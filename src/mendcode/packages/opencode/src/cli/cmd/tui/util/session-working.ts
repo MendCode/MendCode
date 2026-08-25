@@ -31,10 +31,38 @@ export function knownAgentActivityConnectionLabel(input: {
   return `syncing connection${attempt}...`
 }
 
+const NETWORK_RETRY_MARKERS = [
+  "network",
+  "connection",
+  "fetch failed",
+  "failed to fetch",
+  "socket",
+  "econnreset",
+  "econnrefused",
+  "enotfound",
+  "connection reset",
+  "connection refused",
+  "network is unreachable",
+  "dns",
+  "tls",
+  "timeout",
+  "timed out",
+  "offline",
+  "unreachable",
+]
+
+export function retryStatusMessage(message?: string) {
+  const value = message?.trim()
+  if (!value) return "retrying AI backend"
+  const normalized = value.toLowerCase()
+  if (NETWORK_RETRY_MARKERS.some((marker) => normalized.includes(marker))) return `retrying AI backend: ${value}`
+  return value
+}
+
 type TuiSessionStatus =
   | { type: "idle" }
   | { type: "busy"; until?: number }
-  | { type: "retry"; attempt?: number; message?: string; next: number }
+  | { type: "retry"; attempt?: number; message?: string; next: number; heartbeatAt?: number }
 
 function lastActivityTime(...values: Array<number | undefined>) {
   return values
@@ -60,6 +88,7 @@ export function isAssistantWorking(input: {
   statusKind?: string
   now?: number
   assistantCreated?: number
+  statusHeartbeatAt?: number
   statusUntil?: number
   statusNext?: number
   hasActiveTool?: boolean
@@ -72,10 +101,14 @@ export function isAssistantWorking(input: {
       statusType: input.statusType,
       now,
       assistantCreated: input.assistantCreated,
+      statusHeartbeatAt: input.statusHeartbeatAt,
       statusUntil: input.statusUntil,
     })
   }
-  if (input.statusType === "retry") return typeof input.statusNext !== "number" || input.statusNext > now
+  if (input.statusType === "retry") {
+    if (typeof input.statusNext !== "number" || input.statusNext > now) return true
+    return typeof input.statusHeartbeatAt === "number" && now - input.statusHeartbeatAt <= STALE_BUSY_SESSION_WINDOW_MS
+  }
   return isRecentWorkingAssistant({ now, assistantCreated: input.assistantCreated })
 }
 
@@ -109,7 +142,8 @@ export function isBusyStatusSupersededByTerminalAssistant(input: {
   // assistant is durably terminal, a stale busy flag must not keep the TUI in
   // Generating forever. When startedAt exists, retain the ordering guard so a
   // newer turn is never hidden by an older terminal response.
-  if (typeof input.statusStartedAt !== "number") return Boolean(message.time.completed || terminalFinish || message.error)
+  if (typeof input.statusStartedAt !== "number")
+    return Boolean(message.time.completed || terminalFinish || message.error)
   return input.statusStartedAt <= terminalAt
 }
 
@@ -132,6 +166,7 @@ export function isStaleBusySession(input: {
   statusType: string
   now?: number
   assistantCreated?: number
+  statusHeartbeatAt?: number
   sessionUpdated?: number
   statusUntil?: number
   staleMs?: number
@@ -139,7 +174,7 @@ export function isStaleBusySession(input: {
   if (input.statusType !== "busy") return false
   const now = input.now ?? Date.now()
   if (typeof input.statusUntil === "number" && input.statusUntil > now) return false
-  const lastAssistantActivity = lastActivityTime(input.assistantCreated)
+  const lastAssistantActivity = lastActivityTime(input.assistantCreated, input.statusHeartbeatAt)
   if (!lastAssistantActivity) return false
   return now - lastAssistantActivity > (input.staleMs ?? STALE_BUSY_SESSION_WINDOW_MS)
 }
@@ -151,10 +186,16 @@ export function sessionStatusExpiryDelay(
 ) {
   if (status.type === "busy") {
     if (source === "live" && status.until === undefined) return undefined
-    const expiry = typeof status.until === "number" && status.until > now ? status.until : now + STALE_BUSY_SESSION_WINDOW_MS
+    const expiry =
+      typeof status.until === "number" && status.until > now ? status.until : now + STALE_BUSY_SESSION_WINDOW_MS
     return Math.max(1, expiry - now + 1)
   }
-  if (status.type === "retry" && status.next > now) return Math.max(1, status.next - now + 1)
+  if (status.type === "retry") {
+    const heartbeatExpiry =
+      typeof status.heartbeatAt === "number" ? status.heartbeatAt + STALE_BUSY_SESSION_WINDOW_MS : undefined
+    const expiry = Math.max(status.next, heartbeatExpiry ?? status.next)
+    return expiry > now ? Math.max(1, expiry - now + 1) : undefined
+  }
   return undefined
 }
 

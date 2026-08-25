@@ -116,6 +116,7 @@ import {
   terminalAssistantSettlesActivity,
   SESSION_AGENT_STATE_UNKNOWN_MESSAGE,
   displayConnectionStatus,
+  retryStatusMessage,
   shouldShowAgentStateUnknown,
 } from "../../util/session-working"
 
@@ -567,6 +568,7 @@ export function latestPendingAssistantID(
   input?: {
     statusType?: string
     now?: number
+    statusHeartbeatAt?: number
     statusUntil?: number
     statusNext?: number
     hasActiveTool?: boolean
@@ -588,6 +590,7 @@ export function latestPendingAssistantID(
       statusType: input.statusType,
       now: input.now,
       assistantCreated: latestAssistant.time.created,
+      statusHeartbeatAt: input.statusHeartbeatAt,
       statusUntil: input.statusUntil,
       statusNext: input.statusNext,
       hasActiveTool: input.hasActiveTool,
@@ -1037,6 +1040,8 @@ export function Prompt(props: PromptProps) {
     const activeID = latestPendingAssistantID(messages, {
       statusType: currentStatus.type,
       now: promptStatusTick(),
+      statusHeartbeatAt:
+        currentStatus.type === "busy" || currentStatus.type === "retry" ? currentStatus.heartbeatAt : undefined,
       statusUntil: currentStatus.type === "busy" ? currentStatus.until : undefined,
       statusNext: currentStatus.type === "retry" ? currentStatus.next : undefined,
       hasActiveTool,
@@ -3738,19 +3743,11 @@ export function Prompt(props: PromptProps) {
   const workingConnectionMessage = createMemo(() => {
     const connection = sdk.connection
     const effectiveStatus = effectiveConnectionStatus()
-    if (
-      knownAgentActivityConnectionLabel({
-        connectionStatus: effectiveStatus,
-        hasKnownAgentActivity: hasKnownAgentActivity(),
-        attempt: connection.attempt,
-      })
-    )
-      return
-    if (effectiveStatus === "connecting") return "connecting to MendCode..."
+    if (effectiveStatus === "connecting") return "connecting to MendCode backend..."
     if (effectiveStatus === "reconnecting")
-      return `reconnecting to MendCode${connection.attempt > 1 ? ` #${connection.attempt}` : ""}...`
-    if (effectiveStatus === "failed") return `connection lost after ${connection.attempt} reconnect attempts`
-    if (effectiveStatus === "disconnected") return "disconnected from MendCode"
+      return `retrying MendCode backend${connection.attempt > 1 ? ` #${connection.attempt}` : ""}...`
+    if (effectiveStatus === "failed") return `MendCode backend unavailable after ${connection.attempt} retries`
+    if (effectiveStatus === "disconnected") return "MendCode backend disconnected"
 
     return
   })
@@ -3944,7 +3941,7 @@ export function Prompt(props: PromptProps) {
                   const retryText = () => {
                     const r = retry()
                     if (!r) return ""
-                    const baseMessage = message()
+                    const baseMessage = retryStatusMessage(message())
                     const truncatedHint = isTruncated() ? " (click to expand)" : ""
                     const duration = formatDuration(seconds())
                     const retryInfo = ` [retrying ${duration ? `in ${duration} ` : ""}attempt #${r.attempt}]`

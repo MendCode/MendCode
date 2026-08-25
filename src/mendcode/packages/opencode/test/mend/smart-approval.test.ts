@@ -4,7 +4,11 @@ import { tmpdir } from "os"
 import path from "path"
 import {
   isSafeSmartPermissionRequest,
+  isReadOnlySmartPermissionRequest,
   isSafeSmartAutoApprovalRequest,
+  classifySmartPermissionTaskIntent,
+  isDeterministicallyScopedReadOnlyInspection,
+  parseSmartPermissionDecision,
   normalizeSmartPermissionDecision,
   reviewPermissionRequestWithModel,
   shouldReviewSmartApproval,
@@ -124,6 +128,77 @@ describe("smart permission approval trigger", () => {
     expect(isSafeSmartPermissionRequest(request("echo hello > output.txt"))).toBe(false)
     expect(isSafeSmartPermissionRequest(request("./scripts/check.sh"))).toBe(false)
     expect(isSafeSmartPermissionRequest(request("npm test"))).toBe(false)
+  })
+
+  test("keeps writes out of the auto-approval capability", () => {
+    expect(isReadOnlySmartPermissionRequest(request("git status --short"))).toBe(true)
+    expect(isReadOnlySmartPermissionRequest(request("rg -n TODO src"))).toBe(true)
+    expect(isReadOnlySmartPermissionRequest(request("cat /etc/hosts"))).toBe(false)
+    expect(isReadOnlySmartPermissionRequest(request("rg -n TODO ../outside"))).toBe(false)
+    expect(isReadOnlySmartPermissionRequest(request("rg -n TODO 'src\\..\\outside'"))).toBe(false)
+    expect(isReadOnlySmartPermissionRequest(request("mkdir -pv .agents/specs/new/checklists"))).toBe(false)
+    expect(isReadOnlySmartPermissionRequest(request("echo hello > output.txt"))).toBe(false)
+    expect(isReadOnlySmartPermissionRequest(externalRequest("ls /tmp"))).toBe(false)
+  })
+
+  test("does not treat an unknown executable's dry-run flag as safe", () => {
+    expect(isSafeSmartPermissionRequest(request("untrusted-tool --dry-run"))).toBe(false)
+    expect(isSafeSmartPermissionRequest(request("untrusted-tool --check"))).toBe(false)
+    expect(isSafeSmartPermissionRequest(request("untrusted-tool --no-emit"))).toBe(false)
+    expect(isReadOnlySmartPermissionRequest(request("untrusted-tool --dry-run"))).toBe(false)
+  })
+
+  test("requires structured exact read-only evidence for model allows", () => {
+    const safe = request("rg -n TODO src")
+    expect(
+      normalizeSmartPermissionDecision(safe, {
+        triggered: true,
+        decision: "allow",
+        reason: "bounded inspection",
+        scope: "exact",
+        capability: "read-only",
+      }).decision,
+    ).toBe("allow")
+    expect(
+      normalizeSmartPermissionDecision(safe, {
+        triggered: true,
+        decision: "allow",
+        reason: "bounded inspection",
+      }).decision,
+    ).toBe("ask")
+    expect(
+      normalizeSmartPermissionDecision(request("mkdir -pv .agents/specs/new/checklists"), {
+        triggered: true,
+        decision: "allow",
+        reason: "local directory",
+        scope: "exact",
+        capability: "read-only",
+      }).decision,
+    ).toBe("ask")
+  })
+
+  test("fails closed on malformed or extended reviewer output", () => {
+    expect(parseSmartPermissionDecision('{"decision":"allow","reason":"ok"}').decision).toBe("allow")
+    expect(
+      parseSmartPermissionDecision(
+        '{"decision":"allow","scope":"exact","capability":"read-only","reason":"ok","confidence":1}',
+      ).decision,
+    ).toBe("ask")
+    expect(parseSmartPermissionDecision("not json").decision).toBe("ask")
+    expect(parseSmartPermissionDecision("[]").decision).toBe("ask")
+  })
+
+  test("recognizes high-level inspection tasks without broadening the workspace", () => {
+    expect(classifySmartPermissionTaskIntent("haz un sync deep del workspace")).toBe("inspection")
+    expect(classifySmartPermissionTaskIntent("implement the feature and deploy it")).toBe("unknown")
+    expect(
+      isDeterministicallyScopedReadOnlyInspection(request("rg -c 'useKeyboardStore' src"), "sync deep del repo"),
+    ).toBe(true)
+    expect(
+      isDeterministicallyScopedReadOnlyInspection(request("wc -l src/lib/keyboard/*.ts | sort -rn | head -20"), "audit"),
+    ).toBe(true)
+    expect(isDeterministicallyScopedReadOnlyInspection(request("ls -la /tmp"), "audit")).toBe(false)
+    expect(isDeterministicallyScopedReadOnlyInspection(request("mkdir -pv .agents/audit"), "audit")).toBe(false)
   })
 
   test("never auto-approves a shell request without prompt-scoped review", () => {

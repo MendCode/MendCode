@@ -318,6 +318,22 @@ const SESSION_LIVE_FOLLOW_EVENTS = new Set([
 ])
 
 const sessionScrollStates = new Map<string, SessionScrollState>()
+// Multiple TUI routes can observe the same shared pending permission. Keep a
+// process-local lease so they do not run duplicate reviewer calls in parallel;
+// the fingerprint check below still protects the reply from a changed request.
+const smartPermissionReviewLeases = new Set<string>()
+
+function smartPermissionRequestFingerprint(request: PermissionRequest) {
+  return JSON.stringify({
+    sessionID: request.sessionID,
+    permission: request.permission,
+    patterns: request.patterns,
+    always: request.always,
+    command: typeof request.metadata.command === "string" ? request.metadata.command : undefined,
+    source: typeof request.metadata.source === "string" ? request.metadata.source : undefined,
+    tool: request.tool,
+  })
+}
 
 export function sessionFollowSyncKind(type: string) {
   if (SESSION_IMMEDIATE_FOLLOW_EVENTS.has(type)) return "immediate" as const
@@ -834,6 +850,8 @@ export function Session() {
     return latestPendingAssistantID(activityMessages(), {
       statusType: currentStatus?.type,
       now: now(),
+      statusHeartbeatAt:
+        currentStatus?.type === "busy" || currentStatus?.type === "retry" ? currentStatus.heartbeatAt : undefined,
       statusUntil: currentStatus?.type === "busy" ? currentStatus.until : undefined,
       statusNext: currentStatus?.type === "retry" ? currentStatus.next : undefined,
       hasActiveTool,
@@ -1535,23 +1553,36 @@ export function Session() {
   async function smartReviewPendingPermissions() {
     let reviewed = 0
     for (const request of permissions()) {
-      if (smartReviewedPermissionIDs.has(request.id)) continue
+      if (smartReviewedPermissionIDs.has(request.id) || smartPermissionReviewLeases.has(request.id)) continue
       if (!shouldReviewSmartApproval(request)) {
         setSmartPermissionStatus("Smart needs your approval")
         continue
       }
       smartReviewedPermissionIDs.add(request.id)
+      smartPermissionReviewLeases.add(request.id)
+      const requestFingerprint = smartPermissionRequestFingerprint(request)
       try {
         setSmartPermissionStatus(`Smart reviewing ${request.permission}`)
-        const prompt = sessionUserPromptHistory({
+        const prompt = sessionUserPromptForPermissionRequest({
           messages: sync.data.message[request.sessionID] ?? [],
           partsByMessage: sync.data.part,
-        }).findLast((item) => item.input.trim().length > 0)?.input
+          messageID: request.tool?.messageID,
+        })?.input
         const decision = await reviewPermissionRequestWithModel(request, mend.root, { userPrompt: prompt })
         if (!decision.triggered || decision.decision === "ask") {
           setSmartPermissionStatus(`Smart needs approval`)
           toast.show({
             message: `Smart Approval needs manual input: ${decision.reason}`,
+            variant: "info",
+            duration: 5000,
+          })
+          continue
+        }
+        const currentRequest = permissions().find((item) => item.id === request.id)
+        if (!currentRequest || smartPermissionRequestFingerprint(currentRequest) !== requestFingerprint) {
+          smartReviewedPermissionIDs.delete(request.id)
+          toast.show({
+            message: "Smart Approval discarded a stale permission request; it will be reviewed again if still pending.",
             variant: "info",
             duration: 5000,
           })
@@ -1575,6 +1606,8 @@ export function Session() {
       } catch (error) {
         smartReviewedPermissionIDs.delete(request.id)
         throw error
+      } finally {
+        smartPermissionReviewLeases.delete(request.id)
       }
     }
     return { accepted: 0, reviewed }
@@ -5054,7 +5087,15 @@ type SessionSubagentInfo = {
 }
 
 function sessionLiveStateLabel(input: {
-  status?: { type: string; kind?: string; attempt?: number; message?: string; next?: number; startedAt?: number }
+  status?: {
+    type: string
+    kind?: string
+    attempt?: number
+    message?: string
+    next?: number
+    startedAt?: number
+    heartbeatAt?: number
+  }
   messages: Message[]
   pendingInputCount: number
   now?: number
@@ -5072,7 +5113,12 @@ function sessionLiveStateLabel(input: {
   if (
     input.status?.type === "retry" &&
     !terminalAssistantSettles &&
-    isAssistantWorking({ statusType: input.status.type, now: input.now, statusNext: input.status.next })
+    isAssistantWorking({
+      statusType: input.status.type,
+      now: input.now,
+      statusNext: input.status.next,
+      statusHeartbeatAt: input.status.heartbeatAt,
+    })
   )
     return input.status.attempt && input.status.attempt > 1 ? `retry #${input.status.attempt}` : "retrying"
   const lastUser = input.messages.findLast((message) => message.role === "user")
@@ -5085,6 +5131,7 @@ function sessionLiveStateLabel(input: {
       statusKind: input.status.kind,
       now: input.now,
       assistantCreated: lastAssistant?.time.created,
+      statusHeartbeatAt: input.status.heartbeatAt,
       statusUntil: (input.status as { until?: number }).until,
       hasActiveTool: input.hasActiveTool,
     })
@@ -5093,7 +5140,12 @@ function sessionLiveStateLabel(input: {
   if (
     lastAssistant &&
     !lastAssistant.time.completed &&
-    isAssistantWorking({ now: input.now, assistantCreated: lastAssistant.time.created })
+    isAssistantWorking({
+      now: input.now,
+      assistantCreated: lastAssistant.time.created,
+      statusHeartbeatAt:
+        input.status?.type === "busy" || input.status?.type === "retry" ? input.status.heartbeatAt : undefined,
+    })
   )
     return "working"
   if (
@@ -5174,6 +5226,33 @@ export function sessionUserPromptHistory(input: {
     if (prompt.input.length === 0 && prompt.parts.length === 0) return []
     return [prompt]
   })
+}
+
+/**
+ * Resolve the user turn that caused a permission request. A permission request
+ * carries the assistant tool message ID, whose parentID is the exact user
+ * message. Falling back to the latest prompt would let a later, unrelated
+ * request authorize an earlier command.
+ */
+export function sessionUserPromptForPermissionRequest(input: {
+  messages: ReadonlyArray<Pick<Message, "id" | "role"> & { parentID?: string }>
+  partsByMessage: Record<string, readonly { type: string }[] | undefined>
+  messageID?: string
+}) {
+  if (!input.messageID) return
+  const toolMessage = input.messages.find((message) => message.id === input.messageID)
+  if (!toolMessage) return
+  const userMessageID = toolMessage.role === "assistant" ? toolMessage.parentID : toolMessage.id
+  if (!userMessageID) return
+  const userMessage = input.messages.find((message) => message.id === userMessageID && message.role === "user")
+  if (!userMessage) return
+  const prompt = restorePromptFromSubmittedParts(
+    (input.partsByMessage[userMessage.id] ?? []).filter(
+      (part) => part.type === "text" || part.type === "file" || part.type === "agent",
+    ),
+  )
+  if (prompt.input.length === 0 && prompt.parts.length === 0) return
+  return prompt
 }
 
 export function latestFullSessionHistoryStartID(

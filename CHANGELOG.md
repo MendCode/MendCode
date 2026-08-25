@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.1.38 - 2026-08-25
+
+MendCode v0.1.38 hardens Smart Approval and keeps long-running sessions truthful during retries, reconnects, and large TUI turns.
+
+### Changed
+
+- Bind Smart Approval to the exact tool call and originating user turn instead of the latest prompt in the session.
+- Keep bounded workspace inspections for explicit sync, audit, and inspect tasks moving without broadening writes or external-directory access.
+- Show distinct retry states for the MendCode backend and the AI/provider backend while live heartbeats are fresh.
+
+### Fixed
+
+- Fail closed for writes, directory creation, absolute or traversal paths, scripts, validators, unknown executables, and misleading `--dry-run` or `--check` flags.
+- Prevent duplicate or stale Smart Approval replies when multiple TUI routes observe the same pending request.
+- Keep busy/retry activity visible through fresh heartbeats without persisting heartbeat churn to SQLite.
+- Reconcile terminal assistant turns so stale Generating, retrying, and agent-state labels do not survive a completed or interrupted response.
+
+### Tests
+
+- Run 275 focused TUI, session, permission, Smart Approval, and schema regressions with 0 failures.
+
 ## 0.1.37 - 2026-08-23
 
 MendCode v0.1.37 prevents orphaned macOS Loop services and makes Workflow completion recovery bounded and executable.
