@@ -173,6 +173,8 @@ test("public Mermaid ASCII documentation includes the complete visual fixture ca
   expect(documentation.match(/^### `/gm)).toHaveLength(fixtureNames.length)
   expect(documentation).toContain("[Fit]")
   expect(documentation).toContain("LONG FLOWCHART (120 NODES)")
+  expect(documentation.match(/^<details open>$/gm)).toHaveLength(fixtureNames.length)
+  expect(documentation).not.toMatch(/^<details>$/m)
 })
 
 test("stable text mode keeps markdown renderer for inline formatting", () => {

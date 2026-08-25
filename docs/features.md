@@ -530,19 +530,6 @@ For a README, website, or creator demo, show these in order:
 11. Packages show how a team shares commands, agents, modes, skills, prompts, TUI profile, widgets, permissions, memory defaults, and worktree policy.
 12. mflow/TSM/worktree surfaces show parallel workflow coordination.
 
-## Source Map
+## Implementation paths
 
-- `src/mendcode/packages/opencode/src/mend/cli/public-bin.ts`: public `mendcode` command router and help.
-- `src/mendcode/packages/opencode/src/config/keybinds.ts`: default keybindings such as `Shift+Tab`, `Tab`, `F2`, and `F3`.
-- `src/mendcode/packages/opencode/src/cli/cmd/tui/app.tsx`: command palette entries, slash commands, route registration, and MendCode TUI actions.
-- `src/mendcode/packages/opencode/src/mend/profile.ts`: TUI profile schema and defaults.
-- `src/mendcode/packages/opencode/src/mend/tui/`: prompt chrome, prompt status, presentation, mascot, and profile actions.
-- `src/mendcode/packages/opencode/src/tool/plan-review.ts`: Plan Mode tool and post-approval agent switch.
-- `src/mendcode/packages/opencode/src/cli/cmd/tui/routes/session/plan-review.tsx`: Plan Review modal UI.
-- `src/mendcode/packages/opencode/src/cli/cmd/tui/routes/stats/index.tsx`: Usage Insights route.
-- `src/mendcode/packages/opencode/src/cli/cmd/tui/util/usage-insights.ts`: Usage Insights aggregation.
-- `src/mendcode/packages/opencode/src/mend/memory/`: memory config, store, retrieval, proposals, graph, Dream, side chat, workspaces, and category policy.
-- `src/mendcode/packages/opencode/src/cli/cmd/tui/routes/memory/index.tsx`: route-level Memory page.
-- `src/mendcode/packages/opencode/src/mend/runtime/pack.ts`: runtime package snapshot creation.
-- `src/mendcode/packages/opencode/src/mend/runtime/packages.ts`: installed/enabled package projection.
-- `src/mendcode/packages/plugin/src/tui.ts`: public TUI plugin/widget type contract.
+The implementation and test paths for all product surfaces are maintained in the dedicated [MendCode Source Map](source-map.md). This feature page stays focused on behavior and user-visible contracts.

@@ -176,24 +176,6 @@ record. Clearing the active review state clears the cache for that workspace.
 Durable review artifacts can be added later if comments need to survive process
 restart, sync across terminals, or become part of a PR/review workflow.
 
-## Source Map
+## Implementation paths
 
-- `src/mendcode/packages/opencode/src/cli/cmd/tui/routes/changes/index.tsx`:
-  route shell, loading, key handling, reload, comments, and responsive layout.
-- `src/mendcode/packages/opencode/src/cli/cmd/tui/routes/changes/load-diff.ts`:
-  tracked and untracked diff loading.
-- `src/mendcode/packages/opencode/src/cli/cmd/tui/routes/changes/review-state.ts`:
-  parsed files, diff blocks, lines, selection, stats, and navigation.
-- `src/mendcode/packages/opencode/src/cli/cmd/tui/routes/changes/review-comments.ts`:
-  comment creation, filtering, clearing, and stale-anchor reconciliation.
-- `src/mendcode/packages/opencode/src/cli/cmd/tui/routes/changes/review-context.ts`:
-  bounded assistant summaries and optional selected-file patch access.
-- `src/mendcode/packages/opencode/src/cli/cmd/tui/routes/changes/review-actions.ts`:
-  process-local active review registry, local cache bridge, and imperative
-  actions.
-- `src/mendcode/packages/opencode/src/cli/cmd/tui/routes/changes/renderer-adapter.tsx`:
-  header, file navigation, diff renderer, inline comments, and keybind bar.
-- `src/mendcode/packages/opencode/src/tool/review.ts`: assistant-facing
-  `review` tool.
-- `src/mendcode/packages/opencode/src/session/prompt.ts`: injects
-  `<mendcode_review_context>` into model turns when a review is active.
+See [MendCode Source Map — Changes Review](source-map.md#tui-pages-and-product-surfaces) for the route, diff state, comments, renderer, tool, and prompt-context files. Paths are centralized there so this page remains readable for operators.

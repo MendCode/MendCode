@@ -2,7 +2,7 @@
 
 MendCode TUI plugins are local or packaged JavaScript/TypeScript modules that extend the terminal UI without editing runtime internals. They are the right place for company dashboards, status lines, prompt-side context, custom footers, command palettes, dialogs, routes, themes, shell-backed widgets, and editor widgets.
 
-The public API is exported from `@mendcode/plugin/tui`. The active host implementation lives in `src/mendcode/packages/opencode/src/cli/cmd/tui/plugin/`, and the type contract lives in `src/mendcode/packages/plugin/src/tui.ts`. For assistant-facing custom tool calls, see [Custom Tool Calls](custom-tool-calls.md).
+The public API is exported from `@mendcode/plugin/tui`. The host implementation and type contract are listed in the [MendCode Source Map](source-map.md#memory-packages-providers-and-extensions). For assistant-facing custom tool calls, see [Custom Tool Calls](custom-tool-calls.md).
 
 ## Register a Plugin
 
