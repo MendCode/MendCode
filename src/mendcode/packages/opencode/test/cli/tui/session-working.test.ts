@@ -3,6 +3,7 @@ import {
   isAssistantWorking,
   displayConnectionStatus,
   knownAgentActivityConnectionLabel,
+  retryStatusMessage,
   isBusyStatusSupersededByTerminalAssistant,
   terminalAssistantSettlesActivity,
   isRecentWorkingAssistant,
@@ -20,6 +21,15 @@ describe("displayConnectionStatus", () => {
     expect(displayConnectionStatus({ status: "connected", recoveringSince: 123 })).toBe("reconnecting")
     expect(displayConnectionStatus({ status: "connected" })).toBe("connected")
     expect(displayConnectionStatus({ status: "failed", recoveringSince: 123 })).toBe("failed")
+  })
+})
+
+describe("retryStatusMessage", () => {
+  test("identifies provider network retries in the activity line", () => {
+    expect(retryStatusMessage("Network connection lost")).toBe("retrying AI backend: Network connection lost")
+    expect(retryStatusMessage("TypeError: Failed to fetch")).toBe("retrying AI backend: TypeError: Failed to fetch")
+    expect(retryStatusMessage("Provider is overloaded")).toBe("Provider is overloaded")
+    expect(retryStatusMessage()).toBe("retrying AI backend")
   })
 })
 
@@ -92,6 +102,13 @@ describe("isStaleBusySession", () => {
     expect(sessionStatusExpiryDelay({ type: "busy", until: 101_000 }, 100_000)).toBe(1_001)
     expect(sessionStatusExpiryDelay({ type: "busy", until: 101_000 }, 100_000, "live")).toBe(1_001)
     expect(sessionStatusExpiryDelay({ type: "retry", attempt: 1, message: "wait", next: 101_000 }, 100_000)).toBe(1_001)
+    expect(
+      sessionStatusExpiryDelay(
+        { type: "retry", attempt: 1, message: "wait", next: 99_000, heartbeatAt: 99_999 },
+        100_000,
+        "live",
+      ),
+    ).toBe(STALE_BUSY_SESSION_WINDOW_MS)
     expect(sessionStatusExpiryDelay({ type: "idle" }, 100_000)).toBeUndefined()
   })
 })
@@ -131,9 +148,31 @@ describe("isAssistantWorking", () => {
 
   test("trusts a fresh busy status while allowing stale status to expire", () => {
     expect(isAssistantWorking({ statusType: "busy", now: 100_000, assistantCreated: 1_000 })).toBe(false)
-    expect(isAssistantWorking({ statusType: "busy", now: 100_000, assistantCreated: 1_000, statusUntil: 101_000 })).toBe(
-      true,
-    )
+    expect(
+      isAssistantWorking({ statusType: "busy", now: 100_000, assistantCreated: 1_000, statusUntil: 101_000 }),
+    ).toBe(true)
+  })
+
+  test("keeps long reasoning visible when the runtime heartbeat is fresh", () => {
+    expect(
+      isAssistantWorking({
+        statusType: "busy",
+        now: 100_000,
+        assistantCreated: 1_000,
+        statusHeartbeatAt: 99_999,
+      }),
+    ).toBe(true)
+  })
+
+  test("keeps retry activity visible after its scheduled attempt while heartbeat is fresh", () => {
+    expect(
+      isAssistantWorking({
+        statusType: "retry",
+        statusNext: 90_000,
+        statusHeartbeatAt: 99_999,
+        now: 100_000,
+      }),
+    ).toBe(true)
   })
 
   test("keeps a stale-aged busy assistant visible while its tool is still active", () => {

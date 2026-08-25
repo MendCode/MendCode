@@ -10,6 +10,7 @@ import {
   SessionStatus,
   freshStatus,
   refreshBusyStatus,
+  refreshRetryStatus,
   withStartedAt,
 } from "../../src/session/status"
 import { SessionSummary } from "../../src/session/summary"
@@ -254,24 +255,32 @@ describe("SessionStatus.Info", () => {
   test("idle / busy discriminators", () => {
     expect(decode({ type: "idle" })).toEqual({ type: "idle" })
     expect(decode({ type: "busy" })).toEqual({ type: "busy" })
-    expect(decode({ type: "busy", kind: "mflow-wait", message: "mflow waiting for shared-test.md", until: 500 })).toEqual({
+    expect(
+      decode({ type: "busy", kind: "mflow-wait", message: "mflow waiting for shared-test.md", until: 500 }),
+    ).toEqual({
       type: "busy",
       kind: "mflow-wait",
       message: "mflow waiting for shared-test.md",
       until: 500,
     })
-    expect(decode({ type: "busy", kind: "memory-extract", message: "Preparing memory proposal...", startedAt: 100 })).toEqual({
+    expect(
+      decode({ type: "busy", kind: "memory-extract", message: "Preparing memory proposal...", startedAt: 100 }),
+    ).toEqual({
       type: "busy",
       kind: "memory-extract",
       message: "Preparing memory proposal...",
       startedAt: 100,
     })
-    expect(SessionStatus.Info.zod.parse({ type: "busy", startedAt: 100 })).toEqual({ type: "busy", startedAt: 100 })
+    expect(SessionStatus.Info.zod.parse({ type: "busy", startedAt: 100, heartbeatAt: 110 })).toEqual({
+      type: "busy",
+      startedAt: 100,
+      heartbeatAt: 110,
+    })
     expect(SessionStatus.Info.zod.parse({ type: "idle" })).toEqual({ type: "idle" })
   })
 
-  test("retry carries attempt/message/next", () => {
-    const input = { type: "retry" as const, attempt: 1, message: "transient", next: 500 }
+  test("retry carries attempt/message/next and runtime heartbeat", () => {
+    const input = { type: "retry" as const, attempt: 1, message: "transient", next: 500, heartbeatAt: 450 }
     expect(decode(input)).toEqual(input)
     expect(SessionStatus.Info.zod.parse(input)).toEqual(input)
   })
@@ -291,13 +300,47 @@ describe("SessionStatus.Info", () => {
       type: "busy",
       until: now + 1,
     })
-    expect(freshStatus({ time_updated: 1, data: { type: "retry", attempt: 1, message: "wait", next: now + 1 } }, now)).toEqual({
+    expect(
+      freshStatus({ time_updated: 1, data: { type: "retry", attempt: 1, message: "wait", next: now + 1 } }, now),
+    ).toEqual({
       type: "retry",
       attempt: 1,
       message: "wait",
       next: now + 1,
     })
-    expect(freshStatus({ time_updated: now, data: { type: "retry", attempt: 0, message: "recovered", next: now - 1 } }, now)).toBeUndefined()
+    expect(
+      freshStatus(
+        {
+          time_updated: now - BUSY_STATUS_STALE_MS - 1,
+          data: { type: "retry", attempt: 0, message: "recovered", next: now - 1 },
+        },
+        now,
+      ),
+    ).toBeUndefined()
+    expect(
+      freshStatus(
+        {
+          time_updated: now - BUSY_STATUS_STALE_MS - 1,
+          data: { type: "retry", attempt: 1, message: "still retrying", next: now - 1, heartbeatAt: now - 1 },
+        },
+        now,
+      ),
+    ).toMatchObject({ type: "retry", message: "still retrying" })
+    expect(
+      freshStatus(
+        {
+          time_updated: now,
+          data: {
+            type: "retry",
+            attempt: 1,
+            message: "retry stopped",
+            next: now - 1,
+            heartbeatAt: now - BUSY_STATUS_STALE_MS - 1,
+          },
+        },
+        now,
+      ),
+    ).toBeUndefined()
   })
 
   test("adds stable busy startedAt without resetting an existing active status", () => {
@@ -318,7 +361,7 @@ describe("SessionStatus.Info", () => {
     })
   })
 
-  test("refreshes only a live busy status without changing its activity details", () => {
+  test("refreshes live busy and retry statuses without changing activity details", () => {
     const now = 200_000
     const current = {
       time_created: 100_000,
@@ -330,16 +373,24 @@ describe("SessionStatus.Info", () => {
         startedAt: 100_000,
       },
     }
-    expect(refreshBusyStatus(current, now)).toEqual({ ...current, time_updated: now })
+    expect(refreshBusyStatus(current, now)).toEqual({
+      ...current,
+      time_updated: now,
+      data: { ...current.data, heartbeatAt: now },
+    })
     expect(
       refreshBusyStatus({ time_updated: now - BUSY_STATUS_STALE_MS - 1, data: { type: "busy" } }, now),
     ).toBeUndefined()
-    expect(
-      refreshBusyStatus(
-        { time_updated: now, data: { type: "retry", attempt: 1, message: "wait", next: now + 1 } },
-        now,
-      ),
-    ).toBeUndefined()
+    const retry = {
+      time_updated: now,
+      data: { type: "retry" as const, attempt: 1, message: "wait", next: now - 1, heartbeatAt: now - 5_000 },
+    }
+    expect(refreshBusyStatus(retry, now)).toBeUndefined()
+    expect(refreshRetryStatus(retry, now)).toEqual({
+      ...retry,
+      time_updated: now,
+      data: { ...retry.data, heartbeatAt: now },
+    })
   })
 })
 

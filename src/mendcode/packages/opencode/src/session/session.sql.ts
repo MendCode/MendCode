@@ -165,8 +165,9 @@ export const SessionStatusTable = sqliteTable("session_status", {
         message?: string
         until?: number
         startedAt?: number
+        heartbeatAt?: number
       }
-    | { type: "retry"; attempt: number; message: string; next: number }
+    | { type: "retry"; attempt: number; message: string; next: number; heartbeatAt?: number }
   >(),
 })
 

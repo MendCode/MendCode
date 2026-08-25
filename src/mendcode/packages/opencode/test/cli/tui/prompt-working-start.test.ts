@@ -65,6 +65,7 @@ import {
   sessionTranscriptRenderKey,
   sessionUserMessageQueued,
   sessionUserPromptHistory,
+  sessionUserPromptForPermissionRequest,
   shouldPinSessionStickyUserHeader,
   shouldClearSessionPagingBoundarySuppression,
   shouldDeferSessionFollowSync,
@@ -593,6 +594,17 @@ describe("queued user turn", () => {
       "msg_001",
     )
     expect(latestPendingAssistantID(messages, { statusType: "idle", now: 100_000 })).toBeUndefined()
+  })
+
+  test("keeps a long reasoning turn visible after a fresh runtime heartbeat", () => {
+    const messages = [{ id: "msg_001", role: "assistant", time: { created: 1_000 } }]
+    expect(
+      latestPendingAssistantID(messages, {
+        statusType: "busy",
+        now: 100_000,
+        statusHeartbeatAt: 99_999,
+      }),
+    ).toBe("msg_001")
   })
 
   test("keeps a long-running tool visible after the assistant-age fallback expires", () => {
@@ -1437,6 +1449,47 @@ describe("resolveWorkingStartedAt", () => {
     }
 
     expect(sessionUserPromptHistory({ messages, partsByMessage }).map((item) => item.input)).toEqual(["   "])
+  })
+
+  test("anchors permission review to the tool call's originating user turn", () => {
+    const messages = [
+      { id: "user_old", role: "user" as const },
+      { id: "assistant_old", role: "assistant" as const, parentID: "user_old" },
+      { id: "user_current", role: "user" as const },
+      { id: "assistant_current", role: "assistant" as const, parentID: "user_current" },
+    ]
+    const partsByMessage = {
+      user_old: [{ type: "text", text: "audit the old report" }],
+      user_current: [{ type: "text", text: "deploy the new version" }],
+    }
+
+    expect(
+      sessionUserPromptForPermissionRequest({
+        messages,
+        partsByMessage,
+        messageID: "assistant_old",
+      })?.input,
+    ).toBe("audit the old report")
+    expect(
+      sessionUserPromptForPermissionRequest({
+        messages,
+        partsByMessage,
+        messageID: "assistant_current",
+      })?.input,
+    ).toBe("deploy the new version")
+  })
+
+  test("does not authorize a permission request without an exact tool-message anchor", () => {
+    const messages = [
+      { id: "user_1", role: "user" as const },
+      { id: "assistant_1", role: "assistant" as const, parentID: "user_1" },
+    ]
+    const partsByMessage = { user_1: [{ type: "text", text: "inspect this workspace" }] }
+
+    expect(sessionUserPromptForPermissionRequest({ messages, partsByMessage })).toBeUndefined()
+    expect(
+      sessionUserPromptForPermissionRequest({ messages, partsByMessage, messageID: "missing" }),
+    ).toBeUndefined()
   })
 
   test("keys global loop cache entries by the requested page contract", () => {
