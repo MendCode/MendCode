@@ -1194,7 +1194,10 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
             const statusUntil = "until" in status && typeof status.until === "number" ? status.until : undefined
             if (currentUntil !== statusUntil) return
           }
-          if (current.type === "retry" && status.type === "retry" && current.next !== status.next) return
+          if (current.type === "retry" && status.type === "retry") {
+            if (current.next !== status.next) return
+            if (current.heartbeatAt !== status.heartbeatAt) return
+          }
           setStore("session_status", sessionID, { type: "idle" })
         }, delay),
       )

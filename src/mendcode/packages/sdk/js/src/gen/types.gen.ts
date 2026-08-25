@@ -475,6 +475,7 @@ export type SessionStatus =
       attempt: number
       message: string
       next: number
+      heartbeatAt?: number
     }
   | {
       type: "busy"

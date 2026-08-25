@@ -18,6 +18,10 @@ export const Info = Schema.Union([
     attempt: NonNegativeInt,
     message: Schema.String,
     next: NonNegativeInt,
+    // Runtime liveness marker. Retry heartbeats publish this to connected
+    // TUIs but intentionally do not persist updates, so a crashed runtime
+    // still becomes recoverable from the durable status timestamp.
+    heartbeatAt: Schema.optional(NonNegativeInt),
     recovery: Schema.optional(
       Schema.Struct({
         kind: Schema.Literal("stale-session"),
@@ -39,6 +43,10 @@ export const Info = Schema.Union([
     message: Schema.optional(Schema.String),
     until: Schema.optional(NonNegativeInt),
     startedAt: Schema.optional(NonNegativeInt),
+    // Runtime liveness marker. Heartbeats publish this to connected TUIs but
+    // intentionally do not persist updates, so a crashed runtime still
+    // becomes recoverable from the durable status timestamp.
+    heartbeatAt: Schema.optional(NonNegativeInt),
   }),
 ])
   .annotate({ identifier: "SessionStatus" })
@@ -105,14 +113,21 @@ function foreign(err: unknown) {
 export function freshStatus(row: StatusRecord, now = Date.now()) {
   if (row.data.type === "busy" && row.data.until && row.data.until > now) return row.data
   if (row.data.type === "busy") return now - row.time_updated <= BUSY_STATUS_STALE_MS ? row.data : undefined
-  if (row.data.type === "retry") return row.data.next > now ? row.data : undefined
+  if (row.data.type === "retry") {
+    if (row.data.next > now) return row.data
+    const heartbeatAt = row.data.heartbeatAt ?? row.time_updated
+    return now - heartbeatAt <= BUSY_STATUS_STALE_MS ? row.data : undefined
+  }
   return now - row.time_updated <= PERSISTED_STATUS_STALE_MS ? row.data : undefined
 }
 
 export function withStartedAt(status: Info, current: StatusRecord | undefined, now = Date.now()): Info {
   if (status.type !== "busy") return status
   const currentFresh = current ? freshStatus(current, now) : undefined
-  const currentStartedAt = current && currentFresh?.type === "busy" ? (currentFresh.startedAt ?? current.time_created ?? current.time_updated) : undefined
+  const currentStartedAt =
+    current && currentFresh?.type === "busy"
+      ? (currentFresh.startedAt ?? current.time_created ?? current.time_updated)
+      : undefined
   return {
     ...status,
     startedAt: status.startedAt ?? currentStartedAt ?? now,
@@ -125,7 +140,23 @@ export function refreshBusyStatus(current: StatusRecord, now = Date.now()) {
   return {
     ...current,
     time_updated: now,
-    data: status,
+    data: {
+      ...status,
+      heartbeatAt: now,
+    },
+  } satisfies StatusRecord
+}
+
+export function refreshRetryStatus(current: StatusRecord, now = Date.now()) {
+  const status = freshStatus(current, now)
+  if (status?.type !== "retry") return
+  return {
+    ...current,
+    time_updated: now,
+    data: {
+      ...status,
+      heartbeatAt: now,
+    },
   } satisfies StatusRecord
 }
 
@@ -191,12 +222,24 @@ export const layer = Layer.effect(
         : Database.use((db) =>
             db.select().from(SessionStatusTable).where(eq(SessionStatusTable.session_id, sessionID)).get(),
           )
-      const nextStatus = withStartedAt(status, current ?? row, now) as StoredStatus
-      if (options?.notify !== false) yield* bus.publish(Event.Status, { sessionID, status: nextStatus })
+      const nextStatus = withStartedAt(status, current ?? row, now)
+      if (nextStatus.type === "idle") return
+      const liveStatus =
+        nextStatus.type === "busy" || nextStatus.type === "retry"
+          ? ({ ...nextStatus, heartbeatAt: now } satisfies StoredStatus)
+          : (nextStatus as StoredStatus)
+      const durableStatus =
+        nextStatus.type === "busy" || nextStatus.type === "retry"
+          ? (() => {
+              const { heartbeatAt: _heartbeatAt, ...withoutHeartbeat } = nextStatus
+              return withoutHeartbeat satisfies StoredStatus
+            })()
+          : (nextStatus as StoredStatus)
+      if (options?.notify !== false) yield* bus.publish(Event.Status, { sessionID, status: liveStatus })
       data.set(sessionID, {
         time_created: current?.time_created ?? row?.time_created ?? now,
         time_updated: now,
-        data: nextStatus,
+        data: liveStatus,
       })
       if (options?.notify === false) return
       try {
@@ -207,13 +250,13 @@ export const layer = Layer.effect(
               session_id: sessionID,
               time_created: row?.time_created ?? now,
               time_updated: now,
-              data: nextStatus,
+              data: durableStatus,
             })
             .onConflictDoUpdate({
               target: SessionStatusTable.session_id,
               set: {
                 time_updated: now,
-                data: nextStatus,
+                data: durableStatus,
               },
             })
             .run(),
@@ -227,7 +270,7 @@ export const layer = Layer.effect(
       const data = yield* InstanceState.get(state)
       const current = data.get(sessionID)
       if (!current) return
-      const refreshed = refreshBusyStatus(current)
+      const refreshed = refreshBusyStatus(current) ?? refreshRetryStatus(current)
       if (refreshed) {
         data.set(sessionID, refreshed)
         // Keep connected and recently rehydrated TUIs on live liveness semantics

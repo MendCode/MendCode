@@ -381,6 +381,7 @@ export type SessionStatus =
       attempt: number
       message: string
       next: number
+      heartbeatAt?: number
       recovery?: {
         kind: "stale-session"
         reason: string
@@ -393,6 +394,7 @@ export type SessionStatus =
       message?: string
       until?: number
       startedAt?: number
+      heartbeatAt?: number
     }
 
 export type BackgroundTaskSnapshot = {
