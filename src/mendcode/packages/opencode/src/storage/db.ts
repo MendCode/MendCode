@@ -22,6 +22,7 @@ import {
   resolveDualReadDbPathFromLayout,
   assertTestSqliteIsolation,
 } from "./resolve-default-sqlite-path"
+import { reconcileLegacyMigrationJournal } from "./legacy-migration"
 
 declare const OPENCODE_MIGRATIONS: { sql: string; timestamp: number; name: string }[] | undefined
 
@@ -134,7 +135,14 @@ export const Client = lazy(() => {
       count: entries.length,
       mode: typeof OPENCODE_MIGRATIONS !== "undefined" ? "bundled" : "dev",
     })
-    if (Flag.OPENCODE_SKIP_MIGRATIONS) {
+    if (!Flag.OPENCODE_SKIP_MIGRATIONS) {
+      const reconciled = reconcileLegacyMigrationJournal(db, entries)
+      if (reconciled) {
+        log.info("reconciled legacy sqlite migration journal", {
+          count: entries.length,
+        })
+      }
+    } else {
       for (const item of entries) {
         item.sql = "select 1;"
       }

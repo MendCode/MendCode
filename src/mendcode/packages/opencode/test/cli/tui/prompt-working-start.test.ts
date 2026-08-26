@@ -73,6 +73,7 @@ import {
   SESSION_BOTTOM_FOLLOW_REFLOW_DELAYS_MS,
   shouldKeepSessionBottomFollow,
   shouldHandleGlobalSessionInterrupt,
+  sessionHasUnfinishedAssistant,
   shouldReleaseSessionPagingBoundarySuppression,
   shouldRestoreSessionScrollAnchor,
   shouldUseSimpleSessionHistory,
@@ -997,6 +998,22 @@ describe("resolveWorkingStartedAt", () => {
     expect(sessionInterruptHint({ enabled: true, working: true, armed: true })).toBe("[esc again to interrupt]")
     expect(sessionInterruptHint({ enabled: false, working: true, armed: true })).toBeUndefined()
     expect(sessionInterruptHint({ enabled: true, working: false, armed: true })).toBeUndefined()
+    expect(sessionInterruptConfirmationAction({ hasActiveTurn: true })).toBe("arm")
+    expect(
+      sessionInterruptConfirmationAction({
+        hasActiveTurn: true,
+        armedTargetMessageID: "__mendcode_session_interrupt__",
+      }),
+    ).toBe("interrupt")
+  })
+
+  test("keeps the emergency Esc path for an unfinished legacy assistant receipt", () => {
+    expect(sessionHasUnfinishedAssistant([])).toBe(false)
+    expect(sessionHasUnfinishedAssistant([{ role: "assistant", time: {} }])).toBe(true)
+    expect(
+      sessionHasUnfinishedAssistant([{ role: "assistant", error: { name: "MessageAbortedError" }, time: {} }]),
+    ).toBe(false)
+    expect(sessionHasUnfinishedAssistant([{ role: "assistant", time: { completed: 1 } }])).toBe(false)
   })
 
   test("accepts prompt interrupt only when the prompt textarea owns focus", () => {
@@ -1487,9 +1504,7 @@ describe("resolveWorkingStartedAt", () => {
     const partsByMessage = { user_1: [{ type: "text", text: "inspect this workspace" }] }
 
     expect(sessionUserPromptForPermissionRequest({ messages, partsByMessage })).toBeUndefined()
-    expect(
-      sessionUserPromptForPermissionRequest({ messages, partsByMessage, messageID: "missing" }),
-    ).toBeUndefined()
+    expect(sessionUserPromptForPermissionRequest({ messages, partsByMessage, messageID: "missing" })).toBeUndefined()
   })
 
   test("keys global loop cache entries by the requested page contract", () => {

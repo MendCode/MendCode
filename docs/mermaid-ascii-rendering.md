@@ -1,6 +1,6 @@
 # Mermaid ASCII Rendering
 
-MendCode renders Mermaid fences as local, terminal-native ASCII diagrams in Markdown and rich chat presentation modes. The renderer keeps diagram semantics visible without requiring a browser, SVG canvas, or network request. This page reflects the current v0.1.38 behavior; it is documentation-only and does not require a version bump.
+MendCode renders Mermaid fences as local, terminal-native ASCII diagrams in Markdown and rich chat presentation modes. The renderer keeps diagram semantics visible without requiring a browser, SVG canvas, or network request. This page reflects the current v0.1.39 behavior.
 
 ## Chat Canvas Behavior
 

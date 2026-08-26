@@ -49,6 +49,7 @@ import type {
   Part,
   PermissionRequest,
   Provider,
+  Session as SessionInfo,
   Message,
   ToolPart,
   UserMessage,
@@ -57,6 +58,7 @@ import type {
 } from "@mendcode/sdk/v2"
 import type { OpencodeClient } from "@mendcode/sdk/v2"
 import { useLocal } from "@tui/context/local"
+import { resolveSessionControlRouting } from "@tui/context/session-control"
 import * as Log from "@mendcode/core/util/log"
 import { Locale } from "@/util/locale"
 import { tuiText } from "@tui/util/text"
@@ -580,6 +582,22 @@ export function shouldHandleGlobalSessionInterrupt(input: {
   return input.eventName === "escape" && !input.defaultPrevented && input.activeTurn && !input.pendingInput
 }
 
+/**
+ * Keep the emergency Esc path available when a legacy/shared backend lost its
+ * busy status event but still left an unfinished assistant receipt in sync.
+ */
+export function sessionHasUnfinishedAssistant(
+  messages: ReadonlyArray<{
+    role: string
+    error?: unknown
+    finish?: string
+    time: { created?: number; completed?: number }
+  }>,
+) {
+  const latestAssistant = messages.findLast((message) => message.role === "assistant")
+  return Boolean(latestAssistant && latestAssistant.time.completed === undefined && !latestAssistant.error)
+}
+
 const context = createContext<{
   width: number
   sessionID: string
@@ -749,10 +767,18 @@ export function Session() {
   const sdk = useSDK()
   const [now, setNow] = createSignal(Date.now())
   const [sessionInterruptRequested, setSessionInterruptRequested] = createSignal(false)
+  // Keep the owner route available before the session is inserted into the
+  // sync cache. This closes the small window where Esc could otherwise fall
+  // back to the previously selected folder while a shared/legacy session is
+  // still loading.
+  const [routeSessionInfo, setRouteSessionInfo] = createSignal<SessionInfo>()
   createEffect(
     on(
       () => route.sessionID,
-      () => setSessionInterruptRequested(false),
+      () => {
+        setSessionInterruptRequested(false)
+        setRouteSessionInfo(undefined)
+      },
       { defer: true },
     ),
   )
@@ -761,6 +787,7 @@ export function Session() {
   })
   const promptRef = usePromptRef()
   const session = createMemo(() => sync.session.get(route.sessionID))
+  const sessionOwner = createMemo(() => session() ?? routeSessionInfo())
   const [workflowTaskRuns, { refetch: refetchWorkflowTaskRuns }] = createResource(
     () => (session()?.parentID ? route.sessionID : undefined),
     async () => {
@@ -861,6 +888,7 @@ export function Session() {
     const status = sync.data.session_status?.[route.sessionID]?.type
     return status === "busy" || status === "retry"
   })
+  const hasUnfinishedAssistant = createMemo(() => sessionHasUnfinishedAssistant(activityMessages()))
   const activeTurnAssistantID = createMemo(() => {
     const unfinished = pending()
     if (unfinished) return unfinished
@@ -1923,6 +1951,8 @@ export function Session() {
         navigate({ type: "home" })
         return
       }
+
+      setRouteSessionInfo(result.data)
 
       if (result.data.workspaceID !== previousWorkspace) {
         project.workspace.set(result.data.workspaceID)
@@ -3584,14 +3614,17 @@ export function Session() {
       !shouldHandleGlobalSessionInterrupt({
         eventName: evt.name,
         defaultPrevented: evt.defaultPrevented,
-        activeTurn: Boolean(pending() || sessionWorking() || hasLocalActiveTurn()),
+        activeTurn: Boolean(pending() || sessionWorking() || hasLocalActiveTurn() || hasUnfinishedAssistant()),
         pendingInput: disabled(),
       })
     )
       return
     evt.preventDefault()
     evt.stopPropagation()
-    command.trigger("session.interrupt")
+    // The prompt command normally requires prompt focus. The global Esc path
+    // is deliberately allowed to bypass that UI guard: a transcript, editor,
+    // widget, or stale legacy session must not make the emergency stop inert.
+    command.trigger("session.interrupt", { bypassEnabled: true })
   })
 
   function fillSessionPrompt(value: string) {
@@ -3834,7 +3867,15 @@ export function Session() {
       },
       onSelect: async (dialog) => {
         const status = sync.data.session_status?.[route.sessionID]
-        if (status?.type !== "idle") await sdk.client.session.abort({ sessionID: route.sessionID }).catch(() => {})
+        if (status?.type !== "idle") {
+          const routing = resolveSessionControlRouting({
+            sessionWorkspaceID: sessionOwner()?.workspaceID,
+            sessionDirectory: sessionOwner()?.directory,
+            currentWorkspaceID: project.workspace.current(),
+            currentDirectory: sdk.directory,
+          })
+          await sdk.client.session.abort({ sessionID: route.sessionID, ...routing }).catch(() => {})
+        }
         const revert = session()?.revert?.messageID
         const message = messages().findLast((x) => (!revert || x.id < revert) && x.role === "user")
         if (!message) return
@@ -4785,9 +4826,7 @@ export function Session() {
                     selected={
                       permissionSelection()?.requestID === request().id ? permissionSelection()?.option : undefined
                     }
-                    onSelectionChange={(option) =>
-                      setPermissionSelection({ requestID: request().id, option })
-                    }
+                    onSelectionChange={(option) => setPermissionSelection({ requestID: request().id, option })}
                   />
                 )}
               </Show>
@@ -4850,7 +4889,8 @@ export function Session() {
                             disabled={promptDisabled()}
                             historyScope={`session:${route.sessionID}`}
                             historyItems={sessionPromptHistory}
-                            workspaceID={project.workspace.current()}
+                            workspaceID={sessionOwner()?.workspaceID}
+                            directory={sessionOwner()?.directory}
                             sessionID={route.sessionID}
                             permissionMode={permissionMode()}
                             permissionModeLabel={permissionModeLabel()}
