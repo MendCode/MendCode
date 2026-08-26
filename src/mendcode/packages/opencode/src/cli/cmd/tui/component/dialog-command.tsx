@@ -71,10 +71,10 @@ function init() {
   })
 
   const result = {
-    trigger(name: string) {
+    trigger(name: string, options?: { bypassEnabled?: boolean }) {
       for (const option of entries()) {
         if (option.value === name) {
-          if (!isEnabled(option)) return
+          if (!options?.bypassEnabled && !isEnabled(option)) return
           option.onSelect?.(dialog)
           return
         }

@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.1.39 - 2026-08-26
+
+MendCode v0.1.39 makes interruption reliable across folders and recovers legacy installs without disrupting active sessions.
+
+### Changed
+
+- Route session controls through the owning workspace or directory instead of the currently selected project.
+- Keep the global `Esc` interrupt available when the editor, transcript, or another TUI widget owns focus.
+- Preserve explicit backend and provider retry state while their live heartbeat is still fresh.
+
+### Fixed
+
+- Fall back from a stale targeted cancellation to a bounded `session.abort` without leaving large or old sessions running indefinitely.
+- Prevent cancellation outbox entries captured under an old route from replaying into another backend.
+- Update Windows installations through the native PowerShell path instead of assuming WSL `/bin/bash` exists.
+- Reconcile legacy SQLite migration journals transactionally when the existing schema is already present.
+
+### Tests
+
+- Run focused session-control, prompt, runner, installation, database-migration, workspace-routing, build, and startup smoke checks.
+
 ## 0.1.38 - 2026-08-25
 
 MendCode v0.1.38 hardens Smart Approval and keeps long-running sessions truthful during retries, reconnects, and large TUI turns.

@@ -125,10 +125,9 @@ describe("Runner", () => {
         return "second-result"
       })
 
-      const [a, b] = yield* Effect.all(
-        [runner.ensureRunning(first), runner.ensureRunning(second, { queue: true })],
-        { concurrency: "unbounded" },
-      )
+      const [a, b] = yield* Effect.all([runner.ensureRunning(first), runner.ensureRunning(second, { queue: true })], {
+        concurrency: "unbounded",
+      })
 
       expect(a).toBe("first-result")
       expect(b).toBe("second-result")
@@ -166,10 +165,7 @@ describe("Runner", () => {
         )
         .pipe(Effect.forkChild)
       const duplicateQueued = yield* runner
-        .ensureRunning(
-          Effect.fail("duplicate should not run"),
-          { queue: true, queueKey: "message" },
-        )
+        .ensureRunning(Effect.fail("duplicate should not run"), { queue: true, queueKey: "message" })
         .pipe(Effect.forkChild)
 
       yield* Deferred.succeed(activeGate, undefined)
@@ -637,6 +633,36 @@ describe("Runner", () => {
       expect(yield* Fiber.join(active)).toBe("cancelled")
       expect(yield* Fiber.join(queued)).toBe("newer turn")
       expect(yield* runner.cancelCurrentIf("turn-1")).toBe("not_running")
+    }),
+  )
+
+  it.live(
+    "cancelCurrentIf returns while a run finalizer is still unwinding",
+    Effect.gen(function* () {
+      const s = yield* Scope.Scope
+      const started = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      const runner = Runner.make<string>(s)
+      const active = yield* runner
+        .ensureRunning(
+          Effect.gen(function* () {
+            yield* Deferred.succeed(started, undefined)
+            return yield* Effect.never.pipe(Effect.ensuring(Deferred.await(release)), Effect.as("active"))
+          }),
+          { queueKey: "turn-finalizer" },
+        )
+        .pipe(Effect.forkChild)
+
+      try {
+        yield* Deferred.await(started)
+        expect(yield* runner.cancelCurrentIf("turn-finalizer").pipe(Effect.timeout("250 millis"))).toBe("cancelled")
+        expect(runner.busy).toBe(false)
+
+        yield* Deferred.succeed(release, undefined)
+        expect(Exit.isFailure(yield* Fiber.await(active).pipe(Effect.timeout("250 millis")))).toBe(true)
+      } finally {
+        yield* Deferred.succeed(release, undefined).pipe(Effect.ignore)
+      }
     }),
   )
 

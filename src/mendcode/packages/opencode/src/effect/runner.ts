@@ -2,14 +2,12 @@ import { Cause, Deferred, Effect, Exit, Fiber, Latch, Schema, Scope, Synchronize
 import * as Log from "@mendcode/core/util/log"
 
 const trace = Log.create({ service: "runner" })
+const TARGET_CANCEL_FINALIZER_TIMEOUT = "500 millis"
 
 export interface Runner<A, E = never> {
   readonly state: State<A, E>
   readonly busy: boolean
-  readonly ensureRunning: (
-    work: Effect.Effect<A, E>,
-    options?: EnsureRunningOptions,
-  ) => Effect.Effect<A, E>
+  readonly ensureRunning: (work: Effect.Effect<A, E>, options?: EnsureRunningOptions) => Effect.Effect<A, E>
   readonly startShell: (work: Effect.Effect<A, E>, ready?: Latch.Latch) => Effect.Effect<A, E>
   readonly interruptCurrent: (options?: NonNullable<EnsureRunningOptions["interrupt"]>) => Effect.Effect<void>
   readonly interruptQueued: (options?: NonNullable<EnsureRunningOptions["interrupt"]>) => Effect.Effect<boolean>
@@ -98,10 +96,13 @@ export const make = <A, E = never>(
   const idleIfCurrent = () =>
     SynchronizedRef.modify(ref, (st) => [st._tag === "Idle" ? idle : Effect.void, st] as const).pipe(Effect.flatten)
 
-  const finishRun = (id: number, done: Deferred.Deferred<A, E | Cancelled>, exit: Exit.Exit<A, E>): Effect.Effect<void> =>
-    SynchronizedRef.modifyEffect(
-      ref,
-      (st) => Effect.gen(function* () {
+  const finishRun = (
+    id: number,
+    done: Deferred.Deferred<A, E | Cancelled>,
+    exit: Exit.Exit<A, E>,
+  ): Effect.Effect<void> =>
+    SynchronizedRef.modifyEffect(ref, (st) =>
+      Effect.gen(function* () {
         trace.trace("finish", { id, state: st._tag, success: Exit.isSuccess(exit) })
         if (st._tag === "Running" && st.run.id === id) {
           return [
@@ -140,7 +141,7 @@ export const make = <A, E = never>(
   ): Effect.Effect<RunHandle<A, E>> =>
     Effect.gen(function* () {
       const id = next()
-      const fiber = yield* (Effect.yieldNow.pipe(Effect.andThen(work))).pipe(
+      const fiber = yield* Effect.yieldNow.pipe(Effect.andThen(work)).pipe(
         Effect.onExit((exit) => finishRun(id, done, exit)),
         Effect.forkIn(scope),
       )
@@ -148,9 +149,8 @@ export const make = <A, E = never>(
     }) as Effect.Effect<RunHandle<A, E>>
 
   const finishShell = (id: number): Effect.Effect<void> =>
-    SynchronizedRef.modifyEffect(
-      ref,
-      (st) => Effect.gen(function* () {
+    SynchronizedRef.modifyEffect(ref, (st) =>
+      Effect.gen(function* () {
         if (st._tag === "Shell" && st.shell.id === id) {
           return [idle, { _tag: "Idle" }] as const
         }
@@ -158,7 +158,10 @@ export const make = <A, E = never>(
           const [next, ...remaining] = st.run
           if (!next) return [idle, { _tag: "Idle" }] as const
           const run = yield* startRun(next.work, next.done, next.key)
-          return [Effect.void, remaining.length ? { _tag: "RunningThenRun", run, next: remaining } : { _tag: "Running", run }] as const
+          return [
+            Effect.void,
+            remaining.length ? { _tag: "RunningThenRun", run, next: remaining } : { _tag: "Running", run },
+          ] as const
         }
         return [Effect.void, st] as const
       }),
@@ -199,10 +202,13 @@ export const make = <A, E = never>(
     })
 
   const ensureRunning = (work: Effect.Effect<A, E>, options?: EnsureRunningOptions): Effect.Effect<A, E> =>
-    SynchronizedRef.modifyEffect(
-      ref,
-      (st) => Effect.gen(function* () {
-        trace.trace("ensure", { state: st._tag, queue: options?.queue ?? false, interrupt: Boolean(options?.interrupt) })
+    SynchronizedRef.modifyEffect(ref, (st) =>
+      Effect.gen(function* () {
+        trace.trace("ensure", {
+          state: st._tag,
+          queue: options?.queue ?? false,
+          interrupt: Boolean(options?.interrupt),
+        })
         switch (st._tag) {
           case "Running":
             if (options?.queue) {
@@ -293,91 +299,100 @@ export const make = <A, E = never>(
       }),
     ).pipe(Effect.flatten) as Effect.Effect<A, E>
 
-  const cancelCurrent = (options?: { before?: Effect.Effect<void>; cancelPending?: boolean }) => SynchronizedRef.modify(ref, (st) => {
-    switch (st._tag) {
-      case "Idle":
-        return [Effect.void, st] as const
-      case "Running":
-        return [
-          Effect.gen(function* () {
-            yield* options?.before ?? Effect.void
-            yield* Fiber.interrupt(st.run.fiber)
-            // The interrupted work normally completes this in finishRun. Close
-            // it here as well so callers cannot hang if cancellation wins the
-            // brief race before the forked work begins its on-exit path.
-            yield* Deferred.fail(st.run.done, new Cancelled()).pipe(Effect.asVoid)
-            yield* idleIfCurrent()
-          }),
-          { _tag: "Idle" } as const,
-        ] as const
-      case "RunningThenRun":
-        return [
-          Effect.gen(function* () {
-            if (options?.cancelPending) yield* cancelPendingHandles(st.next)
-            yield* options?.before ?? Effect.void
-            yield* Fiber.interrupt(st.run.fiber)
-            yield* Deferred.fail(st.run.done, new Cancelled()).pipe(Effect.asVoid)
-          }),
-          options?.cancelPending ? { _tag: "Running", run: st.run } as const : st,
-        ] as const
-      case "Shell":
-        return [
-          Effect.gen(function* () {
-            yield* options?.before ?? Effect.void
-            yield* stopShell(st.shell)
-            yield* idleIfCurrent()
-          }),
-          { _tag: "Idle" } as const,
-        ] as const
-      case "ShellThenRun":
-        return [
-          Effect.gen(function* () {
-            yield* options?.before ?? Effect.void
-            yield* stopShell(st.shell)
-            yield* cancelPendingHandles(st.run)
-            yield* idleIfCurrent()
-          }),
-          { _tag: "Idle" } as const,
-        ] as const
-    }
-  }).pipe(Effect.flatten)
+  const cancelCurrent = (options?: { before?: Effect.Effect<void>; cancelPending?: boolean }) =>
+    SynchronizedRef.modify(ref, (st) => {
+      switch (st._tag) {
+        case "Idle":
+          return [Effect.void, st] as const
+        case "Running":
+          return [
+            Effect.gen(function* () {
+              yield* options?.before ?? Effect.void
+              yield* Fiber.interrupt(st.run.fiber)
+              // The interrupted work normally completes this in finishRun. Close
+              // it here as well so callers cannot hang if cancellation wins the
+              // brief race before the forked work begins its on-exit path.
+              yield* Deferred.fail(st.run.done, new Cancelled()).pipe(Effect.asVoid)
+              yield* idleIfCurrent()
+            }),
+            { _tag: "Idle" } as const,
+          ] as const
+        case "RunningThenRun":
+          return [
+            Effect.gen(function* () {
+              if (options?.cancelPending) yield* cancelPendingHandles(st.next)
+              yield* options?.before ?? Effect.void
+              yield* Fiber.interrupt(st.run.fiber)
+              yield* Deferred.fail(st.run.done, new Cancelled()).pipe(Effect.asVoid)
+            }),
+            options?.cancelPending ? ({ _tag: "Running", run: st.run } as const) : st,
+          ] as const
+        case "Shell":
+          return [
+            Effect.gen(function* () {
+              yield* options?.before ?? Effect.void
+              yield* stopShell(st.shell)
+              yield* idleIfCurrent()
+            }),
+            { _tag: "Idle" } as const,
+          ] as const
+        case "ShellThenRun":
+          return [
+            Effect.gen(function* () {
+              yield* options?.before ?? Effect.void
+              yield* stopShell(st.shell)
+              yield* cancelPendingHandles(st.run)
+              yield* idleIfCurrent()
+            }),
+            { _tag: "Idle" } as const,
+          ] as const
+      }
+    }).pipe(Effect.flatten)
 
   const cancelCurrentIf = (
     key: string,
     options?: { before?: Effect.Effect<void>; cancelPending?: boolean; ignoreInterruptible?: boolean },
   ): Effect.Effect<CancelCurrentIfResult> =>
-    SynchronizedRef.modify(
-      ref,
-      (st): readonly [Effect.Effect<CancelCurrentIfResult>, State<A, E>] => {
-        if (st._tag !== "Running" && st._tag !== "RunningThenRun") {
-          return [Effect.succeed("not_running" as const), st] as const
-        }
-        if (st.run.key !== key) return [Effect.succeed("target_mismatch" as const), st] as const
-        if (!st.run.interruptible && options?.ignoreInterruptible !== true)
-          return [Effect.succeed("not_interruptible" as const), st] as const
-        if (st._tag === "Running") {
-          return [
-            Effect.gen(function* () {
-              yield* options?.before ?? Effect.void
-              yield* Fiber.interrupt(st.run.fiber)
-              yield* Deferred.await(st.run.done).pipe(Effect.exit, Effect.asVoid)
-              return "cancelled" as const
-            }),
-            st,
-          ] as const
-        }
+    SynchronizedRef.modify(ref, (st): readonly [Effect.Effect<CancelCurrentIfResult>, State<A, E>] => {
+      if (st._tag !== "Running" && st._tag !== "RunningThenRun") {
+        return [Effect.succeed("not_running" as const), st] as const
+      }
+      if (st.run.key !== key) return [Effect.succeed("target_mismatch" as const), st] as const
+      if (!st.run.interruptible && options?.ignoreInterruptible !== true)
+        return [Effect.succeed("not_interruptible" as const), st] as const
+      if (st._tag === "Running") {
         return [
           Effect.gen(function* () {
-            if (options?.cancelPending) yield* cancelPendingHandles(st.next)
             yield* options?.before ?? Effect.void
-            yield* Fiber.interrupt(st.run.fiber)
-            yield* Deferred.await(st.run.done).pipe(Effect.exit, Effect.asVoid)
+            // Targeted cancellation is an HTTP control-plane request. Bound
+            // finalizer waiting so a stale or huge session cannot make Esc
+            // appear dead, while still giving ordinary tool cleanup time to
+            // persist the aborted assistant receipt.
+            yield* Fiber.interrupt(st.run.fiber).pipe(Effect.timeout(TARGET_CANCEL_FINALIZER_TIMEOUT), Effect.ignore)
+            // Cancellation is a control-plane operation. Do not wait for a
+            // provider/tool finalizer to resolve the run receipt: an old or
+            // huge session must be stoppable even when that cleanup is slow.
+            yield* Deferred.fail(st.run.done, new Cancelled()).pipe(Effect.asVoid)
+            yield* idleIfCurrent()
             return "cancelled" as const
           }),
-          options?.cancelPending ? { _tag: "Running", run: st.run } as const : st,
+          { _tag: "Idle" } as const,
         ] as const
-      },
-    ).pipe(Effect.flatten)
+      }
+      return [
+        Effect.gen(function* () {
+          if (options?.cancelPending) yield* cancelPendingHandles(st.next)
+          yield* options?.before ?? Effect.void
+          yield* Fiber.interrupt(st.run.fiber).pipe(Effect.timeout(TARGET_CANCEL_FINALIZER_TIMEOUT), Effect.ignore)
+          // Resolve the caller immediately; the interrupted fiber's exit
+          // hook may otherwise keep the HTTP cancel request hanging.
+          yield* Deferred.fail(st.run.done, new Cancelled()).pipe(Effect.asVoid)
+          yield* idleIfCurrent()
+          return "cancelled" as const
+        }),
+        options?.cancelPending ? ({ _tag: "Running", run: st.run } as const) : st,
+      ] as const
+    }).pipe(Effect.flatten)
 
   const cancel = cancelCurrent()
 
@@ -391,7 +406,9 @@ export const make = <A, E = never>(
           yield* cancelPendingHandles(removed)
           return [
             true,
-            remaining.length > 0 ? { _tag: "RunningThenRun", run: st.run, next: remaining } : { _tag: "Running", run: st.run },
+            remaining.length > 0
+              ? { _tag: "RunningThenRun", run: st.run, next: remaining }
+              : { _tag: "Running", run: st.run },
           ] as const
         }
         if (st._tag === "ShellThenRun") {
@@ -401,7 +418,9 @@ export const make = <A, E = never>(
           yield* cancelPendingHandles(removed)
           return [
             true,
-            remaining.length > 0 ? { _tag: "ShellThenRun", shell: st.shell, run: remaining } : { _tag: "Shell", shell: st.shell },
+            remaining.length > 0
+              ? { _tag: "ShellThenRun", shell: st.shell, run: remaining }
+              : { _tag: "Shell", shell: st.shell },
           ] as const
         }
         return [false, st] as const
@@ -416,31 +435,32 @@ export const make = <A, E = never>(
     })
 
   const interruptRun = (run: RunHandle<A, E>, options?: NonNullable<EnsureRunningOptions["interrupt"]>) =>
-      Effect.gen(function* () {
-        yield* options?.before ?? Effect.void
-        yield* Fiber.interrupt(run.fiber).pipe(Effect.ensuring(options?.after ?? Effect.void))
-        yield* Deferred.await(run.done).pipe(Effect.exit, Effect.asVoid)
-      })
+    Effect.gen(function* () {
+      yield* options?.before ?? Effect.void
+      yield* Fiber.interrupt(run.fiber).pipe(Effect.ensuring(options?.after ?? Effect.void))
+      yield* Deferred.await(run.done).pipe(Effect.exit, Effect.asVoid)
+    })
   const interruptShell = (shell: ShellHandle<A, E>, options?: NonNullable<EnsureRunningOptions["interrupt"]>) =>
-      Effect.gen(function* () {
-        yield* options?.before ?? Effect.void
-        yield* stopShell(shell).pipe(Effect.ensuring(options?.after ?? Effect.void))
-      })
+    Effect.gen(function* () {
+      yield* options?.before ?? Effect.void
+      yield* stopShell(shell).pipe(Effect.ensuring(options?.after ?? Effect.void))
+    })
 
-  const interruptCurrent = (options?: NonNullable<EnsureRunningOptions["interrupt"]>) => SynchronizedRef.modify(ref, (st) => {
-    switch (st._tag) {
-      case "Idle":
-        return [Effect.void, st] as const
-      case "Running":
-        return [interruptRun(st.run, options), st] as const
-      case "RunningThenRun":
-        return [interruptRun(st.run, options), st] as const
-      case "Shell":
-        return [interruptShell(st.shell, options), st] as const
-      case "ShellThenRun":
-        return [interruptShell(st.shell, options), st] as const
-    }
-  }).pipe(Effect.flatten)
+  const interruptCurrent = (options?: NonNullable<EnsureRunningOptions["interrupt"]>) =>
+    SynchronizedRef.modify(ref, (st) => {
+      switch (st._tag) {
+        case "Idle":
+          return [Effect.void, st] as const
+        case "Running":
+          return [interruptRun(st.run, options), st] as const
+        case "RunningThenRun":
+          return [interruptRun(st.run, options), st] as const
+        case "Shell":
+          return [interruptShell(st.shell, options), st] as const
+        case "ShellThenRun":
+          return [interruptShell(st.shell, options), st] as const
+      }
+    }).pipe(Effect.flatten)
 
   const interruptQueued = (options?: NonNullable<EnsureRunningOptions["interrupt"]>) =>
     SynchronizedRef.modify(ref, (st) => {

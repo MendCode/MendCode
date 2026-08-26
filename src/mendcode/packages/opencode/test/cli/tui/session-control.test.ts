@@ -5,6 +5,8 @@ import {
   sessionCancelRetryDelay,
   sessionControlAllowsPrompt,
   sessionCancelRequestIsDuplicate,
+  sessionCancelResultNeedsHardAbort,
+  resolveSessionControlRouting,
   SESSION_CANCEL_AUTO_RETRY_MAX_ATTEMPTS,
   SESSION_CANCEL_AUTO_RETRY_WINDOW_MS,
   type SessionCancelOutboxEntry,
@@ -154,5 +156,37 @@ describe("session control outbox", () => {
         error: "offline",
       }),
     ).toBe(false)
+  })
+
+  test("falls back to a session abort when the targeted stop cannot prove the active turn", () => {
+    expect(sessionCancelResultNeedsHardAbort({ delivered: false })).toBe(true)
+    expect(sessionCancelResultNeedsHardAbort({ delivered: true, result: "target_mismatch" })).toBe(true)
+    expect(sessionCancelResultNeedsHardAbort({ delivered: true, result: "not_running" })).toBe(true)
+    expect(sessionCancelResultNeedsHardAbort({ delivered: true, result: "cancelled" })).toBe(false)
+    expect(sessionCancelResultNeedsHardAbort({ delivered: true, result: "already_terminal" })).toBe(false)
+  })
+
+  test("routes cancellation to the session owner instead of the currently selected folder", () => {
+    expect(
+      resolveSessionControlRouting({
+        sessionDirectory: "/work/legacy-session",
+        currentWorkspaceID: "workspace-selected-now",
+        currentDirectory: "/work/current-folder",
+      }),
+    ).toEqual({ directory: "/work/legacy-session" })
+    expect(
+      resolveSessionControlRouting({
+        sessionWorkspaceID: "workspace-session-owner",
+        sessionDirectory: "/work/ignored-when-warped",
+        currentWorkspaceID: "workspace-selected-now",
+        currentDirectory: "/work/current-folder",
+      }),
+    ).toEqual({ workspace: "workspace-session-owner" })
+    expect(
+      resolveSessionControlRouting({
+        currentWorkspaceID: "workspace-selected-now",
+        currentDirectory: "/work/current-folder",
+      }),
+    ).toEqual({ workspace: "workspace-selected-now" })
   })
 })
