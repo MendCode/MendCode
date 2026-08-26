@@ -11,10 +11,7 @@ function mockHttpClient(handler: (request: HttpClientRequest.HttpClientRequest) 
   return Layer.succeed(HttpClient.HttpClient, client)
 }
 
-function mockSpawner(
-  handler: (cmd: string, args: readonly string[]) => string = () => "",
-  spawnError?: Error,
-) {
+function mockSpawner(handler: (cmd: string, args: readonly string[]) => string = () => "", spawnError?: Error) {
   const spawner = ChildProcessSpawner.make((command) => {
     if (spawnError) {
       return Effect.fail(
@@ -63,6 +60,23 @@ function testLayer(
 }
 
 describe("installation", () => {
+  test("selects the native updater on Windows instead of the WSL bash launcher", () => {
+    expect(Installation.usesNativeWindowsUpdater("win32")).toBe(true)
+    expect(Installation.usesNativeWindowsUpdater("darwin")).toBe(false)
+    expect(Installation.windowsUpdaterArgs("C:\\Temp\\mendcode-upgrade.ps1", "0.1.39")).toEqual([
+      "-NoProfile",
+      "-NonInteractive",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-File",
+      "C:\\Temp\\mendcode-upgrade.ps1",
+      "-Version",
+      "0.1.39",
+      "-NoModifyPath",
+      "-SkipSetup",
+    ])
+  })
+
   test("uses package version for local display labels", () => {
     expect(Installation.displayVersion()).toMatch(/^\d+\.\d+\.\d+$/)
     expect(Installation.labelVersion()).toMatch(/^v\d+\.\d+\.\d+$/)

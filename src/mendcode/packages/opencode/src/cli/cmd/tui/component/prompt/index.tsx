@@ -32,7 +32,12 @@ import { useSDK, type SDKConnectionStatus } from "@tui/context/sdk"
 import { useRoute } from "@tui/context/route"
 import { useProject } from "@tui/context/project"
 import { useSync } from "@tui/context/sync"
-import { sessionControlAllowsPrompt, useSessionControl } from "@tui/context/session-control"
+import {
+  sessionCancelResultNeedsHardAbort,
+  sessionControlAllowsPrompt,
+  resolveSessionControlRouting,
+  useSessionControl,
+} from "@tui/context/session-control"
 import { useEvent } from "@tui/context/event"
 import { editorSelectionKey, useEditorContext, type EditorSelection } from "@tui/context/editor"
 import { MessageID, PartID } from "@/session/schema"
@@ -122,6 +127,7 @@ import {
 
 const NATIVE_COMPACTION_SLASHES = new Set(["compact", "summarize"])
 const ACTIVE_LOOP_STATES = new Set(["active", "sleeping", "working", "needs_input", "blocked"])
+const SESSION_INTERRUPT_FALLBACK_TARGET = "__mendcode_session_interrupt__"
 const trace = Log.create({ service: "tui.prompt" })
 
 export type LoopWorkflowInfo = {
@@ -157,6 +163,7 @@ export type PromptProps = {
   historyScope?: PromptHistoryScope
   historyItems?: () => readonly PromptInfo[]
   workspaceID?: string
+  directory?: string
   permissionMode?: string
   permissionModeLabel?: string
   permissionPending?: number
@@ -553,8 +560,16 @@ function endPendingPromptDelivery(request: PromptAsyncInput) {
 }
 
 function cancelPendingPromptDeliveryForInterrupt(sessionID: string, targetMessageID?: string) {
-  if (!targetMessageID) return
-  cancelPendingPromptDelivery(sessionID, targetMessageID)
+  if (targetMessageID) {
+    cancelPendingPromptDelivery(sessionID, targetMessageID)
+    return
+  }
+  // A stale session may not have a target message in the current sync
+  // window. Cancel every local delivery before the hard session abort so a
+  // reconnect cannot replay a prompt the user just stopped.
+  for (const delivery of pendingPromptDeliveriesForSession(sessionID)) {
+    if (delivery.request.messageID) cancelPendingPromptDelivery(sessionID, delivery.request.messageID)
+  }
 }
 
 export function latestPendingAssistantID(
@@ -718,9 +733,12 @@ export function hasInterruptibleSessionTurn(input: {
 export function sessionInterruptConfirmationAction(input: {
   activeTargetMessageID?: string
   armedTargetMessageID?: string
+  hasActiveTurn?: boolean
 }): "ignore" | "arm" | "interrupt" {
-  if (!input.activeTargetMessageID) return "ignore"
-  return input.armedTargetMessageID === input.activeTargetMessageID ? "interrupt" : "arm"
+  const activeTargetMessageID =
+    input.activeTargetMessageID ?? (input.hasActiveTurn ? SESSION_INTERRUPT_FALLBACK_TARGET : undefined)
+  if (!activeTargetMessageID) return "ignore"
+  return input.armedTargetMessageID === activeTargetMessageID ? "interrupt" : "arm"
 }
 
 export function sessionInterruptHint(input: { enabled: boolean; working: boolean; armed: boolean }) {
@@ -961,7 +979,9 @@ export function Prompt(props: PromptProps) {
   const [interruptRequested, setInterruptRequested] = createSignal(false)
   const [interruptTargetMessageID, setInterruptTargetMessageID] = createSignal<string>()
   const updateInterruptRequested = (interrupted: boolean, targetMessageID?: string) => {
-    setInterruptTargetMessageID(interrupted ? (targetMessageID ?? interruptTargetMessageID()) : undefined)
+    setInterruptTargetMessageID(
+      interrupted ? (targetMessageID ?? interruptTargetMessageID() ?? SESSION_INTERRUPT_FALLBACK_TARGET) : undefined,
+    )
     setInterruptRequested(interrupted)
     props.onInterruptChange?.(interrupted)
   }
@@ -1084,6 +1104,10 @@ export function Prompt(props: PromptProps) {
     return latestAssistant
   }
   const hasActiveWorkingAssistant = createMemo(() => Boolean(findActiveWorkingAssistant()))
+  // A stale/incomplete assistant receipt can outlive the runner in an older
+  // session. It is still an interruptible turn for Esc, even though it must
+  // not keep the normal Generating indicator alive forever.
+  const hasOrphanedAssistant = createMemo(() => Boolean(findOrphanedAssistant()))
   const hasPendingPromptDelivery = createMemo(() => {
     pendingPromptDeliveryRevision()
     return Boolean(props.sessionID && pendingPromptDeliveryIsActive(props.sessionID))
@@ -1650,8 +1674,15 @@ export function Prompt(props: PromptProps) {
   }
   createEffect(() => {
     if (store.interrupt === 0) return
-    const activeTargetMessageID = workingStatusActive() ? activeTurnTargetMessageID() : undefined
-    if (activeTargetMessageID === interruptArmedTargetMessageID) return
+    const activeTargetMessageID =
+      workingStatusActive() || hasOrphanedAssistant() || hasPendingPromptDelivery()
+        ? activeTurnTargetMessageID()
+        : undefined
+    if (
+      activeTargetMessageID === interruptArmedTargetMessageID ||
+      (!activeTargetMessageID && interruptArmedTargetMessageID === SESSION_INTERRUPT_FALLBACK_TARGET)
+    )
+      return
     resetInterruptConfirmation()
   })
   const currentMessageHistoryPrompt = createMemo(() =>
@@ -1766,7 +1797,7 @@ export function Prompt(props: PromptProps) {
         enabled: () =>
           shouldEnableSessionInterrupt({
             statusType: status().type,
-            hasActiveWorkingAssistant: hasActiveWorkingAssistant(),
+            hasActiveWorkingAssistant: hasActiveWorkingAssistant() || hasOrphanedAssistant(),
             hasPendingPromptDelivery: Boolean(props.sessionID && pendingPromptDeliveryIsActive(props.sessionID)),
             autocompleteVisible: Boolean(autocomplete?.visible),
             compactionActive: compactionActive(),
@@ -1781,7 +1812,7 @@ export function Prompt(props: PromptProps) {
           const hasActiveTurn = hasInterruptibleSessionTurn({
             statusType: status().type,
             hasDraft: store.prompt.input.trim().length > 0 || store.prompt.parts.length > 0,
-            hasActiveWorkingAssistant: hasActiveWorkingAssistant(),
+            hasActiveWorkingAssistant: hasActiveWorkingAssistant() || hasOrphanedAssistant(),
             hasPendingPromptDelivery: Boolean(props.sessionID && pendingPromptDeliveryIsActive(props.sessionID)),
             compactionActive: compactionActive(),
           })
@@ -1805,6 +1836,7 @@ export function Prompt(props: PromptProps) {
           const action = sessionInterruptConfirmationAction({
             activeTargetMessageID: targetMessageID,
             armedTargetMessageID: interruptArmedTargetMessageID,
+            hasActiveTurn,
           })
           if (action === "ignore") return
           if (action === "interrupt") {
@@ -1815,7 +1847,7 @@ export function Prompt(props: PromptProps) {
             return
           }
 
-          interruptArmedTargetMessageID = targetMessageID
+          interruptArmedTargetMessageID = targetMessageID ?? SESSION_INTERRUPT_FALLBACK_TARGET
           setStore("interrupt", 1)
           if (interruptResetTimer) clearTimeout(interruptResetTimer)
           interruptResetTimer = setTimeout(() => {
@@ -2301,11 +2333,45 @@ export function Prompt(props: PromptProps) {
   }
 
   function abortSession(sessionID: string, targetMessageID?: string) {
-    if (!targetMessageID) return
-    sessionControl.request({ sessionID, targetMessageID })
+    if (targetMessageID)
+      sessionControl.request({
+        sessionID,
+        targetMessageID,
+        workspaceID: props.workspaceID,
+        directory: props.directory,
+      })
     updateInterruptRequested(true, targetMessageID)
+    cancelPendingPromptDeliveryForInterrupt(sessionID, targetMessageID)
     if (interruptRequest) return
-    interruptRequest = withTimeout(sessionControl.drain(), 2000, "Session interrupt timed out")
+    const hardAbort = async () => {
+      const routing = resolveSessionControlRouting({
+        sessionWorkspaceID: props.workspaceID,
+        sessionDirectory: props.directory,
+        currentWorkspaceID: project.workspace.current(),
+        currentDirectory: sdk.directory,
+      })
+      await withTimeout(
+        sdk.client.session.abort(
+          {
+            sessionID,
+            ...routing,
+          },
+          { throwOnError: true },
+        ),
+        2000,
+        "Session abort timed out",
+      )
+    }
+    const cancel = targetMessageID
+      ? withTimeout(sessionControl.drain(), 2000, "Session interrupt timed out")
+          .catch(() => false)
+          .then(async (delivered) => {
+            const control = sessionControl.status(sessionID)
+            const result = control.state === "stop_confirmed" ? control.result : undefined
+            if (sessionCancelResultNeedsHardAbort({ delivered, result })) await hardAbort()
+          })
+      : hardAbort()
+    interruptRequest = cancel
       .catch(() => undefined)
       .finally(() => {
         interruptRequest = undefined
@@ -3703,7 +3769,11 @@ export function Prompt(props: PromptProps) {
   const interruptHint = createMemo(() => {
     return sessionInterruptHint({
       enabled: workingIndicatorConfig().showInterruptHint,
-      working: workingStatusActive(),
+      // Legacy sessions can retain an unfinished assistant after the backend
+      // lost its busy status. Keep the two-Esc hint visible for that emergency
+      // stop path even though we deliberately suppress the normal Generating
+      // indicator for stale activity.
+      working: workingStatusActive() || hasOrphanedAssistant() || hasPendingPromptDelivery(),
       armed: store.interrupt > 0,
     })
   })
@@ -3875,7 +3945,7 @@ export function Prompt(props: PromptProps) {
         zIndex={1000}
         overflow="visible"
       >
-        <Show when={workingIndicatorVisible() || Boolean(connectionStateMessage())}>
+        <Show when={workingIndicatorVisible() || Boolean(connectionStateMessage()) || Boolean(interruptHint())}>
           <box
             width="100%"
             height={1}

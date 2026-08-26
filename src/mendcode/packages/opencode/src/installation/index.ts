@@ -4,8 +4,9 @@ import { CrossSpawnSpawner } from "@mendcode/core/cross-spawn-spawner"
 import { withTransientReadRetry } from "@/util/effect-http-client"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import path from "path"
-import { existsSync, readFileSync } from "fs"
+import { existsSync, readFileSync, unlinkSync, writeFileSync } from "fs"
 import { fileURLToPath } from "url"
+import { tmpdir } from "os"
 import z from "zod"
 import { BusEvent } from "@/bus/bus-event"
 import { Flag } from "@mendcode/core/flag/flag"
@@ -19,6 +20,9 @@ const log = Log.create({ service: "installation" })
 const GITHUB_REPO = process.env.MENDCODE_GITHUB_REPO ?? "MendCode/MendCode"
 const GITHUB_RAW_INSTALL_URL =
   process.env.MENDCODE_INSTALL_URL ?? `https://raw.githubusercontent.com/${GITHUB_REPO}/main/src/mendcode/install`
+const GITHUB_RAW_INSTALL_PS1_URL =
+  process.env.MENDCODE_INSTALL_PS1_URL ??
+  `https://raw.githubusercontent.com/${GITHUB_REPO}/main/src/mendcode/install.ps1`
 const GITHUB_LATEST_RELEASE_URL = `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`
 const PackageVersion = (() => {
   try {
@@ -114,13 +118,43 @@ function installerShell() {
   const configured = process.env.MENDCODE_BASH_PATH?.trim()
   if (configured) return configured
 
-  const candidates = process.platform === "win32" ? ["bash.exe", "bash"] : ["/bin/bash", "/usr/bin/bash", "bash"]
+  const candidates = ["/bin/bash", "/usr/bin/bash", "bash"]
   for (const candidate of candidates) {
     if (candidate.startsWith("/") && existsSync(candidate)) return candidate
     const resolved = which(candidate)
     if (resolved) return resolved
   }
   return undefined
+}
+
+function installerPowerShell() {
+  const configured = process.env.MENDCODE_POWERSHELL_PATH?.trim()
+  if (configured) return configured
+
+  for (const candidate of ["pwsh.exe", "powershell.exe", "pwsh", "powershell"]) {
+    const resolved = which(candidate)
+    if (resolved) return resolved
+  }
+  return undefined
+}
+
+export function usesNativeWindowsUpdater(platform: NodeJS.Platform = process.platform) {
+  return platform === "win32"
+}
+
+export function windowsUpdaterArgs(scriptPath: string, target: string) {
+  return [
+    "-NoProfile",
+    "-NonInteractive",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-File",
+    scriptPath,
+    "-Version",
+    target,
+    "-NoModifyPath",
+    "-SkipSetup",
+  ]
 }
 
 // Response schemas for external version APIs
@@ -180,6 +214,38 @@ export const layer: Layer.Layer<Service, never, HttpClient.HttpClient | ChildPro
 
       const upgradeCurl = Effect.fnUntraced(
         function* (target: string) {
+          if (usesNativeWindowsUpdater()) {
+            const response = yield* httpOk.execute(HttpClientRequest.get(GITHUB_RAW_INSTALL_PS1_URL))
+            const body = yield* response.text
+            const powershell = installerPowerShell()
+            if (!powershell) {
+              return yield* new UpgradeFailedError({
+                stderr:
+                  "MendCode could not find PowerShell to run the Windows updater. Install PowerShell 7 or enable Windows PowerShell, then retry the upgrade.",
+              })
+            }
+
+            const scriptPath = path.join(tmpdir(), `mendcode-upgrade-${process.pid}-${Date.now()}.ps1`)
+            writeFileSync(scriptPath, body, "utf8")
+            try {
+              const result = yield* run([powershell, ...windowsUpdaterArgs(scriptPath, target)], {
+                env: {
+                  MENDCODE_UPDATE_PARENT_PID: String(process.pid),
+                  MENDCODE_UPDATE_SCRIPT_PATH: scriptPath,
+                },
+              })
+              return { ...result, deferred: true as const }
+            } finally {
+              if (!usesNativeWindowsUpdater()) {
+                try {
+                  unlinkSync(scriptPath)
+                } catch {
+                  // Best effort cleanup; the updater has already completed.
+                }
+              }
+            }
+          }
+
           const response = yield* httpOk.execute(HttpClientRequest.get(GITHUB_RAW_INSTALL_URL))
           const body = yield* response.text
           const bash = installerShell()
@@ -190,14 +256,10 @@ export const layer: Layer.Layer<Service, never, HttpClient.HttpClient | ChildPro
             })
           }
           const bodyBytes = new TextEncoder().encode(body)
-          const proc = ChildProcess.make(
-            bash,
-            ["-s", "--", "--version", target, "--no-modify-path", "--skip-setup"],
-            {
-              stdin: Stream.make(bodyBytes),
-              extendEnv: true,
-            },
-          )
+          const proc = ChildProcess.make(bash, ["-s", "--", "--version", target, "--no-modify-path", "--skip-setup"], {
+            stdin: Stream.make(bodyBytes),
+            extendEnv: true,
+          })
           const handle = yield* spawner.spawn(proc)
           const [stdout, stderr] = yield* Effect.all(
             [Stream.mkString(Stream.decodeText(handle.stdout)), Stream.mkString(Stream.decodeText(handle.stderr))],
@@ -208,11 +270,10 @@ export const layer: Layer.Layer<Service, never, HttpClient.HttpClient | ChildPro
         },
         Effect.scoped,
         Effect.catchDefect((defect) => Effect.fail(new UpgradeFailedError({ stderr: describeUpgradeFailure(defect) }))),
-        Effect.mapError(
-          (error) =>
-            error instanceof UpgradeFailedError
-              ? error
-              : new UpgradeFailedError({ stderr: describeUpgradeFailure(error) }),
+        Effect.mapError((error) =>
+          error instanceof UpgradeFailedError
+            ? error
+            : new UpgradeFailedError({ stderr: describeUpgradeFailure(error) }),
         ),
       )
 
@@ -263,7 +324,9 @@ export const layer: Layer.Layer<Service, never, HttpClient.HttpClient | ChildPro
           return data.tag_name.replace(/^v/, "")
         }, Effect.orDie),
         upgrade: Effect.fn("Installation.upgrade")(function* (m: Method, target: string) {
-          let upgradeResult: { code: ChildProcessSpawner.ExitCode; stdout: string; stderr: string } | undefined
+          let upgradeResult:
+            | { code: ChildProcessSpawner.ExitCode; stdout: string; stderr: string; deferred?: boolean }
+            | undefined
           switch (m) {
             case "curl":
               upgradeResult = yield* upgradeCurl(target)
@@ -295,6 +358,7 @@ export const layer: Layer.Layer<Service, never, HttpClient.HttpClient | ChildPro
             stdout: upgradeResult.stdout,
             stderr: upgradeResult.stderr,
           })
+          if (upgradeResult.deferred) return
           const installedVersion = (yield* text([process.execPath, "--version"])).trim()
           if (installedVersion !== target) {
             return yield* new UpgradeFailedError({

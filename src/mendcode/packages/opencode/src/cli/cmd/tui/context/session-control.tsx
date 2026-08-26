@@ -4,7 +4,10 @@ import { useKV } from "./kv"
 import { useProject } from "./project"
 import { useSDK } from "./sdk"
 
-const OUTBOX_KEY = "session-control-outbox-v1"
+// v1 entries were recorded against the selected project route, which can be
+// wrong after switching folders/workspaces. Do not replay those controls into
+// a different backend; a fresh v2 entry carries session-owner routing.
+const OUTBOX_KEY = "session-control-outbox-v2"
 const OUTBOX_LIMIT = 64
 const OUTBOX_TTL_MS = 7 * 24 * 60 * 60 * 1000
 const CONFIRMATION_TTL_MS = 2_000
@@ -14,6 +17,11 @@ export const SESSION_CANCEL_AUTO_RETRY_BASE_DELAY_MS = 250
 export const SESSION_CANCEL_AUTO_RETRY_MAX_DELAY_MS = 2_000
 
 export type SessionCancelResult = "cancelled" | "already_terminal" | "target_mismatch" | "not_running"
+
+export type SessionControlRouting = {
+  workspace?: string
+  directory?: string
+}
 
 export type SessionCancelOutboxEntry = {
   id: string
@@ -33,6 +41,33 @@ export type SessionControlStatus =
   | { state: "stop_unknown"; targetMessageID: string; requestedAt: number; attempts: number; error: string }
   | { state: "stop_failed"; targetMessageID: string; requestedAt: number; attempts: number; error?: string }
   | { state: "stop_confirmed"; targetMessageID: string; confirmedAt: number; result: SessionCancelResult }
+
+/**
+ * Keep cancellation on the backend/instance that owns the session. A TUI can
+ * remain mounted while the active project or workspace changes, so the
+ * current SDK route is only a fallback for prompts without session metadata.
+ */
+export function resolveSessionControlRouting(input: {
+  sessionWorkspaceID?: string
+  sessionDirectory?: string
+  currentWorkspaceID?: string
+  currentDirectory?: string
+}): SessionControlRouting {
+  if (input.sessionWorkspaceID !== undefined) return { workspace: input.sessionWorkspaceID }
+  if (input.sessionDirectory !== undefined) return { directory: input.sessionDirectory }
+  if (input.currentWorkspaceID !== undefined) return { workspace: input.currentWorkspaceID }
+  if (input.currentDirectory !== undefined) return { directory: input.currentDirectory }
+  return {}
+}
+
+/**
+ * A targeted cancel is preferred because it cannot stop a newer turn by
+ * accident. If the target is stale, missing, or the transport did not confirm
+ * delivery, the explicit user stop must fall back to the session abort route.
+ */
+export function sessionCancelResultNeedsHardAbort(input: { delivered: boolean; result?: SessionCancelResult }) {
+  return !input.delivered || input.result === "target_mismatch" || input.result === "not_running"
+}
 
 export function sessionControlAllowsPrompt(status: SessionControlStatus) {
   if (status.state === "idle") return true
@@ -140,22 +175,28 @@ export const { use: useSessionControl, provider: SessionControlProvider } = crea
       setStored(() => normalizeSessionCancelOutbox(next))
     }
 
-    function request(input: { sessionID: string; targetMessageID: string }) {
-      const workspace = project.workspace.current()
-      const directory = workspace === undefined ? sdk.directory : undefined
+    function request(input: { sessionID: string; targetMessageID: string; workspaceID?: string; directory?: string }) {
+      const routing = resolveSessionControlRouting({
+        sessionWorkspaceID: input.workspaceID,
+        sessionDirectory: input.directory,
+        currentWorkspaceID: project.workspace.current(),
+        currentDirectory: sdk.directory,
+      })
+      const workspace = routing.workspace
+      const directory = routing.directory
       const id = `${workspace ?? directory ?? ""}\u0000${input.sessionID}\u0000${input.targetMessageID}`
       const current = entries()
-      if (
-        sessionCancelRequestIsDuplicate({
-          entries: current,
-          confirmedTargetMessageID: confirmed()[input.sessionID]?.targetMessageID,
-          sessionID: input.sessionID,
-          targetMessageID: input.targetMessageID,
-        })
+      if (confirmed()[input.sessionID]?.targetMessageID === input.targetMessageID) return
+      const sameTarget = current.find(
+        (entry) => entry.sessionID === input.sessionID && entry.targetMessageID === input.targetMessageID,
       )
-        return
+      if (sameTarget?.id === id) return
+      // Replace a legacy entry for the same turn when its route was captured
+      // before the session owner was known. Otherwise the stale entry would
+      // win the dedupe check and Esc would keep hitting the wrong folder.
+      const withoutSameTarget = sameTarget ? current.filter((entry) => entry.id !== sameTarget.id) : current
       persist([
-        ...current,
+        ...withoutSameTarget,
         {
           id,
           ...(directory === undefined ? {} : { directory }),
