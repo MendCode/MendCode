@@ -2,7 +2,8 @@ param(
   [string]$Version = $env:VERSION,
   [switch]$NoModifyPath,
   [switch]$Setup,
-  [switch]$SkipSetup
+  [switch]$SkipSetup,
+  [int]$WaitForExitPid = 0
 )
 
 $ErrorActionPreference = "Stop"
@@ -74,6 +75,52 @@ function Invoke-MendCodeSetup {
 function Write-SetupCommand {
   $binary = Join-Path $InstallDir "mendcode.exe"
   Write-Host ('Setup later: $env:OPENCODE_ROUTE=''{"type":"setup"}''; & "' + $binary + '"') -ForegroundColor DarkGray
+}
+
+function Wait-MendCodeProcessExit {
+  param([int]$ProcessId)
+
+  if ($ProcessId -le 0) { return }
+  while (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue) {
+    Start-Sleep -Milliseconds 250
+  }
+}
+
+function Start-DeferredUpdate {
+  if ($env:MENDCODE_UPDATE_WORKER -eq "1") { return $false }
+  if (-not $env:MENDCODE_UPDATE_PARENT_PID) { return $false }
+
+  [int]$parentPid = 0
+  if (-not [int]::TryParse($env:MENDCODE_UPDATE_PARENT_PID, [ref]$parentPid) -or $parentPid -le 0) {
+    throw "MendCode could not schedule the Windows updater: invalid parent process id."
+  }
+
+  $shell = Get-Command powershell.exe -ErrorAction SilentlyContinue
+  if (-not $shell) { $shell = Get-Command pwsh.exe -ErrorAction SilentlyContinue }
+  if (-not $shell) {
+    throw "MendCode could not schedule the Windows updater because PowerShell is unavailable."
+  }
+
+  $workerArguments = [System.Collections.Generic.List[string]]::new()
+  $workerArguments.Add("-NoProfile")
+  $workerArguments.Add("-NonInteractive")
+  $workerArguments.Add("-ExecutionPolicy")
+  $workerArguments.Add("Bypass")
+  $workerArguments.Add("-File")
+  $workerArguments.Add('"' + $PSCommandPath + '"')
+  if ($Version) {
+    $workerArguments.Add("-Version")
+    $workerArguments.Add($Version)
+  }
+  if ($NoModifyPath) { $workerArguments.Add("-NoModifyPath") }
+  $workerArguments.Add("-SkipSetup")
+  $workerArguments.Add("-WaitForExitPid")
+  $workerArguments.Add($parentPid.ToString())
+
+  $env:MENDCODE_UPDATE_WORKER = "1"
+  Start-Process -FilePath $shell.Source -ArgumentList $workerArguments -WindowStyle Hidden | Out-Null
+  Write-Host "Update scheduled; it will finish after MendCode closes." -ForegroundColor DarkGreen
+  return $true
 }
 
 function Maybe-LaunchSetup {
@@ -180,6 +227,9 @@ if (-not [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([Syst
   throw "install.ps1 is for Windows. On macOS or Linux, run: curl -fsSL https://raw.githubusercontent.com/MendCode/MendCode/main/src/mendcode/install | bash"
 }
 
+if (Start-DeferredUpdate) { exit 0 }
+Wait-MendCodeProcessExit -ProcessId $WaitForExitPid
+
 New-Item -ItemType Directory -Force $InstallDir | Out-Null
 
 $target = Get-MendCodeTarget
@@ -234,3 +284,7 @@ Write-Host "  $(Join-Path $InstallDir "mendcode.exe")  # run now in this termina
 Write-Host ""
 Write-Host "Open a new terminal to use: mendcode"
 Maybe-LaunchSetup
+
+if ($env:MENDCODE_UPDATE_SCRIPT_PATH -and (Test-Path $env:MENDCODE_UPDATE_SCRIPT_PATH)) {
+  Remove-Item -Force $env:MENDCODE_UPDATE_SCRIPT_PATH -ErrorAction SilentlyContinue
+}

@@ -20,6 +20,23 @@ Windows users who cannot run PowerShell can use `src/mendcode/install.cmd`.
 It uses the Windows-provided `curl.exe` and `tar.exe` tools and installs the
 baseline x64 asset (or the ARM64 asset) without requiring a PowerShell command.
 
+On Windows, the supported installer and in-app updater use native PowerShell;
+they never invoke the WSL `bash.exe` launcher. This matters on machines where
+WSL is installed incompletely or has no Linux distribution. To recover an old
+installation whose updater still reports `WSL ... execvpe(/bin/bash)`, run the
+native installer once from PowerShell:
+
+```powershell
+$script = Join-Path $env:TEMP "mendcode-install.ps1"
+Invoke-WebRequest "https://raw.githubusercontent.com/MendCode/MendCode/main/src/mendcode/install.ps1" -OutFile $script
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File $script -SkipSetup
+```
+
+The installer updates only `~\.mendcode\bin\mendcode.exe`; it does not delete
+the MendCode/OpenCode data directory or existing sessions. Newer binaries
+schedule the replacement after the running process exits, avoiding Windows
+executable file locks.
+
 The release must include these assets:
 
 ```text
