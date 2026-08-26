@@ -4,6 +4,7 @@ import { Instance } from "../../src/project/instance"
 import { ControlPaths } from "../../src/server/routes/instance/httpapi/groups/control"
 import { FilePaths } from "../../src/server/routes/instance/httpapi/groups/file"
 import { GlobalPaths } from "../../src/server/routes/instance/httpapi/groups/global"
+import { MflowPaths } from "../../src/server/routes/instance/httpapi/groups/mflow"
 import { PublicApi } from "../../src/server/routes/instance/httpapi/public"
 import { ExperimentalHttpApiServer } from "../../src/server/routes/instance/httpapi/server"
 import { Server } from "../../src/server/server"
@@ -227,12 +228,26 @@ describe("HttpApi server", () => {
 
     expect(honoRoutes.filter((route) => !effectRoutes.includes(route))).toEqual([])
     expect(effectRoutes.filter((route) => !honoRoutes.includes(route))).toEqual([
+      "DELETE /workflow/{runID}",
       "GET /api/session",
       "GET /api/session/{sessionID}/context",
       "GET /api/session/{sessionID}/message",
+      "GET /workflow",
+      "GET /workflow/{runID}",
+      "GET /workflow/{runID}/artifacts",
+      "GET /workflow/{runID}/events",
       "POST /api/session/{sessionID}/compact",
       "POST /api/session/{sessionID}/prompt",
       "POST /api/session/{sessionID}/wait",
+      "POST /workflow/preview",
+      "POST /workflow/save",
+      "POST /workflow/start",
+      "POST /workflow/{runID}/pause",
+      "POST /workflow/{runID}/permission-mode",
+      "POST /workflow/{runID}/resume",
+      "POST /workflow/{runID}/retry-phase",
+      "POST /workflow/{runID}/retry-task",
+      "POST /workflow/{runID}/stop",
     ])
   })
 
@@ -329,6 +344,19 @@ describe("HttpApi server", () => {
 
     expect(response.status).toBe(200)
     expect(await response.json()).toMatchObject({ worktree: tmp.path })
+  })
+
+  test("serves mflow status from Effect HttpApi", async () => {
+    await using tmp = await tmpdir({ git: true })
+
+    const response = await app().request(MflowPaths.status, {
+      headers: {
+        "x-opencode-directory": tmp.path,
+      },
+    })
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({ ok: true, mode: "disabled" })
   })
 
   test("requires credentials when auth is enabled", async () => {

@@ -1782,7 +1782,7 @@ it.live("session.processor effect tests mark pending tools as aborted on cleanup
             await Bun.sleep(10)
           }
         })
-        controller.abort()
+        controller.abort("user")
         yield* Fiber.interrupt(run)
 
         const exit = yield* Fiber.await(run)
@@ -2021,7 +2021,7 @@ it.live("session.processor effect tests record aborted errors and idle state", (
           .pipe(Effect.forkChild)
 
         yield* llm.wait(1)
-        controller.abort()
+        controller.abort("user")
         yield* Fiber.interrupt(run)
 
         const exit = yield* Fiber.await(run)
@@ -2059,10 +2059,12 @@ it.live("session.processor effect tests do not mark interruptions aborted withou
         const parent = yield* user(chat.id, "interrupt")
         const msg = yield* assistant(chat.id, parent.id, path.resolve(dir))
         const mdl = yield* provider.getModel(ref.providerID, ref.modelID)
+        const controller = new AbortController()
         const handle = yield* processors.create({
           assistantMessage: msg,
           sessionID: chat.id,
           model: mdl,
+          abort: controller.signal,
         })
 
         const run = yield* handle
@@ -2085,6 +2087,7 @@ it.live("session.processor effect tests do not mark interruptions aborted withou
           .pipe(Effect.forkChild)
 
         yield* llm.wait(1)
+        controller.abort(new DOMException("transport stream closed", "AbortError"))
         yield* Fiber.interrupt(run)
 
         const exit = yield* Fiber.await(run)

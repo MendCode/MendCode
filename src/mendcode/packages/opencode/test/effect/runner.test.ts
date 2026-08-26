@@ -637,32 +637,40 @@ describe("Runner", () => {
   )
 
   it.live(
-    "cancelCurrentIf returns while a run finalizer is still unwinding",
+    "cancelCurrentIf does not publish idle before cancellation reaches the active run",
     Effect.gen(function* () {
       const s = yield* Scope.Scope
       const started = yield* Deferred.make<void>()
-      const release = yield* Deferred.make<void>()
+      const cancellationStarted = yield* Deferred.make<void>()
+      const releaseCancellation = yield* Deferred.make<void>()
       const runner = Runner.make<string>(s)
       const active = yield* runner
         .ensureRunning(
           Effect.gen(function* () {
             yield* Deferred.succeed(started, undefined)
-            return yield* Effect.never.pipe(Effect.ensuring(Deferred.await(release)), Effect.as("active"))
+            return yield* Effect.never.pipe(Effect.as("active"))
           }),
-          { queueKey: "turn-finalizer" },
+          { queueKey: "turn-cancel" },
         )
         .pipe(Effect.forkChild)
 
-      try {
-        yield* Deferred.await(started)
-        expect(yield* runner.cancelCurrentIf("turn-finalizer").pipe(Effect.timeout("250 millis"))).toBe("cancelled")
-        expect(runner.busy).toBe(false)
+      yield* Deferred.await(started)
+      const cancellation = yield* runner
+        .cancelCurrentIf("turn-cancel", {
+          before: Effect.gen(function* () {
+            yield* Deferred.succeed(cancellationStarted, undefined)
+            yield* Deferred.await(releaseCancellation)
+          }),
+        })
+        .pipe(Effect.forkChild)
+      yield* Deferred.await(cancellationStarted)
+      expect(runner.busy).toBe(true)
+      expect(runner.state._tag).toBe("Running")
 
-        yield* Deferred.succeed(release, undefined)
-        expect(Exit.isFailure(yield* Fiber.await(active).pipe(Effect.timeout("250 millis")))).toBe(true)
-      } finally {
-        yield* Deferred.succeed(release, undefined).pipe(Effect.ignore)
-      }
+      yield* Deferred.succeed(releaseCancellation, undefined)
+      expect(yield* Fiber.join(cancellation).pipe(Effect.timeout("750 millis"))).toBe("cancelled")
+      expect(Exit.isFailure(yield* Fiber.await(active).pipe(Effect.timeout("250 millis")))).toBe(true)
+      expect(runner.busy).toBe(false)
     }),
   )
 

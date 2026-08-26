@@ -25,44 +25,36 @@ export function knownAgentActivityConnectionLabel(input: {
   attempt?: number
 }) {
   if (!input.hasKnownAgentActivity) return
-  if (input.connectionStatus === "connecting") return "connecting transport..."
+  if (input.connectionStatus === "connecting") return "Connecting to backend…"
   if (input.connectionStatus !== "reconnecting") return
-  const attempt = input.attempt && input.attempt > 1 ? ` #${input.attempt}` : ""
-  return `syncing connection${attempt}...`
+  const attempt = input.attempt && input.attempt > 1 ? ` (#${input.attempt})` : ""
+  return `Reconnecting to backend…${attempt}`
 }
-
-const NETWORK_RETRY_MARKERS = [
-  "network",
-  "connection",
-  "fetch failed",
-  "failed to fetch",
-  "socket",
-  "econnreset",
-  "econnrefused",
-  "enotfound",
-  "connection reset",
-  "connection refused",
-  "network is unreachable",
-  "dns",
-  "tls",
-  "timeout",
-  "timed out",
-  "offline",
-  "unreachable",
-]
 
 export function retryStatusMessage(message?: string) {
   const value = message?.trim()
-  if (!value) return "retrying AI backend"
-  const normalized = value.toLowerCase()
-  if (NETWORK_RETRY_MARKERS.some((marker) => normalized.includes(marker))) return `retrying AI backend: ${value}`
-  return value
+  return value ? `Retrying provider… ${value}` : "Retrying provider…"
 }
 
 type TuiSessionStatus =
   | { type: "idle" }
   | { type: "busy"; until?: number }
   | { type: "retry"; attempt?: number; message?: string; next: number; heartbeatAt?: number }
+
+type ActivityAssistantMessage = {
+  id?: string
+  parentID?: string
+  role: string
+  finish?: string
+  error?: unknown
+  time: { created?: number; completed?: number }
+}
+
+type ActivityUserMessage = {
+  id?: string
+  role: string
+  time: { created?: number }
+}
 
 function lastActivityTime(...values: Array<number | undefined>) {
   return values
@@ -112,22 +104,15 @@ export function isAssistantWorking(input: {
   return isRecentWorkingAssistant({ now, assistantCreated: input.assistantCreated })
 }
 
-export function isBusyStatusSupersededByTerminalAssistant(input: {
-  statusType?: string
-  statusKind?: string
-  statusStartedAt?: number
-  latestMessage?: {
-    role: string
-    finish?: string
-    error?: unknown
-    time: { created?: number; completed?: number }
-  }
+export function terminalAssistantSettlesLatestTurn(input: {
+  latestMessage?: ActivityAssistantMessage
+  latestUser?: ActivityUserMessage
+  hasActiveTool?: boolean
 }) {
-  if ((input.statusType !== "busy" && input.statusType !== "retry") || input.statusKind === "compaction") return false
   const message = input.latestMessage
   if (!message || message.role !== "assistant") return false
   const continuation = message.finish === "tool-calls" || message.finish === "unknown"
-  const terminalFinish = Boolean(message.finish && !continuation)
+  const explicitTerminal = Boolean(message.error || (message.finish && !continuation))
   // Direct shell turns can persist their completed timestamp before a finish
   // reason is available. This is also the durable receipt left by an aborted
   // tool run, whose output contains "User aborted the command" but whose
@@ -135,16 +120,40 @@ export function isBusyStatusSupersededByTerminalAssistant(input: {
   // snapshot. A completed non-continuation assistant is terminal evidence;
   // tool-calls/unknown remain live continuations until their next step settles.
   const completedWithoutContinuation = message.time.completed !== undefined && !continuation
-  if (!terminalFinish && !message.error && !completedWithoutContinuation) return false
+  if (!explicitTerminal && !completedWithoutContinuation) return false
+  // An explicit finish/error is authoritative over a residual pending tool
+  // part. Without that explicit receipt, keep the tool alive: a completed
+  // tool-call step may still be waiting for its next assistant step.
+  if (input.hasActiveTool && !explicitTerminal) return false
   const terminalAt = message.time.completed ?? message.time.created
+  if (typeof terminalAt !== "number") return false
+
+  const latestUser = input.latestUser
+  if (!latestUser) return true
+  if (message.parentID && latestUser.id) return message.parentID === latestUser.id
+  const latestUserAt = latestUser.time.created
+  return typeof latestUserAt === "number" && latestUserAt <= terminalAt
+}
+
+export function isBusyStatusSupersededByTerminalAssistant(input: {
+  statusType?: string
+  statusKind?: string
+  statusStartedAt?: number
+  latestMessage?: ActivityAssistantMessage
+  latestUser?: ActivityUserMessage
+  hasActiveTool?: boolean
+}) {
+  if ((input.statusType !== "busy" && input.statusType !== "retry") || input.statusKind === "compaction") return false
+  if (!terminalAssistantSettlesLatestTurn(input)) return false
+  const terminalAt = input.latestMessage?.time.completed ?? input.latestMessage?.time.created
   if (typeof terminalAt !== "number") return false
   // Older/status-recovered sessions may not carry startedAt. Once the latest
   // assistant is durably terminal, a stale busy flag must not keep the TUI in
-  // Generating forever. When startedAt exists, retain the ordering guard so a
-  // newer turn is never hidden by an older terminal response.
+  // Generating forever. A latest user/assistant parent match is stronger than
+  // a reconstructed startedAt: it proves no newer user turn owns that status.
   if (typeof input.statusStartedAt !== "number")
-    return Boolean(message.time.completed || terminalFinish || message.error)
-  return input.statusStartedAt <= terminalAt
+    return true
+  return input.latestUser !== undefined || input.statusStartedAt <= terminalAt
 }
 
 /**
@@ -156,9 +165,9 @@ export function terminalAssistantSettlesActivity(input: {
   statusKind?: string
   statusStartedAt?: number
   latestMessage?: Parameters<typeof isBusyStatusSupersededByTerminalAssistant>[0]["latestMessage"]
+  latestUser?: Parameters<typeof isBusyStatusSupersededByTerminalAssistant>[0]["latestUser"]
   hasActiveTool?: boolean
 }) {
-  if (input.hasActiveTool) return false
   return isBusyStatusSupersededByTerminalAssistant(input)
 }
 

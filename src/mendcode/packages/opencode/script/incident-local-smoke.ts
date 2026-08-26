@@ -279,7 +279,9 @@ The JSON must still contain the same queued/working workflow runs and active/sle
 async function main() {
   const args = new Set(process.argv.slice(2))
   if (args.has("--help") || args.has("-h")) {
-    console.log("Usage: bun run script/incident-local-smoke.ts [--contracts-only|--runtime-only|--require-installed|--manual]")
+    console.log(
+      "Usage: bun run script/incident-local-smoke.ts [--contracts-only|--runtime-only|--require-installed|--manual]",
+    )
     return
   }
   if (args.has("--manual")) {
@@ -291,11 +293,7 @@ async function main() {
   const failures: string[] = []
   if (!args.has("--runtime-only")) {
     for (const group of groups) {
-      const ok = await runStep(
-        group.name,
-        ["test", "--timeout", "30000", ...group.tests],
-        env,
-      )
+      const ok = await runStep(group.name, ["test", "--timeout", "30000", ...group.tests], env)
       if (!ok) failures.push(group.name)
     }
   }
@@ -314,7 +312,9 @@ async function main() {
   }
 
   console.log("\nPASS incident-local smoke: no provider credentials or model requests were enabled")
-  console.log("Manual-only: actual PTY rendering/reconnect perception after killing the server; use --manual")
+  console.log(
+    "Manual-only: human terminal perception during a real server-process restart; automated PTY transport loss/recovery is covered by test:session-runtime:smoke; use --manual",
+  )
 }
 
 await main()
