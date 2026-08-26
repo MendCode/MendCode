@@ -373,10 +373,13 @@ export const make = <A, E = never>(
             // provider/tool finalizer to resolve the run receipt: an old or
             // huge session must be stoppable even when that cleanup is slow.
             yield* Deferred.fail(st.run.done, new Cancelled()).pipe(Effect.asVoid)
-            yield* idleIfCurrent()
             return "cancelled" as const
           }),
-          { _tag: "Idle" } as const,
+          // The control request may acknowledge before cleanup finishes, but
+          // the runner remains authoritative and busy until the interrupted
+          // fiber's exit hook has drained provider/tool finalizers. Publishing
+          // Idle here would let a new turn overlap the old cleanup.
+          st,
         ] as const
       }
       return [
@@ -387,7 +390,6 @@ export const make = <A, E = never>(
           // Resolve the caller immediately; the interrupted fiber's exit
           // hook may otherwise keep the HTTP cancel request hanging.
           yield* Deferred.fail(st.run.done, new Cancelled()).pipe(Effect.asVoid)
-          yield* idleIfCurrent()
           return "cancelled" as const
         }),
         options?.cancelPending ? ({ _tag: "Running", run: st.run } as const) : st,

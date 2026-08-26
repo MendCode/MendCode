@@ -62,6 +62,7 @@ import { BackgroundTask } from "../../src/session/background-task"
 import { LoopWorkflow } from "../../src/session/loop"
 import { LoopRunner } from "../../src/session/loop-runner"
 import { WorkflowService } from "../../src/session/workflow-service"
+import { AgentCommand } from "../../src/session/agent-command"
 
 void Log.init({ print: false })
 
@@ -108,12 +109,14 @@ const lsp = Layer.succeed(
   }),
 )
 
-const status = SessionStatus.layer.pipe(Layer.provideMerge(Bus.layer))
+const bus = Bus.defaultLayer
+const status = SessionStatus.layer.pipe(Layer.provide(bus))
 const run = SessionRunState.layer.pipe(Layer.provide(status))
 const infra = Layer.mergeAll(NodeFileSystem.layer, CrossSpawnSpawner.defaultLayer)
 
 function makeHttp() {
   const deps = Layer.mergeAll(
+    bus,
     Session.defaultLayer,
     Snapshot.defaultLayer,
     LLM.defaultLayer,
@@ -129,7 +132,9 @@ function makeHttp() {
     mcp,
     AppFileSystem.defaultLayer,
     status,
-    BackgroundTask.defaultLayer,
+    BackgroundTask.layer.pipe(Layer.provide(bus)),
+    AgentCommand.defaultLayer,
+    WorkflowService.defaultLayer,
   ).pipe(Layer.provideMerge(infra))
   const question = Question.layer.pipe(Layer.provideMerge(deps))
   const planReview = PlanReview.layer.pipe(Layer.provideMerge(deps))

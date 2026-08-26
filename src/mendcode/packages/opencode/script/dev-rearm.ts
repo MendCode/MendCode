@@ -1,11 +1,12 @@
 import { randomUUID } from "node:crypto"
 import { spawn, spawnSync, type ChildProcess } from "node:child_process"
-import { existsSync, readdirSync } from "node:fs"
+import { existsSync } from "node:fs"
 import { access, mkdir, readdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import { resolveDualReadDbPathFromLayout } from "../src/storage/resolve-default-sqlite-path"
+import { readGlobalLayoutInstallSelection, resolveActiveAppSegmentFromDirs } from "@mendcode/core/global-layout"
 
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 const SOURCE_ENTRYPOINT = path.join(PACKAGE_ROOT, "src", "index.ts")
@@ -89,42 +90,19 @@ function xdgRoot(env: NodeJS.ProcessEnv, key: string, fallback: string) {
   return env[key] || fallback
 }
 
-function hasIdentityArtifacts(directory: string) {
-  try {
-    const names = readdirSync(directory)
-    return names.some(
-      (name) =>
-        name === "storage" ||
-        name === "auth.json" ||
-        name === "mcp-auth.json" ||
-        name.endsWith(".db") ||
-        name === ".mendcode-json-storage-migration-v0.done" ||
-        name === ".mendcode-global-layout-v0.done",
-    )
-  } catch {
-    return false
-  }
-}
-
-function resolveSegment(env: NodeJS.ProcessEnv, dataRoot: string) {
-  const raw = envValue(env, "OPENCODE_GLOBAL_LAYOUT")?.trim().toLowerCase()
-  if (raw === "legacy") return "opencode" as const
-  if (raw === "mendcode") return "mendcode" as const
-
-  const mendData = path.join(dataRoot, "mendcode")
-  const legacyData = path.join(dataRoot, "opencode")
-  if (existsSync(path.join(mendData, ".mendcode-global-layout-v0.done"))) return "mendcode" as const
-  if (hasIdentityArtifacts(legacyData)) return "opencode" as const
-  return "mendcode" as const
-}
-
 export function resolveDevRearmPaths(env: NodeJS.ProcessEnv = process.env): DevRearmPaths {
   const home = env.OPENCODE_TEST_HOME || env.HOME || os.homedir()
   const dataBase = xdgRoot(env, "XDG_DATA_HOME", path.join(home, ".local", "share"))
   const stateBase = xdgRoot(env, "XDG_STATE_HOME", path.join(home, ".local", "state"))
   const configBase = xdgRoot(env, "XDG_CONFIG_HOME", path.join(home, ".config"))
   const cacheBase = xdgRoot(env, "XDG_CACHE_HOME", path.join(home, ".cache"))
-  const segment = resolveSegment(env, dataBase)
+  const segment = resolveActiveAppSegmentFromDirs({
+    environmentSelection: env.MENDCODE_GLOBAL_LAYOUT,
+    installSelection: readGlobalLayoutInstallSelection(home),
+    legacyEnvironmentSelection: env.OPENCODE_GLOBAL_LAYOUT,
+    legacyDataDir: path.join(dataBase, "opencode"),
+    mendDataDir: path.join(dataBase, "mendcode"),
+  })
   const data = path.join(dataBase, segment)
   const state = path.join(stateBase, segment)
   const config = envValue(env, "OPENCODE_CONFIG_DIR") || path.join(configBase, segment)

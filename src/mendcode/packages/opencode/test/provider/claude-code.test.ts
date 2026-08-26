@@ -533,21 +533,44 @@ test("Claude Code forwards pre-aborted signals to the Agent SDK", async () => {
   expect(input?.options?.abortController?.signal.reason).toBe("already cancelled")
 })
 
-test("Claude Code forwards an already-aborted signal to the Agent SDK", async () => {
+test("Claude Code forwards a live abort and closes the Agent SDK query", async () => {
   let input: Parameters<typeof query>[0] | undefined
+  let releaseQuery: (() => void) | undefined
+  let closeCalls = 0
   const abortController = new AbortController()
-  abortController.abort("stop now")
+  const queryGate = new Promise<void>((resolve) => {
+    releaseQuery = resolve
+  })
   const sdk = ClaudeCode.createClaudeCode({
-    createQuery: fakeQuery([], (value) => {
+    createQuery: ((value: Parameters<typeof query>[0]) => {
       input = value
-    }),
+      return Object.assign(
+        (async function* () {
+          await queryGate
+        })(),
+        {
+          close() {
+            closeCalls += 1
+            releaseQuery?.()
+          },
+        },
+      ) as Query
+    }) as typeof query,
   })
 
-  await sdk.languageModel("claude-sonnet-4-6").doGenerate({
+  const result = await sdk.languageModel("claude-sonnet-4-6").doStream({
     prompt: [{ role: "user", content: [{ type: "text", text: "say hi" }] }],
     abortSignal: abortController.signal,
   })
+  const reader = result.stream.getReader()
+  expect((await reader.read()).value?.type).toBe("stream-start")
+  for (let attempt = 0; attempt < 50 && !input; attempt++) await Bun.sleep(5)
+
+  abortController.abort("stop now")
 
   expect(input?.options?.abortController?.signal.aborted).toBe(true)
   expect(input?.options?.abortController?.signal.reason).toBe("stop now")
+  releaseQuery?.()
+  while (!(await reader.read()).done) {}
+  expect(closeCalls).toBe(1)
 })

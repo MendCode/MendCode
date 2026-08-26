@@ -513,7 +513,7 @@ export const layer: Layer.Layer<
           : { type: "busy" as const, message: SessionStatus.SESSION_ACTIVITY_WAITING }
 
       const isExplicitAbort = () =>
-        aborted || (input.isManualAbort ? input.isManualAbort() : input.abort?.aborted === true)
+        aborted || input.isManualAbort?.() === true || (input.abort?.aborted === true && input.abort.reason === "user")
 
       const parse = (e: unknown) =>
         MessageV2.fromError(e, {
@@ -1462,7 +1462,7 @@ export const layer: Layer.Layer<
                     )?.text ?? null)
                 : null
             const idleTimeoutMs = llmStreamIdleTimeoutMs()
-            const stream = llm.stream(streamInput)
+            const stream = llm.stream({ ...streamInput, abort: input.abort })
 
             yield* timeoutStreamUnless(stream, {
               duration: idleTimeoutMs,

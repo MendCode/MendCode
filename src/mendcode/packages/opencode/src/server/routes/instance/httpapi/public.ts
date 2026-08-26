@@ -75,8 +75,21 @@ const QueryNumberParameters = new Set(["start", "cursor", "limit", "method"])
 const QueryBooleanParameters = new Set(["roots", "archived"])
 const QueryParameterSchemas = {
   "GET /find/file limit": { type: "integer", minimum: 1, maximum: 200 },
+  "GET /experimental/usage-insights messageLimit": { type: "number" },
+  "GET /session/agent-command sourceSessionID": { type: "string", pattern: "^ses.*" },
+  "GET /session/agent-command targetSessionID": { type: "string", pattern: "^ses.*" },
   "GET /session/{sessionID}/diff messageID": { type: "string", pattern: "^msg.*" },
   "GET /session/{sessionID}/message limit": { type: "integer", minimum: 0, maximum: Number.MAX_SAFE_INTEGER },
+  "GET /session/{sessionID}/message partsLimit": {
+    type: "integer",
+    minimum: 1,
+    maximum: Number.MAX_SAFE_INTEGER,
+  },
+  "GET /session/{sessionID}/message/{messageID} partsLimit": {
+    type: "integer",
+    minimum: 1,
+    maximum: Number.MAX_SAFE_INTEGER,
+  },
 } satisfies Record<string, OpenApiSchema>
 
 const PathParameterSchemas = {
@@ -532,6 +545,8 @@ function pathParameterSchema(route: string, name: string) {
   if (name === "id" && route.startsWith("POST /experimental/workspace/")) return { type: "string", pattern: "^wrk.*" }
   if (name === "requestID" && route.startsWith("POST /permission/")) return { type: "string", pattern: "^per.*" }
   if (name === "requestID" && route.startsWith("POST /question/")) return { type: "string", pattern: "^que.*" }
+  if (name === "requestID" && route.startsWith("POST /plan-review/")) return { type: "string", pattern: "^plr.*" }
+  if (name === "commandID" && route.startsWith("PATCH /session/")) return { type: "string", pattern: "^acmd.*" }
   return undefined
 }
 
