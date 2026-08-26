@@ -92,6 +92,10 @@ done
 INSTALL_DIR=$HOME/.mendcode/bin
 mkdir -p "$INSTALL_DIR"
 
+# Create MendCode data directory to avoid conflicts with opencode
+MENDCODE_DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/mendcode"
+mkdir -p "$MENDCODE_DATA_DIR"
+
 # If --binary is provided, skip all download/detection logic
 if [ -n "$binary_path" ]; then
     if [ ! -f "$binary_path" ]; then
@@ -480,6 +484,28 @@ add_to_path() {
     fi
 }
 
+add_global_layout_env() {
+    local config_file=$1
+    local shell_type=$2
+    local env_line
+
+    if [[ "$shell_type" == "fish" ]]; then
+        env_line='set -x OPENCODE_GLOBAL_LAYOUT mendcode'
+    else
+        env_line='export OPENCODE_GLOBAL_LAYOUT=mendcode'
+    fi
+
+    if grep -q "OPENCODE_GLOBAL_LAYOUT" "$config_file"; then
+        print_message info "OPENCODE_GLOBAL_LAYOUT already set in $config_file, skipping write."
+    elif [[ -w $config_file ]]; then
+        echo "$env_line" >> "$config_file"
+        print_message info "${MUTED}Successfully added ${NC}OPENCODE_GLOBAL_LAYOUT=mendcode ${MUTED}to ${NC}$config_file"
+    else
+        print_message warning "Manually add to $config_file:"
+        print_message info "  $env_line"
+    fi
+}
+
 XDG_CONFIG_HOME=${XDG_CONFIG_HOME:-$HOME/.config}
 
 current_shell=$(basename "$SHELL")
@@ -543,6 +569,11 @@ if [[ "$no_modify_path" != "true" ]]; then
         esac
     else
         print_success "PATH already includes $INSTALL_DIR"
+    fi
+
+    # Set OPENCODE_GLOBAL_LAYOUT=mendcode so MendCode uses its own data directory
+    if [[ -n "$config_file" ]]; then
+        add_global_layout_env "$config_file" "$current_shell"
     fi
 else
     print_message info "${MUTED}Skipping PATH update because --no-modify-path was set.${NC}"
