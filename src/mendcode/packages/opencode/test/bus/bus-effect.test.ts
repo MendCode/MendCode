@@ -122,6 +122,7 @@ describe("Bus (Effect-native)", () => {
       const bus = yield* Bus.Service
       const entered = yield* Deferred.make<void>()
       const release = yield* Deferred.make<void>()
+      const drained = yield* Deferred.make<void>()
       const received: number[] = []
 
       yield* Stream.runForEach(bus.subscribe(TestEvent.Ping), (evt) =>
@@ -131,6 +132,9 @@ describe("Bus (Effect-native)", () => {
             yield* Deferred.await(release)
           }
           received.push(evt.properties.value)
+          if (evt.properties.value === INTERNAL_EVENT_BUFFER_CAPACITY + 1) {
+            Deferred.doneUnsafe(drained, Effect.void)
+          }
         }),
       ).pipe(Effect.forkScoped)
 
@@ -152,6 +156,7 @@ describe("Bus (Effect-native)", () => {
 
       Deferred.doneUnsafe(release, Effect.void)
       yield* Fiber.join(publishFiber)
+      yield* Deferred.await(drained).pipe(Effect.timeout("2 seconds"))
       expect(received).toHaveLength(INTERNAL_EVENT_BUFFER_CAPACITY + 2)
     }),
   )

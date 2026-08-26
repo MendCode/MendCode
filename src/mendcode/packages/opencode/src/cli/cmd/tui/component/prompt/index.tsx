@@ -119,6 +119,7 @@ import {
   isAssistantWorking,
   knownAgentActivityConnectionLabel,
   terminalAssistantSettlesActivity,
+  terminalAssistantSettlesLatestTurn,
   SESSION_AGENT_STATE_UNKNOWN_MESSAGE,
   displayConnectionStatus,
   retryStatusMessage,
@@ -685,6 +686,23 @@ export function shouldKeepWorkingStatus(input: {
   )
 }
 
+export function shouldClearSubmitPreflight(input: {
+  active: boolean
+  hasSession: boolean
+  statusType: string
+  hasPendingPromptDelivery?: boolean
+  hasActiveWorkingAssistant?: boolean
+  targetTerminal?: boolean
+}) {
+  if (!input.active || !input.hasSession) return false
+  return Boolean(
+    input.statusType !== "idle" ||
+      input.hasPendingPromptDelivery ||
+      input.hasActiveWorkingAssistant ||
+      input.targetTerminal,
+  )
+}
+
 export function promptWorkingIndicatorVisible(input: {
   hasSession: boolean
   submitPreflightActive: boolean
@@ -973,6 +991,7 @@ export function Prompt(props: PromptProps) {
   const [dismissedEditorSelectionKey, setDismissedEditorSelectionKey] = createSignal<string>()
   const [promptStatusTick, setPromptStatusTick] = createSignal(Date.now())
   const [pendingPromptDeliveryRevision, setPendingPromptDeliveryRevision] = createSignal(0)
+  const [submitPreflightMessageID, setSubmitPreflightMessageID] = createSignal<string>()
   const [workingTick, setWorkingTick] = createSignal(Date.now())
   const [workingStartedAt, setWorkingStartedAt] = createSignal<number>()
   const [submitPreflightActive, setSubmitPreflightActive] = createSignal(false)
@@ -1112,16 +1131,21 @@ export function Prompt(props: PromptProps) {
     pendingPromptDeliveryRevision()
     return Boolean(props.sessionID && pendingPromptDeliveryIsActive(props.sessionID))
   })
-  const terminalAssistantSupersedesBusy = createMemo(() => {
-    const current = status()
+  const terminalActivitySnapshot = createMemo(() => {
     const messages = messagesForActivity()
     const latestAssistant = messages.findLast((message) => message.role === "assistant")
+    const latestUser = messages.findLast((message) => message.role === "user")
     const hasActiveTool = latestAssistant
       ? (sync.data.part[latestAssistant.id] ?? []).some((part) => {
           const raw = part as Record<string, any>
           return raw.type === "tool" && (raw.state?.status === "pending" || raw.state?.status === "running")
         })
       : false
+    return { latestAssistant, latestUser, hasActiveTool }
+  })
+  const terminalAssistantSupersedesBusy = createMemo(() => {
+    const current = status()
+    const snapshot = terminalActivitySnapshot()
     return terminalAssistantSettlesActivity({
       statusType: current.type,
       statusKind: current.type === "busy" ? current.kind : undefined,
@@ -1129,9 +1153,26 @@ export function Prompt(props: PromptProps) {
       // A queued user message or late tool event can be the last item even
       // after the assistant response is terminal. Reconcile against the
       // latest assistant, not the last heterogeneous timeline item.
-      latestMessage: latestAssistant,
-      hasActiveTool,
+      latestMessage: snapshot.latestAssistant,
+      latestUser: snapshot.latestUser,
+      hasActiveTool: snapshot.hasActiveTool,
     })
+  })
+  const submitPreflightSettled = createMemo(() => {
+    const targetMessageID = submitPreflightMessageID()
+    if (!targetMessageID) return false
+    const messages = messagesForActivity()
+    const latestUser = messages.findLast((message) => message.role === "user" && message.id === targetMessageID)
+    const latestAssistant = messages.findLast(
+      (message) => message.role === "assistant" && message.parentID === targetMessageID,
+    )
+    const hasActiveTool = latestAssistant
+      ? (sync.data.part[latestAssistant.id] ?? []).some((part) => {
+          const raw = part as Record<string, any>
+          return raw.type === "tool" && (raw.state?.status === "pending" || raw.state?.status === "running")
+        })
+      : false
+    return terminalAssistantSettlesLatestTurn({ latestMessage: latestAssistant, latestUser, hasActiveTool })
   })
   const workingStatusActive = createMemo(() =>
     shouldKeepWorkingStatus({
@@ -1150,9 +1191,19 @@ export function Prompt(props: PromptProps) {
       workingStatusActive() && (hasActiveWorkingAssistant() || compactionActive() || Boolean(props.permissionPending)),
   )
   createEffect(() => {
-    if (!submitPreflightActive() || !props.sessionID) return
-    if (status().type === "idle" && !hasPendingPromptDelivery() && !hasActiveWorkingAssistant()) return
+    if (
+      !shouldClearSubmitPreflight({
+        active: submitPreflightActive(),
+        hasSession: Boolean(props.sessionID),
+        statusType: status().type,
+        hasPendingPromptDelivery: hasPendingPromptDelivery(),
+        hasActiveWorkingAssistant: hasActiveWorkingAssistant(),
+        targetTerminal: submitPreflightSettled(),
+      })
+    )
+      return
     setSubmitPreflightActive(false)
+    setSubmitPreflightMessageID(undefined)
   })
   const connectionStateMessage = createMemo(() => {
     if (
@@ -2323,6 +2374,7 @@ export function Prompt(props: PromptProps) {
     submitPending = false
     if (submitPreflightActive()) setWorkingStartedAt(undefined)
     setSubmitPreflightActive(false)
+    setSubmitPreflightMessageID(undefined)
     suppressPromptInputSync = true
     input.setText(prompt.input)
     input.cursorOffset = prompt.input.length
@@ -2895,6 +2947,7 @@ export function Prompt(props: PromptProps) {
     // virtualization never resolves an intermediate frame from stale scrollTop.
     batch(() => {
       setSubmitPreflightActive(true)
+      setSubmitPreflightMessageID(messageID)
       if (!queuedBehindActiveTurn) {
         workingStartedAtBySession.set(sessionID, submissionStartedAt)
         setWorkingStartedAt(submissionStartedAt)
@@ -3813,9 +3866,12 @@ export function Prompt(props: PromptProps) {
   const workingConnectionMessage = createMemo(() => {
     const connection = sdk.connection
     const effectiveStatus = effectiveConnectionStatus()
-    if (effectiveStatus === "connecting") return "connecting to MendCode backend..."
-    if (effectiveStatus === "reconnecting")
-      return `retrying MendCode backend${connection.attempt > 1 ? ` #${connection.attempt}` : ""}...`
+    const connectionLabel = knownAgentActivityConnectionLabel({
+      connectionStatus: effectiveStatus,
+      hasKnownAgentActivity: true,
+      attempt: connection.attempt,
+    })
+    if (connectionLabel) return connectionLabel
     if (effectiveStatus === "failed") return `MendCode backend unavailable after ${connection.attempt} retries`
     if (effectiveStatus === "disconnected") return "MendCode backend disconnected"
 

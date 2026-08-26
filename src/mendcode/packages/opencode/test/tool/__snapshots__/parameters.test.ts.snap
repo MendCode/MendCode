@@ -208,7 +208,7 @@ exports[`tool parameters JSON Schema (wire shape) loop 1`] = `
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "properties": {
     "action": {
-      "description": "Loop workflow action. Use activate to create/start a loop, draft to create a reviewable draft, show/list to inspect, update_agent to change the loop agent, and pause/resume/stop/delete/run_once for control.",
+      "description": "Loop workflow action. Use activate to create/start a loop, draft to create a reviewable draft, show/list to inspect, update_agent to change the loop agent, override only after an explicit user waiver/accept/retry decision, and pause/resume/stop/delete/run_once for control.",
       "enum": [
         "draft",
         "activate",
@@ -220,6 +220,8 @@ exports[`tool parameters JSON Schema (wire shape) loop 1`] = `
         "delete",
         "run_once",
         "update_agent",
+        "signal",
+        "override",
       ],
       "type": "string",
     },
@@ -227,12 +229,46 @@ exports[`tool parameters JSON Schema (wire shape) loop 1`] = `
       "description": "Optional MendCode agent/profile name to use when the loop runner wakes this workflow. With action=update_agent, set this to the new agent name or an empty string to use the default agent.",
       "type": "string",
     },
+    "approvalRequiredFor": {
+      "description": "Approval-required action classes for this loop, such as push, merge, release, external-send, destructive-shell, or broad-refactor.",
+      "items": {
+        "type": "string",
+      },
+      "type": "array",
+    },
+    "approvedActions": {
+      "description": "Action classes explicitly approved for this loop. Use sparingly; sensitive actions should require user approval.",
+      "items": {
+        "type": "string",
+      },
+      "type": "array",
+    },
+    "artifactMaxAgeMs": {
+      "description": "Optional maximum age for non-critical loop artifacts in milliseconds.",
+      "type": "number",
+    },
+    "artifactMaxBytes": {
+      "description": "Optional soft retained artifact byte budget; oldest non-critical artifacts are pruned first while audit-critical records are preserved.",
+      "type": "number",
+    },
+    "artifactMaxCount": {
+      "description": "Optional retained non-critical artifact count budget for this loop. Audit-critical records are preserved.",
+      "type": "number",
+    },
     "budgetMode": {
-      "description": "Loop budget semantics: fixed runs exactly to maxTurns, max-goal uses maxTurns as a cap and completes as soon as the goal is verified, unbounded-monitor runs until stopped/blocker.",
+      "description": "Loop budget semantics: fixed runs exactly to a positive maxTurns cap, max-goal uses an optional maxTurns cap and completes as soon as the goal is verified, unbounded-monitor omits maxTurns and runs until stopped/blocker.",
       "enum": [
         "fixed",
         "max-goal",
         "unbounded-monitor",
+      ],
+      "type": "string",
+    },
+    "completionConfirmation": {
+      "description": "Terminal confirmation protocol. New max-goal loops default to next-run so a separate full audit iteration must pass before completion.",
+      "enum": [
+        "same-run",
+        "next-run",
       ],
       "type": "string",
     },
@@ -243,9 +279,26 @@ exports[`tool parameters JSON Schema (wire shape) loop 1`] = `
       },
       "type": "array",
     },
+    "dailyAt": {
+      "description": "Local 24-hour time for a daily trigger, formatted as HH:mm.",
+      "type": "string",
+    },
     "ensureService": {
       "description": "When activating, best-effort start the project loop service so wakeups continue outside the TUI.",
       "type": "boolean",
+    },
+    "evaluationMode": {
+      "description": "Completion evaluation mode. max-goal loops default to independent so worker self-completion must be judged before the workflow completes.",
+      "enum": [
+        "legacy",
+        "deterministic",
+        "independent",
+      ],
+      "type": "string",
+    },
+    "evaluatorAgent": {
+      "description": "Optional agent/profile for the independent evaluator. Defaults to the loop agent/session default.",
+      "type": "string",
     },
     "gates": {
       "description": "Review, permission, safety, or quality gates the loop must respect.",
@@ -255,11 +308,15 @@ exports[`tool parameters JSON Schema (wire shape) loop 1`] = `
       "type": "array",
     },
     "intervalMs": {
-      "description": "Interval in milliseconds when triggerMode is interval.",
+      "description": "Interval in milliseconds when triggerMode is interval; omit it for daily triggers.",
       "type": "number",
     },
     "maxChildren": {
       "description": "Maximum child/subagent sessions the loop should create while working.",
+      "type": "number",
+    },
+    "maxCost": {
+      "description": "Optional positive lifetime model cost budget for the loop when usage metadata is available; omit it when Setup has no budget configured. Zero is treated as omitted.",
       "type": "number",
     },
     "maxDepth": {
@@ -270,8 +327,12 @@ exports[`tool parameters JSON Schema (wire shape) loop 1`] = `
       "description": "Maximum wall-clock runtime in milliseconds before the loop should stop.",
       "type": "number",
     },
+    "maxTokens": {
+      "description": "Optional lifetime token budget for the loop when usage metadata is available; omit it when Setup has no budget configured or when no per-loop cap was explicitly requested.",
+      "type": "number",
+    },
     "maxTurns": {
-      "description": "Iteration budget/cap. For goal work this is a maximum, not a plan to spend every iteration. Use budgetMode=fixed only for exactly-N iteration jobs.",
+      "description": "Iteration budget/cap. Omit for budgetMode=unbounded-monitor; unbounded monitor loops run until stopped and ignore maxTurns.",
       "type": "number",
     },
     "model": {
@@ -279,7 +340,7 @@ exports[`tool parameters JSON Schema (wire shape) loop 1`] = `
       "type": "string",
     },
     "name": {
-      "description": "Short workflow name when creating a draft or activating a new loop.",
+      "description": "Concise workflow label: 2-4 words and at most 24 characters. Omit project, model, cadence, and permission details.",
       "type": "string",
     },
     "notifyOwnerOnComplete": {
@@ -288,6 +349,19 @@ exports[`tool parameters JSON Schema (wire shape) loop 1`] = `
     },
     "objective": {
       "description": "Durable loop objective. Required when creating a draft or activating a new loop.",
+      "type": "string",
+    },
+    "overrideAction": {
+      "description": "Human override action. Requires an explicit user decision and a non-empty reason.",
+      "enum": [
+        "waive",
+        "accept",
+        "retry",
+      ],
+      "type": "string",
+    },
+    "overrideGateID": {
+      "description": "Blocking gate id to waive. Safety-critical policy, approval, budget, and user-input gates cannot be waived.",
       "type": "string",
     },
     "permissionMode": {
@@ -311,6 +385,29 @@ exports[`tool parameters JSON Schema (wire shape) loop 1`] = `
       "description": "Number of final budget turns reserved for validation, cleanup, retry, or blocker reporting.",
       "type": "number",
     },
+    "signalDedupeKey": {
+      "description": "Stable idempotency key for action=signal. Duplicate source/type/key signals are ignored.",
+      "type": "string",
+    },
+    "signalLinks": {
+      "description": "Optional links associated with the signal, bounded and stored as metadata.",
+      "items": {
+        "type": "string",
+      },
+      "type": "array",
+    },
+    "signalPayloadSummary": {
+      "description": "Safe redacted summary of the external signal payload for action=signal.",
+      "type": "string",
+    },
+    "signalSource": {
+      "description": "External signal source for action=signal, such as github, ci, slack, local, or manual.",
+      "type": "string",
+    },
+    "signalType": {
+      "description": "External signal type for action=signal, such as ci.check.failed or github.pr.updated.",
+      "type": "string",
+    },
     "stopWhen": {
       "description": "Natural-language stop conditions for the loop.",
       "items": {
@@ -329,16 +426,32 @@ exports[`tool parameters JSON Schema (wire shape) loop 1`] = `
       "description": "Soft target number of iterations to finish the goal before using the remaining budget for recovery/verification.",
       "type": "number",
     },
+    "timezone": {
+      "description": "Timezone for dailyAt. Accepts UTC, GMT, or any valid IANA timezone such as America/New_York or Europe/Madrid. Defaults to the local timezone.",
+      "type": "string",
+    },
     "triggerMode": {
-      "description": "How the loop wakes up. Use manual for on-demand tests or interval for scheduled background loops.",
+      "description": "How the loop wakes up. Use manual for on-demand tests, interval for elapsed-time polling, or daily for a timezone-aware HH:mm schedule.",
       "enum": [
         "manual",
         "interval",
+        "daily",
         "adaptive",
         "external-signal",
         "self-paced",
       ],
       "type": "string",
+    },
+    "validationCommands": {
+      "description": "Explicit executable validation commands. Only bounded read-only test/check commands from the validation allowlist are executed.",
+      "items": {
+        "type": "string",
+      },
+      "type": "array",
+    },
+    "validationTimeoutMs": {
+      "description": "Per-command validation timeout in milliseconds. Defaults to 120000 and is capped at 10 minutes.",
+      "type": "number",
     },
     "variant": {
       "description": "Optional model variant/reasoning effort for loop iterations, for example low, medium, high, or max. Use this when the user says reasoning medium/high/etc.",
@@ -346,6 +459,16 @@ exports[`tool parameters JSON Schema (wire shape) loop 1`] = `
     },
     "workflowID": {
       "description": "Existing loop workflow id. Provide it for precise show, pause, resume, stop, and run_once actions. If omitted, the tool may resolve the current session's contextual loop or fall back to a list.",
+      "type": "string",
+    },
+    "workspaceMode": {
+      "description": "Workspace isolation policy. read-only avoids edits, in-place uses the current project, and worktree modes record intended isolation for worktree lifecycle handling.",
+      "enum": [
+        "read-only",
+        "in-place",
+        "per-loop-worktree",
+        "per-run-worktree",
+      ],
       "type": "string",
     },
   },
@@ -551,6 +674,10 @@ exports[`tool parameters JSON Schema (wire shape) task 1`] = `
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "properties": {
+    "background": {
+      "description": "Return immediately while the subagent continues. Keep the returned task_id; if no independent parent work remains, end the current turn instead of polling task_status or wait.",
+      "type": "boolean",
+    },
     "command": {
       "description": "The command that triggered this task",
       "type": "string",
@@ -561,7 +688,7 @@ exports[`tool parameters JSON Schema (wire shape) task 1`] = `
     },
     "model": {
       "$ref": "https://models.dev/model-schema.json#/$defs/Model",
-      "description": "Optional model to use for this subagent in provider/model-id format. Must be one of the models available in MendCode.",
+      "description": "Optional model to use for this subagent in provider/model-id format. A trailing #variant shorthand is accepted.",
       "type": "string",
     },
     "prompt": {
@@ -574,6 +701,10 @@ exports[`tool parameters JSON Schema (wire shape) task 1`] = `
     },
     "task_id": {
       "description": "This should only be set if you mean to resume a previous task (you can pass a prior task_id and the task will continue the same subagent session as before instead of creating a fresh one)",
+      "type": "string",
+    },
+    "variant": {
+      "description": "Optional model variant or reasoning effort for this subagent, for example low, high, or max. Must be supported by the selected provider/model.",
       "type": "string",
     },
   },

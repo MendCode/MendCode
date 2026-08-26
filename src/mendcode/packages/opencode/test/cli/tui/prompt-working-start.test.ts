@@ -36,6 +36,7 @@ import {
   shouldAcceptPromptInterruptFocus,
   shouldAttemptPromptHistoryNavigation,
   shouldClearWorkingStartedAt,
+  shouldClearSubmitPreflight,
   shouldKeepWorkingStatus,
   shouldEnableSessionInterrupt,
   shouldHandlePromptCursorArrow,
@@ -49,7 +50,10 @@ import {
   shouldSnapPromptCursorToEnd,
   shouldUseStoredPromptHistoryFallback,
 } from "@/cli/cmd/tui/component/prompt"
-import { terminalAssistantSettlesActivity } from "@/cli/cmd/tui/util/session-working"
+import {
+  terminalAssistantSettlesActivity,
+  terminalAssistantSettlesLatestTurn,
+} from "@/cli/cmd/tui/util/session-working"
 import {
   latestFullSessionHistoryStartID,
   sessionFollowSyncIsStale,
@@ -170,10 +174,19 @@ describe("terminal activity reconciliation", () => {
     ).toBe(false)
   })
 
-  test("keeps Generating when a real tool is still pending after a terminal-looking event", () => {
+  test("does not keep Generating when an explicit terminal receipt has a residual active tool", () => {
     const settled = terminalAssistantSettlesActivity({
       statusType: "busy",
       latestMessage: { role: "assistant", finish: "stop", time: { created: 100, completed: 200 } },
+      hasActiveTool: true,
+    })
+    expect(settled).toBe(true)
+  })
+
+  test("keeps Generating for a completed tool step without an explicit terminal finish", () => {
+    const settled = terminalAssistantSettlesActivity({
+      statusType: "busy",
+      latestMessage: { role: "assistant", time: { created: 100, completed: 200 } },
       hasActiveTool: true,
     })
     expect(settled).toBe(false)
@@ -201,6 +214,58 @@ describe("terminal activity reconciliation", () => {
         hasPendingPromptDelivery: true,
       }),
     ).toBe(true)
+  })
+
+  test("clears submit preflight when its exact turn finishes without exposing a busy frame", () => {
+    const user = { id: "msg_user", role: "user", time: { created: 100 } }
+    const targetTerminal = terminalAssistantSettlesLatestTurn({
+      latestUser: user,
+      latestMessage: {
+        id: "msg_assistant",
+        parentID: user.id,
+        role: "assistant",
+        finish: "stop",
+        time: { created: 110, completed: 200 },
+      },
+    })
+    expect(
+      shouldClearSubmitPreflight({
+        active: true,
+        hasSession: true,
+        statusType: "idle",
+        targetTerminal,
+      }),
+    ).toBe(true)
+    expect(
+      shouldKeepWorkingStatus({
+        statusType: "idle",
+        submitPreflightActive: false,
+        terminalAssistant: false,
+      }),
+    ).toBe(false)
+  })
+
+  test("keeps submit preflight when only an older turn has a terminal receipt", () => {
+    expect(
+      terminalAssistantSettlesLatestTurn({
+        latestUser: { id: "msg_new", role: "user", time: { created: 300 } },
+        latestMessage: {
+          id: "msg_assistant",
+          parentID: "msg_old",
+          role: "assistant",
+          finish: "stop",
+          time: { created: 100, completed: 200 },
+        },
+      }),
+    ).toBe(false)
+    expect(
+      shouldClearSubmitPreflight({
+        active: true,
+        hasSession: true,
+        statusType: "idle",
+        targetTerminal: false,
+      }),
+    ).toBe(false)
   })
 })
 

@@ -407,7 +407,7 @@ describe("session.llm.stream", () => {
     })
   })
 
-  test("service stream cancellation cancels provider response body promptly", async () => {
+  test("external turn cancellation reaches the common provider response body promptly", async () => {
     const server = state.server
     if (!server) throw new Error("Server not initialized")
 
@@ -469,20 +469,20 @@ describe("session.llm.stream", () => {
                 system: ["You are a helpful assistant."],
                 messages: [{ role: "user", content: "Hello" }],
                 tools: {},
+                abort: ctrl.signal,
               })
               .pipe(Stream.runDrain),
-          { signal: ctrl.signal },
         )
 
         await pending.request
-        ctrl.abort()
+        ctrl.abort("user")
 
         await Promise.race([pending.responseCanceled, timeout(500)])
         const exit = await run
-        expect(Exit.isFailure(exit)).toBe(true)
-        if (Exit.isFailure(exit)) {
-          expect(Cause.hasInterrupts(exit.cause)).toBe(true)
-        }
+        // The AI SDK closes an externally aborted stream cleanly after
+        // cancelling the response body; the processor's authoritative runner
+        // interrupt is what persists the terminal interrupted state.
+        expect(Exit.isSuccess(exit)).toBe(true)
         await Promise.race([pending.requestAborted, timeout(500)]).catch(() => undefined)
       },
     })

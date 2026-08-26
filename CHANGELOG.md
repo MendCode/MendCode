@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.1.40 - 2026-08-26
+
+MendCode v0.1.40 makes session completion, cancellation, reconnection, and installation state consistent across providers and platforms.
+
+### Changed
+
+- Store new MendCode state in MendCode-owned data directories while preserving and safely migrating compatible legacy OpenCode state.
+- Route provider cancellation through the active turn and keep recovery tied to the owning session after reconnects or workspace changes.
+- Expose the existing Mflow instance routes through the experimental Effect HTTP API contracts.
+
+### Fixed
+
+- Clear stale `Generating...` activity after the latest assistant turn has already reached an explicit terminal finish or error state.
+- Prevent stale tool activity from overriding a completed latest turn while preserving real activity from later user turns or incomplete tools.
+- Avoid replaying cancellation and wake signals into a different session owner during provider, backend, and reconnect races.
+- Make global data migration transactional, idempotent, and non-destructive when source and destination layouts overlap or already contain data.
+- Write server plugin registrations to `mendcode.json[c]` so installed plugins are loaded by the MendCode runtime.
+- Keep release builds working when the removed web application package is absent.
+- Align SDK, schema snapshot, truncation, model-cache, memory, and profile regressions with their current runtime contracts.
+
+### Tests
+
+- Add isolated installer and global-layout migration coverage across Unix, macOS, Windows, XDG, legacy, and already-migrated states.
+- Add fake-provider and compiled PTY regressions for normal completion, reconnect recovery, provider cancellation, double-`Esc`, and stale activity cleanup.
+- Run focused HTTP API, SDK, memory, model, truncation, schema, session, provider, installer, and TUI checks plus the complete typecheck and test suite.
+
 ## 0.1.39 - 2026-08-26
 
 MendCode v0.1.39 makes interruption reliable across folders and recovers legacy installs without disrupting active sessions.

@@ -408,8 +408,13 @@ export async function resolveMemoryAssistantRuntimeRoles(root?: string): Promise
 export async function defaultMemorySideChatResponder(root: string, input: Parameters<MemorySideChatResponder>[0]) {
   const role = await resolveMemoryAssistantRole(root, { connectedProviderIDs: input.connectedProviderIDs })
   if (!role.ok) {
+    const guidance = role.reason === "memory side chat disabled"
+      ? "Enable Memory side chat and select its model role in Memory settings."
+      : role.reason === "memory side chat model not configured" || role.reason.startsWith("memory side chat role not configured:")
+        ? "Configure the Memory Assistant model role in Setup."
+        : "The configured provider auth is not runnable yet. Connect the provider in Setup or provide the required runtime credential."
     return {
-      text: `${role.reason}. The Setup model role is configured, but its provider auth is not runnable yet. Connect the provider in Setup or provide the required runtime credential.`,
+      text: `${role.reason}. ${guidance}`,
       actions: [],
     }
   }

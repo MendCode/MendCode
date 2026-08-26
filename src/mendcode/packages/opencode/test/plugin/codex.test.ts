@@ -264,6 +264,49 @@ describe("plugin.codex", () => {
     expect(loaded.fetch).toBeUndefined()
   })
 
+  test("forwards live cancellation through the ChatGPT OAuth transport", async () => {
+    let upstreamRequest: Request | undefined
+    let resolveAborted: (() => void) | undefined
+    const aborted = new Promise<void>((resolve) => {
+      resolveAborted = resolve
+    })
+    const encoder = new TextEncoder()
+    using server = Bun.serve({
+      port: 0,
+      fetch(request) {
+        upstreamRequest = request
+        request.signal.addEventListener("abort", () => resolveAborted?.(), { once: true })
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(encoder.encode('data: {"type":"response.created"}\n\n'))
+            },
+          }),
+          { headers: { "Content-Type": "text/event-stream" } },
+        )
+      },
+    })
+    const fetchCodex = await loadCodexFetch(`http://127.0.0.1:${server.port}/codex/responses`)
+    const controller = new AbortController()
+    const response = await fetchCodex("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "session-id": "ses_abort" },
+      body: JSON.stringify({ model: "gpt-5.6-luna", input: [] }),
+      signal: controller.signal,
+    })
+
+    controller.abort("user")
+    await Promise.race([
+      aborted,
+      Bun.sleep(500).then(() => {
+        throw new Error("ChatGPT OAuth upstream request did not observe cancellation")
+      }),
+    ])
+
+    expect(upstreamRequest?.signal.aborted).toBe(true)
+    await response.body?.cancel().catch(() => undefined)
+  })
+
   describe("parseJwtClaims", () => {
     test("parses valid JWT with claims", () => {
       const payload = { email: "test@example.com", chatgpt_account_id: "acc-123" }

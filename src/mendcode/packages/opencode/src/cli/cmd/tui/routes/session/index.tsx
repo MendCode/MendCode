@@ -5148,6 +5148,7 @@ function sessionLiveStateLabel(input: {
     statusKind: input.status?.kind,
     statusStartedAt: input.status?.type === "busy" ? input.status.startedAt : undefined,
     latestMessage: input.messages.findLast((message) => message.role === "assistant"),
+    latestUser: input.messages.findLast((message) => message.role === "user"),
     hasActiveTool: input.hasActiveTool,
   })
   if (
