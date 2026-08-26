@@ -34,7 +34,7 @@ describe("memory side chat route", () => {
       )
       expect(response.status).toBe(200)
       const json = await response.json() as { text?: string; actions?: unknown[] }
-      expect(json.text).toContain("memory side chat model not configured")
+      expect(json.text).toContain("memory side chat disabled")
       expect(json.actions).toEqual([])
     }
   })

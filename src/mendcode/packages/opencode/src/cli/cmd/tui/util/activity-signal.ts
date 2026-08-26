@@ -24,13 +24,12 @@ export function resolveActivityPhase(input: ActivitySignalInput): MendActivityPh
   if (currentToolPhase && (input.connection === "connecting" || input.connection === "reconnecting")) {
     return currentToolPhase
   }
-  const hasLiveActivityEvidence = Boolean(
-    input.hasReasoning ||
-      input.hasAnswerText ||
-      (input.liveOutputTokens ?? 0) > 0 ||
-      (input.liveReasoningTokens ?? 0) > 0,
-  )
-  if (input.connection && input.connection !== "connected" && !hasLiveActivityEvidence) return "blocked"
+  if (input.connection === "connecting" || input.connection === "reconnecting") {
+    if (input.hasAnswerText) return "sending"
+    if (input.hasReasoning) return "thinking"
+    return "blocked"
+  }
+  if (input.connection && input.connection !== "connected") return "blocked"
   if (input.retry || input.status === "retry") return "retrying"
   if (input.status === "idle") return "done"
   if (input.status === "busy" && input.statusKind === "subagent-wait") return "subagents"
@@ -44,12 +43,11 @@ export function resolveActivityPhase(input: ActivitySignalInput): MendActivityPh
 
   const liveOutput = input.liveOutputTokens ?? 0
   const liveReasoning = input.liveReasoningTokens ?? 0
-  // Some providers report reasoning in the generic output counter without a
-  // separate reasoning-token total. Visible reasoning remains the stronger
-  // signal until answer text actually arrives.
+  // Providers that split reasoning expose it in liveReasoningTokens. Any
+  // output beyond that counter is answer generation, even if reasoning text
+  // was emitted earlier in the turn.
   const liveAnswerOutput =
-    input.hasAnswerText ||
-    (!input.hasReasoning && (liveReasoning <= 0 ? liveOutput > 0 : liveOutput > liveReasoning))
+    input.hasAnswerText || (liveReasoning <= 0 ? liveOutput > 0 : liveOutput > liveReasoning)
   if (input.livePhase === "output" && liveAnswerOutput) return "sending"
 
   const names = (input.toolNames ?? []).map((item) => item.toLowerCase())

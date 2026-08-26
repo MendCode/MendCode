@@ -10,6 +10,7 @@ import { FileApi } from "./groups/file"
 import { GlobalApi } from "./groups/global"
 import { InstanceApi } from "./groups/instance"
 import { MemoryApi } from "./groups/memory"
+import { MflowApi } from "./groups/mflow"
 import { McpApi } from "./groups/mcp"
 import { PermissionApi } from "./groups/permission"
 import { PlanReviewApi } from "./groups/plan-review"
@@ -37,6 +38,7 @@ export const InstanceHttpApi = HttpApi.make("opencode-instance")
   .addHttpApi(FileApi)
   .addHttpApi(InstanceApi)
   .addHttpApi(MemoryApi)
+  .addHttpApi(MflowApi)
   .addHttpApi(McpApi)
   .addHttpApi(ProjectApi)
   .addHttpApi(PtyApi)

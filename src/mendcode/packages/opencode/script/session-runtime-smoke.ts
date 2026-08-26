@@ -1,9 +1,11 @@
 import { execFileSync, spawn, type ChildProcess } from "node:child_process"
 import { createServer, type AddressInfo } from "node:net"
-import { access, mkdir, mkdtemp, rm, utimes, writeFile } from "node:fs/promises"
+import { access, mkdir, mkdtemp, readFile, rm, utimes, writeFile } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
+import stripAnsi from "strip-ansi"
+import * as pty from "#pty"
 
 const PACKAGE_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
 const SCRIPT_PATH = fileURLToPath(import.meta.url)
@@ -12,6 +14,10 @@ const FAKE_PROVIDER_ID = "fake-local"
 const FAKE_MODEL_ID = "fake-model"
 const CHILD_TIMEOUT_MS = 30_000
 const SERVER_START_TIMEOUT_MS = 20_000
+const PTY_SMOKE_TIMEOUT_MS = 30_000
+const COMPLETE_PROMPT = "pty normal completion"
+const STREAM_PROMPT = "pty provider stream"
+const UNAFFECTED_PROMPT = "pty unaffected stream"
 
 type Sandbox = {
   root: string
@@ -20,6 +26,7 @@ type Sandbox = {
   db: string
   models: string
   state: string
+  providerURL: string
   env: NodeJS.ProcessEnv
 }
 
@@ -33,6 +40,36 @@ type RunningServer = {
   child: ChildProcess
   url: string
   output: () => string
+  stop: () => Promise<void>
+}
+
+type FakeProviderCall = {
+  prompt: string
+  aborted: boolean
+  abort: Promise<void>
+  finish: () => void
+}
+
+type RunningFakeProvider = {
+  calls: FakeProviderCall[]
+  waitForCall: (prompt: string) => Promise<FakeProviderCall>
+  stop: () => Promise<void>
+}
+
+type RunningTransportProxy = {
+  url: string
+  activeStreams: () => number
+  requests: () => string[]
+  drop: () => void
+  restore: () => void
+  stop: () => Promise<void>
+}
+
+type RunningTui = {
+  pid: number
+  output: () => string
+  exitState: () => string
+  write: (value: string) => void
   stop: () => Promise<void>
 }
 
@@ -93,6 +130,7 @@ function fakeConfig(providerURL: string) {
     $schema: "https://mendcode.ai/config.json",
     formatter: false,
     lsp: false,
+    permission: { bash: "allow" },
     enabled_providers: [FAKE_PROVIDER_ID],
     provider: {
       [FAKE_PROVIDER_ID]: {
@@ -196,6 +234,7 @@ async function createSandbox(label: string): Promise<Sandbox> {
     db,
     models,
     state: path.join(xdgState, "mendcode", "shared-server"),
+    providerURL,
     env: buildEnvironment({
       home,
       project,
@@ -212,6 +251,345 @@ async function createSandbox(label: string): Promise<Sandbox> {
 
 function trimOutput(value: string) {
   return value.length > 8_000 ? value.slice(-8_000) : value
+}
+
+function trimTerminalOutput(value: string) {
+  return value
+}
+
+function terminalContains(output: string, text: string) {
+  const compact = (value: string) => stripAnsi(value).replace(/\s+/g, "")
+  return compact(output).includes(compact(text))
+}
+
+function deferred<T>() {
+  let settled = false
+  let resolve!: (value: T | PromiseLike<T>) => void
+  const promise = new Promise<T>((next) => {
+    resolve = (value) => {
+      if (settled) return
+      settled = true
+      next(value)
+    }
+  })
+  return { promise, resolve, settled: () => settled }
+}
+
+async function waitUntil(label: string, check: () => boolean | Promise<boolean>, timeoutMs = PTY_SMOKE_TIMEOUT_MS) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (await check()) return
+    await sleep(50)
+  }
+  throw new Error(`${label} timed out after ${timeoutMs}ms`)
+}
+
+async function withTimeout<T>(label: string, promise: Promise<T>, timeoutMs = PTY_SMOKE_TIMEOUT_MS) {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs}ms`)), timeoutMs)
+        timer.unref?.()
+      }),
+    ])
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
+
+function processAlive(pid: number) {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
+function chatChunk(value: Record<string, unknown>) {
+  return `data: ${JSON.stringify(value)}\n\n`
+}
+
+function openAIStream(chunks: Record<string, unknown>[], done = true) {
+  const encoder = new TextEncoder()
+  const payload = chunks.map(chatChunk).join("") + (done ? "data: [DONE]\n\n" : "")
+  return encoder.encode(payload)
+}
+
+async function startFakeProvider(sandbox: Sandbox): Promise<RunningFakeProvider> {
+  const provider = new URL(sandbox.providerURL)
+  const calls: FakeProviderCall[] = []
+  const active = new Set<ReadableStreamDefaultController<Uint8Array>>()
+
+  const server = Bun.serve({
+    hostname: provider.hostname,
+    port: Number(provider.port),
+    idleTimeout: 255,
+    async fetch(request) {
+      const url = new URL(request.url)
+      if (!url.pathname.endsWith("/chat/completions")) return new Response("not found", { status: 404 })
+      const body = await request.text()
+      const prompt = [STREAM_PROMPT, UNAFFECTED_PROMPT, COMPLETE_PROMPT].find((value) => body.includes(value)) ?? body
+      const aborted = deferred<void>()
+      let finish = () => {}
+      let streamController: ReadableStreamDefaultController<Uint8Array> | undefined
+      const call: FakeProviderCall = {
+        prompt,
+        aborted: false,
+        abort: aborted.promise,
+        finish: () => finish(),
+      }
+      calls.push(call)
+
+      const markAborted = () => {
+        call.aborted = true
+        aborted.resolve()
+      }
+      request.signal.addEventListener("abort", markAborted, { once: true })
+
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            streamController = controller
+            active.add(controller)
+            let settled = false
+            finish = () => {
+              if (settled) return
+              settled = true
+              active.delete(controller)
+              controller.enqueue(
+                openAIStream([
+                  {
+                    id: `chatcmpl-${prompt === UNAFFECTED_PROMPT ? "unaffected" : "primary"}`,
+                    object: "chat.completion.chunk",
+                    choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+                    usage: { prompt_tokens: 8, completion_tokens: 4, total_tokens: 12 },
+                  },
+                ]),
+              )
+              controller.close()
+            }
+            controller.enqueue(
+              openAIStream(
+                [
+                  {
+                    id: `chatcmpl-${prompt === UNAFFECTED_PROMPT ? "unaffected" : "primary"}`,
+                    object: "chat.completion.chunk",
+                    choices: [{ index: 0, delta: { role: "assistant" } }],
+                  },
+                  {
+                    id: `chatcmpl-${prompt === UNAFFECTED_PROMPT ? "unaffected" : "primary"}`,
+                    object: "chat.completion.chunk",
+                    choices: [{ index: 0, delta: { content: `${prompt} active` } }],
+                  },
+                ],
+                false,
+              ),
+            )
+          },
+          cancel() {
+            if (streamController) active.delete(streamController)
+            markAborted()
+          },
+        }),
+        { status: 200, headers: { "content-type": "text/event-stream" } },
+      )
+    },
+  })
+
+  return {
+    calls,
+    async waitForCall(prompt) {
+      await waitUntil(`provider request ${prompt}`, () => calls.some((call) => call.prompt === prompt))
+      return calls.find((call) => call.prompt === prompt)!
+    },
+    async stop() {
+      for (const controller of active) {
+        try {
+          controller.close()
+        } catch {
+          // The stream may already have been closed by cancellation.
+        }
+      }
+      active.clear()
+      await server.stop(true)
+    },
+  }
+}
+
+async function startTransportProxy(upstream: string): Promise<RunningTransportProxy> {
+  const port = await reservePort()
+  let blocked = false
+  const streams = new Set<{ close: () => void }>()
+  const requests: string[] = []
+  const server = Bun.serve({
+    hostname: "127.0.0.1",
+    port,
+    idleTimeout: 255,
+    async fetch(request) {
+      const source = new URL(request.url)
+      requests.push(source.pathname + source.search)
+      const target = new URL(source.pathname + source.search, upstream)
+      const event = source.pathname.endsWith("/event")
+      if (blocked && event) return new Response("transport unavailable", { status: 503 })
+
+      const headers = new Headers(request.headers)
+      headers.delete("host")
+      headers.delete("content-length")
+      const body = request.method === "GET" || request.method === "HEAD" ? undefined : await request.arrayBuffer()
+      const response = await fetch(target, {
+        method: request.method,
+        headers,
+        body,
+        redirect: "manual",
+        signal: request.signal,
+      })
+      if (!event || !response.body) return response
+
+      const reader = response.body.getReader()
+      let closed = false
+      let entry!: { close: () => void }
+      const close = () => {
+        if (closed) return
+        closed = true
+        streams.delete(entry)
+        void reader.cancel().catch(() => undefined)
+      }
+      entry = { close }
+      streams.add(entry)
+      const wrapped = new ReadableStream<Uint8Array>({
+        start(controller) {
+          const pump = async () => {
+            try {
+              while (!closed) {
+                const next = await reader.read()
+                if (next.done) break
+                controller.enqueue(next.value)
+              }
+              if (!closed) controller.close()
+            } catch (error) {
+              if (!closed) controller.error(error)
+            } finally {
+              close()
+            }
+          }
+          void pump()
+          entry.close = () => {
+            if (closed) return
+            closed = true
+            streams.delete(entry)
+            void reader.cancel().catch(() => undefined)
+            try {
+              controller.close()
+            } catch {
+              // Closing a stream already released by the client is harmless.
+            }
+          }
+        },
+        cancel: close,
+      })
+      const responseHeaders = new Headers(response.headers)
+      responseHeaders.delete("content-length")
+      return new Response(wrapped, {
+        status: response.status,
+        statusText: response.statusText,
+        headers: responseHeaders,
+      })
+    },
+  })
+
+  return {
+    url: `http://127.0.0.1:${port}`,
+    activeStreams: () => streams.size,
+    requests: () => [...requests],
+    drop() {
+      blocked = true
+      for (const stream of [...streams]) stream.close()
+    },
+    restore() {
+      blocked = false
+    },
+    async stop() {
+      for (const stream of [...streams]) stream.close()
+      await server.stop(true)
+    },
+  }
+}
+
+function ptyEnvironment(env: NodeJS.ProcessEnv) {
+  return Object.fromEntries(
+    Object.entries({ ...env, TERM: "xterm-256color", COLORTERM: "truecolor" }).filter(
+      (entry): entry is [string, string] => typeof entry[1] === "string",
+    ),
+  )
+}
+
+async function startTui(
+  sandbox: Sandbox,
+  serverURL: string,
+  sessionID: string,
+  entrypoint = SOURCE_ENTRYPOINT,
+): Promise<RunningTui> {
+  const installed = entrypoint !== SOURCE_ENTRYPOINT
+  const terminal = pty.spawn(
+    installed ? entrypoint : process.execPath,
+    installed
+      ? [sandbox.project, "--server-url", serverURL, "--session", sessionID]
+      : [
+          "--cwd",
+          PACKAGE_ROOT,
+          "--no-install",
+          "--conditions=browser",
+          entrypoint,
+          sandbox.project,
+          "--server-url",
+          serverURL,
+          "--session",
+          sessionID,
+        ],
+    {
+      cwd: PACKAGE_ROOT,
+      env: ptyEnvironment(sandbox.env),
+      cols: 120,
+      rows: 40,
+      name: "xterm-256color",
+    },
+  )
+  let output = ""
+  terminal.onData((chunk) => (output = trimTerminalOutput(output + chunk)))
+  const exit = deferred<void>()
+  let exitState = "running"
+  terminal.onExit((event) => {
+    exitState = `exitCode=${event.exitCode} signal=${event.signal ?? "none"}`
+    exit.resolve()
+  })
+  let stopped = false
+  return {
+    pid: terminal.pid,
+    output: () => output,
+    exitState: () => exitState,
+    write: (value) => terminal.write(value),
+    async stop() {
+      if (stopped && !processAlive(terminal.pid)) return
+      stopped = true
+      if (!exit.settled()) terminal.write("\x03")
+      await Promise.race([exit.promise, sleep(500)])
+      if (processAlive(terminal.pid)) terminal.kill("SIGTERM")
+      await Promise.race([exit.promise, sleep(2_000)])
+      if (processAlive(terminal.pid)) {
+        try {
+          if (process.platform !== "win32") process.kill(-terminal.pid, "SIGKILL")
+          else process.kill(terminal.pid, "SIGKILL")
+        } catch {
+          // The PTY child exited between the liveness check and the signal.
+        }
+      }
+      const deadline = Date.now() + 5_000
+      while (processAlive(terminal.pid) && Date.now() < deadline) await sleep(50)
+    },
+  }
 }
 
 async function runChild(args: string[], env: NodeJS.ProcessEnv) {
@@ -330,6 +708,290 @@ async function requestJSON(
     value = text
   }
   return { status: response.status, value, text }
+}
+
+async function submitAsyncPrompt(server: RunningServer, sandbox: Sandbox, sessionID: string, text: string) {
+  const response = await requestJSON(server, sandbox, `/session/${encodeURIComponent(sessionID)}/prompt_async`, {
+    method: "POST",
+    body: JSON.stringify({
+      agent: "build",
+      model: { providerID: FAKE_PROVIDER_ID, modelID: FAKE_MODEL_ID },
+      parts: [{ type: "text", text }],
+    }),
+  })
+  expectStatus(response, 204, `async prompt ${text}`)
+}
+
+function startSessionShell(server: RunningServer, sandbox: Sandbox, sessionID: string, pidFile: string) {
+  const childScript = `import { writeFileSync } from "node:fs"; writeFileSync(process.argv[1], String(process.pid)); setInterval(() => {}, 1000)`
+  const command = `${JSON.stringify(process.execPath)} -e ${JSON.stringify(childScript)} ${JSON.stringify(pidFile)}`
+  const response = requestJSON(server, sandbox, `/session/${encodeURIComponent(sessionID)}/shell`, {
+    method: "POST",
+    body: JSON.stringify({
+      agent: "build",
+      model: { providerID: FAKE_PROVIDER_ID, modelID: FAKE_MODEL_ID },
+      command,
+    }),
+    signal: AbortSignal.timeout(PTY_SMOKE_TIMEOUT_MS),
+  })
+  return { command, response }
+}
+
+async function sessionMessages(server: RunningServer, sandbox: Sandbox, sessionID: string) {
+  const response = await requestJSON(server, sandbox, `/session/${encodeURIComponent(sessionID)}/message`)
+  expectStatus(response, 200, "session messages")
+  assert(Array.isArray(response.value), "session messages response is not an array")
+  return response.value as Array<{ info?: any; parts?: any[] }>
+}
+
+function promptCount(messages: Array<{ info?: any; parts?: any[] }>, prompt: string) {
+  return messages.filter(
+    (message) =>
+      message.info?.role === "user" &&
+      message.parts?.some(
+        (part) => part?.type === "text" && typeof part.text === "string" && part.text.includes(prompt),
+      ),
+  ).length
+}
+
+function interruptedAssistantCount(messages: Array<{ info?: any; parts?: any[] }>) {
+  return messages.filter(
+    (message) =>
+      message.info?.role === "assistant" &&
+      (message.info?.error?.name === "MessageAbortedError" ||
+        message.parts?.some((part) => part?.state?.metadata?.interrupted === true)),
+  ).length
+}
+
+function shellParts(messages: Array<{ info?: any; parts?: any[] }>, command: string) {
+  return messages.flatMap((message) =>
+    (message.parts ?? []).filter((part) => part?.type === "tool" && part?.state?.input?.command === command),
+  )
+}
+
+async function sessionStatusType(server: RunningServer, sandbox: Sandbox, sessionID: string) {
+  const response = await requestJSON(server, sandbox, "/session/status")
+  expectStatus(response, 200, "session status")
+  return response.value?.[sessionID]?.type ?? "idle"
+}
+
+async function waitForSessionStatus(
+  server: RunningServer,
+  sandbox: Sandbox,
+  sessionID: string,
+  expected: "busy" | "idle",
+) {
+  await waitUntil(`session ${sessionID} status ${expected}`, async () => {
+    try {
+      return (await sessionStatusType(server, sandbox, sessionID)) === expected
+    } catch {
+      return false
+    }
+  })
+}
+
+async function interruptThroughTui(tui: RunningTui, label: string) {
+  const firstOffset = tui.output().length
+  tui.write("\x1b")
+  await waitUntil(`${label} first Esc hint`, () =>
+    terminalContains(tui.output().slice(firstOffset), "[esc again to interrupt]"),
+  )
+  const secondOffset = tui.output().length
+  tui.write("\x1b")
+  return secondOffset
+}
+
+async function settledPromptRender(tui: RunningTui, label: string) {
+  const offset = tui.output().length
+  tui.write("x")
+  await waitUntil(`${label} prompt redraw`, () => tui.output().length > offset)
+  const cleanupOffset = tui.output().length
+  tui.write("\x7f")
+  await waitUntil(`${label} prompt cleanup redraw`, () => tui.output().length > cleanupOffset)
+  return stripAnsi(tui.output().slice(offset))
+}
+
+async function abortSession(server: RunningServer, sandbox: Sandbox, sessionID: string) {
+  const response = await requestJSON(server, sandbox, `/session/${encodeURIComponent(sessionID)}/abort`, {
+    method: "POST",
+  })
+  expectStatus(response, 200, "session abort")
+}
+
+async function runTuiPtyScenario(sandbox: Sandbox, tuiEntrypoint = SOURCE_ENTRYPOINT) {
+  let provider: RunningFakeProvider | undefined
+  let backend: RunningServer | undefined
+  let restarted: RunningServer | undefined
+  let proxy: RunningTransportProxy | undefined
+  let tui: RunningTui | undefined
+  let toolChildPID: number | undefined
+  const toolChildPIDFile = path.join(sandbox.root, "tool-child.pid")
+
+  try {
+    provider = await startFakeProvider(sandbox)
+    backend = await startServer({ entrypoint: SOURCE_ENTRYPOINT, installed: false, sandbox })
+    await waitForHealth(backend, sandbox)
+    proxy = await startTransportProxy(backend.url)
+    const primary = await createSession(backend, sandbox)
+    const unaffected = await createSession(backend, sandbox)
+    tui = await startTui(sandbox, proxy.url, primary.id, tuiEntrypoint)
+
+    try {
+      await waitUntil("TUI event subscription", () => proxy!.activeStreams() > 0)
+    } catch (error) {
+      throw new Error(
+        `${error instanceof Error ? error.message : String(error)}\nPTY pid=${tui.pid} alive=${processAlive(tui.pid)} ${tui.exitState()}:\n${stripAnsi(tui.output()).slice(-8_000)}\nProxy requests:\n${proxy.requests().join("\n")}`,
+      )
+    }
+    await submitAsyncPrompt(backend, sandbox, primary.id, COMPLETE_PROMPT)
+    const completedCall = await provider.waitForCall(COMPLETE_PROMPT)
+    await waitForSessionStatus(backend, sandbox, primary.id, "busy")
+    await waitUntil("TUI rendered normally completing provider stream", () =>
+      terminalContains(tui!.output(), `${COMPLETE_PROMPT} active`),
+    )
+    completedCall.finish()
+    await waitForSessionStatus(backend, sandbox, primary.id, "idle")
+    const completedMessages = await sessionMessages(backend, sandbox, primary.id)
+    assert(promptCount(completedMessages, COMPLETE_PROMPT) === 1, "normal completion duplicated its user message")
+    assert(
+      completedMessages.some(
+        (message) =>
+          message.info?.role === "assistant" &&
+          message.info?.finish === "stop" &&
+          typeof message.info?.time?.completed === "number",
+      ),
+      "normal completion did not persist a terminal assistant receipt",
+    )
+    const completedRender = await settledPromptRender(tui, "normal completion")
+    assert(!completedRender.includes("Generating"), "TUI retained generating activity after normal completion")
+
+    await submitAsyncPrompt(backend, sandbox, unaffected.id, UNAFFECTED_PROMPT)
+    const unaffectedCall = await provider.waitForCall(UNAFFECTED_PROMPT)
+    await submitAsyncPrompt(backend, sandbox, primary.id, STREAM_PROMPT)
+    const primaryCall = await provider.waitForCall(STREAM_PROMPT)
+    await waitForSessionStatus(backend, sandbox, primary.id, "busy")
+    await waitForSessionStatus(backend, sandbox, unaffected.id, "busy")
+    try {
+      await waitUntil("TUI rendered active provider stream", () =>
+        terminalContains(tui!.output(), `${STREAM_PROMPT} active`),
+      )
+    } catch (error) {
+      const messages = await sessionMessages(backend, sandbox, primary.id)
+      throw new Error(
+        `${error instanceof Error ? error.message : String(error)}\nPTY:\n${stripAnsi(tui.output()).slice(-12_000)}\nProxy requests:\n${proxy.requests().join("\n")}\nMessages:\n${JSON.stringify(messages).slice(-8_000)}`,
+      )
+    }
+
+    const beforeDisconnect = await sessionMessages(backend, sandbox, primary.id)
+    assert(promptCount(beforeDisconnect, STREAM_PROMPT) === 1, "primary prompt was not persisted exactly once")
+    const disconnectOffset = tui.output().length
+    proxy.drop()
+    await waitUntil("TUI reconnect label", () =>
+      terminalContains(tui!.output().slice(disconnectOffset), "Reconnecting to backend"),
+    )
+    assert(!primaryCall.aborted, "transport loss incorrectly aborted the provider turn")
+    assert(!unaffectedCall.aborted, "transport loss incorrectly aborted the unaffected session")
+
+    proxy.restore()
+    await waitUntil("TUI event resubscription", () => proxy!.activeStreams() > 0)
+    await waitForSessionStatus(backend, sandbox, primary.id, "busy")
+    const afterReconnect = await sessionMessages(backend, sandbox, primary.id)
+    assert(promptCount(afterReconnect, STREAM_PROMPT) === 1, "reconnect duplicated the primary prompt")
+    assert(
+      provider.calls.filter((call) => call.prompt === STREAM_PROMPT).length === 1,
+      "reconnect started a duplicate provider turn",
+    )
+
+    const primarySettleOffset = await interruptThroughTui(tui, "provider stream")
+    await withTimeout("provider AbortSignal", primaryCall.abort)
+    await waitForSessionStatus(backend, sandbox, primary.id, "idle")
+    await waitUntil("TUI cancellation render", () => tui!.output().length > primarySettleOffset)
+    const primarySettledRender = stripAnsi(tui.output().slice(primarySettleOffset))
+    assert(!primarySettledRender.includes("Reconnecting to backend"), "TUI retained reconnect activity after cancel")
+    assert(!primarySettledRender.includes("Generating"), "TUI retained generating activity after cancel")
+    const afterPrimaryCancel = await sessionMessages(backend, sandbox, primary.id)
+    assert(interruptedAssistantCount(afterPrimaryCancel) >= 1, "provider cancellation was not persisted as interrupted")
+    assert(promptCount(afterPrimaryCancel, STREAM_PROMPT) === 1, "provider cancellation duplicated the user message")
+    assert(!unaffectedCall.aborted, "targeted cancellation interrupted the other session")
+    assert(
+      (await sessionStatusType(backend, sandbox, unaffected.id)) === "busy",
+      "targeted cancellation cleared the other session status",
+    )
+
+    const shell = startSessionShell(backend, sandbox, primary.id, toolChildPIDFile)
+    await waitUntil("tool child PID", () => exists(toolChildPIDFile))
+    toolChildPID = Number((await readFile(toolChildPIDFile, "utf8")).trim())
+    assert(Number.isInteger(toolChildPID) && toolChildPID > 1, "tool child did not publish a valid PID")
+    assert(processAlive(toolChildPID), "tool child exited before cancellation")
+    await waitForSessionStatus(backend, sandbox, primary.id, "busy")
+
+    const toolSettleOffset = await interruptThroughTui(tui, "tool child")
+    await waitUntil("tool child termination", () => !processAlive(toolChildPID!))
+    await waitForSessionStatus(backend, sandbox, primary.id, "idle")
+    await waitUntil("TUI tool cancellation render", () => tui!.output().length > toolSettleOffset)
+    const toolSettledRender = stripAnsi(tui.output().slice(toolSettleOffset))
+    assert(!toolSettledRender.includes("Generating"), "TUI retained tool activity after cancel")
+    const shellResponse = await withTimeout("session shell cancellation response", shell.response)
+    expectStatus(shellResponse, 200, "session shell cancellation")
+    const beforeRestart = await sessionMessages(backend, sandbox, primary.id)
+    assert(promptCount(beforeRestart, STREAM_PROMPT) === 1, "stream prompt duplicated before restart")
+    assert(promptCount(beforeRestart, COMPLETE_PROMPT) === 1, "normal completion prompt duplicated before restart")
+    const cancelledShellParts = shellParts(beforeRestart, shell.command)
+    assert(cancelledShellParts.length === 1, "cancelled shell was not persisted exactly once")
+    assert(cancelledShellParts[0]?.state?.status === "completed", "cancelled shell did not reach terminal state")
+    assert(
+      String(cancelledShellParts[0]?.state?.output).includes("User aborted the command"),
+      "cancelled shell did not persist its user-abort receipt",
+    )
+    assert(interruptedAssistantCount(beforeRestart) >= 1, "provider cancellation lost its interrupted receipt")
+    assert(!unaffectedCall.aborted, "tool cancellation interrupted the other session")
+
+    await abortSession(backend, sandbox, unaffected.id)
+    await withTimeout("unaffected session cleanup", unaffectedCall.abort)
+    await waitForSessionStatus(backend, sandbox, unaffected.id, "idle")
+    const providerCallsBeforeRestart = provider.calls.length
+    const messageCountBeforeRestart = beforeRestart.length
+
+    await tui.stop()
+    assert(!processAlive(tui.pid), "TUI child remained alive after exact cleanup")
+    tui = undefined
+    await proxy.stop()
+    proxy = undefined
+    await backend.stop()
+    backend = undefined
+
+    restarted = await startServer({ entrypoint: SOURCE_ENTRYPOINT, installed: false, sandbox })
+    await waitForHealth(restarted, sandbox)
+    await sleep(500)
+    assert((await sessionStatusType(restarted, sandbox, primary.id)) === "idle", "restart revived the cancelled turn")
+    const afterRestart = await sessionMessages(restarted, sandbox, primary.id)
+    assert(afterRestart.length === messageCountBeforeRestart, "restart duplicated persisted messages")
+    assert(promptCount(afterRestart, STREAM_PROMPT) === 1, "restart duplicated the stream prompt")
+    assert(promptCount(afterRestart, COMPLETE_PROMPT) === 1, "restart duplicated the normal completion prompt")
+    assert(shellParts(afterRestart, shell.command).length === 1, "restart duplicated the cancelled shell")
+    assert(provider.calls.length === providerCallsBeforeRestart, "restart resumed a cancelled provider turn")
+
+    return {
+      primaryMessages: afterRestart.length,
+      providerCalls: provider.calls.length,
+      completed: promptCount(afterRestart, COMPLETE_PROMPT),
+      interrupted: interruptedAssistantCount(afterRestart),
+      toolChildPID,
+    }
+  } finally {
+    await tui?.stop().catch(() => undefined)
+    await proxy?.stop().catch(() => undefined)
+    await restarted?.stop().catch(() => undefined)
+    await backend?.stop().catch(() => undefined)
+    await provider?.stop().catch(() => undefined)
+    if (toolChildPID && processAlive(toolChildPID)) {
+      try {
+        process.kill(toolChildPID, "SIGKILL")
+      } catch {
+        // The exact isolated child may exit during cleanup.
+      }
+    }
+  }
 }
 
 function expectStatus(response: JsonResponse, expected: number, label: string) {
@@ -690,9 +1352,22 @@ async function main() {
   if (mode === "--managed-recovery") return managedRecovery(process.argv[3], process.argv[4], process.argv[5])
 
   const requireInstalled = process.argv.includes("--require-installed")
+  if (process.argv.includes("--pty-only")) {
+    const sandbox = await createSandbox("pty")
+    try {
+      const result = await runTuiPtyScenario(sandbox)
+      console.log(
+        `PASS real TUI/PTY completion, reconnect, and targeted cancellation: messages=${result.primaryMessages} completed=${result.completed} interrupted=${result.interrupted} providerCalls=${result.providerCalls} toolChildPID=${result.toolChildPID}`,
+      )
+      return
+    } finally {
+      await rm(sandbox.root, { recursive: true, force: true })
+    }
+  }
   const realHome = process.env.HOME ?? os.homedir()
   const sourceSandbox = await createSandbox("source")
   const managedSandbox = await createSandbox("managed")
+  const ptySandbox = await createSandbox("pty")
   try {
     const source = await runSourceRestartScenario(sourceSandbox)
     console.log(
@@ -712,15 +1387,18 @@ async function main() {
       console.log(`PASS source/installed isolated parity: installed=${parity.version} sessions=${parity.sessions}`)
     }
 
+    const ptyEntrypoint = requireInstalled && installed ? installed : SOURCE_ENTRYPOINT
+    const ptyResult = await runTuiPtyScenario(ptySandbox, ptyEntrypoint)
     console.log(
-      "SKIP TUI/PTY reconnect: headless PTY teardown is not deterministic; shared-server reconnect is covered by the focused thread tests and managed recovery above",
+      `PASS real ${ptyEntrypoint === SOURCE_ENTRYPOINT ? "source" : "installed"} TUI/PTY completion, reconnect, and targeted cancellation: messages=${ptyResult.primaryMessages} completed=${ptyResult.completed} interrupted=${ptyResult.interrupted} providerCalls=${ptyResult.providerCalls} toolChildPID=${ptyResult.toolChildPID}`,
     )
     console.log(
-      "PASS isolation: all smoke processes used temporary HOME/XDG/DB paths; no provider request or model call was made",
+      "PASS isolation: all smoke processes used temporary HOME/XDG/DB paths and a loopback-only fake provider; no external provider or real user session was used",
     )
   } finally {
     await rm(sourceSandbox.root, { recursive: true, force: true })
     await rm(managedSandbox.root, { recursive: true, force: true })
+    await rm(ptySandbox.root, { recursive: true, force: true })
   }
 }
 

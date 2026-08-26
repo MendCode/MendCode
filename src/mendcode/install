@@ -46,6 +46,20 @@ binary_path=""
 setup_mode="ask"
 already_installed=false
 
+print_message() {
+    local level=$1
+    local message=$2
+    local color=""
+
+    case $level in
+        info) color="${NC}" ;;
+        warning) color="${NC}" ;;
+        error) color="${RED}" ;;
+    esac
+
+    echo -e "${color}${message}${NC}"
+}
+
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -h|--help)
@@ -90,7 +104,104 @@ while [[ $# -gt 0 ]]; do
 done
 
 INSTALL_DIR=$HOME/.mendcode/bin
+GLOBAL_LAYOUT_SELECTION_FILE=$HOME/.mendcode/.global-layout-v1
+XDG_DATA_HOME=${XDG_DATA_HOME:-$HOME/.local/share}
+MENDCODE_DATA_DIR=$XDG_DATA_HOME/mendcode
+LEGACY_DATA_DIR=$XDG_DATA_HOME/opencode
+had_mendcode_binary=false
+if [ -x "$INSTALL_DIR/$BINARY_NAME" ] || [ -x "$INSTALL_DIR/$BINARY_NAME.exe" ]; then
+    had_mendcode_binary=true
+fi
 mkdir -p "$INSTALL_DIR"
+
+data_dir_has_identity() {
+    local dir=$1
+    [ -d "$dir" ] || return 1
+    find "$dir" -mindepth 1 -maxdepth 1 \( \
+        -name storage -o \
+        -name auth.json -o \
+        -name mcp-auth.json -o \
+        -name '*.db' -o \
+        -name '.mendcode-json-storage-migration-v0.done' -o \
+        -name '.mendcode-global-layout-v0.done' \
+    \) -print -quit 2>/dev/null | grep -q .
+}
+
+legacy_data_has_mendcode_identity() {
+    [ -d "$LEGACY_DATA_DIR" ] || return 1
+    find "$LEGACY_DATA_DIR" -mindepth 1 -maxdepth 1 \( \
+        -name 'mendcode*.db' -o \
+        -name '.mendcode-json-storage-migration-v0.done' -o \
+        -name '.mendcode-global-layout-v0.done' \
+    \) -print -quit 2>/dev/null | grep -q .
+}
+
+read_layout_selection() {
+    [ -f "$GLOBAL_LAYOUT_SELECTION_FILE" ] || return 1
+    local value
+    value=$(tr -d '[:space:]' < "$GLOBAL_LAYOUT_SELECTION_FILE" | tr '[:upper:]' '[:lower:]')
+    case "$value" in
+        legacy|mendcode)
+            PERSISTED_GLOBAL_LAYOUT=$value
+            ;;
+        *)
+            print_message error "Invalid MendCode layout selection in $GLOBAL_LAYOUT_SELECTION_FILE. Expected legacy or mendcode."
+            exit 1
+            ;;
+    esac
+}
+
+resolve_install_layout() {
+    local requested=${MENDCODE_GLOBAL_LAYOUT:-}
+    requested=$(printf '%s' "$requested" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
+    case "$requested" in
+        legacy|mendcode)
+            SELECTED_GLOBAL_LAYOUT=$requested
+            return 0
+            ;;
+        ""|auto)
+            ;;
+        *)
+            print_message error "Invalid MENDCODE_GLOBAL_LAYOUT value: $requested. Expected legacy, mendcode, or auto."
+            exit 1
+            ;;
+    esac
+
+    PERSISTED_GLOBAL_LAYOUT=""
+    if read_layout_selection; then
+        SELECTED_GLOBAL_LAYOUT=$PERSISTED_GLOBAL_LAYOUT
+        return 0
+    fi
+    if data_dir_has_identity "$MENDCODE_DATA_DIR"; then
+        SELECTED_GLOBAL_LAYOUT=mendcode
+        return 0
+    fi
+    if legacy_data_has_mendcode_identity; then
+        SELECTED_GLOBAL_LAYOUT=legacy
+        return 0
+    fi
+    if [ "$had_mendcode_binary" = "true" ] && data_dir_has_identity "$LEGACY_DATA_DIR"; then
+        print_message error "Cannot safely identify $LEGACY_DATA_DIR as MendCode or external OpenCode data."
+        print_message info "Re-run with MENDCODE_GLOBAL_LAYOUT=legacy only if this data belongs to MendCode."
+        print_message info "Otherwise re-run with MENDCODE_GLOBAL_LAYOUT=mendcode to keep both applications isolated."
+        exit 1
+    fi
+    if data_dir_has_identity "$LEGACY_DATA_DIR"; then
+        print_message warning "Existing OpenCode data detected at $LEGACY_DATA_DIR; MendCode will use its own isolated layout."
+        print_message info "If this is an uninstalled legacy MendCode layout, re-run with MENDCODE_GLOBAL_LAYOUT=legacy."
+    fi
+    SELECTED_GLOBAL_LAYOUT=mendcode
+}
+
+SELECTED_GLOBAL_LAYOUT=""
+resolve_install_layout
+
+persist_install_layout() {
+    local tmp="$GLOBAL_LAYOUT_SELECTION_FILE.$$"
+    mkdir -p "$(dirname "$GLOBAL_LAYOUT_SELECTION_FILE")"
+    printf '%s\n' "$SELECTED_GLOBAL_LAYOUT" > "$tmp"
+    mv "$tmp" "$GLOBAL_LAYOUT_SELECTION_FILE"
+}
 
 # If --binary is provided, skip all download/detection logic
 if [ -n "$binary_path" ]; then
@@ -227,20 +338,6 @@ else
         fi
     fi
 fi
-
-print_message() {
-    local level=$1
-    local message=$2
-    local color=""
-
-    case $level in
-        info) color="${NC}" ;;
-        warning) color="${NC}" ;;
-        error) color="${RED}" ;;
-    esac
-
-    echo -e "${color}${message}${NC}"
-}
 
 print_banner() {
     echo -e ""
@@ -460,6 +557,8 @@ else
     fi
 fi
 
+persist_install_layout
+
 if [ "$already_installed" != "true" ]; then
     restart_loaded_loop_services
 fi
@@ -562,12 +661,12 @@ launch_setup() {
 
     echo -e ""
     print_message info "${MOSS_SOFT}Opening MendCode setup...${NC}"
-    OPENCODE_ROUTE='{"type":"setup"}' "$bin_path"
+    MENDCODE_GLOBAL_LAYOUT="$SELECTED_GLOBAL_LAYOUT" OPENCODE_ROUTE='{"type":"setup"}' "$bin_path"
 }
 
 print_setup_command() {
     local route='{"type":"setup"}'
-    print_message info "${MUTED}Setup later:${NC} OPENCODE_ROUTE='$route' \"$INSTALL_DIR/$BINARY_NAME\""
+    print_message info "${MUTED}Setup later:${NC} MENDCODE_GLOBAL_LAYOUT='$SELECTED_GLOBAL_LAYOUT' OPENCODE_ROUTE='$route' \"$INSTALL_DIR/$BINARY_NAME\""
 }
 
 maybe_launch_setup() {

@@ -79,6 +79,7 @@ export type StreamInput = {
   tools: Record<string, Tool>
   retries?: number
   toolChoice?: "auto" | "required" | "none"
+  abort?: AbortSignal
 }
 
 export type StreamRequest = StreamInput & {
@@ -558,12 +559,22 @@ const live: Layer.Layer<
       Stream.scoped(
         Stream.unwrap(
           Effect.gen(function* () {
-            const ctrl = yield* Effect.acquireRelease(
-              Effect.sync(() => new AbortController()),
-              (ctrl) => Effect.sync(() => ctrl.abort()),
+            const scoped = yield* Effect.acquireRelease(
+              Effect.sync(() => {
+                const ctrl = new AbortController()
+                const onAbort = () => ctrl.abort(input.abort?.reason)
+                if (input.abort?.aborted) onAbort()
+                else input.abort?.addEventListener("abort", onAbort, { once: true })
+                return { ctrl, onAbort }
+              }),
+              ({ ctrl, onAbort }) =>
+                Effect.sync(() => {
+                  input.abort?.removeEventListener("abort", onAbort)
+                  ctrl.abort()
+                }),
             )
 
-            const result = yield* run({ ...input, abort: ctrl.signal })
+            const result = yield* run({ ...input, abort: scoped.ctrl.signal })
 
             const normalize = createStreamEventNormalizer()
             return Stream.fromAsyncIterable(result.fullStream, (e) =>
