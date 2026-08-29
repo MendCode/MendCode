@@ -3728,11 +3728,7 @@ export function Prompt(props: PromptProps) {
     return (sync.data.part[active.id] ?? []).some((part) => (part as Record<string, unknown>).type === "text")
   })
   const effectiveConnectionStatus = createMemo(() => {
-    const connection = sdk.connection
-    if (workingStatusActive() && connection.status === "connected" && connection.recoveringSince) {
-      return "reconnecting" as const
-    }
-    return connection.status
+    return displayConnectionStatus(sdk.connection)
   })
   const activityPhase = createMemo(() => {
     const currentStatus = status()

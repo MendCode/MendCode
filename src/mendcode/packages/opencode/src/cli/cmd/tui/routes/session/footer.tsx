@@ -7,6 +7,7 @@ import { createStore } from "solid-js/store"
 import { useRoute } from "../../context/route"
 import { useMendTuiProfile } from "../../context/mend"
 import { useSDK } from "../../context/sdk"
+import { displayConnectionStatus } from "../../util/session-working"
 
 export function Footer() {
   const { theme } = useTheme()
@@ -25,11 +26,11 @@ export function Footer() {
   const sdk = useSDK()
   const connectionLabel = createMemo(() => {
     const state = sdk.connection
-    const recovering = state.status === "connected" && state.recoveringSince !== undefined
-    if (state.status === "connected" && !recovering) return
-    if (state.status === "connecting") return "connecting"
-    if (state.status === "reconnecting" || recovering) return `reconnecting${state.attempt > 1 ? ` #${state.attempt}` : ""}`
-    if (state.status === "failed") return `local connection unavailable after ${state.attempt} retries`
+    const status = displayConnectionStatus(state)
+    if (status === "connected") return
+    if (status === "connecting") return "connecting"
+    if (status === "reconnecting") return `reconnecting${state.attempt > 1 ? ` #${state.attempt}` : ""}`
+    if (status === "failed") return `local connection unavailable after ${state.attempt} retries`
     return "disconnected"
   })
   const connectionColor = createMemo(() => (sdk.connection.status === "failed" ? theme.error : theme.warning))

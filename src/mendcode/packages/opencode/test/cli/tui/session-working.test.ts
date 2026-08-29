@@ -17,9 +17,10 @@ import {
 } from "@/cli/cmd/tui/util/session-working"
 
 describe("displayConnectionStatus", () => {
-  test("labels a connected transport that is still recovering", () => {
-    expect(displayConnectionStatus({ status: "connected", recoveringSince: 123 })).toBe("reconnecting")
+  test("does not label snapshot reconciliation as a transport reconnect", () => {
+    expect(displayConnectionStatus({ status: "connected", recoveringSince: 123 })).toBe("connected")
     expect(displayConnectionStatus({ status: "connected" })).toBe("connected")
+    expect(displayConnectionStatus({ status: "reconnecting", recoveringSince: 123 })).toBe("reconnecting")
     expect(displayConnectionStatus({ status: "failed", recoveringSince: 123 })).toBe("failed")
   })
 })
