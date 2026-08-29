@@ -1006,11 +1006,14 @@ it.live("session.processor effect tests keep permission toolcalls pending across
 
         yield* Effect.sleep("650 millis")
         const requests = yield* permission.list()
+        const latestCall = MessageV2.parts(msg.id).find(
+          (part): part is MessageV2.ToolPart => part.type === "tool" && part.callID === call?.callID,
+        )
 
         expect(yield* llm.calls).toBe(1)
         expect(requests.some((request) => request.tool?.callID === call?.callID)).toBe(true)
-        expect(call?.tool).toBe("bash")
-        expect(call?.state.status).toBe("running")
+        expect(latestCall?.tool).toBe("bash")
+        expect(latestCall?.state.status).toBe("running")
         yield* Fiber.interrupt(pending)
         yield* Fiber.interrupt(run)
       }),

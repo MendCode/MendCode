@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.1.41 - 2026-08-28
+
+MendCode v0.1.41 keeps terminal connection and session state truthful while completing MendCode-owned application branding.
+
+### Changed
+
+- Use the MendCode icon for native Windows executables and align browser, touch, and installable web-app assets with the same identity.
+
+### Fixed
+
+- Stop presenting snapshot reconciliation on an already-connected local transport as a MendCode reconnection or connection loss.
+- Populate the home Agent View from normal root sessions when the aggregate or background feed is empty or temporarily unavailable.
+- Regenerate favicon and maskable web-app images so every published size contains the visible MendCode symbol.
+
+### Tests
+
+- Add regressions for connected recovery presentation, real reconnect preservation, Agent View session fallback, and child-session filtering.
+- Run the complete 4,352-test suite plus focused TUI, Agent View, connection recovery, typecheck, lint, native binary, and isolated fake-provider PTY validation.
+
 ## 0.1.40 - 2026-08-26
 
 MendCode v0.1.40 makes session completion, cancellation, reconnection, and installation state consistent across providers and platforms.

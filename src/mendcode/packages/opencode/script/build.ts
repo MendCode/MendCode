@@ -231,7 +231,7 @@ for (const item of targets) {
       windows:
         item.os === "win32"
           ? {
-              icon: path.resolve(dir, "../ui/src/assets/favicon/favicon.ico"),
+              icon: path.resolve(dir, "../ui/src/assets/favicon/mendcode.ico"),
               title: "MendCode",
               publisher: "MendCode",
               description: "MendCode AI coding terminal",
