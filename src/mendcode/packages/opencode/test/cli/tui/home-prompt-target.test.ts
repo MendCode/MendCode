@@ -19,6 +19,7 @@ import {
   homeRightPanelContainerWidth,
   homeSurfaceTextLayout,
   mergeAgentViewAggregateFallback,
+  mergeAgentViewSessionFallback,
   homeSplitIdentityPaneWidth,
   homeSplitIdentityWidth,
   homeSplitLogoMaxWidth,
@@ -218,6 +219,74 @@ describe("Home split welcome sizing", () => {
         [{ sessionID: "worker", state: "working" }],
       ),
     ).toEqual([{ sessionID: "worker", state: "working" }])
+  })
+
+  test("projects normal root sessions when the Agent View aggregate is empty", () => {
+    const created = 1_800_000_000_000
+    const session = {
+      id: "foreground",
+      slug: "foreground",
+      projectID: "project",
+      directory: "/workspace",
+      title: "Visible in the session selector",
+      version: "1",
+      time: { created, updated: created + 1_000 },
+    }
+
+    expect(
+      mergeAgentViewSessionFallback({
+        primary: [],
+        sessions: [session],
+        statuses: { foreground: { type: "busy", startedAt: created + 500 } },
+      }),
+    ).toEqual([
+      {
+        sessionID: "foreground",
+        state: "working",
+        summary: "/workspace",
+        pinned: false,
+        time: { created, updated: created + 1_000 },
+        session: {
+          id: "foreground",
+          title: "Visible in the session selector",
+          directory: "/workspace",
+          path: undefined,
+          agent: undefined,
+          time: { created, updated: created + 1_000 },
+        },
+      },
+    ])
+  })
+
+  test("preserves aggregate rows and does not project child sessions", () => {
+    const existing = { sessionID: "foreground", state: "needs_input" as const, time: { created: 1, updated: 2 } }
+    expect(
+      mergeAgentViewSessionFallback({
+        primary: [existing],
+        sessions: [
+          {
+            id: "foreground",
+            slug: "foreground",
+            projectID: "project",
+            directory: "/workspace",
+            title: "Foreground",
+            version: "1",
+            time: { created: 1, updated: 2 },
+          },
+          {
+            id: "child",
+            slug: "child",
+            projectID: "project",
+            directory: "/workspace",
+            parentID: "foreground",
+            title: "Child",
+            version: "1",
+            time: { created: 1, updated: 2 },
+          },
+        ],
+        statuses: {},
+      }),
+    ).toEqual([existing])
   })
 
   test("stacks Agent View metadata before title and timestamps collide", () => {

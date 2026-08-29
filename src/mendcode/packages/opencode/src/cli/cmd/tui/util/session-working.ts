@@ -2,8 +2,10 @@ export const RECENT_WORKING_ASSISTANT_WINDOW_MS = 30_000
 export const STALE_BUSY_SESSION_WINDOW_MS = 60_000
 export const SESSION_AGENT_STATE_UNKNOWN_MESSAGE = "agent state unknown"
 
-export function displayConnectionStatus(input: { status: string; recoveringSince?: number }) {
-  return input.status === "connected" && input.recoveringSince !== undefined ? "reconnecting" : input.status
+export function displayConnectionStatus<T extends string>(input: { status: T; recoveringSince?: number }): T {
+  // Snapshot reconciliation can outlive a healthy SSE connection. Keep that
+  // safety marker internal instead of telling the user the transport was lost.
+  return input.status
 }
 
 export function shouldShowAgentStateUnknown(input: {
