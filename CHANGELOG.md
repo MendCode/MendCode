@@ -13,6 +13,7 @@ MendCode v0.1.41 keeps terminal connection and session state truthful while comp
 - Stop presenting snapshot reconciliation on an already-connected local transport as a MendCode reconnection or connection loss.
 - Populate the home Agent View from normal root sessions when the aggregate or background feed is empty or temporarily unavailable.
 - Regenerate favicon and maskable web-app images so every published size contains the visible MendCode symbol.
+- Upgrade the transitive `pacote` release dependency to 21.5.1 to remediate GHSA-w4pp-8pjf-rmxw.
 
 ### Tests
 
