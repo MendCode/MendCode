@@ -4,6 +4,7 @@ import { NodeFileSystem } from "@effect/platform-node"
 import { AppFileSystem } from "@mendcode/core/filesystem"
 import { testEffect } from "../lib/effect"
 import path from "path"
+import { symlink } from "node:fs/promises"
 
 const live = AppFileSystem.layer.pipe(Layer.provideMerge(NodeFileSystem.layer))
 const { effect: it } = testEffect(live)
@@ -356,6 +357,31 @@ describe("AppFileSystem", () => {
       expect(AppFileSystem.contains("/a/b", "/a/b/c")).toBe(true)
       expect(AppFileSystem.contains("/a/b", "/a/c")).toBe(false)
     })
+
+    it(
+      "resolves missing paths through the nearest existing symlink parent",
+      Effect.gen(function* () {
+        const filesys = yield* FileSystem.FileSystem
+        const tmp = yield* filesys.makeTempDirectoryScoped()
+        const project = path.join(tmp, "project")
+        const outside = path.join(tmp, "outside")
+        const link = path.join(project, "linked")
+        yield* filesys.makeDirectory(project)
+        yield* filesys.makeDirectory(outside)
+        yield* Effect.promise(() => symlink(outside, link, "dir"))
+
+        expect(AppFileSystem.resolve(path.join(link, "missing.txt"))).toBe(
+          path.join(AppFileSystem.resolve(outside), "missing.txt"),
+        )
+        expect(AppFileSystem.contains(AppFileSystem.resolve(project), AppFileSystem.resolve(path.join(link, "missing.txt")))).toBe(false)
+      }),
+    )
+
+    if (process.platform === "win32") {
+      test("contains rejects a child on another drive", () => {
+        expect(AppFileSystem.contains("C:\\project", "D:\\project\\file.txt")).toBe(false)
+      })
+    }
 
     test("overlaps detects overlapping paths", () => {
       expect(AppFileSystem.overlaps("/a/b", "/a/b/c")).toBe(true)

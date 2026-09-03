@@ -1,5 +1,5 @@
 import { NodeFileSystem } from "@effect/platform-node"
-import { dirname, join, relative, resolve as pathResolve } from "path"
+import { basename, dirname, isAbsolute, join, relative, resolve as pathResolve, sep } from "path"
 import { realpathSync } from "fs"
 import * as NFS from "fs/promises"
 import { lookup } from "mime-types"
@@ -215,11 +215,18 @@ export namespace AppFileSystem {
 
   export function resolve(p: string): string {
     const resolved = pathResolve(windowsPath(p))
-    try {
-      return normalizePath(realpathSync(resolved))
-    } catch (e: any) {
-      if (e?.code === "ENOENT") return normalizePath(resolved)
-      throw e
+    const suffix: string[] = []
+    let current = resolved
+    while (true) {
+      try {
+        return normalizePath(join(realpathSync.native(current), ...suffix.toReversed()))
+      } catch (e: any) {
+        if (e?.code !== "ENOENT") throw e
+        const parent = dirname(current)
+        if (parent === current) return normalizePath(resolved)
+        suffix.push(basename(current))
+        current = parent
+      }
     }
   }
 
@@ -235,10 +242,14 @@ export namespace AppFileSystem {
   export function overlaps(a: string, b: string) {
     const relA = relative(a, b)
     const relB = relative(b, a)
-    return !relA || !relA.startsWith("..") || !relB || !relB.startsWith("..")
+    return internalRelative(relA) || internalRelative(relB)
   }
 
   export function contains(parent: string, child: string) {
-    return !relative(parent, child).startsWith("..")
+    return internalRelative(relative(parent, child))
+  }
+
+  function internalRelative(value: string) {
+    return value === "" || (value !== ".." && !value.startsWith(`..${sep}`) && !isAbsolute(value))
   }
 }

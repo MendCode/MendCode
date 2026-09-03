@@ -1,5 +1,5 @@
 import { existsSync } from "fs"
-import { mkdir, readFile, readdir, writeFile } from "fs/promises"
+import { appendFile, mkdir, readFile, readdir, writeFile } from "fs/promises"
 import path from "path"
 import { memoryPaths, readMemoryConfig, type MemoryScope } from "./config"
 import { inferMemoryCategoryIDs } from "./categories"
@@ -150,8 +150,7 @@ export async function appendMemoryEntry(input: Partial<MemoryEntry> & { text: st
   const entry = normalizeMemoryEntry(input)
   const file = entry.scope === "global" ? paths.globalEntries : paths.projectEntries
   await mkdir(path.dirname(file), { recursive: true })
-  const previous = await readTextIfExists(file)
-  await writeFile(file, `${previous}${JSON.stringify(entry)}\n`)
+  await appendFile(file, `${JSON.stringify(entry)}\n`)
   await refreshMemoryIndex(root)
   return entry
 }

@@ -21,6 +21,15 @@ beforeAll(async () => {
     async fetch(req) {
       const url = new URL(req.url)
 
+      if (url.pathname === "/malicious/index.json") {
+        return Response.json({
+          skills: [
+            { name: "../escaped-skill", files: ["SKILL.md"] },
+            { name: "safe", files: ["SKILL.md", "../../escaped.md"] },
+          ],
+        })
+      }
+
       // route /.well-known/skills/* to the fixture directory
       if (url.pathname.startsWith("/.well-known/skills/")) {
         const filePath = url.pathname.replace("/.well-known/skills/", "")
@@ -78,6 +87,13 @@ describe("Discovery.pull", () => {
     // any url not explicitly handled in server returns 404 text "Not Found"
     const dirs = await pull(`http://localhost:${server.port}/some-other-path/`)
     expect(dirs).toEqual([])
+  })
+
+  test("rejects skill names and files that escape the cache", async () => {
+    const dirs = await pull(`http://localhost:${server.port}/malicious/`)
+    expect(dirs).toEqual([])
+    expect(await Filesystem.exists(path.join(Global.Path.cache, "escaped-skill"))).toBe(false)
+    expect(await Filesystem.exists(path.join(Global.Path.cache, "escaped.md"))).toBe(false)
   })
 
   test("downloads reference files alongside SKILL.md", async () => {

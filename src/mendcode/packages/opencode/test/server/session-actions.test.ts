@@ -48,7 +48,7 @@ describe("session action routes", () => {
 
         const interrupt = await app.request(`/session/${session.id}/interrupt`, { method: "POST" })
         expect(interrupt.status).toBe(200)
-        expect(await interrupt.json()).toBe(true)
+        expect(await interrupt.json()).toBe(false)
 
         await svc.remove(session.id)
       },

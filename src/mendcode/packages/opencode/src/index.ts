@@ -175,7 +175,7 @@ const cli = yargs(args)
       let last = -1
       if (tty) process.stderr.write("\x1b[?25l")
       try {
-        await JsonMigration.run(drizzle({ client: Database.Client().$client }), {
+        const stats = await JsonMigration.run(drizzle({ client: Database.Client().$client }), {
           progress: (event) => {
             const percent = Math.floor((event.current / event.total) * 100)
             if (percent === last && event.current !== event.total) return
@@ -192,8 +192,15 @@ const cli = yargs(args)
             }
           },
         })
-        await JsonMigration.writeJsonStorageMigrationDoneMarker()
-        process.stderr.write("Database migration complete." + EOL)
+        if (JsonMigration.jsonStorageMigrationSucceeded(stats)) {
+          await JsonMigration.writeJsonStorageMigrationDoneMarker()
+          process.stderr.write("Database migration complete." + EOL)
+        } else {
+          process.stderr.write(
+            `Database migration incomplete (${stats.errors.length} errors); it will retry on the next start.${EOL}`,
+          )
+          for (const error of stats.errors.slice(0, 10)) process.stderr.write(`- ${error}${EOL}`)
+        }
       } finally {
         if (tty) process.stderr.write("\x1b[?25h")
         else {

@@ -83,4 +83,27 @@ describe("Auth", () => {
       }),
     ),
   )
+
+  it.live("serializes concurrent credential updates without losing entries", () =>
+    provideTmpdirInstance(() =>
+      Effect.gen(function* () {
+        const auth = yield* Auth.Service
+        yield* Effect.all(
+          Array.from({ length: 24 }, (_, index) =>
+            auth.set(`provider-${index}`, {
+              type: "api",
+              key: `key-${index}`,
+            }),
+          ),
+          { concurrency: "unbounded" },
+        )
+        const data = yield* auth.all()
+        for (let index = 0; index < 24; index++) {
+          const entry = data[`provider-${index}`]
+          expect(entry?.type).toBe("api")
+          if (entry?.type === "api") expect(entry.key).toBe(`key-${index}`)
+        }
+      }),
+    ),
+  )
 })

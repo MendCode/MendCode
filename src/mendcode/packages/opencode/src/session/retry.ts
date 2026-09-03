@@ -20,6 +20,10 @@ function cap(ms: number) {
 }
 
 export function delay(attempt: number, error?: MessageV2.APIError) {
+  // Network recovery must not inherit a provider's rate-limit hint. The
+  // request is already known to be transport-bound, so probe again quickly.
+  if (error && MessageV2.isNetworkError(error)) return RETRY_NETWORK_INTERVAL
+
   if (error) {
     const headers = error.data.responseHeaders
     if (headers) {
@@ -45,12 +49,9 @@ export function delay(attempt: number, error?: MessageV2.APIError) {
         }
       }
 
-      if (MessageV2.isNetworkError(error)) return RETRY_NETWORK_INTERVAL
       return cap(RETRY_INITIAL_DELAY * Math.pow(RETRY_BACKOFF_FACTOR, attempt - 1))
     }
   }
-
-  if (error && MessageV2.isNetworkError(error)) return RETRY_NETWORK_INTERVAL
   return cap(Math.min(RETRY_INITIAL_DELAY * Math.pow(RETRY_BACKOFF_FACTOR, attempt - 1), RETRY_MAX_DELAY_NO_HEADERS))
 }
 

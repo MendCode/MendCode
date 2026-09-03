@@ -529,6 +529,22 @@ export const layer = Layer.effect(
             .get(),
         )
 
+        const destination =
+          input.workspaceID === null
+            ? undefined
+            : yield* Effect.gen(function* () {
+                const workspaceID = input.workspaceID!
+                const space = yield* get(workspaceID)
+                if (!space)
+                  return yield* new WorkspaceNotFoundError({
+                    message: `Workspace not found: ${workspaceID}`,
+                    workspaceID,
+                  })
+                const adapter = getAdapter(space.projectID, space.type)
+                const target = yield* EffectBridge.fromPromise(() => adapter.target(space))
+                return { space, target }
+              })
+
         if (current?.workspaceID) {
           const previous = yield* get(current.workspaceID)
           if (previous) {
@@ -551,9 +567,6 @@ export const layer = Layer.effect(
               yield* prompt.cancel(input.sessionID)
             }
 
-            // "claim" this session so any future events coming from
-            // the old workspace are ignored
-            SyncEvent.claim(input.sessionID, input.workspaceID ?? Instance.project.id)
           }
         }
 
@@ -566,6 +579,7 @@ export const layer = Layer.effect(
               },
             }),
           )
+          SyncEvent.claim(input.sessionID, Instance.project.id)
 
           log.info("session warp complete", {
             workspaceID: input.workspaceID,
@@ -576,15 +590,7 @@ export const layer = Layer.effect(
         }
 
         const workspaceID = input.workspaceID
-        const space = yield* get(workspaceID)
-        if (!space)
-          return yield* new WorkspaceNotFoundError({
-            message: `Workspace not found: ${workspaceID}`,
-            workspaceID,
-          })
-
-        const adapter = getAdapter(space.projectID, space.type)
-        const target = yield* EffectBridge.fromPromise(() => adapter.target(space))
+        const { space, target } = destination!
 
         if (target.type === "local") {
           yield* sync.run(Session.Event.Updated, {
@@ -593,6 +599,7 @@ export const layer = Layer.effect(
               workspaceID: input.workspaceID,
             },
           })
+          SyncEvent.claim(input.sessionID, workspaceID)
 
           log.info("session warp complete", {
             workspaceID: input.workspaceID,
@@ -701,6 +708,8 @@ export const layer = Layer.effect(
             body,
           })
         }
+
+        SyncEvent.claim(input.sessionID, workspaceID)
 
         log.info("session warp complete", {
           workspaceID: input.workspaceID,

@@ -240,6 +240,8 @@ describe("loop service plans", () => {
     })
 
     expect(plan.backend).toBe("scheduled-task")
+    expect(plan.programArguments[0]).toBe("mendcode.exe")
+    expect(plan.programArguments).not.toContain("/usr/bin/env")
     expect(plan.definitionPath).toContain("com.mendcode.loops.")
     expect(plan.installCommand[0]).toBe("schtasks.exe")
     expect(loopServiceWindowsCommand(plan)).toContain("mendcode.exe loops daemon")
@@ -247,6 +249,20 @@ describe("loop service plans", () => {
     expect(loopServiceWindowsCommand(plan)).toContain("--execute --report-only")
     expect(loopServiceWindowsCommand(plan)).not.toContain("--once")
     expect(loopServiceWindowsCommand(plan)).toContain("--quiet")
+  })
+
+  test("quotes a Windows executable path without Unix shell helpers", () => {
+    const plan = loopServicePlan({
+      projectRoot: "C:\\work\\repo",
+      command: "C:\\Program Files\\MendCode\\mendcode.exe",
+      platform: "win32",
+      serviceDir: "C:\\MendCode\\Loops",
+      logDir: "C:\\MendCode\\Logs",
+    })
+
+    expect(plan.programArguments[0]).toBe("C:\\Program Files\\MendCode\\mendcode.exe")
+    expect(loopServiceWindowsCommand(plan)).toContain('&& "C:\\Program Files\\MendCode\\mendcode.exe" loops daemon')
+    expect(loopServiceWindowsCommand(plan)).not.toContain("/usr/bin/env")
   })
 
   test("persists bounded scheduler health and reports service drift", async () => {

@@ -5,16 +5,16 @@ import { Session } from "@/session/session"
 import { SessionStatus } from "@/session/status"
 import { NonNegativeInt } from "@/util/schema"
 
-const MAX_PEERS = 32
+const MAX_SESSIONS = 32
 const MAX_ACTIVITY_LENGTH = 120
 
 export const Parameters = Schema.Struct({
   limit: Schema.optional(NonNegativeInt).annotate({
-    description: "Maximum number of peer descriptors to return. The server caps this at 32.",
+    description: "Maximum number of session descriptors to return. The server caps this at 32.",
   }),
 })
 
-export type PeerDescriptor = {
+export type SessionDescriptor = {
   sessionID: string
   title: string
   state: string
@@ -38,13 +38,13 @@ function statusDescriptor(status: SessionStatus.Info) {
   }
 }
 
-export function peerDescriptors(input: {
+export function sessionDescriptors(input: {
   sessions: readonly Session.Info[]
   statuses: ReadonlyMap<string, SessionStatus.Info>
   currentSessionID: string
   limit?: number
-}): PeerDescriptor[] {
-  const limit = Math.min(MAX_PEERS, Math.max(1, Math.floor(input.limit ?? MAX_PEERS)))
+}): SessionDescriptor[] {
+  const limit = Math.min(MAX_SESSIONS, Math.max(1, Math.floor(input.limit ?? MAX_SESSIONS)))
   return input.sessions
     .filter((session) => session.id !== input.currentSessionID)
     .toSorted((a, b) => b.time.updated - a.time.updated || a.id.localeCompare(b.id))
@@ -61,8 +61,8 @@ export function peerDescriptors(input: {
     })
 }
 
-export const PeersTool = Tool.define<typeof Parameters, { count: number }, Session.Service | SessionStatus.Service>(
-  "peers",
+export const SessionsTool = Tool.define<typeof Parameters, { count: number }, Session.Service | SessionStatus.Service>(
+  "sessions",
   Effect.gen(function* () {
     const sessions = yield* Session.Service
     const statuses = yield* SessionStatus.Service
@@ -71,33 +71,33 @@ export const PeersTool = Tool.define<typeof Parameters, { count: number }, Sessi
       parameters: Parameters,
       execute: (params: Schema.Schema.Type<typeof Parameters>, ctx: Tool.Context) =>
         Effect.gen(function* () {
-          const [items, statusMap] = yield* Effect.all([sessions.list({ limit: MAX_PEERS + 1 }), statuses.list()])
-          const peers = peerDescriptors({
+          const [items, statusMap] = yield* Effect.all([sessions.list({ limit: MAX_SESSIONS + 1 }), statuses.list()])
+          const otherSessions = sessionDescriptors({
             sessions: items,
             statuses: statusMap,
             currentSessionID: ctx.sessionID,
             limit: params.limit,
           })
-          const output = peers.length
-            ? peers
-                .map((peer) =>
+          const output = otherSessions.length
+            ? otherSessions
+                .map((session) =>
                   [
-                    `sessionID=${peer.sessionID}`,
-                    `title=${JSON.stringify(peer.title)}`,
-                    `state=${peer.state}`,
-                    peer.activity ? `activity=${JSON.stringify(peer.activity)}` : undefined,
-                    peer.workspaceID ? `workspaceID=${peer.workspaceID}` : undefined,
-                    `updatedAt=${peer.updatedAt}`,
+                    `sessionID=${session.sessionID}`,
+                    `title=${JSON.stringify(session.title)}`,
+                    `state=${session.state}`,
+                    session.activity ? `activity=${JSON.stringify(session.activity)}` : undefined,
+                    session.workspaceID ? `workspaceID=${session.workspaceID}` : undefined,
+                    `updatedAt=${session.updatedAt}`,
                   ]
                     .filter(Boolean)
                     .join(" "),
                 )
                 .join("\n")
-            : "No other peer sessions are available in this project."
+            : "No other sessions are available in this project."
           return {
-            title: `Peers (${peers.length})`,
+            title: `Sessions (${otherSessions.length})`,
             output,
-            metadata: { count: peers.length },
+            metadata: { count: otherSessions.length },
           }
         }),
     }

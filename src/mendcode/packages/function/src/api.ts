@@ -5,6 +5,7 @@ import { jwtVerify, createRemoteJWKSet } from "jose"
 import { createAppAuth } from "@octokit/auth-app"
 import { Octokit } from "@octokit/rest"
 import { Resource } from "sst"
+import { verifyFeishuRequest, verifyFeishuToken, FEISHU_REQUEST_MAX_AGE_SECONDS } from "./feishu-security"
 
 type Env = {
   SYNC_SERVER: DurableObjectNamespace<SyncServer>
@@ -67,7 +68,10 @@ export class SyncServer extends DurableObject<Env> {
 
   public async share(sessionID: string) {
     let secret = await this.getSecret()
-    if (secret) return secret
+    if (secret) {
+      if ((await this.getSessionID()) !== sessionID) throw new Error("Share identifier collision")
+      return secret
+    }
     secret = randomUUID()
 
     await this.ctx.storage.put("secret", secret)
@@ -85,6 +89,27 @@ export class SyncServer extends DurableObject<Env> {
 
   public async assertSecret(secret: string) {
     if (secret !== (await this.getSecret())) throw new Error("Invalid secret")
+  }
+
+  public async assertAccess(sessionID: string, secret: string) {
+    if (sessionID !== (await this.getSessionID())) throw new Error("Invalid session")
+    await this.assertSecret(secret)
+  }
+
+  public async claimReplay(key: string, now: number, expiresAt: number) {
+    const storageKey = `feishu/replay/${key}`
+    const accepted = await this.ctx.storage.transaction(async (txn) => {
+      const existing = await txn.get<number>(storageKey)
+      if (existing && existing >= now) return false
+      await txn.put(storageKey, expiresAt)
+      return true
+    })
+    if (!accepted) return false
+
+    const entries = await this.ctx.storage.list<number>({ prefix: "feishu/replay/", limit: 128 })
+    const expired = Array.from(entries).flatMap(([entry, expiry]) => (expiry < now ? [entry] : []))
+    if (expired.length) await this.ctx.storage.delete(expired)
+    return true
   }
 
   private async getSecret() {
@@ -133,7 +158,7 @@ export default new Hono<{ Bindings: Env }>()
     const secret = body.secret
     const id = c.env.SYNC_SERVER.idFromName(SyncServer.shortName(sessionID))
     const stub = c.env.SYNC_SERVER.get(id)
-    await stub.assertSecret(secret)
+    await stub.assertAccess(sessionID, secret)
     await stub.clear()
     return c.json({})
   })
@@ -157,7 +182,7 @@ export default new Hono<{ Bindings: Env }>()
     const name = SyncServer.shortName(body.sessionID)
     const id = c.env.SYNC_SERVER.idFromName(name)
     const stub = c.env.SYNC_SERVER.get(id)
-    await stub.assertSecret(body.secret)
+    await stub.assertAccess(body.sessionID, body.secret)
     await stub.publish(body.key, body.content)
     return c.json({})
   })
@@ -202,7 +227,10 @@ export default new Hono<{ Bindings: Env }>()
     return c.json({ info, messages })
   })
   .post("/feishu", async (c) => {
-    const body = (await c.req.json()) as {
+    const rawBody = await c.req.text()
+    let body: {
+      token?: string
+      header?: { token?: string }
       challenge?: string
       event?: {
         message?: {
@@ -214,7 +242,34 @@ export default new Hono<{ Bindings: Env }>()
         }
       }
     }
-    console.log(JSON.stringify(body, null, 2))
+    try {
+      body = JSON.parse(rawBody)
+    } catch {
+      return c.json({ error: "Invalid JSON" }, { status: 400 })
+    }
+
+    const timestamp = c.req.header("x-lark-request-timestamp")
+    const nonce = c.req.header("x-lark-request-nonce")
+    const signature = c.req.header("x-lark-signature")
+    if (
+      !verifyFeishuRequest({
+        body: rawBody,
+        timestamp,
+        nonce,
+        signature,
+        encryptKey: Resource.FEISHU_ENCRYPT_KEY.value,
+      }) ||
+      !verifyFeishuToken(body, Resource.FEISHU_VERIFICATION_TOKEN.value)
+    ) {
+      return c.json({ error: "Invalid Feishu signature" }, { status: 401 })
+    }
+
+    const replay = c.env.SYNC_SERVER.get(c.env.SYNC_SERVER.idFromName("feishu-webhook-replay-v1"))
+    const now = Date.now()
+    if (!(await replay.claimReplay(signature!, now, now + FEISHU_REQUEST_MAX_AGE_SECONDS * 1_000))) {
+      return c.json({ error: "Replayed Feishu request" }, { status: 409 })
+    }
+
     const challenge = body.challenge
     if (challenge) return c.json({ challenge })
 
@@ -302,6 +357,7 @@ export default new Hono<{ Bindings: Env }>()
     const installationAuth = await auth({
       type: "installation",
       installationId: installation.id,
+      repositoryNames: [repo],
     })
 
     return c.json({ token: installationAuth.token })
@@ -344,6 +400,7 @@ export default new Hono<{ Bindings: Env }>()
       const installationAuth = await auth({
         type: "installation",
         installationId: installation.id,
+        repositoryIds: [repoData.id],
       })
 
       return c.json({ token: installationAuth.token })

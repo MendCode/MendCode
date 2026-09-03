@@ -668,6 +668,72 @@ describe("workspace-old CRUD", () => {
     })
   })
 
+  test("sessionWarp keeps the current workspace and owner when the destination is missing", async () => {
+    await withInstance(async (dir) => {
+      const previousType = unique("warp-missing-prev")
+      const previous = workspaceInfo(Instance.project.id, previousType)
+      insertWorkspace(previous)
+      registerAdapter(Instance.project.id, previousType, localAdapter(path.join(dir, "warp-missing-prev")).adapter)
+      const session = await AppRuntime.runPromise(SessionNs.Service.use((svc) => svc.create({})))
+      attachSessionToWorkspace(session.id, previous.id)
+      SyncEvent.claim(session.id, previous.id)
+
+      await expect(
+        warpWorkspaceSession({ workspaceID: WorkspaceID.ascending("wrk_missing_destination"), sessionID: session.id }),
+      ).rejects.toThrow("Workspace not found")
+
+      expect(
+        Database.use((db) =>
+          db
+            .select({ workspaceID: SessionTable.workspace_id })
+            .from(SessionTable)
+            .where(eq(SessionTable.id, session.id))
+            .get(),
+        )?.workspaceID,
+      ).toBe(previous.id)
+      expect(sessionSequenceOwner(session.id)).toBe(previous.id)
+    })
+  })
+
+  it.live("sessionWarp keeps the current owner when remote replay fails", () =>
+    Effect.gen(function* () {
+      yield* HttpServer.serveEffect()(
+        Effect.gen(function* () {
+          const req = yield* HttpServerRequest.HttpServerRequest
+          if (new URL(req.url, "http://localhost").pathname === "/warp-fail/sync/replay")
+            return HttpServerResponse.text("replay failed", { status: 503 })
+          return HttpServerResponse.text("unexpected", { status: 500 })
+        }),
+      )
+      const url = yield* serverUrl()
+      yield* provideTmpdirInstance(
+        (dir) =>
+          Effect.gen(function* () {
+            const workspace = yield* WorkspaceOld.Service
+            const sessions = yield* SessionNs.Service
+            const previousType = unique("warp-fail-prev")
+            const targetType = unique("warp-fail-target")
+            const previous = workspaceInfo(Instance.project.id, previousType)
+            const target = workspaceInfo(Instance.project.id, targetType, { directory: "remote-target" })
+            insertWorkspace(previous)
+            insertWorkspace(target)
+            registerAdapter(Instance.project.id, previousType, localAdapter(path.join(dir, "warp-fail-prev")).adapter)
+            registerAdapter(Instance.project.id, targetType, remoteAdapter(`${url}/warp-fail`).adapter)
+            const session = yield* sessions.create({})
+            attachSessionToWorkspace(session.id, previous.id)
+            SyncEvent.claim(session.id, previous.id)
+
+            const result = yield* Effect.exit(workspace.sessionWarp({ workspaceID: target.id, sessionID: session.id }))
+
+            expect(result._tag).toBe("Failure")
+            expect(sessionSequenceOwner(session.id)).toBe(previous.id)
+            expect((yield* sessions.get(session.id)).workspaceID).toBe(previous.id)
+          }),
+        { git: true },
+      )
+    }),
+  )
+
   it.live("sessionWarp syncs previous remote history, replays it, steals, and claims the sequence", () => {
     const calls: FetchCall[] = []
     let historySessionID: SessionID | undefined

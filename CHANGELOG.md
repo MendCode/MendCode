@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.1.42 - 2026-09-03
+
+MendCode v0.1.42 makes queued prompts, cancellation, reconnection, and communication between sessions reliable under concurrent work.
+
+### Changed
+
+- Present agent-to-agent discovery as `sessions` and deliver same-workspace session messages automatically without an acceptance click.
+- Keep queued prompts serialized per session and automatically dispatch them after the active response reaches a terminal state.
+- Retry transient backend and prompt-delivery failures at a short bounded interval while preserving accepted message identity.
+
+### Fixed
+
+- Keep double-`Esc` cancellation targeted to the active message and replay an interrupt requested while an earlier abort is still settling.
+- Prevent queued prompts from being reordered, duplicated, stranded after compaction, or dropped during cancellation and reconnect races.
+- Avoid stale `Generating...` and network-retry states after a terminal response while preserving real active tool work.
+- Prevent removal of unregistered worktree directories.
+- Harden session routing, workspace ownership, filesystem boundaries, authentication, share identifiers, RPC framing, migrations, and webhook verification.
+- Ship a real MendCode VS Code icon and keep launcher/package installation paths MendCode-owned.
+
+### Tests
+
+- Add regressions for immediate send-then-`Esc`, double-`Esc`, FIFO prompt delivery, compaction recovery, session messaging, reconnect retries, worktree removal, and security boundaries.
+- Run focused prompt, runner, TUI, worktree, filesystem, function, SDK, memory, auth, share, workflow, and migration checks plus package typecheck.
+
 ## 0.1.41 - 2026-08-28
 
 MendCode v0.1.41 keeps terminal connection and session state truthful while completing MendCode-owned application branding.

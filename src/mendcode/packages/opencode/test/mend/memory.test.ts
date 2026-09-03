@@ -65,6 +65,16 @@ describe("mend memory", () => {
     expect(status.readsSecrets).toBe(false)
   })
 
+  test("concurrent memory appends preserve every complete JSONL entry", async () => {
+    await using dir = await tmpdir()
+    const texts = Array.from({ length: 32 }, (_, index) => `Concurrent memory ${index}`)
+
+    await Promise.all(texts.map((text) => appendMemoryEntry({ scope: "project", text }, dir.path)))
+
+    const entries = await readMemoryEntries("project", dir.path)
+    expect(entries.map((entry) => entry.text).sort()).toEqual(texts.sort())
+  })
+
   test("normalizes Dream write policy settings", async () => {
     await using dir = await tmpdir()
 

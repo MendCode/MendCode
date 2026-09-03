@@ -111,6 +111,11 @@ describe("JSON to SQLite migration", () => {
     await fs.rm(storageDir, { recursive: true, force: true })
   })
 
+  test("only considers a migration complete when every record migrated cleanly", () => {
+    expect(JsonMigration.jsonStorageMigrationSucceeded({ errors: [] })).toBe(true)
+    expect(JsonMigration.jsonStorageMigrationSucceeded({ errors: ["failed record"] })).toBe(false)
+  })
+
   test("migrates project", async () => {
     await writeProject(storageDir, {
       id: "proj_test123abc",

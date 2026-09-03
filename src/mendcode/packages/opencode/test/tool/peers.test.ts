@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { peerDescriptors } from "../../src/tool/peers"
+import { sessionDescriptors } from "../../src/tool/peers"
 import type { Session } from "../../src/session/session"
 import type { SessionStatus } from "../../src/session/status"
 
@@ -12,7 +12,7 @@ function session(id: string, updated: number, title = id) {
   } as Session.Info
 }
 
-describe("peer directory", () => {
+describe("session directory", () => {
   test("returns bounded same-project descriptors without the current session", () => {
     const sessions = [session("current", 10), session("older", 20, "Older worker"), session("newer", 30, "New worker")]
     const statuses = new Map<string, SessionStatus.Info>([
@@ -20,7 +20,7 @@ describe("peer directory", () => {
       ["newer", { type: "idle" }],
     ])
 
-    expect(peerDescriptors({ sessions, statuses, currentSessionID: "current", limit: 10 })).toEqual([
+    expect(sessionDescriptors({ sessions, statuses, currentSessionID: "current", limit: 10 })).toEqual([
       {
         sessionID: "newer",
         title: "New worker",
@@ -41,7 +41,7 @@ describe("peer directory", () => {
 
   test("caps the requested limit and activity text", () => {
     const longActivity = "x".repeat(300)
-    const descriptors = peerDescriptors({
+    const descriptors = sessionDescriptors({
       sessions: Array.from({ length: 40 }, (_, index) => session(`peer-${index}`, index)),
       statuses: new Map([["peer-39", { type: "busy", message: longActivity } as SessionStatus.Info]]),
       currentSessionID: "none",
