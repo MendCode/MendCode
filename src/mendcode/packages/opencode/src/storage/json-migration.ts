@@ -24,6 +24,10 @@ export async function writeJsonStorageMigrationDoneMarker() {
   await Filesystem.write(jsonStorageMigrationDonePath(), "")
 }
 
+export function jsonStorageMigrationSucceeded(stats: { readonly errors: readonly string[] }) {
+  return stats.errors.length === 0
+}
+
 export type Progress = {
   current: number
   total: number

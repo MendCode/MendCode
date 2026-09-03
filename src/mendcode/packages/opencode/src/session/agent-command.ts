@@ -190,7 +190,7 @@ export class InvalidTargetError extends Schema.TaggedErrorClass<InvalidTargetErr
   },
 ) {
   override get message() {
-    return "Peer messages require a different target session."
+    return "Session messages require a different target session."
   }
 }
 
@@ -298,7 +298,7 @@ function payloadFor(input: Create, sourceTitle?: string): Payload {
     return { text: normalizeString(input.payload.text, 4_000) ?? input.payload.text.trim().slice(0, 4_000) }
   if (input.type === "peer_message") {
     const text = normalizeString(input.payload.text, 4_000)
-    if (!text) throw new Error("Peer message text cannot be empty.")
+    if (!text) throw new Error("Session message text cannot be empty.")
     return {
       text,
       sourceTitle: normalizeString(sourceTitle, 120),
@@ -315,6 +315,11 @@ function canTransition(from: State, to: State) {
 
 function commandExpired(row: Row, now: number) {
   return row.state === "pending" && row.data.expiresAt !== undefined && row.data.expiresAt <= now
+}
+
+function commandOccupiesQueue(row: Row, now: number) {
+  if (row.state === "pending") return !commandExpired(row, now)
+  return row.state === "accepted" || row.state === "running"
 }
 
 function commandPayloadKey(input: Pick<Data, "type" | "payload">) {
@@ -522,27 +527,27 @@ export const layer = Layer.effect(
           .all()
           .find(
             (row) =>
-              row.state === "pending" &&
+              commandOccupiesQueue(row, now) &&
               row.source_session_id === input.sourceSessionID &&
-              !commandExpired(row, now) &&
               commandPayloadKey(row.data) === commandPayloadKey({ type: input.type, payload }),
           )
         if (duplicate) return { info: fromRow(duplicate, { source, target, targetBackground }), created: false }
-        const pendingForTarget = db
+        const queuedForTarget = db
           .select()
           .from(AgentCommandTable)
           .where(eq(AgentCommandTable.target_session_id, input.targetSessionID))
           .all()
-          .filter((row) => row.state === "pending" && !commandExpired(row, now)).length
+          .filter((row) => commandOccupiesQueue(row, now)).length
         const requestedExpiresAt = input.expiresAt ?? now + defaultCommandTTL
         const expiresAt =
           input.type === "peer_message" ? Math.min(requestedExpiresAt, now + maxPeerMessageTTL) : requestedExpiresAt
-        const overLimit = pendingForTarget >= maxPendingPerTarget
+        const overLimit = queuedForTarget >= maxPendingPerTarget
+        const autoAccept = input.type === "peer_message" && policy.decision === "safe_auto"
         const row = {
           id: AgentCommandID.ascending(),
           source_session_id: input.sourceSessionID,
           target_session_id: input.targetSessionID,
-          state: (expiresAt <= now ? "expired" : overLimit ? "rejected" : "pending") as State,
+          state: (expiresAt <= now ? "expired" : overLimit ? "rejected" : autoAccept ? "accepted" : "pending") as State,
           time_created: now,
           time_updated: now,
           data: {
@@ -553,7 +558,7 @@ export const layer = Layer.effect(
             expiresAt,
             ...(overLimit
               ? {
-                  error: `Target already has ${maxPendingPerTarget} pending commands; wait for the worker to accept or reject one first.`,
+                  error: `Target already has ${maxPendingPerTarget} queued commands; wait for one to finish before sending another.`,
                 }
               : {}),
             ...(expiresAt <= now ? { error: "Command expired before it could be queued." } : {}),

@@ -118,7 +118,7 @@ describe("Agent Command inbox", () => {
     })
   })
 
-  test("queues same-workspace peer text without granting tool permissions", async () => {
+  test("auto-queues same-workspace peer text without granting tool permissions", async () => {
     await using tmp = await tmpdir({ git: true })
     await WithInstance.provide({
       directory: tmp.path,
@@ -137,10 +137,10 @@ describe("Agent Command inbox", () => {
           sourceSessionID: source.id,
           targetSessionID: target.id,
           type: "peer_message",
-          state: "pending",
+          state: "accepted",
           permissions: [],
           policy: {
-            decision: "same_workspace",
+            decision: "safe_auto",
             permissions: [],
           },
           payload: {
@@ -156,7 +156,7 @@ describe("Agent Command inbox", () => {
             type: "peer_message",
             payload: { text: "   " },
           }),
-        ).rejects.toThrow("Peer message text cannot be empty.")
+        ).rejects.toThrow("Session message text cannot be empty.")
       },
     })
   })
@@ -175,7 +175,7 @@ describe("Agent Command inbox", () => {
             type: "peer_message",
             payload: { text: "loop back" },
           }),
-        ).rejects.toThrow("Peer messages require a different target session.")
+        ).rejects.toThrow("Session messages require a different target session.")
       },
     })
   })
@@ -370,7 +370,7 @@ describe("Agent Command inbox", () => {
         expect(duplicate.id).toBe(first.id)
         expect(overflow).toMatchObject({
           state: "rejected",
-          error: "Target already has 3 pending commands; wait for the worker to accept or reject one first.",
+          error: "Target already has 3 queued commands; wait for one to finish before sending another.",
         })
       },
     })
@@ -730,7 +730,7 @@ describe("Agent Command inbox", () => {
           decision: "approval_required",
           permissions: ["session.message.send"],
         }),
-        expect.objectContaining({ type: "peer_message", decision: "same_workspace", permissions: [] }),
+        expect.objectContaining({ type: "peer_message", decision: "safe_auto", permissions: [] }),
       ]),
     )
   })

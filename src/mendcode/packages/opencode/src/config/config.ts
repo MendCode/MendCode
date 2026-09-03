@@ -662,7 +662,7 @@ export const layer = Layer.effect(
 
         const isProjectConfigDir = (dir: string) => {
           const base = path.basename(dir)
-          return base === ".mendcode" || base === ".mendcode" || dir === Flag.OPENCODE_CONFIG_DIR
+          return base === ".mendcode" || base === ".opencode" || dir === Flag.OPENCODE_CONFIG_DIR
         }
 
         const installPluginDependency = Effect.fnUntraced(function* (dir: string) {
@@ -700,7 +700,7 @@ export const layer = Layer.effect(
 
         for (const dir of directories) {
           if (isProjectConfigDir(dir)) {
-            for (const file of ["mendcode.json", "mendcode.jsonc", "mendcode.json", "mendcode.jsonc"]) {
+            for (const file of ["mendcode.json", "mendcode.jsonc", "opencode.json", "opencode.jsonc"]) {
               const source = path.join(dir, file)
               log.debug(`loading config from ${source}`)
               yield* merge(source, yield* loadFile(source))

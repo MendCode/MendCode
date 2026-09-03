@@ -94,12 +94,15 @@ const MigrateCommand = cmd({
       if (tty) process.stderr.write("\n")
       if (tty) process.stderr.write("\x1b[?25h")
       else process.stderr.write(`sqlite-migration:done${EOL}`)
-      UI.println(
-        `Migration complete: ${stats.projects} projects, ${stats.sessions} sessions, ${stats.messages} messages`,
-      )
-      await JsonMigration.writeJsonStorageMigrationDoneMarker()
-      if (stats.errors.length > 0) {
-        UI.println(`${stats.errors.length} errors occurred during migration`)
+      if (JsonMigration.jsonStorageMigrationSucceeded(stats)) {
+        UI.println(
+          `Migration complete: ${stats.projects} projects, ${stats.sessions} sessions, ${stats.messages} messages`,
+        )
+        await JsonMigration.writeJsonStorageMigrationDoneMarker()
+      } else {
+        UI.error(`Migration incomplete: ${stats.errors.length} errors occurred; the next run will retry`)
+        for (const error of stats.errors.slice(0, 10)) UI.error(error)
+        process.exitCode = 1
       }
     } catch (err) {
       if (tty) process.stderr.write("\x1b[?25h")

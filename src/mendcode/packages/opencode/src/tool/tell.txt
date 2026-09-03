@@ -1,3 +1,3 @@
 Send a plain-text message to one explicit MendCode session in the same project.
 
-This queues an auditable peer message for the target session. It never shares history, files, reasoning, permissions, or model context. The target must explicitly accept the message before it is delivered to its prompt queue; if the target is busy, delivery waits for its next idle boundary.
+This queues an auditable session message for the target session. It never shares history, files, reasoning, permissions, or model context. Same-workspace messages are delivered automatically to the target prompt queue; if the target is busy, delivery waits for its next idle boundary without interrupting it. Delivery remains awaiting response until the target finishes, then the final response text returns automatically to the source session without creating an acknowledgement loop.

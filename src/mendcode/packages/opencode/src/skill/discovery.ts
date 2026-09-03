@@ -34,6 +34,22 @@ export const layer: Layer.Layer<Service, never, AppFileSystem.Service | Path.Pat
       const http = HttpClient.filterStatusOk(withTransientReadRetry(yield* HttpClient.HttpClient))
       const cache = path.join(Global.Path.cache, "skills")
 
+      const safeSkillName = (name: string) =>
+        name.length > 0 &&
+        name !== "." &&
+        name !== ".." &&
+        !name.includes("/") &&
+        !name.includes("\\") &&
+        !/^[a-zA-Z]:/.test(name)
+
+      const safeSkillFile = (file: string) => {
+        const normalized = file.replaceAll("\\", "/")
+        if (!normalized || normalized.startsWith("/") || /^[a-zA-Z]:/.test(normalized)) return false
+        return normalized.split("/").every((part) => part.length > 0 && part !== "." && part !== "..")
+      }
+
+      const remotePath = (...segments: string[]) => segments.map(encodeURIComponent).join("/")
+
       const download = Effect.fn("Discovery.download")(function* (url: string, dest: string) {
         if (yield* fs.exists(dest).pipe(Effect.orDie)) return true
 
@@ -73,6 +89,10 @@ export const layer: Layer.Layer<Service, never, AppFileSystem.Service | Path.Pat
         if (!data) return []
 
         const list = data.skills.filter((skill) => {
+          if (!safeSkillName(skill.name) || skill.files.some((file) => !safeSkillFile(file))) {
+            log.warn("skill entry contains an unsafe path", { url: index, skill: skill.name })
+            return false
+          }
           if (!skill.files.includes("SKILL.md")) {
             log.warn("skill entry missing SKILL.md", { url: index, skill: skill.name })
             return false
@@ -88,7 +108,11 @@ export const layer: Layer.Layer<Service, never, AppFileSystem.Service | Path.Pat
 
               yield* Effect.forEach(
                 skill.files,
-                (file) => download(new URL(file, `${host}/${skill.name}/`).href, path.join(root, file)),
+                (file) =>
+                  download(
+                    new URL(remotePath(skill.name, ...file.replaceAll("\\", "/").split("/")), `${host}/`).href,
+                    path.join(root, file),
+                  ),
                 {
                   concurrency: fileConcurrency,
                 },

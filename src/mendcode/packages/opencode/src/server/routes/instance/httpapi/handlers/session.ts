@@ -178,10 +178,14 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     }) {
       yield* SessionError.mapStorageNotFound(session.get(ctx.payload.sourceSessionID))
       yield* SessionError.mapStorageNotFound(session.get(ctx.params.sessionID))
-      return yield* agentCommandSvc.create({ targetSessionID: ctx.params.sessionID, ...ctx.payload }).pipe(
+      const created = yield* agentCommandSvc.create({ targetSessionID: ctx.params.sessionID, ...ctx.payload }).pipe(
         Effect.catchIf(NotFoundError.isInstance, (error) => Effect.fail(ApiError.notFound(error.data.message))),
         Effect.catchTag("AgentCommandInvalidTargetError", () => Effect.fail(new HttpApiError.BadRequest({}))),
       )
+      if (created.type === "peer_message" && created.state === "accepted") {
+        yield* promptSvc.wakePeerDelivery(created.targetSessionID)
+      }
+      return created
     })
 
     const agentCommandPatch = Effect.fn("SessionHttpApi.agentCommandPatch")(function* (ctx: {
@@ -413,8 +417,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     })
 
     const interrupt = Effect.fn("SessionHttpApi.interrupt")(function* (ctx: { params: { sessionID: SessionID } }) {
-      yield* promptSvc.interrupt(ctx.params.sessionID)
-      return true
+      return yield* promptSvc.interrupt(ctx.params.sessionID)
     })
 
     const init = Effect.fn("SessionHttpApi.init")(function* (ctx: {

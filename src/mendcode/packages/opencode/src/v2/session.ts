@@ -12,6 +12,14 @@ import { SessionEvent } from "./session-event"
 import { V2Schema } from "./schema"
 import { optionalOmitUndefined } from "@/util/schema"
 import { Modelv2 } from "./model"
+import { Session as LegacySession } from "@/session/session"
+import { SessionPrompt } from "@/session/prompt"
+import { SessionCompaction } from "@/session/compaction"
+import { SessionStatus } from "@/session/status"
+import { MessageV2 } from "@/session/message-v2"
+import { Agent } from "@/agent/agent"
+import { Provider } from "@/provider/provider"
+import { ModelID, ProviderID } from "@/provider/schema"
 
 export const Delivery = Schema.Literals(["immediate", "deferred"]).annotate({
   identifier: "Session.Delivery",
@@ -119,6 +127,12 @@ export class Service extends Context.Service<Service, Interface>()("@opencode/v2
 export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
+    const legacySession = yield* LegacySession.Service
+    const legacyPrompt = yield* SessionPrompt.Service
+    const legacyCompaction = yield* SessionCompaction.Service
+    const legacyStatus = yield* SessionStatus.Service
+    const agents = yield* Agent.Service
+    const providers = yield* Provider.Service
     const decodeMessage = Schema.decodeUnknownSync(SessionMessage.Message)
 
     const decode = (row: typeof SessionMessageTable.$inferSelect) =>
@@ -321,8 +335,20 @@ export const layer = Layer.effect(
     }
 
     const result: Interface = {
-      create: Effect.fn("V2Session.create")(function* (_input) {
-        return {} as any
+      create: Effect.fn("V2Session.create")(function* (input) {
+        const created = yield* legacySession.create({
+          agent: input?.agent,
+          parentID: input?.parentID,
+          workspaceID: input?.workspaceID,
+          model: input?.model
+            ? {
+                providerID: ProviderID.make(input.model.providerID),
+                id: ModelID.make(input.model.id),
+                variant: input.model.variant,
+              }
+            : undefined,
+        })
+        return yield* result.get(created.id).pipe(Effect.orDie)
       }),
       get: Effect.fn("V2Session.get")(function* (sessionID) {
         const row = Database.use((db) => db.select().from(SessionTable).where(eq(SessionTable.id, sessionID)).get())
@@ -441,8 +467,61 @@ export const layer = Layer.effect(
         })
         return rows.map((row) => decode(row))
       }),
-      prompt: Effect.fn("V2Session.prompt")(function* (_input) {
-        return {} as any
+      prompt: Effect.fn("V2Session.prompt")(function* (input) {
+        const current = yield* legacySession.get(input.sessionID).pipe(Effect.orDie)
+        const agent = current.agent ?? (yield* agents.defaultAgent())
+        const model = current.model
+          ? { providerID: current.model.providerID, modelID: current.model.id }
+          : yield* providers.defaultModel()
+        const request = {
+          sessionID: input.sessionID,
+          agent,
+          model,
+          parts: [
+            { type: "text" as const, text: input.prompt.text },
+            ...(input.prompt.files ?? []).map((file) => ({
+              type: "file" as const,
+              mime: file.mime,
+              filename: file.name,
+              url: file.uri,
+            })),
+            ...(input.prompt.agents ?? []).map((attachment) => ({
+              type: "agent" as const,
+              name: attachment.name,
+              source: attachment.source
+                ? {
+                    value: attachment.source.text,
+                    start: attachment.source.start,
+                    end: attachment.source.end,
+                  }
+                : undefined,
+            })),
+          ],
+        }
+        const message = yield* ((input.delivery ?? DefaultDelivery) === "deferred"
+          ? legacyPrompt.promptAsync(request)
+          : legacyPrompt.prompt(request)).pipe(Effect.orDie)
+        const responseInfo = message.info
+        const legacyUser =
+          responseInfo.role === "user"
+            ? message
+            : Option.getOrUndefined(
+                yield* legacySession.findMessage(
+                  input.sessionID,
+                  (candidate) => candidate.info.role === "user" && candidate.info.id === responseInfo.parentID,
+                ),
+              )
+        if (!legacyUser || legacyUser.info.role !== "user")
+          return yield* Effect.die(new Error("V2 prompt completed without its corresponding user turn"))
+        const projected = yield* result.messages({ sessionID: input.sessionID, order: "desc" })
+        const user = projected.find(
+          (candidate): candidate is SessionMessage.User =>
+            candidate.type === "user" &&
+            DateTime.toEpochMillis(candidate.time.created) === legacyUser.info.time.created &&
+            candidate.text === input.prompt.text,
+        )
+        if (!user) return yield* Effect.die(new Error("V2 prompt was accepted but its user event was not projected"))
+        return user
       }),
       shell: Effect.fn("V2Session.shell")(function* (_input) {}),
       skill: Effect.fn("V2Session.skill")(function* (_input) {}),
@@ -481,14 +560,34 @@ export const layer = Layer.effect(
           if (!text) return
         }).pipe(Effect.forkChild())
       }),
-      compact: Effect.fn("V2Session.compact")(function* (_sessionID) {}),
-      wait: Effect.fn("V2Session.wait")(function* (_sessionID) {}),
+      compact: Effect.fn("V2Session.compact")(function* (sessionID) {
+        const current = yield* legacySession.get(sessionID).pipe(Effect.orDie)
+        const defaultAgent = yield* agents.defaultAgent()
+        const agent = MessageV2.latestUserInfo(sessionID)?.agent ?? current.agent ?? defaultAgent
+        const model = current.model
+          ? { providerID: current.model.providerID, modelID: current.model.id }
+          : yield* providers.defaultModel()
+        yield* legacyCompaction.create({ sessionID, agent, model, auto: false }).pipe(Effect.orDie)
+        yield* legacyPrompt.loop({ sessionID })
+      }),
+      wait: Effect.fn("V2Session.wait")(function* (sessionID) {
+        while ((yield* legacyStatus.get(sessionID)).type !== "idle") yield* Effect.sleep(50)
+      }),
     }
 
     return Service.of(result)
   }),
 )
 
-export const defaultLayer = layer
+export const defaultLayer = Layer.suspend(() =>
+  layer.pipe(
+    Layer.provide(SessionPrompt.defaultLayer),
+    Layer.provide(SessionCompaction.defaultLayer),
+    Layer.provide(SessionStatus.defaultLayer),
+    Layer.provide(LegacySession.defaultLayer),
+    Layer.provide(Agent.defaultLayer),
+    Layer.provide(Provider.defaultLayer),
+  ),
+)
 
 export * as SessionV2 from "./session"

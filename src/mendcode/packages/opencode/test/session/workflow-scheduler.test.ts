@@ -145,6 +145,27 @@ describe("workflow scheduler readiness", () => {
     expect(WorkflowRunner.shouldRecoverWorkflowRun("stopped")).toBe(false)
   })
 
+  test("revalidates a claimed task immediately before execution", () => {
+    const sessionID = SessionID.make("ses_workflow_claim")
+    const snapshot = {
+      run: { state: "working" },
+      tasks: [{ id: "task", state: "working", attempt: 2, sessionID }],
+    } as unknown as WorkflowService.WorkflowSnapshot
+    const claim = { taskID: "task", attempt: 2 } as never
+
+    expect(WorkflowRunner.workflowClaimCanExecute(snapshot, claim, sessionID)).toBe(true)
+    expect(
+      WorkflowRunner.workflowClaimCanExecute(
+        { ...snapshot, run: { ...snapshot.run, state: "stopped" } } as WorkflowService.WorkflowSnapshot,
+        claim,
+        sessionID,
+      ),
+    ).toBe(false)
+    expect(WorkflowRunner.workflowClaimCanExecute(snapshot, { taskID: "task", attempt: 1 } as never, sessionID)).toBe(
+      false,
+    )
+  })
+
   test("keeps dependencies and phase barriers strict while honoring concurrency", () => {
     const first = WorkflowScheduler.readyTaskIDs({
       phases: [

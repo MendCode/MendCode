@@ -867,6 +867,24 @@ Test agent prompt`,
   })
 })
 
+test("loads legacy opencode.json from the .opencode directory", async () => {
+  await using tmp = await tmpdir({
+    init: async (dir) => {
+      const legacyDir = path.join(dir, ".opencode")
+      await fs.mkdir(legacyDir, { recursive: true })
+      await Filesystem.write(path.join(legacyDir, "opencode.json"), JSON.stringify({ snapshot: true }))
+    },
+  })
+  await WithInstance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      const config = await load()
+      expect(config.snapshot).toBe(true)
+      expect(await listDirs()).toContain(path.join(tmp.path, ".opencode"))
+    },
+  })
+})
+
 test("agent markdown permission config preserves user key order", async () => {
   await using tmp = await tmpdir({
     init: async (dir) => {
