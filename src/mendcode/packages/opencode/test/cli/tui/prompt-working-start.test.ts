@@ -1069,24 +1069,23 @@ describe("resolveWorkingStartedAt", () => {
     )
   })
 
-  test("keeps double-Esc armed across internal target changes in the same active session", () => {
-    expect(sessionInterruptConfirmationAction({ sessionID: "session-1", hasActiveTurn: true })).toBe("arm")
+  test("keeps double-Esc armed only for the active message target", () => {
+    expect(sessionInterruptConfirmationAction({ activeTargetMessageID: "message-1", hasActiveTurn: true })).toBe("arm")
     expect(
       sessionInterruptConfirmationAction({
-        sessionID: "session-1",
-        armedSessionID: "session-1",
+        activeTargetMessageID: "message-1",
+        armedTargetMessageID: "message-1",
         hasActiveTurn: true,
       }),
     ).toBe("interrupt")
     expect(
       sessionInterruptConfirmationAction({
-        sessionID: "session-2",
-        armedSessionID: "session-1",
+        activeTargetMessageID: "message-2",
+        armedTargetMessageID: "message-1",
         hasActiveTurn: true,
       }),
     ).toBe("arm")
-    expect(sessionInterruptConfirmationAction({ armedSessionID: "session-1", hasActiveTurn: true })).toBe("ignore")
-    expect(sessionInterruptConfirmationAction({ sessionID: "session-1", hasActiveTurn: false })).toBe("ignore")
+    expect(sessionInterruptConfirmationAction({ armedTargetMessageID: "message-1", hasActiveTurn: false })).toBe("ignore")
     expect(sessionInterruptHint({ enabled: true, working: true, armed: false })).toBeUndefined()
     expect(sessionInterruptHint({ enabled: true, working: true, armed: true })).toBe("[esc again to interrupt]")
     expect(sessionInterruptHint({ enabled: false, working: true, armed: true })).toBeUndefined()
