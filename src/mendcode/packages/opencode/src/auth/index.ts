@@ -4,6 +4,7 @@ import { zod } from "@/util/effect-zod"
 import { NonNegativeInt } from "@/util/schema"
 import { Global } from "@mendcode/core/global"
 import { AppFileSystem } from "@mendcode/core/filesystem"
+import { EffectFlock } from "@mendcode/core/util/effect-flock"
 
 export const OAUTH_DUMMY_KEY = "opencode-oauth-dummy-key"
 
@@ -54,7 +55,12 @@ export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const fsys = yield* AppFileSystem.Service
+    const flock = yield* EffectFlock.Service
     const decode = Schema.decodeUnknownOption(Info)
+    const withMutationLock = <A>(body: Effect.Effect<A, AuthError>) =>
+      flock.withLock(body, `auth:${file}`).pipe(
+        Effect.mapError((error) => (error._tag === "AuthError" ? error : fail("Failed to lock auth data")(error))),
+      )
 
     const all = Effect.fn("Auth.all")(function* () {
       if (process.env.OPENCODE_AUTH_CONTENT) {
@@ -71,28 +77,39 @@ export const layer = Layer.effect(
       return (yield* all())[providerID]
     })
 
-    const set = Effect.fn("Auth.set")(function* (key: string, info: Info) {
-      const norm = key.replace(/\/+$/, "")
-      const data = yield* all()
-      if (norm !== key) delete data[key]
-      delete data[norm + "/"]
-      yield* fsys
-        .writeJson(file, { ...data, [norm]: info }, 0o600)
-        .pipe(Effect.mapError(fail("Failed to write auth data")))
-    })
+    const set = Effect.fn("Auth.set")((key: string, info: Info) =>
+      withMutationLock(
+        Effect.gen(function* () {
+          const norm = key.replace(/\/+$/, "")
+          const data = yield* all()
+          if (norm !== key) delete data[key]
+          delete data[norm + "/"]
+          yield* fsys
+            .writeJson(file, { ...data, [norm]: info }, 0o600)
+            .pipe(Effect.mapError(fail("Failed to write auth data")))
+        }),
+      ),
+    )
 
-    const remove = Effect.fn("Auth.remove")(function* (key: string) {
-      const norm = key.replace(/\/+$/, "")
-      const data = yield* all()
-      delete data[key]
-      delete data[norm]
-      yield* fsys.writeJson(file, data, 0o600).pipe(Effect.mapError(fail("Failed to write auth data")))
-    })
+    const remove = Effect.fn("Auth.remove")((key: string) =>
+      withMutationLock(
+        Effect.gen(function* () {
+          const norm = key.replace(/\/+$/, "")
+          const data = yield* all()
+          delete data[key]
+          delete data[norm]
+          yield* fsys.writeJson(file, data, 0o600).pipe(Effect.mapError(fail("Failed to write auth data")))
+        }),
+      ),
+    )
 
     return Service.of({ get, all, set, remove })
   }),
 )
 
-export const defaultLayer = layer.pipe(Layer.provide(AppFileSystem.defaultLayer))
+export const defaultLayer = layer.pipe(
+  Layer.provide(AppFileSystem.defaultLayer),
+  Layer.provide(EffectFlock.defaultLayer),
+)
 
 export * as Auth from "."

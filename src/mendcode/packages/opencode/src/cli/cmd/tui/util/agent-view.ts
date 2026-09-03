@@ -402,8 +402,16 @@ export function formatAgentViewCommandType(command: Pick<AgentViewCommand, "type
   if (command.type === "tag") return "update tags"
   if (command.type === "pause_after_turn") return "pause after turn"
   if (command.type === "stop") return "stop worker"
-  if (command.type === "peer_message") return "peer message"
+  if (command.type === "peer_message") return "session message"
   return "send message"
+}
+
+export function formatAgentViewCommandState(command: Pick<AgentViewCommand, "type" | "state">) {
+  if (command.type !== "peer_message") return command.state
+  if (command.state === "pending" || command.state === "accepted") return "queued"
+  if (command.state === "running") return "awaiting response"
+  if (command.state === "completed") return "responded"
+  return command.state
 }
 
 export function formatAgentViewCommandSummary(command: Pick<AgentViewCommand, "type" | "payload" | "state">) {
@@ -416,6 +424,6 @@ export function formatAgentViewCommandSummary(command: Pick<AgentViewCommand, "t
         : command.type === "send_message" || command.type === "peer_message"
           ? command.payload?.text
           : (command.payload?.instructions ?? command.payload?.reason)
-  const state = command.state === "pending" ? "pending" : command.state
+  const state = formatAgentViewCommandState(command)
   return Locale.truncate([state, action, detail].filter(Boolean).join(" · ").replace(/\s+/g, " ").trim(), 120)
 }

@@ -13,7 +13,7 @@ import PROMPT_EXPLORE from "./prompt/explore.txt"
 import PROMPT_SUMMARY from "./prompt/summary.txt"
 import PROMPT_TITLE from "./prompt/title.txt"
 import { Permission } from "@/permission"
-import { mergeDeep, pipe, sortBy, values } from "remeda"
+import { mergeDeep } from "remeda"
 import { Global } from "@mendcode/core/global"
 import { AppFileSystem } from "@mendcode/core/filesystem"
 import path from "path"
@@ -290,14 +290,13 @@ export const layer = Layer.effect(
 
         const list = Effect.fnUntraced(function* () {
           const cfg = yield* config.get()
-          return pipe(
-            agents,
-            values(),
-            sortBy(
-              [(x) => (cfg.default_agent ? x.name === cfg.default_agent : x.name === "build"), "desc"],
-              [(x) => x.name, "asc"],
-            ),
-          )
+          const defaultKey = cfg.default_agent ?? "build"
+          return Object.entries(agents)
+            .toSorted(
+              ([leftKey, left], [rightKey, right]) =>
+                Number(rightKey === defaultKey) - Number(leftKey === defaultKey) || left.name.localeCompare(right.name),
+            )
+            .map(([, agent]) => agent)
         })
 
         const defaultAgent = Effect.fnUntraced(function* () {
@@ -307,14 +306,14 @@ export const layer = Layer.effect(
             if (!agent) throw new Error(`default agent "${c.default_agent}" not found`)
             if (agent.mode === "subagent") throw new Error(`default agent "${c.default_agent}" is a subagent`)
             if (agent.hidden === true) throw new Error(`default agent "${c.default_agent}" is hidden`)
-            return agent.name
+            return c.default_agent
           }
-          const visible = Object.values(agents).find((a) => a.mode !== "subagent" && a.hidden !== true)
+          const visible = Object.entries(agents).find(([, agent]) => agent.mode !== "subagent" && agent.hidden !== true)
           if (!visible)
             throw new Error(
               'no primary visible agent found; configure a primary custom agent with "default_agent" or re-enable agent.build/agent.plan',
             )
-          return visible.name
+          return visible[0]
         })
 
         return {

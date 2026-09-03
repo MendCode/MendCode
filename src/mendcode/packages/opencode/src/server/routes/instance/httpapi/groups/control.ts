@@ -3,6 +3,7 @@ import { ProviderID } from "@/provider/schema"
 import { Schema } from "effect"
 import { HttpApi, HttpApiEndpoint, HttpApiError, HttpApiGroup, OpenApi } from "effect/unstable/httpapi"
 import { described } from "./metadata"
+import { Authorization } from "../middleware/authorization"
 
 const AuthParams = Schema.Struct({
   providerID: ProviderID,
@@ -71,5 +72,6 @@ export const ControlApi = HttpApi.make("control").add(
         }),
       ),
     )
+    .middleware(Authorization)
     .annotateMerge(OpenApi.annotations({ title: "control", description: "Control plane routes." })),
 )

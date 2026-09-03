@@ -954,8 +954,27 @@ export const layer: Layer.Layer<Service, never, Bus.Service | Storage.Service | 
           const oldest = pendingPartDeltas.keys().next().value
           if (!oldest) break
           const stale = pendingPartDeltas.get(oldest)
-          if (stale?.timer) clearTimeout(stale.timer)
-          pendingPartDeltas.delete(oldest)
+          if (!stale) {
+            pendingPartDeltas.delete(oldest)
+            continue
+          }
+          if (stale.timer) {
+            clearTimeout(stale.timer)
+            stale.timer = undefined
+          }
+          if (stale.flush) yield* Effect.promise(() => stale.flush!)
+          if (pendingPartDeltas.get(oldest) !== stale) continue
+          if (stale.timer) {
+            clearTimeout(stale.timer)
+            stale.timer = undefined
+          }
+          const part = structuredClone(stale.part)
+          yield* sync.run(MessageV2.Event.PartUpdated, {
+            sessionID: part.sessionID,
+            part,
+            time: Date.now(),
+          })
+          if (pendingPartDeltas.get(oldest) === stale) pendingPartDeltas.delete(oldest)
         }
         pending = {
           part: structuredClone(part),

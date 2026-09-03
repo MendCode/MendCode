@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test"
 import {
   formatAgentViewDetailLabel,
   formatAgentViewCommandSummary,
+  formatAgentViewCommandState,
+  formatAgentViewCommandType,
   formatAgentViewPathLabel,
   formatAgentViewSessionTime,
   countAgentViewCommands,
@@ -343,7 +345,14 @@ describe("Agent View visibility", () => {
     ).toBe("pending · send message · Ship next safe step")
     expect(
       formatAgentViewCommandSummary(command({ type: "peer_message", payload: { text: "Check the queued run" } })),
-    ).toBe("pending · peer message · Check the queued run")
+    ).toBe("queued · session message · Check the queued run")
+    expect(formatAgentViewCommandType(command({ type: "peer_message" }))).toBe("session message")
+    expect(formatAgentViewCommandState(command({ type: "peer_message", state: "pending" }))).toBe("queued")
+    expect(formatAgentViewCommandState(command({ type: "peer_message", state: "accepted" }))).toBe("queued")
+    expect(formatAgentViewCommandState(command({ type: "peer_message", state: "running" }))).toBe(
+      "awaiting response",
+    )
+    expect(formatAgentViewCommandState(command({ type: "peer_message", state: "completed" }))).toBe("responded")
     expect(formatAgentViewCommandSummary(command({ type: "stop", payload: { reason: "handoff" } }))).toBe(
       "pending · stop worker · handoff",
     )

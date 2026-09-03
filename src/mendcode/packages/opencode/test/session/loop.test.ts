@@ -118,7 +118,7 @@ function runRunner<A, E>(
       cancel: () => Effect.void,
       cancelTurn: () => Effect.succeed("not_running" as const),
       cancelQueued: () => Effect.succeed(false),
-      interrupt: () => Effect.void,
+      interrupt: () => Effect.succeed(false),
       prompt: (input: PromptInput) =>
         Effect.gen(function* () {
           prompts++
@@ -2940,7 +2940,7 @@ describe("loop workflow service", () => {
             cancel: () => Effect.void,
             cancelTurn: () => Effect.succeed("not_running" as const),
             cancelQueued: () => Effect.succeed(false),
-            interrupt: () => Effect.void,
+            interrupt: () => Effect.succeed(false),
             prompt: () =>
               Effect.promise(async () => {
                 prompts++
@@ -3273,6 +3273,7 @@ describe("loop workflow service", () => {
                   `token=secret-token-value ${"x".repeat(1_500)}`,
                   'payload={"token":"json-secret-value"}',
                   "validated with sk-abcdefghijklmnopqrstuvwxyz123456",
+                  'headers={"authorization":"Bearer quoted-secret-value"}',
                 ],
                 nextAction: 'Retry after setting payload={"password":"hunter2"}',
               },
@@ -3289,6 +3290,8 @@ describe("loop workflow service", () => {
         expect(checkpoint?.evidence?.[1]).toContain("[REDACTED]")
         expect(checkpoint?.evidence?.[1]).not.toContain("json-secret-value")
         expect(checkpoint?.evidence?.[2]).toContain("[REDACTED_SECRET]")
+        expect(checkpoint?.evidence?.[3]).toContain('"authorization":"[REDACTED]"')
+        expect(checkpoint?.evidence?.[3]).not.toContain("quoted-secret-value")
         expect(JSON.stringify(checkpoint?.metadata)).toContain("[REDACTED]")
         expect(JSON.stringify(checkpoint?.metadata)).not.toContain("hunter2")
         expect(snapshot.runs[0]?.checkpoint?.summary).toContain("Authorization:[REDACTED]")
