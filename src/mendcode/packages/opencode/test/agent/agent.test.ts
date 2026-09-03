@@ -697,6 +697,28 @@ test("defaultAgent respects default_agent config set to plan", async () => {
   })
 })
 
+test("defaultAgent returns the configured key when its display name is customized", async () => {
+  await using tmp = await tmpdir({
+    config: {
+      default_agent: "build",
+      agent: {
+        build: { name: "Coder" },
+      },
+    },
+  })
+  await WithInstance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      const key = await load(tmp.path, (svc) => svc.defaultAgent())
+      const agent = await load(tmp.path, (svc) => svc.get(key))
+      const list = await load(tmp.path, (svc) => svc.list())
+      expect(key).toBe("build")
+      expect(agent?.name).toBe("Coder")
+      expect(list[0]?.name).toBe("Coder")
+    },
+  })
+})
+
 test("defaultAgent respects default_agent config set to custom agent with mode all", async () => {
   await using tmp = await tmpdir({
     config: {

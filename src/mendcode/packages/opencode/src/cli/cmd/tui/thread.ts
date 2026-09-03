@@ -620,6 +620,7 @@ export const TuiThreadCommand = cmd({
             error: errorMessage(error),
           })
         })
+        client.close()
         worker.terminate()
       }
 

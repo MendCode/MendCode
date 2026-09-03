@@ -49,6 +49,8 @@ export type ServerSentEventsOptions<TData = unknown> = Omit<RequestInit, "method
      * Defaults to using `setTimeout`.
      */
     sseSleepFn?: (ms: number) => Promise<void>
+    /** Custom fetch implementation inherited from the SDK client configuration. */
+    fetch?: (request: Request) => ReturnType<typeof globalThis.fetch>
     url: string
   }
 
@@ -72,6 +74,7 @@ export const createSseClient = <TData = unknown>({
   sseMaxRetryAttempts,
   sseMaxRetryDelay,
   sseSleepFn,
+  fetch: fetchFn = globalThis.fetch,
   url,
   ...options
 }: ServerSentEventsOptions): ServerSentEventsResult<TData> => {
@@ -99,7 +102,7 @@ export const createSseClient = <TData = unknown>({
       }
 
       try {
-        const response = await fetch(url, { ...options, headers, signal })
+        const response = await fetchFn(new Request(url, { ...options, headers, signal }))
 
         if (!response.ok) throw new Error(`SSE failed: ${response.status} ${response.statusText}`)
 

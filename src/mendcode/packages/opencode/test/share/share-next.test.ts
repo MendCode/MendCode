@@ -11,7 +11,8 @@ import { Bus } from "../../src/bus"
 import { Config } from "@/config/config"
 import { Provider } from "@/provider/provider"
 import { Session } from "@/session/session"
-import type { SessionID } from "../../src/session/schema"
+import { MessageV2 } from "@/session/message-v2"
+import { MessageID, type SessionID } from "../../src/session/schema"
 import { ShareNext } from "@/share/share-next"
 import { SessionShareTable } from "../../src/share/share.sql"
 import { Database } from "@/storage/db"
@@ -324,6 +325,58 @@ describe("ShareNext", () => {
               deletions: 0,
               status: "modified",
             },
+          ])
+        }).pipe(Effect.provide(wired(client)))
+      },
+      { config: { enterprise: { url: "https://legacy-share.example.com" } } },
+    ),
+  )
+
+  it.live("rotates the public share when a message is removed", () =>
+    provideTmpdirInstance(
+      () => {
+        const seen: Array<[string, string]> = []
+        let creates = 0
+        const client = HttpClient.make((req) => {
+          seen.push([req.method, req.url])
+          if (req.method === "POST" && req.url.endsWith("/api/share")) {
+            creates++
+            return Effect.succeed(
+              json(req, {
+                id: creates === 1 ? "shr_old" : "shr_new",
+                url: `https://legacy-share.example.com/share/${creates === 1 ? "old" : "new"}`,
+                secret: creates === 1 ? "sec_old" : "sec_new",
+              }),
+            )
+          }
+          return Effect.succeed(json(req, { ok: true }))
+        })
+
+        return Effect.gen(function* () {
+          const bus = yield* Bus.Service
+          const shares = yield* ShareNext.Service
+          const sessions = yield* Session.Service
+          const info = yield* sessions.create({ title: "shared" })
+          yield* shares.init()
+          yield* shares.create(info.id)
+
+          yield* bus.publish(MessageV2.Event.Removed, {
+            sessionID: info.id,
+            messageID: MessageID.ascending("msg_removed"),
+            reason: "revert",
+          })
+          yield* Effect.sleep(350)
+
+          expect(share(info.id)).toMatchObject({
+            id: "shr_new",
+            url: "https://legacy-share.example.com/share/new",
+            secret: "sec_new",
+          })
+          expect((yield* sessions.get(info.id)).share?.url).toBe("https://legacy-share.example.com/share/new")
+          expect(seen.filter(([, url]) => !url.endsWith("/sync"))).toEqual([
+            ["POST", "https://legacy-share.example.com/api/share"],
+            ["DELETE", "https://legacy-share.example.com/api/share/shr_old"],
+            ["POST", "https://legacy-share.example.com/api/share"],
           ])
         }).pipe(Effect.provide(wired(client)))
       },

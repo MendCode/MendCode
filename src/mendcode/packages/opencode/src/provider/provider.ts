@@ -31,7 +31,16 @@ import { ModelID, ProviderID } from "./schema"
 import { ClaudeCode } from "./claude-code"
 
 const log = Log.create({ service: "provider" })
+// Compaction and long-reasoning requests can legitimately stay silent for more
+// than a few seconds. Keep the watchdog conservative so ordinary model think
+// time is not reported as a network outage. Explicit provider values win.
 const DEFAULT_CHUNK_TIMEOUT = 60_000
+
+function defaultChunkTimeout() {
+  const value = Number(process.env.MENDCODE_LLM_STREAM_IDLE_TIMEOUT_MS)
+  if (Number.isFinite(value) && value > 0) return value
+  return DEFAULT_CHUNK_TIMEOUT
+}
 
 function shouldUseCopilotResponsesApi(modelID: string): boolean {
   const match = /^gpt-(\d+)/.exec(modelID)
@@ -1505,7 +1514,7 @@ const layer: Layer.Layer<
 
         const customFetch = options["fetch"]
         const chunkTimeout =
-          options["chunkTimeout"] === false ? undefined : (options["chunkTimeout"] ?? DEFAULT_CHUNK_TIMEOUT)
+          options["chunkTimeout"] === false ? undefined : (options["chunkTimeout"] ?? defaultChunkTimeout())
         delete options["chunkTimeout"]
 
         options["fetch"] = async (input: any, init?: BunFetchRequestInit) => {

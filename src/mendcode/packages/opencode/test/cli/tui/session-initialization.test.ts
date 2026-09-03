@@ -141,7 +141,9 @@ describe("session route initialization", () => {
     expect(frontend).not.toContain('return "turn already finished"')
     expect(frontend).not.toContain('return "stop reconciled;')
     expect(frontend).toContain("const control = sessionControl.status(sessionID)")
-    expect(frontend).toContain('control.state === "stop_confirmed" && control.result !== "cancelled"')
+    expect(frontend).toContain("const confirmed =")
+    expect(frontend).toContain('input.controlState === "stop_confirmed"')
+    expect(frontend).toContain('input.controlResult === "cancelled"')
     expect(backend).toContain('const cancelTurn = Effect.fn("SessionPrompt.cancelTurn")')
     expect(backend).toContain('yield* elog.info("cancel-turn", { ...input, important: true })')
   })
@@ -308,7 +310,9 @@ describe("session route initialization", () => {
     expect(source).toContain('return "Waiting for the current response to finish"')
     expect(source).toContain("const transcriptRows = createMemo")
     expect(source).toContain("return sessionTranscriptRows(messages(), queuedMessageIDs(), {")
-    expect(source).toContain('return messages().filter((message): message is UserMessage => message.role === "user"')
+    expect(source).toContain(
+      'filter((message): message is UserMessage => message.role === "user" && queuedIDs.has(message.id))',
+    )
     expect(source).toContain("tailIDs: pendingDeliveryTailIDs()")
     expect(source).toContain("const pendingDeliveryQueuedIDs = createMemo")
     expect(source).toContain("pendingPromptDeliveryMessageIDs(route.sessionID)")

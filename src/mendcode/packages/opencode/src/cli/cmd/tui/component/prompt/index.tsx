@@ -310,6 +310,8 @@ type PendingPromptDelivery = {
 const pendingPromptDeliveries = new Map<string, PendingPromptDelivery>()
 // In-flight cancellation must not make a newly submitted prompt render as queued.
 const pendingPromptDeliveryInFlightBySession = new Map<string, Set<string>>()
+const pendingPromptDeliveryDispatchKeys = new Set<string>()
+const promptDeliveryTailBySession = new Map<string, Promise<void>>()
 const latestPromptDeliveryKeyBySession = new Map<string, string>()
 const cancelledPromptDeliveryKeys = new Set<string>()
 const pendingPromptDeliveryListeners = new Set<() => void>()
@@ -320,6 +322,53 @@ function pendingPromptDeliveryKey(request: PromptAsyncInput) {
 
 function notifyPendingPromptDeliveryListeners() {
   for (const listener of pendingPromptDeliveryListeners) listener()
+}
+
+export function runPromptDeliveryInSessionOrder<T>(sessionID: string, task: () => Promise<T>): Promise<T> {
+  const previous = promptDeliveryTailBySession.get(sessionID) ?? Promise.resolve()
+  const current = previous.then(task, task)
+  const tail = current.then(
+    () => undefined,
+    () => undefined,
+  )
+  promptDeliveryTailBySession.set(sessionID, tail)
+  void tail.finally(() => {
+    if (promptDeliveryTailBySession.get(sessionID) === tail) promptDeliveryTailBySession.delete(sessionID)
+  })
+  return current
+}
+
+function pendingPromptDeliveryAcceptanceState(sessionID: string, messageID: string) {
+  const key = `${sessionID}:${messageID}`
+  if (pendingPromptDeliveries.get(key)?.state === "accepted") return "accepted" as const
+  if (
+    pendingPromptDeliveryDispatchKeys.has(key) ||
+    pendingPromptDeliveryInFlightBySession.get(sessionID)?.has(key) ||
+    pendingPromptDeliveries.has(key)
+  )
+    return "waiting" as const
+  return "missing" as const
+}
+
+export function waitForPendingPromptDeliveryReady(sessionID: string, messageID: string, timeoutMs = 5_000) {
+  return new Promise<boolean>((resolve) => {
+    let settled = false
+    let unsubscribe = () => {}
+    const finish = (ready: boolean) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      unsubscribe()
+      resolve(ready)
+    }
+    const inspect = () => {
+      const state = pendingPromptDeliveryAcceptanceState(sessionID, messageID)
+      if (state === "accepted" || state === "missing") finish(true)
+    }
+    const timer = setTimeout(() => finish(false), timeoutMs)
+    unsubscribe = subscribePendingPromptDeliveries(inspect)
+    inspect()
+  })
 }
 
 export function promptDeliveryIsQueued(state: "pending" | "accepted", queuedBehindActiveTurn = false) {
@@ -521,11 +570,12 @@ function settlePendingPromptDelivery(request: PromptAsyncInput) {
 function cancelPendingPromptDeliveryKey(sessionID: string, key: string) {
   const inFlight = pendingPromptDeliveryInFlightBySession.get(sessionID)
   const wasInFlight = inFlight?.delete(key) ?? false
+  const wasQueuedForDispatch = pendingPromptDeliveryDispatchKeys.delete(key)
   if (inFlight && inFlight.size === 0) pendingPromptDeliveryInFlightBySession.delete(sessionID)
   const removed = pendingPromptDeliveries.delete(key)
   if (latestPromptDeliveryKeyBySession.get(sessionID) === key) latestPromptDeliveryKeyBySession.delete(sessionID)
-  if (wasInFlight) cancelledPromptDeliveryKeys.add(key)
-  if (removed || wasInFlight) notifyPendingPromptDeliveryListeners()
+  if (wasInFlight || wasQueuedForDispatch) cancelledPromptDeliveryKeys.add(key)
+  if (removed || wasInFlight || wasQueuedForDispatch) notifyPendingPromptDeliveryListeners()
 }
 
 export function cancelPendingPromptDelivery(sessionID: string, messageID: string) {
@@ -733,6 +783,22 @@ export function shouldEnableSessionInterrupt(input: {
     return true
   if (input.autocompleteVisible) return false
   return false
+}
+
+export function shouldClearSessionInterruptRequest(input: {
+  requestTargetMessageID: string
+  activeTargetMessageID?: string
+  targetTerminal: boolean
+  sessionSettled: boolean
+  controlState: string
+  controlResult?: string
+}) {
+  const confirmed =
+    input.controlState === "stop_confirmed" &&
+    (input.controlResult === "cancelled" || input.controlResult === "already_terminal")
+  const targetSuperseded =
+    input.activeTargetMessageID !== undefined && input.activeTargetMessageID !== input.requestTargetMessageID
+  return input.targetTerminal || input.sessionSettled || confirmed || targetSuperseded
 }
 
 export function hasInterruptibleSessionTurn(input: {
@@ -950,6 +1016,7 @@ export function Prompt(props: PromptProps) {
   let pendingPromptRetryInFlight = false
   let promptDisposed = false
   let interruptRequest: Promise<unknown> | undefined
+  let queuedInterruptRequest: { sessionID: string; targetMessageID?: string } | undefined
   let interruptResetTimer: ReturnType<typeof setTimeout> | undefined
   let interruptArmedTargetMessageID: string | undefined
   let autocomplete: AutocompleteRef
@@ -1222,13 +1289,24 @@ export function Prompt(props: PromptProps) {
     const targetMessageID = interruptTargetMessageID()
     if (!sessionID || !interruptRequested() || !targetMessageID) return
     const control = sessionControl.status(sessionID)
+    const activeTargetMessageID = activeTurnTargetMessageID()
+    const controlResult = control.state === "stop_confirmed" ? control.result : undefined
     const targetTerminal = messagesForActivity().some(
       (message) =>
         message.role === "assistant" && message.parentID === targetMessageID && message.time.completed !== undefined,
     )
-    const rejected = control.state === "stop_confirmed" && control.result !== "cancelled"
     const sessionSettled = status().type === "idle" && !hasActiveWorkingAssistant() && !hasPendingPromptDelivery()
-    if (targetTerminal || rejected || sessionSettled) updateInterruptRequested(false)
+    if (
+      shouldClearSessionInterruptRequest({
+        requestTargetMessageID: targetMessageID,
+        activeTargetMessageID,
+        targetTerminal,
+        sessionSettled,
+        controlState: control.state,
+        controlResult,
+      })
+    )
+      updateInterruptRequested(false)
   })
   onCleanup(() => {
     if (clearWorkingStartTimer) clearTimeout(clearWorkingStartTimer)
@@ -2394,7 +2472,10 @@ export function Prompt(props: PromptProps) {
       })
     updateInterruptRequested(true, targetMessageID)
     cancelPendingPromptDeliveryForInterrupt(sessionID, targetMessageID)
-    if (interruptRequest) return
+    if (interruptRequest) {
+      queuedInterruptRequest = { sessionID, targetMessageID }
+      return
+    }
     const hardAbort = async () => {
       const routing = resolveSessionControlRouting({
         sessionWorkspaceID: props.workspaceID,
@@ -2427,6 +2508,9 @@ export function Prompt(props: PromptProps) {
       .catch(() => undefined)
       .finally(() => {
         interruptRequest = undefined
+        const queued = queuedInterruptRequest
+        queuedInterruptRequest = undefined
+        if (queued) abortSession(queued.sessionID, queued.targetMessageID)
       })
   }
 
@@ -2507,7 +2591,7 @@ export function Prompt(props: PromptProps) {
     })
   }
 
-  async function deliverPrompt(
+  async function deliverPromptNow(
     request: PromptAsyncInput,
     options?: { retry?: boolean; notify?: boolean; forceAccepted?: boolean; queuedBehindActiveTurn?: boolean },
   ) {
@@ -2580,6 +2664,18 @@ export function Prompt(props: PromptProps) {
     } finally {
       endPendingPromptDelivery(request)
     }
+  }
+
+  function deliverPrompt(
+    request: PromptAsyncInput,
+    options?: { retry?: boolean; notify?: boolean; forceAccepted?: boolean; queuedBehindActiveTurn?: boolean },
+  ) {
+    const deliveryKey = pendingPromptDeliveryKey(request)
+    pendingPromptDeliveryDispatchKeys.add(deliveryKey)
+    notifyPendingPromptDeliveryListeners()
+    return runPromptDeliveryInSessionOrder(request.sessionID, () => deliverPromptNow(request, options)).finally(() => {
+      if (pendingPromptDeliveryDispatchKeys.delete(deliveryKey)) notifyPendingPromptDeliveryListeners()
+    })
   }
 
   async function retryPendingPromptDeliveries(input?: { forceAccepted?: boolean }) {

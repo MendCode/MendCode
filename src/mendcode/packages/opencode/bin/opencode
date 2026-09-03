@@ -17,7 +17,7 @@ function run(target) {
   process.exit(code)
 }
 
-const envPath = process.env.OPENCODE_BIN_PATH
+const envPath = process.env.MENDCODE_BIN_PATH || process.env.OPENCODE_BIN_PATH
 if (envPath) {
   run(envPath)
 }
@@ -26,9 +26,9 @@ const scriptPath = fs.realpathSync(__filename)
 const scriptDir = path.dirname(scriptPath)
 
 //
-const cached = path.join(scriptDir, ".opencode")
-if (fs.existsSync(cached)) {
-  run(cached)
+for (const name of [".mendcode", ".opencode"]) {
+  const cached = path.join(scriptDir, name)
+  if (fs.existsSync(cached)) run(cached)
 }
 
 const platformMap = {
@@ -50,8 +50,8 @@ let arch = archMap[os.arch()]
 if (!arch) {
   arch = os.arch()
 }
-const base = "opencode-" + platform + "-" + arch
-const binary = platform === "windows" ? "opencode.exe" : "opencode"
+const base = "mendcode-" + platform + "-" + arch
+const binary = platform === "windows" ? "mendcode.exe" : "mendcode"
 
 function supportsAvx2() {
   if (arch !== "x64") return false

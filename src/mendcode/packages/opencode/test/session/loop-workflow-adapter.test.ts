@@ -110,7 +110,7 @@ function promptLayer() {
       cancel: () => Effect.void,
       cancelTurn: () => Effect.succeed("not_running" as const),
       cancelQueued: () => Effect.succeed(false),
-      interrupt: () => Effect.void,
+      interrupt: () => Effect.succeed(false),
       prompt: (_input: PromptInput) => Effect.succeed(message),
       promptAsync: (_input: PromptInput) => Effect.succeed(message),
       loop: () => Effect.succeed(message),

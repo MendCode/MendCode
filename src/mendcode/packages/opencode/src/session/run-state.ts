@@ -30,7 +30,7 @@ export interface Interface {
   readonly interruptQueued: (
     sessionID: SessionID,
     options?: NonNullable<Runner.EnsureRunningOptions["interrupt"]>,
-  ) => Effect.Effect<void>
+  ) => Effect.Effect<boolean>
   readonly startShell: (
     sessionID: SessionID,
     onInterrupt: Effect.Effect<MessageV2.WithParts>,
@@ -180,8 +180,8 @@ export const layer = Layer.effect(
     ) {
       const data = yield* InstanceState.get(state)
       const existing = data.runners.get(sessionID)
-      if (!existing) return
-      yield* existing.interruptQueued(options)
+      if (!existing) return false
+      return yield* existing.interruptQueued(options)
     })
 
     const ensureRunning = Effect.fn("SessionRunState.ensureRunning")(function* (

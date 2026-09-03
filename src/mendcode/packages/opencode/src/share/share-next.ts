@@ -7,6 +7,7 @@ import { InstanceState } from "@/effect/instance-state"
 import { Provider } from "@/provider/provider"
 import { ModelID, ProviderID } from "@/provider/schema"
 import { Session } from "@/session/session"
+import { SessionTable } from "@/session/session.sql"
 import { MessageV2 } from "@/session/message-v2"
 import type { SessionID } from "@/session/schema"
 import { Database } from "@/storage/db"
@@ -14,6 +15,7 @@ import { eq } from "drizzle-orm"
 import { Config } from "@/config/config"
 import * as Log from "@mendcode/core/util/log"
 import { SessionShareTable } from "./share.sql"
+import { SyncEvent } from "@/sync"
 
 const log = Log.create({ service: "share-next" })
 const disabled = process.env["OPENCODE_DISABLE_SHARE"] === "true" || process.env["OPENCODE_DISABLE_SHARE"] === "1"
@@ -42,6 +44,7 @@ type State = {
   queue: Map<SessionID, Map<string, Data>>
   scope: Scope.Closeable
   shared: Map<SessionID, Share | null>
+  refreshing: Set<SessionID>
 }
 
 type Data =
@@ -116,6 +119,41 @@ export const layer = Layer.effect(
     const httpOk = HttpClient.filterStatusOk(http)
     const provider = yield* Provider.Service
     const session = yield* Session.Service
+    const syncEvents = Option.getOrUndefined(yield* Effect.serviceOption(SyncEvent.Service))
+
+    const setShareUrl = (sessionID: SessionID, url: string | null) =>
+      syncEvents
+        ? syncEvents.run(Session.Event.Updated, { sessionID, info: { share: { url } } })
+        : db((database) =>
+            database
+              .update(SessionTable)
+              .set({ share_url: url, time_updated: Date.now() })
+              .where(eq(SessionTable.id, sessionID))
+              .run(),
+          ).pipe(Effect.asVoid)
+
+    function refreshAfterRemoval(sessionID: SessionID) {
+      return Effect.gen(function* () {
+        const s = yield* InstanceState.get(state)
+        if (s.refreshing.has(sessionID)) return
+        s.refreshing.add(sessionID)
+        yield* Effect.gen(function* () {
+          yield* Effect.sleep(100)
+          const existing = yield* getCached(sessionID)
+          if (!existing) return
+          yield* remove(sessionID)
+          yield* setShareUrl(sessionID, null)
+          const replacement = yield* create(sessionID)
+          yield* setShareUrl(sessionID, replacement.url)
+        }).pipe(
+          Effect.catchCause((cause) =>
+            Effect.sync(() => log.error("share refresh after content removal failed", { sessionID, cause })),
+          ),
+          Effect.ensuring(Effect.sync(() => s.refreshing.delete(sessionID))),
+          Effect.forkIn(s.scope),
+        )
+      })
+    }
 
     function sync(sessionID: SessionID, data: Data[]): Effect.Effect<void> {
       return Effect.gen(function* () {
@@ -148,7 +186,7 @@ export const layer = Layer.effect(
 
     const state: InstanceState.InstanceState<State> = yield* InstanceState.make<State>(
       Effect.fn("ShareNext.state")(function* (_ctx) {
-        const cache: State = { queue: new Map(), scope: yield* Scope.make(), shared: new Map() }
+        const cache: State = { queue: new Map(), scope: yield* Scope.make(), shared: new Map(), refreshing: new Set() }
 
         yield* Effect.addFinalizer(() =>
           Scope.close(cache.scope, Exit.void).pipe(
@@ -156,6 +194,7 @@ export const layer = Layer.effect(
               Effect.sync(() => {
                 cache.queue.clear()
                 cache.shared.clear()
+                cache.refreshing.clear()
               }),
             ),
           ),
@@ -198,6 +237,8 @@ export const layer = Layer.effect(
         yield* watch(MessageV2.Event.PartUpdated, (evt) =>
           sync(evt.properties.part.sessionID, [{ type: "part", data: evt.properties.part }]),
         )
+        yield* watch(MessageV2.Event.Removed, (evt) => refreshAfterRemoval(evt.properties.sessionID))
+        yield* watch(MessageV2.Event.PartRemoved, (evt) => refreshAfterRemoval(evt.properties.sessionID))
         yield* watch(Session.Event.Diff, (evt) =>
           sync(evt.properties.sessionID, [{ type: "session_diff", data: evt.properties.diff }]),
         )
@@ -371,6 +412,7 @@ export const defaultLayer = layer.pipe(
   Layer.provide(FetchHttpClient.layer),
   Layer.provide(Provider.defaultLayer),
   Layer.provide(Session.defaultLayer),
+  Layer.provide(SyncEvent.defaultLayer),
 )
 
 export * as ShareNext from "./share-next"

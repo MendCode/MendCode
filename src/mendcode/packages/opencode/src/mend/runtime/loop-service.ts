@@ -269,12 +269,17 @@ export function loopServicePlan(args: LoopServiceArgs): LoopServicePlan {
   const command = args.command ?? defaultCommand()
   const serviceDir = path.resolve(args.serviceDir || defaultServiceDir(platformValue))
   const logDir = path.resolve(args.logDir || defaultLogDir(platformValue))
-  const programArguments = [
-    "/usr/bin/env",
-    `PATH=${servicePath()}`,
-    command,
-    ...loopDaemonArgs({ intervalMs, limit, execute: args.execute, reportOnly: args.reportOnly, quiet: args.quiet }),
-  ]
+  const daemonArguments = loopDaemonArgs({
+    intervalMs,
+    limit,
+    execute: args.execute,
+    reportOnly: args.reportOnly,
+    quiet: args.quiet,
+  })
+  const programArguments =
+    platformValue === "win32"
+      ? [command, ...daemonArguments]
+      : ["/usr/bin/env", `PATH=${servicePath()}`, command, ...daemonArguments]
   const scheduledProgramArguments = platformValue === "darwin"
     ? [
         "/usr/bin/env",
@@ -297,7 +302,7 @@ export function loopServicePlan(args: LoopServiceArgs): LoopServicePlan {
     platformValue === "darwin"
       ? ["/bin/sh", "-c", loopServicePreflightCommand({ daemonArguments: scheduledProgramArguments, databasePath, projectRoot })]
       : programArguments
-  const programLine = shellQuote(programArguments)
+  const programLine = platformValue === "win32" ? windowsCommandLine(programArguments) : shellQuote(programArguments)
   return {
     label,
     backend,
@@ -467,6 +472,16 @@ function shellQuote(args: string[]) {
     .join(" ")
 }
 
+function windowsQuote(value: string) {
+  if (/^[^\s"]+$/.test(value)) return value
+  const escaped = value.replace(/(\\*)"/g, "$1$1\\\"").replace(/(\\+)$/, "$1$1")
+  return `"${escaped}"`
+}
+
+function windowsCommandLine(args: string[]) {
+  return args.map(windowsQuote).join(" ")
+}
+
 export function loopServicePlist(plan: LoopServicePlan) {
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -537,7 +552,7 @@ export function loopServiceWindowsCommand(plan: LoopServicePlan) {
   const projectRoot = plan.projectRoot.replaceAll('"', '""')
   const serviceDir = path.dirname(plan.definitionPath).replaceAll('"', '""')
   const logDir = path.dirname(plan.healthPath).replaceAll('"', '""')
-  return `set "MENDCODE_SHELL_CWD=${projectRoot}" && set "MENDCODE_LOOP_SERVICE=1" && set "MENDCODE_LOOP_SERVICE_DIR=${serviceDir}" && set "MENDCODE_LOOP_LOG_DIR=${logDir}" && ${shellQuote(plan.programArguments)} >> "${plan.stdoutPath}" 2>> "${plan.stderrPath}"`
+  return `set "MENDCODE_SHELL_CWD=${projectRoot}" && set "MENDCODE_LOOP_SERVICE=1" && set "MENDCODE_LOOP_SERVICE_DIR=${serviceDir}" && set "MENDCODE_LOOP_LOG_DIR=${logDir}" && ${windowsCommandLine(plan.programArguments)} >> "${plan.stdoutPath}" 2>> "${plan.stderrPath}"`
 }
 
 export function loopServiceDefinition(plan: LoopServicePlan) {

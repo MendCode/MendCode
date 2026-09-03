@@ -703,7 +703,7 @@ describe("session HttpApi", () => {
             method: "POST",
             headers,
           }),
-        ).toBe(true)
+        ).toBe(false)
 
         expect(
           yield* requestJson<boolean>(pathFor(SessionPaths.remove, { sessionID: created.id }), {

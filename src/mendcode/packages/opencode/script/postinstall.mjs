@@ -49,8 +49,8 @@ function detectPlatformAndArch() {
 
 function findBinary() {
   const { platform, arch } = detectPlatformAndArch()
-  const packageName = `opencode-${platform}-${arch}`
-  const binaryName = platform === "windows" ? "opencode.exe" : "opencode"
+  const packageName = `mendcode-${platform}-${arch}`
+  const binaryName = platform === "windows" ? "mendcode.exe" : "mendcode"
 
   try {
     // Use require.resolve to find the package
@@ -89,7 +89,7 @@ async function main() {
     }
     fs.chmodSync(target, 0o755)
   } catch (error) {
-    console.error("Failed to setup opencode binary:", error.message)
+    console.error("Failed to setup MendCode binary:", error.message)
     process.exit(1)
   }
 }

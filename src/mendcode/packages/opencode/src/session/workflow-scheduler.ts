@@ -520,10 +520,18 @@ export const layer = Layer.effect(
       readonly backgroundGeneration: number
     }) {
       const current = yield* workflow.show(input.runID)
+      if (current.run.state !== "queued" && current.run.state !== "working")
+        return yield* Effect.fail(
+          new WorkflowStateError(input.runID, `Workflow cannot start tasks while ${current.run.state}`),
+        )
       const now = Date.now()
       const changed = Database.transaction((db) => {
         const task = db.select().from(WorkflowTaskTable).where(and(eq(WorkflowTaskTable.run_id, input.runID), eq(WorkflowTaskTable.id, input.taskID))).get()
         const attempt = db.select().from(WorkflowTaskAttemptTable).where(eq(WorkflowTaskAttemptTable.id, input.attemptID)).get()
+        const run = db.select().from(WorkflowRunTable).where(eq(WorkflowRunTable.id, input.runID)).get()
+        if (!run) throw new WorkflowNotFoundError(input.runID)
+        if (run.state !== "queued" && run.state !== "working")
+          throw new WorkflowStateError(input.runID, `Workflow cannot start tasks while ${run.state}`)
         if (!task || !attempt) throw new WorkflowStateError(input.runID, `Task attempt ${input.attemptID} no longer exists`)
         if (attempt.state !== "queued") return false
         db.update(WorkflowTaskTable).set({ state: "working", time_started: task.time_started ?? now, time_updated: now }).where(eq(WorkflowTaskTable.id, input.taskID)).run()

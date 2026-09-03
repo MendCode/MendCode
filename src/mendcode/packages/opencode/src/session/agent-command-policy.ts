@@ -100,15 +100,16 @@ export function evaluate(input: {
   if (input.type === "peer_message") {
     if (sameWorkspace(input)) {
       return {
-        decision: "same_workspace",
+        decision: "safe_auto",
         permissions: [],
-        reason: "Peer text is non-authorizing; the target must explicitly accept it before delivery.",
+        reason:
+          "Session message text is non-authorizing and same-workspace; it is delivered automatically at the target idle boundary.",
       }
     }
     return {
       decision: "approval_required",
       permissions: [],
-      reason: "Peer text lacks same-workspace context, so the target must explicitly accept it before delivery.",
+      reason: "Session message text lacks same-workspace context, so automatic delivery is disabled.",
     }
   }
   if (sameWorkspace(input)) {
@@ -160,9 +161,9 @@ export function matrix(): MatrixItem[] {
     },
     {
       type: "peer_message",
-      decision: "same_workspace",
+      decision: "safe_auto",
       permissions: [],
-      reason: "Non-authorizing peer text is held until the target explicitly accepts delivery.",
+      reason: "Non-authorizing session message text is delivered automatically at the target idle boundary.",
     },
   ]
 }

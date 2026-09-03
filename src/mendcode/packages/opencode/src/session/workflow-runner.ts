@@ -62,6 +62,16 @@ export function shouldAuditWorkflowCompletion(state: WorkflowRunState) {
   return state === "queued" || state === "working"
 }
 
+export function workflowClaimCanExecute(
+  snapshot: WorkflowService.WorkflowSnapshot,
+  claim: Pick<WorkflowTaskClaim, "taskID" | "attempt">,
+  sessionID: SessionID,
+) {
+  if (!shouldRecoverWorkflowRun(snapshot.run.state)) return false
+  const task = snapshot.tasks.find((candidate) => candidate.id === claim.taskID)
+  return task?.state === "working" && task.attempt === claim.attempt && task.sessionID === sessionID
+}
+
 const errorText = (error: unknown) => {
   if (error instanceof Error) return error.message
   if (typeof error === "object" && error !== null && "message" in error && typeof error.message === "string")
@@ -468,13 +478,29 @@ export const layer = Layer.effect(
         depth: 1,
         maxChildren: input.claim.maxChildren,
       })
-      yield* scheduler.markStarted({
-        runID: input.runID as never,
-        taskID: input.claim.taskID,
-        attemptID: input.claim.attemptID,
-        backgroundTaskID: attempt.sessionID,
-        backgroundGeneration: attempt.generation,
-      })
+      yield* scheduler
+        .markStarted({
+          runID: input.runID as never,
+          taskID: input.claim.taskID,
+          attemptID: input.claim.attemptID,
+          backgroundTaskID: attempt.sessionID,
+          backgroundGeneration: attempt.generation,
+        })
+        .pipe(
+          Effect.tapCause(() =>
+            background
+              .cancelAttempt({ sessionID: attempt.sessionID, generation: attempt.generation })
+              .pipe(Effect.catchCause(() => Effect.void)),
+          ),
+        )
+
+      const latest = yield* workflow.show(input.runID as never)
+      if (!workflowClaimCanExecute(latest, input.claim, attempt.sessionID)) {
+        yield* background
+          .cancelAttempt({ sessionID: attempt.sessionID, generation: attempt.generation })
+          .pipe(Effect.catchCause(() => Effect.void))
+        return
+      }
 
       const result: ExecutionResult = yield* executor
         .execute({
