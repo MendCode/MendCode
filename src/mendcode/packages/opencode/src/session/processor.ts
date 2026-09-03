@@ -39,8 +39,9 @@ import * as DateTime from "effect/DateTime"
 
 const DOOM_LOOP_THRESHOLD = 3
 const log = Log.create({ service: "session.processor" })
-// Abort silent provider streams quickly after sleep/network changes.
-// Slow providers can override this with the environment variable.
+// Compaction and long-reasoning requests can legitimately stay silent. Keep a
+// watchdog for dead streams without turning normal provider think time into a
+// false network outage. Slow providers can override this value.
 const DEFAULT_LLM_STREAM_IDLE_TIMEOUT_MS = 60_000
 const DEFAULT_MEMORY_EXTRACTION_TIMEOUT_MS = 45_000
 const RETRY_STATUS_EVENT_INTERVAL_MS = 5_000

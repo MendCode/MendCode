@@ -52,6 +52,7 @@ import { zod } from "@/util/effect-zod"
 import { withStatics } from "@/util/schema"
 import * as EffectLogger from "@mendcode/core/effect/logger"
 import { InstanceState } from "@/effect/instance-state"
+import { InstanceRef } from "@/effect/instance-ref"
 import { TaskTool, type TaskPromptOps } from "@/tool/task"
 import { BackgroundTask } from "./background-task"
 import { WorkflowService } from "./workflow-service"
@@ -83,6 +84,8 @@ const OWNER_WAKE_MAX_EVENTS = 16
 const OWNER_WAKE_PREVIEW_CHARS = 320
 const SHELL_ABORT_FORCE_KILL_AFTER = "1 second"
 const CANCEL_TOOL_SETTLE_MS = 1_500
+const PEER_DELIVERY_RETRY_INTERVAL_MS = 500
+const PEER_DELIVERY_RETRY_MAX_ATTEMPTS = 20
 
 export type OwnerWakeNotification = BackgroundTask.Notification | WorkflowService.Notification
 
@@ -91,6 +94,13 @@ type OwnerWakeState = {
   pending: Map<SessionID, Map<string, OwnerWakeNotification>>
   scheduled: Set<SessionID>
   running: Set<SessionID>
+}
+
+type PeerDeliveryState = {
+  targets: Set<SessionID>
+  pendingTargets: Set<SessionID>
+  retryingTargets: Set<SessionID>
+  scope: Scope.Scope
 }
 
 function ownerWakePreview(value: string | undefined) {
@@ -460,9 +470,14 @@ export function shouldContinueAfterCompactionStop(input: {
 export function resolveCancelTurnResult(input: {
   runtime: "cancelled" | "target_mismatch" | "not_running" | "not_interruptible"
   terminalAssistant: boolean
+  sessionBusy: boolean
 }): CancelTurnResult {
   if (input.runtime === "cancelled") return input.runtime
   if (input.runtime === "not_interruptible") return "not_running"
+  // A compaction or synthetic resume changes the runner key while the original
+  // user turn already has a terminal assistant. That old receipt must not hide
+  // the newer active run from the TUI's hard-abort fallback.
+  if (input.runtime === "target_mismatch" && input.sessionBusy) return "target_mismatch"
   if (input.terminalAssistant) return "already_terminal"
   return input.runtime
 }
@@ -471,7 +486,7 @@ export interface Interface {
   readonly cancel: (sessionID: SessionID) => Effect.Effect<void>
   readonly cancelTurn: (input: CancelTurnInput) => Effect.Effect<CancelTurnResult>
   readonly cancelQueued: (input: { sessionID: SessionID; messageID: MessageID }) => Effect.Effect<boolean>
-  readonly interrupt: (sessionID: SessionID) => Effect.Effect<void>
+  readonly interrupt: (sessionID: SessionID) => Effect.Effect<boolean>
   readonly prompt: (input: PromptInput) => Effect.Effect<MessageV2.WithParts>
   readonly promptAsync: (input: PromptInput) => Effect.Effect<MessageV2.WithParts>
   readonly loop: (input: LoopInput) => Effect.Effect<MessageV2.WithParts>
@@ -680,7 +695,12 @@ export const layer = Layer.effect(
           msg.info.parentID === input.targetMessageID &&
           Boolean(msg.info.time.completed),
       )
-      return resolveCancelTurnResult({ runtime: result, terminalAssistant: Option.isSome(terminal) })
+      const sessionBusy = yield* state.isBusy(input.sessionID)
+      return resolveCancelTurnResult({
+        runtime: result,
+        terminalAssistant: Option.isSome(terminal),
+        sessionBusy,
+      })
     })
 
     const syncSessionSelection = Effect.fn("SessionPrompt.syncSessionSelection")(function* (input: {
@@ -1812,7 +1832,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
     const interrupt = Effect.fn("SessionPrompt.interrupt")(function* (sessionID: SessionID) {
       yield* elog.info("interrupt", { sessionID })
       let interruptedAssistantID: MessageID | undefined
-      yield* state
+      return yield* state
         .interruptQueued(sessionID, {
           before: Effect.gen(function* () {
             promptAbortReasons.set(sessionID, "user")
@@ -2946,6 +2966,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
     const loop: (input: LoopInput) => Effect.Effect<MessageV2.WithParts> = Effect.fn("SessionPrompt.loop")(function* (
       input: LoopInput,
     ) {
+      yield* ensurePeerDeliveryState
       yield* resumeWorkflowTaskSession(input.sessionID)
       let interruptedAssistantID: MessageID | undefined
       const queueMode = (yield* config.get()).queue?.mode ?? "after-response"
@@ -3054,18 +3075,136 @@ NOTE: At any point in time through this workflow you should feel free to ask the
     // claimed per target only after the target is idle, then persisted through
     // the normal prompt boundary so a restart can detect the delivery marker
     // and avoid inserting the same prompt twice.
-    const peerDeliveryTargets = new Set<SessionID>()
-    const peerDeliveryPendingTargets = new Set<SessionID>()
-    const deliverPeerMessage = (info: AgentCommand.Info): Effect.Effect<void> =>
+    const peerMessageRuntimeContext = (info: Extract<AgentCommand.Info, { type: "peer_message" }>) =>
+      [
+        '<mendcode_runtime_event type="agent_message">',
+        `source_session: ${JSON.stringify({
+          id: info.sourceSessionID,
+          title: info.payload.sourceTitle ?? info.sourceSessionID,
+        })}`,
+        "This is a non-authorizing session message from another MendCode session in the same workspace.",
+        "Reply normally in this session. Your final response text is returned automatically to the source session once it finishes.",
+        "Do not use tell only to acknowledge this message; automatic response delivery does not create an acknowledgement loop.",
+        "</mendcode_runtime_event>",
+      ].join("\n")
+
+    const peerResponseRuntimeContext = (input: {
+      deliveryID: string
+      sourceSessionID: SessionID
+      sourceTitle: string
+      targetAssistantID: MessageID
+    }) =>
+      [
+        '<mendcode_runtime_event type="agent_response">',
+        `responding_session: ${JSON.stringify({ id: input.sourceSessionID, title: input.sourceTitle })}`,
+        `delivery_id: ${JSON.stringify(input.deliveryID)}`,
+        `assistant_message_id: ${JSON.stringify(input.targetAssistantID)}`,
+        "This is the automatic response to an earlier same-workspace session message.",
+        "Treat it as coordination context. Do not send an acknowledgement unless further work genuinely requires it.",
+        "</mendcode_runtime_event>",
+      ].join("\n")
+
+    const completePeerResponse = (
+      assistant: MessageV2.Assistant,
+      peerState: PeerDeliveryState,
+    ): Effect.Effect<void> =>
+      Effect.gen(function* () {
+        if (!assistant.parentID || assistant.time.completed === undefined) return
+        if (assistant.finish === "tool-calls" || assistant.finish === "unknown") return
+        const parent = yield* sessions.findMessage(
+          assistant.sessionID,
+          (message) => message.info.id === assistant.parentID && message.info.role === "user",
+        )
+        if (Option.isNone(parent)) return
+        let deliveryID: string | undefined
+        for (const part of parent.value.parts) {
+          if (part.type !== "text") continue
+          const metadata = part.metadata as Record<string, unknown> | undefined
+          if (metadata?.kind !== "peer_message" || typeof metadata.deliveryID !== "string") continue
+          deliveryID = metadata.deliveryID
+          break
+        }
+        if (!deliveryID) return
+        const command = (yield* agentCommands.list({ targetSessionID: assistant.sessionID })).find(
+          (item) =>
+            item.id === deliveryID &&
+            item.type === "peer_message" &&
+            (item.state === "accepted" || item.state === "running"),
+        )
+        if (!command) return
+        if (assistant.error) {
+          yield* agentCommands.update({
+            id: command.id,
+            targetSessionID: command.targetSessionID,
+            state: "failed",
+            error: `Agent response failed in assistant ${assistant.id}.`,
+          })
+        } else {
+          const assistantMessage = yield* sessions.findMessage(
+            assistant.sessionID,
+            (message) => message.info.id === assistant.id,
+          )
+          const responseText = Option.isSome(assistantMessage)
+            ? assistantMessage.value.parts
+                .flatMap((part) => (part.type === "text" && !part.ignored ? [part.text] : []))
+                .join("\n\n")
+                .trim()
+            : ""
+          const displayText = responseText || "The agent completed its response without a text summary."
+          const targetSession = yield* sessions.get(command.targetSessionID)
+          const existingResponse = yield* sessions.findMessage(command.sourceSessionID, (message) =>
+            message.parts.some((part) => {
+              if (part.type !== "text") return false
+              const metadata = part.metadata as Record<string, unknown> | undefined
+              return metadata?.kind === "peer_response" && metadata.deliveryID === command.id
+            }),
+          )
+          const responsePrompt = Option.isSome(existingResponse)
+            ? existingResponse.value
+            : yield* promptAsync({
+                sessionID: command.sourceSessionID,
+                parts: [
+                  {
+                    type: "text",
+                    text: `${peerResponseRuntimeContext({
+                      deliveryID: command.id,
+                      sourceSessionID: command.targetSessionID,
+                      sourceTitle: targetSession.title,
+                      targetAssistantID: assistant.id,
+                    })}\n\n${displayText}`,
+                    metadata: {
+                      kind: "peer_response",
+                      deliveryID: command.id,
+                      sourceSessionID: command.targetSessionID,
+                      sourceTitle: targetSession.title,
+                      targetAssistantID: assistant.id,
+                      displayText,
+                      receivedAt: Date.now(),
+                    },
+                  },
+                ],
+              })
+          yield* agentCommands.update({
+            id: command.id,
+            targetSessionID: command.targetSessionID,
+            state: "completed",
+            result: `Agent response returned to source in prompt ${responsePrompt.info.id}.`,
+          })
+        }
+        peerState.pendingTargets.add(command.targetSessionID)
+        yield* scheduleNextPeerDelivery(command.targetSessionID, peerState)
+      }).pipe(Effect.orDie)
+
+    const deliverPeerMessage = (info: AgentCommand.Info, peerState: PeerDeliveryState): Effect.Effect<void> =>
       Effect.gen(function* () {
         if (info.type !== "peer_message" || (info.state !== "accepted" && info.state !== "running")) return
-        if (peerDeliveryTargets.has(info.targetSessionID)) return
-        peerDeliveryTargets.add(info.targetSessionID)
+        if (peerState.targets.has(info.targetSessionID)) return
+        peerState.targets.add(info.targetSessionID)
         let settled = false
         try {
           const statusInfo = yield* status.get(info.targetSessionID)
           if (statusInfo.type !== "idle") return
-          if (info.policy.decision !== "same_workspace") {
+          if (info.policy.decision !== "safe_auto" && info.policy.decision !== "same_workspace") {
             yield* agentCommands.update({
               id: info.id,
               targetSessionID: info.targetSessionID,
@@ -3099,13 +3238,25 @@ NOTE: At any point in time through this workflow you should feel free to ask the
             ),
           )
           if (marker) {
+            const response = existing.findLast(
+              (message) =>
+                message.info.role === "assistant" &&
+                message.info.parentID === marker.info.id &&
+                message.info.time.completed !== undefined &&
+                message.info.finish !== "tool-calls" &&
+                message.info.finish !== "unknown",
+            )
+            if (response?.info.role === "assistant") {
+              yield* completePeerResponse(response.info, peerState)
+              settled = true
+              return
+            }
             yield* agentCommands.update({
               id: info.id,
               targetSessionID: info.targetSessionID,
-              state: "completed",
-              result: `Peer message already persisted in prompt ${marker.info.id}.`,
+              state: "running",
+              result: `Session message delivered in prompt ${marker.info.id}; awaiting response.`,
             })
-            settled = true
             return
           }
 
@@ -3114,12 +3265,13 @@ NOTE: At any point in time through this workflow you should feel free to ask the
             parts: [
               {
                 type: "text",
-                text: info.payload.text,
+                text: `${peerMessageRuntimeContext(info)}\n\n${info.payload.text}`,
                 metadata: {
                   kind: "peer_message",
                   deliveryID: info.id,
                   sourceSessionID: info.sourceSessionID,
                   sourceTitle: info.payload.sourceTitle ?? info.sourceSessionID,
+                  displayText: info.payload.text,
                   receivedAt: Date.now(),
                 },
               },
@@ -3128,10 +3280,9 @@ NOTE: At any point in time through this workflow you should feel free to ask the
           yield* agentCommands.update({
             id: info.id,
             targetSessionID: info.targetSessionID,
-            state: "completed",
-            result: `Peer message persisted in prompt ${message.info.id}.`,
+            state: "running",
+            result: `Session message delivered in prompt ${message.info.id}; awaiting response.`,
           })
-          settled = true
         } catch (error) {
           yield* agentCommands.update({
             id: info.id,
@@ -3141,20 +3292,20 @@ NOTE: At any point in time through this workflow you should feel free to ask the
           })
           settled = true
         } finally {
-          peerDeliveryTargets.delete(info.targetSessionID)
-          if (settled) yield* scheduleNextPeerDelivery(info.targetSessionID)
+          peerState.targets.delete(info.targetSessionID)
+          if (settled) yield* scheduleNextPeerDelivery(info.targetSessionID, peerState)
         }
       }).pipe(Effect.orDie)
 
-    const schedulePeerDelivery = (info: AgentCommand.Info): Effect.Effect<void> =>
+    const schedulePeerDelivery = (info: AgentCommand.Info, peerState: PeerDeliveryState): Effect.Effect<void> =>
       Effect.gen(function* () {
         if (info.type !== "peer_message" || (info.state !== "accepted" && info.state !== "running")) return
-        yield* deliverPeerMessage(info).pipe(Effect.forkIn(scope, { startImmediately: true }))
+        yield* deliverPeerMessage(info, peerState).pipe(Effect.forkIn(peerState.scope, { startImmediately: true }))
       })
 
-    const scheduleNextPeerDelivery = (targetSessionID: SessionID): Effect.Effect<void> =>
+    const scheduleNextPeerDelivery = (targetSessionID: SessionID, peerState: PeerDeliveryState): Effect.Effect<void> =>
       Effect.gen(function* () {
-        if (!peerDeliveryPendingTargets.has(targetSessionID)) return
+        if (!peerState.pendingTargets.has(targetSessionID)) return
         const next = (yield* agentCommands.list({ targetSessionID }))
           .filter(
             (item): item is Extract<AgentCommand.Info, { type: "peer_message" }> =>
@@ -3162,27 +3313,128 @@ NOTE: At any point in time through this workflow you should feel free to ask the
           )
           .toSorted((a, b) => a.time.created - b.time.created || a.id.localeCompare(b.id))[0]
         if (next) {
-          yield* schedulePeerDelivery(next)
+          yield* schedulePeerDelivery(next, peerState)
           return
         }
-        peerDeliveryPendingTargets.delete(targetSessionID)
+        peerState.pendingTargets.delete(targetSessionID)
       })
 
-    const enqueuePeerDelivery = (info: AgentCommand.Info): Effect.Effect<void> =>
+    const schedulePeerDeliveryRetry = (targetSessionID: SessionID, peerState: PeerDeliveryState): Effect.Effect<void> =>
+      Effect.gen(function* () {
+        if (peerState.retryingTargets.has(targetSessionID)) return
+        peerState.retryingTargets.add(targetSessionID)
+        yield* Effect.gen(function* () {
+          for (
+            let attempt = 0;
+            attempt < PEER_DELIVERY_RETRY_MAX_ATTEMPTS && peerState.pendingTargets.has(targetSessionID);
+            attempt += 1
+          ) {
+            yield* scheduleNextPeerDelivery(targetSessionID, peerState)
+            if (!peerState.pendingTargets.has(targetSessionID)) break
+            yield* Effect.sleep(`${PEER_DELIVERY_RETRY_INTERVAL_MS} millis`)
+          }
+        }).pipe(
+          Effect.ensuring(Effect.sync(() => peerState.retryingTargets.delete(targetSessionID))),
+          Effect.forkIn(peerState.scope, { startImmediately: true }),
+        )
+      })
+
+    const enqueuePeerDelivery = (info: AgentCommand.Info, peerState: PeerDeliveryState): Effect.Effect<void> =>
       Effect.gen(function* () {
         if (info.type !== "peer_message" || info.state !== "accepted") return
-        peerDeliveryPendingTargets.add(info.targetSessionID)
-        yield* scheduleNextPeerDelivery(info.targetSessionID)
+        peerState.pendingTargets.add(info.targetSessionID)
+        yield* scheduleNextPeerDelivery(info.targetSessionID, peerState)
+        yield* schedulePeerDeliveryRetry(info.targetSessionID, peerState)
       })
 
+    const enqueueAcceptedPeerCommand =
+      (peerState: PeerDeliveryState) => (event: { properties: { info: AgentCommand.Info } }) => {
+        if (event.properties.info.type !== "peer_message" || event.properties.info.state !== "accepted") {
+          return Effect.void
+        }
+        return enqueuePeerDelivery(event.properties.info, peerState)
+      }
+
+    const peerDeliveryState = yield* InstanceState.make<PeerDeliveryState>(
+      Effect.fn("SessionPrompt.peerDeliveryState")(function* (instance) {
+        const instanceScope = yield* Scope.Scope
+        const peerState: PeerDeliveryState = {
+          targets: new Set(),
+          pendingTargets: new Set(),
+          retryingTargets: new Set(),
+          scope: instanceScope,
+        }
+        const withInstance = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+          effect.pipe(Effect.provideService(InstanceRef, instance))
+
+        yield* bus
+          .subscribe(AgentCommand.Event.Created)
+          .pipe(
+            Stream.runForEach(enqueueAcceptedPeerCommand(peerState)),
+            withInstance,
+            Effect.forkIn(instanceScope, { startImmediately: true }),
+          )
+        yield* bus.subscribe(AgentCommand.Event.Updated).pipe(
+          Stream.filter((event) => event.properties.info.type === "peer_message"),
+          Stream.runForEach(enqueueAcceptedPeerCommand(peerState)),
+          withInstance,
+          Effect.forkIn(instanceScope, { startImmediately: true }),
+        )
+        yield* bus.subscribe(MessageV2.Event.Updated).pipe(
+          Stream.filter(
+            (event) =>
+              event.properties.info.role === "assistant" && event.properties.info.time.completed !== undefined,
+          ),
+          Stream.runForEach((event) =>
+            event.properties.info.role === "assistant"
+              ? completePeerResponse(event.properties.info, peerState)
+              : Effect.void,
+          ),
+          withInstance,
+          Effect.forkIn(instanceScope, { startImmediately: true }),
+        )
+        yield* bus.subscribe(SessionStatus.Event.Status).pipe(
+          Stream.filter((event) => event.properties.status.type === "idle"),
+          Stream.runForEach((event) =>
+            // SessionStatus publishes idle before removing its durable busy row.
+            Effect.sleep("1 millis").pipe(
+              Effect.andThen(scheduleNextPeerDelivery(event.properties.sessionID, peerState)),
+              Effect.andThen(schedulePeerDeliveryRetry(event.properties.sessionID, peerState)),
+            ),
+          ),
+          withInstance,
+          Effect.forkIn(instanceScope, { startImmediately: true }),
+        )
+        yield* Effect.gen(function* () {
+          yield* Effect.sleep("1 millis")
+          const targets = new Set(
+            (yield* agentCommands.list())
+              .filter((info) => info.type === "peer_message" && (info.state === "accepted" || info.state === "running"))
+              .map((info) => info.targetSessionID),
+          )
+          for (const targetSessionID of targets) peerState.pendingTargets.add(targetSessionID)
+          yield* Effect.forEach(targets, (targetSessionID) => scheduleNextPeerDelivery(targetSessionID, peerState), {
+            discard: true,
+          })
+          yield* Effect.forEach(targets, (targetSessionID) => schedulePeerDeliveryRetry(targetSessionID, peerState), {
+            discard: true,
+          })
+        }).pipe(withInstance, Effect.forkIn(instanceScope, { startImmediately: false }))
+        return peerState
+      }),
+    )
+
+    const ensurePeerDeliveryState = InstanceState.get(peerDeliveryState).pipe(Effect.asVoid)
     const wakePeerDelivery = Effect.fn("SessionPrompt.wakePeerDelivery")(function* (targetSessionID: SessionID) {
+      const peerState = yield* InstanceState.get(peerDeliveryState)
       const pending = (yield* agentCommands.list({ targetSessionID })).filter(
         (info): info is Extract<AgentCommand.Info, { type: "peer_message" }> =>
           info.type === "peer_message" && (info.state === "accepted" || info.state === "running"),
       )
       if (pending.length === 0) return
-      peerDeliveryPendingTargets.add(targetSessionID)
-      yield* scheduleNextPeerDelivery(targetSessionID)
+      peerState.pendingTargets.add(targetSessionID)
+      yield* scheduleNextPeerDelivery(targetSessionID, peerState)
+      yield* schedulePeerDeliveryRetry(targetSessionID, peerState)
     })
 
     const recoverQueuedPrompt = Effect.fn("SessionPrompt.recoverQueuedPrompt")(function* (
@@ -3541,29 +3793,6 @@ NOTE: At any point in time through this workflow you should feel free to ask the
       }),
     )
 
-    yield* bus.subscribe(AgentCommand.Event.Updated).pipe(
-      Stream.filter((event) => event.properties.info.type === "peer_message"),
-      Stream.runForEach((event) => {
-        if (event.properties.info.state !== "accepted") return Effect.void
-        return enqueuePeerDelivery(event.properties.info)
-      }),
-      Effect.forkScoped({ startImmediately: true }),
-    )
-    yield* bus.subscribe(SessionStatus.Event.Status).pipe(
-      Stream.filter((event) => event.properties.status.type === "idle"),
-      Stream.runForEach((event) => scheduleNextPeerDelivery(event.properties.sessionID)),
-      Effect.forkScoped({ startImmediately: true }),
-    )
-    yield* Effect.gen(function* () {
-      yield* Effect.sleep("1 millis")
-      const targets = new Set(
-        (yield* agentCommands.list())
-          .filter((info) => info.type === "peer_message" && (info.state === "accepted" || info.state === "running"))
-          .map((info) => info.targetSessionID),
-      )
-      for (const targetSessionID of targets) peerDeliveryPendingTargets.add(targetSessionID)
-      yield* Effect.forEach(targets, (targetSessionID) => scheduleNextPeerDelivery(targetSessionID), { discard: true })
-    }).pipe(Effect.forkScoped({ startImmediately: false }))
     return Service.of({
       cancel,
       cancelTurn,

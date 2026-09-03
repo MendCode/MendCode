@@ -2351,6 +2351,21 @@ export function fromError(
     ).toObject()
   }
 
+  const streamStall = retryableStreamStallError(e)
+  if (streamStall) {
+    return new APIError(
+      {
+        message: "AI backend stream stalled",
+        isRetryable: true,
+        metadata: {
+          kind: "stream_timeout",
+          message: streamStall,
+        },
+      },
+      { cause: e },
+    ).toObject()
+  }
+
   switch (true) {
     case e instanceof DOMException && e.name === "AbortError":
       if (ctx.aborted) {
@@ -2557,9 +2572,6 @@ function retryableNetworkError(e: unknown): RetryableNetworkError | undefined {
     lower.includes("operation was aborted") ||
     lower.includes("request aborted") ||
     lower.includes("stream aborted") ||
-    lower.includes("read timed out") ||
-    lower.includes("stream timed out") ||
-    lower.includes("sse read timed out") ||
     lower.includes("failed to fetch")
   ) {
     return {
@@ -2573,6 +2585,22 @@ function retryableNetworkError(e: unknown): RetryableNetworkError | undefined {
   }
 
   return cause
+}
+
+function retryableStreamStallError(e: unknown): string | undefined {
+  if (typeof e !== "object" || e === null) return undefined
+  const err = e as { cause?: unknown; errors?: unknown }
+  const message = errorMessage(e)
+  const lower = message.toLowerCase()
+  if (lower.includes("read timed out") || lower.includes("stream timed out") || lower.includes("sse read timed out"))
+    return message
+  if (Array.isArray(err.errors)) {
+    for (const nested of err.errors) {
+      const match = retryableStreamStallError(nested)
+      if (match) return match
+    }
+  }
+  return retryableStreamStallError(err.cause)
 }
 
 export function isNetworkError(error: unknown) {

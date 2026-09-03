@@ -42,13 +42,15 @@ export const TellTool = Tool.define<typeof Parameters, Metadata, AgentCommand.Se
             })
             .pipe(Effect.orDie)
           return {
-            title: `Peer message → ${command.targetSessionID}`,
+            title: `Session message → ${command.targetSessionID}`,
             output: [
-              `Queued peer message ${command.id}.`,
+              `Queued session message ${command.id}.`,
               `target: ${command.targetSessionID}`,
               `state: ${command.state}`,
               `policy: ${command.policy.decision}`,
-              "The target must explicitly accept it before delivery.",
+              command.policy.decision === "safe_auto"
+                ? "Automatic delivery waits for the target idle boundary without interrupting active work. The command remains active until the target finishes, then its response is returned here automatically."
+                : "Automatic delivery is disabled because the sessions do not share a verified workspace.",
             ].join("\n"),
             metadata: {
               peerMessage: {

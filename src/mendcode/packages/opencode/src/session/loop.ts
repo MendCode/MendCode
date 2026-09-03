@@ -1386,7 +1386,7 @@ function redactArtifactString(value: string) {
     .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/gi, "Bearer [REDACTED]")
     .replace(/\bsk-[A-Za-z0-9_-]{8,}\b/g, "[REDACTED_SECRET]")
     .replace(/\bgh[pousr]_[A-Za-z0-9_]{20,}\b/g, "[REDACTED_SECRET]")
-    .replace(/(["'])(api[_-]?key|access[_-]?token|auth[_-]?token|token|secret|password)\1\s*:\s*"[^"\n]*"/gi, '$1$2$1:"[REDACTED]"')
+    .replace(/(["'])(api[_-]?key|access[_-]?token|auth[_-]?token|authorization|token|secret|password)\1\s*:\s*"[^"\n]*"/gi, '$1$2$1:"[REDACTED]"')
     .replace(/\b(api[_-]?key|access[_-]?token|auth[_-]?token|token|secret|password)\s*([:=])\s*([^\s,;]+)/gi, "$1$2[REDACTED]")
     .replace(/\b(authorization)\s*([:=])\s*([^\n]+)/gi, "$1$2[REDACTED]")
 }

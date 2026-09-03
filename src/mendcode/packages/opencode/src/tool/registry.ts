@@ -64,7 +64,7 @@ import { BackgroundTask } from "@/session/background-task"
 import { Auth } from "@/auth"
 import { AgentCommand } from "@/session/agent-command"
 import { TellTool } from "./tell"
-import { PeersTool } from "./peers"
+import { SessionsTool } from "./peers"
 
 const log = Log.create({ service: "tool.registry" })
 
@@ -148,7 +148,7 @@ export const layer: Layer.Layer<
     const workflowtool = yield* WorkflowTool
     const reviewtool = yield* ReviewTool
     const telltool = yield* TellTool
-    const peerstool = yield* PeersTool
+    const sessionstool = yield* SessionsTool
 
     const memorytool = yield* MemoryTool
     const memorygraphtool = yield* MemoryGraphTool
@@ -250,7 +250,7 @@ export const layer: Layer.Layer<
           loop: Tool.init(looptool),
           workflow: Tool.init(workflowtool),
           review: Tool.init(reviewtool),
-          peers: Tool.init(peerstool),
+          sessions: Tool.init(sessionstool),
           tell: Tool.init(telltool),
           memory: Tool.init(memorytool),
           memoryGraph: Tool.init(memorygraphtool),
@@ -282,7 +282,7 @@ export const layer: Layer.Layer<
             tool.loop,
             tool.workflow,
             tool.review,
-            tool.peers,
+            tool.sessions,
             tool.tell,
             tool.memory,
             tool.memoryGraph,

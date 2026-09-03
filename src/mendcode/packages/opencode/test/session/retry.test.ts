@@ -2,7 +2,8 @@ import { describe, expect, test } from "bun:test"
 import type { NamedError } from "@mendcode/core/util/error"
 import { APICallError } from "ai"
 import { setTimeout as sleep } from "node:timers/promises"
-import { Effect, Layer, Schedule } from "effect"
+import { Effect, Fiber, Layer, Schedule } from "effect"
+import * as TestClock from "effect/testing/TestClock"
 import { CrossSpawnSpawner } from "@mendcode/core/cross-spawn-spawner"
 import { SessionRetry } from "../../src/session/retry"
 import { MessageV2 } from "../../src/session/message-v2"
@@ -44,6 +45,11 @@ describe("session.retry.delay", () => {
     const error = apiError(undefined, "Network connection lost")
     expect(SessionRetry.delay(1, error)).toBe(SessionRetry.RETRY_NETWORK_INTERVAL)
     expect(SessionRetry.delay(99, error)).toBe(SessionRetry.RETRY_NETWORK_INTERVAL)
+  })
+
+  test("does not delay network recovery because of a provider retry hint", () => {
+    const error = apiError({ "retry-after-ms": "60000" }, "Network connection lost")
+    expect(SessionRetry.delay(1, error)).toBe(SessionRetry.RETRY_NETWORK_INTERVAL)
   })
 
   test("prefers retry-after-ms when shorter than exponential", () => {
@@ -159,29 +165,32 @@ describe("session.retry.delay", () => {
     }),
   )
 
-  it.live("keeps transient network retries alive past the normal retry cap", () =>
-    provideTmpdirInstance(() =>
-      Effect.gen(function* () {
-        const error = MessageV2.APIError.Schema.parse(
-          new MessageV2.APIError({
-            message: "Network connection lost",
-            isRetryable: true,
-            responseHeaders: { "retry-after-ms": "0" },
-            metadata: { code: "ENETDOWN" },
-          }).toObject(),
-        )
-        const step = yield* Schedule.toStepWithMetadata(
-          SessionRetry.policy({
-            parse: (err) => MessageV2.APIError.Schema.parse(err),
-            set: () => Effect.void,
-          }),
-        )
-
-        for (let attempt = 0; attempt < SessionRetry.RETRY_MAX_ATTEMPTS + 2; attempt++) {
+  it.effect("keeps transient network retries alive past the normal retry cap", () =>
+    Effect.gen(function* () {
+      const error = MessageV2.APIError.Schema.parse(
+        new MessageV2.APIError({
+          message: "Network connection lost",
+          isRetryable: true,
+          responseHeaders: { "retry-after-ms": "0" },
+          metadata: { code: "ENETDOWN" },
+        }).toObject(),
+      )
+      const step = yield* Schedule.toStepWithMetadata(
+        SessionRetry.policy({
+          parse: (err) => MessageV2.APIError.Schema.parse(err),
+          set: () => Effect.void,
+        }),
+      )
+      const attempts = SessionRetry.RETRY_MAX_ATTEMPTS + 2
+      const fiber = yield* Effect.gen(function* () {
+        for (let attempt = 0; attempt < attempts; attempt++) {
           yield* step(error)
         }
-      }),
-    ),
+      }).pipe(Effect.forkChild)
+
+      yield* TestClock.adjust(`${attempts} seconds`)
+      yield* Fiber.join(fiber)
+    }),
   )
 })
 
@@ -457,14 +466,17 @@ describe("session.message-v2.fromError", () => {
     expect(SessionRetry.retryable(result)).toBeUndefined()
   })
 
-  test("converts silent stream timeouts to retryable APIError", () => {
+  test("keeps silent stream stalls distinct from physical network failures", () => {
     const result = MessageV2.fromError(new Error("SSE read timed out"), { providerID })
 
     expect(MessageV2.APIError.isInstance(result)).toBe(true)
     if (!MessageV2.APIError.isInstance(result)) throw new Error("expected APIError")
     expect(result.data.isRetryable).toBe(true)
-    expect(result.data.message).toBe("Network connection lost")
-    expect(SessionRetry.retryable(result)).toBe("Network connection lost")
+    expect(result.data.message).toBe("AI backend stream stalled")
+    expect(result.data.metadata).toMatchObject({ kind: "stream_timeout", message: "SSE read timed out" })
+    expect(MessageV2.isNetworkError(result)).toBe(false)
+    expect(SessionRetry.retryable(result)).toBe("AI backend stream stalled")
+    expect(SessionRetry.delay(1, result)).toBe(SessionRetry.RETRY_INITIAL_DELAY)
   })
 
   test("retries processor idle stream watchdog timeouts", () => {

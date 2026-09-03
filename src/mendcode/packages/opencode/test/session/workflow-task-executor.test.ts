@@ -71,7 +71,7 @@ function runExecutor(input: {
       }),
       cancelTurn: () => Effect.succeed("not_running" as const),
       cancelQueued: () => Effect.succeed(false),
-      interrupt: () => Effect.void,
+      interrupt: () => Effect.succeed(false),
       prompt: (prompt: PromptInput) => {
         input.calls.push(prompt)
         return input.stall ? Effect.never : Effect.succeed(input.message ?? promptMessage(input.promptText))

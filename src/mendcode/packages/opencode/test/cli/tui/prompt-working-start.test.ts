@@ -20,6 +20,7 @@ import {
   promptDeliveryRetryAction,
   promptDeliveryRetryDelay,
   promptRecoveryReady,
+  runPromptDeliveryInSessionOrder,
   shouldRetryConnectionForPrompt,
   shouldRecoverAcceptedPromptDeliveries,
   acceptedPromptRecoveryDecision,
@@ -38,6 +39,7 @@ import {
   shouldClearWorkingStartedAt,
   shouldKeepWorkingStatus,
   shouldEnableSessionInterrupt,
+  shouldClearSessionInterruptRequest,
   shouldHandlePromptCursorArrow,
   hasInterruptibleSessionTurn,
   sessionInterruptConfirmationAction,
@@ -254,6 +256,29 @@ describe("prompt delivery recovery", () => {
   test("extracts structured server error messages", () => {
     expect(promptDeliveryErrorMessage({ data: { message: "invalid prompt" } })).toBe("invalid prompt")
     expect(promptDeliveryErrorMessage(undefined)).toBe("The server rejected this prompt.")
+  })
+
+  test("dispatches prompt requests for one session in submission order", async () => {
+    const order: string[] = []
+    let releaseFirst = () => {}
+    let markFirstStarted = () => {}
+    const firstStarted = new Promise<void>((resolve) => (markFirstStarted = resolve))
+    const firstGate = new Promise<void>((resolve) => (releaseFirst = resolve))
+    const first = runPromptDeliveryInSessionOrder("session-ordered-delivery", async () => {
+      order.push("first:start")
+      markFirstStarted()
+      await firstGate
+      order.push("first:end")
+    })
+    const second = runPromptDeliveryInSessionOrder("session-ordered-delivery", async () => {
+      order.push("second:start")
+    })
+
+    await firstStarted
+    expect(order).toEqual(["first:start"])
+    releaseFirst()
+    await Promise.all([first, second])
+    expect(order).toEqual(["first:start", "first:end", "second:start"])
   })
 
   test("keeps an accepted delivery queued only when it was submitted behind an active turn", () => {
@@ -979,32 +1004,59 @@ describe("resolveWorkingStartedAt", () => {
     )
   })
 
-  test("requires two Esc presses for the same active turn", () => {
-    expect(sessionInterruptConfirmationAction({ activeTargetMessageID: "message-1" })).toBe("arm")
+  test("keeps double-Esc armed across internal target changes in the same active session", () => {
+    expect(sessionInterruptConfirmationAction({ sessionID: "session-1", hasActiveTurn: true })).toBe("arm")
     expect(
       sessionInterruptConfirmationAction({
-        activeTargetMessageID: "message-1",
-        armedTargetMessageID: "message-1",
+        sessionID: "session-1",
+        armedSessionID: "session-1",
+        hasActiveTurn: true,
       }),
     ).toBe("interrupt")
     expect(
       sessionInterruptConfirmationAction({
-        activeTargetMessageID: "message-2",
-        armedTargetMessageID: "message-1",
+        sessionID: "session-2",
+        armedSessionID: "session-1",
+        hasActiveTurn: true,
       }),
     ).toBe("arm")
-    expect(sessionInterruptConfirmationAction({ armedTargetMessageID: "message-1" })).toBe("ignore")
+    expect(sessionInterruptConfirmationAction({ armedSessionID: "session-1", hasActiveTurn: true })).toBe("ignore")
+    expect(sessionInterruptConfirmationAction({ sessionID: "session-1", hasActiveTurn: false })).toBe("ignore")
     expect(sessionInterruptHint({ enabled: true, working: true, armed: false })).toBeUndefined()
     expect(sessionInterruptHint({ enabled: true, working: true, armed: true })).toBe("[esc again to interrupt]")
     expect(sessionInterruptHint({ enabled: false, working: true, armed: true })).toBeUndefined()
     expect(sessionInterruptHint({ enabled: true, working: false, armed: true })).toBeUndefined()
-    expect(sessionInterruptConfirmationAction({ hasActiveTurn: true })).toBe("arm")
+  })
+
+  test("re-arms Esc after cancellation confirmation or turn promotion", () => {
+    const base = {
+      requestTargetMessageID: "message-1",
+      activeTargetMessageID: "message-1",
+      targetTerminal: false,
+      sessionSettled: false,
+      controlState: "stop_requested",
+    }
+    expect(shouldClearSessionInterruptRequest(base)).toBe(false)
     expect(
-      sessionInterruptConfirmationAction({
-        hasActiveTurn: true,
-        armedTargetMessageID: "__mendcode_session_interrupt__",
+      shouldClearSessionInterruptRequest({
+        ...base,
+        controlState: "stop_confirmed",
+        controlResult: "cancelled",
       }),
-    ).toBe("interrupt")
+    ).toBe(true)
+    expect(
+      shouldClearSessionInterruptRequest({
+        ...base,
+        activeTargetMessageID: "message-2",
+      }),
+    ).toBe(true)
+    expect(
+      shouldClearSessionInterruptRequest({
+        ...base,
+        controlState: "stop_confirmed",
+        controlResult: "target_mismatch",
+      }),
+    ).toBe(false)
   })
 
   test("keeps the emergency Esc path for an unfinished legacy assistant receipt", () => {

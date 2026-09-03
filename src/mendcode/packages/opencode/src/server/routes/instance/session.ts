@@ -437,9 +437,14 @@ export const SessionRoutes = lazy(() =>
             const body = c.req.valid("json")
             const session = yield* Session.Service
             const command = yield* AgentCommand.Service
+            const prompt = yield* SessionPrompt.Service
             yield* session.get(body.sourceSessionID)
             yield* session.get(targetSessionID)
-            return yield* command.create({ targetSessionID, ...body })
+            const created = yield* command.create({ targetSessionID, ...body })
+            if (created.type === "peer_message" && created.state === "accepted") {
+              yield* prompt.wakePeerDelivery(created.targetSessionID)
+            }
+            return created
           })
         } catch (error) {
           if (error instanceof AgentCommand.InvalidTargetError) {
@@ -1064,8 +1069,7 @@ export const SessionRoutes = lazy(() =>
       async (c) =>
         jsonRequest("SessionRoutes.interrupt", c, function* () {
           const svc = yield* SessionPrompt.Service
-          yield* svc.interrupt(c.req.valid("param").sessionID)
-          return true
+          return yield* svc.interrupt(c.req.valid("param").sessionID)
         }),
     )
     .post(

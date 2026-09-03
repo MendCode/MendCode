@@ -57,6 +57,7 @@ import { SessionStatus } from "../../src/session/status"
 import { recoverStaleSessionStatuses, STALE_SESSION_RECOVERY_MS } from "../../src/session/recovery"
 import { BackgroundTask } from "../../src/session/background-task"
 import { SessionV2 } from "../../src/v2/session"
+import { Modelv2 } from "../../src/v2/model"
 import { Skill } from "../../src/skill"
 import { LoopWorkflow } from "../../src/session/loop"
 import { LoopRunner } from "../../src/session/loop-runner"
@@ -81,11 +82,24 @@ import { reply, TestLLMServer } from "../lib/llm-server"
 void Log.init({ print: false })
 
 test("resolves conditional turn cancellation without affecting a newer run", () => {
-  expect(resolveCancelTurnResult({ runtime: "cancelled", terminalAssistant: false })).toBe("cancelled")
-  expect(resolveCancelTurnResult({ runtime: "target_mismatch", terminalAssistant: true })).toBe("already_terminal")
-  expect(resolveCancelTurnResult({ runtime: "target_mismatch", terminalAssistant: false })).toBe("target_mismatch")
-  expect(resolveCancelTurnResult({ runtime: "not_running", terminalAssistant: false })).toBe("not_running")
-  expect(resolveCancelTurnResult({ runtime: "not_interruptible", terminalAssistant: false })).toBe("not_running")
+  expect(resolveCancelTurnResult({ runtime: "cancelled", terminalAssistant: false, sessionBusy: false })).toBe(
+    "cancelled",
+  )
+  expect(resolveCancelTurnResult({ runtime: "target_mismatch", terminalAssistant: true, sessionBusy: false })).toBe(
+    "already_terminal",
+  )
+  expect(resolveCancelTurnResult({ runtime: "target_mismatch", terminalAssistant: true, sessionBusy: true })).toBe(
+    "target_mismatch",
+  )
+  expect(resolveCancelTurnResult({ runtime: "target_mismatch", terminalAssistant: false, sessionBusy: true })).toBe(
+    "target_mismatch",
+  )
+  expect(resolveCancelTurnResult({ runtime: "not_running", terminalAssistant: false, sessionBusy: false })).toBe(
+    "not_running",
+  )
+  expect(resolveCancelTurnResult({ runtime: "not_interruptible", terminalAssistant: false, sessionBusy: true })).toBe(
+    "not_running",
+  )
 })
 
 test("maps tool execution to bounded activity labels", () => {
@@ -2314,18 +2328,24 @@ it.live("promptAsync never replays a delivered prompt whose assistant is still i
   ),
 )
 
-it.live("delivers an accepted peer message once with visible provenance", () =>
+it.live("automatically delivers a same-workspace agent message and returns its response once", () =>
   provideTmpdirServer(
     Effect.fnUntraced(function* ({ llm }) {
       const prompt = yield* SessionPrompt.Service
+      yield* Effect.sleep("20 millis")
       const sessions = yield* Session.Service
+      const status = yield* SessionStatus.Service
       const commands = yield* AgentCommand.Service
       const source = yield* sessions.create({ title: "Peer sender" })
       const target = yield* sessions.create({
         title: "Peer receiver",
         permission: [{ permission: "*", pattern: "*", action: "allow" }],
       })
-      yield* llm.text("peer response")
+      yield* prompt.wakePeerDelivery(source.id)
+      yield* status.set(target.id, { type: "busy", message: "active run" })
+      const responseGate = defer<void>()
+      yield* llm.hold("peer response", responseGate.promise)
+      yield* llm.text("source observed peer response")
 
       const command = yield* commands.create({
         sourceSessionID: source.id,
@@ -2333,10 +2353,43 @@ it.live("delivers an accepted peer message once with visible provenance", () =>
         type: "peer_message",
         payload: { text: "hello from the sender" },
       })
-      expect(command.state).toBe("pending")
-      yield* commands.update({ id: command.id, targetSessionID: target.id, state: "accepted" })
-      yield* prompt.wakePeerDelivery(target.id)
-      yield* prompt.wakePeerDelivery(target.id)
+      expect(command.state).toBe("accepted")
+      expect(command.policy.decision).toBe("safe_auto")
+      yield* Effect.sleep("50 millis")
+      expect((yield* commands.get(command.id)).state).toBe("accepted")
+      expect(
+        (yield* sessions.messages({ sessionID: target.id, view: "full" })).some((message) =>
+          message.parts.some(
+            (part) =>
+              part.type === "text" && (part.metadata as Record<string, unknown> | undefined)?.deliveryID === command.id,
+          ),
+        ),
+      ).toBe(false)
+      expect(yield* llm.calls).toBe(0)
+      yield* status.set(target.id, { type: "idle" }, { notify: false })
+
+      const awaitingResponse = yield* Effect.gen(function* () {
+        while (true) {
+          const messages = yield* sessions.messages({ sessionID: target.id, view: "full" })
+          const received = messages.find((message) =>
+            message.parts.some(
+              (part) =>
+                part.type === "text" &&
+                (part.metadata as Record<string, unknown> | undefined)?.deliveryID === command.id,
+            ),
+          )
+          const state = yield* commands.get(command.id)
+          if (received && state.state === "running" && (yield* llm.calls) === 1) return true
+          yield* Effect.sleep("1 millis")
+        }
+      }).pipe(
+        Effect.timeout("2 seconds"),
+        Effect.catch(() => Effect.succeed(false)),
+      )
+      expect(awaitingResponse).toBe(true)
+      expect(JSON.stringify(yield* llm.inputs)).toContain("agent_message")
+      expect(JSON.stringify(yield* llm.inputs)).toContain(source.id)
+      responseGate.resolve()
 
       const delivered = yield* Effect.gen(function* () {
         while (true) {
@@ -2355,7 +2408,22 @@ it.live("delivers an accepted peer message once with visible provenance", () =>
               message.info.parentID === received?.info.id &&
               message.info.time.completed !== undefined,
           )
-          if (received && state.state === "completed" && assistantCompleted) return true
+          const sourceMessages = yield* sessions.messages({ sessionID: source.id, view: "full" })
+          const returned = sourceMessages.find((message) =>
+            message.parts.some(
+              (part) =>
+                part.type === "text" &&
+                (part.metadata as Record<string, unknown> | undefined)?.kind === "peer_response" &&
+                (part.metadata as Record<string, unknown> | undefined)?.deliveryID === command.id,
+            ),
+          )
+          const sourceResponded = sourceMessages.some(
+            (message) =>
+              message.info.role === "assistant" &&
+              message.info.parentID === returned?.info.id &&
+              message.info.time.completed !== undefined,
+          )
+          if (received && returned && state.state === "completed" && assistantCompleted && sourceResponded) return true
           yield* Effect.sleep("1 millis")
         }
       }).pipe(
@@ -2376,14 +2444,38 @@ it.live("delivers an accepted peer message once with visible provenance", () =>
         (part) =>
           part.type === "text" && (part.metadata as Record<string, unknown> | undefined)?.deliveryID === command.id,
       )
-      expect(receivedPart && receivedPart.type === "text" ? receivedPart.text : undefined).toBe("hello from the sender")
+      expect(receivedPart && receivedPart.type === "text" ? receivedPart.text : undefined).toContain(
+        '<mendcode_runtime_event type="agent_message">',
+      )
+      expect(
+        receivedPart && receivedPart.type === "text"
+          ? (receivedPart.metadata as Record<string, unknown> | undefined)?.displayText
+          : undefined,
+      ).toBe("hello from the sender")
       expect(
         receivedPart && receivedPart.type === "text"
           ? (receivedPart.metadata as Record<string, unknown> | undefined)?.sourceSessionID
           : undefined,
       ).toBe(source.id)
       expect(yield* commands.get(command.id).pipe(Effect.map((info) => info.state))).toBe("completed")
-      expect(yield* llm.calls).toBe(1)
+      const sourceMessages = yield* sessions.messages({ sessionID: source.id, view: "full" })
+      const returnedPart = sourceMessages
+        .flatMap((message) => message.parts)
+        .find(
+          (part) =>
+            part.type === "text" &&
+            (part.metadata as Record<string, unknown> | undefined)?.kind === "peer_response" &&
+            (part.metadata as Record<string, unknown> | undefined)?.deliveryID === command.id,
+        )
+      expect(returnedPart && returnedPart.type === "text" ? returnedPart.text : undefined).toContain("agent_response")
+      expect(
+        returnedPart && returnedPart.type === "text"
+          ? (returnedPart.metadata as Record<string, unknown> | undefined)?.displayText
+          : undefined,
+      ).toBe("peer response")
+      expect(JSON.stringify(yield* llm.inputs)).toContain("peer response")
+      expect(yield* llm.calls).toBe(2)
+      expect((yield* commands.list()).filter((item) => item.type === "peer_message")).toHaveLength(1)
     }),
     {
       git: true,
@@ -2596,6 +2688,44 @@ it.live("cancel-turn aborts an active compaction and finalizes its summary", () 
         expect(summary.info.error?.name).toBe("MessageAbortedError")
         expect(summary.info.time.completed).toBeDefined()
       }
+    }),
+    { git: true, config: providerCfg },
+  ),
+)
+
+it.live("reports a stale terminal target while a newer compaction run is active", () =>
+  provideTmpdirServer(
+    Effect.fnUntraced(function* ({ llm }) {
+      const prompt = yield* SessionPrompt.Service
+      const compaction = yield* SessionCompaction.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({ title: "Stale target during compaction" })
+      yield* llm.text("seed response")
+      yield* prompt.prompt({
+        sessionID: chat.id,
+        agent: "build",
+        model: ref,
+        parts: [{ type: "text", text: "seed request" }],
+      })
+      const original = (yield* sessions.messages({ sessionID: chat.id })).find(
+        (message) =>
+          message.info.role === "user" &&
+          message.parts.some((part) => part.type === "text" && part.text === "seed request"),
+      )
+      if (!original) throw new Error("seed user message missing")
+
+      const gate = defer<void>()
+      yield* llm.hold("compaction response", gate.promise)
+      yield* compaction.create({ sessionID: chat.id, agent: "build", model: ref, auto: true })
+      const compacting = yield* prompt.loop({ sessionID: chat.id }).pipe(Effect.forkChild)
+      yield* llm.wait(2)
+
+      expect(yield* prompt.cancelTurn({ sessionID: chat.id, targetMessageID: original.info.id })).toBe(
+        "target_mismatch",
+      )
+      yield* prompt.cancel(chat.id).pipe(Effect.timeout("1 second"))
+      gate.resolve()
+      yield* Fiber.join(compacting).pipe(Effect.timeout("1 second"))
     }),
     { git: true, config: providerCfg },
   ),
@@ -3052,7 +3182,7 @@ it.live("manual interrupt stops only the active turn and preserves its queued pr
         .pipe(Effect.forkChild)
       yield* Effect.sleep("20 millis")
 
-      yield* prompt.interrupt(chat.id).pipe(Effect.timeout("1 second"))
+      expect(yield* prompt.interrupt(chat.id).pipe(Effect.timeout("1 second"))).toBe(true)
       const [interrupted, queuedResult] = yield* Effect.all([Fiber.join(active), Fiber.join(queued)])
       gate.resolve()
       const messages = yield* sessions.messages({ sessionID: chat.id })
@@ -3377,6 +3507,51 @@ it.live("prompt emits v2 prompted and synthetic events", () =>
           expect.objectContaining({ type: "synthetic", text: "note content" }),
         ]),
       )
+    }),
+    { git: true, config: providerCfg },
+  ),
+)
+
+it.live("V2 create, prompt, compact, and wait bridge to the working session runtime", () =>
+  provideTmpdirServer(
+    Effect.fnUntraced(function* ({ llm }) {
+      yield* Effect.gen(function* () {
+        const v2 = yield* SessionV2.Service
+        const session = yield* v2.create({
+          agent: "build",
+          model: {
+            providerID: Modelv2.ProviderID.make("test"),
+            id: Modelv2.ID.make("test-model"),
+            variant: Modelv2.VariantID.make("default"),
+          },
+        })
+        yield* llm.text("v2 response")
+
+        const user = yield* v2.prompt({
+          sessionID: session.id,
+          delivery: "immediate",
+          prompt: { text: "hello through v2" },
+        })
+        yield* v2.wait(session.id)
+        yield* llm.text("v2 compacted summary")
+        yield* v2.compact(session.id)
+        yield* v2.wait(session.id)
+        const messages = yield* v2.messages({ sessionID: session.id, order: "asc" })
+
+        expect(session.agent).toBe("build")
+        expect(session.model).toMatchObject({ providerID: "test", id: "test-model" })
+        expect(user).toMatchObject({ type: "user", text: "hello through v2" })
+        expect(messages).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ type: "user", text: "hello through v2" }),
+            expect.objectContaining({
+              type: "assistant",
+              content: expect.arrayContaining([expect.objectContaining({ type: "text", text: "v2 response" })]),
+            }),
+            expect.objectContaining({ type: "compaction", summary: "v2 compacted summary" }),
+          ]),
+        )
+      }).pipe(Effect.provide(SessionV2.layer))
     }),
     { git: true, config: providerCfg },
   ),

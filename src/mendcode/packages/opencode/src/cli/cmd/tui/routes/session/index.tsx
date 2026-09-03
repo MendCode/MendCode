@@ -41,6 +41,7 @@ import {
   Prompt,
   sessionActivityMessages,
   subscribePendingPromptDeliveries,
+  waitForPendingPromptDeliveryReady,
   type PromptRef,
   type PromptSubmitInfo,
 } from "@tui/component/prompt"
@@ -62,6 +63,7 @@ import { resolveSessionControlRouting } from "@tui/context/session-control"
 import * as Log from "@mendcode/core/util/log"
 import { Locale } from "@/util/locale"
 import { tuiText } from "@tui/util/text"
+import { compareSessionMessages } from "@tui/util/session-message-order"
 import { Process } from "@/util/process"
 import type { Tool } from "@/tool/tool"
 import type { ReadTool } from "@/tool/read"
@@ -221,6 +223,7 @@ import {
   agentViewCommandStateRank,
   agentViewCommandTouchesSession,
   formatAgentViewCommandSummary,
+  formatAgentViewCommandState,
   formatAgentViewCommandType,
   isAgentViewCommandActionable,
   type AgentViewCommand,
@@ -942,8 +945,11 @@ export function Session() {
   })
   const queuedMessages = createMemo(() => {
     const queuedIDs = queuedMessageIDs()
-    return messages().filter((message): message is UserMessage => message.role === "user" && queuedIDs.has(message.id))
+    return messages()
+      .filter((message): message is UserMessage => message.role === "user" && queuedIDs.has(message.id))
+      .toSorted(compareSessionMessages)
   })
+  const nextQueuedMessageID = createMemo(() => queuedMessages()[0]?.id)
   const messageByID = createMemo(() => new Map(messages().map((message) => [message.id, message] as const)))
   const pinnedTurnUserMessageID = createMemo(() =>
     sessionPinnedUserMessageID({
@@ -1315,7 +1321,17 @@ export function Session() {
     if (sendNowMessageID()) return
     setSendNowMessageID(messageID)
     try {
-      await sdk.client.session.interrupt({ sessionID: route.sessionID }, { throwOnError: true })
+      const ready = await waitForPendingPromptDeliveryReady(route.sessionID, messageID)
+      if (!ready) throw new Error("The queued prompt is still being delivered. Try again after the connection settles.")
+      const interrupted = await sdk.client.session.interrupt(
+        { sessionID: route.sessionID },
+        { throwOnError: true },
+      )
+      if (interrupted.data !== true) {
+        void sync.session.sync(route.sessionID, { force: true }).catch(() => undefined)
+        toast.show({ message: "Queued prompt already started or is no longer waiting", variant: "info", duration: 3000 })
+        return
+      }
       toast.show({ message: "Queued prompt sent now", variant: "success", duration: 2500 })
     } catch (error) {
       toast.show({
@@ -4429,7 +4445,7 @@ export function Session() {
                 </box>
               ) : (
                 <text fg={theme.textMuted} wrapMode="none">
-                  {command.state}
+                  {formatAgentViewCommandState(command)}
                 </text>
               )
             return (
@@ -4720,7 +4736,11 @@ export function Session() {
                                       queued
                                       sticky
                                       anchorID={`queued-${message().id}`}
-                                      onSendNow={() => void sendQueuedNow(message().id)}
+                                      onSendNow={
+                                        nextQueuedMessageID() === message().id
+                                          ? () => void sendQueuedNow(message().id)
+                                          : undefined
+                                      }
                                       sendNowPending={sendNowMessageID() === message().id}
                                       simpleHistory={false}
                                       compactSubagentPrompt={Boolean(session()?.parentID)}
@@ -4753,8 +4773,6 @@ export function Session() {
                                       }}
                                       message={message() as UserMessage}
                                       parts={sync.data.part[message().id] ?? []}
-                                      onSendNow={() => void sendQueuedNow(message().id)}
-                                      sendNowPending={sendNowMessageID() === message().id}
                                       simpleHistory={
                                         !showCompactedToolCalls() &&
                                         shouldUseSimpleSessionHistory({
@@ -5987,6 +6005,13 @@ function UserMessage(props: {
     const texts = props.parts
       .map((x) => {
         if (x.type === "text" && !x.synthetic) {
+          const metadata = x.metadata as Record<string, unknown> | undefined
+          if (
+            (metadata?.kind === "peer_message" || metadata?.kind === "peer_response") &&
+            typeof metadata.displayText === "string"
+          ) {
+            return metadata.displayText
+          }
           return x.text
         }
         return null
@@ -6015,13 +6040,18 @@ function UserMessage(props: {
   const queuedFg = createMemo(() => selectedForeground(theme, color()))
   const sendNowBackground = createMemo(() => (props.sendNowPending ? theme.backgroundElement : theme.accent))
   const sendNowForeground = createMemo(() => selectedForeground(theme, sendNowBackground()))
-  const peerMessage = createMemo(() => {
+  const agentMessage = createMemo(() => {
     const part = props.parts.find(
-      (item) => item.type === "text" && (item.metadata as Record<string, unknown> | undefined)?.kind === "peer_message",
+      (item) =>
+        item.type === "text" &&
+        ["peer_message", "peer_response"].includes(
+          String((item.metadata as Record<string, unknown> | undefined)?.kind),
+        ),
     )
     if (!part || part.type !== "text") return undefined
     const metadata = part.metadata as Record<string, unknown> | undefined
     return {
+      kind: metadata?.kind === "peer_response" ? ("response" as const) : ("message" as const),
       sourceTitle: typeof metadata?.sourceTitle === "string" ? metadata.sourceTitle : undefined,
       sourceSessionID: typeof metadata?.sourceSessionID === "string" ? metadata.sourceSessionID : undefined,
     }
@@ -6198,8 +6228,10 @@ function UserMessage(props: {
               <box flexDirection="row" flexGrow={1} minWidth={0} overflow="hidden">
                 <text fg={theme.textMuted} wrapMode="none">
                   <span style={{ fg: color() }}>●</span>{" "}
-                  {peerMessage()
-                    ? `Peer · ${peerMessage()!.sourceTitle ?? peerMessage()!.sourceSessionID ?? "session"}`
+                  {agentMessage()
+                    ? `${agentMessage()!.kind === "response" ? "Reply from" : "From"} · ${
+                        agentMessage()!.sourceTitle ?? agentMessage()!.sourceSessionID ?? "session"
+                      }`
                     : subagentInitialPrompt()
                       ? "Subagent prompt"
                       : "You"}
