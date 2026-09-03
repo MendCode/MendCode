@@ -2939,7 +2939,8 @@ describe("mend memory", () => {
 
     expect(role.ok).toBe(false)
     expect(result.session.history.map((message) => message.role)).toEqual(["user", "assistant"])
-    expect(result.session.history.at(-1)?.text).toContain("memory side chat model not configured")
+    expect(result.session.history.at(-1)?.text).toContain("memory side chat disabled")
+    expect(result.session.history.at(-1)?.text).toContain("Enable Memory side chat")
     expect(result.proposals).toHaveLength(0)
   })
 
@@ -2954,6 +2955,7 @@ describe("mend memory", () => {
     delete process.env.OPENAI_OAUTH_CLIENT_ID
     process.env.XDG_CONFIG_HOME = path.join(dir.path, "xdg")
     try {
+      await writeProjectMemoryConfig({ memoryAssistantRole: "memoryAssistant" }, dir.path)
       await writeModelsConfig({
         version: 0,
         enabled: true,
@@ -2971,7 +2973,7 @@ describe("mend memory", () => {
         message: "que sabes sobre mi?",
       })
 
-      expect(result.session.history.at(-1)?.text).toContain("Setup model role is configured")
+      expect(result.session.history.at(-1)?.text).toContain("configured provider auth is not runnable")
       expect(result.proposals).toHaveLength(0)
     } finally {
       if (originalApiKey === undefined) delete process.env.OPENAI_API_KEY
@@ -3014,6 +3016,7 @@ describe("mend memory", () => {
     delete process.env.MENDCODE_OPENAI_OAUTH_CLIENT_ID
     delete process.env.OPENAI_OAUTH_CLIENT_ID
     try {
+      await writeProjectMemoryConfig({ memoryAssistantRole: "memoryAssistant" }, dir.path)
       await writeModelsConfig({
         version: 0,
         enabled: true,

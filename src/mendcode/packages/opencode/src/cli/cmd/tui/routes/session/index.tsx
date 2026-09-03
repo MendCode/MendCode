@@ -131,6 +131,7 @@ import { DialogExportOptions } from "../../ui/dialog-export-options"
 import * as Model from "../../util/model"
 import { formatAssistantLiveUsage, formatAssistantUsage, formatLatestAssistantContextUsage } from "../../util/usage"
 import {
+  displayConnectionStatus,
   isAssistantWorking,
   terminalAssistantSettlesActivity,
   isSubagentStatusActive,
@@ -1242,10 +1243,7 @@ export function Session() {
             (sync.data.question[sessionId]?.length ?? 0) +
             (sync.data.plan_review[sessionId]?.length ?? 0),
           now: now(),
-          connectionStatus:
-            sdk.connection.status === "connected" && sdk.connection.recoveringSince !== undefined
-              ? "reconnecting"
-              : sdk.connection.status,
+          connectionStatus: displayConnectionStatus(sdk.connection),
         })
         if (!shouldKeepCompactedSubagent({ compacted: state.time?.compacted, status })) continue
         result.set(sessionId, {
@@ -1281,10 +1279,7 @@ export function Session() {
             (sync.data.question[child.id]?.length ?? 0) +
             (sync.data.plan_review[child.id]?.length ?? 0),
           now: now(),
-          connectionStatus:
-            sdk.connection.status === "connected" && sdk.connection.recoveringSince !== undefined
-              ? "reconnecting"
-              : sdk.connection.status,
+          connectionStatus: displayConnectionStatus(sdk.connection),
         })
         const usage = latestAssistant
           ? (formatAssistantLiveUsage(latestAssistant, providers(), { config: sync.data.config }) ??
@@ -5166,6 +5161,7 @@ function sessionLiveStateLabel(input: {
     statusKind: input.status?.kind,
     statusStartedAt: input.status?.type === "busy" ? input.status.startedAt : undefined,
     latestMessage: input.messages.findLast((message) => message.role === "assistant"),
+    latestUser: input.messages.findLast((message) => message.role === "user"),
     hasActiveTool: input.hasActiveTool,
   })
   if (
@@ -8431,10 +8427,7 @@ function Task(props: ToolProps<typeof TaskTool>) {
       messages: messages(),
       pendingInputCount: childPendingInputCount(),
       now: ctx.now(),
-      connectionStatus:
-        sdk.connection.status === "connected" && sdk.connection.recoveringSince !== undefined
-          ? "reconnecting"
-          : sdk.connection.status,
+      connectionStatus: displayConnectionStatus(sdk.connection),
     })
   })
   const backgroundTask = createMemo(() => props.metadata.status === "started")
@@ -8453,14 +8446,14 @@ function Task(props: ToolProps<typeof TaskTool>) {
   const connectionStatusLabel = createMemo(() => {
     if (!isRunning()) return undefined
     const state = sdk.connection
-    const recovering = state.status === "connected" && state.recoveringSince !== undefined
-    if (state.status === "connected" && !recovering) return undefined
-    if (state.status === "connecting") return "↳ connecting to MendCode..."
-    if (state.status === "reconnecting" || recovering) {
+    const status = displayConnectionStatus(state)
+    if (status === "connected") return undefined
+    if (status === "connecting") return "↳ connecting to MendCode..."
+    if (status === "reconnecting") {
       const attempt = state.attempt > 1 ? ` #${state.attempt}` : ""
       return `↳ reconnecting${attempt}: local connection lost`
     }
-    if (state.status === "failed")
+    if (status === "failed")
       return `↳ local connection unavailable after ${state.attempt} retries; agent state unknown`
     return "↳ disconnected: waiting for local connection"
   })

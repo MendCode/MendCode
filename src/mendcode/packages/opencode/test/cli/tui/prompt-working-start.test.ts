@@ -37,6 +37,7 @@ import {
   shouldAcceptPromptInterruptFocus,
   shouldAttemptPromptHistoryNavigation,
   shouldClearWorkingStartedAt,
+  shouldClearSubmitPreflight,
   shouldKeepWorkingStatus,
   shouldEnableSessionInterrupt,
   shouldClearSessionInterruptRequest,
@@ -51,7 +52,10 @@ import {
   shouldSnapPromptCursorToEnd,
   shouldUseStoredPromptHistoryFallback,
 } from "@/cli/cmd/tui/component/prompt"
-import { terminalAssistantSettlesActivity } from "@/cli/cmd/tui/util/session-working"
+import {
+  terminalAssistantSettlesActivity,
+  terminalAssistantSettlesLatestTurn,
+} from "@/cli/cmd/tui/util/session-working"
 import {
   latestFullSessionHistoryStartID,
   sessionFollowSyncIsStale,
@@ -172,10 +176,19 @@ describe("terminal activity reconciliation", () => {
     ).toBe(false)
   })
 
-  test("keeps Generating when a real tool is still pending after a terminal-looking event", () => {
+  test("does not keep Generating when an explicit terminal receipt has a residual active tool", () => {
     const settled = terminalAssistantSettlesActivity({
       statusType: "busy",
       latestMessage: { role: "assistant", finish: "stop", time: { created: 100, completed: 200 } },
+      hasActiveTool: true,
+    })
+    expect(settled).toBe(true)
+  })
+
+  test("keeps Generating for a completed tool step without an explicit terminal finish", () => {
+    const settled = terminalAssistantSettlesActivity({
+      statusType: "busy",
+      latestMessage: { role: "assistant", time: { created: 100, completed: 200 } },
       hasActiveTool: true,
     })
     expect(settled).toBe(false)
@@ -203,6 +216,58 @@ describe("terminal activity reconciliation", () => {
         hasPendingPromptDelivery: true,
       }),
     ).toBe(true)
+  })
+
+  test("clears submit preflight when its exact turn finishes without exposing a busy frame", () => {
+    const user = { id: "msg_user", role: "user", time: { created: 100 } }
+    const targetTerminal = terminalAssistantSettlesLatestTurn({
+      latestUser: user,
+      latestMessage: {
+        id: "msg_assistant",
+        parentID: user.id,
+        role: "assistant",
+        finish: "stop",
+        time: { created: 110, completed: 200 },
+      },
+    })
+    expect(
+      shouldClearSubmitPreflight({
+        active: true,
+        hasSession: true,
+        statusType: "idle",
+        targetTerminal,
+      }),
+    ).toBe(true)
+    expect(
+      shouldKeepWorkingStatus({
+        statusType: "idle",
+        submitPreflightActive: false,
+        terminalAssistant: false,
+      }),
+    ).toBe(false)
+  })
+
+  test("keeps submit preflight when only an older turn has a terminal receipt", () => {
+    expect(
+      terminalAssistantSettlesLatestTurn({
+        latestUser: { id: "msg_new", role: "user", time: { created: 300 } },
+        latestMessage: {
+          id: "msg_assistant",
+          parentID: "msg_old",
+          role: "assistant",
+          finish: "stop",
+          time: { created: 100, completed: 200 },
+        },
+      }),
+    ).toBe(false)
+    expect(
+      shouldClearSubmitPreflight({
+        active: true,
+        hasSession: true,
+        statusType: "idle",
+        targetTerminal: false,
+      }),
+    ).toBe(false)
   })
 })
 
@@ -1026,6 +1091,22 @@ describe("resolveWorkingStartedAt", () => {
     expect(sessionInterruptHint({ enabled: true, working: true, armed: true })).toBe("[esc again to interrupt]")
     expect(sessionInterruptHint({ enabled: false, working: true, armed: true })).toBeUndefined()
     expect(sessionInterruptHint({ enabled: true, working: false, armed: true })).toBeUndefined()
+    expect(sessionInterruptConfirmationAction({ hasActiveTurn: true })).toBe("arm")
+    expect(
+      sessionInterruptConfirmationAction({
+        hasActiveTurn: true,
+        armedTargetMessageID: "__mendcode_session_interrupt__",
+      }),
+    ).toBe("interrupt")
+  })
+
+  test("keeps the emergency Esc path for an unfinished legacy assistant receipt", () => {
+    expect(sessionHasUnfinishedAssistant([])).toBe(false)
+    expect(sessionHasUnfinishedAssistant([{ role: "assistant", time: {} }])).toBe(true)
+    expect(
+      sessionHasUnfinishedAssistant([{ role: "assistant", error: { name: "MessageAbortedError" }, time: {} }]),
+    ).toBe(false)
+    expect(sessionHasUnfinishedAssistant([{ role: "assistant", time: { completed: 1 } }])).toBe(false)
   })
 
   test("re-arms Esc after cancellation confirmation or turn promotion", () => {

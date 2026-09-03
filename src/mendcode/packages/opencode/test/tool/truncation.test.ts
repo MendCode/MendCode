@@ -10,6 +10,7 @@ import path from "path"
 import { testEffect } from "../lib/effect"
 import { writeFileStringScoped } from "../lib/filesystem"
 import { TestConfig } from "../fixture/config"
+import { utimes } from "fs/promises"
 
 const FIXTURES_DIR = path.join(import.meta.dir, "fixtures")
 const ROOT = path.resolve(import.meta.dir, "..", "..")
@@ -263,6 +264,9 @@ describe("Truncate", () => {
 
         yield* writeFileStringScoped(old, "old content")
         yield* writeFileStringScoped(recent, "recent content")
+        const now = Date.now()
+        yield* Effect.promise(() => utimes(old, new Date(now - 2 * DAY_MS), new Date(now - 2 * DAY_MS)))
+        yield* Effect.promise(() => utimes(recent, new Date(now - 12 * 60 * 60 * 1000), new Date(now - 12 * 60 * 60 * 1000)))
         yield* svc.cleanup()
 
         expect(yield* fs.exists(old)).toBe(false)

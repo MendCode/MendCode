@@ -1006,11 +1006,14 @@ it.live("session.processor effect tests keep permission toolcalls pending across
 
         yield* Effect.sleep("650 millis")
         const requests = yield* permission.list()
+        const latestCall = MessageV2.parts(msg.id).find(
+          (part): part is MessageV2.ToolPart => part.type === "tool" && part.callID === call?.callID,
+        )
 
         expect(yield* llm.calls).toBe(1)
         expect(requests.some((request) => request.tool?.callID === call?.callID)).toBe(true)
-        expect(call?.tool).toBe("bash")
-        expect(call?.state.status).toBe("running")
+        expect(latestCall?.tool).toBe("bash")
+        expect(latestCall?.state.status).toBe("running")
         yield* Fiber.interrupt(pending)
         yield* Fiber.interrupt(run)
       }),
@@ -1782,7 +1785,7 @@ it.live("session.processor effect tests mark pending tools as aborted on cleanup
             await Bun.sleep(10)
           }
         })
-        controller.abort()
+        controller.abort("user")
         yield* Fiber.interrupt(run)
 
         const exit = yield* Fiber.await(run)
@@ -2021,7 +2024,7 @@ it.live("session.processor effect tests record aborted errors and idle state", (
           .pipe(Effect.forkChild)
 
         yield* llm.wait(1)
-        controller.abort()
+        controller.abort("user")
         yield* Fiber.interrupt(run)
 
         const exit = yield* Fiber.await(run)
@@ -2059,10 +2062,12 @@ it.live("session.processor effect tests do not mark interruptions aborted withou
         const parent = yield* user(chat.id, "interrupt")
         const msg = yield* assistant(chat.id, parent.id, path.resolve(dir))
         const mdl = yield* provider.getModel(ref.providerID, ref.modelID)
+        const controller = new AbortController()
         const handle = yield* processors.create({
           assistantMessage: msg,
           sessionID: chat.id,
           model: mdl,
+          abort: controller.signal,
         })
 
         const run = yield* handle
@@ -2085,6 +2090,7 @@ it.live("session.processor effect tests do not mark interruptions aborted withou
           .pipe(Effect.forkChild)
 
         yield* llm.wait(1)
+        controller.abort(new DOMException("transport stream closed", "AbortError"))
         yield* Fiber.interrupt(run)
 
         const exit = yield* Fiber.await(run)

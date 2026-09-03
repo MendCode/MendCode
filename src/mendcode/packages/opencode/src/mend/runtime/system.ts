@@ -3,6 +3,12 @@ import { existsSync, readdirSync, readFileSync, statSync } from "fs"
 import { mkdir, readFile, writeFile } from "fs/promises"
 import { homedir, tmpdir } from "os"
 import path from "path"
+import {
+  GLOBAL_LAYOUT_MIGRATION_DONE_BASENAME,
+  globalLayoutInstallSelectionPath,
+  readGlobalLayoutInstallSelection,
+  resolveActiveAppSegment,
+} from "@mendcode/core/global-layout"
 import { resolveGlobalModelsConfigPath } from "../config/models"
 import { mendPaths, resolveMendProjectRoot } from "../config/paths"
 import { mendRuntimeVersion } from "./version"
@@ -11,7 +17,6 @@ const DONOR_COMMAND_OVERRIDE_ENV = "MENDCODE_ALLOW_DONOR_COMMANDS"
 const SOURCE_RUNTIME_OVERRIDE_ENV = "MENDCODE_USE_SOURCE_RUNTIME"
 const RUNTIME_BINARY_OVERRIDE_ENV = "MENDCODE_RUNTIME_BINARY"
 const BASELINE_OPENCODE_COMMIT = "aa3c99a3c0a609ea4dd485355627e3161251584a"
-const GLOBAL_LAYOUT_MIGRATION_DONE_BASENAME = ".mendcode-global-layout-v0.done"
 const JSON_STORAGE_MIGRATION_DONE_BASENAME = ".mendcode-json-storage-migration-v0.done"
 
 async function readJson<T>(file: string, fallback: T): Promise<T> {
@@ -400,31 +405,10 @@ function globalLayoutRootsForSegment(segment: string) {
   return { dataDir, cacheDir, configDir, stateDir, tmpDir, binDir: path.join(cacheDir, "bin"), logDir: path.join(dataDir, "log") }
 }
 
-function legacyDataHasIdentityArtifacts(legacyDataDir: string) {
-  let names: string[] = []
-  try {
-    names = readdirSync(legacyDataDir)
-  } catch {
-    return false
-  }
-  return names.some((name) => name === "storage" || name === "auth.json" || name === "mcp-auth.json" || name.endsWith(".db") || name === JSON_STORAGE_MIGRATION_DONE_BASENAME || name === GLOBAL_LAYOUT_MIGRATION_DONE_BASENAME)
-}
-
-function resolveEffectiveXdgAppSegment() {
-  const raw = mendOrOpenEnv("OPENCODE_GLOBAL_LAYOUT")?.trim().toLowerCase()
-  if (raw === "legacy") return "opencode"
-  if (raw === "mendcode") return "mendcode"
-  const mend = globalLayoutRootsForSegment("mendcode")
-  const legacy = globalLayoutRootsForSegment("opencode")
-  if (existsSync(path.join(mend.dataDir, GLOBAL_LAYOUT_MIGRATION_DONE_BASENAME))) return "mendcode"
-  if (legacyDataHasIdentityArtifacts(legacy.dataDir)) return "opencode"
-  return "mendcode"
-}
-
 function donorRuntimeGlobalDataReport(root = mendPaths().root) {
   const legacy = globalLayoutRootsForSegment("opencode")
   const mend = globalLayoutRootsForSegment("mendcode")
-  const effectiveSeg = resolveEffectiveXdgAppSegment()
+  const effectiveSeg = resolveActiveAppSegment()
   const active = effectiveSeg === "mendcode" ? mend : legacy
   const jsonMigrationDonePath = path.join(active.dataDir, JSON_STORAGE_MIGRATION_DONE_BASENAME)
   const globalLayoutDoneLegacy = path.join(legacy.dataDir, GLOBAL_LAYOUT_MIGRATION_DONE_BASENAME)
@@ -432,7 +416,9 @@ function donorRuntimeGlobalDataReport(root = mendPaths().root) {
   return {
     effectiveXdgAppSegment: effectiveSeg,
     globalLayoutPhase: "B1-runtime",
-    globalLayoutNote: "Segment = mend when marker exists under mend data, OPENCODE_GLOBAL_LAYOUT/MENDCODE_GLOBAL_LAYOUT=mendcode|legacy, or auto greenfield (no legacy identity artifacts). Restart after copying legacy data into the MendCode layout.",
+    globalLayoutNote: "Segment = explicit env, then MendCode installer selection, then migration marker, then legacy-compatible auto detection.",
+    globalLayoutInstallSelectionPath: globalLayoutInstallSelectionPath(),
+    globalLayoutInstallSelection: readGlobalLayoutInstallSelection() ?? null,
     legacySegment: legacy,
     mendSegment: mend,
     globalLayoutMigrationDoneBasename: GLOBAL_LAYOUT_MIGRATION_DONE_BASENAME,

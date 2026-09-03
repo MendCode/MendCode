@@ -1468,7 +1468,7 @@ it.live("wakes an async parent by default for a background task", () =>
         background: true,
         result: { summary: "Cache is healthy." },
       })
-      yield* Effect.sleep(500)
+      yield* llm.wait(2).pipe(Effect.timeout("2 seconds"))
       off()
 
       expect(ownerWakeIDs).toHaveLength(1)

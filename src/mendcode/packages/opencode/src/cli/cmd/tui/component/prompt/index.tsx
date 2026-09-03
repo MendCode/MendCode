@@ -119,6 +119,7 @@ import {
   isAssistantWorking,
   knownAgentActivityConnectionLabel,
   terminalAssistantSettlesActivity,
+  terminalAssistantSettlesLatestTurn,
   SESSION_AGENT_STATE_UNKNOWN_MESSAGE,
   displayConnectionStatus,
   retryStatusMessage,
@@ -309,8 +310,6 @@ type PendingPromptDelivery = {
 const pendingPromptDeliveries = new Map<string, PendingPromptDelivery>()
 // In-flight cancellation must not make a newly submitted prompt render as queued.
 const pendingPromptDeliveryInFlightBySession = new Map<string, Set<string>>()
-const pendingPromptDeliveryDispatchKeys = new Set<string>()
-const promptDeliveryTailBySession = new Map<string, Promise<void>>()
 const latestPromptDeliveryKeyBySession = new Map<string, string>()
 const cancelledPromptDeliveryKeys = new Set<string>()
 const pendingPromptDeliveryListeners = new Set<() => void>()
@@ -321,53 +320,6 @@ function pendingPromptDeliveryKey(request: PromptAsyncInput) {
 
 function notifyPendingPromptDeliveryListeners() {
   for (const listener of pendingPromptDeliveryListeners) listener()
-}
-
-export function runPromptDeliveryInSessionOrder<T>(sessionID: string, task: () => Promise<T>): Promise<T> {
-  const previous = promptDeliveryTailBySession.get(sessionID) ?? Promise.resolve()
-  const current = previous.then(task, task)
-  const tail = current.then(
-    () => undefined,
-    () => undefined,
-  )
-  promptDeliveryTailBySession.set(sessionID, tail)
-  void tail.finally(() => {
-    if (promptDeliveryTailBySession.get(sessionID) === tail) promptDeliveryTailBySession.delete(sessionID)
-  })
-  return current
-}
-
-function pendingPromptDeliveryAcceptanceState(sessionID: string, messageID: string) {
-  const key = `${sessionID}:${messageID}`
-  if (pendingPromptDeliveries.get(key)?.state === "accepted") return "accepted" as const
-  if (
-    pendingPromptDeliveryDispatchKeys.has(key) ||
-    pendingPromptDeliveryInFlightBySession.get(sessionID)?.has(key) ||
-    pendingPromptDeliveries.has(key)
-  )
-    return "waiting" as const
-  return "missing" as const
-}
-
-export function waitForPendingPromptDeliveryReady(sessionID: string, messageID: string, timeoutMs = 5_000) {
-  return new Promise<boolean>((resolve) => {
-    let settled = false
-    let unsubscribe = () => {}
-    const finish = (ready: boolean) => {
-      if (settled) return
-      settled = true
-      clearTimeout(timer)
-      unsubscribe()
-      resolve(ready)
-    }
-    const inspect = () => {
-      const state = pendingPromptDeliveryAcceptanceState(sessionID, messageID)
-      if (state === "accepted" || state === "missing") finish(true)
-    }
-    const timer = setTimeout(() => finish(false), timeoutMs)
-    unsubscribe = subscribePendingPromptDeliveries(inspect)
-    inspect()
-  })
 }
 
 export function promptDeliveryIsQueued(state: "pending" | "accepted", queuedBehindActiveTurn = false) {
@@ -569,12 +521,11 @@ function settlePendingPromptDelivery(request: PromptAsyncInput) {
 function cancelPendingPromptDeliveryKey(sessionID: string, key: string) {
   const inFlight = pendingPromptDeliveryInFlightBySession.get(sessionID)
   const wasInFlight = inFlight?.delete(key) ?? false
-  const wasQueuedForDispatch = pendingPromptDeliveryDispatchKeys.delete(key)
   if (inFlight && inFlight.size === 0) pendingPromptDeliveryInFlightBySession.delete(sessionID)
   const removed = pendingPromptDeliveries.delete(key)
   if (latestPromptDeliveryKeyBySession.get(sessionID) === key) latestPromptDeliveryKeyBySession.delete(sessionID)
-  if (wasInFlight || wasQueuedForDispatch) cancelledPromptDeliveryKeys.add(key)
-  if (removed || wasInFlight || wasQueuedForDispatch) notifyPendingPromptDeliveryListeners()
+  if (wasInFlight) cancelledPromptDeliveryKeys.add(key)
+  if (removed || wasInFlight) notifyPendingPromptDeliveryListeners()
 }
 
 export function cancelPendingPromptDelivery(sessionID: string, messageID: string) {
@@ -735,6 +686,23 @@ export function shouldKeepWorkingStatus(input: {
   )
 }
 
+export function shouldClearSubmitPreflight(input: {
+  active: boolean
+  hasSession: boolean
+  statusType: string
+  hasPendingPromptDelivery?: boolean
+  hasActiveWorkingAssistant?: boolean
+  targetTerminal?: boolean
+}) {
+  if (!input.active || !input.hasSession) return false
+  return Boolean(
+    input.statusType !== "idle" ||
+      input.hasPendingPromptDelivery ||
+      input.hasActiveWorkingAssistant ||
+      input.targetTerminal,
+  )
+}
+
 export function promptWorkingIndicatorVisible(input: {
   hasSession: boolean
   submitPreflightActive: boolean
@@ -767,22 +735,6 @@ export function shouldEnableSessionInterrupt(input: {
   return false
 }
 
-export function shouldClearSessionInterruptRequest(input: {
-  requestTargetMessageID: string
-  activeTargetMessageID?: string
-  targetTerminal: boolean
-  sessionSettled: boolean
-  controlState: string
-  controlResult?: string
-}) {
-  const confirmed =
-    input.controlState === "stop_confirmed" &&
-    (input.controlResult === "cancelled" || input.controlResult === "already_terminal")
-  const targetSuperseded =
-    input.activeTargetMessageID !== undefined && input.activeTargetMessageID !== input.requestTargetMessageID
-  return input.targetTerminal || input.sessionSettled || confirmed || targetSuperseded
-}
-
 export function hasInterruptibleSessionTurn(input: {
   statusType: string
   hasDraft?: boolean
@@ -797,12 +749,14 @@ export function hasInterruptibleSessionTurn(input: {
 }
 
 export function sessionInterruptConfirmationAction(input: {
-  sessionID?: string
-  armedSessionID?: string
+  activeTargetMessageID?: string
+  armedTargetMessageID?: string
   hasActiveTurn?: boolean
 }): "ignore" | "arm" | "interrupt" {
-  if (!input.sessionID || !input.hasActiveTurn) return "ignore"
-  return input.armedSessionID === input.sessionID ? "interrupt" : "arm"
+  const activeTargetMessageID =
+    input.activeTargetMessageID ?? (input.hasActiveTurn ? SESSION_INTERRUPT_FALLBACK_TARGET : undefined)
+  if (!activeTargetMessageID) return "ignore"
+  return input.armedTargetMessageID === activeTargetMessageID ? "interrupt" : "arm"
 }
 
 export function sessionInterruptHint(input: { enabled: boolean; working: boolean; armed: boolean }) {
@@ -998,7 +952,7 @@ export function Prompt(props: PromptProps) {
   let interruptRequest: Promise<unknown> | undefined
   let queuedInterruptRequest: { sessionID: string; targetMessageID?: string } | undefined
   let interruptResetTimer: ReturnType<typeof setTimeout> | undefined
-  let interruptArmedSessionID: string | undefined
+  let interruptArmedTargetMessageID: string | undefined
   let autocomplete: AutocompleteRef
   let lastPastedContentClick: { time: number; offset: number } | undefined
 
@@ -1038,6 +992,7 @@ export function Prompt(props: PromptProps) {
   const [dismissedEditorSelectionKey, setDismissedEditorSelectionKey] = createSignal<string>()
   const [promptStatusTick, setPromptStatusTick] = createSignal(Date.now())
   const [pendingPromptDeliveryRevision, setPendingPromptDeliveryRevision] = createSignal(0)
+  const [submitPreflightMessageID, setSubmitPreflightMessageID] = createSignal<string>()
   const [workingTick, setWorkingTick] = createSignal(Date.now())
   const [workingStartedAt, setWorkingStartedAt] = createSignal<number>()
   const [submitPreflightActive, setSubmitPreflightActive] = createSignal(false)
@@ -1177,16 +1132,21 @@ export function Prompt(props: PromptProps) {
     pendingPromptDeliveryRevision()
     return Boolean(props.sessionID && pendingPromptDeliveryIsActive(props.sessionID))
   })
-  const terminalAssistantSupersedesBusy = createMemo(() => {
-    const current = status()
+  const terminalActivitySnapshot = createMemo(() => {
     const messages = messagesForActivity()
     const latestAssistant = messages.findLast((message) => message.role === "assistant")
+    const latestUser = messages.findLast((message) => message.role === "user")
     const hasActiveTool = latestAssistant
       ? (sync.data.part[latestAssistant.id] ?? []).some((part) => {
           const raw = part as Record<string, any>
           return raw.type === "tool" && (raw.state?.status === "pending" || raw.state?.status === "running")
         })
       : false
+    return { latestAssistant, latestUser, hasActiveTool }
+  })
+  const terminalAssistantSupersedesBusy = createMemo(() => {
+    const current = status()
+    const snapshot = terminalActivitySnapshot()
     return terminalAssistantSettlesActivity({
       statusType: current.type,
       statusKind: current.type === "busy" ? current.kind : undefined,
@@ -1194,9 +1154,26 @@ export function Prompt(props: PromptProps) {
       // A queued user message or late tool event can be the last item even
       // after the assistant response is terminal. Reconcile against the
       // latest assistant, not the last heterogeneous timeline item.
-      latestMessage: latestAssistant,
-      hasActiveTool,
+      latestMessage: snapshot.latestAssistant,
+      latestUser: snapshot.latestUser,
+      hasActiveTool: snapshot.hasActiveTool,
     })
+  })
+  const submitPreflightSettled = createMemo(() => {
+    const targetMessageID = submitPreflightMessageID()
+    if (!targetMessageID) return false
+    const messages = messagesForActivity()
+    const latestUser = messages.findLast((message) => message.role === "user" && message.id === targetMessageID)
+    const latestAssistant = messages.findLast(
+      (message) => message.role === "assistant" && message.parentID === targetMessageID,
+    )
+    const hasActiveTool = latestAssistant
+      ? (sync.data.part[latestAssistant.id] ?? []).some((part) => {
+          const raw = part as Record<string, any>
+          return raw.type === "tool" && (raw.state?.status === "pending" || raw.state?.status === "running")
+        })
+      : false
+    return terminalAssistantSettlesLatestTurn({ latestMessage: latestAssistant, latestUser, hasActiveTool })
   })
   const workingStatusActive = createMemo(() =>
     shouldKeepWorkingStatus({
@@ -1215,9 +1192,19 @@ export function Prompt(props: PromptProps) {
       workingStatusActive() && (hasActiveWorkingAssistant() || compactionActive() || Boolean(props.permissionPending)),
   )
   createEffect(() => {
-    if (!submitPreflightActive() || !props.sessionID) return
-    if (status().type === "idle" && !hasPendingPromptDelivery() && !hasActiveWorkingAssistant()) return
+    if (
+      !shouldClearSubmitPreflight({
+        active: submitPreflightActive(),
+        hasSession: Boolean(props.sessionID),
+        statusType: status().type,
+        hasPendingPromptDelivery: hasPendingPromptDelivery(),
+        hasActiveWorkingAssistant: hasActiveWorkingAssistant(),
+        targetTerminal: submitPreflightSettled(),
+      })
+    )
+      return
     setSubmitPreflightActive(false)
+    setSubmitPreflightMessageID(undefined)
   })
   const connectionStateMessage = createMemo(() => {
     if (
@@ -1236,23 +1223,13 @@ export function Prompt(props: PromptProps) {
     const targetMessageID = interruptTargetMessageID()
     if (!sessionID || !interruptRequested() || !targetMessageID) return
     const control = sessionControl.status(sessionID)
-    const activeTargetMessageID = activeTurnTargetMessageID()
     const targetTerminal = messagesForActivity().some(
       (message) =>
         message.role === "assistant" && message.parentID === targetMessageID && message.time.completed !== undefined,
     )
+    const rejected = control.state === "stop_confirmed" && control.result !== "cancelled"
     const sessionSettled = status().type === "idle" && !hasActiveWorkingAssistant() && !hasPendingPromptDelivery()
-    if (
-      shouldClearSessionInterruptRequest({
-        requestTargetMessageID: targetMessageID,
-        activeTargetMessageID,
-        targetTerminal,
-        sessionSettled,
-        controlState: control.state,
-        controlResult: control.state === "stop_confirmed" ? control.result : undefined,
-      })
-    )
-      updateInterruptRequested(false)
+    if (targetTerminal || rejected || sessionSettled) updateInterruptRequested(false)
   })
   onCleanup(() => {
     if (clearWorkingStartTimer) clearTimeout(clearWorkingStartTimer)
@@ -1741,12 +1718,25 @@ export function Prompt(props: PromptProps) {
     interrupt: 0,
   })
   function resetInterruptConfirmation() {
-    interruptArmedSessionID = undefined
+    interruptArmedTargetMessageID = undefined
     setStore("interrupt", 0)
     if (!interruptResetTimer) return
     clearTimeout(interruptResetTimer)
     interruptResetTimer = undefined
   }
+  createEffect(() => {
+    if (store.interrupt === 0) return
+    const activeTargetMessageID =
+      workingStatusActive() || hasOrphanedAssistant() || hasPendingPromptDelivery()
+        ? activeTurnTargetMessageID()
+        : undefined
+    if (
+      activeTargetMessageID === interruptArmedTargetMessageID ||
+      (!activeTargetMessageID && interruptArmedTargetMessageID === SESSION_INTERRUPT_FALLBACK_TARGET)
+    )
+      return
+    resetInterruptConfirmation()
+  })
   const currentMessageHistoryPrompt = createMemo(() =>
     messageHistoryIndex() === 0 ? undefined : messageHistoryItems().at(messageHistoryIndex()),
   )
@@ -1896,8 +1886,8 @@ export function Prompt(props: PromptProps) {
           if (!props.sessionID) return
           const targetMessageID = activeTurnTargetMessageID()
           const action = sessionInterruptConfirmationAction({
-            sessionID: props.sessionID,
-            armedSessionID: interruptArmedSessionID,
+            activeTargetMessageID: targetMessageID,
+            armedTargetMessageID: interruptArmedTargetMessageID,
             hasActiveTurn,
           })
           if (action === "ignore") return
@@ -1909,7 +1899,7 @@ export function Prompt(props: PromptProps) {
             return
           }
 
-          interruptArmedSessionID = props.sessionID
+          interruptArmedTargetMessageID = targetMessageID ?? SESSION_INTERRUPT_FALLBACK_TARGET
           setStore("interrupt", 1)
           if (interruptResetTimer) clearTimeout(interruptResetTimer)
           interruptResetTimer = setTimeout(() => {
@@ -2385,6 +2375,7 @@ export function Prompt(props: PromptProps) {
     submitPending = false
     if (submitPreflightActive()) setWorkingStartedAt(undefined)
     setSubmitPreflightActive(false)
+    setSubmitPreflightMessageID(undefined)
     suppressPromptInputSync = true
     input.setText(prompt.input)
     input.cursorOffset = prompt.input.length
@@ -2440,9 +2431,9 @@ export function Prompt(props: PromptProps) {
       .catch(() => undefined)
       .finally(() => {
         interruptRequest = undefined
-        const replay = queuedInterruptRequest
+        const queued = queuedInterruptRequest
         queuedInterruptRequest = undefined
-        if (!promptDisposed && replay) abortSession(replay.sessionID, replay.targetMessageID)
+        if (queued) abortSession(queued.sessionID, queued.targetMessageID)
       })
   }
 
@@ -2523,13 +2514,17 @@ export function Prompt(props: PromptProps) {
     })
   }
 
-  async function deliverPromptNow(
+  async function deliverPrompt(
     request: PromptAsyncInput,
     options?: { retry?: boolean; notify?: boolean; forceAccepted?: boolean; queuedBehindActiveTurn?: boolean },
   ) {
     const retry = options?.retry === true
     const forceAccepted = options?.forceAccepted === true
     const deliveryKey = pendingPromptDeliveryKey(request)
+    if (!retry) {
+      cancelledPromptDeliveryKeys.delete(deliveryKey)
+      latestPromptDeliveryKeyBySession.set(request.sessionID, deliveryKey)
+    }
     beginPendingPromptDelivery(request)
     try {
       if (cancelledPromptDeliveryKeys.has(deliveryKey)) return
@@ -2592,22 +2587,6 @@ export function Prompt(props: PromptProps) {
     } finally {
       endPendingPromptDelivery(request)
     }
-  }
-
-  function deliverPrompt(
-    request: PromptAsyncInput,
-    options?: { retry?: boolean; notify?: boolean; forceAccepted?: boolean; queuedBehindActiveTurn?: boolean },
-  ) {
-    const deliveryKey = pendingPromptDeliveryKey(request)
-    if (options?.retry !== true) {
-      cancelledPromptDeliveryKeys.delete(deliveryKey)
-      latestPromptDeliveryKeyBySession.set(request.sessionID, deliveryKey)
-    }
-    pendingPromptDeliveryDispatchKeys.add(deliveryKey)
-    notifyPendingPromptDeliveryListeners()
-    return runPromptDeliveryInSessionOrder(request.sessionID, () => deliverPromptNow(request, options)).finally(() => {
-      if (pendingPromptDeliveryDispatchKeys.delete(deliveryKey)) notifyPendingPromptDeliveryListeners()
-    })
   }
 
   async function retryPendingPromptDeliveries(input?: { forceAccepted?: boolean }) {
@@ -2792,7 +2771,6 @@ export function Prompt(props: PromptProps) {
     const submittedPrompt = promptSubmitParts(promptSnapshot)
     const queuedBehindActiveTurn = workingStatusActive()
     const submissionStartedAt = Date.now()
-    resetInterruptConfirmation()
     submitPending = true
     updateInterruptRequested(false)
     const modelConfig = await readModelsConfig(mend.root).catch(() => undefined)
@@ -2976,6 +2954,7 @@ export function Prompt(props: PromptProps) {
     // virtualization never resolves an intermediate frame from stale scrollTop.
     batch(() => {
       setSubmitPreflightActive(true)
+      setSubmitPreflightMessageID(messageID)
       if (!queuedBehindActiveTurn) {
         workingStartedAtBySession.set(sessionID, submissionStartedAt)
         setWorkingStartedAt(submissionStartedAt)
@@ -3756,11 +3735,7 @@ export function Prompt(props: PromptProps) {
     return (sync.data.part[active.id] ?? []).some((part) => (part as Record<string, unknown>).type === "text")
   })
   const effectiveConnectionStatus = createMemo(() => {
-    const connection = sdk.connection
-    if (workingStatusActive() && connection.status === "connected" && connection.recoveringSince) {
-      return "reconnecting" as const
-    }
-    return connection.status
+    return displayConnectionStatus(sdk.connection)
   })
   const activityPhase = createMemo(() => {
     const currentStatus = status()
@@ -3894,9 +3869,12 @@ export function Prompt(props: PromptProps) {
   const workingConnectionMessage = createMemo(() => {
     const connection = sdk.connection
     const effectiveStatus = effectiveConnectionStatus()
-    if (effectiveStatus === "connecting") return "connecting to MendCode backend..."
-    if (effectiveStatus === "reconnecting")
-      return `retrying MendCode backend${connection.attempt > 1 ? ` #${connection.attempt}` : ""}...`
+    const connectionLabel = knownAgentActivityConnectionLabel({
+      connectionStatus: effectiveStatus,
+      hasKnownAgentActivity: true,
+      attempt: connection.attempt,
+    })
+    if (connectionLabel) return connectionLabel
     if (effectiveStatus === "failed") return `MendCode backend unavailable after ${connection.attempt} retries`
     if (effectiveStatus === "disconnected") return "MendCode backend disconnected"
 

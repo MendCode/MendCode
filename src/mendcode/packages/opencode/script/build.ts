@@ -63,8 +63,12 @@ const plugin = createSolidTransformPlugin()
 const skipEmbedWebUi = process.argv.includes("--skip-embed-web-ui")
 
 const createEmbeddedWebUIBundle = async () => {
-  console.log(`Building Web UI to embed in the binary`)
   const appDir = path.join(import.meta.dirname, "../../app")
+  if (!fs.existsSync(path.join(appDir, "package.json"))) {
+    console.log(`Skipping embedded Web UI because packages/app is not present`)
+    return null
+  }
+  console.log(`Building Web UI to embed in the binary`)
   const dist = path.join(appDir, "dist")
   await $`bun run --cwd ${appDir} build`
   const files = (await Array.fromAsync(new Bun.Glob("**/*").scan({ cwd: dist })))
@@ -227,7 +231,7 @@ for (const item of targets) {
       windows:
         item.os === "win32"
           ? {
-              icon: path.resolve(dir, "../ui/src/assets/favicon/favicon.ico"),
+              icon: path.resolve(dir, "../ui/src/assets/favicon/mendcode.ico"),
               title: "MendCode",
               publisher: "MendCode",
               description: "MendCode AI coding terminal",

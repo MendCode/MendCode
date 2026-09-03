@@ -630,7 +630,7 @@ export const layer = Layer.effect(
           before: Effect.gen(function* () {
             const orphanedAssistant = yield* findOrphanedAssistantOnCancel(sessionID)
             if (Option.isSome(orphanedAssistant)) interruptedAssistantID = orphanedAssistant.value.info.id
-            controller?.abort()
+            controller?.abort("user")
           }),
         })
         .pipe(
@@ -670,7 +670,7 @@ export const layer = Layer.effect(
                 !msg.info.time.completed,
             )
             if (Option.isSome(orphanedAssistant)) interruptedAssistantID = orphanedAssistant.value.info.id
-            if (active?.targetMessageID === input.targetMessageID) active.controller.abort()
+            if (active?.targetMessageID === input.targetMessageID) active.controller.abort("user")
           }),
         })
         .pipe(
@@ -1838,7 +1838,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
             promptAbortReasons.set(sessionID, "user")
             const orphanedAssistant = yield* findOrphanedAssistantOnCancel(sessionID)
             if (Option.isSome(orphanedAssistant)) interruptedAssistantID = orphanedAssistant.value.info.id
-            promptAbortControllers.get(sessionID)?.controller.abort()
+            promptAbortControllers.get(sessionID)?.controller.abort("user")
           }),
           after: Effect.gen(function* () {
             if (interruptedAssistantID)
@@ -3006,7 +3006,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                   promptAbortReasons.set(input.sessionID, "user")
                   const orphanedAssistant = yield* findOrphanedAssistantOnCancel(input.sessionID)
                   if (Option.isSome(orphanedAssistant)) interruptedAssistantID = orphanedAssistant.value.info.id
-                  promptAbortControllers.get(input.sessionID)?.controller.abort()
+                  promptAbortControllers.get(input.sessionID)?.controller.abort("user")
                 }),
                 after: Effect.gen(function* () {
                   if (interruptedAssistantID)

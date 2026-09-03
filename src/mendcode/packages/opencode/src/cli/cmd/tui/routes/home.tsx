@@ -287,6 +287,42 @@ export function mergeAgentViewAggregateFallback<T extends { sessionID: string; s
   return [...merged, ...fallback.filter((item) => !primary.some((current) => current.sessionID === item.sessionID))]
 }
 
+export function mergeAgentViewSessionFallback(input: {
+  primary: readonly BackgroundSessionInfo[]
+  sessions: readonly Session[]
+  statuses: Readonly<Record<string, SessionStatus | undefined>>
+}) {
+  const existing = new Set(input.primary.map((item) => item.sessionID))
+  const fallback = input.sessions
+    .filter((session) => !session.parentID && !existing.has(session.id))
+    .map((session): BackgroundSessionInfo => {
+      const status = input.statuses[session.id]
+      const state = status?.type === "retry" ? "needs_input" : status?.type === "busy" ? "working" : "completed"
+      return {
+        sessionID: session.id,
+        state,
+        summary: status?.type === "retry" ? status.message : session.path || session.directory || state,
+        pinned: false,
+        time: {
+          created: session.time.created,
+          updated: session.time.updated,
+        },
+        session: {
+          id: session.id,
+          title: session.title,
+          directory: session.directory,
+          path: session.path,
+          agent: session.agent,
+          time: {
+            created: session.time.created,
+            updated: session.time.updated,
+          },
+        },
+      }
+    })
+  return [...input.primary, ...fallback]
+}
+
 export function homeSplitLogoMaxWidth(input: {
   terminalWidth: number
   split: boolean
@@ -917,7 +953,11 @@ export function HomeSurface(props: {
     const byID = new Map<string, Session>()
     for (const session of globalSessions()) byID.set(session.id, session)
     for (const session of sync.data.session) byID.set(session.id, session)
-    const backgroundItems = globalBackgroundSessions()
+    const backgroundItems = mergeAgentViewSessionFallback({
+      primary: globalBackgroundSessions(),
+      sessions: [...byID.values()],
+      statuses: agentViewStatuses(),
+    })
       .map((background) => {
         const loopWorkflow = loopWorkflowForSession(background.sessionID)
         const session = byID.get(background.sessionID)

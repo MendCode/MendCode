@@ -17,19 +17,20 @@ import {
 } from "@/cli/cmd/tui/util/session-working"
 
 describe("displayConnectionStatus", () => {
-  test("labels a connected transport that is still recovering", () => {
-    expect(displayConnectionStatus({ status: "connected", recoveringSince: 123 })).toBe("reconnecting")
+  test("does not label snapshot reconciliation as a transport reconnect", () => {
+    expect(displayConnectionStatus({ status: "connected", recoveringSince: 123 })).toBe("connected")
     expect(displayConnectionStatus({ status: "connected" })).toBe("connected")
+    expect(displayConnectionStatus({ status: "reconnecting", recoveringSince: 123 })).toBe("reconnecting")
     expect(displayConnectionStatus({ status: "failed", recoveringSince: 123 })).toBe("failed")
   })
 })
 
 describe("retryStatusMessage", () => {
   test("identifies provider network retries in the activity line", () => {
-    expect(retryStatusMessage("Network connection lost")).toBe("retrying AI backend: Network connection lost")
-    expect(retryStatusMessage("TypeError: Failed to fetch")).toBe("retrying AI backend: TypeError: Failed to fetch")
-    expect(retryStatusMessage("Provider is overloaded")).toBe("Provider is overloaded")
-    expect(retryStatusMessage()).toBe("retrying AI backend")
+    expect(retryStatusMessage("Network connection lost")).toBe("Retrying provider… Network connection lost")
+    expect(retryStatusMessage("TypeError: Failed to fetch")).toBe("Retrying provider… TypeError: Failed to fetch")
+    expect(retryStatusMessage("Provider is overloaded")).toBe("Retrying provider… Provider is overloaded")
+    expect(retryStatusMessage()).toBe("Retrying provider…")
   })
 })
 
@@ -207,7 +208,14 @@ describe("isAssistantWorking", () => {
 })
 
 describe("terminal busy reconciliation", () => {
-  const terminal = { role: "assistant", finish: "stop", time: { created: 200, completed: 300 } }
+  const user = { id: "msg_user", role: "user", time: { created: 100 } }
+  const terminal = {
+    id: "msg_assistant",
+    parentID: user.id,
+    role: "assistant",
+    finish: "stop",
+    time: { created: 200, completed: 300 },
+  }
 
   test("suppresses only a busy status that predates the terminal assistant", () => {
     expect(
@@ -284,12 +292,43 @@ describe("terminal busy reconciliation", () => {
     ).toBe(true)
   })
 
-  test("keeps the activity indicator when the terminal-looking response still owns a running tool", () => {
+  test("clears a reconstructed busy status newer than the terminal receipt when no later user turn exists", () => {
+    expect(
+      terminalAssistantSettlesActivity({
+        statusType: "busy",
+        statusStartedAt: 400,
+        latestMessage: terminal,
+        latestUser: user,
+      }),
+    ).toBe(true)
+    expect(
+      terminalAssistantSettlesActivity({
+        statusType: "busy",
+        statusStartedAt: 400,
+        latestMessage: terminal,
+        latestUser: { id: "msg_next", role: "user", time: { created: 500 } },
+      }),
+    ).toBe(false)
+  })
+
+  test("trusts an explicit terminal receipt over a residual active tool part", () => {
     expect(
       terminalAssistantSettlesActivity({
         statusType: "busy",
         statusStartedAt: 100,
         latestMessage: terminal,
+        hasActiveTool: true,
+      }),
+    ).toBe(true)
+  })
+
+  test("keeps a completed assistant active when its tool is live and no explicit finish exists", () => {
+    expect(
+      terminalAssistantSettlesActivity({
+        statusType: "busy",
+        statusStartedAt: 100,
+        latestMessage: { ...terminal, finish: undefined },
+        latestUser: user,
         hasActiveTool: true,
       }),
     ).toBe(false)
@@ -329,7 +368,7 @@ describe("shouldShowAgentStateUnknown", () => {
         hasKnownAgentActivity: true,
         attempt: 2,
       }),
-    ).toBe("syncing connection #2...")
+    ).toBe("Reconnecting to backend… (#2)")
   })
 
   test("does not claim known activity after a hard disconnect", () => {

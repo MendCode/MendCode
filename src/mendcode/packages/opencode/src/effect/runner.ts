@@ -190,39 +190,14 @@ export const make = <A, E = never>(
       discard: true,
     })
 
-  const promoteAfterInterrupt = (id: number): Effect.Effect<void> =>
-    SynchronizedRef.modifyEffect(ref, (st) =>
-      Effect.gen(function* () {
-        if (st._tag === "Running" && st.run.id === id) return [idle, { _tag: "Idle" } as const] as const
-        if (st._tag !== "RunningThenRun" || st.run.id !== id) return [Effect.void, st] as const
-
-        const [next, ...remaining] = st.next
-        if (!next) return [idle, { _tag: "Idle" } as const] as const
-        const run = yield* startRun(next.work, next.done, next.key)
-        return [
-          Effect.void,
-          remaining.length ? { _tag: "RunningThenRun", run, next: remaining } : { _tag: "Running", run },
-        ] as const
-      }),
-    ).pipe(Effect.flatten) as Effect.Effect<void>
-
-  const releaseInterruptedRun = (run: RunHandle<A, E>) =>
-    Effect.gen(function* () {
-      yield* Fiber.interrupt(run.fiber).pipe(Effect.timeout(TARGET_CANCEL_FINALIZER_TIMEOUT), Effect.ignore)
-      yield* Deferred.fail(run.done, new Cancelled()).pipe(Effect.asVoid)
-      // If the interrupted fiber is still unwinding, its on-exit hook has not
-      // promoted the queue. Detach that stale run and advance it here.
-      yield* promoteAfterInterrupt(run.id)
-    })
-
   const interruptThenAwait = (
-    run: RunHandle<A, E>,
+    fiber: Fiber.Fiber<A, E>,
     done: Deferred.Deferred<A, E | Cancelled>,
     options: NonNullable<EnsureRunningOptions["interrupt"]>,
   ) =>
     Effect.gen(function* () {
       yield* options.before ?? Effect.void
-      yield* releaseInterruptedRun(run).pipe(Effect.ensuring(options.after ?? Effect.void))
+      yield* Fiber.interrupt(fiber).pipe(Effect.ensuring(options.after ?? Effect.void))
       return yield* awaitDone(done)
     })
 
@@ -243,7 +218,7 @@ export const make = <A, E = never>(
               const next = yield* queueRun(work, options?.queueKey)
               return [
                 st.run.interruptible && options.interrupt
-                  ? interruptThenAwait(st.run, next.done, options.interrupt)
+                  ? interruptThenAwait(st.run.fiber, next.done, options.interrupt)
                   : awaitDone(next.done),
                 { _tag: "RunningThenRun", run: st.run, next: [next] },
               ] as const
@@ -259,7 +234,7 @@ export const make = <A, E = never>(
               const next = yield* queueRun(work, options?.queueKey)
               return [
                 st.run.interruptible && options.interrupt
-                  ? interruptThenAwait(st.run, next.done, options.interrupt)
+                  ? interruptThenAwait(st.run.fiber, next.done, options.interrupt)
                   : awaitDone(next.done),
                 { ...st, next: [...st.next, next] },
               ] as const
@@ -333,10 +308,11 @@ export const make = <A, E = never>(
           return [
             Effect.gen(function* () {
               yield* options?.before ?? Effect.void
-              // Session abort is a control-plane request. A provider or tool
-              // finalizer may keep unwinding, but it must not hold Esc or the
-              // HTTP abort response indefinitely.
-              yield* releaseInterruptedRun(st.run)
+              yield* Fiber.interrupt(st.run.fiber)
+              // The interrupted work normally completes this in finishRun. Close
+              // it here as well so callers cannot hang if cancellation wins the
+              // brief race before the forked work begins its on-exit path.
+              yield* Deferred.fail(st.run.done, new Cancelled()).pipe(Effect.asVoid)
               yield* idleIfCurrent()
             }),
             { _tag: "Idle" } as const,
@@ -346,10 +322,10 @@ export const make = <A, E = never>(
             Effect.gen(function* () {
               if (options?.cancelPending) yield* cancelPendingHandles(st.next)
               yield* options?.before ?? Effect.void
-              yield* releaseInterruptedRun(st.run)
-              if (options?.cancelPending) yield* idleIfCurrent()
+              yield* Fiber.interrupt(st.run.fiber)
+              yield* Deferred.fail(st.run.done, new Cancelled()).pipe(Effect.asVoid)
             }),
-            options?.cancelPending ? ({ _tag: "Idle" } as const) : st,
+            options?.cancelPending ? ({ _tag: "Running", run: st.run } as const) : st,
           ] as const
         case "Shell":
           return [
@@ -392,18 +368,28 @@ export const make = <A, E = never>(
             // finalizer waiting so a stale or huge session cannot make Esc
             // appear dead, while still giving ordinary tool cleanup time to
             // persist the aborted assistant receipt.
-            yield* releaseInterruptedRun(st.run)
-            yield* idleIfCurrent()
+            yield* Fiber.interrupt(st.run.fiber).pipe(Effect.timeout(TARGET_CANCEL_FINALIZER_TIMEOUT), Effect.ignore)
+            // Cancellation is a control-plane operation. Do not wait for a
+            // provider/tool finalizer to resolve the run receipt: an old or
+            // huge session must be stoppable even when that cleanup is slow.
+            yield* Deferred.fail(st.run.done, new Cancelled()).pipe(Effect.asVoid)
             return "cancelled" as const
           }),
-          { _tag: "Idle" } as const,
+          // The control request may acknowledge before cleanup finishes, but
+          // the runner remains authoritative and busy until the interrupted
+          // fiber's exit hook has drained provider/tool finalizers. Publishing
+          // Idle here would let a new turn overlap the old cleanup.
+          st,
         ] as const
       }
       return [
         Effect.gen(function* () {
           if (options?.cancelPending) yield* cancelPendingHandles(st.next)
           yield* options?.before ?? Effect.void
-          yield* releaseInterruptedRun(st.run)
+          yield* Fiber.interrupt(st.run.fiber).pipe(Effect.timeout(TARGET_CANCEL_FINALIZER_TIMEOUT), Effect.ignore)
+          // Resolve the caller immediately; the interrupted fiber's exit
+          // hook may otherwise keep the HTTP cancel request hanging.
+          yield* Deferred.fail(st.run.done, new Cancelled()).pipe(Effect.asVoid)
           return "cancelled" as const
         }),
         options?.cancelPending ? ({ _tag: "Running", run: st.run } as const) : st,
@@ -453,7 +439,7 @@ export const make = <A, E = never>(
   const interruptRun = (run: RunHandle<A, E>, options?: NonNullable<EnsureRunningOptions["interrupt"]>) =>
     Effect.gen(function* () {
       yield* options?.before ?? Effect.void
-      yield* releaseInterruptedRun(run).pipe(Effect.ensuring(options?.after ?? Effect.void))
+      yield* Fiber.interrupt(run.fiber).pipe(Effect.ensuring(options?.after ?? Effect.void))
       yield* Deferred.await(run.done).pipe(Effect.exit, Effect.asVoid)
     })
   const interruptShell = (shell: ShellHandle<A, E>, options?: NonNullable<EnsureRunningOptions["interrupt"]>) =>

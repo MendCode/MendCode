@@ -446,53 +446,6 @@ describe("Runner", () => {
   )
 
   it.live(
-    "interrupt promotes queued work while the old finalizer is still unwinding",
-    Effect.gen(function* () {
-      const s = yield* Scope.Scope
-      const started = yield* Deferred.make<void>()
-      const release = yield* Deferred.make<void>()
-      const queuedStarted = yield* Deferred.make<void>()
-      const runner = Runner.make<string>(s, { onInterrupt: Effect.succeed("fallback") })
-
-      const active = yield* runner
-        .ensureRunning(
-          Effect.gen(function* () {
-            yield* Deferred.succeed(started, undefined)
-            return yield* Effect.never.pipe(Effect.ensuring(Deferred.await(release)), Effect.as("active"))
-          }),
-        )
-        .pipe(Effect.forkChild)
-      try {
-        yield* Deferred.await(started)
-        const queued = yield* runner
-          .ensureRunning(
-            Effect.gen(function* () {
-              yield* Deferred.succeed(queuedStarted, undefined)
-              return "queued"
-            }),
-            { queue: true },
-          )
-          .pipe(Effect.forkChild)
-        yield* Effect.gen(function* () {
-          while (runner.state._tag !== "RunningThenRun") yield* Effect.yieldNow
-        }).pipe(Effect.timeout("250 millis"))
-
-        expect(yield* runner.interruptQueued().pipe(Effect.timeout("1 second"))).toBe(true)
-        yield* Deferred.await(queuedStarted).pipe(Effect.timeout("250 millis"))
-        expect(yield* Fiber.join(active)).toBe("fallback")
-        expect(yield* Fiber.join(queued)).toBe("queued")
-        expect(runner.busy).toBe(false)
-
-        yield* Deferred.succeed(release, undefined)
-        yield* Effect.sleep("10 millis")
-        expect(runner.busy).toBe(false)
-      } finally {
-        yield* Deferred.succeed(release, undefined).pipe(Effect.ignore)
-      }
-    }),
-  )
-
-  it.live(
     "duplicate interrupts remain idempotent after promotion",
     Effect.gen(function* () {
       const s = yield* Scope.Scope
@@ -684,114 +637,40 @@ describe("Runner", () => {
   )
 
   it.live(
-    "cancelCurrentIf returns while a run finalizer is still unwinding",
+    "cancelCurrentIf does not publish idle before cancellation reaches the active run",
     Effect.gen(function* () {
       const s = yield* Scope.Scope
       const started = yield* Deferred.make<void>()
-      const release = yield* Deferred.make<void>()
+      const cancellationStarted = yield* Deferred.make<void>()
+      const releaseCancellation = yield* Deferred.make<void>()
       const runner = Runner.make<string>(s)
       const active = yield* runner
         .ensureRunning(
           Effect.gen(function* () {
             yield* Deferred.succeed(started, undefined)
-            return yield* Effect.never.pipe(Effect.ensuring(Deferred.await(release)), Effect.as("active"))
+            return yield* Effect.never.pipe(Effect.as("active"))
           }),
-          { queueKey: "turn-finalizer" },
+          { queueKey: "turn-cancel" },
         )
         .pipe(Effect.forkChild)
 
-      try {
-        yield* Deferred.await(started)
-        expect(yield* runner.cancelCurrentIf("turn-finalizer").pipe(Effect.timeout("250 millis"))).toBe("cancelled")
-        expect(runner.busy).toBe(false)
-
-        yield* Deferred.succeed(release, undefined)
-        expect(Exit.isFailure(yield* Fiber.await(active).pipe(Effect.timeout("250 millis")))).toBe(true)
-      } finally {
-        yield* Deferred.succeed(release, undefined).pipe(Effect.ignore)
-      }
-    }),
-  )
-
-  it.live(
-    "cancelCurrentIf promotes queued work while the old finalizer is still unwinding",
-    Effect.gen(function* () {
-      const s = yield* Scope.Scope
-      const started = yield* Deferred.make<void>()
-      const release = yield* Deferred.make<void>()
-      const queuedStarted = yield* Deferred.make<void>()
-      const runner = Runner.make<string>(s, { onInterrupt: Effect.succeed("cancelled") })
-      const active = yield* runner
-        .ensureRunning(
-          Effect.gen(function* () {
-            yield* Deferred.succeed(started, undefined)
-            return yield* Effect.never.pipe(Effect.ensuring(Deferred.await(release)), Effect.as("active"))
+      yield* Deferred.await(started)
+      const cancellation = yield* runner
+        .cancelCurrentIf("turn-cancel", {
+          before: Effect.gen(function* () {
+            yield* Deferred.succeed(cancellationStarted, undefined)
+            yield* Deferred.await(releaseCancellation)
           }),
-          { queueKey: "turn-active" },
-        )
+        })
         .pipe(Effect.forkChild)
+      yield* Deferred.await(cancellationStarted)
+      expect(runner.busy).toBe(true)
+      expect(runner.state._tag).toBe("Running")
 
-      try {
-        yield* Deferred.await(started)
-        const queued = yield* runner
-          .ensureRunning(
-            Effect.gen(function* () {
-              yield* Deferred.succeed(queuedStarted, undefined)
-              return "queued"
-            }),
-            { queue: true, queueKey: "turn-queued" },
-          )
-          .pipe(Effect.forkChild)
-        yield* Effect.gen(function* () {
-          while (runner.state._tag !== "RunningThenRun") yield* Effect.yieldNow
-        }).pipe(Effect.timeout("250 millis"))
-
-        expect(yield* runner.cancelCurrentIf("turn-active").pipe(Effect.timeout("1 second"))).toBe("cancelled")
-        yield* Deferred.await(queuedStarted).pipe(Effect.timeout("250 millis"))
-        expect(yield* Fiber.join(active)).toBe("cancelled")
-        expect(yield* Fiber.join(queued)).toBe("queued")
-        expect(runner.busy).toBe(false)
-      } finally {
-        yield* Deferred.succeed(release, undefined).pipe(Effect.ignore)
-      }
-    }),
-  )
-
-  it.live(
-    "hard cancel returns while finalizers unwind and discards queued work",
-    Effect.gen(function* () {
-      const s = yield* Scope.Scope
-      const started = yield* Deferred.make<void>()
-      const release = yield* Deferred.make<void>()
-      const runner = Runner.make<string>(s)
-      const active = yield* runner
-        .ensureRunning(
-          Effect.gen(function* () {
-            yield* Deferred.succeed(started, undefined)
-            return yield* Effect.never.pipe(Effect.ensuring(Deferred.await(release)), Effect.as("active"))
-          }),
-          { queueKey: "turn-active" },
-        )
-        .pipe(Effect.forkChild)
-
-      try {
-        yield* Deferred.await(started)
-        const queued = yield* runner
-          .ensureRunning(Effect.succeed("queued"), { queue: true, queueKey: "turn-queued" })
-          .pipe(Effect.exit, Effect.forkChild)
-        yield* Effect.gen(function* () {
-          while (runner.state._tag !== "RunningThenRun") yield* Effect.yieldNow
-        }).pipe(Effect.timeout("250 millis"))
-
-        yield* runner.cancelCurrent({ cancelPending: true }).pipe(Effect.timeout("1 second"))
-        expect(runner.busy).toBe(false)
-        expect(Exit.isFailure(yield* Fiber.join(queued).pipe(Effect.timeout("250 millis")))).toBe(true)
-
-        yield* Deferred.succeed(release, undefined)
-        expect(Exit.isFailure(yield* Fiber.await(active).pipe(Effect.timeout("250 millis")))).toBe(true)
-      } finally {
-        yield* Deferred.succeed(release, undefined).pipe(Effect.ignore)
-      }
+      yield* Deferred.succeed(releaseCancellation, undefined)
+      expect(yield* Fiber.join(cancellation).pipe(Effect.timeout("750 millis"))).toBe("cancelled")
+      expect(Exit.isFailure(yield* Fiber.await(active).pipe(Effect.timeout("250 millis")))).toBe(true)
+      expect(runner.busy).toBe(false)
     }),
   )
 

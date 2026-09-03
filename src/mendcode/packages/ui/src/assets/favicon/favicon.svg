@@ -1,7 +1,8 @@
-<svg xmlns="http://www.w3.org/2000/svg" version="1.1" xmlns:xlink="http://www.w3.org/1999/xlink" width="512" height="512"><svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
-<rect width="512" height="512" fill="#131010"></rect>
-<path d="M320 224V352H192V224H320Z" fill="#5A5858"></path>
-<path fill-rule="evenodd" clip-rule="evenodd" d="M384 416H128V96H384V416ZM320 160H192V352H320V160Z" fill="white"></path>
-</svg><style>@media (prefers-color-scheme: light) { :root { filter: none; } }
-@media (prefers-color-scheme: dark) { :root { filter: none; } }
-</style></svg>
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-labelledby="title">
+  <title id="title">MendCode favicon</title>
+  <rect id="favicon-background" width="512" height="512" rx="96" fill="#0A130F"/>
+  <g id="mendcode-symbol" transform="translate(46 150) scale(0.42)">
+    <path d="M 438 341 L 355 450 L 160 450 L 60 350 L 60 170 L 160 70 L 355 70 L 645 450 L 840 450 L 940 350 L 940 170 L 840 70 L 645 70 L 562 179" fill="none" stroke="#D9DBCC" stroke-width="88" stroke-linecap="butt" stroke-linejoin="bevel" stroke-miterlimit="2"/>
+  </g>
+</svg>
