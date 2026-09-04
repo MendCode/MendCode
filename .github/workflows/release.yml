@@ -416,7 +416,7 @@ jobs:
           gh release download ${tag} --repo ${GITHUB_REPOSITORY}
           shasum -a 256 -c SHA256SUMS
           for file in mendcode-*.zip mendcode-*.tar.gz SHA256SUMS RELEASE-MANIFEST.txt mendcode.spdx.json; do
-            gh attestation verify --repo ${GITHUB_REPOSITORY} "$file"
+            gh attestation verify --repo ${GITHUB_REPOSITORY} "\$file"
           done
           \`\`\`
           EOF
