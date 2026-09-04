@@ -34,6 +34,17 @@ const modelBehaviorProfiles: Array<PromptBehaviorProfile & { match: RegExp }> = 
     ],
   },
   {
+    id: "gpt-6-astra",
+    focusID: "codex",
+    label: "GPT-6 Astra compatibility",
+    sourcePolicy: "mendcode-compatibility",
+    match: /(^|[^a-z0-9])gpt[-_.:/]?6[-_.:/]?astra([^a-z0-9]|$)/i,
+    behavior: [
+      "Use the actual GPT-6 Astra runtime contract and exposed tools instead of assuming that every Codex CLI feature is available through MendCode.",
+      "Treat reasoning modes, transport, caching, context limits, and advanced features as runtime configuration; verify capabilities before promising them.",
+    ],
+  },
+  {
     id: "claude-sonnet-5",
     focusID: "claude",
     label: "Claude Sonnet 5 public behavior guidance",

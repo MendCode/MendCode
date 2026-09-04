@@ -153,6 +153,7 @@ export function interruptedToolPromptText(messages: readonly MessageV2.WithParts
 }
 
 type RecoverablePromptMessage = {
+  parts?: readonly { type: string; metadata?: Record<string, unknown> }[]
   info: {
     id: string
     role: "user" | "assistant"
@@ -162,11 +163,24 @@ type RecoverablePromptMessage = {
   }
 }
 
+function isCancelledPeerPrompt(message: Pick<RecoverablePromptMessage, "parts">) {
+  return (
+    message.parts?.some(
+      (part) =>
+        part.type === "text" &&
+        (part.metadata?.kind === "peer_message" || part.metadata?.kind === "peer_response") &&
+        typeof part.metadata.cancelledAt === "number",
+    ) === true
+  )
+}
+
 export function findRecoverableQueuedPrompt<T extends RecoverablePromptMessage>(
   messages: readonly T[],
   options?: { includeLegacy?: boolean },
 ) {
-  const ordered = messages.toSorted((a, b) => a.info.time.created - b.info.time.created)
+  const ordered = messages
+    .filter((message) => !isCancelledPeerPrompt(message))
+    .toSorted((a, b) => a.info.time.created - b.info.time.created)
   const latestAssistant = ordered.findLast((message) => message.info.role === "assistant")
   if (latestAssistant && latestAssistant.info.time.completed === undefined) return
 
@@ -568,6 +582,44 @@ export const layer = Layer.effect(
       yield* backgroundTasks.dismissNotifications(sessionID)
     })
 
+    const cancelPeerExchanges = Effect.fn("SessionPrompt.cancelPeerExchanges")(function* (sessionID: SessionID) {
+      const messages = yield* sessions.messages({ sessionID, view: "full" })
+      const answered = new Set(
+        messages.flatMap((message) => (message.info.role === "assistant" ? [message.info.parentID] : [])),
+      )
+      for (const message of messages) {
+        if (message.info.role !== "user" || message.info.queued !== true || answered.has(message.info.id)) continue
+        const parts = message.parts.filter(
+          (part): part is MessageV2.TextPart =>
+            part.type === "text" &&
+            (part.metadata?.kind === "peer_message" || part.metadata?.kind === "peer_response"),
+        )
+        if (parts.length === 0) continue
+        for (const part of parts) {
+          yield* sessions.updatePart({ ...part, ignored: true, metadata: { ...part.metadata, cancelledAt: Date.now() } })
+        }
+        yield* sessions.updateMessage({ ...message.info, queued: false })
+        yield* state.cancelQueued(sessionID, message.info.id)
+      }
+      const commands = (yield* agentCommands.list()).filter(
+        (command) =>
+          command.type === "peer_message" &&
+          (command.targetSessionID === sessionID || command.sourceSessionID === sessionID) &&
+          (command.state === "pending" || command.state === "accepted" || command.state === "running"),
+      )
+      // Settle the durable exchange before idle is published, including replies
+      // still being produced elsewhere. Recovery must not replay a stopped run.
+      for (const command of commands) {
+        yield* agentCommands
+          .update({
+            id: command.id,
+            state: command.state === "pending" ? "rejected" : "failed",
+            error: "Session stopped by the user before the message exchange completed.",
+          })
+          .pipe(Effect.catchTag("AgentCommandInvalidStateTransitionError", () => Effect.void), Effect.orDie)
+      }
+    })
+
     const finishOrphanedAssistant = Effect.fn("SessionPrompt.finishOrphanedAssistant")(function* (
       sessionID: SessionID,
       messageID: MessageID,
@@ -622,6 +674,7 @@ export const layer = Layer.effect(
       // A background task can finish after the parent run is cancelled. Do not
       // let its late notification start a fresh assistant turn.
       yield* cancelOwnerWakeSession(sessionID)
+      yield* cancelPeerExchanges(sessionID)
       promptAbortReasons.set(sessionID, "user")
       const controller = promptAbortControllers.get(sessionID)?.controller
       let interruptedAssistantID: MessageID | undefined
@@ -654,6 +707,9 @@ export const layer = Layer.effect(
       // the cancel request reached the runner.
       yield* cancelOwnerWakeSession(input.sessionID)
       const active = promptAbortControllers.get(input.sessionID)
+      if (active?.targetMessageID === input.targetMessageID || (!active && !(yield* state.isBusy(input.sessionID)))) {
+        yield* cancelPeerExchanges(input.sessionID)
+      }
       let interruptedAssistantID: MessageID | undefined
       let markedUserAbort = false
       const result = yield* state
@@ -2439,6 +2495,9 @@ NOTE: At any point in time through this workflow you should feel free to ask the
         yield* slog.info("loop", { step })
 
         let msgs = yield* MessageV2.filterCompactedEffect(sessionID)
+        const cancelled = msgs.find((message) => message.info.id === targetMessageID && isCancelledPeerPrompt(message))
+        if (cancelled) return cancelled
+        msgs = msgs.filter((message) => !isCancelledPeerPrompt(message))
 
         if (!initialMessageIDs) {
           const targetIndex = targetMessageID ? msgs.findIndex((message) => message.info.id === targetMessageID) : -1
@@ -3159,6 +3218,8 @@ NOTE: At any point in time through this workflow you should feel free to ask the
               return metadata?.kind === "peer_response" && metadata.deliveryID === command.id
             }),
           )
+          const current = yield* agentCommands.get(command.id)
+          if (current.state !== "accepted" && current.state !== "running") return
           const responsePrompt = Option.isSome(existingResponse)
             ? existingResponse.value
             : yield* promptAsync({
@@ -3260,6 +3321,8 @@ NOTE: At any point in time through this workflow you should feel free to ask the
             return
           }
 
+          // A queued delivery may have been cancelled while its marker was read.
+          if ((yield* agentCommands.get(info.id)).state !== "running") return
           const message = yield* promptAsync({
             sessionID: info.targetSessionID,
             parts: [

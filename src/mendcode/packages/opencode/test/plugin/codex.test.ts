@@ -5,6 +5,7 @@ import {
   extractAccountIdFromClaims,
   extractAccountId,
   normalizeCodexChatGPTRequestBody,
+  isCodexChatGPTModelSupported,
   prepareCodexChatGPTOAuthRequest,
   type IdTokenClaims,
 } from "../../src/plugin/codex"
@@ -73,6 +74,19 @@ describe("plugin.codex", () => {
           ) as string,
         ),
       ).toEqual({ model: "gpt-5.6-terra", reasoning: { effort: "high", mode: "pro" } })
+      expect(
+        JSON.parse(
+          normalizeCodexChatGPTRequestBody(
+            JSON.stringify({ model: "gpt-5.6-terra-pro", reasoning: { effort: "high" } }),
+          ) as string,
+        ),
+      ).toEqual({ model: "gpt-5.6-terra", reasoning: { effort: "high", mode: "pro" } })
+    })
+
+    test("routes Astra fast mode to the priority service tier", () => {
+      expect(
+        JSON.parse(normalizeCodexChatGPTRequestBody(JSON.stringify({ model: "gpt-6-astra-fast" })) as string),
+      ).toEqual({ model: "gpt-6-astra", service_tier: "priority" })
     })
 
     test("preserves explicit GPT-5.6 tiers and non-JSON bodies", () => {
@@ -89,8 +103,10 @@ describe("plugin.codex", () => {
     })
   })
 
-  test("keeps Sol, Terra, and Luna modes in the ChatGPT OAuth catalog", async () => {
+  test("keeps Astra, Sol, Terra, and Luna modes in the ChatGPT OAuth catalog", async () => {
     const ids = [
+      "gpt-6-astra",
+      "gpt-6-astra-fast",
       "gpt-5.6-sol",
       "gpt-5.6-sol-fast",
       "gpt-5.6-terra",
@@ -104,7 +120,7 @@ describe("plugin.codex", () => {
           id,
           {
             id,
-            api: { id: id.replace(/-fast$/, "") },
+            api: { id: id.replace(/-(fast|pro)$/, "") },
             cost: { input: 1, output: 1, cache: { read: 1, write: 1 } },
             limit: { context: 1, input: 1, output: 1 },
           },
@@ -116,9 +132,20 @@ describe("plugin.codex", () => {
 
     expect(Object.keys(models)).toEqual(ids)
     for (const id of ids) {
-      expect(models[id]?.limit).toEqual({ context: 256_000, input: 256_000, output: 128_000 })
+      expect(models[id]?.limit).toEqual(
+        id.startsWith("gpt-6-astra")
+          ? { context: 1_050_000, input: 922_000, output: 128_000 }
+          : { context: 256_000, input: 256_000, output: 128_000 },
+      )
       expect(models[id]?.options).toMatchObject({ compaction: { threshold: 90 } })
     }
+  })
+
+  test("accepts the official Astra model and rejects unknown GPT-6 IDs", () => {
+    expect(isCodexChatGPTModelSupported("gpt-6-astra")).toBe(true)
+    expect(isCodexChatGPTModelSupported("gpt-6-astra-fast")).toBe(true)
+    expect(isCodexChatGPTModelSupported("gpt-6-astra-pro")).toBe(false)
+    expect(isCodexChatGPTModelSupported("gpt-6-unknown")).toBe(false)
   })
 
   test("rewrites GPT-5.6 OAuth requests for Responses Lite with honest client identity", async () => {

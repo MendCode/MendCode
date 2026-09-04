@@ -1621,7 +1621,7 @@ async function models(args: string[]) {
   if (sub === "presets") {
     console.log(
       JSON.stringify(
-        { presets: modelPresets, secretsIncluded: false, pricingSource: "official OpenAI docs captured 2026-05-06" },
+        { presets: modelPresets, secretsIncluded: false, pricingSource: "official OpenAI docs verified 2026-09-04" },
         null,
         2,
       ),

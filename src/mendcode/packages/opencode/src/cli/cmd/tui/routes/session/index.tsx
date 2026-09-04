@@ -191,6 +191,7 @@ import {
   sessionBottomDockLayout,
   sessionTodoIcon,
   sessionTodoPanelWidth,
+  sessionWidgetTrayContentWidth,
   type SessionTodo,
 } from "../../util/session-bottom-dock"
 import { renderSessionExitSummary } from "../../util/session-exit-summary"
@@ -220,12 +221,10 @@ import {
   unavailableReasoningLabel,
 } from "@/mend/tui/presentation"
 import { blurCompactionArcade, CompactionPanel, isCompactionArcadeFocused } from "../../component/compaction-panel"
+import { AgentCommandPanel } from "../../component/agent-command-panel"
 import {
   agentViewCommandStateRank,
   agentViewCommandTouchesSession,
-  formatAgentViewCommandSummary,
-  formatAgentViewCommandState,
-  formatAgentViewCommandType,
   isAgentViewCommandActionable,
   type AgentViewCommand,
 } from "../../util/agent-view"
@@ -1006,7 +1005,9 @@ export function Session() {
   const [headerTitleOffset, setHeaderTitleOffset] = createSignal(0)
   const [showGenericToolOutput, setShowGenericToolOutput] = kv.signal("generic_tool_output_visibility", false)
   const [showCompactedToolCalls, setShowCompactedToolCalls] = kv.signal(COMPACTED_TOOL_CALLS_KV_KEY, false)
-  const [showTodos, setShowTodos] = kv.signal("session_todos_visible", false)
+  // Keep the existing KV key so users who had the dock visible keep that preference.
+  const [showSessionWidgets, setShowSessionWidgets] = kv.signal("session_todos_visible", false)
+  const [focusSessionWidgets, setFocusSessionWidgets] = createSignal(false)
   const [followSessionOutput, setFollowSessionOutput] = createSignal(true)
   let submitFollowSyncTimer: ReturnType<typeof setTimeout> | undefined
   let submitFollowSyncToken = 0
@@ -1355,7 +1356,7 @@ export function Session() {
     const name = workflow?.name ? `${workflow.name} · ` : ""
     return Locale.truncate(`${name}${state}${progress ? ` · ${progress}` : ""}`, Math.max(12, contentWidth() - 16))
   })
-  const showSessionBottomDock = createMemo(() => showTodos() && !disabled())
+  const showSessionBottomDock = createMemo(() => showSessionWidgets() && !disabled())
   const promptDisabled = createMemo(() => disabled())
 
   const agentCommandURL = (path: string, query?: Record<string, string | undefined>) => {
@@ -1427,19 +1428,6 @@ export function Session() {
       setAgentCommandBusyID((current) => (current === command.id ? undefined : current))
     }
   }
-
-  const incomingAgentCommands = createMemo(() =>
-    agentCommands().filter((command) => command.targetSessionID === route.sessionID),
-  )
-  const sentAgentCommands = createMemo(() =>
-    agentCommands().filter(
-      (command) => command.sourceSessionID === route.sessionID && command.targetSessionID !== route.sessionID,
-    ),
-  )
-  const visibleAgentCommands = createMemo(() => [
-    ...incomingAgentCommands().slice(0, 4),
-    ...sentAgentCommands().slice(0, 2),
-  ])
 
   createEffect(
     on(
@@ -3617,6 +3605,16 @@ export function Session() {
 
   const command = useCommandDialog()
 
+  function toggleSessionWidgets(dialog?: ReturnType<typeof useDialog>) {
+    setShowSessionWidgets((visible) => {
+      const next = !visible
+      setFocusSessionWidgets(next)
+      if (!next) setTimeout(() => prompt?.focus(), 0)
+      return next
+    })
+    dialog?.clear()
+  }
+
   // Esc must cancel the active turn even when a transcript, widget, or an
   // autocomplete renderable owns focus. Pending approval/question UIs retain
   // their own Esc semantics (reject/close) and are deliberately excluded.
@@ -3700,16 +3698,15 @@ export function Session() {
       },
     },
     {
-      title: showTodos() ? "Hide todos" : "Show todos",
+      title: showSessionWidgets() ? "Hide session widgets" : "Show session widgets",
       value: "session.toggle.todos",
       keybind: "todo_toggle",
       category: "Session",
       description: todos().length
-        ? `${todos().filter((todo) => todo.status !== "completed").length} open todos`
-        : "No todos in this session.",
+        ? `${todos().filter((todo) => todo.status !== "completed").length} open todos · horizontal widget tray`
+        : "Open the horizontal widget tray for this session.",
       onSelect: (dialog) => {
-        setShowTodos((prev) => !prev)
-        dialog.clear()
+        toggleSessionWidgets(dialog)
       },
     },
     {
@@ -4395,92 +4392,6 @@ export function Session() {
     }
   })
 
-  const agentCommandPanel = () => (
-    <Show when={visibleAgentCommands().length > 0}>
-      <box
-        paddingLeft={contentInset()}
-        paddingRight={contentInset()}
-        width={insetRowWidth()}
-        flexDirection="column"
-        gap={0}
-        flexShrink={0}
-      >
-        <text fg={theme.accent} wrapMode="none">
-          ⟡ Commands
-        </text>
-        <For each={visibleAgentCommands()}>
-          {(command) => {
-            const incoming = command.targetSessionID === route.sessionID
-            const actionable = incoming && isAgentViewCommandActionable(command)
-            const busy = agentCommandBusyID() === command.id
-            const compact = insetRowWidth() < 76
-            const statusLine = () =>
-              actionable ? (
-                <box flexDirection="row" flexShrink={0}>
-                  <text fg={theme.textMuted} wrapMode="none">
-                    mouse:{" "}
-                  </text>
-                  <text
-                    fg={busy ? theme.textMuted : theme.accent}
-                    wrapMode="none"
-                    onMouseUp={() => void updateAgentCommand(command, "accepted")}
-                  >
-                    [accept]
-                  </text>
-                  <text fg={theme.textMuted} wrapMode="none">
-                    {" "}
-                  </text>
-                  <text
-                    fg={busy ? theme.textMuted : theme.error}
-                    wrapMode="none"
-                    onMouseUp={() => void updateAgentCommand(command, "rejected")}
-                  >
-                    [reject]
-                  </text>
-                </box>
-              ) : (
-                <text fg={theme.textMuted} wrapMode="none">
-                  {formatAgentViewCommandState(command)}
-                </text>
-              )
-            return (
-              <box
-                width="100%"
-                flexDirection="column"
-                border={["left"]}
-                customBorderChars={SplitBorder.customBorderChars}
-                borderColor={actionable ? theme.accent : theme.backgroundPanel}
-                paddingLeft={1}
-                paddingTop={0}
-                paddingBottom={0}
-              >
-                <box width="100%" flexDirection="row" overflow="hidden">
-                  <text fg={incoming ? theme.text : theme.textMuted} wrapMode="none">
-                    {incoming ? "in" : "sent"} · {formatAgentViewCommandSummary(command)}
-                  </text>
-                </box>
-                <box width="100%" flexDirection={compact ? "column" : "row"} overflow="hidden">
-                  <box width={compact ? "100%" : undefined} overflow="hidden">
-                    <text fg={theme.textMuted} wrapMode="none">
-                      {formatAgentViewCommandType(command)} ·{" "}
-                      {incoming
-                        ? `from ${Locale.truncate(command.sourceSessionID, compact ? 14 : 18)}`
-                        : `to ${Locale.truncate(command.targetSessionID, compact ? 14 : 18)}`}
-                    </text>
-                  </box>
-                  <Show when={!compact}>
-                    <box flexGrow={1} minWidth={1} />
-                  </Show>
-                  {statusLine()}
-                </box>
-              </box>
-            )
-          }}
-        </For>
-      </box>
-    </Show>
-  )
-
   return (
     <context.Provider
       value={{
@@ -4590,7 +4501,6 @@ export function Session() {
                 </box>
               )}
             </Show>
-            {agentCommandPanel()}
             <box position="relative" flexGrow={1} width="100%">
               <For each={[transcriptRenderKey()]}>
                 {() => (
@@ -4850,8 +4760,14 @@ export function Session() {
                 <SessionBottomDock
                   todos={todos()}
                   subagents={subagents()}
+                  commands={agentCommands()}
+                  commandBusyID={agentCommandBusyID()}
                   width={contentWidth()}
                   sessionID={route.sessionID}
+                  autoFocus={focusSessionWidgets()}
+                  onAutoFocus={() => setFocusSessionWidgets(false)}
+                  onUpdateCommand={(command, state) => void updateAgentCommand(command, state)}
+                  onOpenSession={(sessionID) => navigate({ type: "session", sessionID })}
                   onOpenSubagent={(sessionID) => navigate({ type: "session", sessionID })}
                   info={{
                     branch: topBranchLabel(),
@@ -5339,6 +5255,10 @@ function dockWidgetWidth(item: MendWidgetEntry) {
   return undefined
 }
 
+function dockWidgetMinWidth(item: MendWidgetEntry) {
+  return Math.max(1, typeof item.width === "number" ? item.width : (item.minWidth ?? 18))
+}
+
 function dockWidgetHeight(item: MendWidgetEntry, fallback: number) {
   if (typeof item.height === "number") return Math.max(1, Math.min(fallback, item.height))
   return fallback
@@ -5347,8 +5267,7 @@ function dockWidgetHeight(item: MendWidgetEntry, fallback: number) {
 function dockWidgetsMinWidth(items: MendWidgetEntry[]) {
   if (!items.length) return 0
   return items.reduce((total, item, index) => {
-    const width = typeof item.width === "number" ? item.width : (item.minWidth ?? 18)
-    return total + Math.max(1, width) + (index > 0 ? 1 : 0)
+    return total + dockWidgetMinWidth(item) + (index > 0 ? 1 : 0)
   }, 0)
 }
 
@@ -5483,14 +5402,23 @@ function RenderMendWidget(props: { item: MendWidgetEntry }) {
 function SessionBottomDock(props: {
   todos: SessionTodo[]
   subagents: SessionSubagentInfo[]
+  commands: readonly AgentViewCommand[]
+  commandBusyID?: string
   width: number
   sessionID: string
   info: SessionBottomInfo
+  autoFocus?: boolean
+  onAutoFocus?: () => void
+  onUpdateCommand: (command: AgentViewCommand, state: "accepted" | "rejected") => void
+  onOpenSession: (sessionID: string) => void
   onOpenSubagent: (sessionID: string) => void
 }) {
   const { theme } = useTheme()
   const mend = useMendTuiProfile()
   const dockWidgets = createMemo(() => listMendWidgets("sessionBottomDock"))
+  const commandWidth = createMemo(() =>
+    props.commands.length > 0 ? Math.max(42, Math.min(72, Math.floor(props.width * 0.55))) : 0,
+  )
   const builtinDockWidgetIDs = ["todo", "notes", "subagents", "info"]
   const profileControlsBuiltins = createMemo(() => {
     const widgets = mend.profile.widgets
@@ -5518,48 +5446,112 @@ function SessionBottomDock(props: {
       },
     }),
   )
+  const trayContentWidth = createMemo(() =>
+    sessionWidgetTrayContentWidth({
+      dockWidth: layout().dockWidth,
+      widgetWidths: [
+        commandWidth(),
+        layout().todoWidth,
+        layout().showNotes ? layout().notesWidth : 0,
+        layout().showSubagents ? layout().subagentsWidth : 0,
+        layout().showInfo ? layout().infoWidth : 0,
+        ...dockWidgets().map(dockWidgetMinWidth),
+      ],
+    }),
+  )
+  const trayOverflow = createMemo(() => trayContentWidth() > layout().dockWidth)
+  const trayHeight = createMemo(() => layout().dockHeight + (trayOverflow() ? 1 : 0))
+  let tray: ScrollBoxRenderable | undefined
+
+  onMount(() => {
+    if (!props.autoFocus) return
+    tray?.focus()
+    props.onAutoFocus?.()
+  })
 
   return (
     <box flexShrink={0} width="100%" paddingBottom={1}>
-      <box
+      <scrollbox
+        ref={(value: ScrollBoxRenderable) => {
+          tray = value
+        }}
         width={layout().dockWidth}
-        height={layout().dockHeight}
-        flexDirection="row"
-        gap={1}
-        alignItems="stretch"
-        overflow="hidden"
+        height={trayHeight()}
+        scrollX
+        scrollY={false}
+        contentOptions={{ width: trayContentWidth(), minWidth: trayContentWidth() }}
+        horizontalScrollbarOptions={{
+          visible: trayOverflow(),
+          trackOptions: {
+            backgroundColor: theme.backgroundElement,
+            foregroundColor: theme.border,
+          },
+        }}
+        verticalScrollbarOptions={{ visible: false }}
       >
-        <SessionTodoPanel todos={props.todos} width={layout().todoWidth} height={layout().dockHeight} />
-        <Show when={layout().showNotes}>
-          <SessionNotesWidget sessionID={props.sessionID} width={layout().notesWidth} height={layout().dockHeight} />
-        </Show>
-        <Show when={layout().showSubagents}>
-          <SessionSubagentsWidget
-            subagents={props.subagents}
-            width={layout().subagentsWidth}
-            height={layout().dockHeight}
-            onOpen={props.onOpenSubagent}
-          />
-        </Show>
-        <Show when={layout().showInfo}>
-          <SessionInfoWidget info={props.info} width={layout().infoWidth} height={layout().dockHeight} />
-        </Show>
-        <For each={dockWidgets()}>
-          {(item) => (
+        <box
+          width={trayContentWidth()}
+          minWidth={trayContentWidth()}
+          height={layout().dockHeight}
+          flexDirection="row"
+          gap={1}
+          alignItems="stretch"
+          overflow="visible"
+        >
+          <Show when={props.commands.length > 0}>
             <box
-              flexShrink={item.width === "auto" ? 1 : 0}
-              width={dockWidgetWidth(item)}
-              minWidth={item.minWidth ?? 18}
-              maxWidth={item.maxWidth}
-              height={dockWidgetHeight(item, layout().dockHeight)}
+              width={commandWidth()}
+              minWidth={commandWidth()}
+              height={layout().dockHeight}
+              flexShrink={0}
               overflow="hidden"
+              paddingLeft={1}
+              paddingRight={1}
               backgroundColor={theme.backgroundPanel}
             >
-              <RenderMendWidget item={item} />
+              <AgentCommandPanel
+                commands={props.commands}
+                sessionID={props.sessionID}
+                width={Math.max(1, commandWidth() - 2)}
+                busyID={props.commandBusyID}
+                theme={theme}
+                onUpdate={props.onUpdateCommand}
+                onOpenSession={props.onOpenSession}
+              />
             </box>
-          )}
-        </For>
-      </box>
+          </Show>
+          <SessionTodoPanel todos={props.todos} width={layout().todoWidth} height={layout().dockHeight} />
+          <Show when={layout().showNotes}>
+            <SessionNotesWidget sessionID={props.sessionID} width={layout().notesWidth} height={layout().dockHeight} />
+          </Show>
+          <Show when={layout().showSubagents}>
+            <SessionSubagentsWidget
+              subagents={props.subagents}
+              width={layout().subagentsWidth}
+              height={layout().dockHeight}
+              onOpen={props.onOpenSubagent}
+            />
+          </Show>
+          <Show when={layout().showInfo}>
+            <SessionInfoWidget info={props.info} width={layout().infoWidth} height={layout().dockHeight} />
+          </Show>
+          <For each={dockWidgets()}>
+            {(item) => (
+              <box
+                flexShrink={0}
+                width={dockWidgetWidth(item)}
+                minWidth={dockWidgetMinWidth(item)}
+                maxWidth={item.maxWidth}
+                height={dockWidgetHeight(item, layout().dockHeight)}
+                overflow="hidden"
+                backgroundColor={theme.backgroundPanel}
+              >
+                <RenderMendWidget item={item} />
+              </box>
+            )}
+          </For>
+        </box>
+      </scrollbox>
     </box>
   )
 }
@@ -5633,6 +5625,7 @@ function SessionNotesWidget(props: { sessionID: string; width: number; height: n
     <box
       width={props.width}
       height={props.height}
+      flexShrink={0}
       paddingLeft={2}
       paddingRight={2}
       paddingTop={1}
@@ -5707,6 +5700,7 @@ function SessionInfoWidget(props: { info: SessionBottomInfo; width: number; heig
     <box
       width={props.width}
       height={props.height}
+      flexShrink={0}
       paddingLeft={2}
       paddingRight={2}
       paddingTop={1}
@@ -5750,6 +5744,7 @@ function SessionSubagentsWidget(props: {
     <box
       width={props.width}
       height={props.height}
+      flexShrink={0}
       paddingLeft={2}
       paddingRight={2}
       paddingTop={1}
@@ -6050,6 +6045,7 @@ function UserMessage(props: {
       kind: metadata?.kind === "peer_response" ? ("response" as const) : ("message" as const),
       sourceTitle: typeof metadata?.sourceTitle === "string" ? metadata.sourceTitle : undefined,
       sourceSessionID: typeof metadata?.sourceSessionID === "string" ? metadata.sourceSessionID : undefined,
+      cancelled: typeof metadata?.cancelledAt === "number",
     }
   })
   const subagentInitialPrompt = createMemo(() => props.compactSubagentPrompt && props.index === 0)
@@ -6223,11 +6219,11 @@ function UserMessage(props: {
             <box flexDirection="row" justifyContent="space-between" width="100%" gap={2}>
               <box flexDirection="row" flexGrow={1} minWidth={0} overflow="hidden">
                 <text fg={theme.textMuted} wrapMode="none">
-                  <span style={{ fg: color() }}>●</span>{" "}
+                  <span style={{ fg: agentMessage() ? theme.accent : color() }}>{agentMessage() ? "◆" : "●"}</span>{" "}
                   {agentMessage()
-                    ? `${agentMessage()!.kind === "response" ? "Reply from" : "From"} · ${
+                    ? `${agentMessage()!.kind === "response" ? "Agent reply from" : "Agent message from"} · ${
                         agentMessage()!.sourceTitle ?? agentMessage()!.sourceSessionID ?? "session"
-                      }`
+                      }${agentMessage()!.cancelled ? " · cancelled" : ""}`
                     : subagentInitialPrompt()
                       ? "Subagent prompt"
                       : "You"}

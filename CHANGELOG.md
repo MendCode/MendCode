@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.1.43 - 2026-09-04
+
+MendCode v0.1.43 adds the current OpenAI GPT-5.6 family and GPT-6 Astra to
+the model and Codex OAuth surfaces while keeping the terminal session view
+compact during concurrent work.
+
+### Changed
+
+- Add GPT-6 Astra plus GPT-5.6 Sol, Terra, and Luna API and ChatGPT OAuth
+  presets with documented limits, pricing, reasoning levels, and fast/pro
+  variants where the provider exposes them.
+- Keep the OpenAI model picker populated from an in-process fallback when a
+  cached or bundled `models.dev` catalog predates the current model family;
+  live provider metadata still takes precedence.
+- Keep Commands history in the Ctrl+T horizontal widget tray with a direct
+  action to open the originating session.
+- Record the Codex CLI `0.153.3` comparison and the compatibility decisions in
+  the release audit.
+
+### Fixed
+
+- Allow GPT-6 Astra through the ChatGPT OAuth model filter with its documented
+  context and input limits while retaining the existing Responses Lite scope
+  for GPT-5.6 tiers.
+
+### Tests
+
+- Add model-catalog fallback, model-preset, Astra OAuth filtering, mode
+  normalization, and context-limit regressions.
+
 ## 0.1.42 - 2026-09-03
 
 MendCode v0.1.42 makes queued prompts, cancellation, reconnection, and communication between sessions reliable under concurrent work.
