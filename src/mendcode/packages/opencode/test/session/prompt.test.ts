@@ -2487,6 +2487,145 @@ it.live("automatically delivers a same-workspace agent message and returns its r
   ),
 )
 
+for (const cancellation of ["session", "turn"] as const) {
+  it.live(`cancels queued peer messages when stopping a ${cancellation}`, () =>
+    provideTmpdirServer(
+      Effect.fnUntraced(function* ({ llm }) {
+        const prompt = yield* SessionPrompt.Service
+        const sessions = yield* Session.Service
+        const status = yield* SessionStatus.Service
+        const commands = yield* AgentCommand.Service
+        const source = yield* sessions.create({ title: "Late subagent" })
+        const target = yield* sessions.create({ title: "Stopped parent" })
+        yield* llm.text("ready")
+        const finished = yield* prompt.prompt({
+          sessionID: target.id,
+          agent: "build",
+          model: ref,
+          parts: [{ type: "text", text: "start" }],
+        })
+        if (finished.info.role !== "assistant") throw new Error("assistant missing")
+        yield* status.set(target.id, { type: "busy", message: "active run" })
+        const command = yield* commands.create({
+          sourceSessionID: source.id,
+          targetSessionID: target.id,
+          type: "peer_message",
+          payload: { text: "delayed progress" },
+        })
+        if (cancellation === "session") yield* prompt.cancel(target.id)
+        else yield* prompt.cancelTurn({ sessionID: target.id, targetMessageID: finished.info.parentID })
+        expect((yield* commands.get(command.id)).state).toBe("failed")
+        yield* status.set(target.id, { type: "idle" })
+        yield* prompt.wakePeerDelivery(target.id)
+        yield* Effect.sleep("600 millis")
+        expect(yield* llm.calls).toBe(1)
+        expect(
+          (yield* sessions.messages({ sessionID: target.id, view: "full" })).some((message) =>
+            message.parts.some((part) => part.type === "text" && part.metadata?.deliveryID === command.id),
+          ),
+        ).toBe(false)
+      }),
+      { git: true, config: (url) => ({ ...providerCfg(url), agent: { build: { model: "test/test-model" } } }) },
+    ),
+  )
+}
+
+it.live("does not wake a stopped sender when a peer response arrives", () =>
+  provideTmpdirServer(
+    Effect.fnUntraced(function* ({ llm }) {
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const commands = yield* AgentCommand.Service
+      const source = yield* sessions.create({ title: "Stopped sender" })
+      const target = yield* sessions.create({ title: "Responding peer" })
+      yield* prompt.wakePeerDelivery(source.id)
+      const gate = defer<void>()
+      yield* llm.hold("late response", gate.promise)
+      const command = yield* commands.create({
+        sourceSessionID: source.id,
+        targetSessionID: target.id,
+        type: "peer_message",
+        payload: { text: "question" },
+      })
+      try {
+        yield* Effect.gen(function* () {
+          while ((yield* llm.calls) === 0) yield* Effect.sleep("1 millis")
+        }).pipe(Effect.timeout("2 seconds"))
+        yield* prompt.cancel(source.id)
+        expect((yield* commands.get(command.id)).state).toBe("failed")
+      } finally {
+        gate.resolve()
+      }
+      yield* Effect.gen(function* () {
+        while (
+          !(yield* sessions.messages({ sessionID: target.id })).some(
+            (message) => message.info.role === "assistant" && message.info.time.completed !== undefined,
+          )
+        ) yield* Effect.sleep("1 millis")
+      }).pipe(Effect.timeout("2 seconds"))
+      yield* Effect.sleep("100 millis")
+      expect(yield* llm.calls).toBe(1)
+      expect(yield* sessions.messages({ sessionID: source.id, view: "full" })).toEqual([])
+    }),
+    { git: true, config: (url) => ({ ...providerCfg(url), agent: { build: { model: "test/test-model" } } }) },
+  ),
+)
+
+it.live("stopping drops an already queued peer reply while preserving the queued human prompt", () =>
+  provideTmpdirServer(
+    Effect.fnUntraced(function* ({ llm }) {
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const status = yield* SessionStatus.Service
+      const chat = yield* sessions.create({ title: "Mixed prompt queue" })
+      yield* llm.hang
+      const current = yield* prompt.promptAsync({
+        sessionID: chat.id,
+        agent: "build",
+        model: ref,
+        parts: [{ type: "text", text: "active work" }],
+      })
+      yield* llm.wait(1)
+      const peer = yield* prompt.promptAsync({
+        sessionID: chat.id,
+        agent: "build",
+        model: ref,
+        parts: [
+          { type: "text", text: "late peer reply", metadata: { kind: "peer_response", sourceSessionID: "peer" } },
+        ],
+      })
+      const human = yield* prompt.promptAsync({
+        sessionID: chat.id,
+        agent: "build",
+        model: ref,
+        parts: [{ type: "text", text: "keep my real message" }],
+      })
+      yield* llm.text("human response")
+      expect(yield* prompt.cancelTurn({ sessionID: chat.id, targetMessageID: current.info.id })).toBe("cancelled")
+      yield* Effect.gen(function* () {
+        while (
+          !(yield* sessions.messages({ sessionID: chat.id })).some(
+            (message) =>
+              message.info.role === "assistant" &&
+              message.info.parentID === human.info.id &&
+              message.info.time.completed,
+          )
+        ) yield* Effect.sleep("1 millis")
+      }).pipe(Effect.timeout("2 seconds"))
+      yield* Effect.sleep("50 millis")
+      const messages = yield* sessions.messages({ sessionID: chat.id, view: "full" })
+      expect(
+        messages.some((message) => message.info.role === "assistant" && message.info.parentID === peer.info.id),
+      ).toBe(false)
+      expect(findRecoverableQueuedPrompt(messages, { includeLegacy: true })).toBeUndefined()
+      expect(yield* llm.calls).toBe(2)
+      expect(JSON.stringify((yield* llm.inputs).at(-1))).not.toContain("late peer reply")
+      expect((yield* status.get(chat.id)).type).toBe("idle")
+    }),
+    { git: true, config: (url) => ({ ...providerCfg(url), agent: { build: { model: "test/test-model" } } }) },
+  ),
+)
+
 it.live("startup recovery finalizes stale foreground work without replaying it", () =>
   provideTmpdirServer(
     Effect.fnUntraced(function* ({ llm }) {

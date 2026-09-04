@@ -5,6 +5,7 @@ import { tmpdir } from "../fixture/fixture"
 import { initProject } from "../../src/mend/config/project"
 import {
   modelRoleProjection,
+  modelPresets,
   parsePromptModel,
   refreshGeneratedRuntimeModelConfig,
   resolveEffectivePromptSelection,
@@ -17,6 +18,22 @@ async function writeText(file: string, value: string) {
 }
 
 describe("mend model roles", () => {
+  test("publishes the current OpenAI model family and pricing presets", () => {
+    expect(modelPresets["openai-codex-subscription-gpt-6-astra"].modelID).toBe("gpt-6-astra")
+    expect(modelPresets["openai-api-gpt-6-astra"].pricingPer1MTokens).toEqual({
+      inputUsd: 10,
+      cachedInputUsd: 1,
+      outputUsd: 50,
+    })
+    expect(modelPresets["openai-api-gpt-5.6"].pricingPer1MTokens).toEqual({
+      inputUsd: 4,
+      cachedInputUsd: 0.4,
+      outputUsd: 20,
+    })
+    expect(modelPresets["openai-api-gpt-5.6-terra"].modelID).toBe("gpt-5.6-terra")
+    expect(modelPresets["openai-api-gpt-5.6-luna"].modelID).toBe("gpt-5.6-luna")
+  })
+
   test("does not seed command packs that duplicate native TUI model/provider surfaces", async () => {
     await using dir = await tmpdir()
 

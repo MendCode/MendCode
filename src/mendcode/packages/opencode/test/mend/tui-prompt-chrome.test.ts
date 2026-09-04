@@ -355,7 +355,7 @@ describe("mend tui prompt chrome", () => {
     expect(promptChromeUsesFullSessionWidth("ascii-box")).toBe(true)
   })
 
-  test("ctrl-t is reserved for session todos and f3 cycles model variants", () => {
+  test("ctrl-t toggles session widgets and f3 cycles model variants", () => {
     const keybinds = ConfigKeybinds.Keybinds.parse({})
 
     expect(keybinds.todo_toggle).toBe("ctrl+t")

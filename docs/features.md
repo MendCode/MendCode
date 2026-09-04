@@ -433,7 +433,9 @@ MendCode normalizes supported model aliases, preserves session affinity while th
 effective instructions stay the same, and rotates that affinity when instructions
 change. GPT-5.6 OAuth models expose a 256K effective input/context limit and a
 provider-aware compaction threshold so long sessions compact before the provider
-rejects the request.
+rejects the request. GPT-6 Astra is also available when the OpenAI catalog or
+ChatGPT account exposes it, with its documented 1.05M context and 922K input
+limits.
 
 ## Model Roles
 
