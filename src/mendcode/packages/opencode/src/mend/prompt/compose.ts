@@ -241,7 +241,7 @@ function marketplaceExtensionContract() {
     "- Custom Prompt Mode is one of `minimal`, `focus`, `full`, or `custom`; `custom` reads the bounded project prompt at `.mendcode/prompts/custom.md` while preserving the MendCode boundary. It is project instruction text, not an upstream hidden prompt.",
     "- Custom AI tools live in `.mendcode/tools/*.{ts,js}` and can invoke bounded scripts; expose only the smallest safe interface and keep secrets out of tools and packages.",
     "- Custom pages/routes render through the public plugin route/slot API. Custom widgets use `api.ui.runtime.setWidget` with `aboveEditor`, `belowEditor`, or `sessionBottomDock` placement and clean up with the plugin lifecycle.",
-    "- Ctrl+T toggles the current session's TODO view. Ctrl+P -> Customize TUI or `/customize` opens live customization; these controls do not replace the public plugin API.",
+    "- Ctrl+T toggles the current session's horizontal widget tray (todos included). Ctrl+P -> Customize TUI or `/customize` opens live customization; these controls do not replace the public plugin API.",
     "- Custom pages can build terminal-native ASCII/Solid UIs similar to built-in Usage, Memory Center, or Loop pages when the required state is available through the public API.",
     "- Shell-backed widgets use `api.shell.spawn()` for bounded stdout/stderr streams. This is not a PTY; do not implement full-screen terminal apps, cursor-addressing programs, alternate-screen apps, Doom, or real cava by piping stdout into the main TUI.",
     "- If a package needs private MendCode runtime data, add or request a public API first. Do not import private runtime internals from packages.",

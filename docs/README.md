@@ -40,6 +40,7 @@ Use this index by intent. **Use MendCode** explains the public workflow, **Featu
 - [Package index](package-index.md): workspace packages versus runtime `.mendcode` packages.
 - [MendCode Source Map](source-map.md): one maintained map from public features to implementation and test paths.
 - [Releasing](releasing.md): installer contract, checksums, release notes, and public installer smoke tests.
+- [Codex CLI and model audit](audits/codex-cli-0.153.3-gpt56-2026-09-04.md): upstream comparison and the GPT-5.6/GPT-6 Astra compatibility decisions for 0.1.43.
 - [Changelog](../CHANGELOG.md): versioned behavior changes and regression coverage for recent releases.
 - [Supply chain security](supply-chain-security.md): provenance, SBOM, pinned actions, dependency review, and scanner policy.
 - [Public readiness audit](public-readiness-audit.md): branch, secret, dependency, legacy-reference, and public-surface checks.

@@ -8,6 +8,7 @@ import { Instance } from "../../src/project/instance"
 import { WithInstance } from "../../src/project/with-instance"
 import { Plugin } from "../../src/plugin/index"
 import { ModelsDev } from "@/provider/models"
+import { OPENAI_MODEL_FALLBACKS, withOpenAIModelFallbacks } from "@/provider/openai-models"
 import { Provider } from "@/provider/provider"
 import { ProviderID, ModelID } from "../../src/provider/schema"
 import { Filesystem } from "@/util/filesystem"
@@ -1982,6 +1983,34 @@ test("mode cost preserves over-200k pricing from base model", () => {
       write: 0,
     },
   })
+})
+
+test("OpenAI catalog fallback keeps current GPT-5.6 and Astra models available", () => {
+  const catalog = withOpenAIModelFallbacks({
+    openai: {
+      id: "openai",
+      name: "OpenAI",
+      env: ["OPENAI_API_KEY"],
+      models: {
+        "gpt-5.6": {
+          ...OPENAI_MODEL_FALLBACKS["gpt-5.6"],
+          name: "cached GPT-5.6",
+        },
+      },
+    },
+  } as unknown as Record<string, ModelsDev.Provider>)
+
+  expect(Object.keys(catalog.openai!.models)).toEqual(
+    expect.arrayContaining(["gpt-6-astra", "gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]),
+  )
+  expect(catalog.openai!.models["gpt-6-astra"]?.limit).toEqual({
+    context: 1_050_000,
+    input: 922_000,
+    output: 128_000,
+  })
+  expect(catalog.openai!.models["gpt-5.6"]?.name).toBe("cached GPT-5.6")
+  expect(catalog.openai!.models["gpt-5.6-luna"]?.experimental?.modes?.fast?.cost?.output).toBe(2.4)
+  expect(catalog.openai!.models["gpt-6-astra"]?.experimental?.modes?.fast?.cost?.output).toBe(100)
 })
 
 test("models.dev normalization fills required response fields", () => {

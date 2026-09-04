@@ -25,6 +25,18 @@ const MAX_SUBAGENTS_WIDGET_WIDTH = 56
 const MAX_INFO_WIDGET_WIDTH = 36
 const SIDE_WIDGET_GAP = 1
 
+export function sessionWidgetTrayContentWidth(input: {
+  dockWidth: number
+  widgetWidths: readonly number[]
+  gap?: number
+}) {
+  const gap = Math.max(0, input.gap ?? SIDE_WIDGET_GAP)
+  const contentWidth = input.widgetWidths
+    .filter((width) => Number.isFinite(width) && width > 0)
+    .reduce((total, width, index) => total + Math.max(1, width) + (index > 0 ? gap : 0), 0)
+  return Math.max(1, input.dockWidth, contentWidth)
+}
+
 function clampDockWidth(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value))
 }

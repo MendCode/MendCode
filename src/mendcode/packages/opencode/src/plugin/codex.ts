@@ -27,6 +27,7 @@ const ALLOWED_MODELS = new Set([
   "gpt-5.3-codex-spark",
   "gpt-5.4",
   "gpt-5.4-mini",
+  "gpt-6-astra",
 ])
 
 const CODEX_CHATGPT_MODEL_ALIASES: Record<string, string> = {
@@ -40,6 +41,12 @@ const CODEX_CHATGPT_5_6_LIMIT = {
   output: 128_000,
 }
 
+const CODEX_CHATGPT_6_ASTRA_LIMIT = {
+  context: 1_050_000,
+  input: 922_000,
+  output: 128_000,
+}
+
 const CODEX_CHATGPT_FAST_MODE_MODELS = new Set([
   "gpt-5.4",
   "gpt-5.4-mini",
@@ -48,9 +55,15 @@ const CODEX_CHATGPT_FAST_MODE_MODELS = new Set([
   "gpt-5.6-sol",
   "gpt-5.6-terra",
   "gpt-5.6-luna",
+  "gpt-6-astra",
 ])
 
-const CODEX_CHATGPT_PRO_MODE_MODELS = new Set(["gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"])
+const CODEX_CHATGPT_PRO_MODE_MODELS = new Set([
+  "gpt-5.6",
+  "gpt-5.6-sol",
+  "gpt-5.6-terra",
+  "gpt-5.6-luna",
+])
 
 export function normalizeCodexChatGPTModel(modelID: string) {
   const fastBase = modelID.endsWith("-fast") ? modelID.slice(0, -"-fast".length) : undefined
@@ -66,6 +79,20 @@ export function normalizeCodexChatGPTModel(modelID: string) {
     modelID: CODEX_CHATGPT_MODEL_ALIASES[base] ?? base,
     mode,
   }
+}
+
+export function isCodexChatGPTModelSupported(modelID: string) {
+  const normalized = normalizeCodexChatGPTModel(modelID).modelID
+  if (ALLOWED_MODELS.has(normalized)) return true
+  const match = normalized.match(/^gpt-(\d+\.\d+)/)
+  return match ? parseFloat(match[1]) > 5.4 : false
+}
+
+function codexChatGPTLimit(modelID: string) {
+  const normalized = normalizeCodexChatGPTModel(modelID).modelID
+  if (normalized === "gpt-6-astra") return CODEX_CHATGPT_6_ASTRA_LIMIT
+  if (normalized.startsWith("gpt-5.6")) return CODEX_CHATGPT_5_6_LIMIT
+  return undefined
 }
 
 export function normalizeCodexChatGPTRequestBody(body: BodyInit | null | undefined) {
@@ -569,12 +596,12 @@ export async function CodexAuthPlugin(input: PluginInput, options: CodexAuthPlug
         return Object.fromEntries(
           Object.entries(provider.models)
             .filter(([, model]) => {
-              if (ALLOWED_MODELS.has(model.api.id)) return true
-              const match = model.api.id.match(/^gpt-(\d+\.\d+)/)
-              return match ? parseFloat(match[1]) > 5.4 : false
+              return isCodexChatGPTModelSupported(model.api.id)
             })
             .map(([modelID, model]) => {
               const modelOptions = isRecord(model.options) ? model.options : {}
+              const limit = codexChatGPTLimit(model.api.id)
+              const usesCompactionThreshold = limit !== undefined
               return [
                 modelID,
                 {
@@ -584,8 +611,8 @@ export async function CodexAuthPlugin(input: PluginInput, options: CodexAuthPlug
                     output: 0,
                     cache: { read: 0, write: 0 },
                   },
-                  limit: model.api.id.startsWith("gpt-5.6")
-                    ? CODEX_CHATGPT_5_6_LIMIT
+                  limit: limit
+                    ? limit
                     : model.id.includes("gpt-5.5")
                       ? {
                           context: 400_000,
@@ -593,7 +620,7 @@ export async function CodexAuthPlugin(input: PluginInput, options: CodexAuthPlug
                           output: 128_000,
                         }
                       : model.limit,
-                  options: model.api.id.startsWith("gpt-5.6")
+                  options: usesCompactionThreshold
                     ? {
                         ...modelOptions,
                         compaction: {
