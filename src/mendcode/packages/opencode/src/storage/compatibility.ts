@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, chmodSync } from "node:fs"
 import { randomUUID } from "node:crypto"
 import type { MigrationIdentity } from "./migration-journal"
 import { acquireWriterLease } from "./writer-lease"
+import { reportBackendPhase } from "../installation/backend-startup"
 
 type Reader = Pick<ReturnType<typeof init>, "all" | "run">
 export type Compatibility = { compatible: boolean; reason?: string; pending: string[]; legacy: boolean }
@@ -83,6 +84,7 @@ export function backupBeforeMigration(file: string, supported: MigrationIdentity
   const destination = `${dir}/before-migration-${Date.now()}-${randomUUID()}.db`
   const db = init(file, true)
   try {
+    reportBackendPhase("backup")
     db.run(`VACUUM INTO '${destination.replaceAll("'", "''")}'`)
     chmodSync(destination, 0o600)
     return destination

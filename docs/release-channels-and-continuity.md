@@ -1,6 +1,8 @@
 # Release channels and experimental continuity
 
-These features are under development. They are not available in the published v0.1.43 release.
+Release channels and opt-in continuity were published in v0.1.44-beta.1. They are
+not included in v0.1.43 stable. Beta releases do not replace GitHub's latest stable
+release, and installing a beta does not enable experimental capabilities.
 
 ## Update preferences
 
@@ -13,7 +15,7 @@ mendcode upgrade 0.1.44-beta.1
 mendcode upgrade --rollback
 ```
 
-The explicit version above illustrates syntax; it does not claim that version has been published. Supported channels are `stable`, `beta`, and `nightly`. Existing installations default to stable. Changing the preference does not install anything. Installing an explicit version does not change the preference. The TUI `/release-channel` command edits the same backend preference.
+Supported channels are `stable`, `beta`, and `nightly`. Existing installations default to stable. Changing the preference does not install anything. Installing an explicit version does not change the preference. The TUI `/release-channel` command edits the same backend preference.
 
 Stable excludes prereleases; beta excludes nightly builds. Draft candidates are not offered to users. Channel selection does not choose a different session database.
 
@@ -24,6 +26,33 @@ The in-app updater requires a release index verified against the authorized GitH
 The TUI, `run`, and `stats` share the local backend and its database writer. `run --attach` resolves models on the selected server without opening a local session database. A failed session or rejected request exits with a failure status. Other local database commands may still require closing the backend before use; the writer guard reports this explicitly.
 
 Rollback retains sessions and never restores a database backup automatically. It requires verified metadata for the retained executable and a compatible database. Close connected terminals after their work finishes. Unknown legacy compatibility, an active backend or an incompatible schema blocks rollback. Windows rollback is not currently enabled.
+
+## Large-history startup recovery
+
+In beta.1, the client allowed only eight seconds for a newly spawned backend.
+Creating the consistent pre-migration snapshot of a large database could exceed
+that deadline; the client then stopped its child before migration completed.
+The connection error alone does not indicate that session records were deleted.
+
+The beta.2 fix gives an identified backup or migration up to 15 minutes, displays
+the preparation phase, and allows 30 seconds for connection after database work.
+Phase records are tied to the child PID and a unique startup token. Failed or
+exited children stop the wait; an ordinary unresponsive startup remains bounded.
+Client readiness is timed separately, so database preparation cannot exhaust it.
+
+Do not delete session databases or locks, restore an incomplete backup, or start
+multiple independent writers to bypass this error. Retain recovery artifacts.
+A newer binary does not make an incompatible downgrade safe.
+
+## Release promotion
+
+Fixes are tested in beta before explicit stable promotion. Platform builds,
+installer checks, checksums, provenance and relevant startup regressions must pass
+for the candidate being published. Release tags and assets are immutable.
+Stable publication is separate from prerelease publication; the daily nightly
+schedule becomes active when its workflow reaches the default branch. Manual
+prerelease builds are available from dev. Unverified native OpenAI features remain
+disabled, and experimental continuity remains opt-in on every channel.
 
 ## Experimental runtime
 

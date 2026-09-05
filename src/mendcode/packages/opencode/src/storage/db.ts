@@ -23,6 +23,7 @@ import {
 import { reconcileLegacyMigrationJournal } from "./legacy-migration"
 import { migrationEntries, identifyMigrations } from "./migration-journal"
 import { assertCompatibility, backupBeforeMigration, recordSchemaIdentity } from "./compatibility"
+import { reportBackendPhase } from "../installation/backend-startup"
 import { acquireWriterLease } from "./writer-lease"
 
 declare const OPENCODE_MIGRATIONS: { sql: string; timestamp: number; name: string }[] | undefined
@@ -94,6 +95,7 @@ export const Client = lazy(() => {
       const backup = backupBeforeMigration(Path, identity)
       if (backup) log.info("created pre-migration database backup", { path: backup })
     }
+    reportBackendPhase("migration")
     db = init(Path)
     db.run("PRAGMA journal_mode = WAL")
     db.run("PRAGMA synchronous = NORMAL")
@@ -124,9 +126,11 @@ export const Client = lazy(() => {
       if (!Flag.OPENCODE_SKIP_MIGRATIONS) recordSchemaIdentity(db, identity)
     }
 
+    reportBackendPhase("ready")
     releaseWriter = release
     return db
   } catch (error) {
+    try { reportBackendPhase("failed") } catch { /* Preserve the database error. */ }
     try { db?.$client.close() } finally { release() }
     throw error
   }

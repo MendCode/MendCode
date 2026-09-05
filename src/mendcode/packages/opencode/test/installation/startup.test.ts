@@ -15,6 +15,19 @@ async function installed(root: string) {
   return executable
 }
 
+test("backend preparation does not consume the client readiness deadline", async () => {
+  await using tmp = await tmpdir()
+  const attempt = (await trackUpdateStartup({ executable: await installed(tmp.path), version: "0.1.44", timeoutMs: 20 }))!
+  try {
+    attempt.preparing()
+    await Bun.sleep(60)
+    expect(JSON.parse(await fs.readFile(attempt.file, "utf8")).state).toBe("starting")
+    attempt.connecting()
+    await Bun.sleep(60)
+    expect(JSON.parse(await fs.readFile(attempt.file, "utf8")).state).toBe("failed")
+  } finally { await attempt.close() }
+})
+
 test("deferred installer failures remain visible even when the previous executable is still installed", async () => {
   await using tmp = await tmpdir()
   const executable = await installed(tmp.path)

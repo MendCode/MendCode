@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.1.44-beta.2 - 2026-09-05
+
+### Fixed
+
+- Let a newly spawned backend finish a large pre-migration database snapshot
+  instead of stopping it after eight seconds. Verified backup/migration phases
+  have a bounded 15-minute preparation window and visible progress messages.
+- Keep the 30-second client readiness deadline separate from database preparation.
+  Failed children stop the wait, and startup errors identify the recorded phase.
+- Document published beta channels, large-history recovery and stable promotion.
+
+Experimental continuity remains opt-in. This does not enable native OpenAI async
+transport, async shell or Windows rollback.
+
 ## 0.1.44-beta.1 - 2026-09-05
 
 This beta introduces release channels and updater recovery. It is an opt-in
