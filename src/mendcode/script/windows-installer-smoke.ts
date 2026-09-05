@@ -51,8 +51,9 @@ try {
       MENDCODE_DB: path.join(home, "data", "test.db"),
     })
     await fs.writeFile(path.join(home, "installer.log"), result.output)
+    if (scenario === "success") assert.equal(result.code, 0, result.output)
     const operations = (await fs.readdir(path.dirname(installed))).filter((name) => name.startsWith(".update."))
-    assert.equal(operations.length, 1)
+    assert.equal(operations.length, 1, `${scenario}: ${result.output}`)
     const operation = path.join(path.dirname(installed), operations[0])
     const status = await fs.readFile(path.join(operation, "status"), "utf8")
     if (scenario === "success") {
