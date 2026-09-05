@@ -50,9 +50,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          export MENDCODE_DB="${RUNNER_TEMP}/mendcode-contracts-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.db"
-          bun test --timeout 30000 \
-            test/installation \
+          # Some suites replace Bun modules globally. Separate processes keep
+          # those mocks and the test/preload.ts database roots isolated.
+          run_test() {
+            bash -c 'export MENDCODE_DB="${TMPDIR:-/tmp}/opencode-test-data-$$/share/contracts.db"; exec bun test --timeout 30000 "$@"' bash "$@"
+          }
+          for test_file in \
+            test/installation/*.test.ts \
             test/storage/compatibility.test.ts test/storage/writer-lease.test.ts \
             test/cli/run-attach.test.ts test/cli/upgrade-channel.test.ts test/cli/upgrade-readonly.test.ts \
             test/cli/tui/shared-server.test.ts test/cli/tui/thread.test.ts \
@@ -61,6 +65,7 @@ jobs:
             test/mend/concurrent-model-policy.test.ts \
             test/plugin/auth-override.test.ts \
             test/session/continuity.test.ts test/session/session-notes.test.ts test/session/llm.test.ts \
-            test/server/usage.test.ts test/server/release-channel.test.ts test/server/upgrade-progress.test.ts
-          export MENDCODE_DB="${RUNNER_TEMP}/mendcode-executor-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.db"
-          bun test test/session/prompt.test.ts --timeout 30000 --test-name-pattern "continuity wakes the existing executor"
+            test/server/usage.test.ts test/server/release-channel.test.ts test/server/upgrade-progress.test.ts; do
+            run_test "$test_file"
+          done
+          run_test test/session/prompt.test.ts --test-name-pattern "continuity wakes the existing executor"
