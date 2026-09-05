@@ -185,7 +185,8 @@ function Write-Step {
 
 function Write-Ok {
   param([string]$Message)
-  Write-Host "✓ $Message" -ForegroundColor Green
+  # Windows PowerShell 5.1 reads BOM-less scripts using the system code page.
+  Write-Host "$([char]0x2713) $Message" -ForegroundColor Green
 }
 
 function Invoke-MendCodeSetup {

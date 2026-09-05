@@ -22,6 +22,9 @@ async function powershell(source: string, env: Record<string, string | undefined
   } finally { clearTimeout(timer) }
 }
 const archive = path.join(root, "candidate.zip")
+const installer = path.resolve(import.meta.dir, "../install.ps1")
+const parsed = await powershell(`$tokens=$null; $errors=$null; [void][System.Management.Automation.Language.Parser]::ParseFile(${quote(installer)}, [ref]$tokens, [ref]$errors); if ($errors.Count) { $errors | Out-String | Write-Error; exit 1 }`)
+assert.equal(parsed.code, 0, parsed.output)
 const compressed = await powershell(`$ErrorActionPreference='Stop'; Compress-Archive -LiteralPath ${quote(path.resolve(binary))} -DestinationPath ${quote(archive)}`)
 assert.equal(compressed.code, 0, compressed.output)
 const bytes = await Bun.file(archive).bytes()
@@ -45,7 +48,7 @@ try {
     // An unusable existing executable must not be run to perform recovery.
     await fs.writeFile(installed, "previous damaged executable")
     const previousDigest = digest(await Bun.file(installed).bytes())
-    const result = await powershell(`& ${quote(path.resolve(import.meta.dir, "../install.ps1"))} -Version ${quote(version)} -SkipSetup -NoModifyPath; exit $LASTEXITCODE`, {
+    const result = await powershell(`& ${quote(installer)} -Version ${quote(version)} -SkipSetup -NoModifyPath; exit $LASTEXITCODE`, {
       OPENCODE_TEST_HOME: home, MENDCODE_GITHUB_BASE_URL: server.url.toString().replace(/\/$/, ""),
       MENDCODE_UPDATE_PARENT_PID: undefined, MENDCODE_VERIFIED_SUMS_FILE: undefined,
       MENDCODE_DB: path.join(home, "data", "test.db"),
