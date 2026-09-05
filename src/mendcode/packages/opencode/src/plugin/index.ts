@@ -61,8 +61,9 @@ const INTERNAL_PLUGINS: PluginInstance[] = [
   HerdrAgentStatePlugin,
   CodexAuthPlugin,
   CopilotAuthPlugin,
-  GitlabAuthPlugin,
-  PoeAuthPlugin,
+  // Published auth modules carry upstream SDK types; use the same legacy
+  // plugin boundary as installed modules instead of equating the SDKs.
+  ...getLegacyPlugins({ GitlabAuthPlugin, PoeAuthPlugin }),
   CloudflareWorkersAuthPlugin,
   CloudflareAIGatewayAuthPlugin,
   AzureAuthPlugin,

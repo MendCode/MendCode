@@ -50,7 +50,8 @@ function Write-Step {
 
 function Write-Ok {
   param([string]$Message)
-  Write-Host "✓ $Message" -ForegroundColor Green
+  # Keep the BOM-less script parseable by Windows PowerShell 5.1.
+  Write-Host "$([char]0x2713) $Message" -ForegroundColor Green
 }
 
 function Invoke-MendCodeSetup {

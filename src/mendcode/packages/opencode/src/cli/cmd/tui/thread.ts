@@ -4,7 +4,7 @@ import { Rpc } from "@/util/rpc"
 import { type rpc } from "./worker"
 import { spawn, type ChildProcess } from "child_process"
 import { readdir, stat } from "fs/promises"
-import { createHash } from "crypto"
+import { createHash, randomUUID } from "crypto"
 import path from "path"
 import { existsSync } from "fs"
 import { fileURLToPath } from "url"
@@ -30,6 +30,7 @@ import { loadMendTuiProfile } from "@/mend/profile"
 import { ServerAuth } from "@/server/auth"
 import { SharedServer, type SharedServerClientLease, type SharedServerState } from "./shared-server"
 import { isProcessMemoryUsage, processMemoryUsage, type DiagnosticsSnapshot } from "@/util/process-memory"
+import { readBackendPhase, waitForBackend } from "@/installation/backend-startup"
 
 const SHARED_SERVER_PROBE_TIMEOUT_MS = 2_000
 const SHARED_SERVER_WAIT_TIMEOUT_MS = 8_000
@@ -340,9 +341,12 @@ export async function ensureLocalSharedServer(input: {
     await SharedServer.clearState()
     const credentials = SharedServer.credentials()
     const command = sharedServerCommand(input.runtimeCwd)
+    const token = randomUUID()
+    const progressFile = path.join(path.dirname(SharedServer.statePath()), `startup-${token}.json`)
     child = spawn(command.command, command.args, {
       cwd: command.cwd,
-      env: sharedServerEnvironment(credentials, runtimeID),
+      env: { ...sharedServerEnvironment(credentials, runtimeID),
+        MENDCODE_BACKEND_STARTUP_FILE: progressFile, MENDCODE_BACKEND_STARTUP_TOKEN: token },
       detached: true,
       stdio: "ignore",
     })
@@ -356,12 +360,21 @@ export async function ensureLocalSharedServer(input: {
     })
     child.unref()
 
-    const started = await waitForLocalSharedServer(input.directory, runtimeID, input.lease)
-    if (!started) return
+    const started = await waitForBackend({
+      connect: () => connectToLocalSharedServer(input.directory, runtimeID, input.lease),
+      alive: () => child?.exitCode === null && child?.signalCode === null,
+      phase: () => child?.pid ? readBackendPhase(progressFile, child.pid, token) : undefined,
+      progress: (phase) => {
+        if (phase === "backup") process.stderr.write("Preparing session database backup; large histories may take several minutes.\n")
+        if (phase === "migration") process.stderr.write("Applying session database migration; please wait.\n")
+      },
+    })
+    if (!started) {
+      const phase = child.pid ? readBackendPhase(progressFile, child.pid, token) : undefined
+      throw new Error(`Shared backend startup ${phase === "failed" ? "failed" : "did not finish"}${phase ? ` during ${phase}` : ""}. Startup record: ${progressFile}. Session data was not reset.`)
+    }
     connected = true
     return started
-  } catch {
-    return
   } finally {
     if (!connected) child?.kill()
     await release()
