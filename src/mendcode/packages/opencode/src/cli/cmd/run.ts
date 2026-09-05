@@ -305,7 +305,7 @@ const ClientRunCommand = cmd({
       }),
   handler: async (args) => {
     let message = [...args.message, ...(args["--"] || [])]
-      .map((arg) => (arg.includes(" ") ? `"${arg.replace(/"/g, '\\"')}"` : arg))
+      .map((arg) => (arg.includes(" ") ? JSON.stringify(arg) : arg))
       .join(" ")
 
     const directory = (() => {

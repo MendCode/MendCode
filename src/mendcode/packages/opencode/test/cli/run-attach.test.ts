@@ -9,6 +9,7 @@ test.each(["completed", "failed", "http-rejected"])(
     const base = path.join(process.env.XDG_DATA_HOME!, `run-attach-${outcome}`)
     const db = path.join(base, "runtime.db")
     const sessionID = "ses_fixture"
+    const message = 'Inspect "C:\\fixture path\\file.txt"'
     let events: ReadableStreamDefaultController<Uint8Array> | undefined
     let prompt: unknown
     const server = Bun.serve({
@@ -80,7 +81,7 @@ test.each(["completed", "failed", "http-rejected"])(
         "fixture/model",
         "--format",
         "json",
-        "Fixture prompt",
+        message,
       ],
       {
         cwd: path.resolve(import.meta.dir, "../.."),
@@ -115,6 +116,7 @@ test.each(["completed", "failed", "http-rejected"])(
         expect(stdout).toContain(failed ? '"status":"failed"' : '"status":"completed"')
       }
       expect(prompt).toMatchObject({ agent: "build", model: { providerID: "fixture", modelID: "model" } })
+      expect(prompt).toMatchObject({ parts: [{ type: "text", text: `${JSON.stringify(message)}\n` }] })
       expect(existsSync(db)).toBe(false)
       expect(existsSync(`${db}.writer-lock`)).toBe(false)
     } finally {

@@ -59,6 +59,7 @@ jobs:
             test/cli/tui/widgets-runtime.test.tsx test/cli/tui/widgets-tray.test.tsx \
             test/cli/tui/agent-command-panel.test.tsx \
             test/mend/concurrent-model-policy.test.ts \
+            test/plugin/auth-override.test.ts \
             test/session/continuity.test.ts test/session/session-notes.test.ts test/session/llm.test.ts \
             test/server/usage.test.ts test/server/release-channel.test.ts test/server/upgrade-progress.test.ts
           export MENDCODE_DB="${RUNNER_TEMP}/mendcode-executor-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.db"
