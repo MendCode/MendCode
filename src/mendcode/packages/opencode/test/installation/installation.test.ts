@@ -3,6 +3,9 @@ import { Effect, Layer, PlatformError, Stream } from "effect"
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import { Installation } from "../../src/installation"
+import { writeChannel } from "../../src/installation/release-channel"
+import { createHash } from "node:crypto"
+import { supportedMigrationJournal } from "../../src/storage/migration-journal"
 
 const encoder = new TextEncoder()
 
@@ -11,9 +14,27 @@ function mockHttpClient(handler: (request: HttpClientRequest.HttpClientRequest) 
   return Layer.succeed(HttpClient.HttpClient, client)
 }
 
+function installerResponse(request: HttpClientRequest.HttpClientRequest) {
+  if (request.url.includes("/commits/")) return jsonResponse({ sha: "a".repeat(40) })
+  if (request.url.endsWith("/release-index.json")) {
+    const version = /\/download\/v([^/]+)\//.exec(request.url)![1]
+    const journal = supportedMigrationJournal()
+    const hash = (text: string) => createHash("sha256").update(text).digest("hex")
+    return jsonResponse({ formatVersion: 1, version, channel: "stable", tag: `v${version}`,
+      commit: "a".repeat(40), repository: "MendCode/MendCode", provenance: { workflow: ".github/workflows/release.yml", runID: "1" },
+      installer: { path: "src/mendcode/install", commit: "a".repeat(40), sha256: hash("#!/usr/bin/env bash\n") },
+      windowsInstaller: { path: "src/mendcode/install.ps1", commit: "a".repeat(40), sha256: hash("#!/usr/bin/env bash\n") },
+      schema: { journal, fingerprint: hash(JSON.stringify(journal)) },
+      assets: [{ name: "mendcode-darwin-arm64.zip", platform: "darwin-arm64", size: 1, sha256: "b".repeat(64) }],
+    })
+  }
+  return new Response("#!/usr/bin/env bash\n")
+}
+
 function mockSpawner(handler: (cmd: string, args: readonly string[]) => string = () => "", spawnError?: Error) {
   const spawner = ChildProcessSpawner.make((command) => {
-    if (spawnError) {
+    const std = ChildProcess.isStandardCommand(command) ? command : undefined
+    if (spawnError && std?.command !== "gh") {
       return Effect.fail(
         PlatformError.systemError({
           _tag: "NotFound",
@@ -24,7 +45,6 @@ function mockSpawner(handler: (cmd: string, args: readonly string[]) => string =
         }),
       )
     }
-    const std = ChildProcess.isStandardCommand(command) ? command : undefined
     const output = handler(std?.command ?? "", std?.args ?? [])
     return Effect.succeed(
       ChildProcessSpawner.makeHandle({
@@ -84,6 +104,16 @@ describe("installation", () => {
   })
 
   describe("latest", () => {
+    test("selects the highest channel version across publication-order pages", async () => {
+      await writeChannel("beta")
+      try {
+        const layer = testLayer((request) => jsonResponse(request.url.endsWith("page=1")
+          ? Array.from({ length: 100 }, (_, i) => ({ tag_name: i === 0 ? "v0.1.44-beta.1" : "v0.1.43", prerelease: i === 0 }))
+          : [{ tag_name: "v0.1.44-beta.3", prerelease: true }]))
+        const result = await Effect.runPromise(Installation.Service.use((svc) => svc.latest("curl")).pipe(Effect.provide(layer)))
+        expect(result).toBe("0.1.44-beta.3")
+      } finally { await writeChannel("stable") }
+    })
     test("reads release version from GitHub releases", async () => {
       const layer = testLayer(() => jsonResponse({ tag_name: "v1.2.3" }))
 
@@ -93,13 +123,13 @@ describe("installation", () => {
       expect(result).toBe("1.2.3")
     })
 
-    test("strips v prefix from GitHub release tag", async () => {
-      const layer = testLayer(() => jsonResponse({ tag_name: "v4.0.0-beta.1" }))
+    test("strips v prefix from stable GitHub release tag", async () => {
+      const layer = testLayer(() => jsonResponse({ tag_name: "v4.0.0" }))
 
       const result = await Effect.runPromise(
         Installation.Service.use((svc) => svc.latest("curl")).pipe(Effect.provide(layer)),
       )
-      expect(result).toBe("4.0.0-beta.1")
+      expect(result).toBe("4.0.0")
     })
 
     test.each(["npm", "bun", "pnpm", "scoop", "choco", "brew"] as const)(
@@ -121,10 +151,44 @@ describe("installation", () => {
   })
 
   describe("upgrade", () => {
+    test("delivers installer phases to the caller while consuming output", async () => {
+      const phases: string[] = []
+      const layer = testLayer(installerResponse, (cmd, args) =>
+        cmd === process.execPath && args[0] === "--version"
+          ? "0.1.25"
+          : "MENDCODE_UPDATE_PHASE=downloading\nMENDCODE_UPDATE_PHASE=verifying\n",
+      )
+      await Effect.runPromise(Installation.Service.use((svc) => svc.upgrade("curl", "0.1.25", (phase) => phases.push(phase)))
+        .pipe(Effect.provide(layer)))
+      expect(phases).toEqual(["checking", "downloading", "verifying"])
+    })
+
+    test("resolves a release to an immutable installer revision before spawning", async () => {
+      const urls: string[] = []
+      const layer = testLayer((request) => {
+        urls.push(request.url)
+        return installerResponse(request)
+      }, (cmd, args) => cmd === process.execPath && args[0] === "--version" ? "0.1.25" : "")
+      await Effect.runPromise(Installation.Service.use((svc) => svc.upgrade("curl", "0.1.25")).pipe(Effect.provide(layer)))
+      expect(urls).toEqual([
+        "https://github.com/MendCode/MendCode/releases/download/v0.1.25/release-index.json",
+        "https://api.github.com/repos/MendCode/MendCode/commits/v0.1.25",
+        `https://raw.githubusercontent.com/MendCode/MendCode/${"a".repeat(40)}/src/mendcode/install`,
+      ])
+    })
+
+    test("rejects an invalid release revision without running an installer", async () => {
+      let spawned = false
+      const layer = testLayer((request) => request.url.includes("/commits/") ? jsonResponse({ sha: "main" }) : installerResponse(request), (cmd) => { if (cmd !== "gh") spawned = true; return "" })
+      await expect(Effect.runPromise(Installation.Service.use((svc) => svc.upgrade("curl", "0.1.25")).pipe(Effect.provide(layer))))
+        .rejects.toMatchObject({ stderr: expect.any(String) })
+      expect(spawned).toBe(false)
+    })
+
     test("runs curl upgrades without opening setup inside the active TUI", async () => {
       const calls: Array<{ cmd: string; args: readonly string[] }> = []
       const layer = testLayer(
-        () => new Response("#!/usr/bin/env bash\n"),
+        installerResponse,
         (cmd, args) => {
           calls.push({ cmd, args })
           if (cmd === process.execPath && args.length === 1 && args[0] === "--version") return "0.1.25"
@@ -136,7 +200,7 @@ describe("installation", () => {
         Installation.Service.use((svc) => svc.upgrade("curl", "0.1.25")).pipe(Effect.provide(layer)),
       )
 
-      expect(calls[0]).toEqual({
+      expect(calls.find((call) => /(?:^|[\\/])bash(?:\.exe)?$/.test(call.cmd))).toEqual({
         cmd: expect.stringMatching(/(?:^|[\\/])bash(?:\.exe)?$/),
         args: ["-s", "--", "--version", "0.1.25", "--no-modify-path", "--skip-setup"],
       })
@@ -144,7 +208,7 @@ describe("installation", () => {
 
     test("turns a missing updater process into an actionable error", async () => {
       const layer = Installation.layer.pipe(
-        Layer.provide(mockHttpClient(() => new Response("#!/usr/bin/env bash\n"))),
+        Layer.provide(mockHttpClient(installerResponse)),
         Layer.provide(mockSpawner(() => "", new Error("spawn bash ENOENT"))),
       )
 
@@ -163,7 +227,7 @@ describe("installation", () => {
 
     test("rejects an upgrade when the installed binary reports another version", async () => {
       const layer = testLayer(
-        () => new Response("#!/usr/bin/env bash\n"),
+        installerResponse,
         (cmd, args) => (cmd === process.execPath && args.length === 1 && args[0] === "--version" ? "0.1.24" : ""),
       )
 

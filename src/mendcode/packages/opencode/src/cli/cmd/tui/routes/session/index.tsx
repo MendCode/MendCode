@@ -222,6 +222,17 @@ import {
 } from "@/mend/tui/presentation"
 import { blurCompactionArcade, CompactionPanel, isCompactionArcadeFocused } from "../../component/compaction-panel"
 import { AgentCommandPanel } from "../../component/agent-command-panel"
+import { SessionWidgetTray } from "@/mend/tui/widgets-tray"
+import {
+  SessionQuestionsWidget,
+  SessionJobsWidget,
+  splitWidgetQuestions,
+  isWidgetJobActive,
+  widgetReasoningLabel,
+  type WidgetReasoningState,
+  type WidgetJob,
+  type AsyncQuestionRequest,
+} from "@/mend/tui/widgets-runtime"
 import {
   agentViewCommandStateRank,
   agentViewCommandTouchesSession,
@@ -840,8 +851,18 @@ export function Session() {
     return pendingPermissions()
   })
   const activePermission = createMemo(() => permissions()[0])
-  const questions = createMemo(() => {
-    return pendingInputSessionIDs().flatMap((sessionID) => sync.data.question[sessionID] ?? [])
+  const questionGroups = createMemo(() =>
+    splitWidgetQuestions(pendingInputSessionIDs().flatMap((sessionID) => sync.data.question[sessionID] ?? [])),
+  )
+  const asyncQuestions = createMemo(() => questionGroups().asynchronous)
+  const [answeringQuestionID, setAnsweringQuestionID] = createSignal<string>()
+  const questions = createMemo(() => [
+    ...questionGroups().blocking,
+    ...asyncQuestions().filter((request) => request.id === answeringQuestionID()),
+  ])
+  createEffect(() => {
+    const id = answeringQuestionID()
+    if (id && !asyncQuestions().some((request) => request.id === id)) setAnsweringQuestionID(undefined)
   })
   const planReviews = createMemo(() => {
     return pendingInputSessionIDs().flatMap((sessionID) => sync.data.plan_review[sessionID] ?? [])
@@ -1341,6 +1362,13 @@ export function Session() {
     }
   }
   const [agentCommands, setAgentCommands] = createSignal<AgentViewCommand[]>([])
+  const [runtimeJobs, setRuntimeJobs] = createSignal<WidgetJob[]>([])
+  const [reasoningState, setReasoningState] = createSignal<WidgetReasoningState>()
+  let reasoningStateRevision = 0
+  let lastReasoningUpdateAt = 0
+  const [runtimeJobBusyID, setRuntimeJobBusyID] = createSignal<string>()
+  let runtimeRefreshTimer: ReturnType<typeof setTimeout> | undefined
+  let runtimeRefreshRevision = 0
   const [agentCommandBusyID, setAgentCommandBusyID] = createSignal<string>()
   let agentCommandRefreshTimer: ReturnType<typeof setTimeout> | undefined
   const editor = useEditorContext()
@@ -1390,6 +1418,48 @@ export function Session() {
     )
   }
 
+  const refreshRuntimeJobs = async (sessionID = route.sessionID) => {
+    if (route.sessionID !== sessionID) return
+    const revision = ++runtimeRefreshRevision
+    const reasoningRevision = reasoningStateRevision
+    const response = await agentCommandJSON<{ records: WidgetJob[]; currentReasoning?: WidgetReasoningState }>(`/continuity/${sessionID}`, {
+      signal: AbortSignal.timeout(15_000),
+    }).catch(() => undefined)
+    if (revision !== runtimeRefreshRevision || route.sessionID !== sessionID || !response) return
+    if (reasoningRevision === reasoningStateRevision) {
+      if (response.currentReasoning) updateReasoningState(response.currentReasoning)
+      else setReasoningState(undefined)
+    }
+    setRuntimeJobs(
+      response.records.filter((record) => record.kind === "job" && record.sessionID === sessionID)
+        .toSorted((a, b) => Number(isWidgetJobActive(b)) - Number(isWidgetJobActive(a)) || b.timeUpdated - a.timeUpdated),
+    )
+  }
+
+  const updateReasoningState = (state: WidgetReasoningState) => {
+    if (state.sessionID !== route.sessionID || state.requestedAt < lastReasoningUpdateAt) return
+    lastReasoningUpdateAt = state.requestedAt
+    reasoningStateRevision++
+    setReasoningState(state)
+  }
+
+  const cancelRuntimeJob = async (id: string) => {
+    if (runtimeJobBusyID()) return
+    const sessionID = route.sessionID
+    setRuntimeJobBusyID(id)
+    try {
+      await agentCommandJSON(`/continuity/${sessionID}/${encodeURIComponent(id)}/cancel`, {
+        method: "POST",
+        signal: AbortSignal.timeout(30_000),
+      })
+      await refreshRuntimeJobs(sessionID)
+    } catch (error) {
+      toast.show({ variant: "error", message: errorMessage(error), duration: 4000 })
+    } finally {
+      setRuntimeJobBusyID(undefined)
+    }
+  }
+
   const refreshAgentCommands = async (sessionID = route.sessionID) => {
     const [incoming, outgoing] = await Promise.all([
       agentCommandJSON<AgentViewCommand[]>(`/session/${sessionID}/agent-command`).catch(() => []),
@@ -1434,13 +1504,21 @@ export function Session() {
       () => route.sessionID,
       (sessionID) => {
         setAgentCommands([])
+        setRuntimeJobs([])
+        setReasoningState(undefined)
+        reasoningStateRevision++
+        lastReasoningUpdateAt = 0
+        setAnsweringQuestionID(undefined)
         void refreshAgentCommands(sessionID).catch(() => undefined)
+        void refreshRuntimeJobs(sessionID).catch(() => undefined)
       },
     ),
   )
 
   onCleanup(() => {
+    runtimeRefreshRevision++
     if (agentCommandRefreshTimer) clearTimeout(agentCommandRefreshTimer)
+    if (runtimeRefreshTimer) clearTimeout(runtimeRefreshTimer)
   })
   const [permissionsConfig, { refetch: refetchPermissionsConfig }] = createResource(
     () => route.sessionID,
@@ -2110,6 +2188,24 @@ export function Session() {
       })
     if (agentCommandTouchesCurrentSession) scheduleAgentCommandRefresh()
     const evtSessionID = eventSessionID(evt)
+    if (evtType === "session.reasoning.updated" && evtSessionID === route.sessionID) {
+      updateReasoningState(evt.properties as unknown as WidgetReasoningState)
+    }
+    if (evtType === "session.reasoning.cleared" && evtSessionID === route.sessionID) {
+      const cleared = evt.properties as unknown as { requestedAt: number }
+      if (cleared.requestedAt >= lastReasoningUpdateAt) {
+        lastReasoningUpdateAt = cleared.requestedAt
+        reasoningStateRevision++
+        setReasoningState(undefined)
+      }
+    }
+    if (evtType === "continuity.updated" && evtSessionID === route.sessionID) {
+      if (runtimeRefreshTimer) clearTimeout(runtimeRefreshTimer)
+      runtimeRefreshTimer = setTimeout(() => {
+        runtimeRefreshTimer = undefined
+        void refreshRuntimeJobs().catch(() => undefined)
+      }, 50)
+    }
     if (evtSessionID !== route.sessionID && !agentCommandTouchesCurrentSession) return
     lastSessionEventAt = Date.now()
     if (evt.type === "message.part.updated") {
@@ -3606,6 +3702,7 @@ export function Session() {
   const command = useCommandDialog()
 
   function toggleSessionWidgets(dialog?: ReturnType<typeof useDialog>) {
+    if (!showSessionWidgets()) void refreshRuntimeJobs().catch(() => undefined)
     setShowSessionWidgets((visible) => {
       const next = !visible
       setFocusSessionWidgets(next)
@@ -4761,6 +4858,11 @@ export function Session() {
                   todos={todos()}
                   subagents={subagents()}
                   commands={agentCommands()}
+                  questions={asyncQuestions()}
+                  jobs={runtimeJobs()}
+                  jobBusyID={runtimeJobBusyID()}
+                  onCancelJob={(id) => void cancelRuntimeJob(id)}
+                  onAnswerQuestion={setAnsweringQuestionID}
                   commandBusyID={agentCommandBusyID()}
                   width={contentWidth()}
                   sessionID={route.sessionID}
@@ -4786,6 +4888,18 @@ export function Session() {
                     permission: permissionModeLabel(),
                   }}
                 />
+              </Show>
+              <Show when={(asyncQuestions().length > 0 || runtimeJobs().some(isWidgetJobActive)) && !showSessionBottomDock() && !answeringQuestionID()}>
+                <text fg={theme.textMuted} wrapMode="none" onMouseUp={() => toggleSessionWidgets()}>
+                  {asyncQuestions().length} pending questions · {runtimeJobs().filter(isWidgetJobActive).length} active tools · {keybind.print("todo_toggle")} widgets
+                </text>
+              </Show>
+              <Show when={reasoningState()}>
+                {(state) => (
+                  <text fg={theme.textMuted} wrapMode="none">
+                    {Locale.truncate(widgetReasoningLabel(state()), contentWidth())}
+                  </text>
+                )}
               </Show>
               <For each={listMendWidgets("aboveEditor")}>{(item) => <RenderMendWidget item={item} />}</For>
               {/* Do not keep the hidden prompt subtree mounted while a question/permission owns input. */}
@@ -5403,6 +5517,11 @@ function SessionBottomDock(props: {
   todos: SessionTodo[]
   subagents: SessionSubagentInfo[]
   commands: readonly AgentViewCommand[]
+  questions: readonly AsyncQuestionRequest[]
+  jobs: readonly WidgetJob[]
+  jobBusyID?: string
+  onCancelJob: (id: string) => void
+  onAnswerQuestion: (id: string) => void
   commandBusyID?: string
   width: number
   sessionID: string
@@ -5419,6 +5538,8 @@ function SessionBottomDock(props: {
   const commandWidth = createMemo(() =>
     props.commands.length > 0 ? Math.max(42, Math.min(72, Math.floor(props.width * 0.55))) : 0,
   )
+  const questionsWidth = createMemo(() => props.questions.length > 0 ? Math.max(42, Math.min(64, props.width)) : 0)
+  const jobsWidth = createMemo(() => props.jobs.length > 0 ? 42 : 0)
   const builtinDockWidgetIDs = ["todo", "notes", "subagents", "info"]
   const profileControlsBuiltins = createMemo(() => {
     const widgets = mend.profile.widgets
@@ -5451,6 +5572,8 @@ function SessionBottomDock(props: {
       dockWidth: layout().dockWidth,
       widgetWidths: [
         commandWidth(),
+        questionsWidth(),
+        jobsWidth(),
         layout().todoWidth,
         layout().showNotes ? layout().notesWidth : 0,
         layout().showSubagents ? layout().subagentsWidth : 0,
@@ -5459,35 +5582,15 @@ function SessionBottomDock(props: {
       ],
     }),
   )
-  const trayOverflow = createMemo(() => trayContentWidth() > layout().dockWidth)
-  const trayHeight = createMemo(() => layout().dockHeight + (trayOverflow() ? 1 : 0))
-  let tray: ScrollBoxRenderable | undefined
-
-  onMount(() => {
-    if (!props.autoFocus) return
-    tray?.focus()
-    props.onAutoFocus?.()
-  })
-
   return (
     <box flexShrink={0} width="100%" paddingBottom={1}>
-      <scrollbox
-        ref={(value: ScrollBoxRenderable) => {
-          tray = value
-        }}
+      <SessionWidgetTray
         width={layout().dockWidth}
-        height={trayHeight()}
-        scrollX
-        scrollY={false}
-        contentOptions={{ width: trayContentWidth(), minWidth: trayContentWidth() }}
-        horizontalScrollbarOptions={{
-          visible: trayOverflow(),
-          trackOptions: {
-            backgroundColor: theme.backgroundElement,
-            foregroundColor: theme.border,
-          },
-        }}
-        verticalScrollbarOptions={{ visible: false }}
+        contentWidth={trayContentWidth()}
+        height={layout().dockHeight}
+        autoFocus={props.autoFocus}
+        onAutoFocus={props.onAutoFocus}
+        theme={theme}
       >
         <box
           width={trayContentWidth()}
@@ -5498,6 +5601,15 @@ function SessionBottomDock(props: {
           alignItems="stretch"
           overflow="visible"
         >
+          <Show when={props.questions.length > 0}>
+            <SessionQuestionsWidget
+              questions={props.questions}
+              width={questionsWidth()}
+              height={layout().dockHeight}
+              theme={theme}
+              onAnswer={props.onAnswerQuestion}
+            />
+          </Show>
           <Show when={props.commands.length > 0}>
             <box
               width={commandWidth()}
@@ -5513,12 +5625,17 @@ function SessionBottomDock(props: {
                 commands={props.commands}
                 sessionID={props.sessionID}
                 width={Math.max(1, commandWidth() - 2)}
+                height={layout().dockHeight}
                 busyID={props.commandBusyID}
                 theme={theme}
                 onUpdate={props.onUpdateCommand}
                 onOpenSession={props.onOpenSession}
               />
             </box>
+          </Show>
+          <Show when={props.jobs.length > 0}>
+            <SessionJobsWidget jobs={props.jobs} width={jobsWidth()} height={layout().dockHeight} theme={theme}
+              busyID={props.jobBusyID} onCancel={props.onCancelJob} />
           </Show>
           <SessionTodoPanel todos={props.todos} width={layout().todoWidth} height={layout().dockHeight} />
           <Show when={layout().showNotes}>
@@ -5551,7 +5668,7 @@ function SessionBottomDock(props: {
             )}
           </For>
         </box>
-      </scrollbox>
+      </SessionWidgetTray>
     </box>
   )
 }

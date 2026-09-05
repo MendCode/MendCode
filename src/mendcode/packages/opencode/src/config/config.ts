@@ -41,6 +41,7 @@ import { ConfigServer } from "./server"
 import { ConfigSkills } from "./skills"
 import { ConfigVariable } from "./variable"
 import { Npm } from "@mendcode/core/npm"
+import { notifyDisabled } from "@/session/continuity-control"
 
 const log = Log.create({ service: "config" })
 
@@ -244,9 +245,7 @@ export const Info = Schema.Struct({
       model: Schema.optional(ConfigModelID).annotate({
         description: "Image generation model in provider/model format",
       }),
-      adapter: Schema.optional(
-        Schema.Literals(["auto", "codex-oauth", "openrouter", "openai-compatible"]),
-      ).annotate({
+      adapter: Schema.optional(Schema.Literals(["auto", "codex-oauth", "openrouter", "openai-compatible"])).annotate({
         description: "Image API adapter. Auto selects only verified provider contracts.",
       }),
       base_url: Schema.optional(Schema.String).annotate({
@@ -357,6 +356,18 @@ export const Info = Schema.Struct({
   ).annotate({ description: "Default handling for prompts submitted while an assistant turn is active." }),
   experimental: Schema.optional(
     Schema.Struct({
+      async_tools: Schema.optional(Schema.Boolean).annotate({
+        description: "Opt in to emulated background read tools (default: false).",
+      }),
+      async_questions: Schema.optional(Schema.Boolean).annotate({
+        description: "Opt in to persistent nonblocking questions (default: false).",
+      }),
+      session_recall: Schema.optional(Schema.Boolean).annotate({
+        description: "Opt in to bounded current/child session history recall (default: false).",
+      }),
+      reasoning_auto: Schema.optional(Schema.Boolean).annotate({
+        description: "Opt in to balanced automatic reasoning; manual selection takes precedence (default: false).",
+      }),
       disable_paste_summary: Schema.optional(Schema.Boolean),
       paste_summary_min_chars: Schema.optional(PositiveInt).annotate({
         description:
@@ -881,6 +892,7 @@ export const layer = Layer.effect(
       yield* fs
         .writeFileString(file, JSON.stringify(mergeDeep(writable(existing), writable(config)), null, 2))
         .pipe(Effect.orDie)
+      notifyDisabled({ directory: dir, experimental: config.experimental })
     })
 
     const invalidate = Effect.fn("Config.invalidate")(function* () {
@@ -908,7 +920,10 @@ export const layer = Layer.effect(
         if (changed) yield* fs.writeFileString(file, updated).pipe(Effect.orDie)
       }
 
-      if (changed) yield* invalidate()
+      if (changed) {
+        yield* invalidate()
+        notifyDisabled({ experimental: config.experimental })
+      }
       return { info: next, changed }
     })
 

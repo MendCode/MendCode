@@ -15,14 +15,14 @@ import { makeRuntime } from "@mendcode/core/effect/runtime"
 import semver from "semver"
 import { InstallationChannel, InstallationVersion } from "@mendcode/core/installation/version"
 import { which } from "@/util/which"
+import { readChannel, selectRelease, type Release } from "./release-channel"
+import { updateProgress, type UpdateObserver } from "./progress"
+import { verifyReleaseIndex, verifyInstallerBytes } from "./release-index"
 
 const log = Log.create({ service: "installation" })
 const GITHUB_REPO = process.env.MENDCODE_GITHUB_REPO ?? "MendCode/MendCode"
 const GITHUB_RAW_INSTALL_URL =
   process.env.MENDCODE_INSTALL_URL ?? `https://raw.githubusercontent.com/${GITHUB_REPO}/main/src/mendcode/install`
-const GITHUB_RAW_INSTALL_PS1_URL =
-  process.env.MENDCODE_INSTALL_PS1_URL ??
-  `https://raw.githubusercontent.com/${GITHUB_REPO}/main/src/mendcode/install.ps1`
 const GITHUB_LATEST_RELEASE_URL = `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`
 const PackageVersion = (() => {
   try {
@@ -158,13 +158,17 @@ export function windowsUpdaterArgs(scriptPath: string, target: string) {
 }
 
 // Response schemas for external version APIs
-const GitHubRelease = Schema.Struct({ tag_name: Schema.String })
+const GitHubRelease = Schema.Struct({
+  tag_name: Schema.String,
+  draft: Schema.optional(Schema.Boolean),
+  prerelease: Schema.optional(Schema.Boolean),
+})
 
 export interface Interface {
   readonly info: () => Effect.Effect<Info>
   readonly method: () => Effect.Effect<Method>
   readonly latest: (method?: Method) => Effect.Effect<string>
-  readonly upgrade: (method: Method, target: string) => Effect.Effect<void, UpgradeFailedError>
+  readonly upgrade: (method: Method, target: string, observer?: UpdateObserver) => Effect.Effect<void, UpgradeFailedError>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/Installation") {}
@@ -213,10 +217,45 @@ export const layer: Layer.Layer<Service, never, HttpClient.HttpClient | ChildPro
       )
 
       const upgradeCurl = Effect.fnUntraced(
-        function* (target: string) {
+        function* (target: string, observer?: UpdateObserver) {
+          const progress = updateProgress(observer)
+          progress("MENDCODE_UPDATE_PHASE=checking\n")
+          if (!semver.valid(target)) {
+            return yield* new UpgradeFailedError({ stderr: "The requested release must be a valid semantic version." })
+          }
+          const override = usesNativeWindowsUpdater() ? process.env.MENDCODE_INSTALL_PS1_URL : process.env.MENDCODE_INSTALL_URL
+          let installerURL = override
+          let installerSHA256: string | undefined
+          let verifiedSums: string | undefined
+          if (!installerURL) {
+            const verified = yield* Effect.tryPromise({ try: () => verifyReleaseIndex({ version: target,
+              directory: path.join(tmpdir(), "mendcode-release-verification"),
+              run: async (command, args, options) => {
+                const result = await Effect.runPromise(run([command, ...args]).pipe(Effect.timeout(options.timeoutMs)))
+                return { exitCode: Number(result.code) }
+              },
+              fetch: ((url: string | URL | Request) => Effect.runPromise(Effect.gen(function* () {
+                const response = yield* http.execute(HttpClientRequest.get(String(url)).pipe(HttpClientRequest.acceptJson))
+                const bytes = yield* response.stream.pipe(Stream.runFold(() => Buffer.alloc(0), (result, chunk) => {
+                  if (result.length + chunk.length > 512 * 1024) throw new Error("Release metadata exceeds the size limit")
+                  return Buffer.concat([result, chunk])
+                }))
+                return new Response(bytes, { status: response.status, headers: response.headers })
+              }).pipe(Effect.timeout(15_000)))) as typeof fetch,
+            }), catch: (error) => new UpgradeFailedError({ stderr: describeUpgradeFailure(error) }) })
+            const { Path } = yield* Effect.promise(() => import("@/storage/db"))
+            const { assertCompatibility } = yield* Effect.promise(() => import("@/storage/compatibility"))
+            yield* Effect.sync(() => assertCompatibility(Path, verified.index.schema.journal))
+            installerURL = usesNativeWindowsUpdater() ? verified.windowsInstallerURL : verified.installerURL
+            installerSHA256 = usesNativeWindowsUpdater() ? verified.windowsInstallerSHA256 : verified.installerSHA256
+            verifiedSums = path.join(path.dirname(verified.file), "verified-sums.txt")
+            yield* Effect.sync(() => writeFileSync(verifiedSums!, Object.entries(verified.checksums)
+              .map(([name, digest]) => `${digest}  ${name}`).join("\n") + "\n", { mode: 0o600 }))
+          }
           if (usesNativeWindowsUpdater()) {
-            const response = yield* httpOk.execute(HttpClientRequest.get(GITHUB_RAW_INSTALL_PS1_URL))
+            const response = yield* httpOk.execute(HttpClientRequest.get(installerURL)).pipe(Effect.timeout(15_000))
             const body = yield* response.text
+            if (installerSHA256) yield* Effect.sync(() => verifyInstallerBytes(new TextEncoder().encode(body), installerSHA256))
             const powershell = installerPowerShell()
             if (!powershell) {
               return yield* new UpgradeFailedError({
@@ -232,6 +271,7 @@ export const layer: Layer.Layer<Service, never, HttpClient.HttpClient | ChildPro
                 env: {
                   MENDCODE_UPDATE_PARENT_PID: String(process.pid),
                   MENDCODE_UPDATE_SCRIPT_PATH: scriptPath,
+                  ...(verifiedSums ? { MENDCODE_VERIFIED_SUMS_FILE: verifiedSums } : {}),
                 },
               })
               return { ...result, deferred: true as const }
@@ -246,8 +286,9 @@ export const layer: Layer.Layer<Service, never, HttpClient.HttpClient | ChildPro
             }
           }
 
-          const response = yield* httpOk.execute(HttpClientRequest.get(GITHUB_RAW_INSTALL_URL))
+          const response = yield* httpOk.execute(HttpClientRequest.get(installerURL)).pipe(Effect.timeout(15_000))
           const body = yield* response.text
+          if (installerSHA256) yield* Effect.sync(() => verifyInstallerBytes(new TextEncoder().encode(body), installerSHA256))
           const bash = installerShell()
           if (!bash) {
             return yield* new UpgradeFailedError({
@@ -258,17 +299,30 @@ export const layer: Layer.Layer<Service, never, HttpClient.HttpClient | ChildPro
           const bodyBytes = new TextEncoder().encode(body)
           const proc = ChildProcess.make(bash, ["-s", "--", "--version", target, "--no-modify-path", "--skip-setup"], {
             stdin: Stream.make(bodyBytes),
+            env: verifiedSums ? { MENDCODE_VERIFIED_SUMS_FILE: verifiedSums } : undefined,
             extendEnv: true,
           })
           const handle = yield* spawner.spawn(proc)
           const [stdout, stderr] = yield* Effect.all(
-            [Stream.mkString(Stream.decodeText(handle.stdout)), Stream.mkString(Stream.decodeText(handle.stderr))],
+            [
+              Stream.decodeText(handle.stdout).pipe(
+                Stream.tap((chunk) => Effect.sync(() => progress(chunk))),
+                Stream.runFold(() => "", (output, chunk) => (output + chunk).slice(-65_536)),
+              ),
+              Stream.decodeText(handle.stderr).pipe(
+                Stream.runFold(() => "", (output, chunk) => (output + chunk).slice(-65_536)),
+              ),
+            ],
             { concurrency: 2 },
           )
           const code = yield* handle.exitCode
           return { code, stdout, stderr }
         },
+        Effect.timeout(930_000),
         Effect.scoped,
+        Effect.catchTag("TimeoutError", () => Effect.fail(new UpgradeFailedError({
+          stderr: "The updater timed out. Check the download connection and retry; inspect the installed version before starting another update.",
+        }))),
         Effect.catchDefect((defect) => Effect.fail(new UpgradeFailedError({ stderr: describeUpgradeFailure(defect) }))),
         Effect.mapError((error) =>
           error instanceof UpgradeFailedError
@@ -317,19 +371,40 @@ export const layer: Layer.Layer<Service, never, HttpClient.HttpClient | ChildPro
           return "unknown" as Method
         }),
         latest: Effect.fn("Installation.latest")(function* (_installMethod?: Method) {
-          const response = yield* httpOk.execute(
-            HttpClientRequest.get(GITHUB_LATEST_RELEASE_URL).pipe(HttpClientRequest.acceptJson),
-          )
-          const data = yield* HttpClientResponse.schemaBodyJson(GitHubRelease)(response)
-          return data.tag_name.replace(/^v/, "")
+          const channel = yield* Effect.tryPromise(readChannel)
+          if (channel === "stable") {
+            const response = yield* httpOk.execute(
+              HttpClientRequest.get(GITHUB_LATEST_RELEASE_URL).pipe(HttpClientRequest.acceptJson),
+            ).pipe(Effect.timeout(15_000))
+            const data = yield* HttpClientResponse.schemaBodyJson(GitHubRelease)(response)
+            const version = selectRelease([data], channel)
+            if (!version) throw new Error("GitHub did not return a valid stable release")
+            return version
+          }
+          // GitHub orders publication dates, not semantic versions: inspect all bounded pages.
+          const releases: Release[] = []
+          for (let page = 1; page <= 10; page++) {
+            const response = yield* httpOk.execute(HttpClientRequest.get(
+              `https://api.github.com/repos/${GITHUB_REPO}/releases?per_page=100&page=${page}`,
+            ).pipe(HttpClientRequest.acceptJson)).pipe(Effect.timeout(15_000))
+            const data = yield* HttpClientResponse.schemaBodyJson(Schema.Array(GitHubRelease))(response)
+            releases.push(...data)
+            if (data.length < 100) {
+              const version = selectRelease(releases, channel)
+              if (version) return version
+              break
+            }
+            if (page === 10) throw new Error("Release discovery exceeded its history limit; specify an exact version.")
+          }
+          throw new Error(`No published ${channel} release is available`)
         }, Effect.orDie),
-        upgrade: Effect.fn("Installation.upgrade")(function* (m: Method, target: string) {
+        upgrade: Effect.fn("Installation.upgrade")(function* (m: Method, target: string, observer?: UpdateObserver) {
           let upgradeResult:
             | { code: ChildProcessSpawner.ExitCode; stdout: string; stderr: string; deferred?: boolean }
             | undefined
           switch (m) {
             case "curl":
-              upgradeResult = yield* upgradeCurl(target)
+              upgradeResult = yield* upgradeCurl(target, observer)
               break
             case "npm":
             case "pnpm":
@@ -359,7 +434,12 @@ export const layer: Layer.Layer<Service, never, HttpClient.HttpClient | ChildPro
             stderr: upgradeResult.stderr,
           })
           if (upgradeResult.deferred) return
-          const installedVersion = (yield* text([process.execPath, "--version"])).trim()
+          const installedVersion = (yield* text([process.execPath, "--version"]).pipe(
+            Effect.timeout(30_000),
+            Effect.catchTag("TimeoutError", () => Effect.fail(new UpgradeFailedError({
+              stderr: "The installed binary did not answer within 30 seconds. Restart MendCode or recover the previous version before retrying.",
+            }))),
+          )).trim()
           if (installedVersion !== target) {
             return yield* new UpgradeFailedError({
               stderr: `MendCode upgrade did not install the requested version. Expected ${target}, found ${installedVersion || "unknown"}. Restart the current process and retry.`,

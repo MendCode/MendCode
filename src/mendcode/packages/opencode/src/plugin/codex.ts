@@ -7,6 +7,7 @@ import os from "os"
 import { setTimeout as sleep } from "node:timers/promises"
 import { createServer } from "http"
 import { isRecord } from "@/util/record"
+import { normalizeAstraRequest } from "@/mend/prompt/model-family"
 
 const log = Log.create({ service: "plugin.codex" })
 
@@ -114,13 +115,13 @@ export function normalizeCodexChatGPTRequestBody(body: BodyInit | null | undefin
           mode: "pro",
         }
       : request.reasoning
-  if (normalized.modelID === request.model && !normalized.mode) return body
-  return JSON.stringify({
+  if (normalized.modelID === request.model && !normalized.mode && normalizeAstraRequest(request) === request) return body
+  return JSON.stringify(normalizeAstraRequest({
     ...request,
     model: normalized.modelID,
     ...(normalized.mode === "fast" ? { service_tier: "priority" } : {}),
     ...(reasoning === undefined ? {} : { reasoning }),
-  })
+  }))
 }
 
 function prepareResponsesLiteRequest(input: {

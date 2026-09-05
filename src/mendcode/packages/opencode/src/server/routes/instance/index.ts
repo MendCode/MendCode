@@ -15,6 +15,8 @@ import { Global } from "@mendcode/core/global"
 import { LSP } from "@/lsp/lsp"
 import { Command } from "@/command"
 import { QuestionRoutes } from "./question"
+import { ContinuityRoutes } from "./continuity"
+import { UsageRoutes } from "./usage"
 import { PlanReviewRoutes } from "./plan-review"
 import { PermissionRoutes } from "./permission"
 import { ProjectRoutes } from "./project"
@@ -188,6 +190,8 @@ export const InstanceRoutes = (upgrade: UpgradeWebSocket, opts?: CorsOptions): H
   }
 
   return app
+    .route("/usage", UsageRoutes())
+    .route("/continuity", ContinuityRoutes())
     .route("/project", ProjectRoutes())
     .route("/pty", PtyRoutes(upgrade, opts))
     .route("/config", ConfigRoutes())

@@ -9,6 +9,9 @@ import {
   shouldReplaceLiveServer,
   shouldUseSharedServer,
   waitForClientLeases,
+  resolveSharedDatabasePath,
+  resolveSharedServerRoot,
+  acquireLock,
 } from "../../../src/cli/cmd/tui/shared-server"
 import { tmpdir } from "../../fixture/fixture"
 import fs from "fs/promises"
@@ -25,6 +28,57 @@ const valid = {
 }
 
 describe("shared server state", () => {
+  test("does not steal a live owner's startup lock based on age", async () => {
+    await using tmp = await tmpdir()
+    const previous = process.env.MENDCODE_SHARED_SERVER_STATE_FILE
+    process.env.MENDCODE_SHARED_SERVER_STATE_FILE = path.join(tmp.path, "server.json")
+    const lock = path.join(tmp.path, "server.lock")
+    try {
+      await fs.mkdir(lock)
+      await fs.writeFile(path.join(lock, "owner"), String(process.pid))
+      const old = new Date(Date.now() - 60_000)
+      await fs.utimes(lock, old, old)
+      expect(await acquireLock(50)).toBeUndefined()
+      expect(await fs.readFile(path.join(lock, "owner"), "utf8")).toBe(String(process.pid))
+    } finally {
+      if (previous === undefined) delete process.env.MENDCODE_SHARED_SERVER_STATE_FILE
+      else process.env.MENDCODE_SHARED_SERVER_STATE_FILE = previous
+    }
+  })
+
+  test("isolates explicit databases and shares their lock across state directories", async () => {
+    await using tmp = await tmpdir()
+    const database = path.join(tmp.path, "selected.db")
+    const defaults = path.join(tmp.path, "default.db")
+    const root = (selected: string, stateDirectory: string) => resolveSharedServerRoot({
+      database: selected, defaultDatabase: defaults, stateDirectory,
+    })
+    expect(root(database, path.join(tmp.path, "state-a"))).toBe(`${database}.shared-server`)
+    expect(root(database, path.join(tmp.path, "state-b"))).toBe(`${database}.shared-server`)
+    expect(root(path.join(tmp.path, "other.db"), tmp.path)).not.toBe(root(database, tmp.path))
+    expect(root(defaults, tmp.path)).toBe(path.join(tmp.path, "shared-server"))
+  })
+
+  test("canonicalizes relative and symlink database aliases before spawning", async () => {
+    await using tmp = await tmpdir()
+    const data = path.join(tmp.path, "data")
+    const alias = path.join(tmp.path, "alias")
+    await fs.mkdir(data)
+    await fs.symlink(data, alias, process.platform === "win32" ? "junction" : "dir")
+    expect(resolveSharedDatabasePath("nested/db.sqlite", alias)).toBe(path.join(data, "nested/db.sqlite"))
+    expect(resolveSharedServerRoot({
+      database: path.join(alias, "db.sqlite"),
+      defaultDatabase: path.join(data, "db.sqlite"),
+      stateDirectory: tmp.path,
+    })).toBe(path.join(tmp.path, "shared-server"))
+  })
+
+  test("keeps in-memory servers private to their initiating process", () => {
+    const input = { database: ":memory:", defaultDatabase: "/unused.db", stateDirectory: "/state" }
+    expect(resolveSharedServerRoot({ ...input, pid: 101 })).not.toBe(resolveSharedServerRoot({ ...input, pid: 202 }))
+    expect(resolveSharedDatabasePath(":memory:")).toBe(":memory:")
+  })
+
   test("accepts a valid loopback server state", () => {
     expect(parseState(valid)).toEqual(valid)
   })

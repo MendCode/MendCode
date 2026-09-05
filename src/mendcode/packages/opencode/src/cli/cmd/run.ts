@@ -4,6 +4,7 @@ import { pathToFileURL } from "url"
 import { Effect } from "effect"
 import { UI } from "../ui"
 import { effectCmd } from "../effect-cmd"
+import { cmd } from "./cmd"
 import { Flag } from "@mendcode/core/flag/flag"
 import { ServerAuth } from "@/server/auth"
 import { EOL } from "os"
@@ -28,9 +29,10 @@ import { TodoWriteTool } from "../../tool/todo"
 import { Locale } from "@/util/locale"
 import { Session } from "@/session/session"
 import { SessionID } from "@/session/schema"
-import { resolveRuntimeModel } from "../model-selection"
+import { resolveRuntimeModel, type RuntimeModelResolution } from "../model-selection"
 import { writeAutomationEnvelope } from "../automation"
 import { AppRuntime } from "@/effect/app-runtime"
+import { withSharedClient } from "../shared-client"
 
 type ToolProps<T> = {
   input: Tool.InferParameters<T>
@@ -207,15 +209,9 @@ function normalizePath(input?: string) {
   return input
 }
 
-export const RunCommand = effectCmd({
+const ClientRunCommand = cmd({
   command: "run [message..]",
   describe: "run MendCode runtime with a message",
-  // --attach connects to a remote server (no local instance needed); the
-  // default path runs an in-process server and needs the project instance.
-  instance: (args) => !args.attach,
-  // For --dir without --attach, load instance for the resolved target dir.
-  // The handler also chdirs (preserving the legacy order: chdir → file resolution).
-  directory: (args) => (args.dir && !args.attach ? path.resolve(process.cwd(), args.dir) : process.cwd()),
   builder: (yargs: Argv) =>
     yargs
       .positional("message", {
@@ -307,314 +303,292 @@ export const RunCommand = effectCmd({
         describe: "auto-approve permissions that are not explicitly denied (dangerous!)",
         default: false,
       }),
-  handler: Effect.fn("Cli.run")(function* (args) {
-    const agentSvc = yield* Agent.Service
-    const sessions = yield* Session.Service
-    yield* Effect.promise(async () => {
-      let message = [...args.message, ...(args["--"] || [])]
-        .map((arg) => (arg.includes(" ") ? `"${arg.replace(/"/g, '\\"')}"` : arg))
-        .join(" ")
+  handler: async (args) => {
+    let message = [...args.message, ...(args["--"] || [])]
+      .map((arg) => (arg.includes(" ") ? JSON.stringify(arg) : arg))
+      .join(" ")
 
-      const directory = (() => {
-        if (!args.dir) return undefined
-        if (args.attach) return args.dir
-        try {
-          process.chdir(args.dir)
-          return process.cwd()
-        } catch {
-          UI.error("Failed to change directory to " + args.dir)
+    const directory = (() => {
+      if (!args.dir) return undefined
+      if (args.attach) return args.dir
+      try {
+        process.chdir(args.dir)
+        return process.cwd()
+      } catch {
+        UI.error("Failed to change directory to " + args.dir)
+        process.exit(1)
+      }
+    })()
+
+    const files: { type: "file"; url: string; filename: string; mime: string }[] = []
+    if (args.file) {
+      const list = Array.isArray(args.file) ? args.file : [args.file]
+
+      for (const filePath of list) {
+        const resolvedPath = path.resolve(process.cwd(), filePath)
+        if (!(await Filesystem.exists(resolvedPath))) {
+          UI.error(`File not found: ${filePath}`)
           process.exit(1)
         }
-      })()
 
-      const files: { type: "file"; url: string; filename: string; mime: string }[] = []
-      if (args.file) {
-        const list = Array.isArray(args.file) ? args.file : [args.file]
+        const mime = (await Filesystem.isDir(resolvedPath)) ? "application/x-directory" : "text/plain"
 
-        for (const filePath of list) {
-          const resolvedPath = path.resolve(process.cwd(), filePath)
-          if (!(await Filesystem.exists(resolvedPath))) {
-            UI.error(`File not found: ${filePath}`)
-            process.exit(1)
-          }
-
-          const mime = (await Filesystem.isDir(resolvedPath)) ? "application/x-directory" : "text/plain"
-
-          files.push({
-            type: "file",
-            url: pathToFileURL(resolvedPath).href,
-            filename: path.basename(resolvedPath),
-            mime,
-          })
-        }
-      }
-
-      if (!process.stdin.isTTY) message += "\n" + (await Bun.stdin.text())
-
-      if (message.trim().length === 0 && !args.command) {
-        UI.error("You must provide a message or a command")
-        process.exit(1)
-      }
-
-      if (args.fork && !args.continue && !args.session) {
-        UI.error("--fork requires --continue or --session")
-        process.exit(1)
-      }
-
-      const rules: Permission.Ruleset = [
-        {
-          permission: "question",
-          action: "deny",
-          pattern: "*",
-        },
-        {
-          permission: "plan_enter",
-          action: "deny",
-          pattern: "*",
-        },
-        {
-          permission: "plan_exit",
-          action: "deny",
-          pattern: "*",
-        },
-      ]
-
-      function title() {
-        if (args.title === undefined) return
-        if (args.title !== "") return args.title
-        return message.slice(0, 50) + (message.length > 50 ? "..." : "")
-      }
-
-      async function session(sdk: OpencodeClient) {
-        const baseID = args.continue ? (await sdk.session.list()).data?.find((s) => !s.parentID)?.id : args.session
-
-        if (baseID && args.fork) {
-          const forked = await sdk.session.fork({ sessionID: baseID })
-          return forked.data?.id
-        }
-
-        if (baseID) return baseID
-
-        const name = title()
-        const result = await sdk.session.create({ title: name, permission: rules })
-        return result.data?.id
-      }
-
-      async function share(sdk: OpencodeClient, sessionID: string) {
-        const cfg = await sdk.config.get()
-        if (!cfg.data) return
-        if (cfg.data.share !== "auto" && !Flag.OPENCODE_AUTO_SHARE && !args.share) return
-        const res = await sdk.session.share({ sessionID }).catch((error) => {
-          if (error instanceof Error && error.message.includes("disabled")) {
-            UI.println(UI.Style.TEXT_DANGER_BOLD + "!  " + error.message)
-          }
-          return { error }
+        files.push({
+          type: "file",
+          url: pathToFileURL(resolvedPath).href,
+          filename: path.basename(resolvedPath),
+          mime,
         })
-        if (!res.error && "data" in res && res.data?.share?.url) {
-          UI.println(UI.Style.TEXT_INFO_BOLD + "~  " + res.data.share.url)
+      }
+    }
+
+    if (!process.stdin.isTTY) message += "\n" + (await Bun.stdin.text())
+
+    if (message.trim().length === 0 && !args.command) {
+      UI.error("You must provide a message or a command")
+      process.exit(1)
+    }
+
+    if (args.fork && !args.continue && !args.session) {
+      UI.error("--fork requires --continue or --session")
+      process.exit(1)
+    }
+
+    const rules: Permission.Ruleset = [
+      {
+        permission: "question",
+        action: "deny",
+        pattern: "*",
+      },
+      {
+        permission: "plan_enter",
+        action: "deny",
+        pattern: "*",
+      },
+      {
+        permission: "plan_exit",
+        action: "deny",
+        pattern: "*",
+      },
+    ]
+
+    function title() {
+      if (args.title === undefined) return
+      if (args.title !== "") return args.title
+      return message.slice(0, 50) + (message.length > 50 ? "..." : "")
+    }
+
+    async function session(sdk: OpencodeClient) {
+      const baseID = args.continue ? (await sdk.session.list()).data?.find((s) => !s.parentID)?.id : args.session
+
+      if (baseID && args.fork) {
+        const forked = await sdk.session.fork({ sessionID: baseID })
+        return forked.data?.id
+      }
+
+      if (baseID) return baseID
+
+      const name = title()
+      const result = await sdk.session.create({ title: name, permission: rules })
+      return result.data?.id
+    }
+
+    async function share(sdk: OpencodeClient, sessionID: string) {
+      const cfg = await sdk.config.get()
+      if (!cfg.data) return
+      if (cfg.data.share !== "auto" && !Flag.OPENCODE_AUTO_SHARE && !args.share) return
+      const res = await sdk.session.share({ sessionID }).catch((error) => {
+        if (error instanceof Error && error.message.includes("disabled")) {
+          UI.println(UI.Style.TEXT_DANGER_BOLD + "!  " + error.message)
+        }
+        return { error }
+      })
+      if (!res.error && "data" in res && res.data?.share?.url) {
+        UI.println(UI.Style.TEXT_INFO_BOLD + "~  " + res.data.share.url)
+      }
+    }
+
+    async function execute(sdk: OpencodeClient) {
+      function tool(part: ToolPart) {
+        try {
+          if (part.tool === ShellID.ToolID) return shell(props<typeof ShellTool>(part))
+          if (part.tool === "glob") return glob(props<typeof GlobTool>(part))
+          if (part.tool === "grep") return grep(props<typeof GrepTool>(part))
+          if (part.tool === "read") return read(props<typeof ReadTool>(part))
+          if (part.tool === "write") return write(props<typeof WriteTool>(part))
+          if (part.tool === "webfetch") return webfetch(props<typeof WebFetchTool>(part))
+          if (part.tool === "edit") return edit(props<typeof EditTool>(part))
+          if (part.tool === "websearch") return websearch(props<typeof WebSearchTool>(part))
+          if (part.tool === "task") return task(props<typeof TaskTool>(part))
+          if (part.tool === "todowrite") return todo(props<typeof TodoWriteTool>(part))
+          if (part.tool === "skill") return skill(props<typeof SkillTool>(part))
+          return fallback(part)
+        } catch {
+          return fallback(part)
         }
       }
 
-      async function execute(sdk: OpencodeClient) {
-        function tool(part: ToolPart) {
-          try {
-            if (part.tool === ShellID.ToolID) return shell(props<typeof ShellTool>(part))
-            if (part.tool === "glob") return glob(props<typeof GlobTool>(part))
-            if (part.tool === "grep") return grep(props<typeof GrepTool>(part))
-            if (part.tool === "read") return read(props<typeof ReadTool>(part))
-            if (part.tool === "write") return write(props<typeof WriteTool>(part))
-            if (part.tool === "webfetch") return webfetch(props<typeof WebFetchTool>(part))
-            if (part.tool === "edit") return edit(props<typeof EditTool>(part))
-            if (part.tool === "websearch") return websearch(props<typeof WebSearchTool>(part))
-            if (part.tool === "task") return task(props<typeof TaskTool>(part))
-            if (part.tool === "todowrite") return todo(props<typeof TodoWriteTool>(part))
-            if (part.tool === "skill") return skill(props<typeof SkillTool>(part))
-            return fallback(part)
-          } catch {
-            return fallback(part)
-          }
+      function emit(type: string, data: Record<string, unknown>) {
+        if (args.format === "json") {
+          writeAutomationEnvelope({ kind: "event", event: type, sessionID, data })
+          return true
         }
+        return false
+      }
 
-        function emit(type: string, data: Record<string, unknown>) {
-          if (args.format === "json") {
-            writeAutomationEnvelope({ kind: "event", event: type, sessionID, data })
-            return true
+      const eventController = new AbortController()
+      const events = await sdk.event.subscribe(undefined, { signal: eventController.signal })
+      let error: string | undefined
+
+      async function loop() {
+        const toggles = new Map<string, boolean>()
+
+        for await (const event of events.stream) {
+          if (
+            event.type === "message.updated" &&
+            event.properties.info.sessionID === sessionID &&
+            event.properties.info.role === "assistant" &&
+            args.format !== "json" &&
+            toggles.get("start") !== true
+          ) {
+            UI.empty()
+            UI.println(`> ${event.properties.info.agent} · ${event.properties.info.modelID}`)
+            UI.empty()
+            toggles.set("start", true)
           }
-          return false
-        }
 
-        const events = await sdk.event.subscribe()
-        let error: string | undefined
+          if (event.type === "message.part.updated") {
+            const part = event.properties.part
+            if (part.sessionID !== sessionID) continue
 
-        async function loop() {
-          const toggles = new Map<string, boolean>()
-
-          for await (const event of events.stream) {
-            if (
-              event.type === "message.updated" &&
-              event.properties.info.role === "assistant" &&
-              args.format !== "json" &&
-              toggles.get("start") !== true
-            ) {
-              UI.empty()
-              UI.println(`> ${event.properties.info.agent} · ${event.properties.info.modelID}`)
-              UI.empty()
-              toggles.set("start", true)
-            }
-
-            if (event.type === "message.part.updated") {
-              const part = event.properties.part
-              if (part.sessionID !== sessionID) continue
-
-              if (part.type === "tool" && (part.state.status === "completed" || part.state.status === "error")) {
-                if (emit("tool_use", { part })) continue
-                if (part.state.status === "completed") {
-                  tool(part)
-                  continue
-                }
-                inline({
-                  icon: "✗",
-                  title: `${part.tool} failed`,
-                })
-                UI.error(part.state.error)
+            if (part.type === "tool" && (part.state.status === "completed" || part.state.status === "error")) {
+              if (emit("tool_use", { part })) continue
+              if (part.state.status === "completed") {
+                tool(part)
+                continue
               }
-
-              if (
-                part.type === "tool" &&
-                part.tool === "task" &&
-                part.state.status === "running" &&
-                args.format !== "json"
-              ) {
-                if (toggles.get(part.id) === true) continue
-                task(props<typeof TaskTool>(part))
-                toggles.set(part.id, true)
-              }
-
-              if (part.type === "step-start") {
-                if (emit("step_start", { part })) continue
-              }
-
-              if (part.type === "step-finish") {
-                if (emit("step_finish", { part })) continue
-              }
-
-              if (part.type === "text" && part.time?.end) {
-                if (emit("text", { part })) continue
-                const text = part.text.trim()
-                if (!text) continue
-                if (!process.stdout.isTTY) {
-                  process.stdout.write(text + EOL)
-                  continue
-                }
-                UI.empty()
-                UI.println(text)
-                UI.empty()
-              }
-
-              if (part.type === "reasoning" && part.time?.end && args.thinking) {
-                if (emit("reasoning", { part })) continue
-                const text = part.text.trim()
-                if (!text) continue
-                const line = `Thinking: ${text}`
-                if (process.stdout.isTTY) {
-                  UI.empty()
-                  UI.println(`${UI.Style.TEXT_DIM}\u001b[3m${line}\u001b[0m${UI.Style.TEXT_NORMAL}`)
-                  UI.empty()
-                  continue
-                }
-                process.stdout.write(line + EOL)
-              }
-            }
-
-            if (event.type === "session.error") {
-              const props = event.properties
-              if (props.sessionID !== sessionID || !props.error) continue
-              let err = String(props.error.name)
-              if ("data" in props.error && props.error.data && "message" in props.error.data) {
-                err = String(props.error.data.message)
-              }
-              error = error ? error + EOL + err : err
-              if (emit("error", { error: props.error })) continue
-              UI.error(err)
+              inline({
+                icon: "✗",
+                title: `${part.tool} failed`,
+              })
+              UI.error(part.state.error)
             }
 
             if (
-              event.type === "session.status" &&
-              event.properties.sessionID === sessionID &&
-              event.properties.status.type === "idle"
+              part.type === "tool" &&
+              part.tool === "task" &&
+              part.state.status === "running" &&
+              args.format !== "json"
             ) {
-              break
+              if (toggles.get(part.id) === true) continue
+              task(props<typeof TaskTool>(part))
+              toggles.set(part.id, true)
             }
 
-            if (event.type === "permission.asked") {
-              const permission = event.properties
-              if (permission.sessionID !== sessionID) continue
+            if (part.type === "step-start") {
+              if (emit("step_start", { part })) continue
+            }
 
-              if (args["dangerously-skip-permissions"]) {
-                await sdk.permission.reply({
-                  requestID: permission.id,
-                  reply: "once",
-                })
-              } else {
-                UI.println(
-                  UI.Style.TEXT_WARNING_BOLD + "!",
-                  UI.Style.TEXT_NORMAL +
-                    `permission requested: ${permission.permission} (${permission.patterns.join(", ")}); auto-rejecting`,
-                )
-                await sdk.permission.reply({
-                  requestID: permission.id,
-                  reply: "reject",
-                })
+            if (part.type === "step-finish") {
+              if (emit("step_finish", { part })) continue
+            }
+
+            if (part.type === "text" && part.time?.end) {
+              if (emit("text", { part })) continue
+              const text = part.text.trim()
+              if (!text) continue
+              if (!process.stdout.isTTY) {
+                process.stdout.write(text + EOL)
+                continue
               }
+              UI.empty()
+              UI.println(text)
+              UI.empty()
+            }
+
+            if (part.type === "reasoning" && part.time?.end && args.thinking) {
+              if (emit("reasoning", { part })) continue
+              const text = part.text.trim()
+              if (!text) continue
+              const line = `Thinking: ${text}`
+              if (process.stdout.isTTY) {
+                UI.empty()
+                UI.println(`${UI.Style.TEXT_DIM}\u001b[3m${line}\u001b[0m${UI.Style.TEXT_NORMAL}`)
+                UI.empty()
+                continue
+              }
+              process.stdout.write(line + EOL)
+            }
+          }
+
+          if (event.type === "session.error") {
+            const props = event.properties
+            if (props.sessionID !== sessionID || !props.error) continue
+            let err = String(props.error.name)
+            if ("data" in props.error && props.error.data && "message" in props.error.data) {
+              err = String(props.error.data.message)
+            }
+            error = error ? error + EOL + err : err
+            process.exitCode = 1
+            if (emit("error", { error: props.error })) continue
+            UI.error(err)
+          }
+
+          if (
+            event.type === "session.status" &&
+            event.properties.sessionID === sessionID &&
+            event.properties.status.type === "idle"
+          ) {
+            break
+          }
+
+          if (event.type === "permission.asked") {
+            const permission = event.properties
+            if (permission.sessionID !== sessionID) continue
+
+            if (args["dangerously-skip-permissions"]) {
+              await sdk.permission.reply({
+                requestID: permission.id,
+                reply: "once",
+              })
+            } else {
+              UI.println(
+                UI.Style.TEXT_WARNING_BOLD + "!",
+                UI.Style.TEXT_NORMAL +
+                  `permission requested: ${permission.permission} (${permission.patterns.join(", ")}); auto-rejecting`,
+              )
+              await sdk.permission.reply({
+                requestID: permission.id,
+                reply: "reject",
+              })
             }
           }
         }
+      }
 
-        // Validate agent if specified
-        const agent = await (async () => {
-          if (!args.agent) return undefined
-          const name = args.agent
+      // Validate agent if specified
+      const agent = await (async () => {
+        if (!args.agent) return undefined
+        const name = args.agent
 
-          // When attaching, validate against the running server instead of local Instance state.
-          if (args.attach) {
-            const modes = await sdk.app
-              .agents(undefined, { throwOnError: true })
-              .then((x) => x.data ?? [])
-              .catch(() => undefined)
+        // When attaching, validate against the running server instead of local Instance state.
+        if (args.attach) {
+          const modes = await sdk.app
+            .agents(undefined, { throwOnError: true })
+            .then((x) => x.data ?? [])
+            .catch(() => undefined)
 
-            if (!modes) {
-              UI.println(
-                UI.Style.TEXT_WARNING_BOLD + "!",
-                UI.Style.TEXT_NORMAL,
-                `failed to list agents from ${args.attach}. Falling back to default agent`,
-              )
-              return undefined
-            }
-
-            const agent = modes.find((a) => a.name === name)
-            if (!agent) {
-              UI.println(
-                UI.Style.TEXT_WARNING_BOLD + "!",
-                UI.Style.TEXT_NORMAL,
-                `agent "${name}" not found. Falling back to default agent`,
-              )
-              return undefined
-            }
-
-            if (agent.mode === "subagent") {
-              UI.println(
-                UI.Style.TEXT_WARNING_BOLD + "!",
-                UI.Style.TEXT_NORMAL,
-                `agent "${name}" is a subagent, not a primary agent. Falling back to default agent`,
-              )
-              return undefined
-            }
-
-            return name
+          if (!modes) {
+            UI.println(
+              UI.Style.TEXT_WARNING_BOLD + "!",
+              UI.Style.TEXT_NORMAL,
+              `failed to list agents from ${args.attach}. Falling back to default agent`,
+            )
+            return undefined
           }
 
-          const entry = await Effect.runPromise(agentSvc.get(name))
-          if (!entry) {
+          const agent = modes.find((a) => a.name === name)
+          if (!agent) {
             UI.println(
               UI.Style.TEXT_WARNING_BOLD + "!",
               UI.Style.TEXT_NORMAL,
@@ -622,7 +596,8 @@ export const RunCommand = effectCmd({
             )
             return undefined
           }
-          if (entry.mode === "subagent") {
+
+          if (agent.mode === "subagent") {
             UI.println(
               UI.Style.TEXT_WARNING_BOLD + "!",
               UI.Style.TEXT_NORMAL,
@@ -630,80 +605,160 @@ export const RunCommand = effectCmd({
             )
             return undefined
           }
+
           return name
-        })()
-
-        const sessionID = await session(sdk)
-        if (!sessionID) {
-          UI.error("Session not found")
-          process.exit(1)
         }
-        await share(sdk, sessionID)
 
-        const sessionInfo = await Effect.runPromise(sessions.get(SessionID.make(sessionID)))
-        const resolved = await AppRuntime.runPromise(
-          resolveRuntimeModel({
-            session: sessionInfo,
-            explicitAgent: agent,
-            explicitModel: args.model,
-            explicitVariant: args.variant,
+        const entry = await AppRuntime.runPromise(Agent.Service.use((svc) => svc.get(name)))
+        if (!entry) {
+          UI.println(
+            UI.Style.TEXT_WARNING_BOLD + "!",
+            UI.Style.TEXT_NORMAL,
+            `agent "${name}" not found. Falling back to default agent`,
+          )
+          return undefined
+        }
+        if (entry.mode === "subagent") {
+          UI.println(
+            UI.Style.TEXT_WARNING_BOLD + "!",
+            UI.Style.TEXT_NORMAL,
+            `agent "${name}" is a subagent, not a primary agent. Falling back to default agent`,
+          )
+          return undefined
+        }
+        return name
+      })()
+
+      const sessionID = await session(sdk)
+      if (!sessionID) {
+        UI.error("Session not found")
+        process.exit(1)
+      }
+      await share(sdk, sessionID)
+
+      const selection = { explicitAgent: agent, explicitModel: args.model, explicitVariant: args.variant }
+      const resolved: RuntimeModelResolution = await (async () => {
+        if (args.attach) {
+          const url = new URL(`/continuity/${encodeURIComponent(sessionID)}/model-resolution`, args.attach)
+          const headers = new Headers(ServerAuth.headers({ password: args.password, username: args.username }))
+          headers.set("content-type", "application/json")
+          if (directory) headers.set("x-opencode-directory", encodeURIComponent(directory))
+          const response = await fetch(url, {
+            method: "POST",
+            headers,
+            body: JSON.stringify(selection),
+            signal: AbortSignal.timeout(30_000),
+          })
+          if (!response.ok) throw new Error(`Backend model resolution failed (HTTP ${response.status})`)
+          return response.json()
+        }
+        return AppRuntime.runPromise(
+          Effect.gen(function* () {
+            const sessions = yield* Session.Service
+            const session = yield* sessions.get(SessionID.make(sessionID))
+            return yield* resolveRuntimeModel({ session, ...selection })
           }),
         )
-        emit("session.started", {
-          resolution: resolved,
-        })
+      })()
+      emit("session.started", {
+        resolution: resolved,
+      })
 
-        const eventLoop = loop()
+      const eventLoop = loop()
 
-        try {
-          if (args.command) {
-            await sdk.session.command({
+      try {
+        if (args.command) {
+          await sdk.session.command(
+            {
               sessionID,
               agent: resolved.agent,
               model: resolved.model ? `${resolved.model.providerID}/${resolved.model.modelID}` : undefined,
               command: args.command,
               arguments: message,
               variant: resolved.variant,
-            })
-          } else {
-            await sdk.session.prompt({
+            },
+            { throwOnError: true },
+          )
+        } else {
+          await sdk.session.prompt(
+            {
               sessionID,
               agent: resolved.agent,
               model: resolved.model,
               variant: resolved.variant,
               parts: [...files, { type: "text", text: message }],
-            })
-          }
-        } finally {
-          await eventLoop
-        }
-
-        if (args.format === "json") {
-          writeAutomationEnvelope({
-            kind: "result",
-            event: "session.completed",
-            sessionID,
-            data: {
-              status: error ? "failed" : "completed",
-              resolution: resolved,
-              error: error ?? null,
             },
-          })
+            { throwOnError: true },
+          )
         }
+      } catch (failure) {
+        eventController.abort()
+        throw failure
+      } finally {
+        await eventLoop
+        eventController.abort()
       }
 
-      if (args.attach) {
-        const headers = ServerAuth.headers({ password: args.password, username: args.username })
-        const sdk = createOpencodeClient({ baseUrl: args.attach, directory, headers })
-        return await execute(sdk)
+      if (args.format === "json") {
+        writeAutomationEnvelope({
+          kind: "result",
+          event: "session.completed",
+          sessionID,
+          data: {
+            status: error ? "failed" : "completed",
+            resolution: resolved,
+            error: error ?? null,
+          },
+        })
       }
+    }
 
-      const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
-        const request = new Request(input, init)
-        return Server.Default().app.fetch(request)
-      }) as typeof globalThis.fetch
-      const sdk = createOpencodeClient({ baseUrl: "http://opencode.internal", fetch: fetchFn })
-      await execute(sdk)
-    })
-  }),
+    if (args.attach) {
+      const headers = ServerAuth.headers({ password: args.password, username: args.username })
+      const sdk = createOpencodeClient({ baseUrl: args.attach, directory, headers })
+      return await execute(sdk)
+    }
+
+    const fetchFn = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const request = new Request(input, init)
+      return Server.Default().app.fetch(request)
+    }) as typeof globalThis.fetch
+    const sdk = createOpencodeClient({ baseUrl: "http://opencode.internal", fetch: fetchFn })
+    await execute(sdk)
+  },
 })
+
+const LocalRunCommand = effectCmd({
+  command: "run",
+  describe: "run a local session",
+  directory: (args: Parameters<typeof ClientRunCommand.handler>[0]) => path.resolve(args.dir ?? process.cwd()),
+  handler: (args: Parameters<typeof ClientRunCommand.handler>[0]) =>
+    Effect.promise(async () => {
+      await ClientRunCommand.handler(args)
+    }),
+})
+
+export const RunCommand = {
+  ...ClientRunCommand,
+  async handler(args: Parameters<typeof ClientRunCommand.handler>[0]) {
+    if (args.attach) return ClientRunCommand.handler(args)
+    if (process.env.MENDCODE_DISABLE_SHARED_SERVER === "1" || process.env.OPENCODE_DISABLE_SHARED_SERVER === "1") {
+      await (await import("@/storage/startup-migration")).migrateLegacyStorage()
+      return LocalRunCommand.handler(args)
+    }
+    if (args.dir) process.chdir(path.resolve(args.dir))
+    return withSharedClient(process.cwd(), async (connection) => {
+      const authorization = connection.headers.get("authorization")
+      if (!authorization?.startsWith("Basic ")) throw new Error("Local backend credentials are unavailable")
+      const credentials = Buffer.from(authorization.slice(6), "base64").toString("utf8")
+      const separator = credentials.indexOf(":")
+      return ClientRunCommand.handler({
+        ...args,
+        attach: connection.url,
+        dir: connection.directory,
+        username: credentials.slice(0, separator),
+        password: credentials.slice(separator + 1),
+      })
+    })
+  },
+}

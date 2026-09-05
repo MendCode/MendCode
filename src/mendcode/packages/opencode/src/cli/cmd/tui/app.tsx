@@ -601,6 +601,7 @@ export function tui(input: {
     config?: unknown
   }
   onSnapshot?: () => Promise<string[]>
+  onStartupReady?: () => Promise<void>
   onDiagnostics?: () => Promise<DiagnosticsSnapshot>
   directory?: string
   fetch?: typeof fetch
@@ -692,6 +693,7 @@ export function tui(input: {
                                                       <EditorContextProvider>
                                                         <App
                                                           onSnapshot={input.onSnapshot}
+                                                          onStartupReady={input.onStartupReady}
                                                           onDiagnostics={input.onDiagnostics}
                                                         />
                                                       </EditorContextProvider>
@@ -723,7 +725,7 @@ export function tui(input: {
   })
 }
 
-function App(props: { onSnapshot?: () => Promise<string[]>; onDiagnostics?: () => Promise<DiagnosticsSnapshot> }) {
+function App(props: { onSnapshot?: () => Promise<string[]>; onDiagnostics?: () => Promise<DiagnosticsSnapshot>; onStartupReady?: () => Promise<void> }) {
   const tuiConfig = useTuiConfig()
   const route = useRoute()
   const dimensions = useTerminalDimensions()
@@ -4456,6 +4458,14 @@ function App(props: { onSnapshot?: () => Promise<string[]>; onDiagnostics?: () =
       },
     },
     {
+      title: "Release channel",
+      value: "mendcode.release.channel",
+      category: mendCategory,
+      description: "Choose stable, beta or nightly without installing an update",
+      slash: { name: "release-channel" },
+      onSelect: () => void showReleaseChannel(),
+    },
+    {
       title: "Loop Workflows",
       value: "mendcode.loops.dashboard",
       category: mendCategory,
@@ -5125,13 +5135,46 @@ function App(props: { onSnapshot?: () => Promise<string[]>; onDiagnostics?: () =
     }),
   )
 
+  async function releaseChannelRequest(channel?: "stable" | "beta" | "nightly") {
+    const headers = new Headers(sdk.headers)
+    headers.set("content-type", "application/json")
+    const response = await sdk.fetch(new URL("/global/release-channel", sdk.url), {
+      method: channel ? "PUT" : "GET", headers,
+      body: channel ? JSON.stringify({ channel }) : undefined, signal: AbortSignal.timeout(5000),
+    })
+    if (!response.ok) throw new Error("The server could not read or change the release channel.")
+    const result = await response.json() as { channel?: string }
+    if (result.channel !== "stable" && result.channel !== "beta" && result.channel !== "nightly") throw new Error("Invalid release channel response.")
+    return result.channel
+  }
+
+  async function showReleaseChannel() {
+    try {
+      const current = await releaseChannelRequest()
+      dialog.replace(() => <DialogSelect title="Release channel" current={current}
+        options={[
+          { title: "Stable", value: "stable" as const, description: "Published stable releases." },
+          { title: "Beta", value: "beta" as const, description: "Published beta candidates; experimental features stay off." },
+          { title: "Nightly", value: "nightly" as const, description: "Published nightly candidates; experimental features stay off." },
+        ]}
+        onSelect={(option) => {
+          if (option.value !== "stable" && option.value !== "beta" && option.value !== "nightly") return
+          void releaseChannelRequest(option.value).then((channel) => {
+            dialog.clear()
+            toast.show({ variant: "info", message: `Release channel: ${channel}. Run mendcode upgrade when you want to install.`, duration: 6000 })
+          }).catch((error) => toast.show({ variant: "error", message: errorMessage(error), duration: 6000 }))
+        }} />)
+    } catch (error) { toast.show({ variant: "error", message: errorMessage(error), duration: 6000 }) }
+  }
+
   const showUpdateAvailable = async (version: string) => {
     const skipped = skippedUpdateVersion(kv.store)
     if (skipped && !semver.gt(version, skipped)) return
 
+    const channel = await releaseChannelRequest().catch(() => undefined)
     const choice = await DialogConfirm.show(
       dialog,
-      `Update Available`,
+      channel ? `Update Available · ${channel}` : "Update Available",
       `A new release v${version} is available. Would you like to update now?`,
       "skip",
     )
@@ -5149,7 +5192,10 @@ function App(props: { onSnapshot?: () => Promise<string[]>; onDiagnostics?: () =
       duration: 30000,
     })
 
-    const result = await sdk.client.global.upgrade({ target: version })
+    const result = await sdk.client.global.upgrade({ target: version }).catch((error: unknown) => ({
+      error,
+      data: undefined,
+    }))
 
     if (result.error || !result.data?.success) {
       toast.show({
@@ -5168,8 +5214,8 @@ function App(props: { onSnapshot?: () => Promise<string[]>; onDiagnostics?: () =
 
     await DialogAlert.show(
       dialog,
-      "Update Complete",
-      `Successfully updated to ${productName()} runtime v${result.data.version}. Please restart the application.`,
+      "Restart Required",
+      `${productName()} runtime v${result.data.version} was installed. Restart the application to check startup.`,
     )
 
     void exit()
@@ -5198,6 +5244,24 @@ function App(props: { onSnapshot?: () => Promise<string[]>; onDiagnostics?: () =
     return value as JSX.Element
   })
   const startupReady = createMemo(() => ready() && pluginsReady() && sync.status !== "loading")
+  let startupReported = false
+  const startupDeadline = props.onStartupReady ? setTimeout(() => {
+    if (startupReported) return
+    toast.show({
+      variant: "error", title: "Update startup timed out",
+      message: "Backend and TUI readiness were not confirmed. Run mendcode upgrade --check for the startup record.",
+      duration: 30_000,
+    })
+  }, 30_000) : undefined
+  onCleanup(() => clearTimeout(startupDeadline))
+  createEffect(() => {
+    if (startupReported || !startupReady() || sync.status !== "complete") return
+    startupReported = true
+    clearTimeout(startupDeadline)
+    void props.onStartupReady?.().catch((error) => {
+      toast.show({ variant: "error", title: "Update startup check failed", message: errorMessage(error), duration: 10_000 })
+    })
+  })
   const startupMessage = createMemo(() =>
     startupLoadingText({ pluginsReady: pluginsReady(), syncLoading: sync.status === "loading" }),
   )

@@ -24,7 +24,10 @@ import { ImageGenTool, resolveImageGenerationModel, usesCodexImageAdapter } from
 import * as Tool from "./tool"
 import { Config } from "@/config/config"
 import { type ToolContext as PluginToolContext, type ToolDefinition } from "@mendcode/plugin"
-import { Schema } from "effect"
+import { Schema, Scope } from "effect"
+import { continuityTools } from "./continuity"
+import { ReasoningAutoTool } from "./reasoning_auto"
+import { waitForDisable } from "@/session/continuity-control"
 import z from "zod"
 import { ZodOverride } from "@/util/effect-zod"
 import { Plugin } from "../plugin"
@@ -72,6 +75,7 @@ type TaskDef = Tool.InferDef<typeof TaskTool>
 type ReadDef = Tool.InferDef<typeof ReadTool>
 
 type State = {
+  jobs: ReturnType<typeof continuityTools>["jobs"]
   custom: Tool.Def[]
   builtin: Tool.Def[]
   task: TaskDef
@@ -79,6 +83,10 @@ type State = {
 }
 
 export interface Interface {
+  readonly cancelJob: (
+    sessionID: import("@/session/schema").SessionID,
+    id: string,
+  ) => Effect.Effect<import("@/session/runtime-mailbox").Record>
   readonly ids: () => Effect.Effect<string[]>
   readonly all: () => Effect.Effect<Tool.Def[]>
   readonly named: () => Effect.Effect<{ task: TaskDef; read: ReadDef }>
@@ -131,6 +139,10 @@ export const layer: Layer.Layer<
     const taskStatus = yield* TaskStatusTool
     const read = yield* ReadTool
     const question = yield* QuestionTool
+    const questionService = yield* Question.Service
+    const sessionService = yield* Session.Service
+    const busService = yield* Bus.Service
+    const reasoningAuto = yield* ReasoningAutoTool
     const planReview = yield* PlanReviewTool
     const todo = yield* TodoWriteTool
     const lsptool = yield* LspTool
@@ -229,11 +241,12 @@ export const layer: Layer.Layer<
           }
         }
 
-        yield* config.get()
+        const cfg = yield* config.get()
         const questionEnabled =
           ["app", "cli", "desktop"].includes(Flag.OPENCODE_CLIENT) || Flag.OPENCODE_ENABLE_QUESTION_TOOL
 
         const tool = yield* Effect.all({
+          reasoningAuto: Tool.init(reasoningAuto),
           invalid: Tool.init(invalid),
           shell: Tool.init(shell),
           read: Tool.init(read),
@@ -262,9 +275,29 @@ export const layer: Layer.Layer<
           plan: Tool.init(plan),
         })
 
+        const scope = yield* Scope.Scope
+        const continuity = continuityTools({
+          eligible: [tool.read, tool.glob, tool.grep, tool.fetch],
+          scope,
+          directory: ctx.directory,
+          bus: busService,
+          config,
+          question: questionService,
+          sessions: sessionService,
+        })
+        yield* Effect.addFinalizer(() => continuity.jobs.stop())
+        yield* waitForDisable(ctx.directory, "tools").pipe(
+          Effect.andThen(continuity.jobs.stop()),
+          Effect.forkScoped({ startImmediately: true }),
+        )
         return {
+          jobs: continuity.jobs,
           custom,
           builtin: [
+            ...(cfg.experimental?.async_tools === true ? continuity.jobTools : []),
+            ...(cfg.experimental?.async_questions === true ? continuity.questionTools : []),
+            ...(cfg.experimental?.session_recall === true ? continuity.recallTools : []),
+            ...(cfg.experimental?.reasoning_auto === true ? [tool.reasoningAuto] : []),
             tool.invalid,
             ...(questionEnabled ? [tool.question] : []),
             tool.shell,
@@ -433,7 +466,12 @@ export const layer: Layer.Layer<
       return { task: s.task, read: s.read }
     })
 
-    return Service.of({ ids, all, named, tools })
+    const cancelJob: Interface["cancelJob"] = (sessionID, id) =>
+      Effect.gen(function* () {
+        const s = yield* InstanceState.get(state)
+        return yield* s.jobs.cancel(sessionID, id)
+      })
+    return Service.of({ ids, all, named, tools, cancelJob })
   }),
 )
 

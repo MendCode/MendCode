@@ -1,6 +1,10 @@
 import fs from "fs/promises"
 import path from "path"
+import { realpathSync } from "fs"
 import { Global } from "@mendcode/core/global"
+import { Flag } from "@mendcode/core/flag/flag"
+import { InstallationChannel } from "@mendcode/core/installation/version"
+import { resolveDefaultSqliteDbPath } from "@/storage/resolve-default-sqlite-path"
 
 const STATE_VERSION = 1 as const
 const LOCK_STALE_AFTER_MS = 30_000
@@ -19,8 +23,50 @@ export type SharedServerState = {
   runtimeID: string
 }
 
+function canonicalPath(file: string): string {
+  try {
+    return realpathSync(file)
+  } catch (error) {
+    if (errorCode(error) !== "ENOENT") throw error
+    const parent = path.dirname(file)
+    if (parent === file) throw error
+    return path.join(canonicalPath(parent), path.basename(file))
+  }
+}
+
+export function resolveSharedDatabasePath(database: string | undefined, dataDir = Global.Path.data) {
+  if (!database || database === ":memory:") return database
+  return canonicalPath(path.resolve(dataDir, database))
+}
+
+export function resolveSharedServerRoot(input: {
+  database?: string
+  defaultDatabase: string
+  stateDirectory: string
+  pid?: number
+}) {
+  const legacy = path.join(input.stateDirectory, "shared-server")
+  if (!input.database) return legacy
+  if (input.database === ":memory:") return path.join(legacy, `memory-${input.pid ?? process.pid}`)
+  const database = canonicalPath(path.resolve(input.database))
+  if (database === canonicalPath(path.resolve(input.defaultDatabase))) return legacy
+  // A DB-specific lock must not depend on the client's XDG state directory.
+  return `${database}.shared-server`
+}
+
 function rootPath() {
-  return path.join(Global.Path.state, "shared-server")
+  if (process.env.MENDCODE_SHARED_SERVER_STATE_FILE) {
+    return path.dirname(process.env.MENDCODE_SHARED_SERVER_STATE_FILE)
+  }
+  return resolveSharedServerRoot({
+    database: resolveSharedDatabasePath(Flag.OPENCODE_DB),
+    defaultDatabase: resolveDefaultSqliteDbPath({
+      dataDir: Global.Path.data,
+      installationChannel: InstallationChannel,
+      disableChannelDb: Flag.OPENCODE_DISABLE_CHANNEL_DB,
+    }),
+    stateDirectory: Global.Path.state,
+  })
 }
 
 export function statePath() {
@@ -328,7 +374,11 @@ export async function acquireLock(timeoutMs = 12_000) {
     } catch {
       try {
         const stat = await fs.stat(lockPath())
-        if (Date.now() - stat.mtimeMs > LOCK_STALE_AFTER_MS) {
+        const owner = Number(await fs.readFile(path.join(lockPath(), "owner"), "utf8"))
+        if (
+          Date.now() - stat.mtimeMs > LOCK_STALE_AFTER_MS &&
+          Number.isSafeInteger(owner) && owner > 0 && !isProcessAlive(owner)
+        ) {
           await fs.rm(lockPath(), { recursive: true, force: true })
           continue
         }

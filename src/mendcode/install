@@ -30,6 +30,7 @@ Options:
         --no-modify-path    Don't modify shell config files (.zshrc, .bashrc, etc.)
         --setup             Open MendCode setup after install
         --skip-setup        Do not ask to open setup after install
+        --recover-lock      Recover a lock only when its recorded process has exited
 
 Examples:
     curl -fsSL https://raw.githubusercontent.com/MendCode/MendCode/main/src/mendcode/install | bash
@@ -44,7 +45,7 @@ requested_version=${VERSION:-}
 no_modify_path=false
 binary_path=""
 setup_mode="ask"
-already_installed=false
+recover_lock=false
 
 print_message() {
     local level=$1
@@ -94,6 +95,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --skip-setup)
             setup_mode="skip"
+            shift
+            ;;
+        --recover-lock)
+            recover_lock=true
             shift
             ;;
         *)
@@ -202,6 +207,81 @@ persist_install_layout() {
     printf '%s\n' "$SELECTED_GLOBAL_LAYOUT" > "$tmp"
     mv "$tmp" "$GLOBAL_LAYOUT_SELECTION_FILE"
 }
+
+operation=""
+update_phase=checking
+installed_sha256=""
+previous_sha256=""
+download_pid=""
+update_lock="$INSTALL_DIR/.update-lock"
+owns_update_lock=false
+
+record_update() {
+    [ -n "$operation" ] || return 0
+    printf 'version=%s\nphase=%s\nowner_pid=%s\nexit_code=%s\nbinary_sha256=%s\nprevious_sha256=%s\n' \
+        "${specific_version:-${requested_version:-unknown}}" "$update_phase" "$$" "${1:-}" "$installed_sha256" "$previous_sha256" > "$operation/status.next"
+    mv -f "$operation/status.next" "$operation/status"
+    printf 'MENDCODE_UPDATE_PHASE=%s\n' "$update_phase"
+}
+
+finish_update() {
+    local code=$?
+    trap - EXIT
+    if [ -n "$download_pid" ]; then
+        kill -KILL "$download_pid" 2>/dev/null || true
+        wait "$download_pid" 2>/dev/null || true
+    fi
+    if [ "$owns_update_lock" = true ]; then
+        if [ "$code" -ne 0 ]; then
+            print_message error "Update failed during $update_phase. Recovery record: $operation/status"
+        fi
+        record_update "$code" || true
+        # Retain ownership evidence without leaving a lock after a normal exit.
+        mv "$update_lock" "$operation/lock" || true
+    fi
+    exit "$code"
+}
+
+begin_update() {
+    operation=$(mktemp -d "$INSTALL_DIR/.update.XXXXXXXX")
+    chmod 700 "$operation"
+    if ! mkdir "$update_lock" 2>/dev/null; then
+        if [ "$recover_lock" != true ]; then
+            print_message error "Another update owns $update_lock. Inspect its owner record; use --recover-lock only after its process has exited."
+            exit 1
+        fi
+        local owner
+        owner=$(sed -n 's/^pid=//p' "$update_lock/owner" 2>/dev/null || true)
+        if [[ ! "$owner" =~ ^[1-9][0-9]*$ ]] || kill -0 "$owner" 2>/dev/null || ps -p "$owner" >/dev/null 2>&1; then
+            print_message error "Cannot recover update lock: owner is live or ownership cannot be verified."
+            exit 1
+        fi
+        # Elect one recoverer inside the old lock; contenders cannot move a new owner's lock.
+        if ! mkdir "$update_lock/recovering" 2>/dev/null; then
+            print_message error "Update lock recovery is already in progress."
+            exit 1
+        fi
+        if [ "$(sed -n 's/^pid=//p' "$update_lock/owner" 2>/dev/null || true)" != "$owner" ] || \
+            kill -0 "$owner" 2>/dev/null || ps -p "$owner" >/dev/null 2>&1; then
+            print_message error "Update lock ownership changed during recovery. No installation was changed."
+            exit 1
+        fi
+        mv "$update_lock" "$operation/recovered-lock"
+        if ! mkdir "$update_lock" 2>/dev/null; then
+            print_message error "Another updater acquired the recovered lock. Retry after it exits."
+            exit 1
+        fi
+    fi
+    owns_update_lock=true
+    trap finish_update EXIT
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    chmod 700 "$update_lock"
+    printf 'pid=%s\noperation=%s\n' "$$" "$operation" > "$update_lock/owner"
+    record_update
+}
+
+begin_update
 
 # If --binary is provided, skip all download/detection logic
 if [ -n "$binary_path" ]; then
@@ -316,8 +396,7 @@ else
     fi
 
     if [ -z "$requested_version" ]; then
-        url="$GITHUB_BASE_URL/releases/latest/download/$filename"
-        specific_version=$(curl -s "$GITHUB_API_URL/releases/latest" | sed -n 's/.*"tag_name": *"v\([^"]*\)".*/\1/p')
+        specific_version=$(curl --fail --show-error --silent --location --connect-timeout 15 --max-time 30 "$GITHUB_API_URL/releases/latest" | sed -n 's/.*"tag_name": *"v\([^"]*\)".*/\1/p')
 
         if [[ $? -ne 0 || -z "$specific_version" ]]; then
             echo -e "${RED}Failed to fetch version information${NC}"
@@ -329,14 +408,13 @@ else
         url="$GITHUB_BASE_URL/releases/download/v${requested_version}/$filename"
         specific_version=$requested_version
 
-        # Verify the release exists before downloading
-        http_status=$(curl -sI -o /dev/null -w "%{http_code}" "$GITHUB_BASE_URL/releases/tag/v${requested_version}")
-        if [ "$http_status" = "404" ]; then
-            echo -e "${RED}Error: Release v${requested_version} not found${NC}"
-            echo -e "${MUTED}Available releases: $GITHUB_BASE_URL/releases${NC}"
-            exit 1
-        fi
     fi
+    # Resolve latest once so the archive and checksums always belong to one release.
+    if [[ ! "$specific_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-+][a-zA-Z0-9.+-]+)?$ ]]; then
+        print_message error "Invalid release version: $specific_version"
+        exit 1
+    fi
+    url="$GITHUB_BASE_URL/releases/download/v${specific_version}/$filename"
 fi
 
 print_banner() {
@@ -371,149 +449,115 @@ print_success() {
 STEP_TOTAL=4
 PATH_STEP=4
 
-check_version() {
-    local installed_path="$INSTALL_DIR/$BINARY_NAME"
-    if [ "$os" = "windows" ] && [ -f "$INSTALL_DIR/$BINARY_NAME.exe" ]; then
-        installed_path="$INSTALL_DIR/$BINARY_NAME.exe"
-    fi
-
-    if [ -x "$installed_path" ]; then
-        ## Check the installed version
-        installed_version=$("$installed_path" --version 2>/dev/null || echo "")
-
-        if [[ "$installed_version" != "$specific_version" ]]; then
-            print_message info "${MUTED}Installed version: ${NC}$installed_version."
-        else
-            print_message info "${MUTED}Version ${NC}$specific_version${MUTED} already installed"
-            already_installed=true
-        fi
-    fi
-}
-
-unbuffered_sed() {
-    if echo | sed -u -e "" >/dev/null 2>&1; then
-        sed -nu "$@"
-    elif echo | sed -l -e "" >/dev/null 2>&1; then
-        sed -nl "$@"
-    else
-        local pad="$(printf "\n%512s" "")"
-        sed -ne "s/$/\\${pad}/" "$@"
-    fi
-}
-
-print_progress() {
-    local bytes="$1"
-    local length="$2"
-    [ "$length" -gt 0 ] || return 0
-
-    local width=50
-    local percent=$(( bytes * 100 / length ))
-    [ "$percent" -gt 100 ] && percent=100
-    local on=$(( percent * width / 100 ))
-    local off=$(( width - on ))
-
-    local filled=$(printf "%*s" "$on" "")
-    filled=${filled// /█}
-    local empty=$(printf "%*s" "$off" "")
-    empty=${empty// /·}
-
-    printf "\r${MOSS_SOFT}%s%s${NC} ${PARCHMENT}%3d%%${NC}" "$filled" "$empty" "$percent" >&4
-}
-
-download_with_progress() {
-    local url="$1"
-    local output="$2"
-
-    if [ -t 2 ]; then
-        exec 4>&2
-    else
-        exec 4>/dev/null
-    fi
-
-    local tmp_dir=${TMPDIR:-/tmp}
-    local basename="${tmp_dir}/mendcode_install_$$"
-    local tracefile="${basename}.trace"
-
-    rm -f "$tracefile"
-    mkfifo "$tracefile"
-
-    # Hide cursor
-    printf "\033[?25l" >&4
-
-    trap "trap - RETURN; rm -f \"$tracefile\"; printf '\033[?25h' >&4; exec 4>&-" RETURN
-
-    (
-        curl --trace-ascii "$tracefile" -s -L -o "$output" "$url"
-    ) &
-    local curl_pid=$!
-
-    unbuffered_sed \
-        -e 'y/ACDEGHLNORTV/acdeghlnortv/' \
-        -e '/^0000: content-length:/p' \
-        -e '/^<= recv data/p' \
-        "$tracefile" | \
-    {
-        local length=0
-        local bytes=0
-
-        while IFS=" " read -r -a line; do
-            [ "${#line[@]}" -lt 2 ] && continue
-            local tag="${line[0]} ${line[1]}"
-
-            if [ "$tag" = "0000: content-length:" ]; then
-                length="${line[2]}"
-                length=$(echo "$length" | tr -d '\r')
-                bytes=0
-            elif [ "$tag" = "<= recv" ]; then
-                local size="${line[3]}"
-                bytes=$(( bytes + size ))
-                if [ "$length" -gt 0 ]; then
-                    print_progress "$bytes" "$length"
-                fi
-            fi
-        done
-    }
-
-    wait $curl_pid
-    local ret=$?
-    echo "" >&4
-    return $ret
-}
-
 download_and_install() {
     print_banner
     print_step 1 4 "Preparing download"
-    local tmp_dir="${TMPDIR:-/tmp}/mendcode_install_$$"
-    mkdir -p "$tmp_dir"
+    local tmp_dir=$operation
 
     print_step 2 4 "Downloading release asset"
-    if [[ "$os" == "windows" ]] || ! [ -t 2 ] || ! download_with_progress "$url" "$tmp_dir/$filename"; then
-        # Fallback to standard curl on Windows, non-TTY environments, or if custom progress fails
-        curl -# -L -o "$tmp_dir/$filename" "$url"
+    update_phase=downloading
+    record_update
+    curl --fail --show-error --silent --location --connect-timeout 15 --speed-limit 1 --speed-time 60 --max-time 900 \
+        --dump-header "$tmp_dir/download.headers" -o "$tmp_dir/$filename" "$url" &
+    download_pid=$!
+    while kill -0 "$download_pid" 2>/dev/null; do
+        if [ -f "$tmp_dir/$filename" ]; then
+            local bytes total
+            bytes=$(wc -c < "$tmp_dir/$filename" | tr -d '[:space:]')
+            total=""
+            if [ -f "$tmp_dir/download.headers" ]; then
+                total=$(awk '/^HTTP\// {size=""} tolower($1) == "content-length:" {size=$2} END {gsub("\\r", "", size); print size}' "$tmp_dir/download.headers")
+            fi
+            [[ "$total" =~ ^[0-9]+$ ]] || total=""
+            printf 'MENDCODE_UPDATE_BYTES=%s/%s\n' "$bytes" "$total"
+        fi
+        sleep 1
+    done
+    if ! wait "$download_pid"; then
+        download_pid=""
+        print_message error "Downloading failed. Current binary preserved; staging: $tmp_dir"
+        exit 1
     fi
+    download_pid=""
+    printf 'MENDCODE_UPDATE_BYTES=%s/\n' "$(wc -c < "$tmp_dir/$filename" | tr -d '[:space:]')"
     print_success "Downloaded $filename"
 
-    print_step 3 4 "Installing binary"
-    if [ "$os" = "linux" ]; then
-        tar -xzf "$tmp_dir/$filename" -C "$tmp_dir"
+    print_step 3 4 "Verifying release checksum"
+    update_phase=verifying
+    record_update
+    if [ -n "${MENDCODE_VERIFIED_SUMS_FILE:-}" ]; then
+        cp "$MENDCODE_VERIFIED_SUMS_FILE" "$tmp_dir/SHA256SUMS"
+    elif ! curl --fail --show-error --silent --location --connect-timeout 15 --max-time 30 \
+        -o "$tmp_dir/SHA256SUMS" "${url%/*}/SHA256SUMS"; then
+        print_message error "Verifying failed: cannot download SHA256SUMS. Current binary preserved."
+        exit 1
+    fi
+    local expected actual
+    expected=$(awk -v name="$filename" '$2 == name || $2 == "./" name {print $1}' "$tmp_dir/SHA256SUMS")
+    if [[ ! "$expected" =~ ^[a-fA-F0-9]{64}$ ]]; then
+        print_message error "Verifying failed: missing, duplicate, or invalid checksum for $filename."
+        exit 1
+    fi
+    if command -v sha256sum >/dev/null 2>&1; then
+        actual=$(sha256sum "$tmp_dir/$filename" | awk '{print $1}')
+    elif command -v shasum >/dev/null 2>&1; then
+        actual=$(shasum -a 256 "$tmp_dir/$filename" | awk '{print $1}')
     else
-        unzip -q "$tmp_dir/$filename" -d "$tmp_dir"
+        print_message error "Verifying failed: sha256sum or shasum is required."
+        exit 1
     fi
-
+    if [[ "$(printf '%s' "$actual" | tr 'A-F' 'a-f')" != "$(printf '%s' "$expected" | tr 'A-F' 'a-f')" ]]; then
+        print_message error "Verifying failed: checksum mismatch. Current binary preserved; staging: $tmp_dir"
+        exit 1
+    fi
+    # Extract only the executable, never archive-controlled paths or symlinks.
     local extracted="$tmp_dir/$ARCHIVE_BINARY"
-    if [ "$os" = "windows" ] && [ -f "$tmp_dir/$ARCHIVE_BINARY.exe" ]; then
-        extracted="$tmp_dir/$ARCHIVE_BINARY.exe"
-        BINARY_NAME=mendcode.exe
+    if [ "$os" = "linux" ]; then
+        tar -xOzf "$tmp_dir/$filename" "$ARCHIVE_BINARY" > "$extracted"
+    else
+        if [ "$os" = "windows" ]; then
+            BINARY_NAME=mendcode.exe
+            extracted="$tmp_dir/$BINARY_NAME"
+            unzip -p "$tmp_dir/$filename" "$ARCHIVE_BINARY.exe" > "$extracted"
+        else
+            unzip -p "$tmp_dir/$filename" "$ARCHIVE_BINARY" > "$extracted"
+        fi
     fi
-    if [ ! -f "$extracted" ]; then
+    if [ ! -s "$extracted" ]; then
         echo -e "${RED}Error: Release asset did not contain $ARCHIVE_BINARY${NC}"
         exit 1
     fi
 
-    mv "$extracted" "$INSTALL_DIR/$BINARY_NAME"
-    chmod 755 "${INSTALL_DIR}/$BINARY_NAME"
-    rm -rf "$tmp_dir"
+    activate_binary "$extracted" "$tmp_dir"
     print_success "Installed ${INSTALL_DIR}/$BINARY_NAME"
+}
+
+activate_binary() {
+    local staged=$1
+    local operation=$2
+    if command -v sha256sum >/dev/null 2>&1; then
+        installed_sha256=$(sha256sum "$staged" | awk '{print $1}')
+    elif command -v shasum >/dev/null 2>&1; then
+        installed_sha256=$(shasum -a 256 "$staged" | awk '{print $1}')
+    else
+        print_message error "Cannot record executable identity: sha256sum or shasum is required."
+        exit 1
+    fi
+    chmod 755 "$staged"
+    if [ -f "$INSTALL_DIR/$BINARY_NAME" ]; then
+        cp -p "$INSTALL_DIR/$BINARY_NAME" "$operation/previous"
+        if command -v sha256sum >/dev/null 2>&1; then
+            previous_sha256=$(sha256sum "$operation/previous" | awk '{print $1}')
+        else
+            previous_sha256=$(shasum -a 256 "$operation/previous" | awk '{print $1}')
+        fi
+    fi
+    update_phase=activating
+    record_update
+    mv -f "$staged" "$INSTALL_DIR/$BINARY_NAME"
+    update_phase=activated
+    record_update
+    print_message info "Recovery files retained at $operation; startup readiness has not been checked."
 }
 
 install_from_binary() {
@@ -523,45 +567,21 @@ install_from_binary() {
     PATH_STEP=2
     print_banner
     print_step 1 "$STEP_TOTAL" "Installing local binary"
-    cp "$binary_path" "${INSTALL_DIR}/$BINARY_NAME"
-    chmod 755 "${INSTALL_DIR}/$BINARY_NAME"
+    cp "$binary_path" "$operation/candidate"
+    activate_binary "$operation/candidate" "$operation"
     print_success "Installed ${INSTALL_DIR}/$BINARY_NAME"
-}
-
-restart_loaded_loop_services() {
-    if [[ "$(uname -s)" != "Darwin" ]] || ! command -v launchctl >/dev/null 2>&1; then
-        return 0
-    fi
-
-    local uid
-    uid=$(id -u)
-    local restarted=0
-    while IFS= read -r label; do
-        [[ -n "$label" ]] || continue
-        if launchctl kickstart -k "gui/${uid}/${label}" >/dev/null 2>&1; then
-            restarted=$((restarted + 1))
-        fi
-    done < <(launchctl list 2>/dev/null | awk '$3 ~ /^com\\.mendcode\\.loops\\./ { print $3 }')
-
-    if [[ "$restarted" -gt 0 ]]; then
-        print_success "Refreshed $restarted loaded MendCode loop service(s)"
-    fi
 }
 
 if [ -n "$binary_path" ]; then
     install_from_binary
 else
-    check_version
-    if [ "$already_installed" != "true" ]; then
-        download_and_install
-    fi
+    # Recovery must work even when the currently installed executable cannot start.
+    download_and_install
 fi
 
 persist_install_layout
 
-if [ "$already_installed" != "true" ]; then
-    restart_loaded_loop_services
-fi
+print_message info "Existing sessions and services keep running. Restart them when their work is finished."
 
 add_to_path() {
     local config_file=$1

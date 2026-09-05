@@ -7,6 +7,9 @@ import { zod } from "@/util/effect-zod"
 import * as Log from "@mendcode/core/util/log"
 import { withStatics } from "@/util/schema"
 import { QuestionID } from "./schema"
+import * as Mailbox from "@/session/runtime-mailbox"
+import { waitForDisable } from "@/session/continuity-control"
+import { createHash } from "node:crypto"
 
 const log = Log.create({ service: "question" })
 
@@ -65,6 +68,7 @@ export class Request extends Schema.Class<Request>("QuestionRequest")({
     description: "Questions to ask",
   }),
   tool: Schema.optional(Tool),
+  async: Schema.optional(Schema.Boolean),
 }) {
   static readonly zod = zod(this)
 }
@@ -112,11 +116,19 @@ interface PendingEntry {
 
 interface State {
   pending: Map<QuestionID, PendingEntry>
+  asyncDisabled: boolean
 }
 
 // Service
 
 export interface Interface {
+  readonly post: (input: {
+    sessionID: SessionID
+    questions: ReadonlyArray<Info>
+    tool?: Tool
+  }) => Effect.Effect<Request>
+  readonly get: (requestID: QuestionID) => Effect.Effect<Mailbox.Record | undefined>
+  readonly wait: (requestID: QuestionID) => Effect.Effect<ReadonlyArray<Answer>, RejectedError>
   readonly ask: (input: {
     sessionID: SessionID
     questions: ReadonlyArray<Info>
@@ -137,7 +149,37 @@ export const layer = Layer.effect(
       Effect.fn("Question.state")(function* () {
         const state = {
           pending: new Map<QuestionID, PendingEntry>(),
+          asyncDisabled: false,
         }
+        const context = yield* InstanceState.context
+        for (const row of Mailbox.directoryRecords(context.directory, "question", { statuses: ["pending"] })) {
+          if (row.status !== "pending") continue
+          const info = Schema.decodeUnknownSync(Request)(row.data.request)
+          const deferred = yield* Deferred.make<ReadonlyArray<Answer>, RejectedError>()
+          state.pending.set(info.id, { info, deferred })
+        }
+        yield* waitForDisable(context.directory, "questions").pipe(
+          Effect.andThen(
+            Effect.gen(function* () {
+              state.asyncDisabled = true
+              for (const [id, entry] of state.pending) {
+                if (!entry.info.async) continue
+                const record = Mailbox.getRecord(entry.info.sessionID, String(id))
+                if (record)
+                  Mailbox.completeRecord({
+                    ...record,
+                    status: "dismissed",
+                    data: { ...record.data, continuationCancelled: true },
+                  })
+                state.pending.delete(id)
+                yield* Deferred.fail(entry.deferred, new RejectedError())
+                yield* bus.publish(Event.Rejected, { sessionID: entry.info.sessionID, requestID: id })
+              }
+              Mailbox.cancelContinuations(context.directory, "question")
+            }),
+          ),
+          Effect.forkScoped({ startImmediately: true }),
+        )
 
         yield* Effect.addFinalizer(() =>
           Effect.gen(function* () {
@@ -151,6 +193,55 @@ export const layer = Layer.effect(
         return state
       }),
     )
+
+    const get = Effect.fn("Question.get")(function* (requestID: QuestionID) {
+      const context = yield* InstanceState.context
+      return Mailbox.getDirectoryRecord(context.directory, String(requestID), "question")
+    })
+    const post = Effect.fn("Question.post")(function* (input: {
+      sessionID: SessionID
+      questions: ReadonlyArray<Info>
+      tool?: Tool
+    }) {
+      const current = yield* InstanceState.get(state)
+      if (current.asyncDisabled) throw new Error("Async questions were disabled; reload after enabling them")
+      const pending = current.pending
+      const context = yield* InstanceState.context
+      const id = input.tool
+        ? QuestionID.ascending(
+            `que_${createHash("sha256").update(`${input.sessionID}:${input.tool.messageID}:${input.tool.callID}`).digest("hex")}`,
+          )
+        : QuestionID.ascending()
+      const records = Mailbox.listRecords(input.sessionID, "question", { statuses: ["pending"] })
+      const prior = Mailbox.getRecord(input.sessionID, String(id))
+      if (prior) return Schema.decodeUnknownSync(Request)(prior.data.request)
+      if (records.filter((record) => record.status === "pending").length >= 32)
+        throw new Error("Too many pending questions; resolve or dismiss existing questions first")
+      const info = Schema.decodeUnknownSync(Request)({ ...input, id, async: true })
+      const deferred = yield* Deferred.make<ReadonlyArray<Answer>, RejectedError>()
+      Mailbox.putRecord({
+        id: String(info.id),
+        sessionID: info.sessionID,
+        directory: context.directory,
+        kind: "question",
+        generation: Mailbox.generation(info.sessionID),
+        status: "pending",
+        data: { request: info },
+        timeCreated: Date.now(),
+        timeUpdated: Date.now(),
+      })
+      pending.set(info.id, { info, deferred })
+      yield* bus.publish(Event.Asked, info)
+      return info
+    })
+    const wait = Effect.fn("Question.wait")(function* (requestID: QuestionID) {
+      const pending = (yield* InstanceState.get(state)).pending
+      const existing = pending.get(requestID)
+      if (existing) return yield* Deferred.await(existing.deferred)
+      const record = yield* get(requestID)
+      if (record?.status === "answered") return Schema.decodeUnknownSync(Schema.Array(Answer))(record.data.answers)
+      return yield* Effect.fail(new RejectedError())
+    })
 
     const ask = Effect.fn("Question.ask")(function* (input: {
       sessionID: SessionID
@@ -190,6 +281,22 @@ export const layer = Layer.effect(
         return
       }
       pending.delete(input.requestID)
+      if (existing.info.async) {
+        const record = yield* get(input.requestID)
+        if (record?.status === "pending") {
+          const saved = Mailbox.completeRecord({
+            ...record,
+            status: "answered",
+            data: { ...record.data, answers: input.answers },
+          })
+          yield* bus.publish(Mailbox.Event.Updated, {
+            sessionID: saved.sessionID,
+            id: saved.id,
+            kind: saved.kind,
+            status: saved.status,
+          })
+        }
+      }
       log.info("replied", { requestID: input.requestID, answers: input.answers })
       yield* bus.publish(Event.Replied, {
         sessionID: existing.info.sessionID,
@@ -207,6 +314,18 @@ export const layer = Layer.effect(
         return
       }
       pending.delete(requestID)
+      if (existing.info.async) {
+        const record = yield* get(requestID)
+        if (record?.status === "pending") {
+          const saved = Mailbox.completeRecord({ ...record, status: "dismissed" })
+          yield* bus.publish(Mailbox.Event.Updated, {
+            sessionID: saved.sessionID,
+            id: saved.id,
+            kind: saved.kind,
+            status: saved.status,
+          })
+        }
+      }
       log.info("rejected", { requestID })
       yield* bus.publish(Event.Rejected, {
         sessionID: existing.info.sessionID,
@@ -220,7 +339,7 @@ export const layer = Layer.effect(
       return Array.from(pending.values(), (x) => x.info)
     })
 
-    return Service.of({ ask, reply, reject, list })
+    return Service.of({ ask, post, get, wait, reply, reject, list })
   }),
 )
 

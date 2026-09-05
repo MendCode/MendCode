@@ -12,6 +12,7 @@ import { AppRuntime } from "@/effect/app-runtime"
 import { ensureProcessMetadata } from "@mendcode/core/util/opencode-process"
 import { Effect } from "effect"
 import { disposeAllInstancesAndEmitGlobalDisposed } from "@/server/global-lifecycle"
+import { migrateLegacyStorage } from "@/storage/startup-migration"
 
 ensureProcessMetadata("worker")
 
@@ -25,6 +26,7 @@ await Log.init({
 })
 
 Heap.start()
+await migrateLegacyStorage()
 
 process.on("unhandledRejection", (e) => {
   Log.Default.error("rejection", {
@@ -88,6 +90,7 @@ export const rpc = {
 
     await InstanceRuntime.disposeAllInstances()
     if (server) await server.stop(true)
+    ;(await import("@/storage/db")).Database.close()
   },
 }
 

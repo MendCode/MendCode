@@ -72,6 +72,7 @@ import { mflowHandlers } from "./handlers/mflow"
 import { mcpHandlers } from "./handlers/mcp"
 import { permissionHandlers } from "./handlers/permission"
 import { planReviewHandlers } from "./handlers/plan-review"
+import { continuityHandlers } from "./handlers/continuity"
 import { projectHandlers } from "./handlers/project"
 import { providerHandlers } from "./handlers/provider"
 import { ptyConnectRoute, ptyHandlers } from "./handlers/pty"
@@ -136,6 +137,7 @@ const instanceApiRoutes = HttpApiBuilder.layer(InstanceHttpApi).pipe(
     questionHandlers,
     permissionHandlers,
     planReviewHandlers,
+    continuityHandlers,
     providerHandlers,
     sessionHandlers,
     syncHandlers,

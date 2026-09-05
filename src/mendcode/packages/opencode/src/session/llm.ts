@@ -34,6 +34,10 @@ import {
 import { EffectBridge } from "@/effect/bridge"
 import * as Option from "effect/Option"
 import * as OtelTracer from "@effect/opentelemetry/Tracer"
+import { runtimeCapabilityPrompt } from "@/mend/prompt/runtime-capabilities"
+import { autoReasoningSignal, selectAutoReasoning } from "@/mend/prompt/reasoning-auto"
+import { isAstraModel, normalizeAstraOptions } from "@/mend/prompt/model-family"
+import { ReasoningRequested, ReasoningCleared, recordReasoningState, clearReasoningState, requestedReasoningEffort } from "@/mend/prompt/reasoning-state"
 
 const log = Log.create({ service: "llm" })
 export const OUTPUT_TOKEN_MAX = ProviderTransform.OUTPUT_TOKEN_MAX
@@ -238,6 +242,14 @@ const live: Layer.Layer<
           mendFocus,
           mendPromptPolicy,
           mendMemory,
+          runtimeCapabilityPrompt({
+            providerID: input.model.providerID,
+            modelID: input.model.api.id,
+            endpoint: String(item.options.baseURL ?? input.model.api.url),
+            auth: info?.type === "oauth" ? "oauth" : info?.type === "api" ? "api" : "unknown",
+            transport: input.model.providerID === "openai" ? "responses-http" : "other",
+            tools: Object.keys(input.tools),
+          }),
           // any custom prompt passed into this call
           ...input.system,
           // any custom prompt from last user message
@@ -260,10 +272,17 @@ const live: Layer.Layer<
         system.push(header, rest.join("\n"))
       }
 
+      const autoReasoning = selectAutoReasoning({
+        enabled: !input.small && cfg.experimental?.reasoning_auto === true,
+        manual: input.user.model.variant,
+        variants: input.model.variants,
+        signal: autoReasoningSignal(input.messages),
+      })
+      if (autoReasoning) l.info("reasoning.auto", { effort: autoReasoning.effort, reason: autoReasoning.reason, messageID: input.user.id })
       const variant =
         !input.small && input.model.variants && input.user.model.variant
           ? input.model.variants[input.user.model.variant]
-          : {}
+          : autoReasoning?.options ?? {}
       const base = input.small
         ? ProviderTransform.smallOptions(input.model)
         : ProviderTransform.options({
@@ -310,6 +329,15 @@ const live: Layer.Layer<
           options,
         },
       )
+      if (isAstraModel(input.model.api.id)) {
+        params.temperature = undefined
+        params.topP = undefined
+        params.topK = undefined
+        params.options = normalizeAstraOptions(input.model.api.id, params.options)
+        // This SDK's static model catalog predates Astra; its supported override
+        // retains reasoning parameters without substituting a different model ID.
+        if (input.model.api.npm === "@ai-sdk/openai") params.options.forceReasoning = true
+      }
 
       const { headers } = yield* plugin.trigger(
         "chat.headers",
@@ -468,6 +496,24 @@ const live: Layer.Layer<
         ? (yield* InstanceState.context).project.id
         : undefined
 
+      const requestedEffort = requestedReasoningEffort(params.options)
+      if (!input.small && requestedEffort && (autoReasoning || input.user.model.variant)) {
+        const state = {
+          sessionID: input.sessionID,
+          messageID: input.user.id,
+          mode: autoReasoning ? "auto" as const : "manual" as const,
+          effort: requestedEffort,
+          reason: autoReasoning?.reason ?? "manual_selection",
+          modelID: input.model.api.id,
+          providerID: input.model.providerID,
+          requestedAt: Date.now(),
+        }
+        recordReasoningState(state)
+        yield* Effect.promise(() => Bus.publish(ReasoningRequested, state))
+      } else if (!input.small) {
+        clearReasoningState(input.sessionID)
+        yield* Effect.promise(() => Bus.publish(ReasoningCleared, { sessionID: input.sessionID, messageID: input.user.id, requestedAt: Date.now() }))
+      }
       return streamText({
         onError(error) {
           l.error("stream error", {
