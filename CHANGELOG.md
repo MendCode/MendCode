@@ -1,5 +1,47 @@
 # Changelog
 
+## 0.1.44-beta.1 - 2026-09-05
+
+This beta introduces release channels and updater recovery. It is an opt-in
+prerelease; stable installations remain on the stable channel.
+
+### Fixed
+
+- Bound installer downloads, verify checksums, stage replacement atomically,
+  retain the previous executable, and record update and startup failures.
+- Preserve explicit database paths when starting the shared backend and report
+  incompatible or unavailable backends instead of silently opening another writer.
+- Route `run` and `stats` through the shared backend. Failed runs return a failure
+  exit status, and rejected requests no longer wait indefinitely for session events.
+- Preserve quotes and backslashes in run arguments and load bundled GitLab/Poe
+  authentication plugins through the existing compatibility boundary.
+
+### Added
+
+- `mendcode upgrade channel`, `channel set stable|beta|nightly`, `--check`, and
+  compatibility-checked `--rollback`; channel selection never installs by itself.
+- Immutable release indexes with workflow provenance verification and pinned
+  installers, plus separate beta/nightly publication workflows.
+- Experimental async read tools, questions, session recall and versioned working
+  notes under the existing executor. All experimental flags default off.
+- Ctrl+T widgets for questions and jobs, model-family prompt profiles, and optional
+  balanced reasoning Auto that preserves manual choices.
+
+### Limitations
+
+- Native OpenAI async/steering and async shell are not enabled. Windows rollback
+  is unavailable. Some local database commands still require closing the backend.
+- An incompatible downgrade is blocked by this version; database backups are never
+  restored automatically. Keep beta opt-in when sharing sessions with stable.
+- The original v0.1.43 existing-installation incident was not reproduced; these
+  changes address independently demonstrated updater and startup defects.
+
+### Validation
+
+- Linux CI: 153 Bun tests, release-index contracts, typecheck and security checks.
+- Isolated macOS installation/upgrade and two-client TUI checks; no live-provider
+  parity or token-savings claim is made.
+
 ## 0.1.43 - 2026-09-04
 
 MendCode v0.1.43 adds the current OpenAI GPT-5.6 family and GPT-6 Astra to

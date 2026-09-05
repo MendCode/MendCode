@@ -157,9 +157,10 @@ jobs:
           set -euo pipefail
           node --test script/release-index.test.mjs
           bun run --cwd packages/opencode typecheck
-          export MENDCODE_DB="${TMPDIR:-/tmp}/opencode-test-data-$$/share/release.db"
           cd packages/opencode
-          exec bun test test/installation test/cli/upgrade-channel.test.ts test/cli/tui/shared-server.test.ts test/cli/tui/thread.test.ts
+          for test_file in test/installation/*.test.ts test/cli/upgrade-channel.test.ts test/cli/tui/shared-server.test.ts test/cli/tui/thread.test.ts; do
+            bash -c 'export MENDCODE_DB="${TMPDIR:-/tmp}/opencode-test-data-$$/share/release.db"; exec bun test --timeout 30000 "$@"' bash "$test_file"
+          done
 
       - name: Upload release artifacts to workflow
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
