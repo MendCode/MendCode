@@ -44,7 +44,8 @@ function Write-AtomicText([string]$Path, [string]$Text) {
     $stream.Write($bytes, 0, $bytes.Length)
     $stream.Flush($true)
   } finally { $stream.Dispose() }
-  if ([IO.File]::Exists($Path)) { [IO.File]::Replace($temporary, $Path, $null) }
+  # A plain $null becomes an empty backup path in Windows PowerShell 5.1.
+  if ([IO.File]::Exists($Path)) { [IO.File]::Replace($temporary, $Path, [System.Management.Automation.Language.NullString]::Value) }
   else { [IO.File]::Move($temporary, $Path) }
 }
 
