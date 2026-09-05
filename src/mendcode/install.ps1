@@ -35,6 +35,14 @@ function Assert-RegularPath([string]$Path) {
   }
 }
 
+function Get-MendCodeFileDigest([string]$Path) {
+  # Avoid module auto-loading differences when PowerShell 7 launches 5.1.
+  $hash = [Security.Cryptography.SHA256]::Create()
+  $stream = [IO.File]::OpenRead($Path)
+  try { return [BitConverter]::ToString($hash.ComputeHash($stream)).Replace("-", "").ToLowerInvariant() }
+  finally { $stream.Dispose(); $hash.Dispose() }
+}
+
 function Write-AtomicText([string]$Path, [string]$Text) {
   Assert-RegularPath $Path
   $temporary = "$Path.$([Guid]::NewGuid().ToString('N')).tmp"
@@ -430,7 +438,7 @@ function Assert-Candidate([string]$Candidate, [string]$Target) {
 function Activate-Candidate {
   $candidate = Join-Path $script:Operation "candidate.exe"
   Assert-RegularPath $candidate
-  if ((Get-FileHash -LiteralPath $candidate -Algorithm SHA256).Hash.ToLowerInvariant() -ne $script:BinaryDigest) {
+  if ((Get-MendCodeFileDigest $candidate) -ne $script:BinaryDigest) {
     throw "Staged executable changed before activation."
   }
   $destination = Join-Path $InstallDir "mendcode.exe"
@@ -438,7 +446,7 @@ function Activate-Candidate {
   $previous = Join-Path $script:Operation "previous"
   if (Test-Path -LiteralPath $previous) { throw "Previous executable is already retained; inspect this operation before retrying." }
   if ([IO.File]::Exists($destination)) {
-    $script:PreviousDigest = (Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash.ToLowerInvariant()
+    $script:PreviousDigest = Get-MendCodeFileDigest $destination
   }
   $script:Phase = "activating"
   Write-UpdateStatus
@@ -514,11 +522,11 @@ try {
       if ($_ -match ('^([a-fA-F0-9]{64})\s+\*?(?:\./)?' + [Regex]::Escape($filename) + '$')) { $Matches[1].ToLowerInvariant() }
     })
     if ($digests.Count -ne 1) { throw "Missing, duplicate, or invalid release checksum." }
-    if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne $digests[0]) { throw "Release checksum mismatch. Current binary preserved." }
+    if ((Get-MendCodeFileDigest $archive) -ne $digests[0]) { throw "Release checksum mismatch. Current binary preserved." }
     $candidate = Join-Path $script:Operation "candidate.exe"
     Expand-VerifiedExecutable $archive $candidate
     Assert-Candidate $candidate $target
-    $script:BinaryDigest = (Get-FileHash -LiteralPath $candidate -Algorithm SHA256).Hash.ToLowerInvariant()
+    $script:BinaryDigest = Get-MendCodeFileDigest $candidate
     Write-UpdateStatus
     $deferred = Start-DeferredUpdate
     if (-not $deferred) {
