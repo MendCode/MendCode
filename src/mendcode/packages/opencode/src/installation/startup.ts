@@ -2,6 +2,7 @@ import fs from "node:fs/promises"
 import { createReadStream } from "node:fs"
 import { createHash, randomUUID } from "node:crypto"
 import path from "node:path"
+import { BACKEND_PREPARATION_TIMEOUT_MS } from "./backend-startup"
 
 export async function latestUpdateOperation(executable: string) {
   const directory = path.dirname(await fs.realpath(executable))
@@ -75,13 +76,24 @@ export async function trackUpdateStartup(input: {
     return writes
   }
   await write()
-  const timer = setTimeout(() => {
+  const expire = () => {
     state = "failed"
     void write("Backend and TUI readiness were not confirmed within the startup deadline.").catch(() => {})
-  }, input.timeoutMs ?? 30_000)
+  }
+  let timer = setTimeout(expire, input.timeoutMs ?? 30_000)
   timer.unref()
   return {
     file,
+    preparing() {
+      clearTimeout(timer)
+      timer = setTimeout(expire, BACKEND_PREPARATION_TIMEOUT_MS + 30_000)
+      timer.unref()
+    },
+    connecting() {
+      clearTimeout(timer)
+      timer = setTimeout(expire, input.timeoutMs ?? 30_000)
+      timer.unref()
+    },
     async ready() {
       clearTimeout(timer)
       state = "ready"
