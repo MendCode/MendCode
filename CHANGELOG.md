@@ -12,6 +12,8 @@ This stable hotfix carries startup recovery independently of the beta runtime.
 - Reject a recorded, incompatible prerelease schema before opening a database
   writer. Existing legacy databases retain their migration behavior.
 - Keep the Windows installer parseable by Windows PowerShell 5.1.
+- Load bundled GitLab and Poe authentication modules through the existing
+  external-plugin boundary, preserving compatibility with their upstream SDK.
 
 Release-channel selection and experimental continuity remain in the beta line.
 Users who have opened sessions with beta should stay on beta; stable must not be

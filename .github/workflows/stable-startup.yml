@@ -30,6 +30,6 @@ jobs:
         working-directory: src/mendcode/packages/opencode
         run: |
           bun run typecheck
-          for test_file in test/installation/backend-startup.test.ts test/installation/recorded-schema.test.ts test/cli/tui/thread.test.ts; do
+          for test_file in test/installation/backend-startup.test.ts test/installation/recorded-schema.test.ts test/cli/tui/thread.test.ts test/plugin/auth-override.test.ts; do
             bash -c 'export MENDCODE_DB="${TMPDIR:-/tmp}/opencode-test-data-$$/share/contracts.db"; exec bun test --timeout 30000 "$@"' bash "$test_file"
           done
