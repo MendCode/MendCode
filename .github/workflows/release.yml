@@ -106,6 +106,15 @@ jobs:
           set -euo pipefail
           bun run --cwd packages/opencode script/build.ts --release-assets --skip-embed-web-ui --skip-install --exclude-os=darwin
 
+      - name: Verify isolated startup regressions
+        working-directory: src/mendcode/packages/opencode
+        shell: bash
+        run: |
+          set -euo pipefail
+          for test_file in test/installation/backend-startup.test.ts test/installation/recorded-schema.test.ts; do
+            bash -c 'export MENDCODE_DB="${TMPDIR:-/tmp}/opencode-test-data-$$/share/contracts.db"; exec bun test --timeout 30000 "$@"' bash "$test_file"
+          done
+
       - name: Upload release artifacts to workflow
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:

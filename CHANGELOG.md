@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.1.44 - 2026-09-05
+
+This stable hotfix carries startup recovery independently of the beta runtime.
+
+- Stop treating a slow database migration as a failed eight-second backend
+  startup. An identified preparation phase has a bounded 15-minute window,
+  visible progress and a separate 30-second connection deadline.
+- Stop waiting when the owned child exits or reports failure; identify its
+  startup phase record in the error instead of silently retrying.
+- Reject a recorded, incompatible prerelease schema before opening a database
+  writer. Existing legacy databases retain their migration behavior.
+- Keep the Windows installer parseable by Windows PowerShell 5.1.
+
+Release-channel selection and experimental continuity remain in the beta line.
+Users who have opened sessions with beta should stay on beta; stable must not be
+used to force a downgrade of its database. See
+[release and recovery guidance](docs/releases-and-startup-recovery.md).
+
 ## 0.1.43 - 2026-09-04
 
 MendCode v0.1.43 adds the current OpenAI GPT-5.6 family and GPT-6 Astra to

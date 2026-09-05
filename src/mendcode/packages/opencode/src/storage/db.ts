@@ -23,6 +23,8 @@ import {
   assertTestSqliteIsolation,
 } from "./resolve-default-sqlite-path"
 import { reconcileLegacyMigrationJournal } from "./legacy-migration"
+import { assertRecordedSchema } from "./recorded-schema"
+import { reportBackendPhase } from "../installation/backend-startup"
 
 declare const OPENCODE_MIGRATIONS: { sql: string; timestamp: number; name: string }[] | undefined
 
@@ -116,6 +118,13 @@ function migrations(dir: string): Journal {
 export const Client = lazy(() => {
   log.info("opening database", { path: Path })
 
+  const entries =
+    typeof OPENCODE_MIGRATIONS !== "undefined"
+      ? OPENCODE_MIGRATIONS
+      : migrations(path.join(import.meta.dirname, "../../migration"))
+  assertRecordedSchema(Path, entries)
+  reportBackendPhase("migration")
+
   const db = init(Path)
 
   db.run("PRAGMA journal_mode = WAL")
@@ -126,10 +135,6 @@ export const Client = lazy(() => {
   db.run("PRAGMA wal_checkpoint(PASSIVE)")
 
   // Apply schema migrations
-  const entries =
-    typeof OPENCODE_MIGRATIONS !== "undefined"
-      ? OPENCODE_MIGRATIONS
-      : migrations(path.join(import.meta.dirname, "../../migration"))
   if (entries.length > 0) {
     log.info("applying migrations", {
       count: entries.length,
@@ -150,6 +155,7 @@ export const Client = lazy(() => {
     applyMigrations(db, entries)
   }
 
+  reportBackendPhase("ready")
   return db
 })
 
