@@ -2,6 +2,7 @@ import { existsSync } from "fs"
 import { readFile } from "fs/promises"
 import path from "path"
 import { mendPaths } from "../config/paths"
+import { ASTRA_PROMPT_SOURCE, normalizedPromptModel } from "./model-family"
 
 export type PromptSource = {
   label: string
@@ -18,6 +19,7 @@ export type PromptBehaviorProfile = {
   focusID: string
   label: string
   sourcePolicy: "public-model-guidance" | "mendcode-compatibility"
+  provenance?: { revision: string; url: string; verifiedAt: string }
   behavior: string[]
 }
 
@@ -36,12 +38,20 @@ const modelBehaviorProfiles: Array<PromptBehaviorProfile & { match: RegExp }> = 
   {
     id: "gpt-6-astra",
     focusID: "codex",
-    label: "GPT-6 Astra compatibility",
-    sourcePolicy: "mendcode-compatibility",
+    label: "GPT-6 Astra public behavior guidance",
+    sourcePolicy: "public-model-guidance",
+    provenance: ASTRA_PROMPT_SOURCE,
     match: /(^|[^a-z0-9])gpt[-_.:/]?6[-_.:/]?astra([^a-z0-9]|$)/i,
     behavior: [
       "Use the actual GPT-6 Astra runtime contract and exposed tools instead of assuming that every Codex CLI feature is available through MendCode.",
       "Treat reasoning modes, transport, caching, context limits, and advanced features as runtime configuration; verify capabilities before promising them.",
+      "Carry authorized work through implementation and proportionate verification. Resolve routine details from project evidence; ask only when a missing decision materially affects the outcome.",
+      "Incorporate corrections and side questions while preserving the current objective and earlier constraints unless the user replaces or cancels them.",
+      "When a non-blocking question tool is exposed, continue independent work while its answer is pending. Silence never grants permission; dependent actions must wait.",
+      "Use exposed async tools for independent work and retain returned job IDs; retrieve results before relying on them. Never infer native transport support from the model name.",
+      "Keep bounded working notes and retrieve earlier session evidence with exposed recall tools. Do not replace the objective with a compaction summary or create global memory automatically.",
+      "Verify the changed behavior with the narrowest meaningful check. Broaden testing only for a concrete remaining risk; report failed or unavailable checks accurately.",
+      "Write concise connected explanations. Avoid repeated plans, unnecessary headings, canned conclusions, and repeating context already given to the user.",
     ],
   },
   {
@@ -271,7 +281,7 @@ export function sourceForFocus(focusID: string) {
 
 export function promptBehaviorForModel(input: { focusID?: string | null; modelID?: string | null }) {
   const focusID = input.focusID || ""
-  const modelID = input.modelID || ""
+  const modelID = normalizedPromptModel(input.modelID || "")
   return modelBehaviorProfiles.find((profile) => profile.focusID === focusID && profile.match.test(modelID)) || null
 }
 
@@ -279,6 +289,7 @@ export function promptBehaviorText(profile: PromptBehaviorProfile) {
   return [
     `Model-specific MendCode adapter: ${profile.label}.`,
     `Source policy: ${profile.sourcePolicy}; this is behavioral guidance, not an upstream hidden prompt.`,
+    ...(profile.provenance ? [`Profile revision: ${profile.provenance.revision}; guidance verified ${profile.provenance.verifiedAt}; source: ${profile.provenance.url}`] : []),
     ...profile.behavior.map((item) => `- ${item}`),
   ].join("\n")
 }

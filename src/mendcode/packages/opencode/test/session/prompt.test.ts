@@ -56,6 +56,7 @@ import { MessageID, PartID, SessionID } from "../../src/session/schema"
 import { SessionStatus } from "../../src/session/status"
 import { recoverStaleSessionStatuses, STALE_SESSION_RECOVERY_MS } from "../../src/session/recovery"
 import { BackgroundTask } from "../../src/session/background-task"
+import * as ContinuityMailbox from "../../src/session/runtime-mailbox"
 import { SessionV2 } from "../../src/v2/session"
 import { Modelv2 } from "../../src/v2/model"
 import { Skill } from "../../src/skill"
@@ -2561,7 +2562,8 @@ it.live("does not wake a stopped sender when a peer response arrives", () =>
           !(yield* sessions.messages({ sessionID: target.id })).some(
             (message) => message.info.role === "assistant" && message.info.time.completed !== undefined,
           )
-        ) yield* Effect.sleep("1 millis")
+        )
+          yield* Effect.sleep("1 millis")
       }).pipe(Effect.timeout("2 seconds"))
       yield* Effect.sleep("100 millis")
       expect(yield* llm.calls).toBe(1)
@@ -2610,7 +2612,8 @@ it.live("stopping drops an already queued peer reply while preserving the queued
               message.info.parentID === human.info.id &&
               message.info.time.completed,
           )
-        ) yield* Effect.sleep("1 millis")
+        )
+          yield* Effect.sleep("1 millis")
       }).pipe(Effect.timeout("2 seconds"))
       yield* Effect.sleep("50 millis")
       const messages = yield* sessions.messages({ sessionID: chat.id, view: "full" })
@@ -5453,6 +5456,60 @@ it.live("handles filenames with # character", () =>
 )
 
 // Regression: empty assistant turn loop
+
+it.live("continuity wakes the existing executor without inventing a user message", () =>
+  provideTmpdirServer(
+    Effect.fnUntraced(function* ({ llm }) {
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const bus = yield* Bus.Service
+      const session = yield* sessions.create({ title: "Continuity wake" })
+      yield* llm.text("Initial response")
+      yield* prompt.prompt({
+        sessionID: session.id,
+        agent: "build",
+        model: ref,
+        parts: [{ type: "text", text: "Inspect the result when ready" }],
+      })
+      const settled = yield* Deferred.make<void>()
+      const off = yield* bus.subscribeCallback(SessionStatus.Event.Status, (event) => {
+        if (
+          event.properties.sessionID === session.id &&
+          event.properties.status.type === "idle" &&
+          ContinuityMailbox.pendingEvents(session.id).length === 0
+        ) {
+          Effect.runFork(Deferred.succeed(settled, undefined))
+        }
+      })
+      yield* llm.text("Result acknowledged")
+      const record = ContinuityMailbox.completeRecord({
+        id: `job_${session.id}`,
+        sessionID: session.id,
+        directory: session.directory,
+        kind: "job",
+        generation: 0,
+        status: "completed",
+        data: { result: "Read complete" },
+        timeCreated: Date.now(),
+        timeUpdated: Date.now(),
+      })
+      yield* bus.publish(ContinuityMailbox.Event.Updated, {
+        sessionID: session.id,
+        id: record.id,
+        kind: record.kind,
+        status: record.status,
+      })
+      yield* llm.wait(2).pipe(Effect.timeout("3 seconds"))
+      yield* Deferred.await(settled).pipe(Effect.timeout("3 seconds"))
+      off()
+      expect(yield* llm.calls).toBe(2)
+      expect(ContinuityMailbox.pendingEvents(session.id)).toHaveLength(0)
+      const messages = yield* sessions.messages({ sessionID: session.id })
+      expect(messages.filter((message) => message.info.role === "user")).toHaveLength(1)
+    }),
+    { git: true, config: (url) => ({ ...providerCfg(url), experimental: { async_tools: true } }) },
+  ),
+)
 
 it.live("does not loop empty assistant turns for a simple reply", () =>
   provideTmpdirServer(

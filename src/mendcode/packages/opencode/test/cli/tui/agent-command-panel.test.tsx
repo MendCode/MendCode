@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import { expect, test } from "bun:test"
-import { RGBA } from "@opentui/core"
+import { RGBA, type ScrollBoxRenderable } from "@opentui/core"
 import { testRender } from "@opentui/solid"
 import { createSignal } from "solid-js"
 import { AgentCommandPanel } from "@/cli/cmd/tui/component/agent-command-panel"
@@ -138,3 +138,41 @@ for (const width of [42, 100]) {
     }
   })
 }
+
+test("historical commands scroll within the widget and keep the source-session action", async () => {
+  const opened: string[] = []
+  const app = await testRender(() => (
+    <box flexDirection="column">
+      <AgentCommandPanel sessionID="target" commands={[
+        { ...command("first", "failed"), error: "Stopped before completion" },
+        { ...command("second", "expired"), error: "Expired before delivery" },
+        command("third", "completed"),
+        command("fourth", "completed"),
+      ]} width={42} height={4} theme={theme} onUpdate={() => {}}
+        onOpenSession={(id) => opened.push(id)} />
+      <text>Draft below stays visible</text>
+    </box>
+  ), { width: 42, height: 6 })
+  try {
+    await settle(app)
+    const toggle = app.renderer.root.findDescendantById("agent-command-history-toggle")!
+    await app.mockMouse.click(toggle.x + 1, toggle.y)
+    await settle(app)
+    const list = app.renderer.root.findDescendantById("agent-command-list") as ScrollBoxRenderable
+    expect(app.captureCharFrame()).toContain("Cache worker")
+    expect(app.captureCharFrame()).toContain("Draft below stays visible")
+    expect(app.captureCharFrame()).not.toContain("You")
+    list.focus()
+    for (let i = 0; i < 6; i++) app.mockInput.pressArrow("down")
+    await settle(app)
+    expect(list.scrollTop).toBeGreaterThan(0)
+    const open = app.renderer.root.findDescendantById("agent-command-open-fourth")!
+    expect(open.y).toBeLessThan(4)
+    expect(open.x + open.width).toBeLessThanOrEqual(42)
+    await app.mockMouse.click(open.x + 1, open.y)
+    expect(opened).toEqual(["source"])
+    expect(app.captureCharFrame()).toContain("Draft below stays visible")
+  } finally {
+    app.renderer.destroy()
+  }
+})

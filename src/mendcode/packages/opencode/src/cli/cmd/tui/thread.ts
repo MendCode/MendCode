@@ -30,6 +30,8 @@ import { loadMendTuiProfile } from "@/mend/profile"
 import { ServerAuth } from "@/server/auth"
 import { SharedServer, type SharedServerClientLease, type SharedServerState } from "./shared-server"
 import { isProcessMemoryUsage, processMemoryUsage, type DiagnosticsSnapshot } from "@/util/process-memory"
+import { Installation } from "@/installation"
+import { trackUpdateStartup } from "@/installation/startup"
 
 const SHARED_SERVER_PROBE_TIMEOUT_MS = 2_000
 const SHARED_SERVER_WAIT_TIMEOUT_MS = 8_000
@@ -72,14 +74,15 @@ export function resolveSharedServerURL(value?: string, environment = process.env
   return url.toString()
 }
 
-async function probeSharedServer(input: { url: string; directory: string; headers?: RequestInit["headers"] }) {
+async function probeSharedServer(input: { url: string; directory: string; headers?: RequestInit["headers"]; fetch?: typeof fetch }) {
   const client = createOpencodeClient({
     baseUrl: input.url,
     directory: input.directory,
     headers: input.headers,
+    fetch: input.fetch,
     signal: AbortSignal.timeout(SHARED_SERVER_PROBE_TIMEOUT_MS),
   })
-  await client.global.health({ throwOnError: true })
+  return (await client.global.health({ throwOnError: true })).data
 }
 
 function sharedServerConnection(state: SharedServerState) {
@@ -217,8 +220,9 @@ function sharedServerCommand(runtimeCwd: string) {
   }
 }
 
-function sharedServerEnvironment(credentials: ReturnType<typeof SharedServer.credentials>, runtimeID: string) {
+export function sharedServerEnvironment(credentials: ReturnType<typeof SharedServer.credentials>, runtimeID: string) {
   const env = { ...process.env }
+  const database = SharedServer.resolveSharedDatabasePath(env.MENDCODE_DB || env.OPENCODE_DB)
   for (const key of [
     "MENDCODE_ROOT",
     "OPENCODE_ROOT",
@@ -240,6 +244,7 @@ function sharedServerEnvironment(credentials: ReturnType<typeof SharedServer.cre
   }
   return {
     ...env,
+    ...(database ? { MENDCODE_DB: database, OPENCODE_DB: database } : {}),
     MENDCODE_SERVER_USERNAME: credentials.username,
     MENDCODE_SERVER_PASSWORD: credentials.password,
     OPENCODE_SERVER_USERNAME: credentials.username,
@@ -368,6 +373,15 @@ export async function ensureLocalSharedServer(input: {
   }
 }
 
+export async function requireLocalSharedServer(input: Parameters<typeof ensureLocalSharedServer>[0]) {
+  const connection = await ensureLocalSharedServer(input)
+  if (connection) return connection
+  throw new Error(
+    "The shared backend could not become ready. Finish active sessions in other terminals before restarting MendCode. " +
+    "If it remains unavailable, inspect the shared-server logs and lock; no separate database writer was started.",
+  )
+}
+
 function createWorkerFetch(client: RpcClient): typeof fetch {
   const fn = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const request = new Request(input, init)
@@ -486,6 +500,7 @@ export const TuiThreadCommand = cmd({
     // Keep ENABLE_PROCESSED_INPUT cleared even if other code flips it.
     // (Important when running under `bun run` wrappers on Windows.)
     const unguard = win32InstallCtrlCGuard()
+    let startup: Awaited<ReturnType<typeof trackUpdateStartup>>
     try {
       // Must be the very first thing — disables CTRL_C_EVENT before any Worker
       // spawn or async work so the OS cannot kill the process group.
@@ -499,6 +514,14 @@ export const TuiThreadCommand = cmd({
       // Resolve relative --project paths from PWD, then use the real cwd after
       // chdir so the thread and worker share the same directory key.
       const runtimeCwd = process.cwd()
+      if (!Installation.isLocal() && !args.serverUrl && !process.env.MENDCODE_SERVER_URL) {
+        startup = await trackUpdateStartup({ executable: process.execPath, version: Installation.displayVersion(),
+          journal: (await import("@/storage/migration-journal")).supportedMigrationJournal() })
+          .catch((error) => {
+            Log.Default.warn("update startup record unavailable", { error: errorMessage(error) })
+            return undefined
+          })
+      }
       const next = resolveThreadDirectory(args.project)
       try {
         process.chdir(next)
@@ -559,11 +582,16 @@ export const TuiThreadCommand = cmd({
           networkOptionSet,
         })
       ) {
-        localSharedServer = await ensureLocalSharedServer({ directory: cwd, runtimeCwd })
-        if (localSharedServer) {
-          serverURL = localSharedServer.url
-          serverHeaders = localSharedServer.headers
+        try {
+          localSharedServer = await requireLocalSharedServer({ directory: cwd, runtimeCwd })
+        } catch (error) {
+          // Falling through would start a private worker on the same database.
+          UI.error(errorMessage(error))
+          process.exitCode = 1
+          return
         }
+        serverURL = localSharedServer.url
+        serverHeaders = localSharedServer.headers
       }
 
       const file = serverURL ? undefined : await target()
@@ -704,6 +732,14 @@ export const TuiThreadCommand = cmd({
 
         await tui({
           url: transport.url,
+          onStartupReady: startup ? async () => {
+            const health = await probeSharedServer({ ...transport, directory: cwd })
+            if (health?.healthy !== true || health.version !== Installation.displayVersion()) {
+              await startup?.close("Connected backend does not match the installed update version.")
+              return
+            }
+            await startup?.ready()
+          } : undefined,
           ...(args.diagnostics
             ? {
                 async onSnapshot() {
@@ -749,6 +785,7 @@ export const TuiThreadCommand = cmd({
         await stop()
       }
     } finally {
+      await startup?.close().catch((error) => Log.Default.warn("update startup record failed", { error: errorMessage(error) }))
       unguard?.()
     }
     process.exit(process.exitCode ?? 0)

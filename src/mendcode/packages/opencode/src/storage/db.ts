@@ -8,8 +8,6 @@ import { Global } from "@mendcode/core/global"
 import * as Log from "@mendcode/core/util/log"
 import { NamedError } from "@mendcode/core/util/error"
 import z from "zod"
-import path from "path"
-import { readFileSync, readdirSync, existsSync } from "fs"
 import { Flag } from "@mendcode/core/flag/flag"
 import { InstallationChannel } from "@mendcode/core/installation/version"
 import { InstanceState } from "@/effect/instance-state"
@@ -23,6 +21,9 @@ import {
   assertTestSqliteIsolation,
 } from "./resolve-default-sqlite-path"
 import { reconcileLegacyMigrationJournal } from "./legacy-migration"
+import { migrationEntries, identifyMigrations } from "./migration-journal"
+import { assertCompatibility, backupBeforeMigration, recordSchemaIdentity } from "./compatibility"
+import { acquireWriterLease } from "./writer-lease"
 
 declare const OPENCODE_MIGRATIONS: { sql: string; timestamp: number; name: string }[] | undefined
 
@@ -80,83 +81,65 @@ function applyMigrations(db: SQLiteBunDatabase, entries: Journal) {
   migrateFromJournal(db, entries)
 }
 
-function time(tag: string) {
-  const match = /^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})/.exec(tag)
-  if (!match) return 0
-  return Date.UTC(
-    Number(match[1]),
-    Number(match[2]) - 1,
-    Number(match[3]),
-    Number(match[4]),
-    Number(match[5]),
-    Number(match[6]),
-  )
-}
-
-function migrations(dir: string): Journal {
-  const dirs = readdirSync(dir, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => entry.name)
-
-  const sql = dirs
-    .map((name) => {
-      const file = path.join(dir, name, "migration.sql")
-      if (!existsSync(file)) return
-      return {
-        sql: readFileSync(file, "utf-8"),
-        timestamp: time(name),
-        name,
-      }
-    })
-    .filter(Boolean) as Journal
-
-  return sql.sort((a, b) => a.timestamp - b.timestamp)
-}
-
+let releaseWriter: (() => void) | undefined
 export const Client = lazy(() => {
   log.info("opening database", { path: Path })
-
-  const db = init(Path)
-
-  db.run("PRAGMA journal_mode = WAL")
-  db.run("PRAGMA synchronous = NORMAL")
-  db.run("PRAGMA busy_timeout = 5000")
-  db.run("PRAGMA cache_size = -64000")
-  db.run("PRAGMA foreign_keys = ON")
-  db.run("PRAGMA wal_checkpoint(PASSIVE)")
-
-  // Apply schema migrations
-  const entries =
-    typeof OPENCODE_MIGRATIONS !== "undefined"
-      ? OPENCODE_MIGRATIONS
-      : migrations(path.join(import.meta.dirname, "../../migration"))
-  if (entries.length > 0) {
-    log.info("applying migrations", {
-      count: entries.length,
-      mode: typeof OPENCODE_MIGRATIONS !== "undefined" ? "bundled" : "dev",
-    })
+  const entries = migrationEntries()
+  const identity = identifyMigrations(entries)
+  const release = acquireWriterLease(Path)
+  let db: ReturnType<typeof init> | undefined
+  try {
+    assertCompatibility(Path, identity)
     if (!Flag.OPENCODE_SKIP_MIGRATIONS) {
-      const reconciled = reconcileLegacyMigrationJournal(db, entries)
-      if (reconciled) {
-        log.info("reconciled legacy sqlite migration journal", {
-          count: entries.length,
-        })
-      }
-    } else {
-      for (const item of entries) {
-        item.sql = "select 1;"
-      }
+      const backup = backupBeforeMigration(Path, identity)
+      if (backup) log.info("created pre-migration database backup", { path: backup })
     }
-    applyMigrations(db, entries)
-  }
+    db = init(Path)
+    db.run("PRAGMA journal_mode = WAL")
+    db.run("PRAGMA synchronous = NORMAL")
+    db.run("PRAGMA busy_timeout = 5000")
+    db.run("PRAGMA cache_size = -64000")
+    db.run("PRAGMA foreign_keys = ON")
+    db.run("PRAGMA wal_checkpoint(PASSIVE)")
 
-  return db
+    // Apply schema migrations
+    if (entries.length > 0) {
+      log.info("applying migrations", {
+        count: entries.length,
+        mode: typeof OPENCODE_MIGRATIONS !== "undefined" ? "bundled" : "dev",
+      })
+      if (!Flag.OPENCODE_SKIP_MIGRATIONS) {
+        const reconciled = reconcileLegacyMigrationJournal(db, entries)
+        if (reconciled) {
+          log.info("reconciled legacy sqlite migration journal", {
+            count: entries.length,
+          })
+        }
+      } else {
+        for (const item of entries) {
+          item.sql = "select 1;"
+        }
+      }
+      applyMigrations(db, entries)
+      if (!Flag.OPENCODE_SKIP_MIGRATIONS) recordSchemaIdentity(db, identity)
+    }
+
+    releaseWriter = release
+    return db
+  } catch (error) {
+    try { db?.$client.close() } finally { release() }
+    throw error
+  }
 })
 
 export function close() {
   if (!Client.loaded()) return
-  Client().$client.close()
-  Client.reset()
+  try { Client().$client.close() } finally {
+    Client.reset()
+    const release = releaseWriter
+    releaseWriter = undefined
+    release?.()
+  }
 }
 
 export type TxOrDb = Transaction | Client
