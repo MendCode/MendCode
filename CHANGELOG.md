@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.44 stable - 2026-09-05
+
+The stable hotfix is published separately from the beta runtime. It carries the
+phase-aware startup deadline, rejects incompatible recorded prerelease schemas
+before writing, repairs PowerShell 5.1 installer parsing, and loads bundled
+GitLab/Poe authentication modules through the existing plugin boundary.
+
+The beta line already includes these startup and authentication fixes and uses
+its broader schema compatibility checks. Release channels and experimental
+continuity remain in beta; beta databases must not be forced back to stable.
+See [release and recovery guidance](docs/releases-and-startup-recovery.md).
+
 ## 0.1.44-beta.2 - 2026-09-05
 
 ### Fixed
