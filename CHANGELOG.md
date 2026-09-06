@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.1.44-beta.3 - 2026-09-05
+
+### Added
+
+- Backend-owned Smart Approval review, exact action grants, history and revocation,
+  with causal user authority and matching TUI, SDK and ACP controls.
+- `mendcode context` for estimated context composition, provider-reported cache
+  usage and request timing. Missing provider metrics remain unavailable.
+- Stable per-turn memory snapshots and bounded secondary-tool discovery, with a
+  configuration fallback to the complete permitted catalog.
+- Opt-in Code Mode adapted from the pinned OpenCode v2 interpreter. Nested tools
+  retain host permissions and audit records while only the final result enters
+  model context. Code Mode remains disabled by default.
+- Native macOS screenshot capture with crop/window targeting, image attachments,
+  bounded previews and limited navigation keys tied to a recent capture.
+
+### Compatibility and validation limits
+
+- This is an experimental beta. Native provider compaction is not enabled;
+  the portable summarizer remains active. No measured cache-saving claim is made.
+- Native computer tools currently support macOS only. Pointer control, arbitrary
+  typing and browser DOM automation are not included. Interactive keyboard and
+  Smart Approval TUI acceptance remain pending; OS permissions are not bypassed.
+- Code Mode is a confined language in a worker, not an OS sandbox or hard heap
+  quota. Broader resource and permission lifecycle validation remains pending.
+- No database migration or automatic continuity activation is introduced.
+  Existing beta databases must not be forced back to the stable runtime.
+
 ## 0.1.44 stable - 2026-09-05
 
 The stable hotfix is published separately from the beta runtime. It carries the
