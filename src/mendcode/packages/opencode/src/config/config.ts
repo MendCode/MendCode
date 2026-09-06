@@ -356,6 +356,10 @@ export const Info = Schema.Struct({
   ).annotate({ description: "Default handling for prompts submitted while an assistant turn is active." }),
   experimental: Schema.optional(
     Schema.Struct({
+      code_mode: Schema.optional(Schema.Boolean).annotate({ description: "Enable bounded, permission-preserving JavaScript tool orchestration (experimental, default false)." }),
+      tool_discovery: Schema.optional(Schema.Boolean).annotate({
+        description: "Discover secondary and MCP tool schemas on demand to reduce context (default: true). Set false to expose all tools directly.",
+      }),
       async_tools: Schema.optional(Schema.Boolean).annotate({
         description: "Opt in to emulated background read tools (default: false).",
       }),

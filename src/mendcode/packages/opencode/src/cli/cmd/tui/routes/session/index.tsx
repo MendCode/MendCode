@@ -228,7 +228,6 @@ import {
   SessionJobsWidget,
   splitWidgetQuestions,
   isWidgetJobActive,
-  widgetReasoningLabel,
   type WidgetReasoningState,
   type WidgetJob,
   type AsyncQuestionRequest,
@@ -248,7 +247,6 @@ import {
 import { readMendTuiCustomization, resolveMendSessionAccent } from "@/mend/tui/customization"
 import { formatDuration } from "@/util/format"
 import { readPermissionsConfig, writePermissionsConfig, type PermissionMode } from "@/mend/config/permissions"
-import { reviewPermissionRequestWithModel, shouldReviewSmartApproval } from "@/mend/permission/smart-approval"
 import { readActiveTuiProfile, writeActiveTuiProfile } from "@/mend/tui/profile-actions"
 import {
   memoryToolPresentation,
@@ -334,21 +332,23 @@ const SESSION_LIVE_FOLLOW_EVENTS = new Set([
 ])
 
 const sessionScrollStates = new Map<string, SessionScrollState>()
-// Multiple TUI routes can observe the same shared pending permission. Keep a
-// process-local lease so they do not run duplicate reviewer calls in parallel;
-// the fingerprint check below still protects the reply from a changed request.
-const smartPermissionReviewLeases = new Set<string>()
 
-function smartPermissionRequestFingerprint(request: PermissionRequest) {
-  return JSON.stringify({
-    sessionID: request.sessionID,
-    permission: request.permission,
-    patterns: request.patterns,
-    always: request.always,
-    command: typeof request.metadata.command === "string" ? request.metadata.command : undefined,
-    source: typeof request.metadata.source === "string" ? request.metadata.source : undefined,
-    tool: request.tool,
-  })
+function smartReplyFor(request: PermissionRequest) {
+  const metadata = request.metadata ?? {}
+  const facts = metadata.actionFacts
+  const authority = metadata.authorityContext
+  const actionFingerprint =
+    facts && typeof facts === "object" && typeof (facts as { fingerprint?: unknown }).fingerprint === "string"
+      ? (facts as { fingerprint: string }).fingerprint
+      : undefined
+  if (!actionFingerprint) return undefined
+  const contextRevision =
+    authority &&
+    typeof authority === "object" &&
+    Number.isSafeInteger((authority as { contextRevision?: unknown }).contextRevision)
+      ? (authority as { contextRevision: number }).contextRevision
+      : undefined
+  return { actionFingerprint, ...(contextRevision === undefined ? {} : { contextRevision }) }
 }
 
 export function sessionFollowSyncKind(type: string) {
@@ -1526,7 +1526,6 @@ export function Session() {
   )
   const [smartPermissionStatus, setSmartPermissionStatus] = createSignal<string | null>(null)
   const autoAcceptedPermissionIDs = new Set<string>()
-  const smartReviewedPermissionIDs = new Set<string>()
   const sessionPermissionModesKey = "session_permission_modes"
   const permissionSessionID = createMemo(() => session()?.parentID ?? route.sessionID)
   let syncedSessionPermissionMode: string | undefined
@@ -1631,6 +1630,31 @@ export function Session() {
     return JSON.stringify(permission, null, 2)
   })
 
+  async function showSmartPermissionHistory() {
+    try {
+      const result = await sdk.client.permission.reviews(
+        { sessionID: route.sessionID, limit: 20, workspace: project.workspace.current() },
+        { throwOnError: true },
+      )
+      const records = result.data?.items ?? []
+      const lines = records.length
+        ? records.map((item) => {
+            const record = item as {
+              status?: unknown
+              source?: unknown
+              summary?: unknown
+              updatedAt?: unknown
+            }
+            const at = typeof record.updatedAt === "number" ? new Date(record.updatedAt).toISOString() : "time n/a"
+            return `${at} · ${String(record.status ?? "unknown")} · ${String(record.source ?? "unknown")} · ${String(record.summary ?? "")}`
+          })
+        : ["No Smart Approval reviews recorded for this session."]
+      await DialogAlert.show(dialog, "Smart Approval history", lines.join("\n"))
+    } catch (error) {
+      toast.show({ message: `Could not load Smart Approval history: ${errorMessage(error)}`, variant: "error", duration: 5000 })
+    }
+  }
+
   async function replyPermissionOnce(request: PermissionRequest) {
     if (autoAcceptedPermissionIDs.has(request.id)) return false
     autoAcceptedPermissionIDs.add(request.id)
@@ -1638,6 +1662,7 @@ export function Session() {
       await sdk.client.permission.reply({
         reply: "once",
         requestID: request.id,
+        smart: smartReplyFor(request),
         workspace: project.workspace.current(),
       })
       return true
@@ -1655,75 +1680,11 @@ export function Session() {
     return accepted
   }
 
-  async function smartReviewPendingPermissions() {
-    let reviewed = 0
-    for (const request of permissions()) {
-      if (smartReviewedPermissionIDs.has(request.id) || smartPermissionReviewLeases.has(request.id)) continue
-      if (!shouldReviewSmartApproval(request)) {
-        setSmartPermissionStatus("Smart needs your approval")
-        continue
-      }
-      smartReviewedPermissionIDs.add(request.id)
-      smartPermissionReviewLeases.add(request.id)
-      const requestFingerprint = smartPermissionRequestFingerprint(request)
-      try {
-        setSmartPermissionStatus(`Smart reviewing ${request.permission}`)
-        const prompt = sessionUserPromptForPermissionRequest({
-          messages: sync.data.message[request.sessionID] ?? [],
-          partsByMessage: sync.data.part,
-          messageID: request.tool?.messageID,
-        })?.input
-        const decision = await reviewPermissionRequestWithModel(request, mend.root, { userPrompt: prompt })
-        if (!decision.triggered || decision.decision === "ask") {
-          setSmartPermissionStatus(`Smart needs approval`)
-          toast.show({
-            message: `Smart Approval needs manual input: ${decision.reason}`,
-            variant: "info",
-            duration: 5000,
-          })
-          continue
-        }
-        const currentRequest = permissions().find((item) => item.id === request.id)
-        if (!currentRequest || smartPermissionRequestFingerprint(currentRequest) !== requestFingerprint) {
-          smartReviewedPermissionIDs.delete(request.id)
-          toast.show({
-            message: "Smart Approval discarded a stale permission request; it will be reviewed again if still pending.",
-            variant: "info",
-            duration: 5000,
-          })
-          continue
-        }
-        reviewed++
-        await sdk.client.permission.reply({
-          reply: decision.decision === "allow" ? "once" : "reject",
-          requestID: request.id,
-          workspace: project.workspace.current(),
-        })
-        toast.show({
-          message: `Smart Approval ${decision.decision === "allow" ? "allowed" : "rejected"} this command: ${decision.reason}`,
-          variant: decision.decision === "allow" ? "success" : "warning",
-          duration: 5000,
-        })
-        setSmartPermissionStatus(`Smart ${decision.decision === "allow" ? "approved" : "rejected"}`)
-        setTimeout(() => {
-          setSmartPermissionStatus((current) => (current?.startsWith("Smart ") ? null : current))
-        }, 5000)
-      } catch (error) {
-        smartReviewedPermissionIDs.delete(request.id)
-        throw error
-      } finally {
-        smartPermissionReviewLeases.delete(request.id)
-      }
-    }
-    return { accepted: 0, reviewed }
-  }
-
   createEffect(
     on(
       () => route.sessionID,
       () => {
         autoAcceptedPermissionIDs.clear()
-        smartReviewedPermissionIDs.clear()
       },
       { defer: true },
     ),
@@ -1758,17 +1719,6 @@ export function Session() {
   createEffect(() => {
     if (permissionModeSetting() !== "full_access") return
     void autoAcceptPendingPermissions().catch((error) => {
-      toast.show({
-        message: errorMessage(error),
-        variant: "error",
-        duration: 5000,
-      })
-    })
-  })
-
-  createEffect(() => {
-    if (permissionModeSetting() !== "smart") return
-    void smartReviewPendingPermissions().catch((error) => {
       toast.show({
         message: errorMessage(error),
         variant: "error",
@@ -1875,18 +1825,9 @@ export function Session() {
 
           if (option.value === "smart") {
             void setPermissionModeForSession("smart")
-              .then(() => smartReviewPendingPermissions())
-              .then(({ accepted, reviewed }) => {
-                const summary = [
-                  accepted ? `auto-approved ${accepted} permission${accepted === 1 ? "" : "s"}` : "",
-                  reviewed ? `reviewed ${reviewed} permission${reviewed === 1 ? "" : "s"}` : "",
-                ]
-                  .filter(Boolean)
-                  .join("; ")
+              .then(() => {
                 toast.show({
-                  message: summary
-                    ? `Smart Approval enabled for this session; ${summary}.`
-                    : "Smart Approval enabled for this session.",
+                  message: "Smart Approval enabled for this session.",
                   variant: "success",
                   duration: 4000,
                 })
@@ -1973,6 +1914,11 @@ export function Session() {
                 }}
               />
             ))
+            return
+          }
+
+          if (option.value === "details") {
+            void showSmartPermissionHistory()
             return
           }
 
@@ -4893,13 +4839,6 @@ export function Session() {
                 <text fg={theme.textMuted} wrapMode="none" onMouseUp={() => toggleSessionWidgets()}>
                   {asyncQuestions().length} pending questions · {runtimeJobs().filter(isWidgetJobActive).length} active tools · {keybind.print("todo_toggle")} widgets
                 </text>
-              </Show>
-              <Show when={reasoningState()}>
-                {(state) => (
-                  <text fg={theme.textMuted} wrapMode="none">
-                    {Locale.truncate(widgetReasoningLabel(state()), contentWidth())}
-                  </text>
-                )}
               </Show>
               <For each={listMendWidgets("aboveEditor")}>{(item) => <RenderMendWidget item={item} />}</For>
               {/* Do not keep the hidden prompt subtree mounted while a question/permission owns input. */}

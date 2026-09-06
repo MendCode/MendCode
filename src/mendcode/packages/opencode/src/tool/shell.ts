@@ -23,6 +23,7 @@ import { DEFAULT_TIMEOUT_MS, ShellPrompt, type Parameters } from "./shell/prompt
 import { BashArity } from "@/permission/arity"
 import { Shell as ShellEvent } from "@/v2/session-event"
 import { createShellOutputDeltaBuffer } from "./shell-output"
+import { analyzeShellCommand } from "./shell-analysis"
 
 export { Parameters } from "./shell/prompt"
 
@@ -347,8 +348,24 @@ const parse = Effect.fn("ShellTool.parse")(function* (command: string, ps: boole
   return tree
 })
 
-const ask = Effect.fn("ShellTool.ask")(function* (ctx: Tool.Context, scan: Scan, command: string) {
-  const metadata = { source: "shell", command }
+const ask = Effect.fn("ShellTool.ask")(function* (
+  ctx: Tool.Context,
+  scan: Scan,
+  command: string,
+  cwd: string,
+  shell: string,
+  env: NodeJS.ProcessEnv,
+) {
+  const metadata = {
+    source: "shell",
+    command,
+    actionFacts: analyzeShellCommand({
+      command,
+      cwd,
+      dialect: Shell.ps(shell) ? "powershell" : process.platform === "win32" ? "cmd" : "bash",
+      environment: env,
+    }),
+  }
   if (scan.dirs.size > 0) {
     const globs = Array.from(scan.dirs).map((dir) => {
       if (process.platform === "win32") return AppFileSystem.normalizePathPattern(path.join(dir, "*"))
@@ -362,13 +379,14 @@ const ask = Effect.fn("ShellTool.ask")(function* (ctx: Tool.Context, scan: Scan,
     })
   }
 
-  if (scan.patterns.size === 0) return
+  if (scan.patterns.size === 0) return metadata.actionFacts
   yield* ctx.ask({
     permission: ShellID.ToolID,
     patterns: Array.from(scan.patterns),
     always: Array.from(scan.always),
     metadata,
   })
+  return metadata.actionFacts
 })
 
 function cmd(shell: string, command: string, cwd: string, env: NodeJS.ProcessEnv) {
@@ -817,27 +835,37 @@ export const ShellTool = Tool.define(
               }
               const timeout = params.timeout ?? DEFAULT_TIMEOUT
               const ps = Shell.ps(shell)
-              yield* Effect.scoped(
+              return yield* Effect.scoped(
                 Effect.gen(function* () {
                   const tree = yield* Effect.acquireRelease(parse(params.command, ps), (tree) =>
                     Effect.sync(() => tree.delete()),
                   )
                   const scan = yield* collect(tree.rootNode, cwd, ps, shell, executeInstance)
                   if (!containsPath(cwd, executeInstance)) scan.dirs.add(cwd)
-                  yield* ask(ctx, scan, params.command)
-                }),
-              )
+                  const env = yield* shellEnv(ctx, cwd)
+                  const approvedFacts = yield* ask(ctx, scan, params.command, cwd, shell, env)
+                  const recheckedFacts = analyzeShellCommand({
+                    command: params.command,
+                    cwd,
+                    dialect: ps ? "powershell" : process.platform === "win32" ? "cmd" : "bash",
+                    environment: env,
+                  })
+                  if (approvedFacts && approvedFacts.fingerprint !== recheckedFacts.fingerprint) {
+                    throw new Error("Shell action changed after permission review; manual approval is required.")
+                  }
 
-              return yield* run(
-                {
-                  shell,
-                  command: params.command,
-                  cwd,
-                  env: yield* shellEnv(ctx, cwd),
-                  timeout,
-                  description: params.description,
-                },
-                ctx,
+                  return yield* run(
+                    {
+                      shell,
+                      command: params.command,
+                      cwd,
+                      env,
+                      timeout,
+                      description: params.description,
+                    },
+                    ctx,
+                  )
+                }),
               )
             }),
         }

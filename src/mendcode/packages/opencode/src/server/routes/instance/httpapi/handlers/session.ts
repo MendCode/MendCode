@@ -527,8 +527,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       params: { permissionID: PermissionID }
       payload: typeof PermissionResponsePayload.Type
     }) {
-      yield* permissionSvc.reply({ requestID: ctx.params.permissionID, reply: ctx.payload.response })
-      return true
+      return yield* permissionSvc.reply({ requestID: ctx.params.permissionID, reply: ctx.payload.response })
     })
 
     const deleteMessage = Effect.fn("SessionHttpApi.deleteMessage")(function* (ctx: {

@@ -9,6 +9,7 @@ import { Plugin } from "@/plugin"
 import { Snapshot } from "@/snapshot"
 import * as Session from "./session"
 import { LLM } from "./llm"
+import { contextProfile } from "./context-profile"
 import { MessageV2 } from "./message-v2"
 import { isOverflow } from "./overflow"
 import { PartID, SessionID } from "./schema"
@@ -366,6 +367,8 @@ export interface Handle {
       attachments?: MessageV2.FilePart[]
     },
   ) => Effect.Effect<void>
+  readonly startToolCall: (callID: string, name: string, args: Record<string, unknown>, parentCallID: string) => Effect.Effect<void>
+  readonly failToolCall: (callID: string, error: unknown) => Effect.Effect<boolean>
   readonly flushMemory: () => Effect.Effect<void>
   readonly process: (streamInput: LLM.StreamInput) => Effect.Effect<Result>
 }
@@ -695,6 +698,20 @@ export const layer: Layer.Layer<
           sessionID: part.sessionID,
         }
         return part
+      })
+
+      const startToolCall = Effect.fn("SessionProcessor.startToolCall")(function* (
+        callID: string, name: string, args: Record<string, unknown>, parentCallID: string,
+      ) {
+        const part = yield* session.updatePart({
+          id: PartID.ascending(), messageID: ctx.assistantMessage.id, sessionID: ctx.sessionID,
+          type: "tool", tool: name, callID,
+          metadata: { codeMode: { parentCallID } },
+          state: { status: "running", input: args, time: { start: Date.now() }, metadata: {} },
+        } satisfies MessageV2.ToolPart)
+        ctx.toolcalls[callID] = {
+          done: yield* Deferred.make<void>(), partID: part.id, messageID: part.messageID, sessionID: part.sessionID,
+        }
       })
 
       const completeToolCall = Effect.fn("SessionProcessor.completeToolCall")(function* (
@@ -1124,7 +1141,12 @@ export const layer: Layer.Layer<
               id: PartID.ascending(),
               reason: value.finishReason,
               snapshot: completedSnapshot,
-              metadata: queuedMemoryMetadata ? { mendMemory: queuedMemoryMetadata } : undefined,
+              metadata: {
+                ...(queuedMemoryMetadata ? { mendMemory: queuedMemoryMetadata } : {}),
+                ...(contextProfile(value.providerMetadata?.mendcode?.contextProfile)
+                  ? { contextProfile: contextProfile(value.providerMetadata?.mendcode?.contextProfile) }
+                  : {}),
+              },
               messageID: ctx.assistantMessage.id,
               sessionID: ctx.assistantMessage.sessionID,
               type: "step-finish",
@@ -1651,6 +1673,8 @@ export const layer: Layer.Layer<
         },
         updateToolCall,
         completeToolCall,
+        startToolCall,
+        failToolCall,
         flushMemory,
         process,
       } satisfies Handle

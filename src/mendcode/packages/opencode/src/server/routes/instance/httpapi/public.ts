@@ -90,6 +90,8 @@ const QueryParameterSchemas = {
     minimum: 1,
     maximum: Number.MAX_SAFE_INTEGER,
   },
+  "GET /permission/reviews cursor": { type: "string" },
+  "GET /permission/reviews limit": { type: "integer", minimum: 1, maximum: 100 },
 } satisfies Record<string, OpenApiSchema>
 
 const PathParameterSchemas = {

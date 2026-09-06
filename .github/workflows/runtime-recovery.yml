@@ -57,7 +57,10 @@ jobs:
           }
           for test_file in \
             test/installation/*.test.ts \
-            test/storage/compatibility.test.ts test/storage/writer-lease.test.ts \
+            test/storage/compatibility.test.ts test/storage/writer-lease.test.ts test/storage/sql-identifiers.test.ts \
+            test/mend/code-mode.test.ts test/session/context-profile.test.ts test/session/tool-discovery.test.ts \
+            test/mend/smart-context.test.ts test/mend/smart-service.test.ts test/mend/smart-approval.test.ts \
+            test/permission/next.test.ts test/tool/shell-analysis.test.ts \
             test/cli/run-attach.test.ts test/cli/upgrade-channel.test.ts test/cli/upgrade-readonly.test.ts \
             test/cli/tui/shared-server.test.ts test/cli/tui/thread.test.ts \
             test/cli/tui/widgets-runtime.test.tsx test/cli/tui/widgets-tray.test.tsx \

@@ -1386,6 +1386,8 @@ export const toModelMessagesEffect = Effect.fnUntraced(function* (
             type: "step-start",
           })
         if (part.type === "tool") {
+          // Nested Code Mode calls remain in the audit/UI; only its final result enters model context.
+          if (part.metadata?.codeMode) continue
           toolNames.add(part.tool)
           if (part.state.status === "completed") {
             const outputText = part.state.time.compacted

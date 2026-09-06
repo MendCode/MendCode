@@ -6343,6 +6343,11 @@ export type PermissionReplyData = {
   body?: {
     reply: "once" | "always" | "reject"
     message?: string
+    smart?: {
+      actionFingerprint?: string
+      contextRevision?: number
+      grant?: "once" | "task"
+    }
   }
   path: {
     requestID: string
@@ -6375,6 +6380,58 @@ export type PermissionReplyResponses = {
 }
 
 export type PermissionReplyResponse = PermissionReplyResponses[keyof PermissionReplyResponses]
+
+export type PermissionReviewsData = {
+  body?: never
+  path?: never
+  query?: {
+    sessionID?: string
+    cursor?: string
+    limit?: number
+    directory?: string
+    workspace?: string
+  }
+  url: "/permission/reviews"
+}
+
+export type PermissionReviewsResponses = {
+  200: {
+    items: Array<Record<string, unknown>>
+    nextCursor?: string
+  }
+}
+
+export type PermissionReviewsResponse = PermissionReviewsResponses[keyof PermissionReviewsResponses]
+
+export type PermissionGrantsRevokeData = {
+  body?: never
+  path: {
+    grantID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/permission/grants/{grantID}/revoke"
+}
+
+export type PermissionGrantsRevokeErrors = {
+  /**
+   * Not found
+   */
+  404: NotFoundError
+}
+
+export type PermissionGrantsRevokeError = PermissionGrantsRevokeErrors[keyof PermissionGrantsRevokeErrors]
+
+export type PermissionGrantsRevokeResponses = {
+  200: {
+    revoked: boolean
+  }
+}
+
+export type PermissionGrantsRevokeResponse =
+  PermissionGrantsRevokeResponses[keyof PermissionGrantsRevokeResponses]
 
 export type PlanReviewListData = {
   body?: never
