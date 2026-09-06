@@ -11,6 +11,16 @@ const root = "/permission"
 const ReplyPayload = Schema.Struct({
   reply: Permission.Reply,
   message: Schema.optional(Schema.String),
+  smart: Schema.optional(Permission.ReplyBody.fields.smart),
+})
+const ReviewQuery = Schema.Struct({
+  sessionID: Schema.optional(Schema.String),
+  cursor: Schema.optional(Schema.String),
+  limit: Schema.optional(Schema.NumberFromString.check(Schema.isInt(), Schema.isGreaterThan(0), Schema.isLessThanOrEqualTo(100))),
+})
+const ReviewList = Schema.Struct({
+  items: Schema.Array(Schema.Record(Schema.String, Schema.Unknown)),
+  nextCursor: Schema.optional(Schema.String),
 })
 
 export const PermissionApi = HttpApi.make("permission")
@@ -36,6 +46,27 @@ export const PermissionApi = HttpApi.make("permission")
             identifier: "permission.reply",
             summary: "Respond to permission request",
             description: "Approve or deny a permission request from the AI assistant.",
+          }),
+        ),
+        HttpApiEndpoint.get("reviews", `${root}/reviews`, {
+          query: ReviewQuery,
+          success: described(ReviewList, "Smart Approval review history"),
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "permission.reviews",
+            summary: "List Smart Approval review history",
+            description: "Return bounded Smart Approval review records for the current project.",
+          }),
+        ),
+        HttpApiEndpoint.post("revokeGrant", `${root}/grants/:grantID/revoke`, {
+          params: { grantID: Schema.String.check(Schema.isNonEmpty()) },
+          success: described(Schema.Struct({ revoked: Schema.Boolean }), "Grant revocation result"),
+          error: HttpApiError.NotFound,
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "permission.grants.revoke",
+            summary: "Revoke a Smart Approval task grant",
+            description: "Revoke a project-scoped exact Smart Approval task grant.",
           }),
         ),
       )
