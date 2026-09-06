@@ -240,6 +240,8 @@ function fake(
       return msg
     },
     updateToolCall: Effect.fn("TestSessionProcessor.updateToolCall")(() => Effect.succeed(undefined)),
+    startToolCall: () => Effect.void,
+    failToolCall: () => Effect.succeed(false),
     completeToolCall: Effect.fn("TestSessionProcessor.completeToolCall")(() => Effect.void),
     flushMemory: Effect.fn("TestSessionProcessor.flushMemory")(() => Effect.void),
     process: Effect.fn("TestSessionProcessor.process")(() => Effect.succeed(result)),

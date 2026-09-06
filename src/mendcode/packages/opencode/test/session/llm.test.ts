@@ -31,7 +31,7 @@ async function getModel(providerID: ProviderID, modelID: ModelID) {
 const llm = makeRuntime(LLM.Service, LLM.defaultLayer)
 
 async function drain(input: LLM.StreamInput) {
-  return llm.runPromise((svc) => svc.stream(input).pipe(Stream.runDrain))
+  return llm.runPromise((svc) => svc.stream(input).pipe(Stream.runCollect))
 }
 
 describe("session.llm.hasToolCalls", () => {
@@ -363,7 +363,7 @@ describe("session.llm.stream", () => {
           model: { providerID: ProviderID.make(providerID), modelID: resolved.id, variant: "high" },
         } satisfies MessageV2.User
 
-        await drain({
+        const events = await drain({
           user,
           sessionID,
           model: resolved,
@@ -404,6 +404,11 @@ describe("session.llm.stream", () => {
 
         const reasoning = (body.reasoningEffort as string | undefined) ?? (body.reasoning_effort as string | undefined)
         expect(reasoning).toBe("high")
+        const finish = Array.from(events).find((event) => event.type === "finish-step")
+        expect(finish?.providerMetadata?.mendcode?.contextProfile).toMatchObject({
+          version: 1, toolCount: 0, imageCount: 0,
+        })
+        expect(JSON.stringify(finish?.providerMetadata?.mendcode)).not.toContain("test-key")
       },
     })
   })

@@ -48,6 +48,7 @@ const commandLoaders = {
   web: () => import("./cli/cmd/web").then((module) => module.WebCommand),
   models: () => import("./cli/cmd/models").then((module) => module.ModelsCommand),
   stats: () => import("./cli/cmd/stats").then((module) => module.StatsCommand),
+  context: () => import("./cli/cmd/context").then((module) => module.ContextCommand),
   export: () => import("./cli/cmd/export").then((module) => module.ExportCommand),
   import: () => import("./cli/cmd/import").then((module) => module.ImportCommand),
   github: () => import("./cli/cmd/github").then((module) => module.GithubCommand),

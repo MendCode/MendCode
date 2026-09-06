@@ -7,7 +7,7 @@ import { InstanceRef, WorkspaceRef } from "./instance-ref"
 import { attachWith } from "./run-service"
 
 export interface Shape {
-  readonly promise: <A, E, R>(effect: Effect.Effect<A, E, R>) => Promise<A>
+  readonly promise: <A, E, R>(effect: Effect.Effect<A, E, R>, options?: Effect.RunOptions) => Promise<A>
   readonly fork: <A, E, R>(effect: Effect.Effect<A, E, R>) => Fiber.Fiber<A, E>
   readonly run: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E>
 }
@@ -59,8 +59,8 @@ export function make(): Effect.Effect<Shape> {
       attach(effect).pipe(Effect.provide(ctx)) as Effect.Effect<A, E, never>
 
     return {
-      promise: <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-        restore(instance, workspace, () => Effect.runPromise(wrap(effect))),
+      promise: <A, E, R>(effect: Effect.Effect<A, E, R>, options?: Effect.RunOptions) =>
+        restore(instance, workspace, () => Effect.runPromise(wrap(effect), options)),
       fork: <A, E, R>(effect: Effect.Effect<A, E, R>) =>
         restore(instance, workspace, () => Effect.runFork(wrap(effect))),
       run: <A, E, R>(effect: Effect.Effect<A, E, R>) =>

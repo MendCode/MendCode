@@ -5752,3 +5752,32 @@ it.live(
     ),
   30_000,
 )
+
+it.live("Code Mode persists nested reads but sends only final output to the model", () =>
+  provideTmpdirServer(
+    ({ dir, llm }) => Effect.gen(function* () {
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const session = yield* sessions.create({ title: "Code Mode", permission: [{ permission: "*", pattern: "*", action: "allow" }] })
+      const file = path.join(dir, "code-probe.txt")
+      yield* Effect.promise(() => Bun.write(file, "private intermediate payload"))
+      yield* prompt.prompt({ sessionID: session.id, agent: "build", noReply: true, parts: [{ type: "text", text: "Read the probe and return only its length." }] })
+      yield* llm.tool("code", { code: `const result = await tools.read({filePath: ${JSON.stringify(file)}}); return result.output.length` })
+      yield* llm.text("done")
+      yield* prompt.loop({ sessionID: session.id })
+      expect(JSON.stringify(yield* llm.inputs)).not.toContain("private intermediate payload")
+      const messages = yield* sessions.messages({ sessionID: session.id })
+      const parts = messages.flatMap((item) => item.parts)
+      const child = parts.find((part) => part.type === "tool" && part.tool === "read")
+      expect(child?.type === "tool" && child.state.status).toBe("completed")
+      expect(child?.type === "tool" && child.metadata?.codeMode).toBeDefined()
+      const parent = parts.find((part) => part.type === "tool" && part.tool === "code")
+      expect(parent?.type === "tool" && parent.state.status).toBe("completed")
+      if (parent?.type === "tool" && parent.state.status === "completed") {
+        expect(JSON.parse(parent.state.output).ok).toBe(true)
+        expect(parent.state.output).not.toContain("private intermediate payload")
+      }
+    }),
+    { git: true, config: (url) => ({ ...providerCfg(url), experimental: { code_mode: true } }) },
+  ),
+)

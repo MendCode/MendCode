@@ -38,8 +38,12 @@ import { NamedError } from "@mendcode/core/util/error"
 import { SessionProcessor } from "./processor"
 import { Tool } from "@/tool/tool"
 import { Permission } from "@/permission"
+import { buildAuthorityContext } from "@/mend/permission/smart-context"
 import { SessionStatus } from "./status"
 import { LLM, type StreamInput } from "./llm"
+import { memorySnapshot, memorySnapshotContent } from "./context-memory"
+import { executeCode } from "../mend/codemode/host"
+import { withToolDiscovery } from "./tool-discovery"
 import { Shell } from "@/shell/shell"
 import { ShellID } from "@/tool/shell/id"
 import { AppFileSystem } from "@mendcode/core/filesystem"
@@ -1208,7 +1212,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
       model: Provider.Model
       session: Session.Info
       tools?: Record<string, boolean>
-      processor: Pick<SessionProcessor.Handle, "message" | "updateToolCall" | "completeToolCall">
+      processor: Pick<SessionProcessor.Handle, "message" | "updateToolCall" | "completeToolCall" | "startToolCall" | "failToolCall">
       bypassAgentCheck: boolean
       messages: MessageV2.WithParts[]
       abort: AbortSignal
@@ -1223,7 +1227,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
         // The prompt controller is the authoritative lifetime for this turn.
         // SDK callbacks do not consistently retain their optional abortSignal
         // once the surrounding provider stream is interrupted.
-        abort: input.abort,
+        abort: options.abortSignal ? AbortSignal.any([input.abort, options.abortSignal]) : input.abort,
         messageID: input.processor.message.id,
         callID: options.toolCallId,
         extra: {
@@ -1249,14 +1253,35 @@ NOTE: At any point in time through this workflow you should feel free to ask the
             }
           }),
         ask: (req) =>
-          permission
-            .ask({
-              ...req,
+          Effect.gen(function* () {
+            const instance = yield* InstanceState.context
+            const authority = buildAuthorityContext({
+              messages: input.messages.map((item) => ({
+                id: item.info.id,
+                role: item.info.role,
+                parentID: "parentID" in item.info ? item.info.parentID : undefined,
+                text: item.parts
+                  .flatMap((part) => (part.type === "text" && !part.synthetic && !part.ignored ? [part.text] : []))
+                  .join("\n"),
+                synthetic: item.parts.every((part) => "synthetic" in part && part.synthetic === true),
+                ignored: item.parts.some((part) => "ignored" in part && part.ignored === true),
+              })),
+              assistantMessageID: input.processor.message.id,
               sessionID: input.session.id,
-              tool: { messageID: input.processor.message.id, callID: options.toolCallId },
-              ruleset: Permission.merge(input.agent.permission, input.session.permission ?? []),
+              objectiveEpoch: `${input.session.id}:${input.processor.message.id}`,
+              objectiveRoot: instance.directory,
+              contextRevision: 0,
             })
-            .pipe(Effect.orDie),
+            yield* permission
+              .ask({
+                ...req,
+                metadata: { ...req.metadata, authorityContext: authority },
+                sessionID: input.session.id,
+                tool: { messageID: input.processor.message.id, callID: options.toolCallId },
+                ruleset: Permission.merge(input.agent.permission, input.session.permission ?? []),
+              })
+              .pipe(Effect.orDie)
+          }),
       })
 
       for (const item of yield* registry.tools({
@@ -1360,6 +1385,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                 yield* input.processor.completeToolCall(options.toolCallId, output)
                 return output
               }).pipe(Effect.ensuring(status.set(input.session.id, { type: "busy" }))),
+              options.toolCallId.startsWith("code_") ? { signal: options.abortSignal } : undefined,
             )
           },
         })
@@ -1377,7 +1403,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
           run.promise(
             Effect.gen(function* () {
               const ctx = context(args, opts)
-              const executionOptions = { ...opts, abortSignal: input.abort }
+              const executionOptions = { ...opts, abortSignal: ctx.abort }
               yield* status.set(ctx.sessionID, {
                 type: "busy",
                 message: SessionStatus.activityLabelForTool(key),
@@ -1452,11 +1478,45 @@ NOTE: At any point in time through this workflow you should feel free to ask the
               yield* input.processor.completeToolCall(opts.toolCallId, output)
               return output
             }).pipe(Effect.ensuring(status.set(input.session.id, { type: "busy" }))),
+            opts.toolCallId.startsWith("code_") ? { signal: opts.abortSignal } : undefined,
           )
         tools[key] = item
       }
 
-      return tools
+      const disabled = Permission.disabled(Object.keys(tools), Permission.merge(input.agent.permission, input.session.permission ?? []))
+      const available = Object.fromEntries(Object.entries(tools).filter(([name]) => !disabled.has(name) && input.tools?.[name] !== false))
+      if ((yield* config.get()).experimental?.code_mode === true && input.tools?.code !== false &&
+          !Permission.disabled(["code"], Permission.merge(input.agent.permission, input.session.permission ?? [])).has("code")) {
+        const nested = { ...available }
+        available.code = tool({
+          description: "Run bounded JavaScript to compose tools and return only the needed result. Use await tools.search({query: ...}) to inspect available signatures, then await tools.name(args). No filesystem, network, imports or process globals. Maximum 16 calls, 30 seconds, 32 KiB source and 24 KiB final output. Each tool retains its normal permissions. Return a concise value; intermediate results stay out of model context. Images should be read directly outside code.",
+          inputSchema: jsonSchema<{ code: string }>({ type: "object", properties: { code: { type: "string", maxLength: 32768 } }, required: ["code"], additionalProperties: false }),
+          async execute(args, options) {
+            if (typeof args.code !== "string") throw new Error("code must be a string")
+            const result = await executeCode({
+              code: args.code, tools: nested,
+              signal: options.abortSignal ? AbortSignal.any([input.abort, options.abortSignal]) : input.abort,
+              async invoke(name, args, signal) {
+                const callID = `code_${crypto.randomUUID()}`
+                await run.promise(input.processor.startToolCall(callID, name, args as Record<string, unknown>, options.toolCallId))
+                try {
+                  const result = await nested[name].execute!(args, { ...options, toolCallId: callID, abortSignal: signal })
+                  // Media remains stored with the child tool, never copied as base64 into interpreter data.
+                  const { attachments, content, ...data } = result as Record<string, unknown>
+                  return { ...data, ...(attachments ? { media: "Use the tool directly to view its media attachments." } : {}) }
+                } catch (error) {
+                  await run.promise(input.processor.failToolCall(callID, error))
+                  throw error
+                }
+              },
+            })
+            return { title: "Code Mode", output: JSON.stringify(result), metadata: { codeMode: true, truncated: Boolean(result.truncated) } }
+          },
+        })
+      }
+      return (yield* config.get()).experimental?.tool_discovery === false || input.tools?.tool_search === false ||
+        Permission.disabled(["tool_search"], Permission.merge(input.agent.permission, input.session.permission ?? [])).has("tool_search")
+        ? available : withToolDiscovery(available, input.messages)
     })
 
     const handleSubtask = Effect.fn("SessionPrompt.handleSubtask")(function* (input: {
@@ -2741,17 +2801,10 @@ NOTE: At any point in time through this workflow you should feel free to ask the
             }),
           )
           const stripMediaForResume = shouldSkipAutoCompaction(msgs)
-          const [skills, env, instructions, modelMsgs] = yield* Effect.all([
+          const [skills, env, instructions] = yield* Effect.all([
             promptPolicy.includeSkillsByDefault ? sys.skills(agent) : Effect.succeed(undefined),
             sys.environment(model),
             promptPolicy.includeProjectInstructions ? instruction.system().pipe(Effect.orDie) : Effect.succeed([]),
-            MessageV2.toModelMessagesEffect(msgs, model, {
-              stripMedia: stripMediaForResume,
-              preserveMedia: (message, part) =>
-                model.capabilities.input.image === true &&
-                isCompactionResumeMessage(message) &&
-                part.mime.startsWith("image/"),
-            }),
           ])
           const system = [...env, ...instructions, ...(skills ? [skills] : [])]
           const memoryMode = promptMemoryMode(msgs, lastUser)
@@ -2759,11 +2812,21 @@ NOTE: At any point in time through this workflow you should feel free to ask the
           const memoryQuery = (lastUserMessage?.parts || [])
             .flatMap((part) => (part.type === "text" && !part.ignored && !part.synthetic ? [part.text] : []))
             .join("\n")
-          const mendMemory = yield* Effect.promise(() =>
-            SystemPrompt.mendMemory(model, projectRoot, memoryQuery, memoryMode),
-          )
+          // Freeze memory at its causal user boundary instead of rewriting the system prefix.
+          if (lastUserMessage && !memorySnapshot(lastUserMessage)) {
+            const memory = yield* Effect.promise(() => SystemPrompt.mendMemory(model, projectRoot, memoryQuery, memoryMode))
+            const part = yield* sessions.updatePart({
+              id: PartID.ascending(), sessionID, messageID: lastUser.id, type: "text",
+              ...memorySnapshotContent(memory),
+            })
+            lastUserMessage.parts.push(part)
+          }
+          const modelMsgs = yield* MessageV2.toModelMessagesEffect(msgs, model, {
+            stripMedia: stripMediaForResume,
+            preserveMedia: (message, part) => model.capabilities.input.image === true && isCompactionResumeMessage(message) && part.mime.startsWith("image/"),
+          })
           const mendPrompt = yield* Effect.promise(() =>
-            SystemPrompt.mendPromptSnapshot(model, projectRoot, { policy: promptPolicy, memory: mendMemory }),
+            SystemPrompt.mendPromptSnapshot(model, projectRoot, { policy: promptPolicy, memory: "" }),
           )
           const latestPlanReview =
             memoryMode === "after-compaction" && !hasAcceptedPlanReview(msgs)
