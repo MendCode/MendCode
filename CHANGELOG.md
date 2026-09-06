@@ -2,6 +2,11 @@
 
 ## 0.1.44-beta.3 - 2026-09-05
 
+### Fixed
+
+- Update Drizzle ORM and Kit to the fixed `1.0.0-beta.20` versions, including
+  correct SQL identifier escaping (GHSA-gpj5-g38j-94v9). No schema migration is generated.
+
 ### Added
 
 - Backend-owned Smart Approval review, exact action grants, history and revocation,

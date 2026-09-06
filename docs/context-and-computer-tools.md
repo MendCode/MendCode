@@ -54,7 +54,7 @@ tools directly to view images. Cancellation waits for host tool cleanup.
 
 There are no process, filesystem, network or import globals in the language.
 Worker separation is not an OS sandbox or a hard heap quota. Code Mode remains
-off by default pending broader resource, permission and packaged-runtime testing.
+off by default pending broader resource, permission and cross-platform packaged-runtime testing.
 The interpreter is adapted from OpenCode v2 at revision
 `cd504dc66ac6620a662a0246f83cfc05f796f58a`; its MIT license and file provenance
 are kept alongside the source. No dependency upgrade is required.
@@ -96,7 +96,8 @@ before it can be accepted.
 Focused local tests cover profiles and missing usage, discovery, common provider
 request fixtures, Code Mode confinement/deadline/cancellation, and a session
 using a nested file read with final-output-only model input. Native screenshot
-capture and image decoding were exercised on macOS. Interactive keyboard
-control, packaged worker execution, provider-native compaction and paid/live
-provider behavior remain unverified. This is not a claim of complete computer
+capture and image decoding were exercised on macOS. A compiled macOS ARM64 executable also completed a nested file read through Code
+Mode against a local test provider. Interactive keyboard control, packaged worker
+execution on other platforms, provider-native compaction and paid/live provider
+behavior remain unverified. This is not a claim of complete computer
 use or cache-performance equivalence.
