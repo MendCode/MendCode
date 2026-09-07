@@ -11,6 +11,8 @@
 
 ### Fixed
 
+- Update the transitive query-string parser to `qs 6.16.0`, fixing
+  GHSA-4mjr-xmp4-gh2g and GHSA-x5fp-wj9c-mxmx without extending expired exceptions.
 - Normalize replayed tool arguments and bound connection retry behavior.
 - Fence targeted turn and shell cancellation without escalating a stale target
   into an unrelated global abort.
