@@ -19,7 +19,7 @@ export type FixtureCorpus = {
   readonly expected: FixtureState
   readonly sha256: string
   readonly estimatedInputTokens: number
-  readonly tokenMethod: "utf8-bytes-divided-by-four"
+  readonly tokenMethod: "utf8/4"
 }
 
 export type CanaryResult = {
@@ -88,7 +88,7 @@ export function fixtureCorpora(): readonly FixtureCorpus[] {
       expected: fixtureState,
       sha256: sha256(text),
       estimatedInputTokens: estimateTokens(text),
-      tokenMethod: "utf8-bytes-divided-by-four",
+      tokenMethod: "utf8/4",
     }
   })
 }
@@ -159,7 +159,7 @@ export function liveCanaryUnavailable(strategy: CanaryStrategy, corpus?: Fixture
     strategy,
     corpus: corpus
       ? { name: corpus.name, sha256: corpus.sha256, estimatedInputTokens: corpus.estimatedInputTokens, tokenMethod: corpus.tokenMethod }
-      : { name: "medium", sha256: "not-provided", estimatedInputTokens: 0, tokenMethod: "utf8-bytes-divided-by-four" },
+      : { name: "medium", sha256: "not-provided", estimatedInputTokens: 0, tokenMethod: "utf8/4" },
     status: "NOT_RUN",
     evidenceKind: "live-provider",
     reason: "Live mode requires a separately authorized provider route, credentials, sanitized corpus and spend cap; this command never auto-enables them.",

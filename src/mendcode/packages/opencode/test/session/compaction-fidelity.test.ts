@@ -17,6 +17,7 @@ describe("compaction fidelity canary", () => {
         expect(result.evidenceKind).toBe("synthetic-fixture")
         expect(result.fidelity).toEqual({ facts: true, actions: true, latestIntent: true, constraints: true, toolPairs: true })
         expect(result.corpus.sha256).toBe(corpus.sha256)
+        expect(result.corpus.tokenMethod).toBe("utf8/4")
       }
     }
   })
