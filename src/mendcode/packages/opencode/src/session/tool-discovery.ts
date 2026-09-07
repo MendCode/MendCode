@@ -1,4 +1,5 @@
-import { asSchema, jsonSchema, tool, type Tool } from "ai"
+import { asSchema, jsonSchema, tool, type Tool, type LanguageModelMiddleware } from "ai"
+import type { LanguageModelV3CallOptions } from "@ai-sdk/provider"
 import type { MessageV2 } from "./message-v2"
 
 const PRIMARY = new Set([
@@ -8,6 +9,66 @@ const PRIMARY = new Set([
 ])
 const MAX_DISCOVERED = 64
 const MAX_SEARCH_BYTES = 24 * 1024
+
+// OpenAI Responses reserves tool_search for its native protocol. Keep the host
+// name (including persisted history) stable, and alias only the SDK boundary.
+const WIRE_SEARCH = "mendcode_tool_search"
+export function discoveryWireMiddleware(): LanguageModelMiddleware {
+  const aliased = new WeakSet<LanguageModelV3CallOptions>()
+  return {
+    specificationVersion: "v3",
+    async transformParams({ params }) {
+      const definition = params.tools?.find((item) => item.name === "tool_search")
+      if (definition?.type === "provider") return params
+      const calls = new Set(params.prompt.flatMap((message) => message.role !== "assistant" ? [] :
+        message.content.flatMap((part) => part.type === "tool-call" && part.toolName === "tool_search" && !part.providerExecuted ? [part.toolCallId] : [])))
+      if (!definition && calls.size === 0) return params
+      for (const message of params.prompt) {
+        if (message.role !== "assistant") continue
+        for (const part of message.content) {
+          if (part.type !== "tool-call" || !calls.has(part.toolCallId)) continue
+          if (!part.input || typeof part.input !== "object" || Array.isArray(part.input)) {
+            throw new Error(`Invalid stored tool_search arguments for call ${part.toolCallId}. History was preserved; fork the session before this call to recover without replaying the tool.`)
+          }
+        }
+      }
+      if (params.tools?.some((item) => item.name === WIRE_SEARCH)) {
+        throw new Error("Tool discovery wire-name conflict; rename the custom mendcode_tool_search tool before retrying.")
+      }
+      const transformed: LanguageModelV3CallOptions = {
+        ...params,
+        tools: params.tools?.map((item) => item.type === "function" && item.name === "tool_search" ? { ...item, name: WIRE_SEARCH } : item),
+        toolChoice: params.toolChoice?.type === "tool" && params.toolChoice.toolName === "tool_search"
+          ? { ...params.toolChoice, toolName: WIRE_SEARCH } : params.toolChoice,
+        prompt: params.prompt.map((message) => {
+          if (message.role !== "assistant" && message.role !== "tool") return message
+          return { ...message, content: message.content.map((part) =>
+            (part.type === "tool-call" || part.type === "tool-result") && calls.has(part.toolCallId) && part.toolName === "tool_search"
+              ? { ...part, toolName: WIRE_SEARCH } : part) } as typeof message
+        }),
+      }
+      aliased.add(transformed)
+      return transformed
+    },
+    async wrapGenerate({ doGenerate, params }) {
+      const result = await doGenerate()
+      if (!aliased.has(params)) return result
+      return { ...result, content: result.content.map((part) =>
+        part.type === "tool-call" && part.toolName === WIRE_SEARCH && !part.providerExecuted
+          ? { ...part, toolName: "tool_search" } : part) }
+    },
+    async wrapStream({ doStream, params }) {
+      const result = await doStream()
+      if (!aliased.has(params)) return result
+      return { ...result, stream: result.stream.pipeThrough(new TransformStream({
+        transform(part, controller) {
+          controller.enqueue((part.type === "tool-call" || part.type === "tool-input-start") && part.toolName === WIRE_SEARCH && !part.providerExecuted
+            ? { ...part, toolName: "tool_search" } : part)
+        },
+      })) }
+    },
+  }
+}
 
 export async function searchTools(tools: Record<string, Tool>, query: string, limit = 5) {
   const words = query.toLowerCase().match(/[\p{L}\p{N}_-]+/gu)?.slice(0, 16) ?? []

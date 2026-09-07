@@ -60,15 +60,6 @@ export function resolveSessionControlRouting(input: {
   return {}
 }
 
-/**
- * A targeted cancel is preferred because it cannot stop a newer turn by
- * accident. If the target is stale, missing, or the transport did not confirm
- * delivery, the explicit user stop must fall back to the session abort route.
- */
-export function sessionCancelResultNeedsHardAbort(input: { delivered: boolean; result?: SessionCancelResult }) {
-  return !input.delivered || input.result === "target_mismatch" || input.result === "not_running"
-}
-
 export function sessionControlAllowsPrompt(status: SessionControlStatus) {
   if (status.state === "idle") return true
   if (status.state !== "stop_confirmed") return false

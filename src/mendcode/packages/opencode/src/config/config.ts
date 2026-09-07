@@ -42,6 +42,7 @@ import { ConfigSkills } from "./skills"
 import { ConfigVariable } from "./variable"
 import { Npm } from "@mendcode/core/npm"
 import { notifyDisabled } from "@/session/continuity-control"
+import * as AIConfig from "./ai"
 
 const log = Log.create({ service: "config" })
 
@@ -344,8 +345,26 @@ export const Info = Schema.Struct({
       threshold: Schema.optional(Schema.Finite).annotate({
         description: "Auto-compaction threshold as a percent of the model input/context limit (default: 95).",
       }),
+      strategy: Schema.optional(Schema.Literals(["portable", "auto", "native"])).annotate({
+        description: "Compaction strategy. Native and auto require a positively supported provider transport.",
+      }),
+      portable_mode: Schema.optional(Schema.Literals(["legacy", "incremental"])).annotate({
+        description: "Portable compaction implementation. Legacy is the rollback-compatible default.",
+      }),
+      timeout_ms: Schema.optional(AIConfig.TimeoutMs).annotate({
+        description: "Maximum compaction operation time in milliseconds.",
+      }),
+      max_summary_tokens: Schema.optional(AIConfig.SummaryTokens).annotate({
+        description: "Maximum portable summary output tokens.",
+      }),
+      on_native_error: Schema.optional(Schema.Literals(["stop", "portable"])).annotate({
+        description: "Whether a real native failure may consume one bounded portable fallback.",
+      }),
     }),
   ),
+  ai: Schema.optional(AIConfig.Info).annotate({
+    description: "Opt-in provider-aware compound model workflows and configuration assistance.",
+  }),
   queue: Schema.optional(
     Schema.Struct({
       mode: Schema.optional(Schema.Literals(["after-response", "after-tools", "after-turn", "immediate"])).annotate({

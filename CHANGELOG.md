@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.1.44-beta.4 - 2026-09-07
+
+### Added
+
+- Native/portable compaction checkpoints and explicitly configured compound-model
+  workflow plans, snapshots and execution accounting.
+- AI configuration inspection, planning, validation and permission-gated apply
+  through the shared backend, CLI and native tool.
+
+### Fixed
+
+- Normalize replayed tool arguments and bound connection retry behavior.
+- Fence targeted turn and shell cancellation without escalating a stale target
+  into an unrelated global abort.
+- Serialize release-channel changes and verify the installed version before
+  committing a channel transition.
+- Use the shell parser for action facts and bind the frozen execution environment
+  without exposing environment values in fingerprints.
+
+### Experimental limits
+
+- This development beta does not complete the readiness specifications. Shell
+  commands with unverified execution identities require manual approval; automatic
+  Git/read-command semantic adapters remain unfinished.
+- Cold-restart cancellation, Windows deferred channel transitions, real shared-CLI
+  multi-client coverage, live-provider compaction canaries and human/native
+  acceptance remain incomplete. See `docs/beta-integration-readiness.md`.
+- No database schema migration or automatic feature activation is introduced.
+  Existing beta databases must not be forced back to an older stable runtime.
+- Release publication remains subject to security, build and artifact checks.
+
 ## 0.1.44-beta.3 - 2026-09-05
 
 ### Fixed

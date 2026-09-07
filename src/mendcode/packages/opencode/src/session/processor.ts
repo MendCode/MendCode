@@ -506,6 +506,7 @@ export const layer: Layer.Layer<
       let aborted = false
       // Keep the retry state visible while a new provider attempt is still in setup.
       let retrying = false
+      let recoveryPaused: string | undefined
       const slog = log.clone().tag("session.id", input.sessionID).tag("messageID", input.assistantMessage.id)
       const waitingStatus = () =>
         ctx.assistantMessage.mode === "compaction"
@@ -1411,7 +1412,10 @@ export const layer: Layer.Layer<
 
       const halt = Effect.fn("SessionProcessor.halt")(function* (e: unknown) {
         slog.error("process", { error: errorMessage(e), stack: e instanceof Error ? e.stack : undefined })
-        const error = parse(e)
+        const parsed = parse(e)
+        const error = recoveryPaused && MessageV2.APIError.isInstance(parsed)
+          ? new MessageV2.APIError({ ...parsed.data, message: recoveryPaused, isRetryable: false }).toObject()
+          : recoveryPaused ? { name: "UnknownError" as const, data: { message: recoveryPaused } } : parsed
         if (MessageV2.ContextOverflowError.isInstance(error)) {
           ctx.needsCompaction = true
           yield* bus.publish(Session.Event.Error, { sessionID: ctx.sessionID, error })
@@ -1438,6 +1442,7 @@ export const layer: Layer.Layer<
 
       const process = Effect.fn("SessionProcessor.process")(function* (streamInput: LLM.StreamInput) {
         slog.info("process")
+        recoveryPaused = undefined
         ctx.needsCompaction = false
         ctx.shouldBreak = (yield* config.get()).experimental?.continue_loop_on_deny !== true
 
@@ -1545,6 +1550,7 @@ export const layer: Layer.Layer<
             Effect.retry(
               SessionRetry.policy({
                 parse,
+                onExhausted: (message) => Effect.sync(() => { recoveryPaused = message }),
                 set: (info) => {
                   retrying = true
                   const now = Date.now()

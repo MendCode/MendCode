@@ -69,6 +69,8 @@ import { Auth } from "@/auth"
 import { AgentCommand } from "@/session/agent-command"
 import { TellTool } from "./tell"
 import { SessionsTool } from "./peers"
+import { AIConfigTool } from "./ai-config"
+import { AIConfiguration } from "@/mend/runtime/ai-configuration"
 
 const log = Log.create({ service: "tool.registry" })
 
@@ -124,6 +126,7 @@ export const layer: Layer.Layer<
   | Format.Service
   | Truncate.Service
   | AgentCommand.Service
+  | AIConfiguration.Service
 > = Layer.effect(
   Service,
   Effect.gen(function* () {
@@ -162,6 +165,7 @@ export const layer: Layer.Layer<
     const reviewtool = yield* ReviewTool
     const telltool = yield* TellTool
     const sessionstool = yield* SessionsTool
+    const aiConfigTool = yield* AIConfigTool
 
     const memorytool = yield* MemoryTool
     const memorygraphtool = yield* MemoryGraphTool
@@ -169,6 +173,7 @@ export const layer: Layer.Layer<
     const computerCapture = yield* ComputerCaptureTool
     const imagegentool = yield* ImageGenTool
     const agent = yield* Agent.Service
+    yield* AIConfiguration.Service
 
     const state = yield* InstanceState.make<State>(
       Effect.fn("ToolRegistry.state")(function* (ctx) {
@@ -278,6 +283,7 @@ export const layer: Layer.Layer<
           planReview: Tool.init(planReview),
           lsp: Tool.init(lsptool),
           plan: Tool.init(plan),
+          aiConfig: Tool.init(aiConfigTool),
         })
 
         const scope = yield* Scope.Scope
@@ -329,6 +335,7 @@ export const layer: Layer.Layer<
             tool.imageGen,
             tool.patch,
             tool.planReview,
+            tool.aiConfig,
             ...(Flag.OPENCODE_EXPERIMENTAL_LSP_TOOL ? [tool.lsp] : []),
             ...(Flag.OPENCODE_EXPERIMENTAL_PLAN_MODE && Flag.OPENCODE_CLIENT === "cli" ? [tool.plan] : []),
           ],
@@ -503,7 +510,7 @@ export const defaultLayer = Layer.suspend(() =>
     Layer.provide(Format.defaultLayer),
     Layer.provide(CrossSpawnSpawner.defaultLayer),
     Layer.provide(Ripgrep.defaultLayer),
-    Layer.provide(Truncate.defaultLayer),
+    Layer.provide([Truncate.defaultLayer, AIConfiguration.defaultLayer]),
   ),
 )
 

@@ -10,6 +10,7 @@ export async function nativeComputerCommand(command: string[], signal: AbortSign
   const child = Bun.spawn(command, { stdout: "pipe", stderr: "pipe" })
   const stop = () => child.kill()
   signal.addEventListener("abort", stop, { once: true })
+  if (signal.aborted) stop()
   const timeout = setTimeout(stop, 15000)
   try {
     const [code, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()])
@@ -56,7 +57,7 @@ export const ComputerCaptureTool = Tool.define("computer_capture", Effect.succee
       }
     })
     const bytes = yield* Effect.promise(() => readFile(filePath))
-    if (bytes.length > 8 * 1024 * 1024 || !bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) throw new Error("Capture did not produce a bounded PNG")
+    if (bytes.length < 24 || bytes.length > 8 * 1024 * 1024 || !bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) throw new Error("Capture did not produce a bounded PNG")
     const width = bytes.readUInt32BE(16)
     const height = bytes.readUInt32BE(20)
     if (observedPID !== undefined) {
@@ -84,10 +85,13 @@ export const ComputerKeyTool = Tool.define("computer_key", Effect.succeed({
   description: "Press one navigation key in the app observed by a recent computer_capture. macOS only; requires Accessibility permission. Supply its captureID, valid for 30 seconds in this session and one action. Fails if foreground app changed or was not observed; never activates another app. Capture again after each action. Pointer control and arbitrary text entry are not supported.",
   parameters: ControlParameters,
   execute: (args: typeof ControlParameters.Type, ctx: Tool.Context) => Effect.gen(function* () {
+    if (process.platform !== "darwin") throw new Error("Native computer control is currently supported only on macOS. Use a configured computer/browser MCP service on this platform.")
     const snapshot = snapshots.get(args.captureID)
     if (!snapshot || snapshot.sessionID !== ctx.sessionID || Date.now() - snapshot.time > 30000) throw new Error("Capture is missing or stale. Take a new screenshot before controlling the app.")
     yield* ctx.ask({ permission: "computer_control", patterns: [`process:${snapshot.pid}`], always: [`process:${snapshot.pid}`], metadata: { captureID: args.captureID, key: args.key, processID: snapshot.pid } })
     if (Date.now() - snapshot.time > 30000) throw new Error("Capture expired while waiting for permission. Capture again.")
+    // Permission waits can overlap. Consume only the exact observation that was approved.
+    if (snapshots.get(args.captureID) !== snapshot) throw new Error("Capture was already consumed. Take a new screenshot before controlling the app.")
     snapshots.delete(args.captureID)
     yield* Effect.promise(() => nativeComputerCommand(["/usr/bin/osascript", "-e", `on run argv
       tell application "System Events"

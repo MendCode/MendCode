@@ -59,6 +59,9 @@ import {
   decideCompletionAudit,
   nextCompletionProgress,
 } from "./completion-contract"
+import { materializeCompoundPlan } from "./compound-plan"
+import type { CompoundLedgerSnapshot } from "./compound-ledger"
+import { aggregateLedger } from "./compound-ledger"
 
 export class WorkflowNotFoundError extends Error {
   readonly _tag = "WorkflowNotFoundError"
@@ -119,6 +122,8 @@ export type WorkflowTaskSnapshot = WorkflowTask & {
   readonly completedAt?: number
   readonly blocker?: string
   readonly usage?: WorkflowUsageSnapshot
+  readonly compoundLedger?: CompoundLedgerSnapshot
+  readonly compoundReceipt?: unknown
 }
 
 export interface WorkflowEventSnapshot {
@@ -301,6 +306,12 @@ export interface Interface {
     readonly runID: WorkflowRunID
     readonly workspaceLease: WorkflowWorkspaceLease
   }) => Effect.Effect<WorkflowSnapshot, WorkflowNotFoundError>
+  readonly recordCompoundLedger: (input: {
+    readonly runID: WorkflowRunID
+    readonly taskID: WorkflowTaskID
+    readonly attemptID: WorkflowTaskAttemptID
+    readonly ledger: CompoundLedgerSnapshot
+  }) => Effect.Effect<WorkflowSnapshot, WorkflowNotFoundError | WorkflowStateError>
   readonly events: (
     runID: WorkflowRunID,
     limit?: number,
@@ -348,6 +359,18 @@ export class Service extends Context.Service<Service, Interface>()("@opencode/Wo
 
 const terminalStates = new Set<WorkflowRunState>(["completed", "failed", "stopped"])
 const retryableStates = new Set(["failed", "blocked", "needs_input", "stopped"])
+
+const resetTaskData = (data: Record<string, unknown> | null | undefined) => ({
+  ...data,
+  blocker: undefined,
+  summary: undefined,
+  usage: undefined,
+  outputRefs: undefined,
+  evidence: undefined,
+  compoundLedger: undefined,
+  compoundReceipt: undefined,
+  retryAt: undefined,
+})
 
 const usageFromData = (data: Record<string, unknown> | null | undefined): WorkflowUsageSnapshot | undefined => {
   const value = data?.usage
@@ -408,6 +431,22 @@ const planValidation = (plan: WorkflowPlan) => {
   const result = validateWorkflowPlan(plan)
   if (!result.valid || !result.preview) return Effect.fail(new WorkflowValidationError(result.issues))
   return Effect.succeed(result.preview)
+}
+
+const materializePlan = (plan: WorkflowPlan) => {
+  const result = materializeCompoundPlan(plan)
+  if (result.issues.length) {
+    return Effect.fail(
+      new WorkflowValidationError(
+        result.issues.map((entry) => ({
+          code: "policy-contradiction" as const,
+          message: entry.message,
+          path: entry.path,
+        })),
+      ),
+    )
+  }
+  return Effect.succeed(result.plan ?? plan)
 }
 
 const planHash = (plan: WorkflowPlan) => createHash("sha256").update(JSON.stringify(plan)).digest("hex")
@@ -492,6 +531,9 @@ const taskFromRow = (
   ...(row.retry ? { retry: row.retry } : {}),
   ...(row.budget ? { budget: row.budget } : {}),
   ...(row.map ? { map: row.map } : {}),
+  ...(row.data?.compound ? { compound: row.data.compound as WorkflowTask["compound"] } : {}),
+  ...(row.data?.compoundLedger ? { compoundLedger: row.data.compoundLedger as CompoundLedgerSnapshot } : {}),
+  ...(row.data?.compoundReceipt === undefined ? {} : { compoundReceipt: row.data.compoundReceipt }),
   state: row.state,
   attempt: row.attempt,
   ...(attempt?.background_task_id ? { sessionID: SessionID.make(attempt.background_task_id) } : {}),
@@ -852,7 +894,8 @@ export const layer = Layer.effect(
     })
 
     const save = Effect.fn("WorkflowService.save")(function* (input: WorkflowSaveInput) {
-      const preview = yield* planValidation(input.plan)
+      const plan = yield* materializePlan(input.plan)
+      const preview = yield* planValidation(plan)
       const project = yield* InstanceState.context
       const now = Date.now()
       const definitionID = input.definitionID ?? WorkflowDefinitionID.make()
@@ -870,8 +913,8 @@ export const layer = Layer.effect(
             .values({
               id: definitionID,
               project_id: project.project.id,
-              name: input.name ?? input.plan.name,
-              description: input.description ?? input.plan.description,
+              name: input.name ?? plan.name,
+              description: input.description ?? plan.description,
               source: input.source ?? "manual",
               owner_session_id: input.ownerSessionID,
               current_revision: revision,
@@ -897,8 +940,8 @@ export const layer = Layer.effect(
             id: revisionID,
             definition_id: definitionID,
             revision,
-            plan_hash: planHash(input.plan),
-            plan: input.plan,
+            plan_hash: planHash(plan),
+            plan,
             immutable: true,
             time_created: now,
             time_updated: now,
@@ -906,7 +949,7 @@ export const layer = Layer.effect(
           .run()
         return { definitionID, revisionID, revision }
       })
-      return { ...receipt, plan: input.plan, preview }
+      return { ...receipt, plan, preview }
     })
 
     const show = Effect.fn("WorkflowService.show")(function* (runID: WorkflowRunID) {
@@ -952,6 +995,62 @@ export const layer = Layer.effect(
           "Workflow workspace updated",
           `Workflow workspace is ${input.workspaceLease.state}`,
           { workspaceLease: input.workspaceLease },
+        )
+      })
+      return yield* show(current.run.id)
+    })
+
+    const recordCompoundLedger = Effect.fn("WorkflowService.recordCompoundLedger")(function* (input: {
+      readonly runID: WorkflowRunID
+      readonly taskID: WorkflowTaskID
+      readonly attemptID: WorkflowTaskAttemptID
+      readonly ledger: CompoundLedgerSnapshot
+    }) {
+      const current = yield* show(input.runID)
+      const task = current.tasks.find((candidate) => candidate.id === input.taskID)
+      if (!task) return yield* Effect.fail(new WorkflowStateError(input.runID, `Task ${input.taskID} no longer exists`))
+      const now = Date.now()
+      Database.transaction((db) => {
+        const taskRow = db
+          .select()
+          .from(WorkflowTaskTable)
+          .where(and(eq(WorkflowTaskTable.run_id, input.runID), eq(WorkflowTaskTable.id, input.taskID)))
+          .get()
+        const attemptRow = db.select().from(WorkflowTaskAttemptTable).where(eq(WorkflowTaskAttemptTable.id, input.attemptID)).get()
+        if (!taskRow || !attemptRow) throw new WorkflowStateError(input.runID, `Task attempt ${input.attemptID} no longer exists`)
+        if (attemptRow.attempt !== taskRow.attempt) throw new WorkflowStateError(input.runID, `Task ${input.taskID} attempt is stale`)
+        if (attemptRow.state !== "queued" && attemptRow.state !== "working") {
+          throw new WorkflowStateError(input.runID, `Task attempt ${input.attemptID} is already terminal`)
+        }
+        db.update(WorkflowTaskTable)
+          .set({
+            time_updated: now,
+            data: { ...(taskRow.data ?? {}), compoundLedger: input.ledger },
+          })
+          .where(and(eq(WorkflowTaskTable.run_id, input.runID), eq(WorkflowTaskTable.id, input.taskID)))
+          .run()
+        db.update(WorkflowTaskAttemptTable)
+          .set({
+            time_updated: now,
+            data: {
+              ...(attemptRow.data ?? {}),
+              id: attemptRow.id,
+              taskID: taskRow.id,
+              attempt: taskRow.attempt,
+              state: attemptRow.state,
+              compoundLedger: input.ledger,
+            },
+          })
+          .where(eq(WorkflowTaskAttemptTable.id, input.attemptID))
+          .run()
+        const totals = aggregateLedger(input.ledger)
+        appendEvent(
+          db,
+          input.runID,
+          "workflow.task.updated",
+          "Compound request ledger updated",
+          `Compound task ${input.taskID} has ${input.ledger.records.length} accounted request(s)`,
+          { taskID: input.taskID, attemptID: input.attemptID, ledger: totals },
         )
       })
       return yield* show(current.run.id)
@@ -1082,6 +1181,7 @@ export const layer = Layer.effect(
               retry: task.retry,
               budget: task.budget,
               map: task.map,
+              data: task.compound ? { compound: task.compound } : undefined,
               time_created: now,
               time_updated: now,
             })
@@ -1903,8 +2003,14 @@ export const layer = Layer.effect(
       }
       const now = Date.now()
       Database.transaction((db) => {
+        const row = db
+          .select()
+          .from(WorkflowTaskTable)
+          .where(and(eq(WorkflowTaskTable.run_id, input.runID), eq(WorkflowTaskTable.id, input.taskID)))
+          .get()
+        if (!row) throw new WorkflowNotFoundError(input.taskID)
         db.update(WorkflowTaskTable)
-          .set({ state: "pending", time_updated: now, data: { blocker: undefined } })
+          .set({ state: "pending", time_started: null, time_ended: null, time_updated: now, data: resetTaskData(row.data) })
           .where(and(eq(WorkflowTaskTable.run_id, input.runID), eq(WorkflowTaskTable.id, input.taskID)))
           .run()
         db.update(WorkflowRunTable)
@@ -1945,10 +2051,17 @@ export const layer = Layer.effect(
       }
       const now = Date.now()
       Database.transaction((db) => {
-        db.update(WorkflowTaskTable)
-          .set({ state: "pending", time_updated: now })
+        const tasks = db
+          .select()
+          .from(WorkflowTaskTable)
           .where(and(eq(WorkflowTaskTable.run_id, input.runID), eq(WorkflowTaskTable.phase_id, input.phaseID)))
-          .run()
+          .all()
+        for (const task of tasks) {
+          db.update(WorkflowTaskTable)
+            .set({ state: "pending", time_started: null, time_ended: null, time_updated: now, data: resetTaskData(task.data) })
+            .where(and(eq(WorkflowTaskTable.run_id, input.runID), eq(WorkflowTaskTable.id, task.id)))
+            .run()
+        }
         db.update(WorkflowPhaseTable)
           .set({ state: "pending", time_updated: now })
           .where(and(eq(WorkflowPhaseTable.run_id, input.runID), eq(WorkflowPhaseTable.id, input.phaseID)))
@@ -1977,6 +2090,7 @@ export const layer = Layer.effect(
       list,
       show,
       setWorkspaceLease,
+      recordCompoundLedger,
       events,
       artifacts,
       claimCompletionAudit,

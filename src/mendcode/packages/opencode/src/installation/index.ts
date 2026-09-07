@@ -15,7 +15,7 @@ import { makeRuntime } from "@mendcode/core/effect/runtime"
 import semver from "semver"
 import { InstallationChannel, InstallationVersion } from "@mendcode/core/installation/version"
 import { which } from "@/util/which"
-import { readChannel, selectRelease, type Release } from "./release-channel"
+import { acquireChannelTransition, parseChannel, readChannel, selectRelease, type Release, type ReleaseChannel } from "./release-channel"
 import { updateProgress, type UpdateObserver } from "./progress"
 import { verifyReleaseIndex, verifyInstallerBytes } from "./release-index"
 
@@ -167,8 +167,8 @@ const GitHubRelease = Schema.Struct({
 export interface Interface {
   readonly info: () => Effect.Effect<Info>
   readonly method: () => Effect.Effect<Method>
-  readonly latest: (method?: Method) => Effect.Effect<string>
-  readonly upgrade: (method: Method, target: string, observer?: UpdateObserver) => Effect.Effect<void, UpgradeFailedError>
+  readonly latest: (method?: Method, channel?: ReleaseChannel) => Effect.Effect<string>
+  readonly upgrade: (method: Method, target: string, observer?: UpdateObserver, channel?: ReleaseChannel) => Effect.Effect<"installed" | "deferred", UpgradeFailedError>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/Installation") {}
@@ -370,8 +370,8 @@ export const layer: Layer.Layer<Service, never, HttpClient.HttpClient | ChildPro
 
           return "unknown" as Method
         }),
-        latest: Effect.fn("Installation.latest")(function* (_installMethod?: Method) {
-          const channel = yield* Effect.tryPromise(readChannel)
+        latest: Effect.fn("Installation.latest")(function* (_installMethod?: Method, requestedChannel?: ReleaseChannel) {
+          const channel = requestedChannel === undefined ? yield* Effect.tryPromise(readChannel) : parseChannel(requestedChannel)
           if (channel === "stable") {
             const response = yield* httpOk.execute(
               HttpClientRequest.get(GITHUB_LATEST_RELEASE_URL).pipe(HttpClientRequest.acceptJson),
@@ -398,7 +398,28 @@ export const layer: Layer.Layer<Service, never, HttpClient.HttpClient | ChildPro
           }
           throw new Error(`No published ${channel} release is available`)
         }, Effect.orDie),
-        upgrade: Effect.fn("Installation.upgrade")(function* (m: Method, target: string, observer?: UpdateObserver) {
+        upgrade: Effect.fn("Installation.upgrade")(function* (m: Method, target: string, observer?: UpdateObserver, requestedChannel?: ReleaseChannel) {
+          if (requestedChannel !== undefined) {
+            const selected = selectRelease([{ tag_name: target, prerelease: semver.prerelease(target) !== null }], requestedChannel)
+            if (selected !== target) return yield* new UpgradeFailedError({ stderr: "The target version does not match the requested release channel." })
+          }
+          const transition = yield* Effect.acquireRelease(
+            Effect.tryPromise({ try: acquireChannelTransition, catch: (error) => new UpgradeFailedError({ stderr: describeUpgradeFailure(error) }) }),
+            (lock) => Effect.promise(() => lock.release()),
+          )
+          if (requestedChannel !== undefined) {
+            const current = (yield* text([process.execPath, "--version"]).pipe(
+              Effect.timeout(30_000),
+              Effect.catchTag("TimeoutError", () => Effect.fail(new UpgradeFailedError({ stderr: "The installed binary did not answer; channel selection was not changed." }))),
+            )).trim()
+            if (current === target) {
+              yield* Effect.tryPromise({ try: () => transition.commit(requestedChannel), catch: (error) => new UpgradeFailedError({ stderr: describeUpgradeFailure(error) }) })
+              return "installed" as const
+            }
+            // Older Windows installers cannot commit the new preference after
+            // deferred replacement. Refuse before downloading or replacing it.
+            if (usesNativeWindowsUpdater()) return yield* new UpgradeFailedError({ stderr: "One-command channel switching is not available for this deferred Windows installer. The installed executable and channel were not changed. Use the existing channel commands only after verifying the target installation separately." })
+          }
           let upgradeResult:
             | { code: ChildProcessSpawner.ExitCode; stdout: string; stderr: string; deferred?: boolean }
             | undefined
@@ -433,7 +454,7 @@ export const layer: Layer.Layer<Service, never, HttpClient.HttpClient | ChildPro
             stdout: upgradeResult.stdout,
             stderr: upgradeResult.stderr,
           })
-          if (upgradeResult.deferred) return
+          if (upgradeResult.deferred) return "deferred" as const
           const installedVersion = (yield* text([process.execPath, "--version"]).pipe(
             Effect.timeout(30_000),
             Effect.catchTag("TimeoutError", () => Effect.fail(new UpgradeFailedError({
@@ -445,7 +466,12 @@ export const layer: Layer.Layer<Service, never, HttpClient.HttpClient | ChildPro
               stderr: `MendCode upgrade did not install the requested version. Expected ${target}, found ${installedVersion || "unknown"}. Restart the current process and retry.`,
             })
           }
-        }),
+          if (requestedChannel !== undefined) yield* Effect.tryPromise({
+            try: () => transition.commit(requestedChannel),
+            catch: (error) => new UpgradeFailedError({ stderr: `Version ${target} was installed, but its channel preference could not be saved: ${describeUpgradeFailure(error)}` }),
+          })
+          return "installed" as const
+        }, Effect.scoped),
       }
 
       return Service.of(result)

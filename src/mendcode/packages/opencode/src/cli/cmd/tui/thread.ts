@@ -180,9 +180,14 @@ async function stopLocalSharedServer(state: SharedServerState) {
 }
 
 export function resolveRuntimeEntrypoint(entry: string | undefined, runtimeCwd: string) {
-  if (!entry || !/(^|[\\/])src[\\/]index\.(?:ts|js)$/.test(entry)) return
+  if (!entry) return
   if (entry.includes("$bunfs") || entry.includes("~BUN")) return
-  const resolved = path.isAbsolute(entry) ? entry : path.resolve(runtimeCwd, entry)
+  const source = path.isAbsolute(entry) ? entry : path.resolve(runtimeCwd, entry)
+  // The source control plane is another client of this same runtime, not `bun serve`.
+  const resolved = /(^|[\\/])src[\\/]mend[\\/]cli[\\/]control-plane\.(?:ts|js)$/.test(source)
+    ? path.resolve(path.dirname(source), "../..", `index${path.extname(source)}`)
+    : source
+  if (!/(^|[\\/])src[\\/]index\.(?:ts|js)$/.test(resolved)) return
   if (!existsSync(resolved)) return
   return resolved
 }

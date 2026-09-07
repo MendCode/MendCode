@@ -39,6 +39,7 @@ import { autoReasoningSignal, selectAutoReasoning } from "@/mend/prompt/reasonin
 import { isAstraModel, normalizeAstraOptions } from "@/mend/prompt/model-family"
 import { ReasoningRequested, ReasoningCleared, recordReasoningState, clearReasoningState, requestedReasoningEffort } from "@/mend/prompt/reasoning-state"
 import { profileContext, type ContextProfile } from "./context-profile"
+import { discoveryWireMiddleware } from "./tool-discovery"
 
 const log = Log.create({ service: "llm" })
 export const OUTPUT_TOKEN_MAX = ProviderTransform.OUTPUT_TOKEN_MAX
@@ -84,6 +85,9 @@ export type StreamInput = {
   tools: Record<string, Tool>
   retries?: number
   toolChoice?: "auto" | "required" | "none"
+  toolMode?: "normal" | "none"
+  /** Hard upper bound for bounded internal requests such as incremental compaction. */
+  maxOutputTokens?: number
   abort?: AbortSignal
 }
 
@@ -326,10 +330,21 @@ const live: Layer.Layer<
             : undefined,
           topP: input.agent.topP ?? ProviderTransform.topP(input.model),
           topK: ProviderTransform.topK(input.model),
-          maxOutputTokens: ProviderTransform.maxOutputTokens(input.model),
+          maxOutputTokens: Math.min(
+            ProviderTransform.maxOutputTokens(input.model),
+            input.maxOutputTokens ?? Number.POSITIVE_INFINITY,
+          ),
           options,
         },
       )
+      if (input.maxOutputTokens !== undefined) {
+        // Keep the internal bound authoritative even when a plugin adjusts
+        // generic chat parameters. Ordinary requests do not set this field.
+        params.maxOutputTokens = Math.min(
+          params.maxOutputTokens ?? ProviderTransform.maxOutputTokens(input.model),
+          Math.max(1, Math.floor(input.maxOutputTokens)),
+        )
+      }
       if (isAstraModel(input.model.api.id)) {
         params.temperature = undefined
         params.topP = undefined
@@ -372,6 +387,7 @@ const live: Layer.Layer<
       // during compaction), inject a stub tool to satisfy the validation requirement.
       // The stub description explicitly tells the model not to call it.
       if (
+        input.toolMode !== "none" &&
         (isLiteLLMProxy || input.model.providerID.includes("github-copilot")) &&
         Object.keys(tools).length === 0 &&
         hasToolCalls(input.messages)
@@ -400,7 +416,7 @@ const live: Layer.Layer<
         }
         workflowModel.sessionID = input.sessionID
         workflowModel.systemPrompt = system.join("\n")
-        workflowModel.toolExecutor = async (toolName, argsJson, _requestID) => {
+        workflowModel.toolExecutor = input.toolMode === "none" ? null : async (toolName, argsJson, _requestID) => {
           const t = tools[toolName]
           if (!t || !t.execute) {
             return { result: "", error: `Unknown tool: ${toolName}` }
@@ -422,15 +438,19 @@ const live: Layer.Layer<
           }
         }
 
-        const ruleset = Permission.merge(input.agent.permission ?? [], input.permission ?? [])
-        workflowModel.sessionPreapprovedTools = Object.keys(tools).filter((name) => {
-          const match = ruleset.findLast((rule) => Wildcard.match(name, rule.permission))
-          return !match || match.action !== "ask"
-        })
+        if (input.toolMode === "none") {
+          workflowModel.sessionPreapprovedTools = []
+          workflowModel.approvalHandler = async () => ({ approved: false })
+        } else {
+          const ruleset = Permission.merge(input.agent.permission ?? [], input.permission ?? [])
+          workflowModel.sessionPreapprovedTools = Object.keys(tools).filter((name) => {
+            const match = ruleset.findLast((rule) => Wildcard.match(name, rule.permission))
+            return !match || match.action !== "ask"
+          })
 
-        const bridge = yield* EffectBridge.make()
-        const approvedToolsForSession = new Set<string>()
-        workflowModel.approvalHandler = InstanceState.bind(async (approvalTools) => {
+          const bridge = yield* EffectBridge.make()
+          const approvedToolsForSession = new Set<string>()
+          workflowModel.approvalHandler = InstanceState.bind(async (approvalTools) => {
           const uniqueNames = [...new Set(approvalTools.map((t: { name: string }) => t.name))] as string[]
           // Auto-approve tools that were already approved in this session
           // (prevents infinite approval loops for server-side MCP tools)
@@ -473,7 +493,8 @@ const live: Layer.Layer<
           } finally {
             unsub?.()
           }
-        })
+          })
+        }
       }
 
       const telemetryEnabled = process.env.MENDCODE === "1" ? false : Boolean(cfg.experimental?.openTelemetry)
@@ -597,6 +618,7 @@ const live: Layer.Layer<
                 return args.params
               },
             },
+            ...(input.model.api.npm === "@ai-sdk/openai" ? [discoveryWireMiddleware()] : []),
           ],
         }),
         experimental_telemetry: {
@@ -682,7 +704,8 @@ export const defaultLayer = Layer.suspend(() =>
   ),
 )
 
-function resolveTools(input: Pick<StreamInput, "tools" | "agent" | "permission" | "user">) {
+function resolveTools(input: Pick<StreamInput, "tools" | "agent" | "permission" | "user" | "toolMode">) {
+  if (input.toolMode === "none") return {}
   const disabled = Permission.disabled(
     Object.keys(input.tools),
     Permission.merge(input.agent.permission, input.permission ?? []),

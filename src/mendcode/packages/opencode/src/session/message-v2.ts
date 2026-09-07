@@ -473,6 +473,8 @@ export const User = Schema.Struct({
   }),
   system: Schema.optional(Schema.String),
   tools: Schema.optional(Schema.Record(Schema.String, Schema.Boolean)),
+  toolMode: Schema.optional(Schema.Literals(["normal", "none"])),
+  maxOutputTokens: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(1))),
   queued: Schema.optional(Schema.Boolean),
 })
   .annotate({ identifier: "UserMessage" })

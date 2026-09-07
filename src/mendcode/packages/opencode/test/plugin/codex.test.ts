@@ -235,6 +235,32 @@ describe("plugin.codex", () => {
     ])
   })
 
+  test("preserves the standalone compact suffix and opaque input for OAuth", async () => {
+    let upstreamURL = ""
+    let upstreamBody: Record<string, unknown> | undefined
+    using server = Bun.serve({
+      port: 0,
+      async fetch(request) {
+        upstreamURL = request.url
+        upstreamBody = await readRequestBody(request)
+        return Response.json({ output: [] })
+      },
+    })
+    const providerFetch = await loadCodexFetch(new URL("/backend-api/codex/responses", server.url).toString())
+    const input = [
+      { type: "compaction", id: "cmp_opaque", encrypted_content: "do-not-rewrite" },
+      { type: "message", id: "msg_1", role: "user", content: [{ type: "input_text", text: "continue" }] },
+    ]
+    await providerFetch("https://api.openai.com/v1/responses/compact", {
+      method: "POST",
+      headers: { "content-type": "application/json", "session-id": "ses_compact" },
+      body: JSON.stringify({ model: "gpt-6-astra", input, store: false }),
+    })
+
+    expect(new URL(upstreamURL).pathname).toBe("/backend-api/codex/responses/compact")
+    expect(upstreamBody).toEqual({ model: "gpt-6-astra", input, store: false })
+  })
+
   test("does not retain generated affinity keys for headerless Responses Lite requests", () => {
     const sessionIDs = new Map<string, string>()
     const headers = new Headers()

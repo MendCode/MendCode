@@ -18,7 +18,7 @@ import { Config } from "@/config/config"
 import { Todo } from "./todo"
 import { NotFoundError } from "@/storage/storage"
 import { ModelID, ProviderID } from "@/provider/schema"
-import { Effect, Layer, Context, Schema } from "effect"
+import { Cause, Effect, Exit, Layer, Context, Schema } from "effect"
 import * as DateTime from "effect/DateTime"
 import { InstanceState } from "@/effect/instance-state"
 import { isOverflow as overflow, isTokenOverflow, usable } from "./overflow"
@@ -26,6 +26,12 @@ import { makeRuntime } from "@/effect/run-service"
 import { fn } from "@/util/fn"
 import { EventV2 } from "@/v2/event"
 import { SessionEvent } from "@/v2/session-event"
+import type { ModelMessage } from "ai"
+import { Auth } from "@/auth"
+import { NativeCompactionError, compactNative, nativeCapability, type NativeCapability } from "@/provider/native-compaction"
+import * as NativeCheckpoint from "./compaction-checkpoint"
+import { appendNativeDeltas, nativeContextMarker, toNativeContext } from "./native-context"
+import * as ContinuityMailbox from "./runtime-mailbox"
 
 const log = Log.create({ service: "session.compaction" })
 
@@ -51,6 +57,7 @@ const SUBAGENT_CONTEXT_MAX_TASKS = 12
 const SUBAGENT_CONTEXT_MAX_OUTPUT_CHARS = 2_500
 const PRUNE_PROTECTED_TOOLS = ["skill"]
 const DEFAULT_TAIL_TURNS = 2
+const DEFAULT_INCREMENTAL_SUMMARY_TOKENS = 4_096
 const MIN_PRESERVE_RECENT_TOKENS = 2_000
 const MAX_PRESERVE_RECENT_TOKENS = 8_000
 const IMAGE_ATTACHMENT_CONTEXT_MAX_ITEMS = 12
@@ -168,6 +175,91 @@ type Turn = {
 type Tail = {
   start: number
   id: MessageID
+}
+
+export type CompactionMethod = "legacy" | "incremental" | "native"
+
+export type CompactionStrategyDecision =
+  | { method: "legacy" | "incremental"; reason?: string }
+  | { method: "native"; capability: NativeCapability }
+  | { method: "error"; reason: string }
+
+export type NativeContextInput = {
+  sessionID: SessionID
+  messages: MessageV2.WithParts[]
+  user: MessageV2.User
+  agent: Agent.Info
+  model: Provider.Model
+  stripMedia?: boolean
+  preserveMedia?: (message: MessageV2.WithParts, part: MessageV2.FilePart) => boolean
+}
+
+export type NativeContextOutput = {
+  checkpoint: NativeCheckpoint.NativeCheckpoint
+  inputItems: unknown[]
+  messages: ModelMessage[]
+}
+
+export function selectCompactionStrategy(input: {
+  strategy: "portable" | "auto" | "native" | undefined
+  portableMode: "legacy" | "incremental" | undefined
+  compactionRoleConfigured: boolean
+  compactionRoleMatchesActive: boolean
+  capability: NativeCapability
+}): CompactionStrategyDecision {
+  const portable = input.portableMode ?? "legacy"
+  if (input.strategy === "portable" || input.strategy === undefined)
+    return { method: portable, reason: input.strategy === undefined ? "default" : undefined }
+  if (input.compactionRoleConfigured && !input.compactionRoleMatchesActive) {
+    if (input.strategy === "native") {
+      return { method: "error", reason: "Native compaction is bound to the active inference model; the configured compaction role differs." }
+    }
+    return { method: portable, reason: "configured compaction role" }
+  }
+  if (!input.capability.supported) {
+    if (input.strategy === "native") {
+      return { method: "error", reason: input.capability.reason ?? "Native compaction is unavailable." }
+    }
+    return { method: portable, reason: input.capability.reason }
+  }
+  return { method: "native", capability: input.capability }
+}
+
+function nativeBoundaryIndex(messages: MessageV2.WithParts[], checkpoint: NativeCheckpoint.NativeCheckpoint) {
+  const index = messages.findIndex((message) => message.info.id === checkpoint.boundaryMessageID)
+  if (index < 0) return undefined
+  // A non-empty boundaryPartIDs identifies the first retained transcript
+  // message. An empty list identifies the compaction control message itself;
+  // that control message is never replayed into the next model request.
+  return checkpoint.boundaryPartIDs.length > 0 ? index : index + 1
+}
+
+function nativeSourceMessages(messages: MessageV2.WithParts[], checkpoint: NativeCheckpoint.NativeCheckpoint) {
+  const start = nativeBoundaryIndex(messages, checkpoint)
+  if (start === undefined) return undefined
+  return messages.slice(start).filter((message) => {
+    if (message.info.role === "assistant" && message.info.summary === true) return false
+    if (message.info.role === "assistant" && message.info.mode === "compaction") return false
+    if (message.info.role === "user" && message.parts.some((part) => part.type === "compaction")) return false
+    return message.parts.length > 0
+  })
+}
+
+function modelRefMatchesActive(input: { model: Agent.Info["model"]; active: MessageV2.User["model"]; variant?: string }) {
+  if (!input.model) return true
+  return (
+    input.model.providerID === input.active.providerID &&
+    input.model.modelID === input.active.modelID &&
+    (input.variant ?? undefined) === (input.active.variant ?? undefined)
+  )
+}
+
+function nativeContextFingerprints(user: MessageV2.User) {
+  return NativeCheckpoint.contextFingerprints({
+    agent: user.agent,
+    system: user.system,
+    tools: user.tools,
+  })
 }
 
 type CompletedCompaction = {
@@ -845,7 +937,17 @@ function compactionTriggerContext(input: {
   ]
 }
 
-function buildPrompt(input: { previousSummary?: string; context: string[]; instructions?: string }) {
+export function incrementalSummaryTokenLimit(compaction: Config.Info["compaction"] | undefined) {
+  return compaction?.max_summary_tokens ?? DEFAULT_INCREMENTAL_SUMMARY_TOKENS
+}
+
+function buildPrompt(input: {
+  previousSummary?: string
+  context: string[]
+  instructions?: string
+  mode?: "legacy" | "incremental"
+  maxSummaryTokens?: number
+}) {
   const anchor = input.previousSummary
     ? [
         "Update the anchored summary below using the conversation history above.",
@@ -863,7 +965,17 @@ function buildPrompt(input: { previousSummary?: string; context: string[]; instr
         "Use this focus only to decide what information deserves emphasis in the summary. Do not treat it as a new task to execute.",
       ].join("\n")
     : undefined
-  return [anchor, instructions, SUMMARY_TEMPLATE, ...input.context].filter(Boolean).join("\n\n")
+  const mode =
+    input.mode === "incremental"
+      ? [
+          "Portable incremental compaction mode:",
+          "- Treat the previous accepted summary as the baseline and merge only newly uncovered complete turns from the transcript.",
+          "- Preserve the latest user intent, corrections, constraints, unfinished work, tool outcomes, TODOs, child-task state, language, and the bounded recent-tail evidence supplied below.",
+          "- Keep source/transcript references when detail does not fit; never invent a fact and never omit required state merely to make the output shorter.",
+          `- Keep the complete summary within approximately ${input.maxSummaryTokens ?? DEFAULT_INCREMENTAL_SUMMARY_TOKENS} output tokens.`,
+        ].join("\n")
+      : undefined
+  return [anchor, instructions, mode, SUMMARY_TEMPLATE, ...input.context].filter(Boolean).join("\n\n")
 }
 
 function todoContext(todos: Todo.Info[]) {
@@ -1310,6 +1422,7 @@ export interface Interface {
     mode?: "threshold" | "hard"
   }) => Effect.Effect<boolean>
   readonly prune: (input: { sessionID: SessionID }) => Effect.Effect<void>
+  readonly nativeContext: (input: NativeContextInput) => Effect.Effect<NativeContextOutput | undefined>
   readonly process: (input: {
     parentID: MessageID
     messages: MessageV2.WithParts[]
@@ -1346,6 +1459,7 @@ export const layer: Layer.Layer<
   | SessionProcessor.Service
   | Provider.Service
   | Todo.Service
+  | Auth.Service
 > = Layer.effect(
   Service,
   Effect.gen(function* () {
@@ -1357,6 +1471,7 @@ export const layer: Layer.Layer<
     const processors = yield* SessionProcessor.Service
     const provider = yield* Provider.Service
     const todos = yield* Todo.Service
+    const auth = yield* Auth.Service
 
     const isOverflow = Effect.fn("SessionCompaction.isOverflow")(function* (input: {
       tokens: MessageV2.Assistant["tokens"]
@@ -1439,6 +1554,79 @@ export const layer: Layer.Layer<
       }
     })
 
+    const nativeContext = Effect.fn("SessionCompaction.nativeContext")(function* (input: NativeContextInput) {
+      const cfg = yield* config.get()
+      if (cfg.compaction?.strategy !== "native" && cfg.compaction?.strategy !== "auto") return undefined
+      const instance = yield* InstanceState.context
+
+      const providerInfo = yield* provider.getProvider(input.model.providerID)
+      const authInfo = yield* auth.get(input.model.providerID).pipe(
+        Effect.catch((error) =>
+          Effect.sync(() => {
+            log.warn("failed to read provider auth for native context", { error: String(error) })
+            return undefined
+          }),
+        ),
+      )
+      const capability = nativeCapability({ provider: providerInfo, model: input.model, auth: authInfo })
+      const compactionAgent = yield* agents.get("compaction")
+      const decision = selectCompactionStrategy({
+        strategy: cfg.compaction?.strategy,
+        portableMode: cfg.compaction?.portable_mode,
+        compactionRoleConfigured: Boolean(compactionAgent.model),
+        compactionRoleMatchesActive: modelRefMatchesActive({
+          model: compactionAgent.model,
+          active: input.user.model,
+          variant: compactionAgent.variant,
+        }),
+        capability,
+      })
+      if (decision.method === "error") throw new NativeCompactionError("unsupported", decision.reason ?? "Native compaction is unavailable.")
+      if (decision.method !== "native" || !decision.capability.binding) return undefined
+
+      const generation = ContinuityMailbox.generation(input.sessionID)
+      const fingerprints = nativeContextFingerprints(input.user)
+      const checkpoint = NativeCheckpoint.load(input.sessionID, decision.capability.binding, generation)
+      if (!checkpoint) {
+        const active = NativeCheckpoint.loadActive(input.sessionID)
+        if (active && (!NativeCheckpoint.sameBinding(active.binding, decision.capability.binding) || active.generation !== generation)) {
+          NativeCheckpoint.invalidate(input.sessionID, instance.directory, "native binding or generation changed")
+        }
+        return undefined
+      }
+      if (
+        checkpoint.instructionsFingerprint !== fingerprints.instructions ||
+        checkpoint.toolsFingerprint !== fingerprints.tools
+      ) {
+        NativeCheckpoint.invalidate(input.sessionID, instance.directory, "native instruction or tool binding changed")
+        return undefined
+      }
+
+      const source = nativeSourceMessages(input.messages, checkpoint)
+      if (!source) {
+        NativeCheckpoint.invalidate(input.sessionID, instance.directory, "native checkpoint boundary is unavailable")
+        return undefined
+      }
+      const deltaMessages = yield* MessageV2.toModelMessagesEffect(source, input.model, {
+        stripMedia: input.stripMedia,
+        preserveMedia: input.preserveMedia,
+      })
+      const converted = yield* Effect.promise(() => toNativeContext(deltaMessages))
+      if (converted.warnings.length) log.warn("native context conversion warnings", { warnings: converted.warnings })
+      const inputItems = appendNativeDeltas(NativeCheckpoint.outputItems(checkpoint), converted.inputItems)
+      return {
+        checkpoint,
+        inputItems,
+        messages: [
+          {
+            role: "user" as const,
+            content: [{ type: "text" as const, text: nativeContextMarker(inputItems) }],
+          },
+          ...deltaMessages,
+        ],
+      }
+    })
+
     // goes backwards through parts until there are PRUNE_PROTECT tokens worth of tool
     // calls, then erases output of older tool calls to free context space
     const prune = Effect.fn("SessionCompaction.prune")(function* (input: { sessionID: SessionID }) {
@@ -1506,12 +1694,44 @@ export const layer: Layer.Layer<
 
       const messages = input.messages
 
-      const agent = yield* agents.get("compaction")
-      const model = agent.model
-        ? yield* provider.getModel(agent.model.providerID, agent.model.modelID)
-        : yield* provider.getModel(userMessage.model.providerID, userMessage.model.modelID)
-      const includeImageMedia = model.capabilities.input.image === true
       const cfg = yield* config.get()
+      const agent = yield* agents.get("compaction")
+      const activeModel = yield* provider.getModel(userMessage.model.providerID, userMessage.model.modelID)
+      const activeProvider = yield* provider.getProvider(activeModel.providerID)
+      const activeAuth = yield* auth.get(activeModel.providerID).pipe(
+        Effect.catch((error) =>
+          Effect.sync(() => {
+            log.warn("failed to read provider auth for compaction", { error: String(error) })
+            return undefined
+          }),
+        ),
+      )
+      const decision = selectCompactionStrategy({
+        strategy: cfg.compaction?.strategy,
+        portableMode: cfg.compaction?.portable_mode,
+        compactionRoleConfigured: Boolean(agent.model),
+        compactionRoleMatchesActive: modelRefMatchesActive({
+          model: agent.model,
+          active: userMessage.model,
+          variant: agent.variant,
+        }),
+        capability: nativeCapability({ provider: activeProvider, model: activeModel, auth: activeAuth }),
+      })
+      if (decision.method === "error") throw new NativeCompactionError("unsupported", decision.reason ?? "Native compaction is unavailable.")
+      const method: CompactionMethod = decision.method
+      const useNative = method === "native"
+      // A native failure may use the explicitly selected portable mode exactly
+      // once. Native itself does not produce a legacy summary, so this only
+      // affects the bounded fallback request.
+      const portableMethod: "legacy" | "incremental" =
+        method === "native" ? (cfg.compaction?.portable_mode ?? "legacy") : method
+      const maxSummaryTokens = incrementalSummaryTokenLimit(cfg.compaction)
+      const model = useNative
+        ? activeModel
+        : agent.model
+          ? yield* provider.getModel(agent.model.providerID, agent.model.modelID)
+          : activeModel
+      const includeImageMedia = model.capabilities.input.image === true
       const history = compactionPart && messages.at(-1)?.info.id === input.parentID ? messages.slice(0, -1) : messages
       const prior = completedCompactions(history)
       const hidden = new Set(prior.flatMap((item) => [item.userIndex, item.assistantIndex]))
@@ -1563,13 +1783,57 @@ export const layer: Layer.Layer<
         ...compacting.context,
       ]
       const nextPrompt =
-        compacting.prompt ?? buildPrompt({ previousSummary, context, instructions: compactionPart?.instructions })
+        compacting.prompt ??
+        buildPrompt({
+          previousSummary,
+          context,
+          instructions: compactionPart?.instructions,
+          mode: portableMethod,
+          maxSummaryTokens,
+        })
+      const nativeStartedAt = performance.now()
+      let nativeInputItems: unknown[] | undefined
+      let nativeGeneration: number | undefined
+      if (useNative && decision.method === "native" && decision.capability.binding) {
+        const generation = ContinuityMailbox.generation(input.sessionID)
+        nativeGeneration = generation
+        const active = NativeCheckpoint.loadActive(input.sessionID)
+        const fingerprints = nativeContextFingerprints(userMessage)
+        const usable =
+          active &&
+          active.generation === generation &&
+          NativeCheckpoint.sameBinding(active.binding, decision.capability.binding) &&
+          active.instructionsFingerprint === fingerprints.instructions &&
+          active.toolsFingerprint === fingerprints.tools
+            ? active
+            : undefined
+        if (active && usable === undefined) {
+          NativeCheckpoint.invalidate(input.sessionID, ctx.directory, "native binding or input contract changed")
+        }
+        const source = usable ? nativeSourceMessages(history, usable) ?? summaryHistory : summaryHistory
+        const transformed = structuredClone(source)
+        yield* plugin.trigger("experimental.chat.messages.transform", {}, { messages: transformed })
+        const nativeModelMessages = yield* MessageV2.toModelMessagesEffect(transformed, model, {
+          stripMedia: !includeImageMedia,
+          toolOutputMaxChars: TOOL_OUTPUT_MAX_CHARS,
+        })
+        const prepared = yield* Effect.promise(() => toNativeContext(nativeModelMessages))
+        if (prepared.warnings.length) log.warn("native compaction input warnings", { warnings: prepared.warnings })
+        nativeInputItems = usable
+          ? appendNativeDeltas(NativeCheckpoint.outputItems(usable), prepared.inputItems)
+          : prepared.inputItems
+      }
+
       const msgs = structuredClone(summaryHistory)
-      yield* plugin.trigger("experimental.chat.messages.transform", {}, { messages: msgs })
-      const modelMessages = yield* MessageV2.toModelMessagesEffect(msgs, model, {
-        stripMedia: !includeImageMedia,
-        toolOutputMaxChars: TOOL_OUTPUT_MAX_CHARS,
-      })
+      if (!useNative) {
+        yield* plugin.trigger("experimental.chat.messages.transform", {}, { messages: msgs })
+      }
+      const modelMessages = useNative
+        ? undefined
+        : yield* MessageV2.toModelMessagesEffect(msgs, model, {
+            stripMedia: !includeImageMedia,
+            toolOutputMaxChars: TOOL_OUTPUT_MAX_CHARS,
+          })
       const msg: MessageV2.Assistant = {
         id: MessageID.ascending(),
         role: "assistant",
@@ -1578,7 +1842,7 @@ export const layer: Layer.Layer<
         mode: "compaction",
         agent: "compaction",
         variant: userMessage.model.variant,
-        summary: true,
+        ...(useNative ? {} : { summary: true }),
         path: {
           cwd: ctx.directory,
           root: ctx.worktree,
@@ -1596,61 +1860,178 @@ export const layer: Layer.Layer<
           created: Date.now(),
         },
       }
-      yield* session.updateMessage(msg)
-      const processor = yield* processors.create({
-        assistantMessage: msg,
-        sessionID: input.sessionID,
-        model,
-        abort: input.abort,
-        isManualAbort: input.isManualAbort,
-      })
-      const compactionMessages = [
-        ...modelMessages,
-        {
-          role: "user" as const,
-          content: [{ type: "text" as const, text: nextPrompt }],
-        },
-      ]
-      const compactionPromptTokens = Token.estimatePayload(compactionMessages)
-      const compactionPromptOverflow = yield* isPromptOverflow({
-        tokens: compactionPromptTokens,
-        model,
-        respectAuto: false,
-        mode: "hard",
-      })
-      const result = compactionPromptOverflow
-        ? "compact"
-        : yield* processor.process({
-            user: userMessage,
-            agent,
+      let result: "continue" | "compact" | "stop" = "stop"
+      let resultMessage: MessageV2.Assistant = msg
+      let nativeInstalled = false
+      let nativeFallbackReason: NativeCompactionError["kind"] | undefined
+      if (useNative && decision.method === "native" && decision.capability.binding && nativeInputItems) {
+        const preparedAt = performance.now()
+        const providerStartedAt = performance.now()
+        const nativeExit = yield* Effect.exit(Effect.promise(() =>
+          compactNative({
+            provider: activeProvider,
+            model: activeModel,
+            auth: activeAuth,
+            inputItems: nativeInputItems!,
+            instructions: nextPrompt,
+            abort: input.abort,
+            timeoutMs: cfg.compaction?.timeout_ms,
+          }),
+        ))
+        if (Exit.isSuccess(nativeExit)) {
+          const native = nativeExit.value
+          const providerMs = Math.max(0, Math.round(performance.now() - providerStartedAt))
+          const usage = native.usage
+          const inputTokens = typeof usage?.input_tokens === "number" ? usage.input_tokens : null
+          const outputTokens = typeof usage?.output_tokens === "number" ? usage.output_tokens : null
+          const checkpoint: NativeCheckpoint.NativeCheckpoint = {
+            namespace: NativeCheckpoint.NATIVE_COMPACTION_NAMESPACE,
+            version: 1,
             sessionID: input.sessionID,
-            tools: {},
-            system: [],
-            messages: compactionMessages,
-            model,
+            generation: nativeGeneration!,
+            boundaryMessageID: selected.tail_start_id ?? input.parentID,
+            boundaryPartIDs:
+              selected.tail_start_id
+                ? (history.find((message) => message.info.id === selected.tail_start_id)?.parts.map((part) => part.id) ?? [])
+                : [],
+            binding: decision.capability.binding,
+            instructionsFingerprint: nativeContextFingerprints(userMessage).instructions,
+            toolsFingerprint: nativeContextFingerprints(userMessage).tools,
+            canonicalOutput: native.outputJSON,
+            outputBytes: native.outputBytes,
+            inputBytes: native.inputBytes,
+            requestID: native.requestID,
+            timing: {
+              prepareMs: Math.max(0, Math.round(preparedAt - nativeStartedAt)),
+              providerMs,
+              installMs: null,
+              resumeMs: null,
+              totalMs: null,
+              method: "native",
+              inputTokens,
+              outputTokens,
+            },
+            createdAt: Date.now(),
+          }
+          const installed = NativeCheckpoint.commitIfCurrent({
+            checkpoint,
+            directory: ctx.directory,
+            expectedGeneration: checkpoint.generation,
+            expectedBinding: decision.capability.binding,
+            timingStartedAt: nativeStartedAt,
           })
-
-      if (result === "compact") {
-        const rescue = localRescueSummary({
-          previousSummary,
-          context,
-          reason: compactionPromptOverflow
-            ? `compaction prompt estimate ${compactionPromptTokens} tokens exceeded the effective provider/model threshold before request dispatch`
-            : "provider/model reported compaction prompt overflow",
-        })
-        yield* session.updatePart({
-          id: PartID.ascending(),
-          messageID: processor.message.id,
+          if (!installed) throw new NativeCompactionError("stale", "Native compaction result was no longer current.")
+          msg.finish = "stop"
+          msg.time.completed = Date.now()
+          msg.tokens.input = inputTokens ?? 0
+          msg.tokens.output = outputTokens ?? 0
+          yield* session.updateMessage(msg)
+          yield* session.updatePart({
+            id: PartID.ascending(),
+            messageID: msg.id,
+            sessionID: input.sessionID,
+            type: "text",
+            synthetic: true,
+            metadata: {
+              compaction_method: "native",
+              native_protocol: native.protocol,
+              input_bytes: native.inputBytes,
+              output_bytes: native.outputBytes,
+            },
+            text: [
+              "Native compaction installed for this session.",
+              `Protocol: ${native.protocol}.`,
+              `Input: ${native.inputBytes} bytes; output: ${native.outputBytes} bytes.`,
+              "The provider's opaque context remains private and the original transcript is unchanged.",
+            ].join(" "),
+            time: { start: Date.now(), end: Date.now() },
+          })
+          nativeInstalled = true
+          result = "continue"
+          resultMessage = msg
+        } else {
+          const error = Cause.squash(nativeExit.cause)
+          const fallback =
+            error instanceof NativeCompactionError &&
+            cfg.compaction?.on_native_error === "portable" &&
+            error.kind !== "cancelled" &&
+            error.kind !== "stale" &&
+            error.kind !== "unsupported" &&
+            !(error.status === 401 || error.status === 403)
+          if (!fallback) throw error
+          nativeFallbackReason = error.kind
+          log.warn("native compaction failed; using one portable fallback", { kind: error.kind, status: error.status })
+        }
+      }
+      if (!nativeInstalled) {
+        if (nativeFallbackReason) msg.summary = true
+        if (nativeFallbackReason) {
+          yield* plugin.trigger("experimental.chat.messages.transform", {}, { messages: msgs })
+        }
+        const portableModelMessages =
+          modelMessages ??
+          (yield* MessageV2.toModelMessagesEffect(msgs, model, {
+            stripMedia: !includeImageMedia,
+            toolOutputMaxChars: TOOL_OUTPUT_MAX_CHARS,
+          }))
+        yield* session.updateMessage(msg)
+        const processor = yield* processors.create({
+          assistantMessage: msg,
           sessionID: input.sessionID,
-          type: "text",
-          text: rescue,
-          time: { start: Date.now(), end: Date.now() },
+          model,
+          abort: input.abort,
+          isManualAbort: input.isManualAbort,
         })
-        processor.message.error = undefined
-        processor.message.finish = "stop"
-        processor.message.time.completed = Date.now()
-        processor.message.tokens.input = compactionPromptTokens
-        yield* session.updateMessage(processor.message)
+        const compactionMessages = [
+          ...portableModelMessages,
+          {
+            role: "user" as const,
+            content: [{ type: "text" as const, text: nativeFallbackReason ? `${nextPrompt}\n\nNative compaction was unavailable; preserve the full required context in this portable summary.` : nextPrompt }],
+          },
+        ]
+        const compactionPromptTokens = Token.estimatePayload(compactionMessages)
+        const compactionPromptOverflow = yield* isPromptOverflow({
+          tokens: compactionPromptTokens,
+          model,
+          respectAuto: false,
+          mode: "hard",
+        })
+        result = compactionPromptOverflow
+          ? "compact"
+          : yield* processor.process({
+              user: userMessage,
+              agent,
+              sessionID: input.sessionID,
+              tools: {},
+              system: [],
+              messages: compactionMessages,
+              model,
+              ...(portableMethod === "incremental" ? { maxOutputTokens: maxSummaryTokens } : {}),
+            })
+
+        if (result === "compact") {
+          const rescue = localRescueSummary({
+            previousSummary,
+            context,
+            reason: compactionPromptOverflow
+              ? `compaction prompt estimate ${compactionPromptTokens} tokens exceeded the effective provider/model threshold before request dispatch`
+              : "provider/model reported compaction prompt overflow",
+          })
+          yield* session.updatePart({
+            id: PartID.ascending(),
+            messageID: processor.message.id,
+            sessionID: input.sessionID,
+            type: "text",
+            text: rescue,
+            time: { start: Date.now(), end: Date.now() },
+          })
+          processor.message.error = undefined
+          processor.message.finish = "stop"
+          processor.message.time.completed = Date.now()
+          processor.message.tokens.input = compactionPromptTokens
+          yield* session.updateMessage(processor.message)
+        }
+        resultMessage = processor.message
       }
 
       const currentBackgroundTaskSnapshots = yield* Effect.sync(() => BackgroundTask.listSnapshots(input.sessionID))
@@ -1677,7 +2058,7 @@ export const layer: Layer.Layer<
       const resumeRequested = latestCompactionPart?.resume ?? input.resume ?? (input.auto && input.overflow)
       let shouldResume = (result === "continue" || result === "compact") && resumeRequested === true
 
-      if (!processor.message.error && postPrompt && (result === "continue" || result === "compact")) {
+      if (!resultMessage.error && postPrompt && (result === "continue" || result === "compact")) {
         if (!MessageV2.hasCompactionPostPrompt(input.sessionID, input.parentID)) {
           const postPromptMsg = yield* session.updateMessage({
             id: MessageID.ascending(),
@@ -1769,7 +2150,7 @@ export const layer: Layer.Layer<
         }
       }
 
-      if (processor.message.error) return "stop"
+      if (resultMessage.error) return "stop"
       if (result === "continue" || result === "compact") {
         const summary = summaryText(
           yield* Effect.sync(() => MessageV2.get({ sessionID: input.sessionID, messageID: msg.id })),
@@ -1827,6 +2208,7 @@ export const layer: Layer.Layer<
       isOverflow,
       isPromptOverflow,
       prune,
+      nativeContext,
       process: processCompaction,
       create,
     })
@@ -1843,6 +2225,7 @@ export const defaultLayer = Layer.suspend(() =>
     Layer.provide(Bus.layer),
     Layer.provide(Config.defaultLayer),
     Layer.provide(Todo.defaultLayer),
+    Layer.provide(Auth.defaultLayer),
   ),
 )
 

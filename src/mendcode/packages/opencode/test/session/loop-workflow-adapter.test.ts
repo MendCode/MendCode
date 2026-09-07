@@ -147,6 +147,7 @@ function adapterLayers(input: {
         show: input.show,
         remove: unused,
         setWorkspaceLease: unused,
+        recordCompoundLedger: unused,
         events: unused,
         artifacts: unused,
         claimCompletionAudit: unused,

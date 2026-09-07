@@ -35,6 +35,7 @@ import { CrossSpawnSpawner } from "@mendcode/core/cross-spawn-spawner"
 import { TestConfig } from "../fixture/config"
 import { Question } from "../../src/question"
 import { compactionThresholdPercent } from "../../src/session/overflow"
+import { Auth } from "../../src/auth"
 
 void Log.init({ print: false })
 
@@ -107,6 +108,16 @@ const agentLayer = Layer.succeed(
         whenToUse: "test",
         systemPrompt: "test",
       }),
+  }),
+)
+
+const authLayer = Layer.succeed(
+  Auth.Service,
+  Auth.Service.of({
+    get: () => Effect.succeed(undefined),
+    all: () => Effect.succeed<Record<string, Auth.Info>>({}),
+    set: () => Effect.void,
+    remove: () => Effect.void,
   }),
 )
 
@@ -281,6 +292,7 @@ function runtime(
       Layer.provide(bus),
       Layer.provide(config),
       Layer.provide(Todo.defaultLayer),
+      Layer.provide(authLayer),
     ),
   )
 }
@@ -294,6 +306,7 @@ const deps = Layer.mergeAll(
   Bus.layer,
   Config.defaultLayer,
   Todo.defaultLayer,
+  authLayer,
 )
 
 const env = Layer.mergeAll(
@@ -356,6 +369,7 @@ function liveRuntime(layer: Layer.Layer<LLM.Service>, provider = ProviderTest.fa
       Layer.provide(bus),
       Layer.provide(config),
       Layer.provide(Todo.defaultLayer),
+      Layer.provide(authLayer),
     ) as unknown as Layer.Layer<SessionCompaction.Service | BackgroundTask.Service | Bus.Service, never, never>,
   )
 }
@@ -4101,5 +4115,48 @@ describe("SessionNs.getUsage", () => {
     expect(result.tokens.input).toBe(500)
     expect(result.tokens.cache.read).toBe(200)
     expect(result.tokens.cache.write).toBe(300)
+  })
+
+  test("uses incremental portable mode and enforces its summary output cap", async () => {
+    await using tmp = await tmpdir({ git: true })
+    const stub = llm()
+    let captured: LLM.StreamInput | undefined
+    stub.push(reply("bounded summary", (input) => (captured = input)))
+    await WithInstance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const session = await svc.create({})
+        const parent = await user(session.id, "preserve this latest intent")
+        await SessionCompaction.create({
+          sessionID: session.id,
+          agent: "build",
+          model: ref,
+          auto: false,
+        })
+        const rt = liveRuntime(
+          stub.layer,
+          wide(),
+          cfg({ portable_mode: "incremental", max_summary_tokens: 768, tail_turns: 0 }),
+        )
+        try {
+          const messages = await svc.messages({ sessionID: session.id })
+          await rt.runPromise(
+            SessionCompaction.Service.use((service) =>
+              service.process({
+                parentID: messages.at(-1)?.info.id ?? parent.id,
+                messages,
+                sessionID: session.id,
+                auto: false,
+              }),
+            ),
+          )
+          expect(captured?.maxOutputTokens).toBe(768)
+          expect(llmInputText(captured!)).toContain("Portable incremental compaction mode")
+          expect(llmInputText(captured!)).toContain("preserve this latest intent")
+        } finally {
+          await rt.dispose()
+        }
+      },
+    })
   })
 })
