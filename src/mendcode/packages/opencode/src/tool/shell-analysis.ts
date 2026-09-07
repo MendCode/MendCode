@@ -1,5 +1,6 @@
-import { createHash } from "node:crypto"
+import { createHash, createHmac, randomBytes } from "node:crypto"
 import path from "node:path"
+import type { Node } from "web-tree-sitter"
 
 export const ACTION_FACTS_VERSION = 1 as const
 export const MAX_ACTION_COMMAND_BYTES = 32 * 1024
@@ -34,105 +35,67 @@ function digest(value: string) {
   return createHash("sha256").update(value).digest("hex")
 }
 
+const environmentKey = randomBytes(32)
+
 function environmentDigest(environment: NodeJS.ProcessEnv) {
   // The reviewer needs to know whether the execution environment changed, but
   // audit records must never contain environment values or their secrets.
-  return digest(
-    Object.keys(environment)
-      .sort()
-      .map((key) => `${key}\u0000${environment[key] === undefined ? "missing" : "present"}`)
-      .join("\u0001"),
-  )
+  return createHmac("sha256", environmentKey)
+    .update(JSON.stringify(Object.keys(environment).sort().map((key) => [key, environment[key] ?? null])))
+    .digest("hex")
 }
 
-function splitSegments(command: string) {
-  const segments: string[] = []
-  let current = ""
-  let quote: "'" | '"' | undefined
-  let escaped = false
-
-  for (let index = 0; index < command.length; index++) {
-    const char = command[index]
-    const next = command[index + 1]
-    if (escaped) {
-      current += char
-      escaped = false
-      continue
+function astSegments(root: Node | undefined) {
+  const unknownReasons: string[] = []
+  const argvSegments: string[][] = []
+  let astNodes = 0
+  if (!root) return { argvSegments, astNodes, unknownReasons: ["shell_ast_missing"] }
+  const stack = [root]
+  while (stack.length > 0) {
+    const node = stack.pop()!
+    if (++astNodes > MAX_ACTION_AST_NODES || astNodes + stack.length + node.childCount > MAX_ACTION_AST_NODES) {
+      unknownReasons.push("ast_budget_exceeded")
+      break
     }
-    if (quote) {
-      current += char
-      if (char === quote) quote = undefined
-      if (char === "\\" && quote === '"') escaped = true
-      continue
+    if (node.isError || node.isMissing) unknownReasons.push("shell_ast_incomplete")
+    if (node.type === "command") {
+      const args: string[] = []
+      for (const child of node.namedChildren) {
+        if (!child) {
+          unknownReasons.push("shell_ast_incomplete")
+          continue
+        }
+        const value = literalArgument(child)
+        if (value === undefined) unknownReasons.push("unsupported_shell_argument")
+        else args.push(value)
+      }
+      argvSegments.push(args)
     }
-    if (char === "\\") {
-      current += char
-      escaped = true
-      continue
+    // This is deliberately a small grammar, not a second shell parser.
+    // Expansions, assignments, redirects, background jobs and control flow
+    // must not inherit the classification of a nested read command.
+    if (![
+      "program", "list", "pipeline", "command", "command_name",
+      "word", "raw_string", "string", "string_content",
+      "&&", "||", "|", ";", "'", '"',
+    ].includes(node.type)) unknownReasons.push("unsupported_shell_grammar:" + node.type)
+    for (let index = node.childCount - 1; index >= 0; index--) {
+      const child = node.child(index)
+      if (child) stack.push(child)
     }
-    if (char === "'" || char === '"') {
-      current += char
-      quote = char
-      continue
-    }
-    if (char === ";" || char === "\n" || char === "\r" || char === "|" || (char === "&" && next === "&")) {
-      segments.push(current.trim())
-      current = ""
-      if (char === "|" && next === "|") index++
-      if (char === "&") index++
-      continue
-    }
-    current += char
   }
-  if (quote || escaped) return
-  segments.push(current.trim())
-  return segments.filter(Boolean)
+  return { argvSegments, astNodes, unknownReasons }
 }
 
-function tokens(segment: string) {
-  const result: string[] = []
-  let current = ""
-  let quote: "'" | '"' | undefined
-  let escaped = false
-  const push = () => {
-    if (current) result.push(current)
-    current = ""
+function literalArgument(node: Node): string | undefined {
+  if (node.type === "command_name" && node.namedChildCount === 1) return literalArgument(node.namedChild(0)!)
+  if (node.type === "raw_string") return node.text.slice(1, -1)
+  if (node.type === "string" && node.namedChildren.every((child) => child?.type === "string_content")) {
+    // Escapes require dialect-specific interpretation; retain manual review.
+    if (node.text.includes("\\")) return
+    return node.text.slice(1, -1)
   }
-  for (const char of segment) {
-    if (escaped) {
-      current += char
-      escaped = false
-      continue
-    }
-    if (quote) {
-      if (char === quote) {
-        quote = undefined
-        continue
-      }
-      if (char === "\\" && quote === '"') {
-        escaped = true
-        continue
-      }
-      current += char
-      continue
-    }
-    if (char === "\\") {
-      escaped = true
-      continue
-    }
-    if (char === "'" || char === '"') {
-      quote = char
-      continue
-    }
-    if (/\s/.test(char)) {
-      push()
-      continue
-    }
-    current += char
-  }
-  if (quote || escaped) return
-  push()
-  return result
+  if (node.type === "word" && ![...node.text].some((char) => "\\$`*?[]{}~".includes(char))) return node.text
 }
 
 function commandName(value: string) {
@@ -193,23 +156,25 @@ export function analyzeShellCommand(input: {
   cwd: string
   dialect?: "bash" | "powershell" | "cmd"
   environment?: NodeJS.ProcessEnv
+  root?: Node
 }): ActionFactsV1 {
   const environment = input.environment ?? process.env
   const unknownReasons: string[] = []
   const readTargets: string[] = []
   const writeTargets: string[] = []
   const executableIdentities: string[] = []
-  const segments = splitSegments(input.command)
-  const argvSegments =
-    segments?.flatMap((segment) => {
-      const parsed = tokens(segment)
-      return parsed ? [parsed] : []
-    }) ?? []
   const commandBytes = Buffer.byteLength(input.command, "utf8")
-  const astNodes = argvSegments.reduce((count, segment) => count + 1 + segment.length, 0)
+  const { argvSegments, astNodes, unknownReasons: grammarReasons } = astSegments(
+    commandBytes <= MAX_ACTION_COMMAND_BYTES ? input.root : undefined,
+  )
+  unknownReasons.push(...grammarReasons)
+  // Parsing is not an executable identity proof. Until the semantic adapter
+  // verifies the binary, startup files and command-specific configuration,
+  // shell commands require review even when their names look read-only.
+  unknownReasons.push("shell_execution_identity_unverified")
   if (commandBytes > MAX_ACTION_COMMAND_BYTES) unknownReasons.push("command_too_large")
   if (astNodes > MAX_ACTION_AST_NODES) unknownReasons.push("ast_budget_exceeded")
-  if (/[^\x09\x0A\x0D\x20-\x7E]/u.test(input.command)) unknownReasons.push("invisible_or_non_ascii_control")
+  if (/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/u.test(input.command)) unknownReasons.push("invisible_or_non_ascii_control")
   if (/\$\(|\$\{|`|\b(?:eval|exec)\b/i.test(input.command)) unknownReasons.push("dynamic_shell_evaluation")
   if (/\b(?:rm|del|erase|remove-item|move-item|mv|cp|copy-item|curl|wget|nc|ssh)\b/i.test(input.command)) {
     unknownReasons.push("write_or_network_capability")

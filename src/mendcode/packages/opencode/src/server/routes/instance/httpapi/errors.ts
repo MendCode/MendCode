@@ -19,6 +19,27 @@ export class ApiNotFoundError extends Schema.ErrorClass<ApiNotFoundError>("NotFo
   { httpApiStatus: 404 },
 ) {}
 
+const AIConfigErrorFields = {
+  code: Schema.String,
+  message: Schema.String,
+  details: Schema.NullOr(Schema.Record(Schema.String, Schema.Unknown)),
+}
+
+export class ApiForbiddenError extends Schema.ErrorClass<ApiForbiddenError>("AIConfigForbiddenError")(
+  AIConfigErrorFields,
+  { httpApiStatus: 403 },
+) {}
+
+export class ApiConflictError extends Schema.ErrorClass<ApiConflictError>("AIConfigConflictError")(
+  AIConfigErrorFields,
+  { httpApiStatus: 409 },
+) {}
+
+export class ApiUnprocessableError extends Schema.ErrorClass<ApiUnprocessableError>("AIConfigUnavailableError")(
+  AIConfigErrorFields,
+  { httpApiStatus: 422 },
+) {}
+
 export function badRequest(error: Record<string, unknown>) {
   return new ApiBadRequestError({
     success: false,

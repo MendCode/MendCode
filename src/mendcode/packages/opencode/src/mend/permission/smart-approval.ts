@@ -510,6 +510,9 @@ export function isDeterministicallyScopedReadOnlyInspection(request: SmartPermis
   if (request.permission === "external_directory") return false
   if (request.permission !== ShellID.ToolID && request.permission !== "bash") return false
   if (classifySmartPermissionTaskIntent(userPrompt) !== "inspection") return false
+  // Host facts take precedence over the legacy textual classifier. A reviewer
+  // must not turn an incomplete host analysis back into a deterministic allow.
+  if (request.metadata?.actionFacts !== undefined) return isSafeSmartAutoApprovalRequest(request)
   if (!isReadOnlySmartPermissionRequest(request)) return false
   return requestCommands(request).every(isWorkspaceBoundInspectionCommand)
 }
@@ -554,6 +557,7 @@ export function normalizeSmartPermissionDecision(
   if (
     decision.decision === "allow" &&
     (decision.scope !== "exact" ||
+      (facts !== undefined && structuredFacts?.analysisComplete !== true) ||
       (!structuredFacts?.analysisComplete &&
         (decision.risk !== undefined || !isReadOnlySmartPermissionRequest(request))) ||
       !["low", "medium"].includes(risk) ||
@@ -592,6 +596,10 @@ function isSafeShellRequest(request: SmartPermissionRequest) {
 
 export function isReadOnlySmartPermissionRequest(request: SmartPermissionRequest) {
   if (request.permission === ShellID.ToolID || request.permission === "bash") {
+    const facts = request.metadata?.actionFacts
+    if (facts !== undefined) {
+      return Boolean(facts && typeof facts === "object" && isBoundedShellInspection(facts as ActionFactsV1))
+    }
     const commands = requestCommands(request)
     return !requestHasSuspiciousText(request) && commands.length > 0 && commands.every(isStrictWorkspaceReadOnlyCommand)
   }

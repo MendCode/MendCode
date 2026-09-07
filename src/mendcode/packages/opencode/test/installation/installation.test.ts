@@ -3,7 +3,7 @@ import { Effect, Layer, PlatformError, Stream } from "effect"
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import { Installation } from "../../src/installation"
-import { writeChannel } from "../../src/installation/release-channel"
+import { readChannel, writeChannel } from "../../src/installation/release-channel"
 import { createHash } from "node:crypto"
 import { supportedMigrationJournal } from "../../src/storage/migration-journal"
 
@@ -104,6 +104,20 @@ describe("installation", () => {
   })
 
   describe("latest", () => {
+    test("explicit channel discovery is read-only and cannot fall back to stable", async () => {
+      await writeChannel("stable")
+      const layer = testLayer(() => jsonResponse([
+        { tag_name: "v0.1.44-beta.4", prerelease: true },
+        { tag_name: "v0.1.44-beta.5", prerelease: true, draft: true },
+        { tag_name: "v9.0.0", prerelease: false },
+      ]))
+      expect(await Effect.runPromise(Installation.Service.use((svc) => svc.latest("curl", "beta")).pipe(Effect.provide(layer)))).toBe("0.1.44-beta.4")
+      expect(await readChannel()).toBe("stable")
+      const empty = testLayer(() => jsonResponse([{ tag_name: "v0.1.44", prerelease: false }]))
+      await expect(Effect.runPromise(Installation.Service.use((svc) => svc.latest("curl", "beta")).pipe(Effect.provide(empty))))
+        .rejects.toThrow("No published beta release")
+      expect(await readChannel()).toBe("stable")
+    })
     test("selects the highest channel version across publication-order pages", async () => {
       await writeChannel("beta")
       try {
@@ -151,6 +165,34 @@ describe("installation", () => {
   })
 
   describe("upgrade", () => {
+    test("commits a requested channel only after installed-version verification", async () => {
+      await writeChannel("beta")
+      try {
+        const mismatch = testLayer(installerResponse, (_cmd, args) => args.includes("--version") ? "0.1.24" : "")
+        await expect(Effect.runPromise(Installation.Service.use((svc) => svc.upgrade("curl", "0.1.25", undefined, "stable"))
+          .pipe(Effect.provide(mismatch)))).rejects.toMatchObject({ stderr: expect.stringContaining("did not install the requested version") })
+        expect(await readChannel()).toBe("beta")
+        let versionChecks = 0
+        const verified = testLayer(installerResponse, (cmd, args) => {
+          if (cmd !== process.execPath || args.length !== 1 || args[0] !== "--version") return ""
+          return ++versionChecks === 1 ? "0.1.24" : "0.1.25"
+        })
+        expect(await Effect.runPromise(Installation.Service.use((svc) => svc.upgrade("curl", "0.1.25", undefined, "stable"))
+          .pipe(Effect.provide(verified)))).toBe("installed")
+        expect(await readChannel()).toBe("stable")
+        expect(versionChecks).toBe(2)
+      } finally { await writeChannel("stable") }
+    })
+
+    test("a mismatched requested channel is rejected before installer access", async () => {
+      let requests = 0
+      const layer = testLayer(() => { requests++; throw new Error("unexpected request") })
+      await expect(Effect.runPromise(Installation.Service.use((svc) => svc.upgrade("curl", "0.1.25", undefined, "beta"))
+        .pipe(Effect.provide(layer)))).rejects.toMatchObject({ stderr: expect.stringContaining("does not match") })
+      expect(requests).toBe(0)
+      expect(await readChannel()).toBe("stable")
+    })
+
     test("delivers installer phases to the caller while consuming output", async () => {
       const phases: string[] = []
       const layer = testLayer(installerResponse, (cmd, args) =>

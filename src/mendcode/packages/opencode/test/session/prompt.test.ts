@@ -71,6 +71,7 @@ import { Snapshot } from "../../src/snapshot"
 import { ToolRegistry } from "@/tool/registry"
 import { Truncate } from "@/tool/truncate"
 import { Auth } from "@/auth"
+import { AIConfiguration } from "@/mend/runtime/ai-configuration"
 import * as Log from "@mendcode/core/util/log"
 import { CrossSpawnSpawner } from "@mendcode/core/cross-spawn-spawner"
 import * as Database from "../../src/storage/db"
@@ -398,6 +399,7 @@ function makeHttp() {
     lsp,
     mcp,
     AppFileSystem.defaultLayer,
+    Auth.defaultLayer,
     status,
     BackgroundTask.layer.pipe(Layer.provide(bus)),
     WorkflowService.defaultLayer,
@@ -419,6 +421,7 @@ function makeHttp() {
     Layer.provideMerge(question),
     Layer.provideMerge(planReview),
     Layer.provideMerge(deps),
+    Layer.provide(AIConfiguration.defaultLayer),
   )
   const trunc = Truncate.layer.pipe(Layer.provideMerge(deps))
   const proc = SessionProcessor.layer.pipe(Layer.provide(summary), Layer.provideMerge(deps))
@@ -4961,6 +4964,55 @@ unix(
 )
 
 unix(
+  "cancel-turn fences a direct shell by its user message and permits a later explicit shell",
+  () =>
+    withSh(() =>
+      provideTmpdirInstance(
+        () =>
+          Effect.gen(function* () {
+            const { prompt, run, chat } = yield* boot()
+            const sessions = yield* Session.Service
+            const messageID = MessageID.ascending()
+            const shell = yield* prompt
+              .shell({ sessionID: chat.id, messageID, agent: "build", command: "sleep 30" })
+              .pipe(Effect.forkChild)
+            yield* Effect.gen(function* () {
+              while (true) {
+                const messages = yield* sessions.messages({ sessionID: chat.id })
+                if (
+                  messages.some(
+                    (message) =>
+                      message.info.role === "assistant" &&
+                      message.info.parentID === messageID &&
+                      message.parts.some((part) => part.type === "tool" && part.state.status === "running"),
+                  )
+                )
+                  return
+                yield* Effect.sleep("1 millis")
+              }
+            }).pipe(Effect.timeout("2 seconds"))
+            expect(yield* prompt.cancelTurn({ sessionID: chat.id, targetMessageID: MessageID.ascending() })).toBe(
+              "target_mismatch",
+            )
+            expect(yield* run.isBusy(chat.id)).toBe(true)
+            expect(yield* prompt.cancelTurn({ sessionID: chat.id, targetMessageID: messageID })).toBe("cancelled")
+            const result = yield* Fiber.join(shell).pipe(Effect.timeout("5 seconds"))
+            expect(result.info.role).toBe("assistant")
+            expect(
+              result.parts.some((part) => part.type === "tool" && ["running", "pending"].includes(part.state.status)),
+            ).toBe(false)
+            expect(yield* run.isBusy(chat.id)).toBe(false)
+            const next = yield* prompt.shell({ sessionID: chat.id, agent: "build", command: "printf resumed" })
+            const output = completedTool(next.parts)
+            expect(output?.state.output).toContain("resumed")
+          }),
+        { git: true, config: cfg },
+      ),
+    ),
+  30_000,
+)
+
+unix(
   "cancel persists aborted shell result when shell ignores TERM",
   () =>
     withSh(() =>
@@ -5755,29 +5807,40 @@ it.live(
 
 it.live("Code Mode persists nested reads but sends only final output to the model", () =>
   provideTmpdirServer(
-    ({ dir, llm }) => Effect.gen(function* () {
-      const prompt = yield* SessionPrompt.Service
-      const sessions = yield* Session.Service
-      const session = yield* sessions.create({ title: "Code Mode", permission: [{ permission: "*", pattern: "*", action: "allow" }] })
-      const file = path.join(dir, "code-probe.txt")
-      yield* Effect.promise(() => Bun.write(file, "private intermediate payload"))
-      yield* prompt.prompt({ sessionID: session.id, agent: "build", noReply: true, parts: [{ type: "text", text: "Read the probe and return only its length." }] })
-      yield* llm.tool("code", { code: `const result = await tools.read({filePath: ${JSON.stringify(file)}}); return result.output.length` })
-      yield* llm.text("done")
-      yield* prompt.loop({ sessionID: session.id })
-      expect(JSON.stringify(yield* llm.inputs)).not.toContain("private intermediate payload")
-      const messages = yield* sessions.messages({ sessionID: session.id })
-      const parts = messages.flatMap((item) => item.parts)
-      const child = parts.find((part) => part.type === "tool" && part.tool === "read")
-      expect(child?.type === "tool" && child.state.status).toBe("completed")
-      expect(child?.type === "tool" && child.metadata?.codeMode).toBeDefined()
-      const parent = parts.find((part) => part.type === "tool" && part.tool === "code")
-      expect(parent?.type === "tool" && parent.state.status).toBe("completed")
-      if (parent?.type === "tool" && parent.state.status === "completed") {
-        expect(JSON.parse(parent.state.output).ok).toBe(true)
-        expect(parent.state.output).not.toContain("private intermediate payload")
-      }
-    }),
+    ({ dir, llm }) =>
+      Effect.gen(function* () {
+        const prompt = yield* SessionPrompt.Service
+        const sessions = yield* Session.Service
+        const session = yield* sessions.create({
+          title: "Code Mode",
+          permission: [{ permission: "*", pattern: "*", action: "allow" }],
+        })
+        const file = path.join(dir, "code-probe.txt")
+        yield* Effect.promise(() => Bun.write(file, "private intermediate payload"))
+        yield* prompt.prompt({
+          sessionID: session.id,
+          agent: "build",
+          noReply: true,
+          parts: [{ type: "text", text: "Read the probe and return only its length." }],
+        })
+        yield* llm.tool("code", {
+          code: `const result = await tools.read({filePath: ${JSON.stringify(file)}}); return result.output.length`,
+        })
+        yield* llm.text("done")
+        yield* prompt.loop({ sessionID: session.id })
+        expect(JSON.stringify(yield* llm.inputs)).not.toContain("private intermediate payload")
+        const messages = yield* sessions.messages({ sessionID: session.id })
+        const parts = messages.flatMap((item) => item.parts)
+        const child = parts.find((part) => part.type === "tool" && part.tool === "read")
+        expect(child?.type === "tool" && child.state.status).toBe("completed")
+        expect(child?.type === "tool" && child.metadata?.codeMode).toBeDefined()
+        const parent = parts.find((part) => part.type === "tool" && part.tool === "code")
+        expect(parent?.type === "tool" && parent.state.status).toBe("completed")
+        if (parent?.type === "tool" && parent.state.status === "completed") {
+          expect(JSON.parse(parent.state.output).ok).toBe(true)
+          expect(parent.state.output).not.toContain("private intermediate payload")
+        }
+      }),
     { git: true, config: (url) => ({ ...providerCfg(url), experimental: { code_mode: true } }) },
   ),
 )

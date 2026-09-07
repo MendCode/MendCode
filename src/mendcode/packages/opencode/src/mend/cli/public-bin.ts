@@ -61,7 +61,7 @@ type ShortcutWorktreeTarget = {
   label: string
 }
 
-const controlPlaneRoutes: Record<string, (args: string[]) => string[]> = {
+export const controlPlaneRoutes: Record<string, (args: string[]) => string[]> = {
   init: () => ["project", "init"],
   sync: () => ["project", "sync"],
   status: () => ["system", "status"],

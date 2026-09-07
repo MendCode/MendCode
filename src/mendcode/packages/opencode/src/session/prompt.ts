@@ -588,7 +588,10 @@ export const layer = Layer.effect(
       yield* backgroundTasks.dismissNotifications(sessionID)
     })
 
-    const cancelPeerExchanges = Effect.fn("SessionPrompt.cancelPeerExchanges")(function* (sessionID: SessionID) {
+    const cancelPeerExchanges = Effect.fn("SessionPrompt.cancelPeerExchanges")(function* (
+      sessionID: SessionID,
+      cancelQueued = true,
+    ) {
       const messages = yield* sessions.messages({ sessionID, view: "full" })
       const answered = new Set(
         messages.flatMap((message) => (message.info.role === "assistant" ? [message.info.parentID] : [])),
@@ -608,7 +611,7 @@ export const layer = Layer.effect(
           })
         }
         yield* sessions.updateMessage({ ...message.info, queued: false })
-        yield* state.cancelQueued(sessionID, message.info.id)
+        if (cancelQueued) yield* state.cancelQueued(sessionID, message.info.id)
       }
       const commands = (yield* agentCommands.list()).filter(
         (command) =>
@@ -716,20 +719,21 @@ export const layer = Layer.effect(
 
     const cancelTurn = Effect.fn("SessionPrompt.cancelTurn")(function* (input: CancelTurnInput) {
       yield* elog.info("cancel-turn", { ...input, important: true })
-      // The user explicitly asked this session to stop. Suppress pending owner
-      // wakes even when the targeted turn crossed into terminal state before
-      // the cancel request reached the runner.
-      yield* cancelOwnerWakeSession(input.sessionID)
-      const active = promptAbortControllers.get(input.sessionID)
-      if (active?.targetMessageID === input.targetMessageID || (!active && !(yield* state.isBusy(input.sessionID)))) {
-        yield* cancelPeerExchanges(input.sessionID)
-      }
+      const context = yield* InstanceState.context
       let interruptedAssistantID: MessageID | undefined
       let markedUserAbort = false
       const result = yield* state
         .cancelTurn(input.sessionID, input.targetMessageID, {
           ignoreInterruptible: true,
           before: Effect.gen(function* () {
+            // The runner holds the target fence while preparing these effects.
+            // A stale stop must not dismiss notifications or peer work owned
+            // by a newer explicit turn, including one already completed.
+            ContinuityMailbox.cancelGeneration(input.sessionID, context.directory)
+            yield* cancelOwnerWakeSession(input.sessionID)
+            // cancelTurn drops the complete runner queue under this same lock;
+            // do not recursively acquire it for each durable peer marker.
+            yield* cancelPeerExchanges(input.sessionID, false)
             promptAbortReasons.set(input.sessionID, "user")
             markedUserAbort = true
             const orphanedAssistant = yield* sessions.findMessage(
@@ -740,6 +744,7 @@ export const layer = Layer.effect(
                 !msg.info.time.completed,
             )
             if (Option.isSome(orphanedAssistant)) interruptedAssistantID = orphanedAssistant.value.info.id
+            const active = promptAbortControllers.get(input.sessionID)
             if (active?.targetMessageID === input.targetMessageID) active.controller.abort("user")
           }),
         })
@@ -1212,12 +1217,17 @@ NOTE: At any point in time through this workflow you should feel free to ask the
       model: Provider.Model
       session: Session.Info
       tools?: Record<string, boolean>
-      processor: Pick<SessionProcessor.Handle, "message" | "updateToolCall" | "completeToolCall" | "startToolCall" | "failToolCall">
+      toolMode?: "normal" | "none"
+      processor: Pick<
+        SessionProcessor.Handle,
+        "message" | "updateToolCall" | "completeToolCall" | "startToolCall" | "failToolCall"
+      >
       bypassAgentCheck: boolean
       messages: MessageV2.WithParts[]
       abort: AbortSignal
     }) {
       using _ = log.time("resolveTools")
+      if (input.toolMode === "none") return {}
       const tools: Record<string, AITool> = {}
       const run = yield* runner()
       const promptOps = yield* ops()
@@ -1483,40 +1493,75 @@ NOTE: At any point in time through this workflow you should feel free to ask the
         tools[key] = item
       }
 
-      const disabled = Permission.disabled(Object.keys(tools), Permission.merge(input.agent.permission, input.session.permission ?? []))
-      const available = Object.fromEntries(Object.entries(tools).filter(([name]) => !disabled.has(name) && input.tools?.[name] !== false))
-      if ((yield* config.get()).experimental?.code_mode === true && input.tools?.code !== false &&
-          !Permission.disabled(["code"], Permission.merge(input.agent.permission, input.session.permission ?? [])).has("code")) {
+      const disabled = Permission.disabled(
+        Object.keys(tools),
+        Permission.merge(input.agent.permission, input.session.permission ?? []),
+      )
+      const available = Object.fromEntries(
+        Object.entries(tools).filter(([name]) => !disabled.has(name) && input.tools?.[name] !== false),
+      )
+      if (
+        (yield* config.get()).experimental?.code_mode === true &&
+        input.tools?.code !== false &&
+        !Permission.disabled(["code"], Permission.merge(input.agent.permission, input.session.permission ?? [])).has(
+          "code",
+        )
+      ) {
         const nested = { ...available }
         available.code = tool({
-          description: "Run bounded JavaScript to compose tools and return only the needed result. Use await tools.search({query: ...}) to inspect available signatures, then await tools.name(args). No filesystem, network, imports or process globals. Maximum 16 calls, 30 seconds, 32 KiB source and 24 KiB final output. Each tool retains its normal permissions. Return a concise value; intermediate results stay out of model context. Images should be read directly outside code.",
-          inputSchema: jsonSchema<{ code: string }>({ type: "object", properties: { code: { type: "string", maxLength: 32768 } }, required: ["code"], additionalProperties: false }),
+          description:
+            "Run bounded JavaScript to compose tools and return only the needed result. Use await tools.search({query: ...}) to inspect available signatures, then await tools.name(args). No filesystem, network, imports or process globals. Maximum 16 calls, 30 seconds, 32 KiB source and 24 KiB final output. Each tool retains its normal permissions. Return a concise value; intermediate results stay out of model context. Images should be read directly outside code.",
+          inputSchema: jsonSchema<{ code: string }>({
+            type: "object",
+            properties: { code: { type: "string", maxLength: 32768 } },
+            required: ["code"],
+            additionalProperties: false,
+          }),
           async execute(args, options) {
             if (typeof args.code !== "string") throw new Error("code must be a string")
             const result = await executeCode({
-              code: args.code, tools: nested,
+              code: args.code,
+              tools: nested,
               signal: options.abortSignal ? AbortSignal.any([input.abort, options.abortSignal]) : input.abort,
               async invoke(name, args, signal) {
                 const callID = `code_${crypto.randomUUID()}`
-                await run.promise(input.processor.startToolCall(callID, name, args as Record<string, unknown>, options.toolCallId))
+                await run.promise(
+                  input.processor.startToolCall(callID, name, args as Record<string, unknown>, options.toolCallId),
+                )
                 try {
-                  const result = await nested[name].execute!(args, { ...options, toolCallId: callID, abortSignal: signal })
+                  const result = await nested[name].execute!(args, {
+                    ...options,
+                    toolCallId: callID,
+                    abortSignal: signal,
+                  })
                   // Media remains stored with the child tool, never copied as base64 into interpreter data.
                   const { attachments, content, ...data } = result as Record<string, unknown>
-                  return { ...data, ...(attachments ? { media: "Use the tool directly to view its media attachments." } : {}) }
+                  return {
+                    ...data,
+                    ...(attachments ? { media: "Use the tool directly to view its media attachments." } : {}),
+                  }
                 } catch (error) {
                   await run.promise(input.processor.failToolCall(callID, error))
                   throw error
                 }
               },
             })
-            return { title: "Code Mode", output: JSON.stringify(result), metadata: { codeMode: true, truncated: Boolean(result.truncated) } }
+            return {
+              title: "Code Mode",
+              output: JSON.stringify(result),
+              metadata: { codeMode: true, truncated: Boolean(result.truncated) },
+            }
           },
         })
       }
-      return (yield* config.get()).experimental?.tool_discovery === false || input.tools?.tool_search === false ||
-        Permission.disabled(["tool_search"], Permission.merge(input.agent.permission, input.session.permission ?? [])).has("tool_search")
-        ? available : withToolDiscovery(available, input.messages)
+      return (yield* config.get()).experimental?.tool_discovery === false ||
+        input.tools?.tool_search === false ||
+        Permission.disabled(
+          ["tool_search"],
+          Permission.merge(input.agent.permission, input.session.permission ?? []),
+        ).has("tool_search")
+        ? available
+        : withToolDiscovery(available, input.messages)
     })
 
     const handleSubtask = Effect.fn("SessionPrompt.handleSubtask")(function* (input: {
@@ -2032,6 +2077,8 @@ NOTE: At any point in time through this workflow you should feel free to ask the
         sessionID: input.sessionID,
         time: existing?.info.time ?? { created: Date.now() },
         tools: input.tools ?? existing?.info.tools,
+        toolMode: input.toolMode ?? existing?.info.toolMode,
+        maxOutputTokens: input.maxOutputTokens ?? existing?.info.maxOutputTokens,
         agent: ag.name,
         model: {
           providerID: model.providerID,
@@ -2746,13 +2793,14 @@ NOTE: At any point in time through this workflow you should feel free to ask the
             session,
             model,
             tools: lastUser.tools,
+            toolMode: lastUser.toolMode,
             processor: handle,
             bypassAgentCheck,
             messages: msgs,
             abort,
           })
 
-          if (lastUser.format?.type === "json_schema") {
+          if (lastUser.toolMode !== "none" && lastUser.format?.type === "json_schema") {
             tools["StructuredOutput"] = createStructuredOutputTool({
               schema: lastUser.format.schema,
               model,
@@ -2814,17 +2862,39 @@ NOTE: At any point in time through this workflow you should feel free to ask the
             .join("\n")
           // Freeze memory at its causal user boundary instead of rewriting the system prefix.
           if (lastUserMessage && !memorySnapshot(lastUserMessage)) {
-            const memory = yield* Effect.promise(() => SystemPrompt.mendMemory(model, projectRoot, memoryQuery, memoryMode))
+            const memory = yield* Effect.promise(() =>
+              SystemPrompt.mendMemory(model, projectRoot, memoryQuery, memoryMode),
+            )
             const part = yield* sessions.updatePart({
-              id: PartID.ascending(), sessionID, messageID: lastUser.id, type: "text",
+              id: PartID.ascending(),
+              sessionID,
+              messageID: lastUser.id,
+              type: "text",
               ...memorySnapshotContent(memory),
             })
             lastUserMessage.parts.push(part)
           }
-          const modelMsgs = yield* MessageV2.toModelMessagesEffect(msgs, model, {
+          const nativeContext = yield* compaction.nativeContext({
+            sessionID,
+            messages: msgs,
+            user: lastUser,
+            agent,
+            model,
             stripMedia: stripMediaForResume,
-            preserveMedia: (message, part) => model.capabilities.input.image === true && isCompactionResumeMessage(message) && part.mime.startsWith("image/"),
+            preserveMedia: (message, part) =>
+              model.capabilities.input.image === true &&
+              isCompactionResumeMessage(message) &&
+              part.mime.startsWith("image/"),
           })
+          const modelMsgs =
+            nativeContext?.messages ??
+            (yield* MessageV2.toModelMessagesEffect(msgs, model, {
+              stripMedia: stripMediaForResume,
+              preserveMedia: (message, part) =>
+                model.capabilities.input.image === true &&
+                isCompactionResumeMessage(message) &&
+                part.mime.startsWith("image/"),
+            }))
           const mendPrompt = yield* Effect.promise(() =>
             SystemPrompt.mendPromptSnapshot(model, projectRoot, { policy: promptPolicy, memory: "" }),
           )
@@ -2943,6 +3013,8 @@ NOTE: At any point in time through this workflow you should feel free to ask the
             tools,
             model,
             toolChoice: format.type === "json_schema" ? "required" : undefined,
+            toolMode: lastUser.toolMode,
+            maxOutputTokens: lastUser.maxOutputTokens,
           })
           if (!handle.message.error && !abort.aborted) ContinuityMailbox.acknowledgeEvents(continuityEvents)
           else if (continuityEvents.length) failedContinuityWakes.add(sessionID)
@@ -3660,11 +3732,15 @@ NOTE: At any point in time through this workflow you should feel free to ask the
     const shell: (input: ShellInput) => Effect.Effect<MessageV2.WithParts> = Effect.fn("SessionPrompt.shell")(
       function* (input: ShellInput) {
         const ready = yield* Latch.make()
+        const messageID = input.messageID ?? MessageID.ascending()
         return yield* state.startShell(
           input.sessionID,
           lastAssistant(input.sessionID),
-          shellImpl(input, ready).pipe(Effect.ensuring(Effect.sync(() => promptAbortReasons.delete(input.sessionID)))),
+          shellImpl({ ...input, messageID }, ready).pipe(
+            Effect.ensuring(Effect.sync(() => promptAbortReasons.delete(input.sessionID))),
+          ),
           ready,
+          messageID,
         )
       },
     )
@@ -4066,6 +4142,8 @@ export const PromptInput = Schema.Struct({
     description:
       "@deprecated tools and permissions have been merged, you can set permissions on the session itself now",
   }),
+  toolMode: Schema.optional(Schema.Literals(["normal", "none"])),
+  maxOutputTokens: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(1))),
   format: Schema.optional(MessageV2.Format),
   system: Schema.optional(Schema.String),
   variant: Schema.optional(Schema.String),

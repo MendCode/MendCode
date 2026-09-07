@@ -33,7 +33,6 @@ import { useRoute } from "@tui/context/route"
 import { useProject } from "@tui/context/project"
 import { useSync } from "@tui/context/sync"
 import {
-  sessionCancelResultNeedsHardAbort,
   sessionControlAllowsPrompt,
   resolveSessionControlRouting,
   useSessionControl,
@@ -2497,12 +2496,9 @@ export function Prompt(props: PromptProps) {
     }
     const cancel = targetMessageID
       ? withTimeout(sessionControl.drain(), 2000, "Session interrupt timed out")
-          .catch(() => false)
-          .then(async (delivered) => {
-            const control = sessionControl.status(sessionID)
-            const result = control.state === "stop_confirmed" ? control.result : undefined
-            if (sessionCancelResultNeedsHardAbort({ delivered, result })) await hardAbort()
-          })
+          // Unknown delivery remains in the targeted retry outbox. A stale
+          // target never authorizes a session-wide abort of a newer turn.
+          .then(() => undefined)
       : hardAbort()
     interruptRequest = cancel
       .catch(() => undefined)

@@ -9,6 +9,7 @@
     "typecheck": "tsgo --noEmit",
     "test": "bun test --timeout 30000",
     "test:queue-compaction:manual": "bun run script/queue-compaction-smoke.ts",
+    "test:compaction:canary": "bun run script/compaction-canary.ts",
     "test:session-runtime:smoke": "bun run script/session-runtime-smoke.ts",
     "test:incident:local": "bun run script/incident-local-smoke.ts",
     "dev:rearm": "bun run script/dev-rearm.ts",

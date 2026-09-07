@@ -35,10 +35,10 @@ function wrap(message: unknown): ReturnType<NamedError["toObject"]> {
 }
 
 describe("session.retry.delay", () => {
-  test("caps delay at 30 seconds when headers missing", () => {
+  test("caps provider delay at five seconds when headers are missing", () => {
     const error = apiError()
     const delays = Array.from({ length: 10 }, (_, index) => SessionRetry.delay(index + 1, error))
-    expect(delays).toStrictEqual([2000, 4000, 8000, 16000, 30000, 30000, 30000, 30000, 30000, 30000])
+    expect(delays).toStrictEqual([1000, 2000, 4000, 5000, 5000, 5000, 5000, 5000, 5000, 5000])
   })
 
   test("keeps network retries on a short interval instead of reaching 30 seconds", () => {
@@ -51,6 +51,55 @@ describe("session.retry.delay", () => {
     const error = apiError({ "retry-after-ms": "60000" }, "Network connection lost")
     expect(SessionRetry.delay(1, error)).toBe(SessionRetry.RETRY_NETWORK_INTERVAL)
   })
+
+  test("slows transport retries after thirty seconds and rejects negative/partial hints", () => {
+    const network = apiError(undefined, "Network connection lost")
+    expect(SessionRetry.delay(31, network, 30_000)).toBe(5000)
+    for (const hint of ["-1", "Infinity", "1junk", " "]) {
+      expect(SessionRetry.delay(1, apiError({ "retry-after-ms": hint, "retry-after": hint }))).toBe(1000)
+    }
+    expect(SessionRetry.delay(8, apiError({ unrelated: "header" }))).toBe(5000)
+  })
+
+  it.effect("ends network recovery on its clock budget with no further scheduled requests", () =>
+    Effect.gen(function* () {
+      let attempts = 0
+      let exhausted = 0
+      const error = apiError(undefined, "Network connection lost")
+      const program = Effect.sync(() => { attempts++; throw error }).pipe(
+        Effect.catchCause((cause) => Effect.fail(cause)),
+        Effect.retry(SessionRetry.policy({
+          parse: () => error,
+          maxDurationMs: 3000,
+          set: () => Effect.void,
+          onExhausted: () => Effect.sync(() => { exhausted++ }),
+        })),
+        Effect.exit,
+      )
+      const fiber = yield* program.pipe(Effect.forkChild)
+      yield* TestClock.adjust("4 seconds")
+      yield* Fiber.join(fiber)
+      expect(attempts).toBe(3)
+      expect(exhausted).toBe(1)
+      yield* TestClock.adjust("15 minutes")
+      expect(attempts).toBe(3)
+    }),
+  )
+
+  it.effect("does not schedule a provider cooldown past the remaining budget", () =>
+    Effect.gen(function* () {
+      let scheduled = 0
+      let exhausted = 0
+      const step = yield* Schedule.toStepWithMetadata(SessionRetry.policy({
+        parse: () => apiError({ "retry-after": "1000" }),
+        set: () => Effect.sync(() => { scheduled++ }),
+        onExhausted: () => Effect.sync(() => { exhausted++ }),
+      }))
+      yield* Effect.exit(step(undefined))
+      expect(scheduled).toBe(0)
+      expect(exhausted).toBe(1)
+    }),
+  )
 
   test("prefers retry-after-ms when shorter than exponential", () => {
     const error = apiError({ "retry-after-ms": "1500" })
@@ -72,18 +121,18 @@ describe("session.retry.delay", () => {
 
   test("ignores invalid retry hints", () => {
     const error = apiError({ "retry-after": "not-a-number" })
-    expect(SessionRetry.delay(1, error)).toBe(2000)
+    expect(SessionRetry.delay(1, error)).toBe(1000)
   })
 
   test("ignores malformed date retry hints", () => {
     const error = apiError({ "retry-after": "Invalid Date String" })
-    expect(SessionRetry.delay(1, error)).toBe(2000)
+    expect(SessionRetry.delay(1, error)).toBe(1000)
   })
 
   test("ignores past date retry hints", () => {
     const pastDate = new Date(Date.now() - 5000).toUTCString()
     const error = apiError({ "retry-after": pastDate })
-    expect(SessionRetry.delay(1, error)).toBe(2000)
+    expect(SessionRetry.delay(1, error)).toBe(1000)
   })
 
   test("uses retry-after values even when exceeding 10 minutes with headers", () => {

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { mkdir, writeFile } from "fs/promises"
+import { mkdir, readFile, writeFile } from "fs/promises"
 import path from "path"
 import { composePromptPolicy } from "../../../src/mend/prompt/compose"
 import { MAX_CUSTOM_PROMPT_BYTES } from "../../../src/mend/prompt/custom"
@@ -9,6 +9,7 @@ import {
   internalCommands,
   primaryCommands,
 } from "../../../src/mend/cli/public-bin"
+import { Config } from "../../../src/config/config"
 import { tmpdir } from "../../fixture/fixture"
 
 describe("mend prompt composition", () => {
@@ -275,6 +276,33 @@ describe("mend prompt composition", () => {
     expect(catalog?.text).toContain("first-class `workflow` surface")
     expect(catalog?.text).toContain("Installation, enablement, compatibility, trust, and active projection")
     expect(full.policyInstructions).toContain("The actual tool schemas attached to the current model are authoritative")
+  })
+
+  test("full mode teaches actual AI configuration boundaries without widening sparse modes", async () => {
+    const minimal = await composePromptPolicy({ mode: "minimal", focusID: "codex" })
+    const focus = await composePromptPolicy({ mode: "focus", focusID: "codex" })
+    const full = await composePromptPolicy({ mode: "full", focusID: "codex" })
+    const playbook = full.sections.find((item) => item.id === "ai-configuration-playbook")
+
+    expect(minimal.sections.find((item) => item.id === "ai-configuration-playbook")).toBeUndefined()
+    expect(focus.sections.find((item) => item.id === "ai-configuration-playbook")).toBeUndefined()
+    expect(playbook?.text).toContain("`ai_config`")
+    expect(playbook?.text).toContain("inspect")
+    expect(playbook?.text).toContain("plan")
+    expect(playbook?.text).toContain("validate")
+    expect(playbook?.text).toContain("apply")
+    expect(playbook?.text).toContain("mendcode ai config inspect|plan|validate|apply")
+    expect(playbook?.text).toContain("quality `unknown`")
+    expect(playbook?.text).toContain("Ordinary chat keeps its selected model")
+    expect(playbook?.text).toContain("does not start a workflow")
+    expect(playbook?.text).toContain("discussion about cost")
+    expect(playbook?.text).not.toContain("Astra")
+  })
+
+  test("the checked-in AI profile example is a valid configuration template", async () => {
+    const file = path.resolve(process.cwd(), "../../../../docs/examples/ai-profiles.example.json")
+    const value = JSON.parse(await readFile(file, "utf8"))
+    expect(Config.Info.zod.safeParse(value).success).toBe(true)
   })
 
   test("full mode documents the live TUI customization contract", async () => {

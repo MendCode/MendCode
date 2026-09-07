@@ -36,6 +36,7 @@ export interface Interface {
     onInterrupt: Effect.Effect<MessageV2.WithParts>,
     work: Effect.Effect<MessageV2.WithParts>,
     ready?: Latch.Latch,
+    targetMessageID?: MessageID,
   ) => Effect.Effect<MessageV2.WithParts>
 }
 
@@ -130,10 +131,7 @@ export const layer = Layer.effect(
       yield* existing.cancelCurrent({ ...options, cancelPending: true })
     })
 
-    const cancelQueued = Effect.fn("SessionRunState.cancelQueued")(function* (
-      sessionID: SessionID,
-      queueKey: string,
-    ) {
+    const cancelQueued = Effect.fn("SessionRunState.cancelQueued")(function* (sessionID: SessionID, queueKey: string) {
       const data = yield* InstanceState.get(state)
       const existing = data.runners.get(sessionID)
       if (!existing) return false
@@ -151,7 +149,11 @@ export const layer = Layer.effect(
         yield* status.set(sessionID, { type: "idle" })
         return "not_running" as const
       }
-      return yield* existing.cancelCurrentIf(targetMessageID, options)
+      return yield* existing.cancelCurrentIf(targetMessageID, {
+        ...options,
+        cancelPending: true,
+        includeTerminal: true,
+      })
     })
 
     const setInterruptible = Effect.fn("SessionRunState.setInterruptible")(function* (
@@ -201,10 +203,12 @@ export const layer = Layer.effect(
       onInterrupt: Effect.Effect<MessageV2.WithParts>,
       work: Effect.Effect<MessageV2.WithParts>,
       ready?: Latch.Latch,
+      targetMessageID?: MessageID,
     ) {
       return yield* (yield* runner(sessionID, onInterrupt)).startShell(
         withBusyStatusHeartbeat(status, sessionID, work),
         ready,
+        targetMessageID,
       )
     })
 

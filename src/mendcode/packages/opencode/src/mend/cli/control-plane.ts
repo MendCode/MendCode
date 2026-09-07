@@ -198,6 +198,8 @@ import * as WorkflowRunner from "@/session/workflow-runner"
 import * as WorkflowService from "@/session/workflow-service"
 import type { WorkflowPlan } from "@/session/workflow-plan"
 import { SessionID } from "@/session/schema"
+import { withSharedClient } from "../../cli/shared-client"
+import { aiConfigRequest, runAIConfigRequest } from "./ai-config-request"
 
 async function readJson(file: string) {
   return JSON.parse(await readFile(file, "utf8"))
@@ -2615,7 +2617,41 @@ async function ai(args: string[]) {
     console.log(JSON.stringify(await aiStatus(), null, 2))
     return
   }
-  throw new Error("Usage: mend-control-plane ai <status|env status>")
+  if (sub === "config") {
+    const action = args[1] || "inspect"
+    if (!["inspect", "plan", "validate", "apply"].includes(action)) {
+      throw new Error("Usage: mend-control-plane ai config <inspect|plan|validate|apply>")
+    }
+    const file = optionValue(args, "--file")
+    const target = optionValue(args, "--target") ?? undefined
+    const scope = optionValue(args, "--scope") ?? undefined
+    const expectedHash = optionValue(args, "--expected-hash") ?? undefined
+    if (action !== "inspect" && !file) {
+      throw new Error(`Usage: mend-control-plane ai config ${action} --file <preview.json>${action === "apply" ? " --scope project|global --expected-hash <sha256>" : ""}`)
+    }
+    if (action === "apply" && (!scope || !["project", "global"].includes(scope) || !expectedHash)) {
+      throw new Error("Usage: mend-control-plane ai config apply --file <preview.json> --scope project|global --expected-hash <sha256>")
+    }
+    const request = action === "inspect" ? undefined : await readJson(path.resolve(shellProjectRoot(), file!))
+    const result = await withSharedClient(shellProjectRoot(), async (connection) => {
+      return runAIConfigRequest({
+        action: action as "inspect" | "plan" | "validate" | "apply",
+        request: action === "inspect" ? undefined : aiConfigRequest(action as "plan" | "validate" | "apply", request, { scope, target, expectedHash }),
+        connection,
+        confirm: async (approval, signal) => {
+          if (!process.stdin.isTTY) throw new Error("Configuration apply needs approval. Run this command in an interactive terminal; no configuration was changed.")
+          const readline = await import("node:readline/promises")
+          const rl = readline.createInterface({ input: process.stdin, output: process.stderr })
+          try {
+            return (await rl.question(`Allow ${approval.permission} for ${String(approval.metadata.target)} (preview ${String(approval.metadata.expectedHash)})? [y/N] `, { signal })).trim().toLowerCase() === "y"
+          } finally { rl.close() }
+        },
+      })
+    })
+    console.log(JSON.stringify(result, null, 2))
+    return
+  }
+  throw new Error("Usage: mend-control-plane ai <status|env status|config inspect|config plan|config validate|config apply>")
 }
 
 async function exportCommand(args: string[]) {

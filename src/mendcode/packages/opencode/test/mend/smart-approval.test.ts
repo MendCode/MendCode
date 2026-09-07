@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { mkdtemp } from "fs/promises"
 import { tmpdir } from "os"
 import path from "path"
+import { analyzeShellCommand } from "../../src/tool/shell-analysis"
 import {
   isSafeSmartPermissionRequest,
   isReadOnlySmartPermissionRequest,
@@ -34,6 +35,19 @@ function externalRequest(command?: string) {
 }
 
 describe("smart permission approval trigger", () => {
+  test("incomplete host facts cannot fall back to textual read approval", () => {
+    const input = request("rg -n TODO src")
+    input.metadata.actionFacts = {
+      ...analyzeShellCommand({ command: input.metadata.command, cwd: "/workspace/project" }),
+      analysisComplete: false,
+      unknownReasons: ["executable_identity_unknown"],
+    }
+    expect(isReadOnlySmartPermissionRequest(input)).toBe(false)
+    expect(isDeterministicallyScopedReadOnlyInspection(input, "Inspect the project files")).toBe(false)
+    expect(normalizeSmartPermissionDecision(input, {
+      triggered: true, decision: "allow", scope: "exact", capability: "read-only", reason: "looks safe",
+    }).decision).toBe("ask")
+  })
   test("keeps every shell command in the reviewer path, including reads", () => {
     expect(shouldReviewSmartApproval(request("git show HEAD"))).toBe(true)
     expect(shouldReviewSmartApproval(request("git status --short"))).toBe(true)

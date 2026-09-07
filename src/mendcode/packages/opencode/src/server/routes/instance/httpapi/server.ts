@@ -8,6 +8,7 @@ import { Agent } from "@/agent/agent"
 import { Auth } from "@/auth"
 import { Bus } from "@/bus"
 import { Config } from "@/config/config"
+import { AIConfiguration } from "@/mend/runtime/ai-configuration"
 import { Command } from "@/command"
 import * as Observability from "@mendcode/core/effect/observability"
 import { File } from "@/file"
@@ -174,6 +175,7 @@ export function createRoutes(corsOptions?: CorsOptions) {
       Account.defaultLayer,
       Agent.defaultLayer,
       Auth.defaultLayer,
+      AIConfiguration.defaultLayer,
       Command.defaultLayer,
       Config.defaultLayer,
       File.defaultLayer,

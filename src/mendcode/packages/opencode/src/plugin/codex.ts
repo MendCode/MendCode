@@ -681,9 +681,11 @@ export async function CodexAuthPlugin(input: PluginInput, options: CodexAuthPlug
             }
             // Rewrite URL to Codex endpoint
             const parsed = new URL(request.url)
-            const rewrites = parsed.pathname.includes("/v1/responses") || parsed.pathname.includes("/chat/completions")
+            const isCompact = parsed.pathname.endsWith("/responses/compact")
+            const rewrites = isCompact || parsed.pathname.includes("/v1/responses") || parsed.pathname.includes("/chat/completions")
             if (!rewrites) return fetch(request, { headers })
             const url = new URL(codexApiEndpoint)
+            if (isCompact) url.pathname = `${url.pathname.replace(/\/+$/, "")}/compact`
             const requestBody = request.body ? await request.text() : undefined
 
             const body = (() => {
@@ -693,7 +695,11 @@ export async function CodexAuthPlugin(input: PluginInput, options: CodexAuthPlug
                   headers,
                   sessionIDs: codexSessionIDs,
                   sessionPromptFingerprints: codexSessionPromptFingerprints,
-                  responsesLite: parsed.pathname.includes("/v1/responses"),
+                  // The standalone compact endpoint accepts the canonical
+                  // Responses input window. Responses Lite's developer-item
+                  // rewrite would corrupt that opaque window, so keep the
+                  // compact request on the normal Codex JSON path.
+                  responsesLite: !isCompact && parsed.pathname.includes("/v1/responses"),
                 })
               } catch (error) {
                 return invalidCodexChatGPTRequestResponse(error)

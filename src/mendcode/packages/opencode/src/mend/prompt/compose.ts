@@ -227,6 +227,25 @@ function taskLifecycleContract() {
   ].join("\n")
 }
 
+function aiConfigurationPlaybookFull() {
+  return [
+    "MendCode AI configuration and model-workflow playbook:",
+    "- This is conditional guidance, not permission to spend, change credentials, or start another model. The actual tool schemas attached to the current session are authoritative.",
+    "- If `ai_config` is present in the current tool catalog, its actions are `inspect`, `plan`, `validate`, and `apply`. If it is unavailable, explain the observed `mendcode ai config inspect|plan|validate|apply` commands and their shared-backend requirement; never claim that a provider is connected because it is documented or configured.",
+    "- Start with `inspect`. Read the returned models, variants, roles, auth/capability status, configSources, effective values, missingInformation, evidence source, and observation date. Inspection does not call a provider or write a file.",
+    "- Ask only for material missing preferences: the caller's actual candidate ModelRefs, intent (`economical`, `balanced`, or `quality`), taskKind (`repair`, `terminal`, `frontend`, `architecture`, `review`, or `general`), optional role choices, and the exact project/global target when more than one observed file exists.",
+    "- `plan` accepts only the caller's allowlist. Each candidate is exactly `{role}` or `{providerID,modelID,variant?}` and must come from the observed runtime inventory. It returns bounded single/cascade/critic alternatives, limits, rationale, warnings, a preview patch, target digest, and quality `unknown` when comparable dated evidence is absent.",
+    "- Treat null or missing pricing as unknown, never free. Subscription quota is not zero-dollar API billing. Cost estimates are bounded admission estimates, not invoices; quality claims require comparable dated evidence.",
+    "- `validate` previews the exact patch without writing. It checks the additive `ai` and `compaction` shape, role/model/variant resolution, auth, limits, cost coverage, and native binding. `apply` is allowed only after an explicit user request, exact `scope`, `patch`, and `expectedHash`; normal permission still applies.",
+    "- Apply changes only `ai` and `compaction` in a selected `mendcode.json` or `mendcode.jsonc` target, preserves comments/unrelated keys, re-reads before replacement, writes atomically, retains a scoped backup, and returns changed keys/effective values/warnings. It does not start a workflow, switch the active chat model, edit credentials/models.yaml, or buy capacity.",
+    "- For faster compaction, `strategy: auto` selects native only for a positively supported exact provider/API/auth/model binding and otherwise uses portable compaction. Explicit `native` fails before inference when unsupported. A separate compaction role is a deliberate portable choice; it is not silently substituted into native compaction.",
+    "- Ordinary chat keeps its selected model. Use a compound `workflow` only when the user explicitly asks for a profile; its single/cascade/critic state machine, deterministic checks, budgets, isolated workspace, and retained receipt are separate from configuration planning.",
+    "- A critic receives bounded immutable evidence and no tools or mutable workspace. Its opinion is not a deterministic test; an uncertain or malformed verdict blocks, and a revised candidate is not advertised as independently reviewed again.",
+    "- To disable or recover, set orchestration `enabled` to false and/or return compaction to `portable` with `portable_mode: legacy`, then re-inspect. A digest conflict means re-read and re-plan; review the scoped backup before restoring it. Provider changes rebuild a portable context before another native binding is used.",
+    "- A discussion about cost or a recommendation is not authorization for extra calls. Ask for explicit execution intent and required permissions at the point of action.",
+  ].join("\n")
+}
+
 function marketplaceExtensionContract() {
   return [
     "MendCode marketplace and extension contract:",
@@ -283,6 +302,7 @@ function fullProductCapabilityCatalog() {
     "- Local code and files: `bash`, `read`, `glob`, `grep`, `edit`, `write`, `apply_patch`, and optional LSP support. Follow read-before-edit, workspace, permission, and destructive-action boundaries.",
     "- Web and media: `webfetch`, provider-gated web search, and `image_gen` only when a compatible configured image model and permission are present.",
     "- Agent automation: `task`/`task_status` for bounded subagents, `skill` for injected workflows, `loop` for durable repeated or scheduled work, and `workflow` for independent declarative phase/task runs.",
+    "- AI configuration: when the current tool catalog includes `ai_config`, use `inspect` -> `plan` -> `validate` -> `apply` with the caller's actual ModelRef allowlist; otherwise use the observed shared-backend `mendcode ai config ...` commands. Availability is established by the current tool schema or command response, not this catalog.",
     "- Durable context: `memory` for entries and categories and `memory_graph` for relationship-aware facts. Runtime memory injection remains transient context.",
     "- Browser automation, mflow controls, payment/domain integrations, and other namespaced tools may arrive from MCP servers or custom/plugin tool providers. Their presence and schema, not this catalog, establish availability.",
     "",
@@ -474,6 +494,15 @@ export async function composePromptPolicy(input: ComposeInput = {}): Promise<Pro
         label: "MendCode task lifecycle and cost policy",
         source: "mendcode-context",
         text: taskLifecycleContract(),
+      }),
+    )
+
+    sections.push(
+      section({
+        id: "ai-configuration-playbook",
+        label: "MendCode AI configuration and model-workflow playbook",
+        source: "mendcode-context",
+        text: aiConfigurationPlaybookFull(),
       }),
     )
 

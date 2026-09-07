@@ -355,6 +355,7 @@ const ask = Effect.fn("ShellTool.ask")(function* (
   cwd: string,
   shell: string,
   env: NodeJS.ProcessEnv,
+  root: Node,
 ) {
   const metadata = {
     source: "shell",
@@ -364,6 +365,7 @@ const ask = Effect.fn("ShellTool.ask")(function* (
       cwd,
       dialect: Shell.ps(shell) ? "powershell" : process.platform === "win32" ? "cmd" : "bash",
       environment: env,
+      root,
     }),
   }
   if (scan.dirs.size > 0) {
@@ -394,6 +396,7 @@ function cmd(shell: string, command: string, cwd: string, env: NodeJS.ProcessEnv
     return ChildProcess.make(shell, ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command], {
       cwd,
       env,
+      extendEnv: false,
       stdin: "ignore",
       detached: false,
     })
@@ -403,6 +406,7 @@ function cmd(shell: string, command: string, cwd: string, env: NodeJS.ProcessEnv
     shell,
     cwd,
     env,
+    extendEnv: false,
     stdin: "ignore",
     detached: process.platform !== "win32",
   })
@@ -526,11 +530,11 @@ export const ShellTool = Tool.define(
         { cwd, sessionID: ctx.sessionID, callID: ctx.callID },
         { env: {} },
       )
-      return {
+      return Object.freeze({
         ...process.env,
         PYTHONUNBUFFERED: process.env.PYTHONUNBUFFERED ?? "1",
         ...extra.env,
-      }
+      })
     })
 
     const run = Effect.fn("ShellTool.run")(function* (
@@ -843,12 +847,13 @@ export const ShellTool = Tool.define(
                   const scan = yield* collect(tree.rootNode, cwd, ps, shell, executeInstance)
                   if (!containsPath(cwd, executeInstance)) scan.dirs.add(cwd)
                   const env = yield* shellEnv(ctx, cwd)
-                  const approvedFacts = yield* ask(ctx, scan, params.command, cwd, shell, env)
+                  const approvedFacts = yield* ask(ctx, scan, params.command, cwd, shell, env, tree.rootNode)
                   const recheckedFacts = analyzeShellCommand({
                     command: params.command,
                     cwd,
                     dialect: ps ? "powershell" : process.platform === "win32" ? "cmd" : "bash",
                     environment: env,
+                    root: tree.rootNode,
                   })
                   if (approvedFacts && approvedFacts.fingerprint !== recheckedFacts.fingerprint) {
                     throw new Error("Shell action changed after permission review; manual approval is required.")

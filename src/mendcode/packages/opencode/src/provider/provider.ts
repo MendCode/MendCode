@@ -29,6 +29,7 @@ import { optionalOmitUndefined, withStatics } from "@/util/schema"
 import * as ProviderTransform from "./transform"
 import { ModelID, ProviderID } from "./schema"
 import { ClaudeCode } from "./claude-code"
+import { expandNativeContextMarker } from "@/session/native-context"
 
 const log = Log.create({ service: "provider" })
 // Compaction and long-reasoning requests can legitimately stay silent for more
@@ -1531,14 +1532,23 @@ const layer: Layer.Layer<
           const combined = signals.length === 0 ? null : signals.length === 1 ? signals[0] : AbortSignal.any(signals)
           if (combined) opts.signal = combined
 
-          // Strip openai itemId metadata following what codex does
+          let expandedNativeContext = false
+          if (typeof opts.body === "string" && opts.method === "POST") {
+            const expanded = expandNativeContextMarker(opts.body)
+            opts.body = expanded.body
+            expandedNativeContext = expanded.expanded
+          }
+
+          // Strip openai itemId metadata following what codex does. Native
+          // compaction output is an opaque Responses window and must survive
+          // the normal store=false privacy path for this one request.
           if (
             (model.api.npm === "@ai-sdk/openai" || model.api.npm === "@ai-sdk/azure") &&
             opts.body &&
             opts.method === "POST"
           ) {
             const body = JSON.parse(opts.body as string)
-            const keepIds = body.store === true
+            const keepIds = body.store === true || expandedNativeContext
             if (!keepIds && Array.isArray(body.input)) {
               for (const item of body.input) {
                 if ("id" in item) {

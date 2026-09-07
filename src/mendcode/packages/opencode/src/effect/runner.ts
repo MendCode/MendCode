@@ -8,7 +8,7 @@ export interface Runner<A, E = never> {
   readonly state: State<A, E>
   readonly busy: boolean
   readonly ensureRunning: (work: Effect.Effect<A, E>, options?: EnsureRunningOptions) => Effect.Effect<A, E>
-  readonly startShell: (work: Effect.Effect<A, E>, ready?: Latch.Latch) => Effect.Effect<A, E>
+  readonly startShell: (work: Effect.Effect<A, E>, ready?: Latch.Latch, key?: string) => Effect.Effect<A, E>
   readonly interruptCurrent: (options?: NonNullable<EnsureRunningOptions["interrupt"]>) => Effect.Effect<void>
   readonly interruptQueued: (options?: NonNullable<EnsureRunningOptions["interrupt"]>) => Effect.Effect<boolean>
   readonly cancelPending: (predicate: (key?: string) => boolean) => Effect.Effect<boolean>
@@ -17,7 +17,12 @@ export interface Runner<A, E = never> {
   readonly cancelCurrent: (options?: { before?: Effect.Effect<void>; cancelPending?: boolean }) => Effect.Effect<void>
   readonly cancelCurrentIf: (
     key: string,
-    options?: { before?: Effect.Effect<void>; cancelPending?: boolean; ignoreInterruptible?: boolean },
+    options?: {
+      before?: Effect.Effect<void>
+      cancelPending?: boolean
+      ignoreInterruptible?: boolean
+      includeTerminal?: boolean
+    },
   ) => Effect.Effect<CancelCurrentIfResult>
   readonly cancel: Effect.Effect<void>
 }
@@ -45,6 +50,7 @@ interface RunHandle<A, E> {
 
 interface ShellHandle<A, E> {
   id: number
+  key?: string
   cancelled: Deferred.Deferred<void>
   ready?: Latch.Latch
   fiber: Fiber.Fiber<A, E>
@@ -78,6 +84,7 @@ export const make = <A, E = never>(
   const busy = opts?.onBusy ?? Effect.void
   const onInterrupt = opts?.onInterrupt
   let ids = 0
+  let lastKey: string | undefined
 
   const state = () => SynchronizedRef.getUnsafe(ref)
   const next = () => {
@@ -141,6 +148,7 @@ export const make = <A, E = never>(
   ): Effect.Effect<RunHandle<A, E>> =>
     Effect.gen(function* () {
       const id = next()
+      lastKey = key
       const fiber = yield* Effect.yieldNow.pipe(Effect.andThen(work)).pipe(
         Effect.onExit((exit) => finishRun(id, done, exit)),
         Effect.forkIn(scope),
@@ -263,7 +271,7 @@ export const make = <A, E = never>(
       }),
     ).pipe(Effect.flatten) as Effect.Effect<A, E>
 
-  const startShell = (work: Effect.Effect<A, E>, ready?: Latch.Latch): Effect.Effect<A, E> =>
+  const startShell = (work: Effect.Effect<A, E>, ready?: Latch.Latch, key?: string): Effect.Effect<A, E> =>
     SynchronizedRef.modifyEffect(
       ref,
       Effect.fnUntraced(function* (st) {
@@ -279,8 +287,9 @@ export const make = <A, E = never>(
         yield* busy
         const id = next()
         const cancelled = yield* Deferred.make<void>()
+        lastKey = key
         const fiber = yield* work.pipe(Effect.ensuring(finishShell(id)), Effect.forkIn(scope))
-        const shell = { id, cancelled, ready, fiber } satisfies ShellHandle<A, E>
+        const shell = { id, key, cancelled, ready, fiber } satisfies ShellHandle<A, E>
         return [
           Effect.gen(function* () {
             const exit = yield* Fiber.await(fiber)
@@ -351,50 +360,79 @@ export const make = <A, E = never>(
 
   const cancelCurrentIf = (
     key: string,
-    options?: { before?: Effect.Effect<void>; cancelPending?: boolean; ignoreInterruptible?: boolean },
+    options?: {
+      before?: Effect.Effect<void>
+      cancelPending?: boolean
+      ignoreInterruptible?: boolean
+      includeTerminal?: boolean
+    },
   ): Effect.Effect<CancelCurrentIfResult> =>
-    SynchronizedRef.modify(ref, (st): readonly [Effect.Effect<CancelCurrentIfResult>, State<A, E>] => {
-      if (st._tag !== "Running" && st._tag !== "RunningThenRun") {
-        return [Effect.succeed("not_running" as const), st] as const
-      }
-      if (st.run.key !== key) return [Effect.succeed("target_mismatch" as const), st] as const
-      if (!st.run.interruptible && options?.ignoreInterruptible !== true)
-        return [Effect.succeed("not_interruptible" as const), st] as const
-      if (st._tag === "Running") {
-        return [
-          Effect.gen(function* () {
-            yield* options?.before ?? Effect.void
-            // Targeted cancellation is an HTTP control-plane request. Bound
-            // finalizer waiting so a stale or huge session cannot make Esc
-            // appear dead, while still giving ordinary tool cleanup time to
-            // persist the aborted assistant receipt.
-            yield* Fiber.interrupt(st.run.fiber).pipe(Effect.timeout(TARGET_CANCEL_FINALIZER_TIMEOUT), Effect.ignore)
-            // Cancellation is a control-plane operation. Do not wait for a
-            // provider/tool finalizer to resolve the run receipt: an old or
-            // huge session must be stoppable even when that cleanup is slow.
-            yield* Deferred.fail(st.run.done, new Cancelled()).pipe(Effect.asVoid)
-            return "cancelled" as const
-          }),
-          // The control request may acknowledge before cleanup finishes, but
-          // the runner remains authoritative and busy until the interrupted
-          // fiber's exit hook has drained provider/tool finalizers. Publishing
-          // Idle here would let a new turn overlap the old cleanup.
-          st,
-        ] as const
-      }
-      return [
+    SynchronizedRef.modifyEffect(
+      ref,
+      (st): Effect.Effect<readonly [Effect.Effect<CancelCurrentIfResult>, State<A, E>]> =>
         Effect.gen(function* () {
-          if (options?.cancelPending) yield* cancelPendingHandles(st.next)
+          if (st._tag === "Idle") {
+            // A just-completed target can still own pending background wakes. Only
+            // prepare its stop while it remains the latest admitted generation.
+            if (options?.includeTerminal && lastKey === key) yield* options.before ?? Effect.void
+            return [Effect.succeed("not_running" as const), st] as const
+          }
+          if (st._tag === "Shell" || st._tag === "ShellThenRun") {
+            if (st.shell.key !== key) return [Effect.succeed("target_mismatch" as const), st] as const
+            yield* options?.before ?? Effect.void
+            if (st._tag === "ShellThenRun" && options?.cancelPending) yield* cancelPendingHandles(st.run)
+            return [
+              // Do not acknowledge a shell stop merely because the readiness or
+              // cleanup wait timed out. The client retains an unconfirmed stop.
+              stopShell(st.shell).pipe(Effect.as("cancelled" as const)),
+              options?.cancelPending ? ({ _tag: "Shell", shell: st.shell } as const) : st,
+            ] as const
+          }
+          if (st.run.key !== key) return [Effect.succeed("target_mismatch" as const), st] as const
+          if (!st.run.interruptible && options?.ignoreInterruptible !== true)
+            return [Effect.succeed("not_interruptible" as const), st] as const
+          // Preparation belongs to the same critical section as target matching.
+          // Otherwise completion can start a successor while this callback yields,
+          // and session-scoped stop effects would be applied to that newer turn.
+          // Never await the interrupted fiber here: its exit hook acquires ref.
           yield* options?.before ?? Effect.void
-          yield* Fiber.interrupt(st.run.fiber).pipe(Effect.timeout(TARGET_CANCEL_FINALIZER_TIMEOUT), Effect.ignore)
-          // Resolve the caller immediately; the interrupted fiber's exit
-          // hook may otherwise keep the HTTP cancel request hanging.
-          yield* Deferred.fail(st.run.done, new Cancelled()).pipe(Effect.asVoid)
-          return "cancelled" as const
+          if (st._tag === "Running") {
+            return [
+              Effect.gen(function* () {
+                // Targeted cancellation is an HTTP control-plane request. Bound
+                // finalizer waiting so a stale or huge session cannot make Esc
+                // appear dead, while still giving ordinary tool cleanup time to
+                // persist the aborted assistant receipt.
+                yield* Fiber.interrupt(st.run.fiber).pipe(
+                  Effect.timeout(TARGET_CANCEL_FINALIZER_TIMEOUT),
+                  Effect.ignore,
+                )
+                // Cancellation is a control-plane operation. Do not wait for a
+                // provider/tool finalizer to resolve the run receipt: an old or
+                // huge session must be stoppable even when that cleanup is slow.
+                yield* Deferred.fail(st.run.done, new Cancelled()).pipe(Effect.asVoid)
+                return "cancelled" as const
+              }),
+              // The control request may acknowledge before cleanup finishes, but
+              // the runner remains authoritative and busy until the interrupted
+              // fiber's exit hook has drained provider/tool finalizers. Publishing
+              // Idle here would let a new turn overlap the old cleanup.
+              st,
+            ] as const
+          }
+          return [
+            Effect.gen(function* () {
+              if (options?.cancelPending) yield* cancelPendingHandles(st.next)
+              yield* Fiber.interrupt(st.run.fiber).pipe(Effect.timeout(TARGET_CANCEL_FINALIZER_TIMEOUT), Effect.ignore)
+              // Resolve the caller immediately; the interrupted fiber's exit
+              // hook may otherwise keep the HTTP cancel request hanging.
+              yield* Deferred.fail(st.run.done, new Cancelled()).pipe(Effect.asVoid)
+              return "cancelled" as const
+            }),
+            options?.cancelPending ? ({ _tag: "Running", run: st.run } as const) : st,
+          ] as const
         }),
-        options?.cancelPending ? ({ _tag: "Running", run: st.run } as const) : st,
-      ] as const
-    }).pipe(Effect.flatten)
+    ).pipe(Effect.flatten)
 
   const cancel = cancelCurrent()
 

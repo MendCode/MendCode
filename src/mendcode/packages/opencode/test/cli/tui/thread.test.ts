@@ -90,6 +90,7 @@ describe("tui thread", () => {
     expect(resolveRuntimeEntrypoint("/$bunfs/root/src/index.js", process.cwd())).toBeUndefined()
     expect(resolveRuntimeEntrypoint("B:/~BUN/root/src/index.js", process.cwd())).toBeUndefined()
     expect(resolveRuntimeEntrypoint("src/index.ts", process.cwd())).toBe(path.resolve(process.cwd(), "src/index.ts"))
+    expect(resolveRuntimeEntrypoint("src/mend/cli/control-plane.ts", process.cwd())).toBe(path.resolve(process.cwd(), "src/index.ts"))
   })
 
   test("keeps retrying a managed local server until it recovers", () => {
