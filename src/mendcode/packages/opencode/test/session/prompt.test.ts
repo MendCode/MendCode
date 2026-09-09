@@ -2576,7 +2576,7 @@ it.live("does not wake a stopped sender when a peer response arrives", () =>
   ),
 )
 
-it.live("stopping drops an already queued peer reply while preserving the queued human prompt", () =>
+it.live("double Esc stops queued peer and human prompts until a fresh user submission", () =>
   provideTmpdirServer(
     Effect.fnUntraced(function* ({ llm }) {
       const prompt = yield* SessionPrompt.Service
@@ -2605,18 +2605,9 @@ it.live("stopping drops an already queued peer reply while preserving the queued
         model: ref,
         parts: [{ type: "text", text: "keep my real message" }],
       })
-      yield* llm.text("human response")
       expect(yield* prompt.cancelTurn({ sessionID: chat.id, targetMessageID: current.info.id })).toBe("cancelled")
       yield* Effect.gen(function* () {
-        while (
-          !(yield* sessions.messages({ sessionID: chat.id })).some(
-            (message) =>
-              message.info.role === "assistant" &&
-              message.info.parentID === human.info.id &&
-              message.info.time.completed,
-          )
-        )
-          yield* Effect.sleep("1 millis")
+        while ((yield* status.get(chat.id)).type !== "idle") yield* Effect.sleep("1 millis")
       }).pipe(Effect.timeout("2 seconds"))
       yield* Effect.sleep("50 millis")
       const messages = yield* sessions.messages({ sessionID: chat.id, view: "full" })
@@ -2624,9 +2615,46 @@ it.live("stopping drops an already queued peer reply while preserving the queued
         messages.some((message) => message.info.role === "assistant" && message.info.parentID === peer.info.id),
       ).toBe(false)
       expect(findRecoverableQueuedPrompt(messages, { includeLegacy: true })).toBeUndefined()
-      expect(yield* llm.calls).toBe(2)
+      expect(
+        messages.some((message) => message.info.role === "assistant" && message.info.parentID === human.info.id),
+      ).toBe(false)
+      expect(messages.some((message) => message.info.id === human.info.id)).toBe(true)
+      expect(yield* llm.calls).toBe(1)
       expect(JSON.stringify((yield* llm.inputs).at(-1))).not.toContain("late peer reply")
       expect((yield* status.get(chat.id)).type).toBe("idle")
+      // A delayed HTTP retry and an already scheduled owner wake are not new consent.
+      yield* prompt.promptAsync({
+        sessionID: chat.id,
+        messageID: human.info.id,
+        agent: "build",
+        model: ref,
+        parts: [{ type: "text", text: "keep my real message" }],
+      })
+      yield* prompt.prompt({
+        sessionID: chat.id,
+        agent: "build",
+        model: ref,
+        parts: [
+          {
+            type: "text",
+            text: "late wake",
+            synthetic: true,
+            metadata: { kind: "background_task_owner_wake", eventIDs: ["late-event"] },
+          },
+        ],
+      })
+      yield* Effect.sleep("50 millis")
+      expect(yield* llm.calls).toBe(1)
+      yield* llm.text("explicitly resumed")
+      const resumed = yield* prompt.prompt({
+        sessionID: chat.id,
+        agent: "build",
+        model: ref,
+        parts: [{ type: "text", text: "resume now" }],
+      })
+      expect(resumed.parts.some((part) => part.type === "text" && part.text === "explicitly resumed")).toBe(true)
+      expect(yield* llm.calls).toBe(2)
+      expect(JSON.stringify((yield* llm.inputs).at(-1))).not.toContain("keep my real message")
     }),
     { git: true, config: (url) => ({ ...providerCfg(url), agent: { build: { model: "test/test-model" } } }) },
   ),
