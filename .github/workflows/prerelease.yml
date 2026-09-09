@@ -1,0 +1,91 @@
+name: Prerelease candidate
+
+on:
+  schedule:
+    - cron: "23 6 * * *"
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: "Candidate channel"
+        type: choice
+        options: [beta, nightly]
+        default: beta
+        required: true
+      beta_number:
+        description: "Positive beta sequence, required for beta"
+        type: string
+        required: false
+      dry_run:
+        description: "Keep artifacts in Actions without creating a release draft"
+        type: boolean
+        default: true
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: prerelease-candidate
+  cancel-in-progress: false
+
+jobs:
+  select:
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.candidate.outputs.changed }}
+      version: ${{ steps.candidate.outputs.version }}
+      sha: ${{ steps.candidate.outputs.sha }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10
+        with:
+          ref: dev
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Select immutable candidate
+        id: candidate
+        shell: bash
+        env:
+          CHANNEL: ${{ inputs.channel || 'nightly' }}
+          BETA_NUMBER: ${{ inputs.beta_number }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          sha="$(git rev-parse HEAD)"
+          base="$(node -p 'JSON.parse(require("fs").readFileSync("src/mendcode/packages/opencode/package.json", "utf8")).version')"
+          [[ "$base" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Package version must be stable semver" >&2; exit 1; }
+          if [ "$CHANNEL" = nightly ]; then
+            # Tags are never moved. Any successful draft on this source already
+            # represents the daily candidate, including reruns and manual runs.
+            previous="$(gh api "repos/${GH_REPO}/releases?per_page=100" --jq '.[] | select(.tag_name | test("^v[0-9]+\\.[0-9]+\\.[0-9]+-nightly\\.")) | .target_commitish')"
+            if git tag --points-at "$sha" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+-nightly\.' || printf '%s\n' "$previous" | grep -Fxq "$sha"; then
+              echo "changed=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            version="${base}-nightly.$(date -u +%Y%m%d).${GITHUB_RUN_ID}"
+          elif [ "$CHANNEL" = beta ]; then
+            [[ "$BETA_NUMBER" =~ ^[1-9][0-9]*$ ]] || { echo "beta_number must be positive" >&2; exit 1; }
+            version="${base}-beta.${BETA_NUMBER}"
+          else
+            echo "Unsupported prerelease channel" >&2
+            exit 1
+          fi
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: select
+    if: needs.select.outputs.changed == 'true'
+    permissions:
+      contents: write
+      attestations: write
+      id-token: write
+    uses: ./.github/workflows/release.yml
+    with:
+      version: ${{ needs.select.outputs.version }}
+      source_sha: ${{ needs.select.outputs.sha }}
+      prerelease: true
+      # Scheduled runs create reviewable drafts. Publication still requires the
+      # platform acceptance gates and an explicit promotion; never age-based.
+      dry_run: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
