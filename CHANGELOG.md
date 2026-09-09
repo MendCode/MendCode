@@ -4,6 +4,8 @@
 
 ### Fixed
 
+- Pin the release dependency tree to fixed `@ai-sdk/provider-utils 4.0.33`,
+  `hono 4.13.5` and `js-yaml 4.3.2` versions, with matching provider types.
 - Make repeated `Esc` cancellation settle active, queued, peer, and owner-wake
   work without replaying a cancelled prompt; a fresh explicit submission is
   required to resume the session.
