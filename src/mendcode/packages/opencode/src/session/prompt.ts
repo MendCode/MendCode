@@ -173,7 +173,9 @@ function isCancelledPeerPrompt(message: Pick<RecoverablePromptMessage, "parts">)
     message.parts?.some(
       (part) =>
         part.type === "text" &&
-        (part.metadata?.kind === "peer_message" || part.metadata?.kind === "peer_response") &&
+        (part.metadata?.kind === "peer_message" ||
+          part.metadata?.kind === "peer_response" ||
+          part.metadata?.kind === "session_cancelled_prompt") &&
         typeof part.metadata.cancelledAt === "number",
     ) === true
   )
@@ -331,10 +333,10 @@ export function shouldExitPromptLoop(input: {
   const assistant = input.lastAssistant
   return Boolean(
     assistant?.finish &&
-      !["tool-calls"].includes(assistant.finish) &&
-      !input.hasToolCalls &&
-      !input.summaryHasLaterTarget &&
-      comparePromptMessageOrder(assistant, input.lastUser) > 0,
+    !["tool-calls"].includes(assistant.finish) &&
+    !input.hasToolCalls &&
+    !input.summaryHasLaterTarget &&
+    comparePromptMessageOrder(assistant, input.lastUser) > 0,
   )
 }
 
@@ -422,6 +424,7 @@ export function promptRunMessages(input: {
   initialMessageIDs?: ReadonlySet<string>
   includeQueuedUserMessages?: boolean
 }) {
+  const messages = input.messages.filter((message) => !isCancelledPeerPrompt(message))
   const boundaryIDs = input.initialMessageIDs
   const preserveQueuedBoundary = (messages: MessageV2.WithParts[]) => {
     if (input.includeQueuedUserMessages || !boundaryIDs) return messages
@@ -430,18 +433,18 @@ export function promptRunMessages(input: {
     )
   }
   const targetMessageID = input.targetMessageID
-  if (!targetMessageID) return preserveQueuedBoundary(input.messages)
-  const targetIndex = input.messages.findIndex((message) => message.info.id === targetMessageID)
-  if (targetIndex < 0) return preserveQueuedBoundary(input.messages)
+  if (!targetMessageID) return preserveQueuedBoundary(messages)
+  const targetIndex = messages.findIndex((message) => message.info.id === targetMessageID)
+  if (targetIndex < 0) return preserveQueuedBoundary(messages)
 
   const initialMessageIDs = input.initialMessageIDs ?? new Set<string>()
   const includedUserMessageIDs = new Set<string>([targetMessageID])
-  for (const message of input.messages.slice(0, targetIndex + 1)) {
+  for (const message of messages.slice(0, targetIndex + 1)) {
     if (message.info.role === "user" && isInternalUserMessage(message)) {
       includedUserMessageIDs.add(message.info.id)
     }
   }
-  for (const message of input.messages.slice(targetIndex + 1)) {
+  for (const message of messages.slice(targetIndex + 1)) {
     if (message.info.role !== "user") continue
     if (!isInternalUserMessage(message)) {
       if (input.includeQueuedUserMessages || initialMessageIDs.has(message.info.id)) {
@@ -457,7 +460,7 @@ export function promptRunMessages(input: {
     )
     if (
       isCompletedCompactionFollowup &&
-      input.messages.some(
+      messages.some(
         (candidate) =>
           candidate.info.role === "assistant" && candidate.info.parentID === message.info.id && candidate.info.finish,
       )
@@ -468,7 +471,7 @@ export function promptRunMessages(input: {
     if (!parentID || includedUserMessageIDs.has(parentID)) includedUserMessageIDs.add(message.info.id)
   }
 
-  return input.messages.filter((message, index) => {
+  return messages.filter((message, index) => {
     if (index <= targetIndex) return true
     if (message.info.role === "user") return includedUserMessageIDs.has(message.info.id)
     return includedUserMessageIDs.has(message.info.parentID)
@@ -555,6 +558,7 @@ export const layer = Layer.effect(
     const promptAbortReasons = new Map<SessionID, "user">()
     const queuedPromptRecovery = new Set<SessionID>()
     const scheduledAsyncPrompts = new Set<string>()
+    const stoppedSessions = new Set<SessionID>()
     const recoveredWorkflowSessions = new Map<SessionID, WorkflowService.WorkflowTaskSessionRecovery>()
     let ownerWakeState: InstanceState.InstanceState<OwnerWakeState>
     const acknowledgeOwnerWakeNotifications = Effect.fn("SessionPrompt.acknowledgeOwnerWakeNotifications")(function* (
@@ -586,6 +590,34 @@ export const layer = Layer.effect(
       wake.sessions.delete(sessionID)
       wake.pending.delete(sessionID)
       yield* backgroundTasks.dismissNotifications(sessionID)
+      yield* workflows.acknowledgeNotifications(
+        (yield* workflows.pendingNotifications(sessionID)).map((event) => event.eventID),
+      )
+    })
+
+    const cancelQueuedPrompts = Effect.fn("SessionPrompt.cancelQueuedPrompts")(function* (sessionID: SessionID) {
+      const messages = yield* sessions.messages({ sessionID, view: "full" })
+      const answered = new Set(
+        messages.flatMap((message) => (message.info.role === "assistant" ? [message.info.parentID] : [])),
+      )
+      for (const message of messages) {
+        if (message.info.role !== "user" || message.info.queued !== true || answered.has(message.info.id)) continue
+        // Keep the user's text/history, but persist a tombstone so idle/startup
+        // recovery cannot turn a cancelled queue entry into a fresh run.
+        if (!isCancelledPeerPrompt(message))
+          yield* sessions.updatePart({
+            id: PartID.ascending(),
+            sessionID,
+            messageID: message.info.id,
+            type: "text",
+            text: "Cancelled by the user before execution.",
+            synthetic: true,
+            ignored: true,
+            metadata: { kind: "session_cancelled_prompt", cancelledAt: Date.now() },
+          })
+        yield* sessions.updateMessage({ ...message.info, queued: false })
+        yield* state.cancelQueued(sessionID, message.info.id)
+      }
     })
 
     const cancelPeerExchanges = Effect.fn("SessionPrompt.cancelPeerExchanges")(function* (
@@ -688,9 +720,11 @@ export const layer = Layer.effect(
       yield* elog.info("cancel", { sessionID })
       const context = yield* InstanceState.context
       ContinuityMailbox.cancelGeneration(sessionID, context.directory)
+      stoppedSessions.add(sessionID)
       // A background task can finish after the parent run is cancelled. Do not
       // let its late notification start a fresh assistant turn.
       yield* cancelOwnerWakeSession(sessionID)
+      yield* cancelQueuedPrompts(sessionID)
       yield* cancelPeerExchanges(sessionID)
       promptAbortReasons.set(sessionID, "user")
       const controller = promptAbortControllers.get(sessionID)?.controller
@@ -720,6 +754,19 @@ export const layer = Layer.effect(
     const cancelTurn = Effect.fn("SessionPrompt.cancelTurn")(function* (input: CancelTurnInput) {
       yield* elog.info("cancel-turn", { ...input, important: true })
       const context = yield* InstanceState.context
+      const active = promptAbortControllers.get(input.sessionID)
+      const busyBeforeCancel = yield* state.isBusy(input.sessionID)
+      const stopsSession = active?.targetMessageID === input.targetMessageID || !busyBeforeCancel
+      // A delayed cancellation must not pause a newer, explicitly submitted turn.
+      if (stopsSession) stoppedSessions.add(input.sessionID)
+      // The user explicitly asked this session to stop. Suppress pending owner
+      // wakes even when the targeted turn crossed into terminal state before
+      // the cancel request reached the runner.
+      yield* cancelOwnerWakeSession(input.sessionID)
+      if (active?.targetMessageID === input.targetMessageID || (!active && !busyBeforeCancel)) {
+        yield* cancelQueuedPrompts(input.sessionID)
+        yield* cancelPeerExchanges(input.sessionID)
+      }
       let interruptedAssistantID: MessageID | undefined
       let markedUserAbort = false
       const result = yield* state
@@ -734,6 +781,7 @@ export const layer = Layer.effect(
             // cancelTurn drops the complete runner queue under this same lock;
             // do not recursively acquire it for each durable peer marker.
             yield* cancelPeerExchanges(input.sessionID, false)
+            stoppedSessions.add(input.sessionID)
             promptAbortReasons.set(input.sessionID, "user")
             markedUserAbort = true
             const orphanedAssistant = yield* sessions.findMessage(
@@ -744,7 +792,6 @@ export const layer = Layer.effect(
                 !msg.info.time.completed,
             )
             if (Option.isSome(orphanedAssistant)) interruptedAssistantID = orphanedAssistant.value.info.id
-            const active = promptAbortControllers.get(input.sessionID)
             if (active?.targetMessageID === input.targetMessageID) active.controller.abort("user")
           }),
         })
@@ -2510,6 +2557,24 @@ NOTE: At any point in time through this workflow you should feel free to ask the
             : []
         })
         const ownerWakePrompt = ownerWakeEventIDs.length > 0
+        if (ownerWakePrompt && stoppedSessions.has(input.sessionID)) return yield* lastAssistant(input.sessionID)
+        if (input.messageID) {
+          const existing = yield* sessions.findMessage(
+            input.sessionID,
+            (message) => message.info.id === input.messageID,
+          )
+          if (Option.isSome(existing) && isCancelledPeerPrompt(existing.value)) return existing.value
+        }
+        // Only a fresh explicit submission may lift the session stop barrier.
+        if (
+          !ownerWakePrompt &&
+          input.parts.some(
+            (part) =>
+              part.type !== "text" ||
+              (!part.synthetic && part.metadata?.kind !== "peer_message" && part.metadata?.kind !== "peer_response"),
+          )
+        )
+          stoppedSessions.delete(input.sessionID)
         const supersededOwnerWakeEventIDs: string[] = []
         if (input.noReply !== true) {
           const wake = yield* registerOwnerWakeSession(input.sessionID)
@@ -3196,6 +3261,14 @@ NOTE: At any point in time through this workflow you should feel free to ask the
     const loop: (input: LoopInput) => Effect.Effect<MessageV2.WithParts> = Effect.fn("SessionPrompt.loop")(function* (
       input: LoopInput,
     ) {
+      if (stoppedSessions.has(input.sessionID)) return yield* lastAssistant(input.sessionID)
+      if (input.targetMessageID) {
+        const target = yield* sessions.findMessage(
+          input.sessionID,
+          (message) => message.info.id === input.targetMessageID,
+        )
+        if (Option.isSome(target) && isCancelledPeerPrompt(target.value)) return yield* lastAssistant(input.sessionID)
+      }
       yield* ensurePeerDeliveryState
       yield* resumeWorkflowTaskSession(input.sessionID)
       let interruptedAssistantID: MessageID | undefined
@@ -3217,9 +3290,11 @@ NOTE: At any point in time through this workflow you should feel free to ask the
           return controller
         }),
         (controller) =>
-          runLoop(input.sessionID, controller.signal, targetMessageID, queueMode === "after-tools").pipe(
-            Effect.ensuring(state.setInterruptible(input.sessionID, true)),
-          ),
+          Effect.suspend(() =>
+            stoppedSessions.has(input.sessionID)
+              ? lastAssistant(input.sessionID)
+              : runLoop(input.sessionID, controller.signal, targetMessageID, queueMode === "after-tools"),
+          ).pipe(Effect.ensuring(state.setInterruptible(input.sessionID, true))),
         (controller) =>
           Effect.sync(() => {
             if (promptAbortControllers.get(input.sessionID)?.controller === controller)
@@ -3284,6 +3359,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
       // acknowledge it before forking the loop. Register the session here as
       // well; otherwise a background task launched by this async turn has no
       // owner-wake recipient.
+      if (stoppedSessions.has(input.sessionID) || isCancelledPeerPrompt(message)) return message
       yield* registerOwnerWakeSession(input.sessionID)
       yield* loop({ sessionID: input.sessionID, queue: true, targetMessageID: message.info.id }).pipe(
         Effect.catchCause((cause) =>
@@ -3879,6 +3955,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
       "SessionPrompt.drainOwnerWake",
     )(function* (sessionID: SessionID, current?: OwnerWakeState) {
       const wakeState = current ?? (yield* InstanceState.get(ownerWakeState))
+      if (stoppedSessions.has(sessionID)) return
       const cfg = yield* config.get()
       if (cfg.subagent_owner_wake === false) {
         wakeState.pending.delete(sessionID)

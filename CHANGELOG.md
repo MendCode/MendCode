@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.44-beta.5 - 2026-09-09
+
+### Fixed
+
+- Make repeated `Esc` cancellation settle active, queued, peer, and owner-wake
+  work without replaying a cancelled prompt; a fresh explicit submission is
+  required to resume the session.
+
 ## 0.1.44-beta.4 - 2026-09-07
 
 ### Added
