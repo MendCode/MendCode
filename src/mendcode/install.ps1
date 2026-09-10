@@ -450,9 +450,25 @@ function Activate-Candidate {
   }
   $script:Phase = "activating"
   Write-UpdateStatus
-  # File.Replace is one same-volume operation and preserves the original as its backup.
-  if ([IO.File]::Exists($destination)) { [IO.File]::Replace($candidate, $destination, $previous) }
-  else { [IO.File]::Move($candidate, $destination) }
+  if ([IO.File]::Exists($destination)) {
+    # Windows security scanners can briefly hold a freshly executed binary.
+    # Keep the replace atomic while allowing that bounded transient lock to clear.
+    $maxAttempts = 8
+    for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+      try {
+        # File.Replace is one same-volume operation and preserves the original as its backup.
+        [IO.File]::Replace($candidate, $destination, $previous)
+        break
+      } catch {
+        $exception = $_.Exception
+        $isIoFailure = $exception -is [IO.IOException] -or $exception.InnerException -is [IO.IOException]
+        if (-not $isIoFailure -or $attempt -eq $maxAttempts) { throw }
+        $delay = 250 * $attempt
+        Write-Warning "Executable activation is temporarily locked; retrying in ${delay}ms (attempt $attempt/$maxAttempts)."
+        Start-Sleep -Milliseconds $delay
+      }
+    }
+  } else { [IO.File]::Move($candidate, $destination) }
   $script:Phase = "activated"
   Write-UpdateStatus
   Write-Ok "Installed $destination"
