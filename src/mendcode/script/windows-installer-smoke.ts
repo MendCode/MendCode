@@ -62,19 +62,20 @@ try {
       scenario === "transient-lock"
         ? spawnPowerShell(`
 $directory = ${quote(path.dirname(installed))}
+$installed = ${quote(installed)}
 $ready = ${quote(lockReady)}
 $deadline = [DateTime]::UtcNow.AddSeconds(30)
 $stream = $null
 try {
   while ([DateTime]::UtcNow -lt $deadline -and $null -eq $stream) {
-    $operation = Get-ChildItem -LiteralPath $directory -Directory -Filter ".update.*" -ErrorAction SilentlyContinue |
-      Where-Object { [IO.File]::Exists((Join-Path $_.FullName "candidate.exe")) } |
+    $operation = Get-ChildItem -LiteralPath $directory -Force -Directory -ErrorAction SilentlyContinue |
+      Where-Object { $_.Name -like ".update.*" } |
       Select-Object -First 1
     if ($operation) {
       $status = Join-Path $operation.FullName "status"
       if ([IO.File]::Exists($status) -and [IO.File]::ReadAllText($status) -match "binary_sha256=[a-f0-9]{64}") {
         try {
-          $stream = [IO.File]::Open((Join-Path $operation.FullName "candidate.exe"), [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::None)
+          $stream = [IO.File]::Open($installed, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
         } catch {
           $exception = $_.Exception
           if ($exception -isnot [IO.IOException] -and $exception.InnerException -isnot [IO.IOException]) { throw }
