@@ -14,6 +14,8 @@
   reflow moves an already-bottom scroll position.
 - Add native PTY coverage for queued notifications, transcript paging and
   double-`Esc` cancellation.
+- Retry bounded Windows executable activation when a transient security scan
+  briefly holds the freshly verified candidate, while preserving atomic rollback.
 
 ## 0.1.44-beta.5 - 2026-09-09
 
