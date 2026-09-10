@@ -554,8 +554,8 @@ async function startTui(
     {
       cwd: PACKAGE_ROOT,
       env: ptyEnvironment(sandbox.env),
-      cols: 120,
-      rows: 40,
+      cols: Math.max(40, Number.parseInt(process.env.MENDCODE_SMOKE_COLS ?? "120", 10) || 120),
+      rows: Math.max(16, Number.parseInt(process.env.MENDCODE_SMOKE_ROWS ?? "40", 10) || 40),
       name: "xterm-256color",
     },
   )

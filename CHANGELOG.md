@@ -10,6 +10,8 @@
   `run_once` results to the calling session.
 - Keep `Send now` attached to the first visible queued prompt when synthetic
   runtime notifications are present.
+- Preserve transcript follow mode when a viewport resize or tall Shell output
+  reflow moves an already-bottom scroll position.
 - Add native PTY coverage for queued notifications, transcript paging and
   double-`Esc` cancellation.
 

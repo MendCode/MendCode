@@ -499,6 +499,7 @@ export function sessionUserMovedViewport(input: {
   viewportHeight: number
   lastViewportHeight: number
   followOutput?: boolean
+  atBottom?: boolean
 }) {
   const scrollDelta = input.scrollTop - input.lastScrollTop
   const scrollMoved = Math.abs(scrollDelta) > 1
@@ -510,9 +511,11 @@ export function sessionUserMovedViewport(input: {
   // A sticky/following scrollbox can move its scrollTop while layout is
   // settling after a streamed part changes height. A downward movement can
   // be that layout adjustment, but a negative delta is an unmistakable manual
-  // scroll-up gesture and must detach follow immediately.
+  // scroll-up gesture and must detach follow immediately. When sticky follow
+  // has already settled at the new bottom, however, a negative delta can be
+  // caused entirely by a larger viewport or a shorter reflowed child.
   if (layoutChanged) {
-    if (input.followOutput) return scrollDelta < -1
+    if (input.followOutput) return scrollDelta < -1 && input.atBottom !== true
     return false
   }
   return true
@@ -2584,6 +2587,7 @@ export function Session() {
       viewportHeight,
       lastViewportHeight: lastObservedViewportHeight,
       followOutput: followSessionOutput(),
+      atBottom,
     })
     const contentHeightChanged = Math.abs(scrollHeight - lastObservedScrollHeight) > 1
     const viewportHeightChanged = Math.abs(viewportHeight - lastObservedViewportHeight) > 1
