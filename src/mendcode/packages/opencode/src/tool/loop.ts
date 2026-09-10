@@ -1344,9 +1344,9 @@ export const LoopTool = Tool.define<typeof Parameters, Metadata, LoopWorkflow.Se
           if (action === "resume") workflow = yield* workflows.resume({ id: workflow.id, reason: params.reason })
           if (action === "stop") workflow = yield* workflows.stop({ id: workflow.id, reason: params.reason })
           if (action === "run_once") {
-            const promptOps = ctx.extra?.promptOps as Pick<SessionPrompt.Interface, "prompt"> | undefined
+            const promptOps = ctx.extra?.promptOps as Pick<SessionPrompt.Interface, "prompt" | "promptAsync"> | undefined
             if (!promptOps) throw new Error("Loop run_once requires prompt operations from the active session.")
-            let result = yield* runner.runOne({ id: workflow.id, execute: true, reason: params.reason, trigger: "run-once" }).pipe(
+            let result = yield* runner.runOne({ id: workflow.id, callerSessionID: ctx.sessionID, execute: true, reason: params.reason, trigger: "run-once" }).pipe(
               Effect.provideService(LoopWorkflow.Service, workflows),
               Effect.provideService(SessionPrompt.Service, promptOps as SessionPrompt.Interface),
               Effect.provideService(Session.Service, sessions),
@@ -1360,7 +1360,7 @@ export const LoopTool = Tool.define<typeof Parameters, Metadata, LoopWorkflow.Se
               auditRuns < maxAuditRuns
             ) {
               auditRuns++
-              result = yield* runner.runOne({ id: workflow.id, execute: true, reason: "Fresh completion audit after run_once candidate.", trigger: "run-once" }).pipe(
+              result = yield* runner.runOne({ id: workflow.id, callerSessionID: ctx.sessionID, execute: true, reason: "Fresh completion audit after run_once candidate.", trigger: "run-once" }).pipe(
                 Effect.provideService(LoopWorkflow.Service, workflows),
                 Effect.provideService(SessionPrompt.Service, promptOps as SessionPrompt.Interface),
                 Effect.provideService(Session.Service, sessions),

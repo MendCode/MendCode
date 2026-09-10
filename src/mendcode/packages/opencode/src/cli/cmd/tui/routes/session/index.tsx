@@ -174,6 +174,7 @@ import {
   sessionPendingInputSessionIDs,
   sessionPendingInputStatus,
   sessionPromptVisible,
+  sessionNextVisibleQueuedMessageID,
   sessionTranscriptBottomSpacer,
   sessionLoopReceipt,
   shouldRenderSessionLoopCard,
@@ -970,7 +971,7 @@ export function Session() {
       .filter((message): message is UserMessage => message.role === "user" && queuedIDs.has(message.id))
       .toSorted(compareSessionMessages)
   })
-  const nextQueuedMessageID = createMemo(() => queuedMessages()[0]?.id)
+  const nextQueuedMessageID = createMemo(() => sessionNextVisibleQueuedMessageID(queuedMessages(), sync.data.part))
   const messageByID = createMemo(() => new Map(messages().map((message) => [message.id, message] as const)))
   const pinnedTurnUserMessageID = createMemo(() =>
     sessionPinnedUserMessageID({

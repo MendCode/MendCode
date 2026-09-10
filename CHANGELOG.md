@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.44-beta.6 - 2026-09-09
+
+### Fixed
+
+- Complete terminal loop runs without waiting on the owner session that is
+  executing `run_once`, preventing a circular wait and duplicate notification.
+- Deliver background loop notifications asynchronously while returning direct
+  `run_once` results to the calling session.
+- Keep `Send now` attached to the first visible queued prompt when synthetic
+  runtime notifications are present.
+- Add native PTY coverage for queued notifications, transcript paging and
+  double-`Esc` cancellation.
+
 ## 0.1.44-beta.5 - 2026-09-09
 
 ### Fixed
