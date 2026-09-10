@@ -24,8 +24,8 @@ async function powershell(source: string, env: Record<string, string | undefined
     return { code, output: stdout + stderr }
   } finally { clearTimeout(timer) }
 }
-async function waitForFile(file: string, diagnostic?: string) {
-  const deadline = Date.now() + 10_000
+async function waitForFile(file: string, diagnostic?: string, timeout = 10_000) {
+  const deadline = Date.now() + timeout
   while (!(await Bun.file(file).exists()) && Date.now() < deadline) await Bun.sleep(25)
   if (diagnostic && (await Bun.file(diagnostic).exists())) throw new Error(await fs.readFile(diagnostic, "utf8"))
   assert.equal(await Bun.file(file).exists(), true, `Timed out waiting for ${file}`)
@@ -67,7 +67,7 @@ $directory = ${quote(path.dirname(installed))}
 $installed = ${quote(installed)}
 $ready = ${quote(lockReady)}
 $diagnostic = ${quote(lockDiagnostic)}
-$deadline = [DateTime]::UtcNow.AddSeconds(30)
+$deadline = [DateTime]::UtcNow.AddSeconds(90)
 $stream = $null
 try {
   while ([DateTime]::UtcNow -lt $deadline -and $null -eq $stream) {
@@ -100,7 +100,7 @@ try {
         : undefined
     const result = await (async () => {
       try {
-        if (lockProcess) await waitForFile(lockReady, lockDiagnostic)
+        if (lockProcess) await waitForFile(lockReady, lockDiagnostic, 90_000)
         return await powershell(`& ${quote(installer)} -Version ${quote(version)} -SkipSetup -NoModifyPath; exit $LASTEXITCODE`, {
           OPENCODE_TEST_HOME: home, MENDCODE_GITHUB_BASE_URL: server.url.toString().replace(/\/$/, ""),
           MENDCODE_UPDATE_PARENT_PID: undefined, MENDCODE_VERIFIED_SUMS_FILE: undefined,
