@@ -24,9 +24,10 @@ async function powershell(source: string, env: Record<string, string | undefined
     return { code, output: stdout + stderr }
   } finally { clearTimeout(timer) }
 }
-async function waitForFile(file: string) {
+async function waitForFile(file: string, diagnostic?: string) {
   const deadline = Date.now() + 10_000
   while (!(await Bun.file(file).exists()) && Date.now() < deadline) await Bun.sleep(25)
+  if (diagnostic && (await Bun.file(diagnostic).exists())) throw new Error(await fs.readFile(diagnostic, "utf8"))
   assert.equal(await Bun.file(file).exists(), true, `Timed out waiting for ${file}`)
 }
 const archive = path.join(root, "candidate.zip")
@@ -58,12 +59,14 @@ try {
     await fs.writeFile(installed, "previous damaged executable")
     const previousDigest = digest(await Bun.file(installed).bytes())
     const lockReady = path.join(home, "lock-ready")
+    const lockDiagnostic = path.join(home, "lock-diagnostic")
     const lockProcess =
       scenario === "transient-lock"
         ? spawnPowerShell(`
 $directory = ${quote(path.dirname(installed))}
 $installed = ${quote(installed)}
 $ready = ${quote(lockReady)}
+$diagnostic = ${quote(lockDiagnostic)}
 $deadline = [DateTime]::UtcNow.AddSeconds(30)
 $stream = $null
 try {
@@ -87,6 +90,9 @@ try {
   if ($null -eq $stream) { throw "Did not acquire the transient installer lock." }
   [IO.File]::WriteAllText($ready, "ready")
   Start-Sleep -Milliseconds 1500
+} catch {
+  [IO.File]::WriteAllText($diagnostic, ($_ | Out-String))
+  exit 1
 } finally {
   if ($null -ne $stream) { $stream.Dispose() }
 }
@@ -94,7 +100,7 @@ try {
         : undefined
     const result = await (async () => {
       try {
-        if (lockProcess) await waitForFile(lockReady)
+        if (lockProcess) await waitForFile(lockReady, lockDiagnostic)
         return await powershell(`& ${quote(installer)} -Version ${quote(version)} -SkipSetup -NoModifyPath; exit $LASTEXITCODE`, {
           OPENCODE_TEST_HOME: home, MENDCODE_GITHUB_BASE_URL: server.url.toString().replace(/\/$/, ""),
           MENDCODE_UPDATE_PARENT_PID: undefined, MENDCODE_VERIFIED_SUMS_FILE: undefined,
