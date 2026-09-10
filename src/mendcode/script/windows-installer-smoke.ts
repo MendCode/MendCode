@@ -30,6 +30,23 @@ async function waitForFile(file: string, diagnostic?: string, timeout = 10_000) 
   if (diagnostic && (await Bun.file(diagnostic).exists())) throw new Error(await fs.readFile(diagnostic, "utf8"))
   assert.equal(await Bun.file(file).exists(), true, `Timed out waiting for ${file}`)
 }
+async function waitForActivation(directory: string, release: string) {
+  const deadline = Date.now() + 90_000
+  while (!(await Bun.file(release).exists()) && Date.now() < deadline) {
+    const entries = await fs.readdir(directory, { withFileTypes: true }).catch(() => [])
+    for (const entry of entries) {
+      if (!entry.isDirectory() || !entry.name.startsWith(".update.")) continue
+      const status = await fs.readFile(path.join(directory, entry.name, "status"), "utf8").catch(() => "")
+      if (!status.includes("phase=activating")) continue
+      await Bun.sleep(500)
+      await fs.writeFile(release, "release")
+      return
+    }
+    await Bun.sleep(25)
+  }
+  if (await Bun.file(release).exists()) return
+  throw new Error(`Timed out waiting for installer activation in ${directory}`)
+}
 const archive = path.join(root, "candidate.zip")
 const installer = path.resolve(import.meta.dir, "../install.ps1")
 const parsed = await powershell(`$tokens=$null; $errors=$null; [void][System.Management.Automation.Language.Parser]::ParseFile(${quote(installer)}, [ref]$tokens, [ref]$errors); if ($errors.Count) { $errors | Out-String | Write-Error; exit 1 }`)
@@ -63,33 +80,17 @@ try {
     const lockProcess =
       scenario === "transient-lock"
         ? spawnPowerShell(`
-$directory = ${quote(path.dirname(installed))}
 $installed = ${quote(installed)}
 $ready = ${quote(lockReady)}
+$release = ${quote(path.join(home, "lock-release"))}
 $diagnostic = ${quote(lockDiagnostic)}
-$deadline = [DateTime]::UtcNow.AddSeconds(90)
 $stream = $null
 try {
-  while ([DateTime]::UtcNow -lt $deadline -and $null -eq $stream) {
-    $operation = Get-ChildItem -LiteralPath $directory -Force -Directory -ErrorAction SilentlyContinue |
-      Where-Object { $_.Name -like ".update.*" } |
-      Select-Object -First 1
-    if ($operation) {
-      $status = Join-Path $operation.FullName "status"
-      if ([IO.File]::Exists($status) -and [IO.File]::ReadAllText($status) -match "binary_sha256=[a-f0-9]{64}") {
-        try {
-          $stream = [IO.File]::Open($installed, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
-        } catch {
-          $exception = $_.Exception
-          if ($exception -isnot [IO.IOException] -and $exception.InnerException -isnot [IO.IOException]) { throw }
-        }
-      }
-    }
-    if ($null -eq $stream) { Start-Sleep -Milliseconds 25 }
-  }
-  if ($null -eq $stream) { throw "Did not acquire the transient installer lock." }
+  $stream = [IO.File]::Open($installed, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
   [IO.File]::WriteAllText($ready, "ready")
-  Start-Sleep -Milliseconds 1500
+  $deadline = [DateTime]::UtcNow.AddSeconds(90)
+  while (-not [IO.File]::Exists($release) -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 25 }
+  if (-not [IO.File]::Exists($release)) { throw "Did not receive the transient installer lock release." }
 } catch {
   [IO.File]::WriteAllText($diagnostic, ($_ | Out-String))
   exit 1
@@ -100,7 +101,20 @@ try {
         : undefined
     const result = await (async () => {
       try {
-        if (lockProcess) await waitForFile(lockReady, lockDiagnostic, 90_000)
+        if (lockProcess) {
+          await waitForFile(lockReady, lockDiagnostic, 90_000)
+          const activation = waitForActivation(path.dirname(installed), path.join(home, "lock-release"))
+          try {
+            return await powershell(`& ${quote(installer)} -Version ${quote(version)} -SkipSetup -NoModifyPath; exit $LASTEXITCODE`, {
+              OPENCODE_TEST_HOME: home, MENDCODE_GITHUB_BASE_URL: server.url.toString().replace(/\/$/, ""),
+              MENDCODE_UPDATE_PARENT_PID: undefined, MENDCODE_VERIFIED_SUMS_FILE: undefined,
+              MENDCODE_DB: path.join(home, "data", "test.db"),
+            })
+          } finally {
+            await fs.writeFile(path.join(home, "lock-release"), "release")
+            await activation
+          }
+        }
         return await powershell(`& ${quote(installer)} -Version ${quote(version)} -SkipSetup -NoModifyPath; exit $LASTEXITCODE`, {
           OPENCODE_TEST_HOME: home, MENDCODE_GITHUB_BASE_URL: server.url.toString().replace(/\/$/, ""),
           MENDCODE_UPDATE_PARENT_PID: undefined, MENDCODE_VERIFIED_SUMS_FILE: undefined,

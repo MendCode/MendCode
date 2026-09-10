@@ -461,8 +461,11 @@ function Activate-Candidate {
         break
       } catch {
         $exception = $_.Exception
-        $isIoFailure = $exception -is [IO.IOException] -or $exception.InnerException -is [IO.IOException]
-        if (-not $isIoFailure -or $attempt -eq $maxAttempts) { throw }
+        $inner = $exception.InnerException
+        $isIoFailure = $exception -is [IO.IOException] -or $inner -is [IO.IOException]
+        $isAccessFailure = $exception -is [UnauthorizedAccessException] -or $inner -is [UnauthorizedAccessException]
+        $isSharingViolation = $exception.HResult -in @(-2147024864, -2147024863) -or $inner.HResult -in @(-2147024864, -2147024863)
+        if (-not ($isIoFailure -or $isAccessFailure -or $isSharingViolation) -or $attempt -eq $maxAttempts) { throw }
         $delay = 250 * $attempt
         Write-Warning "Executable activation is temporarily locked; retrying in ${delay}ms (attempt $attempt/$maxAttempts)."
         Start-Sleep -Milliseconds $delay
