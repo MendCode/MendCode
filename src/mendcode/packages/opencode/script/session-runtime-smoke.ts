@@ -318,7 +318,7 @@ function openAIStream(chunks: Record<string, unknown>[], done = true) {
   return encoder.encode(payload)
 }
 
-async function startFakeProvider(sandbox: Sandbox): Promise<RunningFakeProvider> {
+async function startFakeProvider(sandbox: Sandbox, longStream = false): Promise<RunningFakeProvider> {
   const provider = new URL(sandbox.providerURL)
   const calls: FakeProviderCall[] = []
   const active = new Set<ReadableStreamDefaultController<Uint8Array>>()
@@ -382,7 +382,9 @@ async function startFakeProvider(sandbox: Sandbox): Promise<RunningFakeProvider>
                   {
                     id: `chatcmpl-${prompt === UNAFFECTED_PROMPT ? "unaffected" : "primary"}`,
                     object: "chat.completion.chunk",
-                    choices: [{ index: 0, delta: { content: `${prompt} active` } }],
+                    choices: [{ index: 0, delta: { content: longStream
+                      ? `${prompt} active\n\n${Array.from({ length: 80 }, (_, index) => `SCROLL-ROW-${index}`).join("\n\n")}\n\nSCROLL-END`
+                      : `${prompt} active` } }],
                   },
                 ],
                 false,
@@ -816,6 +818,77 @@ async function abortSession(server: RunningServer, sandbox: Sandbox, sessionID: 
     method: "POST",
   })
   expectStatus(response, 200, "session abort")
+}
+
+async function runQueuedLoopTuiScenario(sandbox: Sandbox) {
+  const provider = await startFakeProvider(sandbox, true)
+  let backend: RunningServer | undefined
+  let proxy: RunningTransportProxy | undefined
+  let tui: RunningTui | undefined
+  try {
+    backend = await startServer({ entrypoint: SOURCE_ENTRYPOINT, installed: false, sandbox })
+    await waitForHealth(backend, sandbox)
+    const primary = await createSession(backend, sandbox)
+    proxy = await startTransportProxy(backend.url)
+    tui = await startTui(sandbox, proxy.url, primary.id)
+    await waitUntil("queued loop TUI event subscription", () => proxy!.activeStreams() > 0)
+    await submitAsyncPrompt(backend, sandbox, primary.id, STREAM_PROMPT)
+    const call = await provider.waitForCall(STREAM_PROMPT)
+    await waitUntil("long stream prompt rendered", () => terminalContains(tui!.output(), STREAM_PROMPT))
+    for (let page = 0; page < 10; page++) {
+      tui.write("\x1b[6~")
+      await sleep(50)
+    }
+    await waitUntil("long stream end rendered", () => terminalContains(tui!.output(), "SCROLL-END"))
+
+    const notification = await requestJSON(backend, sandbox, `/session/${primary.id}/prompt_async`, {
+      method: "POST",
+      body: JSON.stringify({
+        agent: "build",
+        model: { providerID: FAKE_PROVIDER_ID, modelID: FAKE_MODEL_ID },
+        parts: [
+          {
+            type: "text",
+            text: "Internal loop stopped notification",
+            synthetic: true,
+            metadata: { kind: "loop_owner_notification" },
+          },
+        ],
+      }),
+    })
+    expectStatus(notification, 204, "queued internal loop notification")
+    const queueOffset = tui.output().length
+    await submitAsyncPrompt(backend, sandbox, primary.id, "VISIBLE-QUEUED-QUESTION")
+    await waitUntil("visible queued question keeps Send now", () => {
+      const output = tui!.output().slice(queueOffset)
+      return terminalContains(output, "VISIBLE-QUEUED-QUESTION") && terminalContains(output, "SEND")
+    })
+
+    const upOffset = tui.output().length
+    tui.write("\x1b[5~")
+    await waitUntil("PageUp reveals earlier long stream content", () =>
+      terminalContains(tui!.output().slice(upOffset), "SCROLL-ROW-"),
+    )
+    const downOffset = tui.output().length
+    tui.write("\x1b[6~")
+    await waitUntil("PageDown reaches the queued question", () =>
+      terminalContains(tui!.output().slice(downOffset), "VISIBLE-QUEUED-QUESTION"),
+    )
+
+    await interruptThroughTui(tui, "queued loop notification")
+    await withTimeout("queued loop active provider cancellation", call.abort)
+    await waitForSessionStatus(backend, sandbox, primary.id, "idle")
+    assert(provider.calls.length === 1, "double Esc started a hidden or human queued prompt")
+  } catch (error) {
+    throw new Error(
+      `${error instanceof Error ? error.message : String(error)}\nPTY:\n${stripAnsi(tui?.output() ?? "").slice(-8000)}`,
+    )
+  } finally {
+    await tui?.stop()
+    await proxy?.stop()
+    await backend?.stop()
+    await provider.stop()
+  }
 }
 
 async function runTuiPtyScenario(sandbox: Sandbox, tuiEntrypoint = SOURCE_ENTRYPOINT) {
@@ -1352,6 +1425,16 @@ async function main() {
   if (mode === "--managed-recovery") return managedRecovery(process.argv[3], process.argv[4], process.argv[5])
 
   const requireInstalled = process.argv.includes("--require-installed")
+  if (process.argv.includes("--loop-queue-only")) {
+    const sandbox = await createSandbox("loop-queue")
+    try {
+      await runQueuedLoopTuiScenario(sandbox)
+      console.log("PASS real TUI/PTY hidden loop notification, visible Send now, PageUp/PageDown, and double Esc")
+      return
+    } finally {
+      await rm(sandbox.root, { recursive: true, force: true })
+    }
+  }
   if (process.argv.includes("--pty-only")) {
     const sandbox = await createSandbox("pty")
     try {

@@ -576,7 +576,8 @@ export const layer = Layer.effect(
         cancel: (sessionID: SessionID) => cancel(sessionID),
         resolvePromptParts: (template: string) => resolvePromptParts(template),
         prompt: (input: PromptInput) => prompt(input),
-      } satisfies TaskPromptOps
+        promptAsync: (input: PromptInput) => promptAsync(input),
+      } satisfies TaskPromptOps & Pick<Interface, "promptAsync">
     })
 
     const findOrphanedAssistantOnCancel = Effect.fn("SessionPrompt.findOrphanedAssistantOnCancel")(function* (

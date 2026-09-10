@@ -4,6 +4,7 @@ import { SessionPrompt } from "@/session/prompt"
 import { LoopWorkflow } from "@/session/loop"
 import * as MessageV2 from "@/session/message-v2"
 import { Session } from "@/session/session"
+import type { SessionID } from "@/session/schema"
 import { ModelID, ProviderID } from "@/provider/schema"
 import { InstanceState } from "@/effect/instance-state"
 import { InstanceStore } from "@/project/instance-store"
@@ -41,6 +42,7 @@ export class Service extends Context.Service<Service, Interface>()("@opencode/Lo
 
 export type RunOneInput = {
   id: LoopWorkflow.LoopID
+  callerSessionID?: SessionID
   execute?: boolean
   reportOnly?: boolean
   reason?: string
@@ -1139,12 +1141,18 @@ export const layer = Layer.effect(
       }
       const notifyOwner = (workflow: LoopWorkflow.Info, run: LoopWorkflow.RunInfo, summary: string) => {
         if (!shouldNotifyOwner(workflow) || !workflow.ownerSessionID) return Effect.void
+        // An owner executing run_once receives the result through its tool.
+        // Queueing a second prompt here both duplicates that result and puts an
+        // internal notification ahead of the user's already waiting messages.
+        if (workflow.ownerSessionID === input.callerSessionID) return Effect.void
         const text =
           workflow.state === "completed"
             ? parentCompletionPrompt(workflow, { summary }, run)
             : parentStatusPrompt(workflow, run, summary)
+        // Background runs must persist the notification without waiting for
+        // the owner's current turn, which may itself be waiting for this run.
         return prompt
-          .prompt({
+          .promptAsync({
             sessionID: workflow.ownerSessionID,
             agent: workflow.spec.agent,
             model: promptModel(workflow),

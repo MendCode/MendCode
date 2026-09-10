@@ -18,10 +18,24 @@ import {
   sessionTopbarNavLayout,
   sessionUsageBarDisplayWidth,
   sessionPromptVisible,
+  sessionNextVisibleQueuedMessageID,
   truncateEndDisplay,
 } from "../../../src/cli/cmd/tui/util/session-layout"
 
 describe("session layout", () => {
+  test("hidden loop notifications do not take the visible queued prompt send control", () => {
+    const messages = [{ id: "notification" }, { id: "question" }, { id: "followup" }]
+    const parts = {
+      notification: [{ type: "text", text: "Loop stopped", synthetic: true }],
+      question: [{ type: "text", text: "What happened?" }],
+      followup: [{ type: "text", text: "Hello?" }],
+    }
+    expect(sessionNextVisibleQueuedMessageID(messages, parts)).toBe("question")
+    expect(sessionNextVisibleQueuedMessageID(messages.slice(2), parts)).toBe("followup")
+    expect(sessionNextVisibleQueuedMessageID(messages.slice(0, 1), parts)).toBeUndefined()
+    expect(sessionNextVisibleQueuedMessageID(messages, {})).toBeUndefined()
+  })
+
   test("renders workflow cards for normalized and persisted full presentation profiles", () => {
     expect(shouldRenderSessionWorkflowCard("mendcode")).toBe(true)
     expect(shouldRenderSessionWorkflowCard("full")).toBe(true)
