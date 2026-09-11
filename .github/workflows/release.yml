@@ -95,7 +95,7 @@ jobs:
           if [ "$PRERELEASE" = "false" ]; then
             git merge-base --is-ancestor HEAD origin/main
           else
-            git merge-base --is-ancestor HEAD origin/dev
+            git merge-base --is-ancestor origin/dev HEAD
           fi
         env:
           PRERELEASE: ${{ inputs.prerelease }}
