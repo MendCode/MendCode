@@ -46,9 +46,13 @@ import {
 } from "@/mend/prompt/reasoning-state"
 import {
   CACHE_MODE_HEADER,
+  CACHE_SESSION_HEADER,
   cacheBindingFromModel,
+  fingerprintPrefix,
+  opaqueCacheScope,
   resolveCacheRequestPolicy,
 } from "@/provider/cache-policy"
+import { cacheKeyForFingerprint, stableProviderSessionID } from "./cache-lineage"
 import { profileContext, type ContextProfile } from "./context-profile"
 import { discoveryWireMiddleware } from "./tool-discovery"
 
@@ -232,28 +236,30 @@ const live: Layer.Layer<
       const isOpenaiOauth = item.id === "openai" && info?.type === "oauth"
       const mendProjectRoot = input.root || input.cwd
       const authMode = info?.type === "oauth" ? "oauth" : info?.type === "api" ? "api" : "unknown"
+      const cacheTransport = isOpenaiOauth
+        ? ("responses-lite" as const)
+        : input.model.providerID === "claude-code" && input.model.api.npm === "mendcode/claude-code"
+          ? ("claude-agent-sdk" as const)
+        : input.model.api.npm === "@ai-sdk/openai" ||
+            input.model.providerID === "openrouter" ||
+            input.model.api.npm === "@openrouter/ai-sdk-provider"
+          ? ("responses-http" as const)
+          : ("other" as const)
       const endpoint =
         (typeof input.model.options?.baseURL === "string" && input.model.options.baseURL) ||
         (typeof item.options?.baseURL === "string" && item.options.baseURL) ||
         input.model.api.url
-      const cachePolicy = resolveCacheRequestPolicy({
-        config: cfg.cache,
-        projectScope: mendProjectRoot,
-        sessionID: input.sessionID,
-        binding: cacheBindingFromModel(input.model, {
-          auth: authMode,
-          transport: isOpenaiOauth
-            ? "responses-lite"
-            : input.model.api.npm === "@ai-sdk/openai"
-              ? "responses-http"
-              : "other",
-          endpoint,
-          ...(info?.type === "oauth"
-            ? { accountScope: info.accountId ? `oauth:${info.accountId}` : "oauth" }
-            : info?.type === "api"
-              ? { accountScope: "api" }
-              : {}),
-        }),
+      const accountScope =
+        info?.type === "api"
+          ? opaqueCacheScope(info.key)
+          : info?.type === "oauth" && info.accountId
+            ? `oauth:${info.accountId}`
+            : undefined
+      const cacheBinding = cacheBindingFromModel(input.model, {
+        auth: authMode,
+        transport: cacheTransport,
+        endpoint,
+        ...(accountScope ? { accountScope } : {}),
       })
       const mendFocus = input.mendPrompt?.focus ?? SystemPrompt.mendFocus(input.model)
       const mendPromptPolicy =
@@ -271,8 +277,31 @@ const live: Layer.Layer<
             mendProjectRoot,
             memoryQuery,
             input.memoryMode ?? memoryMode(input.messages),
-          ),
-        ))
+            ),
+          ))
+      const fullMode = /^Mode: full$/m.test(mendPromptPolicy)
+      const cachePolicy = resolveCacheRequestPolicy({
+        config: cfg.cache,
+        projectScope: mendProjectRoot,
+        sessionID: input.sessionID,
+        binding: cacheBinding,
+        fullMode,
+      })
+      const providerSessionID =
+        cachePolicy.mode === "smart" &&
+        mendProjectRoot &&
+        (cachePolicy.useLineage || (isOpenaiOauth && cachePolicy.useCacheKey))
+          ? stableProviderSessionID({
+              providerID: input.model.providerID,
+              modelID: input.model.api.id,
+              projectScope: mendProjectRoot,
+              sessionID: input.sessionID,
+              profile:
+                typeof item.options?.homePath === "string"
+                  ? `${cacheBinding.accountScope ?? ""}:${item.options.homePath}`
+                  : cacheBinding.accountScope,
+            })
+          : undefined
 
       const system: string[] = []
       system.push(
@@ -390,8 +419,6 @@ const live: Layer.Layer<
         // retains reasoning parameters without substituting a different model ID.
         if (input.model.api.npm === "@ai-sdk/openai") params.options.forceReasoning = true
       }
-      params.options = ProviderTransform.enforceCacheOptions(params.options, cachePolicy)
-
       const { headers } = yield* plugin.trigger(
         "chat.headers",
         {
@@ -408,7 +435,18 @@ const live: Layer.Layer<
       const requestHeaders = {
         ...headers,
         ...(isOpenaiOauth && cachePolicy.mode === "off" ? { [CACHE_MODE_HEADER]: "off" } : {}),
+        ...(isOpenaiOauth && providerSessionID ? { [CACHE_SESSION_HEADER]: providerSessionID } : {}),
       }
+      const providerRuntime =
+        input.model.providerID === "claude-code"
+          ? {
+              claudeCode: {
+                ...(providerSessionID ? { sessionID: providerSessionID } : {}),
+                ...(mendProjectRoot ? { workingDirectory: mendProjectRoot } : {}),
+                ...(cachePolicy.mode === "off" ? { cacheMode: "off" as const } : {}),
+              },
+            }
+          : undefined
 
       const tools = resolveTools(input)
 
@@ -445,6 +483,42 @@ const live: Layer.Layer<
           execute: async () => ({ output: "", title: "", metadata: {} }),
         })
       }
+
+      const managedCacheKey = (() => {
+        if (!cachePolicy.allowManagedKey || cachePolicy.scope !== "project" || !mendProjectRoot) return undefined
+        const fingerprint = fingerprintPrefix({
+          binding: cacheBinding,
+          projectScope: mendProjectRoot,
+          prefix: system,
+          toolDefinitions: Object.fromEntries(
+            Object.entries(tools).map(([name, definition]) => [
+              name,
+              {
+                description: definition.description,
+                inputSchema: definition.inputSchema,
+              },
+            ]),
+          ),
+          settings: {
+            temperature: params.temperature,
+            topP: params.topP,
+            topK: params.topK,
+            maxOutputTokens: params.maxOutputTokens,
+            options: ProviderTransform.removeCacheOptions(params.options),
+          },
+          serializationRevision: "mendcode-cache-prefix-v1",
+        })
+        return fingerprint
+          ? cacheKeyForFingerprint({
+              fingerprint,
+              scope: cachePolicy.scope,
+              projectScope: mendProjectRoot,
+              sessionID: input.sessionID,
+            }) ?? undefined
+          : undefined
+      })()
+      params.options = ProviderTransform.withManagedCacheKey(input.model, params.options, managedCacheKey)
+      params.options = ProviderTransform.enforceCacheOptions(params.options, cachePolicy)
 
       // Wire up toolExecutor for DWS workflow models so that tool calls
       // from the workflow service are executed via opencode's tool system
@@ -610,7 +684,7 @@ const live: Layer.Layer<
         temperature: params.temperature,
         topP: params.topP,
         topK: params.topK,
-        providerOptions: ProviderTransform.providerOptions(input.model, params.options),
+        providerOptions: ProviderTransform.providerOptions(input.model, params.options, providerRuntime),
         activeTools: Object.keys(tools).filter((x) => x !== "invalid"),
         tools,
         toolChoice: input.toolChoice,

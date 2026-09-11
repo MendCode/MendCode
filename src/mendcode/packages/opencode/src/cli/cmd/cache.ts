@@ -13,6 +13,7 @@ type CacheArgs = {
   model?: string
   session?: string
   projectPath?: string
+  scope?: ConfigCache.Scope
 }
 
 function cacheOptions(yargs: Argv) {
@@ -38,6 +39,11 @@ function cacheOptions(yargs: Argv) {
       type: "string",
       describe: "absolute or relative project path to target in global config",
     })
+    .option("scope", {
+      type: "string",
+      choices: ["session", "project"] as const,
+      describe: "cache-key scope for an enabled provider/project policy",
+    })
 }
 
 function mutationFromArgs(args: CacheArgs, action: CacheMutation["action"]): CacheMutation {
@@ -48,6 +54,7 @@ function mutationFromArgs(args: CacheArgs, action: CacheMutation["action"]): Cac
     modelID: args.model,
     sessionID: args.session,
     projectPath: args.projectPath,
+    scope: args.scope,
   }
 }
 
@@ -70,12 +77,14 @@ export const CacheStatusCommand = effectCmd({
   handler: Effect.fn("Cli.cache.status")(function* (args: { format?: string; json?: boolean }) {
     const config = yield* Config.Service
     const current = yield* config.get()
+    const selection = ConfigCache.selectCacheConfig({
+      config: current.cache,
+      projectScope: Instance.directory,
+    })
     const status = {
       project: Instance.directory,
-      mode: ConfigCache.selectCacheConfig({
-        config: current.cache,
-        projectScope: Instance.directory,
-      }).mode,
+      mode: selection.mode,
+      scope: selection.scope,
       configured: current.cache ?? null,
       activeKeeper: false,
       note: "MendCode only uses passive provider cache controls; no keepalive requests are scheduled.",

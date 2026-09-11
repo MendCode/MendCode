@@ -397,7 +397,7 @@ export function removeCacheOptions(options: Record<string, any>) {
 }
 
 export function enforceCacheOptions(options: Record<string, any>, policy: CacheRequestPolicy) {
-  if (policy.mode === "off" || (policy.mode === "smart" && !policy.useCacheKey)) return removeCacheOptions(options)
+  if (policy.mode === "off") return removeCacheOptions(options)
   return options
 }
 
@@ -1071,6 +1071,7 @@ export function options(input: {
   sessionID: string
   providerOptions?: Record<string, any>
   cache?: CacheRequestPolicy
+  cacheKey?: string
 }): Record<string, any> {
   const result: Record<string, any> = {}
   const legacyCaching = !input.cache || input.cache.mode === "legacy"
@@ -1127,7 +1128,7 @@ export function options(input: {
     (legacyCaching && (input.model.providerID === "openai" || input.providerOptions?.setCacheKey)) ||
     (managedCaching && input.model.providerID === "openai")
   ) {
-    result["promptCacheKey"] = input.sessionID
+    result["promptCacheKey"] = input.cacheKey ?? input.sessionID
   }
 
   if (input.model.api.npm === "@ai-sdk/google" || input.model.api.npm === "@ai-sdk/google-vertex") {
@@ -1210,7 +1211,7 @@ export function options(input: {
   }
 
   if ((legacyCaching || managedCaching) && input.model.providerID === "openrouter") {
-    result["prompt_cache_key"] = input.sessionID
+    result["prompt_cache_key"] = input.cacheKey ?? input.sessionID
   }
   if (legacyCaching && input.model.api.npm === "@ai-sdk/gateway") {
     result["gateway"] = {
@@ -1219,6 +1220,25 @@ export function options(input: {
   }
 
   return result
+}
+
+export function withManagedCacheKey(model: Provider.Model, options: Record<string, any>, cacheKey?: string) {
+  if (!cacheKey) return options
+  if (model.providerID === "openai" || model.api.npm === "@ai-sdk/openai") {
+    return { ...options, promptCacheKey: cacheKey }
+  }
+  if (model.providerID === "openrouter" || model.api.npm === "@openrouter/ai-sdk-provider") {
+    return { ...options, prompt_cache_key: cacheKey }
+  }
+  return options
+}
+
+export type ProviderRuntimeOptions = {
+  claudeCode?: {
+    sessionID?: string
+    workingDirectory?: string
+    cacheMode?: "off"
+  }
 }
 
 export function smallOptions(model: Provider.Model) {
@@ -1277,7 +1297,11 @@ function sanitizeOpencodeOptions(options: Record<string, any>) {
   return sanitize(options) as Record<string, any>
 }
 
-export function providerOptions(model: Provider.Model, options: { [x: string]: any }) {
+export function providerOptions(
+  model: Provider.Model,
+  options: { [x: string]: any },
+  runtime?: ProviderRuntimeOptions,
+) {
   if (model.providerID.startsWith("opencode")) {
     options = sanitizeOpencodeOptions(options)
   }
@@ -1327,6 +1351,9 @@ export function providerOptions(model: Provider.Model, options: { [x: string]: a
   // "azure" first. Pass both so model options work on either code path.
   if (model.api.npm === "@ai-sdk/azure") {
     return { openai: options, azure: options }
+  }
+  if (model.providerID === "claude-code" && runtime?.claudeCode) {
+    return { [key]: { ...options, __mendcode: runtime.claudeCode } }
   }
   return { [key]: options }
 }

@@ -5,8 +5,25 @@ describe("cache configuration", () => {
   test("keeps legacy behavior when no cache policy is configured", () => {
     expect(ConfigCache.selectCacheConfig({ config: undefined, projectScope: "/repo", sessionID: "ses_1" })).toEqual({
       mode: "legacy",
+      scope: "session",
       source: "default",
       reason: "cache policy is not configured",
+    })
+  })
+
+  test("uses the conservative OpenAI default when no override is configured", () => {
+    expect(
+      ConfigCache.selectCacheConfig({
+        config: undefined,
+        providerID: "openai",
+        modelID: "openai/gpt-5.6-luna",
+        apiModelID: "gpt-5.6-luna",
+      }),
+    ).toEqual({
+      mode: "smart",
+      scope: "session",
+      source: "default",
+      reason: "MendCode default enables conservative OpenAI prompt caching",
     })
   })
 
@@ -92,5 +109,23 @@ describe("cache configuration", () => {
       sessions: { mode: "selected", include: ["ses_1"], exclude: [] },
       providers: { openai: { mode: "smart", models: ["gpt-6-astra"], exclude_models: [] } },
     })
+  })
+
+  test("keeps project scope for a manually enabled folder", () => {
+    const next = ConfigCache.updateCacheConfig(undefined, {
+      action: "enable",
+      projectPath: "/repo",
+      scope: "project",
+    })
+
+    expect(
+      ConfigCache.selectCacheConfig({
+        config: next,
+        projectScope: "/repo/",
+        providerID: "openai",
+        modelID: "openai/gpt-6-astra",
+        apiModelID: "gpt-6-astra",
+      }),
+    ).toMatchObject({ mode: "smart", scope: "project", source: "project" })
   })
 })

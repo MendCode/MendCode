@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.1.44-beta.9 - 2026-09-11
+
+### Added
+
+- Add passive prompt-cache policy controls with project, session, provider, and
+  exact-model scope resolution, plus stable cache-lineage fingerprints.
+- Add provider-aware cache observations and conservative smart-mode adapters
+  without enabling keepalive or remote-cache deletion.
+
+### Fixed
+
+- Preserve ChatGPT OAuth Responses Lite affinity while rotating it when the
+  effective instructions or cache policy changes.
+- Honor explicit cache disablement across OpenAI, Claude Code, and transformed
+  provider requests without forwarding MendCode's internal cache markers.
+- Keep generated cache metadata and lineage deterministic across session and
+  model changes.
+
+### Tests
+
+- Add focused regressions for cache configuration, policy resolution, provider
+  transforms, cache lineage, and OAuth transport behavior.
+
 ## 0.1.44-beta.8 - 2026-09-10
 
 ### Added

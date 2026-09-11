@@ -11,8 +11,9 @@ import type {
   LanguageModelV3Usage,
   SharedV3Warning,
 } from "@ai-sdk/provider"
-import { query, type SDKMessage, type SDKResultMessage } from "@anthropic-ai/claude-agent-sdk"
+import { getSessionInfo, query, type SDKMessage, type SDKResultMessage } from "@anthropic-ai/claude-agent-sdk"
 import type { Auth } from "@/auth"
+import { isRecord } from "@/util/record"
 import type { Provider } from "./provider"
 import { ModelID, ProviderID } from "./schema"
 
@@ -28,9 +29,17 @@ export type Settings = {
 }
 
 type ClaudeQueryFactory = typeof query
+type ClaudeSessionInfoFactory = typeof getSessionInfo
+
+type ClaudeRuntimeOptions = {
+  sessionID?: string
+  workingDirectory?: string
+  cacheMode?: "off"
+}
 
 type CreateOptions = Partial<Settings> & {
   createQuery?: ClaudeQueryFactory
+  getSessionInfo?: ClaudeSessionInfoFactory
 }
 
 const DEFAULT_SETTINGS: Settings = {
@@ -71,6 +80,18 @@ function normalizeSettings(input?: Partial<Settings>): Settings {
 function stringOption(input: Record<string, unknown> | undefined, key: keyof Settings) {
   const value = input?.[key]
   return typeof value === "string" ? value : undefined
+}
+
+function runtimeOptions(input: LanguageModelV3CallOptions): ClaudeRuntimeOptions | undefined {
+  const providerOptions = input.providerOptions as Record<string, unknown> | undefined
+  const namespace = providerOptions?.["claude-code"]
+  if (!isRecord(namespace) || !isRecord(namespace.__mendcode)) return undefined
+  const runtime = namespace.__mendcode
+  return {
+    ...(typeof runtime.sessionID === "string" ? { sessionID: runtime.sessionID } : {}),
+    ...(typeof runtime.workingDirectory === "string" ? { workingDirectory: runtime.workingDirectory } : {}),
+    ...(runtime.cacheMode === "off" ? { cacheMode: "off" as const } : {}),
+  }
 }
 
 export function settingsFromInputs(input?: Record<string, string>): Settings {
@@ -449,6 +470,8 @@ async function* streamClaude(options: {
   prompt: string
   call: LanguageModelV3CallOptions
   createQuery: ClaudeQueryFactory
+  getSessionInfo: ClaudeSessionInfoFactory
+  runtime?: ClaudeRuntimeOptions
 }): AsyncGenerator<LanguageModelV3StreamPart> {
   const warnings: SharedV3Warning[] = []
   if (options.call.tools?.length) {
@@ -475,6 +498,12 @@ async function* streamClaude(options: {
   if (options.call.abortSignal?.aborted) onAbort()
   else options.call.abortSignal?.addEventListener("abort", onAbort, { once: true })
   const extraArgs = launchArgsToExtraArgs(options.settings.launchArgs)
+  const workingDirectory =
+    options.runtime?.workingDirectory || options.settings.workingDirectory || process.cwd()
+  const providerSessionID = options.runtime?.cacheMode === "off" ? undefined : options.runtime?.sessionID
+  const existingSession = providerSessionID
+    ? await options.getSessionInfo(providerSessionID, { dir: workingDirectory }).catch(() => undefined)
+    : undefined
   let queryRuntime: ReturnType<ClaudeQueryFactory> | undefined
 
   try {
@@ -482,7 +511,7 @@ async function* streamClaude(options: {
       prompt: options.prompt,
       options: {
         abortController,
-        cwd: options.settings.workingDirectory || process.cwd(),
+        cwd: workingDirectory,
         env: env(options.settings),
         model: options.modelId,
         pathToClaudeCodeExecutable: options.settings.binaryPath,
@@ -490,6 +519,11 @@ async function* streamClaude(options: {
         systemPrompt: { type: "preset", preset: "claude_code" },
         settingSources: ["user", "project", "local"],
         ...(extraArgs ? { extraArgs } : {}),
+        ...(providerSessionID
+          ? existingSession
+            ? { resume: providerSessionID }
+            : { sessionId: providerSessionID }
+          : {}),
       },
     })
     for await (const message of queryRuntime) {
@@ -566,6 +600,7 @@ class ClaudeCodeLanguageModel implements LanguageModelV3 {
     readonly modelId: string,
     private readonly settings: Settings,
     private readonly createQuery: ClaudeQueryFactory,
+    private readonly getSessionInfo: ClaudeSessionInfoFactory,
   ) {}
 
   async doGenerate(options: LanguageModelV3CallOptions): Promise<LanguageModelV3GenerateResult> {
@@ -621,6 +656,8 @@ class ClaudeCodeLanguageModel implements LanguageModelV3 {
           prompt,
           call: options,
           createQuery: this.createQuery,
+          getSessionInfo: this.getSessionInfo,
+          runtime: runtimeOptions(options),
         }),
       ),
     }
@@ -631,7 +668,12 @@ export function createClaudeCode(options: CreateOptions = {}) {
   const settings = normalizeSettings(options)
   return {
     languageModel(modelId: string) {
-      return new ClaudeCodeLanguageModel(modelId, settings, options.createQuery ?? query)
+      return new ClaudeCodeLanguageModel(
+        modelId,
+        settings,
+        options.createQuery ?? query,
+        options.getSessionInfo ?? getSessionInfo,
+      )
     },
   }
 }

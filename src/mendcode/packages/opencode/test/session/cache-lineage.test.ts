@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test"
-import { fingerprintPrefix, selectCacheIdentity } from "@/session/cache-lineage"
+import {
+  cacheKeyForFingerprint,
+  fingerprintPrefix,
+  selectCacheIdentity,
+  stableProviderSessionID,
+} from "@/session/cache-lineage"
 
 describe("cache lineage", () => {
   test("inherits only an identical fingerprint while keeping runtime identity separate", () => {
@@ -71,5 +76,47 @@ describe("cache lineage", () => {
         },
       }),
     ).toBeNull()
+  })
+
+  test("derives stable project keys and isolated provider session IDs", () => {
+    const projectKey = cacheKeyForFingerprint({
+      fingerprint: "a".repeat(64),
+      scope: "project",
+      projectScope: "/repo/",
+      sessionID: "ses_1",
+    })
+    expect(projectKey).toBe(
+      cacheKeyForFingerprint({
+        fingerprint: "a".repeat(64),
+        scope: "project",
+        projectScope: "/repo",
+        sessionID: "ses_2",
+      }),
+    )
+    expect(projectKey).toMatch(/^mendcode:project:[a-f0-9]{64}$/)
+
+    const first = stableProviderSessionID({
+      providerID: "claude-code",
+      modelID: "claude-sonnet-4-6",
+      projectScope: "/repo",
+      sessionID: "ses_1",
+    })
+    expect(first).toBe(
+      stableProviderSessionID({
+        providerID: "claude-code",
+        modelID: "claude-sonnet-4-6",
+        projectScope: "/repo/",
+        sessionID: "ses_1",
+      }),
+    )
+    expect(first).not.toBe(
+      stableProviderSessionID({
+        providerID: "claude-code",
+        modelID: "claude-sonnet-4-6",
+        projectScope: "/other",
+        sessionID: "ses_1",
+      }),
+    )
+    expect(first).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
   })
 })
