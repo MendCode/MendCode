@@ -29,6 +29,7 @@ import { validateSession } from "./validate-session"
 import { loadMendTuiProfile } from "@/mend/profile"
 import { ServerAuth } from "@/server/auth"
 import { SharedServer, type SharedServerClientLease, type SharedServerState } from "./shared-server"
+import { SHARED_SERVER_SHUTDOWN_TIMEOUT_MS } from "../serve-shutdown"
 import { isProcessMemoryUsage, processMemoryUsage, type DiagnosticsSnapshot } from "@/util/process-memory"
 import { Installation } from "@/installation"
 import { trackUpdateStartup } from "@/installation/startup"
@@ -171,7 +172,7 @@ async function stopLocalSharedServer(state: SharedServerState) {
     return !SharedServer.isProcessAlive(state.pid)
   }
 
-  const deadline = Date.now() + 5_000
+  const deadline = Date.now() + SHARED_SERVER_SHUTDOWN_TIMEOUT_MS + 2_000
   while (Date.now() < deadline) {
     if (!SharedServer.isProcessAlive(state.pid)) return true
     await new Promise((resolve) => setTimeout(resolve, 50))

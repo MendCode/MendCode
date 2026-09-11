@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.1.44-beta.8 - 2026-09-10
+
+### Added
+
+- Add a bounded Agent View command panel with actionable peer-session history,
+  direct session navigation, and explicit acceptance or rejection controls.
+- Add model-family prompt compatibility, bounded tool discovery, context
+  profiles, and runtime capability reporting without changing provider identity.
+
+### Fixed
+
+- Preserve queued prompts and peer delivery across targeted cancellation,
+  stale owner wakes, retries, and shared-server shutdown without replaying
+  cancelled work.
+- Harden shared-server leases, lock ownership, shutdown cleanup, and targeted
+  turn cancellation while keeping the original session state intact.
+
+### Tests
+
+- Add focused regressions for queue/cancellation recovery, shared-server
+  lifecycle, tool discovery, Astra prompt composition, OAuth transport, and
+  Agent View rendering.
+
 ## 0.1.44-beta.7 - 2026-09-10
 
 ### Added

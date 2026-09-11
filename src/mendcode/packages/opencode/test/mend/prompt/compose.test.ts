@@ -135,6 +135,22 @@ describe("mend prompt composition", () => {
     expect(policy.sections.find((item) => item.id === "model-behavior")?.text).toContain("GPT-5.6 compatibility")
   })
 
+  test("adds the concise Astra behavior profile to focus and full modes", async () => {
+    const minimal = await composePromptPolicy({ mode: "minimal", focusID: "codex", modelID: "openai/gpt-6-astra-fast" })
+    const focus = await composePromptPolicy({ mode: "focus", focusID: "codex", modelID: "openai/gpt-6-astra-fast" })
+    const full = await composePromptPolicy({ mode: "full", focusID: "codex", modelID: "gpt-6-astra" })
+
+    expect(minimal.sections.find((item) => item.id === "model-behavior")).toBeUndefined()
+    const focusSection = focus.sections.find((item) => item.id === "model-behavior")
+    const fullSection = full.sections.find((item) => item.id === "model-behavior")
+    expect(focusSection?.text).toContain("GPT-6 Astra behavior guidance")
+    expect(focusSection?.text).toContain("distinguish facts from hypotheses")
+    expect(focusSection?.text).toContain("Preserve the current objective")
+    expect(focusSection?.text).not.toContain("You are Codex")
+    expect(focusSection?.text).toBe(fullSection?.text)
+    expect(focusSection?.bytes).toBeLessThanOrEqual(4500)
+  })
+
   test("uses the current Mistral Vibe CLI snapshot", async () => {
     const policy = await composePromptPolicy({ mode: "focus", focusID: "mistral", modelID: "devstral-2" })
 

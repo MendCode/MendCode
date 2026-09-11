@@ -3411,7 +3411,10 @@ NOTE: At any point in time through this workflow you should feel free to ask the
         "</mendcode_runtime_event>",
       ].join("\n")
 
-    const completePeerResponse = (assistant: MessageV2.Assistant, peerState: PeerDeliveryState): Effect.Effect<void> =>
+    const completePeerResponse = (
+      assistant: MessageV2.Assistant,
+      peerState: PeerDeliveryState,
+    ): Effect.Effect<void> =>
       Effect.gen(function* () {
         if (!assistant.parentID || assistant.time.completed === undefined) return
         if (assistant.finish === "tool-calls" || assistant.finish === "unknown") return
@@ -3690,7 +3693,8 @@ NOTE: At any point in time through this workflow you should feel free to ask the
         )
         yield* bus.subscribe(MessageV2.Event.Updated).pipe(
           Stream.filter(
-            (event) => event.properties.info.role === "assistant" && event.properties.info.time.completed !== undefined,
+            (event) =>
+              event.properties.info.role === "assistant" && event.properties.info.time.completed !== undefined,
           ),
           Stream.runForEach((event) =>
             event.properties.info.role === "assistant"

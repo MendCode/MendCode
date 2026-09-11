@@ -83,6 +83,32 @@ describe("ProviderTransform.options - setCacheKey", () => {
     expect(result.promptCacheKey).toBe(sessionID)
   })
 
+  test("disables generated options and legacy annotations when cache mode is off", () => {
+    const policy = {
+      mode: "off" as const,
+      useCacheKey: false,
+      useLegacyAnnotations: false,
+      adapterID: "disabled",
+      reason: "test",
+    }
+    const options = ProviderTransform.options({ model: mockModel, sessionID, providerOptions: {}, cache: policy })
+    const messages = ProviderTransform.message(
+      [{ role: "system", content: "stable" }],
+      mockModel,
+      options,
+      policy,
+    )
+
+    expect(options.promptCacheKey).toBeUndefined()
+    expect(messages[0]?.providerOptions).toBeUndefined()
+    expect(
+      ProviderTransform.enforceCacheOptions(
+        { promptCacheKey: sessionID, prompt_cache_key: sessionID, gateway: { caching: "auto" } },
+        policy,
+      ),
+    ).toEqual({})
+  })
+
   test("should set store=false for openai provider", () => {
     const openaiModel = {
       ...mockModel,

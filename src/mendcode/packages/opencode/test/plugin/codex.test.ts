@@ -4,11 +4,12 @@ import {
   parseJwtClaims,
   extractAccountIdFromClaims,
   extractAccountId,
-  normalizeCodexChatGPTRequestBody,
   isCodexChatGPTModelSupported,
+  normalizeCodexChatGPTRequestBody,
   prepareCodexChatGPTOAuthRequest,
   type IdTokenClaims,
 } from "../../src/plugin/codex"
+import { normalizeAstraOptions } from "../../src/mend/prompt/model-family"
 
 function createTestJwt(payload: object): string {
   const header = Buffer.from(JSON.stringify({ alg: "none" })).toString("base64url")
@@ -101,6 +102,64 @@ describe("plugin.codex", () => {
         URLSearchParams,
       )
     })
+
+    test("normalizes Astra-only request controls without changing its model", () => {
+      const body = normalizeCodexChatGPTRequestBody(
+        JSON.stringify({
+          model: "gpt-6-astra-fast",
+          temperature: 0.2,
+          top_p: 0.8,
+          top_logprobs: 2,
+          logprobs: true,
+          include: ["reasoning.encrypted_content", "message.output_text.logprobs"],
+          reasoning: { effort: "minimal" },
+        }),
+      )
+
+      expect(JSON.parse(body as string)).toEqual({
+        model: "gpt-6-astra",
+        service_tier: "priority",
+        include: ["reasoning.encrypted_content"],
+        reasoning: { effort: "low" },
+      })
+    })
+  })
+
+  test("recognizes the Astra catalog model and its generated fast alias", () => {
+    expect(isCodexChatGPTModelSupported("gpt-6-astra")).toBe(true)
+    expect(isCodexChatGPTModelSupported("gpt-6-astra-fast")).toBe(true)
+    expect(isCodexChatGPTModelSupported("gpt-4.1")).toBe(false)
+  })
+
+  test("assigns the Astra context limit and compaction threshold in the OAuth catalog", async () => {
+    const plugin = await CodexAuthPlugin({} as never)
+    const models = await plugin.provider!.models!(
+      {
+        models: {
+          "gpt-6-astra": {
+            id: "gpt-6-astra",
+            api: { id: "gpt-6-astra" },
+            cost: { input: 1, output: 1, cache: { read: 1, write: 1 } },
+            limit: { context: 1, input: 1, output: 1 },
+          },
+        },
+      } as never,
+      { auth: { type: "oauth" } } as never,
+    )
+
+    expect(models["gpt-6-astra"]?.limit).toEqual({ context: 1_050_000, input: 922_000, output: 128_000 })
+    expect(models["gpt-6-astra"]?.options).toMatchObject({ compaction: { threshold: 90 } })
+  })
+
+  test("removes unsupported Astra SDK options before serialization", () => {
+    expect(
+      normalizeAstraOptions("gpt-6-astra", {
+        temperature: 0.2,
+        topP: 0.8,
+        reasoningEffort: "minimal",
+        reasoning: { effort: "none" },
+      }),
+    ).toEqual({ reasoningEffort: "low", reasoning: { effort: "low" } })
   })
 
   test("keeps Astra, Sol, Terra, and Luna modes in the ChatGPT OAuth catalog", async () => {
@@ -275,6 +334,28 @@ describe("plugin.codex", () => {
     expect(sessionIDs.size).toBe(0)
   })
 
+  test("routes Astra through the Codex Responses Lite envelope", () => {
+    const headers = new Headers({ "session-id": "ses_astra" })
+    const body = prepareCodexChatGPTOAuthRequest({
+      headers,
+      body: JSON.stringify({
+        model: "gpt-6-astra",
+        input: [{ role: "user", content: [{ type: "input_text", text: "hello" }] }],
+        instructions: "be concise",
+      }),
+    })
+    const parsed = JSON.parse(body as string) as Record<string, unknown>
+
+    expect(parsed.model).toBe("gpt-6-astra")
+    expect(headers.get("x-openai-internal-codex-responses-lite")).toBe("true")
+    expect(parsed.tool_choice).toBe("auto")
+    expect(parsed.input).toEqual([
+      { type: "additional_tools", role: "developer", tools: [] },
+      { type: "message", role: "developer", content: [{ type: "input_text", text: "be concise" }] },
+      { role: "user", content: [{ type: "input_text", text: "hello" }] },
+    ])
+  })
+
   test("rotates Responses Lite affinity when instructions change", () => {
     const sessionIDs = new Map<string, string>()
     const sessionPromptFingerprints = new Map<string, string>()
@@ -393,6 +474,49 @@ describe("plugin.codex", () => {
     expect(forwarded?.body.prompt_cache_key).toBeUndefined()
   })
 
+  test("falls back to the generated session key for invalid or changed managed cache keys", () => {
+    const request = (instructions: string, managedCacheKey: string) => {
+      const headers = new Headers({ "session-id": "ses_managed_cache_change" })
+      const body = prepareCodexChatGPTOAuthRequest({
+        headers,
+        managedCacheKey,
+        sessionIDs: new Map<string, string>(),
+        sessionPromptFingerprints: new Map<string, string>(),
+        body: JSON.stringify({ model: "gpt-5.6-luna", input: [], instructions }),
+      })
+      return { headers, body: JSON.parse(body as string) as Record<string, unknown> }
+    }
+
+    const invalid = request("stable instructions", "bad key with spaces")
+    expect(invalid.body.prompt_cache_key).toBe(invalid.headers.get("session-id"))
+
+    const sessionIDs = new Map<string, string>()
+    const fingerprints = new Map<string, string>()
+    const firstHeaders = new Headers({ "session-id": "ses_managed_cache_rotate" })
+    const first = JSON.parse(
+      prepareCodexChatGPTOAuthRequest({
+        headers: firstHeaders,
+        managedCacheKey: "mendcode:project:root-1",
+        sessionIDs,
+        sessionPromptFingerprints: fingerprints,
+        body: JSON.stringify({ model: "gpt-5.6-luna", input: [], instructions: "first" }),
+      }) as string,
+    ) as Record<string, unknown>
+    const changedHeaders = new Headers({ "session-id": "ses_managed_cache_rotate" })
+    const changed = JSON.parse(
+      prepareCodexChatGPTOAuthRequest({
+        headers: changedHeaders,
+        managedCacheKey: "mendcode:project:root-1",
+        sessionIDs,
+        sessionPromptFingerprints: fingerprints,
+        body: JSON.stringify({ model: "gpt-5.6-luna", input: [], instructions: "changed" }),
+      }) as string,
+    ) as Record<string, unknown>
+
+    expect(first.prompt_cache_key).toBe("mendcode:project:root-1")
+    expect(changed.prompt_cache_key).toBe(changedHeaders.get("session-id"))
+    expect(changed.prompt_cache_key).not.toBe(first.prompt_cache_key)
+  })
   test("keeps the API-key transport independent from the ChatGPT OAuth adapter", async () => {
     const plugin = await CodexAuthPlugin({} as never)
     const loaded = await plugin.auth!.loader!(async () => ({ type: "api", key: "test" }) as never, {} as never)

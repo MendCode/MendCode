@@ -5227,6 +5227,18 @@ unix(
 
           const run = yield* prompt.loop({ sessionID: chat.id }).pipe(Effect.forkChild)
           yield* llm.wait(1)
+          yield* Effect.gen(function* () {
+            while (true) {
+              const messages = yield* sessions.messages({ sessionID: chat.id })
+              if (
+                messages.some((message) =>
+                  message.parts.some((part) => part.type === "tool" && part.state.status === "running"),
+                )
+              )
+                return
+              yield* Effect.sleep("1 millis")
+            }
+          }).pipe(Effect.timeout("1 second"))
           yield* Effect.sleep(150)
           yield* prompt.cancel(chat.id)
 

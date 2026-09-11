@@ -37,8 +37,18 @@ import * as OtelTracer from "@effect/opentelemetry/Tracer"
 import { runtimeCapabilityPrompt } from "@/mend/prompt/runtime-capabilities"
 import { autoReasoningSignal, selectAutoReasoning } from "@/mend/prompt/reasoning-auto"
 import { isAstraModel, normalizeAstraOptions } from "@/mend/prompt/model-family"
-import { ReasoningRequested, ReasoningCleared, recordReasoningState, clearReasoningState, requestedReasoningEffort } from "@/mend/prompt/reasoning-state"
-import { CACHE_MODE_HEADER, cacheBindingFromModel, resolveCacheRequestPolicy } from "@/provider/cache-policy"
+import {
+  ReasoningRequested,
+  ReasoningCleared,
+  recordReasoningState,
+  clearReasoningState,
+  requestedReasoningEffort,
+} from "@/mend/prompt/reasoning-state"
+import {
+  CACHE_MODE_HEADER,
+  cacheBindingFromModel,
+  resolveCacheRequestPolicy,
+} from "@/provider/cache-policy"
 import { profileContext, type ContextProfile } from "./context-profile"
 import { discoveryWireMiddleware } from "./tool-discovery"
 

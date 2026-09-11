@@ -21,7 +21,7 @@ const CODEX_COMPATIBILITY_VERSION = "0.144.0"
 const CODEX_ORIGINATOR = "codex_cli_rs"
 const CODEX_USER_AGENT = `codex_cli_rs/0.0.0 (MendCode; ${os.platform()} ${os.release()}; ${os.arch()})`
 const RESPONSES_LITE_HEADER = "x-openai-internal-codex-responses-lite"
-const RESPONSES_LITE_MODELS = new Set(["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"])
+const RESPONSES_LITE_MODELS = new Set(["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-6-astra"])
 const ALLOWED_MODELS = new Set([
   "gpt-5.5",
   "gpt-5.2",
@@ -116,13 +116,14 @@ export function normalizeCodexChatGPTRequestBody(body: BodyInit | null | undefin
           mode: "pro",
         }
       : request.reasoning
-  if (normalized.modelID === request.model && !normalized.mode && normalizeAstraRequest(request) === request) return body
-  return JSON.stringify(normalizeAstraRequest({
+  const normalizedRequest = normalizeAstraRequest({
     ...request,
     model: normalized.modelID,
     ...(normalized.mode === "fast" ? { service_tier: "priority" } : {}),
     ...(reasoning === undefined ? {} : { reasoning }),
-  }))
+  })
+  if (normalized.modelID === request.model && !normalized.mode && normalizeAstraRequest(request) === request) return body
+  return JSON.stringify(normalizedRequest)
 }
 
 function prepareResponsesLiteRequest(input: {
