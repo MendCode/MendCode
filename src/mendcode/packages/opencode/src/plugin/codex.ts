@@ -8,6 +8,7 @@ import { setTimeout as sleep } from "node:timers/promises"
 import { createServer } from "http"
 import { isRecord } from "@/util/record"
 import { normalizeAstraRequest } from "@/mend/prompt/model-family"
+import { CACHE_MODE_HEADER, isManagedCacheKey } from "@/provider/cache-policy"
 
 const log = Log.create({ service: "plugin.codex" })
 
@@ -129,6 +130,8 @@ function prepareResponsesLiteRequest(input: {
   headers: Headers
   sessionIDs: Map<string, string>
   sessionPromptFingerprints: Map<string, string>
+  managedCacheKey?: string
+  cacheMode?: "off"
 }) {
   const body = normalizeCodexChatGPTRequestBody(input.body)
   if (typeof body !== "string") return body
@@ -148,12 +151,21 @@ function prepareResponsesLiteRequest(input: {
   }
 
   const sourceSessionID = input.headers.get("session-id") ?? input.headers.get("session_id")
+  let instructionsChanged = false
   if (sourceSessionID && typeof parsed.instructions === "string") {
     const fingerprint = Bun.hash(parsed.instructions).toString()
-    if (input.sessionPromptFingerprints.get(sourceSessionID) !== fingerprint) {
+    const previousFingerprint = input.sessionPromptFingerprints.get(sourceSessionID)
+    if (previousFingerprint !== undefined && previousFingerprint !== fingerprint) {
+      instructionsChanged = true
+    }
+    if (previousFingerprint !== fingerprint) {
       input.sessionIDs.delete(sourceSessionID)
       input.sessionPromptFingerprints.set(sourceSessionID, fingerprint)
     }
+  } else if (sourceSessionID && input.sessionPromptFingerprints.has(sourceSessionID)) {
+    instructionsChanged = true
+    input.sessionIDs.delete(sourceSessionID)
+    input.sessionPromptFingerprints.delete(sourceSessionID)
   }
   const sessionID = (sourceSessionID ? input.sessionIDs.get(sourceSessionID) : undefined) ?? Bun.randomUUIDv7()
   if (sourceSessionID) input.sessionIDs.set(sourceSessionID, sessionID)
@@ -174,7 +186,13 @@ function prepareResponsesLiteRequest(input: {
   delete parsed.instructions
   parsed.tool_choice = "auto"
   parsed.parallel_tool_calls = false
-  parsed.prompt_cache_key = sessionID
+  if (input.cacheMode === "off") {
+    delete parsed.prompt_cache_key
+    delete parsed.promptCacheKey
+  } else {
+    parsed.prompt_cache_key =
+      !instructionsChanged && isManagedCacheKey(input.managedCacheKey) ? input.managedCacheKey : sessionID
+  }
   parsed.reasoning = {
     ...(isRecord(parsed.reasoning) ? parsed.reasoning : {}),
     context: "all_turns",
@@ -195,12 +213,29 @@ export function prepareCodexChatGPTOAuthRequest(input: {
   headers: Headers
   sessionIDs?: Map<string, string>
   sessionPromptFingerprints?: Map<string, string>
+  /** Internal seam for a verified cache lineage; affinity remains session-scoped. */
+  managedCacheKey?: string
+  /** Internal request override used to disable provider cache controls. */
+  cacheMode?: "off"
   responsesLite?: boolean
 }) {
   input.headers.set("originator", CODEX_ORIGINATOR)
   input.headers.set("User-Agent", CODEX_USER_AGENT)
   input.headers.set("Origin", "https://chatgpt.com")
-  if (input.responsesLite === false) return normalizeCodexChatGPTRequestBody(input.body)
+  if (input.responsesLite === false) {
+    const body = normalizeCodexChatGPTRequestBody(input.body)
+    if (input.cacheMode !== "off" || typeof body !== "string") return body
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(body)
+    } catch {
+      return body
+    }
+    if (!isRecord(parsed)) return body
+    delete parsed.prompt_cache_key
+    delete parsed.promptCacheKey
+    return JSON.stringify(parsed)
+  }
   const sessionIDs = input.sessionIDs ?? new Map<string, string>()
   const sessionPromptFingerprints = input.sessionPromptFingerprints ?? new Map<string, string>()
   return prepareResponsesLiteRequest({
@@ -208,6 +243,8 @@ export function prepareCodexChatGPTOAuthRequest(input: {
     headers: input.headers,
     sessionIDs,
     sessionPromptFingerprints,
+    managedCacheKey: input.managedCacheKey,
+    cacheMode: input.cacheMode,
   })
 }
 
@@ -672,6 +709,8 @@ export async function CodexAuthPlugin(input: PluginInput, options: CodexAuthPlug
             }
 
             const headers = new Headers(request.headers)
+            const cacheMode = headers.get(CACHE_MODE_HEADER)
+            headers.delete(CACHE_MODE_HEADER)
             headers.delete("authorization")
             headers.set("authorization", `Bearer ${currentAuth.access}`)
 
@@ -695,6 +734,7 @@ export async function CodexAuthPlugin(input: PluginInput, options: CodexAuthPlug
                   headers,
                   sessionIDs: codexSessionIDs,
                   sessionPromptFingerprints: codexSessionPromptFingerprints,
+                  ...(cacheMode === "off" ? { cacheMode: "off" as const } : {}),
                   // The standalone compact endpoint accepts the canonical
                   // Responses input window. Responses Lite's developer-item
                   // rewrite would corrupt that opaque window, so keep the

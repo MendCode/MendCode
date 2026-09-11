@@ -311,6 +311,88 @@ describe("plugin.codex", () => {
     ])
   })
 
+  test("rotates Responses Lite affinity when instructions are removed", () => {
+    const sessionIDs = new Map<string, string>()
+    const sessionPromptFingerprints = new Map<string, string>()
+
+    const request = (instructions?: string) => {
+      const headers = new Headers({ "session-id": "ses_prompt_context_removed" })
+      const body = prepareCodexChatGPTOAuthRequest({
+        headers,
+        sessionIDs,
+        sessionPromptFingerprints,
+        body: JSON.stringify({
+          model: "gpt-5.6-luna",
+          input: [{ role: "user", content: [{ type: "input_text", text: "hello" }] }],
+          ...(instructions === undefined ? {} : { instructions }),
+        }),
+      })
+      return { headers, body: JSON.parse(body as string) as Record<string, unknown> }
+    }
+
+    const first = request("stable instructions")
+    const removed = request()
+
+    expect(removed.headers.get("session-id")).not.toBe(first.headers.get("session-id"))
+    expect(removed.body.prompt_cache_key).toBe(removed.headers.get("session-id"))
+  })
+
+  test("uses a validated managed cache key without changing transport affinity", () => {
+    const headers = new Headers({ "session-id": "ses_managed_cache" })
+    const body = prepareCodexChatGPTOAuthRequest({
+      headers,
+      managedCacheKey: "mendcode:project:root-1",
+      body: JSON.stringify({
+        model: "gpt-5.6-luna",
+        input: [],
+        instructions: "stable instructions",
+      }),
+    })
+    const parsed = JSON.parse(body as string) as Record<string, unknown>
+
+    expect(parsed.prompt_cache_key).toBe("mendcode:project:root-1")
+    expect(headers.get("session-id")).not.toBe("mendcode:project:root-1")
+    expect(headers.get("x-session-affinity")).toBe(headers.get("session-id"))
+  })
+
+  test("omits the Responses Lite cache key when cache mode is off", () => {
+    const headers = new Headers({ "session-id": "ses_cache_off" })
+    const body = prepareCodexChatGPTOAuthRequest({
+      headers,
+      cacheMode: "off",
+      body: JSON.stringify({ model: "gpt-5.6-luna", input: [], instructions: "stable" }),
+    })
+    const parsed = JSON.parse(body as string) as Record<string, unknown>
+
+    expect(parsed.prompt_cache_key).toBeUndefined()
+    expect(headers.get("x-session-affinity")).toBe(headers.get("session-id"))
+  })
+
+  test("consumes the cache-off marker before forwarding an OAuth request", async () => {
+    let forwarded: { headers: Headers; body: Record<string, unknown> } | undefined
+    using server = Bun.serve({
+      port: 0,
+      async fetch(request) {
+        forwarded = { headers: new Headers(request.headers), body: await readRequestBody(request) }
+        return Response.json({})
+      },
+    })
+    const providerFetch = await loadCodexFetch(`http://127.0.0.1:${server.port}/codex/responses`)
+
+    await providerFetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "session-id": "ses_cache_off_forward",
+        "x-mendcode-cache-mode": "off",
+      },
+      body: JSON.stringify({ model: "gpt-5.6-luna", input: [], instructions: "stable" }),
+    })
+
+    expect(forwarded?.headers.get("x-mendcode-cache-mode")).toBeNull()
+    expect(forwarded?.body.prompt_cache_key).toBeUndefined()
+  })
+
   test("keeps the API-key transport independent from the ChatGPT OAuth adapter", async () => {
     const plugin = await CodexAuthPlugin({} as never)
     const loaded = await plugin.auth!.loader!(async () => ({ type: "api", key: "test" }) as never, {} as never)

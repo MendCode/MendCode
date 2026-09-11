@@ -1,11 +1,11 @@
 import type { ModelMessage, ToolResultPart } from "ai"
-import { mergeDeep, unique } from "remeda"
 import type { JSONSchema7 } from "@ai-sdk/provider"
 import type { JSONSchema } from "zod/v4/core"
 import type * as Provider from "./provider"
 import type * as ModelsDev from "./models"
 import { iife } from "@/util/iife"
 import { Flag } from "@mendcode/core/flag/flag"
+import { applyLegacyCaching, type CacheRequestPolicy } from "./cache-policy"
 
 type Modality = NonNullable<ModelsDev.Model["modalities"]>["input"][number]
 
@@ -20,6 +20,14 @@ function mimeToModality(mime: string): Modality | undefined {
 export const OUTPUT_TOKEN_MAX = Flag.OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX || 32_000
 
 const INCLUDE_ENCRYPTED_REASONING = ["reasoning.encrypted_content"] as const
+const CACHE_OPTION_KEYS = new Set([
+  "cacheControl",
+  "cachePoint",
+  "cache_control",
+  "copilot_cache_control",
+  "promptCacheKey",
+  "prompt_cache_key",
+])
 
 export function sanitizeSurrogates(content: string) {
   return content.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, "\uFFFD")
@@ -327,57 +335,6 @@ function normalizeMessages(
   return msgs
 }
 
-function applyCaching(msgs: ModelMessage[], model: Provider.Model): ModelMessage[] {
-  const system = msgs.filter((msg) => msg.role === "system").slice(0, 2)
-  const final = msgs.filter((msg) => msg.role !== "system").slice(-2)
-
-  const providerOptions = {
-    anthropic: {
-      cacheControl: { type: "ephemeral" },
-    },
-    openrouter: {
-      cacheControl: { type: "ephemeral" },
-    },
-    bedrock: {
-      cachePoint: { type: "default" },
-    },
-    openaiCompatible: {
-      cache_control: { type: "ephemeral" },
-    },
-    copilot: {
-      copilot_cache_control: { type: "ephemeral" },
-    },
-    alibaba: {
-      cacheControl: { type: "ephemeral" },
-    },
-  }
-
-  for (const msg of unique([...system, ...final])) {
-    const useMessageLevelOptions =
-      model.providerID === "anthropic" ||
-      model.providerID.includes("bedrock") ||
-      model.api.npm === "@ai-sdk/amazon-bedrock"
-    const shouldUseContentOptions = !useMessageLevelOptions && Array.isArray(msg.content) && msg.content.length > 0
-
-    if (shouldUseContentOptions) {
-      const lastContent = msg.content[msg.content.length - 1]
-      if (
-        lastContent &&
-        typeof lastContent === "object" &&
-        lastContent.type !== "tool-approval-request" &&
-        lastContent.type !== "tool-approval-response"
-      ) {
-        lastContent.providerOptions = mergeDeep(lastContent.providerOptions ?? {}, providerOptions)
-        continue
-      }
-    }
-
-    msg.providerOptions = mergeDeep(msg.providerOptions ?? {}, providerOptions)
-  }
-
-  return msgs
-}
-
 function unsupportedParts(msgs: ModelMessage[], model: Provider.Model): ModelMessage[] {
   return msgs.map((msg) => {
     if (msg.role !== "user" || !Array.isArray(msg.content)) return msg
@@ -416,10 +373,67 @@ function unsupportedParts(msgs: ModelMessage[], model: Provider.Model): ModelMes
   })
 }
 
-export function message(msgs: ModelMessage[], model: Provider.Model, options: Record<string, unknown>) {
+function stripCacheFields(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stripCacheFields)
+  if (!value || typeof value !== "object") return value
+
+  const result: Record<string, unknown> = {}
+  for (const [key, item] of Object.entries(value)) {
+    if (CACHE_OPTION_KEYS.has(key)) continue
+    result[key] = stripCacheFields(item)
+  }
+  return result
+}
+
+export function removeCacheOptions(options: Record<string, any>) {
+  const result = stripCacheFields(options) as Record<string, any>
+  if (result.gateway && typeof result.gateway === "object" && result.gateway.caching === "auto") {
+    const gateway = { ...result.gateway }
+    delete gateway.caching
+    if (Object.keys(gateway).length === 0) delete result.gateway
+    else result.gateway = gateway
+  }
+  return result
+}
+
+export function enforceCacheOptions(options: Record<string, any>, policy: CacheRequestPolicy) {
+  if (policy.mode === "off" || (policy.mode === "smart" && !policy.useCacheKey)) return removeCacheOptions(options)
+  return options
+}
+
+function withoutCacheAnnotations(msgs: ModelMessage[]) {
+  return msgs.map((msg) => {
+    const result = { ...msg } as Record<string, any>
+    const providerOptions = stripCacheFields(msg.providerOptions) as Record<string, any> | undefined
+    if (providerOptions && Object.keys(providerOptions).length > 0) result.providerOptions = providerOptions
+    else delete result.providerOptions
+
+    if (Array.isArray(msg.content)) {
+      result.content = msg.content.map((part) => {
+        if (!part || typeof part !== "object") return part
+        const next = { ...part } as Record<string, any>
+        const partOptions = stripCacheFields(next.providerOptions) as Record<string, any> | undefined
+        if (partOptions && Object.keys(partOptions).length > 0) next.providerOptions = partOptions
+        else delete next.providerOptions
+        return next
+      })
+    }
+    return result as ModelMessage
+  })
+}
+
+export function message(
+  msgs: ModelMessage[],
+  model: Provider.Model,
+  options: Record<string, unknown>,
+  cachePolicy?: CacheRequestPolicy,
+) {
   msgs = unsupportedParts(msgs, model)
   msgs = normalizeMessages(msgs, model, options)
-  if (
+  if (cachePolicy?.mode === "off") {
+    msgs = withoutCacheAnnotations(msgs)
+  } else if (
+    cachePolicy?.useLegacyAnnotations !== false &&
     (model.providerID === "anthropic" ||
       model.providerID === "google-vertex-anthropic" ||
       model.api.id.includes("anthropic") ||
@@ -430,7 +444,7 @@ export function message(msgs: ModelMessage[], model: Provider.Model, options: Re
       model.api.npm === "@ai-sdk/alibaba") &&
     model.api.npm !== "@ai-sdk/gateway"
   ) {
-    msgs = applyCaching(msgs, model)
+    msgs = applyLegacyCaching(msgs, model)
   }
 
   // Remap providerOptions keys from stored providerID to expected SDK key
@@ -1056,8 +1070,11 @@ export function options(input: {
   model: Provider.Model
   sessionID: string
   providerOptions?: Record<string, any>
+  cache?: CacheRequestPolicy
 }): Record<string, any> {
   const result: Record<string, any> = {}
+  const legacyCaching = !input.cache || input.cache.mode === "legacy"
+  const managedCaching = input.cache?.mode === "smart" && input.cache.useCacheKey
 
   if (
     input.model.api.npm === "@ai-sdk/google-vertex/anthropic" ||
@@ -1075,7 +1092,7 @@ export function options(input: {
     result["store"] = false
   }
 
-  if (input.model.api.npm === "@ai-sdk/azure") {
+  if (legacyCaching && input.model.api.npm === "@ai-sdk/azure") {
     result["store"] = false
     result["promptCacheKey"] = input.sessionID
   }
@@ -1106,7 +1123,10 @@ export function options(input: {
     }
   }
 
-  if (input.model.providerID === "openai" || input.providerOptions?.setCacheKey) {
+  if (
+    (legacyCaching && (input.model.providerID === "openai" || input.providerOptions?.setCacheKey)) ||
+    (managedCaching && input.model.providerID === "openai")
+  ) {
     result["promptCacheKey"] = input.sessionID
   }
 
@@ -1178,21 +1198,21 @@ export function options(input: {
       result["textVerbosity"] = "low"
     }
 
-    if (input.model.providerID.startsWith("opencode")) {
+    if (legacyCaching && input.model.providerID.startsWith("opencode")) {
       result["promptCacheKey"] = input.sessionID
       result["include"] = INCLUDE_ENCRYPTED_REASONING
       result["reasoningSummary"] = "auto"
     }
   }
 
-  if (input.model.providerID === "venice") {
+  if (legacyCaching && input.model.providerID === "venice") {
     result["promptCacheKey"] = input.sessionID
   }
 
-  if (input.model.providerID === "openrouter") {
+  if ((legacyCaching || managedCaching) && input.model.providerID === "openrouter") {
     result["prompt_cache_key"] = input.sessionID
   }
-  if (input.model.api.npm === "@ai-sdk/gateway") {
+  if (legacyCaching && input.model.api.npm === "@ai-sdk/gateway") {
     result["gateway"] = {
       caching: "auto",
     }

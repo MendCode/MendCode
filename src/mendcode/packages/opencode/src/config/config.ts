@@ -25,6 +25,7 @@ import { containsPath } from "../project/instance-context"
 import { zod } from "@/util/effect-zod"
 import { NonNegativeInt, PositiveInt, withStatics, type DeepMutable } from "@/util/schema"
 import { ConfigAgent } from "./agent"
+import { ConfigCache } from "./cache"
 import { ConfigCommand } from "./command"
 import { ConfigFormatter } from "./formatter"
 import { ConfigLayout } from "./layout"
@@ -237,6 +238,9 @@ export const Info = Schema.Struct({
   ).annotate({ description: "Agent configuration for model roles and subagents" }),
   provider: Schema.optional(Schema.Record(Schema.String, ConfigProvider.Info)).annotate({
     description: "Custom provider configurations and model overrides",
+  }),
+  cache: Schema.optional(ConfigCache.Info).annotate({
+    description: "Provider prompt-cache controls with project, session, and exact-model scoping",
   }),
   image_generation: Schema.optional(
     Schema.Struct({

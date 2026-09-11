@@ -159,7 +159,7 @@ jobs:
           bun run --cwd packages/opencode typecheck
           cd packages/opencode
           for test_file in test/installation/*.test.ts test/cli/upgrade-channel.test.ts test/cli/tui/shared-server.test.ts test/cli/tui/thread.test.ts; do
-            bash -c 'export MENDCODE_DB="${TMPDIR:-/tmp}/opencode-test-data-$$/share/release.db"; exec bun test --timeout 30000 "$@"' bash "$test_file"
+            bash -c 'export MENDCODE_DB=":memory:"; exec bun test --timeout 30000 "$@"' bash "$test_file"
           done
 
       - name: Upload release artifacts to workflow
