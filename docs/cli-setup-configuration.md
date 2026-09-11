@@ -159,6 +159,129 @@ Common MendCode config paths:
 - `.mendcode/tsm/state.json`: optional TSM state.
 - `.mendcode/worktree/state.json`: managed/adopted worktree registry.
 
+## Prompt Cache Controls
+
+MendCode exposes passive prompt-cache controls through the `cache` block in the
+project or global MendCode config. The controls affect cache keys and provider
+cache annotations that MendCode sends with a request; they never delete a
+provider's remote cache and they never schedule refresh or keepalive requests.
+
+The public CLI is:
+
+```bash
+mendcode cache status [--format text|json|--json]
+mendcode cache enable [--global] [--provider <id>] [--model <id>] [--session <id>] [--project-path <path>]
+mendcode cache disable [--global] [--provider <id>] [--model <id>] [--session <id>] [--project-path <path>]
+```
+
+`on` is an alias for `enable` and `off` is an alias for `disable`. Without
+`--global`, mutation commands update the active project's config. With
+`--global`, they update the global config. `--project-path` is only valid with
+`--global` and writes an exact normalized project-path override. A model target
+requires `--provider`; provider, model, session, and project targets cannot be
+combined.
+
+### Configuration
+
+The `cache` block is optional. If it is absent, MendCode preserves existing
+provider behavior (`legacy` effective mode).
+
+```jsonc
+{
+  "cache": {
+    "mode": "smart",
+    "projects": {
+      "/Users/me/src/example": { "mode": "smart" }
+    },
+    "sessions": {
+      "mode": "selected",
+      "include": ["ses_allowed"],
+      "exclude": ["ses_blocked"]
+    },
+    "providers": {
+      "openai": {
+        "mode": "smart",
+        "models": ["openai/gpt-6-astra"],
+        "exclude_models": ["openai/legacy-model"]
+      },
+      "openrouter": {
+        "models": ["openai/gpt-5.6-mini"]
+      }
+    }
+  }
+}
+```
+
+Supported values and scopes:
+
+- `mode`: `off` suppresses MendCode cache controls; `smart` enables only the
+  verified passive-key paths described below. Omit it to keep legacy behavior.
+- `projects`: exact normalized project paths mapped to `{ "mode": "off" }` or
+  `{ "mode": "smart" }`. Use absolute paths for portable global config.
+- `sessions.mode`: `all`, `selected`, or `none`. `include` selects session IDs
+  and `exclude` blocks session IDs. An excluded session wins over inclusion.
+- `providers`: provider IDs mapped to an optional `mode`, `models` allowlist,
+  and `exclude_models` list. Model matching accepts the configured runtime ID,
+  API model ID, and their final path component.
+
+Resolution is deterministic. Disabling rules win in this order: global
+`mode: off`, project `off`, session `none`/exclusion/not-selected, provider
+`off`, then model exclusion or allowlist rejection. Enabling then resolves from
+the global mode, project mode, provider selection, or explicitly included
+session; otherwise the effective mode is `legacy`.
+
+### Smart-mode boundaries
+
+`smart` is deliberately conservative. A managed passive cache key is enabled
+only for a binding that has all of the following verified locally:
+
+- API-key authentication, not ChatGPT subscription OAuth;
+- a non-Responses-Lite transport;
+- OpenAI's `@ai-sdk/openai` SDK at `api.openai.com`, or the OpenRouter SDK/
+  compatible route at `openrouter.ai`;
+- the exact provider, model, endpoint, SDK, authentication, and transport match.
+
+Other providers, custom endpoints, OAuth routes, unknown models, and incomplete
+bindings do not receive a newly inferred managed key. Existing provider-specific
+legacy annotations remain governed by their existing transform path unless the
+policy is explicitly `off`; MendCode does not infer TTL, cache warmth, hit rate,
+price savings, or provider support from a model name alone.
+
+`off` removes recognized cache fields from request options and message/provider
+annotations, including `promptCacheKey`, `prompt_cache_key`, `cacheControl`,
+`cachePoint`, `cache_control`, `copilot_cache_control`, and gateway
+`caching: "auto"`. For ChatGPT OAuth, the internal disable marker is consumed
+before the request is forwarded upstream. This is local request shaping, not
+remote-cache delete access.
+
+### Scope examples
+
+```bash
+# Inspect the effective policy for the current project.
+mendcode cache status --format json
+
+# Enable conservative caching for the current project's OpenAI provider.
+mendcode cache enable --provider openai
+
+# Allow one exact model and disable another model on the same provider.
+mendcode cache enable --provider openai --model openai/gpt-6-astra
+mendcode cache disable --provider openai --model openai/legacy-model
+
+# Limit caching to one session, or disable it for a session.
+mendcode cache enable --session ses_allowed
+mendcode cache disable --session ses_blocked
+
+# Manage an exact project override from the global config.
+mendcode cache enable --global --project-path /Users/me/src/example
+mendcode cache disable --global --project-path /Users/me/src/example
+```
+
+`cache status` reports the effective mode, the current project, the configured
+block, and `activeKeeper: false`. Cache Keeper, scheduled refresh, automatic
+warm-up, and provider canaries are not part of this control surface. Missing
+provider cache metrics remain unknown rather than being converted to a zero or
+used to claim a cache hit.
+
 ## Prompt Draft Undo and Redo
 
 The TUI keeps a temporary in-memory edit history for the active prompt:

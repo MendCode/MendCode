@@ -38,6 +38,7 @@ import { runtimeCapabilityPrompt } from "@/mend/prompt/runtime-capabilities"
 import { autoReasoningSignal, selectAutoReasoning } from "@/mend/prompt/reasoning-auto"
 import { isAstraModel, normalizeAstraOptions } from "@/mend/prompt/model-family"
 import { ReasoningRequested, ReasoningCleared, recordReasoningState, clearReasoningState, requestedReasoningEffort } from "@/mend/prompt/reasoning-state"
+import { CACHE_MODE_HEADER, cacheBindingFromModel, resolveCacheRequestPolicy } from "@/provider/cache-policy"
 import { profileContext, type ContextProfile } from "./context-profile"
 import { discoveryWireMiddleware } from "./tool-discovery"
 
@@ -220,6 +221,30 @@ const live: Layer.Layer<
       // TODO: move this to a proper hook
       const isOpenaiOauth = item.id === "openai" && info?.type === "oauth"
       const mendProjectRoot = input.root || input.cwd
+      const authMode = info?.type === "oauth" ? "oauth" : info?.type === "api" ? "api" : "unknown"
+      const endpoint =
+        (typeof input.model.options?.baseURL === "string" && input.model.options.baseURL) ||
+        (typeof item.options?.baseURL === "string" && item.options.baseURL) ||
+        input.model.api.url
+      const cachePolicy = resolveCacheRequestPolicy({
+        config: cfg.cache,
+        projectScope: mendProjectRoot,
+        sessionID: input.sessionID,
+        binding: cacheBindingFromModel(input.model, {
+          auth: authMode,
+          transport: isOpenaiOauth
+            ? "responses-lite"
+            : input.model.api.npm === "@ai-sdk/openai"
+              ? "responses-http"
+              : "other",
+          endpoint,
+          ...(info?.type === "oauth"
+            ? { accountScope: info.accountId ? `oauth:${info.accountId}` : "oauth" }
+            : info?.type === "api"
+              ? { accountScope: "api" }
+              : {}),
+        }),
+      })
       const mendFocus = input.mendPrompt?.focus ?? SystemPrompt.mendFocus(input.model)
       const mendPromptPolicy =
         input.mendPrompt?.policy ??
@@ -294,6 +319,7 @@ const live: Layer.Layer<
             model: input.model,
             sessionID: input.sessionID,
             providerOptions: item.options,
+            cache: cachePolicy,
           })
       const options = mergeOptions(mergeOptions(mergeOptions(base, input.model.options), input.agent.options), variant)
       if (isOpenaiOauth) {
@@ -354,6 +380,7 @@ const live: Layer.Layer<
         // retains reasoning parameters without substituting a different model ID.
         if (input.model.api.npm === "@ai-sdk/openai") params.options.forceReasoning = true
       }
+      params.options = ProviderTransform.enforceCacheOptions(params.options, cachePolicy)
 
       const { headers } = yield* plugin.trigger(
         "chat.headers",
@@ -368,6 +395,10 @@ const live: Layer.Layer<
           headers: {},
         },
       )
+      const requestHeaders = {
+        ...headers,
+        ...(isOpenaiOauth && cachePolicy.mode === "off" ? { [CACHE_MODE_HEADER]: "off" } : {}),
+      }
 
       const tools = resolveTools(input)
 
@@ -594,7 +625,7 @@ const live: Layer.Layer<
                 "User-Agent": `mendcode/${InstallationVersion}`,
               }),
           ...input.model.headers,
-          ...headers,
+          ...requestHeaders,
         },
         maxRetries: input.retries ?? 0,
         includeRawChunks: true,
@@ -607,7 +638,7 @@ const live: Layer.Layer<
               async transformParams(args) {
                 if (args.type === "stream") {
                   // @ts-expect-error
-                  args.params.prompt = ProviderTransform.message(args.params.prompt, input.model, options)
+                  args.params.prompt = ProviderTransform.message(args.params.prompt, input.model, options, cachePolicy)
                   contextProfile = profileContext({
                     prompt: args.params.prompt,
                     tools: args.params.tools,

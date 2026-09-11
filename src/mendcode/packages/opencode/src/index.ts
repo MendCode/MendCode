@@ -41,6 +41,7 @@ const commandLoaders = {
   debug: () => import("./cli/cmd/debug").then((module) => module.DebugCommand),
   console: () => import("./cli/cmd/account").then((module) => module.ConsoleCommand),
   providers: () => import("./cli/cmd/providers").then((module) => module.ProvidersCommand),
+  cache: () => import("./cli/cmd/cache").then((module) => module.CacheCommand),
   agent: () => import("./cli/cmd/agent").then((module) => module.AgentCommand),
   upgrade: () => import("./cli/cmd/upgrade").then((module) => module.UpgradeCommand),
   uninstall: () => import("./cli/cmd/uninstall").then((module) => module.UninstallCommand),
