@@ -4,6 +4,9 @@
 
 ### Fixed
 
+- Sign and verify the final macOS executable after compilation, before creating
+  release archives.
+
 - Let updated CLI and desktop clients attach to a healthy shared backend while
   existing clients own its previous runtime, without starting another database
   writer or failing update readiness solely on the backend version.

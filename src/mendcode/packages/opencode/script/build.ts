@@ -251,6 +251,14 @@ for (const item of targets) {
     },
   })
 
+  // Bun appends the compiled payload after linking. Re-sign the final Mach-O
+  // so the signature covers the shipped bytes, then verify before archiving.
+  if (item.os === "darwin" && process.platform === "darwin") {
+    const binaryPath = `dist/${name}/bin/${binaryName}`
+    await $`codesign --force --sign - ${binaryPath}`
+    await $`codesign --verify --strict ${binaryPath}`
+  }
+
   // Smoke test: only run if binary is for current platform
   if (item.os === process.platform && item.arch === process.arch && !item.abi) {
     const binaryPath = `dist/${name}/bin/${binaryName}`
