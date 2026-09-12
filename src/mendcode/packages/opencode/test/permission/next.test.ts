@@ -1068,7 +1068,7 @@ it.live("reply - reject with message throws CorrectedError", () =>
   ),
 )
 
-it.live("reply - always persists approval and resolves", () =>
+it.live("reply - always retains approval for the current runtime", () =>
   Effect.gen(function* () {
     const dir = yield* tmpdirScoped({ git: true })
     const run = withProvided(dir)
@@ -1096,6 +1096,103 @@ it.live("reply - always persists approval and resolves", () =>
     }).pipe(run)
     expect(result).toBeUndefined()
   }),
+)
+
+it.live("restart ignores legacy persisted always approvals", () =>
+  Effect.gen(function* () {
+    const dir = yield* tmpdirScoped({ git: true })
+    const run = withProvided(dir)
+    const first = yield* ask({
+      id: PermissionID.make("per_legacy_seed"),
+      sessionID: SessionID.make("session_legacy_seed"),
+      permission: "custom_tool",
+      patterns: ["invocation:legacy"],
+      metadata: {},
+      always: ["invocation:legacy"],
+      ruleset: [],
+    }).pipe(run, Effect.forkScoped)
+    yield* waitForPending(1).pipe(run)
+    yield* reply({ requestID: PermissionID.make("per_legacy_seed"), reply: "always" }).pipe(run)
+    yield* Fiber.join(first)
+
+    yield* Effect.sync(() => {
+      const row = Database.use((db) => db.select().from(PermissionTable).all()[0])!
+      if (Array.isArray(row.data)) throw new Error("expected v2 permission store")
+      Database.use((db) =>
+        db
+          .update(PermissionTable)
+          .set({
+            time_updated: Date.now(),
+            data: {
+              ...row.data,
+              approved: [{ permission: "custom_tool", pattern: "invocation:legacy", action: "allow" }],
+            },
+          })
+          .where(eq(PermissionTable.project_id, row.project_id))
+          .run(),
+      )
+    }).pipe(run)
+    yield* Effect.promise(() => reloadTestInstance({ directory: dir }))
+
+    const afterRestart = yield* ask({
+      id: PermissionID.make("per_legacy_after_restart"),
+      sessionID: SessionID.make("session_legacy_after_restart"),
+      permission: "custom_tool",
+      patterns: ["invocation:legacy"],
+      metadata: {},
+      always: [],
+      ruleset: [],
+    }).pipe(run, Effect.forkScoped)
+    yield* waitForPending(1).pipe(run)
+    yield* reply({ requestID: PermissionID.make("per_legacy_after_restart"), reply: "reject" }).pipe(run)
+    expect(Exit.isFailure(yield* Fiber.await(afterRestart))).toBe(true)
+  }),
+)
+
+it.live("harness approval binds an always grant to one exact invocation", () =>
+  withDir({ git: true }, () =>
+    Effect.gen(function* () {
+      const exact = "invocation:exact"
+      const ruleset = Permission.withSessionMode([{ permission: "*", pattern: "*", action: "allow" }], "approval")
+      const first = yield* ask({
+        id: PermissionID.make("per_harness_exact"),
+        sessionID: SessionID.make("session_harness"),
+        permission: "custom_tool",
+        patterns: [exact],
+        metadata: { harnessApproval: true },
+        always: [exact],
+        ruleset,
+      }).pipe(Effect.forkScoped)
+
+      yield* waitForPending(1)
+      yield* reply({ requestID: PermissionID.make("per_harness_exact"), reply: "always" })
+      yield* Fiber.join(first)
+
+      expect(
+        yield* ask({
+          sessionID: SessionID.make("session_harness"),
+          permission: "custom_tool",
+          patterns: [exact],
+          metadata: { harnessApproval: true },
+          always: [exact],
+          ruleset,
+        }),
+      ).toBeUndefined()
+
+      const changed = yield* ask({
+        id: PermissionID.make("per_harness_changed"),
+        sessionID: SessionID.make("session_harness"),
+        permission: "custom_tool",
+        patterns: ["invocation:changed"],
+        metadata: { harnessApproval: true },
+        always: ["invocation:changed"],
+        ruleset,
+      }).pipe(Effect.forkScoped)
+      yield* waitForPending(1)
+      yield* reply({ requestID: PermissionID.make("per_harness_changed"), reply: "reject" })
+      expect(Exit.isFailure(yield* Fiber.await(changed))).toBe(true)
+    }),
+  ),
 )
 
 it.live("reply - reject cancels all pending for same session", () =>

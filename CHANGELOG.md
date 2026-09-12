@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.1.44-beta.10 - 2026-09-12
+
+### Fixed
+
+- Let updated CLI and desktop clients attach to a healthy shared backend while
+  existing clients own its previous runtime, without starting another database
+  writer or failing update readiness solely on the backend version.
+
+- Require harness authorization before custom, plugin, and MCP tool hooks or
+  execution, with runtime-only grants bound to the exact tool and canonical
+  arguments.
+- Ignore legacy persisted `always` grants after restart and prevent DWS from
+  preapproving tools unless an explicit allow rule matches.
+- Update ChatGPT OAuth's Codex compatibility header to `0.154.0` so GPT-6 Astra
+  satisfies the current backend client-version requirement.
+
+### Tests
+
+- Add regressions for custom-tool authorization metadata, canonical invocation
+  identities, argument-isolated grants, restart isolation, and Astra headers.
+
 ## 0.1.44-beta.9 - 2026-09-11
 
 ### Added

@@ -84,7 +84,9 @@ async function probeSharedServer(input: { url: string; directory: string; header
     fetch: input.fetch,
     signal: AbortSignal.timeout(SHARED_SERVER_PROBE_TIMEOUT_MS),
   })
-  return (await client.global.health({ throwOnError: true })).data
+  const health = (await client.global.health({ throwOnError: true })).data
+  if (health?.healthy !== true) throw new Error("Shared backend is not healthy")
+  return health
 }
 
 function sharedServerConnection(state: SharedServerState) {
@@ -300,7 +302,7 @@ export async function ensureLocalSharedServer(input: {
   if (existing) return existing
 
   const release = await SharedServer.acquireLock()
-  if (!release) return waitForLocalSharedServer(input.directory, runtimeID, input.lease)
+  if (!release) return waitForExistingLocalSharedServer(input.directory, input.lease)
 
   let child: ChildProcess | undefined
   let connected = false
@@ -316,18 +318,30 @@ export async function ensureLocalSharedServer(input: {
       const activeClients = await SharedServer.activeClientLeaseCountForServer(state.pid)
       const live = SharedServer.isProcessAlive(state.pid)
       const runtimeMatches = state.runtimeID === runtimeID
+      // An installed update can coexist with an older backend owned by active clients.
+      // Probe that owner before treating a different runtime fingerprint as unavailable.
+      const reachable = live && await probeSharedServer({ ...sharedServerConnection(state), directory: input.directory })
+        .then(() => true, () => false)
+      if (reachable && runtimeMatches) {
+        const connection = await connectToSharedServerState(input.directory, state, input.lease)
+        if (connection) {
+          connected = true
+          return connection
+        }
+        return undefined
+      }
 
       const canReplace = SharedServer.shouldReplaceSharedServer({
         live,
         runtimeMatches,
         activeClients,
-        reachable: false,
+        reachable,
       })
       if (SharedServer.shouldAttachExistingSharedServer({
         live,
         runtimeMatches,
         activeClients,
-        reachable: false,
+        reachable,
       })) {
         // An active client owns the old runtime. Attach to that server until
         // its leases drain; starting a second server would split durable state
@@ -755,7 +769,7 @@ export const TuiThreadCommand = cmd({
           url: transport.url,
           onStartupReady: startup ? async () => {
             const health = await probeSharedServer({ ...transport, directory: cwd })
-            if (health?.healthy !== true || health.version !== Installation.displayVersion()) {
+            if (health?.healthy !== true || (!localSharedServer && health.version !== Installation.displayVersion())) {
               await startup?.close("Connected backend does not match the installed update version.")
               return
             }

@@ -16,7 +16,7 @@ import { Flag } from "@mendcode/core/flag/flag"
 import { Permission } from "@/permission"
 import { PermissionID } from "@/permission/schema"
 import { Bus } from "@/bus"
-import { Wildcard } from "@/util/wildcard"
+import { invocationApprovalPattern } from "@/tool/tool"
 import { SessionID } from "@/session/schema"
 import { Auth } from "@/auth"
 import { Installation } from "@/installation"
@@ -240,11 +240,11 @@ const live: Layer.Layer<
         ? ("responses-lite" as const)
         : input.model.providerID === "claude-code" && input.model.api.npm === "mendcode/claude-code"
           ? ("claude-agent-sdk" as const)
-        : input.model.api.npm === "@ai-sdk/openai" ||
-            input.model.providerID === "openrouter" ||
-            input.model.api.npm === "@openrouter/ai-sdk-provider"
-          ? ("responses-http" as const)
-          : ("other" as const)
+          : input.model.api.npm === "@ai-sdk/openai" ||
+              input.model.providerID === "openrouter" ||
+              input.model.api.npm === "@openrouter/ai-sdk-provider"
+            ? ("responses-http" as const)
+            : ("other" as const)
       const endpoint =
         (typeof input.model.options?.baseURL === "string" && input.model.options.baseURL) ||
         (typeof item.options?.baseURL === "string" && item.options.baseURL) ||
@@ -277,8 +277,8 @@ const live: Layer.Layer<
             mendProjectRoot,
             memoryQuery,
             input.memoryMode ?? memoryMode(input.messages),
-            ),
-          ))
+          ),
+        ))
       const fullMode = /^Mode: full$/m.test(mendPromptPolicy)
       const cachePolicy = resolveCacheRequestPolicy({
         config: cfg.cache,
@@ -347,11 +347,16 @@ const live: Layer.Layer<
         variants: input.model.variants,
         signal: autoReasoningSignal(input.messages),
       })
-      if (autoReasoning) l.info("reasoning.auto", { effort: autoReasoning.effort, reason: autoReasoning.reason, messageID: input.user.id })
+      if (autoReasoning)
+        l.info("reasoning.auto", {
+          effort: autoReasoning.effort,
+          reason: autoReasoning.reason,
+          messageID: input.user.id,
+        })
       const variant =
         !input.small && input.model.variants && input.user.model.variant
           ? input.model.variants[input.user.model.variant]
-          : autoReasoning?.options ?? {}
+          : (autoReasoning?.options ?? {})
       const base = input.small
         ? ProviderTransform.smallOptions(input.model)
         : ProviderTransform.options({
@@ -509,12 +514,12 @@ const live: Layer.Layer<
           serializationRevision: "mendcode-cache-prefix-v1",
         })
         return fingerprint
-          ? cacheKeyForFingerprint({
+          ? (cacheKeyForFingerprint({
               fingerprint,
               scope: cachePolicy.scope,
               projectScope: mendProjectRoot,
               sessionID: input.sessionID,
-            }) ?? undefined
+            }) ?? undefined)
           : undefined
       })()
       params.options = ProviderTransform.withManagedCacheKey(input.model, params.options, managedCacheKey)
@@ -531,83 +536,79 @@ const live: Layer.Layer<
         }
         workflowModel.sessionID = input.sessionID
         workflowModel.systemPrompt = system.join("\n")
-        workflowModel.toolExecutor = input.toolMode === "none" ? null : async (toolName, argsJson, _requestID) => {
-          const t = tools[toolName]
-          if (!t || !t.execute) {
-            return { result: "", error: `Unknown tool: ${toolName}` }
-          }
-          try {
-            const result = await t.execute!(JSON.parse(argsJson), {
-              toolCallId: _requestID,
-              messages: input.messages,
-              abortSignal: input.abort,
-            })
-            const output = typeof result === "string" ? result : (result?.output ?? JSON.stringify(result))
-            return {
-              result: output,
-              metadata: typeof result === "object" ? result?.metadata : undefined,
-              title: typeof result === "object" ? result?.title : undefined,
-            }
-          } catch (e: any) {
-            return { result: "", error: e.message ?? String(e) }
-          }
-        }
+        workflowModel.toolExecutor =
+          input.toolMode === "none"
+            ? null
+            : async (toolName, argsJson, _requestID) => {
+                const t = tools[toolName]
+                if (!t || !t.execute) {
+                  return { result: "", error: `Unknown tool: ${toolName}` }
+                }
+                try {
+                  const result = await t.execute!(JSON.parse(argsJson), {
+                    toolCallId: _requestID,
+                    messages: input.messages,
+                    abortSignal: input.abort,
+                  })
+                  const output = typeof result === "string" ? result : (result?.output ?? JSON.stringify(result))
+                  return {
+                    result: output,
+                    metadata: typeof result === "object" ? result?.metadata : undefined,
+                    title: typeof result === "object" ? result?.title : undefined,
+                  }
+                } catch (e: any) {
+                  return { result: "", error: e.message ?? String(e) }
+                }
+              }
 
         if (input.toolMode === "none") {
           workflowModel.sessionPreapprovedTools = []
           workflowModel.approvalHandler = async () => ({ approved: false })
         } else {
           const ruleset = Permission.merge(input.agent.permission ?? [], input.permission ?? [])
-          workflowModel.sessionPreapprovedTools = Object.keys(tools).filter((name) => {
-            const match = ruleset.findLast((rule) => Wildcard.match(name, rule.permission))
-            return !match || match.action !== "ask"
-          })
+          workflowModel.sessionPreapprovedTools = Object.keys(tools).filter(
+            (name) => Permission.evaluate(name, "*", ruleset).action === "allow",
+          )
 
           const bridge = yield* EffectBridge.make()
-          const approvedToolsForSession = new Set<string>()
+          const approvedInvocationsForSession = new Set<string>()
           workflowModel.approvalHandler = InstanceState.bind(async (approvalTools) => {
-          const uniqueNames = [...new Set(approvalTools.map((t: { name: string }) => t.name))] as string[]
-          // Auto-approve tools that were already approved in this session
-          // (prevents infinite approval loops for server-side MCP tools)
-          if (uniqueNames.every((name) => approvedToolsForSession.has(name))) {
-            return { approved: true }
-          }
-
-          const id = PermissionID.ascending()
-          let unsub: (() => void) | undefined
-          try {
-            unsub = Bus.subscribe(Permission.Event.Replied, (evt) => {
-              if (evt.properties.requestID === id) void evt.properties.reply
-            })
-            const toolPatterns = approvalTools.map((t: { name: string; args: string }) => {
+            const invocationPatterns = approvalTools.map((item) => {
               try {
-                const parsed = JSON.parse(t.args) as Record<string, unknown>
-                const title = (parsed?.title ?? parsed?.name ?? "") as string
-                return title ? `${t.name}: ${title}` : t.name
+                return invocationApprovalPattern(item.name, JSON.parse(item.args))
               } catch {
-                return t.name
+                return invocationApprovalPattern(item.name, item.args)
               }
             })
-            const uniquePatterns = [...new Set(toolPatterns)] as string[]
-            await bridge.promise(
-              perm.ask({
-                id,
-                sessionID: SessionID.make(input.sessionID),
-                permission: "workflow_tool_approval",
-                patterns: uniquePatterns,
-                metadata: { tools: approvalTools },
-                always: uniquePatterns,
-                ruleset: [],
-              }),
-            )
-            for (const name of uniqueNames) approvedToolsForSession.add(name)
-            workflowModel.sessionPreapprovedTools = [...(workflowModel.sessionPreapprovedTools ?? []), ...uniqueNames]
-            return { approved: true }
-          } catch {
-            return { approved: false }
-          } finally {
-            unsub?.()
-          }
+            if (invocationPatterns.every((pattern) => approvedInvocationsForSession.has(pattern))) {
+              return { approved: true }
+            }
+
+            const id = PermissionID.ascending()
+            let unsub: (() => void) | undefined
+            try {
+              unsub = Bus.subscribe(Permission.Event.Replied, (evt) => {
+                if (evt.properties.requestID === id) void evt.properties.reply
+              })
+              const uniquePatterns = [...new Set(invocationPatterns)] as string[]
+              await bridge.promise(
+                perm.ask({
+                  id,
+                  sessionID: SessionID.make(input.sessionID),
+                  permission: "workflow_tool_approval",
+                  patterns: uniquePatterns,
+                  metadata: { tools: approvalTools },
+                  always: uniquePatterns,
+                  ruleset: [],
+                }),
+              )
+              for (const pattern of invocationPatterns) approvedInvocationsForSession.add(pattern)
+              return { approved: true }
+            } catch {
+              return { approved: false }
+            } finally {
+              unsub?.()
+            }
           })
         }
       }
@@ -638,7 +639,7 @@ const live: Layer.Layer<
         const state = {
           sessionID: input.sessionID,
           messageID: input.user.id,
-          mode: autoReasoning ? "auto" as const : "manual" as const,
+          mode: autoReasoning ? ("auto" as const) : ("manual" as const),
           effort: requestedEffort,
           reason: autoReasoning?.reason ?? "manual_selection",
           modelID: input.model.api.id,
@@ -649,7 +650,13 @@ const live: Layer.Layer<
         yield* Effect.promise(() => Bus.publish(ReasoningRequested, state))
       } else if (!input.small) {
         clearReasoningState(input.sessionID)
-        yield* Effect.promise(() => Bus.publish(ReasoningCleared, { sessionID: input.sessionID, messageID: input.user.id, requestedAt: Date.now() }))
+        yield* Effect.promise(() =>
+          Bus.publish(ReasoningCleared, {
+            sessionID: input.sessionID,
+            messageID: input.user.id,
+            requestedAt: Date.now(),
+          }),
+        )
       }
       let contextProfile: ContextProfile | undefined
       let dispatchedAt = performance.now()
@@ -764,8 +771,13 @@ const live: Layer.Layer<
                   firstTokenMs,
                   usageReported: {
                     input: Number.isFinite(event.usage.inputTokens),
-                    cacheRead: Number.isFinite(event.usage.inputTokenDetails?.cacheReadTokens ?? event.usage.cachedInputTokens),
-                    cacheWrite: Number.isFinite(event.usage.inputTokenDetails?.cacheWriteTokens ?? event.providerMetadata?.anthropic?.cacheCreationInputTokens),
+                    cacheRead: Number.isFinite(
+                      event.usage.inputTokenDetails?.cacheReadTokens ?? event.usage.cachedInputTokens,
+                    ),
+                    cacheWrite: Number.isFinite(
+                      event.usage.inputTokenDetails?.cacheWriteTokens ??
+                        event.providerMetadata?.anthropic?.cacheCreationInputTokens,
+                    ),
                   },
                 },
               },

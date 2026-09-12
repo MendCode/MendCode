@@ -333,10 +333,10 @@ export function shouldExitPromptLoop(input: {
   const assistant = input.lastAssistant
   return Boolean(
     assistant?.finish &&
-    !["tool-calls"].includes(assistant.finish) &&
-    !input.hasToolCalls &&
-    !input.summaryHasLaterTarget &&
-    comparePromptMessageOrder(assistant, input.lastUser) > 0,
+      !["tool-calls"].includes(assistant.finish) &&
+      !input.hasToolCalls &&
+      !input.summaryHasLaterTarget &&
+      comparePromptMessageOrder(assistant, input.lastUser) > 0,
   )
 }
 
@@ -1356,6 +1356,15 @@ NOTE: At any point in time through this workflow you should feel free to ask the
             return run.promise(
               Effect.gen(function* () {
                 const ctx = context(args, options)
+                if (item.harnessApproval === "invocation") {
+                  const pattern = Tool.invocationApprovalPattern(item.id, args)
+                  yield* ctx.ask({
+                    permission: item.id,
+                    patterns: [pattern],
+                    always: [pattern],
+                    metadata: { harnessApproval: true, tool: item.id, arguments: args },
+                  })
+                }
                 yield* status.set(ctx.sessionID, {
                   type: "busy",
                   message: SessionStatus.activityLabelForTool(item.id),
@@ -1462,6 +1471,13 @@ NOTE: At any point in time through this workflow you should feel free to ask the
             Effect.gen(function* () {
               const ctx = context(args, opts)
               const executionOptions = { ...opts, abortSignal: ctx.abort }
+              const pattern = Tool.invocationApprovalPattern(key, args)
+              yield* ctx.ask({
+                permission: key,
+                metadata: { harnessApproval: true, tool: key, arguments: args },
+                patterns: [pattern],
+                always: [pattern],
+              })
               yield* status.set(ctx.sessionID, {
                 type: "busy",
                 message: SessionStatus.activityLabelForTool(key),
@@ -1471,10 +1487,9 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                 { tool: key, sessionID: ctx.sessionID, callID: opts.toolCallId },
                 { args },
               )
-              const result: Awaited<ReturnType<NonNullable<typeof execute>>> = yield* Effect.gen(function* () {
-                yield* ctx.ask({ permission: key, metadata: {}, patterns: ["*"], always: ["*"] })
-                return yield* Effect.promise(() => execute(args, executionOptions))
-              }).pipe(
+              const result: Awaited<ReturnType<NonNullable<typeof execute>>> = yield* Effect.promise(() =>
+                execute(args, executionOptions),
+              ).pipe(
                 Effect.withSpan("Tool.execute", {
                   attributes: {
                     "tool.name": key,
@@ -3411,10 +3426,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
         "</mendcode_runtime_event>",
       ].join("\n")
 
-    const completePeerResponse = (
-      assistant: MessageV2.Assistant,
-      peerState: PeerDeliveryState,
-    ): Effect.Effect<void> =>
+    const completePeerResponse = (assistant: MessageV2.Assistant, peerState: PeerDeliveryState): Effect.Effect<void> =>
       Effect.gen(function* () {
         if (!assistant.parentID || assistant.time.completed === undefined) return
         if (assistant.finish === "tool-calls" || assistant.finish === "unknown") return
@@ -3693,8 +3705,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
         )
         yield* bus.subscribe(MessageV2.Event.Updated).pipe(
           Stream.filter(
-            (event) =>
-              event.properties.info.role === "assistant" && event.properties.info.time.completed !== undefined,
+            (event) => event.properties.info.role === "assistant" && event.properties.info.time.completed !== undefined,
           ),
           Stream.runForEach((event) =>
             event.properties.info.role === "assistant"

@@ -192,6 +192,7 @@ export const layer: Layer.Layer<
             id,
             parameters,
             description: def.description,
+            harnessApproval: "invocation",
             execute: (args, toolCtx) =>
               Effect.gen(function* () {
                 const pluginCtx: PluginToolContext = {
@@ -467,6 +468,7 @@ export const layer: Layer.Layer<
               .filter(Boolean)
               .join("\n"),
             parameters: output.parameters,
+            harnessApproval: tool.harnessApproval,
             execute: tool.execute,
             formatValidationError: tool.formatValidationError,
           }

@@ -4,6 +4,7 @@ import type { Permission } from "../permission"
 import type { SessionID, MessageID } from "../session/schema"
 import * as Truncate from "./truncate"
 import { Agent } from "@/agent/agent"
+import { createHash } from "node:crypto"
 
 interface Metadata {
   [key: string]: any
@@ -38,8 +39,24 @@ export interface Def<
   id: string
   description: string
   parameters: Parameters
+  harnessApproval?: "invocation"
   execute(args: Schema.Schema.Type<Parameters>, ctx: Context): Effect.Effect<ExecuteResult<M>>
   formatValidationError?(error: unknown): string
+}
+
+function canonicalize(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalize)
+  if (!value || typeof value !== "object") return value
+  return Object.fromEntries(
+    Object.keys(value as Record<string, unknown>)
+      .sort()
+      .map((key) => [key, canonicalize((value as Record<string, unknown>)[key])]),
+  )
+}
+
+export function invocationApprovalPattern(toolID: string, args: unknown) {
+  const payload = JSON.stringify({ toolID, args: canonicalize(args) })
+  return `invocation:${createHash("sha256").update(payload).digest("hex")}`
 }
 export type DefWithoutID<
   Parameters extends Schema.Decoder<unknown> = Schema.Decoder<unknown>,

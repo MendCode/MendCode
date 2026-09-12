@@ -8,12 +8,7 @@ import { setTimeout as sleep } from "node:timers/promises"
 import { createServer } from "http"
 import { isRecord } from "@/util/record"
 import { normalizeAstraRequest } from "@/mend/prompt/model-family"
-import {
-  CACHE_KEY_HEADER,
-  CACHE_MODE_HEADER,
-  CACHE_SESSION_HEADER,
-  isManagedCacheKey,
-} from "@/provider/cache-policy"
+import { CACHE_KEY_HEADER, CACHE_MODE_HEADER, CACHE_SESSION_HEADER, isManagedCacheKey } from "@/provider/cache-policy"
 
 const log = Log.create({ service: "plugin.codex" })
 
@@ -22,7 +17,7 @@ const ISSUER = "https://auth.openai.com"
 const CODEX_API_ENDPOINT = "https://chatgpt.com/backend-api/codex/responses"
 const OAUTH_PORT = 1455
 const OAUTH_POLLING_SAFETY_MARGIN_MS = 3000
-const CODEX_COMPATIBILITY_VERSION = "0.144.0"
+const CODEX_COMPATIBILITY_VERSION = "0.154.0"
 const CODEX_ORIGINATOR = "codex_cli_rs"
 const CODEX_USER_AGENT = `codex_cli_rs/0.0.0 (MendCode; ${os.platform()} ${os.release()}; ${os.arch()})`
 const RESPONSES_LITE_HEADER = "x-openai-internal-codex-responses-lite"
@@ -65,22 +60,17 @@ const CODEX_CHATGPT_FAST_MODE_MODELS = new Set([
   "gpt-6-astra",
 ])
 
-const CODEX_CHATGPT_PRO_MODE_MODELS = new Set([
-  "gpt-5.6",
-  "gpt-5.6-sol",
-  "gpt-5.6-terra",
-  "gpt-5.6-luna",
-])
+const CODEX_CHATGPT_PRO_MODE_MODELS = new Set(["gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"])
 
 export function normalizeCodexChatGPTModel(modelID: string) {
   const fastBase = modelID.endsWith("-fast") ? modelID.slice(0, -"-fast".length) : undefined
   const proBase = modelID.endsWith("-pro") ? modelID.slice(0, -"-pro".length) : undefined
   const mode =
     fastBase && CODEX_CHATGPT_FAST_MODE_MODELS.has(fastBase)
-    ? "fast"
-    : proBase && CODEX_CHATGPT_PRO_MODE_MODELS.has(proBase)
-      ? "pro"
-      : undefined
+      ? "fast"
+      : proBase && CODEX_CHATGPT_PRO_MODE_MODELS.has(proBase)
+        ? "pro"
+        : undefined
   const base = mode === "fast" ? fastBase! : mode === "pro" ? proBase! : modelID
   return {
     modelID: CODEX_CHATGPT_MODEL_ALIASES[base] ?? base,
@@ -127,7 +117,8 @@ export function normalizeCodexChatGPTRequestBody(body: BodyInit | null | undefin
     ...(normalized.mode === "fast" ? { service_tier: "priority" } : {}),
     ...(reasoning === undefined ? {} : { reasoning }),
   })
-  if (normalized.modelID === request.model && !normalized.mode && normalizeAstraRequest(request) === request) return body
+  if (normalized.modelID === request.model && !normalized.mode && normalizeAstraRequest(request) === request)
+    return body
   return JSON.stringify(normalizedRequest)
 }
 
@@ -263,8 +254,9 @@ export function prepareCodexChatGPTOAuthRequest(input: {
 }
 
 function isProviderSessionID(value: unknown): value is string {
-  return typeof value === "string" &&
-    /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
+  return (
+    typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
+  )
 }
 
 function stripImageDetail(input: unknown): void {
@@ -744,7 +736,8 @@ export async function CodexAuthPlugin(input: PluginInput, options: CodexAuthPlug
             // Rewrite URL to Codex endpoint
             const parsed = new URL(request.url)
             const isCompact = parsed.pathname.endsWith("/responses/compact")
-            const rewrites = isCompact || parsed.pathname.includes("/v1/responses") || parsed.pathname.includes("/chat/completions")
+            const rewrites =
+              isCompact || parsed.pathname.includes("/v1/responses") || parsed.pathname.includes("/chat/completions")
             if (!rewrites) return fetch(request, { headers })
             const url = new URL(codexApiEndpoint)
             if (isCompact) url.pathname = `${url.pathname.replace(/\/+$/, "")}/compact`

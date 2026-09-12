@@ -260,7 +260,7 @@ describe("plugin.codex", () => {
     expect(requests[0]?.headers.get("originator")).toBe("codex_cli_rs")
     expect(requests[0]?.headers.get("user-agent")).toContain("codex_cli_rs/0.0.0 (MendCode;")
     expect(requests[0]?.headers.get("origin")).toBe("https://chatgpt.com")
-    expect(requests[0]?.headers.get("version")).toBe("0.144.0")
+    expect(requests[0]?.headers.get("version")).toBe("0.154.0")
     expect(requests[0]?.headers.get("x-openai-internal-codex-responses-lite")).toBe("true")
     const sessionID = requests[0]?.headers.get("session-id")
     expect(sessionID).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)

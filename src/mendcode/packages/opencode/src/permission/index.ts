@@ -75,6 +75,10 @@ function isShellPermissionRequest(request: Pick<Request, "permission" | "metadat
   )
 }
 
+function requiresHarnessApproval(request: Pick<Request, "metadata">) {
+  return request.metadata.harnessApproval === true
+}
+
 export class Request extends Schema.Class<Request>("PermissionRequest")({
   id: PermissionID,
   sessionID: SessionID,
@@ -228,10 +232,12 @@ type Store = Exclude<StoreData, Ruleset>
 const runtimeID = `permission:${process.pid}:${crypto.randomUUID()}`
 
 function normalizeStore(data: StoreData | undefined): Store {
-  if (Array.isArray(data)) return { version: 2, approved: [...data], requests: [], smart: emptySmartStore() }
+  if (Array.isArray(data)) return { version: 2, approved: [], requests: [], smart: emptySmartStore() }
   return {
     version: 2,
-    approved: [...(data?.approved ?? [])],
+    // "Always" means for this MendCode runtime. Never restore grants left by
+    // an older process, including legacy rows that persisted them.
+    approved: [],
     requests: [...(data?.requests ?? [])],
     smart: normalizeSmartStore(data?.smart),
   }
@@ -343,7 +349,7 @@ export const layer = Layer.effect(
         )
         const state = {
           pending: new Map<PermissionID, PendingEntry>(),
-          approved: normalizeStore(row?.data).approved,
+          approved: [],
         }
 
         yield* Effect.addFinalizer(() =>
@@ -397,6 +403,12 @@ export const layer = Layer.effect(
           })
         }
         if (mode === "full_access") continue
+        if (requiresHarnessApproval(request) && (mode === "approval" || mode === "smart")) {
+          const runtimeRule = evaluate(request.permission, pattern, local.approved)
+          if (runtimeRule.action === "allow" && runtimeRule.pattern === pattern) continue
+          needsAsk = true
+          continue
+        }
         if (isShellPermissionRequest(request) && (mode === "approval" || mode === "smart")) {
           needsAsk = true
           continue

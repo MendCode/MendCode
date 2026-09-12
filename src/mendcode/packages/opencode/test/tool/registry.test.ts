@@ -1,4 +1,4 @@
-import { afterEach, describe, expect } from "bun:test"
+import { afterEach, describe, expect, test } from "bun:test"
 import path from "path"
 import fs from "fs/promises"
 import { Effect, Layer } from "effect"
@@ -33,6 +33,7 @@ import { LoopWorkflow } from "@/session/loop"
 import { LoopRunner } from "@/session/loop-runner"
 import { WorkflowService } from "@/session/workflow-service"
 import type { Agent as AgentTypes } from "@/agent/agent"
+import { Tool } from "@/tool/tool"
 import { Auth } from "@/auth"
 import { AIConfiguration } from "@/mend/runtime/ai-configuration"
 
@@ -343,10 +344,20 @@ describe("tool.registry", () => {
         ),
       )
       const registry = yield* ToolRegistry.Service
-      const ids = yield* registry.ids()
-      expect(ids).toContain("hello")
+      const tools = yield* registry.all()
+      expect(tools.find((tool) => tool.id === "hello")?.harnessApproval).toBe("invocation")
     }),
   )
+
+  test("binds invocation approval patterns to canonical arguments and tool identity", () => {
+    expect(Tool.invocationApprovalPattern("alpha", { b: 2, a: 1 })).toBe(
+      Tool.invocationApprovalPattern("alpha", { a: 1, b: 2 }),
+    )
+    expect(Tool.invocationApprovalPattern("alpha", { a: 1 })).not.toBe(
+      Tool.invocationApprovalPattern("alpha", { a: 2 }),
+    )
+    expect(Tool.invocationApprovalPattern("alpha", { a: 1 })).not.toBe(Tool.invocationApprovalPattern("beta", { a: 1 }))
+  })
 
   it.instance("loads tools from .mendcode/tools (plural)", () =>
     Effect.gen(function* () {
