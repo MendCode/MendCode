@@ -791,15 +791,21 @@ test("auto compaction guard waits for real user input after a synthetic resume",
   expect(shouldSkipAutoCompaction([summary, syntheticResume, realUser])).toBe(false)
 })
 
-test("resolves peer delivery only through its internal compaction lineage", () => {
+test("resolves a peer response through a legacy compaction tail without matching later turns", () => {
   const peer = promptUser([
     {
       type: "text",
       id: PartID.ascending(),
       text: "peer request",
-      metadata: { kind: "peer_message", deliveryID: "acmd_test" },
+      metadata: { kind: "peer_message", deliveryID: "acmd_legacy" },
     },
   ])
+  const tail = promptAssistant({
+    id: MessageID.ascending(),
+    finish: "tool-calls",
+    summary: false,
+    parentID: peer.info.id,
+  })
   const compactionInfo = userInfo()
   const compaction = {
     info: compactionInfo,
@@ -809,10 +815,10 @@ test("resolves peer delivery only through its internal compaction lineage", () =
         sessionID: compactionInfo.sessionID,
         messageID: compactionInfo.id,
         type: "compaction" as const,
-        parent_id: peer.info.id,
         auto: true,
         overflow: true,
         resume: true,
+        tail_start_id: tail.info.id,
       },
     ],
   } satisfies MessageV2.WithParts
@@ -844,10 +850,10 @@ test("resolves peer delivery only through its internal compaction lineage", () =
     summary: false,
     parentID: unrelated.info.id,
   })
-  const messages = [peer, compaction, summary, resume, response, unrelated, unrelatedResponse]
+  const messages = [peer, tail, compaction, summary, resume, response, unrelated, unrelatedResponse]
 
   expect(peerDeliveryIDForAssistant(messages, summary.info)).toBeUndefined()
-  expect(peerDeliveryIDForAssistant(messages, response.info)).toBe("acmd_test")
+  expect(peerDeliveryIDForAssistant(messages, response.info)).toBe("acmd_legacy")
   expect(peerDeliveryIDForAssistant(messages, unrelatedResponse.info)).toBeUndefined()
 })
 

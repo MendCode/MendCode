@@ -423,6 +423,13 @@ function internalUserParentID(message: MessageV2.WithParts) {
   }
 }
 
+function legacyCompactionTailStartID(message: MessageV2.WithParts) {
+  if (message.info.role !== "user") return
+  for (const part of message.parts) {
+    if (part.type === "compaction" && !part.parent_id && part.tail_start_id) return part.tail_start_id
+  }
+}
+
 function peerMessageDeliveryID(message: MessageV2.WithParts) {
   if (message.info.role !== "user") return
   for (const part of message.parts) {
@@ -436,20 +443,23 @@ export function peerDeliveryIDForAssistant(
   messages: readonly MessageV2.WithParts[],
   assistant: MessageV2.Info,
 ) {
-  if (assistant.role !== "assistant") return
-  if (!assistant.parentID || assistant.summary === true) return
+  if (assistant.role !== "assistant" || !assistant.parentID || assistant.summary === true) return
   const byID = new Map(messages.map((message) => [message.info.id, message]))
   const visited = new Set<string>()
-  let parentID: MessageID | undefined = assistant.parentID
+  let currentID: MessageID | undefined = assistant.parentID
 
-  while (parentID && !visited.has(parentID)) {
-    visited.add(parentID)
-    const parent = byID.get(parentID)
-    if (!parent || parent.info.role !== "user") return
-    const deliveryID = peerMessageDeliveryID(parent)
+  while (currentID && visited.size < 32 && !visited.has(currentID)) {
+    visited.add(currentID)
+    const current = byID.get(currentID)
+    if (!current) return
+    if (current.info.role === "assistant") {
+      currentID = current.info.parentID
+      continue
+    }
+    const deliveryID = peerMessageDeliveryID(current)
     if (deliveryID) return deliveryID
-    if (!isInternalUserMessage(parent)) return
-    parentID = internalUserParentID(parent)
+    if (!isInternalUserMessage(current)) return
+    currentID = internalUserParentID(current) ?? legacyCompactionTailStartID(current)
   }
 }
 
@@ -3514,18 +3524,19 @@ NOTE: At any point in time through this workflow you should feel free to ask the
 
     const findPeerDeliveryID = Effect.fnUntraced(function* (sessionID: SessionID, initialParentID: MessageID) {
       const visited = new Set<string>()
-      let parentID: MessageID | undefined = initialParentID
-      while (parentID && visited.size < 32 && !visited.has(parentID)) {
-        visited.add(parentID)
-        const parent = yield* sessions.findMessage(
-          sessionID,
-          (message) => message.info.id === parentID && message.info.role === "user",
-        )
-        if (Option.isNone(parent)) return
-        const deliveryID = peerMessageDeliveryID(parent.value)
+      let currentID: MessageID | undefined = initialParentID
+      while (currentID && visited.size < 32 && !visited.has(currentID)) {
+        visited.add(currentID)
+        const current = yield* sessions.findMessage(sessionID, (message) => message.info.id === currentID)
+        if (Option.isNone(current)) return
+        if (current.value.info.role === "assistant") {
+          currentID = current.value.info.parentID
+          continue
+        }
+        const deliveryID = peerMessageDeliveryID(current.value)
         if (deliveryID) return deliveryID
-        if (!isInternalUserMessage(parent.value)) return
-        parentID = internalUserParentID(parent.value)
+        if (!isInternalUserMessage(current.value)) return
+        currentID = internalUserParentID(current.value) ?? legacyCompactionTailStartID(current.value)
       }
     })
 
