@@ -40,6 +40,21 @@ export function parameterSchema(description: string) {
       description: `The working directory to run the command in. Defaults to the current directory. Use this instead of 'cd' commands.`,
     }),
     description: Schema.String.annotate({ description }),
+    operation: Schema.optional(
+      Schema.Struct({
+        expected_revision: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)).annotate({
+          description: "Current TODO target-lock revision",
+        }),
+        target_id: Schema.String.annotate({ description: "Exact target ID" }),
+        artifact: Schema.String.annotate({ description: "Exact artifact path" }),
+        sha256: Schema.String.annotate({ description: "Expected lowercase artifact SHA-256" }),
+        port: Schema.String.annotate({ description: "Exact port or device" }),
+        stage: Schema.Literals(["transfer", "flash", "verify"]),
+      }),
+    ).annotate({
+      description:
+        "Required for target-locked transfer, flash, and verify commands. Values must match the active TODO target lock and actual command.",
+    }),
   })
 }
 

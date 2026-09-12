@@ -1,4 +1,6 @@
 Use this tool to create and manage a structured task list for your current coding session. This helps you track progress, organize complex tasks, and demonstrate thoroughness to the user.
+
+For any transfer, firmware flash, or device verification task, include `target_lock` with the exact target ID, artifact path and SHA-256, port/device, stage, and current revision. Reuse the revision returned by the latest `todowrite` or `bash` result. Never infer success from old TODO text: the current target lock and recorded command evidence are authoritative. A stale revision or mismatched target is intentionally rejected.
 It also helps the user understand the progress of the task and overall progress of their requests.
 
 ## When to Use This Tool
@@ -164,4 +166,3 @@ The assistant did not use the todo list because this is a single command executi
    - Use clear, descriptive task names
 
 When in doubt, use this tool. Being proactive with task management demonstrates attentiveness and ensures you complete all requirements successfully.
-

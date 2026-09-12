@@ -326,6 +326,17 @@ function fullProductCapabilityCatalog() {
   ].join("\n")
 }
 
+function computerUsePlaybookFull() {
+  return [
+    "MendCode Computer Use (conditional and on demand):",
+    "- Computer Use is available only when matching computer or connected semantic browser tools are present in the current tool catalog. Discovering a tool does not authorize using it.",
+    "- Discover and activate Computer Use only for the user's current explicit request to interact with a desktop/browser or to perform visual verification. Never activate it for ordinary coding work, retained prior intent, background agents, or loops without separate explicit authorization.",
+    "- Prefer bounded accessibility/DOM observations and semantic actions. Use screenshots only when semantics are unavailable or visual judgment is explicitly needed.",
+    "- Built-in native control is macOS-only. Browser MCP/Stagehand support is conditional on an actually connected tool; do not install or claim it when absent.",
+    "- Native control requires a short-lived, exact-target ComputerSession and its dedicated approval. Report activation, target, stale-observation, secure-field, indicator, or platform failures rather than bypassing them.",
+  ].join("\n")
+}
+
 async function fullKnowledge(root: string) {
   const [config, policy, mflow, tsm] = await Promise.all([
     Promise.resolve(readMendConfig(root)),
@@ -549,6 +560,14 @@ export async function composePromptPolicy(input: ComposeInput = {}): Promise<Pro
         label: "MendCode complete product capability catalog",
         source: "mendcode-context",
         text: fullProductCapabilityCatalog(),
+      }),
+    )
+    sections.push(
+      section({
+        id: "computer-use-playbook",
+        label: "MendCode Computer Use on-demand contract",
+        source: "mendcode-context",
+        text: computerUsePlaybookFull(),
       }),
     )
     sections.push(

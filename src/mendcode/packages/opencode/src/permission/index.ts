@@ -402,6 +402,17 @@ export const layer = Layer.effect(
             ruleset: evaluationRuleset.filter((rule) => Wildcard.match(request.permission, rule.permission)),
           })
         }
+        if (request.permission === "computer_activation") {
+          const exactAllow = [...evaluationRuleset, ...loaded.approved, ...local.approved].some(
+            (candidate) =>
+              candidate.permission === request.permission &&
+              candidate.pattern === pattern &&
+              candidate.action === "allow",
+          )
+          if (exactAllow) continue
+          needsAsk = true
+          continue
+        }
         if (mode === "full_access") continue
         if (requiresHarnessApproval(request) && (mode === "approval" || mode === "smart")) {
           const runtimeRule = evaluate(request.permission, pattern, local.approved)

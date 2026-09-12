@@ -59,27 +59,60 @@ The interpreter is adapted from OpenCode v2 at revision
 `cd504dc66ac6620a662a0246f83cfc05f796f58a`; its MIT license and file provenance
 are kept alongside the source. No dependency upgrade is required.
 
-## Native macOS screenshots and navigation
+## On-demand Computer Use on macOS
+
+Only Full Prompt Mode proactively teaches the model that Computer Use can be
+discovered. Other prompt modes retain generic tool discovery wording. Discovery
+does not authorize desktop control, and ordinary coding work must not activate
+Computer Use.
 
 `computer_capture` captures the main display, an explicit window ID, or an
 integer screen-region crop. It returns a PNG attachment and an absolute file
 path that `read` can reopen. Previews are resized to at most 1600 pixels;
 coordinates in them must not be assumed to match desktop control coordinates.
 Retained identical screenshots reuse the existing image reference. Capture
-artifacts are limited to 64 per session and 8 MiB per inline image.
+artifacts are limited to 64 per session and 8 MiB per inline image. A fresh
+single-display full capture can bootstrap an exact-target `computer_session`.
 
-`computer_key` supports one navigation key against the foreground application
+`computer_session` binds the current real user message, MendCode session,
+foreground PID/bundle, requested observe/control mode, and short expiry. Control
+activation uses the dedicated `computer_activation` permission even in Full
+Access unless an exact target/mode grant exists. Synthetic peer messages,
+detached/background calls, stale captures and target changes fail closed.
+
+`computer_observe` reads a bounded accessibility snapshot first: at most 500
+nodes and 64 KiB, with revision-scoped IDs and secure-field values removed.
+`computer_code` runs a confined JavaScript subset for up to 20 seconds and eight
+host-checked semantic calls (`observe`, `press`, `setValue`). It exposes no
+process, filesystem, network, imports or persistent JavaScript heap. Each
+mutation rechecks the target and observation revision.
+
+Before native keyboard or semantic mutation, MendCode starts a non-interactive
+AppKit halo around the current pointer and waits for its readiness acknowledgement.
+If the indicator cannot be shown, control fails before the OS event. The helper
+does not replace the cursor or accept pointer input and is terminated after the
+bounded action. Screenshot fallback uses `computer_capture` when semantic context
+is insufficient; no action halo is running during that capture.
+
+`computer_key` remains a compatibility path for one navigation key against the foreground application
 observed during a recent full-display capture on a single-display Mac. The
 capture ID belongs to the same session, expires after 30 seconds and permits
 one action. Foreground changes, stale captures and missing observations fail
 closed. The tool never activates another application. Capture again afterward.
-Window crops, multiple displays, pointer control and arbitrary typing do not
-support this keyboard-control path.
+Window crops and multiple displays do not support this compatibility path.
 
-Both tools use the normal MendCode permission boundary. macOS Screen Recording,
+All tools use the MendCode permission boundary. macOS Screen Recording,
 Automation and Accessibility permissions remain controlled by the OS; failures
-are reported rather than bypassed. Native support on Windows/Linux and browser
-DOM automation are not included. Connected MCP services remain discoverable.
+are reported rather than bypassed. Built-in native support on Windows/Linux is
+not included. Browser DOM/Stagehand support is conditional on a matching MCP tool
+being actually connected; MendCode does not install or claim one automatically.
+
+Run `bun run test:computer-use:manual` from the opencode package for an isolated
+localhost fixture. It reads no credentials or production database, permits one
+owner, exits after 30 minutes, and removes its lock on normal signals. A human
+must verify the packaged binary's halo visibility, focus behavior, screenshot
+cleanliness, target-change rejection, reduced-motion behavior and cleanup before
+release publication.
 
 ## Compaction compatibility
 
@@ -97,7 +130,8 @@ Focused local tests cover profiles and missing usage, discovery, common provider
 request fixtures, Code Mode confinement/deadline/cancellation, and a session
 using a nested file read with final-output-only model input. Native screenshot
 capture and image decoding were exercised on macOS. A compiled macOS ARM64 executable also completed a nested file read through Code
-Mode against a local test provider. Interactive keyboard control, packaged worker
-execution on other platforms, provider-native compaction and paid/live provider
-behavior remain unverified. This is not a claim of complete computer
-use or cache-performance equivalence.
+Mode against a local test provider. Packaged native Computer Use still requires
+the documented manual macOS visual verification; source tests or a build cannot
+prove halo visibility or focus safety. Provider-native compaction and paid/live
+provider behavior remain unverified. This is not a claim of cache-performance
+equivalence.

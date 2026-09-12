@@ -676,6 +676,35 @@ it.live("ask - Full Access bypasses an otherwise pending request", () =>
   ),
 )
 
+it.live("ask - Full Access still requires exact Computer Use activation", () =>
+  withDir({ git: true }, () =>
+    Effect.gen(function* () {
+      const request = {
+        sessionID: SessionID.make("session_test"),
+        permission: "computer_activation",
+        patterns: ["capture:abc:mode:control"],
+        metadata: {},
+        always: ["capture:abc:mode:control"],
+        ruleset: [Permission.sessionModeRule("full_access")],
+      }
+      const fiber = yield* ask(request).pipe(Effect.forkScoped)
+      expect(yield* waitForPending(1)).toHaveLength(1)
+      yield* rejectAll()
+      yield* Fiber.await(fiber)
+
+      expect(
+        yield* ask({
+          ...request,
+          ruleset: [
+            { permission: "computer_activation", pattern: "capture:abc:mode:control", action: "allow" },
+            Permission.sessionModeRule("full_access"),
+          ],
+        }),
+      ).toBeUndefined()
+    }),
+  ),
+)
+
 it.live("ask - Full Access preserves an explicit deny", () =>
   withDir({ git: true }, () =>
     Effect.gen(function* () {

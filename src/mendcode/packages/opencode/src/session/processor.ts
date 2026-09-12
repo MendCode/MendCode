@@ -369,7 +369,7 @@ export interface Handle {
   ) => Effect.Effect<void>
   readonly startToolCall: (callID: string, name: string, args: Record<string, unknown>, parentCallID: string) => Effect.Effect<void>
   readonly failToolCall: (callID: string, error: unknown) => Effect.Effect<boolean>
-  readonly flushMemory: () => Effect.Effect<void>
+  readonly flushMemory: (options?: { background?: boolean }) => Effect.Effect<void>
   readonly process: (streamInput: LLM.StreamInput) => Effect.Effect<Result>
 }
 
@@ -1595,15 +1595,17 @@ export const layer: Layer.Layer<
         })
       })
 
-      const flushMemory = Effect.fn("SessionProcessor.flushMemory")(function* () {
+      const flushMemory = Effect.fn("SessionProcessor.flushMemory")(function* (options?: { background?: boolean }) {
         const pending = ctx.pendingMemoryExtraction
         ctx.pendingMemoryExtraction = undefined
         if (!pending || ctx.blocked || ctx.assistantMessage.error) return
-        yield* status.set(ctx.sessionID, {
-          type: "busy",
-          kind: "memory-extract",
-          message: "Preparing memory proposal...",
-        })
+        if (options?.background !== true) {
+          yield* status.set(ctx.sessionID, {
+            type: "busy",
+            kind: "memory-extract",
+            message: "Preparing memory proposal...",
+          })
+        }
         const sessionID = ctx.sessionID
         const messageID = ctx.assistantMessage.id
         yield* Effect.promise(() =>

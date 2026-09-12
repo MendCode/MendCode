@@ -156,7 +156,7 @@ export function withToolDiscovery(tools: Record<string, Tool>, messages: Message
   const discoverable = Object.keys(tools).filter((name) => !PRIMARY.has(name))
   if (!discoverable.length) return selected
   selected.tool_search = tool({
-    description: "Discover additional tools by task, name or keyword, including memory, workflows, computer screenshots/control, browser tools and connected MCP services. Returns bounded schemas and enables matching tools for subsequent direct calls. Search before assuming a capability is unavailable. Discovery never grants permission to execute a tool.",
+    description: "Discover additional tools by task, name or keyword, including built-in, package, plugin and connected MCP capabilities. Returns bounded schemas and enables matching tools for subsequent direct calls. Search before assuming a capability is unavailable. Discovery never grants permission to execute a tool.",
     inputSchema: jsonSchema<{ query: string; limit?: number }>({
       type: "object", properties: { query: { type: "string", maxLength: 500 }, limit: { type: "integer", minimum: 1, maximum: 8 } },
       required: ["query"], additionalProperties: false,

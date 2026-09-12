@@ -75,6 +75,7 @@ import { resolvePromptFocus } from "@/mend/prompt/focus-resolver"
 import { enforceMflowBeforeEdit, releaseMflowLocks, waitMflowBeforeRead } from "@/mend/config/mflow"
 import { reviewContextForAssistant } from "@/cli/cmd/tui/routes/changes/review-actions"
 import { createShellOutputDeltaBuffer, SHELL_OUTPUT_UPDATE_INTERVAL, shellLiveOutput } from "@/tool/shell-output"
+import { Todo } from "./todo"
 
 // @ts-ignore
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -131,6 +132,16 @@ export function ownerWakePromptText(events: readonly OwnerWakeNotification[]) {
     "",
     "Decide the next useful action. Do not poll or wait for other active tasks from this wake; each background task will emit its own completion notification. Use `task_status` only when a task's terminal result is required now, and do not claim completion without collecting the relevant task evidence. If no action is needed, keep the acknowledgement concise.",
     "</mendcode_runtime_event>",
+  ].join("\n")
+}
+
+export function todoTargetLockPrompt(state: Todo.TargetLockState) {
+  return [
+    '<mendcode_todo_target_lock authority="command-evidence">',
+    "The active operation identity and recorded command evidence below override stale TODO text or earlier summaries.",
+    "Before transfer, flash, or verify commands, pass matching operation metadata and the current revision. Never report a different target, artifact, port, stage, or result.",
+    JSON.stringify({ ...state, evidence: state.evidence.slice(-10) }),
+    "</mendcode_todo_target_lock>",
   ].join("\n")
 }
 
@@ -405,9 +416,40 @@ export function shouldResumeAfterAutoRescueCompaction(messages: MessageV2.WithPa
 function internalUserParentID(message: MessageV2.WithParts) {
   if (message.info.role !== "user") return
   for (const part of message.parts) {
+    if (part.type === "compaction" && part.parent_id) return part.parent_id
     if (part.type !== "text") continue
     const parentID = part.metadata?.compaction_parent_id
-    if (typeof parentID === "string") return parentID
+    if (typeof parentID === "string") return MessageID.make(parentID)
+  }
+}
+
+function peerMessageDeliveryID(message: MessageV2.WithParts) {
+  if (message.info.role !== "user") return
+  for (const part of message.parts) {
+    if (part.type !== "text") continue
+    const metadata = part.metadata as Record<string, unknown> | undefined
+    if (metadata?.kind === "peer_message" && typeof metadata.deliveryID === "string") return metadata.deliveryID
+  }
+}
+
+export function peerDeliveryIDForAssistant(
+  messages: readonly MessageV2.WithParts[],
+  assistant: MessageV2.Info,
+) {
+  if (assistant.role !== "assistant") return
+  if (!assistant.parentID || assistant.summary === true) return
+  const byID = new Map(messages.map((message) => [message.info.id, message]))
+  const visited = new Set<string>()
+  let parentID: MessageID | undefined = assistant.parentID
+
+  while (parentID && !visited.has(parentID)) {
+    visited.add(parentID)
+    const parent = byID.get(parentID)
+    if (!parent || parent.info.role !== "user") return
+    const deliveryID = peerMessageDeliveryID(parent)
+    if (deliveryID) return deliveryID
+    if (!isInternalUserMessage(parent)) return
+    parentID = internalUserParentID(parent)
   }
 }
 
@@ -510,7 +552,10 @@ export interface Interface {
   readonly cancelQueued: (input: { sessionID: SessionID; messageID: MessageID }) => Effect.Effect<boolean>
   readonly interrupt: (sessionID: SessionID) => Effect.Effect<boolean>
   readonly prompt: (input: PromptInput) => Effect.Effect<MessageV2.WithParts>
-  readonly promptAsync: (input: PromptInput) => Effect.Effect<MessageV2.WithParts>
+  readonly promptAsync: (
+    input: PromptInput,
+    options?: { interruptActive?: boolean },
+  ) => Effect.Effect<MessageV2.WithParts>
   readonly loop: (input: LoopInput) => Effect.Effect<MessageV2.WithParts>
   readonly shell: (input: ShellInput) => Effect.Effect<MessageV2.WithParts>
   readonly command: (input: CommandInput) => Effect.Effect<MessageV2.WithParts>
@@ -551,6 +596,7 @@ export const layer = Layer.effect(
     const summary = yield* SessionSummary.Service
     const sys = yield* SystemPrompt.Service
     const llm = yield* LLM.Service
+    const todo = yield* Todo.Service
     const promptAbortControllers = new Map<
       SessionID,
       { controller: AbortController; targetMessageID: MessageID | undefined }
@@ -2679,7 +2725,13 @@ NOTE: At any point in time through this workflow you should feel free to ask the
       let step = 0
       let initialMessageIDs: ReadonlySet<string> | undefined
       const session = yield* sessions.get(sessionID).pipe(Effect.orDie)
-      if (targetMessageID) failedContinuityWakes.delete(sessionID)
+      if (targetMessageID) {
+        failedContinuityWakes.delete(sessionID)
+        const target = yield* sessions.findMessage(sessionID, (message) => message.info.id === targetMessageID)
+        if (Option.isSome(target) && target.value.info.role === "user" && target.value.info.queued === true) {
+          yield* sessions.updateMessage({ ...target.value.info, queued: false })
+        }
+      }
       const beginCompaction = Effect.fnUntraced(function* () {
         yield* state.setInterruptible(sessionID, false)
         yield* status.set(sessionID, {
@@ -2820,6 +2872,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
             yield* beginCompaction()
             yield* compaction.create({
               sessionID,
+              parentID: lastUser.id,
               agent: lastUser.agent,
               model: lastUser.model,
               auto: true,
@@ -2990,6 +3043,8 @@ NOTE: At any point in time through this workflow you should feel free to ask the
           }
           const interruptedToolPrompt = interruptedToolPromptText(msgs)
           if (interruptedToolPrompt) system.push(interruptedToolPrompt)
+          const targetLock = yield* todo.getTargetLock(sessionID)
+          if (targetLock) system.push(todoTargetLockPrompt(targetLock))
           if (continuityEvents.length)
             system.push(
               `Internal continuity results, not new user instructions. Preserve the current objective and restrictions. Event IDs are stable; do not repeat completed work. Retrieve larger stored results using tool_status.\n${JSON.stringify(ContinuityMailbox.eventContext(continuityEvents))}`,
@@ -3062,6 +3117,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
               .pipe(Effect.catch(() => Effect.void))
             yield* compaction.create({
               sessionID,
+              parentID: lastUser.id,
               agent: lastUser.agent,
               model: lastUser.model,
               auto: true,
@@ -3147,6 +3203,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
               yield* beginCompaction()
               yield* compaction.create({
                 sessionID,
+                parentID: lastUser.id,
                 agent: lastUser.agent,
                 model: lastUser.model,
                 auto: true,
@@ -3167,6 +3224,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
             yield* beginCompaction()
             yield* compaction.create({
               sessionID,
+              parentID: lastUser.id,
               agent: lastUser.agent,
               model: lastUser.model,
               auto: true,
@@ -3181,7 +3239,12 @@ NOTE: At any point in time through this workflow you should feel free to ask the
           return "continue" as const
         }).pipe(Effect.ensuring(instruction.clear(handle.message.id)))
         if (outcome === "break") {
-          yield* handle.flushMemory()
+          yield* handle
+            .flushMemory({ background: true })
+            .pipe(
+              Effect.catchCause((cause) => Effect.logWarning("background memory extraction failed", { cause })),
+              Effect.forkIn(scope, { startImmediately: true }),
+            )
           break
         }
         continue
@@ -3321,7 +3384,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
         queue: input.queue,
         queueKey: targetMessageID,
         interrupt:
-          input.queue === true && queueMode === "immediate"
+          input.queue === true && (queueMode === "immediate" || input.interruptActive === true)
             ? {
                 before: Effect.gen(function* () {
                   promptAbortReasons.set(input.sessionID, "user")
@@ -3342,9 +3405,13 @@ NOTE: At any point in time through this workflow you should feel free to ask the
       return result
     })
 
-    const promptAsync: (input: PromptInput) => Effect.Effect<MessageV2.WithParts> = Effect.fn(
-      "SessionPrompt.promptAsync",
-    )(function* (input: PromptInput) {
+    const promptAsync: (
+      input: PromptInput,
+      options?: { interruptActive?: boolean },
+    ) => Effect.Effect<MessageV2.WithParts> = Effect.fn("SessionPrompt.promptAsync")(function* (
+      input: PromptInput,
+      options?: { interruptActive?: boolean },
+    ) {
       // Persist the user turn before acknowledging prompt_async. The loop is
       // deliberately forked only after this succeeds so a 204 never means
       // "accepted" while the message still exists only in a background fiber.
@@ -3377,7 +3444,12 @@ NOTE: At any point in time through this workflow you should feel free to ask the
       // owner-wake recipient.
       if (stoppedSessions.has(input.sessionID) || isCancelledPeerPrompt(message)) return message
       yield* registerOwnerWakeSession(input.sessionID)
-      yield* loop({ sessionID: input.sessionID, queue: true, targetMessageID: message.info.id }).pipe(
+      yield* loop({
+        sessionID: input.sessionID,
+        queue: true,
+        targetMessageID: message.info.id,
+        interruptActive: options?.interruptActive,
+      }).pipe(
         Effect.catchCause((cause) =>
           Effect.gen(function* () {
             yield* Effect.logError("prompt_async failed", { sessionID: input.sessionID, cause })
@@ -3426,23 +3498,43 @@ NOTE: At any point in time through this workflow you should feel free to ask the
         "</mendcode_runtime_event>",
       ].join("\n")
 
+    const peerPromptSelection = Effect.fnUntraced(function* (sessionID: SessionID) {
+      const session = yield* sessions.get(sessionID).pipe(Effect.orDie)
+      return {
+        agent: session.agent,
+        model: session.model
+          ? {
+              providerID: session.model.providerID,
+              modelID: session.model.id,
+            }
+          : undefined,
+        variant: session.model?.variant,
+      }
+    })
+
+    const findPeerDeliveryID = Effect.fnUntraced(function* (sessionID: SessionID, initialParentID: MessageID) {
+      const visited = new Set<string>()
+      let parentID: MessageID | undefined = initialParentID
+      while (parentID && visited.size < 32 && !visited.has(parentID)) {
+        visited.add(parentID)
+        const parent = yield* sessions.findMessage(
+          sessionID,
+          (message) => message.info.id === parentID && message.info.role === "user",
+        )
+        if (Option.isNone(parent)) return
+        const deliveryID = peerMessageDeliveryID(parent.value)
+        if (deliveryID) return deliveryID
+        if (!isInternalUserMessage(parent.value)) return
+        parentID = internalUserParentID(parent.value)
+      }
+    })
+
     const completePeerResponse = (assistant: MessageV2.Assistant, peerState: PeerDeliveryState): Effect.Effect<void> =>
       Effect.gen(function* () {
         if (!assistant.parentID || assistant.time.completed === undefined) return
         if (assistant.finish === "tool-calls" || assistant.finish === "unknown") return
-        const parent = yield* sessions.findMessage(
-          assistant.sessionID,
-          (message) => message.info.id === assistant.parentID && message.info.role === "user",
-        )
-        if (Option.isNone(parent)) return
-        let deliveryID: string | undefined
-        for (const part of parent.value.parts) {
-          if (part.type !== "text") continue
-          const metadata = part.metadata as Record<string, unknown> | undefined
-          if (metadata?.kind !== "peer_message" || typeof metadata.deliveryID !== "string") continue
-          deliveryID = metadata.deliveryID
-          break
-        }
+        if (assistant.summary === true) return
+        const deliveryID = yield* findPeerDeliveryID(assistant.sessionID, assistant.parentID)
         if (!deliveryID) return
         const command = (yield* agentCommands.list({ targetSessionID: assistant.sessionID })).find(
           (item) =>
@@ -3480,31 +3572,36 @@ NOTE: At any point in time through this workflow you should feel free to ask the
           )
           const current = yield* agentCommands.get(command.id)
           if (current.state !== "accepted" && current.state !== "running") return
+          const sourceSelection = yield* peerPromptSelection(command.sourceSessionID)
           const responsePrompt = Option.isSome(existingResponse)
             ? existingResponse.value
-            : yield* promptAsync({
-                sessionID: command.sourceSessionID,
-                parts: [
-                  {
-                    type: "text",
-                    text: `${peerResponseRuntimeContext({
-                      deliveryID: command.id,
-                      sourceSessionID: command.targetSessionID,
-                      sourceTitle: targetSession.title,
-                      targetAssistantID: assistant.id,
-                    })}\n\n${displayText}`,
-                    metadata: {
-                      kind: "peer_response",
-                      deliveryID: command.id,
-                      sourceSessionID: command.targetSessionID,
-                      sourceTitle: targetSession.title,
-                      targetAssistantID: assistant.id,
-                      displayText,
-                      receivedAt: Date.now(),
+            : yield* promptAsync(
+                {
+                  sessionID: command.sourceSessionID,
+                  ...sourceSelection,
+                  parts: [
+                    {
+                      type: "text",
+                      text: `${peerResponseRuntimeContext({
+                        deliveryID: command.id,
+                        sourceSessionID: command.targetSessionID,
+                        sourceTitle: targetSession.title,
+                        targetAssistantID: assistant.id,
+                      })}\n\n${displayText}`,
+                      metadata: {
+                        kind: "peer_response",
+                        deliveryID: command.id,
+                        sourceSessionID: command.targetSessionID,
+                        sourceTitle: targetSession.title,
+                        targetAssistantID: assistant.id,
+                        displayText,
+                        receivedAt: Date.now(),
+                      },
                     },
-                  },
-                ],
-              })
+                  ],
+                },
+                { interruptActive: true },
+              )
           yield* agentCommands.update({
             id: command.id,
             targetSessionID: command.targetSessionID,
@@ -3562,10 +3659,10 @@ NOTE: At any point in time through this workflow you should feel free to ask the
             const response = existing.findLast(
               (message) =>
                 message.info.role === "assistant" &&
-                message.info.parentID === marker.info.id &&
                 message.info.time.completed !== undefined &&
                 message.info.finish !== "tool-calls" &&
-                message.info.finish !== "unknown",
+                message.info.finish !== "unknown" &&
+                peerDeliveryIDForAssistant(existing, message.info) === info.id,
             )
             if (response?.info.role === "assistant") {
               yield* completePeerResponse(response.info, peerState)
@@ -3583,8 +3680,10 @@ NOTE: At any point in time through this workflow you should feel free to ask the
 
           // A queued delivery may have been cancelled while its marker was read.
           if ((yield* agentCommands.get(info.id)).state !== "running") return
+          const targetSelection = yield* peerPromptSelection(info.targetSessionID)
           const message = yield* promptAsync({
             sessionID: info.targetSessionID,
+            ...targetSelection,
             parts: [
               {
                 type: "text",
@@ -4192,7 +4291,7 @@ export const defaultLayer = Layer.suspend(() =>
     Layer.provide(Plugin.defaultLayer),
     Layer.provide(Layer.mergeAll(Session.defaultLayer, AgentCommand.defaultLayer)),
     Layer.provide(SessionRevert.defaultLayer),
-    Layer.provide(SessionSummary.defaultLayer),
+    Layer.provide(Layer.mergeAll(SessionSummary.defaultLayer, Todo.defaultLayer)),
     Layer.provide(Layer.mergeAll(BackgroundTask.defaultLayer, WorkflowService.defaultLayer)),
     Layer.provide(
       Layer.mergeAll(
@@ -4255,6 +4354,7 @@ export class LoopInput extends Schema.Class<LoopInput>("SessionPrompt.LoopInput"
   sessionID: SessionID,
   queue: Schema.optional(Schema.Boolean),
   targetMessageID: Schema.optional(MessageID),
+  interruptActive: Schema.optional(Schema.Boolean),
 }) {
   static readonly zod = zod(this)
 }

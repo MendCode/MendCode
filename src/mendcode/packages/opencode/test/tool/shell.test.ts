@@ -4,7 +4,7 @@ import os from "os"
 import path from "path"
 import { Config } from "@/config/config"
 import { Shell } from "../../src/shell/shell"
-import { ShellTool } from "../../src/tool/shell"
+import { commandContainsTarget, ShellTool } from "../../src/tool/shell"
 import { ShellPrompt, shellTimeoutDescription } from "../../src/tool/shell/prompt"
 import { Instance } from "../../src/project/instance"
 import { WithInstance } from "../../src/project/with-instance"
@@ -18,6 +18,7 @@ import { CrossSpawnSpawner } from "@mendcode/core/cross-spawn-spawner"
 import { AppFileSystem } from "@mendcode/core/filesystem"
 import { Plugin } from "../../src/plugin"
 import { Bus } from "../../src/bus"
+import { Todo } from "../../src/session/todo"
 
 const runtime = ManagedRuntime.make(
   Layer.mergeAll(
@@ -28,6 +29,7 @@ const runtime = ManagedRuntime.make(
     Truncate.defaultLayer,
     Config.defaultLayer,
     Agent.defaultLayer,
+    Todo.defaultLayer,
   ),
 )
 
@@ -143,6 +145,23 @@ const mustTruncate = (result: {
 }
 
 describe("tool.shell", () => {
+  test("target-locked commands must cite the exact operation identity", () => {
+    const target = {
+      targetID: "12",
+      artifact: "/firmware/ocu-firmware-12.bin",
+      sha256: "a".repeat(64),
+      port: "COM9",
+      stage: "flash" as const,
+    }
+    expect(commandContainsTarget("write-flash /firmware/ocu-firmware-12.bin --port COM9 --target 12", target)).toBe(
+      true,
+    )
+    expect(commandContainsTarget("write-flash /firmware/ocu-firmware-11.bin --port COM9 --target 11", target)).toBe(
+      false,
+    )
+    expect(commandContainsTarget("verify /firmware/ocu-firmware-12.bin --port COM9 --target 12", target)).toBe(false)
+  })
+
   test("renders the effective default timeout instead of a stale hardcoded value", () => {
     const rendered = ShellPrompt.render(sh(), process.platform, { maxLines: 100, maxBytes: 10_000 })
     expect(rendered.description).toContain(`commands will time out after ${shellTimeoutDescription()}`)
@@ -1405,7 +1424,8 @@ describe("tool.shell truncation", () => {
       fn: async () => {
         const bash = await initShell()
         const byteCount = Truncate.MAX_SAVED_BYTES + 100_000
-        const code = "process.stdout.write(String.fromCharCode(83,84,65,82,84,45)+String.fromCharCode(97).repeat(Number(Bun.argv[1]))+String.fromCharCode(45,69,78,68))"
+        const code =
+          "process.stdout.write(String.fromCharCode(83,84,65,82,84,45)+String.fromCharCode(97).repeat(Number(Bun.argv[1]))+String.fromCharCode(45,69,78,68))"
         const command = `${bin} -e ${evalarg(code)} ${byteCount}`
         const result = await Effect.runPromise(
           bash.execute(

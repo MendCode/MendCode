@@ -1435,6 +1435,7 @@ export interface Interface {
   }) => Effect.Effect<"continue" | "stop">
   readonly create: (input: {
     sessionID: SessionID
+    parentID?: MessageID
     agent: string
     model: { providerID: ProviderID; modelID: ModelID }
     auto: boolean
@@ -2168,6 +2169,7 @@ export const layer: Layer.Layer<
 
     const create = Effect.fn("SessionCompaction.create")(function* (input: {
       sessionID: SessionID
+      parentID?: MessageID
       agent: string
       model: { providerID: ProviderID; modelID: ModelID }
       auto: boolean
@@ -2190,6 +2192,7 @@ export const layer: Layer.Layer<
         messageID: msg.id,
         sessionID: msg.sessionID,
         type: "compaction",
+        parent_id: input.parentID,
         auto: input.auto,
         overflow: input.overflow,
         resume: input.resume ?? false,

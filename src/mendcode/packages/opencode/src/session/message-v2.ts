@@ -283,6 +283,7 @@ export type AgentPart = Types.DeepMutable<Schema.Schema.Type<typeof AgentPart>>
 export const CompactionPart = Schema.Struct({
   ...partBase,
   type: Schema.Literal("compaction"),
+  parent_id: Schema.optional(MessageID),
   auto: Schema.Boolean,
   overflow: Schema.optional(Schema.Boolean),
   resume: Schema.optional(Schema.Boolean),

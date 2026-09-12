@@ -12,6 +12,7 @@
     "test:compaction:canary": "bun run script/compaction-canary.ts",
     "test:session-runtime:smoke": "bun run script/session-runtime-smoke.ts",
     "test:incident:local": "bun run script/incident-local-smoke.ts",
+    "test:computer-use:manual": "bun run script/computer-use-smoke.ts",
     "dev:rearm": "bun run script/dev-rearm.ts",
     "test:dev-rearm:smoke": "bun run script/dev-rearm-smoke.ts",
     "test:markdown-render": "bun test test/cli/tui/markdown-render.test.ts --timeout 30000",

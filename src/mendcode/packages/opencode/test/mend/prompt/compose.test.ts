@@ -294,6 +294,23 @@ describe("mend prompt composition", () => {
     expect(full.policyInstructions).toContain("The actual tool schemas attached to the current model are authoritative")
   })
 
+  test("teaches on-demand Computer Use only in full mode", async () => {
+    const modes = await Promise.all(
+      (["minimal", "focus", "full", "custom"] as const).map((mode) => composePromptPolicy({ mode, focusID: "codex" })),
+    )
+    const [minimal, focus, full, custom] = modes
+    const playbook = full.sections.find((item) => item.id === "computer-use-playbook")
+
+    expect(playbook?.text).toContain("Computer Use (conditional and on demand)")
+    expect(playbook?.text).toContain("Discovering a tool does not authorize using it")
+    expect(playbook?.text).toContain("accessibility/DOM")
+    expect(playbook?.text).toContain("screenshots only")
+    for (const sparse of [minimal, focus, custom]) {
+      expect(sparse.sections.find((item) => item.id === "computer-use-playbook")).toBeUndefined()
+      expect(sparse.policyInstructions).not.toContain("Computer Use (conditional and on demand)")
+    }
+  })
+
   test("full mode teaches actual AI configuration boundaries without widening sparse modes", async () => {
     const minimal = await composePromptPolicy({ mode: "minimal", focusID: "codex" })
     const focus = await composePromptPolicy({ mode: "focus", focusID: "codex" })

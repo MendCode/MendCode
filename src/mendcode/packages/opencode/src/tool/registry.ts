@@ -1,4 +1,10 @@
-import { ComputerCaptureTool, ComputerKeyTool } from "./computer"
+import {
+  ComputerCaptureTool,
+  ComputerCodeTool,
+  ComputerKeyTool,
+  ComputerObserveTool,
+  ComputerSessionTool,
+} from "./computer"
 import { PlanExitTool } from "./plan"
 import { PlanReviewTool } from "./plan-review"
 import { Session } from "@/session/session"
@@ -171,6 +177,9 @@ export const layer: Layer.Layer<
     const memorygraphtool = yield* MemoryGraphTool
     const computerKey = yield* ComputerKeyTool
     const computerCapture = yield* ComputerCaptureTool
+    const computerSession = yield* ComputerSessionTool
+    const computerObserve = yield* ComputerObserveTool
+    const computerCode = yield* ComputerCodeTool
     const imagegentool = yield* ImageGenTool
     const agent = yield* Agent.Service
     yield* AIConfiguration.Service
@@ -278,6 +287,9 @@ export const layer: Layer.Layer<
           memoryGraph: Tool.init(memorygraphtool),
           computerKey: Tool.init(computerKey),
           computerCapture: Tool.init(computerCapture),
+          computerSession: Tool.init(computerSession),
+          computerObserve: Tool.init(computerObserve),
+          computerCode: Tool.init(computerCode),
           imageGen: Tool.init(imagegentool),
           patch: Tool.init(patchtool),
           question: Tool.init(question),
@@ -316,6 +328,9 @@ export const layer: Layer.Layer<
             tool.read,
             tool.computerCapture,
             tool.computerKey,
+            tool.computerSession,
+            tool.computerObserve,
+            tool.computerCode,
             tool.glob,
             tool.grep,
             tool.edit,

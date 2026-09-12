@@ -41,6 +41,50 @@ Output: Creates directory 'foo'"
 ,
       "type": "string",
     },
+    "operation": {
+      "description": "Required for target-locked transfer, flash, and verify commands. Values must match the active TODO target lock and actual command.",
+      "properties": {
+        "artifact": {
+          "description": "Exact artifact path",
+          "type": "string",
+        },
+        "expected_revision": {
+          "description": "Current TODO target-lock revision",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer",
+        },
+        "port": {
+          "description": "Exact port or device",
+          "type": "string",
+        },
+        "sha256": {
+          "description": "Expected lowercase artifact SHA-256",
+          "type": "string",
+        },
+        "stage": {
+          "enum": [
+            "transfer",
+            "flash",
+            "verify",
+          ],
+          "type": "string",
+        },
+        "target_id": {
+          "description": "Exact target ID",
+          "type": "string",
+        },
+      },
+      "required": [
+        "expected_revision",
+        "target_id",
+        "artifact",
+        "sha256",
+        "port",
+        "stage",
+      ],
+      "type": "object",
+    },
     "timeout": {
       "description": "Optional timeout in milliseconds",
       "exclusiveMinimum": 0,
@@ -721,6 +765,50 @@ exports[`tool parameters JSON Schema (wire shape) todo 1`] = `
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "properties": {
+    "target_lock": {
+      "description": "Required operation identity for transfer, flash, or verify tasks",
+      "properties": {
+        "artifact": {
+          "description": "Exact artifact path",
+          "type": "string",
+        },
+        "expected_revision": {
+          "description": "Current target-lock revision; use 0 only when creating the first lock",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer",
+        },
+        "port": {
+          "description": "Exact device or port, for example COM9",
+          "type": "string",
+        },
+        "sha256": {
+          "description": "Lowercase SHA-256 of the artifact",
+          "type": "string",
+        },
+        "stage": {
+          "enum": [
+            "transfer",
+            "flash",
+            "verify",
+          ],
+          "type": "string",
+        },
+        "target_id": {
+          "description": "Exact operation target ID",
+          "type": "string",
+        },
+      },
+      "required": [
+        "expected_revision",
+        "target_id",
+        "artifact",
+        "sha256",
+        "port",
+        "stage",
+      ],
+      "type": "object",
+    },
     "todos": {
       "description": "The updated todo list",
       "items": {

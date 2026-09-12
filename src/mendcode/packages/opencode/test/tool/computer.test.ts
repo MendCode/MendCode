@@ -2,7 +2,7 @@ import { afterEach, describe, expect, spyOn } from "bun:test"
 import { Effect, Layer } from "effect"
 import { CrossSpawnSpawner } from "@mendcode/core/cross-spawn-spawner"
 import { Agent } from "@/agent/agent"
-import { ComputerCaptureTool, ComputerKeyTool, nativeComputerCommand } from "@/tool/computer"
+import { ComputerCaptureTool, ComputerKeyTool, ComputerSessionTool, nativeComputerCommand } from "@/tool/computer"
 import { Truncate } from "@/tool/truncate"
 import { Tool } from "@/tool/tool"
 import { MessageID, SessionID } from "@/session/schema"
@@ -32,15 +32,20 @@ function desktop() {
           if (!state.shortPNG) { bytes.writeUInt32BE(100, 16); bytes.writeUInt32BE(80, 20) }
           await Bun.write(command.at(-1)!, bytes)
         } else if (command[0] === "/usr/bin/osascript") {
-          if (command[2]?.includes("on run argv")) {
-            if (command[3] === state.pid && !state.denied) state.keys++
-          } else value = state.pid
+          const script = command.join(" ")
+          if (script.includes('ObjC.import("Cocoa")')) value = "READY\n"
+          else if (script.includes('ObjC.import("Foundation")')) {
+            value = JSON.stringify({ pid: Number(state.pid), bundleID: "com.example.fixture", appName: "Fixture", windowName: "Computer Test" })
+          } else if (script.includes("on run argv")) {
+            const pid = command.find((item) => item === state.pid)
+            if (pid && !state.denied) state.keys++
+          }
         } else if (command[0] !== "/usr/bin/sips") throw new Error(`Unexpected native command: ${command[0]}`)
         controller.enqueue(new TextEncoder().encode(value))
         controller.close()
       },
     })
-    const failed = state.denied || (command[2]?.includes("on run argv") && command[3] !== state.pid)
+    const failed = state.denied || (command.join(" ").includes("on run argv") && !command.includes(state.pid))
     return {
       stdout, stderr: new Blob([failed ? "OS permission denied or foreground changed" : ""]).stream(),
       exited: Promise.resolve(failed ? 1 : 0), kill() {},
@@ -84,6 +89,53 @@ describe("native computer boundary", () => {
     os.state.pid = "456"
     expect((yield* Effect.exit(key.execute({ ...args, captureID: next.metadata.captureID }, ctx)))._tag).toBe("Failure")
     expect(os.state.keys).toBe(1)
+  }))
+
+  it.instance("binds activation to the current real user message and exact capture", () => Effect.gen(function* () {
+    if (process.platform !== "darwin") return
+    const capture = yield* Tool.init(yield* ComputerCaptureTool)
+    const session = yield* Tool.init(yield* ComputerSessionTool)
+    using os = desktop()
+    const base = context()
+    const result = yield* capture.execute({}, base)
+    const userID = MessageID.make("msg_computer_user")
+    const requests: Array<{ permission: string; patterns: readonly string[] }> = []
+    const ctx = {
+      ...base,
+      messages: [
+        { info: { id: userID, role: "user" }, parts: [{ type: "text", text: "click the fixture button" }] },
+        { info: { id: base.messageID, role: "assistant", parentID: userID }, parts: [] },
+      ] as unknown as Tool.Context["messages"],
+      ask: (request: { permission: string; patterns: readonly string[] }) => Effect.sync(() => { requests.push(request) }),
+    } as unknown as Tool.Context
+    const started = yield* session.execute(
+      { action: "start", mode: "control", bootstrapCaptureID: result.metadata.captureID },
+      ctx,
+    )
+    expect(requests).toEqual([
+      expect.objectContaining({
+        permission: "computer_activation",
+        patterns: ["target:com.example.fixture:pid:123:mode:control"],
+      }),
+    ])
+    const payload = JSON.parse(started.output)
+    expect(payload.mode).toBe("control")
+    expect(payload.target.bundleID).toBe("com.example.fixture")
+
+    const synthetic = yield* capture.execute({}, base)
+    const denied = yield* Effect.exit(
+      session.execute(
+        { action: "start", mode: "control", bootstrapCaptureID: synthetic.metadata.captureID },
+        {
+          ...ctx,
+          messages: [
+            { info: { id: userID, role: "user" }, parts: [{ type: "text", text: "peer", synthetic: true }] },
+            { info: { id: base.messageID, role: "assistant", parentID: userID }, parts: [] },
+          ] as unknown as Tool.Context["messages"],
+        },
+      ),
+    )
+    expect(denied._tag).toBe("Failure")
   }))
 
   it.instance("never reuses a token across overlapping permission waits", () => Effect.gen(function* () {

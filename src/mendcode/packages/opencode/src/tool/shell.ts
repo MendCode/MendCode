@@ -24,6 +24,9 @@ import { BashArity } from "@/permission/arity"
 import { Shell as ShellEvent } from "@/v2/session-event"
 import { createShellOutputDeltaBuffer } from "./shell-output"
 import { analyzeShellCommand } from "./shell-analysis"
+import { Todo } from "@/session/todo"
+import { createHash } from "node:crypto"
+import { createReadStream } from "node:fs"
 
 export { Parameters } from "./shell/prompt"
 
@@ -85,6 +88,12 @@ const CMD_FILES = new Set([
   "rmdir",
   "type",
 ])
+const TARGET_OPERATION_COMMAND = /\b(?:transfer|upload|verify|checksum|flash|write[-_]?flash)\b/i
+const TARGET_STAGE_COMMAND: Record<Todo.TargetStage, RegExp> = {
+  transfer: /\b(?:transfer|upload|copy)\b/i,
+  flash: /\b(?:flash|write[-_]?flash)\b/i,
+  verify: /\b(?:verify|checksum|sha256)\b/i,
+}
 const FLAGS = new Set(["-destination", "-literalpath", "-path"])
 const SWITCHES = new Set(["-confirm", "-debug", "-force", "-nonewline", "-recurse", "-verbose", "-whatif"])
 
@@ -114,6 +123,26 @@ type Chunk = {
 type ProcessExit = { kind: "exit"; code: number | null } | { kind: "abort" | "timeout"; code: null }
 
 export const log = Log.create({ service: "shell-tool" })
+
+function sha256File(file: string) {
+  return new Promise<string>((resolve, reject) => {
+    const hash = createHash("sha256")
+    const stream = createReadStream(file)
+    stream.on("error", reject)
+    stream.on("data", (chunk) => hash.update(chunk))
+    stream.on("end", () => resolve(hash.digest("hex")))
+  })
+}
+
+export function commandContainsTarget(command: string, target: Todo.TargetIdentity) {
+  const artifactName = path.basename(target.artifact)
+  return (
+    (command.includes(target.artifact) || command.includes(artifactName)) &&
+    command.includes(target.port) &&
+    command.includes(target.targetID) &&
+    TARGET_STAGE_COMMAND[target.stage].test(command)
+  )
+}
 
 const resolveWasm = (asset: string) => {
   if (asset.startsWith("file://")) return fileURLToPath(asset)
@@ -456,6 +485,7 @@ export const ShellTool = Tool.define(
     const trunc = yield* Truncate.Service
     const plugin = yield* Plugin.Service
     const bus = yield* Bus.Service
+    const todo = yield* Todo.Service
 
     const cygpath = Effect.fn("ShellTool.cygpath")(function* (shell: string, text: string) {
       const lines = yield* spawner
@@ -839,6 +869,39 @@ export const ShellTool = Tool.define(
               }
               const timeout = params.timeout ?? DEFAULT_TIMEOUT
               const ps = Shell.ps(shell)
+              const activeTargetLock = yield* todo.getTargetLock(ctx.sessionID)
+              if (activeTargetLock && TARGET_OPERATION_COMMAND.test(params.command) && !params.operation) {
+                throw new Error(
+                  `This command matches a target-locked operation. Provide operation metadata for revision ${activeTargetLock.revision}.`,
+                )
+              }
+              const operationTarget: Todo.TargetIdentity | undefined = params.operation
+                ? {
+                    targetID: params.operation.target_id,
+                    artifact: path.isAbsolute(params.operation.artifact)
+                      ? path.normalize(params.operation.artifact)
+                      : path.resolve(cwd, params.operation.artifact),
+                    sha256: params.operation.sha256.toLowerCase(),
+                    port: params.operation.port,
+                    stage: params.operation.stage,
+                  }
+                : undefined
+              if (operationTarget) {
+                if (!/^[a-f0-9]{64}$/.test(operationTarget.sha256)) {
+                  throw new Error("Target-locked operation requires a valid lowercase SHA-256.")
+                }
+                if (!commandContainsTarget(params.command, operationTarget)) {
+                  throw new Error(
+                    "Target-locked command must contain the exact target ID, artifact, port/device, and matching stage.",
+                  )
+                }
+                const actualSha256 = yield* Effect.promise(() => sha256File(operationTarget.artifact))
+                if (actualSha256 !== operationTarget.sha256) {
+                  throw new Error(
+                    `Artifact SHA-256 mismatch for ${operationTarget.artifact}: expected ${operationTarget.sha256}, actual ${actualSha256}.`,
+                  )
+                }
+              }
               return yield* Effect.scoped(
                 Effect.gen(function* () {
                   const tree = yield* Effect.acquireRelease(parse(params.command, ps), (tree) =>
@@ -859,7 +922,16 @@ export const ShellTool = Tool.define(
                     throw new Error("Shell action changed after permission review; manual approval is required.")
                   }
 
-                  return yield* run(
+                  const operation = operationTarget
+                    ? yield* todo.beginOperation({
+                        sessionID: ctx.sessionID,
+                        expectedRevision: params.operation!.expected_revision,
+                        target: operationTarget,
+                        command: params.command,
+                      })
+                    : undefined
+                  let operationCompleted = false
+                  const result = yield* run(
                     {
                       shell,
                       command: params.command,
@@ -869,7 +941,46 @@ export const ShellTool = Tool.define(
                       description: params.description,
                     },
                     ctx,
+                  ).pipe(
+                    Effect.tap((result) =>
+                      operation
+                        ? todo
+                            .completeOperation({
+                              sessionID: ctx.sessionID,
+                              token: operation.token,
+                              revision: operation.revision,
+                              result: result.metadata.exit === 0 ? "succeeded" : "failed",
+                              output: result.output,
+                              exitCode: result.metadata.exit,
+                            })
+                            .pipe(Effect.tap(() => Effect.sync(() => (operationCompleted = true))))
+                        : Effect.void,
+                    ),
+                    Effect.ensuring(
+                      operation
+                        ? Effect.suspend(() =>
+                            operationCompleted
+                              ? Effect.void
+                              : todo.completeOperation({
+                                  sessionID: ctx.sessionID,
+                                  token: operation.token,
+                                  revision: operation.revision,
+                                  result: ctx.abort.aborted ? "interrupted" : "unknown",
+                                  output: "Command ended before MendCode collected a final result.",
+                                  exitCode: null,
+                                }),
+                          ).pipe(Effect.ignore)
+                        : Effect.void,
+                    ),
                   )
+                  const targetLock = operation ? yield* todo.getTargetLock(ctx.sessionID) : undefined
+                  return targetLock
+                    ? {
+                        ...result,
+                        metadata: { ...result.metadata, targetLock },
+                        output: `${result.output}\n\n<todo_target_lock>\n${JSON.stringify(targetLock)}\n</todo_target_lock>`,
+                      }
+                    : result
                 }),
               )
             }),

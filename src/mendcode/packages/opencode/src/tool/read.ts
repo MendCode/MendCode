@@ -19,6 +19,7 @@ const MAX_LINE_SUFFIX = `... (line truncated to ${MAX_LINE_LENGTH} chars)`
 const MAX_BYTES = 50 * 1024
 const MAX_BYTES_LABEL = `${MAX_BYTES / 1024} KB`
 const SAMPLE_BYTES = 4096
+const READ_TIMEOUT_MS = 30_000
 const SUPPORTED_IMAGE_MIMES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"])
 
 // `offset` and `limit` were originally `z.coerce.number()` — the runtime
@@ -258,9 +259,18 @@ export const ReadTool = Tool.define(
         return yield* Effect.fail(new Error(`Cannot read binary file: ${filepath}`))
       }
 
-      const file = yield* Effect.promise(() =>
-        lines(filepath, { limit: params.limit ?? DEFAULT_READ_LIMIT, offset: params.offset || 1 }),
-      )
+      const timeout = AbortSignal.timeout(READ_TIMEOUT_MS)
+      const signal = AbortSignal.any([ctx.abort, timeout])
+      const file = yield* Effect.tryPromise({
+        try: () => lines(filepath, { limit: params.limit ?? DEFAULT_READ_LIMIT, offset: params.offset || 1, signal }),
+        catch: (error) =>
+          new Error(
+            timeout.aborted && !ctx.abort.aborted
+              ? `Reading timed out after ${READ_TIMEOUT_MS / 1000} seconds: ${filepath}`
+              : `Reading was interrupted: ${filepath}`,
+            { cause: error },
+          ),
+      })
       if (file.count < file.offset && !(file.count === 0 && file.offset === 1)) {
         return yield* Effect.fail(
           new Error(`Offset ${file.offset} is out of range for this file (${file.count} lines)`),
@@ -276,7 +286,7 @@ export const ReadTool = Tool.define(
       if (file.cut) {
         output += `\n\n(Output capped at ${MAX_BYTES_LABEL}. Showing lines ${file.offset}-${last}. Use offset=${next} to continue.)`
       } else if (file.more) {
-        output += `\n\n(Showing lines ${file.offset}-${last} of ${file.count}. Use offset=${next} to continue.)`
+        output += `\n\n(Showing lines ${file.offset}-${last}. Use offset=${next} to continue.)`
       } else {
         output += `\n\n(End of file - total ${file.count} lines)`
       }
@@ -308,8 +318,8 @@ export const ReadTool = Tool.define(
   }),
 )
 
-async function lines(filepath: string, opts: { limit: number; offset: number }) {
-  const stream = createReadStream(filepath, { encoding: "utf8" })
+async function lines(filepath: string, opts: { limit: number; offset: number; signal: AbortSignal }) {
+  const stream = createReadStream(filepath, { encoding: "utf8", signal: opts.signal })
   const rl = createInterface({
     input: stream,
     // Note: we use the crlfDelay option to recognize all instances of CR LF
@@ -330,7 +340,7 @@ async function lines(filepath: string, opts: { limit: number; offset: number }) 
 
       if (raw.length >= opts.limit) {
         more = true
-        continue
+        break
       }
 
       const line = text.length > MAX_LINE_LENGTH ? text.substring(0, MAX_LINE_LENGTH) + MAX_LINE_SUFFIX : text

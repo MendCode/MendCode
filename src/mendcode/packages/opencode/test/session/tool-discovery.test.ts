@@ -11,6 +11,8 @@ describe("tool discovery", () => {
     const tools = { read: definition("Read files"), notes_find: definition("Search notes and memory"), screenshot: definition("Capture the computer screen") }
     const initial = withToolDiscovery(tools, [])
     expect(Object.keys(initial)).toEqual(["read", "tool_search"])
+    expect(initial.tool_search.description).not.toContain("computer")
+    expect(initial.tool_search.description).not.toContain("browser")
     const found = await searchTools(tools, "computer screen", 2)
     expect(found.tools.map((item) => item.name)).toEqual(["screenshot"])
     const history = [{ info: { role: "assistant" }, parts: [{

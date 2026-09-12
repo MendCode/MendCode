@@ -8,6 +8,7 @@ import type { ProjectID } from "../project/schema"
 import type { SessionID, MessageID, PartID, AgentCommandID } from "./schema"
 import type { WorkspaceID } from "../control-plane/schema"
 import type { CompletionProgress } from "./completion-contract"
+import type { TargetLockState } from "./todo"
 import type {
   WorkflowArtifact,
   WorkflowArtifactID,
@@ -132,6 +133,16 @@ export const TodoTable = sqliteTable(
     index("todo_session_idx").on(table.session_id),
   ],
 )
+
+export const TodoTargetLockTable = sqliteTable("todo_target_lock", {
+  session_id: text()
+    .$type<SessionID>()
+    .primaryKey()
+    .references(() => SessionTable.id, { onDelete: "cascade" }),
+  revision: integer().notNull(),
+  data: text({ mode: "json" }).notNull().$type<TargetLockState>(),
+  ...Timestamps,
+})
 
 export const SessionMessageTable = sqliteTable(
   "session_message",

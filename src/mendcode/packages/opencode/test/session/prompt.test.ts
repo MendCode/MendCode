@@ -1,7 +1,7 @@
 import { NodeFileSystem } from "@effect/platform-node"
 import { FetchHttpClient } from "effect/unstable/http"
 import { expect, test } from "bun:test"
-import { Cause, Deferred, Effect, Exit, Fiber, Layer, Schema } from "effect"
+import { Cause, Deferred, Effect, Exit, Fiber, Layer, Option, Schema } from "effect"
 import path from "path"
 import { fileURLToPath } from "url"
 import { NamedError } from "@mendcode/core/util/error"
@@ -47,6 +47,7 @@ import {
   findRecoverableQueuedPrompt,
   ownerWakePromptText,
   interruptedToolPromptText,
+  peerDeliveryIDForAssistant,
   resolveCancelTurnResult,
   shouldContinueAfterCompactionStop,
 } from "../../src/session/prompt"
@@ -788,6 +789,66 @@ test("auto compaction guard waits for real user input after a synthetic resume",
   expect(shouldSkipAutoCompaction([summary, syntheticResume])).toBe(true)
   expect(shouldSkipAutoCompaction([summary, oldUser, oldAssistant, syntheticResume])).toBe(true)
   expect(shouldSkipAutoCompaction([summary, syntheticResume, realUser])).toBe(false)
+})
+
+test("resolves peer delivery only through its internal compaction lineage", () => {
+  const peer = promptUser([
+    {
+      type: "text",
+      id: PartID.ascending(),
+      text: "peer request",
+      metadata: { kind: "peer_message", deliveryID: "acmd_test" },
+    },
+  ])
+  const compactionInfo = userInfo()
+  const compaction = {
+    info: compactionInfo,
+    parts: [
+      {
+        id: PartID.ascending(),
+        sessionID: compactionInfo.sessionID,
+        messageID: compactionInfo.id,
+        type: "compaction" as const,
+        parent_id: peer.info.id,
+        auto: true,
+        overflow: true,
+        resume: true,
+      },
+    ],
+  } satisfies MessageV2.WithParts
+  const resume = promptUser([
+    {
+      type: "text",
+      id: PartID.ascending(),
+      text: "resume",
+      synthetic: true,
+      metadata: { compaction_continue: true, compaction_parent_id: compaction.info.id },
+    },
+  ])
+  const summary = promptAssistant({
+    id: MessageID.ascending(),
+    finish: "stop",
+    summary: true,
+    parentID: compaction.info.id,
+  })
+  const response = promptAssistant({
+    id: MessageID.ascending(),
+    finish: "stop",
+    summary: false,
+    parentID: resume.info.id,
+  })
+  const unrelated = promptUser([{ type: "text", id: PartID.ascending(), text: "later user request" }])
+  const unrelatedResponse = promptAssistant({
+    id: MessageID.ascending(),
+    finish: "stop",
+    summary: false,
+    parentID: unrelated.info.id,
+  })
+  const messages = [peer, compaction, summary, resume, response, unrelated, unrelatedResponse]
+
+  expect(peerDeliveryIDForAssistant(messages, summary.info)).toBeUndefined()
+  expect(peerDeliveryIDForAssistant(messages, response.info)).toBe("acmd_test")
+  expect(peerDeliveryIDForAssistant(messages, unrelatedResponse.info)).toBeUndefined()
 })
 
 test("auto compaction resumes only for active or incomplete assistant turns", () => {
@@ -2345,6 +2406,18 @@ it.live("automatically delivers a same-workspace agent message and returns its r
         title: "Peer receiver",
         permission: [{ permission: "*", pattern: "*", action: "allow" }],
       })
+      yield* sessions.setAgentModel({
+        sessionID: source.id,
+        agent: "build",
+        model: { id: ref.modelID, providerID: ref.providerID, variant: "medium" },
+        time: Date.now(),
+      })
+      yield* sessions.setAgentModel({
+        sessionID: target.id,
+        agent: "build",
+        model: { id: ref.modelID, providerID: ref.providerID, variant: "low" },
+        time: Date.now(),
+      })
       yield* prompt.wakePeerDelivery(source.id)
       yield* status.set(target.id, { type: "busy", message: "active run" })
       const responseGate = defer<void>()
@@ -2463,20 +2536,30 @@ it.live("automatically delivers a same-workspace agent message and returns its r
       ).toBe(source.id)
       expect(yield* commands.get(command.id).pipe(Effect.map((info) => info.state))).toBe("completed")
       const sourceMessages = yield* sessions.messages({ sessionID: source.id, view: "full" })
-      const returnedPart = sourceMessages
-        .flatMap((message) => message.parts)
-        .find(
+      const returnedMessage = sourceMessages.find((message) =>
+        message.parts.some(
           (part) =>
             part.type === "text" &&
             (part.metadata as Record<string, unknown> | undefined)?.kind === "peer_response" &&
             (part.metadata as Record<string, unknown> | undefined)?.deliveryID === command.id,
-        )
+        ),
+      )
+      const returnedPart = returnedMessage?.parts.find(
+        (part) =>
+          part.type === "text" &&
+          (part.metadata as Record<string, unknown> | undefined)?.kind === "peer_response" &&
+          (part.metadata as Record<string, unknown> | undefined)?.deliveryID === command.id,
+      )
       expect(returnedPart && returnedPart.type === "text" ? returnedPart.text : undefined).toContain("agent_response")
       expect(
         returnedPart && returnedPart.type === "text"
           ? (returnedPart.metadata as Record<string, unknown> | undefined)?.displayText
           : undefined,
       ).toBe("peer response")
+      expect(received?.info.role === "user" ? received.info.model.variant : undefined).toBe("low")
+      expect(returnedMessage?.info.role === "user" ? returnedMessage.info.model.variant : undefined).toBe("medium")
+      expect((yield* sessions.get(target.id)).model?.variant).toBe("low")
+      expect((yield* sessions.get(source.id)).model?.variant).toBe("medium")
       expect(JSON.stringify(yield* llm.inputs)).toContain("peer response")
       expect(yield* llm.calls).toBe(2)
       expect((yield* commands.list()).filter((item) => item.type === "peer_message")).toHaveLength(1)
@@ -2486,6 +2569,132 @@ it.live("automatically delivers a same-workspace agent message and returns its r
       config: (url) => ({
         ...providerCfg(url),
         agent: { build: { model: "test/test-model" } },
+      }),
+    },
+  ),
+)
+
+it.live("returns a peer response after overflow compaction resumes the target turn", () =>
+  provideTmpdirServer(
+    Effect.fnUntraced(function* ({ llm }) {
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const commands = yield* AgentCommand.Service
+      const source = yield* sessions.create({ title: "Peer sender" })
+      const target = yield* sessions.create({
+        title: "Peer receiver",
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
+      yield* prompt.wakePeerDelivery(source.id)
+      yield* Effect.sleep("20 millis")
+      yield* llm.push(reply().text("work before overflow").usage({ input: 95_000, output: 1 }).toolCalls().item())
+      yield* llm.text("compaction summary must not be returned")
+      yield* llm.text("peer response after compaction")
+      yield* llm.text("source observed compacted peer response")
+
+      const command = yield* commands.create({
+        sourceSessionID: source.id,
+        targetSessionID: target.id,
+        type: "peer_message",
+        payload: { text: "continue through overflow" },
+      })
+
+      const completed = yield* Effect.gen(function* () {
+        while (true) {
+          const current = yield* commands.get(command.id)
+          if (current.state === "completed") return true
+          if (current.state === "failed" || current.state === "rejected") return false
+          yield* Effect.sleep("1 millis")
+        }
+      }).pipe(
+        Effect.timeout("3 seconds"),
+        Effect.catch(() => Effect.succeed(false)),
+      )
+      expect(completed).toBe(true)
+
+      const targetMessages = yield* sessions.messages({ sessionID: target.id, view: "full" })
+      const marker = targetMessages.find((message) =>
+        message.parts.some(
+          (part) =>
+            part.type === "text" &&
+            (part.metadata as Record<string, unknown> | undefined)?.kind === "peer_message" &&
+            (part.metadata as Record<string, unknown> | undefined)?.deliveryID === command.id,
+        ),
+      )
+      const compaction = targetMessages.find((message) =>
+        message.parts.some((part) => part.type === "compaction" && part.parent_id === marker?.info.id),
+      )
+      const resume = targetMessages.find((message) =>
+        message.parts.some(
+          (part) =>
+            part.type === "text" &&
+            part.synthetic === true &&
+            part.metadata?.compaction_continue === true &&
+            part.metadata?.compaction_parent_id === compaction?.info.id,
+        ),
+      )
+      const terminal = targetMessages.find(
+        (message) =>
+          message.info.role === "assistant" &&
+          message.info.parentID === resume?.info.id &&
+          message.parts.some((part) => part.type === "text" && part.text === "peer response after compaction"),
+      )
+      expect(marker).toBeDefined()
+      expect(compaction).toBeDefined()
+      expect(resume).toBeDefined()
+      expect(terminal).toBeDefined()
+
+      const sourceResponded = yield* Effect.gen(function* () {
+        while (true) {
+          const messages = yield* sessions.messages({ sessionID: source.id, view: "full" })
+          const responsePrompt = messages.find((message) =>
+            message.parts.some(
+              (part) =>
+                part.type === "text" &&
+                (part.metadata as Record<string, unknown> | undefined)?.kind === "peer_response" &&
+                (part.metadata as Record<string, unknown> | undefined)?.deliveryID === command.id,
+            ),
+          )
+          if (
+            responsePrompt &&
+            messages.some(
+              (message) =>
+                message.info.role === "assistant" &&
+                message.info.parentID === responsePrompt.info.id &&
+                message.info.time.completed !== undefined,
+            )
+          )
+            return true
+          yield* Effect.sleep("1 millis")
+        }
+      }).pipe(
+        Effect.timeout("3 seconds"),
+        Effect.catch(() => Effect.succeed(false)),
+      )
+      expect(sourceResponded).toBe(true)
+
+      const sourceMessages = yield* sessions.messages({ sessionID: source.id, view: "full" })
+      const returned = sourceMessages
+        .flatMap((message) => message.parts)
+        .find(
+          (part) =>
+            part.type === "text" &&
+            (part.metadata as Record<string, unknown> | undefined)?.kind === "peer_response" &&
+            (part.metadata as Record<string, unknown> | undefined)?.deliveryID === command.id,
+        )
+      expect(returned && returned.type === "text" ? returned.metadata?.displayText : undefined).toBe(
+        "peer response after compaction",
+      )
+      expect(yield* llm.calls).toBe(4)
+    }),
+    {
+      git: true,
+      config: (url) => ({
+        ...providerCfg(url),
+        agent: {
+          build: { model: "test/test-model" },
+          compaction: { model: "test/test-model" },
+        },
       }),
     },
   ),
@@ -3323,6 +3532,75 @@ it.live("global immediate queue mode interrupts the active turn and runs the que
   ),
 )
 
+it.live("peer-style async delivery interrupts and continues without global immediate mode", () =>
+  provideTmpdirServer(
+    Effect.fnUntraced(function* ({ llm }) {
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({
+        title: "Peer response source",
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
+      const gate = defer<void>()
+      yield* llm.hold("active turn", gate.promise)
+      const active = yield* prompt
+        .prompt({
+          sessionID: chat.id,
+          agent: "build",
+          model: ref,
+          parts: [{ type: "text", text: "active request" }],
+        })
+        .pipe(Effect.forkChild)
+      yield* llm.wait(1)
+      yield* llm.text("continued with peer response")
+
+      const delivered = yield* prompt.promptAsync(
+        {
+          sessionID: chat.id,
+          agent: "build",
+          model: ref,
+          parts: [{ type: "text", text: "peer response", metadata: { kind: "peer_response" } }],
+        },
+        { interruptActive: true },
+      )
+      const interrupted = yield* Fiber.join(active)
+      gate.resolve()
+
+      const completed = yield* Effect.gen(function* () {
+        while (true) {
+          const messages = yield* sessions.messages({ sessionID: chat.id, view: "full" })
+          const assistant = messages.find(
+            (message) => message.info.role === "assistant" && message.info.parentID === delivered.info.id,
+          )
+          if (assistant?.info.role === "assistant" && assistant.info.time.completed !== undefined) return assistant
+          yield* Effect.sleep("1 millis")
+        }
+      }).pipe(Effect.timeout("2 seconds"))
+      const persistedDelivery = yield* sessions.findMessage(chat.id, (message) => message.info.id === delivered.info.id)
+
+      expect(interrupted.info.role === "assistant" ? interrupted.info.error?.name : undefined).toBe(
+        "MessageAbortedError",
+      )
+      expect(
+        Option.isSome(persistedDelivery) && persistedDelivery.value.info.role === "user"
+          ? persistedDelivery.value.info.queued
+          : undefined,
+      ).toBe(false)
+      expect(completed.parts.some((part) => part.type === "text" && part.text === "continued with peer response")).toBe(
+        true,
+      )
+      expect(yield* llm.calls).toBe(2)
+    }),
+    {
+      git: true,
+      config: (url) => ({
+        ...providerCfg(url),
+        agent: { build: { model: "test/test-model" } },
+      }),
+    },
+  ),
+)
+
 it.live("manual interrupt stops only the active turn and preserves its queued prompt", () =>
   provideTmpdirServer(
     Effect.fnUntraced(function* ({ llm }) {
@@ -3830,7 +4108,13 @@ it.live("loop flushes automatic memory extraction after a normal assistant stop"
           )
 
           const result = yield* prompt.loop({ sessionID: session.id })
-          const proposals = yield* Effect.promise(() => listMemoryProposals(root, "pending"))
+          const proposals = yield* Effect.gen(function* () {
+            while (true) {
+              const items = yield* Effect.promise(() => listMemoryProposals(root, "pending"))
+              if (items.length > 0) return items
+              yield* Effect.sleep("1 millis")
+            }
+          }).pipe(Effect.timeout("2 seconds"))
           const inputs = yield* llm.inputs
 
           expect(result.info.role).toBe("assistant")
@@ -3842,6 +4126,94 @@ it.live("loop flushes automatic memory extraction after a normal assistant stop"
           expect(proposals[0]?.scope).toBe("project")
           expect(proposals[0]?.text).toContain("visible TUI changes")
         } finally {
+          if (previousXdgConfigHome === undefined) delete process.env.XDG_CONFIG_HOME
+          else process.env.XDG_CONFIG_HOME = previousXdgConfigHome
+        }
+      }),
+    { git: true, config: providerCfg },
+  ),
+)
+
+it.live("queued prompt starts while automatic memory extraction remains in flight", () =>
+  provideTmpdirServer(
+    ({ dir, llm }) =>
+      Effect.gen(function* () {
+        const root = path.resolve(dir)
+        const previousXdgConfigHome = process.env.XDG_CONFIG_HOME
+        const assistantGate = defer<void>()
+        const memoryGate = defer<void>()
+        process.env.XDG_CONFIG_HOME = path.join(root, ".xdg")
+        try {
+          yield* Effect.promise(() =>
+            writeProjectMemoryConfig(
+              {
+                enabled: true,
+                use: false,
+                generate: true,
+                extractorRole: "memoryExtractor",
+              },
+              root,
+            ),
+          )
+          yield* Effect.promise(() =>
+            writeModelsConfig(
+              {
+                ...defaultModelsConfig,
+                enabled: true,
+                roles: {
+                  ...defaultModelsConfig.roles,
+                  default: { providerID: "test", modelID: "test-model" },
+                  memoryExtractor: { providerID: "test", modelID: "test-model" },
+                },
+              },
+              root,
+            ),
+          )
+
+          const prompt = yield* SessionPrompt.Service
+          const sessions = yield* Session.Service
+          const session = yield* sessions.create({
+            title: "Memory queue handoff",
+            permission: [{ permission: "*", pattern: "*", action: "allow" }],
+          })
+          const emptyMemoryResult = JSON.stringify({ proposals: [] })
+          yield* llm.hold("first response complete", assistantGate.promise)
+          yield* llm.hold(emptyMemoryResult, memoryGate.promise)
+          yield* llm.text("queued response started")
+          yield* llm.text(emptyMemoryResult)
+
+          const first = yield* prompt
+            .prompt({
+              sessionID: session.id,
+              agent: "build",
+              parts: [{ type: "text", text: "Remember this durable first-turn preference." }],
+            })
+            .pipe(Effect.forkChild)
+          yield* llm.wait(1)
+          const queued = yield* prompt
+            .prompt({
+              sessionID: session.id,
+              agent: "build",
+              parts: [{ type: "text", text: "Run this queued turn without waiting for memory extraction." }],
+            })
+            .pipe(Effect.forkChild)
+
+          assistantGate.resolve()
+          yield* Fiber.join(first)
+          const queuedResult = yield* Fiber.join(queued).pipe(Effect.timeout("2 seconds"))
+
+          expect(
+            queuedResult.parts.some((part) => part.type === "text" && part.text === "queued response started"),
+          ).toBe(true)
+          expect(yield* llm.calls).toBeGreaterThanOrEqual(3)
+
+          memoryGate.resolve()
+          yield* Effect.gen(function* () {
+            while ((yield* llm.pending) > 0 || (yield* llm.calls) < 4) yield* Effect.sleep("1 millis")
+          }).pipe(Effect.timeout("2 seconds"))
+        } finally {
+          assistantGate.resolve()
+          memoryGate.resolve()
           if (previousXdgConfigHome === undefined) delete process.env.XDG_CONFIG_HOME
           else process.env.XDG_CONFIG_HOME = previousXdgConfigHome
         }
@@ -3906,10 +4278,19 @@ it.live("loop returns to idle when automatic memory extraction times out", () =>
           yield* llm.hang
 
           const result = yield* prompt.loop({ sessionID: session.id })
-          const finish = [...result.parts]
-            .reverse()
-            .find((part): part is MessageV2.StepFinishPart => part.type === "step-finish")
-          const memory = finish?.metadata?.mendMemory as any
+          const memory = yield* Effect.gen(function* () {
+            while (true) {
+              const current = yield* sessions.findMessage(session.id, (message) => message.info.id === result.info.id)
+              if (Option.isSome(current)) {
+                const finish = [...current.value.parts]
+                  .reverse()
+                  .find((part): part is MessageV2.StepFinishPart => part.type === "step-finish")
+                const value = finish?.metadata?.mendMemory as any
+                if (value?.output?.queued === false) return value
+              }
+              yield* Effect.sleep("1 millis")
+            }
+          }).pipe(Effect.timeout("2 seconds"))
 
           expect(result.info.role).toBe("assistant")
           expect(yield* llm.calls).toBe(2)

@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.1.44-beta.11 - 2026-09-12
+
+### Added
+
+- Add permission-gated, on-demand Computer Use with bounded semantic inspection,
+  macOS interaction highlighting, strict action and duration limits, and a local
+  smoke harness.
+- Add revisioned TODO target locks for transfer, flash, and verify operations,
+  rejecting stale target/artifact/port data and grounding final reports in
+  recorded command output.
+
+### Fixed
+
+- Preserve the active session model, provider, and variant when delivering
+  peer-session messages and their automatic responses.
+- Return peer-session responses after overflow compaction by preserving and
+  following the internal compaction lineage without mistaking summaries or
+  unrelated turns for the final response.
+- Deliver completed peer-session responses immediately instead of leaving them
+  in the manual queued state behind an active generation.
+- Run automatic memory extraction after a completed turn without blocking the
+  next queued prompt or overwriting its visible activity state.
+- Keep large file and shell output reads bounded, cancellable, and protected by
+  explicit time limits.
+
+### Tests
+
+- Add regressions for Computer Use activation and permissions, target-lock
+  revision enforcement, bounded reads and shell output, peer response delivery
+  across compaction, and queued turns during memory extraction.
+
 ## 0.1.44-beta.10 - 2026-09-12
 
 ### Fixed
