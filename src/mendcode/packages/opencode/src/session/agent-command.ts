@@ -9,6 +9,7 @@ import { inArray } from "drizzle-orm"
 import { Context, Effect, Layer, Schema } from "effect"
 import { AgentCommandPolicy } from "./agent-command-policy"
 import { AgentViewMetadata } from "./agent-view-metadata"
+import { MessageV2 } from "./message-v2"
 import { AgentCommandTable, BackgroundSessionTable, SessionTable } from "./session.sql"
 import { AgentCommandID, SessionID } from "./schema"
 
@@ -55,6 +56,7 @@ const SendMessagePayload = Schema.Struct({
 const PeerMessagePayload = Schema.Struct({
   text: Schema.String,
   sourceTitle: Schema.optional(Schema.String),
+  attachments: Schema.optional(Schema.Array(MessageV2.FilePartInput)),
 })
 
 const Payload = Schema.Union([
@@ -108,7 +110,10 @@ export const Create = Schema.Union([
   Schema.Struct({
     sourceSessionID: SessionID,
     type: Schema.Literal("peer_message"),
-    payload: Schema.Struct({ text: Schema.String }),
+    payload: Schema.Struct({
+      text: Schema.String,
+      attachments: Schema.optional(Schema.Array(MessageV2.FilePartInput)),
+    }),
     expiresAt: Schema.optional(NonNegativeInt),
   }),
 ])
@@ -302,6 +307,13 @@ function payloadFor(input: Create, sourceTitle?: string): Payload {
     return {
       text,
       sourceTitle: normalizeString(sourceTitle, 120),
+      attachments: input.payload.attachments?.slice(0, 10).map((attachment) => ({
+        type: "file" as const,
+        mime: attachment.mime,
+        filename: attachment.filename,
+        url: attachment.url,
+        source: attachment.source,
+      })),
     }
   }
   return { reason: normalizeString(input.payload?.reason, 1_000) }

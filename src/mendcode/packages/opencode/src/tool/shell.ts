@@ -870,22 +870,24 @@ export const ShellTool = Tool.define(
               const timeout = params.timeout ?? DEFAULT_TIMEOUT
               const ps = Shell.ps(shell)
               const activeTargetLock = yield* todo.getTargetLock(ctx.sessionID)
-              if (activeTargetLock && TARGET_OPERATION_COMMAND.test(params.command) && !params.operation) {
+              const targetOperationCommand = TARGET_OPERATION_COMMAND.test(params.command)
+              if (activeTargetLock && targetOperationCommand && !params.operation) {
                 throw new Error(
                   `This command matches a target-locked operation. Provide operation metadata for revision ${activeTargetLock.revision}.`,
                 )
               }
-              const operationTarget: Todo.TargetIdentity | undefined = params.operation
-                ? {
-                    targetID: params.operation.target_id,
-                    artifact: path.isAbsolute(params.operation.artifact)
-                      ? path.normalize(params.operation.artifact)
-                      : path.resolve(cwd, params.operation.artifact),
-                    sha256: params.operation.sha256.toLowerCase(),
-                    port: params.operation.port,
-                    stage: params.operation.stage,
-                  }
-                : undefined
+              const operationTarget: Todo.TargetIdentity | undefined =
+                targetOperationCommand && params.operation
+                  ? {
+                      targetID: params.operation.target_id,
+                      artifact: path.isAbsolute(params.operation.artifact)
+                        ? path.normalize(params.operation.artifact)
+                        : path.resolve(cwd, params.operation.artifact),
+                      sha256: params.operation.sha256.toLowerCase(),
+                      port: params.operation.port,
+                      stage: params.operation.stage,
+                    }
+                  : undefined
               if (operationTarget) {
                 if (!/^[a-f0-9]{64}$/.test(operationTarget.sha256)) {
                   throw new Error("Target-locked operation requires a valid lowercase SHA-256.")

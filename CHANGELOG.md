@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.1.44-beta.13 - 2026-09-12
+
+### Added
+
+- Let `tell` forward current, selected prior, and explicit local attachments to
+  another session, then return files produced by that session to the sender.
+
+### Fixed
+
+- Restrict TODO target-lock validation to transfer, flash, and verify commands so
+  ordinary shell commands do not inherit stale device-operation metadata.
+- Clear the queued state after completed assistant turns with an `unknown` finish
+  while preserving continuation for real tool-call turns.
+- Keep peer-message responses correlated through compaction and bound attachment
+  delivery to the originating session command.
+
+### Tests
+
+- Add focused regressions for target-lock scope, queued-state release, peer
+  lineage, and attachment forwarding and return delivery.
+
 ## 0.1.44-beta.11 - 2026-09-12
 
 ### Added

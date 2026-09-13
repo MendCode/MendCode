@@ -2434,7 +2434,17 @@ it.live("automatically delivers a same-workspace agent message and returns its r
         sourceSessionID: source.id,
         targetSessionID: target.id,
         type: "peer_message",
-        payload: { text: "hello from the sender" },
+        payload: {
+          text: "hello from the sender",
+          attachments: [
+            {
+              type: "file",
+              mime: "image/png",
+              filename: "from-user.png",
+              url: "data:image/png;base64,dXNlcg==",
+            },
+          ],
+        },
       })
       expect(command.state).toBe("accepted")
       expect(command.policy.decision).toBe("safe_auto")
@@ -2472,6 +2482,26 @@ it.live("automatically delivers a same-workspace agent message and returns its r
       expect(awaitingResponse).toBe(true)
       expect(JSON.stringify(yield* llm.inputs)).toContain("agent_message")
       expect(JSON.stringify(yield* llm.inputs)).toContain(source.id)
+      const runningTargetMessages = yield* sessions.messages({ sessionID: target.id, view: "full" })
+      const runningReceived = runningTargetMessages.find((message) =>
+        message.parts.some(
+          (part) =>
+            part.type === "text" && (part.metadata as Record<string, unknown> | undefined)?.deliveryID === command.id,
+        ),
+      )
+      const runningAssistant = runningTargetMessages.find(
+        (message) => message.info.role === "assistant" && message.info.parentID === runningReceived?.info.id,
+      )
+      if (!runningAssistant) throw new Error("peer assistant was not created")
+      yield* sessions.updatePart({
+        id: PartID.ascending(),
+        messageID: runningAssistant.info.id,
+        sessionID: target.id,
+        type: "file",
+        mime: "application/pdf",
+        filename: "agent-result.pdf",
+        url: "data:application/pdf;base64,YWdlbnQ=",
+      })
       responseGate.resolve()
 
       const delivered = yield* Effect.gen(function* () {
@@ -2540,6 +2570,16 @@ it.live("automatically delivers a same-workspace agent message and returns its r
           ? (receivedPart.metadata as Record<string, unknown> | undefined)?.sourceSessionID
           : undefined,
       ).toBe(source.id)
+      expect(received?.parts).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: "file",
+            mime: "image/png",
+            filename: "from-user.png",
+            url: "data:image/png;base64,dXNlcg==",
+          }),
+        ]),
+      )
       expect(yield* commands.get(command.id).pipe(Effect.map((info) => info.state))).toBe("completed")
       const sourceMessages = yield* sessions.messages({ sessionID: source.id, view: "full" })
       const returnedMessage = sourceMessages.find((message) =>
@@ -2562,6 +2602,16 @@ it.live("automatically delivers a same-workspace agent message and returns its r
           ? (returnedPart.metadata as Record<string, unknown> | undefined)?.displayText
           : undefined,
       ).toBe("peer response")
+      expect(returnedMessage?.parts).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: "file",
+            mime: "application/pdf",
+            filename: "agent-result.pdf",
+            url: "data:application/pdf;base64,YWdlbnQ=",
+          }),
+        ]),
+      )
       expect(received?.info.role === "user" ? received.info.model.variant : undefined).toBe("low")
       expect(returnedMessage?.info.role === "user" ? returnedMessage.info.model.variant : undefined).toBe("medium")
       expect((yield* sessions.get(target.id)).model?.variant).toBe("low")

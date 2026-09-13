@@ -3573,6 +3573,29 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                 .trim()
             : ""
           const displayText = responseText || "The agent completed its response without a text summary."
+          const responseAttachments = Option.isSome(assistantMessage)
+            ? assistantMessage.value.parts.flatMap((part) => {
+                if (part.type === "file")
+                  return [
+                    {
+                      type: "file" as const,
+                      mime: part.mime,
+                      filename: part.filename,
+                      url: part.url,
+                      source: part.source,
+                    },
+                  ]
+                if (part.type === "tool" && part.state.status === "completed")
+                  return (part.state.attachments ?? []).map((attachment) => ({
+                    type: "file" as const,
+                    mime: attachment.mime,
+                    filename: attachment.filename,
+                    url: attachment.url,
+                    source: attachment.source,
+                  }))
+                return []
+              })
+            : []
           const targetSession = yield* sessions.get(command.targetSessionID)
           const existingResponse = yield* sessions.findMessage(command.sourceSessionID, (message) =>
             message.parts.some((part) => {
@@ -3587,7 +3610,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
           const responsePrompt = Option.isSome(existingResponse)
             ? existingResponse.value
             : yield* promptAsync(
-                {
+                  {
                   sessionID: command.sourceSessionID,
                   ...sourceSelection,
                   parts: [
@@ -3607,9 +3630,10 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                         targetAssistantID: assistant.id,
                         displayText,
                         receivedAt: Date.now(),
-                      },
                     },
-                  ],
+                  },
+                  ...responseAttachments,
+                ],
                 },
                 { interruptActive: true },
               )
@@ -3708,6 +3732,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                   receivedAt: Date.now(),
                 },
               },
+              ...(info.payload.attachments ?? []),
             ],
           })
           yield* agentCommands.update({

@@ -19,6 +19,8 @@ import { AppFileSystem } from "@mendcode/core/filesystem"
 import { Plugin } from "../../src/plugin"
 import { Bus } from "../../src/bus"
 import { Todo } from "../../src/session/todo"
+import { Database } from "../../src/storage/db"
+import { SessionTable } from "../../src/session/session.sql"
 
 const runtime = ManagedRuntime.make(
   Layer.mergeAll(
@@ -160,6 +162,96 @@ describe("tool.shell", () => {
       false,
     )
     expect(commandContainsTarget("verify /firmware/ocu-firmware-12.bin --port COM9 --target 12", target)).toBe(false)
+  })
+
+  test("ignores inherited operation metadata for ordinary commands while retaining target-lock enforcement", async () => {
+    await using tmp = await tmpdir({ git: true })
+    await WithInstance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const sessionID = SessionID.make("ses_shell_target_lock_scope")
+        Database.use((db) =>
+          db
+            .insert(SessionTable)
+            .values({
+              id: sessionID,
+              project_id: Instance.project.id,
+              slug: "shell-target-lock-scope",
+              directory: Instance.directory,
+              title: "Shell target lock scope",
+              version: "test",
+            })
+            .run(),
+        )
+        const target = {
+          targetID: "device-12",
+          artifact: path.join(tmp.path, "firmware-12.bin"),
+          sha256: "a".repeat(64),
+          port: "COM9",
+          stage: "verify" as const,
+        }
+        await runtime.runPromise(
+          Effect.gen(function* () {
+            const service = yield* Todo.Service
+            yield* service.setTargetLock({ sessionID, expectedRevision: 0, target })
+          }),
+        )
+
+        const bash = await initShell()
+        const lockedCtx = { ...ctx, sessionID }
+        const result = await Effect.runPromise(
+          bash.execute(
+            {
+              command: "echo ordinary",
+              description: "Runs an ordinary command",
+              operation: {
+                expected_revision: 999,
+                target_id: "stale-target",
+                artifact: "stale-artifact.bin",
+                sha256: "not-a-sha256",
+                port: "stale-port",
+                stage: "flash",
+              },
+            },
+            lockedCtx,
+          ),
+        )
+        expect(result.metadata.exit).toBe(0)
+        expect(result.output).toContain("ordinary")
+
+        const status = await Effect.runPromise(
+          bash.execute(
+            {
+              command: "git status --short --branch",
+              description: "Inspects the working tree",
+              operation: {
+                expected_revision: 999,
+                target_id: "stale-target",
+                artifact: "stale-artifact.bin",
+                sha256: "not-a-sha256",
+                port: "stale-port",
+                stage: "flash",
+              },
+            },
+            lockedCtx,
+          ),
+        )
+        expect(status.metadata.exit).toBe(0)
+        expect(status.output).toContain("##")
+
+        await expect(
+          Effect.runPromise(
+            bash.execute(
+              {
+                command: `verify ${target.artifact}`,
+                description: "Runs a protected command",
+              },
+              lockedCtx,
+            ),
+          ),
+        ).rejects.toThrow("Provide operation metadata for revision 1")
+      },
+    })
   })
 
   test("renders the effective default timeout instead of a stale hardcoded value", () => {

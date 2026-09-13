@@ -385,7 +385,7 @@ export function sessionUserMessageQueued(input: {
 
 function assistantTurnNeedsContinuation(message: { time?: { completed?: number }; finish?: string }) {
   if (message.time?.completed === undefined) return true
-  return message.finish === "tool-calls" || message.finish === "unknown"
+  return message.finish === "tool-calls"
 }
 
 export function sessionQueuedUserMessageIDs(input: {

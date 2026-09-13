@@ -809,6 +809,22 @@ describe("queued user turn", () => {
     ).toEqual([])
   })
 
+  test("releases a queued message after a completed assistant with an unknown finish", () => {
+    const messages = [
+      { id: "msg_001", role: "user" },
+      { id: "msg_002", role: "assistant", parentID: "msg_001", finish: "unknown", time: { completed: 2 } },
+      { id: "msg_003", role: "user" },
+    ]
+
+    expect(
+      sessionQueuedUserMessageIDs({
+        messages,
+        pendingAssistantID: "msg_002",
+        working: true,
+      }),
+    ).toEqual([])
+  })
+
   test("does not mark an older user queued when the active assistant belongs to a later user", () => {
     const olderUser = { id: "msg_001", role: "user" }
     const activeUser = { id: "msg_003", role: "user" }

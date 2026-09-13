@@ -126,11 +126,17 @@ describe("Agent Command inbox", () => {
         const source = await svc.createSession({ title: "coordinator" })
         const target = await svc.createSession({ title: "worker" })
 
+        const attachments = Array.from({ length: 12 }, (_, index) => ({
+          type: "file" as const,
+          mime: index === 0 ? "image/png" : "text/plain",
+          filename: `attachment-${index}.txt`,
+          url: `data:text/plain;base64,${index}`,
+        }))
         const command = await svc.create({
           sourceSessionID: source.id,
           targetSessionID: target.id,
           type: "peer_message",
-          payload: { text: "  inspect the latest test failure  " },
+          payload: { text: "  inspect the latest test failure  ", attachments },
         })
 
         expect(command).toMatchObject({
@@ -146,8 +152,10 @@ describe("Agent Command inbox", () => {
           payload: {
             text: "inspect the latest test failure",
             sourceTitle: "coordinator",
+            attachments: attachments.slice(0, 10).map((attachment) => ({ ...attachment, source: undefined })),
           },
         })
+        expect(command.type === "peer_message" ? command.payload.attachments : undefined).toHaveLength(10)
 
         await expect(
           svc.create({
