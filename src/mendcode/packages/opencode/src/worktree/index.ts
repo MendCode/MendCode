@@ -393,6 +393,14 @@ export const layer: Layer.Layer<
       if (!entry?.path) {
         const directoryExists = yield* fs.exists(directory).pipe(Effect.orDie)
         if (directoryExists) {
+          const registered = yield* Effect.forEach(yield* project.sandboxes(ctx.project.id), canonical, {
+            concurrency: "unbounded",
+          }).pipe(Effect.map((sandboxes) => sandboxes.includes(directory)))
+          if (!registered) {
+            throw new RemoveFailedError({
+              message: "Refusing to remove a directory that is not a registered project sandbox",
+            })
+          }
           yield* stopFsmonitor(directory)
           yield* cleanDirectory(directory)
         }

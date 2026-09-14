@@ -4,6 +4,7 @@ import {
   shouldBlurCompactionArcadeWhenOffscreen,
   shouldRestoreCompactionPromptFocus,
   shouldRenderCompactionArcade,
+  shouldRunCompactionArcade,
   compactionPanelIsPacked,
   compactionPanelHeading,
   compactionTranscriptToggleLabel,
@@ -1243,9 +1244,15 @@ describe("resolveWorkingStartedAt", () => {
     expect(shouldRenderCompactionArcade({ style: "cockpit", arcade: "snake" })).toBe(false)
     expect(shouldRenderCompactionArcade({ style: "minimal", arcade: "snake" })).toBe(false)
     expect(shouldRenderCompactionArcade({ style: "arcade", arcade: "snake" })).toBe(true)
-    expect(shouldRenderCompactionArcade({ style: "arcade", arcade: "snake", completed: true })).toBe(false)
-    expect(shouldRenderCompactionArcade({ style: "arcade", arcade: "snake", terminal: true })).toBe(false)
+    expect(shouldRenderCompactionArcade({ style: "arcade", arcade: "snake", completed: true })).toBe(true)
+    expect(shouldRenderCompactionArcade({ style: "arcade", arcade: "snake", terminal: true })).toBe(true)
     expect(shouldRenderCompactionArcade({ style: "arcade", arcade: "off" })).toBe(false)
+  })
+
+  test("keeps the final arcade board visible without running it after compaction", () => {
+    expect(shouldRunCompactionArcade({ style: "arcade", arcade: "snake" })).toBe(true)
+    expect(shouldRunCompactionArcade({ style: "arcade", arcade: "snake", completed: true })).toBe(false)
+    expect(shouldRunCompactionArcade({ style: "arcade", arcade: "snake", terminal: true })).toBe(false)
   })
 
   test("keeps the compaction arcade visible after a summary body is persisted", () => {
@@ -1968,8 +1975,38 @@ describe("resolveWorkingStartedAt", () => {
         viewportHeight: 48,
         lastViewportHeight: 48,
         followOutput: true,
+        atBottom: false,
       }),
     ).toBe(true)
+  })
+
+  test("does not detach follow when a layout reflow moves an already-bottom viewport", () => {
+    for (const input of [
+      {
+        scrollTop: 180,
+        lastScrollTop: 200,
+        scrollHeight: 300,
+        lastScrollHeight: 300,
+        viewportHeight: 120,
+        lastViewportHeight: 100,
+      },
+      {
+        scrollTop: 180,
+        lastScrollTop: 200,
+        scrollHeight: 280,
+        lastScrollHeight: 300,
+        viewportHeight: 100,
+        lastViewportHeight: 100,
+      },
+    ]) {
+      expect(
+        sessionUserMovedViewport({
+          ...input,
+          followOutput: true,
+          atBottom: true,
+        }),
+      ).toBe(false)
+    }
   })
 
   test("detaches follow when a manual scroll-up overlaps a content reflow", () => {

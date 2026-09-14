@@ -8,6 +8,7 @@ import { Agent } from "@/agent/agent"
 import { Auth } from "@/auth"
 import { Bus } from "@/bus"
 import { Config } from "@/config/config"
+import { AIConfiguration } from "@/mend/runtime/ai-configuration"
 import { Command } from "@/command"
 import * as Observability from "@mendcode/core/effect/observability"
 import { File } from "@/file"
@@ -72,6 +73,7 @@ import { mflowHandlers } from "./handlers/mflow"
 import { mcpHandlers } from "./handlers/mcp"
 import { permissionHandlers } from "./handlers/permission"
 import { planReviewHandlers } from "./handlers/plan-review"
+import { continuityHandlers } from "./handlers/continuity"
 import { projectHandlers } from "./handlers/project"
 import { providerHandlers } from "./handlers/provider"
 import { ptyConnectRoute, ptyHandlers } from "./handlers/pty"
@@ -136,6 +138,7 @@ const instanceApiRoutes = HttpApiBuilder.layer(InstanceHttpApi).pipe(
     questionHandlers,
     permissionHandlers,
     planReviewHandlers,
+    continuityHandlers,
     providerHandlers,
     sessionHandlers,
     syncHandlers,
@@ -172,6 +175,7 @@ export function createRoutes(corsOptions?: CorsOptions) {
       Account.defaultLayer,
       Agent.defaultLayer,
       Auth.defaultLayer,
+      AIConfiguration.defaultLayer,
       Command.defaultLayer,
       Config.defaultLayer,
       File.defaultLayer,

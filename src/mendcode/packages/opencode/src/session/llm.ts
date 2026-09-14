@@ -91,6 +91,9 @@ export type StreamInput = {
   tools: Record<string, Tool>
   retries?: number
   toolChoice?: "auto" | "required" | "none"
+  toolMode?: "normal" | "none"
+  /** Hard upper bound for bounded internal requests such as incremental compaction. */
+  maxOutputTokens?: number
   abort?: AbortSignal
 }
 
@@ -377,10 +380,19 @@ const live: Layer.Layer<
             : undefined,
           topP: input.agent.topP ?? ProviderTransform.topP(input.model),
           topK: ProviderTransform.topK(input.model),
-          maxOutputTokens: ProviderTransform.maxOutputTokens(input.model),
+          maxOutputTokens: Math.min(
+            ProviderTransform.maxOutputTokens(input.model),
+            input.maxOutputTokens ?? Number.POSITIVE_INFINITY,
+          ),
           options,
         },
       )
+      if (input.maxOutputTokens !== undefined) {
+        params.maxOutputTokens = Math.min(
+          params.maxOutputTokens ?? ProviderTransform.maxOutputTokens(input.model),
+          Math.max(1, Math.floor(input.maxOutputTokens)),
+        )
+      }
 
       if (isAstraModel(input.model.api.id)) {
         params.temperature = undefined
@@ -729,7 +741,8 @@ export const defaultLayer = Layer.suspend(() =>
   ),
 )
 
-function resolveTools(input: Pick<StreamInput, "tools" | "agent" | "permission" | "user">) {
+function resolveTools(input: Pick<StreamInput, "tools" | "agent" | "permission" | "user" | "toolMode">) {
+  if (input.toolMode === "none") return {}
   const disabled = Permission.disabled(
     Object.keys(input.tools),
     Permission.merge(input.agent.permission, input.permission ?? []),

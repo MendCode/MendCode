@@ -290,6 +290,25 @@ export const WorkflowTaskTemplate = Schema.Struct({
 })
 export type WorkflowTaskTemplate = Types.DeepMutable<Schema.Schema.Type<typeof WorkflowTaskTemplate>>
 
+const WorkflowValidationCheck = Schema.Struct({
+  id: Schema.String,
+  command: Schema.String,
+  timeoutMs: Schema.optional(PositiveInt),
+})
+
+/**
+ * A compound task is deliberately an additive field. Persisted compound
+ * tasks are materialized as `human` tasks so older runtimes stop at their
+ * existing human gate instead of treating them as ordinary agents.
+ */
+export const WorkflowCompoundTask = Schema.Struct({
+  profile: Schema.String,
+  validationChecks: Schema.Array(WorkflowValidationCheck),
+  configHash: Schema.optional(Schema.String),
+  resolved: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
+}).pipe(withStatics((schema) => ({ zod: zod(schema) })))
+export type WorkflowCompoundTask = Types.DeepMutable<Schema.Schema.Type<typeof WorkflowCompoundTask>>
+
 export const WorkflowMapSpec = Schema.Struct({
   source: WorkflowArtifactSelector,
   maxItems: PositiveInt,
@@ -321,6 +340,7 @@ export const WorkflowTask = Schema.Struct({
   retry: Schema.optional(WorkflowRetryPolicy),
   budget: Schema.optional(WorkflowTaskBudget),
   map: Schema.optional(WorkflowMapSpec),
+  compound: Schema.optional(WorkflowCompoundTask),
 })
 export type WorkflowTask = Types.DeepMutable<Schema.Schema.Type<typeof WorkflowTask>>
 
@@ -364,6 +384,8 @@ export const WorkflowTaskAttempt = Schema.Struct({
   reason: Schema.optional(Schema.String),
   startedAt: Schema.optional(NonNegativeInt),
   completedAt: Schema.optional(NonNegativeInt),
+  /** Additive JSON state for compound request accounting; absent on legacy attempts. */
+  compoundLedger: Schema.optional(Schema.Unknown),
 })
 export type WorkflowTaskAttempt = Types.DeepMutable<Schema.Schema.Type<typeof WorkflowTaskAttempt>>
 

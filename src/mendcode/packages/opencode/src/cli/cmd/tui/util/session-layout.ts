@@ -1,3 +1,12 @@
+export function sessionNextVisibleQueuedMessageID(
+  messages: ReadonlyArray<{ id: string }>,
+  parts: Readonly<Record<string, ReadonlyArray<{ type: string; synthetic?: boolean; text?: string }>>>,
+) {
+  return messages.find((message) =>
+    parts[message.id]?.some((part) => part.type === "text" && !part.synthetic && Boolean(part.text)),
+  )?.id
+}
+
 export function sessionPromptVisible(input: {
   isChildSession: boolean
   permissionCount: number

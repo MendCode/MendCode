@@ -1,6 +1,6 @@
 import { existsSync } from "fs"
 import { chmod, readFile, writeFile } from "fs/promises"
-import { spawnSync } from "child_process"
+import { spawn } from "child_process"
 import path from "path"
 import { mendPaths } from "../config/paths"
 import { providerAuthPreset, providerAuthStatus, providerEnvRequirements } from "./readiness"
@@ -24,6 +24,17 @@ type PricingPer1MTokens = {
   inputUsd: number
   cachedInputUsd?: number
   outputUsd: number
+}
+
+export type ProviderAdapterInput = {
+  providerID: string
+  modelID: string
+  authMode: string
+  prompt?: string
+  messages?: any[]
+  instructions?: string
+  signal?: AbortSignal
+  deadlineMs?: number
 }
 
 async function readJsonIfExists(file: string, fallback: any) {
@@ -62,7 +73,7 @@ function openaiApiResponsesEndpoint() {
   return process.env.MENDCODE_OPENAI_API_RESPONSES_ENDPOINT || process.env.OPENAI_API_RESPONSES_ENDPOINT || "https://api.openai.com/v1/responses"
 }
 
-async function refreshOpenAIToken(refreshToken: string) {
+async function refreshOpenAIToken(refreshToken: string, signal?: AbortSignal) {
   const response = await fetch(`${openaiOAuthIssuer()}/oauth/token`, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -71,6 +82,7 @@ async function refreshOpenAIToken(refreshToken: string) {
       refresh_token: refreshToken,
       client_id: openaiOAuthClientID(),
     }).toString(),
+    signal,
   })
   if (!response.ok) throw new Error(`OpenAI OAuth token refresh failed: ${response.status}`)
   return response.json()
@@ -91,12 +103,12 @@ function extractOpenAIAccountId(tokens: any) {
   return claims.chatgpt_account_id || claims["https://api.openai.com/auth"]?.chatgpt_account_id || claims.organizations?.[0]?.id || null
 }
 
-async function ensureFreshOpenAIAuthState(root: string) {
+async function ensureFreshOpenAIAuthState(root: string, signal?: AbortSignal) {
   const file = providerAuthStateFile(root, "openai")
   const state = await readProviderAuthState(root, "openai")
   if (!state?.refresh || !state?.access) return null
   if (typeof state.expires === "number" && state.expires > Date.now() + 30_000) return state
-  const tokens = await refreshOpenAIToken(state.refresh)
+  const tokens = await refreshOpenAIToken(state.refresh, signal)
   const refreshed = {
     ...state,
     access: tokens.access_token,
@@ -242,7 +254,7 @@ function parseResponsesResult(input: { providerID: string; modelID: string; auth
 }
 
 async function runOpenAISubscriptionPrompt(root: string, input: any) {
-  const auth = await ensureFreshOpenAIAuthState(root)
+  const auth = await ensureFreshOpenAIAuthState(root, input.signal)
   if (!auth) throw new Error("OpenAI OAuth state missing. Run `mendcode auth login openai --method browser --execute` first.")
   const startedAt = Date.now()
   const headers = new Headers({
@@ -259,6 +271,7 @@ async function runOpenAISubscriptionPrompt(root: string, input: any) {
     method: "POST",
     headers,
     body,
+    signal: input.signal,
   })
   return parseResponsesResult({ ...input, authMode: "chatgpt-subscription-oauth", response, text: await response.text(), elapsedMs: Date.now() - startedAt })
 }
@@ -271,6 +284,7 @@ async function runOpenAIAPIKeyPrompt(input: any) {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}`, "User-Agent": `mendcode/${mendRuntimeVersion()} (${process.platform}; ${process.arch})` },
     body: JSON.stringify(responseRequestBody(input)),
+    signal: input.signal,
   })
   return parseResponsesResult({ ...input, authMode: "api-key", response, text: await response.text(), elapsedMs: Date.now() - startedAt })
 }
@@ -333,7 +347,32 @@ async function runGenericAiSdkPrompt(root: string, input: any) {
   const envKey = envKeys.find((key: string) => Boolean(process.env[key])) || envKeys[0]
   if (!provider?.npm || !genericAiSdkPackages[provider.npm]) throw new Error(`No generic AI SDK adapter for provider: ${input.providerID}`)
   if (!envKey || !process.env[envKey]) throw new Error(`${envKey || "provider API key"} is required for ${input.providerID}`)
-  const result = spawnSync("bun", ["-e", genericAiSdkRunnerCode()], { cwd: enginePackage(root), input: JSON.stringify({ ...input, npm: provider.npm, envKey }), encoding: "utf8", env: process.env })
+  const result = await new Promise<{ status: number | null; stdout: string; stderr: string }>((resolve, reject) => {
+    const child = spawn("bun", ["-e", genericAiSdkRunnerCode()], {
+      cwd: enginePackage(root),
+      env: process.env,
+      stdio: ["pipe", "pipe", "pipe"],
+    })
+    let stdout = ""
+    let stderr = ""
+    const append = (current: string, chunk: Buffer) => `${current}${chunk.toString("utf8")}`.slice(-256 * 1024)
+    child.stdout.on("data", (chunk: Buffer) => {
+      stdout = append(stdout, chunk)
+    })
+    child.stderr.on("data", (chunk: Buffer) => {
+      stderr = append(stderr, chunk)
+    })
+    const timer = setTimeout(() => child.kill("SIGTERM"), input.deadlineMs ?? 20_000)
+    const abort = () => child.kill("SIGTERM")
+    input.signal?.addEventListener("abort", abort, { once: true })
+    child.once("error", reject)
+    child.once("close", (status) => {
+      clearTimeout(timer)
+      input.signal?.removeEventListener("abort", abort)
+      resolve({ status, stdout, stderr })
+    })
+    child.stdin.end(JSON.stringify({ ...input, npm: provider.npm, envKey }))
+  })
   if (result.status !== 0) {
     return { ok: false, status: result.status || 1, statusText: "AI SDK runner failed", errorPreview: (result.stderr || result.stdout || "").slice(0, 500), telemetry: { elapsedMs: null, usage: null, cost: estimateRunCost({ providerID: input.providerID, modelID: input.modelID, authMode: "api-key", usage: null }) } }
   }
@@ -354,13 +393,23 @@ export async function runSupportStatus(input: { providerID?: string | null; mode
   return { supported: true, authMode: resolvedAuthMode, catalogProviderCount: Object.keys(catalog).length, implementedProviders, implementedAuthModes }
 }
 
-export async function runProviderAdapter(root: string, input: { providerID: string; modelID: string; authMode: string; prompt?: string; messages?: any[]; instructions?: string }) {
-  if (input.providerID === "openai") {
-    const authMode = await resolveOpenAIAuthMode(root, input)
-    if (authMode === "api-key") return runOpenAIAPIKeyPrompt(input)
-    return runOpenAISubscriptionPrompt(root, input)
+export async function runProviderAdapter(root: string, input: ProviderAdapterInput) {
+  const controller = new AbortController()
+  const abort = () => controller.abort()
+  const timer = setTimeout(() => controller.abort(), input.deadlineMs ?? 20_000)
+  input.signal?.addEventListener("abort", abort, { once: true })
+  const request = { ...input, signal: controller.signal }
+  try {
+    if (input.providerID === "openai") {
+      const authMode = await resolveOpenAIAuthMode(root, input)
+      if (authMode === "api-key") return await runOpenAIAPIKeyPrompt(request)
+      return await runOpenAISubscriptionPrompt(root, request)
+    }
+    return await runGenericAiSdkPrompt(root, request)
+  } finally {
+    clearTimeout(timer)
+    input.signal?.removeEventListener("abort", abort)
   }
-  return runGenericAiSdkPrompt(root, input)
 }
 
 export async function providerRunAdapterInventory(root?: string) {

@@ -2,7 +2,7 @@ import { existsSync } from "fs"
 import { readFile } from "fs/promises"
 import path from "path"
 import { mendPaths } from "../config/paths"
-import { normalizedPromptModel } from "./model-family"
+import { ASTRA_PROMPT_SOURCE, normalizedPromptModel } from "./model-family"
 
 export type PromptSource = {
   label: string
@@ -19,6 +19,7 @@ export type PromptBehaviorProfile = {
   focusID: string
   label: string
   sourcePolicy: "public-model-guidance" | "mendcode-compatibility"
+  provenance?: { revision: string; url: string; verifiedAt: string }
   behavior: string[]
 }
 
@@ -39,6 +40,7 @@ const modelBehaviorProfiles: Array<PromptBehaviorProfile & { match: RegExp }> = 
     focusID: "codex",
     label: "GPT-6 Astra behavior guidance",
     sourcePolicy: "mendcode-compatibility",
+    provenance: ASTRA_PROMPT_SOURCE,
     match: /(^|[^a-z0-9])gpt[-_.:/]?6[-_.:/]?astra([^a-z0-9]|$)/i,
     behavior: [
       "Use the actual Astra runtime contract and exposed tools; do not infer capabilities from the model name or a different Codex transport.",

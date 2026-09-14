@@ -2,7 +2,7 @@ import { $ } from "bun"
 import { describe, expect } from "bun:test"
 import * as fs from "fs/promises"
 import path from "path"
-import { Effect, Layer } from "effect"
+import { Cause, Effect, Exit, Layer } from "effect"
 import { CrossSpawnSpawner } from "@mendcode/core/cross-spawn-spawner"
 import { Worktree } from "../../src/worktree"
 import { provideTmpdirInstance } from "../fixture/fixture"
@@ -12,6 +12,32 @@ const it = testEffect(Layer.mergeAll(Worktree.defaultLayer, CrossSpawnSpawner.de
 const wintest = process.platform === "win32" ? it.live : it.live.skip
 
 describe("Worktree.remove", () => {
+  it.live("does not delete an unregistered directory", () =>
+    provideTmpdirInstance(
+      (root) =>
+        Effect.gen(function* () {
+          const svc = yield* Worktree.Service
+          const dir = path.join(root, "important-data")
+          const file = path.join(dir, "keep.txt")
+
+          yield* Effect.promise(() => fs.mkdir(dir, { recursive: true }))
+          yield* Effect.promise(() => Bun.write(file, "keep\n"))
+
+          const exit = yield* Effect.exit(svc.remove({ directory: dir }))
+
+          expect(Exit.isFailure(exit)).toBe(true)
+          if (Exit.isFailure(exit)) {
+            const error = Cause.squash(exit.cause)
+            expect(error).toBeInstanceOf(Worktree.RemoveFailedError)
+            if (!(error instanceof Worktree.RemoveFailedError)) throw error
+            expect(error.data.message).toContain("registered project sandbox")
+          }
+          expect(yield* Effect.promise(() => Bun.file(file).text())).toBe("keep\n")
+        }),
+      { git: true },
+    ),
+  )
+
   it.live("continues when git remove exits non-zero after detaching", () =>
     provideTmpdirInstance(
       (root) =>

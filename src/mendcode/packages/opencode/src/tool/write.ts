@@ -14,6 +14,7 @@ import { InstanceState } from "@/effect/instance-state"
 import { trimDiff } from "./edit"
 import { assertExternalDirectoryEffect } from "./external-directory"
 import * as Bom from "@/util/bom"
+import { createNativeFileActionFacts } from "./shell-analysis"
 
 const MAX_PROJECT_DIAGNOSTICS_FILES = 5
 
@@ -58,8 +59,26 @@ export const WriteTool = Tool.define(
             metadata: {
               filepath,
               diff,
+              actionFacts: createNativeFileActionFacts({
+                operation: exists ? "update" : "create",
+                cwd: instance.directory,
+                sourcePaths: [filepath],
+                before: [contentOld],
+                after: [contentNew],
+              }),
             },
           })
+
+          const currentExists = yield* fs.existsSafe(filepath)
+          if (currentExists !== exists) {
+            throw new Error("Write target changed while waiting for permission; reread and request approval again.")
+          }
+          if (currentExists) {
+            const current = yield* Bom.readFile(fs, filepath)
+            if (current.text !== contentOld) {
+              throw new Error("Write target changed while waiting for permission; reread and request approval again.")
+            }
+          }
 
           yield* fs.writeWithDirs(filepath, Bom.join(contentNew, desiredBom))
           if (yield* format.file(filepath)) {

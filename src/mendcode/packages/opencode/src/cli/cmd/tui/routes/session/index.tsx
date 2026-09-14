@@ -487,6 +487,7 @@ export function sessionUserMovedViewport(input: {
   viewportHeight: number
   lastViewportHeight: number
   followOutput?: boolean
+  atBottom?: boolean
 }) {
   const scrollDelta = input.scrollTop - input.lastScrollTop
   const scrollMoved = Math.abs(scrollDelta) > 1
@@ -500,7 +501,7 @@ export function sessionUserMovedViewport(input: {
   // be that layout adjustment, but a negative delta is an unmistakable manual
   // scroll-up gesture and must detach follow immediately.
   if (layoutChanged) {
-    if (input.followOutput) return scrollDelta < -1
+    if (input.followOutput) return scrollDelta < -1 && input.atBottom !== true
     return false
   }
   return true

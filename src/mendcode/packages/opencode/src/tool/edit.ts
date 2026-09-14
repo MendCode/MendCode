@@ -20,6 +20,7 @@ import { AppFileSystem } from "@mendcode/core/filesystem"
 import * as Bom from "@/util/bom"
 import { Truncate } from "./truncate"
 import { PERSISTED_DIFF_COPY_BYTES, previewDiff } from "./diff-metadata"
+import { createNativeFileActionFacts } from "./shell-analysis"
 
 const MAX_EDIT_SOURCE_BYTES = 2 * 1024 * 1024
 
@@ -125,8 +126,29 @@ export const EditTool = Tool.define(
                   metadata: {
                     filepath: filePath,
                     diff,
+                    actionFacts: createNativeFileActionFacts({
+                      operation: "update",
+                      cwd: instance.directory,
+                      sourcePaths: [filePath],
+                      before: [contentOld],
+                      after: [contentNew],
+                    }),
                   },
                 })
+                const currentExists = yield* afs.existsSafe(filePath)
+                if (currentExists !== existed) {
+                  throw new Error(
+                    "Edit target changed while waiting for permission; reread and request approval again.",
+                  )
+                }
+                if (currentExists) {
+                  const current = yield* Bom.readFile(afs, filePath)
+                  if (current.text !== contentOld) {
+                    throw new Error(
+                      "Edit target changed while waiting for permission; reread and request approval again.",
+                    )
+                  }
+                }
                 yield* afs.writeWithDirs(filePath, Bom.join(contentNew, desiredBom))
                 if (yield* format.file(filePath)) {
                   contentNew = yield* Bom.syncFile(afs, filePath, desiredBom)
@@ -169,8 +191,20 @@ export const EditTool = Tool.define(
                 metadata: {
                   filepath: filePath,
                   diff,
+                  actionFacts: createNativeFileActionFacts({
+                    operation: "update",
+                    cwd: instance.directory,
+                    sourcePaths: [filePath],
+                    before: [contentOld],
+                    after: [contentNew],
+                  }),
                 },
               })
+
+              const current = yield* Bom.readFile(afs, filePath)
+              if (current.text !== contentOld) {
+                throw new Error("Edit target changed while waiting for permission; reread and request approval again.")
+              }
 
               yield* afs.writeWithDirs(filePath, Bom.join(contentNew, desiredBom))
               if (yield* format.file(filePath)) {

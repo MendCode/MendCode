@@ -22,7 +22,9 @@ const ISSUER = "https://auth.openai.com"
 const CODEX_API_ENDPOINT = "https://chatgpt.com/backend-api/codex/responses"
 const OAUTH_PORT = 1455
 const OAUTH_POLLING_SAFETY_MARGIN_MS = 3000
-const CODEX_COMPATIBILITY_VERSION = "0.144.0"
+// Keep this aligned with the newest verified Codex protocol release. New model
+// rollouts can reject older compatibility headers before processing a request.
+const CODEX_COMPATIBILITY_VERSION = "0.154.0"
 const CODEX_ORIGINATOR = "codex_cli_rs"
 const CODEX_USER_AGENT = `codex_cli_rs/0.0.0 (MendCode; ${os.platform()} ${os.release()}; ${os.arch()})`
 const RESPONSES_LITE_HEADER = "x-openai-internal-codex-responses-lite"

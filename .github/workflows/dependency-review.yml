@@ -30,4 +30,6 @@ jobs:
         with:
           fail-on-severity: high
           deny-licenses: GPL-2.0, GPL-3.0, AGPL-1.0, AGPL-3.0
+          # These existing packages publish missing/non-canonical SPDX metadata; keep the license gate enabled for all other dependencies.
+          allow-dependencies-licenses: "pkg:npm/@pierre/diffs, pkg:npm/@openauthjs/openauth, pkg:npm/opencontrol"
           comment-summary-in-pr: always

@@ -1,7 +1,7 @@
 import { Permission } from "@/permission"
 import { PermissionID } from "@/permission/schema"
 import { Effect } from "effect"
-import { HttpApiBuilder } from "effect/unstable/httpapi"
+import { HttpApiBuilder, HttpApiError } from "effect/unstable/httpapi"
 import { InstanceHttpApi } from "../api"
 
 export const permissionHandlers = HttpApiBuilder.group(InstanceHttpApi, "permission", (handlers) =>
@@ -16,14 +16,31 @@ export const permissionHandlers = HttpApiBuilder.group(InstanceHttpApi, "permiss
       params: { requestID: PermissionID }
       payload: Permission.ReplyBody
     }) {
-      yield* svc.reply({
+      const released = yield* svc.reply({
         requestID: ctx.params.requestID,
         reply: ctx.payload.reply,
         message: ctx.payload.message,
+        smart: ctx.payload.smart,
       })
-      return true
+      return released
     })
 
-    return handlers.handle("list", list).handle("reply", reply)
+    const reviews = Effect.fn("PermissionHttpApi.reviews")(function* (ctx: {
+      query: { sessionID?: string; cursor?: string; limit?: number }
+    }) {
+      return yield* svc.listReviews(ctx.query)
+    })
+
+    const revokeGrant = Effect.fn("PermissionHttpApi.revokeGrant")(function* (ctx: { params: { grantID: string } }) {
+      const revoked = yield* svc.revokeGrant(ctx.params.grantID)
+      if (!revoked) return yield* new HttpApiError.NotFound({})
+      return { revoked: true }
+    })
+
+    return handlers
+      .handle("list", list)
+      .handle("reply", reply)
+      .handle("reviews", reviews)
+      .handle("revokeGrant", revokeGrant)
   }),
 )

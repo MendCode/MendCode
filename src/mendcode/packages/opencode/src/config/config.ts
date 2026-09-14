@@ -42,6 +42,8 @@ import { ConfigServer } from "./server"
 import { ConfigSkills } from "./skills"
 import { ConfigVariable } from "./variable"
 import { Npm } from "@mendcode/core/npm"
+import { notifyDisabled } from "@/session/continuity-control"
+import * as AIConfig from "./ai"
 
 const log = Log.create({ service: "config" })
 
@@ -254,9 +256,7 @@ export const Info = Schema.Struct({
       model: Schema.optional(ConfigModelID).annotate({
         description: "Image generation model in provider/model format",
       }),
-      adapter: Schema.optional(
-        Schema.Literals(["auto", "codex-oauth", "openrouter", "openai-compatible"]),
-      ).annotate({
+      adapter: Schema.optional(Schema.Literals(["auto", "codex-oauth", "openrouter", "openai-compatible"])).annotate({
         description: "Image API adapter. Auto selects only verified provider contracts.",
       }),
       base_url: Schema.optional(Schema.String).annotate({
@@ -355,8 +355,26 @@ export const Info = Schema.Struct({
       threshold: Schema.optional(Schema.Finite).annotate({
         description: "Auto-compaction threshold as a percent of the model input/context limit (default: 95).",
       }),
+      strategy: Schema.optional(Schema.Literals(["portable", "auto", "native"])).annotate({
+        description: "Compaction strategy. Native and auto require a positively supported provider transport.",
+      }),
+      portable_mode: Schema.optional(Schema.Literals(["legacy", "incremental"])).annotate({
+        description: "Portable compaction implementation. Legacy is the rollback-compatible default.",
+      }),
+      timeout_ms: Schema.optional(AIConfig.TimeoutMs).annotate({
+        description: "Maximum compaction operation time in milliseconds.",
+      }),
+      max_summary_tokens: Schema.optional(AIConfig.SummaryTokens).annotate({
+        description: "Maximum portable summary output tokens.",
+      }),
+      on_native_error: Schema.optional(Schema.Literals(["stop", "portable"])).annotate({
+        description: "Whether a real native failure may consume one bounded portable fallback.",
+      }),
     }),
   ),
+  ai: Schema.optional(AIConfig.Info).annotate({
+    description: "Opt-in provider-aware compound model workflows and configuration assistance.",
+  }),
   queue: Schema.optional(
     Schema.Struct({
       mode: Schema.optional(Schema.Literals(["after-response", "after-tools", "after-turn", "immediate"])).annotate({
@@ -367,15 +385,28 @@ export const Info = Schema.Struct({
   ).annotate({ description: "Default handling for prompts submitted while an assistant turn is active." }),
   experimental: Schema.optional(
     Schema.Struct({
+      code_mode: Schema.optional(Schema.Boolean).annotate({ description: "Enable bounded, permission-preserving JavaScript tool orchestration (experimental, default false)." }),
+      tool_discovery: Schema.optional(Schema.Boolean).annotate({
+        description: "Discover secondary and MCP tool schemas on demand to reduce context (default: true). Set false to expose all tools directly.",
+      }),
+      async_tools: Schema.optional(Schema.Boolean).annotate({
+        description: "Opt in to emulated background read tools (default: false).",
+      }),
+      async_questions: Schema.optional(Schema.Boolean).annotate({
+        description: "Opt in to persistent nonblocking questions (default: false).",
+      }),
+      session_recall: Schema.optional(Schema.Boolean).annotate({
+        description: "Opt in to bounded current/child session history recall (default: false).",
+      }),
+      reasoning_auto: Schema.optional(Schema.Boolean).annotate({
+        description: "Opt in to balanced automatic reasoning; manual selection takes precedence (default: false).",
+      }),
       disable_paste_summary: Schema.optional(Schema.Boolean),
       paste_summary_min_chars: Schema.optional(PositiveInt).annotate({
         description:
           "Minimum pasted text length before the TUI collapses it into a pasted-content placeholder (default: 3000).",
       }),
       batch_tool: Schema.optional(Schema.Boolean).annotate({ description: "Enable the batch tool" }),
-      tool_discovery: Schema.optional(Schema.Boolean).annotate({
-        description: "Discover secondary and MCP tool schemas on demand to reduce context (default: true).",
-      }),
       openTelemetry: Schema.optional(Schema.Boolean).annotate({
         description: "Enable OpenTelemetry spans for AI SDK calls (using the 'experimental_telemetry' flag)",
       }),
@@ -894,6 +925,7 @@ export const layer = Layer.effect(
       yield* fs
         .writeFileString(file, JSON.stringify(mergeDeep(writable(existing), writable(config)), null, 2))
         .pipe(Effect.orDie)
+      notifyDisabled({ directory: dir, experimental: config.experimental })
     })
 
     const invalidate = Effect.fn("Config.invalidate")(function* () {
@@ -921,7 +953,10 @@ export const layer = Layer.effect(
         if (changed) yield* fs.writeFileString(file, updated).pipe(Effect.orDie)
       }
 
-      if (changed) yield* invalidate()
+      if (changed) {
+        yield* invalidate()
+        notifyDisabled({ experimental: config.experimental })
+      }
       return { info: next, changed }
     })
 

@@ -29,6 +29,87 @@ afterEach(async () => {
 const it = testEffect(Layer.mergeAll(ToolRegistry.defaultLayer, Session.defaultLayer, LoopWorkflow.defaultLayer, CrossSpawnSpawner.defaultLayer))
 
 describe("tool.loop", () => {
+  it.live("run_once returns its terminal result to the calling owner without queueing another prompt", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const registry = yield* ToolRegistry.Service
+          const sessions = yield* Session.Service
+          const parent = yield* sessions.create({ title: "Calling loop owner" })
+          const tool = (yield* registry.tools({
+            providerID: ProviderID.opencode,
+            modelID: ModelID.make("gpt-5"),
+            agent: { name: "build", mode: "primary" as const, permission: [], options: {} },
+          })).find((item) => item.id === LoopTool.id)
+          if (!tool) throw new Error("Loop tool not found")
+          const ctx = { ...baseCtx, sessionID: parent.id, ask: () => Effect.void }
+          const activated = yield* tool.execute(
+            {
+              action: "activate",
+              objective: "Observe the device without restarting it.",
+              triggerMode: "manual",
+              maxTurns: 3,
+              reportOnly: true,
+              ensureService: false,
+            },
+            ctx,
+          )
+          let notifications = 0
+          const result = yield* tool
+            .execute(
+              {
+                action: "run_once",
+                workflowID: activated.metadata.workflowID,
+                ensureService: false,
+              },
+              {
+                ...ctx,
+                extra: {
+                  promptOps: {
+                    prompt: (input: { sessionID: SessionID }) =>
+                      Effect.succeed({
+                        info: {
+                          id: MessageID.make("msg_loop_worker"),
+                          sessionID: input.sessionID,
+                          role: "assistant",
+                          parentID: baseCtx.messageID,
+                          agent: "build",
+                          mode: "build",
+                          modelID: ModelID.make("gpt-5"),
+                          providerID: ProviderID.opencode,
+                          time: { created: 1, completed: 2 },
+                          finish: "stop",
+                          path: { cwd: "/tmp", root: "/tmp" },
+                          cost: 0,
+                          tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+                        },
+                        parts: [
+                          {
+                            id: PartID.make("prt_loop_stop"),
+                            sessionID: input.sessionID,
+                            messageID: MessageID.make("msg_loop_worker"),
+                            type: "text",
+                            text: "LOOP_CHECKPOINT:\nstatus: stop\nsummary: Device unexpectedly rebooted.\nevidence:\n- boot identity changed",
+                          },
+                        ],
+                      } satisfies MessageV2.WithParts),
+                    promptAsync: () =>
+                      Effect.sync(() => {
+                        notifications++
+                      }).pipe(Effect.andThen(Effect.never)),
+                  },
+                },
+              },
+            )
+            .pipe(Effect.timeout("2 seconds"))
+          expect(result.metadata.state).toBe("stopped")
+          expect(result.output).toContain("Device unexpectedly rebooted.")
+          expect(notifications).toBe(0)
+        }),
+      { git: true },
+    ),
+  )
+
   it.live("registry exposes loop tool and activation creates a durable workflow", () =>
     provideTmpdirInstance(
       () =>

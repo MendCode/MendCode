@@ -70,6 +70,7 @@ import { Shell } from "../../src/shell/shell"
 import { Snapshot } from "../../src/snapshot"
 import { ToolRegistry } from "@/tool/registry"
 import { Truncate } from "@/tool/truncate"
+import { AIConfiguration } from "@/mend/runtime/ai-configuration"
 import { Auth } from "@/auth"
 import * as Log from "@mendcode/core/util/log"
 import { CrossSpawnSpawner } from "@mendcode/core/cross-spawn-spawner"
@@ -398,6 +399,7 @@ function makeHttp() {
     lsp,
     mcp,
     AppFileSystem.defaultLayer,
+    Auth.defaultLayer,
     status,
     BackgroundTask.layer.pipe(Layer.provide(bus)),
     WorkflowService.defaultLayer,
@@ -415,6 +417,8 @@ function makeHttp() {
     Layer.provide(LoopRunner.defaultLayer),
     Layer.provide(WorkflowService.defaultLayer),
     Layer.provide(Auth.defaultLayer),
+    Layer.provide(Truncate.defaultLayer),
+    Layer.provide(AIConfiguration.defaultLayer),
     Layer.provideMerge(todo),
     Layer.provideMerge(question),
     Layer.provideMerge(planReview),

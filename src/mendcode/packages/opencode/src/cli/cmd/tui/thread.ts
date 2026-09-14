@@ -4,7 +4,7 @@ import { Rpc } from "@/util/rpc"
 import { type rpc } from "./worker"
 import { spawn, type ChildProcess } from "child_process"
 import { readdir, stat } from "fs/promises"
-import { createHash } from "crypto"
+import { createHash, randomUUID } from "crypto"
 import path from "path"
 import { existsSync } from "fs"
 import { fileURLToPath } from "url"
@@ -29,8 +29,11 @@ import { validateSession } from "./validate-session"
 import { loadMendTuiProfile } from "@/mend/profile"
 import { ServerAuth } from "@/server/auth"
 import { SharedServer, type SharedServerClientLease, type SharedServerState } from "./shared-server"
-import { SHARED_SERVER_SHUTDOWN_TIMEOUT_MS } from "../serve-shutdown"
 import { isProcessMemoryUsage, processMemoryUsage, type DiagnosticsSnapshot } from "@/util/process-memory"
+import { Installation } from "@/installation"
+import { trackUpdateStartup } from "@/installation/startup"
+import { readBackendPhase, waitForBackend } from "@/installation/backend-startup"
+import { SHARED_SERVER_SHUTDOWN_TIMEOUT_MS } from "../serve-shutdown"
 
 const SHARED_SERVER_PROBE_TIMEOUT_MS = 2_000
 const SHARED_SERVER_WAIT_TIMEOUT_MS = 8_000
@@ -73,15 +76,17 @@ export function resolveSharedServerURL(value?: string, environment = process.env
   return url.toString()
 }
 
-async function probeSharedServer(input: { url: string; directory: string; headers?: RequestInit["headers"] }) {
+async function probeSharedServer(input: { url: string; directory: string; headers?: RequestInit["headers"]; fetch?: typeof fetch }) {
   const client = createOpencodeClient({
     baseUrl: input.url,
     directory: input.directory,
     headers: input.headers,
+    fetch: input.fetch,
     signal: AbortSignal.timeout(SHARED_SERVER_PROBE_TIMEOUT_MS),
   })
-  const health = await client.global.health({ throwOnError: true })
-  if (health.data?.healthy !== true) throw new Error("Shared backend is not healthy")
+  const health = (await client.global.health({ throwOnError: true })).data
+  if (health?.healthy !== true) throw new Error("Shared backend is not healthy")
+  return health
 }
 
 function sharedServerConnection(state: SharedServerState) {
@@ -178,9 +183,14 @@ async function stopLocalSharedServer(state: SharedServerState) {
 }
 
 export function resolveRuntimeEntrypoint(entry: string | undefined, runtimeCwd: string) {
-  if (!entry || !/(^|[\\/])src[\\/]index\.(?:ts|js)$/.test(entry)) return
+  if (!entry) return
   if (entry.includes("$bunfs") || entry.includes("~BUN")) return
-  const resolved = path.isAbsolute(entry) ? entry : path.resolve(runtimeCwd, entry)
+  const source = path.isAbsolute(entry) ? entry : path.resolve(runtimeCwd, entry)
+  // The source control plane is another client of this same runtime, not `bun serve`.
+  const resolved = /(^|[\\/])src[\\/]mend[\\/]cli[\\/]control-plane\.(?:ts|js)$/.test(source)
+    ? path.resolve(path.dirname(source), "../..", `index${path.extname(source)}`)
+    : source
+  if (!/(^|[\\/])src[\\/]index\.(?:ts|js)$/.test(resolved)) return
   if (!existsSync(resolved)) return
   return resolved
 }
@@ -219,8 +229,9 @@ function sharedServerCommand(runtimeCwd: string) {
   }
 }
 
-function sharedServerEnvironment(credentials: ReturnType<typeof SharedServer.credentials>, runtimeID: string) {
+export function sharedServerEnvironment(credentials: ReturnType<typeof SharedServer.credentials>, runtimeID: string) {
   const env = { ...process.env }
+  const database = SharedServer.resolveSharedDatabasePath(env.MENDCODE_DB || env.OPENCODE_DB)
   for (const key of [
     "MENDCODE_ROOT",
     "OPENCODE_ROOT",
@@ -242,6 +253,7 @@ function sharedServerEnvironment(credentials: ReturnType<typeof SharedServer.cre
   }
   return {
     ...env,
+    ...(database ? { MENDCODE_DB: database, OPENCODE_DB: database } : {}),
     MENDCODE_SERVER_USERNAME: credentials.username,
     MENDCODE_SERVER_PASSWORD: credentials.password,
     OPENCODE_SERVER_USERNAME: credentials.username,
@@ -354,9 +366,12 @@ export async function ensureLocalSharedServer(input: {
     await SharedServer.clearState()
     const credentials = SharedServer.credentials()
     const command = sharedServerCommand(input.runtimeCwd)
+    const token = randomUUID()
+    const progressFile = path.join(path.dirname(SharedServer.statePath()), `startup-${token}.json`)
     child = spawn(command.command, command.args, {
       cwd: command.cwd,
-      env: sharedServerEnvironment(credentials, runtimeID),
+      env: { ...sharedServerEnvironment(credentials, runtimeID),
+        MENDCODE_BACKEND_STARTUP_FILE: progressFile, MENDCODE_BACKEND_STARTUP_TOKEN: token },
       detached: true,
       stdio: "ignore",
     })
@@ -370,16 +385,34 @@ export async function ensureLocalSharedServer(input: {
     })
     child.unref()
 
-    const started = await waitForLocalSharedServer(input.directory, runtimeID, input.lease)
-    if (!started) return
+    const started = await waitForBackend({
+      connect: () => connectToLocalSharedServer(input.directory, runtimeID, input.lease),
+      alive: () => child?.exitCode === null && child?.signalCode === null,
+      phase: () => child?.pid ? readBackendPhase(progressFile, child.pid, token) : undefined,
+      progress: (phase) => {
+        if (phase === "backup") process.stderr.write("Preparing session database backup; large histories may take several minutes.\n")
+        if (phase === "migration") process.stderr.write("Applying session database migration; please wait.\n")
+      },
+    })
+    if (!started) {
+      const phase = child.pid ? readBackendPhase(progressFile, child.pid, token) : undefined
+      throw new Error(`Shared backend startup ${phase === "failed" ? "failed" : "did not finish"}${phase ? ` during ${phase}` : ""}. Startup record: ${progressFile}. Session data was not reset.`)
+    }
     connected = true
     return started
-  } catch {
-    return
   } finally {
     if (!connected) child?.kill()
     await release()
   }
+}
+
+export async function requireLocalSharedServer(input: Parameters<typeof ensureLocalSharedServer>[0]) {
+  const connection = await ensureLocalSharedServer(input)
+  if (connection) return connection
+  throw new Error(
+    "The shared backend could not become ready. Finish active sessions in other terminals before restarting MendCode. " +
+    "If it remains unavailable, inspect the shared-server logs and lock; no separate database writer was started.",
+  )
 }
 
 function createWorkerFetch(client: RpcClient): typeof fetch {
@@ -500,6 +533,7 @@ export const TuiThreadCommand = cmd({
     // Keep ENABLE_PROCESSED_INPUT cleared even if other code flips it.
     // (Important when running under `bun run` wrappers on Windows.)
     const unguard = win32InstallCtrlCGuard()
+    let startup: Awaited<ReturnType<typeof trackUpdateStartup>>
     try {
       // Must be the very first thing — disables CTRL_C_EVENT before any Worker
       // spawn or async work so the OS cannot kill the process group.
@@ -513,6 +547,14 @@ export const TuiThreadCommand = cmd({
       // Resolve relative --project paths from PWD, then use the real cwd after
       // chdir so the thread and worker share the same directory key.
       const runtimeCwd = process.cwd()
+      if (!Installation.isLocal() && !args.serverUrl && !process.env.MENDCODE_SERVER_URL) {
+        startup = await trackUpdateStartup({ executable: process.execPath, version: Installation.displayVersion(),
+          journal: (await import("@/storage/migration-journal")).supportedMigrationJournal() })
+          .catch((error) => {
+            Log.Default.warn("update startup record unavailable", { error: errorMessage(error) })
+            return undefined
+          })
+      }
       const next = resolveThreadDirectory(args.project)
       try {
         process.chdir(next)
@@ -573,11 +615,18 @@ export const TuiThreadCommand = cmd({
           networkOptionSet,
         })
       ) {
-        localSharedServer = await ensureLocalSharedServer({ directory: cwd, runtimeCwd })
-        if (localSharedServer) {
-          serverURL = localSharedServer.url
-          serverHeaders = localSharedServer.headers
+        try {
+          startup?.preparing()
+          localSharedServer = await requireLocalSharedServer({ directory: cwd, runtimeCwd })
+          startup?.connecting()
+        } catch (error) {
+          // Falling through would start a private worker on the same database.
+          UI.error(errorMessage(error))
+          process.exitCode = 1
+          return
         }
+        serverURL = localSharedServer.url
+        serverHeaders = localSharedServer.headers
       }
 
       const file = serverURL ? undefined : await target()
@@ -718,6 +767,14 @@ export const TuiThreadCommand = cmd({
 
         await tui({
           url: transport.url,
+          onStartupReady: startup ? async () => {
+            const health = await probeSharedServer({ ...transport, directory: cwd })
+            if (health?.healthy !== true || health.version !== Installation.displayVersion()) {
+              await startup?.close("Connected backend does not match the installed update version.")
+              return
+            }
+            await startup?.ready()
+          } : undefined,
           ...(args.diagnostics
             ? {
                 async onSnapshot() {
@@ -763,6 +820,7 @@ export const TuiThreadCommand = cmd({
         await stop()
       }
     } finally {
+      await startup?.close().catch((error) => Log.Default.warn("update startup record failed", { error: errorMessage(error) }))
       unguard?.()
     }
     process.exit(process.exitCode ?? 0)

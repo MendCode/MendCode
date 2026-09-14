@@ -124,6 +124,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
     const model = iife(() => {
       const [modelStore, setModelStore] = createStore<{
         ready: boolean
+        policyReady: boolean
         mendDefault?: {
           providerID: string
           modelID: string
@@ -161,6 +162,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
         variantOverrideMessageID: Record<string, string | undefined>
       }>({
         ready: false,
+        policyReady: false,
         mendDefault: undefined,
         mendRoles: {},
         model: {},
@@ -224,7 +226,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
         setModelStore("mendRoles", roles)
       }
 
-      void refreshMendModelPolicy()
+      void refreshMendModelPolicy().finally(() => setModelStore("policyReady", true))
       const mendModelRefresh = setInterval(() => void refreshMendModelPolicy(), 2000)
       onCleanup(() => clearInterval(mendModelRefresh))
 
@@ -520,7 +522,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
           }
         },
         get ready() {
-          return modelStore.ready
+          return modelStore.ready && modelStore.policyReady
         },
         recent() {
           return modelStore.recent

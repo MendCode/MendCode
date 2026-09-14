@@ -12,6 +12,7 @@ const GlobalHealth = Schema.Struct({
   version: Schema.String,
   channel: Schema.String,
 })
+const ReleaseChannel = Schema.Struct({ channel: Schema.Literals(["stable", "beta", "nightly"]) })
 
 const ProcessMemory = Schema.Struct({
   pid: Schema.Number,
@@ -65,11 +66,14 @@ export const GlobalPaths = {
   config: "/global/config",
   dispose: "/global/dispose",
   upgrade: "/global/upgrade",
+  releaseChannel: "/global/release-channel",
 } as const
 
 export const GlobalApi = HttpApi.make("global").add(
   HttpApiGroup.make("global")
     .add(
+      HttpApiEndpoint.get("releaseChannelGet", GlobalPaths.releaseChannel, { success: ReleaseChannel }),
+      HttpApiEndpoint.put("releaseChannelSet", GlobalPaths.releaseChannel, { payload: ReleaseChannel, success: ReleaseChannel }),
       HttpApiEndpoint.get("health", GlobalPaths.health, {
         success: described(GlobalHealth, "Health information"),
       }).annotateMerge(

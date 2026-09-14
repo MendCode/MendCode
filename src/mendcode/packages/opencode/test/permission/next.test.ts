@@ -4,6 +4,7 @@ import { Cause, Effect, Exit, Fiber, Layer, Schema } from "effect"
 import { Bus } from "../../src/bus"
 import { CrossSpawnSpawner } from "@mendcode/core/cross-spawn-spawner"
 import { Permission } from "../../src/permission"
+import { actionFingerprint } from "../../src/mend/permission/smart-service"
 import { PermissionID } from "../../src/permission/schema"
 import { Instance } from "../../src/project/instance"
 import { WithInstance } from "../../src/project/with-instance"
@@ -607,10 +608,7 @@ it.live("ask - Smart mode keeps a safe command pending for prompt-scoped review"
         patterns: ["date -u +%Y-%m-%dT%H:%M:%SZ"],
         metadata: {},
         always: [],
-        ruleset: [
-          { permission: "*", pattern: "*", action: "allow" },
-          Permission.sessionModeRule("smart"),
-        ],
+        ruleset: [{ permission: "*", pattern: "*", action: "allow" }, Permission.sessionModeRule("smart")],
       }).pipe(Effect.forkScoped)
 
       expect(yield* waitForPending(1)).toHaveLength(1)
@@ -629,10 +627,7 @@ it.live("ask - Smart mode forces an allowed bash request through pending approva
         patterns: ["curl -I https://example.com"],
         metadata: {},
         always: [],
-        ruleset: [
-          { permission: "*", pattern: "*", action: "allow" },
-          Permission.sessionModeRule("smart"),
-        ],
+        ruleset: [{ permission: "*", pattern: "*", action: "allow" }, Permission.sessionModeRule("smart")],
       }).pipe(Effect.forkScoped)
 
       expect(yield* waitForPending(1)).toHaveLength(1)
@@ -691,10 +686,7 @@ it.live("ask - Full Access preserves an explicit deny", () =>
           patterns: ["src/index.ts"],
           metadata: {},
           always: [],
-          ruleset: [
-            { permission: "edit", pattern: "*", action: "deny" },
-            Permission.sessionModeRule("full_access"),
-          ],
+          ruleset: [{ permission: "edit", pattern: "*", action: "deny" }, Permission.sessionModeRule("full_access")],
         }),
       )
       expect(err).toBeInstanceOf(Permission.DeniedError)
@@ -883,6 +875,97 @@ it.live("reply - once resolves the pending ask", () =>
   ),
 )
 
+it.live("smart-managed replies fail closed for old clients and accept an exact task grant", () =>
+  withDir({ git: true }, () =>
+    Effect.gen(function* () {
+      const actionFacts = {
+        version: 1,
+        kind: "shell",
+        fingerprint: "smart-action-fingerprint",
+        fullCommand: "ls",
+        dialect: "bash",
+        cwd: process.cwd(),
+        argvSegments: [["ls"]],
+        astNodes: 1,
+        readTargets: [],
+        writeTargets: [],
+        destinations: [],
+        executableIdentities: ["ls"],
+        scriptIdentities: [],
+        environmentDigest: "environment-digest",
+        effects: ["execute"],
+        analysisComplete: false,
+        unknownReasons: ["test_requires_review"],
+      }
+      const authorityContext = {
+        version: 1,
+        objectiveEpoch: "session_test:objective",
+        contextRevision: 3,
+        sourceUserIDs: ["user_test"],
+        userText: "Please inspect the workspace.",
+        explicitConstraints: [],
+        complete: true,
+        unknownReasons: [],
+        fingerprint: "authority-fingerprint",
+      }
+      const requestID = PermissionID.make("per_smart_fail_closed")
+      const request = {
+        id: requestID,
+        sessionID: SessionID.make("session_smart_fail_closed"),
+        permission: "bash",
+        patterns: ["ls"],
+        metadata: { actionFacts, authorityContext },
+        always: ["ls"],
+        ruleset: [Permission.sessionModeRule("smart")],
+      }
+      const fiber = yield* ask(request).pipe(Effect.forkScoped)
+      yield* waitForPending(1)
+
+      expect(yield* reply({ requestID, reply: "once" })).toBe(false)
+      expect(yield* list()).toHaveLength(1)
+
+      expect(
+        yield* reply({
+          requestID,
+          reply: "always",
+          smart: { actionFingerprint: actionFacts.fingerprint, contextRevision: 3, grant: "task" },
+        }),
+      ).toBe(true)
+      yield* Fiber.join(fiber)
+
+      const secondFiber = yield* ask({
+        ...request,
+        id: PermissionID.make("per_smart_grant_match"),
+      }).pipe(Effect.forkScoped)
+      yield* Fiber.join(secondFiber)
+      expect(yield* list()).toHaveLength(0)
+
+      const noFactsRequest = {
+        ...request,
+        id: PermissionID.make("per_smart_without_facts"),
+        permission: "mcp",
+        patterns: ["server:tool"],
+        metadata: { authorityContext },
+      }
+      const noFactsFiber = yield* ask(noFactsRequest).pipe(Effect.forkScoped)
+      yield* waitForPending(1)
+      expect(yield* reply({ requestID: noFactsRequest.id!, reply: "once" })).toBe(false)
+      expect(
+        yield* reply({
+          requestID: noFactsRequest.id!,
+          reply: "once",
+          smart: {
+            actionFingerprint: actionFingerprint({ permission: "mcp", patterns: ["server:tool"] }),
+            contextRevision: 3,
+            grant: "once",
+          },
+        }),
+      ).toBe(true)
+      yield* Fiber.join(noFactsFiber)
+    }),
+  ),
+)
+
 it.live("ask - resumes when another runtime persists a permission reply", () =>
   withDir({ git: true }, () =>
     Effect.gen(function* () {
@@ -899,9 +982,15 @@ it.live("ask - resumes when another runtime persists a permission reply", () =>
 
       yield* waitForPending(1)
       Database.use((db) => {
-        const row = db.select().from(PermissionTable).all().find((candidate) =>
-          !Array.isArray(candidate.data) && candidate.data.requests.some((request) => request.info.id === requestID),
-        )!
+        const row = db
+          .select()
+          .from(PermissionTable)
+          .all()
+          .find(
+            (candidate) =>
+              !Array.isArray(candidate.data) &&
+              candidate.data.requests.some((request) => request.info.id === requestID),
+          )!
         if (Array.isArray(row.data)) throw new Error("pending permission was not persisted")
         db.update(PermissionTable)
           .set({
@@ -909,7 +998,9 @@ it.live("ask - resumes when another runtime persists a permission reply", () =>
             data: {
               ...row.data,
               requests: row.data.requests.map((request) =>
-                request.info.id === requestID ? { ...request, reply: "once" as const, timeUpdated: Date.now() } : request,
+                request.info.id === requestID
+                  ? { ...request, reply: "once" as const, timeUpdated: Date.now() }
+                  : request,
               ),
             },
           })

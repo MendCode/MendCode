@@ -22,6 +22,31 @@ import { useTuiConfig } from "../../context/tui-config"
 
 type PermissionStage = "permission" | "always" | "reject"
 
+function smartReplyFor(request: PermissionRequest, grant?: "once" | "task") {
+  const metadata = request.metadata ?? {}
+  const facts = metadata.actionFacts
+  const authority = metadata.authorityContext
+  const actionFingerprint =
+    facts && typeof facts === "object" && typeof (facts as { fingerprint?: unknown }).fingerprint === "string"
+      ? (facts as { fingerprint: string }).fingerprint
+      : typeof metadata.smartActionFingerprint === "string"
+        ? metadata.smartActionFingerprint
+        : undefined
+  const smartManaged = metadata.smartApproval === true
+  if (!actionFingerprint && !smartManaged) return undefined
+  const contextRevision =
+    authority &&
+    typeof authority === "object" &&
+    Number.isSafeInteger((authority as { contextRevision?: unknown }).contextRevision)
+      ? (authority as { contextRevision: number }).contextRevision
+      : undefined
+  return {
+    ...(actionFingerprint === undefined ? {} : { actionFingerprint }),
+    ...(contextRevision === undefined ? {} : { contextRevision }),
+    ...(grant ? { grant } : {}),
+  }
+}
+
 export type PermissionPromptPointerState = {
   keyboardNavigation: boolean
   x?: number
@@ -158,6 +183,63 @@ function TextBody(props: { title: string; description?: string; icon?: string })
   )
 }
 
+function SmartDetails(props: { request: PermissionRequest }) {
+  const { theme } = useTheme()
+  const details = createMemo(() => {
+    const metadata = props.request.metadata ?? {}
+    const facts = metadata.actionFacts
+    if (!facts || typeof facts !== "object") return
+    const value = facts as {
+      analysisComplete?: unknown
+      effects?: unknown
+      unknownReasons?: unknown
+      smartRisk?: unknown
+      smartReviewSummary?: unknown
+    }
+    const effects = Array.isArray(value.effects)
+      ? value.effects.filter((item): item is string => typeof item === "string").slice(0, 6)
+      : []
+    const unknownReasons = Array.isArray(value.unknownReasons)
+      ? value.unknownReasons.filter((item): item is string => typeof item === "string").slice(0, 2)
+      : []
+    const boundedRead = value.analysisComplete === true && effects.every((effect) => ["read", "execute"].includes(effect))
+    const recordedRisk = ["low", "medium", "high", "critical", "unknown"].includes(String(value.smartRisk))
+      ? String(value.smartRisk)
+      : undefined
+    const risk = recordedRisk ?? (effects.some((effect) => ["delete", "network", "write"].includes(effect))
+      ? "high"
+      : boundedRead
+        ? "low"
+        : effects.includes("execute")
+          ? "medium"
+          : "unknown")
+    return {
+      risk,
+      scope: value.analysisComplete === true ? "bounded action" : "manual review required",
+      effects: effects.length ? effects.join(", ") : "unknown",
+      unknown: unknownReasons.length ? unknownReasons.join(", ") : undefined,
+      summary: typeof value.smartReviewSummary === "string" ? value.smartReviewSummary : undefined,
+    }
+  })
+
+  return (
+    <Show when={details()}>
+      {(value) => (
+        <box paddingLeft={1} gap={0}>
+          <text fg={theme.textMuted}>Smart Approval · risk {value().risk} · scope {value().scope}</text>
+          <text fg={theme.textMuted}>Effects: {value().effects}</text>
+          <Show when={value().unknown}>
+            <text fg={theme.textMuted}>Review note: {value().unknown}</text>
+          </Show>
+          <Show when={value().summary}>
+            <text fg={theme.textMuted}>Reason: {value().summary}</text>
+          </Show>
+        </box>
+      )}
+    </Show>
+  )
+}
+
 export function PermissionPrompt(props: {
   request: PermissionRequest
   selected?: string
@@ -185,6 +267,15 @@ export function PermissionPrompt(props: {
   })
 
   const { theme } = useTheme()
+  const smartManaged = createMemo(() => props.request.metadata?.smartApproval === true)
+  const smartTaskGrantAvailable = createMemo(() => {
+    const metadata = props.request.metadata ?? {}
+    const facts = metadata.actionFacts
+    return (
+      (facts && typeof facts === "object" && typeof (facts as { fingerprint?: unknown }).fingerprint === "string") ||
+      typeof metadata.smartActionFingerprint === "string"
+    )
+  })
 
   return (
     <Switch>
@@ -193,10 +284,16 @@ export function PermissionPrompt(props: {
           title="Always allow"
           body={
             <Switch>
-              <Match when={props.request.always.length === 1 && props.request.always[0] === "*"}>
+              <Match when={smartManaged()}>
+                <TextBody
+                  title={`This will allow this exact ${props.request.permission} action for the current task.`}
+                  description="The grant is scoped to this action, session and task context, and expires automatically."
+                />
+              </Match>
+              <Match when={!smartManaged() && props.request.always.length === 1 && props.request.always[0] === "*"}>
                 <TextBody title={"This will allow " + props.request.permission + " until MendCode is restarted."} />
               </Match>
-              <Match when={true}>
+              <Match when={!smartManaged() && !(props.request.always.length === 1 && props.request.always[0] === "*")}>
                 <box paddingLeft={1} gap={1}>
                   <text fg={theme.textMuted}>This will allow the following patterns until MendCode is restarted</text>
                   <box>
@@ -221,6 +318,7 @@ export function PermissionPrompt(props: {
             void sdk.client.permission.reply({
               reply: "always",
               requestID: props.request.id,
+              smart: smartReplyFor(props.request, "task"),
               workspace: project.workspace.current(),
             })
           }}
@@ -454,8 +552,19 @@ export function PermissionPrompt(props: {
             <Prompt
               title="Permission required"
               header={header()}
-              body={current.body}
-              options={{ once: "Allow once", always: "Allow always", reject: "Reject" }}
+              body={
+                <box flexDirection="column" gap={1}>
+                  {current.body}
+                  <SmartDetails request={props.request} />
+                </box>
+              }
+              options={
+                smartManaged()
+                  ? smartTaskGrantAvailable()
+                    ? { once: "Allow once", always: "Allow for this task", reject: "Reject" }
+                    : { once: "Allow once", reject: "Reject" }
+                  : { once: "Allow once", always: "Allow always", reject: "Reject" }
+              }
               selected={props.selected}
               onSelectionChange={props.onSelectionChange}
               escapeKey="reject"
@@ -480,6 +589,7 @@ export function PermissionPrompt(props: {
                 void sdk.client.permission.reply({
                   reply: "once",
                   requestID: props.request.id,
+                  smart: smartReplyFor(props.request, "once"),
                   workspace: project.workspace.current(),
                 })
               }}

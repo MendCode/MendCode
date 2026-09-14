@@ -1285,12 +1285,14 @@ NOTE: At any point in time through this workflow you should feel free to ask the
       model: Provider.Model
       session: Session.Info
       tools?: Record<string, boolean>
+      toolMode?: "normal" | "none"
       processor: Pick<SessionProcessor.Handle, "message" | "updateToolCall" | "completeToolCall">
       bypassAgentCheck: boolean
       messages: MessageV2.WithParts[]
       abort: AbortSignal
     }) {
       using _ = log.time("resolveTools")
+      if (input.toolMode === "none") return {}
       const tools: Record<string, AITool> = {}
       const run = yield* runner()
       const promptOps = yield* ops()
@@ -2067,6 +2069,8 @@ NOTE: At any point in time through this workflow you should feel free to ask the
         sessionID: input.sessionID,
         time: existing?.info.time ?? { created: Date.now() },
         tools: input.tools ?? existing?.info.tools,
+        toolMode: input.toolMode ?? existing?.info.toolMode,
+        maxOutputTokens: input.maxOutputTokens ?? existing?.info.maxOutputTokens,
         agent: ag.name,
         model: {
           providerID: model.providerID,
@@ -2783,13 +2787,14 @@ NOTE: At any point in time through this workflow you should feel free to ask the
             session,
             model,
             tools: lastUser.tools,
+            toolMode: lastUser.toolMode,
             processor: handle,
             bypassAgentCheck,
             messages: msgs,
             abort,
           })
 
-          if (lastUser.format?.type === "json_schema") {
+          if (lastUser.toolMode !== "none" && lastUser.format?.type === "json_schema") {
             tools["StructuredOutput"] = createStructuredOutputTool({
               schema: lastUser.format.schema,
               model,
@@ -2974,6 +2979,8 @@ NOTE: At any point in time through this workflow you should feel free to ask the
             tools,
             model,
             toolChoice: format.type === "json_schema" ? "required" : undefined,
+            toolMode: lastUser.toolMode,
+            maxOutputTokens: lastUser.maxOutputTokens,
           })
 
           if (structured !== undefined) {
@@ -4074,6 +4081,8 @@ export const PromptInput = Schema.Struct({
     description:
       "@deprecated tools and permissions have been merged, you can set permissions on the session itself now",
   }),
+  toolMode: Schema.optional(Schema.Literals(["normal", "none"])),
+  maxOutputTokens: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(1))),
   format: Schema.optional(MessageV2.Format),
   system: Schema.optional(Schema.String),
   variant: Schema.optional(Schema.String),

@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test"
-import { initialTuiPluginReady, syncBootstrapReadiness, themeModeWaitMs, tuiFastBootEnabled } from "@/cli/cmd/tui/util/fast-boot"
+import {
+  homePromptBootstrapReady,
+  initialTuiPluginReady,
+  syncBootstrapReadiness,
+  themeModeWaitMs,
+  tuiFastBootEnabled,
+} from "@/cli/cmd/tui/util/fast-boot"
 
 describe("TUI fast boot", () => {
   test("defaults to fast boot while keeping an explicit opt-out", () => {
@@ -21,5 +27,26 @@ describe("TUI fast boot", () => {
     })
     expect(initialTuiPluginReady(true)).toBe(true)
     expect(themeModeWaitMs(true)).toBeLessThan(themeModeWaitMs(false))
+  })
+
+  test("does not mount a cold-start prompt before the global model is hydrated", () => {
+    expect(
+      homePromptBootstrapReady({
+        providerMetadataReady: false,
+        modelPolicyReady: false,
+      }),
+    ).toBe(false)
+    expect(
+      homePromptBootstrapReady({
+        providerMetadataReady: true,
+        modelPolicyReady: false,
+      }),
+    ).toBe(false)
+    expect(
+      homePromptBootstrapReady({
+        providerMetadataReady: true,
+        modelPolicyReady: true,
+      }),
+    ).toBe(true)
   })
 })

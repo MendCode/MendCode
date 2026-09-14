@@ -61,9 +61,16 @@ export function shouldRenderCompactionArcade(input: {
   completed?: boolean
   terminal?: boolean
 }) {
-  // Partial summary text can arrive before completion. Only the terminal
-  // lifecycle closes the game and releases its focus and timers.
-  return !input.terminal && !input.completed && input.style === "arcade" && input.arcade !== "off"
+  return input.style === "arcade" && input.arcade !== "off"
+}
+
+export function shouldRunCompactionArcade(input: {
+  style: "minimal" | "cockpit" | "arcade" | "quiet"
+  arcade: string
+  completed?: boolean
+  terminal?: boolean
+}) {
+  return shouldRenderCompactionArcade(input) && !input.terminal && !input.completed
 }
 
 export function compactionPanelIsPacked(input: { completed?: boolean; terminal?: boolean; hasSummaryBody?: boolean }) {
@@ -480,6 +487,7 @@ export function CompactionPanel(props: {
   }
 
   function focusArcade() {
+    if (!shouldRunCompactionArcade({ ...config(), completed: packed(), terminal: props.terminal })) return
     if (!activeArcadeGame() || !arcadeBox || arcadeBox.isDestroyed) return
     focusRestoreToken += 1
     const currentFocus = renderer.currentFocusedRenderable
@@ -563,6 +571,7 @@ export function CompactionPanel(props: {
   }
 
   function handleArcadeKey(event: CompactionArcadeKeyEvent) {
+    if (!shouldRunCompactionArcade({ ...config(), completed: packed(), terminal: props.terminal })) return false
     const game = activeArcadeGame()
     if (!game) return false
     const key = normalizedArcadeKey(event.name, event.sequence)
@@ -581,7 +590,10 @@ export function CompactionPanel(props: {
   }
 
   createEffect(() => {
-    if (!shouldRenderCompactionArcade({ ...config(), completed: packed(), terminal: props.terminal })) return
+    if (!shouldRunCompactionArcade({ ...config(), completed: packed(), terminal: props.terminal })) {
+      blurArcade(undefined, { consume: false })
+      return
+    }
     const timer = setInterval(() => {
       const game = activeArcadeGame()
       if (game) {
@@ -806,7 +818,7 @@ export function CompactionPanel(props: {
             }}
             flexDirection="column"
             alignItems="center"
-            focusable={true}
+            focusable={shouldRunCompactionArcade({ ...config(), completed: packed(), terminal: props.terminal })}
             border={["top", "bottom", "left", "right"]}
             borderColor={arcadeFocused() ? theme.borderActive : theme.border}
             paddingLeft={2}
@@ -825,7 +837,11 @@ export function CompactionPanel(props: {
             }}
           >
             <text fg={arcadeFocused() ? theme.primary : theme.textMuted} wrapMode="none">
-              {arcadeFocused() ? "● GAME FOCUSED · Press Esc to type in chat" : "○ Click game to play · chat keeps typing until game is focused"}
+              {packed() || props.terminal
+                ? "○ Final board · compaction complete"
+                : arcadeFocused()
+                  ? "● GAME FOCUSED · Press Esc to type in chat"
+                  : "○ Click game to play · chat keeps typing until game is focused"}
             </text>
             <text fg={theme.textMuted} wrapMode="none">
               {arcadeRender()?.title} · ↑↓←→/WASD · Space pause · R reset

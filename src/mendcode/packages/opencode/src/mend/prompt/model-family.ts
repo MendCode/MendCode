@@ -15,6 +15,12 @@ export function isAstraModel(modelID: string) {
   return /^gpt[-_.:]?6[-_.:]?astra$/.test(normalizedPromptModel(modelID))
 }
 
+export const ASTRA_PROMPT_SOURCE = {
+  revision: "mendcode-astra-2026-09-04.1",
+  url: "https://developers.openai.com/api/docs/guides/latest-model?model=gpt-6-astra",
+  verifiedAt: "2026-09-04",
+} as const
+
 /** Remove request controls that Astra does not accept while preserving the selected model. */
 export function normalizeAstraRequest(request: Record<string, unknown>) {
   if (typeof request.model !== "string" || !isAstraModel(request.model)) return request

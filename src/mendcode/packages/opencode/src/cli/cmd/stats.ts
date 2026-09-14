@@ -1,12 +1,12 @@
 import { Effect } from "effect"
-import { effectCmd } from "../effect-cmd"
+import { cmd } from "./cmd"
 import { Session } from "@/session/session"
 import { Database } from "@/storage/db"
 import { SessionTable } from "../../session/session.sql"
 import { Project } from "@/project/project"
-import { InstanceRef } from "@/effect/instance-ref"
+import { withSharedClient } from "../shared-client"
 
-interface SessionStats {
+export interface SessionStats {
   totalSessions: number
   totalMessages: number
   totalCost: number
@@ -45,7 +45,7 @@ interface SessionStats {
   medianTokensPerSession: number
 }
 
-export const StatsCommand = effectCmd({
+export const StatsCommand = cmd({
   command: "stats",
   describe: "show token usage and cost statistics",
   builder: (yargs) =>
@@ -65,10 +65,15 @@ export const StatsCommand = effectCmd({
         describe: "filter by project (default: all projects, empty string: current project)",
         type: "string",
       }),
-  handler: Effect.fn("Cli.stats")(function* (args) {
-    const ctx = yield* InstanceRef
-    if (!ctx) return
-    const stats = yield* aggregateSessionStats(args.days, args.project, ctx.project)
+  handler: async (args) => {
+    const stats = await withSharedClient(process.cwd(), async (connection) => {
+      const url = new URL("/usage", connection.url)
+      if (args.days !== undefined) url.searchParams.set("days", String(args.days))
+      if (args.project !== undefined) url.searchParams.set("project", args.project)
+      const response = await fetch(url, { headers: connection.headers, signal: AbortSignal.timeout(30_000) })
+      if (!response.ok) throw new Error(`Backend statistics failed (HTTP ${response.status})`)
+      return (await response.json()) as SessionStats
+    })
     let modelLimit: number | undefined
     if (args.models === true) {
       modelLimit = Infinity
@@ -76,14 +81,14 @@ export const StatsCommand = effectCmd({
       modelLimit = args.models
     }
     displayStats(stats, args.tools, modelLimit)
-  }),
+  },
 })
 
 const getAllSessions = Effect.sync(() =>
   Database.use((db) => db.select().from(SessionTable).all()).map((row) => Session.fromRow(row)),
 )
 
-const aggregateSessionStats = Effect.fn("Cli.stats.aggregate")(function* (
+export const aggregateSessionStats = Effect.fn("Cli.stats.aggregate")(function* (
   days?: number,
   projectFilter?: string,
   currentProject?: Project.Info,

@@ -8,6 +8,7 @@ import { Flock } from "@mendcode/core/util/flock"
 import { Hash } from "@mendcode/core/util/hash"
 import { AppFileSystem } from "@mendcode/core/filesystem"
 import { withTransientReadRetry } from "@/util/effect-http-client"
+import { withOpenAIModelFallbacks } from "./openai-models"
 
 const Cost = Schema.Struct({
   input: Schema.Finite,
@@ -166,7 +167,7 @@ export const layer: Layer.Layer<Service, never, AppFileSystem.Service | HttpClie
         }),
       )
       return JSON.parse(text) as Record<string, Provider>
-    }).pipe(Effect.withSpan("ModelsDev.populate"), Effect.orDie)
+    }).pipe(Effect.map(withOpenAIModelFallbacks), Effect.withSpan("ModelsDev.populate"), Effect.orDie)
 
     const [cachedGet, invalidate] = yield* Effect.cachedInvalidateWithTTL(populate, Duration.infinity)
 

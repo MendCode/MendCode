@@ -1,0 +1,40 @@
+{
+  "$schema": "https://mendcode.ai/config.json",
+  "compaction": {
+    "strategy": "auto",
+    "portable_mode": "incremental",
+    "timeout_ms": 60000,
+    "max_summary_tokens": 4096,
+    "on_native_error": "portable"
+  },
+  "ai": {
+    "version": 1,
+    "orchestration": {
+      "enabled": true,
+      "profiles": {
+        "economical": {
+          "strategy": "cascade",
+          "primary": { "role": "build" },
+          "escalation": { "role": "plan" },
+          "limits": {
+            "maxModelRequests": 2,
+            "maxTotalTokens": 64000,
+            "maxRuntimeMs": 300000,
+            "unknownCost": "allow-with-token-cap"
+          }
+        },
+        "reviewable": {
+          "strategy": "critic",
+          "primary": { "role": "build" },
+          "critic": { "role": "plan" },
+          "limits": {
+            "maxModelRequests": 3,
+            "maxTotalTokens": 96000,
+            "maxRuntimeMs": 600000,
+            "unknownCost": "block"
+          }
+        }
+      }
+    }
+  }
+}

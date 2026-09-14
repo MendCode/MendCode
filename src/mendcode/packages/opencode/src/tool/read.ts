@@ -11,6 +11,7 @@ import { InstanceState } from "@/effect/instance-state"
 import { assertExternalDirectoryEffect } from "./external-directory"
 import { Instruction } from "../session/instruction"
 import { isPdfAttachment, MAX_INLINE_ATTACHMENT_BYTES, sniffAttachmentMime } from "@/util/media"
+import { createNativeFileActionFacts } from "./shell-analysis"
 
 const DEFAULT_READ_LIMIT = 2000
 const MAX_LINE_LENGTH = 2000
@@ -180,7 +181,13 @@ export const ReadTool = Tool.define(
         permission: "read",
         patterns: [filepath],
         always: ["*"],
-        metadata: {},
+        metadata: {
+          actionFacts: createNativeFileActionFacts({
+            operation: "read",
+            cwd: instance.directory,
+            sourcePaths: [filepath],
+          }),
+        },
       })
 
       if (!stat) return yield* miss(filepath)

@@ -1,0 +1,172 @@
+{
+  "repository": "https://github.com/anomalyco/opencode",
+  "revision": "cd504dc66ac6620a662a0246f83cfc05f796f58a",
+  "scope": "packages/codemode/src excluding OpenAPI, entry barrel and workerd transport",
+  "adaptations": [
+    "Acorn parser vendored from integrity-verified 8.15.0 source distribution",
+    "Node transpiler imported by relative path",
+    "Effect TaggedErrorClass and Defect API aligned with the installed Effect version",
+    "Acorn declaration trailing whitespace normalized"
+  ],
+  "acorn": {
+    "version": "8.15.0",
+    "integrity": "sha512-NZyJarBfL7nWwIq+FDL6Zp/yHEhePMNnnJ0y3qfieCrmNvYct8uvtiV41UvlSe6apAfk0fY1FbWx+NwfmpvtTg==",
+    "vendored_sha256": {
+      "acorn.mjs": "b4c8c70200e72bae33cf1085e0ecb1e792c1b6924ed50cab817caf14f51bb249",
+      "acorn.d.mts": "004f848e44a63070114eb4e2db48a20e3726cdddba38dffd684680326dac784f",
+      "LICENSE.acorn": "76a876cf886ff9be2a8b5e2e86514fed06223c8c9f0c1e9ee9606e93841e00b7"
+    }
+  },
+  "files": [
+    {
+      "path": "codemode.ts",
+      "upstream_blob": "0d557169d83363dc1492b3d19fc9fbbe2eb39221",
+      "sha256": "1c1cbb0e0592eb86e3714597257570cb52ff17417b5db10934c946adfebb6719"
+    },
+    {
+      "path": "interpreter/errors.ts",
+      "upstream_blob": "14962ce384833b2cb371c5ee785f42b71aa76c0f",
+      "sha256": "0aa5e432376d8f5f80a82f7cf98d83d147037cb93992640dcee6ddf012fcaab1"
+    },
+    {
+      "path": "interpreter/execute.ts",
+      "upstream_blob": "7763b3aa00e1616a79b37e7ef0e8a1b4a3afd666",
+      "sha256": "98d2c2ea15f10ccbeab8c6408f3197ea92c65eb7b505b8dcb364a10d7119be2b"
+    },
+    {
+      "path": "interpreter/iterator.ts",
+      "upstream_blob": "f352ed159de5a3acdbce13d5bfec3b401c77fd03",
+      "sha256": "8f3d4210b6adcde29fb66f8d420af32c3a8741e1cfa5a14cbb26b80b148e1c41"
+    },
+    {
+      "path": "interpreter/methods.ts",
+      "upstream_blob": "cae4951d9a872155273249b56733e32fd6e2a028",
+      "sha256": "cb15120cc57d214a04c24f73ce39cd7d52777939e9a39d0cf15cd8c028e29955"
+    },
+    {
+      "path": "interpreter/model.ts",
+      "upstream_blob": "b3a82e68867f7148bbfe985e04ea63ab6c06928f",
+      "sha256": "3865ff00f5cf99d3ef576d8beef155d9a4baf7109c57666f33e7230544707b66"
+    },
+    {
+      "path": "interpreter/promises.ts",
+      "upstream_blob": "26b6824e993ab2772fdbf8dce476ba706eb4ed2e",
+      "sha256": "405c40602a6723a352bdd090d568b7b7ad7408c3a1cc056d89bd20f537d58f21"
+    },
+    {
+      "path": "interpreter/references.ts",
+      "upstream_blob": "120afc7f28f99c1459be3b25493002fc7dc30213",
+      "sha256": "3eeac8cbf0e8f9fd6aaa7c757a7a85d7603af929651c47e9c85ad07f4af3c3ed"
+    },
+    {
+      "path": "interpreter/runtime.ts",
+      "upstream_blob": "4457ec6add14b0ad6241da1f2b091424a98389d4",
+      "sha256": "a6a1d9bfc7073a9c9189150cd05a7a785596efbc270b9810cc72f7fd29060380"
+    },
+    {
+      "path": "interpreter/scope.ts",
+      "upstream_blob": "ae3257de3fd21c3af762368c70f4b67140ce263c",
+      "sha256": "fc018358d901a07d7d1c20511c881761cc5e2409e402103c55d07000fd24b4c9"
+    },
+    {
+      "path": "interpreter/transpile.node.ts",
+      "upstream_blob": "95d0989af209e42c104ae92159f16425fdd5ec20",
+      "sha256": "875896b20590c69febc222a909fa54d46fe50adaa4f9fabec31cb030a7bece88"
+    },
+    {
+      "path": "namespace.ts",
+      "upstream_blob": "1446540ef24a00d482a4a1abab4be41047f8d0a2",
+      "sha256": "005790d96690dd3621f4961a84a36506ebbe32b1872ddb42a006685365bc813f"
+    },
+    {
+      "path": "stdlib/collections.ts",
+      "upstream_blob": "6797998d7b1dd6d0eb5ee6811d07a6074bef2d2f",
+      "sha256": "a96cc85ad346ad418b39b973d9157ad5a096bd17ad00535911931f82f354bee7"
+    },
+    {
+      "path": "stdlib/console.ts",
+      "upstream_blob": "9ecca62c77a9cf245d7852b8fc281ded624091e0",
+      "sha256": "4179b7774f90830444a53240b680d0af8c5f3014b25de7d5b6fef25647966c37"
+    },
+    {
+      "path": "stdlib/date.ts",
+      "upstream_blob": "bbae208eca2af32a531d7704309e2cbef3254a62",
+      "sha256": "82febb60e5eb9041ef32db3e4da9d726e35dbcf036413a9d6d6d0eea3b5de4e9"
+    },
+    {
+      "path": "stdlib/json.ts",
+      "upstream_blob": "fd917a877cf4bee0581c296e4e8e96ffa19976bf",
+      "sha256": "a221bb88ee73632ff5e270462e8692aa5a144eedd124102fd050b71c295eeb2e"
+    },
+    {
+      "path": "stdlib/math.ts",
+      "upstream_blob": "211d307cac2530278cd8e105d62e6338cf5c2b0e",
+      "sha256": "c51831cef6d16b03e88859c388507768d0f284674391c566eac438196bc72ddb"
+    },
+    {
+      "path": "stdlib/number.ts",
+      "upstream_blob": "8055b046ea1b78a704c2b4d18f65660d575e3d58",
+      "sha256": "d2042744b0d70ae95fdb403963ae7de5fa57cdb6e0a0f6b83bccfd83b2413fc7"
+    },
+    {
+      "path": "stdlib/object.ts",
+      "upstream_blob": "e5f48db291b17b883cd9fdcaa50542c663955e47",
+      "sha256": "522d49a425c6ea2a9c8fc07e8d7aef8333a565451ceac79319b9db6e2c5863ec"
+    },
+    {
+      "path": "stdlib/promise.ts",
+      "upstream_blob": "73d02d6c0c13ef4eb9a52968282ed56eb9e71c30",
+      "sha256": "61bc8c4c6f4b68d731b7d133766dea1b5f1bbb7993260863486f1f427e0042d9"
+    },
+    {
+      "path": "stdlib/regexp.ts",
+      "upstream_blob": "c53a38fcd84f0a21832e605133552c43c7468e17",
+      "sha256": "1f75e6bd7750b0562fea546dde0723689dc119546d327b71dcbd42929abe1f3e"
+    },
+    {
+      "path": "stdlib/string.ts",
+      "upstream_blob": "7070c645a4b8f932143ec9334bccdf75fe0b4a92",
+      "sha256": "3f8b46d062ebeac1d6d46765f02bd55a851a9510fb1382fcbcbd7f96467532ac"
+    },
+    {
+      "path": "stdlib/url.ts",
+      "upstream_blob": "dfb203f1f2dd4dbefabc860600674a87e86afac1",
+      "sha256": "0d2d55d6aaa9e459f8e3d39d67f03bbf96e2bd16a819959a76568f255b4f8993"
+    },
+    {
+      "path": "stdlib/value.ts",
+      "upstream_blob": "68817ea7d73b2e9a2323ff0540ced539d9e9bb0b",
+      "sha256": "5231f106118f2df104efb03aee20cf935395179686225b76577c84821ec32ff4"
+    },
+    {
+      "path": "tool-error.ts",
+      "upstream_blob": "453a71bdfa4b49664300b94d77e150e47e204127",
+      "sha256": "d7dc13a123a6ccc1f2a09ed56353630226e7a10ca9a3ed062090610ef49a121a"
+    },
+    {
+      "path": "tool-runtime.ts",
+      "upstream_blob": "6976e0d158800b7b317b824757bdb8e0205f4001",
+      "sha256": "ac34391e96348c01346b0d6258e2b08c95066b1090f5e5e7e897619de643e4c4"
+    },
+    {
+      "path": "tool-schema.ts",
+      "upstream_blob": "f1ab3866206177c1f11a59b08c41d35cfd2e4ab1",
+      "sha256": "8eb27e4eee83fde566cd9d77645b62fef05d0bfc125fe860b9dbf1fe1e92f3fc"
+    },
+    {
+      "path": "tool.ts",
+      "upstream_blob": "1b23d20c36839aded39df3eca4d666aa50122b36",
+      "sha256": "b4107a83240b2bc88ec51b54cf281f9e918cacf27ebd467d38a6c220acd7e410"
+    },
+    {
+      "path": "tools.ts",
+      "upstream_blob": "f2f0d2083dda933b5dc62743a700798b112a5e0a",
+      "sha256": "d03f1f035bed080dd9ab6b91b972325b3626bf7fb5c0a34d8c5bce8ae2442036"
+    },
+    {
+      "path": "values.ts",
+      "upstream_blob": "d51e4f0c7e55628da11f0043c864ec8ee21b9fd4",
+      "sha256": "71c3d010496e13e800c0d09133713d9f87c9b8c4cded80f271100ed321f1ad4d"
+    }
+  ]
+}

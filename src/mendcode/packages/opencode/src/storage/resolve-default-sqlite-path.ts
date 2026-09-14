@@ -14,7 +14,7 @@ export type TestSqliteIsolationInput = {
   allowedRoots: string[]
 }
 
-const SIMPLE_NAME_CHANNELS = new Set(["latest", "beta", "prod"])
+const SIMPLE_NAME_CHANNELS = new Set(["latest", "stable", "beta", "nightly", "prod"])
 
 function useSimpleDbBasename(installationChannel: string, disableChannelDb: boolean) {
   return SIMPLE_NAME_CHANNELS.has(installationChannel) || disableChannelDb

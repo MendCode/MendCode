@@ -9,6 +9,7 @@ import { Plugin } from "@/plugin"
 import { Snapshot } from "@/snapshot"
 import * as Session from "./session"
 import { LLM } from "./llm"
+import { contextProfile } from "./context-profile"
 import { MessageV2 } from "./message-v2"
 import { isOverflow } from "./overflow"
 import { PartID, SessionID, MessageID } from "./schema"
@@ -345,6 +346,8 @@ export interface Handle {
       attachments?: MessageV2.FilePart[]
     },
   ) => Effect.Effect<void>
+  readonly startToolCall: (callID: string, name: string, args: Record<string, unknown>, parentCallID: string) => Effect.Effect<void>
+  readonly failToolCall: (callID: string, error: unknown) => Effect.Effect<boolean>
   readonly flushMemory: () => Effect.Effect<void>
   readonly process: (streamInput: LLM.StreamInput) => Effect.Effect<Result>
 }
@@ -587,6 +590,7 @@ export const layer: Layer.Layer<
       let aborted = false
       // Keep the retry state visible while a new provider attempt is still in setup.
       let retrying = false
+      let recoveryPaused: string | undefined
       const slog = log.clone().tag("session.id", input.sessionID).tag("messageID", input.assistantMessage.id)
       const waitingStatus = () =>
         ctx.assistantMessage.mode === "compaction"
@@ -726,6 +730,20 @@ export const layer: Layer.Layer<
           sessionID: part.sessionID,
         }
         return part
+      })
+
+      const startToolCall = Effect.fn("SessionProcessor.startToolCall")(function* (
+        callID: string, name: string, args: Record<string, unknown>, parentCallID: string,
+      ) {
+        const part = yield* session.updatePart({
+          id: PartID.ascending(), messageID: ctx.assistantMessage.id, sessionID: ctx.sessionID,
+          type: "tool", tool: name, callID,
+          metadata: { codeMode: { parentCallID } },
+          state: { status: "running", input: args, time: { start: Date.now() }, metadata: {} },
+        } satisfies MessageV2.ToolPart)
+        ctx.toolcalls[callID] = {
+          done: yield* Deferred.make<void>(), partID: part.id, messageID: part.messageID, sessionID: part.sessionID,
+        }
       })
 
       const completeToolCall = Effect.fn("SessionProcessor.completeToolCall")(function* (
@@ -1157,7 +1175,12 @@ export const layer: Layer.Layer<
               id: PartID.ascending(),
               reason: value.finishReason,
               snapshot: completedSnapshot,
-              metadata: queuedMemoryMetadata ? { mendMemory: queuedMemoryMetadata } : undefined,
+              metadata: {
+                ...(queuedMemoryMetadata ? { mendMemory: queuedMemoryMetadata } : {}),
+                ...(contextProfile(value.providerMetadata?.mendcode?.contextProfile)
+                  ? { contextProfile: contextProfile(value.providerMetadata?.mendcode?.contextProfile) }
+                  : {}),
+              },
               messageID: ctx.assistantMessage.id,
               sessionID: ctx.assistantMessage.sessionID,
               type: "step-finish",
@@ -1422,7 +1445,10 @@ export const layer: Layer.Layer<
 
       const halt = Effect.fn("SessionProcessor.halt")(function* (e: unknown) {
         slog.error("process", { error: errorMessage(e), stack: e instanceof Error ? e.stack : undefined })
-        const error = parse(e)
+        const parsed = parse(e)
+        const error = recoveryPaused && MessageV2.APIError.isInstance(parsed)
+          ? new MessageV2.APIError({ ...parsed.data, message: recoveryPaused, isRetryable: false }).toObject()
+          : recoveryPaused ? { name: "UnknownError" as const, data: { message: recoveryPaused } } : parsed
         if (MessageV2.ContextOverflowError.isInstance(error)) {
           ctx.needsCompaction = true
           yield* bus.publish(Session.Event.Error, { sessionID: ctx.sessionID, error })
@@ -1449,6 +1475,7 @@ export const layer: Layer.Layer<
 
       const process = Effect.fn("SessionProcessor.process")(function* (streamInput: LLM.StreamInput) {
         slog.info("process")
+        recoveryPaused = undefined
         ctx.needsCompaction = false
         ctx.shouldBreak = (yield* config.get()).experimental?.continue_loop_on_deny !== true
 
@@ -1556,6 +1583,7 @@ export const layer: Layer.Layer<
             Effect.retry(
               SessionRetry.policy({
                 parse,
+                onExhausted: (message) => Effect.sync(() => { recoveryPaused = message }),
                 set: (info) => {
                   retrying = true
                   const now = Date.now()
@@ -1626,6 +1654,8 @@ export const layer: Layer.Layer<
         },
         updateToolCall,
         completeToolCall,
+        startToolCall,
+        failToolCall,
         flushMemory,
         process,
       } satisfies Handle
