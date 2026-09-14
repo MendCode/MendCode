@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.44-beta.15 - 2026-09-14
+
+### Fixed
+
+- Restore compatibility with databases created by beta.11 and later by bundling
+  the previously released TODO target-lock migration with its original identity.
+
+### Tests
+
+- Verify the beta.11 migration hash and confirm compatible databases are inspected
+  without changing their bytes.
+
 ## 0.1.44-beta.14 - 2026-09-14
 
 ### Added
