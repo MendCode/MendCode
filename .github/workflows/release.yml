@@ -184,7 +184,7 @@ jobs:
             arch: x64
             build_args: --single
             expected_executables: 1
-          - runner: blacksmith-4vcpu-windows-2025
+          - runner: windows-11-arm
             arch: arm64
             build_args: --single
             expected_executables: 1
@@ -279,7 +279,7 @@ jobs:
         include:
           - runner: blacksmith-6vcpu-macos-15
             arch: arm64
-          - runner: blacksmith-6vcpu-macos-15
+          - runner: macos-15-intel
             arch: x64
     permissions:
       contents: read
