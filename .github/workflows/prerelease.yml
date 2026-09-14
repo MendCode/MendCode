@@ -30,7 +30,7 @@ concurrency:
 
 jobs:
   select:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     outputs:
       changed: ${{ steps.candidate.outputs.changed }}
       version: ${{ steps.candidate.outputs.version }}
