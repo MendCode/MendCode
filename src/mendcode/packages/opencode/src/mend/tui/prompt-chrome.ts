@@ -141,6 +141,15 @@ export function promptChromeUsesFullSessionWidth(preset: MendPromptChromePreset)
   }
 }
 
+export function promptChromeVerticalSpacing(preset: MendPromptChromePreset) {
+  return {
+    inputTop: 0,
+    inputBottom: 0,
+    footerTop: 0,
+    mascotSpacer: preset === "left-rail" ? 3 : 0,
+  }
+}
+
 export function resolvePromptChrome(
   profile?: MendPromptChromeConfig | null,
   override?: Partial<MendPromptChromeConfig> | null,

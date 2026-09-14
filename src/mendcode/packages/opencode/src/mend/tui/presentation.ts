@@ -399,6 +399,7 @@ export function shouldShowToolContinuation(input: { finish?: string; terminal: b
 }
 
 export function toolContinuationActivity(input: { status: string; tool?: string }) {
+  if (input.status === "pending") return "Preparing tool call..."
   const name = (input.tool ?? "").toLowerCase()
   if (name === "question" || name.includes("ask_user")) return "Waiting for answer..."
   if (name.includes("upload")) return "Uploading..."
@@ -418,7 +419,6 @@ export function toolContinuationActivity(input: { status: string; tool?: string 
   if (name === "task" || name.includes("subagent")) return "Waiting for subagents..."
   if (name.includes("bash") || name.includes("shell") || name.includes("exec") || name.includes("command"))
     return "Running command..."
-  if (input.status === "pending") return "Generating..."
   return "Thinking..."
 }
 

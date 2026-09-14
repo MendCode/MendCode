@@ -79,6 +79,7 @@ export type MendPromptStatusScriptInput = {
   contextTokens?: number
   contextLimit?: number
   contextPercent?: number
+  sessionCachePercent?: number
   permissionMode?: string
   permissionModeLabel?: string
   permissionPending?: number
@@ -100,6 +101,22 @@ export type MendPromptStatusScriptSegment = {
 export type MendPromptStatusScriptOutput = {
   text: string
   segments?: MendPromptStatusScriptSegment[]
+}
+
+export function resolvePromptCachePercent(input: {
+  input?: number
+  cache?: {
+    read?: number
+    write?: number
+  }
+}) {
+  const safe = (value: number | undefined) =>
+    typeof value === "number" && Number.isFinite(value) ? Math.max(0, value) : 0
+  const cacheRead = safe(input.cache?.read)
+  const cacheWrite = safe(input.cache?.write)
+  const totalInput = safe(input.input) + cacheRead + cacheWrite
+  if (cacheRead <= 0 || totalInput <= 0) return
+  return Math.max(1, Math.min(100, Math.round((cacheRead / totalInput) * 100)))
 }
 
 export type MendPromptStatusScriptResult = {
@@ -131,6 +148,7 @@ function warmCacheKey(input: MendPromptStatusScriptInput) {
     contextTokens: input.contextTokens ?? "",
     contextLimit: input.contextLimit ?? "",
     contextPercent: input.contextPercent ?? "",
+    sessionCachePercent: input.sessionCachePercent ?? "",
     permissionMode: input.permissionMode || "",
     permissionModeLabel: input.permissionModeLabel || "",
     permissionPending: input.permissionPending ?? 0,
@@ -408,6 +426,8 @@ export async function readPromptStatusScript(input: MendPromptStatusScriptInput)
       MEND_TUI_CONTEXT_TOKENS: input.contextTokens === undefined ? "" : String(input.contextTokens),
       MEND_TUI_CONTEXT_LIMIT: input.contextLimit === undefined ? "" : String(input.contextLimit),
       MEND_TUI_CONTEXT_PERCENT: input.contextPercent === undefined ? "" : String(input.contextPercent),
+      MEND_TUI_SESSION_CACHE_PERCENT:
+        input.sessionCachePercent === undefined ? "" : String(input.sessionCachePercent),
       MEND_TUI_PERMISSION_MODE: input.permissionMode || "",
       MEND_TUI_PERMISSION_MODE_LABEL: input.permissionModeLabel || "",
       MEND_TUI_PERMISSION_PENDING: String(input.permissionPending ?? 0),

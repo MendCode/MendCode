@@ -38,11 +38,8 @@ import { NamedError } from "@mendcode/core/util/error"
 import { SessionProcessor } from "./processor"
 import { Tool } from "@/tool/tool"
 import { Permission } from "@/permission"
-import { buildAuthorityContext } from "@/mend/permission/smart-context"
 import { SessionStatus } from "./status"
 import { LLM, type StreamInput } from "./llm"
-import { memorySnapshot, memorySnapshotContent } from "./context-memory"
-import { executeCode } from "../mend/codemode/host"
 import { withToolDiscovery } from "./tool-discovery"
 import { Shell } from "@/shell/shell"
 import { ShellID } from "@/tool/shell/id"
@@ -59,7 +56,6 @@ import { InstanceState } from "@/effect/instance-state"
 import { InstanceRef } from "@/effect/instance-ref"
 import { TaskTool, type TaskPromptOps } from "@/tool/task"
 import { BackgroundTask } from "./background-task"
-import * as ContinuityMailbox from "./runtime-mailbox"
 import { WorkflowService } from "./workflow-service"
 import { SessionRunState } from "./run-state"
 import { AgentCommand } from "./agent-command"
@@ -333,10 +329,10 @@ export function shouldExitPromptLoop(input: {
   const assistant = input.lastAssistant
   return Boolean(
     assistant?.finish &&
-    !["tool-calls"].includes(assistant.finish) &&
-    !input.hasToolCalls &&
-    !input.summaryHasLaterTarget &&
-    comparePromptMessageOrder(assistant, input.lastUser) > 0,
+      !["tool-calls"].includes(assistant.finish) &&
+      !input.hasToolCalls &&
+      !input.summaryHasLaterTarget &&
+      comparePromptMessageOrder(assistant, input.lastUser) > 0,
   )
 }
 
@@ -405,9 +401,50 @@ export function shouldResumeAfterAutoRescueCompaction(messages: MessageV2.WithPa
 function internalUserParentID(message: MessageV2.WithParts) {
   if (message.info.role !== "user") return
   for (const part of message.parts) {
+    if (part.type === "compaction" && part.parent_id) return part.parent_id
     if (part.type !== "text") continue
     const parentID = part.metadata?.compaction_parent_id
-    if (typeof parentID === "string") return parentID
+    if (typeof parentID === "string") return MessageID.make(parentID)
+  }
+}
+
+function legacyCompactionTailStartID(message: MessageV2.WithParts) {
+  if (message.info.role !== "user") return
+  for (const part of message.parts) {
+    if (part.type === "compaction" && !part.parent_id && part.tail_start_id) return part.tail_start_id
+  }
+}
+
+function peerMessageDeliveryID(message: MessageV2.WithParts) {
+  if (message.info.role !== "user") return
+  for (const part of message.parts) {
+    if (part.type !== "text") continue
+    const metadata = part.metadata as Record<string, unknown> | undefined
+    if (metadata?.kind === "peer_message" && typeof metadata.deliveryID === "string") return metadata.deliveryID
+  }
+}
+
+export function peerDeliveryIDForAssistant(
+  messages: readonly MessageV2.WithParts[],
+  assistant: MessageV2.Info,
+) {
+  if (assistant.role !== "assistant" || !assistant.parentID || assistant.summary === true) return
+  const byID = new Map(messages.map((message) => [message.info.id, message]))
+  const visited = new Set<string>()
+  let currentID: MessageID | undefined = assistant.parentID
+
+  while (currentID && visited.size < 32 && !visited.has(currentID)) {
+    visited.add(currentID)
+    const current = byID.get(currentID)
+    if (!current) return
+    if (current.info.role === "assistant") {
+      currentID = current.info.parentID
+      continue
+    }
+    const deliveryID = peerMessageDeliveryID(current)
+    if (deliveryID) return deliveryID
+    if (!isInternalUserMessage(current)) return
+    currentID = internalUserParentID(current) ?? legacyCompactionTailStartID(current)
   }
 }
 
@@ -535,7 +572,6 @@ export const layer = Layer.effect(
     const plugin = yield* Plugin.Service
     const commands = yield* Command.Service
     const config = yield* Config.Service
-    const failedContinuityWakes = new Set<SessionID>()
     const permission = yield* Permission.Service
     const fsys = yield* AppFileSystem.Service
     const mcp = yield* MCP.Service
@@ -553,7 +589,7 @@ export const layer = Layer.effect(
     const llm = yield* LLM.Service
     const promptAbortControllers = new Map<
       SessionID,
-      { controller: AbortController; targetMessageID: MessageID | undefined }
+      { controller: AbortController; targetMessageID: MessageID | undefined; currentMessageID?: MessageID }
     >()
     const promptAbortReasons = new Map<SessionID, "user">()
     const queuedPromptRecovery = new Set<SessionID>()
@@ -576,8 +612,7 @@ export const layer = Layer.effect(
         cancel: (sessionID: SessionID) => cancel(sessionID),
         resolvePromptParts: (template: string) => resolvePromptParts(template),
         prompt: (input: PromptInput) => prompt(input),
-        promptAsync: (input: PromptInput) => promptAsync(input),
-      } satisfies TaskPromptOps & Pick<Interface, "promptAsync">
+      } satisfies TaskPromptOps
     })
 
     const findOrphanedAssistantOnCancel = Effect.fn("SessionPrompt.findOrphanedAssistantOnCancel")(function* (
@@ -599,7 +634,7 @@ export const layer = Layer.effect(
     const cancelQueuedPrompts = Effect.fn("SessionPrompt.cancelQueuedPrompts")(function* (sessionID: SessionID) {
       const messages = yield* sessions.messages({ sessionID, view: "full" })
       const answered = new Set(
-        messages.flatMap((message) => (message.info.role === "assistant" ? [message.info.parentID] : [])),
+        messages.flatMap((message) => message.info.role === "assistant" ? [message.info.parentID] : []),
       )
       for (const message of messages) {
         if (message.info.role !== "user" || message.info.queued !== true || answered.has(message.info.id)) continue
@@ -621,10 +656,7 @@ export const layer = Layer.effect(
       }
     })
 
-    const cancelPeerExchanges = Effect.fn("SessionPrompt.cancelPeerExchanges")(function* (
-      sessionID: SessionID,
-      cancelQueued = true,
-    ) {
+    const cancelPeerExchanges = Effect.fn("SessionPrompt.cancelPeerExchanges")(function* (sessionID: SessionID) {
       const messages = yield* sessions.messages({ sessionID, view: "full" })
       const answered = new Set(
         messages.flatMap((message) => (message.info.role === "assistant" ? [message.info.parentID] : [])),
@@ -633,18 +665,15 @@ export const layer = Layer.effect(
         if (message.info.role !== "user" || message.info.queued !== true || answered.has(message.info.id)) continue
         const parts = message.parts.filter(
           (part): part is MessageV2.TextPart =>
-            part.type === "text" && (part.metadata?.kind === "peer_message" || part.metadata?.kind === "peer_response"),
+            part.type === "text" &&
+            (part.metadata?.kind === "peer_message" || part.metadata?.kind === "peer_response"),
         )
         if (parts.length === 0) continue
         for (const part of parts) {
-          yield* sessions.updatePart({
-            ...part,
-            ignored: true,
-            metadata: { ...part.metadata, cancelledAt: Date.now() },
-          })
+          yield* sessions.updatePart({ ...part, ignored: true, metadata: { ...part.metadata, cancelledAt: Date.now() } })
         }
         yield* sessions.updateMessage({ ...message.info, queued: false })
-        if (cancelQueued) yield* state.cancelQueued(sessionID, message.info.id)
+        yield* state.cancelQueued(sessionID, message.info.id)
       }
       const commands = (yield* agentCommands.list()).filter(
         (command) =>
@@ -661,10 +690,7 @@ export const layer = Layer.effect(
             state: command.state === "pending" ? "rejected" : "failed",
             error: "Session stopped by the user before the message exchange completed.",
           })
-          .pipe(
-            Effect.catchTag("AgentCommandInvalidStateTransitionError", () => Effect.void),
-            Effect.orDie,
-          )
+          .pipe(Effect.catchTag("AgentCommandInvalidStateTransitionError", () => Effect.void), Effect.orDie)
       }
     })
 
@@ -719,8 +745,6 @@ export const layer = Layer.effect(
 
     const cancel = Effect.fn("SessionPrompt.cancel")(function* (sessionID: SessionID) {
       yield* elog.info("cancel", { sessionID })
-      const context = yield* InstanceState.context
-      ContinuityMailbox.cancelGeneration(sessionID, context.directory)
       stoppedSessions.add(sessionID)
       // A background task can finish after the parent run is cancelled. Do not
       // let its late notification start a fresh assistant turn.
@@ -754,34 +778,30 @@ export const layer = Layer.effect(
 
     const cancelTurn = Effect.fn("SessionPrompt.cancelTurn")(function* (input: CancelTurnInput) {
       yield* elog.info("cancel-turn", { ...input, important: true })
-      const context = yield* InstanceState.context
       const active = promptAbortControllers.get(input.sessionID)
-      const busyBeforeCancel = yield* state.isBusy(input.sessionID)
-      const stopsSession = active?.targetMessageID === input.targetMessageID || !busyBeforeCancel
+      // Compaction creates a synthetic user continuation inside the same run.
+      // Resolve only the parent actually consumed by that live controller; a
+      // queued or historical message must never cancel a different turn.
+      const targetMessageID = active?.currentMessageID === input.targetMessageID
+        ? (active.targetMessageID ?? input.targetMessageID)
+        : input.targetMessageID
+      const stopsSession = active?.targetMessageID === targetMessageID || !(yield* state.isBusy(input.sessionID))
       // A delayed cancellation must not pause a newer, explicitly submitted turn.
       if (stopsSession) stoppedSessions.add(input.sessionID)
       // The user explicitly asked this session to stop. Suppress pending owner
       // wakes even when the targeted turn crossed into terminal state before
       // the cancel request reached the runner.
       yield* cancelOwnerWakeSession(input.sessionID)
-      if (active?.targetMessageID === input.targetMessageID || (!active && !busyBeforeCancel)) {
+      if (active?.targetMessageID === targetMessageID || (!active && !(yield* state.isBusy(input.sessionID)))) {
         yield* cancelQueuedPrompts(input.sessionID)
         yield* cancelPeerExchanges(input.sessionID)
       }
       let interruptedAssistantID: MessageID | undefined
       let markedUserAbort = false
       const result = yield* state
-        .cancelTurn(input.sessionID, input.targetMessageID, {
+        .cancelTurn(input.sessionID, targetMessageID, {
           ignoreInterruptible: true,
           before: Effect.gen(function* () {
-            // The runner holds the target fence while preparing these effects.
-            // A stale stop must not dismiss notifications or peer work owned
-            // by a newer explicit turn, including one already completed.
-            ContinuityMailbox.cancelGeneration(input.sessionID, context.directory)
-            yield* cancelOwnerWakeSession(input.sessionID)
-            // cancelTurn drops the complete runner queue under this same lock;
-            // do not recursively acquire it for each durable peer marker.
-            yield* cancelPeerExchanges(input.sessionID, false)
             stoppedSessions.add(input.sessionID)
             promptAbortReasons.set(input.sessionID, "user")
             markedUserAbort = true
@@ -789,11 +809,11 @@ export const layer = Layer.effect(
               input.sessionID,
               (msg) =>
                 msg.info.role === "assistant" &&
-                msg.info.parentID === input.targetMessageID &&
-                !msg.info.time.completed,
+(msg.info.parentID === targetMessageID || msg.info.parentID === active?.currentMessageID) &&
+                 !msg.info.time.completed,
             )
             if (Option.isSome(orphanedAssistant)) interruptedAssistantID = orphanedAssistant.value.info.id
-            if (active?.targetMessageID === input.targetMessageID) active.controller.abort("user")
+            if (active?.targetMessageID === targetMessageID) active.controller.abort("user")
           }),
         })
         .pipe(
@@ -1266,10 +1286,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
       session: Session.Info
       tools?: Record<string, boolean>
       toolMode?: "normal" | "none"
-      processor: Pick<
-        SessionProcessor.Handle,
-        "message" | "updateToolCall" | "completeToolCall" | "startToolCall" | "failToolCall"
-      >
+      processor: Pick<SessionProcessor.Handle, "message" | "updateToolCall" | "completeToolCall">
       bypassAgentCheck: boolean
       messages: MessageV2.WithParts[]
       abort: AbortSignal
@@ -1285,7 +1302,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
         // The prompt controller is the authoritative lifetime for this turn.
         // SDK callbacks do not consistently retain their optional abortSignal
         // once the surrounding provider stream is interrupted.
-        abort: options.abortSignal ? AbortSignal.any([input.abort, options.abortSignal]) : input.abort,
+        abort: input.abort,
         messageID: input.processor.message.id,
         callID: options.toolCallId,
         extra: {
@@ -1311,35 +1328,17 @@ NOTE: At any point in time through this workflow you should feel free to ask the
             }
           }),
         ask: (req) =>
-          Effect.gen(function* () {
-            const instance = yield* InstanceState.context
-            const authority = buildAuthorityContext({
-              messages: input.messages.map((item) => ({
-                id: item.info.id,
-                role: item.info.role,
-                parentID: "parentID" in item.info ? item.info.parentID : undefined,
-                text: item.parts
-                  .flatMap((part) => (part.type === "text" && !part.synthetic && !part.ignored ? [part.text] : []))
-                  .join("\n"),
-                synthetic: item.parts.every((part) => "synthetic" in part && part.synthetic === true),
-                ignored: item.parts.some((part) => "ignored" in part && part.ignored === true),
-              })),
-              assistantMessageID: input.processor.message.id,
+          sessions.get(input.session.id).pipe(
+            Effect.flatMap((current) => permission.ask({
+              ...req,
               sessionID: input.session.id,
-              objectiveEpoch: `${input.session.id}:${input.processor.message.id}`,
-              objectiveRoot: instance.directory,
-              contextRevision: 0,
-            })
-            yield* permission
-              .ask({
-                ...req,
-                metadata: { ...req.metadata, authorityContext: authority },
-                sessionID: input.session.id,
-                tool: { messageID: input.processor.message.id, callID: options.toolCallId },
-                ruleset: Permission.merge(input.agent.permission, input.session.permission ?? []),
-              })
-              .pipe(Effect.orDie)
-          }),
+              tool: { messageID: input.processor.message.id, callID: options.toolCallId },
+              // Mode changes apply to the next tool even during the same turn.
+              // The tool closure's original session is only a snapshot.
+              ruleset: Permission.merge(input.agent.permission, current.permission ?? []),
+            })),
+            Effect.orDie,
+          ),
       })
 
       for (const item of yield* registry.tools({
@@ -1443,7 +1442,6 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                 yield* input.processor.completeToolCall(options.toolCallId, output)
                 return output
               }).pipe(Effect.ensuring(status.set(input.session.id, { type: "busy" }))),
-              options.toolCallId.startsWith("code_") ? { signal: options.abortSignal } : undefined,
             )
           },
         })
@@ -1461,7 +1459,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
           run.promise(
             Effect.gen(function* () {
               const ctx = context(args, opts)
-              const executionOptions = { ...opts, abortSignal: ctx.abort }
+              const executionOptions = { ...opts, abortSignal: input.abort }
               yield* status.set(ctx.sessionID, {
                 type: "busy",
                 message: SessionStatus.activityLabelForTool(key),
@@ -1536,7 +1534,6 @@ NOTE: At any point in time through this workflow you should feel free to ask the
               yield* input.processor.completeToolCall(opts.toolCallId, output)
               return output
             }).pipe(Effect.ensuring(status.set(input.session.id, { type: "busy" }))),
-            opts.toolCallId.startsWith("code_") ? { signal: opts.abortSignal } : undefined,
           )
         tools[key] = item
       }
@@ -1548,60 +1545,6 @@ NOTE: At any point in time through this workflow you should feel free to ask the
       const available = Object.fromEntries(
         Object.entries(tools).filter(([name]) => !disabled.has(name) && input.tools?.[name] !== false),
       )
-      if (
-        (yield* config.get()).experimental?.code_mode === true &&
-        input.tools?.code !== false &&
-        !Permission.disabled(["code"], Permission.merge(input.agent.permission, input.session.permission ?? [])).has(
-          "code",
-        )
-      ) {
-        const nested = { ...available }
-        available.code = tool({
-          description:
-            "Run bounded JavaScript to compose tools and return only the needed result. Use await tools.search({query: ...}) to inspect available signatures, then await tools.name(args). No filesystem, network, imports or process globals. Maximum 16 calls, 30 seconds, 32 KiB source and 24 KiB final output. Each tool retains its normal permissions. Return a concise value; intermediate results stay out of model context. Images should be read directly outside code.",
-          inputSchema: jsonSchema<{ code: string }>({
-            type: "object",
-            properties: { code: { type: "string", maxLength: 32768 } },
-            required: ["code"],
-            additionalProperties: false,
-          }),
-          async execute(args, options) {
-            if (typeof args.code !== "string") throw new Error("code must be a string")
-            const result = await executeCode({
-              code: args.code,
-              tools: nested,
-              signal: options.abortSignal ? AbortSignal.any([input.abort, options.abortSignal]) : input.abort,
-              async invoke(name, args, signal) {
-                const callID = `code_${crypto.randomUUID()}`
-                await run.promise(
-                  input.processor.startToolCall(callID, name, args as Record<string, unknown>, options.toolCallId),
-                )
-                try {
-                  const result = await nested[name].execute!(args, {
-                    ...options,
-                    toolCallId: callID,
-                    abortSignal: signal,
-                  })
-                  // Media remains stored with the child tool, never copied as base64 into interpreter data.
-                  const { attachments, content, ...data } = result as Record<string, unknown>
-                  return {
-                    ...data,
-                    ...(attachments ? { media: "Use the tool directly to view its media attachments." } : {}),
-                  }
-                } catch (error) {
-                  await run.promise(input.processor.failToolCall(callID, error))
-                  throw error
-                }
-              },
-            })
-            return {
-              title: "Code Mode",
-              output: JSON.stringify(result),
-              metadata: { codeMode: true, truncated: Boolean(result.truncated) },
-            }
-          },
-        })
-      }
       return (yield* config.get()).experimental?.tool_discovery === false ||
         input.tools?.tool_search === false ||
         Permission.disabled(
@@ -1707,13 +1650,14 @@ NOTE: At any point in time through this workflow you should feel free to ask the
               } satisfies MessageV2.ToolPart)
             }),
           ask: (req: any) =>
-            permission
-              .ask({
+            sessions.get(sessionID).pipe(
+              Effect.flatMap((current) => permission.ask({
                 ...req,
                 sessionID,
-                ruleset: Permission.merge(taskAgent.permission, session.permission ?? []),
-              })
-              .pipe(Effect.orDie),
+                ruleset: Permission.merge(taskAgent.permission, current.permission ?? []),
+              })),
+              Effect.orDie,
+            ),
         })
         .pipe(
           Effect.catchCause((cause) => {
@@ -2560,22 +2504,15 @@ NOTE: At any point in time through this workflow you should feel free to ask the
         const ownerWakePrompt = ownerWakeEventIDs.length > 0
         if (ownerWakePrompt && stoppedSessions.has(input.sessionID)) return yield* lastAssistant(input.sessionID)
         if (input.messageID) {
-          const existing = yield* sessions.findMessage(
-            input.sessionID,
-            (message) => message.info.id === input.messageID,
-          )
+          const existing = yield* sessions.findMessage(input.sessionID, (message) => message.info.id === input.messageID)
           if (Option.isSome(existing) && isCancelledPeerPrompt(existing.value)) return existing.value
         }
         // Only a fresh explicit submission may lift the session stop barrier.
         if (
-          !ownerWakePrompt &&
-          input.parts.some(
-            (part) =>
-              part.type !== "text" ||
-              (!part.synthetic && part.metadata?.kind !== "peer_message" && part.metadata?.kind !== "peer_response"),
+          !ownerWakePrompt && input.parts.some((part) =>
+            part.type !== "text" || (!part.synthetic && part.metadata?.kind !== "peer_message" && part.metadata?.kind !== "peer_response"),
           )
-        )
-          stoppedSessions.delete(input.sessionID)
+        ) stoppedSessions.delete(input.sessionID)
         const supersededOwnerWakeEventIDs: string[] = []
         if (input.noReply !== true) {
           const wake = yield* registerOwnerWakeSession(input.sessionID)
@@ -2664,7 +2601,6 @@ NOTE: At any point in time through this workflow you should feel free to ask the
       let step = 0
       let initialMessageIDs: ReadonlySet<string> | undefined
       const session = yield* sessions.get(sessionID).pipe(Effect.orDie)
-      if (targetMessageID) failedContinuityWakes.delete(sessionID)
       const beginCompaction = Effect.fnUntraced(function* () {
         yield* state.setInterruptible(sessionID, false)
         yield* status.set(sessionID, {
@@ -2675,14 +2611,6 @@ NOTE: At any point in time through this workflow you should feel free to ask the
       })
 
       while (true) {
-        const continuityConfig = (yield* config.get()).experimental
-        const continuityEvents = ContinuityMailbox.boundedEventBatch(
-          ContinuityMailbox.pendingEvents(sessionID).filter((event) =>
-            event.data.kind === "job"
-              ? continuityConfig?.async_tools === true
-              : continuityConfig?.async_questions === true,
-          ),
-        )
         yield* status.set(sessionID, { type: "busy", message: SessionStatus.SESSION_ACTIVITY_WAITING })
         yield* slog.info("loop", { step })
 
@@ -2720,6 +2648,8 @@ NOTE: At any point in time through this workflow you should feel free to ask the
         }
 
         if (!lastUser) throw new Error("No user message found in stream. This should never happen.")
+        const activeRun = promptAbortControllers.get(sessionID)
+        if (activeRun?.controller.signal === abort) activeRun.currentMessageID = lastUser.id
 
         const lastAssistantMsg = msgs.findLast(
           (msg) => msg.info.role === "assistant" && msg.info.id === lastAssistant?.id,
@@ -2737,10 +2667,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
             compactionParentID: lastAssistant.parentID,
           })
 
-        if (
-          continuityEvents.length === 0 &&
-          shouldExitPromptLoop({ lastUser, lastAssistant, hasToolCalls, summaryHasLaterTarget })
-        ) {
+        if (shouldExitPromptLoop({ lastUser, lastAssistant, hasToolCalls, summaryHasLaterTarget })) {
           yield* slog.info("exiting loop")
           break
         }
@@ -2805,6 +2732,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
             yield* beginCompaction()
             yield* compaction.create({
               sessionID,
+              parentID: lastUser.id,
               agent: lastUser.agent,
               model: lastUser.model,
               auto: true,
@@ -2915,10 +2843,17 @@ NOTE: At any point in time through this workflow you should feel free to ask the
             }),
           )
           const stripMediaForResume = shouldSkipAutoCompaction(msgs)
-          const [skills, env, instructions] = yield* Effect.all([
+          const [skills, env, instructions, modelMsgs] = yield* Effect.all([
             promptPolicy.includeSkillsByDefault ? sys.skills(agent) : Effect.succeed(undefined),
             sys.environment(model),
             promptPolicy.includeProjectInstructions ? instruction.system().pipe(Effect.orDie) : Effect.succeed([]),
+            MessageV2.toModelMessagesEffect(msgs, model, {
+              stripMedia: stripMediaForResume,
+              preserveMedia: (message, part) =>
+                model.capabilities.input.image === true &&
+                isCompactionResumeMessage(message) &&
+                part.mime.startsWith("image/"),
+            }),
           ])
           const system = [...env, ...instructions, ...(skills ? [skills] : [])]
           const memoryMode = promptMemoryMode(msgs, lastUser)
@@ -2926,43 +2861,11 @@ NOTE: At any point in time through this workflow you should feel free to ask the
           const memoryQuery = (lastUserMessage?.parts || [])
             .flatMap((part) => (part.type === "text" && !part.ignored && !part.synthetic ? [part.text] : []))
             .join("\n")
-          // Freeze memory at its causal user boundary instead of rewriting the system prefix.
-          if (lastUserMessage && !memorySnapshot(lastUserMessage)) {
-            const memory = yield* Effect.promise(() =>
-              SystemPrompt.mendMemory(model, projectRoot, memoryQuery, memoryMode),
-            )
-            const part = yield* sessions.updatePart({
-              id: PartID.ascending(),
-              sessionID,
-              messageID: lastUser.id,
-              type: "text",
-              ...memorySnapshotContent(memory),
-            })
-            lastUserMessage.parts.push(part)
-          }
-          const nativeContext = yield* compaction.nativeContext({
-            sessionID,
-            messages: msgs,
-            user: lastUser,
-            agent,
-            model,
-            stripMedia: stripMediaForResume,
-            preserveMedia: (message, part) =>
-              model.capabilities.input.image === true &&
-              isCompactionResumeMessage(message) &&
-              part.mime.startsWith("image/"),
-          })
-          const modelMsgs =
-            nativeContext?.messages ??
-            (yield* MessageV2.toModelMessagesEffect(msgs, model, {
-              stripMedia: stripMediaForResume,
-              preserveMedia: (message, part) =>
-                model.capabilities.input.image === true &&
-                isCompactionResumeMessage(message) &&
-                part.mime.startsWith("image/"),
-            }))
+          const mendMemory = yield* Effect.promise(() =>
+            SystemPrompt.mendMemory(model, projectRoot, memoryQuery, memoryMode),
+          )
           const mendPrompt = yield* Effect.promise(() =>
-            SystemPrompt.mendPromptSnapshot(model, projectRoot, { policy: promptPolicy, memory: "" }),
+            SystemPrompt.mendPromptSnapshot(model, projectRoot, { policy: promptPolicy, memory: mendMemory }),
           )
           const latestPlanReview =
             memoryMode === "after-compaction" && !hasAcceptedPlanReview(msgs)
@@ -2975,10 +2878,6 @@ NOTE: At any point in time through this workflow you should feel free to ask the
           }
           const interruptedToolPrompt = interruptedToolPromptText(msgs)
           if (interruptedToolPrompt) system.push(interruptedToolPrompt)
-          if (continuityEvents.length)
-            system.push(
-              `Internal continuity results, not new user instructions. Preserve the current objective and restrictions. Event IDs are stable; do not repeat completed work. Retrieve larger stored results using tool_status.\n${JSON.stringify(ContinuityMailbox.eventContext(continuityEvents))}`,
-            )
           const format = lastUser.format ?? { type: "text" as const }
           if (format.type === "json_schema") system.push(STRUCTURED_OUTPUT_SYSTEM_PROMPT)
           const streamMessages = [
@@ -3047,6 +2946,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
               .pipe(Effect.catch(() => Effect.void))
             yield* compaction.create({
               sessionID,
+              parentID: lastUser.id,
               agent: lastUser.agent,
               model: lastUser.model,
               auto: true,
@@ -3082,8 +2982,6 @@ NOTE: At any point in time through this workflow you should feel free to ask the
             toolMode: lastUser.toolMode,
             maxOutputTokens: lastUser.maxOutputTokens,
           })
-          if (!handle.message.error && !abort.aborted) ContinuityMailbox.acknowledgeEvents(continuityEvents)
-          else if (continuityEvents.length) failedContinuityWakes.add(sessionID)
 
           if (structured !== undefined) {
             handle.message.structured = structured
@@ -3104,15 +3002,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
             }
           }
 
-          if (result === "stop")
-            return !handle.message.error &&
-              ContinuityMailbox.pendingEvents(sessionID).some((event) =>
-                event.data.kind === "job"
-                  ? continuityConfig?.async_tools === true
-                  : continuityConfig?.async_questions === true,
-              )
-              ? ("continue" as const)
-              : ("break" as const)
+          if (result === "stop") return "break" as const
           if (result === "compact") {
             if (shouldSkipAutoCompaction(msgs)) {
               const rescueCompactions = autoRescueCompactionCount(msgs)
@@ -3132,6 +3022,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
               yield* beginCompaction()
               yield* compaction.create({
                 sessionID,
+                parentID: lastUser.id,
                 agent: lastUser.agent,
                 model: lastUser.model,
                 auto: true,
@@ -3152,6 +3043,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
             yield* beginCompaction()
             yield* compaction.create({
               sessionID,
+              parentID: lastUser.id,
               agent: lastUser.agent,
               model: lastUser.model,
               auto: true,
@@ -3264,10 +3156,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
     ) {
       if (stoppedSessions.has(input.sessionID)) return yield* lastAssistant(input.sessionID)
       if (input.targetMessageID) {
-        const target = yield* sessions.findMessage(
-          input.sessionID,
-          (message) => message.info.id === input.targetMessageID,
-        )
+        const target = yield* sessions.findMessage(input.sessionID, (message) => message.info.id === input.targetMessageID)
         if (Option.isSome(target) && isCancelledPeerPrompt(target.value)) return yield* lastAssistant(input.sessionID)
       }
       yield* ensurePeerDeliveryState
@@ -3295,7 +3184,9 @@ NOTE: At any point in time through this workflow you should feel free to ask the
             stoppedSessions.has(input.sessionID)
               ? lastAssistant(input.sessionID)
               : runLoop(input.sessionID, controller.signal, targetMessageID, queueMode === "after-tools"),
-          ).pipe(Effect.ensuring(state.setInterruptible(input.sessionID, true))),
+          ).pipe(
+            Effect.ensuring(state.setInterruptible(input.sessionID, true)),
+          ),
         (controller) =>
           Effect.sync(() => {
             if (promptAbortControllers.get(input.sessionID)?.controller === controller)
@@ -3411,22 +3302,32 @@ NOTE: At any point in time through this workflow you should feel free to ask the
         "</mendcode_runtime_event>",
       ].join("\n")
 
-    const completePeerResponse = (assistant: MessageV2.Assistant, peerState: PeerDeliveryState): Effect.Effect<void> =>
+    const completePeerResponse = (
+      assistant: MessageV2.Assistant,
+      peerState: PeerDeliveryState,
+    ): Effect.Effect<void> =>
       Effect.gen(function* () {
         if (!assistant.parentID || assistant.time.completed === undefined) return
         if (assistant.finish === "tool-calls" || assistant.finish === "unknown") return
-        const parent = yield* sessions.findMessage(
-          assistant.sessionID,
-          (message) => message.info.id === assistant.parentID && message.info.role === "user",
-        )
-        if (Option.isNone(parent)) return
+        if (assistant.summary === true) return
+        const visited = new Set<string>()
+        let currentID: MessageID | undefined = assistant.parentID
         let deliveryID: string | undefined
-        for (const part of parent.value.parts) {
-          if (part.type !== "text") continue
-          const metadata = part.metadata as Record<string, unknown> | undefined
-          if (metadata?.kind !== "peer_message" || typeof metadata.deliveryID !== "string") continue
-          deliveryID = metadata.deliveryID
-          break
+        while (currentID && visited.size < 32 && !visited.has(currentID)) {
+          visited.add(currentID)
+          const current = yield* sessions.findMessage(
+            assistant.sessionID,
+            (message) => message.info.id === currentID,
+          )
+          if (Option.isNone(current)) return
+          if (current.value.info.role === "assistant") {
+            currentID = current.value.info.parentID
+            continue
+          }
+          deliveryID = peerMessageDeliveryID(current.value)
+          if (deliveryID) break
+          if (!isInternalUserMessage(current.value)) return
+          currentID = internalUserParentID(current.value) ?? legacyCompactionTailStartID(current.value)
         }
         if (!deliveryID) return
         const command = (yield* agentCommands.list({ targetSessionID: assistant.sessionID })).find(
@@ -3547,10 +3448,10 @@ NOTE: At any point in time through this workflow you should feel free to ask the
             const response = existing.findLast(
               (message) =>
                 message.info.role === "assistant" &&
-                message.info.parentID === marker.info.id &&
                 message.info.time.completed !== undefined &&
                 message.info.finish !== "tool-calls" &&
-                message.info.finish !== "unknown",
+                message.info.finish !== "unknown" &&
+                peerDeliveryIDForAssistant(existing, message.info) === info.id,
             )
             if (response?.info.role === "assistant") {
               yield* completePeerResponse(response.info, peerState)
@@ -3690,7 +3591,8 @@ NOTE: At any point in time through this workflow you should feel free to ask the
         )
         yield* bus.subscribe(MessageV2.Event.Updated).pipe(
           Stream.filter(
-            (event) => event.properties.info.role === "assistant" && event.properties.info.time.completed !== undefined,
+            (event) =>
+              event.properties.info.role === "assistant" && event.properties.info.time.completed !== undefined,
           ),
           Stream.runForEach((event) =>
             event.properties.info.role === "assistant"
@@ -3809,15 +3711,11 @@ NOTE: At any point in time through this workflow you should feel free to ask the
     const shell: (input: ShellInput) => Effect.Effect<MessageV2.WithParts> = Effect.fn("SessionPrompt.shell")(
       function* (input: ShellInput) {
         const ready = yield* Latch.make()
-        const messageID = input.messageID ?? MessageID.ascending()
         return yield* state.startShell(
           input.sessionID,
           lastAssistant(input.sessionID),
-          shellImpl({ ...input, messageID }, ready).pipe(
-            Effect.ensuring(Effect.sync(() => promptAbortReasons.delete(input.sessionID))),
-          ),
+          shellImpl(input, ready).pipe(Effect.ensuring(Effect.sync(() => promptAbortReasons.delete(input.sessionID)))),
           ready,
-          messageID,
         )
       },
     )
@@ -4056,30 +3954,6 @@ NOTE: At any point in time through this workflow you should feel free to ask the
         yield* scheduleOwnerWake(notification.parentSessionID, event.state)
       })
 
-    const continuityWaking = new Set<SessionID>()
-    const wakeContinuity = Effect.fn("SessionPrompt.wakeContinuity")(function* (sessionID: SessionID) {
-      const cfg = (yield* config.get()).experimental
-      if (failedContinuityWakes.has(sessionID) || continuityWaking.has(sessionID) || (yield* state.isBusy(sessionID)))
-        return
-      if (
-        !ContinuityMailbox.pendingEvents(sessionID).some((event) =>
-          event.data.kind === "job" ? cfg?.async_tools === true : cfg?.async_questions === true,
-        )
-      )
-        return
-      continuityWaking.add(sessionID)
-      yield* loop({ sessionID, queue: true }).pipe(
-        Effect.ensuring(Effect.sync(() => continuityWaking.delete(sessionID))),
-        Effect.catchCause((cause) =>
-          Effect.sync(() => {
-            failedContinuityWakes.add(sessionID)
-            log.error("continuity wake failed", { sessionID, error: Cause.squash(cause) })
-          }),
-        ),
-        Effect.forkIn(scope),
-      )
-    })
-
     ownerWakeState = yield* InstanceState.make<OwnerWakeState>(
       Effect.fn("SessionPrompt.ownerWakeState")(function* () {
         const value: OwnerWakeState = {
@@ -4087,18 +3961,6 @@ NOTE: At any point in time through this workflow you should feel free to ask the
           pending: new Map(),
           scheduled: new Set(),
           running: new Set(),
-        }
-        yield* bus.subscribe(ContinuityMailbox.Event.Updated).pipe(
-          Stream.runForEach((event) => wakeContinuity(event.properties.sessionID)),
-          Effect.forkScoped({ startImmediately: true }),
-        )
-        const continuityContext = yield* InstanceState.context
-        for (const sessionID of new Set(
-          ContinuityMailbox.directoryRecords(continuityContext.directory, "event", { statuses: ["pending"] }).map(
-            (event) => event.sessionID,
-          ),
-        )) {
-          yield* wakeContinuity(sessionID)
         }
         yield* bus.subscribe(BackgroundTask.Event.Notification).pipe(
           Stream.runForEach((event) => queueOwnerWake({ state: value, ...event })),
@@ -4114,7 +3976,6 @@ NOTE: At any point in time through this workflow you should feel free to ask the
             Effect.gen(function* () {
               yield* scheduleOwnerWake(event.properties.sessionID, value)
               yield* recoverQueuedPrompt(event.properties.sessionID, { includeLegacy: true })
-              yield* wakeContinuity(event.properties.sessionID)
             }),
           ),
           Effect.forkScoped({ startImmediately: true }),

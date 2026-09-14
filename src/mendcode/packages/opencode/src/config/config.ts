@@ -195,6 +195,12 @@ export const Info = Schema.Struct({
   subagent_variant: Schema.optional(Schema.String).annotate({
     description: "Default model variant to use with subagent_model for subagents launched by the task tool",
   }),
+  workflow_model: Schema.optional(ConfigModelID).annotate({
+    description: "Default workflow executor model in provider/model format; explicit task and plan models take precedence",
+  }),
+  workflow_variant: Schema.optional(Schema.String).annotate({
+    description: "Default variant for workflow_model; never applied to explicit task or plan models",
+  }),
   subagent_owner_wake: Schema.optional(Schema.Boolean).annotate({
     description:
       "Let completed background subagents wake an idle parent agent. Enabled by default; set false to disable.",

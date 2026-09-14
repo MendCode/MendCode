@@ -1,6 +1,14 @@
-/** Behavioral aliases never rewrite the provider's actual request model. */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+}
+
+/** Normalize catalog aliases for behavioral matching without changing the wire model ID. */
 export function normalizedPromptModel(modelID: string) {
-  return modelID.trim().toLowerCase().replace(/^openai\//, "").replace(/-(fast|pro)$/, "")
+  return modelID
+    .trim()
+    .toLowerCase()
+    .replace(/^openai\//, "")
+    .replace(/-(fast|pro)$/, "")
 }
 
 export function isAstraModel(modelID: string) {
@@ -13,25 +21,39 @@ export const ASTRA_PROMPT_SOURCE = {
   verifiedAt: "2026-09-04",
 } as const
 
-/** Responses request contract shared by API and OAuth; no private headers. */
+/** Remove request controls that Astra does not accept while preserving the selected model. */
 export function normalizeAstraRequest(request: Record<string, unknown>) {
   if (typeof request.model !== "string" || !isAstraModel(request.model)) return request
+
   const result = { ...request }
   for (const key of ["temperature", "top_p", "top_logprobs", "logprobs"]) delete result[key]
-  if (Array.isArray(result.include)) result.include = result.include.filter((item) => item !== "message.output_text.logprobs")
-  if (result.reasoning && typeof result.reasoning === "object" && !Array.isArray(result.reasoning)) {
-    const reasoning = result.reasoning as Record<string, unknown>
-    if (reasoning.effort === "none" || reasoning.effort === "minimal") result.reasoning = { ...reasoning, effort: "low" }
+
+  if (Array.isArray(result.include)) {
+    result.include = result.include.filter((item) => item !== "message.output_text.logprobs")
   }
+
+  if (isRecord(result.reasoning) && (result.reasoning.effort === "none" || result.reasoning.effort === "minimal")) {
+    result.reasoning = { ...result.reasoning, effort: "low" }
+  }
+
   return result
 }
 
-export function normalizeAstraOptions(modelID: string, options: Record<string, any>) {
+/** Apply the same compatibility cleanup to options before an SDK serializes them. */
+export function normalizeAstraOptions(modelID: string, options: Record<string, unknown>) {
   if (!isAstraModel(modelID)) return options
+
   const result = { ...options }
   for (const key of ["temperature", "topP", "top_p", "topLogprobs", "top_logprobs", "logprobs"]) delete result[key]
   if (result.reasoningEffort === "none" || result.reasoningEffort === "minimal") result.reasoningEffort = "low"
-  if (Array.isArray(result.include)) result.include = result.include.filter((item: unknown) => item !== "message.output_text.logprobs")
-  if (result.reasoning?.effort === "none" || result.reasoning?.effort === "minimal") result.reasoning = { ...result.reasoning, effort: "low" }
+
+  if (Array.isArray(result.include)) {
+    result.include = result.include.filter((item) => item !== "message.output_text.logprobs")
+  }
+
+  if (isRecord(result.reasoning) && (result.reasoning.effort === "none" || result.reasoning.effort === "minimal")) {
+    result.reasoning = { ...result.reasoning, effort: "low" }
+  }
+
   return result
 }

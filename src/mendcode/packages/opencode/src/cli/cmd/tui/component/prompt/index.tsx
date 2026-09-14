@@ -95,7 +95,7 @@ import { listMendWidgets } from "@/mend/tui/widgets"
 import { getMendFooter, listMendFooterEntries } from "@/mend/tui/footer"
 import { readMendWorkingIndicator } from "@/mend/tui/working-indicator"
 import { readMendEditorVisual } from "@/mend/tui/editor-host"
-import { promptChromeUsesFullSessionWidth, resolvePromptChrome } from "@/mend/tui/prompt-chrome"
+import { promptChromeUsesFullSessionWidth, promptChromeVerticalSpacing, resolvePromptChrome } from "@/mend/tui/prompt-chrome"
 import { activityMascotHoverText, activityMascotText, mascotLineHitboxes, mascotTextWidth } from "@/mend/tui/mascot"
 import { activityMessage, resolveActivityPhase, trailingActivityToolNames } from "../../util/activity-signal"
 import {
@@ -109,6 +109,7 @@ import {
   pickPromptStatusScriptOutput,
   promptStatusScriptIdentityKey,
   readPromptStatusScript,
+  resolvePromptCachePercent,
   resolvePromptStatus,
   type MendPromptStatusBuiltin,
   type MendPromptStatusScriptOutput,
@@ -1744,6 +1745,16 @@ export function Prompt(props: PromptProps) {
     const cost = msg.reduce((sum, item) => sum + (item.role === "assistant" ? item.cost : 0), 0)
     return formatPromptUsage(tokens, contextLimit, cost)
   })
+  const sessionCachePercent = createMemo(() => {
+    const sessionID = props.sessionID
+    if (!sessionID) return
+    const messages = sync.data.message[sessionID] ?? []
+    const active = findActiveWorkingAssistant()
+    if (active?.liveUsage) return resolvePromptCachePercent(active.liveUsage)
+    const last = messages.findLast((item): item is AssistantMessage => item.role === "assistant")
+    if (!last) return
+    return resolvePromptCachePercent(last.tokens)
+  })
   const workingTokenUsage = createMemo(() => {
     if (!props.sessionID) return
     const active = findActiveWorkingAssistant()
@@ -3318,21 +3329,17 @@ export function Prompt(props: PromptProps) {
     return preset === "box" || preset === "top-bottom" || preset === "ascii-box"
   })
   const promptWantsFullWidth = createMemo(() => promptChromeUsesFullSessionWidth(promptChrome().preset))
+  const promptVerticalSpacing = createMemo(() => promptChromeVerticalSpacing(promptChrome().preset))
   const promptLeadText = createMemo(() => promptChrome().leadText)
   const promptUsesFlushLead = createMemo(() => !!promptLeadText())
   const promptLeadInsetLeft = createMemo(() => (promptChrome().preset === "box" ? 1 : 0))
-  const promptInnerTextBottomPadding = createMemo(() => {
-    const preset = promptChrome().preset
-    if (preset === "ascii-box") return 0
-    if (preset === "minimal") return 1
-    return 0
-  })
+  const promptInnerTextBottomPadding = createMemo(() => promptVerticalSpacing().inputBottom)
   const promptInnerMetaTopPadding = createMemo(() => (promptChrome().preset === "ascii-box" ? 1 : 0))
   const promptFooterPadRight = createMemo(() => {
     const preset = promptChrome().preset
     return preset === "minimal" || preset === "top-bottom" ? 2 : 0
   })
-  const promptFooterPadTop = createMemo(() => (promptChrome().preset === "minimal" ? 1 : 0))
+  const promptFooterPadTop = createMemo(() => promptVerticalSpacing().footerTop)
   const promptOuterMetaPadLeft = createMemo(() => {
     const preset = promptChrome().preset
     if (preset === "minimal" || preset === "top-bottom" || preset === "box") return 1
@@ -3565,6 +3572,7 @@ export function Prompt(props: PromptProps) {
       contextTokens: usage()?.contextTokens,
       contextLimit: usage()?.contextLimit,
       contextPercent: usage()?.contextPercent,
+      sessionCachePercent: sessionCachePercent(),
       permissionMode: props.permissionMode,
       permissionModeLabel: props.permissionModeLabel,
       permissionPending: props.permissionPending,
@@ -3798,6 +3806,12 @@ export function Prompt(props: PromptProps) {
       })
       .filter((item): item is string => typeof item === "string")
   })
+  const pendingActivityToolInput = createMemo(() => {
+    const active = activeWorkingAssistant()
+    if (!active) return false
+    const tools = (sync.data.part[active.id] ?? []).filter((part) => part.type === "tool")
+    return tools.some((part) => part.state.status === "pending") && !tools.some((part) => part.state.status === "running")
+  })
   const latestActivityToolNames = createMemo(() => {
     const active = activeWorkingAssistant()
     if (!active) return []
@@ -3836,6 +3850,7 @@ export function Prompt(props: PromptProps) {
       connection: effectiveConnectionStatus(),
       toolNames: activityToolNames(),
       activeToolNames: activeActivityToolNames(),
+      pendingToolInput: pendingActivityToolInput(),
       latestToolNames: latestActivityToolNames(),
       hasReasoning: activityHasReasoning(),
       hasAnswerText: activityHasAnswerText(),
@@ -3918,17 +3933,13 @@ export function Prompt(props: PromptProps) {
       armed: store.interrupt > 0,
     })
   })
-  const promptInputPadTop = createMemo(() => {
-    if (promptChrome().preset === "minimal") return 1
-    if (promptUsesPanelBackground()) return 0
-    return promptUsesCompactTopPadding() ? 0 : 1
-  })
+  const promptInputPadTop = createMemo(() => promptVerticalSpacing().inputTop)
   const promptMascotTopSpacerHeight = createMemo(() => {
     const preset = promptChrome().preset
     if (preset !== "minimal" && preset !== "left-rail") return 0
     if (!props.sessionID) return 0
     if (!workingMascot() && !idleMascot()) return 0
-    return 3
+    return promptVerticalSpacing().mascotSpacer
   })
   const mascotTopOffset = createMemo(() => {
     return (workingIndicatorVisible() ? 1 : 0) + mascotPromptTopOffset()

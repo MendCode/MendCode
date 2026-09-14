@@ -45,6 +45,7 @@ export type MemoryProposal = {
   updatedAt: string
   targetEntryID: string | null
   targetEntryScope: MemoryScope | null
+  targetEntryRevision?: string
   targetEntryIDs: string[]
   appliedEntryID: string | null
 }
@@ -55,6 +56,7 @@ export type ProposeMemoryInput = {
   scope?: MemoryScope
   targetEntryID?: string | null
   targetEntryScope?: MemoryScope | null
+  targetEntryRevision?: string
   targetEntryIDs?: string[]
   tags?: string[]
   categoryIDs?: string[]
@@ -212,6 +214,7 @@ function normalizeMemoryProposal(input: Partial<MemoryProposal> & Pick<MemoryPro
     updatedAt,
     targetEntryID: typeof input.targetEntryID === "string" && input.targetEntryID.trim() ? input.targetEntryID.trim() : null,
     targetEntryScope: input.targetEntryScope === "global" || input.targetEntryScope === "project" ? input.targetEntryScope : null,
+    targetEntryRevision: typeof input.targetEntryRevision === "string" && /^[a-f0-9]{64}$/.test(input.targetEntryRevision) ? input.targetEntryRevision : undefined,
     targetEntryIDs: normalizeStringList(input.targetEntryIDs).length ? normalizeStringList(input.targetEntryIDs) : typeof input.targetEntryID === "string" && input.targetEntryID.trim() ? [input.targetEntryID.trim()] : [],
     appliedEntryID: typeof input.appliedEntryID === "string" && input.appliedEntryID.trim() ? input.appliedEntryID.trim() : null,
   }
@@ -260,6 +263,7 @@ export async function proposeMemory(input: ProposeMemoryInput, root?: string) {
     updatedAt: now,
     targetEntryID: typeof input.targetEntryID === "string" && input.targetEntryID.trim() ? input.targetEntryID.trim() : null,
     targetEntryScope: input.targetEntryScope === "global" || input.targetEntryScope === "project" ? input.targetEntryScope : null,
+    targetEntryRevision: typeof input.targetEntryRevision === "string" && /^[a-f0-9]{64}$/.test(input.targetEntryRevision) ? input.targetEntryRevision : undefined,
     targetEntryIDs: normalizeStringList(input.targetEntryIDs).length ? normalizeStringList(input.targetEntryIDs) : typeof input.targetEntryID === "string" && input.targetEntryID.trim() ? [input.targetEntryID.trim()] : [],
     appliedEntryID: null,
   }
@@ -665,9 +669,18 @@ export async function proposeMemoriesFromExtractorText(
   return { proposals, candidates: extracted.length, callsProviders: true as const, readsSecrets: false as const, writesMemory: autoApplied > 0, skipped: false, reason }
 }
 
-export async function proposeMemoriesWithExtractor(input: ProposeMemoriesFromTextInput, root?: string) {
+export async function proposeMemoriesWithExtractor(
+  input: ProposeMemoriesFromTextInput,
+  root?: string,
+  signal?: AbortSignal,
+  extract?: (request: { providerID: string; modelID: string; content: string }) => Promise<string>,
+) {
+  signal?.throwIfAborted()
   const paths = memoryPaths(root)
   const config = await readMemoryConfig(paths.root)
+  if (!config.enabled || !config.generate) {
+    return { proposals: [], candidates: 0, callsProviders: false as const, readsSecrets: false as const, writesMemory: false as const, skipped: true, reason: "memory output disabled" }
+  }
   if (config.memoryWritePolicy === "disabled") {
     return { proposals: [], candidates: 0, callsProviders: false as const, readsSecrets: false as const, writesMemory: false as const, skipped: true, reason: "memory write policy disabled" }
   }
@@ -678,7 +691,10 @@ export async function proposeMemoriesWithExtractor(input: ProposeMemoriesFromTex
 
   const context = await readMemoryExtractorContext(paths.root)
 
-  const result = await runProviderAdapter(paths.root, {
+  const result = await (extract
+    ? extract({ providerID: role.providerID, modelID: role.modelID, content: memoryExtractorCandidateMessage(input, context.existing) })
+        .then((outputText) => ({ ok: true as const, outputText }))
+    : runProviderAdapter(paths.root, {
     providerID: role.providerID,
     modelID: role.modelID,
     authMode: role.authMode,
@@ -687,7 +703,7 @@ export async function proposeMemoriesWithExtractor(input: ProposeMemoriesFromTex
       role: "user",
       content: memoryExtractorCandidateMessage(input, context.existing),
     }],
-  }).catch((error) => ({
+  })).catch((error) => ({
     ok: false as const,
     status: 1,
     statusText: "memory extractor failed",
@@ -696,6 +712,13 @@ export async function proposeMemoriesWithExtractor(input: ProposeMemoriesFromTex
   }))
   if (!result.ok) {
     return { proposals: [], candidates: 0, callsProviders: true as const, readsSecrets: false as const, writesMemory: false as const, skipped: true, reason: memoryExtractorFailureReason(result.errorPreview || result.statusText) }
+  }
+
+  signal?.throwIfAborted()
+  const beforeWrite = await readMemoryConfig(paths.root)
+  signal?.throwIfAborted()
+  if (!beforeWrite.enabled || !beforeWrite.generate || beforeWrite.memoryWritePolicy === "disabled") {
+    return { proposals: [], candidates: 0, callsProviders: true as const, readsSecrets: false as const, writesMemory: false as const, skipped: true, reason: "memory output disabled before write" }
   }
 
   return proposeMemoriesFromExtractorText({
@@ -965,7 +988,7 @@ export async function applyMemoryProposal(id: string, root?: string, input: Appl
       evidence: proposal.evidence,
       confidence: proposal.confidence,
       sensitivity: proposal.sensitivity,
-    }, root)
+    }, root, proposal.targetEntryRevision)
   } else if (operation === "remove" || operation === "expire") {
     if (!proposal.targetEntryID) throw new Error(`Memory proposal ${id} is missing targetEntryID`)
     await deleteMemoryEntry(proposal.targetEntryScope ?? proposal.scope, proposal.targetEntryID, root)

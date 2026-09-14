@@ -122,17 +122,23 @@ describe("cache policy", () => {
     expect(() => normalizeCacheObservation({ observedAtMs: -1 })).toThrow(RangeError)
   })
 
-  test("allows only verified passive API bindings in smart mode", () => {
+  test("allows only verified passive bindings in smart mode", () => {
     expect(
       resolveCacheRequestPolicy({
         config: { mode: "smart" },
         binding: binding(),
       }),
-    ).toMatchObject({ mode: "smart", useCacheKey: true, adapterID: "openai" })
+    ).toMatchObject({ mode: "smart", useCacheKey: true, allowManagedKey: true, adapterID: "openai" })
     expect(
       resolveCacheRequestPolicy({
         config: { mode: "smart" },
         binding: binding({ auth: "oauth", transport: "responses-lite" }),
+      }),
+    ).toMatchObject({ mode: "smart", useCacheKey: true, allowManagedKey: false, adapterID: "openai" })
+    expect(
+      resolveCacheRequestPolicy({
+        config: { mode: "smart" },
+        binding: binding({ auth: "oauth", transport: "responses-lite", endpoint: "https://example.invalid" }),
       }),
     ).toMatchObject({ mode: "smart", useCacheKey: false })
     expect(
@@ -140,6 +146,6 @@ describe("cache policy", () => {
         config: { mode: "off" },
         binding: binding(),
       }),
-    ).toMatchObject({ mode: "off", useCacheKey: false, useLegacyAnnotations: false })
+    ).toMatchObject({ mode: "off", useCacheKey: false, allowManagedKey: false, useLegacyAnnotations: false })
   })
 })

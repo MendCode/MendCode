@@ -6,12 +6,17 @@ import { withStatics } from "@/util/schema"
 export const Mode = Schema.Literals(["off", "smart"])
 export type Mode = Schema.Schema.Type<typeof Mode>
 
+export const Scope = Schema.Literals(["session", "project"])
+export type Scope = Schema.Schema.Type<typeof Scope>
+
 const Project = Schema.Struct({
   mode: Schema.optional(Mode),
+  scope: Schema.optional(Scope),
 })
 
 const Provider = Schema.Struct({
   mode: Schema.optional(Mode),
+  scope: Schema.optional(Scope),
   models: Schema.optional(Schema.mutable(Schema.Array(Schema.String))),
   exclude_models: Schema.optional(Schema.mutable(Schema.Array(Schema.String))),
 })
@@ -26,6 +31,9 @@ export const Info = Schema.Struct({
   mode: Schema.optional(Mode).annotate({
     description:
       "Prompt-cache policy. Omit to preserve existing provider behavior, off to suppress cache controls, or smart to allow only verified passive bindings.",
+  }),
+  scope: Schema.optional(Scope).annotate({
+    description: "Default cache-key scope for smart bindings: session or project",
   }),
   projects: Schema.optional(Schema.Record(Schema.String, Project)).annotate({
     description: "Project-path overrides for the prompt-cache policy",
@@ -46,6 +54,7 @@ export type EffectiveMode = "legacy" | Mode
 
 export type CacheSelection = {
   mode: EffectiveMode
+  scope: Scope
   source: "default" | "project" | "session" | "provider" | "model"
   reason: string
 }
@@ -76,6 +85,10 @@ function includesModel(models: readonly string[] | undefined, candidates: readon
   return candidates.some((candidate) => models.includes(candidate))
 }
 
+function configuredScope(value: { scope?: Scope } | undefined, fallback: Scope): Scope {
+  return value?.scope ?? fallback
+}
+
 export function selectCacheConfig(input: {
   config?: Info
   projectScope?: string
@@ -83,6 +96,7 @@ export function selectCacheConfig(input: {
   providerID?: string
   modelID?: string
   apiModelID?: string
+  fullMode?: boolean
 }): CacheSelection {
   const config = input.config
   const project = projectOverride(config, input.projectScope)
@@ -91,58 +105,111 @@ export function selectCacheConfig(input: {
   const session = config?.sessions
 
   if (config?.mode === "off") {
-    return { mode: "off", source: "default", reason: "cache.mode is off" }
+    return { mode: "off", scope: configuredScope(config, "session"), source: "default", reason: "cache.mode is off" }
   }
 
   if (project?.mode === "off") {
-    return { mode: "off", source: "project", reason: "the active project is excluded" }
+    return {
+      mode: "off",
+      scope: configuredScope(project, "project"),
+      source: "project",
+      reason: "the active project is excluded",
+    }
   }
 
   if (session?.mode === "none") {
-    return { mode: "off", source: "session", reason: "session caching is disabled" }
+    return { mode: "off", scope: "session", source: "session", reason: "session caching is disabled" }
   }
 
   if (input.sessionID && session?.exclude?.includes(input.sessionID)) {
-    return { mode: "off", source: "session", reason: "the session is excluded" }
+    return { mode: "off", scope: "session", source: "session", reason: "the session is excluded" }
   }
 
   if (input.sessionID && session?.mode === "selected" && !session.include?.includes(input.sessionID)) {
-    return { mode: "off", source: "session", reason: "the session is not selected" }
+    return { mode: "off", scope: "session", source: "session", reason: "the session is not selected" }
   }
 
   if (provider?.mode === "off") {
-    return { mode: "off", source: "provider", reason: `provider ${input.providerID} is disabled` }
+    return {
+      mode: "off",
+      scope: configuredScope(provider, "session"),
+      source: "provider",
+      reason: `provider ${input.providerID} is disabled`,
+    }
   }
 
   if (provider && input.modelID) {
     if (!includesModel(provider.models, candidates)) {
-      return { mode: "off", source: "model", reason: "the model is not in the provider allowlist" }
+      return {
+        mode: "off",
+        scope: configuredScope(provider, "session"),
+        source: "model",
+        reason: "the model is not in the provider allowlist",
+      }
     }
     if (provider.exclude_models?.some((model) => candidates.includes(model))) {
-      return { mode: "off", source: "model", reason: "the model is excluded" }
+      return {
+        mode: "off",
+        scope: configuredScope(provider, "session"),
+        source: "model",
+        reason: "the model is excluded",
+      }
     }
   }
 
   if (config?.mode === "smart") {
-    return { mode: "smart", source: "default", reason: "cache.mode is smart" }
+    return {
+      mode: "smart",
+      scope: configuredScope(config, "session"),
+      source: "default",
+      reason: "cache.mode is smart",
+    }
   }
 
   if (project?.mode === "smart") {
-    return { mode: "smart", source: "project", reason: "the active project enables smart caching" }
+    return {
+      mode: "smart",
+      scope: configuredScope(project, "project"),
+      source: "project",
+      reason: "the active project enables smart caching",
+    }
   }
 
   if (
     provider &&
     (provider.mode === "smart" || provider.models !== undefined || provider.exclude_models !== undefined)
   ) {
-    return { mode: "smart", source: provider.models ? "model" : "provider", reason: "the provider is selected" }
+    return {
+      mode: "smart",
+      scope: configuredScope(provider, "session"),
+      source: provider.models ? "model" : "provider",
+      reason: "the provider is selected",
+    }
   }
 
   if (input.sessionID && session?.include?.includes(input.sessionID)) {
-    return { mode: "smart", source: "session", reason: "the session is explicitly selected" }
+    return { mode: "smart", scope: "session", source: "session", reason: "the session is explicitly selected" }
   }
 
-  return { mode: "legacy", source: "default", reason: "cache policy is not configured" }
+  if (input.fullMode) {
+    return {
+      mode: "smart",
+      scope: "session",
+      source: "default",
+      reason: "full prompt mode enables passive cache controls for the active session",
+    }
+  }
+
+  if (input.providerID === "openai" || input.providerID === "claude-code") {
+    return {
+      mode: "smart",
+      scope: "session",
+      source: "default",
+      reason: `MendCode default enables conservative ${input.providerID === "openai" ? "OpenAI" : "Claude Code"} prompt caching`,
+    }
+  }
+
+  return { mode: "legacy", scope: "session", source: "default", reason: "cache policy is not configured" }
 }
 
 export type CacheMutation = {
@@ -151,6 +218,7 @@ export type CacheMutation = {
   modelID?: string
   sessionID?: string
   projectPath?: string
+  scope?: Scope
 }
 
 function unique(values: readonly string[]) {
@@ -175,7 +243,13 @@ export function updateCacheConfig(current: Info | undefined, mutation: CacheMuta
     throw new Error("A session target cannot be combined with provider or model")
   }
 
-  if (targetCount === 0) return { ...next, mode: enabled ? "smart" : "off" }
+  if (targetCount === 0) {
+    return {
+      ...next,
+      mode: enabled ? "smart" : "off",
+      ...(enabled ? { scope: mutation.scope ?? next.scope ?? "session" } : {}),
+    }
+  }
 
   if (mutation.projectPath) {
     const key = normalizedProjectPath(mutation.projectPath)
@@ -183,7 +257,11 @@ export function updateCacheConfig(current: Info | undefined, mutation: CacheMuta
       ...next,
       projects: {
         ...(next.projects ?? {}),
-        [key]: { ...(next.projects?.[key] ?? {}), mode: enabled ? "smart" : "off" },
+        [key]: {
+          ...(next.projects?.[key] ?? {}),
+          mode: enabled ? "smart" : "off",
+          ...(enabled ? { scope: mutation.scope ?? next.projects?.[key]?.scope ?? "project" } : {}),
+        },
       },
     }
   }
@@ -211,8 +289,10 @@ export function updateCacheConfig(current: Info | undefined, mutation: CacheMuta
   const updatedProvider = { ...(provider ?? {}) }
   if (!mutation.modelID) {
     updatedProvider.mode = enabled ? "smart" : "off"
+    if (enabled) updatedProvider.scope = mutation.scope ?? updatedProvider.scope ?? "session"
   } else if (enabled) {
     updatedProvider.mode = "smart"
+    if (mutation.scope) updatedProvider.scope = mutation.scope
     updatedProvider.models = unique([...(updatedProvider.models ?? []), mutation.modelID])
     updatedProvider.exclude_models = without(updatedProvider.exclude_models, mutation.modelID)
   } else {

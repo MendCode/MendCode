@@ -4,6 +4,7 @@ export type { SetupStepID } from "@/mend/setup/state"
 import { createSimpleContext } from "./helper"
 import type { PromptInfo } from "../component/prompt/history"
 import { routeReturnTarget as routeReturnTargetBase } from "./route-return"
+import { preserveWorkflowReturn } from "./workflow-return"
 
 export type HomeRoute = {
   type: "home"
@@ -13,6 +14,7 @@ export type HomeRoute = {
 export type SessionRoute = {
   type: "session"
   sessionID: string
+  workflowReturnTo?: WorkflowsRoute
   prompt?: PromptInfo
   submitted?: {
     messageID: string
@@ -99,7 +101,7 @@ export const { use: useRoute, provider: RouteProvider } = createSimpleContext({
         return store
       },
       navigate(route: Route) {
-        setStore(reconcile(route))
+        setStore(reconcile(preserveWorkflowReturn(store, route)))
       },
     }
   },

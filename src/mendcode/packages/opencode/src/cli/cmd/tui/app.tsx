@@ -157,7 +157,12 @@ import {
 } from "@/mend/runtime/packages"
 import { resolveProjectMemoryRoot, writeProjectMemoryConfig, type MemoryConfig } from "@/mend/memory/config"
 import { readPermissionsConfig, writePermissionsConfig, type PermissionMode } from "@/mend/config/permissions"
-import { initialTuiPluginReady, themeModeWaitMs, tuiFastBootEnabled } from "@/cli/cmd/tui/util/fast-boot"
+import {
+  homePromptBootstrapReady,
+  initialTuiPluginReady,
+  themeModeWaitMs,
+  tuiFastBootEnabled,
+} from "@/cli/cmd/tui/util/fast-boot"
 import { FIRST_RUN_INTRO_SEEN_KEY, shouldShowFirstRunIntro } from "@/cli/cmd/tui/util/first-run-intro"
 import {
   appendMemoryEntry,
@@ -3974,6 +3979,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; onDiagnostics?: () =
           `Memory learning: ${status.output ? "on" : "off"} · creates approval-gated proposals after chats`,
           `Entries: global ${status.entries.global.count} · project ${status.entries.project.count}`,
           `Proposals: pending ${status.proposals.pending} · applied ${status.proposals.applied} · rejected ${status.proposals.rejected}`,
+          `Extraction queue: ${status.extraction.queued} queued · ${status.extraction.running} running · ${status.extraction.failed} failed`,
           `Runtime caps: project ${status.projectMaxEntries}/request · global ${status.globalCompactionMaxEntries}/after compaction`,
           `Extractor: ${status.extractorRole} · output model calls ${status.outputCallsProviders ? "possible" : "off"}`,
           `Dream consolidation: ${status.dreamConsolidationPolicy}`,
@@ -5243,7 +5249,19 @@ function App(props: { onSnapshot?: () => Promise<string[]>; onDiagnostics?: () =
     if (typeof value === "boolean") return null
     return value as JSX.Element
   })
-  const startupReady = createMemo(() => ready() && pluginsReady() && sync.status !== "loading")
+  const homePromptReady = createMemo(() =>
+    homePromptBootstrapReady({
+      providerMetadataReady: sync.providerMetadataReady,
+      modelPolicyReady: local.model.ready,
+    }),
+  )
+  const startupReady = createMemo(
+    () =>
+      ready() &&
+      pluginsReady() &&
+      sync.status !== "loading" &&
+      (route.data.type !== "home" || homePromptReady()),
+  )
   let startupReported = false
   const startupDeadline = props.onStartupReady ? setTimeout(() => {
     if (startupReported) return
@@ -5297,7 +5315,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; onDiagnostics?: () =
       </Show>
       <Show when={ready()}>
         <Switch>
-          <Match when={route.data.type === "home"}>
+          <Match when={route.data.type === "home" && homePromptReady()}>
             <Home revision={homeRevision()} pluginsReady={pluginsReady()} />
           </Match>
           <Match when={route.data.type === "session"}>

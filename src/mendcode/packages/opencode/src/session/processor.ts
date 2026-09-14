@@ -12,7 +12,8 @@ import { LLM } from "./llm"
 import { contextProfile } from "./context-profile"
 import { MessageV2 } from "./message-v2"
 import { isOverflow } from "./overflow"
-import { PartID, SessionID } from "./schema"
+import { PartID, SessionID, MessageID } from "./schema"
+import { ProviderID, ModelID } from "@/provider/schema"
 import { SessionRetry } from "./retry"
 import { SessionStatus } from "./status"
 import { SessionSummary } from "./summary"
@@ -26,15 +27,13 @@ import { SessionEvent } from "@/v2/session-event"
 import { Modelv2 } from "@/v2/model"
 import { readMemoryConfig, resolveProjectMemoryRoot } from "@/mend/memory/config"
 import {
+  proposeMemoriesWithExtractor,
   extractorPrompt,
-  memoryExtractorCandidateMessage,
-  proposeMemoriesFromExtractorText,
-  readMemoryExtractorContext,
-  resolveMemoryExtractorRole,
-  type ProposeMemoriesFromTextInput,
 } from "@/mend/memory/proposals"
 import { mendMemoryContext } from "@/mend/memory/retrieve"
 import { writeMemorySessionDigest } from "@/mend/memory/session-digests"
+import { MemoryExtractionQueue } from "@/mend/memory/extraction-queue"
+import { InstanceState } from "@/effect/instance-state"
 import { ShellID } from "@/tool/shell/id"
 import * as DateTime from "effect/DateTime"
 
@@ -44,7 +43,6 @@ const log = Log.create({ service: "session.processor" })
 // watchdog for dead streams without turning normal provider think time into a
 // false network outage. Slow providers can override this value.
 const DEFAULT_LLM_STREAM_IDLE_TIMEOUT_MS = 60_000
-const DEFAULT_MEMORY_EXTRACTION_TIMEOUT_MS = 45_000
 const RETRY_STATUS_EVENT_INTERVAL_MS = 5_000
 // Shell cancellation includes process-group TERM/KILL, stream drain, and
 // output persistence. Give that cleanup time to publish its real result before
@@ -55,12 +53,6 @@ function llmStreamIdleTimeoutMs() {
   const value = Number(process.env.MENDCODE_LLM_STREAM_IDLE_TIMEOUT_MS)
   if (Number.isFinite(value) && value > 0) return value
   return DEFAULT_LLM_STREAM_IDLE_TIMEOUT_MS
-}
-
-function memoryExtractionTimeoutMs() {
-  const value = Number(process.env.MENDCODE_MEMORY_EXTRACTION_TIMEOUT_MS)
-  if (Number.isFinite(value) && value > 0) return value
-  return DEFAULT_MEMORY_EXTRACTION_TIMEOUT_MS
 }
 
 function normalizeToolInput(input: unknown): Record<string, any> {
@@ -136,19 +128,6 @@ function timeoutStreamUnless<A, E, R>(
     },
   )
 }
-function memoryExtractorAgent(): Agent.Info {
-  return {
-    name: "memoryExtractor",
-    mode: "primary",
-    native: true,
-    hidden: true,
-    options: {},
-    permission: [{ permission: "*", pattern: "*", action: "deny" }],
-    prompt: extractorPrompt(),
-    temperature: 0,
-  }
-}
-
 function estimateTokenCount(text: string) {
   if (!text.trim()) return 0
   return Math.max(1, Math.ceil(new TextEncoder().encode(text).length / 4))
@@ -382,6 +361,7 @@ type Input = {
 }
 
 export interface Interface {
+  readonly init: () => Effect.Effect<void>
   readonly create: (input: Input) => Effect.Effect<Handle>
 }
 
@@ -475,9 +455,111 @@ export const layer: Layer.Layer<
     const summary = yield* SessionSummary.Service
     const scope = yield* Scope.Scope
     const status = yield* SessionStatus.Service
+    const memoryQueue = new MemoryExtractionQueue()
+    const runMemoryExtraction = async (job: import("@/mend/memory/extraction-queue").MemoryExtractionJob, signal: AbortSignal) => {
+      signal.throwIfAborted()
+      const config = await readMemoryConfig(job.projectRoot)
+      if (!config.enabled || !config.generate || config.memoryWritePolicy === "disabled") {
+        return { state: "skipped" as const, reason: "memory output disabled" }
+      }
+      await writeMemorySessionDigest(
+        {
+          sessionID: job.sessionID,
+          projectRoot: job.projectRoot,
+          title: null,
+          summary: job.text,
+          decisions: [],
+          corrections: [],
+          validations: [],
+          files: [],
+          evidenceRefs: [job.evidence],
+        },
+        job.projectRoot,
+      ).catch(() => null)
+      const result = await proposeMemoriesWithExtractor(
+        {
+          scope: "project",
+          text: job.text,
+          cwd: job.cwd,
+          source: "tui-session-auto-extract",
+          evidence: job.evidence,
+          maxProposals: 1,
+        },
+        job.projectRoot,
+        signal,
+        (request) => Effect.runPromise(Effect.gen(function* () {
+          const model = yield* provider.getModel(ProviderID.make(request.providerID), ModelID.make(request.modelID))
+          return yield* llm.stream({
+            agent: {
+              name: "memoryExtractor", mode: "primary", native: true, hidden: true,
+              options: {}, permission: [{ permission: "*", pattern: "*", action: "deny" }],
+              prompt: extractorPrompt(), temperature: 0,
+            },
+            user: {
+              id: MessageID.make(job.turnID), sessionID: SessionID.make(job.sessionID), role: "user",
+              agent: "memoryExtractor", model: { providerID: model.providerID, modelID: model.id },
+              time: { created: Date.parse(job.createdAt) },
+            },
+            system: [], small: true, tools: {}, toolChoice: "none", model,
+            sessionID: SessionID.make(job.sessionID), cwd: job.cwd, root: job.projectRoot,
+            abort: signal, retries: 0,
+            messages: [{ role: "user", content: request.content }],
+          }).pipe(
+            Stream.filter((event): event is Extract<LLM.Event, { type: "text-delta" }> => event.type === "text-delta"),
+            Stream.map((event) => event.text),
+            Stream.mkString,
+          )
+        }), { signal }),
+      )
+      signal.throwIfAborted()
+      if (job.finishPartID) {
+        const part = await Effect.runPromise(session.getPart({
+          sessionID: SessionID.make(job.sessionID),
+          messageID: MessageID.make(job.messageID),
+          partID: PartID.make(job.finishPartID),
+        }))
+        const memory = part?.type === "step-finish" ? part.metadata?.mendMemory as PendingMemoryExtraction["memoryMetadata"] | undefined : undefined
+        if (part?.type === "step-finish" && memory) {
+          await Effect.runPromise(session.updatePart({
+            ...part,
+            metadata: {
+              ...(part.metadata ?? {}),
+              mendMemory: {
+                ...memory,
+                output: {
+                  ...memory.output,
+                  queued: false,
+                  skipped: result.skipped ?? false,
+                  reason: result.reason ?? null,
+                  candidates: "candidates" in result ? result.candidates : 0,
+                  proposals: result.proposals.map((proposal) => ({
+                    id: proposal.id,
+                    status: proposal.status,
+                    sensitivity: proposal.sensitivity,
+                    confidence: proposal.confidence,
+                    durability: proposal.durability,
+                    changeRisk: proposal.changeRisk,
+                  })),
+                },
+                callsProviders: result.callsProviders,
+              },
+            },
+          }))
+        }
+      }
+      return { state: result.skipped ? "skipped" as const : "completed" as const, reason: result.reason, result }
+    }
+    const memoryState = yield* InstanceState.make((ctx) => Effect.gen(function* () {
+      const root = resolveProjectMemoryRoot(ctx.worktree, ctx.directory)
+      if (!root) return
+      yield* Effect.addFinalizer(() => Effect.promise(() => memoryQueue.stop(root)))
+      yield* Effect.promise(() => memoryQueue.start(root, runMemoryExtraction))
+    }))
+    const init = Effect.fn("SessionProcessor.init")(() => InstanceState.get(memoryState))
     const retryStatusPublishedAt = new Map<SessionID, number>()
 
     const create = Effect.fn("SessionProcessor.create")(function* (input: Input) {
+      yield* init()
       // Pre-capture snapshot before the LLM stream starts. The AI SDK
       // may execute tools internally before emitting start-step events,
       // so capturing inside the event handler can be too late.
@@ -503,6 +585,8 @@ export const layer: Layer.Layer<
         pendingMemoryExtraction: undefined,
         usedExplicitMemoryTool: false,
       }
+      const memoryRoot = resolveProjectMemoryRoot(input.assistantMessage.path.root, input.assistantMessage.path.cwd)
+      if (memoryRoot) yield* Effect.promise(() => memoryQueue.start(memoryRoot, runMemoryExtraction))
       let aborted = false
       // Keep the retry state visible while a new provider attempt is still in setup.
       let retrying = false
@@ -626,59 +710,6 @@ export const layer: Layer.Layer<
       const keepStreamAlive = Effect.fn("SessionProcessor.keepStreamAlive")(function* () {
         if (yield* hasPendingHumanInteraction()) return true
         return yield* hasActiveToolExecution()
-      })
-
-      const proposeAutomaticMemories = Effect.fn("SessionProcessor.proposeAutomaticMemories")(function* (input: {
-          user: MessageV2.User
-          cwd: string
-          root: string
-          proposal: ProposeMemoriesFromTextInput
-      }) {
-        const role = yield* Effect.promise(() => resolveMemoryExtractorRole(input.root))
-        if (!role.ok) {
-          return {
-            proposals: [],
-            callsProviders: false as const,
-            skipped: true,
-            reason: role.reason,
-          }
-        }
-        const model = yield* provider.getModel(role.providerID as any, role.modelID as any)
-        const extractorContext = yield* Effect.promise(() => readMemoryExtractorContext(input.root))
-        const outputText = yield* llm
-          .stream({
-            agent: memoryExtractorAgent(),
-            user: input.user,
-            system: [],
-            small: true,
-            tools: {},
-            toolChoice: "none",
-            model,
-            sessionID: ctx.sessionID,
-            cwd: input.cwd,
-            root: input.root,
-            retries: 2,
-            messages: [
-              {
-              role: "user",
-              content: memoryExtractorCandidateMessage(input.proposal, extractorContext.existing),
-              },
-            ],
-          })
-          .pipe(
-            Stream.filter((event): event is Extract<LLM.Event, { type: "text-delta" }> => event.type === "text-delta"),
-            Stream.map((event) => event.text),
-            Stream.mkString,
-            Effect.timeout(memoryExtractionTimeoutMs()),
-          )
-        return yield* Effect.promise(() =>
-          proposeMemoriesFromExtractorText(
-            input.proposal,
-            outputText,
-            input.root,
-            extractorContext.existingFingerprints,
-          ),
-        )
       })
 
       const updateToolCall = Effect.fn("SessionProcessor.updateToolCall")(function* (
@@ -1125,6 +1156,8 @@ export const layer: Layer.Layer<
               memoryMetadata.output.generate &&
               memoryMetadata.output.extractorRole !== "none" &&
               !ctx.usedExplicitMemoryTool &&
+              (value.finishReason === "stop" || value.finishReason === "length") &&
+              memoryUserText.trim() &&
               memoryTurnText.trim(),
             )
             const queuedMemoryMetadata = memoryMetadata
@@ -1599,78 +1632,20 @@ export const layer: Layer.Layer<
         const pending = ctx.pendingMemoryExtraction
         ctx.pendingMemoryExtraction = undefined
         if (!pending || ctx.blocked || ctx.assistantMessage.error) return
-        yield* status.set(ctx.sessionID, {
-          type: "busy",
-          kind: "memory-extract",
-          message: "Preparing memory proposal...",
-        })
         const sessionID = ctx.sessionID
         const messageID = ctx.assistantMessage.id
         yield* Effect.promise(() =>
-          writeMemorySessionDigest(
-            {
-          sessionID: String(sessionID),
-          projectRoot: pending.memoryRoot,
-          title: null,
-          summary: pending.memoryTurnText,
-          decisions: [],
-          corrections: [],
-          validations: [],
-          files: [],
-          evidenceRefs: [`session:${sessionID}:message:${messageID}`],
-            },
-            pending.memoryRoot,
-          ).catch(() => null),
-        )
-        const created = yield* proposeAutomaticMemories({
-          user: pending.user,
-          cwd: pending.messagePath.cwd,
-          root: pending.memoryRoot,
-          proposal: {
-            scope: "project",
-            text: pending.memoryTurnText,
-            tags: ["tui", "auto"],
+          memoryQueue.enqueue({
+            projectRoot: pending.memoryRoot,
+            sessionID: String(sessionID),
+            turnID: String(pending.user.id),
+            messageID: String(messageID),
+            finishPartID: String(pending.finishPart.id),
             cwd: pending.messagePath.cwd,
-            source: "tui-session-auto-extract",
+            text: pending.memoryTurnText,
             evidence: `session:${sessionID}:message:${messageID}`,
-            maxProposals: 1,
-          },
-        }).pipe(
-          Effect.catchCause((cause) => {
-            const reason = errorMessage(Cause.squash(cause))
-            log.warn("memory extract", { error: reason })
-            return Effect.succeed({
-              proposals: [],
-              candidates: 0,
-              callsProviders: true as const,
-              skipped: true,
-              reason,
-            })
           }),
         )
-        const nextMetadata = {
-          ...pending.memoryMetadata,
-          output: {
-            ...pending.memoryMetadata.output,
-            queued: false,
-            skipped: created.skipped ?? false,
-            reason: created.reason ?? null,
-            candidates: "candidates" in created ? created.candidates : 0,
-            proposals: created.proposals.map((proposal) => ({
-              id: proposal.id,
-              status: proposal.status,
-              sensitivity: proposal.sensitivity,
-              confidence: proposal.confidence,
-              durability: proposal.durability,
-              changeRisk: proposal.changeRisk,
-            })),
-          },
-          callsProviders: created.callsProviders,
-        }
-        yield* session.updatePart({
-          ...pending.finishPart,
-          metadata: { ...(pending.finishPart.metadata ?? {}), mendMemory: nextMetadata },
-        })
       })
 
       return {
@@ -1686,7 +1661,7 @@ export const layer: Layer.Layer<
       } satisfies Handle
     })
 
-    return Service.of({ create })
+    return Service.of({ init, create })
   }),
 )
 

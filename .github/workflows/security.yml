@@ -23,7 +23,7 @@ concurrency:
 jobs:
   repository-guards:
     name: Repository guards
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 10
     steps:
       - name: Checkout repository
@@ -139,7 +139,7 @@ jobs:
 
   deep-scanners:
     name: Deep security scanners
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 30
     permissions:
       contents: read

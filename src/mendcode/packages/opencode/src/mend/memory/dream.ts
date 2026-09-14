@@ -6,7 +6,7 @@ import { materializeLegacyMemoryFacts, readMemoryFacts, readMemoryGraph, upsertM
 import { collectDreamFileEvidence, type DreamEvidenceRef, type DreamSourcePermissions } from "./dream-sources"
 import { publishMemoryDreamEvent } from "./dream-events"
 import { listMemoryProposals, proposeMemory, redactMemoryText, settleGeneratedMemoryProposal, type MemoryProposal } from "./proposals"
-import { cleanupGeneratedMemoryEntries, deterministicDreamConsolidator, isMemoryMaintenanceInstruction, readDreamConsolidationRun, resolveMemoryConsolidator, runMemoryConsolidation, type DreamConsolidationModel, type DreamConsolidationRun } from "./dream-consolidation"
+import { cleanupGeneratedMemoryEntries, consolidateAcceptedMemoryEntries, deterministicDreamConsolidator, isMemoryMaintenanceInstruction, readDreamConsolidationRun, resolveMemoryConsolidator, runMemoryConsolidation, type DreamConsolidationModel, type DreamConsolidationRun } from "./dream-consolidation"
 import { resolveModelRoles } from "../config/models"
 import { runProviderAdapter } from "../runtime/provider-adapters"
 
@@ -871,6 +871,9 @@ export async function runMemoryDream(input: {
     if (consolidationPolicy === "auto-consolidate") {
       const cleanup = await cleanupGeneratedMemoryEntries(root)
       cleanupSummary = cleanup.archived.length ? `memory cleanup archived ${cleanup.archived.length} redundant entries` : "memory cleanup found no redundant entries"
+      const accepted = await consolidateAcceptedMemoryEntries(root)
+      const acceptedArchived = accepted.reduce((total, item) => total + item.archived.length, 0)
+      if (acceptedArchived) cleanupSummary = `${cleanupSummary}; merged and archived ${acceptedArchived} accepted duplicates`
       if (cleanup.archived.length) {
         await appendJsonl(path.join(dreamRunDir(root, id), "events.jsonl"), { at: new Date().toISOString(), status: "progress", message: `Dream ${cleanupSummary}` } satisfies DreamRunEvent)
         publishMemoryDreamEvent({ root: memoryPaths(root).root, runID: id, status: "progress", message: `Dream ${cleanupSummary}` })
@@ -913,7 +916,8 @@ export async function runMemoryDream(input: {
     await writeFile(path.join(dir, "evidence.jsonl"), evidence.map((item) => JSON.stringify(item)).join("\n") + (evidence.length ? "\n" : ""))
     safetyInput = { evidence, skipped: files.skipped, failures: [] }
     await writeSafety(root, id, safetyInput)
-    const model = input.model ?? (await configuredDreamModel(root)) ?? defaultDreamCandidates
+    const model = input.model ?? await configuredDreamModel(root)
+    if (!model) throw new Error("Dream model is not configured; no deterministic fallback was used")
     const modelOutput = await model({ facts, proposals, evidence })
     const candidates = Array.isArray(modelOutput) ? modelOutput : modelOutput.candidates
     const graphSuggestions = Array.isArray(modelOutput) ? [] : modelOutput.graphLinks
@@ -981,6 +985,25 @@ export async function runMemoryDream(input: {
         await appendJsonl(path.join(dir, "events.jsonl"), { at: new Date().toISOString(), status: "progress", message: reason } satisfies DreamRunEvent)
         continue
       }
+      if (consolidationPolicy === "preview") {
+        const reason = "Dream preview recorded this candidate without mutating the proposal or memory store."
+        decisions.push({
+          at: new Date().toISOString(),
+          status: "skipped-policy",
+          policy: config.dreamWritePolicy,
+          text: candidateText,
+          scope,
+          categoryIDs,
+          reason,
+          confidence: candidate.confidence ?? 0.8,
+          durability: candidate.durability ?? 0.85,
+          changeRisk: candidate.changeRisk ?? 0.15,
+          evidenceRefs,
+        })
+        priorCandidates.push({ id: `preview:${decisions.length}`, text: candidate.text })
+        await appendJsonl(path.join(dir, "events.jsonl"), { at: new Date().toISOString(), status: "progress", message: reason } satisfies DreamRunEvent)
+        continue
+      }
       const proposal = await proposeMemory({
         scope,
         text: candidate.text,
@@ -1026,12 +1049,12 @@ export async function runMemoryDream(input: {
     if (consolidationPolicy !== "disabled") {
       const pendingForConsolidation = await listMemoryProposals(root, "pending")
       const resolvedConsolidator = input.consolidator ? null : await resolveMemoryConsolidator(root)
-      if (!pendingForConsolidation.length) {
-        consolidationSummary = "consolidation found no pending proposals"
-      } else {
+      // Accepted memories and unconsumed digests also require maintenance.
+      // The consolidator owns the genuinely empty-inventory fast path.
+      {
         const consolidationModel = input.consolidator ?? (resolvedConsolidator?.ok
           ? async (modelInput: Parameters<DreamConsolidationModel>[0]) => {
-            const recommendations = await resolvedConsolidator.model(modelInput).catch(() => [])
+            const recommendations = await resolvedConsolidator.model(modelInput)
             const expectedIDs = new Set(modelInput.proposals.map((proposal) => proposal.id))
             const resolvedIDs = new Set<string>()
             const acceptedRecommendations = recommendations.filter((decision) => {
@@ -1040,16 +1063,16 @@ export async function runMemoryDream(input: {
               resolvedIDs.add(decision.proposalID)
               return true
             })
-            const fallback = await deterministicDreamConsolidator(modelInput)
-            return [...acceptedRecommendations, ...fallback.filter((decision) => !decision.proposalID || !resolvedIDs.has(decision.proposalID))]
+            return acceptedRecommendations
           }
-          : deterministicDreamConsolidator)
+          : undefined)
         const consolidation = await runMemoryConsolidation({
           root,
           runID: id,
           policy: consolidationPolicy,
           model: consolidationModel,
           evidence,
+          pendingSnapshot: pendingForConsolidation,
           now: input.now,
         })
         consolidationSummary = consolidation.status === "failed"

@@ -34,13 +34,27 @@ import {
 import { EffectBridge } from "@/effect/bridge"
 import * as Option from "effect/Option"
 import * as OtelTracer from "@effect/opentelemetry/Tracer"
-import { runtimeCapabilityPrompt } from "@/mend/prompt/runtime-capabilities"
-import { autoReasoningSignal, selectAutoReasoning } from "@/mend/prompt/reasoning-auto"
 import { isAstraModel, normalizeAstraOptions } from "@/mend/prompt/model-family"
-import { ReasoningRequested, ReasoningCleared, recordReasoningState, clearReasoningState, requestedReasoningEffort } from "@/mend/prompt/reasoning-state"
-import { CACHE_MODE_HEADER, cacheBindingFromModel, resolveCacheRequestPolicy } from "@/provider/cache-policy"
-import { profileContext, type ContextProfile } from "./context-profile"
+import { autoReasoningSignal, selectAutoReasoning } from "@/mend/prompt/reasoning-auto"
+import {
+  ReasoningRequested,
+  ReasoningCleared,
+  recordReasoningState,
+  clearReasoningState,
+  requestedReasoningEffort,
+} from "@/mend/prompt/reasoning-state"
+import { promptRuntimeContextText } from "@/mend/prompt/compose"
 import { discoveryWireMiddleware } from "./tool-discovery"
+import {
+  CACHE_MODE_HEADER,
+  CACHE_SESSION_HEADER,
+  cacheBindingFromModel,
+  fingerprintPrefix,
+  opaqueCacheScope,
+  resolveCacheRequestPolicy,
+} from "@/provider/cache-policy"
+import { cacheKeyForFingerprint, stableProviderSessionID } from "./cache-lineage"
+import { profileContext, type ContextProfile } from "./context-profile"
 
 const log = Log.create({ service: "llm" })
 export const OUTPUT_TOKEN_MAX = ProviderTransform.OUTPUT_TOKEN_MAX
@@ -222,28 +236,30 @@ const live: Layer.Layer<
       const isOpenaiOauth = item.id === "openai" && info?.type === "oauth"
       const mendProjectRoot = input.root || input.cwd
       const authMode = info?.type === "oauth" ? "oauth" : info?.type === "api" ? "api" : "unknown"
+      const cacheTransport = isOpenaiOauth
+        ? ("responses-lite" as const)
+        : input.model.providerID === "claude-code" && input.model.api.npm === "mendcode/claude-code"
+          ? ("claude-agent-sdk" as const)
+        : input.model.api.npm === "@ai-sdk/openai" ||
+            input.model.providerID === "openrouter" ||
+            input.model.api.npm === "@openrouter/ai-sdk-provider"
+          ? ("responses-http" as const)
+          : ("other" as const)
       const endpoint =
         (typeof input.model.options?.baseURL === "string" && input.model.options.baseURL) ||
         (typeof item.options?.baseURL === "string" && item.options.baseURL) ||
         input.model.api.url
-      const cachePolicy = resolveCacheRequestPolicy({
-        config: cfg.cache,
-        projectScope: mendProjectRoot,
-        sessionID: input.sessionID,
-        binding: cacheBindingFromModel(input.model, {
-          auth: authMode,
-          transport: isOpenaiOauth
-            ? "responses-lite"
-            : input.model.api.npm === "@ai-sdk/openai"
-              ? "responses-http"
-              : "other",
-          endpoint,
-          ...(info?.type === "oauth"
-            ? { accountScope: info.accountId ? `oauth:${info.accountId}` : "oauth" }
-            : info?.type === "api"
-              ? { accountScope: "api" }
-              : {}),
-        }),
+      const accountScope =
+        info?.type === "api"
+          ? opaqueCacheScope(info.key)
+          : info?.type === "oauth" && info.accountId
+            ? `oauth:${info.accountId}`
+            : undefined
+      const cacheBinding = cacheBindingFromModel(input.model, {
+        auth: authMode,
+        transport: cacheTransport,
+        endpoint,
+        ...(accountScope ? { accountScope } : {}),
       })
       const mendFocus = input.mendPrompt?.focus ?? SystemPrompt.mendFocus(input.model)
       const mendPromptPolicy =
@@ -263,6 +279,37 @@ const live: Layer.Layer<
             input.memoryMode ?? memoryMode(input.messages),
           ),
         ))
+      const fullMode = /^Mode: full$/m.test(mendPromptPolicy)
+      const cachePolicy = resolveCacheRequestPolicy({
+        config: cfg.cache,
+        projectScope: mendProjectRoot,
+        sessionID: input.sessionID,
+        binding: cacheBinding,
+        fullMode,
+      })
+      const providerSessionID =
+        cachePolicy.mode === "smart" &&
+        mendProjectRoot &&
+        (cachePolicy.useLineage || (isOpenaiOauth && cachePolicy.useCacheKey))
+          ? stableProviderSessionID({
+              providerID: input.model.providerID,
+              modelID: input.model.api.id,
+              projectScope: mendProjectRoot,
+              sessionID: input.sessionID,
+              profile:
+                typeof item.options?.homePath === "string" ? `${cacheBinding.accountScope ?? ""}:${item.options.homePath}` : cacheBinding.accountScope,
+            })
+          : undefined
+      const runtimeProviderContext = /^Mode: full$/m.test(mendPromptPolicy)
+        ? promptRuntimeContextText({
+            providerID: input.model.providerID,
+            modelID: input.model.id,
+            apiModelID: input.model.api.id,
+            authMode,
+            transport: cacheTransport,
+            cache: cachePolicy,
+          })
+        : undefined
 
       const system: string[] = []
       system.push(
@@ -272,14 +319,7 @@ const live: Layer.Layer<
           mendFocus,
           mendPromptPolicy,
           mendMemory,
-          runtimeCapabilityPrompt({
-            providerID: input.model.providerID,
-            modelID: input.model.api.id,
-            endpoint: String(item.options.baseURL ?? input.model.api.url),
-            auth: info?.type === "oauth" ? "oauth" : info?.type === "api" ? "api" : "unknown",
-            transport: input.model.providerID === "openai" ? "responses-http" : "other",
-            tools: Object.keys(input.tools),
-          }),
+          ...(runtimeProviderContext ? [runtimeProviderContext] : []),
           // any custom prompt passed into this call
           ...input.system,
           // any custom prompt from last user message
@@ -308,7 +348,12 @@ const live: Layer.Layer<
         variants: input.model.variants,
         signal: autoReasoningSignal(input.messages),
       })
-      if (autoReasoning) l.info("reasoning.auto", { effort: autoReasoning.effort, reason: autoReasoning.reason, messageID: input.user.id })
+      if (autoReasoning)
+        l.info("reasoning.auto", {
+          effort: autoReasoning.effort,
+          reason: autoReasoning.reason,
+          messageID: input.user.id,
+        })
       const variant =
         !input.small && input.model.variants && input.user.model.variant
           ? input.model.variants[input.user.model.variant]
@@ -364,13 +409,12 @@ const live: Layer.Layer<
         },
       )
       if (input.maxOutputTokens !== undefined) {
-        // Keep the internal bound authoritative even when a plugin adjusts
-        // generic chat parameters. Ordinary requests do not set this field.
         params.maxOutputTokens = Math.min(
           params.maxOutputTokens ?? ProviderTransform.maxOutputTokens(input.model),
           Math.max(1, Math.floor(input.maxOutputTokens)),
         )
       }
+
       if (isAstraModel(input.model.api.id)) {
         params.temperature = undefined
         params.topP = undefined
@@ -380,7 +424,6 @@ const live: Layer.Layer<
         // retains reasoning parameters without substituting a different model ID.
         if (input.model.api.npm === "@ai-sdk/openai") params.options.forceReasoning = true
       }
-      params.options = ProviderTransform.enforceCacheOptions(params.options, cachePolicy)
 
       const { headers } = yield* plugin.trigger(
         "chat.headers",
@@ -398,7 +441,18 @@ const live: Layer.Layer<
       const requestHeaders = {
         ...headers,
         ...(isOpenaiOauth && cachePolicy.mode === "off" ? { [CACHE_MODE_HEADER]: "off" } : {}),
+        ...(isOpenaiOauth && providerSessionID ? { [CACHE_SESSION_HEADER]: providerSessionID } : {}),
       }
+      const providerRuntime =
+        input.model.providerID === "claude-code"
+          ? {
+              claudeCode: {
+                ...(providerSessionID ? { sessionID: providerSessionID } : {}),
+                ...(mendProjectRoot ? { workingDirectory: mendProjectRoot } : {}),
+                ...(cachePolicy.mode === "off" ? { cacheMode: "off" as const } : {}),
+              },
+            }
+          : undefined
 
       const tools = resolveTools(input)
 
@@ -418,7 +472,6 @@ const live: Layer.Layer<
       // during compaction), inject a stub tool to satisfy the validation requirement.
       // The stub description explicitly tells the model not to call it.
       if (
-        input.toolMode !== "none" &&
         (isLiteLLMProxy || input.model.providerID.includes("github-copilot")) &&
         Object.keys(tools).length === 0 &&
         hasToolCalls(input.messages)
@@ -436,6 +489,42 @@ const live: Layer.Layer<
         })
       }
 
+      const managedCacheKey = (() => {
+        if (!cachePolicy.allowManagedKey || cachePolicy.scope !== "project" || !mendProjectRoot) return undefined
+        const fingerprint = fingerprintPrefix({
+          binding: cacheBinding,
+          projectScope: mendProjectRoot,
+          prefix: system,
+          toolDefinitions: Object.fromEntries(
+            Object.entries(tools).map(([name, definition]) => [
+              name,
+              {
+                description: definition.description,
+                inputSchema: definition.inputSchema,
+              },
+            ]),
+          ),
+          settings: {
+            temperature: params.temperature,
+            topP: params.topP,
+            topK: params.topK,
+            maxOutputTokens: params.maxOutputTokens,
+            options: ProviderTransform.removeCacheOptions(params.options),
+          },
+          serializationRevision: "mendcode-cache-prefix-v1",
+        })
+        return fingerprint
+          ? cacheKeyForFingerprint({
+              fingerprint,
+              scope: cachePolicy.scope,
+              projectScope: mendProjectRoot,
+              sessionID: input.sessionID,
+            }) ?? undefined
+          : undefined
+      })()
+      params.options = ProviderTransform.withManagedCacheKey(input.model, params.options, managedCacheKey)
+      params.options = ProviderTransform.enforceCacheOptions(params.options, cachePolicy)
+
       // Wire up toolExecutor for DWS workflow models so that tool calls
       // from the workflow service are executed via opencode's tool system
       // and results sent back over the WebSocket.
@@ -447,7 +536,7 @@ const live: Layer.Layer<
         }
         workflowModel.sessionID = input.sessionID
         workflowModel.systemPrompt = system.join("\n")
-        workflowModel.toolExecutor = input.toolMode === "none" ? null : async (toolName, argsJson, _requestID) => {
+        workflowModel.toolExecutor = async (toolName, argsJson, _requestID) => {
           const t = tools[toolName]
           if (!t || !t.execute) {
             return { result: "", error: `Unknown tool: ${toolName}` }
@@ -469,19 +558,15 @@ const live: Layer.Layer<
           }
         }
 
-        if (input.toolMode === "none") {
-          workflowModel.sessionPreapprovedTools = []
-          workflowModel.approvalHandler = async () => ({ approved: false })
-        } else {
-          const ruleset = Permission.merge(input.agent.permission ?? [], input.permission ?? [])
-          workflowModel.sessionPreapprovedTools = Object.keys(tools).filter((name) => {
-            const match = ruleset.findLast((rule) => Wildcard.match(name, rule.permission))
-            return !match || match.action !== "ask"
-          })
+        const ruleset = Permission.merge(input.agent.permission ?? [], input.permission ?? [])
+        workflowModel.sessionPreapprovedTools = Object.keys(tools).filter((name) => {
+          const match = ruleset.findLast((rule) => Wildcard.match(name, rule.permission))
+          return !match || match.action !== "ask"
+        })
 
-          const bridge = yield* EffectBridge.make()
-          const approvedToolsForSession = new Set<string>()
-          workflowModel.approvalHandler = InstanceState.bind(async (approvalTools) => {
+        const bridge = yield* EffectBridge.make()
+        const approvedToolsForSession = new Set<string>()
+        workflowModel.approvalHandler = InstanceState.bind(async (approvalTools) => {
           const uniqueNames = [...new Set(approvalTools.map((t: { name: string }) => t.name))] as string[]
           // Auto-approve tools that were already approved in this session
           // (prevents infinite approval loops for server-side MCP tools)
@@ -524,8 +609,7 @@ const live: Layer.Layer<
           } finally {
             unsub?.()
           }
-          })
-        }
+        })
       }
 
       const telemetryEnabled = process.env.MENDCODE === "1" ? false : Boolean(cfg.experimental?.openTelemetry)
@@ -554,7 +638,7 @@ const live: Layer.Layer<
         const state = {
           sessionID: input.sessionID,
           messageID: input.user.id,
-          mode: autoReasoning ? "auto" as const : "manual" as const,
+          mode: autoReasoning ? ("auto" as const) : ("manual" as const),
           effort: requestedEffort,
           reason: autoReasoning?.reason ?? "manual_selection",
           modelID: input.model.api.id,
@@ -565,7 +649,13 @@ const live: Layer.Layer<
         yield* Effect.promise(() => Bus.publish(ReasoningRequested, state))
       } else if (!input.small) {
         clearReasoningState(input.sessionID)
-        yield* Effect.promise(() => Bus.publish(ReasoningCleared, { sessionID: input.sessionID, messageID: input.user.id, requestedAt: Date.now() }))
+        yield* Effect.promise(() =>
+          Bus.publish(ReasoningCleared, {
+            sessionID: input.sessionID,
+            messageID: input.user.id,
+            requestedAt: Date.now(),
+          }),
+        )
       }
       let contextProfile: ContextProfile | undefined
       let dispatchedAt = performance.now()
@@ -600,7 +690,7 @@ const live: Layer.Layer<
         temperature: params.temperature,
         topP: params.topP,
         topK: params.topK,
-        providerOptions: ProviderTransform.providerOptions(input.model, params.options),
+        providerOptions: ProviderTransform.providerOptions(input.model, params.options, providerRuntime),
         activeTools: Object.keys(tools).filter((x) => x !== "invalid"),
         tools,
         toolChoice: input.toolChoice,
@@ -665,7 +755,10 @@ const live: Layer.Layer<
       return {
         result,
         profile(event: Event): Event {
-          if (firstTokenMs === null && ["text-delta", "reasoning-delta", "tool-input-delta"].includes(event.type)) {
+          if (
+            firstTokenMs === null &&
+            ["text-delta", "reasoning-delta", "tool-input-delta"].includes(event.type)
+          ) {
             firstTokenMs = Math.max(0, Math.round(performance.now() - dispatchedAt))
           }
           if (event.type !== "finish-step" || !contextProfile) return event
@@ -680,8 +773,13 @@ const live: Layer.Layer<
                   firstTokenMs,
                   usageReported: {
                     input: Number.isFinite(event.usage.inputTokens),
-                    cacheRead: Number.isFinite(event.usage.inputTokenDetails?.cacheReadTokens ?? event.usage.cachedInputTokens),
-                    cacheWrite: Number.isFinite(event.usage.inputTokenDetails?.cacheWriteTokens ?? event.providerMetadata?.anthropic?.cacheCreationInputTokens),
+                    cacheRead: Number.isFinite(
+                      event.usage.inputTokenDetails?.cacheReadTokens ?? event.usage.cachedInputTokens,
+                    ),
+                    cacheWrite: Number.isFinite(
+                      event.usage.inputTokenDetails?.cacheWriteTokens ??
+                        event.providerMetadata?.anthropic?.cacheCreationInputTokens,
+                    ),
                   },
                 },
               },

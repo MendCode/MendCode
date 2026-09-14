@@ -8,6 +8,7 @@ export type ActivitySignalInput = {
   connection?: "connecting" | "connected" | "reconnecting" | "disconnected" | "failed"
   toolNames?: string[]
   activeToolNames?: string[]
+  pendingToolInput?: boolean
   latestToolNames?: string[]
   hasReasoning?: boolean
   hasAnswerText?: boolean
@@ -20,7 +21,7 @@ export function resolveActivityPhase(input: ActivitySignalInput): MendActivityPh
   const activeNames = (input.activeToolNames ?? []).map((item) => item.toLowerCase())
   const activeToolPhase = phaseForToolNames(activeNames)
   const latestToolPhase = phaseForToolNames((input.latestToolNames ?? []).map((item) => item.toLowerCase()))
-  const currentToolPhase = activeToolPhase ?? latestToolPhase
+  const currentToolPhase = input.pendingToolInput ? "sending" : activeToolPhase ?? latestToolPhase
   if (currentToolPhase && (input.connection === "connecting" || input.connection === "reconnecting")) {
     return currentToolPhase
   }
@@ -35,6 +36,7 @@ export function resolveActivityPhase(input: ActivitySignalInput): MendActivityPh
   if (input.status === "busy" && input.statusKind === "subagent-wait") return "subagents"
   if (input.status === "busy" && input.statusKind === "memory-extract") return "memory"
   if (input.status === "busy" && input.statusKind === "compaction") return "compacting"
+  if (input.pendingToolInput) return "sending"
   if (activeToolPhase) return activeToolPhase
   // An active tool that is not registered still represents generation; do not
   // misclassify it as reasoning-only activity.

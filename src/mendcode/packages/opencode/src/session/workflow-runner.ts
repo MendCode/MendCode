@@ -3,6 +3,8 @@ import * as Stream from "effect/Stream"
 import { ulid } from "ulid"
 
 import { Bus } from "@/bus"
+import { Config } from "@/config/config"
+import { workflowDefaultModel } from "./workflow-model"
 import { InstanceState } from "@/effect/instance-state"
 import { Permission } from "@/permission"
 import { readPermissionsConfig } from "@/mend/config/permissions"
@@ -280,6 +282,10 @@ export const layer = Layer.effect(
     const bus = yield* Bus.Service
     const scope = yield* Scope.Scope
     const activeRuns = new Map<string, number>()
+    const configuredModel = Effect.gen(function* () {
+      const config = yield* Effect.serviceOption(Config.Service)
+      return Option.isSome(config) ? workflowDefaultModel(yield* config.value.get()) : undefined
+    })
 
     const reconcileAttempts = Effect.fn("WorkflowRunner.reconcileAttempts")(function* (
       snapshot: WorkflowService.WorkflowSnapshot,
@@ -540,7 +546,7 @@ export const layer = Layer.effect(
         readonly evidence: readonly string[]
       }[]
     }) {
-      const model = input.claim.task.model ?? input.planModel
+      const model = input.claim.task.model ?? input.planModel ?? (yield* configuredModel)
       const policy = WorkflowPolicy.taskPolicy({
         workflow: input.planPermissions,
         task: input.claim.task,
@@ -587,7 +593,7 @@ export const layer = Layer.effect(
         .execute({
           task: input.claim.task,
           sessionID: attempt.sessionID,
-          workflowModel: input.planModel,
+          workflowModel: model,
           context: [
             WorkflowPolicy.workspaceInstruction(policy.workspace),
             artifactContext({ task: input.claim.task, artifacts: input.artifacts }),
@@ -790,7 +796,7 @@ export const layer = Layer.effect(
               task: auditTask,
               sessionID: auditSession.id,
               timeoutMs: completionAuditResponseTimeoutMs,
-              workflowModel: input.snapshot.revision.plan.model,
+               workflowModel: input.snapshot.revision.plan.model ?? (yield* configuredModel),
               workflowPermissions: input.snapshot.revision.plan.permissions,
               workflowWorkspace: input.snapshot.revision.plan.workspace,
             }).pipe(
@@ -1087,6 +1093,7 @@ export const layer = Layer.effect(
 )
 
 export const defaultLayer = layer.pipe(
+  Layer.provide(Config.defaultLayer),
   Layer.provide(Permission.defaultLayer),
   Layer.provide(WorkflowTaskExecutor.defaultLayer),
   Layer.provide(WorkflowBackgroundTask.defaultLayer),

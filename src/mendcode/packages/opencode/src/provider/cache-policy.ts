@@ -5,10 +5,14 @@ import { ConfigCache } from "@/config/cache"
 import type * as Provider from "./provider"
 
 export type CacheAuth = "api" | "oauth" | "unknown"
-export type CacheTransport = "responses-http" | "responses-lite" | "other"
+export type CacheTransport = "responses-http" | "responses-lite" | "claude-agent-sdk" | "other"
 
 /** Internal marker consumed by the ChatGPT OAuth adapter and never sent upstream. */
 export const CACHE_MODE_HEADER = "x-mendcode-cache-mode"
+/** Internal managed-key marker consumed by provider adapters and never sent upstream. */
+export const CACHE_KEY_HEADER = "x-mendcode-cache-key"
+/** Internal provider-session marker consumed by adapters and never sent upstream. */
+export const CACHE_SESSION_HEADER = "x-mendcode-cache-session-id"
 
 export type CacheBinding = {
   providerID: string
@@ -77,6 +81,14 @@ const LEGACY_CONTROL_CAPABILITIES: CacheCapabilities = {
   lineage: false,
 }
 
+const CLAUDE_CODE_CAPABILITIES: CacheCapabilities = {
+  key: false,
+  explicitBreakpoints: false,
+  retentionSeconds: null,
+  refresh: false,
+  lineage: true,
+}
+
 const FALLBACK_ADAPTER: CacheAdapter = {
   id: "legacy-fallback",
   scope: "fallback",
@@ -114,6 +126,12 @@ export const defaultCacheAdapters: readonly CacheAdapter[] = [
     capabilities: () => ({ ...LEGACY_CONTROL_CAPABILITIES }),
   },
   {
+    id: "claude-code",
+    scope: "provider",
+    matches: (binding) => binding.providerID === "claude-code" && binding.sdk === "mendcode/claude-code",
+    capabilities: () => ({ ...CLAUDE_CODE_CAPABILITIES }),
+  },
+  {
     ...FALLBACK_ADAPTER,
   },
 ]
@@ -148,21 +166,31 @@ export function resolveCacheAdapter(
 
 export type CacheRequestPolicy = {
   mode: ConfigCache.EffectiveMode
+  scope: ConfigCache.Scope
   useCacheKey: boolean
+  /** A deterministic cross-request key is allowed for this exact binding. */
+  allowManagedKey: boolean
+  useLineage: boolean
   useLegacyAnnotations: boolean
   adapterID: string
   reason: string
 }
 
 function verifiedPassiveBinding(binding: CacheBinding) {
-  if (binding.auth !== "api" || binding.transport === "responses-lite") return false
-
   let hostname: string
   try {
     hostname = new URL(binding.endpoint).hostname
   } catch {
     return false
   }
+
+  // Codex OAuth has a provider-native, session-scoped key in the Responses Lite
+  // envelope. This is not a managed cross-session lineage key.
+  if (binding.providerID === "openai" && binding.auth === "oauth" && binding.transport === "responses-lite") {
+    return binding.sdk === "@ai-sdk/openai" && (hostname === "api.openai.com" || hostname === "chatgpt.com")
+  }
+
+  if (binding.auth !== "api" || binding.transport === "responses-lite") return false
 
   if (binding.providerID === "openai") {
     return binding.sdk === "@ai-sdk/openai" && hostname === "api.openai.com"
@@ -178,11 +206,35 @@ function verifiedPassiveBinding(binding: CacheBinding) {
   return false
 }
 
+function verifiedLineageBinding(binding: CacheBinding) {
+  return (
+    binding.providerID === "claude-code" &&
+    binding.sdk === "mendcode/claude-code" &&
+    binding.auth === "api" &&
+    binding.transport === "claude-agent-sdk"
+  )
+}
+
+function verifiedManagedKeyBinding(binding: CacheBinding) {
+  if (binding.auth !== "api") return false
+  if (binding.providerID === "openai") {
+    return binding.transport === "responses-http" && binding.sdk === "@ai-sdk/openai"
+  }
+  if (binding.providerID === "openrouter") {
+    return (
+      binding.transport !== "responses-lite" &&
+      (binding.sdk === "@openrouter/ai-sdk-provider" || binding.sdk === "@ai-sdk/openai-compatible")
+    )
+  }
+  return false
+}
+
 export function resolveCacheRequestPolicy(input: {
   config?: ConfigCache.Info
   binding: CacheBinding
   projectScope?: string
   sessionID?: string
+  fullMode?: boolean
 }): CacheRequestPolicy {
   const selection = ConfigCache.selectCacheConfig({
     config: input.config,
@@ -191,12 +243,16 @@ export function resolveCacheRequestPolicy(input: {
     providerID: input.binding.providerID,
     modelID: input.binding.modelID,
     apiModelID: input.binding.apiModelID,
+    fullMode: input.fullMode,
   })
 
   if (selection.mode === "off") {
     return {
       mode: "off",
+      scope: selection.scope,
       useCacheKey: false,
+      allowManagedKey: false,
+      useLineage: false,
       useLegacyAnnotations: false,
       adapterID: "disabled",
       reason: selection.reason,
@@ -207,7 +263,10 @@ export function resolveCacheRequestPolicy(input: {
   if (selection.mode === "legacy") {
     return {
       mode: "legacy",
+      scope: selection.scope,
       useCacheKey: true,
+      allowManagedKey: false,
+      useLineage: false,
       useLegacyAnnotations: true,
       adapterID: adapter.id,
       reason: selection.reason,
@@ -215,14 +274,28 @@ export function resolveCacheRequestPolicy(input: {
   }
 
   const capabilities = adapter.capabilities(input.binding)
-  const enabled = capabilities.key && verifiedPassiveBinding(input.binding)
+  const useCacheKey = capabilities.key && verifiedPassiveBinding(input.binding)
+  const allowManagedKey = useCacheKey && verifiedManagedKeyBinding(input.binding)
+  const useLineage = capabilities.lineage && verifiedLineageBinding(input.binding)
   return {
     mode: "smart",
-    useCacheKey: enabled,
-    useLegacyAnnotations: true,
+    scope: selection.scope,
+    useCacheKey,
+    allowManagedKey,
+    useLineage,
+    useLegacyAnnotations: adapter.id !== "claude-code",
     adapterID: adapter.id,
-    reason: enabled ? "verified passive cache binding" : "binding is not verified for passive cache keys",
+    reason: useCacheKey
+      ? "verified passive cache binding"
+      : useLineage
+        ? "verified passive provider session lineage"
+        : "binding is not verified for passive cache controls",
   }
+}
+
+/** Return an opaque, stable account discriminator without retaining credentials. */
+export function opaqueCacheScope(value: string) {
+  return `account:${createHash("sha256").update(value).digest("hex").slice(0, 32)}`
 }
 
 export function cacheBindingFromModel(

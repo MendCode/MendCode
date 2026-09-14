@@ -13,6 +13,7 @@ import { Effect, Layer } from "effect"
 import { Config } from "@/config/config"
 import { Service } from "./bootstrap-service"
 import { startGlobalDreamBackgroundService } from "@/mend/memory/dream-scheduler"
+import { SessionProcessor } from "@/session/processor"
 
 export { Service } from "./bootstrap-service"
 export type { Interface } from "./bootstrap-service"
@@ -33,6 +34,7 @@ export const layer = Layer.effect(
     const shareNext = yield* ShareNext.Service
     const snapshot = yield* Snapshot.Service
     const vcs = yield* Vcs.Service
+    const processor = yield* SessionProcessor.Service
 
     const run = Effect.gen(function* () {
       const ctx = yield* InstanceState.context
@@ -45,7 +47,7 @@ export const layer = Layer.effect(
       // its per-instance state scope. We just await materialization here.
       yield* Effect.sync(() => startGlobalDreamBackgroundService())
       yield* Effect.forEach(
-        [lsp, shareNext, format, file, fileWatcher, vcs, snapshot, project],
+        [lsp, shareNext, format, file, fileWatcher, vcs, snapshot, project, processor],
         (s) => s.init().pipe(Effect.catchCause((cause) => Effect.logWarning("init failed", { cause }))),
         { concurrency: "unbounded", discard: true },
       ).pipe(Effect.withSpan("InstanceBootstrap.init"))
@@ -68,6 +70,7 @@ export const defaultLayer: Layer.Layer<Service> = layer.pipe(
     ShareNext.defaultLayer,
     Snapshot.defaultLayer,
     Vcs.defaultLayer,
+    SessionProcessor.defaultLayer,
   ]),
 )
 

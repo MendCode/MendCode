@@ -11,7 +11,7 @@ import { memoryPaths, readGlobalMemoryConfig, readMemoryConfig, resolveProjectMe
 import { applyMemoryProposal, autoProposeMemoriesFromSession, extractorPrompt, importCodexMemories, listMemoryProposals, memoryExtractorCandidateMessage, memoryExtractorFailureReason, proposeMemoriesFromExtractorText, proposeMemoriesWithExtractor, proposeMemory, readMemoryExtractorContext, rejectMemoryProposal, updateMemoryProposal } from "../../src/mend/memory/proposals"
 import { DEFAULT_MEMORY_CATEGORIES, inferMemoryCategoryIDs, normalizeMemoryCategoryPolicies, readMemoryCategoryPolicies, readMemoryCategoryPolicyLayers, resetMemoryCategoryPolicy, scopeReasonForMemory, writeMemoryCategoryPolicy } from "../../src/mend/memory/categories"
 import { materializeLegacyMemoryFacts, readMemoryFacts, readMemoryGraph, repairMemoryGraph, upsertMemoryFact, upsertMemoryFactLink, validateMemoryGraph } from "../../src/mend/memory/graph"
-import { registerMemoryWorkspace, memoryWorkspaceOverview, writeWorkspaceRegistry } from "../../src/mend/memory/workspaces"
+import { normalizeWorkspaceRegistry, registerMemoryWorkspace, memoryWorkspaceOverview, writeWorkspaceRegistry } from "../../src/mend/memory/workspaces"
 import { allowedDreamGitCommands, collectDreamFileEvidence, isDreamFileAllowed } from "../../src/mend/memory/dream-sources"
 import { applyDreamGraphProposal, latestDreamStatus, parseDreamCandidates, readDreamRunDetail, readDreamRuns, rejectDreamGraphProposal, resolveMemoryDreamRole, runMemoryDream, type DreamGraphProposal } from "../../src/mend/memory/dream"
 import { listMemorySessionDigests, writeMemorySessionDigestFromSession } from "../../src/mend/memory/session-digests"
@@ -1321,6 +1321,19 @@ describe("mend memory", () => {
     expect(stored?.categoryIDs).toEqual(["memory.policy"])
   })
 
+  test("workspace registry defaults never include another user's home", () => {
+    const home = process.env.HOME
+    try {
+      process.env.HOME = "/isolated-memory-home"
+      expect(normalizeWorkspaceRegistry({}).defaultGroupRoots).toEqual(["/isolated-memory-home/Code"])
+      delete process.env.HOME
+      expect(normalizeWorkspaceRegistry({}).defaultGroupRoots).toEqual([])
+    } finally {
+      if (home === undefined) delete process.env.HOME
+      else process.env.HOME = home
+    }
+  })
+
   test("workspace registry registers known roots without blind home scans and builds group views", async () => {
     await using dir = await tmpdir()
     const projectRoot = path.join(dir.path, "Code", "MendCode")
@@ -1608,7 +1621,7 @@ describe("mend memory", () => {
       confidence: 0.88,
     }, dir.path)
 
-    const run = await runMemoryDream({ root: dir.path, model: async () => [] })
+    const run = await runMemoryDream({ root: dir.path, model: async () => [], consolidator: async () => [] })
 
     expect((await readDreamRunDetail(dir.path, run.id))?.graphProposals).toHaveLength(1)
   })
@@ -1936,6 +1949,7 @@ describe("mend memory", () => {
     }, dir.path)
     const run = await runMemoryDream({
       root: dir.path,
+      consolidator: async ({ proposals }) => proposals.map((proposal) => ({ proposalID: proposal.id, resolution: "archive" as const, reason: "Fixture candidate remains in the audit archive." })),
       model: async ({ evidence }) => {
         expect(evidence.some((item) => item.sourceType === "memory")).toBe(true)
         expect(evidence.some((item) => item.sourceType === "file" && item.sourcePath?.endsWith("AGENTS.md"))).toBe(true)
@@ -1994,6 +2008,7 @@ describe("mend memory", () => {
 
     const run = await runMemoryDream({
       root: dir.path,
+      consolidator: async () => [],
       model: async () => [{
         text: "For this repo, Dream auto-safe mode may apply obvious low-risk memory policy candidates without review.",
         categoryIDs: ["memory.policy"],
@@ -2098,6 +2113,7 @@ describe("mend memory", () => {
 
     const run = await runMemoryDream({
       root: dir.path,
+      consolidator: async ({ proposals }) => proposals.map((proposal) => ({ proposalID: proposal.id, resolution: "archive" as const, reason: "Fixture proposal archived after deduplication." })),
       model: async () => [{
         text: "Project convention from AGENTS.md: Dream should avoid duplicate pending proposals for durable memory rules.",
         categoryIDs: ["memory.policy"],
@@ -2128,6 +2144,7 @@ describe("mend memory", () => {
 
     const run = await runMemoryDream({
       root: dir.path,
+      consolidator: async () => [],
       model: async () => [{
         text: "Dream must avoid duplicate saved memory entries during scheduled runs.",
         categoryIDs: ["memory.policy"],
@@ -2190,7 +2207,7 @@ describe("mend memory", () => {
     expect(events).toContain("completed")
   })
 
-  test("Dream default analyzer proposes missing project conventions from safe code scan", async () => {
+  test("Dream without a configured analyzer fails honestly without fallback proposals", async () => {
     await using dir = await tmpdir()
     await writeFile(path.join(dir.path, "AGENTS.md"), "Always run bun test test/mend/memory.test.ts from packages/opencode for memory changes.\n")
 
@@ -2198,10 +2215,10 @@ describe("mend memory", () => {
     const proposals = await listMemoryProposals(dir.path, "all")
     const detail = await readDreamRunDetail(dir.path, run.id)
 
-    expect(run.status).toBe("completed")
-    expect(proposals.some((proposal) => proposal.source === "memory-dream" && proposal.status !== "pending")).toBe(true)
-    expect(detail?.consolidation).toMatchObject({ status: "completed", pendingAfter: 0 })
-    expect(proposals.some((proposal) => proposal.evidenceRefs.some((ref) => ref.startsWith("file:")))).toBe(true)
+    expect(run.status).toBe("failed")
+    expect(run.failureReason).toContain("Dream model is not configured")
+    expect(proposals).toHaveLength(0)
+    expect(detail?.events.at(-1)?.status).toBe("failed")
     expect((await readMemoryEntries("project", dir.path))).toHaveLength(0)
   })
 
@@ -2326,6 +2343,7 @@ describe("mend memory", () => {
 
   test("Dream schedule marks missed windows manual-only and locks scheduled runs", async () => {
     await using dir = await tmpdir()
+    await writeProjectMemoryConfig({ enabled: true }, dir.path)
     const missed = await evaluateDreamSchedule({
       root: dir.path,
       window: { enabled: true, start: "01:00", end: "02:00" },
@@ -2733,6 +2751,7 @@ describe("mend memory", () => {
   test("Dream runtime state keeps missed/manual status even when settings define a window", async () => {
     await using dir = await tmpdir()
     await writeGlobalMemoryConfig({
+      enabled: true,
       dreamWindow: {
         enabled: true,
         start: "01:00",
@@ -2757,6 +2776,7 @@ describe("mend memory", () => {
     await using first = await tmpdir()
     await using second = await tmpdir()
     await writeGlobalMemoryConfig({
+      enabled: true,
       dreamWindow: { enabled: true, start: "18:00", end: "23:00", timezone: "America/New_York" },
     }, first.path)
     await registerMemoryWorkspace({ root: first.path, source: "user-added-root" }, first.path)
@@ -2812,6 +2832,7 @@ describe("mend memory", () => {
 
   test("scheduled Dream revisits a window when new pending work arrives after the daily run", async () => {
     await using dir = await tmpdir()
+    await writeProjectMemoryConfig({ enabled: true, dreamConsolidationPolicy: "disabled" }, dir.path)
     const window = { enabled: true, start: "00:00", end: "23:59" }
     const first = await runScheduledMemoryDream({
       root: dir.path,
@@ -2852,6 +2873,7 @@ describe("mend memory", () => {
 
   test("scheduled Dream uses an atomic lock for concurrent ticks", async () => {
     await using dir = await tmpdir()
+    await writeProjectMemoryConfig({ enabled: true }, dir.path)
     let release!: () => void
     const hold = new Promise<void>((resolve) => {
       release = resolve
@@ -3326,6 +3348,7 @@ describe("mend memory", () => {
 
     const run = await runMemoryDream({
       root: dir.path,
+      model: async () => [],
       consolidator: async ({ proposals, digests }) => {
         expect(digests.some((item) => item.id === digest.id)).toBe(true)
         return proposals.map((proposal) => proposal.id === accepted.id
@@ -3399,6 +3422,7 @@ describe("mend memory", () => {
 
     const run = await runMemoryDream({
       root: dir.path,
+      model: async () => [],
       consolidator: async ({ proposals }) => proposals.map((proposal) => ({ proposalID: proposal.id, resolution: "apply" as const, reason: `Apply ${proposal.operation} from Dream consolidation.` })),
     })
 
@@ -3429,6 +3453,7 @@ describe("mend memory", () => {
     const batches: number[] = []
     const run = await runMemoryDream({
       root: dir.path,
+      model: async () => [],
       consolidator: async ({ proposals }) => {
         batches.push(proposals.length)
         return proposals.map((proposal) => ({ proposalID: proposal.id, resolution: "archive" as const, reason: "Fixture proposal is intentionally archived." }))
@@ -3442,6 +3467,27 @@ describe("mend memory", () => {
     expect(consolidation?.pendingAfter).toBe(0)
     expect(consolidation?.resolved).toBe(25)
     expect(await listMemoryProposals(dir.path, "pending")).toHaveLength(0)
+  })
+
+  test("Dream consolidation reviews accepted memories without pending proposals", async () => {
+    await using dir = await tmpdir()
+    await writeProjectMemoryConfig({ dreamConsolidationPolicy: "preview" }, dir.path)
+    const entry = await appendMemoryEntry({ scope: "project", text: "Preserve accepted project decisions." }, dir.path)
+    let reviewed = false
+    const run = await runMemoryDream({
+      root: dir.path,
+      model: async () => [],
+      consolidator: async ({ entries, proposals }) => {
+        expect(proposals).toHaveLength(0)
+        expect(entries.some((item) => item.id === entry.id)).toBe(true)
+        reviewed = true
+        return []
+      },
+    })
+    expect(reviewed).toBe(true)
+    expect(run.status).toBe("completed")
+    expect((await readDreamConsolidationRun(dir.path, run.id))?.status).toBe("preview")
+    expect((await readMemoryEntries("project", dir.path)).some((item) => item.id === entry.id)).toBe(true)
   })
 
   test("Dream consolidation fails closed when the model omits a pending proposal", async () => {
@@ -3459,6 +3505,7 @@ describe("mend memory", () => {
 
     const run = await runMemoryDream({
       root: dir.path,
+      model: async () => [],
       consolidator: async () => [],
     })
     const consolidation = await readDreamConsolidationRun(dir.path, run.id)

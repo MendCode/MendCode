@@ -1803,7 +1803,9 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
           name: e instanceof Error ? e.name : undefined,
           stack: e instanceof Error ? e.stack : undefined,
         })
-        if (fatal) await exit(e)
+        // An initial bootstrap failure is not an empty provider catalog.
+        // Surface it instead of leaving Home or its startup overlay unusable.
+        if (isCurrentBootstrap() && (fatal || !store.provider_metadata_ready)) await exit(e)
       }
       const blockingRequests: Promise<unknown>[] = [
         projectPromise,

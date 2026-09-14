@@ -131,7 +131,7 @@ export function AgentCommandPanel(props: {
           when={props.height !== undefined}
           fallback={rows()}
         >
-          <scrollbox id="agent-command-list" height={Math.max(1, props.height! - 1)} width="100%">
+          <scrollbox height={Math.max(1, props.height! - 1)} width="100%">
             {rows()}
           </scrollbox>
         </Show>

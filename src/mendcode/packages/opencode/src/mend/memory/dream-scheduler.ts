@@ -2,13 +2,14 @@ import { existsSync } from "fs"
 import { mkdir, readFile, readdir, rm, writeFile } from "fs/promises"
 import { networkInterfaces } from "os"
 import path from "path"
-import { memoryPaths, readGlobalMemoryConfig, writeGlobalMemoryConfig } from "./config"
+import { memoryPaths, readGlobalMemoryConfig, readMemoryConfig, writeGlobalMemoryConfig } from "./config"
 import { readDreamRuns, runMemoryDream, type DreamModelAdapter, type DreamRun } from "./dream"
 import type { DreamSourcePermissions } from "./dream-sources"
 import { listMemoryProposals } from "./proposals"
 import { memoryWorkspaceOverview, type MemoryWorkspace } from "./workspaces"
 
 const OVERNIGHT_MISSED_GRACE_MINUTES = 60
+const DREAM_LOCK_MAX_AGE_MS = 30 * 60_000
 
 export type DreamScheduleWindow = {
   enabled: boolean
@@ -37,10 +38,18 @@ function lockFile(root: string | undefined, key: string) {
 async function acquireDreamLock(root: string | undefined, key: string) {
   const file = lockFile(root, key)
   await mkdir(path.dirname(file), { recursive: true })
-  return writeFile(file, JSON.stringify({ startedAt: new Date().toISOString() }), { flag: "wx" })
+  const acquire = () => writeFile(file, JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }), { flag: "wx" })
+  return acquire()
     .then(() => file)
     .catch((error) => {
-      if (typeof error === "object" && error !== null && "code" in error && error.code === "EEXIST") return null
+      if (typeof error === "object" && error !== null && "code" in error && error.code === "EEXIST") {
+        return readFile(file, "utf8").then((text) => {
+          const lock = JSON.parse(text) as { startedAt?: string }
+          const startedAt = typeof lock.startedAt === "string" ? Date.parse(lock.startedAt) : NaN
+          if (!Number.isFinite(startedAt) || Date.now() - startedAt <= DREAM_LOCK_MAX_AGE_MS) return null
+          return rm(file, { force: true }).then(() => acquire()).then(() => file).catch(() => null)
+        }).catch(() => null)
+      }
       throw error
     })
 }
@@ -278,6 +287,12 @@ export async function runScheduledMemoryDream(input: {
   permissions?: DreamSourcePermissions
   model?: DreamModelAdapter
 }) {
+  const config = await readMemoryConfig(input.root)
+  if (!config.enabled) {
+    const state = { status: "disabled", reason: "Memory master switch is disabled", date: localDate(input.now ?? new Date(), input.window.timezone), manualTriggerRequired: false, window: input.window }
+    await writeDreamScheduleState(input.root, state)
+    return state
+  }
   const evaluation = await evaluateDreamSchedule(input)
   if (evaluation.action === "missed") return markDreamMissed(input.root, evaluation.date, evaluation.reason, input.window)
   if (evaluation.action !== "run") {

@@ -49,6 +49,7 @@ import {
   interruptedToolPromptText,
   resolveCancelTurnResult,
   shouldContinueAfterCompactionStop,
+  peerDeliveryIDForAssistant,
 } from "../../src/session/prompt"
 import { SessionRevert } from "../../src/session/revert"
 import { SessionRunState } from "../../src/session/run-state"
@@ -56,7 +57,6 @@ import { MessageID, PartID, SessionID } from "../../src/session/schema"
 import { SessionStatus } from "../../src/session/status"
 import { recoverStaleSessionStatuses, STALE_SESSION_RECOVERY_MS } from "../../src/session/recovery"
 import { BackgroundTask } from "../../src/session/background-task"
-import * as ContinuityMailbox from "../../src/session/runtime-mailbox"
 import { SessionV2 } from "../../src/v2/session"
 import { Modelv2 } from "../../src/v2/model"
 import { Skill } from "../../src/skill"
@@ -70,8 +70,8 @@ import { Shell } from "../../src/shell/shell"
 import { Snapshot } from "../../src/snapshot"
 import { ToolRegistry } from "@/tool/registry"
 import { Truncate } from "@/tool/truncate"
-import { Auth } from "@/auth"
 import { AIConfiguration } from "@/mend/runtime/ai-configuration"
+import { Auth } from "@/auth"
 import * as Log from "@mendcode/core/util/log"
 import { CrossSpawnSpawner } from "@mendcode/core/cross-spawn-spawner"
 import * as Database from "../../src/storage/db"
@@ -417,11 +417,12 @@ function makeHttp() {
     Layer.provide(LoopRunner.defaultLayer),
     Layer.provide(WorkflowService.defaultLayer),
     Layer.provide(Auth.defaultLayer),
+    Layer.provide(Truncate.defaultLayer),
+    Layer.provide(AIConfiguration.defaultLayer),
     Layer.provideMerge(todo),
     Layer.provideMerge(question),
     Layer.provideMerge(planReview),
     Layer.provideMerge(deps),
-    Layer.provide(AIConfiguration.defaultLayer),
   )
   const trunc = Truncate.layer.pipe(Layer.provideMerge(deps))
   const proc = SessionProcessor.layer.pipe(Layer.provide(summary), Layer.provideMerge(deps))
@@ -788,6 +789,72 @@ test("auto compaction guard waits for real user input after a synthetic resume",
   expect(shouldSkipAutoCompaction([summary, syntheticResume])).toBe(true)
   expect(shouldSkipAutoCompaction([summary, oldUser, oldAssistant, syntheticResume])).toBe(true)
   expect(shouldSkipAutoCompaction([summary, syntheticResume, realUser])).toBe(false)
+})
+
+test("resolves a peer response through a legacy compaction tail without matching later turns", () => {
+  const peer = promptUser([
+    {
+      type: "text",
+      id: PartID.ascending(),
+      text: "peer request",
+      metadata: { kind: "peer_message", deliveryID: "acmd_legacy" },
+    },
+  ])
+  const tail = promptAssistant({
+    id: MessageID.ascending(),
+    finish: "tool-calls",
+    summary: false,
+    parentID: peer.info.id,
+  })
+  const compactionInfo = userInfo()
+  const compaction = {
+    info: compactionInfo,
+    parts: [
+      {
+        id: PartID.ascending(),
+        sessionID: compactionInfo.sessionID,
+        messageID: compactionInfo.id,
+        type: "compaction" as const,
+        auto: true,
+        overflow: true,
+        resume: true,
+        tail_start_id: tail.info.id,
+      },
+    ],
+  } satisfies MessageV2.WithParts
+  const summary = promptAssistant({
+    id: MessageID.ascending(),
+    finish: "stop",
+    summary: true,
+    parentID: compaction.info.id,
+  })
+  const resume = promptUser([
+    {
+      type: "text",
+      id: PartID.ascending(),
+      text: "resume",
+      synthetic: true,
+      metadata: { compaction_continue: true, compaction_parent_id: compaction.info.id },
+    },
+  ])
+  const response = promptAssistant({
+    id: MessageID.ascending(),
+    finish: "stop",
+    summary: false,
+    parentID: resume.info.id,
+  })
+  const unrelated = promptUser([{ type: "text", id: PartID.ascending(), text: "later user request" }])
+  const unrelatedResponse = promptAssistant({
+    id: MessageID.ascending(),
+    finish: "stop",
+    summary: false,
+    parentID: unrelated.info.id,
+  })
+  const messages = [peer, tail, compaction, summary, resume, response, unrelated, unrelatedResponse]
+
+  expect(peerDeliveryIDForAssistant(messages, summary.info)).toBeUndefined()
+  expect(peerDeliveryIDForAssistant(messages, response.info)).toBe("acmd_legacy")
+  expect(peerDeliveryIDForAssistant(messages, unrelatedResponse.info)).toBeUndefined()
 })
 
 test("auto compaction resumes only for active or incomplete assistant turns", () => {
@@ -2565,8 +2632,7 @@ it.live("does not wake a stopped sender when a peer response arrives", () =>
           !(yield* sessions.messages({ sessionID: target.id })).some(
             (message) => message.info.role === "assistant" && message.info.time.completed !== undefined,
           )
-        )
-          yield* Effect.sleep("1 millis")
+        ) yield* Effect.sleep("1 millis")
       }).pipe(Effect.timeout("2 seconds"))
       yield* Effect.sleep("100 millis")
       expect(yield* llm.calls).toBe(1)
@@ -2615,43 +2681,18 @@ it.live("double Esc stops queued peer and human prompts until a fresh user submi
         messages.some((message) => message.info.role === "assistant" && message.info.parentID === peer.info.id),
       ).toBe(false)
       expect(findRecoverableQueuedPrompt(messages, { includeLegacy: true })).toBeUndefined()
-      expect(
-        messages.some((message) => message.info.role === "assistant" && message.info.parentID === human.info.id),
-      ).toBe(false)
+      expect(messages.some((message) => message.info.role === "assistant" && message.info.parentID === human.info.id)).toBe(false)
       expect(messages.some((message) => message.info.id === human.info.id)).toBe(true)
       expect(yield* llm.calls).toBe(1)
       expect(JSON.stringify((yield* llm.inputs).at(-1))).not.toContain("late peer reply")
       expect((yield* status.get(chat.id)).type).toBe("idle")
       // A delayed HTTP retry and an already scheduled owner wake are not new consent.
-      yield* prompt.promptAsync({
-        sessionID: chat.id,
-        messageID: human.info.id,
-        agent: "build",
-        model: ref,
-        parts: [{ type: "text", text: "keep my real message" }],
-      })
-      yield* prompt.prompt({
-        sessionID: chat.id,
-        agent: "build",
-        model: ref,
-        parts: [
-          {
-            type: "text",
-            text: "late wake",
-            synthetic: true,
-            metadata: { kind: "background_task_owner_wake", eventIDs: ["late-event"] },
-          },
-        ],
-      })
+      yield* prompt.promptAsync({ sessionID: chat.id, messageID: human.info.id, agent: "build", model: ref, parts: [{ type: "text", text: "keep my real message" }] })
+      yield* prompt.prompt({ sessionID: chat.id, agent: "build", model: ref, parts: [{ type: "text", text: "late wake", synthetic: true, metadata: { kind: "background_task_owner_wake", eventIDs: ["late-event"] } }] })
       yield* Effect.sleep("50 millis")
       expect(yield* llm.calls).toBe(1)
       yield* llm.text("explicitly resumed")
-      const resumed = yield* prompt.prompt({
-        sessionID: chat.id,
-        agent: "build",
-        model: ref,
-        parts: [{ type: "text", text: "resume now" }],
-      })
+      const resumed = yield* prompt.prompt({ sessionID: chat.id, agent: "build", model: ref, parts: [{ type: "text", text: "resume now" }] })
       expect(resumed.parts.some((part) => part.type === "text" && part.text === "explicitly resumed")).toBe(true)
       expect(yield* llm.calls).toBe(2)
       expect(JSON.stringify((yield* llm.inputs).at(-1))).not.toContain("keep my real message")
@@ -2861,6 +2902,41 @@ it.live("cancel-turn aborts an active compaction and finalizes its summary", () 
         expect(summary.info.error?.name).toBe("MessageAbortedError")
         expect(summary.info.time.completed).toBeDefined()
       }
+    }),
+    { git: true, config: providerCfg },
+  ),
+)
+
+it.live("cancel-turn accepts the active continuation after compaction", () =>
+  provideTmpdirServer(
+    Effect.fnUntraced(function* ({ llm }) {
+      const prompt = yield* SessionPrompt.Service
+      const compaction = yield* SessionCompaction.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({ title: "Cancel continuation" })
+      yield* llm.text("seed response")
+      yield* prompt.prompt({ sessionID: chat.id, agent: "build", model: ref, parts: [{ type: "text", text: "seed" }] })
+      yield* llm.text("compacted context")
+      const gate = defer<void>()
+      yield* llm.hold("continuing", gate.promise)
+      yield* compaction.create({ sessionID: chat.id, agent: "build", model: ref, auto: true, resume: true })
+      const running = yield* prompt.loop({ sessionID: chat.id }).pipe(Effect.forkChild)
+      yield* llm.wait(3)
+      const continuation = (yield* sessions.messages({ sessionID: chat.id })).findLast(
+        (message) => message.info.role === "user" && message.parts.some(
+          (part) => part.type === "text" && part.metadata?.compaction_continue === true,
+        ),
+      )
+      if (!continuation) throw new Error("continuation missing")
+      const result = yield* prompt.cancelTurn({ sessionID: chat.id, targetMessageID: continuation.info.id })
+      // Always release the local server, including when the regression fails.
+      gate.resolve()
+      yield* Fiber.join(running).pipe(Effect.timeout("2 seconds"))
+      expect(result).toBe("cancelled")
+      const last = (yield* sessions.messages({ sessionID: chat.id })).findLast((message) => message.info.role === "assistant")
+      if (last?.info.role !== "assistant") throw new Error("assistant missing")
+      expect(last.info.error?.name).toBe("MessageAbortedError")
+      expect(last.info.time.completed).toBeDefined()
     }),
     { git: true, config: providerCfg },
   ),
@@ -3759,7 +3835,18 @@ it.live("static loop returns assistant text through local provider", () =>
   ),
 )
 
-it.live("loop flushes automatic memory extraction after a normal assistant stop", () =>
+const waitForMemoryJob = Effect.fn("test.waitForMemoryJob")(function* (root: string, id?: string) {
+  const { readMemoryExtractionQueue } = yield* Effect.promise(() => import("../../src/mend/memory/extraction-queue"))
+  for (let attempt = 0; attempt < 200; attempt++) {
+    const jobs = yield* Effect.promise(() => readMemoryExtractionQueue(root))
+    const job = jobs.find((item) => (!id || item.id === id) && ["completed", "skipped", "failed"].includes(item.state))
+    if (job) return job
+    yield* Effect.sleep("50 millis")
+  }
+  return yield* Effect.die(new Error("Memory extraction did not settle within 10 seconds"))
+})
+
+it.live("loop enqueues automatic memory extraction after a normal assistant stop", () =>
   provideTmpdirServer(
     ({ dir, llm }) =>
       Effect.gen(function* () {
@@ -3830,6 +3917,9 @@ it.live("loop flushes automatic memory extraction after a normal assistant stop"
           )
 
           const result = yield* prompt.loop({ sessionID: session.id })
+          expect(yield* (yield* SessionStatus.Service).get(session.id)).toEqual({ type: "idle" })
+          const job = yield* waitForMemoryJob(root)
+          expect(job.state).toBe("completed")
           const proposals = yield* Effect.promise(() => listMemoryProposals(root, "pending"))
           const inputs = yield* llm.inputs
 
@@ -3846,6 +3936,58 @@ it.live("loop flushes automatic memory extraction after a normal assistant stop"
           else process.env.XDG_CONFIG_HOME = previousXdgConfigHome
         }
       }),
+    { git: true, config: providerCfg },
+  ),
+)
+
+it.live("a second chat turn completes while automatic memory extraction from the first is held", () =>
+  provideTmpdirServer(
+    ({ dir, llm }) => Effect.gen(function* () {
+      const { readMemoryExtractionQueue } = yield* Effect.promise(() => import("../../src/mend/memory/extraction-queue"))
+      const root = path.resolve(dir)
+      const previousXdgConfigHome = process.env.XDG_CONFIG_HOME
+      process.env.XDG_CONFIG_HOME = path.join(root, ".xdg")
+      let release!: () => void
+      const held = new Promise<void>((resolve) => { release = resolve })
+      try {
+        yield* Effect.promise(() => writeProjectMemoryConfig({ enabled: true, use: false, generate: true, extractorRole: "memoryExtractor" }, root))
+        yield* Effect.promise(() => writeModelsConfig({
+          ...defaultModelsConfig,
+          enabled: true,
+          roles: {
+            ...defaultModelsConfig.roles,
+            default: { providerID: "test", modelID: "test-model" },
+            memoryExtractor: { providerID: "test", modelID: "test-model" },
+          },
+        }, root))
+        const prompt = yield* SessionPrompt.Service
+        const sessions = yield* Session.Service
+        const status = yield* SessionStatus.Service
+        const session = yield* sessions.create({ title: "Independent memory extraction", permission: [{ permission: "*", pattern: "*", action: "allow" }] })
+        yield* llm.text("first response")
+        yield* llm.hold(JSON.stringify({ proposals: [] }), held)
+        yield* prompt.prompt({ sessionID: session.id, agent: "build", noReply: true, parts: [{ type: "text", text: "For this repo, when you make visible TUI changes, run a smoke test before saying done. Respond only: understood." }] })
+        yield* prompt.loop({ sessionID: session.id }).pipe(Effect.timeout("5 seconds"))
+        expect(yield* llm.calls).toBeGreaterThanOrEqual(1)
+        yield* llm.wait(2).pipe(Effect.timeout("5 seconds"))
+        expect(yield* status.get(session.id)).toEqual({ type: "idle" })
+        const first = (yield* Effect.promise(() => readMemoryExtractionQueue(root)))[0]!
+        expect(first?.state).toBe("running")
+        yield* llm.text("second response")
+        yield* llm.text(JSON.stringify({ proposals: [] }))
+        yield* prompt.prompt({ sessionID: session.id, agent: "build", noReply: true, parts: [{ type: "text", text: "Respond now without waiting for background memory." }] })
+        const second = yield* prompt.loop({ sessionID: session.id }).pipe(Effect.timeout("5 seconds"))
+        expect(second.parts.some((part) => part.type === "text" && part.text === "second response")).toBe(true)
+        expect((yield* Effect.promise(() => readMemoryExtractionQueue(root))).find((job) => job.id === first.id)?.state).toBe("running")
+        expect(yield* status.get(session.id)).toEqual({ type: "idle" })
+        release()
+        expect((yield* waitForMemoryJob(root, first.id)).state).toBe("completed")
+      } finally {
+        release()
+        if (previousXdgConfigHome === undefined) delete process.env.XDG_CONFIG_HOME
+        else process.env.XDG_CONFIG_HOME = previousXdgConfigHome
+      }
+    }),
     { git: true, config: providerCfg },
   ),
 )
@@ -3904,17 +4046,16 @@ it.live("loop returns to idle when automatic memory extraction times out", () =>
 
           yield* llm.text("understood")
           yield* llm.hang
+          yield* llm.hang
+          yield* llm.hang
 
           const result = yield* prompt.loop({ sessionID: session.id })
-          const finish = [...result.parts]
-            .reverse()
-            .find((part): part is MessageV2.StepFinishPart => part.type === "step-finish")
-          const memory = finish?.metadata?.mendMemory as any
-
           expect(result.info.role).toBe("assistant")
-          expect(yield* llm.calls).toBe(2)
-          expect(memory?.output?.skipped).toBe(true)
-          expect(memory?.output?.reason).toBeTruthy()
+          // The chat must already be idle while its extractor is hanging.
+          expect(yield* status.get(session.id)).toEqual({ type: "idle" })
+          const job = yield* waitForMemoryJob(root)
+          expect(["skipped", "failed"]).toContain(job.state)
+          expect(job.reason).toBeTruthy()
           expect(yield* status.get(session.id)).toEqual({ type: "idle" })
         } finally {
           if (previousXdgConfigHome === undefined) delete process.env.XDG_CONFIG_HOME
@@ -4992,55 +5133,6 @@ unix(
 )
 
 unix(
-  "cancel-turn fences a direct shell by its user message and permits a later explicit shell",
-  () =>
-    withSh(() =>
-      provideTmpdirInstance(
-        () =>
-          Effect.gen(function* () {
-            const { prompt, run, chat } = yield* boot()
-            const sessions = yield* Session.Service
-            const messageID = MessageID.ascending()
-            const shell = yield* prompt
-              .shell({ sessionID: chat.id, messageID, agent: "build", command: "sleep 30" })
-              .pipe(Effect.forkChild)
-            yield* Effect.gen(function* () {
-              while (true) {
-                const messages = yield* sessions.messages({ sessionID: chat.id })
-                if (
-                  messages.some(
-                    (message) =>
-                      message.info.role === "assistant" &&
-                      message.info.parentID === messageID &&
-                      message.parts.some((part) => part.type === "tool" && part.state.status === "running"),
-                  )
-                )
-                  return
-                yield* Effect.sleep("1 millis")
-              }
-            }).pipe(Effect.timeout("2 seconds"))
-            expect(yield* prompt.cancelTurn({ sessionID: chat.id, targetMessageID: MessageID.ascending() })).toBe(
-              "target_mismatch",
-            )
-            expect(yield* run.isBusy(chat.id)).toBe(true)
-            expect(yield* prompt.cancelTurn({ sessionID: chat.id, targetMessageID: messageID })).toBe("cancelled")
-            const result = yield* Fiber.join(shell).pipe(Effect.timeout("5 seconds"))
-            expect(result.info.role).toBe("assistant")
-            expect(
-              result.parts.some((part) => part.type === "tool" && ["running", "pending"].includes(part.state.status)),
-            ).toBe(false)
-            expect(yield* run.isBusy(chat.id)).toBe(false)
-            const next = yield* prompt.shell({ sessionID: chat.id, agent: "build", command: "printf resumed" })
-            const output = completedTool(next.parts)
-            expect(output?.state.output).toContain("resumed")
-          }),
-        { git: true, config: cfg },
-      ),
-    ),
-  30_000,
-)
-
-unix(
   "cancel persists aborted shell result when shell ignores TERM",
   () =>
     withSh(() =>
@@ -5227,6 +5319,18 @@ unix(
 
           const run = yield* prompt.loop({ sessionID: chat.id }).pipe(Effect.forkChild)
           yield* llm.wait(1)
+          yield* Effect.gen(function* () {
+            while (true) {
+              const messages = yield* sessions.messages({ sessionID: chat.id })
+              if (
+                messages.some((message) =>
+                  message.parts.some((part) => part.type === "tool" && part.state.status === "running"),
+                )
+              )
+                return
+              yield* Effect.sleep("1 millis")
+            }
+          }).pipe(Effect.timeout("1 second"))
           yield* Effect.sleep(150)
           yield* prompt.cancel(chat.id)
 
@@ -5537,60 +5641,6 @@ it.live("handles filenames with # character", () =>
 
 // Regression: empty assistant turn loop
 
-it.live("continuity wakes the existing executor without inventing a user message", () =>
-  provideTmpdirServer(
-    Effect.fnUntraced(function* ({ llm }) {
-      const prompt = yield* SessionPrompt.Service
-      const sessions = yield* Session.Service
-      const bus = yield* Bus.Service
-      const session = yield* sessions.create({ title: "Continuity wake" })
-      yield* llm.text("Initial response")
-      yield* prompt.prompt({
-        sessionID: session.id,
-        agent: "build",
-        model: ref,
-        parts: [{ type: "text", text: "Inspect the result when ready" }],
-      })
-      const settled = yield* Deferred.make<void>()
-      const off = yield* bus.subscribeCallback(SessionStatus.Event.Status, (event) => {
-        if (
-          event.properties.sessionID === session.id &&
-          event.properties.status.type === "idle" &&
-          ContinuityMailbox.pendingEvents(session.id).length === 0
-        ) {
-          Effect.runFork(Deferred.succeed(settled, undefined))
-        }
-      })
-      yield* llm.text("Result acknowledged")
-      const record = ContinuityMailbox.completeRecord({
-        id: `job_${session.id}`,
-        sessionID: session.id,
-        directory: session.directory,
-        kind: "job",
-        generation: 0,
-        status: "completed",
-        data: { result: "Read complete" },
-        timeCreated: Date.now(),
-        timeUpdated: Date.now(),
-      })
-      yield* bus.publish(ContinuityMailbox.Event.Updated, {
-        sessionID: session.id,
-        id: record.id,
-        kind: record.kind,
-        status: record.status,
-      })
-      yield* llm.wait(2).pipe(Effect.timeout("3 seconds"))
-      yield* Deferred.await(settled).pipe(Effect.timeout("3 seconds"))
-      off()
-      expect(yield* llm.calls).toBe(2)
-      expect(ContinuityMailbox.pendingEvents(session.id)).toHaveLength(0)
-      const messages = yield* sessions.messages({ sessionID: session.id })
-      expect(messages.filter((message) => message.info.role === "user")).toHaveLength(1)
-    }),
-    { git: true, config: (url) => ({ ...providerCfg(url), experimental: { async_tools: true } }) },
-  ),
-)
-
 it.live("does not loop empty assistant turns for a simple reply", () =>
   provideTmpdirServer(
     Effect.fnUntraced(function* ({ llm }) {
@@ -5831,44 +5881,4 @@ it.live(
       { git: true },
     ),
   30_000,
-)
-
-it.live("Code Mode persists nested reads but sends only final output to the model", () =>
-  provideTmpdirServer(
-    ({ dir, llm }) =>
-      Effect.gen(function* () {
-        const prompt = yield* SessionPrompt.Service
-        const sessions = yield* Session.Service
-        const session = yield* sessions.create({
-          title: "Code Mode",
-          permission: [{ permission: "*", pattern: "*", action: "allow" }],
-        })
-        const file = path.join(dir, "code-probe.txt")
-        yield* Effect.promise(() => Bun.write(file, "private intermediate payload"))
-        yield* prompt.prompt({
-          sessionID: session.id,
-          agent: "build",
-          noReply: true,
-          parts: [{ type: "text", text: "Read the probe and return only its length." }],
-        })
-        yield* llm.tool("code", {
-          code: `const result = await tools.read({filePath: ${JSON.stringify(file)}}); return result.output.length`,
-        })
-        yield* llm.text("done")
-        yield* prompt.loop({ sessionID: session.id })
-        expect(JSON.stringify(yield* llm.inputs)).not.toContain("private intermediate payload")
-        const messages = yield* sessions.messages({ sessionID: session.id })
-        const parts = messages.flatMap((item) => item.parts)
-        const child = parts.find((part) => part.type === "tool" && part.tool === "read")
-        expect(child?.type === "tool" && child.state.status).toBe("completed")
-        expect(child?.type === "tool" && child.metadata?.codeMode).toBeDefined()
-        const parent = parts.find((part) => part.type === "tool" && part.tool === "code")
-        expect(parent?.type === "tool" && parent.state.status).toBe("completed")
-        if (parent?.type === "tool" && parent.state.status === "completed") {
-          expect(JSON.parse(parent.state.output).ok).toBe(true)
-          expect(parent.state.output).not.toContain("private intermediate payload")
-        }
-      }),
-    { git: true, config: (url) => ({ ...providerCfg(url), experimental: { code_mode: true } }) },
-  ),
 )

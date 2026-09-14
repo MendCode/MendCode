@@ -320,11 +320,9 @@ export async function waitForClientLeases(input: {
     if (activeClients > 0 || activeWork) {
       lastLiveAt = Date.now()
     } else if (Date.now() - lastLiveAt >= idleGraceMs) {
-      try {
-        await input.stop()
-      } finally {
-        await clearStateIfOwned(input.pid)
-      }
+      // Shutdown owns discovery cleanup, after closing the database. Removing
+      // it here on failure hides a still-live writer from subsequent clients.
+      await input.stop()
       return
     }
     if (input.signal?.aborted) return

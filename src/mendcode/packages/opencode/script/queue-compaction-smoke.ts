@@ -182,12 +182,16 @@ function syntheticPrompt(label: string) {
 
 function environment(root: string): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {
-    ...process.env,
+    // Do not inherit config-content, package-root, or provider overrides from
+    // the developer's active MendCode session into the isolated fixture.
+    ...Object.fromEntries(["PATH", "TERM", "COLORTERM", "LANG", "LC_ALL", "TMPDIR"].flatMap((key) => process.env[key] === undefined ? [] : [[key, process.env[key]]])),
     HOME: path.join(root, "home"),
     XDG_DATA_HOME: path.join(root, "data"),
     XDG_CACHE_HOME: path.join(root, "cache"),
     XDG_CONFIG_HOME: path.join(root, "config"),
     XDG_STATE_HOME: path.join(root, "state"),
+    MENDCODE_MEMORY_DIR: path.join(root, "data", "memory"),
+    MENDCODE_MEMORY_DISCOVERY_ROOTS: "",
     OPENCODE_GLOBAL_LAYOUT: "mendcode",
     OPENCODE_DB: path.join(root, "state", "queue-smoke.db"),
     OPENCODE_DISABLE_DEFAULT_PLUGINS: "true",

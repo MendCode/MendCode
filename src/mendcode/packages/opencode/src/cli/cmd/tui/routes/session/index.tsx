@@ -174,7 +174,6 @@ import {
   sessionPendingInputSessionIDs,
   sessionPendingInputStatus,
   sessionPromptVisible,
-  sessionNextVisibleQueuedMessageID,
   sessionTranscriptBottomSpacer,
   sessionLoopReceipt,
   shouldRenderSessionLoopCard,
@@ -223,16 +222,6 @@ import {
 } from "@/mend/tui/presentation"
 import { blurCompactionArcade, CompactionPanel, isCompactionArcadeFocused } from "../../component/compaction-panel"
 import { AgentCommandPanel } from "../../component/agent-command-panel"
-import { SessionWidgetTray } from "@/mend/tui/widgets-tray"
-import {
-  SessionQuestionsWidget,
-  SessionJobsWidget,
-  splitWidgetQuestions,
-  isWidgetJobActive,
-  type WidgetReasoningState,
-  type WidgetJob,
-  type AsyncQuestionRequest,
-} from "@/mend/tui/widgets-runtime"
 import {
   agentViewCommandStateRank,
   agentViewCommandTouchesSession,
@@ -248,6 +237,7 @@ import {
 import { readMendTuiCustomization, resolveMendSessionAccent } from "@/mend/tui/customization"
 import { formatDuration } from "@/util/format"
 import { readPermissionsConfig, writePermissionsConfig, type PermissionMode } from "@/mend/config/permissions"
+import { reviewPermissionRequestWithModel, shouldReviewSmartApproval } from "@/mend/permission/smart-approval"
 import { readActiveTuiProfile, writeActiveTuiProfile } from "@/mend/tui/profile-actions"
 import {
   memoryToolPresentation,
@@ -333,23 +323,21 @@ const SESSION_LIVE_FOLLOW_EVENTS = new Set([
 ])
 
 const sessionScrollStates = new Map<string, SessionScrollState>()
+// Multiple TUI routes can observe the same shared pending permission. Keep a
+// process-local lease so they do not run duplicate reviewer calls in parallel;
+// the fingerprint check below still protects the reply from a changed request.
+const smartPermissionReviewLeases = new Set<string>()
 
-function smartReplyFor(request: PermissionRequest) {
-  const metadata = request.metadata ?? {}
-  const facts = metadata.actionFacts
-  const authority = metadata.authorityContext
-  const actionFingerprint =
-    facts && typeof facts === "object" && typeof (facts as { fingerprint?: unknown }).fingerprint === "string"
-      ? (facts as { fingerprint: string }).fingerprint
-      : undefined
-  if (!actionFingerprint) return undefined
-  const contextRevision =
-    authority &&
-    typeof authority === "object" &&
-    Number.isSafeInteger((authority as { contextRevision?: unknown }).contextRevision)
-      ? (authority as { contextRevision: number }).contextRevision
-      : undefined
-  return { actionFingerprint, ...(contextRevision === undefined ? {} : { contextRevision }) }
+function smartPermissionRequestFingerprint(request: PermissionRequest) {
+  return JSON.stringify({
+    sessionID: request.sessionID,
+    permission: request.permission,
+    patterns: request.patterns,
+    always: request.always,
+    command: typeof request.metadata.command === "string" ? request.metadata.command : undefined,
+    source: typeof request.metadata.source === "string" ? request.metadata.source : undefined,
+    tool: request.tool,
+  })
 }
 
 export function sessionFollowSyncKind(type: string) {
@@ -511,9 +499,7 @@ export function sessionUserMovedViewport(input: {
   // A sticky/following scrollbox can move its scrollTop while layout is
   // settling after a streamed part changes height. A downward movement can
   // be that layout adjustment, but a negative delta is an unmistakable manual
-  // scroll-up gesture and must detach follow immediately. When sticky follow
-  // has already settled at the new bottom, however, a negative delta can be
-  // caused entirely by a larger viewport or a shorter reflowed child.
+  // scroll-up gesture and must detach follow immediately.
   if (layoutChanged) {
     if (input.followOutput) return scrollDelta < -1 && input.atBottom !== true
     return false
@@ -855,18 +841,8 @@ export function Session() {
     return pendingPermissions()
   })
   const activePermission = createMemo(() => permissions()[0])
-  const questionGroups = createMemo(() =>
-    splitWidgetQuestions(pendingInputSessionIDs().flatMap((sessionID) => sync.data.question[sessionID] ?? [])),
-  )
-  const asyncQuestions = createMemo(() => questionGroups().asynchronous)
-  const [answeringQuestionID, setAnsweringQuestionID] = createSignal<string>()
-  const questions = createMemo(() => [
-    ...questionGroups().blocking,
-    ...asyncQuestions().filter((request) => request.id === answeringQuestionID()),
-  ])
-  createEffect(() => {
-    const id = answeringQuestionID()
-    if (id && !asyncQuestions().some((request) => request.id === id)) setAnsweringQuestionID(undefined)
+  const questions = createMemo(() => {
+    return pendingInputSessionIDs().flatMap((sessionID) => sync.data.question[sessionID] ?? [])
   })
   const planReviews = createMemo(() => {
     return pendingInputSessionIDs().flatMap((sessionID) => sync.data.plan_review[sessionID] ?? [])
@@ -974,7 +950,7 @@ export function Session() {
       .filter((message): message is UserMessage => message.role === "user" && queuedIDs.has(message.id))
       .toSorted(compareSessionMessages)
   })
-  const nextQueuedMessageID = createMemo(() => sessionNextVisibleQueuedMessageID(queuedMessages(), sync.data.part))
+  const nextQueuedMessageID = createMemo(() => queuedMessages()[0]?.id)
   const messageByID = createMemo(() => new Map(messages().map((message) => [message.id, message] as const)))
   const pinnedTurnUserMessageID = createMemo(() =>
     sessionPinnedUserMessageID({
@@ -1366,13 +1342,6 @@ export function Session() {
     }
   }
   const [agentCommands, setAgentCommands] = createSignal<AgentViewCommand[]>([])
-  const [runtimeJobs, setRuntimeJobs] = createSignal<WidgetJob[]>([])
-  const [reasoningState, setReasoningState] = createSignal<WidgetReasoningState>()
-  let reasoningStateRevision = 0
-  let lastReasoningUpdateAt = 0
-  const [runtimeJobBusyID, setRuntimeJobBusyID] = createSignal<string>()
-  let runtimeRefreshTimer: ReturnType<typeof setTimeout> | undefined
-  let runtimeRefreshRevision = 0
   const [agentCommandBusyID, setAgentCommandBusyID] = createSignal<string>()
   let agentCommandRefreshTimer: ReturnType<typeof setTimeout> | undefined
   const editor = useEditorContext()
@@ -1422,48 +1391,6 @@ export function Session() {
     )
   }
 
-  const refreshRuntimeJobs = async (sessionID = route.sessionID) => {
-    if (route.sessionID !== sessionID) return
-    const revision = ++runtimeRefreshRevision
-    const reasoningRevision = reasoningStateRevision
-    const response = await agentCommandJSON<{ records: WidgetJob[]; currentReasoning?: WidgetReasoningState }>(`/continuity/${sessionID}`, {
-      signal: AbortSignal.timeout(15_000),
-    }).catch(() => undefined)
-    if (revision !== runtimeRefreshRevision || route.sessionID !== sessionID || !response) return
-    if (reasoningRevision === reasoningStateRevision) {
-      if (response.currentReasoning) updateReasoningState(response.currentReasoning)
-      else setReasoningState(undefined)
-    }
-    setRuntimeJobs(
-      response.records.filter((record) => record.kind === "job" && record.sessionID === sessionID)
-        .toSorted((a, b) => Number(isWidgetJobActive(b)) - Number(isWidgetJobActive(a)) || b.timeUpdated - a.timeUpdated),
-    )
-  }
-
-  const updateReasoningState = (state: WidgetReasoningState) => {
-    if (state.sessionID !== route.sessionID || state.requestedAt < lastReasoningUpdateAt) return
-    lastReasoningUpdateAt = state.requestedAt
-    reasoningStateRevision++
-    setReasoningState(state)
-  }
-
-  const cancelRuntimeJob = async (id: string) => {
-    if (runtimeJobBusyID()) return
-    const sessionID = route.sessionID
-    setRuntimeJobBusyID(id)
-    try {
-      await agentCommandJSON(`/continuity/${sessionID}/${encodeURIComponent(id)}/cancel`, {
-        method: "POST",
-        signal: AbortSignal.timeout(30_000),
-      })
-      await refreshRuntimeJobs(sessionID)
-    } catch (error) {
-      toast.show({ variant: "error", message: errorMessage(error), duration: 4000 })
-    } finally {
-      setRuntimeJobBusyID(undefined)
-    }
-  }
-
   const refreshAgentCommands = async (sessionID = route.sessionID) => {
     const [incoming, outgoing] = await Promise.all([
       agentCommandJSON<AgentViewCommand[]>(`/session/${sessionID}/agent-command`).catch(() => []),
@@ -1508,21 +1435,13 @@ export function Session() {
       () => route.sessionID,
       (sessionID) => {
         setAgentCommands([])
-        setRuntimeJobs([])
-        setReasoningState(undefined)
-        reasoningStateRevision++
-        lastReasoningUpdateAt = 0
-        setAnsweringQuestionID(undefined)
         void refreshAgentCommands(sessionID).catch(() => undefined)
-        void refreshRuntimeJobs(sessionID).catch(() => undefined)
       },
     ),
   )
 
   onCleanup(() => {
-    runtimeRefreshRevision++
     if (agentCommandRefreshTimer) clearTimeout(agentCommandRefreshTimer)
-    if (runtimeRefreshTimer) clearTimeout(runtimeRefreshTimer)
   })
   const [permissionsConfig, { refetch: refetchPermissionsConfig }] = createResource(
     () => route.sessionID,
@@ -1530,6 +1449,7 @@ export function Session() {
   )
   const [smartPermissionStatus, setSmartPermissionStatus] = createSignal<string | null>(null)
   const autoAcceptedPermissionIDs = new Set<string>()
+  const smartReviewedPermissionIDs = new Set<string>()
   const sessionPermissionModesKey = "session_permission_modes"
   const permissionSessionID = createMemo(() => session()?.parentID ?? route.sessionID)
   let syncedSessionPermissionMode: string | undefined
@@ -1634,31 +1554,6 @@ export function Session() {
     return JSON.stringify(permission, null, 2)
   })
 
-  async function showSmartPermissionHistory() {
-    try {
-      const result = await sdk.client.permission.reviews(
-        { sessionID: route.sessionID, limit: 20, workspace: project.workspace.current() },
-        { throwOnError: true },
-      )
-      const records = result.data?.items ?? []
-      const lines = records.length
-        ? records.map((item) => {
-            const record = item as {
-              status?: unknown
-              source?: unknown
-              summary?: unknown
-              updatedAt?: unknown
-            }
-            const at = typeof record.updatedAt === "number" ? new Date(record.updatedAt).toISOString() : "time n/a"
-            return `${at} · ${String(record.status ?? "unknown")} · ${String(record.source ?? "unknown")} · ${String(record.summary ?? "")}`
-          })
-        : ["No Smart Approval reviews recorded for this session."]
-      await DialogAlert.show(dialog, "Smart Approval history", lines.join("\n"))
-    } catch (error) {
-      toast.show({ message: `Could not load Smart Approval history: ${errorMessage(error)}`, variant: "error", duration: 5000 })
-    }
-  }
-
   async function replyPermissionOnce(request: PermissionRequest) {
     if (autoAcceptedPermissionIDs.has(request.id)) return false
     autoAcceptedPermissionIDs.add(request.id)
@@ -1666,7 +1561,6 @@ export function Session() {
       await sdk.client.permission.reply({
         reply: "once",
         requestID: request.id,
-        smart: smartReplyFor(request),
         workspace: project.workspace.current(),
       })
       return true
@@ -1684,11 +1578,75 @@ export function Session() {
     return accepted
   }
 
+  async function smartReviewPendingPermissions() {
+    let reviewed = 0
+    for (const request of permissions()) {
+      if (smartReviewedPermissionIDs.has(request.id) || smartPermissionReviewLeases.has(request.id)) continue
+      if (!shouldReviewSmartApproval(request)) {
+        setSmartPermissionStatus("Smart needs your approval")
+        continue
+      }
+      smartReviewedPermissionIDs.add(request.id)
+      smartPermissionReviewLeases.add(request.id)
+      const requestFingerprint = smartPermissionRequestFingerprint(request)
+      try {
+        setSmartPermissionStatus(`Smart reviewing ${request.permission}`)
+        const prompt = sessionUserPromptForPermissionRequest({
+          messages: sync.data.message[request.sessionID] ?? [],
+          partsByMessage: sync.data.part,
+          messageID: request.tool?.messageID,
+        })?.input
+        const decision = await reviewPermissionRequestWithModel(request, mend.root, { userPrompt: prompt })
+        if (!decision.triggered || decision.decision === "ask") {
+          setSmartPermissionStatus(`Smart needs approval`)
+          toast.show({
+            message: `Smart Approval needs manual input: ${decision.reason}`,
+            variant: "info",
+            duration: 5000,
+          })
+          continue
+        }
+        const currentRequest = permissions().find((item) => item.id === request.id)
+        if (!currentRequest || smartPermissionRequestFingerprint(currentRequest) !== requestFingerprint) {
+          smartReviewedPermissionIDs.delete(request.id)
+          toast.show({
+            message: "Smart Approval discarded a stale permission request; it will be reviewed again if still pending.",
+            variant: "info",
+            duration: 5000,
+          })
+          continue
+        }
+        reviewed++
+        await sdk.client.permission.reply({
+          reply: decision.decision === "allow" ? "once" : "reject",
+          requestID: request.id,
+          workspace: project.workspace.current(),
+        })
+        toast.show({
+          message: `Smart Approval ${decision.decision === "allow" ? "allowed" : "rejected"} this command: ${decision.reason}`,
+          variant: decision.decision === "allow" ? "success" : "warning",
+          duration: 5000,
+        })
+        setSmartPermissionStatus(`Smart ${decision.decision === "allow" ? "approved" : "rejected"}`)
+        setTimeout(() => {
+          setSmartPermissionStatus((current) => (current?.startsWith("Smart ") ? null : current))
+        }, 5000)
+      } catch (error) {
+        smartReviewedPermissionIDs.delete(request.id)
+        throw error
+      } finally {
+        smartPermissionReviewLeases.delete(request.id)
+      }
+    }
+    return { accepted: 0, reviewed }
+  }
+
   createEffect(
     on(
       () => route.sessionID,
       () => {
         autoAcceptedPermissionIDs.clear()
+        smartReviewedPermissionIDs.clear()
       },
       { defer: true },
     ),
@@ -1723,6 +1681,17 @@ export function Session() {
   createEffect(() => {
     if (permissionModeSetting() !== "full_access") return
     void autoAcceptPendingPermissions().catch((error) => {
+      toast.show({
+        message: errorMessage(error),
+        variant: "error",
+        duration: 5000,
+      })
+    })
+  })
+
+  createEffect(() => {
+    if (permissionModeSetting() !== "smart") return
+    void smartReviewPendingPermissions().catch((error) => {
       toast.show({
         message: errorMessage(error),
         variant: "error",
@@ -1829,9 +1798,18 @@ export function Session() {
 
           if (option.value === "smart") {
             void setPermissionModeForSession("smart")
-              .then(() => {
+              .then(() => smartReviewPendingPermissions())
+              .then(({ accepted, reviewed }) => {
+                const summary = [
+                  accepted ? `auto-approved ${accepted} permission${accepted === 1 ? "" : "s"}` : "",
+                  reviewed ? `reviewed ${reviewed} permission${reviewed === 1 ? "" : "s"}` : "",
+                ]
+                  .filter(Boolean)
+                  .join("; ")
                 toast.show({
-                  message: "Smart Approval enabled for this session.",
+                  message: summary
+                    ? `Smart Approval enabled for this session; ${summary}.`
+                    : "Smart Approval enabled for this session.",
                   variant: "success",
                   duration: 4000,
                 })
@@ -1918,11 +1896,6 @@ export function Session() {
                 }}
               />
             ))
-            return
-          }
-
-          if (option.value === "details") {
-            void showSmartPermissionHistory()
             return
           }
 
@@ -2138,24 +2111,6 @@ export function Session() {
       })
     if (agentCommandTouchesCurrentSession) scheduleAgentCommandRefresh()
     const evtSessionID = eventSessionID(evt)
-    if (evtType === "session.reasoning.updated" && evtSessionID === route.sessionID) {
-      updateReasoningState(evt.properties as unknown as WidgetReasoningState)
-    }
-    if (evtType === "session.reasoning.cleared" && evtSessionID === route.sessionID) {
-      const cleared = evt.properties as unknown as { requestedAt: number }
-      if (cleared.requestedAt >= lastReasoningUpdateAt) {
-        lastReasoningUpdateAt = cleared.requestedAt
-        reasoningStateRevision++
-        setReasoningState(undefined)
-      }
-    }
-    if (evtType === "continuity.updated" && evtSessionID === route.sessionID) {
-      if (runtimeRefreshTimer) clearTimeout(runtimeRefreshTimer)
-      runtimeRefreshTimer = setTimeout(() => {
-        runtimeRefreshTimer = undefined
-        void refreshRuntimeJobs().catch(() => undefined)
-      }, 50)
-    }
     if (evtSessionID !== route.sessionID && !agentCommandTouchesCurrentSession) return
     lastSessionEventAt = Date.now()
     if (evt.type === "message.part.updated") {
@@ -2587,7 +2542,6 @@ export function Session() {
       viewportHeight,
       lastViewportHeight: lastObservedViewportHeight,
       followOutput: followSessionOutput(),
-      atBottom,
     })
     const contentHeightChanged = Math.abs(scrollHeight - lastObservedScrollHeight) > 1
     const viewportHeightChanged = Math.abs(viewportHeight - lastObservedViewportHeight) > 1
@@ -3653,7 +3607,6 @@ export function Session() {
   const command = useCommandDialog()
 
   function toggleSessionWidgets(dialog?: ReturnType<typeof useDialog>) {
-    if (!showSessionWidgets()) void refreshRuntimeJobs().catch(() => undefined)
     setShowSessionWidgets((visible) => {
       const next = !visible
       setFocusSessionWidgets(next)
@@ -4809,11 +4762,6 @@ export function Session() {
                   todos={todos()}
                   subagents={subagents()}
                   commands={agentCommands()}
-                  questions={asyncQuestions()}
-                  jobs={runtimeJobs()}
-                  jobBusyID={runtimeJobBusyID()}
-                  onCancelJob={(id) => void cancelRuntimeJob(id)}
-                  onAnswerQuestion={setAnsweringQuestionID}
                   commandBusyID={agentCommandBusyID()}
                   width={contentWidth()}
                   sessionID={route.sessionID}
@@ -4839,11 +4787,6 @@ export function Session() {
                     permission: permissionModeLabel(),
                   }}
                 />
-              </Show>
-              <Show when={(asyncQuestions().length > 0 || runtimeJobs().some(isWidgetJobActive)) && !showSessionBottomDock() && !answeringQuestionID()}>
-                <text fg={theme.textMuted} wrapMode="none" onMouseUp={() => toggleSessionWidgets()}>
-                  {asyncQuestions().length} pending questions · {runtimeJobs().filter(isWidgetJobActive).length} active tools · {keybind.print("todo_toggle")} widgets
-                </text>
               </Show>
               <For each={listMendWidgets("aboveEditor")}>{(item) => <RenderMendWidget item={item} />}</For>
               {/* Do not keep the hidden prompt subtree mounted while a question/permission owns input. */}
@@ -5461,11 +5404,6 @@ function SessionBottomDock(props: {
   todos: SessionTodo[]
   subagents: SessionSubagentInfo[]
   commands: readonly AgentViewCommand[]
-  questions: readonly AsyncQuestionRequest[]
-  jobs: readonly WidgetJob[]
-  jobBusyID?: string
-  onCancelJob: (id: string) => void
-  onAnswerQuestion: (id: string) => void
   commandBusyID?: string
   width: number
   sessionID: string
@@ -5482,8 +5420,6 @@ function SessionBottomDock(props: {
   const commandWidth = createMemo(() =>
     props.commands.length > 0 ? Math.max(42, Math.min(72, Math.floor(props.width * 0.55))) : 0,
   )
-  const questionsWidth = createMemo(() => props.questions.length > 0 ? Math.max(42, Math.min(64, props.width)) : 0)
-  const jobsWidth = createMemo(() => props.jobs.length > 0 ? 42 : 0)
   const builtinDockWidgetIDs = ["todo", "notes", "subagents", "info"]
   const profileControlsBuiltins = createMemo(() => {
     const widgets = mend.profile.widgets
@@ -5516,8 +5452,6 @@ function SessionBottomDock(props: {
       dockWidth: layout().dockWidth,
       widgetWidths: [
         commandWidth(),
-        questionsWidth(),
-        jobsWidth(),
         layout().todoWidth,
         layout().showNotes ? layout().notesWidth : 0,
         layout().showSubagents ? layout().subagentsWidth : 0,
@@ -5526,15 +5460,35 @@ function SessionBottomDock(props: {
       ],
     }),
   )
+  const trayOverflow = createMemo(() => trayContentWidth() > layout().dockWidth)
+  const trayHeight = createMemo(() => layout().dockHeight + (trayOverflow() ? 1 : 0))
+  let tray: ScrollBoxRenderable | undefined
+
+  onMount(() => {
+    if (!props.autoFocus) return
+    tray?.focus()
+    props.onAutoFocus?.()
+  })
+
   return (
     <box flexShrink={0} width="100%" paddingBottom={1}>
-      <SessionWidgetTray
+      <scrollbox
+        ref={(value: ScrollBoxRenderable) => {
+          tray = value
+        }}
         width={layout().dockWidth}
-        contentWidth={trayContentWidth()}
-        height={layout().dockHeight}
-        autoFocus={props.autoFocus}
-        onAutoFocus={props.onAutoFocus}
-        theme={theme}
+        height={trayHeight()}
+        scrollX
+        scrollY={false}
+        contentOptions={{ width: trayContentWidth(), minWidth: trayContentWidth() }}
+        horizontalScrollbarOptions={{
+          visible: trayOverflow(),
+          trackOptions: {
+            backgroundColor: theme.backgroundElement,
+            foregroundColor: theme.border,
+          },
+        }}
+        verticalScrollbarOptions={{ visible: false }}
       >
         <box
           width={trayContentWidth()}
@@ -5545,15 +5499,6 @@ function SessionBottomDock(props: {
           alignItems="stretch"
           overflow="visible"
         >
-          <Show when={props.questions.length > 0}>
-            <SessionQuestionsWidget
-              questions={props.questions}
-              width={questionsWidth()}
-              height={layout().dockHeight}
-              theme={theme}
-              onAnswer={props.onAnswerQuestion}
-            />
-          </Show>
           <Show when={props.commands.length > 0}>
             <box
               width={commandWidth()}
@@ -5569,17 +5514,12 @@ function SessionBottomDock(props: {
                 commands={props.commands}
                 sessionID={props.sessionID}
                 width={Math.max(1, commandWidth() - 2)}
-                height={layout().dockHeight}
                 busyID={props.commandBusyID}
                 theme={theme}
                 onUpdate={props.onUpdateCommand}
                 onOpenSession={props.onOpenSession}
               />
             </box>
-          </Show>
-          <Show when={props.jobs.length > 0}>
-            <SessionJobsWidget jobs={props.jobs} width={jobsWidth()} height={layout().dockHeight} theme={theme}
-              busyID={props.jobBusyID} onCancel={props.onCancelJob} />
           </Show>
           <SessionTodoPanel todos={props.todos} width={layout().todoWidth} height={layout().dockHeight} />
           <Show when={layout().showNotes}>
@@ -5612,7 +5552,7 @@ function SessionBottomDock(props: {
             )}
           </For>
         </box>
-      </SessionWidgetTray>
+      </scrollbox>
     </box>
   )
 }
@@ -5954,6 +5894,8 @@ const MIME_BADGE: Record<string, string> = {
 
 function CompactionCard(props: {
   part: Extract<Part, { type: "compaction" }>
+  terminal?: boolean
+  failure?: "interrupted" | "failed"
   summaryPreview?: string
   transcriptPreview?: string
   editableScratchpad?: boolean
@@ -5980,6 +5922,8 @@ function CompactionCard(props: {
   return (
     <CompactionPanel
       reason={props.part.auto ? "auto" : "manual"}
+      terminal={props.terminal}
+      failure={props.failure}
       overflow={props.part.overflow}
       resume={props.part.resume}
       postPrompt={props.part.post_prompt}
@@ -6226,15 +6170,22 @@ function UserMessage(props: {
   )
   const showCompactionCard = createMemo(() => props.message.id === latestCompactionMessageID())
   const visibleCompaction = createMemo(() => (showCompactionCard() ? compaction() : undefined))
-  const summaryAssistant = createMemo(() =>
-    (sync.data.message[props.message.sessionID] ?? []).find(
+  const summaryLifecycle = createMemo(() =>
+    (sync.data.message[props.message.sessionID] ?? []).findLast(
       (message): message is AssistantMessage =>
         message.role === "assistant" &&
         message.summary === true &&
-        message.parentID === props.message.id &&
-        !message.error,
+        message.parentID === props.message.id,
     ),
   )
+  const summaryAssistant = createMemo(() => {
+    const message = summaryLifecycle()
+    return message?.error ? undefined : message
+  })
+  const compactionTerminal = createMemo(() => {
+    const message = summaryLifecycle()
+    return Boolean(message && (message.time.completed !== undefined || message.error))
+  })
   const summaryOutputText = createMemo(() => {
     const summary = summaryAssistant()
     if (!summary) return
@@ -6460,6 +6411,8 @@ function UserMessage(props: {
         {(part) => (
           <CompactionCard
             part={part()}
+            terminal={compactionTerminal()}
+            failure={summaryLifecycle()?.error ? (summaryLifecycle()?.error?.name === "MessageAbortedError" ? "interrupted" : "failed") : undefined}
             summaryPreview={summaryPreview()}
             transcriptPreview={transcriptPreview()}
             editableScratchpad={!summaryAssistant()}
