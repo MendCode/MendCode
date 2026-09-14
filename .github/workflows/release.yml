@@ -46,7 +46,7 @@ concurrency:
 jobs:
   build-release:
     name: Build Linux and Windows baseline release assets
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 60
     permissions:
       attestations: write
@@ -180,7 +180,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: windows-latest
+          - runner: blacksmith-4vcpu-windows-2025
             arch: x64
             build_args: --single
             expected_executables: 1
@@ -277,7 +277,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: macos-14
+          - runner: blacksmith-6vcpu-macos-15
             arch: arm64
           - runner: macos-15-intel
             arch: x64
@@ -349,7 +349,7 @@ jobs:
     name: Assemble and attest release assets
     if: ${{ always() && needs.build-release.result == 'success' && needs.build-windows.result == 'success' && needs.build-darwin.result == 'success' }}
     needs: [build-release, build-windows, build-darwin]
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
       attestations: write
       contents: read
@@ -440,7 +440,7 @@ jobs:
     name: Create draft GitHub Release
     if: ${{ inputs.dry_run == false }}
     needs: assemble-release
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 10
     environment: release
     permissions:
