@@ -71,4 +71,4 @@ jobs:
             test/server/usage.test.ts test/server/release-channel.test.ts test/server/upgrade-progress.test.ts; do
             run_test "$test_file"
           done
-          run_test test/session/prompt.test.ts --test-name-pattern "continuity wakes the existing executor"
+          run_test test/session/prompt.test.ts --test-name-pattern "wakes an async parent by default for a background task"

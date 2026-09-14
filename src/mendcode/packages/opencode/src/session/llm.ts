@@ -35,6 +35,14 @@ import { EffectBridge } from "@/effect/bridge"
 import * as Option from "effect/Option"
 import * as OtelTracer from "@effect/opentelemetry/Tracer"
 import { isAstraModel, normalizeAstraOptions } from "@/mend/prompt/model-family"
+import { autoReasoningSignal, selectAutoReasoning } from "@/mend/prompt/reasoning-auto"
+import {
+  ReasoningRequested,
+  ReasoningCleared,
+  recordReasoningState,
+  clearReasoningState,
+  requestedReasoningEffort,
+} from "@/mend/prompt/reasoning-state"
 import { promptRuntimeContextText } from "@/mend/prompt/compose"
 import { discoveryWireMiddleware } from "./tool-discovery"
 import {
@@ -46,6 +54,7 @@ import {
   resolveCacheRequestPolicy,
 } from "@/provider/cache-policy"
 import { cacheKeyForFingerprint, stableProviderSessionID } from "./cache-lineage"
+import { profileContext, type ContextProfile } from "./context-profile"
 
 const log = Log.create({ service: "llm" })
 export const OUTPUT_TOKEN_MAX = ProviderTransform.OUTPUT_TOKEN_MAX
@@ -333,10 +342,22 @@ const live: Layer.Layer<
         system.push(header, rest.join("\n"))
       }
 
+      const autoReasoning = selectAutoReasoning({
+        enabled: !input.small && cfg.experimental?.reasoning_auto === true,
+        manual: input.user.model.variant,
+        variants: input.model.variants,
+        signal: autoReasoningSignal(input.messages),
+      })
+      if (autoReasoning)
+        l.info("reasoning.auto", {
+          effort: autoReasoning.effort,
+          reason: autoReasoning.reason,
+          messageID: input.user.id,
+        })
       const variant =
         !input.small && input.model.variants && input.user.model.variant
           ? input.model.variants[input.user.model.variant]
-          : {}
+          : autoReasoning?.options ?? {}
       const base = input.small
         ? ProviderTransform.smallOptions(input.model)
         : ProviderTransform.options({
@@ -399,6 +420,9 @@ const live: Layer.Layer<
         params.topP = undefined
         params.topK = undefined
         params.options = normalizeAstraOptions(input.model.api.id, params.options)
+        // This SDK's static model catalog predates Astra; its supported override
+        // retains reasoning parameters without substituting a different model ID.
+        if (input.model.api.npm === "@ai-sdk/openai") params.options.forceReasoning = true
       }
 
       const { headers } = yield* plugin.trigger(
@@ -609,7 +633,34 @@ const live: Layer.Layer<
         ? (yield* InstanceState.context).project.id
         : undefined
 
-      return streamText({
+      const requestedEffort = requestedReasoningEffort(params.options)
+      if (!input.small && requestedEffort && (autoReasoning || input.user.model.variant)) {
+        const state = {
+          sessionID: input.sessionID,
+          messageID: input.user.id,
+          mode: autoReasoning ? ("auto" as const) : ("manual" as const),
+          effort: requestedEffort,
+          reason: autoReasoning?.reason ?? "manual_selection",
+          modelID: input.model.api.id,
+          providerID: input.model.providerID,
+          requestedAt: Date.now(),
+        }
+        recordReasoningState(state)
+        yield* Effect.promise(() => Bus.publish(ReasoningRequested, state))
+      } else if (!input.small) {
+        clearReasoningState(input.sessionID)
+        yield* Effect.promise(() =>
+          Bus.publish(ReasoningCleared, {
+            sessionID: input.sessionID,
+            messageID: input.user.id,
+            requestedAt: Date.now(),
+          }),
+        )
+      }
+      let contextProfile: ContextProfile | undefined
+      let dispatchedAt = performance.now()
+      let firstTokenMs: number | null = null
+      const result = streamText({
         onError(error) {
           l.error("stream error", {
             error,
@@ -678,6 +729,12 @@ const live: Layer.Layer<
                 if (args.type === "stream") {
                   // @ts-expect-error
                   args.params.prompt = ProviderTransform.message(args.params.prompt, input.model, options, cachePolicy)
+                  contextProfile = profileContext({
+                    prompt: args.params.prompt,
+                    tools: args.params.tools,
+                    instructions: isOpenaiOauth ? params.options.instructions : undefined,
+                  })
+                  dispatchedAt = performance.now()
                 }
                 return args.params
               },
@@ -695,6 +752,41 @@ const live: Layer.Layer<
           },
         },
       })
+      return {
+        result,
+        profile(event: Event): Event {
+          if (
+            firstTokenMs === null &&
+            ["text-delta", "reasoning-delta", "tool-input-delta"].includes(event.type)
+          ) {
+            firstTokenMs = Math.max(0, Math.round(performance.now() - dispatchedAt))
+          }
+          if (event.type !== "finish-step" || !contextProfile) return event
+          return {
+            ...event,
+            providerMetadata: {
+              ...event.providerMetadata,
+              mendcode: {
+                contextProfile: {
+                  ...contextProfile,
+                  durationMs: Math.max(0, Math.round(performance.now() - dispatchedAt)),
+                  firstTokenMs,
+                  usageReported: {
+                    input: Number.isFinite(event.usage.inputTokens),
+                    cacheRead: Number.isFinite(
+                      event.usage.inputTokenDetails?.cacheReadTokens ?? event.usage.cachedInputTokens,
+                    ),
+                    cacheWrite: Number.isFinite(
+                      event.usage.inputTokenDetails?.cacheWriteTokens ??
+                        event.providerMetadata?.anthropic?.cacheCreationInputTokens,
+                    ),
+                  },
+                },
+              },
+            },
+          }
+        },
+      }
     })
 
     const stream: Interface["stream"] = (input) =>
@@ -719,9 +811,9 @@ const live: Layer.Layer<
             const result = yield* run({ ...input, abort: scoped.ctrl.signal })
 
             const normalize = createStreamEventNormalizer()
-            return Stream.fromAsyncIterable(result.fullStream, (e) =>
+            return Stream.fromAsyncIterable(result.result.fullStream, (e) =>
               e instanceof Error ? e : new Error(String(e)),
-            ).pipe(Stream.map(normalize))
+            ).pipe(Stream.map((event) => result.profile(normalize(event))))
           }),
         ),
       )
