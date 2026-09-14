@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.1.44-beta.14 - 2026-09-14
+
+### Added
+
+- Run automatic memory learning through a persisted, bounded background worker so
+  completed chat turns no longer wait for the memory provider; expose extraction
+  outcomes, Dream maintenance, write policy, and Markdown sharing controls.
+- Add recoverable memory maintenance and revision-aware Markdown import/export
+  with explicit opt-in scopes, validation, and visible conflicts.
+
+### Changed
+
+- Keep GPT-6 Astra compatible with the current Codex Responses Lite protocol and
+  surface normalized multi-provider cache-hit usage to prompt status integrations.
+- Make the Minimal prompt preset truly compact and retain the final Arcade/Snake
+  board after compaction without leaving timers or input focus active.
+
+### Fixed
+
+- Preserve queued prompt delivery and terminal cancellation while compaction,
+  background extraction, reconnect recovery, or long-running shell work settles.
+- Keep provider startup usable when metadata loading fails or a valid catalog is
+  empty, and report configuration errors without trapping Home in startup state.
+- Carry forward database compatibility checks and Blacksmith-backed security and
+  startup regression workflows from the latest public branch.
+
+### Tests
+
+- Add focused regressions for memory workers, Dream and Markdown sharing, provider
+  startup, Astra OAuth compatibility, cache reporting, compact prompt layout,
+  final compaction rendering, queue delivery, and repeated cancellation.
+
 ## 0.1.44-beta.7 - 2026-09-10
 
 ### Added
