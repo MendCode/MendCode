@@ -1,7 +1,15 @@
 import { describe, expect, test } from "bun:test"
-import { sessionBottomDockLayout, sessionTodoPanelWidth } from "./session-bottom-dock"
+import { sessionBottomDockLayout, sessionTodoPanelWidth, sessionWidgetTrayContentWidth } from "./session-bottom-dock"
 
 describe("session bottom dock layout", () => {
+  test("keeps the tray viewport width when widgets fit", () => {
+    expect(sessionWidgetTrayContentWidth({ dockWidth: 100, widgetWidths: [28, 32] })).toBe(100)
+  })
+
+  test("keeps every stacked widget reachable when the tray overflows", () => {
+    expect(sessionWidgetTrayContentWidth({ dockWidth: 60, widgetWidths: [42, 28, 32] })).toBe(104)
+  })
+
   test("keeps room for notes beside todos when the dock has side space", () => {
     const layout = sessionBottomDockLayout({
       width: 120,

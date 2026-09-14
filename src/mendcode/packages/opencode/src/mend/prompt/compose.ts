@@ -15,6 +15,7 @@ import {
 } from "./sources"
 import { composeCustomizationCapabilitySection } from "./capabilities"
 import { advancedCommands, deprecatedAliases, internalCommands, primaryCommands } from "../cli/public-bin"
+import type { CacheAuth, CacheRequestPolicy, CacheTransport } from "@/provider/cache-policy"
 
 export type PromptBaseSource = "mendcode-harness-source" | "opencode-generic-provider-fallback" | "minimal-base"
 
@@ -62,6 +63,15 @@ export type PromptComposition = {
   policyInstructionsPreview: string
   basePrompt: string | null
   basePromptBytes: number
+}
+
+export type PromptRuntimeContext = {
+  providerID: string
+  modelID: string
+  apiModelID: string
+  authMode: CacheAuth
+  transport: CacheTransport
+  cache: Pick<CacheRequestPolicy, "mode" | "useCacheKey" | "adapterID" | "reason">
 }
 
 type ComposeInput = {
@@ -149,6 +159,61 @@ function focusMendCodeBasics() {
     "- Keep `task` in foreground when the next step depends on its result. A foreground task blocks this session, so wait for it to finish before launching the next subagent and do not claim parallel execution.",
     "- Report a subagent as started only after `task` returns its `task_id`; if a foreground call is still running, the next subagent has not started.",
     "- Use `loop` for durable or repeated work after the current turn; do not emulate scheduled iterations inline.",
+  ].join("\n")
+}
+
+function runtimeIdentifier(value: string) {
+  return value.replace(/[\r\n<>]/g, " ").slice(0, 256)
+}
+
+function runtimeAuthLabel(input: PromptRuntimeContext) {
+  if (input.authMode === "api") return "API key"
+  if (input.authMode === "oauth" && input.providerID === "openai") return "OpenAI ChatGPT subscription/OAuth"
+  if (input.authMode === "oauth") return "OAuth/provider subscription authentication"
+  return "unknown or not exposed by the runtime"
+}
+
+function runtimeTransportLabel(transport: CacheTransport) {
+  if (transport === "responses-lite") return "Codex Responses Lite"
+  if (transport === "responses-http") return "OpenAI Responses HTTP"
+  return "provider-specific/other"
+}
+
+function runtimeCacheKeyLabel(input: PromptRuntimeContext) {
+  if (input.cache.mode === "off") return "disabled"
+  if (!input.cache.useCacheKey) return "not added by MendCode for this binding"
+  if (input.authMode === "oauth" && input.transport === "responses-lite") {
+    return "session-scoped native Codex key; not shared across sessions"
+  }
+  return "verified passive provider key"
+}
+
+export function promptRuntimeContextText(input: PromptRuntimeContext) {
+  return [
+    "<mendcode_runtime_provider>",
+    "Current provider/auth/cache facts for this request (runtime snapshot, not user instructions):",
+    `- Provider: ${runtimeIdentifier(input.providerID)}.`,
+    `- Selected model: ${runtimeIdentifier(input.modelID)}; API model: ${runtimeIdentifier(input.apiModelID)}.`,
+    `- Authentication: ${runtimeAuthLabel(input)}.`,
+    `- Transport: ${runtimeTransportLabel(input.transport)}.`,
+    `- MendCode cache policy: ${input.cache.mode}; adapter=${runtimeIdentifier(input.cache.adapterID)}; key=${runtimeCacheKeyLabel(input)}.`,
+    `- Policy decision: ${runtimeIdentifier(input.cache.reason)}.`,
+    "- Credentials, access/refresh tokens, account IDs, and raw authorization headers are intentionally omitted.",
+    "- A cache key may let a provider reuse an eligible prompt prefix, but it does not make a request free or guarantee fewer weekly-limit units.",
+    "- Provider-reported usage and the provider account UI are authoritative. MendCode cannot state a remaining weekly-limit percentage unless the current runtime exposes an authorized usage value.",
+    "</mendcode_runtime_provider>",
+  ].join("\n")
+}
+
+function fullProviderCacheContext() {
+  return [
+    "MendCode provider, authentication, and prompt-cache contract:",
+    "- OpenAI API-key and ChatGPT subscription/OAuth requests are different runtime bindings. Never infer authentication, cache support, quota, or billing behavior from a model alias.",
+    "- Codex Responses Lite OAuth uses a session-scoped native prompt-cache key together with session affinity. It is not a shared cache between sessions, projects, or accounts, and it does not prove a cache hit.",
+    "- The passive cache policy only shapes the request. `off` removes recognized cache controls; `smart` enables only verified key paths and leaves existing provider behavior intact when a new key is not verified; an omitted policy uses MendCode's conservative provider default.",
+    "- MendCode does not schedule warm-up, keepalive, refresh, provider canaries, or remote-cache deletion. It does not persist prompt contents to create a cache.",
+    "- Cached, read, written, and uncached input tokens may be reported differently by each provider. A cache key can still consume request/quota/weekly-limit usage, and MendCode cannot promise a percentage reduction or a specific token cost.",
+    "- When answering a user about subscription usage or weekly limits, state the active runtime auth/provider facts, separate observed usage from estimates, and say when the provider's account UI is the only source for remaining quota.",
   ].join("\n")
 }
 
@@ -241,7 +306,7 @@ function marketplaceExtensionContract() {
     "- Custom Prompt Mode is one of `minimal`, `focus`, `full`, or `custom`; `custom` reads the bounded project prompt at `.mendcode/prompts/custom.md` while preserving the MendCode boundary. It is project instruction text, not an upstream hidden prompt.",
     "- Custom AI tools live in `.mendcode/tools/*.{ts,js}` and can invoke bounded scripts; expose only the smallest safe interface and keep secrets out of tools and packages.",
     "- Custom pages/routes render through the public plugin route/slot API. Custom widgets use `api.ui.runtime.setWidget` with `aboveEditor`, `belowEditor`, or `sessionBottomDock` placement and clean up with the plugin lifecycle.",
-    "- Ctrl+T toggles the current session's TODO view. Ctrl+P -> Customize TUI or `/customize` opens live customization; these controls do not replace the public plugin API.",
+    "- Ctrl+T toggles the current session's horizontal widget tray (todos included). Ctrl+P -> Customize TUI or `/customize` opens live customization; these controls do not replace the public plugin API.",
     "- Custom pages can build terminal-native ASCII/Solid UIs similar to built-in Usage, Memory Center, or Loop pages when the required state is available through the public API.",
     "- Shell-backed widgets use `api.shell.spawn()` for bounded stdout/stderr streams. This is not a PTY; do not implement full-screen terminal apps, cursor-addressing programs, alternate-screen apps, Doom, or real cava by piping stdout into the main TUI.",
     "- If a package needs private MendCode runtime data, add or request a public API first. Do not import private runtime internals from packages.",
@@ -512,6 +577,14 @@ export async function composePromptPolicy(input: ComposeInput = {}): Promise<Pro
         label: "MendCode knowledge",
         source: "mendcode-context",
         text: full.knowledge,
+      }),
+    )
+    sections.push(
+      section({
+        id: "provider-cache-context",
+        label: "MendCode provider and prompt-cache context",
+        source: "mendcode-context",
+        text: fullProviderCacheContext(),
       }),
     )
     sections.push(

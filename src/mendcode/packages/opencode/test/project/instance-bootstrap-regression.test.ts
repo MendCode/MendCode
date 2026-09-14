@@ -11,6 +11,7 @@ import { InstanceMiddleware } from "../../src/server/routes/instance/middleware"
 import { disposeAllInstances, tmpdir } from "../fixture/fixture"
 import { isGlobalDreamBackgroundServiceRunning, stopGlobalDreamBackgroundService } from "../../src/mend/memory/dream-scheduler"
 import { writeGlobalMemoryConfig } from "../../src/mend/memory/config"
+import { MemoryExtractionQueue } from "../../src/mend/memory/extraction-queue"
 
 // These regressions cover the legacy instance-loading paths fixed by PRs
 // #25389 and #25449. The plugin config hook writes a marker file, and the test
@@ -78,6 +79,27 @@ test("InstanceBootstrap starts global Dream background service", async () => {
   expect(first).toBe(true)
   expect(second).toBe(true)
   expect(isGlobalDreamBackgroundServiceRunning()).toBe(true)
+})
+
+test("CLI bootstrap recovers persisted memory jobs without a new chat", async () => {
+  await using tmp = await bootstrapFixture()
+  await writeGlobalMemoryConfig({ enabled: false }, tmp.path)
+  const queue = new MemoryExtractionQueue()
+  await queue.enqueue({
+    projectRoot: tmp.path, cwd: tmp.path, sessionID: "bootstrap-fixture",
+    turnID: "bootstrap-turn", messageID: "bootstrap-message", text: "stored turn", evidence: "local fixture",
+  })
+  await cliBootstrap(tmp.path, async () => {
+    for (let attempt = 0; attempt < 100; attempt++) {
+      const [job] = await queue.list(tmp.path)
+      if (job?.state === "skipped") {
+        expect(job.reason).toBe("memory output disabled")
+        return
+      }
+      await Bun.sleep(10)
+    }
+    throw new Error("bootstrap did not recover the persisted job")
+  })
 })
 
 test("CLI bootstrap runs InstanceBootstrap before callback", async () => {

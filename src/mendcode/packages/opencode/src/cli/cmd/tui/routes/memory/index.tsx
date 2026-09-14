@@ -1,13 +1,13 @@
-import { createEffect, createMemo, createResource, createSignal, For, Match, onCleanup, onMount, Show, Switch } from "solid-js"
+import { createEffect, createMemo, createResource, createSignal, For, Match, onCleanup, onMount, Show, Switch, type Signal } from "solid-js"
 import { BoxRenderable, MouseButton, MouseEvent } from "@opentui/core"
 import { useKeyboard, useTerminalDimensions } from "@opentui/solid"
 import { asciiGraphNearestNode, asciiGraphRuns, layoutAsciiGraph, renderAsciiGraph, type AsciiGraphCell } from "@mendcode/plugin/tui"
 import { memoryGraphOverview, memoryOverview } from "@/mend/memory/overview"
 import { applyMemoryProposal, rejectMemoryProposal, updateMemoryProposal, type MemoryProposal } from "@/mend/memory/proposals"
-import { deleteMemoryEntry, readMemoryEntries, updateMemoryEntry, type MemoryEntry } from "@/mend/memory/store"
+import { deleteMemoryEntry, readArchivedMemoryEntries, readMemoryEntries, restoreArchivedMemoryEntries, updateMemoryEntry, type MemoryEntry } from "@/mend/memory/store"
 import { registerMemoryWorkspace, type MemoryWorkspace } from "@/mend/memory/workspaces"
 import { resetMemoryCategoryPolicy, writeMemoryCategoryPolicy, type MemoryCategoryPolicy, type MemoryPolicyScope, type MemoryWritePolicy } from "@/mend/memory/categories"
-import { applyDreamGraphProposal, rejectDreamGraphProposal } from "@/mend/memory/dream"
+import { applyDreamGraphProposal, rejectDreamGraphProposal, runMemoryDream } from "@/mend/memory/dream"
 import { readDreamScheduleState, type DreamScheduleState, type DreamScheduleWindow } from "@/mend/memory/dream-scheduler"
 import { Locale } from "@/util/locale"
 import { useProject } from "@tui/context/project"
@@ -22,12 +22,13 @@ import { DialogPrompt } from "@tui/ui/dialog-prompt"
 import { DialogSelect } from "@tui/ui/dialog-select"
 import { useDialog } from "@tui/ui/dialog"
 import { useToast } from "@tui/ui/toast"
+import { configureMemorySharing, exportSharedMemories, importSharedMemories, memorySharingStatus } from "@/mend/memory/sharing"
 
 type MemoryOverview = Awaited<ReturnType<typeof memoryOverview>>
 type MemoryGraphOverview = Awaited<ReturnType<typeof memoryGraphOverview>>
 type MemoryGraphFactView = MemoryOverview["facts"][number]
 type DreamRunDetailView = MemoryOverview["dreamRunDetails"][number]
-type MemoryTab = "memories" | "graph" | "dream" | "rules"
+type MemoryTab = "memories" | "graph" | "dream" | "rules" | "sharing"
 type MemoryScopeFilter = "current" | "global" | "all"
 type MemoryListEntry = {
   entry: MemoryEntry
@@ -45,8 +46,66 @@ const TABS: Array<{ id: MemoryTab; label: string; compactLabel: string }> = [
   { id: "memories", label: "Memories", compactLabel: "Memories" },
   { id: "graph", label: "Graph", compactLabel: "Graph" },
   { id: "dream", label: "Dream", compactLabel: "Dream" },
-  { id: "rules", label: "Rules", compactLabel: "Rules" },
+  { id: "rules", label: "Memory policies", compactLabel: "Policies" },
+  { id: "sharing", label: "Sharing", compactLabel: "Sharing" },
 ]
+
+type MemorySharingState = {
+  scope: Signal<"project" | "global">
+  busy: Signal<boolean>
+  result: Signal<string>
+}
+
+function MemorySharingPanel(props: { root: string; state: MemorySharingState; onImported: () => Promise<void> }) {
+  const { theme } = useTheme()
+  const dialog = useDialog()
+  const [scope, setScope] = props.state.scope
+  const [busy, setBusy] = props.state.busy
+  const [result, setResult] = props.state.result
+  const [status, { refetch }] = createResource(() => ({ root: props.root, scope: scope() }), (value) => memorySharingStatus(value.scope, value.root))
+  async function act(action: "enable" | "disable" | "export" | "import") {
+    if (busy()) return
+    const root = props.root
+    const selectedScope = scope()
+    setBusy(true)
+    try {
+      if (action === "enable") {
+        const expected = `ENABLE ${selectedScope.toUpperCase()}`
+        const approval = await DialogPrompt.show(dialog, "Enable Markdown sharing", { placeholder: `Type ${expected}. Other local tools can read exported low-sensitivity memories.` })
+        dialog.clear()
+        if (approval !== expected) return
+      }
+      const outcome = action === "export" ? await exportSharedMemories(selectedScope, root)
+        : action === "import" ? await importSharedMemories(selectedScope, root)
+          : await configureMemorySharing(selectedScope, action === "enable", root)
+      setResult(JSON.stringify(outcome, null, 2))
+      await refetch()
+      if (action === "import") await props.onImported()
+    } catch (error) {
+      setResult(`Sharing failed: ${error instanceof Error ? error.message : String(error)}`)
+    } finally {
+      setBusy(false)
+    }
+  }
+  useKeyboard((event) => {
+    if (dialog.stack.length || event.defaultPrevented || busy()) return
+    if (event.name === "s") { event.preventDefault(); setScope(scope() === "project" ? "global" : "project"); return }
+    const action = ({ e: "enable", d: "disable", o: "export", i: "import" } as const)[event.name as "e" | "d" | "o" | "i"]
+    if (action) { event.preventDefault(); void act(action) }
+  })
+  return <Panel title="Editable Markdown sharing" grow>
+    <scrollbox flexGrow={1} minHeight={0}>
+    <box flexDirection="column" gap={1} flexShrink={0}>
+      <text fg={theme.text}>Scope: {scope()} · {status.loading ? "Loading…" : status.error ? "Status unavailable" : status()?.enabled ? "Enabled" : "Disabled"}</text>
+      <text fg={theme.textMuted}>{status.error ? "" : status()?.directory ?? ""}</text>
+      <text fg={theme.textMuted}>Internal memory remains authoritative. Import creates manual-review proposals. Conflicts never overwrite internal memory; deleting Markdown never deletes it either.</text>
+      <text fg={theme.primary}>s scope · e enable · d disable · o export · i import</text>
+      <text fg={theme.textMuted}>Exported files remain on disk when sharing is disabled. Review imported proposals in Memories.</text>
+      <text fg={theme.text}>{busy() ? "Working…" : status.error ? String(status.error) : result()}</text>
+    </box>
+    </scrollbox>
+  </Panel>
+}
 
 const WRITE_POLICIES: MemoryWritePolicy[] = ["disabled", "pending", "auto-apply-safe", "manual-only"]
 const ENTRY_ROW_LIMIT = 11
@@ -503,8 +562,8 @@ function Header(props: { root: string; tab: MemoryTab; narrow: boolean; live: bo
   const tab = () => TABS.find((item) => item.id === props.tab)?.label ?? "Memory"
   const status = () => `MendCode · ${tab()} · SSE ${props.live ? "live" : "waiting"}`
   const shortcuts = props.tab === "graph"
-    ? "1-4 tabs · Enter map · ←→ tabs · V review · esc"
-    : "1-4 tabs · ←→/hl tabs · ↑↓/jk select · V review · esc"
+    ? "1-5 tabs · Enter map · ←→ tabs · V review · esc"
+    : "1-5 tabs · ←→/hl tabs · ↑↓/jk select · V review · esc"
   return (
     <Switch>
       <Match when={props.narrow}>
@@ -1114,7 +1173,7 @@ function dreamConsolidationLabel(policy: MemoryOverview["config"]["dreamConsolid
 
 function dreamRoleLabel(role: MemoryOverview["dreamRole"]) {
   if (role.ok) return `${role.roleName} · ${role.providerID}/${role.modelID}`
-  return `${role.reason} · local fallback available`
+  return `${role.reason} · no fallback`
 }
 
 function memoryOriginLabel(source: string | null | undefined) {
@@ -1500,6 +1559,7 @@ function DreamContent(props: {
   selectedIndex: number
   limit?: number
   onSelectRun: (index: number) => void
+  onRunNow?: (policy: "preview" | "auto-consolidate") => void
 }) {
   const { theme } = useTheme()
   const dream = () => props.data.dream
@@ -1552,6 +1612,10 @@ function DreamContent(props: {
             {short(`source ${dream()?.source ?? schedule()?.reason ?? "not scheduled"} · ${schedule()?.manualTriggerRequired ? "manual trigger required" : schedule()?.status ?? "not scheduled"} · last ${dream() ? formatDate(dream()!.startedAt) : "none"}`, props.width)}
           </text>
         </Show>
+        <box flexDirection="row" gap={2} height={1} overflow="hidden">
+          <text fg={theme.primary} wrapMode="none" onMouseUp={() => props.onRunNow?.("preview")}>[preview]</text>
+          <text fg={theme.success} wrapMode="none" onMouseUp={() => props.onRunNow?.("auto-consolidate")}>[run now]</text>
+        </box>
       </Panel>
       <Panel title="Dream runs" grow>
         <Show when={runs().length > 0} fallback={
@@ -1905,6 +1969,13 @@ function LoadingMemory(props: { tiny: boolean }) {
 
 
 export function Memory() {
+  // Reloading proposals and switching responsive layouts can remount the panel.
+  // Keep operation ownership and its visible result at route lifetime.
+  const sharingState: MemorySharingState = {
+    scope: createSignal<"project" | "global">("project"),
+    busy: createSignal(false),
+    result: createSignal("Enable sharing explicitly, then export accepted memories as editable Markdown."),
+  }
   const route = useRoute()
   const project = useProject()
   const sdk = useSDK()
@@ -2224,6 +2295,25 @@ export function Memory() {
     await reload("Memory entry deleted")
   }
 
+  async function restoreArchivedEntry() {
+    const scope = memoryScope() === "global" ? "global" : "project"
+    const archived = await readArchivedMemoryEntries(scope, activeRoot())
+    if (!archived.length) {
+      toast.show(toastInput("info", "No archived memories in this scope."))
+      return
+    }
+    const id = await DialogPrompt.show(dialog, "Restore archived memory", { placeholder: archived.slice(0, 8).map((entry) => `${entry.id}: ${entry.text}`).join("\n") })
+    dialog.clear()
+    if (!id?.trim()) return
+    const result = await restoreArchivedMemoryEntries(scope, [id.trim()], activeRoot())
+    await reload(result.restored.length ? "Archived memory restored" : "No matching archived memory restored")
+  }
+
+  async function runDreamNow(policy: "preview" | "auto-consolidate") {
+    const run = await runMemoryDream({ root: activeRoot(), source: "manual", consolidationPolicy: policy })
+    await reload(run.status === "failed" ? "Dream finished with a failure" : policy === "preview" ? "Dream preview recorded" : "Dream run completed")
+  }
+
   function proposalConfirmText(proposal: MemoryProposal) {
     return [
       `Operation: ${proposal.operation}`,
@@ -2520,9 +2610,20 @@ export function Memory() {
       setSelectedIndex(0)
       return
     }
+    if (tab() === "sharing") return
     if (evt.name === "e") {
       evt.preventDefault()
       void editSelection().catch((err) => toast.error(err))
+      return
+    }
+    if (evt.name === "n" && tab() === "dream") {
+      evt.preventDefault()
+      void runDreamNow("auto-consolidate").catch((err) => toast.error(err))
+      return
+    }
+    if (evt.name === "v" && tab() === "dream") {
+      evt.preventDefault()
+      void runDreamNow("preview").catch((err) => toast.error(err))
       return
     }
     if (evt.name === "v") {
@@ -2533,6 +2634,11 @@ export function Memory() {
     if (evt.name === "delete" || evt.name === "backspace") {
       evt.preventDefault()
       void deleteSelectedEntry().catch((err) => toast.error(err))
+      return
+    }
+    if (evt.name === "r" && tab() === "memories") {
+      evt.preventDefault()
+      void restoreArchivedEntry().catch((err) => toast.error(err))
       return
     }
     if (evt.name === "a") {
@@ -2625,9 +2731,12 @@ export function Memory() {
           />
         </Show>
       </Match>
+      <Match when={tab() === "sharing"}>
+        <MemorySharingPanel root={activeRoot()} state={sharingState} onImported={() => reload("Markdown proposals imported")} />
+      </Match>
       <Match when={tab() === "rules"}>
         <box flexDirection="column" minHeight={0} flexGrow={1} gap={1}>
-          <Panel title="Rules & categories" grow>
+           <Panel title="Memory policies & categories" grow>
             <PolicyRows data={current} selectedIndex={selectedIndex()} width={Math.max(30, availableWidth - 4)} policyScope={policyScope()} limit={policyRowLimit()} onSelect={setSelectedIndex} />
           </Panel>
           <box height={inspectorHeight()} minHeight={0}>
@@ -2638,7 +2747,7 @@ export function Memory() {
       <Match when={tab() === "dream"}>
         <Show
           when={dreamDetailOpen() && selectedDreamDetail()}
-          fallback={<DreamContent data={current} schedule={dreamSchedule()} width={availableWidth} selectedIndex={selectedIndex()} limit={dreamRunRowLimit()} onSelectRun={setSelectedIndex} />}
+           fallback={<DreamContent data={current} schedule={dreamSchedule()} width={availableWidth} selectedIndex={selectedIndex()} limit={dreamRunRowLimit()} onSelectRun={setSelectedIndex} onRunNow={(policy) => void runDreamNow(policy).catch((err) => toast.error(err))} />}
         >
           <box flexDirection="column" minHeight={0} flexGrow={1} gap={1}>
             <box height={1} overflow="hidden">
@@ -2670,14 +2779,15 @@ export function Memory() {
                summary={() => `${current().facts.length} facts · ${pending().length} pending · ${graphOverview()?.links.length ?? 0} edges`}
                 footer={() => {
                   const compact = width() < 120
+                  if (tab() === "sharing") return "S Scope · E Enable · D Disable · O Export · I Import · 1-5 Tabs · Esc/Q Back"
                   if (tab() === "graph") {
                     return compact
                       ? "Arrows Pan · HJKL Select · P Project · / Find · +/- Zoom · R Refresh · Esc/Q Back"
                       : "Arrows Pan · HJKL Select · Enter Focus · P Project · [/] Cycle · +/- Zoom · / Find · I Isolates · V Review · R Refresh · Esc/Q Back"
                   }
                   return compact
-                    ? "↑↓/JK Select · ←→/HL Tabs · 1-4 Tabs · P Policy · V Review · R Refresh · Q Back"
-                    : "↑↓/JK Select · ←→/HL Tabs · 1-4 Tabs · Enter Open · E Edit · A Apply · X Reject · P Policy · O Prompt · V Review · R Refresh · Q Back"
+                    ? "↑↓/JK Select · ←→/HL Tabs · 1-5 Tabs · P Policy · V Review · R Refresh · Q Back"
+                    : "↑↓/JK Select · ←→/HL Tabs · 1-5 Tabs · Enter Open · E Edit · A Apply · X Reject · P Policy · O Prompt · V Review · R Refresh · Q Back"
                 }}
                rail={
 
@@ -2740,7 +2850,7 @@ export function Memory() {
               setGraphFocused(false)
             }} />
             <Switch>
-              <Match when={tab() === "graph" || tab() === "dream" || tab() === "rules"}>
+              <Match when={tab() === "graph" || tab() === "dream" || tab() === "rules" || tab() === "sharing"}>
                 {renderMain(current())}
               </Match>
               <Match when={wide()}>

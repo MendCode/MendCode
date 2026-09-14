@@ -3802,6 +3802,12 @@ export function Prompt(props: PromptProps) {
       })
       .filter((item): item is string => typeof item === "string")
   })
+  const pendingActivityToolInput = createMemo(() => {
+    const active = activeWorkingAssistant()
+    if (!active) return false
+    const tools = (sync.data.part[active.id] ?? []).filter((part) => part.type === "tool")
+    return tools.some((part) => part.state.status === "pending") && !tools.some((part) => part.state.status === "running")
+  })
   const latestActivityToolNames = createMemo(() => {
     const active = activeWorkingAssistant()
     if (!active) return []
@@ -3840,6 +3846,7 @@ export function Prompt(props: PromptProps) {
       connection: effectiveConnectionStatus(),
       toolNames: activityToolNames(),
       activeToolNames: activeActivityToolNames(),
+      pendingToolInput: pendingActivityToolInput(),
       latestToolNames: latestActivityToolNames(),
       hasReasoning: activityHasReasoning(),
       hasAnswerText: activityHasAnswerText(),

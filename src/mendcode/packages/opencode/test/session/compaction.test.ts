@@ -250,6 +250,7 @@ function layer(result: "continue" | "compact") {
   return Layer.succeed(
     SessionProcessorModule.SessionProcessor.Service,
     SessionProcessorModule.SessionProcessor.Service.of({
+      init: () => Effect.void,
       create: Effect.fn("TestSessionProcessor.create")((input) => Effect.succeed(fake(input, result))),
     }),
   )

@@ -293,6 +293,9 @@ describe("mend tui prompt chrome", () => {
   })
 
   test("activity signal resolves additional status events", () => {
+    expect(resolveActivityPhase({ status: "busy", activeToolNames: ["bash"], pendingToolInput: true })).toBe("sending")
+    expect(resolveActivityPhase({ status: "busy", connection: "reconnecting", activeToolNames: ["bash"], pendingToolInput: true })).toBe("sending")
+    expect(resolveActivityPhase({ status: "busy", activeToolNames: ["bash"], pendingToolInput: false })).toBe("running")
     expect(resolveActivityPhase({ status: "busy", toolNames: ["bash"] })).toBe("running")
     expect(resolveActivityPhase({ status: "busy", toolNames: ["webfetch"] })).toBe("browsing")
     expect(resolveActivityPhase({ status: "busy", toolNames: ["upload_artifact"] })).toBe("uploading")
@@ -355,7 +358,7 @@ describe("mend tui prompt chrome", () => {
     expect(promptChromeUsesFullSessionWidth("ascii-box")).toBe(true)
   })
 
-  test("ctrl-t is reserved for session todos and f3 cycles model variants", () => {
+  test("ctrl-t toggles session widgets and f3 cycles model variants", () => {
     const keybinds = ConfigKeybinds.Keybinds.parse({})
 
     expect(keybinds.todo_toggle).toBe("ctrl+t")

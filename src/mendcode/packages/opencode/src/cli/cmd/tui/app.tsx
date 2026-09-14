@@ -3972,6 +3972,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; onDiagnostics?: () =
           `Memory learning: ${status.output ? "on" : "off"} · creates approval-gated proposals after chats`,
           `Entries: global ${status.entries.global.count} · project ${status.entries.project.count}`,
           `Proposals: pending ${status.proposals.pending} · applied ${status.proposals.applied} · rejected ${status.proposals.rejected}`,
+          `Extraction queue: ${status.extraction.queued} queued · ${status.extraction.running} running · ${status.extraction.failed} failed`,
           `Runtime caps: project ${status.projectMaxEntries}/request · global ${status.globalCompactionMaxEntries}/after compaction`,
           `Extractor: ${status.extractorRole} · output model calls ${status.outputCallsProviders ? "possible" : "off"}`,
           `Dream consolidation: ${status.dreamConsolidationPolicy}`,

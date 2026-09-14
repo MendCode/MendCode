@@ -3,11 +3,11 @@ import { Effect, Exit, Fiber, Layer } from "effect"
 
 import { Bus } from "@/bus"
 import { Permission } from "@/permission"
-import { Database, eq } from "@/storage/db"
+import { and, Database, eq } from "@/storage/db"
 import { BackgroundTask } from "@/session/background-task"
 import { BackgroundTaskEventTable, BackgroundTaskRunTable } from "@/session/background-task.sql"
 import { MessageV2 } from "@/session/message-v2"
-import { markPermissionAbandoned, markPermissionPending, reconcilePermissionAbandonment } from "@/session/pending-input"
+import { markPermissionAbandoned, markPermissionPending, markPermissionResolved, reconcilePermissionAbandonment } from "@/session/pending-input"
 import { Session } from "@/session/session"
 import { MessageID, PartID, SessionID } from "@/session/schema"
 import { PermissionTable, WorkflowArtifactTable, WorkflowTaskAttemptTable, WorkflowRunTable } from "@/session/session.sql"
@@ -861,6 +861,36 @@ describe("workflow scheduler persistence", () => {
             .filter((event) => event.type === "interrupted"),
         ),
       ).toHaveLength(1)
+    }),
+  )
+
+  permissionIt.instance("permission resolution repairs a stale workflow after background resumption", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const workflow = yield* WorkflowService.Service
+      const scheduler = yield* WorkflowScheduler.Service
+      const background = yield* BackgroundTask.Service
+      const origin = yield* sessions.create({ title: "Resolution origin" })
+      const child = yield* sessions.create({ parentID: origin.id, title: "Resolution child" })
+      const started = yield* workflow.start({ originSessionID: origin.id, plan: graph() })
+      const claim = (yield* scheduler.tick(started.run.id)).claimed[0]
+      if (!claim) throw new Error("Expected a workflow claim")
+      const attempt = yield* background.start({ taskID: child.id, parentSessionID: origin.id, title: "Resolution child" })
+      yield* background.markRunning({ taskID: child.id, generation: attempt.generation })
+      yield* scheduler.markStarted({
+        runID: claim.runID, taskID: claim.taskID, attemptID: claim.attemptID,
+        backgroundTaskID: child.id, backgroundGeneration: attempt.generation,
+      })
+      markPermissionPending({ sessionID: child.id, permission: "bash", patterns: ["git status"] }, 0)
+      yield* Effect.sleep("10 millis")
+      expect((yield* workflow.show(started.run.id)).tasks.find((task) => task.id === claim.taskID)?.state).toBe("needs_input")
+      Database.use((db) => db.update(BackgroundTaskRunTable)
+        .set({ state: "running" })
+        .where(and(eq(BackgroundTaskRunTable.task_id, child.id), eq(BackgroundTaskRunTable.generation, attempt.generation)))
+        .run())
+      markPermissionResolved(child.id)
+      markPermissionResolved(child.id)
+      expect((yield* workflow.show(started.run.id)).tasks.find((task) => task.id === claim.taskID)?.state).toBe("working")
     }),
   )
 

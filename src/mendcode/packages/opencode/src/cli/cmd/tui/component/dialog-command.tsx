@@ -231,7 +231,7 @@ const titleOverrides: Record<string, string> = {
   "session.context": "View Context Usage",
   "session.permission.status": "Change Approval Mode",
   "session.toggle.sticky_user_header": "Toggle Sticky User Header",
-  "session.toggle.todos": "Toggle Todos",
+  "session.toggle.todos": "Toggle Session Widgets",
   "session.toggle.thinking": "Toggle Thinking",
   "session.toggle.timestamps": "Toggle Timestamps",
   "session.toggle.actions": "Toggle Tool Details",

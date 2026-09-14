@@ -34,6 +34,18 @@ import {
 import { EffectBridge } from "@/effect/bridge"
 import * as Option from "effect/Option"
 import * as OtelTracer from "@effect/opentelemetry/Tracer"
+import { isAstraModel, normalizeAstraOptions } from "@/mend/prompt/model-family"
+import { promptRuntimeContextText } from "@/mend/prompt/compose"
+import { discoveryWireMiddleware } from "./tool-discovery"
+import {
+  CACHE_MODE_HEADER,
+  CACHE_SESSION_HEADER,
+  cacheBindingFromModel,
+  fingerprintPrefix,
+  opaqueCacheScope,
+  resolveCacheRequestPolicy,
+} from "@/provider/cache-policy"
+import { cacheKeyForFingerprint, stableProviderSessionID } from "./cache-lineage"
 
 const log = Log.create({ service: "llm" })
 export const OUTPUT_TOKEN_MAX = ProviderTransform.OUTPUT_TOKEN_MAX
@@ -211,6 +223,32 @@ const live: Layer.Layer<
       // TODO: move this to a proper hook
       const isOpenaiOauth = item.id === "openai" && info?.type === "oauth"
       const mendProjectRoot = input.root || input.cwd
+      const authMode = info?.type === "oauth" ? "oauth" : info?.type === "api" ? "api" : "unknown"
+      const cacheTransport = isOpenaiOauth
+        ? ("responses-lite" as const)
+        : input.model.providerID === "claude-code" && input.model.api.npm === "mendcode/claude-code"
+          ? ("claude-agent-sdk" as const)
+        : input.model.api.npm === "@ai-sdk/openai" ||
+            input.model.providerID === "openrouter" ||
+            input.model.api.npm === "@openrouter/ai-sdk-provider"
+          ? ("responses-http" as const)
+          : ("other" as const)
+      const endpoint =
+        (typeof input.model.options?.baseURL === "string" && input.model.options.baseURL) ||
+        (typeof item.options?.baseURL === "string" && item.options.baseURL) ||
+        input.model.api.url
+      const accountScope =
+        info?.type === "api"
+          ? opaqueCacheScope(info.key)
+          : info?.type === "oauth" && info.accountId
+            ? `oauth:${info.accountId}`
+            : undefined
+      const cacheBinding = cacheBindingFromModel(input.model, {
+        auth: authMode,
+        transport: cacheTransport,
+        endpoint,
+        ...(accountScope ? { accountScope } : {}),
+      })
       const mendFocus = input.mendPrompt?.focus ?? SystemPrompt.mendFocus(input.model)
       const mendPromptPolicy =
         input.mendPrompt?.policy ??
@@ -229,6 +267,37 @@ const live: Layer.Layer<
             input.memoryMode ?? memoryMode(input.messages),
           ),
         ))
+      const fullMode = /^Mode: full$/m.test(mendPromptPolicy)
+      const cachePolicy = resolveCacheRequestPolicy({
+        config: cfg.cache,
+        projectScope: mendProjectRoot,
+        sessionID: input.sessionID,
+        binding: cacheBinding,
+        fullMode,
+      })
+      const providerSessionID =
+        cachePolicy.mode === "smart" &&
+        mendProjectRoot &&
+        (cachePolicy.useLineage || (isOpenaiOauth && cachePolicy.useCacheKey))
+          ? stableProviderSessionID({
+              providerID: input.model.providerID,
+              modelID: input.model.api.id,
+              projectScope: mendProjectRoot,
+              sessionID: input.sessionID,
+              profile:
+                typeof item.options?.homePath === "string" ? `${cacheBinding.accountScope ?? ""}:${item.options.homePath}` : cacheBinding.accountScope,
+            })
+          : undefined
+      const runtimeProviderContext = /^Mode: full$/m.test(mendPromptPolicy)
+        ? promptRuntimeContextText({
+            providerID: input.model.providerID,
+            modelID: input.model.id,
+            apiModelID: input.model.api.id,
+            authMode,
+            transport: cacheTransport,
+            cache: cachePolicy,
+          })
+        : undefined
 
       const system: string[] = []
       system.push(
@@ -238,6 +307,7 @@ const live: Layer.Layer<
           mendFocus,
           mendPromptPolicy,
           mendMemory,
+          ...(runtimeProviderContext ? [runtimeProviderContext] : []),
           // any custom prompt passed into this call
           ...input.system,
           // any custom prompt from last user message
@@ -270,6 +340,7 @@ const live: Layer.Layer<
             model: input.model,
             sessionID: input.sessionID,
             providerOptions: item.options,
+            cache: cachePolicy,
           })
       const options = mergeOptions(mergeOptions(mergeOptions(base, input.model.options), input.agent.options), variant)
       if (isOpenaiOauth) {
@@ -311,6 +382,13 @@ const live: Layer.Layer<
         },
       )
 
+      if (isAstraModel(input.model.api.id)) {
+        params.temperature = undefined
+        params.topP = undefined
+        params.topK = undefined
+        params.options = normalizeAstraOptions(input.model.api.id, params.options)
+      }
+
       const { headers } = yield* plugin.trigger(
         "chat.headers",
         {
@@ -324,6 +402,21 @@ const live: Layer.Layer<
           headers: {},
         },
       )
+      const requestHeaders = {
+        ...headers,
+        ...(isOpenaiOauth && cachePolicy.mode === "off" ? { [CACHE_MODE_HEADER]: "off" } : {}),
+        ...(isOpenaiOauth && providerSessionID ? { [CACHE_SESSION_HEADER]: providerSessionID } : {}),
+      }
+      const providerRuntime =
+        input.model.providerID === "claude-code"
+          ? {
+              claudeCode: {
+                ...(providerSessionID ? { sessionID: providerSessionID } : {}),
+                ...(mendProjectRoot ? { workingDirectory: mendProjectRoot } : {}),
+                ...(cachePolicy.mode === "off" ? { cacheMode: "off" as const } : {}),
+              },
+            }
+          : undefined
 
       const tools = resolveTools(input)
 
@@ -359,6 +452,42 @@ const live: Layer.Layer<
           execute: async () => ({ output: "", title: "", metadata: {} }),
         })
       }
+
+      const managedCacheKey = (() => {
+        if (!cachePolicy.allowManagedKey || cachePolicy.scope !== "project" || !mendProjectRoot) return undefined
+        const fingerprint = fingerprintPrefix({
+          binding: cacheBinding,
+          projectScope: mendProjectRoot,
+          prefix: system,
+          toolDefinitions: Object.fromEntries(
+            Object.entries(tools).map(([name, definition]) => [
+              name,
+              {
+                description: definition.description,
+                inputSchema: definition.inputSchema,
+              },
+            ]),
+          ),
+          settings: {
+            temperature: params.temperature,
+            topP: params.topP,
+            topK: params.topK,
+            maxOutputTokens: params.maxOutputTokens,
+            options: ProviderTransform.removeCacheOptions(params.options),
+          },
+          serializationRevision: "mendcode-cache-prefix-v1",
+        })
+        return fingerprint
+          ? cacheKeyForFingerprint({
+              fingerprint,
+              scope: cachePolicy.scope,
+              projectScope: mendProjectRoot,
+              sessionID: input.sessionID,
+            }) ?? undefined
+          : undefined
+      })()
+      params.options = ProviderTransform.withManagedCacheKey(input.model, params.options, managedCacheKey)
+      params.options = ProviderTransform.enforceCacheOptions(params.options, cachePolicy)
 
       // Wire up toolExecutor for DWS workflow models so that tool calls
       // from the workflow service are executed via opencode's tool system
@@ -498,7 +627,7 @@ const live: Layer.Layer<
         temperature: params.temperature,
         topP: params.topP,
         topK: params.topK,
-        providerOptions: ProviderTransform.providerOptions(input.model, params.options),
+        providerOptions: ProviderTransform.providerOptions(input.model, params.options, providerRuntime),
         activeTools: Object.keys(tools).filter((x) => x !== "invalid"),
         tools,
         toolChoice: input.toolChoice,
@@ -523,7 +652,7 @@ const live: Layer.Layer<
                 "User-Agent": `mendcode/${InstallationVersion}`,
               }),
           ...input.model.headers,
-          ...headers,
+          ...requestHeaders,
         },
         maxRetries: input.retries ?? 0,
         includeRawChunks: true,
@@ -536,11 +665,12 @@ const live: Layer.Layer<
               async transformParams(args) {
                 if (args.type === "stream") {
                   // @ts-expect-error
-                  args.params.prompt = ProviderTransform.message(args.params.prompt, input.model, options)
+                  args.params.prompt = ProviderTransform.message(args.params.prompt, input.model, options, cachePolicy)
                 }
                 return args.params
               },
             },
+            ...(input.model.api.npm === "@ai-sdk/openai" ? [discoveryWireMiddleware()] : []),
           ],
         }),
         experimental_telemetry: {

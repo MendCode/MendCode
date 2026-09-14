@@ -72,7 +72,7 @@ const KeybindsSchema = Schema.Struct({
   agent_cycle_reverse: keybind("none", "Previous primary agent"),
   variant_cycle: keybind("f3", "Cycle model variants"),
   variant_list: keybind("shift+f3", "List model variants"),
-  todo_toggle: keybind("ctrl+t", "Toggle session todos"),
+  todo_toggle: keybind("ctrl+t", "Toggle session widgets"),
   input_clear: keybind("ctrl+c", "Clear input field"),
   input_paste: keybind("ctrl+v", "Paste from clipboard"),
   input_submit: keybind("return", "Submit input"),

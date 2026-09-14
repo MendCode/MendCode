@@ -21,6 +21,7 @@ import { Session } from "@/session/session"
 import { LLM } from "../../src/session/llm"
 import { MessageV2 } from "../../src/session/message-v2"
 import { SessionProcessor } from "../../src/session/processor"
+import { MemoryExtractionQueue } from "../../src/mend/memory/extraction-queue"
 import { MessageID, PartID, SessionID } from "../../src/session/schema"
 import { SessionStatus } from "../../src/session/status"
 import { SessionSummary } from "../../src/session/summary"
@@ -109,6 +110,14 @@ function defer<T>() {
     resolve = done
   })
   return { promise, resolve }
+}
+
+async function waitFor(check: () => Promise<boolean>, message: string) {
+  for (let attempt = 0; attempt < 100; attempt++) {
+    if (await check()) return
+    await Bun.sleep(10)
+  }
+  throw new Error(message)
 }
 
 const user = Effect.fn("TestSession.user")(function* (sessionID: SessionID, text: string) {
@@ -478,6 +487,13 @@ it.live("session.processor routes automatic memory extraction through LLM servic
           })
           const callsBeforeFlush = yield* llm.calls
           yield* handle.flushMemory()
+          yield* Effect.promise(() => waitFor(async () => {
+            const parts = MessageV2.parts(msg.id)
+            const finish = [...parts].reverse().find((part): part is MessageV2.StepFinishPart => part.type === "step-finish")
+            if (!finish) return false
+            const persisted = await Effect.runPromise(session.getPart({ sessionID: chat.id, messageID: msg.id, partID: finish.id }))
+            return persisted?.type === "step-finish" && (persisted.metadata?.mendMemory as any)?.output?.queued === false
+          }, "background memory extraction did not settle"))
           off()
 
           const parts = MessageV2.parts(msg.id)
@@ -491,7 +507,7 @@ it.live("session.processor routes automatic memory extraction through LLM servic
           expect(callsBeforeFlush).toBe(1)
           expect(yield* llm.calls).toBe(2)
           expect(JSON.stringify(inputs[1])).toContain("You are MendCode's memory extractor")
-          expect(memoryStatuses).toContain("memory-extract")
+          expect(memoryStatuses).not.toContain("memory-extract")
           expect(memory?.output?.skipped).toBe(false)
           expect(memory?.output?.candidates).toBe(1)
           expect(memory?.output?.proposals?.length).toBe(1)
@@ -585,6 +601,7 @@ it.live("session.processor writes automatic memory proposals under cwd when mess
             tools: {},
           })
           yield* handle.flushMemory()
+          yield* Effect.promise(() => waitFor(async () => (await listMemoryProposals(root, "pending")).length === 1, "background memory proposal was not created"))
 
           const proposals = yield* Effect.promise(() => listMemoryProposals(root, "pending"))
 
@@ -1635,6 +1652,36 @@ it.live("session.processor effect tests preserve visible text and tool attempt o
         ).toBe(true)
         expect(parts.some((part) => part.type === "text" && part.text.includes("should not be used"))).toBe(false)
       }),
+    { git: true, config: (url) => providerCfg(url) },
+  ),
+)
+
+it.live("processor initialization recovers queued memory without a chat turn", () =>
+  provideTmpdirServer(
+    ({ dir, llm }) => Effect.gen(function* () {
+      const { processors, session } = yield* boot()
+      const root = path.resolve(dir)
+      yield* Effect.promise(() => writeProjectMemoryConfig({ enabled: false }, root))
+      const chat = yield* session.create({})
+      const queue = new MemoryExtractionQueue()
+      yield* Effect.promise(() => queue.enqueue({
+        projectRoot: root, cwd: root, sessionID: chat.id,
+        turnID: MessageID.ascending(), messageID: MessageID.ascending(),
+        text: "persisted extraction", evidence: "restart-fixture",
+      }))
+      yield* processors.init()
+      const jobs = yield* Effect.promise(async () => {
+        for (let attempt = 0; attempt < 100; attempt++) {
+          const jobs = await queue.list(root)
+          if (jobs[0]?.state === "skipped") return jobs
+          await Bun.sleep(10)
+        }
+        throw new Error("queued memory was not recovered by initialization")
+      })
+      expect(jobs[0]?.reason).toBe("memory output disabled")
+      expect(yield* llm.calls).toBe(0)
+      expect(yield* session.messages({ sessionID: chat.id })).toHaveLength(0)
+    }),
     { git: true, config: (url) => providerCfg(url) },
   ),
 )

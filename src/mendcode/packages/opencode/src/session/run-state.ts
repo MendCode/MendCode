@@ -151,7 +151,7 @@ export const layer = Layer.effect(
         yield* status.set(sessionID, { type: "idle" })
         return "not_running" as const
       }
-      return yield* existing.cancelCurrentIf(targetMessageID, options)
+      return yield* existing.cancelCurrentIf(targetMessageID, { ...options, cancelPending: true })
     })
 
     const setInterruptible = Effect.fn("SessionRunState.setInterruptible")(function* (

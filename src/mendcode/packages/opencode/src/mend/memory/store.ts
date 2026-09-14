@@ -1,8 +1,11 @@
 import { existsSync } from "fs"
-import { appendFile, mkdir, readFile, readdir, writeFile } from "fs/promises"
+import { appendFile, mkdir, readFile, readdir, writeFile, rename } from "fs/promises"
+import { Flock } from "@mendcode/core/util/flock"
+import { createHash, randomUUID } from "crypto"
 import path from "path"
 import { memoryPaths, readMemoryConfig, type MemoryScope } from "./config"
 import { inferMemoryCategoryIDs } from "./categories"
+import { readMemoryExtractionQueue, type MemoryExtractionState } from "./extraction-queue"
 
 export type MemorySensitivity = "low" | "medium" | "high"
 
@@ -53,11 +56,27 @@ export type MemoryStatus = {
   summaries: Record<MemoryScope, { exists: boolean; bytes: number }>
   entries: Record<MemoryScope, { exists: boolean; count: number }>
   proposals: { exists: boolean; pending: number; applied: number; rejected: number }
+  extraction: Record<MemoryExtractionState, number>
   callsProviders: false
   retrievalCallsProviders: false
   outputCallsProviders: boolean
   readsSecrets: false
   printsSecrets: false
+}
+
+const memoryWriteTails = new Map<string, Promise<void>>()
+
+function serializeMemoryWrite<T>(file: string, operation: () => Promise<T>) {
+  const previous = memoryWriteTails.get(file) ?? Promise.resolve()
+  const next = previous.catch(() => {}).then(() => Flock.withLock(
+    `memory:${path.resolve(file)}`, operation,
+    { dir: path.join(path.dirname(file), ".locks"), timeoutMs: 5_000 },
+  ))
+  const tail = next.then(() => {}, () => {})
+  memoryWriteTails.set(file, tail)
+  return next.finally(() => {
+    if (memoryWriteTails.get(file) === tail) memoryWriteTails.delete(file)
+  })
 }
 
 function nowID() {
@@ -149,18 +168,27 @@ export async function appendMemoryEntry(input: Partial<MemoryEntry> & { text: st
   const paths = memoryPaths(root)
   const entry = normalizeMemoryEntry(input)
   const file = entry.scope === "global" ? paths.globalEntries : paths.projectEntries
-  await mkdir(path.dirname(file), { recursive: true })
-  await appendFile(file, `${JSON.stringify(entry)}\n`)
-  await refreshMemoryIndex(root)
+  await serializeMemoryWrite(file, async () => {
+    await mkdir(path.dirname(file), { recursive: true })
+    await appendFile(file, `${JSON.stringify(entry)}\n`)
+    await refreshMemoryIndex(root)
+  })
   return entry
 }
 
-async function writeMemoryEntries(scope: MemoryScope, entries: MemoryEntry[], root?: string) {
+async function writeMemoryEntriesUnlocked(scope: MemoryScope, entries: MemoryEntry[], root?: string) {
   const paths = memoryPaths(root)
   const file = scope === "global" ? paths.globalEntries : paths.projectEntries
   await mkdir(path.dirname(file), { recursive: true })
-  await writeFile(file, entries.map((entry) => JSON.stringify(entry)).join("\n") + (entries.length ? "\n" : ""))
+  const temporary = `${file}.${randomUUID()}.tmp`
+  await writeFile(temporary, entries.map((entry) => JSON.stringify(entry)).join("\n") + (entries.length ? "\n" : ""), { mode: 0o600 })
+  await rename(temporary, file)
   await refreshMemoryIndex(root)
+}
+
+async function writeMemoryEntries(scope: MemoryScope, entries: MemoryEntry[], root?: string) {
+  const file = scope === "global" ? memoryPaths(root).globalEntries : memoryPaths(root).projectEntries
+  return serializeMemoryWrite(file, () => writeMemoryEntriesUnlocked(scope, entries, root))
 }
 
 export async function archiveMemoryEntries(
@@ -168,47 +196,56 @@ export async function archiveMemoryEntries(
   selections: Array<{ id: string; reason: string; canonicalEntryID?: string | null }>,
   root?: string,
 ) {
-  const entries = await readMemoryEntries(scope, root)
-  const requested = new Map(selections.filter((selection) => selection.id && selection.reason.trim()).map((selection) => [selection.id, selection]))
-  const archived = entries.filter((entry) => requested.has(entry.id))
-  if (!archived.length) return { archived: [], skipped: selections.map((selection) => selection.id) }
-  const existingArchived = await readArchivedMemoryEntries(scope, root)
-  const archivedIDs = new Set(existingArchived.map((entry) => entry.id))
-  const archivedAt = new Date().toISOString()
-  const records = archived
-    .filter((entry) => !archivedIDs.has(entry.id))
-    .map((entry) => ({
-      ...entry,
-      archivedAt,
-      archiveReason: requested.get(entry.id)!.reason.trim(),
-      canonicalEntryID: requested.get(entry.id)!.canonicalEntryID ?? null,
-    } satisfies ArchivedMemoryEntry))
   const paths = memoryPaths(root)
   const archiveFile = path.join(scope === "global" ? paths.globalDir : paths.projectDir, "archived.jsonl")
-  if (records.length) {
-    await mkdir(path.dirname(archiveFile), { recursive: true })
-    const previous = await readTextIfExists(archiveFile)
-    await writeFile(archiveFile, `${previous}${records.map((entry) => JSON.stringify(entry)).join("\n")}\n`)
-  }
-  await writeMemoryEntries(scope, entries.filter((entry) => !requested.has(entry.id)), root)
-  return { archived: records, skipped: selections.filter((selection) => !records.some((entry) => entry.id === selection.id)).map((selection) => selection.id) }
+  return serializeMemoryWrite(scope === "global" ? paths.globalEntries : paths.projectEntries, async () => {
+    const entries = await readMemoryEntries(scope, root)
+    const requested = new Map(selections.filter((selection) => selection.id && selection.reason.trim()).map((selection) => [selection.id, selection]))
+    const archived = entries.filter((entry) => requested.has(entry.id))
+    if (!archived.length) return { archived: [], skipped: selections.map((selection) => selection.id) }
+    const existingArchived = await readArchivedMemoryEntries(scope, root)
+    const archivedIDs = new Set(existingArchived.map((entry) => entry.id))
+    const archivedAt = new Date().toISOString()
+    const records = archived
+      .filter((entry) => !archivedIDs.has(entry.id))
+      .map((entry) => ({ ...entry, archivedAt, archiveReason: requested.get(entry.id)!.reason.trim(), canonicalEntryID: requested.get(entry.id)!.canonicalEntryID ?? null } satisfies ArchivedMemoryEntry))
+    if (records.length) {
+      await mkdir(path.dirname(archiveFile), { recursive: true })
+      const previous = await readTextIfExists(archiveFile)
+      await writeFile(archiveFile, `${previous}${records.map((entry) => JSON.stringify(entry)).join("\n")}\n`)
+    }
+    await writeMemoryEntriesUnlocked(scope, entries.filter((entry) => !requested.has(entry.id)), root)
+    return { archived: records, skipped: selections.filter((selection) => !records.some((entry) => entry.id === selection.id)).map((selection) => selection.id) }
+  })
 }
 
 export async function restoreArchivedMemoryEntries(scope: MemoryScope, ids: string[], root?: string) {
+  const paths = memoryPaths(root)
+  return serializeMemoryWrite(scope === "global" ? paths.globalEntries : paths.projectEntries, async () => {
   const active = await readMemoryEntries(scope, root)
   const activeIDs = new Set(active.map((entry) => entry.id))
   const archived = await readArchivedMemoryEntries(scope, root)
   const restored = archived.filter((entry) => ids.includes(entry.id) && !activeIDs.has(entry.id))
   if (!restored.length) return { restored: [] }
-  await writeMemoryEntries(scope, [...active, ...restored.map(({ archivedAt: _archivedAt, archiveReason: _archiveReason, canonicalEntryID: _canonicalEntryID, ...entry }) => entry)], root)
+  await writeMemoryEntriesUnlocked(scope, [...active, ...restored.map(({ archivedAt: _archivedAt, archiveReason: _archiveReason, canonicalEntryID: _canonicalEntryID, ...entry }) => entry)], root)
   return { restored }
+  })
 }
 
-export async function updateMemoryEntry(scope: MemoryScope, id: string, patch: Partial<MemoryEntry>, root?: string) {
+export function memoryEntryRevision(entry: MemoryEntry) {
+  return createHash("sha256").update(JSON.stringify(entry)).digest("hex")
+}
+
+export async function updateMemoryEntry(scope: MemoryScope, id: string, patch: Partial<MemoryEntry>, root?: string, expectedRevision?: string) {
+  const paths = memoryPaths(root)
+  return serializeMemoryWrite(scope === "global" ? paths.globalEntries : paths.projectEntries, async () => {
   const entries = await readMemoryEntries(scope, root)
   const index = entries.findIndex((entry) => entry.id === id)
   if (index === -1) throw new Error(`Unknown ${scope} memory entry: ${id}`)
   const current = entries[index]!
+  if (expectedRevision && memoryEntryRevision(current) !== expectedRevision) {
+    throw new Error(`Memory revision conflict: ${id}; review the current entry before applying this update`)
+  }
   const next = normalizeMemoryEntry({
     ...current,
     ...patch,
@@ -219,16 +256,20 @@ export async function updateMemoryEntry(scope: MemoryScope, id: string, patch: P
     updatedAt: new Date().toISOString(),
   })
   entries[index] = next
-  await writeMemoryEntries(scope, entries, root)
+  await writeMemoryEntriesUnlocked(scope, entries, root)
   return next
+  })
 }
 
 export async function deleteMemoryEntry(scope: MemoryScope, id: string, root?: string) {
+  const paths = memoryPaths(root)
+  return serializeMemoryWrite(scope === "global" ? paths.globalEntries : paths.projectEntries, async () => {
   const entries = await readMemoryEntries(scope, root)
   const next = entries.filter((entry) => entry.id !== id)
   if (next.length === entries.length) throw new Error(`Unknown ${scope} memory entry: ${id}`)
-  await writeMemoryEntries(scope, next, root)
+  await writeMemoryEntriesUnlocked(scope, next, root)
   return { ok: true, id, scope }
+  })
 }
 
 export async function refreshMemoryIndex(root?: string) {
@@ -280,6 +321,7 @@ export async function memoryStatus(root?: string): Promise<MemoryStatus> {
     readMemoryEntries("global", paths.root).catch(() => []),
     readMemoryEntries("project", paths.root).catch(() => []),
   ])
+  const extractionJobs = await readMemoryExtractionQueue(paths.root).catch(() => [])
   const proposalFiles = existsSync(paths.proposalsDir) ? await readdir(paths.proposalsDir).catch(() => []) : []
   const proposals = await Promise.all(proposalFiles.filter((file) => file.endsWith(".json")).map(async (file) => {
     try {
@@ -324,6 +366,13 @@ export async function memoryStatus(root?: string): Promise<MemoryStatus> {
       pending: proposals.filter((proposal) => proposal?.status === "pending").length,
       applied: proposals.filter((proposal) => proposal?.status === "applied").length,
       rejected: proposals.filter((proposal) => proposal?.status === "rejected").length,
+    },
+    extraction: {
+      queued: extractionJobs.filter((job) => job.state === "queued").length,
+      running: extractionJobs.filter((job) => job.state === "running").length,
+      completed: extractionJobs.filter((job) => job.state === "completed").length,
+      skipped: extractionJobs.filter((job) => job.state === "skipped").length,
+      failed: extractionJobs.filter((job) => job.state === "failed").length,
     },
     callsProviders: false,
     retrievalCallsProviders: false,

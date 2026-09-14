@@ -7,6 +7,13 @@ import os from "os"
 import { setTimeout as sleep } from "node:timers/promises"
 import { createServer } from "http"
 import { isRecord } from "@/util/record"
+import { normalizeAstraRequest } from "@/mend/prompt/model-family"
+import {
+  CACHE_KEY_HEADER,
+  CACHE_MODE_HEADER,
+  CACHE_SESSION_HEADER,
+  isManagedCacheKey,
+} from "@/provider/cache-policy"
 
 const log = Log.create({ service: "plugin.codex" })
 
@@ -19,7 +26,7 @@ const CODEX_COMPATIBILITY_VERSION = "0.144.0"
 const CODEX_ORIGINATOR = "codex_cli_rs"
 const CODEX_USER_AGENT = `codex_cli_rs/0.0.0 (MendCode; ${os.platform()} ${os.release()}; ${os.arch()})`
 const RESPONSES_LITE_HEADER = "x-openai-internal-codex-responses-lite"
-const RESPONSES_LITE_MODELS = new Set(["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"])
+const RESPONSES_LITE_MODELS = new Set(["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-6-astra"])
 const ALLOWED_MODELS = new Set([
   "gpt-5.5",
   "gpt-5.2",
@@ -27,6 +34,7 @@ const ALLOWED_MODELS = new Set([
   "gpt-5.3-codex-spark",
   "gpt-5.4",
   "gpt-5.4-mini",
+  "gpt-6-astra",
 ])
 
 const CODEX_CHATGPT_MODEL_ALIASES: Record<string, string> = {
@@ -40,6 +48,12 @@ const CODEX_CHATGPT_5_6_LIMIT = {
   output: 128_000,
 }
 
+const CODEX_CHATGPT_6_ASTRA_LIMIT = {
+  context: 1_050_000,
+  input: 922_000,
+  output: 128_000,
+}
+
 const CODEX_CHATGPT_FAST_MODE_MODELS = new Set([
   "gpt-5.4",
   "gpt-5.4-mini",
@@ -48,6 +62,7 @@ const CODEX_CHATGPT_FAST_MODE_MODELS = new Set([
   "gpt-5.6-sol",
   "gpt-5.6-terra",
   "gpt-5.6-luna",
+  "gpt-6-astra",
 ])
 
 const CODEX_CHATGPT_PRO_MODE_MODELS = new Set(["gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"])
@@ -66,6 +81,20 @@ export function normalizeCodexChatGPTModel(modelID: string) {
     modelID: CODEX_CHATGPT_MODEL_ALIASES[base] ?? base,
     mode,
   }
+}
+
+export function isCodexChatGPTModelSupported(modelID: string) {
+  const normalized = normalizeCodexChatGPTModel(modelID).modelID
+  if (ALLOWED_MODELS.has(normalized)) return true
+  const match = normalized.match(/^gpt-(\d+\.\d+)/)
+  return match ? parseFloat(match[1]) > 5.4 : false
+}
+
+function codexChatGPTLimit(modelID: string) {
+  const normalized = normalizeCodexChatGPTModel(modelID).modelID
+  if (normalized === "gpt-6-astra") return CODEX_CHATGPT_6_ASTRA_LIMIT
+  if (normalized.startsWith("gpt-5.6")) return CODEX_CHATGPT_5_6_LIMIT
+  return undefined
 }
 
 export function normalizeCodexChatGPTRequestBody(body: BodyInit | null | undefined) {
@@ -87,13 +116,14 @@ export function normalizeCodexChatGPTRequestBody(body: BodyInit | null | undefin
           mode: "pro",
         }
       : request.reasoning
-  if (normalized.modelID === request.model && !normalized.mode) return body
-  return JSON.stringify({
+  const normalizedRequest = normalizeAstraRequest({
     ...request,
     model: normalized.modelID,
     ...(normalized.mode === "fast" ? { service_tier: "priority" } : {}),
     ...(reasoning === undefined ? {} : { reasoning }),
   })
+  if (normalized.modelID === request.model && !normalized.mode && normalizedRequest === request) return body
+  return JSON.stringify(normalizedRequest)
 }
 
 function prepareResponsesLiteRequest(input: {
@@ -101,6 +131,9 @@ function prepareResponsesLiteRequest(input: {
   headers: Headers
   sessionIDs: Map<string, string>
   sessionPromptFingerprints: Map<string, string>
+  managedCacheKey?: string
+  providerSessionID?: string
+  cacheMode?: "off"
 }) {
   const body = normalizeCodexChatGPTRequestBody(input.body)
   if (typeof body !== "string") return body
@@ -119,15 +152,29 @@ function prepareResponsesLiteRequest(input: {
     throw new Error("Responses Lite requires string instructions")
   }
 
-  const sourceSessionID = input.headers.get("session-id") ?? input.headers.get("session_id")
+  const sourceSessionID =
+    input.headers.get("x-session-affinity") ?? input.headers.get("session-id") ?? input.headers.get("session_id")
+  let instructionsChanged = false
   if (sourceSessionID && typeof parsed.instructions === "string") {
     const fingerprint = Bun.hash(parsed.instructions).toString()
-    if (input.sessionPromptFingerprints.get(sourceSessionID) !== fingerprint) {
+    const previousFingerprint = input.sessionPromptFingerprints.get(sourceSessionID)
+    if (previousFingerprint !== undefined && previousFingerprint !== fingerprint) {
+      instructionsChanged = true
+    }
+    if (previousFingerprint !== fingerprint) {
       input.sessionIDs.delete(sourceSessionID)
       input.sessionPromptFingerprints.set(sourceSessionID, fingerprint)
     }
+  } else if (sourceSessionID && input.sessionPromptFingerprints.has(sourceSessionID)) {
+    instructionsChanged = true
+    input.sessionIDs.delete(sourceSessionID)
+    input.sessionPromptFingerprints.delete(sourceSessionID)
   }
-  const sessionID = (sourceSessionID ? input.sessionIDs.get(sourceSessionID) : undefined) ?? Bun.randomUUIDv7()
+  const providerSessionID = isProviderSessionID(input.providerSessionID) ? input.providerSessionID : undefined
+  const sessionID =
+    (!instructionsChanged ? providerSessionID : undefined) ??
+    (sourceSessionID ? input.sessionIDs.get(sourceSessionID) : undefined) ??
+    Bun.randomUUIDv7()
   if (sourceSessionID) input.sessionIDs.set(sourceSessionID, sessionID)
   parsed.input = [
     { type: "additional_tools", role: "developer", tools: parsed.tools ?? [] },
@@ -146,7 +193,13 @@ function prepareResponsesLiteRequest(input: {
   delete parsed.instructions
   parsed.tool_choice = "auto"
   parsed.parallel_tool_calls = false
-  parsed.prompt_cache_key = sessionID
+  if (input.cacheMode === "off") {
+    delete parsed.prompt_cache_key
+    delete parsed.promptCacheKey
+  } else {
+    parsed.prompt_cache_key =
+      !instructionsChanged && isManagedCacheKey(input.managedCacheKey) ? input.managedCacheKey : sessionID
+  }
   parsed.reasoning = {
     ...(isRecord(parsed.reasoning) ? parsed.reasoning : {}),
     context: "all_turns",
@@ -167,12 +220,30 @@ export function prepareCodexChatGPTOAuthRequest(input: {
   headers: Headers
   sessionIDs?: Map<string, string>
   sessionPromptFingerprints?: Map<string, string>
+  /** Internal seam for a verified cache lineage; affinity remains session-scoped. */
+  managedCacheKey?: string
+  providerSessionID?: string
+  /** Internal request override used to disable provider cache controls. */
+  cacheMode?: "off"
   responsesLite?: boolean
 }) {
   input.headers.set("originator", CODEX_ORIGINATOR)
   input.headers.set("User-Agent", CODEX_USER_AGENT)
   input.headers.set("Origin", "https://chatgpt.com")
-  if (input.responsesLite === false) return normalizeCodexChatGPTRequestBody(input.body)
+  if (input.responsesLite === false) {
+    const body = normalizeCodexChatGPTRequestBody(input.body)
+    if (input.cacheMode !== "off" || typeof body !== "string") return body
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(body)
+    } catch {
+      return body
+    }
+    if (!isRecord(parsed)) return body
+    delete parsed.prompt_cache_key
+    delete parsed.promptCacheKey
+    return JSON.stringify(parsed)
+  }
   const sessionIDs = input.sessionIDs ?? new Map<string, string>()
   const sessionPromptFingerprints = input.sessionPromptFingerprints ?? new Map<string, string>()
   return prepareResponsesLiteRequest({
@@ -180,7 +251,15 @@ export function prepareCodexChatGPTOAuthRequest(input: {
     headers: input.headers,
     sessionIDs,
     sessionPromptFingerprints,
+    managedCacheKey: input.managedCacheKey,
+    providerSessionID: input.providerSessionID,
+    cacheMode: input.cacheMode,
   })
+}
+
+function isProviderSessionID(value: unknown): value is string {
+  return typeof value === "string" &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
 }
 
 function stripImageDetail(input: unknown): void {
@@ -569,12 +648,12 @@ export async function CodexAuthPlugin(input: PluginInput, options: CodexAuthPlug
         return Object.fromEntries(
           Object.entries(provider.models)
             .filter(([, model]) => {
-              if (ALLOWED_MODELS.has(model.api.id)) return true
-              const match = model.api.id.match(/^gpt-(\d+\.\d+)/)
-              return match ? parseFloat(match[1]) > 5.4 : false
+              return isCodexChatGPTModelSupported(model.api.id)
             })
             .map(([modelID, model]) => {
               const modelOptions = isRecord(model.options) ? model.options : {}
+              const limit = codexChatGPTLimit(model.api.id)
+              const usesCompactionThreshold = limit !== undefined
               return [
                 modelID,
                 {
@@ -584,8 +663,8 @@ export async function CodexAuthPlugin(input: PluginInput, options: CodexAuthPlug
                     output: 0,
                     cache: { read: 0, write: 0 },
                   },
-                  limit: model.api.id.startsWith("gpt-5.6")
-                    ? CODEX_CHATGPT_5_6_LIMIT
+                  limit: limit
+                    ? limit
                     : model.id.includes("gpt-5.5")
                       ? {
                           context: 400_000,
@@ -593,7 +672,7 @@ export async function CodexAuthPlugin(input: PluginInput, options: CodexAuthPlug
                           output: 128_000,
                         }
                       : model.limit,
-                  options: model.api.id.startsWith("gpt-5.6")
+                  options: usesCompactionThreshold
                     ? {
                         ...modelOptions,
                         compaction: {
@@ -644,6 +723,12 @@ export async function CodexAuthPlugin(input: PluginInput, options: CodexAuthPlug
             }
 
             const headers = new Headers(request.headers)
+            const cacheMode = headers.get(CACHE_MODE_HEADER)
+            const managedCacheKey = headers.get(CACHE_KEY_HEADER)
+            const providerSessionID = headers.get(CACHE_SESSION_HEADER)
+            headers.delete(CACHE_MODE_HEADER)
+            headers.delete(CACHE_KEY_HEADER)
+            headers.delete(CACHE_SESSION_HEADER)
             headers.delete("authorization")
             headers.set("authorization", `Bearer ${currentAuth.access}`)
 
@@ -665,6 +750,9 @@ export async function CodexAuthPlugin(input: PluginInput, options: CodexAuthPlug
                   headers,
                   sessionIDs: codexSessionIDs,
                   sessionPromptFingerprints: codexSessionPromptFingerprints,
+                  ...(isManagedCacheKey(managedCacheKey) ? { managedCacheKey } : {}),
+                  ...(isProviderSessionID(providerSessionID) ? { providerSessionID } : {}),
+                  ...(cacheMode === "off" ? { cacheMode: "off" as const } : {}),
                   responsesLite: parsed.pathname.includes("/v1/responses"),
                 })
               } catch (error) {

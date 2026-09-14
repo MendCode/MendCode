@@ -1,4 +1,4 @@
-import { afterEach, describe, expect } from "bun:test"
+import { afterEach, describe, expect, test } from "bun:test"
 import { Cause, Effect, Exit, Layer } from "effect"
 import path from "path"
 import { Agent } from "../../src/agent/agent"
@@ -9,12 +9,23 @@ import { Permission } from "../../src/permission"
 import { Instance } from "../../src/project/instance"
 import { SessionID, MessageID } from "../../src/session/schema"
 import { Instruction } from "../../src/session/instruction"
-import { ReadTool } from "../../src/tool/read"
+import { ReadTool, lines } from "../../src/tool/read"
 import { Truncate } from "@/tool/truncate"
 import { Tool } from "@/tool/tool"
 import { Filesystem } from "@/util/filesystem"
 import { disposeAllInstances, provideInstance, TestInstance, tmpdirScoped } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
+
+test("bounded line reads stop after the requested slice and one lookahead", async () => {
+  const result = await lines(import.meta.filename, { offset: 1, limit: 2 })
+  expect(result.raw).toHaveLength(2)
+  expect(result.count).toBe(3)
+  expect(result.more).toBe(true)
+})
+
+test("line reads honor cancellation", async () => {
+  await expect(lines(import.meta.filename, { offset: 1, limit: 100 }, AbortSignal.abort())).rejects.toThrow()
+})
 
 const FIXTURES_DIR = path.join(import.meta.dir, "fixtures")
 
@@ -278,7 +289,7 @@ describe("tool.read truncation", () => {
 
       const result = yield* run({ filePath: path.join(test.directory, "many-lines.txt"), limit: 10 })
       expect(result.metadata.truncated).toBe(true)
-      expect(result.output).toContain("Showing lines 1-10 of 100")
+      expect(result.output).toContain("Showing lines 1-10. Use offset=11 to continue.")
       expect(result.output).toContain("Use offset=11")
       expect(result.output).toContain("line0")
       expect(result.output).toContain("line9")

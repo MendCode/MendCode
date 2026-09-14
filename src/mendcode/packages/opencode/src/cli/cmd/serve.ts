@@ -10,46 +10,12 @@ import { SessionRunState } from "@/session/run-state"
 import { SessionStatus } from "@/session/status"
 import * as Log from "@mendcode/core/util/log"
 import { recoverStaleSessionStatuses } from "@/session/recovery"
+import { Database } from "@/storage/db"
+import { createShutdown } from "./serve-shutdown"
+
+export { createShutdown } from "./serve-shutdown"
 
 const log = Log.create({ service: "cli.serve" })
-const INSTANCE_DISPOSE_TIMEOUT_MS = 10_000
-
-export function createShutdown(input: {
-  stopListener: () => Promise<void>
-  disposeInstances: () => Promise<void>
-  clearState: () => Promise<void>
-  disposeTimeoutMs?: number
-}) {
-  let shutdown: Promise<void> | undefined
-  return () =>
-    (shutdown ??= input
-      .stopListener()
-      .catch((error) => {
-        log.warn("shared server listener cleanup failed", {
-          error: error instanceof Error ? error.message : String(error),
-        })
-      })
-      .then(async () => {
-        let timer: ReturnType<typeof setTimeout> | undefined
-        await Promise.race([
-          input.disposeInstances().catch((error) => {
-            log.warn("shared server instance cleanup failed", {
-              error: error instanceof Error ? error.message : String(error),
-            })
-          }),
-          new Promise<void>((resolve) => {
-            timer = setTimeout(() => {
-              log.warn("shared server instance cleanup timed out")
-              resolve()
-            }, input.disposeTimeoutMs ?? INSTANCE_DISPOSE_TIMEOUT_MS)
-            timer.unref()
-          }),
-        ])
-        if (timer) clearTimeout(timer)
-      })
-      .then(input.clearState)
-      .then(() => undefined))
-}
 
 export const ServeCommand = effectCmd({
   command: "serve",
@@ -96,9 +62,16 @@ export const ServeCommand = effectCmd({
     const stop = createShutdown({
       stopListener: () => server.stop(true),
       disposeInstances: () => Effect.runPromise(store.disposeAll()),
+      closeDatabase: () => Database.close(),
       clearState: async () => {
         if (shared) await SharedServer.clearStateIfOwned(process.pid)
       },
+      exit: (code) => process.exit(code),
+      report: (stage, error) =>
+        log.warn("server shutdown failed; exiting with ownership receipt retained", {
+          stage,
+          error: error instanceof Error ? error.message : String(error),
+        }),
     })
 
     try {

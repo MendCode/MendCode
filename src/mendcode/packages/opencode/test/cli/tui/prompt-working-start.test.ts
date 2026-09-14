@@ -1243,20 +1243,22 @@ describe("resolveWorkingStartedAt", () => {
     expect(shouldRenderCompactionArcade({ style: "cockpit", arcade: "snake" })).toBe(false)
     expect(shouldRenderCompactionArcade({ style: "minimal", arcade: "snake" })).toBe(false)
     expect(shouldRenderCompactionArcade({ style: "arcade", arcade: "snake" })).toBe(true)
-    expect(shouldRenderCompactionArcade({ style: "arcade", arcade: "snake", completed: true })).toBe(true)
+    expect(shouldRenderCompactionArcade({ style: "arcade", arcade: "snake", completed: true })).toBe(false)
     expect(shouldRenderCompactionArcade({ style: "arcade", arcade: "snake", terminal: true })).toBe(false)
     expect(shouldRenderCompactionArcade({ style: "arcade", arcade: "off" })).toBe(false)
   })
 
   test("keeps the compaction arcade visible after a summary body is persisted", () => {
     const packed = compactionPanelIsPacked({ completed: false, hasSummaryBody: true })
-    expect(packed).toBe(true)
+    expect(packed).toBe(false)
     expect(shouldRenderCompactionArcade({ style: "arcade", arcade: "snake", completed: packed })).toBe(true)
     expect(compactionPanelIsPacked({ completed: false, hasSummaryBody: false })).toBe(false)
     expect(compactionPanelIsPacked({ terminal: true })).toBe(true)
   })
 
-  test("keeps Arcade completion distinguishable while the game remains visible", () => {
+  test("distinguishes successful compaction from interruption and failure", () => {
+    expect(compactionPanelHeading({ style: "arcade", packed: true, failure: "interrupted" })).toBe("Compaction interrupted")
+    expect(compactionPanelHeading({ style: "arcade", packed: true, failure: "failed" })).toBe("Compaction failed")
     expect(compactionPanelHeading({ style: "arcade", packed: true })).toBe("Arcade complete · Context packed")
     expect(compactionPanelHeading({ style: "arcade", packed: false })).toBe("Packing context")
     expect(compactionPanelHeading({ style: "cockpit", packed: true })).toBe("Context packed")

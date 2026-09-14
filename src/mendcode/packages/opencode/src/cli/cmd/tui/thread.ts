@@ -29,6 +29,7 @@ import { validateSession } from "./validate-session"
 import { loadMendTuiProfile } from "@/mend/profile"
 import { ServerAuth } from "@/server/auth"
 import { SharedServer, type SharedServerClientLease, type SharedServerState } from "./shared-server"
+import { SHARED_SERVER_SHUTDOWN_TIMEOUT_MS } from "../serve-shutdown"
 import { isProcessMemoryUsage, processMemoryUsage, type DiagnosticsSnapshot } from "@/util/process-memory"
 
 const SHARED_SERVER_PROBE_TIMEOUT_MS = 2_000
@@ -79,7 +80,8 @@ async function probeSharedServer(input: { url: string; directory: string; header
     headers: input.headers,
     signal: AbortSignal.timeout(SHARED_SERVER_PROBE_TIMEOUT_MS),
   })
-  await client.global.health({ throwOnError: true })
+  const health = await client.global.health({ throwOnError: true })
+  if (health.data?.healthy !== true) throw new Error("Shared backend is not healthy")
 }
 
 function sharedServerConnection(state: SharedServerState) {
@@ -167,7 +169,7 @@ async function stopLocalSharedServer(state: SharedServerState) {
     return !SharedServer.isProcessAlive(state.pid)
   }
 
-  const deadline = Date.now() + 5_000
+  const deadline = Date.now() + SHARED_SERVER_SHUTDOWN_TIMEOUT_MS + 2_000
   while (Date.now() < deadline) {
     if (!SharedServer.isProcessAlive(state.pid)) return true
     await new Promise((resolve) => setTimeout(resolve, 50))
@@ -288,7 +290,7 @@ export async function ensureLocalSharedServer(input: {
   if (existing) return existing
 
   const release = await SharedServer.acquireLock()
-  if (!release) return waitForLocalSharedServer(input.directory, runtimeID, input.lease)
+  if (!release) return waitForExistingLocalSharedServer(input.directory, input.lease)
 
   let child: ChildProcess | undefined
   let connected = false
@@ -304,18 +306,30 @@ export async function ensureLocalSharedServer(input: {
       const activeClients = await SharedServer.activeClientLeaseCountForServer(state.pid)
       const live = SharedServer.isProcessAlive(state.pid)
       const runtimeMatches = state.runtimeID === runtimeID
+      // A different runtime fingerprint is not a failed health probe. Desktop
+      // clients can keep the previous binary alive while an update is installed.
+      const reachable = live && await probeSharedServer({ ...sharedServerConnection(state), directory: input.directory })
+        .then(() => true, () => false)
 
+      if (reachable && runtimeMatches) {
+        const connection = await connectToSharedServerState(input.directory, state, input.lease)
+        if (connection) {
+          connected = true
+          return connection
+        }
+        return undefined
+      }
       const canReplace = SharedServer.shouldReplaceSharedServer({
         live,
         runtimeMatches,
         activeClients,
-        reachable: false,
+        reachable,
       })
       if (SharedServer.shouldAttachExistingSharedServer({
         live,
         runtimeMatches,
         activeClients,
-        reachable: false,
+        reachable,
       })) {
         // An active client owns the old runtime. Attach to that server until
         // its leases drain; starting a second server would split durable state

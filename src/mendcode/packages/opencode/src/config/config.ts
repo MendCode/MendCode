@@ -25,6 +25,7 @@ import { containsPath } from "../project/instance-context"
 import { zod } from "@/util/effect-zod"
 import { NonNegativeInt, PositiveInt, withStatics, type DeepMutable } from "@/util/schema"
 import { ConfigAgent } from "./agent"
+import { ConfigCache } from "./cache"
 import { ConfigCommand } from "./command"
 import { ConfigFormatter } from "./formatter"
 import { ConfigLayout } from "./layout"
@@ -192,6 +193,12 @@ export const Info = Schema.Struct({
   subagent_variant: Schema.optional(Schema.String).annotate({
     description: "Default model variant to use with subagent_model for subagents launched by the task tool",
   }),
+  workflow_model: Schema.optional(ConfigModelID).annotate({
+    description: "Default workflow executor model in provider/model format; explicit task and plan models take precedence",
+  }),
+  workflow_variant: Schema.optional(Schema.String).annotate({
+    description: "Default variant for workflow_model; never applied to explicit task or plan models",
+  }),
   subagent_owner_wake: Schema.optional(Schema.Boolean).annotate({
     description:
       "Let completed background subagents wake an idle parent agent. Enabled by default; set false to disable.",
@@ -235,6 +242,9 @@ export const Info = Schema.Struct({
   ).annotate({ description: "Agent configuration for model roles and subagents" }),
   provider: Schema.optional(Schema.Record(Schema.String, ConfigProvider.Info)).annotate({
     description: "Custom provider configurations and model overrides",
+  }),
+  cache: Schema.optional(ConfigCache.Info).annotate({
+    description: "Provider prompt-cache controls with project, session, and exact-model scoping",
   }),
   image_generation: Schema.optional(
     Schema.Struct({
@@ -363,6 +373,9 @@ export const Info = Schema.Struct({
           "Minimum pasted text length before the TUI collapses it into a pasted-content placeholder (default: 3000).",
       }),
       batch_tool: Schema.optional(Schema.Boolean).annotate({ description: "Enable the batch tool" }),
+      tool_discovery: Schema.optional(Schema.Boolean).annotate({
+        description: "Discover secondary and MCP tool schemas on demand to reduce context (default: true).",
+      }),
       openTelemetry: Schema.optional(Schema.Boolean).annotate({
         description: "Enable OpenTelemetry spans for AI SDK calls (using the 'experimental_telemetry' flag)",
       }),

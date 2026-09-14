@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { mkdir, writeFile } from "fs/promises"
 import path from "path"
-import { composePromptPolicy } from "../../../src/mend/prompt/compose"
+import { composePromptPolicy, promptRuntimeContextText } from "../../../src/mend/prompt/compose"
 import { MAX_CUSTOM_PROMPT_BYTES } from "../../../src/mend/prompt/custom"
 import {
   advancedCommands,
@@ -84,6 +84,36 @@ describe("mend prompt composition", () => {
     expect(section?.text).not.toMatch(/\b(you may|do not|prefer|use)\b/i)
   })
 
+  test("full mode explains provider-aware subscription cache behavior", async () => {
+    const focus = await composePromptPolicy({ mode: "focus", focusID: "codex" })
+    const full = await composePromptPolicy({ mode: "full", focusID: "codex" })
+    const section = full.sections.find((item) => item.id === "provider-cache-context")
+
+    expect(focus.sections.find((item) => item.id === "provider-cache-context")).toBeUndefined()
+    expect(section?.text).toContain("ChatGPT subscription/OAuth")
+    expect(section?.text).toContain("session-scoped native prompt-cache key")
+    expect(section?.text).toContain("weekly-limit")
+    expect(section?.text).toContain("does not schedule warm-up, keepalive, refresh")
+    expect(full.policyInstructions).toContain("account UI")
+
+    const runtime = promptRuntimeContextText({
+      providerID: "openai",
+      modelID: "openai/gpt-5.6-luna",
+      apiModelID: "gpt-5.6-luna",
+      authMode: "oauth",
+      transport: "responses-lite",
+      cache: {
+        mode: "smart",
+        useCacheKey: true,
+        adapterID: "openai",
+        reason: "verified passive cache binding",
+      },
+    })
+    expect(runtime).toContain("OpenAI ChatGPT subscription/OAuth")
+    expect(runtime).toContain("session-scoped native Codex key")
+    expect(runtime).not.toContain("access-token")
+  })
+
   test("full mode documents TODO discipline, async consent, and cost-aware routing", async () => {
     const focus = await composePromptPolicy({ mode: "focus", focusID: "codex" })
     const full = await composePromptPolicy({ mode: "full", focusID: "codex" })
@@ -132,6 +162,22 @@ describe("mend prompt composition", () => {
 
     expect(policy.source?.promptPath).toContain("gpt_5_codex_prompt.md")
     expect(policy.sections.find((item) => item.id === "model-behavior")?.text).toContain("GPT-5.6 compatibility")
+  })
+
+  test("adds the concise Astra behavior profile to focus and full modes", async () => {
+    const minimal = await composePromptPolicy({ mode: "minimal", focusID: "codex", modelID: "openai/gpt-6-astra-fast" })
+    const focus = await composePromptPolicy({ mode: "focus", focusID: "codex", modelID: "openai/gpt-6-astra-fast" })
+    const full = await composePromptPolicy({ mode: "full", focusID: "codex", modelID: "gpt-6-astra" })
+
+    expect(minimal.sections.find((item) => item.id === "model-behavior")).toBeUndefined()
+    const focusSection = focus.sections.find((item) => item.id === "model-behavior")
+    const fullSection = full.sections.find((item) => item.id === "model-behavior")
+    expect(focusSection?.text).toContain("GPT-6 Astra behavior guidance")
+    expect(focusSection?.text).toContain("distinguish facts from hypotheses")
+    expect(focusSection?.text).toContain("Preserve the current objective")
+    expect(focusSection?.text).not.toContain("You are Codex")
+    expect(focusSection?.text).toBe(fullSection?.text)
+    expect(focusSection?.bytes).toBeLessThanOrEqual(4500)
   })
 
   test("uses the current Mistral Vibe CLI snapshot", async () => {
