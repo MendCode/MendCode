@@ -10,7 +10,7 @@ import {
   inspectCompatibility,
   recordSchemaIdentity,
 } from "../../src/storage/compatibility"
-import { identifyMigrations } from "../../src/storage/migration-journal"
+import { identifyMigrations, supportedMigrationJournal } from "../../src/storage/migration-journal"
 import { init } from "../../src/storage/db.bun"
 import { mendChannelDbPath } from "../../src/storage/resolve-default-sqlite-path"
 
@@ -48,6 +48,27 @@ test("known legacy schema is compatible; persisted SQL identity rejects drift", 
   writer.$client.close()
   expect(inspectCompatibility(file, journal).legacy).toBe(false)
   expect(inspectCompatibility(file, [{ ...journal[0], hash: "f".repeat(64) }]).compatible).toBe(false)
+})
+
+test("target-lock migration from beta 11 remains compatible without changing database bytes", () => {
+  const target = supportedMigrationJournal().find((entry) => entry.name === "20260912160000_todo_target_lock")
+  expect(target).toEqual({
+    name: "20260912160000_todo_target_lock",
+    timestamp: 1789228800000,
+    hash: "70cfa4c0564c863794823218a7e39e645c10b6a99ffa47b39d4eb87bd41e6ef1",
+  })
+  const file = path.join(root, "target-lock.db")
+  const db = new Database(file, { create: true })
+  db.run("CREATE TABLE __drizzle_migrations (name TEXT, created_at NUMERIC)")
+  db.run("CREATE TABLE __mendcode_schema_identity (name TEXT PRIMARY KEY, timestamp INTEGER NOT NULL, hash TEXT NOT NULL)")
+  db.run("INSERT INTO __drizzle_migrations VALUES (?, ?)", [target!.name, target!.timestamp])
+  db.run("INSERT INTO __mendcode_schema_identity VALUES (?, ?, ?)", [target!.name, target!.timestamp, target!.hash])
+  db.close()
+  const before = readFileSync(file)
+  const result = inspectCompatibility(file, supportedMigrationJournal())
+  expect(result.compatible).toBe(true)
+  expect(result.legacy).toBe(false)
+  expect(readFileSync(file)).toEqual(before)
 })
 
 test("snapshot includes WAL commits only when migrations are pending", () => {
