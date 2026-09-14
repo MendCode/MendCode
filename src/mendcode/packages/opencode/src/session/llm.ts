@@ -425,6 +425,13 @@ const live: Layer.Layer<
         if (input.model.api.npm === "@ai-sdk/openai") params.options.forceReasoning = true
       }
 
+      if (isAstraModel(input.model.api.id)) {
+        params.temperature = undefined
+        params.topP = undefined
+        params.topK = undefined
+        params.options = normalizeAstraOptions(input.model.api.id, params.options)
+      }
+
       const { headers } = yield* plugin.trigger(
         "chat.headers",
         {

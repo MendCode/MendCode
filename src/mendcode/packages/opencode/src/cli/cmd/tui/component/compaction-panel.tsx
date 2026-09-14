@@ -594,6 +594,7 @@ export function CompactionPanel(props: {
       blurArcade(undefined, { consume: false })
       return
     }
+
     const timer = setInterval(() => {
       const game = activeArcadeGame()
       if (game) {
