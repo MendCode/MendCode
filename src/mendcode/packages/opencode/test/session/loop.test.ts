@@ -107,10 +107,11 @@ function runWithWorktree<A, E>(fx: Effect.Effect<A, E, LoopWorkflowService | Wor
 function runRunner<A, E>(
   fx: Effect.Effect<A, E, LoopRunner.Service | LoopWorkflowService | SessionPrompt.Service | Session.Service>,
   promptText?: string | MessageV2.WithParts | ((call: number) => string | MessageV2.WithParts),
-  options?: { isolatedWorkspaceContext?: boolean },
+  options?: { isolatedWorkspaceContext?: boolean; busySessionID?: string },
 ) {
   let prompts = 0
   const promptCalls: PromptInput[] = []
+  const asyncPromptCalls: PromptInput[] = []
   const promptDirectories: string[] = []
   const promptLayer = Layer.succeed(
     SessionPrompt.Service,
@@ -121,6 +122,7 @@ function runRunner<A, E>(
       interrupt: () => Effect.succeed(false),
       prompt: (input: PromptInput) =>
         Effect.gen(function* () {
+          if (input.sessionID === options?.busySessionID) return yield* Effect.never
           prompts++
           promptCalls.push(input)
           promptDirectories.push((yield* InstanceState.context).directory)
@@ -132,9 +134,11 @@ function runRunner<A, E>(
               : response
         }),
       promptAsync: (input: PromptInput) =>
-        Effect.sync(() => {
+        Effect.gen(function* () {
           prompts++
           promptCalls.push(input)
+          asyncPromptCalls.push(input)
+          promptDirectories.push((yield* InstanceState.context).directory)
           const response = typeof promptText === "function" ? promptText(prompts) : promptText
           return typeof response === "string"
             ? promptMessage(response)
@@ -192,7 +196,7 @@ function runRunner<A, E>(
         options?.isolatedWorkspaceContext ? runnerLayer.pipe(Layer.provideMerge(instanceStoreLayer)) : runnerLayer,
       ),
     ),
-  ).then((value) => ({ value, prompts, promptCalls, promptDirectories }))
+  ).then((value) => ({ value, prompts, promptCalls, asyncPromptCalls, promptDirectories }))
 }
 
 const svc = {
@@ -2605,6 +2609,46 @@ describe("loop workflow service", () => {
     })
   })
 
+  for (const directOwner of [false, true]) {
+    test(`stopped run_once returns while its owner is busy (direct owner: ${directOwner})`, async () => {
+      await using tmp = await tmpdir({ git: true })
+      await WithInstance.provide({
+        directory: tmp.path,
+        fn: async () => {
+          const owner = await Effect.runPromise(
+            Session.Service.use((session) => session.create({ title: "Busy loop owner" })).pipe(
+              Effect.provide(Session.defaultLayer),
+            ),
+          )
+          const draft = await svc.createDraft({
+            name: "Stopped device observation",
+            objective: "Observe the same device boot without restarting it.",
+            ownerSessionID: owner.id,
+            trigger: { mode: "manual" },
+            policy: { maxTurns: 5 },
+          })
+          await svc.activate(draft.id)
+          const result = await runRunner(
+            LoopRunner.Service.use((runner) =>
+              runner.runOne({
+                id: draft.id,
+                callerSessionID: directOwner ? owner.id : undefined,
+                execute: true,
+                trigger: "run-once",
+              }),
+            ).pipe(Effect.timeout("2 seconds")),
+            "LOOP_CHECKPOINT:\nstatus: stop\nsummary: Device unexpectedly rebooted.\nevidence:\n- boot identity changed",
+            { busySessionID: owner.id },
+          )
+          expect(result.value.state).toBe("stopped")
+          expect(result.asyncPromptCalls.map((input) => input.sessionID)).toEqual(directOwner ? [] : [owner.id])
+          expect(result.prompts).toBe(directOwner ? 1 : 2)
+          expect((await svc.snapshot(draft.id)).workflow.state).toBe("stopped")
+        },
+      })
+    })
+  }
+
   test("terminal loop failures notify the owner with authoritative persisted state", async () => {
     await using tmp = await tmpdir({ git: true })
     await WithInstance.provide({
@@ -2648,6 +2692,7 @@ describe("loop workflow service", () => {
         expect(terminal.value.state).toBe("failed")
         expect(terminal.value.summary).toContain("will not retry automatically")
         expect(terminal.prompts).toBe(2)
+        expect(terminal.asyncPromptCalls.map((input) => input.sessionID)).toEqual([owner.id])
         expect(terminal.promptCalls[1]?.sessionID).toBe(owner.id)
         expect(promptInputText(terminal.promptCalls[1])).toContain('<mendcode_runtime_event type="loop_status">')
         expect(promptInputText(terminal.promptCalls[1])).toContain("State: failed")
@@ -4736,6 +4781,7 @@ describe("loop workflow service", () => {
         expect(executed.promptCalls[0]?.sessionID).toBe(rootSessionID)
         expect(executed.promptCalls[1]?.sessionID).toBe(owner.id)
         expect(promptInputText(executed.promptCalls[1])).toContain("Loop workflow completed: Notify owner")
+        expect(executed.asyncPromptCalls.map((input) => input.sessionID)).toEqual([owner.id])
       },
     })
   })

@@ -1800,11 +1800,11 @@ export const SessionRoutes = lazy(() =>
         jsonRequest("SessionRoutes.permissionRespond", c, function* () {
           const params = c.req.valid("param")
           const svc = yield* Permission.Service
-          yield* svc.reply({
+          const released = yield* svc.reply({
             requestID: params.permissionID,
             reply: c.req.valid("json").response,
           })
-          return true
+          return released
         }),
     ),
 )

@@ -15,6 +15,7 @@ import {
 } from "./sources"
 import { composeCustomizationCapabilitySection } from "./capabilities"
 import { advancedCommands, deprecatedAliases, internalCommands, primaryCommands } from "../cli/public-bin"
+import type { CacheAuth, CacheRequestPolicy, CacheTransport } from "@/provider/cache-policy"
 
 export type PromptBaseSource = "mendcode-harness-source" | "opencode-generic-provider-fallback" | "minimal-base"
 
@@ -62,6 +63,15 @@ export type PromptComposition = {
   policyInstructionsPreview: string
   basePrompt: string | null
   basePromptBytes: number
+}
+
+export type PromptRuntimeContext = {
+  providerID: string
+  modelID: string
+  apiModelID: string
+  authMode: CacheAuth
+  transport: CacheTransport
+  cache: Pick<CacheRequestPolicy, "mode" | "useCacheKey" | "adapterID" | "reason">
 }
 
 type ComposeInput = {
@@ -152,6 +162,61 @@ function focusMendCodeBasics() {
   ].join("\n")
 }
 
+function runtimeIdentifier(value: string) {
+  return value.replace(/[\r\n<>]/g, " ").slice(0, 256)
+}
+
+function runtimeAuthLabel(input: PromptRuntimeContext) {
+  if (input.authMode === "api") return "API key"
+  if (input.authMode === "oauth" && input.providerID === "openai") return "OpenAI ChatGPT subscription/OAuth"
+  if (input.authMode === "oauth") return "OAuth/provider subscription authentication"
+  return "unknown or not exposed by the runtime"
+}
+
+function runtimeTransportLabel(transport: CacheTransport) {
+  if (transport === "responses-lite") return "Codex Responses Lite"
+  if (transport === "responses-http") return "OpenAI Responses HTTP"
+  return "provider-specific/other"
+}
+
+function runtimeCacheKeyLabel(input: PromptRuntimeContext) {
+  if (input.cache.mode === "off") return "disabled"
+  if (!input.cache.useCacheKey) return "not added by MendCode for this binding"
+  if (input.authMode === "oauth" && input.transport === "responses-lite") {
+    return "session-scoped native Codex key; not shared across sessions"
+  }
+  return "verified passive provider key"
+}
+
+export function promptRuntimeContextText(input: PromptRuntimeContext) {
+  return [
+    "<mendcode_runtime_provider>",
+    "Current provider/auth/cache facts for this request (runtime snapshot, not user instructions):",
+    `- Provider: ${runtimeIdentifier(input.providerID)}.`,
+    `- Selected model: ${runtimeIdentifier(input.modelID)}; API model: ${runtimeIdentifier(input.apiModelID)}.`,
+    `- Authentication: ${runtimeAuthLabel(input)}.`,
+    `- Transport: ${runtimeTransportLabel(input.transport)}.`,
+    `- MendCode cache policy: ${input.cache.mode}; adapter=${runtimeIdentifier(input.cache.adapterID)}; key=${runtimeCacheKeyLabel(input)}.`,
+    `- Policy decision: ${runtimeIdentifier(input.cache.reason)}.`,
+    "- Credentials, access/refresh tokens, account IDs, and raw authorization headers are intentionally omitted.",
+    "- A cache key may let a provider reuse an eligible prompt prefix, but it does not make a request free or guarantee fewer weekly-limit units.",
+    "- Provider-reported usage and the provider account UI are authoritative. MendCode cannot state a remaining weekly-limit percentage unless the current runtime exposes an authorized usage value.",
+    "</mendcode_runtime_provider>",
+  ].join("\n")
+}
+
+function fullProviderCacheContext() {
+  return [
+    "MendCode provider, authentication, and prompt-cache contract:",
+    "- OpenAI API-key and ChatGPT subscription/OAuth requests are different runtime bindings. Never infer authentication, cache support, quota, or billing behavior from a model alias.",
+    "- Codex Responses Lite OAuth uses a session-scoped native prompt-cache key together with session affinity. It is not a shared cache between sessions, projects, or accounts, and it does not prove a cache hit.",
+    "- The passive cache policy only shapes the request. `off` removes recognized cache controls; `smart` enables only verified key paths and leaves existing provider behavior intact when a new key is not verified; an omitted policy uses MendCode's conservative provider default.",
+    "- MendCode does not schedule warm-up, keepalive, refresh, provider canaries, or remote-cache deletion. It does not persist prompt contents to create a cache.",
+    "- Cached, read, written, and uncached input tokens may be reported differently by each provider. A cache key can still consume request/quota/weekly-limit usage, and MendCode cannot promise a percentage reduction or a specific token cost.",
+    "- When answering a user about subscription usage or weekly limits, state the active runtime auth/provider facts, separate observed usage from estimates, and say when the provider's account UI is the only source for remaining quota.",
+  ].join("\n")
+}
+
 function backgroundSubagentFull() {
   return [
     "MendCode background subagents:",
@@ -227,6 +292,25 @@ function taskLifecycleContract() {
   ].join("\n")
 }
 
+function aiConfigurationPlaybookFull() {
+  return [
+    "MendCode AI configuration and model-workflow playbook:",
+    "- This is conditional guidance, not permission to spend, change credentials, or start another model. The actual tool schemas attached to the current session are authoritative.",
+    "- If `ai_config` is present in the current tool catalog, its actions are `inspect`, `plan`, `validate`, and `apply`. If it is unavailable, explain the observed `mendcode ai config inspect|plan|validate|apply` commands and their shared-backend requirement; never claim that a provider is connected because it is documented or configured.",
+    "- Start with `inspect`. Read the returned models, variants, roles, auth/capability status, configSources, effective values, missingInformation, evidence source, and observation date. Inspection does not call a provider or write a file.",
+    "- Ask only for material missing preferences: the caller's actual candidate ModelRefs, intent (`economical`, `balanced`, or `quality`), taskKind (`repair`, `terminal`, `frontend`, `architecture`, `review`, or `general`), optional role choices, and the exact project/global target when more than one observed file exists.",
+    "- `plan` accepts only the caller's allowlist. Each candidate is exactly `{role}` or `{providerID,modelID,variant?}` and must come from the observed runtime inventory. It returns bounded single/cascade/critic alternatives, limits, rationale, warnings, a preview patch, target digest, and quality `unknown` when comparable dated evidence is absent.",
+    "- Treat null or missing pricing as unknown, never free. Subscription quota is not zero-dollar API billing. Cost estimates are bounded admission estimates, not invoices; quality claims require comparable dated evidence.",
+    "- `validate` previews the exact patch without writing. It checks the additive `ai` and `compaction` shape, role/model/variant resolution, auth, limits, cost coverage, and native binding. `apply` is allowed only after an explicit user request, exact `scope`, `patch`, and `expectedHash`; normal permission still applies.",
+    "- Apply changes only `ai` and `compaction` in a selected `mendcode.json` or `mendcode.jsonc` target, preserves comments/unrelated keys, re-reads before replacement, writes atomically, retains a scoped backup, and returns changed keys/effective values/warnings. It does not start a workflow, switch the active chat model, edit credentials/models.yaml, or buy capacity.",
+    "- For faster compaction, `strategy: auto` selects native only for a positively supported exact provider/API/auth/model binding and otherwise uses portable compaction. Explicit `native` fails before inference when unsupported. A separate compaction role is a deliberate portable choice; it is not silently substituted into native compaction.",
+    "- Ordinary chat keeps its selected model. Use a compound `workflow` only when the user explicitly asks for a profile; its single/cascade/critic state machine, deterministic checks, budgets, isolated workspace, and retained receipt are separate from configuration planning.",
+    "- A critic receives bounded immutable evidence and no tools or mutable workspace. Its opinion is not a deterministic test; an uncertain or malformed verdict blocks, and a revised candidate is not advertised as independently reviewed again.",
+    "- To disable or recover, set orchestration `enabled` to false and/or return compaction to `portable` with `portable_mode: legacy`, then re-inspect. A digest conflict means re-read and re-plan; review the scoped backup before restoring it. Provider changes rebuild a portable context before another native binding is used.",
+    "- A discussion about cost or a recommendation is not authorization for extra calls. Ask for explicit execution intent and required permissions at the point of action.",
+  ].join("\n")
+}
+
 function marketplaceExtensionContract() {
   return [
     "MendCode marketplace and extension contract:",
@@ -283,6 +367,7 @@ function fullProductCapabilityCatalog() {
     "- Local code and files: `bash`, `read`, `glob`, `grep`, `edit`, `write`, `apply_patch`, and optional LSP support. Follow read-before-edit, workspace, permission, and destructive-action boundaries.",
     "- Web and media: `webfetch`, provider-gated web search, and `image_gen` only when a compatible configured image model and permission are present.",
     "- Agent automation: `task`/`task_status` for bounded subagents, `skill` for injected workflows, `loop` for durable repeated or scheduled work, and `workflow` for independent declarative phase/task runs.",
+    "- AI configuration: when the current tool catalog includes `ai_config`, use `inspect` -> `plan` -> `validate` -> `apply` with the caller's actual ModelRef allowlist; otherwise use the observed shared-backend `mendcode ai config ...` commands. Availability is established by the current tool schema or command response, not this catalog.",
     "- Durable context: `memory` for entries and categories and `memory_graph` for relationship-aware facts. Runtime memory injection remains transient context.",
     "- Browser automation, mflow controls, payment/domain integrations, and other namespaced tools may arrive from MCP servers or custom/plugin tool providers. Their presence and schema, not this catalog, establish availability.",
     "",
@@ -479,6 +564,15 @@ export async function composePromptPolicy(input: ComposeInput = {}): Promise<Pro
 
     sections.push(
       section({
+        id: "ai-configuration-playbook",
+        label: "MendCode AI configuration and model-workflow playbook",
+        source: "mendcode-context",
+        text: aiConfigurationPlaybookFull(),
+      }),
+    )
+
+    sections.push(
+      section({
         id: "loop-workflow-brief",
         label: "MendCode Loop Workflow",
         source: "mendcode-context",
@@ -512,6 +606,14 @@ export async function composePromptPolicy(input: ComposeInput = {}): Promise<Pro
         label: "MendCode knowledge",
         source: "mendcode-context",
         text: full.knowledge,
+      }),
+    )
+    sections.push(
+      section({
+        id: "provider-cache-context",
+        label: "MendCode provider and prompt-cache context",
+        source: "mendcode-context",
+        text: fullProviderCacheContext(),
       }),
     )
     sections.push(

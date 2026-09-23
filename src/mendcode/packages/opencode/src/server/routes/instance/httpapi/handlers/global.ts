@@ -18,6 +18,8 @@ import { RootHttpApi } from "../api"
 import { GlobalUpgradeInput } from "../groups/global"
 import { processMemoryUsage } from "@/util/process-memory"
 import { SharedServer } from "@/cli/cmd/tui/shared-server"
+import { reportUpgradePhase, reportUpgradeOutcome } from "@/server/upgrade-progress"
+import { readChannel, writeChannel } from "@/installation/release-channel"
 
 const log = Log.create({ service: "server" })
 const HTTPAPI_EVENT_BUFFER_SIZE = 512
@@ -125,7 +127,7 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
         }
       }
       const target = ctx.payload.target || (yield* installation.latest(method))
-      const result = yield* installation.upgrade(method, target).pipe(
+      const result = yield* installation.upgrade(method, target, (phase, progress) => reportUpgradePhase(target, phase, progress)).pipe(
         Effect.as({ status: 200, body: { success: true as const, version: target } }),
         Effect.catch((err) =>
           Effect.succeed({
@@ -137,6 +139,7 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
           }),
         ),
       )
+      reportUpgradeOutcome(target, result.body.success ? undefined : result.body.error)
       if (!result.body.success) return result
       GlobalBus.emit("event", {
         directory: "global",
@@ -168,6 +171,8 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
     })
 
     return handlers
+      .handle("releaseChannelGet", () => Effect.promise(async () => ({ channel: await readChannel() })))
+      .handle("releaseChannelSet", ({ payload }) => Effect.promise(async () => ({ channel: await writeChannel(payload.channel) })))
       .handle("health", health)
       .handle("memory", memory)
       .handleRaw("event", event)

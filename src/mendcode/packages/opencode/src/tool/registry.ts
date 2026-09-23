@@ -1,3 +1,4 @@
+import { ComputerCaptureTool, ComputerKeyTool } from "./computer"
 import { PlanExitTool } from "./plan"
 import { PlanReviewTool } from "./plan-review"
 import { Session } from "@/session/session"
@@ -24,7 +25,10 @@ import { ImageGenTool, resolveImageGenerationModel, usesCodexImageAdapter } from
 import * as Tool from "./tool"
 import { Config } from "@/config/config"
 import { type ToolContext as PluginToolContext, type ToolDefinition } from "@mendcode/plugin"
-import { Schema } from "effect"
+import { Schema, Scope } from "effect"
+import { continuityTools } from "./continuity"
+import { ReasoningAutoTool } from "./reasoning_auto"
+import { waitForDisable } from "@/session/continuity-control"
 import z from "zod"
 import { ZodOverride } from "@/util/effect-zod"
 import { Plugin } from "../plugin"
@@ -65,6 +69,8 @@ import { Auth } from "@/auth"
 import { AgentCommand } from "@/session/agent-command"
 import { TellTool } from "./tell"
 import { SessionsTool } from "./peers"
+import { AIConfigTool } from "./ai-config"
+import { AIConfiguration } from "@/mend/runtime/ai-configuration"
 
 const log = Log.create({ service: "tool.registry" })
 
@@ -72,6 +78,7 @@ type TaskDef = Tool.InferDef<typeof TaskTool>
 type ReadDef = Tool.InferDef<typeof ReadTool>
 
 type State = {
+  jobs: ReturnType<typeof continuityTools>["jobs"]
   custom: Tool.Def[]
   builtin: Tool.Def[]
   task: TaskDef
@@ -79,6 +86,10 @@ type State = {
 }
 
 export interface Interface {
+  readonly cancelJob: (
+    sessionID: import("@/session/schema").SessionID,
+    id: string,
+  ) => Effect.Effect<import("@/session/runtime-mailbox").Record>
   readonly ids: () => Effect.Effect<string[]>
   readonly all: () => Effect.Effect<Tool.Def[]>
   readonly named: () => Effect.Effect<{ task: TaskDef; read: ReadDef }>
@@ -115,6 +126,7 @@ export const layer: Layer.Layer<
   | Format.Service
   | Truncate.Service
   | AgentCommand.Service
+  | AIConfiguration.Service
 > = Layer.effect(
   Service,
   Effect.gen(function* () {
@@ -131,6 +143,10 @@ export const layer: Layer.Layer<
     const taskStatus = yield* TaskStatusTool
     const read = yield* ReadTool
     const question = yield* QuestionTool
+    const questionService = yield* Question.Service
+    const sessionService = yield* Session.Service
+    const busService = yield* Bus.Service
+    const reasoningAuto = yield* ReasoningAutoTool
     const planReview = yield* PlanReviewTool
     const todo = yield* TodoWriteTool
     const lsptool = yield* LspTool
@@ -149,11 +165,15 @@ export const layer: Layer.Layer<
     const reviewtool = yield* ReviewTool
     const telltool = yield* TellTool
     const sessionstool = yield* SessionsTool
+    const aiConfigTool = yield* AIConfigTool
 
     const memorytool = yield* MemoryTool
     const memorygraphtool = yield* MemoryGraphTool
+    const computerKey = yield* ComputerKeyTool
+    const computerCapture = yield* ComputerCaptureTool
     const imagegentool = yield* ImageGenTool
     const agent = yield* Agent.Service
+    yield* AIConfiguration.Service
 
     const state = yield* InstanceState.make<State>(
       Effect.fn("ToolRegistry.state")(function* (ctx) {
@@ -229,11 +249,12 @@ export const layer: Layer.Layer<
           }
         }
 
-        yield* config.get()
+        const cfg = yield* config.get()
         const questionEnabled =
           ["app", "cli", "desktop"].includes(Flag.OPENCODE_CLIENT) || Flag.OPENCODE_ENABLE_QUESTION_TOOL
 
         const tool = yield* Effect.all({
+          reasoningAuto: Tool.init(reasoningAuto),
           invalid: Tool.init(invalid),
           shell: Tool.init(shell),
           read: Tool.init(read),
@@ -254,21 +275,46 @@ export const layer: Layer.Layer<
           tell: Tool.init(telltool),
           memory: Tool.init(memorytool),
           memoryGraph: Tool.init(memorygraphtool),
+          computerKey: Tool.init(computerKey),
+          computerCapture: Tool.init(computerCapture),
           imageGen: Tool.init(imagegentool),
           patch: Tool.init(patchtool),
           question: Tool.init(question),
           planReview: Tool.init(planReview),
           lsp: Tool.init(lsptool),
           plan: Tool.init(plan),
+          aiConfig: Tool.init(aiConfigTool),
         })
 
+        const scope = yield* Scope.Scope
+        const continuity = continuityTools({
+          eligible: [tool.read, tool.glob, tool.grep, tool.fetch],
+          scope,
+          directory: ctx.directory,
+          bus: busService,
+          config,
+          question: questionService,
+          sessions: sessionService,
+        })
+        yield* Effect.addFinalizer(() => continuity.jobs.stop())
+        yield* waitForDisable(ctx.directory, "tools").pipe(
+          Effect.andThen(continuity.jobs.stop()),
+          Effect.forkScoped({ startImmediately: true }),
+        )
         return {
+          jobs: continuity.jobs,
           custom,
           builtin: [
+            ...(cfg.experimental?.async_tools === true ? continuity.jobTools : []),
+            ...(cfg.experimental?.async_questions === true ? continuity.questionTools : []),
+            ...(cfg.experimental?.session_recall === true ? continuity.recallTools : []),
+            ...(cfg.experimental?.reasoning_auto === true ? [tool.reasoningAuto] : []),
             tool.invalid,
             ...(questionEnabled ? [tool.question] : []),
             tool.shell,
             tool.read,
+            tool.computerCapture,
+            tool.computerKey,
             tool.glob,
             tool.grep,
             tool.edit,
@@ -289,6 +335,7 @@ export const layer: Layer.Layer<
             tool.imageGen,
             tool.patch,
             tool.planReview,
+            tool.aiConfig,
             ...(Flag.OPENCODE_EXPERIMENTAL_LSP_TOOL ? [tool.lsp] : []),
             ...(Flag.OPENCODE_EXPERIMENTAL_PLAN_MODE && Flag.OPENCODE_CLIENT === "cli" ? [tool.plan] : []),
           ],
@@ -433,7 +480,12 @@ export const layer: Layer.Layer<
       return { task: s.task, read: s.read }
     })
 
-    return Service.of({ ids, all, named, tools })
+    const cancelJob: Interface["cancelJob"] = (sessionID, id) =>
+      Effect.gen(function* () {
+        const s = yield* InstanceState.get(state)
+        return yield* s.jobs.cancel(sessionID, id)
+      })
+    return Service.of({ ids, all, named, tools, cancelJob })
   }),
 )
 
@@ -458,7 +510,7 @@ export const defaultLayer = Layer.suspend(() =>
     Layer.provide(Format.defaultLayer),
     Layer.provide(CrossSpawnSpawner.defaultLayer),
     Layer.provide(Ripgrep.defaultLayer),
-    Layer.provide(Truncate.defaultLayer),
+    Layer.provide([Truncate.defaultLayer, AIConfiguration.defaultLayer]),
   ),
 )
 

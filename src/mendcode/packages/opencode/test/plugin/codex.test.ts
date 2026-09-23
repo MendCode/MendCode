@@ -4,11 +4,12 @@ import {
   parseJwtClaims,
   extractAccountIdFromClaims,
   extractAccountId,
-  normalizeCodexChatGPTRequestBody,
   isCodexChatGPTModelSupported,
+  normalizeCodexChatGPTRequestBody,
   prepareCodexChatGPTOAuthRequest,
   type IdTokenClaims,
 } from "../../src/plugin/codex"
+import { normalizeAstraOptions } from "../../src/mend/prompt/model-family"
 
 function createTestJwt(payload: object): string {
   const header = Buffer.from(JSON.stringify({ alg: "none" })).toString("base64url")
@@ -74,19 +75,6 @@ describe("plugin.codex", () => {
           ) as string,
         ),
       ).toEqual({ model: "gpt-5.6-terra", reasoning: { effort: "high", mode: "pro" } })
-      expect(
-        JSON.parse(
-          normalizeCodexChatGPTRequestBody(
-            JSON.stringify({ model: "gpt-5.6-terra-pro", reasoning: { effort: "high" } }),
-          ) as string,
-        ),
-      ).toEqual({ model: "gpt-5.6-terra", reasoning: { effort: "high", mode: "pro" } })
-    })
-
-    test("routes Astra fast mode to the priority service tier", () => {
-      expect(
-        JSON.parse(normalizeCodexChatGPTRequestBody(JSON.stringify({ model: "gpt-6-astra-fast" })) as string),
-      ).toEqual({ model: "gpt-6-astra", service_tier: "priority" })
     })
 
     test("preserves explicit GPT-5.6 tiers and non-JSON bodies", () => {
@@ -101,12 +89,95 @@ describe("plugin.codex", () => {
         URLSearchParams,
       )
     })
+
+    test("normalizes Astra-only request controls without changing its model", () => {
+      const body = normalizeCodexChatGPTRequestBody(
+        JSON.stringify({
+          model: "gpt-6-astra-fast",
+          temperature: 0.2,
+          top_p: 0.8,
+          top_logprobs: 2,
+          logprobs: true,
+          include: ["reasoning.encrypted_content", "message.output_text.logprobs"],
+          reasoning: { effort: "minimal" },
+        }),
+      )
+
+      expect(JSON.parse(body as string)).toEqual({
+        model: "gpt-6-astra",
+        service_tier: "priority",
+        include: ["reasoning.encrypted_content"],
+        reasoning: { effort: "low" },
+      })
+    })
   })
 
-  test("keeps Astra, Sol, Terra, and Luna modes in the ChatGPT OAuth catalog", async () => {
+  test("recognizes the Astra catalog model and its generated fast alias", () => {
+    expect(isCodexChatGPTModelSupported("gpt-6-astra")).toBe(true)
+    expect(isCodexChatGPTModelSupported("gpt-6-astra-fast")).toBe(true)
+    expect(isCodexChatGPTModelSupported("gpt-4.1")).toBe(false)
+  })
+
+  test("keeps the provider catalog dynamic without inferring OAuth protocol support", async () => {
+    const accepted = ["gpt-6-luna", "gpt-6-sol", "gpt-6", "gpt-7-example", "gpt-5.10-example", "gpt-10.1-example"]
+    for (const id of accepted) expect(isCodexChatGPTModelSupported(id)).toBe(true)
+    for (const id of ["gpt-4.9", "gpt-5.1", "gpt-6junk", "gpt-6.1.2", "other-6-luna"])
+      expect(isCodexChatGPTModelSupported(id)).toBe(false)
+    const plugin = await CodexAuthPlugin({} as never)
+    const catalogIDs = [...accepted, "gpt-4.1", "future-provider-model"]
+    const catalog = Object.fromEntries(
+      catalogIDs.map((id) => [
+        id,
+        {
+          id,
+          api: { id },
+          limit: { context: 12345, input: 12000, output: 345 },
+          cost: { input: 1, output: 1, cache: { read: 1, write: 1 } },
+        },
+      ]),
+    )
+    const models = await plugin.provider!.models!({ models: catalog } as never, { auth: { type: "oauth" } } as never)
+    expect(Object.keys(models)).toEqual(catalogIDs)
+    expect(models["gpt-6-luna"]?.limit).toEqual(catalog["gpt-6-luna"]!.limit)
+    expect(models["future-provider-model"]?.limit).toEqual(catalog["future-provider-model"]!.limit)
+    expect(models["future-provider-model"]?.cost).toEqual({ input: 0, output: 0, cache: { read: 0, write: 0 } })
+    const apiModels = await plugin.provider!.models!({ models: catalog } as never, { auth: { type: "api" } } as never)
+    expect(apiModels === catalog).toBe(true)
+  })
+
+  test("assigns the Astra context limit and compaction threshold in the OAuth catalog", async () => {
+    const plugin = await CodexAuthPlugin({} as never)
+    const models = await plugin.provider!.models!(
+      {
+        models: {
+          "gpt-6-astra": {
+            id: "gpt-6-astra",
+            api: { id: "gpt-6-astra" },
+            cost: { input: 1, output: 1, cache: { read: 1, write: 1 } },
+            limit: { context: 1, input: 1, output: 1 },
+          },
+        },
+      } as never,
+      { auth: { type: "oauth" } } as never,
+    )
+
+    expect(models["gpt-6-astra"]?.limit).toEqual({ context: 1_050_000, input: 922_000, output: 128_000 })
+    expect(models["gpt-6-astra"]?.options).toMatchObject({ compaction: { threshold: 90 } })
+  })
+
+  test("removes unsupported Astra SDK options before serialization", () => {
+    expect(
+      normalizeAstraOptions("gpt-6-astra", {
+        temperature: 0.2,
+        topP: 0.8,
+        reasoningEffort: "minimal",
+        reasoning: { effort: "none" },
+      }),
+    ).toEqual({ reasoningEffort: "low", reasoning: { effort: "low" } })
+  })
+
+  test("keeps Sol, Terra, and Luna modes in the ChatGPT OAuth catalog", async () => {
     const ids = [
-      "gpt-6-astra",
-      "gpt-6-astra-fast",
       "gpt-5.6-sol",
       "gpt-5.6-sol-fast",
       "gpt-5.6-terra",
@@ -120,7 +191,7 @@ describe("plugin.codex", () => {
           id,
           {
             id,
-            api: { id: id.replace(/-(fast|pro)$/, "") },
+            api: { id: id.replace(/-fast$/, "") },
             cost: { input: 1, output: 1, cache: { read: 1, write: 1 } },
             limit: { context: 1, input: 1, output: 1 },
           },
@@ -132,20 +203,9 @@ describe("plugin.codex", () => {
 
     expect(Object.keys(models)).toEqual(ids)
     for (const id of ids) {
-      expect(models[id]?.limit).toEqual(
-        id.startsWith("gpt-6-astra")
-          ? { context: 1_050_000, input: 922_000, output: 128_000 }
-          : { context: 256_000, input: 256_000, output: 128_000 },
-      )
+      expect(models[id]?.limit).toEqual({ context: 256_000, input: 256_000, output: 128_000 })
       expect(models[id]?.options).toMatchObject({ compaction: { threshold: 90 } })
     }
-  })
-
-  test("accepts the official Astra model and rejects unknown GPT-6 IDs", () => {
-    expect(isCodexChatGPTModelSupported("gpt-6-astra")).toBe(true)
-    expect(isCodexChatGPTModelSupported("gpt-6-astra-fast")).toBe(true)
-    expect(isCodexChatGPTModelSupported("gpt-6-astra-pro")).toBe(false)
-    expect(isCodexChatGPTModelSupported("gpt-6-unknown")).toBe(false)
   })
 
   test("rewrites GPT-5.6 OAuth requests for Responses Lite with honest client identity", async () => {
@@ -201,7 +261,7 @@ describe("plugin.codex", () => {
     expect(requests[0]?.headers.get("originator")).toBe("codex_cli_rs")
     expect(requests[0]?.headers.get("user-agent")).toContain("codex_cli_rs/0.0.0 (MendCode;")
     expect(requests[0]?.headers.get("origin")).toBe("https://chatgpt.com")
-    expect(requests[0]?.headers.get("version")).toBe("0.144.0")
+    expect(requests[0]?.headers.get("version")).toBe("0.154.0")
     expect(requests[0]?.headers.get("x-openai-internal-codex-responses-lite")).toBe("true")
     const sessionID = requests[0]?.headers.get("session-id")
     expect(sessionID).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
@@ -249,6 +309,28 @@ describe("plugin.codex", () => {
     expect(sessionIDs.size).toBe(0)
   })
 
+  test("routes Astra through the Codex Responses Lite envelope", () => {
+    const headers = new Headers({ "session-id": "ses_astra" })
+    const body = prepareCodexChatGPTOAuthRequest({
+      headers,
+      body: JSON.stringify({
+        model: "gpt-6-astra",
+        input: [{ role: "user", content: [{ type: "input_text", text: "hello" }] }],
+        instructions: "be concise",
+      }),
+    })
+    const parsed = JSON.parse(body as string) as Record<string, unknown>
+
+    expect(parsed.model).toBe("gpt-6-astra")
+    expect(headers.get("x-openai-internal-codex-responses-lite")).toBe("true")
+    expect(parsed.tool_choice).toBe("auto")
+    expect(parsed.input).toEqual([
+      { type: "additional_tools", role: "developer", tools: [] },
+      { type: "message", role: "developer", content: [{ type: "input_text", text: "be concise" }] },
+      { role: "user", content: [{ type: "input_text", text: "hello" }] },
+    ])
+  })
+
   test("rotates Responses Lite affinity when instructions change", () => {
     const sessionIDs = new Map<string, string>()
     const sessionPromptFingerprints = new Map<string, string>()
@@ -283,6 +365,132 @@ describe("plugin.codex", () => {
       },
       { role: "user", content: [{ type: "input_text", text: "hello" }] },
     ])
+  })
+
+  test("rotates Responses Lite affinity when instructions are removed", () => {
+    const sessionIDs = new Map<string, string>()
+    const sessionPromptFingerprints = new Map<string, string>()
+
+    const request = (instructions?: string) => {
+      const headers = new Headers({ "session-id": "ses_prompt_context_removed" })
+      const body = prepareCodexChatGPTOAuthRequest({
+        headers,
+        sessionIDs,
+        sessionPromptFingerprints,
+        body: JSON.stringify({
+          model: "gpt-5.6-luna",
+          input: [{ role: "user", content: [{ type: "input_text", text: "hello" }] }],
+          ...(instructions === undefined ? {} : { instructions }),
+        }),
+      })
+      return { headers, body: JSON.parse(body as string) as Record<string, unknown> }
+    }
+
+    const first = request("stable instructions")
+    const removed = request()
+
+    expect(removed.headers.get("session-id")).not.toBe(first.headers.get("session-id"))
+    expect(removed.body.prompt_cache_key).toBe(removed.headers.get("session-id"))
+  })
+
+  test("uses a validated managed cache key without changing transport affinity", () => {
+    const headers = new Headers({ "session-id": "ses_managed_cache" })
+    const body = prepareCodexChatGPTOAuthRequest({
+      headers,
+      managedCacheKey: "mendcode:project:root-1",
+      body: JSON.stringify({
+        model: "gpt-5.6-luna",
+        input: [],
+        instructions: "stable instructions",
+      }),
+    })
+    const parsed = JSON.parse(body as string) as Record<string, unknown>
+
+    expect(parsed.prompt_cache_key).toBe("mendcode:project:root-1")
+    expect(headers.get("session-id")).not.toBe("mendcode:project:root-1")
+    expect(headers.get("x-session-affinity")).toBe(headers.get("session-id"))
+  })
+
+  test("omits the Responses Lite cache key when cache mode is off", () => {
+    const headers = new Headers({ "session-id": "ses_cache_off" })
+    const body = prepareCodexChatGPTOAuthRequest({
+      headers,
+      cacheMode: "off",
+      body: JSON.stringify({ model: "gpt-5.6-luna", input: [], instructions: "stable" }),
+    })
+    const parsed = JSON.parse(body as string) as Record<string, unknown>
+
+    expect(parsed.prompt_cache_key).toBeUndefined()
+    expect(headers.get("x-session-affinity")).toBe(headers.get("session-id"))
+  })
+
+  test("consumes the cache-off marker before forwarding an OAuth request", async () => {
+    let forwarded: { headers: Headers; body: Record<string, unknown> } | undefined
+    using server = Bun.serve({
+      port: 0,
+      async fetch(request) {
+        forwarded = { headers: new Headers(request.headers), body: await readRequestBody(request) }
+        return Response.json({})
+      },
+    })
+    const providerFetch = await loadCodexFetch(`http://127.0.0.1:${server.port}/codex/responses`)
+
+    await providerFetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "session-id": "ses_cache_off_forward",
+        "x-mendcode-cache-mode": "off",
+      },
+      body: JSON.stringify({ model: "gpt-5.6-luna", input: [], instructions: "stable" }),
+    })
+
+    expect(forwarded?.headers.get("x-mendcode-cache-mode")).toBeNull()
+    expect(forwarded?.body.prompt_cache_key).toBeUndefined()
+  })
+
+  test("falls back to the generated session key for invalid or changed managed cache keys", () => {
+    const request = (instructions: string, managedCacheKey: string) => {
+      const headers = new Headers({ "session-id": "ses_managed_cache_change" })
+      const body = prepareCodexChatGPTOAuthRequest({
+        headers,
+        managedCacheKey,
+        sessionIDs: new Map<string, string>(),
+        sessionPromptFingerprints: new Map<string, string>(),
+        body: JSON.stringify({ model: "gpt-5.6-luna", input: [], instructions }),
+      })
+      return { headers, body: JSON.parse(body as string) as Record<string, unknown> }
+    }
+
+    const invalid = request("stable instructions", "bad key with spaces")
+    expect(invalid.body.prompt_cache_key).toBe(invalid.headers.get("session-id"))
+
+    const sessionIDs = new Map<string, string>()
+    const fingerprints = new Map<string, string>()
+    const firstHeaders = new Headers({ "session-id": "ses_managed_cache_rotate" })
+    const first = JSON.parse(
+      prepareCodexChatGPTOAuthRequest({
+        headers: firstHeaders,
+        managedCacheKey: "mendcode:project:root-1",
+        sessionIDs,
+        sessionPromptFingerprints: fingerprints,
+        body: JSON.stringify({ model: "gpt-5.6-luna", input: [], instructions: "first" }),
+      }) as string,
+    ) as Record<string, unknown>
+    const changedHeaders = new Headers({ "session-id": "ses_managed_cache_rotate" })
+    const changed = JSON.parse(
+      prepareCodexChatGPTOAuthRequest({
+        headers: changedHeaders,
+        managedCacheKey: "mendcode:project:root-1",
+        sessionIDs,
+        sessionPromptFingerprints: fingerprints,
+        body: JSON.stringify({ model: "gpt-5.6-luna", input: [], instructions: "changed" }),
+      }) as string,
+    ) as Record<string, unknown>
+
+    expect(first.prompt_cache_key).toBe("mendcode:project:root-1")
+    expect(changed.prompt_cache_key).toBe(changedHeaders.get("session-id"))
+    expect(changed.prompt_cache_key).not.toBe(first.prompt_cache_key)
   })
 
   test("keeps the API-key transport independent from the ChatGPT OAuth adapter", async () => {

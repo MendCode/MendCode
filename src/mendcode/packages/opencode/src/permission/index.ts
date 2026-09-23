@@ -16,7 +16,25 @@ import os from "os"
 import { evaluate as evalRule } from "./evaluate"
 import { PermissionID } from "./schema"
 import { markPermissionAbandoned, markPermissionPending, markPermissionResolved } from "@/session/pending-input"
-import { isSafeSmartAutoApprovalRequest as isSafeSmartAutoApprovalRequestForShell } from "@/mend/permission/smart-approval"
+import {
+  isSafeSmartAutoApprovalRequest as isSafeSmartAutoApprovalRequestForShell,
+  reviewPermissionRequestWithModel,
+} from "@/mend/permission/smart-approval"
+import {
+  actionFingerprint,
+  appendSmartReview,
+  authorityForRequest,
+  createSmartGrant,
+  emptySmartStore,
+  factsForRequest,
+  matchingSmartGrant,
+  normalizeSmartStore,
+  revokeSmartGrant,
+  summarizeSmartReason,
+  type SmartGrant,
+  type SmartReviewRecord,
+  type SmartStore,
+} from "@/mend/permission/smart-service"
 
 const log = Log.create({ service: "permission" })
 
@@ -84,6 +102,13 @@ export type Reply = Schema.Schema.Type<typeof Reply>
 const reply = {
   reply: Reply,
   message: Schema.optional(Schema.String),
+  smart: Schema.optional(
+    Schema.Struct({
+      actionFingerprint: Schema.optional(Schema.String),
+      contextRevision: Schema.optional(Schema.Int),
+      grant: Schema.optional(Schema.Literals(["once", "task"])),
+    }),
+  ),
 }
 
 export const ReplyBody = Schema.Struct(reply)
@@ -161,23 +186,32 @@ export type StoredRequest = {
   timeUpdated: number
 }
 
+export type { SmartGrant, SmartReviewRecord, SmartStore }
+
 export type StoreData =
   | Ruleset
   | {
       version: 2
       approved: Ruleset
       requests: StoredRequest[]
+      smart?: SmartStore
     }
 
 export interface Interface {
   readonly ask: (input: AskInput) => Effect.Effect<void, Error>
-  readonly reply: (input: ReplyInput) => Effect.Effect<void>
+  readonly reply: (input: ReplyInput) => Effect.Effect<boolean>
   readonly replyForSessions: (input: {
     sessionIDs: readonly SessionID[]
     reply: Reply
     filter?: (request: Request) => boolean
   }) => Effect.Effect<void>
   readonly list: () => Effect.Effect<ReadonlyArray<Request>>
+  readonly listReviews: (input: {
+    sessionID?: string
+    cursor?: string
+    limit?: number
+  }) => Effect.Effect<{ items: ReadonlyArray<SmartReviewRecord>; nextCursor?: string }>
+  readonly revokeGrant: (grantID: string) => Effect.Effect<boolean>
 }
 
 interface PendingEntry {
@@ -194,11 +228,12 @@ type Store = Exclude<StoreData, Ruleset>
 const runtimeID = `permission:${process.pid}:${crypto.randomUUID()}`
 
 function normalizeStore(data: StoreData | undefined): Store {
-  if (Array.isArray(data)) return { version: 2, approved: [...data], requests: [] }
+  if (Array.isArray(data)) return { version: 2, approved: [...data], requests: [], smart: emptySmartStore() }
   return {
     version: 2,
     approved: [...(data?.approved ?? [])],
     requests: [...(data?.requests ?? [])],
+    smart: normalizeSmartStore(data?.smart),
   }
 }
 
@@ -250,6 +285,47 @@ function readRequest(projectID: ProjectID, requestID: PermissionID) {
   return normalizeStore(row?.data).requests.find((request) => request.info.id === requestID)
 }
 
+function smartRequestDetails(request: Request) {
+  const authority = authorityForRequest(request.metadata)
+  const facts = factsForRequest(request.metadata)
+  return {
+    authority,
+    facts,
+    actionFingerprint: actionFingerprint({
+      permission: request.permission,
+      patterns: request.patterns,
+      actionFacts: facts,
+    }),
+  }
+}
+
+function isSmartManagedRequest(request: Request) {
+  return request.metadata.smartApproval === true
+}
+
+function smartReviewRecord(input: {
+  request: Request
+  status: SmartReviewRecord["status"]
+  source: SmartReviewRecord["source"]
+  reason: string
+  fingerprint: string
+  now?: number
+}): SmartReviewRecord {
+  const now = input.now ?? Date.now()
+  return {
+    id: `smart-review:${input.request.id}`,
+    requestID: String(input.request.id),
+    sessionID: input.request.sessionID,
+    actionFingerprint: input.fingerprint,
+    status: input.status,
+    source: input.source,
+    reasonCode: input.status === "allowed" ? "allowed" : input.status === "denied" ? "denied" : "manual_required",
+    summary: summarizeSmartReason(input.reason),
+    createdAt: now,
+    updatedAt: now,
+  }
+}
+
 export function evaluate(permission: string, pattern: string, ...rulesets: Ruleset[]): Rule {
   return evalRule(permission, pattern, ...rulesets)
 }
@@ -299,6 +375,7 @@ export const layer = Layer.effect(
       const loaded = yield* Effect.sync(() =>
         updateStore(context.project.id, (store) => ({
           approved: [...store.approved],
+          smart: normalizeSmartStore(store.smart),
           abandoned: cleanDeadRequests(store),
         })),
       )
@@ -331,11 +408,154 @@ export const layer = Layer.effect(
       if (!needsAsk) return
 
       const id = request.id ?? PermissionID.ascending()
-      const info = Schema.decodeUnknownSync(Request)({
+      let info = Schema.decodeUnknownSync(Request)({
         id,
         ...request,
+        metadata: {
+          ...request.metadata,
+          ...(mode === "smart" ? { smartApproval: true } : {}),
+        },
       })
-      if (mode === "smart" && isSafeSmartAutoApprovalRequest(info)) return
+      const smart = smartRequestDetails(info)
+      if (mode === "smart") {
+        info = {
+          ...info,
+          metadata: { ...info.metadata, smartActionFingerprint: smart.actionFingerprint },
+        }
+      }
+      if (
+        mode === "smart" &&
+        matchingSmartGrant(loaded.smart, {
+          permission: info.permission,
+          actionFingerprint: smart.actionFingerprint,
+          sessionID: info.sessionID,
+          authority: smart.authority,
+        })
+      ) {
+        yield* Effect.sync(() => {
+          updateStore(context.project.id, (store) => {
+            appendSmartReview(
+              store.smart ?? (store.smart = emptySmartStore()),
+              smartReviewRecord({
+                request: info,
+                status: "allowed",
+                source: "grant",
+                reason: "Exact Smart task grant matched this action.",
+                fingerprint: smart.actionFingerprint,
+              }),
+            )
+          })
+        })
+        return
+      }
+      if (mode === "smart" && isSafeSmartAutoApprovalRequest(info)) {
+        yield* Effect.sync(() => {
+          updateStore(context.project.id, (store) => {
+            appendSmartReview(
+              store.smart ?? (store.smart = emptySmartStore()),
+              smartReviewRecord({
+                request: info,
+                status: "allowed",
+                source: "deterministic",
+                reason: "Bounded low-risk action matched the deterministic Smart lane.",
+                fingerprint: smart.actionFingerprint,
+              }),
+            )
+          })
+        })
+        return
+      }
+      if (mode === "smart" && isSmartManagedRequest(info)) {
+        yield* Effect.sync(() => {
+          updateStore(context.project.id, (store) => {
+            appendSmartReview(
+              store.smart ?? (store.smart = emptySmartStore()),
+              smartReviewRecord({
+                request: info,
+                status: "reviewing",
+                source: "model",
+                reason: "Smart Approval is checking the bounded action and its causal user request.",
+                fingerprint: smart.actionFingerprint,
+              }),
+            )
+          })
+        })
+        const controller = new AbortController()
+        const reviewed = yield* Effect.promise(async () => {
+          try {
+            return await reviewPermissionRequestWithModel(info, context.worktree, {
+              userPrompt: smart.authority?.userText,
+              authorityContext: smart.authority,
+              actionFacts: smart.facts,
+              signal: controller.signal,
+              deadlineMs: 20_000,
+            })
+          } catch {
+            return {
+              triggered: true,
+              decision: "ask" as const,
+              reason: "Permission reviewer failed; manual approval is required.",
+            }
+          }
+        }).pipe(Effect.ensuring(Effect.sync(() => controller.abort())))
+        if (reviewed.decision === "allow") {
+          yield* Effect.sync(() => {
+            updateStore(context.project.id, (store) => {
+              appendSmartReview(
+                store.smart ?? (store.smart = emptySmartStore()),
+                smartReviewRecord({
+                  request: info,
+                  status: "allowed",
+                  source: reviewed.source ?? "model",
+                  reason: reviewed.reason,
+                  fingerprint: smart.actionFingerprint,
+                }),
+              )
+            })
+          })
+          return
+        }
+        if (reviewed.decision === "reject") {
+          yield* Effect.sync(() => {
+            updateStore(context.project.id, (store) => {
+              appendSmartReview(
+                store.smart ?? (store.smart = emptySmartStore()),
+                smartReviewRecord({
+                  request: info,
+                  status: "denied",
+                  source: reviewed.source ?? "model",
+                  reason: reviewed.reason,
+                  fingerprint: smart.actionFingerprint,
+                }),
+              )
+            })
+          })
+          return yield* new DeniedError({ ruleset: [] })
+        }
+        info = {
+          ...info,
+          metadata: {
+            ...info.metadata,
+            smartReviewSummary: summarizeSmartReason(reviewed.reason),
+            smartRisk: reviewed.risk ?? "unknown",
+            smartAuthorization: reviewed.authorization ?? "unknown",
+          },
+        }
+        yield* Effect.sync(() => {
+          updateStore(context.project.id, (store) => {
+            appendSmartReview(
+              store.smart ?? (store.smart = emptySmartStore()),
+              smartReviewRecord({
+                request: info,
+                status: "waiting_manual",
+                source: "model",
+                reason: reviewed.reason,
+                fingerprint: smart.actionFingerprint,
+              }),
+            )
+          })
+        })
+      }
       log.info("asking", { id, permission: info.permission, patterns: info.patterns })
 
       const deferred = yield* Deferred.make<void, RejectedError | CorrectedError>()
@@ -398,8 +618,28 @@ export const layer = Layer.effect(
             (request) => request.info.id === input.requestID && request.reply === undefined,
           )
           if (!existing) return []
+          const managedBySmart = isSmartManagedRequest(existing.info)
+          const details = smartRequestDetails(existing.info)
+          const hasServerFingerprint = typeof existing.info.metadata.smartActionFingerprint === "string"
+          if (
+            managedBySmart &&
+            input.reply !== "reject" &&
+            (!input.smart ||
+              (hasServerFingerprint && input.smart.actionFingerprint !== details.actionFingerprint) ||
+              (!hasServerFingerprint && input.smart.grant !== "once"))
+          ) {
+            return []
+          }
+          if (
+            managedBySmart &&
+            input.reply !== "reject" &&
+            details.authority?.contextRevision !== undefined &&
+            input.smart?.contextRevision !== details.authority.contextRevision
+          ) {
+            return []
+          }
           const approvals =
-            input.reply === "always"
+            input.reply === "always" && !managedBySmart
               ? existing.info.always.map((pattern) => ({
                   permission: existing.info.permission,
                   pattern,
@@ -408,7 +648,13 @@ export const layer = Layer.effect(
               : []
           const released: StoredRequest[] = []
           for (const request of store.requests) {
-            if (request.info.sessionID !== existing.info.sessionID || request.reply !== undefined) continue
+            if (
+              request.reply !== undefined ||
+              (managedBySmart
+                ? request.info.id !== existing.info.id
+                : request.info.sessionID !== existing.info.sessionID)
+            )
+              continue
             const reply =
               request.info.id === existing.info.id
                 ? input.reply
@@ -427,6 +673,44 @@ export const layer = Layer.effect(
             request.timeUpdated = Date.now()
             released.push(request)
           }
+          if (managedBySmart && input.smart?.grant === "task" && details.authority) {
+            const smart = store.smart ?? (store.smart = emptySmartStore())
+            smart.grants = [
+              ...smart.grants.filter(
+                (grant) =>
+                  !(
+                    grant.sessionID === existing.info.sessionID &&
+                    grant.actionFingerprint === details.actionFingerprint &&
+                    grant.objectiveEpoch === details.authority!.objectiveEpoch &&
+                    grant.contextRevision === details.authority!.contextRevision &&
+                    grant.revokedAt === undefined
+                  ),
+              ),
+              createSmartGrant({
+                permission: existing.info.permission,
+                actionFingerprint: details.actionFingerprint,
+                sessionID: existing.info.sessionID,
+                authority: details.authority,
+              }),
+            ].slice(-100)
+          }
+          if (managedBySmart) {
+            appendSmartReview(
+              store.smart ?? (store.smart = emptySmartStore()),
+              smartReviewRecord({
+                request: existing.info,
+                status: input.reply === "reject" ? "denied" : "allowed",
+                source: "manual",
+                reason:
+                  input.reply === "reject"
+                    ? input.message || "The user rejected this Smart Approval request."
+                    : input.smart?.grant === "task"
+                      ? "The user approved this exact action for the current task."
+                      : "The user approved this exact action once.",
+                fingerprint: details.actionFingerprint,
+              }),
+            )
+          }
           return released
         }),
       )
@@ -439,6 +723,7 @@ export const layer = Layer.effect(
         const local = pending.get(request.info.id)
         if (local) yield* Deferred.succeed(local.deferred, undefined)
       }
+      return released.length > 0
     })
 
     const replyForSessions = Effect.fn("Permission.replyForSessions")(function* (input: {
@@ -466,7 +751,19 @@ export const layer = Layer.effect(
       )
       for (const request of result.abandoned) markPermissionAbandoned(request.info.sessionID)
       for (const request of result.requests) {
-        yield* reply({ requestID: request.id, reply: input.reply })
+        const details = smartRequestDetails(request)
+        yield* reply({
+          requestID: request.id,
+          reply: input.reply,
+          smart: isSmartManagedRequest(request)
+            ? {
+                actionFingerprint: details.actionFingerprint,
+                ...(details.authority?.contextRevision === undefined
+                  ? {}
+                  : { contextRevision: details.authority.contextRevision }),
+              }
+            : undefined,
+        })
       }
     })
 
@@ -484,7 +781,41 @@ export const layer = Layer.effect(
       return result.requests.filter((request) => !result.abandoned.some((item) => item.info.id === request.id))
     })
 
-    return Service.of({ ask, reply, replyForSessions, list })
+    const listReviews = Effect.fn("Permission.listReviews")(function* (input: {
+      sessionID?: string
+      cursor?: string
+      limit?: number
+    }) {
+      const context = yield* InstanceState.context
+      const limit = Math.min(Math.max(input.limit ?? 50, 1), 100)
+      const offset = input.cursor ? Number.parseInt(input.cursor, 10) : 0
+      if (!Number.isSafeInteger(offset) || offset < 0) return { items: [], nextCursor: undefined }
+      return yield* Effect.sync(() => {
+        const store = updateStore(context.project.id, (current) => ({
+          smart: normalizeSmartStore(current.smart),
+        })).smart
+        const reviews = store.reviews
+          .filter((review) => !input.sessionID || review.sessionID === input.sessionID)
+          .toSorted((a, b) => b.updatedAt - a.updatedAt)
+        const items = reviews.slice(offset, offset + limit)
+        return {
+          items,
+          nextCursor: offset + items.length < reviews.length ? String(offset + items.length) : undefined,
+        }
+      })
+    })
+
+    const revokeGrant = Effect.fn("Permission.revokeGrant")(function* (grantID: string) {
+      const context = yield* InstanceState.context
+      return yield* Effect.sync(() =>
+        updateStore(context.project.id, (store) => {
+          const smart = store.smart ?? (store.smart = emptySmartStore())
+          return revokeSmartGrant(smart, grantID)
+        }),
+      )
+    })
+
+    return Service.of({ ask, reply, replyForSessions, list, listReviews, revokeGrant })
   }),
 )
 

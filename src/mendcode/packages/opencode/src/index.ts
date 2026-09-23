@@ -1,7 +1,6 @@
 import yargs from "yargs"
 import { hideBin } from "yargs/helpers"
 import * as Log from "@mendcode/core/util/log"
-import { Global } from "@mendcode/core/global"
 import { UI } from "./cli/ui"
 import { Installation } from "./installation"
 import { NamedError } from "@mendcode/core/util/error"
@@ -10,8 +9,7 @@ import { EOL } from "os"
 import { errorMessage } from "./util/error"
 import { Heap } from "./cli/heap"
 import { ensureProcessMetadata } from "@mendcode/core/util/opencode-process"
-import path from "path"
-import { existsSync } from "fs"
+import { commandOwnsStartupMigration, migrateLegacyStorage } from "./storage/startup-migration"
 import { automationJSONRequested, writeAutomationEnvelope } from "./cli/automation"
 
 const processMetadata = ensureProcessMetadata("main")
@@ -43,6 +41,7 @@ const commandLoaders = {
   debug: () => import("./cli/cmd/debug").then((module) => module.DebugCommand),
   console: () => import("./cli/cmd/account").then((module) => module.ConsoleCommand),
   providers: () => import("./cli/cmd/providers").then((module) => module.ProvidersCommand),
+  cache: () => import("./cli/cmd/cache").then((module) => module.CacheCommand),
   agent: () => import("./cli/cmd/agent").then((module) => module.AgentCommand),
   upgrade: () => import("./cli/cmd/upgrade").then((module) => module.UpgradeCommand),
   uninstall: () => import("./cli/cmd/uninstall").then((module) => module.UninstallCommand),
@@ -50,6 +49,7 @@ const commandLoaders = {
   web: () => import("./cli/cmd/web").then((module) => module.WebCommand),
   models: () => import("./cli/cmd/models").then((module) => module.ModelsCommand),
   stats: () => import("./cli/cmd/stats").then((module) => module.StatsCommand),
+  context: () => import("./cli/cmd/context").then((module) => module.ContextCommand),
   export: () => import("./cli/cmd/export").then((module) => module.ExportCommand),
   import: () => import("./cli/cmd/import").then((module) => module.ImportCommand),
   github: () => import("./cli/cmd/github").then((module) => module.GithubCommand),
@@ -159,55 +159,8 @@ const cli = yargs(args)
       run_id: processMetadata.runID,
     })
 
-    const migrationDonePath = path.join(Global.Path.data, ".mendcode-json-storage-migration-v0.done")
-    if (!existsSync(migrationDonePath)) {
-      const [{ JsonMigration }, { Database }, { drizzle }] = await Promise.all([
-        import("@/storage/json-migration"),
-        import("@/storage/db"),
-        import("drizzle-orm/bun-sqlite"),
-      ])
-      const tty = process.stderr.isTTY
-      process.stderr.write("Performing one time database migration, may take a few minutes..." + EOL)
-      const width = 36
-      const orange = "\x1b[38;5;214m"
-      const muted = "\x1b[0;2m"
-      const reset = "\x1b[0m"
-      let last = -1
-      if (tty) process.stderr.write("\x1b[?25l")
-      try {
-        const stats = await JsonMigration.run(drizzle({ client: Database.Client().$client }), {
-          progress: (event) => {
-            const percent = Math.floor((event.current / event.total) * 100)
-            if (percent === last && event.current !== event.total) return
-            last = percent
-            if (tty) {
-              const fill = Math.round((percent / 100) * width)
-              const bar = `${"■".repeat(fill)}${"･".repeat(width - fill)}`
-              process.stderr.write(
-                `\r${orange}${bar} ${percent.toString().padStart(3)}%${reset} ${muted}${event.label.padEnd(12)} ${event.current}/${event.total}${reset}`,
-              )
-              if (event.current === event.total) process.stderr.write("\n")
-            } else {
-              process.stderr.write(`sqlite-migration:${percent}${EOL}`)
-            }
-          },
-        })
-        if (JsonMigration.jsonStorageMigrationSucceeded(stats)) {
-          await JsonMigration.writeJsonStorageMigrationDoneMarker()
-          process.stderr.write("Database migration complete." + EOL)
-        } else {
-          process.stderr.write(
-            `Database migration incomplete (${stats.errors.length} errors); it will retry on the next start.${EOL}`,
-          )
-          for (const error of stats.errors.slice(0, 10)) process.stderr.write(`- ${error}${EOL}`)
-        }
-      } finally {
-        if (tty) process.stderr.write("\x1b[?25h")
-        else {
-          process.stderr.write(`sqlite-migration:done${EOL}`)
-        }
-      }
-    }
+    const command = typeof opts._[0] === "string" && opts._[0] in commandLoaders ? opts._[0] : undefined
+    if (commandOwnsStartupMigration(command)) await migrateLegacyStorage()
   })
   .usage("")
   .completion("completion", "generate shell completion script")

@@ -7,6 +7,7 @@ Use this index by intent. **Use MendCode** explains the public workflow, **Featu
 ## Use MendCode
 
 - [CLI, setup, and configuration](cli-setup-configuration.md): install/open commands, setup state, config paths, focus profiles, model roles, prompt modes, permissions, and memory.
+- [Context, cache and computer tools](context-and-computer-tools.md): request profiles, tool discovery, experimental Code Mode, and native macOS captures.
 - [Session history](session-history.md): browse, inspect, and resume previous sessions.
 - [Automation runtime](automation-runtime.md): JSON envelopes, shared model selection, progress inspection, events, waiting, and cancellation.
 - [Independent Workflows](workflows.md): one-shot plans, task sequencing, completion evidence, and operator controls.

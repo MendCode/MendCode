@@ -34,6 +34,27 @@ import {
 import { EffectBridge } from "@/effect/bridge"
 import * as Option from "effect/Option"
 import * as OtelTracer from "@effect/opentelemetry/Tracer"
+import { isAstraModel, normalizeAstraOptions } from "@/mend/prompt/model-family"
+import { autoReasoningSignal, selectAutoReasoning } from "@/mend/prompt/reasoning-auto"
+import {
+  ReasoningRequested,
+  ReasoningCleared,
+  recordReasoningState,
+  clearReasoningState,
+  requestedReasoningEffort,
+} from "@/mend/prompt/reasoning-state"
+import { promptRuntimeContextText } from "@/mend/prompt/compose"
+import { discoveryWireMiddleware } from "./tool-discovery"
+import {
+  CACHE_MODE_HEADER,
+  CACHE_SESSION_HEADER,
+  cacheBindingFromModel,
+  fingerprintPrefix,
+  opaqueCacheScope,
+  resolveCacheRequestPolicy,
+} from "@/provider/cache-policy"
+import { cacheKeyForFingerprint, stableProviderSessionID } from "./cache-lineage"
+import { profileContext, type ContextProfile } from "./context-profile"
 
 const log = Log.create({ service: "llm" })
 export const OUTPUT_TOKEN_MAX = ProviderTransform.OUTPUT_TOKEN_MAX
@@ -79,6 +100,9 @@ export type StreamInput = {
   tools: Record<string, Tool>
   retries?: number
   toolChoice?: "auto" | "required" | "none"
+  toolMode?: "normal" | "none"
+  /** Hard upper bound for bounded internal requests such as incremental compaction. */
+  maxOutputTokens?: number
   abort?: AbortSignal
 }
 
@@ -211,6 +235,32 @@ const live: Layer.Layer<
       // TODO: move this to a proper hook
       const isOpenaiOauth = item.id === "openai" && info?.type === "oauth"
       const mendProjectRoot = input.root || input.cwd
+      const authMode = info?.type === "oauth" ? "oauth" : info?.type === "api" ? "api" : "unknown"
+      const cacheTransport = isOpenaiOauth
+        ? ("responses-lite" as const)
+        : input.model.providerID === "claude-code" && input.model.api.npm === "mendcode/claude-code"
+          ? ("claude-agent-sdk" as const)
+        : input.model.api.npm === "@ai-sdk/openai" ||
+            input.model.providerID === "openrouter" ||
+            input.model.api.npm === "@openrouter/ai-sdk-provider"
+          ? ("responses-http" as const)
+          : ("other" as const)
+      const endpoint =
+        (typeof input.model.options?.baseURL === "string" && input.model.options.baseURL) ||
+        (typeof item.options?.baseURL === "string" && item.options.baseURL) ||
+        input.model.api.url
+      const accountScope =
+        info?.type === "api"
+          ? opaqueCacheScope(info.key)
+          : info?.type === "oauth" && info.accountId
+            ? `oauth:${info.accountId}`
+            : undefined
+      const cacheBinding = cacheBindingFromModel(input.model, {
+        auth: authMode,
+        transport: cacheTransport,
+        endpoint,
+        ...(accountScope ? { accountScope } : {}),
+      })
       const mendFocus = input.mendPrompt?.focus ?? SystemPrompt.mendFocus(input.model)
       const mendPromptPolicy =
         input.mendPrompt?.policy ??
@@ -229,6 +279,37 @@ const live: Layer.Layer<
             input.memoryMode ?? memoryMode(input.messages),
           ),
         ))
+      const fullMode = /^Mode: full$/m.test(mendPromptPolicy)
+      const cachePolicy = resolveCacheRequestPolicy({
+        config: cfg.cache,
+        projectScope: mendProjectRoot,
+        sessionID: input.sessionID,
+        binding: cacheBinding,
+        fullMode,
+      })
+      const providerSessionID =
+        cachePolicy.mode === "smart" &&
+        mendProjectRoot &&
+        (cachePolicy.useLineage || (isOpenaiOauth && cachePolicy.useCacheKey))
+          ? stableProviderSessionID({
+              providerID: input.model.providerID,
+              modelID: input.model.api.id,
+              projectScope: mendProjectRoot,
+              sessionID: input.sessionID,
+              profile:
+                typeof item.options?.homePath === "string" ? `${cacheBinding.accountScope ?? ""}:${item.options.homePath}` : cacheBinding.accountScope,
+            })
+          : undefined
+      const runtimeProviderContext = /^Mode: full$/m.test(mendPromptPolicy)
+        ? promptRuntimeContextText({
+            providerID: input.model.providerID,
+            modelID: input.model.id,
+            apiModelID: input.model.api.id,
+            authMode,
+            transport: cacheTransport,
+            cache: cachePolicy,
+          })
+        : undefined
 
       const system: string[] = []
       system.push(
@@ -238,6 +319,7 @@ const live: Layer.Layer<
           mendFocus,
           mendPromptPolicy,
           mendMemory,
+          ...(runtimeProviderContext ? [runtimeProviderContext] : []),
           // any custom prompt passed into this call
           ...input.system,
           // any custom prompt from last user message
@@ -260,16 +342,29 @@ const live: Layer.Layer<
         system.push(header, rest.join("\n"))
       }
 
+      const autoReasoning = selectAutoReasoning({
+        enabled: !input.small && cfg.experimental?.reasoning_auto === true,
+        manual: input.user.model.variant,
+        variants: input.model.variants,
+        signal: autoReasoningSignal(input.messages),
+      })
+      if (autoReasoning)
+        l.info("reasoning.auto", {
+          effort: autoReasoning.effort,
+          reason: autoReasoning.reason,
+          messageID: input.user.id,
+        })
       const variant =
         !input.small && input.model.variants && input.user.model.variant
           ? input.model.variants[input.user.model.variant]
-          : {}
+          : autoReasoning?.options ?? {}
       const base = input.small
         ? ProviderTransform.smallOptions(input.model)
         : ProviderTransform.options({
             model: input.model,
             sessionID: input.sessionID,
             providerOptions: item.options,
+            cache: cachePolicy,
           })
       const options = mergeOptions(mergeOptions(mergeOptions(base, input.model.options), input.agent.options), variant)
       if (isOpenaiOauth) {
@@ -306,10 +401,36 @@ const live: Layer.Layer<
             : undefined,
           topP: input.agent.topP ?? ProviderTransform.topP(input.model),
           topK: ProviderTransform.topK(input.model),
-          maxOutputTokens: ProviderTransform.maxOutputTokens(input.model),
+          maxOutputTokens: Math.min(
+            ProviderTransform.maxOutputTokens(input.model),
+            input.maxOutputTokens ?? Number.POSITIVE_INFINITY,
+          ),
           options,
         },
       )
+      if (input.maxOutputTokens !== undefined) {
+        params.maxOutputTokens = Math.min(
+          params.maxOutputTokens ?? ProviderTransform.maxOutputTokens(input.model),
+          Math.max(1, Math.floor(input.maxOutputTokens)),
+        )
+      }
+
+      if (isAstraModel(input.model.api.id)) {
+        params.temperature = undefined
+        params.topP = undefined
+        params.topK = undefined
+        params.options = normalizeAstraOptions(input.model.api.id, params.options)
+        // This SDK's static model catalog predates Astra; its supported override
+        // retains reasoning parameters without substituting a different model ID.
+        if (input.model.api.npm === "@ai-sdk/openai") params.options.forceReasoning = true
+      }
+
+      if (isAstraModel(input.model.api.id)) {
+        params.temperature = undefined
+        params.topP = undefined
+        params.topK = undefined
+        params.options = normalizeAstraOptions(input.model.api.id, params.options)
+      }
 
       const { headers } = yield* plugin.trigger(
         "chat.headers",
@@ -324,6 +445,21 @@ const live: Layer.Layer<
           headers: {},
         },
       )
+      const requestHeaders = {
+        ...headers,
+        ...(isOpenaiOauth && cachePolicy.mode === "off" ? { [CACHE_MODE_HEADER]: "off" } : {}),
+        ...(isOpenaiOauth && providerSessionID ? { [CACHE_SESSION_HEADER]: providerSessionID } : {}),
+      }
+      const providerRuntime =
+        input.model.providerID === "claude-code"
+          ? {
+              claudeCode: {
+                ...(providerSessionID ? { sessionID: providerSessionID } : {}),
+                ...(mendProjectRoot ? { workingDirectory: mendProjectRoot } : {}),
+                ...(cachePolicy.mode === "off" ? { cacheMode: "off" as const } : {}),
+              },
+            }
+          : undefined
 
       const tools = resolveTools(input)
 
@@ -359,6 +495,42 @@ const live: Layer.Layer<
           execute: async () => ({ output: "", title: "", metadata: {} }),
         })
       }
+
+      const managedCacheKey = (() => {
+        if (!cachePolicy.allowManagedKey || cachePolicy.scope !== "project" || !mendProjectRoot) return undefined
+        const fingerprint = fingerprintPrefix({
+          binding: cacheBinding,
+          projectScope: mendProjectRoot,
+          prefix: system,
+          toolDefinitions: Object.fromEntries(
+            Object.entries(tools).map(([name, definition]) => [
+              name,
+              {
+                description: definition.description,
+                inputSchema: definition.inputSchema,
+              },
+            ]),
+          ),
+          settings: {
+            temperature: params.temperature,
+            topP: params.topP,
+            topK: params.topK,
+            maxOutputTokens: params.maxOutputTokens,
+            options: ProviderTransform.removeCacheOptions(params.options),
+          },
+          serializationRevision: "mendcode-cache-prefix-v1",
+        })
+        return fingerprint
+          ? cacheKeyForFingerprint({
+              fingerprint,
+              scope: cachePolicy.scope,
+              projectScope: mendProjectRoot,
+              sessionID: input.sessionID,
+            }) ?? undefined
+          : undefined
+      })()
+      params.options = ProviderTransform.withManagedCacheKey(input.model, params.options, managedCacheKey)
+      params.options = ProviderTransform.enforceCacheOptions(params.options, cachePolicy)
 
       // Wire up toolExecutor for DWS workflow models so that tool calls
       // from the workflow service are executed via opencode's tool system
@@ -468,7 +640,34 @@ const live: Layer.Layer<
         ? (yield* InstanceState.context).project.id
         : undefined
 
-      return streamText({
+      const requestedEffort = requestedReasoningEffort(params.options)
+      if (!input.small && requestedEffort && (autoReasoning || input.user.model.variant)) {
+        const state = {
+          sessionID: input.sessionID,
+          messageID: input.user.id,
+          mode: autoReasoning ? ("auto" as const) : ("manual" as const),
+          effort: requestedEffort,
+          reason: autoReasoning?.reason ?? "manual_selection",
+          modelID: input.model.api.id,
+          providerID: input.model.providerID,
+          requestedAt: Date.now(),
+        }
+        recordReasoningState(state)
+        yield* Effect.promise(() => Bus.publish(ReasoningRequested, state))
+      } else if (!input.small) {
+        clearReasoningState(input.sessionID)
+        yield* Effect.promise(() =>
+          Bus.publish(ReasoningCleared, {
+            sessionID: input.sessionID,
+            messageID: input.user.id,
+            requestedAt: Date.now(),
+          }),
+        )
+      }
+      let contextProfile: ContextProfile | undefined
+      let dispatchedAt = performance.now()
+      let firstTokenMs: number | null = null
+      const result = streamText({
         onError(error) {
           l.error("stream error", {
             error,
@@ -498,7 +697,7 @@ const live: Layer.Layer<
         temperature: params.temperature,
         topP: params.topP,
         topK: params.topK,
-        providerOptions: ProviderTransform.providerOptions(input.model, params.options),
+        providerOptions: ProviderTransform.providerOptions(input.model, params.options, providerRuntime),
         activeTools: Object.keys(tools).filter((x) => x !== "invalid"),
         tools,
         toolChoice: input.toolChoice,
@@ -523,7 +722,7 @@ const live: Layer.Layer<
                 "User-Agent": `mendcode/${InstallationVersion}`,
               }),
           ...input.model.headers,
-          ...headers,
+          ...requestHeaders,
         },
         maxRetries: input.retries ?? 0,
         includeRawChunks: true,
@@ -536,11 +735,18 @@ const live: Layer.Layer<
               async transformParams(args) {
                 if (args.type === "stream") {
                   // @ts-expect-error
-                  args.params.prompt = ProviderTransform.message(args.params.prompt, input.model, options)
+                  args.params.prompt = ProviderTransform.message(args.params.prompt, input.model, options, cachePolicy)
+                  contextProfile = profileContext({
+                    prompt: args.params.prompt,
+                    tools: args.params.tools,
+                    instructions: isOpenaiOauth ? params.options.instructions : undefined,
+                  })
+                  dispatchedAt = performance.now()
                 }
                 return args.params
               },
             },
+            ...(input.model.api.npm === "@ai-sdk/openai" ? [discoveryWireMiddleware()] : []),
           ],
         }),
         experimental_telemetry: {
@@ -553,6 +759,41 @@ const live: Layer.Layer<
           },
         },
       })
+      return {
+        result,
+        profile(event: Event): Event {
+          if (
+            firstTokenMs === null &&
+            ["text-delta", "reasoning-delta", "tool-input-delta"].includes(event.type)
+          ) {
+            firstTokenMs = Math.max(0, Math.round(performance.now() - dispatchedAt))
+          }
+          if (event.type !== "finish-step" || !contextProfile) return event
+          return {
+            ...event,
+            providerMetadata: {
+              ...event.providerMetadata,
+              mendcode: {
+                contextProfile: {
+                  ...contextProfile,
+                  durationMs: Math.max(0, Math.round(performance.now() - dispatchedAt)),
+                  firstTokenMs,
+                  usageReported: {
+                    input: Number.isFinite(event.usage.inputTokens),
+                    cacheRead: Number.isFinite(
+                      event.usage.inputTokenDetails?.cacheReadTokens ?? event.usage.cachedInputTokens,
+                    ),
+                    cacheWrite: Number.isFinite(
+                      event.usage.inputTokenDetails?.cacheWriteTokens ??
+                        event.providerMetadata?.anthropic?.cacheCreationInputTokens,
+                    ),
+                  },
+                },
+              },
+            },
+          }
+        },
+      }
     })
 
     const stream: Interface["stream"] = (input) =>
@@ -577,9 +818,9 @@ const live: Layer.Layer<
             const result = yield* run({ ...input, abort: scoped.ctrl.signal })
 
             const normalize = createStreamEventNormalizer()
-            return Stream.fromAsyncIterable(result.fullStream, (e) =>
+            return Stream.fromAsyncIterable(result.result.fullStream, (e) =>
               e instanceof Error ? e : new Error(String(e)),
-            ).pipe(Stream.map(normalize))
+            ).pipe(Stream.map((event) => result.profile(normalize(event))))
           }),
         ),
       )
@@ -599,7 +840,8 @@ export const defaultLayer = Layer.suspend(() =>
   ),
 )
 
-function resolveTools(input: Pick<StreamInput, "tools" | "agent" | "permission" | "user">) {
+function resolveTools(input: Pick<StreamInput, "tools" | "agent" | "permission" | "user" | "toolMode">) {
+  if (input.toolMode === "none") return {}
   const disabled = Permission.disabled(
     Object.keys(input.tools),
     Permission.merge(input.agent.permission, input.permission ?? []),

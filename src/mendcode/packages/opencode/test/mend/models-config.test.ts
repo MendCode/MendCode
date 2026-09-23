@@ -10,6 +10,7 @@ import {
   refreshGeneratedRuntimeModelConfig,
   resolveEffectivePromptSelection,
   resolveModelRoles,
+  validateProviderModelID,
 } from "../../src/mend/config/models"
 
 async function writeText(file: string, value: string) {
@@ -32,6 +33,13 @@ describe("mend model roles", () => {
     })
     expect(modelPresets["openai-api-gpt-5.6-terra"].modelID).toBe("gpt-5.6-terra")
     expect(modelPresets["openai-api-gpt-5.6-luna"].modelID).toBe("gpt-5.6-luna")
+    expect(validateProviderModelID("local-runtime", "org/model+preview:Q4_K_M")).toEqual([])
+    expect(validateProviderModelID("gateway", "vendor/model@2026?mode=fast")).toEqual([])
+    expect(validateProviderModelID("bad/provider", "model")).not.toEqual([])
+    expect(validateProviderModelID("provider", " model")).not.toEqual([])
+    expect(validateProviderModelID("..", "model")).not.toEqual([])
+    expect(validateProviderModelID("bad\\provider", "model")).not.toEqual([])
+    expect(validateProviderModelID("provider", "model\u0000suffix")).not.toEqual([])
   })
 
   test("does not seed command packs that duplicate native TUI model/provider surfaces", async () => {

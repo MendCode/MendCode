@@ -15,12 +15,15 @@ import { Global } from "@mendcode/core/global"
 import { LSP } from "@/lsp/lsp"
 import { Command } from "@/command"
 import { QuestionRoutes } from "./question"
+import { ContinuityRoutes } from "./continuity"
+import { UsageRoutes } from "./usage"
 import { PlanReviewRoutes } from "./plan-review"
 import { PermissionRoutes } from "./permission"
 import { ProjectRoutes } from "./project"
 import { SessionRoutes } from "./session"
 import { LoopRoutes } from "./loop"
 import { WorkflowRoutes } from "./workflow"
+import { AuxiliaryRoutes } from "./auxiliary"
 import { PtyRoutes } from "./pty"
 import { McpRoutes } from "./mcp"
 import { MflowRoutes } from "./mflow"
@@ -56,6 +59,7 @@ export const InstanceRoutes = (upgrade: UpgradeWebSocket, opts?: CorsOptions): H
   app.all("/api/*", (c) => handler(c.req.raw, context))
   app.route("/loop", LoopRoutes())
   app.route("/workflow", WorkflowRoutes())
+  app.route("/auxiliary", AuxiliaryRoutes())
 
   if (Flag.OPENCODE_EXPERIMENTAL_HTTPAPI) {
     app.get(EventPaths.event, (c) => handler(c.req.raw, context))
@@ -69,6 +73,10 @@ export const InstanceRoutes = (upgrade: UpgradeWebSocket, opts?: CorsOptions): H
     app.get("/config", (c) => handler(c.req.raw, context))
     app.patch("/config", (c) => handler(c.req.raw, context))
     app.get("/config/providers", (c) => handler(c.req.raw, context))
+    app.get("/config/ai", (c) => handler(c.req.raw, context))
+    app.post("/config/ai/plan", (c) => handler(c.req.raw, context))
+    app.post("/config/ai/validate", (c) => handler(c.req.raw, context))
+    app.post("/config/ai/apply", (c) => handler(c.req.raw, context))
     app.get(ExperimentalPaths.console, (c) => handler(c.req.raw, context))
     app.get(ExperimentalPaths.consoleOrgs, (c) => handler(c.req.raw, context))
     app.post(ExperimentalPaths.consoleSwitch, (c) => handler(c.req.raw, context))
@@ -188,6 +196,8 @@ export const InstanceRoutes = (upgrade: UpgradeWebSocket, opts?: CorsOptions): H
   }
 
   return app
+    .route("/usage", UsageRoutes())
+    .route("/continuity", ContinuityRoutes())
     .route("/project", ProjectRoutes())
     .route("/pty", PtyRoutes(upgrade, opts))
     .route("/config", ConfigRoutes())

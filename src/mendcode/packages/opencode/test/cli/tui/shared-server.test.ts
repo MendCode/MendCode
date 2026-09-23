@@ -9,6 +9,9 @@ import {
   shouldReplaceLiveServer,
   shouldUseSharedServer,
   waitForClientLeases,
+  writeState,
+  readState,
+  clearStateIfOwned,
 } from "../../../src/cli/cmd/tui/shared-server"
 import { tmpdir } from "../../fixture/fixture"
 import fs from "fs/promises"
@@ -61,9 +64,15 @@ describe("shared server state", () => {
   })
 
   test("replaces an unreachable live PID only when no client owns it", () => {
-    expect(shouldReplaceSharedServer({ live: true, runtimeMatches: true, activeClients: 0, reachable: false })).toBe(true)
-    expect(shouldReplaceSharedServer({ live: true, runtimeMatches: true, activeClients: 1, reachable: false })).toBe(false)
-    expect(shouldAttachExistingSharedServer({ live: true, runtimeMatches: false, activeClients: 1, reachable: false })).toBe(false)
+    expect(shouldReplaceSharedServer({ live: true, runtimeMatches: true, activeClients: 0, reachable: false })).toBe(
+      true,
+    )
+    expect(shouldReplaceSharedServer({ live: true, runtimeMatches: true, activeClients: 1, reachable: false })).toBe(
+      false,
+    )
+    expect(
+      shouldAttachExistingSharedServer({ live: true, runtimeMatches: false, activeClients: 1, reachable: false }),
+    ).toBe(false)
   })
 
   test("attaches to a live older runtime while another client still owns it", () => {
@@ -124,7 +133,9 @@ describe("shared server state", () => {
 
     await first.release()
     expect(await activeClientLeaseCount(tmp.path)).toBe(1)
-    expect(shouldReplaceSharedServer({ live: true, runtimeMatches: true, activeClients: 1, reachable: false })).toBe(false)
+    expect(shouldReplaceSharedServer({ live: true, runtimeMatches: true, activeClients: 1, reachable: false })).toBe(
+      false,
+    )
 
     await second.release()
     expect(await activeClientLeaseCount(tmp.path)).toBe(0)
@@ -193,6 +204,31 @@ describe("shared server state", () => {
       },
     })
     expect(stopped).toBe(1)
+  })
+
+  test("retains the live owner's discovery receipt when idle shutdown fails", async () => {
+    await using tmp = await tmpdir()
+    const previousStateFile = process.env.MENDCODE_SHARED_SERVER_STATE_FILE
+    process.env.MENDCODE_SHARED_SERVER_STATE_FILE = path.join(tmp.path, "server.json")
+    const state = { ...valid, pid: process.pid }
+    try {
+      await writeState(state)
+      await expect(
+        waitForClientLeases({
+          directory: tmp.path,
+          pollMs: 1,
+          idleGraceMs: 1,
+          stop: async () => {
+            throw new Error("shutdown failed")
+          },
+        }),
+      ).rejects.toThrow("shutdown failed")
+      expect(await readState()).toEqual(state)
+    } finally {
+      await clearStateIfOwned(process.pid)
+      if (previousStateFile === undefined) delete process.env.MENDCODE_SHARED_SERVER_STATE_FILE
+      else process.env.MENDCODE_SHARED_SERVER_STATE_FILE = previousStateFile
+    }
   })
 
   test("aborts an idle wait without stopping the backend", async () => {

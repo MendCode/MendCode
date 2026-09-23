@@ -283,6 +283,7 @@ export type AgentPart = Types.DeepMutable<Schema.Schema.Type<typeof AgentPart>>
 export const CompactionPart = Schema.Struct({
   ...partBase,
   type: Schema.Literal("compaction"),
+  parent_id: Schema.optional(MessageID),
   auto: Schema.Boolean,
   overflow: Schema.optional(Schema.Boolean),
   resume: Schema.optional(Schema.Boolean),
@@ -473,6 +474,8 @@ export const User = Schema.Struct({
   }),
   system: Schema.optional(Schema.String),
   tools: Schema.optional(Schema.Record(Schema.String, Schema.Boolean)),
+  toolMode: Schema.optional(Schema.Literals(["normal", "none"])),
+  maxOutputTokens: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(1))),
   queued: Schema.optional(Schema.Boolean),
 })
   .annotate({ identifier: "UserMessage" })
@@ -1386,6 +1389,8 @@ export const toModelMessagesEffect = Effect.fnUntraced(function* (
             type: "step-start",
           })
         if (part.type === "tool") {
+          // Nested Code Mode calls remain in the audit/UI; only its final result enters model context.
+          if (part.metadata?.codeMode) continue
           toolNames.add(part.tool)
           if (part.state.status === "completed") {
             const outputText = part.state.time.compacted

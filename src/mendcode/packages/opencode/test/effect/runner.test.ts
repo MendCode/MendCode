@@ -637,6 +637,106 @@ describe("Runner", () => {
   )
 
   it.live(
+    "targeted cancellation prepares its fence before a completed run can start its successor",
+    Effect.gen(function* () {
+      const scope = yield* Scope.Scope
+      const started = yield* Deferred.make<void>()
+      const finish = yield* Deferred.make<void>()
+      const preparing = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+      const prepared = yield* Ref.make(false)
+      const runner = Runner.make<string>(scope, { onInterrupt: Effect.succeed("cancelled") })
+      const active = yield* runner
+        .ensureRunning(
+          Deferred.succeed(started, undefined).pipe(Effect.andThen(Deferred.await(finish)), Effect.as("active")),
+          { queueKey: "old" },
+        )
+        .pipe(Effect.forkChild)
+      yield* Deferred.await(started)
+      const queued = yield* runner
+        .ensureRunning(Ref.get(prepared).pipe(Effect.map((ready) => (ready ? "prepared" : "raced"))), {
+          queue: true,
+          queueKey: "new",
+        })
+        .pipe(Effect.forkChild)
+      yield* Effect.gen(function* () {
+        while (runner.state._tag !== "RunningThenRun") yield* Effect.yieldNow
+      }).pipe(Effect.timeout("250 millis"))
+      const cancel = yield* runner
+        .cancelCurrentIf("old", {
+          before: Deferred.succeed(preparing, undefined).pipe(
+            Effect.andThen(Deferred.await(release)),
+            Effect.andThen(Ref.set(prepared, true)),
+          ),
+        })
+        .pipe(Effect.forkChild)
+      yield* Deferred.await(preparing)
+      yield* Deferred.succeed(finish, undefined)
+      // Allow the old run's completion hook and queued successor to contend
+      // with preparation. Neither may cross the target fence before release.
+      yield* Effect.sleep("20 millis")
+      yield* Deferred.succeed(release, undefined)
+      expect(yield* Fiber.join(cancel)).toBe("cancelled")
+      yield* Fiber.join(active)
+      expect(yield* Fiber.join(queued)).toBe("prepared")
+    }),
+  )
+
+  it.live(
+    "a terminal target cannot prepare stop effects for a newer terminal generation",
+    Effect.gen(function* () {
+      const scope = yield* Scope.Scope
+      const prepared = yield* Ref.make(0)
+      const runner = Runner.make<string>(scope)
+      yield* runner.ensureRunning(Effect.succeed("old"), { queueKey: "old" })
+      yield* runner.ensureRunning(Effect.succeed("new"), { queueKey: "new" })
+      const options = { includeTerminal: true, before: Ref.update(prepared, (n) => n + 1) }
+      expect(yield* runner.cancelCurrentIf("old", options)).toBe("not_running")
+      expect(yield* Ref.get(prepared)).toBe(0)
+      expect(yield* runner.cancelCurrentIf("new", options)).toBe("not_running")
+      expect(yield* Ref.get(prepared)).toBe(1)
+    }),
+  )
+
+  it.live(
+    "targeted shell cancellation rejects stale keys and holds queued work",
+    Effect.gen(function* () {
+      const scope = yield* Scope.Scope
+      const started = yield* Deferred.make<void>()
+      const prepared = yield* Ref.make(0)
+      const calls = yield* Ref.make(0)
+      const runner = Runner.make<string>(scope, { onInterrupt: Effect.succeed("cancelled") })
+      const shell = yield* runner
+        .startShell(
+          Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never), Effect.as("shell")),
+          undefined,
+          "shell-turn",
+        )
+        .pipe(Effect.forkChild)
+      yield* Deferred.await(started)
+      const queued = yield* runner
+        .ensureRunning(Ref.update(calls, (n) => n + 1).pipe(Effect.as("queued")), {
+          queue: true,
+          queueKey: "queued-turn",
+        })
+        .pipe(Effect.forkChild)
+      yield* Effect.gen(function* () {
+        while (runner.state._tag !== "ShellThenRun") yield* Effect.yieldNow
+      }).pipe(Effect.timeout("250 millis"))
+      const options = { cancelPending: true, before: Ref.update(prepared, (n) => n + 1) }
+      expect(yield* runner.cancelCurrentIf("old-turn", options)).toBe("target_mismatch")
+      expect(yield* Ref.get(prepared)).toBe(0)
+      expect(runner.state._tag).toBe("ShellThenRun")
+      expect(yield* runner.cancelCurrentIf("shell-turn", options)).toBe("cancelled")
+      expect(yield* Fiber.join(shell)).toBe("cancelled")
+      expect(yield* Fiber.join(queued)).toBe("cancelled")
+      expect(yield* Ref.get(calls)).toBe(0)
+      expect(yield* Ref.get(prepared)).toBe(1)
+      expect(yield* runner.ensureRunning(Effect.succeed("explicit new"), { queueKey: "explicit" })).toBe("explicit new")
+    }),
+  )
+
+  it.live(
     "cancelCurrentIf does not publish idle before cancellation reaches the active run",
     Effect.gen(function* () {
       const s = yield* Scope.Scope

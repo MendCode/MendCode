@@ -60,10 +60,8 @@ function workspaceID(root: string, repoFingerprint?: string | null) {
 }
 
 function defaultGroupRoots() {
-  const roots = ["/Users/obed/Code"]
   const home = process.env.HOME
-  if (home) roots.push(path.join(home, "Code"))
-  return [...new Set(roots)]
+  return home ? [path.join(home, "Code")] : []
 }
 
 function currentParentDiscoveryRoot(root?: string) {

@@ -4,7 +4,7 @@ import path from "path"
 import { memoryPaths, readMemoryConfig, type DreamConsolidationPolicy, type MemoryConfig, type MemoryScope } from "./config"
 import { readMemoryFacts, type MemoryFact } from "./graph"
 import type { DreamEvidenceRef } from "./dream-sources"
-import { archiveMemoryEntries, readMemoryEntries, type MemoryEntry } from "./store"
+import { archiveMemoryEntries, readMemoryEntries, updateMemoryEntry, type MemoryEntry } from "./store"
 import {
   applyMemoryProposal,
   archiveMemoryProposal,
@@ -20,6 +20,7 @@ import { listMemorySessionDigests, markMemorySessionDigestsConsumed, type Memory
 import { redactMemoryText } from "./proposals"
 import { resolveModelRoles } from "../config/models"
 import { runProviderAdapter } from "../runtime/provider-adapters"
+import { assertLegacyLearning } from "../evolution/policy"
 
 const CONSOLIDATION_BATCH_SIZE = 24
 const CONSOLIDATION_RETRY_BATCH_SIZE = 8
@@ -137,6 +138,7 @@ function isProtectedCanonical(entry: MemoryEntry) {
 }
 
 export async function cleanupGeneratedMemoryEntries(root?: string) {
+  await assertLegacyLearning(memoryPaths(root).root)
   const entries = await readMemoryEntries("global", root)
   const maintenanceSources = new Set(["memory-dream", "memory-side-chat"])
   const maintenance = entries.filter((entry) => maintenanceSources.has(entry.source) && isMemoryMaintenanceInstruction(entry.text, entry))
@@ -172,6 +174,42 @@ export async function cleanupGeneratedMemoryEntries(root?: string) {
   if (!selections.length) return { archived: [], retained: entries.length }
   const result = await archiveMemoryEntries("global", selections, root)
   return { archived: result.archived, retained: Math.max(0, entries.length - result.archived.length) }
+}
+
+/**
+ * Maintenance for accepted entries is deliberately host-owned.  The model may
+ * recommend proposal decisions, but it must not be trusted to choose which
+ * canonical entry survives or to mutate canonical storage directly.
+ */
+export async function consolidateAcceptedMemoryEntries(root?: string) {
+  await assertLegacyLearning(memoryPaths(root).root)
+  const results: { scope: MemoryScope; archived: string[]; canonical: string[] }[] = []
+  for (const scope of ["global", "project"] as const) {
+    const entries = await readMemoryEntries(scope, root)
+    const retained: MemoryEntry[] = []
+    const selections: Array<{ id: string; reason: string; canonicalEntryID: string }> = []
+    for (const entry of entries.toSorted((a, b) => canonicalMemoryRank(b) - canonicalMemoryRank(a) || a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id))) {
+      const canonical = retained.find((item) => isConsolidationDuplicate(comparableMemoryText(entry.text), comparableMemoryText(item.text)))
+      if (!canonical) {
+        retained.push(entry)
+        continue
+      }
+      const merged = {
+        tags: [...new Set([...canonical.tags, ...entry.tags])],
+        categoryIDs: [...new Set([...canonical.categoryIDs, ...entry.categoryIDs])],
+        files: [...new Set([...canonical.files, ...entry.files])],
+        confidence: Math.max(canonical.confidence, entry.confidence),
+        evidence: [canonical.evidence, entry.evidence].filter(Boolean).join("; ") || null,
+      }
+      await updateMemoryEntry(scope, canonical.id, merged, root)
+      const canonicalIndex = retained.findIndex((item) => item.id === canonical.id)
+      if (canonicalIndex >= 0) retained[canonicalIndex] = { ...canonical, ...merged }
+      selections.push({ id: entry.id, canonicalEntryID: canonical.id, reason: "Dream merged evidence into the canonical accepted memory and archived the duplicate." })
+    }
+    const archived = selections.length ? await archiveMemoryEntries(scope, selections, root) : { archived: [] as MemoryEntry[] }
+    results.push({ scope, archived: archived.archived.map((entry) => entry.id), canonical: selections.map((selection) => selection.canonicalEntryID) })
+  }
+  return results
 }
 
 export const deterministicDreamConsolidator: DreamConsolidationModel = async (input) => {
@@ -454,6 +492,10 @@ async function applyExistingProposal(input: {
   root?: string
   config: MemoryConfig
 }) {
+  if (input.proposal.policyDecision === "manual-only") {
+    throw new Error(`Proposal ${input.proposal.id} requires manual review; Dream cannot resolve it automatically`)
+  }
+  await assertLegacyLearning(memoryPaths(input.root).root)
   const decision = input.decision
   if (decision.resolution === "archive") return { status: "archived" as const, proposal: await archiveMemoryProposal(input.proposal.id, input.root, decision.reason), reason: decision.reason }
   if (decision.resolution === "reject") return { status: "rejected" as const, proposal: await rejectMemoryProposal(input.proposal.id, input.root), reason: decision.reason }
@@ -493,6 +535,7 @@ async function applyDirectDecision(input: {
   runID: string
   config: MemoryConfig
 }) {
+  await assertLegacyLearning(memoryPaths(input.root).root)
   const decision = input.decision
   const target = decision.entryID ? input.entries.find((entry) => entry.id === decision.entryID) : undefined
   if (decision.resolution !== "add" && !target) throw new Error(`Consolidation target entry not found: ${decision.entryID || "missing"}`)
@@ -531,7 +574,9 @@ export async function runMemoryConsolidation(input: {
   model?: DreamConsolidationModel
   evidence?: DreamEvidenceRef[]
   now?: Date
+  pendingSnapshot?: MemoryProposal[]
 }): Promise<DreamConsolidationRun> {
+  await assertLegacyLearning(memoryPaths(input.root).root)
   const config = await readMemoryConfig(input.root)
   const policy = input.policy ?? config.dreamConsolidationPolicy
   const [entries, facts, allProposals, digests] = await Promise.all([
@@ -540,7 +585,7 @@ export async function runMemoryConsolidation(input: {
     listMemoryProposals(input.root, "all"),
     listMemorySessionDigests(input.root),
   ])
-  const pending = allProposals
+  const pending = (input.pendingSnapshot ?? allProposals.filter((proposal) => proposal.status === "pending"))
     .filter((proposal) => proposal.status === "pending")
     .sort((left, right) => {
       const leftTarget = proposalTargetKey(left)

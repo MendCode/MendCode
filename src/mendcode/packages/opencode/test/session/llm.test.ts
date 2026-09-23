@@ -17,6 +17,7 @@ import type { Agent } from "../../src/agent/agent"
 import { MessageV2 } from "../../src/session/message-v2"
 import { SessionID, MessageID } from "../../src/session/schema"
 import { AppRuntime } from "../../src/effect/app-runtime"
+import { getReasoningState } from "../../src/mend/prompt/reasoning-state"
 
 async function getModel(providerID: ProviderID, modelID: ModelID) {
   return AppRuntime.runPromise(
@@ -30,7 +31,7 @@ async function getModel(providerID: ProviderID, modelID: ModelID) {
 const llm = makeRuntime(LLM.Service, LLM.defaultLayer)
 
 async function drain(input: LLM.StreamInput) {
-  return llm.runPromise((svc) => svc.stream(input).pipe(Stream.runDrain))
+  return llm.runPromise((svc) => svc.stream(input).pipe(Stream.runCollect))
 }
 
 describe("session.llm.hasToolCalls", () => {
@@ -362,7 +363,7 @@ describe("session.llm.stream", () => {
           model: { providerID: ProviderID.make(providerID), modelID: resolved.id, variant: "high" },
         } satisfies MessageV2.User
 
-        await drain({
+        const events = await drain({
           user,
           sessionID,
           model: resolved,
@@ -403,6 +404,11 @@ describe("session.llm.stream", () => {
 
         const reasoning = (body.reasoningEffort as string | undefined) ?? (body.reasoning_effort as string | undefined)
         expect(reasoning).toBe("high")
+        const finish = Array.from(events).find((event) => event.type === "finish-step")
+        expect(finish?.providerMetadata?.mendcode?.contextProfile).toMatchObject({
+          version: 1, toolCount: 0, imageCount: 0,
+        })
+        expect(JSON.stringify(finish?.providerMetadata?.mendcode)).not.toContain("test-key")
       },
     })
   })
@@ -573,14 +579,20 @@ describe("session.llm.stream", () => {
     })
   })
 
-  test("sends responses API payload for OpenAI models", async () => {
+  test.each([
+    { modelID: "gpt-5.2", auto: false, manual: "high", signal: false, expected: "high" },
+    { modelID: "gpt-6-astra", auto: false, manual: "high", signal: false, expected: "high" },
+    { modelID: "gpt-6-astra", auto: true, manual: undefined, signal: false, expected: "medium" },
+    { modelID: "gpt-6-astra", auto: true, manual: undefined, signal: true, expected: "high" },
+    { modelID: "gpt-6-astra", auto: true, manual: "low", signal: true, expected: "low" },
+  ])("sends Responses options for $modelID auto=$auto manual=$manual signal=$signal", async (scenario) => {
     const server = state.server
     if (!server) {
       throw new Error("Server not initialized")
     }
 
     const source = await loadFixture("openai", "gpt-5.2")
-    const model = source.model
+    const model = { ...source.model, id: scenario.modelID }
 
     const responseChunks = [
       {
@@ -621,6 +633,7 @@ describe("session.llm.stream", () => {
           JSON.stringify({
             $schema: "https://mendcode.ai/config.json",
             enabled_providers: ["openai"],
+            experimental: { reasoning_auto: scenario.auto },
             provider: {
               openai: {
                 name: "OpenAI",
@@ -660,7 +673,7 @@ describe("session.llm.stream", () => {
           role: "user",
           time: { created: Date.now() },
           agent: agent.name,
-          model: { providerID: ProviderID.make("openai"), modelID: resolved.id, variant: "high" },
+          model: { providerID: ProviderID.make("openai"), modelID: resolved.id, variant: scenario.manual },
         } satisfies MessageV2.User
 
         await drain({
@@ -669,7 +682,13 @@ describe("session.llm.stream", () => {
           model: resolved,
           agent,
           system: ["You are a helpful assistant."],
-          messages: [{ role: "user", content: "Hello" }],
+          messages: [
+            { role: "user", content: "Hello" },
+            ...(scenario.signal ? [
+              { role: "assistant", content: [{ type: "tool-call", toolCallId: "auto-1", toolName: "reasoning_auto", input: { reason: "verification_failed", evidence: "Regression check failed" } }] },
+              { role: "tool", content: [{ type: "tool-result", toolCallId: "auto-1", toolName: "reasoning_auto", output: { type: "text", value: JSON.stringify({ signal: "verification_failed" }) } }] },
+            ] as ModelMessage[] : []),
+          ],
           tools: {},
         })
 
@@ -679,7 +698,13 @@ describe("session.llm.stream", () => {
         expect(capture.url.pathname.endsWith("/responses")).toBe(true)
         expect(body.model).toBe(resolved.api.id)
         expect(body.stream).toBe(true)
-        expect((body.reasoning as { effort?: string } | undefined)?.effort).toBe("high")
+        expect((body.reasoning as { effort?: string } | undefined)?.effort).toBe(scenario.expected)
+        expect(getReasoningState(sessionID)).toMatchObject({ effort: scenario.expected, mode: scenario.manual ? "manual" : "auto", messageID: user.id })
+        if (scenario.modelID === "gpt-6-astra") {
+          expect(body.temperature).toBeUndefined()
+          expect(body.top_p).toBeUndefined()
+          expect(body.service_tier).toBeUndefined()
+        }
         expect((body.reasoning as { summary?: string } | undefined)?.summary).toBe("auto")
         expect(body.include).toContain("reasoning.encrypted_content")
 

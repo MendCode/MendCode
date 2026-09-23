@@ -3,6 +3,8 @@ import * as Stream from "effect/Stream"
 import { ulid } from "ulid"
 
 import { Bus } from "@/bus"
+import { Config } from "@/config/config"
+import { workflowDefaultModel } from "./workflow-model"
 import { InstanceState } from "@/effect/instance-state"
 import { Permission } from "@/permission"
 import { readPermissionsConfig } from "@/mend/config/permissions"
@@ -77,6 +79,74 @@ const errorText = (error: unknown) => {
   if (typeof error === "object" && error !== null && "message" in error && typeof error.message === "string")
     return error.message
   return String(error)
+}
+
+const compoundOutcomes = new Set(["accepted", "revised", "unreviewed-revision", "blocked", "failed", "needs_input"])
+
+type CompoundReceiptOutcome = "accepted" | "revised" | "unreviewed-revision" | "blocked" | "failed" | "needs_input"
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value)
+
+/**
+ * A compound attempt may only be reconciled from its durable terminal receipt.
+ * A terminal background/session message alone is not enough: the provider may
+ * have performed an unobserved side effect before the process stopped.
+ */
+export function compoundReceiptOutcome(value: unknown): CompoundReceiptOutcome | undefined {
+  if (!isRecord(value) || value.version !== 1 || typeof value.profile !== "string" || !compoundOutcomes.has(String(value.outcome))) return
+  if (
+    !isRecord(value.ledger) ||
+    value.ledger.version !== 1 ||
+    !Array.isArray(value.ledger.records) ||
+    !isRecord(value.ledger.limits) ||
+    !Array.isArray(value.legs) ||
+    !Array.isArray(value.validation)
+  ) return
+  return value.outcome as CompoundReceiptOutcome
+}
+
+const compoundStateForOutcome = (outcome: CompoundReceiptOutcome): ExecutionResult["state"] => {
+  if (outcome === "accepted" || outcome === "revised" || outcome === "unreviewed-revision") return "completed"
+  if (outcome === "needs_input") return "needs_input"
+  if (outcome === "blocked") return "blocked"
+  return "failed"
+}
+
+export function compoundRecoveryResult(input: {
+  readonly task: Pick<WorkflowTaskClaim["task"], "compound"> & { readonly compoundReceipt?: unknown }
+  readonly terminalResult?: ExecutionResult
+}): ExecutionResult | undefined {
+  if (input.task.compound === undefined) return input.terminalResult
+  const outcome = compoundReceiptOutcome(input.task.compoundReceipt)
+  if (outcome === undefined) {
+    if (input.terminalResult === undefined && input.task.compoundReceipt === undefined) return
+    return {
+      state: "blocked",
+      failureClass: "environment",
+      ...(input.terminalResult?.summary === undefined ? {} : { summary: input.terminalResult.summary }),
+      error: "Compound attempt ended without a valid terminal receipt after restart; side effects are unknown and automatic replay is disabled. Use a manual reviewed retry.",
+      ...(input.terminalResult?.usage === undefined ? {} : { usage: input.terminalResult.usage }),
+      ...(input.terminalResult?.evidence === undefined ? {} : { evidence: input.terminalResult.evidence }),
+    }
+  }
+
+  const state = compoundStateForOutcome(outcome)
+  const failureClass = state === "blocked"
+    ? "policy" as const
+    : state === "needs_input"
+      ? "user_input" as const
+      : state === "failed"
+        ? input.terminalResult?.failureClass ?? "environment" as const
+        : undefined
+  return {
+    state,
+    ...(input.terminalResult?.summary === undefined ? { summary: `Recovered compound terminal receipt: ${outcome}.` } : { summary: input.terminalResult.summary }),
+    ...(input.terminalResult?.usage === undefined ? {} : { usage: input.terminalResult.usage }),
+    ...(input.terminalResult?.evidence === undefined ? {} : { evidence: input.terminalResult.evidence }),
+    ...(failureClass === undefined ? {} : { failureClass }),
+    ...(state === "completed" || input.terminalResult?.error === undefined ? {} : { error: input.terminalResult.error }),
+  }
 }
 
 const artifactContext = (input: {
@@ -212,6 +282,10 @@ export const layer = Layer.effect(
     const bus = yield* Bus.Service
     const scope = yield* Scope.Scope
     const activeRuns = new Map<string, number>()
+    const configuredModel = Effect.gen(function* () {
+      const config = yield* Effect.serviceOption(Config.Service)
+      return Option.isSome(config) ? workflowDefaultModel(yield* config.value.get()) : undefined
+    })
 
     const reconcileAttempts = Effect.fn("WorkflowRunner.reconcileAttempts")(function* (
       snapshot: WorkflowService.WorkflowSnapshot,
@@ -238,7 +312,7 @@ export const layer = Layer.effect(
               (latest.info.error !== undefined || Boolean(latest.info.finish) || latest.info.time.completed !== undefined)
                 ? latest
                 : undefined
-            const result = terminalMessage
+            const terminalResult = terminalMessage
               ? WorkflowTaskExecutor.resultFromMessage(task, terminalMessage)
               : backgroundAttempt?.state === "completed"
                 ? ({ state: "completed", summary: backgroundAttempt.result?.summary } satisfies ExecutionResult)
@@ -258,6 +332,7 @@ export const layer = Layer.effect(
                       summary: backgroundAttempt.result?.summary,
                     } satisfies ExecutionResult)
                   : undefined
+            const result = compoundRecoveryResult({ task, terminalResult })
             if (!result) return
 
             if (backgroundAttempt && !["completed", "failed", "cancelled", "interrupted"].includes(backgroundAttempt.state)) {
@@ -284,6 +359,8 @@ export const layer = Layer.effect(
               failureClass: result.failureClass,
               usage: result.usage,
               evidence: result.evidence,
+              ...(task.compoundLedger === undefined ? {} : { compoundLedger: task.compoundLedger }),
+              ...(task.compoundReceipt === undefined ? {} : { compoundReceipt: task.compoundReceipt }),
             })
           }).pipe(Effect.catchCause(() => Effect.void)),
         { concurrency: 8, discard: true },
@@ -387,6 +464,15 @@ export const layer = Layer.effect(
         return
       }
 
+      if (snapshot.tasks.some((task) => task.compound !== undefined)) {
+        if (lease.state !== "retained") {
+          yield* workflow
+            .setWorkspaceLease({ runID: input.runID as never, workspaceLease: { ...lease, state: "retained" } })
+            .pipe(Effect.asVoid)
+        }
+        return
+      }
+
       const cleaning = { ...lease, state: "cleaning" as const }
       yield* workflow.setWorkspaceLease({ runID: input.runID as never, workspaceLease: cleaning }).pipe(Effect.asVoid)
       if (!instances || !worktrees) {
@@ -453,13 +539,14 @@ export const layer = Layer.effect(
       readonly planPermissions?: WorkflowPermissionPolicy
       readonly sessionPermissionMode: WorkflowSessionPermissionMode
       readonly planWorkspace?: WorkflowTaskClaim["task"]["workspace"]
+      readonly workspacePath: string
       readonly artifacts: readonly {
         readonly taskID?: string
         readonly summary: string
         readonly evidence: readonly string[]
       }[]
     }) {
-      const model = input.claim.task.model ?? input.planModel
+      const model = input.claim.task.model ?? input.planModel ?? (yield* configuredModel)
       const policy = WorkflowPolicy.taskPolicy({
         workflow: input.planPermissions,
         task: input.claim.task,
@@ -506,7 +593,7 @@ export const layer = Layer.effect(
         .execute({
           task: input.claim.task,
           sessionID: attempt.sessionID,
-          workflowModel: input.planModel,
+          workflowModel: model,
           context: [
             WorkflowPolicy.workspaceInstruction(policy.workspace),
             artifactContext({ task: input.claim.task, artifacts: input.artifacts }),
@@ -515,6 +602,18 @@ export const layer = Layer.effect(
             .join("\n\n"),
           workflowPermissions: input.planPermissions,
           workflowWorkspace: input.planWorkspace,
+          workspacePath: input.workspacePath,
+          ...(input.claim.task.compound === undefined
+            ? {}
+            : {
+                compoundContext: {
+                  runID: input.runID,
+                  taskAttemptID: input.claim.attemptID,
+                  generation: attempt.generation,
+                  resolvedProfile: input.claim.task.compound.resolved,
+                  configHash: input.claim.task.compound.configHash ?? "",
+                },
+              }),
         })
         .pipe(
           Effect.catchCause((cause) =>
@@ -538,6 +637,9 @@ export const layer = Layer.effect(
           failureClass: result.failureClass,
           usage: result.usage,
           evidence: result.evidence,
+          ...(result.compound === undefined
+            ? {}
+            : { compoundLedger: result.compound.ledger, compoundReceipt: result.compound }),
         })
         yield* background.finishAttempt({
           taskID: attempt.sessionID,
@@ -575,6 +677,9 @@ export const layer = Layer.effect(
         failureClass: result.failureClass,
         usage: result.usage,
         evidence: result.evidence,
+        ...(result.compound === undefined
+          ? {}
+          : { compoundLedger: result.compound.ledger, compoundReceipt: result.compound }),
       })
     })
 
@@ -691,7 +796,7 @@ export const layer = Layer.effect(
               task: auditTask,
               sessionID: auditSession.id,
               timeoutMs: completionAuditResponseTimeoutMs,
-              workflowModel: input.snapshot.revision.plan.model,
+               workflowModel: input.snapshot.revision.plan.model ?? (yield* configuredModel),
               workflowPermissions: input.snapshot.revision.plan.permissions,
               workflowWorkspace: input.snapshot.revision.plan.workspace,
             }).pipe(
@@ -821,6 +926,7 @@ export const layer = Layer.effect(
                 ),
                 sessionPermissionMode,
                 planWorkspace: snapshot.revision.plan.workspace,
+                workspacePath: target.directory,
                 artifacts: snapshot.artifacts,
               }).pipe(
                 Effect.catchCause((cause) =>
@@ -987,6 +1093,7 @@ export const layer = Layer.effect(
 )
 
 export const defaultLayer = layer.pipe(
+  Layer.provide(Config.defaultLayer),
   Layer.provide(Permission.defaultLayer),
   Layer.provide(WorkflowTaskExecutor.defaultLayer),
   Layer.provide(WorkflowBackgroundTask.defaultLayer),

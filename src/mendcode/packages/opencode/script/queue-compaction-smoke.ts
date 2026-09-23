@@ -182,12 +182,16 @@ function syntheticPrompt(label: string) {
 
 function environment(root: string): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {
-    ...process.env,
+    // Do not inherit config-content, package-root, or provider overrides from
+    // the developer's active MendCode session into the isolated fixture.
+    ...Object.fromEntries(["PATH", "TERM", "COLORTERM", "LANG", "LC_ALL", "TMPDIR"].flatMap((key) => process.env[key] === undefined ? [] : [[key, process.env[key]]])),
     HOME: path.join(root, "home"),
     XDG_DATA_HOME: path.join(root, "data"),
     XDG_CACHE_HOME: path.join(root, "cache"),
     XDG_CONFIG_HOME: path.join(root, "config"),
     XDG_STATE_HOME: path.join(root, "state"),
+    MENDCODE_MEMORY_DIR: path.join(root, "data", "memory"),
+    MENDCODE_MEMORY_DISCOVERY_ROOTS: "",
     OPENCODE_GLOBAL_LAYOUT: "mendcode",
     OPENCODE_DB: path.join(root, "state", "queue-smoke.db"),
     OPENCODE_DISABLE_DEFAULT_PLUGINS: "true",
@@ -353,7 +357,7 @@ async function main() {
           "Press Enter to submit it, press Esc once to arm interruption, then press Esc again within five seconds to cancel it.",
           `The local model holds that request for ${Math.round(HOLD_MS / 1_000)} seconds so the queued state is visible.`,
           "Only one smoke can run at a time. Exit with /exit or Ctrl+C; child processes and the lock are cleaned automatically.",
-          "Expected result: the second Esc issues one cancellation; the compaction summary terminates once, Snake disappears, the panel collapses, and queued messages remain paired with their queued/send state.",
+          "Expected result: the second Esc issues one cancellation; the compaction summary terminates once, Snake's final board stays visible and stops advancing, the transcript collapses, and queued messages remain paired with their queued/send state.",
           "",
         ].join("\n"),
       )

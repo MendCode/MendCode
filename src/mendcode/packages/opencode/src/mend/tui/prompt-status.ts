@@ -79,6 +79,7 @@ export type MendPromptStatusScriptInput = {
   contextTokens?: number
   contextLimit?: number
   contextPercent?: number
+  sessionCachePercent?: number
   permissionMode?: string
   permissionModeLabel?: string
   permissionPending?: number
@@ -100,6 +101,65 @@ export type MendPromptStatusScriptSegment = {
 export type MendPromptStatusScriptOutput = {
   text: string
   segments?: MendPromptStatusScriptSegment[]
+}
+
+type PromptCacheUsage = {
+  input?: number
+  cache?: {
+    read?: number
+    write?: number
+  }
+}
+
+export function resolvePromptCachePercent(input: PromptCacheUsage): number | undefined
+export function resolvePromptCachePercent(input: readonly PromptCacheUsage[]): number | undefined
+export function resolvePromptCachePercent(input: PromptCacheUsage | readonly PromptCacheUsage[]) {
+  const safe = (value: number | undefined) =>
+    typeof value === "number" && Number.isFinite(value) ? Math.max(0, value) : 0
+  if (Array.isArray(input)) {
+    const usage = input.reduce<{ input: number; read: number; write: number }>(
+      (total, item) => ({
+        input: total.input + safe(item.input),
+        read: total.read + safe(item.cache?.read),
+        write: total.write + safe(item.cache?.write),
+      }),
+      { input: 0, read: 0, write: 0 },
+    )
+    const totalInput = usage.input + usage.read + usage.write
+    if (totalInput <= 0) return
+    return Math.max(0, Math.min(100, Math.round((usage.read / totalInput) * 100)))
+  }
+
+  const single = input as PromptCacheUsage
+  const cacheRead = safe(single.cache?.read)
+  const cacheWrite = safe(single.cache?.write)
+  const totalInput = safe(single.input) + cacheRead + cacheWrite
+  if (cacheRead <= 0 || totalInput <= 0) return
+  return Math.max(1, Math.min(100, Math.round((cacheRead / totalInput) * 100)))
+}
+
+export function resolvePromptTurnCachePercent(input: {
+  messages: ReadonlyArray<{
+    id: string
+    role: string
+    parentID?: string
+    tokens?: PromptCacheUsage
+    liveUsage?: PromptCacheUsage
+  }>
+  activeAssistantID?: string
+}) {
+  const latest =
+    (input.activeAssistantID
+      ? input.messages.findLast((message) => message.role === "assistant" && message.id === input.activeAssistantID)
+      : undefined) ?? input.messages.findLast((message) => message.role === "assistant")
+  if (!latest?.parentID) return
+  return resolvePromptCachePercent(
+    input.messages.flatMap((message) => {
+      if (message.role !== "assistant" || message.parentID !== latest.parentID) return []
+      const usage = message.liveUsage ?? message.tokens
+      return usage ? [usage] : []
+    }),
+  )
 }
 
 export type MendPromptStatusScriptResult = {
@@ -131,6 +191,7 @@ function warmCacheKey(input: MendPromptStatusScriptInput) {
     contextTokens: input.contextTokens ?? "",
     contextLimit: input.contextLimit ?? "",
     contextPercent: input.contextPercent ?? "",
+    sessionCachePercent: input.sessionCachePercent ?? "",
     permissionMode: input.permissionMode || "",
     permissionModeLabel: input.permissionModeLabel || "",
     permissionPending: input.permissionPending ?? 0,
@@ -408,6 +469,8 @@ export async function readPromptStatusScript(input: MendPromptStatusScriptInput)
       MEND_TUI_CONTEXT_TOKENS: input.contextTokens === undefined ? "" : String(input.contextTokens),
       MEND_TUI_CONTEXT_LIMIT: input.contextLimit === undefined ? "" : String(input.contextLimit),
       MEND_TUI_CONTEXT_PERCENT: input.contextPercent === undefined ? "" : String(input.contextPercent),
+      MEND_TUI_SESSION_CACHE_PERCENT:
+        input.sessionCachePercent === undefined ? "" : String(input.sessionCachePercent),
       MEND_TUI_PERMISSION_MODE: input.permissionMode || "",
       MEND_TUI_PERMISSION_MODE_LABEL: input.permissionModeLabel || "",
       MEND_TUI_PERMISSION_PENDING: String(input.permissionPending ?? 0),

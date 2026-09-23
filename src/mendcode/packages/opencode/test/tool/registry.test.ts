@@ -34,6 +34,7 @@ import { LoopRunner } from "@/session/loop-runner"
 import { WorkflowService } from "@/session/workflow-service"
 import type { Agent as AgentTypes } from "@/agent/agent"
 import { Auth } from "@/auth"
+import { AIConfiguration } from "@/mend/runtime/ai-configuration"
 
 const buildAgent: AgentTypes.Info = {
   name: "build",
@@ -113,7 +114,7 @@ const registryLayer = (
     Layer.provide(node),
     Layer.provide(Ripgrep.defaultLayer),
   )
-  return base.pipe(Layer.provide(Truncate.defaultLayer))
+  return base.pipe(Layer.provide([Truncate.defaultLayer, AIConfiguration.defaultLayer]))
 }
 
 const it = testEffect(Layer.mergeAll(registryLayer(), node))

@@ -2,6 +2,7 @@ import { existsSync } from "fs"
 import { readFile } from "fs/promises"
 import path from "path"
 import { mendPaths } from "../config/paths"
+import { ASTRA_PROMPT_SOURCE, normalizedPromptModel } from "./model-family"
 
 export type PromptSource = {
   label: string
@@ -18,6 +19,7 @@ export type PromptBehaviorProfile = {
   focusID: string
   label: string
   sourcePolicy: "public-model-guidance" | "mendcode-compatibility"
+  provenance?: { revision: string; url: string; verifiedAt: string }
   behavior: string[]
 }
 
@@ -36,12 +38,19 @@ const modelBehaviorProfiles: Array<PromptBehaviorProfile & { match: RegExp }> = 
   {
     id: "gpt-6-astra",
     focusID: "codex",
-    label: "GPT-6 Astra compatibility",
+    label: "GPT-6 Astra behavior guidance",
     sourcePolicy: "mendcode-compatibility",
+    provenance: ASTRA_PROMPT_SOURCE,
     match: /(^|[^a-z0-9])gpt[-_.:/]?6[-_.:/]?astra([^a-z0-9]|$)/i,
     behavior: [
-      "Use the actual GPT-6 Astra runtime contract and exposed tools instead of assuming that every Codex CLI feature is available through MendCode.",
-      "Treat reasoning modes, transport, caching, context limits, and advanced features as runtime configuration; verify capabilities before promising them.",
+      "Use the actual Astra runtime contract and exposed tools; do not infer capabilities from the model name or a different Codex transport.",
+      "Inspect repository evidence before editing, distinguish facts from hypotheses, and revisit the approach when a check contradicts it.",
+      "Carry authorized work through implementation and proportionate verification; resolve routine details from the project instead of asking repeated permission.",
+      "Preserve the current objective, accepted corrections, and useful evidence across compaction or interruption; do not restart work without a reason.",
+      "Ask only for a missing decision, capability, or authority that materially changes the next action; continue independent work when the runtime permits it.",
+      "Use only tools, subagents, async jobs, and recall capabilities that the current session exposes, and retain identifiers until their results are verified.",
+      "Keep permissions, model selection, reasoning controls, caching, and transport as runtime concerns; do not promise them from prompt text.",
+      "Report the resulting change, evidence, failures, and unavailable checks accurately, with concise connected explanations and without repeating settled context.",
     ],
   },
   {
@@ -271,7 +280,7 @@ export function sourceForFocus(focusID: string) {
 
 export function promptBehaviorForModel(input: { focusID?: string | null; modelID?: string | null }) {
   const focusID = input.focusID || ""
-  const modelID = input.modelID || ""
+  const modelID = normalizedPromptModel(input.modelID || "")
   return modelBehaviorProfiles.find((profile) => profile.focusID === focusID && profile.match.test(modelID)) || null
 }
 

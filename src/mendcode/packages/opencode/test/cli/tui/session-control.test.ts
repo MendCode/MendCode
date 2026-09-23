@@ -5,7 +5,6 @@ import {
   sessionCancelRetryDelay,
   sessionControlAllowsPrompt,
   sessionCancelRequestIsDuplicate,
-  sessionCancelResultNeedsHardAbort,
   resolveSessionControlRouting,
   SESSION_CANCEL_AUTO_RETRY_MAX_ATTEMPTS,
   SESSION_CANCEL_AUTO_RETRY_WINDOW_MS,
@@ -156,14 +155,6 @@ describe("session control outbox", () => {
         error: "offline",
       }),
     ).toBe(false)
-  })
-
-  test("falls back to a session abort when the targeted stop cannot prove the active turn", () => {
-    expect(sessionCancelResultNeedsHardAbort({ delivered: false })).toBe(true)
-    expect(sessionCancelResultNeedsHardAbort({ delivered: true, result: "target_mismatch" })).toBe(true)
-    expect(sessionCancelResultNeedsHardAbort({ delivered: true, result: "not_running" })).toBe(true)
-    expect(sessionCancelResultNeedsHardAbort({ delivered: true, result: "cancelled" })).toBe(false)
-    expect(sessionCancelResultNeedsHardAbort({ delivered: true, result: "already_terminal" })).toBe(false)
   })
 
   test("routes cancellation to the session owner instead of the currently selected folder", () => {

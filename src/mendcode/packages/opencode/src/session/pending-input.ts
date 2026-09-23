@@ -71,7 +71,12 @@ function updateBackgroundTask(
     : input.state === "running"
       ? run.state === "needs_input"
       : run.state === "running" || run.state === "needs_input"
-  if (!allowed) return
+  if (!allowed) {
+    // A resumed background attempt may be persisted before its workflow view.
+    // Replaying the resolution must still repair that view for this generation.
+    if (input.state === "running" && run.state === "running") return { generation: task.current_generation }
+    return
+  }
   const revision = run.revision + 1
   const changed = db.update(BackgroundTaskRunTable)
     .set({

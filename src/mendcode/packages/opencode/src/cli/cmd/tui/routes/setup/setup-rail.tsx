@@ -12,7 +12,7 @@ const labels: Record<SetupStepID, string> = {
   package: "Package",
   prompt: "Prompt",
   tui: "TUI Profile",
-  memory: "Memory",
+  memory: "Memory & Evolution",
   permissions: "Permissions",
 }
 

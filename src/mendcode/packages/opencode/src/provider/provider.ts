@@ -29,6 +29,7 @@ import { optionalOmitUndefined, withStatics } from "@/util/schema"
 import * as ProviderTransform from "./transform"
 import { ModelID, ProviderID } from "./schema"
 import { ClaudeCode } from "./claude-code"
+import { expandNativeContextMarker } from "@/session/native-context"
 
 const log = Log.create({ service: "provider" })
 // Compaction and long-reasoning requests can legitimately stay silent for more
@@ -1164,33 +1165,6 @@ const layer: Layer.Layer<
           return true
         }
 
-        for (const hook of plugins) {
-          const p = hook.provider
-          const models = p?.models
-          if (!p || !models) continue
-
-          const providerID = ProviderID.make(p.id)
-          if (disabled.has(providerID)) continue
-
-          const provider = database[providerID]
-          if (!provider) continue
-          const pluginAuth = yield* auth.get(providerID).pipe(Effect.orDie)
-
-          provider.models = yield* Effect.promise(async () => {
-            const next = await models(toPublicInfo(provider), { auth: pluginAuth })
-            return Object.fromEntries(
-              Object.entries(next).map(([id, model]) => [
-                id,
-                {
-                  ...model,
-                  id: ModelID.make(id),
-                  providerID,
-                },
-              ]),
-            )
-          })
-        }
-
         // extend database from config
         for (const [providerID, provider] of configProviders) {
           const existing = database[providerID]
@@ -1283,6 +1257,47 @@ const layer: Layer.Layer<
             parsed.models[modelID] = parsedModel
           }
           database[providerID] = parsed
+        }
+
+        // Config can introduce providers and models that are not in the bundled
+        // catalog. Add them before plugin model hooks so auth adapters can apply
+        // the same policy to catalog and locally configured models.
+        for (const hook of plugins) {
+          const p = hook.provider
+          const models = p?.models
+          if (!p || !models) continue
+
+          const providerID = ProviderID.make(p.id)
+          if (disabled.has(providerID)) continue
+
+          const provider = database[providerID]
+          if (!provider) continue
+          const pluginAuth = yield* auth.get(providerID).pipe(Effect.orDie)
+
+          provider.models = yield* Effect.promise(async () => {
+            const next = await models(toPublicInfo(provider), { auth: pluginAuth })
+            return Object.fromEntries(
+              Object.entries(next).map(([id, model]) => [
+                id,
+                {
+                  ...model,
+                  id: ModelID.make(id),
+                  providerID,
+                },
+              ]),
+            )
+          })
+        }
+
+        // Hooks may supply defaults for new models, but explicit local limits/options stay authoritative.
+        for (const [providerID, provider] of configProviders) {
+          for (const [modelID, configured] of Object.entries(provider.models ?? {})) {
+            const model = database[providerID]?.models[modelID]
+            if (!model) continue
+            model.limit = mergeDeep(model.limit, configured.limit ?? {})
+            model.options = mergeDeep(model.options, configured.options ?? {})
+            model.headers = mergeDeep(model.headers, configured.headers ?? {})
+          }
         }
 
         // load env
@@ -1531,14 +1546,23 @@ const layer: Layer.Layer<
           const combined = signals.length === 0 ? null : signals.length === 1 ? signals[0] : AbortSignal.any(signals)
           if (combined) opts.signal = combined
 
-          // Strip openai itemId metadata following what codex does
+          let expandedNativeContext = false
+          if (typeof opts.body === "string" && opts.method === "POST") {
+            const expanded = expandNativeContextMarker(opts.body)
+            opts.body = expanded.body
+            expandedNativeContext = expanded.expanded
+          }
+
+          // Strip openai itemId metadata following what codex does. Native
+          // compaction output is an opaque Responses window and must survive
+          // the normal store=false privacy path for this one request.
           if (
             (model.api.npm === "@ai-sdk/openai" || model.api.npm === "@ai-sdk/azure") &&
             opts.body &&
             opts.method === "POST"
           ) {
             const body = JSON.parse(opts.body as string)
-            const keepIds = body.store === true
+            const keepIds = body.store === true || expandedNativeContext
             if (!keepIds && Array.isArray(body.input)) {
               for (const item of body.input) {
                 if ("id" in item) {

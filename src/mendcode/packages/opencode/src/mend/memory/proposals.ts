@@ -2,13 +2,17 @@ import { existsSync } from "fs"
 import { mkdir, readFile, readdir, stat, writeFile } from "fs/promises"
 import path from "path"
 import { memoryPaths, readMemoryConfig, type GeneratedMemoryWritePolicy, type MemoryConfig, type MemoryScope } from "./config"
-import { appendMemoryEntry, deleteMemoryEntry, readMemoryEntries, updateMemoryEntry, type MemoryEntry, type MemorySensitivity } from "./store"
+import { appendMemoryEntry, archiveMemoryEntries, deleteMemoryEntry, memoryEntryRevision, readArchivedMemoryEntries, readMemoryEntries, updateMemoryEntry, type MemoryEntry, type MemorySensitivity } from "./store"
+import { Flock } from "@mendcode/core/util/flock"
 import { DEFAULT_MEMORY_CATEGORIES, inferMemoryCategoryIDs, normalizeMemoryCategoryIDs, scopeReasonForMemory } from "./categories"
 import { connectMemoryFactToRelatedFact, legacyScopeForFact, readMemoryFacts, readMemoryGraph, upsertMemoryFact, upsertMemoryFactLink, type MemoryFactLink } from "./graph"
 import { configureDreamScheduleFromText, type DreamScheduleState } from "./dream-scheduler"
 import { resolveModelRoles } from "../config/models"
 import { runProviderAdapter } from "../runtime/provider-adapters"
 import { dreamServiceStart, type DreamServicePlan } from "../runtime/dream-service"
+import { assertLegacyLearning, withEvolutionAction } from "../evolution/policy"
+import { listEvolutionEvidence } from "../evolution/evidence"
+import { writeEvolutionJSON } from "../evolution/config"
 
 export type MemoryProposalStatus = "pending" | "applied" | "rejected"
 export type MemoryProposalResolution = "pending" | "applied" | "rejected" | "archived" | "superseded"
@@ -45,8 +49,10 @@ export type MemoryProposal = {
   updatedAt: string
   targetEntryID: string | null
   targetEntryScope: MemoryScope | null
+  targetEntryRevision?: string
   targetEntryIDs: string[]
   appliedEntryID: string | null
+  appliedEntryRevision?: string
 }
 
 export type ProposeMemoryInput = {
@@ -55,6 +61,7 @@ export type ProposeMemoryInput = {
   scope?: MemoryScope
   targetEntryID?: string | null
   targetEntryScope?: MemoryScope | null
+  targetEntryRevision?: string
   targetEntryIDs?: string[]
   tags?: string[]
   categoryIDs?: string[]
@@ -99,6 +106,8 @@ export type AutoMemoryResult = {
 }
 
 export type ApplyMemoryProposalInput = {
+  evolutionAutoApply?: boolean
+  evolutionDataDir?: string
   startDreamService?: () => Promise<DreamServicePlan>
   connectRelated?: boolean
   relatedCategoryIDs?: string[]
@@ -212,8 +221,10 @@ function normalizeMemoryProposal(input: Partial<MemoryProposal> & Pick<MemoryPro
     updatedAt,
     targetEntryID: typeof input.targetEntryID === "string" && input.targetEntryID.trim() ? input.targetEntryID.trim() : null,
     targetEntryScope: input.targetEntryScope === "global" || input.targetEntryScope === "project" ? input.targetEntryScope : null,
+    targetEntryRevision: typeof input.targetEntryRevision === "string" && /^[a-f0-9]{64}$/.test(input.targetEntryRevision) ? input.targetEntryRevision : undefined,
     targetEntryIDs: normalizeStringList(input.targetEntryIDs).length ? normalizeStringList(input.targetEntryIDs) : typeof input.targetEntryID === "string" && input.targetEntryID.trim() ? [input.targetEntryID.trim()] : [],
     appliedEntryID: typeof input.appliedEntryID === "string" && input.appliedEntryID.trim() ? input.appliedEntryID.trim() : null,
+    appliedEntryRevision: typeof input.appliedEntryRevision === "string" && /^[a-f0-9]{64}$/.test(input.appliedEntryRevision) ? input.appliedEntryRevision : undefined,
   }
 }
 
@@ -221,7 +232,8 @@ async function writeProposal(proposal: MemoryProposal, root?: string) {
   const paths = memoryPaths(root)
   const normalized = normalizeMemoryProposal(proposal)
   await mkdir(paths.proposalsDir, { recursive: true })
-  await writeFile(proposalPath(paths.root, normalized.id), `${JSON.stringify(normalized, null, 2)}\n`)
+  if (normalized.source === "evolution") await writeEvolutionJSON(proposalPath(paths.root, normalized.id), normalized)
+  else await writeFile(proposalPath(paths.root, normalized.id), `${JSON.stringify(normalized, null, 2)}\n`)
   return normalized
 }
 
@@ -260,6 +272,7 @@ export async function proposeMemory(input: ProposeMemoryInput, root?: string) {
     updatedAt: now,
     targetEntryID: typeof input.targetEntryID === "string" && input.targetEntryID.trim() ? input.targetEntryID.trim() : null,
     targetEntryScope: input.targetEntryScope === "global" || input.targetEntryScope === "project" ? input.targetEntryScope : null,
+    targetEntryRevision: typeof input.targetEntryRevision === "string" && /^[a-f0-9]{64}$/.test(input.targetEntryRevision) ? input.targetEntryRevision : undefined,
     targetEntryIDs: normalizeStringList(input.targetEntryIDs).length ? normalizeStringList(input.targetEntryIDs) : typeof input.targetEntryID === "string" && input.targetEntryID.trim() ? [input.targetEntryID.trim()] : [],
     appliedEntryID: null,
   }
@@ -511,6 +524,7 @@ export async function settleGeneratedMemoryProposal(input: {
   allowedCategories: string[]
   blockedSensitivity: Array<"medium" | "high">
 }, root?: string) {
+  await assertLegacyLearning(memoryPaths(root).root)
   if (input.policy === "disabled") return { proposal: await markProposalPolicyDecision(input.proposal, "disabled", root), entry: null, autoApplied: false, reason: "memory write policy disabled" }
   if (input.policy === "model-decides" && input.recommendedDisposition === "skip") return { proposal: await markProposalPolicyDecision(input.proposal, "disabled", root), entry: null, autoApplied: false, reason: "model recommended skipping" }
   const wantsAutoApply = input.policy === "auto-safe" || (input.policy === "model-decides" && input.recommendedDisposition === "auto-apply")
@@ -607,6 +621,7 @@ export async function proposeMemoriesFromExtractorText(
   existingFingerprints?: string[],
 ) {
   const paths = memoryPaths(root)
+  await assertLegacyLearning(paths.root)
   const config = await readMemoryConfig(paths.root)
   if (config.memoryWritePolicy === "disabled") return { proposals: [], candidates: 0, callsProviders: true as const, readsSecrets: false as const, writesMemory: false as const, skipped: true, reason: "memory write policy disabled" }
   const fingerprints = new Set(existingFingerprints ?? (await readMemoryExtractorContext(paths.root)).existingFingerprints)
@@ -665,9 +680,19 @@ export async function proposeMemoriesFromExtractorText(
   return { proposals, candidates: extracted.length, callsProviders: true as const, readsSecrets: false as const, writesMemory: autoApplied > 0, skipped: false, reason }
 }
 
-export async function proposeMemoriesWithExtractor(input: ProposeMemoriesFromTextInput, root?: string) {
+export async function proposeMemoriesWithExtractor(
+  input: ProposeMemoriesFromTextInput,
+  root?: string,
+  signal?: AbortSignal,
+  extract?: (request: { providerID: string; modelID: string; content: string }) => Promise<string>,
+) {
+  signal?.throwIfAborted()
   const paths = memoryPaths(root)
+  await assertLegacyLearning(paths.root)
   const config = await readMemoryConfig(paths.root)
+  if (!config.enabled || !config.generate) {
+    return { proposals: [], candidates: 0, callsProviders: false as const, readsSecrets: false as const, writesMemory: false as const, skipped: true, reason: "memory output disabled" }
+  }
   if (config.memoryWritePolicy === "disabled") {
     return { proposals: [], candidates: 0, callsProviders: false as const, readsSecrets: false as const, writesMemory: false as const, skipped: true, reason: "memory write policy disabled" }
   }
@@ -678,7 +703,11 @@ export async function proposeMemoriesWithExtractor(input: ProposeMemoriesFromTex
 
   const context = await readMemoryExtractorContext(paths.root)
 
-  const result = await runProviderAdapter(paths.root, {
+  await assertLegacyLearning(paths.root)
+  const result = await (extract
+    ? extract({ providerID: role.providerID, modelID: role.modelID, content: memoryExtractorCandidateMessage(input, context.existing) })
+        .then((outputText) => ({ ok: true as const, outputText }))
+    : runProviderAdapter(paths.root, {
     providerID: role.providerID,
     modelID: role.modelID,
     authMode: role.authMode,
@@ -687,7 +716,7 @@ export async function proposeMemoriesWithExtractor(input: ProposeMemoriesFromTex
       role: "user",
       content: memoryExtractorCandidateMessage(input, context.existing),
     }],
-  }).catch((error) => ({
+  })).catch((error) => ({
     ok: false as const,
     status: 1,
     statusText: "memory extractor failed",
@@ -696,6 +725,13 @@ export async function proposeMemoriesWithExtractor(input: ProposeMemoriesFromTex
   }))
   if (!result.ok) {
     return { proposals: [], candidates: 0, callsProviders: true as const, readsSecrets: false as const, writesMemory: false as const, skipped: true, reason: memoryExtractorFailureReason(result.errorPreview || result.statusText) }
+  }
+
+  signal?.throwIfAborted()
+  const beforeWrite = await readMemoryConfig(paths.root)
+  signal?.throwIfAborted()
+  if (!beforeWrite.enabled || !beforeWrite.generate || beforeWrite.memoryWritePolicy === "disabled") {
+    return { proposals: [], candidates: 0, callsProviders: true as const, readsSecrets: false as const, writesMemory: false as const, skipped: true, reason: "memory output disabled before write" }
   }
 
   return proposeMemoriesFromExtractorText({
@@ -887,6 +923,25 @@ export async function supersedeMemoryProposal(id: string, supersededBy: string, 
 
 export async function applyMemoryProposal(id: string, root?: string, input: ApplyMemoryProposalInput = {}): Promise<ApplyMemoryProposalResult> {
   const proposal = await readMemoryProposal(id, root)
+  if (proposal.source !== "evolution") return applyMemoryProposalUnchecked(id, root, input)
+  const revision = proposal.evidenceRefs.find((ref) => ref.startsWith("evolution-policy:"))?.slice("evolution-policy:".length)
+  if (!revision || proposal.scope !== "project" || proposal.operation !== "add" || proposal.tags.length) throw new Error("Invalid Evolution memory proposal; review required")
+  return withEvolutionAction(memoryPaths(root).root, input.evolutionAutoApply ? "auto-apply" : "promote", revision, async () => {
+    const current = await readMemoryProposal(id, root)
+    if (JSON.stringify(current) !== JSON.stringify(proposal)) throw new Error("Evolution proposal changed during review")
+    if (input.evolutionAutoApply) {
+      // Intentionally narrow first allowlist: an exact user correction, not a model-inferred rule.
+      if (!/^Project language: (TypeScript|JavaScript|Python|Rust|Go)\.$/.test(current.text) || current.sensitivity !== "low" || current.categoryIDs.length !== 1 || current.categoryIDs[0] !== "project.stack") throw new Error("Memory requires manual review")
+      const evidence = await listEvolutionEvidence(memoryPaths(root).root, input.evolutionDataDir)
+      if (!evidence.some((entry) => entry.source === "correction" && entry.revision === revision && entry.text === current.text && current.evidenceRefs.includes(entry.id))) throw new Error("Auto-safe requires an exact current user correction")
+      if (evidence.some((entry) => entry.source === "correction" && entry.revision === revision && entry.text?.startsWith("Project language:") && entry.text !== current.text)) throw new Error("Conflicting user corrections require manual review")
+    }
+    return applyMemoryProposalUnchecked(id, root, input, current)
+  }, input.evolutionDataDir)
+}
+
+async function applyMemoryProposalUnchecked(id: string, root?: string, input: ApplyMemoryProposalInput = {}, reviewed?: MemoryProposal): Promise<ApplyMemoryProposalResult> {
+  const proposal = reviewed ?? await readMemoryProposal(id, root)
   if (proposal.status !== "pending") throw new Error(`Memory proposal ${id} is ${proposal.status}`)
   const operation = proposal.operation ?? "add"
   let entry: MemoryEntry | null = null
@@ -942,6 +997,7 @@ export async function applyMemoryProposal(id: string, root?: string, input: Appl
   }
   if (operation === "add") {
     entry = await appendMemoryEntry({
+      id: proposal.source === "evolution" ? `evolution_${proposal.id}` : undefined,
       scope: proposal.scope,
       text: proposal.text,
       tags: proposal.tags,
@@ -952,7 +1008,7 @@ export async function applyMemoryProposal(id: string, root?: string, input: Appl
       evidence: proposal.evidence,
       confidence: proposal.confidence,
       sensitivity: proposal.sensitivity,
-    }, root)
+    }, root, { requireEmpty: proposal.source === "evolution" && input.evolutionAutoApply })
   } else if (operation === "update") {
     if (!proposal.targetEntryID) throw new Error(`Memory proposal ${id} is missing targetEntryID`)
     entry = await updateMemoryEntry(proposal.targetEntryScope ?? proposal.scope, proposal.targetEntryID, {
@@ -965,7 +1021,7 @@ export async function applyMemoryProposal(id: string, root?: string, input: Appl
       evidence: proposal.evidence,
       confidence: proposal.confidence,
       sensitivity: proposal.sensitivity,
-    }, root)
+    }, root, proposal.targetEntryRevision)
   } else if (operation === "remove" || operation === "expire") {
     if (!proposal.targetEntryID) throw new Error(`Memory proposal ${id} is missing targetEntryID`)
     await deleteMemoryEntry(proposal.targetEntryScope ?? proposal.scope, proposal.targetEntryID, root)
@@ -1003,7 +1059,8 @@ export async function applyMemoryProposal(id: string, root?: string, input: Appl
       confidence: proposal.confidence,
     }, root)
   }
-  if (entry) {
+  // Evolution uses the existing live legacy projection; avoid a second independently committed copy.
+  if (entry && proposal.source !== "evolution") {
     const fact = await upsertMemoryFact({
       id: `legacy_${entry.id}`,
       legacyEntryID: entry.id,
@@ -1020,9 +1077,28 @@ export async function applyMemoryProposal(id: string, root?: string, input: Appl
     }, root)
     if (input.connectRelated) await connectMemoryFactToRelatedFact(fact.id, root, input.relatedCategoryIDs)
   }
-  const next: MemoryProposal = { ...proposal, operation, status: "applied", updatedAt: new Date().toISOString(), appliedEntryID: entry?.id ?? null }
+  const next: MemoryProposal = { ...proposal, operation, status: "applied", updatedAt: new Date().toISOString(), appliedEntryID: entry?.id ?? null, appliedEntryRevision: proposal.source === "evolution" && entry ? memoryEntryRevision(entry) : undefined, policyDecision: proposal.source === "evolution" && input.evolutionAutoApply ? "auto-applied" : proposal.policyDecision }
   await writeProposal(next, root)
   return { proposal: next, entry, dreamSchedule, dreamService }
+}
+
+/** Retire only the exact newly-created Evolution memory, preserving its archive and graph data. */
+export async function rollbackEvolutionMemoryProposal(id: string, expectedRevision: string, root?: string) {
+  const paths = memoryPaths(root)
+  return Flock.withLock(`evolution-memory:${paths.root}:${id}`, async () => {
+    const proposal = await readMemoryProposal(id, root)
+    if (proposal.source !== "evolution" || proposal.scope !== "project" || proposal.operation !== "add" || !proposal.appliedEntryID || proposal.appliedEntryRevision !== expectedRevision) throw new Error("Evolution memory receipt changed; review required")
+    if (proposal.resolution === "archived") return proposal
+    if (proposal.status !== "applied") throw new Error("Evolution memory is not active")
+    const result = await archiveMemoryEntries("project", [{ id: proposal.appliedEntryID, reason: `Evolution rollback ${proposal.id}`, expectedRevision }], root)
+    if (!result.archived.length) {
+      const archived = (await readArchivedMemoryEntries("project", root)).find((entry) => entry.id === proposal.appliedEntryID)
+      if (!archived) throw new Error("Evolution memory no longer matches its receipt")
+      const { archivedAt: _at, archiveReason: _reason, canonicalEntryID: _canonical, ...original } = archived
+      if (memoryEntryRevision(original) !== expectedRevision) throw new Error("Evolution archive changed; manual review required")
+    }
+    return writeProposal({ ...proposal, status: "rejected", resolution: "archived", resolutionReason: "Reverted by user; original memory archived", resolvedAt: new Date().toISOString(), updatedAt: new Date().toISOString() }, root)
+  }, { dir: path.join(paths.proposalsDir, ".locks"), timeoutMs: 5_000 })
 }
 
 export async function rejectMemoryProposal(id: string, root?: string) {

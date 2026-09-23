@@ -487,6 +487,7 @@ export function sessionUserMovedViewport(input: {
   viewportHeight: number
   lastViewportHeight: number
   followOutput?: boolean
+  atBottom?: boolean
 }) {
   const scrollDelta = input.scrollTop - input.lastScrollTop
   const scrollMoved = Math.abs(scrollDelta) > 1
@@ -500,7 +501,7 @@ export function sessionUserMovedViewport(input: {
   // be that layout adjustment, but a negative delta is an unmistakable manual
   // scroll-up gesture and must detach follow immediately.
   if (layoutChanged) {
-    if (input.followOutput) return scrollDelta < -1
+    if (input.followOutput) return scrollDelta < -1 && input.atBottom !== true
     return false
   }
   return true
@@ -5893,6 +5894,8 @@ const MIME_BADGE: Record<string, string> = {
 
 function CompactionCard(props: {
   part: Extract<Part, { type: "compaction" }>
+  terminal?: boolean
+  failure?: "interrupted" | "failed"
   summaryPreview?: string
   transcriptPreview?: string
   editableScratchpad?: boolean
@@ -5919,6 +5922,8 @@ function CompactionCard(props: {
   return (
     <CompactionPanel
       reason={props.part.auto ? "auto" : "manual"}
+      terminal={props.terminal}
+      failure={props.failure}
       overflow={props.part.overflow}
       resume={props.part.resume}
       postPrompt={props.part.post_prompt}
@@ -6165,15 +6170,22 @@ function UserMessage(props: {
   )
   const showCompactionCard = createMemo(() => props.message.id === latestCompactionMessageID())
   const visibleCompaction = createMemo(() => (showCompactionCard() ? compaction() : undefined))
-  const summaryAssistant = createMemo(() =>
-    (sync.data.message[props.message.sessionID] ?? []).find(
+  const summaryLifecycle = createMemo(() =>
+    (sync.data.message[props.message.sessionID] ?? []).findLast(
       (message): message is AssistantMessage =>
         message.role === "assistant" &&
         message.summary === true &&
-        message.parentID === props.message.id &&
-        !message.error,
+        message.parentID === props.message.id,
     ),
   )
+  const summaryAssistant = createMemo(() => {
+    const message = summaryLifecycle()
+    return message?.error ? undefined : message
+  })
+  const compactionTerminal = createMemo(() => {
+    const message = summaryLifecycle()
+    return Boolean(message && (message.time.completed !== undefined || message.error))
+  })
   const summaryOutputText = createMemo(() => {
     const summary = summaryAssistant()
     if (!summary) return
@@ -6399,6 +6411,8 @@ function UserMessage(props: {
         {(part) => (
           <CompactionCard
             part={part()}
+            terminal={compactionTerminal()}
+            failure={summaryLifecycle()?.error ? (summaryLifecycle()?.error?.name === "MessageAbortedError" ? "interrupted" : "failed") : undefined}
             summaryPreview={summaryPreview()}
             transcriptPreview={transcriptPreview()}
             editableScratchpad={!summaryAssistant()}

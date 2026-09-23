@@ -311,6 +311,40 @@ export const validateWorkflowPlan = (plan: WorkflowPlan): WorkflowPlanValidation
 
     issues.push(...validatePermission(task.permissions, `task ${task.id}`, ["tasks", String(index), "permissions"]))
     issues.push(...validatePolicyInheritance(plan, task, ["tasks", String(index), "permissions"]))
+
+    if (task.compound) {
+      if (task.kind !== "agent" && task.kind !== "human") {
+        issues.push(issue("policy-contradiction", `Compound task ${task.id} must be an agent or compatibility human sentinel`, ["tasks", String(index), "kind"]))
+      }
+      if (task.output.kind !== "text") {
+        issues.push(issue("unsupported-output", `Compound task ${task.id} must produce text`, ["tasks", String(index), "output"]))
+      }
+      if (task.model) {
+        issues.push(issue("policy-contradiction", `Compound task ${task.id} cannot define an overriding model`, ["tasks", String(index), "model"]))
+      }
+      if (task.workspace?.mode !== "per-run-worktree") {
+        issues.push(issue("policy-contradiction", `Compound task ${task.id} requires a per-run-worktree workspace`, ["tasks", String(index), "workspace", "mode"]))
+      }
+      if (!task.compound.profile.trim()) {
+        issues.push(issue("policy-contradiction", `Compound task ${task.id} requires a profile name`, ["tasks", String(index), "compound", "profile"]))
+      }
+      if (task.compound.validationChecks.length === 0) {
+        issues.push(issue("invalid-completion-criteria", `Compound task ${task.id} requires a deterministic validation check`, ["tasks", String(index), "compound", "validationChecks"]))
+      }
+      const checkIDs = new Set<string>()
+      for (const [checkIndex, check] of task.compound.validationChecks.entries()) {
+        if (!check.id.trim() || checkIDs.has(check.id)) {
+          issues.push(issue("duplicate-identifier", `Compound task ${task.id} repeats a validation check identifier`, ["tasks", String(index), "compound", "validationChecks", String(checkIndex), "id"]))
+        }
+        checkIDs.add(check.id)
+        if (!check.command.trim() || !completionValidationCommandAllowed(check.command)) {
+          issues.push(issue("invalid-completion-criteria", `Compound task ${task.id} uses an unsupported validation command`, ["tasks", String(index), "compound", "validationChecks", String(checkIndex), "command"]))
+        }
+      }
+      if (plan.budget?.maxConcurrency !== 1) {
+        issues.push(issue("policy-contradiction", "Compound workflows require maxConcurrency=1", ["budget", "maxConcurrency"]))
+      }
+    }
   }
 
   for (const phase of plan.phases) {

@@ -25,6 +25,7 @@ import {
 } from "./workflow"
 import { isTransientWorkflowError } from "./workflow"
 import { SessionID } from "./schema"
+import type { CompoundLedgerSnapshot } from "./compound-ledger"
 import {
   Service as WorkflowService,
   WorkflowNotFoundError,
@@ -165,6 +166,8 @@ export interface TaskResultInput {
   }
   readonly outputRefs?: readonly string[]
   readonly evidence?: readonly string[]
+  readonly compoundLedger?: CompoundLedgerSnapshot
+  readonly compoundReceipt?: unknown
 }
 
 export interface Interface {
@@ -186,6 +189,8 @@ export interface Interface {
     readonly failureClass?: string
     readonly usage?: TaskResultInput["usage"]
     readonly evidence?: readonly string[]
+    readonly compoundLedger?: CompoundLedgerSnapshot
+    readonly compoundReceipt?: unknown
   }) => Effect.Effect<void, WorkflowNotFoundError | WorkflowStateError>
 }
 
@@ -586,19 +591,25 @@ export const layer = Layer.effect(
                : taskBudget?.maxRuntimeMs !== undefined && attempt.time_started !== null && now - attempt.time_started > taskBudget.maxRuntimeMs
                  ? `Task runtime budget exhausted (${now - attempt.time_started}/${taskBudget.maxRuntimeMs}ms)`
                  : undefined
-         const finalState = budgetError ? "blocked" as const : input.state
-         const finalFailureClass = budgetError ? "budget" : input.failureClass
-         const finalError = budgetError ?? input.error
-         const defaultTransientRetry =
-           task.retry?.maxAttempts === undefined &&
+        const compoundTask = task.data?.compound !== undefined
+         const missingCompoundReceipt = compoundTask && input.state === "completed" && input.compoundReceipt === undefined
+         const finalState = budgetError || missingCompoundReceipt ? "blocked" as const : input.state
+         const finalFailureClass = budgetError ? "budget" : missingCompoundReceipt ? "policy" : input.failureClass
+         const finalError = budgetError ?? (missingCompoundReceipt
+           ? "Compound task cannot complete without a durable terminal receipt."
+           : input.error)
+        const defaultTransientRetry =
+          !compoundTask &&
+          task.retry?.maxAttempts === undefined &&
            task.retry?.retryOn === undefined &&
            input.state === "failed" &&
            input.failureClass === "transient" &&
            isTransientWorkflowError(input.error ?? input.summary)
          const retryOn = task.retry?.retryOn
          const maxAttempts = task.retry?.maxAttempts ?? (defaultTransientRetry ? 3 : undefined)
-         const retryable =
-           !budgetError &&
+        const retryable =
+          !compoundTask &&
+          !budgetError &&
            input.state === "failed" &&
            input.failureClass !== undefined &&
            maxAttempts !== undefined &&
@@ -615,6 +626,12 @@ export const layer = Layer.effect(
             ...(taskUsage === undefined ? {} : { usage: taskUsage }),
             ...(input.outputRefs === undefined ? {} : { outputRefs: [...input.outputRefs] }),
             ...(input.evidence === undefined ? {} : { evidence: [...input.evidence] }),
+            ...(input.compoundLedger === undefined ? {} : { compoundLedger: input.compoundLedger }),
+            ...(input.compoundReceipt === undefined
+              ? missingCompoundReceipt
+                ? { compoundReceipt: undefined }
+                : {}
+              : { compoundReceipt: input.compoundReceipt }),
             ...(retryAt === undefined ? { retryAt: undefined } : { retryAt }),
           }
           db.update(WorkflowTaskTable).set({ state: taskState, time_started: retryable ? null : undefined, time_ended: retryable ? null : now, time_updated: now, data }).where(eq(WorkflowTaskTable.id, input.taskID)).run()
@@ -631,6 +648,8 @@ export const layer = Layer.effect(
             attempt: attempt.attempt,
              state: finalState,
              ...(finalError ?? input.summary ? { reason: finalError ?? input.summary } : {}),
+             ...(input.compoundLedger === undefined ? {} : { compoundLedger: input.compoundLedger }),
+             ...(input.compoundReceipt === undefined ? {} : { compoundReceipt: input.compoundReceipt }),
            },
          }).where(eq(WorkflowTaskAttemptTable.id, input.attemptID)).run()
           if (input.summary || input.outputRefs?.length || input.evidence?.length) {
@@ -679,6 +698,8 @@ export const layer = Layer.effect(
       readonly failureClass?: string
       readonly usage?: TaskResultInput["usage"]
       readonly evidence?: readonly string[]
+      readonly compoundLedger?: CompoundLedgerSnapshot
+      readonly compoundReceipt?: unknown
     }) {
       const attempt = Database.use((db) =>
         db
@@ -705,6 +726,8 @@ export const layer = Layer.effect(
         ...(input.failureClass === undefined ? {} : { failureClass: input.failureClass }),
         ...(input.usage === undefined ? {} : { usage: input.usage }),
         ...(input.evidence === undefined ? {} : { evidence: input.evidence }),
+        ...(input.compoundLedger === undefined ? {} : { compoundLedger: input.compoundLedger }),
+        ...(input.compoundReceipt === undefined ? {} : { compoundReceipt: input.compoundReceipt }),
         backgroundTaskID: input.sessionID,
         ...(input.backgroundGeneration === undefined
           ? {}

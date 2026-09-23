@@ -7,6 +7,7 @@ import { Bus } from "@/bus"
 import { Auth } from "@/auth"
 import { Account } from "@/account/account"
 import { Config } from "@/config/config"
+import { AIConfiguration } from "@/mend/runtime/ai-configuration"
 import { Git } from "@/git"
 import { Ripgrep } from "@/file/ripgrep"
 import { File } from "@/file"
@@ -71,6 +72,7 @@ export const AppLayer = Layer.mergeAll(
   Auth.defaultLayer,
   Account.defaultLayer,
   Config.defaultLayer,
+  AIConfiguration.defaultLayer,
   Git.defaultLayer,
   Ripgrep.defaultLayer,
   File.defaultLayer,

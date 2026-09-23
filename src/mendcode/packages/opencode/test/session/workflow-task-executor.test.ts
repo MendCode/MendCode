@@ -1,10 +1,12 @@
 import { describe, expect, test } from "bun:test"
 import { Effect, Layer } from "effect"
+import { tmpdir } from "../fixture/fixture"
 
 import * as MessageV2 from "@/session/message-v2"
 import { SessionPrompt, type PromptInput } from "@/session/prompt"
+import type { CompoundContext } from "@/session/compound-executor"
 import { WorkflowTaskExecutor } from "@/session/workflow-task-executor"
-import { WorkflowPhaseID, WorkflowTaskID, type WorkflowModelRoute, type WorkflowTask } from "@/session/workflow"
+import { WorkflowPhaseID, WorkflowTaskID, type WorkflowModelRoute, type WorkflowPermissionPolicy, type WorkflowTask, type WorkflowWorkspacePolicy } from "@/session/workflow"
 
 const phaseID = WorkflowPhaseID.make("executor-phase")
 const taskID = WorkflowTaskID.make("executor-task")
@@ -57,12 +59,18 @@ function runExecutor(input: {
   task: WorkflowTask
   workflowModel?: WorkflowModelRoute
   promptText: string
+  promptTextFor?: (prompt?: PromptInput) => string
   calls: PromptInput[]
   message?: MessageV2.WithParts
   stall?: boolean
   timeoutMs?: number
   cancellations?: string[]
+  workspacePath?: string
+  workflowPermissions?: WorkflowPermissionPolicy
+  workflowWorkspace?: WorkflowWorkspacePolicy
+  compoundContext?: CompoundContext
 }) {
+  const responseText = (prompt?: PromptInput) => input.promptTextFor?.(prompt) ?? input.promptText
   const promptLayer = Layer.succeed(
     SessionPrompt.Service,
     SessionPrompt.Service.of({
@@ -74,12 +82,12 @@ function runExecutor(input: {
       interrupt: () => Effect.succeed(false),
       prompt: (prompt: PromptInput) => {
         input.calls.push(prompt)
-        return input.stall ? Effect.never : Effect.succeed(input.message ?? promptMessage(input.promptText))
+        return input.stall ? Effect.never : Effect.succeed(input.message ?? promptMessage(responseText(prompt)))
       },
-      promptAsync: () => Effect.succeed(promptMessage(input.promptText)),
-      loop: () => Effect.succeed(promptMessage(input.promptText)),
-      shell: () => Effect.succeed(promptMessage(input.promptText)),
-      command: () => Effect.succeed(promptMessage(input.promptText)),
+      promptAsync: () => Effect.succeed(promptMessage(responseText())),
+      loop: () => Effect.succeed(promptMessage(responseText())),
+      shell: () => Effect.succeed(promptMessage(responseText())),
+      command: () => Effect.succeed(promptMessage(responseText())),
       wakePeerDelivery: () => Effect.void,
       resolvePromptParts: () => Effect.succeed([]),
     }),
@@ -91,6 +99,10 @@ function runExecutor(input: {
         sessionID: "ses_executor_root" as never,
         timeoutMs: input.timeoutMs,
         workflowModel: input.workflowModel,
+        workspacePath: input.workspacePath,
+        workflowPermissions: input.workflowPermissions,
+        workflowWorkspace: input.workflowWorkspace,
+        compoundContext: input.compoundContext,
       }),
     ).pipe(Effect.provide(WorkflowTaskExecutor.layer.pipe(Layer.provide(promptLayer)))),
   )
@@ -201,5 +213,87 @@ describe("workflow task executor", () => {
 
     expect(result).toMatchObject({ state: "failed", failureClass: "quality" })
     expect(result.error).toContain("declared schema")
+  })
+
+  test("enforces zero tools and the bounded output cap for a critic at the prompt boundary", async () => {
+    await using tmp = await tmpdir({ git: true })
+    const resolved = {
+      name: "workflow-critic",
+      strategy: "critic" as const,
+      primary: {
+        source: "direct" as const,
+        providerID: "provider-primary",
+        modelID: "model-primary",
+        authMode: "api",
+        pricing: {
+          inputUsdPer1M: 1,
+          outputUsdPer1M: 2,
+          cacheReadUsdPer1M: null,
+          cacheWriteUsdPer1M: null,
+          source: "fixture",
+        },
+      },
+      critic: {
+        source: "direct" as const,
+        providerID: "provider-critic",
+        modelID: "model-critic",
+        authMode: "api",
+        pricing: {
+          inputUsdPer1M: 1,
+          outputUsdPer1M: 2,
+          cacheReadUsdPer1M: null,
+          cacheWriteUsdPer1M: null,
+          source: "fixture",
+        },
+      },
+      limits: {
+        maxModelRequests: 3,
+        maxTotalTokens: 20_000,
+        maxRuntimeMs: 60_000,
+        unknownCost: "block" as const,
+      },
+    }
+    const calls: PromptInput[] = []
+    const result = await runExecutor({
+      task: task({
+        kind: "human",
+        model: undefined,
+        output: { kind: "text" },
+        workspace: { mode: "per-run-worktree" },
+        compound: {
+          profile: "workflow-critic",
+          validationChecks: [{ id: "diff", command: "git diff --check" }],
+          configHash: "workflow-test",
+          resolved,
+        } as never,
+      }),
+      promptText: "solver complete",
+      promptTextFor: (prompt) => prompt?.toolMode === "none"
+        ? JSON.stringify({ verdict: "accept", findings: [], summary: "independent review complete" })
+        : "solver complete",
+      calls,
+      workspacePath: tmp.path,
+      workflowPermissions: {
+        mode: "normal",
+        allowEdits: true,
+        allowMutatingCommands: true,
+        allowExternalSend: false,
+      },
+      workflowWorkspace: { mode: "per-run-worktree" },
+      compoundContext: {
+        runID: "workflow-run",
+        taskAttemptID: "workflow-attempt",
+        generation: 1,
+        resolvedProfile: resolved,
+        configHash: "workflow-test",
+      },
+    })
+
+    const critic = calls.find((call) => call.toolMode === "none")
+    expect(result).toMatchObject({ state: "completed", compound: { outcome: "accepted" } })
+    expect(critic).toBeDefined()
+    expect(Object.keys(critic?.tools ?? {})).toEqual([])
+    expect(critic?.format).toBeUndefined()
+    expect(critic).toMatchObject({ toolMode: "none", maxOutputTokens: 4_096 })
   })
 })

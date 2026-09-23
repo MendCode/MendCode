@@ -1,24 +1,259 @@
 # Changelog
 
-## 0.1.44 - 2026-09-05
+## 0.1.44-beta.16 - 2026-09-23
 
-This stable hotfix carries startup recovery independently of the beta runtime.
+### Added
 
-- Stop treating a slow database migration as a failed eight-second backend
-  startup. An identified preparation phase has a bounded 15-minute window,
-  visible progress and a separate 30-second connection deadline.
-- Stop waiting when the owned child exits or reports failure; identify its
-  startup phase record in the error instead of silently retrying.
-- Reject a recorded, incompatible prerelease schema before opening a database
-  writer. Existing legacy databases retain their migration behavior.
-- Keep the Windows installer parseable by Windows PowerShell 5.1.
-- Load bundled GitLab and Poe authentication modules through the existing
-  external-plugin boundary, preserving compatibility with their upstream SDK.
+- Add opt-in Memory & Evolution setup controls with bounded evidence, policy
+  gating, candidate review, and reversible project-scoped promotion.
+- Add adaptive reasoning policy/runtime support with explicit user controls and
+  focused validation coverage.
 
-Release-channel selection and experimental continuity remain in the beta line.
-Users who have opened sessions with beta should stay on beta; stable must not be
-used to force a downgrade of its database. See
-[release and recovery guidance](docs/releases-and-startup-recovery.md).
+### Changed
+
+- Accept provider-native and local model identifiers without a rigid catalog
+  allowlist while preserving provider and path safety validation.
+- Aggregate prompt-cache usage across the active user turn for more accurate TUI
+  status reporting.
+
+### Fixed
+
+- Harden queued peer delivery, compaction recovery, and session state checks so
+  accepted messages are not persisted into a target session while its runner is
+  still busy.
+
+### Tests
+
+- Add focused regressions for Memory & Evolution, adaptive reasoning, provider
+  compatibility, model validation, prompt cache reporting, and peer delivery.
+
+## 0.1.44-beta.15 - 2026-09-14
+
+### Fixed
+
+- Restore compatibility with databases created by beta.11 and later by bundling
+  the previously released TODO target-lock migration with its original identity.
+
+### Tests
+
+- Verify the beta.11 migration hash and confirm compatible databases are inspected
+  without changing their bytes.
+
+## 0.1.44-beta.14 - 2026-09-14
+
+### Added
+
+- Run automatic memory learning through a persisted, bounded background worker so
+  completed chat turns no longer wait for the memory provider; expose extraction
+  outcomes, Dream maintenance, write policy, and Markdown sharing controls.
+- Add recoverable memory maintenance and revision-aware Markdown import/export
+  with explicit opt-in scopes, validation, and visible conflicts.
+
+### Changed
+
+- Keep GPT-6 Astra compatible with the current Codex Responses Lite protocol and
+  surface normalized multi-provider cache-hit usage to prompt status integrations.
+- Make the Minimal prompt preset truly compact and retain the final Arcade/Snake
+  board after compaction without leaving timers or input focus active.
+
+### Fixed
+
+- Preserve queued prompt delivery and terminal cancellation while compaction,
+  background extraction, reconnect recovery, or long-running shell work settles.
+- Keep provider startup usable when metadata loading fails or a valid catalog is
+  empty, and report configuration errors without trapping Home in startup state.
+- Carry forward database compatibility checks and Blacksmith-backed security and
+  startup regression workflows from the latest public branch.
+
+### Tests
+
+- Add focused regressions for memory workers, Dream and Markdown sharing, provider
+  startup, Astra OAuth compatibility, cache reporting, compact prompt layout,
+  final compaction rendering, queue delivery, and repeated cancellation.
+
+## 0.1.44-beta.7 - 2026-09-10
+
+### Added
+
+- Add passive prompt-cache controls by project, session, provider, and exact
+  model through `mendcode cache status|enable|disable` and the `cache` config
+  block, without enabling keepalive or remote-cache deletion.
+- Add conservative smart-mode adapters, cache lineage fingerprints, and
+  provider cache observations that keep unsupported bindings unknown.
+
+### Fixed
+
+- Keep ChatGPT OAuth Responses Lite transport affinity separate from managed
+  cache keys, rotate affinity when instructions change or disappear, and honor
+  explicit cache disablement without forwarding MendCode's internal marker.
+- Remove generated cache keys and provider annotations when the effective
+  policy is `off`.
+
+### Tests
+
+- Add configuration, adapter, lineage, provider-transform, and ChatGPT OAuth
+  regressions for cache scope resolution, safe fallback, and disablement.
+
+## 0.1.44-beta.6 - 2026-09-09
+
+### Fixed
+
+- Complete terminal loop runs without waiting on the owner session that is
+  executing `run_once`, preventing a circular wait and duplicate notification.
+- Deliver background loop notifications asynchronously while returning direct
+  `run_once` results to the calling session.
+- Keep `Send now` attached to the first visible queued prompt when synthetic
+  runtime notifications are present.
+- Preserve transcript follow mode when a viewport resize or tall Shell output
+  reflow moves an already-bottom scroll position.
+- Add native PTY coverage for queued notifications, transcript paging and
+  double-`Esc` cancellation.
+- Retry bounded Windows executable activation when a transient security scan
+  briefly holds the freshly verified candidate, while preserving atomic rollback.
+
+## 0.1.44-beta.5 - 2026-09-09
+
+### Fixed
+
+- Pin the release dependency tree to fixed `@ai-sdk/provider-utils 4.0.33`,
+  `hono 4.13.5` and `js-yaml 4.3.2` versions, with matching provider types.
+- Make repeated `Esc` cancellation settle active, queued, peer, and owner-wake
+  work without replaying a cancelled prompt; a fresh explicit submission is
+  required to resume the session.
+
+## 0.1.44-beta.4 - 2026-09-07
+
+### Added
+
+- Native/portable compaction checkpoints and explicitly configured compound-model
+  workflow plans, snapshots and execution accounting.
+- AI configuration inspection, planning, validation and permission-gated apply
+  through the shared backend, CLI and native tool.
+
+### Fixed
+
+- Update the transitive query-string parser to `qs 6.16.0`, fixing
+  GHSA-4mjr-xmp4-gh2g and GHSA-x5fp-wj9c-mxmx without extending expired exceptions.
+- Normalize replayed tool arguments and bound connection retry behavior.
+- Fence targeted turn and shell cancellation without escalating a stale target
+  into an unrelated global abort.
+- Serialize release-channel changes and verify the installed version before
+  committing a channel transition.
+- Use the shell parser for action facts and bind the frozen execution environment
+  without exposing environment values in fingerprints.
+
+### Experimental limits
+
+- This development beta does not complete the readiness specifications. Shell
+  commands with unverified execution identities require manual approval; automatic
+  Git/read-command semantic adapters remain unfinished.
+- Cold-restart cancellation, Windows deferred channel transitions, real shared-CLI
+  multi-client coverage, live-provider compaction canaries and human/native
+  acceptance remain incomplete. See `docs/beta-integration-readiness.md`.
+- No database schema migration or automatic feature activation is introduced.
+  Existing beta databases must not be forced back to an older stable runtime.
+- Release publication remains subject to security, build and artifact checks.
+
+## 0.1.44-beta.3 - 2026-09-05
+
+### Fixed
+
+- Update Drizzle ORM and Kit to the fixed `1.0.0-beta.20` versions, including
+  correct SQL identifier escaping (GHSA-gpj5-g38j-94v9). No schema migration is generated.
+
+### Added
+
+- Backend-owned Smart Approval review, exact action grants, history and revocation,
+  with causal user authority and matching TUI, SDK and ACP controls.
+- `mendcode context` for estimated context composition, provider-reported cache
+  usage and request timing. Missing provider metrics remain unavailable.
+- Stable per-turn memory snapshots and bounded secondary-tool discovery, with a
+  configuration fallback to the complete permitted catalog.
+- Opt-in Code Mode adapted from the pinned OpenCode v2 interpreter. Nested tools
+  retain host permissions and audit records while only the final result enters
+  model context. Code Mode remains disabled by default.
+- Native macOS screenshot capture with crop/window targeting, image attachments,
+  bounded previews and limited navigation keys tied to a recent capture.
+
+### Compatibility and validation limits
+
+- This is an experimental beta. Native provider compaction is not enabled;
+  the portable summarizer remains active. No measured cache-saving claim is made.
+- Native computer tools currently support macOS only. Pointer control, arbitrary
+  typing and browser DOM automation are not included. Interactive keyboard and
+  Smart Approval TUI acceptance remain pending; OS permissions are not bypassed.
+- Code Mode is a confined language in a worker, not an OS sandbox or hard heap
+  quota. Broader resource and permission lifecycle validation remains pending.
+- No database migration or automatic continuity activation is introduced.
+  Existing beta databases must not be forced back to the stable runtime.
+
+## 0.1.44 stable - 2026-09-05
+
+The stable hotfix is published separately from the beta runtime. It carries the
+phase-aware startup deadline, rejects incompatible recorded prerelease schemas
+before writing, repairs PowerShell 5.1 installer parsing, and loads bundled
+GitLab/Poe authentication modules through the existing plugin boundary.
+
+The beta line already includes these startup and authentication fixes and uses
+its broader schema compatibility checks. Release channels and experimental
+continuity remain in beta; beta databases must not be forced back to stable.
+See [release and recovery guidance](docs/releases-and-startup-recovery.md).
+
+## 0.1.44-beta.2 - 2026-09-05
+
+### Fixed
+
+- Let a newly spawned backend finish a large pre-migration database snapshot
+  instead of stopping it after eight seconds. Verified backup/migration phases
+  have a bounded 15-minute preparation window and visible progress messages.
+- Keep the 30-second client readiness deadline separate from database preparation.
+  Failed children stop the wait, and startup errors identify the recorded phase.
+- Document published beta channels, large-history recovery and stable promotion.
+
+Experimental continuity remains opt-in. This does not enable native OpenAI async
+transport, async shell or Windows rollback.
+
+## 0.1.44-beta.1 - 2026-09-05
+
+This beta introduces release channels and updater recovery. It is an opt-in
+prerelease; stable installations remain on the stable channel.
+
+### Fixed
+
+- Bound installer downloads, verify checksums, stage replacement atomically,
+  retain the previous executable, and record update and startup failures.
+- Preserve explicit database paths when starting the shared backend and report
+  incompatible or unavailable backends instead of silently opening another writer.
+- Route `run` and `stats` through the shared backend. Failed runs return a failure
+  exit status, and rejected requests no longer wait indefinitely for session events.
+- Preserve quotes and backslashes in run arguments and load bundled GitLab/Poe
+  authentication plugins through the existing compatibility boundary.
+
+### Added
+
+- `mendcode upgrade channel`, `channel set stable|beta|nightly`, `--check`, and
+  compatibility-checked `--rollback`; channel selection never installs by itself.
+- Immutable release indexes with workflow provenance verification and pinned
+  installers, plus separate beta/nightly publication workflows.
+- Experimental async read tools, questions, session recall and versioned working
+  notes under the existing executor. All experimental flags default off.
+- Ctrl+T widgets for questions and jobs, model-family prompt profiles, and optional
+  balanced reasoning Auto that preserves manual choices.
+
+### Limitations
+
+- Native OpenAI async/steering and async shell are not enabled. Windows rollback
+  is unavailable. Some local database commands still require closing the backend.
+- An incompatible downgrade is blocked by this version; database backups are never
+  restored automatically. Keep beta opt-in when sharing sessions with stable.
+- The original v0.1.43 existing-installation incident was not reproduced; these
+  changes address independently demonstrated updater and startup defects.
+
+### Validation
+
+- Linux CI: 153 Bun tests, release-index contracts, typecheck and security checks.
+- Isolated macOS installation/upgrade and two-client TUI checks; no live-provider
+  parity or token-savings claim is made.
 
 ## 0.1.43 - 2026-09-04
 

@@ -201,6 +201,7 @@ export function memoryPaths(root?: string) {
     globalEntries: path.join(globalDir, "entries.jsonl"),
     globalIndex: path.join(globalDir, "index.json"),
     proposalsDir: path.join(project.memoryDir, "proposals"),
+    extractionQueue: path.join(project.memoryDir, "extraction-queue.json"),
   }
 }
 

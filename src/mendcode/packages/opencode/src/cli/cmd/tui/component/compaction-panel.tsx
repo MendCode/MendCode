@@ -61,17 +61,24 @@ export function shouldRenderCompactionArcade(input: {
   completed?: boolean
   terminal?: boolean
 }) {
-  // Packing the context is a presentation milestone, not a reason to tear
-  // down the selected game. Keep the arcade mounted after the summary lands so
-  // the user can still see and play it while reviewing the compacted session.
-  return !input.terminal && input.style === "arcade" && input.arcade !== "off"
+  return input.style === "arcade" && input.arcade !== "off"
+}
+
+export function shouldRunCompactionArcade(input: {
+  style: "minimal" | "cockpit" | "arcade" | "quiet"
+  arcade: string
+  completed?: boolean
+  terminal?: boolean
+}) {
+  return shouldRenderCompactionArcade(input) && !input.terminal && !input.completed
 }
 
 export function compactionPanelIsPacked(input: { completed?: boolean; terminal?: boolean; hasSummaryBody?: boolean }) {
-  return input.completed === true || input.terminal === true || input.hasSummaryBody === true
+  return input.completed === true || input.terminal === true
 }
 
-export function compactionPanelHeading(input: { style: "minimal" | "cockpit" | "arcade" | "quiet"; packed: boolean }) {
+export function compactionPanelHeading(input: { style: "minimal" | "cockpit" | "arcade" | "quiet"; packed: boolean; failure?: "interrupted" | "failed" }) {
+  if (input.failure) return `Compaction ${input.failure}`
   if (input.style === "arcade" && input.packed) return "Arcade complete · Context packed"
   return input.packed ? "Context packed" : "Packing context"
 }
@@ -337,6 +344,7 @@ export function CompactionPanel(props: {
   completed?: boolean
   terminal?: boolean
   summaryPreview?: string
+  failure?: "interrupted" | "failed"
   transcriptPreview?: string
   summaryContent?: JSX.Element
   scratchpad?: {
@@ -380,23 +388,23 @@ export function CompactionPanel(props: {
   const [arcadeState, setArcadeState] = createSignal<unknown>(snakeArcadeGame.initialState())
   const [summaryExpanded, setSummaryExpanded] = createSignal(false)
   const activeArcadeGame = createMemo(() =>
-    shouldRenderCompactionArcade({ ...config(), completed: packed() })
+    shouldRenderCompactionArcade({ ...config(), completed: packed(), terminal: props.terminal })
       ? registeredCompactionArcadeGame(config().arcade)
       : undefined,
   )
   const arcadeRender = createMemo(() => activeArcadeGame()?.render(arcadeState()))
   const arcadeFrame = createMemo(() => {
-    if (!shouldRenderCompactionArcade({ ...config(), completed: packed() }) || activeArcadeGame()) return []
+    if (!shouldRenderCompactionArcade({ ...config(), completed: packed(), terminal: props.terminal }) || activeArcadeGame()) return []
     const frames = compactionArcadeFrames(config().arcade)
     const frame = frames[arcadeTick() % Math.max(1, frames.length)]
     return frame ? [frame] : []
   })
   const summaryAvailable = createMemo(() =>
-    Boolean(props.summaryContent || props.summaryPreview?.trim() || props.transcriptPreview?.trim()),
+    !props.failure && Boolean(props.summaryContent || props.summaryPreview?.trim() || props.transcriptPreview?.trim()),
   )
 
   const scratchpadEnabled = createMemo(() => config().allowScratchpad && Boolean(props.scratchpad))
-  const scratchpadReadOnly = createMemo(() => Boolean(props.scratchpad?.readOnly))
+  const scratchpadReadOnly = createMemo(() => Boolean(props.terminal || props.scratchpad?.readOnly))
   const followUpText = createMemo(() => (props.scratchpad?.initialValue ?? props.postPrompt ?? "").trim())
   const tailDetail = createMemo(() =>
     props.tailStartID
@@ -479,6 +487,7 @@ export function CompactionPanel(props: {
   }
 
   function focusArcade() {
+    if (!shouldRunCompactionArcade({ ...config(), completed: packed(), terminal: props.terminal })) return
     if (!activeArcadeGame() || !arcadeBox || arcadeBox.isDestroyed) return
     focusRestoreToken += 1
     const currentFocus = renderer.currentFocusedRenderable
@@ -562,6 +571,7 @@ export function CompactionPanel(props: {
   }
 
   function handleArcadeKey(event: CompactionArcadeKeyEvent) {
+    if (!shouldRunCompactionArcade({ ...config(), completed: packed(), terminal: props.terminal })) return false
     const game = activeArcadeGame()
     if (!game) return false
     const key = normalizedArcadeKey(event.name, event.sequence)
@@ -580,7 +590,10 @@ export function CompactionPanel(props: {
   }
 
   createEffect(() => {
-    if (!shouldRenderCompactionArcade({ ...config(), completed: packed() })) return
+    if (!shouldRunCompactionArcade({ ...config(), completed: packed(), terminal: props.terminal })) {
+      blurArcade(undefined, { consume: false })
+      return
+    }
     const timer = setInterval(() => {
       const game = activeArcadeGame()
       if (game) {
@@ -700,6 +713,7 @@ export function CompactionPanel(props: {
   const scratchpadStatus = createMemo(() => {
     const scratchpad = props.scratchpad
     if (!scratchpadEnabled() || !scratchpad) return undefined
+    if (props.failure) return "Compaction did not complete. This follow-up was not sent."
     if (scratchpad.loading) return "Loading scratchpad…"
     if (scratchpadReadOnly()) return followUpText() ? "Follow-up was sent after compaction." : undefined
     if (saveState() === "saving" || saveState() === "pending") return "Saving scratchpad…"
@@ -727,10 +741,10 @@ export function CompactionPanel(props: {
         flexShrink={0}
       >
         <text fg={theme.text} wrapMode="none">
-          <span style={{ fg: theme.borderActive, bold: true }}>◈</span> {compactionPanelHeading({ style: config().style, packed: packed() })}
+          <span style={{ fg: theme.borderActive, bold: true }}>◈</span> {compactionPanelHeading({ style: config().style, packed: packed(), failure: props.failure })}
         </text>
         <text fg={theme.textMuted} wrapMode="none">
-          {packed() ? "Context packed." : "Preparing a shorter context…"}
+          {props.failure ? "Compaction did not complete." : packed() ? "Context packed." : "Preparing a shorter context…"}
         </text>
       </box>
     )
@@ -754,7 +768,7 @@ export function CompactionPanel(props: {
     >
       <box width="100%">
         <text fg={theme.text} wrapMode="none">
-          <span style={{ fg: theme.borderActive, bold: true }}>◈</span> {compactionPanelHeading({ style: config().style, packed: packed() })}
+          <span style={{ fg: theme.borderActive, bold: true }}>◈</span> {compactionPanelHeading({ style: config().style, packed: packed(), failure: props.failure })}
         </text>
       </box>
       <Show when={!packed()}>
@@ -804,7 +818,7 @@ export function CompactionPanel(props: {
             }}
             flexDirection="column"
             alignItems="center"
-            focusable={true}
+            focusable={shouldRunCompactionArcade({ ...config(), completed: packed(), terminal: props.terminal })}
             border={["top", "bottom", "left", "right"]}
             borderColor={arcadeFocused() ? theme.borderActive : theme.border}
             paddingLeft={2}
@@ -823,7 +837,11 @@ export function CompactionPanel(props: {
             }}
           >
             <text fg={arcadeFocused() ? theme.primary : theme.textMuted} wrapMode="none">
-              {arcadeFocused() ? "● GAME FOCUSED · Press Esc to type in chat" : "○ Click game to play · chat keeps typing until game is focused"}
+              {packed() || props.terminal
+                ? "○ Final board · compaction complete"
+                : arcadeFocused()
+                  ? "● GAME FOCUSED · Press Esc to type in chat"
+                  : "○ Click game to play · chat keeps typing until game is focused"}
             </text>
             <text fg={theme.textMuted} wrapMode="none">
               {arcadeRender()?.title} · ↑↓←→/WASD · Space pause · R reset
@@ -850,7 +868,7 @@ export function CompactionPanel(props: {
       <box paddingTop={1} flexDirection="column" border={["top"]} borderColor={theme.border} paddingLeft={1} paddingRight={1}>
         <box flexDirection="row" justifyContent="space-between" width="100%" gap={1}>
           <text fg={theme.textMuted} wrapMode="none">
-            {config().style === "arcade" && packed() ? "Arcade complete · " : ""}Compacted memory · {packed() ? "packed" : "packing"}
+            {props.failure ? `Compaction ${props.failure}` : `${config().style === "arcade" && packed() ? "Arcade complete · " : ""}Compacted memory · ${packed() ? "packed" : "packing"}`}
           </text>
           <Show when={summaryAvailable()}>
             <text

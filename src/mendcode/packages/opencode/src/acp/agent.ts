@@ -61,6 +61,30 @@ const DEFAULT_VARIANT_VALUE = "default"
 
 const log = Log.create({ service: "acp-agent" })
 
+function smartReplyForPermission(permission: { metadata?: Record<string, unknown> }, grant?: "once" | "task") {
+  const facts = permission.metadata?.actionFacts
+  const authority = permission.metadata?.authorityContext
+  const actionFingerprint =
+    facts && typeof facts === "object" && typeof (facts as { fingerprint?: unknown }).fingerprint === "string"
+      ? (facts as { fingerprint: string }).fingerprint
+      : typeof permission.metadata?.smartActionFingerprint === "string"
+        ? permission.metadata.smartActionFingerprint
+        : undefined
+  const smartManaged = permission.metadata?.smartApproval === true
+  if (!actionFingerprint && !smartManaged) return undefined
+  const contextRevision =
+    authority &&
+    typeof authority === "object" &&
+    Number.isSafeInteger((authority as { contextRevision?: unknown }).contextRevision)
+      ? (authority as { contextRevision: number }).contextRevision
+      : undefined
+  return {
+    ...(actionFingerprint === undefined ? {} : { actionFingerprint }),
+    ...(contextRevision === undefined ? {} : { contextRevision }),
+    ...(grant ? { grant } : {}),
+  }
+}
+
 async function getContextLimit(
   sdk: OpencodeClient,
   providerID: ProviderID,
@@ -256,6 +280,14 @@ export class Agent implements ACPAgent {
             await this.sdk.permission.reply({
               requestID: permission.id,
               reply: res.outcome.optionId as "once" | "always" | "reject",
+              smart: smartReplyForPermission(
+                permission,
+                res.outcome.optionId === "always"
+                  ? "task"
+                  : res.outcome.optionId === "once" && permission.metadata?.smartApproval === true
+                    ? "once"
+                    : undefined,
+              ),
               directory,
             })
           })

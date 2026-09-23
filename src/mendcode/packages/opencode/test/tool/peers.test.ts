@@ -39,6 +39,25 @@ describe("session directory", () => {
     ])
   })
 
+  test("does not invent idle presence for historical sessions without runtime status", () => {
+    const result = sessionDescriptors({
+      sessions: [session("historical", 1)],
+      statuses: new Map(),
+      currentSessionID: "current",
+    })
+    expect(result[0].state).toBe("unknown")
+    expect(result[0].activity).toBeUndefined()
+  })
+
+  test("respects a zero result limit", () => {
+    expect(sessionDescriptors({
+      sessions: [session("historical", 1)],
+      statuses: new Map(),
+      currentSessionID: "current",
+      limit: 0,
+    })).toEqual([])
+  })
+
   test("caps the requested limit and activity text", () => {
     const longActivity = "x".repeat(300)
     const descriptors = sessionDescriptors({

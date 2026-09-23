@@ -44,13 +44,14 @@ export function sessionDescriptors(input: {
   currentSessionID: string
   limit?: number
 }): SessionDescriptor[] {
-  const limit = Math.min(MAX_SESSIONS, Math.max(1, Math.floor(input.limit ?? MAX_SESSIONS)))
+  const limit = Math.min(MAX_SESSIONS, Math.max(0, Math.floor(input.limit ?? MAX_SESSIONS)))
   return input.sessions
     .filter((session) => session.id !== input.currentSessionID)
     .toSorted((a, b) => b.time.updated - a.time.updated || a.id.localeCompare(b.id))
     .slice(0, limit)
     .map((session) => {
-      const status = statusDescriptor(input.statuses.get(session.id) ?? { type: "idle" })
+      const observed = input.statuses.get(session.id)
+      const status = observed ? statusDescriptor(observed) : { state: "unknown" as const }
       return {
         sessionID: session.id,
         title: session.title.slice(0, 160),
@@ -96,7 +97,7 @@ export const SessionsTool = Tool.define<typeof Parameters, { count: number }, Se
             : "No other sessions are available in this project."
           return {
             title: `Sessions (${otherSessions.length})`,
-            output,
+            output: `${output}\n\nThis is a bounded recent-session directory, not an active-agent roster. State is the current server's observation; unknown means no runtime status is available. Idle does not prove the session is open. updatedAt is the conversation update time, not a heartbeat. Titles and timestamps do not establish file ownership. Do not wake historical sessions merely to ask whether they are working.`,
             metadata: { count: otherSessions.length },
           }
         }),

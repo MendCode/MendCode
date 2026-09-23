@@ -19,6 +19,14 @@ export function syncReadyForStatus(status: "loading" | "partial" | "complete") {
   return status !== "loading"
 }
 
+export function homePromptBootstrapReady(input: {
+  providerMetadataReady: boolean
+  modelPolicyReady: boolean
+}) {
+  // A successfully loaded empty catalog must still allow provider setup.
+  return input.providerMetadataReady && input.modelPolicyReady
+}
+
 export function syncBootstrapReadiness(input: { fastBoot: boolean; continueSession?: boolean }) {
   return {
     blockProviderMetadata: !input.fastBoot,

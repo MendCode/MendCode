@@ -1,11 +1,17 @@
 import { describe, expect, test } from "bun:test"
 import { defaultTuiProfile, mergeMendTuiProfile, validateMendTuiProfile } from "../../src/mend/profile"
-import { promptChromeUsesFullSessionWidth, resolvePromptChrome } from "../../src/mend/tui/prompt-chrome"
+import {
+  promptChromeUsesFullSessionWidth,
+  promptChromeVerticalSpacing,
+  resolvePromptChrome,
+} from "../../src/mend/tui/prompt-chrome"
 import {
   pickPromptStatusScriptOutput,
   promptStatusScriptIdentityKey,
   readPromptStatusScript,
+  resolvePromptCachePercent,
   resolvePromptStatus,
+  resolvePromptTurnCachePercent,
 } from "../../src/mend/tui/prompt-status"
 import { resolveActivityPhase } from "../../src/cli/cmd/tui/util/activity-signal"
 import {
@@ -33,6 +39,16 @@ describe("mend tui prompt chrome", () => {
     expect(defaultTuiProfile().layout.zones.session.stickyUserHeader).toBe(true)
     expect(defaultTuiProfile().layout.zones.session.submitScrollMode).toBe("bottom")
     expect(validateMendTuiProfile(defaultTuiProfile()).ok).toBe(true)
+  })
+
+  test("minimal prompt chrome does not reserve empty vertical rows", () => {
+    expect(promptChromeVerticalSpacing("minimal")).toEqual({
+      inputTop: 0,
+      inputBottom: 0,
+      footerTop: 0,
+      mascotSpacer: 0,
+    })
+    expect(promptChromeVerticalSpacing("left-rail").mascotSpacer).toBe(3)
   })
 
   test("context meter is opt-in even when old profiles still list the context builtin", () => {
@@ -293,6 +309,9 @@ describe("mend tui prompt chrome", () => {
   })
 
   test("activity signal resolves additional status events", () => {
+    expect(resolveActivityPhase({ status: "busy", activeToolNames: ["bash"], pendingToolInput: true })).toBe("sending")
+    expect(resolveActivityPhase({ status: "busy", connection: "reconnecting", activeToolNames: ["bash"], pendingToolInput: true })).toBe("sending")
+    expect(resolveActivityPhase({ status: "busy", activeToolNames: ["bash"], pendingToolInput: false })).toBe("running")
     expect(resolveActivityPhase({ status: "busy", toolNames: ["bash"] })).toBe("running")
     expect(resolveActivityPhase({ status: "busy", toolNames: ["webfetch"] })).toBe("browsing")
     expect(resolveActivityPhase({ status: "busy", toolNames: ["upload_artifact"] })).toBe("uploading")
@@ -378,6 +397,60 @@ describe("mend tui prompt chrome", () => {
     })
 
     expect(result.text).toBe("Build")
+  })
+
+  test("calculates the current prompt cache ratio and hides cache misses", () => {
+    expect(resolvePromptCachePercent({ input: 5000, cache: { read: 5000, write: 0 } })).toBe(50)
+    expect(resolvePromptCachePercent({ input: 100, cache: { read: 100, write: 50 } })).toBe(40)
+    expect(resolvePromptCachePercent({ input: 1, cache: { read: 0, write: 9000 } })).toBeUndefined()
+    expect(resolvePromptCachePercent([{ input: 5000, cache: { read: 5000, write: 0 } }])).toBe(50)
+    expect(resolvePromptCachePercent([{ input: 1, cache: { read: 0, write: 9000 } }])).toBe(0)
+    expect(resolvePromptCachePercent([{ input: 0, cache: { read: 0, write: 0 } }])).toBeUndefined()
+  })
+
+  test("aggregates cache usage across the latest user turn", () => {
+    expect(
+      resolvePromptTurnCachePercent({
+        messages: [
+          {
+            id: "msg_old",
+            role: "assistant",
+            parentID: "usr_old",
+            tokens: { input: 1, cache: { read: 99_999, write: 0 } },
+          },
+          {
+            id: "msg_cold",
+            role: "assistant",
+            parentID: "usr_current",
+            tokens: { input: 196_437, cache: { read: 0, write: 0 } },
+          },
+          {
+            id: "msg_warm",
+            role: "assistant",
+            parentID: "usr_current",
+            tokens: { input: 365, cache: { read: 198_656, write: 0 } },
+          },
+        ],
+      }),
+    ).toBe(50)
+  })
+
+  test("passes current-session cache percentage to prompt status scripts", async () => {
+    const result = await readPromptStatusScript({
+      command: `printf "%s" "$MEND_TUI_SESSION_CACHE_PERCENT"`,
+      root: process.cwd(),
+      sessionID: "ses_current",
+      sessionCachePercent: 82,
+      promptMode: "custom",
+      model: "",
+      provider: "",
+      preset: "top-bottom",
+      side: "left",
+      prepend: false,
+      timeoutMs: 1000,
+    })
+
+    expect(result.text).toBe("82")
   })
 
   test("prompt status supports per-side scripts and preserves legacy left script fallback", () => {

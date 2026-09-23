@@ -87,11 +87,14 @@ import type {
   PartUpdateErrors,
   PartUpdateResponses,
   PathGetResponses,
+  PermissionGrantsRevokeErrors,
+  PermissionGrantsRevokeResponses,
   PermissionListResponses,
   PermissionReplyErrors,
   PermissionReplyResponses,
   PermissionRespondErrors,
   PermissionRespondResponses,
+  PermissionReviewsResponses,
   PermissionRuleset,
   PlanReviewListResponses,
   PlanReviewReply,
@@ -2751,6 +2754,11 @@ export class Permission extends HeyApiClient {
       workspace?: string
       reply: "once" | "always" | "reject"
       message?: string
+      smart?: {
+        actionFingerprint?: string
+        contextRevision?: number
+        grant?: "once" | "task"
+      }
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -2764,6 +2772,7 @@ export class Permission extends HeyApiClient {
             { in: "query", key: "workspace" },
             { in: "body", key: "reply" },
             { in: "body", key: "message" },
+            { in: "body", key: "smart" },
           ],
         },
       ],
@@ -2777,6 +2786,66 @@ export class Permission extends HeyApiClient {
         ...options?.headers,
         ...params.headers,
       },
+    })
+  }
+
+  /** List Smart Approval review history. */
+  public reviews<ThrowOnError extends boolean = false>(
+    parameters?: {
+      sessionID?: string
+      cursor?: string
+      limit?: number
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "sessionID" },
+            { in: "query", key: "cursor" },
+            { in: "query", key: "limit" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<PermissionReviewsResponses, unknown, ThrowOnError>({
+      url: "/permission/reviews",
+      ...options,
+      ...params,
+    })
+  }
+
+  /** Revoke an exact Smart Approval task grant. */
+  public revokeGrant<ThrowOnError extends boolean = false>(
+    parameters: {
+      grantID: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "grantID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<PermissionGrantsRevokeResponses, PermissionGrantsRevokeErrors, ThrowOnError>({
+      url: "/permission/grants/{grantID}/revoke",
+      ...options,
+      ...params,
     })
   }
 

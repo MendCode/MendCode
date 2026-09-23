@@ -63,6 +63,11 @@ export const GlobTool = Tool.define(
             Stream.take(limit + 1),
             Stream.runCollect,
             Effect.map((chunk) => [...chunk]),
+            // Bound traversal/stat work, not the user's permission decision.
+            Effect.timeout("30 seconds"),
+            Effect.catchTag("TimeoutError", () => Effect.fail(new Error(
+              "File search exceeded 30 seconds. Use a narrower directory or glob pattern.",
+            ))),
           )
 
           if (files.length > limit) {

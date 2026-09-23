@@ -17,6 +17,7 @@ import { Format } from "../format"
 import * as Bom from "@/util/bom"
 import { Truncate } from "./truncate"
 import { APPLY_PATCH_DIFF_BYTES, APPLY_PATCH_FILES_BYTES, previewDiff } from "./diff-metadata"
+import { createNativeFileActionFacts } from "./shell-analysis"
 
 const MAX_PATCH_SOURCE_BYTES = 2 * 1024 * 1024
 const MAX_PATCH_TEXT_BYTES = 8 * 1024 * 1024
@@ -31,7 +32,9 @@ export function patchStaleRetryDecision(attempts: number): "retry" | "replan" {
 }
 
 function stalePatchKey(sessionID: string, filePath: string, oldLines: string[]) {
-  const fingerprint = createHash("sha256").update(`${filePath}\u0000${oldLines.join("\n")}`).digest("hex")
+  const fingerprint = createHash("sha256")
+    .update(`${filePath}\u0000${oldLines.join("\n")}`)
+    .digest("hex")
   return `${sessionID}\u0000${fingerprint}`
 }
 
@@ -368,11 +371,41 @@ export const ApplyPatchTool = Tool.define(
           filepath: relativePaths.join(", "),
           diff: totalDiff,
           files,
+          actionFacts: createNativeFileActionFacts({
+            operation: fileChanges.some((change) => change.type === "delete") ? "delete" : "update",
+            cwd: instance.directory,
+            sourcePaths: fileChanges.map((change) => change.filePath),
+            destinationPaths: fileChanges.flatMap((change) => (change.movePath ? [change.movePath] : [])),
+            before: fileChanges.map((change) => change.oldContent),
+            after: fileChanges.map((change) => change.newContent),
+          }),
         },
       })
 
       // Apply the changes
       const updates: Array<{ file: string; event: "add" | "change" | "unlink" }> = []
+
+      for (const change of fileChanges) {
+        const exists = yield* afs.existsSafe(change.filePath)
+        if (change.type === "add") {
+          if (exists) {
+            throw new Error("Patch target changed while waiting for permission; reread and request approval again.")
+          }
+          continue
+        }
+        if (!exists) {
+          throw new Error("Patch target changed while waiting for permission; reread and request approval again.")
+        }
+        if (change.oldContent) {
+          const current = yield* afs.readFile(change.filePath)
+          if (Bom.isBinary(current) || Bom.decode(current).text !== change.oldContent) {
+            throw new Error("Patch target changed while waiting for permission; reread and request approval again.")
+          }
+        }
+        if (change.movePath && (yield* afs.existsSafe(change.movePath))) {
+          throw new Error("Patch destination changed while waiting for permission; reread and request approval again.")
+        }
+      }
 
       for (const change of fileChanges) {
         const edited = change.type === "delete" ? undefined : (change.movePath ?? change.filePath)

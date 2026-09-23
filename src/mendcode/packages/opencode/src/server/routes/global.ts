@@ -19,6 +19,8 @@ import "@/mend/memory/dream-events"
 import "@/mend/memory/workspace-events"
 import { processMemoryUsage } from "@/util/process-memory"
 import { SharedServer } from "@/cli/cmd/tui/shared-server"
+import { reportUpgradePhase, reportUpgradeOutcome } from "../upgrade-progress"
+import { readChannel, writeChannel } from "@/installation/release-channel"
 
 const log = Log.create({ service: "server" })
 const EVENT_QUEUE_MAX_ITEMS = 512
@@ -266,6 +268,9 @@ export const GlobalRoutes = lazy(() =>
         return c.json(true)
       },
     )
+    .get("/release-channel", async (c) => c.json({ channel: await readChannel() }))
+    .put("/release-channel", validator("json", z.object({ channel: z.enum(["stable", "beta", "nightly"]) })),
+      async (c) => c.json({ channel: await writeChannel(c.req.valid("json").channel) }))
     .post(
       "/upgrade",
       describeRoute({
@@ -312,7 +317,7 @@ export const GlobalRoutes = lazy(() =>
 
               const target = c.req.valid("json").target || (yield* svc.latest(method))
               const result = yield* Effect.catch(
-                svc.upgrade(method, target).pipe(Effect.as({ success: true as const, version: target })),
+                svc.upgrade(method, target, (phase, progress) => reportUpgradePhase(target, phase, progress)).pipe(Effect.as({ success: true as const, version: target })),
                 (err) =>
                   Effect.succeed({
                     success: false as const,
@@ -320,6 +325,7 @@ export const GlobalRoutes = lazy(() =>
                     error: err.stderr || "Update failed",
                   }),
               )
+              reportUpgradeOutcome(target, result.success ? undefined : result.error)
               if (!result.success) return result
               return { ...result, status: 200 as const }
             }),

@@ -40,7 +40,7 @@ export async function checkUpgrade(autoupdate: boolean | "notify" | undefined) {
 
   if (method === "unknown") return
   const updated = await Installation.upgrade(method, latest)
-    .then(() => true)
+    .then((result) => result === "installed")
     .catch(() => false)
   if (updated) return { type: "updated" as const, version: latest }
 }

@@ -3,6 +3,7 @@ import { HttpApi } from "effect/unstable/httpapi"
 import { BusEvent } from "@/bus/bus-event"
 import { SyncEvent } from "@/sync"
 import { ConfigApi } from "./groups/config"
+import { ContinuityApi } from "./groups/continuity"
 import { ControlApi } from "./groups/control"
 import { EventApi } from "./event"
 import { ExperimentalApi } from "./groups/experimental"
@@ -34,6 +35,7 @@ export const RootHttpApi = HttpApi.make("opencode-root").addHttpApi(ControlApi).
 
 export const InstanceHttpApi = HttpApi.make("opencode-instance")
   .addHttpApi(ConfigApi)
+  .addHttpApi(ContinuityApi)
   .addHttpApi(ExperimentalApi)
   .addHttpApi(FileApi)
   .addHttpApi(InstanceApi)
