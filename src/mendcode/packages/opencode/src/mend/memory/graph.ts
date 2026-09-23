@@ -3,7 +3,7 @@ import { mkdir, readFile, rename, writeFile } from "fs/promises"
 import path from "path"
 import { memoryPaths, type MemoryScope } from "./config"
 import { DEFAULT_MEMORY_CATEGORIES, inferMemoryCategoryIDs, memoryCategoryByID, normalizeMemoryCategoryIDs, normalizeMemoryCategoryPolicies, type MemoryFactScope } from "./categories"
-import { readMemoryEntries, type MemoryEntry } from "./store"
+import { readArchivedMemoryEntries, readMemoryEntries, type MemoryEntry } from "./store"
 
 export type MemoryFact = {
   id: string
@@ -164,6 +164,13 @@ export async function readMemoryGraph(root?: string): Promise<MemoryGraph> {
       return null
     }
   }).filter((link): link is MemoryFactLink => Boolean(link))
+  if (facts.some((fact) => fact.legacyEntryID?.startsWith("evolution_") || fact.provenance.some((ref) => ref.startsWith("evolution-policy:")))) {
+    const [archived, active] = await Promise.all([readArchivedMemoryEntries("project", root), readMemoryEntries("project", root)])
+    const activeIDs = new Set(active.map((entry) => entry.id))
+    const retired = new Set(archived.filter((entry) => entry.source === "evolution" && !activeIDs.has(entry.id)).map((entry) => entry.id))
+    // Archive is authoritative. Retain graph content/links, but never revive a retired projection.
+    return { facts: facts.map((fact) => fact.legacyEntryID && retired.has(fact.legacyEntryID) ? { ...fact, stale: true } : fact), links, categories, policies }
+  }
   return { facts, links, categories, policies }
 }
 

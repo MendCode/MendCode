@@ -2151,6 +2151,119 @@ it.live("runs a prompt queued during compaction after the resumed turn", () =>
   ),
 )
 
+it.live("durably queues ordered peer messages until compaction and its resumed turn are idle", () =>
+  provideTmpdirServer(
+    Effect.fnUntraced(function* ({ llm }) {
+      const prompt = yield* SessionPrompt.Service
+      const compaction = yield* SessionCompaction.Service
+      const sessions = yield* Session.Service
+      const runState = yield* SessionRunState.Service
+      const status = yield* SessionStatus.Service
+      const commands = yield* AgentCommand.Service
+      const source = yield* sessions.create({
+        title: "Peer sender",
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
+      const target = yield* sessions.create({
+        title: "Compacting receiver",
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
+      yield* prompt.wakePeerDelivery(source.id)
+      yield* user(target.id, "active request")
+      yield* compaction.create({
+        sessionID: target.id,
+        agent: "build",
+        model: ref,
+        auto: true,
+        overflow: true,
+        resume: true,
+      })
+      const gate = defer<void>()
+      yield* llm.hold("compaction summary", gate.promise)
+      const compacting = yield* prompt.loop({ sessionID: target.id }).pipe(Effect.forkChild)
+      yield* llm.wait(1)
+      expect(yield* runState.isBusy(target.id)).toBe(true)
+      // Reproduce the transient stale-idle boundary that previously let tell
+      // persist a target prompt while the compaction runner still owned it.
+      yield* status.set(target.id, { type: "idle" }, { notify: false })
+
+      const first = yield* commands.create({
+        sourceSessionID: source.id,
+        targetSessionID: target.id,
+        type: "peer_message",
+        payload: { text: "first queued tell" },
+      })
+      const second = yield* commands.create({
+        sourceSessionID: source.id,
+        targetSessionID: target.id,
+        type: "peer_message",
+        payload: { text: "second queued tell" },
+      })
+      yield* Effect.sleep("50 millis")
+
+      expect((yield* commands.get(first.id)).state).toBe("accepted")
+      expect((yield* commands.get(second.id)).state).toBe("accepted")
+      expect(
+        (yield* sessions.messages({ sessionID: target.id, view: "full" })).some((message) =>
+          message.parts.some((part) => part.type === "text" && part.metadata?.kind === "peer_message"),
+        ),
+      ).toBe(false)
+      expect(yield* llm.calls).toBe(1)
+
+      yield* llm.text("resumed target turn")
+      yield* llm.text("first peer answer")
+      yield* llm.text("source handled first answer")
+      yield* llm.text("second peer answer")
+      yield* llm.text("source handled second answer")
+      gate.resolve()
+      yield* Fiber.join(compacting)
+
+      const completed = yield* Effect.gen(function* () {
+        while (true) {
+          const states = yield* Effect.all([commands.get(first.id), commands.get(second.id)])
+          if (states.every((command) => command.state === "completed")) return true
+          yield* Effect.sleep("1 millis")
+        }
+      }).pipe(
+        Effect.timeout("3 seconds"),
+        Effect.catch(() => Effect.succeed(false)),
+      )
+      expect(completed).toBe(true)
+
+      const received = (yield* sessions.messages({ sessionID: target.id, view: "full" })).flatMap((message) =>
+        message.parts.flatMap((part) =>
+          part.type === "text" && part.metadata?.kind === "peer_message"
+            ? [{ deliveryID: part.metadata.deliveryID, displayText: part.metadata.displayText }]
+            : [],
+        ),
+      )
+      expect(received).toEqual([
+        { deliveryID: first.id, displayText: "first queued tell" },
+        { deliveryID: second.id, displayText: "second queued tell" },
+      ])
+      expect(new Set(received.map((item) => item.deliveryID)).size).toBe(2)
+      const returned = (yield* sessions.messages({ sessionID: source.id, view: "full" })).flatMap((message) =>
+        message.parts.flatMap((part) =>
+          part.type === "text" && part.metadata?.kind === "peer_response" ? [part.metadata.deliveryID] : [],
+        ),
+      )
+      expect(returned).toEqual([first.id, second.id])
+      expect(yield* llm.calls).toBe(5)
+    }),
+    {
+      git: true,
+      config: (url) => ({
+        ...providerCfg(url),
+        compaction: { auto: false },
+        agent: {
+          build: { model: "test/test-model" },
+          compaction: { model: "test/test-model" },
+        },
+      }),
+    },
+  ),
+)
+
 it.live("does not re-dispatch a completed response after active compaction", () =>
   provideTmpdirServer(
     Effect.fnUntraced(function* ({ llm }) {

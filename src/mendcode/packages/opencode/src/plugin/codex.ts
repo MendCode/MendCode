@@ -85,11 +85,17 @@ export function normalizeCodexChatGPTModel(modelID: string) {
   }
 }
 
+/** Catalog eligibility hint only; it does not prove endpoint or protocol support. */
 export function isCodexChatGPTModelSupported(modelID: string) {
   const normalized = normalizeCodexChatGPTModel(modelID).modelID
   if (ALLOWED_MODELS.has(normalized)) return true
-  const match = normalized.match(/^gpt-(\d+\.\d+)/)
-  return match ? parseFloat(match[1]) > 5.4 : false
+  // Catalog versions are major/minor components, not decimal numbers.
+  // Integer releases (gpt-6-...) and double-digit minors must not need an allowlist update.
+  const match = normalized.match(/^gpt-(\d+)(?:\.(\d+))?(?:-[a-z0-9]+)*$/)
+  if (!match) return false
+  const major = Number(match[1])
+  const minor = Number(match[2] ?? 0)
+  return major > 5 || (major === 5 && minor > 4)
 }
 
 function codexChatGPTLimit(modelID: string) {
@@ -647,45 +653,43 @@ export async function CodexAuthPlugin(input: PluginInput, options: CodexAuthPlug
       async models(provider, ctx) {
         if (ctx.auth?.type !== "oauth") return provider.models
 
+        // The provider catalog owns model visibility. Keep protocol-specific
+        // rewrites limited to models whose transport contract is known below.
         return Object.fromEntries(
-          Object.entries(provider.models)
-            .filter(([, model]) => {
-              return isCodexChatGPTModelSupported(model.api.id)
-            })
-            .map(([modelID, model]) => {
-              const modelOptions = isRecord(model.options) ? model.options : {}
-              const limit = codexChatGPTLimit(model.api.id)
-              const usesCompactionThreshold = limit !== undefined
-              return [
-                modelID,
-                {
-                  ...model,
-                  cost: {
-                    input: 0,
-                    output: 0,
-                    cache: { read: 0, write: 0 },
-                  },
-                  limit: limit
-                    ? limit
-                    : model.id.includes("gpt-5.5")
-                      ? {
-                          context: 400_000,
-                          input: 272_000,
-                          output: 128_000,
-                        }
-                      : model.limit,
-                  options: usesCompactionThreshold
-                    ? {
-                        ...modelOptions,
-                        compaction: {
-                          ...(isRecord(modelOptions.compaction) ? modelOptions.compaction : {}),
-                          threshold: 90,
-                        },
-                      }
-                    : model.options,
+          Object.entries(provider.models).map(([modelID, model]) => {
+            const modelOptions = isRecord(model.options) ? model.options : {}
+            const limit = codexChatGPTLimit(model.api.id)
+            const usesCompactionThreshold = limit !== undefined
+            return [
+              modelID,
+              {
+                ...model,
+                cost: {
+                  input: 0,
+                  output: 0,
+                  cache: { read: 0, write: 0 },
                 },
-              ]
-            }),
+                limit: limit
+                  ? limit
+                  : model.id.includes("gpt-5.5")
+                    ? {
+                        context: 400_000,
+                        input: 272_000,
+                        output: 128_000,
+                      }
+                    : model.limit,
+                options: usesCompactionThreshold
+                  ? {
+                      ...modelOptions,
+                      compaction: {
+                        ...(isRecord(modelOptions.compaction) ? modelOptions.compaction : {}),
+                        threshold: 90,
+                      },
+                    }
+                  : model.options,
+              },
+            ]
+          }),
         )
       },
     },

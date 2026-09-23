@@ -20,6 +20,7 @@ import { listMemorySessionDigests, markMemorySessionDigestsConsumed, type Memory
 import { redactMemoryText } from "./proposals"
 import { resolveModelRoles } from "../config/models"
 import { runProviderAdapter } from "../runtime/provider-adapters"
+import { assertLegacyLearning } from "../evolution/policy"
 
 const CONSOLIDATION_BATCH_SIZE = 24
 const CONSOLIDATION_RETRY_BATCH_SIZE = 8
@@ -137,6 +138,7 @@ function isProtectedCanonical(entry: MemoryEntry) {
 }
 
 export async function cleanupGeneratedMemoryEntries(root?: string) {
+  await assertLegacyLearning(memoryPaths(root).root)
   const entries = await readMemoryEntries("global", root)
   const maintenanceSources = new Set(["memory-dream", "memory-side-chat"])
   const maintenance = entries.filter((entry) => maintenanceSources.has(entry.source) && isMemoryMaintenanceInstruction(entry.text, entry))
@@ -180,6 +182,7 @@ export async function cleanupGeneratedMemoryEntries(root?: string) {
  * canonical entry survives or to mutate canonical storage directly.
  */
 export async function consolidateAcceptedMemoryEntries(root?: string) {
+  await assertLegacyLearning(memoryPaths(root).root)
   const results: { scope: MemoryScope; archived: string[]; canonical: string[] }[] = []
   for (const scope of ["global", "project"] as const) {
     const entries = await readMemoryEntries(scope, root)
@@ -492,6 +495,7 @@ async function applyExistingProposal(input: {
   if (input.proposal.policyDecision === "manual-only") {
     throw new Error(`Proposal ${input.proposal.id} requires manual review; Dream cannot resolve it automatically`)
   }
+  await assertLegacyLearning(memoryPaths(input.root).root)
   const decision = input.decision
   if (decision.resolution === "archive") return { status: "archived" as const, proposal: await archiveMemoryProposal(input.proposal.id, input.root, decision.reason), reason: decision.reason }
   if (decision.resolution === "reject") return { status: "rejected" as const, proposal: await rejectMemoryProposal(input.proposal.id, input.root), reason: decision.reason }
@@ -531,6 +535,7 @@ async function applyDirectDecision(input: {
   runID: string
   config: MemoryConfig
 }) {
+  await assertLegacyLearning(memoryPaths(input.root).root)
   const decision = input.decision
   const target = decision.entryID ? input.entries.find((entry) => entry.id === decision.entryID) : undefined
   if (decision.resolution !== "add" && !target) throw new Error(`Consolidation target entry not found: ${decision.entryID || "missing"}`)
@@ -571,6 +576,7 @@ export async function runMemoryConsolidation(input: {
   now?: Date
   pendingSnapshot?: MemoryProposal[]
 }): Promise<DreamConsolidationRun> {
+  await assertLegacyLearning(memoryPaths(input.root).root)
   const config = await readMemoryConfig(input.root)
   const policy = input.policy ?? config.dreamConsolidationPolicy
   const [entries, facts, allProposals, digests] = await Promise.all([

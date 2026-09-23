@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { MemoryExtractionQueue } from "../../src/mend/memory/extraction-queue"
 import { tmpdir } from "../fixture/fixture"
+import { defaultEvolutionConfig, writeEvolutionConsent } from "../../src/mend/evolution/config"
 
 const input = (root: string, turnID: string) => ({
   projectRoot: root,
@@ -21,6 +22,25 @@ async function eventually(check: () => boolean | Promise<boolean>, timeout = 2_0
 }
 
 describe("memory extraction queue", () => {
+  test("Evolution adoption discards legacy backlog and forbids new legacy work", async () => {
+    await using tmp = await tmpdir()
+    const queue = new MemoryExtractionQueue()
+    await queue.enqueue(input(tmp.path, "legacy"))
+    await writeEvolutionConsent(tmp.path, defaultEvolutionConfig)
+    let calls = 0
+    await queue.start(tmp.path, async () => { calls++; return {} })
+    await eventually(async () => (await queue.list(tmp.path))[0]?.state === "skipped")
+    expect(calls).toBe(0)
+    expect((await queue.list(tmp.path))[0]?.text).toBe("")
+    await expect(queue.enqueue(input(tmp.path, "new"))).rejects.toThrow("replaced by Evolution")
+    await queue.stop(tmp.path)
+    await writeEvolutionConsent(tmp.path, { ...defaultEvolutionConfig, mode: "suggest" })
+    const restarted = new MemoryExtractionQueue()
+    await restarted.start(tmp.path, async () => { calls++; return {} })
+    expect((await restarted.list(tmp.path))[0]?.state).toBe("skipped")
+    expect(calls).toBe(0)
+    await restarted.stop(tmp.path)
+  })
   test("applies backpressure without rejecting an idempotent duplicate", async () => {
     await using tmp = await tmpdir()
     const queue = new MemoryExtractionQueue({ maxPendingJobs: 1 })

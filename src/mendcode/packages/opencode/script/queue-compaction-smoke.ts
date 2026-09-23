@@ -357,7 +357,7 @@ async function main() {
           "Press Enter to submit it, press Esc once to arm interruption, then press Esc again within five seconds to cancel it.",
           `The local model holds that request for ${Math.round(HOLD_MS / 1_000)} seconds so the queued state is visible.`,
           "Only one smoke can run at a time. Exit with /exit or Ctrl+C; child processes and the lock are cleaned automatically.",
-          "Expected result: the second Esc issues one cancellation; the compaction summary terminates once, Snake disappears, the panel collapses, and queued messages remain paired with their queued/send state.",
+          "Expected result: the second Esc issues one cancellation; the compaction summary terminates once, Snake's final board stays visible and stops advancing, the transcript collapses, and queued messages remain paired with their queued/send state.",
           "",
         ].join("\n"),
       )

@@ -103,20 +103,62 @@ export type MendPromptStatusScriptOutput = {
   segments?: MendPromptStatusScriptSegment[]
 }
 
-export function resolvePromptCachePercent(input: {
+type PromptCacheUsage = {
   input?: number
   cache?: {
     read?: number
     write?: number
   }
-}) {
+}
+
+export function resolvePromptCachePercent(input: PromptCacheUsage): number | undefined
+export function resolvePromptCachePercent(input: readonly PromptCacheUsage[]): number | undefined
+export function resolvePromptCachePercent(input: PromptCacheUsage | readonly PromptCacheUsage[]) {
   const safe = (value: number | undefined) =>
     typeof value === "number" && Number.isFinite(value) ? Math.max(0, value) : 0
+  if (Array.isArray(input)) {
+    const usage = input.reduce<{ input: number; read: number; write: number }>(
+      (total, item) => ({
+        input: total.input + safe(item.input),
+        read: total.read + safe(item.cache?.read),
+        write: total.write + safe(item.cache?.write),
+      }),
+      { input: 0, read: 0, write: 0 },
+    )
+    const totalInput = usage.input + usage.read + usage.write
+    if (totalInput <= 0) return
+    return Math.max(0, Math.min(100, Math.round((usage.read / totalInput) * 100)))
+  }
+
   const cacheRead = safe(input.cache?.read)
   const cacheWrite = safe(input.cache?.write)
   const totalInput = safe(input.input) + cacheRead + cacheWrite
   if (cacheRead <= 0 || totalInput <= 0) return
   return Math.max(1, Math.min(100, Math.round((cacheRead / totalInput) * 100)))
+}
+
+export function resolvePromptTurnCachePercent(input: {
+  messages: ReadonlyArray<{
+    id: string
+    role: string
+    parentID?: string
+    tokens?: PromptCacheUsage
+    liveUsage?: PromptCacheUsage
+  }>
+  activeAssistantID?: string
+}) {
+  const latest =
+    (input.activeAssistantID
+      ? input.messages.findLast((message) => message.role === "assistant" && message.id === input.activeAssistantID)
+      : undefined) ?? input.messages.findLast((message) => message.role === "assistant")
+  if (!latest?.parentID) return
+  return resolvePromptCachePercent(
+    input.messages.flatMap((message) => {
+      if (message.role !== "assistant" || message.parentID !== latest.parentID) return []
+      const usage = message.liveUsage ?? message.tokens
+      return usage ? [usage] : []
+    }),
+  )
 }
 
 export type MendPromptStatusScriptResult = {

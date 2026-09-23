@@ -163,6 +163,8 @@ export interface WorkflowSnapshot {
 
 export interface WorkflowSaveInput {
   readonly plan: WorkflowPlan
+  /** Optimistic concurrency for callers promoting/reverting a reviewed revision. */
+  readonly expectedRevision?: number
   readonly definitionID?: WorkflowDefinitionID
   readonly name?: string
   readonly description?: string
@@ -906,6 +908,9 @@ export const layer = Layer.effect(
           .where(eq(WorkflowDefinitionTable.id, definitionID))
           .get()
         if (current && current.project_id !== project.project.id) throw new WorkflowNotFoundError(definitionID)
+        if (input.expectedRevision !== undefined && input.expectedRevision !== (current?.current_revision ?? 0)) {
+          throw new Error("Workflow revision conflict; review the current definition before saving")
+        }
         const revision = (current?.current_revision ?? 0) + 1
         const revisionID = WorkflowRevisionID.make()
         if (!current) {

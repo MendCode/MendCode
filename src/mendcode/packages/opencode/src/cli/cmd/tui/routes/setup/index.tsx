@@ -62,6 +62,8 @@ import {
 } from "@/mend/setup/state"
 import { SetupRail } from "./setup-rail"
 import { SetupActionBar } from "./action-bar"
+import { EvolutionDialog } from "./evolution-dialog"
+import { readEvolutionPolicy } from "@/mend/evolution/config"
 
 const baseModelRoleOrder = [
   "default",
@@ -457,6 +459,7 @@ export function Setup() {
         readPermissionsConfig(),
       ])
     const memory = await memoryStatus(root)
+    const evolution = await readEvolutionPolicy(root)
     const memoryExtractorRole = (models.roles as Record<string, any>)[memory.extractorRole || "memoryExtractor"]
     const memoryExtractorAuth = memoryExtractorRole?.providerID
       ? await providerAuthStatus(
@@ -479,6 +482,7 @@ export function Setup() {
       pkg,
       packages,
       memory,
+      evolution,
       memoryExtractorAuth,
       permissions,
     }
@@ -1168,13 +1172,21 @@ export function Setup() {
     ))
   }
 
+  const chooseEvolution = () => dialog.replace(() => <EvolutionDialog
+    root={mend.root}
+    onChange={reload}
+    onModel={chooseModelRole}
+    onMemory={() => { dialog.clear(); route.navigate({ type: "memory", returnTo: routeReturnTarget(route.data) }) }}
+  />)
+
   const chooseMemory = () => {
     const current = setupSummary()?.memory
     dialog.replace(() => (
       <DialogSelect
-        title="Memory"
+        title="Memory & Evolution"
         current={setupMemoryDialogCurrentValue(current)}
         options={[
+          { title: "Configure Evolution", value: "evolution", category: "Learning", description: "Opt-in learning, provider consent and reviewable capability proposals.", onSelect: chooseEvolution },
           {
             title: "Enable memory use (opt-in)",
             value: "enable-use",
@@ -1199,11 +1211,12 @@ export function Setup() {
             },
           },
           {
-            title: "Allow generated proposals (approval-gated)",
+            title: setupSummary()?.evolution.adopted ? "Learning is managed by Evolution" : "Allow legacy generated proposals (approval-gated)",
             value: "generate",
             category: "Generation",
-            description: "Permit future extractor runs to create approval-gated memory proposals.",
+            description: "Legacy extraction is preserved until Evolution is adopted for this project.",
             onSelect: async () => {
+              if (setupSummary()?.evolution.adopted) return chooseEvolution()
               await writeGlobalMemoryConfig(
                 { enabled: true, use: true, generate: true, requireApprovalForGenerated: true },
                 mend.root,
@@ -2535,7 +2548,7 @@ export function Setup() {
               </Match>
               <Match when={active() === "memory"}>
                 <box flexDirection="column" gap={1}>
-                  <text fg={theme.primary}>Memory</text>
+                  <text fg={theme.primary}>Memory & Evolution</text>
                   <text>
                       Config scope:{" "}
                       {setupSummary()?.memory.configScope === "project" ? "project override" : "global defaults"}
@@ -2543,7 +2556,9 @@ export function Setup() {
                   <text>Enabled: {setupSummary()?.memory.enabled ? "yes" : "no"}</text>
                   <text>Input memory: {setupSummary()?.memory.use ? "on" : "off"}</text>
                   <text>
-                      Memory learning: {setupSummary()?.memory.generate ? "on" : "off"} · {memoryLearningStatus()}
+                      {setupSummary()?.evolution.adopted
+                        ? `Evolution: ${setupSummary()?.evolution.config.mode} · ${setupSummary()?.evolution.config.execution} execution · project only`
+                        : `Legacy memory learning: ${setupSummary()?.memory.generate ? "on" : "off"} · ${memoryLearningStatus()}`}
                     </text>
                     <text fg={theme.textMuted}>
                       Default and Minimal keep memory off. Full enables retrieval and approval-gated proposals; it never
@@ -2560,7 +2575,9 @@ export function Setup() {
                   </text>
                   <text>
                       Output model calls:{" "}
-                      {setupSummary()?.memory.outputCallsProviders ? "possible when learning runs" : "off"}
+                      {setupSummary()?.evolution.adopted
+                        ? (setupSummary()?.evolution.config.remoteProcessing && ["suggest", "auto-safe"].includes(setupSummary()?.evolution.config.mode ?? "off") ? "authorized for configured Evolution runs" : "blocked")
+                        : (setupSummary()?.memory.outputCallsProviders ? "possible when legacy learning runs" : "off")}
                   </text>
                   <Show when={showMemoryExtractorAuthBlocker()}>
                     <text fg={theme.warning}>
@@ -2571,6 +2588,7 @@ export function Setup() {
                       )}
                     </text>
                   </Show>
+                  <Show when={!setupSummary()?.evolution.adopted}>
                   <text>
                       Consolidation model: {setupSummary()?.memory.consolidatorRole || "none"} · policy{" "}
                       {setupSummary()?.memory.dreamConsolidationPolicy || "disabled"}
@@ -2579,6 +2597,7 @@ export function Setup() {
                       Dream model: {setupSummary()?.memory.memoryDreamRole || "memoryDream"} · manual/scheduled runs
                       write proposals only
                   </text>
+                  </Show>
                   <text>Scopes: {setupSummary()?.memory.scopes.join(", ")}</text>
                   <text>
                     Stored entries: global {setupSummary()?.memory.entries.global.count}, project{" "}

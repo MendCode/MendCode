@@ -7,6 +7,10 @@ import { readDreamRuns, runMemoryDream, type DreamModelAdapter, type DreamRun } 
 import type { DreamSourcePermissions } from "./dream-sources"
 import { listMemoryProposals } from "./proposals"
 import { memoryWorkspaceOverview, type MemoryWorkspace } from "./workspaces"
+import { Flock } from "@mendcode/core/util/flock"
+import { evolutionPaths, readEvolutionJSON, readEvolutionPolicy, writeEvolutionJSON } from "../evolution/config"
+import { authorizeEvolutionAction } from "../evolution/policy"
+import { runEvolution } from "../evolution/runner"
 
 const OVERNIGHT_MISSED_GRACE_MINUTES = 60
 const DREAM_LOCK_MAX_AGE_MS = 30 * 60_000
@@ -334,6 +338,43 @@ export function hasUsableNetworkInterface() {
   )
 }
 
+/** Evolution uses the existing Dream tick; no additional timer or service. */
+export async function runScheduledEvolution(input: {
+  root: string
+  now?: Date
+  dataDir?: string
+  model?: NonNullable<Parameters<typeof runEvolution>[1]>["model"]
+}) {
+  const policy = await readEvolutionPolicy(input.root, input.dataDir)
+  if (!authorizeEvolutionAction(policy, "provider").allowed || policy.config.execution !== "daily") return { status: "disabled" as const }
+  const clock = localClock(input.now ?? new Date(), policy.config.timezone!)
+  const start = minutes(policy.config.dailyAt!)!
+  if (clock.current < start) return { status: "wait" as const }
+  // Do not create a surprise catch-up call hours after a missed window.
+  if (clock.current - start > 5) return { status: "missed" as const }
+  const paths = evolutionPaths(input.root, input.dataDir)
+  return Flock.withLock(`evolution-schedule:${paths.projectDir}`, async () => {
+    const file = path.join(paths.projectDir, "schedule.json")
+    const stored = await readEvolutionJSON(file)
+    if (stored !== undefined) {
+      if (!stored || typeof stored !== "object" || !("date" in stored) || typeof stored.date !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(stored.date)) throw new Error("Invalid Evolution schedule receipt; manual review required")
+      if (stored.date === clock.date) return { status: "skip" as const }
+    }
+    const current = await readEvolutionPolicy(input.root, input.dataDir)
+    if (!authorizeEvolutionAction(current, "provider", policy.revision).allowed) return { status: "disabled" as const }
+    // Claim before inference: restart/failure cannot consume quota twice in the same day.
+    await writeEvolutionJSON(file, { date: clock.date, revision: policy.revision, status: "claimed" })
+    try {
+      const result = await runEvolution(input.root, { dataDir: input.dataDir, model: input.model })
+      await writeEvolutionJSON(file, { date: clock.date, revision: policy.revision, status: result.status })
+      return { status: "attempted" as const }
+    } catch {
+      await writeEvolutionJSON(file, { date: clock.date, revision: policy.revision, status: "blocked" })
+      return { status: "attempted" as const }
+    }
+  }, { dir: path.join(paths.projectDir, ".locks"), timeoutMs: 100 })
+}
+
 export async function runGlobalDreamSchedulerTick(input: {
   now?: Date
   permissions?: DreamSourcePermissions
@@ -343,9 +384,17 @@ export async function runGlobalDreamSchedulerTick(input: {
 } = {}) {
   const config = await readGlobalMemoryConfig()
   const window = config.dreamWindow ?? (await readDreamScheduleState())?.window
-  if (!window) return { status: "not-configured" as const, reason: "Global Dream window is not configured", runs: [] as DreamRun[] }
-
   const online = await (input.networkAvailable?.() ?? hasUsableNetworkInterface())
+  const overview = input.workspaces ? null : await memoryWorkspaceOverview(undefined)
+  const workspaces = (input.workspaces ?? overview?.activeWorkspaces ?? []).filter((workspace) => !workspace.archived)
+  if (online) {
+    // At most one bounded Evolution model run per tick; later projects wait for the next tick.
+    for (const workspace of workspaces) {
+      const result = await runScheduledEvolution({ root: workspace.root, now: input.now }).catch(() => ({ status: "locked" }))
+      if (result.status === "attempted") break
+    }
+  }
+  if (!window) return { status: "not-configured" as const, reason: "Global Dream window is not configured; Evolution schedules checked independently", runs: [] as DreamRun[] }
   if (!online) {
     const state = {
       date: localDate(input.now ?? new Date(), window.timezone),
@@ -358,9 +407,6 @@ export async function runGlobalDreamSchedulerTick(input: {
     return { status: "offline" as const, reason: state.reason, state, runs: [] as DreamRun[] }
   }
 
-  const overview = input.workspaces ? null : await memoryWorkspaceOverview(undefined)
-  const workspaces = (input.workspaces ?? overview?.activeWorkspaces ?? [])
-    .filter((workspace) => !workspace.archived)
   if (!workspaces.length) {
     const evaluation = await evaluateDreamSchedule({ window, now: input.now })
     const state = {
@@ -376,6 +422,7 @@ export async function runGlobalDreamSchedulerTick(input: {
 
   const runs: DreamRun[] = []
   for (const workspace of workspaces) {
+    if ((await readEvolutionPolicy(workspace.root)).adopted) continue
     const result = await runScheduledMemoryDream({
       root: workspace.root,
       window,
@@ -398,8 +445,11 @@ export function startGlobalDreamBackgroundService(input: {
   networkAvailable?: () => boolean | Promise<boolean>
 } = {}) {
   if (backgroundTimer) return { started: false, reason: "Global Dream background service already running" }
+  let running = false
   const tick = () => {
-    void runGlobalDreamSchedulerTick(input).catch(() => {})
+    if (running) return
+    running = true
+    void runGlobalDreamSchedulerTick(input).catch(() => {}).finally(() => { running = false })
   }
   backgroundTimer = setInterval(tick, input.intervalMs ?? 60_000)
   backgroundTimer.unref?.()

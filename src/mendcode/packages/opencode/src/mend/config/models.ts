@@ -660,7 +660,11 @@ export async function refreshGeneratedRuntimeModelConfig(root?: string) {
 
 export function validateProviderModelID(providerID?: string, modelID?: string) {
   const failures: string[] = []
-  if (!providerID || !/^[a-zA-Z0-9_.-]+$/.test(providerID)) failures.push("providerID must match /^[a-zA-Z0-9_.-]+$/")
-  if (!modelID || !/^[a-zA-Z0-9_.:/@-]+$/.test(modelID)) failures.push("modelID must match /^[a-zA-Z0-9_.:/@-]+$/")
+  if (!providerID || !/^[a-zA-Z0-9_.-]+$/.test(providerID) || providerID === "." || providerID === "..") {
+    failures.push("providerID must be a non-empty safe identifier using letters, digits, dots, underscores or hyphens")
+  }
+  if (!modelID || modelID.trim() !== modelID || /[\s\x00-\x1f\x7f]/.test(modelID)) {
+    failures.push("modelID must be a non-empty value without whitespace or control characters")
+  }
   return failures
 }

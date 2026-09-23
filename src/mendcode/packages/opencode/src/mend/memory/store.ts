@@ -164,16 +164,25 @@ export async function readMemorySummary(scope: MemoryScope, root?: string) {
   return readTextIfExists(file)
 }
 
-export async function appendMemoryEntry(input: Partial<MemoryEntry> & { text: string; scope?: MemoryScope }, root?: string) {
+export async function appendMemoryEntry(input: Partial<MemoryEntry> & { text: string; scope?: MemoryScope }, root?: string, options: { requireEmpty?: boolean } = {}) {
   const paths = memoryPaths(root)
   const entry = normalizeMemoryEntry(input)
   const file = entry.scope === "global" ? paths.globalEntries : paths.projectEntries
-  await serializeMemoryWrite(file, async () => {
+  return serializeMemoryWrite(file, async () => {
+    if (options.requireEmpty && (await readMemoryEntries(entry.scope, root)).some((item) => item.id !== entry.id)) throw new Error("Auto-safe requires empty project memory; review the possible conflict")
+    if (entry.source === "evolution") {
+      const existing = (await readMemoryEntries(entry.scope, root)).find((item) => item.id === entry.id)
+      if (existing) {
+        if (existing.source !== entry.source || existing.text !== entry.text || existing.evidence !== entry.evidence) throw new Error(`Memory revision conflict: ${entry.id}`)
+        return existing
+      }
+      if ((await readArchivedMemoryEntries(entry.scope, root)).some((item) => item.id === entry.id)) throw new Error("Retired Evolution memory cannot be reapplied")
+    }
     await mkdir(path.dirname(file), { recursive: true })
     await appendFile(file, `${JSON.stringify(entry)}\n`)
     await refreshMemoryIndex(root)
+    return entry
   })
-  return entry
 }
 
 async function writeMemoryEntriesUnlocked(scope: MemoryScope, entries: MemoryEntry[], root?: string) {
@@ -193,7 +202,7 @@ async function writeMemoryEntries(scope: MemoryScope, entries: MemoryEntry[], ro
 
 export async function archiveMemoryEntries(
   scope: MemoryScope,
-  selections: Array<{ id: string; reason: string; canonicalEntryID?: string | null }>,
+  selections: Array<{ id: string; reason: string; canonicalEntryID?: string | null; expectedRevision?: string }>,
   root?: string,
 ) {
   const paths = memoryPaths(root)
@@ -202,8 +211,20 @@ export async function archiveMemoryEntries(
     const entries = await readMemoryEntries(scope, root)
     const requested = new Map(selections.filter((selection) => selection.id && selection.reason.trim()).map((selection) => [selection.id, selection]))
     const archived = entries.filter((entry) => requested.has(entry.id))
+    for (const entry of archived) {
+      const expected = requested.get(entry.id)!.expectedRevision
+      if (expected && memoryEntryRevision(entry) !== expected) throw new Error(`Memory revision conflict: ${entry.id}; review before archiving`)
+    }
     if (!archived.length) return { archived: [], skipped: selections.map((selection) => selection.id) }
     const existingArchived = await readArchivedMemoryEntries(scope, root)
+    for (const entry of archived) {
+      if (!requested.get(entry.id)?.expectedRevision) continue
+      const prior = existingArchived.find((item) => item.id === entry.id)
+      if (prior) {
+        const { archivedAt: _at, archiveReason: _reason, canonicalEntryID: _canonical, ...original } = prior
+        if (memoryEntryRevision(original) !== memoryEntryRevision(entry)) throw new Error(`Memory archive conflict: ${entry.id}`)
+      }
+    }
     const archivedIDs = new Set(existingArchived.map((entry) => entry.id))
     const archivedAt = new Date().toISOString()
     const records = archived
@@ -212,7 +233,9 @@ export async function archiveMemoryEntries(
     if (records.length) {
       await mkdir(path.dirname(archiveFile), { recursive: true })
       const previous = await readTextIfExists(archiveFile)
-      await writeFile(archiveFile, `${previous}${records.map((entry) => JSON.stringify(entry)).join("\n")}\n`)
+      const temporary = `${archiveFile}.${randomUUID()}.tmp`
+      await writeFile(temporary, `${previous}${records.map((entry) => JSON.stringify(entry)).join("\n")}\n`, { mode: 0o600 })
+      await rename(temporary, archiveFile)
     }
     await writeMemoryEntriesUnlocked(scope, entries.filter((entry) => !requested.has(entry.id)), root)
     return { archived: records, skipped: selections.filter((selection) => !records.some((entry) => entry.id === selection.id)).map((selection) => selection.id) }
