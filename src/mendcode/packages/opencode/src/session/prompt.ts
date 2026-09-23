@@ -3302,13 +3302,12 @@ NOTE: At any point in time through this workflow you should feel free to ask the
         "</mendcode_runtime_event>",
       ].join("\n")
 
-    const completePeerResponse = (
+    const trackPeerResponse = (
       assistant: MessageV2.Assistant,
       peerState: PeerDeliveryState,
     ): Effect.Effect<void> =>
       Effect.gen(function* () {
-        if (!assistant.parentID || assistant.time.completed === undefined) return
-        if (assistant.finish === "tool-calls" || assistant.finish === "unknown") return
+        if (!assistant.parentID) return
         if (assistant.summary === true) return
         const visited = new Set<string>()
         let currentID: MessageID | undefined = assistant.parentID
@@ -3337,6 +3336,17 @@ NOTE: At any point in time through this workflow you should feel free to ask the
             (item.state === "accepted" || item.state === "running"),
         )
         if (!command) return
+        if (assistant.time.completed === undefined || assistant.finish === "tool-calls" || assistant.finish === "unknown") {
+          if (command.state === "accepted") {
+            yield* agentCommands.update({
+              id: command.id,
+              targetSessionID: command.targetSessionID,
+              state: "running",
+              result: `Session message delivered to assistant ${assistant.id}; awaiting response.`,
+            })
+          }
+          return
+        }
         if (assistant.error) {
           yield* agentCommands.update({
             id: command.id,
@@ -3411,6 +3421,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
         try {
           const statusInfo = yield* status.get(info.targetSessionID)
           if (statusInfo.type !== "idle") return
+          if (yield* state.isBusy(info.targetSessionID)) return
           if (info.policy.decision !== "safe_auto" && info.policy.decision !== "same_workspace") {
             yield* agentCommands.update({
               id: info.id,
@@ -3420,19 +3431,6 @@ NOTE: At any point in time through this workflow you should feel free to ask the
             })
             settled = true
             return
-          }
-
-          if (info.state === "accepted") {
-            try {
-              yield* agentCommands.update({
-                id: info.id,
-                targetSessionID: info.targetSessionID,
-                state: "running",
-              })
-            } catch (error) {
-              if (error instanceof AgentCommand.InvalidStateTransitionError) return
-              throw error
-            }
           }
 
           const existing = yield* sessions.messages({ sessionID: info.targetSessionID, view: "full" })
@@ -3454,21 +3452,16 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                 peerDeliveryIDForAssistant(existing, message.info) === info.id,
             )
             if (response?.info.role === "assistant") {
-              yield* completePeerResponse(response.info, peerState)
+              yield* trackPeerResponse(response.info, peerState)
               settled = true
               return
             }
-            yield* agentCommands.update({
-              id: info.id,
-              targetSessionID: info.targetSessionID,
-              state: "running",
-              result: `Session message delivered in prompt ${marker.info.id}; awaiting response.`,
-            })
             return
           }
 
           // A queued delivery may have been cancelled while its marker was read.
-          if ((yield* agentCommands.get(info.id)).state !== "running") return
+          const current = yield* agentCommands.get(info.id)
+          if (current.state !== "accepted" && current.state !== "running") return
           const message = yield* promptAsync({
             sessionID: info.targetSessionID,
             parts: [
@@ -3486,12 +3479,22 @@ NOTE: At any point in time through this workflow you should feel free to ask the
               },
             ],
           })
-          yield* agentCommands.update({
-            id: info.id,
-            targetSessionID: info.targetSessionID,
-            state: "running",
-            result: `Session message delivered in prompt ${message.info.id}; awaiting response.`,
-          })
+          const started = yield* sessions.findMessage(
+            info.targetSessionID,
+            (item) => item.info.role === "assistant" && item.info.parentID === message.info.id,
+          )
+          if (Option.isSome(started) && started.value.info.role === "assistant") {
+            yield* trackPeerResponse(started.value.info, peerState)
+          }
+          const scheduled = yield* agentCommands.get(info.id)
+          if (scheduled.state === "accepted" || scheduled.state === "running") {
+            yield* agentCommands.update({
+              id: info.id,
+              targetSessionID: info.targetSessionID,
+              state: "running",
+              result: `Session message accepted by target runner in prompt ${message.info.id}; awaiting response.`,
+            })
+          }
         } catch (error) {
           yield* agentCommands.update({
             id: info.id,
@@ -3590,13 +3593,10 @@ NOTE: At any point in time through this workflow you should feel free to ask the
           Effect.forkIn(instanceScope, { startImmediately: true }),
         )
         yield* bus.subscribe(MessageV2.Event.Updated).pipe(
-          Stream.filter(
-            (event) =>
-              event.properties.info.role === "assistant" && event.properties.info.time.completed !== undefined,
-          ),
+          Stream.filter((event) => event.properties.info.role === "assistant"),
           Stream.runForEach((event) =>
             event.properties.info.role === "assistant"
-              ? completePeerResponse(event.properties.info, peerState)
+              ? trackPeerResponse(event.properties.info, peerState)
               : Effect.void,
           ),
           withInstance,

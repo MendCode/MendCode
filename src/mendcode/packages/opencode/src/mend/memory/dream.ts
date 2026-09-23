@@ -9,6 +9,7 @@ import { listMemoryProposals, proposeMemory, redactMemoryText, settleGeneratedMe
 import { cleanupGeneratedMemoryEntries, consolidateAcceptedMemoryEntries, deterministicDreamConsolidator, isMemoryMaintenanceInstruction, readDreamConsolidationRun, resolveMemoryConsolidator, runMemoryConsolidation, type DreamConsolidationModel, type DreamConsolidationRun } from "./dream-consolidation"
 import { resolveModelRoles } from "../config/models"
 import { runProviderAdapter } from "../runtime/provider-adapters"
+import { assertLegacyLearning } from "../evolution/policy"
 
 const DREAM_FACT_CONTEXT_LIMIT = 32
 const DREAM_PROPOSAL_CONTEXT_LIMIT = 32
@@ -838,6 +839,7 @@ export async function runMemoryDream(input: {
   now?: Date
 } = {}) {
   const root = input.root
+  await assertLegacyLearning(memoryPaths(root).root)
   const id = nowID()
   const startedAt = (input.now ?? new Date()).toISOString()
   const permissions = normalizeDreamPermissions(root, input.permissions)
@@ -918,7 +920,9 @@ export async function runMemoryDream(input: {
     await writeSafety(root, id, safetyInput)
     const model = input.model ?? await configuredDreamModel(root)
     if (!model) throw new Error("Dream model is not configured; no deterministic fallback was used")
+    await assertLegacyLearning(memoryPaths(root).root)
     const modelOutput = await model({ facts, proposals, evidence })
+    await assertLegacyLearning(memoryPaths(root).root)
     const candidates = Array.isArray(modelOutput) ? modelOutput : modelOutput.candidates
     const graphSuggestions = Array.isArray(modelOutput) ? [] : modelOutput.graphLinks
     const priorCandidates: Array<{ id: string; text: string }> = []

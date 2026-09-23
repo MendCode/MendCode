@@ -1,6 +1,8 @@
 import { test, expect } from "bun:test"
+import { generateText } from "ai"
 import { mkdir, unlink } from "fs/promises"
 import path from "path"
+import { pathToFileURL } from "url"
 
 import { disposeAllInstances, tmpdir } from "../fixture/fixture"
 import { Global } from "@mendcode/core/global"
@@ -1190,6 +1192,89 @@ test("provider with custom npm package", async () => {
       expect(providers[ProviderID.make("local-llm")].options.baseURL).toBe("http://localhost:11434/v1")
     },
   })
+})
+
+test("local provider SDK loads a configured model without catalog registration", async () => {
+  await using tmp = await tmpdir({
+    init: async (dir) => {
+      const sdk = path.join(dir, "local-provider.mjs")
+      await Bun.write(
+        sdk,
+        [
+          "export function createLocalProvider(options) {",
+          "  return {",
+          "    languageModel(modelID) {",
+          "      return { modelID, providerID: options.name, baseURL: options.baseURL }",
+          "    },",
+          "  }",
+          "}",
+          "",
+        ].join("\n"),
+      )
+      await Bun.write(
+        path.join(dir, "mendcode.json"),
+        JSON.stringify({
+          $schema: "https://mendcode.ai/config.json",
+          provider: {
+            "local-runtime": {
+              name: "Local Runtime",
+              npm: pathToFileURL(sdk).href,
+              models: {
+                "org/model+preview:Q4_K_M": {
+                  name: "Local Preview",
+                  limit: { context: 32768, output: 4096 },
+                },
+              },
+              options: { baseURL: "http://127.0.0.1:11434/v1" },
+            },
+          },
+        }),
+      )
+    },
+  })
+  await WithInstance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      const model = await getModel(ProviderID.make("local-runtime"), ModelID.make("org/model+preview:Q4_K_M"))
+      const language = (await getLanguage(model)) as unknown as {
+        modelID: string
+        providerID: string
+        baseURL: string
+      }
+      expect(language).toEqual({
+        modelID: "org/model+preview:Q4_K_M",
+        providerID: "local-runtime",
+        baseURL: "http://127.0.0.1:11434/v1",
+      })
+    },
+  })
+})
+
+test("configured local OpenAI-compatible models can complete over loopback without catalog IDs", async () => {
+  const received: string[] = []
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
+    expect(new URL(request.url).pathname).toBe("/v1/chat/completions")
+    const body = await request.json() as { model: string }
+    received.push(body.model)
+    return Response.json({ id: "local-test", object: "chat.completion", created: 1, model: body.model, choices: [{ index: 0, message: { role: "assistant", content: "LOCAL_ADAPTER_OK" }, finish_reason: "stop" }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } })
+  } })
+  try {
+    await using tmp = await tmpdir({ config: {
+      provider: {
+        "local-loopback": {
+          npm: "@ai-sdk/openai-compatible",
+          options: { baseURL: `http://127.0.0.1:${server.port}/v1` },
+          models: { "org/model+preview:Q4_K_M": { name: "Local model", limit: { context: 32768, output: 4096 } } },
+        },
+      },
+    } })
+    await WithInstance.provide({ directory: tmp.path, fn: async () => {
+      const model = await getModel(ProviderID.make("local-loopback"), ModelID.make("org/model+preview:Q4_K_M"))
+      const result = await generateText({ model: await getLanguage(model), prompt: "Local fixture only", maxRetries: 0, abortSignal: AbortSignal.timeout(2000) })
+      expect(result.text).toBe("LOCAL_ADAPTER_OK")
+      expect(received).toEqual(["org/model+preview:Q4_K_M"])
+    } })
+  } finally { await server.stop(true) }
 })
 
 // Edge cases for model configuration
@@ -2553,6 +2638,55 @@ test("plugin config providers persist after instance dispose", async () => {
   })
   expect(second[ProviderID.make("demo")]).toBeDefined()
   expect(second[ProviderID.make("demo")].models[ModelID.make("chat")]).toBeDefined()
+})
+
+test("provider hooks receive providers and models introduced by local config", async () => {
+  await using tmp = await tmpdir({
+    init: async (dir) => {
+      const configDir = path.join(dir, ".mendcode")
+      const root = path.join(configDir, "plugin")
+      await mkdir(root, { recursive: true })
+      await markPluginDependenciesReady(configDir)
+      await markPluginDependenciesReady(Global.Path.config)
+      await Bun.write(
+        path.join(root, "configured-provider.ts"),
+        [
+          "export default {",
+          '  id: "demo.configured-provider",',
+          "  server: async () => ({",
+          "    async config(cfg) {",
+          "      cfg.provider ??= {}",
+          "      cfg.provider.local = {",
+          '        npm: "@ai-sdk/openai-compatible",',
+          '        api: "http://127.0.0.1:11434/v1",',
+          '        models: { preview: { name: "Configured Preview", limit: { context: 16384, output: 4096 }, options: { localChoice: true } } },',
+          "      }",
+          "    },",
+          "    provider: {",
+          '      id: "local",',
+          "      async models(provider) {",
+          "        return Object.fromEntries(Object.entries(provider.models).map(([id, model]) => [id, { ...model, name: `adapted:${model.name}`, limit: { context: 32768, output: 8192 }, options: { localChoice: false, pluginDefault: true } }]))",
+          "      },",
+          "    },",
+          "  }),",
+          "}",
+          "",
+        ].join("\n"),
+      )
+    },
+  })
+
+  await WithInstance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      const providers = await list()
+      expect(providers[ProviderID.make("local")].models[ModelID.make("preview")].name).toBe(
+        "adapted:Configured Preview",
+      )
+      expect(providers[ProviderID.make("local")].models[ModelID.make("preview")].limit).toMatchObject({ context: 16384, output: 4096 })
+      expect(providers[ProviderID.make("local")].models[ModelID.make("preview")].options).toMatchObject({ localChoice: true, pluginDefault: true })
+    },
+  })
 })
 
 test("plugin config enabled and disabled providers are honored", async () => {

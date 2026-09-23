@@ -33,6 +33,52 @@ Generated changes can come from normal extraction, Memory Center side chat, or
 Dream. They all land in the same review model: a proposal must be inspected,
 edited, applied, or rejected by the user before it changes saved memory.
 
+## Memory & Evolution (local implementation)
+
+Setup exposes project-scoped Evolution separately from **using saved memory**.
+Without explicit Evolution consent, existing legacy memory learning remains unchanged.
+Adopting Evolution replaces automatic legacy extraction/Dream for that project;
+it does not disable manually requested memory tools or delete saved entries.
+
+- **Off:** blocks new capture, inference and promotion; cancels Evolution work and
+  rejects late results. Previously approved artifacts remain active.
+- **Observe:** retains bounded metadata only, without free text or provider calls.
+- **Suggest:** authorized evidence produces review-only memory, skill and workflow
+  proposals. Skills/workflows require explicit approval; saving a workflow never runs it.
+- **Auto-safe (limited):** permits only an exact user correction in the form
+  `Project language: TypeScript.` (also JavaScript, Python, Rust or Go), with low
+  sensitivity and the project-stack category. Project memory must be empty, and
+  contradictory current corrections block automatic application. Everything else,
+  including permission/security/model rules, remains pending for review.
+
+Corrections can be entered from Setup or through a chat message beginning with
+`Correction:` or `Corrección:`. Optional tool/test evidence records host completion
+metadata, not stdout or assistant claims. A zero process exit status is not proof
+that an entire task passed a semantic audit.
+
+Provider processing requires separate consent. Local storage **does not mean local
+inference**: the selected provider may receive authorized evidence and consume quota.
+Evolution uses the configured extractor/distiller role without silently switching
+models. Evidence is limited to 500 records, 4 KiB per record and a 30-day eligible
+window; each run uses at most five current evidence records, lasts at most 60 seconds,
+and produces at most five candidates. Expired records are excluded from processing;
+physical pruning occurs when the evidence ledger is next rewritten.
+
+Daily execution uses the existing Dream service and registered workspaces. Setting a
+schedule does not install or start a service. There is a five-minute admission window,
+at most one claimed attempt per project/local date, and no automatic retry or late
+catch-up after failure or restart. The scheduler admits at most one Evolution run per
+tick. Use **Run once** for missed windows.
+
+**Revert Evolution memories** archives an unchanged newly-created memory and retires
+its graph projection without deleting graph content. An entry modified after promotion
+requires manual review instead. Reversion remains available while Evolution is Off.
+Capability rollback similarly checks the promoted file hash or workflow revision and
+refuses to overwrite later edits.
+
+This is contextual learning, not weight training or automatic source-code editing.
+Schema validation alone does not establish the usefulness of a generated capability.
+
 ## Memory Side Agent
 
 The side chat is intentionally constrained, but it is still powerful inside the

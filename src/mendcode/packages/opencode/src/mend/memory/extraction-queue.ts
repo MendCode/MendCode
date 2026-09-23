@@ -5,6 +5,8 @@ import * as Log from "@mendcode/core/util/log"
 import { mkdir, readFile, rename, writeFile } from "fs/promises"
 import path from "path"
 import { memoryPaths } from "./config"
+import { readEvolutionPolicy } from "../evolution/config"
+import { assertLegacyLearning } from "../evolution/policy"
 
 export type MemoryExtractionState = "queued" | "running" | "completed" | "skipped" | "failed"
 
@@ -148,6 +150,7 @@ export class MemoryExtractionQueue {
   }
 
   async enqueue(input: Omit<MemoryExtractionJob, "id" | "identity" | "createdAt" | "updatedAt" | "state" | "attempts"> & { turnID?: string }) {
+    await assertLegacyLearning(input.projectRoot)
     const turnID = input.turnID || input.messageID
     const now = new Date().toISOString()
     const jobIdentity = identity({ projectRoot: input.projectRoot, sessionID: input.sessionID, turnID })
@@ -284,6 +287,18 @@ export class MemoryExtractionQueue {
     while (!this.stopped.has(root) && this.active.size < concurrency) {
       const job = await this.withLock(root, async () => {
         const queue = await readQueue(root)
+        if ((await readEvolutionPolicy(root)).adopted) {
+          for (const item of queue.jobs) {
+            if (item.state !== "queued" && item.state !== "running") continue
+            this.controllers.get(item.id)?.abort("Evolution adopted")
+            item.state = "skipped"
+            item.reason = "Legacy learning replaced by Evolution"
+            item.text = ""
+            item.updatedAt = new Date().toISOString()
+          }
+          await this.write(root, queue)
+          return undefined
+        }
         const candidate = queue.jobs.find((item) => item.state === "queued" && (!item.nextAttemptAt || Date.parse(item.nextAttemptAt) <= Date.now()))
         if (!candidate) {
           const next = queue.jobs.reduce((earliest, item) => {

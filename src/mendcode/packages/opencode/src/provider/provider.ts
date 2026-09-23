@@ -1165,33 +1165,6 @@ const layer: Layer.Layer<
           return true
         }
 
-        for (const hook of plugins) {
-          const p = hook.provider
-          const models = p?.models
-          if (!p || !models) continue
-
-          const providerID = ProviderID.make(p.id)
-          if (disabled.has(providerID)) continue
-
-          const provider = database[providerID]
-          if (!provider) continue
-          const pluginAuth = yield* auth.get(providerID).pipe(Effect.orDie)
-
-          provider.models = yield* Effect.promise(async () => {
-            const next = await models(toPublicInfo(provider), { auth: pluginAuth })
-            return Object.fromEntries(
-              Object.entries(next).map(([id, model]) => [
-                id,
-                {
-                  ...model,
-                  id: ModelID.make(id),
-                  providerID,
-                },
-              ]),
-            )
-          })
-        }
-
         // extend database from config
         for (const [providerID, provider] of configProviders) {
           const existing = database[providerID]
@@ -1284,6 +1257,47 @@ const layer: Layer.Layer<
             parsed.models[modelID] = parsedModel
           }
           database[providerID] = parsed
+        }
+
+        // Config can introduce providers and models that are not in the bundled
+        // catalog. Add them before plugin model hooks so auth adapters can apply
+        // the same policy to catalog and locally configured models.
+        for (const hook of plugins) {
+          const p = hook.provider
+          const models = p?.models
+          if (!p || !models) continue
+
+          const providerID = ProviderID.make(p.id)
+          if (disabled.has(providerID)) continue
+
+          const provider = database[providerID]
+          if (!provider) continue
+          const pluginAuth = yield* auth.get(providerID).pipe(Effect.orDie)
+
+          provider.models = yield* Effect.promise(async () => {
+            const next = await models(toPublicInfo(provider), { auth: pluginAuth })
+            return Object.fromEntries(
+              Object.entries(next).map(([id, model]) => [
+                id,
+                {
+                  ...model,
+                  id: ModelID.make(id),
+                  providerID,
+                },
+              ]),
+            )
+          })
+        }
+
+        // Hooks may supply defaults for new models, but explicit local limits/options stay authoritative.
+        for (const [providerID, provider] of configProviders) {
+          for (const [modelID, configured] of Object.entries(provider.models ?? {})) {
+            const model = database[providerID]?.models[modelID]
+            if (!model) continue
+            model.limit = mergeDeep(model.limit, configured.limit ?? {})
+            model.options = mergeDeep(model.options, configured.options ?? {})
+            model.headers = mergeDeep(model.headers, configured.headers ?? {})
+          }
         }
 
         // load env

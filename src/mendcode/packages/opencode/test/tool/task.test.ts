@@ -13,7 +13,7 @@ import type { SessionPrompt } from "../../src/session/prompt"
 import { MessageID, PartID, SessionID } from "../../src/session/schema"
 import { ModelID, ProviderID } from "../../src/provider/schema"
 import { Provider } from "@/provider/provider"
-import { normalizeSubagentType, TaskTool, type TaskPromptOps } from "../../src/tool/task"
+import { normalizeSubagentType, taskExecutionContext, TaskTool, type TaskPromptOps } from "../../src/tool/task"
 import { taskState, TaskStatusTool } from "../../src/tool/task-status"
 import { Truncate } from "@/tool/truncate"
 import { ToolRegistry } from "@/tool/registry"
@@ -192,6 +192,20 @@ describe("tool.task", () => {
     expect(normalizeSubagentType("sub-code-reviewer")).toBe("code-reviewer")
   })
 
+  test("task context identifies the worker and owner without relying on transcript order", () => {
+    const text = taskExecutionContext({
+      workerSessionID: SessionID.make("ses_worker"),
+      ownerSessionID: SessionID.make("ses_owner"),
+      taskPrompt: "Implement the scoped fix and tests.",
+    })
+
+    expect(text).toContain('worker_session_id: "ses_worker"')
+    expect(text).toContain('owner_session_id: "ses_owner"')
+    expect(text).toContain("You are the worker session")
+    expect(text).toContain("do not relay or delegate it back to the owner")
+    expect(text).toContain("<task_payload>\nImplement the scoped fix and tests.\n</task_payload>")
+  })
+
   it.instance(
     "description sorts subagents by name and is stable across calls",
     () =>
@@ -311,6 +325,12 @@ describe("tool.task", () => {
       expect(result.metadata.sessionId).toBe(child.id)
       expect(result.output).toContain(`task_id: ${child.id}`)
       expect(seen?.sessionID).toBe(child.id)
+      expect(seen?.parts[0]?.type === "text" ? seen.parts[0].text : "").toContain(
+        `worker_session_id: ${JSON.stringify(child.id)}`,
+      )
+      expect(seen?.parts[0]?.type === "text" ? seen.parts[0].text : "").toContain(
+        `owner_session_id: ${JSON.stringify(chat.id)}`,
+      )
     }),
   )
 

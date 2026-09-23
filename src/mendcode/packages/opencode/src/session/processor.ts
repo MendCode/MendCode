@@ -33,6 +33,8 @@ import {
 import { mendMemoryContext } from "@/mend/memory/retrieve"
 import { writeMemorySessionDigest } from "@/mend/memory/session-digests"
 import { MemoryExtractionQueue } from "@/mend/memory/extraction-queue"
+import { readEvolutionPolicy } from "@/mend/evolution/config"
+import { recordEvolutionEvidence, recordEvolutionToolEvidence } from "@/mend/evolution/evidence"
 import { InstanceState } from "@/effect/instance-state"
 import { ShellID } from "@/tool/shell/id"
 import * as DateTime from "effect/DateTime"
@@ -458,6 +460,9 @@ export const layer: Layer.Layer<
     const memoryQueue = new MemoryExtractionQueue()
     const runMemoryExtraction = async (job: import("@/mend/memory/extraction-queue").MemoryExtractionJob, signal: AbortSignal) => {
       signal.throwIfAborted()
+      if ((await readEvolutionPolicy(job.projectRoot)).adopted) {
+        return { state: "skipped" as const, reason: "Legacy learning replaced by Evolution" }
+      }
       const config = await readMemoryConfig(job.projectRoot)
       if (!config.enabled || !config.generate || config.memoryWritePolicy === "disabled") {
         return { state: "skipped" as const, reason: "memory output disabled" }
@@ -1024,6 +1029,13 @@ export const layer: Layer.Layer<
               timestamp: DateTime.makeUnsafe(Date.now()),
             })
             yield* completeToolCall(value.toolCallId, value.output)
+            const evidenceRoot = resolveProjectMemoryRoot(ctx.assistantMessage.path.root, ctx.assistantMessage.path.cwd)
+            if (evidenceRoot && toolCall && !ctx.assistantMessage.summary) {
+              yield* Effect.promise(() => recordEvolutionToolEvidence(evidenceRoot, {
+                sessionID: String(ctx.sessionID), turnID: value.toolCallId, tool: toolCall.part.tool,
+                command: toolCall.part.state.input.command, exitCode: value.output.metadata?.exit,
+              })).pipe(Effect.catch(() => Effect.sync(() => log.warn("Evolution tool evidence rejected; no output retained"))))
+            }
             return
           }
 
@@ -1043,6 +1055,13 @@ export const layer: Layer.Layer<
               timestamp: DateTime.makeUnsafe(Date.now()),
             })
             yield* failToolCall(value.toolCallId, value.error)
+            const evidenceRoot = resolveProjectMemoryRoot(ctx.assistantMessage.path.root, ctx.assistantMessage.path.cwd)
+            if (evidenceRoot && toolCall && !ctx.assistantMessage.summary) {
+              yield* Effect.promise(() => recordEvolutionToolEvidence(evidenceRoot, {
+                sessionID: String(ctx.sessionID), turnID: value.toolCallId, tool: toolCall.part.tool,
+                command: toolCall.part.state.input.command, failed: true,
+              })).pipe(Effect.catch(() => Effect.sync(() => log.warn("Evolution tool evidence rejected; no error retained"))))
+            }
             return
           }
 
@@ -1094,6 +1113,14 @@ export const layer: Layer.Layer<
               ? messagePartsText(MessageV2.parts(ctx.assistantMessage.parentID))
               : ""
             const memoryUserText = ctx.memoryQuery || persistedUserText
+            const correction = persistedUserText.trim().match(/^(?:correcci[oó]n|correction):\s*(\S[\s\S]*)$/i)?.[1]
+            if (memoryRoot && correction && !ctx.assistantMessage.summary && !ctx.usedExplicitMemoryTool && value.finishReason === "stop") {
+              yield* Effect.promise(() => recordEvolutionEvidence(memoryRoot, {
+                source: "correction", sessionID: String(ctx.sessionID),
+                turnID: String(ctx.assistantMessage.parentID ?? ctx.assistantMessage.id),
+                outcome: "observed", text: correction,
+              })).pipe(Effect.catch(() => Effect.sync(() => log.warn("Evolution evidence rejected; no transcript retained"))))
+            }
             const recentContext = memoryConversationWindow(ctx.streamMessages)
             const memoryTurnText = [
               recentContext ? `<recent_context>\n${recentContext}\n</recent_context>` : "",
@@ -1106,6 +1133,7 @@ export const layer: Layer.Layer<
               if (ctx.assistantMessage.summary) return undefined
               if (!memoryRoot) return undefined
               const config = await readMemoryConfig(memoryRoot)
+              const evolution = await readEvolutionPolicy(memoryRoot)
               const shouldReportInput = config.enabled && config.use
               const used = shouldReportInput
                 ? await mendMemoryContext(ctx.model, memoryRoot, ctx.memoryQuery)
@@ -1126,7 +1154,7 @@ export const layer: Layer.Layer<
                 },
                 output: {
                   enabled: config.enabled,
-                  generate: config.generate,
+                  generate: config.generate && !evolution.adopted,
                   extractorRole: config.extractorRole,
                   queued: false,
                   saved: [],
@@ -1632,6 +1660,7 @@ export const layer: Layer.Layer<
         const pending = ctx.pendingMemoryExtraction
         ctx.pendingMemoryExtraction = undefined
         if (!pending || ctx.blocked || ctx.assistantMessage.error) return
+        if (yield* Effect.promise(async () => (await readEvolutionPolicy(pending.memoryRoot)).adopted)) return
         const sessionID = ctx.sessionID
         const messageID = ctx.assistantMessage.id
         yield* Effect.promise(() =>

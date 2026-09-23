@@ -208,9 +208,11 @@ describe("shared server state", () => {
 
   test("retains the live owner's discovery receipt when idle shutdown fails", async () => {
     await using tmp = await tmpdir()
+    const previousStateFile = process.env.MENDCODE_SHARED_SERVER_STATE_FILE
+    process.env.MENDCODE_SHARED_SERVER_STATE_FILE = path.join(tmp.path, "server.json")
     const state = { ...valid, pid: process.pid }
-    await writeState(state)
     try {
+      await writeState(state)
       await expect(
         waitForClientLeases({
           directory: tmp.path,
@@ -224,6 +226,8 @@ describe("shared server state", () => {
       expect(await readState()).toEqual(state)
     } finally {
       await clearStateIfOwned(process.pid)
+      if (previousStateFile === undefined) delete process.env.MENDCODE_SHARED_SERVER_STATE_FILE
+      else process.env.MENDCODE_SHARED_SERVER_STATE_FILE = previousStateFile
     }
   })
 

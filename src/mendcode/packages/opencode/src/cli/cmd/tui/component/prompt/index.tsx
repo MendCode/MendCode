@@ -111,6 +111,7 @@ import {
   readPromptStatusScript,
   resolvePromptCachePercent,
   resolvePromptStatus,
+  resolvePromptTurnCachePercent,
   type MendPromptStatusBuiltin,
   type MendPromptStatusScriptOutput,
   type MendPromptStatusScriptResult,
@@ -1749,6 +1750,11 @@ export function Prompt(props: PromptProps) {
     const sessionID = props.sessionID
     if (!sessionID) return
     const messages = sync.data.message[sessionID] ?? []
+    const turnPercent = resolvePromptTurnCachePercent({
+      messages,
+      activeAssistantID: findActiveWorkingAssistant()?.id,
+    })
+    if (turnPercent !== undefined) return turnPercent
     const active = findActiveWorkingAssistant()
     if (active?.liveUsage) return resolvePromptCachePercent(active.liveUsage)
     const last = messages.findLast((item): item is AssistantMessage => item.role === "assistant")

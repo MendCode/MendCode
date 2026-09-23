@@ -118,6 +118,33 @@ describe("plugin.codex", () => {
     expect(isCodexChatGPTModelSupported("gpt-4.1")).toBe(false)
   })
 
+  test("keeps the provider catalog dynamic without inferring OAuth protocol support", async () => {
+    const accepted = ["gpt-6-luna", "gpt-6-sol", "gpt-6", "gpt-7-example", "gpt-5.10-example", "gpt-10.1-example"]
+    for (const id of accepted) expect(isCodexChatGPTModelSupported(id)).toBe(true)
+    for (const id of ["gpt-4.9", "gpt-5.1", "gpt-6junk", "gpt-6.1.2", "other-6-luna"])
+      expect(isCodexChatGPTModelSupported(id)).toBe(false)
+    const plugin = await CodexAuthPlugin({} as never)
+    const catalogIDs = [...accepted, "gpt-4.1", "future-provider-model"]
+    const catalog = Object.fromEntries(
+      catalogIDs.map((id) => [
+        id,
+        {
+          id,
+          api: { id },
+          limit: { context: 12345, input: 12000, output: 345 },
+          cost: { input: 1, output: 1, cache: { read: 1, write: 1 } },
+        },
+      ]),
+    )
+    const models = await plugin.provider!.models!({ models: catalog } as never, { auth: { type: "oauth" } } as never)
+    expect(Object.keys(models)).toEqual(catalogIDs)
+    expect(models["gpt-6-luna"]?.limit).toEqual(catalog["gpt-6-luna"]!.limit)
+    expect(models["future-provider-model"]?.limit).toEqual(catalog["future-provider-model"]!.limit)
+    expect(models["future-provider-model"]?.cost).toEqual({ input: 0, output: 0, cache: { read: 0, write: 0 } })
+    const apiModels = await plugin.provider!.models!({ models: catalog } as never, { auth: { type: "api" } } as never)
+    expect(apiModels === catalog).toBe(true)
+  })
+
   test("assigns the Astra context limit and compaction threshold in the OAuth catalog", async () => {
     const plugin = await CodexAuthPlugin({} as never)
     const models = await plugin.provider!.models!(

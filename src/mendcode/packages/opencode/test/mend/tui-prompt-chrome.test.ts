@@ -11,6 +11,7 @@ import {
   readPromptStatusScript,
   resolvePromptCachePercent,
   resolvePromptStatus,
+  resolvePromptTurnCachePercent,
 } from "../../src/mend/tui/prompt-status"
 import { resolveActivityPhase } from "../../src/cli/cmd/tui/util/activity-signal"
 import {
@@ -402,6 +403,36 @@ describe("mend tui prompt chrome", () => {
     expect(resolvePromptCachePercent({ input: 5000, cache: { read: 5000, write: 0 } })).toBe(50)
     expect(resolvePromptCachePercent({ input: 100, cache: { read: 100, write: 50 } })).toBe(40)
     expect(resolvePromptCachePercent({ input: 1, cache: { read: 0, write: 9000 } })).toBeUndefined()
+    expect(resolvePromptCachePercent([{ input: 5000, cache: { read: 5000, write: 0 } }])).toBe(50)
+    expect(resolvePromptCachePercent([{ input: 1, cache: { read: 0, write: 9000 } }])).toBe(0)
+    expect(resolvePromptCachePercent([{ input: 0, cache: { read: 0, write: 0 } }])).toBeUndefined()
+  })
+
+  test("aggregates cache usage across the latest user turn", () => {
+    expect(
+      resolvePromptTurnCachePercent({
+        messages: [
+          {
+            id: "msg_old",
+            role: "assistant",
+            parentID: "usr_old",
+            tokens: { input: 1, cache: { read: 99_999, write: 0 } },
+          },
+          {
+            id: "msg_cold",
+            role: "assistant",
+            parentID: "usr_current",
+            tokens: { input: 196_437, cache: { read: 0, write: 0 } },
+          },
+          {
+            id: "msg_warm",
+            role: "assistant",
+            parentID: "usr_current",
+            tokens: { input: 365, cache: { read: 198_656, write: 0 } },
+          },
+        ],
+      }),
+    ).toBe(50)
   })
 
   test("passes current-session cache percentage to prompt status scripts", async () => {

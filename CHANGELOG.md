@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.1.44-beta.16 - 2026-09-23
+
+### Added
+
+- Add opt-in Memory & Evolution setup controls with bounded evidence, policy
+  gating, candidate review, and reversible project-scoped promotion.
+- Add adaptive reasoning policy/runtime support with explicit user controls and
+  focused validation coverage.
+
+### Changed
+
+- Accept provider-native and local model identifiers without a rigid catalog
+  allowlist while preserving provider and path safety validation.
+- Aggregate prompt-cache usage across the active user turn for more accurate TUI
+  status reporting.
+
+### Fixed
+
+- Harden queued peer delivery, compaction recovery, and session state checks so
+  accepted messages are not persisted into a target session while its runner is
+  still busy.
+
+### Tests
+
+- Add focused regressions for Memory & Evolution, adaptive reasoning, provider
+  compatibility, model validation, prompt cache reporting, and peer delivery.
+
 ## 0.1.44-beta.15 - 2026-09-14
 
 ### Fixed

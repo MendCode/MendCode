@@ -29,11 +29,11 @@ import { validateSession } from "./validate-session"
 import { loadMendTuiProfile } from "@/mend/profile"
 import { ServerAuth } from "@/server/auth"
 import { SharedServer, type SharedServerClientLease, type SharedServerState } from "./shared-server"
+import { SHARED_SERVER_SHUTDOWN_TIMEOUT_MS } from "../serve-shutdown"
 import { isProcessMemoryUsage, processMemoryUsage, type DiagnosticsSnapshot } from "@/util/process-memory"
 import { Installation } from "@/installation"
 import { trackUpdateStartup } from "@/installation/startup"
 import { readBackendPhase, waitForBackend } from "@/installation/backend-startup"
-import { SHARED_SERVER_SHUTDOWN_TIMEOUT_MS } from "../serve-shutdown"
 
 const SHARED_SERVER_PROBE_TIMEOUT_MS = 2_000
 const SHARED_SERVER_WAIT_TIMEOUT_MS = 8_000
