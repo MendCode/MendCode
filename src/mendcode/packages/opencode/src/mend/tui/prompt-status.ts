@@ -130,9 +130,10 @@ export function resolvePromptCachePercent(input: PromptCacheUsage | readonly Pro
     return Math.max(0, Math.min(100, Math.round((usage.read / totalInput) * 100)))
   }
 
-  const cacheRead = safe(input.cache?.read)
-  const cacheWrite = safe(input.cache?.write)
-  const totalInput = safe(input.input) + cacheRead + cacheWrite
+  const single = input as PromptCacheUsage
+  const cacheRead = safe(single.cache?.read)
+  const cacheWrite = safe(single.cache?.write)
+  const totalInput = safe(single.input) + cacheRead + cacheWrite
   if (cacheRead <= 0 || totalInput <= 0) return
   return Math.max(1, Math.min(100, Math.round((cacheRead / totalInput) * 100)))
 }

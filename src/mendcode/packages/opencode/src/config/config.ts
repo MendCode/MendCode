@@ -407,9 +407,6 @@ export const Info = Schema.Struct({
           "Minimum pasted text length before the TUI collapses it into a pasted-content placeholder (default: 3000).",
       }),
       batch_tool: Schema.optional(Schema.Boolean).annotate({ description: "Enable the batch tool" }),
-      tool_discovery: Schema.optional(Schema.Boolean).annotate({
-        description: "Discover secondary and MCP tool schemas on demand to reduce context (default: true).",
-      }),
       openTelemetry: Schema.optional(Schema.Boolean).annotate({
         description: "Enable OpenTelemetry spans for AI SDK calls (using the 'experimental_telemetry' flag)",
       }),
