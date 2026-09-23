@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.44-beta.17 - 2026-09-23
+
+### Fixed
+
+- Generate release provenance from GitHub-hosted assembly runners so in-app updates pass the self-hosted runner policy without weakening attestation verification.
+
+### Tests
+
+- Verify release checksums and provenance before the updater consumes release metadata.
+
 ## 0.1.44-beta.16 - 2026-09-23
 
 ### Added
