@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.44-beta.18 - 2026-09-23
+
+### Fixed
+
+- Re-sign compiled macOS executables and verify their code signatures before smoke testing and packaging release archives, preventing `Killed: 9` on launch.
+
 ## 0.1.44-beta.17 - 2026-09-23
 
 ### Fixed
