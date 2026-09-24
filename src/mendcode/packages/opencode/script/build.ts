@@ -251,6 +251,14 @@ for (const item of targets) {
     },
   })
 
+  // Bun's compiled Mach-O can have an invalid embedded signature even when the
+  // build succeeds. Sign the final binary before smoke testing or archiving it.
+  if (item.os === "darwin" && process.platform === "darwin") {
+    const binaryPath = `dist/${name}/bin/${binaryName}`
+    await $`codesign --force --sign - ${binaryPath}`
+    await $`codesign --verify --strict --verbose=2 ${binaryPath}`
+  }
+
   // Smoke test: only run if binary is for current platform
   if (item.os === process.platform && item.arch === process.arch && !item.abi) {
     const binaryPath = `dist/${name}/bin/${binaryName}`
