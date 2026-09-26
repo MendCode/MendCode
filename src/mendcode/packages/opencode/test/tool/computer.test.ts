@@ -65,6 +65,23 @@ describe("native computer boundary", () => {
     expect(os.state.commands).toHaveLength(0)
   }))
 
+  it.instance("accepts nullable selectors from strict tool transports", () => Effect.gen(function* () {
+    if (process.platform !== "darwin") return
+    const capture = yield* Tool.init(yield* ComputerCaptureTool)
+    using os = desktop()
+    const ctx = context()
+    yield* capture.execute({ region: null, windowID: null }, ctx)
+    yield* capture.execute({ region: null, windowID: 42 }, ctx)
+    yield* capture.execute({ region: { x: 0, y: 0, width: 100, height: 80 }, windowID: null }, ctx)
+    const commands = os.state.commands.filter((command) => command[0] === "/usr/sbin/screencapture")
+    expect(commands[0]).toContain("-m")
+    expect(commands[1]).toContain("42")
+    expect(commands[2]).toContain("0,0,100,80")
+    const count = os.state.commands.length
+    expect((yield* Effect.exit(capture.execute({ region: null, windowID: 0 }, ctx)))._tag).toBe("Failure")
+    expect(os.state.commands).toHaveLength(count)
+  }))
+
   it.instance("binds capture to session, consumes once and rejects foreground changes", () => Effect.gen(function* () {
     if (process.platform !== "darwin") return
     const capture = yield* Tool.init(yield* ComputerCaptureTool)

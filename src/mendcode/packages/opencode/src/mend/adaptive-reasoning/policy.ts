@@ -10,7 +10,7 @@ export const AdaptivePolicySchema = z.object({
   version: z.literal(1),
   mode: z.enum(["off", "shadow", "adaptive"]),
   remoteProcessing: z.boolean(),
-  provider: z.literal("openrouter"),
+  provider: z.enum(["openrouter", "vercel-ai-gateway"]),
   maxLeaseSteps: lease,
   maxDecisionsPerTurn: z.number().int().min(1).max(20),
   failureMode: z.enum(["pause", "baseline"]),

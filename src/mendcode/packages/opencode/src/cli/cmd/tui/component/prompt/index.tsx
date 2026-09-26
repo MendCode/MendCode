@@ -3393,6 +3393,34 @@ export function Prompt(props: PromptProps) {
     render?: JSX.Element
     bold?: boolean
     separatorBefore?: boolean
+    breakBefore?: boolean
+  }
+
+  function PromptStatusLines(props: { segments: PromptStatusSegment[] }) {
+    const rows = createMemo(() => {
+      const result: PromptStatusSegment[][] = []
+      for (const segment of props.segments) {
+        if (!result.length || segment.breakBefore) result.push([])
+        result[result.length - 1].push(segment)
+      }
+      return result
+    })
+    return (
+      <box flexDirection="column" gap={0} flexShrink={1}>
+        <For each={rows()}>{(row) => (
+          <box flexDirection="row" gap={0}>
+            <For each={row}>{(segment) => (
+              <>
+                <Show when={segment.separatorBefore && !segment.breakBefore}>
+                  <text fg={theme.textMuted} wrapMode="none">{promptStatusSeparator()}</text>
+                </Show>
+                <PromptStatusSegmentText segment={segment} />
+              </>
+            )}</For>
+          </box>
+        )}</For>
+      </box>
+    )
   }
 
   function PromptStatusSegmentText(props: { segment: PromptStatusSegment }) {
@@ -3682,13 +3710,14 @@ export function Prompt(props: PromptProps) {
     if (scriptOutput?.segments?.length) {
       const separatorBefore = base.length > 0
       const next = scriptOutput.segments
-        .filter((item): item is { text: string; fg?: string; bold?: boolean } =>
+        .filter((item) =>
           Boolean(item.text.trim() && !isTransientPromptStatusText(item.text)),
         )
         .map((item, index: number) => ({
           text: item.text,
           fg: resolvePromptStatusScriptColor(item.fg),
           bold: item.bold,
+          breakBefore: item.breakBefore,
           separatorBefore: index === 0 ? separatorBefore : false,
         }))
       if (script?.prepend) base.unshift(...next)
@@ -4570,38 +4599,12 @@ export function Prompt(props: PromptProps) {
               >
                 <box flexDirection="row" gap={1} flexShrink={1}>
                   <Show when={promptStatusLeftSegments().length} fallback={<box height={1} />}>
-                    <box flexDirection="row" gap={0}>
-                      <For each={promptStatusLeftSegments()}>
-                        {(segment, index) => (
-                          <>
-                            <Show when={segment.separatorBefore}>
-                              <text fg={theme.textMuted} wrapMode="none">
-                                {promptStatusSeparator()}
-                              </text>
-                            </Show>
-                            <PromptStatusSegmentText segment={segment} />
-                          </>
-                        )}
-                      </For>
-                    </box>
+                    <PromptStatusLines segments={promptStatusLeftSegments()} />
                   </Show>
                 </box>
                 <box flexDirection="row" gap={1} alignItems="center" flexShrink={0}>
                   <Show when={promptStatusRightSegments().length}>
-                    <box flexDirection="row" gap={0}>
-                      <For each={promptStatusRightSegments()}>
-                        {(segment, index) => (
-                          <>
-                            <Show when={segment.separatorBefore}>
-                              <text fg={theme.textMuted} wrapMode="none">
-                                {promptStatusSeparator()}
-                              </text>
-                            </Show>
-                            <PromptStatusSegmentText segment={segment} />
-                          </>
-                        )}
-                      </For>
-                    </box>
+                    <PromptStatusLines segments={promptStatusRightSegments()} />
                   </Show>
                   <Show when={hasRightContent()}>
                     <box flexDirection="row" gap={1} alignItems="center">
@@ -4703,20 +4706,7 @@ export function Prompt(props: PromptProps) {
               </Match>
               <Match when={promptStatusUsesOuterMeta() && promptStatusLeftSegments().length}>
                 <box paddingLeft={promptOuterMetaPadLeft()} flexDirection="row" gap={1}>
-                  <box flexDirection="row" gap={0}>
-                    <For each={promptStatusLeftSegments()}>
-                      {(segment, index) => (
-                        <>
-                          <Show when={segment.separatorBefore}>
-                            <text fg={theme.textMuted} wrapMode="none">
-                              {promptStatusSeparator()}
-                            </text>
-                          </Show>
-                          <PromptStatusSegmentText segment={segment} />
-                        </>
-                      )}
-                    </For>
-                  </box>
+                  <PromptStatusLines segments={promptStatusLeftSegments()} />
                 </box>
               </Match>
               <Match when={true}>{props.hint ?? <text />}</Match>
@@ -4738,20 +4728,7 @@ export function Prompt(props: PromptProps) {
                     <Switch>
                       <Match when={store.mode === "normal" && promptStatusUsesOuterMeta()}>
                         <Show when={promptStatusOuterRightSegments().length}>
-                          <box flexDirection="row" gap={0}>
-                            <For each={promptStatusOuterRightSegments()}>
-                              {(segment, index) => (
-                                <>
-                                  <Show when={segment.separatorBefore}>
-                                    <text fg={theme.textMuted} wrapMode="none">
-                                      {promptStatusSeparator()}
-                                    </text>
-                                  </Show>
-                                  <PromptStatusSegmentText segment={segment} />
-                                </>
-                              )}
-                            </For>
-                          </box>
+                          <PromptStatusLines segments={promptStatusOuterRightSegments()} />
                         </Show>
                         <For each={footerEntries()}>{(item) => item.render() as any}</For>
                       </Match>
