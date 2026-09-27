@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.1.44-beta.19 - 2026-09-26
+
+### Added
+
+- Allow prompt status scripts to render multiline footers by returning explicit
+  `rows` (up to four); legacy JSON and text output stays single-line.
+- Support Vercel AI Gateway as an adaptive reasoning evaluator provider next to
+  OpenRouter.
+
+### Fixed
+
+- Accept `null` for the `computer_capture` `region` and `windowID` arguments so
+  strict tool transports that require every key can capture the main display.
+
 ## 0.1.44-beta.18 - 2026-09-23
 
 ### Fixed

@@ -24,18 +24,21 @@ export async function nativeComputerCommand(command: string[], signal: AbortSign
 }
 
 const Parameters = Schema.Struct({
-  region: Schema.optional(Schema.Struct({ x: Schema.Number, y: Schema.Number, width: Schema.Number, height: Schema.Number })).annotate({ description: "Optional crop in native screen points; cannot be combined with windowID." }),
-  windowID: Schema.optional(Schema.Number).annotate({ description: "Optional known macOS window ID; omit to capture the main display." }),
+  region: Schema.optional(Schema.NullOr(Schema.Struct({ x: Schema.Number, y: Schema.Number, width: Schema.Number, height: Schema.Number }))).annotate({ description: "Crop in native screen points, or null/omitted. Use null when capturing a window; never combine two non-null selectors." }),
+  windowID: Schema.optional(Schema.NullOr(Schema.Number)).annotate({ description: "Known positive macOS window ID, or null/omitted. For the main display, set both region and windowID to null. Never use 0 as an absent ID." }),
 })
 
 export const ComputerCaptureTool = Tool.define("computer_capture", Effect.succeed({
   description: "Take and immediately view a native screenshot on macOS. Captures the main display or a known window ID, returns a PNG attachment plus an absolute file path for read. Resizes the preview to at most 1600 pixels. Requires OS Screen Recording permission; does not grant it automatically. Other operating systems are currently unsupported.",
   parameters: Parameters,
   execute: (args: typeof Parameters.Type, ctx: Tool.Context) => Effect.gen(function* () {
+    // Strict tool transports may require every key: null represents absence.
+    const region = args.region ?? undefined
+    const windowID = args.windowID ?? undefined
     if (process.platform !== "darwin") throw new Error("Native computer capture is currently supported only on macOS. Use a configured computer/browser MCP service on this platform.")
-    if (args.windowID !== undefined && (!Number.isSafeInteger(args.windowID) || args.windowID <= 0)) throw new Error("windowID must be a positive integer")
-    if (args.region && (args.windowID !== undefined || !Object.values(args.region).every(Number.isSafeInteger) || args.region.width < 1 || args.region.height < 1 || args.region.width > 16384 || args.region.height > 16384)) throw new Error("Use an integer crop with positive dimensions up to 16384, or a window ID, not both")
-    yield* ctx.ask({ permission: "computer_capture", patterns: [args.windowID ? `window:${args.windowID}` : "main-display"], always: ["*"], metadata: { surface: args.windowID ?? "main-display" } })
+    if (windowID !== undefined && (!Number.isSafeInteger(windowID) || windowID <= 0)) throw new Error("windowID must be a positive integer")
+    if (region && (windowID !== undefined || !Object.values(region).every(Number.isSafeInteger) || region.width < 1 || region.height < 1 || region.width > 16384 || region.height > 16384)) throw new Error("Use an integer crop with positive dimensions up to 16384, or a window ID, not both")
+    yield* ctx.ask({ permission: "computer_capture", patterns: [windowID ? `window:${windowID}` : "main-display"], always: ["*"], metadata: { surface: windowID ?? "main-display" } })
     const directory = path.join(Global.Path.cache, "computer", ctx.sessionID)
     const id = crypto.randomUUID()
     const filePath = path.join(directory, `${id}.png`)
@@ -43,13 +46,13 @@ export const ComputerCaptureTool = Tool.define("computer_capture", Effect.succee
     yield* Effect.promise(async () => {
       const displays = await nativeComputerCommand(["/usr/sbin/system_profiler", "SPDisplaysDataType", "-json"], ctx.abort).catch(() => "{}")
       const displayCount = (JSON.parse(displays).SPDisplaysDataType ?? []).reduce((sum: number, gpu: { spdisplays_ndrvs?: unknown[] }) => sum + (gpu.spdisplays_ndrvs?.length ?? 0), 0)
-      if (args.windowID === undefined && !args.region && displayCount === 1) {
+      if (windowID === undefined && !region && displayCount === 1) {
         const value = await nativeComputerCommand(["/usr/bin/osascript", "-e", FRONTMOST], ctx.abort).catch(() => "")
         if (/^\d+$/.test(value)) observedPID = Number(value)
       }
       await mkdir(directory, { recursive: true, mode: 0o700 })
       if ((await readdir(directory)).filter((name) => name.endsWith(".png")).length >= 64) throw new Error("This session reached its 64 screenshot artifact limit. Archive or remove its cached captures before continuing.")
-      await nativeComputerCommand(["/usr/sbin/screencapture", "-x", ...(args.region ? ["-R", `${args.region.x},${args.region.y},${args.region.width},${args.region.height}`] : args.windowID ? ["-l", String(args.windowID)] : ["-m"]), filePath], ctx.abort)
+      await nativeComputerCommand(["/usr/sbin/screencapture", "-x", ...(region ? ["-R", `${region.x},${region.y},${region.width},${region.height}`] : windowID ? ["-l", String(windowID)] : ["-m"]), filePath], ctx.abort)
       await nativeComputerCommand(["/usr/bin/sips", "-Z", "1600", filePath], ctx.abort)
       if (observedPID !== undefined) {
         const after = await nativeComputerCommand(["/usr/bin/osascript", "-e", FRONTMOST], ctx.abort).catch(() => "")

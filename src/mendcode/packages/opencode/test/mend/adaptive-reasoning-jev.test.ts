@@ -41,6 +41,21 @@ describe("Jev isolated HTTP contract", () => {
     } finally { await server.stop(true) }
   })
 
+  test("uses the Pi Gateway binding without OpenRouter routing or model fallback", async () => {
+    const input = { ...base(), policy: { ...base().policy, provider: "vercel-ai-gateway" as const } }
+    const decision = await evaluateJev({ ...input, fetch: async (url, init) => {
+      expect(url).toBe("https://ai-gateway.vercel.sh/v1/evaluate")
+      const body = JSON.parse(String(init.body))
+      expect(body.model).toBe("typesafe-ai/jev")
+      expect(body.provider).toBeUndefined()
+      expect(body.providerOptions).toEqual({ gateway: { only: ["typesafe-ai"] } })
+      return Response.json({ model: "typesafe-ai/jev", answers: result.answers, usage: { inputTokens: 8, outputTokens: 2 } })
+    } })
+    expect(decision.effort).toBe("high")
+    expect(decision.usage).toEqual({ inputTokens: 8, outputTokens: 2, cost: undefined })
+    await expect(evaluateJev({ ...input, fetch: async () => Response.json(result) })).rejects.toMatchObject({ code: "response" })
+  })
+
   test("off, missing consent, missing credential, stale revision and denied budget send nothing", async () => {
     let calls = 0
     const transport = async () => { calls++; return Response.json(result) }

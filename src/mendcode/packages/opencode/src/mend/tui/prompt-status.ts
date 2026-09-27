@@ -96,6 +96,7 @@ export type MendPromptStatusScriptSegment = {
   text: string
   fg?: string
   bold?: boolean
+  breakBefore?: boolean
 }
 
 export type MendPromptStatusScriptOutput = {
@@ -398,6 +399,23 @@ function parseScriptOutput(text: string): MendPromptStatusScriptOutput {
   if (trimmed.startsWith("[") || trimmed.startsWith("{")) {
     try {
       const parsed = JSON.parse(trimmed) as unknown
+      // Explicit rows opt into multiline output; legacy JSON/TSV stays single-line.
+      if (parsed && typeof parsed === "object" && "rows" in parsed && Array.isArray(parsed.rows)) {
+        const segments: MendPromptStatusScriptSegment[] = []
+        for (const row of parsed.rows.slice(0, 4)) {
+          if (!Array.isArray(row)) continue
+          const items = row.slice(0, 32).flatMap((item): MendPromptStatusScriptSegment[] => {
+            if (!item || typeof item !== "object" || typeof item.text !== "string") return []
+            const text = item.text.replace(/[\x00-\x1f\x7f]/g, " ").slice(0, 240)
+            if (!text.trim()) return []
+            return [{ text, fg: typeof item.fg === "string" ? item.fg : undefined, bold: item.bold === true }]
+          })
+          if (!items.length) continue
+          if (segments.length) items[0].breakBefore = true
+          segments.push(...items)
+        }
+        return { text: segments.map((item) => `${item.breakBefore ? "\n" : ""}${item.text}`).join(""), segments }
+      }
       const rawSegments = Array.isArray(parsed)
         ? parsed
         : parsed && typeof parsed === "object" && "segments" in parsed && Array.isArray((parsed as any).segments)
@@ -437,7 +455,7 @@ function parseScriptOutput(text: string): MendPromptStatusScriptOutput {
   return { text: normalizeScriptText(trimmed) }
 }
 
-export async function readPromptStatusScript(input: MendPromptStatusScriptInput) {
+export async function readPromptStatusScript(input: MendPromptStatusScriptInput): Promise<MendPromptStatusScriptOutput> {
   const key = JSON.stringify(input)
   const warmKey = warmCacheKey(input)
   const now = Date.now()
@@ -478,6 +496,7 @@ export async function readPromptStatusScript(input: MendPromptStatusScriptInput)
       MEND_TUI_AGENTS_HINT: input.agentsHint || "",
       MEND_TUI_PROMPT_PRESET: input.preset,
       MEND_TUI_STATUS_SIDE: input.side,
+      MEND_TUI_STATUS_FORMAT: "rows-v1",
       MEND_TUI_STATUS_PREPEND: input.prepend ? "1" : "0",
       MEND_TUI_STATUS_REFRESH_KEY: String(input.refreshKey ?? 0),
     },

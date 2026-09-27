@@ -399,6 +399,21 @@ describe("mend tui prompt chrome", () => {
     expect(result.text).toBe("Build")
   })
 
+  test("preserves explicit status rows, colors and bounded content", async () => {
+    const rows = [[{ text: "ASTRA", fg: "accent", bold: true }], [], [{ text: "quota\n█" }], [{ text: "GRAFT" }], [{ text: "hidden" }]]
+    const result = await readPromptStatusScript({
+      command: `printf '%s' '${JSON.stringify({ rows })}'`,
+      root: process.cwd(), promptMode: "custom", model: "", provider: "",
+      preset: "top-bottom", side: "left", prepend: false, timeoutMs: 1000,
+    })
+    expect(result.text).toBe("ASTRA\nquota █\nGRAFT")
+    expect(result.segments).toEqual([
+      { text: "ASTRA", fg: "accent", bold: true },
+      { text: "quota █", fg: undefined, bold: false, breakBefore: true },
+      { text: "GRAFT", fg: undefined, bold: false, breakBefore: true },
+    ])
+  })
+
   test("calculates the current prompt cache ratio and hides cache misses", () => {
     expect(resolvePromptCachePercent({ input: 5000, cache: { read: 5000, write: 0 } })).toBe(50)
     expect(resolvePromptCachePercent({ input: 100, cache: { read: 100, write: 50 } })).toBe(40)

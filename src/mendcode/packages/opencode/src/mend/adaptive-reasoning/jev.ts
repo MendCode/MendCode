@@ -3,8 +3,10 @@ import { z } from "zod"
 import { AdaptivePolicySchema, type AdaptivePolicy } from "./policy"
 import { redactEvaluatorText, type EvaluatorContext } from "./context"
 
-const endpoint = "https://openrouter.ai/api/alpha/decisions"
-const model = "typesafe/jev-1.13"
+const bindings = {
+  openrouter: { endpoint: "https://openrouter.ai/api/alpha/decisions", model: "typesafe/jev-1.13" },
+  "vercel-ai-gateway": { endpoint: "https://ai-gateway.vercel.sh/v1/evaluate", model: "typesafe-ai/jev" },
+} as const
 const efforts = {
   low: "A clear next step with little uncertainty or comparison.",
   medium: "Focused analysis of connected facts and a bounded decision.",
@@ -29,6 +31,20 @@ const responseSchema = z.object({
   }).optional(),
 })
 
+const gatewayResponseSchema = z.object({
+  model: z.literal("typesafe-ai/jev"),
+  answers: z.object({ effort: answer, lease: answer }),
+  usage: z.object({
+    inputTokens: z.number().int().nonnegative().optional(),
+    outputTokens: z.number().int().nonnegative().optional(),
+    cost: z.number().finite().nonnegative().optional(),
+  }).optional(),
+}).transform((data) => ({
+  model: data.model,
+  answers: data.answers,
+  usage: data.usage && { input_tokens: data.usage.inputTokens, output_tokens: data.usage.outputTokens, cost: data.usage.cost },
+}))
+
 export type JevDecision = {
   effort: string
   leaseSteps: 1 | 2 | 5
@@ -44,7 +60,7 @@ export class JevError extends Error {
   }
 }
 
-export function jevRequest(context: EvaluatorContext, supportedEfforts: readonly string[], maxLeaseSteps: AdaptivePolicy["maxLeaseSteps"]) {
+export function jevRequest(context: EvaluatorContext, supportedEfforts: readonly string[], maxLeaseSteps: AdaptivePolicy["maxLeaseSteps"], provider: AdaptivePolicy["provider"] = "openrouter") {
   const parsed = contextSchema.safeParse(context)
   if (!parsed.success || Buffer.byteLength(context.goal) > 8_192 || Buffer.byteLength(context.progress) > 4_096 ||
     context.tools.some((tool) => Buffer.byteLength(tool.name) > 128 || Buffer.byteLength(tool.result) > 2_048)) throw new JevError("context")
@@ -55,8 +71,10 @@ export function jevRequest(context: EvaluatorContext, supportedEfforts: readonly
     tools: parsed.data.tools.map((tool) => ({ name: redactEvaluatorText(tool.name), result: redactEvaluatorText(tool.result) })),
   }
   const body = JSON.stringify({
-    model, state,
-    provider: { only: ["typesafe"], allow_fallbacks: false },
+    model: bindings[provider].model, state,
+    ...(provider === "vercel-ai-gateway"
+      ? { providerOptions: { gateway: { only: ["typesafe-ai"] } } }
+      : { provider: { only: ["typesafe"], allow_fallbacks: false } }),
     questions: {
       effort: {
         type: "choice",
@@ -129,7 +147,8 @@ export async function evaluateJev(input: {
   if (!policy.success || policy.data.mode === "off" || !policy.data.remoteProcessing) throw new JevError("consent")
   if (!input.apiKey || /\s/.test(input.apiKey)) throw new JevError("credential")
   const supportedEfforts = [...input.supportedEfforts]
-  const body = jevRequest(input.context, supportedEfforts, policy.data.maxLeaseSteps)
+  const binding = bindings[policy.data.provider]
+  const body = jevRequest(input.context, supportedEfforts, policy.data.maxLeaseSteps, policy.data.provider)
   // A known credential cannot cross the boundary even when a caller bypasses projection.
   if (body.includes(input.apiKey)) throw new JevError("context")
   const controller = new AbortController()
@@ -146,7 +165,7 @@ export async function evaluateJev(input: {
       await current()
       if (!await withAbort(input.admitAttempt(signal), signal)) throw new JevError("budget")
       await current()
-      const response = await (input.fetch ?? fetch)(endpoint, {
+      const response = await (input.fetch ?? fetch)(binding.endpoint, {
         method: "POST", headers: { authorization: `Bearer ${input.apiKey}`, "content-type": "application/json" },
         body, signal, redirect: "error",
       })
@@ -160,7 +179,8 @@ export async function evaluateJev(input: {
         await delay(ms, undefined, { signal })
         continue
       }
-      const parsed = responseSchema.safeParse(await readResponse(response))
+      const schema = policy.data.provider === "vercel-ai-gateway" ? gatewayResponseSchema : responseSchema
+      const parsed = schema.safeParse(await readResponse(response))
       await current()
       if (!parsed.success) throw new JevError("response")
       const effort = parsed.data.answers.effort.choice
