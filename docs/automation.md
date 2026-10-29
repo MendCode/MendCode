@@ -271,6 +271,13 @@ standing (loops, workflows, Dream, a scheduled usage resume, channels, remote pe
 keep it. `run` and the user service stay up. `status` and `logs` never start one. Logs are bounded to 128 KiB per stream and
 1–1000 lines (`--lines`, default 100), redact recognized secrets and omit terminal controls. JSON retains the CLI envelope.
 
+The daemon's `PATH` is completed when it starts, however it was started (a terminal, `env -i`, launchd's
+`/usr/bin:/bin:/usr/sbin:/sbin`, systemd): the folders it was given stay first, then the usual install folders that exist
+(`/opt/homebrew/bin` and `/usr/local/bin` on macOS; Linuxbrew, `/usr/local/bin` and `/snap/bin` on Linux; `~/.local/bin`; the
+system ones), then the folders of your login shell's `PATH` (`$SHELL -l -i -c`, read in the background, 5 seconds at most). Only
+`PATH` is read from that shell; no other variable is copied. So `gh`, `git`, `claude` and `codex` installed with Homebrew are
+found by a daemon an agent restarted with a short `PATH`.
+
 `daemon service plan|install|start|stop|restart|status|logs|uninstall` manages one fixed user service, shared by loops
 and Dream. macOS uses launchd; Linux uses systemd user units. Install enables login startup without starting immediately;
 start is explicit. `--dir D`, `--cwd PROJECT`, `--engine ENGINE` and `--service-dir D` configure its binding.

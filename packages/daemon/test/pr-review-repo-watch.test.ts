@@ -10,7 +10,7 @@ import type { GhRun } from "../src/pr-watch"
 import { gitRun } from "../src/pr-review/context"
 import type { ReviewSessionFactory } from "../src/pr-review/engine"
 import type { GhCall } from "../src/pr-review/publish"
-import { createRepoWatch, MAX_CONCURRENT_REVIEWS, PUBLISHER_RETRY_MS, type RepoWatchJob } from "../src/pr-review/repo-watch"
+import { createRepoWatch, MAX_CONCURRENT_REVIEWS, PAUSE_RETRY_MS, PUBLISHER_RETRY_MS, type RepoWatchJob } from "../src/pr-review/repo-watch"
 import { createPrReviewService } from "../src/pr-review/service"
 import { createReviewSessions, reviewMessage } from "../src/pr-review/sessions"
 
@@ -617,5 +617,88 @@ describe("cooldown and roles", () => {
     gh.state.prs.push({ number: 6, headRefOid: sha(6) })
     await watch.tick()
     expect(jobs.map((job) => job.number)).toEqual([6])
+  })
+})
+
+describe("a paused watch", () => {
+  /** A watch on `dir` whose clock the test moves; it records every job and notice. */
+  function paused({ dir = temp("pr-review-pause-"), clock = { now: 0 } } = {}) {
+    const gh = fakeList()
+    const jobs: RepoWatchJob[] = []
+    const notices: string[] = []
+    const watch = createRepoWatch({
+      dir, run: gh.run, intervalMs: 3_600_000, now: () => clock.now, enabled: () => true, sessionExists: () => true, notify: (_session, text) => notices.push(text),
+      triggers: async () => ({ opened: true, synchronize: true, ready_for_review: true, drafts: false }),
+      start: async (job) => { jobs.push(job) },
+    })
+    cleanups.push(() => watch.stop())
+    return { watch, gh, jobs, notices, clock, dir }
+  }
+  const missing = { code: 127, err: "Executable not found in $PATH: \"gh\"" }
+
+  test("gh missing from the daemon's PATH (seen live after a restart): the watch resumes by itself, and the PR opened, the push and the @mendcode comment of the pause all run", async () => {
+    const p = paused()
+    p.gh.state.prs = [{ number: 2, headRefOid: sha(2) }]
+    await p.watch.watchRepo("ses_a", "/repo")
+    p.gh.state.fail = missing
+    p.clock.now = 60_000
+    await p.watch.tick()
+    expect(p.notices).toHaveLength(1)
+    expect(p.notices[0]).toContain("paused: gh is not installed or not on PATH")
+    expect(p.notices[0]).toContain("resumes by itself")
+    // While gh is missing: a new PR, a push to #2 and a review request; nothing is lost, nothing is said twice.
+    p.gh.state.prs = [{ number: 2, headRefOid: sha(22) }, { number: 7, headRefOid: sha(7) }]
+    p.gh.state.comments = [{ id: 6508154855, body: "@mendcode review", user: "eden", html_url: "https://github.com/acme/app/pull/2#issuecomment-6508154855" }]
+    p.clock.now += PAUSE_RETRY_MS
+    await p.watch.tick()
+    expect(p.notices).toHaveLength(1)
+    expect(p.jobs).toEqual([])
+    // gh is back: before the next retry is due nothing runs; at it the watch resumes and catches up.
+    p.gh.state.fail = undefined
+    p.clock.now += PAUSE_RETRY_MS - 1
+    await p.watch.tick()
+    expect(p.jobs).toEqual([])
+    p.clock.now += 1
+    await p.watch.tick()
+    await Bun.sleep(5)
+    expect(p.notices[1]).toContain("resumed after 10 minutes paused (gh is not installed or not on PATH)")
+    expect(p.jobs.map((job) => [job.kind, job.number, job.head, job.trigger])).toEqual([["review", 2, sha(22), "synchronize"], ["review", 7, sha(7), "opened"], ["command", 2, sha(22), "comment"]])
+    expect(p.watch.describe()).toContain("watching")
+    await p.watch.tick()
+    await Bun.sleep(5)
+    expect(p.jobs).toHaveLength(3)
+  })
+
+  test("a watch saved paused tries gh at the daemon's first tick after a restart, keeping its cursor and kept commands", async () => {
+    const before = paused()
+    before.gh.state.prs = [{ number: 2, headRefOid: sha(2) }]
+    await before.watch.watchRepo("ses_a", "/repo")
+    before.gh.state.fail = missing
+    await before.watch.tick()
+    before.watch.stop()
+    const after = paused({ dir: before.dir, clock: before.clock })
+    expect(after.watch.describe()).toContain("paused (gh is not installed or not on PATH)")
+    after.gh.state.prs = [{ number: 2, headRefOid: sha(2) }]
+    after.gh.state.comments = [{ id: 9, body: "@mendcode review", user: "eden", html_url: "https://github.com/acme/app/pull/2#issuecomment-9" }]
+    await after.watch.tick()
+    await Bun.sleep(5)
+    expect(after.notices[0]).toContain("resumed")
+    expect(after.jobs.map((job) => [job.kind, job.number])).toEqual([["command", 2]])
+  })
+
+  test("/pr watch-repo on a paused watch tries at once and keeps what it saw: a PR opened during the pause is reviewed, not taken as the baseline", async () => {
+    const p = paused()
+    p.gh.state.prs = [{ number: 2, headRefOid: sha(2) }]
+    await p.watch.watchRepo("ses_a", "/repo", "all")
+    p.gh.state.fail = missing
+    await p.watch.tick()
+    expect(await p.watch.watchRepo("ses_a", "/repo", "all")).toEqual({ ok: false, message: "could not list pull requests: gh is not installed or not on PATH" })
+    p.gh.state.fail = undefined
+    p.gh.state.prs = [{ number: 2, headRefOid: sha(2) }, { number: 7, headRefOid: sha(7) }]
+    const again = await p.watch.watchRepo("ses_a", "/repo", "all")
+    expect(again.ok && again.text).toContain("it was paused (gh is not installed or not on PATH)")
+    await Bun.sleep(5)
+    expect(p.jobs.map((job) => [job.number, job.trigger])).toEqual([[7, "opened"]])
+    expect(p.watch.describe().split("\n")).toHaveLength(1)
   })
 })

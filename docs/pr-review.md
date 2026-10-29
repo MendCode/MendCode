@@ -99,7 +99,11 @@ instruction files (`AGENTS.md`, `CLAUDE.md`, yours or the PR's): the review prom
 reviewer, and a user skill once sent a child to files outside the checkout, so its read was refused as a whole. A read outside the
 checkout is refused with what may be read instead. A push reviews only the commits since the last reviewed head (the whole PR after a force push) and re-checks the
 published findings whose lines it rewrote: one that no longer reproduces gets its thread resolved. A missing or logged-out `gh`
-pauses the watch with one notice; 15 unreadable minutes end it.
+pauses the watch with one notice. A paused watch tries again every 5 minutes, and at the first tick after the daemon starts, and
+resumes by itself with a second notice; `/pr watch-repo` tries at once. It keeps what it saw, so the PRs opened, the heads pushed
+and the `@mendcode` comments written during the pause (every page of them) are handled when it resumes, not taken as a new
+baseline. Before, a paused watch waited for `/pr watch-repo`, which took the PRs open at that moment as the baseline. 15 unreadable
+minutes end a watch that is not paused.
 
 Every notice (a review's findings, a failure, an `@mendcode` comment that was not answered and why) goes to the session only while
 it is free, so it never cuts into your turn or your queue. One that arrives during a turn, behind queued messages, after a cancel or

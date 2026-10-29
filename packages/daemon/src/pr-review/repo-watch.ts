@@ -1,6 +1,7 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
 import path from "node:path"
 import { z } from "zod"
+import { NO_GH } from "../git-pr"
 import { ghProcess, UNREADABLE_LIMIT_MS, WATCH_INTERVAL_MS, type GhRun } from "../pr-watch"
 import { parsePrCommand, type CommandComment, type PrCommand } from "./commands"
 
@@ -9,7 +10,9 @@ import { parsePrCommand, type CommandComment, type PrCommand } from "./commands"
  * minute and queues a review only for a PR it has not seen or a head that moved, so an idle repository costs no model call. At most
  * two reviews run at once per daemon; the rest wait in order. PRs already open when the watch starts are the baseline (`/pr review
  * N` reviews one of them). Drafts wait until they are ready unless the repo config's `triggers.drafts` says otherwise. A missing or
- * logged-out `gh` pauses the watch with one notice; a repository unreadable for 15 minutes ends it, as `pr_watch` does.
+ * logged-out `gh` pauses the watch with one notice; it tries again every 5 minutes (and at the daemon's first tick) and resumes by
+ * itself, keeping what it saw, so the PRs, pushes and comments of the pause are read then. A repository unreadable for 15 minutes
+ * ends it, as `pr_watch` does.
  *
  * Two limits keep a busy repository from spending without end (`cooldown` in the repo config): a PR is reviewed again only after
  * `pr_minutes`, and then once, at its newest head; and a repository starts at most `repo_per_hour` automatic reviews. A watch has a
@@ -58,7 +61,10 @@ const Watch = z.object({
   publish: z.enum(["allowed", "denied"]).optional(),
   /** The question was asked; it is asked once. */
   asked: z.boolean().optional(),
+  /** Why gh cannot list the PRs (missing, logged out); the watch tries again every `PAUSE_RETRY_MS` and resumes by itself. */
   paused: z.string().optional(),
+  /** When it paused, for the notice that it resumed. */
+  pausedAt: z.number().optional(),
   unreadableSince: z.number().optional(),
   ended: z.object({ at: z.number(), reason: z.string() }).optional(),
   /** Comments updated after this ISO time are read for `@mendcode` commands. */
@@ -87,6 +93,8 @@ const MAX_QUEUE = 50
 const MAX_COMMANDS = 100
 /** A command the repository did not let this login answer is tried again this often (`publishers` is cached as long). */
 export const PUBLISHER_RETRY_MS = 600_000
+/** A paused watch lists its PRs again this often, and once at the first tick after the daemon starts (gh may be there now). */
+export const PAUSE_RETRY_MS = 300_000
 
 export type RepoWatchOptions = {
   dir: string
@@ -126,6 +134,8 @@ export function createRepoWatch(options: RepoWatchOptions) {
   let timer: ReturnType<typeof setInterval> | undefined
   let ticking = false
   let stopped = false
+  /** When each paused watch last tried gh in this process; one not tried yet is due. */
+  const pauseTried = new Map<RepoWatchRecord, number>()
 
   function load(): RepoWatchRecord[] {
     try {
@@ -168,7 +178,7 @@ export function createRepoWatch(options: RepoWatchOptions) {
   }
   const active = (watch: RepoWatchRecord) => !watch.ended && !watch.paused
   function arm() {
-    const needed = !stopped && watches.some(active)
+    const needed = !stopped && watches.some((watch) => !watch.ended)
     if (needed && !timer) { timer = setInterval(() => void tick(), interval); timer.unref?.() }
     if (!needed && timer) { clearInterval(timer); timer = undefined }
   }
@@ -216,7 +226,8 @@ export function createRepoWatch(options: RepoWatchOptions) {
     const answered = new Set(watch.answered ?? [])
     let complete = true
     for (const [endpoint, jq] of [["issues/comments", ISSUE_COMMENTS], ["pulls/comments", REVIEW_COMMENTS]] as const) {
-      const done = await run({ argv: ["api", `repos/{owner}/{repo}/${endpoint}?since=${since}&per_page=100`, "--jq", jq], cwd: watch.directory })
+      // Every page: after a long pause more than 100 comments can be newer than `since`, and only one page was read before.
+      const done = await run({ argv: ["api", `repos/{owner}/{repo}/${endpoint}?since=${since}&per_page=100`, "--paginate", "--jq", jq], cwd: watch.directory })
       if (done.code !== 0) { complete = false; continue }
       for (const line of done.out.split("\n")) {
         let item: z.infer<typeof PolledComment>
@@ -241,7 +252,7 @@ export function createRepoWatch(options: RepoWatchOptions) {
 
   async function list(directory: string): Promise<{ ok: true; prs: Listed } | { ok: false; auth: boolean; reason: string }> {
     const result = await run({ argv: ["pr", "list", "--state", "open", "--limit", "100", "--json", "number,headRefOid,isDraft,updatedAt,reviewRequests,assignees"], cwd: directory })
-    if (result.code === 127) return { ok: false, auth: true, reason: "gh is not installed or not on PATH" }
+    if (result.code === 127) return { ok: false, auth: true, reason: NO_GH }
     if (result.code !== 0) {
       const line = result.err.split("\n").find((entry) => entry.trim())?.slice(0, 160) ?? `gh exited with ${result.code}`
       return { ok: false, auth: /auth|log ?in|token|credentials|HTTP 401/i.test(result.err), reason: line }
@@ -286,12 +297,27 @@ export function createRepoWatch(options: RepoWatchOptions) {
     watch.commands = kept
   }
 
+  const retryDue = (watch: RepoWatchRecord) => !watch.ended && !!watch.paused && now() - (pauseTried.get(watch) ?? -Infinity) >= PAUSE_RETRY_MS
+  const pauseText = (watch: RepoWatchRecord, reason: string) => `The PR review watch of ${watch.directory} is paused: ${reason}. ${reason === NO_GH ? "Install gh or put its folder on the daemon's PATH" : "Log gh in (gh auth login)"}; the watch tries again every ${Math.round(PAUSE_RETRY_MS / 60_000)} minutes and resumes by itself, and /pr watch-repo tries now. Pull requests and @mendcode comments from the pause are read then, none is lost.`
+  /** A paused watch that listed its PRs again: what was kept (heads, comment time, kept commands) carries the pause's events over. */
+  function resume(watch: RepoWatchRecord) {
+    if (!watch.paused) return
+    const minutes = watch.pausedAt === undefined ? undefined : Math.max(1, Math.round((now() - watch.pausedAt) / 60_000))
+    options.notify(watch.sessionId, `The PR review watch of ${watch.directory} resumed${minutes ? ` after ${minutes} minute${minutes === 1 ? "" : "s"}` : ""} paused (${watch.paused}); pull requests and @mendcode comments from the pause are read now.`)
+    delete watch.paused
+    delete watch.pausedAt
+    pauseTried.delete(watch)
+  }
+
   async function poll(watch: RepoWatchRecord) {
     const found = await list(watch.directory)
     if (!found.ok) {
+      if (watch.paused) { pauseTried.set(watch, now()); return }
       if (found.auth) {
         watch.paused = found.reason
-        options.notify(watch.sessionId, `The PR review watch of ${watch.directory} is paused: ${found.reason}. Fix gh (gh auth login) and run /pr watch-repo again.`)
+        watch.pausedAt = now()
+        pauseTried.set(watch, now())
+        options.notify(watch.sessionId, pauseText(watch, found.reason))
         return
       }
       watch.unreadableSince ??= now()
@@ -302,6 +328,7 @@ export function createRepoWatch(options: RepoWatchOptions) {
       return
     }
     delete watch.unreadableSince
+    resume(watch)
     const triggers = await options.triggers(watch.directory).catch((): RepoTriggers => ({ opened: true, synchronize: true, ready_for_review: true, drafts: false }))
     const limits = (await options.limits?.(watch.directory).catch(() => undefined)) ?? NO_LIMITS
     const role = watch.role ?? limits.reviewers
@@ -353,7 +380,7 @@ export function createRepoWatch(options: RepoWatchOptions) {
       if (options.enabled()) for (const watch of [...watches]) {
         if (stopped) break
         if (!options.sessionExists(watch.sessionId)) { watches = watches.filter((item) => item !== watch); continue }
-        if (active(watch)) await poll(watch)
+        if (active(watch) || retryDue(watch)) await poll(watch)
       }
     } finally {
       ticking = false
@@ -384,6 +411,19 @@ export function createRepoWatch(options: RepoWatchOptions) {
       existing.role = role
       save()
       return { ok: true, text: `Watching ${directory}: ${roleText(existing)} from now on.` }
+    }
+    if (existing?.paused) {
+      // Not a new baseline: the PRs opened, the heads pushed and the comments written while it was paused are this poll's events.
+      const reason = existing.paused
+      const login = existing.login ?? await ownLogin(directory)
+      if (role === "requested" && !login) return { ok: false, message: "could not read your gh login (gh api user), which requested reviews are matched against" }
+      if (role) existing.role = role
+      if (login) existing.login = login
+      existing.sessionId = sessionId
+      pauseTried.delete(existing)
+      if (!ticking) { ticking = true; try { await poll(existing) } finally { ticking = false; save(); arm() } }
+      else return { ok: true, text: `${directory} is being read now; the watch resumes by itself if gh works.` }
+      return existing.paused ? { ok: false, message: `could not list pull requests: ${existing.paused}` } : { ok: true, text: `Watching ${directory} again (${roleText(existing)}): it was paused (${reason}); the pull requests and @mendcode comments from the pause are read now.` }
     }
     if (!existing && watches.filter((watch) => !watch.ended).length >= MAX_REPOS) return { ok: false, message: `at most ${MAX_REPOS} repositories are watched at once` }
     const found = await list(directory)

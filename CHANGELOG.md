@@ -9,7 +9,8 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
-Releases are easier to read: a plain title and notes that say what changed.
+The pull request reviewer keeps working when the daemon starts with a short `PATH`, and a paused watch resumes by itself without
+losing the requests made while it was paused.
 
 ### Changed
 
@@ -27,6 +28,14 @@ Releases are easier to read: a plain title and notes that say what changed.
   instead of reading as done the moment it was launched.
 - Claude Code sessions: the first message after esc stopped background agents is answered. Claude Code first answers its own
   notice that those agents did not finish, with an empty result, and that result used to end the message's turn with no reply.
+- The daemon finds `gh`, `git`, `claude` and `codex` installed with Homebrew however it was started. A daemon restarted with a
+  short `PATH` (`env -i`, launchd, systemd) paused every PR review watch on "gh is not installed or not on PATH" while `gh` was in
+  `/opt/homebrew/bin`. At start it now adds the usual install folders that exist and your login shell's `PATH`; only `PATH` is read
+  from that shell.
+- PR review: a watch paused because `gh` is missing or logged out tries again every 5 minutes and at the daemon's first tick, and
+  resumes by itself with a notice. The PRs opened, the pushes and the `@mendcode` comments of the pause are handled then; before, it
+  waited for `/pr watch-repo`, which took the PRs open at that moment as the baseline.
+- PR review: `@mendcode` comments are read page by page, so more than 100 new comments since the last poll no longer drops the rest.
 
 ## v0.0.2-nightly.20261029.2 - 2026-10-29
 

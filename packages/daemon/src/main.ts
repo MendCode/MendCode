@@ -12,6 +12,7 @@ import { PROGRAM_NAME } from "@mendcode/program"
 import { appendFileSync, existsSync } from "node:fs"
 import { logLevel } from "./logging"
 import { dropHostSessionEnv } from "./inherited-env"
+import { completeToolPath } from "./tool-path"
 import { createProviderMetadataAuth } from "./provider-metadata-auth"
 import { homedir } from "node:os"
 import path from "node:path"
@@ -117,6 +118,8 @@ const argv = hosting.argv ?? process.argv
 const logLine = (message: string) => (hosting.log ? hosting.log("info", message) : console.error(message))
 // Before anything is started: what a Claude Code shell left in the environment must not reach the sessions' commands.
 dropHostSessionEnv(process.env)
+// Before gh, git or an engine runs: a daemon started by `env -i`, launchd or systemd has a PATH without the user's install folders.
+void completeToolPath(process.env)
 
 function arg(name: string) {
   const index = argv.indexOf(`--${name}`)
