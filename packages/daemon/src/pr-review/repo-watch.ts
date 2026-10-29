@@ -20,7 +20,11 @@ import { parsePrCommand, type CommandComment, type PrCommand } from "./commands"
 export type RepoWatchJob =
   | { kind: "review"; directory: string; sessionId: string; number: number; head: string; trigger: "opened" | "synchronize" | "ready_for_review" | "requested" | "manual" }
   /** A maintainer's `@mendcode ...` comment on an open PR of the watched repository. */
-  | { kind: "command"; directory: string; sessionId: string; number: number; head: string; trigger: "comment"; command: PrCommand; comment: CommandComment }
+  | { kind: "command"; directory: string; sessionId: string; number: number; head: string; trigger: "comment"; command: PrCommand; comment: CommandComment; blocked?: CommandBlock | undefined }
+/** Why a command could not be answered yet: no `/pr publish on` (`consent`), or the repository does not let this login post (`publisher`). */
+export type CommandBlock = "consent" | "publisher"
+/** What a job reports back: a command that is `blocked` stays with the watch and is tried again once that can change. */
+export type JobOutcome = { blocked?: CommandBlock | undefined } | void
 export type RepoTriggers = { opened: boolean; synchronize: boolean; ready_for_review: boolean; drafts: boolean }
 export type RepoRole = "all" | "requested"
 /** The repo config's limits and role (`cooldown`, `reviewers`); without them nothing is limited and every PR counts. */
@@ -38,6 +42,15 @@ const Seen = z.object({
   /** A trigger that came during the cooldown or over the hourly limit: the newest head is reviewed once both allow it. */
   waiting: AutoTrigger.optional(),
 })
+/** A taken `@mendcode` comment the watch keeps until it is answered: it survives a restart, a full queue and a missing consent. */
+const Stored = z.object({
+  comment: z.object({ id: z.number().int(), surface: z.enum(["issue", "review"]), actor: z.string().max(100), body: z.string().max(100_000), association: z.string().max(40).optional(), inReplyTo: z.number().int().optional(), diffHunk: z.string().max(50_000).optional() }),
+  number: z.number().int().positive(),
+  blocked: z.enum(["consent", "publisher"]).optional(),
+  /** When it was last handed to a job. */
+  triedAt: z.number().optional(),
+})
+type StoredCommand = z.infer<typeof Stored>
 const Watch = z.object({
   directory: z.string(), sessionId: z.string(), createdAt: z.number(),
   seen: z.record(z.string(), Seen).default({}),
@@ -50,8 +63,10 @@ const Watch = z.object({
   ended: z.object({ at: z.number(), reason: z.string() }).optional(),
   /** Comments updated after this ISO time are read for `@mendcode` commands. */
   commentsSince: z.string().max(40).optional(),
-  /** Comment ids already queued, so a comment edited later runs once. */
+  /** Comment ids already read, so a comment edited later is taken once. */
   answered: z.array(z.number().int()).max(200).optional(),
+  /** Taken commands not answered yet, oldest first. Missing in a watch saved before they were kept. */
+  commands: z.array(Stored).max(100).optional(),
   /** `/pr watch-repo all|requested`; unset, the repo config's `reviewers` decides. */
   role: z.enum(["all", "requested"]).optional(),
   /** This daemon's `gh` login, read when the watch starts; `requested` matches it. */
@@ -69,6 +84,9 @@ const Listed = z.array(z.object({ number: z.number().int().positive(), headRefOi
 export const MAX_CONCURRENT_REVIEWS = 2
 const MAX_REPOS = 10
 const MAX_QUEUE = 50
+const MAX_COMMANDS = 100
+/** A command the repository did not let this login answer is tried again this often (`publishers` is cached as long). */
+export const PUBLISHER_RETRY_MS = 600_000
 
 export type RepoWatchOptions = {
   dir: string
@@ -81,8 +99,8 @@ export type RepoWatchOptions = {
   triggers(directory: string): Promise<RepoTriggers>
   /** The repo config's cooldown and role for a watched directory. */
   limits?(directory: string): Promise<RepoLimits>
-  /** Runs one review to its end (T2 to T4); the watch only counts it against the concurrency cap. */
-  start(job: RepoWatchJob): Promise<void>
+  /** Runs one review or command to its end (T2 to T4); the watch counts it against the concurrency cap and keeps a blocked command. */
+  start(job: RepoWatchJob): Promise<JobOutcome>
   notify(sessionId: string, text: string): void
   sessionExists(sessionId: string): boolean
   /** After each successful listing: explain the failing checks of reviewed heads (docs/pr-review.md, follow-ups). */
@@ -102,6 +120,8 @@ export function createRepoWatch(options: RepoWatchOptions) {
   const file = path.join(options.dir, "pr-review", "watches.json")
   let watches = load()
   const queue: RepoWatchJob[] = []
+  /** Comment ids whose command job runs now: offered again only once it ends. */
+  const inFlight = new Set<number>()
   let running = 0
   let timer: ReturnType<typeof setInterval> | undefined
   let ticking = false
@@ -110,8 +130,33 @@ export function createRepoWatch(options: RepoWatchOptions) {
   function load(): RepoWatchRecord[] {
     try {
       const parsed = File.safeParse(JSON.parse(readFileSync(file, "utf8")))
-      return parsed.success ? parsed.data.watches.flatMap((item) => { const watch = Watch.safeParse(item); return watch.success ? [watch.data] : [] }) : []
+      return parsed.success ? carryConsent(parsed.data.watches.flatMap((item) => { const watch = Watch.safeParse(item); return watch.success ? [upgrade(watch.data)] : [] })) : []
     } catch { return [] }
+  }
+  /**
+   * The answer to "may MendCode post here" belongs to the directory, not to one watch record: a stopped watch stays in the file
+   * next to the running one. Before, `/pr publish on` went to the first record of the directory, a stopped one, and the running
+   * watch kept asking (seen live). A running watch without an answer takes the one its directory's other records hold.
+   */
+  function carryConsent(records: RepoWatchRecord[]): RepoWatchRecord[] {
+    for (const watch of records) {
+      if (watch.ended) continue
+      const other = records.find((item) => item !== watch && item.directory === watch.directory && (item.publish || item.asked))
+      if (!watch.publish && other?.publish) watch.publish = other.publish
+      if (!watch.asked && other?.asked) watch.asked = true
+    }
+    return records
+  }
+  /**
+   * A watch saved before commands were kept marked every comment read before it was answered, so one refused for a missing
+   * `/pr publish on` was lost. While posting was never allowed nothing was answered on GitHub: its comments are read again from
+   * the watch's start and kept this time. A watch that did post keeps its marks (an answered command must not run twice).
+   */
+  function upgrade(watch: RepoWatchRecord): RepoWatchRecord {
+    if (watch.commands) return watch
+    if (watch.publish === "allowed") return { ...watch, commands: [] }
+    const { commentsSince: _since, answered: _answered, ...rest } = watch
+    return { ...rest, commands: [] }
   }
   function save() {
     try {
@@ -133,7 +178,12 @@ export function createRepoWatch(options: RepoWatchOptions) {
     while (!stopped && running < MAX_CONCURRENT_REVIEWS && queue.length) {
       const job = queue.shift()!
       running++
-      void options.start(job).catch(() => undefined).finally(() => { running--; pump() })
+      if (job.kind === "command") inFlight.add(job.comment.id)
+      void options.start(job).catch(() => undefined).then((outcome) => { if (job.kind === "command") settle(job, outcome) }).finally(() => {
+        if (job.kind === "command") inFlight.delete(job.comment.id)
+        running--
+        pump()
+      })
     }
   }
   function enqueue(job: RepoWatchJob) {
@@ -179,11 +229,14 @@ export function createRepoWatch(options: RepoWatchOptions) {
         answered.add(item.id)
         if (!takes({ command, role, me, requested: requestedOf(number) })) continue
         const comment: CommandComment = { id: item.id, surface: endpoint === "pulls/comments" ? "review" : "issue", actor: item.user, body: item.body, ...(item.association ? { association: item.association } : {}), ...(item.in_reply_to_id ? { inReplyTo: item.in_reply_to_id } : {}), ...(item.diff_hunk ? { diffHunk: item.diff_hunk } : {}) }
-        enqueue({ kind: "command", directory: watch.directory, sessionId: watch.sessionId, number, head, trigger: "comment", command, comment })
+        const commands = watch.commands ??= []
+        if (!commands.some((stored) => stored.comment.id === item.id)) commands.push({ comment: comment as StoredCommand["comment"], number })
+        if (commands.length > MAX_COMMANDS) commands.splice(0, commands.length - MAX_COMMANDS)
       }
     }
     watch.answered = [...answered].slice(-200)
     if (complete) watch.commentsSince = started
+    offer(watch)
   }
 
   async function list(directory: string): Promise<{ ok: true; prs: Listed } | { ok: false; auth: boolean; reason: string }> {
@@ -197,6 +250,40 @@ export function createRepoWatch(options: RepoWatchOptions) {
       const parsed = Listed.safeParse(JSON.parse(result.out))
       return parsed.success ? { ok: true, prs: parsed.data } : { ok: false, auth: false, reason: "gh returned something that is not a pull request list" }
     } catch { return { ok: false, auth: false, reason: "gh returned something that is not JSON" } }
+  }
+
+  /** A command job ended: answered (or refused for good) it is dropped, blocked it waits for its condition. */
+  function settle(job: Extract<RepoWatchJob, { kind: "command" }>, outcome: JobOutcome) {
+    const watch = watches.find((item) => item.directory === job.directory && !item.ended)
+    const stored = watch?.commands?.find((item) => item.comment.id === job.comment.id)
+    if (!watch || !stored) return
+    const blocked = outcome?.blocked
+    if (blocked) stored.blocked = blocked
+    else watch.commands = watch.commands!.filter((item) => item !== stored)
+    save()
+  }
+
+  /**
+   * Queues the kept commands that are due: a new one, one whose job never ended (a restart, a full queue), one blocked on consent
+   * once posting is allowed, one blocked by `publishers` every `PUBLISHER_RETRY_MS` while posting is allowed. A command of a PR
+   * that is no longer open is dropped. One comment is never queued or run twice at once.
+   */
+  function offer(watch: RepoWatchRecord) {
+    if (!watch.commands?.length || !active(watch)) return
+    const allowed = consentOf(watch.directory) === "allowed"
+    const kept: StoredCommand[] = []
+    for (const stored of watch.commands) {
+      const head = watch.seen[String(stored.number)]?.head
+      if (!head) continue
+      kept.push(stored)
+      const busy = inFlight.has(stored.comment.id) || queue.some((job) => job.kind === "command" && job.comment.id === stored.comment.id)
+      const due = !stored.blocked || allowed && (stored.blocked === "consent" || now() - (stored.triedAt ?? 0) >= PUBLISHER_RETRY_MS)
+      const command = parsePrCommand(stored.comment.body)
+      if (busy || !due || !command) continue
+      stored.triedAt = now()
+      enqueue({ kind: "command", directory: watch.directory, sessionId: watch.sessionId, number: stored.number, head, trigger: "comment", command, comment: stored.comment, ...(stored.blocked ? { blocked: stored.blocked } : {}) })
+    }
+    watch.commands = kept
   }
 
   async function poll(watch: RepoWatchRecord) {
@@ -306,7 +393,10 @@ export function createRepoWatch(options: RepoWatchOptions) {
     if (role === "requested" && !login) return { ok: false, message: "could not read your gh login (gh api user), which requested reviews are matched against" }
     const me = login?.toLowerCase()
     const seen = Object.fromEntries(found.prs.map((pr) => [String(pr.number), { head: pr.headRefOid, draft: pr.isDraft === true, requested: !!me && [...(pr.reviewRequests ?? []), ...(pr.assignees ?? [])].some((who) => who.login?.toLowerCase() === me) }]))
-    const record: RepoWatchRecord = { ...(existing ?? {}), directory, sessionId, createdAt: existing?.createdAt ?? now(), seen, ...(role ? { role } : {}), ...(login ? { login } : {}) }
+    // A new watch of a directory keeps the answer a stopped one got: the user is asked once per repository.
+    const answered = consentRecord(directory)
+    const consent = { ...(answered?.publish ? { publish: answered.publish } : {}), ...(answered?.asked ? { asked: true } : {}) }
+    const record: RepoWatchRecord = { ...consent, ...(existing ?? {}), directory, sessionId, createdAt: existing?.createdAt ?? now(), seen, ...(role ? { role } : {}), ...(login ? { login } : {}) }
     delete record.paused
     delete record.unreadableSince
     watches = [...watches.filter((watch) => watch !== existing), record]
@@ -335,20 +425,25 @@ export function createRepoWatch(options: RepoWatchOptions) {
    * (the caller asks in the session and the question is not asked again), `wait` while the question is open.
    */
   function publishConsent(directory: string): "allowed" | "denied" | "ask" | "wait" {
-    const watch = watches.find((item) => item.directory === directory)
+    const watch = consentRecord(directory)
     if (!watch) return "ask"
     if (watch.publish) return watch.publish
     if (watch.asked) return "wait"
-    watch.asked = true
+    for (const item of watches) if (item.directory === directory) item.asked = true
     save()
     return "ask"
   }
+  /** The record whose answer counts for a directory: its running watch, else its newest record. */
+  const consentRecord = (directory: string) => find(directory) ?? watches.findLast((item) => item.directory === directory)
   /** The answer so far, without asking. */
-  const consentOf = (directory: string) => watches.find((item) => item.directory === directory)?.publish
+  const consentOf = (directory: string) => consentRecord(directory)?.publish
   function setPublish(directory: string, sessionId: string, answer: "allowed" | "denied") {
-    let watch = watches.find((item) => item.directory === directory)
-    if (!watch) { watch = { directory, sessionId, createdAt: now(), seen: {}, ended: { at: now(), reason: "not watched" } }; watches.push(watch) }
-    watch.publish = answer
+    if (!watches.some((item) => item.directory === directory)) watches.push({ directory, sessionId, createdAt: now(), seen: {}, ended: { at: now(), reason: "not watched" } })
+    // Every record of the directory holds the answer, so whichever one is read later agrees.
+    for (const item of watches) if (item.directory === directory) item.publish = answer
+    // Commands that waited for this answer are answered now, without waiting for the next poll.
+    const running = find(directory)
+    if (answer === "allowed" && running) offer(running)
     save()
   }
 
@@ -366,6 +461,8 @@ export function createRepoWatch(options: RepoWatchOptions) {
     /** A review asked for by hand (`/pr review`): queued behind the cap like any other. */
     review(job: Omit<RepoWatchJob, "kind" | "trigger">) { enqueue({ ...job, kind: "review", trigger: "manual" }) },
     pending: () => ({ running, queued: queue.length }),
+    /** The commands of `directory` that are kept, not answered yet. */
+    commands: (directory: string) => (find(directory)?.commands ?? []).map((stored) => ({ id: stored.comment.id, number: stored.number, blocked: stored.blocked })),
     stop() { stopped = true; if (timer) clearInterval(timer); timer = undefined; queue.splice(0); save() },
   }
 }

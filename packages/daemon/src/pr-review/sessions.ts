@@ -18,6 +18,15 @@ export function reviewMessage(prompt: string, putText: (bytes: Uint8Array) => Bl
  */
 
 export const REVIEW_AGENT = "explore"
+/**
+ * Tools a review child is not offered. `explore` has `shell`, but plan mode refuses every command, so a model that read with
+ * `git show` or `sed` got only refusals and reported that its repository reads were denied; `read`, `grep` and `glob` remain.
+ * `skill` loaded the user's own review skill, whose files live outside the checkout: the read that named them asked for
+ * approval, was refused as a whole, and the in-repository files it also named were never read (a live review).
+ */
+export const REVIEW_EXCLUDED_TOOLS: readonly string[] = ["shell*", "skill"]
+/** Why a review child's approval request is refused: what it may still read, so it reads that instead of giving up. */
+export const REVIEW_APPROVAL_REFUSED = "A PR review cannot ask for approval, so files outside the pull request's checkout cannot be read. Read the files of the checkout itself, with paths relative to it (each call only those), and answer from them."
 const TURN_TIMEOUT_MS = 15 * 60_000
 
 type Waiting = { text: string; message?: string; tokens: ReviewTurn["tokens"]; done(result: { ok: true; turn: ReviewTurn } | { ok: false; message: string }): void }
@@ -77,7 +86,7 @@ export function createReviewSessions(deps: {
         return
       case "server.request":
         if (editors.has(event.sessionId)) return
-        deps.deny(event.sessionId, event.requestId, "A PR review cannot ask for approval. Do not retry: answer from what you could read.")
+        deps.deny(event.sessionId, event.requestId, REVIEW_APPROVAL_REFUSED)
         return
       case "turn.completed":
         return entry.done({ ok: true, turn: { text: entry.text, tokens: entry.tokens } })

@@ -241,4 +241,114 @@ describe("the watch answers commands", () => {
     expect(readReviewState(dir, "acme/app", 12).paused).toBe(true)
     expect(notices.at(-1)).toBe("@mendcode pause from maintainer on acme/app#12: answered on GitHub.")
   })
+
+  test("a polled @mendcode comment refused for a missing /pr publish on is answered once after it, across a restart and a crash right after the post", async () => {
+    const dir = temp("cmd-data-"), project = temp("cmd-project-")
+    const { gh: base, posts } = fakeGh()
+    // MendCode's own replies show up on the PR, as GitHub lists them, so an earlier answer is found.
+    const gh: GhCall = async (input) => /issues\/12\/comments\?per_page=100$/.test(input.argv[1] ?? "") && !input.argv.includes("POST") ? { code: 0, out: JSON.stringify(posts.map((post) => ({ body: post.body, user: { login: "nora" } }))) } : base(input)
+    const polled = { id: 5, body: "@mendcode pause", user: "maintainer", association: "MEMBER", html_url: "https://github.com/acme/app/pull/12#issuecomment-5" }
+    const run: GhRun = async ({ argv }) => {
+      if (argv[0] === "repo") return { code: 0, out: "acme/app", err: "" }
+      if (argv.join(" ") === "api user --jq .login") return { code: 0, out: "nora", err: "" }
+      if (argv[0] === "pr" && argv[1] === "list") return { code: 0, out: JSON.stringify([{ number: 12, headRefOid: "d".repeat(40) }]), err: "" }
+      if (argv[0] === "api" && argv[1]!.startsWith("repos/{owner}/{repo}/issues/comments?since=")) return { code: 0, out: JSON.stringify(polled), err: "" }
+      if (argv[0] === "api" && argv[1]!.startsWith("repos/{owner}/{repo}/pulls/comments?since=")) return { code: 0, out: "", err: "" }
+      return { code: 1, out: "", err: "unexpected" }
+    }
+    const notices: string[] = []
+    const start = () => {
+      const service = createPrReviewService({
+        dir, run, call: gh, intervalMs: 3_600_000, enabled: () => true, graphOn: () => false, sessionDirectory: () => project, sessionExists: () => true,
+        notify: (_session, text) => notices.push(text), sessions: () => { throw new Error("no model call") }, editor: () => { throw new Error("no model call") }, schedule: async (job) => { await job() },
+      })
+      cleanups.push(() => service.stop())
+      return service
+    }
+    const settled = () => Bun.sleep(20)
+    const first = start()
+    expect((await first.control({ sessionId: "ses_a", action: "watch-repo" })).ok).toBe(true)
+    await first.tick()
+    await settled()
+    await first.tick()
+    await settled()
+    expect(posts).toEqual([])
+    expect(notices.filter((text) => text.includes("is not answered yet"))).toEqual(["@mendcode pause from maintainer on acme/app#12 is not answered yet: MendCode posts to acme/app only after /pr publish on, and answers it then."])
+    first.stop()
+    const second = start()
+    await second.tick()
+    await settled()
+    expect(posts).toEqual([])
+    await second.control({ sessionId: "ses_a", action: "publish-on" })
+    await settled()
+    expect(posts).toHaveLength(1)
+    expect(posts[0]!.body).toContain("Paused")
+    second.stop()
+    // A crash right after the post, before the watch dropped the command: it is kept again and found answered by this login.
+    const file = path.join(dir, "pr-review", "watches.json")
+    const saved = JSON.parse(readFileSync(file, "utf8"))
+    saved.watches[0].commands = [{ comment: { id: 5, surface: "issue", actor: "maintainer", body: "@mendcode pause", association: "MEMBER" }, number: 12 }]
+    writeFileSync(file, JSON.stringify(saved))
+    const third = start()
+    await third.tick()
+    await settled()
+    expect(posts).toHaveLength(1)
+    expect(JSON.parse(readFileSync(file, "utf8")).watches[0].commands).toEqual([])
+  })
+
+  test("a kept @mendcode review whose head already has a review by this login (posted by hand) is answered without a second review or a model call", async () => {
+    // Seen live: the user's own session posted reviews of #2, #12 and #15 itself while their requests waited for /pr publish on.
+    const dir = temp("cmd-data-"), project = temp("cmd-project-")
+    const { gh: base, posts } = fakeGh()
+    const head = "d".repeat(40)
+    const reviews = [{ id: 9001, commit_id: head, state: "COMMENTED", body: "## Summary\nReviewed by hand.", user: { login: "nora", type: "User" }, author_association: "NONE" }]
+    const gh: GhCall = async (input) => input.argv[1] === "repos/acme/app/pulls/12/reviews?per_page=100" ? { code: 0, out: JSON.stringify(reviews) } : base(input)
+    const notices: string[] = []
+    const run: GhRun = async ({ argv }) => argv[0] === "repo" ? { code: 0, out: "acme/app", err: "" } : argv.join(" ") === "api user --jq .login" ? { code: 0, out: "nora", err: "" } : { code: 1, out: "", err: "unexpected" }
+    const service = createPrReviewService({
+      dir, run, call: gh, intervalMs: 3_600_000, enabled: () => true, graphOn: () => false, sessionDirectory: () => project, sessionExists: () => true,
+      notify: (_session, text) => notices.push(text), sessions: () => { throw new Error("no model call") }, editor: () => { throw new Error("no model call") }, schedule: async (job) => { await job() },
+    })
+    cleanups.push(() => service.stop())
+    await service.control({ sessionId: "ses_a", action: "publish-on" })
+    const job = { kind: "command" as const, directory: project, sessionId: "ses_a", number: 12, head, trigger: "comment" as const, command: { kind: "review" as const }, comment: { ...issue("@mendcode review", "carol"), id: 9002 } }
+    expect(await service.command(job)).toBeUndefined()
+    expect(posts).toEqual([])
+    expect(notices.at(-1)).toBe("@mendcode review from carol on acme/app#12: @nora already reviewed this head (review 9001), so it is not reviewed again.")
+    // A newer head has no review yet: the old one does not answer the request, which goes on to the usual gates (here the
+    // commenter's write access).
+    await service.command({ ...job, head: "e".repeat(40) })
+    expect(notices.at(-1)).not.toContain("already reviewed")
+    expect(notices.at(-1)).toContain("refused (no write access)")
+  })
+
+  test("two @mendcode comments handled while the session is busy both reach it: a notice the session refuses is held and offered when it goes idle", async () => {
+    // Seen live: #15 and #12 got `@mendcode review` two seconds apart; the session took #15's notice and started a turn,
+    // then refused #12's (a notice waits for a free session), which was dropped and never shown.
+    const dir = temp("cmd-data-"), project = temp("cmd-project-")
+    const { gh } = fakeGh()
+    const notices: string[] = []
+    let busy = false
+    const run: GhRun = async ({ argv }) => argv[0] === "repo" ? { code: 0, out: "acme/app", err: "" } : argv.join(" ") === "api user --jq .login" ? { code: 0, out: "nora", err: "" } : { code: 1, out: "", err: "unexpected" }
+    const service = createPrReviewService({
+      dir, run, call: gh, intervalMs: 3_600_000, enabled: () => true, graphOn: () => false, sessionDirectory: () => project, sessionExists: () => true,
+      // Like the session actor: a free session takes the notice and starts a turn on it; a busy one answers undefined.
+      notify: (_session, text) => { if (busy) return undefined; busy = true; notices.push(text); return "que_1" },
+      sessions: () => { throw new Error("no model call") }, editor: () => { throw new Error("no model call") }, schedule: async (job) => { await job() },
+    })
+    cleanups.push(() => service.stop())
+    const job = (number: number, id: number) => ({ kind: "command" as const, directory: project, sessionId: "ses_a", number, head: "d".repeat(40), trigger: "comment" as const, command: { kind: "review" as const }, comment: { ...issue("@mendcode review", "carol"), id } })
+    await service.command(job(15, 1))
+    await service.command(job(12, 2))
+    await Bun.sleep(10)
+    expect(notices).toHaveLength(1)
+    expect(notices[0]).toContain("acme/app#15 is not answered yet")
+    expect(service.held("ses_a")).toEqual([expect.stringContaining("acme/app#12 is not answered yet")])
+    // The turn on #15's notice ends: the held notice goes now, and nothing is held any more.
+    busy = false
+    await service.idle("ses_a")
+    expect(notices).toHaveLength(2)
+    expect(notices[1]).toContain("@mendcode review from carol on acme/app#12 is not answered yet: MendCode posts to acme/app only after /pr publish on")
+    expect(service.held("ses_a")).toEqual([])
+  })
 })

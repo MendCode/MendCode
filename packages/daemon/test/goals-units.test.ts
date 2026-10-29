@@ -68,6 +68,8 @@ describe("goal templates", () => {
     expect(continuation).toContain("<objective>\nship the release\n</objective>")
     expect(continuation).toContain("Tokens remaining: 880")
     expect(continuation).toContain("Keep it whole")
+    expect(continuation).toContain("the objective wins")
+    expect(continuation).toContain("usage is not a reason to stop")
     expect(continuation).toContain("todo tool")
     expect(continuation).toContain("audit it against the actual current state, requirement by requirement")
     expect(continuation).toContain("at least 3 consecutive goal turns")

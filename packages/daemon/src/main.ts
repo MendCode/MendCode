@@ -323,8 +323,9 @@ let extractionSettings: () => import("@mendcode/protocol").Settings = () => ({})
 const dreamComplete = (prompt: string, signal: AbortSignal, model?: ModelChoice) => completeWithUsage({ system: "You curate long-term memory for a coding assistant. Reply with JSON only.", prompt, signal, model })
 
 /** The system prompt as named parts, so the engine can both join them and report each one's size. `memory` is the memory block for this prompt. */
-function systemParts(root: string, memory: string, prompts: PromptFiles, modelID?: string, contextFiles = true): SystemPart[] {
-  const skillBlock = skills.block(root)
+function systemParts(root: string, memory: string, prompts: PromptFiles, modelID?: string, contextFiles = true, skillsListed = true): SystemPart[] {
+  // A session without the skill tool (a PR review child) is not shown skills it cannot load.
+  const skillBlock = skillsListed ? skills.block(root) : ""
   // SYSTEM.md replaces the packaged prompt, APPEND_SYSTEM.md follows as a part of its own; the project's files win over the user's.
   const parts = promptContextParts(dir, root, systemPartsWith({
     files: promptFileOverrides(dir, root, prompts),
@@ -668,10 +669,13 @@ export const daemon = await startDaemon({
           },
           runLimits: (sessionId) => runLimits.get(sessionId),
           hiddenTools: hiddenGraphTools,
-          system: (root, context) => systemWithLimits(joinSystemParts(systemParts(root, memoryFor(root, context), extensions.prompts, context ? mainModel(context.sessionId).model : undefined, context ? runLimits.get(context.sessionId)?.noContextFiles !== true : true)), context ? runLimits.get(context.sessionId) : undefined),
+          system: (root, context) => {
+            const limits = context ? runLimits.get(context.sessionId) : undefined
+            return systemWithLimits(joinSystemParts(systemParts(root, memoryFor(root, context), extensions.prompts, context ? mainModel(context.sessionId).model : undefined, limits?.noContextFiles !== true, !limits?.excludeTools?.includes("skill"))), limits)
+          },
           systemParts: (root, context) => {
             const limits = context ? runLimits.get(context.sessionId) : undefined
-            const parts = systemParts(root, memoryFor(root, context), extensions.prompts, context ? mainModel(context.sessionId).model : undefined, limits?.noContextFiles !== true)
+            const parts = systemParts(root, memoryFor(root, context), extensions.prompts, context ? mainModel(context.sessionId).model : undefined, limits?.noContextFiles !== true, !limits?.excludeTools?.includes("skill"))
             return limits?.systemPrompt !== undefined || limits?.appendSystemPrompt ? [{ id: "run", label: "scripted run prompt", text: systemWithLimits(joinSystemParts(parts), limits) }] : parts
           },
         }),

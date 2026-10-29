@@ -28,8 +28,12 @@ export const ReviewConfig = z.strictObject({
   budget: z.strictObject({ tokens_per_pr: z.number().int().min(10_000).max(5_000_000).default(200_000) }).default({ tokens_per_pr: 200_000 }),
   /** Automatic reviews only: a PR again after `pr_minutes` (once, at its newest head), at most `repo_per_hour` per repository. `/pr review` is not limited. */
   cooldown: z.strictObject({ pr_minutes: z.number().int().min(0).max(1440).default(10), repo_per_hour: z.number().int().min(1).max(500).default(20) }).default({ pr_minutes: 10, repo_per_hour: 20 }),
-  /** Whose PRs a watching reviewer takes: `all`, or `requested` (a review requested from, or the PR assigned to, the reviewer's gh login). `/pr watch-repo all|requested` overrides it per watch. */
-  reviewers: z.enum(["all", "requested"]).default("all"),
+  /**
+   * Whose PRs a watching reviewer takes: `all`, or `requested` (a review requested from, or the PR assigned to, the reviewer's gh
+   * login). `/pr watch-repo all|requested` overrides it per watch. A list of logins is the team that may ask: only their
+   * `@mendcode` comments are taken, and PRs are taken as with `all` (`reviewRole`, `requestersOf`).
+   */
+  reviewers: z.union([z.enum(["all", "requested"]), z.array(z.string().regex(/^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/)).min(1).max(100)]).default("all"),
   /**
    * Whose reviewer may post here (publishers.ts): `maintainers`, a gh login with write access; a list of logins (contributors
    * included); or `anyone`. A reviewer that may not post keeps its reviews in its session and answers no `@mendcode` comment.
@@ -38,6 +42,13 @@ export const ReviewConfig = z.strictObject({
 })
 export type ReviewConfig = z.infer<typeof ReviewConfig>
 export const DEFAULT_REVIEW_CONFIG: ReviewConfig = ReviewConfig.parse({})
+
+/** Which PRs a watching reviewer takes: a `reviewers` list restricts who asks, not whose PRs, so it reviews as `all`. */
+export const reviewRole = (rule: ReviewConfig["reviewers"]): "all" | "requested" => Array.isArray(rule) ? "all" : rule
+/** The logins whose `@mendcode` comments are taken, or undefined when anyone's are (still only answered with write access). */
+export const requestersOf = (rule: ReviewConfig["reviewers"]): readonly string[] | undefined => Array.isArray(rule) ? rule : undefined
+/** Whether `actor` may ask this repository's reviewer for anything (`reviewers` as a list). */
+export const mayRequest = (rule: ReviewConfig["reviewers"], actor: string) => { const team = requestersOf(rule); return !team || team.some((login) => login.toLowerCase() === actor.toLowerCase()) }
 
 /** The first line from which no longer prefix parses: where Bun's YAML error (which names no line) went wrong. */
 function errorLine(text: string): number {

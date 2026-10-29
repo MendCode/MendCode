@@ -60,6 +60,50 @@ git tag "$tag"
 git push origin "$tag"
 ```
 
+## Release titles and notes
+
+Tags stay machine-readable (installers and `upgrade` read only the tag, the prerelease flag and the assets). What people read is
+written by `scripts/release-notes.ts` in the `notes` job of `release.yml`, which runs beside the gate, so a release without notes
+fails before anything is built or signed:
+
+| Tag | Title |
+|---|---|
+| `v0.0.2` | MendCode v0.0.2 |
+| `v0.0.2-beta.4` | MendCode v0.0.2 Beta 4 |
+| `v0.0.2-nightly.20261029.2` | MendCode Nightly — 2026-10-29 · Build 2 |
+| `dev-1a2b3c4…` | MendCode Dev 1a2b3c4 |
+
+The notes come from [CHANGELOG.md](../CHANGELOG.md), reviewed with the code it describes. The public repository has one snapshot
+commit per release, so GitHub's generated notes have nothing to list. The notes compare the release with the previous one of its
+channel, chosen the way the updater chooses (`pickRelease`): a nightly follows the newest older nightly, beta or stable. Both ends
+are the exact commits of those tags. In order:
+
+- a short line: tag, channel, the previous release, the commit it was built from;
+- the summary paragraph and the items, grouped `New`, `Changed`, `Fixed`, `Upgrade notes`, `Known limitations`;
+- how to install this channel or this exact build, and how to verify it (`SHA256SUMS`, the cosign bundles, GitHub provenance);
+- a folded **Full changelog**: the commits since the previous release, the changed files by area, the compare link.
+
+Where the text comes from:
+
+- **Stable and beta:** the section named after the tag (`## v0.0.2-beta.4 - 2026-11-02`). No section, or one without a summary
+  and an item, fails the release. Versions between the previous release and this one that this channel never got are folded in
+  and named: a beta whose release failed, or the betas of a stable.
+- **Nightly:** the items under `## Unreleased` that `CHANGELOG.md` at the previous release did not have. None fails the nightly,
+  so every change that reaches `main` adds its item. A section named after the nightly's tag is used instead when it exists. A
+  release whose tree is the previous release's says it is the same code.
+- An unknown `###` group or a section written twice fails, so a typo cannot drop items.
+
+Cutting a stable or beta release renames `## Unreleased` to the tag and starts an empty one, in the commit that is tagged. To
+correct the notes of a published release, run the script on its tag with the corrected file and edit only the title and body.
+Tags, assets, checksums, signatures and the prerelease/latest flags stay as they are:
+
+```sh
+gh api "repos/MendCode/MendCode/releases?per_page=100" > releases.json
+bun scripts/release-notes.ts --tag "$tag" --repository MendCode/MendCode --releases releases.json --changelog CHANGELOG.md \
+  --out notes.md --title-out title.txt
+gh release edit "$tag" --repo MendCode/MendCode --title "$(cat title.txt)" --notes-file notes.md
+```
+
 ## Channels
 
 | Channel | Tag | GitHub release | Who gets it |

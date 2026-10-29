@@ -46,6 +46,24 @@ function counts(rule: PublishersRule, author: { login?: string | undefined; asso
 type Posted = { body?: string | null; user?: { login?: string; type?: string } | null; author_association?: string }
 const authorOf = (item: Posted) => ({ login: item.user?.login, association: item.author_association, bot: item.user?.type === "Bot" })
 
+/**
+ * A submitted review of `head` by this login or by a publisher that counts, MendCode's or written by hand: an `@mendcode review`
+ * of a head that already has one is answered (seen live: the user's own session reviewed #2, #12 and #15 itself while
+ * their requests waited for `/pr publish on`). Undefined when there is none or the reviews cannot be read.
+ */
+export async function headReviewedBy({ gh, repo, number, head, rule, self }: { gh: GhCall; repo: string; number: number; head: string; rule: PublishersRule; self: string | undefined }): Promise<{ login: string; id: number } | undefined> {
+  const done = await gh({ argv: ["api", `repos/${repo}/pulls/${number}/reviews?per_page=100`] }).catch(() => undefined)
+  const reviews = done?.code === 0 ? json(done.out) : undefined
+  if (!Array.isArray(reviews)) return undefined
+  for (const review of reviews as Array<Posted & { id?: number; commit_id?: string; state?: string }>) {
+    if (review.commit_id !== head || review.state === "PENDING" || review.state === "DISMISSED" || typeof review.id !== "number") continue
+    const author = authorOf(review)
+    const mine = !!self && author.login?.toLowerCase() === self.toLowerCase()
+    if (mine || counts(rule, author)) return { login: author.login ?? "a bot", id: review.id }
+  }
+  return undefined
+}
+
 /** The login of another publisher whose MendCode review of `head` is already on the pull request, or undefined. */
 export async function reviewedBy({ gh, repo, number, head, rule, self }: { gh: GhCall; repo: string; number: number; head: string; rule: PublishersRule; self: string | undefined }): Promise<string | undefined> {
   const done = await gh({ argv: ["api", `repos/${repo}/pulls/${number}/reviews?per_page=100`] }).catch(() => undefined)
@@ -60,7 +78,7 @@ export async function reviewedBy({ gh, repo, number, head, rule, self }: { gh: G
   return undefined
 }
 
-/** The login of another publisher that already answered `commentId` (its reply carries `answersMarker`), or undefined. */
+/** The login of a publisher that already answered `commentId` (its reply carries `answersMarker`): `self` when it was this login, else undefined. */
 export async function answeredBy({ gh, repo, number, commentId, rule, self }: { gh: GhCall; repo: string; number: number; commentId: number; rule: PublishersRule; self: string | undefined }): Promise<string | undefined> {
   for (const endpoint of [`repos/${repo}/issues/${number}/comments?per_page=100`, `repos/${repo}/pulls/${number}/comments?per_page=100`]) {
     const done = await gh({ argv: ["api", endpoint] }).catch(() => undefined)
@@ -68,7 +86,8 @@ export async function answeredBy({ gh, repo, number, commentId, rule, self }: { 
     if (!Array.isArray(items)) continue
     for (const item of items as Posted[]) {
       const author = authorOf(item)
-      if (Number(ANSWERS.exec(item.body ?? "")?.[1]) !== commentId || (self && author.login?.toLowerCase() === self.toLowerCase())) continue
+      if (Number(ANSWERS.exec(item.body ?? "")?.[1]) !== commentId) continue
+      if (self && author.login?.toLowerCase() === self.toLowerCase()) return self
       if (counts(rule, author)) return author.login ?? "a bot"
     }
   }

@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from "node:fs"
 import path from "node:path"
 import type { ModelEvent, ModelMessage, ModelRequest } from "@mendcode/engine-native"
 import type { Goal, SessionEvent, SessionId } from "@mendcode/protocol"
+import { MAX_UNATTENDED_GOAL_TURNS } from "../src/goals"
 import { answer, boot, callTool, hang, openSession, put, stop, until, type NativeHarness, type Step } from "./native-harness"
 
 const harnesses: NativeHarness[] = []
@@ -243,6 +244,66 @@ describe("goal continuation", () => {
     expect(h.steps.length).toBe(1)
     expect(goalOf(h, sessionId)).toMatchObject({ status: "active", stalled: expect.stringContaining("no output") })
   })
+
+  test("three goal turns in a row that only report and call no tool stop continuation; the user's next message brings it back", async () => {
+    // A ZeroBase goal ran 2,029 such turns, ten seconds apart: "No progress. The last gate was 47 % / STOP".
+    const report = (percent: number) => stop(`No progress. The last quota gate was ${percent} % / STOP; I started nothing.`)
+    const h = await start([report(47), callTool("probe", {}), stop("probed"), report(47), report(43), report(43), stop("ok, going on"), callTool("update_goal", { status: "complete" }), stop("done")])
+    const sessionId = await openSession(h)
+    await h.client.send({ type: "goal.set", sessionId, objective: "build everything; spend all my usage" })
+    await until(() => goalOf(h, sessionId)?.stalled !== undefined)
+    await settle()
+    // A turn that brought a new result (the probe) restarts the count: the stall comes three report-only turns after it.
+    expect(started(h, sessionId)).toBe(5)
+    expect(goalOf(h, sessionId)).toMatchObject({ status: "active", stalled: expect.stringContaining("no progress in 3 goal turns") })
+    expect(goalOf(h, sessionId)?.stalled).toContain("43 % / STOP")
+    await h.client.send({ type: "user.submit", sessionId, text: "ignore the quota, keep coding", attachments: [] })
+    await until(() => goalOf(h, sessionId)?.status === "complete")
+    expect(h.steps.length).toBe(0)
+  })
+
+  test("a tool called every turn that gets the same answer again is no progress: continuation stops after three such turns", async () => {
+    // The loop an agent falls into when it re-runs a check each turn ("gate: STOP") instead of only writing that it is stuck.
+    const check = () => callTool("probe", {})
+    const h = await start([check(), stop("checked: STOP"), check(), stop("checked again: STOP"), check(), stop("still STOP"), check(), stop("STOP"), stop("never reached")])
+    const sessionId = await openSession(h)
+    await h.client.send({ type: "goal.set", sessionId, objective: "finish the batch" })
+    await until(() => goalOf(h, sessionId)?.stalled !== undefined)
+    await settle()
+    // Turn 1 is the first time the probe answers; turns 2-4 repeat the same call and result.
+    expect(started(h, sessionId)).toBe(4)
+    expect(h.steps.length).toBe(1)
+    expect(goalOf(h, sessionId)).toMatchObject({ status: "active", stalled: expect.stringContaining("no progress in 3 goal turns") })
+  })
+
+  test("turns whose calls bring new results keep the goal going past three turns, until the agent completes it", async () => {
+    const h = await start([])
+    for (let index = 1; index <= 6; index++) put(path.join(h.project, `part-${index}.txt`), `part ${index}`)
+    for (let index = 1; index <= 6; index++) h.steps.push(callTool("read", { path: `part-${index}.txt` }), stop(`read part ${index}`))
+    h.steps.push(callTool("update_goal", { status: "complete" }), stop("all parts read"))
+    const sessionId = await openSession(h)
+    await h.client.send({ type: "goal.set", sessionId, objective: "read every part" })
+    await until(() => goalOf(h, sessionId)?.status === "complete")
+    expect(started(h, sessionId)).toBe(7)
+    expect(goalEvents(h, sessionId).some((event) => event.change === "stalled")).toBe(false)
+  })
+
+  test(`a loop whose every call looks new still stops after ${MAX_UNATTENDED_GOAL_TURNS} goal turns without the user; resume goes on`, async () => {
+    const h = await start([])
+    for (let index = 1; index <= MAX_UNATTENDED_GOAL_TURNS; index++) {
+      put(path.join(h.project, `gate-${index}.txt`), `remaining ${index} % STOP`)
+      h.steps.push(callTool("read", { path: `gate-${index}.txt` }), stop(`gate ${index}: STOP`))
+    }
+    h.steps.push(callTool("update_goal", { status: "complete" }), stop("done after resume"))
+    const sessionId = await openSession(h)
+    await h.client.send({ type: "goal.set", sessionId, objective: "keep checking" })
+    await until(() => goalOf(h, sessionId)?.stalled !== undefined, 30_000)
+    await settle()
+    expect(started(h, sessionId)).toBe(MAX_UNATTENDED_GOAL_TURNS)
+    expect(goalOf(h, sessionId)?.stalled).toContain(`${MAX_UNATTENDED_GOAL_TURNS} goal turns in a row without you`)
+    await h.client.send({ type: "goal.update", sessionId, status: "active" })
+    await until(() => goalOf(h, sessionId)?.status === "complete")
+  }, 60_000)
 
   test("cancelling a goal turn stops continuation; resume starts it again even though the cancel held the session", async () => {
     const h = await start([hang, stop("after resume"), callTool("update_goal", { status: "complete" }), stop("done")])

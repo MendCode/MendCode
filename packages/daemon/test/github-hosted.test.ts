@@ -92,12 +92,12 @@ describe("hosted workflow", () => {
 })
 
 describe("github run --review", () => {
-  async function repository() {
+  async function repository(config = "enabled: true\nchecks: [\"bun test\"]\n") {
     const dir = temp("hosted-repo-")
     const git = async (...args: string[]) => { const done = await gitRun(["-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", ...args], dir); if (done.code) throw new Error(args.join(" ")); return done.out.trim() }
     await git("init", "-q", "-b", "main")
     mkdirSync(path.join(dir, ".mendcode"))
-    writeFileSync(path.join(dir, ".mendcode", "review.yaml"), "enabled: true\nchecks: [\"bun test\"]\n")
+    writeFileSync(path.join(dir, ".mendcode", "review.yaml"), config)
     writeFileSync(path.join(dir, "a.ts"), "export const one = 1\n")
     await git("add", "-A")
     await git("commit", "-q", "-m", "base")
@@ -194,6 +194,22 @@ describe("github run --review", () => {
     expect(asksForReview("@mendcode review")).toBe(true)
     expect(asksForReview("thanks @mendcode, reviewing later")).toBe(false)
   })
+  test("reviewers as a list on the base: a comment from outside it is skipped with no reply and no model call; a listed maintainer is answered", async () => {
+    const repo = await repository("enabled: true\nreviewers: [maintainer, reader]\n")
+    const api = fakeApi(repo)
+    const outsider = reviewer()
+    const skipped = await hostedReview({ directory: repo.dir, event: event("issue_comment", { actor: "drive-by" }), gh: api.gh, publish: true, sessionFactory: outsider.factory })
+    expect(skipped).toMatchObject({ status: "skipped", posted: false, reason: "@drive-by is not in reviewers of .mendcode/review.yaml" })
+    expect(api.replies).toEqual([])
+    expect(outsider.prompts).toEqual([])
+    // Listed but without write access: the list grants nothing, the usual refusal answers.
+    const reader = await hostedReview({ directory: repo.dir, event: event("issue_comment", { actor: "reader" }), gh: api.gh, publish: true, sessionFactory: reviewer().factory })
+    expect(reader).toMatchObject({ status: "skipped", command: "review", posted: true })
+    const asked = reviewer()
+    expect((await hostedReview({ directory: repo.dir, event: event("issue_comment"), gh: api.gh, publish: false, sessionFactory: asked.factory })).status).toBe("reviewed")
+    expect(asked.prompts.length).toBeGreaterThan(0)
+  })
+
   test("through the daemon: github.run with review posts with the run's token and answers with the report", async () => {
     const repo = await repository()
     const api = fakeApi(repo)

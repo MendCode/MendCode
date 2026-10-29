@@ -52,7 +52,11 @@ jobs:
             base=$(sed -nE 's/^  "version": "([0-9]+\.[0-9]+\.[0-9]+).*",$/\1/p' apps/cli/package.json)
           fi
           [[ "$base" =~ ^[0-9]{1,9}\.[0-9]{1,9}\.[0-9]{1,9}$ ]] || { echo "cannot derive the nightly version (got '$base')" >&2; exit 1; }
-          tag="v$base-nightly.$(date -u +%Y%m%d).$RUN"
+          # A nightly tagged by hand can hold this run's number for the day: take the next free one.
+          day=$(date -u +%Y%m%d)
+          run=$RUN
+          while git rev-parse -q --verify "refs/tags/v$base-nightly.$day.$run" > /dev/null; do run=$((run + 1)); done
+          tag="v$base-nightly.$day.$run"
           gh api "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/$tag" -f sha="$head" > /dev/null
           gh workflow run release.yml --repo "$GITHUB_REPOSITORY" --ref "$tag" -f tag="$tag"
           echo "tagged $head as $tag and dispatched the release"

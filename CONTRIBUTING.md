@@ -39,6 +39,8 @@ Do not run a bare `bun test` from the root: it starts every suite in one process
 - **One problem per pull request**, with the smallest change that solves it. Unrelated cleanup goes in its own.
 - **A test that fails without the change** for every fix, and tests for every new behavior, including its error states.
 - **Docs in the same pull request** when behavior changes: `docs/` is what users and the model read.
+- **An item under `## Unreleased` in [CHANGELOG.md](CHANGELOG.md)** for every change a user can notice, in plain English. The
+  release notes are made from it, and a release with nothing there fails ([release notes](docs/release.md#release-titles-and-notes)).
 - **Evidence in the description:** the commands you ran and what they printed; a screenshot or frame for a visual change.
 - No new dependencies without discussing them first. Keep `apps/cli` free of network and process calls; the daemon does that work.
 - Follow the code around you: naming, comment density, the module layout. Write code and UI text in English.

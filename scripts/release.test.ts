@@ -39,8 +39,8 @@ test("release YAML has five native targets, a single test gate and scoped write 
   expect(gateSource).not.toContain("|| true")
   expect(gate.runs.steps.find((step) => step.run?.includes("test-shards.sh"))?.env).toMatchObject({ MENDCODE_TEST_TIME_SCALE: "3", MENDCODE_REQUIRE_TOOLS: "rg,zsh" })
   expect(gateSource).toContain("--config.minimumReleaseAge=10080")
-  expect(build!.needs).toBe("checks")
-  expect(release!.needs).toEqual(["checks", "build"])
+  expect(build!.needs).toEqual(["checks", "notes"])
+  expect(release!.needs).toEqual(["checks", "notes", "build"])
   const matrix = build!.strategy!.matrix.include
   expect(matrix.map((row) => row.target).sort()).toEqual(["darwin-arm64", "darwin-x64", "linux-arm64", "linux-x64", "windows-x64"])
   expect(matrix.find((row) => row.target === "windows-x64")?.suffix).toBe(".exe")
@@ -167,6 +167,28 @@ test("a nightly takes the patch after the newest stable, or the package version 
   expect(first.gh).toContain(`workflow run release.yml --repo MendCode/MendCode --ref v0.0.1-nightly.${today}.42 -f tag=v0.0.1-nightly.${today}.42`)
   const after = tagStep((git) => { git("tag", "v0.0.1-beta.7"); git("tag", "v0.0.1"); git("commit", "-q", "--allow-empty", "-m", "next") })
   expect(after.gh).toContain(`--ref v0.0.2-nightly.${today}.42`)
+})
+
+test("a run number a nightly of the same day already holds is skipped, not reused", () => {
+  const today = new Date().toISOString().slice(0, 10).replaceAll("-", "")
+  const taken = tagStep((git) => { git("tag", `v0.0.1-nightly.${today}.42`); git("tag", `v0.0.1-nightly.${today}.43`); git("commit", "-q", "--allow-empty", "-m", "next") })
+  expect(taken.code).toBe(0)
+  expect(taken.gh).toContain(`-f ref=refs/tags/v0.0.1-nightly.${today}.44`)
+  expect(taken.gh).toContain(`--ref v0.0.1-nightly.${today}.44 -f tag=v0.0.1-nightly.${today}.44`)
+})
+
+test("a release's title and notes come from scripts/release-notes.ts in a job beside the gate, never from GitHub's generated notes", () => {
+  const { notes, build, release } = workflow.jobs
+  expect(build!.needs).toEqual(["checks", "notes"])
+  expect(release!.needs).toEqual(["checks", "notes", "build"])
+  expectPinned(notes!.steps, source)
+  expect(notes!.steps[0]!.with).toMatchObject({ "fetch-depth": 0, "fetch-tags": true, "persist-credentials": false })
+  const write = notes!.steps.find((step) => step.run?.includes("scripts/release-notes.ts"))!.run!
+  expect(write).toContain("--out notes/notes.md --title-out notes/title.txt")
+  const create = release!.steps.find((step) => step.run?.includes("gh release create"))!.run!
+  expect(create).toContain('--notes-file "$RUNNER_TEMP/notes/notes.md"')
+  expect(create).toContain('--title "$(cat "$RUNNER_TEMP/notes/title.txt")"')
+  expect(source).not.toContain("--generate-notes")
 })
 
 test("main that already has a nightly is not tagged again", () => {

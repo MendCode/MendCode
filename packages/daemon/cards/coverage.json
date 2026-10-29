@@ -19,7 +19,7 @@
     "footer": "feature:forecast command:footer setting:footer",
     "git": "feature:worktree_tool feature:pr_watch feature:review_order feature:git_hub feature:git_actions flag:worktree_tool flag:pr_watch flag:git_actions command:new command:changes command:git command:pr command:review command:commit command:security-review command:bughunter command:verify command:worktrees command:warp setting:worktreeGcDays setting:worktreeBranch setting:git tool:pr_watch tool:review tool:worktree",
     "goals": "feature:plan_tools command:plan command:goal command:plan-review command:ultraplan setting:planExitAgent tool:create_goal tool:get_goal tool:plan_exit tool:plan_review tool:plan_submit tool:todo tool:update_goal",
-    "pr-review": "feature:pr_review flag:pr_review file:watches.json",
+    "pr-review": "feature:pr_review flag:pr_review file:watches.json file:outbox.json",
     "hooks": "feature:hooks command:hooks setting:allowedHttpHookUrls file:hooks.json",
     "keys": "command:editor command:vim command:multiline command:shortcuts command:keymap command:help file:keybindings.json",
     "layout": "feature:panel command:sidebar command:panel file:session-look.json",
