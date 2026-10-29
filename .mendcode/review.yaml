@@ -1,0 +1,10 @@
+enabled: true
+profile: normal
+reviewers: all
+publishers: maintainers
+fixes: false
+triggers:
+  opened: true
+  synchronize: true
+  ready_for_review: true
+  drafts: false
