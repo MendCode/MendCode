@@ -1,0 +1,13 @@
+diff --git a/src/price.ts b/src/price.ts
+index fedfa32..f10235c 100644
+--- a/src/price.ts
++++ b/src/price.ts
+@@ -3,7 +3,7 @@ import { roundHalfUp } from "./round"
+ /** Formats an integer amount of cents for display, e.g. 1999 -> "$19.99". */
+ export function formatPrice(cents: number, symbol = "$"): string {
+   const sign = cents < 0 ? "-" : ""
+-  const dollars = roundHalfUp(Math.abs(cents) / 100)
++  const dollars = roundHalfUp(Math.abs(cents) / 100, 2)
+   return `${sign}${symbol}${dollars.toFixed(2)}`
+ }
+ 

@@ -1,0 +1,11 @@
+2026-02-27T06:00:00Z INFO  mailer daily-report sent recipients=finance@example.test total_cents=204115
+2026-02-27T06:00:00Z INFO  reconcile day=2026-02-27 ledger_cents=204115 diff=0
+2026-02-28T06:00:00Z INFO  mailer daily-report sent recipients=finance@example.test total_cents=198430
+2026-02-28T06:00:00Z INFO  reconcile day=2026-02-28 ledger_cents=198430 diff=0
+2026-03-01T06:00:00Z INFO  mailer daily-report sent recipients=finance@example.test total_cents=187740
+2026-03-01T06:00:00Z WARN  reconcile day=2026-03-01 ledger_cents=241880 diff=-54140
+2026-03-01T06:00:01Z WARN  mailer smtp greeting delayed 3.1s
+2026-03-02T06:00:00Z INFO  mailer daily-report sent recipients=finance@example.test total_cents=43390
+2026-03-02T06:00:00Z WARN  reconcile day=2026-03-02 ledger_cents=120580 diff=-77190
+2026-03-02T06:00:02Z WARN  disk usage on /var/data at 83%
+2026-03-02T09:12:40Z INFO  partner-onboarding northwind feed_version=2 enabled_at=2026-02-28T12:00:00Z

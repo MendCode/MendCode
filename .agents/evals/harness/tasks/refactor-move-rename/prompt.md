@@ -1,0 +1,1 @@
+`fmtMoney` in src/util.ts is a terrible name and money formatting doesn't belong in a grab-bag util file. Move it to `src/money/format.ts` and rename it `formatMoney`, then update everything that uses it (src and tests, plus the index re-exports). Behaviour must not change and the tests should stay green.

@@ -1,0 +1,41 @@
+node_modules/
+dist/
+.cache/
+*.log
+.DS_Store
+spikes/*/node_modules/
+
+# graft's local graph cache — regenerable, not committed (run `graft build`).
+/graft/
+/.ignore
+
+# local state and secrets
+.env
+.env.*
+!.env.example
+*.db
+*.db-wal
+*.db-shm
+*.sqlite*
+.mendcode/
+.mendcode-v2/
+.codex/
+.claude/
+
+# captures, traces, scratch
+captures/
+traces/
+*.trace
+*.tsbuildinfo
+coverage/
+.pnpm-store/
+tmp/
+benchmarks/out/
+.vscode/
+.idea/
+
+# private working notes, kept on the owner's disk only
+/.agents/
+/docs/tasks/
+/legacy/
+/specs/voice-notes-*.md

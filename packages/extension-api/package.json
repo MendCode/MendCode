@@ -1,0 +1,7 @@
+{
+  "name": "@mendcode/extension-api",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts", "./plugin-files": "./src/plugin-files.ts", "./plugin": "./src/plugin.ts", "./preflight": "./src/preflight.ts", "./views": "./src/views.ts", "./package-scaffold": "./src/package-scaffold.ts", "./view-starter": "./src/view-starter.ts", "./workflow-starter": "./src/workflow-starter.ts" }
+}

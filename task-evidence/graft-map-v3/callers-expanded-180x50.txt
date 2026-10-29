@@ -1,0 +1,50 @@
+     ● You
+     Who calls renderToolCard?
+
+     ◆ graph_callers renderToolCard
+       ╭─ renderToolCard · 7 callers · 16 callees ──────────────────────────────────────────────────────────────────────────╮
+       │ defaultBody   transcript:399            ─┐                                                                         │
+       │   └ rowsOf    transcript:520             │                                                                         │
+       │ chatView      transcript:700            ─┼──▶ ◆ renderToolCard ──┬──▶ cardRows               :254                  │
+       │   └ layout    render:40                  │      tool-card:237    │      └ computerCard       computer-card:7       │
+       │     └ frame   render:90                  │                       │      └ wrapSpans          markdown:600          │
+       │ toolCardTest  chat-transcript.test:7    ─┤                       │      └ diffBlocks         :347                  │
+       │ recallTest    tool-card-sessions.test:2 ─┘                       ├──▶ parseToolTitle         :101                  │
+       │                                                                  │      └ renderSpecLines    render-spec:19        │
+       │                                                                  │      └ sessionRecallCard  session-recall-card:6 │
+       │                                                                  └──▶ parseDiff              :131                  │
+       │                                                                         └ outputLines        :229                  │
+       │                                                                           └ parsePatch       :161                  │
+       │ +6 callees · ~12.4K tokens saved · ctrl+o collapses                                                                │
+       ╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+     defaultBody is the only product caller.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

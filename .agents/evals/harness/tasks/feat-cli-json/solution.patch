@@ -1,0 +1,85 @@
+diff --git a/src/cli.ts b/src/cli.ts
+index f3187e5..33908f7 100644
+--- a/src/cli.ts
++++ b/src/cli.ts
+@@ -1,6 +1,6 @@
+ import { readFileSync } from "node:fs"
+ import { addCounts, countText, emptyCounts } from "./count"
+-import { formatTable, type Row } from "./format"
++import { formatJson, formatTable, type Row } from "./format"
+ 
+ type Io = { out(text: string): void; err(text: string): void }
+ 
+@@ -8,10 +8,12 @@ type Io = { out(text: string): void; err(text: string): void }
+ export function run(argv: string[], io: Io): number {
+   const options = argv.filter((arg) => arg.startsWith("--"))
+   const files = argv.filter((arg) => !arg.startsWith("--"))
+-  if (options.length > 0) {
+-    io.err(`unknown option ${options[0]}\n`)
++  const unknown = options.find((option) => option !== "--json")
++  if (unknown) {
++    io.err(`unknown option ${unknown}\n`)
+     return 2
+   }
++  const json = options.includes("--json")
+   if (files.length === 0) {
+     io.err("usage: wc FILE...\n")
+     return 2
+@@ -30,7 +32,7 @@ export function run(argv: string[], io: Io): number {
+     rows.push({ file, ...counts })
+     total = addCounts(total, counts)
+   }
+-  io.out(formatTable(rows, total))
++  io.out(json ? formatJson(rows, total) : formatTable(rows, total))
+   return 0
+ }
+ 
+diff --git a/src/format.ts b/src/format.ts
+index f94c779..5e390cf 100644
+--- a/src/format.ts
++++ b/src/format.ts
+@@ -9,6 +9,12 @@ export function formatTable(rows: Row[], total: Counts): string {
+   return `${lines.join("\n")}\n`
+ }
+ 
++/** One JSON document: every file in the order given, plus the total. */
++export function formatJson(rows: Row[], total: Counts): string {
++  const files = rows.map(({ file, lines, words, bytes }) => ({ file, lines, words, bytes }))
++  return `${JSON.stringify({ files, total })}\n`
++}
++
+ function formatRow(counts: Counts, label: string): string {
+   return [counts.lines, counts.words, counts.bytes].map((value) => String(value).padStart(8)).join("") + ` ${label}`
+ }
+diff --git a/test/cli.test.ts b/test/cli.test.ts
+index cd6b113..9ffacab 100644
+--- a/test/cli.test.ts
++++ b/test/cli.test.ts
+@@ -32,6 +32,27 @@ describe("cli", () => {
+     expect(result.out.trim().split("\n")).toHaveLength(3)
+   })
+ 
++  test("--json prints files and a total as one JSON document", () => {
++    const dir = fixture({ "a.txt": "x y\n", "b.txt": "z\n" })
++    const a = path.join(dir, "a.txt")
++    const b = path.join(dir, "b.txt")
++    const result = capture(["--json", a, b])
++    expect(result.code).toBe(0)
++    expect(JSON.parse(result.out)).toEqual({
++      files: [
++        { file: a, lines: 1, words: 2, bytes: 4 },
++        { file: b, lines: 1, words: 1, bytes: 2 },
++      ],
++      total: { lines: 2, words: 3, bytes: 6 },
++    })
++  })
++
++  test("--json still reports errors on stderr with exit 2", () => {
++    const result = capture(["--json", "/definitely/not/here.txt"])
++    expect(result.code).toBe(2)
++    expect(result.out).toBe("")
++  })
++
+   test("a missing file is a usage error", () => {
+     const result = capture(["/definitely/not/here.txt"])
+     expect(result.code).toBe(2)

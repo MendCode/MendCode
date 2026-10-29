@@ -1,0 +1,50 @@
+     ● You
+     Who calls renderToolCard?
+
+     ◆ graph_find run
+       ╭─ search: run · 3 matches ─────────╮
+       │ ◆ search: run ──┬─── run     a:3  │
+       │                 ├─── runAll  b:9  │
+       │                 └─── runner  b:20 │
+       ╰───────────────────────────────────╯
+
+     defaultBody is the only product caller.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

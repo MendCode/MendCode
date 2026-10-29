@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/MendCode/MendCode/security/advisories/new
+    about: Report it privately, never in a public issue
+  - name: Documentation
+    url: https://github.com/MendCode/MendCode/tree/main/docs
+    about: Every feature, setting and command is documented here

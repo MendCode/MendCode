@@ -1,0 +1,8 @@
+{
+  "name": "@mendcode/engine-native",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": { "@mendcode/protocol": "workspace:*", "@mendcode/kernel": "workspace:*", "@mendcode/tools": "workspace:*", "@mendcode/packages": "workspace:*", "@mendcode/extension-api": "workspace:*", "zod": "4.6.5" }
+}

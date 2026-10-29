@@ -1,0 +1,8 @@
+{
+  "version": 0,
+  "packs": [
+    { "id": "mendcode-review", "version": "1.0.0", "title": "Focused review", "tags": ["official", "balanced"], "source": { "url": "./mendcode-review" } },
+    { "id": "mendcode-autoresearch", "version": "1.0.0", "title": "Metric experiments", "tags": ["official", "full", "on-demand"], "source": { "url": "./mendcode-autoresearch" } },
+    { "id": "mendcode-web-routing", "version": "1.0.0", "title": "Explicit web routes", "tags": ["official", "balanced", "on-demand"], "source": { "url": "./mendcode-web-routing" } }
+  ]
+}

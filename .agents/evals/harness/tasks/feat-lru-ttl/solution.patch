@@ -1,0 +1,151 @@
+diff --git a/src/lru.ts b/src/lru.ts
+index 07002e3..c773ffc 100644
+--- a/src/lru.ts
++++ b/src/lru.ts
+@@ -1,34 +1,49 @@
+-export type LruOptions = { max: number }
++export type LruOptions = {
++  max: number
++  /** Default time-to-live of an entry in milliseconds; without it entries never expire. */
++  ttlMs?: number
++  /** Clock used to judge expiry; defaults to `Date.now`. */
++  now?: () => number
++}
++
++type Entry<V> = { value: V; expiresAt: number | undefined }
+ 
+ /** Least-recently-used cache: reading or writing a key makes it the newest; the oldest key is evicted past `max`. */
+ export class LruCache<K, V> {
+   readonly #max: number
+-  readonly #entries = new Map<K, V>()
++  readonly #ttlMs: number | undefined
++  readonly #now: () => number
++  readonly #entries = new Map<K, Entry<V>>()
+ 
+-  constructor({ max }: LruOptions) {
++  constructor({ max, ttlMs, now }: LruOptions) {
+     if (!Number.isInteger(max) || max < 1) throw new RangeError("max must be a positive integer")
+     this.#max = max
++    this.#ttlMs = ttlMs
++    this.#now = now ?? Date.now
+   }
+ 
+   get size(): number {
++    this.#purge()
+     return this.#entries.size
+   }
+ 
+   has(key: K): boolean {
+-    return this.#entries.has(key)
++    return this.#live(key) !== undefined
+   }
+ 
+   get(key: K): V | undefined {
+-    if (!this.#entries.has(key)) return undefined
+-    const value = this.#entries.get(key) as V
++    const entry = this.#live(key)
++    if (!entry) return undefined
+     this.#entries.delete(key)
+-    this.#entries.set(key, value)
+-    return value
++    this.#entries.set(key, entry)
++    return entry.value
+   }
+ 
+-  set(key: K, value: V): this {
++  set(key: K, value: V, ttlMs?: number): this {
++    this.#purge()
++    const life = ttlMs ?? this.#ttlMs
+     this.#entries.delete(key)
+-    this.#entries.set(key, value)
++    this.#entries.set(key, { value, expiresAt: life === undefined ? undefined : this.#now() + life })
+     while (this.#entries.size > this.#max) {
+       const oldest = this.#entries.keys().next()
+       if (oldest.done) break
+@@ -38,7 +53,9 @@ export class LruCache<K, V> {
+   }
+ 
+   delete(key: K): boolean {
+-    return this.#entries.delete(key)
++    const live = this.#live(key) !== undefined
++    this.#entries.delete(key)
++    return live
+   }
+ 
+   clear(): void {
+@@ -47,6 +64,22 @@ export class LruCache<K, V> {
+ 
+   /** Keys from oldest to newest. */
+   keys(): K[] {
++    this.#purge()
+     return [...this.#entries.keys()]
+   }
++
++  #live(key: K): Entry<V> | undefined {
++    const entry = this.#entries.get(key)
++    if (!entry) return undefined
++    if (entry.expiresAt !== undefined && this.#now() >= entry.expiresAt) {
++      this.#entries.delete(key)
++      return undefined
++    }
++    return entry
++  }
++
++  #purge(): void {
++    const now = this.#now()
++    for (const [key, entry] of this.#entries) if (entry.expiresAt !== undefined && now >= entry.expiresAt) this.#entries.delete(key)
++  }
+ }
+diff --git a/test/lru.test.ts b/test/lru.test.ts
+index 21c53cc..7888a19 100644
+--- a/test/lru.test.ts
++++ b/test/lru.test.ts
+@@ -22,3 +22,48 @@ describe("LruCache", () => {
+     expect(() => new LruCache({ max: 0 })).toThrow(RangeError)
+   })
+ })
++
++describe("LruCache ttl", () => {
++  function clock() {
++    let current = 0
++    return { now: () => current, advance: (ms: number) => void (current += ms) }
++  }
++
++  test("entries expire after the default ttl", () => {
++    const time = clock()
++    const cache = new LruCache<string, number>({ max: 3, ttlMs: 100, now: time.now })
++    cache.set("a", 1)
++    time.advance(50)
++    expect(cache.get("a")).toBe(1)
++    time.advance(60)
++    expect(cache.get("a")).toBeUndefined()
++    expect(cache.has("a")).toBe(false)
++    expect(cache.size).toBe(0)
++  })
++
++  test("a per-entry ttl overrides the default", () => {
++    const time = clock()
++    const cache = new LruCache<string, number>({ max: 3, ttlMs: 100, now: time.now })
++    cache.set("short", 1, 10)
++    time.advance(20)
++    expect(cache.has("short")).toBe(false)
++  })
++
++  test("an expired entry does not push out a live one", () => {
++    const time = clock()
++    const cache = new LruCache<string, number>({ max: 2, now: time.now })
++    cache.set("a", 1, 10)
++    cache.set("b", 2)
++    time.advance(20)
++    cache.set("c", 3)
++    expect(cache.keys()).toEqual(["b", "c"])
++  })
++
++  test("without a ttl nothing expires", () => {
++    const time = clock()
++    const cache = new LruCache<string, number>({ max: 1, now: time.now })
++    cache.set("a", 1)
++    time.advance(10 ** 9)
++    expect(cache.get("a")).toBe(1)
++  })
++})

@@ -1,0 +1,36 @@
+import { defineTheme } from "../define"
+
+/** Ported from MendCode v1 `context/theme/lucent-orng.json` (dark variant). */
+export default defineTheme({
+  name: "lucent-orng",
+  label: "Lucent Orng",
+  dark: true,
+  background: "#181818",
+  colors: {
+    primary: "#ec5b2b",
+    text: "#eeeeee",
+    body: "#eeeeee",
+    muted: "#808080",
+    border: "#ec5b2b",
+    heading: "#ec5b2b",
+    code: "#6ba1e6",
+    link: "#ec5b2b",
+    success: "#6ba1e6",
+    warning: "#ec5b2b",
+    error: "#e06c75",
+    accent: "#fff7f1",
+    secondary: "#ee7948",
+    info: "#56b6c2",
+    borderActive: "#ee7948",
+    panel: "#181818",
+    element: "#181818",
+    diffAddedBg: "#181818",
+    diffRemovedBg: "#181818",
+    synComment: "#808080",
+    synKeyword: "#ec5b2b",
+    synString: "#6ba1e6",
+    synNumber: "#fff7f1",
+    synFunction: "#ee7948",
+    synType: "#e5c07b",
+  },
+})

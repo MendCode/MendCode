@@ -1,0 +1,17 @@
+diff --git a/src/shipping.ts b/src/shipping.ts
+index a90a3d1..0dc44d8 100644
+--- a/src/shipping.ts
++++ b/src/shipping.ts
+@@ -10,9 +10,9 @@
+  */
+ export function shippingCents(weightGrams: number): number {
+   if (!Number.isFinite(weightGrams) || weightGrams <= 0) throw new RangeError("weight must be a positive number of grams")
+-  if (weightGrams < 500) return 499
+-  if (weightGrams < 2000) return 899
+-  if (weightGrams < 5000) return 1499
++  if (weightGrams <= 500) return 499
++  if (weightGrams <= 2000) return 899
++  if (weightGrams <= 5000) return 1499
+   return 2999
+ }
+ 

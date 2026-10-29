@@ -1,0 +1,31 @@
+8f296b8deb53f14c
+  git /work/app
+  • The cache key ignored the directory.
+
+    ╭─ ts ───────────────────────────────────────────────────────────────────────────────────── copy
+    │ const key = `${directory}:${name}`
+    │ return cache.get(key) ?? load(key)
+
+    • both sessions now get their own entry
+    • the test passes after the change
+
+    See the docs (https://example.com) for details.
+
+  › Thanks. Run the whole suite once more.
+
+     $ bun test  212 pass · 0 fail                                                             9.1s
+
+  • All 212 tests pass.
+
+  ┃ # Allow shell?
+  ┃  rm -rf build && bun run build --minify
+  ┃
+  ┃ 1  (●) Allow once  a
+  ┃ 2  (○) Allow for this session  s
+  ┃ 3  (○) Reject  d
+  ┃
+  ┃ ↑↓ select · enter confirm · ? explain · or type what to do instead
+  ────────────────────────────────────────────────────────────────────────────────────────────────
+  ❭
+  ────────────────────────────────────────────────────────────────────────────────────────────────
+   Build

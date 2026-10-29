@@ -1,0 +1,1 @@
+{ "name": "mendcode-web-routing", "title": "Explicit web routes", "version": "1.0.0", "description": "On-demand source retrieval with explicit destinations", "extensions": false, "capabilities": [], "compatibility": { "mendcode": "v2", "runtimePack": "1" } }

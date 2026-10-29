@@ -1,0 +1,17 @@
+{
+  "label": "Retro",
+  "background": "#0d0a05",
+  "colors": {
+    "primary": "#ffb000",
+    "text": "#ffd27a",
+    "body": "#e8b95a",
+    "muted": "#a8823a",
+    "border": "#6b5220",
+    "heading": "#ffb000",
+    "code": "#7fd48a",
+    "link": "#6ec1d6",
+    "success": "#7fd48a",
+    "warning": "#ffb000",
+    "error": "#ff6b5a"
+  }
+}

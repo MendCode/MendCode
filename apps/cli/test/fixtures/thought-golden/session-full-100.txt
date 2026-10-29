@@ -1,0 +1,5 @@
+37001ddb97118bed
+    ┃ Thought: Order of the topics · 1.6s
+    ┃ The index is built from ORDER, so packages has to be added there; the file itself exists.
+    ┃ Thought: Count the topics · 1.6s
+    ┃ A short script over docs/ tells me which chapter has no topic.

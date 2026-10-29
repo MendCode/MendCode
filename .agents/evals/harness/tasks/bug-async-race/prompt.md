@@ -1,0 +1,1 @@
+We're seeing the profile store get hit with the same request several times at once when two screens open together, even though lookups are supposed to be cached. The test I wrote for it fails. Please find out why and fix it.

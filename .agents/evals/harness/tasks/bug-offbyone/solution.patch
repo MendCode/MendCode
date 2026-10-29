@@ -1,0 +1,13 @@
+diff --git a/src/paginate.ts b/src/paginate.ts
+index 3d47bd3..e1b50aa 100644
+--- a/src/paginate.ts
++++ b/src/paginate.ts
+@@ -12,7 +12,7 @@ export function paginate<T>(items: readonly T[], page: number, pageSize: number)
+   if (!Number.isInteger(page) || page < 1) throw new RangeError("page must be a positive integer")
+   const pageCount = Math.max(1, Math.ceil(items.length / pageSize))
+   const start = (page - 1) * pageSize
+-  const end = start + pageSize - 1
++  const end = start + pageSize
+   return {
+     items: items.slice(start, end),
+     page,

@@ -1,0 +1,23 @@
+{
+  "name": "mendcode",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.17.0",
+  "scripts": {
+    "build": "bun scripts/build.ts",
+    "test:compiled": "MENDCODE_TEST_COMPILE=1 bun test apps/cli/test/compiled.test.ts apps/cli/test/compiled-script-host.test.ts",
+    "test": "bun scripts/test-fast.ts --all",
+    "test:fast": "bun scripts/test-fast.ts",
+    "typecheck": "tsc -p tsconfig.base.json --noEmit",
+    "clean": "rm -rf node_modules packages/*/node_modules apps/*/node_modules spikes/*/node_modules .cache dist packages/*/dist apps/*/dist"
+  },
+  "devDependencies": {
+    "@types/bun": "1.3.13",
+    "typescript": "7.0.2"
+  },
+  "dependencies": {
+    "@mendcode/protocol": "workspace:*",
+    "@mendcode/store": "workspace:*",
+    "@mendcode/client": "workspace:*"
+  }
+}

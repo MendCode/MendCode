@@ -1,0 +1,44 @@
+name: Bug report
+description: Something in MendCode does not work as it should
+labels: ["bug"]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The output of `mendcode --version`
+      placeholder: "0.0.1"
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options: ["macOS (Apple silicon)", "macOS (Intel)", "Linux x64", "Linux arm64", "Windows x64"]
+    validations:
+      required: true
+  - type: input
+    id: engine
+    attributes:
+      label: Engine and model
+      description: Native with which provider and model, or Claude Code, Codex, ACP, pi
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: The smallest steps that show the problem
+      placeholder: "1. Run mendcode in an empty folder\n2. Type /pr on\n3. ..."
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected and what happened
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or screenshot
+      description: "`mendcode doctor` output helps. Remove secrets and private paths before pasting."
+      render: text

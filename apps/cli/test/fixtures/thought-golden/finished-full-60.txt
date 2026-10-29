@@ -1,0 +1,4 @@
+3f2a05af18727c99
+    ┃ Thought: Order of the topics · 1.6s
+    ┃ The index is built from ORDER, so packages has to be
+    ┃ added there; the file itself exists.

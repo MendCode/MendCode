@@ -1,0 +1,17 @@
+---
+summary: where settings and config files live, and who may change what
+docs: resources-config, customize, profiles
+aliases: config, configuration, files, paths
+---
+Data dir: ~/.mendcode-v2, or the daemon's --dir / MENDCODE_V2_DIR. It holds AGENTS.md (global instructions), mcp.json, hooks.json, keybindings.json, statusline.json, tui/profile.json (terminal look) and the folders extensions/ skills/ commands/ agents/ tools/ themes/ packages/. The daemon's own settings live in its database there (mendd.db): never edit it.
+Project: <project>/.mendcode/ holds the same kinds of files, plus project.json (project-level settings; an unreadable one is listed in /debug-config), prompts/custom.md and context/project.md. AGENTS.md or CLAUDE.md at the project root are read as instructions. Project tools, hooks, MCP, agents and extensions wait for the user to trust the project (/tools).
+Layers, lowest to highest: user packages, user folder, project packages, project folder. A later layer wins a name.
+
+Two kinds of settings:
+1. Terminal look (theme, density, prompt box, logo, footer, ...): the profile. Apply with customize_ui {"action":"settings","values":{...}} (find a key: action keys); keys: {{program}} docs customize.
+2. Daemon settings (tier, permissions, models, budgets, compaction, ...): you CAN change any. mendcode_settings {"action":"get"} reads them (no secrets); {"action":"propose","patch":{...},"reason":"..."} validates the patch (a key's value replaces it whole; null resets it), shows the user before → after, and saves only on their Apply, in every mode. Do not tell the user to do it. Your shell's change commands are refused. The user has /settings, /tier, /model, /experimental. Cards: {{program}} docs permissions | models | tiers | budgets | compaction.
+
+Read the current state, never guess it, and not from a MendCode source tree on this machine (it may be another version): mendcode_settings get; {{program}} status; {{program}} control-plane system config-layers (every layer, no secrets); config-paths. The user has /debug-config and /doctor.
+Common daemon keys: [[setting:tier]], [[setting:defaultPermission]], [[setting:outputStyle]], [[setting:budgets]], [[setting:experimental]], [[setting:foreignResources]] (.agents and .claude folders as data).
+Others: /init sets up the instructions file; [[setting:instructionFallbacks]] (extra instruction file names) and [[setting:projectRootMarkers]] (.git when unset); [[setting:shell]] (the model's shell; per project too), [[setting:shellCommandPrefix]] (run before each command) and [[setting:loginShell]]; [[setting:instructions]] (extra instruction paths or globs); [[setting:watcher]] { ignore: [globs] }; [[setting:tool_output]] { max_lines, max_bytes, filters }; [[setting:logLevel]]; [[setting:autoupdate]], [[setting:enterprise]]; [[setting:setupPreset]], [[setting:onboarded]]; [[setting:profiles]] (per-folder memories, roles, permission; {{program}} profile add NAME DIR) and [[setting:projectThemes]] ({{program}} docs theme). Turned-off extras: [[setting:disabledPackages]], [[setting:disabledPackageResources]], [[setting:disabledExtensions]], [[setting:disabledSkills]].
+Remote and peer terminals cannot set [[setting:permission]], [[setting:sandbox]], [[setting:shellEnvironment]], [[setting:trustedToolDirs]], [[setting:proxy]] or [[setting:projectConfig]] (nor approve such a proposal). Propose only what the user asked; never raise or remove a spend limit unless asked for that exact change. Never print or ask for secrets.

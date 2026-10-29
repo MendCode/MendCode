@@ -1,0 +1,36 @@
+import { defineTheme } from "../define"
+
+/** Ported from MendCode v1 `context/theme/mercury.json` (dark variant). */
+export default defineTheme({
+  name: "mercury",
+  label: "Mercury",
+  dark: true,
+  background: "#171721",
+  colors: {
+    primary: "#8da4f5",
+    text: "#dddde5",
+    body: "#dddde5",
+    muted: "#9d9da8",
+    border: "#2a2a35",
+    heading: "#ffffff",
+    code: "#77c599",
+    link: "#8da4f5",
+    success: "#77c599",
+    warning: "#fc9b6f",
+    error: "#fc92b4",
+    accent: "#8da4f5",
+    secondary: "#a7b6f8",
+    info: "#77becf",
+    borderActive: "#8da4f5",
+    panel: "#10101a",
+    element: "#272735",
+    diffAddedBg: "#2a3a39",
+    diffRemovedBg: "#45303e",
+    synComment: "#9d9da8",
+    synKeyword: "#8da4f5",
+    synString: "#77c599",
+    synNumber: "#fc9b6f",
+    synFunction: "#8da4f5",
+    synType: "#77becf",
+  },
+})

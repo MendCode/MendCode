@@ -1,0 +1,9 @@
+{
+  "name": "@mendcode/codegraph",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": { "@mendcode/tools": "workspace:*", "zod": "4.6.5" },
+  "devDependencies": { "@mendcode/protocol": "workspace:*" }
+}

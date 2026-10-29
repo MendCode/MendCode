@@ -1,0 +1,1 @@
+{ "name": "mendcode-review", "title": "Focused review", "version": "1.0.0", "description": "One bounded review command", "extensions": false, "capabilities": ["commands"], "compatibility": { "mendcode": "v2", "runtimePack": "1" } }

@@ -1,0 +1,26 @@
+{
+  "name": "@mendcode/cli",
+  "version": "0.0.1-dev",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "mendcode": "./src/entry.ts"
+  },
+  "dependencies": {
+    "@jsquash/webp": "1.5.0",
+    "@mendcode/build-id": "workspace:*",
+    "@mendcode/client": "workspace:*",
+    "@mendcode/editor-launch": "workspace:*",
+    "@mendcode/loops": "workspace:*",
+    "@mendcode/migrate": "workspace:*",
+    "@mendcode/program": "workspace:*",
+    "@mendcode/protocol": "workspace:*",
+    "@mendcode/upgrade": "workspace:*",
+    "@mendcode/extension-api": "workspace:*"
+  },
+  "devDependencies": {
+    "@mendcode/daemon": "workspace:*",
+    "@mendcode/engine-faux": "workspace:*",
+    "@mendcode/engine-native": "workspace:*"
+  }
+}

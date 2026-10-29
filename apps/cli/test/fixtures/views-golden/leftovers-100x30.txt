@@ -1,0 +1,31 @@
+484e84bf1b974a76
+  git /work/app
+  › ls -la src
+    Plan
+
+    1. Read the store
+    2. Fix the key
+    3. Run the suite
+
+  Saved to memory: the cache key includes the directory
+
+  • Done.
+
+   ┃
+   ┃  provider said slow down
+   ┃  retry in 30s
+   ┃  rate_limit
+   ┃
+
+  ┌─ Context packed ───────────────────────────────────────────────────────────────────────────────┐
+  │                                                                                                │
+  │ manual                                                                        /compaction open │
+  │                                                                                                │
+  │ ▸ Compacted memory · packed                                                                    │
+  │                                                                                                │
+  └────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+  ────────────────────────────────────────────────────────────────────────────────────────────────
+  ❭
+  ────────────────────────────────────────────────────────────────────────────────────────────────
+   Build

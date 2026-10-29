@@ -1,0 +1,30 @@
+name: ci
+
+# Typecheck and the whole test suite on Linux for every pull request, and on demand for a branch (`gh workflow run ci.yml --ref main`)
+# to find Linux-only breakage (missing tools, slower machines, signal timing) before a release tag. A push to main does not run it:
+# every tag, betas included, runs the same action once as the release gate, and that is the one run per version.
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  checks:
+    runs-on: ubuntu-24.04
+    # Same limit and arithmetic as the release gate (see the checks job of release.yml).
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/checks

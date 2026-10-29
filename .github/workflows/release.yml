@@ -1,0 +1,202 @@
+name: release
+
+on:
+  push:
+    tags: ["v*", "dev-*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag (vX.Y.Z, vX.Y.Z-beta.N, vX.Y.Z-nightly.DATE.RUN or dev-<sha>); never creates a tag
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  TAG: ${{ inputs.tag || github.ref_name }}
+  WORKFLOW_REF: ${{ github.ref }}
+
+jobs:
+  checks:
+    runs-on: ubuntu-24.04
+    # 45 min (the same limit as ci.yml). Arithmetic: the four parts take 474 s on a developer machine (cli 179, daemon 139, packages 138,
+    # rest 18). The only measurement on this runner is the first release run: its cli part took 609 s against 179 s here, 3.4 times
+    # (2.7 times without the 16 failing tests), so the parts need about 474 s x 3.4 = 27 min, setup and typecheck another 1.5 min.
+    # 45 min is that plus 50 %. A part that hangs is cut at 25 min by MENDCODE_TEST_PART_SECONDS and still leaves room for the other three.
+    timeout-minutes: 45
+    outputs:
+      version: ${{ steps.channel.outputs.version }}
+      prerelease: ${{ steps.channel.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: refs/tags/${{ inputs.tag || github.ref_name }}
+          persist-credentials: false
+      - name: Validate and classify the existing tag
+        id: channel
+        run: |
+          test "$WORKFLOW_REF" = "refs/tags/$TAG" || { echo "Dispatch with --ref $TAG so the signing identity is the release tag" >&2; exit 1; }
+          git show-ref --verify "refs/tags/$TAG"
+          if [[ "$TAG" =~ ^v[0-9]{1,9}\.[0-9]{1,9}\.[0-9]{1,9}$ ]]; then
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          elif [[ "$TAG" =~ ^v[0-9]{1,9}\.[0-9]{1,9}\.[0-9]{1,9}-beta\.[0-9]{1,9}$ || "$TAG" =~ ^v[0-9]{1,9}\.[0-9]{1,9}\.[0-9]{1,9}-nightly\.[0-9]{8}\.[1-9][0-9]{0,8}$ || "$TAG" =~ ^dev-[0-9a-f]{7,40}$ ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "unsupported tag: $TAG" >&2
+            exit 1
+          fi
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+      # Typecheck and the whole suite in parts (scripts/test-shards.sh): the gate that fails the release when a part fails.
+      - uses: ./.github/actions/checks
+
+  build:
+    needs: checks
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: darwin-arm64
+            runner: macos-15
+            suffix: ""
+          - target: darwin-x64
+            runner: macos-15-intel
+            suffix: ""
+          - target: linux-x64
+            runner: ubuntu-24.04
+            suffix: ""
+          - target: linux-arm64
+            runner: ubuntu-24.04-arm
+            suffix: ""
+          - target: windows-x64
+            runner: windows-2022
+            suffix: .exe
+    env:
+      VERSION: ${{ needs.checks.outputs.version }}
+      TARGET: ${{ matrix.target }}
+      ASSET: mendcode-${{ needs.checks.outputs.version }}-${{ matrix.target }}${{ matrix.suffix }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: refs/tags/${{ inputs.tag || github.ref_name }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22.16.0
+      - uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
+        with:
+          bun-version: 1.3.13
+      - name: Install locked dependencies
+        run: |
+          corepack enable
+          corepack prepare pnpm@11.17.0 --activate
+          pnpm install --frozen-lockfile --config.minimumReleaseAge=10080
+      - name: Check native runner and stamp version
+        run: |
+          bun -e 'const os = process.platform === "win32" ? "windows" : process.platform; if (`${os}-${process.arch}` !== process.env.TARGET) throw new Error("runner does not match target"); const file = "apps/cli/package.json"; const json = await Bun.file(file).json(); json.version = process.env.VERSION; await Bun.write(file, JSON.stringify(json, null, 2) + "\n")'
+      - name: Build the release binary
+        run: bun run build --target "$TARGET" --outfile "dist/$ASSET"
+      - name: Parse the Windows installer without executing it
+        if: runner.os == 'Windows'
+        run: bun test scripts/install.test.ts -t "PowerShell installer parses"
+      - name: Bubblewrap for the script host smoke
+        # The compiled binary is its own workflow script host (`__script-host`) and runs under the OS sandbox; on Linux that is bubblewrap,
+        # which Ubuntu 24.04 only allows once unprivileged user namespaces are enabled. macOS uses seatbelt and Windows has no script host.
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y --no-install-recommends bubblewrap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          bwrap --version
+      - name: Smoke the exact release binary on the native runner
+        env:
+          MENDCODE_TEST_COMPILE: "1"
+          MENDCODE_REQUIRE_COMPILE: "1"
+          MENDCODE_TEST_BINARY: ${{ github.workspace }}/dist/${{ env.ASSET }}
+        run: bun run test:compiled
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ env.ASSET }}
+          path: dist/${{ env.ASSET }}
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+
+  release:
+    needs: [checks, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    env:
+      VERSION: ${{ needs.checks.outputs.version }}
+      PRERELEASE: ${{ needs.checks.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: refs/tags/${{ inputs.tag || github.ref_name }}
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@735343b667d3e6f658f44d0eca948eb6282f2b76 # v2.0.2
+        with:
+          bun-version: 1.3.13
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: mendcode-${{ env.VERSION }}-*
+          path: dist
+          merge-multiple: true
+      - name: Verify all five files arrived and generate the offline SBOM
+        run: |
+          for target in darwin-arm64 darwin-x64 linux-x64 linux-arm64 windows-x64; do
+            suffix=""
+            if [ "$target" = windows-x64 ]; then suffix=".exe"; fi
+            test -s "dist/mendcode-$VERSION-$target$suffix"
+          done
+          bun scripts/sbom.ts "$VERSION" dist/SBOM.cdx.json
+          bun scripts/release-index.ts "$TAG" "$GITHUB_REPOSITORY" dist
+          cp scripts/install.sh scripts/install.ps1 dist/
+      - name: Skip GitHub provenance on private repositories
+        if: github.event.repository.private
+        run: echo "GitHub build provenance skipped on private repositories (requires Enterprise Cloud); cosign signing and SBOM still run."
+      - uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3.0.0
+        id: provenance
+        if: ${{ !github.event.repository.private }}
+        with:
+          subject-path: |
+            dist/mendcode-*
+            dist/release-index.json
+      - name: Attach the provenance bundle
+        if: ${{ !github.event.repository.private }}
+        env:
+          BUNDLE: ${{ steps.provenance.outputs.bundle-path }}
+        run: cp "$BUNDLE" dist/provenance.sigstore.json
+      - uses: sigstore/cosign-installer@7e8b541eb2e61bf99390e1afd4be13a184e9ebc5 # v3.10.1
+        with:
+          cosign-release: v2.6.1
+      - name: Sign release payloads with keyless OIDC
+        run: |
+          for file in dist/mendcode-* dist/SBOM.cdx.json dist/install.sh dist/install.ps1; do
+            cosign sign-blob --yes --new-bundle-format --bundle "$file.sigstore.json" "$file"
+          done
+      - name: Hash every payload and signature, then sign the manifest
+        run: |
+          bun scripts/checksums.ts dist
+          cosign sign-blob --yes --new-bundle-format --bundle dist/SHA256SUMS.sigstore.json dist/SHA256SUMS
+      - name: Create the release from the existing tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          flags=(--repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes --title "$TAG")
+          if [ "$PRERELEASE" = true ]; then flags+=(--prerelease); else flags+=(--latest); fi
+          gh release create "$TAG" dist/* "${flags[@]}"

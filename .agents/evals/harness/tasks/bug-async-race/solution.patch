@@ -1,0 +1,33 @@
+diff --git a/src/memoize-async.ts b/src/memoize-async.ts
+index 0b47945..5539cb7 100644
+--- a/src/memoize-async.ts
++++ b/src/memoize-async.ts
+@@ -4,16 +4,20 @@
+  * kept, and a failed load is forgotten so the next call retries.
+  */
+ export function memoizeAsync<K extends string, V>(load: (key: K) => Promise<V>) {
+-  const done = new Map<K, V>()
++  const entries = new Map<K, Promise<V>>()
+ 
+-  async function get(key: K): Promise<V> {
+-    if (done.has(key)) return done.get(key) as V
+-    const value = await load(key)
+-    done.set(key, value)
+-    return value
++  function get(key: K): Promise<V> {
++    const existing = entries.get(key)
++    if (existing) return existing
++    const pending = load(key).catch((error: unknown) => {
++      if (entries.get(key) === pending) entries.delete(key)
++      throw error
++    })
++    entries.set(key, pending)
++    return pending
+   }
+ 
+-  get.clear = () => done.clear()
+-  get.has = (key: K) => done.has(key)
++  get.clear = () => entries.clear()
++  get.has = (key: K) => entries.has(key)
+   return get
+ }

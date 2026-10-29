@@ -1,0 +1,15 @@
+{
+  "name": "@mendcode/migrate",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": {
+    "@mendcode/program": "workspace:*",
+    "@mendcode/protocol": "workspace:*",
+    "@mendcode/store": "workspace:*"
+  },
+  "devDependencies": {
+    "@mendcode/engine-native": "workspace:*"
+  }
+}

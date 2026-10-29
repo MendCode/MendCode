@@ -1,0 +1,20 @@
+     ● You
+     Who calls renderToolCard?
+
+     ⊙ graft · graft_trace_calls renderToolCard
+       ╭─ renderToolCard · 2 callers · 2 callees ────╮
+       │ ┌── defaultBody              transcript:399 │
+       │ ├── chat-transcript.test.ts                 │
+       │ └─▶ ◆ renderToolCard  tool-card:237         │
+       │       └─▶ cardRows          :254            │
+       │             └ computerCard  computer-card:7 │
+       │ ~16.5K tokens saved                         │
+       ╰─────────────────────────────────────────────╯
+
+     defaultBody is the only product caller.
+
+
+
+
+
+

@@ -1,0 +1,67 @@
+name: nightly
+
+# Once a day, when main has commits the last nightly does not have: tag main as vX.Y.Z-nightly.YYYYMMDD.RUN and start the release
+# workflow on that tag, which runs the whole gate before it builds and signs anything. X.Y.Z is the patch after the newest stable
+# release (the version in apps/cli/package.json before the first one). A tag pushed with the workflow token starts no workflow, so
+# the release is dispatched explicitly, on the tag ref, which keeps the signing identity the tag's. Only the 14 newest nightlies stay.
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  tag:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      actions: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: main
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+      - name: Tag main and dispatch the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN: ${{ github.run_number }}
+        run: |
+          head=$(git rev-parse HEAD)
+          if git tag --points-at "$head" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+-nightly\.[0-9]{8}\.[0-9]+$'; then
+            echo "main ($head) already has a nightly"
+            exit 0
+          fi
+          stable=$(git tag --list 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1 || true)
+          if [ -n "$stable" ]; then
+            IFS=. read -r major minor patch <<< "${stable#v}"
+            base="$major.$minor.$((patch + 1))"
+          else
+            base=$(sed -nE 's/^  "version": "([0-9]+\.[0-9]+\.[0-9]+).*",$/\1/p' apps/cli/package.json)
+          fi
+          [[ "$base" =~ ^[0-9]{1,9}\.[0-9]{1,9}\.[0-9]{1,9}$ ]] || { echo "cannot derive the nightly version (got '$base')" >&2; exit 1; }
+          tag="v$base-nightly.$(date -u +%Y%m%d).$RUN"
+          gh api "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/$tag" -f sha="$head" > /dev/null
+          gh workflow run release.yml --repo "$GITHUB_REPOSITORY" --ref "$tag" -f tag="$tag"
+          echo "tagged $head as $tag and dispatched the release"
+      - name: Keep the 14 newest nightlies
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release list --repo "$GITHUB_REPOSITORY" --limit 200 --json tagName --jq '.[].tagName' \
+            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+-nightly\.[0-9]{8}\.[0-9]+$' \
+            | sort -V -r \
+            | tail -n +15 \
+            | while read -r old; do gh release delete "$old" --repo "$GITHUB_REPOSITORY" --cleanup-tag --yes; done

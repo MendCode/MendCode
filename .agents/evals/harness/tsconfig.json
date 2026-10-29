@@ -1,0 +1,6 @@
+{
+  "extends": "../../../tsconfig.base.json",
+  "compilerOptions": { "noEmit": true },
+  "include": ["*.ts", "lib/**/*.ts", "adapters/**/*.ts", "test/**/*.ts"],
+  "exclude": ["tasks", "test/fixtures"]
+}

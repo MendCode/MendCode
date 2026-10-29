@@ -1,0 +1,31 @@
+524d7c3d6bdff2e6
+  git /work/app
+  • The cache key ignored the directory.
+
+    ╭─ ts ───────────────────────────────────────────────────────────────────────────────────── copy
+    │ const key = `${directory}:${name}`
+    │ return cache.get(key) ?? load(key)
+
+    • both sessions now get their own entry
+    • the test passes after the change
+
+    See the docs (https://example.com) for details.
+
+  › Thanks. Run the whole suite once more.
+
+     $ bun test  212 pass · 0 fail                                                             9.1s
+
+  • All 212 tests pass.
+
+  [suggested] 6  session 24  context 15  code 16  agents 10  setup 30  look 8  more 23
+  ┃ /new       Start a session                                                           ctrl+x n
+  ┃ /sessions  Switch session                                                            ctrl+x l
+  ┃ /model     Switch model                                                              ctrl+x m
+  ┃ /changes   Review changes and replay hunks                                           ctrl+x d
+  ┃ /context   Inspect context usage
+  ┃ /settings  Edit saved settings
+  ─ 1–6 of 6 ─ ←→ group · ↑↓ move · tab complete · enter run
+  ────────────────────────────────────────────────────────────────────────────────────────────────
+  ❭ /
+  ────────────────────────────────────────────────────────────────────────────────────────────────
+   Build

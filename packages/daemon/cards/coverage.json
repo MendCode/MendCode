@@ -1,0 +1,82 @@
+{
+  "cards": {
+    "agents": "command:agent command:agents setting:default_agent setting:agent setting:defaultAgent",
+    "attachments": "feature:voice command:voice command:attach group:Image_generation setting:image_generation setting:voice tool:image_gen",
+    "backlog": "feature:backlog command:backlog",
+    "one-tree": "feature:one_tree",
+    "background": "flag:async_tools flag:async_questions command:bg command:ps tool:question_start tool:question_status tool:shell_monitor tool:shell_session tool:sleep tool:tool_cancel tool:tool_start tool:tool_status tool:tool_wait",
+    "budgets": "feature:usage_resume command:usage command:limit command:stats-project file:spend.json",
+    "cache-ttl": "feature:wait_cache feature:cache_countdown setting:promptCacheTtl setting:claudeCacheTtl",
+    "codegraph": "feature:codegraph feature:graph_context feature:orientation command:graph setting:codegraph_index tool:apply_patch tool:code_search tool:diagnostics tool:graph_callers tool:graph_file_api tool:graph_find tool:graph_impact tool:graph_map tool:lsp file:formatter.json file:lsp.json",
+    "commands": "feature:slash_menu group:Slash_menu file:mendcode.json",
+    "comments": "command:comments group:Comments",
+    "compaction": "feature:claude_compact feature:snip flag:auto_recall feature:limit_checkpoint feature:idle_compact feature:compact_notice flag:snip command:compact command:context command:files command:context-window command:compaction group:Compaction setting:compactAtTokens setting:idleCompactAtTokens setting:compactNoticePercent setting:cacheLifetimeMinutes setting:handoffTokenCap setting:promptCache setting:compaction setting:cache setting:cacheProjects tool:snip",
+    "computer": "feature:computer feature:browser tool:browser tool:computer_capture tool:computer_code tool:computer_key tool:computer_observe tool:computer_session tool:screenshot",
+    "customize": "command:view command:customize group:Views group:Home group:Terminal tool:customize_ui file:journal.json file:pending.json file:report.json",
+    "engines": "feature:pi feature:thread_mcp feature:acp_registry command:acp setting:acpAgents setting:threadMcp file:acp-agents.json file:acp-models.json file:pi.json",
+    "extensions": "feature:extensions command:extensions group:Extensions tool:sidebar",
+    "extend": "tool:mendcode_extend",
+    "footer": "feature:forecast command:footer setting:footer",
+    "git": "feature:worktree_tool feature:pr_watch feature:review_order feature:git_hub feature:git_actions flag:worktree_tool flag:pr_watch flag:git_actions command:new command:changes command:git command:pr command:review command:commit command:security-review command:bughunter command:verify command:worktrees command:warp setting:worktreeGcDays setting:worktreeBranch setting:git tool:pr_watch tool:review tool:worktree",
+    "goals": "feature:plan_tools command:plan command:goal command:plan-review command:ultraplan setting:planExitAgent tool:create_goal tool:get_goal tool:plan_exit tool:plan_review tool:plan_submit tool:todo tool:update_goal",
+    "pr-review": "feature:pr_review flag:pr_review file:watches.json",
+    "hooks": "feature:hooks command:hooks setting:allowedHttpHookUrls file:hooks.json",
+    "keys": "command:editor command:vim command:multiline command:shortcuts command:keymap command:help file:keybindings.json",
+    "layout": "feature:panel command:sidebar command:panel file:session-look.json",
+    "loops": "feature:autoresearch command:loops tool:loop",
+    "mcp": "feature:mcp command:mcps file:auth.json file:mcp-auth.json file:mcp.json",
+    "memory": "feature:memory_ux command:remember command:memory command:dream command:wiki setting:dreamAt setting:dreamMaxTokens setting:evolution setting:memoryMaintenance setting:memoryEnabled setting:memoryUse setting:memoryGenerate setting:memoryRequireApproval setting:memoryMaxPromptTokens setting:memoryMaxEntries setting:memoryProjectMaxEntries setting:memoryPolicies setting:memoryGlobalCompactionMaxEntries setting:dreamConsolidationPolicy setting:memoryProjects setting:evolutionWorkflows tool:memory tool:memory_graph tool:remember",
+    "models": "feature:panel_models command:model command:connect command:providers command:variants command:fast command:ai-config setting:models setting:serviceTier setting:disabled_models setting:enabled_providers setting:subagent_variant setting:plan_exit_agent setting:provider setting:modelContext tool:ai_config file:models.json file:providers.json file:models-dev-cache.json",
+    "packages": "feature:packages feature:package_tools feature:package_capabilities feature:official_packages command:packages command:marketplace group:Capabilities setting:disabledPackages setting:disabledPackageResources tool:packages file:activation.json file:mendcode-package.json file:package.json",
+    "permissions": "flag:continue_loop_on_deny command:permissions command:approve command:sandbox command:trust setting:defaultPermission setting:permissionAllow setting:smartSandboxTrust setting:engineSafetyPrompts setting:permission setting:permissionReviewerRole setting:sandbox setting:additionalDirectories",
+    "pet": "feature:pets feature:pet_generator command:pet command:mascot setting:pet file:pet.json",
+    "prompt-modes": "feature:instruction_includes feature:caveman command:output-style command:prompt-mode setting:outputStyle file:prompt-context.json",
+    "reasoning": "feature:jev flag:reasoning_auto tool:reasoning_auto file:adaptive-reasoning.json file:consent.json",
+    "remote": "command:tsm command:ide command:mflow command:remote-control command:org command:console command:share command:unshare setting:share file:channels.json file:console.json file:remote.json",
+    "secrets": "command:env command:privacy command:secrets tool:secrets setting:engineEnvironment",
+    "sessions": "feature:session_meta flag:session_recall command:sessions command:undo command:redo command:history command:rename command:title command:pin command:settle command:timeline command:fork command:tree command:label command:recap command:export command:import command:cd command:pwd command:stash command:drafts command:prompt-history command:backtrack command:copy command:quit command:queue setting:retentionDays setting:queue setting:snapshot setting:snapshotScope setting:allowMessageEdits tool:session_meta tool:session_notes tool:session_read tool:session_search tool:sessions",
+    "settings": "command:experimental command:settings command:init tool:mendcode_settings setting:profiles setting:trustedToolDirs setting:disabledSkills setting:disabledExtensions setting:onboarded setting:experimental setting:logLevel setting:shell setting:watcher setting:instructions setting:foreignResources setting:instructionFallbacks setting:projectRootMarkers setting:shellEnvironment setting:shellCommandPrefix setting:loginShell setting:autoupdate setting:enterprise setting:projectConfig setting:budgets setting:setupPreset setting:tier file:profile.json file:project.json file:statusline.json",
+    "skills": "command:skills setting:skills tool:skill",
+    "subagents": "feature:subagents feature:task_worktree feature:task_fork feature:cheap_subagents setting:subagentCatalog setting:agentMentions feature:orchestration_receipts feature:panel_orbit command:scratch command:tasks command:pause command:unpause command:stop setting:subagentDepth setting:subagentMaxChildren setting:subagentMaxDescendants setting:subagentOwnerWake tool:task tool:task_status file:agent-mentions.json",
+    "theme": "command:theme setting:theme setting:projectThemes",
+    "threads": "feature:threads feature:handoff flag:thread_tools command:handoff command:btw tool:tell tool:threads",
+    "tiers": "feature:script_workflows feature:aux_tools feature:harness_tools command:tier setting:features",
+    "tools": "feature:code_mode feature:output_filters feature:tool_discovery feature:lean_tools feature:find_tools feature:ui_tool flag:tool_discovery flag:code_mode command:tools setting:tools setting:tool_output tool:code tool:notebook_edit tool:tool_define",
+    "usage": "feature:quota_refresh",
+    "transcript": "command:prompt-chrome command:presentation command:message-rendering command:submit-scroll command:timestamps command:thinking command:scrollbar command:jump-to-latest command:activity command:username command:terminal-title command:tips command:sticky-prompt command:find command:raw command:messages group:Prompt_&_footer group:Session_chrome group:Markdown group:Status_segments setting:view",
+    "troubleshooting": "feature:storage_compact feature:single_process flag:openTelemetry command:changelog command:debug-config command:terminal-setup command:tutorial command:accessible command:doctor command:fetch command:setup command:status command:daemon command:restart command:reload command:storage command:mend-assets command:intro command:release-channel file:upgrade.json",
+    "viewer": "feature:file_viewer command:add-dir command:open command:diagram",
+    "web": "feature:webfetch_modes feature:web_routing setting:proxy setting:web tool:webfetch tool:websearch",
+    "workflows": "feature:fanout command:fanout command:workflows command:compound tool:workflow_control tool:workflow_save tool:workflow_script tool:workflow_start tool:workflow_status file:ai.json file:plan.json"
+  },
+  "internal": [
+    {
+      "reason": "Claude Code's own settings file, not MendCode's: only its effortLevel is read, as the default level of a Claude Code model (docs/claude-code.md)",
+      "items": "file:settings.json"
+    },
+    {
+      "reason": "core coding tools: every request carries each one's own schema and description, a card would only repeat it",
+      "items": "tool:edit tool:glob tool:grep tool:ls tool:question tool:read tool:shell tool:shell_kill tool:shell_output tool:write"
+    },
+    {
+      "reason": "inert schema key: nothing reads it (reduced motion comes from MENDCODE_REDUCED_MOTION=1 or screen-reader mode, docs/profile-keys.md)",
+      "items": "setting:reducedMotion"
+    },
+    {
+      "reason": "credential stores: written by login, /connect and token commands, never shown to a model",
+      "items": "file:chatgpt-auth.json file:github-copilot-auth.json file:plugin-auth.json file:provider-metadata-auth.json file:remote-tokens.json"
+    },
+    {
+      "reason": "other tools' own files, which MendCode only detects (formatter and language-server gates, package manager)",
+      "items": "file:biome.json file:composer.json file:deno.json file:jsconfig.json file:package-lock.json file:pyrightconfig.json file:tsconfig.json"
+    },
+    {
+      "reason": "internal state, caches and indexes the daemon or terminal writes and reads itself; no user edit path",
+      "items": "file:file-frecency.json file:global.json file:http-workspaces.json file:latest-backup.json file:marketplace-index.json file:mcp-pending-budget.json file:model-resolutions.json file:package-authoring.json file:package-sources.json file:plugin-metadata.json file:pr-watch.json file:preview.json file:project-rest.json file:release-index.json file:restore.json file:rooms.json file:runtime-pack.json file:session-permissions.json file:session-rest.json file:session-shares.json file:slash-recents.json file:stash.json file:state.json file:static-shares.json file:upgrade-recovery.json"
+    },
+    {
+      "reason": "maintainer records (security audit, half-done audit, performance budgets, release pipeline, PTY smoke harness), not user-facing",
+      "items": "doc:security-2026-10-04 doc:halfdone-audit doc:performance doc:release doc:pty-smoke"
+    }
+  ]
+}

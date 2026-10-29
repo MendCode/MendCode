@@ -1,0 +1,13 @@
+diff --git a/src/payments/checkout-client.ts b/src/payments/checkout-client.ts
+index c3ab57e..0c80d8c 100644
+--- a/src/payments/checkout-client.ts
++++ b/src/payments/checkout-client.ts
+@@ -1,7 +1,7 @@
+ import { timeoutError } from "../shared/errors"
+ 
+ /** Longest a checkout call to the payment gateway may take before we give up on it. */
+-export const CHECKOUT_REQUEST_TIMEOUT_MS = 10_000
++export const CHECKOUT_REQUEST_TIMEOUT_MS = 25_000
+ export const CHECKOUT_REQUEST_RETRIES = 1
+ 
+ export type CheckoutRequest = { cartId: string; timeoutMs: number }

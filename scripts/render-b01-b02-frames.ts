@@ -1,0 +1,83 @@
+import { writeFileSync } from "node:fs"
+import path from "node:path"
+import { parityHarness } from "../apps/cli/test/parity-b01-b02-harness"
+import { conversation } from "../apps/cli/test/session-ui-harness"
+import { fit } from "../apps/cli/src/view/deck"
+import { textWidth } from "../apps/cli/src/view/wrap"
+
+export async function renderParityFrames(directory: string, sizes: string[]) {
+  for (const size of sizes.length ? sizes : ["100x30", "180x50"]) {
+    const match = /^(\d+)x(\d+)$/.exec(size)
+    if (!match) throw new Error(`invalid size: ${size}`)
+    const width = Number(match[1]), height = Number(match[2])
+    const h = parityHarness({ width, height })
+    const save = (name: string) => {
+      const expected = name.startsWith("history") ? "history" : name.startsWith("skills") ? "skills" : name === "model-roles" ? "model" : name === "model-providers" || name.startsWith("model-picker") ? "model-picker" : name.startsWith("variant") ? "variants" : name === "session-rename" ? "sessions" : "chat"
+      if (h.app.page !== expected) throw new Error(`wrong page: ${name} is ${h.app.page}`)
+      h.app.render()
+      const frame = h.frames.at(-1)!
+      if (frame.length !== height || frame.some((row) => textWidth(row.map((span) => span.text).join("")) > width)) throw new Error(`overflow: ${name} ${size}`)
+      const rows = frame.map((row) => fit(row, width).map((span) => span.text).join(""))
+      if (rows.some((row) => row.includes("\x1b"))) throw new Error(`ANSI: ${name} ${size}`)
+      writeFileSync(path.join(directory, `${name}-${size}.txt`), `${rows.join("\n")}\n`)
+    }
+    await h.type("/history\r")
+    save("history")
+    await h.type("t")
+    save("history-tools-tree")
+    await h.type("t")
+    save("history-tools-hidden")
+    await h.type("t")
+    await h.type("v")
+    save("history-pages")
+    await h.type("v")
+    save("history-timeline")
+    await h.type("v")
+    await h.type("s")
+    save("history-split-toggle")
+    await h.type("\x1b[5~")
+    save("history-older")
+    await h.type("/Needle")
+    save("history-quick-jump")
+    await h.type("\r")
+    save("history-search-result")
+    await h.type("\r")
+    save("history-reader")
+    await h.type("G")
+    save("history-reader-end")
+    await h.type("l")
+    await h.type("/skills\r")
+    save("skills")
+    await h.type("rev\r")
+    save("skills-disabled")
+    await h.type("\x0c")
+    save("skills-load-error")
+    await h.type("\r\x0c")
+    save("skills-instructions")
+    await h.app.onKey("\x1b")
+    await h.app.onKey("\x1b")
+    await h.type("/model\r")
+    save("model-roles")
+    await h.type("/")
+    save("model-picker")
+    await h.type("atl\x06")
+    save("model-picker-filter")
+    await h.type("\x01")
+    save("model-providers")
+    await h.type("\r\r")
+    save("variants")
+    await h.type("\x1b[B")
+    save("variant-parameters")
+    await h.type("\x1b")
+    await h.type("/rename\r")
+    save("session-rename")
+    await h.app.onKey("\x1b")
+    await h.app.onKey("\x1b")
+    const chat = conversation(h.sessionId, (event) => h.app.onEvent(event))
+    chat.exchange("Inspect the reader", "## Reader\n\nThe **complete turn** remains available.\n\n```ts\nconst reader = true\n```")
+    save("chat-concealed")
+    await h.type("\x18h")
+    save("chat-source")
+    await h.app.onKey("\x03")
+  }
+}

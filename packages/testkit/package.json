@@ -1,0 +1,8 @@
+{
+  "name": "@mendcode/testkit",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": { "@mendcode/protocol": "workspace:*", "@mendcode/kernel": "workspace:*", "@mendcode/workflows": "workspace:*" }
+}

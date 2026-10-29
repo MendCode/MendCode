@@ -1,0 +1,5 @@
+[test]
+# Tests cannot signal anything outside the processes they spawned (scripts/test-kill-guard.ts).
+# A `bun test` with no path is refused: it would load the whole suite into one process (scripts/test-scope-guard.ts).
+# The terminal the run happens in (tmux, screen, tuios) is hidden from tests that do not set their own (scripts/test-terminal-env.ts).
+preload = ["./scripts/test-kill-guard.ts", "./scripts/test-scope-guard.ts", "./scripts/test-terminal-env.ts"]

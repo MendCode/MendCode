@@ -1,0 +1,23 @@
+/** What `/customize` draws under the Markdown rows: one of each block the rows change, short enough for the preview pane. */
+export const MARKDOWN_SAMPLE = [
+  "# Heading one",
+  "",
+  "## Heading two",
+  "",
+  "Text with **bold**, `code`, ~~gone~~ and a [link](https://example.com).",
+  "",
+  "| Name | Qty |",
+  "|:-----|----:|",
+  "| apple | 3 |",
+  "| kiwi | 12 |",
+  "",
+  "```ts",
+  'const total = add(1, "two") // sum',
+  "```",
+  "",
+  "> [!NOTE]",
+  "> A callout with a rail.",
+  "",
+  "- [x] done",
+  "- [ ] open",
+].join("\n")

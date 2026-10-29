@@ -1,0 +1,6 @@
+{
+  "name": "long-many-fixes",
+  "private": true,
+  "type": "module",
+  "scripts": { "test": "bun test" }
+}

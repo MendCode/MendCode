@@ -1,0 +1,36 @@
+import { defineTheme } from "../define"
+
+/** Ported from MendCode v1 `context/theme/cursor.json` (dark variant). */
+export default defineTheme({
+  name: "cursor",
+  label: "Cursor",
+  dark: true,
+  background: "#181818",
+  colors: {
+    primary: "#88c0d0",
+    text: "#e4e4e4",
+    body: "#e4e4e4",
+    muted: "#636363",
+    border: "#272727",
+    heading: "#aaa0fa",
+    code: "#e394dc",
+    link: "#82d2ce",
+    success: "#3fa266",
+    warning: "#f1b467",
+    error: "#e34671",
+    accent: "#88c0d0",
+    secondary: "#81a1c1",
+    info: "#81a1c1",
+    borderActive: "#88c0d0",
+    panel: "#141414",
+    element: "#262626",
+    diffAddedBg: "#203428",
+    diffRemovedBg: "#381322",
+    synComment: "#636363",
+    synKeyword: "#82d2ce",
+    synString: "#e394dc",
+    synNumber: "#f8c762",
+    synFunction: "#efb080",
+    synType: "#efb080",
+  },
+})

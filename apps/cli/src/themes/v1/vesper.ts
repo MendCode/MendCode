@@ -1,0 +1,36 @@
+import { defineTheme } from "../define"
+
+/** Ported from MendCode v1 `context/theme/vesper.json` (dark variant). */
+export default defineTheme({
+  name: "vesper",
+  label: "Vesper",
+  dark: true,
+  background: "#101010",
+  colors: {
+    primary: "#ffc799",
+    text: "#ffffff",
+    body: "#ffffff",
+    muted: "#a0a0a0",
+    border: "#282828",
+    heading: "#ffc799",
+    code: "#a0a0a0",
+    link: "#ffc799",
+    success: "#99ffe4",
+    warning: "#ffc799",
+    error: "#ff8080",
+    accent: "#ffc799",
+    secondary: "#99ffe4",
+    info: "#ffc799",
+    borderActive: "#ffc799",
+    panel: "#101010",
+    element: "#101010",
+    diffAddedBg: "#0d2818",
+    diffRemovedBg: "#281a1a",
+    synComment: "#8b8b8b",
+    synKeyword: "#a0a0a0",
+    synString: "#99ffe4",
+    synNumber: "#ffc799",
+    synFunction: "#ffc799",
+    synType: "#ffc799",
+  },
+})

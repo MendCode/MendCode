@@ -1,0 +1,2 @@
+{"sessionId":"ses_Y","seq":6,"at":1791300000000,"type":"turn.started","turnId":"trn_Y","queueId":"que_Y"}
+{"sessionId":"ses_Y","seq":7,"at":1791300000500,"type":"turn.failed","turnId":"trn_Y","error":{"code":"usage_limit_reached","message":"You have hit your usage limit"},"message":"usage limit","by":"system"}

@@ -1,0 +1,2 @@
+export const PACKAGE_SELECTIONS = ["commands", "agents", "modes", "skills", "plugins", "tools", "prompts", "mcp", "context", "pages", "widgets", "extensions", "themes", "pets", "hooks", "statusline", "recipes", "workflows", "contracts", "keybindings", "models", "focus", "budget", "memory", "permissions", "tuiProfile", "worktreePolicy"] as const
+export type PackageSelection = typeof PACKAGE_SELECTIONS[number]

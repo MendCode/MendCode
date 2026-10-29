@@ -1,0 +1,10 @@
+{
+  "name": "@mendcode/upgrade",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts", "./io": "./src/io.ts", "./install-receipt": "./src/install-receipt.ts","./uninstall": "./src/uninstall.ts", "./uninstall-args": "./src/uninstall-args.ts" },
+  "dependencies": {
+    "@mendcode/program": "workspace:*"
+  }
+}

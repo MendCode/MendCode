@@ -1,0 +1,27 @@
+{"sessionId":"ses_01M491V8FMMAQPDQN111XTZ7HM","seq":6,"at":1791305294340,"type":"turn.started","turnId":"trn_01M491V8G374HTPDM6NXTXFC3A","queueId":"que_01M491V8G1PZ6THT709XB58PMG"}
+{"sessionId":"ses_01M491V8FMMAQPDQN111XTZ7HM","seq":7,"at":1791305294341,"type":"item.started","turnId":"trn_01M491V8G374HTPDM6NXTXFC3A","itemId":"itm_01M491V8G5J8ASWYNSV6X8QSEN","kind":"user_message"}
+{"sessionId":"ses_01M491V8FMMAQPDQN111XTZ7HM","seq":8,"at":1791305294342,"type":"item.completed","itemId":"itm_01M491V8G5J8ASWYNSV6X8QSEN","status":"ok","text":"/faux-activity"}
+{"sessionId":"ses_01M491V8FMMAQPDQN111XTZ7HM","seq":9,"at":1791305294343,"type":"foreground.state","state":"generating","turnId":"trn_01M491V8G374HTPDM6NXTXFC3A"}
+{"sessionId":"ses_01M491V8FMMAQPDQN111XTZ7HM","seq":10,"at":1791305294347,"type":"item.started","turnId":"trn_01M491V8G374HTPDM6NXTXFC3A","itemId":"itm_01M491V8GB9FZGX9K0SEZ0543X","kind":"tool_call","meta":{"tool":"read: src/panel.ts"}}
+{"sessionId":"ses_01M491V8FMMAQPDQN111XTZ7HM","seq":11,"at":1791305294348,"type":"foreground.state","state":"tool","turnId":"trn_01M491V8G374HTPDM6NXTXFC3A"}
+{"sessionId":"ses_01M491V8FMMAQPDQN111XTZ7HM","seq":12,"at":1791305294353,"type":"item.completed","itemId":"itm_01M491V8GB9FZGX9K0SEZ0543X","status":"ok","text":"read src/panel.ts","meta":{"path":"src/panel.ts","savedTokens":120,"filter":"graft"}}
+{"sessionId":"ses_01M491V8FMMAQPDQN111XTZ7HM","seq":13,"at":1791305294354,"type":"foreground.state","state":"generating","turnId":"trn_01M491V8G374HTPDM6NXTXFC3A"}
+{"sessionId":"ses_01M491V8FMMAQPDQN111XTZ7HM","seq":14,"at":1791305294354,"type":"item.started","turnId":"trn_01M491V8G374HTPDM6NXTXFC3A","itemId":"itm_01M491V8GH4CQ8C3B1FBPWS9FE","kind":"tool_call","meta":{"tool":"edit: src/panel.ts"}}
+{"sessionId":"ses_01M491V8FMMAQPDQN111XTZ7HM","seq":15,"at":1791305294355,"type":"foreground.state","state":"tool","turnId":"trn_01M491V8G374HTPDM6NXTXFC3A"}
+{"sessionId":"ses_01M491V8FMMAQPDQN111XTZ7HM","seq":16,"at":1791305294358,"type":"item.completed","itemId":"itm_01M491V8GH4CQ8C3B1FBPWS9FE","status":"ok","text":"edit src/panel.ts","meta":{"path":"src/panel.ts","savedTokens":120,"filter":"graft"}}
+{"sessionId":"ses_01M491V8FMMAQPDQN111XTZ7HM","seq":17,"at":1791305294359,"type":"foreground.state","state":"generating","turnId":"trn_01M491V8G374HTPDM6NXTXFC3A"}
+{"sessionId":"ses_01M491V8FMMAQPDQN111XTZ7HM","seq":18,"at":1791305294361,"type":"item.started","turnId":"trn_01M491V8G374HTPDM6NXTXFC3A","itemId":"itm_01M491V8GP34WFNGMVQN7GBTJN","kind":"tool_call","meta":{"tool":"write: src/orbit.ts"}}
+{"sessionId":"ses_01M491V8FMMAQPDQN111XTZ7HM","seq":19,"at":1791305294361,"type":"foreground.state","state":"tool","turnId":"trn_01M491V8G374HTPDM6NXTXFC3A"}
+{"sessionId":"ses_01M491V8FMMAQPDQN111XTZ7HM","seq":20,"at":1791305294364,"type":"item.completed","itemId":"itm_01M491V8GP34WFNGMVQN7GBTJN","status":"ok","text":"write src/orbit.ts","meta":{"path":"src/orbit.ts","savedTokens":120,"filter":"graft"}}
+{"sessionId":"ses_01M491V8FMMAQPDQN111XTZ7HM","seq":21,"at":1791305294364,"type":"foreground.state","state":"generating","turnId":"trn_01M491V8G374HTPDM6NXTXFC3A"}
+{"sessionId":"ses_01M491V8FMMAQPDQN111XTZ7HM","seq":22,"at":1791305294365,"type":"item.started","turnId":"trn_01M491V8G374HTPDM6NXTXFC3A","itemId":"itm_01M491V8GW3V6H2YZPBY5WBQY4","kind":"tool_call","meta":{"tool":"todo"}}
+{"sessionId":"ses_01M491V8FMMAQPDQN111XTZ7HM","seq":23,"at":1791305294365,"type":"foreground.state","state":"tool","turnId":"trn_01M491V8G374HTPDM6NXTXFC3A"}
+{"sessionId":"ses_01M491V8FMMAQPDQN111XTZ7HM","seq":24,"at":1791305294365,"type":"item.completed","itemId":"itm_01M491V8GW3V6H2YZPBY5WBQY4","status":"ok","text":"[x] Read the panel code\n[~] Fix the next cycle\n[ ] Add regression tests"}
+{"sessionId":"ses_01M491V8FMMAQPDQN111XTZ7HM","seq":25,"at":1791305294365,"type":"foreground.state","state":"generating","turnId":"trn_01M491V8G374HTPDM6NXTXFC3A"}
+{"sessionId":"ses_01M491V8FMMAQPDQN111XTZ7HM","seq":26,"at":1791305294366,"type":"usage.recorded","turnId":"trn_01M491V8G374HTPDM6NXTXFC3A","provider":"faux","model":"echo","input":12000,"output":900,"reasoning":200,"cacheRead":9000,"cacheWrite":0,"costMicros":20000,"profile":{"estimatedTokens":{"instructions":0,"memory":0,"history":0,"toolResults":0,"toolSchemas":0,"media":0,"total":0},"firstTokenMs":500,"durationMs":9000,"toolCount":4,"imageCount":0}}
+{"sessionId":"ses_01M491V8FMMAQPDQN111XTZ7HM","seq":27,"at":1791305294369,"type":"item.started","turnId":"trn_01M491V8G374HTPDM6NXTXFC3A","itemId":"itm_01M491V8GWMW3548RP4S6Y4SNE","kind":"agent_message"}
+{"sessionId":"ses_01M491V8FMMAQPDQN111XTZ7HM","seq":28,"at":1791305294369,"type":"item.delta","itemId":"itm_01M491V8GWMW3548RP4S6Y4SNE","text":"echo: /f"}
+{"sessionId":"ses_01M491V8FMMAQPDQN111XTZ7HM","seq":29,"at":1791305294369,"type":"item.delta","itemId":"itm_01M491V8GWMW3548RP4S6Y4SNE","text":"aux-acti"}
+{"sessionId":"ses_01M491V8FMMAQPDQN111XTZ7HM","seq":30,"at":1791305294376,"type":"item.delta","itemId":"itm_01M491V8GWMW3548RP4S6Y4SNE","text":"vity"}
+{"sessionId":"ses_01M491V8FMMAQPDQN111XTZ7HM","seq":31,"at":1791305294381,"type":"item.completed","itemId":"itm_01M491V8GWMW3548RP4S6Y4SNE","status":"ok","text":"echo: /faux-activity"}
+{"sessionId":"ses_01M491V8FMMAQPDQN111XTZ7HM","seq":32,"at":1791305294382,"type":"turn.completed","turnId":"trn_01M491V8G374HTPDM6NXTXFC3A"}

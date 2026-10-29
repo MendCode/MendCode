@@ -1,0 +1,1 @@
+Finance says our daily revenue report has been coming in low since the start of March: yesterday's total was off by about 770 dollars. Nothing is crashing and the tests pass. The job logs from the last few days are in logs/. Work out why the numbers are short and fix it.

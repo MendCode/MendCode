@@ -1,0 +1,6 @@
+2026-02-27T02:00:00Z INFO  scheduler tick job=orders-report attempt=1
+2026-02-27T02:00:01Z INFO  ingest start source=data/orders-2026-02-27.csv
+2026-02-27T02:00:01Z INFO  upstream feed ok bytes=1022
+2026-02-27T02:00:01Z INFO  ingest done accepted=19 skipped=0 total_cents=204115
+2026-02-27T02:00:02Z INFO  db write ok rows=19 elapsed=301ms
+2026-02-27T02:00:02Z INFO  scheduler job=orders-report status=ok duration=2.1s

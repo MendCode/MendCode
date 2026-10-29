@@ -1,0 +1,190 @@
+diff --git a/src/cart.ts b/src/cart.ts
+index aee1157..bb4a1a5 100644
+--- a/src/cart.ts
++++ b/src/cart.ts
+@@ -1,4 +1,5 @@
+-import { clampInt, fmtMoney } from "./util"
++import { formatMoney } from "./money/format"
++import { clampInt } from "./util"
+ 
+ export type CartItem = { name: string; priceCents: number; quantity: number }
+ 
+@@ -8,5 +9,5 @@ export function cartTotalCents(items: readonly CartItem[]): number {
+ 
+ export function cartSummary(items: readonly CartItem[]): string {
+   const count = items.reduce((sum, item) => sum + clampInt(item.quantity, 0, 99), 0)
+-  return `${count} item${count === 1 ? "" : "s"}, ${fmtMoney(cartTotalCents(items))}`
++  return `${count} item${count === 1 ? "" : "s"}, ${formatMoney(cartTotalCents(items))}`
+ }
+diff --git a/src/email.ts b/src/email.ts
+index 78bef30..68694e8 100644
+--- a/src/email.ts
++++ b/src/email.ts
+@@ -1,9 +1,9 @@
+-import { fmtMoney } from "./util"
++import { formatMoney } from "./money/format"
+ 
+ export function paymentSubject(amountCents: number, currency = "USD"): string {
+-  return `Payment received: ${fmtMoney(amountCents, currency)}`
++  return `Payment received: ${formatMoney(amountCents, currency)}`
+ }
+ 
+ export function paymentBody(name: string, amountCents: number, currency = "USD"): string {
+-  return `Hi ${name}, we received your payment of ${fmtMoney(amountCents, currency)}. Thank you!`
++  return `Hi ${name}, we received your payment of ${formatMoney(amountCents, currency)}. Thank you!`
+ }
+diff --git a/src/index.ts b/src/index.ts
+index 64a4537..c649db8 100644
+--- a/src/index.ts
++++ b/src/index.ts
+@@ -1,6 +1,7 @@
+ export { cartSummary, cartTotalCents } from "./cart"
+ export { paymentBody, paymentSubject } from "./email"
+ export { invoiceTotalCents, lineTotalCents, renderInvoice } from "./invoice"
++export { formatMoney } from "./money/format"
+ export { renderReceipt } from "./receipt"
+ export { bestMonth, monthlyReport } from "./report"
+-export { clampInt, fmtMoney, padRight } from "./util"
++export { clampInt, padRight } from "./util"
+diff --git a/src/invoice.ts b/src/invoice.ts
+index 014d3e2..04ccc26 100644
+--- a/src/invoice.ts
++++ b/src/invoice.ts
+@@ -1,4 +1,5 @@
+-import { fmtMoney, padRight } from "./util"
++import { formatMoney } from "./money/format"
++import { padRight } from "./util"
+ 
+ export type LineItem = { description: string; quantity: number; unitCents: number }
+ 
+@@ -11,7 +12,7 @@ export function invoiceTotalCents(items: readonly LineItem[]): number {
+ }
+ 
+ export function renderInvoice(items: readonly LineItem[], currency = "USD"): string {
+-  const rows = items.map((item) => `${padRight(item.description, 20)}${item.quantity} x ${fmtMoney(item.unitCents, currency)} = ${fmtMoney(lineTotalCents(item), currency)}`)
+-  rows.push(`Total: ${fmtMoney(invoiceTotalCents(items), currency)}`)
++  const rows = items.map((item) => `${padRight(item.description, 20)}${item.quantity} x ${formatMoney(item.unitCents, currency)} = ${formatMoney(lineTotalCents(item), currency)}`)
++  rows.push(`Total: ${formatMoney(invoiceTotalCents(items), currency)}`)
+   return rows.join("\n")
+ }
+diff --git a/src/money/format.ts b/src/money/format.ts
+new file mode 100644
+index 0000000..450ede1
+--- /dev/null
++++ b/src/money/format.ts
+@@ -0,0 +1,11 @@
++const SYMBOLS: Record<string, string> = { USD: "$", EUR: "€", GBP: "£" }
++
++/** "1234567" cents -> "$12,345.67". Negative amounts keep the sign in front of the symbol. */
++export function formatMoney(cents: number, currency = "USD"): string {
++  const sign = cents < 0 ? "-" : ""
++  const abs = Math.abs(Math.round(cents))
++  const whole = Math.floor(abs / 100)
++  const fraction = String(abs % 100).padStart(2, "0")
++  const grouped = String(whole).replace(/\B(?=(\d{3})+(?!\d))/g, ",")
++  return `${sign}${SYMBOLS[currency] ?? `${currency} `}${grouped}.${fraction}`
++}
+diff --git a/src/receipt.ts b/src/receipt.ts
+index 0106243..fc8a7b7 100644
+--- a/src/receipt.ts
++++ b/src/receipt.ts
+@@ -1,8 +1,8 @@
+-import { fmtMoney } from "./util"
++import { formatMoney } from "./money/format"
+ 
+ export function renderReceipt(totalCents: number, paidCents: number, currency = "USD"): string {
+   const change = paidCents - totalCents
+-  const lines = [`Total: ${fmtMoney(totalCents, currency)}`, `Paid: ${fmtMoney(paidCents, currency)}`]
+-  lines.push(change >= 0 ? `Change: ${fmtMoney(change, currency)}` : `Still due: ${fmtMoney(-change, currency)}`)
++  const lines = [`Total: ${formatMoney(totalCents, currency)}`, `Paid: ${formatMoney(paidCents, currency)}`]
++  lines.push(change >= 0 ? `Change: ${formatMoney(change, currency)}` : `Still due: ${formatMoney(-change, currency)}`)
+   return lines.join("\n")
+ }
+diff --git a/src/report.ts b/src/report.ts
+index 8f16bb2..e582b35 100644
+--- a/src/report.ts
++++ b/src/report.ts
+@@ -1,9 +1,10 @@
+-import { fmtMoney, padRight } from "./util"
++import { formatMoney } from "./money/format"
++import { padRight } from "./util"
+ 
+ export type LedgerEntry = { month: string; revenueCents: number; costCents: number }
+ 
+ export function monthlyReport(entries: readonly LedgerEntry[]): string[] {
+-  return entries.map((entry) => `${padRight(entry.month, 10)}${fmtMoney(entry.revenueCents)} in, ${fmtMoney(entry.costCents)} out, net ${fmtMoney(entry.revenueCents - entry.costCents)}`)
++  return entries.map((entry) => `${padRight(entry.month, 10)}${formatMoney(entry.revenueCents)} in, ${formatMoney(entry.costCents)} out, net ${formatMoney(entry.revenueCents - entry.costCents)}`)
+ }
+ 
+ export function bestMonth(entries: readonly LedgerEntry[]): string | undefined {
+diff --git a/src/util.ts b/src/util.ts
+index dca3227..569c0e5 100644
+--- a/src/util.ts
++++ b/src/util.ts
+@@ -1,15 +1,3 @@
+-const SYMBOLS: Record<string, string> = { USD: "$", EUR: "€", GBP: "£" }
+-
+-/** "1234567" cents -> "$12,345.67". Negative amounts keep the sign in front of the symbol. */
+-export function fmtMoney(cents: number, currency = "USD"): string {
+-  const sign = cents < 0 ? "-" : ""
+-  const abs = Math.abs(Math.round(cents))
+-  const whole = Math.floor(abs / 100)
+-  const fraction = String(abs % 100).padStart(2, "0")
+-  const grouped = String(whole).replace(/\B(?=(\d{3})+(?!\d))/g, ",")
+-  return `${sign}${SYMBOLS[currency] ?? `${currency} `}${grouped}.${fraction}`
+-}
+-
+ export function clampInt(value: number, min: number, max: number): number {
+   return Math.min(max, Math.max(min, Math.trunc(value)))
+ }
+diff --git a/test/documents.test.ts b/test/documents.test.ts
+index a1b5adb..213fb32 100644
+--- a/test/documents.test.ts
++++ b/test/documents.test.ts
+@@ -2,9 +2,9 @@ import { describe, expect, test } from "bun:test"
+ import { cartSummary } from "../src/cart"
+ import { paymentBody, paymentSubject } from "../src/email"
+ import { renderInvoice } from "../src/invoice"
++import { formatMoney } from "../src/money/format"
+ import { renderReceipt } from "../src/receipt"
+ import { bestMonth, monthlyReport } from "../src/report"
+-import { fmtMoney } from "../src/util"
+ 
+ describe("documents", () => {
+   test("invoice", () => {
+@@ -34,6 +34,6 @@ describe("documents", () => {
+   test("email", () => {
+     expect(paymentSubject(1234)).toBe("Payment received: $12.34")
+     expect(paymentBody("Ana", 99)).toContain("$0.99")
+-    expect(fmtMoney(99)).toBe("$0.99")
++    expect(formatMoney(99)).toBe("$0.99")
+   })
+ })
+diff --git a/test/util.test.ts b/test/util.test.ts
+index 6832b32..a11099c 100644
+--- a/test/util.test.ts
++++ b/test/util.test.ts
+@@ -1,16 +1,17 @@
+ import { describe, expect, test } from "bun:test"
+-import { clampInt, fmtMoney, padRight } from "../src/util"
++import { formatMoney } from "../src/money/format"
++import { clampInt, padRight } from "../src/util"
+ 
+-describe("fmtMoney", () => {
++describe("formatMoney", () => {
+   test("formats cents with grouping", () => {
+-    expect(fmtMoney(1234567)).toBe("$12,345.67")
++    expect(formatMoney(1234567)).toBe("$12,345.67")
+   })
+   test("keeps the sign in front", () => {
+-    expect(fmtMoney(-250)).toBe("-$2.50")
++    expect(formatMoney(-250)).toBe("-$2.50")
+   })
+   test("other currencies", () => {
+-    expect(fmtMoney(5, "EUR")).toBe("€0.05")
+-    expect(fmtMoney(100, "CHF")).toBe("CHF 1.00")
++    expect(formatMoney(5, "EUR")).toBe("€0.05")
++    expect(formatMoney(100, "CHF")).toBe("CHF 1.00")
+   })
+ })
+ 

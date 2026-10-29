@@ -1,0 +1,6 @@
+{
+  "name": "feat-cli-json",
+  "private": true,
+  "type": "module",
+  "scripts": { "test": "bun test", "start": "bun src/cli.ts" }
+}

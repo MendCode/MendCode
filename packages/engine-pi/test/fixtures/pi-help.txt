@@ -1,0 +1,1 @@
+  --no-extensions, -ne           Disable extension discovery and built-in extensions (explicit -e paths still work)

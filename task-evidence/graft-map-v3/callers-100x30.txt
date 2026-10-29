@@ -1,0 +1,30 @@
+     ● You
+     Who calls renderToolCard?
+
+     ◆ graph_callers renderToolCard
+       ╭─ renderToolCard · 7 callers · 16 callees ─────────────────────────────────────────────────╮
+       │ defaultBody   transcript:399            ─┐                                                │
+       │   └ rowsOf    transcript:520             │                                                │
+       │ chatView      transcript:700            ─┼──▶ ◆ renderToolCard ──┬──▶ cardRows            │
+       │   └ layout    render:40                  │      tool-card:237    │      └ computerCard    │
+       │ toolCardTest  chat-transcript.test:7    ─┤                       │      └ wrapSpans       │
+       │ recallTest    tool-card-sessions.test:2 ─┘                       ├──▶ parseToolTitle      │
+       │                                                                  │      └ renderSpecLines │
+       │                                                                  └──▶ parseDiff           │
+       │ +1 caller · +10 callees · ~12.4K tokens saved · ctrl+o                                    │
+       ╰───────────────────────────────────────────────────────────────────────────────────────────╯
+
+     defaultBody is the only product caller.
+
+
+
+
+
+
+
+
+
+
+
+
+

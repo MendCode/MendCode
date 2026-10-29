@@ -1,0 +1,206 @@
+diff --git a/src/arrays.ts b/src/arrays.ts
+index a229ea2..64ecca4 100644
+--- a/src/arrays.ts
++++ b/src/arrays.ts
+@@ -2,11 +2,11 @@
+ export function chunk<T>(items: readonly T[], size: number): T[][] {
+   if (!Number.isInteger(size) || size < 1) throw new RangeError("size must be a positive integer")
+   const out: T[][] = []
+-  for (let index = 0; index + size <= items.length; index += size) out.push(items.slice(index, index + size))
++  for (let index = 0; index < items.length; index += size) out.push(items.slice(index, index + size))
+   return out
+ }
+ 
+ /** Keeps the first occurrence of each value, in order. 1 and "1" are different values. */
+ export function unique<T>(items: readonly T[]): T[] {
+-  return items.filter((item, index) => items.findIndex((other) => other == item) === index)
++  return items.filter((item, index) => items.indexOf(item) === index)
+ }
+diff --git a/src/async.ts b/src/async.ts
+index e30f0e4..b8d8752 100644
+--- a/src/async.ts
++++ b/src/async.ts
+@@ -2,7 +2,7 @@
+ export async function retry<T>(task: () => Promise<T>, attempts: number): Promise<T> {
+   if (!Number.isInteger(attempts) || attempts < 1) throw new RangeError("attempts must be at least 1")
+   let lastError: unknown
+-  for (let attempt = 1; attempt < attempts; attempt++) {
++  for (let attempt = 1; attempt <= attempts; attempt++) {
+     try {
+       return await task()
+     } catch (error) {
+@@ -19,7 +19,7 @@ export async function settleAll<T>(promises: readonly Promise<T>[]): Promise<{ v
+   const errors: unknown[] = []
+   for (const result of results) {
+     if (result.status === "fulfilled") values.push(result.value)
+-    else if (errors.length === 0) errors.push(result.reason)
++    else errors.push(result.reason)
+   }
+   return { values, errors }
+ }
+diff --git a/src/dates.ts b/src/dates.ts
+index 56e37cc..b06366a 100644
+--- a/src/dates.ts
++++ b/src/dates.ts
+@@ -1,9 +1,9 @@
+ /** Gregorian rule: divisible by 4, except century years, unless divisible by 400. */
+ export function isLeapYear(year: number): boolean {
+-  return year % 4 === 0
++  return (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0
+ }
+ 
+-const NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
++const NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
+ 
+ /** 0 = Sunday ... 6 = Saturday, the same numbering as Date#getDay. Anything else throws RangeError. */
+ export function weekdayName(index: number): string {
+diff --git a/src/format.ts b/src/format.ts
+index 4fa44f4..8096e30 100644
+--- a/src/format.ts
++++ b/src/format.ts
+@@ -3,16 +3,23 @@ export function formatDuration(totalSeconds: number): string {
+   const hours = Math.floor(totalSeconds / 3600)
+   const minutes = Math.floor((totalSeconds % 3600) / 60)
+   const seconds = totalSeconds % 60
+-  return `${hours}h ${minutes}m ${seconds}s`
++  const parts = [hours && `${hours}h`, minutes && `${minutes}m`, seconds && `${seconds}s`].filter(Boolean)
++  return parts.length === 0 ? "0s" : parts.join(" ")
+ }
+ 
+ const NUMERALS: ReadonlyArray<readonly [number, string]> = [
+   [1000, "M"],
++  [900, "CM"],
+   [500, "D"],
++  [400, "CD"],
+   [100, "C"],
++  [90, "XC"],
+   [50, "L"],
++  [40, "XL"],
+   [10, "X"],
++  [9, "IX"],
+   [5, "V"],
++  [4, "IV"],
+   [1, "I"],
+ ]
+ 
+diff --git a/src/math.ts b/src/math.ts
+index 2e2114d..cda3841 100644
+--- a/src/math.ts
++++ b/src/math.ts
+@@ -1,12 +1,13 @@
+ /** Median of a non-empty list; with an even count it is the mean of the two middle values. Never mutates its input. */
+ export function median(values: readonly number[]): number {
+   if (values.length === 0) throw new RangeError("median of an empty list")
+-  const sorted = [...values].sort()
++  const sorted = [...values].sort((a, b) => a - b)
+   const middle = Math.floor(sorted.length / 2)
+   return sorted.length % 2 === 1 ? sorted[middle]! : (sorted[middle - 1]! + sorted[middle]!) / 2
+ }
+ 
+ /** percent(2, 3) -> 66.7: one decimal, rounded to nearest. A total of 0 gives 0. */
+ export function percent(part: number, total: number): number {
+-  return Math.floor((part / total) * 1000) / 10
++  if (total === 0) return 0
++  return Math.round((part / total) * 1000) / 10
+ }
+diff --git a/src/objects.ts b/src/objects.ts
+index a1d6889..08f9196 100644
+--- a/src/objects.ts
++++ b/src/objects.ts
+@@ -1,13 +1,13 @@
+ /** groupBy(["a", "bb", "cc"], (s) => s.length) -> { 1: ["a"], 2: ["bb", "cc"] }, each group in input order. */
+ export function groupBy<T, K extends string | number>(items: readonly T[], key: (item: T) => K): Record<K, T[]> {
+   const out = {} as Record<K, T[]>
+-  for (const item of items) out[key(item)] = [item]
++  for (const item of items) (out[key(item)] ??= []).push(item)
+   return out
+ }
+ 
+ /** pick({ a: 1, b: 2 }, ["a", "z"]) -> { a: 1 }. Keys the object does not have are left out entirely. */
+ export function pick<T extends object, K extends keyof T>(source: T, keys: readonly K[]): Pick<T, K> {
+   const out = {} as Pick<T, K>
+-  for (const key of keys) out[key] = source[key]
++  for (const key of keys) if (key in source) out[key] = source[key]
+   return out
+ }
+diff --git a/src/parse.ts b/src/parse.ts
+index 2abcb41..69c4574 100644
+--- a/src/parse.ts
++++ b/src/parse.ts
+@@ -1,6 +1,9 @@
+ /** Case-insensitive, trimmed: true/yes/on/1 -> true; false/no/off/0/"" -> false; anything else throws SyntaxError. */
+ export function parseBool(text: string): boolean {
+-  return Boolean(text)
++  const word = text.trim().toLowerCase()
++  if (["true", "yes", "on", "1"].includes(word)) return true
++  if (["false", "no", "off", "0", ""].includes(word)) return false
++  throw new SyntaxError(`not a boolean: ${text}`)
+ }
+ 
+ /** "?a=1&b=2&a=3" -> { a: ["1", "3"], b: "2" }: a repeated key becomes an array, values are URI-decoded, a leading "?" is ignored. */
+@@ -9,7 +12,11 @@ export function parseQuery(query: string): Record<string, string | string[]> {
+   for (const pair of query.replace(/^\?/, "").split("&")) {
+     if (!pair) continue
+     const [key = "", value = ""] = pair.split("=")
+-    out[decodeURIComponent(key)] = decodeURIComponent(value)
++    const name = decodeURIComponent(key)
++    const decoded = decodeURIComponent(value)
++    const existing = out[name]
++    if (existing === undefined) out[name] = decoded
++    else out[name] = Array.isArray(existing) ? [...existing, decoded] : [existing, decoded]
+   }
+   return out
+ }
+diff --git a/src/search.ts b/src/search.ts
+index 479bb5c..91ed186 100644
+--- a/src/search.ts
++++ b/src/search.ts
+@@ -2,7 +2,7 @@
+ export function binarySearch(sorted: readonly number[], target: number): number {
+   let low = 0
+   let high = sorted.length - 1
+-  while (low < high) {
++  while (low <= high) {
+     const middle = (low + high) >> 1
+     const value = sorted[middle]!
+     if (value === target) return middle
+@@ -18,5 +18,5 @@ export function mergeSorted(a: readonly number[], b: readonly number[]): number[
+   let i = 0
+   let j = 0
+   while (i < a.length && j < b.length) out.push(a[i]! <= b[j]! ? a[i++]! : b[j++]!)
+-  return out
++  return [...out, ...a.slice(i), ...b.slice(j)]
+ }
+diff --git a/src/strings.ts b/src/strings.ts
+index 7974285..892a206 100644
+--- a/src/strings.ts
++++ b/src/strings.ts
+@@ -1,9 +1,9 @@
+ /** "Hello,  World!" -> "hello-world": lowercase, every run of non-alphanumerics becomes one dash, no leading or trailing dash. */
+ export function slugify(text: string): string {
+-  return text.toLowerCase().replace(/[^a-z0-9]/g, "-")
++  return text.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "")
+ }
+ 
+ /** "the quick  brown fox" -> "The Quick Brown Fox": the first letter of each word is upper-cased, the rest lower-cased, spacing kept. */
+ export function capitalizeWords(text: string): string {
+-  return text.replace(/\b\w/g, (letter) => letter.toUpperCase())
++  return text.toLowerCase().replace(/\b\w/g, (letter) => letter.toUpperCase())
+ }
+diff --git a/src/text.ts b/src/text.ts
+index 129fc89..a6fc89a 100644
+--- a/src/text.ts
++++ b/src/text.ts
+@@ -1,9 +1,10 @@
+ /** Ignores case and every character that is not a letter or digit: "A man, a plan, a canal: Panama" is a palindrome. */
+ export function isPalindrome(text: string): boolean {
+-  return text === [...text].reverse().join("")
++  const letters = text.toLowerCase().replace(/[^a-z0-9]/g, "")
++  return letters === [...letters].reverse().join("")
+ }
+ 
+ /** Words are runs of non-whitespace characters: "  a  b " -> 2, "" -> 0. */
+ export function wordCount(text: string): number {
+-  return text.split(" ").length
++  return text.split(/\s+/).filter(Boolean).length
+ }

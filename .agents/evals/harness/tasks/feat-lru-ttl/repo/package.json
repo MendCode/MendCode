@@ -1,0 +1,6 @@
+{
+  "name": "feat-lru-ttl",
+  "private": true,
+  "type": "module",
+  "scripts": { "test": "bun test" }
+}

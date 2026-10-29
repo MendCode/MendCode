@@ -1,0 +1,50 @@
+     ● You
+     Who calls renderToolCard?
+
+     ◆ graph_callers renderToolCard
+       ╭─ renderToolCard · 7 callers · 16 callees ────────────────────────────────────────────────────────────────────────────────────╮
+       │ fn defaultBody   transcript:399            ─┐                                                                                │
+       │   └ fn rowsOf    transcript:520             │                                                                                │
+       │ fn chatView      transcript:700            ─┼──▶ ◆ renderToolCard     ──┬──▶ fn cardRows               :254                  │
+       │   └ fn layout    render:40                  │      fn · tool-card:237   │      └ fn computerCard       computer-card:7       │
+       │     └ fn frame   render:90                  │                           │      └ fn wrapSpans          markdown:600          │
+       │ fn toolCardTest  chat-transcript.test:7    ─┤                           │      └ fn diffBlocks         :347                  │
+       │ fn recallTest    tool-card-sessions.test:2 ─┘                           ├──▶ fn parseToolTitle         :101                  │
+       │                                                                         │      └ fn renderSpecLines    render-spec:19        │
+       │                                                                         │      └ fn sessionRecallCard  session-recall-card:6 │
+       │                                                                         └──▶ fn parseDiff              :131                  │
+       │                                                                                └ fn outputLines        :229                  │
+       │                                                                                  └ fn parsePatch       :161                  │
+       │ +6 callees · ~12.4K tokens saved · ctrl+o collapses                                                                          │
+       ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+     defaultBody is the only product caller.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

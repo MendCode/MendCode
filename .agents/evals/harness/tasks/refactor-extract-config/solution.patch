@@ -1,0 +1,113 @@
+diff --git a/src/client.ts b/src/client.ts
+index 15e6c52..06dc6b4 100644
+--- a/src/client.ts
++++ b/src/client.ts
+@@ -1,3 +1,4 @@
++import { config } from "./config"
+ import { getJson, type Transport } from "./http"
+ import { retry, type Sleep } from "./retry"
+ 
+@@ -6,7 +7,7 @@ export type ClientOptions = { transport: Transport; sleep?: Sleep }
+ /** JSON client for the public API: every read is retried on failure. */
+ export function createClient({ transport, sleep }: ClientOptions) {
+   return {
+-    get: (path: string) => retry(() => getJson(transport, path), { retries: 3, delayMs: 250, ...(sleep ? { sleep } : {}) }),
+-    describe: () => ({ base: "https://api.example.test/v2", timeoutMs: 5000, retries: 3 }),
++    get: (path: string) => retry(() => getJson(transport, path), { retries: config.retries, delayMs: config.retryDelayMs, ...(sleep ? { sleep } : {}) }),
++    describe: () => ({ base: config.baseUrl, timeoutMs: config.timeoutMs, retries: config.retries }),
+   }
+ }
+diff --git a/src/config.ts b/src/config.ts
+new file mode 100644
+index 0000000..1c1f56d
+--- /dev/null
++++ b/src/config.ts
+@@ -0,0 +1,7 @@
++/** Settings shared by every call to the public API. */
++export const config = {
++  baseUrl: "https://api.example.test/v2",
++  timeoutMs: 5000,
++  retries: 3,
++  retryDelayMs: 250,
++}
+diff --git a/src/health.ts b/src/health.ts
+index 74e10ec..482096e 100644
+--- a/src/health.ts
++++ b/src/health.ts
+@@ -1,8 +1,10 @@
++import { config } from "./config"
++
+ export type HealthProbe = { url: string; timeoutMs: number }
+ 
+ /** The uptime monitor pings the API root with the same timeout as real requests. */
+ export function healthProbe(): HealthProbe {
+-  return { url: "https://api.example.test/v2/health", timeoutMs: 5000 }
++  return { url: `${config.baseUrl}/health`, timeoutMs: config.timeoutMs }
+ }
+ 
+ export function isHealthy(status: number): boolean {
+diff --git a/src/http.ts b/src/http.ts
+index e49d902..61982ee 100644
+--- a/src/http.ts
++++ b/src/http.ts
+@@ -1,12 +1,14 @@
++import { config } from "./config"
++
+ export type RequestOptions = { url: string; timeoutMs: number }
+ 
+ export function buildUrl(path: string): string {
+   const clean = path.startsWith("/") ? path : `/${path}`
+-  return `https://api.example.test/v2${clean}`
++  return `${config.baseUrl}${clean}`
+ }
+ 
+ export function requestOptions(path: string): RequestOptions {
+-  return { url: buildUrl(path), timeoutMs: 5000 }
++  return { url: buildUrl(path), timeoutMs: config.timeoutMs }
+ }
+ 
+ export type Transport = (url: string, init: { timeoutMs: number }) => Promise<{ status: number; body: unknown }>
+diff --git a/src/retry.ts b/src/retry.ts
+index ff769b7..4904b1e 100644
+--- a/src/retry.ts
++++ b/src/retry.ts
+@@ -1,11 +1,13 @@
++import { config } from "./config"
++
+ export type Sleep = (ms: number) => Promise<void>
+ 
+ const realSleep: Sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+ 
+ /** Calls `task` once, then up to `retries` more times with a fixed pause of `delayMs` between attempts. */
+ export async function retry<T>(task: () => Promise<T>, options: { retries?: number; delayMs?: number; sleep?: Sleep } = {}): Promise<T> {
+-  const retries = options.retries ?? 3
+-  const delayMs = options.delayMs ?? 250
++  const retries = options.retries ?? config.retries
++  const delayMs = options.delayMs ?? config.retryDelayMs
+   const sleep = options.sleep ?? realSleep
+   let lastError: unknown
+   for (let attempt = 0; attempt <= retries; attempt++) {
+diff --git a/src/webhooks.ts b/src/webhooks.ts
+index 794e3ce..8459619 100644
+--- a/src/webhooks.ts
++++ b/src/webhooks.ts
+@@ -1,9 +1,10 @@
++import { config } from "./config"
+ import { retry, type Sleep } from "./retry"
+ 
+ export type Delivery = (url: string) => Promise<number>
+ 
+ export function webhookEndpoint(name: string): string {
+-  return `https://api.example.test/v2/hooks/${encodeURIComponent(name)}`
++  return `${config.baseUrl}/hooks/${encodeURIComponent(name)}`
+ }
+ 
+ /** Deliveries retry like API reads do: three more tries, a quarter of a second apart. */
+@@ -14,6 +15,6 @@ export async function deliverWebhook(name: string, deliver: Delivery, sleep?: Sl
+       if (status >= 500) throw new Error(`webhook ${name} failed with ${status}`)
+       return status
+     },
+-    { retries: 3, delayMs: 250, ...(sleep ? { sleep } : {}) },
++    { retries: config.retries, delayMs: config.retryDelayMs, ...(sleep ? { sleep } : {}) },
+   )
+ }

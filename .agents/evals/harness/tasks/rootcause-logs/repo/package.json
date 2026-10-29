@@ -1,0 +1,6 @@
+{
+  "name": "rootcause-logs",
+  "private": true,
+  "type": "module",
+  "scripts": { "test": "bun test", "report": "bun src/main.ts data/orders-2026-03-02.csv" }
+}

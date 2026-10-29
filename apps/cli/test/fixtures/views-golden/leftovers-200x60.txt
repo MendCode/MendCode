@@ -1,0 +1,61 @@
+4c941e19eb158a40
+  Sessions                   ← focus │   git /work/app
+                                     │      ✗ bun test src/store.test.ts  3 pass · 1 fail  exit 1                                                                                                  1.8s
+                                     │      │ bun test v1.3
+                                     │      │ 3 pass
+                                     │      │ 1 fail
+                                     │      │ error: expected "a" received "b"
+                                     │
+                                     │      ✎ Edit src/store.ts  3 lines                                                                                                                             1s
+                                     │      │ Edited src/store.ts
+                                     │      │ - const key = name
+                                     │      │ + const key = `${directory}:${name}`
+                                     │
+                                     │   • The cache key ignored the directory.
+                                     │
+                                     │     ╭─ ts ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── copy
+                                     │     │ const key = `${directory}:${name}`
+                                     │     │ return cache.get(key) ?? load(key)
+                                     │
+                                     │     • both sessions now get their own entry
+                                     │     • the test passes after the change
+                                     │
+                                     │     See the docs (https://example.com) for details.
+                                     │
+                                     │   › Thanks. Run the whole suite once more.
+                                     │
+                                     │      $ bun test  212 pass · 0 fail                                                                                                                          9.1s
+                                     │
+                                     │   • All 212 tests pass.
+                                     │
+                                     │      $ ls -la src                                                                                                                                     11:50 AM
+                                     │
+                                     │   ◆ plan ✓ approved
+                                     │     Plan
+                                     │
+                                     │     1. Read the store
+                                     │     2. Fix the key
+                                     │     3. Run the suite
+                                     │
+                                     │   Saved to memory: the cache key includes the directory
+                                     │
+                                     │   • Done.
+                                     │
+                                     │    ┃
+                                     │    ┃  provider said slow down
+                                     │    ┃  retry in 30s
+                                     │    ┃  rate_limit
+                                     │    ┃
+                                     │
+                                     │   ┌─ Context packed ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+                                     │   │                                                                                                                                                             │
+                                     │   │ manual                                                                                                                                     /compaction open │
+                                     │   │                                                                                                                                                             │
+                                     │   │ ▸ Compacted memory · packed                                                                                                                                 │
+                                     │   │                                                                                                                                                             │
+                                     │   └─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+                                     │
+                                     │   ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+                                     │   ❭
+                                     │   ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+                                     │    Build

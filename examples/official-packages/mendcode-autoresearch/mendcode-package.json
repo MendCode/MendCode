@@ -1,0 +1,1 @@
+{ "name": "mendcode-autoresearch", "title": "Metric experiments", "version": "1.0.0", "description": "On-demand experiments using existing loops and correctness gates", "extensions": false, "capabilities": [], "compatibility": { "mendcode": "v2", "runtimePack": "1" } }

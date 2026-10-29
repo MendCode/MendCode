@@ -1,0 +1,453 @@
+{
+ "src/auth/login-form.ts": {
+  "LOGIN_FORM_TIMEOUT_MS": 15000
+ },
+ "src/auth/token-refresh.ts": {
+  "TOKEN_REFRESH_TIMEOUT_MS": 10000
+ },
+ "src/auth/password-reset.ts": {
+  "PASSWORD_RESET_TIMEOUT_MS": 10000
+ },
+ "src/auth/session-store.ts": {
+  "SESSION_STORE_TIMEOUT_MS": 10000
+ },
+ "src/auth/mfa-challenge.ts": {
+  "MFA_CHALLENGE_TIMEOUT_MS": 30000
+ },
+ "src/auth/oauth-callback.ts": {
+  "OAUTH_CALLBACK_TIMEOUT_MS": 3000
+ },
+ "src/auth/device-trust.ts": {
+  "DEVICE_TRUST_TIMEOUT_MS": 15000
+ },
+ "src/auth/logout-all.ts": {
+  "LOGOUT_ALL_TIMEOUT_MS": 15000
+ },
+ "src/auth/api-keys.ts": {
+  "API_KEYS_TIMEOUT_MS": 15000
+ },
+ "src/auth/invite-accept.ts": {
+  "INVITE_ACCEPT_TIMEOUT_MS": 8000
+ },
+ "src/billing/invoice-pdf.ts": {
+  "INVOICE_PDF_TIMEOUT_MS": 5000
+ },
+ "src/billing/tax-lookup.ts": {
+  "TAX_LOOKUP_TIMEOUT_MS": 30000
+ },
+ "src/billing/proration.ts": {
+  "PRORATION_TIMEOUT_MS": 3000
+ },
+ "src/billing/dunning.ts": {
+  "DUNNING_TIMEOUT_MS": 10000
+ },
+ "src/billing/ledger-export.ts": {
+  "LEDGER_EXPORT_TIMEOUT_MS": 3000
+ },
+ "src/billing/credit-notes.ts": {
+  "CREDIT_NOTES_TIMEOUT_MS": 8000
+ },
+ "src/billing/plan-change.ts": {
+  "PLAN_CHANGE_TIMEOUT_MS": 2000
+ },
+ "src/billing/usage-meter.ts": {
+  "USAGE_METER_TIMEOUT_MS": 15000
+ },
+ "src/billing/vat-validate.ts": {
+  "VAT_VALIDATE_TIMEOUT_MS": 10000
+ },
+ "src/billing/receipt-mailer.ts": {
+  "RECEIPT_MAILER_TIMEOUT_MS": 2000
+ },
+ "src/cart/add-item.ts": {
+  "ADD_ITEM_TIMEOUT_MS": 8000
+ },
+ "src/cart/remove-item.ts": {
+  "REMOVE_ITEM_TIMEOUT_MS": 10000
+ },
+ "src/cart/price-refresh.ts": {
+  "PRICE_REFRESH_TIMEOUT_MS": 8000
+ },
+ "src/cart/coupon-apply.ts": {
+  "COUPON_APPLY_TIMEOUT_MS": 5000
+ },
+ "src/cart/stock-hold.ts": {
+  "STOCK_HOLD_TIMEOUT_MS": 30000
+ },
+ "src/cart/cart-merge.ts": {
+  "CART_MERGE_TIMEOUT_MS": 10000
+ },
+ "src/cart/gift-wrap.ts": {
+  "GIFT_WRAP_TIMEOUT_MS": 10000
+ },
+ "src/cart/wishlist-move.ts": {
+  "WISHLIST_MOVE_TIMEOUT_MS": 10000
+ },
+ "src/cart/bundle-rules.ts": {
+  "BUNDLE_RULES_TIMEOUT_MS": 8000
+ },
+ "src/cart/cart-expiry.ts": {
+  "CART_EXPIRY_TTL_MS": 1800000,
+  "CART_EXPIRY_SWEEP_MS": 60000
+ },
+ "src/catalog/product-feed.ts": {
+  "PRODUCT_FEED_TIMEOUT_MS": 8000
+ },
+ "src/catalog/category-tree.ts": {
+  "CATEGORY_TREE_TIMEOUT_MS": 30000
+ },
+ "src/catalog/image-resize.ts": {
+  "IMAGE_RESIZE_TIMEOUT_MS": 8000
+ },
+ "src/catalog/sku-import.ts": {
+  "SKU_IMPORT_TIMEOUT_MS": 5000
+ },
+ "src/catalog/facet-index.ts": {
+  "FACET_INDEX_TIMEOUT_MS": 3000
+ },
+ "src/catalog/price-rules.ts": {
+  "PRICE_RULES_TIMEOUT_MS": 10000
+ },
+ "src/catalog/variant-picker.ts": {
+  "VARIANT_PICKER_TIMEOUT_MS": 10000
+ },
+ "src/catalog/availability.ts": {
+  "AVAILABILITY_TIMEOUT_MS": 3000
+ },
+ "src/catalog/tag-sync.ts": {
+  "TAG_SYNC_TIMEOUT_MS": 2000
+ },
+ "src/catalog/seo-slugs.ts": {
+  "SEO_SLUGS_TIMEOUT_MS": 8000
+ },
+ "src/search/query-parse.ts": {
+  "QUERY_PARSE_TIMEOUT_MS": 10000
+ },
+ "src/search/suggest.ts": {
+  "SUGGEST_TIMEOUT_MS": 30000
+ },
+ "src/search/synonyms.ts": {
+  "SYNONYMS_TIMEOUT_MS": 2000
+ },
+ "src/search/ranking.ts": {
+  "RANKING_TIMEOUT_MS": 15000
+ },
+ "src/search/index-writer.ts": {
+  "INDEX_WRITER_TIMEOUT_MS": 10000
+ },
+ "src/search/spell-fix.ts": {
+  "SPELL_FIX_TIMEOUT_MS": 5000
+ },
+ "src/search/recent-queries.ts": {
+  "RECENT_QUERIES_TIMEOUT_MS": 10000
+ },
+ "src/search/filters.ts": {
+  "FILTERS_TIMEOUT_MS": 10000
+ },
+ "src/search/result-cache.ts": {
+  "RESULT_CACHE_TIMEOUT_MS": 10000
+ },
+ "src/search/analytics.ts": {
+  "ANALYTICS_TIMEOUT_MS": 3000
+ },
+ "src/media/avatar-upload.ts": {
+  "AVATAR_UPLOAD_TIMEOUT_MS": 2000
+ },
+ "src/media/video-transcode.ts": {
+  "VIDEO_TRANSCODE_TIMEOUT_MS": 10000
+ },
+ "src/media/thumbnail.ts": {
+  "THUMBNAIL_TIMEOUT_MS": 8000
+ },
+ "src/media/cdn-purge.ts": {
+  "CDN_PURGE_TIMEOUT_MS": 10000
+ },
+ "src/media/exif-strip.ts": {
+  "EXIF_STRIP_TIMEOUT_MS": 10000
+ },
+ "src/media/gallery.ts": {
+  "GALLERY_TIMEOUT_MS": 8000
+ },
+ "src/media/virus-scan.ts": {
+  "VIRUS_SCAN_TIMEOUT_MS": 30000
+ },
+ "src/media/watermark.ts": {
+  "WATERMARK_TIMEOUT_MS": 2000
+ },
+ "src/media/audio-clip.ts": {
+  "AUDIO_CLIP_TIMEOUT_MS": 10000
+ },
+ "src/media/signed-urls.ts": {
+  "SIGNED_URLS_TIMEOUT_MS": 10000
+ },
+ "src/notify/email-queue.ts": {
+  "EMAIL_QUEUE_TIMEOUT_MS": 10000
+ },
+ "src/notify/push-gateway.ts": {
+  "PUSH_GATEWAY_TIMEOUT_MS": 15000
+ },
+ "src/notify/sms-relay.ts": {
+  "SMS_RELAY_TIMEOUT_MS": 5000
+ },
+ "src/notify/digest.ts": {
+  "DIGEST_TIMEOUT_MS": 2000
+ },
+ "src/notify/template-render.ts": {
+  "TEMPLATE_RENDER_TIMEOUT_MS": 10000
+ },
+ "src/notify/unsubscribe.ts": {
+  "UNSUBSCRIBE_TIMEOUT_MS": 5000
+ },
+ "src/notify/bounce-handler.ts": {
+  "BOUNCE_HANDLER_TIMEOUT_MS": 10000
+ },
+ "src/notify/quiet-hours.ts": {
+  "QUIET_HOURS_TIMEOUT_MS": 8000
+ },
+ "src/notify/channel-prefs.ts": {
+  "CHANNEL_PREFS_TIMEOUT_MS": 5000
+ },
+ "src/notify/webhook-fanout.ts": {
+  "WEBHOOK_FANOUT_TIMEOUT_MS": 10000
+ },
+ "src/orders/order-create.ts": {
+  "ORDER_CREATE_TIMEOUT_MS": 10000
+ },
+ "src/orders/order-status.ts": {
+  "ORDER_STATUS_TIMEOUT_MS": 5000
+ },
+ "src/orders/refund-flow.ts": {
+  "REFUND_FLOW_TIMEOUT_MS": 30000
+ },
+ "src/orders/fraud-score.ts": {
+  "FRAUD_SCORE_TIMEOUT_MS": 3000
+ },
+ "src/orders/fulfilment.ts": {
+  "FULFILMENT_TIMEOUT_MS": 10000
+ },
+ "src/orders/split-order.ts": {
+  "SPLIT_ORDER_TIMEOUT_MS": 10000
+ },
+ "src/orders/order-export.ts": {
+  "ORDER_EXPORT_TIMEOUT_MS": 8000
+ },
+ "src/orders/return-label.ts": {
+  "RETURN_LABEL_TIMEOUT_MS": 10000
+ },
+ "src/orders/checkout-notify.ts": {
+  "CHECKOUT_NOTIFY_TIMEOUT_MS": 10000
+ },
+ "src/orders/reorder.ts": {
+  "REORDER_TIMEOUT_MS": 5000
+ },
+ "src/payments/card-vault.ts": {
+  "CARD_VAULT_TIMEOUT_MS": 10000
+ },
+ "src/payments/wallet-pay.ts": {
+  "WALLET_PAY_TIMEOUT_MS": 5000
+ },
+ "src/payments/bank-transfer.ts": {
+  "BANK_TRANSFER_TIMEOUT_MS": 5000
+ },
+ "src/payments/payout-batch.ts": {
+  "PAYOUT_BATCH_TIMEOUT_MS": 5000
+ },
+ "src/payments/chargeback.ts": {
+  "CHARGEBACK_TIMEOUT_MS": 8000
+ },
+ "src/payments/fx-rates.ts": {
+  "FX_RATES_TIMEOUT_MS": 8000
+ },
+ "src/payments/payment-intent.ts": {
+  "PAYMENT_INTENT_TIMEOUT_MS": 5000
+ },
+ "src/payments/three-ds.ts": {
+  "THREE_DS_TIMEOUT_MS": 5000
+ },
+ "src/payments/reconcile.ts": {
+  "RECONCILE_TIMEOUT_MS": 2000
+ },
+ "src/payments/checkout-client.ts": {
+  "CHECKOUT_REQUEST_TIMEOUT_MS": 25000
+ },
+ "src/profile/address-book.ts": {
+  "ADDRESS_BOOK_TIMEOUT_MS": 5000
+ },
+ "src/profile/preferences.ts": {
+  "PREFERENCES_TIMEOUT_MS": 5000
+ },
+ "src/profile/avatar-crop.ts": {
+  "AVATAR_CROP_TIMEOUT_MS": 10000
+ },
+ "src/profile/privacy-export.ts": {
+  "PRIVACY_EXPORT_TIMEOUT_MS": 15000
+ },
+ "src/profile/delete-account.ts": {
+  "DELETE_ACCOUNT_TIMEOUT_MS": 2000
+ },
+ "src/profile/newsletter.ts": {
+  "NEWSLETTER_TIMEOUT_MS": 10000
+ },
+ "src/profile/locale.ts": {
+  "LOCALE_TIMEOUT_MS": 5000
+ },
+ "src/profile/badges.ts": {
+  "BADGES_TIMEOUT_MS": 2000
+ },
+ "src/profile/activity-feed.ts": {
+  "ACTIVITY_FEED_TIMEOUT_MS": 10000
+ },
+ "src/profile/linked-accounts.ts": {
+  "LINKED_ACCOUNTS_TIMEOUT_MS": 30000
+ },
+ "src/reports/daily-rollup.ts": {
+  "DAILY_ROLLUP_TIMEOUT_MS": 3000
+ },
+ "src/reports/csv-export.ts": {
+  "CSV_EXPORT_TIMEOUT_MS": 10000
+ },
+ "src/reports/funnel.ts": {
+  "FUNNEL_TIMEOUT_MS": 10000
+ },
+ "src/reports/cohort.ts": {
+  "COHORT_TIMEOUT_MS": 10000
+ },
+ "src/reports/revenue-chart.ts": {
+  "REVENUE_CHART_TIMEOUT_MS": 3000
+ },
+ "src/reports/retention.ts": {
+  "RETENTION_TIMEOUT_MS": 5000
+ },
+ "src/reports/scheduled-mail.ts": {
+  "SCHEDULED_MAIL_TIMEOUT_MS": 5000
+ },
+ "src/reports/pivot.ts": {
+  "PIVOT_TIMEOUT_MS": 3000
+ },
+ "src/reports/audit-trail.ts": {
+  "AUDIT_TRAIL_TIMEOUT_MS": 8000
+ },
+ "src/reports/slow-queries.ts": {
+  "SLOW_QUERIES_TIMEOUT_MS": 10000
+ },
+ "src/shipping/rate-quote.ts": {
+  "RATE_QUOTE_TIMEOUT_MS": 10000
+ },
+ "src/shipping/label-print.ts": {
+  "LABEL_PRINT_TIMEOUT_MS": 10000
+ },
+ "src/shipping/tracking-poll.ts": {
+  "TRACKING_POLL_TIMEOUT_MS": 10000
+ },
+ "src/shipping/address-verify.ts": {
+  "ADDRESS_VERIFY_TIMEOUT_MS": 8000
+ },
+ "src/shipping/carrier-select.ts": {
+  "CARRIER_SELECT_TIMEOUT_MS": 10000
+ },
+ "src/shipping/customs-forms.ts": {
+  "CUSTOMS_FORMS_TIMEOUT_MS": 2000
+ },
+ "src/shipping/pickup-slots.ts": {
+  "PICKUP_SLOTS_TIMEOUT_MS": 10000
+ },
+ "src/shipping/zone-map.ts": {
+  "ZONE_MAP_TIMEOUT_MS": 15000
+ },
+ "src/shipping/insurance.ts": {
+  "INSURANCE_TIMEOUT_MS": 10000
+ },
+ "src/shipping/dispatch.ts": {
+  "DISPATCH_TIMEOUT_MS": 10000
+ },
+ "src/support/ticket-create.ts": {
+  "TICKET_CREATE_TIMEOUT_MS": 5000
+ },
+ "src/support/macro-apply.ts": {
+  "MACRO_APPLY_TIMEOUT_MS": 10000
+ },
+ "src/support/sla-timer.ts": {
+  "SLA_TIMER_TIMEOUT_MS": 5000
+ },
+ "src/support/chat-handoff.ts": {
+  "CHAT_HANDOFF_TIMEOUT_MS": 8000
+ },
+ "src/support/kb-search.ts": {
+  "KB_SEARCH_TIMEOUT_MS": 8000
+ },
+ "src/support/csat-survey.ts": {
+  "CSAT_SURVEY_TIMEOUT_MS": 10000
+ },
+ "src/support/escalation.ts": {
+  "ESCALATION_TIMEOUT_MS": 30000
+ },
+ "src/support/merge-tickets.ts": {
+  "MERGE_TICKETS_TIMEOUT_MS": 30000
+ },
+ "src/support/canned-replies.ts": {
+  "CANNED_REPLIES_TIMEOUT_MS": 10000
+ },
+ "src/support/agent-routing.ts": {
+  "AGENT_ROUTING_TIMEOUT_MS": 15000
+ },
+ "src/sync/delta-pull.ts": {
+  "DELTA_PULL_TIMEOUT_MS": 15000
+ },
+ "src/sync/conflict-merge.ts": {
+  "CONFLICT_MERGE_TIMEOUT_MS": 5000
+ },
+ "src/sync/offline-queue.ts": {
+  "OFFLINE_QUEUE_TIMEOUT_MS": 5000
+ },
+ "src/sync/full-resync.ts": {
+  "FULL_RESYNC_TIMEOUT_MS": 30000
+ },
+ "src/sync/cursor-store.ts": {
+  "CURSOR_STORE_TIMEOUT_MS": 30000
+ },
+ "src/sync/schema-migrate.ts": {
+  "SCHEMA_MIGRATE_TIMEOUT_MS": 5000
+ },
+ "src/sync/batch-upload.ts": {
+  "BATCH_UPLOAD_TIMEOUT_MS": 2000
+ },
+ "src/sync/tombstones.ts": {
+  "TOMBSTONES_TIMEOUT_MS": 2000
+ },
+ "src/sync/clock-skew.ts": {
+  "CLOCK_SKEW_TIMEOUT_MS": 2000
+ },
+ "src/sync/peer-discovery.ts": {
+  "PEER_DISCOVERY_TIMEOUT_MS": 15000
+ },
+ "src/users/user-search.ts": {
+  "USER_SEARCH_TIMEOUT_MS": 30000
+ },
+ "src/users/role-assign.ts": {
+  "ROLE_ASSIGN_TIMEOUT_MS": 2000
+ },
+ "src/users/bulk-invite.ts": {
+  "BULK_INVITE_TIMEOUT_MS": 2000
+ },
+ "src/users/directory-sync.ts": {
+  "DIRECTORY_SYNC_TIMEOUT_MS": 10000
+ },
+ "src/users/deactivate.ts": {
+  "DEACTIVATE_TIMEOUT_MS": 10000
+ },
+ "src/users/impersonate.ts": {
+  "IMPERSONATE_TIMEOUT_MS": 10000
+ },
+ "src/users/team-list.ts": {
+  "TEAM_LIST_TIMEOUT_MS": 8000
+ },
+ "src/users/seat-count.ts": {
+  "SEAT_COUNT_TIMEOUT_MS": 10000
+ },
+ "src/users/audit-log.ts": {
+  "AUDIT_LOG_TIMEOUT_MS": 10000
+ },
+ "src/users/lifecycle.ts": {
+  "LIFECYCLE_TIMEOUT_MS": 10000
+ }
+}

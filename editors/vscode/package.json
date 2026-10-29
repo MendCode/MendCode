@@ -1,0 +1,47 @@
+{
+  "name": "mendcode",
+  "displayName": "MendCode",
+  "description": "Run the MendCode terminal agent in your editor, add files and selections to its prompt, and share the active selection with it.",
+  "version": "0.1.0",
+  "publisher": "mendcode",
+  "private": true,
+  "engines": { "vscode": "^1.85.0" },
+  "categories": ["AI", "Other"],
+  "main": "./extension.js",
+  "activationEvents": ["onStartupFinished"],
+  "extensionKind": ["workspace"],
+  "capabilities": {
+    "untrustedWorkspaces": { "supported": false, "description": "MendCode runs commands and edits files in the workspace." },
+    "virtualWorkspaces": false
+  },
+  "contributes": {
+    "commands": [
+      { "command": "mendcode.controlCenter", "title": "Control Center", "category": "MendCode" },
+      { "command": "mendcode.open", "title": "Open", "category": "MendCode" },
+      { "command": "mendcode.newSession", "title": "New Session", "category": "MendCode" },
+      { "command": "mendcode.addSelection", "title": "Add Selection to Prompt", "category": "MendCode" },
+      { "command": "mendcode.addFile", "title": "Add File to Prompt", "category": "MendCode" },
+      { "command": "mendcode.fixProblems", "title": "Fix Problems in File", "category": "MendCode" },
+      { "command": "mendcode.connect", "title": "Connect Editor Context", "category": "MendCode" },
+      { "command": "mendcode.toggleShare", "title": "Toggle Sharing Editor Context", "category": "MendCode" }
+    ],
+    "keybindings": [
+      { "command": "mendcode.addSelection", "key": "ctrl+alt+m", "mac": "cmd+alt+m", "when": "editorTextFocus" },
+      { "command": "mendcode.open", "key": "ctrl+alt+shift+m", "mac": "cmd+alt+shift+m" }
+    ],
+    "menus": {
+      "editor/context": [{ "command": "mendcode.addSelection", "group": "mendcode@1", "when": "editorHasSelection" }],
+      "explorer/context": [{ "command": "mendcode.addFile", "group": "mendcode@1" }]
+    },
+    "configuration": {
+      "title": "MendCode",
+      "properties": {
+        "mendcode.command": { "type": "string", "default": "mendcode", "scope": "machine", "markdownDescription": "Executable that starts the MendCode terminal client. Run directly, never through a shell." },
+        "mendcode.args": { "type": "array", "items": { "type": "string" }, "default": [], "scope": "machine", "description": "Extra arguments passed to the command." },
+        "mendcode.dataDir": { "type": "string", "default": "", "scope": "machine", "markdownDescription": "MendCode data directory (`--dir`). Empty uses `~/.mendcode-v2`. The editor context is published under `<data dir>/ide/vscode`." },
+        "mendcode.terminalLocation": { "type": "string", "enum": ["panel", "editor"], "default": "panel", "description": "Where the MendCode terminal opens." },
+        "mendcode.shareContext": { "type": "boolean", "default": false, "scope": "machine", "markdownDescription": "Publish the active file and selection to the local data dir so `/ide on vscode` can attach it to your next prompt. Off by default; nothing leaves your machine." }
+      }
+    }
+  }
+}

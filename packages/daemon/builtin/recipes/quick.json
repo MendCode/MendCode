@@ -1,0 +1,11 @@
+{
+  "description": "Fast and cheap: every role on low effort",
+  "version": "1",
+  "roles": {
+    "main": { "model": "gpt-6-luna", "effort": "low" },
+    "plan": { "model": "gpt-6-luna", "effort": "low" },
+    "subagent": { "model": "gpt-6-luna", "effort": "low" },
+    "compaction": { "model": "gpt-6-luna", "effort": "low" },
+    "dream": { "model": "gpt-6-luna", "effort": "low" }
+  }
+}

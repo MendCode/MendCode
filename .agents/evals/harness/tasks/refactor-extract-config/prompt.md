@@ -1,0 +1,1 @@
+The API base URL, the request timeout and the retry settings are copy-pasted across several files in src. Put them in one place: a `src/config.ts` that exports a `config` object with `baseUrl`, `timeoutMs`, `retries` and `retryDelayMs`, and use it everywhere instead of the literals. No behaviour change; tests stay green.

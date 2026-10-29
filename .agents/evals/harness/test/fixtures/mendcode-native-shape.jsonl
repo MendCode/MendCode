@@ -1,0 +1,16 @@
+{"sessionId":"ses_X","seq":6,"at":1791300000000,"type":"turn.started","turnId":"trn_X","queueId":"que_X"}
+{"sessionId":"ses_X","seq":7,"at":1791300000100,"type":"item.started","turnId":"trn_X","itemId":"itm_1","kind":"tool_call","meta":{"tool":"read"}}
+{"sessionId":"ses_X","seq":8,"at":1791300000200,"type":"item.completed","itemId":"itm_1","status":"ok","text":"..."}
+session: ses_X
+{"sessionId":"ses_X","seq":9,"at":1791300000300,"type":"usage.recorded","turnId":"trn_X","provider":"chatgpt","model":"gpt-6-luna","input":1200,"output":300,"reasoning":120,"cacheRead":8000,"cacheWrite":0}
+{"sessionId":"ses_X","seq":10,"at":1791300001000,"type":"item.started","turnId":"trn_X","itemId":"itm_2","kind":"tool_call","meta":{"tool":"shell"}}
+{"sessionId":"ses_X","seq":11,"at":1791300001500,"type":"item.completed","itemId":"itm_2","status":"error","text":"exit 1"}
+{"sessionId":"ses_X","seq":12,"at":1791300001600,"type":"item.started","turnId":"trn_X","itemId":"itm_3","kind":"tool_call","meta":{"tool":"edit"}}
+{"sessionId":"ses_X","seq":13,"at":1791300001700,"type":"item.completed","itemId":"itm_3","status":"ok"}
+{"sessionId":"ses_X","seq":14,"at":1791300001800,"type":"turn.retrying","turnId":"trn_X","attempt":1,"nextAt":1791300003800,"message":"rate limit"}
+{"sessionId":"ses_X","seq":15,"at":1791300004000,"type":"usage.recorded","turnId":"trn_X","provider":"chatgpt","model":"gpt-6-luna","input":900,"output":450,"reasoning":200,"cacheRead":10000,"cacheWrite":50,"costMicros":1234}
+{"sessionId":"ses_X","seq":16,"at":1791300004100,"type":"compaction.updated","turnId":"trn_X","reason":"auto","state":"writing","followUp":""}
+{"sessionId":"ses_X","seq":17,"at":1791300004900,"type":"compaction.updated","turnId":"trn_X","reason":"auto","state":"packed","followUp":"continue"}
+{"sessionId":"ses_X","seq":18,"at":1791300005000,"type":"item.started","turnId":"trn_X","itemId":"itm_4","kind":"agent_message"}
+{"sessionId":"ses_X","seq":19,"at":1791300005100,"type":"item.completed","itemId":"itm_4","status":"ok","text":"Done."}
+{"sessionId":"ses_X","seq":20,"at":1791300007500,"type":"turn.completed","turnId":"trn_X"}

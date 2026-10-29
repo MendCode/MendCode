@@ -1,0 +1,1 @@
+Our little `wc` CLI needs a `--json` flag for scripts: instead of the table it should print one JSON object `{ "files": [{ "file", "lines", "words", "bytes" }], "total": { "lines", "words", "bytes" } }`, files in the order given. Errors stay as they are (stderr, exit 2). Add a test for it.

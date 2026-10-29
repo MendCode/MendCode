@@ -1,0 +1,61 @@
+270c9f6e29847f20
+
+› Why does the second session see the first one's config? Please look at src/store.ts and fix it.
+
+  Thought: The cache key might ignore the directory. I should read the store module first and check how the key is built before to… · 1s
+◆ 3 tools · shell: bun test src/store.test.ts ✗ error · error: expected "a" received "b"
+◆ edit: src/store.ts ✓
+
+• The cache key ignored the directory.
+
+  │ ts
+  │ const key = `${directory}:${name}`
+  │ return cache.get(key) ?? load(key)
+
+  • both sessions now get their own entry
+  • the test passes after the change
+
+  See the docs (https://example.com) for details.
+
+› Thanks. Run the whole suite once more.
+
+◆ shell: bun test ✓
+
+• All 212 tests pass.
+
+  $ ls -la src
+
+◆ plan ✓ approved
+  Plan
+
+  1. Read the store
+  2. Fix the key
+  3. Run the suite
+Saved to memory: the cache key includes the directory
+
+• Done.
+
+ ┃
+ ┃  provider said slow down
+ ┃  retry in 30s
+ ┃  rate_limit
+ ┃
+
+┌─ Context packed ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                                                                                                                                                                                      │
+│ manual                                                                                                                                                                                               │
+│                                                                                                                                                                                                      │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+

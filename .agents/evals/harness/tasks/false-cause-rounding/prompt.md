@@ -1,0 +1,1 @@
+`formatPrice(1999)` shows `$20.00` instead of `$19.99`. I'm pretty sure the culprit is `roundHalfUp` in src/round.ts — it must be rounding to the wrong number of digits. Can you fix that so the price test passes?

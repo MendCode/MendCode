@@ -1,0 +1,30 @@
+     ● You
+     Who calls renderToolCard?
+
+     ◆ graph_callers renderToolCard
+       ╭─ renderToolCard · 7 callers · 16 callees ─────────────────────────────────────────────╮
+       │ fn defaultBody             ─┐                                                         │
+       │   └ fn rowsOf               │                                                         │
+       │ fn chatView                ─┼──▶ ◆ renderToolCard     ──┬──▶ fn cardRows              │
+       │   └ fn layout    render:40  │      fn · tool-card:237   │      └ fn computerCard      │
+       │     └ fn frame   render:90  │                           │      └ fn wrapSpans         │
+       │ fn toolCardTest            ─┤                           │      └ fn diffBlocks        │
+       │ fn recallTest              ─┘                           ├──▶ fn parseToolTitle        │
+       │                                                         │      └ fn renderSpecLines   │
+       │                                                         │      └ fn sessionRecallCard │
+       │                                                         └──▶ fn parseDiff             │
+       │                                                                └ fn outputLines       │
+       │                                                                  └ fn parsePatch      │
+       │ +6 callees · ~12.4K tokens saved · ctrl+o collapses                                   │
+       ╰───────────────────────────────────────────────────────────────────────────────────────╯
+
+     defaultBody is the only product caller.
+
+
+
+
+
+
+
+
+

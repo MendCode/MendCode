@@ -1,0 +1,54 @@
+// Bun Snapshot v1, https://bun.sh/docs/test/snapshots
+
+exports[`hosted workflow the YAML for openai/gpt-6-luna is stable 1`] = `
+"name: MendCode review
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review]
+  issue_comment:
+    types: [created]
+permissions:
+  contents: read
+  pull-requests: write
+concurrency:
+  group: mendcode-review-\${{ github.event.pull_request.number || github.event.issue.number }}
+  cancel-in-progress: false
+jobs:
+  review:
+    # A comment counts only on a pull request, from a member or collaborator, and when it mentions @mendcode.
+    if: \${{ github.event_name == 'pull_request' || (github.event.issue.pull_request && contains(github.event.comment.body, '@mendcode') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: \${{ github.event.pull_request.head.sha || format('refs/pull/{0}/head', github.event.issue.number) }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: sigstore/cosign-installer@7e8b541eb2e61bf99390e1afd4be13a184e9ebc5 # v3.10.1
+      - name: Install MendCode v0.4.0
+        env:
+          MENDCODE_VERSION: "v0.4.0"
+          INSTALLER_SHA256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL --proto '=https' --tlsv1.2 -o "$RUNNER_TEMP/install.sh" "https://github.com/MendCode/MendCode/releases/download/$MENDCODE_VERSION/install.sh"
+          echo "$INSTALLER_SHA256  $RUNNER_TEMP/install.sh" | sha256sum -c -
+          MENDCODE_INSTALL_DIR="$RUNNER_TEMP/bin" sh "$RUNNER_TEMP/install.sh"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Review
+        env:
+          GH_TOKEN: \${{ secrets.GITHUB_TOKEN }}
+          OPENAI_API_KEY: \${{ secrets.OPENAI_API_KEY }}
+          MODEL: "openai/gpt-6-luna"
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "\${OPENAI_API_KEY:-}" ]; then
+            echo 'MendCode review skipped: OPENAI_API_KEY is not available to this run (a pull request from a fork gets no secrets). A maintainer can comment \`@mendcode review\` to review it.' | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          mendcode --safe-mode --dir "$RUNNER_TEMP/mc" github run --publish --review | tee -a "$GITHUB_STEP_SUMMARY"
+"
+`;

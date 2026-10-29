@@ -1,0 +1,11 @@
+{
+  "description": "Hard problems: high effort for main, plans and subagents",
+  "version": "1",
+  "roles": {
+    "main": { "model": "gpt-6-luna", "effort": "high" },
+    "plan": { "model": "gpt-6-luna", "effort": "high" },
+    "subagent": { "model": "gpt-6-luna", "effort": "high" },
+    "compaction": { "model": "gpt-6-luna", "effort": "medium" },
+    "dream": { "model": "gpt-6-luna", "effort": "low" }
+  }
+}

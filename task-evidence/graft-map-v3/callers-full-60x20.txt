@@ -1,0 +1,20 @@
+       │ ├── fn chatView      transcript:700              │
+       │ │     └ fn layout    render:40                   │
+       │ │       └ fn frame   render:90                   │
+       │ ├── fn toolCardTest  chat-transcript.test:7      │
+       │ ├── fn recallTest    tool-card-sessions.test:2   │
+       │ └─▶ ◆ renderToolCard  fn · tool-card:237         │
+       │       ├─▶ fn cardRows               :254         │
+       │       │     └ fn computerCard                    │
+       │       │     └ fn wrapSpans          markdown:600 │
+       │       │     └ fn diffBlocks         :347         │
+       │       ├─▶ fn parseToolTitle         :101         │
+       │       │     └ fn renderSpecLines                 │
+       │       │     └ fn sessionRecallCard               │
+       │       └─▶ fn parseDiff              :131         │
+       │             └ fn outputLines        :229         │
+       │               └ fn parsePatch       :161         │
+       │ +6 callees · ~12.4K saved · ctrl+o collapses     │
+       ╰──────────────────────────────────────────────────╯
+
+     defaultBody is the only product caller.

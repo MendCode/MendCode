@@ -1,0 +1,10 @@
+{
+  "name": "tool-renderers",
+  "version": "1.0.0",
+  "description": "Two tool cards drawn from the call's arguments: shell commands with their folder and flags, and every GitHub MCP call as repository and number",
+  "author": "MendCode",
+  "license": "MIT",
+  "compatibility": { "mendcode": ">=0.0.1", "api": 1 },
+  "extensions": true,
+  "capabilities": []
+}

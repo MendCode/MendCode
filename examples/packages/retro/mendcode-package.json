@@ -1,0 +1,34 @@
+{
+  "name": "retro",
+  "version": "1.0.0",
+  "description": "Phosphor-amber reskin: theme, transcript rails, line-printer tool cards, columns slash menu, a panel card and a home screen",
+  "author": "MendCode",
+  "license": "MIT",
+  "compatibility": { "mendcode": ">=0.0.1", "api": 1 },
+  "extensions": true,
+  "capabilities": [],
+  "activate": {
+    "theme": "retro",
+    "tuiProfile": {
+      "logoKind": "wordmark",
+      "logoText": "RETRO",
+      "tagline": "phosphor edition",
+      "homeLayout": "split",
+      "homeTips": true,
+      "promptChrome": "box",
+      "promptBorder": "double",
+      "userLead": "»",
+      "doneSymbol": "■",
+      "statusSeparator": " ▪ ",
+      "density": "compact",
+      "slashMenu": "columns",
+      "slashCommands": [{ "name": "retro-crt", "pinned": true }],
+      "sidebarWidgets": [
+        { "type": "text", "title": "RETRO", "options": { "text": "phosphor edition · alt+g shows this panel · /retro-crt", "priority": "high" } },
+        { "type": "context", "options": { "priority": "high" } }
+      ]
+    },
+    "keybindings": "keybindings.json",
+    "views": { "message.assistant": "message-assistant", "tool.card": "tool-card" }
+  }
+}

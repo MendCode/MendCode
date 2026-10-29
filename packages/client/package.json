@@ -1,0 +1,8 @@
+{
+  "name": "@mendcode/client",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts", "./local-endpoint": "./src/local-endpoint.ts", "./app-server": "./src/app-server.ts" },
+  "dependencies": { "@mendcode/protocol": "workspace:*" }
+}

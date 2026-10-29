@@ -1,0 +1,31 @@
+2f0fde8c5b9a1a08
+  git /work/app
+     │ + const key = `${directory}:${name}`
+
+  • The cache key ignored the directory.
+
+    ╭─ ts ───────────────────────────────────────────────────────────────────────────────────── copy
+    │ const key = `${directory}:${name}`
+    │ return cache.get(key) ?? load(key)
+
+    • both sessions now get their own entry
+    • the test passes after the change
+
+    See the docs (https://example.com) for details.
+
+  › Thanks. Run the whole suite once more.
+
+     $ bun test  212 pass · 0 fail                                                             9.1s
+
+  • All 212 tests pass.
+
+  ┃ Which test runner should I use?
+  ┃ The repo has both.
+  ┃
+  ┃ › 1. bun test
+  ┃      fast, already used
+  ┃   2. vitest
+  ┃   3. Type your own answer
+  ┃
+  ┃ ↑↓ select · enter confirm · esc dismiss
+

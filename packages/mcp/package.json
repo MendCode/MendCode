@@ -1,0 +1,8 @@
+{
+  "name": "@mendcode/mcp",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": { "@mendcode/packages": "workspace:*", "@mendcode/tools": "workspace:*", "zod": "4.6.5" }
+}

@@ -1,0 +1,17 @@
+{
+  "name": "@mendcode/engine-acp",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@mendcode/protocol": "workspace:*",
+    "@mendcode/kernel": "workspace:*",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@mendcode/testkit": "workspace:*"
+  }
+}

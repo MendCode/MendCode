@@ -1,0 +1,43 @@
+{
+  "name": "@mendcode/daemon",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./remote": "./src/remote.ts",
+    "./storage-compact": "./src/storage-compact.ts",
+    "./config-bundle": "./src/config-bundle/index.ts",
+    "./http-launch": "./src/http-launch.ts"
+  },
+  "bin": {
+    "mendd": "./src/main.ts"
+  },
+  "dependencies": {
+    "@mendcode/program": "workspace:*",
+    "@mendcode/protocol": "workspace:*",
+    "@mendcode/kernel": "workspace:*",
+    "@mendcode/store": "workspace:*",
+    "@mendcode/engine-faux": "workspace:*",
+    "@mendcode/engine-codex": "workspace:*",
+    "@mendcode/engine-claude": "workspace:*",
+    "@mendcode/engine-acp": "workspace:*",
+    "@mendcode/engine-pi": "workspace:*",
+    "@mendcode/engine-native": "workspace:*",
+    "@mendcode/tools": "workspace:*",
+    "@mendcode/mcp": "workspace:*",
+    "@mendcode/packages": "workspace:*",
+    "@mendcode/lsp": "workspace:*",
+    "@mendcode/loops": "workspace:*",
+    "@mendcode/workflows": "workspace:*",
+    "@mendcode/dream": "workspace:*",
+    "@mendcode/build-id": "workspace:*",
+    "@mendcode/codegraph": "workspace:*",
+    "@mendcode/extension-api": "workspace:*",
+    "@mendcode/client": "workspace:*",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@mendcode/testkit": "workspace:*"
+  }
+}

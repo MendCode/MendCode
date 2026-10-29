@@ -1,0 +1,1 @@
+Your previous reply was cut off by a network interruption right after the last character shown above. Continue it from exactly that point: the first character you write must be the next character after where it stopped. Do not repeat, quote or summarize anything already written, do not restart, and do not add a preamble, apology or note about the interruption.

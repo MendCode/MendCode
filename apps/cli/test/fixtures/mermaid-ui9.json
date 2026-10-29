@@ -1,0 +1,817 @@
+[
+  {
+    "kind": "flowchart",
+    "source": "flowchart TD\n  A[Start] --> B{Ready?}\n  B -->|yes| C[Done]",
+    "labels": [
+      "Start",
+      "Done"
+    ],
+    "origin": "v1 family matrix",
+    "edges": 2,
+    "edgeGlyphs": "▼▲▶◀▷◁△",
+    "structure": "[┌╭╔╱].*[─═]"
+  },
+  {
+    "kind": "flowchart",
+    "source": "flowchart LR\nsubgraph web[Web]\n A[Client] -->|submit| B{Ready?}\nend\nB -.->|events| C[(Store)]\nC ==> D([Result])",
+    "labels": [
+      "Web",
+      "Client",
+      "Ready?",
+      "submit",
+      "Store",
+      "Result",
+      "events"
+    ],
+    "origin": "UI-9 real-world fixture",
+    "edges": 3,
+    "edgeGlyphs": "▼▲▶◀▷◁△",
+    "structure": "[┌╭╔╱].*[─═]"
+  },
+  {
+    "kind": "swimlane",
+    "source": "swimlane-beta LR\n  subgraph customer[\"Customer\"]\n    request[Request] --> response[Response]\n  end\n  subgraph service[\"Service\"]\n    receive[Receive]\n  end\n  request --> receive",
+    "labels": [
+      "Customer",
+      "Receive"
+    ],
+    "origin": "v1 family matrix",
+    "edges": 2,
+    "edgeGlyphs": "▼▲▶◀▷◁△",
+    "structure": "[╭┌][─]+"
+  },
+  {
+    "kind": "sequence",
+    "source": "sequenceDiagram\n  participant A as Alice\n  participant B as Bob\n  A->>B: Hello",
+    "labels": [
+      "Alice",
+      "Hello"
+    ],
+    "origin": "v1 family matrix",
+    "edges": 1,
+    "edgeGlyphs": "▼▲▶◀▷◁△",
+    "structure": "┆|║"
+  },
+  {
+    "kind": "sequence",
+    "source": "sequenceDiagram\nautonumber 10 2\nactor U as User\nparticipant A as API\nU->>+A: Checkout\nloop retry\nA->>A: Validate\nend\nalt valid\nA-->>-U: Receipt\nelse invalid\nNote over U,A: Try again\nend",
+    "labels": [
+      "User",
+      "API",
+      "Checkout",
+      "Validate",
+      "Receipt",
+      "Try again"
+    ],
+    "origin": "UI-9 real-world fixture",
+    "edges": 3,
+    "edgeGlyphs": "▼▲▶◀▷◁△",
+    "structure": "┆|║"
+  },
+  {
+    "kind": "class",
+    "source": "classDiagram\n  class User {\n    +id: string\n  }\n  User --> Account : owns",
+    "labels": [
+      "User",
+      "owns"
+    ],
+    "origin": "v1 family matrix",
+    "edges": 1,
+    "edgeGlyphs": "▼▲▶◀▷◁△",
+    "structure": "[╭┌][─]+"
+  },
+  {
+    "kind": "class",
+    "source": "classDiagram\nclass Repository {\n +String name\n +save() bool\n}\nclass User {\n +UUID id\n}\nUser \"1\" --> \"many\" Repository : owns",
+    "labels": [
+      "Repository",
+      "save",
+      "User",
+      "owns"
+    ],
+    "origin": "UI-9 real-world fixture",
+    "edges": 1,
+    "edgeGlyphs": "▼▲▶◀▷◁△",
+    "structure": "[╭┌][─]+"
+  },
+  {
+    "kind": "state",
+    "source": "stateDiagram-v2\n  [*] --> Idle\n  Idle --> Done: finish\n  Done --> [*]",
+    "labels": [
+      "Idle",
+      "finish"
+    ],
+    "origin": "v1 family matrix",
+    "edges": 3,
+    "edgeGlyphs": "▼▲▶◀▷◁△",
+    "structure": "[╭┌][─]+"
+  },
+  {
+    "kind": "state",
+    "source": "stateDiagram-v2\nstate \"Order processing\" as Active {\n [*] --> Pending\n Pending --> Ready : paid\n Ready --> [*] : shipped\n}\nPending: Awaiting payment\nnote right of Ready\n Receipt archived\nend note",
+    "labels": [
+      "Order processing",
+      "Pending",
+      "Ready",
+      "paid",
+      "shipped",
+      "Awaiting payment",
+      "Receipt archived"
+    ],
+    "origin": "UI-9 real-world fixture",
+    "edges": 3,
+    "edgeGlyphs": "▼▲▶◀▷◁△",
+    "structure": "[╭┌][─]+"
+  },
+  {
+    "kind": "er",
+    "source": "erDiagram\n  USER ||--o{ ORDER : places\n  USER {\n    string id PK\n  }",
+    "labels": [
+      "USER",
+      "places"
+    ],
+    "origin": "v1 family matrix",
+    "edges": 1,
+    "edgeGlyphs": "||",
+    "structure": "[╭┌][─]+"
+  },
+  {
+    "kind": "er",
+    "source": "erDiagram\n  USER ||--o{ ORDER : places\n  ORDER ||--|{ ORDER_ITEM : contains\n  ORDER_ITEM {\n    string productCode\n    int quantity\n  }",
+    "labels": [
+      "USER",
+      "ORDER_ITEM",
+      "places",
+      "contains",
+      "productCode",
+      "quantity"
+    ],
+    "origin": "v1 regression fixtures",
+    "edges": 2,
+    "edgeGlyphs": "||",
+    "structure": "[╭┌][─]+"
+  },
+  {
+    "kind": "journey",
+    "source": "journey\n  title Checkout\n  section Purchase\n    Pay: 5: Customer",
+    "labels": [
+      "Checkout",
+      "Pay"
+    ],
+    "origin": "v1 family matrix",
+    "edges": 0,
+    "edgeGlyphs": "▼▲▶◀▷◁△",
+    "structure": "[★☆]{5}"
+  },
+  {
+    "kind": "journey",
+    "source": "journey\n  title Checkout journey\n  section Purchase\n    Add to cart: 5: Customer\n    Enter payment: 2: Customer, Payment\n    Confirm order: 5: Customer",
+    "labels": [
+      "Checkout journey",
+      "Purchase",
+      "Add to cart",
+      "Enter payment",
+      "Confirm order",
+      "Customer",
+      "Payment"
+    ],
+    "origin": "v1 regression fixtures",
+    "edges": 0,
+    "edgeGlyphs": "▼▲▶◀▷◁△",
+    "structure": "[★☆]{5}"
+  },
+  {
+    "kind": "gantt",
+    "source": "gantt\n  title Release\n  dateFormat YYYY-MM-DD\n  section Build\n  API :a1, 2024-01-01, 2d",
+    "labels": [
+      "Release",
+      "API"
+    ],
+    "origin": "v1 family matrix",
+    "edges": 0,
+    "edgeGlyphs": "▼▲▶◀▷◁△",
+    "structure": "│.*[█▓▒◆]"
+  },
+  {
+    "kind": "gantt",
+    "source": "gantt\n title Release pipeline\n dateFormat YYYY-MM-DD\n section Build\n API :done, api, 2026-09-20, 3d\n CLI :active, cli, after api, 4d\n section Delivery\n QA :crit, qa, after cli, 2d\n Ship :milestone, ship, after qa, 1d",
+    "labels": [
+      "Release pipeline",
+      "Build",
+      "API",
+      "CLI",
+      "Delivery",
+      "QA",
+      "Ship"
+    ],
+    "origin": "UI-9 real-world fixture",
+    "edges": 0,
+    "edgeGlyphs": "▼▲▶◀▷◁△",
+    "structure": "│.*[█▓▒◆]"
+  },
+  {
+    "kind": "pie",
+    "source": "pie title Status\n  \"Done\" : 70\n  \"Todo\" : 30",
+    "labels": [
+      "Status",
+      "Done"
+    ],
+    "origin": "v1 family matrix",
+    "edges": 0,
+    "edgeGlyphs": "▼▲▶◀▷◁△",
+    "structure": "●{3}"
+  },
+  {
+    "kind": "pie",
+    "source": "pie title Status\n  \"Done\" : 60\n  \"Todo\" : 40",
+    "labels": [
+      "Status",
+      "Done",
+      "Todo"
+    ],
+    "origin": "v1 regression fixtures",
+    "edges": 0,
+    "edgeGlyphs": "▼▲▶◀▷◁△",
+    "structure": "●{3}"
+  },
+  {
+    "kind": "quadrant",
+    "source": "quadrantChart\n  title Effort\n  x-axis Low --> High\n  y-axis Risk --> Safe\n  Quick win: [0.8, 0.7]",
+    "labels": [
+      "Effort",
+      "Quick win"
+    ],
+    "origin": "v1 family matrix",
+    "edges": 0,
+    "edgeGlyphs": "▼▲▶◀▷◁△",
+    "structure": "┌─+┬─+┐"
+  },
+  {
+    "kind": "quadrant",
+    "source": "quadrantChart\n  title Portfolio\n  x-axis Low --> High\n  y-axis Risk --> Safe\n  quadrant-1 Invest\n  Winner: [0.8, 0.7]",
+    "labels": [
+      "Portfolio",
+      "Invest",
+      "Winner",
+      "Low",
+      "High"
+    ],
+    "origin": "v1 regression fixtures",
+    "edges": 0,
+    "edgeGlyphs": "▼▲▶◀▷◁△",
+    "structure": "┌─+┬─+┐"
+  },
+  {
+    "kind": "requirement",
+    "source": "requirementDiagram\n  requirement req_login {\n    id: 1\n    text: User can login\n  }",
+    "labels": [
+      "req_login",
+      "User can login"
+    ],
+    "origin": "v1 family matrix",
+    "edges": 0,
+    "edgeGlyphs": "▼▲▶◀▷◁△",
+    "structure": "[╭┌][─]+"
+  },
+  {
+    "kind": "requirement",
+    "source": "requirementDiagram\n  requirement req_login {\n    id: 1\n    text: User can login\n  }\n  element login_form {\n    type: UI\n  }\n  login_form - satisfies -> req_login",
+    "labels": [
+      "req_login",
+      "User can login",
+      "login_form",
+      "satisfies"
+    ],
+    "origin": "v1 regression fixtures",
+    "edges": 1,
+    "edgeGlyphs": "▼▲▶◀▷◁△",
+    "structure": "[╭┌][─]+"
+  },
+  {
+    "kind": "git",
+    "source": "gitGraph\n  commit id: \"start\"\n  branch feature\n  checkout feature\n  commit id: \"work\"",
+    "labels": [
+      "Git graph",
+      "work"
+    ],
+    "origin": "v1 family matrix",
+    "edges": 0,
+    "edgeGlyphs": "▼▲▶◀▷◁△",
+    "structure": "[●◎]"
+  },
+  {
+    "kind": "git",
+    "source": "gitGraph\n  commit id: \"start\"\n  branch feature\n  checkout feature\n  commit id: \"work\"\n  checkout main\n  merge feature",
+    "labels": [
+      "start",
+      "work",
+      "merge feature",
+      "main"
+    ],
+    "origin": "v1 regression fixtures",
+    "edges": 0,
+    "edgeGlyphs": "▼▲▶◀▷◁△",
+    "structure": "[●◎]"
+  },
+  {
+    "kind": "c4",
+    "source": "C4Context\n  Person(user, \"User\")\n  System(app, \"App\")\n  Rel(user, app, \"Uses\")",
+    "labels": [
+      "C4 Context",
+      "Uses"
+    ],
+    "origin": "v1 family matrix",
+    "edges": 1,
+    "edgeGlyphs": "▼▲▶◀▷◁△",
+    "structure": "[╭┌][─]+"
+  },
+  {
+    "kind": "c4",
+    "source": "C4Container\n  System_Ext(ext, \"External\")\n  SystemQueue(queue, \"Queue\")\n  ContainerDb(db, \"Database\")\n  ContainerQueue(worker, \"Worker queue\")\n  ComponentDb(store, \"Store\")\n  RelIndex(1, ext, queue, \"publishes\")",
+    "labels": [
+      "External",
+      "Queue",
+      "Database",
+      "Worker queue",
+      "Store",
+      "publishes"
+    ],
+    "origin": "v1 regression fixtures",
+    "edges": 1,
+    "edgeGlyphs": "▼▲▶◀▷◁△",
+    "structure": "[╭┌][─]+"
+  },
+  {
+    "kind": "mindmap",
+    "source": "mindmap\n  root((Root))\n    Child",
+    "labels": [
+      "Mindmap",
+      "Child"
+    ],
+    "origin": "v1 family matrix",
+    "edges": 1,
+    "edgeGlyphs": "▼▲▶◀▷◁△",
+    "structure": "[╭┌][─]+"
+  },
+  {
+    "kind": "mindmap",
+    "source": "mindmap\n root((Release))\n  test[Verification]\n   unit(Unit tests)\n   smoke(Smoke tests)\n  ship[Delivery]",
+    "labels": [
+      "Release",
+      "Verification",
+      "Unit tests",
+      "Smoke tests",
+      "Delivery"
+    ],
+    "origin": "UI-9 real-world fixture",
+    "edges": 4,
+    "edgeGlyphs": "▼▲▶◀▷◁△",
+    "structure": "[╭┌][─]+"
+  },
+  {
+    "kind": "timeline",
+    "source": "timeline\n  title History\n  2020 : Start\n  2021 : Next",
+    "labels": [
+      "History",
+      "Start"
+    ],
+    "origin": "v1 family matrix",
+    "edges": 0,
+    "edgeGlyphs": "▼▲▶◀▷◁△",
+    "structure": "[─]+●|●[─]+|│"
+  },
+  {
+    "kind": "timeline",
+    "source": "timeline TD\n  title Releases\n  2025 : Alpha\n  2026 : Beta",
+    "labels": [
+      "Releases",
+      "2025",
+      "2026",
+      "Alpha",
+      "Beta"
+    ],
+    "origin": "v1 regression fixtures",
+    "edges": 0,
+    "edgeGlyphs": "▼▲▶◀▷◁△",
+    "structure": "[─]+●|●[─]+|│"
+  },
+  {
+    "kind": "zenuml",
+    "source": "zenuml\n  Client->API: GET /items",
+    "labels": [
+      "ZenUML",
+      "GET /items"
+    ],
+    "origin": "v1 family matrix",
+    "edges": 1,
+    "edgeGlyphs": "▼▲▶◀▷◁△",
+    "structure": "┆|──"
+  },
+  {
+    "kind": "sankey",
+    "source": "sankey\n  A,B,10\n  B,C,5",
+    "labels": [
+      "Sankey",
+      "A",
+      "10"
+    ],
+    "origin": "v1 family matrix",
+    "edges": 2,
+    "edgeGlyphs": "▼▲▶◀▷◁△",
+    "structure": "█+▶"
+  },
+  {
+    "kind": "sankey",
+    "source": "sankey-beta\nGrid,Factory,80\nSolar,Factory,20\nFactory,Output,75\nFactory,Loss,25",
+    "labels": [
+      "Grid",
+      "Factory",
+      "Solar",
+      "Output",
+      "Loss"
+    ],
+    "origin": "UI-9 real-world fixture",
+    "edges": 4,
+    "edgeGlyphs": "▼▲▶◀▷◁△",
+    "structure": "█+▶"
+  },
+  {
+    "kind": "xychart",
+    "source": "xychart-beta\n  title \"Growth\"\n  x-axis [Jan, Feb]\n  bar [1, 2]",
+    "labels": [
+      "Growth",
+      "Jan"
+    ],
+    "origin": "v1 family matrix",
+    "edges": 0,
+    "edgeGlyphs": "▼▲▶◀▷◁△",
+    "structure": "[╭┌╔╱█·┼─│●]"
+  },
+  {
+    "kind": "xychart",
+    "source": "xychart-beta\n  title \"Growth\"\n  x-axis [Jan, Feb]\n  bar [1, 2]\n  line [2, 1]",
+    "labels": [
+      "Growth",
+      "Jan",
+      "Feb"
+    ],
+    "origin": "v1 regression fixtures",
+    "edges": 0,
+    "edgeGlyphs": "▼▲▶◀▷◁△",
+    "structure": "[╭┌╔╱█·┼─│●]"
+  },
+  {
+    "kind": "block",
+    "source": "block-beta\n  columns 2\n  A[\"Client\"] B[\"Server\"]\n  A --> B",
+    "labels": [
+      "Block diagram",
+      "Client",
+      "Server"
+    ],
+    "origin": "v1 family matrix",
+    "edges": 1,
+    "edgeGlyphs": "▼▲▶◀▷◁△",
+    "structure": "[╭┌][─]+"
+  },
+  {
+    "kind": "block",
+    "source": "block-beta\ncolumns 3\nclient[Client] gateway[Gateway] store[Store]\nclient --> gateway\ngateway --> store",
+    "labels": [
+      "Client",
+      "Gateway",
+      "Store"
+    ],
+    "origin": "UI-9 real-world fixture",
+    "edges": 2,
+    "edgeGlyphs": "▼▲▶◀▷◁△",
+    "structure": "[╭┌][─]+"
+  },
+  {
+    "kind": "packet",
+    "source": "packet-beta\n  0-7: \"Flags\"\n  8-15: \"Code\"",
+    "labels": [
+      "Packet",
+      "Flags",
+      "Code"
+    ],
+    "origin": "v1 family matrix",
+    "edges": 0,
+    "edgeGlyphs": "▼▲▶◀▷◁△",
+    "structure": "┌─+"
+  },
+  {
+    "kind": "packet",
+    "source": "packet-beta\n+4: \"Version\"\n+4: \"IHL\"\n+8: \"Service\"\n+16: \"Length\"",
+    "labels": [
+      "Version",
+      "IHL",
+      "Service",
+      "Length"
+    ],
+    "origin": "UI-9 real-world fixture",
+    "edges": 0,
+    "edgeGlyphs": "▼▲▶◀▷◁△",
+    "structure": "┌─+"
+  },
+  {
+    "kind": "kanban",
+    "source": "kanban\n  backlog[Backlog]\n    task[Task]@{ticket: \"42\"}\n  done[Done]\n    ship[Ship]",
+    "labels": [
+      "Kanban",
+      "Task",
+      "ticket",
+      "Ship"
+    ],
+    "origin": "v1 family matrix",
+    "edges": 0,
+    "edgeGlyphs": "▼▲▶◀▷◁△",
+    "structure": "╭─+╮"
+  },
+  {
+    "kind": "kanban",
+    "source": "kanban\n todo[Ready for development]\n  auth[Implement authentication]@{assigned: \"Mend\", priority: \"High\"}\n done[Released]\n  docs[Write migration documentation]@{ticket: \"UI-9\"}",
+    "labels": [
+      "Ready for development",
+      "Implement",
+      "authentication",
+      "assigned",
+      "Mend",
+      "High",
+      "Released",
+      "migration",
+      "documentation",
+      "UI-9"
+    ],
+    "origin": "UI-9 real-world fixture",
+    "edges": 0,
+    "edgeGlyphs": "▼▲▶◀▷◁△",
+    "structure": "╭─+╮"
+  },
+  {
+    "kind": "architecture",
+    "source": "architecture-beta\n  group core(cloud)[Core]\n  service api(server)[API] in core\n  service db(database)[DB] in core\n  api:R --> L:db\n  junction split",
+    "labels": [
+      "Architecture",
+      "Core",
+      "API",
+      "DB"
+    ],
+    "origin": "v1 family matrix",
+    "edges": 1,
+    "edgeGlyphs": "▼▲▶◀▷◁△",
+    "structure": "┌─+┐"
+  },
+  {
+    "kind": "architecture",
+    "source": "architecture-beta\ngroup core(cloud)[Core]\nservice api(server)[API] in core\nservice db(database)[DB] in core\nservice cache(disk)[Cache]\napi:R --> L:db\napi:B --> T:cache",
+    "labels": [
+      "Core",
+      "API",
+      "DB",
+      "Cache"
+    ],
+    "origin": "UI-9 real-world fixture",
+    "edges": 2,
+    "edgeGlyphs": "▼▲▶◀▷◁△",
+    "structure": "┌─+┐"
+  },
+  {
+    "kind": "radar",
+    "source": "radar-beta\n  title \"Skills\"\n  axis a[\"Speed\"], b[\"Quality\"]\n  curve team[\"Team\"]{8, 9}",
+    "labels": [
+      "Skills",
+      "Team"
+    ],
+    "origin": "v1 family matrix",
+    "edges": 0,
+    "edgeGlyphs": "▼▲▶◀▷◁△",
+    "structure": "┼|[╱╲]"
+  },
+  {
+    "kind": "radar",
+    "source": "radar-beta\n  title \"Skills\"\n  axis a[\"Speed\"], b[\"Quality\"], c[\"Safety\"]\n  curve team[\"Team\"]{8, 9, 7}",
+    "labels": [
+      "Skills",
+      "Speed",
+      "Quality",
+      "Safety",
+      "Team"
+    ],
+    "origin": "v1 regression fixtures",
+    "edges": 0,
+    "edgeGlyphs": "▼▲▶◀▷◁△",
+    "structure": "┼|[╱╲]"
+  },
+  {
+    "kind": "eventmodeling",
+    "source": "eventmodeling\n  tf 01 ui Cart\n  tf 02 cmd AddItem\n  tf 03 evt ItemAdded",
+    "labels": [
+      "Event modeling",
+      "ItemAdded"
+    ],
+    "origin": "v1 family matrix",
+    "edges": 2,
+    "edgeGlyphs": "▼▲▶◀▷◁△",
+    "structure": "[╭┌╔╱█·┼─│●]"
+  },
+  {
+    "kind": "eventmodeling",
+    "source": "eventmodeling\n  tf 01 ui CartUI\n  tf 02 cmd AddItem {\"sku\":\"A-1\"}\n  tf 03 evt ItemAdded [[ItemData]]\n  01 ->> 03\n  data ItemData `json`{\n    \"sku\": \"A-1\"\n  }",
+    "labels": [
+      "CartUI",
+      "AddItem",
+      "ItemAdded",
+      "sku",
+      "A-1"
+    ],
+    "origin": "v1 regression fixtures",
+    "edges": 1,
+    "edgeGlyphs": "▼▲▶◀▷◁△",
+    "structure": "[╭┌╔╱█·┼─│●]"
+  },
+  {
+    "kind": "treemap",
+    "source": "treemap-beta\n  \"Products\"\n    \"Apps\": 12\n    \"Tools\": 8",
+    "labels": [
+      "Treemap",
+      "Products",
+      "Apps"
+    ],
+    "origin": "v1 family matrix",
+    "edges": 0,
+    "edgeGlyphs": "▼▲▶◀▷◁△",
+    "structure": "│┌─+"
+  },
+  {
+    "kind": "treemap",
+    "source": "treemap-beta\n \"Budget\"\n  \"Core\": 30\n  \"Support\": 15\n  \"Research\": 20",
+    "labels": [
+      "Budget",
+      "Core",
+      "Support",
+      "Research"
+    ],
+    "origin": "UI-9 real-world fixture",
+    "edges": 0,
+    "edgeGlyphs": "▼▲▶◀▷◁△",
+    "structure": "│┌─+"
+  },
+  {
+    "kind": "venn",
+    "source": "venn-beta\n  set A[\"Alpha\"]:20\n  set B[\"Beta\"]:12\n  union A,B[\"Shared\"]:3\n  text A1[\"React\"]",
+    "labels": [
+      "Venn",
+      "Alpha",
+      "Shared"
+    ],
+    "origin": "v1 family matrix",
+    "edges": 0,
+    "edgeGlyphs": "▼▲▶◀▷◁△",
+    "structure": "[╭┌╔╱█·┼─│●]"
+  },
+  {
+    "kind": "venn",
+    "source": "venn-beta\n  set A[\"Alpha\"]:20\n  set B[\"Beta\"]:12\n  union A,B[\"Shared\"]:3",
+    "labels": [
+      "Alpha",
+      "Beta",
+      "Shared"
+    ],
+    "origin": "v1 regression fixtures",
+    "edges": 0,
+    "edgeGlyphs": "▼▲▶◀▷◁△",
+    "structure": "[╭┌╔╱█·┼─│●]"
+  },
+  {
+    "kind": "ishikawa",
+    "source": "ishikawa-beta\n  Blurry photo\n    Process\n      Out of focus\n    User\n      Shaky hands",
+    "labels": [
+      "Ishikawa",
+      "Blurry photo",
+      "Shaky hands"
+    ],
+    "origin": "v1 family matrix",
+    "edges": 0,
+    "edgeGlyphs": "▼▲▶◀▷◁△",
+    "structure": "[╭┌╔╱█·┼─│●]"
+  },
+  {
+    "kind": "ishikawa",
+    "source": "ishikawa-beta\n Late delivery\n  Build\n   Slow tests\n  Review\n   Missing owner",
+    "labels": [
+      "Late delivery",
+      "Slow tests",
+      "Missing owner"
+    ],
+    "origin": "UI-9 real-world fixture",
+    "edges": 0,
+    "edgeGlyphs": "▼▲▶◀▷◁△",
+    "structure": "[╭┌╔╱█·┼─│●]"
+  },
+  {
+    "kind": "wardley",
+    "source": "wardley-beta\n  anchor User [0.9, 0.1]\n  component App [0.7, 0.4]\n  User -> App",
+    "labels": [
+      "Wardley",
+      "User",
+      "App"
+    ],
+    "origin": "v1 family matrix",
+    "edges": 0,
+    "edgeGlyphs": "▼▲▶◀▷◁△",
+    "structure": "[╭┌╔╱█·┼─│●]"
+  },
+  {
+    "kind": "wardley",
+    "source": "wardley-beta\n  anchor User [0.9, 0.1]\n  component App [0.7, 0.4]\n  User -> App\n  evolve App 0.8\n  note \"Move right\" [0.3, 0.5]",
+    "labels": [
+      "User",
+      "App",
+      "Move right"
+    ],
+    "origin": "v1 regression fixtures",
+    "edges": 0,
+    "edgeGlyphs": "▼▲▶◀▷◁△",
+    "structure": "[╭┌╔╱█·┼─│●]"
+  },
+  {
+    "kind": "cynefin",
+    "source": "cynefin-beta\n  title Decision\n  complex\n    \"Experiment\"\n  clear\n    \"Runbook\"\n  complex --> clear : \"simplify\"",
+    "labels": [
+      "Experiment",
+      "simplify"
+    ],
+    "origin": "v1 family matrix",
+    "edges": 0,
+    "edgeGlyphs": "▼▲▶◀▷◁△",
+    "structure": "[╭┌╔╱█·┼─│●]"
+  },
+  {
+    "kind": "cynefin",
+    "source": "cynefin-beta\n  complex\n    \"Experiment\"\n  clear\n    \"Runbook\"\n  complex --> clear : \"simplify\"",
+    "labels": [
+      "Experiment",
+      "Runbook",
+      "simplify"
+    ],
+    "origin": "v1 regression fixtures",
+    "edges": 0,
+    "edgeGlyphs": "▼▲▶◀▷◁△",
+    "structure": "[╭┌╔╱█·┼─│●]"
+  },
+  {
+    "kind": "treeview",
+    "source": "treeView-beta\n  root\n    src\n      index.ts\n    README.md",
+    "labels": [
+      "TreeView",
+      "index.ts",
+      "README.md"
+    ],
+    "origin": "v1 family matrix",
+    "edges": 3,
+    "edgeGlyphs": "▼▲▶◀▷◁△",
+    "structure": "[╭┌][─]+"
+  },
+  {
+    "kind": "treeview",
+    "source": "treeView-beta\n project\n  apps\n   cli.ts\n  packages\n   wire.ts",
+    "labels": [
+      "project",
+      "apps",
+      "cli.ts",
+      "packages",
+      "wire.ts"
+    ],
+    "origin": "UI-9 real-world fixture",
+    "edges": 4,
+    "edgeGlyphs": "▼▲▶◀▷◁△",
+    "structure": "[╭┌][─]+"
+  },
+  {
+    "kind": "zenuml",
+    "source": "zenuml\nClient->API: POST /checkout\nAPI->DB: Store order\nAPI->Client: Receipt",
+    "labels": [
+      "POST /checkout",
+      "Store order",
+      "Receipt"
+    ],
+    "origin": "UI-9 real-world fixture",
+    "edges": 3,
+    "edgeGlyphs": "▼▲▶◀▷◁△",
+    "structure": "┆|──"
+  },
+  {
+    "kind": "swimlane",
+    "source": "swimlane-beta TD\nsubgraph request[Request]\n A[Client] --> B[Response]\nend\nsubgraph service[Service]\n C[API]\nend\nA --> C",
+    "labels": [
+      "Client",
+      "Response",
+      "Service",
+      "API"
+    ],
+    "origin": "UI-9 real-world fixture",
+    "edges": 2,
+    "edgeGlyphs": "▼▲▶◀▷◁△",
+    "structure": "[╭┌][─]+"
+  }
+]

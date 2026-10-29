@@ -1,0 +1,6 @@
+{
+  "id": "tiny",
+  "displayName": "Tiny",
+  "description": "A 6x4-pixel test pet.",
+  "spritesheetPath": "spritesheet.png"
+}
