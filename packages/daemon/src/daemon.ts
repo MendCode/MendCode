@@ -235,7 +235,7 @@ import { runLoopCheck, workspaceFingerprint } from "./loop-checks"
 import { createLoopPort } from "./loop-port"
 import { createWorktreePort } from "./worktree-port"
 import { createPrWatch, type GhRun } from "./pr-watch"
-import { createReviewSessions, REVIEW_AGENT } from "./pr-review/sessions"
+import { createReviewSessions, REVIEW_AGENT, reviewMessage } from "./pr-review/sessions"
 import { createGitWorktrees, isGitCheckout } from "./loop-worktree"
 import { createWorkflowsHost } from "./workflows"
 import { createWorkflowRouter } from "./workflow-routing"
@@ -2511,7 +2511,8 @@ export async function startDaemon(options: DaemonOptions) {
       const actor = actorFor(id)
       if (!actor) throw new Error("[PR_REVIEW]: review session is gone")
       if (!editing) await actor.handle({ id: ids("command"), clientId: taskClientId, type: "session.permission.set", sessionId: id, mode: "plan" })
-      const result = await actor.handle({ id: ids("command"), clientId: taskClientId, type: "user.submit", sessionId: id, text, attachments: [] })
+      const message = reviewMessage(text, (bytes) => store.putBlob(bytes, "text/plain"))
+      const result = await actor.handle({ id: ids("command"), clientId: taskClientId, type: "user.submit", sessionId: id, ...message })
       if (!result.ok) throw new Error(`[PR_REVIEW]: ${result.message}`)
     },
     deny(id, requestId, reason) { void actorFor(id)?.handle({ id: ids("command"), clientId: taskClientId, type: "request.resolve", sessionId: id, requestId, decision: { kind: "deny", reason } }) },

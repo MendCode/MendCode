@@ -12,7 +12,7 @@ import type { ReviewSessionFactory } from "../src/pr-review/engine"
 import type { GhCall } from "../src/pr-review/publish"
 import { createRepoWatch, MAX_CONCURRENT_REVIEWS, type RepoWatchJob } from "../src/pr-review/repo-watch"
 import { createPrReviewService } from "../src/pr-review/service"
-import { createReviewSessions } from "../src/pr-review/sessions"
+import { createReviewSessions, reviewMessage } from "../src/pr-review/sessions"
 
 const cleanups: Array<() => Promise<void> | void> = []
 afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup() })
@@ -190,14 +190,14 @@ describe("PR review service", () => {
     await git(dir, "checkout", "-q", "main")
     return { dir, base, head }
   }
-  async function service({ writer = true }: { writer?: boolean } = {}) {
+  async function service({ writer = true, git }: { writer?: boolean; git?: import("../src/pr-review/context").GitRun } = {}) {
     const { dir, base, head } = await repository()
     const notices: string[] = []
     const posts: unknown[] = []
     let turns = 0
     const run: GhRun = async ({ argv }) => {
       if (argv[0] === "repo") return { code: 0, out: "acme/app", err: "" }
-      if (argv[0] === "pr" && argv[1] === "view") return { code: 0, out: JSON.stringify({ number: 12, headRefOid: head, baseRefOid: base, baseRefName: "main", url: "https://github.com/acme/app/pull/12" }), err: "" }
+      if (argv[0] === "pr" && argv[1] === "view") return { code: 0, out: JSON.stringify({ number: Number(argv[2]), headRefOid: head, baseRefOid: base, baseRefName: "main", url: "https://github.com/acme/app/pull/12" }), err: "" }
       if (argv[0] === "pr" && argv[1] === "list") return { code: 0, out: "[]", err: "" }
       if (argv.join(" ") === "api user --jq .login") return { code: 0, out: "nora", err: "" }
       return { code: 1, out: "", err: "unexpected" }
@@ -222,11 +222,27 @@ describe("PR review service", () => {
     const reviewer = createPrReviewService({
       dir: data, run, call, intervalMs: 3_600_000, enabled: () => true, graphOn: () => false,
       sessionDirectory: () => dir, sessionExists: () => true, notify: (_session, text) => notices.push(text),
-      sessions, editor: sessions, schedule: async (job) => { await job() },
+      sessions, editor: sessions, schedule: async (job) => { await job() }, ...(git ? { git } : {}),
     })
     cleanups.push(() => reviewer.stop())
     return { reviewer, notices, posts, dir, data, turns: () => turns }
   }
+
+  test("reviews started together check out one at a time: parallel fetches and worktree adds on one .git fail on its locks", async () => {
+    const { gitRun } = await import("../src/pr-review/context")
+    let inFlight = 0, most = 0
+    const git: import("../src/pr-review/context").GitRun = async (args, cwd) => {
+      const checkout = args[0] === "fetch" || args[0] === "worktree" && args[1] === "add"
+      if (checkout) { inFlight++; most = Math.max(most, inFlight); await Bun.sleep(30) }
+      try { return args[0] === "fetch" ? { code: 0, out: "" } : await gitRun(args, cwd) } finally { if (checkout) inFlight-- }
+    }
+    const { reviewer, notices } = await service({ git })
+    const started = await Promise.all(["12", "13", "14"].map((pr) => reviewer.control({ sessionId: "ses_a", action: "review", pr })))
+    expect(started.every((reply) => reply.ok)).toBe(true)
+    for (let i = 0; i < 150 && notices.filter((notice) => notice.startsWith("PR review of")).length < 3; i++) await Bun.sleep(20)
+    expect(notices.filter((notice) => notice.startsWith("PR review of") && !notice.includes("failed"))).toHaveLength(3)
+    expect(most).toBe(1)
+  })
 
   test("a reviewer the repository does not let post keeps the review in its session and is never asked to post", async () => {
     const { reviewer, notices, posts } = await service({ writer: false })
@@ -289,6 +305,17 @@ describe("daemon", () => {
 })
 
 describe("review children", () => {
+  test("a review prompt longer than a message may be goes whole into a text attachment (a large PR: 'the message could not be stored')", () => {
+    const stored: Uint8Array[] = []
+    const put = (bytes: Uint8Array) => { stored.push(bytes); return { sha256: "a".repeat(64), mime: "text/plain", bytes: bytes.length } as never }
+    expect(reviewMessage("review this", put)).toEqual({ text: "review this", attachments: [] })
+    expect(stored).toHaveLength(0)
+    const prompt = "diff ".repeat(20_000)
+    const message = reviewMessage(prompt, put)
+    expect(message.text.length).toBeLessThan(200)
+    expect(message.attachments).toHaveLength(1)
+    expect(new TextDecoder().decode(stored[0])).toBe(prompt)
+  })
   test("a child runs in plan mode, refuses approvals, answers with its last message and the reported tokens, and is removed", async () => {
     const log: string[] = []
     let observe: (event: never) => void = () => undefined

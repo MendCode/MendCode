@@ -69,6 +69,16 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
   const git = options.git ?? gitRun
   const root = path.join(options.dir, "pr-review")
   const held = new Map<string, Array<() => Promise<void>>>()
+  /** The last checkout step queued on each directory: parallel fetches and worktree adds on one `.git` fail on its locks. */
+  const checkouts = new Map<string, Promise<unknown>>()
+
+  function oneAtATime<T>(directory: string, step: () => Promise<T>): Promise<T> {
+    const next = (checkouts.get(directory) ?? Promise.resolve()).then(step, step)
+    const settled = next.catch(() => undefined)
+    checkouts.set(directory, settled)
+    void settled.then(() => { if (checkouts.get(directory) === settled) checkouts.delete(directory) })
+    return next
+  }
 
   /** `owner/repo` of a directory's GitHub origin, through gh. */
   async function repoOf(directory: string) {
@@ -84,13 +94,17 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
     if (viewed.code !== 0 || !pr.headRefOid || !pr.baseRefOid || !/^[0-9a-f]{40}$/.test(pr.headRefOid) || !/^[0-9a-f]{40}$/.test(pr.baseRefOid)) throw new Error(`[PR_REVIEW]: gh could not read pull request #${number}`)
     const base = pr.baseRefName && /^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$/.test(pr.baseRefName) && !pr.baseRefName.includes("..") ? pr.baseRefName : undefined
     // FETCH_HEAD only: no branch or remote-tracking ref of the user's checkout changes.
-    const fetched = await git(["fetch", "--no-tags", "--quiet", "origin", `refs/pull/${number}/head`, ...(base ? [`refs/heads/${base}`] : [])], directory)
-    if (fetched.code !== 0) throw new Error(`[PR_REVIEW]: git fetch of pull request #${number} failed`)
-    mkdirSync(path.join(root, "worktrees"), { recursive: true, mode: 0o700 })
-    const worktree = mkdtempSync(path.join(root, "worktrees", `pr${number}-`))
-    rmSync(worktree, { recursive: true, force: true })
-    const added = await git(["worktree", "add", "--detach", "--quiet", worktree, pr.headRefOid], directory)
-    if (added.code !== 0) throw new Error(`[PR_REVIEW]: could not check out ${pr.headRefOid.slice(0, 12)} in a worktree`)
+    const head = pr.headRefOid
+    const worktree = await oneAtATime(directory, async () => {
+      const fetched = await git(["fetch", "--no-tags", "--quiet", "origin", `refs/pull/${number}/head`, ...(base ? [`refs/heads/${base}`] : [])], directory)
+      if (fetched.code !== 0) throw new Error(`[PR_REVIEW]: git fetch of pull request #${number} failed`)
+      mkdirSync(path.join(root, "worktrees"), { recursive: true, mode: 0o700 })
+      const created = mkdtempSync(path.join(root, "worktrees", `pr${number}-`))
+      rmSync(created, { recursive: true, force: true })
+      const added = await git(["worktree", "add", "--detach", "--quiet", created, head], directory)
+      if (added.code !== 0) throw new Error(`[PR_REVIEW]: could not check out ${head.slice(0, 12)} in a worktree`)
+      return created
+    })
     const graphCache = `${worktree}.graph`
     try {
       const state = readReviewState(options.dir, repo, number)
@@ -199,7 +213,7 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
         pushable: async () => (await fixInfo()).pushable,
         fix: async ({ instructions, finding }) => {
           const info = await fixInfo()
-          if ((await git(["fetch", "--no-tags", "--quiet", "origin", `refs/pull/${number}/head`], directory)).code !== 0) return { ok: false, reason: `git fetch of pull request #${number} failed` }
+          if ((await oneAtATime(directory, () => git(["fetch", "--no-tags", "--quiet", "origin", `refs/pull/${number}/head`], directory))).code !== 0) return { ok: false, reason: `git fetch of pull request #${number} failed` }
           options.notify(sessionId, `@mendcode fix on ${repo}#${number}: a fix session is editing a copy of the branch; its approvals come to you like any session's.`)
           return runFix({ directory, root, number, head: info.head, branch: info.branch, pushUrl: info.pushUrl, instructions, finding, checks: info.config.checks, runChecks: (dir, commands) => runChecks({ directory: dir, commands }), sessions: (worktree) => options.editor(sessionId, worktree), git })
         },

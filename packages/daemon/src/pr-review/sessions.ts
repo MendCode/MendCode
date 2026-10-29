@@ -1,5 +1,14 @@
-import type { ModelChoice, RequestId, SessionEvent, SessionId } from "@mendcode/protocol"
+import { MAX_DRAFT_CHARS, type BlobRef, type ModelChoice, type RequestId, type SessionEvent, type SessionId } from "@mendcode/protocol"
 import type { ReviewSessionFactory, ReviewTurn } from "./engine"
+
+/**
+ * A review prompt as a message the session stores: one longer than a message may be (a large pull request's diff and
+ * files) goes whole into a text attachment, which the native engine reads itself and other engines get put back in.
+ */
+export function reviewMessage(prompt: string, putText: (bytes: Uint8Array) => BlobRef): { text: string; attachments: BlobRef[] } {
+  if (prompt.length <= MAX_DRAFT_CHARS) return { text: prompt, attachments: [] }
+  return { text: "The review request (instructions and the pull request) is the attached text. Follow it.", attachments: [putText(new TextEncoder().encode(prompt))] }
+}
 
 /**
  * The review children the daemon runs (docs/pr-review.md): each `ReviewSession` is a hidden session in plan mode on the read-only
