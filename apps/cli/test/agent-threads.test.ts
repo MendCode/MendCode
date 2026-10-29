@@ -294,3 +294,53 @@ test("after the daemon restarts, a background sub-agent that ended with the old 
   h.app.render()
   expect(screen(h)).not.toMatch(/Survey the map\s+bg/)
 })
+
+test("a background sub-agent esc stopped stays in the strip as stopped by you until /relaunch asks the model to start it again", async () => {
+  const dataDir = tempDir()
+  writeTuiProfile(dataDir, { ...DEFAULT_TUI_PROFILE })
+  const h = appHarness({
+    dataDir, width: 110, height: 34,
+    reply: (command) => {
+      if (command.type === "session.get") return { ok: true, result: { session: { sessionId: command.sessionId, directory: "/work" } } } as never
+      if (command.type === "session.children") return { ok: true, result: { sessions: [] } } as never
+      if (command.type === "task.list") return { ok: true, result: { tasks: [] } } as never
+      if (command.type === "background.list") return { ok: true, result: { tasks: [] } } as never
+      if (command.type === "user.submit") return { ok: true, result: {} } as never
+      return undefined
+    },
+  })
+  h.app.applySettings({ onboarded: true })
+  const talk = conversation(h.sessionId, h.app.onEvent)
+  talk.emit({ type: "turn.started", turnId: "turn_1", queueId: "queue_1" })
+  talk.emit({ type: "item.started", turnId: "turn_1", itemId: "item_bg", kind: "tool_call", meta: { tool: "agent Re-verify comparison table", subagent: true, agent: "general-purpose", background: true } })
+  talk.emit({ type: "item.completed", itemId: "item_bg", status: "ok", text: "running in the background" })
+  talk.emit({ type: "item.started", turnId: "turn_1", itemId: "item_bg_tool", kind: "tool_call", meta: { tool: "read /work/table.md", agentParent: "item_bg" } })
+  talk.emit({ type: "item.completed", itemId: "item_bg_tool", status: "ok", meta: { agentParent: "item_bg" } })
+  talk.emit({ type: "item.started", turnId: "turn_1", itemId: "item_bg_end", kind: "agent_message", meta: { agentParent: "item_bg" } })
+  talk.emit({ type: "item.completed", itemId: "item_bg_end", status: "cancelled", text: "", meta: { agentParent: "item_bg", agentEnd: true, stoppedBy: "user" } })
+  talk.emit({ type: "turn.cancelled", turnId: "turn_1", by: "user" })
+  h.app.render()
+  // An hour old by the harness clock, far past the moment an ended sub-agent's row normally stays.
+  expect(screen(h)).toMatch(/Agents {2}1 stopped by you/)
+  expect(screen(h)).toMatch(/└ Re-verify compar\S*\s+bg\s+stopped by you · \/relaunch\s+5s/)
+  await h.type("/relaunch\r")
+  await Bun.sleep(5)
+  const [submit] = h.sentOf("user.submit") as Array<{ text: string }>
+  expect(submit?.text).toContain('- "Re-verify comparison table" (general-purpose, in the background): it had run 1 tool, the last one read /work/table.md')
+  expect(submit?.text).toStartWith("Relaunch the sub-agent I stopped with esc.")
+  h.app.render()
+  expect(screen(h)).not.toContain("stopped by you")
+})
+
+test("a stopped sub-agent's row goes once a turn begun after the stop has ended; the turn the esc ended keeps it", async () => {
+  const { h, talk, child } = await chat()
+  child("item_a", "item_a_end", "agent_message")
+  talk.emit({ type: "item.completed", itemId: "item_a_end", status: "cancelled", text: "", meta: { agentParent: "item_a", agentEnd: true, stoppedBy: "user" } })
+  talk.emit({ type: "turn.cancelled", turnId: "turn_1", by: "user" })
+  h.app.render()
+  expect(screen(h)).toMatch(/Read a\.txt\s+await\s+stopped by you/)
+  talk.emit({ type: "turn.started", turnId: "turn_2", queueId: "queue_2" })
+  talk.emit({ type: "turn.completed", turnId: "turn_2" })
+  h.app.render()
+  expect(screen(h)).not.toContain("stopped by you")
+})

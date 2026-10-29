@@ -16,7 +16,7 @@ export const COMMANDS_SHOWN = 3
 const ACTIVE: ReadonlySet<TaskRecord["state"]> = new Set(["queued", "running", "needs_input"])
 
 /** What a row of the strip needs of a sub-agent: a child task of the daemon, or a thread an engine reports inside the session. */
-export type StripTask = Pick<TaskRecord, "taskId" | "description" | "agent" | "background" | "state" | "createdAt" | "updatedAt" | "startedAt"> & { run?: TaskRecord["run"] }
+export type StripTask = Pick<TaskRecord, "taskId" | "description" | "agent" | "background" | "state" | "createdAt" | "updatedAt" | "startedAt"> & { run?: TaskRecord["run"]; /** Stopped by the user's esc: its row stays, saying how to start it again. */ stoppedByUser?: true }
 
 /**
  * What a sub-agent runs on, in one line: `Sol 6.1 · openai · native · low · fast`. Each fact has its own colour, so the line reads
@@ -38,9 +38,9 @@ export function runSpans(run: NonNullable<TaskRecord["run"]>, shownModel: (id: s
 /** What the daemon's activity push says of a sub-agent's session while its turn runs. */
 export type AgentActivity = { state: ForegroundState; since?: number; tool?: string; pending?: string; paused?: boolean }
 
-/** The sub-agents of the open session worth a row now: the ones at work, then the ones that ended a moment ago. */
+/** The sub-agents of the open session worth a row now: the ones at work, then the ones that ended a moment ago or that the user stopped. */
 export function stripTasks<T extends StripTask>(tasks: readonly T[], now: number): T[] {
-  const shown = tasks.filter((task) => ACTIVE.has(task.state) || now - task.updatedAt < AGENT_DONE_MS)
+  const shown = tasks.filter((task) => ACTIVE.has(task.state) || task.stoppedByUser || now - task.updatedAt < AGENT_DONE_MS)
   return [...shown.filter((task) => ACTIVE.has(task.state)), ...shown.filter((task) => !ACTIVE.has(task.state))]
 }
 
@@ -49,9 +49,10 @@ export function stripActive(tasks: readonly StripTask[]): boolean {
   return tasks.some((task) => ACTIVE.has(task.state))
 }
 
-function doing(task: StripTask, activity: AgentActivity | undefined): Span {
+function doing(task: StripTask, activity: AgentActivity | undefined, sep: string): Span {
   if (task.state === "completed") return { text: "done", fg: "success" }
   if (task.state === "failed") return { text: "failed", fg: "error" }
+  if (task.stoppedByUser) return { text: `stopped by you ${sep} /relaunch`, fg: "warning" }
   if (task.state === "cancelled") return { text: "cancelled", fg: "muted" }
   if (task.state === "interrupted") return { text: "interrupted", fg: "warning" }
   if (task.state === "needs_input" || activity?.state === "waiting_approval") return { text: activity?.pending ? `needs you: ${activity.pending}` : "needs you", fg: "warning" }
@@ -86,7 +87,8 @@ export function renderAgentsStrip(input: { tasks: readonly StripTask[]; /** What
   const push = (row: Line, id?: string) => { rows.push(row); ids.push(id) }
   if (input.root) {
     const needs = active.filter((task) => task.state === "needs_input" || input.activity(task.taskId)?.state === "waiting_approval").length
-    const counts = [active.length ? `${active.length} running` : `${tasks.length} finished`, ...(needs ? [`${needs} ${needs === 1 ? "needs" : "need"} you`] : []), ...(commands.length ? [`${commands.length} command${commands.length === 1 ? "" : "s"}`] : [])].join(` ${g.sep} `)
+    const stopped = tasks.filter((task) => task.stoppedByUser).length
+    const counts = [active.length ? `${active.length} running` : stopped ? `${stopped} stopped by you` : `${tasks.length} finished`, ...(needs ? [`${needs} ${needs === 1 ? "needs" : "need"} you`] : []), ...(commands.length ? [`${commands.length} command${commands.length === 1 ? "" : "s"}`] : [])].join(` ${g.sep} `)
     const head: Line = [{ text: "Agents", fg: "primary" }, { text: `  ${counts}`, fg: needs ? "warning" : "muted" }]
     const hint: Line = [{ text: commands.length ? `${input.openHint} ${g.sep} /ps` : input.openHint, fg: "muted" }]
     push([pad, ...(lineWidth(head) + lineWidth(hint) + 2 <= room ? spread(head, hint, room) : fit(head, room))])
@@ -107,13 +109,15 @@ export function renderAgentsStrip(input: { tasks: readonly StripTask[]; /** What
   const runWidth = inline.size ? Math.min(20, Math.max(...[...inline.values()].map(lineWidth))) : 0
   const TIME = 9
   const free = Math.max(8, room - 2 - (agentWidth ? agentWidth + 2 : 0) - (modeWidth ? modeWidth + 2 : 0) - (runWidth ? runWidth + 2 : 0) - 2 - TIME)
-  const statusWant = Math.max(...shown.map((task) => cells(doing(task, input.activity(task.taskId)).text)))
-  const titleWidth = Math.max(4, Math.min(Math.max(...shown.map((task) => cells(described(task))), ...shownCommands.map((item) => cells(backgroundName(item.command, 200)))), free - Math.min(statusWant, Math.max(8, Math.floor(free / 2)))))
+  const statusWant = Math.max(...shown.map((task) => cells(doing(task, input.activity(task.taskId), g.sep).text)))
+  // A row the user stopped names the command that starts it again: that status is read whole, the descriptions give way.
+  const statusRoom = shown.some((task) => task.stoppedByUser) ? statusWant : Math.max(8, Math.floor(free / 2))
+  const titleWidth = Math.max(4, Math.min(Math.max(...shown.map((task) => cells(described(task))), ...shownCommands.map((item) => cells(backgroundName(item.command, 200)))), free - Math.min(statusWant, statusRoom)))
   const statusWidth = Math.max(1, free - titleWidth)
   shown.forEach((task, index) => {
     const activity = input.activity(task.taskId)
     const running = ACTIVE.has(task.state)
-    const status = doing(task, activity)
+    const status = doing(task, activity, g.sep)
     // A resumed child counts from its current run, not from its first (which may be a day old).
     const since = task.startedAt ?? (running && activity?.since ? Math.min(activity.since, task.createdAt) : task.createdAt)
     const elapsed = formatElapsed((running ? input.now : task.updatedAt) - since)

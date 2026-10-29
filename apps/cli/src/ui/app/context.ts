@@ -274,6 +274,8 @@ export type AppState = {
   /** The parent of each sub-agent session a `task.changed` named (the activity push does not carry it): the session pet's `agents` state reads it. */
   agentParents: Map<string, string>
   agentShells: AgentShell[]
+  /** Sub-agents the user stopped and `/relaunch` already asked to start again, by their call's item: their stopped row goes. */
+  relaunched: Set<string>
   agentShellsBusy: boolean
   agentShellsStale: boolean
   toolsReport: CustomToolsReport | undefined

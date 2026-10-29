@@ -19,7 +19,7 @@ describe("the built-in aliases", () => {
     const found = SLASH_COMMANDS.flatMap((command) => command.aliases.map((alias) => `${command.name}=${alias}`))
     expect(found.sort()).toEqual([...KEPT].sort())
     for (const command of SLASH_COMMANDS) expect([command.name, command.aliases.length <= (command.name === "quit" ? 2 : 1)]).toEqual([command.name, true])
-    expect(SLASH_COMMANDS).toHaveLength(155)
+    expect(SLASH_COMMANDS).toHaveLength(156)
     expect(SLASH_COMMANDS.filter((command) => command.aliases.length)).toHaveLength(22)
   })
   test("the Git page adds one command, /git, with no alias: /changes, /diff, /worktrees and /warp keep their names and their own summaries", () => {

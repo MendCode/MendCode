@@ -46,6 +46,11 @@ type ActiveTurn = {
   steering?: boolean
   /** The turn's `result` came while a steered message still waited: Claude Code answers it next, in the same MendCode turn. */
   held?: TurnOutcome
+  /**
+   * Claude Code holds the turn's own message behind a run of its own (`command_lifecycle` `queued`, until `started`): a resumed
+   * session first answers its notice that agents of the ended process did not finish, and that run's `result` is not this turn's.
+   */
+  ownQueued?: boolean
   watchdog?: TimerHandle
   touch(): void
   finish(outcome: TurnOutcome): void
@@ -356,6 +361,7 @@ export function createClaudeEngine(options: {
     if (message.type === "command_lifecycle") {
       connection.lifecycle = true
       const steered = connection.turn
+      if (steered && message.command_uuid === messageUuid(steered.input.turnId)) steered.ownQueued = message.state === "queued"
       if (steered && typeof message.command_uuid === "string" && steered.steered.has(message.command_uuid) && message.state !== "queued") {
         steered.steered.delete(message.command_uuid)
         if (message.state === "started") delete steered.held
@@ -415,6 +421,7 @@ export function createClaudeEngine(options: {
       if (typeof facts.pre_tokens === "number") compaction.preTokens = facts.pre_tokens
       if (typeof facts.post_tokens === "number") compaction.postTokens = facts.post_tokens
     } else if (compaction?.done && compaction.summary === undefined && message.type === "user" && message.isSynthetic && typeof message.message?.content === "string") compaction.summary = message.message.content
+    if (message.type === "result" && turn.ownQueued) return
     accept(turn, message)
     // A tool result of the turn itself is where Claude Code can take a message in: queued ones go to it now, as it does with a
     // message typed while it works (it reads them after the running step's tool results, or answers them right after this turn).
@@ -674,6 +681,10 @@ export function createClaudeEngine(options: {
           "abort",
           () => {
             turn.interrupted = true
+            // Claude Code's interrupt stops every background agent of the session, this turn's and earlier ones', for good.
+            turn.mapper.stopBackground()
+            for (const mapper of connection.agentTurns) mapper.stopBackground()
+            connection.agentTurns = []
             const stopNow = () => {
               if (settled) return
               turn.mapper.finish("interrupted")

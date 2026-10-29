@@ -28,6 +28,7 @@ import type { createStatus } from "./status"
 import type { createHooks } from "./hooks"
 import { featureOn } from "@mendcode/protocol/wire"
 import { BREAKPOINTS } from "../breakpoints"
+import { relaunchMessage, relaunchTargets } from "../../view/relaunch"
 import { sidebarVisible } from "../../view/sidebar"
 import { createChangesPageState, createLoopsPageState, createMcpsPageState, createMemoryPageState, createStoragePageState, createToolsPageState, createUsagePageState, preload, createAgentsPageState, slashPage, createPackagesPageState, createCustomizePageState, createSettingsPageState, createStatusPageState, createExtensionsPageState, createProvidersPageState, createSecretsPageState } from "../lazy-pages"
 import { readReviewComments } from "../../view/review-comments"
@@ -273,6 +274,16 @@ export function createSlash(ctx: AppContext, actions: {
         const target = parsed.args.trim() || state.sessionId
         if (/\s/.test(target)) { fail(`usage: /${parsed.command.name} [session-id]`); break }
         await actions.controlSession(target, parsed.command.name === "unpause" ? "resume" : parsed.command.name)
+        break
+      }
+      case "relaunch": {
+        const stopped = (state.agentRoot ?? state.transcript).agentThreads().filter((thread) => thread.stoppedByUser && !state.relaunched.has(thread.itemId))
+        if (!stopped.length) { fail("no sub-agent stopped by esc to relaunch"); break }
+        const targets = relaunchTargets(stopped, parsed.args)
+        if (!targets.length) { fail(`no stopped sub-agent matches "${parsed.args.trim()}"`); break }
+        const sent = await input.send({ type: "user.submit", sessionId: state.sessionId, text: relaunchMessage(targets), attachments: [] })
+        if (!sent.ok) { fail(sent.error.message); break }
+        for (const thread of targets) state.relaunched.add(thread.itemId)
         break
       }
       case "bg": {

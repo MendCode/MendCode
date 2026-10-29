@@ -132,7 +132,9 @@ export type AgentThread = {
   agent: string
   background: boolean
   running: boolean
-  status: "running" | "ok" | "error" | "interrupted"
+  status: "running" | "ok" | "error" | "interrupted" | "cancelled"
+  /** Stopped by the user's esc and not yet followed by another turn: it is shown as stopped, to be started again (`/relaunch`). */
+  stoppedByUser?: true
   startedAt: number | undefined
   endedAt: number | undefined
   /** Tools it has called, the title of the latest, and the tokens it used once it has ended. */
@@ -142,7 +144,7 @@ export type AgentThread = {
   /** The model it runs on, when its engine says (Claude Code's sub-agents do). */
   model?: string
 }
-type ThreadState = { transcript: { apply(event: SessionEvent): void; prepend(events: readonly SessionEvent[]): void; setMode(next: PresentationMode): void; setAppearance(next: Partial<TuiProfile> & { reasoning: string; toolOutput: string }): void }; tools: number; last?: string; model?: string; ended?: { status: "ok" | "error" | "interrupted"; at: number; tools: number; tokens: number; durationMs: number } }
+type ThreadState = { transcript: { apply(event: SessionEvent): void; prepend(events: readonly SessionEvent[]): void; setMode(next: PresentationMode): void; setAppearance(next: Partial<TuiProfile> & { reasoning: string; toolOutput: string }): void }; tools: number; last?: string; model?: string; ended?: { status: "ok" | "error" | "interrupted" | "cancelled"; at: number; tools: number; tokens: number; durationMs: number; byUser?: true } }
 
 export type ImageRow = { sha256: string; index: number; row: number; rows: number; cols: number; col: number }
 
@@ -310,6 +312,8 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
   /** When the latest turn started and, once it ended, when (the activity card's run time). */
   let turnClock: { startedAt: number; endedAt?: number } | undefined
   let activeTurn: TurnId | undefined
+  /** When the latest of the ended turns started: a sub-agent the user stopped before it stays in sight (`stoppedByUser`). */
+  let settledStart = 0
   /** The session's goal as the last `goal.changed` left it; undefined before one and after `/goal clear`. */
   let goal: Goal | undefined
   /** The session's open usage-limit pause as the last `usage.limit` left it; undefined when nothing is paused. */
@@ -979,6 +983,7 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
 
   /** A turn ended: close it with v1's completion line (and the error box for a failed turn). Nothing to say → no block. */
   function finishTurn(event: { turnId: TurnId; at: number }, end: Pick<TurnEnd, "outcome" | "reason" | "error">) {
+    settledStart = Math.max(settledStart, turns.get(event.turnId)?.startedAt ?? 0)
     if (byItem.has(`status:${event.turnId}` as ItemId)) return
     activeTurn = undefined
     if (turnClock && event.at > 0) turnClock = { ...turnClock, endedAt: event.at }
@@ -1043,7 +1048,7 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
     }
     if (event.type === "item.completed" && event.meta?.agentEnd === true) {
       const count = (value: unknown) => (typeof value === "number" ? value : 0)
-      thread.ended = { status: event.status === "ok" ? "ok" : event.status === "error" ? "error" : "interrupted", at: event.at, tools: count(event.meta.toolCalls) || thread.tools, tokens: count(event.meta.tokens), durationMs: count(event.meta.durationMs) }
+      thread.ended = { status: event.status === "ok" ? "ok" : event.status === "error" ? "error" : event.status === "cancelled" ? "cancelled" : "interrupted", at: event.at, tools: count(event.meta.toolCalls) || thread.tools, tokens: count(event.meta.tokens), durationMs: count(event.meta.durationMs), ...(event.meta.stoppedBy === "user" ? { byUser: true as const } : {}) }
     }
     cache.delete(parent)
     invalidateCounts()
@@ -1058,8 +1063,11 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
     // it runs or, after it, while the daemon still lists it among the session's background work.
     const running = background ? !thread?.ended && block.status !== "error" && (activeTurn === block.turnId || options.backgroundRunning?.(description) === true) : block.status === "running"
     const status = running ? "running" : thread?.ended?.status ?? (block.status === "error" ? "error" : block.status === "ok" ? "ok" : "interrupted")
+    // Stopped by the user's esc: it stays in sight, to be started again, until a turn begun after that stop has ended.
+    const stoppedByUser = thread?.ended?.byUser === true && settledStart < thread.ended.at
     return {
       itemId: block.itemId, description, agent: typeof block.meta?.agent === "string" ? block.meta.agent : "agent", background, running, status,
+      ...(stoppedByUser ? { stoppedByUser: true as const } : {}),
       startedAt: block.at, endedAt: thread?.ended?.at ?? block.endAt, tools: thread?.ended?.tools ?? thread?.tools ?? 0, last: thread?.last, tokens: thread?.ended?.tokens || undefined, ...(thread?.model ? { model: thread.model } : {}),
     }
   }
@@ -1307,6 +1315,7 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
     usageNotes.reset()
     turnClock = undefined
     activeTurn = undefined
+    settledStart = 0
     goal = undefined
     usageLimit = undefined
     invalidateCounts()

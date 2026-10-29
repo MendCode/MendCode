@@ -14,15 +14,15 @@ Model tools (feature subagents, tier balanced; the live lines say if they are on
   Continue a finished child with its task_id (context kept); with model it goes on on that model (after a usage limit, or cheaper). Not while running.
 In a Claude Code or Codex session their own Agent tool cannot change a child's model; delegate_task can (full tier, the user runs /tier thread_mcp on claude; {{program}} docs engines).
 A user prompt opening with @name of a child agent goes to that child (queued while it works, kept in <data dir>/agent-mentions.json; [[setting:agentMentions]]).
-Children inherit your permission mode (lowered by their agent's cap), work in your directory unless isolated, and lack main-only tools (question, loop, worktree). Two children editing one file clash: split by file.
+Children inherit your permission mode (lowered by their agent's cap), work in your directory unless isolated, and lack main-only tools (question, loop, worktree). Two children editing one file clash.
 Model: task's, agent's, subagent role, else (cheap_subagents, balanced) your provider's mid tier under a large one (Sol → Luna, Opus → Sonnet; Claude Code too), else yours.
 
 Limits (a call over one fails by name: wait or continue a task_id, do not retry in a loop):
   [[setting:subagentDepth]] 1 (0 turns task off) · [[setting:subagentMaxChildren]] 4 running per parent · [[setting:subagentMaxDescendants]] 16 per tree · 256 started per tree.
 
-The user controls (no model tool): /pause [id] finishes the turn, holds the queue; /unpause; /stop [id] cancels it and every child. /tasks lists children (x cancel, b detach, w wait); /bg detaches to Agent View; /tree.
+The user controls (no model tool): /pause [id] finishes the turn, holds the queue; /unpause; /stop [id] cancels it and every child. /tasks lists children (x cancel, b detach, w wait); /bg detaches to Agent View; /tree; /relaunch restarts Claude Code agents esc stopped.
 
-Retries replay the result (orchestration_receipts); /panel galaxy draws the tree (panel_orbit).
+Retries replay the result (orchestration_receipts); /panel galaxy draws the tree.
 
 Does not exist: a pause tool for the model; a worktree per child by default; a scratch folder per child (/scratch is one note per project); merging children's edits. /fanout compares models. engine: claude|codex|pi|acp:<name> for a child needs the full tier.
 

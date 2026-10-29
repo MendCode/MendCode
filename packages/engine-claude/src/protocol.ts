@@ -207,6 +207,8 @@ export function createTurnMapper(input: { newItemId(): ItemId; emit(event: Engin
   const lateAgentMeta = new Map<ItemId, { subagent: true; agent: string; background: boolean; tool: string }>()
   /** Background agents of this turn still running, by tool-use id: they report after the turn ends. */
   const backgroundAgents = new Set<string>()
+  /** Agent calls whose agent was stopped by an interrupt, by item: Claude Code's own notice of that end comes too late or not at all. */
+  const stopped = new Set<ItemId>()
   /** Tools a sub-agent called, by tool-use id. */
   const agentTools = new Map<string, ItemId>()
   /** The last text each sub-agent wrote, by its call's item: the report it ends with repeats it, and is then not drawn twice. */
@@ -322,8 +324,9 @@ export function createTurnMapper(input: { newItemId(): ItemId; emit(event: Engin
         const agent = open.name === "Agent" || open.name === "Task"
         if (agent && open.toolUseId) agents.set(open.toolUseId, itemId)
         if (agent && open.toolUseId && args?.run_in_background === true) backgroundAgents.add(open.toolUseId)
-        // An agent call started early may have had only part of its input (a long prompt before the description): its whole title comes with its end.
-        if (agent && open.itemId) lateAgentMeta.set(itemId, { subagent: true, agent: String(args?.subagent_type ?? "general-purpose").slice(0, 60), background: args?.run_in_background === true, tool: claudeToolTitle(open.name ?? "tool", args).slice(0, 200) })
+        // An agent call started early may have had only part of its input (a long prompt before the description): its whole title comes
+        // with its end. Every agent call keeps it, as Claude Code may still run the agent in the background when the model did not ask.
+        if (agent) lateAgentMeta.set(itemId, { subagent: true, agent: String(args?.subagent_type ?? "general-purpose").slice(0, 60), background: args?.run_in_background === true, tool: claudeToolTitle(open.name ?? "tool", args).slice(0, 200) })
         if (!open.itemId) input.emit({ type: "item.started", itemId, kind: "tool_call", meta: { tool: claudeToolTitle(open.name ?? "tool", args).slice(0, 200), ...(agent ? { subagent: true, agent: String(args?.subagent_type ?? "general-purpose").slice(0, 60), background: args?.run_in_background === true } : {}) } })
         return
       }
@@ -334,14 +337,20 @@ export function createTurnMapper(input: { newItemId(): ItemId; emit(event: Engin
   function onToolResults(content: unknown, toolUseResult?: unknown) {
     if (!Array.isArray(content)) return
     // An edit's result says only that the file was updated; the diff it made comes beside it, for the one result of its message.
-    const patch = content.filter((part) => part?.type === "tool_result").length === 1 ? claudeEditPatch(toolUseResult) : undefined
+    const single = content.filter((part) => part?.type === "tool_result").length === 1
+    const patch = single ? claudeEditPatch(toolUseResult) : undefined
+    // Claude Code runs an agent in the background on its own when the model did not ask (subagents forced into the background):
+    // the call's result says so (`async_launched`), and the agent then reports after the call like one the model sent there.
+    const launched = single && (toolUseResult as { status?: unknown } | undefined)?.status === "async_launched"
     for (const part of content) {
       if (part?.type !== "tool_result") continue
       const itemId = tools.get(String(part.tool_use_id))
       if (!itemId) continue
       tools.delete(String(part.tool_use_id))
-      const late = lateAgentMeta.get(itemId)
+      const agentLate = lateAgentMeta.get(itemId)
       lateAgentMeta.delete(itemId)
+      if (launched && !part.is_error && agents.has(String(part.tool_use_id))) backgroundAgents.add(String(part.tool_use_id))
+      const late = agentLate && backgroundAgents.has(String(part.tool_use_id)) ? { ...agentLate, background: true } : agentLate
       // A background agent's result is Claude Code's note to its model (ids and how to message it), not something to show.
       const text = !part.is_error && backgroundAgents.has(String(part.tool_use_id)) ? "running in the background" : !part.is_error && patch ? patch : toolResultText(part.content)
       input.emit({ type: "item.completed", itemId, status: part.is_error ? "error" : "ok", text: clip(text), ...(late ? { meta: late } : {}) })
@@ -390,9 +399,11 @@ export function createTurnMapper(input: { newItemId(): ItemId; emit(event: Engin
       input.emit({ type: "item.started", itemId, kind: "user_message", meta: { agentParent: parent } })
       input.emit({ type: "item.completed", itemId, status: "ok", text: clip(message.prompt), meta: { agentParent: parent } })
     } else if (message.subtype === "task_notification") {
+      // An agent whose stop was already reported (`stopBackground`) is not ended twice.
+      if (stopped.has(parent)) return
       backgroundAgents.delete(String(message.tool_use_id))
       const count = (value: unknown) => (typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.round(value) : 0)
-      const failed = message.status !== "completed"
+      const status = message.status === "completed" ? "ok" : message.status === "killed" || message.status === "stopped" ? "cancelled" : "error"
       const itemId = input.newItemId()
       const meta = { agentParent: parent, agentEnd: true, toolCalls: count(message.usage?.tool_uses), tokens: count(message.usage?.total_tokens), durationMs: count(message.usage?.duration_ms) }
       const summary = typeof message.summary === "string" ? message.summary : ""
@@ -400,8 +411,25 @@ export function createTurnMapper(input: { newItemId(): ItemId; emit(event: Engin
       const repeated = summary.trim() !== "" && summary.trim() === agentLastText.get(parent)
       agentLastText.delete(parent)
       input.emit({ type: "item.started", itemId, kind: "agent_message", meta: { agentParent: parent } })
-      input.emit({ type: "item.completed", itemId, status: failed ? "error" : "ok", text: repeated ? "" : clip(summary), meta })
+      input.emit({ type: "item.completed", itemId, status, text: repeated ? "" : clip(summary), meta })
     }
+  }
+
+  /**
+   * Ends the background agents still running: an interrupt from the SDK stops them all, and Claude Code then refuses to resume
+   * them, so each ends here, `cancelled` and marked `stoppedBy: "user"`, for clients to keep it in sight with a way to start it again.
+   */
+  function stopBackground() {
+    for (const toolUseId of backgroundAgents) {
+      const parent = agents.get(toolUseId)
+      if (!parent || stopped.has(parent)) continue
+      stopped.add(parent)
+      agentLastText.delete(parent)
+      const itemId = input.newItemId()
+      input.emit({ type: "item.started", itemId, kind: "agent_message", meta: { agentParent: parent } })
+      input.emit({ type: "item.completed", itemId, status: "cancelled", text: "", meta: { agentParent: parent, agentEnd: true, stoppedBy: "user" } })
+    }
+    backgroundAgents.clear()
   }
 
   /**
@@ -455,6 +483,7 @@ export function createTurnMapper(input: { newItemId(): ItemId; emit(event: Engin
   return {
     /** True while an agent this turn started in the background still runs. */
     hasBackgroundAgents: () => backgroundAgents.size > 0,
+    stopBackground,
     /** True for a record of one of this turn's agents: something it did, or Claude Code's notice that it started or ended. */
     owns(message: ClaudeMessage): boolean {
       if (message.parent_tool_use_id) return agents.has(String(message.parent_tool_use_id))

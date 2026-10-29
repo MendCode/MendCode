@@ -1136,6 +1136,85 @@ describe("claude engine background tasks", () => {
     h.engine.stop()
   })
 
+  test("an agent Claude Code sends to the background on its own (async_launched, no run_in_background) is a background agent: bg call, reports after its turn", async () => {
+    const fake = fakeClaude({
+      onUser(api) {
+        api.push({ type: "system", subtype: "init", session_id: "cc-session-1" })
+        streamTool(api, 0, "toolu_agent", "Agent", { description: "Re-verify table", subagent_type: "general-purpose", prompt: "check it" })
+        api.push({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_agent", content: "Async agent launched successfully. agentId: ad41" }] }, tool_use_result: { isAsync: true, status: "async_launched", agentId: "ad41" } })
+        streamText(api, 1, "launched")
+        api.push(result())
+      },
+    })
+    const late: EngineEvent[] = []
+    const h = engineWith([fake], { notify: () => {}, onAgentEvent: (_sessionId, _turnId, event) => void late.push(event) })
+    const first = turnInput()
+    expect(await h.engine.runTurn(first.input)).toEqual({ status: "ok" })
+    const call = first.events.find((event) => event.type === "item.started" && event.meta?.subagent === true)
+    if (call?.type !== "item.started") throw new Error("no agent call")
+    expect(first.events.find((event) => event.type === "item.completed" && event.itemId === call.itemId)).toMatchObject({ text: "running in the background", meta: { subagent: true, background: true, tool: "agent Re-verify table" } })
+    fake.api.push({ type: "system", subtype: "task_notification", task_id: "ad41", tool_use_id: "toolu_agent", status: "completed", summary: "table ok", usage: { tool_uses: 3 } })
+    await Bun.sleep(10)
+    expect(late.at(-1)).toMatchObject({ type: "item.completed", status: "ok", text: "table ok", meta: { agentParent: call.itemId, agentEnd: true } })
+    h.engine.stop()
+  })
+
+  test("a message Claude Code queues behind its own run (a resumed session's notice of unfinished agents) gets its own answer, not that run's empty result", async () => {
+    const fake = fakeClaude({
+      onUser(api) {
+        const uuid = fake.written.filter((message) => message.type === "user").at(-1)!.uuid
+        api.push({ type: "system", subtype: "task_notification", task_id: "ad41", status: "stopped", summary: "2 background agents didn't finish before the previous session ended" })
+        api.push({ type: "command_lifecycle", command_uuid: uuid, state: "queued" })
+        api.push({ type: "system", subtype: "init", session_id: "cc-session-1" })
+        api.push(result({ result: "" }))
+        api.push({ type: "command_lifecycle", command_uuid: uuid, state: "started" })
+        streamText(api, 0, "Relaunching both agents.")
+        api.push(result())
+        api.push({ type: "command_lifecycle", command_uuid: uuid, state: "completed" })
+      },
+    })
+    const h = engineWith([fake], { notify: () => {} })
+    const turn = turnInput({ text: "relaunch them" })
+    expect(await h.engine.runTurn(turn.input)).toEqual({ status: "ok" })
+    expect(turn.events.some((event) => event.type === "item.completed" && "text" in event && event.text === "Relaunching both agents.")).toBe(true)
+    h.engine.stop()
+  })
+
+  test("esc ends every background agent as cancelled and stopped by the user, this turn's and an earlier turn's; Claude Code's late notice adds no second end", async () => {
+    const controller = new AbortController()
+    let turns = 0
+    const fake = fakeClaude({
+      onUser(api) {
+        turns++
+        api.push({ type: "system", subtype: "init", session_id: "cc-session-1" })
+        const id = `toolu_agent${turns}`
+        streamTool(api, 0, id, "Agent", { description: `Agent ${turns}`, subagent_type: "general-purpose", prompt: "work", run_in_background: true })
+        api.push({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: "Async agent launched successfully." }] } })
+        if (turns === 1) { streamText(api, 1, "launched"); api.push(result()); return }
+        streamTool(api, 1, "toolu_sleep", "Bash", { command: "sleep 60" })
+        setTimeout(() => controller.abort(), 10)
+      },
+      onControl(api, request) {
+        if (request.subtype === "interrupt") queueMicrotask(() => api.push(result({ terminal_reason: "aborted_tools" })))
+        return {}
+      },
+    })
+    const late: EngineEvent[] = []
+    const h = engineWith([fake], { notify: () => {}, onAgentEvent: (_sessionId, _turnId, event) => void late.push(event) })
+    const first = turnInput()
+    expect(await h.engine.runTurn(first.input)).toEqual({ status: "ok" })
+    const second = turnInput({ sessionId: first.input.sessionId, signal: controller.signal })
+    expect(await h.engine.runTurn(second.input)).toEqual({ status: "ok" })
+    const callOf = (events: EngineEvent[]) => { const call = events.find((event) => event.type === "item.started" && event.meta?.subagent === true); return call?.type === "item.started" ? call.itemId : undefined }
+    const ended = (events: EngineEvent[], parent: unknown) => events.filter((event) => event.type === "item.completed" && event.meta?.agentEnd === true && event.meta?.agentParent === parent)
+    expect(ended(second.events, callOf(second.events))).toEqual([expect.objectContaining({ status: "cancelled", meta: { agentParent: callOf(second.events), agentEnd: true, stoppedBy: "user" } })])
+    expect(ended(late, callOf(first.events))).toEqual([expect.objectContaining({ status: "cancelled", meta: expect.objectContaining({ stoppedBy: "user" }) })])
+    fake.api.push({ type: "system", subtype: "task_notification", task_id: "a2", tool_use_id: "toolu_agent2", status: "killed", summary: "stopped" })
+    await Bun.sleep(10)
+    expect(ended([...second.events, ...late], callOf(second.events))).toHaveLength(1)
+    h.engine.stop()
+  })
+
   test("send now hands the message to the running turn with Claude Code's send_now interrupt, so background agents keep running; the message's own turn adopts the answer", async () => {
     const fake = fakeClaude({
       onUser(api, content) {

@@ -1,4 +1,4 @@
-39b4017c41ba926b
+6ec9a45e3b1d39d4
   Sessions                   ← focus │   git /work/app
                                      │
                                      │   › Why does the second session see the first one's config? Please look at src/store.ts and fix it.
@@ -47,7 +47,7 @@
                                      │
                                      │
                                      │
-                                     │   [suggested] 6  session 24  context 15  code 16  agents 10  setup 30  look 8  more 23
+                                     │   [suggested] 6  session 24  context 15  code 16  agents 11  setup 30  look 8  more 23
                                      │   ┃ /new       Start a session                                                                                                                        ctrl+x n
                                      │   ┃ /sessions  Switch session                                                                                                                         ctrl+x l
                                      │   ┃ /model     Switch model                                                                                                                           ctrl+x m

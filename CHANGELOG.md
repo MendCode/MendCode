@@ -20,6 +20,13 @@ Releases are easier to read: a plain title and notes that say what changed.
 ### Fixed
 
 - A nightly run no longer fails when its run number is already taken by a nightly tag of the same day.
+- Claude Code sessions: a background sub-agent stopped by esc no longer vanishes from the Agents strip. Its row says
+  `stopped by you · /relaunch`, and `/relaunch` asks Claude to start it again with the same prompt, told how far it got
+  (Claude Code itself refuses to resume an agent an interrupt stopped).
+- Claude Code sessions: an agent Claude Code sends to the background on its own is shown and followed as a background agent,
+  instead of reading as done the moment it was launched.
+- Claude Code sessions: the first message after esc stopped background agents is answered. Claude Code first answers its own
+  notice that those agents did not finish, with an empty result, and that result used to end the message's turn with no reply.
 
 ## v0.0.2-nightly.20261029.2 - 2026-10-29
 

@@ -199,6 +199,7 @@ export function createApp(input: AppInput) {
     agentTitles: new Map<string, string>(),
     agentParents: new Map<string, string>(),
     agentShells: [],
+    relaunched: new Set<string>(),
     agentShellsBusy: false,
     agentShellsStale: false,
     toolsReport: undefined,
