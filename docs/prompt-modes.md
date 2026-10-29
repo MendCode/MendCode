@@ -14,6 +14,24 @@ Instruction files (`AGENTS.md` and friends, see [instruction files](resources-co
 | `full` | Guide plus a short operator's guide to MendCode itself (about 1,370 characters, generated from the reference cards) and family context files |
 | `custom` | Project prompt, boundary, your project and user instructions and memories; no inherited focus/full context and no skill catalog |
 
+## What the model's provider family gets in each mode
+
+Every native model call gets guidance for the family of the model it is sent to (Claude, GPT/Codex, Gemini, DeepSeek and so on); how much depends on the mode, and so on the tier:
+
+| Mode (tier that sets it) | Family guidance sent on every call |
+|---|---|
+| `minimal` (minimalist) | None. The prompt is the same for every model |
+| `focus` (**balanced**) | One line, `MendCode focus: <family> (auto)`, followed by the family's short working rules (one to three sentences); for a few models with known quirks (GPT-5.6, GPT-6 Astra, Claude Sonnet 5 and Opus 5, DeepSeek V4 and V3.2, Kimi K2.5) a short compatibility note too |
+| `guide` (no tier; `/prompt-mode guide`) | `focus` plus the provider guide: the basics every family shares, the family's full guide file (`packages/daemon/prompts/focus/<family>.prompt.md`) and the note for the model when one matches (reasoning or not, Flash or Pro, Opus or Haiku) |
+| `full` (full) | `guide` plus the family's context files from the project (for example `CLAUDE.md` for `claude`, `GEMINI.md` for `gemini`, `.agents/context.md` for `codex` and `deepseek`) when the instruction loader has not already sent them, and the operator guide |
+| `custom` | None; your project prompt replaces it |
+
+So balanced does adapt to the provider, but briefly: the family's full guide is `guide` and `full` only. For the full guide on a balanced project, run `/prompt-mode guide` (or `mendcode prompt mode guide`); it costs about 560 to 690 more tokens on every call, depending on the family (see the budgets below).
+
+- **Which family:** with `auto` (the default) it is read from the id of the model each call goes to, so changing models changes the guidance on the next call. A model behind a gateway (`openrouter/anthropic/claude-…`) gets its own family, not the gateway's. A model no family claims gets `neutral`: a family-less line in `focus` and the shared basics in `guide`, never another vendor's text. The full matching rules are below.
+- **Forcing a family:** pick one in `/prompt-mode` (Tab switches to the families) or run `mendcode prompt mode --focus <family>`. The choice is saved per project and wins over the model; picking `auto` again follows the model.
+- **Not affected:** the family changes only this text, never the provider, model, permissions, budgets or transport. Claude Code, Codex, ACP agents and pi build their own prompts, so this applies to native models only (`claude` therefore means Claude on the native engine with an API key).
+
 The user's instructions (the `AGENTS.md`/`CLAUDE.md` hierarchy and the global `AGENTS.md`) are the user's rules, not optional chrome: every mode carries them, within the loader's caps (16,000 characters per file, 64,000 in total), and `--no-context-files` is the only switch that leaves them out. Before this was true only in `full`, so the default `focus` tier ignored a repository's `AGENTS.md` until a file under it was read. For a typical project (a 1.6 KB `AGENTS.md` and five skills) the prompt grows, in estimated tokens (characters over four), by 0 → 204 in `minimal`, 0 → 346 in `focus` and 346 → 346 in `full`; a repository without instruction files or skills adds nothing in any mode.
 
 `APPEND_SYSTEM.md` (user, package or project layer, [extensions](extensions.md#prompt-files)) is the user's own text too, so every mode sends it after the instructions; before, only `full` did, and "always answer in Spanish" written there was silently dropped in the default `focus`. `SYSTEM.md` replaces the packaged base prompt where a mode sends it (`focus`, `guide`, `full`); `minimal` and `custom` have their own base.
