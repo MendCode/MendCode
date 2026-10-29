@@ -79,7 +79,9 @@ dispatched, on the tag ref so the signing identity is the tag's. The 14 newest n
 updater accept exactly the same tag shapes; anything else is refused. The newest nightly is the one with the highest `X.Y.Z`, then date, then
 run number. A tag whose shape and prerelease flag disagree is not part of any channel. The upgrade side of the channels is in [upgrade.md](upgrade.md).
 
-For a manual run, the tag must already exist and contain this workflow:
+For a manual run, the tag must already exist and contain this workflow. Use it too when a tag you pushed yourself starts no run:
+on the public repository the pushes of `v0.0.1` and `v0.0.2-beta.1` (2026-10-29, the `gh` login's token with the `workflow`
+scope) started none, for a reason not found; both were released by this dispatch.
 
 ```sh
 gh workflow run release.yml --repo MendCode/MendCode --ref "$tag" -f tag="$tag"

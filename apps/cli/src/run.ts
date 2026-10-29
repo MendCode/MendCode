@@ -58,13 +58,17 @@ export function createHeadlessRun(options: RunOptions) {
   /** An approval was denied for lack of `--approve` and no tool call has succeeded since: the turn ends as `EXIT.denied`. */
   let blocked = false
 
+  /** The turn's last event arrived; the run settles after `finish`, and nothing after that event belongs to the turn. */
+  let ended = false
+
   function handle(event: SessionEvent) {
-    if (finished || event.sessionId !== sessionId) return
+    if (finished || ended || event.sessionId !== sessionId) return
     if (!turnId) {
       if (event.type === "turn.started" && queueId && (event.queueId === queueId || event.joinedQueueIds?.includes(queueId as QueueId))) turnId = event.turnId
       else return
     }
     if ("turnId" in event && event.turnId !== turnId) return
+    if (event.type === "turn.completed" || event.type === "turn.failed" || event.type === "turn.cancelled" || event.type === "turn.interrupted") ended = true
     if (options.json) {
       const output = options.compat
         ? event.type === "turn.completed"

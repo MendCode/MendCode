@@ -53,9 +53,11 @@ test("headless compatibility translates lifecycle events and returns the normal 
   const run = createHeadlessRun({ client: { send: async () => ({ ok: true, result: { queueId: "q_a" } }) } as never, sessionId: "ses_a" as never, prompt: "go", json: true, compat: true, approve: false, out: { write: (line) => out.push(line) }, err: { write() {} } })
   run.onEvent({ type: "turn.started", sessionId: "ses_a", seq: 1, at: 10, queueId: "q_a", turnId: "turn_a" } as SessionEvent)
   run.onEvent({ type: "turn.completed", sessionId: "ses_a", seq: 2, at: 20, turnId: "turn_a" } as SessionEvent)
+  // The idle state follows the turn before the run settles (it settles after `finish`): the result stays the last line.
+  run.onEvent({ type: "foreground.state", sessionId: "ses_a", seq: 3, at: 30, state: "idle" } as SessionEvent)
   expect(await run.start()).toBe(0)
   expect(out.map((line) => JSON.parse(line).event)).toEqual(["session.started", "session.completed"])
   expect(JSON.parse(out.at(-1)!)).toMatchObject({ kind: "result", sessionID: "ses_a", data: { status: "completed" } })
-  run.onEvent({ type: "foreground.state", sessionId: "ses_a", seq: 3, at: 30, state: "idle" } as SessionEvent)
+  run.onEvent({ type: "foreground.state", sessionId: "ses_a", seq: 4, at: 40, state: "idle" } as SessionEvent)
   expect(out).toHaveLength(2)
 })
