@@ -29,13 +29,13 @@ Exit codes: 0 ok, 1 failure, 64 usage error.
 | Channel | Tags | GitHub flag | Newest is decided by |
 |---|---|---|---|
 | `stable` | `vX.Y.Z` | release | semver |
-| `beta` | `vX.Y.Z-beta.N` | prerelease | semver (`beta.10` is newer than `beta.9`) |
+| `beta` | `vX.Y.Z-beta.N`, and `vX.Y.Z` | prerelease | semver (`beta.10` is newer than `beta.9`) |
 | `dev` | `dev-<shortsha>` | prerelease | publication time |
-| `nightly` | `vX.Y.Z-nightly.YYYYMMDD.RUN` | prerelease | version, date, then numeric run |
+| `nightly` | `vX.Y.Z-nightly.YYYYMMDD.RUN`, and the beta and stable tags | prerelease | version, date, then numeric run |
 
-The first releases are `v0.0.1-beta.N`, then `v0.0.1`; nightly tags (`vX.Y.Z-nightly.YYYYMMDD.RUN`) are published by `nightly.yml` each day `main` changed ([releases](release.md#channels)). `mendcode upgrade --channel beta` installs the newest beta, and `--channel nightly` the newest nightly, of `MendCode/MendCode` with no environment variable and remembers the channel; `--check` only reports. The same tag shapes are accepted by `install.sh` / `install.ps1` ([release.md](release.md#channels)).
+The first releases are `v0.0.1-beta.N`, then `v0.0.1`; nightly tags (`vX.Y.Z-nightly.YYYYMMDD.RUN`) are published by `nightly.yml` each day `main` changed ([releases](release.md#channels)). `mendcode upgrade --channel beta` installs the newest beta (or a newer stable), and `--channel nightly` the newest nightly (or a newer beta or stable), of `MendCode/MendCode` with no environment variable and remembers the channel; `--check` only reports. The same tag shapes are accepted by `install.sh` / `install.ps1` ([release.md](release.md#channels)).
 
-A tag whose shape and prerelease flag disagree (for example `v1.2.3` marked prerelease), drafts and other tags are ignored. Channels are separate: a `beta` user does not receive `stable` releases, run `upgrade --channel stable` to change. At the same `X.Y.Z` a nightly is older than the stable release of that version.
+A tag whose shape and prerelease flag disagree (for example `v1.2.3` marked prerelease), drafts and other tags are ignored. A channel takes its own releases and every steadier channel's: `beta` also takes `stable`, `nightly` also takes `beta` and `stable`. So a newer stable reaches a beta or nightly user, and a channel with no release of its own yet (a new repository's beta) installs the stable one instead of failing. `stable` never takes a prerelease and `dev` takes only dev builds; `upgrade --channel stable` goes back to releases only. At the same `X.Y.Z` its betas come before its nightlies, and both before the stable release of that version.
 
 The running version is compared with the newest release of the channel. A newer release is an update, the same one is "up to date", an older one is "ahead" and is not installed unless `--force` or an exact older target is given. A dev build is identified by its `dev-<sha>` tag (no ordering). A version that cannot be compared, such as the checkout's `0.0.1-dev`, is offered the update.
 

@@ -2,6 +2,7 @@ import { createHash } from "node:crypto"
 import type { PrFinding } from "@mendcode/protocol"
 import type { ReviewSessionFactory } from "./engine"
 import { findingFromComment, type GhCall } from "./publish"
+import { answersMarker } from "./publishers"
 import { FINDING_MARKER, type ReviewState } from "./state"
 
 /**
@@ -13,7 +14,8 @@ import { FINDING_MARKER, type ReviewState } from "./state"
 
 export const PR_COMMANDS = ["review", "pause", "resume", "explain", "fix", "learn"] as const
 export type PrCommandKind = (typeof PR_COMMANDS)[number]
-export type PrCommand = { kind: PrCommandKind; arg?: string }
+/** `target`: the login a comment addresses (`@mendcode review @alice`); only that login's reviewer answers it. */
+export type PrCommand = { kind: PrCommandKind; arg?: string; target?: string }
 
 export const REPLY_MARKER = "<!-- mendcode:reply -->"
 export const PAUSE_MARKER = /<!-- mendcode:paused=([01]) -->/
@@ -42,22 +44,30 @@ export function parsePrCommand(body: string, mentions: readonly string[] = ["@me
       const match = new RegExp(`^\\s*${escape(mention)}\\s+([a-z]+)\\b[ \\t]*(.*)$`, "i").exec(line)
       const kind = match?.[1]?.toLowerCase()
       if (!match || !(PR_COMMANDS as readonly string[]).includes(kind!)) continue
-      const arg = [match[2] ?? "", ...lines.slice(index + 1)].join("\n").trim().slice(0, ARG_LIMIT)
-      return { kind: kind as PrCommandKind, ...(arg ? { arg } : {}) }
+      const rest = [match[2] ?? "", ...lines.slice(index + 1)].join("\n").trim()
+      const target = /^@([A-Za-z0-9][A-Za-z0-9-]{0,38})(?=\s|$)/.exec(rest)?.[1]
+      const arg = (target ? rest.slice(target.length + 1).trim() : rest).slice(0, ARG_LIMIT)
+      return { kind: kind as PrCommandKind, ...(arg ? { arg } : {}), ...(target ? { target } : {}) }
     }
   }
   return undefined
 }
 
-/** Whether `actor` may run MendCode on the repository: write, maintain or admin. */
-export async function hasWriteAccess({ gh, repo, actor }: { gh: GhCall; repo: string; actor: string }) {
+/**
+ * Whether `actor` may run MendCode on the repository: write, maintain or admin. Reading another user's permission needs push access;
+ * a reviewer the repository lists as a publisher without it falls back to the comment's author association (owner, member or
+ * collaborator).
+ */
+export async function hasWriteAccess({ gh, repo, actor, association }: { gh: GhCall; repo: string; actor: string; association?: string | undefined }) {
   if (!/^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/.test(actor)) return false
   const done = await gh({ argv: ["api", `repos/${repo}/collaborators/${actor}/permission`, "--jq", ".permission"] })
-  return done.code === 0 && WRITE_PERMISSIONS.has(done.out.trim())
+  if (done.code === 0) return WRITE_PERMISSIONS.has(done.out.trim())
+  return ["OWNER", "MEMBER", "COLLABORATOR"].includes(association ?? "")
 }
 
 /** Where a comment was written: the conversation (issue comment) or a review thread (its `inReplyTo` is the thread's first comment). */
-export type CommandComment = { id: number; surface: "issue" | "review"; actor: string; body: string; inReplyTo?: number | undefined; diffHunk?: string | undefined; path?: string | undefined; line?: number | undefined }
+/** `association`: GitHub's author association of the commenter, the fallback when the reviewer may not read permissions. */
+export type CommandComment = { id: number; surface: "issue" | "review"; actor: string; body: string; association?: string | undefined; inReplyTo?: number | undefined; diffHunk?: string | undefined; path?: string | undefined; line?: number | undefined }
 export type FixResult = { ok: true; commit: string } | { ok: false; reason: string }
 export type ReviewSummary = { status: string; reason?: string | undefined; posted: boolean }
 
@@ -84,7 +94,7 @@ export type CommandOutcome = { kind: PrCommandKind | "denied"; reply?: string; p
 
 /** Posts `text` where the comment was written, with the reply marker (and `extra` markers). */
 export async function replyTo({ gh, repo, number, comment, text, extra = "" }: { gh: GhCall; repo: string; number: number; comment: CommandComment; text: string; extra?: string }) {
-  const body = `${text.trim().slice(0, 60_000)}\n\n${REPLY_MARKER}${extra}`
+  const body = `${text.trim().slice(0, 60_000)}\n\n${REPLY_MARKER}${answersMarker(comment.id)}${extra}`
   const endpoint = comment.surface === "review" ? `repos/${repo}/pulls/${number}/comments/${comment.inReplyTo ?? comment.id}/replies` : `repos/${repo}/issues/${number}/comments`
   const done = await gh({ argv: ["api", endpoint, "--method", "POST", "--input", "-"], stdin: JSON.stringify({ body }) })
   return done.code === 0
@@ -126,7 +136,7 @@ export function learningBullet(text: string) {
 export async function runPrCommand(command: PrCommand, deps: CommandDeps): Promise<CommandOutcome> {
   const { gh, repo, number, comment } = deps
   const reply = async (text: string, extra = "") => ({ reply: text, posted: await replyTo({ gh, repo, number, comment, text, extra }) })
-  if (!await hasWriteAccess({ gh, repo, actor: comment.actor })) return { kind: "denied", ...await reply(MAINTAINERS_ONLY), state: deps.state }
+  if (!await hasWriteAccess({ gh, repo, actor: comment.actor, association: comment.association })) return { kind: "denied", ...await reply(MAINTAINERS_ONLY), state: deps.state }
   switch (command.kind) {
     case "review": {
       const done = await deps.review()

@@ -30,6 +30,11 @@ export const ReviewConfig = z.strictObject({
   cooldown: z.strictObject({ pr_minutes: z.number().int().min(0).max(1440).default(10), repo_per_hour: z.number().int().min(1).max(500).default(20) }).default({ pr_minutes: 10, repo_per_hour: 20 }),
   /** Whose PRs a watching reviewer takes: `all`, or `requested` (a review requested from, or the PR assigned to, the reviewer's gh login). `/pr watch-repo all|requested` overrides it per watch. */
   reviewers: z.enum(["all", "requested"]).default("all"),
+  /**
+   * Whose reviewer may post here (publishers.ts): `maintainers`, a gh login with write access; a list of logins (contributors
+   * included); or `anyone`. A reviewer that may not post keeps its reviews in its session and answers no `@mendcode` comment.
+   */
+  publishers: z.union([z.enum(["maintainers", "anyone"]), z.array(z.string().regex(/^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/)).min(1).max(100)]).default("maintainers"),
 })
 export type ReviewConfig = z.infer<typeof ReviewConfig>
 export const DEFAULT_REVIEW_CONFIG: ReviewConfig = ReviewConfig.parse({})
@@ -60,7 +65,7 @@ export function parseReviewConfig(text: string | undefined): ParsedConfig {
   return { config: DEFAULT_REVIEW_CONFIG, problem: `[PR_REVIEW]: config ${issue.path.join(".") || "root"}: ${issue.message}; defaults used` }
 }
 
-/** Base controls `enabled`, `checks`, `budget`, `ignore`, `profile`, `cap`, `fixes`, the triggers, the cooldown and `reviewers`; the head may only add path instructions. */
+/** Base controls `enabled`, `checks`, `budget`, `ignore`, `profile`, `cap`, `fixes`, the triggers, the cooldown, `reviewers` and `publishers`; the head may only add path instructions. */
 export function mergeReviewConfigs(base: ReviewConfig, head: ReviewConfig): ReviewConfig {
   const known = new Set(base.paths.map((entry) => `${entry.glob}\n${entry.instructions}`))
   return { ...base, paths: [...base.paths, ...head.paths.filter((entry) => !known.has(`${entry.glob}\n${entry.instructions}`))].slice(0, 50) }

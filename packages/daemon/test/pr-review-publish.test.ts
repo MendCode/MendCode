@@ -225,6 +225,37 @@ describe("what a review looks like", () => {
     expect(body).not.toContain("| Finding |")
   })
 
+  test("with a walkthrough the summary has the merge risk and change type, the changes by layer and the diagram folded, and the checks folded open when one did not pass", () => {
+    const walkthrough = {
+      overview: "Sums now start at the second value.",
+      changes: [{ layer: "Shared | reader", files: ["src/math.ts", "src/`odd`.ts"], summary: "The loop starts at index 1." }],
+      diagram: "sequenceDiagram\n  Cart->>Math: total(prices)",
+      type: "bug fix" as const, risk: { level: "medium" as const, reason: "Three callers rely on it." },
+      checks: [{ name: "Title", status: "passed" as const, explanation: "Says what changes." }, { name: "Linked issues", status: "warning" as const, explanation: "Issue #4 also asks for a test." }],
+    }
+    const body = reviewBody({ result: { ...result([]), walkthrough }, inline: 0, moved: [], info: { files: [{ path: "src/math.ts", touched: 60 }], profile: "normal", cap: 8, incremental: false, notes: [] } })
+    expect(body).toContain("**Merge risk:** 🟡 Medium · Three callers rely on it.\n**Change:** Bug fix · **Review effort:** 2/5, about 15 minutes")
+    expect(body).toContain("<summary><strong>Walkthrough</strong></summary>")
+    expect(body).toContain("| **Shared \\| reader** <br> `src/math.ts`, `src/'odd'.ts` | The loop starts at index 1. |")
+    expect(body).toContain("```mermaid\nsequenceDiagram\n  Cart->>Math: total(prices)\n```")
+    expect(body).toContain("<details open>\n<summary><strong>Pre-merge checks:</strong> ⚠️ 1 warning · ✅ 1 passed</summary>")
+    expect(body).toContain("| Linked issues | ⚠️ Warning | Issue #4 also asks for a test. |")
+    // The order a reader meets: verdict, risk, summary, walkthrough, checks, details.
+    const order = ["**No findings**", "**Merge risk:**", "Changes the sum loop.", "<strong>Walkthrough</strong>", "<strong>Pre-merge checks:</strong>", "Review details"].map((text) => body.indexOf(text))
+    expect(order).toEqual([...order].sort((a, b) => a - b))
+    // All checks passed: folded closed. No checks (no title to check): no block.
+    expect(reviewBody({ result: { ...result([]), walkthrough: { ...walkthrough, checks: [walkthrough.checks[0]!] } }, inline: 0, moved: [] })).toContain("<details>\n<summary><strong>Pre-merge checks:</strong> ✅ 1 passed</summary>")
+    expect(reviewBody({ result: { ...result([]), walkthrough: { ...walkthrough, checks: [] } }, inline: 0, moved: [] })).not.toContain("Pre-merge checks")
+  })
+
+  test("a review the budget stopped before verifying says so instead of \"No findings\", and the cost shows the cache reads", () => {
+    const body = reviewBody({ result: { ...result([]), dropped: 1, budgetHit: true, tokens: { input: 207_343, output: 1_392, cached: 190_000 } }, inline: 0, moved: [] })
+    expect(body).toContain("**Stopped at the token budget** · 1 candidate finding was not verified, so nothing is published")
+    expect(body).not.toContain("No findings")
+    expect(body).toContain("the token budget stopped the review before the separate pass; 1 candidate was not verified")
+    expect(body).toContain("- **Cost:** 207,343 tokens in (190,000 from the provider's cache) · 1,392 out")
+  })
+
   test("review effort grows with the changed lines, 1 to 5", () => {
     expect([10, 50, 51, 200, 500, 1500, 1501].map((lines) => reviewEffort(lines).level)).toEqual([1, 1, 2, 2, 3, 4, 5])
   })

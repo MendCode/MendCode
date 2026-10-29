@@ -26,6 +26,9 @@ function fakeGh() {
     calls.push(argv)
     const endpoint = argv[1] ?? ""
     if (endpoint.endsWith("/permission")) return { code: 0, out: writers.has(endpoint.split("/")[4]!) ? "write" : "read" }
+    // The reviewer's own access (publishers: maintainers) and no earlier MendCode answer or review on the PR.
+    if (endpoint === "repos/acme/app") return { code: 0, out: "true" }
+    if (/\/(comments|reviews)\?per_page=100$/.test(endpoint) && !argv.includes("POST")) return { code: 0, out: "[]" }
     if (endpoint === "repos/acme/app/pulls/comments/77") return { code: 0, out: JSON.stringify({ id: 77, path: "a.ts", line: 1, body: commentBody(finding) }) }
     if (argv.includes("POST")) { posts.push({ endpoint, body: JSON.parse(stdin!).body }); return { code: 0, out: "{}" } }
     return { code: 1, out: "", err: `unexpected ${argv.join(" ")}` }
@@ -222,7 +225,7 @@ describe("the watch answers commands", () => {
     mkdirSync(path.join(project, ".mendcode"))
     const { gh, posts } = fakeGh()
     const notices: string[] = []
-    const run: GhRun = async ({ argv }) => argv[0] === "repo" ? { code: 0, out: "acme/app", err: "" } : { code: 1, out: "", err: "unexpected" }
+    const run: GhRun = async ({ argv }) => argv[0] === "repo" ? { code: 0, out: "acme/app", err: "" } : argv.join(" ") === "api user --jq .login" ? { code: 0, out: "nora", err: "" } : { code: 1, out: "", err: "unexpected" }
     const service = createPrReviewService({
       dir, run, call: gh, intervalMs: 3_600_000, enabled: () => true, graphOn: () => false, sessionDirectory: () => project, sessionExists: () => true,
       notify: (_session, text) => notices.push(text), sessions: () => { throw new Error("no model call") }, editor: () => { throw new Error("no model call") }, schedule: async (job) => { await job() },

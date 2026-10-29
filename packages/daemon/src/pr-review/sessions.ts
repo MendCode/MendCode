@@ -39,7 +39,7 @@ export function createReviewSessions(deps: {
       if (editing) editors.add(id)
       return {
         async send(prompt) {
-          const ended = new Promise<{ ok: true; turn: ReviewTurn } | { ok: false; message: string }>((resolve) => waiting.set(id, { text: "", tokens: { input: 0, output: 0 }, done: resolve }))
+          const ended = new Promise<{ ok: true; turn: ReviewTurn } | { ok: false; message: string }>((resolve) => waiting.set(id, { text: "", tokens: { input: 0, output: 0, cached: 0 }, done: resolve }))
           const timer = setTimeout(() => { void deps.cancel(id); waiting.get(id)?.done({ ok: false, message: "[PR_REVIEW]: the review turn timed out" }) }, deps.timeoutMs ?? TURN_TIMEOUT_MS)
           try {
             await deps.submit(id, prompt, editing)
@@ -64,7 +64,7 @@ export function createReviewSessions(deps: {
         if (messages.get(event.sessionId)?.has(event.itemId) && event.status === "ok" && typeof event.text === "string") entry.text = event.text
         return
       case "usage.recorded":
-        entry.tokens = { input: entry.tokens.input + event.input + event.cacheRead + event.cacheWrite, output: entry.tokens.output + event.output }
+        entry.tokens = { input: entry.tokens.input + event.input + event.cacheRead + event.cacheWrite, output: entry.tokens.output + event.output, cached: (entry.tokens.cached ?? 0) + event.cacheRead }
         return
       case "server.request":
         if (editors.has(event.sessionId)) return

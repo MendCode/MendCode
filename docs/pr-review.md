@@ -9,15 +9,24 @@ App, no webhook server and no stored token. Code: `packages/daemon/src/pr-review
 1. **Context.** The diff of `base...head` and, for every symbol a hunk touches, its callers and callees from the [code graph](code-graph.md)
    (depth 2, at most 12 each). No vector index: the graph gives the blast radius, the child reads files with its own read-only tools.
    The context stays inside half the PR's token budget; callers are cut first, then the largest files' diffs, and the summary says so.
-   Without a graph index the review uses the diff alone and says so.
+   Without a graph index the review uses the diff alone and says so. The pull request's title and description, and the issues
+   it closes with GitHub's keywords (`Fixes #12`, at most three, each read with one `gh api` call), go in too, as untrusted data,
+   for the pre-merge checks.
 2. **Review pass.** One child session in plan mode (the read-only `explore` agent, no edits) answers with findings as JSON
    (path, line on the diff's new side, severity, category, summary, detail, `file:line` evidence, an optional suggestion). An invalid
    answer gets one repair turn, then the review fails (`[PR_REVIEW]: invalid findings`): prose never becomes a finding. A finding on a
-   line the diff does not show on its new side is dropped.
+   line the diff does not show on its new side is dropped. The same answer carries the **walkthrough**: an overview, the changed
+   files grouped by layer, a Mermaid sequence diagram when the change alters how components call each other, the change type,
+   the merge risk with its reason, and the pre-merge checks (Title, Description, Linked issues, Out of scope; passed, warning or
+   failed). It is a description, not a claim: a group or check that does not fit is left out and an invalid walkthrough never
+   fails the review.
 3. **Verify pass.** A fresh child, never the one that found them, is told to refute each finding (at most 10 per turn): `confirmed`,
    `plausible` or `rejected`. Only confirmed findings are published; the `strict` profile also publishes plausible ones, marked as such.
    A finding the verifier did not judge counts as rejected; a verifier that fails publishes nothing and the summary says so.
-4. **Rank and cap.** Confirmed first, then critical, major, minor, then category; at most `cap` (8) are shown and the rest are one line,
+4. **Merge risk floor.** The review pass judges the risk before anything is verified, so the risk is never below what the
+   confirmed findings show: a confirmed critical finding makes it high, a major one at least medium, and the reason starts with
+   the count ("1 confirmed critical finding."). A rejected finding raises nothing.
+5. **Rank and cap.** Confirmed first, then critical, major, minor, then category; at most `cap` (8) are shown and the rest are one line,
    "And N smaller notes not shown", in the summary.
 
 ## Repository config
@@ -25,7 +34,7 @@ App, no webhook server and no stored token. Code: `packages/daemon/src/pr-review
 `.mendcode/review.yaml` (YAML, every key optional):
 
 ```yaml
-enabled: false          # the repo watch and publishing stay off until this is true on the base branch
+enabled: false          # nothing is posted until this is true on the base branch (a watch still reviews into its own session)
 profile: normal         # quiet (critical and major only) | normal | strict (also maintainability, and plausible findings)
 cap: 8                  # 1..30 inline comments per review
 paths:                  # extra instructions for files matching a glob; only globs the diff touches reach the prompt
@@ -35,9 +44,10 @@ ignore: ["dist/**", "**/*.generated.json"]
 checks: ["bun test"]    # commands the verify pass gets the output of (below)
 fixes: false            # whether `@mendcode fix` may push a commit to the PR branch
 triggers: { opened: true, synchronize: true, ready_for_review: true, drafts: false }
-budget: { tokens_per_pr: 200000 }
+budget: { tokens_per_pr: 200000 }   # input not served from the provider's cache, plus output
 cooldown: { pr_minutes: 10, repo_per_hour: 20 }   # automatic reviews only; /pr review is never limited
 reviewers: all          # all (every PR) | requested (only PRs that request a review from, or are assigned to, the reviewer's gh login)
+publishers: maintainers # maintainers (gh login with write access) | [alice, bob] (these logins, contributors included) | anyone
 ```
 
 The base branch's file decides everything a pull request could abuse: `enabled`, `checks`, `budget`, `ignore`, `profile`, `cap`,
@@ -88,6 +98,34 @@ pauses the watch with one notice; 15 unreadable minutes end it. State: `<dir>/pr
 `<dir>/pr-review/<owner>/<repo>/<n>.json` (0600, atomic). Which events queue a review is read from the checkout's own
 `.mendcode/review.yaml`; whether it may post is read from the PR's base.
 
+## Many reviewers on one repository
+
+Anyone can point a reviewer at a public repository, so the repository decides who may post, on its base branch:
+
+- **Who posts:** `publishers` in `.mendcode/review.yaml`. `maintainers` (the default) posts only from a `gh` login with write
+  access; a list (`publishers: [alice, bob]`) names the logins that may, contributors without write access included; `anyone` lets
+  every reviewer post. A reviewer that may not post keeps its reviews in its own session and answers no `@mendcode` comment, so 300
+  people watching one repository never flood it. The hosted workflow is the repository's own and always may. A modified client
+  can ignore all of this; GitHub's interaction limits and blocking are what stop it.
+- **One review per head:** before posting, a reviewer reads the PR's reviews; a MendCode review of the same head by another
+  publisher (a listed login, or an owner, member or collaborator for `maintainers`, or the hosted workflow) makes it stand down,
+  and the review stays in its session. Two reviewers that start at the same moment both spend tokens, but only the first posts.
+- **One answer per comment:** every reply carries `<!-- mendcode:answers=<comment id> -->`; a reviewer that finds another
+  publisher's answer to the same comment does not answer.
+- **Addressing one reviewer:** `@mendcode review @alice` (any command, the login right after the command word) is answered only by
+  the reviewer running as `@alice`; the hosted workflow leaves it to her. A comment addressed to no one is answered by reviewers
+  of every PR (`/pr watch-repo all`) and by a `requested` reviewer when the PR requests it. GitHub's own review request is the
+  other way to ask one developer's reviewer: requesting `@alice` starts her `requested` reviewer.
+- **Who may run a command:** write access, read from GitHub. A contributor reviewer listed in `publishers` cannot read another
+  user's permission (GitHub needs push access for that), so it accepts the comment's author association instead: owner, member or
+  collaborator.
+
+The usual setups: one reviewer of every PR (the hosted workflow, or one `/pr watch-repo all` on a server) and everyone else
+`requested`; or every developer `requested` and no shared reviewer.
+
+A repository that has not set `enabled: true` is still reviewed by a watch you started, into your own session only: nothing is
+posted and you are not asked to post.
+
 ## Commands in a pull request
 
 A comment whose line starts with `@mendcode` and a command word runs it; quoted lines, code blocks and MendCode's own replies (they
@@ -127,13 +165,19 @@ review carries `<!-- mendcode:review head=SHA -->` and each comment `<!-- mendco
 category and summary): a finding already posted is never posted again, the same head is never reviewed twice, and a later head with
 nothing new posts nothing. A comment GitHub refuses (422) moves into the summary and the request is sent once more; any other failure
 posts nothing and the findings stay in the session. Over `budget.tokens_per_pr` the review says it stopped and publishes only what
-it confirmed.
+it confirmed. The budget counts input the provider did not serve from its cache, plus output: a child that
+reads files resends its conversation on every step, so cache reads would stop an ordinary PR before verification (one live review
+of an 8-file PR read 207,343 input tokens in its first pass). The cost line shows the cache reads apart. A review the budget
+stopped before verifying says so in its verdict, never "No findings".
 
 ### What a review looks like
 
 The summary (`publish.ts` `reviewBody`) starts with `## MendCode review`, the verdict (`**3 findings** · 🔴 1 critical · 🟠 2 major`,
-or `**No findings**`), the head and whether only the commits since the last review were read. Then the model's summary, one table
-of every finding worst first, each linked to its lines at the reviewed head, the findings GitHub would not take inline, and a folded
+or `**No findings**`), the head and whether only the commits since the last review were read. Then the merge risk and its reason
+(`**Merge risk:** 🟡 Medium · …`) and the change type with the review effort, the model's summary, one table of every finding worst
+first, each linked to its lines at the reviewed head, the **Walkthrough** folded (overview, a `Layer / files | Summary` table and the
+sequence diagram), the **Pre-merge checks** folded with their counts in the title (open when one did not pass; absent when the
+review had no title or description to check), the findings GitHub would not take inline, and a folded
 **Review details**: files reviewed, changed lines and an estimated review effort (1 to 5, by changed lines), the profile and cap,
 how many candidates the verify pass left out, the tokens spent, and the notes (no code graph, what the budget cut). A last line
 lists the `@mendcode` commands.

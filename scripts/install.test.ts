@@ -201,7 +201,7 @@ test("a signature that fails is never skipped, even with MENDCODE_ALLOW_UNSIGNED
 })
 
 const LISTING = [
-  ["v0.0.1", "false"], ["v0.0.1-beta.2", "true"], ["v0.0.1-beta.10", "true"], ["v0.0.1-nightly.20261004.30", "true"],
+  ["v0.0.0", "false"], ["v0.0.1-beta.2", "true"], ["v0.0.1-beta.10", "true"], ["v0.0.1-nightly.20261004.30", "true"],
   ["v0.0.1-nightly.20261005.9", "true"], ["v0.0.1-nightly.20261005.12", "true"], ["v0.0.1-nightly.20261006.1", "false"], ["v0.0.0-nightly.20261230.1", "true"], ["nightly", "true"],
 ] as const
 
@@ -231,9 +231,19 @@ esac
   expect(calls).toContain("release list --repo MendCode/MendCode --limit 100 --json tagName,isPrerelease,isDraft")
   expect(calls).toContain(`release download v${NIGHTLY} --repo MendCode/MendCode --pattern SHA256SUMS --dir`)
   expect(calls).not.toContain("v0.0.1-nightly.20261006.1")
-  for (const [channel, expected] of [["stable", "v0.0.1"], ["beta", "v0.0.1-beta.10"]] as const) {
+  for (const [channel, expected] of [["stable", "v0.0.0"], ["beta", "v0.0.1-beta.10"]] as const) {
     writeFileSync(log, "")
     box.run({ ...env, MENDCODE_CHANNEL: channel })
+    expect(readFileSync(log, "utf8")).toContain(`release download ${expected} --repo MendCode/MendCode`)
+  }
+  // A channel takes every steadier channel's releases: a newer stable wins over betas and nightlies, and a repository with only
+  // a stable release installs it on every channel instead of failing with "no beta release found".
+  for (const [list, channel, expected] of [
+    [[...LISTING, ["v0.0.1", "false"]], "beta", "v0.0.1"], [[...LISTING, ["v0.0.1", "false"]], "nightly", "v0.0.1"],
+    [[["v0.0.1", "false"]], "beta", "v0.0.1"], [[["v0.0.1", "false"]], "nightly", "v0.0.1"],
+  ] as const) {
+    writeFileSync(log, "")
+    box.run({ ...env, GH_LIST: list.map(([tag, pre]) => `${tag}\t${pre}`).join("\n"), MENDCODE_CHANNEL: channel })
     expect(readFileSync(log, "utf8")).toContain(`release download ${expected} --repo MendCode/MendCode`)
   }
 })

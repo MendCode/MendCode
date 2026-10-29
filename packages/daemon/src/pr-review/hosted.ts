@@ -6,6 +6,7 @@ import { readReviewConfig } from "./config"
 import type { ReviewSessionFactory } from "./engine"
 import { findingFromComment, type GhCall } from "./publish"
 import { reviewNotice, runPrReview, type ReviewRun } from "./run"
+import { readPullRequestInfo } from "./pull-request"
 import { FINDING_MARKER, stateFromMarkers, type ReviewState } from "./state"
 
 /**
@@ -95,6 +96,7 @@ export async function hostedReview(input: HostedReviewInput): Promise<GithubRevi
     return runPrReview({
       repo, number: number!, directory: input.directory, base, head, state: state ?? await stateFromGithub({ gh: input.gh, repo, number: number! }), git, gh: input.gh, publish: input.publish, sessionFactory: input.sessionFactory,
       force: true, full,
+      pullRequest: await readPullRequestInfo({ gh: input.gh, repo, title: typeof pr.title === "string" ? pr.title : "", body: typeof pr.body === "string" ? pr.body : "" }),
       checks: async (_directory, commands) => commands.map((command) => ({ command, code: -1, output: HOSTED_CHECKS_SKIPPED })),
       ...(input.graph ? { graph: input.graph } : {}),
     })
@@ -116,6 +118,8 @@ export async function hostedReview(input: HostedReviewInput): Promise<GithubRevi
 
   const body = event.payload.comment?.body ?? ""
   const command = parsePrCommand(body, input.mentions)
+  // A comment addressed to one developer's reviewer (`@mendcode review @alice`) is theirs to answer, not the repository's workflow.
+  if (command?.target) return skipped(`the comment is addressed to @${command.target}'s reviewer`, number)
   if (!command) return skipped("the comment holds no @mendcode command", number)
   if (!event.actor) return skipped("the comment event names no actor", number)
   const raw = obj(event.payload.comment)

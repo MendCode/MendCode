@@ -25,8 +25,8 @@ async function repo(base: Record<string, string>, head: Record<string, string>) 
 }
 
 describe("review config", () => {
-  test("no file means the defaults: off, normal, cap 8, 200k tokens, drafts not reviewed, a 10-minute and 20-an-hour cooldown, every PR", async () => {
-    expect(DEFAULT_REVIEW_CONFIG).toEqual({ enabled: false, profile: "normal", cap: 8, paths: [], ignore: [], checks: [], fixes: false, triggers: { opened: true, synchronize: true, ready_for_review: true, drafts: false }, budget: { tokens_per_pr: 200_000 }, cooldown: { pr_minutes: 10, repo_per_hour: 20 }, reviewers: "all" })
+  test("no file means the defaults: off, normal, cap 8, 200k tokens, drafts not reviewed, a 10-minute and 20-an-hour cooldown, every PR, maintainers post", async () => {
+    expect(DEFAULT_REVIEW_CONFIG).toEqual({ enabled: false, profile: "normal", cap: 8, paths: [], ignore: [], checks: [], fixes: false, triggers: { opened: true, synchronize: true, ready_for_review: true, drafts: false }, budget: { tokens_per_pr: 200_000 }, cooldown: { pr_minutes: 10, repo_per_hour: 20 }, reviewers: "all" , publishers: "maintainers" })
     const dir = await repo({}, {})
     expect(await readReviewConfig({ directory: dir, base: "main", head: "feature", git: gitRun })).toEqual({ config: DEFAULT_REVIEW_CONFIG, learnings: "", notes: [] })
   })

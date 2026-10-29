@@ -26,8 +26,18 @@ describe("channels", () => {
     expect(pickRelease(releases, "stable")?.tag).toBe("v1.10.0")
   })
 
-  test("beta picks the newest beta by number (10 beats 9), ignoring stable releases", () => {
+  test("beta picks the newest beta by number (10 beats 9) while it is newer than every stable release", () => {
     expect(pickRelease(releases, "beta")?.tag).toBe("v1.12.0-beta.10")
+  })
+
+  test("a newer stable reaches the beta and nightly channels; a version's betas come before its nightlies, both before the version", () => {
+    const rows = [make("v1.12.0-beta.10", true), make("v1.12.0-nightly.20261001.3", true), make("v1.11.0", false)]
+    expect(pickRelease(rows, "beta")?.tag).toBe("v1.12.0-beta.10")
+    expect(pickRelease(rows, "nightly")?.tag).toBe("v1.12.0-nightly.20261001.3")
+    const released = [...rows, make("v1.12.0", false)]
+    expect(pickRelease(released, "beta")?.tag).toBe("v1.12.0")
+    expect(pickRelease(released, "nightly")?.tag).toBe("v1.12.0")
+    expect(pickRelease(released, "stable")?.tag).toBe("v1.12.0")
   })
 
   test("dev picks the most recently published dev-<sha> tag", () => {
@@ -42,8 +52,11 @@ describe("channels", () => {
     expect(channelOf(make("dev-xyz", true))).toBeUndefined()
   })
 
-  test("an empty channel has no release", () => {
-    expect(pickRelease([make("v1.0.0", false)], "beta")).toBeUndefined()
+  test("a channel with no release of its own takes the stable one (a new repository's beta); stable and dev never take another channel's", () => {
+    expect(pickRelease([make("v1.0.0", false)], "beta")?.tag).toBe("v1.0.0")
+    expect(pickRelease([make("v1.0.0", false)], "nightly")?.tag).toBe("v1.0.0")
+    expect(pickRelease([make("v1.0.0-beta.1", true)], "stable")).toBeUndefined()
+    expect(pickRelease([make("v1.0.0", false)], "dev")).toBeUndefined()
   })
 })
 

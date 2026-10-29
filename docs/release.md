@@ -65,8 +65,8 @@ git push origin "$tag"
 | Channel | Tag | GitHub release | Who gets it |
 |---|---|---|---|
 | `stable` | `vX.Y.Z` | release (the "latest" one) | the default for installers and `upgrade` |
-| `beta` | `vX.Y.Z-beta.N` | prerelease | `--channel beta` |
-| `nightly` | `vX.Y.Z-nightly.YYYYMMDD.RUN` | prerelease | `--channel nightly`; tagged from `main` by [nightly.yml](../.github/workflows/nightly.yml) |
+| `beta` | `vX.Y.Z-beta.N` | prerelease | `--channel beta` (also takes a newer stable) |
+| `nightly` | `vX.Y.Z-nightly.YYYYMMDD.RUN` | prerelease | `--channel nightly` (also takes a newer beta or stable); tagged from `main` by [nightly.yml](../.github/workflows/nightly.yml) |
 | `dev` | `dev-<7–40 hex sha>` | prerelease | exact tags only for installers; `upgrade --channel dev` follows the newest |
 
 `RUN` is a positive integer without leading zeros (the nightly workflow's run number), `YYYYMMDD` is the UTC date.
@@ -176,8 +176,8 @@ Or download and inspect the release's installer before running it, then pick a c
 
 ```sh
 sh ./install.sh                         # newest stable release
-sh ./install.sh --channel beta          # newest vX.Y.Z-beta.N
-sh ./install.sh --channel nightly       # newest vX.Y.Z-nightly.YYYYMMDD.RUN
+sh ./install.sh --channel beta          # newest vX.Y.Z-beta.N, or a newer stable
+sh ./install.sh --channel nightly       # newest vX.Y.Z-nightly.YYYYMMDD.RUN, or a newer beta or stable
 MENDCODE_VERSION=v0.0.1-beta.2 sh ./install.sh   # one exact release (a channel cannot be combined with it)
 sh ./install.sh --tier minimalist       # start in the minimalist tier (see below); --tier balanced|full too
 ```

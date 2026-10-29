@@ -1,4 +1,4 @@
-import { PR_FINDING_CATEGORIES, type PrFinding, type PrReviewResult } from "@mendcode/protocol"
+import { PR_FINDING_CATEGORIES, type PrFinding, type PrReviewResult, type PrWalkthrough } from "@mendcode/protocol"
 import { parseUnifiedDiff } from "./context"
 import { findingMarker, reviewMarker, type ReviewState } from "./state"
 
@@ -90,13 +90,47 @@ export function reviewEffort(touched: number): { level: number; minutes: number 
 
 const cell = (text: string) => text.replace(/\|/g, "\\|").replace(/\n/g, " ")
 
+const RISK_MARK: Record<PrWalkthrough["risk"]["level"], string> = { low: "🟢", medium: "🟡", high: "🔴" }
+const CHECK_MARK: Record<PrWalkthrough["checks"][number]["status"], string> = { passed: "✅", warning: "⚠️", failed: "❌" }
+const capital = (text: string) => text.charAt(0).toUpperCase() + text.slice(1)
+const code = (text: string) => `\`${text.replace(/`/g, "'")}\``
+
+/** The change in one line: its type, the merge risk and why, and the review effort. */
+function assessment(walkthrough: PrWalkthrough, effort: { level: number; minutes: number } | undefined): string {
+  return [
+    `**Merge risk:** ${RISK_MARK[walkthrough.risk.level]} ${capital(walkthrough.risk.level)} · ${walkthrough.risk.reason}`,
+    `**Change:** ${capital(walkthrough.type)}${effort ? ` · **Review effort:** ${effort.level}/5, about ${effort.minutes} minutes` : ""}`,
+  ].join("\n")
+}
+
+/** The walkthrough folded: the overview, the changes grouped by layer, and the sequence diagram when there is one. */
+function walkthroughBlock(walkthrough: PrWalkthrough): string {
+  const changes = walkthrough.changes.length
+    ? ["**Changes**", "", "| Layer / files | Summary |", "|:--|:--|", ...walkthrough.changes.map((change) => `| **${cell(change.layer)}** <br> ${change.files.slice(0, 12).map((file) => cell(code(file))).join(", ")}${change.files.length > 12 ? `, and ${change.files.length - 12} more` : ""} | ${cell(change.summary)} |`)].join("\n")
+    : ""
+  const fence = walkthrough.diagram ? fenceFor(walkthrough.diagram) : ""
+  const diagram = walkthrough.diagram ? `**Sequence diagram**\n\n${fence}mermaid\n${walkthrough.diagram}\n${fence}` : ""
+  return details("<strong>Walkthrough</strong>", [walkthrough.overview, changes, diagram].filter(Boolean).join("\n\n"))
+}
+
+/** The pre-merge checks folded, their counts in the summary line; nothing when the review had no title or description to check. */
+function checksBlock(walkthrough: PrWalkthrough): string {
+  if (!walkthrough.checks.length) return ""
+  const counts = (["failed", "warning", "passed"] as const).map((status) => [status, walkthrough.checks.filter((check) => check.status === status).length] as const).filter(([, count]) => count > 0)
+  const table = ["| Check | Status | Explanation |", "|:--|:-:|:--|", ...walkthrough.checks.map((check) => `| ${cell(check.name)} | ${CHECK_MARK[check.status]} ${capital(check.status)} | ${cell(check.explanation)} |`)].join("\n")
+  return details(`<strong>Pre-merge checks:</strong> ${counts.map(([status, count]) => `${CHECK_MARK[status]} ${count} ${status}`).join(" · ")}`, table, counts.some(([status]) => status !== "passed"))
+}
+
 /** The review's body: the verdict, every finding in one table, what GitHub would not take inline, the details folded, and the head marker. */
 export function reviewBody({ result, inline, moved, repo, info }: { result: PrReviewResult; inline: number; moved: readonly PrFinding[]; repo?: string; info?: ReviewInfo }): string {
   const findings = [...result.findings].sort((a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity])
   const total = inline + moved.length
   const counts = (Object.keys(SEVERITY_LABEL) as Array<PrFinding["severity"]>).map((severity) => [severity, findings.filter((finding) => finding.severity === severity).length] as const).filter(([, count]) => count > 0)
   const link = (finding: PrFinding) => repo ? `[\`${where(finding)}\`](https://github.com/${repo}/blob/${result.head}/${finding.path.split("/").map(encodeURIComponent).join("/")}#L${finding.line}${finding.endLine && finding.endLine > finding.line ? `-L${finding.endLine}` : ""})` : `\`${where(finding)}\``
-  const verdict = total
+  const unverified = result.budgetHit && !total && result.dropped > 0
+  const verdict = unverified
+    ? `**Stopped at the token budget** · ${result.dropped} candidate finding${result.dropped === 1 ? " was" : "s were"} not verified, so nothing is published`
+    : total
     ? `**${total} finding${total === 1 ? "" : "s"}** · ${counts.map(([severity, count]) => `${SEVERITY_MARK[severity]} ${count} ${severity}`).join(" · ")}`
     : "**No findings** · nothing in this change was confirmed as a problem"
   const scope = `head \`${result.head.slice(0, 12)}\`${info?.incremental ? ` · only the commits since the last review` : ""}${result.budgetHit ? " · stopped at the token budget" : ""}`
@@ -107,16 +141,22 @@ export function reviewBody({ result, inline, moved, repo, info }: { result: PrRe
   const facts = [
     info ? `- **Files reviewed:** ${info.files.length}${effort ? ` · ${touched} changed line${touched === 1 ? "" : "s"} · estimated review effort ${effort.level}/5, about ${effort.minutes} minutes` : ""}` : "",
     info ? `- **Profile:** ${info.profile} · at most ${info.cap} inline comment${info.cap === 1 ? "" : "s"}` : "",
-    `- **Verification:** every finding was checked again by a separate pass${result.dropped ? `; ${result.dropped} candidate${result.dropped === 1 ? " was" : "s were"} left out (not confirmed, outside the diff or past the cap)` : ""}`,
-    `- **Cost:** ${result.tokens.input.toLocaleString("en-US")} tokens in · ${result.tokens.output.toLocaleString("en-US")} out`,
+    unverified
+      ? `- **Verification:** the token budget stopped the review before the separate pass; ${result.dropped} candidate${result.dropped === 1 ? " was" : "s were"} not verified (raise \`budget.tokens_per_pr\` in \`.mendcode/review.yaml\`)`
+      : `- **Verification:** every finding was checked again by a separate pass${result.dropped ? `; ${result.dropped} candidate${result.dropped === 1 ? " was" : "s were"} left out (not confirmed, outside the diff or past the cap)` : ""}`,
+    `- **Cost:** ${result.tokens.input.toLocaleString("en-US")} tokens in${result.tokens.cached ? ` (${result.tokens.cached.toLocaleString("en-US")} from the provider's cache)` : ""} · ${result.tokens.output.toLocaleString("en-US")} out`,
     ...(info?.notes ?? []).slice(0, 8).map((note) => `- ${note.replace(/^\[PR_REVIEW\]:\s*/, "")}`),
   ].filter(Boolean).join("\n")
   const files = info?.files.length ? `\n\n${details(`Files (${info.files.length})`, info.files.slice(0, 100).map((file) => `- \`${file.path}\``).join("\n"))}` : ""
+  const walkthrough = result.walkthrough
   return [
     "## MendCode review",
     `${verdict}\n${scope}`,
+    walkthrough ? assessment(walkthrough, effort) : "",
     result.summary.trim(),
     table,
+    walkthrough ? walkthroughBlock(walkthrough) : "",
+    walkthrough ? checksBlock(walkthrough) : "",
     outside,
     details("Review details", facts + files),
     "<sub>Comment <code>@mendcode review</code> to review again · <code>@mendcode pause</code> / <code>resume</code> · reply to a finding with <code>explain</code>, <code>fix</code> or <code>learn</code> · settings in <code>.mendcode/review.yaml</code></sub>",

@@ -8,6 +8,13 @@ import type { ReviewProfile, ReviewSessionFactory, ReviewTurn } from "./engine"
 import { extractJson } from "./findings"
 
 /**
+ * What a review spends against `budget.tokens_per_pr`: input the provider did not serve from its cache, plus output. A child that
+ * reads files with its tools sends the whole conversation again on every step, so counting cache reads would stop a review of an
+ * ordinary PR before its findings are verified (a live review of an 8-file PR read 207,343 input tokens in its first pass).
+ */
+export const spent = (tokens: ReviewTurn["tokens"]) => tokens.input - (tokens.cached ?? 0) + tokens.output
+
+/**
  * The adversarial verify pass (docs/pr-review.md). A fresh plan-mode child, never the one that found the bugs, is told to refute
  * each candidate from the code: `confirmed` when the defect holds, `plausible` when it may, `rejected` when a guard, a caller or
  * a type already rules it out. Only confirmed findings are published (plausible too in the strict profile, marked as such). A
@@ -87,21 +94,23 @@ function parseVerdicts(text: string): { ok: true; verdicts: Map<string, Judged> 
 export async function verifyFindings({ sessionFactory, findings, context, checks = [], budget = Infinity }: { sessionFactory: ReviewSessionFactory; findings: readonly PrFinding[]; context: ReviewContext; checks?: readonly CheckResult[]; budget?: number }): Promise<{ findings: PrFinding[]; tokens: ReviewTurn["tokens"]; stopped: boolean; unjudged: string[] }> {
   const judged: PrFinding[] = []
   const unjudged: string[] = []
-  const tokens = { input: 0, output: 0 }
+  const tokens = { input: 0, output: 0, cached: 0 }
   let stopped = false
   for (let start = 0; start < findings.length; start += VERIFY_BATCH) {
     const batch = findings.slice(start, start + VERIFY_BATCH)
-    if (tokens.input + tokens.output >= budget) { stopped = true; unjudged.push(...batch.map((finding) => finding.id)); judged.push(...batch.map((finding) => ({ ...finding, verdict: "rejected" as const }))); continue }
+    if (spent(tokens) >= budget) { stopped = true; unjudged.push(...batch.map((finding) => finding.id)); judged.push(...batch.map((finding) => ({ ...finding, verdict: "rejected" as const }))); continue }
     const session = await sessionFactory({ purpose: "verify" })
     try {
       let turn = await session.send(verifyPrompt(batch, context, checks))
       tokens.input += turn.tokens.input
       tokens.output += turn.tokens.output
+      tokens.cached += turn.tokens.cached ?? 0
       let parsed = parseVerdicts(turn.text)
       if (!parsed.ok) {
         turn = await session.send(`Your answer could not be used: ${parsed.problem}. Answer again with only the JSON object: ${SHAPE}`)
         tokens.input += turn.tokens.input
         tokens.output += turn.tokens.output
+        tokens.cached += turn.tokens.cached ?? 0
         parsed = parseVerdicts(turn.text)
       }
       if (!parsed.ok) throw new Error(`[PR_REVIEW]: verification failed (${parsed.problem})`)

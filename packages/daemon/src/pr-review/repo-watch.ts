@@ -91,9 +91,9 @@ export type RepoWatchOptions = {
 
 type Listed = z.infer<typeof Listed>
 /** A comment as `gh api --jq` prints it, one object per line. */
-const PolledComment = z.object({ id: z.number().int(), body: z.string().max(100_000).nullable(), user: z.string().max(100).nullable(), html_url: z.string().max(500).optional(), pull_request_url: z.string().max(500).optional(), in_reply_to_id: z.number().int().nullable().optional(), diff_hunk: z.string().max(50_000).nullable().optional() })
-const ISSUE_COMMENTS = ".[] | {id, body, user: .user.login, html_url}"
-const REVIEW_COMMENTS = ".[] | {id, body, user: .user.login, pull_request_url, in_reply_to_id, diff_hunk}"
+const PolledComment = z.object({ id: z.number().int(), body: z.string().max(100_000).nullable(), user: z.string().max(100).nullable(), association: z.string().max(40).nullable().optional(), html_url: z.string().max(500).optional(), pull_request_url: z.string().max(500).optional(), in_reply_to_id: z.number().int().nullable().optional(), diff_hunk: z.string().max(50_000).nullable().optional() })
+const ISSUE_COMMENTS = ".[] | {id, body, user: .user.login, association: .author_association, html_url}"
+const REVIEW_COMMENTS = ".[] | {id, body, user: .user.login, association: .author_association, pull_request_url, in_reply_to_id, diff_hunk}"
 
 export function createRepoWatch(options: RepoWatchOptions) {
   const run = options.run ?? ghProcess
@@ -149,7 +149,17 @@ export function createRepoWatch(options: RepoWatchOptions) {
    * review comments, filtered by `since`. MendCode's own replies carry a marker and are never read as commands. Failures are
    * quiet: the next poll reads from the same time again.
    */
-  async function pollComments(watch: RepoWatchRecord, prs: Listed) {
+  /**
+   * Which `@mendcode` comments this reviewer takes: one addressed to its login (`@mendcode review @alice`), or one addressed to no
+   * one when it reviews every PR (`all`) or the PR requests it. Many developers can run their own reviewer on one repository and a
+   * comment is answered by the reviewer it is meant for.
+   */
+  const takes = ({ command, role, me, requested }: { command: PrCommand; role: RepoRole; me: string | undefined; requested: boolean }) =>
+    command.target ? !!me && command.target.toLowerCase() === me : role === "all" || requested
+
+  async function pollComments(watch: RepoWatchRecord, prs: Listed, role: RepoRole) {
+    const me = watch.login?.toLowerCase()
+    const requestedOf = (number: number) => { const pr = prs.find((entry) => entry.number === number); return !!me && !!pr && [...(pr.reviewRequests ?? []), ...(pr.assignees ?? [])].some((who) => who.login?.toLowerCase() === me) }
     const started = new Date(now()).toISOString()
     const since = watch.commentsSince ?? new Date(watch.createdAt).toISOString()
     const heads = new Map(prs.map((pr) => [pr.number, pr.headRefOid]))
@@ -167,7 +177,8 @@ export function createRepoWatch(options: RepoWatchOptions) {
         const head = heads.get(number)
         if (!command || !head) continue
         answered.add(item.id)
-        const comment: CommandComment = { id: item.id, surface: endpoint === "pulls/comments" ? "review" : "issue", actor: item.user, body: item.body, ...(item.in_reply_to_id ? { inReplyTo: item.in_reply_to_id } : {}), ...(item.diff_hunk ? { diffHunk: item.diff_hunk } : {}) }
+        if (!takes({ command, role, me, requested: requestedOf(number) })) continue
+        const comment: CommandComment = { id: item.id, surface: endpoint === "pulls/comments" ? "review" : "issue", actor: item.user, body: item.body, ...(item.association ? { association: item.association } : {}), ...(item.in_reply_to_id ? { inReplyTo: item.in_reply_to_id } : {}), ...(item.diff_hunk ? { diffHunk: item.diff_hunk } : {}) }
         enqueue({ kind: "command", directory: watch.directory, sessionId: watch.sessionId, number, head, trigger: "comment", command, comment })
       }
     }
@@ -244,7 +255,7 @@ export function createRepoWatch(options: RepoWatchOptions) {
       enqueue({ kind: "review", directory: watch.directory, sessionId: watch.sessionId, number: pr.number, head: pr.headRefOid, trigger: due })
     }
     for (const key of Object.keys(watch.seen)) if (!open.has(key)) delete watch.seen[key]
-    await pollComments(watch, found.prs)
+    await pollComments(watch, found.prs, role)
     await options.followUp?.(watch.directory, watch.sessionId, found.prs).catch(() => undefined)
   }
 
@@ -344,6 +355,14 @@ export function createRepoWatch(options: RepoWatchOptions) {
   arm()
   return {
     tick, watchRepo, unwatchRepo, describe, rows, publishConsent, consentOf, setPublish,
+    /** The `gh` login this daemon posts as in a watched directory: read once, then kept with the watch. */
+    async loginOf(directory: string) {
+      const watch = find(directory)
+      if (watch?.login) return watch.login
+      const login = await ownLogin(directory)
+      if (watch && login) { watch.login = login; save() }
+      return login
+    },
     /** A review asked for by hand (`/pr review`): queued behind the cap like any other. */
     review(job: Omit<RepoWatchJob, "kind" | "trigger">) { enqueue({ ...job, kind: "review", trigger: "manual" }) },
     pending: () => ({ running, queued: queue.length }),

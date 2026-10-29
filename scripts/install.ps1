@@ -35,19 +35,22 @@ if (-not $HaveCosign -and $env:MENDCODE_REQUIRE_SIGNATURE -eq '1') {
   throw 'cosign is required by MENDCODE_REQUIRE_SIGNATURE=1 to verify the release signature (install cosign 2.6.1 or newer)'
 }
 
-# Picks the newest tag of the channel from objects with Tag and Prerelease, ordered by version, then date and run for nightlies.
+# Picks the newest tag the channel takes from objects with Tag and Prerelease: its own and every steadier channel's (beta also
+# stable, nightly also beta and stable), so a newer stable wins and a channel with no release yet installs the stable one.
+# Ordered as semver: version, then a version's betas < its nightlies < the version itself, then beta number or date and run.
 function Select-NewestTag([object[]] $Releases, [string] $Name) {
+  $Takes = @{ stable = @('stable'); beta = @('stable', 'beta'); nightly = @('stable', 'beta', 'nightly') }[$Name]
   $Best = $null
   $BestKey = $null
   foreach ($Release in $Releases) {
     $Tag = [string] $Release.Tag
     $Key = $null
-    if ($Name -eq 'stable' -and -not $Release.Prerelease -and $Tag -cmatch '^v(\d+)\.(\d+)\.(\d+)$') { $Key = @([long] $Matches[1], [long] $Matches[2], [long] $Matches[3], 0L, 0L) }
-    elseif ($Name -eq 'beta' -and $Release.Prerelease -and $Tag -cmatch '^v(\d+)\.(\d+)\.(\d+)-beta\.(\d+)$') { $Key = @([long] $Matches[1], [long] $Matches[2], [long] $Matches[3], [long] $Matches[4], 0L) }
-    elseif ($Name -eq 'nightly' -and $Release.Prerelease -and $Tag -cmatch '^v(\d+)\.(\d+)\.(\d+)-nightly\.(\d{8})\.(\d+)$') { $Key = @([long] $Matches[1], [long] $Matches[2], [long] $Matches[3], [long] $Matches[4], [long] $Matches[5]) }
+    if ($Takes -contains 'stable' -and -not $Release.Prerelease -and $Tag -cmatch '^v(\d+)\.(\d+)\.(\d+)$') { $Key = @([long] $Matches[1], [long] $Matches[2], [long] $Matches[3], 3L, 0L, 0L) }
+    elseif ($Takes -contains 'beta' -and $Release.Prerelease -and $Tag -cmatch '^v(\d+)\.(\d+)\.(\d+)-beta\.(\d+)$') { $Key = @([long] $Matches[1], [long] $Matches[2], [long] $Matches[3], 1L, [long] $Matches[4], 0L) }
+    elseif ($Takes -contains 'nightly' -and $Release.Prerelease -and $Tag -cmatch '^v(\d+)\.(\d+)\.(\d+)-nightly\.(\d{8})\.(\d+)$') { $Key = @([long] $Matches[1], [long] $Matches[2], [long] $Matches[3], 2L, [long] $Matches[4], [long] $Matches[5]) }
     if (-not $Key) { continue }
     $Newer = -not $BestKey
-    for ($Index = 0; -not $Newer -and $Index -lt 5; $Index++) {
+    for ($Index = 0; -not $Newer -and $Index -lt 6; $Index++) {
       if ($Key[$Index] -gt $BestKey[$Index]) { $Newer = $true; break }
       if ($Key[$Index] -lt $BestKey[$Index]) { break }
     }

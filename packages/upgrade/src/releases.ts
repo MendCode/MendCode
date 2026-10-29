@@ -55,9 +55,15 @@ export function channelOf(release: Release): Channel | undefined {
   return undefined
 }
 
-/** The newest release of a channel: stable and beta by semver, dev by publication time. */
+/**
+ * The releases a channel takes: its own and every steadier channel's. A newer stable reaches a beta or nightly user, and a channel
+ * with no release of its own yet (a new repository's beta) installs the stable one instead of failing.
+ */
+const ACCEPTS: Record<Channel, readonly Channel[]> = { stable: ["stable"], beta: ["beta", "stable"], nightly: ["nightly", "beta", "stable"], dev: ["dev"] }
+
+/** The newest release a channel takes (`ACCEPTS`): stable, beta and nightly by semver, dev by publication time. */
 export function pickRelease(releases: readonly Release[], channel: Channel): Release | undefined {
-  const inChannel = releases.filter((release) => channelOf(release) === channel)
+  const inChannel = releases.filter((release) => { const own = channelOf(release); return own !== undefined && ACCEPTS[channel].includes(own) })
   const newest = (a: Release, b: Release) => {
     if (channel !== "dev") {
       const order = compareSemver(parseVersion(b.tag)!, parseVersion(a.tag)!)

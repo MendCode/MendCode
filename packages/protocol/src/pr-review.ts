@@ -30,6 +30,42 @@ export const PrFinding = lazySchema(() => z.strictObject({
 }))
 export type PrFinding = z.infer<typeof PrFinding>
 
+export const PR_CHANGE_TYPES = ["bug fix", "feature", "refactor", "performance", "tests", "docs", "build", "chore"] as const
+export const PR_MERGE_RISKS = ["low", "medium", "high"] as const
+export const PR_CHECK_STATUSES = ["passed", "warning", "failed"] as const
+
+/** One group of the walkthrough's changes table: related files (a layer or a purpose) and what changed in them. */
+export const PrWalkthroughChange = lazySchema(() => z.strictObject({
+  layer: z.string().min(1).max(80),
+  files: z.array(z.string().min(1).max(500)).min(1).max(40),
+  summary: z.string().min(1).max(400),
+}))
+export type PrWalkthroughChange = z.infer<typeof PrWalkthroughChange>
+
+/** A pre-merge check: whether the title, description and linked issues match the change, and what is out of scope. */
+export const PrPreMergeCheck = lazySchema(() => z.strictObject({
+  name: z.string().min(1).max(40),
+  status: z.enum(PR_CHECK_STATUSES),
+  explanation: z.string().min(1).max(600),
+}))
+export type PrPreMergeCheck = z.infer<typeof PrPreMergeCheck>
+
+/**
+ * What the change is, for a reader who has not opened it: an overview, the changes grouped by layer, a sequence diagram when the
+ * change alters how components call each other, its type, the merge risk with its reason, and the pre-merge checks. Written by the
+ * review pass; the risk is never below what the confirmed findings show (`docs/pr-review.md`).
+ */
+export const PrWalkthrough = lazySchema(() => z.strictObject({
+  overview: z.string().min(1).max(1500),
+  changes: z.array(PrWalkthroughChange).max(12),
+  /** A Mermaid `sequenceDiagram` or `flowchart`, without its fence. */
+  diagram: z.string().min(1).max(3000).optional(),
+  type: z.enum(PR_CHANGE_TYPES),
+  risk: z.strictObject({ level: z.enum(PR_MERGE_RISKS), reason: z.string().min(1).max(600) }),
+  checks: z.array(PrPreMergeCheck).max(6),
+}))
+export type PrWalkthrough = z.infer<typeof PrWalkthrough>
+
 export const PrReviewResult = lazySchema(() => z.strictObject({
   head: z.string().min(1).max(200),
   base: z.string().min(1).max(200),
@@ -37,7 +73,9 @@ export const PrReviewResult = lazySchema(() => z.strictObject({
   /** Candidates left out: outside the diff, rejected by the verifier, or past the cap. */
   dropped: z.number().int().nonnegative(),
   summary: z.string().max(8000),
-  tokens: z.strictObject({ input: z.number().int().nonnegative(), output: z.number().int().nonnegative() }),
+  /** `cached`: the part of `input` the provider served from its cache; the PR budget does not count it. */
+  tokens: z.strictObject({ input: z.number().int().nonnegative(), output: z.number().int().nonnegative(), cached: z.number().int().nonnegative().optional() }),
   budgetHit: z.boolean(),
+  walkthrough: PrWalkthrough.optional(),
 }))
 export type PrReviewResult = z.infer<typeof PrReviewResult>

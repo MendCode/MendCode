@@ -205,9 +205,10 @@ describe("decisions", () => {
     expect(existsSync(box.dataDir)).toBe(false)
   })
 
-  test("a channel without releases is an error", async () => {
+  test("a channel with no release of its own takes the stable one; a channel with nothing it takes is an error", async () => {
     const box = sandbox()
-    expect((await failure(runUpgrade(box.request({ channel: "beta" }), releases().ports))).code).toBe("no-release")
+    expect((await runUpgrade(box.request({ check: true, channel: "beta" }), releases().ports)).latest).toBe("v1.1.0")
+    expect((await failure(runUpgrade(box.request({ channel: "dev" }), releases().ports))).code).toBe("no-release")
   })
 
   test("a network failure is reported with the failing step", async () => {

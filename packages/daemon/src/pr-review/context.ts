@@ -1,6 +1,7 @@
 import { estimateTokens } from "@mendcode/protocol"
 import { parseDiffRows } from "@mendcode/protocol/wire"
 import { loc, traverseCalls, type Graph, type GraphNode } from "@mendcode/codegraph"
+import type { PullRequestInfo } from "./pull-request"
 
 /**
  * What a review reads (docs/pr-review.md): the diff of `base...head` and, for every symbol a hunk touches, its callers and callees
@@ -57,6 +58,8 @@ export type ReviewContext = {
   truncated: boolean
   /** Facts for the summary: no code graph, what the budget cut. */
   notes: string[]
+  /** The title, description and linked issues the pre-merge checks read; absent when the caller could not read them. */
+  pullRequest?: PullRequestInfo
   /** Estimated tokens of `diff` plus the symbol lines. */
   tokens: number
 }

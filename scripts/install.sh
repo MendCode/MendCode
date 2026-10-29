@@ -78,17 +78,20 @@ elif [ "${MENDCODE_REQUIRE_SIGNATURE:-0}" = 1 ]; then
   fail 'cosign is required by MENDCODE_REQUIRE_SIGNATURE=1 to verify the release signature (install cosign 2.6.1 or newer)'
 fi
 
-# Reads "tag<TAB>prerelease" lines and prints the newest tag of the channel, ordered by version, then date and run for nightlies.
+# Reads "tag<TAB>prerelease" lines and prints the newest tag the channel takes: its own and every steadier channel's (beta also
+# stable, nightly also beta and stable), so a newer stable wins and a channel with no release yet installs the stable one.
+# Ordered as semver: version, then a version's betas < its nightlies < the version itself, then beta number or date and run.
 newest_tag() {
   awk -F '\t' -v channel="$1" '
     function pad(n) { return sprintf("%09d", n) }
+    BEGIN { takes["stable"] = " stable "; takes["beta"] = " stable beta "; takes["nightly"] = " stable beta nightly " }
     {
-      tag = $1; pre = $2; key = ""
+      tag = $1; pre = $2; key = ""; kind = ""
       split(tag, p, /[v.-]/)
-      if (channel == "stable" && pre == "false" && tag ~ /^v[0-9]+\.[0-9]+\.[0-9]+$/) key = pad(p[2]) pad(p[3]) pad(p[4])
-      else if (channel == "beta" && pre == "true" && tag ~ /^v[0-9]+\.[0-9]+\.[0-9]+-beta\.[0-9]+$/) key = pad(p[2]) pad(p[3]) pad(p[4]) pad(p[6])
-      else if (channel == "nightly" && pre == "true" && tag ~ /^v[0-9]+\.[0-9]+\.[0-9]+-nightly\.[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]\.[0-9]+$/) key = pad(p[2]) pad(p[3]) pad(p[4]) pad(p[6]) pad(p[7])
-      if (key != "" && key > best) { best = key; found = tag }
+      if (pre == "false" && tag ~ /^v[0-9]+\.[0-9]+\.[0-9]+$/) { kind = "stable"; key = pad(p[2]) pad(p[3]) pad(p[4]) "3" pad(0) pad(0) }
+      else if (pre == "true" && tag ~ /^v[0-9]+\.[0-9]+\.[0-9]+-beta\.[0-9]+$/) { kind = "beta"; key = pad(p[2]) pad(p[3]) pad(p[4]) "1" pad(p[6]) pad(0) }
+      else if (pre == "true" && tag ~ /^v[0-9]+\.[0-9]+\.[0-9]+-nightly\.[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]\.[0-9]+$/) { kind = "nightly"; key = pad(p[2]) pad(p[3]) pad(p[4]) "2" pad(p[6]) pad(p[7]) }
+      if (key != "" && index(takes[channel], " " kind " ") && key > best) { best = key; found = tag }
     }
     END { if (found == "") exit 1; print found }'
 }

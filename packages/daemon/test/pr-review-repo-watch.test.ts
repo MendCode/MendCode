@@ -70,6 +70,27 @@ describe("repo watch", () => {
     await watch.tick()
     expect(jobs).toHaveLength(2)
   })
+  test("many reviewers on one repository: a comment addressed to a login reaches only that reviewer, an unaddressed one only reviewers of every PR or of a PR that requests them", async () => {
+    const comments = [
+      { id: 1, body: "@mendcode review @dev-ana", user: "maintainer", html_url: "https://github.com/acme/app/pull/12#issuecomment-1" },
+      { id: 2, body: "@mendcode review @dev-bob", user: "maintainer", html_url: "https://github.com/acme/app/pull/12#issuecomment-2" },
+      { id: 3, body: "@mendcode review", user: "maintainer", html_url: "https://github.com/acme/app/pull/12#issuecomment-3" },
+      { id: 4, body: "@mendcode review", user: "maintainer", html_url: "https://github.com/acme/app/pull/14#issuecomment-4" },
+    ]
+    const taken = async (role: "all" | "requested") => {
+      const { watch, gh, jobs } = watcher()
+      gh.state.prs = [{ number: 12, headRefOid: sha(12) }, { number: 14, headRefOid: sha(14), reviewRequests: [{ login: "dev-ana" }] }]
+      await watch.watchRepo("ses_a", "/repo", role)
+      gh.state.comments = comments
+      await watch.tick()
+      return jobs.map((job) => job.kind === "command" ? job.comment.id : 0)
+    }
+    // dev-ana (the fake gh login) reviewing every PR: her own address and both unaddressed comments, never dev-bob's.
+    expect(await taken("all")).toEqual([1, 3, 4])
+    // Reviewing only requested PRs: her address, and the unaddressed comment on #14, which requests her.
+    expect(await taken("requested")).toEqual([1, 4])
+  })
+
   test("open PRs are the baseline; a new PR #12 queues one review, a push to it an incremental one, nothing changing queues none", async () => {
     const { watch, gh, jobs } = watcher()
     gh.state.prs = [{ number: 3, headRefOid: sha(3) }]
@@ -169,7 +190,7 @@ describe("PR review service", () => {
     await git(dir, "checkout", "-q", "main")
     return { dir, base, head }
   }
-  async function service() {
+  async function service({ writer = true }: { writer?: boolean } = {}) {
     const { dir, base, head } = await repository()
     const notices: string[] = []
     const posts: unknown[] = []
@@ -178,10 +199,13 @@ describe("PR review service", () => {
       if (argv[0] === "repo") return { code: 0, out: "acme/app", err: "" }
       if (argv[0] === "pr" && argv[1] === "view") return { code: 0, out: JSON.stringify({ number: 12, headRefOid: head, baseRefOid: base, baseRefName: "main", url: "https://github.com/acme/app/pull/12" }), err: "" }
       if (argv[0] === "pr" && argv[1] === "list") return { code: 0, out: "[]", err: "" }
+      if (argv.join(" ") === "api user --jq .login") return { code: 0, out: "nora", err: "" }
       return { code: 1, out: "", err: "unexpected" }
     }
     const call: GhCall = async ({ argv, stdin }) => {
       if (argv[1]?.endsWith("/reviews") && argv.includes("POST")) { posts.push(JSON.parse(stdin!)); return { code: 0, out: JSON.stringify({ id: 1 }) } }
+      // The reviewer's own write access (publishers: maintainers).
+      if (argv[1] === "repos/acme/app") return { code: 0, out: writer ? "true" : "false" }
       return { code: 0, out: "[]" }
     }
     const finding = { path: "a.ts", line: 1, severity: "major", category: "correctness", summary: "one is now 2", detail: "Callers expect 1.", evidence: ["a.ts:1"] }
@@ -203,6 +227,16 @@ describe("PR review service", () => {
     cleanups.push(() => reviewer.stop())
     return { reviewer, notices, posts, dir, data, turns: () => turns }
   }
+
+  test("a reviewer the repository does not let post keeps the review in its session and is never asked to post", async () => {
+    const { reviewer, notices, posts } = await service({ writer: false })
+    expect((await reviewer.control({ sessionId: "ses_a", action: "review", pr: "12" })).ok).toBe(true)
+    for (let i = 0; i < 100 && !notices.length; i++) await Bun.sleep(20)
+    expect(notices[0]).toContain("PR review of acme/app#12: reviewed (kept in this session: @nora has no write access to acme/app")
+    await Bun.sleep(50)
+    expect(notices.some((notice) => notice.includes("never posted a review"))).toBe(false)
+    expect(posts).toEqual([])
+  })
 
   test("/pr review reviews in a throwaway worktree, asks once before the first post, and posts the held review on yes without a second model call", async () => {
     const { reviewer, notices, posts, dir, data, turns } = await service()
@@ -279,7 +313,7 @@ describe("review children", () => {
     })
     observe = sessions.observe as never
     const child = await sessions.factory({ owner: "ses_owner", directory: "/repo" })({ purpose: "review" })
-    expect(await child.send("review this")).toEqual({ text: "{\"findings\": []}", tokens: { input: 1000, output: 40 } })
+    expect(await child.send("review this")).toEqual({ text: "{\"findings\": []}", tokens: { input: 1000, output: 40, cached: 100 } })
     await child.close()
     expect(log).toEqual(["create PR review", "submit review this", "deny req_1", "remove ses_child"])
   })

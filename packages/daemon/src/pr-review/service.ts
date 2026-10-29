@@ -3,11 +3,13 @@ import path from "node:path"
 import { createIndexer } from "@mendcode/codegraph"
 import { ghProcess, parseRef, type GhRun } from "../pr-watch"
 import { gitRun, type GitRun } from "./context"
-import { readReviewConfig } from "./config"
+import { readReviewConfig, type ReviewConfig } from "./config"
 import type { ReviewSessionFactory } from "./engine"
 import { publishReview, type GhCall } from "./publish"
 import { explainFinding, failureFollowUp, runPrCommand } from "./commands"
 import { runFix } from "./fix"
+import { answeredBy, mayPublish, reviewedBy, type PublishCheck } from "./publishers"
+import { readPullRequestInfo } from "./pull-request"
 import { createRepoWatch, type RepoWatchJob } from "./repo-watch"
 import { runChecks } from "./verify"
 import { reviewNotice, runPrReview, type ReviewRun } from "./run"
@@ -59,7 +61,7 @@ export const FOLLOW_UP_MS = 5 * 60_000
 
 export const PR_REVIEW_DISABLED = "The PR reviewer is off: it reaches the network through gh and spends model calls, so turn it on with /experimental pr_review on (balanced tier or above)"
 
-const View = (text: string) => { try { return JSON.parse(text) as { number?: number; headRefOid?: string; baseRefOid?: string; baseRefName?: string; url?: string } } catch { return {} } }
+const View = (text: string) => { try { return JSON.parse(text) as { number?: number; headRefOid?: string; baseRefOid?: string; baseRefName?: string; url?: string; title?: string; body?: string } } catch { return {} } }
 
 export function createPrReviewService(options: PrReviewServiceOptions) {
   const run = options.run ?? ghProcess
@@ -77,7 +79,7 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
 
   async function reviewOne({ sessionId, directory, number, publish, manual }: { sessionId: string; directory: string; number: number; publish: boolean; manual: boolean }): Promise<ReviewRun & { repo: string }> {
     const repo = await repoOf(directory)
-    const viewed = await run({ argv: ["pr", "view", String(number), "--json", "number,headRefOid,baseRefOid,baseRefName,url"], cwd: directory })
+    const viewed = await run({ argv: ["pr", "view", String(number), "--json", "number,headRefOid,baseRefOid,baseRefName,url,title,body"], cwd: directory })
     const pr = View(viewed.out)
     if (viewed.code !== 0 || !pr.headRefOid || !pr.baseRefOid || !/^[0-9a-f]{40}$/.test(pr.headRefOid) || !/^[0-9a-f]{40}$/.test(pr.baseRefOid)) throw new Error(`[PR_REVIEW]: gh could not read pull request #${number}`)
     const base = pr.baseRefName && /^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$/.test(pr.baseRefName) && !pr.baseRefName.includes("..") ? pr.baseRefName : undefined
@@ -93,8 +95,11 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
     try {
       const state = readReviewState(options.dir, repo, number)
       const reviewed = await runPrReview({
-        repo, number, directory: worktree, base: pr.baseRefOid, head: pr.headRefOid, state, git, publish, force: manual, full: manual,
+        // A watched repository that has not enabled publishing is still reviewed, into this session only: the user started the watch.
+        repo, number, directory: worktree, base: pr.baseRefOid, head: pr.headRefOid, state, git, publish, force: true, full: manual,
+        publisher: { login: await watch.loginOf(directory), check: (config) => publisherOf(directory, repo, config.publishers) }, read: call,
         sessionFactory: options.sessions(sessionId, worktree),
+        pullRequest: await readPullRequestInfo({ gh: call, repo, title: typeof pr.title === "string" ? pr.title : "", body: typeof pr.body === "string" ? pr.body : "" }),
         ...(publish ? { gh: call } : {}),
         ...(options.graphOn() ? { graph: () => createIndexer({ cacheDir: graphCache, now: Date.now }).graph({ cwd: worktree, signal: AbortSignal.timeout(120_000) }) } : {}),
       })
@@ -117,7 +122,7 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
       if (first.status === "skipped" && !manual) return
       options.notify(sessionId, reviewNotice({ repo: first.repo, number, run: first }))
       // A review that could post but has no consent yet: ask once, hold it, post it when the answer is yes.
-      if (!allowed && first.status === "reviewed" && first.config?.enabled) {
+      if (!allowed && first.status === "reviewed" && first.config?.enabled && !first.notPublisher) {
         const consent = watch.publishConsent(directory)
         if (consent === "denied") return
         const list = held.get(directory) ?? []
@@ -153,7 +158,23 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
     return { branch: pr.headRefName, head: pr.headRefOid!, pushUrl: fork ? `https://github.com/${owner}/${name}.git` : "origin", pushable: !fork || pr.maintainerCanModify === true, config }
   }
 
-  /** One `@mendcode` comment of a watched repository: answered on GitHub with the user's own gh, once they allowed posting there. */
+  const publishers = new Map<string, { at: number; check: PublishCheck }>()
+  /** Whether this daemon's login may post to `repo` (`publishers` in the repo config), asked at most every ten minutes per repository. */
+  async function publisherOf(directory: string, repo: string, rule: ReviewConfig["publishers"]): Promise<PublishCheck> {
+    const key = `${directory}\n${JSON.stringify(rule)}`
+    const at = (options.now ?? Date.now)()
+    const known = publishers.get(key)
+    if (known && at - known.at < 600_000) return known.check
+    const check = await mayPublish({ gh: call, repo, login: await watch.loginOf(directory), rule })
+    publishers.set(key, { at, check })
+    return check
+  }
+  const baseConfig = async (directory: string) => (await readReviewConfig({ directory, base: "HEAD", head: "HEAD", git })).config
+
+  /**
+   * One `@mendcode` comment of a watched repository: answered on GitHub with the user's own gh, once they allowed posting there, when
+   * the repository lets this reviewer post (`publishers`) and no other publisher answered it yet.
+   */
   async function commandJob(entry: Extract<RepoWatchJob, { kind: "command" }>) {
     const { sessionId, directory, number, command, comment } = entry
     try {
@@ -162,6 +183,11 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
         if (!waiting.has(comment.id)) { waiting.add(comment.id); options.notify(sessionId, `@mendcode ${command.kind} from ${comment.actor} on ${repo}#${number} was not answered: MendCode posts to ${repo} only after /pr publish on.`) }
         return
       }
+      const config = await baseConfig(directory)
+      const allowed = await publisherOf(directory, repo, config.publishers)
+      if (!allowed.ok) { options.notify(sessionId, `@mendcode ${command.kind} from ${comment.actor} on ${repo}#${number} was not answered: ${allowed.reason}.`); return }
+      const other = await answeredBy({ gh: call, repo, number, commentId: comment.id, rule: config.publishers, self: await watch.loginOf(directory) })
+      if (other) { options.notify(sessionId, `@mendcode ${command.kind} from ${comment.actor} on ${repo}#${number}: @${other} answered it already.`); return }
       const state = readReviewState(options.dir, repo, number)
       let target: Awaited<ReturnType<typeof fixTarget>> | undefined
       const fixInfo = async () => (target ??= await fixTarget(directory, number))
@@ -190,6 +216,7 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
   async function followUp(directory: string, sessionId: string, prs: ReadonlyArray<{ number: number; headRefOid: string }>) {
     if (watch.consentOf(directory) !== "allowed") return
     const repo = await repoCached(directory)
+    if (!(await publisherOf(directory, repo, (await baseConfig(directory)).publishers)).ok) return
     const at = (options.now ?? Date.now)()
     for (const pr of prs) {
       const state = readReviewState(options.dir, repo, pr.number)

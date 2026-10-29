@@ -124,12 +124,15 @@ describe("nightly channel on a repository GitHub does not attest", () => {
     expect(fake.verified).toHaveLength(2)
   })
 
-  test("a private-repository release that a stable or beta user never sees stays out of the nightly channel and the reverse", async () => {
+  test("a nightly never reaches a stable or beta user; a nightly user gets a newer beta or stable", async () => {
     const h = box()
-    const rows = [nightly(), release({ tag: "v0.0.1-beta.2", prerelease: true, mode: "cosign", binaries: { "mendcode-0.0.1-beta.2-linux-x64": "b" } }), release({ tag: "v0.0.1", mode: "cosign", binaries: { "mendcode-0.0.1-linux-x64": "s" } })]
+    const rows = [nightly(), release({ tag: "v0.0.1-beta.2", prerelease: true, mode: "cosign", binaries: { "mendcode-0.0.1-beta.2-linux-x64": "b" } }), release({ tag: "v0.0.0", mode: "cosign", binaries: { "mendcode-0.0.0-linux-x64": "s" } })]
     expect((await runUpgrade(h.request({ check: true }), fakePorts(rows).ports)).latest).toBe(NIGHTLY)
     expect((await runUpgrade(h.request({ check: true, channel: "beta" }), fakePorts(rows).ports)).latest).toBe("v0.0.1-beta.2")
-    expect((await runUpgrade(h.request({ check: true, channel: "stable" }), fakePorts(rows).ports)).latest).toBe("v0.0.1")
+    expect((await runUpgrade(h.request({ check: true, channel: "stable" }), fakePorts(rows).ports)).latest).toBe("v0.0.0")
+    // v0.0.1 itself is newer than its nightlies and betas: every channel takes it.
+    const released = [...rows, release({ tag: "v0.0.1", mode: "cosign", binaries: { "mendcode-0.0.1-linux-x64": "s" } })]
+    for (const channel of ["nightly", "beta", "stable"] as const) expect((await runUpgrade(h.request({ check: true, channel }), fakePorts(released).ports)).latest).toBe("v0.0.1")
   })
 })
 

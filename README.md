@@ -36,8 +36,8 @@ prefer: it is attached to every [release](https://github.com/MendCode/MendCode/r
 | Channel | What it is | Install |
 |---|---|---|
 | `stable` | Tested releases, `vX.Y.Z` | the commands above |
-| `beta` | The next release before it ships, `vX.Y.Z-beta.N` | `... \| sh -s -- --channel beta` |
-| `nightly` | Built from `main` every day it changes, `vX.Y.Z-nightly.YYYYMMDD.RUN` | `... \| sh -s -- --channel nightly` |
+| `beta` | The next release before it ships, `vX.Y.Z-beta.N`; a newer stable when there is one | `... \| sh -s -- --channel beta` |
+| `nightly` | Built from `main` every day it changes, `vX.Y.Z-nightly.YYYYMMDD.RUN`; a newer beta or stable when there is one | `... \| sh -s -- --channel nightly` |
 
 On Windows set `$env:MENDCODE_CHANNEL = 'beta'` (or `nightly`) before the `irm` line. One exact release:
 `MENDCODE_VERSION=v0.0.1 sh install.sh`. A starting tier for the first launch: `--tier minimalist|balanced|full` (default
