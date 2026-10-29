@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { parsePrCommand, replyTo } from "../src/pr-review/commands"
 import type { GhCall } from "../src/pr-review/publish"
-import { answeredBy, answersMarker, mayPublish, reviewedBy } from "../src/pr-review/publishers"
+import { answeredBy, answersMarker, headReviewedBy, mayPublish, reviewedBy } from "../src/pr-review/publishers"
 import { reviewMarker } from "../src/pr-review/state"
 
 const HEAD = "c".repeat(40)
@@ -32,12 +32,27 @@ describe("who may post", () => {
     expect(await at([review("github-actions[bot]", "NONE", HEAD, "Bot")])).toBe("github-actions[bot]")
   })
 
+  test("a submitted review of the head, hand-written or MendCode's, by this login or a publisher answers @mendcode review; another head, a pending or dismissed review or an outsider's does not", async () => {
+    // Seen live, #12: the user's own session posted review 9001 on head 6d33aa87 by hand, without MendCode's marker.
+    const review = (login: string, association: string, extra: Record<string, unknown> = {}) => ({ id: 9001, commit_id: HEAD, state: "COMMENTED", body: "## Summary\nReviewed by hand.", user: { login, type: "User" }, author_association: association, ...extra })
+    const at = (reviews: unknown[]) => headReviewedBy({ gh: answering({ "repos/acme/app/pulls/12/reviews?per_page=100": JSON.stringify(reviews) }), repo: "acme/app", number: 12, head: HEAD, rule: "maintainers", self: "Alice-Dev" })
+    expect(await at([review("alice-dev", "NONE")])).toEqual({ login: "alice-dev", id: 9001 })
+    expect(await at([review("bob", "MEMBER")])).toEqual({ login: "bob", id: 9001 })
+    expect(await at([review("mallory", "NONE")])).toBeUndefined()
+    expect(await at([review("Alice-Dev", "NONE", { commit_id: "d".repeat(40) })])).toBeUndefined()
+    expect(await at([review("Alice-Dev", "NONE", { state: "PENDING" })])).toBeUndefined()
+    expect(await at([review("Alice-Dev", "NONE", { state: "DISMISSED" })])).toBeUndefined()
+    // Unreadable reviews answer nothing: the command runs as before.
+    expect(await headReviewedBy({ gh: answering({}), repo: "acme/app", number: 12, head: HEAD, rule: "maintainers", self: "Alice-Dev" })).toBeUndefined()
+  })
+
   test("a comment another publisher answered is not answered again; every reply carries the comment it answers", async () => {
     const replies = [{ body: `Paused.\n\n<!-- mendcode:reply -->${answersMarker(5)}`, user: { login: "bob" }, author_association: "COLLABORATOR" }]
     const gh = answering({ "repos/acme/app/issues/12/comments?per_page=100": JSON.stringify(replies), "repos/acme/app/pulls/12/comments?per_page=100": "[]" })
     expect(await answeredBy({ gh, repo: "acme/app", number: 12, commentId: 5, rule: "maintainers", self: "ana" })).toBe("bob")
     expect(await answeredBy({ gh, repo: "acme/app", number: 12, commentId: 6, rule: "maintainers", self: "ana" })).toBeUndefined()
-    expect(await answeredBy({ gh, repo: "acme/app", number: 12, commentId: 5, rule: "maintainers", self: "bob" })).toBeUndefined()
+    // Its own earlier reply (before a restart) counts too, so a command is never answered twice.
+    expect(await answeredBy({ gh, repo: "acme/app", number: 12, commentId: 5, rule: "maintainers", self: "bob" })).toBe("bob")
     const posted: string[] = []
     await replyTo({ gh: async ({ stdin }) => { posted.push(JSON.parse(stdin!).body); return { code: 0, out: "{}" } }, repo: "acme/app", number: 12, comment: { id: 9, surface: "issue", actor: "ana", body: "@mendcode pause" }, text: "Paused." })
     expect(posted[0]).toContain(answersMarker(9))

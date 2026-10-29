@@ -36,6 +36,8 @@ export async function runPrReview(input: {
   directory: string
   base: string
   head: string
+  /** Where the base-controlled config is read (`enabled`, `publishers`, ...): the base branch's current tip; else `base`. */
+  policy?: string
   state: ReviewState
   sessionFactory: ReviewSessionFactory
   git?: GitRun
@@ -60,7 +62,7 @@ export async function runPrReview(input: {
   read?: GhCall
 }): Promise<ReviewRun> {
   const git = input.git ?? gitRun
-  const { config, learnings, notes } = await readReviewConfig({ directory: input.directory, base: input.base, head: input.head, git })
+  const { config, learnings, notes } = await readReviewConfig({ directory: input.directory, base: input.policy ?? input.base, head: input.head, git })
   if (!config.enabled && !input.force) return { status: "skipped", reason: ".mendcode/review.yaml on the base branch does not set enabled: true", state: input.state, config, incremental: false }
   if (input.state.paused && !input.full) return { status: "skipped", reason: "reviews are paused on this pull request (@mendcode resume)", state: input.state, config, incremental: false }
   const ancestor = input.state.lastHead ? (await git(["merge-base", "--is-ancestor", input.state.lastHead, input.head], input.directory)).code === 0 : false

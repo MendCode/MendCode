@@ -56,11 +56,33 @@ Engines without these tools (Claude Code, Codex, ACP) still work: the steering t
 
 1. Every session event passes the goals service. `observe` (`packages/daemon/src/goals.ts:447`) defers to a microtask, because observers run inside `sink.append` and appending from one would make client cursors skip events. Registered in `packages/daemon/src/daemon.ts:844`.
 2. `process` (`goals.ts:283`) follows the turn: `turn.started` and the first user item mark the turn as a goal turn (and set `activeSince`), `usage.recorded` adds `input + output` tokens (cache is not counted) and may flip the goal to `budget_limited`, the last agent text is kept for the marker fallback.
-3. On `turn.completed | cancelled | interrupted | failed`, `onTurnEnded` (`goals.ts:249`) adds the turn's wall time, then decides: a `GOAL_STATUS` marker ends the goal; a failed turn with a quota message becomes `usage_limited`; any other failure, a cancel, an interrupt, or two goal turns in a row with no output (no text, no tool call) **stalls** the goal (still `active`, `stalled` says why, no more automatic turns); otherwise `next` (`goals.ts:132`) renders the template.
+3. On `turn.completed | cancelled | interrupted | failed`, `onTurnEnded` (`goals.ts:249`) adds the turn's wall time, then decides: a `GOAL_STATUS` marker ends the goal; a failed turn with a quota message becomes `usage_limited`; any other failure, a cancel, an interrupt, two goal turns in a row with no output (no text, no tool call), three goal turns in a row with no progress, or 100 goal turns in a row without the user **stalls** the goal (still `active`, `stalled` says why, no more automatic turns); otherwise `next` (`goals.ts:132`) renders the template.
 4. `next` calls `options.steer` (`goals.ts:158`, wired at `daemon.ts:840`) which posts to the session actor. `onSteer` (`packages/kernel/src/session-actor.ts:472`) starts the turn only when no turn runs, **nothing is queued** (queued user messages always go first), and the session is not held by a user cancel or an interrupt. Otherwise it returns false and the next turn end tries again.
 5. A steering turn is never queued or stored in the queue; it is emitted as a `user_message` item with `meta { notice: true, goal: <kind> }` whose text is the label, so undo treats it as a system notice.
 
-Stalled goals restart when the user sends a message, or with `/goal resume` (which forces past a cancel's hold). A turn the user starts while the goal is active counts toward it too.
+Stalled goals restart when the user sends a message, or with `/goal resume` (which forces past a cancel's hold). A turn the user starts while the goal is active counts toward it too. Both counts start over after a turn that acted, a user message, `/goal resume`, an edited objective or budget, and a new goal.
+
+### Progress
+
+A goal turn makes progress when one of its tool calls succeeds with a call and a result this goal has not seen before. The fingerprint is the call's label, its input and its result (text or blob), kept for the goal's lifetime (the newest 4,000). So these turns are no progress:
+
+- a turn that only writes text ("no progress, the gate still says STOP");
+- a turn whose tool calls all fail;
+- a turn that repeats a check it already ran and gets the same answer.
+
+Work that reads new files, runs commands with new output, edits, or polls a job whose state moves counts as progress. So does a successful call that reports neither input nor result: the Codex engine sends its file edits and MCP calls with only a title, so a repeat cannot be told from new work there. Three goal turns in a row with no progress stall the goal, and the reason quotes the agent's last message. A loop that changes its calls a little every time, so that each looks new, is stopped by the second bound: 100 automatic goal turns in a row with no message from the user, no resume and no edit. `/goal resume` or a message starts both counts again; the fingerprints stay, so repeating an old check after a resume is still no progress.
+
+These rules exist because a goal once ran 2,029 turns ten seconds apart. The agent kept answering "no progress, the quota gate says STOP" to every continuation, and every 257 turns it re-ran the gate and rewrote its state file. Each turn had text, so the no-output rule never fired. Replayed on that session's events, the progress rule stalls it at the third turn after the first STOP, with no stall during the ten productive turns before it.
+
+How others stop a goal (checked in their sources, 2026-10-29):
+
+- **Codex** (`codex-rs/ext/goal`): it marks the goal blocked after 3 automatic turns with no activity at all, or after 3 turns where command execution failed and no tool succeeded. Text or any tool call counts as activity. Everything else is left to the continuation prompt ("classify the previous turn as progress, a verified wait or no progress"). Codex has no turn cap.
+- **OpenCode 2** (`packages/core/src/plugin/goal.ts`): after every round a reviewer call on the same session returns `done`, `continue`, `blocked`, `paused` or `wait`, and only `done` completes the goal. A round with no tool call, or one whose reviewer reason repeats the previous one word for word, is a stall, and 3 stalls pause the goal. Every goal also pauses after 50 rounds and after 30 minutes idle waiting on background work.
+- **Pi** has no goal feature. Its durable harness only limits turns and restarts per run.
+
+### Usage is not a stop reason
+
+The steering texts say the objective is newer than what the user asked earlier in the session: an earlier stop rule, usage or quota floor or narrower scope gives way to it. They also say the provider's usage is not a reason to stop or work less unless the objective sets a limit; the agent does not check the quota to decide whether to go on. MendCode stops the goal only when a turn actually fails on the account's limit (below). Project instructions, extensions and the system prompt still outrank the objective: a rule there that stops work below some quota (such as an extension's `prompt.system` text or a gate tool) keeps applying until it is removed.
 
 ### Budget
 

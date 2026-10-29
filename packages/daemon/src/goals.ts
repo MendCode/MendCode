@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto"
 import { mkdirSync, rmSync, writeFileSync } from "node:fs"
 import path from "node:path"
 import type { GoalPort } from "@mendcode/engine-native"
@@ -43,6 +44,20 @@ export type GoalsOptions = {
 
 /** Consecutive goal turns with no output (no text, no tool call) after which continuation stops. */
 export const MAX_EMPTY_GOAL_TURNS = 2
+/**
+ * Consecutive goal turns that bring nothing new after which continuation stops. A turn brings something new when one of
+ * its tool calls succeeds with a call and result this goal has not seen before; a turn that only reports why it is not
+ * working, or that repeats a check and gets the same answer, does not. Without this an agent stuck on "no progress, the
+ * gate says STOP" is steered again every few seconds, forever (a goal once ran 2,029 such turns).
+ */
+export const MAX_STALE_GOAL_TURNS = 3
+/**
+ * Automatic goal turns in a row, with no message or resume from the user, after which continuation stops: the bound for
+ * a loop that changes its calls a little every time, so each one looks new. A long run continues with `/goal resume`.
+ */
+export const MAX_UNATTENDED_GOAL_TURNS = 100
+/** Call fingerprints kept per goal; the oldest go first. */
+const MAX_SEEN_CALLS = 4_000
 
 const LABELS: Record<GoalPromptKind, string> = {
   continuation: "goal · continuing",
@@ -61,11 +76,20 @@ type TurnWatch = {
   agentItems: Set<ItemId>
   lastText?: string
   output: boolean
+  /** The tool calls of the turn, by item: the label they started with. */
+  tools: Map<ItemId, string>
+  /** A tool call succeeded with a call and result the goal had not seen. */
+  fresh: boolean
 }
 
 type Runtime = {
   turn?: TurnWatch | undefined
   emptyStreak: number
+  staleStreak: number
+  /** Automatic goal turns since the user last spoke, resumed or set the goal. */
+  unattended: number
+  /** Fingerprints of the successful tool calls (label, input, result) of the current goal. */
+  seen?: { goalId: GoalId; calls: Set<string> } | undefined
   /** A steering is being handed to the session actor: nothing else starts one meanwhile. */
   steering: boolean
   /** The daemon restarted with this goal active: continue when a client opens the session. */
@@ -94,8 +118,26 @@ export function createGoals(options: GoalsOptions) {
 
   const runtime = (sessionId: SessionId): Runtime => {
     let entry = runtimes.get(sessionId)
-    if (!entry) runtimes.set(sessionId, (entry = { emptyStreak: 0, steering: false, resumeOnOpen: false }))
+    if (!entry) runtimes.set(sessionId, (entry = { emptyStreak: 0, staleStreak: 0, unattended: 0, steering: false, resumeOnOpen: false }))
     return entry
+  }
+
+  /** The user (or a fresh goal) restarts the counts of turns that did nothing and of turns run without them. */
+  const resetStreaks = (sessionId: SessionId) => {
+    const state = runtime(sessionId)
+    state.emptyStreak = 0
+    state.staleStreak = 0
+    state.unattended = 0
+  }
+
+  /** Whether a successful tool call is new to the goal, remembering it either way. */
+  function firstSeen(state: Runtime, goalId: GoalId, fingerprint: string) {
+    if (state.seen?.goalId !== goalId) state.seen = { goalId, calls: new Set() }
+    const { calls } = state.seen
+    if (calls.has(fingerprint)) return false
+    if (calls.size >= MAX_SEEN_CALLS) calls.delete(calls.values().next().value!)
+    calls.add(fingerprint)
+    return true
   }
 
   function publish(goal: Goal, change: GoalChange, by?: GoalBy, reason?: string) {
@@ -180,13 +222,16 @@ export function createGoals(options: GoalsOptions) {
   }
 
   function onTurnStarted(sessionId: SessionId, event: Extract<SessionEvent, { type: "turn.started" }>) {
-    runtime(sessionId).turn = { turnId: event.turnId, startedAt: event.at, agentItems: new Set(), output: false }
+    runtime(sessionId).turn = { turnId: event.turnId, startedAt: event.at, agentItems: new Set(), output: false, tools: new Map(), fresh: false }
   }
 
   function onItemStarted(sessionId: SessionId, event: Extract<SessionEvent, { type: "item.started" }>) {
     const turn = runtime(sessionId).turn
     if (!turn || turn.turnId !== event.turnId) return
-    if (event.kind === "tool_call") turn.output = true
+    if (event.kind === "tool_call") {
+      turn.output = true
+      turn.tools.set(event.itemId, typeof event.meta?.tool === "string" ? event.meta.tool : "")
+    }
     if (event.kind === "agent_message") turn.agentItems.add(event.itemId)
     if (event.kind !== "user_message") return
     // The first item of a turn is the message that started it: a steering, a notice, a `!command` or the user's own.
@@ -197,7 +242,7 @@ export function createGoals(options: GoalsOptions) {
     const byUser = !steering && event.meta?.notice !== true && event.meta?.shell !== true
     if (byUser) {
       // The user is back: whatever stopped continuation is over with.
-      runtime(sessionId).emptyStreak = 0
+      resetStreaks(sessionId)
       stored = clearStall(stored)
     }
     const { goal } = stored
@@ -209,8 +254,20 @@ export function createGoals(options: GoalsOptions) {
   }
 
   function onItemCompleted(sessionId: SessionId, event: Extract<SessionEvent, { type: "item.completed" }>) {
-    const turn = runtime(sessionId).turn
-    if (!turn || !turn.agentItems.has(event.itemId) || !event.text?.trim()) return
+    const state = runtime(sessionId)
+    const turn = state.turn
+    if (!turn) return
+    const label = turn.tools.get(event.itemId)
+    if (label !== undefined) {
+      if (event.status !== "ok" || !turn.goalId) return
+      // Some engines report a call with only its title (Codex's file edits and MCP calls): nothing tells a repeat from
+      // new work, so it counts as new and only the unattended bound applies.
+      if (!event.toolInput && !event.text && !event.blob) return void (turn.fresh = true)
+      const fingerprint = createHash("sha256").update(`${label}\0${event.toolInput ?? ""}\0${event.text ?? ""}\0${event.blob?.sha256 ?? ""}`).digest("base64")
+      if (firstSeen(state, turn.goalId, fingerprint)) turn.fresh = true
+      return
+    }
+    if (!turn.agentItems.has(event.itemId) || !event.text?.trim()) return
     turn.lastText = event.text
     turn.output = true
   }
@@ -263,7 +320,11 @@ export function createGoals(options: GoalsOptions) {
         return
       }
     }
-    if (end.kind === "completed" && goalTurn) state.emptyStreak = turn?.output ? 0 : state.emptyStreak + 1
+    if (end.kind === "completed" && goalTurn) {
+      state.emptyStreak = turn?.output ? 0 : state.emptyStreak + 1
+      state.staleStreak = turn?.fresh ? 0 : state.staleStreak + 1
+      state.unattended += 1
+    }
     if (stored.goal.status !== "active") {
       // A budget wrap-up is owed once; every other status waits for the user.
       if (end.kind === "completed") void next(sessionId, { force: false })
@@ -277,6 +338,9 @@ export function createGoals(options: GoalsOptions) {
     if (end.kind === "cancelled") return stall(stored, "the last turn was cancelled")
     if (end.kind === "interrupted") return stall(stored, `the last turn was interrupted (${end.reason})`)
     if (state.emptyStreak >= MAX_EMPTY_GOAL_TURNS) return stall(stored, `the agent produced no output in ${MAX_EMPTY_GOAL_TURNS} goal turns in a row`)
+    const said = turn?.lastText?.trim() ? `; its last message: ${clip(turn.lastText.trim(), 200)}` : ""
+    if (state.staleStreak >= MAX_STALE_GOAL_TURNS) return stall(stored, `no progress in ${MAX_STALE_GOAL_TURNS} goal turns in a row (no tool call that brought a new result)${said}`)
+    if (state.unattended >= MAX_UNATTENDED_GOAL_TURNS) return stall(stored, `${MAX_UNATTENDED_GOAL_TURNS} goal turns in a row without you; /goal resume goes on${said}`)
     void next(sessionId, { force: false })
   }
 
@@ -328,7 +392,7 @@ export function createGoals(options: GoalsOptions) {
     const goalId = ids("goal")
     const saved = storeObjective(goalId, objective)
     const { created, replaced } = store.goals.insert({ goalId, sessionId: input.sessionId, ...saved, ...(input.tokenBudget !== undefined ? { tokenBudget: input.tokenBudget } : {}) })
-    runtime(input.sessionId).emptyStreak = 0
+    resetStreaks(input.sessionId)
     publish(created.goal, "created", input.by, replaced ? "replaced the previous goal" : undefined)
     return { ok: true, goal: created.goal, ...(replaced ? { replaced: replaced.goal } : {}) }
   }
@@ -401,7 +465,7 @@ export function createGoals(options: GoalsOptions) {
       else clearStall(current())
       kick = true
     }
-    if (command.status === "active" || command.objective !== undefined) runtime(sessionId).emptyStreak = 0
+    if (kick) resetStreaks(sessionId)
     // Paused, blocked or usage-limited goals stay as they are after an edit: `next` only continues an active one (or owes a wrap-up).
     if (kick) void next(sessionId, { force: true })
     return { ok: true, result: { goal: current().goal } }
@@ -428,9 +492,8 @@ export function createGoals(options: GoalsOptions) {
         const cleared = store.goals.clear(sessionId)
         if (!cleared) return { ok: true, result: { cleared: false } }
         if (cleared.goal.objectiveFile) rmSync(cleared.goal.objectiveFile, { force: true })
-        const state = runtime(sessionId)
-        state.emptyStreak = 0
-        state.resumeOnOpen = false
+        resetStreaks(sessionId)
+        runtime(sessionId).resumeOnOpen = false
         publish(cleared.goal, "cleared", "user")
         return { ok: true, result: { cleared: true } }
       }

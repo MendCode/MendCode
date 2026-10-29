@@ -2,7 +2,7 @@ import type { Graph } from "@mendcode/codegraph"
 import { GithubContext, type GithubReviewReport } from "@mendcode/protocol"
 import { explainFinding, MAINTAINERS_ONLY, parsePrCommand, pausedFromComments, runPrCommand, type CommandComment } from "./commands"
 import { gitRun, type GitRun } from "./context"
-import { readReviewConfig } from "./config"
+import { mayRequest, readReviewConfig } from "./config"
 import type { ReviewSessionFactory } from "./engine"
 import { findingFromComment, type GhCall } from "./publish"
 import { reviewNotice, runPrReview, type ReviewRun } from "./run"
@@ -122,6 +122,10 @@ export async function hostedReview(input: HostedReviewInput): Promise<GithubRevi
   if (command?.target) return skipped(`the comment is addressed to @${command.target}'s reviewer`, number)
   if (!command) return skipped("the comment holds no @mendcode command", number)
   if (!event.actor) return skipped("the comment event names no actor", number)
+  // `reviewers` as a list on the base branch is the team that may ask; anyone else's comment is not answered at all. A checkout
+  // without the base commit has no list to read, and the command's own write-access check still applies.
+  const policy = await ensureCommits().then(() => readReviewConfig({ directory: input.directory, base, head: base, git })).then(({ config }) => config, () => undefined)
+  if (policy && !mayRequest(policy.reviewers, event.actor)) return skipped(`@${event.actor} is not in reviewers of .mendcode/review.yaml`, number)
   const raw = obj(event.payload.comment)
   const target: CommandComment = {
     id: event.payload.comment!.id, surface: event.eventName === "pull_request_review_comment" ? "review" : "issue", actor: event.actor, body,

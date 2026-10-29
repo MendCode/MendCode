@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import { boundLearnings, DEFAULT_REVIEW_CONFIG, ignoredBy, LEARNINGS_LIMIT, mergeReviewConfigs, parseReviewConfig, promptConfig, readReviewConfig } from "../src/pr-review/config"
+import { boundLearnings, DEFAULT_REVIEW_CONFIG, ignoredBy, LEARNINGS_LIMIT, mayRequest, mergeReviewConfigs, parseReviewConfig, promptConfig, readReviewConfig, requestersOf, reviewRole } from "../src/pr-review/config"
 import { gitRun } from "../src/pr-review/context"
 
 const temps: string[] = []
@@ -52,6 +52,28 @@ describe("review config", () => {
     expect(read.config.enabled).toBe(true)
     expect(read.notes[0]).toContain("the base branch's config used")
   })
+  test("reviewers is all, requested or a list of logins: a list is who may ask, PRs are taken as with all, and it grants nothing else", () => {
+    // Seen live, on master: `reviewers: [Alice-Dev, Bob-Dev, carol-dev]` ("requests limited to the team").
+    const team = parseReviewConfig("enabled: true\nreviewers: [Alice-Dev, Bob-Dev, carol-dev]\npublishers: [Alice-Dev, Bob-Dev]\n")
+    expect(team.problem).toBeUndefined()
+    expect(team.config.reviewers).toEqual(["Alice-Dev", "Bob-Dev", "carol-dev"])
+    expect(team.config.publishers).toEqual(["Alice-Dev", "Bob-Dev"])
+    expect(team.config.enabled).toBe(true)
+    expect(reviewRole(team.config.reviewers)).toBe("all")
+    expect(requestersOf(team.config.reviewers)).toEqual(["Alice-Dev", "Bob-Dev", "carol-dev"])
+    expect(mayRequest(team.config.reviewers, "bob-dev")).toBe(true)
+    expect(mayRequest(team.config.reviewers, "mallory")).toBe(false)
+    for (const role of ["all", "requested"] as const) {
+      const parsed = parseReviewConfig(`reviewers: ${role}\n`)
+      expect(reviewRole(parsed.config.reviewers)).toBe(role)
+      expect(requestersOf(parsed.config.reviewers)).toBeUndefined()
+      expect(mayRequest(parsed.config.reviewers, "mallory")).toBe(true)
+    }
+    // Not a login, or an empty list: invalid, and the defaults are used as for any invalid field.
+    expect(parseReviewConfig("reviewers: [\"not a login\"]\n").problem).toContain("reviewers")
+    expect(parseReviewConfig("reviewers: []\n").problem).toContain("reviewers")
+  })
+
   test("a path instruction reaches the prompt only for diffs that touch its glob; ignore drops paths", () => {
     const { config } = parseReviewConfig("paths:\n  - glob: 'packages/daemon/**'\n    instructions: treat races as major\nignore: ['**/*.generated.json', 'dist/**']\n")
     expect(promptConfig(config, ["packages/daemon/src/daemon.ts"], "").instructions.map((entry) => entry.instructions)).toEqual(["treat races as major"])

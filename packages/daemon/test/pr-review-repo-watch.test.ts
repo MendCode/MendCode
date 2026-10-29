@@ -10,7 +10,7 @@ import type { GhRun } from "../src/pr-watch"
 import { gitRun } from "../src/pr-review/context"
 import type { ReviewSessionFactory } from "../src/pr-review/engine"
 import type { GhCall } from "../src/pr-review/publish"
-import { createRepoWatch, MAX_CONCURRENT_REVIEWS, type RepoWatchJob } from "../src/pr-review/repo-watch"
+import { createRepoWatch, MAX_CONCURRENT_REVIEWS, PUBLISHER_RETRY_MS, type RepoWatchJob } from "../src/pr-review/repo-watch"
 import { createPrReviewService } from "../src/pr-review/service"
 import { createReviewSessions, reviewMessage } from "../src/pr-review/sessions"
 
@@ -168,6 +168,186 @@ describe("repo watch", () => {
   })
 })
 
+describe("kept @mendcode commands", () => {
+  const comment = (id: number, number = 12) => ({ id, body: "@mendcode review", user: "carol", html_url: `https://github.com/acme/app/pull/${number}#issuecomment-${id}` })
+  /** A watch whose command jobs report `outcome()` (blocked or answered), like the service's gates; `hold` keeps each job running. */
+  function keeper({ dir = temp("pr-review-keep-"), now = () => 0, hold = false }: { dir?: string; now?: () => number; hold?: boolean } = {}) {
+    const gh = fakeList()
+    const ran: number[] = []
+    const releases: Array<() => void> = []
+    const state = { publisher: true }
+    const watch = createRepoWatch({
+      dir, run: gh.run, intervalMs: 3_600_000, now, enabled: () => true, sessionExists: () => true, notify: () => undefined,
+      triggers: async () => ({ opened: false, synchronize: false, ready_for_review: false, drafts: false }),
+      start: async (job) => {
+        if (job.kind !== "command") return
+        ran.push(job.comment.id)
+        if (hold) await new Promise<void>((resolve) => releases.push(resolve))
+        // The service's first gate reads the watch's own answer, as commandJob does.
+        if (watch.consentOf(job.directory) !== "allowed") return { blocked: "consent" as const }
+        if (!state.publisher) return { blocked: "publisher" as const }
+        return undefined
+      },
+    })
+    cleanups.push(() => watch.stop())
+    const settled = () => Bun.sleep(5)
+    return { watch, gh, ran, releases, state, settled, allow() { watch.setPublish("/repo", "ses_a", "allowed") } }
+  }
+
+  test("a comment refused for a missing /pr publish on is kept, not tried every poll, and answered once after /pr publish on", async () => {
+    const k = keeper()
+    k.gh.state.prs = [{ number: 12, headRefOid: sha(12) }]
+    await k.watch.watchRepo("ses_a", "/repo")
+    k.gh.state.comments = [comment(1)]
+    await k.watch.tick()
+    await k.settled()
+    expect(k.ran).toEqual([1])
+    expect(k.watch.commands("/repo")).toEqual([{ id: 1, number: 12, blocked: "consent" }])
+    await k.watch.tick()
+    await k.settled()
+    expect(k.ran).toEqual([1])
+    k.allow()
+    await k.settled()
+    expect(k.ran).toEqual([1, 1])
+    expect(k.watch.commands("/repo")).toEqual([])
+    await k.watch.tick()
+    await k.settled()
+    expect(k.ran).toEqual([1, 1])
+  })
+
+  test("/pr publish on and a poll at the same moment run a kept command once; a command whose job still runs is not queued again", async () => {
+    const k = keeper({ hold: true })
+    k.gh.state.prs = [{ number: 12, headRefOid: sha(12) }]
+    await k.watch.watchRepo("ses_a", "/repo")
+    k.gh.state.comments = [comment(1)]
+    await k.watch.tick()
+    k.releases.shift()!()
+    await k.settled()
+    expect(k.watch.commands("/repo")).toEqual([{ id: 1, number: 12, blocked: "consent" }])
+    k.allow()
+    await k.watch.tick()
+    await k.watch.tick()
+    await k.settled()
+    expect(k.ran).toEqual([1, 1])
+    k.releases.shift()!()
+    await k.settled()
+    expect(k.watch.commands("/repo")).toEqual([])
+    expect(k.ran).toEqual([1, 1])
+  })
+
+  test("kept commands survive a daemon restart: blocked ones wait for consent, one whose job never ended runs again", async () => {
+    const dir = temp("pr-review-keep-")
+    const before = keeper({ dir, hold: true })
+    before.gh.state.prs = [{ number: 12, headRefOid: sha(12) }, { number: 15, headRefOid: sha(15) }]
+    await before.watch.watchRepo("ses_a", "/repo")
+    before.gh.state.comments = [comment(1, 12), comment(2, 15)]
+    await before.watch.tick()
+    before.releases.shift()!()
+    await before.settled()
+    // #12's job ended blocked; #15's still runs when the daemon stops.
+    expect(before.watch.commands("/repo")).toEqual([{ id: 1, number: 12, blocked: "consent" }, { id: 2, number: 15, blocked: undefined }])
+    before.watch.stop()
+    const after = keeper({ dir })
+    after.gh.state.prs = before.gh.state.prs
+    await after.watch.tick()
+    await after.settled()
+    expect(after.ran).toEqual([2])
+    expect(after.watch.commands("/repo")).toEqual([{ id: 1, number: 12, blocked: "consent" }, { id: 2, number: 15, blocked: "consent" }])
+    after.allow()
+    await after.settled()
+    expect(after.ran).toEqual([2, 1, 2])
+    expect(after.watch.commands("/repo")).toEqual([])
+  })
+
+  test("a command the repository does not let this login answer is tried again every PUBLISHER_RETRY_MS, not every poll; a closed PR drops it", async () => {
+    let clock = 1_000
+    const k = keeper({ now: () => clock })
+    k.gh.state.prs = [{ number: 12, headRefOid: sha(12) }]
+    await k.watch.watchRepo("ses_a", "/repo")
+    k.state.publisher = false
+    k.allow()
+    k.gh.state.comments = [comment(1)]
+    await k.watch.tick()
+    await k.settled()
+    expect(k.watch.commands("/repo")).toEqual([{ id: 1, number: 12, blocked: "publisher" }])
+    clock += PUBLISHER_RETRY_MS - 1
+    await k.watch.tick()
+    await k.settled()
+    expect(k.ran).toEqual([1])
+    clock += 1
+    await k.watch.tick()
+    await k.settled()
+    expect(k.ran).toEqual([1, 1])
+    k.gh.state.prs = []
+    await k.watch.tick()
+    expect(k.watch.commands("/repo")).toEqual([])
+  })
+
+  test("a watch saved before commands were kept, that never posted, reads its comments again so the ones it dropped are kept", async () => {
+    // Seen live: `@mendcode review` on #12 and #15 was marked read and dropped because /pr publish on was never typed.
+    const dir = temp("pr-review-keep-")
+    mkdirSync(path.join(dir, "pr-review"), { recursive: true })
+    const old = (publish?: "allowed") => ({ directory: "/repo", sessionId: "ses_a", createdAt: 0, seen: { "12": { head: sha(12), draft: false } }, commentsSince: "2026-10-29T05:10:00.000Z", answered: [1], ...(publish ? { publish } : {}) })
+    writeFileSync(path.join(dir, "pr-review", "watches.json"), JSON.stringify({ version: 1, watches: [old()] }))
+    const k = keeper({ dir })
+    k.gh.state.prs = [{ number: 12, headRefOid: sha(12) }]
+    k.gh.state.comments = [comment(1)]
+    await k.watch.tick()
+    await k.settled()
+    expect(k.ran).toEqual([1])
+    expect(k.watch.commands("/repo")).toEqual([{ id: 1, number: 12, blocked: "consent" }])
+    // One that may have posted keeps its marks: an answered command never runs twice.
+    k.watch.stop()
+    writeFileSync(path.join(dir, "pr-review", "watches.json"), JSON.stringify({ version: 1, watches: [old("allowed")] }))
+    const posted = keeper({ dir })
+    posted.gh.state.prs = k.gh.state.prs
+    posted.gh.state.comments = [comment(1)]
+    await posted.watch.tick()
+    await posted.settled()
+    expect(posted.ran).toEqual([])
+  })
+
+  test("a stopped watch saved before the running one of the same directory: /pr publish on reaches the running watch and its kept commands run", async () => {
+    // Seen live: /pr publish on wrote `allowed` to the first record of the directory, a watch stopped earlier; the running
+    // one kept `publish` unset and its three kept requests waited on consent for good.
+    const k = keeper()
+    k.gh.state.prs = [{ number: 12, headRefOid: sha(12) }]
+    await k.watch.watchRepo("ses_a", "/repo")
+    k.watch.unwatchRepo("/repo")
+    await k.watch.watchRepo("ses_a", "/repo", "all")
+    k.gh.state.comments = [comment(1)]
+    await k.watch.tick()
+    await k.settled()
+    expect(k.watch.commands("/repo")).toEqual([{ id: 1, number: 12, blocked: "consent" }])
+    expect(k.watch.rows().map((row) => row.state)).toEqual(["ended (stopped)", "watching"])
+    k.allow()
+    await k.settled()
+    expect(k.ran).toEqual([1, 1])
+    expect(k.watch.commands("/repo")).toEqual([])
+    expect(k.watch.consentOf("/repo")).toBe("allowed")
+    expect(k.watch.rows().map((row) => row.publish)).toEqual(["allowed", "allowed"])
+    // Both records stay: the stopped one is history.
+    expect(k.watch.rows()).toHaveLength(2)
+  })
+
+  test("a file whose answer sits on the stopped record gives it to the running watch at load: pending commands run, nothing is dropped", async () => {
+    const dir = temp("pr-review-keep-")
+    mkdirSync(path.join(dir, "pr-review"), { recursive: true })
+    const stopped = { directory: "/repo", sessionId: "ses_a", createdAt: 0, seen: {}, ended: { at: 1, reason: "stopped" }, publish: "allowed", commands: [] }
+    const running = { directory: "/repo", sessionId: "ses_a", createdAt: 2, seen: { "12": { head: sha(12), draft: false }, "15": { head: sha(15), draft: false } }, role: "all", commentsSince: "2026-10-29T15:23:19.253Z", answered: [1, 2], commands: [{ comment: { id: 1, surface: "issue", actor: "carol", body: "@mendcode review" }, number: 12, blocked: "consent", triedAt: 1 }, { comment: { id: 2, surface: "issue", actor: "carol", body: "@mendcode review" }, number: 15, blocked: "consent", triedAt: 1 }] }
+    writeFileSync(path.join(dir, "pr-review", "watches.json"), JSON.stringify({ version: 1, watches: [stopped, running] }))
+    const k = keeper({ dir })
+    expect(k.watch.consentOf("/repo")).toBe("allowed")
+    expect(k.watch.rows().map((row) => row.publish)).toEqual(["allowed", "allowed"])
+    k.gh.state.prs = [{ number: 12, headRefOid: sha(12) }, { number: 15, headRefOid: sha(15) }]
+    await k.watch.tick()
+    await k.settled()
+    expect(k.ran).toEqual([1, 2])
+    expect(k.watch.commands("/repo")).toEqual([])
+    expect(k.watch.rows()).toHaveLength(2)
+  })
+})
+
 describe("PR review service", () => {
   /** A repository whose origin holds `refs/pull/12/head` and a base config with `enabled: true`. */
   async function repository() {
@@ -301,6 +481,32 @@ describe("daemon", () => {
     const off = await client.send({ type: "pr.review", sessionId, action: "watch-repo" })
     expect(off.ok).toBe(false)
     expect(!off.ok && off.error.message).toContain("/experimental pr_review on")
+  })
+
+  test("a review notice that arrives while the session runs a turn is shown after the turn, not dropped; the queue and the turn are untouched", async () => {
+    const dir = temp("mendd-prreview-")
+    const daemon = await startDaemon({ dir, socketPath: path.join(dir, "mendd.sock"), prReview: { run: async () => ({ code: 1, out: "", err: "no gh in tests" }), intervalMs: 3_600_000 }, engine: ({ clock }) => createFauxEngine({ clock, deltaMs: 40 }) })
+    cleanups.push(() => daemon.stop())
+    const client = createClient({ socketPath: daemon.socketPath, name: "prreview" })
+    await client.connect()
+    cleanups.push(() => client.close())
+    const created = await client.send({ type: "session.create", directory: dir, title: "t" })
+    const sessionId = (created.ok ? created.result?.sessionId : undefined) as SessionId
+    await client.subscribe(sessionId, 0)
+    await client.send({ type: "settings.set", patch: { tier: "balanced", experimental: { pr_review: true } } })
+    const events = () => daemon.store.readAfter(sessionId, 0, 10_000)
+    const until = async (check: () => boolean) => { for (let i = 0; i < 300 && !check(); i++) await Bun.sleep(20); expect(check()).toBe(true) }
+    expect((await client.send({ type: "user.submit", sessionId, text: "work on it", attachments: [] })).ok).toBe(true)
+    await until(() => events().some((event) => event.type === "turn.started"))
+    // The review fails at once (no gh), so its notice comes while the turn still runs.
+    expect(await client.send({ type: "pr.review", sessionId, action: "review", pr: "12" })).toMatchObject({ ok: true })
+    const notice = () => events().find((event) => event.type === "queue.added" && event.notice && event.text.includes("PR review of #12 failed"))
+    await until(() => notice() !== undefined)
+    const ended = events().find((event) => event.type === "turn.completed")
+    expect(ended).toBeDefined()
+    // The user's turn finished untouched before the notice joined the queue.
+    expect(notice()!.seq).toBeGreaterThan(ended!.seq)
+    expect(events().filter((event) => event.type === "turn.cancelled" || event.type === "turn.interrupted")).toHaveLength(0)
   })
 })
 
