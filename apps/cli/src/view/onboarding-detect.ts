@@ -21,7 +21,12 @@ export type DetectInput = {
   imports?: DetectImport | undefined
   /** The model already chosen as `main`, when there is one. */
   selected?: string | undefined
+  /** `daemon.info.harnesses`: Claude Code and Codex as their own status commands report them. Absent from an older daemon. */
+  harnesses?: readonly DetectHarness[] | undefined
+  /** `daemon.info.ownLogins`: MendCode signs in for itself and uses no other tool's login. */
+  ownLogins?: boolean | undefined
 }
+export type DetectHarness = { id: "claude" | "codex"; installed: boolean; signedIn?: boolean | undefined; plan?: string | undefined; profile?: "mendcode" | "default" | undefined; login?: string | undefined }
 
 export type ReadyItem = {
   id: "chatgpt" | "claude" | "codex" | "pi" | "keys"
@@ -68,10 +73,11 @@ export type Detected = {
 }
 
 const TOOL_NAME: Record<string, string> = { "claude-code": "Claude Code", codex: "Codex" }
+/** Who runs the model and whose login pays, so a Claude model in Claude Code is never mistaken for one behind an API key. */
 const LINES: Record<ModelSource, string> = {
-  chatgpt: "your ChatGPT subscription · no per-token charge",
-  claude: "your Claude Code login · no per-token charge",
-  codex: "your Codex login · no per-token charge",
+  chatgpt: "MendCode's own engine · your ChatGPT subscription · no per-token charge",
+  claude: "runs in Claude Code, hosted by MendCode · your Claude login · no per-token charge",
+  codex: "runs in Codex · your Codex login · no per-token charge",
   pi: "your own pi install · billed by whatever pi uses",
   api: "your API key · billed per token",
 }
@@ -91,19 +97,17 @@ export function detectReady(input: DetectInput): Detected {
   const keyed = input.providers.filter((provider) => provider.enabled && provider.hasKey && provider.authReady !== false)
   const loggedIn = input.login?.ok !== false
   const native = bySource.get("chatgpt") ?? []
+  const claude = input.harnesses?.find((harness) => harness.id === "claude")
+  const codex = input.harnesses?.find((harness) => harness.id === "codex")
 
   const items: ReadyItem[] = [
     native.length || input.login
       ? loggedIn && native.length
         ? { id: "chatgpt", label: "ChatGPT login", ok: true, detail: "signed in" }
-        : { id: "chatgpt", label: "ChatGPT login", ok: false, detail: "not signed in", fix: "/connect" }
+        : { id: "chatgpt", label: "ChatGPT login", ok: false, detail: input.ownLogins ? "not signed in for MendCode" : "not signed in", fix: "/connect chatgpt" }
       : { id: "chatgpt", label: "ChatGPT login", ok: false, detail: "not used by this engine" },
-    bySource.has("claude")
-      ? { id: "claude", label: "Claude Code", ok: true, detail: "installed, signed in" }
-      : { id: "claude", label: "Claude Code", ok: false, detail: "not found", fix: "claude auth login" },
-    bySource.has("codex")
-      ? { id: "codex", label: "Codex CLI", ok: true, detail: "found" }
-      : { id: "codex", label: "Codex CLI", ok: false, detail: "not found", fix: "codex login" },
+    claudeItem(claude, bySource.has("claude")),
+    codexItem(codex, bySource.has("codex"), input.ownLogins === true),
     bySource.has("pi")
       ? { id: "pi", label: "pi", ok: true, detail: "found" }
       : { id: "pi", label: "pi", ok: false, detail: "not found" },
@@ -114,7 +118,7 @@ export function detectReady(input: DetectInput): Detected {
   const options: ModelOption[] = []
   if (input.selectable) {
     const usableNative = loggedIn ? native : []
-    const picks: Record<ModelSource, DetectModel[]> = { chatgpt: usableNative.slice(0, 2), claude: (bySource.get("claude") ?? []).slice(0, 2), codex: (bySource.get("codex") ?? []).slice(0, 1), pi: (bySource.get("pi") ?? []).slice(0, 1), api: apiPicks(bySource.get("api") ?? [], keyed) }
+    const picks: Record<ModelSource, DetectModel[]> = { chatgpt: usableNative.slice(0, 2), claude: claude?.signedIn === false || claude?.installed === false ? [] : (bySource.get("claude") ?? []).slice(0, 2), codex: input.ownLogins ? [] : (bySource.get("codex") ?? []).slice(0, 1), pi: (bySource.get("pi") ?? []).slice(0, 1), api: apiPicks(bySource.get("api") ?? [], keyed) }
     for (const source of ORDER) for (const model of picks[source]) options.push({ id: model.id, label: modelListLabel(model.id, input), source, recommended: false, current: model.id === input.selected, line: LINES[source] })
   }
   const first = options[0]
@@ -132,6 +136,32 @@ export function detectReady(input: DetectInput): Detected {
 
   return { items, options: marked, ...(recommended ? { recommended } : {}), usable: marked.length > 0 || !input.selectable, ...(importRow ? { importRow } : {}) }
 }
+
+/**
+ * Claude Code as `claude auth status` reports it: installed, signed in, and the plan only when it says so. Without the daemon's
+ * report (an older daemon) a catalog that has Claude Code models says only that it is installed, never that it is signed in.
+ */
+function claudeItem(harness: DetectHarness | undefined, listed: boolean): ReadyItem {
+  const label = "Claude Code"
+  const own = harness?.profile === "mendcode" ? " · MendCode's own profile" : ""
+  if (!harness) return listed ? { id: "claude", label, ok: true, detail: "installed · sign-in not checked" } : { id: "claude", label, ok: false, detail: "not found", fix: CLAUDE_INSTALL }
+  if (!harness.installed) return { id: "claude", label, ok: false, detail: "not installed", fix: CLAUDE_INSTALL }
+  if (harness.signedIn === false) return { id: "claude", label, ok: false, detail: `installed · not signed in${own}`, fix: harness.login ?? "claude auth login" }
+  if (harness.signedIn === undefined) return { id: "claude", label, ok: true, detail: `installed · sign-in not confirmed${own}` }
+  return { id: "claude", label, ok: true, detail: `signed in · ${harness.plan ? `${harness.plan} plan` : "plan not reported"}${own}` }
+}
+
+/** The Codex CLI: with `ownLogins` it is only reported, since MendCode signs in to ChatGPT for itself (`/connect chatgpt`). */
+function codexItem(harness: DetectHarness | undefined, listed: boolean, ownLogins: boolean): ReadyItem {
+  const label = "Codex CLI"
+  if (!harness) return listed ? { id: "codex", label, ok: true, detail: "found" } : { id: "codex", label, ok: false, detail: "not found", fix: "codex login" }
+  if (!harness.installed) return { id: "codex", label, ok: false, detail: "not installed" }
+  // A note, not a fix: the ChatGPT row already says how MendCode signs in.
+  if (ownLogins) return { id: "codex", label, ok: false, detail: `${harness.signedIn ? "signed in" : "installed"} · its login is not used` }
+  return harness.signedIn ? { id: "codex", label, ok: true, detail: "installed · signed in" } : { id: "codex", label, ok: false, detail: "installed · not signed in", fix: harness.login ?? "codex login" }
+}
+/** Not installed: where to get it (signing in comes after, and the page says how once it is there). */
+const CLAUDE_INSTALL = "claude.com/claude-code"
 
 function importChoice(item: DetectImportItem & { name: string; kind: "mcp" | "command" }): ImportChoice {
   const tool: ImportChoice["tool"] = item.tool === "codex" ? "codex" : "claude-code"

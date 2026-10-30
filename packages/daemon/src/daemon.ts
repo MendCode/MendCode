@@ -466,7 +466,7 @@ export type DaemonOptions = RemoteListenerOptions & {
   setupTimeoutMs?: number
   setupComplete?(input: { system: string; prompt: string; signal: AbortSignal; model?: ModelChoice; onText?(text: string): void }): Promise<{ text: string; usage?: BudgetUsage | undefined }>
   /** Reported by `daemon.info`. `login` checks the subscription login (never returns the token). */
-  info?: { engine: string; model?: string; effort?: string; login?(): Promise<{ ok: boolean; message?: string }> }
+  info?: { engine: string; model?: string; effort?: string; login?(): Promise<{ ok: boolean; message?: string }>; harnesses?(): Promise<import("./harness-status").HarnessStatus[]> }
   /** Models `/model` can pick from; without it the engine picks its own and choices are refused. */
   models?: ModelCatalog
   /** Local host fakes for compound acceptance tests; production uses isolated git worktrees. */
@@ -4246,7 +4246,7 @@ export async function startDaemon(options: DaemonOptions) {
         if ("worktreeGcDays" in command.patch && (connection.remoteAddress || connection.peer)) return reply(connection, command.id, { ok: false, code: "forbidden", message: "[DAEMON]: worktree cleanup is set on the machine that holds the worktrees" })
         if (connection.remoteAddress && REMOTE_HOST_SETTINGS.some((key) => key in command.patch)) return reply(connection, command.id, { ok: false, code: "forbidden", message: "[DAEMON]: proxy, shell and web policy are set on the machine that runs the commands" })
         if ((connection.remoteAddress || connection.peer) && remoteExecutionSettings(command.patch)) return reply(connection, command.id, { ok: false, code: "forbidden", message: "[DAEMON]: execution policy and feature switches are set on the machine that runs the commands" })
-        if (connection.remoteAddress && ["sandbox", "trustedToolDirs", "allowedHttpHookUrls", "permission", "permissionAllow", "smartSandboxTrust", "engineSafetyPrompts", "engineEnvironment", "projectConfig"].some((key) => key in command.patch)) return reply(connection, command.id, { ok: false, code: "forbidden", message: "[DAEMON]: sandbox, trust and saved permission rules are set on the machine that runs the commands" })
+        if (connection.remoteAddress && ["sandbox", "trustedToolDirs", "allowedHttpHookUrls", "permission", "permissionAllow", "smartSandboxTrust", "engineSafetyPrompts", "engineEnvironment", "ownLogins", "projectConfig"].some((key) => key in command.patch)) return reply(connection, command.id, { ok: false, code: "forbidden", message: "[DAEMON]: sandbox, trust and saved permission rules are set on the machine that runs the commands" })
         let settings: Settings
         const before = store.settings.get()
         try {
@@ -5348,7 +5348,12 @@ export async function startDaemon(options: DaemonOptions) {
       }
       case "daemon.info": {
         const info = options.info
-        const login = info?.login ? await info.login().catch((error: unknown) => ({ ok: false, message: error instanceof Error ? error.message : String(error) })) : undefined
+        const [login, harnesses] = await Promise.all([
+          info?.login ? info.login().catch((error: unknown) => ({ ok: false, message: error instanceof Error ? error.message : String(error) })) : undefined,
+          // Run on this machine: a remote terminal is told nothing about the host's other tools.
+          info?.harnesses && !connection.remoteAddress ? info.harnesses().catch(() => undefined) : undefined,
+        ])
+        const ownLogins = store.settings.get().ownLogins === true
         return reply(connection, command.id, {
           ok: true,
           result: {
@@ -5361,6 +5366,8 @@ export async function startDaemon(options: DaemonOptions) {
             pid: process.pid,
             ...(options.buildId ? { buildId: options.buildId } : {}),
             ...(login ? { login: { ok: login.ok, ...(login.message ? { message: login.message.slice(0, 300) } : {}) } } : {}),
+            ...(harnesses?.length ? { harnesses } : {}),
+            ...(ownLogins ? { ownLogins: true } : {}),
             // Only when the user listed a provider: the `usage` card's live lines show it. Absent means off and nothing was ever sent.
             ...(quotaRefresh.status().length ? { quotaRefresh: quotaRefresh.status() } : {}),
           },

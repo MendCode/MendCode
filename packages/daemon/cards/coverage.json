@@ -13,7 +13,7 @@
     "compaction": "feature:claude_compact feature:snip flag:auto_recall feature:limit_checkpoint feature:idle_compact feature:compact_notice flag:snip command:compact command:context command:files command:context-window command:compaction group:Compaction setting:compactAtTokens setting:idleCompactAtTokens setting:compactNoticePercent setting:cacheLifetimeMinutes setting:handoffTokenCap setting:promptCache setting:compaction setting:cache setting:cacheProjects tool:snip",
     "computer": "feature:computer feature:browser tool:browser tool:computer_capture tool:computer_code tool:computer_key tool:computer_observe tool:computer_session tool:screenshot",
     "customize": "command:view command:customize group:Views group:Home group:Terminal tool:customize_ui file:journal.json file:pending.json file:report.json",
-    "engines": "feature:pi feature:thread_mcp feature:acp_registry command:acp setting:acpAgents setting:threadMcp file:acp-agents.json file:acp-models.json file:pi.json",
+    "engines": "feature:pi feature:thread_mcp feature:acp_registry command:acp setting:acpAgents setting:threadMcp setting:ownLogins file:acp-agents.json file:acp-models.json file:pi.json",
     "extensions": "feature:extensions command:extensions group:Extensions tool:sidebar",
     "extend": "tool:mendcode_extend",
     "footer": "feature:forecast command:footer setting:footer",

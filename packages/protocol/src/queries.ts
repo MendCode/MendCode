@@ -463,6 +463,12 @@ const SharedSettings = lazySchema(() => z.strictObject({
   engineSafetyPrompts: z.boolean().optional(),
   /** The session's `/env` credentials also go to Claude Code, Codex, pi and ACP agents (their process environment, and the names to their model). Unset or `true`: they do. `false`: only the native engine gets them. Local clients only. */
   engineEnvironment: z.boolean().optional(),
+  /**
+   * MendCode signs in for itself (docs/setup.md#own-logins): ChatGPT only through `/connect chatgpt`, never the Codex CLI's login
+   * file, and Claude Code with MendCode's own profile (`CLAUDE_CONFIG_DIR=<data dir>/claude-code`, its own `claude auth login`), not
+   * `~/.claude`. The first setup of a new install writes `true`; unset, an install set up before keeps both as they were.
+   */
+  ownLogins: z.boolean().optional(),
   /** URL patterns (`*` spans any characters) that `http` hooks in `hooks.json` may POST to. Unset or empty: http hooks never run. */
   allowedHttpHookUrls: z.array(z.string().min(1).max(500)).max(50).optional(),
   /** Native engine compacts after a turn whose context reached this many tokens. */
@@ -712,6 +718,21 @@ export const DaemonInfoReport = lazySchema(() => z.strictObject({
   safeMode: z.boolean().optional(),
   /** Subscription login check; absent for engines that do not use one. `message` explains a failure. */
   login: z.strictObject({ ok: z.boolean(), message: z.string().optional() }).optional(),
+  /**
+   * Claude Code and Codex as their own status commands report them (docs/setup.md#own-logins): installed, signed in, and the plan
+   * only when the tool says it. Never an email, organization or token. `login` is the official command that signs one in for MendCode.
+   */
+  harnesses: z.array(z.strictObject({
+    id: z.enum(["claude", "codex"]),
+    installed: z.boolean(),
+    signedIn: z.boolean().optional(),
+    method: z.string().max(30).optional(),
+    plan: z.string().max(30).optional(),
+    profile: z.enum(["mendcode", "default"]).optional(),
+    login: z.string().max(300).optional(),
+  })).max(4).optional(),
+  /** The `ownLogins` setting in force: MendCode signs in for itself and uses no other tool's login. */
+  ownLogins: z.boolean().optional(),
   /** The quota refresh probe per listed provider (docs/usage-limit.md); absent when the user listed none. */
   quotaRefresh: z.array(z.strictObject({
     provider: z.enum(["codex", "claude"]),

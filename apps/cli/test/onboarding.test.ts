@@ -25,8 +25,32 @@ describe("detection to recommended model", () => {
     expect(found.recommended).toBeUndefined()
     expect(found.usable).toBe(false)
     expect(found.items.filter((item) => item.ok)).toEqual([])
-    expect(found.items.find((item) => item.id === "claude")?.fix).toBe("claude auth login")
+    // Not installed: where to get Claude Code, not a sign-in command for a program that is not there.
+    expect(found.items.find((item) => item.id === "claude")?.fix).toBe("claude.com/claude-code")
     expect(found.items.find((item) => item.id === "keys")?.fix).toContain("ANTHROPIC_API_KEY")
+  })
+  test("Claude Code as its own status reports it: installed is not signed in, and a plan is shown only when it says one", () => {
+    const harness = (claude: NonNullable<DetectInput["harnesses"]>[number]) => detect({ claude: true }, { harnesses: [claude] })
+    // Before, `claude --version` answering was shown as "installed, signed in" and its models offered.
+    const out = harness({ id: "claude", installed: true, signedIn: false, profile: "mendcode", login: "mendcode claude login" })
+    expect(out.items.find((item) => item.id === "claude")).toMatchObject({ ok: false, detail: "installed · not signed in · MendCode's own profile", fix: "mendcode claude login" })
+    expect(out.options.filter((option) => option.source === "claude")).toEqual([])
+    expect(out.usable).toBe(false)
+    const max = harness({ id: "claude", installed: true, signedIn: true, plan: "max", profile: "default" })
+    expect(max.items.find((item) => item.id === "claude")).toMatchObject({ ok: true, detail: "signed in · max plan" })
+    expect(max.options[0]).toMatchObject({ source: "claude", line: expect.stringContaining("runs in Claude Code, hosted by MendCode") })
+    expect(harness({ id: "claude", installed: true, signedIn: true }).items.find((item) => item.id === "claude")?.detail).toBe("signed in · plan not reported")
+    expect(harness({ id: "claude", installed: true }).items.find((item) => item.id === "claude")?.detail).toBe("installed · sign-in not confirmed")
+    // Without the daemon's report (an older daemon) a listed Claude Code is never called signed in.
+    expect(detect({ claude: true }).items.find((item) => item.id === "claude")?.detail).toBe("installed · sign-in not checked")
+  })
+  test("ownLogins: a signed-in Codex CLI is only reported, its models are not offered, and ChatGPT asks for MendCode's own login", () => {
+    const found = detect({ codex: true }, { ownLogins: true, login: { ok: false, message: "sign in" }, harnesses: [{ id: "codex", installed: true, signedIn: true }] })
+    expect(found.items.find((item) => item.id === "codex")).toEqual({ id: "codex", label: "Codex CLI", ok: false, detail: "signed in · its login is not used" })
+    expect(found.items.find((item) => item.id === "chatgpt")).toMatchObject({ ok: false, detail: "not signed in for MendCode", fix: "/connect chatgpt" })
+    expect(found.options).toEqual([])
+    const before = detect({ codex: true }, { harnesses: [{ id: "codex", installed: true, signedIn: true }] })
+    expect(before.options.map((option) => option.source)).toEqual(["codex"])
   })
   test("only an API key: that provider's model is recommended and billed per token", () => {
     const found = detect({ keys: ["anthropic"] })
@@ -51,7 +75,7 @@ describe("detection to recommended model", () => {
   test("a signed-out ChatGPT login is not offered and Claude Code takes over", () => {
     const found = detect({ chatgpt: true, claude: true }, { login: { ok: false } })
     expect(found.options.every((option) => option.source === "claude")).toBe(true)
-    expect(found.items.find((item) => item.id === "chatgpt")).toMatchObject({ ok: false, fix: "/connect" })
+    expect(found.items.find((item) => item.id === "chatgpt")).toMatchObject({ ok: false, fix: "/connect chatgpt" })
   })
   test("a model already chosen stays the recommendation", () => {
     const found = detect({ chatgpt: true, claude: true }, { selected: "claude-opus" })
@@ -440,12 +464,48 @@ describe("the wizard in the app", () => {
     let claude = false
     const h = onboardingHarness({}, { reply: (command) => (command.type === "models.list" && claude ? { ok: true, result: { engine: "native", selectable: true, models: modelsFor({ claude: true }), defaults: { model: "claude-sonnet" }, roles: {} } } as never : undefined) })
     await h.app.openSetupIfFirstRun({})
-    expect(h.text().join("\n")).toContain("claude auth login")
+    expect(h.text().join("\n")).toContain("claude.com/claude-code")
     claude = true
     await h.app.onKey("r")
     await Bun.sleep(5)
     h.app.render()
     expect(h.text().join("\n")).toContain("Sonnet")
+  })
+  test("nothing usable: esc or enter does not end the first run, so the next launch opens setup again instead of a chat no model answers", async () => {
+    for (const key of ["\x1b", "\r"]) {
+      const h = onboardingHarness({})
+      await h.app.openSetupIfFirstRun({})
+      await h.app.onKey(key)
+      await Bun.sleep(5)
+      expect(writes(h).filter((patch) => "onboarded" in patch)).toEqual([])
+      h.app.render()
+      expect(h.text().join("\n")).toContain("no model is set up yet · this setup opens again next")
+    }
+  })
+  test("the minimalist preset with nothing found opens the page instead of configuring a prompt with no model", async () => {
+    const h = onboardingHarness({})
+    await h.app.openSetupIfFirstRun({}, "minimalist")
+    await Bun.sleep(5)
+    expect(h.app.page).toBe("setup")
+    expect(writes(h).filter((patch) => "onboarded" in patch)).toEqual([])
+  })
+  test("a new install signs in for itself (ownLogins); an install with a used session or a chosen model keeps its logins", async () => {
+    const sessions = (count: number) => (command: { type: string }) => command.type === "session.list" ? { ok: true, result: { sessions: Array.from({ length: count }, (_, i) => ({ id: `ses_${i}` })) } } as never : undefined
+    const fresh = onboardingHarness({ claude: true }, { reply: sessions(0) })
+    await fresh.app.openSetupIfFirstRun({})
+    expect(writes(fresh)[0]).toEqual({ ownLogins: true })
+    expect(fresh.sentOf("session.list")[0]).toMatchObject({ hideEmpty: true })
+    const used = onboardingHarness({ claude: true }, { reply: sessions(1) })
+    await used.app.openSetupIfFirstRun({})
+    expect(writes(used).some((patch) => "ownLogins" in patch)).toBe(false)
+    const chosen = onboardingHarness({ claude: true }, { reply: sessions(0) })
+    await chosen.app.openSetupIfFirstRun({ models: { main: { model: "claude-opus" } } })
+    expect(writes(chosen).some((patch) => "ownLogins" in patch)).toBe(false)
+    // An upgrade: setup already done, nothing runs at all.
+    const done = onboardingHarness({ claude: true }, { reply: sessions(0) })
+    await done.app.openSetupIfFirstRun({ onboarded: true })
+    expect(done.sentOf("session.list")).toEqual([])
+    expect(writes(done)).toEqual([])
   })
   const applied = (h: ReturnType<typeof onboardingHarness>) => h.sentOf("setup.import").filter((c) => (c as unknown as { apply?: boolean }).apply)
   const keys = async (h: ReturnType<typeof onboardingHarness>, ...list: string[]) => { for (const k of list) await h.app.onKey(k); await Bun.sleep(5); h.app.render() }

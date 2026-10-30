@@ -36,22 +36,21 @@ describe("the installer's preset on the first launch", () => {
       expect([model, patches(h).at(-1)]).toEqual([model, { onboarded: true, models: { main: { model } } }])
     }
   })
-  test("a provider found says nothing; nothing found says one line how to add one and still records the first launch", async () => {
+  test("a provider found goes straight to the prompt; nothing found opens the setup page with the minimalist tier and records no first launch", async () => {
     const found = await launch({ keys: ["anthropic"] }, {}, "minimalist")
-    expect(screen(found)).not.toContain("no model found")
+    expect(found.app.page).toBe("chat")
+    // Before, it went to a chat no model could answer and recorded the first launch, so setup never came back.
     const none = await launch({}, {}, "minimalist", (command) => command.type === "providers.list" ? { ok: true, result: { providers: [] } } as never : undefined)
-    expect(none.app.page).toBe("chat")
-    expect(screen(none).match(/no model found/g)).toHaveLength(1)
-    expect(screen(none)).toContain("/connect adds one")
-    expect(patches(none).at(-1)).toEqual({ onboarded: true })
-    expect(patches(none)[0]).toMatchObject({ tier: "minimalist" })
+    expect(none.app.page).toBe("setup")
+    expect(screen(none)).toContain("minimalist")
+    expect(patches(none).filter((patch) => "onboarded" in patch)).toEqual([])
   })
   test("a model already chosen is kept, and a daemon that does not answer writes nothing so the next launch tries again", async () => {
     const kept = await launch({ claude: true }, { models: { main: { model: "claude-opus" } } }, "minimalist")
     expect(patches(kept).at(-1)).toEqual({ onboarded: true })
     const silent = await launch({ claude: true }, {}, "minimalist", (command) => command.type === "models.list" ? { ok: false, code: "unavailable", error: { message: "down" } } as never : undefined)
     expect(silent.sent.filter((command) => command.type === "settings.set" || command.type === "prompt.set")).toEqual([])
-    expect(screen(silent)).not.toContain("no model found")
+    expect(silent.app.page).toBe("chat")
   })
   test("a saved tier, a finished setup or no preset leave minimalist alone", async () => {
     const saved = await launch({ claude: true }, { tier: "balanced" }, "minimalist")

@@ -521,6 +521,16 @@ export function resultOutcome(result: ClaudeMessage): { status: "ok" } | { statu
 }
 
 /**
+ * Claude Code's "Not logged in · Please run /login" names its own slash command, which MendCode's prompt does not have. The turn
+ * says instead which official login signs in the profile the process used: MendCode's own (`CLAUDE_CONFIG_DIR`) or `~/.claude`.
+ */
+export function signInHint<T extends ReturnType<typeof resultOutcome>>(outcome: T, configDir: string | undefined): T {
+  if (outcome.status !== "error" || !/not logged in/i.test(outcome.message)) return outcome
+  const command = `${configDir ? `CLAUDE_CONFIG_DIR=${configDir} ` : ""}claude auth login`
+  return { ...outcome, message: `${outcome.message} · sign in${configDir ? " to MendCode's own Claude Code profile" : ""} in a terminal: ${command}` }
+}
+
+/**
  * A tool call that changes which MCP servers Claude Code has: `claude mcp add|remove…` in a command, or a write to an MCP
  * configuration file. Claude Code reads its servers when its process starts, so the process is started again after such a turn.
  */

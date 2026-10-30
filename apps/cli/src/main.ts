@@ -58,6 +58,13 @@ const rawArgv = globalOptions.args
 /** `--safe-mode` / MENDCODE_SAFE_MODE=1: a pure start that also leaves out packages, shell hooks, MCP and project tools (docs/tiers.md). */
 const safeMode = globalOptions.safeMode === true || process.env.MENDCODE_SAFE_MODE === "1"
 const pure = globalOptions.pure === true || safeMode
+if (rawArgv[0] === "claude" && (rawArgv[1] === "login" || rawArgv[1] === "status")) {
+  // `claude login|status`: Claude Code's own sign-in for MendCode's profile (docs/setup.md#own-logins). A folder named claude still opens.
+  const { parseClaudeProfile, runClaudeProfile } = await import("@mendcode/daemon/claude-profile")
+  const claude = parseClaudeProfile(rawArgv)!
+  refuseFromSession(claude.dir, "signs Claude Code in for MendCode")
+  process.exit(await runClaudeProfile({ action: claude.action, dataDir: originDir(claude.dir), bin: process.env.MENDCODE_CLAUDE_BIN || "claude", err: process.stderr }))
+}
 try {
   const server = parseServerCommand(rawArgv)
   if (server) {

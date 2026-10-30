@@ -13,6 +13,7 @@ import { appendFileSync, existsSync } from "node:fs"
 import { logLevel } from "./logging"
 import { dropHostSessionEnv } from "./inherited-env"
 import { completeToolPath } from "./tool-path"
+import { claudeProfileEnv, claudeStatus, codexStatus } from "./harness-status"
 import { createProviderMetadataAuth } from "./provider-metadata-auth"
 import { homedir } from "node:os"
 import path from "node:path"
@@ -223,13 +224,17 @@ const LIST_PRICE_VENDOR: Readonly<Record<string, string>> = { chatgpt: "openai",
 const modelsDev = createModelsDev({ dir, log: (message) => logLine(`[MODELS]: ${message}`) })
 const providerService = createProviderService({ dir, settings: () => extractionSettings(), keyForEnv: providerMetadata.keyForEnv, extensions: () => extensionProviders(), modelsDev })
 const providerAuth = createProviderAuth({ dir, providers: providerService, metadata: providerMetadata })
+/** `ownLogins`: only MendCode's own ChatGPT login (/connect chatgpt) is used; the Codex CLI's login file is never read. */
+const NO_OWN_CHATGPT = "[AUTH]: sign in to ChatGPT for MendCode with /connect chatgpt (MendCode does not use the Codex CLI's login)"
 const subscriptionHeaders = async () => {
   const owned = providerAuth.chatgpt.status()
   if (owned.error) throw new Error("[AUTH]: v2 ChatGPT login failed; use /connect chatgpt")
-  return owned.source === "v2" ? providerAuth.chatgpt.headers() : codexSubscriptionHeaders()()
+  if (owned.source === "v2") return providerAuth.chatgpt.headers()
+  if (extractionSettings().ownLogins) throw new Error(NO_OWN_CHATGPT)
+  return codexSubscriptionHeaders()()
 }
-/** A login `subscriptionHeaders` can use: MendCode's own (/connect chatgpt) or the Codex CLI's. Only whether it exists; nothing is read. */
-const subscriptionLogin = () => providerAuth.chatgpt.status().source === "v2" || existsSync(path.join(process.env.CODEX_HOME ?? path.join(homedir(), ".codex"), "auth.json"))
+/** A login `subscriptionHeaders` can use: MendCode's own (/connect chatgpt) or, without `ownLogins`, the Codex CLI's. Only whether it exists; nothing is read. */
+const subscriptionLogin = () => providerAuth.chatgpt.status().source === "v2" || (!extractionSettings().ownLogins && existsSync(path.join(process.env.CODEX_HOME ?? path.join(homedir(), ".codex"), "auth.json")))
 /** External agents that speak the Agent Client Protocol, from `<dir>/acp-agents.json`; each is a model `acp:<name>`. */
 const acpAgents = createAcpAgents({
   dir,
@@ -391,7 +396,7 @@ export const daemon = await startDaemon({
           claude: async (input) => {
             await claudeDetection.refresh()
             if (!claudeDetection.installed()) throw new Error("[PROBE]: Claude Code is not installed")
-            await claudeCodeProbe({ bin: claudeBin, dataDir: dir })(input)
+            await claudeCodeProbe({ bin: claudeBin, dataDir: dir, env: () => claudeProfileEnv({ ownLogins: extractionSettings().ownLogins, dataDir: dir }) })(input)
           },
         }
       : engineName === "codex" ? { codex: codexAppServerProbe({ bin: process.env.MENDCODE_CODEX_BIN || "codex", dataDir: dir }) } : {},
@@ -529,7 +534,9 @@ export const daemon = await startDaemon({
                 const cache = claudeCacheEnv(settings)
                 // Compaction at MendCode's point (`claude_compact`), not near Claude Code's 1M window.
                 const compact = claudeCompactEnv({ model: model.model, settings, on: featureOn(settings, "claude_compact", { safeMode }) })
-                return cache || subagent || compact ? { ...cache, ...subagent, ...compact } : undefined
+                // `ownLogins`: MendCode's own Claude Code profile and login, never `~/.claude`'s.
+                const profile = claudeProfileEnv({ ownLogins: settings.ownLogins, dataDir: dir })
+                return cache || subagent || compact || profile ? { ...cache, ...subagent, ...compact, ...profile } : undefined
               },
               environment: credentialsFor,
               readBlob: async (ref) => new Uint8Array(store.readBlob(ref.sha256)),
@@ -773,6 +780,7 @@ export const daemon = await startDaemon({
               const owned = providerAuth.chatgpt.status()
               if (owned.error) return { ok: false, message: owned.error }
               if (owned.source === "v2") return { ok: owned.state === "authorized", ...(owned.state !== "authorized" ? { message: `ChatGPT login ${owned.state}` } : {}) }
+              if (extractionSettings().ownLogins) return { ok: false, message: NO_OWN_CHATGPT }
               await codexSubscriptionHeaders()()
               return { ok: true }
             } catch (error) {
@@ -781,6 +789,11 @@ export const daemon = await startDaemon({
           },
         }
       : {}),
+    // What the setup says about Claude Code and Codex; their own status commands, never their credential files.
+    harnesses: async () => Promise.all([
+      claudeStatus({ bin: claudeBin, ownLogins: extractionSettings().ownLogins, dataDir: dir }),
+      codexStatus({ bin: process.env.MENDCODE_CODEX_BIN || "codex" }),
+    ]),
   },
   mcp,
   lsp,

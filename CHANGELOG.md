@@ -9,8 +9,16 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
-The pull request reviewer keeps working when the daemon starts with a short `PATH`, and a paused watch resumes by itself without
-losing the requests made while it was paused.
+A new install's setup signs MendCode in for itself and no longer leaves you at a prompt with no model; the pull request reviewer
+keeps working when the daemon starts with a short `PATH`, and a paused watch resumes by itself without losing requests.
+
+### New
+
+- Own logins for new installs (`ownLogins`): the first setup of a new install signs MendCode in for itself. ChatGPT runs in
+  MendCode's engine with `/connect chatgpt`, and the Codex CLI's login file is not read. Claude models run in Claude Code with a
+  profile of MendCode's own (`CLAUDE_CONFIG_DIR=<data dir>/claude-code`), signed in with `mendcode claude login` (Claude Code's
+  own `claude auth login` for that profile), apart from `~/.claude`.
+  Nothing of another tool is copied or adopted. Installs set up before keep the logins they used.
 
 ### Changed
 
@@ -36,6 +44,12 @@ losing the requests made while it was paused.
   resumes by itself with a notice. The PRs opened, the pushes and the `@mendcode` comments of the pause are handled then; before, it
   waited for `/pr watch-repo`, which took the PRs open at that moment as the baseline.
 - PR review: `@mendcode` comments are read page by page, so more than 100 new comments since the last poll no longer drops the rest.
+- Setup: a first launch with no usable model is not marked done. Esc or Enter leaves it open for the next launch, and the minimalist
+  preset opens the page instead of a prompt no model answers. Upgrades and reinstalls keep their finished setup.
+- Setup: Claude Code is shown as installed, signed in, and with its plan only when `claude auth status` reports one; before, a
+  `claude --version` that answered read as "installed, signed in". Each model says who runs it and whose login pays.
+- Claude Code turns that fail on "Not logged in" give the official login command of the profile in use instead of Claude Code's
+  own `/login`.
 
 ## v0.0.2-nightly.20261029.2 - 2026-10-29
 

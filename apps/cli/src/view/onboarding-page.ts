@@ -228,6 +228,24 @@ function styleNote(input: OnboardingInput, row: OnboardingRow, style: SetupStyle
 /** The style as the sample draws it. */
 const sampleLook = (style: SetupStyle | undefined): SampleLook | undefined => style ? { ...stylePatch(style) } as SampleLook : undefined
 
+/** Glyph and label column of a Ready row. */
+const READY_INDENT = 16
+/** A command cut into rows of `width`: at spaces when it can, inside a long word (a path) when it must; every character kept. */
+function wrapCommand(text: string, width: number): string[] {
+  const rows: string[] = []
+  let row = ""
+  for (const word of text.split(" ")) {
+    const next = row ? `${row} ${word}` : word
+    if (next.length <= width) { row = next; continue }
+    if (row) rows.push(row)
+    let rest = word
+    while (rest.length > width) { rows.push(rest.slice(0, width)); rest = rest.slice(width) }
+    row = rest
+  }
+  if (row) rows.push(row)
+  return rows
+}
+
 function readyLines(input: OnboardingInput, width: number): Line[] {
   const { detected } = input
   if (!detected) return [[{ text: input.loading ? "checking this machine…" : "nothing detected", fg: "muted" }]]
@@ -235,10 +253,17 @@ function readyLines(input: OnboardingInput, width: number): Line[] {
   for (const item of detected.items) {
     if (!item.ok && (item.id === "pi" || item.id === "chatgpt" && item.detail === "not used by this engine")) continue
     const glyph = item.ok ? "✓" : "·"
+    const head = [{ text: `${glyph} `, fg: TONE(item.ok) }, { text: item.label.padEnd(14), fg: item.ok ? "text" : "muted" as ColorName }]
     const tail = item.ok ? item.detail : item.fix ? `→ ${item.fix}` : item.detail
-    lines.push([{ text: `${glyph} `, fg: TONE(item.ok) }, { text: item.label.padEnd(14), fg: item.ok ? "text" : "muted" }, { text: tail, fg: "muted" }])
+    // A fix is a command to copy: when it does not fit beside its label it goes whole on the lines below, never cut.
+    if (!item.ok && item.fix && READY_INDENT + tail.length > width) {
+      lines.push(fit([...head, { text: item.detail, fg: "muted" }], width))
+      for (const row of wrapCommand(`→ ${item.fix}`, Math.max(10, width - READY_INDENT))) lines.push([{ text: " ".repeat(READY_INDENT) }, { text: row, fg: "muted" }])
+      continue
+    }
+    lines.push(fit([...head, { text: tail, fg: "muted" }], width))
   }
-  return lines.map((line) => fit(line, width))
+  return lines
 }
 
 /** The ready list as at most two wrapped lines, found items first. */

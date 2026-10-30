@@ -15,6 +15,7 @@ import {
   MCP_RELOAD_NOTE,
   MAX_TEXT,
   resultOutcome,
+  signInHint,
   userMessage,
   type ClaudeMessage,
   type ClaudePermissionMode,
@@ -108,6 +109,8 @@ type Connection = {
   lifecycle?: boolean
   /** `environmentKey` of the credentials the process started with. */
   envKey: string
+  /** The `CLAUDE_CONFIG_DIR` the process started with (MendCode's own profile), for the sign-in hint of a "Not logged in" turn. */
+  configDir?: string
   /** Ended turns whose background agents still run: their records go on to that turn's mapper, and from it to the daemon. */
   agentTurns: Array<ReturnType<typeof createTurnMapper>>
 }
@@ -452,7 +455,7 @@ export function createClaudeEngine(options: {
     turn.touch()
     const result = turn.mapper.accept(message)
     if (result && final) {
-      const outcome = resultOutcome(result)
+      const outcome = signInHint(resultOutcome(result), connections.get(turn.input.sessionId)?.configDir)
       // Claude Code still holds a message steered into this turn: it answers that next, and the turn ends with that answer.
       if (turn.steered.size && !turn.interrupted && outcome.status === "ok") return void (turn.held = outcome)
       turn.mapper.finish(outcome.status === "ok" ? (turn.interrupted ? "interrupted" : "ok") : "error")
@@ -491,7 +494,7 @@ export function createClaudeEngine(options: {
     const extra = { ...options.env?.(sessionId, model), ...environment?.values }
     const env = Object.keys(extra).length ? { env: extra } : {}
     const transport = options.transportFactory?.({ args, cwd, ...env }) ?? spawnClaude({ bin: options.bin ?? "claude", args, cwd, ...env })
-    const connection: Connection = { sessionId, transport, model, permission: claudePermissionMode(permission), pending: new Map(), ready: Promise.resolve(), closed: false, background: 0, agentTurns: [], envKey: environmentKey(environment) }
+    const connection: Connection = { sessionId, transport, model, permission: claudePermissionMode(permission), pending: new Map(), ready: Promise.resolve(), closed: false, background: 0, agentTurns: [], envKey: environmentKey(environment), ...(extra.CLAUDE_CONFIG_DIR ? { configDir: extra.CLAUDE_CONFIG_DIR } : {}) }
     connections.set(sessionId, connection)
     void (async () => {
       try {

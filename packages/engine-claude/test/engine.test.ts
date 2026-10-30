@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { createIdFactory, partialToolArgs, type PermissionMode, type SessionId } from "@mendcode/protocol"
 import { createVirtualClock, type EngineEvent, type EngineRequest, type EngineResolution, type GlobalEventDraft, type TurnInput } from "@mendcode/kernel"
-import { CANCEL_GRACE_MS, changesMcpServers, messageUuid, claudeArgs, claudeEditPatch, claudeCacheEnv, claudeProcessEnv, claudeQuota, claudeToolTitle, createClaudeEngine, createTurnMapper, resultOutcome, spawnClaude, type ClaudeTransport } from "../src"
+import { CANCEL_GRACE_MS, changesMcpServers, messageUuid, claudeArgs, claudeEditPatch, claudeCacheEnv, claudeProcessEnv, claudeQuota, claudeToolTitle, createClaudeEngine, createTurnMapper, resultOutcome, signInHint, spawnClaude, type ClaudeTransport } from "../src"
 
 const ids = createIdFactory()
 
@@ -1012,6 +1012,13 @@ describe("claude protocol helpers", () => {
     expect(claudeToolTitle("mcp__linear__list", {})).toBe("mcp__linear__list")
     expect(resultOutcome({ subtype: "success", terminal_reason: "completed" })).toEqual({ status: "ok" })
     expect(resultOutcome({ subtype: "error_max_turns", is_error: true })).toEqual({ status: "error", code: "claude_turn_failed", message: "[CLAUDE]: error_max_turns" })
+  })
+  test("a signed-out profile's turn names the official login of that profile, not Claude Code's own /login (seen live with MendCode's profile)", () => {
+    const failed = resultOutcome({ subtype: "success", is_error: true, result: "Not logged in · Please run /login" })
+    expect(signInHint(failed, "/d/claude-code")).toEqual({ status: "error", code: "claude_turn_failed", message: "[CLAUDE]: Not logged in · Please run /login · sign in to MendCode's own Claude Code profile in a terminal: CLAUDE_CONFIG_DIR=/d/claude-code claude auth login" })
+    expect(signInHint(failed, undefined)).toMatchObject({ message: expect.stringMatching(/sign in in a terminal: claude auth login$/) })
+    const other = resultOutcome({ subtype: "error_max_turns", is_error: true })
+    expect(signInHint(other, "/d/claude-code")).toBe(other)
   })
 })
 

@@ -87,7 +87,7 @@ describe("the generated cards", () => {
     for (const entry of index.cards) for (const name of slashCommands(entry.text)) expect([entry.topic, name, parseSlash(`/${name}`) !== undefined]).toEqual([entry.topic, name, true])
   })
   test("every program command a card names starts with a subcommand this CLI has", () => {
-    const own = new Set(["run", "docs", "view", "help", "daemon", "upgrade", "uninstall", "acp", "app-server", "remote", "migrate-v1"])
+    const own = new Set(["run", "docs", "view", "help", "daemon", "upgrade", "uninstall", "acp", "app-server", "remote", "migrate-v1", "claude"])
     for (const entry of index.cards) for (const [, word] of entry.text.matchAll(/\{\{program\}\} ([a-z][a-z0-9-]*)/g)) {
       expect([entry.topic, word, own.has(word!) || parseAutomation([word!]).ok !== "none"]).toEqual([entry.topic, word, true])
     }

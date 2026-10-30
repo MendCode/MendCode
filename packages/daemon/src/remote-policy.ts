@@ -4,7 +4,7 @@ export function remoteExecutionCommand(type: string): boolean {
   return ["tools.trust", "packages.install", "packages.capture", "lsp.install", "packages.remove", "packages.restore", "packages.enable", "packages.resource", "packages.preview", "packages.install-catalog", "packages.install-source", "packages.add-source", "packages.remove-source", "packages.refresh", "packages.disable-all", "mcp.decide"].includes(type)
 }
 
-const EXECUTION_SETTINGS = ["acpAgents", "tier", "features", "experimental", "tools", "threadMcp", "disabledExtensions", "disabledPackages", "disabledPackageResources", "sandbox", "trustedToolDirs", "allowedHttpHookUrls", "permission", "permissionAllow", "smartSandboxTrust", "engineSafetyPrompts", "engineEnvironment", "projectConfig"]
+const EXECUTION_SETTINGS = ["acpAgents", "tier", "features", "experimental", "tools", "threadMcp", "disabledExtensions", "disabledPackages", "disabledPackageResources", "sandbox", "trustedToolDirs", "allowedHttpHookUrls", "permission", "permissionAllow", "smartSandboxTrust", "engineSafetyPrompts", "engineEnvironment", "ownLogins", "projectConfig"]
 /** Proxy, shell and web policy: set on the machine that runs the commands, never by a remote client. */
 export const REMOTE_HOST_SETTINGS = ["proxy", "shellEnvironment", "shellCommandPrefix", "loginShell", "web"]
 /** Every key `settings.set` refuses to a remote or a peer client, whichever rule refuses it. */

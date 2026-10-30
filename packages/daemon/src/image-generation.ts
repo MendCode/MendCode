@@ -25,7 +25,7 @@ export function createPetImageApi(input: { settings: Settings; credentials?(prov
       if ([target.toString(), target.hostname].some((pattern) => matchingRule("network", pattern, rules)?.action === "deny")) throw new Error("Pet network request is denied")
       return fetch(url, init)
     }
-    return createImageApi({ settings: { ...settings, options: { ...settings.options, size: "1024x1024", background: "transparent", output_format: "png", quality: "medium" } }, fetch: guardedFetch, subscriptionHeaders: codexSubscriptionHeaders(), ...(input.credentials ? { credentials: input.credentials } : {}) })(request)
+    return createImageApi({ settings: { ...settings, options: { ...settings.options, size: "1024x1024", background: "transparent", output_format: "png", quality: "medium" } }, fetch: guardedFetch, subscriptionHeaders: input.settings.ownLogins ? async () => { throw new Error("[AUTH]: with ownLogins a pet image needs an OpenAI key (/connect openai); MendCode does not use the Codex CLI's login") } : codexSubscriptionHeaders(), ...(input.credentials ? { credentials: input.credentials } : {}) })(request)
   }
 }
 

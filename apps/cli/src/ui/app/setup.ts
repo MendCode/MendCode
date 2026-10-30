@@ -7,7 +7,9 @@ import type { OnboardingAction } from "../../view/onboarding-page"
 import { toolLayoutOf, type TuiProfile } from "../../view/tui-profile"
 
 /** The profile keys the setup's Look rows (Glyphs, Tools, Diff, Prompt, Pet) move live; Theme is held apart, as a theme selection. */
-const SETUP_STYLE_KEYS = ["glyphs", "toolOutput", "toolDensity", "codeMapCard", "diffView", "promptChrome", "pet"] as const satisfies readonly (keyof TuiProfile)[]
+/** Said when the first setup closes with no model to talk to: it is not marked done, so the next launch opens it again. */
+const NOT_SET_UP = "no model is set up yet · this setup opens again next launch · /connect chatgpt signs MendCode in, /setup reopens it"
+const SETUP_STYLE_KEYS =["glyphs", "toolOutput", "toolDensity", "codeMapCard", "diffView", "promptChrome", "pet"] as const satisfies readonly (keyof TuiProfile)[]
 import type { AppContext } from "./context"
 import { applyTierBundle } from "./tier"
 
@@ -107,7 +109,8 @@ export function createSetup(ctx: AppContext, actions: {
     ])
     const report = models.ok ? (models.result as import("@mendcode/protocol").ModelsReport) : undefined
     const list = providers.ok ? ((providers.result?.providers as import("@mendcode/protocol").ProviderInfo[] | undefined) ?? []) : []
-    const loginReport = info.ok ? (info.result as DaemonInfoReport).login : undefined
+    const infoReport = info.ok ? (info.result as DaemonInfoReport) : undefined
+    const loginReport = infoReport?.login
     const login = loginReport ? { ok: loginReport.ok, ...(loginReport.message ? { message: loginReport.message } : {}) } : undefined
     return {
       answered: models.ok,
@@ -118,6 +121,8 @@ export function createSetup(ctx: AppContext, actions: {
         login,
         ...(imported?.ok ? { imports: imported.result as import("../../view/onboarding-detect").DetectImport } : {}),
         selected: state.settingsNow.models?.main?.model,
+        ...(infoReport?.harnesses ? { harnesses: infoReport.harnesses } : {}),
+        ...(infoReport?.ownLogins ? { ownLogins: true } : {}),
       }),
     }
   }
@@ -136,27 +141,40 @@ export function createSetup(ctx: AppContext, actions: {
   /**
    * The first launch of the minimalist preset (docs/setup.md): no page and no welcome. It applies the tier like `/tier minimalist`,
    * picks the model the setup page would have recommended (the one already chosen stays) and records `onboarded`. With nothing
-   * found it says so in one line. When the daemon does not answer nothing is written, so the next launch tries again.
+   * usable found it opens the setup page instead and records nothing. When the daemon does not answer nothing is written, so the next launch tries again.
    */
   async function configureMinimalist() {
     await loadPage("detect")
     const { answered, detected } = await detectAnswers({ imports: false })
     if (!answered) return
+    // Nothing to talk to: the page shows what was found and how to sign in, instead of a prompt no model answers.
+    if (!detected.usable) { await openSetup({ firstRun: true, preset: "minimalist" }); return }
     const applied = await applyTierBundle(ctx, { tier: "minimalist", changeProfile })
     if (applied) applySettings(applied.settings)
     const patch: Record<string, unknown> = { onboarded: true }
     if (detected.recommended && detected.recommended !== state.settingsNow.models?.main?.model) patch.models = { ...(state.settingsNow.models ?? {}), main: { ...(state.settingsNow.models?.main ?? {}), model: detected.recommended } }
     await setupChoice(patch)
-    if (!detected.usable) ctx.say("no model found · /connect adds one, or export ANTHROPIC_API_KEY", "info")
     requestFrame()
   }
 
-  /** What the first launch does: the minimalist preset configures itself; any other opens the setup page, with the preset as its tier. */
+  /**
+   * What the first launch does: the minimalist preset configures itself; any other opens the setup page, with the preset as its
+   * tier. A new install (no setup done, no model chosen, no session with a message) signs in for itself from now on (`ownLogins`):
+   * an install that already ran keeps the logins it used, so an upgrade changes no session's model or login.
+   */
   async function openSetupIfFirstRun(settings: Settings, preset?: Tier) {
     if (settings.onboarded) return
+    if (settings.ownLogins === undefined && !settings.models?.main?.model && await noSessionUsed()) await setupChoice({ ownLogins: true })
     const tier = settings.tier === undefined ? preset : undefined
     if (tier === "minimalist") await configureMinimalist()
     else await openSetup({ firstRun: true, ...(tier ? { preset: tier } : {}) })
+  }
+  /** True only when the daemon answers and no session has a message: an unanswered list is not proof of a new install. */
+  async function noSessionUsed() {
+    const listed = await input.send({ type: "session.list", limit: 1, hideEmpty: true }).catch(() => undefined)
+    if (!listed?.ok) return false
+    const sessions = (listed.result as { sessions?: unknown[] } | undefined)?.sessions
+    return Array.isArray(sessions) && sessions.length === 0
   }
 
   async function openSetup(options: { advanced?: boolean; firstRun?: boolean; preset?: Tier } = {}) {
@@ -287,7 +305,9 @@ export function createSetup(ctx: AppContext, actions: {
     if (action.type === "defaults") {
       if (themeSelection() !== onboarding.lookStart) applyLook(onboarding.lookStart)
       if (Object.keys(styleMoved()).length) changeProfile(onboarding.styleStart, { layer: true })
-      if (onboarding.firstRun) await setupChoice({ onboarded: true })
+      // With no model to talk to the first run is not over: the next launch opens this page again (nothing else is written).
+      if (onboarding.firstRun && onboarding.detected?.usable !== false) await setupChoice({ onboarded: true })
+      else if (onboarding.firstRun) ctx.say(NOT_SET_UP, "info")
       // Leaving the page keeps the starting tier the installer was asked for.
       if (onboarding.preset && !state.settingsNow.tier) {
         const applied = await applyTierBundle(ctx, { tier: onboarding.preset, changeProfile })
@@ -299,7 +319,8 @@ export function createSetup(ctx: AppContext, actions: {
     const { choices } = action
     const patch: Record<string, unknown> = {}
     if (choices.theme !== undefined && choices.theme !== onboarding.lookStart) patch.theme = choices.theme
-    if (state.settingsNow.onboarded !== true) patch.onboarded = true
+    const usable = onboarding.detected?.usable !== false
+    if (state.settingsNow.onboarded !== true && usable) patch.onboarded = true
     if (choices.permission !== state.settingsNow.defaultPermission) patch.defaultPermission = choices.permission
     if (choices.model && choices.model !== state.settingsNow.models?.main?.model) patch.models = { ...(state.settingsNow.models ?? {}), main: { ...(state.settingsNow.models?.main ?? {}), model: choices.model } }
     if (Object.keys(patch).length) await setupChoice(patch)
@@ -312,8 +333,10 @@ export function createSetup(ctx: AppContext, actions: {
       if (applied) applySettings(applied.settings)
     }
     if (Object.keys(moved).length) changeProfile(moved)
-    if (onboarding.firstRun) ctx.say("ready · new here? /tutorial · 4 min", "info")
+    if (onboarding.firstRun && usable) ctx.say("ready · new here? /tutorial · 4 min", "info")
     if (choices.imports.length) await applyImports(choices.imports)
+    // Last, so the tier's own notice does not cover it.
+    if (onboarding.firstRun && !usable) ctx.say(NOT_SET_UP, "info")
     requestFrame()
   }
 

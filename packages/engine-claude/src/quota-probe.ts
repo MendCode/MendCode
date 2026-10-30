@@ -11,6 +11,8 @@ export type ClaudeQuotaProbe = {
   model: string
   cwd: string
   bin?: string
+  /** Extra variables for the process, such as MendCode's own Claude Code profile (`CLAUDE_CONFIG_DIR`). */
+  env?: Record<string, string> | undefined
   clock?: Clock
   timeoutMs?: number
   signal?: AbortSignal
@@ -30,7 +32,7 @@ export async function probeClaudeQuota(options: ClaudeQuotaProbe): Promise<void>
   // `--tools ""` leaves the model nothing to call and `--no-session-persistence` keeps Claude Code from saving the exchange.
   // `disableAllHooks`: the user's Claude Code hooks (a system notification when a turn ends, a session log) are for their own sessions, never for this probe.
   const args = [...claudeArgs({ model: options.model, permission: "plan" }), "--tools", "", "--no-session-persistence", "--settings", JSON.stringify({ disableAllHooks: true })]
-  const transport = options.transportFactory?.({ args, cwd: options.cwd }) ?? spawnClaude({ bin: options.bin ?? "claude", args, cwd: options.cwd })
+  const transport = options.transportFactory?.({ args, cwd: options.cwd }) ?? spawnClaude({ bin: options.bin ?? "claude", args, cwd: options.cwd, env: options.env })
   let reported = false
   let failure: Error | undefined
   const timer = clock.setTimer(options.timeoutMs ?? DEFAULT_TIMEOUT_MS, () => {
