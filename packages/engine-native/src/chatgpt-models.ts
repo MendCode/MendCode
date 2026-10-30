@@ -2,6 +2,7 @@ import { createHash } from "node:crypto"
 import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs"
 import path from "node:path"
 import type { ModelInfo } from "@mendcode/protocol"
+import { CHATGPT_PLAN_BASE_URL } from "./chatgpt-auth"
 import { CHATGPT_CODEX_BASE_URL } from "./codex-auth"
 import { parseCodexModels } from "./codex-models"
 import { NATIVE_DEFAULTS } from "./defaults"
@@ -20,7 +21,9 @@ const FETCH_TIMEOUT_MS = 10_000
 /** How long a first listing waits for a catalog that was never fetched before it shows the engine default alone. */
 const FIRST_WAIT_MS = 5_000
 /** The fields MendCode reads of an entry; the backend's other fields (prompts, tool settings) are not kept. */
-const KEPT = ["slug", "display_name", "visibility", "default_reasoning_level", "supported_reasoning_levels", "context_window", "max_context_window"] as const
+const KEPT = ["slug", "display_name", "visibility", "default_reasoning_level", "supported_reasoning_levels", "context_window", "max_context_window", "supported_in_api"] as const
+/** The version a Sign in with ChatGPT list is saved under: it comes from api.openai.com, not from the backend of a Codex client version. */
+const PLAN_VERSION = "plan"
 
 const FALLBACK: ModelInfo[] = [{ id: NATIVE_DEFAULTS.model, name: NATIVE_DEFAULTS.model, efforts: ["low", "medium", "high"], defaultEffort: NATIVE_DEFAULTS.effort }]
 
@@ -40,6 +43,8 @@ export function createChatgptModelCatalog(options: {
   headers(): Promise<Record<string, string>>
   /** Whether a login exists, without reading it; no login, no request. */
   signedIn(): boolean
+  /** The account of a Sign in with ChatGPT login: its list is asked of api.openai.com (developers.openai.com/siwc/token-sharing-open-source/models-and-inference). */
+  planAccount?(): string | undefined
   fetch?: Fetch
   now?: () => number
   log?(message: string): void
@@ -72,26 +77,30 @@ export function createChatgptModelCatalog(options: {
     renameSync(temp, file)
   }
 
-  const stale = (saved: Saved | undefined) => !saved || saved.clientVersion !== CHATGPT_CLIENT_VERSION || now() - saved.fetchedAt >= CHATGPT_MODELS_TTL_MS
+  const version = () => options.planAccount?.() ? PLAN_VERSION : CHATGPT_CLIENT_VERSION
+  const stale = (saved: Saved | undefined) => !saved || saved.clientVersion !== version() || now() - saved.fetchedAt >= CHATGPT_MODELS_TTL_MS
 
   async function download() {
     const headers = await options.headers()
+    const plan = options.planAccount?.()
+    const clientVersion = plan ? PLAN_VERSION : CHATGPT_CLIENT_VERSION
     // The account the list belongs to, hashed: a list is never shown for another account.
-    const identity = createHash("sha256").update(headers["chatgpt-account-id"] ?? "").digest("hex")
+    const identity = createHash("sha256").update(plan ?? headers["chatgpt-account-id"] ?? "").digest("hex")
     const saved = read()
-    const same = saved?.identity === identity && saved.clientVersion === CHATGPT_CLIENT_VERSION
-    const response = await (options.fetch ?? fetch)(`${CHATGPT_CODEX_BASE_URL}/models?client_version=${CHATGPT_CLIENT_VERSION}`, {
+    const same = saved?.identity === identity && saved.clientVersion === clientVersion
+    const response = await (options.fetch ?? fetch)(plan ? `${CHATGPT_PLAN_BASE_URL}/models` : `${CHATGPT_CODEX_BASE_URL}/models?client_version=${CHATGPT_CLIENT_VERSION}`, {
       headers: { ...headers, accept: "application/json", ...(same && saved.etag ? { "if-none-match": saved.etag } : {}) },
       signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     })
     if (response.status === 304 && same) { save({ ...saved, fetchedAt: now() }); return }
     if (!response.ok) throw new Error(`the subscription backend answered ${response.status}`)
     const body = await response.json() as { models?: unknown }
-    const models = Array.isArray(body.models) ? body.models.filter((entry): entry is Record<string, unknown> => typeof entry === "object" && entry !== null).map((entry) => Object.fromEntries(KEPT.filter((key) => key in entry).map((key) => [key, entry[key]]))) : []
+    // A model the API route does not serve (`supported_in_api: false`) is not offered there.
+    const models = Array.isArray(body.models) ? body.models.filter((entry): entry is Record<string, unknown> => typeof entry === "object" && entry !== null && !(plan && entry.supported_in_api === false)).map((entry) => Object.fromEntries(KEPT.filter((key) => key in entry).map((key) => [key, entry[key]]))) : []
     // An answer with no usable model is a broken answer, not an account without models: the last list stays.
     if (!parseCodexModels({ models }).length) throw new Error("the subscription backend listed no models")
     const etag = response.headers.get("etag") ?? undefined
-    save({ fetchedAt: now(), ...(etag ? { etag } : {}), clientVersion: CHATGPT_CLIENT_VERSION, identity, models })
+    save({ fetchedAt: now(), ...(etag ? { etag } : {}), clientVersion, identity, models })
   }
 
   /** Asks the backend now (one request at a time); a failure is recorded and keeps the saved list. */

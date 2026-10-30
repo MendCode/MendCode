@@ -11,10 +11,10 @@ Pick a provider with the arrow keys or `1`-`9`, or press `/` and type part of it
 | OpenAI, Anthropic, OpenRouter, Vercel AI Gateway, Groq, DeepSeek | the API key |
 | Ollama, LM Studio | nothing but the base URL (filled in) and optional model ids |
 | Custom endpoint | name, format (`openai-compatible`, `openai`, `anthropic`), base URL, key and optional model ids |
-| ChatGPT | browser or device login, using v2's own credential store |
+| ChatGPT | Sign in with ChatGPT in the browser ([setup](setup.md#logins)), using v2's own credential store |
 | OpenCode (free) | nothing: adds your `opencode` CLI as an ACP agent ([below](#opencode-free)) |
 
-OpenAI first opens a method picker (ChatGPT browser/device or API key). `/connect chatgpt` opens its OAuth methods or the saved authorization status. OAuth stays unavailable until the daemon has a configured public client id. Numeric shortcuts select the first nine providers; arrows also reach ChatGPT.
+OpenAI first opens a method picker (ChatGPT browser/device or API key). `/connect chatgpt` opens its OAuth methods or the saved authorization status. The browser method needs nothing configured; device code is offered only with a configured Codex-style client id (`MENDCODE_OPENAI_OAUTH_CLIENT_ID`). Numeric shortcuts select the first nine providers; arrows also reach ChatGPT.
 
 The bordered page uses the shared panel grid, with action hints in its header and a single column below 70 cells. During OAuth, `c` copies the authorization URL, `s` checks status and `x` or Escape cancels the pending flow. After login, `r` refreshes, `m` opens models and `d` then `y` removes v2 credentials. `e` retries a cancelled/failed flow. Reopening the page reads the saved status. Device codes and URLs are temporary authorization capabilities, not credential reports.
 
@@ -91,7 +91,8 @@ A session on a model a list no longer has keeps it; its turn then fails with the
   list and are retried after a minute. A list of another account is asked again. A first listing with no list yet waits up to 5 s
   for it; with no login, or before the first answer, only the engine default (`gpt-6-luna`) is listed. A model the list does not
   have (`models set-default chatgpt gpt-6-astra`, `/model gpt-6-astra`) is asked for again once before it is refused. `codex:`
-  models (the thread bridge) are the same list.
+  models (the thread bridge) are the same list. With a Sign in with ChatGPT login the list is asked of `api.openai.com/v1/models`
+  instead (OpenAI's own request for that route), without the models it marks as not served there (`supported_in_api: false`).
 - **Claude Code**: `claude-fable`, `claude-opus`, `claude-sonnet` and `claude-haiku` (the newest of each family) and any full id of
   a family. Claude Code has no command that lists models, so there is nothing to refresh; they are shown when `claude --version`
   answers.

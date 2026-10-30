@@ -64,7 +64,7 @@
     },
     {
       "reason": "credential stores: written by login, /connect and token commands, never shown to a model",
-      "items": "file:chatgpt-auth.json file:github-copilot-auth.json file:plugin-auth.json file:provider-metadata-auth.json file:remote-tokens.json"
+      "items": "file:chatgpt-auth.json file:chatgpt-host.json file:github-copilot-auth.json file:plugin-auth.json file:provider-metadata-auth.json file:remote-tokens.json"
     },
     {
       "reason": "other tools' own files, which MendCode only detects (formatter and language-server gates, package manager)",

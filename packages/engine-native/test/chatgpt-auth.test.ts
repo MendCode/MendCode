@@ -30,7 +30,8 @@ function fixture(options: Partial<Parameters<typeof createChatgptAuth>[0]> = {})
 describe("B10 own ChatGPT credentials", () => {
   test("status and availability never call a provider or create files", () => {
     const h = fixture({ clientId: undefined })
-    expect(h.auth.available()).toBe(false)
+    expect(h.auth.available("browser")).toBe(true)
+    expect(h.auth.available("headless")).toBe(false)
     expect(h.auth.status()).toMatchObject({ state: "none", source: "none", accessTokenPresent: false })
     expect(h.calls).toHaveLength(0)
     expect(() => readFileSync(path.join(h.dir, CHATGPT_AUTH_FILE))).toThrow()
@@ -107,7 +108,8 @@ describe("B10 own ChatGPT credentials", () => {
   })
   test("no hardcoded client ID, remote cleartext issuer, or malformed credentials", async () => {
     const h = fixture({ clientId: undefined })
-    await expect(h.auth.authorize("browser")).rejects.toThrow("CLIENT_ID")
+    // Without a configured client the browser method is Sign in with ChatGPT (chatgpt-plan-auth.test.ts); device code needs a client.
+    await expect(h.auth.authorize("headless")).rejects.toThrow("no device code")
     expect(() => createChatgptAuth({ dir: h.dir, issuer: "http://remote.example" })).toThrow("HTTPS")
     writeFileSync(path.join(h.dir, CHATGPT_AUTH_FILE), "{invalid")
     expect(h.auth.status().state).toBe("failed")

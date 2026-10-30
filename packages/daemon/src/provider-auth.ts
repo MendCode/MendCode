@@ -15,7 +15,8 @@ export function createProviderAuth(options: { dir: string; providers?: ProviderS
   const inventory = () => options.providers?.inventory?.({ readOnly: true }) ?? []
   const known = (provider: string) => ["chatgpt", "openai", "github-copilot"].includes(provider) || inventory().some((entry) => entry.id === provider)
   function methods(provider?: string): Record<string, ProviderAuthMethod[]> {
-    const oauth = ["browser", "headless"].map((id): ProviderAuthMethod => ({ id, type: "oauth", label: `ChatGPT Pro/Plus (${id})`, available: chatgpt.available(), ...(!chatgpt.available() ? { reason: "Set MENDCODE_OPENAI_OAUTH_CLIENT_ID" } : {}) }))
+    // Browser is Sign in with ChatGPT and needs nothing configured; device code exists only for a configured Codex-style client.
+    const oauth = ["browser", "headless"].map((id): ProviderAuthMethod => ({ id, type: "oauth", label: `ChatGPT Pro/Plus (${id})`, available: chatgpt.available(id), ...(!chatgpt.available(id) ? { reason: "Sign in with ChatGPT has no device code; use browser" } : {}) }))
     const all: Record<string, ProviderAuthMethod[]> = Object.fromEntries(inventory().map((entry) => [entry.id, [api]]))
     for (const entry of inventory().filter((entry) => entry.type === "azure")) all[entry.id] = [api, { id: "entra", type: "api", label: "Microsoft Entra ID (environment)", available: true }]
     for (const entry of inventory().filter((entry) => entry.type === "amazon-bedrock")) all[entry.id] = [{ id: "aws-chain", type: "api", label: "AWS credential chain", available: true }, { ...api, label: "Bedrock bearer token" }]

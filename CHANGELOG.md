@@ -9,14 +9,19 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
-MendCode keeps its own list of the ChatGPT models your account can use, and Claude models on a new install run in the Claude Code you
-already have signed in; the setup no longer leaves you at a prompt with no model, and the pull request reviewer keeps working when the
-daemon starts with a short `PATH`.
+MendCode signs in to ChatGPT for itself with OpenAI's Sign in with ChatGPT, keeps its own list of the models your account can use,
+and Claude models on a new install run in the Claude Code you already have signed in; the setup no longer leaves you at a prompt with
+no model, and the pull request reviewer keeps working when the daemon starts with a short `PATH`.
 
 ### New
 
+- Sign in with ChatGPT: `/connect chatgpt` (or `control-plane auth login --provider chatgpt --method browser --execute`) shows a
+  link; you sign in in the browser, allow MendCode to use your ChatGPT plan, and MendCode keeps a login of its own. No client id is
+  shipped or needed: OpenAI registers MendCode for your account on the first sign-in, and you can limit or revoke it in ChatGPT →
+  Settings → Usage. Requests on that login go to `api.openai.com` and count against your plan. The link stays open 15 minutes.
 - Own ChatGPT login for new installs (`ownLogins`): the first setup of a new install makes MendCode's engine sign in to ChatGPT
-  only with `/connect chatgpt`; the Codex CLI's login file is not read. Installs set up before keep it as a fallback.
+  only with `/connect chatgpt`; the Codex CLI's login file is not read, not even on the daemon's first start before the setup.
+  Installs set up before keep it as a fallback.
 
 ### Changed
 
@@ -57,6 +62,15 @@ daemon starts with a short `PATH`.
   before. Nightly 20261030.6 gave them a separate Claude Code profile that had to be signed in again; that profile and
   `mendcode claude login` are gone, and only ChatGPT uses MendCode's own login.
 - Setup: Esc while the page still says "checking this machine…" no longer marks the first launch done with no usable model.
+- ChatGPT login on new installs: `/connect chatgpt` said "Set MENDCODE_OPENAI_OAUTH_CLIENT_ID" and the ChatGPT models were
+  unusable, because released builds carry no OAuth client id; it now uses Sign in with ChatGPT, which needs none. A new install's
+  daemon also no longer lists ChatGPT models with the Codex CLI's login in the seconds before its first setup.
+
+### Known limitations
+
+- Sign in with ChatGPT has no device code: sign in on the machine that runs the daemon. On that login there is no native
+  compaction (MendCode's own summary is used), no hosted image generation and no `/fast` priority. Device code remains for a
+  Codex-style client id you set yourself (`MENDCODE_OPENAI_OAUTH_CLIENT_ID`).
 
 ## v0.0.2-nightly.20261029.2 - 2026-10-29
 

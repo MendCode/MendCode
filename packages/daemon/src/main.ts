@@ -19,6 +19,7 @@ import { homedir } from "node:os"
 import path from "node:path"
 import {
   CHATGPT_CODEX_BASE_URL,
+  CHATGPT_PLAN_BASE_URL,
   chatgptQuota,
   codexSubscriptionHeaders,
   createChatgptModelCatalog,
@@ -228,13 +229,25 @@ const subscriptionHeaders = async () => {
   const owned = providerAuth.chatgpt.status()
   if (owned.error) throw new Error("[AUTH]: v2 ChatGPT login failed; use /connect chatgpt")
   if (owned.source === "v2") return providerAuth.chatgpt.headers()
-  if (extractionSettings().ownLogins) throw new Error(NO_OWN_CHATGPT)
+  if (ownLoginsOnly()) throw new Error(NO_OWN_CHATGPT)
   return codexSubscriptionHeaders()()
 }
+/**
+ * Only MendCode's own ChatGPT login may be used: `ownLogins`, or a new install (never set up, no model chosen, no session with a
+ * message), so its first start, before the setup saves `ownLogins`, never reads the Codex CLI's login either. An install already in
+ * use keeps the login it had.
+ */
+function ownLoginsOnly() {
+  const settings = extractionSettings()
+  if (settings.ownLogins !== undefined) return settings.ownLogins
+  return !settings.onboarded && !settings.models?.main?.model && !sessionsUsed()
+}
 /** A login `subscriptionHeaders` can use: MendCode's own (/connect chatgpt) or, without `ownLogins`, the Codex CLI's. Only whether it exists; nothing is read. */
-const subscriptionLogin = () => providerAuth.chatgpt.status().source === "v2" || (!extractionSettings().ownLogins && existsSync(path.join(process.env.CODEX_HOME ?? path.join(homedir(), ".codex"), "auth.json")))
+const subscriptionLogin = () => providerAuth.chatgpt.status().source === "v2" || (!ownLoginsOnly() && existsSync(path.join(process.env.CODEX_HOME ?? path.join(homedir(), ".codex"), "auth.json")))
+/** A login the subscription backend's own endpoints (search, images) take; a Sign in with ChatGPT login only reaches api.openai.com's Responses. */
+const subscriptionBackend = () => subscriptionLogin() && providerAuth.chatgpt.route() !== "plan"
 /** The models the ChatGPT account can use, asked of the subscription backend with that same login and kept in `<dir>/chatgpt-models.json` (docs/connect.md#where-each-list-comes-from). */
-const chatgptModels = createChatgptModelCatalog({ dir, headers: subscriptionHeaders, signedIn: subscriptionLogin, log: (message) => logLine(`[MODELS]: ${message}`) })
+const chatgptModels = createChatgptModelCatalog({ dir, headers: subscriptionHeaders, signedIn: subscriptionLogin, planAccount: () => providerAuth.chatgpt.planAccount(), log: (message) => logLine(`[MODELS]: ${message}`) })
 const codexModels = () => chatgptModels.list()
 /** External agents that speak the Agent Client Protocol, from `<dir>/acp-agents.json`; each is a model `acp:<name>`. */
 const acpAgents = createAcpAgents({
@@ -277,19 +290,31 @@ let stopAcp: (() => void) | undefined
 const CHATGPT_HEADER_TIMEOUT_MS = 10_000
 /** After the headers the backend sends `response.created` in the same second; a body with no byte for this long is retried at once. Later silence keeps the stream's own 120 s limit. */
 const CHATGPT_FIRST_EVENT_TIMEOUT_MS = 20_000
+/**
+ * Fields Sign in with ChatGPT refuses on `api.openai.com/v1` (developers.openai.com/siwc/token-sharing-open-source/preview-limitations);
+ * `service_tier` too, an override the route names as unsupported.
+ */
+const CHATGPT_PLAN_UNSUPPORTED = ["background", "conversation", "max_output_tokens", "max_tool_calls", "metadata", "moderation", "multi_agent", "prompt", "prompt_cache_retention", "safety_identifier", "temperature", "top_logprobs", "top_p", "truncation", "user", "previous_response_id", "service_tier"] as const
+/** The ChatGPT login's provider: a Sign in with ChatGPT login is spent on api.openai.com, a Codex-style one on the subscription backend; chosen per call. */
+function chatgptProvider(input: { onResponseHeaders?: (headers: Headers) => void }): import("@mendcode/engine-native").ModelProvider {
+  const common = { id: NATIVE_DEFAULTS.providerId, model: NATIVE_DEFAULTS.model, effort: NATIVE_DEFAULTS.effort, headers: subscriptionHeaders, headerTimeoutMs: CHATGPT_HEADER_TIMEOUT_MS, firstEventTimeoutMs: CHATGPT_FIRST_EVENT_TIMEOUT_MS, ...(input.onResponseHeaders ? { onResponseHeaders: input.onResponseHeaders } : {}) }
+  const codex = createResponsesProvider({ ...common, baseUrl: CHATGPT_CODEX_BASE_URL, serviceTier: () => extractionSettings().serviceTier === "fast" ? "priority" : undefined })
+  // No hosted image generation, no native compaction, no client tool search on this route; the conversation id header is the backend's, not the API's.
+  const plan = createResponsesProvider({ ...common, baseUrl: CHATGPT_PLAN_BASE_URL, hostedTools: ["web_search"], nativeCompaction: false, clientToolSearch: false, routingHeader: false, unsupportedFields: CHATGPT_PLAN_UNSUPPORTED })
+  const pick = () => providerAuth.chatgpt.route() === "plan" ? plan : codex
+  return {
+    id: common.id,
+    model: common.model,
+    cacheBinding: (model) => pick().cacheBinding?.(model) ?? Promise.resolve(undefined),
+    stream: (request) => pick().stream(request),
+    probe: (model) => pick().probe?.(model) ?? Promise.resolve(false),
+    nativeBinding: (model) => pick().nativeBinding?.(model) ?? Promise.resolve(undefined),
+    compact: (request) => { const chosen = pick(); if (!chosen.compact) throw new Error("[PROVIDER]: no native compaction on this route"); return chosen.compact(request) },
+  }
+}
 function routedProvider(input: { onResponseHeaders?: (headers: Headers) => void } = {}) {
   const router = createProviderRouter({
-    fallback: createResponsesProvider({
-      id: NATIVE_DEFAULTS.providerId,
-      model: NATIVE_DEFAULTS.model,
-      effort: NATIVE_DEFAULTS.effort,
-      baseUrl: CHATGPT_CODEX_BASE_URL,
-      headers: subscriptionHeaders,
-      headerTimeoutMs: CHATGPT_HEADER_TIMEOUT_MS,
-      firstEventTimeoutMs: CHATGPT_FIRST_EVENT_TIMEOUT_MS,
-      serviceTier: () => extractionSettings().serviceTier === "fast" ? "priority" : undefined,
-      ...(input.onResponseHeaders ? { onResponseHeaders: input.onResponseHeaders } : {}),
-    }),
+    fallback: chatgptProvider(input),
     providers: () => providerService.runtime(),
   })
   return { ...router, async *stream(request: import("@mendcode/engine-native").ModelRequest) {
@@ -330,6 +355,8 @@ const complete = async (input: { system: string; prompt: string; signal: AbortSi
 
 /** Dream's completion, with the dream role's model (the default one when unset) and the token counts its budget needs. */
 let extractionSettings: () => import("@mendcode/protocol").Settings = () => ({})
+/** Whether any session has a message; bound with the store, and once true it stays true. */
+let sessionsUsed = () => false
 const dreamComplete = (prompt: string, signal: AbortSignal, model?: ModelChoice) => completeWithUsage({ system: "You curate long-term memory for a coding assistant. Reply with JSON only.", prompt, signal, model })
 
 /** The system prompt as named parts, so the engine can both join them and report each one's size. `memory` is the memory block for this prompt. */
@@ -433,6 +460,8 @@ export const daemon = await startDaemon({
     completionTrace = trace
     forgetOneTree = oneTree.forget
     extractionSettings = () => store.settings.get()
+    let used = false
+    sessionsUsed = () => used ||= store.listSessions({ limit: 1, hideEmpty: true }).length > 0
     layersFor = extensionLayers
     skills = skillLoader
     // Memories are ranked for the session's latest prompt (full-text matches, recency, links; pinned always in) instead of all being injected.
@@ -443,12 +472,12 @@ export const daemon = await startDaemon({
       baseUrl: CHATGPT_CODEX_BASE_URL,
       headers: subscriptionHeaders,
       model: () => NATIVE_DEFAULTS.model,
-      available: subscriptionLogin,
+      available: subscriptionBackend,
     }
     const keyedTools = [createWebSearchTool(subscriptionSearch ? { subscription: subscriptionSearch } : {})].filter((tool): tool is Tool => tool !== undefined)
     // A Claude Code session (`host`) has no image tool of its own: the ChatGPT login or an OpenAI key makes image_gen work there unconfigured,
     // as the hosted `image_generation` does for a native session. MENDCODE_IMAGE_GEN=0 turns both off.
-    const imageGenTool = (host = false) => createDaemonImageGenTool({ dir, settings: () => store.settings.get(), provider: routedProvider(), models: () => modelCatalog.list(), credentials: (id) => providerService.imageTransport?.(id), subscriptionHeaders, ...(host ? { implicit: () => process.env.MENDCODE_IMAGE_GEN !== "0" && (subscriptionLogin() || providerService.imageTransport?.("openai") !== undefined) } : {}) })
+    const imageGenTool = (host = false) => createDaemonImageGenTool({ dir, settings: () => store.settings.get(), provider: routedProvider(), models: () => modelCatalog.list(), credentials: (id) => providerService.imageTransport?.(id), subscriptionHeaders, ...(host ? { implicit: () => process.env.MENDCODE_IMAGE_GEN !== "0" && (subscriptionBackend() || providerService.imageTransport?.("openai") !== undefined) } : {}) })
     const builtinTools = [...BUILTIN_TOOLS, ...keyedTools, createDiagnosticsTool(lsp), questionTool, todoTool, createSkillTool(skills, { docs: `${PROGRAM_NAME} docs skills` }), createRememberTool(memory.propose, memory), createMemoryGraphTool(memory), createToolDefine({ userDir: dir }), workflowStartTool, workflowScriptTool, workflowStatusTool, createSidebarTool(dir, (directory, widgets) => emitGlobal({ type: "sidebar.changed", ...(directory ? { directory } : {}), widgets })), sessionsTool, tellTool, threadsTool, packagesTool, sessionMetaTool, loopTool, worktreeTool, prWatchTool, ...codeGraphTools, createLspTool(lsp), workflowSaveTool, workflowControlTool, workflowEventsTool, workflowArtifactsTool, aiConfigTool]
     // Extensions tell an override from a clash, and `api.builtinTool` wraps, by these.
     builtinTools.push(createCustomizeUiTool(dir, extensions.reload, emitGlobal))
@@ -779,8 +808,10 @@ export const daemon = await startDaemon({
             try {
               const owned = providerAuth.chatgpt.status()
               if (owned.error) return { ok: false, message: owned.error }
-              if (owned.source === "v2") return { ok: owned.state === "authorized", ...(owned.state !== "authorized" ? { message: `ChatGPT login ${owned.state}` } : {}) }
-              if (extractionSettings().ownLogins) return { ok: false, message: NO_OWN_CHATGPT }
+              // An expired access token is renewed on the next request with the refresh token, so the login still counts.
+              const usable = owned.state === "authorized" || owned.state === "expired" && owned.refreshTokenPresent
+              if (owned.source === "v2") return { ok: usable, ...(!usable ? { message: `ChatGPT login ${owned.state}` } : {}) }
+              if (ownLoginsOnly()) return { ok: false, message: NO_OWN_CHATGPT }
               await codexSubscriptionHeaders()()
               return { ok: true }
             } catch (error) {

@@ -32,8 +32,9 @@ describe("B10 protocol and daemon", () => {
     const auth = createProviderAuth({ dir, providers, env: {} })
     cleanups.push(() => auth.stop())
     expect(auth.methods("openai").openai!.map((method) => method.id)).toEqual(["browser", "headless", "api-key"])
-    expect(auth.plan("openai")).toMatchObject({ executesNow: false, callsProvider: false, writesSecrets: false, callback: "loopback", method: { id: "browser", available: false } })
-    expect(auth.plan("openai", "ChatGPT Pro/Plus (headless)").callback).toBe("device")
+    // With no client configured, browser is Sign in with ChatGPT (available); device code needs a configured Codex-style client.
+    expect(auth.plan("openai")).toMatchObject({ executesNow: false, callsProvider: false, writesSecrets: false, callback: "loopback", method: { id: "browser", available: true } })
+    expect(auth.plan("openai", "ChatGPT Pro/Plus (headless)")).toMatchObject({ callback: "device", method: { available: false, reason: "Sign in with ChatGPT has no device code; use browser" } })
     expect(() => auth.plan("openai", "bad")).toThrow("Unknown method")
     expect(() => auth.methods("unknown")).toThrow("Unknown provider")
     expect(auth.status("chatgpt")[0]).toMatchObject({ source: "none", state: "none" })

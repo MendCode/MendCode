@@ -658,3 +658,19 @@ describe("sseData", () => {
     expect(await read(text.match(/[^]{1,4096}/g)!)).toEqual([event, "[DONE]"])
   })
 })
+
+describe("a host with refused fields and no native compaction (Sign in with ChatGPT on api.openai.com)", () => {
+  test("refused fields are removed after the model's parameters; nativeCompaction false offers no compact binding", async () => {
+    const calls: Record<string, unknown>[] = []
+    const p = createResponsesProvider({
+      id: "chatgpt", model: "gpt-test", baseUrl: "https://api.openai.com/v1", effort: "low",
+      headers: async () => ({ authorization: "Bearer t" }),
+      nativeCompaction: false, routingHeader: false, unsupportedFields: ["max_output_tokens", "temperature", "service_tier", "prompt_cache_retention"],
+      fetch: async (_url, init) => { calls.push(JSON.parse(String(init.body))); return new Response(sse([{ type: "response.completed", response: { usage: { input_tokens: 1, output_tokens: 1 } } }])) },
+    })
+    await collect(p.stream({ ...request(), maxOutputTokens: 100, fast: true, parameters: { temperature: 0.2, prompt_cache_retention: "24h" } } as ModelRequest))
+    for (const field of ["max_output_tokens", "temperature", "service_tier", "prompt_cache_retention"]) expect(calls[0]).not.toHaveProperty(field)
+    expect(calls[0]).toMatchObject({ store: false, stream: true, instructions: "be brief" })
+    expect(await p.nativeBinding?.("gpt-test")).toBeUndefined()
+  })
+})

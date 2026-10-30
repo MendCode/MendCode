@@ -13,7 +13,8 @@ export function createProviderAuthAutomation(ctx: CatalogContext) {
     let success = false
     let wake: (() => void) | undefined
     const timer = ctx.setTimer ?? ((ms: number, callback: () => void) => { const id = setTimeout(callback, ms); return { cancel: () => clearTimeout(id) } })
-    const timeout = timer(300_000, () => { timedOut = true; wake?.() })
+    // As long as the daemon keeps the login open (15 minutes): an account, workspace and consent in the browser can take a while.
+    const timeout = timer(900_000, () => { timedOut = true; wake?.() })
     ctx.onInterrupt(() => { interrupted = true; wake?.() })
     try {
       const started = await request({ type: "providers.auth.authorize", provider, ...(method ? { method } : {}), ...(open ? { open } : {}) })

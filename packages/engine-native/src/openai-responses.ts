@@ -315,13 +315,17 @@ export function createResponsesProvider(options: {
    * that answers 400 or 422 gets the same call again with the plain function, once, and the session stays on the function.
    */
   clientToolSearch?: boolean
+  /** Whether `/responses/compact` may be used. Default: the OpenAI API and the ChatGPT backend. */
+  nativeCompaction?: boolean
+  /** Body fields the host refuses, removed from every request after the model's parameters and any plugin transform. */
+  unsupportedFields?: readonly string[]
 }): ModelProvider {
   const doFetch: Fetch = options.fetch ?? ((url, init) => fetch(url, init))
   const responsesUrl = `${options.baseUrl.replace(/\/$/, "")}/responses`
   const idleMs = options.idleTimeoutMs ?? DEFAULT_STREAM_IDLE_MS
   const maxSilentBytes = options.maxSilentStreamBytes ?? MAX_SILENT_STREAM_BYTES
   const nativeOrigin = options.baseUrl.replace(/\/+$/, "")
-  const supportsNative = nativeOrigin === "https://api.openai.com/v1" || nativeOrigin === "https://chatgpt.com/backend-api/codex"
+  const supportsNative = options.nativeCompaction ?? (nativeOrigin === "https://api.openai.com/v1" || nativeOrigin === "https://chatgpt.com/backend-api/codex")
   const clientToolSearch = options.clientToolSearch ?? nativeOrigin === "https://chatgpt.com/backend-api/codex"
   const rejectedSearch = new Set<string>()
   /** Conversations whose request ran out of the header deadline, and how many times: each one doubles the deadline of that conversation's later requests. */
@@ -364,6 +368,7 @@ export function createResponsesProvider(options: {
         }
         const configured = modelParameters(built, request)
         const body = (await request.transformBody?.(configured)) ?? configured
+        for (const field of options.unsupportedFields ?? []) delete body[field]
         const key = request.cacheKeyForBody?.(body)
         if (request.cacheKeyForBody) { if (key) body.prompt_cache_key = key; else delete body.prompt_cache_key }
         if (request.cacheMode === "off") delete body.prompt_cache_key

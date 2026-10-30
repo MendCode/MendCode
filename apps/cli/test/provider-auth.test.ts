@@ -124,7 +124,7 @@ describe("B10 CLI auth", () => {
         if (command.type === "providers.auth.status") timeout ? onTimeout() : h.interrupt()
         return { ok: true, result: command.type === "providers.auth.authorize" ? { authorization: AUTHORIZATION } : { statuses: [status("pending")] } }
       } })
-      h.deps.setTimer = (ms, callback) => { if (ms === 300_000) onTimeout = callback; return { cancel() {} } }
+      h.deps.setTimer = (ms, callback) => { if (ms === 900_000) onTimeout = callback; return { cancel() {} } }
       expect(await h.run(["control-plane", "auth", "login", "chatgpt", "--execute"])).toBe(timeout ? 3 : 2)
       expect(h.sent.at(-1)).toEqual({ type: "providers.auth.action", provider: "chatgpt", action: "cancel" })
     }

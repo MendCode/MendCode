@@ -131,6 +131,24 @@ describe("MendCode's own ChatGPT model list", () => {
     expect(server.calls).toHaveLength(0)
   })
 
+  test("a Sign in with ChatGPT login lists from api.openai.com, drops models the API route does not serve, and never shows the backend's list for it", async () => {
+    const dir = temp()
+    const server = backend(listed(["gpt-6-luna"]), new Response(JSON.stringify({ models: [entry("gpt-6.1-sol", { supported_in_api: true }), entry("gpt-6-astra", { supported_in_api: false }), entry("gpt-6-luna")] })))
+    const clock = { now: 1_000_000 }
+    // The same data dir first had a Codex-style login, then the user signed in with ChatGPT.
+    let plan: string | undefined
+    const models = createChatgptModelCatalog({ dir, headers: async () => plan ? { authorization: "Bearer p" } : { authorization: "Bearer t", "chatgpt-account-id": "acct-1" }, signedIn: () => true, planAccount: () => plan, fetch: server.fetch, now: () => clock.now })
+    await models.settle()
+    expect(server.calls[0]!.url).toContain("chatgpt.com/backend-api/codex/models")
+    plan = "user-subject"
+    await models.discover()
+    expect(server.calls[1]!.url).toBe("https://api.openai.com/v1/models")
+    expect(server.calls[1]!.headers).toMatchObject({ authorization: "Bearer p" })
+    expect(server.calls[1]!.headers["if-none-match"]).toBeUndefined()
+    expect(ids(models.list())).toEqual(["gpt-6.1-sol", "gpt-6-luna"])
+    expect(models.status().stale).toBe(false)
+  })
+
   test("the Codex CLI's cache is never read", () => {
     expect(readFileSync(path.join(import.meta.dir, "../src/chatgpt-models.ts"), "utf8")).not.toContain("models_cache")
     expect(readFileSync(path.join(import.meta.dir, "../src/codex-models.ts"), "utf8")).not.toContain(path.join(homedir(), ".codex"))
