@@ -31,12 +31,14 @@ describe("the daemon's PATH", () => {
     const brew = temp()
     writeFileSync(path.join(brew, "gh"), "#!/bin/sh\necho gh-ran \"$@\"\n")
     chmodSync(path.join(brew, "gh"), 0o755)
-    const environment: NodeJS.ProcessEnv = { PATH: "/usr/bin:/bin" }
-    const finished = completeToolPath(environment, { platform: "darwin", home: "/nowhere", exists: (dir) => dir === "/usr/bin" || dir === "/bin", shellPath: async () => [brew] })
-    expect(environment.PATH).toBe("/usr/bin:/bin")
-    expect(await finished).toBe(`/usr/bin:/bin:${brew}`)
+    // The short PATH is an empty folder, not /usr/bin: a CI runner has a real gh there (Ubuntu's does).
+    const short = temp()
+    const environment: NodeJS.ProcessEnv = { PATH: short }
+    const finished = completeToolPath(environment, { platform: "darwin", home: "/nowhere", exists: () => false, shellPath: async () => [brew] })
+    expect(environment.PATH).toBe(short)
+    expect(await finished).toBe(`${short}:${brew}`)
     const saved = process.env.PATH
-    process.env.PATH = "/usr/bin:/bin"
+    process.env.PATH = short
     try {
       expect((await ghProcess({ argv: ["pr", "list"], cwd: brew })).code).toBe(127)
       process.env.PATH = environment.PATH
