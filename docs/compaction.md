@@ -368,8 +368,8 @@ model's known maximum; `compactAt` replaces `compactAtTokens` for that model (ca
 patch replaces the key). It has no `/settings` row: the page edits one value per row, while this is a map keyed by model, and
 the model is known in a session, where `/context-window --always` sets it.
 
-The ChatGPT subscription's catalog comes from Codex's `models_cache.json`. A model's maximum is that cache's `max_context_window`
-when it states one, else the value OpenAI's own Codex catalog publishes (`codex-rs/models-manager/models.json`: `gpt-6-astra`
+The ChatGPT subscription's catalog is MendCode's own list of the account's models ([connect](connect.md#where-each-list-comes-from)).
+A model's maximum is that list's `max_context_window` when it states one, else the value OpenAI's own Codex catalog publishes (`codex-rs/models-manager/models.json`: `gpt-6-astra`
 272,000 by default, 872,000 at most; Codex lets its config raise `context_window` up to `max_context_window`). Other models have
 no known maximum. So GPT-6-Astra at 500k like GPT-6.1-Sol: in a session on it, `/context-window 500k --always`.
 

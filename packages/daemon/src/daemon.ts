@@ -4407,7 +4407,14 @@ export async function startDaemon(options: DaemonOptions) {
         try {
           const preset = command.preset ? catalogPresets(catalog).find((preset) => preset.name === command.preset) : undefined
           if (command.preset && !preset) throw new Error(`unknown model preset ${command.preset}`)
-          const choice = catalogChoice(preset ?? { provider: command.provider!, model: command.model!, authMode: command.authMode }, catalog)
+          const asked = preset ?? { provider: command.provider!, model: command.model!, authMode: command.authMode }
+          // A model the saved list lacks may be one the account gained since: the list is asked for again once before it is refused.
+          let choice: ModelChoice
+          try { choice = catalogChoice(asked, catalog) } catch (error) {
+            if (!catalog.discover) throw error
+            await catalog.discover()
+            choice = catalogChoice(asked, catalog)
+          }
           const roles = { ...rolesFor(store.settings.get(), command.directory), main: choice }
           if (!command.dryRun) {
             const settings = store.settings.set(rolesPatch(store.settings.get(), command.directory, roles) as never)
@@ -5260,7 +5267,8 @@ export async function startDaemon(options: DaemonOptions) {
         const catalog = extra.length ? { ...baseCatalog, list: () => [...baseCatalog.list().filter((model) => !extra.some((item) => item.id === model.id)), ...extra] } : baseCatalog
         if (command.type === "session.model.set") {
           if ((connection.remoteAddress || connection.peer) && command.choice && ["pi", "opencode", "cursor"].includes(modelEngine(command.choice, catalog) ?? "")) return reply(connection, command.id, { ok: false, code: "forbidden", message: "[DAEMON]: this engine runs local tools and is local only" })
-          const problem = command.choice ? invalidChoice(command.choice, catalog) : undefined
+          let problem = command.choice ? invalidChoice(command.choice, catalog) : undefined
+          if (problem?.startsWith("unknown model") && baseCatalog.discover) { await baseCatalog.discover(); problem = invalidChoice(command.choice!, catalog) }
           if (problem) return reply(connection, command.id, { ok: false, code: "invalid_command", message: `[DAEMON]: ${problem}` })
           // A new model keeps the session's own `/fast` unless the choice says otherwise.
           const fast = store.sessionModel(command.sessionId)?.fast

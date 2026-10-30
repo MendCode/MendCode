@@ -306,7 +306,8 @@ export function createSetup(ctx: AppContext, actions: {
       if (themeSelection() !== onboarding.lookStart) applyLook(onboarding.lookStart)
       if (Object.keys(styleMoved()).length) changeProfile(onboarding.styleStart, { layer: true })
       // With no model to talk to the first run is not over: the next launch opens this page again (nothing else is written).
-      if (onboarding.firstRun && onboarding.detected?.usable !== false) await setupChoice({ onboarded: true })
+      // Only a check that finished and found a model marks the first run done: Esc while it still says "checking…" did, before.
+      if (onboarding.firstRun && onboarding.detected?.usable === true) await setupChoice({ onboarded: true })
       else if (onboarding.firstRun) ctx.say(NOT_SET_UP, "info")
       // Leaving the page keeps the starting tier the installer was asked for.
       if (onboarding.preset && !state.settingsNow.tier) {
@@ -319,7 +320,7 @@ export function createSetup(ctx: AppContext, actions: {
     const { choices } = action
     const patch: Record<string, unknown> = {}
     if (choices.theme !== undefined && choices.theme !== onboarding.lookStart) patch.theme = choices.theme
-    const usable = onboarding.detected?.usable !== false
+    const usable = onboarding.detected?.usable === true
     if (state.settingsNow.onboarded !== true && usable) patch.onboarded = true
     if (choices.permission !== state.settingsNow.defaultPermission) patch.defaultPermission = choices.permission
     if (choices.model && choices.model !== state.settingsNow.models?.main?.model) patch.models = { ...(state.settingsNow.models ?? {}), main: { ...(state.settingsNow.models?.main ?? {}), model: choices.model } }

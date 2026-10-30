@@ -9,16 +9,14 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
-A new install's setup signs MendCode in for itself and no longer leaves you at a prompt with no model; the pull request reviewer
-keeps working when the daemon starts with a short `PATH`, and a paused watch resumes by itself without losing requests.
+MendCode keeps its own list of the ChatGPT models your account can use, and Claude models on a new install run in the Claude Code you
+already have signed in; the setup no longer leaves you at a prompt with no model, and the pull request reviewer keeps working when the
+daemon starts with a short `PATH`.
 
 ### New
 
-- Own logins for new installs (`ownLogins`): the first setup of a new install signs MendCode in for itself. ChatGPT runs in
-  MendCode's engine with `/connect chatgpt`, and the Codex CLI's login file is not read. Claude models run in Claude Code with a
-  profile of MendCode's own (`CLAUDE_CONFIG_DIR=<data dir>/claude-code`), signed in with `mendcode claude login` (Claude Code's
-  own `claude auth login` for that profile), apart from `~/.claude`.
-  Nothing of another tool is copied or adopted. Installs set up before keep the logins they used.
+- Own ChatGPT login for new installs (`ownLogins`): the first setup of a new install makes MendCode's engine sign in to ChatGPT
+  only with `/connect chatgpt`; the Codex CLI's login file is not read. Installs set up before keep it as a fallback.
 
 ### Changed
 
@@ -50,6 +48,15 @@ keeps working when the daemon starts with a short `PATH`, and a paused watch res
   `claude --version` that answered read as "installed, signed in". Each model says who runs it and whose login pays.
 - Claude Code turns that fail on "Not logged in" give the official login command of the profile in use instead of Claude Code's
   own `/login`.
+- ChatGPT models: MendCode asks the subscription backend which models your account can use, with its own login, and keeps the list
+  in `chatgpt-models.json` in its data directory, refreshed in the background every 5 minutes. Before, it read the Codex CLI's
+  `~/.codex/models_cache.json`, so without that file only `gpt-6-luna` was listed and `models set-default chatgpt gpt-6-astra` failed
+  with "unavailable model". A model the list lacks is asked for again once before it is refused; no network, an error or an empty
+  answer keep the last list. Nothing of the Codex CLI is read or written.
+- Claude models on a new install run in the Claude Code installed on the machine, with its own login, as on an install set up
+  before. Nightly 20261030.6 gave them a separate Claude Code profile that had to be signed in again; that profile and
+  `mendcode claude login` are gone, and only ChatGPT uses MendCode's own login.
+- Setup: Esc while the page still says "checking this machine…" no longer marks the first launch done with no usable model.
 
 ## v0.0.2-nightly.20261029.2 - 2026-10-29
 

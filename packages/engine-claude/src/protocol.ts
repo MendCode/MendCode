@@ -522,12 +522,11 @@ export function resultOutcome(result: ClaudeMessage): { status: "ok" } | { statu
 
 /**
  * Claude Code's "Not logged in · Please run /login" names its own slash command, which MendCode's prompt does not have. The turn
- * says instead which official login signs in the profile the process used: MendCode's own (`CLAUDE_CONFIG_DIR`) or `~/.claude`.
+ * says instead the official login of the Claude Code MendCode runs, the user's own.
  */
-export function signInHint<T extends ReturnType<typeof resultOutcome>>(outcome: T, configDir: string | undefined): T {
+export function signInHint<T extends ReturnType<typeof resultOutcome>>(outcome: T): T {
   if (outcome.status !== "error" || !/not logged in/i.test(outcome.message)) return outcome
-  const command = `${configDir ? `CLAUDE_CONFIG_DIR=${configDir} ` : ""}claude auth login`
-  return { ...outcome, message: `${outcome.message} · sign in${configDir ? " to MendCode's own Claude Code profile" : ""} in a terminal: ${command}` }
+  return { ...outcome, message: `${outcome.message} · sign Claude Code in from a terminal: claude auth login` }
 }
 
 /**

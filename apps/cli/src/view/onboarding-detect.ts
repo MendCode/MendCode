@@ -26,7 +26,7 @@ export type DetectInput = {
   /** `daemon.info.ownLogins`: MendCode signs in for itself and uses no other tool's login. */
   ownLogins?: boolean | undefined
 }
-export type DetectHarness = { id: "claude" | "codex"; installed: boolean; signedIn?: boolean | undefined; plan?: string | undefined; profile?: "mendcode" | "default" | undefined; login?: string | undefined }
+export type DetectHarness = { id: "claude" | "codex"; installed: boolean; signedIn?: boolean | undefined; plan?: string | undefined; login?: string | undefined }
 
 export type ReadyItem = {
   id: "chatgpt" | "claude" | "codex" | "pi" | "keys"
@@ -143,12 +143,11 @@ export function detectReady(input: DetectInput): Detected {
  */
 function claudeItem(harness: DetectHarness | undefined, listed: boolean): ReadyItem {
   const label = "Claude Code"
-  const own = harness?.profile === "mendcode" ? " · MendCode's own profile" : ""
   if (!harness) return listed ? { id: "claude", label, ok: true, detail: "installed · sign-in not checked" } : { id: "claude", label, ok: false, detail: "not found", fix: CLAUDE_INSTALL }
   if (!harness.installed) return { id: "claude", label, ok: false, detail: "not installed", fix: CLAUDE_INSTALL }
-  if (harness.signedIn === false) return { id: "claude", label, ok: false, detail: `installed · not signed in${own}`, fix: harness.login ?? "claude auth login" }
-  if (harness.signedIn === undefined) return { id: "claude", label, ok: true, detail: `installed · sign-in not confirmed${own}` }
-  return { id: "claude", label, ok: true, detail: `signed in · ${harness.plan ? `${harness.plan} plan` : "plan not reported"}${own}` }
+  if (harness.signedIn === false) return { id: "claude", label, ok: false, detail: "installed · not signed in", fix: harness.login ?? "claude auth login" }
+  if (harness.signedIn === undefined) return { id: "claude", label, ok: true, detail: "installed · sign-in not confirmed" }
+  return { id: "claude", label, ok: true, detail: `signed in · ${harness.plan ? `${harness.plan} plan` : "plan not reported"}` }
 }
 
 /** The Codex CLI: with `ownLogins` it is only reported, since MendCode signs in to ChatGPT for itself (`/connect chatgpt`). */

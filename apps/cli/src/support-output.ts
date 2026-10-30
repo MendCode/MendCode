@@ -100,7 +100,7 @@ export function systemText(report: SystemReport) {
   return `${JSON.stringify(report.facts, null, 2)}\n`
 }
 
-const COMMANDS = ["backlog", "run", "export", "acp", "app-server", "session", "memory", "loop", "workflow", "usage", "storage", "package", "recipe", "profile", "control-plane", "tui", "help", "context", "status", "doctor", "debug", "generate", "completion", "agent", "import", "uninstall", "cache", "daemon", "loops", "db", "tsm", "github", "pr", "ps", "logs", "kill", "attach", "claude"]
+const COMMANDS = ["backlog", "run", "export", "acp", "app-server", "session", "memory", "loop", "workflow", "usage", "storage", "package", "recipe", "profile", "control-plane", "tui", "help", "context", "status", "doctor", "debug", "generate", "completion", "agent", "import", "uninstall", "cache", "daemon", "loops", "db", "tsm", "github", "pr", "ps", "logs", "kill", "attach"]
 const SUBCOMMANDS: Record<string, string> = {
   "control-plane": "ai system tui tsm", ai: "env status", env: "status",
   system: "status doctor check toolchain config-paths config-layers precedence adapter-status", debug: "rg config info paths scrap skill startup agent file lsp snapshot wait", rg: "tree files search",
@@ -114,7 +114,7 @@ const SUBCOMMANDS: Record<string, string> = {
   daemon: "start run status logs stop service", service: "plan install start stop restart status logs uninstall", loops: "daemon service", dream: "status tick run consolidate daemon service",
   db: "path", file: "search read status list tree", lsp: "diagnostics symbols document-symbols", snapshot: "track patch diff",
   tsm: "status plan install setup activate deactivate remove doctor open create",
-  github: "install run", claude: "login status",
+  github: "install run",
 }
 const FLAGS = "--dir --data-dir --json --format --help --version --print-logs --log-level --limit --query --glob --httpapi --index --entry --keep-config --keep-data --dry-run --force --trace --no-trace --approve --no-approve --offline --output-schema --output-last-message --ephemeral --max-turns --tools --exclude-tools --no-tools --system-prompt --append-system-prompt --config --add-dir --process"
 

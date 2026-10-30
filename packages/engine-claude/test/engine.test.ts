@@ -1013,12 +1013,11 @@ describe("claude protocol helpers", () => {
     expect(resultOutcome({ subtype: "success", terminal_reason: "completed" })).toEqual({ status: "ok" })
     expect(resultOutcome({ subtype: "error_max_turns", is_error: true })).toEqual({ status: "error", code: "claude_turn_failed", message: "[CLAUDE]: error_max_turns" })
   })
-  test("a signed-out profile's turn names the official login of that profile, not Claude Code's own /login (seen live with MendCode's profile)", () => {
+  test("a signed-out Claude Code's turn names its official login, not Claude Code's own /login that MendCode's prompt lacks", () => {
     const failed = resultOutcome({ subtype: "success", is_error: true, result: "Not logged in · Please run /login" })
-    expect(signInHint(failed, "/d/claude-code")).toEqual({ status: "error", code: "claude_turn_failed", message: "[CLAUDE]: Not logged in · Please run /login · sign in to MendCode's own Claude Code profile in a terminal: CLAUDE_CONFIG_DIR=/d/claude-code claude auth login" })
-    expect(signInHint(failed, undefined)).toMatchObject({ message: expect.stringMatching(/sign in in a terminal: claude auth login$/) })
+    expect(signInHint(failed)).toEqual({ status: "error", code: "claude_turn_failed", message: "[CLAUDE]: Not logged in · Please run /login · sign Claude Code in from a terminal: claude auth login" })
     const other = resultOutcome({ subtype: "error_max_turns", is_error: true })
-    expect(signInHint(other, "/d/claude-code")).toBe(other)
+    expect(signInHint(other)).toBe(other)
   })
 })
 

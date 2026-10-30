@@ -32,11 +32,11 @@ describe("detection to recommended model", () => {
   test("Claude Code as its own status reports it: installed is not signed in, and a plan is shown only when it says one", () => {
     const harness = (claude: NonNullable<DetectInput["harnesses"]>[number]) => detect({ claude: true }, { harnesses: [claude] })
     // Before, `claude --version` answering was shown as "installed, signed in" and its models offered.
-    const out = harness({ id: "claude", installed: true, signedIn: false, profile: "mendcode", login: "mendcode claude login" })
-    expect(out.items.find((item) => item.id === "claude")).toMatchObject({ ok: false, detail: "installed · not signed in · MendCode's own profile", fix: "mendcode claude login" })
+    const out = harness({ id: "claude", installed: true, signedIn: false, login: "claude auth login" })
+    expect(out.items.find((item) => item.id === "claude")).toMatchObject({ ok: false, detail: "installed · not signed in", fix: "claude auth login" })
     expect(out.options.filter((option) => option.source === "claude")).toEqual([])
     expect(out.usable).toBe(false)
-    const max = harness({ id: "claude", installed: true, signedIn: true, plan: "max", profile: "default" })
+    const max = harness({ id: "claude", installed: true, signedIn: true, plan: "max" })
     expect(max.items.find((item) => item.id === "claude")).toMatchObject({ ok: true, detail: "signed in · max plan" })
     expect(max.options[0]).toMatchObject({ source: "claude", line: expect.stringContaining("runs in Claude Code, hosted by MendCode") })
     expect(harness({ id: "claude", installed: true, signedIn: true }).items.find((item) => item.id === "claude")?.detail).toBe("signed in · plan not reported")
@@ -435,6 +435,19 @@ describe("the wizard in the app", () => {
     expect(writes(h)).toEqual([{ onboarded: true }])
     expect(h.app.page).toBe("chat")
     expect(h.sentOf("prompt.set")).toEqual([])
+  })
+  test("esc while the page still says checking… does not mark the first run done (seen live on a clean nightly .6 install)", async () => {
+    let answer: (value: never) => void = () => {}
+    const pending = new Promise<never>((resolve) => { answer = resolve })
+    const h = onboardingHarness({ claude: true }, { reply: (command) => command.type === "daemon.info" ? pending : undefined })
+    const opened = h.app.openSetupIfFirstRun({})
+    await Bun.sleep(10)
+    expect(h.app.page).toBe("setup")
+    await h.app.onKey("\x1b")
+    await Bun.sleep(5)
+    expect(writes(h).filter((patch) => "onboarded" in patch)).toEqual([])
+    answer({ ok: true, result: { engine: "native", dataDir: "/d", pid: 1 } } as never)
+    await opened
   })
   test("/setup reopens it with the saved values and enter changes nothing by itself", async () => {
     const h = onboardingHarness({ claude: true })

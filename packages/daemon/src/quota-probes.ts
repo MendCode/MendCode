@@ -75,17 +75,17 @@ export function nativeCodexProbe(deps: {
   }
 }
 
-type ClaudeProbeFn = (input: { model: string; cwd: string; bin: string; env?: Record<string, string> | undefined; signal: AbortSignal; onQuota(snapshot: Parameters<Parameters<RefreshProbe>[0]["report"]>[0]): void }) => Promise<void>
+type ClaudeProbeFn = (input: { model: string; cwd: string; bin: string; signal: AbortSignal; onQuota(snapshot: Parameters<Parameters<RefreshProbe>[0]["report"]>[0]): void }) => Promise<void>
 
 /**
  * Claude Code: one throwaway `claude` process running one minimal turn on Haiku (Claude Code's own prompt plus one word) with every tool
  * off; its `rate_limit_event` carries the windows. Haiku unless the user named another model. It runs in the probe's own empty directory,
  * never in a project: Claude Code loads the CLAUDE.md, settings, hooks and MCP servers of the folder it starts in.
  */
-export function claudeCodeProbe(deps: { bin: string; dataDir: string; env?: () => Record<string, string> | undefined; run?: ClaudeProbeFn }): RefreshProbe {
+export function claudeCodeProbe(deps: { bin: string; dataDir: string; run?: ClaudeProbeFn }): RefreshProbe {
   return async ({ model, signal, report }) => {
     const run = deps.run ?? (async (input) => (await import("@mendcode/engine-claude")).probeClaudeQuota(input))
-    await run({ model: claudeAlias({ model: model ?? "claude-haiku" }).model, cwd: quotaProbeDir(deps.dataDir), bin: deps.bin, env: deps.env?.(), signal, onQuota: report })
+    await run({ model: claudeAlias({ model: model ?? "claude-haiku" }).model, cwd: quotaProbeDir(deps.dataDir), bin: deps.bin, signal, onQuota: report })
   }
 }
 

@@ -464,9 +464,9 @@ const SharedSettings = lazySchema(() => z.strictObject({
   /** The session's `/env` credentials also go to Claude Code, Codex, pi and ACP agents (their process environment, and the names to their model). Unset or `true`: they do. `false`: only the native engine gets them. Local clients only. */
   engineEnvironment: z.boolean().optional(),
   /**
-   * MendCode signs in for itself (docs/setup.md#own-logins): ChatGPT only through `/connect chatgpt`, never the Codex CLI's login
-   * file, and Claude Code with MendCode's own profile (`CLAUDE_CONFIG_DIR=<data dir>/claude-code`, its own `claude auth login`), not
-   * `~/.claude`. The first setup of a new install writes `true`; unset, an install set up before keeps both as they were.
+   * The native engine signs in to ChatGPT for itself (docs/setup.md#logins): only through `/connect chatgpt`, never the Codex CLI's
+   * login file. Claude models are not affected: they run in the user's Claude Code, signed in as it is. The first setup of a new
+   * install writes `true`; unset, an install set up before keeps the Codex CLI's login as a fallback.
    */
   ownLogins: z.boolean().optional(),
   /** URL patterns (`*` spans any characters) that `http` hooks in `hooks.json` may POST to. Unset or empty: http hooks never run. */
@@ -719,8 +719,8 @@ export const DaemonInfoReport = lazySchema(() => z.strictObject({
   /** Subscription login check; absent for engines that do not use one. `message` explains a failure. */
   login: z.strictObject({ ok: z.boolean(), message: z.string().optional() }).optional(),
   /**
-   * Claude Code and Codex as their own status commands report them (docs/setup.md#own-logins): installed, signed in, and the plan
-   * only when the tool says it. Never an email, organization or token. `login` is the official command that signs one in for MendCode.
+   * Claude Code and Codex as their own status commands report them (docs/setup.md#logins): installed, signed in, and the plan
+   * only when the tool says it. Never an email, organization or token. `login` is the tool's own official sign-in command.
    */
   harnesses: z.array(z.strictObject({
     id: z.enum(["claude", "codex"]),
@@ -728,10 +728,9 @@ export const DaemonInfoReport = lazySchema(() => z.strictObject({
     signedIn: z.boolean().optional(),
     method: z.string().max(30).optional(),
     plan: z.string().max(30).optional(),
-    profile: z.enum(["mendcode", "default"]).optional(),
     login: z.string().max(300).optional(),
   })).max(4).optional(),
-  /** The `ownLogins` setting in force: MendCode signs in for itself and uses no other tool's login. */
+  /** The `ownLogins` setting in force: the native engine signs in to ChatGPT for itself, without the Codex CLI's login. */
   ownLogins: z.boolean().optional(),
   /** The quota refresh probe per listed provider (docs/usage-limit.md); absent when the user listed none. */
   quotaRefresh: z.array(z.strictObject({

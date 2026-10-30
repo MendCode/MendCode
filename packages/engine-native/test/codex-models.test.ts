@@ -1,8 +1,5 @@
-import { afterEach, describe, expect, test } from "bun:test"
-import { mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs"
-import { tmpdir } from "node:os"
-import path from "node:path"
-import { createCodexModelCatalog, NATIVE_DEFAULTS, parseCodexModels } from "../src"
+import { describe, expect, test } from "bun:test"
+import { parseCodexModels } from "../src"
 
 const levels = (...efforts: string[]) => efforts.map((effort) => ({ effort, description: "x" }))
 const payload = {
@@ -43,31 +40,4 @@ describe("parseCodexModels", () => {
   })
 })
 
-const dirs: string[] = []
-afterEach(() => {
-  for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true })
-})
 
-describe("createCodexModelCatalog", () => {
-  test("a missing or broken cache still offers the default model", () => {
-    const dir = mkdtempSync(path.join(tmpdir(), "codex-models-"))
-    dirs.push(dir)
-    expect(createCodexModelCatalog(path.join(dir, "missing.json"))().map((m) => m.id)).toEqual([NATIVE_DEFAULTS.model])
-    const broken = path.join(dir, "broken.json")
-    writeFileSync(broken, "{")
-    expect(createCodexModelCatalog(broken)().map((m) => m.id)).toEqual([NATIVE_DEFAULTS.model])
-  })
-  test("re-reads the cache only when it changes, and appends the default when the account list lacks it", () => {
-    const dir = mkdtempSync(path.join(tmpdir(), "codex-models-"))
-    dirs.push(dir)
-    const file = path.join(dir, "models_cache.json")
-    writeFileSync(file, JSON.stringify({ models: [payload.models[0]] }))
-    const list = createCodexModelCatalog(file)
-    expect(list().map((m) => m.id)).toEqual(["gpt-6-sol", NATIVE_DEFAULTS.model])
-    expect(list()).toBe(list())
-    writeFileSync(file, JSON.stringify(payload))
-    const later = new Date(Date.now() + 5_000)
-    utimesSync(file, later, later)
-    expect(list().map((m) => m.id)).toEqual(["gpt-6-sol", "gpt-6-luna"])
-  })
-})

@@ -9,6 +9,8 @@ export type ModelCatalog = {
   allows?(model: string): boolean
   /** Settles what `list()` depends on that is learned asynchronously (is Claude Code installed); awaited before a models report is built. */
   refresh?(): Promise<void>
+  /** Asks the providers that can list their models for a fresh list now; awaited once before a model the list lacks is refused. */
+  discover?(): Promise<void>
 }
 
 /** The catalog's entry for a model id; a full id of a Claude Code family (`claude-haiku-5-5`) is its alias's entry pinned to that id (`findModel`). */
@@ -163,7 +165,7 @@ export function filteredCatalog(catalog: ModelCatalog, settings: () => Settings)
     const current = settings()
     return catalog.list().filter((model) => modelAllowed(model.id, current, model.provider))
   }
-  return { selectable: catalog.selectable, list, ...(catalog.refresh ? { refresh: catalog.refresh } : {}), allows: (model) => catalog.allows?.(model) !== false && modelAllowed(model, settings(), catalog.list().find((entry) => entry.id === model)?.provider), get defaults() {
+  return { selectable: catalog.selectable, list, ...(catalog.refresh ? { refresh: catalog.refresh } : {}), ...(catalog.discover ? { discover: catalog.discover } : {}), allows: (model) => catalog.allows?.(model) !== false && modelAllowed(model, settings(), catalog.list().find((entry) => entry.id === model)?.provider), get defaults() {
     const listed = list()
     if (listed.some((model) => model.id === catalog.defaults.model)) return catalog.defaults
     return { model: listed[0]?.id ?? catalog.defaults.model }

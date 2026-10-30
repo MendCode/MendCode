@@ -13,7 +13,7 @@ import { appendFileSync, existsSync } from "node:fs"
 import { logLevel } from "./logging"
 import { dropHostSessionEnv } from "./inherited-env"
 import { completeToolPath } from "./tool-path"
-import { claudeProfileEnv, claudeStatus, codexStatus } from "./harness-status"
+import { claudeStatus, codexStatus } from "./harness-status"
 import { createProviderMetadataAuth } from "./provider-metadata-auth"
 import { homedir } from "node:os"
 import path from "node:path"
@@ -21,7 +21,7 @@ import {
   CHATGPT_CODEX_BASE_URL,
   chatgptQuota,
   codexSubscriptionHeaders,
-  createCodexModelCatalog,
+  createChatgptModelCatalog,
   createInstructionLoader,
   createNativeEngine,
   createLoopbackJevEvaluator,
@@ -204,11 +204,9 @@ const lspWarmUp = () => {
 }
 const afterWrite = createAfterWrite({ manager: lsp, formatter, budgetMs: 4_000, diagnosticsWaitMs: 300, warmUp: lspWarmUp })
 /**
- * Models of the user's subscription, from the Codex CLI's cache (read-only), plus Claude Code's when the user's own
- * `claude` is installed (MENDCODE_CLAUDE=0 hides them; MENDCODE_CLAUDE_BIN points at a `claude` outside PATH).
- * Only the native engine lets the user choose.
+ * Claude Code's models when the user's own `claude` is installed (MENDCODE_CLAUDE=0 hides them; MENDCODE_CLAUDE_BIN points at a
+ * `claude` outside PATH). The subscription's own models are `chatgptModels` below. Only the native engine lets the user choose.
  */
-const codexModels = createCodexModelCatalog()
 const claudeBin = process.env.MENDCODE_CLAUDE_BIN || "claude"
 const claudeDetection = createClaudeDetection({ probe: () => probeClaude(claudeBin) })
 const claudeModels = createClaudeModelCatalog()
@@ -235,6 +233,9 @@ const subscriptionHeaders = async () => {
 }
 /** A login `subscriptionHeaders` can use: MendCode's own (/connect chatgpt) or, without `ownLogins`, the Codex CLI's. Only whether it exists; nothing is read. */
 const subscriptionLogin = () => providerAuth.chatgpt.status().source === "v2" || (!extractionSettings().ownLogins && existsSync(path.join(process.env.CODEX_HOME ?? path.join(homedir(), ".codex"), "auth.json")))
+/** The models the ChatGPT account can use, asked of the subscription backend with that same login and kept in `<dir>/chatgpt-models.json` (docs/connect.md#where-each-list-comes-from). */
+const chatgptModels = createChatgptModelCatalog({ dir, headers: subscriptionHeaders, signedIn: subscriptionLogin, log: (message) => logLine(`[MODELS]: ${message}`) })
+const codexModels = () => chatgptModels.list()
 /** External agents that speak the Agent Client Protocol, from `<dir>/acp-agents.json`; each is a model `acp:<name>`. */
 const acpAgents = createAcpAgents({
   dir,
@@ -261,7 +262,8 @@ const realModels = (readOnly?: boolean): ModelInfo[] => [...codexModels(), ...(e
 const modelCatalog: ModelCatalog = filteredCatalog({
   selectable: engineName === "native",
   list: (readOnly) => { const real = realModels(readOnly); return engineName === "native" ? [...real, ...extensionVirtualModels(real)] : real },
-  ...(claudeProbed ? { refresh: claudeDetection.refresh } : {}),
+  refresh: async () => { await Promise.all([claudeProbed ? claudeDetection.refresh() : undefined, chatgptModels.settle()]) },
+  discover: chatgptModels.discover,
   defaults: { model: NATIVE_DEFAULTS.model, effort: NATIVE_DEFAULTS.effort },
 }, () => extractionSettings())
 let stopClaude: (() => void) | undefined
@@ -396,7 +398,7 @@ export const daemon = await startDaemon({
           claude: async (input) => {
             await claudeDetection.refresh()
             if (!claudeDetection.installed()) throw new Error("[PROBE]: Claude Code is not installed")
-            await claudeCodeProbe({ bin: claudeBin, dataDir: dir, env: () => claudeProfileEnv({ ownLogins: extractionSettings().ownLogins, dataDir: dir }) })(input)
+            await claudeCodeProbe({ bin: claudeBin, dataDir: dir })(input)
           },
         }
       : engineName === "codex" ? { codex: codexAppServerProbe({ bin: process.env.MENDCODE_CODEX_BIN || "codex", dataDir: dir }) } : {},
@@ -534,9 +536,7 @@ export const daemon = await startDaemon({
                 const cache = claudeCacheEnv(settings)
                 // Compaction at MendCode's point (`claude_compact`), not near Claude Code's 1M window.
                 const compact = claudeCompactEnv({ model: model.model, settings, on: featureOn(settings, "claude_compact", { safeMode }) })
-                // `ownLogins`: MendCode's own Claude Code profile and login, never `~/.claude`'s.
-                const profile = claudeProfileEnv({ ownLogins: settings.ownLogins, dataDir: dir })
-                return cache || subagent || compact || profile ? { ...cache, ...subagent, ...compact, ...profile } : undefined
+                return cache || subagent || compact ? { ...cache, ...subagent, ...compact } : undefined
               },
               environment: credentialsFor,
               readBlob: async (ref) => new Uint8Array(store.readBlob(ref.sha256)),
@@ -791,7 +791,7 @@ export const daemon = await startDaemon({
       : {}),
     // What the setup says about Claude Code and Codex; their own status commands, never their credential files.
     harnesses: async () => Promise.all([
-      claudeStatus({ bin: claudeBin, ownLogins: extractionSettings().ownLogins, dataDir: dir }),
+      claudeStatus({ bin: claudeBin }),
       codexStatus({ bin: process.env.MENDCODE_CODEX_BIN || "codex" }),
     ]),
   },

@@ -1,12 +1,6 @@
-import { readFileSync, statSync } from "node:fs"
-import { homedir } from "node:os"
-import path from "node:path"
 import { REASONING_EFFORTS, type ModelInfo, type ReasoningEffort } from "@mendcode/protocol"
-import { NATIVE_DEFAULTS } from "./defaults"
 
-/** Written by the Codex CLI after it asks the subscription backend which models the account can use. */
-export const CODEX_MODELS_CACHE = path.join(homedir(), ".codex", "models_cache.json")
-
+/** An entry of the subscription backend's model list (`GET …/models`), the shape MendCode keeps in its own `chatgpt-models.json`. */
 type CachedModel = {
   slug?: unknown
   display_name?: unknown
@@ -46,27 +40,4 @@ export function parseCodexModels(payload: unknown): ModelInfo[] {
     })
   }
   return out
-}
-
-/** The engine default alone, for when the Codex cache is missing or unreadable. */
-const FALLBACK: ModelInfo[] = [{ id: NATIVE_DEFAULTS.model, name: NATIVE_DEFAULTS.model, efforts: ["low", "medium", "high"], defaultEffort: NATIVE_DEFAULTS.effort }]
-
-/**
- * Read-only view of the Codex model cache, re-read only when the file changes. The default model is
- * always present so a missing cache never leaves the engine without a choice.
- */
-export function createCodexModelCatalog(file = CODEX_MODELS_CACHE) {
-  let cached: { mtimeMs: number; models: ModelInfo[] } | undefined
-  return function list(): ModelInfo[] {
-    try {
-      const { mtimeMs } = statSync(file)
-      if (cached?.mtimeMs !== mtimeMs) {
-        const models = parseCodexModels(JSON.parse(readFileSync(file, "utf8")))
-        cached = { mtimeMs, models: models.some((m) => m.id === NATIVE_DEFAULTS.model) ? models : [...models, ...FALLBACK] }
-      }
-      return cached.models
-    } catch {
-      return FALLBACK
-    }
-  }
 }

@@ -8,8 +8,7 @@
     "./remote": "./src/remote.ts",
     "./storage-compact": "./src/storage-compact.ts",
     "./config-bundle": "./src/config-bundle/index.ts",
-    "./http-launch": "./src/http-launch.ts",
-    "./claude-profile": "./src/claude-profile.ts"
+    "./http-launch": "./src/http-launch.ts"
   },
   "bin": {
     "mendd": "./src/main.ts"

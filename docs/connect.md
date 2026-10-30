@@ -79,6 +79,29 @@ provider. `ctrl+a` switches to the provider list (including Connect provider), `
 selects. Favorites and Recent lead the unfiltered list without duplicates. Escape backs out of a provider filter,
 then returns to the role page. Native models with variants or efforts open the variant picker after selection.
 
+## Where each list comes from
+
+Every list is MendCode's own: no other program's cache is read or written, and no session's model is changed when a list changes.
+A session on a model a list no longer has keeps it; its turn then fails with the provider's answer.
+
+- **ChatGPT** (MendCode's engine): the subscription backend is asked which models your account can use (`GET …/backend-api/codex/models`,
+  the request the Codex CLI makes), with MendCode's ChatGPT login, and the answer is kept in `<dataDir>/chatgpt-models.json`: the
+  name, efforts and windows of each model, the ETag, and a hash of the account, never a token. A list older than 5 minutes is
+  shown at once and refreshed in the background (a 304 when nothing changed). No network, an error or an empty answer keep the last
+  list and are retried after a minute. A list of another account is asked again. A first listing with no list yet waits up to 5 s
+  for it; with no login, or before the first answer, only the engine default (`gpt-6-luna`) is listed. A model the list does not
+  have (`models set-default chatgpt gpt-6-astra`, `/model gpt-6-astra`) is asked for again once before it is refused. `codex:`
+  models (the thread bridge) are the same list.
+- **Claude Code**: `claude-fable`, `claude-opus`, `claude-sonnet` and `claude-haiku` (the newest of each family) and any full id of
+  a family. Claude Code has no command that lists models, so there is nothing to refresh; they are shown when `claude --version`
+  answers.
+- **API-key providers**: the provider's preset, filled in by models.dev (`<dataDir>/models.dev.json`, refreshed in the background
+  when a week old), or the `models` saved in `providers.json`. `providers refresh <id>` asks the provider's own list; an empty answer
+  or an error keeps the current one. Azure, Vertex and Cloudflare AI Gateway have no list to ask: their models are the ids you
+  configure.
+- **ACP agents**: `acp:<name>`, plus the models the agent offered on its first turn (`<dataDir>/acp-models.json`).
+- **pi**: the models pi's own configuration lists.
+
 ## Google Gemini
 
 `/connect google` or `/connect Google Gemini` opens the masked API-key form; Ctrl+E uses `GOOGLE_GENERATIVE_AI_API_KEY`. Enter explicitly enables and tests the provider. Google Gemini follows the existing choices, preserving shortcuts 1–9; reach it with arrows. Refresh and model selection use the same keys as other providers. Custom endpoints also offer the `google` native format. Gemini stays disabled until explicitly enabled; see [native provider behavior](providers.md#google-gemini-native-b1003).
