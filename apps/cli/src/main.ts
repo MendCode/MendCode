@@ -25,6 +25,7 @@ import { sessionToMarkdown } from "./export"
 import { HTTP_USAGE, parseServerCommand } from "./http-cli"
 import { createDaemonServiceCli, DAEMON_USAGE, parseDaemonService, type DaemonServiceCommand } from "./daemon-service"
 import { daemonCommand } from "./launcher"
+import { droppedEnvLog, hostSessionEnvNames, restartWithoutHostSessionEnv, withoutHostSessionEnv } from "@mendcode/client/inherited-env"
 import { parseViewCommand, runViewCommand } from "./view-args"
 import { parseDocsCommand } from "./docs-args"
 import { parsePackageFileCommand, runPackageFileCommand } from "./package-file-command"
@@ -63,6 +64,8 @@ try {
   if (server) {
     if (server.help) { process.stdout.write(HTTP_USAGE); process.exit(0) }
     refuseFromSession(server.dir, "opens an HTTP server on the data directory")
+    // The daemon runs in this process: it restarts once, in place, without a Claude Code shell's session variables (inherited-env.ts).
+    await restartWithoutHostSessionEnv({ log: (line) => process.stderr.write(`${line}\n`) })
     const { launchHttpServer } = await import("@mendcode/daemon/http-launch")
     await launchHttpServer({ ...server, dir: server.dir!, ...(globalOptions.logLevel ? { logLevel: globalOptions.logLevel } : {}) })
     await new Promise(() => {})
@@ -123,6 +126,8 @@ if (daemonService) {
     },
     launch: async () => { await runtime.launchUserDaemon(options) },
     foreground: async () => {
+      // The daemon runs in this process: it restarts once, in place, without a Claude Code shell's session variables (inherited-env.ts).
+      await restartWithoutHostSessionEnv({ log: (line) => process.stderr.write(`${line}\n`) })
       process.argv = [process.execPath, "__daemon", ...host.plan.programArguments.slice(command.length)]
       await import("../../../packages/daemon/src/main")
       await new Promise<void>(() => {})
@@ -361,7 +366,11 @@ if (startup?.kind === "tui" && /^(\/\$bunfs\/|[A-Za-z]:[\\/]~BUN[\\/])/.test(Bun
   // Solo is only a wish until the first connection: with a daemon already running this terminal only draws.
   const hosts = soloPending && !(await liveDaemon(daemonDataDir ?? process.env.MENDCODE_V2_DIR ?? DEFAULT_DIR))
   const lean = leanClientEnv(process.env, hosts)
-  if (lean) (await (await import("./relaunch")).selfExec())?.(process.execPath, process.argv.slice(2), lean)
+  // A terminal that will host the daemon also leaves a Claude Code shell's session variables behind in that restart (inherited-env.ts).
+  const inherited = hosts ? hostSessionEnvNames(process.env) : []
+  const next = inherited.length ? withoutHostSessionEnv(lean ?? process.env) : lean
+  if (inherited.length) log("INFO", droppedEnvLog(inherited)!)
+  if (next) (await (await import("./relaunch")).selfExec())?.(process.execPath, process.argv.slice(2), next)
   forgetLeanJit()
 }
 /**

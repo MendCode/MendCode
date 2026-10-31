@@ -64,6 +64,52 @@ export function claudeArgs(input: { model?: string | undefined; effort?: Reasoni
   ]
 }
 
+/**
+ * What a MendCode session's run limits change in its Claude Code process. Claude Code 2.1.314 reads both variables at start
+ * (checked in its binary; neither is in `claude --help`): `CLAUDE_CODE_DISABLE_CLAUDE_MDS` loads no CLAUDE.md of any level (managed,
+ * user, project, `.claude/rules`, nested) and `CLAUDE_CODE_DISABLE_AUTO_MEMORY` turns auto memory off. A session with both limits is
+ * a PR review child (the daemon's only such session), which runs in a throwaway worktree of the PR's head: `--setting-sources user`
+ * (in `claude --help`) also keeps that checkout's `.claude/settings*.json` (hooks, permission rules) from configuring its reviewer,
+ * while the user's own settings and login stay as they are. Nothing is added without a limit.
+ */
+export function claudeRunLimits(limits: { noContextFiles?: boolean | undefined; noMemory?: boolean | undefined; untrustedCheckout?: boolean | undefined; responseLanguage?: string | undefined } | undefined): { args: string[]; env?: Record<string, string> } {
+  const env = {
+    ...(limits?.noContextFiles ? { CLAUDE_CODE_DISABLE_CLAUDE_MDS: "1" } : {}),
+    ...(limits?.noMemory ? { CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" } : {}),
+  }
+  // A PR's checkout is untrusted code: its project settings (hooks run commands) are never loaded, only the user's own.
+  const userSettingsOnly = limits?.untrustedCheckout || (limits?.noContextFiles && limits.noMemory)
+  // `language` is a Claude Code setting ("Preferred language for Claude responses", put in its system prompt as "Always respond in …").
+  // `--settings` is the flag layer: 2.1.314 always loads it, whatever `--setting-sources` says, and above the user's settings
+  // (sources low to high: user, project, local, flag, policy; both read in its binary), so the user's own `language` does not reach
+  // a PR review child, which writes in the repository's review language instead. Nothing is saved to any settings file.
+  const language = limits?.responseLanguage ? ["--settings", JSON.stringify({ language: limits.responseLanguage })] : []
+  return { args: [...(userSettingsOnly ? ["--setting-sources", "user"] : []), ...language], ...(Object.keys(env).length ? { env } : {}) }
+}
+
+/**
+ * Every `--settings <json object>` of `args` as one, the later keys winning: a process may get settings from several places (fast
+ * mode, a run limit's language), and neither may depend on how Claude Code reads a repeated option. A value that is not a JSON
+ * object (a settings file's path) is left where it is.
+ */
+export function mergeSettingsArgs(args: readonly string[]): string[] {
+  const merged: Record<string, unknown> = {}
+  const out: string[] = []
+  let at = -1
+  for (let index = 0; index < args.length; index++) {
+    const value = args[index + 1]
+    if (args[index] !== "--settings" || value === undefined) { out.push(args[index]!); continue }
+    let parsed: unknown
+    try { parsed = JSON.parse(value) } catch { parsed = undefined }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) { out.push(args[index]!, value); index++; continue }
+    Object.assign(merged, parsed)
+    if (at < 0) { at = out.length; out.push("--settings", "") }
+    index++
+  }
+  if (at >= 0) out[at + 1] = JSON.stringify(merged)
+  return out
+}
+
 export function controlRequest(requestId: string, request: Record<string, unknown>) {
   return JSON.stringify({ type: "control_request", request_id: requestId, request })
 }
@@ -157,7 +203,10 @@ export function claudeToolPermission(name: string): "read" | "write" | "execute"
 function toolResultText(content: unknown): string {
   if (typeof content === "string") return content
   if (!Array.isArray(content)) return ""
-  return content.map((part: any) => (part?.type === "text" && typeof part.text === "string" ? part.text : part?.type === "image" ? "[image]" : "")).filter(Boolean).join("\n")
+  // ToolSearch answers with tool references only: say what it loaded instead of showing an empty result.
+  const loaded = content.filter((part: any) => part?.type === "tool_reference" && typeof part.tool_name === "string").map((part: any) => part.tool_name as string)
+  const text = content.map((part: any) => (part?.type === "text" && typeof part.text === "string" ? part.text : part?.type === "image" ? "[image]" : "")).filter(Boolean)
+  return [...text, ...(loaded.length ? [`Loaded ${loaded.join(", ")}`] : [])].join("\n")
 }
 
 type OpenBlock = { kind: "text" | "reasoning" | "tool"; itemId?: ItemId; text: string; toolUseId?: string; name?: string; json: string; /** Wordless thinking deltas seen (`SILENT_THINKING_EVERY`). */ silent?: number; /** Input characters when the card last heard how much is written. */ told?: number }

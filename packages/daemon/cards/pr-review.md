@@ -1,18 +1,22 @@
 ---
 summary: PR reviewer, repo watch, hosted Action, @mendcode
-docs: pr-review
+docs: pr-review, pr-review-setup
 aliases: pr-reviewer, code-review, review-yaml
 ---
-For: "review this PR", "why did MendCode comment on my PR", "configure the reviewer", "teach the reviewer".
+For: "review this PR", "set up PR review", "why did MendCode comment on my PR", "configure the reviewer", "teach the reviewer".
 
-A review has two passes in plan-mode child sessions: one finds candidate defects as JSON (line on the diff's new side, severity, category, file:line evidence), a fresh one tries to refute each. Only confirmed findings are published (strict also publishes plausible ones), ranked, at most `cap` (8); the rest are one "and N smaller notes" line. Context is the diff plus the code graph's callers and callees of each changed symbol, within half of budget.tokens_per_pr (200000).
+Two read-only child passes: one finds defects (JSON, file:line evidence), a fresh one tries to refute each. Only confirmed findings are posted (strict also plausible), at most `cap` (8). Context: diff plus code-graph callers/callees, within half of budget.context_tokens (200000/call); a larger diff is reviewed in parts.
 
-Repo config .mendcode/review.yaml: enabled (false), profile quiet|normal|strict, cap 1..30, paths [{glob, instructions}], ignore, checks (run in the OS sandbox, no network, output to the verifier), fixes, triggers, budget. The base branch decides everything but path instructions, so a PR cannot turn checks or publishing on for itself. Learnings: .mendcode/review-learnings.md, one bullet each, read from the base branch, cut to 4 KB.
+Repo config .mendcode/review.yaml (base branch decides; a PR only adds path instructions): enabled (false), preset, profile quiet|normal|strict, cap, paths, ignore, checks (sandbox, no network), fixes, triggers, budget.tokens_per_pr (1000000 per head; null = no cap; at the cap candidates are kept, unposted), backlog {max_prs: 10, window_days: 30}, template.language (English, a name or auto = the PR author's; repo only). Learnings: .mendcode/review-learnings.md.
 
-Switch: off until experimental.pr_review (feature pr_review, balanced tier up, permit). The user types /pr review [pr] (one PR now), /pr watch-repo (a new PR or new head starts a review; no model call while nothing changes), /pr unwatch-repo, /pr repos, /pr publish on|off (asked once before the first post to a repository). Posts are one COMMENT review with inline comments and hidden markers, never twice for the same finding or head. A notice that arrives while the session is busy is held and shown when it is idle (outbox.json). An @mendcode command that cannot be answered yet (no /pr publish on, or publishers do not allow this login) is kept and answered once that changes, once, not if the head has a review by a publisher; /pr publish holds per directory; reviewers: all, requested or logins who may ask (grants nothing else); review children are not offered shell (plan mode refuses commands), skills or instruction files; they read the checkout with read, grep and glob. State: <dir>/pr-review/watches.json, outbox.json and one file per PR.
+Set up PR review: call review_config setup first (read only, no scope): forge, login, configs, watches, claims, role signals, what is missing and the questions. Confirm the role, then preview/apply (with a scope). Review a PR now: pr_review review (or /pr review <n>); never post @mendcode from the user's account.
 
-PR comments (write access only): @mendcode review | pause | resume | explain (reply to a MendCode comment) | fix (needs fixes: true; local daemon only; pushes one commit only if checks pass) | learn <text> (proposes the learnings line). A failing check on a reviewed head gets one explaining comment per failing set.
+Switch: experimental.pr_review. /pr watch-repo [all|requested] reviews each new PR or head and, at start, up to backlog.max_prs open PRs with no review; /pr unwatch-repo, /pr repos, /pr publish on|off (asked once). A watch keeps the daemon up and survives restarts, sleep and outages (a lost repo ends it). Posts one COMMENT review with inline comments, never twice.
 
-Hosted: `mendcode github install --hosted --model PROVIDER/MODEL --release TAG --sha256 HEX [--write]` writes .github/workflows/mendcode-review.yml (ubuntu-latest, pull_request never pull_request_target, the provider key secret plus GITHUB_TOKEN with pull-requests: write). It runs `github run --publish --review`, state from GitHub markers, no checks. A fork's run has no secret and says a maintainer can comment `@mendcode review`.
+Platform: a budget, quota or rate-limit stop checkpoints (on_quota: wait) and resumes. .mendcode/reviewers.yaml routes to the global reviewer or personal ones (own memory); capabilities review|fix|publish are enforced. Jobs claim their PR (best-effort, checked before each write). fix.mode review|fix-once|fix-loop pushes only with fix.push and /pr publish on, else keeps a local ref; no force push. Stages none|fixed|dynamic; a stacked PR: own range. Forges: GitHub (gh), GitLab (glab), Gitea/Forgejo (GITEA_TOKEN); not on GitLab/Gitea: check follow-up, hosted run; Gitea: no thread resolve. /reviews (or /pr dashboard): jobs, retry, take over, audit (session only), config. State in <dir>/pr-review: watches.json outbox.json jobs.json effects.json accounting.json device.json ownership.json. Notices: no model turn unless experimental.pr_review_prompts.
 
-Data honesty: say which findings were confirmed and which were folded; never call a finding verified when the summary says verification failed.
+PR comments (write access only): @mendcode review | pause | resume | explain | fix (needs fixes: true; local daemon) | learn <text>. Checked in order: permission, filters, reviewed head (one reply; the next push is reviewed).
+
+Hosted: `mendcode github install --hosted --model PROVIDER/MODEL --release TAG --sha256 HEX [--write]` writes .github/workflows/mendcode-review.yml (pull_request, never pull_request_target).
+
+Data honesty: say which findings were confirmed or folded; never call one verified if verification failed.

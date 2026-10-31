@@ -30,7 +30,7 @@ The context window in the model list is 200K for every Claude model until Claude
 MendCode drives the unmodified `claude` binary through the same stream-json protocol the official Agent SDK uses:
 
 - Claude Code runs its own agent loop, tools, `CLAUDE.md`, skills, hooks, output style and MCP servers, from your normal Claude settings (user, project, local).
-- Its system prompt stays its own. MendCode adds a short note after it (`--append-system-prompt`): what this terminal draws, so the model writes a Mermaid diagram or a chart when one helps, and that a changed MCP server is there on the next message. The `minimal` prompt mode leaves out the drawing lines.
+- Its system prompt stays its own. MendCode adds a short note after it (`--append-system-prompt`): that it runs inside MendCode and reads MendCode's own commands and features with `mendcode docs --search` (the line a native session carries), what this terminal draws, so the model writes a Mermaid diagram or a chart when one helps, and that a changed MCP server is there on the next message. The `minimal` prompt mode leaves out the drawing lines.
 - It uses its own login. MendCode never reads, copies or forwards Claude credentials, and there is no proxy or relay.
 - It runs with your Claude Code's own configuration and login (`~/.claude`, or your `CLAUDE_CONFIG_DIR`), on a new install as on an old one ([setup](setup.md#logins)); `ownLogins` changes only ChatGPT's login. The setup reads `claude auth status --json` for installed, signed in and the plan (`subscriptionType`, only when reported); a turn that fails on "Not logged in" says `claude auth login`.
 - One `claude` process serves one session. It stays up between turns, and stops after 10 idle minutes or when the model or effort changes. The next turn resumes the same Claude Code conversation (`--resume`), also after a daemon restart.
@@ -84,6 +84,16 @@ MendCode drives the unmodified `claude` binary through the same stream-json prot
 - A message sent while a turn runs is not held back: as in Claude Code, it goes in at the turn's next tool result and Claude Code reads it after the step at hand; one it takes only once the turn's answer is done is answered in the same turn. A saved `/queue` policy wins.
 - A quiet turn is never cut, as in Claude Code itself: it times out and retries its own API calls, and a long think (over images, at high effort) can be silent for minutes. Esc stops it. The working row shows no `no response for` hint for it either.
 - Attachments: images are sent; other files are named in the message but not sent.
+
+## Started from Claude Code
+
+A daemon started from a Claude Code shell (an agent ran `mendcode --dir X session list`, `mendcode daemon restart`, `mendcode __daemon`) would otherwise hand that Claude Code session's variables to every command, engine and app its sessions start; a `claude` opened there would take itself for that session's child and turn transcript saving off. They are never passed on, so nothing needs to be unset by hand:
+
+- **Always dropped** (set by Claude Code 2.1.314 in its tool shells or on its own process): `CLAUDECODE`, `CLAUDE_PID`, `CLAUDE_EFFORT`, `CLAUDE_CODE_CHILD_SESSION`, `CLAUDE_CODE_SESSION_ID`, `CLAUDE_CODE_SESSION_ATTENDED`, `CLAUDE_CODE_ENTRYPOINT`, `CLAUDE_CODE_EXECPATH`, `CLAUDE_CODE_INVOKED_SKILLS`, `CLAUDE_CODE_BRIDGE_SESSION_ID`, `CLAUDE_CODE_MESSAGING_SOCKET`, `CLAUDE_CODE_MESSAGING_TOKEN`, and `CLAUDE_CODE_SSE_PORT` (the IDE window of that terminal, which Claude Code itself drops for a detached process).
+- **Dropped only with Claude Code's value**: `AI_AGENT` when it starts with `claude-code`; `GIT_EDITOR=true` and `TRACEPARENT` when `CLAUDECODE=1` is set too.
+- **Kept**: everything you set for the engines: `ANTHROPIC_*` (`ANTHROPIC_API_KEY` enables the [provider](providers.md), `ANTHROPIC_BASE_URL`), `CLAUDE_CONFIG_DIR`, `CLAUDE_CODE_USE_BEDROCK` and the other `CLAUDE_CODE_*` settings, cache lifetimes.
+
+The CLI starts the daemon without them; launchd and systemd services never had them; the daemon program started with them restarts once in place (same pid) without them, and so do `daemon start --foreground`, `serve`, `web` and a compiled terminal that hosts the daemon. Only removing them from the running process would not be enough: Bun gives a child started without an explicit environment the one the process started with. On Windows, and in a terminal run from source that hosts the daemon, they are removed from the process only, which every child given that environment honours. The daemon log names what was dropped, never a value: `[ENV]: dropped inherited Claude Code session variables: CLAUDECODE, ...`.
 
 ## Debugging
 

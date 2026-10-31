@@ -1,7 +1,7 @@
 import { graphScene, horizontalScene } from "./graph-scene"
 import { parseFlowchartNodeExpression, flowchartShapeMarker, splitMermaidTopLevel } from "./legacy-shared"
 import type { Line } from "../../ui/theme"
-import { textWidth, cells, wrap } from "../wrap"
+import { textWidth, truncateEnd, wrap } from "../wrap"
 import { Canvas, E, W, decodeLabel, MAX_NODES, MAX_ROWS, MERMAID_NOTES } from "./core"
 import type { LineStyle, Point } from "./core"
 
@@ -146,6 +146,9 @@ function parseFlowStatement(source: string, flow: Flow): boolean {
   }
 }
 
+/** Nested subgraph titles are joined with this separator in `Flow.groups`; the layout splits them back into a path. */
+export const GROUP_SEPARATOR = " / "
+
 export function parseFlowchart(lines: string[], direction: Direction): Flow | undefined {
   const flow: Flow = { direction, nodes: new Map(), edges: [], groups: new Map() }
   const groups: string[] = []
@@ -162,7 +165,7 @@ export function parseFlowchart(lines: string[], direction: Direction): Flow | un
       const group = /^subgraph\s+(.+)$/i.exec(text)
       if (group) {
         const parsed = parseFlowchartNodeExpression(group[1]!)
-        groups.push(parsed?.label ?? group[1]!)
+        groups.push((parsed?.label ?? group[1]!).trim())
         continue
       }
       const previous = new Map([...flow.nodes].map(([id, node]) => [id, node.explicit]))
@@ -170,7 +173,7 @@ export function parseFlowchart(lines: string[], direction: Direction): Flow | un
       if (flow.nodes.size > 120 || flow.edges.length > 240) return undefined
       if (groups.length) for (const [id, node] of flow.nodes) {
         // A forward reference outside the subgraph must not steal its later declaration.
-        if (!previous.has(id) || (!previous.get(id) && node.explicit)) flow.groups!.set(id, groups.join(" / "))
+        if (!previous.has(id) || (!previous.get(id) && node.explicit)) flow.groups!.set(id, groups.join(GROUP_SEPARATOR))
       }
     }
   }
@@ -178,7 +181,9 @@ export function parseFlowchart(lines: string[], direction: Direction): Flow | un
 }
 
 // ---------------------------------------------------------------------------------------------
-// Flowchart: layout (layered, longest-path layers, barycenter ordering, orthogonal channel routing)
+// Flowchart: layout (layered, longest-path layers, barycenter ordering, orthogonal channel routing).
+// Subgraphs are clusters: their members stay contiguous in every layer they span, a rectangle of
+// columns belongs to the cluster alone, and a frame with the title in its border is drawn around it.
 
 type Seg = {
   upper: LNode
@@ -203,6 +208,47 @@ type LNode = {
   ups: Seg[]
   downs: Seg[]
   inset: number
+  /** Subgraph chain, outermost first; empty outside every subgraph. */
+  path: string[]
+  /** An invisible placeholder keeping a cluster present in a layer where it has no member. */
+  spacer: boolean
+}
+
+type Cluster = {
+  key: string
+  path: string[]
+  title: string
+  depth: number
+  minLayer: number
+  maxLayer: number
+  /** Inclusive cross-axis extent of the frame, border included. Valid after `measureFrames`. */
+  lo: number
+  hi: number
+}
+
+/** Rows (vertical) or columns (horizontal) a frame border needs beyond its content on the along axis: the border and a gap. */
+const FRAME_ALONG = 2
+/** Widest subgraph title kept in a frame border. */
+const MAX_TITLE_WIDTH = 36
+
+const pathKey = (path: readonly string[]) => path.join("\u0000")
+
+function startsWithPath(path: readonly string[], prefix: readonly string[]) {
+  if (prefix.length > path.length) return false
+  for (let i = 0; i < prefix.length; i++) if (path[i] !== prefix[i]) return false
+  return true
+}
+
+function commonPrefixLength(a: readonly string[], b: readonly string[]) {
+  let i = 0
+  while (i < a.length && i < b.length && a[i] === b[i]) i++
+  return i
+}
+
+/** Frames crossed when stepping from one node to its neighbour: every subgraph one is inside and the other is not. */
+function boundariesBetween(a: LNode, b: LNode) {
+  const common = commonPrefixLength(a.path, b.path)
+  return a.path.length - common + (b.path.length - common)
 }
 
 function boxSize(node: FlowNode) {
@@ -282,10 +328,11 @@ function dedupe(points: Point[]) {
   return points.filter((p, i) => i === 0 || p.x !== points[i - 1]!.x || p.y !== points[i - 1]!.y)
 }
 
-type Layout = { layers: LNode[][]; nodes: LNode[]; segs: Seg[]; chains: { edge: FlowEdge; segs: Seg[]; reversed: boolean }[] } | undefined
+type Layout = { layers: LNode[][]; nodes: LNode[]; segs: Seg[]; chains: { edge: FlowEdge; segs: Seg[]; reversed: boolean }[]; clusters: Cluster[] } | undefined
 
 function buildLayers(flow: Flow, vertical: boolean): Layout {
   const ids = [...flow.nodes.keys()]
+  const pathOf = (id: string) => (flow.groups?.get(id) ?? "").split(GROUP_SEPARATOR).map((part) => part.trim()).filter(Boolean)
   const out = new Map<string, number[]>()
   flow.edges.forEach((edge, i) => {
     if (edge.from === edge.to) return
@@ -332,6 +379,7 @@ function buildLayers(flow: Flow, vertical: boolean): Layout {
     layers[node.layer]!.push(node)
     nodes.push(node)
   }
+  const placeholder = (layer: number, path: string[], spacer: boolean): LNode => ({ flow: undefined, layer, along: 1, across: 1, cross: 0, along0: 0, order: 0, ups: [], downs: [], inset: 0, path, spacer })
   for (const id of ids) {
     const flowNode = flow.nodes.get(id)!
     const size = boxSize(flowNode)
@@ -346,6 +394,8 @@ function buildLayers(flow: Flow, vertical: boolean): Layout {
       ups: [],
       downs: [],
       inset: flowNode.shape === "diamond" && vertical ? 2 : 1,
+      path: pathOf(id),
+      spacer: false,
     }
     real.set(id, node)
     add(node)
@@ -356,9 +406,11 @@ function buildLayers(flow: Flow, vertical: boolean): Layout {
   for (const { edge, reversed, u, v } of oriented) {
     const top = real.get(u)!
     const bottom = real.get(v)!
+    // A long edge travels inside the deepest subgraph shared by both ends, so it leaves a frame only when it must.
+    const shared = top.path.slice(0, commonPrefixLength(top.path, bottom.path))
     const chain: LNode[] = [top]
     for (let layer = top.layer + 1; layer < bottom.layer; layer++) {
-      const dummy: LNode = { flow: undefined, layer, along: 1, across: 1, cross: 0, along0: 0, order: 0, ups: [], downs: [], inset: 0 }
+      const dummy = placeholder(layer, shared, false)
       add(dummy)
       chain.push(dummy)
     }
@@ -383,54 +435,217 @@ function buildLayers(flow: Flow, vertical: boolean): Layout {
     }
     chains.push({ edge, segs: chainSegs, reversed })
   }
-  return { layers, nodes, segs, chains }
+
+  // Every subgraph prefix is a cluster spanning the layers of its members.
+  const clusters = new Map<string, Cluster>()
+  for (const node of nodes) {
+    for (let depth = 1; depth <= node.path.length; depth++) {
+      const path = node.path.slice(0, depth)
+      const key = pathKey(path)
+      const existing = clusters.get(key)
+      if (existing) {
+        existing.minLayer = Math.min(existing.minLayer, node.layer)
+        existing.maxLayer = Math.max(existing.maxLayer, node.layer)
+      } else clusters.set(key, { key, path, title: truncateEnd(path[depth - 1]!, MAX_TITLE_WIDTH), depth, minLayer: node.layer, maxLayer: node.layer, lo: 0, hi: 0 })
+    }
+  }
+  for (const cluster of clusters.values()) {
+    for (let layer = cluster.minLayer; layer <= cluster.maxLayer; layer++) {
+      if (layers[layer]!.some((node) => startsWithPath(node.path, cluster.path))) continue
+      add(placeholder(layer, cluster.path, true))
+    }
+  }
+  const ordered = [...clusters.values()].sort((a, b) => a.depth - b.depth || a.minLayer - b.minLayer)
+  return { layers, nodes, segs, chains, clusters: ordered }
 }
 
-function orderLayers(layers: LNode[][]) {
-  const sortLayer = (layer: LNode[], neighbors: (n: LNode) => LNode[]) => {
-    const keyed = layer.map((node, index) => {
-      const near = neighbors(node)
-      return { node, index, key: near.length ? near.reduce((sum, n) => sum + n.order, 0) / near.length : node.order }
-    })
-    keyed.sort((a, b) => a.key - b.key || a.index - b.index)
-    keyed.forEach(({ node }, index) => {
+/**
+ * Barycenter sweeps keep each cluster contiguous inside a layer; a final pass orders clusters by one key
+ * shared by all their layers, so a cluster is a rectangle of columns instead of a staircase.
+ */
+function orderLayers(layers: LNode[][], clusters: Cluster[]) {
+  const sortLayer = (layer: LNode[], base: (n: LNode) => number, clusterKey?: (key: string) => number | undefined) => {
+    const own = new Map(layer.map((node) => [node, base(node)]))
+    const local = new Map<string, { sum: number; n: number }>()
+    for (const node of layer) {
+      for (let depth = 1; depth <= node.path.length; depth++) {
+        const key = pathKey(node.path.slice(0, depth))
+        const slot = local.get(key) ?? { sum: 0, n: 0 }
+        slot.sum += own.get(node)!
+        slot.n++
+        local.set(key, slot)
+      }
+    }
+    const keyOf = (key: string) => {
+      const shared = clusterKey?.(key)
+      if (shared !== undefined) return shared
+      const slot = local.get(key)!
+      return slot.sum / slot.n
+    }
+    const compare = (a: LNode, b: LNode) => {
+      for (let level = 0; ; level++) {
+        const ga = a.path[level]
+        const gb = b.path[level]
+        if (ga !== undefined && gb !== undefined && ga === gb) continue
+        const ka = ga === undefined ? own.get(a)! : keyOf(pathKey(a.path.slice(0, level + 1)))
+        const kb = gb === undefined ? own.get(b)! : keyOf(pathKey(b.path.slice(0, level + 1)))
+        if (ka !== kb) return ka - kb
+        return a.order - b.order
+      }
+    }
+    const sorted = [...layer].sort(compare)
+    sorted.forEach((node, index) => {
       node.order = index
       layer[index] = node
     })
   }
-  for (let pass = 0; pass < 4; pass++) {
-    for (let l = 1; l < layers.length; l++) sortLayer(layers[l]!, (n) => n.ups.map((s) => s.upper))
-    for (let l = layers.length - 2; l >= 0; l--) sortLayer(layers[l]!, (n) => n.downs.map((s) => s.lower))
+  const barycenter = (neighbors: (n: LNode) => LNode[]) => (node: LNode) => {
+    const near = neighbors(node)
+    return near.length ? near.reduce((sum, n) => sum + n.order, 0) / near.length : node.order
   }
+  for (let pass = 0; pass < 4; pass++) {
+    for (let l = 1; l < layers.length; l++) sortLayer(layers[l]!, barycenter((n) => n.ups.map((s) => s.upper)))
+    for (let l = layers.length - 2; l >= 0; l--) sortLayer(layers[l]!, barycenter((n) => n.downs.map((s) => s.lower)))
+  }
+  if (!clusters.length) return
+  const normalized = (node: LNode) => node.order / Math.max(1, layers[node.layer]!.length - 1)
+  const shared = new Map<string, number>()
+  for (const cluster of clusters) {
+    const members = layers.flat().filter((node) => startsWithPath(node.path, cluster.path))
+    shared.set(cluster.key, members.reduce((sum, node) => sum + normalized(node), 0) / Math.max(1, members.length))
+  }
+  for (const layer of layers) sortLayer(layer, normalized, (key) => shared.get(key))
 }
 
 const centerOf = (n: LNode) => n.cross + Math.floor((n.across - 1) / 2)
 
-function placeAcross(layers: LNode[][], spacing: number) {
-  const layerWidth = layers.map((layer) => layer.reduce((sum, n) => sum + n.across, 0) + spacing * Math.max(0, layer.length - 1))
+/** Cross-axis padding a frame adds around its content: border plus a gap, and for horizontal diagrams a title row at the top. */
+function framePads(vertical: boolean) {
+  return vertical ? { lo: 2, hi: 2 } : { lo: 3, hi: 2 }
+}
+
+/** Recomputes every cluster's cross extent from the current node positions, innermost clusters first. */
+function measureFrames(clusters: Cluster[], nodes: LNode[], vertical: boolean) {
+  const pads = framePads(vertical)
+  const byKey = new Map(clusters.map((cluster) => [cluster.key, cluster]))
+  for (const cluster of [...clusters].sort((a, b) => b.depth - a.depth)) {
+    let lo = Number.POSITIVE_INFINITY
+    let hi = Number.NEGATIVE_INFINITY
+    for (const node of nodes) {
+      if (!startsWithPath(node.path, cluster.path)) continue
+      if (node.path.length === cluster.depth) {
+        lo = Math.min(lo, node.cross)
+        hi = Math.max(hi, node.cross + node.across - 1)
+        continue
+      }
+      const child = byKey.get(pathKey(node.path.slice(0, cluster.depth + 1)))!
+      lo = Math.min(lo, child.lo)
+      hi = Math.max(hi, child.hi)
+    }
+    if (!Number.isFinite(lo)) {
+      lo = 0
+      hi = 0
+    }
+    cluster.lo = lo - pads.lo
+    cluster.hi = hi + pads.hi
+    if (vertical) {
+      // The title lives in the top border: `┌─ Title ─┐` needs the title, two spaces, a dash and both corners.
+      const need = textWidth(cluster.title) + 5
+      if (cluster.hi - cluster.lo + 1 < need) cluster.hi = cluster.lo + need - 1
+    }
+  }
+}
+
+function placeAcross(layers: LNode[][], spacing: number, vertical: boolean, clusters: Cluster[]) {
+  const gap = (prev: LNode, node: LNode) => (prev.spacer || node.spacer ? 1 : spacing) + 3 * boundariesBetween(prev, node)
+  const layerWidth = layers.map((layer) => layer.reduce((sum, n, i) => sum + n.across + (i ? gap(layer[i - 1]!, n) : 0), 0))
   const widest = Math.max(...layerWidth, 1)
   layers.forEach((layer, l) => {
     let cursor = Math.floor((widest - layerWidth[l]!) / 2)
-    for (const node of layer) {
+    layer.forEach((node, i) => {
+      if (i) cursor += gap(layer[i - 1]!, node)
       node.cross = cursor
-      cursor += node.across + spacing
-    }
+      cursor += node.across
+    })
   })
   const settle = (layer: LNode[], neighbors: (n: LNode) => LNode[]) => {
     let cursor = Number.NEGATIVE_INFINITY
-    for (const node of layer) {
+    layer.forEach((node, i) => {
       const near = neighbors(node)
       const want = near.length ? Math.round(near.reduce((sum, n) => sum + centerOf(n), 0) / near.length) - Math.floor((node.across - 1) / 2) : node.cross
-      node.cross = Math.max(want, cursor)
-      cursor = node.cross + node.across + spacing
-    }
+      node.cross = Math.max(want, i ? cursor + gap(layer[i - 1]!, node) : cursor)
+      cursor = node.cross + node.across
+    })
   }
   for (let pass = 0; pass < 3; pass++) {
     for (let l = 1; l < layers.length; l++) settle(layers[l]!, (n) => n.ups.map((s) => s.upper))
     for (let l = layers.length - 2; l >= 0; l--) settle(layers[l]!, (n) => n.downs.map((s) => s.lower))
   }
-  const min = Math.min(...layers.flat().map((n) => n.cross))
-  for (const node of layers.flat()) node.cross -= min
+  const all = layers.flat()
+  if (clusters.length) separateClusters(layers, all, vertical, clusters)
+  let min = Math.min(...all.map((n) => n.cross))
+  if (clusters.length) {
+    measureFrames(clusters, all, vertical)
+    min = Math.min(min, ...clusters.map((cluster) => cluster.lo))
+  }
+  for (const node of all) node.cross -= min
+  if (clusters.length) measureFrames(clusters, all, vertical)
+}
+
+/**
+ * Makes every cluster a rectangle nothing else enters: in each layer a cluster spans, a node outside it (or the
+ * outermost sibling cluster holding that node) must end a gap before the frame or start a gap after it.
+ * Violations push the later block to the right, so positions only grow and the loop settles.
+ */
+function separateClusters(layers: LNode[][], nodes: LNode[], vertical: boolean, clusters: Cluster[]) {
+  const byKey = new Map(clusters.map((cluster) => [cluster.key, cluster]))
+  const shiftFrom = (layer: LNode[], firstOrder: number, delta: number) => {
+    for (const node of layer) if (node.order >= firstOrder) node.cross += delta
+  }
+  const shiftCluster = (cluster: Cluster, delta: number) => {
+    for (let l = cluster.minLayer; l <= cluster.maxLayer; l++) {
+      const layer = layers[l]!
+      const first = Math.min(...layer.filter((node) => startsWithPath(node.path, cluster.path)).map((node) => node.order))
+      if (Number.isFinite(first)) shiftFrom(layer, first, delta)
+    }
+  }
+  for (let pass = 0; pass < 40; pass++) {
+    measureFrames(clusters, nodes, vertical)
+    let changed = false
+    for (const cluster of clusters) {
+      for (let l = cluster.minLayer; l <= cluster.maxLayer; l++) {
+        const layer = layers[l]!
+        const inside = layer.filter((node) => startsWithPath(node.path, cluster.path)).map((node) => node.order)
+        if (!inside.length) continue
+        const first = Math.min(...inside)
+        const last = Math.max(...inside)
+        for (const node of layer) {
+          if (startsWithPath(node.path, cluster.path)) continue
+          const common = commonPrefixLength(node.path, cluster.path)
+          const block = node.path.length > common ? byKey.get(pathKey(node.path.slice(0, common + 1))) : undefined
+          const left = block ? block.lo : node.cross
+          const right = block ? block.hi : node.cross + node.across - 1
+          if (node.order < first) {
+            const need = right + 2
+            if (cluster.lo < need) {
+              shiftCluster(cluster, need - cluster.lo)
+              changed = true
+              measureFrames(clusters, nodes, vertical)
+            }
+          } else if (node.order > last) {
+            const need = cluster.hi + 2
+            if (left < need) {
+              if (block) shiftCluster(block, need - left)
+              else shiftFrom(layer, node.order, need - left)
+              changed = true
+              measureFrames(clusters, nodes, vertical)
+            }
+          }
+        }
+      }
+    }
+    if (!changed) return
+  }
 }
 
 /** Arrows of the same kind entering one node share a single port, so a merge reads as one joined arrow. */
@@ -526,23 +741,57 @@ function labelCandidates(runs: Run[], width: number, vertical: boolean): Point[]
   return out
 }
 
-export function renderFlowchart(flow: Flow, maxWidth: number): { lines: Line[] } | { note: string } {
-  if (flow.groups?.size) {
-    const nodes = [...flow.nodes.values()].map((node) => ({ id: node.id, label: node.lines.join(" "), draw: (canvas: Canvas, rect: { x: number; y: number; w: number; h: number }) => drawBox(canvas, rect, { ...node, lines: wrap(node.lines.join(" "), rect.w - 4) }), ...(flow.groups?.get(node.id) ? { group: flow.groups.get(node.id)! } : {}) }))
-    const edges = flow.edges.map((edge) => ({ from: edge.from, to: edge.to, ...(edge.label ? { label: edge.label } : {}), style: edge.line, head: edge.head === "none" ? "─" : edge.head === "x" ? "✕" : edge.head === "o" ? "○" : "◀", ...(edge.tail !== "none" ? { tail: headGlyph(edge.tail, -1, 0) } : {}) }))
-    if (flow.direction === "LR" || flow.direction === "RL") return horizontalScene(nodes, edges, maxWidth, flow.direction === "RL")
-    return graphScene(flow.direction === "BT" ? [...nodes].reverse() : nodes, edges, maxWidth)
+/** A frame border cell: lines already routed through it become crossings, and nothing drawn before it is overwritten. */
+function frameCell(canvas: Canvas, x: number, y: number, ch: string) {
+  if (canvas.charAt(x, y) !== "") return
+  const mask = canvas.maskAt(x, y)
+  if (mask === 0) {
+    canvas.glyph(x, y, ch, "frame")
+    return
   }
+  const vertical = (mask & 5) !== 0
+  const horizontal = (mask & (E | W)) !== 0
+  const crossing = (ch === "─" && vertical) || (ch === "│" && horizontal) || (vertical && horizontal)
+  canvas.glyph(x, y, crossing ? "┼" : ch, "frame")
+}
+
+function drawFrame(canvas: Canvas, rect: { x0: number; y0: number; x1: number; y1: number }, title: string, titleInBorder: boolean) {
+  const { x0, y0, x1, y1 } = rect
+  if (x1 - x0 < 2 || y1 - y0 < 1) return
+  for (let x = x0 + 1; x < x1; x++) {
+    frameCell(canvas, x, y0, "─")
+    frameCell(canvas, x, y1, "─")
+  }
+  for (let y = y0 + 1; y < y1; y++) {
+    frameCell(canvas, x0, y, "│")
+    frameCell(canvas, x1, y, "│")
+  }
+  frameCell(canvas, x0, y0, "┌")
+  frameCell(canvas, x1, y0, "┐")
+  frameCell(canvas, x0, y1, "└")
+  frameCell(canvas, x1, y1, "┘")
+  // In the border the title sits between two spaces and must leave the corner alone; inside it uses the inner width.
+  const room = titleInBorder ? x1 - x0 - 4 : x1 - x0 - 3
+  if (room < 1) return
+  const text = truncateEnd(title, room)
+  if (!text) return
+  if (titleInBorder) canvas.text(x0 + 2, y0, ` ${text} `, "keyword")
+  else canvas.text(x0 + 2, y0 + 1, text, "keyword")
+}
+
+type LayoutOptions = { spacing: number }
+
+function layeredFlowchart(flow: Flow, maxWidth: number, options: LayoutOptions): { lines: Line[] } | { note: string } {
   if (flow.nodes.size > MAX_NODES) return { note: MERMAID_NOTES.tooComplex }
   const vertical = flow.direction === "TD" || flow.direction === "BT"
   const mirrored = flow.direction === "BT" || flow.direction === "RL"
   const layout = buildLayers(flow, vertical)
   if (!layout) return { note: MERMAID_NOTES.unsupported }
-  const { layers, nodes, segs, chains } = layout
+  const { layers, nodes, segs, chains, clusters } = layout
 
-  orderLayers(layers)
+  orderLayers(layers, clusters)
   const widestLabel = Math.max(0, ...flow.edges.map((e) => (e.label ? textWidth(e.label) : 0)))
-  placeAcross(layers, vertical ? Math.min(14, Math.max(3, widestLabel + 2)) : 1)
+  placeAcross(layers, vertical ? Math.min(options.spacing, Math.max(3, widestLabel + 2)) : 1, vertical, clusters)
   for (const node of nodes) {
     assignPorts(node, node.downs, (s) => s.lower, (s, p) => (s.upperPort = p))
     assignPorts(node, node.ups, (s) => s.upper, (s, p) => (s.lowerPort = p), true)
@@ -557,17 +806,24 @@ export function renderFlowchart(flow: Flow, maxWidth: number): { lines: Line[] }
     const widest = Math.max(0, ...labeled.map((s) => textWidth(s.label!)))
     bandSize.push(vertical ? 2 + tracks + (labeled.length ? Math.min(2, labeled.length) : 0) : Math.max(4, 2 + Math.max(tracks, 1), labeled.length ? widest + 4 : 0))
   }
+  // Frames opening at a layer take rows above its boxes (outermost first); frames closing take rows below (innermost first).
+  const opening = layers.map((_, l) => clusters.filter((c) => c.minLayer === l).sort((a, b) => a.depth - b.depth))
+  const closing = layers.map((_, l) => clusters.filter((c) => c.maxLayer === l).sort((a, b) => b.depth - a.depth))
+  const before = opening.map((list) => list.length * FRAME_ALONG)
+  const after = closing.map((list) => list.length * FRAME_ALONG)
   const thickness = layers.map((layer) => Math.max(1, ...layer.filter((n) => n.flow).map((n) => n.along)))
   const layerStart: number[] = []
+  const boxesAt: number[] = []
   let cursor = 0
   layers.forEach((_, l) => {
     layerStart.push(cursor)
-    cursor += thickness[l]! + (bandSize[l] ?? 0)
+    boxesAt.push(cursor + before[l]!)
+    cursor += before[l]! + thickness[l]! + after[l]! + (bandSize[l] ?? 0)
   })
   const total = cursor
-  for (const node of nodes) node.along0 = layerStart[node.layer]! + Math.floor((thickness[node.layer]! - node.along) / 2)
+  for (const node of nodes) node.along0 = boxesAt[node.layer]! + Math.floor((thickness[node.layer]! - node.along) / 2)
 
-  const crossExtent = Math.max(...nodes.map((n) => n.cross + n.across))
+  const crossExtent = Math.max(...nodes.map((n) => n.cross + n.across), ...clusters.map((c) => c.hi + 1))
   const width = vertical ? crossExtent : total
   const height = vertical ? total : crossExtent
   if (width > maxWidth) return { note: MERMAID_NOTES.tooWide }
@@ -592,7 +848,7 @@ export function renderFlowchart(flow: Flow, maxWidth: number): { lines: Line[] }
     const abstract: { s: number; c: number }[] = []
     for (const seg of chain.segs) {
       const g = seg.upper.layer
-      const bandStart = layerStart[g]! + thickness[g]!
+      const bandStart = boxesAt[g]! + thickness[g]! + after[g]!
       const arrow = layerStart[g + 1]! - 1
       const s0 = seg.upper.flow ? seg.upper.along0 + seg.upper.along : bandStart
       const s1 = seg.lower.flow ? seg.lower.along0 - 1 : arrow
@@ -628,6 +884,15 @@ export function renderFlowchart(flow: Flow, maxWidth: number): { lines: Line[] }
     runsByEdge.set(chain.edge, runs)
   }
 
+  // Frames go on after the edges so a line through a border reads as a crossing, and before the labels so no label lands on a border.
+  for (const cluster of [...clusters].sort((a, b) => a.depth - b.depth)) {
+    const alongLo = layerStart[cluster.minLayer]! + opening[cluster.minLayer]!.indexOf(cluster) * FRAME_ALONG
+    const alongHi = boxesAt[cluster.maxLayer]! + thickness[cluster.maxLayer]! + 1 + closing[cluster.maxLayer]!.indexOf(cluster) * FRAME_ALONG
+    const a = toReal(alongLo, cluster.lo)
+    const b = toReal(alongHi, cluster.hi)
+    drawFrame(canvas, { x0: Math.min(a.x, b.x), y0: Math.min(a.y, b.y), x1: Math.max(a.x, b.x), y1: Math.max(a.y, b.y) }, cluster.title, vertical)
+  }
+
   for (const chain of chains) {
     const label = chain.edge.label
     if (!label) continue
@@ -649,6 +914,46 @@ export function renderFlowchart(flow: Flow, maxWidth: number): { lines: Line[] }
   }
   const lines = cropLines(canvas.toLines())
   return lines.some((line) => lineCells(line) > maxWidth) ? { note: MERMAID_NOTES.tooWide } : { lines }
+}
+
+/** The same flow with every node label re-wrapped to a narrower column, for a second attempt at a tight width. */
+function narrowed(flow: Flow, labelWidth: number): Flow {
+  const nodes = new Map<string, FlowNode>()
+  for (const [id, node] of flow.nodes) nodes.set(id, { ...node, lines: wrap(node.lines.join(" "), labelWidth) })
+  return { ...flow, nodes }
+}
+
+/** The single-column scene: every box stacked, every connection on a side channel. The last resort when layers do not fit. */
+function sceneFlowchart(flow: Flow, maxWidth: number): { lines: Line[] } | { note: string } {
+  const nodes = [...flow.nodes.values()].map((node) => ({ id: node.id, label: node.lines.join(" "), draw: (canvas: Canvas, rect: { x: number; y: number; w: number; h: number }) => drawBox(canvas, rect, { ...node, lines: wrap(node.lines.join(" "), rect.w - 4) }), ...(flow.groups?.get(node.id) ? { group: flow.groups.get(node.id)! } : {}) }))
+  const edges = flow.edges.map((edge) => ({ from: edge.from, to: edge.to, ...(edge.label ? { label: edge.label } : {}), style: edge.line, head: edge.head === "none" ? "─" : edge.head === "x" ? "✕" : edge.head === "o" ? "○" : "◀", ...(edge.tail !== "none" ? { tail: headGlyph(edge.tail, -1, 0) } : {}) }))
+  if (flow.direction === "LR" || flow.direction === "RL") return horizontalScene(nodes, edges, maxWidth, flow.direction === "RL")
+  return graphScene(flow.direction === "BT" ? [...nodes].reverse() : nodes, edges, maxWidth)
+}
+
+/**
+ * Layered layout first, at the usual spacing; when that overflows the width, once more with tight spacing and
+ * narrower boxes. A flowchart without subgraphs that still does not fit keeps the note: the chat shows its source
+ * and `/diagram` draws it at full size. One with subgraphs was always drawn in the chat (the stacked scene, before
+ * clusters were laid out), so it goes on: a left-to-right flow is laid out top-down (RL as BT), which needs the
+ * width of one layer instead of the whole chain, and the stacked single-column scene comes only when nothing
+ * layered fits. A diagram that cannot be drawn at all keeps the first attempt's note.
+ */
+export function renderFlowchart(flow: Flow, maxWidth: number): { lines: Line[] } | { note: string } {
+  if (flow.nodes.size > MAX_NODES) return { note: MERMAID_NOTES.tooComplex }
+  const first = layeredFlowchart(flow, maxWidth, { spacing: 14 })
+  if ("lines" in first) return first
+  const retry = first.note === MERMAID_NOTES.tooWide || first.note === MERMAID_NOTES.tooComplex
+  if (!retry) return first
+  const compact = layeredFlowchart(narrowed(flow, 16), maxWidth, { spacing: 3 })
+  if ("lines" in compact) return compact
+  if (!flow.groups?.size) return first
+  if (flow.direction === "LR" || flow.direction === "RL") {
+    const turned: Flow = { ...flow, direction: flow.direction === "LR" ? "TD" : "BT" }
+    for (const attempt of [layeredFlowchart(turned, maxWidth, { spacing: 14 }), layeredFlowchart(narrowed(turned, 16), maxWidth, { spacing: 3 })]) if ("lines" in attempt) return attempt
+  }
+  const stacked = sceneFlowchart(narrowed(flow, 24), maxWidth)
+  return "lines" in stacked ? stacked : first
 }
 
 // ---------------------------------------------------------------------------------------------

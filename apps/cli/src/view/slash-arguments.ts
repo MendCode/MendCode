@@ -23,6 +23,7 @@ const ARGUMENTS: Readonly<Record<string, () => readonly SlashArgument[]>> = {
     { word: "watch-repo", summary: "Review this repository's new pull requests: [all|requested]" },
     { word: "unwatch-repo", summary: "Stop reviewing this repository's pull requests" },
     { word: "repos", summary: "List the watched repositories" },
+    { word: "dashboard", summary: "Open the review jobs page (/reviews)" },
     { word: "publish", summary: "Allow or stop posting reviews to GitHub", more: true },
     { word: "list", summary: "List this session's watched pull requests" },
   ],

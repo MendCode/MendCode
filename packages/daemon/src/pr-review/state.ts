@@ -2,6 +2,7 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
 import path from "node:path"
 import { z } from "zod"
 import { PrFinding } from "@mendcode/protocol"
+import { LANGUAGE_NAME, languageFromMarkers } from "./language"
 
 /**
  * What the reviewer remembers about one pull request (docs/pr-review.md): the head it last reviewed and the findings it published,
@@ -26,6 +27,8 @@ export const ReviewState = z.object({
   explainedFailures: z.string().max(4000).optional(),
   /** Comment ids a PR command was already answered for. */
   handled: z.array(z.string().max(100)).max(400).optional(),
+  /** `template.language: auto` resolved for this PR (language.ts): every later review, verify, fix and reply on it keeps it. */
+  language: z.string().regex(LANGUAGE_NAME).optional(),
 })
 export type ReviewState = z.infer<typeof ReviewState>
 export const emptyState = (): ReviewState => ({ version: 1, published: {} })
@@ -59,16 +62,18 @@ export function writeReviewState(dataDir: string, repo: string, number: number, 
   renameSync(temp, file)
 }
 
-/** The state as GitHub shows it: the newest review's head marker and every finding marker in review comments. */
+/** The state as GitHub shows it: the newest review's head (and kept `auto` language) marker and every finding marker in review comments. */
 export function stateFromMarkers({ reviews, comments }: { reviews: ReadonlyArray<{ body?: string | null; submitted_at?: string | null }>; comments: ReadonlyArray<{ id?: number; body?: string | null; path?: string; line?: number | null }> }): ReviewState {
-  const heads = reviews.flatMap((review) => { const head = REVIEW_MARKER.exec(review.body ?? "")?.[1]; return head ? [{ head, at: review.submitted_at ?? "" }] : [] })
-  const lastHead = heads.sort((a, b) => a.at.localeCompare(b.at)).at(-1)?.head
+  const heads = reviews.flatMap((review) => { const head = REVIEW_MARKER.exec(review.body ?? "")?.[1]; return head ? [{ head, at: review.submitted_at ?? "", body: review.body ?? "" }] : [] })
+  const ordered = heads.sort((a, b) => a.at.localeCompare(b.at))
+  const lastHead = ordered.at(-1)?.head
+  const language = languageFromMarkers(ordered.map((review) => review.body))
   const published: ReviewState["published"] = {}
   for (const comment of comments) {
     const id = FINDING_MARKER.exec(comment.body ?? "")?.[1]
     if (id && !published[id]) published[id] = { ...(Number.isSafeInteger(comment.id) ? { commentId: comment.id } : {}) }
   }
-  return { version: 1, ...(lastHead ? { lastHead } : {}), published }
+  return { version: 1, ...(lastHead ? { lastHead } : {}), published, ...(language ? { language } : {}) }
 }
 
 /**

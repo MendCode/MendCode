@@ -163,6 +163,14 @@ describe("effectiveSettings", () => {
     expect(featureState({ tier: "full", experimental: { thread_tools: false } }, "threads")).toEqual({ on: false, why: "setting" })
   })
 
+  test("review_config belongs to pr_review: denied below balanced and when the feature is forced off, kept from balanced up", () => {
+    expect(FEATURES.pr_review.tools).toEqual(["review_config", "pr_review"])
+    expect(effectiveSettings({ tier: "minimalist" } as TierSettings).tools).toMatchObject({ review_config: false })
+    expect(effectiveSettings({ tier: "balanced", features: { pr_review: false } } as TierSettings).tools).toMatchObject({ review_config: false })
+    expect(effectiveSettings({ tier: "balanced" } as TierSettings).tools?.review_config).toBeUndefined()
+    expect(effectiveSettings({ tier: "minimalist", tools: { review_config: true } } as TierSettings).tools?.review_config).toBe(true)
+  })
+
   test("voice and pet settings are switched off only where they exist", () => {
     const withVoice = effectiveSettings({ tier: "minimalist", voice: { enabled: true, language: "es" }, pet: "user:fox" } as TierSettings & Record<string, unknown>) as Record<string, unknown>
     expect(withVoice.voice).toEqual({ enabled: false, language: "es" })

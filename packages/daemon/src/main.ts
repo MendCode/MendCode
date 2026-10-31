@@ -11,7 +11,7 @@ import { otlpFromEnvironment } from "./tracing"
 import { PROGRAM_NAME } from "@mendcode/program"
 import { appendFileSync, existsSync } from "node:fs"
 import { logLevel } from "./logging"
-import { dropHostSessionEnv } from "./inherited-env"
+import { dropHostSessionEnv, droppedEnvLog, parseDroppedEnv, restartWithoutHostSessionEnv } from "@mendcode/client/inherited-env"
 import { completeToolPath } from "./tool-path"
 import { claudeStatus, codexStatus } from "./harness-status"
 import { createProviderMetadataAuth } from "./provider-metadata-auth"
@@ -64,6 +64,10 @@ import { createSidebarTool } from "./sidebar"
 import { createCustomizeUiTool } from "./customize-ui"
 import { createExtendTool, extensionToolCheck } from "./extend-tool"
 import { createSettingsTool } from "./settings-tool"
+import { createReviewConfigTool, type ReviewSetupPort } from "./review-config-tool"
+import { createPrReviewTool } from "./pr-review-tool"
+import type { ConfigControl } from "./pr-review/config-control"
+import type { ReviewSetup, SetupMemory } from "./pr-review/setup"
 import { workflowScriptTool, workflowStartTool, workflowStatusTool, workflowSaveTool, workflowControlTool, workflowEventsTool, workflowArtifactsTool } from "./workflow-tools"
 import { sessionsTool, tellTool } from "./peer-tools"
 import { threadsTool } from "./thread-tool"
@@ -92,6 +96,7 @@ import { systemPartsWith, type PromptFiles } from "./extensions"
 import { promptContextParts, promptFileOverrides } from "./prompt-context"
 import { outputStyleText } from "./output-styles"
 import { createPromptModes } from "./prompt-modes"
+import { selfKnowledgeText } from "./prompt-guidance"
 import { invalidChoice, modelEngine, resolveModel, usableEffort, type ModelCatalog } from "./models"
 import { claudeAlias, claudeCompactEnv, claudeSubagentEnv, createClaudeDetection, createClaudeModelCatalog, probeClaude } from "./claude-models"
 import { createEngineRouter } from "./engine-router"
@@ -118,8 +123,12 @@ export const DEFAULT_DIR = path.join(homedir(), ".mendcode-v2")
 const argv = hosting.argv ?? process.argv
 /** A log line: the daemon's log file when a terminal hosts it (its screen is the TUI), stderr otherwise. */
 const logLine = (message: string) => (hosting.log ? hosting.log("info", message) : console.error(message))
-// Before anything is started: what a Claude Code shell left in the environment must not reach the sessions' commands.
-dropHostSessionEnv(process.env)
+// Before anything is started: what a Claude Code shell left in the environment must not reach the sessions' commands and programs
+// (docs/claude-code.md, "Started from Claude Code"). The daemon program itself (`mendcode __daemon`, `bun main.ts`, not a command or
+// terminal that hosts it in its own process) restarts in place without them; a launcher that dropped them already names them in `--dropped-env`.
+if (!hosting.active && (process.argv[2] === "__daemon" || Bun.main === import.meta.path)) await restartWithoutHostSessionEnv({ log: logLine })
+const droppedEnv = droppedEnvLog([...parseDroppedEnv(arg("dropped-env")), ...dropHostSessionEnv(process.env)])
+if (droppedEnv) logLine(droppedEnv)
 // Before gh, git or an engine runs: a daemon started by `env -i`, launchd or systemd has a PATH without the user's install folders.
 void completeToolPath(process.env)
 
@@ -131,6 +140,29 @@ function arg(name: string) {
 // Started lean (apps/cli/src/launcher.ts LEAN_JIT): JSC has read its options, so the user's commands run by this daemon get the environment the user had.
 if (process.env.MENDCODE_V2_LEAN_JIT === "1") for (const key of ["BUN_JSC_useDFGJIT", "BUN_JSC_useFTLJIT", "MENDCODE_V2_LEAN_JIT"]) delete process.env[key]
 const dir = arg("dir") ?? process.env.MENDCODE_V2_DIR ?? DEFAULT_DIR
+
+/**
+ * The PR reviewer's config control for `review_config`, loaded on the tool's first call (config layers, profiles and YAML stay out
+ * of a daemon that never configures a reviewer). The repository and login come from the user's own `gh`, as the reviewer's do.
+ */
+function lazyReviewConfigControl(dataDir: string): ConfigControl {
+  let control: Promise<ConfigControl> | undefined
+  const load = () => control ??= Promise.all([import("./pr-review/config-control"), import("./pr-watch")]).then(([{ createConfigControl }, { ghProcess }]) => {
+    const gh = async (argv: string[], cwd: string) => { const done = await ghProcess({ argv, cwd }); return done.code === 0 && done.out.trim() ? done.out.trim() : undefined }
+    return createConfigControl({ dataDir, repo: (directory) => gh(["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"], directory), login: (directory) => gh(["api", "user", "--jq", ".login"], directory) })
+  })
+  return { run: async (request) => (await load()).run(request) }
+}
+/**
+ * `review_config setup`: the guided setup's read-only report (pr-review/setup.ts), loaded on its first call. It reads the user's own
+ * `gh` and the saved memories the session may see, unless memory is off for that directory.
+ */
+function lazyReviewSetup(dataDir: string, memory: SetupMemory, memoryEnabled: (directory: string) => boolean): ReviewSetupPort {
+  let setup: Promise<ReviewSetup> | undefined
+  const load = () => setup ??= Promise.all([import("./pr-review/setup"), import("./pr-watch")]).then(([{ createReviewSetup }, { ghProcess }]) =>
+    createReviewSetup({ dataDir, memory, memoryEnabled, gh: (argv, cwd) => ghProcess({ argv, cwd }) }))
+  return { run: async (directory) => (await load()).run(directory) }
+}
 /** `--safe-mode` (or MENDCODE_SAFE_MODE=1): no extensions, packages, shell hooks, MCP or project tools, whatever the settings say (docs/tiers.md). */
 const safeMode = argv.includes("--safe-mode") || process.env.MENDCODE_SAFE_MODE === "1"
 // Settings `proxy` (docs/resources-config.md): every outbound request of this process goes through one policy-aware fetch.
@@ -433,7 +465,7 @@ export const daemon = await startDaemon({
   // `/tier computer on` (features.computer) switches it on while the daemon runs; the environment variable still does at start.
   computer: { enabled: process.env.MENDCODE_COMPUTER === "1" ? true : () => extractionSettings().features?.computer === true },
   browser: { enabled: process.env.MENDCODE_BROWSER === "1", ...(process.env.MENDCODE_BROWSER_PATH ? { executable: process.env.MENDCODE_BROWSER_PATH } : {}) },
-  engine: ({ notify, engineBackground, engineAgentEvent, trace, continuity, tasks, clock, store, grants, runLimits, sessionRules, emitGlobal, secrets, memory, background, interactive, workflows, peers, threads, packages, sessionMeta, loops, worktrees, prWatch, goals, review, customTools, extensionLayers, agents, plans, extensions, skills: skillLoader, recall, computer, browser, harness, compound, budget, aiConfig, inlineShell, reasoning, settingsWrite }) => {
+  engine: ({ notify, engineBackground, engineAgentEvent, trace, continuity, tasks, clock, store, grants, runLimits, sessionRules, emitGlobal, secrets, memory, background, interactive, workflows, peers, threads, packages, sessionMeta, loops, worktrees, prWatch, prReview, goals, review, customTools, extensionLayers, agents, plans, extensions, skills: skillLoader, recall, computer, browser, harness, compound, budget, aiConfig, inlineShell, reasoning, settingsWrite }) => {
     extensionProviders = () => extensions.transportProviders()
     extensionMcpServers = (directory) => extensions.mcpServers(directory)
     extensionVirtualModels = (real) => extensions.virtualModels(real)
@@ -484,6 +516,12 @@ export const daemon = await startDaemon({
     builtinTools.push(createExtendTool({ dir, extensions: { reload: extensions.reload, report: extensions.report, routeInput: extensions.routeInput, checkTool: extensionToolCheck(extensions) } }))
     builtinTools.push(createSettingsTool({ settings: () => store.settings.get(), check: (patch) => store.settings.check(patch), write: settingsWrite }))
     builtinTools.push(createMemoryTool(memory))
+    // `review_config` (pr_review): the PR reviewer's config, `global` or `personal`, never guessed; its modules load on its first call.
+    // Listed only while the reviewer is on (the tier permits it and `experimental.pr_review` is set), like the daemon's `pr.review`.
+    const prReviewOn = () => featureOn(store.settings.get(), "pr_review", { safeMode }) && effectiveSettings(store.settings.get(), { safeMode }).experimental?.pr_review === true
+    builtinTools.push(createReviewConfigTool({ control: lazyReviewConfigControl(dir), enabled: prReviewOn, setup: lazyReviewSetup(dir, memory, (directory) => memorySettings(store.settings.get(), directory).memoryEnabled !== false) }))
+    // `pr_review` (pr_review): one PR reviewed now by the daemon's own reviewer (the session's `prReview` port), never by a comment.
+    builtinTools.push(createPrReviewTool({ enabled: prReviewOn }))
     // Interactive sessions need a pseudo-terminal: macOS and Linux under Bun, Windows only with MENDCODE_V2_CONPTY=1. Elsewhere the model only sees `shell`.
     if (ptyAvailable()) builtinTools.push(shellSession)
     // Registered wherever they can work; the feature `computer` (off until `/tier computer on`) keeps them out of the model's tool list.
@@ -530,7 +568,7 @@ export const daemon = await startDaemon({
           usesClaude: (sessionId, override) => modelEngine(turnModel(sessionId, override), modelCatalog) === "claude",
           // Loaded on the first Claude Code turn only (P5).
           claude: async () => {
-            const { createClaudeEngine, claudeCacheEnv } = await import("@mendcode/engine-claude")
+            const { createClaudeEngine, claudeCacheEnv, claudeRunLimits } = await import("@mendcode/engine-claude")
             const terminalRendering = await loadTerminalRendering()
             const engine = createClaudeEngine({
               bin: claudeBin,
@@ -538,12 +576,15 @@ export const daemon = await startDaemon({
               cwdFor: (sessionId) => store.sessionDirectory(sessionId) || cwd,
               // The minimal prompt mode adds nothing to any engine's prompt.
               // MendCode's native tools (code graph, computer use, memory, settings) through the daemon's loopback bridge.
-              sessionArgs: (sessionId) => harness.args(sessionId),
+              // A session's run limits reach Claude Code too: no CLAUDE.md, no auto memory, and for a PR review child not the PR checkout's settings.
+              sessionArgs: (sessionId) => [...harness.args(sessionId), ...claudeRunLimits(runLimits.get(sessionId)).args],
               waitingForMcp: harness.waiting,
               subagentContext: (sessionId) => harness.instructions(sessionId),
               oneTree: oneTree.note,
               ownTools: `mcp__${HOST_MCP_SERVER}__`,
-              appendSystem: (root) => (createPromptModes(dir).status(root).mode === "minimal" ? undefined : terminalRendering),
+              // The same MendCode docs pointer a native session carries: slash commands, the PR reviewer and other MendCode features
+              // are found with `mendcode docs --search`, not guessed from the harness's own tools.
+              appendSystem: (root) => (createPromptModes(dir).status(root).mode === "minimal" ? undefined : `${selfKnowledgeText()}\n\n${terminalRendering}`),
               // `/fast` reaches Claude Code on the models that have its fast mode; the process starts with it.
               modelFor: (sessionId, override) => { const turn = turnModel(sessionId, override); const choice = claudeAlias(turn); return (turn.fast ?? store.settings.get().serviceTier === "fast") && claudeFastModel(choice.model) ? { ...choice, fast: true } : choice },
               bindings: {
@@ -565,7 +606,8 @@ export const daemon = await startDaemon({
                 const cache = claudeCacheEnv(settings)
                 // Compaction at MendCode's point (`claude_compact`), not near Claude Code's 1M window.
                 const compact = claudeCompactEnv({ model: model.model, settings, on: featureOn(settings, "claude_compact", { safeMode }) })
-                return cache || subagent || compact ? { ...cache, ...subagent, ...compact } : undefined
+                const limited = claudeRunLimits(runLimits.get(sessionId)).env
+                return cache || subagent || compact || limited ? { ...cache, ...subagent, ...compact, ...limited } : undefined
               },
               environment: credentialsFor,
               readBlob: async (ref) => new Uint8Array(store.readBlob(ref.sha256)),
@@ -617,6 +659,7 @@ export const daemon = await startDaemon({
           loops,
           worktrees,
           prWatch,
+          prReview,
           review,
           aiConfig,
           inlineShell,
@@ -707,14 +750,14 @@ export const daemon = await startDaemon({
             return ref
           },
           runLimits: (sessionId) => runLimits.get(sessionId),
-          hiddenTools: hiddenGraphTools,
+          hiddenTools: (directory) => (prReviewOn() ? hiddenGraphTools(directory) : [...hiddenGraphTools(directory), "review_config", "pr_review"]),
           system: (root, context) => {
             const limits = context ? runLimits.get(context.sessionId) : undefined
-            return systemWithLimits(joinSystemParts(systemParts(root, memoryFor(root, context), extensions.prompts, context ? mainModel(context.sessionId).model : undefined, limits?.noContextFiles !== true, !limits?.excludeTools?.includes("skill"))), limits)
+            return systemWithLimits(joinSystemParts(systemParts(root, limits?.noMemory ? "" : memoryFor(root, context), extensions.prompts, context ? mainModel(context.sessionId).model : undefined, limits?.noContextFiles !== true, !limits?.excludeTools?.includes("skill"))), limits)
           },
           systemParts: (root, context) => {
             const limits = context ? runLimits.get(context.sessionId) : undefined
-            const parts = systemParts(root, memoryFor(root, context), extensions.prompts, context ? mainModel(context.sessionId).model : undefined, limits?.noContextFiles !== true, !limits?.excludeTools?.includes("skill"))
+            const parts = systemParts(root, limits?.noMemory ? "" : memoryFor(root, context), extensions.prompts, context ? mainModel(context.sessionId).model : undefined, limits?.noContextFiles !== true, !limits?.excludeTools?.includes("skill"))
             return limits?.systemPrompt !== undefined || limits?.appendSystemPrompt ? [{ id: "run", label: "scripted run prompt", text: systemWithLimits(joinSystemParts(parts), limits) }] : parts
           },
         }),
@@ -748,6 +791,8 @@ export const daemon = await startDaemon({
           bindings: { get: (id) => store.engineBindings.get(id, "codex"), set: (id, thread) => store.engineBindings.set(id, "codex", thread) },
           onQuota: emitGlobal,
           environment: credentialsFor(turn.sessionId),
+          // A PR review child or fix session: none of the checkout's AGENTS.md, `.codex/` config, hooks, rules or skills; a review child neither memories nor skills.
+          runLimits: runLimits.get(turn.sessionId),
           storeImage: async (bytes, mime, sessionId) => {
             const ref = store.putBlob(bytes, mime)
             store.refBlob(ref, sessionId)

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { createClient } from "@mendcode/client"
@@ -10,7 +10,8 @@ import type { GhRun } from "../src/pr-watch"
 import { gitRun } from "../src/pr-review/context"
 import type { ReviewSessionFactory } from "../src/pr-review/engine"
 import type { GhCall } from "../src/pr-review/publish"
-import { createRepoWatch, MAX_CONCURRENT_REVIEWS, PAUSE_RETRY_MS, PUBLISHER_RETRY_MS, type RepoWatchJob } from "../src/pr-review/repo-watch"
+import { BACKOFF_BASE_MS, BACKOFF_CAP_MS, createJobLedger, MAX_JOB_ATTEMPTS } from "../src/pr-review/jobs"
+import { createRepoWatch, MAX_CONCURRENT_REVIEWS, MAX_OPEN_PRS, PAUSE_RETRY_MS, PUBLISHER_RETRY_MS, type RepoWatchJob } from "../src/pr-review/repo-watch"
 import { createPrReviewService } from "../src/pr-review/service"
 import { createReviewSessions, reviewMessage } from "../src/pr-review/sessions"
 
@@ -19,13 +20,13 @@ afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) awai
 const temp = (prefix: string) => { const dir = realpathSync(mkdtempSync(path.join(tmpdir(), prefix))); cleanups.push(() => rmSync(dir, { recursive: true, force: true })); return dir }
 const sha = (n: number) => n.toString(16).padStart(40, "0")
 
-/** A fake `gh pr list`: the open PRs are whatever the test sets; every call is counted. */
+/** A fake `gh pr list`: the open PRs are whatever the test sets, cut at `--limit` as gh does; every call is counted. */
 function fakeList() {
-  const state = { prs: [] as Array<{ number: number; headRefOid: string; isDraft?: boolean; reviewRequests?: Array<{ login?: string }>; assignees?: Array<{ login: string }> }>, comments: [] as Array<Record<string, unknown>>, calls: 0, fail: undefined as { code: number; err: string } | undefined }
+  const state = { prs: [] as Array<{ number: number; headRefOid: string; isDraft?: boolean; updatedAt?: string; reviewRequests?: Array<{ login?: string }>; assignees?: Array<{ login: string }> }>, comments: [] as Array<Record<string, unknown>>, calls: 0, fail: undefined as { code: number; err: string } | undefined, lists: [] as string[][] }
   const run: GhRun = async ({ argv }) => {
     state.calls++
     if (state.fail) return { code: state.fail.code, out: "", err: state.fail.err }
-    if (argv[0] === "pr" && argv[1] === "list") return { code: 0, out: JSON.stringify(state.prs), err: "" }
+    if (argv[0] === "pr" && argv[1] === "list") { state.lists.push(argv); return { code: 0, out: JSON.stringify(state.prs.slice(0, Number(argv[argv.indexOf("--limit") + 1]))), err: "" } }
     if (argv[0] === "api" && argv[1] === "user") return { code: 0, out: "dev-ana\n", err: "" }
     if (argv[0] === "api" && /^repos\/\{owner\}\/\{repo\}\/(issues|pulls)\/comments\?since=/.test(argv[1]!)) return { code: 0, out: state.comments.filter((comment) => argv[1]!.startsWith("repos/{owner}/{repo}/issues") === ("html_url" in comment)).map((comment) => JSON.stringify(comment)).join("\n"), err: "" }
     return { code: 1, out: "", err: "unexpected" }
@@ -50,6 +51,28 @@ function watcher(extra: { drafts?: boolean; hold?: boolean; now?: () => number; 
 }
 
 describe("repo watch", () => {
+  test("an idle poll does not rewrite watches.json: the file is written only when what it holds changed", async () => {
+    const gh = fakeList()
+    const dir = temp("pr-review-watch-idle-")
+    const watch = createRepoWatch({
+      dir, run: gh.run, intervalMs: 3_600_000, enabled: () => true, sessionExists: () => true, notify: () => undefined,
+      triggers: async () => ({ opened: true, synchronize: true, ready_for_review: true, drafts: false }), start: async () => undefined,
+    })
+    cleanups.push(() => watch.stop())
+    gh.state.prs = [{ number: 12, headRefOid: sha(12) }]
+    await watch.watchRepo("ses_a", "/repo")
+    await watch.tick()
+    const file = path.join(dir, "pr-review", "watches.json")
+    const written = statSync(file)
+    await watch.tick()
+    await watch.tick()
+    expect(statSync(file).ino).toBe(written.ino)
+    // A real change (a new PR) is written.
+    gh.state.prs.push({ number: 13, headRefOid: sha(13) })
+    await watch.tick()
+    expect(statSync(file).ino).not.toBe(written.ino)
+    expect(JSON.parse(readFileSync(file, "utf8")).watches[0].seen["13"].head).toBe(sha(13))
+  })
   test("a maintainer's @mendcode comment on an open PR queues one command job; quoted, closed-PR and MendCode's own comments queue none", async () => {
     const { watch, gh, jobs } = watcher()
     gh.state.prs = [{ number: 12, headRefOid: sha(12) }]
@@ -99,7 +122,8 @@ describe("repo watch", () => {
     expect(jobs).toEqual([])
     gh.state.prs.push({ number: 12, headRefOid: sha(12) })
     await watch.tick()
-    expect(jobs).toEqual([{ kind: "review", directory: "/repo", sessionId: "ses_a", number: 12, head: sha(12), trigger: "opened" }])
+    // The runner gets the ledger job's id, to checkpoint into it and to ask isCurrent before it posts.
+    expect(jobs).toEqual([{ kind: "review", directory: "/repo", sessionId: "ses_a", number: 12, head: sha(12), trigger: "opened", jobId: expect.any(String) }])
     gh.state.prs[1]!.headRefOid = sha(13)
     await watch.tick()
     expect(jobs.at(-1)).toMatchObject({ number: 12, head: sha(13), trigger: "synchronize" })
@@ -131,12 +155,12 @@ describe("repo watch", () => {
     gh.state.prs = [1, 2, 3, 4].map((number) => ({ number, headRefOid: sha(number) }))
     await watch.tick()
     expect(jobs.map((job) => job.number)).toEqual([1, 2])
-    expect(watch.pending()).toEqual({ running: 2, queued: 2 })
+    expect(watch.pending()).toEqual({ running: 2, queued: 2, waiting: 0 })
     releases[0]!()
     await Bun.sleep(1)
     expect(jobs.map((job) => job.number)).toEqual([1, 2, 3])
   })
-  test("a logged-out gh pauses the watch with one notice and no more gh calls; 15 unreadable minutes end it", async () => {
+  test("a logged-out gh pauses the watch with one notice and no more gh calls; 15 minutes of a permanent error end it", async () => {
     const { watch, gh, notices } = watcher()
     await watch.watchRepo("ses_a", "/repo")
     gh.state.fail = { code: 1, err: "To get started with GitHub CLI, please run: gh auth login" }
@@ -151,7 +175,7 @@ describe("repo watch", () => {
     let clock = 0
     const later = watcher({ now: () => clock })
     await later.watch.watchRepo("ses_a", "/repo")
-    later.gh.state.fail = { code: 1, err: "HTTP 502: Bad Gateway" }
+    later.gh.state.fail = { code: 1, err: "GraphQL: Could not resolve to a Repository with the name 'acme/app'. (repository) HTTP 404" }
     await later.watch.tick()
     clock = 16 * 60_000
     await later.watch.tick()
@@ -500,7 +524,7 @@ describe("daemon", () => {
     await until(() => events().some((event) => event.type === "turn.started"))
     // The review fails at once (no gh), so its notice comes while the turn still runs.
     expect(await client.send({ type: "pr.review", sessionId, action: "review", pr: "12" })).toMatchObject({ ok: true })
-    const notice = () => events().find((event) => event.type === "queue.added" && event.notice && event.text.includes("PR review of #12 failed"))
+    const notice = () => events().find((event) => event.type === "queue.added" && event.notice && event.text.includes("#12 failed: "))
     await until(() => notice() !== undefined)
     const ended = events().find((event) => event.type === "turn.completed")
     expect(ended).toBeDefined()
@@ -700,5 +724,227 @@ describe("a paused watch", () => {
     await Bun.sleep(5)
     expect(p.jobs.map((job) => [job.number, job.trigger])).toEqual([[7, "opened"]])
     expect(p.watch.describe().split("\n")).toHaveLength(1)
+  })
+})
+
+describe("durable review jobs", () => {
+  /**
+   * A watch over a fake gh whose jobs the test controls: `hold` keeps each review running until released, `fail` makes each
+   * review report an error. The data dir and clock can be shared with a second watch, as a daemon restart would.
+   */
+  function durable({ dir = temp("pr-review-jobs-watch-"), clock = { now: 1_000_000 }, hold = false, concurrency, limits, fail }: { dir?: string; clock?: { now: number }; hold?: boolean; concurrency?: number; limits?: import("../src/pr-review/repo-watch").RepoLimits; fail?: () => string | undefined } = {}) {
+    const gh = fakeList()
+    const jobs: RepoWatchJob[] = []
+    const releases: Array<() => void> = []
+    const watch = createRepoWatch({
+      dir, run: gh.run, intervalMs: 3_600_000, now: () => clock.now, random: () => 0.5, enabled: () => true, sessionExists: () => true, notify: () => undefined,
+      triggers: async () => ({ opened: true, synchronize: true, ready_for_review: true, drafts: false }),
+      ...(limits ? { limits: async () => limits } : {}), ...(concurrency ? { concurrency } : {}),
+      start: async (job) => {
+        jobs.push(job)
+        if (hold) await new Promise<void>((resolve) => releases.push(resolve))
+        const error = fail?.()
+        return error ? { error } : undefined
+      },
+    })
+    cleanups.push(() => watch.stop())
+    return { watch, gh, jobs, releases, dir, clock, settled: () => Bun.sleep(5) }
+  }
+  const reviews = (jobs: RepoWatchJob[]) => jobs.filter((job) => job.kind === "review").map((job) => [job.number, job.head, job.trigger])
+
+  test("a daemon restart while a review runs recovers it once: the same job runs again, no duplicate is queued even when the watch file lost the push", async () => {
+    const before = durable({ hold: true })
+    await before.watch.watchRepo("ses_a", "/repo")
+    before.gh.state.prs = [{ number: 12, headRefOid: sha(12) }, { number: 13, headRefOid: sha(13) }, { number: 14, headRefOid: sha(14) }]
+    await before.watch.tick()
+    expect(reviews(before.jobs)).toEqual([[12, sha(12), "opened"], [13, sha(13), "opened"]])
+    const ids = before.jobs.map((job) => job.kind === "review" ? job.jobId : undefined)
+    before.watch.stop()
+    // A crash between the ledger write and the watch's save: the watch file does not know #12 at all.
+    const file = path.join(before.dir, "pr-review", "watches.json")
+    const saved = JSON.parse(readFileSync(file, "utf8"))
+    delete saved.watches[0].seen["12"]
+    writeFileSync(file, JSON.stringify(saved))
+    const after = durable({ dir: before.dir, clock: before.clock, hold: true, concurrency: 3 })
+    after.gh.state.prs = before.gh.state.prs
+    await after.watch.tick()
+    await after.settled()
+    // The two interrupted reviews run again under their own ids, the queued #14 runs; #12 is not queued a second time.
+    expect(reviews(after.jobs)).toEqual([[12, sha(12), "opened"], [13, sha(13), "opened"], [14, sha(14), "opened"]])
+    expect(after.jobs.slice(0, 2).map((job) => job.kind === "review" ? job.jobId : undefined)).toEqual(ids)
+    expect(after.watch.jobs.list().map((job) => [job.number, job.state, job.attempts])).toEqual([[12, "running", 1], [13, "running", 1], [14, "running", 0]])
+    for (const release of after.releases.splice(0)) release()
+    await after.settled()
+    await after.watch.tick()
+    await after.settled()
+    expect(after.jobs).toHaveLength(3)
+    expect(after.watch.jobs.list().map((job) => job.state)).toEqual(["done", "done", "done"])
+    expect(after.watch.pending()).toEqual({ running: 0, queued: 0, waiting: 0 })
+  })
+
+  test("a job interrupted by MAX_JOB_ATTEMPTS restarts is failed with the reason instead of crashing the daemon again", async () => {
+    const dir = temp("pr-review-jobs-watch-"), clock = { now: 1_000 }
+    const ledger = createJobLedger({ file: path.join(dir, "pr-review", "jobs.json"), now: () => clock.now })
+    const job = ledger.upsert({ provider: "github", repo: "acme/app", directory: "/repo", number: 3, sessionId: "ses_a", reviewer: "global", scope: "global", trigger: "opened", coverage: "full", base: "", head: sha(3), configKey: "" })
+    ledger.transition(job.id, "running", { attempts: MAX_JOB_ATTEMPTS - 1 })
+    const w = durable({ dir, clock })
+    await w.watch.tick()
+    expect(w.jobs).toEqual([])
+    expect(w.watch.jobs.get(job.id)).toMatchObject({ state: "failed", attempts: MAX_JOB_ATTEMPTS, error: expect.stringContaining("interrupted 5 times") })
+  })
+
+  test("the same PR and head is queued once: a repeated /pr review, a repeated listing; a new head is a new job", async () => {
+    const w = durable({ hold: true })
+    await w.watch.watchRepo("ses_a", "/repo")
+    w.gh.state.prs = [{ number: 12, headRefOid: sha(12) }]
+    await w.watch.tick()
+    await w.watch.tick()
+    expect(w.watch.review({ directory: "/repo", sessionId: "ses_a", number: 7, head: "" })).toBe(w.watch.review({ directory: "/repo", sessionId: "ses_a", number: 7, head: "" }))
+    expect(w.watch.jobs.list().map((job) => [job.number, job.trigger])).toEqual([[12, "opened"], [7, "manual"]])
+    expect(reviews(w.jobs)).toEqual([[12, sha(12), "opened"], [7, "", "manual"]])
+  })
+
+  test("an out-of-order listing (older updatedAt, or a head the PR already left) changes nothing; a force-push back with a newer time is a push", async () => {
+    const w = durable()
+    await w.watch.watchRepo("ses_a", "/repo")
+    w.gh.state.prs = [{ number: 12, headRefOid: sha(12), updatedAt: "2026-10-30T10:00:00Z" }]
+    await w.watch.tick()
+    w.gh.state.prs = [{ number: 12, headRefOid: sha(13), updatedAt: "2026-10-30T10:05:00Z" }]
+    await w.watch.tick()
+    // A late answer from before the push.
+    w.gh.state.prs = [{ number: 12, headRefOid: sha(12), updatedAt: "2026-10-30T10:00:00Z" }]
+    await w.watch.tick()
+    await w.settled()
+    expect(reviews(w.jobs)).toEqual([[12, sha(12), "opened"], [12, sha(13), "synchronize"]])
+    w.gh.state.prs = [{ number: 12, headRefOid: sha(12), updatedAt: "2026-10-30T10:09:00Z" }]
+    await w.watch.tick()
+    await w.settled()
+    expect(reviews(w.jobs).at(-1)).toEqual([12, sha(12), "synchronize"])
+    // Without times (an older gh): a head the PR already moved away from is the late answer.
+    const bare = durable()
+    await bare.watch.watchRepo("ses_a", "/repo")
+    bare.gh.state.prs = [{ number: 5, headRefOid: sha(5) }]
+    await bare.watch.tick()
+    bare.gh.state.prs = [{ number: 5, headRefOid: sha(6) }]
+    await bare.watch.tick()
+    bare.gh.state.prs = [{ number: 5, headRefOid: sha(5) }]
+    await bare.watch.tick()
+    await bare.settled()
+    expect(reviews(bare.jobs)).toEqual([[5, sha(5), "opened"], [5, sha(6), "synchronize"]])
+  })
+
+  test("concurrency is an option and @mendcode commands share the cap with reviews", async () => {
+    const wide = durable({ hold: true, concurrency: 3 })
+    await wide.watch.watchRepo("ses_a", "/repo")
+    wide.gh.state.prs = [1, 2, 3, 4, 5].map((number) => ({ number, headRefOid: sha(number) }))
+    await wide.watch.tick()
+    expect(wide.jobs.map((job) => job.number)).toEqual([1, 2, 3])
+    expect(wide.watch.pending()).toEqual({ running: 3, queued: 2, waiting: 0 })
+    const narrow = durable({ hold: true, concurrency: 1 })
+    narrow.gh.state.prs = [{ number: 12, headRefOid: sha(12) }]
+    await narrow.watch.watchRepo("ses_a", "/repo")
+    narrow.watch.review({ directory: "/repo", sessionId: "ses_a", number: 12, head: "" })
+    narrow.gh.state.comments = [{ id: 1, body: "@mendcode pause", user: "maintainer", html_url: "https://github.com/acme/app/pull/12#issuecomment-1" }]
+    await narrow.watch.tick()
+    await narrow.settled()
+    expect(narrow.jobs.map((job) => job.kind)).toEqual(["review"])
+    expect(narrow.watch.pending()).toEqual({ running: 1, queued: 1, waiting: 0 })
+    narrow.releases.shift()!()
+    await narrow.settled()
+    expect(narrow.jobs.map((job) => job.kind)).toEqual(["review", "command"])
+  })
+
+  test("a failing review is retried after a jittered backoff, then failed with its error after MAX_JOB_ATTEMPTS", async () => {
+    const w = durable({ fail: () => "the review child exited with 1" })
+    await w.watch.watchRepo("ses_a", "/repo")
+    w.gh.state.prs = [{ number: 12, headRefOid: sha(12) }]
+    await w.watch.tick()
+    await w.settled()
+    const [job] = w.watch.jobs.list()
+    // random() = 0.5: the first retry waits half of 30 s.
+    expect(job).toMatchObject({ state: "waiting", attempts: 1, error: "the review child exited with 1", notBefore: w.clock.now + BACKOFF_BASE_MS / 2 })
+    w.clock.now += BACKOFF_BASE_MS / 2 - 1
+    await w.watch.tick()
+    await w.settled()
+    expect(w.jobs).toHaveLength(1)
+    for (let attempt = 2; attempt <= MAX_JOB_ATTEMPTS; attempt++) {
+      w.clock.now += BACKOFF_CAP_MS
+      await w.watch.tick()
+      await w.settled()
+      expect(w.jobs).toHaveLength(attempt)
+    }
+    expect(w.watch.jobs.get(job!.id)).toMatchObject({ state: "failed", attempts: MAX_JOB_ATTEMPTS, error: "the review child exited with 1" })
+    w.clock.now += BACKOFF_CAP_MS
+    await w.watch.tick()
+    await w.settled()
+    expect(w.jobs).toHaveLength(MAX_JOB_ATTEMPTS)
+    // Every retry ran the same job.
+    expect(new Set(w.jobs.map((entry) => entry.kind === "review" ? entry.jobId : undefined)).size).toBe(1)
+  })
+
+  test("a push while a review runs marks it superseded (stale when it ends, isCurrent false) and queues the new head without waiting out the PR cooldown", async () => {
+    const w = durable({ hold: true, limits: { cooldown: { pr_minutes: 30, repo_per_hour: 20 }, reviewers: "all" } })
+    await w.watch.watchRepo("ses_a", "/repo")
+    w.gh.state.prs = [{ number: 12, headRefOid: sha(12) }]
+    await w.watch.tick()
+    const old = w.jobs[0]!.kind === "review" ? w.jobs[0]!.jobId! : ""
+    expect(w.watch.isCurrent(old)).toBe(true)
+    w.clock.now += 60_000
+    w.gh.state.prs = [{ number: 12, headRefOid: sha(13) }]
+    await w.watch.tick()
+    expect(reviews(w.jobs)).toEqual([[12, sha(12), "opened"], [12, sha(13), "synchronize"]])
+    const fresh = w.jobs[1]!.kind === "review" ? w.jobs[1]!.jobId! : ""
+    expect(w.watch.isCurrent(old)).toBe(false)
+    expect(w.watch.isCurrent(fresh)).toBe(true)
+    expect(w.watch.jobs.get(old)).toMatchObject({ state: "running", stop: { kind: "superseded", resumable: false } })
+    w.releases.shift()!()
+    await w.settled()
+    expect(w.watch.jobs.get(old)!.state).toBe("stale")
+    w.releases.shift()!()
+    await w.settled()
+    expect(w.watch.jobs.get(fresh)!.state).toBe("done")
+  })
+
+  test("a head that moves before its job starts makes that job stale, never run", async () => {
+    const w = durable({ hold: true, concurrency: 1 })
+    await w.watch.watchRepo("ses_a", "/repo")
+    w.gh.state.prs = [{ number: 1, headRefOid: sha(1) }, { number: 2, headRefOid: sha(2) }]
+    await w.watch.tick()
+    w.gh.state.prs = [{ number: 1, headRefOid: sha(1) }, { number: 2, headRefOid: sha(22) }]
+    await w.watch.tick()
+    w.releases.shift()!()
+    await w.settled()
+    expect(reviews(w.jobs)).toEqual([[1, sha(1), "opened"], [2, sha(22), "synchronize"]])
+    expect(w.watch.jobs.list({ number: 2 }).map((job) => [job.head, job.state, job.stop?.kind])).toEqual([[sha(2), "stale", "superseded"], [sha(22), "running", undefined]])
+  })
+
+  test("more than 100 open PRs: every one is listed, so a push to the 140th starts a review; a listing cut at MAX_OPEN_PRS drops no PR it did not show", async () => {
+    const w = durable()
+    w.gh.state.prs = Array.from({ length: 150 }, (_, index) => ({ number: index + 1, headRefOid: sha(index + 1) }))
+    await w.watch.watchRepo("ses_a", "/repo")
+    expect(w.gh.state.lists.at(-1)).toContain(String(MAX_OPEN_PRS))
+    w.gh.state.prs[139]!.headRefOid = sha(9_140)
+    await w.watch.tick()
+    await w.settled()
+    expect(reviews(w.jobs)).toEqual([[140, sha(9_140), "synchronize"]])
+    expect(w.watch.describe()).toContain("150 open PRs")
+    // A repository at the bound: the PRs beyond it are kept as last seen, not taken as closed and opened again later.
+    w.gh.state.prs = Array.from({ length: MAX_OPEN_PRS + 5 }, (_, index) => ({ number: index + 1, headRefOid: index === 139 ? sha(9_140) : sha(index + 1) }))
+    await w.watch.tick()
+    await w.settled()
+    w.gh.state.prs = w.gh.state.prs.slice(5)
+    await w.watch.tick()
+    await w.settled()
+    expect(w.watch.describe()).toContain(`${MAX_OPEN_PRS + 5} open PRs`)
+  })
+
+  test("stopping the watch of a repository cancels its reviews that had not started", async () => {
+    const w = durable({ hold: true, concurrency: 1 })
+    await w.watch.watchRepo("ses_a", "/repo")
+    w.gh.state.prs = [{ number: 1, headRefOid: sha(1) }, { number: 2, headRefOid: sha(2) }]
+    await w.watch.tick()
+    w.watch.unwatchRepo("/repo")
+    expect(w.watch.jobs.list().map((job) => [job.number, job.state])).toEqual([[1, "running"], [2, "cancelled"]])
+    expect(w.watch.pending()).toEqual({ running: 1, queued: 0, waiting: 0 })
   })
 })

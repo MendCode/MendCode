@@ -34,7 +34,7 @@ test("peer turns cannot call thread or PR tools, even in full mode with forged t
     expect(touched).toBe(false)
     expect(requests[0]!.tools.some((tool) => tool.name === name)).toBe(false)
   }
-  expect(remoteTurnOptions({ excludeTools: ["write"], noReply: true })).toMatchObject({ noReply: true, excludeTools: ["write", "threads", "packages", "pr_watch", "session_meta", "graph_*", "webfetch", "memory", "memory_graph", "remember", "workflow_script"] })
+  expect(remoteTurnOptions({ excludeTools: ["write"], noReply: true })).toMatchObject({ noReply: true, excludeTools: ["write", "threads", "packages", "pr_watch", "review_config", "pr_review", "session_meta", "graph_*", "webfetch", "memory", "memory_graph", "remember", "workflow_script"] })
 })
 
 test("peer turns cannot reach the packages tool through tool discovery or a forged call, in any permission mode", async () => {
@@ -61,8 +61,8 @@ test("peer turns cannot reach the packages tool through tool discovery or a forg
 })
 
 test("automatic continuations retain the paused peer turn's local tool restrictions", () => {
-  expect(continuationTurnOptions(undefined, true)).toMatchObject({ excludeTools: ["threads", "packages", "pr_watch", "session_meta", "graph_*", "webfetch", "memory", "memory_graph", "remember", "workflow_script"] })
-  expect(continuationTurnOptions({ excludeTools: ["write"] }, true)).toMatchObject({ excludeTools: ["write", "threads", "packages", "pr_watch", "session_meta", "graph_*", "webfetch", "memory", "memory_graph", "remember", "workflow_script"] })
+  expect(continuationTurnOptions(undefined, true)).toMatchObject({ excludeTools: ["threads", "packages", "pr_watch", "review_config", "pr_review", "session_meta", "graph_*", "webfetch", "memory", "memory_graph", "remember", "workflow_script"] })
+  expect(continuationTurnOptions({ excludeTools: ["write"] }, true)).toMatchObject({ excludeTools: ["write", "threads", "packages", "pr_watch", "review_config", "pr_review", "session_meta", "graph_*", "webfetch", "memory", "memory_graph", "remember", "workflow_script"] })
   expect(continuationTurnOptions(undefined, false)).toBeUndefined()
 })
 

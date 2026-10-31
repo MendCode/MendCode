@@ -3,6 +3,7 @@ import path from "node:path"
 import { z } from "zod"
 import type { PrWatchPort } from "@mendcode/tools"
 import { redactSecrets } from "@mendcode/protocol/wire"
+import { clockMark, elapsed, failureKind, OUTAGE_LIMIT_MS, outageGap, type ClockMark } from "./pr-review/outage"
 
 /**
  * PR watch (docs/pr-watch.md): the daemon polls linked pull requests through the user's own `gh` login and wakes the owning
@@ -45,7 +46,8 @@ export const ghProcess: GhRun = async ({ argv, cwd }) => {
 
 export const WATCH_INTERVAL_MS = 60_000
 export const COMMENT_WAKE_LIMIT = 10
-export const UNREADABLE_LIMIT_MS = 15 * 60_000
+/** Awake time of failed reads after which the session hears of it once, and after which a permanent error ends the watch. */
+export const UNREADABLE_LIMIT_MS = OUTAGE_LIMIT_MS
 const MAX_WATCHES = 20
 const MAX_PER_SESSION = 5
 const MAX_ENDED = 30
@@ -164,12 +166,25 @@ export function statusLines(snapshot: Snapshot): string[] {
   return lines
 }
 
+/** What a failed `gh pr view` says about the future (outage.ts), and a pull request GitHub cannot resolve is gone too. */
+export function readFailureKind(reason: string): ReturnType<typeof failureKind> {
+  const kind = failureKind(reason)
+  return kind === "unknown" && /could not resolve to a pull ?request/i.test(reason) ? "permanent" : kind
+}
+
 export type EndReason = "merged" | "closed" | "comment-limit" | "unreadable" | "stopped"
 const Last = z.object({ at: z.number(), state: z.enum(["open", "merged", "closed"]), pass: z.number(), fail: z.number(), pending: z.number(), review: z.string().optional(), mergeable: z.string(), draft: z.boolean() })
 const Watch = z.object({
   sessionId: z.string(), directory: z.string(), url: z.string(), number: z.number(), title: z.string(), head: z.string(), base: z.string(), createdAt: z.number(),
   mark: z.object({ failed: z.string(), passed: z.boolean(), conflict: z.boolean(), seen: z.array(z.string()) }),
+  /** Read only to drop it: watches saved before reads were counted awake (`outage`) kept the wall time of the first failure. */
   wakes: z.number().default(0), unreadableSince: z.number().optional(),
+  /**
+   * Reads that failed in a row (outage.ts, as the repository watch counts them): since when, the awake time they took (sleep does
+   * not count), the awake time of permanent errors alone, how many, the last reason, when to read again, and whether the session
+   * was told.
+   */
+  outage: z.object({ since: z.number(), awakeMs: z.number(), permanentMs: z.number(), failures: z.number().int(), reason: z.string().max(300), retryAt: z.number(), told: z.boolean().optional() }).optional(),
   pending: z.array(z.string()).default([]), pendingOther: z.boolean().default(false),
   last: Last.optional(), ended: z.object({ at: z.number(), reason: z.enum(["merged", "closed", "comment-limit", "unreadable", "stopped"]) }).optional(),
 })
@@ -183,6 +198,8 @@ export type PrWatchOptions = {
   dir: string
   run?: GhRun
   now?: () => number
+  /** A clock that stops while the machine sleeps (default `performance.now`, unless `now` is injected): failing time is counted awake. */
+  monotonic?: () => number
   intervalMs?: number
   /** `experimental.pr_watch` is on. Checked on every tick and every command, so turning it off stops all network use. */
   enabled(): boolean
@@ -213,6 +230,9 @@ export function parseRef(value: string | undefined): { ok: true; arg?: string; n
 export function createPrWatch(options: PrWatchOptions) {
   const run = options.run ?? ghProcess
   const now = options.now ?? Date.now
+  // An injected wall clock without a monotonic one: comparing it with the real `performance.now` would read every jump as sleep.
+  const monotonic = options.monotonic ?? (options.now ? undefined : () => performance.now())
+  const mark = () => clockMark(now, monotonic)
   const interval = options.intervalMs ?? WATCH_INTERVAL_MS
   const file = path.join(options.dir, "pr-watch.json")
   let watches: PrWatchRecord[] = load()
@@ -312,23 +332,62 @@ export function createPrWatch(options: PrWatchOptions) {
     if (limitHit) end(watch, "comment-limit")
   }
 
-  async function poll(watch: PrWatchRecord) {
-    const result = await view(watch.sessionId, watch.directory, watch.url)
-    if (!result.ok) {
-      watch.unreadableSince ??= now()
-      if (now() - watch.unreadableSince >= UNREADABLE_LIMIT_MS) {
-        watch.pending = [options.mask(watch.sessionId, `Could not read this pull request through gh for ${Math.round(UNREADABLE_LIMIT_MS / 60_000)} minutes (${result.reason}); the watch ended. Use pr_watch watch to start it again once gh works.`)]
-        watch.pendingOther = true
-        end(watch, "unreadable")
-      }
+  /** The last failed read of each watch in this process: the next one adds only the awake time between the two. */
+  const lastFailure = new Map<PrWatchRecord, ClockMark>()
+  /** Whether a watch whose reads fail is due again (`outage.retryAt`, with half an interval of slack for the timer). */
+  const outageDue = (watch: PrWatchRecord) => !watch.outage || now() + interval / 2 >= watch.outage.retryAt
+
+  /**
+   * A read failed. The same outage semantics as the repository watch (outage.ts): the watch reads again after a growing gap (one
+   * interval, doubling, at most 15 minutes) and counts the failing time awake, so a laptop asleep with its lid closed is not failing
+   * time. A network or GitHub outage (or an unclear error, a missing gh) never ends the watch: after 15 awake minutes the session
+   * is woken once to hear of it, and the watch goes on by itself. Only a permanent error (the pull request or its repository gone,
+   * access revoked) for 15 awake minutes ends it.
+   */
+  function failedRead(watch: PrWatchRecord, reason: string) {
+    const at = mark()
+    delete watch.unreadableSince
+    const kind = readFailureKind(reason)
+    const before = watch.outage
+    const previous = lastFailure.get(watch)
+    const step = before && previous ? elapsed(previous, at, 2 * outageGap(before.failures, interval)).awake : 0
+    lastFailure.set(watch, at)
+    const failures = (before?.failures ?? 0) + 1
+    const outage: NonNullable<PrWatchRecord["outage"]> = {
+      since: before?.since ?? at.wall, awakeMs: (before?.awakeMs ?? 0) + step, permanentMs: kind === "permanent" ? (before?.permanentMs ?? 0) + step : 0,
+      // After the first failure the next tick reads again; after more, the gap doubles.
+      failures, reason: reason.slice(0, 300), retryAt: failures === 1 ? at.wall : at.wall + outageGap(failures, interval), ...(before?.told ? { told: true } : {}),
+    }
+    watch.outage = outage
+    if (kind === "permanent" && outage.permanentMs >= OUTAGE_LIMIT_MS) {
+      delete watch.outage
+      lastFailure.delete(watch)
+      watch.pending = [options.mask(watch.sessionId, `Could not read this pull request through gh for ${Math.round(OUTAGE_LIMIT_MS / 60_000)} minutes (${reason}); the watch ended. That is not a network outage, which never ends a watch; use pr_watch watch to start it again once the pull request can be read.`)]
+      watch.pendingOther = true
+      end(watch, "unreadable")
       return
     }
+    if (!outage.told && outage.awakeMs >= OUTAGE_LIMIT_MS) {
+      outage.told = true
+      watch.pending.push(options.mask(watch.sessionId, `Could not read this pull request through gh for ${Math.round(outage.awakeMs / 60_000)} minutes (${reason}). The watch keeps trying, at most ${Math.round(outageGap(Infinity, interval) / 60_000)} minutes apart, and wakes you as before once gh reads it again; this is said once.`))
+      watch.pendingOther = true
+    }
+  }
+
+  async function poll(watch: PrWatchRecord) {
+    const result = await view(watch.sessionId, watch.directory, watch.url)
+    if (!result.ok) { failedRead(watch, result.reason); return }
+    const outage = watch.outage
     delete watch.unreadableSince
+    delete watch.outage
+    lastFailure.delete(watch)
     const { snapshot } = result
     remember(watch, snapshot)
     if (snapshot.state !== "open") { end(watch, snapshot.state); return }
     const outcome = evaluate({ snapshot, mark: watch.mark, self: await self(watch.directory) })
     watch.mark = outcome.mark
+    // The session heard of the outage: what changed meanwhile says it is over.
+    if (outage?.told && outcome.events.length) watch.pending.push(options.mask(watch.sessionId, `Read again after ${Math.max(1, Math.round((now() - outage.since) / 60_000))} minutes of failures (${outage.reason}).`))
     for (const event of outcome.events) {
       for (const line of event.lines) watch.pending.push(options.mask(watch.sessionId, line))
       if (event.kind !== "comments") watch.pendingOther = true
@@ -345,7 +404,7 @@ export function createPrWatch(options: PrWatchOptions) {
         for (const watch of [...watches]) {
           if (stopped) break
           if (!options.sessionExists(watch.sessionId)) { watches = watches.filter((item) => item !== watch); continue }
-          if (!active(watch)) continue
+          if (!active(watch) || !outageDue(watch)) continue
           const directory = options.sessionDirectory(watch.sessionId)
           if (directory) watch.directory = directory
           await poll(watch)

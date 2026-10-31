@@ -3,6 +3,6 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "exports": { ".": "./src/index.ts", "./local-endpoint": "./src/local-endpoint.ts", "./app-server": "./src/app-server.ts" },
+  "exports": { ".": "./src/index.ts", "./local-endpoint": "./src/local-endpoint.ts", "./app-server": "./src/app-server.ts", "./inherited-env": "./src/inherited-env.ts", "./self-exec": "./src/self-exec.ts" },
   "dependencies": { "@mendcode/protocol": "workspace:*" }
 }

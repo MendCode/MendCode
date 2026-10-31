@@ -128,6 +128,7 @@ export function createSlash(ctx: AppContext, actions: {
   daemonCommand: ReturnType<typeof createDaemon>["daemonCommand"]
   whenIdle: ReturnType<typeof createDaemon>["whenIdle"]
   prCommand: ReturnType<typeof createPrWatchCommand>["prCommand"]
+  openReviews(): Promise<void>
   openWorkflows: ReturnType<typeof createWorkflows>["openWorkflows"]
   workflowCommand: ReturnType<typeof createWorkflows>["workflowCommand"]
   rightSidebarCommand: (args: string, panel?: boolean) => Promise<boolean>
@@ -706,7 +707,11 @@ export function createSlash(ctx: AppContext, actions: {
         await goalCommand(parsed.args)
         break
       case "pr":
-        if (!await actions.prMetadata(parsed.args)) await actions.prCommand(parsed.args)
+        if (/^\s*dashboard\s*$/i.test(parsed.args)) await actions.openReviews()
+        else if (!await actions.prMetadata(parsed.args)) await actions.prCommand(parsed.args)
+        break
+      case "reviews":
+        await actions.openReviews()
         break
       case "limit":
         await limitCommand(parsed.args)

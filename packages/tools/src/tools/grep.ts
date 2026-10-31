@@ -23,8 +23,17 @@ const MAX_FILE_BYTES = 2_000_000
 /** Set to "1" to force the pure-TypeScript walker even when `rg` is installed (used by tests). */
 export const GREP_FALLBACK_ENV = "MENDCODE_GREP_FALLBACK"
 
-type Search = { pattern: string; base: string; include: string | undefined; ignoreCase: boolean }
-type Found = { lines: string[]; capped: boolean }
+type Search = { pattern: string; base: string; include: string | undefined; ignoreCase: boolean; context: number }
+/** `lines` is the rendered output; `matches` counts matching lines only, not context lines or `--` separators. */
+type Found = { lines: string[]; matches: number; capped: boolean }
+
+const MAX_CONTEXT = 5
+const GROUP_SEPARATOR = "--"
+/**
+ * With context, rg runs with `--null`: `path\0line:text` for a match, `path\0line-text` for a context line. The NUL tells the two
+ * apart whatever the path contains; the output then takes rg's usual `path:line:text` / `path-line-text` shape.
+ */
+const NULL_LINE = /^([^\0]*)\0(\d+)([:-])/
 
 /**
  * True when a group that repeats (`+`, `*`, `{n,}`) holds a repetition of its own, as `(a+)+` or `(\w*,)*`: a JavaScript regex
@@ -58,12 +67,14 @@ const clip = (text: string) => (text.length > MAX_LINE_CHARS ? `${text.slice(0, 
 function searchWithRg({ search, context, rg }: { search: Search; context: ToolContext; rg: string }): Promise<Found | string> {
   const args = ["--line-number", "--with-filename", "--no-heading", "--color", "never"]
   if (search.ignoreCase) args.push("-i")
+  if (search.context > 0) args.push("-C", String(search.context), "--null")
   if (search.include) args.push("--glob", search.include)
   args.push("--glob", "!node_modules", "--glob", "!.git")
   args.push("-e", search.pattern, "--", search.base)
   return new Promise((resolve) => {
     const child = spawn(rg, args, { cwd: context.cwd, stdio: ["ignore", "pipe", "pipe"] })
     const lines: string[] = []
+    let matches = 0
     let pending = ""
     let stderr = ""
     let capped = false
@@ -75,13 +86,21 @@ function searchWithRg({ search, context, rg }: { search: Search; context: ToolCo
       context.signal.removeEventListener("abort", onAbort)
       resolve(value)
     }
-    const push = (line: string) => {
-      if (line === "" || capped) return
-      if (lines.length >= MAX_MATCHES) {
+    const push = (raw: string) => {
+      if (raw === "" || capped) return
+      if (search.context > 0 && raw === GROUP_SEPARATOR) {
+        if (lines.length > 0 && lines[lines.length - 1] !== GROUP_SEPARATOR) lines.push(raw)
+        return
+      }
+      const parsed = search.context > 0 ? NULL_LINE.exec(raw) : null
+      const isMatch = search.context === 0 || parsed?.[3] === ":"
+      if (isMatch && matches >= MAX_MATCHES) {
         capped = true
         child.kill("SIGTERM")
         return
       }
+      if (isMatch) matches++
+      const line = parsed ? `${parsed[1]}${parsed[3]}${parsed[2]}${parsed[3]}${raw.slice(parsed[0].length)}` : raw
       lines.push(clip(line.startsWith(prefix) ? line.slice(prefix.length) : line))
     }
     const onAbort = () => {
@@ -103,7 +122,8 @@ function searchWithRg({ search, context, rg }: { search: Search; context: ToolCo
     child.on("error", (error) => finish(`cannot run rg: ${errorMessage(error)}`))
     child.on("close", (code) => {
       push(pending)
-      if (capped || code === 0 || code === 1) return finish({ lines, capped })
+      if (lines[lines.length - 1] === GROUP_SEPARATOR) lines.pop()
+      if (capped || code === 0 || code === 1) return finish({ lines, matches, capped })
       finish(stderr.trim().split("\n")[0] || `rg exited with code ${code}`)
     })
   })
@@ -120,6 +140,7 @@ async function searchWithWalker({ search, context }: { search: Search; context: 
   const includeGlob = search.include ? new Bun.Glob(search.include) : undefined
   const includeHasSlash = search.include?.includes("/") ?? false
   const lines: string[] = []
+  let matches = 0
   let capped = false
 
   const included = (file: string) => {
@@ -136,14 +157,35 @@ async function searchWithWalker({ search, context }: { search: Search; context: 
     const text = await Bun.file(file).text()
     const shown = displayPath({ cwd: context.cwd, path: file })
     const rows = text.split("\n")
+    // A final newline ends the last line; it does not start an empty one (rg neither matches nor shows it as context).
+    if (rows.length > 1 && rows[rows.length - 1] === "") rows.pop()
+    const hits: number[] = []
     for (let index = 0; index < rows.length; index++) {
-      if (regex.test(rows[index] as string)) {
-        if (lines.length >= MAX_MATCHES) {
-          capped = true
-          return
-        }
-        lines.push(`${shown}:${index + 1}:${clip(rows[index] as string)}`)
+      if (!regex.test(rows[index] as string)) continue
+      if (matches >= MAX_MATCHES) {
+        capped = true
+        break
       }
+      matches++
+      hits.push(index)
+    }
+    if (search.context === 0) {
+      for (const index of hits) lines.push(`${shown}:${index + 1}:${clip(rows[index] as string)}`)
+      return
+    }
+    // The shape of rg -C: matching lines with `:`, context lines with `-`, `--` between groups that do not touch.
+    const wanted = new Set(hits)
+    let last = -2
+    for (const index of hits) {
+      const from = Math.max(0, last + 1, index - search.context)
+      const to = Math.min(rows.length - 1, index + search.context)
+      if (from > to) continue
+      if (from > last + 1 && lines.length > 0) lines.push(GROUP_SEPARATOR)
+      for (let row = from; row <= to; row++) {
+        const marker = wanted.has(row) ? ":" : "-"
+        lines.push(`${shown}${marker}${row + 1}${marker}${clip(rows[row] as string)}`)
+      }
+      last = to
     }
   }
 
@@ -164,7 +206,7 @@ async function searchWithWalker({ search, context }: { search: Search; context: 
   if (info.isDirectory()) await walk(search.base)
   else await scanFile(search.base)
   if (context.signal.aborted) return "cancelled"
-  return { lines, capped }
+  return { lines, matches, capped }
 }
 
 export default defineTool({
@@ -175,23 +217,25 @@ export default defineTool({
   args: z.object({
     pattern: z.string().min(1).describe("Regular expression"),
     path: z.string().optional().describe("File or directory to search (default: project root)"),
-    include: z.string().optional().describe("Glob filter for file names, e.g. *.ts"),
+    include: z.string().optional().describe("File name glob, e.g. *.ts"),
     ignoreCase: z.boolean().optional().describe("Case-insensitive match"),
+    // Lines before and after each match, as rg -C; the name says it, and every described key costs each request.
+    context: z.number().int().min(0).max(MAX_CONTEXT).optional(),
   }),
-  async execute({ pattern, path, include, ignoreCase }, context): Promise<ToolResult> {
+  async execute({ pattern, path, include, ignoreCase, context: around }, context): Promise<ToolResult> {
     const title = `Grep ${pattern}`
     if (context.signal.aborted) return cancelled(title)
     const base = path ? resolvePath({ cwd: context.cwd, path }) : context.cwd
     const missing = await missingPathMessage({ cwd: context.cwd, path: base })
     if (missing) return fail({ title, message: missing })
-    const search: Search = { pattern, base, include, ignoreCase: ignoreCase ?? false }
+    const search: Search = { pattern, base, include, ignoreCase: ignoreCase ?? false, context: around ?? 0 }
     try {
       const rg = process.env[GREP_FALLBACK_ENV] === "1" ? null : Bun.which("rg")
       const found = rg ? await searchWithRg({ search, context, rg }) : await searchWithWalker({ search, context })
       if (typeof found === "string") {
         return found === "cancelled" ? cancelled(title) : fail({ title, message: found })
       }
-      if (found.lines.length === 0) return succeed({ title, output: "No matches found", meta: { matches: 0 } })
+      if (found.matches === 0) return succeed({ title, output: "No matches found", meta: { matches: 0 } })
       let output = found.lines.join("\n")
       if (found.capped) output += `\n[output truncated: more than ${MAX_MATCHES} matches; narrow the pattern, the path or \`include\`]`
       const capped = truncateText({ text: output, ...(context.outputLimits ? { limits: { maxBytes: 8 * 1024 * 1024, maxLines: 100000 } } : {}) })
@@ -199,7 +243,7 @@ export default defineTool({
         title,
         output: capped.text,
         truncated: found.capped || capped.truncated,
-        meta: { matches: found.lines.length },
+        meta: { matches: found.matches },
       })
     } catch (error) {
       return fail({ title, message: `grep failed: ${errorMessage(error)}` })

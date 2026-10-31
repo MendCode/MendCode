@@ -63,5 +63,8 @@ test("a comment can address one developer's reviewer: @mendcode review @alice", 
   expect(parsePrCommand("@mendcode review @alice")).toEqual({ kind: "review", target: "alice" })
   expect(parsePrCommand("@mendcode explain @alice why is this wrong?")).toEqual({ kind: "explain", target: "alice", arg: "why is this wrong?" })
   expect(parsePrCommand("@mendcode learn @Decorators are fine here")).toEqual({ kind: "learn", target: "Decorators", arg: "are fine here" })
+  // GitLab and Gitea usernames may hold `_` and `.`.
+  expect(parsePrCommand("@mendcode review @ana.lopez_2")).toEqual({ kind: "review", target: "ana.lopez_2" })
+  expect(parsePrCommand("@mendcode review @ana.")).toEqual({ kind: "review", arg: "@ana." })
   expect(parsePrCommand("@mendcode learn decorators are fine")).toEqual({ kind: "learn", arg: "decorators are fine" })
 })

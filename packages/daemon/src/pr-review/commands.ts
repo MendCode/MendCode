@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto"
 import type { PrFinding } from "@mendcode/protocol"
 import type { ReviewSessionFactory } from "./engine"
+import type { ReviewProvider } from "./contracts"
 import { findingFromComment, type GhCall } from "./publish"
 import { answersMarker } from "./publishers"
 import { FINDING_MARKER, type ReviewState } from "./state"
@@ -45,7 +46,8 @@ export function parsePrCommand(body: string, mentions: readonly string[] = ["@me
       const kind = match?.[1]?.toLowerCase()
       if (!match || !(PR_COMMANDS as readonly string[]).includes(kind!)) continue
       const rest = [match[2] ?? "", ...lines.slice(index + 1)].join("\n").trim()
-      const target = /^@([A-Za-z0-9][A-Za-z0-9-]{0,38})(?=\s|$)/.exec(rest)?.[1]
+      // A GitHub login, or a GitLab/Gitea username (which may also hold `_` and `.`, never as its last character).
+      const target = /^@([A-Za-z0-9](?:[A-Za-z0-9._-]{0,253}[A-Za-z0-9_-])?)(?=\s|$)/.exec(rest)?.[1]
       const arg = (target ? rest.slice(target.length + 1).trim() : rest).slice(0, ARG_LIMIT)
       return { kind: kind as PrCommandKind, ...(arg ? { arg } : {}), ...(target ? { target } : {}) }
     }
@@ -58,7 +60,9 @@ export function parsePrCommand(body: string, mentions: readonly string[] = ["@me
  * a reviewer the repository lists as a publisher without it falls back to the comment's author association (owner, member or
  * collaborator).
  */
-export async function hasWriteAccess({ gh, repo, actor, association }: { gh: GhCall; repo: string; actor: string; association?: string | undefined }) {
+export async function hasWriteAccess({ gh, repo, actor, association, provider }: { gh: GhCall; repo: string; actor: string; association?: string | undefined; provider?: ReviewProvider | undefined }) {
+  // GitLab and Gitea: the provider's permission read (GitLab Developer or above, Gitea write or admin); no association fallback.
+  if (provider) return /^[A-Za-z0-9_.][A-Za-z0-9_.-]{0,254}$/.test(actor) && ["admin", "write"].includes(await provider.permission({ repo, login: actor }).catch(() => "unknown"))
   if (!/^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/.test(actor)) return false
   const done = await gh({ argv: ["api", `repos/${repo}/collaborators/${actor}/permission`, "--jq", ".permission"] })
   if (done.code === 0) return WRITE_PERMISSIONS.has(done.out.trim())
@@ -67,9 +71,35 @@ export async function hasWriteAccess({ gh, repo, actor, association }: { gh: GhC
 
 /** Where a comment was written: the conversation (issue comment) or a review thread (its `inReplyTo` is the thread's first comment). */
 /** `association`: GitHub's author association of the commenter, the fallback when the reviewer may not read permissions. */
-export type CommandComment = { id: number; surface: "issue" | "review"; actor: string; body: string; association?: string | undefined; inReplyTo?: number | undefined; diffHunk?: string | undefined; path?: string | undefined; line?: number | undefined }
-export type FixResult = { ok: true; commit: string } | { ok: false; reason: string }
-export type ReviewSummary = { status: string; reason?: string | undefined; posted: boolean }
+/** `discussion`: the GitLab discussion the comment belongs to, where its reply goes. */
+export type CommandComment = { id: number; surface: "issue" | "review"; actor: string; body: string; association?: string | undefined; inReplyTo?: number | undefined; diffHunk?: string | undefined; path?: string | undefined; line?: number | undefined; discussion?: string | undefined }
+/**
+ * What a fix did. `ok` is a commit made after the checks passed: `pushed` to the PR's branch, or not (`fix.push` off) and `kept` on
+ * a local ref. Not `ok` pushed nothing; `kept` names the local ref holding a commit that was made but not pushed (a push refused or
+ * blocked by the revalidation), and `stale` says the branch or base moved meanwhile. `sessionId`: the fix session, kept for the user.
+ * `notPushed`: why a committed fix was kept instead of pushed (`fix.push` off, a fork that does not let maintainers push, …).
+ */
+export type FixResult =
+  | { ok: true; commit: string; pushed: boolean; kept?: string | undefined; sessionId?: string | undefined; notPushed?: string | undefined }
+  | { ok: false; reason: string; commit?: string | undefined; kept?: string | undefined; stale?: boolean | undefined; sessionId?: string | undefined }
+/** `text`, when set, is the whole reply (a review of a new head that found nothing new names that head and the earlier findings). */
+export type ReviewSummary = { status: string; reason?: string | undefined; posted: boolean; text?: string | undefined }
+
+/**
+ * The reply to `@mendcode review` when the review of a new head found nothing new, so no review was posted: the head it reviewed,
+ * how many earlier findings it resolved, and which are still open. `state` is the state after that review.
+ */
+export function nothingNewReply({ head, resolved, state }: { head: string; resolved: number; state: ReviewState }): string {
+  const open = Object.values(state.published).flatMap((entry) => entry.finding && !entry.resolved ? [entry.finding] : [])
+  const lines = [`Reviewed ${head.slice(0, 12)}: no new findings, so no new review was posted.`]
+  if (resolved) lines.push(`${resolved} earlier finding${resolved === 1 ? " is" : "s are"} fixed on this head; ${resolved === 1 ? "its thread was" : "their threads were"} resolved or answered.`)
+  if (open.length) {
+    lines.push(`Still open from earlier reviews (${open.length}):`)
+    for (const finding of open.slice(0, 10)) lines.push(`- \`${finding.path}:${finding.line}\` ${finding.summary.replace(/\s+/g, " ").slice(0, 160)}`)
+    if (open.length > 10) lines.push(`- and ${open.length - 10} more`)
+  } else if (Object.keys(state.published).length) lines.push("Every earlier finding is resolved.")
+  return lines.join("\n")
+}
 
 export type CommandDeps = {
   gh: GhCall
@@ -81,30 +111,109 @@ export type CommandDeps = {
   review(): Promise<ReviewSummary>
   /** Answers a question about a finding in a read-only child. */
   explain(input: { finding: PrFinding; question: string; diffHunk?: string | undefined }): Promise<string>
-  /** Edits the PR branch in a separate session and pushes one commit; undefined where it cannot run. */
-  fix?: ((input: { instructions: string; finding?: PrFinding | undefined }) => Promise<FixResult>) | undefined
+  /**
+   * Edits the PR branch in a separate session and commits once; undefined where it cannot run. `push` is the decision from
+   * `pushAllowed` and `guards` are the checks to repeat right before the push: the caller hands both to `runFix` (`push`,
+   * `stillOpen`, `mayPush`), which keeps the commit on a local ref whenever it does not push.
+   */
+  fix?: ((input: { instructions: string; finding?: PrFinding | undefined; push: boolean; guards: FixGuards }) => Promise<FixResult>) | undefined
   /** Why `fix` cannot run here, when `fix` is undefined. */
   fixUnavailable?: string
   /** The base config's `fixes`. */
   fixesAllowed(): Promise<boolean>
   /** Whether a fix may push: the head branch lives in this repository, or its fork allows maintainer edits. */
   pushable(): Promise<boolean>
+  /**
+   * The repository's `fix.push` (and `fix.personal` for a personal reviewer): off, the fix is committed and kept locally, never
+   * pushed. Unset: the fix pushes, as `fixes: true` alone always did.
+   */
+  pushAllowed?: (() => Promise<boolean>) | undefined
+  /**
+   * Why `review` or `fix` does not run on this pull request (the repository's filters, a personal profile's narrowing), checked
+   * after the commenter's write access; undefined when it runs. A refused command gets one reply naming the filter, and no job or
+   * model turn starts. A comment never overrides a filter.
+   */
+  refusal?: (() => Promise<string | undefined>) | undefined
+  /**
+   * The caller already checked the commenter (write access, or the daemon's own login) and the filters, in the daemon's order:
+   * permission, then filters, then the reviewed head. They are not checked again here.
+   */
+  checked?: boolean | undefined
+  /**
+   * Sends one reply (the body already carries the reply and answer markers) and says whether it is on the pull request. The daemon
+   * passes one that goes through the effects ledger, so a comment is answered once across retries and restarts; absent, the reply
+   * is posted directly.
+   */
+  send?: ((input: { endpoint: string; body: string }) => Promise<boolean>) | undefined
+  /**
+   * GitLab and Gitea: the adapter answers what `gh` answers on GitHub (the commenter's write access, the replied-to comment, the
+   * PR's state, a reply without `send`). Absent, everything goes through `gh` as before.
+   */
+  provider?: ReviewProvider | undefined
 }
-export type CommandOutcome = { kind: PrCommandKind | "denied"; reply?: string; posted: boolean; state: ReviewState }
 
-/** Posts `text` where the comment was written, with the reply marker (and `extra` markers). */
-export async function replyTo({ gh, repo, number, comment, text, extra = "" }: { gh: GhCall; repo: string; number: number; comment: CommandComment; text: string; extra?: string }) {
+/** What a fix checks again right before it pushes: the PR is still open, and the commenter and the reviewer may still write to the branch. */
+export type FixGuards = { stillOpen(): Promise<boolean>; mayPush(): Promise<true | string> }
+
+/**
+ * Fresh reads for `runFix`'s revalidation: the PR's state from GitHub, the commenter's write access again (a maintainer removed
+ * meanwhile no longer gets a push), and whether the branch still accepts the reviewer's push. A failed read counts as "no": the fix
+ * is then kept on its local ref instead of pushed.
+ */
+export function fixGuards({ gh, repo, number, actor, association, pushable, provider }: { gh: GhCall; repo: string; number: number; actor: string; association?: string | undefined; pushable(): Promise<boolean>; provider?: ReviewProvider | undefined }): FixGuards {
+  return {
+    async stillOpen() {
+      if (provider) return (await provider.view({ directory: "", repo, number }).catch(() => undefined))?.open === true
+      const done = await gh({ argv: ["api", `repos/${repo}/pulls/${number}`, "--jq", ".state"] })
+      return done.code === 0 && done.out.trim() === "open"
+    },
+    async mayPush() {
+      if (!await hasWriteAccess({ gh, repo, actor, association, ...(provider ? { provider } : {}) })) return `${actor} no longer has write access to ${repo}`
+      if (!await pushable()) return "the branch no longer accepts pushes from maintainers"
+      return true
+    },
+  }
+}
+
+/** The reply to `@mendcode fix`: what was pushed, or why nothing was, and where a commit that was not pushed is kept. */
+export function fixReply(done: FixResult) {
+  const where = (kept: string, commit?: string) => `The fix is kept in the reviewer's checkout as \`${kept}\`${commit ? ` (commit ${commit.slice(0, 12)})` : ""}, so it is not lost.`
+  if (done.ok && done.pushed) return `Pushed ${done.commit.slice(0, 12)} to this branch.`
+  if (done.ok) return `Committed ${done.commit.slice(0, 12)} but did not push it: \`fix.push\` is off for this repository.${done.kept ? ` ${where(done.kept)}` : ""}`
+  const reason = done.reason.replace(/^\[PR_REVIEW\]:\s*/, "").slice(0, 3_000)
+  const stale = done.stale ? " Ask again with `@mendcode fix` to redo it on the new head." : ""
+  return `Nothing was pushed: ${reason}${done.kept ? `\n\n${where(done.kept, done.commit)}${stale}` : stale}`
+}
+/** `filtered`: a `review` or `fix` the repository's filters keep off this pull request (one reply names the filter). */
+export type CommandOutcome = { kind: PrCommandKind | "denied" | "filtered"; reply?: string; posted: boolean; state: ReviewState }
+
+/** Posts `text` where the comment was written, with the reply marker (and `extra` markers); through `send` when given. */
+export async function replyTo({ gh, repo, number, comment, text, extra = "", send, provider }: { gh: GhCall; repo: string; number: number; comment: CommandComment; text: string; extra?: string; send?: CommandDeps["send"]; provider?: ReviewProvider | undefined }) {
   const body = `${text.trim().slice(0, 60_000)}\n\n${REPLY_MARKER}${answersMarker(comment.id)}${extra}`
   const endpoint = comment.surface === "review" ? `repos/${repo}/pulls/${number}/comments/${comment.inReplyTo ?? comment.id}/replies` : `repos/${repo}/issues/${number}/comments`
+  if (send) return send({ endpoint, body })
+  if (provider) return (await provider.reply?.({ repo, number, to: comment, body }).catch(() => undefined))?.ok === true
   const done = await gh({ argv: ["api", endpoint, "--method", "POST", "--input", "-"], stdin: JSON.stringify({ body }) })
   return done.code === 0
 }
 
+/** The reply to a `review` or `fix` that a filter refused: the filter by name, and how to change it. */
+export const filteredReply = (kind: "review" | "fix", reason: string) =>
+  `MendCode does not ${kind === "fix" ? "fix" : "review"} this pull request: ${reason}. A comment does not override the repository's filters (\`filters\` and \`triggers.drafts\` in \`.mendcode/review.yaml\` on the base branch, narrowed by the reviewer's personal profile); change the filter there, or remove the label, to have it ${kind === "fix" ? "fixed" : "reviewed"}.`
+
 /** The finding a reply thread is about: from the saved state, or read back from MendCode's own comment. */
-async function threadFinding({ gh, repo, comment, state }: Pick<CommandDeps, "gh" | "repo" | "comment" | "state">): Promise<PrFinding | undefined> {
+async function threadFinding({ gh, repo, number, comment, state, provider }: Pick<CommandDeps, "gh" | "repo" | "number" | "comment" | "state" | "provider">): Promise<PrFinding | undefined> {
   if (comment.surface !== "review" || !comment.inReplyTo) return undefined
   const saved = Object.entries(state.published).find(([, entry]) => entry.commentId === comment.inReplyTo)
   if (saved?.[1].finding) return saved[1].finding
+  if (provider) {
+    // The thread's first comment is MendCode's own: its finding marker names the finding, and the saved state holds it.
+    const read = await provider.comments?.({ repo, number }).catch(() => undefined)
+    const parent = read?.ok ? read.comments.find((item) => item.id === comment.inReplyTo) : undefined
+    const id = FINDING_MARKER.exec(parent?.body ?? "")?.[1]
+    if (!parent || !id) return undefined
+    return state.published[id]?.finding ?? findingFromComment({ id, body: parent.body, path: parent.path, line: parent.line ?? null })
+  }
   const done = await gh({ argv: ["api", `repos/${repo}/pulls/comments/${comment.inReplyTo}`] })
   if (done.code !== 0) return undefined
   try {
@@ -134,13 +243,19 @@ export function learningBullet(text: string) {
 
 /** Checks the commenter, then runs the command and answers in the same thread. Never throws for a GitHub failure. */
 export async function runPrCommand(command: PrCommand, deps: CommandDeps): Promise<CommandOutcome> {
-  const { gh, repo, number, comment } = deps
-  const reply = async (text: string, extra = "") => ({ reply: text, posted: await replyTo({ gh, repo, number, comment, text, extra }) })
-  if (!await hasWriteAccess({ gh, repo, actor: comment.actor, association: comment.association })) return { kind: "denied", ...await reply(MAINTAINERS_ONLY), state: deps.state }
+  const { gh, repo, number, comment, provider } = deps
+  const via = provider ? { provider } : {}
+  const reply = async (text: string, extra = "") => ({ reply: text, posted: await replyTo({ gh, repo, number, comment, text, extra, ...(deps.send ? { send: deps.send } : {}), ...via }) })
+  if (!deps.checked && !await hasWriteAccess({ gh, repo, actor: comment.actor, association: comment.association, ...via })) return { kind: "denied", ...await reply(MAINTAINERS_ONLY), state: deps.state }
+  if (!deps.checked && (command.kind === "review" || command.kind === "fix") && deps.refusal) {
+    const refused = await deps.refusal()
+    if (refused) return { kind: "filtered", ...await reply(filteredReply(command.kind, refused)), state: deps.state }
+  }
   switch (command.kind) {
     case "review": {
       const done = await deps.review()
       if (done.posted) return { kind: "review", posted: true, state: deps.state }
+      if (done.text) return { kind: "review", ...await reply(done.text), state: deps.state }
       return { kind: "review", ...await reply(`Reviewed the current head: ${done.status}${done.reason ? ` (${done.reason})` : ""}.`), state: deps.state }
     }
     case "pause":
@@ -162,8 +277,10 @@ export async function runPrCommand(command: PrCommand, deps: CommandDeps): Promi
       const finding = await threadFinding(deps)
       const instructions = command.arg ?? (finding ? `Fix this finding: ${finding.summary}` : "")
       if (!instructions) return { kind: "fix", ...await reply("Say what to fix (`@mendcode fix the null check in parse`), or reply to one of MendCode's review comments."), state: deps.state }
-      const done = await deps.fix({ instructions, finding }).catch((error: unknown): FixResult => ({ ok: false, reason: error instanceof Error ? error.message : String(error) }))
-      return { kind: "fix", ...await reply(done.ok ? `Pushed ${done.commit.slice(0, 12)} to this branch.` : `Nothing was pushed: ${done.reason.replace(/^\[PR_REVIEW\]:\s*/, "").slice(0, 3_000)}`), state: deps.state }
+      const push = deps.pushAllowed ? await deps.pushAllowed() : true
+      const guards = fixGuards({ gh, repo, number, actor: comment.actor, association: comment.association, pushable: deps.pushable, ...via })
+      const done = await deps.fix({ instructions, finding, push, guards }).catch((error: unknown): FixResult => ({ ok: false, reason: error instanceof Error ? error.message : String(error) }))
+      return { kind: "fix", ...await reply(fixReply(done)), state: deps.state }
     }
     case "learn": {
       const bullet = learningBullet(command.arg ?? "")

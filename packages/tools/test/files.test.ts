@@ -108,6 +108,105 @@ describe("edit", () => {
   })
 })
 
+describe("edit with edits", () => {
+  test("applies several replacements in order in one write; a later one sees what an earlier one wrote", async () => {
+    const root = tmp()
+    put({ root, path: "f.ts", content: "const a = 1\nconst b = 2\nlet c = a + b\n" })
+    const result = await edit.execute({ path: "f.ts", edits: [
+      { oldString: "const a = 1", newString: "const alpha = 1" },
+      { oldString: "a + b", newString: "alpha + b" },
+      { oldString: "let", newString: "const" },
+    ] }, makeContext({ cwd: root }))
+    expect(result.isError).toBe(false)
+    expect(readFileSync(join(root, "f.ts"), "utf8")).toBe("const alpha = 1\nconst b = 2\nconst c = alpha + b\n")
+    expect(result.meta).toMatchObject({ replacements: 3, edits: 3 })
+    expect(result.output).toContain("+const c = alpha + b")
+  })
+  test("one entry that does not match fails the call before anything is written, and names the entry", async () => {
+    const root = tmp()
+    put({ root, path: "f.ts", content: "x = 1\ny = 2\n" })
+    const result = await edit.execute({ path: "f.ts", edits: [{ oldString: "x = 1", newString: "x = 9" }, { oldString: "z = 3", newString: "z = 4" }] }, makeContext({ cwd: root }))
+    expect(result.isError).toBe(true)
+    expect(result.output).toContain("edit 2 of 2: oldString not found in f.ts; nothing was written")
+    expect(readFileSync(join(root, "f.ts"), "utf8")).toBe("x = 1\ny = 2\n")
+  })
+  test("an entry that matches twice is refused; the call's replaceAll covers every entry", async () => {
+    const root = tmp()
+    put({ root, path: "f.ts", content: "a a b\n" })
+    const ctx = makeContext({ cwd: root })
+    expect((await edit.execute({ path: "f.ts", edits: [{ oldString: "b", newString: "c" }, { oldString: "a", newString: "z" }] }, ctx)).output).toContain("edit 2 of 2: oldString matches 2 times")
+    const done = await edit.execute({ path: "f.ts", edits: [{ oldString: "b", newString: "c" }, { oldString: "a", newString: "z" }], replaceAll: true }, ctx)
+    expect(done.meta?.replacements).toBe(3)
+    expect(readFileSync(join(root, "f.ts"), "utf8")).toBe("z z c\n")
+  })
+  test("the top-level pair runs first, then edits; one entry alone reads like a single edit", async () => {
+    const root = tmp()
+    put({ root, path: "f.ts", content: "one\ntwo\n" })
+    const ctx = makeContext({ cwd: root })
+    expect((await edit.execute({ path: "f.ts", oldString: "one", newString: "1", edits: [{ oldString: "two", newString: "2" }] }, ctx)).isError).toBe(false)
+    expect(readFileSync(join(root, "f.ts"), "utf8")).toBe("1\n2\n")
+    const single = await edit.execute({ path: "f.ts", edits: [{ oldString: "nope", newString: "x" }] }, ctx)
+    expect(single.output).toBe("oldString not found in f.ts")
+    expect(single.meta).toBeUndefined()
+  })
+  test("a call without a complete pair or edits is refused with what is missing", async () => {
+    const root = tmp()
+    put({ root, path: "f.ts", content: "a\n" })
+    const ctx = makeContext({ cwd: root })
+    expect((await edit.execute({ path: "f.ts" }, ctx)).output).toBe("edit needs oldString and newString, or edits")
+    expect((await edit.execute({ path: "f.ts", oldString: "a" }, ctx)).output).toBe("oldString and newString go together")
+    expect(edit.args.safeParse({ path: "f.ts", edits: [] }).success).toBe(false)
+    expect(edit.args.safeParse({ path: "f.ts", edits: [{ oldString: "", newString: "x" }] }).success).toBe(false)
+    expect(readFileSync(join(root, "f.ts"), "utf8")).toBe("a\n")
+  })
+  test("each entry gets the CRLF and trailing-space near misses of a single edit", async () => {
+    const root = tmp()
+    put({ root, path: "f.ts", content: "one\r\ntwo\r\nthree  \r\nfour\r\n" })
+    const result = await edit.execute({ path: "f.ts", edits: [{ oldString: "one\ntwo", newString: "ONE\nTWO" }, { oldString: "three\nfour", newString: "THREE\nFOUR" }] }, makeContext({ cwd: root }))
+    expect(result.isError).toBe(false)
+    expect(readFileSync(join(root, "f.ts"), "utf8")).toBe("ONE\r\nTWO\r\nTHREE\r\nFOUR\r\n")
+  })
+  test("with the daemon's output limits a long diff is not cut at the default 2,000 lines", async () => {
+    const root = tmp()
+    const lines = Array.from({ length: 3000 }, (_, i) => `line ${i}`)
+    put({ root, path: "f.txt", content: `${lines.join("\n")}\n` })
+    const ctx = { ...makeContext({ cwd: root }), outputLimits: { maxBytes: 51200 * 100, maxLines: 100000 } }
+    const result = await edit.execute({ path: "f.txt", oldString: "line 0\n", newString: `${lines.map((line) => `${line}!`).join("\n")}\nline 0\n` }, ctx)
+    expect(result.isError).toBe(false)
+    expect(result.truncated).toBe(false)
+  })
+})
+
+describe("apply_patch near misses", () => {
+  const patchOf = (...rows: string[]) => ["*** Begin Patch", ...rows, "*** End Patch"].join("\n")
+  test("context whose spaces inside the line differ from the file still places the hunk", async () => {
+    const root = tmp()
+    const file = put({ root, path: "a.py", content: "def f(a,  b):\n    return a  +  b\n" })
+    const result = await applyPatch.execute({ patch: patchOf("*** Update File: a.py", "@@", " def f(a, b):", "-    return a + b", "+    return a * b") }, makeContext({ cwd: root }))
+    expect(result.isError).toBe(false)
+    expect(readFileSync(file, "utf8")).toBe("def f(a,  b):\n    return a * b\n")
+  })
+  test("a hunk that differs one line deep shows the file there, numbered, with the differing line marked", async () => {
+    const root = tmp()
+    const file = put({ root, path: "a.ts", content: ["import x", "", "function sum(a, b) {", "  const total = a + b", "  return total", "}", "export { sum }"].join("\n") + "\n" })
+    const result = await applyPatch.execute({ patch: patchOf("*** Update File: a.ts", "@@", " function sum(a, b) {", "   const total = a + b", "-  return totals", "+  return total * 2", " }") }, makeContext({ cwd: root }))
+    expect(result.isError).toBe(true)
+    expect(result.output).toContain("closest line 3: function sum(a, b) {")
+    expect(result.output).toContain("line 3 of the hunk differs (\">\"), the file there:")
+    expect(result.output).toContain(">5 |   return total")
+    expect(result.output).toContain(" 1 | import x")
+    expect(result.output).toContain(" 7 | export { sum }")
+    expect(readFileSync(file, "utf8")).toContain("  return total\n}")
+  })
+  test("a one-line hunk keeps the short closest-line note", async () => {
+    const root = tmp()
+    put({ root, path: "a.ts", content: "const a = 1\nconst total = a + 2\n" })
+    const result = await applyPatch.execute({ patch: patchOf("*** Update File: a.ts", "@@", "-const total = a + 3", "+const total = a + 4") }, makeContext({ cwd: root }))
+    expect(result.output).toContain("closest line 2: const total = a + 2")
+    expect(result.output).not.toContain("the file there")
+  })
+})
+
 describe("apply_patch", () => {
   test("adds, updates and deletes atomically", async () => {
     const root = tmp()

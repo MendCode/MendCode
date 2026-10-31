@@ -121,6 +121,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   { name: "restart", group: "more", aliases: [], summary: "Restart this terminal on the same session" },
   { name: "reload", group: "more", aliases: [], summary: "Reload extensions, packages, keys and themes" },
   { name: "pr", group: "code", feature: "pr_watch", aliases: ["pr-watch"], summary: "Review, watch and comment on pull requests" },
+  { name: "reviews", group: "code", feature: "pr_review", aliases: [], summary: "Manage PR review jobs and reviewers" },
   { name: "loops", group: "agents", aliases: ["loop"], summary: "Manage loops" },
   { name: "workflows", group: "agents", aliases: ["wf"], summary: "Manage workflows" },
   { name: "storage", group: "more", aliases: [], summary: "Inspect storage and cleanup" },

@@ -6,7 +6,7 @@ import { PrFinding, type PrReviewResult } from "@mendcode/protocol"
 import { buildReviewContext, gitRun } from "../src/pr-review/context"
 import type { ReviewSessionFactory } from "../src/pr-review/engine"
 import { findingId } from "../src/pr-review/findings"
-import { agentPrompt, commentBody, findingFromComment, publishReview, reviewBody, reviewEffort, type GhCall } from "../src/pr-review/publish"
+import { agentPrompt, commentBody, findingFromComment, fixedMarker, publishReview, reviewBody, reviewEffort, type GhCall } from "../src/pr-review/publish"
 import { emptyState, readReviewState, reviewRange, stateFromMarkers, statePath, writeReviewState } from "../src/pr-review/state"
 import { fixedFindings } from "../src/pr-review/verify"
 
@@ -115,6 +115,46 @@ describe("publishing a review", () => {
     expect(again.resolved).toBe(0)
     expect(fake.calls.filter((call) => call.body?.query?.startsWith("mutation"))).toHaveLength(1)
   })
+  test("the same head asked again: nothing is posted, but a finding the re-check found fixed has its thread resolved", async () => {
+    // Seen live (Symbex #18): the head after a fix was reviewed with nothing new and its threads stayed open; asking again changed nothing.
+    const fixed = make("The loop skips the first value")
+    const previous = { ...emptyState(), lastHead: NEXT, published: { [fixed.id]: { commentId: 500, finding: fixed } } }
+    const fake = fakeGh((argv, body) => {
+      if (argv[1] === "graphql" && body.query.startsWith("query")) return { code: 0, out: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [{ id: "PRRT_1", isResolved: false, comments: { nodes: [{ body: commentBody(fixed) }] } }] } } } } }) }
+      if (argv[1] === "graphql") return { code: 0, out: JSON.stringify({ data: { resolveReviewThread: { thread: { id: "PRRT_1", isResolved: true } } } }) }
+      return undefined
+    })
+    const quiet = await publishReview({ repo: "acme/app", number: 12, result: result([], NEXT), previous, process: fake.gh })
+    expect(quiet).toMatchObject({ posted: false, resolved: 0, reason: "this head was already reviewed and nothing is new" })
+    expect(fake.calls).toHaveLength(0)
+    const done = await publishReview({ repo: "acme/app", number: 12, result: result([], NEXT), previous, process: fake.gh, resolve: [fixed.id] })
+    expect(done).toMatchObject({ posted: false, resolved: 1, reason: "this head was already reviewed and nothing is new" })
+    expect(done.state.published[fixed.id]).toMatchObject({ resolved: true })
+    expect(fake.posts()).toHaveLength(0)
+  })
+  test("a thread this login may not resolve (read access) gets one reply saying the finding is fixed at the head, never a second", async () => {
+    // Seen live (Symbex #18): the publisher had read access, GitHub refused resolveReviewThread and the fixed findings stayed open in silence.
+    const fixed = make("The loop skips the first value")
+    const previous = { ...emptyState(), lastHead: HEAD, published: { [fixed.id]: { commentId: 500, finding: fixed } } }
+    let replies: unknown[] = []
+    const fake = fakeGh((argv, body) => {
+      if (argv[1] === "graphql" && body.query.startsWith("query")) return { code: 0, out: JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [{ id: "PRRT_1", isResolved: false, comments: { nodes: [{ body: commentBody(fixed) }] }, replies: { nodes: replies } }] } } } } }) }
+      if (argv[1] === "graphql") return { code: 1, out: "", err: "Resource not accessible by integration" }
+      if (argv[1] === `repos/acme/app/pulls/12/comments/500/replies`) { replies = [...replies, { body: body.body }]; return { code: 0, out: "{}" } }
+      return undefined
+    })
+    const done = await publishReview({ repo: "acme/app", number: 12, result: result([], NEXT), previous, process: fake.gh, resolve: [fixed.id] })
+    expect(done).toMatchObject({ posted: false, resolved: 1 })
+    expect(done.state.published[fixed.id]).toMatchObject({ resolved: true })
+    const posted = fake.calls.filter((call) => call.argv[1] === "repos/acme/app/pulls/12/comments/500/replies")
+    expect(posted).toHaveLength(1)
+    expect(posted[0]!.body.body).toContain(`Fixed in \`${NEXT.slice(0, 12)}\``)
+    expect(posted[0]!.body.body).toContain(fixedMarker(fixed.id))
+    // A state lost after the reply (a crash): the marker in the thread keeps it to the one reply.
+    const again = await publishReview({ repo: "acme/app", number: 12, result: result([], "c".repeat(40)), previous, process: fake.gh, resolve: [fixed.id] })
+    expect(again.resolved).toBe(1)
+    expect(fake.calls.filter((call) => call.argv[1] === "repos/acme/app/pulls/12/comments/500/replies")).toHaveLength(1)
+  })
 })
 
 describe("review state", () => {
@@ -150,24 +190,27 @@ describe("review state", () => {
 })
 
 describe("fixed findings", () => {
-  test("only previous findings on lines the new commits rewrote are re-checked, and a rejected one counts as fixed", async () => {
+  test("only previous findings in files the new commits changed are re-checked, and a rejected one counts as fixed", async () => {
     const dir = temp("pr-review-fix-")
     const git = async (...args: string[]) => { const done = await gitRun(["-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", ...args], dir); if (done.code) throw new Error(args.join(" ")); return done.out.trim() }
     await git("init", "-q", "-b", "main")
     writeFileSync(path.join(dir, "a.ts"), "one\ntwo\nthree\nfour\n")
+    writeFileSync(path.join(dir, "b.ts"), "five\n")
     await git("add", "-A")
     await git("commit", "-q", "-m", "base")
     const before = await git("rev-parse", "HEAD")
     writeFileSync(path.join(dir, "a.ts"), "one\nTWO\nthree\nfour\n")
     await git("commit", "-q", "-am", "fix")
     const context = await buildReviewContext({ directory: dir, base: before, head: "HEAD", budgetTokens: 10_000 })
-    const onTwo = make("two is wrong", { path: "a.ts", line: 2 }), onFour = make("four is wrong", { path: "a.ts", line: 4 })
+    const onTwo = make("two is wrong", { path: "a.ts", line: 2 }), onFour = make("four is wrong", { path: "a.ts", line: 4 }), onFive = make("five is wrong", { path: "b.ts", line: 1 })
     const asked: string[] = []
-    const factory: ReviewSessionFactory = async () => ({ async send(prompt) { asked.push(prompt); return { text: JSON.stringify({ verdicts: [{ id: onTwo.id, verdict: "rejected", evidence: ["a.ts:2 now TWO"] }] }), tokens: { input: 1, output: 1 } } }, async close() {} })
-    expect(await fixedFindings({ sessionFactory: factory, previous: [onTwo, onFour], context })).toEqual([onTwo.id])
+    const factory: ReviewSessionFactory = async () => ({ async send(prompt) { asked.push(prompt); return { text: JSON.stringify({ verdicts: [{ id: onTwo.id, verdict: "rejected", evidence: ["a.ts:2 now TWO"] }, { id: onFour.id, verdict: "confirmed", evidence: ["a.ts:4 still four"] }] }), tokens: { input: 1, output: 1 } } }, async close() {} })
+    expect(await fixedFindings({ sessionFactory: factory, previous: [onTwo, onFour, onFive], context })).toEqual([onTwo.id])
     expect(asked).toHaveLength(1)
     expect(asked[0]).toContain("two is wrong")
-    expect(asked[0]).not.toContain("four is wrong")
+    // Same file, line untouched: asked too (a fix need not rewrite the flagged line); a file the commits left alone is not.
+    expect(asked[0]).toContain("four is wrong")
+    expect(asked[0]).not.toContain("five is wrong")
     const silent: ReviewSessionFactory = async () => ({ async send() { return { text: JSON.stringify({ verdicts: [] }), tokens: { input: 1, output: 1 } } }, async close() {} })
     expect(await fixedFindings({ sessionFactory: silent, previous: [onTwo], context })).toEqual([])
   })

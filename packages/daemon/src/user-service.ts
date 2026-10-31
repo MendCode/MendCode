@@ -4,6 +4,7 @@ import { chmod, lstat, mkdir, readFile, rename, writeFile } from "node:fs/promis
 import { homedir } from "node:os"
 import path from "node:path"
 import { daemonLogPaths, daemonLogs } from "./daemon-logs"
+import { droppedEnvArgs, hostSessionEnvNames, withoutHostSessionEnv } from "@mendcode/client/inherited-env"
 
 export type ServiceAction = "plan" | "install" | "start" | "stop" | "restart" | "uninstall" | "status" | "logs"
 export type ServiceOptions = { dir: string; cwd: string; command: string[]; engine?: string; serviceDir?: string; platform?: string; home?: string; uid?: number }
@@ -180,7 +181,9 @@ export async function launchUserDaemon(options: ServiceOptions) {
   const descriptors: number[] = []
   try {
     for (const file of [plan.stdoutPath, plan.stderrPath]) descriptors.push(openSync(file, constants.O_CREAT | constants.O_APPEND | constants.O_WRONLY | constants.O_NOFOLLOW, 0o600))
-    const child = spawn(plan.programArguments[0]!, plan.programArguments.slice(1), { cwd: plan.cwd, detached: true, stdio: ["ignore", descriptors[0]!, descriptors[1]!] })
+    // A Claude Code shell's session variables stay with the command that asked; launchd and systemd start theirs without them.
+    const dropped = droppedEnvArgs(hostSessionEnvNames(process.env))
+    const child = spawn(plan.programArguments[0]!, [...plan.programArguments.slice(1), ...dropped], { cwd: plan.cwd, detached: true, stdio: ["ignore", descriptors[0]!, descriptors[1]!], env: withoutHostSessionEnv(process.env) })
     await new Promise<void>((resolve, reject) => { child.once("spawn", resolve); child.once("error", reject) })
     child.unref()
     return child.pid!

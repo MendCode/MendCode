@@ -8,6 +8,18 @@ export type RunLimits = {
   offline?: boolean
   /** `--no-context-files`: AGENTS.md, CLAUDE.md and the other instruction files stay out of this session's system prompt. */
   noContextFiles?: boolean
+  /** No `<mendcode_memory>` block: a PR review child gets only the memory its reviewer's scope allows, given in its prompt. */
+  noMemory?: boolean
+  /**
+   * The session works in a checkout of someone else's code (a PR head): an external harness loads none of that checkout's own
+   * settings (Claude Code's `.claude/settings*.json` hooks and permission rules), so a pull request cannot run commands through them.
+   */
+  untrustedCheckout?: boolean
+  /**
+   * The language an external harness answers in, over the user's own setting for it (Claude Code's `language`): a PR review child
+   * writes in the repository's `template.language`, never in the language of whoever runs the daemon.
+   */
+  responseLanguage?: string
   /** Extra workspace directories for this session (`--add-dir`); the only field that widens access. */
   addDirs?: readonly string[]
   systemPrompt?: string

@@ -29,6 +29,14 @@ describe("renderTurn", () => {
     expect(text).toContain("(turn cancelled)")
   })
 
+  test("a PR review notice reaches the next engine whole, not cut after 400 characters", () => {
+    // Seen live: a Claude Code session got the reviewer's notice cut and could not say what the review found.
+    const notice = `PR review of acme/app#18: published\n${"The kernel reads only the blocks that hold the row. ".repeat(40)}`
+    const rendered = renderTurn(turn(1, [item({ kind: "user_message", source: "notice", text: notice })]))
+    expect(rendered).not.toContain("[cut]")
+    expect(rendered).toContain(notice.replace(/\s+/g, " ").trim())
+  })
+
   test("a user's shell command and a system notice are labelled, and an empty turn renders nothing", () => {
     expect(renderTurn(turn(1, [item({ kind: "user_message", source: "shell", text: "ls -la" }), item({ kind: "user_message", source: "notice", text: "task finished" })]))).toContain("- $ ls -la (typed by the user)")
     expect(renderTurn(turn(2, []))).toBe("")

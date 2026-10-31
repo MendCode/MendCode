@@ -3,13 +3,13 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSy
 import { tmpdir } from "node:os"
 import path from "node:path"
 import type { PrFinding } from "@mendcode/protocol"
-import { failingKey, failureExcerpt, failureFollowUp, learningBullet, MAINTAINERS_ONLY, parsePrCommand, pausedFromComments, runPrCommand, type CommandComment, type CommandDeps } from "../src/pr-review/commands"
+import { failingKey, failureExcerpt, failureFollowUp, learningBullet, MAINTAINERS_ONLY, nothingNewReply, parsePrCommand, pausedFromComments, runPrCommand, type CommandComment, type CommandDeps } from "../src/pr-review/commands"
 import { gitRun } from "../src/pr-review/context"
 import type { ReviewSessionFactory } from "../src/pr-review/engine"
 import { runFix } from "../src/pr-review/fix"
 import { commentBody, type GhCall } from "../src/pr-review/publish"
 import { createPrReviewService } from "../src/pr-review/service"
-import { emptyState, readReviewState } from "../src/pr-review/state"
+import { emptyState, readReviewState, writeReviewState } from "../src/pr-review/state"
 import type { GhRun } from "../src/pr-watch"
 
 const cleanups: Array<() => unknown> = []
@@ -46,7 +46,7 @@ function deps(gh: GhCall, comment: CommandComment, extra: Partial<CommandDeps> =
     explain: async ({ finding: about, question }) => { log.push(`explain ${about.id.slice(0, 4)} ${question}`); return "Because callers compare with 1 (a.ts:1)." },
     fixesAllowed: async () => true,
     pushable: async () => true,
-    fix: async ({ instructions }) => { log.push(`fix ${instructions}`); return { ok: true, commit: "c".repeat(40) } },
+    fix: async ({ instructions }) => { log.push(`fix ${instructions}`); return { ok: true, commit: "c".repeat(40), pushed: true } },
     ...extra,
   }
 }
@@ -83,6 +83,26 @@ describe("runPrCommand", () => {
     const quiet = deps(gh, issue("@mendcode review"), { review: async () => ({ status: "skipped", reason: "no new findings on this head", posted: false }) })
     await runPrCommand({ kind: "review" }, quiet)
     expect(posts.at(-1)!.body).toContain("Reviewed the current head: skipped (no new findings on this head).")
+  })
+  test("a new head with nothing new: the reply names the head, the findings it resolved and the ones still open, never just 'published'", async () => {
+    const finding = (id: string, path: string, line: number, summary: string) => ({ id, path, line, endLine: line, side: "RIGHT" as const, severity: "major" as const, category: "correctness" as const, summary, detail: "d", evidence: [], verdict: "confirmed" as const })
+    const state = { version: 1 as const, lastHead: "1deadf97f5431890", published: {
+      a: { finding: finding("a", "src/hal.c", 453, "Loads past the weights"), resolved: true },
+      b: { finding: finding("b", "bench.py", 250, "--no-upload labels one firmware twice") },
+    } }
+    const text = nothingNewReply({ head: "1deadf97f5431890a873", resolved: 1, state })
+    expect(text).toBe([
+      "Reviewed 1deadf97f543: no new findings, so no new review was posted.",
+      "1 earlier finding is fixed on this head; its thread was resolved or answered.",
+      "Still open from earlier reviews (1):",
+      "- `bench.py:250` --no-upload labels one firmware twice",
+    ].join("\n"))
+    expect(nothingNewReply({ head: "abc", resolved: 2, state: { ...state, published: { a: state.published.a, b: { ...state.published.b, resolved: true } } } })).toContain("Every earlier finding is resolved.")
+    const { gh, posts } = fakeGh()
+    const outcome = await runPrCommand({ kind: "review" }, deps(gh, issue("@mendcode review"), { review: async () => ({ status: "published", posted: false, text }) }))
+    expect(outcome).toMatchObject({ kind: "review", posted: true })
+    expect(posts.at(-1)!.body.startsWith(text)).toBe(true)
+    expect(posts.at(-1)!.body).not.toContain("Reviewed the current head: published")
   })
   test("pause and resume set the flag and leave a marker GitHub can be read back from", async () => {
     const { gh, posts } = fakeGh()
@@ -296,15 +316,18 @@ describe("the watch answers commands", () => {
     expect(JSON.parse(readFileSync(file, "utf8")).watches[0].commands).toEqual([])
   })
 
-  test("a kept @mendcode review whose head already has a review by this login (posted by hand) is answered without a second review or a model call", async () => {
+  test("a kept @mendcode review whose head already has a review by this login (posted by hand) is answered by one reply linking it, without a second review or a model call", async () => {
     // Seen live: the user's own session posted reviews of #2, #12 and #15 itself while their requests waited for /pr publish on.
     const dir = temp("cmd-data-"), project = temp("cmd-project-")
-    const { gh: base, posts } = fakeGh()
+    const { gh: base, posts, writers } = fakeGh()
+    writers.add("carol")
     const head = "d".repeat(40)
     const reviews = [{ id: 9001, commit_id: head, state: "COMMENTED", body: "## Summary\nReviewed by hand.", user: { login: "nora", type: "User" }, author_association: "NONE" }]
     const gh: GhCall = async (input) => input.argv[1] === "repos/acme/app/pulls/12/reviews?per_page=100" ? { code: 0, out: JSON.stringify(reviews) } : base(input)
     const notices: string[] = []
-    const run: GhRun = async ({ argv }) => argv[0] === "repo" ? { code: 0, out: "acme/app", err: "" } : argv.join(" ") === "api user --jq .login" ? { code: 0, out: "nora", err: "" } : { code: 1, out: "", err: "unexpected" }
+    // The PR as eligibility reads it: the filters are checked (after the commenter, before the reviewed head).
+    const view = JSON.stringify({ number: 12, headRefOid: head, baseRefOid: "b".repeat(40), baseRefName: "main", headRefName: "feature", isDraft: false, labels: [], author: { login: "bob" }, files: [{ path: "a.ts" }], reviewRequests: [], assignees: [], isCrossRepository: false })
+    const run: GhRun = async ({ argv }) => argv[0] === "repo" ? { code: 0, out: "acme/app", err: "" } : argv.join(" ") === "api user --jq .login" ? { code: 0, out: "nora", err: "" } : argv[0] === "pr" && argv[1] === "view" ? { code: 0, out: view, err: "" } : { code: 1, out: "", err: "unexpected" }
     const service = createPrReviewService({
       dir, run, call: gh, intervalMs: 3_600_000, enabled: () => true, graphOn: () => false, sessionDirectory: () => project, sessionExists: () => true,
       notify: (_session, text) => notices.push(text), sessions: () => { throw new Error("no model call") }, editor: () => { throw new Error("no model call") }, schedule: async (job) => { await job() },
@@ -313,13 +336,46 @@ describe("the watch answers commands", () => {
     await service.control({ sessionId: "ses_a", action: "publish-on" })
     const job = { kind: "command" as const, directory: project, sessionId: "ses_a", number: 12, head, trigger: "comment" as const, command: { kind: "review" as const }, comment: { ...issue("@mendcode review", "carol"), id: 9002 } }
     expect(await service.command(job)).toBeUndefined()
-    expect(posts).toEqual([])
-    expect(notices.at(-1)).toBe("@mendcode review from carol on acme/app#12: @nora already reviewed this head (review 9001), so it is not reviewed again.")
+    expect(posts).toHaveLength(1)
+    expect(posts[0]!.endpoint).toBe("repos/acme/app/issues/12/comments")
+    expect(posts[0]!.body).toContain(`@nora already reviewed this head (${head.slice(0, 12)}): https://github.com/acme/app/pull/12#pullrequestreview-9001`)
+    expect(posts[0]!.body).toContain("<!-- mendcode:answers=9002 -->")
+    // No watch follows the PR here, so no request is kept for its next head.
+    expect(notices.at(-1)).toBe("@mendcode review from carol on acme/app#12: @nora already reviewed this head (review 9001), so it is not reviewed again; a new push is reviewed as usual; one reply on GitHub links it.")
     // A newer head has no review yet: the old one does not answer the request, which goes on to the usual gates (here the
-    // commenter's write access).
-    await service.command({ ...job, head: "e".repeat(40) })
+    // commenter's write access, revoked meanwhile).
+    writers.delete("carol")
+    await service.command({ ...job, head: "e".repeat(40), comment: { ...job.comment, id: 9003 } })
     expect(notices.at(-1)).not.toContain("already reviewed")
     expect(notices.at(-1)).toContain("refused (no write access)")
+  })
+
+  test("@mendcode explain answers in the review's language: the configured one, and with auto the one this PR's reviews resolved", async () => {
+    for (const [configured, stored, expected] of [["Español", undefined, "Español"], ["auto", "Deutsch", "Deutsch"]] as const) {
+      const dir = temp("cmd-data-"), project = temp("cmd-project-")
+      const git = async (...args: string[]) => { const done = await gitRun(["-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", ...args], project); if (done.code) throw new Error(args.join(" ")) }
+      await git("init", "-q", "-b", "main")
+      mkdirSync(path.join(project, ".mendcode"))
+      writeFileSync(path.join(project, ".mendcode", "review.yaml"), `template:\n  language: ${configured}\n`)
+      await git("add", "-A")
+      await git("commit", "-q", "-m", "base")
+      if (stored) writeReviewState(dir, "acme/app", 12, { ...emptyState(), language: stored })
+      const { gh, posts } = fakeGh()
+      const asked: Array<{ language: string | undefined; prompt: string }> = []
+      const run: GhRun = async ({ argv }) => argv[0] === "repo" ? { code: 0, out: "acme/app", err: "" } : argv.join(" ") === "api user --jq .login" ? { code: 0, out: "nora", err: "" } : { code: 1, out: "", err: "unexpected" }
+      const service = createPrReviewService({
+        dir, run, call: gh, intervalMs: 3_600_000, enabled: () => true, graphOn: () => false, sessionDirectory: () => project, sessionExists: () => true, notify: () => undefined,
+        sessions: () => async ({ language }) => ({ async send(prompt: string) { asked.push({ language, prompt }); return { text: "Porque sí.", tokens: { input: 1, output: 1 } } }, async close() {} }),
+        editor: () => { throw new Error("no fix") }, schedule: async (job) => { await job() },
+      })
+      cleanups.push(() => service.stop())
+      await service.control({ sessionId: "ses_a", action: "publish-on" })
+      await service.command({ kind: "command", directory: project, sessionId: "ses_a", number: 12, head: "d".repeat(40), trigger: "comment", command: { kind: "explain", arg: "why?" }, comment: thread("@mendcode explain why?") })
+      expect(asked).toHaveLength(1)
+      expect(asked[0]!.language).toBe(expected)
+      expect(asked[0]!.prompt).toContain(`Write all of your prose in ${expected}`)
+      expect(posts.at(-1)!.body).toContain("Porque sí.")
+    }
   })
 
   test("two @mendcode comments handled while the session is busy both reach it: a notice the session refuses is held and offered when it goes idle", async () => {

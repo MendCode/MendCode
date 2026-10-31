@@ -4,6 +4,7 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 import type { EnginePort, TurnInput } from "@mendcode/kernel"
 import type { SessionId } from "@mendcode/protocol"
+import { PROGRAM_NAME } from "@mendcode/program"
 
 /** The MCP server name Claude Code sees; its tools are `mcp__mendcode__<name>` there. */
 export const HOST_MCP_SERVER = "mendcode"
@@ -26,6 +27,10 @@ export function hostInstructions(tools: readonly HostTool[]) {
     ...(has("webfetch") || has("websearch") ? ["Web: when your own web fetch or search refuses a site, is blocked or is missing, call mcp__mendcode__webfetch (a page, PDF or public repository) or mcp__mendcode__websearch. They run in MendCode from the user's machine; say which one you used."] : []),
     ...(has("remember") || has("memory") ? ["Memory: remember saves a durable fact about the user or project; memory reads what was saved."] : []),
     ...(has("customize_ui") ? ["MendCode's look (theme, footer, prompt box): customize_ui. Do not edit MendCode's files by hand."] : []),
+    ...(has("pr_watch") ? [`Pull requests: pr_watch only wakes this session on one PR's checks, comments or conflicts; it reviews nothing. To review PRs and keep reviewing every new PR and push (two passes, inline comments on GitHub, threads resolved when a push fixes them, the @mendcode commands), MendCode has its own reviewer that runs in its daemon and survives this session: the user types /pr review <n> for one PR and /pr watch-repo for the repository (${PROGRAM_NAME} docs --search pr review). Offer that before a cron job, a cloud routine or a GitHub Action, and do not post reviews with gh yourself.`] : []),
+    ...(has("review_config") ? ["PR reviewer settings: mcp__mendcode__review_config. Always pass scope: global is the repository's reviewer (.mendcode/review.yaml, shared with everyone), personal is the user's own reviewer profile for this repository. When the user did not say which, ask them; never change global when they meant their own. To set up PR review with the user, call action setup first (no scope, read only) and walk them through its questions."] : []),
+    ...(has("pr_review") ? ["Review one PR now: mcp__mendcode__pr_review with action review (MendCode's own reviewer, as /pr review <n>; it posts only as the user's /pr publish consent allows). Never post an @mendcode comment, or anything else, from the user's account to start a review."] : []),
+    ...(has("review_config") && !has("pr_review") ? ["Never post an @mendcode comment from the user's account to start a review: the user runs /pr review <n>."] : []),
     ...(has("mendcode_settings") ? ["MendCode's daemon settings (tier, permissions, models and roles, compaction, budgets, output style, experimental): you CAN change them. Read with mcp__mendcode__mendcode_settings get, then propose the exact patch; the user approves it on a card and only then is it saved. Do not tell the user to change it themselves, and do not edit MendCode's database or run mendcode commands to do it."] : []),
   ].join("\n")
 }

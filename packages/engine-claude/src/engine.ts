@@ -14,6 +14,7 @@ import {
   createTurnMapper,
   MCP_RELOAD_NOTE,
   MAX_TEXT,
+  mergeSettingsArgs,
   resultOutcome,
   signInHint,
   userMessage,
@@ -488,7 +489,8 @@ export function createClaudeEngine(options: {
   function open(sessionId: SessionId, model: ClaudeModelChoice, permission: PermissionMode, withThinkingDisplay: boolean): Connection {
     const cwd = options.cwdFor(sessionId)
     const environment = options.environment?.(sessionId)
-    const args = [...claudeArgs({ ...model, permission, resume: options.bindings?.get(sessionId), thinkingDisplay: withThinkingDisplay, appendSystem: [options.appendSystem?.(cwd), MCP_RELOAD_NOTE, environment?.note].filter(Boolean).join("\n\n") }), ...(options.sessionArgs?.(sessionId) ?? []), ...(options.processArgs ?? [])]
+    // Fast mode and a session's run limits may each bring `--settings`: one merged value, so neither depends on how a repeated option is read.
+    const args = mergeSettingsArgs([...claudeArgs({ ...model, permission, resume: options.bindings?.get(sessionId), thinkingDisplay: withThinkingDisplay, appendSystem: [options.appendSystem?.(cwd), MCP_RELOAD_NOTE, environment?.note].filter(Boolean).join("\n\n") }), ...(options.sessionArgs?.(sessionId) ?? []), ...(options.processArgs ?? [])])
     const extra = { ...options.env?.(sessionId, model), ...environment?.values }
     const env = Object.keys(extra).length ? { env: extra } : {}
     const transport = options.transportFactory?.({ args, cwd, ...env }) ?? spawnClaude({ bin: options.bin ?? "claude", args, cwd, ...env })

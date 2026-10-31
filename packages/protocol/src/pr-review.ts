@@ -79,3 +79,128 @@ export const PrReviewResult = lazySchema(() => z.strictObject({
   walkthrough: PrWalkthrough.optional(),
 }))
 export type PrReviewResult = z.infer<typeof PrReviewResult>
+
+/**
+ * The review platform (docs/pr-review.md): durable jobs, who runs them, why one stopped and what the TUI page shows. A job is one
+ * reviewer's work on one pull request head; it survives a daemon restart and keeps its findings, checkpoint and remote effects.
+ */
+
+export const PR_REVIEW_PROVIDERS = ["github", "gitlab", "gitea"] as const
+export const PR_REVIEWER_SCOPES = ["global", "personal"] as const
+/**
+ * `waiting`: due but held (offline owner, cooldown, quota reset, missing consent); `checkpointed`: stopped resumably with its work
+ * kept (budget, quota, rate limit); `stale`: the head or base moved while it ran, its results are marked obsolete and not published.
+ */
+export const PR_JOB_STATES = ["pending", "waiting", "running", "fixing", "validating", "checkpointed", "paused", "done", "failed", "cancelled", "stale"] as const
+/** `backlog`: an open PR whose current head had no MendCode review when a watch started or caught up (backlog.ts). */
+export const PR_JOB_TRIGGERS = ["opened", "synchronize", "ready_for_review", "requested", "label", "comment", "manual", "routed", "recovered", "stack", "backlog"] as const
+export const PR_STOP_KINDS = ["budget", "quota", "rate_limit", "no_progress", "max_rounds", "error", "user", "permission", "superseded"] as const
+/** What a review covered: the diff since the last review, the whole pull request, or an explicitly requested audit of the repository. */
+export const PR_REVIEW_COVERAGES = ["incremental", "full", "audit"] as const
+
+/** Tokens as the provider reported them: `cached` is part of `input` served from cache and is never converted into billable tokens. */
+export const PrTokenUsage = lazySchema(() => z.strictObject({
+  input: z.number().int().nonnegative(),
+  output: z.number().int().nonnegative(),
+  cached: z.number().int().nonnegative().optional(),
+  /** Calls with no provider report: their tokens are unknown, not zero. */
+  unreported: z.number().int().nonnegative().optional(),
+}))
+export type PrTokenUsage = z.infer<typeof PrTokenUsage>
+
+/** Why a job stopped, in the unit it was measured in, and whether it can continue from its checkpoint. */
+export const PrStopReason = lazySchema(() => z.strictObject({
+  kind: z.enum(PR_STOP_KINDS),
+  detail: z.string().min(1).max(600),
+  unit: z.enum(["tokens", "rounds", "minutes", "requests", "percent"]).optional(),
+  used: z.number().nonnegative().optional(),
+  /** Undefined: no internal limit is configured for this unit. */
+  limit: z.number().nonnegative().optional(),
+  /** When a quota or rate limit resets, if the source says so. */
+  resetsAt: z.number().int().optional(),
+  resumable: z.boolean(),
+  /** What remains: candidates not verified, phases not run. */
+  remaining: z.string().max(400).optional(),
+}))
+export type PrStopReason = z.infer<typeof PrStopReason>
+
+export const PrJobSummary = lazySchema(() => z.strictObject({
+  id: z.string().min(1).max(80),
+  provider: z.enum(PR_REVIEW_PROVIDERS),
+  repo: z.string().min(1).max(200),
+  number: z.number().int().positive(),
+  title: z.string().max(300).optional(),
+  url: z.string().max(500).optional(),
+  /** `global`, or `personal:<login>` for one developer's reviewer. */
+  reviewer: z.string().min(1).max(120),
+  scope: z.enum(PR_REVIEWER_SCOPES),
+  /** Why this reviewer has the job (the routing decision), shown with the job. */
+  assignment: z.string().max(400).optional(),
+  trigger: z.enum(PR_JOB_TRIGGERS),
+  state: z.enum(PR_JOB_STATES),
+  phase: z.string().max(60).optional(),
+  coverage: z.enum(PR_REVIEW_COVERAGES),
+  base: z.string().max(64),
+  head: z.string().max(64),
+  attempts: z.number().int().nonnegative(),
+  createdAt: z.number().int(),
+  updatedAt: z.number().int(),
+  /** The device that owns it (`deviceId`), when ownership is tracked. */
+  owner: z.string().max(120).optional(),
+  /** The review session and, when a fix ran, the fix session the user can open and take over. */
+  sessionId: z.string().max(120).optional(),
+  fixSessionId: z.string().max(120).optional(),
+  /** Who holds the fix session now: the reviewer, or the user after a take-over. */
+  control: z.enum(["reviewer", "user"]).optional(),
+  findings: z.strictObject({ confirmed: z.number().int().nonnegative(), plausible: z.number().int().nonnegative(), candidates: z.number().int().nonnegative(), resolved: z.number().int().nonnegative() }),
+  tokens: PrTokenUsage,
+  stop: PrStopReason.optional(),
+  error: z.string().max(600).optional(),
+  stack: z.strictObject({ parent: z.number().int().positive().optional(), children: z.array(z.number().int().positive()).max(50), depth: z.number().int().nonnegative() }).optional(),
+  /** The stages run so far and each dynamic decision with its reason, for the job's detail. */
+  completedPhases: z.array(z.string().max(60)).max(50).optional(),
+  decisions: z.array(z.strictObject({ phase: z.string().max(60), action: z.enum(["added", "skipped", "kept"]), reason: z.string().max(600) })).max(20).optional(),
+}))
+export type PrJobSummary = z.infer<typeof PrJobSummary>
+
+export const PrReviewerSummary = lazySchema(() => z.strictObject({
+  id: z.string().min(1).max(120),
+  scope: z.enum(PR_REVIEWER_SCOPES),
+  login: z.string().max(100).optional(),
+  areas: z.array(z.string().max(300)).max(50),
+  /** `online`: its daemon answered within the lease; `offline` is not a failure, its work waits. */
+  availability: z.enum(["online", "offline", "unknown"]),
+  device: z.string().max(120).optional(),
+  lastSeenAt: z.number().int().optional(),
+}))
+export type PrReviewerSummary = z.infer<typeof PrReviewerSummary>
+
+export const PrReviewDashboard = lazySchema(() => z.strictObject({
+  updatedAt: z.number().int(),
+  watches: z.array(z.strictObject({ directory: z.string().max(4096), repo: z.string().max(200).optional(), provider: z.enum(PR_REVIEW_PROVIDERS), state: z.string().max(120), open: z.number().int().nonnegative(), publish: z.string().max(40), owner: z.string().max(120).optional() })).max(50),
+  reviewers: z.array(PrReviewerSummary).max(200),
+  jobs: z.array(PrJobSummary).max(500),
+  /** Counts from the job ledger only; nothing estimated. */
+  metrics: z.strictObject({ running: z.number().int().nonnegative(), queued: z.number().int().nonnegative(), waiting: z.number().int().nonnegative(), done24h: z.number().int().nonnegative(), failed24h: z.number().int().nonnegative(), tokens24h: PrTokenUsage, concurrency: z.number().int().positive() }),
+}))
+export type PrReviewDashboard = z.infer<typeof PrReviewDashboard>
+
+/** One effective setting and where it came from: the preset, the repository's file, the user's personal profile or the task. */
+export const PrConfigOrigin = lazySchema(() => z.enum(["preset", "repository", "personal", "task"]))
+export const PrReviewConfigView = lazySchema(() => z.strictObject({
+  scope: z.enum(PR_REVIEWER_SCOPES),
+  /** `.mendcode/review.yaml` of the repository, or the personal profile's file under the data directory. */
+  target: z.string().max(4096),
+  repo: z.string().max(200).optional(),
+  login: z.string().max(100).optional(),
+  version: z.number().int().nonnegative(),
+  /** The effective config as JSON with each top-level key's origin. */
+  effective: z.record(z.string(), z.unknown()),
+  origins: z.record(z.string(), PrConfigOrigin),
+  /** A preview or apply: the text before and after, and problems that block it. */
+  before: z.string().max(65_536).optional(),
+  after: z.string().max(65_536).optional(),
+  problems: z.array(z.string().max(400)).max(20).optional(),
+  history: z.array(z.strictObject({ version: z.number().int().nonnegative(), at: z.number().int(), summary: z.string().max(200) })).max(50).optional(),
+}))
+export type PrReviewConfigView = z.infer<typeof PrReviewConfigView>

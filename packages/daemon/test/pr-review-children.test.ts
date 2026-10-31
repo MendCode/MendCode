@@ -43,6 +43,8 @@ async function repository() {
 
 /** Stands for the user's skill loader: a session that is offered it can pull in instructions from outside the checkout. */
 const skill = defineTool({ name: "skill", description: "Load a skill", permission: "read", args: z.object({ name: z.string().optional() }), execute: async () => ({ output: "Skill folder: /elsewhere", truncated: false, title: "skill", isError: false }) })
+/** Stand for the native memory tools, which read and write the user's memory store. */
+const memoryTools = ["memory", "memory_graph", "remember"].map((name) => defineTool({ name, description: `Stands for ${name}`, permission: "read", args: z.object({}), execute: async () => ({ output: "user memory: prefers tabs", truncated: false, title: name, isError: false }) }))
 
 /** Runs `/pr review 12` in a real daemon whose review child is the scripted model `steps`; returns what the child was offered and got. */
 async function reviewWith(steps: ModelEvent[][]) {
@@ -61,7 +63,7 @@ async function reviewWith(steps: ModelEvent[][]) {
   const daemon = await startDaemon({
     dir: data, socketPath: path.join(data, "mendd.sock"), prReview: { run, call, intervalMs: 3_600_000 },
     engine: ({ store, runLimits }) => createNativeEngine({
-      provider, tools: [read, shell, skill], history: memoryHistory(), system: () => "sys", compactionPrompt: "summarize",
+      provider, tools: [read, shell, skill, ...memoryTools], history: memoryHistory(), system: () => "sys", compactionPrompt: "summarize",
       cwdFor: (id) => { if (store.sessionDirectory(id) !== project) limits.push(runLimits.get(id)); return store.sessionDirectory(id) ?? data },
       runLimits: (id) => runLimits.get(id),
     }),
@@ -103,7 +105,9 @@ test("a review child gets no skills and no instruction files; a read that names 
     stop(JSON.stringify({ summary: "Changes one.", findings: [] })),
   ])
   expect(offered).not.toContain("skill")
-  expect(limits[0]).toMatchObject({ noContextFiles: true, excludeTools: expect.arrayContaining(["skill"]) })
+  // Nor the user's memory: the global reviewer must never read user-scope memory through a tool.
+  for (const name of ["memory", "memory_graph", "remember"]) expect(offered).not.toContain(name)
+  expect(limits[0]).toMatchObject({ noContextFiles: true, excludeTools: expect.arrayContaining(["skill", "memory", "memory_graph", "remember"]) })
   expect(results[0]).toMatchObject({ isError: true })
   expect(JSON.stringify(results[0])).toContain(REVIEW_APPROVAL_REFUSED)
   expect(JSON.stringify(results[0])).not.toContain("Do not retry")

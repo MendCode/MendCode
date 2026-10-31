@@ -58,6 +58,8 @@ export type ToolContext = {
   worktrees?: WorktreePort
   /** This session's pull request watches (`pr_watch`); absent where the host has none. */
   prWatch?: PrWatchPort
+  /** This session's MendCode PR reviewer (`pr_review`: one PR reviewed now, its jobs); absent where the host has none. */
+  prReview?: PrReviewPort
   /** Shared Changes selection and comments, owned by the daemon. */
   review?: ReviewPort
   recall?: SessionRecallPort
@@ -148,6 +150,14 @@ export type WorktreePort = {
  * What the `pr_watch` tool may do for its own session (docs/pr-watch.md): link a pull request to the session so the daemon
  * polls it through `gh` and wakes the session only on a change. Nothing here reads local files or runs a model.
  */
+/** The daemon's own PR reviewer for one session's checkout (`pr_review`; the daemon's `createPrReviewPort`). */
+export type PrReviewPort = {
+  /** What a review of `pr` now would do, for the approval text; never throws. */
+  preview(input: { pr?: string | undefined }): Promise<string>
+  review(input: { pr?: string | undefined }): Promise<{ ok: true; text: string } | { ok: false; message: string }>
+  status(): Promise<{ ok: true; text: string } | { ok: false; message: string }>
+}
+
 export type PrWatchPort = {
   /** Problems (empty when the watch can start) and, when valid, the approval text. */
   preview(input: { pr?: string | undefined }): Promise<{ problems: string[]; detail?: string }>

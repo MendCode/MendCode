@@ -18,7 +18,7 @@ export default defineTool({
   permission: "read",
   args: z.object({
     pattern: z.string().min(1).optional().describe("Glob pattern"),
-    patterns: z.array(z.string().min(1)).min(1).max(MAX_PATTERNS).optional().describe("Several glob patterns, merged into one result"),
+    patterns: z.array(z.string().min(1)).min(1).max(MAX_PATTERNS).optional(),
     path: z.string().optional().describe("Directory to search (default: project root)"),
   }),
   async execute({ pattern, patterns, path }, context) {

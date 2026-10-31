@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises"
 import type { BlobRef, ItemId, ItemKind, SessionId } from "@mendcode/protocol"
 import { processMcpTurn, realClock, type Clock, type EngineEnvironment, type EnginePort, type EngineResolution, type GlobalEventDraft, type TimerHandle, type TurnInput, type TurnOutcome } from "@mendcode/kernel"
 import { createRpc, spawnCodex, type Transport } from "./rpc"
+import { codexLanguageInstruction, codexRunLimits, type CodexRunLimits } from "./run-limits"
 
 /** The user's constraint for every AI call in development: one model, low effort. */
 export const CODEX_MODEL = "gpt-6-luna"
@@ -131,6 +132,8 @@ export function createCodexEngine(options: {
   onQuota?(snapshot: QuotaDraft): void
   /** The session's `/env` credentials: in the process environment, and their names in the thread's developer instructions. */
   environment?: EngineEnvironment | undefined
+  /** The session's run limits (`codexRunLimits`): a PR review child or fix session loads nothing of its checkout's own Codex setup. */
+  runLimits?: CodexRunLimits | undefined
   transportFactory?: (input: { args: string[]; cwd: string; env?: Record<string, string> }) => Transport
   /** Stores an image Codex generated (it saves it under `savedPath`), so the transcript shows it as for a native session. */
   storeImage?(bytes: Uint8Array, mime: string, sessionId: SessionId): Promise<BlobRef>
@@ -275,7 +278,7 @@ export function createCodexEngine(options: {
   function ensureStarted() {
     if (ready && rpc && !rpc.closed) return ready
     // Live web search: the sandbox gives the child no network, so without it a Codex agent (a sub-agent too) cannot look anything up.
-    const args = ["app-server", "-c", `model=${JSON.stringify(model)}`, "-c", `model_reasoning_effort=${JSON.stringify(effort)}`, "-c", `web_search="live"`, ...(options.fast ? ["-c", `service_tier="fast"`] : []), ...credentialArgs(options.environment), ...(options.processArgs ?? [])]
+    const args = ["app-server", "-c", `model=${JSON.stringify(model)}`, "-c", `model_reasoning_effort=${JSON.stringify(effort)}`, "-c", `web_search="live"`, ...(options.fast ? ["-c", `service_tier="fast"`] : []), ...credentialArgs(options.environment), ...codexRunLimits(options.runLimits, options.cwd), ...(options.processArgs ?? [])]
     const env = options.environment && Object.keys(options.environment.values).length ? { env: options.environment.values } : {}
     transport = options.transportFactory?.({ args, cwd: options.cwd, ...env }) ?? spawnCodex({ bin: options.bin ?? "codex", args, cwd: options.cwd, ...env })
     rpc = createRpc(transport, { notification: onNotification, request: onRequest }, options.trace)
@@ -299,7 +302,9 @@ export function createCodexEngine(options: {
   async function threadFor(sessionId: SessionId, plan: boolean) {
     const existing = threads.get(sessionId)
     if (existing) return existing
-    const settings = { model, cwd: options.cwd, approvalPolicy: "on-request", sandbox: plan ? "read-only" : "workspace-write", ...(options.environment?.note ? { developerInstructions: options.environment.note } : {}) }
+    // A thread's own developer instructions take the place of the process's (`developer_instructions`), so the language pin rides along.
+    const developer = options.environment?.note ? [options.environment.note, codexLanguageInstruction(options.runLimits)].filter(Boolean).join("\n\n") : undefined
+    const settings = { model, cwd: options.cwd, approvalPolicy: "on-request", sandbox: plan ? "read-only" : "workspace-write", ...(developer ? { developerInstructions: developer } : {}) }
     const bound = options.bindings?.get(sessionId)
     if (bound) {
       // Resume the same Codex conversation after a daemon restart; fall back to a new thread if it is gone.

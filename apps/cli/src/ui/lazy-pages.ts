@@ -87,6 +87,8 @@ const release = lazyModule("release-page", () => import("../view/release-page"))
 const tsm = lazyModule("tsm-page", () => import("../view/tsm-page"))
 const console = lazyModule("console-page", () => import("../view/console-page"))
 const mflow = lazyModule("mflow-page", () => import("../view/mflow-page"))
+const reviewsPage = lazyModule("reviews-page", () => import("../view/reviews-page"))
+const reviewsKeys = lazyModule("reviews-keys", () => import("../view/reviews-keys"))
 const keymap = lazyModule("keymap-page", () => import("../view/keymap-page"))
 const terminalSetup = lazyModule("terminal-setup-page", () => import("../view/terminal-setup-page"))
 const tutorial = lazyModule("tutorial-page", () => import("../view/tutorial-page"))
@@ -171,6 +173,7 @@ export const PAGE_MODULES = {
   tsm: [tsm],
   ide: [ide],
   mflow: [mflow],
+  reviews: [reviewsPage, reviewsKeys],
   console: [console],
   share: [console],
   keymap: [keymap],
@@ -180,7 +183,7 @@ export const PAGE_MODULES = {
 export type PageName = keyof typeof PAGE_MODULES
 
 /** Names of the lazily loaded modules, for the footprint test. */
-export const LAZY_MODULE_FILES = ["stash-page", "queue-page","history-page", "skills-page", "model-picker", "acp-page", "agent-picker", "theme-picker", "usage-page", "memory-page", "context-page", "changes-page", "git-page", "git-commit-page", "git-pr-page", "git-init-page", "mcps-page", "tools-page", "packages-page", "storage-page", "agents-page", "loops-page", "loop-command", "workflows-page", "workflow-command", "setup-page", "onboarding-page", "onboarding-detect", "customize-page", "settings-page", "status-page", "extensions-page", "hooks-page", "palette", "approval-diff", "pet-picker", "connect-page", "providers-page", "secrets-page", "session-tree-page", "text-page", "permissions-page", "mermaid-viewer", "sidebar-editor", "transcript-actions-page", "plan-review-page", "prompt-mode-page", "compaction-page", "agent-commands-page", "diagnostics-page", "worktrees-page", "automation-ledger-page", "compound-page", "marketplace-page", "ai-config-page", "reasoning-page", "release-page", "tsm-page", "ide-page", "mflow-page", "console-page", "compaction-live", "compaction-arcade", "keymap-page", "terminal-setup-page", "tutorial-page", "model-quick", "file-viewer"] as const
+export const LAZY_MODULE_FILES = ["stash-page", "queue-page","history-page", "skills-page", "model-picker", "acp-page", "agent-picker", "theme-picker", "usage-page", "memory-page", "context-page", "changes-page", "git-page", "git-commit-page", "git-pr-page", "git-init-page", "mcps-page", "tools-page", "packages-page", "storage-page", "agents-page", "loops-page", "loop-command", "workflows-page", "workflow-command", "setup-page", "onboarding-page", "onboarding-detect", "customize-page", "settings-page", "status-page", "extensions-page", "hooks-page", "palette", "approval-diff", "pet-picker", "connect-page", "providers-page", "secrets-page", "session-tree-page", "text-page", "permissions-page", "mermaid-viewer", "sidebar-editor", "transcript-actions-page", "plan-review-page", "prompt-mode-page", "compaction-page", "agent-commands-page", "diagnostics-page", "worktrees-page", "automation-ledger-page", "compound-page", "marketplace-page", "ai-config-page", "reasoning-page", "release-page", "tsm-page", "ide-page", "mflow-page", "reviews-page", "reviews-keys", "console-page", "compaction-live", "compaction-arcade", "keymap-page", "terminal-setup-page", "tutorial-page", "model-quick", "file-viewer"] as const
 
 /** The lazily loaded modules a slash command needs, if any. */
 export function slashPage(command: string): PageName | undefined {
@@ -504,6 +507,13 @@ export const renderTsmPage: typeof import("../view/tsm-page").renderTsmPage = (.
 export const renderIdePage: typeof import("../view/ide-page").renderIdePage = (...args) => ide.get().renderIdePage(...args)
 type MflowMod = typeof import("../view/mflow-page")
 export const renderMflowPage: MflowMod["renderMflowPage"] = (...args) => mflow.get().renderMflowPage(...args)
+
+type ReviewsMod = typeof import("../view/reviews-page")
+type ReviewsKeysMod = typeof import("../view/reviews-keys")
+export const createReviewsPageState: ReviewsMod["createReviewsPageState"] = (...args) => reviewsPage.get().createReviewsPageState(...args)
+export const renderReviewsPage: ReviewsMod["renderReviewsPage"] = (...args) => reviewsPage.get().renderReviewsPage(...args)
+export const reviewsPageKey: ReviewsKeysMod["reviewsPageKey"] = (...args) => reviewsKeys.get().reviewsPageKey(...args)
+export const reviewsCommand: ReviewsKeysMod["reviewsCommand"] = (...args) => reviewsKeys.get().reviewsCommand(...args)
 
 type ConsoleMod = typeof import("../view/console-page")
 export const renderConsolePage: ConsoleMod["renderConsolePage"] = (...args) => console.get().renderConsolePage(...args)

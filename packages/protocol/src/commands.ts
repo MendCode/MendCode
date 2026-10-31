@@ -629,21 +629,33 @@ export const PrWatchControl = lazySchema(() => z.strictObject({
 }))
 
 /**
- * The PR reviewer (docs/pr-review.md), run by the daemon through the user's own `gh`: `watch-repo` reviews every new pull request and
+ * The PR reviewer (docs/pr-review.md), run by the daemon through the user's own forge CLI (`gh`, `glab`) or Gitea token: `watch-repo` reviews every new pull request and
  * new head of the session's repository (`directory` when given), `unwatch-repo` stops that, `review` reviews one PR now (`pr`: a
  * number, `#number` or a github.com pull URL; the current branch's PR when omitted), `list` shows the watches, `publish-on` and
  * `publish-off` answer the one question asked before the first post to a repository; `role` is whose PRs a `watch-repo` takes. Notices go to `sessionId`. Needs
- * `experimental.pr_review`; local clients only. Ack: `{ text, watches }`.
+ * `experimental.pr_review`; local clients only. Ack: `{ text, watches }`, plus `dashboard` for `status` and `config` for the `config-*` actions.
+ *
+ * The review platform adds: `status` (the TUI page's data), `audit` (an explicit review of the whole repository, never implied by a
+ * PR review), the job actions on `jobId` (`job-pause`, `job-resume`, `job-cancel`, `job-retry` with a `reason`, `take-over` and
+ * `release` of a fix session), and the configuration actions on `scope` (`global`: the repository's `.mendcode/review.yaml`;
+ * `personal`: this user's own reviewer profile for the repository): `config-show`, `config-preview` and `config-apply` of a
+ * `patch`, `config-revert` to `version`, `config-history`.
  */
 export const PrReviewControl = lazySchema(() => z.strictObject({
   ...base,
   type: z.literal("pr.review"),
   sessionId: SessionId,
-  action: z.enum(["watch-repo", "unwatch-repo", "review", "list", "publish-on", "publish-off"]),
+  action: z.enum(["watch-repo", "unwatch-repo", "review", "list", "publish-on", "publish-off", "status", "audit", "job-pause", "job-resume", "job-cancel", "job-retry", "take-over", "release", "config-show", "config-preview", "config-apply", "config-revert", "config-history"]),
   directory: z.string().min(1).max(4096).optional(),
   pr: z.string().min(1).max(300).optional(),
-  /** `watch-repo` only: `all` reviews every PR, `requested` only the ones that request this daemon's gh login; unset, the repo config's `reviewers`. */
+  /** `watch-repo` only: `all` reviews every PR, `requested` only the ones that request this daemon's forge login; unset, the repo config's `reviewers`. */
   role: z.enum(["all", "requested"]).optional(),
+  jobId: z.string().min(1).max(80).optional(),
+  reason: z.string().min(1).max(600).optional(),
+  scope: z.enum(["global", "personal"]).optional(),
+  /** A partial config: top-level keys replace, `null` removes an override (personal) or a key (global). */
+  patch: z.record(z.string(), z.unknown()).optional(),
+  version: z.number().int().nonnegative().optional(),
 }))
 
 /** Applies from the next tool call of the session; every subscribed client sees `session.permission`. */

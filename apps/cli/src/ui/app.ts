@@ -8,6 +8,7 @@ import { createVoice } from "./app/voice"
 import { createAddDir } from "./app/add-dir"
 import { createChannels } from "./app/channels"
 import { createMflow } from "./app/mflow"
+import { createReviews } from "./app/reviews"
 import { createKeymapEditor } from "./app/keymap-editor"
 import { createTerminalSetup } from "./app/terminal-setup"
 import { createTutorial } from "./app/tutorial"
@@ -650,6 +651,7 @@ export function createApp(input: AppInput) {
   const { quickCommand, setFlags } = createQuickSettings(ctx, { changeProfile: (...args) => changeProfile(...args) })
   const { tsmCommand, tsmKey } = createTsm(ctx)
   const { mflowCommand, mflowKey } = createMflow(ctx)
+  const reviews = createReviews(ctx, { switchSession: (sessionId) => switchSession(sessionId) })
   const { openKeymap, keymapKey } = createKeymapEditor(ctx, { loadPage: () => loadPage("keymap"), reloadKeybindings: () => reloadKeybindings() })
   const { openTerminalSetup, terminalSetupKey } = createTerminalSetup(ctx, { loadPage: () => loadPage("terminal-setup") })
   const { openTutorial, tutorialPageKey } = createTutorial(ctx, { loadPage: () => loadPage("tutorial"), changeProfile: (...args) => changeProfile(...args) })
@@ -843,6 +845,7 @@ export function createApp(input: AppInput) {
     daemonCommand,
     whenIdle,
     prCommand,
+    openReviews: reviews.open,
     titleCommand, pinCommand, settleCommand, prMetadata, fanoutCommand,
     openWorkflows,
     workflowCommand,
@@ -907,6 +910,7 @@ export function createApp(input: AppInput) {
     releaseKey,
     tsmKey,
     mflowKey,
+    reviewsKey: reviews.key,
     keymapKey,
     terminalSetupKey,
     tutorialPageKey,
@@ -1127,6 +1131,7 @@ export function createApp(input: AppInput) {
     mascotFrame: () => homeMascot.frame(),
     planReviewFrame,
     peerCommandRows: peerCommands.render,
+    reviewsRows: reviews.render,
     agentMetadata,
     psItems: ps.items,
     dropRevealedSecret,

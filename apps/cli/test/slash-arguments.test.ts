@@ -22,7 +22,7 @@ async function started() {
 
 describe("argument words", () => {
   test("a blank word lists every word of the command; a partial one puts the exact word, then prefixes, then a word that only contains it", () => {
-    expect(names("pr", "")).toEqual(["pr on", "pr off", "pr review", "pr comments", "pr watch", "pr unwatch", "pr check", "pr watch-repo", "pr unwatch-repo", "pr repos", "pr publish", "pr list"])
+    expect(names("pr", "")).toEqual(["pr on", "pr off", "pr review", "pr comments", "pr watch", "pr unwatch", "pr check", "pr watch-repo", "pr unwatch-repo", "pr repos", "pr dashboard", "pr publish", "pr list"])
     expect(names("pr", "watch")).toEqual(["pr watch", "pr watch-repo", "pr unwatch", "pr unwatch-repo"])
     expect(names("pr", "rev")).toEqual(["pr review"])
     expect(names("pr", "zz")).toEqual([])
@@ -36,7 +36,7 @@ describe("argument words", () => {
   })
 
   test("a word of any value (a flag, a feature) is followed by its own choices", () => {
-    expect(names("experimental", "pr_r")).toEqual(["experimental pr_review"])
+    expect(names("experimental", "pr_r")).toEqual(["experimental pr_review", "experimental pr_review_prompts"])
     expect(names("experimental", "pr_review ")).toEqual(["experimental pr_review on", "experimental pr_review off", "experimental pr_review toggle"])
     expect(names("tier", "bal")).toEqual(["tier balanced"])
     expect(names("tier", "pr_watch d")).toEqual(["tier pr_watch default"])

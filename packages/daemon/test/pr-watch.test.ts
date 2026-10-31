@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from "bun:test"
 import { existsSync, readFileSync, symlinkSync, writeFileSync } from "node:fs"
 import path from "node:path"
-import { COMMENT_WAKE_LIMIT, UNREADABLE_LIMIT_MS, createPrWatch, evaluate, parseRef, parseSnapshot, type GhRun } from "../src/pr-watch"
+import { COMMENT_WAKE_LIMIT, UNREADABLE_LIMIT_MS, createPrWatch, evaluate, parseRef, parseSnapshot, readFailureKind, type GhRun } from "../src/pr-watch"
 import { cleanTemps, tempDir } from "../../../apps/cli/test/session-ui-harness"
 
 afterEach(() => cleanTemps())
@@ -11,25 +11,26 @@ type Fake = {
   pr: Record<string, unknown>
   viewer: string | undefined
   fail: boolean
+  error: string
   calls: string[][]
 }
 const check = (name: string, status: string, conclusion: string | null) => ({ __typename: "CheckRun", name, status, conclusion, detailsUrl: `https://ci.example.test/${name}` })
 const pull = (extra: Record<string, unknown> = {}) => ({ number: 7, title: "Add the thing", url: URL, state: "OPEN", isDraft: false, mergeable: "MERGEABLE", reviewDecision: "", headRefName: "feature", baseRefName: "main", author: { login: "me" }, statusCheckRollup: [check("build", "IN_PROGRESS", null), check("lint", "COMPLETED", "SUCCESS")], comments: [], reviews: [], ...extra })
 
-function setup(options: { enabled?: () => boolean; notify?: (sessionId: string, text: string) => Promise<unknown>; mask?: (sessionId: string, text: string) => string } = {}) {
+function setup(options: { enabled?: () => boolean; notify?: (sessionId: string, text: string) => Promise<unknown>; mask?: (sessionId: string, text: string) => string; intervalMs?: number; monotonic?: () => number } = {}) {
   const dir = tempDir("mendcode-prwatch-")
-  const fake: Fake = { pr: pull(), viewer: "me", fail: false, calls: [] }
+  const fake: Fake = { pr: pull(), viewer: "me", fail: false, error: "HTTP 502 from github", calls: [] }
   const run: GhRun = async ({ argv }) => {
     fake.calls.push(argv)
     if (argv[0] === "api") return fake.viewer ? { code: 0, out: fake.viewer, err: "" } : { code: 1, out: "", err: "not logged in" }
-    if (fake.fail) return { code: 1, out: "", err: "HTTP 502 from github" }
+    if (fake.fail) return { code: 1, out: "", err: fake.error }
     return { code: 0, out: JSON.stringify(fake.pr), err: "" }
   }
   const woken: string[] = []
   const clock = { now: 1_000_000 }
   let enabled = true
   const make = () => createPrWatch({
-    dir, run, now: () => clock.now, intervalMs: 3_600_000,
+    dir, run, now: () => clock.now, intervalMs: options.intervalMs ?? 3_600_000, ...(options.monotonic ? { monotonic: options.monotonic } : {}),
     enabled: options.enabled ?? (() => enabled),
     sessionExists: () => true,
     sessionDirectory: () => dir,
@@ -206,20 +207,95 @@ test("a merged or closed PR ends the watch silently and polling stops", async ()
   h.watch.stop()
 })
 
-test("a PR gh cannot read for 15 minutes ends the watch and wakes the session with that reason", async () => {
-  const h = setup()
+test("a PR gone for 15 awake minutes (a permanent error) ends the watch and wakes the session with that reason", async () => {
+  const h = setup({ intervalMs: 60_000 })
   await h.watch.control({ sessionId: "s1", action: "watch", pr: "7" })
   h.fake.fail = true
-  await h.watch.tick()
-  h.clock.now += UNREADABLE_LIMIT_MS - 1000
-  await h.watch.tick()
-  expect(h.woken).toEqual([])
-  h.clock.now += 2000
-  await h.watch.tick()
+  h.fake.error = "GraphQL: Could not resolve to a PullRequest with the number of 7. (repository.pullRequest)"
+  const started = h.clock.now
+  while (h.watch.list("s1")[0]!.state === "watching" && h.clock.now - started < 60 * 60_000) {
+    await h.watch.tick()
+    if (h.watch.list("s1")[0]!.state === "watching") expect(h.woken).toEqual([])
+    h.clock.now += 60_000
+  }
+  // Not before 15 minutes of failed reads, and at most one backed-off gap after them.
+  expect(h.clock.now - started).toBeGreaterThan(UNREADABLE_LIMIT_MS)
+  expect(h.clock.now - started).toBeLessThanOrEqual(UNREADABLE_LIMIT_MS + 16 * 60_000)
   expect(h.woken).toHaveLength(1)
-  expect(h.woken[0]).toContain("Could not read this pull request through gh for 15 minutes (HTTP 502 from github)")
+  expect(h.woken[0]).toContain("Could not read this pull request through gh for 15 minutes (GraphQL: Could not resolve to a PullRequest")
+  expect(h.woken[0]).toContain("That is not a network outage, which never ends a watch")
   expect(h.watch.list("s1")[0]!.state).toBe("unreadable")
   h.watch.stop()
+})
+
+test("a network or GitHub outage never ends the watch: hours of failures wake the session once, reads back off to 15 minutes apart, and the watch resumes by itself", async () => {
+  const h = setup({ intervalMs: 60_000 })
+  await h.watch.control({ sessionId: "s1", action: "watch", pr: "7" })
+  h.fake.fail = true
+  h.fake.error = "HTTP 502: Bad Gateway (https://api.github.com/graphql)"
+  const reads: number[] = []
+  // Three hours of ticks a minute apart while every read fails.
+  for (let minute = 0; minute < 180; minute++) {
+    const before = h.gh()
+    await h.watch.tick()
+    if (h.gh() > before) reads.push(minute)
+    h.clock.now += 60_000
+  }
+  expect(h.watch.list("s1")[0]!.state).toBe("watching")
+  expect(h.woken).toHaveLength(1)
+  expect(h.woken[0]).toContain("Could not read this pull request through gh for 1")
+  expect(h.woken[0]).toContain("(HTTP 502: Bad Gateway")
+  expect(h.woken[0]).toContain("The watch keeps trying, at most 15 minutes apart, and wakes you as before once gh reads it again; this is said once.")
+  // The gaps grow (1, 2, 4, 8 minutes) and never exceed 15 minutes: far fewer reads than ticks.
+  const gaps = reads.slice(1).map((minute, index) => minute - reads[index]!)
+  expect(Math.max(...gaps)).toBeLessThanOrEqual(15)
+  expect(gaps.slice(0, 4)).toEqual([1, 2, 4, 8])
+  expect(reads.length).toBeLessThan(20)
+  // GitHub answers again and a check failed meanwhile: the next read wakes the session with it, saying the outage is over.
+  h.fake.fail = false
+  h.fake.pr = pull({ statusCheckRollup: [check("build", "COMPLETED", "FAILURE")] })
+  h.clock.now += 15 * 60_000
+  await h.watch.tick()
+  expect(h.woken).toHaveLength(2)
+  expect(h.woken[1]).toContain("Read again after")
+  expect(h.woken[1]).toContain("Checks failed: build")
+  expect(h.watch.list("s1")[0]!.state).toBe("watching")
+  h.watch.stop()
+})
+
+test("sleep is not failing time: a permanent error across a night asleep (the monotonic clock stopped) does not end the watch", async () => {
+  let mono = 0
+  const h = setup({ intervalMs: 60_000, monotonic: () => mono })
+  await h.watch.control({ sessionId: "s1", action: "watch", pr: "7" })
+  h.fake.fail = true
+  h.fake.error = "HTTP 404: Not Found (https://api.github.com/graphql)"
+  await h.watch.tick()
+  // Four hours with the lid closed: the wall clock runs, the monotonic one does not.
+  h.clock.now += 4 * 3_600_000
+  mono += 1_000
+  await h.watch.tick()
+  h.clock.now += 60_000
+  mono += 60_000
+  await h.watch.tick()
+  expect(h.watch.list("s1")[0]!.state).toBe("watching")
+  expect(h.woken).toEqual([])
+  // Awake and still gone, 15 more minutes of reads: now it ends.
+  for (let minute = 0; minute < 40 && h.watch.list("s1")[0]!.state === "watching"; minute++) {
+    h.clock.now += 60_000
+    mono += 60_000
+    await h.watch.tick()
+  }
+  expect(h.watch.list("s1")[0]!.state).toBe("unreadable")
+  expect(h.woken).toHaveLength(1)
+  h.watch.stop()
+})
+
+test("failures are classified as the repository watch does: transient, permanent (a PR GitHub cannot resolve), unknown", () => {
+  expect(readFailureKind("HTTP 502 from github")).toBe("transient")
+  expect(readFailureKind("error connecting to api.github.com")).toBe("transient")
+  expect(readFailureKind("GraphQL: Could not resolve to a PullRequest with the number of 7.")).toBe("permanent")
+  expect(readFailureKind("HTTP 404: Not Found")).toBe("permanent")
+  expect(readFailureKind("gh is not installed or not on PATH")).toBe("unknown")
 })
 
 test("a read that recovers clears the unreadable clock", async () => {

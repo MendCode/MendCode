@@ -130,7 +130,7 @@ export const FEATURES: Readonly<Record<FeatureId, FeatureSpec>> = {
   // Allowed from balanced, but it reaches the network through `gh`: the user's own switch must also be on, so it is never on by itself.
   pr_watch: { label: "PR watch", tier: "balanced", mode: "permit", cost: ["tools"], legacy: true, own: "experimental.pr_watch", tools: ["pr_watch"], flag: "pr_watch", doc: "docs/pr-watch.md" },
   // Model calls and GitHub posts with the user's own gh login: the tier only allows it, experimental.pr_review turns it on, and the repo's own config turns publishing on.
-  pr_review: { label: "PR reviewer", tier: "balanced", mode: "permit", cost: ["calls"], legacy: false, own: "experimental.pr_review", flag: "pr_review", doc: "docs/pr-review.md" },
+  pr_review: { label: "PR reviewer", tier: "balanced", mode: "permit", cost: ["calls", "tools"], legacy: false, own: "experimental.pr_review", tools: ["review_config", "pr_review"], flag: "pr_review", doc: "docs/pr-review.md" },
   // Both are savings aids, not costs: the filters add a one-line header only when they shorten a result, the forecast is one footer segment.
   output_filters: { label: "Command output filters", tier: "balanced", mode: "tier", cost: [], legacy: false, own: "tool_output.filters", doc: "docs/advanced-config.md" },
   forecast: { label: "Context forecast", tier: "balanced", mode: "tier", cost: ["chrome"], legacy: false, own: "/footer +forecast", doc: "docs/layout.md" },

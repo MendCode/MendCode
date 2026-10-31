@@ -3,7 +3,15 @@ import { z } from "zod"
 import { defineTool } from "../tool"
 import { atomicWrite, boundPreview, displayPath, errorMessage, exists, fail, renderDiff, resolvePath, succeed, truncateText, withFileLock } from "../util"
 
-type Hunk = { header: string | undefined; oldLines: string[]; newLines: string[]; /** `*** End of File` followed it: its lines are the file's last. */ atEnd?: boolean }
+type Hunk = {
+  header: string | undefined
+  oldLines: string[]
+  newLines: string[]
+  /** For each new line that is a context line, the index of the same line in `oldLines`: it keeps the file's own text when matched loosely. */
+  kept: Array<number | undefined>
+  /** `*** End of File` followed it: its lines are the file's last. */
+  atEnd?: boolean
+}
 type FileOp =
   | { kind: "add"; path: string; lines: string[] }
   | { kind: "delete"; path: string }
@@ -57,25 +65,24 @@ function parsePatch(patch: string): FileOp[] {
           continue
         }
         if (row.startsWith("@@")) {
-          current = { header: row.slice(2).trim() || undefined, oldLines: [], newLines: [] }
+          current = { header: row.slice(2).trim() || undefined, oldLines: [], newLines: [], kept: [] }
           hunks.push(current)
           continue
         }
         if (!current) {
-          current = { header: undefined, oldLines: [], newLines: [] }
+          current = { header: undefined, oldLines: [], newLines: [], kept: [] }
           hunks.push(current)
         }
         const marker = row[0]
         const text = row.slice(1)
-        if (row === "") {
-          current.oldLines.push("")
-          current.newLines.push("")
-        } else if (marker === " ") {
-          current.oldLines.push(text)
-          current.newLines.push(text)
+        if (row === "" || marker === " ") {
+          current.kept.push(current.oldLines.length)
+          current.oldLines.push(row === "" ? "" : text)
+          current.newLines.push(row === "" ? "" : text)
         } else if (marker === "-") {
           current.oldLines.push(text)
         } else if (marker === "+") {
+          current.kept.push(undefined)
           current.newLines.push(text)
         } else throw new PatchError(`update file ${path}: unexpected line "${row}"`)
       }
@@ -89,10 +96,14 @@ function parsePatch(patch: string): FileOp[] {
   return ops
 }
 
-/** Every place from `from` on where `needle` sits, under the strictest comparison (exact, then trailing space, then both ends) that finds any. */
+/** Runs of whitespace inside a line count as one space, and the ends are trimmed: the loosest comparison a hunk line gets. */
+const loose = (s: string) => s.replace(/\s+/g, " ").trim()
+/** Exact, then trailing space ignored, then both ends, then runs of whitespace inside the line too. */
+const MATCH_PASSES: ReadonlyArray<(s: string) => string> = [(s) => s, (s) => s.trimEnd(), (s) => s.trim(), loose]
+
+/** Every place from `from` on where `needle` sits, under the strictest comparison of `MATCH_PASSES` that finds any. */
 function findAll({ haystack, needle, from }: { haystack: string[]; needle: string[]; from: number }): number[] {
-  const passes: Array<(s: string) => string> = [(s) => s, (s) => s.trimEnd(), (s) => s.trim()]
-  for (const normalize of passes) {
+  for (const normalize of MATCH_PASSES) {
     const wanted = needle.map(normalize)
     const found: number[] = []
     for (let start = from; start + wanted.length <= haystack.length; start++) {
@@ -121,7 +132,38 @@ function closestLine({ lines, wanted }: { lines: string[]; wanted: string[] }): 
     while (shared < candidate.length && shared < target.length && candidate[shared] === target[shared]) shared++
     if (shared > bestShared) { best = index; bestShared = shared }
   })
-  return best === -1 ? "" : `; closest line ${best + 1}: ${(lines[best] as string).trim().slice(0, 160)}`
+  if (best === -1) return ""
+  return `; closest line ${best + 1}: ${(lines[best] as string).trim().slice(0, 160)}${closestWindow({ lines, wanted, anchor: best })}`
+}
+
+const WINDOW_CONTEXT = 2
+const WINDOW_MAX_ROWS = 16
+const WINDOW_LINE_CHARS = 160
+
+/**
+ * For a hunk of several lines: the file where the hunk would sit if its first meaningful line is the closest line, numbered, with
+ * `>` on the first line that differs. One changed line deep in a hunk is the usual miss, and these rows let the next patch be written
+ * without reading the file again. Empty when the hunk has one line or no line of it agrees there.
+ */
+function closestWindow({ lines, wanted, anchor }: { lines: string[]; wanted: string[]; anchor: number }): string {
+  if (wanted.length < 2) return ""
+  const start = anchor - wanted.findIndex((line) => line.trim() !== "")
+  if (start < 0) return ""
+  const span = Math.min(wanted.length, lines.length - start)
+  const agree = (k: number) => loose(lines[start + k] as string) === loose(wanted[k] as string)
+  let differs = -1
+  for (let k = 0; k < wanted.length; k++) if (k >= span || !agree(k)) { differs = k; break }
+  if (differs === -1) return ""
+  const first = Math.max(0, start - WINDOW_CONTEXT)
+  const last = Math.min(lines.length - 1, start + span - 1 + WINDOW_CONTEXT, first + WINDOW_MAX_ROWS - 1)
+  const width = String(last + 1).length
+  const rows: string[] = []
+  for (let row = first; row <= last; row++) {
+    const text = lines[row] as string
+    rows.push(`${row === start + differs ? ">" : " "}${String(row + 1).padStart(width)} | ${text.length > WINDOW_LINE_CHARS ? `${text.slice(0, WINDOW_LINE_CHARS)}…` : text}`)
+  }
+  const where = differs < span ? `line ${differs + 1} of the hunk differs (">")` : `the file ends after ${span} of the hunk's ${wanted.length} lines`
+  return `; ${where}, the file there:\n${rows.join("\n")}`
 }
 
 /** A hunk's place in the file as it was before the patch: `length` lines from `start` become `lines`. */
@@ -177,7 +219,9 @@ function applyHunks({ path, original: onDisk, hunks, renamed }: { path: string; 
     // rejected patches were this shape, each costing a regenerated patch). It moves the cursor and claims no lines; a patch that
     // changes nothing in the whole file is still refused below.
     if (hunk.oldLines.length === hunk.newLines.length && hunk.oldLines.every((line, k) => line === hunk.newLines[k])) continue
-    placed.push({ hunk: number, start, length: hunk.oldLines.length, lines: hunk.newLines })
+    // A context line matched loosely (other indentation or spacing) keeps the file's text: only "-" and "+" lines change the file.
+    const written = hunk.newLines.map((line, k) => { const at = hunk.kept[k]; return at === undefined ? line : lines[start + at] ?? line })
+    placed.push({ hunk: number, start, length: hunk.oldLines.length, lines: written })
   }
   const result: string[] = []
   let copied = 0
@@ -267,7 +311,7 @@ export default defineTool({
   description:
     'Apply a multi-file patch. Format: "*** Begin Patch", then "*** Add File: p" (+lines), "*** Update File: p" (optional "*** Move to: q", "@@ context" hunks with " ", "-", "+" lines) or "*** Delete File: p", then "*** End Patch". All-or-nothing.',
   permission: "write",
-  args: z.object({ patch: z.string().describe("The full patch text") }),
+  args: z.object({ patch: z.string() }),
   async preview({ patch }, context) {
     try {
       const planned = await plan({ ops: parsePatch(patch), cwd: context.cwd })

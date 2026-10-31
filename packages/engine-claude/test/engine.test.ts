@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { createIdFactory, partialToolArgs, type PermissionMode, type SessionId } from "@mendcode/protocol"
 import { createVirtualClock, type EngineEvent, type EngineRequest, type EngineResolution, type GlobalEventDraft, type TurnInput } from "@mendcode/kernel"
-import { CANCEL_GRACE_MS, changesMcpServers, messageUuid, claudeArgs, claudeEditPatch, claudeCacheEnv, claudeProcessEnv, claudeQuota, claudeToolTitle, createClaudeEngine, createTurnMapper, resultOutcome, signInHint, spawnClaude, type ClaudeTransport } from "../src"
+import { CANCEL_GRACE_MS, changesMcpServers, messageUuid, claudeArgs, claudeEditPatch, claudeCacheEnv, claudeProcessEnv, claudeRunLimits, claudeQuota, claudeToolTitle, createClaudeEngine, createTurnMapper, mergeSettingsArgs, resultOutcome, signInHint, spawnClaude, type ClaudeTransport } from "../src"
 
 const ids = createIdFactory()
 
@@ -763,6 +763,16 @@ describe("claude thinking blocks", () => {
     expect(events.at(-1)).toMatchObject({ type: "item.completed", itemId, status: "ok" })
   })
 
+  test("a ToolSearch that answers with tool references says which tools it loaded instead of an empty result", () => {
+    const { events, mapper } = mapped([
+      stream({ type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "toolu_s", name: "ToolSearch", input: {} } }),
+      stream({ type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: JSON.stringify({ query: "select:mcp__mendcode__pr_watch,mcp__mendcode__review" }) } }),
+      stream({ type: "content_block_stop", index: 0 }),
+    ])
+    mapper.accept({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "toolu_s", content: [{ type: "tool_reference", tool_name: "mcp__mendcode__pr_watch" }, { type: "tool_reference", tool_name: "mcp__mendcode__review" }] }] }, parent_tool_use_id: null })
+    expect(events.at(-1)).toMatchObject({ type: "item.completed", status: "ok", text: "Loaded mcp__mendcode__pr_watch, mcp__mendcode__review" })
+  })
+
   test("an agent call writing a long prompt opens its card at once, and its completion carries the agent and background flag the input ended with", () => {
     const json = JSON.stringify({ description: "Audit fork", prompt: "p".repeat(4000), subagent_type: "general-purpose", run_in_background: true })
     const { events, mapper } = mapped([
@@ -958,6 +968,37 @@ describe("claude protocol helpers", () => {
     expect(claudeArgs({ permission: "plan" })).not.toContain("--append-system-prompt")
     const appended = claudeArgs({ permission: "plan", appendSystem: "A mermaid fence is drawn." })
     expect(appended[appended.indexOf("--append-system-prompt") + 1]).toBe("A mermaid fence is drawn.")
+  })
+
+  test("run limits: no CLAUDE.md and no auto memory by variable; a PR review child (both limits) also skips the checkout's settings", () => {
+    expect(claudeRunLimits(undefined)).toEqual({ args: [] })
+    expect(claudeRunLimits({})).toEqual({ args: [] })
+    expect(claudeRunLimits({ noContextFiles: true })).toEqual({ args: [], env: { CLAUDE_CODE_DISABLE_CLAUDE_MDS: "1" } })
+    expect(claudeRunLimits({ noMemory: true })).toEqual({ args: [], env: { CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" } })
+    expect(claudeRunLimits({ noContextFiles: true, noMemory: true })).toEqual({ args: ["--setting-sources", "user"], env: { CLAUDE_CODE_DISABLE_CLAUDE_MDS: "1", CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1" } })
+  })
+
+  test("a fix session in a PR's checkout loads only the user's settings, so the PR's own hooks never run; its CLAUDE.md and memory stay", () => {
+    expect(claudeRunLimits({ untrustedCheckout: true })).toEqual({ args: ["--setting-sources", "user"] })
+  })
+
+  test("a PR review child's language is the flag settings layer, above the user's own `language` (live e2e: reviews of one PR in two languages)", () => {
+    expect(claudeRunLimits({ noContextFiles: true, noMemory: true, untrustedCheckout: true, responseLanguage: "English" }).args).toEqual(["--setting-sources", "user", "--settings", JSON.stringify({ language: "English" })])
+    // Several `--settings` objects become one, later keys winning; a settings file path stays as it is.
+    expect(mergeSettingsArgs(["--model", "opus", "--settings", JSON.stringify({ fastMode: true }), "--setting-sources", "user", "--settings", JSON.stringify({ language: "English" })]))
+      .toEqual(["--model", "opus", "--settings", JSON.stringify({ fastMode: true, language: "English" }), "--setting-sources", "user"])
+    expect(mergeSettingsArgs(["--settings", "/etc/claude.json", "--settings", "{\"language\":\"English\"}"])).toEqual(["--settings", "/etc/claude.json", "--settings", "{\"language\":\"English\"}"])
+    expect(mergeSettingsArgs(["--model", "opus"])).toEqual(["--model", "opus"])
+  })
+
+  test("a fast-mode process with a run limit's language starts with one --settings that holds both", async () => {
+    const fake = fakeClaude({ onUser(api) { api.push(result()) } })
+    const h = engineWith([fake], { modelFor: () => ({ model: "opus", fast: true }), sessionArgs: () => claudeRunLimits({ untrustedCheckout: true, responseLanguage: "Português" }).args })
+    expect(await h.engine.runTurn(turnInput().input)).toEqual({ status: "ok" })
+    const args = h.spawned[0]!.args
+    expect(args.filter((arg) => arg === "--settings")).toHaveLength(1)
+    expect(JSON.parse(args[args.indexOf("--settings") + 1]!)).toEqual({ fastMode: true, language: "Português" })
+    h.engine.stop()
   })
 
   test("the cache TTL variables are opt-in and only for 1h; the child's environment is the daemon's own with them on top", () => {

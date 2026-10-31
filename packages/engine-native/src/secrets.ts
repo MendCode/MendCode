@@ -49,12 +49,27 @@ export function secretsNote(secrets: readonly SecretSummary[]) {
   ].join("\n")
 }
 
-/** `args` of a built-in tool with the markers of its secret-bearing fields resolved; other arguments are untouched. */
+/** List arguments whose entries carry secret-bearing fields, by tool name: `edit` with `edits: [{ oldString, newString }]`. */
+export const SECRET_LIST_ARGUMENTS: Readonly<Record<string, Readonly<Record<string, readonly string[]>>>> = {
+  edit: { edits: ["oldString", "newString"] },
+}
+
+/** `args` of a built-in tool with the markers of its secret-bearing fields resolved, inside list entries too; other arguments are untouched. */
 export function resolveToolArgs({ tool, args, resolve }: { tool: string; args: unknown; resolve(text: string): string }): unknown {
   const fields = SECRET_ARGUMENTS[tool]
   if (!fields || typeof args !== "object" || args === null) return args
   const next: Record<string, unknown> = { ...(args as Record<string, unknown>) }
   for (const field of fields) if (typeof next[field] === "string") next[field] = resolve(next[field])
+  for (const [list, keys] of Object.entries(SECRET_LIST_ARGUMENTS[tool] ?? {})) {
+    const entries = next[list]
+    if (!Array.isArray(entries)) continue
+    next[list] = entries.map((entry) => {
+      if (typeof entry !== "object" || entry === null) return entry
+      const item: Record<string, unknown> = { ...(entry as Record<string, unknown>) }
+      for (const key of keys) if (typeof item[key] === "string") item[key] = resolve(item[key])
+      return item
+    })
+  }
   return next
 }
 

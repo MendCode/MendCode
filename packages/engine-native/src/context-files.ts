@@ -6,6 +6,12 @@ const EDIT_TOOLS = new Set(["edit", "write", "notebook_edit"])
 const PATCH_FILE = /^\*\*\* (?:Add|Update|Delete) File: (.+)$/gm
 const MAX_FILES = 100
 
+/** The files a `read` call names: its `path`, or every entry of `paths` when it reads several at once. */
+export function readPaths(args: { path?: unknown; paths?: unknown }): string[] {
+  const listed = Array.isArray(args.paths) ? args.paths.map((entry) => (entry as { path?: unknown } | null)?.path) : []
+  return [args.path, ...listed].filter((value): value is string => typeof value === "string")
+}
+
 /**
  * The files the history still holds: every path a read, edit, write or patch tool call of a successful result touched,
  * with how many times and how many tokens its results take. Biggest first, at most 100.
@@ -15,9 +21,11 @@ export function contextFiles(input: { messages: readonly ModelMessage[]; tokensO
   for (const message of input.messages) {
     if (message.role !== "assistant") continue
     for (const call of message.toolCalls) {
-      const args = (call.args ?? {}) as { path?: unknown; patch?: unknown; input?: unknown }
-      if (call.name === "read" && typeof args.path === "string") calls.set(call.callId, { kind: "read", paths: [args.path] })
-      else if (EDIT_TOOLS.has(call.name) && typeof args.path === "string") calls.set(call.callId, { kind: "edit", paths: [args.path] })
+      const args = (call.args ?? {}) as { path?: unknown; paths?: unknown; patch?: unknown; input?: unknown }
+      if (call.name === "read") {
+        const paths = readPaths(args)
+        if (paths.length) calls.set(call.callId, { kind: "read", paths })
+      } else if (EDIT_TOOLS.has(call.name) && typeof args.path === "string") calls.set(call.callId, { kind: "edit", paths: [args.path] })
       else if (call.name === "apply_patch") {
         const text = typeof args.patch === "string" ? args.patch : typeof args.input === "string" ? args.input : ""
         const paths = [...text.matchAll(PATCH_FILE)].map((match) => match[1]!.trim())

@@ -58,6 +58,7 @@ export function createPageKeys(ctx: AppContext, actions: {
   releaseKey(key: string): Promise<void>
   tsmKey(key: string): Promise<void>
   mflowKey(key: string): Promise<void>
+  reviewsKey(key: string): Promise<void>
   keymapKey(key: string): Promise<void>
   terminalSetupKey(key: string): void
   tutorialPageKey(key: string): void
@@ -167,6 +168,7 @@ export function createPageKeys(ctx: AppContext, actions: {
     if (state.page === "tsm") { await actions.tsmKey(key); return }
     if (state.page === "console" || state.page === "share") { await actions.consoleKey(key); return }
     if (state.page === "mflow") { await actions.mflowKey(key); return }
+    if (state.page === "reviews") { await actions.reviewsKey(key); return }
     if (state.page === "keymap") { await actions.keymapKey(key); return }
     if (state.page === "terminal-setup") { actions.terminalSetupKey(key); return }
     if (state.page === "tutorial") { actions.tutorialPageKey(key); return }

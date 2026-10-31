@@ -147,6 +147,23 @@ already carried it) and listed directories 17 times. Three changes, each reverti
 several globs into one newest-first list without duplicates under the same 1,000-file cap. Each pattern is matched against the
 `glob` permission rules; the single `pattern` form is unchanged.
 
+`grep` takes `context` (0 to 5): the lines around each match come back in rg's shape, `path-line-text` beside the matching
+`path:line:text`, with `--` between groups that do not touch, so a search often replaces the read that would follow it. Both
+backends (ripgrep and the built-in walker) print the same lines. The 500-match cap, `meta.matches` and the tool card count
+matching lines only. `edit` takes `edits: [{oldString, newString}]` (up to 50) for several replacements in one file: they run
+in order on one read, each sees what the previous ones wrote, each gets the CRLF and trailing-space near misses of a single
+edit, and the first that fails (`edit 2 of 3: oldString not found in f.ts; nothing was written`) stops the call before anything
+is written. A top-level `oldString`/`newString` pair runs first when both are given, and `replaceAll` covers every replacement
+of the call. `apply_patch` also places a hunk
+whose lines differ from the file only in runs of whitespace inside a line, and a context line matched that way (or by
+indentation or trailing spaces) keeps the file's own text: only `-` and `+` lines change the file. A multi-line hunk that does
+not match adds the file around its closest line, numbered, with `>` on the first line that differs (at most 16 rows).
+The two arguments cost no context: `context` and the entries of `edits` carry no descriptions of their own (an entry repeats
+the top-level keys), and the descriptions that only restated their tool's (`read`'s `paths`, `glob`'s `patterns`, the `patch` of
+`apply_patch`) were cut. Measured on 2026-10-31 with the tier test's tool pool: minimalist's first request (system prompt and
+tool definitions, lean catalogue) is 5,378 characters where it was 5,381, and the tier baselines are 3,353 / 4,808 / 6,111
+estimated tokens where they were 3,354 / 4,808 / 6,111.
+
 `glob` walks the tree itself and bounds the walk. It starts at the pattern's fixed directories (`src/lib/**` reads only
 `src/lib`) and, without `**`, stays at the pattern's depth. `node_modules`, `.git`, hidden files and directories and, on macOS,
 `~/Library` are not listed at all unless the pattern names them (`.github/**/*.yml`, `node_modules/zod/**`). After 50,000

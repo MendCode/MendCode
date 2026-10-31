@@ -22,7 +22,7 @@ export function localOnlySettings(patch: object): string[] {
 
 /** Native turns from a peer must not acquire the new host-local tool surfaces. */
 export function remoteTurnOptions(options?: TurnOptions): TurnOptions {
-  return { ...options, excludeTools: [...new Set([...(options?.excludeTools ?? []), "threads", "packages", "pr_watch", "session_meta", "graph_*", "webfetch", "memory", "memory_graph", "remember", "workflow_script"])] }
+  return { ...options, excludeTools: [...new Set([...(options?.excludeTools ?? []), "threads", "packages", "pr_watch", "review_config", "pr_review", "session_meta", "graph_*", "webfetch", "memory", "memory_graph", "remember", "workflow_script"])] }
 }
 
 export function continuationTurnOptions(options: TurnOptions | undefined, restricted: boolean): TurnOptions | undefined {

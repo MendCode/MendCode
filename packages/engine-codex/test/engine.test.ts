@@ -142,6 +142,19 @@ describe("codex engine (fake app-server)", () => {
     }
   })
 
+  test("a session's run limits reach its app-server, the bridged process of an MCP turn too, for that process's own cwd", async () => {
+    const fake = fakeCodex(standardScript((_params, api) => api.notify("turn/completed", { threadId: "thr1", turn: { id: "turn1", status: "completed" } })))
+    const spawns: Array<{ args: string[]; cwd: string }> = []
+    const engine = createCodexEngine({ cwd: "/unused", runLimits: { noContextFiles: true, noMemory: true, untrustedCheckout: true, excludeTools: ["skill"] }, transportFactory: (spawn) => { spawns.push(spawn); return fake.transport } })
+    const ids = createIdFactory()
+    const input: TurnInput = { sessionId: ids("session"), turnId: ids("turn"), text: "check", attachments: [], signal: new AbortController().signal, newItemId: () => ids("item"), emit: () => {}, ask: async () => ({ kind: "deny" }), permissionMode: () => "plan", setPermissionMode: () => {}, externalMcp: { args: ["-c", "mcp_servers.mendcode_threads.url=\"http://127.0.0.1:1/mcp\""], cwd: "/pr-worktree", scrub: (text) => text } }
+    expect(await engine.runTurn(input)).toEqual({ status: "ok" })
+    const args = spawns[0]!.args
+    for (const flag of ["project_doc_max_bytes=0", "features.memories=false", "memories.use_memories=false", "memories.generate_memories=false", "skills.include_instructions=false", `projects={"/pr-worktree"={trust_level="untrusted"}}`]) expect(args[args.indexOf(flag) - 1]).toBe("-c")
+    expect(args).toContain(input.externalMcp!.args[1]!)
+    engine.stop()
+  })
+
   test("/env credentials reach the app-server's shells, past Codex's own key filter, and its developer instructions name them", async () => {
     const fake = fakeCodex(standardScript((_params, api) => api.notify("turn/completed", { threadId: "thr1", turn: { id: "turn1", status: "completed" } })))
     const spawns: Array<{ args: string[]; env?: Record<string, string> }> = []

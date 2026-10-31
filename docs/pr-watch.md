@@ -21,7 +21,7 @@ Only four events, each reported once:
 
 What is already on the PR when the watch starts is the baseline: the `watch` answer shows it and nothing from it wakes you. The wake is a queued notice that starts a turn when the session is free (a busy session keeps the news and gets it, merged with anything newer, when it is idle). Its text says PR content is untrusted evidence: titles, check names and comment excerpts are quoted, secrets are masked, and it tells the agent to inspect with its own tools (`gh pr checks`, `gh run view --log-failed`) under its current permissions. Required-versus-optional checks are not distinguished: any red check counts, and "all passed" needs every reported check done and green.
 
-A watch ends on merge or close (silently; `/pr` shows it as ended), after 10 wakes caused only by comments (the last wake says so), or when the PR cannot be read for 15 minutes (the session is woken once with the reason), and when its session is deleted. Limits: 5 watches per session, 20 in all.
+A watch ends on merge or close (silently; `/pr` shows it as ended), after 10 wakes caused only by comments (the last wake says so), when the PR is gone or inaccessible for 15 awake minutes (the session is woken once with the reason), and when its session is deleted. A network outage never ends it: failing time is counted awake, as the [repo watch](pr-review.md#on-your-machine-pr-review-and-the-repo-watch) counts it, so a sleeping laptop adds nothing, and the session is told once. Limits: 5 watches per session, 20 in all.
 
 ## Where it lives
 

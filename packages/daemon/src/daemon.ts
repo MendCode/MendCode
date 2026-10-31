@@ -80,7 +80,7 @@ import { createHttpAdapter, httpConfig, type HttpOptions, type HttpPeer } from "
 import { createPtyService, PtyError } from "./pty"
 import type { PtyDriver } from "./pty-native"
 import { createWorkspaces } from "./workspaces"
-import { existsSync, rmSync } from "node:fs"
+import { existsSync, readFileSync, rmSync } from "node:fs"
 import { randomBytes, timingSafeEqual } from "node:crypto"
 import { defaultLocalTransport, localEndpointPath, removeLocalEndpoint, writeLocalEndpoint, type LocalTransport } from "@mendcode/client/local-endpoint"
 import { homedir } from "node:os"
@@ -236,6 +236,7 @@ import { createLoopPort } from "./loop-port"
 import { createWorktreePort } from "./worktree-port"
 import { createPrWatch, type GhRun } from "./pr-watch"
 import { createReviewSessions, REVIEW_AGENT, REVIEW_EXCLUDED_TOOLS, reviewMessage } from "./pr-review/sessions"
+import { createPrReviewPort } from "./pr-review-tool"
 import { createGitWorktrees, isGitCheckout } from "./loop-worktree"
 import { createWorkflowsHost } from "./workflows"
 import { createWorkflowRouter } from "./workflow-routing"
@@ -404,7 +405,7 @@ export type DaemonOptions = RemoteListenerOptions & {
   /** `tcp` listens on 127.0.0.1 behind a per-start secret published in `<dir>/mendd.endpoint` (Windows default); `unix` uses `socketPath`. Defaults from the platform and `MENDCODE_V2_LOCAL_TRANSPORT`. */
   localTransport?: LocalTransport
   defaultDirectory?: string
-  engine(input: { /** Queue a notice in a session from the engine (Claude Code answered a background task's end on its own). */ notify(sessionId: SessionId, text: string): void; /** Background tasks an engine runs by itself (Claude Code's), listed with the daemon's own shells. */ engineBackground(sessionId: SessionId, tasks: ReadonlyArray<{ id: string; description: string; kind: string }>, stop?: (taskId: string) => Promise<void>): void; /** What an engine's background sub-agent does after its turn ended, recorded under that turn. */ engineAgentEvent(sessionId: SessionId, turnId: import("@mendcode/protocol").TurnId, event: import("@mendcode/kernel").EngineEvent): void; trace: import("@mendcode/protocol").TracePort; budget: BudgetPort; reasoning: import("@mendcode/engine-native").ReasoningPort; continuity: import("@mendcode/kernel").ContinuityForSession; tasks: import("@mendcode/kernel").TaskPort; clock: Clock; store: Store; grants: GrantStore; runLimits: RunLimitsStore; sessionRules(sessionId: SessionId): readonly import("@mendcode/protocol").PermissionRule[]; emitGlobal(event: GlobalEventDraft): void; secrets: SecretsPort; memory: MemoryAccess; background(sessionId: SessionId): BackgroundPort; interactive(sessionId: SessionId): InteractivePort; workflows(sessionId: SessionId): WorkflowPort; peers(sessionId: SessionId): PeerPort; sessionMeta(sessionId: SessionId): NonNullable<import("@mendcode/tools").ToolContext["sessionMeta"]>; threads(sessionId: SessionId): import("@mendcode/tools").ThreadPort; packages(sessionId: SessionId): import("@mendcode/tools").PackagePort; loops(sessionId: SessionId): LoopPort; worktrees(sessionId: SessionId): import("@mendcode/tools").WorktreePort; prWatch(sessionId: SessionId): import("@mendcode/tools").PrWatchPort; review(sessionId: SessionId): ReviewPort; goals(sessionId: SessionId): GoalPort; customTools: CustomToolRegistry; skills: SkillLoader; extensionLayers(directory: string): ExtensionLayer[]; agents: AgentPort; plans: { latest(sessionId: SessionId): import("@mendcode/protocol").PlanReview | undefined }; extensions: EngineExtensions; recall(sessionId: SessionId): SessionRecallPort; compound(sessionId: SessionId): CompoundCall | undefined; aiConfig(sessionId: SessionId): import("@mendcode/tools").AIConfigPort; inlineShell(text: string): InlineShell[]; computer(sessionId: SessionId): import("@mendcode/tools").ComputerPort; browser(sessionId: SessionId): import("@mendcode/tools").BrowserPort; harness: { args(sessionId: SessionId): string[]; servers(sessionId: SessionId): ReturnType<ReturnType<typeof createHostMcp>["servers"]>; waiting(): boolean; instructions(sessionId: SessionId): Promise<string | undefined> }; /** The local owner's settings write (`mendcode_settings` after the user approved): saved, announced, followed. */ settingsWrite(patch: Record<string, unknown>): Promise<Settings> }): EnginePort & { stop?(): void }
+  engine(input: { /** Queue a notice in a session from the engine (Claude Code answered a background task's end on its own). */ notify(sessionId: SessionId, text: string): void; /** Background tasks an engine runs by itself (Claude Code's), listed with the daemon's own shells. */ engineBackground(sessionId: SessionId, tasks: ReadonlyArray<{ id: string; description: string; kind: string }>, stop?: (taskId: string) => Promise<void>): void; /** What an engine's background sub-agent does after its turn ended, recorded under that turn. */ engineAgentEvent(sessionId: SessionId, turnId: import("@mendcode/protocol").TurnId, event: import("@mendcode/kernel").EngineEvent): void; trace: import("@mendcode/protocol").TracePort; budget: BudgetPort; reasoning: import("@mendcode/engine-native").ReasoningPort; continuity: import("@mendcode/kernel").ContinuityForSession; tasks: import("@mendcode/kernel").TaskPort; clock: Clock; store: Store; grants: GrantStore; runLimits: RunLimitsStore; sessionRules(sessionId: SessionId): readonly import("@mendcode/protocol").PermissionRule[]; emitGlobal(event: GlobalEventDraft): void; secrets: SecretsPort; memory: MemoryAccess; background(sessionId: SessionId): BackgroundPort; interactive(sessionId: SessionId): InteractivePort; workflows(sessionId: SessionId): WorkflowPort; peers(sessionId: SessionId): PeerPort; sessionMeta(sessionId: SessionId): NonNullable<import("@mendcode/tools").ToolContext["sessionMeta"]>; threads(sessionId: SessionId): import("@mendcode/tools").ThreadPort; packages(sessionId: SessionId): import("@mendcode/tools").PackagePort; loops(sessionId: SessionId): LoopPort; worktrees(sessionId: SessionId): import("@mendcode/tools").WorktreePort; prWatch(sessionId: SessionId): import("@mendcode/tools").PrWatchPort; prReview(sessionId: SessionId): import("@mendcode/tools").PrReviewPort; review(sessionId: SessionId): ReviewPort; goals(sessionId: SessionId): GoalPort; customTools: CustomToolRegistry; skills: SkillLoader; extensionLayers(directory: string): ExtensionLayer[]; agents: AgentPort; plans: { latest(sessionId: SessionId): import("@mendcode/protocol").PlanReview | undefined }; extensions: EngineExtensions; recall(sessionId: SessionId): SessionRecallPort; compound(sessionId: SessionId): CompoundCall | undefined; aiConfig(sessionId: SessionId): import("@mendcode/tools").AIConfigPort; inlineShell(text: string): InlineShell[]; computer(sessionId: SessionId): import("@mendcode/tools").ComputerPort; browser(sessionId: SessionId): import("@mendcode/tools").BrowserPort; harness: { args(sessionId: SessionId): string[]; servers(sessionId: SessionId): ReturnType<ReturnType<typeof createHostMcp>["servers"]>; waiting(): boolean; instructions(sessionId: SessionId): Promise<string | undefined> }; /** The local owner's settings write (`mendcode_settings` after the user approved): saved, announced, followed. */ settingsWrite(patch: Record<string, unknown>): Promise<Settings> }): EnginePort & { stop?(): void }
   reasoningEvaluator?: import("@mendcode/engine-native").ReasoningEvaluator
   /** Extension diagnostics (load failures, the first error of each extension); defaults to stderr. */
   log?(level: "debug" | "info" | "warn" | "error", message: string): void
@@ -1191,6 +1192,15 @@ export async function startDaemon(options: DaemonOptions) {
     // The project service is built on first use; the `worktree` tool only calls this during turns.
     worktrees: (sessionId) => worktreePort(sessionId),
     prWatch: (sessionId) => prWatch.port(sessionId),
+    // `pr_review`: the session's `/pr review` and the reviewer's jobs, through the service's own control (built on first use). Like
+    // `pr.review` it runs gh on this machine, so a session restricted to local tools is refused.
+    prReview: (sessionId) => createPrReviewPort({
+      sessionId,
+      directory: () => store.sessionInfo(sessionId)?.directory,
+      control: async (input) => store.meta.get(`session.local-tools.restricted:${sessionId}`) === "true" ? { ok: false, message: "the PR reviewer runs gh on this machine and is local only" }
+        : !prReviewOn() ? { ok: false, message: "The PR reviewer is off: the user turns it on with /pr on (experimental.pr_review)" }
+        : (await prReviewService()).control(input),
+    }),
     // Built below with the goal service; the goal tools only call this during turns.
     goals: (sessionId) => goals.port(sessionId),
     aiConfig: (sessionId) => aiConfig.port(sessionId),
@@ -1257,6 +1267,12 @@ export async function startDaemon(options: DaemonOptions) {
       }
       const model = turn.selection?.model ?? resolveModel({ role: "main", session: store.sessionModel(turn.sessionId), roles: rolesFor(store.settings.get(), store.sessionDirectory(turn.sessionId)), catalog })
       if (retiredEngineChoice(model)) return retiredEngineError
+      // A recorded notice (`actor.record`, the PR reviewer's news): already in the transcript, answered by no model on any engine. Only
+      // the native engine keeps it in its own history; another program's engine is not started for it.
+      if (turn.turnOptions?.noReply && turn.authority?.synthetic) {
+        if (options.info?.engine !== "native" || modelEngine(model, catalog) || model.model.startsWith("acp:")) return { status: "ok" }
+        return rawEngine.runTurn(turn)
+      }
       // Only the native engine runs a command's inline shell through its own permission pipeline; no other engine may see a marker as an approved command.
       if (inlineShells.find(turn.text).length && (options.info?.engine !== "native" || modelEngine(model, catalog) || model.model.startsWith("acp:"))) return { status: "error", code: "unsupported", message: "[DAEMON]: inline shell in commands needs the native engine and a native model" }
       if (turn.turnOptions && Object.keys(turn.turnOptions).length) {
@@ -2496,14 +2512,18 @@ export async function startDaemon(options: DaemonOptions) {
   /** The PR reviewer (docs/pr-review.md): needs the tier's permit and `experimental.pr_review`; nothing loads until a watch exists or `/pr review` runs. */
   const prReviewOn = () => featureOn(store.settings.get(), "pr_review", { safeMode: options.safeMode }) && effectiveSettings(store.settings.get(), { safeMode: options.safeMode }).experimental?.pr_review === true
   const reviewSessions = createReviewSessions({
-    create({ owner, directory, title, model: chosen, editing }) {
+    create({ owner, directory, title, model: chosen, editing, language }) {
       const id = ids("session")
       const parent = owner && store.hasSession(owner as SessionId) ? owner as SessionId : undefined
       store.createSession({ id, directory, title, ...(parent ? { parentId: parent } : {}) })
       const agent = editing ? agents.defaultName(directory) : REVIEW_AGENT
       if (agent !== "plan" && agent !== "build") store.setSessionAgent(id, agent)
       // The review prompt is the whole brief: no instruction files (the PR's own CLAUDE.md would steer its reviewer) and no skills.
-      if (!editing) runLimits.configure(id, { excludeTools: REVIEW_EXCLUDED_TOOLS, noContextFiles: true })
+      // No memory block either: the user's own memories must not reach the repository's reviewer; the review prompt carries what its scope allows.
+      // The repository's review language overrides the user's own harness language (Claude Code's `language` setting), live e2e D3.
+      if (!editing) runLimits.configure(id, { excludeTools: REVIEW_EXCLUDED_TOOLS, noContextFiles: true, noMemory: true, untrustedCheckout: true, ...(language ? { responseLanguage: language } : {}) })
+      // A fix session edits the PR's head: the user's approvals still apply, but the checkout's own harness settings (hooks) never load.
+      else runLimits.configure(id, { untrustedCheckout: true, ...(language ? { responseLanguage: language } : {}) })
       if (editing) announceSession(id, directory, parent)
       const model = chosen ?? (parent ? store.sessionModel(parent) : undefined)
       if (model) store.setSessionModel(id, model)
@@ -2529,11 +2549,34 @@ export async function startDaemon(options: DaemonOptions) {
     },
   })
   sessionObservers.push(reviewSessions.observe)
+  /**
+   * The memory a review may use (R05, pr-review/review-memory.ts), chosen by the reviewer's scope: the global reviewer reads only
+   * project memories of the user's checkout (`directory`, not the review's throwaway worktree, which keys no memory) that project
+   * sharing lets leave the machine; the personal reviewer reads the profile's memories as the user's own settings allow.
+   */
+  async function reviewMemory({ scope, directory, login, query, budgetTokens }: { scope: "global" | "personal"; directory: string; login?: string | undefined; query: string; budgetTokens: number }) {
+    const settings = store.settings.get()
+    const shared = scope === "global" && (await sharingMemory.status("project", directory).catch(() => undefined))?.enabled === true
+    const { reviewMemoryContext } = await import("./pr-review/review-memory")
+    return reviewMemoryContext({ reader: { memories: store.memories, projectShared: () => shared }, scope, profile: profileOf(settings, directory), directory, login, settings, query, budgetTokens, now: clock.now() })
+  }
+  /** The window of the model a review runs on (the watch session's model): the session's own, the model's setting, else the catalog's. */
+  function reviewContextWindow(sessionId: string): number | undefined {
+    const id = sessionId as SessionId
+    if (!store.hasSession(id)) return undefined
+    const own = readContextWindow(store.meta, id)
+    if (own) return own
+    const choice = options.models ? resolveModel({ role: "main", session: store.sessionModel(id), roles: rolesFor(store.settings.get(), store.sessionInfo(id)?.directory), catalog: options.models }) : undefined
+    const info = options.models && choice ? catalogModel(options.models, choice.model) : undefined
+    return modelContextOf(store.settings.get(), info)?.window ?? info?.contextWindow
+  }
   let prReview: import("./pr-review/service").PrReviewService | undefined
   async function prReviewService() {
     if (prReview) return prReview
     const { createPrReviewService } = await import("./pr-review/service")
     prReview ??= createPrReviewService({
+      memory: reviewMemory,
+      contextWindow: reviewContextWindow,
       dir: options.dir,
       ...(options.prReview?.run ? { run: options.prReview.run } : {}),
       ...(options.prReview?.call ? { call: options.prReview.call } : {}),
@@ -2544,7 +2587,13 @@ export async function startDaemon(options: DaemonOptions) {
       sessionDirectory: (sessionId) => store.sessionInfo(sessionId as SessionId)?.directory,
       sessionExists: (sessionId) => store.hasSession(sessionId as SessionId),
       // A busy session refuses the notice (undefined): the reviewer's outbox holds it and offers it again when the session is idle.
-      notify: (sessionId, text) => actorFor(sessionId as SessionId)?.notify(secrets.mask(sessionId as SessionId, text), undefined, true),
+      // Recorded, not answered: a model turn per notice cost a call each and asked for approvals nobody needed (live e2e O2). The
+      // user's `experimental.pr_review_prompts` lets the session's model answer each one instead.
+      notify: (sessionId, text) => {
+        const actor = actorFor(sessionId as SessionId)
+        const masked = secrets.mask(sessionId as SessionId, text)
+        return effectiveSettings(store.settings.get(), { safeMode: options.safeMode }).experimental?.pr_review_prompts === true ? actor?.notify(masked, undefined, true) : actor?.record(masked, true)
+      },
       sessions: (owner, directory) => options.prReview?.sessions?.(owner, directory) ?? reviewSessions.factory({ owner, directory }),
       editor: (owner, directory) => options.prReview?.sessions?.(owner, directory) ?? reviewSessions.factory({ owner, directory, editing: true }),
       schedule: (run) => new Promise<void>((resolve) => { scheduler.schedule({ jobType: "pr_review", priority: "P4", run: async () => { try { await run() } finally { resolve() } } }) }),
@@ -2552,7 +2601,24 @@ export async function startDaemon(options: DaemonOptions) {
     root.onDispose(prReview.stop)
     return prReview
   }
-  if (["watches.json", "outbox.json"].some((file) => existsSync(path.join(options.dir, "pr-review", file)))) void prReviewService()
+  // jobs.json too: a queued `/pr review` or audit with no watch is recovered after a restart.
+  if (["watches.json", "outbox.json", "jobs.json"].some((file) => existsSync(path.join(options.dir, "pr-review", file)))) void prReviewService()
+  /**
+   * The PR reviewer's standing work (`keepAliveReport`): a watch that has not ended (paused ones retry by themselves), notices held for
+   * a session, and jobs this daemon still runs later (queued, waiting for a time, a claim or a slot, or checkpointed until a quota
+   * reset). A job taken over, or checkpointed until someone retries it, waits for a person and keeps nothing up. Watches and held
+   * notices are read from their files, which the service writes on every change.
+   */
+  function prReviewStanding(): string[] {
+    if (!prReview || !prReviewOn()) return []
+    const stored = (file: string): Record<string, unknown> | undefined => { try { return JSON.parse(readFileSync(path.join(options.dir, "pr-review", file), "utf8")) as Record<string, unknown> } catch { return undefined } }
+    const watches = stored("watches.json")?.watches
+    const watching = Array.isArray(watches) && watches.some((watch) => !!watch && typeof watch === "object" && !("ended" in watch && (watch as { ended?: unknown }).ended))
+    const sessions = stored("outbox.json")?.sessions
+    const held = !!sessions && typeof sessions === "object" && Object.values(sessions).some((notices) => Array.isArray(notices) && notices.length > 0)
+    const later = prReview.platform.jobs.list({ states: ["pending", "waiting", "running", "fixing", "validating", "checkpointed"] }).some((job) => job.state !== "checkpointed" || job.notBefore !== undefined)
+    return [...(watching ? ["PR review watch"] : []), ...(held ? ["PR review notices"] : []), ...(later ? ["PR review jobs"] : [])]
+  }
   sessionObservers.push((event) => {
     if (prReview && event.type === "foreground.state" && event.state === "idle") queueMicrotask(() => void prReview?.idle(event.sessionId))
   })
@@ -3674,8 +3740,10 @@ export async function startDaemon(options: DaemonOptions) {
         if (connection.remoteAddress || connection.peer) return reply(connection, command.id, { ok: false, code: "forbidden", message: "[DAEMON]: the PR reviewer runs gh on this machine and is local only" })
         if (!store.hasSession(command.sessionId)) return reply(connection, command.id, { ok: false, code: "unknown_session", message: "[DAEMON]: unknown session" })
         if (!prReviewOn()) return reply(connection, command.id, { ok: false, code: "invalid_command", message: "[DAEMON]: The PR reviewer is off: it reaches the network through gh and spends model calls, so turn it on with /experimental pr_review on (balanced tier or above)" })
-        const done = await (await prReviewService()).control({ sessionId: command.sessionId, action: command.action, directory: command.directory, pr: command.pr, role: command.role })
-        return reply(connection, command.id, done.ok ? { ok: true, result: { text: done.text, watches: done.watches } } : { ok: false, code: "invalid_command", message: `[DAEMON]: ${done.message}` })
+        // The platform's fields (job actions, audit, config) go through as given; the service and control.ts validate them.
+        const done = await (await prReviewService()).control({ sessionId: command.sessionId, action: command.action, directory: command.directory, pr: command.pr, role: command.role, jobId: command.jobId, reason: command.reason, scope: command.scope, patch: command.patch, version: command.version })
+        if (!done.ok) return reply(connection, command.id, { ok: false, code: "invalid_command", message: `[DAEMON]: ${done.message}` })
+        return reply(connection, command.id, { ok: true, result: { text: done.text, watches: done.watches, ...(done.dashboard ? { dashboard: done.dashboard } : {}), ...(done.config ? { config: done.config } : {}) } })
       }
       case "git.push":
       case "git.publish":
@@ -6038,6 +6106,7 @@ export async function startDaemon(options: DaemonOptions) {
         ...(usageLimit.scheduled() > 0 ? ["usage resume"] : []),
         ...(channels.status().telegram.enabled ? ["channels"] : []),
         ...(remoteConfig ? ["remote"] : []),
+        ...prReviewStanding(),
       ],
     }
   }

@@ -22,7 +22,7 @@ const COVERAGE: Record<string, Entry> = {
     "loop-form", "loops-page", "marketplace-page", "mcps-catalog", "mcps-page", "memory-assistant-page", "memory-evolution",
     "memory-extraction-tab", "memory-graph-view", "onboarding-page", "onboarding-import", "onboarding-sample", "memory-page", "memory-policies", "memory-sharing-tab", "memory-workspaces", "mermaid-viewer",
     "mflow-page", "model-page", "model-picker", "packages-page", "permissions-page", "pet-picker", "pet-plan", "plan-review-page", "prompt-mode-page",
-    "providers-page", "queue-page", "reasoning-page", "release-page", "secrets-page", "session-list", "settings-page", "setup-page",
+    "providers-page", "queue-page", "reasoning-page", "release-page", "reviews-page", "secrets-page", "session-list", "settings-page", "setup-page",
     "sidebar-editor", "skills-page", "slash-menu-editor", "stash-page", "storage-page", "tasks-page", "terminal-setup-page", "text-page",
     "theme-picker", "session-tree", "session-tree-page", "tools-page", "transcript-actions-page", "tsm-page", "tutorial-page", "usage-clock",
     "usage-heatmap", "usage-page", "usage-widgets", "workflows-page", "worktrees-page", "git-commit-page", "git-pr-page", "git-page", "git-init-page", "git-publish-page",

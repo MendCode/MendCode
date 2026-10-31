@@ -42,73 +42,101 @@ function nearMatch({ text, oldString, newString }: { text: string; oldString: st
   return { text: [...lines.slice(0, at), ...replaced, ...lines.slice(at + wanted.length)].join("\n"), replacements: 1 }
 }
 
-/** Computes the edit without writing; a string result is the error message. */
-async function planEdit({
-  abs,
-  shown,
-  oldString,
-  newString,
-  replaceAll,
-}: {
-  abs: string
-  shown: string
-  oldString: string
-  newString: string
-  replaceAll: boolean | undefined
-}): Promise<EditPlan | string> {
+/** Most replacements one call may carry in `edits`. */
+export const MAX_EDITS = 50
+
+type Replacement = { oldString: string; newString: string; replaceAll?: boolean | undefined }
+
+/** One replacement on `text` as earlier ones left it; a string result is the error message. */
+function replaceOne({ text, shown, edit }: { text: string; shown: string; edit: Replacement }): { after: string; replacements: number } | string {
+  const { oldString, newString, replaceAll } = edit
   if (oldString === newString) return "oldString and newString are identical"
-  const before = await readFile(abs, "utf8")
-  const matches = countOccurrences({ text: before, needle: oldString })
+  const matches = countOccurrences({ text, needle: oldString })
   if (matches === 0) {
-    const near = nearMatch({ text: before, oldString, newString })
-    return near ? { before, after: near.text, replacements: near.replacements } : `oldString not found in ${shown}`
+    const near = nearMatch({ text, oldString, newString })
+    return near ? { after: near.text, replacements: near.replacements } : `oldString not found in ${shown}`
   }
   if (matches > 1 && !replaceAll) {
     return `oldString matches ${matches} times in ${shown}; add context to make it unique or set replaceAll`
   }
-  const after = replaceAll ? before.split(oldString).join(newString) : before.replace(oldString, () => newString)
-  return { before, after, replacements: replaceAll ? matches : 1 }
+  const after = replaceAll ? text.split(oldString).join(newString) : text.replace(oldString, () => newString)
+  return { after, replacements: replaceAll ? matches : 1 }
+}
+
+/**
+ * Computes every replacement in order on one read of the file, without writing; a string result is the error message. Each one
+ * sees the text the previous ones left, and the first that fails stops the call before anything is written.
+ */
+async function planEdit({ abs, shown, edits }: { abs: string; shown: string; edits: Replacement[] }): Promise<EditPlan | string> {
+  const before = await readFile(abs, "utf8")
+  let after = before
+  let replacements = 0
+  for (const [index, edit] of edits.entries()) {
+    const step = replaceOne({ text: after, shown, edit })
+    if (typeof step === "string") return edits.length > 1 ? `edit ${index + 1} of ${edits.length}: ${step}; nothing was written` : step
+    after = step.after
+    replacements += step.replacements
+  }
+  return { before, after, replacements }
+}
+
+const Args = z.object({
+  path: z.string().describe("Absolute or project-relative path"),
+  oldString: z.string().min(1).optional().describe("Exact text to replace"),
+  newString: z.string().optional().describe("Replacement text"),
+  replaceAll: z.boolean().optional().describe("Replace every occurrence"),
+  // More pairs, applied in order after the top-level one. An entry has the same keys as the call, described once on the top-level ones,
+  // and `replaceAll` covers every entry: every key and description is paid on each request.
+  edits: z.array(z.object({ oldString: z.string().min(1), newString: z.string() })).min(1).max(MAX_EDITS).optional(),
+})
+
+/** The replacements a call asks for: the top-level pair first when given, then `edits`, all under `replaceAll`; a string is what is missing. */
+function replacementsOf(args: z.infer<typeof Args>): Replacement[] | string {
+  const single = args.oldString !== undefined || args.newString !== undefined
+  if (single && (args.oldString === undefined || args.newString === undefined)) return "oldString and newString go together"
+  if (!single && !args.edits) return "edit needs oldString and newString, or edits"
+  const pairs = [...(single ? [{ oldString: args.oldString!, newString: args.newString! }] : []), ...(args.edits ?? [])]
+  return pairs.map((pair) => ({ ...pair, replaceAll: args.replaceAll }))
 }
 
 export default defineTool({
   name: "edit",
   description:
-    "Replace exact text in a file; fails when oldString is missing or matches more than once (unless replaceAll). Line endings and trailing spaces may differ if one place still matches.",
+    "Replace exact text in a file; fails unless oldString matches once (or replaceAll). CRLF and trailing spaces may differ if one place still matches.",
   permission: "write",
-  args: z.object({
-    path: z.string().describe("Absolute or project-relative path"),
-    oldString: z.string().min(1).describe("Exact text to replace"),
-    newString: z.string().describe("Replacement text"),
-    replaceAll: z.boolean().optional().describe("Replace every occurrence"),
-  }),
-  async execute({ path, oldString, newString, replaceAll }, context) {
-    const abs = resolvePath({ cwd: context.cwd, path })
+  args: Args,
+  async execute(args, context) {
+    const abs = resolvePath({ cwd: context.cwd, path: args.path })
     const shown = displayPath({ cwd: context.cwd, path: abs })
     const title = `Edit ${shown}`
     if (context.signal.aborted) return fail({ title, message: "cancelled" })
+    const edits = replacementsOf(args)
+    if (typeof edits === "string") return fail({ title, message: edits })
     try {
       // Read and write as one step per file: another session's edit in between would be overwritten.
       const planned = await withFileLock([abs], async () => {
-        const plan = await planEdit({ abs, shown, oldString, newString, replaceAll })
+        const plan = await planEdit({ abs, shown, edits })
         if (typeof plan !== "string") await atomicWrite({ path: abs, content: plan.after })
         return plan
       })
       if (typeof planned === "string") return fail({ title, message: planned })
-      const capped = truncateText({ text: renderDiff({ before: planned.before, after: planned.after, ...(context.outputLimits ? { limits: { maxBytes: 8 * 1024 * 1024, maxLines: 100000 } } : {}) }) })
+      const capped = truncateText({ text: renderDiff({ before: planned.before, after: planned.after }), ...(context.outputLimits ? { limits: { maxBytes: 8 * 1024 * 1024, maxLines: 100000 } } : {}) })
       return succeed({
         title,
         output: capped.text,
         truncated: capped.truncated,
-        meta: { path: abs, replacements: planned.replacements },
+        meta: { path: abs, replacements: planned.replacements, ...(edits.length > 1 ? { edits: edits.length } : {}) },
       })
     } catch (error) {
       return fail({ title, message: `cannot edit ${shown}: ${errorMessage(error)}` })
     }
   },
-  async preview({ path, oldString, newString, replaceAll }, context) {
+  async preview(args, context) {
     try {
-      const abs = resolvePath({ cwd: context.cwd, path })
-      const planned = await planEdit({ abs, shown: displayPath({ cwd: context.cwd, path: abs }), oldString, newString, replaceAll })
+      const edits = replacementsOf(args)
+      if (typeof edits === "string") return undefined
+      const abs = resolvePath({ cwd: context.cwd, path: args.path })
+      const planned = await planEdit({ abs, shown: displayPath({ cwd: context.cwd, path: abs }), edits })
       return typeof planned === "string" ? undefined : boundPreview(renderDiff({ before: planned.before, after: planned.after }))
     } catch {
       return undefined

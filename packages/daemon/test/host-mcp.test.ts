@@ -87,6 +87,26 @@ describe("native tools bridge for another harness", () => {
     expect(hostInstructions(TOOLS)).not.toContain("image_gen")
   })
 
+  test("a session with review_config is told to always pass scope and to ask when the user did not say which reviewer", () => {
+    const config = { name: "review_config", description: "Configure the PR reviewer", parameters: { type: "object", properties: {} } }
+    const told = hostInstructions([config])
+    expect(told).toContain("mcp__mendcode__review_config")
+    expect(told).toContain("Always pass scope")
+    expect(told).toContain("global is the repository's reviewer (.mendcode/review.yaml")
+    expect(told).toContain("personal is the user's own reviewer profile")
+    expect(told).toContain("ask them")
+    expect(hostInstructions(TOOLS)).not.toContain("review_config")
+  })
+
+  test("a session with pr_watch is pointed at MendCode's own PR reviewer instead of a cron job, a cloud routine or a GitHub Action", () => {
+    const watch = { name: "pr_watch", description: "Watch a pull request", parameters: { type: "object", properties: {} } }
+    const told = hostInstructions([watch])
+    expect(told).toContain("/pr watch-repo")
+    expect(told).toContain("docs --search pr review")
+    expect(told).toContain("before a cron job, a cloud routine or a GitHub Action")
+    expect(hostInstructions(TOOLS)).not.toContain("/pr watch-repo")
+  })
+
   test("a call runs as a call of the session's running turn, and only while one runs", async () => {
     const { config, rpc, host, calls, turn } = bridge()
     const auth = config().server.headers.Authorization

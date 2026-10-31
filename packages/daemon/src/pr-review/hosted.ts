@@ -6,7 +6,9 @@ import { mayRequest, readReviewConfig } from "./config"
 import type { ReviewSessionFactory } from "./engine"
 import { findingFromComment, type GhCall } from "./publish"
 import { reviewNotice, runPrReview, type ReviewRun } from "./run"
+import { resolveReviewLanguage } from "./language"
 import { readPullRequestInfo } from "./pull-request"
+import { inLanguage } from "./sessions"
 import { FINDING_MARKER, stateFromMarkers, type ReviewState } from "./state"
 
 /**
@@ -137,7 +139,8 @@ export async function hostedReview(input: HostedReviewInput): Promise<GithubRevi
   const outcome = await runPrCommand(command, {
     gh: input.gh, repo, number, comment: target, state,
     review: async () => { reviewed = await reviewNow(true, state); return { status: reviewed.status, reason: reviewed.reason, posted: reviewed.report?.posted ?? false } },
-    explain: (question) => explainFinding({ sessionFactory: input.sessionFactory, ...question }),
+    // The answer is public like the review: in the repository's language (or the PR's kept `auto` one), never the runner's.
+    explain: (question) => explainFinding({ sessionFactory: inLanguage(input.sessionFactory, resolveReviewLanguage({ configured: policy?.template.language, stored: state.language, pullRequest: { title: typeof pr.title === "string" ? pr.title : "", body: typeof pr.body === "string" ? pr.body : "" } }).language), ...question }),
     fixUnavailable: HOSTED_NO_FIX,
     fixesAllowed: async () => false,
     pushable: async () => false,

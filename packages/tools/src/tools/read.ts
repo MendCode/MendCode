@@ -152,7 +152,7 @@ export default defineTool({
     path: entry.shape.path.optional(),
     offset: entry.shape.offset,
     limit: entry.shape.limit,
-    paths: z.array(pathsEntry).min(1).max(MAX_READ_PATHS).optional().describe("Several paths in one call, instead of path"),
+    paths: z.array(pathsEntry).min(1).max(MAX_READ_PATHS).optional().describe("Instead of path"),
   }),
   async execute({ paths, ...single }, context) {
     if (paths === undefined) {

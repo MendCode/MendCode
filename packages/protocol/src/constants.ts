@@ -79,6 +79,7 @@ export const EXPERIMENTAL_FLAGS = [
   { id: "thread_tools", summary: "Let the model list, read, message, wait on and interrupt this project's other sessions", doc: "docs/sessions.md" },
   { id: "pr_watch", summary: "Let the model watch a pull request through gh (checks, reviews, conflicts) and wake only on a change", doc: "docs/pr-watch.md" },
   { id: "pr_review", summary: "Review pull requests of a watched repository through gh and publish verified findings once the repo config allows it", doc: "docs/pr-review.md" },
+  { id: "pr_review_prompts", summary: "The PR reviewer's notices start a turn the session's model answers, instead of being only recorded", doc: "docs/pr-review.md" },
   { id: "git_actions", summary: "Push the branch and create a pull request from the Git page, and read its PR tab, through your own git and gh logins", doc: "docs/git.md" },
   { id: "continue_loop_on_deny", summary: "Keep a loop running after a denied tool call", doc: "docs/permissions.md" },
   { id: "openTelemetry", summary: "Export spans through OTLP when an endpoint is configured", doc: "docs/tracing.md" },

@@ -52,8 +52,8 @@ agent proposes is also passed through `redactSecrets`, in case it read a secret 
 The system prompt of a session that has secrets lists its markers (kind and tail) and says how to use them. The agent
 cannot read a value. It writes the marker:
 
-- in the `command` of a `shell` call, and in the `content` of `write`, the `oldString`/`newString` of `edit` and the
-  `patch` of `apply_patch`: the engine replaces `‹secret:N›` with the decrypted value just before `execute`, after the
+- in the `command` of a `shell` call, and in the `content` of `write`, the `oldString`/`newString` of `edit` (top level
+  and in each entry of `edits`) and the `patch` of `apply_patch`: the engine replaces `‹secret:N›` with the decrypted value just before `execute`, after the
   permission check and after `tool.before` hooks. The approval prompt, the tool card, `server.request.detail`, the log
   and hooks show the marker (`packages/engine-native/src/engine.ts`, `runCall`).
 - only for the built-in tools: a tool an extension overrides, a custom tool or an MCP tool gets the marker as written.

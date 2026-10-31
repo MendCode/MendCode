@@ -65,7 +65,22 @@ export function parseWalkthrough(raw: unknown): PrWalkthrough | undefined {
   return parsed.success ? parsed.data : undefined
 }
 
-export type ParsedFindings = { ok: true; summary: string; findings: PrFinding[]; walkthrough?: PrWalkthrough } | { ok: false; problems: string[] }
+/** Template sections the model writes: at most `SECTION_LIMIT` ids, each text at most `SECTION_TEXT` characters. */
+export const SECTION_LIMIT = 20
+export const SECTION_TEXT = 4000
+const SECTION_ID = /^[a-z][a-z0-9-]{0,39}$/
+
+/**
+ * The `sections` map of an answer (`{ "risks-for-ops": "Markdown…" }`), or undefined. Like the walkthrough it never fails the
+ * answer: an entry with a bad id or a non-string text is left out, a long text is cut, and only `SECTION_LIMIT` entries are kept.
+ * Which ids were asked for is the engine's business (it keeps only those).
+ */
+export function parseSections(raw: unknown): Record<string, string> | undefined {
+  const entries = Object.entries(record(raw)).flatMap(([id, text]) => SECTION_ID.test(id) && typeof text === "string" && text.trim() ? [[id, text.trim().slice(0, SECTION_TEXT)] as const] : []).slice(0, SECTION_LIMIT)
+  return entries.length ? Object.fromEntries(entries) : undefined
+}
+
+export type ParsedFindings = { ok: true; summary: string; findings: PrFinding[]; walkthrough?: PrWalkthrough; sections?: Record<string, string> } | { ok: false; problems: string[] }
 
 /** `{ summary, findings: [...] }` from an answer, every finding valid, or the problems a repair turn is told about. */
 export function parseFindings(text: string): ParsedFindings {
@@ -82,7 +97,8 @@ export function parseFindings(text: string): ParsedFindings {
   })
   if (problems.length) return { ok: false, problems: problems.slice(0, 12) }
   const walkthrough = parseWalkthrough(body.walkthrough)
-  return { ok: true, summary: typeof body.summary === "string" ? body.summary.slice(0, 4000) : "", findings, ...(walkthrough ? { walkthrough } : {}) }
+  const sections = parseSections(body.sections)
+  return { ok: true, summary: typeof body.summary === "string" ? body.summary.slice(0, 4000) : "", findings, ...(walkthrough ? { walkthrough } : {}), ...(sections ? { sections } : {}) }
 }
 
 /** The shape the review child is asked to answer in, quoted in its prompt and in the repair turn. */

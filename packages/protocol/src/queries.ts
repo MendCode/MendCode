@@ -594,6 +594,8 @@ const SharedSettings = lazySchema(() => z.strictObject({
     pr_watch: z.boolean().optional(),
     /** Opt-in network and model calls: the daemon reviews pull requests of watched repositories through `gh` (docs/pr-review.md). */
     pr_review: z.boolean().optional(),
+    /** The PR reviewer's notices start a turn in the watching session, so its model answers each one; unset, they are only recorded in the transcript (no model call). */
+    pr_review_prompts: z.boolean().optional(),
     /** Opt-in network: the Git page's push, create pull request and PR tab run git and gh on this machine, each after a confirmation card. */
     git_actions: z.boolean().optional(),
     openTelemetry: z.boolean().optional(),

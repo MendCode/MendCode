@@ -72,7 +72,7 @@ type Message =
   | { kind: "engine.request"; turnId: TurnId; request: EngineRequest; resolve(resolution: EngineResolution): void }
   | { kind: "engine.done"; turnId: TurnId; phase: Phase; outcome: TurnOutcome }
   | { kind: "engine.permission"; turnId: TurnId; mode: PermissionMode }
-  | { kind: "notice"; text: string; queueId?: QueueId; idleOnly?: boolean; delivery?: "queue" | "steer"; rides?: boolean; unless?: () => boolean; reply(queueId: QueueId | undefined): void }
+  | { kind: "notice"; text: string; queueId?: QueueId; idleOnly?: boolean; delivery?: "queue" | "steer"; rides?: boolean; unless?: () => boolean; recordOnly?: boolean; reply(queueId: QueueId | undefined): void }
   | { kind: "steer"; steering: Steering; reply(started: boolean): void }
   | { kind: "compact.idle"; reply(started: boolean): void }
   | { kind: "engine.queue"; turnId: TurnId; userOnly?: boolean; reply(entry: Pick<TurnInput, "text" | "attachments" | "authority"> | undefined): void }
@@ -810,10 +810,12 @@ export function createSessionActor(options: SessionActorOptions) {
         // turn cannot take it: a turn that ends before its next boundary leaves the order and the policy a queued notice always had.
         const joins = message.delivery === "steer" && message.rides === true
         const delivery: QueueDelivery | undefined = message.delivery === "steer" ? (active ? (steerable() ? "steer" : joins ? undefined : "queue") : undefined) : message.delivery
-        const entry: QueueEntry = { queueId, text: message.text, attachments: [], notice: true, ...(delivery ? { delivery } : {}), ...(message.rides ? { rides: true as const, at: options.clock.now() } : {}), ...(message.unless ? { unless: message.unless } : {}) }
+        // A recorded notice is a turn with `noReply`: shown and kept like any notice, never answered by a model.
+        const recorded = message.recordOnly ? { turnOptions: { noReply: true as const } } : {}
+        const entry: QueueEntry = { queueId, text: message.text, attachments: [], notice: true, ...recorded, ...(delivery ? { delivery } : {}), ...(message.rides ? { rides: true as const, at: options.clock.now() } : {}), ...(message.unless ? { unless: message.unless } : {}) }
         if (delivery === "steer" && !joins) placeSteered(entry)
         else queue.push(entry)
-        emit({ type: "queue.added", sessionId, queueId, text: message.text, attachments: [], notice: true })
+        emit({ type: "queue.added", sessionId, queueId, text: message.text, attachments: [], notice: true, ...recorded })
         emitQueue()
         settleIdle()
         return message.reply(queueId)
@@ -911,6 +913,14 @@ export function createSessionActor(options: SessionActorOptions) {
      */
     notify(text: string, queueId?: QueueId, idleOnly = false, delivery?: "queue" | "steer", rides = false, unless?: () => boolean) {
       return new Promise<QueueId | undefined>((reply) => post({ kind: "notice", text, ...(queueId ? { queueId } : {}), ...(idleOnly ? { idleOnly } : {}), ...(delivery ? { delivery } : {}), ...(rides ? { rides } : {}), ...(unless ? { unless } : {}), reply }))
+    },
+    /**
+     * A system notice nobody answers (the PR reviewer's news): it is shown in the transcript and stored like `notify`'s, in order with
+     * the queue, but its turn carries `noReply`, so no model is called; the native engine also keeps it in the history the model reads
+     * next. `idleOnly` as for `notify`: a busy, held or paused session refuses it (`undefined`) and the caller offers it again later.
+     */
+    record(text: string, idleOnly = false) {
+      return new Promise<QueueId | undefined>((reply) => post({ kind: "notice", text, recordOnly: true, ...(idleOnly ? { idleOnly } : {}), reply }))
     },
     /**
      * A turn the daemon starts on its own to steer the agent (a goal's continuation): shown in the transcript as a thin

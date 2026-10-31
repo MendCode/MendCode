@@ -215,6 +215,46 @@ for (const { name, fallback } of modes) {
       expect((await grep.execute({ pattern: "needle", path: "a.txt" }, ctx)).output).toBe("a.txt:1:needle")
       expect((await grep.execute({ pattern: "x", path: "zzz" }, ctx)).isError).toBe(true)
     })
+    t("context shows the lines around each match as path-line-text, merges groups that touch and separates the rest with --", async () => {
+      setup()
+      const root = tmp()
+      put({ root, path: "a-1.ts", content: ["one", "two", "hit A", "four", "hit B", "six", "seven", "eight", "nine", "hit C", "eleven"].join("\n") + "\n" })
+      const result = await grep.execute({ pattern: "hit", path: "a-1.ts", context: 1 }, makeContext({ cwd: root }))
+      expect(result.output.split("\n")).toEqual([
+        "a-1.ts-2-two", "a-1.ts:3:hit A", "a-1.ts-4-four", "a-1.ts:5:hit B", "a-1.ts-6-six",
+        "--",
+        "a-1.ts-9-nine", "a-1.ts:10:hit C", "a-1.ts-11-eleven",
+      ])
+      // Context lines are not matches: the count, the cap and the card read only the `:` lines.
+      expect(result.meta?.matches).toBe(3)
+    })
+    t("context across files: one -- between them, nothing after the last group, and the end of a file is not an empty line", async () => {
+      setup()
+      const root = tmp()
+      put({ root, path: "a.ts", content: "x\nneedle\n" })
+      put({ root, path: "b.ts", content: "needle\ny\nz\n" })
+      const result = await grep.execute({ pattern: "needle", context: 2 }, makeContext({ cwd: root }))
+      const lines = result.output.split("\n")
+      expect(lines.filter((line) => line === "--")).toHaveLength(1)
+      expect(lines.at(-1)).not.toBe("--")
+      expect(lines.filter((line) => line !== "--").sort()).toEqual(["a.ts-1-x", "a.ts:2:needle", "b.ts-2-y", "b.ts-3-z", "b.ts:1:needle"])
+      expect(result.meta?.matches).toBe(2)
+    })
+    t("context 0 is the plain output, and a search with no match still says so", async () => {
+      setup()
+      const root = tmp()
+      put({ root, path: "a.ts", content: "a\nneedle\nb\n" })
+      expect((await grep.execute({ pattern: "needle", context: 0 }, makeContext({ cwd: root }))).output).toBe("a.ts:2:needle")
+      expect((await grep.execute({ pattern: "absent", context: 3 }, makeContext({ cwd: root }))).output).toBe("No matches found")
+    })
+    t("with context the cap still counts matches, not lines", async () => {
+      setup()
+      const root = tmp()
+      put({ root, path: "a.txt", content: Array.from({ length: 1400 }, (_, i) => (i % 2 ? "hit" : "gap")).join("\n") })
+      const result = await grep.execute({ pattern: "hit", context: 1 }, makeContext({ cwd: root }))
+      expect(result.truncated).toBe(true)
+      expect(result.meta?.matches).toBe(500)
+    })
     t("aborted signal cancels", async () => {
       setup()
       const root = tmp()

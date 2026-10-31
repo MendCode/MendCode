@@ -8,7 +8,7 @@ import { workflowToolAsks, workflowToolDenied } from "./workflow-policy"
 import { createHash } from "node:crypto"
 import { compactionThreshold, historyTokens, prunable, pruneDue, pruneToolOutputs, splitCompaction } from "./compaction-policy"
 import { AUTO_RECALL_CHARS, AUTO_RECALL_PREFIX, AUTO_RECALL_TURNS, notInHistory, packedAway, recalledText } from "./auto-recall"
-import { contextFiles } from "./context-files"
+import { contextFiles, readPaths } from "./context-files"
 import { toolOwner } from "./context-rent"
 import { checkpointContext, checkpointOf, compactionDeadline, fingerprint, NativeCompactionError, portableHistory, type CompactionCheckpoint } from "./compaction-checkpoint"
 import { acceptSummary, RESUME_GUIDANCE, summaryBody } from "./compaction-summary"
@@ -312,6 +312,7 @@ function approvalTitle(tool: Tool) {
   if (tool.name === "shell_session") return "Run interactive command"
   if (tool.name === "browser") return "Use browser"
   if (tool.name === "threads") return "Read another session"
+  if (tool.name === "pr_review") return "Review a pull request"
   return tool.permission === "execute" ? "Run command" : "Edit files"
 }
 
@@ -339,7 +340,7 @@ function approvalDetail(call: ToolCall) {
   if (typeof args.command === "string") return args.command
   if (typeof args.path === "string") return args.path
   if (call.name === "glob" && Array.isArray(args.patterns)) return [args.pattern, ...args.patterns].filter((value): value is string => typeof value === "string").join(", ").slice(0, 500)
-  if (call.name === "read" && Array.isArray(args.paths)) return args.paths.map((entry) => (entry as { path?: unknown } | null)?.path).filter((value): value is string => typeof value === "string").join(", ").slice(0, 500)
+  if (call.name === "read" && Array.isArray(args.paths)) return readPaths(args).join(", ").slice(0, 500)
   return JSON.stringify(call.args).slice(0, 500)
 }
 
@@ -439,6 +440,8 @@ export function createNativeEngine(options: {
   worktrees?(sessionId: SessionId): WorktreePort
   /** The session's pull request watches (the `pr_watch` tool, offered to the main agent while `experimental.pr_watch` is on); without it the tool does not exist. */
   prWatch?(sessionId: SessionId): import("@mendcode/tools").PrWatchPort
+  /** The session's MendCode PR reviewer (the `pr_review` tool: one PR reviewed now, its jobs); without it the tool says it is unavailable. */
+  prReview?(sessionId: SessionId): import("@mendcode/tools").PrReviewPort
   /** The session's goal (the `get_goal`, `create_goal` and `update_goal` tools, offered to the main agent only); without it the tools do not exist and a goal can only end by the user or by the text marker. */
   goals?(sessionId: SessionId): GoalPort
   /** Where "approve for this session" grants live; shared with the daemon so it can list and revoke them. Defaults to a private store. */
@@ -1168,7 +1171,7 @@ export function createNativeEngine(options: {
     if (mode === "plan" && tool.permission !== "read") return { kind: "deny", by: "rule", reason: "plan mode is read-only; investigate, then propose the plan with plan_submit" }
     const pluginPermission = hooks?.has("permission.ask", cwd) ? await hooks.permission?.({ sessionId: input.sessionId, cwd, tool: tool.name, args: structuredClone(call.args as Record<string, unknown>) }) : undefined
     if (pluginPermission?.status === "deny") return { kind: "deny", by: "rule", reason: "plugin permission hook denied the action" }
-    const previewOf = (data: unknown) => tool.preview!(data as never, { cwd, signal: input.signal, ...(options.packages ? { packages: options.packages(input.sessionId) } : {}), ...(options.workflows ? { workflows: options.workflows(input.sessionId) } : {}), ...(options.loops ? { loops: options.loops(input.sessionId) } : {}), ...(options.worktrees ? { worktrees: options.worktrees(input.sessionId) } : {}), ...(options.prWatch ? { prWatch: options.prWatch(input.sessionId) } : {}), ...(options.aiConfig ? { aiConfig: options.aiConfig(input.sessionId) } : {}) }).catch(() => undefined)
+    const previewOf = (data: unknown) => tool.preview!(data as never, { cwd, signal: input.signal, ...(options.packages ? { packages: options.packages(input.sessionId) } : {}), ...(options.workflows ? { workflows: options.workflows(input.sessionId) } : {}), ...(options.loops ? { loops: options.loops(input.sessionId) } : {}), ...(options.worktrees ? { worktrees: options.worktrees(input.sessionId) } : {}), ...(options.prWatch ? { prWatch: options.prWatch(input.sessionId) } : {}), ...(options.prReview ? { prReview: options.prReview(input.sessionId) } : {}), ...(options.aiConfig ? { aiConfig: options.aiConfig(input.sessionId) } : {}) }).catch(() => undefined)
     // `approval: "always"`: the user sees exactly what will run, in every mode and whatever the allow rules or grants say (a tool that runs code the model wrote).
     const always = tool.approval === "always" || parsedPermission.success && tool.approvalFor?.(parsedPermission.data) === true
     // Reading another session asks once per call, except in full access (the user chose to run unattended) or when the user's own
@@ -1564,7 +1567,7 @@ export function createNativeEngine(options: {
     }
     let result: ToolResult
     try {
-      result = await tool.execute(runArgs, { ...storedFiles, cwd, shell: executionShell, ...(userInitiated ? { userInitiated: true } : {}),...(shellPolicy ? { shellPolicy } : {}), ...(webPolicy ? { web: webPolicy } : {}), ...(sandbox ? { sandbox } : {}), environment: frozen.environment, signal: input.signal, outputLimits: { maxBytes: options.toolOutput?.()?.max_bytes ?? 51200, maxLines: options.toolOutput?.()?.max_lines ?? 2000 }, onOutput, ask, ...(loadedInstructions ? { loadedInstructions } : {}), ...(options.instructions ? { instructions: options.instructions } : {}),...(options.tasks ? { taskStatus: (args) => options.tasks!.status(input.sessionId, args, input.signal) } : {}), ...(options.background ? { background: options.background(input.sessionId) } : {}), ...(options.interactive ? { interactive: options.interactive(input.sessionId) } : {}),...(options.workflows ? { workflows: options.workflows(input.sessionId) } : {}), ...(options.peers ? { peers: options.peers(input.sessionId) } : {}), ...(options.sessionMeta ? { sessionMeta: options.sessionMeta(input.sessionId) } : {}), ...(options.threads ? { threads: options.threads(input.sessionId) } : {}), ...(options.packages ? { packages: options.packages(input.sessionId) } : {}), ...(options.review ? { review: options.review(input.sessionId) } : {}), ...(options.loops ? { loops: options.loops(input.sessionId) } : {}), ...(options.worktrees ? { worktrees: options.worktrees(input.sessionId) } : {}), ...(options.prWatch ? { prWatch: options.prWatch(input.sessionId) } : {}), ...(options.recall ? { recall: options.recall(input.sessionId) } : {}), ...(options.computer ? { computer: bindComputerAuthority(options.computer(input.sessionId), input, toolset.main, itemId, () => modeOf(input, toolset)) } : {}), ...(options.aiConfig ? { aiConfig: options.aiConfig(input.sessionId) } : {}), ...(options.browser && call.name === "browser" ? { browser: options.browser(input.sessionId) } : {}), ...(call.name === "image_gen" ? { recentImages: (count: number) => recentImageReferences(messages, count, options.readBlob) } : {}) })
+      result = await tool.execute(runArgs, { ...storedFiles, cwd, shell: executionShell, ...(userInitiated ? { userInitiated: true } : {}),...(shellPolicy ? { shellPolicy } : {}), ...(webPolicy ? { web: webPolicy } : {}), ...(sandbox ? { sandbox } : {}), environment: frozen.environment, signal: input.signal, outputLimits: { maxBytes: options.toolOutput?.()?.max_bytes ?? 51200, maxLines: options.toolOutput?.()?.max_lines ?? 2000 }, onOutput, ask, ...(loadedInstructions ? { loadedInstructions } : {}), ...(options.instructions ? { instructions: options.instructions } : {}),...(options.tasks ? { taskStatus: (args) => options.tasks!.status(input.sessionId, args, input.signal) } : {}), ...(options.background ? { background: options.background(input.sessionId) } : {}), ...(options.interactive ? { interactive: options.interactive(input.sessionId) } : {}),...(options.workflows ? { workflows: options.workflows(input.sessionId) } : {}), ...(options.peers ? { peers: options.peers(input.sessionId) } : {}), ...(options.sessionMeta ? { sessionMeta: options.sessionMeta(input.sessionId) } : {}), ...(options.threads ? { threads: options.threads(input.sessionId) } : {}), ...(options.packages ? { packages: options.packages(input.sessionId) } : {}), ...(options.review ? { review: options.review(input.sessionId) } : {}), ...(options.loops ? { loops: options.loops(input.sessionId) } : {}), ...(options.worktrees ? { worktrees: options.worktrees(input.sessionId) } : {}), ...(options.prWatch ? { prWatch: options.prWatch(input.sessionId) } : {}), ...(options.prReview ? { prReview: options.prReview(input.sessionId) } : {}), ...(options.recall ? { recall: options.recall(input.sessionId) } : {}), ...(options.computer ? { computer: bindComputerAuthority(options.computer(input.sessionId), input, toolset.main, itemId, () => modeOf(input, toolset)) } : {}), ...(options.aiConfig ? { aiConfig: options.aiConfig(input.sessionId) } : {}), ...(options.browser && call.name === "browser" ? { browser: options.browser(input.sessionId) } : {}), ...(call.name === "image_gen" ? { recentImages: (count: number) => recentImageReferences(messages, count, options.readBlob) } : {}) })
     } catch (error) {
       if (!parentItemId) throw error
       return finish({ output: input.signal.aborted ? "cancelled" : error instanceof Error ? error.message : String(error), title: call.name, isError: true, truncated: false }, input.signal.aborted)
@@ -2136,15 +2139,19 @@ export function createNativeEngine(options: {
         const chars = JSON.stringify(taskSpec.description).length - JSON.stringify(TASK_TOOL.description).length
         moveTools("agents", chars, estimateTokens(chars), subagents.length)
       }
-      const readCalls = new Map(messages.flatMap((message) => message.role === "assistant" ? message.toolCalls : []).filter((call) => call.name === "read").map((call) => [call.callId, (call.args as { path?: unknown })?.path]))
+      const readCalls = new Map(messages.flatMap((message) => message.role === "assistant" ? message.toolCalls : []).filter((call) => call.name === "read").map((call) => [call.callId, readPaths((call.args ?? {}) as { path?: unknown; paths?: unknown })]))
       const reads = new Map<string, { path: string; count: number; tokens: number }>()
       for (const message of messages) if (message.role === "tool" && !message.isError) {
-        const file = readCalls.get(message.callId)
-        if (typeof file !== "string") continue
-        const entry = reads.get(file) ?? { path: file, count: 0, tokens: 0 }
-        entry.count++
-        entry.tokens += estimateTokens(messageChars(message))
-        reads.set(file, entry)
+        const files = readCalls.get(message.callId)
+        if (!files?.length) continue
+        // A multi-file read shares its result's tokens evenly among the files it named.
+        const share = Math.round(estimateTokens(messageChars(message)) / files.length)
+        for (const file of files) {
+          const entry = reads.get(file) ?? { path: file, count: 0, tokens: 0 }
+          entry.count++
+          entry.tokens += share
+          reads.set(file, entry)
+        }
       }
       for (const entry of categories) if (entry.chars === 0 && entry.count === undefined) entry.count = 0
       // Context rent: what each tool's schema costs every request against the calls still in the history.

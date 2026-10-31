@@ -8,7 +8,8 @@ const CHARS_PER_TOKEN = 4
 export const HANDOFF_END = "[End of handoff]"
 const REQUEST_CHARS = 2_000
 const MESSAGE_CHARS = 3_000
-const NOTICE_CHARS = 400
+/** A notice can be the whole result (a PR review's findings, ~2,000 characters): it is kept like a message, not as a one-liner. */
+const NOTICE_CHARS = 3_000
 const COMMAND_CHARS = 160
 const OUTPUT_CHARS = 300
 const COMMANDS_PER_TURN = 8

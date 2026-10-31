@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from "node:fs"
 import { homedir } from "node:os"
 import path from "node:path"
 import { defaultLocalTransport, localEndpointPath, readLocalEndpoint } from "@mendcode/client/local-endpoint"
+import { droppedEnvArgs, hostSessionEnvNames, withoutHostSessionEnv } from "@mendcode/client/inherited-env"
 
 /** Same default as the daemon; legacy MendCode data (~/.local/share/mendcode) is never used. */
 export const DEFAULT_DIR = path.join(homedir(), ".mendcode-v2")
@@ -131,9 +132,11 @@ export async function ensureDaemon(options: { dir?: string; timeoutMs?: number; 
   // closing this terminal (no SIGHUP) and its children (e.g. codex app-server) can never compete with
   // the client's raw-mode TTY or be stopped by terminal job control.
   const deadline = Date.now() + (options.timeoutMs ?? 5_000)
-  for (const env of daemonEnvs({ ...process.env, ...(options.trace === undefined ? {} : { MENDCODE_TRACE: options.trace ? "1" : "0" }) })) {
+  // A Claude Code shell's session variables stay with this command: the daemon and everything its sessions start never see them.
+  const dropped = droppedEnvArgs(hostSessionEnvNames(process.env))
+  for (const env of daemonEnvs({ ...withoutHostSessionEnv(process.env), ...(options.trace === undefined ? {} : { MENDCODE_TRACE: options.trace ? "1" : "0" }) })) {
     const [executable, ...args] = daemonCommand()
-    const child = spawn(executable!, [...args, "--dir", dir, ...engineArgs], { detached: true, windowsHide: true, stdio: ["ignore", "ignore", options.printLogs ? "inherit" : "ignore"], env })
+    const child = spawn(executable!, [...args, "--dir", dir, ...engineArgs, ...dropped], { detached: true, windowsHide: true, stdio: ["ignore", "ignore", options.printLogs ? "inherit" : "ignore"], env })
     child.unref()
     // A daemon that dies at once (Bun rejecting the JSC option after an upgrade) is retried with the next environment.
     while (Date.now() < deadline && child.exitCode === null) {

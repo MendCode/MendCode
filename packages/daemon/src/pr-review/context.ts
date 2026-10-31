@@ -6,9 +6,10 @@ import type { PullRequestInfo } from "./pull-request"
 /**
  * What a review reads (docs/pr-review.md): the diff of `base...head` and, for every symbol a hunk touches, its callers and callees
  * from the code graph (depth 2, at most 12 each). The graph shows the blast radius a diff hides without a vector index to keep
- * fresh. The whole context stays inside half the PR's token budget: callers and callees are cut first, then the largest files'
- * diffs, and `truncated` says so. The repository itself is never loaded into the prompt; the review child reads files with its
- * own read-only tools.
+ * fresh. One call's context stays inside half the call's token bound: a diff larger than that is split into parts of whole files
+ * (`parts`, one review call each); within a call, callers and callees are cut first, then the largest files' diffs, and
+ * `truncated` says so. The repository itself is never loaded into the prompt; the review child reads files with its own
+ * read-only tools.
  */
 
 export type GitRun = (args: string[], cwd: string) => Promise<{ code: number; out: string }>
@@ -40,8 +41,6 @@ export type FileDiff = {
   right: Set<number>
   /** New-side lines the change touched: added lines and where lines were deleted. */
   touched: number[]
-  /** Old-side lines the change deleted or rewrote: on an incremental review, the lines of the last reviewed head it changed. */
-  oldTouched: number[]
   deleted: boolean
 }
 
@@ -62,7 +61,18 @@ export type ReviewContext = {
   pullRequest?: PullRequestInfo
   /** Estimated tokens of `diff` plus the symbol lines. */
   tokens: number
+  /**
+   * Set only when the whole diff does not fit one call (`budgetTokens * CONTEXT_SHARE`): the diff in parts of whole files, each
+   * within that bound, reviewed one call per part (engine.ts). `diff` is then the single-call view with the largest files cut.
+   */
+  parts?: ReviewPart[] | undefined
 }
+
+/** One review call's share of a large diff: whole files (a file larger than a call by itself is a one-line note) and their symbols. */
+export type ReviewPart = { files: string[]; diff: string; symbols: ChangedSymbol[]; tokens: number }
+
+/** The most parts one review makes; past it the remaining files' diffs are left out of the last part (the child reads them itself). */
+export const MAX_REVIEW_PARTS = 12
 
 /** Splits `git diff` output by file and reads each file's RIGHT-side lines. */
 export function parseUnifiedDiff(diff: string): FileDiff[] {
@@ -79,15 +89,13 @@ export function parseUnifiedDiff(diff: string): FileDiff[] {
     const touched: number[] = []
     const first = lines.findIndex((line) => line.startsWith("@@"))
     const rows = first < 0 ? [] : parseDiffRows(lines.slice(first))
-    const oldTouched: number[] = []
     let lastNew = 0
     for (const row of rows) {
       if (row.new !== undefined) { lastNew = row.new; if (!deleted) right.add(row.new) }
       if (row.kind === "add" && row.new !== undefined) touched.push(row.new)
-      if (row.kind === "del" && row.old !== undefined) oldTouched.push(row.old)
       if (row.kind === "del" && !deleted) touched.push(lastNew + 1)
     }
-    files.push({ path: target, text, right, touched: [...new Set(touched)].sort((a, b) => a - b), oldTouched, deleted })
+    files.push({ path: target, text, right, touched: [...new Set(touched)].sort((a, b) => a - b), deleted })
   }
   return files
 }
@@ -106,6 +114,43 @@ function touchedNodes(graph: Graph, file: FileDiff): GraphNode[] {
 const symbolLine = (symbol: ChangedSymbol) => `${symbol.symbol} (${symbol.path}:${symbol.line})${symbol.callers.length ? `\n  callers: ${symbol.callers.join(", ")}` : ""}${symbol.callees.length ? `\n  callees: ${symbol.callees.join(", ")}` : ""}`
 export const symbolsText = (symbols: readonly ChangedSymbol[]) => symbols.map(symbolLine).join("\n")
 const tokensOf = (diff: string, symbols: readonly ChangedSymbol[]) => estimateTokens(diff.length) + estimateTokens(symbolsText(symbols).length)
+const leftOut = (file: FileDiff, why: string) => `diff --git a/${file.path} b/${file.path}\n(diff of ${file.text.split("\n").length} lines left out by ${why}; read the file yourself)\n`
+const keepCalls = (symbols: readonly ChangedSymbol[], keep: number) => symbols.map((symbol) => ({ ...symbol, callers: symbol.callers.slice(0, keep), callees: symbol.callees.slice(0, keep) }))
+
+/**
+ * A diff too large for one call, in parts of whole files in diff order (related paths stay together), each within `limit` tokens
+ * with its files' symbols. A file's callers and callees are cut (to 3, then none) before its diff; a file that still does not fit
+ * a call alone is a one-line note in its part (`cut`). At most `MAX_REVIEW_PARTS`: the files past the last one are notes in it.
+ */
+export function splitIntoParts({ files, symbols, limit }: { files: readonly FileDiff[]; symbols: readonly ChangedSymbol[]; limit: number }): { parts: ReviewPart[]; cut: string[] } {
+  const parts: ReviewPart[] = []
+  const cut: string[] = []
+  let texts: string[] = []
+  let paths: string[] = []
+  let held: ChangedSymbol[] = []
+  let used = 0
+  const flush = () => {
+    if (!paths.length) return
+    const diff = texts.join("")
+    parts.push({ files: paths, diff, symbols: held, tokens: tokensOf(diff, held) })
+    texts = []; paths = []; held = []; used = 0
+  }
+  for (const file of files) {
+    let own = symbols.filter((symbol) => symbol.path === file.path)
+    let text = file.text
+    for (const keep of [3, 0]) if (tokensOf(text, own) > limit) own = keepCalls(own, keep)
+    const last = parts.length >= MAX_REVIEW_PARTS - 1
+    if (tokensOf(text, own) > limit || (last && paths.length && used + tokensOf(text, own) > limit)) {
+      text = leftOut(file, last && tokensOf(text, own) <= limit ? `the review's limit of ${MAX_REVIEW_PARTS} parts` : "the token budget (larger than one review call)")
+      cut.push(file.path)
+    }
+    const cost = tokensOf(text, own)
+    if (paths.length && used + cost > limit && !last) flush()
+    texts.push(text); paths.push(file.path); held.push(...own); used += cost
+  }
+  flush()
+  return { parts, cut }
+}
 
 /**
  * The diff of `base...head` in `directory` and the graph context of what it touches, within `budgetTokens * CONTEXT_SHARE`.
@@ -130,26 +175,44 @@ export async function buildReviewContext({ directory, base, head, budgetTokens, 
     }
   }
   const limit = Math.max(1_000, Math.floor(budgetTokens * CONTEXT_SHARE))
+  const whole = tokensOf(files.map((file) => file.text).join(""), symbols)
+  const single = singleView({ files, symbols, limit })
+  // Callers and callees are cut first; a diff that still does not fit one call is reviewed in parts of whole files rather than
+  // with the largest diffs left out.
+  const split = single.cut.length && files.length > 1 ? splitIntoParts({ files, symbols, limit }) : undefined
+  const parts = split && split.parts.length > 1 ? split.parts : undefined
+  if (!parts) {
+    notes.push(...single.notes)
+    return { directory, base, head, diff: single.diff, files, changedSymbols: single.symbols, truncated: single.truncated, notes, tokens: tokensOf(single.diff, single.symbols) }
+  }
+  const cut = split!.cut
+  notes.push(`The diff (about ${whole.toLocaleString("en-US")} tokens) is larger than one review call (${limit.toLocaleString("en-US")}), so it was reviewed in ${parts.length} parts of whole files.`)
+  if (cut.length) notes.push(`The diffs of ${cut.length} file${cut.length === 1 ? "" : "s"} did not fit a part and were left out: ${cut.slice(0, 8).join(", ")}${cut.length > 8 ? ", …" : ""}.`)
+  return { directory, base, head, diff: single.diff, files, changedSymbols: single.symbols, truncated: true, notes, tokens: tokensOf(single.diff, single.symbols), parts }
+}
+
+/** The diff as one call carries it within `limit`: callers and callees cut first (they are context), then the largest files' diffs. */
+function singleView({ files, symbols: all, limit }: { files: readonly FileDiff[]; symbols: ChangedSymbol[]; limit: number }): { diff: string; symbols: ChangedSymbol[]; truncated: boolean; notes: string[]; cut: string[] } {
+  const notes: string[] = []
+  const cut: string[] = []
+  let symbols = all
   const shown = files.map((file) => ({ file, text: file.text }))
   const diffOf = () => shown.map((entry) => entry.text).join("")
   let truncated = false
-  // Callers and callees go first: they are context, the diff is the subject.
   for (const keep of [3, 0]) {
     if (tokensOf(diffOf(), symbols) <= limit) break
-    symbols = symbols.map((symbol) => ({ ...symbol, callers: symbol.callers.slice(0, keep), callees: symbol.callees.slice(0, keep) }))
+    symbols = keepCalls(symbols, keep)
     if (!truncated) notes.push("Callers and callees were cut to fit the token budget.")
     truncated = true
   }
   if (tokensOf(diffOf(), symbols) > limit) {
-    const cut: string[] = []
     for (const entry of [...shown].sort((a, b) => b.text.length - a.text.length)) {
       if (tokensOf(diffOf(), symbols) <= limit) break
-      entry.text = `diff --git a/${entry.file.path} b/${entry.file.path}\n(diff of ${entry.file.text.split("\n").length} lines left out by the token budget; read the file yourself)\n`
+      entry.text = leftOut(entry.file, "the token budget")
       cut.push(entry.file.path)
     }
     truncated = true
     notes.push(`The token budget left out the diffs of ${cut.length} file${cut.length === 1 ? "" : "s"}: ${cut.slice(0, 8).join(", ")}${cut.length > 8 ? ", …" : ""}.`)
   }
-  const diff = diffOf()
-  return { directory, base, head, diff, files, changedSymbols: symbols, truncated, notes, tokens: tokensOf(diff, symbols) }
+  return { diff: diffOf(), symbols, truncated, notes, cut }
 }

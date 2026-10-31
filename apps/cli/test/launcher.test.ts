@@ -5,8 +5,9 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { daemonCommand, daemonEnvs, ensureDaemon, forgetLeanJit, isDaemonPid, leanClientEnv, ownerListening, terminateDaemon } from "../src/launcher"
-import { writeFileSync } from "node:fs"
+import { readFileSync, writeFileSync } from "node:fs"
 import { createServer } from "node:net"
+import { askHarnessesAndStop, CLAUDE_SHELL_ENV, expectCleanChild, fakeClaude, USER_ENV } from "../../../packages/daemon/test/inherited-env-fixture"
 
 describe("a daemon that owns the data directory but does not listen yet", () => {
   test("is waited for: the client attaches once its socket opens, instead of failing at once", async () => {
@@ -123,6 +124,30 @@ describe("ensureDaemon", () => {
       expect(first.started).toBe(true)
       expect(first.socketPath).toBe(path.join(dir, "mendd.sock"))
       expect((await ensureDaemon({ dir, engine: "faux" })).started).toBe(false)
+    } finally {
+      await terminateDaemon(dir)
+      rmSync(dir, { recursive: true, force: true })
+    }
+  }, 30_000)
+
+  test.skipIf(process.platform === "win32")("from a Claude Code shell: the daemon starts without its session variables and is told their names; what it starts keeps the user's API settings", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "mendd-launch-env-"))
+    const claude = fakeClaude(dir)
+    const extra: Record<string, string> = { ...CLAUDE_SHELL_ENV, ...USER_ENV, ...claude.env }
+    const saved = Object.fromEntries(Object.keys(extra).map((name) => [name, process.env[name]]))
+    Object.assign(process.env, extra)
+    try {
+      let started: Awaited<ReturnType<typeof ensureDaemon>>
+      try { started = await ensureDaemon({ dir, engine: "faux", timeoutMs: 15_000 }) } finally {
+        for (const [name, value] of Object.entries(saved)) value === undefined ? delete process.env[name] : (process.env[name] = value)
+      }
+      expect(started.started).toBe(true)
+      // The flag carries names only, for the daemon's log; this process keeps its own environment.
+      const args = Bun.spawnSync(["ps", "-o", "args=", "-p", readFileSync(path.join(dir, "mendd.lock"), "utf8").trim()]).stdout.toString()
+      expect(args).toContain("--dropped-env CLAUDECODE,")
+      for (const value of ["leaked-session-id", "leaked-token"]) expect(args).not.toContain(value)
+      await askHarnessesAndStop(started)
+      expectCleanChild(claude)
     } finally {
       await terminateDaemon(dir)
       rmSync(dir, { recursive: true, force: true })
