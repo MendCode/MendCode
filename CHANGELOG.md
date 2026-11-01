@@ -15,6 +15,12 @@ no model, and the pull request reviewer keeps working when the daemon starts wit
 
 ### New
 
+- The model is told what MendCode can do: a native session's prompt names, in one line, the tools it can load (image generation,
+  computer use, memory, web, workflows and others behind `tool_search`), taken from the session's real catalogue, so the model uses
+  them instead of saying it cannot. The rendering lines say what this terminal draws (colour swatches, callouts, clickable paths, diff
+  cards; a Markdown image is not drawn). Codex, pi and ACP agents get those lines and the `mendcode docs` pointer too.
+- Codex sessions get MendCode's own tools (code graph, image generation, computer use, memory and the rest) through the same
+  loopback bridge as Claude Code, with one approval: MendCode's. Gated like Claude Code by `harness_tools` (balanced and full).
 - Sign in with ChatGPT: `/connect chatgpt` (or `control-plane auth login --provider chatgpt --method browser --execute`) shows a
   link; you sign in in the browser, allow MendCode to use your ChatGPT plan, and MendCode keeps a login of its own. No client id is
   shipped or needed: OpenAI registers MendCode for your account on the first sign-in, and you can limit or revoke it in ChatGPT →
