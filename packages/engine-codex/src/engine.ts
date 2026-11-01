@@ -107,11 +107,36 @@ export function codexQuota(rateLimits: any, fetchedAt: number): QuotaDraft | und
  * No credentials are read or copied: Codex authenticates itself. The process starts on first use
  * and is shared by all sessions (P6).
  */
-/** Codex's own default drops inherited variables named like a key, secret or token: the credentials are kept, and the daemon's other such variables still are dropped, by name. */
-function credentialArgs(environment: EngineEnvironment | undefined): string[] {
+/** Codex's own default drops inherited variables named like a key, secret or token: the credentials are kept, and the daemon's other such variables, and the bridge's bearers (`own`), still are dropped, by name. */
+function credentialArgs(environment: EngineEnvironment | undefined, own: readonly string[]): string[] {
   if (!environment || !Object.keys(environment.values).length) return []
-  const hidden = Object.keys(process.env).filter((name) => /KEY|SECRET|TOKEN/i.test(name) && !(name in environment.values))
+  const hidden = [...Object.keys(process.env).filter((name) => /KEY|SECRET|TOKEN/i.test(name) && !(name in environment.values)), ...own]
   return ["-c", "shell_environment_policy.ignore_default_excludes=true", "-c", `shell_environment_policy.exclude=${JSON.stringify(hidden)}`]
+}
+
+type HostServer = NonNullable<NonNullable<TurnInput["externalMcp"]>["servers"]>[number]
+/** A MendCode tool call can wait on the user's approval card or a long computer-use step; Codex's own default cuts one at 60 s. */
+const HOST_TOOL_TIMEOUT_SEC = 86_400
+
+/**
+ * MendCode's own tools (the daemon's loopback bridge) as this process's `mcp_servers`. The bearer is in the process environment
+ * (`bearer_token_env_var`, a name with TOKEN in it, which Codex keeps out of its shells), never on the command line. MendCode asks
+ * before it runs a call, so Codex does not ask again (`default_tools_approval_mode = "approve"`).
+ */
+function hostServerConfig(servers: readonly HostServer[]) {
+  const args: string[] = []
+  const env: Record<string, string> = {}
+  const names = new Set<string>()
+  for (const server of servers) {
+    const token = /^Bearer (.+)$/.exec(server.headers.find((header) => header.name.toLowerCase() === "authorization")?.value ?? "")?.[1]
+    if (!token || !/^[A-Za-z0-9_]+$/.test(server.name)) continue
+    const variable = `MENDCODE_MCP_TOKEN_${server.name.toUpperCase()}`
+    const key = `mcp_servers.${server.name}`
+    env[variable] = token
+    names.add(server.name)
+    args.push("-c", `${key}.url=${JSON.stringify(server.url)}`, "-c", `${key}.bearer_token_env_var=${JSON.stringify(variable)}`, "-c", `${key}.default_tools_approval_mode="approve"`, "-c", `${key}.tool_timeout_sec=${HOST_TOOL_TIMEOUT_SEC}`)
+  }
+  return { args, env, names }
 }
 
 export function createCodexEngine(options: {
@@ -134,6 +159,12 @@ export function createCodexEngine(options: {
   environment?: EngineEnvironment | undefined
   /** The session's run limits (`codexRunLimits`): a PR review child or fix session loads nothing of its checkout's own Codex setup. */
   runLimits?: CodexRunLimits | undefined
+  /** Text for a project directory added to the thread's developer instructions, after Codex's own (which stay): what MendCode draws that Codex's terminal does not. */
+  appendSystem?(cwd: string): string | undefined
+  /** MendCode's own tools (code graph, computer use, image_gen, memory, settings…) for the one session this process serves, through the daemon's loopback MCP bridge. */
+  hostServers?: readonly HostServer[]
+  /** What the model is told about those tools. Codex keeps an MCP server's `instructions` out of the model's prompt (0.162), so they join the thread's developer instructions. */
+  hostInstructions?: string | undefined
   transportFactory?: (input: { args: string[]; cwd: string; env?: Record<string, string> }) => Transport
   /** Stores an image Codex generated (it saves it under `savedPath`), so the transcript shows it as for a native session. */
   storeImage?(bytes: Uint8Array, mime: string, sessionId: SessionId): Promise<BlobRef>
@@ -147,6 +178,7 @@ export function createCodexEngine(options: {
   const idleMs = options.idleMs
   const model = options.model ?? CODEX_MODEL
   const effort = options.effort ?? CODEX_EFFORT
+  const host = hostServerConfig(options.hostServers ?? [])
   const isolated = new Set<ReturnType<typeof createCodexEngine>>()
   const threads = new Map<SessionId, string>()
   const turnsByCodexTurn = new Map<string, ActiveTurn>()
@@ -180,7 +212,8 @@ export function createCodexEngine(options: {
         return
       case "item/started": {
         const kind = KIND[params.item?.type]
-        if (!kind) return
+        // A call of MendCode's own tools runs in the bridge as a call of this turn, which draws its card: none here.
+        if (!kind || (params.item.type === "mcpToolCall" && host.names.has(params.item.server))) return
         const itemId = input.newItemId()
         turn.items.set(params.item.id, itemId)
         input.emit({ type: "item.started", itemId, kind, ...(kind === "tool_call" ? { meta: { tool: toolTitle(params.item).slice(0, 200) } } : {}) })
@@ -257,6 +290,11 @@ export function createCodexEngine(options: {
 
   async function onRequest(method: string, params: any): Promise<unknown> {
     const turn = turnFor(params)
+    if (method === "mcpServer/elicitation/request") {
+      // `approve` keeps Codex from asking about MendCode's own tools; should a version ask anyway, MendCode asks when it runs the call.
+      const own = turn && host.names.has(params?.serverName) && params?._meta?.codex_approval_kind === "mcp_tool_call"
+      return { action: own ? "accept" : "decline", content: null, _meta: null }
+    }
     const isApproval = method === "item/commandExecution/requestApproval" || method === "item/fileChange/requestApproval"
     if (!turn || !isApproval) return { decision: "decline" }
     const isEdit = method === "item/fileChange/requestApproval"
@@ -278,8 +316,9 @@ export function createCodexEngine(options: {
   function ensureStarted() {
     if (ready && rpc && !rpc.closed) return ready
     // Live web search: the sandbox gives the child no network, so without it a Codex agent (a sub-agent too) cannot look anything up.
-    const args = ["app-server", "-c", `model=${JSON.stringify(model)}`, "-c", `model_reasoning_effort=${JSON.stringify(effort)}`, "-c", `web_search="live"`, ...(options.fast ? ["-c", `service_tier="fast"`] : []), ...credentialArgs(options.environment), ...codexRunLimits(options.runLimits, options.cwd), ...(options.processArgs ?? [])]
-    const env = options.environment && Object.keys(options.environment.values).length ? { env: options.environment.values } : {}
+    const args = ["app-server", "-c", `model=${JSON.stringify(model)}`, "-c", `model_reasoning_effort=${JSON.stringify(effort)}`, "-c", `web_search="live"`, ...(options.fast ? ["-c", `service_tier="fast"`] : []), ...credentialArgs(options.environment, Object.keys(host.env)), ...codexRunLimits(options.runLimits, options.cwd), ...host.args, ...(options.processArgs ?? [])]
+    const values = { ...options.environment?.values, ...host.env }
+    const env = Object.keys(values).length ? { env: values } : {}
     transport = options.transportFactory?.({ args, cwd: options.cwd, ...env }) ?? spawnCodex({ bin: options.bin ?? "codex", args, cwd: options.cwd, ...env })
     rpc = createRpc(transport, { notification: onNotification, request: onRequest }, options.trace)
     const client = rpc
@@ -302,9 +341,11 @@ export function createCodexEngine(options: {
   async function threadFor(sessionId: SessionId, plan: boolean) {
     const existing = threads.get(sessionId)
     if (existing) return existing
-    // A thread's own developer instructions take the place of the process's (`developer_instructions`), so the language pin rides along.
-    const developer = options.environment?.note ? [options.environment.note, codexLanguageInstruction(options.runLimits)].filter(Boolean).join("\n\n") : undefined
-    const settings = { model, cwd: options.cwd, approvalPolicy: "on-request", sandbox: plan ? "read-only" : "workspace-write", ...(developer ? { developerInstructions: developer } : {}) }
+    // `developerInstructions` is a developer message on top of Codex's base instructions; `baseInstructions` would replace them. A
+    // thread's own developer instructions take the place of the process's (`developer_instructions`), so the language pin rides along.
+    const own = [options.appendSystem?.(options.cwd), host.names.size ? options.hostInstructions : undefined, options.environment?.note].filter(Boolean)
+    const developerInstructions = own.length ? [...own, codexLanguageInstruction(options.runLimits)].filter(Boolean).join("\n\n") : ""
+    const settings = { model, cwd: options.cwd, approvalPolicy: "on-request", sandbox: plan ? "read-only" : "workspace-write", ...(developerInstructions ? { developerInstructions } : {}) }
     const bound = options.bindings?.get(sessionId)
     if (bound) {
       // Resume the same Codex conversation after a daemon restart; fall back to a new thread if it is gone.
@@ -326,7 +367,7 @@ export function createCodexEngine(options: {
       if (input.externalMcp) {
         const mcp = input.externalMcp
         const { trace: _trace, ...processOptions } = options
-        const child = createCodexEngine({ ...processOptions, cwd: mcp.cwd, processArgs: mcp.args, waitingForMcp: mcp.waiting })
+        const child = createCodexEngine({ ...processOptions, cwd: mcp.cwd, processArgs: mcp.args, waitingForMcp: () => Boolean(mcp.waiting?.() || options.waitingForMcp?.()) })
         isolated.add(child)
         const turn = processMcpTurn(input)
         try { return await child.runTurn(turn) }

@@ -18,8 +18,9 @@ import { PROGRAM_NAME } from "@mendcode/program"
 /**
  * Characters of static guidance each mode may add, and the ceilings of the composed prompt (measured with the packaged base prompt and
  * no project instructions, skills or memory). Every mode but `custom` carries the one-line pointer to `mendcode docs` (`selfKnowledge`);
- * beyond it `minimal` and `focus` add none: the long guidance is the opt-in `guide` mode. `guide` adds the working basics, one family
- * body and at most one model note; `full` adds the generated operator guide on top of that. Tests hold every file to these.
+ * beyond it `minimal` adds none and `focus` the short core of the basics and at most one model note; the long guidance is the opt-in
+ * `guide` mode. `guide` adds the working basics, one family body and at most one model note; `full` adds the generated operator guide on
+ * top of that. Tests hold every file to these.
  */
 export const PROMPT_BUDGETS = {
   // Measured with gpt-6-luna on "make my footer like my other tool's" in a project that is not MendCode: "For any MendCode feature or
@@ -40,10 +41,14 @@ export const PROMPT_BUDGETS = {
   // write, refuse on a dirty tree"), with the tool's check action and the cards, made it 14 and 15 of 15 (395 bytes).
   // Both lines merged (screen parts, then behavior): 428 bytes, measured again with both evals.
   selfKnowledge: 430,
+  // `focus` (the default) had only a one-sentence family note: the core gives it the guide's every-call habits (preambles, `todo`,
+  // `path:line`, result first) and the model note joins it; together they stay under 1,200 characters over that focus (not measured with an eval).
+  focus: { core: 600 },
   guide: { basics: 1_100, family: 3_000, modelNote: 600 },
   // 1,500: the guide names every card topic (45 of them now, 22 before) so the model picks one without a call; the prose was trimmed first.
   full: { operatorGuide: 1_500 },
-  composed: { guide: 6_500, full: 7_400 },
+  // full 7,400 -> 7,800: the base prompt's terminal rendering block (+389 characters, sent to every engine) put codex full at 7,619.
+  composed: { guide: 6_500, full: 7_800 },
 } as const
 
 export type ModelNote = { label: string; match: RegExp; text: string }
@@ -98,9 +103,25 @@ export function familyGuidance(family: PromptFocus): FamilyGuidance | undefined 
   return family === "neutral" ? undefined : once(`family:${family}`, () => parseFamilyGuidance(readFileSync(FAMILY_FILES[family], "utf8")))
 }
 
+/** The basics file holds two blocks: the working basics `guide` sends, then, after a `<!-- focus -->` line, the short core `focus` sends instead. */
+const FOCUS_MARKER = /^<!-- focus -->$/m
+function basicsBlocks(): { guide: string; focus: string } {
+  return once("basics", () => {
+    const body = frontmatter(readFileSync(basicsFile, "utf8")).body
+    const marker = FOCUS_MARKER.exec(body)
+    if (!marker) throw new TypeError("[GUIDANCE]: basics.prompt.md needs a <!-- focus --> block")
+    return { guide: body.slice(0, marker.index).trim(), focus: body.slice(marker.index + marker[0].length).trim() }
+  })
+}
+
 /** The block every family shares in `guide`: how this harness's tools behave. */
 export function focusBasics(): string {
-  return once("basics", () => frontmatter(readFileSync(basicsFile, "utf8")).body)
+  return basicsBlocks().guide
+}
+
+/** What `focus` carries of the basics: preambles, `todo`, `path:line`, result-first answers. `guide` sends the full basics and not this. */
+export function focusCore(): string {
+  return basicsBlocks().focus
 }
 
 /** What `guide` adds for a family: the working basics, then the family body when the family has one. */

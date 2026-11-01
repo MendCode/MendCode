@@ -63,6 +63,7 @@ type Setup = {
   args?: string[]
   smartBash?: (input: { args: Record<string, unknown>; cwd: string }) => "allow" | "ask" | "deny"
   environment?: () => { values: Record<string, string>; note: string } | undefined
+  appendSystem?: (cwd: string) => string | undefined
 }
 
 function setup(patch: Setup = {}) {
@@ -82,6 +83,7 @@ function setup(patch: Setup = {}) {
     permissionFor: () => patch.permission?.() ?? "ask",
     ...(patch.smartBash ? { smartBash: patch.smartBash } : {}),
     ...(patch.environment ? { environment: patch.environment } : {}),
+    ...(patch.appendSystem ? { appendSystem: patch.appendSystem } : {}),
     capabilities: () => patch.capabilities ?? { settled: true, disableExtensions: true },
     ...(patch.idleMs ? { idleMs: patch.idleMs } : {}),
     ...(patch.settleQuietMs ? { settleQuietMs: patch.settleQuietMs } : {}),
@@ -204,6 +206,19 @@ describe("a normal turn", () => {
     expect(await h.engine.runTurn(turnInput({ sessionId }).input)).toEqual({ status: "ok" })
     expect(h.spawned).toHaveLength(2)
     expect(h.envs[1]).toMatchObject({ INSTABOX_KEY: "ib-rotated" })
+  })
+
+  test("the daemon's appended text and the credentials note are one --append-system-prompt for the session's directory; none without either", async () => {
+    const roots: string[] = []
+    const h = setup({ appendSystem: (root) => (roots.push(root), "Terminal rendering (assistant messages):\n- A mermaid fence is drawn."), environment: () => ({ values: { INSTABOX_KEY: "ib-secret" }, note: "Credentials: INSTABOX_KEY." }) })
+    expect(await h.engine.runTurn(turnInput({ sessionId: ids("session") }).input)).toEqual({ status: "ok" })
+    expect(h.spawned[0]!.filter((arg) => arg === "--append-system-prompt")).toHaveLength(1)
+    expect(h.spawned[0]).toEqual(expect.arrayContaining(["--append-system-prompt", "Terminal rendering (assistant messages):\n- A mermaid fence is drawn.\n\nCredentials: INSTABOX_KEY."]))
+    expect(h.spawned[0]).not.toContain("--system-prompt")
+    expect(roots).toEqual([h.dir])
+    const bare = setup({ appendSystem: () => undefined })
+    expect(await bare.engine.runTurn(turnInput({ sessionId: ids("session") }).input)).toEqual({ status: "ok" })
+    expect(bare.spawned[0]).not.toContain("--append-system-prompt")
   })
 
   test("the process stays up between turns and the bridge file goes away with the engine", async () => {

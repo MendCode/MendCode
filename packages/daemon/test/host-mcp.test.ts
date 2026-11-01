@@ -81,6 +81,17 @@ describe("native tools bridge for another harness", () => {
     expect(hostInstructions(TOOLS)).not.toContain("mcp__mendcode__webfetch")
   })
 
+  test("Codex is told its tools sit under exec and is never sent to ToolSearch, which it lacks; Claude's text keeps ToolSearch", () => {
+    const image = { name: "image_gen", description: "Generate an image", parameters: { type: "object", properties: {} } }
+    const codex = hostInstructions([...TOOLS, image], "codex")
+    expect(codex).not.toContain("ToolSearch")
+    expect(codex).toContain("tools.mcp__mendcode__graph_find")
+    expect(codex).toContain("ALL_TOOLS")
+    expect(codex).toContain("mcp__mendcode__image_gen")
+    expect(hostInstructions([...TOOLS, image])).toContain("ToolSearch")
+    expect(hostInstructions([...TOOLS, image])).not.toContain("ALL_TOOLS")
+  })
+
   test("a session with image_gen is told it can make images, one without it is not", () => {
     const image = { name: "image_gen", description: "Generate an image", parameters: { type: "object", properties: {} } }
     expect(hostInstructions([image])).toContain("mcp__mendcode__image_gen")

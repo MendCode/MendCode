@@ -33,7 +33,9 @@ import {
   createSkillTool,
   createMemorySelector,
   joinSystemParts,
+  capabilityIndex,
   type SystemPart,
+  type ToolCatalog,
   questionTool,
   todoTool,
   createPermissionReviewer,
@@ -391,8 +393,11 @@ let extractionSettings: () => import("@mendcode/protocol").Settings = () => ({})
 let sessionsUsed = () => false
 const dreamComplete = (prompt: string, signal: AbortSignal, model?: ModelChoice) => completeWithUsage({ system: "You curate long-term memory for a coding assistant. Reply with JSON only.", prompt, signal, model })
 
-/** The system prompt as named parts, so the engine can both join them and report each one's size. `memory` is the memory block for this prompt. */
-function systemParts(root: string, memory: string, prompts: PromptFiles, modelID?: string, contextFiles = true, skillsListed = true): SystemPart[] {
+/**
+ * The system prompt as named parts, so the engine can both join them and report each one's size. `memory` is the memory block for this
+ * prompt; `tools` is the call's catalogue, named in one line (`capabilities-index`) where the prompt mode carries it.
+ */
+function systemParts(root: string, memory: string, prompts: PromptFiles, modelID?: string, contextFiles = true, skillsListed = true, tools?: ToolCatalog): SystemPart[] {
   // A session without the skill tool (a PR review child) is not shown skills it cannot load.
   const skillBlock = skillsListed ? skills.block(root) : ""
   // SYSTEM.md replaces the packaged prompt, APPEND_SYSTEM.md follows as a part of its own; the project's files win over the user's.
@@ -403,6 +408,7 @@ function systemParts(root: string, memory: string, prompts: PromptFiles, modelID
     rest: [
       { id: "instructions", label: "project instructions", text: contextFiles ? instructionsFor(root) : "" },
       { id: "skills", label: "skills", text: skillBlock, count: (skillBlock.match(/^- /gm) ?? []).length },
+      { id: "capabilities-index", label: "MendCode capabilities", text: tools ? capabilityIndex(tools) : "" },
       { id: "memory", label: "memory", text: memory, count: (memory.match(/^- \[/gm) ?? []).length },
     ],
   }), { ...(modelID ? { modelID } : {}) })
@@ -534,6 +540,13 @@ export const daemon = await startDaemon({
     const toolOutputs = createToolOutputs(dir, Date.now, store.writeStoredFile)
     // `/env` credentials for the engines that run their own tools; `engineEnvironment: false` keeps them native-only.
     const credentialsFor = (sessionId: Parameters<typeof store.sessionModel>[0]) => engineEnvironment({ enabled: store.settings.get().engineEnvironment !== false, values: () => secrets.environment?.(sessionId) ?? {} })
+    // What an engine with its own system prompt (Claude Code, Codex, pi, ACP) is told after it: what MendCode draws and where its
+    // docs are. Read on the first such engine's start only (P5). The minimal prompt mode adds nothing to any engine's prompt.
+    let harnessRendering: Promise<string> | undefined
+    const harnessSystem = async () => {
+      const text = `${await (harnessRendering ??= loadTerminalRendering())}\n\n${selfKnowledgeText()}`
+      return (root: string) => (createPromptModes(dir).status(root).mode === "minimal" ? undefined : text)
+    }
     const transcripts = createSessionTranscripts(dir, Date.now, store.writeStoredFile)
     const configured = engineName === "native"
       ? withAcpEngine({
@@ -549,6 +562,7 @@ export const daemon = await startDaemon({
               onEfforts: acpAgents.learnEfforts,
               cwdFor: (sessionId) => store.sessionDirectory(sessionId) || cwd,
               environment: credentialsFor,
+              appendSystem: await harnessSystem(),
               hostServers: (sessionId) => harness.servers(sessionId),
               waitingForMcp: harness.waiting,
               bindings: {
@@ -569,12 +583,11 @@ export const daemon = await startDaemon({
           // Loaded on the first Claude Code turn only (P5).
           claude: async () => {
             const { createClaudeEngine, claudeCacheEnv, claudeRunLimits } = await import("@mendcode/engine-claude")
-            const terminalRendering = await loadTerminalRendering()
+            const appendSystem = await harnessSystem()
             const engine = createClaudeEngine({
               bin: claudeBin,
               clock,
               cwdFor: (sessionId) => store.sessionDirectory(sessionId) || cwd,
-              // The minimal prompt mode adds nothing to any engine's prompt.
               // MendCode's native tools (code graph, computer use, memory, settings) through the daemon's loopback bridge.
               // A session's run limits reach Claude Code too: no CLAUDE.md, no auto memory, and for a PR review child not the PR checkout's settings.
               sessionArgs: (sessionId) => [...harness.args(sessionId), ...claudeRunLimits(runLimits.get(sessionId)).args],
@@ -584,7 +597,7 @@ export const daemon = await startDaemon({
               ownTools: `mcp__${HOST_MCP_SERVER}__`,
               // The same MendCode docs pointer a native session carries: slash commands, the PR reviewer and other MendCode features
               // are found with `mendcode docs --search`, not guessed from the harness's own tools.
-              appendSystem: (root) => (createPromptModes(dir).status(root).mode === "minimal" ? undefined : `${selfKnowledgeText()}\n\n${terminalRendering}`),
+              appendSystem,
               // `/fast` reaches Claude Code on the models that have its fast mode; the process starts with it.
               modelFor: (sessionId, override) => { const turn = turnModel(sessionId, override); const choice = claudeAlias(turn); return (turn.fast ?? store.settings.get().serviceTier === "fast") && claudeFastModel(choice.model) ? { ...choice, fast: true } : choice },
               bindings: {
@@ -753,11 +766,11 @@ export const daemon = await startDaemon({
           hiddenTools: (directory) => (prReviewOn() ? hiddenGraphTools(directory) : [...hiddenGraphTools(directory), "review_config", "pr_review"]),
           system: (root, context) => {
             const limits = context ? runLimits.get(context.sessionId) : undefined
-            return systemWithLimits(joinSystemParts(systemParts(root, limits?.noMemory ? "" : memoryFor(root, context), extensions.prompts, context ? mainModel(context.sessionId).model : undefined, limits?.noContextFiles !== true, !limits?.excludeTools?.includes("skill"))), limits)
+            return systemWithLimits(joinSystemParts(systemParts(root, limits?.noMemory ? "" : memoryFor(root, context), extensions.prompts, context ? mainModel(context.sessionId).model : undefined, limits?.noContextFiles !== true, !limits?.excludeTools?.includes("skill"), context?.tools)), limits)
           },
           systemParts: (root, context) => {
             const limits = context ? runLimits.get(context.sessionId) : undefined
-            const parts = systemParts(root, limits?.noMemory ? "" : memoryFor(root, context), extensions.prompts, context ? mainModel(context.sessionId).model : undefined, limits?.noContextFiles !== true, !limits?.excludeTools?.includes("skill"))
+            const parts = systemParts(root, limits?.noMemory ? "" : memoryFor(root, context), extensions.prompts, context ? mainModel(context.sessionId).model : undefined, limits?.noContextFiles !== true, !limits?.excludeTools?.includes("skill"), context?.tools)
             return limits?.systemPrompt !== undefined || limits?.appendSystemPrompt ? [{ id: "run", label: "scripted run prompt", text: systemWithLimits(joinSystemParts(parts), limits) }] : parts
           },
         }),
@@ -786,6 +799,11 @@ export const daemon = await startDaemon({
       create: async (turn) => {
         const { createCodexEngine } = await import("@mendcode/engine-codex")
         const model = turnModel(turn.sessionId, turn.selection?.model)
+        // MendCode's native tools (code graph, computer use, image_gen, memory, settings) through the daemon's loopback bridge, as
+        // Claude Code gets them (`harness_tools`); the process is this turn's, so the bridge's port and bearer are always current.
+        // Their instructions come in every prompt mode, as Claude Code's server instructions do; minimal still drops `appendSystem`.
+        const hostServers = harness.servers(turn.sessionId)
+        const hostInstructions = hostServers.length ? await harness.instructions(turn.sessionId, "codex") : undefined
         return createCodexEngine({
           cwd: store.sessionDirectory(turn.sessionId) || cwd, clock, model: model.model.slice("codex:".length), ...(model.effort ? { effort: model.effort } : {}), ...((model.fast ?? store.settings.get().serviceTier === "fast") ? { fast: true } : {}),
           bindings: { get: (id) => store.engineBindings.get(id, "codex"), set: (id, thread) => store.engineBindings.set(id, "codex", thread) },
@@ -793,6 +811,8 @@ export const daemon = await startDaemon({
           environment: credentialsFor(turn.sessionId),
           // A PR review child or fix session: none of the checkout's AGENTS.md, `.codex/` config, hooks, rules or skills; a review child neither memories nor skills.
           runLimits: runLimits.get(turn.sessionId),
+          appendSystem: await harnessSystem(),
+          ...(hostServers.length ? { hostServers, hostInstructions, waitingForMcp: harness.waiting } : {}),
           storeImage: async (bytes, mime, sessionId) => {
             const ref = store.putBlob(bytes, mime)
             store.refBlob(ref, sessionId)
@@ -815,6 +835,7 @@ export const daemon = await startDaemon({
           modelFor: (sessionId, override) => turnModel(sessionId, override),
           cwdFor: (sessionId) => store.sessionDirectory(sessionId) || cwd,
           environment: credentialsFor,
+          appendSystem: await harnessSystem(),
           projectTrusted: (root) => (store.settings.get().trustedToolDirs ?? []).some((entry) => canonicalDir(entry) === canonicalDir(root)),
           sandbox: sessionSandbox,
           permissionFor: (sessionId) => store.permissionModeOf(sessionId),

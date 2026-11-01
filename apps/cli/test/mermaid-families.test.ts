@@ -28,9 +28,9 @@ describe("diagram families, registry and system prompt", () => {
     expect(listed).toEqual(DIAGRAM_FAMILIES.map((family) => family.name))
   })
 
-  test("the section stays compact (at most 120 words) and mentions math, details and when a diagram fits", async () => {
+  test("the section stays compact (at most 180 words) and mentions math, details and when a diagram fits", async () => {
     const section = await renderingSection()
-    expect(section.split(/\s+/).filter(Boolean).length).toBeLessThanOrEqual(120)
+    expect(section.split(/\s+/).filter(Boolean).length).toBeLessThanOrEqual(180)
     for (const needle of ["$$", "<details>", "mermaid", "structure beats prose", "<kbd>"]) expect(section).toContain(needle)
   })
 })

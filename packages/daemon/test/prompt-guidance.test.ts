@@ -10,7 +10,7 @@ import { parseSlash } from "../../../apps/cli/src/view/commands"
 import { PROGRAM_NAME } from "@mendcode/program"
 import { CARDS_DIR, OPERATOR_GUIDE_FILE, OPERATOR_GUIDE_TEMPLATE, cardTopics, operatorGuide, slashCommands } from "../src/operator-guide"
 import { familyForModel, resolveFocus } from "../src/prompt-focus"
-import { PROMPT_BUDGETS, familyGuidance, focusBasics, guideText, modelNote, operatorGuideText, parseFamilyGuidance, selfKnowledgeText } from "../src/prompt-guidance"
+import { PROMPT_BUDGETS, familyGuidance, focusBasics, focusCore, guideText, modelNote, operatorGuideText, parseFamilyGuidance, selfKnowledgeText } from "../src/prompt-guidance"
 import { composePromptParts, createPromptModes } from "../src/prompt-modes"
 import pinned from "./fixtures/prompt-focus-pre-guide.json"
 
@@ -67,11 +67,21 @@ describe("family guidance files", () => {
     expect(guideText("neutral")).toBe(basics)
     expect(guideText("codex")).toBe(`${basics}\n\n${familyGuidance("codex")!.body}`)
   })
+  test("the focus core is the short part of the basics: preambles, todo, path:line, result first, inside its budget", () => {
+    const core = focusCore()
+    expect(core.length).toBeLessThanOrEqual(PROMPT_BUDGETS.focus.core)
+    for (const habit of ["say in one sentence what you will do", "`todo`", "`tool_search`", "`path:line`", "result first"]) expect(core).toContain(habit)
+    // The base prompt's rendering block already says edits show as diff cards; the core does not repeat it.
+    expect(core).not.toMatch(/paste diffs/i)
+    expect(focusBasics()).not.toContain(core)
+    expect(focusBasics()).not.toContain("<!-- focus -->")
+    expect(core).not.toMatch(/\d{4}-\d{2}-\d{2}|\{\{|<!--/)
+  })
   test("each guidance file names only tools the native engine ships", () => {
     // The built-in set plus the tools the engine and daemon add per session (checked in their own tests).
     const known = new Set([...BUILTIN_TOOLS.map((tool) => tool.name), "todo", "task", "loop", "question", "skill", "tool_search", "memory"])
     for (const name of ["read", "edit", "apply_patch", "write", "grep", "glob", "ls", "shell", "shell_output"]) expect(known.has(name)).toBe(true)
-    for (const text of [focusBasics(), ...PROMPT_FAMILIES.flatMap((family) => [familyGuidance(family)!.body, ...familyGuidance(family)!.notes.map((note) => note.text)])]) {
+    for (const text of [focusBasics(), focusCore(), ...PROMPT_FAMILIES.flatMap((family) => [familyGuidance(family)!.body, ...familyGuidance(family)!.notes.map((note) => note.text)])]) {
       for (const [, name] of text.matchAll(/`([a-z_]+)`/g)) {
         if (/^(oldString|offset|limit|background|path|tail|true|false)$/.test(name!)) continue
         expect(known.has(name!)).toBe(true)
@@ -135,9 +145,10 @@ describe("focus is what it was before the provider guide", () => {
   const parts: SystemPart[] = [{ id: "base", label: "base prompt", text: "BASE PROMPT /proj/example" }, { id: "instructions", label: "project instructions", text: "project rules" }, { id: "skills", label: "skills", text: "skill catalogue" }]
   const old = ["codex", "claude", "gemini", "kimi", "deepseek", "mistral", "neutral"]
   const models = [undefined, "gpt-6-astra", "gpt-5.6", "claude-sonnet-5-5", "claude-opus-5", "deepseek-v4-pro", "kimi-k2.5"]
-  /** The composed parts without the one-line docs pointer, which the fixture predates: what is left must be the pinned output byte for byte. */
-  const withoutPointer = (composed: ReturnType<typeof composePromptParts>) => composed.parts.filter((part) => part.id !== "self-knowledge")
-  test("minimal and focus parts are identical to the pre-change output for every earlier family, model and role, plus exactly the one-line docs pointer", () => {
+  /** The parts the fixture predates: the one-line docs pointer, and in focus the working core and the model note. What is left must be the pinned output byte for byte. */
+  const ADDED = ["self-knowledge", "focus-core", "model-guidance"]
+  const withoutPointer = (composed: ReturnType<typeof composePromptParts>) => composed.parts.filter((part) => !ADDED.includes(part.id))
+  test("minimal and focus parts are identical to the pre-change output for every earlier family, model and role, plus the docs pointer and, in focus, the core and the model note", () => {
     const dir = temp()
     let checked = 0
     for (const mode of ["minimal", "focus"] as const) for (const family of old) for (const model of models) for (const [role, workflow] of [[undefined, undefined], ["review", undefined], [undefined, "edit"]] as const) {
@@ -146,13 +157,17 @@ describe("focus is what it was before the provider guide", () => {
       const composed = composePromptParts(dir, "/proj/example", parts, binding)
       const pointers = composed.parts.filter((part) => part.id === "self-knowledge")
       expect([key, pointers.map((part) => part.text)]).toEqual([key, [selfKnowledgeText()]])
+      const resolved = resolveFocus(binding!.focusID!, binding!.modelID)
+      const note = mode === "focus" ? modelNote(resolved, binding!.modelID) : undefined
+      expect([key, composed.parts.filter((part) => part.id === "focus-core").map((part) => part.text)]).toEqual([key, mode === "focus" ? [focusCore()] : []])
+      expect([key, composed.parts.filter((part) => part.id === "model-guidance").map((part) => part.text)]).toEqual([key, note ? [note.text] : []])
       const result = withoutPointer(composed).map((part) => ({ id: part.id, label: part.label, text: part.text }))
       expect([key, createHash("sha256").update(JSON.stringify(result)).digest("hex")]).toEqual([key, (pinned.hashes as Record<string, string>)[key]!])
       checked++
     }
     expect(checked).toBe(Object.keys(pinned.hashes).length)
   })
-  test("the focus parts of each earlier family are readable in the fixture and carry only the one-line family note", () => {
+  test("the focus parts of each earlier family are readable in the fixture and carry the one-line family note and the core, not the guide", () => {
     const dir = temp()
     for (const family of old) {
       const expected = (pinned.texts as Record<string, Array<{ id: string; label: string; text: string }>>)[family]!
@@ -160,8 +175,9 @@ describe("focus is what it was before the provider guide", () => {
       const actual = withoutPointer(composed)
       expect(actual).toEqual(expected)
       expect(composed.parts.map((part) => part.id).slice(0, 6)).toEqual(["base", "instructions", "skills", "boundary", "self-knowledge", "focus"])
+      expect(composed.parts[6]?.id).toBe("focus-core")
       expect(actual.some((part) => part.id === "focus-guide")).toBe(false)
-      expect(joined(actual)).not.toContain("Working here:")
+      expect(joined(composed.parts)).not.toContain("Working here:")
     }
   })
   test("the four new families get a one-line note of the order of the old ones", () => {
@@ -187,14 +203,17 @@ describe("composition by mode", () => {
       expect(joined(composed.parts)).toBe(`You are MendCode, a coding assistant working in ${root}. Answer directly. Read before editing, preserve unrelated work and verify changes with the available tools. Follow the user's scope, runtime permissions and budgets. Use loop tools for scheduled or repeated work, inspect existing loops first and never set an iteration cap to zero. Configured budgets are authoritative; do not infer limits from a provider name. Do not invent successful tests or tool results. Do not expose secrets.\n\n${selfKnowledgeText()}`)
     }
   })
-  test("guide is focus plus the basics and the family file inside the guide budget; full adds the operator guide inside the full budget", async () => {
+  test("guide is focus with the basics and the family file in place of the core, inside the guide budget; full adds the operator guide inside the full budget", async () => {
     for (const family of FAMILIES) {
       const place = { dir: temp(), root: temp() }
       const focus = await compose("focus", family, place), guide = await compose("guide", family, place), full = await compose("full", family, place)
       const added = guide.parts.find((part) => part.id === "focus-guide")!
       expect(added.text).toBe(guideText(family))
       expect(added.text.length).toBeLessThanOrEqual(PROMPT_BUDGETS.guide.basics + PROMPT_BUDGETS.guide.family)
-      expect(guide.parts.filter((part) => part.id !== "focus-guide")).toEqual(focus.parts)
+      // One of the two, never both: the core would repeat what the basics already say.
+      expect(guide.parts.map((part) => part.id === "focus-guide" ? "focus-core" : part.id)).toEqual(focus.parts.map((part) => part.id))
+      expect(guide.parts.filter((part) => part.id !== "focus-guide")).toEqual(focus.parts.filter((part) => part.id !== "focus-core"))
+      for (const composed of [guide, full]) expect(composed.parts.some((part) => part.id === "focus-core")).toBe(false)
       expect(joined(guide.parts).length).toBeLessThanOrEqual(PROMPT_BUDGETS.composed.guide)
       expect(joined(full.parts).length).toBeLessThanOrEqual(PROMPT_BUDGETS.composed.full)
       expect(full.parts.find((part) => part.id === "capabilities")?.text).toBe(operatorGuideText())
@@ -216,14 +235,18 @@ describe("composition by mode", () => {
       for (const text of stable(first)) expect(text).not.toMatch(/\/(?:var|tmp|private|Users)\/|\b20\d\d-\d\d-\d\d\b/)
     }
   })
-  test("a model note rides in its own part after the guide and only in guide and full, for the matching model", async () => {
+  test("a model note rides in its own part after the guide or the core in focus, guide and full, for the matching model", async () => {
     const dir = temp(), root = temp()
     const parts = await baseParts(root)
     const ids = (mode: PromptMode, modelID: string) => composePromptParts(dir, root, parts, { mode, modelID }).parts.map((part) => part.id)
     expect(ids("guide", "claude-opus-5")).toContain("model-guidance")
     expect(ids("guide", "claude-opus-5").indexOf("model-guidance")).toBeGreaterThan(ids("guide", "claude-opus-5").indexOf("focus-guide"))
     expect(ids("full", "claude-opus-5")).toContain("model-guidance")
-    expect(ids("focus", "claude-opus-5")).not.toContain("model-guidance")
+    expect(ids("focus", "claude-opus-5").indexOf("model-guidance")).toBeGreaterThan(ids("focus", "claude-opus-5").indexOf("focus-core"))
+    for (const mode of ["minimal", "custom"] as const) expect(ids(mode, "claude-opus-5")).not.toContain("model-guidance")
+    // What focus gained (the core and the longest note of any family, with their separators) stays under 1,200 characters.
+    const longestNote = Math.max(0, ...PROMPT_FAMILIES.flatMap((family) => familyGuidance(family)!.notes.map((note) => note.text.length)))
+    expect(focusCore().length + longestNote + 4).toBeLessThanOrEqual(1_200)
     expect(ids("guide", "gpt-6-sol")).not.toContain("model-guidance")
   })
 })
@@ -264,7 +287,8 @@ describe("token cost of each mode", () => {
     const dir = temp(), project = temp()
     const before = createPromptModes(dir).status(project, "gpt-6-sol")
     expect(promptCostOf(before, "custom")).toBeUndefined()
-    expect(promptCostOf(before, "guide")!.overFocus).toBeGreaterThanOrEqual(Math.floor(guideText("codex").length / 4))
+    // Guide sends the basics and the family file where focus sends the core.
+    expect(promptCostOf(before, "guide")!.overFocus).toBeGreaterThanOrEqual(Math.floor((guideText("codex").length - focusCore().length) / 4))
     mkdirSync(path.join(project, ".mendcode/prompts"), { recursive: true })
     writeFileSync(path.join(project, ".mendcode/prompts/custom.md"), "Work carefully. ".repeat(40))
     const after = createPromptModes(dir).status(project, "gpt-6-sol")

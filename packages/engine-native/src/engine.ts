@@ -42,7 +42,7 @@ import { SESSION_RECALL_TOOLS, SESSION_RECALL_TOOL_NAMES, sessionRecallPermissio
 import { runSnip, SNIP_TOOL } from "./snip"
 import type { CompoundCall } from "./compound-budget"
 import { hostable } from "./host-tools"
-import { activeToolNames, createToolSearch, impliedTools, isPrimaryIn, PLAN_TOOLS, searchTools, TOOL_SEARCH_NAME, withoutDiscovered, type CatalogMode } from "./tool-discovery"
+import { activeToolNames, createToolSearch, impliedTools, isPrimaryIn, PLAN_TOOLS, searchTools, TOOL_SEARCH_NAME, withoutDiscovered, type CatalogMode, type ToolCatalog } from "./tool-discovery"
 import { compactToolSchema } from "./tool-schema"
 import { CODE_TOOL } from "./code-mode"
 import { CodeError } from "./code-parser"
@@ -75,8 +75,12 @@ export type SystemPart = { id: string; label: string; text: string; count?: numb
 
 export const joinSystemParts = (parts: SystemPart[]) => parts.map((part) => part.text).filter(Boolean).join("\n\n")
 
-/** What a system prompt may depend on besides the project: which session asks and what the user just said (memory relevance). */
-export type SystemContext = { sessionId: SessionId; prompt: string }
+/**
+ * What a system prompt may depend on besides the project: which session asks, what the user just said (memory relevance) and the
+ * tools of the call, listed and deferred (`capabilityIndex`), when the engine is composing a model call or reporting one.
+ */
+export type SystemContext = { sessionId: SessionId; prompt: string; tools?: ToolCatalog }
+export { capabilityIndex, type ToolCatalog } from "./tool-discovery"
 
 /** The user's latest message text, empty when there is none (a turn always starts with one). */
 function lastPrompt(messages: readonly ModelMessage[]) {
@@ -146,7 +150,7 @@ function asLastSent(messages: ModelMessage[], last: SharedPrefix): ModelMessage[
   if (turn?.pruned) pruneHistoryToolOutputs(replayed.slice(0, turn.start))
   return historyDigest(replayed.slice(0, last.sent)) === last.digest ? replayed : undefined
 }
-type CallInput = Pick<TurnInput, "sessionId" | "signal" | "newItemId" | "emit" | "selection" | "workflow" | "turnOptions"> & Partial<Pick<TurnInput, "ask" | "turnId" | "text">>
+type CallInput = Pick<TurnInput, "sessionId" | "signal" | "newItemId" | "emit" | "selection" | "workflow" | "turnOptions"> & Partial<Pick<TurnInput, "ask" | "turnId" | "text">> & { /** The call's tools, listed and deferred, for the system prompt. */ catalog?: ToolCatalog }
 
 const SUMMARY_PREFIX = "Summary of the conversation so far (earlier messages were compacted):"
 /** A conservative default below common 200k-token context windows; set per model in config. */
@@ -190,7 +194,7 @@ export type RunLimits = { maxSteps?: number; tools?: readonly string[]; excludeT
 /** Tools that reach the network on their own; `--offline` removes them. */
 const OFFLINE_TOOLS = new Set(["webfetch", "websearch", "image_gen", "session_meta"])
 
-type Toolset = { tools: Map<string, Tool>; specs: ToolSpec[]; main: boolean; allowTask: boolean; agent?: AgentProfile; subagents?: Map<string, AgentProfile>; extras?: ProjectTool[]; codeCatalog?: Toolset; codeActive?: Set<string> }
+type Toolset = { tools: Map<string, Tool>; specs: ToolSpec[]; main: boolean; allowTask: boolean; agent?: AgentProfile; subagents?: Map<string, AgentProfile>; extras?: ProjectTool[]; codeCatalog?: Toolset; codeActive?: Set<string>; /** Set by `withDiscovery`: what is listed and what waits behind `tool_search`. */ catalog?: ToolCatalog }
 
 /** Handled by the engine itself (it needs the loop), offered only when `subagents` is on. */
 /** Plan mode: the agent submits a plan; approval leaves plan mode and the agent implements it. */
@@ -619,10 +623,11 @@ export function createNativeEngine(options: {
     const discovery = discoveryOn()
     const planDeferred = planToolsDeferred()
     const deferred = (name: string) => name === "packages" || discovery && !primary(name) || planDeferred && PLAN_TOOLS.has(name)
-    if (!eligible.specs.some((spec) => deferred(spec.name))) return eligible
+    const allListed = (specs: ToolSpec[]): Toolset => ({ ...eligible, specs, catalog: { listed: specs.map((spec) => spec.name), deferred: [] } })
+    if (!eligible.specs.some((spec) => deferred(spec.name))) return allListed(eligible.specs)
     // Without permission to search, keep the allowed catalog usable directly.
     if (toolDisabled(TOOL_SEARCH_NAME, rulesFor(base)) || base.agent && !agentAllows(base.agent, TOOL_SEARCH_NAME)
-      || !base.main && policy().experimental?.primary_tools?.some((pattern) => permissionMatch(TOOL_SEARCH_NAME, pattern))) return { ...eligible, specs: eligible.specs.filter((spec) => spec.name !== "packages") }
+      || !base.main && policy().experimental?.primary_tools?.some((pattern) => permissionMatch(TOOL_SEARCH_NAME, pattern))) return allListed(eligible.specs.filter((spec) => spec.name !== "packages"))
     const search = createToolSearch(() => withPolicy(base).specs, active, primary)
     // Append-only: the always-listed tools keep the order of the catalogue, then `tool_search`, then the discovered tools in the order they were
     // discovered, so finding a tool leaves every earlier byte of the tool list as it was. It is still not free: providers put the tool list before
@@ -635,6 +640,8 @@ export function createNativeEngine(options: {
       ...eligible,
       tools: new Map([...eligible.tools, [search.name, search]]),
       specs: [...listed, toSpec(search), ...discovered],
+      // A found tool stays in `deferred`: the catalogue, not the conversation, decides the line the system prompt carries.
+      catalog: { listed: [...listed.map((spec) => spec.name), search.name], deferred: eligible.specs.filter((spec) => spec.name !== search.name && deferred(spec.name)).map((spec) => spec.name) },
     }
   }
 
@@ -683,6 +690,8 @@ export function createNativeEngine(options: {
   const providerTurnSignals = new WeakMap<AbortSignal, AbortSignal>()
   /** Tool specs sent on each session's last turn, including project (MCP) tools discovered then. */
   const lastSpecs = new Map<SessionId, ToolSpec[]>()
+  /** The catalogue (listed and deferred) of each session's last main call, for `/context` and the calls that send no tools of their own. */
+  const lastCatalog = new Map<SessionId, ToolCatalog>()
   /** The custom agent each session's last turn ran as, for `/context`. */
   const lastAgent = new Map<SessionId, AgentProfile | undefined>()
   const lastSubagents = new Map<SessionId, AgentProfile[]>()
@@ -895,7 +904,10 @@ export function createNativeEngine(options: {
         const cwd = options.cwdFor(input.sessionId)
         // The role hooks see: a shared request must come out of them as the main call's did.
         const hookRole: ModelRole = share || fork ? "main" : role
-        let system = share ? share.last.system : fork ? fork.system : options.system(cwd, { sessionId: input.sessionId, prompt: lastPrompt(messages) })
+        // A compaction call names no tools of its own: it carries the line of the session's last main call, so its prompt stays the main one.
+        const catalog = input.catalog ?? lastCatalog.get(input.sessionId)
+        const systemContext: SystemContext = { sessionId: input.sessionId, prompt: lastPrompt(messages), ...(catalog ? { tools: catalog } : {}) }
+        let system = share ? share.last.system : fork ? fork.system : options.system(cwd, systemContext)
         if (!share && !fork) {
           const agentText = agent ? agentSection(agent) : ""
           if (agentText) system = `${system}\n\n${agentText}`
@@ -962,7 +974,7 @@ export function createNativeEngine(options: {
         const hostedTools = share ? share.last.hostedTools : fork ? callTools.length ? fork.hostedTools.filter(hostedAllowed) : [] : !compound && textKind === "agent_message" && !final ? (options.hostedTools?.() ?? []).filter(hostedAllowed) : []
         if (hostedOff.size) system = `${system}\n\n${hostedOffNote([...hostedOff])}`
         const transformBody =!compound && hooks?.has("request.before", cwd) && hooks.requestBody ? (body: Record<string, unknown>) => hooks.requestBody!({ sessionId: input.sessionId, cwd, provider: options.provider.idFor?.(choice?.model) ?? options.provider.id, model: choice?.model ?? options.provider.model, body }) : undefined
-        const estimatedTokens = requestEstimates(system, (options.systemParts?.(cwd, { sessionId: input.sessionId, prompt: lastPrompt(messages) }) ?? []).filter((part) => part.id === "memory").map((part) => part.text), outgoing, [...callTools, ...hostedTools])
+        const estimatedTokens = requestEstimates(system, (options.systemParts?.(cwd, systemContext) ?? []).filter((part) => part.id === "memory").map((part) => part.text), outgoing, [...callTools, ...hostedTools])
         const startedAt = Date.now()
         let firstTokenMs: number | null = null
         await options.beforeModel?.({ model: choice?.model ?? options.provider.model, signal: input.signal, ...(input.ask ? { ask: input.ask } : {}) })
@@ -1727,9 +1739,11 @@ export function createNativeEngine(options: {
       if (final) messages.push({ role: "user", content: "The agent step limit is reached. Summarize the work and what remains. Reply with text only; do not call tools." })
       const available = withDiscovery(toolset, messages, input.permissionMode() === "plan")
       if (loop.trackContext) lastSpecs.set(input.sessionId, final ? [] : available.specs)
+      if (loop.trackContext && available.catalog) lastCatalog.set(input.sessionId, available.catalog)
       let reply: Awaited<ReturnType<typeof callModel>>
       try {
-        reply = await callModel(input, messages, "agent_message", final ? [] : available.specs, !toolset.main ? "subagent" : modeOf(input, toolset) === "plan" ? "plan" : "main", toolset.agent, loop.fork ? { meta: {}, fork: loop.fork } : undefined, final)
+        // The final, text-only step keeps the catalogue: its prompt must be the one the earlier steps cached.
+        reply = await callModel(available.catalog ? { ...input, catalog: available.catalog } : input, messages, "agent_message", final ? [] : available.specs, !toolset.main ? "subagent" : modeOf(input, toolset) === "plan" ? "plan" : "main", toolset.agent, loop.fork ? { meta: {}, fork: loop.fork } : undefined, final)
       } catch (error) {
         if (input.signal.aborted) return { outcome: { status: "ok" } as TurnOutcome, answer }
         return { outcome: { status: "error", code: error instanceof ReasoningError ? `reasoning_${error.code}` : "provider_error", message: `[ENGINE]: ${error instanceof Error ? error.message : String(error)}` } as TurnOutcome, answer }
@@ -1944,7 +1958,7 @@ export function createNativeEngine(options: {
   return {
     forget(sessionId) {
       // A deleted session's prompts, schemas and profiles go with it; a fork of it keeps its own copy (`forkPrefixes` of the fork).
-      for (const map of [latestPlans, lastSpecs, lastAgent, lastSubagents, lastMain, forkPrefixes, turnStarts, lineages, contextTokens, prunedTokens] as Array<Map<SessionId, unknown>>) map.delete(sessionId)
+      for (const map of [latestPlans, lastSpecs, lastCatalog, lastAgent, lastSubagents, lastMain, forkPrefixes, turnStarts, lineages, contextTokens, prunedTokens] as Array<Map<SessionId, unknown>>) map.delete(sessionId)
       for (const key of [...earlyCards.keys()]) if (key.startsWith(`${sessionId}\n`)) earlyCards.delete(key)
     },
     async hostTools({ directory, sessionId }) {
@@ -2078,13 +2092,15 @@ export function createNativeEngine(options: {
       let messages = (await options.history.load(sessionId)) ?? []
       const cwd = options.cwdFor(sessionId)
       const section = (id: string, label: string, chars: number, count?: number): ContextSection => ({ id, label, chars, tokens: estimateTokens(chars), ...(count === undefined ? {} : { count }) })
-      const context = { sessionId, prompt: lastPrompt(messages) }
       const agent = lastAgent.has(sessionId) ? lastAgent.get(sessionId) : options.agents?.primary(sessionId)
       const agentText = agent ? agentSection(agent) : ""
+      const subagents = lastSubagents.get(sessionId) ?? options.agents?.subagents(cwd) ?? []
+      const fresh = lastSpecs.has(sessionId) && lastCatalog.has(sessionId) ? undefined : withDiscovery(withAgent(withSubagents(withProjectTools(mainToolset, await options.projectTools?.(cwd, sessionId) ?? []), subagents), agent), messages)
+      const toolSpecs = lastSpecs.get(sessionId) ?? fresh!.specs
+      const catalog = lastCatalog.get(sessionId) ?? fresh?.catalog
+      const context: SystemContext = { sessionId, prompt: lastPrompt(messages), ...(catalog ? { tools: catalog } : {}) }
       const parts = options.systemParts?.(cwd, context) ?? [{ id: "system", label: "system prompt", text: options.system(cwd, context) }]
       const system = [...parts, ...(agentText ? [{ id: "agent", label: `agent ${agent!.name}`, text: agentText, count: 1 }] : [])].map((part) => section(`system:${part.id}`, `system · ${part.label}`, part.text.length, part.count))
-      const subagents = lastSubagents.get(sessionId) ?? options.agents?.subagents(cwd) ?? []
-      const toolSpecs = lastSpecs.get(sessionId) ?? withDiscovery(withAgent(withSubagents(withProjectTools(mainToolset, await options.projectTools?.(cwd, sessionId) ?? []), subagents), agent), messages).specs
       const choice = choiceFor(options.modelFor?.(sessionId, "main"), agent)
       let requestSystem = options.system(cwd, context)
       if (agentText) requestSystem += `\n\n${agentText}`
@@ -2238,8 +2254,10 @@ export function createNativeEngine(options: {
         const binding = wantsNative && roleMatches ? await compactionDeadline(input.signal, config.timeout_ms ?? DEFAULT_COMPACTION_TIMEOUT_MS, async () => options.provider.nativeBinding?.(active?.model)) : undefined
         if (wantsNative && (!binding || !roleMatches || !options.provider.compact) && config.strategy === "native") throw new NativeCompactionError("unsupported", roleMatches ? "Native compaction is unavailable for this transport" : "Native compaction requires the active model; the compaction role differs")
         if (wantsNative && binding && options.provider.compact) {
-          const tools = lastSpecs.get(input.sessionId) ?? withDiscovery(mainToolset, []).specs
-          let system = options.system(cwd, { sessionId: input.sessionId, prompt: lastPrompt(messages) })
+          const fallback = lastSpecs.has(input.sessionId) && lastCatalog.has(input.sessionId) ? undefined : withDiscovery(mainToolset, [])
+          const tools = lastSpecs.get(input.sessionId) ?? fallback!.specs
+          const catalog = lastCatalog.get(input.sessionId) ?? fallback?.catalog
+          let system = options.system(cwd, { sessionId: input.sessionId, prompt: lastPrompt(messages), ...(catalog ? { tools: catalog } : {}) })
           const agent = lastAgent.get(input.sessionId)
           if (agent) system += `\n\n${agentSection(agent)}`
           const known = secrets?.list(input.sessionId) ?? []

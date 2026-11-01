@@ -16,11 +16,12 @@ const FAMILY_WORDS: Array<{ family: PromptFamily; words: RegExp }> = [
   { family: "minimax", words: /^minimax$/ },
   { family: "grok", words: /^(?:grok\d*|xai)$/ },
   // Open-weight models and the hosts that run them on the user's side: small, strict about tool-call format, short on context.
-  { family: "local", words: /^(?:local|ollama|lmstudio|llamacpp|llamafile|vllm|llama\d*|codellama|qwen\d*|qwq|gemma\d*|phi\d*|granite\d*|starcoder\d*|smollm\d*|tinyllama)$/ },
+  // `gpt-oss` is OpenAI's open-weight model: it runs on those hosts, not in Codex, so it gets this guide and not the Codex one.
+  { family: "local", words: /^(?:local|ollama|lmstudio|llamacpp|llamafile|vllm|gptoss|llama\d*|codellama|qwen\d*|qwq|gemma\d*|phi\d*|granite\d*|starcoder\d*|smollm\d*|tinyllama)$/ },
 ]
 
-/** Spellings that split one name into two words: `z.ai`, `z-ai`, `mini-max`, `lm-studio`. */
-const JOINED_NAMES: Array<[RegExp, string]> = [[/z[-_.]ai/g, "zai"], [/mini[-_.]max/g, "minimax"], [/lm[-_ ]studio/g, "lmstudio"], [/llama[-_.]cpp/g, "llamacpp"]]
+/** Spellings that split one name into two words: `z.ai`, `z-ai`, `mini-max`, `lm-studio`, `gpt-oss`. */
+const JOINED_NAMES: Array<[RegExp, string]> = [[/z[-_.]ai/g, "zai"], [/mini[-_.]max/g, "minimax"], [/lm[-_ ]studio/g, "lmstudio"], [/llama[-_.]cpp/g, "llamacpp"], [/gpt[-_.]?oss/g, "gptoss"]]
 
 function familyOf(text: string): PromptFamily | undefined {
   const lower = JOINED_NAMES.reduce((value, [pattern, joined]) => value.replace(pattern, joined), text.toLowerCase())

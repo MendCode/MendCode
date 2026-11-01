@@ -6,7 +6,7 @@ import { NATIVE_DEFAULTS, type SystemPart } from "@mendcode/engine-native"
 import { createTuiControl } from "./tui-control"
 import { promptBehavior } from "./prompt-behavior"
 import { resolveFocus } from "./prompt-focus"
-import { guideText, operatorGuideText, selfKnowledgeText } from "./prompt-guidance"
+import { focusCore, guideText, operatorGuideText, selfKnowledgeText } from "./prompt-guidance"
 
 type Choice = { mode?: PromptMode; focusID?: PromptFocusChoice }
 export const FOCUS_CONTEXT: Record<PromptFocus, { files: string[]; behavior: string }> = {
@@ -164,6 +164,8 @@ function buildParts({ mode, focusID, resolved, root, parts, override, custom }: 
   const instructions = parts.filter((part) => part.id === "instructions")
   // APPEND_SYSTEM.md is the user's own text too: every mode carries it after the instructions.
   const appended = parts.filter((part) => part.id === "append")
+  // The line naming the session's tools (deferred ones too, `capabilityIndex`): focus, guide and full only, as the last static part.
+  const capabilities = parts.filter((part) => part.id === "capabilities-index")
   const safe: SystemPart = { id: "boundary", label: "MendCode boundary", text: boundary(root) }
   // One line in every mode but `custom` (which inherits nothing): where to read about configuring and extending MendCode, instead of the web.
   const self: SystemPart = { id: "self-knowledge", label: "MendCode docs pointer", text: selfKnowledgeText() }
@@ -172,13 +174,13 @@ function buildParts({ mode, focusID, resolved, root, parts, override, custom }: 
   else if (mode === "custom") result = [safe, ...(custom.status.available ? [{ id: "base", label: custom.status.name, text: custom.text.replaceAll("{{cwd}}", root) }] : []), ...instructions, ...appended, ...memory]
   else {
     // Focus and guide keep the native harness (or SYSTEM.md in its place), the user's instructions, the skill catalog and APPEND_SYSTEM.md.
-    result = parts.filter((part) => part.id !== "memory" && (mode === "full" || ["base", "instructions", "skills", "append"].includes(part.id)))
+    result = parts.filter((part) => part.id !== "memory" && part.id !== "capabilities-index" && (mode === "full" || ["base", "instructions", "skills", "append"].includes(part.id)))
     const longGuidance = mode === "guide" || mode === "full"
     result = [...result, safe, self, { id: "focus", label: `${promptFocusLabel({ focusID, resolvedFocus: resolved })} focus`, text: `MendCode focus: ${resolved}${focusID === "auto" ? " (auto)" : ""}. ${FOCUS_CONTEXT[resolved].behavior}` }]
-    // `guide` and `full` add the working basics and the family's guidance file; `focus` stays the short line above.
-    if (longGuidance) result.push({ id: "focus-guide", label: "Provider guide", text: guideText(resolved) })
+    // `guide` and `full` add the working basics and the family's guidance file; `focus` the short core of the basics instead, never both.
+    result.push(longGuidance ? { id: "focus-guide", label: "Provider guide", text: guideText(resolved) } : { id: "focus-core", label: "Working core", text: focusCore() })
     if (override.modelID || override.role || override.workflow) result.push({ id: "binding", label: "Prompt binding", text: `Model: ${override.modelID ?? "runtime"}. Role: ${override.role ?? "main"}. Workflow: ${override.workflow ?? "interactive"}. Use only capabilities exposed by the runtime; do not infer tools, transport, quota or reasoning settings from this binding.` })
-    result.push(...promptBehavior(resolved, override, { guide: longGuidance }))
+    result.push(...promptBehavior(resolved, override))
     if (mode === "full") {
       const instructions = parts.find((part) => part.id === "instructions")?.text ?? ""
       for (const relative of FOCUS_CONTEXT[resolved].files) {
@@ -191,8 +193,9 @@ function buildParts({ mode, focusID, resolved, root, parts, override, custom }: 
       }
       result.push({ id: "capabilities", label: "MendCode operator guide", text: operatorGuideText() })
     }
-    // Memory is chosen per user message, so it goes last and the static parts before it stay a stable prefix.
-    result.push(...memory)
+    // Memory is chosen per user message, so it goes last and the static parts before it stay a stable prefix. The capability line
+    // changes only with the session's tool set, so it is the last part of that prefix.
+    result.push(...capabilities, ...memory)
   }
   return result
 }

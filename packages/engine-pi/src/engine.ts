@@ -86,6 +86,8 @@ export type PiEngineOptions = {
   cwdFor(sessionId: SessionId): string
   /** The session's `/env` credentials: in the process environment, and their names in the system prompt when the engine has one. */
   environment?(sessionId: SessionId): EngineEnvironment | undefined
+  /** Text for a project directory added after pi's own system prompt (`--append-system-prompt`, which keeps it): what MendCode draws that pi's terminal does not. */
+  appendSystem?(cwd: string): string | undefined
   /** Existing project-tools trust, checked before every turn and compaction. Absent means untrusted. */
   projectTrusted?(cwd: string): boolean
   sandbox?(input: { sessionId: SessionId; cwd: string }): SandboxPolicy | undefined
@@ -465,7 +467,9 @@ export function createPiEngine(options: PiEngineOptions): EnginePort & { stop():
     const bound = options.bindings?.get(sessionId)
     // A session file that is gone (pi's own store was cleaned) starts a new pi session instead of failing.
     const file = bound && fileExists(bound) ? bound : undefined
-    const args = ["--mode", "rpc", ...config.args, ...(policy.environment?.note ? ["--append-system-prompt", policy.environment.note] : []), ...(!trusted && disableExtensions ? ["--no-extensions"] : []), "-e", gatePath(), ...(config.sessionDir ? ["--session-dir", config.sessionDir] : []), ...(file ? ["--session", file] : []), ...(pattern ? ["--model", pattern] : [])]
+    // One value: pi took a single `--append-system-prompt` before it allowed several.
+    const appended = [options.appendSystem?.(cwd), policy.environment?.note].filter(Boolean).join("\n\n")
+    const args = ["--mode", "rpc", ...config.args, ...(appended ? ["--append-system-prompt", appended] : []), ...(!trusted && disableExtensions ? ["--no-extensions"] : []), "-e", gatePath(), ...(config.sessionDir ? ["--session-dir", config.sessionDir] : []), ...(file ? ["--session", file] : []), ...(pattern ? ["--model", pattern] : [])]
     const gateToken = randomUUID()
     const launch = { command: config.command, args, env: { ...config.env, ...policy.environment?.values, [GATE_TOKEN_ENV]: gateToken }, cwd, ...(sandbox ? { sandbox } : {}) }
     const transport = options.transportFactory?.(launch) ?? spawnPi(launch)

@@ -43,6 +43,8 @@ type Connection = {
   /** Resolves with the agent's session id once `session/new` or `session/load` answered. */
   ready: Promise<string>
   acpSessionId?: string
+  /** The agent session was created by `session/new` and has had no prompt yet: the next one carries `appendSystem`. */
+  unprompted?: boolean
   capabilities: { loadSession: boolean; image: boolean; http: boolean }
   /** The agent's `model` config option, when it offers one, and the value in force. */
   modelOption?: { configId: string; current?: string }
@@ -68,6 +70,11 @@ export type AcpEngineOptions = {
   cwdFor(sessionId: SessionId): string
   /** The session's `/env` credentials, in the agent process's environment (ACP has no system prompt to name them in). */
   environment?(sessionId: SessionId): EngineEnvironment | undefined
+  /**
+   * Text for a project directory the agent should know: what MendCode draws that the agent's terminal does not. ACP has no
+   * system prompt, so it is a text block before the first prompt of an agent session; the agent's own prompt stays as it is.
+   */
+  appendSystem?(cwd: string): string | undefined
   clock?: Clock
   /** Silence after which a turn is cut. Unset (the default) never cuts one, as the engine's own CLI does not: it times out and
    *  retries its own calls, and a long think can be quiet for minutes. */
@@ -225,6 +232,7 @@ export function createAcpEngine(options: AcpEngineOptions): EnginePort & { stop(
     const created = (await connection.rpc.request("session/new", { cwd, mcpServers }, { timeoutMs: SESSION_TIMEOUT_MS })) as Json
     if (typeof created?.sessionId !== "string") throw new AcpRpcError("session/new returned no sessionId")
     connection.acpSessionId = created.sessionId
+    connection.unprompted = true
     noteConfig(connection, created.configOptions)
     options.bindings?.set(sessionId, agent, created.sessionId)
     return created.sessionId
@@ -377,6 +385,10 @@ export function createAcpEngine(options: AcpEngineOptions): EnginePort & { stop(
         if (!connection.closed) connection.idle = clock.setTimer(processIdleMs, () => close(connection))
         return { status: "ok" }
       }
+      // A loaded session already holds it in its history.
+      const context = connection.unprompted ? options.appendSystem?.(options.cwdFor(input.sessionId)) : undefined
+      connection.unprompted = false
+      const prompt = context ? [{ type: "text", text: context }, ...body] : body
       return new Promise<TurnOutcome>((resolve) => {
         let settled = false
         const cancel = () => {
@@ -424,7 +436,7 @@ export function createAcpEngine(options: AcpEngineOptions): EnginePort & { stop(
           },
           { once: true },
         )
-        connection.rpc.request("session/prompt", { sessionId: acpSessionId, prompt: body }).then(
+        connection.rpc.request("session/prompt", { sessionId: acpSessionId, prompt }).then(
           (result) => {
             const reason = (result as Json | undefined)?.stopReason
             if (reason === "cancelled" || turn.interrupted) {

@@ -171,6 +171,108 @@ describe("codex engine (fake app-server)", () => {
     engine.stop()
   })
 
+  test("the daemon's appended text joins the credentials note in the developer instructions; Codex's base instructions are never sent", async () => {
+    const fake = fakeCodex(standardScript((_params, api) => api.notify("turn/completed", { threadId: "thr1", turn: { id: "turn1", status: "completed" } })))
+    const roots: string[] = []
+    const engine = createCodexEngine({ cwd: "/repo", appendSystem: (root) => (roots.push(root), "Terminal rendering (assistant messages):\n- A mermaid fence is drawn."), environment: { values: { INSTABOX_KEY: "ib-secret" }, note: "Credentials: INSTABOX_KEY." }, transportFactory: () => fake.transport })
+    const ids = createIdFactory()
+    expect(await engine.runTurn({ sessionId: ids("session"), turnId: ids("turn"), text: "check", attachments: [], signal: new AbortController().signal, newItemId: () => ids("item"), emit: () => {}, ask: async () => ({ kind: "deny" }), permissionMode: () => "ask", setPermissionMode: () => {} })).toEqual({ status: "ok" })
+    const params = fake.requests.find((request) => request.method === "thread/start")?.params
+    expect(params.developerInstructions).toBe("Terminal rendering (assistant messages):\n- A mermaid fence is drawn.\n\nCredentials: INSTABOX_KEY.")
+    expect(params).not.toHaveProperty("baseInstructions")
+    expect(roots).toEqual(["/repo"])
+    engine.stop()
+  })
+
+  test("no appended text and no credentials send no developer instructions", async () => {
+    const fake = fakeCodex(standardScript((_params, api) => api.notify("turn/completed", { threadId: "thr1", turn: { id: "turn1", status: "completed" } })))
+    const engine = createCodexEngine({ cwd: "/repo", appendSystem: () => undefined, transportFactory: () => fake.transport })
+    const ids = createIdFactory()
+    expect(await engine.runTurn({ sessionId: ids("session"), turnId: ids("turn"), text: "check", attachments: [], signal: new AbortController().signal, newItemId: () => ids("item"), emit: () => {}, ask: async () => ({ kind: "deny" }), permissionMode: () => "ask", setPermissionMode: () => {} })).toEqual({ status: "ok" })
+    expect(fake.requests.find((request) => request.method === "thread/start")?.params).not.toHaveProperty("developerInstructions")
+    engine.stop()
+  })
+
+  const HOST = [{ type: "http" as const, name: "mendcode", url: "http://127.0.0.1:4100/mcp", headers: [{ name: "Authorization", value: "Bearer host-secret" }] }]
+
+  test("MendCode's own tools reach the app-server as its mendcode MCP server: bearer in the environment only, no Codex approval, their instructions in the developer instructions", async () => {
+    const fake = fakeCodex(standardScript((_params, api) => api.notify("turn/completed", { threadId: "thr1", turn: { id: "turn1", status: "completed" } })))
+    const spawns: Array<{ args: string[]; env?: Record<string, string> }> = []
+    const traces: string[] = []
+    const engine = createCodexEngine({ cwd: "/repo", hostServers: HOST, hostInstructions: "MendCode's own tools, named mcp__mendcode__<tool>.", appendSystem: () => "Terminal rendering.", trace: (_direction, line) => traces.push(line), transportFactory: (spawn) => { spawns.push(spawn); return fake.transport } })
+    const ids = createIdFactory()
+    expect(await engine.runTurn({ sessionId: ids("session"), turnId: ids("turn"), text: "check", attachments: [], signal: new AbortController().signal, newItemId: () => ids("item"), emit: () => {}, ask: async () => ({ kind: "deny" }), permissionMode: () => "ask", setPermissionMode: () => {} })).toEqual({ status: "ok" })
+    const args = spawns[0]!.args
+    expect(args).toContain(`mcp_servers.mendcode.url="http://127.0.0.1:4100/mcp"`)
+    expect(args).toContain(`mcp_servers.mendcode.bearer_token_env_var="MENDCODE_MCP_TOKEN_MENDCODE"`)
+    expect(args).toContain(`mcp_servers.mendcode.default_tools_approval_mode="approve"`)
+    expect(args).toContain("mcp_servers.mendcode.tool_timeout_sec=86400")
+    expect(spawns[0]!.env).toEqual({ MENDCODE_MCP_TOKEN_MENDCODE: "host-secret" })
+    // Codex's default shell filter drops a variable named with TOKEN, so the model's commands never see the bearer.
+    expect(args.some((arg) => arg.startsWith("shell_environment_policy."))).toBe(false)
+    expect([...args, ...traces].join("\n")).not.toContain("host-secret")
+    expect(fake.requests.find((request) => request.method === "thread/start")?.params.developerInstructions).toBe("Terminal rendering.\n\nMendCode's own tools, named mcp__mendcode__<tool>.")
+    engine.stop()
+  })
+
+  test("with /env credentials the bridge's bearer variable stays in Codex's shell exclude list", async () => {
+    const fake = fakeCodex(standardScript((_params, api) => api.notify("turn/completed", { threadId: "thr1", turn: { id: "turn1", status: "completed" } })))
+    const spawns: Array<{ args: string[]; env?: Record<string, string> }> = []
+    const engine = createCodexEngine({ cwd: "/repo", hostServers: HOST, environment: { values: { INSTABOX_KEY: "ib-secret" }, note: "Credentials: INSTABOX_KEY." }, transportFactory: (spawn) => { spawns.push(spawn); return fake.transport } })
+    const ids = createIdFactory()
+    expect(await engine.runTurn({ sessionId: ids("session"), turnId: ids("turn"), text: "check", attachments: [], signal: new AbortController().signal, newItemId: () => ids("item"), emit: () => {}, ask: async () => ({ kind: "deny" }), permissionMode: () => "ask", setPermissionMode: () => {} })).toEqual({ status: "ok" })
+    expect(spawns[0]!.env).toEqual({ INSTABOX_KEY: "ib-secret", MENDCODE_MCP_TOKEN_MENDCODE: "host-secret" })
+    const exclude = spawns[0]!.args.find((arg) => arg.startsWith("shell_environment_policy.exclude="))!
+    const hidden = JSON.parse(exclude.slice("shell_environment_policy.exclude=".length))
+    expect(hidden).toContain("MENDCODE_MCP_TOKEN_MENDCODE")
+    expect(hidden).not.toContain("INSTABOX_KEY")
+    engine.stop()
+  })
+
+  test("without the bridge (harness_tools off) no MCP server is configured and the tools' instructions are not sent", async () => {
+    const fake = fakeCodex(standardScript((_params, api) => api.notify("turn/completed", { threadId: "thr1", turn: { id: "turn1", status: "completed" } })))
+    const spawns: Array<{ args: string[]; env?: Record<string, string> }> = []
+    const engine = createCodexEngine({ cwd: "/repo", hostServers: [], hostInstructions: "MendCode's own tools.", transportFactory: (spawn) => { spawns.push(spawn); return fake.transport } })
+    const ids = createIdFactory()
+    expect(await engine.runTurn({ sessionId: ids("session"), turnId: ids("turn"), text: "check", attachments: [], signal: new AbortController().signal, newItemId: () => ids("item"), emit: () => {}, ask: async () => ({ kind: "deny" }), permissionMode: () => "ask", setPermissionMode: () => {} })).toEqual({ status: "ok" })
+    expect(spawns[0]!.args.join(" ")).not.toContain("mcp_servers")
+    expect(spawns[0]).not.toHaveProperty("env")
+    expect(fake.requests.find((request) => request.method === "thread/start")?.params).not.toHaveProperty("developerInstructions")
+    engine.stop()
+  })
+
+  test("in the minimal prompt mode (no appended text) the tools' instructions are the only developer instructions", async () => {
+    const fake = fakeCodex(standardScript((_params, api) => api.notify("turn/completed", { threadId: "thr1", turn: { id: "turn1", status: "completed" } })))
+    const engine = createCodexEngine({ cwd: "/repo", hostServers: HOST, hostInstructions: "MendCode's own tools.", appendSystem: () => undefined, transportFactory: () => fake.transport })
+    const ids = createIdFactory()
+    expect(await engine.runTurn({ sessionId: ids("session"), turnId: ids("turn"), text: "check", attachments: [], signal: new AbortController().signal, newItemId: () => ids("item"), emit: () => {}, ask: async () => ({ kind: "deny" }), permissionMode: () => "ask", setPermissionMode: () => {} })).toEqual({ status: "ok" })
+    expect(fake.requests.find((request) => request.method === "thread/start")?.params.developerInstructions).toBe("MendCode's own tools.")
+    engine.stop()
+  })
+
+  test("a call of MendCode's own tools is asked and drawn by MendCode only: Codex's approval is accepted without the user, no second card; another server's still is declined and drawn", async () => {
+    const answers: any[] = []
+    const fake = fakeCodex(
+      standardScript(async (_params, api) => {
+        api.notify("turn/started", { threadId: "thr1", turn: { id: "turn1" } })
+        const approval = (serverName: string) => ({ threadId: "thr1", turnId: "turn1", serverName, mode: "form", _meta: { codex_approval_kind: "mcp_tool_call" }, message: `Allow the ${serverName} MCP server to run tool "x"?`, requestedSchema: { type: "object", properties: {} } })
+        answers.push(await api.serverRequest("mcpServer/elicitation/request", approval("mendcode")))
+        api.notify("item/started", { threadId: "thr1", turnId: "turn1", item: { type: "mcpToolCall", id: "m1", server: "mendcode", tool: "graph_find", status: "inProgress" } })
+        api.notify("item/completed", { threadId: "thr1", turnId: "turn1", item: { type: "mcpToolCall", id: "m1", server: "mendcode", tool: "graph_find", status: "completed" } })
+        answers.push(await api.serverRequest("mcpServer/elicitation/request", approval("other")))
+        api.notify("item/started", { threadId: "thr1", turnId: "turn1", item: { type: "mcpToolCall", id: "m2", server: "other", tool: "lookup", status: "inProgress" } })
+        api.notify("item/completed", { threadId: "thr1", turnId: "turn1", item: { type: "mcpToolCall", id: "m2", server: "other", tool: "lookup", status: "declined" } })
+        api.notify("turn/completed", { threadId: "thr1", turn: { id: "turn1", status: "completed" } })
+      }),
+    )
+    const h = harness(fake, { hostServers: HOST })
+    await h.submit("find it")
+    await until(() => h.events.some((e) => e.type === "turn.completed"))
+    expect(answers).toEqual([{ action: "accept", content: null, _meta: null }, { action: "decline", content: null, _meta: null }])
+    expect(h.events.some((e) => e.type === "server.request")).toBe(false)
+    expect(h.events.filter((e) => e.type === "item.started" && e.kind === "tool_call").map((e: any) => e.meta.tool)).toEqual(["other.lookup"])
+  })
+
   test("maps a streamed answer, token usage and quota into MendCode events; always luna + low", async () => {
     const fake = fakeCodex(
       standardScript((params, api) => {

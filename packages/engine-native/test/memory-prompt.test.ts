@@ -24,7 +24,8 @@ test("memory guidance and the orientation line stay within the prompt budget", a
   // The call-economy wording (read several files in one call, edit with one patch, no directory listing) added ~175 characters on purpose.
   // Charts drawn in the reply without being asked for Mermaid: one sentence, ~80 characters.
   // Code found through the graph lookups first where the folder is indexed (they are listed only there): ~60 characters on purpose.
-  expect(total - 2381).toBeLessThanOrEqual(660)
+  // What else the terminal draws (swatches, callouts, path links, no Markdown images, diff cards): ~390 characters, also sent to other harnesses.
+  expect(total - 2381).toBeLessThanOrEqual(1050)
   expect(system).toContain("If a request needs no code, answer without tools.")
   // Code questions reach for the graph before text search, without the user having to say "use graph".
   expect(system).toContain("Find code with `graph_find`/`graph_callers` when listed, text with `grep`/`glob`")

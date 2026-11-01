@@ -3,7 +3,7 @@ import type { Settings } from "@mendcode/protocol"
 import { defineTool } from "@mendcode/tools"
 import { z } from "zod"
 import { createNativeEngine, memoryHistory, type ModelMessage, type ToolSpec } from "../src"
-import { activeToolNames, createToolSearch, MAX_DISCOVERED_TOOLS, MAX_SEARCH_BYTES, searchTools } from "../src/tool-discovery"
+import { activeToolNames, capabilityIndex, createToolSearch, MAX_DISCOVERED_TOOLS, MAX_SEARCH_BYTES, searchTools } from "../src/tool-discovery"
 import { callTool, ids, scriptedProvider, stop, turn } from "./harness"
 
 const spec = (name: string, description = name, parameters: Record<string, unknown> = { type: "object", properties: {} }): ToolSpec => ({ name, description, parameters })
@@ -70,6 +70,37 @@ describe("bounded secondary catalog", () => {
     const next = await search.execute({ query: "t64" }, context)
     expect(JSON.parse(next.output)).toEqual({ tools: [], omitted: 1 })
     expect((await search.execute({ query: "t63" }, context)).discoveredTools).toEqual(["t63"])
+  })
+})
+
+describe("capability line", () => {
+  const ALL = ["image_gen", "computer_session", "computer_key", "remember", "memory", "websearch", "webfetch", "browser", "screenshot", "loop", "workflow_start", "lsp", "secrets", "threads", "pr_watch", "todo"]
+  test("names only the capabilities the catalogue has, listed ones first, deferred ones through tool_search", () => {
+    expect(capabilityIndex({ listed: ["read", "todo", "tool_search"], deferred: ["image_gen", "websearch", "webfetch", "remember", "memory"] }))
+      .toBe("MendCode tools listed here: todo. Also reached through `tool_search` (load, then call): image_gen (pictures show in MendCode), remember/memory, websearch/webfetch. Do not claim you lack them.")
+    expect(capabilityIndex({ listed: ["todo", "loop"], deferred: [] })).toBe("MendCode tools listed here: loop, todo. Do not claim you lack them.")
+    expect(capabilityIndex({ listed: ["read", "tool_search"], deferred: ["screenshot"] })).toBe("MendCode tools reached through `tool_search` (load, then call): screenshot. Do not claim you lack them.")
+    expect(capabilityIndex({ listed: ["read", "edit"], deferred: ["custom__audit"] })).toBe("")
+  })
+  test("computer use is named only when a computer_ tool is in the catalogue", () => {
+    expect(capabilityIndex({ listed: [], deferred: ["image_gen"] })).not.toContain("computer")
+    expect(capabilityIndex({ listed: [], deferred: ["computer_session", "computer_key"] })).toContain("computer_* (computer use)")
+  })
+  test("stays under 350 characters with every capability, in either list, and is the same for any catalogue order", () => {
+    for (const split of [0, 5, ALL.length]) expect(capabilityIndex({ listed: ALL.slice(0, split), deferred: ALL.slice(split) }).length).toBeLessThanOrEqual(350)
+    expect(capabilityIndex({ listed: [], deferred: [...ALL].reverse() })).toBe(capabilityIndex({ listed: [], deferred: ALL }))
+  })
+  test("the engine hands the system prompt the session's catalogue, and finding a tool does not move it out of the deferred list", async () => {
+    const seen: string[] = []
+    const s = scenario([callTool("tool_search", { query: "screenshot" }), stop("found")], { experimental: { tool_discovery: true } }, { system: (_cwd, context) => (seen.push(context?.tools ? capabilityIndex(context.tools) : "none"), "sys") })
+    await s.engine.runTurn(turn({ text: "go" }).input)
+    expect(seen.length).toBeGreaterThanOrEqual(2)
+    expect(new Set(seen)).toEqual(new Set(["MendCode tools reached through `tool_search` (load, then call): screenshot. Do not claim you lack them."]))
+    expect(s.requests.at(-1)!.tools.map((tool) => tool.name)).toContain("screenshot")
+  })
+  test("the tool_search description names the capabilities models deny having", () => {
+    const description = createToolSearch(() => [], new Set()).description
+    for (const word of ["image generation", "computer use", "memory", "websearch"]) expect(description).toContain(word)
   })
 })
 

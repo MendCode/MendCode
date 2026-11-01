@@ -22,7 +22,7 @@ function temp() {
   return dir
 }
 
-function setup({ env = {}, agentName = "fake", idleMs, releasedIdleMs, bindings, trace, hostServers, modelFor, onModels, effortFor, onEfforts }: { env?: Record<string, string>; agentName?: string; idleMs?: number; releasedIdleMs?: number; bindings?: Map<string, string>; trace?: (direction: "in" | "out", line: string) => void; hostServers?: Parameters<typeof createAcpEngine>[0]["hostServers"]; modelFor?: () => string | undefined; onModels?: Parameters<typeof createAcpEngine>[0]["onModels"]; effortFor?: () => string | undefined; onEfforts?: Parameters<typeof createAcpEngine>[0]["onEfforts"] } = {}) {
+function setup({ env = {}, agentName = "fake", idleMs, releasedIdleMs, bindings, trace, hostServers, modelFor, onModels, effortFor, onEfforts, appendSystem }: { env?: Record<string, string>; agentName?: string; idleMs?: number; releasedIdleMs?: number; bindings?: Map<string, string>; trace?: (direction: "in" | "out", line: string) => void; hostServers?: Parameters<typeof createAcpEngine>[0]["hostServers"]; modelFor?: () => string | undefined; onModels?: Parameters<typeof createAcpEngine>[0]["onModels"]; effortFor?: () => string | undefined; onEfforts?: Parameters<typeof createAcpEngine>[0]["onEfforts"]; appendSystem?: (cwd: string) => string | undefined } = {}) {
   const dir = temp()
   const log = join(dir, "log.jsonl")
   const config: AcpAgentConfig = { command: process.execPath, args: [FAKE], env: { FAKE_ACP_LOG: log, ...env } }
@@ -41,6 +41,7 @@ function setup({ env = {}, agentName = "fake", idleMs, releasedIdleMs, bindings,
     ...(onModels ? { onModels } : {}),
     ...(effortFor ? { effortFor } : {}),
     ...(onEfforts ? { onEfforts } : {}),
+    ...(appendSystem ? { appendSystem } : {}),
   })
   engines.push(engine)
   const received = () =>
@@ -119,6 +120,31 @@ describe("a normal turn", () => {
     expect(await engine.runTurn(turnInput({ sessionId, text: "back" }).input)).toEqual({ status: "ok" })
     expect(received().filter((message) => message.method === "initialize")).toHaveLength(2)
     expect(received().filter((message) => message.method === "session/load")).toHaveLength(1)
+  })
+
+  test("the daemon's appended text leads only the first prompt of a new agent session, never a later or a resumed one", async () => {
+    const roots: string[] = []
+    const context = "Terminal rendering (assistant messages):\n- A mermaid fence is drawn."
+    const { engine, dir, received } = setup({ releasedIdleMs: 50, env: { FAKE_ACP_LOAD: "1" }, appendSystem: (root) => (roots.push(root), context) })
+    const sessionId = ids("session")
+    expect(await engine.runTurn(turnInput({ sessionId }).input)).toEqual({ status: "ok" })
+    expect(await engine.runTurn(turnInput({ sessionId, text: "again" }).input)).toEqual({ status: "ok" })
+    engine.release!(sessionId)
+    await Bun.sleep(400)
+    expect(await engine.runTurn(turnInput({ sessionId, text: "back" }).input)).toEqual({ status: "ok" })
+    expect(received().filter((message) => message.method === "session/load")).toHaveLength(1)
+    expect(received().filter((message) => message.method === "session/prompt").map((message) => message.params.prompt)).toEqual([
+      [{ type: "text", text: context }, { type: "text", text: "hello" }],
+      [{ type: "text", text: "again" }],
+      [{ type: "text", text: "back" }],
+    ])
+    expect(roots).toEqual([dir])
+  })
+
+  test("no appended text keeps the first prompt as the user's alone", async () => {
+    const { engine, received } = setup({ appendSystem: () => undefined })
+    expect(await engine.runTurn(turnInput().input)).toEqual({ status: "ok" })
+    expect(received().find((message) => message.method === "session/prompt").params.prompt).toEqual([{ type: "text", text: "hello" }])
   })
 
   test("tool calls, diffs, an update for an unknown call, and the plan", async () => {

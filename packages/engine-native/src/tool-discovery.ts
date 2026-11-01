@@ -140,12 +140,53 @@ export function searchTools(catalog: readonly ToolSpec[], query: string, limit =
   return result
 }
 
+/** The tools a session's model can call: listed in every request, or deferred behind `tool_search`. */
+export type ToolCatalog = { listed: readonly string[]; deferred: readonly string[] }
+
+/**
+ * MendCode's own capabilities a model tends to deny having when their schemas are deferred (an image, the screen, the web, memory...).
+ * A group is named only when the session's catalogue has one of its tools, so the line cannot promise a tool this session lacks.
+ */
+const CAPABILITY_GROUPS: ReadonlyArray<{ tools: readonly string[] | RegExp; name?: string; note?: string }> = [
+  { tools: ["image_gen"], note: "pictures show in MendCode" },
+  { tools: /^computer_/, name: "computer_*", note: "computer use" },
+  { tools: ["remember", "memory"] },
+  { tools: ["websearch", "webfetch"] },
+  { tools: ["browser"] }, { tools: ["screenshot"] }, { tools: ["loop"] },
+  { tools: /^workflow_/, name: "workflow_*" },
+  { tools: ["lsp"] }, { tools: ["secrets"] }, { tools: ["threads"] }, { tools: ["pr_watch"] }, { tools: ["todo"] },
+]
+
+/** The group's present tools in one of the two lists, as the model reads them: `remember/memory`, `computer_* (computer use)`. */
+function capabilityLabels(names: ReadonlySet<string>): string[] {
+  return CAPABILITY_GROUPS.flatMap(({ tools, name, note }) => {
+    const present = Array.isArray(tools) ? tools.filter((tool) => names.has(tool)) : [...names].filter((tool) => (tools as RegExp).test(tool))
+    if (!present.length) return []
+    const label = name ?? present.join("/")
+    return [note ? `${label} (${note})` : label]
+  })
+}
+
+/**
+ * One line naming the capabilities of this catalogue, deferred ones included: it is built from the catalogue alone, in a fixed order,
+ * so it is the same on every call of a session until its tool set changes (finding a tool does not move one from deferred to listed).
+ */
+export function capabilityIndex(catalog: ToolCatalog): string {
+  const listed = capabilityLabels(new Set(catalog.listed)), deferred = capabilityLabels(new Set(catalog.deferred))
+  if (!listed.length && !deferred.length) return ""
+  const sentences = [
+    ...(listed.length ? [`MendCode tools listed here: ${listed.join(", ")}.`] : []),
+    ...(deferred.length ? [`${listed.length ? "Also" : "MendCode tools"} reached through \`${TOOL_SEARCH_NAME}\` (load, then call): ${deferred.join(", ")}.`] : []),
+  ]
+  return `${sentences.join(" ")} Do not claim you lack them.`
+}
+
 /** The host supplies the permission-filtered catalog again at execution time; lookup never invokes a tool. */
 export function createToolSearch(catalog: () => readonly ToolSpec[], active: ReadonlySet<string>, primary: (name: string) => boolean = isPrimaryTool): Tool {
   const discovered = new Set(active)
   return defineTool({
     name: TOOL_SEARCH_NAME,
-    description: "Find more tools (glob, grep, ls, webfetch, todo, MCP, extensions...) by task, name or keyword; matches become directly callable. Search before assuming one is missing. Finding a tool never grants permission to run it.",
+    description: "Find more tools (glob, grep, ls, webfetch, websearch, todo, memory, image generation, computer use, MCP, extensions...) by task, name or keyword; matches become directly callable. Search before assuming one is missing. Finding a tool never grants permission to run it.",
     permission: "read",
     args: z.strictObject({ query: z.string().max(500), limit: z.number().int().min(1).max(8).optional() }),
     async execute({ query, limit }, { signal }) {

@@ -9,3 +9,9 @@ Working here:
 - Use `task` for clearly independent parts or when the user asks for agents, not for a search you can run yourself; collect its result before saying the work is done.
 - Ask with `question` only for a decision the repository cannot answer; otherwise continue.
 - Finish with what changed, the check you ran and its result, and what stays unverified.
+<!-- focus -->
+How to work here:
+- Before a batch of tool calls that changes something, say in one sentence what you will do; do not narrate reads or each call.
+- Work of three or more steps gets a `todo` list (load it with `tool_search` when it is not listed).
+- Cite code as `path:line`.
+- Answer with the result first, then the check you ran and its outcome, and what stays unverified.

@@ -74,7 +74,7 @@ test("mode composition matches preset boundaries, memory stays independent and c
   // the user's own text, like the instructions, so every mode carries it.
   expect(build("minimal").parts.map((p) => p.id)).toEqual(["base", "self-knowledge", "instructions", "append", "memory"])
   // Memory is chosen per user message, so in focus, guide and full it is the last part and everything before it is a stable prefix.
-  expect(build("focus").parts.map((p) => p.id)).toEqual(["base", "instructions", "skills", "append", "boundary", "self-knowledge", "focus", "memory"])
+  expect(build("focus").parts.map((p) => p.id)).toEqual(["base", "instructions", "skills", "append", "boundary", "self-knowledge", "focus", "focus-core", "memory"])
   expect(build("guide").parts.map((p) => p.id)).toEqual(["base", "instructions", "skills", "append", "boundary", "self-knowledge", "focus", "focus-guide", "memory"])
   expect(build("full").parts.map((p) => p.id)).toEqual([...parts.map((p) => p.id).filter((id) => id !== "memory"), "boundary", "self-knowledge", "focus", "focus-guide", "capabilities", "memory"])
   expect(build("custom").parts.map((p) => p.id)).toEqual(["boundary", "instructions", "append", "memory"])
@@ -113,10 +113,18 @@ test("build bindings change review/edit and model guidance only inside focus/ful
   expect(createPromptModes(dir).status(root)).toMatchObject({ mode: "focus", focusID: "auto" })
 })
 
+test("the capability line is the last static part of focus, guide and full, before memory, and minimal and custom leave it out", () => {
+  const dir = temp(), root = temp()
+  const withLine = [...parts.slice(0, -1), { id: "capabilities-index", label: "MendCode capabilities", text: "MendCode tools listed here: todo." }, parts.at(-1)!]
+  const ids = (mode: "minimal" | "focus" | "guide" | "full" | "custom") => composePromptParts(dir, root, withLine, { mode }).parts.map((p) => p.id)
+  for (const mode of ["focus", "guide", "full"] as const) expect(ids(mode).slice(-2)).toEqual(["capabilities-index", "memory"])
+  for (const mode of ["minimal", "custom"] as const) expect(ids(mode)).not.toContain("capabilities-index")
+})
+
 test("auto follows the model: every family's ids map to it, open-weight and local-host ids map to local, and unknown ids get no vendor's guidance", () => {
   const cases: Array<[string | undefined, string]> = [
     ["claude-sonnet-5-5", "claude"], ["anthropic:claude-opus-5", "claude"], ["anthropic/claude-sonnet-4-5-20250929", "claude"], ["openrouter/anthropic/claude-3", "claude"], ["sonnet", "claude"], ["opus", "claude"],
-    ["gpt-6-sol", "codex"], ["gpt-5-codex", "codex"], ["openai/gpt-oss-120b", "codex"], ["o3-mini", "codex"], ["o4", "codex"], ["codex", "codex"], ["chatgpt:gpt-6-luna", "codex"], ["openai/beta", "codex"],
+    ["gpt-6-sol", "codex"], ["gpt-5-codex", "codex"], ["openai/gpt-oss-120b", "local"], ["ollama:gpt-oss:20b", "local"], ["gptoss-20b", "local"], ["o3-mini", "codex"], ["o4", "codex"], ["codex", "codex"], ["chatgpt:gpt-6-luna", "codex"], ["openai/beta", "codex"],
     ["gemini-3-pro", "gemini"], ["google/gemini-3-pro", "gemini"],
     ["kimi-k2-5", "kimi"], ["moonshotai/kimi-k2", "kimi"], ["moonshot-v1", "kimi"],
     ["deepseek-v4-pro", "deepseek"], ["openrouter/deepseek/deepseek-v3.2", "deepseek"],
