@@ -10,7 +10,7 @@
     "@mendcode/protocol": "workspace:*",
     "@mendcode/kernel": "workspace:*",
     "@mendcode/tools": "workspace:*",
-    "zod": "4.6.5"
+    "zod": "4.6.6"
   },
   "devDependencies": {
     "@mendcode/testkit": "workspace:*"

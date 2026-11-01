@@ -82,8 +82,8 @@ importers:
         specifier: workspace:*
         version: link:../tools
       zod:
-        specifier: 4.6.5
-        version: 4.6.5
+        specifier: 4.6.6
+        version: 4.6.6
     devDependencies:
       '@mendcode/protocol':
         specifier: workspace:*
@@ -155,8 +155,8 @@ importers:
         specifier: workspace:*
         version: link:../workflows
       zod:
-        specifier: 4.6.5
-        version: 4.6.5
+        specifier: 4.6.6
+        version: 4.6.6
     devDependencies:
       '@mendcode/testkit':
         specifier: workspace:*
@@ -168,8 +168,8 @@ importers:
         specifier: workspace:*
         version: link:../protocol
       zod:
-        specifier: 4.6.5
-        version: 4.6.5
+        specifier: 4.6.6
+        version: 4.6.6
 
   packages/editor-launch: {}
 
@@ -182,8 +182,8 @@ importers:
         specifier: workspace:*
         version: link:../protocol
       zod:
-        specifier: 4.6.5
-        version: 4.6.5
+        specifier: 4.6.6
+        version: 4.6.6
     devDependencies:
       '@mendcode/testkit':
         specifier: workspace:*
@@ -242,8 +242,8 @@ importers:
         specifier: workspace:*
         version: link:../tools
       zod:
-        specifier: 4.6.5
-        version: 4.6.5
+        specifier: 4.6.6
+        version: 4.6.6
 
   packages/engine-pi:
     dependencies:
@@ -257,8 +257,8 @@ importers:
         specifier: workspace:*
         version: link:../tools
       zod:
-        specifier: 4.6.5
-        version: 4.6.5
+        specifier: 4.6.6
+        version: 4.6.6
     devDependencies:
       '@mendcode/testkit':
         specifier: workspace:*
@@ -281,8 +281,8 @@ importers:
         specifier: workspace:*
         version: link:../protocol
       zod:
-        specifier: 4.6.5
-        version: 4.6.5
+        specifier: 4.6.6
+        version: 4.6.6
 
   packages/lsp:
     dependencies:
@@ -290,8 +290,8 @@ importers:
         specifier: workspace:*
         version: link:../tools
       zod:
-        specifier: 4.6.5
-        version: 4.6.5
+        specifier: 4.6.6
+        version: 4.6.6
 
   packages/mcp:
     dependencies:
@@ -302,8 +302,8 @@ importers:
         specifier: workspace:*
         version: link:../tools
       zod:
-        specifier: 4.6.5
-        version: 4.6.5
+        specifier: 4.6.6
+        version: 4.6.6
 
   packages/migrate:
     dependencies:
@@ -324,16 +324,16 @@ importers:
   packages/packages:
     dependencies:
       zod:
-        specifier: 4.6.5
-        version: 4.6.5
+        specifier: 4.6.6
+        version: 4.6.6
 
   packages/program: {}
 
   packages/protocol:
     dependencies:
       zod:
-        specifier: 4.6.5
-        version: 4.6.5
+        specifier: 4.6.6
+        version: 4.6.6
 
   packages/store:
     dependencies:
@@ -366,8 +366,8 @@ importers:
         specifier: workspace:*
         version: link:../packages
       zod:
-        specifier: 4.6.5
-        version: 4.6.5
+        specifier: 4.6.6
+        version: 4.6.6
 
   packages/upgrade:
     dependencies:
@@ -384,8 +384,8 @@ importers:
         specifier: workspace:*
         version: link:../protocol
       zod:
-        specifier: 4.6.5
-        version: 4.6.5
+        specifier: 4.6.6
+        version: 4.6.6
 
   spikes/render:
     dependencies:
@@ -627,8 +627,8 @@ packages:
       '@types/emscripten':
         optional: true
 
-  zod@4.6.5:
-    resolution: {integrity: sha512-v5l/aFXZQeai4awLbOpSoHecE9UiMrnfx75tEXLjNonXVARxQ5mOeipTjROUchszUNCqnE+hqAMujRsRHsut2Q==}
+  zod@4.6.6:
+    resolution: {integrity: sha512-4UmzQUF5fxvfcYHlbjBmejU+w+hbDnWFx4aS8kBx7nPBHcO2SqPbpAG8snbdg+Xse4pRefR98hgjFgIMCI/UhA==}
 
 snapshots:
 
@@ -805,4 +805,4 @@ snapshots:
 
   web-tree-sitter@0.25.10: {}
 
-  zod@4.6.5: {}
+  zod@4.6.6: {}

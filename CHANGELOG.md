@@ -137,6 +137,8 @@ no model, and the pull request reviewer keeps working when the daemon starts wit
 - A Claude Code, Codex or ACP session gets MendCode's notices (a PR review's summary and findings) with their line breaks, not as one
   paragraph; each line after the first is indented, so none can pass for a `User:` line of the handoff.
 - `/reviews` says `updated just now`, not `updated now ago`.
+- Zod is 4.6.6: 4.6.5 could exhaust memory validating an oversized constrained collection (GHSA-mrhx-c7xc-m3w5), and the daemon
+  validates what reaches it over its socket, HTTP and ACP with it.
 - PR review: `@mendcode review` on a head with nothing new no longer answers just "published". The reply names the head, says
   no new review was posted, and lists the earlier findings it resolved and the ones still open. An explicit review re-checks the
   open findings, so asking again after a fix closes the threads of the fixed ones, also on a head reviewed before. Where GitHub

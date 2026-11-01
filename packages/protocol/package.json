@@ -4,5 +4,5 @@
   "private": true,
   "type": "module",
   "exports": { ".": "./src/index.ts", "./wire": "./src/wire.ts" },
-  "dependencies": { "zod": "4.6.5" }
+  "dependencies": { "zod": "4.6.6" }
 }
