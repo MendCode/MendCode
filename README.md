@@ -39,7 +39,7 @@ pull requests.
 
 - [Why MendCode](#why-mendcode)
 - [Install](#install) · [First run](#first-run)
-- [What it does](#what-it-does): [sessions](#sessions-that-outlive-the-terminal), [pull request reviews](#pull-request-reviews), [memory](#memory-you-can-read-and-edit), [approvals](#approvals), [long work](#goals-loops-and-sub-agents), [/changes](#review-the-diff-before-you-commit), [engines](#one-screen-several-engines)
+- [What it does](#what-it-does): [sessions](#sessions-that-outlive-the-terminal), [pull request reviews](#pull-request-reviews), [memory](#memory-you-can-read-and-edit), [packages and profiles](#packages-and-profiles), [long work](#goals-loops-and-sub-agents), [/changes](#review-the-diff-before-you-commit), [engines](#one-screen-several-engines)
 - [Status](#status) · [Build from source](#build-from-source)
 - Reference: [views](#replaceable-views), [script workflows](#script-workflows), [Markdown](#markdown-renderer), [process modes](#process-modes), [terminal details](#terminal-details), [tiers](#tiers), [measurements](#measurements), [engines](#engines), [embedding](#embedding), [security](#security-model), [docs](#docs-and-development)
 
@@ -52,7 +52,8 @@ pull requests.
 | A model that reads less of your repository | A code graph answers where a symbol is and who calls it, with exact `file:line` ([code graph](docs/code-graph.md)) |
 | Long sessions that do not forget | Compaction packs the conversation and keeps a scratchpad of what was folded ([compaction](docs/compaction.md)) |
 | Reviews you can trust | Two passes on every pull request: one finds defects, a fresh one tries to refute each ([PR reviewer](docs/pr-review.md)) |
-| Control over what runs | The daemon checks every tool call against your permission mode, whatever the prompt says ([permissions](docs/permissions.md)) |
+| A whole setup you can swap and share | One package carries a theme, home screen, prompt, keys, views, skills and commands; turning it off puts everything back ([packages](docs/packages.md)) |
+| Work kept apart from personal | A profile is a set of folders with its own user memories, model roles and default permission, applied without switching ([profiles](docs/profiles.md)) |
 | As much or as little as you like | Three tiers, minimalist, balanced and full, from a plain prompt to every panel ([tiers](#tiers)) |
 
 ## Install
@@ -199,15 +200,22 @@ memories as related, supports, supersedes or conflicts; a memory linked to one t
   <img src="docs/assets/readme/memory-graph.svg" alt="The memory page's Graph tab: saved memories and their links around the selected one, with its detail below." width="100%">
 </p>
 
-### Approvals
+### Packages and profiles
 
-Every tool call is checked by the daemon against your permission mode before it runs, whatever the model was told: `ask`,
-`edits`, `full`, `plan` or `smart`. An approval answers once or for the session. A pasted key becomes `‹secret:1›` and the model
-sees only the marker. Seatbelt or bubblewrap around the model's shell commands is available and off by default
-([permissions](docs/permissions.md), [sandbox](docs/sandbox.md), [secrets](docs/secrets.md)).
+A package is a whole setup in one folder: a theme, the terminal profile (logo, home screen, prompt box, density, slash menu,
+panel cards), the right panel, keybindings, prompt files and any of the 22 view slots that draw the transcript, plus the skills,
+commands, agents, MCP servers and workflows it adds. It is an overlay: nothing is written into your settings, and turning it off
+puts everything back. `/packages` then `o` lists every setting, key and view it takes over, and `k` keeps your own value for one.
+`mendcode package new mylook` writes a complete package to start from, and anyone installs yours with
+`mendcode package install github:you/mylook` ([packages](docs/packages.md)).
+
+A profile is a set of folders. `mendcode profile add company ~/Code/acme` gives everything under it its own user memories, model
+roles and default permission; open a terminal there and you are working as `company`, shown as `◆ company` under the prompt.
+Everything else is personal ([profiles](docs/profiles.md)). Your own setup moves to another machine as one checked file
+([config bundles](docs/config-bundle.md)).
 
 <p align="center">
-  <img src="docs/assets/readme/approval.svg" alt="An approval card: the command the model wants to run, with allow once, allow for this session and reject." width="100%">
+  <img src="docs/assets/readme/packages.svg" alt="The packages page listing what the retro example package takes over: theme, home screen, prompt box, slash menu, panel cards, two keys and two views, each from the default to the package's value." width="100%">
 </p>
 
 ### Goals, loops and sub-agents
@@ -238,7 +246,7 @@ logins and tool loops, and sub-agents can run on any of them by model name ([eng
 language servers for navigation ([code graph](docs/code-graph.md), [LSP](docs/lsp.md)), compaction that packs long conversations
 ([compaction](docs/compaction.md)), Mermaid diagrams drawn in the terminal ([mermaid](docs/mermaid.md)), native macOS computer use
 bound to the window you approve, off until enabled ([computer](docs/computer.md)), a browser tool ([browser](docs/browser.md)),
-hooks ([hooks](docs/hooks.md)), packages ([packages](docs/packages.md)), push-to-talk dictation ([voice](docs/voice.md)), Telegram
+hooks ([hooks](docs/hooks.md)), push-to-talk dictation ([voice](docs/voice.md)), Telegram
 ([channels](docs/channels.md)) and usage-limit checkpoints ([usage limits](docs/usage-limit.md)).
 
 ## Status
