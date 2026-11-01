@@ -190,6 +190,30 @@ export function decorate(entry: string, body: Span[], input: FooterInput): Span[
   return icon ? [{ text: `${icon} `, fg: "primary" }, ...colored] : colored
 }
 
+/**
+ * A segment as the row under the prompt lays it out: its spans, its overflow rank (the lowest gives way first), and the narrower form it
+ * takes before giving way, when it has one (the quota windows without bars, the code graph's files alone).
+ */
+export type FooterPart = { id: string; spans: Span[]; rank: number; compact?: Span[] }
+
+/** Under this many cells a segment draws its compact form (`isCompact`): what `footerParts` asks for the narrow one. */
+const COMPACT_WIDTH = 60
+
+/**
+ * `entries` as parts for a row that groups and drops them itself (prompt-chrome.ts): the ones with something to show, in order, none
+ * dropped. The rank is the single row's (`DROP_RANK`) scaled under 2, so a segment always gives way before what the row draws itself.
+ */
+export function footerParts(input: FooterInput, entries: readonly string[]): FooterPart[] {
+  const narrow = { ...input, width: Math.min(input.width, COMPACT_WIDTH) }
+  return entries.flatMap((id) => {
+    const spans = entrySpans(id, input)
+    if (spans.length === 0) return []
+    const compact = entrySpans(id, narrow)
+    const smaller = widthOf(compact) < widthOf(spans)
+    return [{ id, spans, rank: 1 + (DROP_RANK[parseRowSegment(id).id] ?? 2) / 10, ...(smaller ? { compact } : {}) }]
+  })
+}
+
 /** The session stats a segment reads: the app's own (one computation per frame), else the figures this input carries. */
 function statsOf(input: FooterInput): SessionStats {
   return input.stats ?? computeSessionStats({

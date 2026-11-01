@@ -6,7 +6,7 @@ export type SessionAutomation =
   | { kind: "session.list"; all: boolean; allProjects?: boolean; limit: number; project?: string; state?: string; active?: boolean; since?: number; search?: string; agent?: string; model?: string; archived?: boolean }
   | ({ kind: "session.create"; title: string; parent?: string } & SessionSelection)
   | { kind: "session.get" | "session.status" | "session.delete"; id: string }
-  | { kind: "session.inspect"; id: string; limit: number }
+  | { kind: "session.inspect"; id: string; limit: number; summary?: boolean }
   | { kind: "session.stats"; id: string }
   | { kind: "session.rename"; id: string; title: string }
   | { kind: "session.fork"; id: string; messageId?: string }
@@ -114,7 +114,7 @@ export function parseSession(sub: string | undefined, rest: string[], flags: Map
         return ok({ kind: "session.archive", id, restore: flags.has("restore") })
       case "inspect":
         if (!id || rest.length !== 1) throw new Error("session inspect needs <id>")
-        return ok({ kind: "session.inspect", id, limit: number("limit", 0, 50) ?? 50 })
+        return ok({ kind: "session.inspect", id, limit: number("limit", 0, 50) ?? 50, ...(flags.has("summary") ? { summary: true } : {}) })
       case "stats":
         if (!id || rest.length !== 1) throw new Error("session stats needs <id>")
         return ok({ kind: "session.stats", id })

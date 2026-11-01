@@ -179,6 +179,11 @@ export type PeerPort = {
   tell(target: string, text: string, options?: { mode?: "auto" | "queue" | "steer"; clientRequestId?: string }): Promise<{ ok: true; waiting: boolean } | { ok: false; message: string }>
   /** A session's figures as text (this one for `self`): time per turn, day and hour, usage per model, tools, sub-agents, approval waits. Same project only. */
   stats?(target: string): { ok: true; output: string } | { ok: false; message: string }
+  /**
+   * One page of a session's conversation by its exact id, of any project of this daemon: user and assistant messages, a line per tool
+   * call, no tool output or reasoning. `cursor` is the `next` of the previous page; `next` is absent on the last page.
+   */
+  read?(target: string, cursor?: string): { ok: true; output: string; next?: string } | { ok: false; message: string }
 }
 
 export type ThreadResult = { ok: true; output: string } | { ok: false; message: string }

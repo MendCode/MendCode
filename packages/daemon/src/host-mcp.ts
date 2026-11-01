@@ -16,9 +16,10 @@ type HostTool = Awaited<ReturnType<NonNullable<EnginePort["hostTools"]>>>[number
 /**
  * What the other harness's model is told about these tools (MCP `instructions`, which Claude Code puts in its system prompt).
  * Only what the session really has is named: a session with no graph tools is not told to use a graph. Codex has no ToolSearch:
- * there a deferred MCP tool is a nested tool of its `exec`, listed in `ALL_TOOLS` (codex 0.162).
+ * there a deferred MCP tool is a nested tool of its `exec`, listed in `ALL_TOOLS` (codex 0.162). `unbridged` is the session's engine
+ * key when it has no thread bridge: sub-agents on MendCode's other models are then off, and the model is told how they are turned on.
  */
-export function hostInstructions(tools: readonly HostTool[], harness: "claude" | "codex" = "claude") {
+export function hostInstructions(tools: readonly HostTool[], harness: "claude" | "codex" = "claude", unbridged?: string) {
   const has = (prefix: string) => tools.some((tool) => tool.name.startsWith(prefix))
   const codex = harness === "codex"
   return [
@@ -34,6 +35,7 @@ export function hostInstructions(tools: readonly HostTool[], harness: "claude" |
     ...(has("pr_review") ? ["Review one PR now: mcp__mendcode__pr_review with action review (MendCode's own reviewer, as /pr review <n>; it posts only as the user's /pr publish consent allows). Never post an @mendcode comment, or anything else, from the user's account to start a review."] : []),
     ...(has("review_config") && !has("pr_review") ? ["Never post an @mendcode comment from the user's account to start a review: the user runs /pr review <n>."] : []),
     ...(has("mendcode_settings") ? ["MendCode's daemon settings (tier, permissions, models and roles, compaction, budgets, output style, experimental): you CAN change them. Read with mcp__mendcode__mendcode_settings get, then propose the exact patch; the user approves it on a card and only then is it saved. Do not tell the user to change it themselves, and do not edit MendCode's database or run mendcode commands to do it."] : []),
+    ...(unbridged ? [`Sub-agents on MendCode's other models (\`${PROGRAM_NAME} models\`) need the full tier and /tier thread_mcp on ${unbridged}; your own sub-agent tool runs only this harness's. Say that, never that such a model does not exist.`] : []),
   ].join("\n")
 }
 
@@ -82,6 +84,8 @@ export function createHostMcp(options: {
   directory(sessionId: SessionId): string | undefined
   tools(input: { directory: string; sessionId: SessionId }): Promise<HostTool[]>
   call(input: { turn: TurnInput; name: string; args: unknown }): ReturnType<NonNullable<EnginePort["hostCall"]>>
+  /** The session's engine key (`claude`, `codex`, `acp:<name>`) when it has no thread bridge, which delegates to MendCode's other models. */
+  unbridged?(sessionId: SessionId): string | undefined
   /** Tests inject a listener without opening a socket. */
   listen?(handler: (request: Request) => Promise<Response>): { url: string; stop(): void }
 }) {
@@ -113,7 +117,7 @@ export function createHostMcp(options: {
     const error = (code: number, text: string) => json({ jsonrpc: "2.0", id: message.id, error: { code, message: text } })
     const directory = options.directory(sessionId)
     const listed = async () => (directory ? await options.tools({ directory, sessionId }).catch(() => []) : [])
-    if (message.method === "initialize") return reply({ protocolVersion: ["2025-03-26", "2025-06-18", "2025-11-25"].includes(message.params?.protocolVersion) ? message.params.protocolVersion : "2025-03-26", capabilities: { tools: {} }, serverInfo: { name: HOST_MCP_SERVER, version: "1" }, instructions: hostInstructions(await listed()) })
+    if (message.method === "initialize") return reply({ protocolVersion: ["2025-03-26", "2025-06-18", "2025-11-25"].includes(message.params?.protocolVersion) ? message.params.protocolVersion : "2025-03-26", capabilities: { tools: {} }, serverInfo: { name: HOST_MCP_SERVER, version: "1" }, instructions: hostInstructions(await listed(), "claude", options.unbridged?.(sessionId)) })
     if (message.method === "ping") return reply({})
     if (message.method === "tools/list") return reply({ tools: (await listed()).map((tool) => ({ name: tool.name, description: tool.description, inputSchema: mcpInputSchema(tool.parameters) })) })
     if (message.method !== "tools/call") return error(-32601, "Unknown method")
@@ -139,7 +143,7 @@ export function createHostMcp(options: {
       const directory = options.directory(sessionId)
       if (!options.enabled() || !directory) return undefined
       const tools = await options.tools({ directory, sessionId }).catch(() => [])
-      return tools.length ? hostInstructions(tools, harness) : undefined
+      return tools.length ? hostInstructions(tools, harness, options.unbridged?.(sessionId)) : undefined
     },
     /** `claude` flags that connect one session's process to this server; empty when the feature is off. The same flags every time, so the process is kept between turns. */
     args(sessionId: SessionId): string[] {

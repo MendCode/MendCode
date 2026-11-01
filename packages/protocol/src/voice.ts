@@ -17,8 +17,11 @@ export const VoiceSettings = lazySchema(() => z.strictObject({
   model: z.string().trim().min(1).max(200).optional(),
   /** Overrides the provider's API root. Provider credentials go to it only when `provider` is set explicitly. */
   base_url: BaseUrl.optional(),
-  /** ISO 639-1/-3 hint (`es`, `en`); unset lets the model detect the language. */
-  language: z.string().regex(/^[a-z]{2,3}$/).optional(),
+  /**
+   * ISO 639-1/-3 code (`es`), or two (`es,en`) that the on-device model hears at once, keeping the surer transcript; an API gets
+   * the first as its hint. Unset: on-device follows the Mac's first two preferred languages and an API detects the language.
+   */
+  language: z.string().regex(/^[a-z]{2,3}(,[a-z]{2,3})?$/).optional(),
   /** Longest recording; the terminal stops it there. */
   max_seconds: z.number().int().min(5).max(300).optional(),
   timeout_ms: z.number().int().min(1000).max(600_000).optional(),

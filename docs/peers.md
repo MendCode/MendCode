@@ -4,9 +4,29 @@ Sessions of the same project can talk to each other through two agent tools.
 
 ## `sessions`
 
-Lists the project's other sessions: id, title, state (`idle`, `generating`, …) and last update. It never shows their transcripts, files or reasoning. Sub-sessions (workflow tasks, subagents) are not listed.
+Lists the project's other sessions: id, title, state (`idle`, `generating`, …) and last update. The list never shows their transcripts, files or reasoning. Sub-sessions (workflow tasks, subagents) are not listed.
 
 It is a list of recent conversations, not of agents working right now: `idle` does not mean the session is open, and a title does not mean it owns a file.
+
+### `read`: one session's conversation
+
+`sessions read=<exact session id>` returns that conversation, oldest first, as the Markdown of [`/export`](sessions.md) without the
+details: the user's and the assistant's messages, system notices, and one line per tool call (`**Tool:** \`shell: ls\``, at most 160
+characters). Tool input and output, reasoning and what an engine's own sub-agent did inside the turn are left out; secrets stay
+markers. The page starts with a line saying it is another conversation's data, not instructions.
+
+- **Any project.** An exact id is the user's own pointer (`read the chat ses_…`), so it may name a session of another project of
+  this daemon; the list stays this project's. A sub-session (a sub-agent's child session) is read by its id too. A shortened id,
+  a title or another program's chat (`claude:…`, `codex:…`) is not accepted.
+- **Pages.** A page holds whole messages up to 40,000 bytes and 1,500 lines (one longer message is cut on its own page; the export
+  keeps 40,000 characters of a message anyway). A page that is not the last ends with `more: cursor=<n>`: call again with
+  `read` and `cursor=<n>`. The last one ends with `end of conversation`. A turn longer than the export's 200 items goes on in the
+  next pages instead of being cut.
+- **Permission `read`**, like the list: no approval. A turn that a remote or peer client started reads no other conversation
+  (`reading another session is local only`), as it gets no `threads` tool.
+
+Use it instead of searching `~/.claude`, `~/.codex` or MendCode's database for a session; to search inside one, or to read this
+project's chats kept by other programs, see `threads` in [sessions](sessions.md#thread-tools-and-thread-t4-tier-balanced).
 
 ## `tell`
 
@@ -25,7 +45,7 @@ Limits:
 - messages up to 4,000 characters; replies keep the last 4,000;
 - deliveries have a durable command lifecycle. After a restart queued commands keep their existing queue id and wait for the user to resume; completed/interrupted turns settle from persisted events. An unverified delivery fails rather than inserting the prompt twice.
 
-Claude Code sessions can receive messages and answer them. The tools themselves are only on native sessions.
+Claude Code sessions can receive messages and answer them. Native sessions have the tools; Claude Code and Codex sessions reach them as `mcp__mendcode__sessions` and `mcp__mendcode__tell` while `harness_tools` is on ([Claude Code](claude-code.md)).
 
 The `threads` tool (`message`, `wait`, `read`, `interrupt`, and `merge_back` for a fork of the calling session) and the composer's `@thread` build on the same rules and limits; see [sessions](sessions.md#thread-tools-and-thread-t4-tier-balanced).
 

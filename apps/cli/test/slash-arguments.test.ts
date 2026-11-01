@@ -21,6 +21,14 @@ async function started() {
 }
 
 describe("argument words", () => {
+  test("/voice language lists auto and every on-device language by name, and a second word offers the languages again", () => {
+    const first = argumentMatches("voice", "language ")
+    expect(first[0]).toMatchObject({ name: "voice language auto" })
+    expect(first.find((option) => option.name === "voice language es")?.summary).toStartWith("Spanish")
+    expect(first.map((option) => option.name)).toContain("voice language ja")
+    expect(names("voice", "language es ")).toContain("voice language es en")
+  })
+
   test("a blank word lists every word of the command; a partial one puts the exact word, then prefixes, then a word that only contains it", () => {
     expect(names("pr", "")).toEqual(["pr on", "pr off", "pr review", "pr comments", "pr watch", "pr unwatch", "pr check", "pr watch-repo", "pr unwatch-repo", "pr repos", "pr dashboard", "pr publish", "pr list"])
     expect(names("pr", "watch")).toEqual(["pr watch", "pr watch-repo", "pr unwatch", "pr unwatch-repo"])

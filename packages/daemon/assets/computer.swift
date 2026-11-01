@@ -9,6 +9,11 @@ var cancelled = false
 signal(SIGTERM) { _ in cancelled = true }
 signal(SIGINT) { _ in cancelled = true }
 func fail(_ message: String) throws -> Never { throw Failure(message: message) }
+// Delivery semantics as agent-desktop names them (CONCEPTS.md, "Delivery Semantics"): what matters about a failure is whether input
+// can have reached the app. Until the request starts an effect (an AX action or value, a posted event, a window raise, a launch) a
+// failure sent nothing and is safe to retry from a new observation; after it, the effect may have landed.
+var effectStarted = false
+func effect() { effectStarted = true }
 func attribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
     var result: CFTypeRef?
     return AXUIElementCopyAttributeValue(element, name as CFString, &result) == .success ? result : nil
@@ -23,16 +28,44 @@ func clipped(_ value: String) -> String {
     if let last = units.last, last >= 0xD800 && last <= 0xDBFF { units.removeLast() }
     return String(decoding: units, as: UTF16.self).replacingOccurrences(of: "\n", with: " ").replacingOccurrences(of: "\r", with: " ").replacingOccurrences(of: "\t", with: " ")
 }
+// AppKit text views (TextEdit's document) do not report AXEnabled at all; without AXTextArea here they offered no action.
+let enabledWithoutAttribute: Set<String> = ["AXWindow", "AXScrollArea", "AXGroup", "AXWebArea", "AXImage", "AXTextArea"]
 func enabled(_ element: AXUIElement) -> Bool {
     if let value = attribute(element, kAXEnabledAttribute) as? Bool { return value }
-    // AppKit text views (TextEdit's document) do not report AXEnabled at all; without AXTextArea here they offered no action.
-    return ["AXWindow", "AXScrollArea", "AXGroup", "AXWebArea", "AXImage", "AXTextArea"].contains(text(element, kAXRoleAttribute))
+    return enabledWithoutAttribute.contains(text(element, kAXRoleAttribute))
 }
-func bounds(_ element: AXUIElement) -> CGRect? {
-    guard let p = attribute(element, kAXPositionAttribute), let s = attribute(element, kAXSizeAttribute), CFGetTypeID(p) == AXValueGetTypeID(), CFGetTypeID(s) == AXValueGetTypeID() else { return nil }
-    var point = CGPoint.zero, size = CGSize.zero
-    guard AXValueGetValue(p as! AXValue, .cgPoint, &point), AXValueGetValue(s as! AXValue, .cgSize, &size), point.x.isFinite, point.y.isFinite, size.width > 0, size.height > 0 else { return nil }
-    return CGRect(origin: point, size: size)
+func rect(position: CFTypeRef?, size: CFTypeRef?) -> CGRect? {
+    guard let p = position, let s = size, CFGetTypeID(p) == AXValueGetTypeID(), CFGetTypeID(s) == AXValueGetTypeID() else { return nil }
+    var point = CGPoint.zero, extent = CGSize.zero
+    guard AXValueGetValue(p as! AXValue, .cgPoint, &point), AXValueGetValue(s as! AXValue, .cgSize, &extent), point.x.isFinite, point.y.isFinite, extent.width > 0, extent.height > 0 else { return nil }
+    return CGRect(origin: point, size: extent)
+}
+func bounds(_ element: AXUIElement) -> CGRect? { rect(position: attribute(element, kAXPositionAttribute), size: attribute(element, kAXSizeAttribute)) }
+// One round trip per node, as agent-desktop reads its nodes (crates/macos/src/tree/properties/node_attribute_fetch.rs, Apache-2.0):
+// AXUIElementCopyMultipleAttributeValues answers every attribute a node needs at once, where one call per attribute made about
+// fifteen times the calls (measured read-only, same nodes and actions: Ghostty's window, 239 nodes, 465–528 ms before and 61–73 ms
+// now; Finder's sidebar walk 5,822 calls and 471 ms before, 381 calls and 68 ms now). The value is read separately, and only once
+// the role says the node is not a secure field.
+let nodeAttributes = [kAXRoleAttribute, kAXSubroleAttribute, kAXTitleAttribute, kAXDescriptionAttribute, kAXIdentifierAttribute, kAXEnabledAttribute, kAXFocusedAttribute, kAXPositionAttribute, kAXSizeAttribute] as CFArray
+let nodeAttributesWithChildren = [kAXRoleAttribute, kAXSubroleAttribute, kAXTitleAttribute, kAXDescriptionAttribute, kAXIdentifierAttribute, kAXEnabledAttribute, kAXFocusedAttribute, kAXPositionAttribute, kAXSizeAttribute, kAXChildrenAttribute] as CFArray
+struct NodeRead { var role = "", subrole = "", title = "", description = "", identifier = "", enabled = false, focused = false, bounds: CGRect?, children: [AXUIElement] = [] }
+func readNode(_ element: AXUIElement, children: Bool = false) -> NodeRead {
+    var values: CFArray?
+    let names = children ? nodeAttributesWithChildren : nodeAttributes
+    guard AXUIElementCopyMultipleAttributeValues(element, names, AXCopyMultipleAttributeOptions(rawValue: 0), &values) == .success, let list = values as? [AnyObject], list.count == CFArrayGetCount(names) else {
+        // An app that cannot answer the batch still answers each attribute.
+        var slow = NodeRead(role: text(element, kAXRoleAttribute), subrole: text(element, kAXSubroleAttribute), title: text(element, kAXTitleAttribute), description: text(element, kAXDescriptionAttribute), identifier: text(element, kAXIdentifierAttribute), enabled: enabled(element), focused: (attribute(element, kAXFocusedAttribute) as? Bool) == true, bounds: bounds(element))
+        if children { slow.children = attribute(element, kAXChildrenAttribute) as? [AXUIElement] ?? [] }
+        return slow
+    }
+    // A slot the app could not answer holds an AXValue of the error type instead of the attribute.
+    let slots = list.map { value -> AnyObject? in CFGetTypeID(value) == AXValueGetTypeID() && AXValueGetType(value as! AXValue) == .axError ? nil : value }
+    var node = NodeRead(role: slots[0] as? String ?? "", subrole: slots[1] as? String ?? "", title: slots[2] as? String ?? "", description: slots[3] as? String ?? "", identifier: slots[4] as? String ?? "")
+    node.enabled = (slots[5] as? Bool) ?? enabledWithoutAttribute.contains(node.role)
+    node.focused = (slots[6] as? Bool) == true
+    node.bounds = rect(position: slots[7], size: slots[8])
+    if children { node.children = slots[9] as? [AXUIElement] ?? [] }
+    return node
 }
 func rectObject(_ rect: CGRect) -> Object { ["x": rect.minX, "y": rect.minY, "width": rect.width, "height": rect.height] }
 // Web pages nest deeply: in a browser the page itself starts about ten levels below the window, and a tab label sits ten
@@ -58,17 +91,23 @@ func descendant(_ element: AXUIElement, of ancestor: AXUIElement) -> Bool {
     }
     return false
 }
-func fingerprint(_ element: AXUIElement) -> String {
-    let values = [kAXRoleAttribute, kAXSubroleAttribute, kAXIdentifierAttribute, kAXTitleAttribute, kAXDescriptionAttribute, kAXValueAttribute].map { text(element, $0) }
-    return String(data: try! JSONSerialization.data(withJSONObject: values + [String(enabled(element)), String(describing: bounds(element))]), encoding: .utf8)!
+/** What revalidation compares: the node's identity and state, with its value unless `value` is nil. */
+func signature(_ node: NodeRead, value: String?) -> String {
+    let values = [node.role, node.subrole, node.identifier, node.title, node.description, value ?? "\u{0}"]
+    return String(data: try! JSONSerialization.data(withJSONObject: values + [String(node.enabled), String(describing: node.bounds)]), encoding: .utf8)!
 }
-struct Reference { let element: AXUIElement; let signature: String; let window: AXUIElement; let pid: pid_t }
+func fingerprint(_ element: AXUIElement, value: Bool = true) -> String { signature(readNode(element), value: value ? text(element, kAXValueAttribute) : nil) }
+/** `stable` leaves the value out: a node an earlier step of the same batch changed is still that node when only its value moved. */
+struct Reference { let element: AXUIElement; let signature: String; let stable: String; let window: AXUIElement; let pid: pid_t }
+func retain(_ element: AXUIElement, window: AXUIElement, pid: pid_t) -> Reference {
+    let node = readNode(element)
+    return Reference(element: element, signature: signature(node, value: text(element, kAXValueAttribute)), stable: signature(node, value: nil), window: window, pid: pid)
+}
 var references: [String: Reference] = [:]
 var windowHandles: [String: AXUIElement] = [:]
 var windowPIDs: [String: pid_t] = [:]
 var nodeCounter: UInt64 = UInt64.random(in: 100_000_000_000...900_000_000_000)
 var badge: NSPanel?
-var cursorView: NativeCursorView?
 var cursorLocation: CGPoint?
 var cursorProgram = false
 var lease: Int32 = -1
@@ -146,108 +185,304 @@ func selected(_ target: Object, foreground: Bool = true) throws -> (NSRunningApp
     }
     return (running, ax, focused)
 }
-// Cursor silhouette adapted from Lucide mouse-pointer-2 (ISC License).
-// Copyright (c) 2026 Lucide Icons and Contributors
-// Permission to use, copy, modify, and/or distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
-// WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
-// MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
-// ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
-// WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
-// ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
-// OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
-final class NativeCursorView: NSView {
-    override var isFlipped: Bool { true }
-    var tip = CGPoint(x: 16, y: 16)
-    var label = "Ready"
-    var dragging = false
-    override func draw(_ dirtyRect: NSRect) {
-        NSGraphicsContext.saveGraphicsState()
-        defer { NSGraphicsContext.restoreGraphicsState() }
-        NSColor.clear.setFill(); dirtyRect.fill(using: .copy)
-        let accent = dragging ? NSColor.systemOrange : NSColor(calibratedRed: 0.08, green: 0.72, blue: 0.60, alpha: 1)
-        let dx: CGFloat = tip.x + 16 > bounds.width ? -1 : 1
-        let dy: CGFloat = tip.y + 16 > bounds.height ? -1 : 1
-        func point(_ x: CGFloat, _ y: CGFloat) -> CGPoint {
-            CGPoint(x: tip.x + (x - 4) * 0.9 * dx, y: tip.y + (y - 4) * 0.9 * dy)
-        }
-        let pointer = NSBezierPath()
-        pointer.move(to: point(4.037, 4.688))
-        pointer.curve(to: point(4.688, 4.037), controlPoint1: point(3.887, 4.32), controlPoint2: point(4.32, 3.887))
-        pointer.line(to: point(20.688, 10.537))
-        pointer.curve(to: point(20.625, 11.484), controlPoint1: point(21.15, 10.725), controlPoint2: point(21.118, 11.357))
-        pointer.line(to: point(14.501, 13.064))
-        pointer.curve(to: point(13.063, 14.499), controlPoint1: point(13.796, 13.246), controlPoint2: point(13.245, 13.795))
-        pointer.line(to: point(11.484, 20.625))
-        pointer.curve(to: point(10.537, 20.688), controlPoint1: point(11.364, 21.091), controlPoint2: point(10.722, 21.137))
-        pointer.close()
-        let glow = NSShadow(); glow.shadowColor = accent.withAlphaComponent(0.55)
-        glow.shadowBlurRadius = 7; glow.shadowOffset = .zero; glow.set()
-        accent.setFill(); pointer.fill()
-        NSShadow().set()
+// The agent cursor and its effects are ported from agent-desktop (https://github.com/vercel-labs/agent-desktop, Apache License 2.0;
+// see THIRD_PARTY.md): the dart, label pill, ripple, outline and trail from crates/macos/src/system/cursor_overlay/
+// cursor_overlay_bridge.m and cursor_overlay_chrome_bridge.m, and the travel from crates/core/src/cursor_overlay/hand_path.rs.
+// Changed for MendCode: Swift instead of Objective-C and Rust, one stage window that carries the dart and the pill, MendCode's
+// action labels in the pill, the default style only (no custom images, colours or seeds), effects timed by the helper's idle loop.
+let cursorFill = (1.0, 1.0, 1.0), cursorRim = (0.07, 0.07, 0.09), cursorAccent = (0.26, 0.60, 1.0)
+func color(_ rgb: (Double, Double, Double), _ alpha: CGFloat = 1) -> CGColor { NSColor(srgbRed: rgb.0, green: rgb.1, blue: rgb.2, alpha: alpha).cgColor }
+/** Layers move and change only when told to: no implicit animation lags behind the cursor. */
+func frozen(_ layer: CALayer) { layer.actions = ["transform": NSNull(), "opacity": NSNull(), "position": NSNull(), "bounds": NSNull(), "hidden": NSNull(), "path": NSNull(), "string": NSNull(), "contents": NSNull()] }
+let effectLevel = NSWindow.Level(rawValue: NSWindow.Level.statusBar.rawValue - 1)
+/** A transparent, non-activating, click-through panel that screenshots and the accessibility tree do not see. */
+func overlayPanel(_ frame: NSRect, level: NSWindow.Level) -> NSPanel {
+    let panel = NSPanel(contentRect: frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+    panel.isFloatingPanel = true; panel.level = level; panel.ignoresMouseEvents = true
+    panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+    panel.isOpaque = false; panel.backgroundColor = .clear; panel.hasShadow = false; panel.hidesOnDeactivate = false
+    panel.isReleasedWhenClosed = false; panel.sharingType = .none
+    // No window fade: the effects are Core Animation layers.
+    panel.animationBehavior = .none
+    let view = NSView(frame: NSRect(origin: .zero, size: frame.size))
+    view.wantsLayer = true; frozen(view.layer!)
+    view.setAccessibilityElement(false); panel.setAccessibilityElement(false)
+    panel.contentView = view
+    return panel
+}
+/** The dart: tip at (1, 35) of a 32 × 40 box, drawn twice, a wide dark rim under a white body. */
+func dart() -> CAShapeLayer {
+    let layer = CAShapeLayer(), path = CGMutablePath()
+    path.move(to: CGPoint(x: 1, y: 35))
+    for point in [CGPoint(x: 29.6, y: 17.5), CGPoint(x: 12.7, y: 16.3), CGPoint(x: 4.2, y: 1.6)] { path.addLine(to: point) }
+    path.closeSubpath()
+    layer.path = path; layer.lineWidth = 3; layer.lineJoin = .round
+    layer.shadowColor = NSColor.black.cgColor; layer.shadowOpacity = 0.32; layer.shadowRadius = 5; layer.shadowOffset = CGSize(width: 2.5, height: -3)
+    frozen(layer)
+    return layer
+}
+let labelFont = NSFont.systemFont(ofSize: 12.5, weight: .medium)
+/** The stage moves with the cursor: its tip sits at `stageTip` (view coordinates, y up) and the pill beside it. */
+let stageSize = CGSize(width: 320, height: 240), stageTip = CGPoint(x: 160, y: 172)
+final class CursorStage {
+    let panel = overlayPanel(NSRect(origin: .zero, size: stageSize), level: .statusBar)
+    let pointer = CALayer(), pill = CALayer(), caption = CATextLayer()
+    var label = ""
+    init() {
+        let root = panel.contentView!.layer!
+        pointer.bounds = CGRect(x: 0, y: 0, width: 32, height: 40)
+        pointer.anchorPoint = CGPoint(x: 1.0 / 32, y: 35.0 / 40)
+        pointer.position = stageTip
+        frozen(pointer)
+        let rim = dart(), body = dart()
+        rim.lineWidth = 6.5; rim.shadowOpacity = 0.34
+        rim.fillColor = color(cursorRim); rim.strokeColor = color(cursorRim)
+        body.fillColor = color(cursorFill); body.strokeColor = color(cursorFill)
+        pointer.addSublayer(rim); pointer.addSublayer(body)
+        pill.backgroundColor = NSColor.black.cgColor
+        pill.shadowColor = NSColor.black.cgColor; pill.shadowOpacity = 0.31; pill.shadowRadius = 2.5; pill.shadowOffset = CGSize(width: 0, height: -2)
+        pill.isHidden = true
+        frozen(pill)
+        caption.font = labelFont; caption.fontSize = labelFont.pointSize; caption.foregroundColor = NSColor.white.cgColor
+        caption.alignmentMode = .center; caption.truncationMode = .end
+        caption.contentsScale = NSScreen.screens.map(\.backingScaleFactor).max() ?? 2
+        frozen(caption)
+        pill.addSublayer(caption)
+        root.addSublayer(pill); root.addSublayer(pointer)
+    }
+    /** Shows `text` in the pill; a new text fades in with a small pop. */
+    func show(_ text: String) {
+        guard text != label else { return }
+        label = text
+        let width = min(120, ceil(NSAttributedString(string: text, attributes: [.font: labelFont]).size().width))
+        pill.bounds = CGRect(x: 0, y: 0, width: width + 20, height: 24); pill.cornerRadius = 12
+        pill.shadowPath = CGPath(roundedRect: pill.bounds, cornerWidth: 12, cornerHeight: 12, transform: nil)
+        let line = ceil(labelFont.ascender - labelFont.descender + labelFont.leading)
+        caption.frame = CGRect(x: 10, y: (24 - line) / 2, width: width, height: line)
+        caption.string = text
+        pill.isHidden = text.isEmpty
+        pill.removeAllAnimations()
+        guard !text.isEmpty, !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
+        let fade = CABasicAnimation(keyPath: "opacity"); fade.fromValue = 0; fade.toValue = 1
+        let pop = CABasicAnimation(keyPath: "transform.scale"); pop.fromValue = 0.94; pop.toValue = 1
+        let reveal = CAAnimationGroup(); reveal.animations = [fade, pop]; reveal.duration = 0.18; reveal.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        pill.add(reveal, forKey: "reveal")
+    }
+    /** The pill sits right of and below the tip, or on the other side where the screen ends. */
+    func place(_ cocoa: CGPoint) {
+        let screen = (NSScreen.screens.first(where: { $0.frame.contains(cocoa) }) ?? NSScreen.screens.first)?.frame ?? .infinite
+        let size = pill.bounds.size
+        let x = cocoa.x + 20 + size.width <= screen.maxX ? stageTip.x + 20 : stageTip.x - 20 - size.width
+        let y = cocoa.y - 30 - size.height >= screen.minY ? stageTip.y - 30 - size.height : stageTip.y + 30
+        pill.frame = CGRect(origin: CGPoint(x: x, y: y), size: size)
     }
 }
+var cursorStage: CursorStage?
+var ripplePanel: NSPanel?, highlightPanel: NSPanel?, trailPanel: NSPanel?
+var trailLayer: CAShapeLayer?, trailPath = CGMutablePath(), trailFrame = NSRect.zero
+/** When the click effects may go, and when the cursor last moved: after six idle seconds it rests (fades out) until the next move. */
+var effectsUntil: TimeInterval = 0, cursorActiveAt: TimeInterval = 0, cursorResting = false
+func uptime() -> TimeInterval { ProcessInfo.processInfo.systemUptime }
+func reduceMotion() -> Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
 func cocoaPoint(_ point: CGPoint) -> CGPoint {
     CGPoint(x: point.x, y: (NSScreen.screens.first?.frame.maxY ?? 0) - point.y)
 }
-func presentCursor(_ point: CGPoint, label: String) {
-    guard let panel = badge, let view = cursorView else { return }
+func cocoaRect(_ rect: CGRect) -> NSRect {
+    NSRect(x: rect.minX, y: (NSScreen.screens.first?.frame.maxY ?? 0) - rect.maxY, width: rect.width, height: rect.height)
+}
+func presentCursor(_ point: CGPoint, label: String? = nil) {
+    guard let stage = cursorStage else { return }
     let cocoa = cocoaPoint(point)
-    let screen = NSScreen.screens.first(where: { $0.frame.contains(cocoa) }) ?? NSScreen.screens.first
-    let frame = screen?.frame ?? NSRect(x: cocoa.x - 48, y: cocoa.y - 48, width: 96, height: 96)
-    let origin = NSPoint(x: min(max(cocoa.x - 48, frame.minX), max(frame.minX, frame.maxX - 96)), y: min(max(cocoa.y - 48, frame.minY), max(frame.minY, frame.maxY - 96)))
-    panel.setFrameOrigin(origin)
-    view.tip = CGPoint(x: cocoa.x - origin.x, y: panel.frame.height - (cocoa.y - origin.y))
-    view.label = label
-    cursorLocation = point
-    view.needsDisplay = true; panel.displayIfNeeded()
+    if let label = label { stage.show(label) }
+    stage.place(cocoa)
+    stage.panel.setFrameOrigin(NSPoint(x: cocoa.x - stageTip.x, y: cocoa.y - stageTip.y))
+    if cursorResting { stage.panel.alphaValue = 1; cursorResting = false }
+    cursorLocation = point; cursorActiveAt = uptime()
+    stage.panel.displayIfNeeded()
     CATransaction.flush()
+}
+/**
+ * How the cursor travels, as agent-desktop models a hand (hand_path.rs): a minimum-jerk primary movement that overshoots by 3.5 %
+ * and a correction back onto the target, bowed sideways by 5.5 % of the distance (at most 38 points) with a 1.1-point tremor that
+ * settles at both ends. Its duration follows Fitts's law, 40 + 70 × log2(distance / 40 + 1) ms, between 90 and 320 ms.
+ */
+struct HandPath {
+    let start: CGPoint, end: CGPoint, bow: Double, seed: UInt64
+    static let reach = 1.035, tremor = 1.1
+    init(from start: CGPoint, to end: CGPoint) {
+        self.start = start; self.end = end
+        let distance = Double(hypot(end.x - start.x, end.y - start.y))
+        bow = min(0.055 * distance, 38)
+        let mixed = Double(start.x).bitPattern ^ Double(end.y).bitPattern
+        seed = ((mixed << 17) | (mixed >> 47)) ^ Double(end.x).bitPattern
+    }
+    var durationMs: Double {
+        let distance = Double(hypot(end.x - start.x, end.y - start.y))
+        return distance < 1.5 ? 0 : min(320, max(90, 40 + 70 * log2(distance / 40 + 1)))
+    }
+    static func minimumJerk(_ t: Double) -> Double { t * t * t * (10 + t * (-15 + 6 * t)) }
+    static func mix(_ seed: UInt64, _ index: UInt64) -> UInt64 {
+        var hash = seed ^ (index &* 0x9E37_79B9_7F4A_7C15)
+        hash ^= hash >> 33
+        hash = hash &* 0xFF51_AFD7_ED55_8CCD
+        return hash ^ (hash >> 33)
+    }
+    static func unit(_ seed: UInt64, _ index: UInt64) -> Double { Double(mix(seed, index) >> 11) / Double(UInt64(1) << 53) }
+    func shake(_ t: Double) -> Double {
+        let x = t * 7, step = floor(x), fraction = x - step
+        let low = HandPath.unit(seed, UInt64(step)), high = HandPath.unit(seed, UInt64(step) + 1)
+        return (low + (high - low) * fraction * fraction * (3 - 2 * fraction)) * 2 - 1
+    }
+    func at(_ t: Double) -> CGPoint {
+        if t >= 1 { return end }
+        let dx = Double(end.x - start.x), dy = Double(end.y - start.y), distance = hypot(dx, dy)
+        let primary = HandPath.minimumJerk(min(1, max(0, t / 0.74))), correction = HandPath.minimumJerk(min(1, max(0, (t - 0.62) / 0.38)))
+        let travelled = HandPath.reach * primary + (1 - HandPath.reach) * correction
+        let (nx, ny) = distance > .ulpOfOne ? (-dy / distance, dx / distance) : (0, 0)
+        let sideways = bow * sin(Double.pi * pow(t, 0.8)) + HandPath.tremor * shake(t) * sin(Double.pi * t)
+        return CGPoint(x: Double(start.x) + dx * travelled + nx * sideways, y: Double(start.y) + dy * travelled + ny * sideways)
+    }
 }
 func animateCursor(to end: CGPoint, label: String) throws {
     guard badge?.isVisible == true else { try fail("Virtual cursor is not visible") }
-    let start = cursorLocation ?? end
-    let distance = hypot(end.x - start.x, end.y - start.y)
-    if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion || distance < 2 { presentCursor(end, label: label); return }
-    let duration = min(0.75, max(0.28, distance / 1200)), began = ProcessInfo.processInfo.systemUptime
+    let path = HandPath(from: cursorLocation ?? end, to: end), duration = path.durationMs / 1000
+    if reduceMotion() || duration == 0 { presentCursor(end, label: label); return }
+    let began = uptime()
+    presentCursor(path.start, label: label)
     repeat {
         if cancelled { try fail("Cursor movement cancelled; no input sent") }
-        let t = min(1, (ProcessInfo.processInfo.systemUptime - began) / duration), eased = t * t * (3 - 2 * t)
-        let point = CGPoint(x: start.x + (end.x - start.x) * eased, y: start.y + (end.y - start.y) * eased)
-        presentCursor(point, label: label)
-        if t >= 1 { break }
-        RunLoop.current.run(until: Date(timeIntervalSinceNow: 1 / 60))
+        let elapsed = uptime() - began
+        if elapsed >= duration { break }
+        presentCursor(path.at(elapsed / duration))
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 1 / 120))
     } while true
-    presentCursor(end, label: label)
+    presentCursor(end)
 }
-func cursorPulse(_ label: String) {
-    guard let point = cursorLocation else { return }
-    presentCursor(point, label: label)
+/** A click's ripple at the cursor: a filled core and two rings that spread and fade in 0.3 s. */
+func ripple(at point: CGPoint) {
+    let size: CGFloat = 108, cocoa = cocoaPoint(point)
+    if ripplePanel == nil {
+        let panel = overlayPanel(NSRect(x: 0, y: 0, width: size, height: size), level: effectLevel)
+        for (index, radius) in [19, size / 2 - 4, size / 2 - 4].enumerated() {
+            let ring = CAShapeLayer()
+            ring.bounds = CGRect(x: 0, y: 0, width: size, height: size); ring.position = CGPoint(x: size / 2, y: size / 2)
+            ring.path = CGPath(ellipseIn: CGRect(x: size / 2 - radius, y: size / 2 - radius, width: radius * 2, height: radius * 2), transform: nil)
+            ring.fillColor = index == 0 ? color(cursorAccent) : NSColor.clear.cgColor; ring.strokeColor = color(cursorAccent)
+            if index == 0 { ring.shadowColor = color(cursorAccent); ring.shadowOffset = .zero; ring.shadowRadius = 14; ring.shadowOpacity = 1 }
+            ring.opacity = 0
+            frozen(ring)
+            panel.contentView!.layer!.addSublayer(ring)
+        }
+        ripplePanel = panel
+    }
+    guard let panel = ripplePanel else { return }
+    panel.setFrameOrigin(NSPoint(x: cocoa.x - size / 2, y: cocoa.y - size / 2))
+    panel.orderFrontRegardless()
+    for (index, layer) in (panel.contentView!.layer!.sublayers ?? []).enumerated() {
+        layer.removeAllAnimations()
+        let opacity = CAKeyframeAnimation(keyPath: "opacity"); opacity.values = index == 0 ? [0, 0.42, 0] : [0, 0.9, 0]; opacity.keyTimes = [0, 0.18, 1]
+        let spread = CABasicAnimation(keyPath: "transform.scale"); spread.fromValue = index == 0 ? 0.22 : 0.04; spread.toValue = index == 0 ? 1.12 : 1
+        let effect = CAAnimationGroup(); effect.animations = [opacity, spread]; effect.duration = 0.3; effect.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        layer.add(effect, forKey: "ripple")
+    }
+    effectsUntil = max(effectsUntil, uptime() + 0.35)
+}
+func held(_ path: String, _ values: [Any], _ times: [NSNumber], _ seconds: Double) -> CAKeyframeAnimation {
+    let animation = CAKeyframeAnimation(keyPath: path)
+    animation.values = values; animation.keyTimes = times; animation.duration = seconds
+    animation.isRemovedOnCompletion = false; animation.fillMode = .forwards
+    animation.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+    return animation
+}
+/** An outline around the element acted on: it pops in, holds and fades within 0.9 s. */
+func highlight(_ rect: CGRect) {
+    let bleed: CGFloat = 24, frame = cocoaRect(rect).insetBy(dx: -5, dy: -5)
+    if highlightPanel == nil {
+        let panel = overlayPanel(frame, level: effectLevel), border = CALayer()
+        border.borderWidth = 2.5; border.cornerRadius = 8; border.opacity = 0
+        border.borderColor = color(cursorAccent); border.backgroundColor = color(cursorAccent, 0.10)
+        border.shadowColor = color(cursorAccent); border.shadowOpacity = 0.5; border.shadowRadius = 10; border.shadowOffset = .zero
+        frozen(border)
+        panel.contentView!.layer!.addSublayer(border)
+        highlightPanel = panel
+    }
+    guard let panel = highlightPanel, let border = panel.contentView!.layer!.sublayers?.first else { return }
+    panel.setFrame(frame.insetBy(dx: -bleed, dy: -bleed), display: false)
+    border.frame = CGRect(x: bleed, y: bleed, width: frame.width, height: frame.height)
+    border.removeAllAnimations()
+    border.add(held("opacity", [0, 1, 1, 0], [0, 0.04, 0.55, 1], 0.9), forKey: "fade")
+    border.add(held("transform.scale", [1.08, 0.99, 1, 1], [0, 0.12, 0.22, 1], 0.9), forKey: "pop")
+    panel.orderFrontRegardless()
+    effectsUntil = max(effectsUntil, uptime() + 0.95)
+}
+/** What an action shows once it is dispatched: a ripple for a click, press or drop, and an outline around the element. */
+func cursorEffect(click: Bool, around rect: CGRect?) {
+    guard !reduceMotion(), cursorStage != nil else { return }
+    if click, let point = cursorLocation { ripple(at: point) }
+    if let rect = rect { highlight(rect) }
+    CATransaction.flush()
+}
+/** A drag draws its path in the accent colour: a dot where it starts, the line it follows, and a fade once it is dropped. */
+func trailBegin(_ from: CGPoint, to: CGPoint) {
+    trailEnd(fade: false)
+    trailFrame = cocoaRect(CGRect(x: min(from.x, to.x), y: min(from.y, to.y), width: abs(to.x - from.x), height: abs(to.y - from.y))).insetBy(dx: -12, dy: -12)
+    let panel = overlayPanel(trailFrame, level: effectLevel), layer = CAShapeLayer()
+    layer.frame = panel.contentView!.bounds
+    layer.fillColor = color(cursorAccent, 0.9); layer.strokeColor = color(cursorAccent, 0.9); layer.lineWidth = 4; layer.lineCap = .round; layer.lineJoin = .round
+    layer.shadowColor = color(cursorAccent); layer.shadowOpacity = 0.45; layer.shadowRadius = 6
+    frozen(layer)
+    panel.contentView!.layer!.addSublayer(layer)
+    trailPanel = panel; trailLayer = layer; trailPath = CGMutablePath()
+    let local = trailPoint(from)
+    trailPath.addEllipse(in: CGRect(x: local.x - 4, y: local.y - 4, width: 8, height: 8)); trailPath.move(to: local)
+    layer.path = trailPath
+    panel.orderFrontRegardless()
+}
+func trailPoint(_ point: CGPoint) -> CGPoint { let cocoa = cocoaPoint(point); return CGPoint(x: cocoa.x - trailFrame.minX, y: cocoa.y - trailFrame.minY) }
+func trailAppend(_ point: CGPoint) {
+    guard let layer = trailLayer else { return }
+    trailPath.addLine(to: trailPoint(point)); layer.path = trailPath
+}
+func trailEnd(fade: Bool) {
+    guard let layer = trailLayer else { return }
+    if fade && !reduceMotion() {
+        let end = trailPath.currentPoint
+        trailPath.addEllipse(in: CGRect(x: end.x - 4, y: end.y - 4, width: 8, height: 8)); layer.path = trailPath
+        layer.add(held("opacity", [1, 1, 0], [0, 0.55, 1], 0.9), forKey: "fade")
+        CATransaction.flush()
+        effectsUntil = max(effectsUntil, uptime() + 0.95)
+        return
+    }
+    trailPanel?.orderOut(nil); trailPanel = nil; trailLayer = nil
+}
+/** Ends what the effects still show: before a hit test, so nothing of ours is under the point, and when they have played. */
+func stopEffects() {
+    ripplePanel?.orderOut(nil); highlightPanel?.orderOut(nil)
+    trailPanel?.orderOut(nil); trailPanel = nil; trailLayer = nil
+    effectsUntil = 0
+}
+/** Between requests: end played effects, and let an idle cursor rest after six seconds (13 steps of 12 ms, as agent-desktop fades it). */
+func idle() {
+    if effectsUntil > 0 && uptime() >= effectsUntil { stopEffects() }
+    guard let stage = cursorStage, stage.panel.isVisible, !cursorResting, uptime() - cursorActiveAt >= 6 else { return }
+    for step in stride(from: 1.0, to: 0.0, by: -0.08) { stage.panel.alphaValue = step; CATransaction.flush(); usleep(12_000) }
+    stage.panel.alphaValue = 0; cursorResting = true
 }
 func showBadge(_ show: Bool) throws {
     if show && badge?.isVisible == true { return }
     if !show && cursorProgram { return }
     // The main thread sits in readLine() between requests, so the window server only learns the panel is gone if the run loop turns
     // once here: without it the helper answered "hidden" and the cursor stayed on screen (measured: 1 on-screen window after hide).
-    if let panel = badge { panel.orderOut(nil); panel.close(); RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.05)) }
-    badge = nil; cursorView = nil
+    if let panel = badge { panel.orderOut(nil); panel.close(); stopEffects(); RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.05)) }
+    badge = nil; cursorStage = nil; cursorResting = false
     guard show else { releaseLease(); return }
     try acquireLease()
-    let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 96, height: 96), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
-    panel.isFloatingPanel = true; panel.level = .statusBar; panel.ignoresMouseEvents = true
-    panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-    panel.isOpaque = false; panel.backgroundColor = .clear; panel.hasShadow = false
-    panel.isReleasedWhenClosed = false; panel.sharingType = .none
-    // No fade: an animation needs the run loop to keep turning, and it stops as soon as the next request is awaited.
-    panel.animationBehavior = .none
-    let view = NativeCursorView(frame: NSRect(x: 0, y: 0, width: 96, height: 96))
-    view.setAccessibilityElement(false); panel.setAccessibilityElement(false)
-    panel.contentView = view; badge = panel; cursorView = view
+    let stage = CursorStage()
+    cursorStage = stage; badge = stage.panel
     let mouse = NSEvent.mouseLocation
     let initial = cursorLocation ?? CGPoint(x: mouse.x, y: (NSScreen.screens.first?.frame.maxY ?? 0) - mouse.y)
-    presentCursor(initial, label: "Ready")
-    panel.orderFrontRegardless(); panel.displayIfNeeded()
+    presentCursor(initial, label: "MendCode")
+    stage.panel.orderFrontRegardless(); stage.panel.displayIfNeeded()
     RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.02))
 }
 // Chromium (Chrome, Brave, Edge, Electron apps) offers a page's own actions only once an assistive app asks for them, and a
@@ -297,41 +532,45 @@ func walkWindow(_ window: AXUIElement, pid: pid_t) -> (nodes: [Object], truncate
         if visited.contains(where: { CFEqual($0, element) }) { return }
         visited.append(element)
         AXUIElementSetMessagingTimeout(element, 0.3)
-        let role = text(element, kAXRoleAttribute), isSecure = inheritedSecure || secure(element), isEnabled = enabled(element)
+        let info = readNode(element, children: true), role = info.role
+        // The walk starts at the window and carries a secure ancestor down, so the node's own role completes the check.
+        let isSecure = inheritedSecure || role == "AXSecureTextField" || info.subrole == "AXSecureTextField", isEnabled = info.enabled
         let inPage = inWeb || role == "AXWebArea"
         if inPage && webProbe == nil && ["AXLink", "AXButton"].contains(role) { webProbe = element }
-        let name = text(element, kAXTitleAttribute).isEmpty ? text(element, kAXDescriptionAttribute) : text(element, kAXTitleAttribute)
+        let name = info.title.isEmpty ? info.description : info.title
         nodeCounter += 1; let id = "0.\(nodeCounter)"
         var actions: [String] = []
-        var supported: CFArray?
-        AXUIElementCopyActionNames(element, &supported)
         if isEnabled && !isSecure {
+            var supported: CFArray?
+            AXUIElementCopyActionNames(element, &supported)
             if (supported as? [String] ?? []).contains(kAXPressAction) { actions.append("press") }
+            let textual = ["AXTextField", "AXTextArea", "AXComboBox"].contains(role)
             var writable = DarwinBoolean(false)
-            if AXUIElementIsAttributeSettable(element, kAXValueAttribute as CFString, &writable) == .success && writable.boolValue && ["AXTextField", "AXTextArea", "AXComboBox"].contains(role) { actions.append("setValue") }
-            if bounds(element) != nil {
+            if textual && AXUIElementIsAttributeSettable(element, kAXValueAttribute as CFString, &writable) == .success && writable.boolValue { actions.append("setValue") }
+            if info.bounds != nil {
                 actions += ["click", "key", "scroll", "drag"]
-                if ["AXTextField", "AXTextArea", "AXComboBox"].contains(role) { actions.append("typeText") }
+                if textual { actions.append("typeText") }
             }
         }
-        var node: Object = ["id": id, "role": clipped(role), "name": isSecure ? "" : clipped(name), "states": (isEnabled ? ["enabled"] : []) + ((attribute(element, kAXFocusedAttribute) as? Bool) == true ? ["focused"] : []), "actions": actions]
+        var node: Object = ["id": id, "role": clipped(role), "name": isSecure ? "" : clipped(name), "states": (isEnabled ? ["enabled"] : []) + (info.focused ? ["focused"] : []), "actions": actions]
+        let value = isSecure ? "" : text(element, kAXValueAttribute)
         if isSecure { node["secure"] = true; node["states"] = ["secure"] }
-        else { let value = text(element, kAXValueAttribute); if !value.isEmpty { node["value"] = clipped(value) } }
-        if let rect = bounds(element) { node["bounds"] = rectObject(rect) }
+        else if !value.isEmpty { node["value"] = clipped(value) }
+        if let rect = info.bounds { node["bounds"] = rectObject(rect) }
         let length = (try? JSONSerialization.data(withJSONObject: node).count) ?? 0
         if bytes + length > 58_000 { truncated = true; return }
         bytes += length; nodes.append(node)
-        if !isSecure { references[id] = Reference(element: element, signature: fingerprint(element), window: window, pid: pid) }
         if isSecure { return }
-        let children = attribute(element, kAXChildrenAttribute) as? [AXUIElement] ?? []
-        for child in children { if nodes.count >= 500 || bytes >= 58_000 { truncated = true; break }; walk(child, depth: depth + 1, inheritedSecure: isSecure, inWeb: inPage) }
+        references[id] = Reference(element: element, signature: signature(info, value: value), stable: signature(info, value: nil), window: window, pid: pid)
+        for child in info.children { if nodes.count >= 500 || bytes >= 58_000 { truncated = true; break }; walk(child, depth: depth + 1, inheritedSecure: isSecure, inWeb: inPage) }
     }
     walk(window, depth: 0, inheritedSecure: false, inWeb: false)
     return (nodes, truncated, webProbe)
 }
-func validateReference(_ ref: Reference, target: Object, foreground: Bool = true) throws {
+/** Strict re-resolution right before an effect: the retained object, its window and ancestry, and its signature (`stable` leaves the value out). */
+func validateReference(_ ref: Reference, target: Object, foreground: Bool = true, stable: Bool = false) throws {
     let (running, _, window) = try selected(target, foreground: foreground)
-    guard ref.pid == running.processIdentifier, CFEqual(ref.window, window), descendant(ref.element, of: window), !secure(ref.element), enabled(ref.element), fingerprint(ref.element) == ref.signature else { try fail("Semantic node changed, is secure, or is stale; observe again") }
+    guard ref.pid == running.processIdentifier, CFEqual(ref.window, window), descendant(ref.element, of: window), !secure(ref.element), enabled(ref.element), stable ? fingerprint(ref.element, value: false) == ref.stable : fingerprint(ref.element) == ref.signature else { try fail("Semantic node changed, is secure, or is stale; observe again") }
 }
 func reference(_ id: String, target: Object, foreground: Bool = true) throws -> Reference {
     guard let ref = references[id] else { try fail("Semantic node is stale; observe again") }
@@ -405,7 +644,7 @@ func coveredMessage(_ found: AXUIElement?, ref: Reference) -> String {
 func hit(_ point: CGPoint, ref: Reference, click: Bool = false) throws -> AXUIElement? {
     // The visual overlay is never accepted as input evidence or an AX hit target.
     let overlay = badge, visible = overlay?.isVisible == true
-    overlay?.orderOut(nil)
+    overlay?.orderOut(nil); stopEffects()
     defer { if visible && !cancelled { overlay?.orderFrontRegardless(); overlay?.displayIfNeeded() } }
     // In front, the screen decides what the pointer would hit; in the background, the app's own window does (what covers it is
     // another app's, and the event goes to this process only).
@@ -454,40 +693,86 @@ func aim(_ event: CGEvent?, at point: CGPoint, pid: pid_t) {
 }
 func post(_ event: CGEvent?, pid: pid_t) throws {
     guard let event = event else { try fail("Cannot create native input event") }
-    event.postToPid(pid)
+    effect(); event.postToPid(pid)
 }
 let keyCodes: [String: CGKeyCode] = ["tab":48,"escape":53,"enter":36,"space":49,"left":123,"right":124,"down":125,"up":126,"backspace":51,"delete":117,"home":115,"end":119,"pageUp":116,"pageDown":121,"a":0,"c":8,"v":9,"x":7,"z":6,"s":1,"f":3,"l":37,"n":45,"w":13]
 func flags(_ names: [String]) -> CGEventFlags {
     names.reduce(CGEventFlags()) { result, name in result.union(["command": .maskCommand, "shift": .maskShift, "option": .maskAlternate, "control": .maskControl][name] ?? []) }
 }
-func action(_ target: Object, input: Object) throws -> Object {
-    guard badge?.isVisible == true, lease >= 0 else { try fail("Visible control indicator or input lease is missing") }
+/** One action on observed nodes. `stable` and `destinationStable` mark a node an earlier step of the same batch acted on. */
+struct Step { let name: String; let input: Object; let nodeID: String; let ref: Reference; let destination: Reference?; var stable = false; var destinationStable = false }
+func resolve(_ input: Object, target: Object) throws -> Step {
     guard let id = input["nodeID"] as? String, let name = input["action"] as? String else { try fail("Invalid action") }
     // AXPress and AXSetValue are delivered to the element itself; every other action is an event posted to the approved process,
     // so none needs the app in front and none raises it or moves the user's own pointer.
-    let foreground = false
-    let ref = try reference(id, target: target, foreground: foreground)
+    let ref = try reference(id, target: target, foreground: false)
     var destination: Reference?
     if name == "drag" {
         guard let to = input["toNodeID"] as? String else { try fail("Drag requires a destination node") }
         destination = try reference(to, target: target, foreground: false)
     }
+    return Step(name: name, input: input, nodeID: id, ref: ref, destination: destination)
+}
+func action(_ target: Object, input: Object) throws -> Object {
+    guard badge?.isVisible == true, lease >= 0 else { try fail("Visible control indicator or input lease is missing") }
+    let step = try resolve(input, target: target)
     // Consume all handles before effects, including partial failures.
     references.removeAll()
+    try perform(step, target: target)
+    return ["dispatched": true]
+}
+let batchLimit = 16
+/**
+ * Several actions on one observation in one request, as agent-desktop's batch runs commands on refs held from one snapshot
+ * (src/batch/execution.rs, Apache-2.0): every step is resolved before the first one runs, so a stale or unknown node refuses the whole
+ * batch with nothing sent, and each step is resolved again right before its own effect. Unlike agent-desktop's default, the first step
+ * that fails stops the batch, and the steps after it do not start. A node an earlier step acted on is compared without its value.
+ */
+func batch(_ target: Object, steps: [Object]) throws -> [Object] {
+    guard badge?.isVisible == true, lease >= 0 else { try fail("Visible control indicator or input lease is missing") }
+    guard (1...batchLimit).contains(steps.count) else { try fail("A batch holds 1 to \(batchLimit) steps") }
+    let resolved = try steps.map { try resolve($0, target: target) }
+    references.removeAll()
+    var results: [Object] = [], acted = Set<String>(), posted = false
+    for (index, var step) in resolved.enumerated() {
+        effectStarted = false
+        // Events posted to the app wait in its queue: it takes them before the next step reaches it, perhaps another way (AXPress).
+        if posted { RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.05)) }
+        let destination = step.input["toNodeID"] as? String
+        step.stable = acted.contains(step.nodeID)
+        step.destinationStable = destination.map(acted.contains) ?? false
+        do { try perform(step, target: target) }
+        catch {
+            results.append(["index": index, "outcome": effectStarted ? "unknown" : "failed", "error": (error as? Failure)?.message ?? "Native computer operation failed"])
+            break
+        }
+        results.append(["index": index, "outcome": "dispatched"])
+        acted.insert(step.nodeID); if let destination = destination { acted.insert(destination) }
+        posted = !["press", "setValue"].contains(step.name)
+    }
+    effectStarted = false
+    return results
+}
+func perform(_ step: Step, target: Object) throws {
+    let ref = step.ref, input = step.input, name = step.name, destination = step.destination, foreground = false
     let labels = ["press": "Press", "setValue": "Text", "typeText": "Typing", "key": "Key", "scroll": "Scroll", "drag": "Drag", "click": input["button"] as? String == "right" ? "Right click" : input["count"] as? Int == 2 ? "Double click" : "Click"]
     let label = labels[name] ?? "Control"
+    // A resting cursor comes back before anything is sent, also for a node it does not travel to.
+    if cursorResting, let point = cursorLocation { presentCursor(point) }
     if let rect = bounds(ref.element) { try animateCursor(to: CGPoint(x: rect.midX, y: rect.midY), label: label) }
-    try validateReference(ref, target: target, foreground: foreground)
+    try validateReference(ref, target: target, foreground: foreground, stable: step.stable)
     if name == "press" {
+        effect()
         guard AXUIElementPerformAction(ref.element, kAXPressAction as CFString) == .success else { try fail("AXPress failed; inspect the target before retrying") }
-        cursorPulse(label)
-        return ["dispatched": true]
+        cursorEffect(click: true, around: bounds(ref.element))
+        return
     }
     if name == "setValue" {
         guard ["AXTextField", "AXTextArea", "AXComboBox"].contains(text(ref.element, kAXRoleAttribute)), let value = input["value"] as? String else { try fail("Not a writable text node") }
         // The caret moves only while the app is in front: moving AX focus inside a background app is not needed to set a value, and is not ours to do.
         if frontmost()?.processIdentifier == ref.pid { try focus(ref) }
         _ = try selected(target, foreground: false)
+        effect()
         guard AXUIElementSetAttributeValue(ref.element, kAXValueAttribute as CFString, value as CFString) == .success else { try fail("AXSetValue failed; inspect the target before retrying") }
         let deadline = Date(timeIntervalSinceNow: 1)
         while text(ref.element, kAXValueAttribute) != value && Date() < deadline {
@@ -496,8 +781,8 @@ func action(_ target: Object, input: Object) throws -> Object {
             RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.05))
         }
         guard text(ref.element, kAXValueAttribute) == value else { try fail("AXSetValue was accepted but its value was not confirmed; observe before retrying") }
-        cursorPulse(label)
-        return ["dispatched": true]
+        cursorEffect(click: false, around: bounds(ref.element))
+        return
     }
     if name == "key" || name == "typeText" {
         try focus(ref); _ = try selected(target, foreground: false)
@@ -524,8 +809,8 @@ func action(_ target: Object, input: Object) throws -> Object {
                 start = end
             }
         }
-        cursorPulse(label)
-        return ["dispatched": true]
+        cursorEffect(click: false, around: bounds(ref.element))
+        return
     }
     guard let (rect, onScreen) = reveal(ref) else { try fail("Node has no screen bounds") }
     let point = CGPoint(x: rect.midX, y: rect.midY)
@@ -540,9 +825,10 @@ func action(_ target: Object, input: Object) throws -> Object {
     } else { try fail("The node's center is outside the visible part of its scroll area or window; no input was sent. Scroll the area that holds it, observe again, then act") }
     _ = try selected(target, foreground: false)
     if let element = pressed {
+        effect()
         guard AXUIElementPerformAction(element, kAXPressAction as CFString) == .success else { try fail("AXPress on the clicked element failed; observe before retrying") }
-        cursorPulse(label)
-        return ["dispatched": true]
+        cursorEffect(click: true, around: rect)
+        return
     }
     if name == "scroll" {
         let amount = min(1000, max(1, input["amount"] as? Int ?? 300)), direction = input["direction"] as? String ?? "down"
@@ -550,8 +836,8 @@ func action(_ target: Object, input: Object) throws -> Object {
         let horizontal = direction == "left" ? amount : direction == "right" ? -amount : 0
         let event = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2, wheel1: Int32(vertical), wheel2: Int32(horizontal), wheel3: 0)
         event?.location = point; aim(event, at: point, pid: ref.pid); try post(event, pid: ref.pid)
-        cursorPulse(label)
-        return ["dispatched": true]
+        cursorEffect(click: false, around: rect)
+        return
     }
     let right = input["button"] as? String == "right", button: CGMouseButton = right ? .right : .left
     let downType: CGEventType = right ? .rightMouseDown : .leftMouseDown, upType: CGEventType = right ? .rightMouseUp : .leftMouseUp
@@ -563,21 +849,21 @@ func action(_ target: Object, input: Object) throws -> Object {
             down?.setIntegerValueField(.mouseEventClickState, value: Int64(count)); up?.setIntegerValueField(.mouseEventClickState, value: Int64(count))
             try post(down, pid: ref.pid); try post(up, pid: ref.pid)
         }
-        cursorPulse(label)
-        return ["dispatched": true]
+        cursorEffect(click: true, around: rect)
+        return
     }
     if name == "drag", let destination = destination, let endRect = bounds(destination.element) {
         let end = CGPoint(x: endRect.midX, y: endRect.midY)
-        try validateReference(destination, target: target, foreground: false)
+        try validateReference(destination, target: target, foreground: false, stable: step.destinationStable)
         _ = try hit(end, ref: destination)
+        trailBegin(point, to: end)
         try post(CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: point, mouseButton: .left), pid: ref.pid)
         var current = point
-        cursorView?.dragging = true
         defer {
             CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: current, mouseButton: .left)?.postToPid(ref.pid)
-            cursorView?.dragging = false
             presentCursor(current, label: "Dropped")
-            cursorPulse("Dropped")
+            trailEnd(fade: true)
+            cursorEffect(click: true, around: nil)
         }
         for step in 1...18 {
             _ = try selected(target, foreground: false)
@@ -585,9 +871,10 @@ func action(_ target: Object, input: Object) throws -> Object {
             current = CGPoint(x: point.x + (end.x - point.x) * eased, y: point.y + (end.y - point.y) * eased)
             try post(CGEvent(mouseEventSource: nil, mouseType: .leftMouseDragged, mouseCursorPosition: current, mouseButton: .left), pid: ref.pid)
             presentCursor(current, label: "Dragging")
+            trailAppend(current)
             RunLoop.current.run(until: Date(timeIntervalSinceNow: 1 / 60))
         }
-        return ["dispatched": true]
+        return
     }
     try fail("Unsupported native action")
 }
@@ -619,6 +906,7 @@ func dispatch(_ request: Object) throws -> Any {
             guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundle) else { try fail("Application is not installed") }
             let configuration = NSWorkspace.OpenConfiguration(); configuration.activates = false
             var finished = false, launchError: Error?
+            effect()
             NSWorkspace.shared.openApplication(at: url, configuration: configuration) { result, error in launched = result; launchError = error; finished = true }
             let deadline = Date(timeIntervalSinceNow: 8)
             while !finished && Date() < deadline { RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.02)) }
@@ -652,6 +940,7 @@ func dispatch(_ request: Object) throws -> Any {
         references.removeAll()
         if let rect = bounds(window) { try animateCursor(to: CGPoint(x: rect.midX, y: rect.midY), label: "Window") }
         if cancelled || running.isTerminated || frontmost()?.processIdentifier != running.processIdentifier { try fail("Application changed during window selection; no window was raised") }
+        effect()
         guard AXUIElementPerformAction(window, kAXRaiseAction as CFString) == .success else { try fail("Cannot raise window") }
         _ = AXUIElementSetAttributeValue(window, kAXMainAttribute as CFString, kCFBooleanTrue)
         let result = targetObject(running)
@@ -662,6 +951,7 @@ func dispatch(_ request: Object) throws -> Any {
         guard let running = alive(target) else { return NSNull() }
         return targetObject(running)
     case "observe": return try observe(target)
+    case "batch": return try batch(target, steps: request["steps"] as? [Object] ?? [])
     case "action": return try action(target, input: request["input"] as? Object ?? [:])
     case "navigation":
         try trusted()
@@ -670,7 +960,7 @@ func dispatch(_ request: Object) throws -> Any {
         let (_, ax, window) = try selected(target)
         guard let focused = elementAttribute(ax, kAXFocusedUIElementAttribute), !secure(focused), descendant(focused, of: window) else { try fail("Cannot send a key to a secure or unknown focused element") }
         nodeCounter += 1; let id = "0.\(nodeCounter)"
-        references[id] = Reference(element: focused, signature: fingerprint(focused), window: window, pid: current.processIdentifier)
+        references[id] = retain(focused, window: window, pid: current.processIdentifier)
         return try action(target, input: ["nodeID": id, "action": "key", "key": request["key"] as? String ?? ""])
     case "program":
         if request["active"] as? Bool == true {
@@ -698,16 +988,18 @@ func runCursorDemo() throws {
     window.isReleasedWhenClosed = false; window.center()
     let title = NSTextField(labelWithString: "Virtual cursor · no real input")
     title.font = .systemFont(ofSize: 22, weight: .semibold); title.frame = NSRect(x: 30, y: 278, width: 560, height: 32)
-    let subtitle = NSTextField(wrappingLabelWithString: "Only this demo window is opened. Movement, click rings and dragging are visual simulations; no browser, clipboard or user application is controlled.")
+    let subtitle = NSTextField(wrappingLabelWithString: "Only this demo window is opened. Movement, click ripples, outlines and the drag trail are visual simulations; no browser, clipboard or user application is controlled.")
     subtitle.frame = NSRect(x: 30, y: 217, width: 550, height: 50)
     window.contentView?.addSubview(title); window.contentView?.addSubview(subtitle)
     let labels = ["Search", "Save", "Drag here"]
-    var points: [CGPoint] = []
+    var points: [CGPoint] = [], frames: [CGRect] = []
     for (index, label) in labels.enumerated() {
         let button = NSButton(title: label, target: nil, action: nil)
         button.bezelStyle = .rounded; button.frame = NSRect(x: 40 + index * 190, y: 130, width: 155, height: 44)
         window.contentView?.addSubview(button)
-        points.append(cocoaPoint(window.convertPoint(toScreen: NSPoint(x: button.frame.midX, y: button.frame.midY))))
+        let screen = window.convertToScreen(button.frame), top = NSScreen.screens.first?.frame.maxY ?? 0
+        frames.append(CGRect(x: screen.minX, y: top - screen.maxY, width: screen.width, height: screen.height))
+        points.append(CGPoint(x: frames[index].midX, y: frames[index].midY))
     }
     window.makeKeyAndOrderFront(nil); app.activate(ignoringOtherApps: true)
     RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.15))
@@ -715,22 +1007,59 @@ func runCursorDemo() throws {
     try showBadge(true)
     defer { try? showBadge(false); window.close() }
     for (index, point) in points.enumerated() {
-        try animateCursor(to: point, label: labels[index]); cursorPulse(index == 1 ? "Click" : "Ready")
-        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.35))
+        try animateCursor(to: point, label: index == 1 ? "Click" : "Press"); cursorEffect(click: true, around: frames[index])
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.9))
     }
-    cursorView?.dragging = true
-    try animateCursor(to: points[0], label: "Dragging")
-    cursorView?.dragging = false; cursorPulse("Dropped")
-    RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.4))
-    if let view = cursorView, let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
-        view.cacheDisplay(in: view.bounds, to: bitmap)
-        if let png = bitmap.representation(using: .png, properties: [:]) {
-            let file = FileManager.default.temporaryDirectory.appendingPathComponent("mendcode-cursor-\(UUID().uuidString).png")
-            try png.write(to: file, options: .atomic)
-            print("Cursor-only render: \(file.path)")
-        }
+    trailBegin(points[2], to: points[0])
+    let drag = HandPath(from: points[2], to: points[0]), began = uptime()
+    while uptime() - began < 0.6 { let point = drag.at((uptime() - began) / 0.6); presentCursor(point, label: "Dragging"); trailAppend(point); RunLoop.current.run(until: Date(timeIntervalSinceNow: 1 / 60)) }
+    presentCursor(points[0], label: "Dropped"); trailEnd(fade: true); cursorEffect(click: true, around: nil)
+    RunLoop.current.run(until: Date(timeIntervalSinceNow: 1))
+    if let stage = cursorStage, let png = stagePNG(stage) {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("mendcode-cursor-\(UUID().uuidString).png")
+        try png.write(to: file, options: .atomic)
+        print("Cursor-only render: \(file.path)")
     }
     print("Demo completed; no input events were sent.")
+}
+/** The cursor stage drawn offscreen at twice its size: no window is shown and nothing is captured from the screen. */
+func stageBitmap(_ stage: CursorStage) -> CGContext? {
+    let scale: CGFloat = 2
+    guard let context = CGContext(data: nil, width: Int(stageSize.width * scale), height: Int(stageSize.height * scale), bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+    context.scaleBy(x: scale, y: scale)
+    stage.panel.contentView!.layer!.render(in: context)
+    return context
+}
+func stagePNG(_ stage: CursorStage) -> Data? {
+    guard let image = stageBitmap(stage)?.makeImage() else { return nil }
+    return NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])
+}
+// Decision-only: the cursor's travel for each stdin line {from, to, samples}, as its duration and sampled points. No window or event.
+if CommandLine.arguments.contains("--cursor-path") {
+    while let line = readLine() {
+        guard let data = line.data(using: .utf8), let input = try? JSONSerialization.jsonObject(with: data) as? Object, let from = input["from"] as? [Double], let to = input["to"] as? [Double], from.count == 2, to.count == 2, let samples = input["samples"] as? Int, samples >= 2 else { print("{\"error\":\"invalid\"}"); continue }
+        let path = HandPath(from: CGPoint(x: from[0], y: from[1]), to: CGPoint(x: to[0], y: to[1]))
+        let points = (0..<samples).map { index -> [Double] in let point = path.at(Double(index) / Double(samples - 1)); return [Double(point.x), Double(point.y)] }
+        print(String(data: try! JSONSerialization.data(withJSONObject: ["durationMs": path.durationMs, "points": points]), encoding: .utf8)!)
+    }
+    exit(0)
+}
+// Render-only, `--cursor-render <label> [<png>]`: the stage with that label drawn offscreen (never shown), optionally written as a
+// PNG, and sampled at the stage points given as stdin lines [x, y] (y up) as [r, g, b, a].
+if let flag = CommandLine.arguments.firstIndex(of: "--cursor-render"), flag + 1 < CommandLine.arguments.count {
+    let stage = CursorStage(), rest = CommandLine.arguments[(flag + 1)...]
+    stage.show(rest.first!)
+    stage.place(CGPoint(x: 400, y: 400))
+    if rest.count > 1, let png = stagePNG(stage) { try? png.write(to: URL(fileURLWithPath: rest[rest.startIndex + 1]), options: .atomic) }
+    guard let context = stageBitmap(stage), let pixels = context.data?.assumingMemoryBound(to: UInt8.self) else { exit(1) }
+    while let line = readLine() {
+        guard let data = line.data(using: .utf8), let at = try? JSONSerialization.jsonObject(with: data) as? [Double], at.count == 2 else { print("[]"); continue }
+        let column = Int(at[0] * 2), row = context.height - 1 - Int(at[1] * 2)
+        guard (0..<context.width).contains(column), (0..<context.height).contains(row) else { print("[]"); continue }
+        let offset = row * context.bytesPerRow + column * 4
+        print("[\(pixels[offset]),\(pixels[offset + 1]),\(pixels[offset + 2]),\(pixels[offset + 3])]")
+    }
+    exit(0)
 }
 // Decision-only: one recorded accessibility tree per stdin line, the pointer plan per stdout line. No AX object, event or window.
 if CommandLine.arguments.contains("--pointer-plan") {
@@ -761,13 +1090,37 @@ if CommandLine.arguments.contains("--cursor-demo") {
     do { try runCursorDemo(); exit(0) }
     catch { fputs("\((error as? Failure)?.message ?? String(describing: error))\n", stderr); exit(1) }
 }
-while !cancelled, let line = readLine() {
+// Requests come one line at a time. While the cursor or an effect is on screen the wait turns the run loop every 50 ms, so played
+// effects end and an idle cursor rests; otherwise the helper sleeps in poll() until the next line or the end of its input.
+var pending = [UInt8](), discarding = false
+func nextLine() -> String? {
+    while !cancelled {
+        if let end = pending.firstIndex(of: 10) {
+            let line = discarding ? "" : String(decoding: pending[..<end], as: UTF8.self)
+            pending.removeSubrange(...end); discarding = false
+            return line
+        }
+        // A line over the bound is dropped as it arrives and answered once, as invalid, when it ends.
+        if pending.count > 131_072 { pending.removeAll(); discarding = true }
+        var descriptor = pollfd(fd: 0, events: Int16(POLLIN), revents: 0)
+        let ready = poll(&descriptor, 1, badge != nil || effectsUntil > 0 ? 50 : -1)
+        if ready < 0 { if errno == EINTR { continue }; return nil }
+        if ready == 0 { CFRunLoopRunInMode(.defaultMode, 0, false); idle(); continue }
+        var chunk = [UInt8](repeating: 0, count: 65_536)
+        let count = Darwin.read(0, &chunk, chunk.count)
+        if count <= 0 { return nil }
+        pending.append(contentsOf: chunk[..<count])
+    }
+    return nil
+}
+while !cancelled, let line = nextLine() {
     autoreleasepool {
         var reply: Object
+        effectStarted = false
         do {
-            guard line.utf8.count <= 131_072, let data = line.data(using: .utf8), let request = try JSONSerialization.jsonObject(with: data) as? Object else { try fail("Invalid bounded JSON request") }
+            guard !line.isEmpty, line.utf8.count <= 131_072, let data = line.data(using: .utf8), let request = try JSONSerialization.jsonObject(with: data) as? Object else { try fail("Invalid bounded JSON request") }
             reply = ["ok": true, "value": try dispatch(request)]
-        } catch { reply = ["ok": false, "error": (error as? Failure)?.message ?? "Native computer operation failed"] }
+        } catch { reply = ["ok": false, "error": (error as? Failure)?.message ?? "Native computer operation failed", "delivery": effectStarted ? "unknown" : "not_delivered"] }
         let data = (try? JSONSerialization.data(withJSONObject: reply, options: [.sortedKeys])) ?? Data("{\"ok\":false,\"error\":\"Invalid native output\"}".utf8)
         FileHandle.standardOutput.write(data); FileHandle.standardOutput.write(Data([10]))
     }

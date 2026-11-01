@@ -3,7 +3,7 @@ summary: providers, models, reasoning effort and per-role model recipes
 docs: connect, providers, ai-config, advanced-config
 aliases: model, providers, provider, recipes, recipe, effort, login, fast, variants
 ---
-List: {{program}} models [provider] [--verbose]; roles in force: {{program}} control-plane models status. Model references are provider/model (catalog ids; API providers use provider:model).
+List: {{program}} models [provider] [--verbose]; roles in force: {{program}} control-plane models status. Roles and /model take these refs. A new main role is for new sessions.
 Switch (the user): /model picks model and effort per session (levels are the model's catalog's, max/none too); F2/F3 step them. /connect adds a provider and its key (the key is typed in the terminal: never ask for it in chat, never print it).
 CLI (the user's; your shell only lists): {{program}} providers login --provider ID [--api-key-env VAR] (env var name, never the value) | providers list | providers logout --provider ID. {{program}} control-plane models set-default <provider> <model> [--dry-run] sets the main role; use-preset <name> applies a named preset. A run: {{program}} run --model P/M --effort <effort> "...".
 Roles: {{roles}}. A role that is unset follows main.

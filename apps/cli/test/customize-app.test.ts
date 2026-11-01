@@ -4,6 +4,7 @@ import path from "node:path"
 import type { Line } from "../src/ui/theme"
 import { createCustomizePageState, customizePageKey, customizePreview, renderCustomizePage, CUSTOMIZE_ROWS } from "../src/view/customize-page"
 import { logoRowsFor } from "../src/view/logo-fonts"
+import { LOGO_MARK } from "../src/view/logo-mark"
 import { DEFAULT_TUI_PROFILE, tuiProfilePath, type TuiProfile } from "../src/view/tui-profile"
 import { glyphs } from "../src/ui/theme"
 import { textWidth } from "../src/view/wrap"
@@ -47,7 +48,7 @@ describe("/customize page", () => {
     const { h } = await open({ width: 180, height: 50 })
     expect(h.app.page).toBe("customize")
     for (const label of ["Home", "Logo kind", "Logo text", "Logo font", "Product name", "Welcome layout", "Split panel", "Density", "Prompt & footer", "Preview"]) expect(h.text()).toContain(label)
-    expect(h.text()).toContain(logoRowsFor("MENDCODE")[0]!)
+    expect(h.text()).toContain(LOGO_MARK[0]!)
     expect(h.text()).toContain("No sessions yet")
     expect(h.text()).not.toMatch(/sample sessions|Port the palette|gpt-6|● Tip/)
     expect(h.rows()[0]).toContain("esc back")
@@ -111,7 +112,7 @@ describe("/customize page", () => {
     await h.key(LEFT)
     expect(saved(dataDir).logoKind).toBe("none")
     await h.key("\x1b")
-    expect(h.text()).not.toContain(logoRowsFor("MENDCODE")[0]!)
+    expect(h.text()).not.toContain(LOGO_MARK[0]!)
   })
 
   test("welcome panel, layout and density save with their rendered changes", async () => {

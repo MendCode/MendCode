@@ -75,8 +75,8 @@ describe("dictation service", () => {
     expect(await h.voice.transcribe({ bytes: new Uint8Array(2000), name: "a.ogg", mime: "audio/ogg" })).toEqual({ ok: false, message: "voice dictation is off" })
   })
 
-  test("records, uploads once with the provider's key and no stored audio left behind", async () => {
-    const h = service({ voice: { enabled: true, language: "es" } })
+  test("records, uploads once with the provider's key and no stored audio left behind; a language pair sends its first as the hint", async () => {
+    const h = service({ voice: { enabled: true, language: "es,en" } })
     const started = await h.voice.start(h.owner)
     expect(started).toMatchObject({ ok: true, value: { recording: true, ready: true, provider: "openai", model: "gpt-4o-mini-transcribe", maxSeconds: 60, recorder: "fakerec" } })
     expect(h.files()).toHaveLength(1)
@@ -178,10 +178,11 @@ describe("dictation service", () => {
 
 describe("on-device dictation", () => {
   function device(options: { unavailable?: string; final?: string; fail?: string } = {}) {
-    const calls = { starts: [] as Array<string | undefined>, stops: 0, kills: 0 }
+    const calls = { starts: [] as Array<string | undefined>, stops: 0, kills: 0, prepares: 0 }
     let live: ((update: LocalLive) => void) | undefined
     const local: LocalDictation = {
       available: () => options.unavailable,
+      prepare() { calls.prepares++ },
       async start(input) {
         if (options.fail) throw new Error(options.fail)
         calls.starts.push(input.language)
@@ -214,6 +215,18 @@ describe("on-device dictation", () => {
     expect(stopped.ok && stopped.value.text).toBe("hola mundo")
     expect(h.recorder.calls.started).toEqual([])
     expect(h.http.seen).toEqual([])
+  })
+
+  test("asking the status of ready on-device dictation builds the helper ahead of the first recording; off or an API builds nothing", () => {
+    const ready = onDevice()
+    ready.voice.status()
+    expect(ready.mic.calls.prepares).toBe(1)
+    const off = onDevice({ voice: { enabled: false } })
+    off.voice.status()
+    expect(off.mic.calls.prepares).toBe(0)
+    const api = onDevice({ voice: { enabled: true, provider: "openai" } })
+    api.voice.status()
+    expect(api.mic.calls.prepares).toBe(0)
   })
 
   test("a tier without voice (minimalist) leaves it off until the user turns it on", async () => {
@@ -336,6 +349,8 @@ describe("voice.control in the daemon", () => {
     expect(Settings.safeParse({ voice: { base_url: "http://example.com/v1" } }).success).toBe(false)
     expect(Settings.safeParse({ voice: { base_url: "https://user:pw@example.com/v1" } }).success).toBe(false)
     expect(Settings.safeParse({ voice: { language: "Spanish" } }).success).toBe(false)
+    expect(Settings.safeParse({ voice: { language: "es,en" } }).success).toBe(true)
+    expect(Settings.safeParse({ voice: { language: "es,en,fr" } }).success).toBe(false)
     expect(Settings.safeParse({ voice: { max_seconds: 9000 } }).success).toBe(false)
     expect(Settings.safeParse({ voice: { token: "x" } }).success).toBe(false)
   })

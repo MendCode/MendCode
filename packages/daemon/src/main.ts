@@ -99,7 +99,7 @@ import { promptContextParts, promptFileOverrides } from "./prompt-context"
 import { outputStyleText } from "./output-styles"
 import { createPromptModes } from "./prompt-modes"
 import { selfKnowledgeText } from "./prompt-guidance"
-import { invalidChoice, modelEngine, resolveModel, usableEffort, type ModelCatalog } from "./models"
+import { foreignEngine, invalidChoice, modelEngine, resolveModel, unusableRoles, usableEffort, type ModelCatalog } from "./models"
 import { claudeAlias, claudeCompactEnv, claudeSubagentEnv, createClaudeDetection, createClaudeModelCatalog, probeClaude } from "./claude-models"
 import { createEngineRouter } from "./engine-router"
 import { withCodexEngine } from "./codex-router"
@@ -357,6 +357,9 @@ function routedProvider(input: { onResponseHeaders?: (headers: Headers) => void 
     if (request.model?.startsWith("virtual:")) request = { ...request, model: virtualModelFallback(request.model) }
     if (request.model?.startsWith("virtual:")) throw new Error("[PROVIDER]: virtual model has no real model available")
     if (!modelAllowed(request.model ?? router.model, extractionSettings())) throw new Error("[PROVIDER]: model is excluded from the catalog")
+    // A model another engine runs (Claude Code, an ACP agent) is never sent here: the fallback provider would answer that it does not know it.
+    const elsewhere = request.model ? foreignEngine(request.model, modelCatalog) : undefined
+    if (elsewhere) throw new Error(`[PROVIDER]: ${request.model} runs on ${elsewhere}, not on a provider of MendCode's own engine`)
     yield* router.stream(request)
   } }
 }
@@ -521,7 +524,7 @@ export const daemon = await startDaemon({
     // Extensions tell an override from a clash, and `api.builtinTool` wraps, by these.
     builtinTools.push(createCustomizeUiTool(dir, extensions.reload, emitGlobal))
     builtinTools.push(createExtendTool({ dir, extensions: { reload: extensions.reload, report: extensions.report, routeInput: extensions.routeInput, checkTool: extensionToolCheck(extensions) } }))
-    builtinTools.push(createSettingsTool({ settings: () => store.settings.get(), check: (patch) => store.settings.check(patch), write: settingsWrite }))
+    builtinTools.push(createSettingsTool({ settings: () => store.settings.get(), check: (patch) => store.settings.check(patch), models: (patch) => unusableRoles(patch, store.settings.get().models, modelCatalog), write: settingsWrite }))
     builtinTools.push(createMemoryTool(memory))
     // `review_config` (pr_review): the PR reviewer's config, `global` or `personal`, never guessed; its modules load on its first call.
     // Listed only while the reviewer is on (the tier permits it and `experimental.pr_review` is set), like the daemon's `pr.review`.
@@ -708,6 +711,8 @@ export const daemon = await startDaemon({
             const choice = tasks.isChild(sessionId) && store.sessionModel(sessionId) ? usableEffort(store.sessionModel(sessionId)!, modelCatalog) : resolveModel({ role, session: store.sessionModel(sessionId), roles: rolesFor(store.settings.get(), store.sessionInfo(sessionId)?.directory), catalog: modelCatalog })
             return choice.model.startsWith("virtual:") ? usableEffort(extensions.routeModel(choice, { sessionId, cwd: store.sessionDirectory(sessionId) ?? "", role }, modelCatalog.list()), modelCatalog) : choice
           },
+          // A session moved to Claude Code or an ACP agent mid-turn (`/model`, a new default) finishes the turn here on its model.
+          foreignModel: (model) => foreignEngine(model, modelCatalog),
           subagents: true,
           tasks,
           // Custom agents (`agents/*.md`): the session's selected one and the sub-agents `task` can name; their model is checked against the catalog's efforts.

@@ -184,9 +184,11 @@ variant's color, `width` cells); a floating box does not fit there.
 ### footer
 
 The row or rows under the prompt (at most 4). Input: `leftItems?`, `rightItems?`, `separator?`, `agent?`, `agentColor?`,
-`model?`, `effort?`, `provider?`, `counters?`, `permission?`, `permissionLabel?`, `profile?`, `pr?`, `loops`, `goal?`,
-`workflows?`, `notice?`, `connection?`, `shell?`, script segments, and `extraRows`. The legacy `footer.*` slots add to or
-replace the built-in row inside the built-in only. Actions: none.
+`model?`, `effort?`, `fast?` (`{ mark, applies }`; `model` no longer carries the mark), `provider?`, `counters?`, `segments?`
+and `detail?` (the placed footer segments of the first row and of the full view's second row, each `{ id, spans, rank, compact? }`),
+`divider?`, `plainMarks?`, `permission?`, `permissionLabel?`, `profile?`, `pr?`, `loops`, `goal?`, `workflows?`, `notice?`,
+`connection?`, `shell?`, script segments, and `extraRows`. The legacy `footer.*` slots add to or replace the built-in row inside
+the built-in only. Actions: none.
 
 ### home
 

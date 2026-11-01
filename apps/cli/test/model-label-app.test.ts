@@ -65,11 +65,12 @@ test("a Claude Code alias reads as its family until the engine reports what it r
   talk.exchange("hello", "hi")
   await h.type("")
   const bar = () => h.text().find((row) => row.includes("Build ·"))
-  expect(bar()).toContain("Build · Opus · claude")
+  // The balanced row names the reasoning effort between the model and the engine that serves it.
+  expect(bar()).toContain("Build · Opus · high · claude")
   expect(bar()).not.toContain("native")
   talk.emit({ type: "usage.recorded", turnId: ids("turn"), provider: "claude", model: "claude-opus-5-5-20260301", input: 10, output: 5, reasoning: 0, cacheRead: 0, cacheWrite: 0 })
   await h.type("")
-  expect(bar()).toContain("Build · Opus 5.5 · claude")
+  expect(bar()).toContain("Build · Opus 5.5 · high · claude")
 })
 
 test("the /model page and the picker keep the exact id, muted, next to the name", async () => {

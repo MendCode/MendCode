@@ -141,7 +141,7 @@ export type AgentThread = {
   tools: number
   last: string | undefined
   tokens: number | undefined
-  /** The model it runs on, when its engine says (Claude Code's sub-agents do). */
+  /** The model it runs on, when its engine says (Claude Code's sub-agents do), or until then the one its call asked for; never its parent's. */
   model?: string
 }
 type ThreadState = { transcript: { apply(event: SessionEvent): void; prepend(events: readonly SessionEvent[]): void; setMode(next: PresentationMode): void; setAppearance(next: Partial<TuiProfile> & { reasoning: string; toolOutput: string }): void }; tools: number; last?: string; model?: string; ended?: { status: "ok" | "error" | "interrupted" | "cancelled"; at: number; tools: number; tokens: number; durationMs: number; byUser?: true } }
@@ -1065,10 +1065,12 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
     const status = running ? "running" : thread?.ended?.status ?? (block.status === "error" ? "error" : block.status === "ok" ? "ok" : "interrupted")
     // Stopped by the user's esc: it stays in sight, to be started again, until a turn begun after that stop has ended.
     const stoppedByUser = thread?.ended?.byUser === true && settledStart < thread.ended.at
+    // What the sub-agent's own messages say it runs on; until the first one, the model its call asked for.
+    const model = thread?.model ?? (typeof block.meta?.model === "string" ? block.meta.model : undefined)
     return {
       itemId: block.itemId, description, agent: typeof block.meta?.agent === "string" ? block.meta.agent : "agent", background, running, status,
       ...(stoppedByUser ? { stoppedByUser: true as const } : {}),
-      startedAt: block.at, endedAt: thread?.ended?.at ?? block.endAt, tools: thread?.ended?.tools ?? thread?.tools ?? 0, last: thread?.last, tokens: thread?.ended?.tokens || undefined, ...(thread?.model ? { model: thread.model } : {}),
+      startedAt: block.at, endedAt: thread?.ended?.at ?? block.endAt, tools: thread?.ended?.tools ?? thread?.tools ?? 0, last: thread?.last, tokens: thread?.ended?.tokens || undefined, ...(model ? { model } : {}),
     }
   }
 

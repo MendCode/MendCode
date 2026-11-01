@@ -3,19 +3,23 @@ import type { PermissionMode } from "@mendcode/protocol"
 import { glyphs as defaultGlyphs, GLYPH_CHOICES, type ColorName, type GlyphChoice, type Glyphs, type Line } from "../ui/theme"
 import { appearancePage, focusedWindow } from "./appearance-layout"
 import { beside, fit, panelGrid } from "./deck"
-import { textWidth, wrap } from "./wrap"
-import type { Detected, ModelOption } from "./onboarding-detect"
+import { lineWidth, textWidth, wrap } from "./wrap"
+import type { Detected, ModelOption, ReadyItem } from "./onboarding-detect"
 import { importPickerText, importSummary, importValue, openPicker, pickerKey, renderImportPicker, toggleAll, validSelection, type ImportPicker } from "./onboarding-import"
-import { PERMISSION_NOTES, onboardingSample, tierLine, type SampleLook, type SamplePart } from "./onboarding-sample"
+import { modelConnects, modelPickerFocus, modelPickerKey, modelPickerText, openModelPicker, renderModelPicker, type ModelPicker } from "./onboarding-models"
+import { PERMISSION_NOTES, TIER_WHAT, onboardingSample, tierLine, type SampleLook, type SamplePart } from "./onboarding-sample"
 import { diffViewNote } from "./tool-card"
 import { DIFF_VIEWS, PROMPT_CHROMES, TOOL_LAYOUTS, TOOL_LAYOUT_NAMES, type TuiProfile } from "./tui-profile"
 
 /**
  * `/setup` and the first run: what is ready on this machine, the choices (model, tier, permission, then the look: theme,
  * glyphs, tool cards, diff, prompt, pet; then import) and one real preview of the focused choice. Enter on any row but Import
- * starts chatting with the choices shown; Enter or Space on Import opens a picker in the same screen. Nothing is written,
- * imported or saved until that final Enter; esc keeps working defaults. Everything else (memory, budget, home) lives in
- * `/customize` and `/setup advanced`. Under 60 columns, or under 72 and 34 rows, the preview is a key (`p`) away instead of under the choices.
+ * starts chatting with the choices shown; Enter or Space on Import opens a picker in the same screen, and Space on Model lists
+ * every model found, grouped by who runs it, with the sign-ins that would add more (`onboarding-models`). Up from the first
+ * choice reaches the Ready rows MendCode's own engine signs in with (`connectRows`): Enter there runs that `/connect` flow
+ * and comes back here. Nothing is written, imported or saved until that final Enter, except what a `/connect` flow saves
+ * itself; esc keeps working defaults. Everything else (memory, budget, home) lives in `/customize` and `/setup advanced`.
+ * Under 60 columns, or under 72 and 34 rows, the preview is a key (`p`) away instead of under the choices.
  */
 export const ONBOARDING_PERMISSIONS = ["ask", "edits", "full", "plan"] as const
 export type OnboardingPermission = (typeof ONBOARDING_PERMISSIONS)[number]
@@ -46,8 +50,12 @@ export type OnboardingState = {
   imports: readonly string[]
   /** The open Import picker, when there is one. */
   picker?: ImportPicker
+  /** The open model list (Space on the Model row), when there is one. */
+  models?: ModelPicker
   /** Where the preview is a key away (see `STACKED_PREVIEW_HEIGHT`): it is shown in place of the choices. */
   preview?: boolean
+  /** The focused sign-in row (an index into `connectRows`), while the focus is up in Ready instead of on a choice. */
+  ready?: number
 }
 export type OnboardingCurrent = { model?: string | undefined; tier?: Tier | undefined; permission?: PermissionMode | undefined; theme?: string | undefined; glyphs?: GlyphChoice | undefined; style?: SetupStyle | undefined }
 export type OnboardingChoices = { model?: string; tier: OnboardingTier; permission: PermissionMode; theme?: string; glyphs?: GlyphChoice; style?: SetupStyle; imports: string[] }
@@ -62,6 +70,8 @@ export type OnboardingAction =
   /** A Glyphs, Tools, Diff, Prompt or Pet row moved: the app applies the profile keys now (not saved), so the screen redraws with them. */
   | { type: "style"; patch: Partial<TuiProfile> }
   | { type: "recheck" }
+  /** Enter on a sign-in row: `/connect <target>` (the provider list when empty), then back to this page, checked again. */
+  | { type: "connect"; target: string }
 
 const UP = new Set(["\x1b[A", "\x1bOA", "\x10", "k"])
 const DOWN = new Set(["\x1b[B", "\x1bOB", "\x0e", "j", "\t"])
@@ -109,6 +119,22 @@ const cycle = <T,>(list: readonly T[], value: T, direction: 1 | -1): T => {
 /** The tier values this page can show: none only when nothing is saved and this is not the first run. */
 export const tierChoices = (firstRun: boolean): OnboardingTier[] => firstRun ? [...TIERS] : ["none", ...TIERS]
 
+/** The Ready rows MendCode's own engine uses; Claude Code, Codex and pi run as external harnesses on their own logins. */
+const NATIVE_ITEMS: ReadonlySet<ReadyItem["id"]> = new Set(["chatgpt", "keys"])
+/** A Ready row worth a line: pi only when found, the ChatGPT login only where this engine uses it. */
+const shownItem = (item: ReadyItem) => item.ok || !(item.id === "pi" || item.id === "chatgpt" && item.detail === "not used by this engine")
+
+/** A Ready row Enter acts on, and the `/connect` target it opens (empty: the provider list). */
+export type ConnectRow = { id: ReadyItem["id"]; target: string }
+
+/**
+ * The sign-in rows, in the order Ready draws them: the ChatGPT login runs `/connect chatgpt`, API keys open `/connect`. An
+ * external harness keeps the login of its own tool, so its row has nothing MendCode could run.
+ */
+export function connectRows(detected: Detected | undefined): ConnectRow[] {
+  return (detected?.items ?? []).filter((item) => shownItem(item) && NATIVE_ITEMS.has(item.id)).map((item) => ({ id: item.id, target: item.id === "chatgpt" ? "chatgpt" : "" }))
+}
+
 export function onboardingKey(state: OnboardingState, key: string, ctx: { detected: Detected | undefined; firstRun: boolean; themes?: readonly string[] | undefined }): { state: OnboardingState; action: OnboardingAction } {
   const importRow = ctx.detected?.importRow
   const none = (next: OnboardingState = state) => ({ state: next, action: { type: "none" } as OnboardingAction })
@@ -118,15 +144,35 @@ export function onboardingKey(state: OnboardingState, key: string, ctx: { detect
     void picker
     return none({ ...rest, ...(result.picker ? { picker: result.picker } : {}), ...(result.commit ? { imports: result.commit } : {}) })
   }
+  if (state.models) {
+    const result = modelPickerKey({ picker: state.models, key, detected: ctx.detected, connects: modelConnects(ctx.detected, connectRows(ctx.detected)), chosen: state.model ?? ctx.detected?.recommended })
+    const { models, ...rest } = state
+    void models
+    if (!result.picker) return none({ ...rest, ...(result.model ? { model: result.model } : {}) })
+    return { state: { ...state, models: result.picker }, action: result.action ?? { type: "none" } }
+  }
   const rows = onboardingRows(ctx.detected, state)
   const row = rows[Math.min(state.row, rows.length - 1)]!
   if (key === "\x1b" && state.preview) return none({ ...state, preview: false })
   if (key === "\x1b") return { state, action: { type: "defaults" } }
   if (key === "r") return { state, action: { type: "recheck" } }
   if (key === "p") return none({ ...state, preview: !state.preview })
+  const signIn = connectRows(ctx.detected)
+  if (state.ready !== undefined && signIn.length) {
+    const at = Math.min(state.ready, signIn.length - 1)
+    const { ready, ...choosing } = state
+    void ready
+    if (UP.has(key)) return none({ ...state, ready: Math.max(0, at - 1) })
+    if (DOWN.has(key)) return none(at + 1 < signIn.length ? { ...state, ready: at + 1 } : { ...choosing, row: 0 })
+    if (key === "\r") return { state, action: { type: "connect", target: signIn[at]!.target } }
+    return none()
+  }
+  if (UP.has(key) && state.row === 0 && signIn.length) return none({ ...state, ready: signIn.length - 1 })
   if (UP.has(key)) return none({ ...state, row: Math.max(0, state.row - 1) })
   if (DOWN.has(key)) return none({ ...state, row: Math.min(rows.length - 1, state.row + 1) })
   if (row === "import" && key === " ") return none({ ...state, picker: openPicker(importRow, state.imports) })
+  // Space lists every model found, grouped by who runs it, with the sign-ins that would add more; ←→ still step through them.
+  if (row === "model" && key === " " && ctx.detected) return none({ ...state, models: openModelPicker(state.model ?? ctx.detected.recommended) })
   const direction = LEFT.has(key) ? -1 : RIGHT.has(key) ? 1 : 0
   if (direction) {
     if (row === "model") {
@@ -191,6 +237,9 @@ const modelOf = (detected: Detected | undefined, state: OnboardingState): ModelO
 
 const tierName = (tier: OnboardingTier) => tier === "none" ? "no tier" : tier
 
+/** `TIER_WHAT` in fewer words, for the Tier row beside its value. */
+const TIER_SHORT: Readonly<Record<Tier, string>> = { minimalist: "bare chat", balanced: "code graph, sub-agents", full: "everything" }
+
 /** What each Glyphs value draws; the whole screen switches as the row moves. */
 const GLYPH_NOTES: Record<GlyphChoice, string> = {
   auto: "the terminal decides: ASCII on old ones, Nerd Font icons where bundled",
@@ -215,7 +264,7 @@ const PROMPT_NOTES: Record<string, string> = {
   "ascii-box": "a square frame",
 }
 
-const petNote = (pet: string) => pet === "off" ? "no pet beside the prompt" : pet === "mend" ? "Mend stands on the prompt" : `${pet} stands on the prompt (a picture: not in this preview)`
+const petNote = (pet: string) => pet === "off" ? "no pet beside the prompt" : pet === "mend" ? "Mend stands on the prompt (drawn small in this preview)" : `${pet} stands on the prompt (a picture: not in this preview)`
 
 /** The detail under a focused style row. */
 function styleNote(input: OnboardingInput, row: OnboardingRow, style: SetupStyle): string {
@@ -246,22 +295,50 @@ function wrapCommand(text: string, width: number): string[] {
   return rows
 }
 
-function readyLines(input: OnboardingInput, width: number): Line[] {
+/** The focused sign-in row, when the focus is up in Ready. */
+const focusedConnect = (input: Pick<OnboardingInput, "state" | "detected">): ConnectRow | undefined => {
+  const rows = connectRows(input.detected)
+  return input.state.ready === undefined || !rows.length ? undefined : rows[Math.min(input.state.ready, rows.length - 1)]
+}
+
+/** What Enter on a sign-in row does, as the dim line under it. */
+function connectNote(item: ReadyItem): string {
+  if (item.id === "chatgpt") return item.ok ? "enter opens /connect chatgpt: status, sign out" : "enter signs MendCode in, then comes back here"
+  return item.ok ? "enter opens /connect to add a provider" : "enter opens /connect to save a key here"
+}
+
+/** Who each group of Ready rows signs in with, longest wording first. */
+const READY_GROUPS = [
+  { native: true, titles: ["MendCode's own engine · signs in itself", "MendCode's own engine"] },
+  { native: false, titles: ["External harnesses · their own login", "External · own login"] },
+] as const
+
+/**
+ * Ready as rows: MendCode's own engine (the ChatGPT login, API keys) apart from the external harnesses (Claude Code, Codex,
+ * pi) that run on their own tool's login, each group under its heading when `headings`. The focused sign-in row carries the
+ * focus mark in place of its glyph (the line under it says what Enter does), so no row moves as the focus does.
+ */
+function readyLines(input: OnboardingInput, width: number, glyphs: Glyphs, headings: boolean): Line[] {
   const { detected } = input
   if (!detected) return [[{ text: input.loading ? "checking this machine…" : "nothing detected", fg: "muted" }]]
+  const focused = focusedConnect(input)
   const lines: Line[] = []
-  for (const item of detected.items) {
-    if (!item.ok && (item.id === "pi" || item.id === "chatgpt" && item.detail === "not used by this engine")) continue
-    const glyph = item.ok ? "✓" : "·"
-    const head = [{ text: `${glyph} `, fg: TONE(item.ok) }, { text: item.label.padEnd(14), fg: item.ok ? "text" : "muted" as ColorName }]
-    const tail = item.ok ? item.detail : item.fix ? `→ ${item.fix}` : item.detail
-    // A fix is a command to copy: when it does not fit beside its label it goes whole on the lines below, never cut.
-    if (!item.ok && item.fix && READY_INDENT + tail.length > width) {
-      lines.push(fit([...head, { text: item.detail, fg: "muted" }], width))
-      for (const row of wrapCommand(`→ ${item.fix}`, Math.max(10, width - READY_INDENT))) lines.push([{ text: " ".repeat(READY_INDENT) }, { text: row, fg: "muted" }])
-      continue
+  const firstFit = (candidates: readonly string[]) => candidates.find((text) => textWidth(text) <= width) ?? candidates[candidates.length - 1]!
+  for (const group of READY_GROUPS) {
+    const items = detected.items.filter((item) => shownItem(item) && NATIVE_ITEMS.has(item.id) === group.native)
+    if (!items.length) continue
+    if (headings) lines.push(fit([{ text: firstFit(group.titles), fg: "muted", bold: true }], width))
+    for (const item of items) {
+      const on = focused?.id === item.id
+      const head: Line = [on ? { text: `${glyphs.user} `, fg: "primary" } : { text: `${item.ok ? "✓" : "·"} `, fg: TONE(item.ok) }, { text: item.label.padEnd(14), fg: on ? "primary" : item.ok ? "text" : "muted", bold: on }]
+      const tail = item.ok ? item.detail : item.fix ? `→ ${item.fix}` : item.detail
+      // A fix is a command to copy: when it does not fit beside its label it goes whole on the lines below, never cut.
+      if (!item.ok && item.fix && READY_INDENT + tail.length > width) {
+        lines.push(fit([...head, { text: item.detail, fg: "muted" }], width))
+        for (const row of wrapCommand(`→ ${item.fix}`, Math.max(10, width - READY_INDENT))) lines.push([{ text: " ".repeat(READY_INDENT) }, { text: row, fg: "muted" }])
+      } else lines.push(fit([...head, { text: tail, fg: "muted" }], width))
+      if (on) for (const text of wrap(connectNote(item), Math.max(10, width - 4)).slice(0, 2)) lines.push([{ text: `    ${text}`, fg: "muted" }])
     }
-    lines.push(fit([...head, { text: tail, fg: "muted" }], width))
   }
   return lines
 }
@@ -291,12 +368,28 @@ function actionLines(input: OnboardingInput, width: number, current: OnboardingR
     : [{ text: `  ${row}`, fg: "text" }])
 }
 
+/** `space lists all 9 from 3 sources`: the Model row's way to the whole grouped list. */
+function modelCount(detected: Detected | undefined): string {
+  const count = detected?.options.length ?? 0
+  const groups = detected?.groups.length ?? 0
+  return `space lists all ${count}${groups > 1 ? ` from ${groups} sources` : ""}`
+}
+
+/** The Model row's value: the model and who runs it (`Opus · Claude Code`), the model alone when both do not fit. */
+function modelValue(model: ModelOption | undefined, detected: Detected | undefined, room: number): string | undefined {
+  if (!model) return undefined
+  const short = detected?.groups.find((group) => group.key === model.group)?.short
+  const both = short ? `${model.name} · ${short}` : model.label
+  return textWidth(both) + 4 <= room ? both : model.label
+}
+
 /** The dim line under a focused row: what its value does. */
 function rowDetail(input: OnboardingInput, row: OnboardingRow): string {
   const { state, detected } = input
   const model = modelOf(detected, state)
-  if (row === "model") return model ? `${model.current ? "current · " : model.recommended ? "recommended · " : ""}${model.line}` : detected && !detected.options.length ? "nothing to run yet: fix a row under Ready, then press r" : "the engine chooses its own model"
-  if (row === "tier") return state.tier === "none" ? "no tier: every feature at its own default" : tierLine(state.tier)
+  // The way to the whole list comes before the line about the model, so a narrow column never cuts it.
+  if (row === "model") return model ? `${model.current ? "current · " : model.recommended ? "recommended · " : ""}${modelCount(detected)} · ${model.line}` : detected && !detected.options.length ? "nothing to run yet: space lists the sign-ins, ↑ to a Ready row signs in, or fix one and press r" : "the engine chooses its own model"
+  if (row === "tier") return `${state.tier === "none" ? "no tier: every feature at its own default" : tierLine(state.tier)} · ←→ ${tierChoices(input.firstRun).map(tierName).join(" · ")}`
   if (row === "permission") return PERMISSION_NOTES[state.permission] ?? ""
   if (row === "look") return "the whole screen repaints now · saved when you start chatting"
   if (row === "glyphs") return state.glyphs ? GLYPH_NOTES[state.glyphs] : ""
@@ -309,20 +402,24 @@ function rowDetail(input: OnboardingInput, row: OnboardingRow): string {
 function chooseLines(input: OnboardingInput, width: number, glyphs: Glyphs): { lines: Line[]; focus: number } {
   const { state, detected } = input
   const rows = onboardingRows(detected, state)
-  const current = rows[Math.min(state.row, rows.length - 1)]
+  // Up in Ready, no choice is focused.
+  const current = focusedConnect(input) ? undefined : rows[Math.min(state.row, rows.length - 1)]
   const lines: Line[] = []
   let focus = 0
   const model = modelOf(detected, state)
   const rowLine = (row: OnboardingRow, label: string, value: string) => {
     const on = current === row
-    lines.push([{ text: on ? `${glyphs.user} ` : "  ", fg: "primary" }, { text: label.padEnd(12), fg: on ? "primary" : "text", bold: on }, { text: `‹ ${value} ›`, fg: on ? "text" : "muted", bold: on }])
+    const head: Line = [{ text: on ? `${glyphs.user} ` : "  ", fg: "primary" }, { text: label.padEnd(12), fg: on ? "primary" : "text", bold: on }, { text: `‹ ${value} ›`, fg: on ? "text" : "muted", bold: on }]
+    // The tier is the choice that changes the most, so its row says what the value gives even unfocused, in the words that fit whole.
+    const gives = row === "tier" && !on && state.tier !== "none" ? [TIER_WHAT[state.tier], TIER_SHORT[state.tier]].find((text) => lineWidth(head) + 2 + textWidth(text) <= width) : undefined
+    lines.push(gives ? [...head, { text: `  ${gives}`, fg: "muted" }] : head)
     if (!on) return
-    for (const text of wrap(rowDetail(input, row), Math.max(10, width - 4)).slice(0, 2)) lines.push([{ text: `    ${text}`, fg: "muted" }])
+    for (const text of wrap(rowDetail(input, row), Math.max(10, width - 4)).slice(0, 3)) lines.push([{ text: `    ${text}`, fg: "muted" }])
     // The window follows the detail's last line, so a scrolled list never cuts the note under the row.
     focus = lines.length - 1
   }
   const none = detected && !detected.options.length
-  rowLine("model", "Model", model?.label ?? (none ? "none found" : input.loading ? "checking…" : "default"))
+  rowLine("model", "Model", modelValue(model, detected, width - 14) ?? (none ? "none found" : input.loading ? "checking…" : "default"))
   rowLine("tier", "Tier", state.tier)
   rowLine("permission", "Permission", state.permission)
   if (state.look !== undefined || state.glyphs !== undefined || state.style) lines.push([{ text: "  Look", fg: "muted", bold: true }])
@@ -367,13 +464,16 @@ function partsFor(row: OnboardingRow, room: number): readonly SamplePart[] {
   return ["chat", "footer"]
 }
 
-/** The sample sized to its content (no blank rows above the prompt), cut to `room` rows only when it cannot fit. */
-function previewLines(input: OnboardingInput, width: number, room: number, glyphs: Glyphs, row: OnboardingRow): Line[] {
+/**
+ * The sample sized to its content (no blank rows above the prompt), or with `fill` all `room` rows with the prompt at the
+ * bottom, as the chat stands in a terminal that size; cut to `room` rows only when it cannot fit.
+ */
+function previewLines(input: OnboardingInput, width: number, room: number, glyphs: Glyphs, row: OnboardingRow, fill = false): Line[] {
   const model = modelOf(input.detected, input.state)
   const look = sampleLook(input.state.style)
   const base = { tier: previewTier(input.state.tier), permission: input.state.permission, model: model?.id ?? "your model", width, glyphs, now: input.now, pad: false, ...(look ? { look } : {}), ...(input.chatWidth ? { chatWidth: input.chatWidth } : {}) }
   const whole = onboardingSample({ ...base, height: 1000 })
-  if (whole.length <= room) return whole
+  if (whole.length <= room) return fill ? onboardingSample({ ...base, height: room, pad: true }) : whole
   return onboardingSample({ ...base, height: room, parts: partsFor(row, room) })
 }
 
@@ -406,32 +506,51 @@ export function renderOnboardingPage(input: OnboardingInput): Line[] {
     const body = renderImportPicker({ row: importRow, picker: state.picker, width: Math.min(inner, 110), height: room, glyphs })
     return appearancePage({ title: "Setup", subtitle, hints, body, width, height })
   }
+  if (state.models) {
+    const list = { picker: state.models, detected, connects: modelConnects(detected, connectRows(detected)), chosen: state.model ?? detected?.recommended }
+    const hints = modelPickerFocus(list) === "connect"
+      ? firstFit(["↑↓ move · enter sign in, then back here · esc back", "enter sign in · esc back"], hintRoom)
+      : firstFit(["↑↓ move · enter pick · r check again · esc back", "↑↓ move · enter pick · esc back", "enter pick · esc back"], hintRoom)
+    const body = renderModelPicker({ ...list, width: Math.min(inner, 110), height: room, glyphs })
+    return appearancePage({ title: "Setup", subtitle, hints, body, width, height })
+  }
   const keyed = width < PREVIEW_KEY_WIDTH || width < 72 && height < STACKED_PREVIEW_HEIGHT
+  const signingIn = focusedConnect(input) !== undefined
   const hints = firstFit(state.preview && keyed
     ? ["←→ change · p choices · esc back", "p choices · esc back"]
-    : !usable
-      ? ["r check again · enter continue anyway · esc keep defaults", "r recheck · enter go on · esc skip", "r recheck · esc skip"]
-      : row === "import"
-        ? ["↑↓ row · ←→ nothing/all · enter pick · esc keep defaults", "↑↓ row · enter pick · esc skip", "enter pick · esc skip"]
-        : keyed
-          ? ["↑↓ ←→ change · p preview · esc skip", "p preview · esc skip"]
-          : ["↑↓ row · ←→ change · enter start chatting · esc keep defaults", "↑↓ ←→ change · enter start · esc skip"], hintRoom)
+    : signingIn
+      ? ["↑↓ row · enter sign in · esc keep defaults", "enter sign in · esc skip"]
+      : !usable
+        ? ["↑ sign in · r check again · enter continue anyway · esc keep defaults", "r check again · enter continue anyway · esc keep defaults", "r recheck · enter go on · esc skip", "r recheck · esc skip"]
+        : row === "import"
+          ? ["↑↓ row · ←→ nothing/all · enter pick · esc keep defaults", "↑↓ row · enter pick · esc skip", "enter pick · esc skip"]
+          : keyed
+            ? ["↑↓ ←→ change · p preview · esc skip", "p preview · esc skip"]
+            : row === "model"
+              ? ["↑↓ row · ←→ change · space all models · enter start chatting · esc keep defaults", "↑↓ ←→ change · space all models · enter start · esc skip", "↑↓ ←→ change · enter start · esc skip"]
+            : ["↑↓ row · ←→ change · enter start chatting · esc keep defaults", "↑↓ ←→ change · enter start · esc skip"], hintRoom)
   const foot = (text: string): Line[] => [[{ text, fg: "muted", dim: true }]]
   let body: Line[]
   if (width >= 72) {
-    const leftWidth = Math.max(34, Math.min(56, Math.floor(inner * 0.42)))
-    const rightWidth = Math.min(110, inner - leftWidth - 1)
-    const readyBody = readyLines(input, leftWidth)
-    const readyHeight = Math.min(readyBody.length + 2, Math.max(4, Math.floor(room * 0.4)))
+    // The whole width: the choices grow to 64 columns, the preview takes the rest, as wide as a chat on this terminal.
+    const leftWidth = Math.max(34, Math.min(64, Math.floor(inner * 0.45)))
+    const rightWidth = inner - leftWidth - 1
+    // Ready takes at most two fifths of the rows; its group headings are the first to go when they do not fit.
+    const readyCap = Math.max(4, Math.floor(room * 0.4))
+    const grouped = readyLines(input, leftWidth, glyphs, true)
+    const readyBody = grouped.length + 2 <= readyCap ? grouped : readyLines(input, leftWidth, glyphs, false)
+    const readyHeight = Math.min(readyBody.length + 2, readyCap)
     const action = actionLines(input, leftWidth, row, glyphs)
     const choose = chooseLines(input, leftWidth, glyphs)
     // Ready, a gap, Choose, a gap and the Enter line, over the one-line foot: the Enter line stays put while Choose scrolls.
     const chooseHeight = Math.min(choose.lines.length + 2, Math.max(6, room - readyHeight - action.length - 3))
-    const left = [...panelGrid({ width: leftWidth, compact: true, maxColumns: 1, padding: false, gap: 1, rows: [
+    const panels = panelGrid({ width: leftWidth, compact: true, maxColumns: 1, padding: false, gap: 1, rows: [
       [{ title: "Ready", body: readyBody.slice(0, readyHeight - 2) }],
       [{ title: "Choose", body: focusedWindow(choose.lines, choose.focus, chooseHeight - 2) }],
-    ], heights: [readyHeight, chooseHeight] }), [], ...action]
-    const sample = previewLines(input, rightWidth, Math.max(2, room - 3), glyphs, row)
+    ], heights: [readyHeight, chooseHeight] })
+    // The whole height: the Enter line stands at the foot of the column, level with the bottom of the preview.
+    const left = [...panels, ...Array.from({ length: Math.max(1, room - 1 - panels.length - action.length) }, (): Line => []), ...action]
+    const sample = previewLines(input, rightWidth, Math.max(2, room - 3), glyphs, row, true)
     const right = panelGrid({ width: rightWidth, compact: true, maxColumns: 1, padding: false, rows: [
       [{ title: previewTitle(input, row, rightWidth), body: sample }],
     ] })
@@ -444,8 +563,8 @@ export function renderOnboardingPage(input: OnboardingInput): Line[] {
       [{ title: previewTitle(input, row, inner), body: [...note, [], ...sample] }],
     ] })
   } else {
-    // Stacked: the ready list folds into two lines; where the preview is a key away, Choose takes its room.
-    const readyBody = readySummary(input, inner)
+    // Stacked: the ready list folds into two lines (whole while a sign-in row is focused); where the preview is a key away, Choose takes its room.
+    const readyBody = signingIn ? readyLines(input, inner, glyphs, false) : readySummary(input, inner)
     const readyHeight = readyBody.length + 2
     const action = actionLines(input, inner, row, glyphs)
     const choose = chooseLines(input, inner, glyphs)
@@ -468,10 +587,15 @@ export function renderOnboardingPage(input: OnboardingInput): Line[] {
 export function onboardingText(input: OnboardingInput): string[] {
   const { detected, state } = input
   if (state.picker && detected?.importRow) return importPickerText(detected.importRow, state.picker)
+  if (state.models) return modelPickerText({ picker: state.models, detected, connects: modelConnects(detected, connectRows(detected)), chosen: state.model ?? detected?.recommended })
   const out = ["Setup. Enter starts chatting with the choices below. Escape keeps working defaults. Nothing is written until you start chatting."]
   for (const item of detected?.items ?? []) out.push(`${item.ok ? "Found" : "Missing"}: ${item.label}, ${item.detail}${!item.ok && item.fix ? `. To fix: ${item.fix}` : ""}.`)
+  const focused = focusedConnect(input)
+  const focusedItem = focused && detected?.items.find((item) => item.id === focused.id)
+  if (focusedItem) out.push(`Focused: ${focusedItem.label}. ${connectNote(focusedItem)}.`)
   const model = modelOf(detected, state)
   out.push(`Model: ${model?.label ?? "none"}${model?.recommended ? " (recommended)" : ""}. ${model?.line ?? ""}`)
+  if (detected?.options.length) out.push(`${detected.options.length} ${detected.options.length === 1 ? "model" : "models"} found, from ${detected.groups.map((group) => group.title).join(", ")}. Space on the Model row lists them all; left and right step through them.`)
   out.push(`Tier: ${state.tier}. ${state.tier === "none" ? "No tier." : tierLine(state.tier)}.`)
   out.push(`Permission: ${state.permission}. ${PERMISSION_NOTES[state.permission] ?? ""}.`)
   if (state.look !== undefined) out.push(`Look: ${state.look}. Left and right change the theme now.`)
@@ -484,6 +608,8 @@ export function onboardingText(input: OnboardingInput): string[] {
     out.push(`Pet: ${style.pet}. ${styleNote(input, "pet", style)}.`)
   }
   if (detected?.importRow) out.push(`Import: ${importValue(detected.importRow, state.imports)}. Available from ${detected.importRow.summary}. Enter or Space on the Import row opens the list; the default imports nothing.`)
+  const signIn = connectRows(detected)
+  if (signIn.length) out.push(`Sign in: up from Model reaches ${signIn.map((row) => row.id === "chatgpt" ? "the ChatGPT login" : "API keys").join(" and ")}; Enter there runs ${signIn.map((row) => row.target ? `/connect ${row.target}` : "/connect").join(" or ")} and comes back here. Claude Code, Codex and pi use their own logins.`)
   out.push(`Enter starts chatting: ${actionText(input, false).text.slice("enter  ".length)}.`)
   return out
 }

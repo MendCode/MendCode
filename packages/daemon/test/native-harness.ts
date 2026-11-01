@@ -9,7 +9,7 @@ import type { Store } from "@mendcode/store"
 import { defineTool, read, write, shell, taskStatus, type Tool } from "@mendcode/tools"
 import { z } from "zod"
 import { startDaemon } from "../src"
-import { filteredCatalog, resolveModel, usableEffort } from "../src/models"
+import { filteredCatalog, foreignEngine, resolveModel, usableEffort } from "../src/models"
 import { rolesFor } from "../src/profiles"
 import { windowOverride } from "../src/session-context-window"
 
@@ -151,6 +151,7 @@ export async function boot(options: { memoryTools?: boolean; shell?: boolean; ex
           const roles = rolesFor(s.settings.get(), s.sessionDirectory(sessionId))
           return session || Object.keys(roles).length ? resolveModel({ role, session, roles, catalog }) : undefined
         },
+        foreignModel: (model) => foreignEngine(model, catalog),
         agentModel: (choice) => usableEffort(choice, catalog),
         toolOutput: () => s.settings.get().tool_output,
         shell: () => s.settings.get().shell,

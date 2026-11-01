@@ -287,7 +287,13 @@ describe("footer in the app", () => {
     app.applySettings({ footer: [...DEFAULT_FOOTER], ...settings } as never)
     let seq = 0
     const ev = (patch: Record<string, unknown>) => ({ sessionId, seq: ++seq, at: 0, ...patch }) as SessionEvent
-    const footer = () => frames.at(-1)!.at(-1)!.map((s) => s.text).join("").trim()
+    /** The rows under the prompt's bottom rule: the status row, then the full view's second row when it has something to show. */
+    const below = () => {
+      const rows = frames.at(-1)!.map((row) => row.map((s) => s.text).join(""))
+      return rows.slice(rows.findLastIndex((row) => row.includes("─".repeat(20))) + 1).map((row) => row.trim())
+    }
+    const footer = () => below()[0] ?? ""
+    const detail = () => below()[1]
     const topbar = () => text(frames.at(-1)![0]!)
     const chat = () => {
       const itemId = ids("item")
@@ -296,16 +302,20 @@ describe("footer in the app", () => {
     }
     /** The whole last frame: a command's report shows in the notice slot over the prompt, not in the footer. */
     const whole = () => { app.render(); return frames.at(-1)!.map((row) => row.map((s) => s.text).join("")).join("\n") }
-    return { app, sent, footer, screen: whole, topbar, chat, ev, tick: () => Bun.sleep(5) }
+    return { app, sent, footer, detail, screen: whole, topbar, chat, ev, tick: () => Bun.sleep(5) }
   }
 
   test("the footer shows the agent and model, with context only in the topbar", () => {
-    const { app, footer, topbar, chat, ev } = harness()
+    const { app, footer, detail, topbar, chat, ev } = harness()
     app.render()
     expect(footer()).toBe("Build")
+    expect(detail()).toBeUndefined()
     chat()
     app.onEvent(ev({ type: "usage.recorded", turnId: ids("turn"), provider: "p", model: "m", input: 16_000, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 }))
     expect(footer()).toBe("Build · m · p")
+    // A 12-row terminal is too short for the full view's second row: the row stays one line.
+    app.onEvent(ev({ type: "usage.recorded", turnId: ids("turn"), provider: "p", model: "m", input: 4_000, output: 0, reasoning: 0, cacheRead: 12_000, cacheWrite: 0 }))
+    expect(detail()).toBeUndefined()
     expect(topbar()).toContain("10%")
   })
 
@@ -332,9 +342,10 @@ describe("footer in the app", () => {
   test("usage.today pushes update the today and cost segments", () => {
     const { app, footer } = harness({ footer: ["state", "today", "cost"] })
     app.onGlobal({ type: "usage.today", gseq: 0, at: NOW, day: "2026-09-26", tokens: 1_234_567, calls: 3, costMicros: 420_000 } as never)
-    expect(footer()).toMatch(/^Build +today 1.2M  cost \$0.42$/)
+    // Placed segments follow the agent on the left, each a group of its own behind the divider (they were pushed to the right edge).
+    expect(footer()).toBe("Build │ today 1.2M │ cost $0.42")
     app.onGlobal({ type: "usage.today", gseq: 0, at: NOW, day: "2026-09-26", tokens: 2_000_000, calls: 4 } as never)
-    expect(footer()).toMatch(/^Build +today 2M$/)
+    expect(footer()).toBe("Build │ today 2M")
   })
 
   test("the model segment follows the last usage event", () => {
@@ -350,7 +361,7 @@ describe("footer in the app", () => {
     const { app, sent, footer, ev, tick } = harness({ footer: ["state", "branch"] })
     await tick()
     expect(sent.filter((c) => c.type === "git.branch")).toEqual([{ type: "git.branch", directory: "/work/app" }])
-    expect(footer()).toMatch(/^Build +git feature\/x$/)
+    expect(footer()).toBe("Build │ git feature/x")
     const turnId = ids("turn")
     app.onEvent(ev({ type: "turn.completed", turnId }))
     await tick()
@@ -358,14 +369,25 @@ describe("footer in the app", () => {
   })
 
   test("/footer toggles segments, saves them and shows the list in the notice", async () => {
+    // The saved list equals the old default, so it follows the full view's tier list, and the edit starts from that list (what shows).
     const { app, sent, footer, screen, tick } = harness()
     for (const key of "/footer +branch -quota") await app.onKey(key)
     await app.onKey("\r")
     await tick()
     const saved = sent.find((c) => c.type === "settings.set") as { patch: { footer: string[] } }
-    expect(saved.patch.footer).toEqual(["state", "permission", "context", "notice", "branch"])
-    expect(screen()).toContain("footer: state permission context notice branch")
+    expect(saved.patch.footer).toEqual(["forecast", "codegraph", "cache", "branch"])
+    expect(screen()).toContain("footer: forecast codegraph cache branch")
     expect(footer()).not.toContain("footer:")
+  })
+
+  test("/footer reset removes the saved list, so the view's tier places the segments again", async () => {
+    const { app, sent, screen, tick } = harness({ footer: ["state", "branch"] })
+    for (const key of "/footer reset") await app.onKey(key)
+    await app.onKey("\r")
+    await tick()
+    const saved = sent.find((c) => c.type === "settings.set") as { patch: { footer: null } }
+    expect(saved.patch.footer).toBeNull()
+    expect(screen()).toContain("footer: forecast codegraph cache quota (full view default)")
   })
 
   test("/footer with an unknown segment reports an error and saves nothing", async () => {

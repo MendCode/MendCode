@@ -109,7 +109,7 @@ export const TUI_DEFAULTS: Readonly<Record<string, unknown>> = {
   "statusPlacement": "auto",
   "statusSeparator": " · ",
   "showAgent": true,
-  "showEffort": false,
+  "showEffort": true,
   "showPermission": true,
   "promptBorder": "auto",
   "showModel": true,

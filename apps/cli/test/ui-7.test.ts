@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { createTranscript } from "../src/view/transcript"
-import { homeIdentity } from "../src/view/home"
+import { homeIdentity, logoRows } from "../src/view/home"
 import { defaultHomeMascot } from "../src/view/mascot"
 import { textWidth } from "../src/view/wrap"
 import { createScreen } from "../src/ui/screen"
@@ -232,9 +232,9 @@ test("both logo remains composed in every welcome mode at 100x30", async () => {
     h.app.onGlobal({ type: "session.activity", gseq: 1, at: NOW, sessionId: ids("session"), directory: "/work/app", title: "Check layout", state: "generating", updatedAt: NOW } as never)
     h.app.render()
     const text = h.text().join("\n")
-    // Centered, the colored Mend stands above the wordmark (working with the session at work); the split box keeps the text identity.
+    // Centered, the colored Mend stands above the wordmark's letters (working with the session at work); the split box keeps the text identity.
     if (homeLayout === "centered") {
-      for (const row of homeIdentity({ logoKind: "wordmark" }).filter((row) => row.trim())) expect(text).toContain(row.trim())
+      for (const row of logoRows()) expect(text).toContain(row.trim())
       expect(mendRowIn(h.frames.at(-1)!, "running", 2)).toBeGreaterThan(0)
     } else for (const row of homeIdentity({ logoKind: "both" }).filter((row) => row.trim())) expect(text).toContain(row)
     await h.app.onKey("\x03")

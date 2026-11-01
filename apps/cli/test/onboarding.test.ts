@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { detectReady, type DetectInput } from "../src/view/onboarding-detect"
-import { actionText, createOnboardingState, onboardingKey, onboardingRows, PREVIEW_KEY_WIDTH, renderOnboardingPage, STACKED_PREVIEW_HEIGHT, onboardingText, type OnboardingState } from "../src/view/onboarding-page"
+import { actionText, connectRows, createOnboardingState, onboardingKey, onboardingRows, PREVIEW_KEY_WIDTH, renderOnboardingPage, STACKED_PREVIEW_HEIGHT, onboardingText, type OnboardingState } from "../src/view/onboarding-page"
 import { importValue } from "../src/view/onboarding-import"
 import { sampleChat } from "../src/view/onboarding-sample"
 import { glyphs, type Line } from "../src/ui/theme"
@@ -44,11 +44,16 @@ describe("detection to recommended model", () => {
     // Without the daemon's report (an older daemon) a listed Claude Code is never called signed in.
     expect(detect({ claude: true }).items.find((item) => item.id === "claude")?.detail).toBe("installed · sign-in not checked")
   })
-  test("ownLogins: a signed-in Codex CLI is only reported, its models are not offered, and ChatGPT asks for MendCode's own login", () => {
-    const found = detect({ codex: true }, { ownLogins: true, login: { ok: false, message: "sign in" }, harnesses: [{ id: "codex", installed: true, signedIn: true }] })
+  test("ownLogins: ChatGPT asks for MendCode's own login; a signed-in Codex CLI with no harness models is only reported", () => {
+    const own = { ownLogins: true, login: { ok: false, message: "sign in" }, harnesses: [{ id: "codex" as const, installed: true, signedIn: true }] }
+    const found = detect({}, own)
     expect(found.items.find((item) => item.id === "codex")).toEqual({ id: "codex", label: "Codex CLI", ok: false, detail: "signed in · its login is not used" })
     expect(found.items.find((item) => item.id === "chatgpt")).toMatchObject({ ok: false, detail: "not signed in for MendCode", fix: "/connect chatgpt" })
     expect(found.options).toEqual([])
+    // The Codex harness's own models (a native daemon lists them with its thread bridge) run on the Codex CLI's login, ownLogins or not.
+    const listed = detect({ codex: true }, own)
+    expect(listed.options.map((option) => option.source)).toEqual(["codex"])
+    expect(listed.items.find((item) => item.id === "codex")).toMatchObject({ ok: true, detail: "installed · signed in" })
     const before = detect({ codex: true }, { harnesses: [{ id: "codex", installed: true, signedIn: true }] })
     expect(before.options.map((option) => option.source)).toEqual(["codex"])
   })
@@ -66,9 +71,9 @@ describe("detection to recommended model", () => {
     expect(found.options[0]?.line).toContain("no per-token")
     expect(found.items.find((item) => item.id === "claude")?.ok).toBe(true)
   })
-  test("several: the ChatGPT subscription comes first, then Claude Code, Codex, keys, pi", () => {
+  test("several: MendCode's own engine is listed first (the ChatGPT subscription, then keys), then Claude Code, Codex, pi", () => {
     const found = detect({ chatgpt: true, claude: true, codex: true, pi: true, keys: ["openai", "anthropic"] })
-    expect(found.options.map((option) => option.source)).toEqual(["chatgpt", "chatgpt", "claude", "claude", "codex", "api", "api", "pi"])
+    expect(found.options.map((option) => option.source)).toEqual(["chatgpt", "chatgpt", "api", "api", "claude", "claude", "codex", "pi"])
     expect(found.recommended).toBe("gpt-5.5")
     expect(found.options.filter((option) => option.source === "api").map((option) => option.id)).toEqual(["anthropic:default", "openai:default"])
   })
@@ -637,6 +642,126 @@ describe("the wizard in the app", () => {
     await keys(kept, "j", "j", "j", "j", "j", "\x1b[C", "j", "\x1b[C", "j", "j", "\x1b[C", "\r")
     expect(kept.app.page).toBe("chat")
     expect(readTuiProfile(keptDir)).toMatchObject({ toolDensity: "standard", codeMapCard: "open", diffView: "split", promptChrome: "top-bottom", pet: "mend" })
+  })
+})
+
+/** A new install as the user had it: Claude Code and Codex signed in, MendCode not yet signed in to ChatGPT, no API key. */
+const signedOut: Partial<DetectInput> = { ownLogins: true, login: { ok: false, message: "sign in" }, harnesses: [{ id: "claude", installed: true, signedIn: true, plan: "max" }, { id: "codex", installed: true, signedIn: true }] }
+const signedOutInfo = { engine: "native", model: "gpt-5.5", dataDir: "/tmp/mendcode-demo", pid: 7, buildId: "deadbeefcafe", ownLogins: true, login: signedOut.login, harnesses: signedOut.harnesses }
+
+describe("sign-in rows", () => {
+  // A native daemon lists no Codex harness models until its thread bridge is on, as on the user's machine.
+  const c = { detected: detect({ claude: true }, signedOut), firstRun: true }
+  test("up from Model reaches the rows MendCode's own engine signs in with; enter runs their /connect, down comes back", () => {
+    expect(connectRows(c.detected)).toEqual([{ id: "chatgpt", target: "chatgpt" }, { id: "keys", target: "" }])
+    const keys = onboardingKey(state(), "k", c).state
+    expect(keys.ready).toBe(1)
+    expect(onboardingKey(keys, "\r", c).action).toEqual({ type: "connect", target: "" })
+    const chatgpt = onboardingKey(keys, "k", c).state
+    expect(onboardingKey(chatgpt, "\r", c).action).toEqual({ type: "connect", target: "chatgpt" })
+    // Left and right change nothing up there; down past API keys is the Model row again, and Enter there still starts chatting.
+    expect(onboardingKey(chatgpt, "\x1b[C", c).state).toEqual(chatgpt)
+    const back = onboardingKey(onboardingKey(chatgpt, "j", c).state, "j", c).state
+    expect(back.ready).toBeUndefined()
+    expect(back.row).toBe(0)
+    expect(onboardingKey(back, "\r", c).action).toMatchObject({ type: "finish" })
+  })
+  test("an engine that does not use the ChatGPT login offers only API keys; no detection, no sign-in rows", () => {
+    expect(connectRows(detect({ claude: true }))).toEqual([{ id: "keys", target: "" }])
+    expect(connectRows(undefined)).toEqual([])
+    expect(onboardingKey(state(), "k", { detected: undefined, firstRun: true }).state).toEqual(state())
+  })
+  test("Ready sets MendCode's own engine apart from the external harnesses, and the focused row says what enter does", () => {
+    const rows = renderOnboardingPage({ state: state(), detected: c.detected, firstRun: true, loading: false, width: 120, height: 40, glyphs: g, now: 0 }).map(plain)
+    const at = (needle: string) => rows.findIndex((row) => row.includes(needle))
+    expect(at("MendCode's own engine")).toBeGreaterThan(0)
+    expect(at("ChatGPT login")).toBeGreaterThan(at("MendCode's own engine"))
+    expect(at("API keys")).toBeGreaterThan(at("ChatGPT login"))
+    expect(at("External harnesses · their own login")).toBeGreaterThan(at("API keys"))
+    expect(at("Claude Code")).toBeGreaterThan(at("External harnesses"))
+    expect(rows[at("Codex CLI")]).toContain("its login is not used")
+    const focused = words(renderOnboardingPage({ state: { ...state(), ready: 0 }, detected: c.detected, firstRun: true, loading: false, width: 120, height: 40, glyphs: g, now: 0 }).map(plain))
+    expect(focused).toContain("❯ ChatGPT login")
+    expect(focused).toContain("enter signs MendCode in, then comes back here")
+    expect(focused).toContain("↑↓ row · enter sign in · esc keep defaults")
+    expect(focused).not.toContain("❯ Model")
+  })
+  test("screen-reader mode names the sign-in rows and what enter runs", () => {
+    const text = onboardingText({ state: state(), detected: c.detected, firstRun: true, loading: false, width: 80, height: 24, now: 0 }).join("\n")
+    expect(text).toContain("Sign in: up from Model reaches the ChatGPT login and API keys; Enter there runs /connect chatgpt or /connect and comes back here.")
+  })
+  test("in the app, enter on a sign-in row opens /connect for it and esc comes back to setup, checked again, with nothing written", async () => {
+    const h = onboardingHarness({ claude: true, codex: true }, { width: 120, height: 40, reply: (command) => command.type === "daemon.info" ? { ok: true, result: signedOutInfo } as never : undefined })
+    await h.app.openSetupIfFirstRun({})
+    for (const key of ["k", "k", "\r"]) await h.app.onKey(key)
+    await Bun.sleep(5)
+    expect(h.app.page).toBe("connect")
+    h.app.render()
+    expect(h.text().join("\n")).toContain("ChatGPT")
+    const checks = h.sentOf("models.list").length
+    // The ChatGPT flow opens on its sign-in methods: esc steps back to the provider list, a second esc closes it.
+    await h.app.onKey("\x1b")
+    await h.app.onKey("\x1b")
+    await Bun.sleep(5)
+    expect(h.app.page).toBe("setup")
+    expect(h.sentOf("models.list").length).toBeGreaterThan(checks)
+    h.app.render()
+    expect(h.text().join("\n")).toContain("welcome · all optional")
+    expect(mutating(h)).toEqual([])
+    // A /connect opened from the chat still closes to the chat.
+    await h.app.onKey("\x1b")
+    await Bun.sleep(5)
+    await h.type("/connect\r")
+    await h.app.onKey("\x1b")
+    await Bun.sleep(5)
+    expect(h.app.page).toBe("chat")
+  })
+  test("signed in during that detour, m (models) comes back to setup, whose Model row lists them, instead of opening /model", async () => {
+    let signedIn = false
+    const authorized = { provider: "chatgpt", state: "authorized", source: "v2", accessTokenPresent: true, refreshTokenPresent: true, accountIdPresent: true }
+    const h = onboardingHarness({ claude: true, codex: true }, { width: 120, height: 40, reply: (command) => {
+      if (command.type === "daemon.info") return { ok: true, result: { ...signedOutInfo, login: { ok: signedIn } } } as never
+      if (command.type === "providers.auth.status") return { ok: true, result: { statuses: [authorized] } } as never
+      if (command.type === "models.list" && signedIn) return { ok: true, result: { engine: "native", selectable: true, models: modelsFor({ chatgpt: true, claude: true }), defaults: { model: "gpt-5.5" }, roles: {} } } as never
+      return undefined
+    } })
+    await h.app.openSetupIfFirstRun({})
+    for (const key of ["k", "k", "\r"]) await h.app.onKey(key)
+    await Bun.sleep(5)
+    expect(h.app.page).toBe("connect")
+    signedIn = true
+    await h.app.onKey("m")
+    await Bun.sleep(5)
+    expect(h.app.page).toBe("setup")
+    h.app.render()
+    const text = h.text().join("\n")
+    // The focus stays on the row it left from, which now reads signed in.
+    expect(text).toContain("❯ ChatGPT login signed in")
+    expect(text).toContain("Model       ‹ GPT-5.5 · ChatGPT ›")
+  })
+})
+
+describe("a large terminal", () => {
+  test("the page takes the whole width and height: the preview reaches the right edge, its prompt and the Enter line stand at the foot", () => {
+    const rows = renderOnboardingPage({ state: state(), detected: detect({ claude: true, codex: true }, signedOut), firstRun: true, loading: false, width: 190, height: 55, glyphs: g, now: 0 }).map(plain)
+    expect(rows).toHaveLength(55)
+    // The preview's rule under its title runs to the page's right margin (it stopped at 110 columns of preview).
+    expect(rows[3]!.trimEnd().length).toBe(188)
+    expect(rows.findIndex((row) => row.includes("Fix a TODO in the codebase"))).toBeGreaterThan(55 - 8)
+    expect(rows.findIndex((row) => row.includes("enter  start chatting"))).toBeGreaterThan(55 - 6)
+    // Still the same page at 80x24: every part on screen.
+    const small = words(renderOnboardingPage({ state: state(), detected: detect({ claude: true, codex: true }, signedOut), firstRun: true, loading: false, width: 80, height: 24, glyphs: g, now: 0 }).map(plain))
+    for (const part of ["Ready", "ChatGPT login", "Choose", "Preview", "enter  start chatting"]) expect(small).toContain(part)
+  })
+  test("the Tier row says what its value gives even when another row is focused, and its note lists the tiers", () => {
+    const rows = words(frame(state(), { claude: true }, 160, 40))
+    expect(rows).toContain("Tier        ‹ balanced ›  tool cards, code graph, sub-agents")
+    expect(words(frame({ ...state(), row: 1 }, { claude: true }, 160, 40))).toContain("←→ minimalist · balanced · full")
+  })
+  test("Mend in the preview is its compact three-row form, not the chat's seven-row sprite", () => {
+    const page = renderOnboardingPage({ state: state({ look: "mend", glyphs: "auto", style: { tools: "default", diffView: "unified", promptChrome: "top-bottom", pet: "mend" } }), detected: detect({ claude: true }), firstRun: true, loading: false, width: 160, height: 40, glyphs: g, now: 0 })
+    expect(words(page.map(plain))).toContain("(o o)")
+    expect(page.flat().some((span) => span.fgHex !== undefined)).toBe(false)
   })
 })
 

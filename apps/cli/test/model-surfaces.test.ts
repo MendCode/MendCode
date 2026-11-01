@@ -77,7 +77,8 @@ describe("the quick switch and the full model page list the same models", () => 
     test(`${where}: the bottom bar names the ChatGPT subscription, not the daemon's engine, next to a subscription model`, async () => {
       const h = await start({ withSession })
       const bar = h.text().find((row) => row.includes("Build ·"))
-      expect(bar).toContain("GPT-6-Astra · chatgpt")
+      // The reasoning effort sits between the model and its provider (`showEffort` is on by default).
+      expect(bar).toContain("GPT-6-Astra · medium · chatgpt")
       expect(bar).not.toContain("native")
     })
 

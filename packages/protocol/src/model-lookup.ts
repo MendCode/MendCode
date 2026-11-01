@@ -2,7 +2,9 @@
  * Looking a model up in a catalog by the id a person may give. Zod-free: thin clients import it through
  * "@mendcode/protocol/wire". Only the fields the lookup reads are required, so `ModelInfo` and lighter rows both fit.
  */
-type Row = { id: string; name: string; engine?: string | undefined; resolved?: string | undefined }
+import { modelRef } from "./model-context"
+
+type Row = { id: string; name: string; provider?: string | undefined; engine?: string | undefined; resolved?: string | undefined }
 
 /** After a family alias: a version (`-5`, `-5-5`) and optionally a release date (`-20251001`). */
 const PINNED_VERSION = /^-(\d{1,2})(?:-(\d{1,2}))?(?:-(\d{8}))?$/
@@ -13,9 +15,10 @@ const PINNED_VERSION = /^-(\d{1,2})(?:-(\d{1,2}))?(?:-(\d{8}))?$/
  * `claude-haiku-4-5-20251001` is that family pinned to one model, which `claude --model` takes as it is. The pinned
  * entry is the alias's with the full id and a name that says the version. No table of versions: whether the model
  * exists is Claude Code's answer on the first turn. Anything else (`claude-nonsense`, `claude-haiku-fast`) is unknown.
+ * The reference `mendcode models` prints (`claude/claude-opus`, `chatgpt/gpt-6-luna`) is the model it names, entry and id.
  */
 export function findModel<T extends Row>(models: readonly T[], id: string): T | undefined {
-  const exact = models.find((model) => model.id === id)
+  const exact = models.find((model) => model.id === id) ?? (id.includes("/") ? models.find((model) => modelRef(model) === id) : undefined)
   if (exact) return exact
   for (const alias of models) {
     if (alias.engine !== "claude" || !/^claude-[a-z]+$/.test(alias.id) || !id.startsWith(alias.id)) continue

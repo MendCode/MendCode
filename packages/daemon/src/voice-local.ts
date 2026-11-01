@@ -10,7 +10,12 @@ import sourceFile from "../assets/dictate.swift" with { type: "file" }
 export type LocalLive = { level?: number; text?: string }
 export type LocalSession = { stop(): Promise<string>; kill(): void }
 /** On-device dictation: `available()` says why not when it cannot run here. Tests supply a fake. */
-export type LocalDictation = { available(): string | undefined; start(input: { language?: string | undefined; live(update: LocalLive): void }): Promise<LocalSession> }
+export type LocalDictation = {
+  available(): string | undefined
+  /** Builds the helper in the background if it is not built yet, so the first recording does not wait for the compiler. */
+  prepare?(): void
+  start(input: { language?: string | undefined; live(update: LocalLive): void }): Promise<LocalSession>
+}
 
 const COMPILE_MS = 120_000
 /** The first use of a language may download its speech model (macOS does it); the helper says so and is waited on longer. */
@@ -126,5 +131,10 @@ export function createLocalDictation(options: { dir: string; platform?: NodeJS.P
     }
   }
 
-  return { available, start }
+  // A failed build is reported by the recording that needs it, which tries again.
+  function prepare() {
+    if (!available()) void helper().catch(() => {})
+  }
+
+  return { available, prepare, start }
 }

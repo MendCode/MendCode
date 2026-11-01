@@ -106,11 +106,13 @@ describe("UI-1 chat chrome", () => {
       await Bun.sleep(5)
       h.app.onGlobal({ type: "usage.today", gseq: 1, at: NOW, day: "2026-09-30", tokens: 0, calls: 0 } as never)
       h.app.render()
-      expect(h.text().at(-1)?.trim()).toBe("Build · GPT-6-Luna · codex")
-      expect(h.text().at(-2)?.trim()).toMatch(/^─+$/)
-      expect(h.text().at(-1)).not.toMatch(/ready|today|quota/)
+      // Both views name the reasoning effort beside the model (`showEffort` is on by default). Full's second row waits for something
+      // to say: after one cold call its cache share would only read `cache 0%`.
+      const below = () => h.text().slice(h.text().findLastIndex((row) => /^ *─+ *$/.test(row)) + 1).map((row) => row.trim())
+      expect(below()).toEqual(["Build · GPT-6-Luna · medium · codex"])
+      expect(below().join("\n")).not.toMatch(/ready|today|quota/)
       h.app.onGlobal({ type: "usage.today", gseq: 2, at: NOW, day: "2026-09-30", tokens: 2400, calls: 1 } as never)
-      expect(h.text().at(-1)).not.toContain("today")
+      expect(below().join("\n")).not.toContain("today")
     }
   })
 

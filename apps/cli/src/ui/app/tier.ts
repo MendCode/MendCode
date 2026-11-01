@@ -5,7 +5,7 @@ import type { AppContext } from "./context"
 
 /**
  * Applies a tier: saves it with the chat view of its bundle, sets the project's prompt mode, and sets the terminal profile's
- * density (and hides the right bar for minimalist). Feature modules follow the tier live in the daemon; this only sets the
+ * density (and hides the right bar for minimalist; balanced and full turn `showEffort` on). Feature modules follow the tier live in the daemon; this only sets the
  * existing switches once, like a setup preset. Returns the saved settings, or undefined when the daemon refused.
  */
 export async function applyTierBundle(ctx: AppContext, input: { tier: Tier; changeProfile(patch: Partial<TuiProfile>): void }) {
@@ -19,7 +19,8 @@ export async function applyTierBundle(ctx: AppContext, input: { tier: Tier; chan
   const prompt = await app.send({ type: "prompt.set", directory: app.directory ?? ".", mode: bundle.promptMode })
   // Minimalist hosts the daemon in the terminal's process (applies at the next launch); leaving it restores the separate daemon, but a user's own choice under another tier is not touched.
   const processPatch = input.tier === "minimalist" || before === "minimalist" ? { processMode: bundle.processMode } : {}
-  input.changeProfile({ density: bundle.density, slashMenu: input.tier === "minimalist" ? "flat" : "tabs", ...processPatch, ...(bundle.hideRightSidebar ? { rightSidebar: false } : {}) })
+  // Balanced and full name the reasoning effort in the row under the prompt; minimalist has no such row, so nothing is written for it.
+  input.changeProfile({ density: bundle.density, slashMenu: input.tier === "minimalist" ? "flat" : "tabs", ...processPatch, ...(bundle.hideRightSidebar ? { rightSidebar: false } : {}), ...(bundle.view !== "minimal" ? { showEffort: true } : {}) })
   const diff = before ? tierDiff(before, input.tier) : undefined
   const change = diff ? [...diff.added.map((id) => `+${id}`), ...diff.removed.map((id) => `-${id}`)].join(" ") : ""
   return { settings, promptOk: prompt.ok, summary: `tier ${input.tier} · view ${bundle.view} · prompt ${bundle.promptMode} · density ${bundle.density}${change ? ` · ${change}` : ""}${prompt.ok ? "" : " · prompt mode unchanged"}` }

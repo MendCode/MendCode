@@ -787,6 +787,33 @@ describe("claude thinking blocks", () => {
     expect(events.at(-1)).toMatchObject({ type: "item.completed", itemId: (events[0] as any).itemId, status: "ok", meta: { subagent: true, agent: "general-purpose", background: true } })
   })
 
+  test("an agent call carries the model it asked for from its first event, so its row never shows the parent's model while it starts", () => {
+    const long = JSON.stringify({ description: "Read part 1", model: "haiku", subagent_type: "general-purpose", prompt: "p".repeat(4000) })
+    const early = mapped([
+      stream({ type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "toolu_h", name: "Agent", input: {} } }),
+      stream({ type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: long.slice(0, 2000) } }),
+    ])
+    expect(early.events[0]).toMatchObject({ type: "item.started", kind: "tool_call", meta: { subagent: true, model: "claude-haiku" } })
+    early.mapper.accept(stream({ type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: long.slice(2000) } }))
+    early.mapper.accept(stream({ type: "content_block_stop", index: 0 }))
+    early.mapper.accept({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "toolu_h", content: "Done." }] }, parent_tool_use_id: null })
+    expect(early.events.at(-1)).toMatchObject({ type: "item.completed", meta: { subagent: true, model: "claude-haiku" } })
+    // A short input starts the card at its end; a half-written name, `inherit` or none says no model.
+    const short = (input: Record<string, unknown>) => mapped([
+      stream({ type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "toolu_s", name: "Agent", input: {} } }),
+      stream({ type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: JSON.stringify(input) } }),
+      stream({ type: "content_block_stop", index: 0 }),
+    ]).events.find((event) => event.type === "item.started") as Extract<EngineEvent, { type: "item.started" }>
+    expect(short({ description: "a", prompt: "b", model: "claude-sonnet-5-5" }).meta).toMatchObject({ model: "claude-sonnet-5-5" })
+    expect(short({ description: "a", prompt: "b", model: "inherit" }).meta?.model).toBeUndefined()
+    expect(short({ description: "a", prompt: "b" }).meta?.model).toBeUndefined()
+    const halfWritten = mapped([
+      stream({ type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "toolu_p", name: "Agent", input: {} } }),
+      stream({ type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: `{"prompt":"${"p".repeat(2000)}","model":"hai` } }),
+    ])
+    expect((halfWritten.events[0] as Extract<EngineEvent, { type: "item.started" }>).meta?.model).toBeUndefined()
+  })
+
   test("an edit's result carries the diff Claude Code made, so its card draws it like MendCode's own edit", () => {
     const { events, mapper } = mapped([
       stream({ type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "toolu_e", name: "Edit", input: {} } }),

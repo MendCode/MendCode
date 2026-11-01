@@ -61,7 +61,10 @@ export function normalizeAttach(argv: string[]) {
   const at = commandIndex(argv)
   if (argv[at] !== "attach") return { args: argv }
   const url = argv[at + 1]
-  if (!url || !/^https?:\/\//.test(url)) throw new Error("attach needs an HTTP URL")
+  // `attach <session id>` opens a local session in the terminal UI and startup parses it. A session id never has `:`, `/` or `.`,
+  // so anything with them (`localhost:4096`, `ftp://…`) is still a remote attach and refused below unless it is an HTTP URL.
+  if (!url || !/[:/.]/.test(url)) return { args: argv }
+  if (!/^https?:\/\//.test(url)) throw new Error("attach needs an HTTP URL")
   const args: string[] = []
   let directory: string | undefined
   for (let i = 0; i < argv.length; i++) {

@@ -480,7 +480,7 @@ export const DEFAULT_TUI_PROFILE: Readonly<TuiProfile> = {
   statusPlacement: "auto",
   statusSeparator: " · ",
   showAgent: true,
-  showEffort: false,
+  showEffort: true,
   showPermission: true,
   promptBorder: "auto",
   showModel: true,

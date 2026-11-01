@@ -217,6 +217,19 @@ const SILENT_THINKING_EVERY = 20
 const WHOLE_INPUT_TOOLS = new Set(["Agent", "Task"])
 
 /**
+ * The model an Agent call asks for (its `model` input), as an id the screen names (`haiku` is `claude-haiku`, shown "Haiku"), so the
+ * row says it from the start instead of waiting for the sub-agent's first message. `inherit` or no model says nothing.
+ */
+export function requestedAgentModel(value: unknown): { model: string } | Record<string, never> {
+  if (typeof value !== "string") return {}
+  const model = value.trim().toLowerCase()
+  if (!model || model === "inherit") return {}
+  return { model: /^(haiku|sonnet|opus)$/.test(model) ? `claude-${model}` : model.slice(0, 120) }
+}
+/** The `model` of an input still being written, once its closing quote has come (a half-written name is no name). */
+const writtenModel = (json: string) => /"model"\s*:\s*"([^"\\]{1,120})"/.exec(json)?.[1]
+
+/**
  * The unified diff of a Claude Code Edit or MultiEdit (`tool_use_result.structuredPatch`: hunks with their start lines and ` `/`-`/`+`
  * lines), the text MendCode's own edit tool returns, so the card draws it the same way. A Write's result (it has a `type`) and a
  * result with no hunks give nothing.
@@ -252,8 +265,8 @@ export function createTurnMapper(input: { newItemId(): ItemId; emit(event: Engin
   const tools = new Map<string, ItemId>()
   /** Agent calls of this turn by their tool-use id, kept past their result: a background agent goes on after it. */
   const agents = new Map<string, ItemId>()
-  /** Agent calls drawn before their input was whole: the agent and background flag the input ended with, sent again when the call completes. */
-  const lateAgentMeta = new Map<ItemId, { subagent: true; agent: string; background: boolean; tool: string }>()
+  /** Agent calls drawn before their input was whole: the agent, model and background flag the input ended with, sent again when the call completes. */
+  const lateAgentMeta = new Map<ItemId, { subagent: true; agent: string; model?: string; background: boolean; tool: string }>()
   /** Background agents of this turn still running, by tool-use id: they report after the turn ends. */
   const backgroundAgents = new Set<string>()
   /** Agent calls whose agent was stopped by an interrupt, by item: Claude Code's own notice of that end comes too late or not at all. */
@@ -346,7 +359,7 @@ export function createTurnMapper(input: { newItemId(): ItemId; emit(event: Engin
           if (open.toolUseId) tools.set(open.toolUseId, open.itemId)
           const partial = partialToolArgs(open.json)
           const agentCall = WHOLE_INPUT_TOOLS.has(open.name ?? "")
-          input.emit({ type: "item.started", itemId: open.itemId, kind: "tool_call", meta: { tool: claudeToolTitle(open.name ?? "tool", partial).slice(0, 200), ...(agentCall ? { subagent: true, ...(partial.subagent_type ? { agent: partial.subagent_type.slice(0, 60) } : {}), background: /"run_in_background"\s*:\s*true/.test(open.json) } : {}) } })
+          input.emit({ type: "item.started", itemId: open.itemId, kind: "tool_call", meta: { tool: claudeToolTitle(open.name ?? "tool", partial).slice(0, 200), ...(agentCall ? { subagent: true, ...(partial.subagent_type ? { agent: partial.subagent_type.slice(0, 60) } : {}), ...requestedAgentModel(writtenModel(open.json)), background: /"run_in_background"\s*:\s*true/.test(open.json) } : {}) } })
         }
         // The card says how much the model has written, so a long write reads as writing and not as a tool that hangs.
         if (open.itemId && (open.told === undefined || open.json.length - open.told >= INPUT_PROGRESS_CHARS)) {
@@ -375,8 +388,8 @@ export function createTurnMapper(input: { newItemId(): ItemId; emit(event: Engin
         if (agent && open.toolUseId && args?.run_in_background === true) backgroundAgents.add(open.toolUseId)
         // An agent call started early may have had only part of its input (a long prompt before the description): its whole title comes
         // with its end. Every agent call keeps it, as Claude Code may still run the agent in the background when the model did not ask.
-        if (agent) lateAgentMeta.set(itemId, { subagent: true, agent: String(args?.subagent_type ?? "general-purpose").slice(0, 60), background: args?.run_in_background === true, tool: claudeToolTitle(open.name ?? "tool", args).slice(0, 200) })
-        if (!open.itemId) input.emit({ type: "item.started", itemId, kind: "tool_call", meta: { tool: claudeToolTitle(open.name ?? "tool", args).slice(0, 200), ...(agent ? { subagent: true, agent: String(args?.subagent_type ?? "general-purpose").slice(0, 60), background: args?.run_in_background === true } : {}) } })
+        if (agent) lateAgentMeta.set(itemId, { subagent: true, agent: String(args?.subagent_type ?? "general-purpose").slice(0, 60), ...requestedAgentModel(args?.model), background: args?.run_in_background === true, tool: claudeToolTitle(open.name ?? "tool", args).slice(0, 200) })
+        if (!open.itemId) input.emit({ type: "item.started", itemId, kind: "tool_call", meta: { tool: claudeToolTitle(open.name ?? "tool", args).slice(0, 200), ...(agent ? { subagent: true, agent: String(args?.subagent_type ?? "general-purpose").slice(0, 60), ...requestedAgentModel(args?.model), background: args?.run_in_background === true } : {}) } })
         return
       }
       if (open.itemId) input.emit({ type: "item.completed", itemId: open.itemId, status: "ok", text: clip(open.text) })

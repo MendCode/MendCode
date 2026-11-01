@@ -4,6 +4,7 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 import { z } from "zod"
 import type { Clock, TurnInput } from "@mendcode/kernel"
+import { PROGRAM_NAME } from "@mendcode/program"
 import type { TaskInput } from "@mendcode/protocol"
 import type { BridgeEngine } from "./thread-mcp-policy"
 export { threadMcpEnabled } from "./thread-mcp-policy"
@@ -13,6 +14,10 @@ import type { createOrchestrationReceipts } from "./orchestration-receipts"
 const target = { sessionId: z.string().min(4).max(64) }
 const paging = { limit: z.number().int().min(1).max(10).optional(), before: z.string().max(100).optional() }
 const retry = { clientRequestId: z.string().min(1).max(128).optional() }
+/** The engines delegate_task takes; another catalog engine (OpenCode, Cursor) runs whole sessions only. */
+const DELEGATE_ENGINE = /^(native|claude|codex|pi|acp:[a-zA-Z0-9_.-]+)$/
+/** Model ids named per engine in the bridge's instructions; the rest are counted, and `mendcode models` lists them. */
+const MODELS_PER_ENGINE = 10
 const schemas = {
   thread_list: z.strictObject({ limit: paging.limit }),
   thread_create: z.strictObject({ title: z.string().min(1).max(80), ...retry }),
@@ -23,7 +28,7 @@ const schemas = {
   thread_interrupt: z.strictObject({ ...target, ...retry }),
   delegate_task: z.strictObject({
     description: z.string().min(1).max(80), prompt: z.string().min(1).max(20_000),
-    engine: z.string().regex(/^(native|claude|codex|pi|acp:[a-zA-Z0-9_.-]+)$/).optional(),
+    engine: z.string().regex(DELEGATE_ENGINE).optional(),
     model: z.string().min(1).max(200).optional(), variant: z.string().min(1).max(80).optional(),
     agent: z.string().min(1).max(64).optional(), background: z.boolean().optional(),
     task_id: z.string().min(1).max(80).optional(),
@@ -45,6 +50,22 @@ const descriptions: Record<Name, string> = {
 }
 const tools = Object.entries(schemas).map(([name, schema]) => ({ name, description: descriptions[name as Name], inputSchema: z.toJSONSchema(schema), annotations: { readOnlyHint: ["thread_list", "thread_read", "thread_search", "thread_wait", "orchestrator_capabilities"].includes(name) } }))
 
+/**
+ * What the other harness's model is told about delegation (MCP `instructions`, which Claude Code puts in its system prompt; Codex
+ * gets them in its developer instructions): delegate_task runs MendCode's models, by engine, besides the harness's own. Without
+ * them a Claude Code model asked for a GPT sub-agent saw only its Agent tool's Claude models and said the model did not exist.
+ */
+export function threadInstructions(input: { engine: BridgeEngine; models: ReadonlyArray<{ id: string; engine: string }> }): string {
+  const groups = new Map<string, string[]>()
+  for (const model of input.models) if (model.engine !== input.engine && DELEGATE_ENGINE.test(model.engine)) groups.set(model.engine, [...(groups.get(model.engine) ?? []), model.id])
+  const listed = [...groups].map(([engine, ids]) => `${engine}: ${ids.slice(0, MODELS_PER_ENGINE).join(", ")}${ids.length > MODELS_PER_ENGINE ? ` (+${ids.length - MODELS_PER_ENGINE} more)` : ""}`)
+  const call = input.engine === "codex" ? "tools.mcp__mendcode_threads__delegate_task (a nested tool of exec)" : "mcp__mendcode_threads__delegate_task"
+  return [
+    `Sub-agents on MendCode's models, not only this harness's own (your own sub-agent tool runs only those): ${call}, with model an exact id below and engine its group (none for native). A model the user names is one of these ids; never say it does not exist without looking here.${input.engine === "claude" ? ` If it is deferred, load it with ToolSearch "select:mcp__mendcode_threads__delegate_task".` : ""}`,
+    ...(listed.length ? [`Models: ${listed.join("; ")}. \`${PROGRAM_NAME} models\` lists all.`] : []),
+  ].join("\n")
+}
+
 type Lease = {
   token: string
   turn: TurnInput
@@ -56,6 +77,8 @@ type Lease = {
   queue: Promise<void>
   retries: Map<string, { digest: string; result: ThreadResult }>
   controller: AbortController
+  /** `threadInstructions` for this lease's engine and the catalog when it opened. */
+  instructions: string
   allowed(): boolean
   run(name: Name, args: Record<string, unknown>, signal: AbortSignal): Promise<ThreadResult>
   release(): void
@@ -109,7 +132,7 @@ export function createThreadMcp(options: {
     const reply = (result: unknown) => json({ jsonrpc: "2.0", id: message.id, result })
     const error = (code: number, text: string) => json({ jsonrpc: "2.0", id: message.id, error: { code, message: text } })
     if (message.id === undefined) return new Response(null, { status: 202 })
-    if (message.method === "initialize") return reply({ protocolVersion: ["2025-03-26", "2025-06-18", "2025-11-25"].includes(message.params?.protocolVersion) ? message.params.protocolVersion : "2025-03-26", capabilities: { tools: {} }, serverInfo: { name: "mendcode-threads", version: "1" } })
+    if (message.method === "initialize") return reply({ protocolVersion: ["2025-03-26", "2025-06-18", "2025-11-25"].includes(message.params?.protocolVersion) ? message.params.protocolVersion : "2025-03-26", capabilities: { tools: {} }, serverInfo: { name: "mendcode-threads", version: "1" }, instructions: lease.instructions })
     if (message.method === "ping") return reply({})
     if (message.method === "tools/list") return reply({ tools })
     if (message.method !== "tools/call") return error(-32601, "Unknown method")
@@ -160,6 +183,8 @@ export function createThreadMcp(options: {
       /** Normal host tool policy, including explicit deny; rechecked after approval. */
       authorize(name: string, args: Record<string, unknown>, read: boolean): Promise<boolean>
       receipts?: { project: string; run: ReturnType<typeof createOrchestrationReceipts>["run"] }
+      /** The catalog's models with the engine that runs each (`native`, `codex`, `acp:<name>`), named in the instructions. */
+      models?: ReadonlyArray<{ id: string; engine: string }>
     }) {
       if (!input.allowed() || input.turn.signal.aborted) throw new Error("Bridge disabled or turn cancelled")
       listener ??= options.listen?.(handle) ?? (() => {
@@ -170,6 +195,7 @@ export function createThreadMcp(options: {
       let configDir: string | undefined
       const lease: Lease = {
         token: randomBytes(32).toString("hex"), turn: input.turn, born: options.clock.now(), touched: options.clock.now(), calls: 0, pending: 0, queue: Promise.resolve(), retries: new Map(), controller,
+        instructions: threadInstructions({ engine: input.engine, models: input.models ?? [] }),
         allowed: input.allowed,
         async run(name, args, signal) {
           if (name === "orchestrator_capabilities") return { ok: true, output: "Local project only. create, message, wait, read, search, interrupt, delegate_task. Full tier; normal approvals; child permission ceiling; 10-minute idle / 1-hour maximum token lifetime. 200 calls per turn; calls sent together run one after another. delegate_task children: 4 running at once per agent and 16 in the conversation by default (the user changes both in /settings, Subagents); a limit error says the current number. No engine-internal child projection." }
@@ -233,7 +259,7 @@ export function createThreadMcp(options: {
             flush() { const safe = scrub(held); held = ""; return safe },
           }
         }
-        return { args, servers, scrub, stream, waiting: () => leases.has(lease) && lease.pending > 0, release: lease.release }
+        return { args, servers, instructions: lease.instructions, scrub, stream, waiting: () => leases.has(lease) && lease.pending > 0, release: lease.release }
       } catch (error) { lease.release(); throw error }
     },
     stop() { for (const lease of [...leases]) lease.release() },

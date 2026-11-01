@@ -1042,6 +1042,11 @@ export async function startDaemon(options: DaemonOptions) {
     directory: (sessionId) => store.sessionDirectory(sessionId),
     tools: async (input) => (await rawEngine.hostTools?.(input)) ?? [],
     call: async (input) => (await rawEngine.hostCall?.(input)) ?? { output: "Native tools are unavailable", isError: true },
+    unbridged: (sessionId) => {
+      const model = resolveModel({ role: "main", session: store.sessionModel(sessionId), roles: rolesFor(store.settings.get(), store.sessionDirectory(sessionId)), catalog })
+      const key = model.model.startsWith("acp:") ? acpAgentKey(model.model) : modelEngine(model, catalog)
+      return (key === "claude" || key === "codex" || key?.startsWith("acp:")) && !threadMcpEnabled(store.settings.get(), key as BridgeEngine, options.safeMode) ? key : undefined
+    },
     ...(options.hostMcpListener ? { listen: options.hostMcpListener } : {}),
   })
   const tasks = createChildTasks({
@@ -1241,6 +1246,30 @@ export async function startDaemon(options: DaemonOptions) {
     return rebuilt
   }
   const retiredEngineError = { status: "error" as const, code: "engine_unavailable", message: "[DAEMON]: optional engine removed; select an available model or use a portable handoff" }
+  /** The default a session without a model of its own last followed, once it ran a turn (`keepSessionEngine`). Cleared by `/model`. */
+  const followedKey = (sessionId: SessionId) => `session.followed-default:${sessionId}`
+  /** What a session without a model of its own follows in its project: the `main` role, else the catalog's default model. */
+  const followedDefault = (sessionId: SessionId): ModelChoice => {
+    const main = rolesFor(store.settings.get(), store.sessionDirectory(sessionId)).main
+    return main && catalog.allows?.(main.model) !== false ? main : { model: catalog.defaults.model }
+  }
+  /**
+   * The default is for new sessions (docs/sessions.md, "The default model and running sessions"). A session that follows it and already
+   * ran keeps following it on the same engine, but a default moved to another engine (Claude Code, pi, an ACP agent, or back to the
+   * daemon's own) does not move it: it gets the default it followed as its own model, as `/model` would set it. `ran` records the default
+   * a turn starts on; a record of a model the catalog does not list (yet) is left for later.
+   */
+  function keepSessionEngine(sessionId: SessionId, ran = false) {
+    if (!catalog.selectable || !store.hasSession(sessionId) || store.sessionModel(sessionId)) return
+    const saved = store.meta.get(followedKey(sessionId))
+    let before: ModelChoice | undefined
+    try { before = saved ? JSON.parse(saved) as ModelChoice : undefined } catch { before = undefined }
+    if (before && !catalogModel(catalog, before.model)) return
+    const now = followedDefault(sessionId)
+    if (before && engineKeyOf(before) !== engineKeyOf(now) && !invalidChoice(before, catalog) && !retiredEngineChoice(before)) return store.setSessionModel(sessionId, before)
+    const value = JSON.stringify(now)
+    if ((before || ran) && saved !== value) store.meta.set(followedKey(sessionId), value)
+  }
 
   /** The text and the other attachments of a message whose `text/plain` attachments are put back in where their labels stand. */
   function withPastedTexts(input: { text: string; attachments: BlobRef[] }): { text: string; attachments: BlobRef[] } {
@@ -1265,6 +1294,7 @@ export async function startDaemon(options: DaemonOptions) {
         const excluded = turn.turnOptions?.excludeTools ?? []
         store.meta.set(restrictionKey, String(excluded.includes("threads") && excluded.includes("pr_watch")))
       }
+      keepSessionEngine(turn.sessionId, true)
       const model = turn.selection?.model ?? resolveModel({ role: "main", session: store.sessionModel(turn.sessionId), roles: rolesFor(store.settings.get(), store.sessionDirectory(turn.sessionId)), catalog })
       if (retiredEngineChoice(model)) return retiredEngineError
       // A recorded notice (`actor.record`, the PR reviewer's news): already in the transcript, answered by no model on any engine. Only
@@ -1324,6 +1354,7 @@ export async function startDaemon(options: DaemonOptions) {
           if (allowed()) lease = threadBridge.open({
             engine: bridgeKey, turn: routed, allowed, threads: threads.port(turn.sessionId),
             receipts: { project: directory, run: createOrchestrationReceipts(store.meta).run },
+            models: catalog.list(true).map((info) => ({ id: info.id, engine: info.engine ?? (info.id.startsWith("acp:") ? acpAgentKey(info.id) : "native") })),
             authorize: bridgeAuthorizer({ turn: routed, directory, settings: () => store.settings.get(), profile: () => agents.port().primary(turn.sessionId, turn.selection?.agent), sessionRules: () => sessionPermissions.effective(turn.sessionId), allowed, mask: (text) => secrets.mask(turn.sessionId, text) }),
             create: async (title) => {
               const id = ids("session")
@@ -1347,7 +1378,7 @@ export async function startDaemon(options: DaemonOptions) {
               return { ok: true, output: `task_id: ${task.taskId}\nstate: ${task.state}\n${secrets.mask(task.taskId, task.result)}` }
             },
           })
-          if (lease) routed.externalMcp = { args: lease.args, servers: lease.servers, cwd: directory, scrub: lease.scrub, waiting: lease.waiting, stream: lease.stream }
+          if (lease) routed.externalMcp = { args: lease.args, servers: lease.servers, instructions: lease.instructions, cwd: directory, scrub: lease.scrub, waiting: lease.waiting, stream: lease.stream }
         }
         // Calls Claude Code, Codex or an ACP agent makes to MendCode's tools during this turn run as calls of this turn.
         const leave = key === "claude" || key === "codex" || key?.startsWith("acp:") ? hostBridge.enter(routed) : undefined
@@ -1453,7 +1484,7 @@ export async function startDaemon(options: DaemonOptions) {
     changed: (directory, server) => { if (!stopped) globalSink.append({ type: "mcp.changed", directory, server }) },
   })
   extraction.wake()
-  const metadata = createSessionMetadata({ store, complete: options.info?.engine === "native" ? options.complete : undefined, settings: () => store.settings.get(), agent: (id, role) => agents.auxiliary(store.sessionDirectory(id)!, role), model: (id, role) => resolveModel({ role, session: store.sessionModel(id), roles: rolesFor(store.settings.get(), store.sessionDirectory(id)), catalog }), changed: (id) => publishActivity(id, actors.get(id)?.snapshot().foreground ?? "idle", true) })
+  const metadata = createSessionMetadata({ store, complete: options.info?.engine === "native" ? completeBudgeted : undefined, settings: () => store.settings.get(), agent: (id, role) => agents.auxiliary(store.sessionDirectory(id)!, role), model: (id, role) => resolveModel({ role, session: store.sessionModel(id), roles: rolesFor(store.settings.get(), store.sessionDirectory(id)), catalog }), changed: (id) => publishActivity(id, actors.get(id)?.snapshot().foreground ?? "idle", true) })
   const sessionObservers: Array<(event: SessionEvent) => void> = [asideSessions.observe, tasks.observe, sessionBackground.observe, ownerWake.observe, extraction.observe, metadata.observe, (event) => { if (event.type === "turn.completed") maintainMemory(store.sessionDirectory(event.sessionId)) }]
   // An engine alias (`claude-opus`) resolves to a concrete id in the first answer's usage; remember it so the next launch names it at once.
   sessionObservers.push((event) => {
@@ -2418,6 +2449,12 @@ export async function startDaemon(options: DaemonOptions) {
   const peers = createPeers({
     clock,
     stats: (sessionId) => { const stats = store.sessionStats.get(sessionId, clock.now()); return stats ? sessionStatsText(stats) : undefined },
+    // Another session's conversation stays on this machine: a turn a remote or peer client started reads none, as with `threads`.
+    read: (from, sessionId, cursor) => {
+      if (store.meta.get(`session.local-tools.restricted:${from}`) === "true") return { ok: false, message: "reading another session is local only" }
+      const page = history.read({ sessionId, cursor })
+      return page.ok ? { ok: true, output: page.result.text, ...(page.result.next ? { next: page.result.next } : {}) } : { ok: false, message: page.message.replace(/^\[DAEMON\]: /, "") }
+    },
     waiting: (sessionId) => agentCommands.waiting(sessionId),
     deliver: async (from, to, text, mode) => {
       const waiting = actors.get(to)?.snapshot().foreground !== undefined && actors.get(to)?.snapshot().foreground !== "idle"
@@ -4994,6 +5031,8 @@ export async function startDaemon(options: DaemonOptions) {
       }
       case "session.get":
       case "session.inspect": {
+        // The summary is written only when a local reader asks for it, never by a read a terminal or a script repeats.
+        if (command.type === "session.inspect" && command.summary && !connection.remoteAddress && !connection.peer && featureOn(store.settings.get(), "session_meta", { safeMode: options.safeMode })) await metadata.summary(command.sessionId)
         const result = command.type === "session.get" ? sessionAutomation.detail(command.sessionId) : sessionAutomation.inspect(command.sessionId, command.limit)
         return reply(connection, command.id, result ? { ok: true, result: command.type === "session.get" ? { session: result } : result } : { ok: false, code: "unknown_session", message: "[DAEMON]: unknown session" })
       }
@@ -5098,6 +5137,8 @@ export async function startDaemon(options: DaemonOptions) {
         if (!featureOn(store.settings.get(), "fanout", { safeMode: options.safeMode })) return reply(connection, command.id, { ok: false, code: "forbidden", message: "Enable /tier fanout on (full)" })
         try {
           if (command.action === "start" && (!command.prompt || !command.models)) throw new Error("Fan-out needs prompt and models")
+          // `/fanout compare` shows each branch's summary: written here, on that request, for the branches that moved on since theirs.
+          if (command.action === "compare") await Promise.all((fanout.compare(command.sessionId).branches as Array<{ sessionId: SessionId }>).map((branch) => metadata.summary(branch.sessionId)))
           const result = command.action === "compare" ? fanout.compare(command.sessionId) : await fanout.start(command.sessionId, command.prompt!, command.models!)
           if (command.action === "start") fanoutSummary(command.sessionId)
           return reply(connection, command.id, { ok: true, result })
@@ -5349,10 +5390,14 @@ export async function startDaemon(options: DaemonOptions) {
           if (problem) return reply(connection, command.id, { ok: false, code: "invalid_command", message: `[DAEMON]: ${problem}` })
           // A new model keeps the session's own `/fast` unless the choice says otherwise.
           const fast = store.sessionModel(command.sessionId)?.fast
-          store.setSessionModel(command.sessionId, command.choice && command.choice.fast === undefined && fast !== undefined ? { ...command.choice, fast } : command.choice ?? undefined)
+          // Saved by its catalog id, also when it was named by the reference `mendcode models` prints (`claude/claude-opus`).
+          const chosen = command.choice ? { ...command.choice, model: catalogModel(catalog, command.choice.model)?.id ?? command.choice.model } : undefined
+          store.setSessionModel(command.sessionId, chosen && chosen.fast === undefined && fast !== undefined ? { ...chosen, fast } : chosen)
+          // The user's own pick: back to the default, the session follows it wherever it runs.
+          if (store.meta.get(followedKey(command.sessionId))) store.meta.set(followedKey(command.sessionId), "")
           usageLimit.revalidate(command.sessionId)
           reasoning.port.manual(command.sessionId)
-        }
+        } else if (sessionId) keepSessionEngine(sessionId)
         const roles = rolesFor(store.settings.get(), sessionId ? store.sessionInfo(sessionId)?.directory : undefined)
         const session = sessionId ? store.sessionModel(sessionId) : undefined
         // A switch to another engine tells what will be handed over with the next message (the transcript's turns, within the cap); a remote client is not told.

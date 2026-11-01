@@ -148,8 +148,8 @@ describe("slash commands", () => {
     expect(h.sentOf("session.model.set")[0]).toMatchObject({ choice: { model: "claude-sonnet-5-5", fast: true } })
     expect(h.sentOf("settings.set")).toHaveLength(0)
     expect(screen(h)).toContain("fast mode on · not applied to Sonnet 5.5 (Claude")
-    // The footer says the same: the mark is there, muted, with n/a.
-    expect(screen(h)).toContain("Sonnet 5.5 fast n/a")
+    // The footer says the same: the mark is there, muted, with n/a (an item of its own beside the model now).
+    expect(screen(h)).toContain("Sonnet 5.5 · fast n/a")
     await h.type("/fast status\r")
     expect(screen(h)).toContain("fast mode on · not applied to Sonnet 5.5 (Claude")
   })

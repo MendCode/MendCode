@@ -23,21 +23,24 @@ as authority. Restart, shutdown or cancellation cannot replay an action.
 
 ## Virtual cursor
 
-The native helper draws a small, filled **~16 × 16 point diagonal pointer** adapted
-from [Lucide mouse-pointer-2](https://lucide.dev/icons/mouse-pointer-2): rounded vertices
-and a concave inset, without a classic cursor stem. The transparent, non-activating,
-click-through `NSPanel` adds no label, border, trail or click rings. A soft, constant
-7-point glow surrounds the pointer, including when it is stationary. No shimmer line
-crosses the shape. Travel takes 280–750 ms
-with smoothstep easing instead of jumping between targets; dragging follows the
-dispatched path in orange. The real system pointer is not warped or hidden.
-Placement accounts for macOS/AX coordinate differences and display edges. Reduce Motion
-disables travel animation.
+The native helper draws the agent cursor of [agent-desktop](https://github.com/vercel-labs/agent-desktop)
+(Apache-2.0, ported to Swift; see [THIRD_PARTY.md](../THIRD_PARTY.md)): a **white dart with a dark rim** and a soft
+shadow, and beside it a **black pill naming what it does** (`MendCode` when it appears, then `Click`, `Press`, `Typing`,
+`Text`, `Key`, `Scroll`, `Dragging`). A new label fades in with a small pop. The pill sits right of and below the tip, or on
+the other side at a screen edge. All of it lives in transparent, non-activating, click-through panels that screenshots and the
+accessibility tree do not see.
 
-This is our own implementation, not copied Codex desktop code. In the public Codex
-checkout inspected (`44984d208`), desktop Computer Use is integrated through MCP plugins;
-no implementation of its desktop cursor overlay was found. Terminal cursor code is
-unrelated to that overlay.
+The cursor moves like a hand: a minimum-jerk movement that overshoots by 3.5 % and corrects back onto the target, bowed
+sideways by 5.5 % of the distance (at most 38 points) with a one-point tremor. A move takes 40 + 70 × log2(distance / 40 + 1)
+ms by Fitts's law, between **90 and 320 ms** (it was 280–750 ms), so most of an action's time is no longer the cursor's
+travel. Once an action is dispatched the cursor shows it: a **ripple** for a click, press or drop (0.3 s), an **outline**
+around the element acted on that pops in, holds and fades (0.9 s), and for a drag a **trail** along the dispatched path that
+fades after the drop. After six seconds without a move the cursor rests (fades out) and comes back with the next one. The
+real system pointer is not warped or hidden. Placement accounts for macOS/AX coordinate differences. Reduce Motion disables
+the travel animation, the ripple, the outline and the trail.
+
+agent-desktop is the only source of this code; in the public Codex checkout inspected (`44984d208`) desktop Computer Use
+is integrated through MCP plugins and no implementation of its desktop cursor overlay was found.
 
 Control programs retain the cursor and exclusive input lease across their steps, so
 observation/action calls do not blink the cursor off and on. The cursor disappears at
@@ -54,8 +57,10 @@ xcrun swiftc -O packages/daemon/assets/computer.swift -o /tmp/mendcode-cursor-de
 /tmp/mendcode-cursor-demo --cursor-demo
 ```
 
-It exercises the actual pointer/movement renderer and writes a cursor-only PNG render to
-a temporary file. It does not screenshot the desktop or exercise control of real apps.
+It exercises the actual cursor, its travel, ripple, outline and trail, and writes a cursor-only PNG render
+(drawn offscreen) to a temporary file. It does not screenshot the desktop or exercise control of real apps.
+`/tmp/mendcode-cursor-demo --cursor-render Click /tmp/cursor.png < /dev/null` draws only the cursor with that label into
+the PNG, without opening any window.
 
 ## Choose a target
 
@@ -125,13 +130,19 @@ reads back joined. Node IDs are new in every observation. A screenshot request
 returns guidance to `computer_capture` (the main display, or a region such as the
 window node's bounds); no implicit screenshot is taken.
 
+The helper reads each node in **one accessibility round trip** (`AXUIElementCopyMultipleAttributeValues`, as agent-desktop
+does) instead of one per attribute, and reads a value only once the role says the node is not a secure field. Measured
+read-only on this Mac with the same nodes and actions as before: Ghostty's window (239 nodes) took 465–528 ms and now
+61–73 ms; WhatsApp's (235 nodes) 157–179 ms and now 26–40 ms. An app's first observation after a pause can still take
+seconds while the app itself builds its tree.
+
 When the session's window closes or another window of the app takes focus (a dialog that
 becomes a document, for example), observation fails with "Selected window changed": call
 `windows` and `selectWindow` in `computer_code`, or start a new session.
 
 `computer_code { computerSessionID, code }` groups operations in the existing confined
 JS/TS interpreter. Limits: 32 KiB source, **16 tool calls, 30 seconds**, 64 KiB output
-and 20,000 evaluation steps. There are no imports, eval, process, filesystem, network,
+and 20,000 evaluation steps; a `batch` of up to 16 actions is one call. There are no imports, eval, process, filesystem, network,
 clipboard API, timers or persistent JavaScript heap. Live native handles persist in the
 broker, not in JavaScript. Binding the app (`computer_session start`) shows its own card in the modes that ask, and none in
 full; code then asks as any tool does in the permission mode (no card in full, one card in the modes that ask). Treat
@@ -149,6 +160,7 @@ Available operations:
 | `key` | `{revision,nodeID,key,modifiers?:[...]}` |
 | `scroll` | `{revision,nodeID,direction:"up"\|"down"\|"left"\|"right",amount?:300}` — 1–1000 pixels |
 | `drag` | `{revision,nodeID,toNodeID}` — between two observed nodes |
+| `batch` | `{revision,steps:[{action,nodeID,...}]}` — 1–16 of the actions above on one observation, one call |
 | `windows` | `{}` — opaque handles and titles, only this app |
 | `selectWindow` | `{windowID}` — control mode; observe afterwards |
 | `waitFor` | `{name?,role?,value?,timeoutMs?:3000}` — exact non-secure match, maximum 10 seconds |
@@ -191,10 +203,47 @@ a visible MendCode indicator. Capture and input cannot overlap in the daemon. Th
 does not prevent the real user or unrelated automation from interacting with the computer.
 
 Every mutation consumes the observation **before** native awaits, even on failure.
-Observe again afterwards. Action results say `outcome: "dispatched", verified: false`:
-input delivery does not prove the application performed the intended effect. Failed
-native dispatch/cancellation may have partial effects; the audit marks them `unknown`
-conservatively. Never automatically retry an unknown action.
+Observe again afterwards. Action results say `outcome: "dispatched", delivery: "delivered_unverified", retry: "unsafe",
+verified: false`: input delivery does not prove the application performed the intended effect.
+
+Every failed action says whether its input can have reached the app, in agent-desktop's terms. A refusal before anything
+was sent (a stale observation, a node that changed, something covering the node's center, a focus that cannot be set)
+ends with `(not delivered: nothing reached the app; observe again before retrying)` and the audit
+marks it `failed`. A failure after the helper began an effect (an AX action or value, a posted event, a window raise, a
+launch) or a cancellation, timeout or helper exit during one ends with `(delivery unknown: …)` and the audit marks it
+`unknown`. Never automatically retry an unknown action.
+
+### Batches
+
+`batch` runs a fixed sequence on nodes of one observation without observing between the steps, the way agent-desktop's
+`batch` runs commands on refs from one snapshot. It is one of the 16 tool calls, one native request, one indicator and one
+cursor session:
+
+```js
+const view = await tools.observe({})
+const search = view.nodes.find(n => n.role === "AXTextField" && n.actions.includes("setValue"))
+const go = view.nodes.find(n => n.name === "Search" && n.actions.includes("press"))
+const result = await tools.batch({ revision: view.revision, steps: [
+  { action: "setValue", nodeID: search.id, value: "example" },
+  { action: "press", nodeID: go.id },
+] })
+if (!result.ok) return result.steps // Each step: outcome, delivery, retry and the error of the one that failed.
+return await tools.waitFor({ role: "AXTextField", value: "example" })
+```
+
+- **Checked first.** Every step is checked against the observation (revision under 15 seconds old, the node exists, is not
+  secure and advertises the action, the fields fit the action) before the first is sent; one bad step refuses the whole
+  batch with nothing delivered. Steps carry no revision of their own. The whole batch is at most 120 KB of input.
+- **Re-resolved per step.** Right before each step the helper revalidates that step's retained node as for a single
+  action (window, ancestry, secure, enabled, role, name, value and bounds). A node an earlier step of the same batch acted
+  on is compared without its value, so typing into a field and then pressing `enter` in it works. Any other change stops
+  the batch, so keep batches to controls that one step does not rebuild.
+- **Stops at the first failure.** The result is `{ ok, revision, steps, stopped?, verified: false }`; each step has
+  `outcome` (`dispatched`, `failed`, `unknown` or `not_started`), `delivery` (`delivered_unverified`, `not_delivered` or
+  `unknown`), `retry` (`safe` only for what never reached the app) and the failing step's `error`. A batch is never retried
+  and is not a transaction: steps before the failure stay done.
+- **Paced.** After a step that posted events (click, keys, text, scroll, drag) the next step waits 50 ms, so the app takes
+  those events before an AXPress or AXSetValue reaches it another way.
 
 ```js
 const view = await tools.observe({})

@@ -5,10 +5,11 @@ import { z } from "zod"
 import { ComputerTarget, ComputerNode, type ComputerApp, type ComputerWindow } from "@mendcode/protocol"
 import { runManaged } from "@mendcode/tools"
 import sourceFile from "../assets/computer.swift" with { type: "file" }
-import { identified, type ComputerAccessibility } from "./computer-accessibility"
+import { identified, NotDelivered, type ComputerAccessibility } from "./computer-accessibility"
 
 class NativeRejected extends Error {}
-const Reply = z.discriminatedUnion("ok", [z.strictObject({ ok: z.literal(true), value: z.unknown() }), z.strictObject({ ok: z.literal(false), error: z.string().max(4096) })])
+const Reply = z.discriminatedUnion("ok", [z.strictObject({ ok: z.literal(true), value: z.unknown() }), z.strictObject({ ok: z.literal(false), error: z.string().max(4096), delivery: z.enum(["not_delivered", "unknown"]).optional() })])
+const Outcome = z.strictObject({ index: z.number().int().min(0).max(15), outcome: z.enum(["dispatched", "failed", "unknown"]), error: z.string().max(4096).optional() })
 const App = z.strictObject({ bundleID: z.string().min(1).max(256), appName: z.string().max(256), pid: z.number().int().positive() })
 const Window = z.strictObject({ id: z.string().min(1).max(128), name: z.string().max(256), bounds: ComputerNode.shape.bounds })
 
@@ -99,10 +100,10 @@ export function createNativeComputer(dir: string): ComputerAccessibility {
         const end = buffer.indexOf("\n"), line = buffer.slice(0, end)
         buffer = buffer.slice(end + 1)
         const reply = Reply.parse(JSON.parse(line))
-        if (!reply.ok) throw new NativeRejected(reply.error)
+        if (!reply.ok) throw reply.delivery === "not_delivered" ? new NotDelivered(reply.error) : new NativeRejected(reply.error)
         return reply.value
       } catch (error) {
-        if (!(error instanceof NativeRejected)) disconnect()
+        if (!(error instanceof NativeRejected) && !(error instanceof NotDelivered)) disconnect()
         throw error
       } finally { if (rejectAbort) signal.removeEventListener("abort", rejectAbort) }
     })
@@ -124,6 +125,7 @@ export function createNativeComputer(dir: string): ComputerAccessibility {
       return z.strictObject({ nodes: z.array(ComputerNode).max(500), truncated: z.boolean() }).parse(await request("observe", { target }, signal))
     },
     async action(target, input, signal) { await request("action", { target, input }, signal) },
+    async batch(target, steps, signal) { return z.array(Outcome).max(16).parse(await request("batch", { target, steps }, signal)) },
     async navigation(pid, key, signal) { await request("navigation", { pid, key }, signal) },
     async program(target, signal, execute) {
       await request("program", { target, active: true }, signal)

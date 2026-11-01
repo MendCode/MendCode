@@ -3,6 +3,7 @@ import { createHash } from "node:crypto"
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
+import { NotDelivered } from "../src/computer-accessibility"
 import { createNativeComputer } from "../src/computer-native"
 
 // A stand-in helper in the place of the compiled one: nothing is compiled and no real application is touched.
@@ -15,6 +16,8 @@ while IFS= read -r line; do
     *'"method":"identify"'*'"pid":7'*) echo '{"ok":true,"value":{"pid":7,"bundleID":"local.editor","appName":"Editor"}}' ;;
     *'"method":"identify"'*'"pid":8'*) echo '{"ok":true,"value":{"pid":9,"bundleID":"local.editor","appName":"Editor"}}' ;;
     *'"method":"identify"'*) echo '{"ok":true,"value":null}' ;;
+    *'"method":"action"'*) echo '{"ok":false,"error":"Semantic node is stale; observe again","delivery":"not_delivered"}' ;;
+    *'"method":"batch"'*) echo '{"ok":true,"value":[{"index":0,"outcome":"dispatched"},{"index":1,"outcome":"unknown","error":"AXPress failed"}]}' ;;
     *'"visible":true'*) echo '{"ok":true,"value":{"visible":true}}' ;;
     *) echo '{"ok":true,"value":{"visible":false}}' ;;
   esac
@@ -76,5 +79,17 @@ test.skipIf(process.platform === "win32")("identify returns the approved process
     expect(await os.identify(target(7), new AbortController().signal)).toEqual(target(7))
     expect(await os.identify(target(8), new AbortController().signal)).toBeUndefined()
     expect(await os.identify(target(5), new AbortController().signal)).toBeUndefined()
+  } finally { os.stop?.() }
+})
+
+test.skipIf(process.platform === "win32")("a refusal the helper marks not delivered stays one, keeps the helper, and batch outcomes come back per step", async () => {
+  const f = await standIn(), os = createNativeComputer(f.dir)
+  try {
+    const target = { pid: 7, bundleID: "local.editor", appName: "Editor" }, step = { revision: 1, nodeID: "0.1", action: "press" as const, role: "AXButton" }
+    const refused = await os.action(target, step, new AbortController().signal).catch((error) => error)
+    expect(refused).toBeInstanceOf(NotDelivered)
+    expect(refused.message).toContain("stale")
+    expect(await os.batch!(target, [step, step], new AbortController().signal)).toEqual([{ index: 0, outcome: "dispatched" }, { index: 1, outcome: "unknown", error: "AXPress failed" }])
+    expect(f.started()).toHaveLength(1)
   } finally { os.stop?.() }
 })

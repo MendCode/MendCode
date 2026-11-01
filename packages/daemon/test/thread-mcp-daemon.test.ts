@@ -93,12 +93,13 @@ async function boot(fakeAcp = false) {
     await client.send({ type: "session.permission.set", sessionId: id, mode: "full" })
     return id
   }
-  const invoke = (turn: TurnInput, name: string, args: unknown = {}) => {
+  const rpc = (turn: TurnInput, method: string, params: unknown) => {
     const flags = turn.externalMcp!.args
     const injected = fakeAcp ? injectedServers?.[0] : undefined
     const server = injected ? { url: injected.url, headers: { Authorization: injected.headers[0]!.value } } : JSON.parse(readFileSync(flags[1]!, "utf8")).mcpServers.mendcode_threads
-    return handler(new Request(server.url, { method: "POST", headers: { authorization: server.headers.Authorization, "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } }) })).then((response) => response.json())
+    return handler(new Request(server.url, { method: "POST", headers: { authorization: server.headers.Authorization, "content-type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }) })).then((response) => response.json() as Promise<any>)
   }
+  const invoke = (turn: TurnInput, name: string, args: unknown = {}) => rpc(turn, "tools/call", { name, arguments: args })
   const say = async (id: SessionId) => {
     const before = seen.length
     await client.send({ type: "user.submit", sessionId: id, text: "bridge", attachments: [] })
@@ -110,7 +111,7 @@ async function boot(fakeAcp = false) {
     if (!response) throw new Error("missing HTTP response")
     return response.json()
   }
-  return { daemon, client, project, create, invoke, say, seen, remote, globals, tasks: () => tasks, run: (callback: typeof run) => { run = callback }, listeners: () => ({ opened, stopped }), acpProcesses: () => ({ opened: acpOpened, closed: acpClosed }) }
+  return { daemon, client, project, create, rpc, invoke, say, seen, remote, globals, tasks: () => tasks, run: (callback: typeof run) => { run = callback }, listeners: () => ({ opened, stopped }), acpProcesses: () => ({ opened: acpOpened, closed: acpClosed }) }
 }
 
 test("an opted-in fake ACP agent creates and delegates children visible from parent and child lineage", async () => {
@@ -212,6 +213,30 @@ test("daemon bridge creates project children and delegates across configured eng
   expect(children.every((turn) => turn.text === "check")).toBe(true)
   expect(children.some((turn) => turn.externalMcp?.args[0] === "-c")).toBe(true)
   expect(children.some((turn) => turn.externalMcp?.args[0] === "--mcp-config")).toBe(true)
+})
+
+test("a Claude Code session's bridge names MendCode's other models by engine, and a sub-agent goes on one by the name `mendcode models` prints", async () => {
+  const h = await boot()
+  await h.client.send({ type: "settings.set", patch: { tier: "full", threadMcp: { claude: true, codex: true } } })
+  const parent = await h.create()
+  let hello: any
+  const results: any[] = []
+  h.run(async (turn) => {
+    hello = await h.rpc(turn, "initialize", { protocolVersion: "2025-06-18" })
+    results.push(await h.invoke(turn, "delegate_task", { description: "native child", prompt: "check", model: "chatgpt/configured-native", background: false }))
+    return { status: "ok" }
+  })
+  await h.say(parent)
+  const told: string = hello.result.instructions
+  expect(told).toContain("mcp__mendcode_threads__delegate_task")
+  expect(told).toContain(`ToolSearch "select:mcp__mendcode_threads__delegate_task"`)
+  expect(told).toContain("native: configured-native, vendor:configured; codex: codex:configured; acp:demo: acp:demo; pi: pi:configured.")
+  // Its own engine's models are its own sub-agent tool's.
+  expect(told).not.toContain("claude-sonnet")
+  expect(h.seen.find((turn) => turn.sessionId === parent)?.externalMcp?.instructions).toBe(told)
+  expect(results[0].result.content[0].text).toContain("state: completed")
+  const task = h.daemon.store.tasks.list().find((entry) => entry.parentId === parent)!
+  expect(h.daemon.store.sessionModel(task.taskId)?.model).toBe("configured-native")
 })
 
 test("a delegation that fails says why to the engine that called, and names the engine's models when one is missing", async () => {

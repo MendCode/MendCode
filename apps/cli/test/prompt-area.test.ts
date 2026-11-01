@@ -145,11 +145,12 @@ describe("prompt chrome", () => {
     expect([0, 0.4, 0.99].map(placeholderFor)).toEqual(PLACEHOLDER_EXAMPLES.map((example) => `Ask anything... "${example}"`))
   })
 
-  test("the status row is v1's: model and effort left, loops right", () => {
+  test("the status row reads left to right: model and effort, then the loops behind the divider", () => {
+    // The loops used to be pushed to the right edge; they now follow the identity group, so nothing pads the row out to the edge.
     const row = renderStatusRow({ width: 60, model: "gpt-6-luna", effort: "high", loops: 2 })
-    expect(plain(row)).toMatch(/^ {3}gpt-6-luna · high +↻ 2 loops$/)
-    expect(textWidth(plain(row))).toBe(58)
-    expect(row.find((span) => span.text === "high")).toMatchObject({ fg: "warning", bold: true })
+    expect(plain(row)).toBe("   gpt-6-luna · high │ ↻ 2 loops")
+    // The effort is a quiet detail of the model now, not a bold warning (that read as an alarm when no engine was named).
+    expect(row.find((span) => span.text === "high")).toMatchObject({ fg: "muted" })
   })
 
   test("a non-default permission leads the row; the default is not named", () => {
@@ -201,7 +202,8 @@ describe("prompt area in the app", () => {
     app.applySettings({})
     await Bun.sleep(5)
     app.render()
-    expect(text().at(-1)).toMatch(/^ {3}Build · GPT-6-Luna · codex +↻ 1 loop$/)
+    // Balanced places the reasoning effort beside the model (its tier's `effort` segment); the loop follows behind the divider.
+    expect(text().at(-1)).toBe("   Build · GPT-6-Luna · high · codex │ ↻ 1 loop")
   })
 
   test("minimal keeps bare rules and nothing below the prompt", () => {
@@ -700,7 +702,8 @@ describe("script status line", () => {
     await Bun.sleep(5)
     h.app.onGlobal(line({ left: [{ text: "main", fg: "#22c55e", bold: true }, { text: "3 changed" }], right: [{ text: "12:04", fg: "#38bdf8" }] }))
     const row = h.text().at(-1)!
-    expect(row).toMatch(/^ {3}Build · GPT-6-Luna · codex · main · 3 changed +12:04$/)
+    // Balanced adds the effort beside the model; the script's right segment still ends the row.
+    expect(row).toMatch(/^ {3}Build · GPT-6-Luna · high · codex · main · 3 changed +12:04$/)
     const spans = h.frame().at(-1)!
     expect(spans.find((span) => span.text === "main")).toMatchObject({ fgHex: "#22c55e", bold: true })
     expect(spans.find((span) => span.text === "3 changed")).toMatchObject({ fg: "muted" })

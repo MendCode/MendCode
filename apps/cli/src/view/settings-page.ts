@@ -1,4 +1,4 @@
-import { DEFAULT_COMPACT_AT_TOKENS, DEFAULT_COMPACT_NOTICE_PERCENT, DEFAULT_FOOTER, DEFAULT_IDLE_COMPACT_AT_TOKENS, featureOn } from "@mendcode/protocol/wire"
+import { DEFAULT_COMPACT_AT_TOKENS, DEFAULT_COMPACT_NOTICE_PERCENT, DEFAULT_IDLE_COMPACT_AT_TOKENS, featureOn } from "@mendcode/protocol/wire"
 import type { Settings } from "@mendcode/protocol"
 import { glyphs as defaultGlyphs, type ColorName, type Glyphs, type Line, type Span } from "../ui/theme"
 import { panelGrid, clip, fit, columns } from "./deck"
@@ -345,7 +345,8 @@ function shown(def: RowDef, values: SettingsValues, state: SettingsPageState): S
     case "pet":
       return { text: settings.pet && settings.pet !== "off" ? settings.pet : "off", fg: settings.pet && settings.pet !== "off" ? "text" : "muted", note: "enter opens /pet", arrows: false }
     case "footer":
-      return { text: settings.footer ? `${plural(settings.footer.length, "segment")}` : `default (${DEFAULT_FOOTER.length})`, fg: settings.footer ? "text" : "muted", note: settings.footer ? "enter resets · /footer +branch -quota" : "/footer +branch -quota to choose", arrows: false }
+      // Without a list the view's tier places the segments (docs/layout.md "Footer by tier"), so the default has no fixed count.
+      return { text: settings.footer ? `${plural(settings.footer.length, "segment")}` : "default (by view)", fg: settings.footer ? "text" : "muted", note: settings.footer ? "enter resets · /footer +branch -quota" : "/footer +branch -quota to choose", arrows: false }
     case "defaultPermission":
       return { text: settings.defaultPermission ?? "ask", fg: settings.defaultPermission === "full" ? "error" : "text", note: "for new sessions", arrows: true }
     case "compactAtTokens": {

@@ -2,6 +2,7 @@ import type { ColorName, Line, Span } from "../ui/theme"
 import { clip, fit } from "./deck"
 import { tipLine } from "./home-tips"
 import { DEFAULT_LOGO_FONT, DEFAULT_LOGO_TEXT, logoRowsFor, rowsWidth, type LogoFont } from "./logo-fonts"
+import { isShippedWordmark, logoLockup } from "./logo-mark"
 import { relativeTime, shortenMiddle } from "./session-list"
 import { defaultHomeMascot } from "./mascot"
 import type { TuiProfile } from "./tui-profile"
@@ -72,7 +73,7 @@ export type HomeMascot = { pixel?: { boxes: ReadonlyArray<{ cols: number; rows: 
 /** The gap between the sprite and the title beside it. */
 export const HOME_MASCOT_GAP = 4
 
-export type HomeLook = Partial<Pick<TuiProfile, "logoKind" | "homeMascot" | "customAscii" | "density" | "homeRightPanel" | "tagline" | "homeHeader" | "homePanel">> & { productName?: string; logoText?: string; logoFont?: LogoFont; layout?: "centered" | "split" }
+export type HomeLook = Partial<Pick<TuiProfile, "logoKind" | "homeMascot" | "customAscii" | "density" | "homeRightPanel" | "tagline" | "homeHeader" | "homePanel">> & { productName?: string; logoText?: string; logoFont?: LogoFont; layout?: "centered" | "split"; /** The terminal draws ASCII glyphs only: the logo's mark is drawn in plain characters. */ ascii?: boolean }
 /** `mcp` is absent until the daemon answered, and the MCP part is left out when there are no servers (like v1). */
 export type HomeFooter = { mcp?: { total: number; connected: number; failed: boolean } }
 
@@ -279,13 +280,17 @@ export function homeLook(profile: TuiProfile): HomeLook {
   return { ...profile, layout: profile.homeLayout }
 }
 
-/** Cell-accurate identity. No scaling, trimming of left padding, or bitmap conversion. */
+/**
+ * Cell-accurate identity. No scaling, trimming of left padding, or bitmap conversion. The wordmark alone, left as shipped,
+ * is MendCode's logo (the infinity mark over the name); beside a mascot it stays the letters, the mascot being the picture.
+ */
 export function homeIdentity(look?: HomeLook): string[] {
   const kind = look?.logoKind ?? "wordmark"
   const wordmark = logoRows(look?.logoText, look?.logoFont)
   // A pet mascot is a picture the terminal brings (`HomeMascot`); in text cells the mascot is always the ASCII Mend.
   const chosen = defaultHomeMascot
   if (kind === "none") return []
+  if (kind === "wordmark" && isShippedWordmark(look)) return logoLockup(look?.productName ?? PRODUCT, look?.ascii === true)
   if (kind === "mascot") return chosen.split("\n")
   if (kind === "custom") return (look?.customAscii || defaultHomeMascot).split("\n")
   if (kind === "both") {

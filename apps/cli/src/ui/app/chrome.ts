@@ -6,10 +6,10 @@ import type { createAgents } from "./agents"
 import { goalSpans } from "../../view/goal"
 import { BREAKPOINTS, breakpointOf } from "../breakpoints"
 import { chatColumns, projectSessions, SIDEBAR_WIDTH, sidebarVisible } from "../../view/sidebar"
-import { DEFAULT_COMPACT_AT_TOKENS, DEFAULT_FOOTER, DEFAULT_PROFILE, FOOTER_OPT_IN, FOOTER_SEGMENTS, featureOn, profileFor, type FooterSegment } from "@mendcode/protocol/wire"
+import { DEFAULT_COMPACT_AT_TOKENS, DEFAULT_FOOTER, DEFAULT_PROFILE, FOOTER_SEGMENT_TIER, featureOn, profileFor, tierFooter, type FooterSegment } from "@mendcode/protocol/wire"
 import { contextIsEngineWindow, contextLimit } from "../../view/context-meter"
 import type { McpStatusReport } from "@mendcode/protocol"
-import { fastMark, quotaText, renderFooter, type FooterInput } from "../../view/footer"
+import { fastMark, footerParts, quotaText, type FooterInput } from "../../view/footer"
 import { externalEngine, fastApplies } from "../../view/fast-mode"
 import { footerRowBudget, renderFooterRows } from "../../view/footer-rows"
 import { partsLine } from "../../view/stat-parts"
@@ -31,6 +31,9 @@ import { sessionDisplayTitle } from "./display-title"
 import { boxPanel } from "../../view/deck"
 import { createCacheClock } from "./cache-clock"
 import { usageInForce } from "./usage-in-force"
+
+/** The shortest terminal that gives the full view's footer its second row (docs/layout.md "Footer by tier"). */
+const DETAIL_ROW_MIN_HEIGHT = 24
 
 /** A turn in progress: the cache is being read and written, so there is nothing to count down. */
 const WORKING = new Set(["generating", "tool", "compacting", "cancelling"])
@@ -164,6 +167,15 @@ export function createChrome(ctx: AppContext, actions: {
 
   const rowsOn = () => state.tuiProfile.footerRows.length > 0
 
+  /**
+   * The `/footer` list, or undefined while the view's tier places the segments. A saved list equal to the old default (what `/footer
+   * reset` used to write) means the default too, so it follows the tier.
+   */
+  function customFooter(): readonly FooterSegment[] | undefined {
+    const list = state.customFooter
+    return list && !(list.length === DEFAULT_FOOTER.length && list.every((segment, at) => segment === DEFAULT_FOOTER[at])) ? list : undefined
+  }
+
   /** `statusColors` as a map, parsed again only when the setting changed. */
   let colorsText = ""
   let colorsMap: Record<string, string> = {}
@@ -207,7 +219,9 @@ export function createChrome(ctx: AppContext, actions: {
     if (!rowsOn() && !icons && !profile.statusColors && !segments.some((segment) => segment === "directory" || segment === "codegraph" || segment === "time")) return {}
     const directory = input.home && input.directory?.startsWith(input.home) ? `~${input.directory.slice(input.home.length)}` : input.directory
     const graphShown = segments.includes("codegraph") || profile.footerRows.some((row) => row.includes("codegraph"))
-    const savedTokens = graphShown ? footerSaved() : undefined
+    // The saved tokens cost a `session.savings` request per model call: only a graph the user placed asks it, never the full view's own.
+    const graphPlaced = customFooter()?.includes("codegraph") || profile.footerRows.some((row) => row.includes("codegraph"))
+    const savedTokens = graphPlaced ? footerSaved() : undefined
     const counts = graphShown && input.directory ? codegraph.get(input.directory) : undefined
     return {
       ...(directory ? { directory } : {}),
@@ -243,7 +257,7 @@ export function createChrome(ctx: AppContext, actions: {
   }
 
   /** What the footer slot shows (docs/views.md): everything the first row is built from, as plain data. */
-  function footerModel(width: number, provided?: ReturnType<typeof footerSlots>): { model: FooterModel; slots: ReturnType<typeof footerSlots>; rows: Line[] | undefined } {
+  function footerModel(width: number, provided?: ReturnType<typeof footerSlots>, detailRow = false): { model: FooterModel; slots: ReturnType<typeof footerSlots>; rows: Line[] | undefined } {
     const model = sessionModelId(state.effectiveModel?.model, usageInForce(state)?.model, state.modelReport)
     const slots = state.shellMode ? undefined : provided ?? footerSlots(width - META_MARGIN - PROMPT_MARGIN)
     const name = state.transcript.permissionMode === "plan" ? "plan" : state.agentReport?.current ?? "build"
@@ -251,10 +265,18 @@ export function createChrome(ctx: AppContext, actions: {
     const provider = servedByProvider(state.effectiveModel?.model ?? model, state.modelReport) ?? usageInForce(state)?.provider
     // This session's background work; the row over the prompt names it, so the built-in count is not repeated (`/footer +jobs` still places it).
     const jobs = state.agentShells.filter((shell) => shell.status === "running" && shell.sessionId === state.sessionId).length
-    const chosen = (state.customFooter ?? [...(state.tuiProfile.footerQuota ? ["quota"] as const : []), ...(state.tuiProfile.footerToday ? ["today"] as const : [])]).filter((segment) => !["state", "model", "permission", "context", "goal", "notice"].includes(segment))
+    // Without a `/footer` list the view's tier places the segments (FOOTER_SEGMENT_TIER); quota and today are the profile's own opt-ins.
+    const custom = customFooter()
+    const placed = custom ?? tierPlaced()
+    // The full view's own segments wait until they say something: the code graph for what the daemon pushed about this folder (before
+    // that it would only say `graph on`), the cache share for a second call (the first call of every session is cold: `cache 0%`).
+    const waiting = (segment: FooterSegment) => !custom && ((segment === "codegraph" && !(input.directory !== undefined && codegraph.has(input.directory))) || (segment === "cache" && state.transcript.sessionUsage.calls < 2))
+    const chosen = [...new Set(placed)].filter((segment) => FOOTER_SEGMENT_TIER[segment] !== "row" && FOOTER_SEGMENT_TIER[segment] !== "elsewhere" && !waiting(segment))
     // The forecast follows the tier (balanced and up; `/tier forecast off` removes it); `/footer` placing it is an explicit choice that stays even in minimalist.
-    const forecastOn = state.customFooter ? chosen.includes("forecast") && state.settingsNow.features?.forecast !== false : featureOn(state.settingsNow, "forecast")
+    const forecastOn = custom ? chosen.includes("forecast") && state.settingsNow.features?.forecast !== false : featureOn(state.settingsNow, "forecast")
     const segments = forecastOn ? [...new Set<FooterSegment>([...chosen, "forecast"])] : chosen.filter((segment) => segment !== "forecast")
+    // Reasoning effort is drawn beside the model: the profile's `showEffort` (on by default and by `/tier balanced|full`), or a `/footer` list that places it.
+    const effortShown = (state.tuiProfile.showEffort || custom?.includes("effort") === true) && !statusInBorder()
     const sandbox = state.settingsNow.sandbox?.mode ?? "off"
     const update = state.updateAvailable ? (state.updateAvailable.installed ? "restart to update" : `update ${state.updateAvailable.version}`) : undefined
     // The cache countdown is a full-tier segment the user places (`/footer +warm`): without the feature it has no data and draws nothing.
@@ -276,12 +298,18 @@ export function createChrome(ctx: AppContext, actions: {
       ...(state.tuiProfile.vimMode ? { vim: ctx.vim.label } : {}),      ...(update ? { update } : {}),
       ...(state.todayUsage ? { today: state.todayUsage } : {}),
       ...(warm ? { warm } : {}),
-      ...(state.customFooter && state.gitBranch ? { branch: state.gitBranch } : {}),
+      ...(custom && state.gitBranch ? { branch: state.gitBranch } : {}),
       ...footerExtras(segments),
     }
-    // `footerRows`: the whole footer is the rows, so the single row's counters are not built.
+    // `footerRows`: the whole footer is the rows, so the single row's segments are not built.
     const rows = rowsOn() && !state.shellMode ? footerRowLines(feed) : undefined
-    const counters = rows ? [] : renderFooter(feed)
+    // The full view's own segments get a second row when the caller has one to give; otherwise every segment shares the first.
+    const inDetail = (segment: FooterSegment) => detailRow && state.mode === "full" && FOOTER_SEGMENT_TIER[segment] === "full"
+    const rowSegments = rows ? [] : segments.filter((segment) => !inDetail(segment))
+    // A screen reader gets the quota windows without their bars (their compact form): figures, not block characters.
+    const parts = (ids: readonly FooterSegment[]) => footerParts(feed, ids).map(({ compact, ...part }) => state.accessible && compact && part.id === "quota" ? { ...part, spans: compact } : { ...part, ...(compact ? { compact } : {}) })
+    const detail = rows ? [] : parts(segments.filter(inDetail))
+    const counters: Line = []
     if (state.tuiProfile.showCommandHint) counters.push({ text: "  ctrl-p commands", fg: "muted" })
     if (state.tuiProfile.showAgentHint) counters.push({ text: "  /agents", fg: "muted" })
     if (state.mflowWait) counters.unshift({ text: `Mflow ${state.mflowWait.file.slice(0, 30)} · ${Math.max(0, Math.ceil((state.mflowWait.deadlineAt - now()) / 1000))}s  `, fg: "secondary" })
@@ -298,11 +326,18 @@ export function createChrome(ctx: AppContext, actions: {
       agentColor: agentColor(state.agentReport?.agents.find((agent) => agent.name === name)),
       ...(state.tuiProfile.showAgent ? { agent: name.charAt(0).toUpperCase() + name.slice(1) } : {}),
       // With the status line in the prompt border the row under it keeps telemetry only: model and effort are already above.
-      ...(state.tuiProfile.showModel && shownModel && !statusInBorder() ? { model: shownModel } : {}),
+      ...(state.tuiProfile.showModel && model && !statusInBorder() ? { model: modelLabel(model, state.modelReport) } : {}),
+      ...(state.tuiProfile.showModel && model && !statusInBorder() && (feed.fast || feed.fastIgnored) ? { fast: { mark: fastMark(feed), applies: feed.fast === true } } : {}),
       ...(state.tuiProfile.showProvider && provider && !statusInBorder() ? { provider } : {}),
       separator: state.tuiProfile.statusSeparator,
       counters,
-      ...(state.tuiProfile.showEffort && state.effectiveModel?.effort && !statusInBorder() ? { effort: state.effectiveModel.effort } : {}),
+      segments: parts(rowSegments),
+      ...(detail.length ? { detail } : {}),
+      // One kind of separator for a screen reader; ASCII chrome has no box line.
+      divider: state.accessible ? state.tuiProfile.statusSeparator : asciiMarks() ? " | " : ` ${g.track} `,
+      // Words without marks for a screen reader, and where ASCII would turn `↻` into `@`.
+      ...(state.accessible || asciiMarks() ? { plainMarks: true } : {}),
+      ...(effortShown && state.effectiveModel?.effort ? { effort: state.effectiveModel.effort } : {}),
       // A notice is not footer text: it shows in the notice slot over the prompt (app.ts).
       notice: "",
       connection: state.connection,
@@ -376,7 +411,11 @@ export function createChrome(ctx: AppContext, actions: {
     const slots = state.shellMode ? undefined : footerSlots(width - META_MARGIN - PROMPT_MARGIN)
     const left = state.shellMode || slots?.replace ? [] : state.statusLine?.leftRows ?? []
     const right = state.shellMode || slots?.replace ? [] : state.statusLine?.rightRows ?? []
-    const { model, rows } = footerModel(width, slots)
+    // The full view's second row takes the place no script, extension or `footerRows` row needs, and only on a terminal of at least the
+    // classic 24 rows: on a shorter one the row is worth more to the transcript and the panel sheet than to telemetry.
+    const detailRow = !state.shellMode && !slots?.replace && !slots?.rows?.length && left.length <= 1 && right.length <= 1 && !rowsOn() && input.screen.size.height >= DETAIL_ROW_MIN_HEIGHT
+    const { model, rows } = footerModel(width, slots, detailRow)
+    if (model.detail?.length) return ctx.views.draw("footer", model, { width, height: 2, extra: { ...(slots ? { ext: slots } : {}) } }).lines
     // The rows of `footerRows` (none when an extension replaced the whole footer) and the extension rows beside them share the budget.
     const built = slots?.replace ? [] : rows ?? []
     const count = Math.min(footerRowBudget(input.screen.size.height), Math.max(1, left.length, right.length, (slots?.rows?.length ?? 0) + 1, built.length))
@@ -390,9 +429,11 @@ export function createChrome(ctx: AppContext, actions: {
     return ctx.views.draw("footer", { ...model, extraRows }, { width, height: count, extra: { ...(slots ? { ext: slots } : {}), rows: rowExt } }).lines
   }
 
-  // The full view turns every segment on except the stat parts added later, which stay opt-in (`/footer +ctx`).
-  const FULL_FOOTER = FOOTER_SEGMENTS.filter((segment) => !FOOTER_OPT_IN.includes(segment))
-  const footerSegments = (): readonly FooterSegment[] => state.customFooter ?? (state.mode === "full" ? FULL_FOOTER : DEFAULT_FOOTER)
+  /** The list `/footer` edits and shows: the saved one, else the segments the view's tier places with the profile's quota and today. */
+  const footerSegments = (): readonly FooterSegment[] => customFooter() ?? tierPlaced()
+  function tierPlaced(): FooterSegment[] {
+    return [...new Set<FooterSegment>([...tierFooter(state.mode), ...(state.tuiProfile.footerQuota ? ["quota"] as const : []), ...(state.tuiProfile.footerToday ? ["today"] as const : [])])]
+  }
 
   // ─── Sidebar layout ─────────────────────────────────────────────────────────────────────────────────────────────────
 

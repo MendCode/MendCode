@@ -11,8 +11,9 @@ import type { AppState } from "./context"
  */
 export function sessionChildren(state: AppState, input: { now: number; sep: string }) {
   const threads = (state.agentRoot ?? state.transcript).agentThreads()
-  // Only Claude Code reports its Agent calls as threads: one runs on the model it named, or on the session's when it named none.
-  const threadRun = (model: string | undefined): StripTask["run"] => { const id = model ?? state.effectiveModel?.model; return id ? { model: id, engine: "claude" } : undefined }
+  // Only Claude Code reports its Agent calls as threads: the model its messages name, or the one its call asked for. Never the
+  // session's own: an agent defined with a model of its own does not run on the parent's, so a guess would show a wrong model.
+  const threadRun = (model: string | undefined): StripTask["run"] => (model ? { model, engine: "claude" } : undefined)
   const threadTasks: StripTask[] = threads.map((thread) => ({ taskId: thread.itemId as never, description: thread.description, agent: thread.agent, background: thread.background, state: thread.running ? "running" : thread.status === "ok" ? "completed" : thread.status === "error" ? "failed" : thread.status === "cancelled" ? "cancelled" : "interrupted", createdAt: thread.startedAt ?? input.now, updatedAt: thread.endedAt ?? thread.startedAt ?? 0, ...(threadRun(thread.model) ? { run: threadRun(thread.model)! } : {}), ...(thread.stoppedByUser && !state.relaunched.has(thread.itemId) ? { stoppedByUser: true as const } : {}) }))
   const threadActivity = (taskId: string): AgentActivity | undefined => {
     const thread = threads.find((entry) => entry.itemId === taskId)

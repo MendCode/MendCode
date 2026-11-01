@@ -12,9 +12,11 @@ export function createProviders(ctx: AppContext, actions: {
   takeModels(reply: CommandReply): boolean
   loadPage(name: Parameters<typeof preload>[0] | undefined): Promise<void>
   runSlash(text: string): Promise<boolean>
+  /** Back to the setup page when one of its sign-in rows opened `/connect`; false otherwise. */
+  returnFromConnect(): Promise<boolean>
 }) {
   const { input, state, requestFrame, say } = ctx
-  const { takeModels, loadPage, runSlash } = actions
+  const { takeModels, loadPage, runSlash, returnFromConnect } = actions
   let authTick: ReturnType<typeof setTimeout> | undefined
   let deepinfraSeeded = false
   const seedDeepInfra = () => {
@@ -246,7 +248,7 @@ export function createProviders(ctx: AppContext, actions: {
       stopAuthTick()
       if (state.connectState.authStatus?.state === "pending") await input.send({ type: "providers.auth.action", provider: authProvider(), action: "cancel" })
       state.connectSerial++
-      state.page = "chat"
+      if (!await returnFromConnect()) state.page = "chat"
     } else if (action.type === "submit") await connectSubmit(action.submit)
     else if (action.type === "test") await connectTest(action.provider, ++state.connectSerial)
     else if (action.type === "refresh") await connectRefresh(action.provider)
@@ -268,7 +270,8 @@ export function createProviders(ctx: AppContext, actions: {
     }
     else if (action.type === "model") {
       state.connectSerial++
-      await runSlash("/model")
+      // From setup the model is picked on its Model row, which lists what was just connected.
+      if (!await returnFromConnect()) await runSlash("/model")
     } else if (action.type === "add-opencode") await addOpencode(state.connectSerial)
     requestFrame()
   }

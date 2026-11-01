@@ -163,4 +163,19 @@ describe("catalog ids a model writes", () => {
     expect(nearModels(catalog, "terra-6.1")).toEqual(["chatgpt/gpt-6.1-terra"])
     expect(nearModels(catalog, "zzz")).toEqual([])
   })
+
+  test("the reference `mendcode models` prints is the id it names: ChatGPT's ids have no provider, Claude Code's and Codex's an engine", async () => {
+    const { catalogId } = await import("../src/models")
+    const catalog = { selectable: true, defaults: { model: "gpt-6-luna" }, list: () => [
+      { id: "gpt-6.1-terra", name: "GPT-6.1 Terra", efforts: [] },
+      { id: "openai/gpt-6.1-terra", name: "GPT-6.1 Terra", provider: "openai", efforts: [] },
+      { id: "claude-opus", name: "Claude Opus · Claude Code", engine: "claude", efforts: [] },
+      { id: "codex:gpt-6-sol", name: "GPT-6 Sol · Codex", engine: "codex", efforts: [] },
+    ] as ModelInfo[] }
+    expect(catalogId(catalog, "chatgpt/gpt-6.1-terra")).toBe("gpt-6.1-terra")
+    expect(catalogId(catalog, "openai/gpt-6.1-terra")).toBe("openai/gpt-6.1-terra")
+    expect(catalogId(catalog, "claude/claude-opus")).toBe("claude-opus")
+    expect(catalogId(catalog, "codex/codex:gpt-6-sol")).toBe("codex:gpt-6-sol")
+    expect(catalogId(catalog, "claude/claude-nope")).toBeUndefined()
+  })
 })

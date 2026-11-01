@@ -13,7 +13,8 @@ Names, reconciled. `minimal`/`balanced`/`full` already mean three different thin
 | Setup preset (`/setup`, [setup](setup.md)) | `default`, `minimal`, `full`, `custom` | Nothing. A tier never writes the preset or its memory and approval choices |
 | Chat view (`view`, [layout](layout.md)) | `minimal`, `balanced`, `full` | `/tier` sets it to the tier's view |
 | Prompt mode (`/prompt-mode`, [prompt modes](prompt-modes.md)) | `minimal`, `focus`, `guide`, `full`, `custom` | `/tier` sets the project's mode: minimalist `minimal`, balanced `focus`, full `full`; `guide` is never set by a tier |
-| Density (terminal profile) | `compact`, `comfortable`, `spacious` | `/tier` sets `compact` for minimalist, `comfortable` otherwise; minimalist also hides the right bar |
+| Density (terminal profile) | `compact`, `comfortable`, `spacious` | `/tier` sets `compact` for minimalist, `comfortable` otherwise; minimalist also hides the right bar; balanced and full turn `showEffort` on |
+| Footer (the row under the prompt) | follows the view | minimal has none; balanced and full place their segments ([layout](layout.md#footer-by-tier)) |
 | Feature modules | the manifest below | follow the tier live |
 
 The bundle is written once by `/tier <name>` (or the Tier row of `/setup`), like a preset: a later change to one switch stays. Feature modules are different: they follow `tier` every time they are read, so a tier change needs no restart.
@@ -81,7 +82,7 @@ The unverified OpenCode serve and Cursor SDK adapters and their tier switches ha
 | `forecast` (footer `~N turns to compact`; [layout](layout.md)) | balanced | tier | `/footer +forecast` (off without a tier) |
 | `lean_tools` (only the coding core in every request, the rest through `tool_search`; [tool discovery](tool-discovery.md#lean-catalogue-and-plan-tools-tier-defaults)) | minimalist | tier | `/tier lean_tools off` (off without a tier) |
 | `aux_tools` (the situational tools of the core in every request: background command output, sub-agent status, web fetch, questions, plan mode; [tool discovery](tool-discovery.md#lean-catalogue-and-plan-tools-tier-defaults)) | balanced, opt-in | tier | `/tier aux_tools on` (on without a tier; off in every tier, where each one is listed when its situation arises) |
-| `harness_tools` (MendCode's tools inside [Claude Code](claude-code.md), [Codex](claude-code.md) and HTTP-MCP [ACP agents](acp-engine.md): code graph, computer use, memory, settings, image generation) | balanced | tier | `/tier harness_tools on` (off without a tier and in minimalist) |
+| `harness_tools` (MendCode's tools inside [Claude Code](claude-code.md), [Codex](claude-code.md) and HTTP-MCP [ACP agents](acp-engine.md): code graph, computer use, memory, settings, image generation; without `thread_mcp`, one line on how sub-agents on MendCode's other models are turned on) | balanced | tier | `/tier harness_tools on` (off without a tier and in minimalist) |
 | `plan_tools` (`todo` and the goal tools in every request) | full, opt-in | tier | `/tier plan_tools on` (on without a tier; deferred in every tier) |
 | `find_tools` (`glob` and `grep` in every request; they keep minimalist's first request above the provider's cacheable minimum, [tool discovery](tool-discovery.md#lean-catalogue-and-plan-tools-tier-defaults)) | minimalist | tier | `/tier find_tools off` (on without a tier; off, `shell` searches with `rg` and `tool_search` finds them) |
 | `ui_tool` (`customize_ui`, the user's screen settings, in every request) | balanced | tier | `/tier ui_tool on` (on without a tier; deferred in minimalist) |
@@ -90,7 +91,7 @@ The unverified OpenCode serve and Cursor SDK adapters and their tier switches ha
 | `git_hub` (`/git`: Changes, Commit, Worktrees and PR tabs, a local commit of the files you tick, and `git init` in a folder that is not a repository; [git](git.md)) | balanced | tier | `git.defaultTab`, `git.newSessionWorktree`; `/tier git_hub off` (off without a tier; no model tool, no prompt text) |
 | `git_actions` (the Git page's push, publish to GitHub as a private repository and create pull request, and the PR tab's read; [git](git.md)) | balanced | permit | `experimental.git_actions` (network through your own `git` and `gh`; never on by itself; no model tool, no prompt text) |
 | `mcp` (servers, `mcp__*`, `mcp_resource_*`) | full | tier | `mcp.json` |
-| `thread_mcp` ([thread bridge](thread-mcp.md), cross-engine delegation) | full | permit | `threadMcp.claude` / `threadMcp.codex`, off by default |
+| `thread_mcp` ([thread bridge](thread-mcp.md), cross-engine delegation: a Claude Code, Codex or ACP session's sub-agents on MendCode's other models, which its instructions name by engine) | full | permit | `threadMcp.claude` / `threadMcp.codex`, off by default |
 | `jev` (adaptive reasoning) | full | tier | `experimental.reasoning_auto` |
 | `idle_compact` (one compaction of a large idle session just before its prompt cache expires; [compaction](compaction.md#compaction-while-idle)) | full | tier | `/tier idle_compact on\|off`; `idleCompactAtTokens` (off without a tier) |
 | `cache_countdown` (the `warm` footer segment: the minutes the prompt cache of the last call has left, `cold` after; [layout](layout.md#cache-countdown)) | full | permit | `/footer +warm` places it; no tier places it, and outside full it draws nothing unless `/tier cache_countdown on` (no call of its own beyond one `context.recent` per turn, no tool, no prompt text) |

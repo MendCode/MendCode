@@ -100,6 +100,7 @@ export function activationProfile(activation: Activation, panel: (name: string) 
     put("presentation", bundle.view, "tier")
     put("density", bundle.density, "tier")
     if (bundle.hideRightSidebar) put("rightSidebar", false, "tier")
+    if (bundle.view !== "minimal") put("showEffort", true, "tier")
   }
   if (activation.panelPreset) {
     for (const [key, value] of Object.entries(panel(activation.panelPreset) ?? {})) put(key, value, "panel")

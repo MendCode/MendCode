@@ -157,7 +157,7 @@ export function parseStartup(argv: string[], probe: FileProbe = {}): Startup {
   // `attach ID` opens the terminal UI on a session (typically one started with `run --bg`).
   if (words[0] === "attach") {
     words.shift()
-    if (words.length !== 1) throw new Error("attach needs one session id")
+    if (words.length !== 1) throw new Error("attach needs one session id or an HTTP URL")
     if (values.has("session") || flags.has("continue")) throw new Error("attach takes the session id; do not combine it with --session or --continue")
     values.set("session", words.shift()!)
   }

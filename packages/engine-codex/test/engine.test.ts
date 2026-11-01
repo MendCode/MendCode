@@ -128,6 +128,16 @@ describe("codex engine (fake app-server)", () => {
     expect(traces.some((line) => line.includes(token))).toBe(false)
     engine.stop()
   })
+  test("a bridged turn's MCP instructions (delegation and MendCode's models) reach the thread's developer instructions, which Codex keeps from the model otherwise", async () => {
+    const fake = fakeCodex(standardScript((_params, api) => api.notify("turn/completed", { threadId: "thr1", turn: { id: "turn1", status: "completed" } })))
+    const engine = createCodexEngine({ cwd: "/unused", appendSystem: () => "Terminal rendering.", transportFactory: () => fake.transport })
+    const ids = createIdFactory()
+    const input: TurnInput = { sessionId: ids("session"), turnId: ids("turn"), text: "check", attachments: [], signal: new AbortController().signal, newItemId: () => ids("item"), emit: () => {}, ask: async () => ({ kind: "deny" }), permissionMode: () => "ask", setPermissionMode: () => {}, externalMcp: { args: ["-c", "mcp_servers.mendcode_threads.url=\"http://127.0.0.1:1/mcp\""], instructions: "Sub-agents on MendCode's models: delegate_task.", cwd: "/project", scrub: (text) => text } }
+    expect(await engine.runTurn(input)).toEqual({ status: "ok" })
+    expect(fake.requests.find((request) => request.method === "thread/start")?.params.developerInstructions).toBe("Terminal rendering.\n\nSub-agents on MendCode's models: delegate_task.")
+    engine.stop()
+  })
+
   test("with /fast the app-server starts on Codex's fast service tier; without it, on its default", async () => {
     for (const fast of [true, false]) {
       const fake = fakeCodex(standardScript((_params, api) => api.notify("turn/completed", { threadId: "thr1", turn: { id: "turn1", status: "completed" } })))

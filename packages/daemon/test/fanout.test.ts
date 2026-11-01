@@ -12,7 +12,7 @@ import { attachPrReference } from "../src/pr-reference"
 const cleanup: Array<() => Promise<void> | void> = []
 const ids = createIdFactory()
 afterEach(async () => { for (const fn of cleanup.splice(0).reverse()) await fn() })
-async function boot() {
+async function boot(options: Pick<Parameters<typeof startDaemon>[0], "complete" | "info"> = {}) {
   const dir = mkdtempSync(path.join(tmpdir(), "mend-fanout-"))
   cleanup.push(() => rmSync(dir, { recursive: true, force: true }))
   const repo = path.join(dir, "repo")
@@ -22,7 +22,7 @@ async function boot() {
   git("-C", repo, "add", "README.md")
   git("-C", repo, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "initial")
   const data = path.join(dir, "data")
-  const daemon = await startDaemon({ dir: data, socketPath: path.join(dir, "d.sock"), listen: "127.0.0.1:0", models: { selectable: true, list: () => [{ id: "fake-a", name: "Fake A", efforts: [] }, { id: "fake-b", name: "Fake B", efforts: [] }], defaults: { model: "fake-a" } }, engine: ({ clock }) => createFauxEngine({ clock, deltaMs: 1 }) })
+  const daemon = await startDaemon({ dir: data, socketPath: path.join(dir, "d.sock"), listen: "127.0.0.1:0", models: { selectable: true, list: () => [{ id: "fake-a", name: "Fake A", efforts: [] }, { id: "fake-b", name: "Fake B", efforts: [] }], defaults: { model: "fake-a" } }, engine: ({ clock }) => createFauxEngine({ clock, deltaMs: 1 }), ...options })
   cleanup.push(() => daemon.stop())
   const client = createClient({ socketPath: daemon.socketPath, name: "fanout-test" })
   await client.connect()
@@ -54,6 +54,29 @@ test("fan-out is opt-in, uses distinct leases, inherits permission and leaves th
   const next = await h.client.send({ type: "session.fanout", sessionId: rows[0]!.sessionId, action: "compare" })
   expect(next.ok && next.result?.owner).toBe(h.id)
   expect(h.daemon.store.readAfter(h.id, 0).some((event) => event.type === "session.orchestration")).toBe(true)
+})
+test("branch summaries are written by /fanout compare, once per branch until it moves on; finished branch turns write none", async () => {
+  const summaries: string[] = []
+  const h = await boot({ info: { engine: "native", model: "fake-a" }, complete: async (input) => {
+    if (input.system.includes("title")) return "Title"
+    summaries.push(input.prompt)
+    return `Branch summary ${summaries.length}`
+  } })
+  await h.client.send({ type: "settings.set", patch: { tier: "full" } })
+  const started = await h.client.send({ type: "session.fanout", sessionId: h.id, action: "start", prompt: "compare this", models: ["fake-a", "fake-b"] })
+  const rows = (started.ok ? started.result?.branches : []) as FanoutBranch[]
+  expect(rows).toHaveLength(2)
+  const finished = () => rows.every((row) => h.daemon.store.lastTurnStatus(row.sessionId) === "completed")
+  for (let i = 0; i < 200 && !finished(); i++) await Bun.sleep(10)
+  expect(finished()).toBe(true)
+  await Bun.sleep(50)
+  expect(summaries).toHaveLength(0)
+  const compare = async () => { const reply = await h.client.send({ type: "session.fanout", sessionId: h.id, action: "compare" }); return (reply.ok ? reply.result?.branches : []) as Array<FanoutBranch & { summary: string }> }
+  const first = await compare()
+  expect(summaries).toHaveLength(2)
+  expect(first.map((row) => row.summary).sort()).toEqual(["Branch summary 1", "Branch summary 2"])
+  expect((await compare()).map((row) => row.summary).sort()).toEqual(["Branch summary 1", "Branch summary 2"])
+  expect(summaries).toHaveLength(2)
 })
 test("provisioning failure cleans only unused leases and starts no providers; model validation precedes leases", async () => {
   const h = await boot()

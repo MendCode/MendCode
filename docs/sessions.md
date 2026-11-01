@@ -20,7 +20,16 @@ threads and use saved PR state; `/settle check` explicitly refreshes it. Default
 leases, inherit the owner's permission mode/session rules/selected agent, and retain branches for review. New worktree
 project resources still require their own trust. Provisioning failure starts no providers and releases unused leases.
 `/fanout compare` shows statuses/summaries; `/fanout open N` opens a branch; `/fanout changes N` opens its Changes view.
-Grouped transcript summaries update without waking a model. No automatic commits, merges or successful-lease removal.
+Grouped transcript summaries update without waking a model.
+
+A session's summary (the `summary` role, `session.summary` in `session.list`/`get`/`inspect`) is written only when a reader
+asks for it: `/fanout compare` for each branch, and `session.inspect` with `summary: true` (`mendcode session inspect ID --summary`,
+local terminals only, `session_meta` tier, so never in minimalist). It is one completion of up to the last 24,000 characters of the
+conversation (about 6k tokens) on the `summary` role's model, or `small`, or the session's own model when neither is set. It is
+saved with the sequence it read up to: asked again before the session moved on, the saved text is returned and no call is made. A
+finished turn never writes it, and `session.list`/`get` and a plain `inspect` (what terminals and `session wait` repeat) only
+read the saved one. `agent.summary.disable` turns it off; `agent.summary.prompt` and `.model` still shape it. Before this, every
+finished turn of a top-level native session wrote one, on the session's model when no `small` model was set. No automatic commits, merges or successful-lease removal.
 Compare keeps the latest group; earlier children remain in history. Existing provider authentication and lease cleanup
 remain explicit user choices.
 
@@ -326,6 +335,29 @@ A redo brings back the transcript and files but not Claude Code's cut conversati
 A fork of such a session cannot fork the engine's own conversation, so its first turn on Claude Code or an ACP agent
 starts with the copied conversation as text, through the portable handoff below (this replaces the former 60,000-character
 dump marked by `session.fork.seed`).
+
+### The default model and running sessions
+
+The `main` role (`models.main`, a profile's or project's roles; `/model` then `s`, `/setup`, `mendcode_settings`) is the model new
+sessions start on. A session without a model of its own follows it, with one limit: once it has run a turn it keeps its **engine**.
+
+- A default on the same engine (another ChatGPT or API-key model, another effort) is followed from the session's next call.
+- A default on another engine (Claude Code, pi, an ACP agent, or from one of those back to MendCode's own) does not move a session
+  that already ran: at its next turn, or when a terminal next shows its model, it is given the default it followed as its own model,
+  as `/model` would set it. A session that has not run a turn yet follows the new default. The daemon records the default each turn
+  starts on (`session.followed-default:<session>` in the store's `meta`); sessions from before this record follow the default once
+  more and are recorded from their next turn.
+- `/model` is the session's own choice and always wins; picking the default again (`/model reset`, `choice: null`) makes the
+  session follow it wherever it runs.
+- Within a turn of MendCode's own engine, the model is read before every call, so a switch between its own models applies at the
+  next call. A switch to another engine's model (`/model`, a new default) applies from the next turn: the rest of the turn stays on
+  the model it was on. No model another engine runs is ever sent to a provider; a native turn that would fails before the request,
+  saying where the model runs.
+
+The assistant's `mendcode_settings` checks the model roles it proposes as `/model` checks a model (a model no catalog lists, or a
+Claude Code model for a role other than `main`, is refused before you are asked) and says after a change that the new main model is
+for new sessions. A model may be written as its catalog id or as the reference `mendcode models` prints (`claude/claude-opus` is
+Claude Code's `claude-opus`, `chatgpt/gpt-6.1-terra` is `gpt-6.1-terra`).
 
 ### Portable handoff between engines
 

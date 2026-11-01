@@ -20,7 +20,7 @@ const COVERAGE: Record<string, Entry> = {
     "compaction-page", "compound-page", "connect-page", "console-page", "context-page", "customize-page", "diagnostics-page", "dream-report",
     "dream-tab", "environment-page", "extensions-page", "help-page", "history-page", "hooks-page", "ide-page", "intro-page", "keymap-page", "loop-evidence",
     "loop-form", "loops-page", "marketplace-page", "mcps-catalog", "mcps-page", "memory-assistant-page", "memory-evolution",
-    "memory-extraction-tab", "memory-graph-view", "onboarding-page", "onboarding-import", "onboarding-sample", "memory-page", "memory-policies", "memory-sharing-tab", "memory-workspaces", "mermaid-viewer",
+    "memory-extraction-tab", "memory-graph-view", "onboarding-page", "onboarding-import", "onboarding-models", "onboarding-sample", "memory-page", "memory-policies", "memory-sharing-tab", "memory-workspaces", "mermaid-viewer",
     "mflow-page", "model-page", "model-picker", "packages-page", "permissions-page", "pet-picker", "pet-plan", "plan-review-page", "prompt-mode-page",
     "providers-page", "queue-page", "reasoning-page", "release-page", "reviews-page", "secrets-page", "session-list", "settings-page", "setup-page",
     "sidebar-editor", "skills-page", "slash-menu-editor", "stash-page", "storage-page", "tasks-page", "terminal-setup-page", "text-page",

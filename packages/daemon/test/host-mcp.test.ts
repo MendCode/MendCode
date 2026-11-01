@@ -92,6 +92,14 @@ describe("native tools bridge for another harness", () => {
     expect(hostInstructions([...TOOLS, image])).not.toContain("ALL_TOOLS")
   })
 
+  test("a session with no thread bridge is told its sub-agents on MendCode's other models are off and how they are turned on, not that they do not exist", () => {
+    const told = hostInstructions(TOOLS, "codex", "codex")
+    expect(told).toContain("full tier and /tier thread_mcp on codex")
+    expect(told).toContain("never that such a model does not exist")
+    expect(hostInstructions(TOOLS, "claude", "acp:gemini")).toContain("/tier thread_mcp on acp:gemini")
+    expect(hostInstructions(TOOLS)).not.toContain("thread_mcp")
+  })
+
   test("a session with image_gen is told it can make images, one without it is not", () => {
     const image = { name: "image_gen", description: "Generate an image", parameters: { type: "object", properties: {} } }
     expect(hostInstructions([image])).toContain("mcp__mendcode__image_gen")

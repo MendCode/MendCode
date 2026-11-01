@@ -493,7 +493,7 @@ export const ModelsList = lazySchema(() => z.strictObject({
   sessionId: SessionId.optional(),
 }))
 
-/** Sets (or with `choice: null`, clears) a session's own model; it applies from the session's next model call. Ack: `ModelsReport`. */
+/** Sets (or with `choice: null`, clears) a session's own model; it applies from the session's next model call, a model of another engine from its next turn. Ack: `ModelsReport`. */
 export const SessionModelSet = lazySchema(() => z.strictObject({
   ...base,
   type: z.literal("session.model.set"),
@@ -1595,7 +1595,9 @@ export const SessionAgentCommandList = lazySchema(() => z.strictObject({ ...base
 export const SessionAgentCommandUpdate = lazySchema(() => z.strictObject({ ...base, type: z.literal("session.agent-command.update"), sessionId: SessionId, commandId: CommandId, state: z.enum(["accepted", "rejected"]) }))
 export const SessionAgentCommandPolicy = lazySchema(() => z.strictObject({ ...base, type: z.literal("session.agent-command.policy") }))
 export const SessionGet = lazySchema(() => z.strictObject({ ...base, type: z.literal("session.get"), sessionId: SessionId }))
-export const SessionInspect = lazySchema(() => z.strictObject({ ...base, type: z.literal("session.inspect"), sessionId: SessionId, limit: z.number().int().min(0).max(50).optional() }))
+export const SessionInspect = lazySchema(() => z.strictObject({ ...base, type: z.literal("session.inspect"), sessionId: SessionId, limit: z.number().int().min(0).max(50).optional(),
+  /** Write the session's summary first when it moved on since the saved one: one model call, local terminals only, `session_meta` tier. */
+  summary: z.boolean().optional() }))
 export const SessionStatsCommand = lazySchema(() => z.strictObject({ ...base, type: z.literal("session.stats"), sessionId: SessionId }))
 export const DiagnosticsSnapshot = lazySchema(() => z.strictObject({ ...base, type: z.literal("diagnostics.snapshot") }))
 

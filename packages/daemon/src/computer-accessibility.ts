@@ -2,12 +2,23 @@ import { ComputerTarget, ComputerNode, type ComputerObservation, type ComputerAc
 import type { CommandRunner } from "@mendcode/tools"
 
 export type SemanticAction = ComputerActionInput & { action: "press" | "setValue" | "click" | "typeText" | "key" | "scroll" | "drag"; role: string }
+/** A step of a native batch as the backend reports it; steps after the first failure are not reported, because they did not start. */
+export type BatchOutcome = { index: number; outcome: "dispatched" | "failed" | "unknown"; error?: string | undefined }
+
+/**
+ * A refusal that sent nothing to the app (agent-desktop's `not_delivered`): the request may be made again from a new observation.
+ * Any other failure of an action may have reached the app, and is never repeated blindly.
+ */
+export class NotDelivered extends Error {}
+
 export type ComputerAccessibility = {
   foreground(signal: AbortSignal): Promise<ComputerTarget>
   /** The live identity of an approved target, wherever it is on screen: undefined when its process ended or its bundle ID differs. Never activates it. */
   identify(target: ComputerTarget, signal: AbortSignal): Promise<ComputerTarget | undefined>
   observe(target: ComputerTarget, signal: AbortSignal): Promise<Pick<ComputerObservation, "nodes" | "truncated">>
   action(target: ComputerTarget, input: SemanticAction, signal: AbortSignal): Promise<void>
+  /** Several actions on one observation in one native request, stopping at the first that fails; without it they run one by one. */
+  batch?(target: ComputerTarget, steps: SemanticAction[], signal: AbortSignal): Promise<BatchOutcome[]>
   indicator(signal: AbortSignal, action: () => Promise<void>): Promise<void>
   program?<T>(target: ComputerTarget, signal: AbortSignal, execute: () => Promise<T>): Promise<T>
   navigation?(pid: number, key: string, signal: AbortSignal): Promise<void>

@@ -165,6 +165,39 @@ test("the full tier says what each sub-agent runs on, on its strip row and its c
   expect(balanced).not.toContain("native · low")
 })
 
+test("an engine's sub-agent row shows the model its call asked for from the start, then its own; never the parent session's model", async () => {
+  const dataDir = tempDir()
+  writeTuiProfile(dataDir, { ...DEFAULT_TUI_PROFILE })
+  const h = appHarness({
+    dataDir, width: 170, height: 30,
+    reply: (command) => {
+      if (command.type === "models.list") return { ok: true, result: { engine: "claude", selectable: true, models: [], defaults: { model: "claude-opus-5-5" }, effective: { model: "claude-opus-5-5" }, roles: {} } } as never
+      if (command.type === "task.list") return { ok: true, result: { tasks: [] } } as never
+      return undefined
+    },
+  })
+  h.app.applySettings({ onboarded: true, tier: "full" })
+  await h.type("")
+  const talk = conversation(h.sessionId, h.app.onEvent)
+  talk.emit({ type: "turn.started", turnId: "turn_1", queueId: "queue_1" })
+  // The shape packages/engine-claude sends for `Agent({ model: "haiku" })` and for a call that names no model.
+  talk.emit({ type: "item.started", turnId: "turn_1", itemId: "item_haiku", kind: "tool_call", meta: { tool: "agent Read part 1", subagent: true, agent: "general-purpose", model: "claude-haiku", background: false } })
+  talk.emit({ type: "item.started", turnId: "turn_1", itemId: "item_plain", kind: "tool_call", meta: { tool: "agent Read part 2", subagent: true, agent: "general-purpose", background: false } })
+  // The session's own model is on the footer; the strip, from its head to the prompt's rule, never says it.
+  const strip = () => {
+    h.app.render()
+    const rows = h.text()
+    const head = rows.findIndex((row) => /Agents\s+2 running/.test(row))
+    return rows.slice(head, rows.findIndex((row, index) => index > head && row.includes("───"))).join("\n")
+  }
+  expect(strip()).toMatch(/Read part 1[^\n]*\n[^\n]*Haiku · claude[^\n]*\n[^\n]*Read part 2/)
+  expect(strip()).not.toContain("Opus")
+  // Its first message names the model it really runs on.
+  talk.emit({ type: "item.started", turnId: "turn_1", itemId: "item_haiku_think", kind: "reasoning", meta: { agentParent: "item_haiku", agentModel: "claude-haiku-5-5" } })
+  expect(strip()).toMatch(/Read part 1[^\n]*\n[^\n]*Haiku 5\.5 · claude/)
+  expect(strip()).not.toContain("Opus")
+})
+
 test("a background sub-agent stays in the strip after its turn, while the daemon still runs it, instead of turning into a plain background row", async () => {
   const dataDir = tempDir()
   writeTuiProfile(dataDir, { ...DEFAULT_TUI_PROFILE })

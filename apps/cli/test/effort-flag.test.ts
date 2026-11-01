@@ -115,8 +115,10 @@ describe("run --effort reaches the model request", () => {
 })
 
 test("a model is accepted by the name `mendcode models` prints for it (its reference), such as claude/claude-sonnet", async () => {
-  const listed = { send: async () => ({ ok: true as const, result: { models: [{ id: "claude-sonnet", name: "Claude Sonnet", efforts: ["low", "high"], reference: "claude/claude-sonnet" }], roles: {}, defaults: { model: "claude-sonnet" } } }) }
+  // The daemon's `models.list` rows as they are: a Claude Code model has its engine, no provider and no `reference` field.
+  const listed = { send: async () => ({ ok: true as const, result: { models: [{ id: "claude-sonnet", name: "Claude Sonnet · Claude Code", engine: "claude", efforts: ["low", "high"] }, { id: "codex:gpt-6-sol", name: "GPT-6 Sol · Codex", engine: "codex", efforts: [] }], roles: {}, defaults: { model: "claude-sonnet" } } }) }
   expect(await sessionSelection(listed as never, { model: "claude/claude-sonnet" }, {})).toEqual({ ok: true, model: { model: "claude-sonnet" } })
+  expect(await sessionSelection(listed as never, { model: "codex/codex:gpt-6-sol" }, {})).toEqual({ ok: true, model: { model: "codex:gpt-6-sol" } })
   expect(await sessionSelection(listed as never, { model: "claude-sonnet" }, {})).toEqual({ ok: true, model: { model: "claude-sonnet" } })
   expect(await sessionSelection(listed as never, { model: "claude/claude-nope" }, {})).toMatchObject({ ok: false, message: "unknown model claude/claude-nope" })
 })

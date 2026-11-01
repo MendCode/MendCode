@@ -5,7 +5,7 @@ import { fit, lineWidth } from "./deck"
 import { homeVisibleSessions, renderHome, type HomeInput } from "./home"
 import { assistantRows, reasoningRows, userRows } from "./message-views"
 import { compactionRows, toolRows, turnStatusRows } from "./transcript-views"
-import { promptFrame, renderStatusRow, withoutMargin, type PromptFrame, type StatusRowInput } from "./prompt-chrome"
+import { promptFrame, renderDetailRow, renderStatusRow, withoutMargin, type FooterRowPart, type PromptFrame, type StatusRowInput } from "./prompt-chrome"
 import { renderQueuePanel } from "./queue-panel"
 import { approvalOptionRows, renderApprovalPanel, type ApprovalChoice, type PanelRows } from "./request-panel"
 import { questionAnswerBlock, renderQuestionBatch, type QuestionCard, type QuestionDraft, type QuestionField } from "./question-batch"
@@ -177,6 +177,9 @@ export const BUILTIN_VIEWS: { [S in Exclude<keyof ViewModels, "prompt.frame">]: 
     const ext = m.extra?.ext as StatusRowInput["ext"]
     const rowExt = (m.extra?.rows ?? []) as Array<StatusRowInput["ext"]>
     const head = renderStatusRow({ ...(first as unknown as StatusRowInput), width: m.width, ...(ext ? { ext } : {}) })
+    // The full view's second row; the chrome sends it only when no script, extension or `footerRows` row needs that place.
+    const detail = first.detail?.length && !ext?.replace ? [renderDetailRow({ parts: first.detail as unknown as FooterRowPart[], width: m.width, ...(first.separator !== undefined ? { separator: first.separator } : {}), ...(first.divider !== undefined ? { divider: first.divider } : {}) })] : []
+    if (detail.length) return [head, ...detail]
     const rest = extraRows.map((row, index) => renderStatusRow({ width: m.width, loops: 0, ...(m.separator !== undefined ? { separator: m.separator } : {}), scriptLeftRow: row.scriptLeftRow, scriptRightRow: row.scriptRightRow, ...(rowExt[index] ? { ext: rowExt[index] } : {}) }))
     return [head, ...rest]
   },

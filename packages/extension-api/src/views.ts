@@ -251,7 +251,20 @@ export type FooterModel = Readonly<{
   scriptRightRow?: readonly ScriptSegment[]
   /** Script rows below the first, at most three. */
   extraRows: readonly Readonly<{ scriptLeftRow: readonly ScriptSegment[]; scriptRightRow: readonly ScriptSegment[] }>[]
+  /** Priority processing (`/fast`): its mark (`fast`, or the icon of `footerIcons`) and whether this model gets it (`n/a` when not). */
+  fast?: Readonly<{ mark: string; applies: boolean }>
+  /** Footer segments placed in the first row (`/footer`, else the view's tier), in order; the lowest `rank` gives way first when narrow. */
+  segments?: readonly FooterPartModel[]
+  /** The full view's second row: the full-tier segments, in the same shape. Absent when script, extension or `footerRows` rows need that place. */
+  detail?: readonly FooterPartModel[]
+  /** Between groups of the row (` │ `; `|` in ASCII chrome; the separator in screen-reader mode). */
+  divider?: string
+  /** Screen-reader mode: counts are words without marks (`1 loop`, not `↻ 1 loop`). */
+  plainMarks?: boolean
 }>
+
+/** One footer segment as the built-in row lays it out: its spans, its overflow rank and the narrower form it takes before giving way. */
+export type FooterPartModel = Readonly<{ id: string; spans: readonly ViewSpan[]; rank: number; compact?: readonly ViewSpan[] }>
 
 export type HomeSessionModel = Readonly<{ id?: string; title: string; state: "needs_input" | "looping" | "working" | "completed"; updatedAt: number; startedAt?: number; detail?: string }>
 export type HomeModel = Readonly<{

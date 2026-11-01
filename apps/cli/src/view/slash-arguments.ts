@@ -11,6 +11,12 @@ const onOff = (what: string): SlashArgument[] => [{ word: "on", summary: `Turn $
 const toggle = (what: string): SlashArgument[] => [...onOff(what), { word: "toggle", summary: `Switch ${what}` }]
 const words = (summary: string, list: readonly string[]): SlashArgument[] => list.map((word) => ({ word, summary }))
 
+/** The languages Apple's on-device speech model hears on macOS 26 (`SpeechTranscriber.supportedLocales`); an API takes any code typed. */
+const ON_DEVICE_LANGUAGES = ["en", "es", "fr", "de", "it", "pt", "ja", "ko", "zh", "yue", "hi", "bn", "gu", "kn", "ml", "mr", "ne", "or", "pa", "ta", "te", "ur"] as const
+const languageNames = new Intl.DisplayNames(["en"], { type: "language" })
+// Enter on a first language sets it alone; typing a space after it offers the second.
+const languages = (first: boolean): SlashArgument[] => ON_DEVICE_LANGUAGES.map((code) => ({ word: code, summary: `${languageNames.of(code) ?? code}${first ? "; a space adds a second, heard at once" : ""}` }))
+
 const ARGUMENTS: Readonly<Record<string, () => readonly SlashArgument[]>> = {
   pr: () => [
     { word: "on", summary: "Turn on PR watching and the PR reviewer" },
@@ -52,7 +58,9 @@ const ARGUMENTS: Readonly<Record<string, () => readonly SlashArgument[]>> = {
   "sandbox network": () => onOff("the network"),
   "add-dir": () => [{ word: "save", summary: "Add a directory for good: <path>" }, { word: "remove", summary: "Remove a directory: <path>" }],
   "remote-control": () => [...onOff("remote control"), { word: "pair", summary: "Pair a chat" }, { word: "unpair", summary: "Unpair a chat: [chat id]" }],
-  voice: () => [...onOff("voice"), ...words("Dictation", ["status", "start", "stop", "cancel"]), { word: "language", summary: "Set the language: <code|auto>" }],
+  voice: () => [...onOff("voice"), ...words("Dictation", ["status", "start", "stop", "cancel"]), { word: "language", summary: "Set the language: <code [code]|auto>", more: true }],
+  "voice language": () => [{ word: "auto", summary: "Your Mac's first two languages, heard at once" }, ...languages(true)],
+  "voice language *": () => languages(false),
   ide: () => [{ word: "on", summary: "Connect an editor: [zed|vscode]" }, { word: "off", summary: "Disconnect the editor" }, { word: "clear", summary: "Forget the editor's selection" }, { word: "refresh", summary: "Read the editor again" }, { word: "open", summary: "Open a file in the editor: [path:line]" }],
   share: () => [{ word: "local", summary: "Share as a local file" }, { word: "gist", summary: "Share as a secret gist (--yes)" }, { word: "policy", summary: "Set the sharing policy", more: true }, ...words("Shared session", ["status", "create", "sync", "remove"])],
   "share policy": () => words("Sharing policy", ["manual", "auto", "disabled"]),

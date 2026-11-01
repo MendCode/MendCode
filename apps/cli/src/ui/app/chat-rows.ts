@@ -460,7 +460,7 @@ export function createChatRows(ctx: AppContext, actions: {
       sessions,
       ...(state.homeSelected ?? state.homeHover ? { selectedId: (state.homeSelected ?? state.homeHover)! } : {}),
       spinner: state.spinFrame,
-      look: homeLook(profile) as never,
+      look: { ...homeLook(profile), ...(asciiGlyphs() ? { ascii: true } : {}) } as never,
       ...(state.tuiProfile.homeTips ? { tip: homeTipText } : {}),
       ...(state.tuiProfile.homeFooter && !footerTaken ? { footer: state.homeMcp ? { mcp: state.homeMcp } : {} } : {}),
       ...(input.version ? { version: input.version } : {}),

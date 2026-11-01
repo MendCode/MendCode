@@ -3,6 +3,7 @@ import type { Line } from "../src/ui/theme"
 import { HOME_TIPS, homeTip, tipLine, tipText } from "../src/view/home-tips"
 import { renderHome, logoRows, type HomeSession } from "../src/view/home"
 import { LOGO_FONTS, LOGO_TEXT_MAX, logoHeight, logoRowsFor } from "../src/view/logo-fonts"
+import { LOGO_MARK } from "../src/view/logo-mark"
 import { textWidth } from "../src/view/wrap"
 
 const text = (line: Line) => line.map((span) => span.text).join("")
@@ -17,8 +18,9 @@ const sessions: HomeSession[] = [
 ]
 
 describe("logo fonts", () => {
-  test("MENDCODE in the default font is v1's wordmark, unchanged", () => {
-    expect(logoRows()).toEqual(["█▄ ▄█  █▀▀▀  █▄  █  █▀▀▄  █▀▀▀  █▀▀█  █▀▀▄  █▀▀▀", "█ ▀ █  █▀▀▀  █ ▀ █  █  █  █     █  █  █  █  █▀▀▀", "▀   ▀  ▀▀▀▀  ▀   ▀  ▀▀▀   ▀▀▀▀  ▀▀▀▀  ▀▀▀   ▀▀▀▀"])
+  test("MENDCODE in the default font is v1's wordmark, its N's stroke running down to the right foot", () => {
+    // The N stopped half way (`█ ▀ █`), so it read as the left half of an M or a mirrored И.
+    expect(logoRows()).toEqual(["█▄ ▄█  █▀▀▀  █▄  █  █▀▀▄  █▀▀▀  █▀▀█  █▀▀▄  █▀▀▀", "█ ▀ █  █▀▀▀  █ ▀▄█  █  █  █     █  █  █  █  █▀▀▀", "▀   ▀  ▀▀▀▀  ▀   ▀  ▀▀▀   ▀▀▀▀  ▀▀▀▀  ▀▀▀   ▀▀▀▀"])
   })
 
   test("each font has its own row count, and every row of a font is as wide as its letters", () => {
@@ -73,18 +75,18 @@ describe("product name", () => {
 })
 
 describe("home layout", () => {
-  test("split at 160 columns: one box, the wordmark and root on the left, the Agent View on the right, no header row", () => {
+  test("split at 160 columns: one box, the logo and root on the left, the Agent View on the right, no header row", () => {
     const rows = lines(renderHome({ ...base, width: 160, height: 34, screenHeight: 40, sessions, look: { layout: "split" } }))
     expect(rows[0]).toBe("")
     expect(rows[1]).toMatch(/^ {2}┌─+┐ {2}$/)
     const bottom = rows.findIndex((row) => /^ {2}└─+┘ {2}$/.test(row))
     expect(bottom).toBeGreaterThan(10)
     for (const row of rows.slice(1, bottom + 1)) expect(textWidth(row)).toBe(160)
-    const logoRow = rows.findIndex((row) => row.includes(logoRows()[0]!))
+    const logoRow = rows.findIndex((row) => row.includes(LOGO_MARK[0]!))
     const approve = rows.findIndex((row) => row.includes("Approve plan"))
     expect(logoRow).toBeGreaterThan(1)
     // The two columns share rows: the Agent View starts to the right of the logo's right edge.
-    expect(rows[approve]!.indexOf("Approve plan")).toBeGreaterThan(rows[logoRow]!.indexOf(logoRows()[0]!) + textWidth(logoRows()[0]!))
+    expect(rows[approve]!.indexOf("Approve plan")).toBeGreaterThan(rows[logoRow]!.indexOf(LOGO_MARK[0]!) + textWidth(LOGO_MARK[0]!))
     expect(rows.join("\n")).toContain("MendCode v0.4.2")
     expect(rows.some((row) => row.includes("~/Code/MendCodeV2"))).toBe(true)
     // The root is inside the box, not on a header row above it.
@@ -92,11 +94,11 @@ describe("home layout", () => {
   })
 
   test("split at 100 columns: the name in text where the wordmark cannot fit beside the Agent View, still two columns", () => {
-    const rows = lines(renderHome({ ...base, width: 100, height: 34, screenHeight: 40, sessions, look: { layout: "split" } }))
+    const rows = lines(renderHome({ ...base, width: 100, height: 34, screenHeight: 40, sessions, look: { layout: "split", logoFont: "compact" } }))
     const bottom = rows.findIndex((row) => /^ {2}└─+┘ {2}$/.test(row))
     expect(bottom).toBeGreaterThan(10)
     for (const row of rows.slice(1, bottom + 1)) expect(textWidth(row)).toBe(100)
-    expect(rows.join("\n")).not.toContain(logoRows()[0]!)
+    expect(rows.join("\n")).not.toContain(logoRowsFor("MENDCODE", "compact")[0]!)
     const name = rows.findIndex((row) => row.includes("MendCode") && !row.includes("v0.4.2"))
     const approve = rows.findIndex((row) => row.includes("Approve plan"))
     expect(name).toBeGreaterThan(1)
@@ -118,12 +120,12 @@ describe("home layout", () => {
     expect(lines(renderHome({ ...base, width: 120, height: 20, screenHeight: 23, sessions, look: { layout: "split" } })).join("\n")).not.toContain("┌")
   })
 
-  test("centered keeps the root and product on the top row and the wordmark in the middle", () => {
+  test("centered keeps the root and product on the top row and the logo in the middle", () => {
     const rows = lines(renderHome({ ...base, width: 160, height: 34, screenHeight: 40, sessions, look: { layout: "centered" } }))
     expect(rows[1]).toMatch(/~\/Code\/MendCodeV2 +MendCode v0\.4\.2$/)
     expect(rows.join("\n")).not.toContain("┌")
-    const left = rows.find((row) => row.includes(logoRows()[0]!))!.indexOf(logoRows()[0]!)
-    expect(left).toBe(Math.floor((160 - textWidth(logoRows()[0]!)) / 2))
+    const left = rows.find((row) => row.includes(LOGO_MARK[0]!))!.indexOf(LOGO_MARK[0]!)
+    expect(left).toBe(Math.floor((160 - textWidth(LOGO_MARK[0]!)) / 2))
   })
 
   test("the split Agent View shows the empty state when nothing is running", () => {

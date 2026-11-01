@@ -67,8 +67,10 @@ export const FEATURES: Readonly<Record<FeatureId, FeatureSpec>> = {
   autoresearch: { label: "Metric experiments", tier: "full", mode: "permit", cost: [], legacy: true, own: "On-demand metric-experiment skill", doc: "docs/loops.md" },
   web_routing: { label: "Explicit web routes", tier: "balanced", mode: "permit", cost: [], legacy: true, own: "On-demand explicit-web skill", doc: "docs/tools-web.md" },
   review_order: { label: "Suggested review order", tier: "balanced", mode: "tier", cost: [], legacy: true, own: "/changes · o preview · O apply", doc: "docs/changes.md" },
-  session_meta: { label: "Session lifecycle", tier: "balanced", mode: "tier", cost: ["tools"], legacy: false, own: "/tier session_meta on", tools: ["session_meta"], safe: true, doc: "docs/sessions.md" },
-  fanout: { label: "Fan-out comparison", tier: "full", mode: "tier", cost: [], legacy: false, own: "/tier fanout on", safe: true, doc: "docs/agents.md" },
+  // Calls: a session summary, only for `session.inspect` with `summary: true` from a local terminal, once per change of the session.
+  session_meta: { label: "Session lifecycle", tier: "balanced", mode: "tier", cost: ["tools", "calls"], legacy: false, own: "/tier session_meta on", tools: ["session_meta"], safe: true, doc: "docs/sessions.md" },
+  // Calls: `/fanout compare` writes the summary of each branch that moved on since its last one.
+  fanout: { label: "Fan-out comparison", tier: "full", mode: "tier", cost: ["calls"], legacy: false, own: "/tier fanout on", safe: true, doc: "docs/agents.md" },
   // Permit: nothing runs until the user lists a provider in `quotaRefresh`; the tier never turns it on, safe mode always turns it off.
   quota_refresh: { label: "Quota refresh probe", tier: "minimalist", mode: "permit", cost: ["calls"], legacy: true, own: "/customize · quotaRefresh (off until a provider is listed; each probe spends some of the quota it measures)", safe: true, doc: "docs/usage-limit.md" },
   limit_checkpoint: { label: "Pre-limit checkpoint", tier: "balanced", mode: "tier", cost: [], legacy: false, own: "/tier limit_checkpoint off", doc: "docs/usage-limit.md" },

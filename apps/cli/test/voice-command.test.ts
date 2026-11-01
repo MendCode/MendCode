@@ -92,6 +92,87 @@ describe("/voice", () => {
     expect(screen(off)).not.toContain("recording")
   })
 
+  test("while the microphone opens the row says to wait, then listens once the daemon has started", async () => {
+    const opened = Promise.withResolvers<CommandReply>()
+    const h = appHarness({
+      directory: tempDir("mendcode-voice-"),
+      reply: (command: CommandInput) => {
+        if (command.type !== "voice.control") return undefined
+        if (command.action === "start") return opened.promise
+        return asReply({ ok: true, result: { enabled: true, recording: false, ready: true, provider: "local", model: "macOS on-device", maxSeconds: 60 } })
+      },
+    })
+    apps.push(h)
+    void h.app.onInput("/voice\r")
+    await Bun.sleep(5)
+    h.app.render()
+    expect(screen(h)).toContain("starting… wait to speak")
+    expect(screen(h)).not.toContain("listening")
+    opened.resolve(asReply({ ok: true, result: { enabled: true, recording: true, ready: true, provider: "local", model: "macOS on-device", maxSeconds: 60 } }))
+    await Bun.sleep(5)
+    h.app.render()
+    expect(screen(h)).not.toContain("starting…")
+    expect(screen(h)).toMatch(/● ▁{16} 0:00 \/voice or ctrl\+x v to stop/)
+  })
+
+  test("esc while the microphone opens drops the recording it opened", async () => {
+    const opened = Promise.withResolvers<CommandReply>()
+    const h = appHarness({
+      directory: tempDir("mendcode-voice-"),
+      reply: (command: CommandInput) => command.type !== "voice.control" ? undefined : command.action === "start" ? opened.promise : asReply({ ok: true, result: { enabled: true, recording: false, ready: true, provider: "local", model: "macOS on-device", maxSeconds: 60 } }),
+    })
+    apps.push(h)
+    void h.app.onInput("/voice\r")
+    await Bun.sleep(5)
+    await h.type("\x1b")
+    opened.resolve(asReply({ ok: true, result: { enabled: true, recording: true, ready: true, provider: "local", model: "macOS on-device", maxSeconds: 60 } }))
+    await Bun.sleep(5)
+    h.app.render()
+    expect(voiceCalls(h)).toEqual(["start", "cancel"])
+    expect(screen(h)).toContain("dictation cancelled")
+    expect(screen(h)).not.toContain("listening")
+  })
+
+  test("when the transcript does not come back, the words already heard stay in the prompt as a draft", async () => {
+    const h = appHarness({
+      directory: tempDir("mendcode-voice-"),
+      reply: (command: CommandInput) => {
+        if (command.type !== "voice.control") return undefined
+        if (command.action === "stop") return asReply({ ok: false, error: { code: "internal", message: "[VOICE]: the daemon connection closed" } })
+        return asReply({ ok: true, result: { enabled: true, recording: command.action === "start", ready: true, provider: "local", model: "macOS on-device", maxSeconds: 60 } })
+      },
+    })
+    apps.push(h)
+    await h.type("please")
+    await h.type("\x18v")
+    await h.app.onGlobal({ type: "voice.live", gseq: 1, at: 1, level: 0.5, text: "review the long plan we talked about" })
+    await h.type("\x18v")
+    await Bun.sleep(5)
+    h.app.render()
+    expect(h.app.editor.text).toBe("please review the long plan we talked about")
+    expect(screen(h)).toContain("kept what was heard in the prompt")
+    expect(h.sentOf("user.submit")).toHaveLength(0)
+  })
+
+  test("an empty final transcript falls back to the words heard live", async () => {
+    const h = appHarness({
+      directory: tempDir("mendcode-voice-"),
+      reply: (command: CommandInput) => {
+        if (command.type !== "voice.control") return undefined
+        if (command.action === "stop") return asReply({ ok: true, result: { text: "", seconds: 9 } })
+        return asReply({ ok: true, result: { enabled: true, recording: command.action === "start", ready: true, provider: "local", model: "macOS on-device", maxSeconds: 60 } })
+      },
+    })
+    apps.push(h)
+    await h.type("/voice\r")
+    await h.app.onGlobal({ type: "voice.live", gseq: 1, at: 1, text: "keep this part" })
+    await h.type("/voice\r")
+    await Bun.sleep(5)
+    h.app.render()
+    expect(h.app.editor.text).toBe("keep this part")
+    expect(screen(h)).not.toContain("nothing heard")
+  })
+
   test("on and off change the setting; on warns when the daemon cannot record yet", async () => {
     const ready = app()
     await ready.type("/voice on\r")
@@ -103,10 +184,15 @@ describe("/voice", () => {
     expect(screen(h)).toContain("install sox")
     await h.type("/voice language es\r")
     expect(h.sentOf("settings.set").at(-1)).toMatchObject({ patch: { voice: { enabled: true, language: "es" } } })
+    await h.type("/voice language es en\r")
+    expect(h.sentOf("settings.set").at(-1)).toMatchObject({ patch: { voice: { language: "es,en" } } })
     await h.type("/voice language auto\r")
     expect(h.sentOf("settings.set").at(-1)).toEqual(expect.objectContaining({ patch: { voice: { enabled: true } } }))
+    const sets = h.sentOf("settings.set").length
     await h.type("/voice language spanish\r")
     expect(screen(h)).toContain("usage: /voice")
+    await h.type("/voice language es en fr\r")
+    expect(h.sentOf("settings.set").length).toBe(sets)
     await h.type("/voice off\r")
     expect(h.sentOf("settings.set").at(-1)).toMatchObject({ patch: { voice: { enabled: false } } })
     await h.type("/voice status\r")
@@ -131,6 +217,9 @@ describe("voice row", () => {
     expect(row).toMatch(/^● ▁{16} {2}0:07 {2}listening +\/voice or ctrl\+x v to stop · esc cancels$/)
     expect(row.length).toBe(100)
     expect(voiceRow({ voice: { phase: "transcribing", startedAt: 0, maxSeconds: 60, levels: [0.5] }, now: 1, dot: "●", width: 80 }).map((span) => span.text).join("")).toBe(`● ${"▁".repeat(15)}▅  finishing…`)
+    const starting = voiceRow({ voice: { phase: "starting", startedAt: 0, maxSeconds: 0, levels: [], held: true }, now: 1, dot: "●", width: 80 })
+    expect(starting.map((span) => span.text).join("")).toMatch(/^● ▁{16} {2}starting… wait to speak +esc cancels$/)
+    expect(starting[0]?.fg).toBe("warning")
   })
 
   test("bars follow the level with the newest on the right, the words heard show their end, and a held space says how it stops", () => {
@@ -169,11 +258,11 @@ describe("hold space to talk", () => {
   test("a held space takes back the spaces it typed, listens with live bars and words, and lets go into the prompt at the cursor", async () => {
     const { h, space } = holder()
     await h.type("fix")
+    // The first repeat asks whether dictation is ready, so the next one already starts it.
     await space(500)
     await space(450)
+    expect(voiceCalls(h)).toEqual([])
     await space(40)
-    await space(40)
-    // The first repeat run only asked whether dictation is ready; the next repeat starts it.
     expect(voiceCalls(h)).toEqual(["status"])
     await space(40)
     expect(voiceCalls(h)).toEqual(["status", "start"])

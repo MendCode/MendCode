@@ -1,9 +1,10 @@
 import type { Settings, VoiceReport, VoiceTranscript } from "@mendcode/protocol"
+import type { VoiceState } from "../../view/voice-row"
 import type { AppContext } from "./context"
 
 type VoiceSetting = NonNullable<Settings["voice"]>
 
-export const VOICE_USAGE = "usage: /voice [on | off | status | start | stop | cancel | language <code|auto>]"
+export const VOICE_USAGE = "usage: /voice [on | off | status | start | stop | cancel | language <code [code]|auto>]"
 
 /** Auto-repeated keys arrive this close together; a typed one rarely comes three times in a row this fast. */
 const REPEAT_MS = 150
@@ -44,14 +45,34 @@ export function createVoice(ctx: AppContext) {
   async function begin(held = false) {
     if (starting || state.voice) return
     starting = true
+    // The row shows at once while the microphone and the speech model start, so nothing is said before they listen.
+    const pending: VoiceState = { phase: "starting", startedAt: now(), maxSeconds: 0, levels: [], ...(held ? { held: true } : {}) }
+    state.voice = pending
+    requestFrame()
     try {
       const reply = await input.send({ type: "voice.control", action: "start" })
-      if (!reply.ok) { stopWhenStarted = false; fail(reply.error.message.replace(/^\[VOICE\]: /, "")); return }
+      // Esc while it started: the recording it opened is dropped.
+      if (state.voice !== pending) {
+        stopWhenStarted = false
+        if (reply.ok) void input.send({ type: "voice.control", action: "cancel" }).catch(() => {})
+        return
+      }
+      if (!reply.ok) {
+        stopWhenStarted = false
+        state.voice = undefined
+        fail(reply.error.message.replace(/^\[VOICE\]: /, ""))
+        return
+      }
       const { maxSeconds } = reply.result as unknown as VoiceReport
       state.voice = { phase: "recording", startedAt: now(), maxSeconds, levels: [], ...(held ? { held: true } : {}) }
       tick = setInterval(requestFrame, 1000)
       limit = setTimeout(() => void finish(), maxSeconds * 1000)
       requestFrame()
+    } catch (error) {
+      stopWhenStarted = false
+      if (state.voice === pending) state.voice = undefined
+      fail(error instanceof Error ? error.message : "could not start dictation")
+      return
     } finally { starting = false }
     if (stopWhenStarted) { stopWhenStarted = false; void finish() }
   }
@@ -82,7 +103,7 @@ export function createVoice(ctx: AppContext) {
     if (!asking) {
       asking = true
       void input.send({ type: "voice.control", action: "status" }).then((reply) => {
-        hold = { key, ready: reply.ok && (reply.result as unknown as VoiceReport).ready }
+        hold = { key, ready: reply.ok && (reply.result as unknown as VoiceReport | undefined)?.ready === true }
       }, () => { hold = { key, ready: false } }).finally(() => { asking = false })
     }
     return false
@@ -103,7 +124,10 @@ export function createVoice(ctx: AppContext) {
     const at = now()
     const gap = at - run.last
     run = gap > RUN_MS ? { count: 1, last: at, fast: 0 } : { count: run.count + 1, last: at, fast: gap <= REPEAT_MS ? run.fast + 1 : 0 }
-    if (run.fast < 2 || !holdReady()) return false
+    // Asked from the first repeat, a step before a hold starts, so the answer (and the daemon's helper build) is already in; a space
+    // typed by hand asks nothing.
+    const ready = run.fast >= 1 && holdReady()
+    if (run.fast < 2 || !ready) return false
     // Take back the spaces this hold already typed, as far as they are right before the cursor.
     const cursor = editor.cursorOffset
     const chars = Array.from(editor.text)
@@ -130,9 +154,18 @@ export function createVoice(ctx: AppContext) {
     if (mine !== epoch) return
     state.voice = undefined
     requestFrame()
-    if (!reply.ok) return fail(reply.error.message.replace(/^\[VOICE\]: /, ""))
-    const { text } = reply.result as unknown as VoiceTranscript
+    // What was already heard is never lost: when the transcript does not come back, the live words stay in the prompt as a draft.
+    const heard = current.text?.trim() ?? ""
+    if (!reply.ok) {
+      if (heard) place(heard)
+      return fail(`${reply.error.message.replace(/^\[VOICE\]: /, "")}${heard ? "; kept what was heard in the prompt" : ""}`)
+    }
+    const text = (reply.result as unknown as VoiceTranscript).text || heard
     if (!text) return say("nothing heard", "warning")
+    place(text)
+  }
+
+  function place(text: string) {
     const before = editor.text
     editor.insert(before && !/\s$/.test(before) ? ` ${text}` : text)
     requestFrame()
@@ -174,6 +207,7 @@ export function createVoice(ctx: AppContext) {
     const current: VoiceSetting = { ...state.settingsNow.voice }
     if (head === "" || head === "toggle") {
       if (state.voice?.phase === "recording") void finish()
+      else if (state.voice?.phase === "starting") stopWhenStarted = true
       else if (state.voice) say("still transcribing", "warning")
       else await begin()
       return true
@@ -181,6 +215,7 @@ export function createVoice(ctx: AppContext) {
     if (head === "start") { await begin(); return true }
     if (head === "stop") {
       if (state.voice?.phase === "recording") void finish()
+      else if (state.voice?.phase === "starting") stopWhenStarted = true
       else say("not recording", "warning")
       return true
     }
@@ -204,8 +239,9 @@ export function createVoice(ctx: AppContext) {
       return true
     }
     if (head === "language" && words[1]) {
-      const code = words[1].toLowerCase()
-      if (code !== "auto" && !/^[a-z]{2,3}$/.test(code)) { say(VOICE_USAGE, "warning"); return true }
+      // `es`, `es en` or `es,en`: two languages are heard at once on this Mac.
+      const code = words.slice(1).join(",").toLowerCase()
+      if (code !== "auto" && !/^[a-z]{2,3}(,[a-z]{2,3})?$/.test(code)) { say(VOICE_USAGE, "warning"); return true }
       const { language: _drop, ...rest } = current
       await apply(code === "auto" ? rest : { ...rest, language: code }, code === "auto" ? "voice language: auto-detect" : `voice language: ${code}`)
       return true

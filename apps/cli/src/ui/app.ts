@@ -740,8 +740,8 @@ export function createApp(input: AppInput) {
     requestFrame()
   }, (patch) => changeProfile(patch, { session: true }))
   const { askAside, openFetch, scrollAside, asideKey, loadAside } = createAside(ctx)
-  const { setupValues, setupChecks, openSetup, openSetupIfFirstRun, setupChoice, setupAction, onboardingAction, openIntro, finishIntro } = createSetup(ctx, { loadRecipes, loadPage: (...args) => loadPage(...args), applySettings: (...args) => applySettings(...args), changeProfile: (...args) => changeProfile(...args) })
-  const { openConnect, connectAction, loadProviders, providersAction } = createProviders(ctx, { takeModels, loadPage: (...args) => loadPage(...args), runSlash: (...args) => runSlash(...args) })
+  const { setupValues, setupChecks, openSetup, openSetupIfFirstRun, setupChoice, setupAction, onboardingAction, returnFromConnect, openIntro, finishIntro } = createSetup(ctx, { loadRecipes, loadPage: (...args) => loadPage(...args), applySettings: (...args) => applySettings(...args), changeProfile: (...args) => changeProfile(...args), openConnect: (...args) => openConnect(...args) })
+  const { openConnect, connectAction, loadProviders, providersAction } = createProviders(ctx, { takeModels, loadPage: (...args) => loadPage(...args), runSlash: (...args) => runSlash(...args), returnFromConnect })
   /** Effective keys: the defaults, `keybindings.json`, then `api.key` of extensions. */
   appState.bindings = input.bindings ?? (keybindingFile.entries.length > 0 ? buildBindings({ file: keybindingFile.entries }).bindings : DEFAULT_BINDINGS)
   appState.extPageId = undefined!

@@ -18,7 +18,7 @@ const FIELDS: Record<ViewSlot, string> = {
   topbar: "path, branch, title, diff, context { tokens, limit }, files, navigation",
   "sessions.sidebar": "sessions [{ sessionId, title, state, queued, updatedAt }], current, selected, focused",
   notice: "kind: toast { variant, title, message } | limit { view, chips } | queue { previews, delivery, held, paused }",
-  footer: "agent, model, effort, provider, permissionLabel, counters, goal, notice, connection, extraRows",
+  footer: "agent, model, effort, fast, provider, permissionLabel, counters, segments, detail, goal, notice, connection, extraRows",
   home: "root, sessions, look, tip, footer, spinner, bare",
   "panel.widget": "widget (the widget id), options, body (the built-in rows)",
   "file.viewer": "variant (slot | page), path, name, language, kind, lines, top, rows [{ line, text, spans, mark, selected, hit }], selection, search, focused, panel (actions: close | switch | open | ask | copy | line)",

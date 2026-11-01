@@ -7,7 +7,6 @@ import { renderFooter } from "./footer"
 import { PLACEHOLDER_EXAMPLES, promptFrame, promptRow, renderStatusRow, withRightBlock } from "./prompt-chrome"
 import { fit } from "./deck"
 import { PLAN_TITLE, approvalOptions, renderApprovalPanel, type PanelRequest } from "./request-panel"
-import { mendChatLines } from "./mend-sprite"
 import { mascotRows } from "./mascot"
 import { splitDiffAt } from "./tool-card"
 import { textWidth } from "./wrap"
@@ -98,10 +97,12 @@ export function samplePrompt({ width, glyphs, look }: { width: number; glyphs: G
   return [...frame.top, frame.row(promptRow({ text: "", first: true, rich: true, glyphs, placeholder: PLACEHOLDER_EXAMPLES[0]! })), ...frame.bottom].map((line) => fit(line, width))
 }
 
-/** The pet that stands on the prompt: Mend in half blocks, or its text art where glyphs are ASCII. Other pets are pictures the sample does not draw. */
-function samplePet(look: SampleLook | undefined, glyphs: Glyphs): Line[] {
-  if (look?.pet !== "mend") return []
-  return glyphs.rule === "-" ? mascotRows("idle") : mendChatLines("idle")
+/**
+ * The pet that stands on the prompt, in its compact three-row form: the chat's seven-row Mend would cover the card and most
+ * of a short sample. Other pets are pictures the sample does not draw.
+ */
+function samplePet(look: SampleLook | undefined): Line[] {
+  return look?.pet === "mend" ? mascotRows("idle") : []
 }
 
 /** The status row (where the model shows) and the footer (where the mode shows), as the chat draws them under the prompt. */
@@ -114,7 +115,7 @@ export function sampleBottom({ model, permission, width, glyphs, now }: { model:
   return [status, footer].map((line) => fit(line, width))
 }
 
-/** The sample as `height` rows: chat on top (its newest rows when it must be cut), the card, then the prompt (with the pet on it) and footer. */
+/** The sample as `height` rows: chat on top (its newest rows when it must be cut), the card on the prompt (with the pet on it), then the footer; blank rows between the chat and the card, as in the chat. */
 export function onboardingSample(input: SampleInput): Line[] {
   const { width, height, glyphs, now, look } = input
   const parts = new Set<SamplePart>(input.parts ?? ["chat", "approval", "prompt", "footer"])
@@ -125,9 +126,8 @@ export function onboardingSample(input: SampleInput): Line[] {
   const chat = parts.has("chat") ? sampleChat({ tier: input.tier, width, glyphs, now, ...(look ? { look } : {}), ...(input.chatWidth ? { chatWidth: input.chatWidth } : {}) }) : []
   const above = [...chat, ...card]
   const shown = card.length >= room ? card.slice(0, room) : above.slice(Math.max(0, above.length - room))
-  const rows = [...shown]
-  if (input.pad !== false) while (rows.length < room) rows.push(fit([], width))
-  const pet = prompt.length ? samplePet(look, glyphs) : []
+  const rows = input.pad !== false && above.length < room ? [...chat, ...Array.from({ length: room - above.length }, () => fit([], width)), ...card] : [...shown]
+  const pet = prompt.length ? samplePet(look) : []
   while (rows.length < pet.length && rows.length + bottom.length < height) rows.unshift(fit([], width))
   // It stands on the prompt as in the chat, over the right end of the rows above; like the chat, it is left out where it does not fit whole.
   if (pet.length && rows.length >= pet.length) {
@@ -138,9 +138,15 @@ export function onboardingSample(input: SampleInput): Line[] {
   return [...rows, ...bottom].slice(0, height)
 }
 
+/** What a tier gives, in a few words. */
+export const TIER_WHAT: Readonly<Record<Tier, string>> = {
+  minimalist: "bare chat, small prompt",
+  balanced: "tool cards, code graph, sub-agents",
+  full: "everything: MCP, pets, voice, wide chat",
+}
+
 /** One line on what a tier shows and what it costs in context, from the same numbers the tier test holds it to. */
 export function tierLine(tier: Tier): string {
   const tokens = TIER_BASELINE_TOKENS[tier]
-  const what = tier === "minimalist" ? "bare chat, small prompt" : tier === "balanced" ? "tool cards, code graph, sub-agents" : "everything: MCP, pets, voice, wide chat"
-  return `${what} · ~${(Math.round(tokens / 100) / 10).toFixed(1)}k tokens of context per request`
+  return `${TIER_WHAT[tier]} · ~${(Math.round(tokens / 100) / 10).toFixed(1)}k tokens of context per request`
 }

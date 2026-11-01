@@ -85,9 +85,55 @@ no model, and the pull request reviewer keeps working when the daemon starts wit
 - PR review: an opt-in offline fallback (`routing.offline_fallback` in `.mendcode/reviewers.yaml`) lets a global reviewer take a
   PR a personal reviewer has not claimed or reviewed within the set minutes. The waiting job names the reviewer and the time, and
   a personal reviewer that comes back after the fallback posted posts nothing. Without the key nothing changes.
+- Setup: sign in from the page. Up from the Model row reaches the ChatGPT login and API keys; Enter runs `/connect chatgpt` or
+  opens `/connect`, and closing it (or `m` after signing in) comes back to setup, checked again, with the new models on the Model
+  row. Ready now groups MendCode's own engine (ChatGPT login, API keys) apart from the external harnesses that keep their own login
+  (Claude Code, Codex, pi). Nothing is saved but what `/connect` saves itself.
+- Setup: Space on the Model row lists every model found, grouped by who runs it: MendCode's own engine (the ChatGPT subscription,
+  then each provider you have a key for), then the Claude Code, Codex, pi and ACP harnesses. Enter picks one; the list also holds
+  `Sign in to ChatGPT` and `Add an API-key provider`, which run `/connect` and come back to the list with the new models in it. A
+  harness found without models says what lists them (`claude auth login`, `/tier thread_mcp on codex`). The Model row names who
+  runs the model (`Opus · Claude Code`).
+- The model can read another session's conversation in one call: `sessions read=<session id>` returns its messages, oldest first,
+  with one line per tool call and no tool output or reasoning, in pages of up to 40,000 bytes (`more: cursor=…` asks for the next).
+  An exact id may name a session of any project of this MendCode; the list stays this project's. Before, a model asked to read a
+  chat by its id searched `~/.claude` and MendCode's database for minutes ([peers](docs/peers.md#read-one-sessions-conversation)).
 
 ### Changed
 
+- The start screen's title is MendCode's infinity logo, drawn in half blocks (plain ASCII under `glyphs ascii`) with the name
+  under it, in place of the pixel MENDCODE. A logo text or font of your own still draws those letters; a small terminal shows
+  the name.
+- Setup uses the whole terminal: the choices grow to 64 columns, the preview takes the rest of the width and the full height
+  with its prompt at the foot, as in the chat, and the Enter line stands at the bottom. The Tier row says what its value gives
+  (`tool cards, code graph, sub-agents`) even unfocused, and lists the tiers when focused. Mend in the preview is its compact
+  three-row form instead of the chat's seven-row sprite, which covered the card.
+- Computer use: `tools.batch({revision, steps})` in `computer_code` runs up to 16 actions on one observation in one call,
+  without observing between them, the way agent-desktop batches commands. Every step is checked before the first is sent,
+  each node is re-resolved right before its step, the first failing step stops the batch, and each step reports its outcome,
+  delivery and whether a retry is safe ([batches](docs/computer.md#batches)).
+
+### Changed
+
+- Computer use takes agent-desktop's cursor (Apache-2.0, ported to Swift): a white dart with a dark rim and a pill naming the
+  action, a click ripple, an outline around the element acted on and a trail for drags. It moves like a hand (overshoot and
+  correction, a slight bow) and a move takes 90–320 ms instead of 280–750 ms; it rests after six idle seconds.
+- Computer use observes faster: the helper reads each node in one accessibility call instead of one per attribute, measured
+  6–7 times faster on the same windows (Ghostty 239 nodes, about 500 ms to about 65 ms).
+- Computer use: a failed action says whether its input can have reached the app. A refusal before anything was sent ends with
+  "not delivered" and is audited `failed`; a failure after an effect began ends with "delivery unknown" and stays `unknown`
+  (before, every failure inside the helper was `unknown`).
+
+- The row under the prompt reads left to right in groups instead of pushing everything to the right edge:
+  `Build · GPT-6-Luna · high · fast · native │ ↻ 1 loop │ ~12 turns to compact`. Balanced names the reasoning effort and `/fast`
+  (`fast n/a` when the model never gets it) beside the model; the full view adds a second row with the code graph, the session's
+  cache share (from the second call) and the quota windows, shown only when they have something to say and never asking the daemon
+  for anything new. Minimalist has no such row and gains nothing. Narrow terminals take the compact form of a segment first, then drop
+  the least important parts; the agent and a permission that acts without asking always stay. Screen-reader mode uses one separator
+  and plain words, ASCII chrome a plain `|`. Every footer segment declares where it shows by view
+  ([layout](docs/layout.md#footer-by-tier)); `/footer reset` now returns to the view's own list.
+- Reasoning effort is on by default in the footer (`showEffort`), and `/tier balanced|full` turns it on. A terminal profile saved
+  before keeps its value: Customize > Prompt & footer > Reasoning effort, or `/tier balanced` again, shows it.
 - Release titles name the channel and version ("MendCode v0.0.2 Beta 4", "MendCode Nightly — 2026-10-29 · Build 2") instead of
   the bare tag, and the notes list what changed since the previous release of the same channel, with install and verify steps
   and the full changelog folded away. Tags, assets and the updater are unchanged.
@@ -128,6 +174,50 @@ no model, and the pull request reviewer keeps working when the daemon starts wit
 
 ### Fixed
 
+- `mendcode attach <session id>` opens that session in the terminal again; it stopped at `attach needs an HTTP URL` because the
+  remote attach took every `attach` first. An HTTP URL still attaches to a server, and a bare `attach` names both forms.
+- On-device dictation with no language set no longer hears with the model of the Mac's region: English (Panama) picked Apple's
+  Irish English model and turned Spanish into nonsense. It now listens in the first two languages of Language & Region at once
+  (English and Spanish on a bilingual Mac) and keeps the transcript the models are surer of. `/voice language` now lists every
+  language the on-device model hears by name, and takes one (`/voice language es`) or two to hear at once (`/voice language es en`).
+- While dictating on this Mac the words show about a second after they are said, not only at a pause or when the recording ends,
+  and the row shows the language actually spoken: with English and Spanish listening, Spanish speech no longer shows the English
+  model's misspelled guess until the end. The transcript placed in the prompt is unchanged.
+- Dictation says when to start talking: holding space shows `starting… wait to speak` at once, until the microphone listens, and
+  the on-device helper is built as soon as the key repeats instead of after the recording was asked for. If the transcript does not come
+  back, the words already heard stay in the prompt as a draft rather than being lost.
+- Setup's default model offered only the first two models of each source (Fable and Haiku, or Opus and Fable, of Claude Code's
+  four), one per API-key provider and none of the Codex harness's: the Model row now steps through every model found. ACP agents'
+  models are no longer listed as the ChatGPT subscription's, and the Codex harness's models, which run on the Codex CLI's own
+  login, are offered with `ownLogins` too.
+- The pixel wordmark's N draws its whole diagonal; it stopped half way and read as a mirrored И.
+- A Claude Code session asked for a sub-agent on another model (GPT-6.1 Terra, a Codex model) no longer answers that the model does
+  not exist because its Agent tool lists only Claude models. With the thread bridge on (full tier, `/tier thread_mcp on claude`), the
+  bridge tells the model that `delegate_task` runs MendCode's models and names them by engine (ten per engine, the harness's own left
+  out); Codex gets the same in its developer instructions. Without the bridge, MendCode's tools say in one line how it is turned on.
+- A sub-agent (`task`, `delegate_task`) takes a model by the name `mendcode models` prints for it (`chatgpt/gpt-6.1-terra`,
+  `claude/claude-opus`, `codex/codex:gpt-6-sol`), and so do `session create --model` and `run --model` for Claude Code and Codex
+  models; they answered `unknown model`.
+- A sub-agent Claude Code starts on another model (`Agent` with `model: "haiku"` from an Opus session) shows that model on its
+  Agents strip row and thread header from the start. Before, the row said the session's model (Opus) until the sub-agent's first
+  message arrived; a call that names no model now shows none until then.
+- A finished turn no longer spends a hidden model call on a session summary. Every turn of a top-level native session sent up to
+  the last 24,000 characters of the conversation (about 6k tokens) to the `summary` role, which falls back to the session's own
+  model when no `small` model is set, and nothing on screen showed the result. The summary is now written only when something asks
+  to show it, `/fanout compare` for its branches and `mendcode session inspect ID --summary` (`session_meta` tier, local only), once
+  per session until it moves on; minimalist never writes one. `agent.summary` keeps its prompt, model and `disable`.
+- Session titles and summaries go through the budget like every other daemon helper: a reached `stopUsd` blocks them, an
+  expensive model needing confirmation is not called unattended, and their spend counts in the ledger. They skipped it before.
+- Changing the default model while a session runs no longer breaks that session. Setting Claude Code's Opus as the default from a
+  ChatGPT session (through the assistant, `/settings` or `/model`) sent `claude/claude-opus` to ChatGPT on the session's next call,
+  which answered `400 model_not_found`. Now the running turn finishes on its model; a session that already ran keeps its engine
+  (it takes the default it followed as its own model) and only new sessions, or ones that have not run yet, start on Claude Code. A
+  default on the same engine (another ChatGPT model, another effort) is still followed. `/model` to another engine mid-turn applies
+  from the next turn, and no model another engine runs (Claude Code, an ACP agent) is ever sent to a provider: a turn that would
+  fails at once, saying where the model runs.
+- The references `mendcode models` prints (`claude/claude-opus`, `chatgpt/gpt-6.1-terra`) work wherever a model id is read: a role,
+  `/model`, `--model`. The assistant's `mendcode_settings` refuses a model role no catalog lists (naming the ids it was likely meant
+  to be) or one its role cannot use, as `/model` does, and says after a change that the new main model is for new sessions.
 - A daemon started by a terminal in a tuios pane no longer carries that pane's identity and token (`TUIOS_PANE_ID`,
   `TUIOS_PANE_TOKEN` and the rest), so the commands of every session stop speaking to tuios as that one pane. A terminal that hosts
   the daemon in its own process keeps them: it is that pane.

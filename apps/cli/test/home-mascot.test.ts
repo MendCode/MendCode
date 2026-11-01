@@ -18,6 +18,7 @@ import { setTheme, type Line } from "../src/ui/theme"
 import { customizePageKey, CUSTOMIZE_ROWS } from "../src/view/customize-page"
 import { renderHome, type HomeMascot, type HomeMascotBox } from "../src/view/home"
 import { DEFAULT_TUI_PROFILE, normalizeTuiProfile, readTuiProfile, tuiProfilePath, writeTuiProfile, type TuiProfile } from "../src/view/tui-profile"
+import { LOGO_MARK } from "../src/view/logo-mark"
 import { mendSpriteLines } from "../src/view/mend-sprite"
 import { lineWidth } from "../src/view/wrap"
 import { hasHalfBlocks, mascotScene, petStore, type PetStore } from "./mascot-scene"
@@ -141,7 +142,7 @@ describe("the start screen with a pet mascot", () => {
   test("the title beside or above the picture is tinted; alone it keeps the text color", () => {
     const tinted = home(100, 26).lines.find((line) => plain(line).includes(TITLE))!
     expect(tinted.some((span) => span.fgHex === "#22c55e")).toBe(true)
-    const alone = renderHome({ width: 100, height: 26, root: "~/code", look: { logoKind: "wordmark", homeMascot: "user:aiko" }, mascot: mascot() }).find((line) => plain(line).includes(TITLE))!
+    const alone = renderHome({ width: 100, height: 26, root: "~/code", look: { logoKind: "wordmark", homeMascot: "user:aiko" }, mascot: mascot() }).find((line) => plain(line).includes(LOGO_MARK[0]!))!
     expect(alone.every((span) => span.fgHex === undefined)).toBe(true)
     const spans = gradientSpans("█".repeat(48), 48, "#22c55e", "#38bdf8")
     expect([spans.length, spans[0]!.fgHex, spans.at(-1)!.fgHex]).toEqual([8, "#22c55e", "#38bdf8"])

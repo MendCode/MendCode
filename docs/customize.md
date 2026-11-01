@@ -129,7 +129,7 @@ bottom sheets, and hide when there is no free space.
 | Terminal | Sidebar mode/side, built-in and loaded file themes, bell, image protocol, pet and its size, Usage clock, reset, activity sound |
 | Compaction | `auto|minimal|cockpit|quiet` panel, stage progress, follow-up scratchpad; `/compaction` reopens memory and the saved note |
 
-The four fonts are `mendcode` (v1 pixel wordmark with block-only crossbars), `compact` (3 rows), `solid` and `outline` (5 rows). Each covers A–Z, 0–9 and ASCII punctuation. Retired `small`, `standard`, `shadow`, `classic`, `opencode`, and the retired staircase `slant` profiles migrate atomically to `mendcode`, preserving the other valid choices.
+The wordmark left as shipped (Logo kind `wordmark`, text `MENDCODE`, font `mendcode`) is MendCode's logo: the website's infinity mark in 24 x 6 cells of half blocks, plain ASCII under `glyphs ascii`, with the product name centered under it; a terminal too small for it shows the plain name. Any other text or font draws those letters, and beside a mascot (`both`) the title stays letters. The four fonts are `mendcode` (v1 pixel wordmark with block-only crossbars), `compact` (3 rows), `solid` and `outline` (5 rows). Each covers A–Z, 0–9 and ASCII punctuation. Retired `small`, `standard`, `shadow`, `classic`, `opencode`, and the retired staircase `slant` profiles migrate atomically to `mendcode`, preserving the other valid choices.
 
 Ctrl+P → **Home welcome mode** opens the Centered/Split picker. The palette also links to identity, title text/font, custom ASCII and the split panel. Ctrl+S opens sessions on an empty home; its queue behavior during chat is unchanged. Agent View lists the waiting, looping and working sessions of this project and the folders inside it (another project's sessions show on that project's home); opened in the user's home folder it lists every project, as v1 does. Sessions that already run or wait for input in other terminals are there from the start, and its spinners and clocks move while one works. Under Completed, as in v1, come the three most recently finished conversations of the last 30 days (not archived, not sub-agents), with how long ago each ended. Down selects (up stays the prompt's history until a row is selected), Enter opens, Esc clears. With no session at all the empty state is one line, "No sessions yet". Split home has one full-width bordered hero with identity on the left and the selected panel on the right. It falls back to centered at short/narrow sizes; oversized art falls back to the product name. Density changes home spacing without scaling art.
 
@@ -324,7 +324,7 @@ Messages default to `quiet`: a full-width subtle user tint with `›`, an assist
 
 The `full` renderer has a Markdown group in `/customize` with a live preview: `Table style` (`auto|box|rules|grid|minimal`), `Heading style` (`auto|banner|bold|underline|uppercase`), `Copy hints` (`markdownCopyHints`: `auto|code|all|off`), `Right-to-left` (on by default) and `Markdown colors`, a JSON object that sets single slots such as `{"mdHeading1":"#ff8800","mdRule":"#444444"}` over the active theme (all 28 slots are listed in `docs/design/markdown-parity.md`; theme files may set the same names under `colors`). `auto` means box tables, underlined headings and copy hints on code, tables and diagrams in the full view, and bold headings with hints on code only in the balanced view; the minimal view and the `markdown` and `plain` renderers keep the classic look and have no hints. Code blocks keep a header row with `copy`; a boxed table shows `copy` on its own top border and a diagram shows `art  copy` beside its first row (nothing when there is no room, as for narrow, `rules`, `minimal` and stacked tables). Lists and quotes draw no header or rail beyond their own bullets and bar. Click a visible `copy`, or press `ctrl+x Y` (`block.copy`) to copy any block, lists and quotes included, nearest the middle of the screen; a mouse selection also copies them as usual. The terminal theme keeps its own palette and ignores `Markdown colors`.
 
-Seven more footer segments are opt-in through `/footer +id` (none is in any default order): `cache` (share of prompt tokens read from the cache over the calls this terminal has seen), `tokens` (`in`, `out`, cache read `cr` and write `cw` totals), `effort`, `jobs` (this session's running background shells and engine tasks; the chat already names them in the row over the prompt, so the built-in leading count is drawn only on other pages), `sandbox` (the configured mode, a setting and not proof of enforcement), `vim` (mode label) and `update` (a newer release was announced). Totals cover the loaded history window plus live events.
+Seven more footer segments are placed through `/footer +id` (only `cache` is in a default order, the full view's: [layout.md](layout.md#footer-by-tier)): `cache` (share of prompt tokens read from the cache over the calls this terminal has seen), `tokens` (`in`, `out`, cache read `cr` and write `cw` totals), `effort` (drawn beside the model, as `showEffort` does), `jobs` (this session's running background shells and engine tasks; the chat already names them in the row over the prompt, so the built-in leading count is drawn only on other pages), `sandbox` (the configured mode, a setting and not proof of enforcement), `vim` (mode label) and `update` (a newer release was announced). Totals cover the loaded history window plus live events.
 
 Three more telemetry segments read the model calls this terminal has seen: `ttft` (first-token time of the last call that reported one), `tps` (output tokens per second after the first token) and `spend` (estimated session cost; nothing when no call had a known price, `<$0.01` under a cent). `/footer stats` sets the telemetry order `state tokens cache spend ttft tps notice`. When the footer overflows, the lowest ranked segment goes first (telemetry, then quota and today, then branch and model); `state`, `notice`, the goal and the context are the last to go.
 
@@ -390,20 +390,21 @@ amber at 3 turns or fewer). Where each part can be placed:
 
 | Part | Shows | Footer (`/footer +id`) | Activity status (`/activity +id`) | Top bar (`topbarStats`) | Sidebar `stats` card |
 |---|---|---|---|---|---|
-| `cache` | session cache share | on in the full view | yes | yes | yes |
+| `cache` | session cache share | the full view's second row, from the second call | yes | yes | yes |
 | `hit` | last call's cache share | opt-in | yes | yes | yes |
 | `ctx` | context against the threshold | opt-in | yes | yes | yes |
-| `tokens` | prompt, output, cache reads and writes | on in the full view | this turn's numbers | yes | yes |
+| `tokens` | prompt, output, cache reads and writes | opt-in | this turn's numbers | yes | yes |
 | `think` | reasoning tokens | opt-in | yes | yes | yes |
 | `calls` | model calls | opt-in | yes | yes | yes |
-| `spend` | estimated cost | on in the full view | yes | yes | yes |
-| `tps` | output speed | on in the full view | this turn's numbers | yes | yes |
-| `ttft` | time to the first token | on in the full view | yes | yes | yes |
-| `effort` | reasoning effort | on in the full view | yes | yes | yes |
+| `spend` | estimated cost | opt-in | yes | yes | yes |
+| `tps` | output speed | opt-in | this turn's numbers | yes | yes |
+| `ttft` | time to the first token | opt-in | yes | yes | yes |
+| `effort` | reasoning effort | beside the model (`showEffort`, on by default) | yes | yes | yes |
 | `forecast` | turns to compaction | follows the `forecast` tier feature | yes | yes | yes |
 
-- **Footer**: "on in the full view" parts were already part of that view's footer; `ctx`, `hit`, `think` and `calls` are new and opt-in there. The balanced footer carries none of them. The cache share would fit at 60 columns (about nine), but the first call of every
-  session is cold, so a default `cache 0%` in amber after the first message would be noise; add it with `/footer +cache`.
+- **Footer**: each segment's place by view is in [layout.md](layout.md#footer-by-tier). The balanced footer carries the forecast and
+  none of the others. The full view puts the session's cache share on its second row from the second call: the first call of every
+  session is cold, so `cache 0%` in amber after the first message would be noise. `/footer +cache` places it anywhere, at once.
 - **Top bar** (`topbarStats`, Session chrome, a comma list such as `cache,ctx`, empty by default): drawn at the right of the bar and only
   when it fits after the path; the stats give way first.
 - **Activity status**: add the names to `activityParts` (see above).

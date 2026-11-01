@@ -71,8 +71,11 @@ export type EngineEvent =
   | { type: "retrying"; attempt: number; delayMs: number; message: string; offline?: boolean }
 
 export type TurnInput = {
-  /** Daemon-owned, process-only MCP configuration. Never accepted from a protocol client or persisted. */
-  externalMcp?: { args: string[]; servers?: Array<{ type: "http"; name: string; url: string; headers: Array<{ name: string; value: string }> }>; cwd: string; scrub(text: string): string; waiting?(): boolean; stream?(): { push(text: string): string; flush(): string } } | undefined
+  /**
+   * Daemon-owned, process-only MCP configuration. Never accepted from a protocol client or persisted. `instructions`: the server's
+   * MCP instructions, for an engine whose program keeps them out of its model's prompt (Codex).
+   */
+  externalMcp?: { args: string[]; servers?: Array<{ type: "http"; name: string; url: string; headers: Array<{ name: string; value: string }> }>; instructions?: string; cwd: string; scrub(text: string): string; waiting?(): boolean; stream?(): { push(text: string): string; flush(): string } } | undefined
   sessionId: SessionId
   turnId: TurnId
   text: string

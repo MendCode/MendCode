@@ -105,3 +105,16 @@ test("a native session's turn is not a turn the bridge serves", async () => {
   expect(reply.result.isError).toBe(true)
   expect(h.hostCalls).toEqual([])
 })
+
+test("a Claude Code session without the thread bridge is told how sub-agents on MendCode's other models are turned on; with the bridge it is not", async () => {
+  const h = await boot()
+  await h.client.send({ type: "settings.set", patch: { tier: "balanced" } })
+  const session = await h.create("claude-sonnet")
+  const told = async () => (await h.rpc(session, "initialize", { protocolVersion: "2025-06-18" })).result.instructions as string
+  expect(await told()).toContain("full tier and /tier thread_mcp on claude")
+  await h.client.send({ type: "settings.set", patch: { tier: "full" } })
+  expect(await told()).toContain("/tier thread_mcp on claude")
+  // The bridge's own instructions then name delegate_task and the models.
+  await h.client.send({ type: "settings.set", patch: { threadMcp: { claude: true } } })
+  expect(await told()).not.toContain("thread_mcp")
+})

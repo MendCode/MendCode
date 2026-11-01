@@ -3,7 +3,8 @@ import { lineWidth } from "./deck"
 import { truncateEnd } from "./wrap"
 
 export type VoiceState = {
-  phase: "recording" | "transcribing"
+  /** `starting`: the microphone and the speech model are opening; what is said now is not heard yet. */
+  phase: "starting" | "recording" | "transcribing"
   startedAt: number
   maxSeconds: number
   /** Microphone levels 0..1, the newest last (on-device dictation reports them live). */
@@ -37,11 +38,13 @@ export function levelBars(levels: readonly number[], count = VOICE_BARS, ascii =
  * of them when long) and, at the right, how it stops. Without live levels (an upload provider) the bars stay flat.
  */
 export function voiceRow({ voice, now, dot, width, ascii = false }: { voice: VoiceState; now: number; dot: string; width: number; ascii?: boolean }): Line {
-  const hint = voice.phase === "transcribing" ? "" : voice.held ? "release space to stop · esc cancels" : "/voice or ctrl+x v to stop · esc cancels"
+  const hint = voice.phase === "transcribing" ? "" : voice.phase === "starting" ? "esc cancels" : voice.held ? "release space to stop · esc cancels" : "/voice or ctrl+x v to stop · esc cancels"
   // On a narrow row the words heard win over the keys.
   const keys = voice.text?.trim() && width - lineWidth([{ text: hint }]) < 50 ? "" : hint
   const head: Line = voice.phase === "transcribing"
     ? [{ text: dot, fg: "muted" }, { text: ` ${levelBars(voice.levels, VOICE_BARS, ascii)}`, fg: "muted" }, { text: "  finishing…", fg: "muted" }]
+    : voice.phase === "starting"
+    ? [{ text: dot, fg: "warning", bold: true }, { text: ` ${levelBars([], VOICE_BARS, ascii)}`, fg: "muted" }, { text: "  starting… wait to speak", fg: "warning" }]
     : [
         { text: dot, fg: "error", bold: true },
         { text: ` ${levelBars(voice.levels, VOICE_BARS, ascii)}`, fg: "primary" },

@@ -3,6 +3,7 @@ import { createIdFactory, TUI_DEFAULTS, type SessionEvent } from "@mendcode/prot
 import { createApp } from "../src/ui/app"
 import { glyphs, type Line } from "../src/ui/theme"
 import { renderHome, type HomeSession } from "../src/view/home"
+import { LOGO_MARK } from "../src/view/logo-mark"
 import { renderSessionSidebar } from "../src/view/sidebar"
 import { createTranscript } from "../src/view/transcript"
 import { DEFAULT_TUI_PROFILE, normalizeTuiProfile, type TuiProfile } from "../src/view/tui-profile"
@@ -56,7 +57,7 @@ describe("profile keys for the parts of the screen that had none", () => {
     const off = renderHome({ ...base, look: { layout: "centered", homeHeader: false, homePanel: false } }).map(plain)
     expect(off.join("\n")).not.toContain("~/Code/notes")
     expect(off.join("\n")).not.toContain("Port palette")
-    expect(off.join("\n")).toContain("█▄ ▄█")
+    expect(off.join("\n")).toContain(LOGO_MARK[0]!)
     // The split welcome without its panel keeps the identity in one column and still names the folder inside its box.
     const split = renderHome({ ...base, look: { layout: "split", homePanel: false } }).map(plain)
     expect(split.join("\n")).not.toContain("Port palette")

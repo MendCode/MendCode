@@ -36,11 +36,22 @@ test("attach forwards remote --dir unchanged, aliases, fork/continue/session/dia
   expect(parseRemoteFlags(["--password", "private-token", "attach", "http://127.0.0.1:4096"]).remote?.password).toBe("private-token")
 })
 
+test("attach with a session id (no URL) reaches the local attach: the remote parser leaves it alone", () => {
+  const session = ids("session")
+  const parsed = parseRemoteFlags(["attach", session])
+  expect(parsed.remote).toBeUndefined()
+  expect(parseStartup(parsed.args)).toMatchObject({ kind: "tui", session, words: [] })
+  expect(() => parseStartup(parseRemoteFlags(["attach"]).args)).toThrow("attach needs one session id")
+  // A URL of another scheme is still a remote attach, and refused as one.
+  expect(() => parseRemoteFlags(["attach", "ftp://server.example"])).toThrow("attach needs an HTTP URL")
+})
+
 test("HTTP URLs never accept inline secrets, insecure hosts, paths or transport changes", () => {
   for (const url of ["http://user:private-secret@localhost:4096", "http://server.example:4096", "http://localhost:4096/path", "http://localhost:4096?token=private-secret", "http://localhost:4096#private-secret"]) {
     try { parseRemoteFlags(["attach", url]); throw new Error("accepted") } catch (error) { expect(String(error)).not.toContain("private-secret"); expect(String(error)).not.toContain("accepted") }
   }
-  expect(() => parseRemoteFlags(["attach"])).toThrow("HTTP URL")
+  // A bare `attach` reaches startup, which names both forms.
+  expect(() => parseStartup(parseRemoteFlags(["attach"]).args)).toThrow("attach needs one session id or an HTTP URL")
   expect(() => parseRemoteFlags(["attach", "localhost:4096"])).toThrow("HTTP URL")
   expect(() => parseRemoteFlags(["attach", "http://localhost:0"])).toThrow("nonzero port")
   expect(() => parseRemoteFlags(["attach", "http://localhost:4096", "--engine", "faux"])).toThrow("local daemon")

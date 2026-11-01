@@ -2,14 +2,33 @@ import { randomUUID } from "node:crypto"
 import { z } from "zod"
 import { ComputerSessionInput, ComputerObserveInput, ComputerCodeInput, ComputerNode, ComputerActionInput, type ComputerTarget, type ComputerObservation, type ComputerSessionReport, type SessionId } from "@mendcode/protocol"
 import { fail, type ComputerActivation, type ToolResult } from "@mendcode/tools"
-import type { ComputerAccessibility, SemanticAction } from "./computer-accessibility"
+import { NotDelivered, type BatchOutcome, type ComputerAccessibility, type SemanticAction } from "./computer-accessibility"
 import { runComputerProgram } from "./computer-program"
 
 type Audit = { action: string; revision: number; nodeID: string; result: "dispatched" | "failed" | "unknown"; at: number }
 type State = { id: string; sessionId: SessionId; sourceId: string; target: ComputerTarget; mode: "observe" | "control"; createdAt: number; expiresAt: number; lastActiveAt: number; revision: number; stopped: boolean; busy: boolean; program: boolean; abort: AbortController; observation?: ComputerObservation | undefined; audit: Audit[] }
 const same = (a: ComputerTarget, b: ComputerTarget) => a.pid === b.pid && a.bundleID === b.bundleID
-const mutations = new Set(["press", "setValue", "click", "typeText", "key", "scroll", "drag"])
+const MUTATIONS = ["press", "setValue", "click", "typeText", "key", "scroll", "drag"] as const
+const mutations = new Set<string>(MUTATIONS)
 const fields: Record<string, string[]> = { press: [], setValue: ["value"], click: ["button", "count"], typeText: ["value"], key: ["key", "modifiers"], scroll: ["direction", "amount"], drag: ["toNodeID"] }
+/** A batch: up to 16 steps, each an action name and that action's fields, all on the observation `revision` names. */
+const BatchInput = z.strictObject({ revision: z.number().int().positive(), steps: z.array(z.object({ action: z.enum(MUTATIONS) }).catchall(z.unknown())).min(1).max(16) })
+/** The helper's request line is bounded at 128 KiB; a batch leaves room for its envelope. */
+const BATCH_BYTES = 120_000
+/** Delivery and retry per outcome, in agent-desktop's terms: only what never reached the app is safe to send again. */
+const DISPOSITION = {
+  dispatched: { delivery: "delivered_unverified", retry: "unsafe" },
+  failed: { delivery: "not_delivered", retry: "safe" },
+  unknown: { delivery: "unknown", retry: "unsafe" },
+  not_started: { delivery: "not_delivered", retry: "safe" },
+} as const
+/** Whether a failed action's input may have reached the app: only after dispatch began, and not when the helper refused it first. */
+const delivered = (error: unknown, dispatched: boolean) => dispatched && !(error instanceof NotDelivered)
+/** Every failed action says whether repeating it is safe, so a program never has to guess from the message. */
+function disposed(error: unknown, maybeDelivered: boolean) {
+  const message = error instanceof Error ? error.message : "Computer action failed"
+  return new Error(`${message} (${maybeDelivered ? "delivery unknown: the input may have reached the app; observe and check before repeating it" : "not delivered: nothing reached the app; observe again before retrying"})`)
+}
 
 /** Authority and live snapshots are memory-only; transcripts cannot resume them. */
 export function createComputerSessions(os: ComputerAccessibility, now: () => number, available: (id: SessionId, signal: AbortSignal) => void, stopping: AbortSignal, consumed: (id: string) => void) {
@@ -76,14 +95,15 @@ export function createComputerSessions(os: ComputerAccessibility, now: () => num
     } catch (error) { state.observation = undefined; throw error }
     finally { state.busy = false }
   }
-  async function act(id: string, sessionId: SessionId, raw: unknown, action: SemanticAction["action"], signal: AbortSignal) {
+  /** The action's own fields, checked before anything else. */
+  function parsed(raw: unknown, action: SemanticAction["action"]) {
     const input = ComputerActionInput.parse(raw)
     for (const key of Object.keys(input)) if (!["revision", "nodeID", ...fields[action]!].includes(key)) throw new Error(`Unexpected ${key} for ${action}`)
     if ((action === "setValue" || action === "typeText") && typeof input.value !== "string" || action === "key" && !input.key || action === "drag" && !input.toNodeID) throw new Error("Invalid native action input")
-    const state = active(id, sessionId, signal)
-    signal = AbortSignal.any([signal, state.abort.signal])
-    if (state.mode !== "control") throw new Error("This ComputerSession is observe-only")
-    if (state.busy || actionInFlight || capturing) throw new Error("Another ComputerSession operation is running")
+    return input
+  }
+  /** The action against the session's current observation: its revision and age, and a node there that offers it. */
+  function located(state: State, input: ComputerActionInput, action: SemanticAction["action"]): SemanticAction {
     const observation = state.observation
     if (!observation || observation.revision !== input.revision || state.revision !== input.revision || now() - observation.observedAt > 15000) throw new Error("Semantic observation is stale; observe again before acting")
     const node = observation.nodes.find((node) => node.id === input.nodeID)
@@ -94,24 +114,100 @@ export function createComputerSessions(os: ComputerAccessibility, now: () => num
       const destination = observation.nodes.find((node) => node.id === input.toNodeID)
       if (!destination || destination.secure || !destination.actions.includes("drag")) throw new Error("Drag destination is not an actionable non-secure node in this observation")
     }
-    // Every action reaches the bound app where it is: AXPress and AXSetValue go to the element, keys, text, pointer events and drags
-    // are posted to its process (the helper checks the point against that app's own window, not what is on top of the screen).
-    state.busy = true
-    state.observation = undefined
-    state.revision++
+    return { ...input, action, role: node.role }
+  }
+  async function act(id: string, sessionId: SessionId, raw: unknown, action: SemanticAction["action"], signal: AbortSignal) {
     let dispatched = false
     try {
-      return await inputLease(signal, async () => {
-        await target(state, signal)
-        const semantic: SemanticAction = { ...input, action, role: node.role }
-        await os.indicator(signal, async () => { await target(state, signal); dispatched = true; await os.action(state.target, semantic, signal) })
-        active(id, sessionId, signal)
-        state.lastActiveAt = now()
-        state.audit.push({ action, revision: input.revision, nodeID: input.nodeID, result: "dispatched", at: now() })
-        return { ok: true, revision: state.revision, action, nodeID: input.nodeID, outcome: "dispatched", verified: false, next: "Observe again and check the intended postcondition; dispatch is not proof of success." }
+      const input = parsed(raw, action)
+      const state = active(id, sessionId, signal)
+      signal = AbortSignal.any([signal, state.abort.signal])
+      if (state.mode !== "control") throw new Error("This ComputerSession is observe-only")
+      if (state.busy || actionInFlight || capturing) throw new Error("Another ComputerSession operation is running")
+      const semantic = located(state, input, action)
+      // Every action reaches the bound app where it is: AXPress and AXSetValue go to the element, keys, text, pointer events and drags
+      // are posted to its process (the helper checks the point against that app's own window, not what is on top of the screen).
+      state.busy = true
+      state.observation = undefined
+      state.revision++
+      try {
+        return await inputLease(signal, async () => {
+          await target(state, signal)
+          await os.indicator(signal, async () => { await target(state, signal); dispatched = true; await os.action(state.target, semantic, signal) })
+          active(id, sessionId, signal)
+          state.lastActiveAt = now()
+          state.audit.push({ action, revision: input.revision, nodeID: input.nodeID, result: "dispatched", at: now() })
+          return { ok: true, revision: state.revision, action, nodeID: input.nodeID, outcome: "dispatched", ...DISPOSITION.dispatched, verified: false, next: "Observe again and check the intended postcondition; dispatch is not proof of success." }
+        })
+      } catch (error) { state.audit.push({ action, revision: input.revision, nodeID: input.nodeID, result: delivered(error, dispatched) ? "unknown" : "failed", at: now() }); throw error }
+      finally { state.busy = false; state.audit = state.audit.slice(-64) }
+    } catch (error) { throw disposed(error, delivered(error, dispatched)) }
+  }
+  /** Runs the steps one by one for a backend without native batches, stopping at the first failure. */
+  async function oneByOne(target: ComputerTarget, steps: SemanticAction[], signal: AbortSignal) {
+    const outcomes: BatchOutcome[] = []
+    for (const [index, step] of steps.entries()) {
+      try { await os.action(target, step, signal) } catch (error) {
+        outcomes.push({ index, outcome: error instanceof NotDelivered ? "failed" : "unknown", error: error instanceof Error ? error.message : "Computer action failed" })
+        break
+      }
+      outcomes.push({ index, outcome: "dispatched" })
+    }
+    return outcomes
+  }
+  /**
+   * Several actions on one observation in one call, as agent-desktop batches commands on refs from one snapshot. Every step is
+   * checked against the observation before the first is sent (a bad step refuses the whole batch with nothing sent), the observation
+   * is consumed once, the cursor and indicator stay up across the steps, and the helper re-resolves each node right before its step.
+   * The first step that fails stops the batch: the report says, per step, what was sent and whether it may be retried.
+   */
+  async function batch(id: string, sessionId: SessionId, raw: unknown, signal: AbortSignal) {
+    let dispatched = false
+    try {
+      const request = BatchInput.parse(raw)
+      const fieldsOf = request.steps.map(({ action, ...rest }) => ({ action, input: parsed({ ...rest, revision: request.revision }, action) }))
+      const state = active(id, sessionId, signal)
+      signal = AbortSignal.any([signal, state.abort.signal])
+      if (state.mode !== "control") throw new Error("This ComputerSession is observe-only")
+      if (state.busy || actionInFlight || capturing) throw new Error("Another ComputerSession operation is running")
+      const steps = fieldsOf.map((step) => located(state, step.input, step.action))
+      if (Buffer.byteLength(JSON.stringify(steps)) > BATCH_BYTES) throw new Error("Batch input exceeds 120 KB; send long text in its own typeText or setValue")
+      state.busy = true
+      state.observation = undefined
+      state.revision++
+      const outcomes: (BatchOutcome | undefined)[] = steps.map(() => undefined)
+      const audit = (result: (index: number) => Audit["result"] | undefined) => {
+        steps.forEach((step, index) => { const value = result(index); if (value) state.audit.push({ action: step.action, revision: request.revision, nodeID: step.nodeID, result: value, at: now() }) })
+        state.audit = state.audit.slice(-64)
+      }
+      try {
+        await inputLease(signal, async () => {
+          await target(state, signal)
+          await os.indicator(signal, async () => {
+            await target(state, signal)
+            dispatched = true
+            const reported = os.batch ? await os.batch(state.target, steps, signal) : await oneByOne(state.target, steps, signal)
+            // Reported in order and stopping at the first failure: anything else cannot say which steps ran.
+            if (reported.length > steps.length || reported.some((outcome, index) => outcome.index !== index || outcome.outcome !== "dispatched" && index !== reported.length - 1)) throw new Error("The native batch report does not match its steps")
+            for (const outcome of reported) outcomes[outcome.index] = outcome
+          })
+        })
+      } catch (error) {
+        // Refused before its first step, nothing was sent; broken off after it, any step not reported may have run.
+        const refused = delivered(error, dispatched) ? undefined : "failed"
+        audit((index) => outcomes[index]?.outcome ?? refused ?? "unknown")
+        throw error
+      } finally { state.busy = false }
+      audit((index) => outcomes[index]?.outcome)
+      active(id, sessionId, signal)
+      state.lastActiveAt = now()
+      const results = steps.map((step, index) => {
+        const outcome = outcomes[index]?.outcome ?? "not_started", error = outcomes[index]?.error
+        return { index, action: step.action, nodeID: step.nodeID, outcome, ...DISPOSITION[outcome], ...(error ? { error: error.slice(0, 512) } : {}) }
       })
-    } catch (error) { state.audit.push({ action, revision: input.revision, nodeID: input.nodeID, result: dispatched ? "unknown" : "failed", at: now() }); throw error }
-    finally { state.busy = false; state.audit = state.audit.slice(-64) }
+      const stopped = results.findIndex((result) => result.outcome !== "dispatched")
+      return { ok: stopped < 0, revision: state.revision, steps: results, ...(stopped >= 0 ? { stopped: { index: stopped, reason: "step_failed" } } : {}), verified: false, next: "Observe again and check the intended postconditions; dispatch is not proof of success." }
+    } catch (error) { throw disposed(error, delivered(error, dispatched)) }
   }
   async function selectWindow(id: string, sessionId: SessionId, raw: unknown, signal: AbortSignal) {
     const input = z.strictObject({ windowID: z.string().min(1).max(128) }).parse(raw)
@@ -220,6 +316,7 @@ export function createComputerSessions(os: ComputerAccessibility, now: () => num
                 active(state.id, sessionId, bounded)
                 if (name === "observe") { z.strictObject({}).parse(args); return observe(state.id, sessionId, bounded) }
                 if (mutations.has(name)) return act(state.id, sessionId, args, name as SemanticAction["action"], bounded)
+                if (name === "batch") return batch(state.id, sessionId, args, bounded)
                 if (name === "selectWindow") return selectWindow(state.id, sessionId, args, bounded)
                 if (name === "status") { z.strictObject({}).parse(args); return { target: structuredClone(state.target), mode: state.mode, expiresAt: state.expiresAt, revision: state.revision, audit: structuredClone(state.audit) } }
                 if (name === "windows") {

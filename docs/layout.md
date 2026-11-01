@@ -135,9 +135,9 @@ Live `session.activity` updates the list even while chat is open. Prompts, popup
 Messages default to a quiet `›` user row on a subtle tint and a `•` assistant marker. Role icons, labels, leads and
 user tint preview in `/customize`; `classic` restores the previous headers. Completion metadata is off by default;
 `compact` or `full` shows it once per turn. One blank row separates turns, including those containing tools.
-Balanced and full share one footer outside the prompt: agent, model and provider on the left; live loops/workflows
-and running jobs on the right. Quota and today are opt-in in `/customize`. Script status and extension `footer.*` slots
-share that row. `footerRows` (or `/footer preset rows`) make it any number of rows, up to 12 and a quarter of the terminal
+Balanced and full share one footer outside the prompt, read left to right in groups (see [Footer by tier](#footer-by-tier)):
+who answers and how, what runs, then the placed segments. Quota and today are opt-in in `/customize` for balanced. Script status
+and extension `footer.*` slots share that row. `footerRows` (or `/footer preset rows`) make it any number of rows, up to 12 and a quarter of the terminal
 height ([customize.md](customize.md#footer-rows)). Explicit script `rows` expand it up to four rows, reserving height outside every prompt preset;
 left/right rows align independently and clip by cell width. Legacy output stays one row. See [customize.md](customize.md).
 Legacy footer context is ignored: Context bar (`top|off`, `bar|percent|both`) is the only context control.
@@ -161,6 +161,35 @@ frames through the fake app harness, using temporary data directories and no pro
 `pixels.json` sizing metadata and `fonts.txt`. It reads Greenie from `UI3_PET_ROOT` or `~/.codex/pets`, copying sources
 to a temporary directory; caches and profiles never touch real data. Standalone probes:
 `bun scripts/pet-probes.ts <output-dir> <greenie-dir>`.
+
+### Footer by tier
+
+The row under the prompt follows the view the tier sets (`/tier`); `/footer` replaces the segment list, `/footer reset` returns to the
+view's own. Every footer segment declares where it shows (`FOOTER_SEGMENT_TIER` in `packages/protocol/src/constants.ts`): drawn by the
+row itself under its own switch, placed from balanced, placed from full, opt-in, or never there because another part of the screen
+shows it (the state in the working row, the context in the top bar, notices over the prompt).
+
+| View | Row under the prompt |
+|---|---|
+| minimal | none; nothing is added (`footerRows` or an extension slot still draw their own rows) |
+| balanced | `Build · GPT-6-Luna · high · fast · native │ ↻ 1 loop │ ~12 turns to compact`: agent, a permission other than ask, model, reasoning effort (`showEffort`), `fast` (`fast n/a` when `/fast` never reaches the model), engine; then the goal, loops and workflows; then each placed segment (`forecast` by default) |
+| full | the balanced row, and a second row for full's own segments: `GRAPH 2,594 files · 17,641 symbols · 41,203 edges · indexed │ cache 85% │ codex 7d 8%  claude 7d 61% 5h 11%` |
+
+- Groups are split by a muted ` │ ` (` | ` in ASCII chrome); the items of a group by the separator (`statusSeparator`, ` · `). Only
+  explicit right-hand content keeps the right edge: hints, `statusRight`, script and extension right slots, connection trouble.
+- When a row does not fit, a segment with a narrower form takes it first (quota windows without bars and reset, the graph's files
+  alone), the lowest-ranked first; then parts give way in rank order: segments, extension and script items, profile and PR, the
+  engine, the effort, fast, the loops, the goal, the model. The agent and a permission that acts without asking never give way (at
+  worst they are cut with `…`). A compacted segment gets its whole form back when it fits again.
+- Full's second row shows only when something on it has something to say: the code graph after the daemon pushed this folder's
+  status (it never asks for the saved tokens, which a placed `codegraph` asks once per model call), the cache share from the second
+  call (the first is always cold), the quota windows once read. It is not drawn when script rows, extension rows or `footerRows` use
+  that place, or on a terminal under 24 rows, where a row is worth more to the transcript and the panel sheet; its segments then
+  join the first row and give way first.
+- Screen-reader mode: one separator everywhere, counts as words (`1 loop`, not `↻ 1 loop`) and quota figures without bars. ASCII
+  glyphs: `|` between groups and no marks before counts. Nothing in the footer moves, so reduced motion changes nothing here.
+- `showEffort` is on by default and `/tier balanced|full` turns it on; a profile saved before keeps its own value (Customize > Prompt &
+  footer > Reasoning effort).
 
 ### Cache countdown
 

@@ -50,7 +50,7 @@ export const SCHEMA = "mendcode-next.cli.v1"
 export const EXIT = { ok: 0, failed: 1, stopped: 2, timeout: 3, needsInput: 4, denied: 5, usage: 64 } as const
 
 const NAMES = ["backlog", "session", "memory", "loop", "workflow", "usage", "storage", "package", "recipe", "profile", "control-plane", "tui", "help", "stats", "prompt", "context", "status", "doctor", "debug", "generate", "completion", "export", "import", "worktree", "workflows", "packages", "marketplace", "runtime", "plugin", "plug", "plugin-auth", "db", "tsm", "github", "pr", "mflow", "console", "share", "login", "logout", "switch", "orgs", "open"] as const
-const BOOLEAN_FLAGS = new Set(["json", "all", "wait", "approve", "dangerously-skip-permissions", "follow", "user", "now", "goal", "help", "clean", "dry-run", "vacuum", "compact", "worktrees", "project", "replace", "yes", "no-audit", "preview", "auto", "deterministic", "apply", "enable", "disable", "use", "no-use", "input", "no-input", "generate", "no-generate", "output", "no-output", "show-full", "all-projects", "active", "archived", "restore", "async", "keep-open", "idle", "version", "httpapi", "hono", "index", "sanitize", "latest", "reasoning", "no-reasoning", "no-tools", "metadata", "no-metadata", "timestamps", "no-timestamps", "purge", "switch"])
+const BOOLEAN_FLAGS = new Set(["json", "all", "wait", "approve", "dangerously-skip-permissions", "follow", "user", "now", "goal", "help", "clean", "dry-run", "vacuum", "compact", "worktrees", "project", "replace", "yes", "no-audit", "preview", "auto", "deterministic", "apply", "enable", "disable", "use", "no-use", "input", "no-input", "generate", "no-generate", "output", "no-output", "show-full", "all-projects", "active", "archived", "restore", "async", "keep-open", "idle", "version", "httpapi", "hono", "index", "sanitize", "latest", "reasoning", "no-reasoning", "no-tools", "metadata", "no-metadata", "timestamps", "no-timestamps", "purge", "switch", "summary"])
 const VALUE_FLAGS = new Set(["dir", "commit", "title", "limit", "timeout", "after", "every", "daily", "runs", "days", "engine", "session", "format", "name", "criteria", "category", "status", "older-than", "delta-idle", "worktree-idle", "permission", "task", "reason", "note", "compat", "state", "preset", "proposal", "backup", "scope", "tags", "from-file", "from", "max-proposals", "mode", "provider", "model", "max-prompt-tokens", "max-entries", "project-max-entries", "global-compaction-max-entries", "dream-consolidation-policy", "tools", "focus", "role", "workflow", "data-dir", "parent", "agent", "variant", "effort", "max-count", "since", "search", "message-id", "timeout-ms", "interval-ms", "command", "query", "id", "description", "kind", "channel", "source-type", "source-url", "compat-mendcode", "compat-runtime-pack", "plan-file", "definition-id", "revision-id", "task-id", "source", "before", "run", "location", "url", "type", "entry", "request-id", "args", "out", "agents", "tokens", "usd", "minutes"])
 /** Flags that may be given several times; their values are collected in order. */
 const REPEAT_FLAGS = new Set(["check", "file", "glob", "include", "exclude"])
@@ -160,6 +160,7 @@ const USAGE: Record<string, string> = {
     "  list [--all] [--all-projects] [--max-count N] [--project PATH] [--state STATE] [--active] [--since MS] [--search TEXT] [--agent A] [--model P/M]",
     "  create [--title T] [--parent ID] [--agent A] [--model P/M] [--variant V] [--effort LEVEL]",
     "  get|status|inspect <id> [--limit N]           metadata or a bounded progress snapshot",
+    "  inspect <id> --summary                        also write the session's summary first (one model call when it moved on)",
     "  stats <id> [--json]                            time per turn, day and hour, tokens per model, tools, sub-agents, approval waits",
     "  rename <id> <title...> · fork <id> [--message-id ID] · delete <id> · export <id>",
     '  send <id> ["text"] [--async|--wait] [--approve|--dangerously-skip-permissions] [--agent A] [--model P/M] [--variant V] [--effort LEVEL] [--file PATH]... [--command NAME]',
@@ -1505,7 +1506,7 @@ export async function runAutomation(command: Automation, deps: AutomationDeps): 
     }
 
     case "session.get": case "session.inspect": case "session.status": {
-      const reply = await daemon(command.kind === "session.get" ? { type: "session.get", sessionId: command.id as SessionId } : { type: "session.inspect", sessionId: command.id as SessionId, limit: command.kind === "session.inspect" ? command.limit : 20 })
+      const reply = await daemon(command.kind === "session.get" ? { type: "session.get", sessionId: command.id as SessionId } : { type: "session.inspect", sessionId: command.id as SessionId, limit: command.kind === "session.inspect" ? command.limit : 20, ...(command.kind === "session.inspect" && command.summary ? { summary: true } : {}) })
       if (!reply.ok) return fail(reply.message)
       const session = reply.result.session as import("@mendcode/protocol").SessionDetail
       return result(reply.result, sessionHuman(session))

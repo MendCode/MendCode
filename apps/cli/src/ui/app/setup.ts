@@ -18,9 +18,10 @@ export function createSetup(ctx: AppContext, actions: {
   loadPage(name: Parameters<typeof preload>[0] | undefined): Promise<void>
   applySettings(settings: Settings): void
   changeProfile(patch: Partial<TuiProfile>, options?: { layer?: boolean }): void
+  openConnect(target: string): Promise<void>
 }) {
   const { input, state, quotas, requestFrame, report } = ctx
-  const { loadRecipes, loadPage, applySettings, changeProfile } = actions
+  const { loadRecipes, loadPage, applySettings, changeProfile, openConnect } = actions
 
   let readiness: SetupReport | undefined
   let helper: SetupHelper | undefined
@@ -136,6 +137,17 @@ export function createSetup(ctx: AppContext, actions: {
     onboarding.detected = detected
     onboarding.loading = false
     requestFrame()
+  }
+
+  /** `/connect` closing: back to the setup page that opened it, checked again so a new sign-in shows. False when setup did not open it. */
+  async function returnFromConnect(): Promise<boolean> {
+    const onboarding = state.onboarding
+    if (!onboarding?.connecting) return false
+    onboarding.connecting = false
+    state.page = "setup"
+    requestFrame()
+    await detect()
+    return true
   }
 
   /**
@@ -296,6 +308,8 @@ export function createSetup(ctx: AppContext, actions: {
     const onboarding = state.onboarding
     if (!onboarding || action.type === "none") return
     if (action.type === "recheck") { await detect(); return }
+    // The `/connect` flow saves what it saves itself; this page keeps its choices in memory until it is back.
+    if (action.type === "connect") { onboarding.connecting = true; await openConnect(action.target); return }
     if (action.type === "look") { applyLook(action.theme); return }
     // In memory only while the row moves; the final Enter saves it, esc puts the opening value back.
     if (action.type === "style") { changeProfile(action.patch, { layer: true }); requestFrame(); return }
@@ -368,6 +382,6 @@ export function createSetup(ctx: AppContext, actions: {
     requestFrame()
   }
 
-  return { setupValues, setupChecks, openSetup, openSetupIfFirstRun, setupChoice, setupAction, onboardingAction, openIntro, finishIntro }
+  return { setupValues, setupChecks, openSetup, openSetupIfFirstRun, setupChoice, setupAction, onboardingAction, returnFromConnect, openIntro, finishIntro }
 
 }

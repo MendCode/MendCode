@@ -3,7 +3,7 @@ import { existsSync, readFileSync, statSync } from "node:fs"
 import { createIdFactory, type PermissionMode, type Settings } from "@mendcode/protocol"
 import { createVirtualClock, processMcpTurn, type EngineEvent, type TurnInput } from "@mendcode/kernel"
 import type { ThreadPort } from "@mendcode/tools"
-import { createThreadMcp, threadMcpEnabled } from "../src/thread-mcp"
+import { createThreadMcp, threadInstructions, threadMcpEnabled } from "../src/thread-mcp"
 import { bridgeAuthorizer } from "../src/thread-mcp-approval"
 import { remoteExecutionSettings } from "../src/remote-policy"
 
@@ -42,6 +42,23 @@ function fixture(engine: "claude" | "codex" | "acp:demo" = "codex") {
   const call = async (name: string, args: unknown = {}) => (await (await request("tools/call", { name, arguments: args })).json()) as any
   return { clock, lease, service, request, call, calls, authorization, authorize: (fn: typeof authorize) => { authorize = fn }, allow: (value: boolean) => { allow = value }, enable: (value: boolean) => { enabled = value }, stops: () => stops }
 }
+
+test("the instructions name delegate_task and the models of every engine it takes but the harness's own, ten per engine", () => {
+  const native = Array.from({ length: 12 }, (_, index) => ({ id: `gpt-${index}`, engine: "native" }))
+  const models = [...native, { id: "claude-opus", engine: "claude" }, { id: "codex:gpt-6-sol", engine: "codex" }, { id: "opencode:big", engine: "opencode" }]
+  const claude = threadInstructions({ engine: "claude", models })
+  expect(claude).toContain("mcp__mendcode_threads__delegate_task")
+  expect(claude).toContain(`ToolSearch "select:mcp__mendcode_threads__delegate_task"`)
+  expect(claude).toContain("native: gpt-0, gpt-1, gpt-2, gpt-3, gpt-4, gpt-5, gpt-6, gpt-7, gpt-8, gpt-9 (+2 more); codex: codex:gpt-6-sol.")
+  expect(claude).not.toContain("claude-opus")
+  // OpenCode runs whole sessions; delegate_task does not take it.
+  expect(claude).not.toContain("opencode")
+  const codex = threadInstructions({ engine: "codex", models })
+  expect(codex).toContain("tools.mcp__mendcode_threads__delegate_task (a nested tool of exec)")
+  expect(codex).not.toContain("ToolSearch")
+  expect(codex).toContain("claude: claude-opus")
+  expect(codex).not.toContain("codex:gpt-6-sol")
+})
 
 test("full tier and a separate engine opt-in are required, and remote settings cannot enable it", () => {
   const on: Settings = { tier: "full", threadMcp: { claude: true } }

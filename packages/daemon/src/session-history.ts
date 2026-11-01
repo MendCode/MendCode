@@ -2,6 +2,7 @@ import { readFileSync, statSync } from "node:fs"
 import path from "node:path"
 import { EXPORT_MAX_CHARS, MAX_FRAME_BYTES, redactSecrets, type ChangesReport, type ClientId, type ErrorCode, type ItemKind, type RewindReport, type SessionEvent, type SessionExportResult, type SessionId, type SessionTranscriptItem, type SessionTranscriptTurn, type SessionTranscript, type TimelineEntry } from "@mendcode/protocol"
 import { historyMark, type FileSnapshot, type FileState, type Store, type TurnRecord } from "@mendcode/store"
+import { truncateText } from "@mendcode/tools"
 import { canonicalDirectory, readFileState, writeFileState, type TurnSnapshots } from "./turn-snapshots"
 import { sanitizeTranscript, redactTranscriptValue } from "./session-transfer"
 import { renderHtml } from "./session-html"
@@ -22,6 +23,8 @@ const OTHER_CHARS = 4_000
 const EXPORT_PAGE = 1_000
 /** What the export's ack keeps free for the frame around the text. */
 const FRAME_HEADROOM = 2_048
+/** A page of `read` (`sessions read`): under the 50 KB and 2,000 lines a tool result may have, and a tool call's line. */
+const READ_PAGE = { bytes: 40_000, lines: 1_500, toolChars: 160 } as const
 
 type Writable = { state: "content"; content: Uint8Array; mode?: number } | { state: "absent" }
 
@@ -656,12 +659,56 @@ export function createSessionHistory(deps: HistoryDeps) {
       }
       return { ok: true, result: { format, text, turns: turns.length, truncated } }
     },
+
+    /**
+     * One page of the conversation for a model to read (`sessions read`, docs/peers.md): the export's Markdown of the user's and the
+     * assistant's messages with one line per tool call, and no tool input, output or reasoning. A page ends between items once it would
+     * pass `maxBytes` (a single bigger item is cut); `next` is the cursor the following page starts at, absent on the last page.
+     */
+    read({ sessionId, cursor, maxBytes = READ_PAGE.bytes }: { sessionId: SessionId; cursor?: string | undefined; maxBytes?: number }): Outcome<{ text: string; next?: string }> {
+      const info = store.sessionInfo(sessionId)
+      if (!info) return fail("unknown_session", "unknown session")
+      if (cursor !== undefined && !/^\d{1,15}$/.test(cursor)) return fail("invalid_command", "unknown cursor; pass the one a page ended with")
+      const options: ExportOptions = { fromSeq: cursor === undefined ? 0 : Number(cursor), toolDetails: false, agentItems: false }
+      const collected = collect(store, sessionId, options)
+      // Each item is a block of its own, so a page can end between any two; a turn's ending goes with its last item.
+      const blocks: Array<{ seq: number; text: string }> = []
+      for (const turn of collected.turns) {
+        const last = turn.items.length - 1
+        if (last < 0) blocks.push({ seq: collected.starts.get(turn.turnId)!, text: renderTurn(turn, options).join("\n\n") })
+        turn.items.forEach((item, index) => {
+          const marker = item.tool ? { ...item, tool: redactSecrets(item.tool.replace(/\s+/g, " ").trim().slice(0, READ_PAGE.toolChars)).text } : item
+          blocks.push({ seq: collected.starts.get(item.itemId)!, text: renderTurn({ ...turn, items: [marker], outcome: index === last ? turn.outcome : "running" }, options).join("\n\n") })
+        })
+      }
+      const ready = collected.resume === undefined ? blocks : blocks.filter((block) => block.seq < collected.resume!)
+      // What a stopped pass cut short waits for the next page, unless nothing comes before it: then the part read shows, so pages move on.
+      const forced = !ready.length && blocks.length > 0
+      const page = forced ? blocks.slice(0, 1) : ready
+      const head = renderMarkdown({ title: info.title, directory: redactSecrets(info.directory).text, turns: [], truncated: false, options }).trimEnd()
+      const out = [head]
+      let bytes = Buffer.byteLength(head), lines = head.split("\n").length, taken = 0, shown = 0
+      for (const block of page) {
+        if (block.text) {
+          const size = Buffer.byteLength(block.text) + 2, rows = block.text.split("\n").length + 1
+          if (shown && (bytes + size > maxBytes || lines + rows > READ_PAGE.lines)) break
+          const fitted = shown ? block.text : truncateText({ text: block.text, limits: { maxBytes: Math.max(1_024, maxBytes - bytes - 64), maxLines: Math.max(10, READ_PAGE.lines - lines) } }).text
+          out.push(fitted)
+          bytes += Buffer.byteLength(fitted) + 2
+          lines += fitted.split("\n").length + 1
+          shown++
+        }
+        taken++
+      }
+      const following = forced ? blocks[1]?.seq ?? collected.stop : page[taken]?.seq ?? collected.resume
+      return { ok: true, result: { text: out.join("\n\n"), ...(following !== undefined ? { next: String(following - 1) } : {}) } }
+    },
   }
   return api
 }
 
 /** `fromSeq`/`untilSeq` read only the events in that range (`fromSeq` is the last event number to skip); `messagesOnly` keeps user and assistant messages and leaves the rest out. */
-type ExportOptions = { fromSeq?: number | undefined; untilSeq?: number | undefined; messagesOnly?: boolean | undefined; reasoning?: boolean | undefined; toolDetails?: boolean | undefined; assistantMetadata?: boolean | undefined; timestamps?: boolean | undefined; sanitize?: boolean | undefined; fullParts?: boolean | undefined }
+type ExportOptions = { fromSeq?: number | undefined; untilSeq?: number | undefined; messagesOnly?: boolean | undefined; /** false leaves out what an engine's own sub-agent did inside the turn (items marked `agentParent`); its call stays. */ agentItems?: boolean | undefined; reasoning?: boolean | undefined; toolDetails?: boolean | undefined; assistantMetadata?: boolean | undefined; timestamps?: boolean | undefined; sanitize?: boolean | undefined; fullParts?: boolean | undefined }
 type ExportItem = SessionTranscriptItem
 type ExportTurn = SessionTranscriptTurn
 
@@ -684,21 +731,29 @@ function clip(text: string, { chars, lines }: { chars: number; lines?: number })
 
 const limitOf = (kind: ItemKind, full = false) => full ? 65_520 : (kind === "user_message" || kind === "agent_message" ? MESSAGE_CHARS : kind === "tool_call" ? TOOL_CHARS : OTHER_CHARS)
 
-/** One pass over the session's events in pages: the turns that are not undone, with each item's text bounded. */
-function collect(store: Store, sessionId: SessionId, options: ExportOptions): { turns: ExportTurn[]; truncated: boolean } {
+/**
+ * One pass over the session's events in pages: the turns that are not undone, with each item's text bounded. `starts` is the seq each
+ * turn and item starts at; `resume` is the first seq a limit left out (an item past a cap, or one the pass stopped inside), so a reader
+ * that pages (`read`) starts its next page there instead of skipping what was not collected; `stop` is where the pass stopped early.
+ */
+function collect(store: Store, sessionId: SessionId, options: ExportOptions): { turns: ExportTurn[]; truncated: boolean; starts: Map<string, number>; resume?: number; stop?: number } {
   const undone = new Set(store.turns.list(sessionId).filter((turn) => turn.reverted).map((turn) => turn.turnId))
   const turns: ExportTurn[] = []
   const turnOf = new Map<string, ExportTurn>()
-  const items = new Map<string, { item: ExportItem; turn: ExportTurn; chars: number }>()
+  const items = new Map<string, { item: ExportItem; turn: ExportTurn; chars: number; seq: number }>()
+  const starts = new Map<string, number>()
   let total = 0
   let itemCount = 0
   let truncated = false
+  let resume: number | undefined
+  let stop: number | undefined
+  const leftOut = (seq: number) => { truncated = true; if (resume === undefined || seq < resume) resume = seq }
   pages: for (let cursor = options.fromSeq ?? 0; ; ) {
     const page = store.readAfter(sessionId, cursor, EXPORT_PAGE)
     for (const event of store.messages.project(page)) {
       if (options.untilSeq !== undefined && event.seq >= options.untilSeq) break pages
       if (total > EXPORT_MAX_CHARS) {
-        truncated = true
+        leftOut((stop = event.seq))
         break pages
       }
       switch (event.type) {
@@ -707,17 +762,29 @@ function collect(store: Store, sessionId: SessionId, options: ExportOptions): { 
           break
         case "turn.started": {
           if (undone.has(event.turnId)) break
-          if (turns.length >= 1000) return { turns, truncated: true }
+          if (turns.length >= 1000) {
+            leftOut((stop = event.seq))
+            break pages
+          }
           const turn: ExportTurn = { turnId: event.turnId, at: event.at, outcome: "running", items: [], ...(options.assistantMetadata && event.importedMetadata ? { metadata: redactTranscriptValue(event.importedMetadata) } : {}) }
           turns.push(turn)
           turnOf.set(event.turnId, turn)
+          starts.set(event.turnId, event.seq)
           break
         }
         case "item.started": {
-          const turn = turnOf.get(event.turnId)
+          let turn = turnOf.get(event.turnId)
+          // A pass that starts inside a turn (`fromSeq` past its start: a page of `read`) still takes that turn's later items.
+          if (!turn && options.fromSeq !== undefined && !undone.has(event.turnId) && turns.length < 1000) {
+            turn = { turnId: event.turnId, at: event.at, outcome: "running", items: [] }
+            turns.push(turn)
+            turnOf.set(event.turnId, turn)
+            starts.set(event.turnId, event.seq)
+          }
           if (!turn || event.kind === "reasoning" && !options.reasoning) break
           if (options.messagesOnly && event.kind !== "user_message" && event.kind !== "agent_message") break
-          if (turn.items.length >= 200 || itemCount >= 2000) { truncated = true; break }
+          if (options.agentItems === false && typeof event.meta?.agentParent === "string") break
+          if (turn.items.length >= 200 || itemCount >= 2000) { leftOut(event.seq); break }
           itemCount++
           const tool = typeof event.meta?.tool === "string" ? redactSecrets(event.meta.tool).text : undefined
           const source = event.meta?.shell === true ? ("shell" as const) : event.meta?.notice === true ? ("notice" as const) : undefined
@@ -729,7 +796,8 @@ function collect(store: Store, sessionId: SessionId, options: ExportOptions): { 
           }
           turn.items.push(item)
           total += 128
-          items.set(event.itemId, { item, turn, chars: 0 })
+          items.set(event.itemId, { item, turn, chars: 0, seq: event.seq })
+          starts.set(event.itemId, event.seq)
           break
         }
         case "item.delta": {
@@ -804,12 +872,14 @@ function collect(store: Store, sessionId: SessionId, options: ExportOptions): { 
     cursor = page[page.length - 1]!.seq
   }
   // An item still open (an interrupted turn) keeps what its deltas gave.
-  for (const { item, chars } of items.values()) {
+  // One the pass stopped in the middle of was not read to its end: a page of `read` leaves it for the next page.
+  for (const { item, chars, seq } of items.values()) {
     const clipped = clip(item.text, { chars: limitOf(item.kind, options.fullParts) })
     item.text = redactSecrets(clipped.text).text
     if (clipped.cut || chars > limitOf(item.kind, options.fullParts)) { item.truncated = true; truncated = true }
+    if (stop !== undefined) leftOut(seq)
   }
-  return { turns, truncated }
+  return { turns, truncated, starts, ...(resume !== undefined ? { resume } : {}), ...(stop !== undefined ? { stop } : {}) }
 }
 
 function fence(text: string) {
@@ -820,43 +890,48 @@ function fence(text: string) {
 
 function renderMarkdown({ title, directory, turns, truncated, options }: { title: string; directory: string; turns: ExportTurn[]; truncated: boolean; options: ExportOptions }) {
   const out: string[] = [`# ${redactSecrets(title.trim() || "MendCode session").text}`, `\`${directory}\``]
-  for (const turn of turns) {
-    let metadataShown = false
-    for (const item of turn.items) {
-      if (options.timestamps && item.at !== undefined) out.push(`> ${new Date(item.at).toISOString()}`)
-      switch (item.kind) {
-        case "user_message": {
-          const heading = item.source === "shell" ? "## User (shell)" : item.source === "notice" ? "## System notice" : "## User"
-          const attachments = item.attachments?.length ? `\n\nAttachments: ${item.attachments.map((attachment) => attachment.name).join(", ")}` : ""
-          out.push(`${heading}\n\n${item.text.trim()}${attachments}`)
-          break
-        }
-        case "agent_message":
-          if (item.text.trim()) {
-            const meta = !metadataShown && turn.metadata ? ` (${turn.metadata.model} · ${turn.metadata.provider} · ${turn.metadata.tokens} tokens${turn.metadata.durationMs !== undefined ? ` · ${(turn.metadata.durationMs / 1000).toFixed(1)}s` : ""})` : ""
-            out.push(`## Assistant${meta}\n\n${item.text.trim()}`)
-            metadataShown = true
-          }
-          break
-        case "reasoning":
-          if (item.text.trim()) out.push(`_Thinking:_\n\n${item.text.trim()}`)
-          break
-        case "tool_call": {
-          const status = item.status && item.status !== "ok" ? ` (${item.status})` : ""
-          out.push(`**Tool:** \`${item.tool ?? "tool"}\`${status}${item.input ? `\n\n**Input:**\n${fence(item.input)}` : ""}${item.text.trim() ? `\n\n${fence(item.text)}` : ""}`)
-          break
-        }
-        case "compaction":
-          out.push("> Context compacted.")
-          break
-        default:
-          if (item.text.trim()) out.push(item.text.trim())
-      }
-    }
-    if (turn.outcome === "failed") out.push(`> **Turn failed** (${turn.error?.code ?? "error"}): ${turn.error?.message ?? ""}`)
-    else if (turn.outcome === "cancelled") out.push("> Turn cancelled.")
-    else if (turn.outcome === "interrupted") out.push("> Turn interrupted.")
-  }
+  for (const turn of turns) out.push(...renderTurn(turn, options))
   if (truncated) out.push("> Export truncated: content exceeds transcript/frame limits.")
   return `${out.join("\n\n")}\n`
+}
+
+/** One turn's Markdown blocks: its items, then how it ended when that was not a completion. */
+function renderTurn(turn: ExportTurn, options: ExportOptions): string[] {
+  const out: string[] = []
+  let metadataShown = false
+  for (const item of turn.items) {
+    if (options.timestamps && item.at !== undefined) out.push(`> ${new Date(item.at).toISOString()}`)
+    switch (item.kind) {
+      case "user_message": {
+        const heading = item.source === "shell" ? "## User (shell)" : item.source === "notice" ? "## System notice" : "## User"
+        const attachments = item.attachments?.length ? `\n\nAttachments: ${item.attachments.map((attachment) => attachment.name).join(", ")}` : ""
+        out.push(`${heading}\n\n${item.text.trim()}${attachments}`)
+        break
+      }
+      case "agent_message":
+        if (item.text.trim()) {
+          const meta = !metadataShown && turn.metadata ? ` (${turn.metadata.model} · ${turn.metadata.provider} · ${turn.metadata.tokens} tokens${turn.metadata.durationMs !== undefined ? ` · ${(turn.metadata.durationMs / 1000).toFixed(1)}s` : ""})` : ""
+          out.push(`## Assistant${meta}\n\n${item.text.trim()}`)
+          metadataShown = true
+        }
+        break
+      case "reasoning":
+        if (item.text.trim()) out.push(`_Thinking:_\n\n${item.text.trim()}`)
+        break
+      case "tool_call": {
+        const status = item.status && item.status !== "ok" ? ` (${item.status})` : ""
+        out.push(`**Tool:** \`${item.tool ?? "tool"}\`${status}${item.input ? `\n\n**Input:**\n${fence(item.input)}` : ""}${item.text.trim() ? `\n\n${fence(item.text)}` : ""}`)
+        break
+      }
+      case "compaction":
+        out.push("> Context compacted.")
+        break
+      default:
+        if (item.text.trim()) out.push(item.text.trim())
+    }
+  }
+  if (turn.outcome === "failed") out.push(`> **Turn failed** (${turn.error?.code ?? "error"}): ${turn.error?.message ?? ""}`)
+  else if (turn.outcome === "cancelled") out.push("> Turn cancelled.")
+  else if (turn.outcome === "interrupted") out.push("> Turn interrupted.")
+  return out
 }

@@ -1,6 +1,6 @@
 import type { Client } from "@mendcode/client"
 import type { ModelChoice, ModelInfo, ModelsReport, ReasoningEffort, SessionDetail } from "@mendcode/protocol"
-import { findModel } from "@mendcode/protocol/wire"
+import { findModel, modelRef } from "@mendcode/protocol/wire"
 import type { SessionSelection } from "./session-args"
 
 export function sessionHuman(session: SessionDetail) {
@@ -11,6 +11,7 @@ export function sessionHuman(session: SessionDetail) {
     `Model: ${session.model ? `${session.model.model}${session.model.variant ? ` (${session.model.variant})` : ""}` : "runtime default"}`,
     `Directory: ${session.directory}`,
     `Updated: ${new Date(session.updatedAt).toISOString()}`,
+    ...(session.summary ? [`Summary: ${session.summary}`] : []),
     ...(session.archivedAt !== undefined ? [`Archived: ${new Date(session.archivedAt).toISOString()}`] : []),
   ].join("\n") + "\n"
 }
@@ -34,8 +35,8 @@ export async function sessionSelection(client: Pick<Client, "send">, selection: 
     const asked = selection.model
     const [provider, ...rest] = asked.split("/")
     const model = rest.join("/")
-    // `reference` is the name `mendcode models` prints (`claude/claude-sonnet`): what is listed can be asked for.
-    const found = report.models.find((entry) => entry.id === asked || (entry as { reference?: string }).reference === asked || model && (entry.id === `${provider}:${model}` || entry.id === model && (entry.provider === provider || !entry.provider && ["openai", "codex", "chatgpt"].includes(provider!)))) ?? findModel(report.models, asked)
+    // The name `mendcode models` prints (`claude/claude-sonnet`, its `modelRef`): what is listed can be asked for. The daemon's report has no `reference` field.
+    const found = report.models.find((entry) => entry.id === asked || modelRef(entry) === asked || model && (entry.id === `${provider}:${model}` || entry.id === model && (entry.provider === provider || !entry.provider && ["openai", "codex", "chatgpt"].includes(provider!)))) ?? findModel(report.models, asked)
     if (!found) return { ok: false as const, message: `unknown model ${asked}` }
     choice = { model: found.id }
   }

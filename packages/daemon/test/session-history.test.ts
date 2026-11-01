@@ -715,6 +715,90 @@ describe("system notices", () => {
   })
 })
 
+describe("reading a session in pages (sessions read)", () => {
+  function recorded() {
+    const store = openStore({ dir: tempDir("mendd-read-") })
+    cleanups.push(() => store.close())
+    const ids = createIdFactory()
+    const sessionId = ids("session")
+    store.createSession({ id: sessionId, directory: "/repo", title: "long chat" })
+    const history = createSessionHistory({ store, snapshots: createTurnSnapshots({ store }), publish: () => {}, isBusy: () => false, now: Date.now })
+    const item = (turnId: ReturnType<typeof ids<"turn">>, kind: "user_message" | "agent_message" | "reasoning" | "tool_call", text: string, meta?: Record<string, string>) => {
+      const itemId = ids("item")
+      store.sessionSink.append({ type: "item.started", sessionId, turnId, itemId, kind, ...(meta ? { meta } : {}) })
+      store.sessionSink.append({ type: "item.completed", sessionId, itemId, status: "ok", text })
+      return itemId
+    }
+    return { store, ids, sessionId, history, item }
+  }
+  const pages = (history: ReturnType<typeof createSessionHistory>, sessionId: SessionId, maxBytes: number) => {
+    const read: string[] = []
+    let cursor: string | undefined
+    for (let page = 0; page < 200; page++) {
+      const result = history.read({ sessionId, cursor, maxBytes })
+      if (!result.ok) throw new Error(result.message)
+      read.push(result.result.text)
+      if (!result.result.next) return read
+      expect(Number(result.result.next)).toBeGreaterThan(Number(cursor ?? -1))
+      cursor = result.result.next
+    }
+    throw new Error("the pages never ended")
+  }
+
+  test("every message comes once and in order across small pages, a tool is one line and its output, reasoning and sub-agent steps never show", () => {
+    const { store, ids, sessionId, history, item } = recorded()
+    const answers: string[] = []
+    for (let turnIndex = 0; turnIndex < 3; turnIndex++) {
+      const turnId = ids("turn")
+      store.sessionSink.append({ type: "turn.started", sessionId, turnId, queueId: ids("queue") })
+      item(turnId, "user_message", `question ${turnIndex}`)
+      item(turnId, "reasoning", "SECRET THINKING")
+      // A turn longer than the export's 200 items: the pages go on past that cap instead of skipping the rest of the turn.
+      for (let step = 0; step < (turnIndex === 1 ? 260 : 3); step++) {
+        const call = item(turnId, "tool_call", "TOOL OUTPUT", { tool: `shell: ls step-${turnIndex}-${step}` })
+        if (step === 0) item(turnId, "agent_message", "SUB-AGENT STEP", { agentParent: call })
+        const answer = `answer ${turnIndex}.${step} ${"x".repeat(step % 7 === 0 ? 300 : 20)}`
+        answers.push(answer)
+        item(turnId, "agent_message", answer)
+      }
+      store.sessionSink.append({ type: "turn.completed", sessionId, turnId })
+    }
+    const read = pages(history, sessionId, 1_500)
+    expect(read.length).toBeGreaterThan(10)
+    for (const page of read) expect(Buffer.byteLength(page)).toBeLessThanOrEqual(1_500)
+    const all = read.join("\n")
+    let at = -1
+    for (const answer of answers) {
+      expect(all.split(answer).length - 1).toBe(1)
+      expect(all.indexOf(answer)).toBeGreaterThan(at)
+      at = all.indexOf(answer)
+    }
+    for (const question of ["question 0", "question 1", "question 2"]) expect(all.split(`## User\n\n${question}`).length - 1).toBe(1)
+    expect(all).toContain("**Tool:** `shell: ls step-1-259`")
+    expect(all).not.toContain("TOOL OUTPUT")
+    expect(all).not.toContain("SECRET THINKING")
+    expect(all).not.toContain("SUB-AGENT STEP")
+    expect(read[0]).toStartWith("# long chat\n\n`/repo`")
+  }, 30_000)
+
+  test("an item a page could not read to its end still moves the pages on, and a cursor that is not one is refused", () => {
+    const { store, ids, sessionId, history, item } = recorded()
+    const turnId = ids("turn")
+    store.sessionSink.append({ type: "turn.started", sessionId, turnId, queueId: ids("queue") })
+    const open = ids("item")
+    store.sessionSink.append({ type: "item.started", sessionId, turnId, itemId: open, kind: "agent_message" })
+    store.sessionSink.append({ type: "item.delta", sessionId, itemId: open, text: "still streaming" })
+    // Enough finished text after it that one pass stops before the end of the turn, with the first item still open.
+    for (let index = 0; index < 4; index++) item(turnId, "agent_message", `${index}${"y".repeat(40_000)}`)
+    const read = pages(history, sessionId, 40_000)
+    expect(read[0]).toContain("still streaming")
+    expect(read.join("\n").split("still streaming").length - 1).toBe(1)
+    for (let index = 0; index < 4; index++) expect(read.join("\n")).toContain(`## Assistant\n\n${index}yyy`)
+    expect(history.read({ sessionId, cursor: "abc" })).toMatchObject({ ok: false, code: "invalid_command" })
+    expect(history.read({ sessionId: ids("session") })).toMatchObject({ ok: false, code: "unknown_session" })
+  }, 30_000)
+})
+
 describe("protocol", () => {
   test("the new commands and events are part of the wire schemas", async () => {
     const { Command, SessionEvent } = await import("@mendcode/protocol")

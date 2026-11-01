@@ -118,16 +118,19 @@ test("provider config maps SDK names, merges offline models.dev metadata and enf
 test("title and summary roles run asynchronously, persist, look again at turn 3, refresh at turn 15 and preserve renamed titles", async () => {
   const calls: Array<{ system: string; model?: ModelChoice }> = []
   const h = await start({ steps: Array.from({ length: 16 }, () => stop("completed work")), complete: async (input) => { calls.push(input); return input.system.includes("title") ? `Generated title ${calls.filter((call) => call.system.includes("title")).length}` : "Updated summary" } })
-  await h.client.send({ type: "settings.set", patch: { models: { title: { model: "gpt-6-luna" }, summary: { model: "gpt-6-sol" } } } })
+  await h.client.send({ type: "settings.set", patch: { tier: "balanced", models: { title: { model: "gpt-6-luna" }, summary: { model: "gpt-6-sol" } } } })
   const sessionId = await openSession(h)
-  for (let i = 0; i < 15; i++) { await say(h, sessionId, `work ${i}`); await until(() => calls.filter((call) => call.system.includes("Summarize")).length === i + 1) }
+  const titles = () => calls.filter((call) => call.system.includes("title")).length
+  for (let i = 0; i < 15; i++) { await say(h, sessionId, `work ${i}`); await until(() => titles() === (i < 2 ? 1 : i < 14 ? 2 : 3)) }
   const titleCalls = calls.filter((call) => call.system.includes("title")) as Array<{ system: string; prompt?: string }>
   expect(titleCalls).toHaveLength(3)
+  expect(calls).toHaveLength(3)
   expect(titleCalls[1]?.prompt).toContain("Current title: Generated title 1")
   expect(titleCalls[1]?.prompt).toContain("work 2")
   expect(calls[0]?.model?.model).toBe("gpt-6-luna")
-  expect(calls[1]?.model?.model).toBe("gpt-6-sol")
   expect(h.store.sessionInfo(sessionId)?.title).toBe("Generated title 3")
+  await h.client.send({ type: "session.inspect", sessionId, summary: true })
+  expect(calls[3]?.model?.model).toBe("gpt-6-sol")
   const ack = await h.client.send({ type: "session.list", directory: h.project })
   expect(JSON.stringify(result(ack))).toContain("Updated summary")
   await h.client.send({ type: "session.rename", sessionId, title: "My title" })
@@ -144,13 +147,15 @@ test("an in-flight title completion cannot overwrite a manual rename, and childr
   await until(() => !!release)
   await h.client.send({ type: "session.rename", sessionId, title: "Manual" })
   release("Stale generated title")
-  await until(() => calls === 2)
+  await until(() => h.store.meta.get(`session.title.generated:${sessionId}`) === undefined && calls === 1)
+  await Bun.sleep(20)
   expect(h.store.sessionInfo(sessionId)?.title).toBe("Manual")
   const created = await h.client.send({ type: "session.create", directory: h.project, parentId: sessionId })
   const child = (result(created) as { sessionId: typeof sessionId }).sessionId
   await h.client.subscribe(child, 0)
   await say(h, child, "child")
-  expect(calls).toBe(2)
+  await Bun.sleep(20)
+  expect(calls).toBe(1)
 })
 
 test("auxiliary agent frontmatter shapes titles and disabled summary agents make no call", async () => {
@@ -165,28 +170,33 @@ test("auxiliary agent frontmatter shapes titles and disabled summary agents make
   expect(calls[0]).toMatchObject({ system: "Specific title instructions.", model: { model: "gpt-6-luna", parameters: { seed: 3, temperature: 0.1, top_p: 0.8 } } })
 })
 
-test("metadata completions coalesce new turns while busy and recover summary after a title failure", async () => {
+test("title completions coalesce new turns while busy, and a failed title does not stop a summary a reader asks for", async () => {
   let release!: () => void
   const prompts: string[] = []
   let titles = 0
   const h = await start({ steps: [stop("first"), stop("second")], complete: async (input) => {
-    if (input.system.includes("title")) { titles++; return "Working title" }
+    if (input.system.includes("title")) { titles++; await new Promise<void>((resolve) => { release = resolve }); return "Working title" }
     prompts.push(input.prompt)
-    if (prompts.length === 1) await new Promise<void>((resolve) => { release = resolve })
     return `Summary ${prompts.length}`
   } })
+  await h.client.send({ type: "settings.set", patch: { tier: "balanced" } })
   const sessionId = await openSession(h)
   await say(h, sessionId, "First user question")
   await until(() => !!release)
   await say(h, sessionId, "Second user question")
   release()
-  await until(() => h.store.meta.get(`session.summary:${sessionId}`) === "Summary 2")
+  await until(() => h.store.sessionInfo(sessionId)?.title === "Working title")
+  await Bun.sleep(20)
   expect(titles).toBe(1)
-  expect(prompts[1]).toContain("Second user question")
+  expect(prompts).toHaveLength(0)
+  await h.client.send({ type: "session.inspect", sessionId, summary: true })
+  expect(prompts[0]).toContain("Second user question")
   const failed = await start({ steps: [stop("done")], complete: async (input) => { if (input.system.includes("title")) throw new Error("title unavailable"); return "Recovered summary" } })
+  await failed.client.send({ type: "settings.set", patch: { tier: "balanced" } })
   const other = await openSession(failed)
   await say(failed, other, "work")
-  await until(() => failed.store.meta.get(`session.summary:${other}`) === "Recovered summary")
+  await failed.client.send({ type: "session.inspect", sessionId: other, summary: true })
+  expect(failed.store.meta.get(`session.summary:${other}`)).toBe("Recovered summary")
 })
 
 test("tool excerpts have an 8 MB per-file cap, a 64 MB disk budget and one-day retention", async () => {

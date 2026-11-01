@@ -185,7 +185,8 @@ export function createVoice(input: {
     const form = new FormData()
     form.set("model", route.value.model)
     form.set("response_format", "json")
-    const hint = language ?? cfg.language
+    // A pair (`es,en`) is for the on-device model; an API takes one hint.
+    const hint = (language ?? cfg.language)?.split(",")[0]
     if (hint) form.set("language", hint)
     form.set("file", new Blob([bytes as BlobPart], { type: mime }), name)
     const controller = new AbortController()
@@ -254,7 +255,12 @@ export function createVoice(input: {
   }
 
   return {
-    status: (): VoiceResult<VoiceReport> => ({ ok: true, value: report() }),
+    // A terminal asks for the status on the first repeat of a held space, a step before it starts: the helper builds then.
+    status: (): VoiceResult<VoiceReport> => {
+      const value = report()
+      if (value.ready && value.provider === LOCAL_PROVIDER) local()?.prepare?.()
+      return { ok: true, value }
+    },
     start,
     stop,
     cancel,

@@ -1,5 +1,5 @@
 import type { ModelChoice, ModelInfo, ModelRole, ModelRoles, ModelsReport, Settings } from "@mendcode/protocol"
-import { findModel } from "@mendcode/protocol/wire"
+import { findModel, modelRef } from "@mendcode/protocol/wire"
 
 /** What the engine can run and its fallback choice. `selectable` is false for engines that pick their own model. */
 export type ModelCatalog = {
@@ -19,13 +19,15 @@ export function catalogModel(catalog: ModelCatalog, id: string): ModelInfo | und
 }
 
 /**
- * The catalog id a model wrote for a sub-agent: exact, or the one id whose model part (after `provider/`) is the given
- * name, case aside (`gpt-6.1-terra` → `chatgpt/gpt-6.1-terra`). Two providers with that model stay ambiguous: undefined.
+ * The catalog id a model wrote for a sub-agent: exact, the reference `mendcode models` prints (`chatgpt/gpt-6.1-terra` is
+ * `gpt-6.1-terra`, `claude/claude-opus` is `claude-opus`), or the one id whose model part (after `provider/`) is the given
+ * name, case aside (`gpt-6-luna` → `openai/gpt-6-luna`). Two providers with that model stay ambiguous: undefined.
  */
 export function catalogId(catalog: ModelCatalog, id: string): string | undefined {
-  if (catalogModel(catalog, id)) return id
+  const found = catalogModel(catalog, id)
+  if (found) return found.id
   const wanted = id.toLowerCase()
-  const matches = catalog.list().filter((model) => model.id.toLowerCase() === wanted || model.id.slice(model.id.indexOf("/") + 1).toLowerCase() === wanted)
+  const matches = catalog.list().filter((model) => model.id.toLowerCase() === wanted || modelRef(model).toLowerCase() === wanted || model.id.slice(model.id.indexOf("/") + 1).toLowerCase() === wanted)
   return matches.length === 1 ? matches[0]!.id : undefined
 }
 
@@ -38,6 +40,13 @@ export function nearModels(catalog: ModelCatalog, id: string, limit = 8): string
 /** The engine that runs a model's sessions: "claude" for a Claude Code model, "pi" for a pi model, otherwise the daemon's own. */
 export function modelEngine(choice: ModelChoice | undefined, catalog: ModelCatalog): "claude" | "pi" | "codex" | "opencode" | "cursor" | undefined {
   return choice ? catalogModel(catalog, choice.model)?.engine : undefined
+}
+
+/** Who runs `model` when the daemon's own engine cannot (Claude Code, Codex, pi, an ACP agent); undefined for a model of its providers or one the catalog does not know. */
+export function foreignEngine(model: string, catalog: ModelCatalog): string | undefined {
+  if (model.startsWith("acp:")) return "an ACP agent"
+  const engine = catalogModel(catalog, model)?.engine
+  return engine === "claude" ? "Claude Code" : engine === "codex" ? "Codex" : engine
 }
 
 /**
@@ -81,10 +90,14 @@ export function cheapSubagentModel(main: ModelChoice, catalog: ModelCatalog): Mo
   return undefined
 }
 
-/** A choice whose effort the model does not support falls back to the model's default (or none); a model the catalog does not know is kept as asked. */
-export function usableEffort(chosen: ModelChoice, catalog: ModelCatalog): ModelChoice {
-  const info = catalogModel(catalog, chosen.model)
-  if (!info) return chosen
+/**
+ * A choice whose effort the model does not support falls back to the model's default (or none); a model the catalog does not know is kept as asked.
+ * A model named by its `mendcode models` reference (`claude/claude-opus`) comes back as its catalog id, the one engines and providers take.
+ */
+export function usableEffort(asked: ModelChoice, catalog: ModelCatalog): ModelChoice {
+  const info = catalogModel(catalog, asked.model)
+  if (!info) return asked
+  const chosen = info.id === asked.model ? asked : { ...asked, model: info.id }
   // An external engine's model has no provider variants: a variant naming one of its efforts is that effort.
   if (info.engine && chosen.variant) {
     const { variant: named, ...rest } = chosen
@@ -109,7 +122,7 @@ export function modelsReport(input: { engine: string; catalog: ModelCatalog; rol
   for (const choice of [session, effective, ...Object.values(roles)]) {
     if (!choice || listed.some((model) => model.id === choice.model)) continue
     const info = findModel(catalog.list(), choice.model)
-    if (info) pinned.set(info.id, info)
+    if (info && !listed.some((model) => model.id === info.id)) pinned.set(info.id, info)
   }
   return {
     engine,
@@ -128,6 +141,30 @@ export function imageRefusal(choice: ModelChoice, catalog: ModelCatalog): string
   if (!info) return undefined
   if (info.images === false || (info.modalities && !info.modalities.input.includes("image"))) return `${info.name} does not accept images; pick a vision model or remove the image`
   return undefined
+}
+
+/**
+ * Why the model roles a settings patch writes (`models`) cannot run, or undefined: a model no catalog lists (named with the ids it was
+ * likely meant to be) or one its role cannot use, as `/model` refuses them. Roles the patch keeps as they are are not judged again.
+ */
+export async function unusableRoles(patch: Record<string, unknown>, current: ModelRoles | undefined, catalog: ModelCatalog): Promise<string | undefined> {
+  const asked = patch.models
+  if (!catalog.selectable || !asked || typeof asked !== "object") return undefined
+  const changed = Object.entries(asked as Record<string, unknown>).filter((entry): entry is [ModelRole, ModelChoice] => {
+    const choice = entry[1] as ModelChoice | null
+    return !!choice && typeof choice === "object" && typeof choice.model === "string" && JSON.stringify(choice) !== JSON.stringify(current?.[entry[0] as ModelRole])
+  })
+  if (!changed.length) return undefined
+  await catalog.refresh?.()
+  const problem = () => changed.map(([role, choice]) => {
+    const why = invalidChoice(choice, catalog, role)
+    const near = why?.startsWith("unknown model") ? nearModels(catalog, choice.model, 4) : []
+    return why ? `models.${role}: ${why}${near.length ? `; ids in the catalog: ${near.join(", ")}` : ""}` : undefined
+  }).find((why) => why !== undefined)
+  const first = problem()
+  if (!first?.includes("unknown model") || !catalog.discover) return first
+  await catalog.discover()
+  return problem()
 }
 
 /** Why a choice cannot be used, or undefined when it can. */

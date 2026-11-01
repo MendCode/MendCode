@@ -2,6 +2,7 @@ import { footerTextLine } from "@mendcode/protocol/wire"
 import type { Span } from "../ui/theme"
 import type { FooterInput } from "./footer"
 import { compact } from "./format"
+import { isCompact } from "../ui/breakpoints"
 
 /**
  * Footer segments that are neither session stats (stat-parts.ts) nor part of the original footer: the project directory, the code
@@ -28,7 +29,9 @@ export const EXTRA_SEGMENTS: Readonly<Record<string, Segment>> = {
     if (index?.state === "indexing") return [{ text: "GRAPH ", fg: "text", bold: true }, { text: "indexing…", fg: "warning" }, ...saved]
     if (index) {
       const number = (value: number) => value.toLocaleString("en-US")
-      return [{ text: "GRAPH ", fg: "text", bold: true }, { text: `${number(index.files)} ${index.files === 1 ? "file" : "files"} · ${number(index.symbols)} ${index.symbols === 1 ? "symbol" : "symbols"} · ${number(index.edges)} ${index.edges === 1 ? "edge" : "edges"} · `, fg: "muted" }, { text: "indexed", fg: "success" }, ...saved]
+      // Compact (under the normal breakpoint, as the quota windows): the files alone, `GRAPH 2,594 files · indexed`.
+      const counts = isCompact(input.width) ? `${number(index.files)} ${index.files === 1 ? "file" : "files"} · ` : `${number(index.files)} ${index.files === 1 ? "file" : "files"} · ${number(index.symbols)} ${index.symbols === 1 ? "symbol" : "symbols"} · ${number(index.edges)} ${index.edges === 1 ? "edge" : "edges"} · `
+      return [{ text: "GRAPH ", fg: "text", bold: true }, { text: counts, fg: "muted" }, { text: "indexed", fg: "success" }, ...saved]
     }
     return [{ text: "graph ", fg: "muted" }, { text: "on", fg: "success" }, ...saved]
   },

@@ -1,6 +1,6 @@
 import { setupImportKey } from "@mendcode/protocol/wire"
-import { modelListLabel } from "./model-label"
-import { CONNECT_PRESETS } from "./provider-presets"
+import { modelLabel, modelListLabel } from "./model-label"
+import { CONNECT_PRESETS, providerName } from "./provider-presets"
 
 /**
  * First-run detection, from answers the daemon already gives (`models.list`, `providers.list`, `daemon.info`,
@@ -37,8 +37,35 @@ export type ReadyItem = {
   /** The one command or variable that fixes a missing item. */
   fix?: string
 }
-export type ModelSource = "chatgpt" | "claude" | "codex" | "pi" | "api"
-export type ModelOption = { id: string; label: string; source: ModelSource; recommended: boolean; current: boolean; /** One line: what it uses and what it costs. */ line: string }
+export type ModelSource = "chatgpt" | "claude" | "codex" | "pi" | "api" | "acp"
+export type ModelOption = {
+  id: string
+  /** The list label, with its provider when another option reads the same (`GPT-6.1-Sol (codex)`). */
+  label: string
+  /** The label alone, for a row under its group's heading (`GPT-6.1-Sol`). */
+  name: string
+  source: ModelSource
+  /** `ModelGroupInfo.key` of the group it is listed under. */
+  group: string
+  recommended: boolean
+  current: boolean
+  /** One line: what it uses and what it costs. */
+  line: string
+}
+/** One group of the model list: who runs its models and whose login or key pays. */
+export type ModelGroupInfo = {
+  key: string
+  source: ModelSource
+  /** `ChatGPT subscription`, `Anthropic · API key`, `Claude Code harness`. */
+  title: string
+  /** The name beside a model on the Model row: `ChatGPT`, `Anthropic`, `Claude Code`. */
+  short: string
+  /** MendCode's own engine (ChatGPT, API keys) or an external harness on its own login. */
+  native: boolean
+  line: string
+}
+/** A harness or provider that was found but offers no model yet, and the one thing that would list its models. */
+export type UnavailableSource = { source: ModelSource; title: string; native: boolean; reason: string }
 /** One thing the setup could bring over: what the picker lists and what `setup.import` is asked to write. */
 export type ImportChoice = {
   /** `setupImportKey` of the item: the daemon matches it. */
@@ -65,7 +92,12 @@ export type ImportRow = {
 }
 export type Detected = {
   items: ReadyItem[]
+  /** Every model usable from what was found, grouped (`groups`, in that order) and in catalog order inside a group. */
   options: ModelOption[]
+  /** The groups that have options, in the order the list shows them: MendCode's own engine first, then the harnesses. */
+  groups: ModelGroupInfo[]
+  /** What was found but lists no model yet, and how to change that. */
+  unavailable: UnavailableSource[]
   recommended?: string
   /** True when at least one way to talk to a model exists: Enter can start chatting. */
   usable: boolean
@@ -80,13 +112,43 @@ const LINES: Record<ModelSource, string> = {
   codex: "runs in Codex · your Codex login · no per-token charge",
   pi: "your own pi install · billed by whatever pi uses",
   api: "your API key · billed per token",
+  acp: "runs in that agent over ACP · its own login",
 }
-/** Best first: the product's own subscription engine, then the logins of other tools, then keys, then pi. */
-const ORDER: ModelSource[] = ["chatgpt", "claude", "codex", "api", "pi"]
+/** The recommendation, best first: the product's own subscription engine, then the logins of other tools, then keys, then pi and ACP agents. */
+const ORDER: ModelSource[] = ["chatgpt", "claude", "codex", "api", "pi", "acp"]
+/** The order the list shows: MendCode's own engine (ChatGPT, then each keyed provider), then the external harnesses. */
+const LIST_ORDER: ModelSource[] = ["chatgpt", "api", "claude", "codex", "pi", "acp"]
 /** Among API providers, the ones with a first-party model come first. */
 const PROVIDER_ORDER = ["anthropic", "openai", "google", "openrouter"]
+const ACP_PREFIX = "acp:"
 
-const sourceOf = (model: DetectModel): ModelSource => model.engine === "claude" ? "claude" : model.engine === "codex" ? "codex" : model.engine === "pi" ? "pi" : model.provider ? "api" : "chatgpt"
+/** An ACP model is `acp:<agent>` or `acp:<agent>/<model>`: it has no engine field and must not read as the ChatGPT subscription. */
+const sourceOf = (model: DetectModel): ModelSource => model.id.startsWith(ACP_PREFIX) ? "acp" : model.engine === "claude" ? "claude" : model.engine === "codex" ? "codex" : model.engine === "pi" ? "pi" : model.provider ? "api" : model.engine ? "acp" : "chatgpt"
+/** The group of a model: one per API provider and per ACP agent, one for each other source. */
+const groupKeyOf = (model: DetectModel, source: ModelSource) => source === "api" ? `api:${model.provider}` : source === "acp" ? `acp:${acpAgentOf(model)}` : source
+const acpAgentOf = (model: DetectModel) => model.id.startsWith(ACP_PREFIX) ? model.id.slice(ACP_PREFIX.length).split("/")[0]! : model.engine ?? "agent"
+
+/** The heading of a group, from its first model: an ACP agent's catalog entry names its harness (`OpenCode harness`). */
+function groupInfo(key: string, source: ModelSource, model: DetectModel, catalog: readonly DetectModel[]): ModelGroupInfo {
+  if (source === "api") {
+    const name = providerName(model.provider ?? "")
+    return { key, source, title: `${name} · API key`, short: name, native: true, line: `your ${name} key · billed per token` }
+  }
+  if (source === "acp") {
+    const agent = acpAgentOf(model)
+    const entry = catalog.find((candidate) => candidate.id === `${ACP_PREFIX}${agent}`)
+    const harness = (entry?.name ?? model.name.split(" · ").pop() ?? agent).trim()
+    const short = harness.replace(/ harness$/, "")
+    return { key, source, title: `${harness} · ACP`, short, native: false, line: `runs in ${short} over ACP · its own login` }
+  }
+  const fixed: Record<Exclude<ModelSource, "api" | "acp">, Omit<ModelGroupInfo, "key" | "source" | "line">> = {
+    chatgpt: { title: "ChatGPT subscription", short: "ChatGPT", native: true },
+    claude: { title: "Claude Code harness", short: "Claude Code", native: false },
+    codex: { title: "Codex harness", short: "Codex", native: false },
+    pi: { title: "pi harness", short: "pi", native: false },
+  }
+  return { key, source, ...fixed[source], line: LINES[source] }
+}
 
 const keyEnvOf = (id: string) => CONNECT_PRESETS.find((preset) => preset.id === id)?.keyEnv
 
@@ -107,7 +169,7 @@ export function detectReady(input: DetectInput): Detected {
         : { id: "chatgpt", label: "ChatGPT login", ok: false, detail: input.ownLogins ? "not signed in for MendCode" : "not signed in", fix: "/connect chatgpt" }
       : { id: "chatgpt", label: "ChatGPT login", ok: false, detail: "not used by this engine" },
     claudeItem(claude, bySource.has("claude")),
-    codexItem(codex, bySource.has("codex"), input.ownLogins === true),
+    codexItem(codex, bySource.has("codex"), input.ownLogins === true && !usableHarness(codex, bySource.has("codex"))),
     bySource.has("pi")
       ? { id: "pi", label: "pi", ok: true, detail: "found" }
       : { id: "pi", label: "pi", ok: false, detail: "not found" },
@@ -116,15 +178,31 @@ export function detectReady(input: DetectInput): Detected {
       : { id: "keys", label: "API keys", ok: false, detail: "none in the environment", fix: "export ANTHROPIC_API_KEY=…" },
   ]
   const options: ModelOption[] = []
+  const groups: ModelGroupInfo[] = []
   if (input.selectable) {
-    const usableNative = loggedIn ? native : []
-    const picks: Record<ModelSource, DetectModel[]> = { chatgpt: usableNative.slice(0, 2), claude: claude?.signedIn === false || claude?.installed === false ? [] : (bySource.get("claude") ?? []).slice(0, 2), codex: input.ownLogins ? [] : (bySource.get("codex") ?? []).slice(0, 1), pi: (bySource.get("pi") ?? []).slice(0, 1), api: apiPicks(bySource.get("api") ?? [], keyed) }
-    for (const source of ORDER) for (const model of picks[source]) options.push({ id: model.id, label: modelListLabel(model.id, input), source, recommended: false, current: model.id === input.selected, line: LINES[source] })
+    // Every model each source can run, not a sample: the Model row and its list are the whole real catalog of what was found.
+    const usable: Record<ModelSource, DetectModel[]> = {
+      chatgpt: loggedIn ? native : [],
+      api: apiModels(bySource.get("api") ?? [], keyed),
+      claude: usableHarness(claude, bySource.has("claude")) ? bySource.get("claude") ?? [] : [],
+      // The Codex harness runs `codex` on the Codex CLI's own login, as Claude Code runs on its own: `ownLogins` is about MendCode's engine.
+      codex: usableHarness(codex, bySource.has("codex")) ? bySource.get("codex") ?? [] : [],
+      pi: bySource.get("pi") ?? [],
+      acp: bySource.get("acp") ?? [],
+    }
+    for (const source of LIST_ORDER) {
+      for (const model of usable[source]) {
+        const key = groupKeyOf(model, source)
+        let group = groups.find((entry) => entry.key === key)
+        if (!group) groups.push(group = groupInfo(key, source, model, input.models))
+        options.push({ id: model.id, label: modelListLabel(model.id, input), name: modelLabel(model.id, input), source, group: key, recommended: false, current: model.id === input.selected, line: group.line })
+      }
+    }
   }
-  const first = options[0]
   const current = options.find((option) => option.current)
-  const recommended = current?.id ?? first?.id
+  const recommended = current?.id ?? ORDER.map((source) => options.find((option) => option.source === source)).find(Boolean)?.id
   const marked = options.map((option) => ({ ...option, recommended: option.id === recommended }))
+  const unavailable = input.selectable ? unavailableSources({ input, loggedIn, native, keyed, claude, codex, listed: (source) => marked.some((option) => option.source === source) }) : []
 
   const taken = (input.imports?.items ?? []).filter((item) => item.status === "new")
   const tool = (input.imports?.found[0]?.tool ?? taken[0]?.tool) as ImportRow["tool"] | undefined
@@ -134,7 +212,24 @@ export function detectReady(input: DetectInput): Detected {
   const choices = taken.flatMap((item): ImportChoice[] => item.name && (item.kind === "mcp" || item.kind === "command") ? [importChoice({ ...item, name: item.name, kind: item.kind })] : [])
   const importRow: ImportRow | undefined = tool && parts.length ? { tool, mcp, commands, counts: parts.join(", "), summary: `${TOOL_NAME[tool] ?? tool}: ${parts.join(", ")}`, choices, inPlace: [...(input.imports?.inPlace ?? [])], notImported: [...(input.imports?.notImported ?? [])] } : undefined
 
-  return { items, options: marked, ...(recommended ? { recommended } : {}), usable: marked.length > 0 || !input.selectable, ...(importRow ? { importRow } : {}) }
+  return { items, options: marked, groups, unavailable, ...(recommended ? { recommended } : {}), usable: marked.length > 0 || !input.selectable, ...(importRow ? { importRow } : {}) }
+}
+
+/** A harness can run its models unless its own status says it is not installed or not signed in; without a status, a listed one can. */
+const usableHarness = (harness: DetectHarness | undefined, listed: boolean) => listed && harness?.installed !== false && harness?.signedIn !== false
+
+/**
+ * What was found but lists no model yet, each with the one step that lists its models: MendCode's ChatGPT login, an API key,
+ * a harness's own sign-in, and the Codex harness, whose models a native daemon lists only with its thread bridge (full tier).
+ */
+function unavailableSources(input: { input: DetectInput; loggedIn: boolean; native: readonly DetectModel[]; keyed: readonly DetectProvider[]; claude: DetectHarness | undefined; codex: DetectHarness | undefined; listed(source: ModelSource): boolean }): UnavailableSource[] {
+  const out: UnavailableSource[] = []
+  const { claude, codex } = input
+  if ((input.native.length || input.input.login) && !input.listed("chatgpt")) out.push({ source: "chatgpt", title: "ChatGPT subscription", native: true, reason: `${input.input.ownLogins ? "not signed in for MendCode" : "not signed in"} · /connect chatgpt` })
+  if (!input.keyed.length) out.push({ source: "api", title: "API-key providers", native: true, reason: "no key yet · /connect saves one" })
+  if (claude?.installed && !input.listed("claude")) out.push({ source: "claude", title: "Claude Code harness", native: false, reason: claude.signedIn === false ? `not signed in · ${claude.login ?? "claude auth login"}` : "installed · no models listed yet · r checks again" })
+  if (codex?.installed && !input.listed("codex")) out.push({ source: "codex", title: "Codex harness", native: false, reason: codex.signedIn === false ? `not signed in · ${codex.login ?? "codex login"}` : "full tier · /tier thread_mcp on codex lists its models" })
+  return out
 }
 
 /**
@@ -169,9 +264,9 @@ function importChoice(item: DetectImportItem & { name: string; kind: "mcp" | "co
   return { key: setupImportKey({ kind: item.kind, tool, scope, name: item.name }), kind: item.kind, name: item.name, tool, scope, ...(reason ? { reason } : {}) }
 }
 
-/** One model per keyed provider, the first-party providers first, so a long catalog never fills the row. */
-function apiPicks(models: DetectModel[], keyed: readonly DetectProvider[]): DetectModel[] {
+/** Every model of each keyed provider, the first-party providers first; a provider without a key lists nothing. */
+function apiModels(models: DetectModel[], keyed: readonly DetectProvider[]): DetectModel[] {
   const ids = keyed.map((provider) => provider.id).sort((a, b) => rank(a) - rank(b))
-  return ids.flatMap((id) => models.filter((model) => model.provider === id).slice(0, 1)).slice(0, 2)
+  return ids.flatMap((id) => models.filter((model) => model.provider === id))
 }
 const rank = (id: string) => { const index = PROVIDER_ORDER.indexOf(id); return index < 0 ? PROVIDER_ORDER.length : index }

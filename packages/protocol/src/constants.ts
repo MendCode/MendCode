@@ -22,6 +22,32 @@ export type FooterSegment = (typeof FOOTER_SEGMENTS)[number]
  */
 export const FOOTER_OPT_IN: readonly FooterSegment[] = ["ctx", "hit", "think", "calls", "directory", "codegraph", "time", "warm"]
 export const DEFAULT_FOOTER: FooterSegment[] = ["state", "permission", "context", "quota", "notice"]
+
+/**
+ * Where each footer segment shows in the row under the prompt while `/footer` never set a list (docs/layout.md "Footer by tier"):
+ * - `row`: the row draws it itself, under its own switch (`showModel`, `showPermission`, `showEffort`, which `/tier balanced|full` turns
+ *   on; the goal whenever there is one). A `/footer` list that places `effort` also shows it there.
+ * - `balanced`, `full`: the lowest view that places it; the full view puts its own segments on a second row.
+ * - `opt-in`: only where `/footer` or `footerRows` places it.
+ * - `elsewhere`: never in that row, because another part of the screen shows it (the working row, the topbar, the notice slot).
+ */
+export type FooterSegmentTier = "row" | "balanced" | "full" | "opt-in" | "elsewhere"
+export const FOOTER_SEGMENT_TIER: Readonly<Record<FooterSegment, FooterSegmentTier>> = {
+  model: "row", permission: "row", goal: "row", effort: "row",
+  forecast: "balanced",
+  codegraph: "full", cache: "full", quota: "full",
+  state: "elsewhere", context: "elsewhere", notice: "elsewhere",
+  today: "opt-in", cost: "opt-in", branch: "opt-in", tokens: "opt-in", jobs: "opt-in", sandbox: "opt-in", vim: "opt-in", update: "opt-in", ttft: "opt-in", tps: "opt-in", spend: "opt-in", ctx: "opt-in", hit: "opt-in", think: "opt-in", calls: "opt-in", directory: "opt-in", time: "opt-in", warm: "opt-in",
+}
+
+/**
+ * The segments the row under the prompt shows in a view while `/footer` never set a list, in the table's order (the drawing order): none
+ * in minimal, which has no such row.
+ */
+export function tierFooter(view: "minimal" | "balanced" | "full"): FooterSegment[] {
+  const wanted: readonly FooterSegmentTier[] = view === "full" ? ["balanced", "full"] : view === "balanced" ? ["balanced"] : []
+  return (Object.keys(FOOTER_SEGMENT_TIER) as FooterSegment[]).filter((segment) => wanted.includes(FOOTER_SEGMENT_TIER[segment]))
+}
 /** The stats footer: token flow, cache hit, spend and speed. */
 export const FOOTER_STATS: FooterSegment[] = ["state", "tokens", "cache", "spend", "ttft", "tps", "notice"]
 

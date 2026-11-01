@@ -41,6 +41,8 @@ export function createPeers(input: {
   notify(sessionId: SessionId, text: string, delivery?: "queue" | "steer"): Promise<QueueId | undefined>
   /** A session's figures as text (`session stats`), or undefined when it is gone. */
   stats?(sessionId: SessionId): string | undefined
+  /** A page of a session's conversation (`sessions read`) for `from`, which the daemon may refuse (a turn a remote client started). */
+  read?(from: SessionId, sessionId: SessionId, cursor: string | undefined): ReturnType<NonNullable<PeerPort["read"]>>
 }) {
   /** Answers by sender, target and `clientRequestId` (bounded): a retried `tell` returns the first answer and sends nothing. */
   const requests = new Map<string, Awaited<ReturnType<PeerPort["tell"]>>>()
@@ -123,6 +125,11 @@ export function createPeers(input: {
           if (!origin || !info || info.directory !== origin.directory) return { ok: false, message: `no session ${target} in this project; use sessions to list them` }
           const text = input.stats?.(id)
           return text ? { ok: true, output: text } : { ok: false, message: "session figures are not available here" }
+        },
+        // An exact id is the user's own pointer, so it may name a session of another project; listing stays within this one.
+        read(target, cursor) {
+          if (!input.info(target as SessionId)) return { ok: false, message: `no session ${target}; read needs its exact id (ses_…)` }
+          return input.read?.(from, target as SessionId, cursor) ?? { ok: false, message: "reading sessions is not available here" }
         },
         list(limit = MAX_PEER_SESSIONS): PeerSession[] {
           const directory = input.info(from)?.directory

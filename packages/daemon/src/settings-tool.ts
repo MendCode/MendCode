@@ -9,6 +9,8 @@ export const SETTINGS_PROPOSAL = "Change MendCode settings?"
 export const SETTINGS_PROPOSAL_LOCAL = "Change MendCode settings? (answer on this machine)"
 export const SETTINGS_APPLY = "Apply"
 export const SETTINGS_KEEP = "Don't apply"
+/** Appended to an applied change of `models`: what a new default changes and what it leaves alone (docs/sessions.md). */
+export const MODEL_ROLES_NOTE = "New sessions start on the new main model. A session that already ran keeps its engine (this one included): a main model on another engine (Claude Code, an ACP agent) does not move it; /model switches it."
 const MAX_LINES = 24
 const MAX_VALUE = 160
 /** Records whose values are credentials or environment values: their names are shown, never their values. */
@@ -67,6 +69,8 @@ export function createSettingsTool(input: {
   settings(): Settings
   /** What the settings would be after `patch`, validated as `settings.set` validates it; throws when invalid. Writes nothing. */
   check(patch: Record<string, unknown>): Settings
+  /** Why the patch's model roles cannot run (a model no catalog lists, a Claude Code model for a role other than main), or undefined. */
+  models?(patch: Record<string, unknown>): Promise<string | undefined>
   write(patch: Record<string, unknown>): Promise<Settings>
 }) {
   return defineTool({
@@ -86,6 +90,8 @@ export function createSettingsTool(input: {
       const { patch, reason } = args
       let after: Settings
       try { after = input.check(patch) } catch (error) { return fail({ title, message: `Not proposed: invalid settings. Nothing was asked or changed.\n${invalid(error).slice(0, 1500)}` }) }
+      const unusable = await input.models?.(patch)
+      if (unusable) return fail({ title, message: `Not proposed: ${unusable.slice(0, 1500)}. Nothing was asked or changed.` })
       const before = input.settings() as Record<string, unknown>
       // `acpAgents` merges per agent and lives in its own file: the patch itself is what changes.
       const result: Record<string, unknown> = { ...after, ...("acpAgents" in patch ? { acpAgents: patch.acpAgents === null ? undefined : { ...(before.acpAgents as object | undefined), ...(patch.acpAgents as object) } } : {}) }
@@ -106,7 +112,9 @@ export function createSettingsTool(input: {
       }
       if (ctx.signal.aborted) return fail({ title, message: "Not applied: the turn was cancelled. Nothing changed." })
       try { await input.write(patch) } catch (error) { return fail({ title, message: `Not applied: ${invalid(error).slice(0, 1500)}. Nothing changed.` }) }
-      return { title, output: `Applied; every terminal has the new settings.\n${lines.join("\n")}`, truncated: false, isError: false }
+      // So the assistant can say where a new default takes effect: the session it runs in stays where it is.
+      const roles = "models" in patch ? `\n${MODEL_ROLES_NOTE}` : ""
+      return { title, output: `Applied; every terminal has the new settings.\n${lines.join("\n")}${roles}`, truncated: false, isError: false }
     },
   })
 }

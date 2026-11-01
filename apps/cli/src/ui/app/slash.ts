@@ -207,10 +207,13 @@ export function createSlash(ctx: AppContext, actions: {
       state.notice = parsed.error
       return
     }
-    if (args.trim()) await setupChoice({ footer: parsed.segments })
-    if (args.trim().toLowerCase() === "reset" && state.tuiProfile.footerRows.length) changeProfile({ footerRows: [] })
-    const shown = state.tuiProfile.footerRows.length && !args.trim().toLowerCase().startsWith("reset") ? `rows: ${state.tuiProfile.footerRows.length} (/footer rows 0 to clear) · single row: ` : "footer: "
-    state.notice = `${shown}${parsed.segments.join(" ")}`
+    // `reset` removes the saved list, so the view's tier places the segments again.
+    const reset = args.trim().toLowerCase() === "reset"
+    if (args.trim()) await setupChoice({ footer: reset ? null : parsed.segments })
+    if (reset && state.tuiProfile.footerRows.length) changeProfile({ footerRows: [] })
+    const shown = state.tuiProfile.footerRows.length && !reset ? `rows: ${state.tuiProfile.footerRows.length} (/footer rows 0 to clear) · single row: ` : "footer: "
+    const list = reset ? footerSegments() : parsed.segments
+    state.notice = `${shown}${list.length ? list.join(" ") : "none"}${reset || !state.customFooter ? ` (${state.mode} view default)` : ""}`
   }
 
   /** Opens another page from a link row of a page, leaving the prompt's draft as it was. */

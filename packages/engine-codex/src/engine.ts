@@ -165,6 +165,8 @@ export function createCodexEngine(options: {
   hostServers?: readonly HostServer[]
   /** What the model is told about those tools. Codex keeps an MCP server's `instructions` out of the model's prompt (0.162), so they join the thread's developer instructions. */
   hostInstructions?: string | undefined
+  /** What the model is told about this process's own MCP servers (`externalMcp.instructions`, the thread bridge's delegation and models). */
+  processInstructions?: string | undefined
   transportFactory?: (input: { args: string[]; cwd: string; env?: Record<string, string> }) => Transport
   /** Stores an image Codex generated (it saves it under `savedPath`), so the transcript shows it as for a native session. */
   storeImage?(bytes: Uint8Array, mime: string, sessionId: SessionId): Promise<BlobRef>
@@ -343,7 +345,7 @@ export function createCodexEngine(options: {
     if (existing) return existing
     // `developerInstructions` is a developer message on top of Codex's base instructions; `baseInstructions` would replace them. A
     // thread's own developer instructions take the place of the process's (`developer_instructions`), so the language pin rides along.
-    const own = [options.appendSystem?.(options.cwd), host.names.size ? options.hostInstructions : undefined, options.environment?.note].filter(Boolean)
+    const own = [options.appendSystem?.(options.cwd), host.names.size ? options.hostInstructions : undefined, options.processInstructions, options.environment?.note].filter(Boolean)
     const developerInstructions = own.length ? [...own, codexLanguageInstruction(options.runLimits)].filter(Boolean).join("\n\n") : ""
     const settings = { model, cwd: options.cwd, approvalPolicy: "on-request", sandbox: plan ? "read-only" : "workspace-write", ...(developerInstructions ? { developerInstructions } : {}) }
     const bound = options.bindings?.get(sessionId)
@@ -367,7 +369,7 @@ export function createCodexEngine(options: {
       if (input.externalMcp) {
         const mcp = input.externalMcp
         const { trace: _trace, ...processOptions } = options
-        const child = createCodexEngine({ ...processOptions, cwd: mcp.cwd, processArgs: mcp.args, waitingForMcp: () => Boolean(mcp.waiting?.() || options.waitingForMcp?.()) })
+        const child = createCodexEngine({ ...processOptions, cwd: mcp.cwd, processArgs: mcp.args, processInstructions: mcp.instructions, waitingForMcp: () => Boolean(mcp.waiting?.() || options.waitingForMcp?.()) })
         isolated.add(child)
         const turn = processMcpTurn(input)
         try { return await child.runTurn(turn) }

@@ -465,6 +465,11 @@ export function createNativeEngine(options: {
   trace?: import("@mendcode/protocol").TracePort
   /** The model for a session's next call in a role; the provider's own model when absent. Read per call, so `/model` applies mid-turn. */
   modelFor?(sessionId: SessionId, role: ModelRole): ModelChoice | undefined
+  /**
+   * Who runs `model` when this engine cannot (Claude Code, an ACP agent), or undefined. A session's model or default that changes to such a
+   * model while a turn runs applies from its next turn: the rest of the turn keeps the model it was on, and no such model reaches a provider.
+   */
+  foreignModel?(model: string): string | undefined
   reasoning?: ReasoningPort
   beforeModel?(input: { model: string; signal: AbortSignal; ask?: TurnInput["ask"] }): Promise<void>
   onMissingUsage?(): void
@@ -700,6 +705,14 @@ export function createNativeEngine(options: {
    * start with the same bytes (the provider's cached prefix). A portable compaction is built from it when it can be (`compact`).
    */
   const lastMain = new Map<SessionId, SharedPrefix>()
+  /** The main model each running turn sends, kept for the turn when the session's model or default moves to another engine (`foreignModel`). */
+  const turnModels = new Map<SessionId, { choice: ModelChoice | undefined }>()
+  /** `options.modelFor`, except that a running turn's main calls keep its model rather than take one this engine cannot send. */
+  const modelFor = (sessionId: SessionId, role: ModelRole): ModelChoice | undefined => {
+    const choice = options.modelFor?.(sessionId, role)
+    const kept = role === "main" && choice && options.foreignModel?.(choice.model) ? turnModels.get(sessionId) : undefined
+    return kept ? kept.choice : choice
+  }
   /** Early cards of whole calls waiting for their run, by session and call id (`EarlyCard`). */
   const earlyCards = new Map<string, EarlyCard>()
   const earlyKey = (sessionId: SessionId, callId: string) => `${sessionId}\n${callId}`
@@ -758,7 +771,7 @@ export function createNativeEngine(options: {
   /** Read at each check so a settings change applies to the next turn. */
   const compactionConfig = () => options.compaction?.() ?? {}
   const limitsFor = (sessionId: SessionId) => {
-    const choice = choiceFor(options.modelFor?.(sessionId, "main"), lastAgent.get(sessionId))
+    const choice = choiceFor(modelFor(sessionId, "main"), lastAgent.get(sessionId))
     const override = options.contextWindowOverrideFor?.(sessionId, choice?.model)
     if (override) {
       const { contextWindow: _window, inputLimit: _input, ...rest } = options.provider.compactionLimits?.(choice?.model) ?? {}
@@ -767,7 +780,7 @@ export function createNativeEngine(options: {
     const window = options.contextWindowFor?.(sessionId)
     return { ...(window ? { contextWindow: window } : {}), ...options.provider.compactionLimits?.(choice?.model) }
   }
-  const compactAt = (sessionId: SessionId) => compactionThreshold(compactionConfig(), limitsFor(sessionId), typeof options.compactAtTokens === "function" ? options.compactAtTokens(sessionId, choiceFor(options.modelFor?.(sessionId, "main"), lastAgent.get(sessionId))?.model) : options.compactAtTokens)
+  const compactAt = (sessionId: SessionId) => compactionThreshold(compactionConfig(), limitsFor(sessionId), typeof options.compactAtTokens === "function" ? options.compactAtTokens(sessionId, choiceFor(modelFor(sessionId, "main"), lastAgent.get(sessionId))?.model) : options.compactAtTokens)
   /** Tokens of old tool output each session's last request left out, so the size `pruneNow` compares does not fall because of the prune itself. */
   const prunedTokens = new Map<SessionId, number>()
   /**
@@ -844,11 +857,15 @@ export function createNativeEngine(options: {
     const fork = compact?.fork
     // The final, text-only step of a fork sends no tools, like any other.
     if (fork && callTools.length) callTools = fork.tools
-    const override = textKind === "agent_message" ? role === "subagent" && options.tasks ? options.modelFor?.(input.sessionId, role) : input.selection?.model : textKind === "compaction" ? input.selection?.model : undefined
+    const override = textKind === "agent_message" ? role === "subagent" && options.tasks ? modelFor(input.sessionId, role) : input.selection?.model : textKind === "compaction" ? input.selection?.model : undefined
     const compound = options.compound?.(input.sessionId)
-    const selected = override ?? options.modelFor?.(input.sessionId, role)
+    const selected = override ?? modelFor(input.sessionId, role)
     const profile = (override || options.tasks?.isChild(input.sessionId)) && agent ? (({ model: _model, variant: _variant, effort: _effort, ...rest }) => rest)(agent) : agent
     const choice = share ? share.last.choice : fork ? fork.choice : compound?.choice ?? input.workflow?.execution.model ?? choiceFor(selected, profile)
+    // Another engine's model (Claude Code's `claude-opus`, an ACP agent) never goes to a provider of this one: the provider would answer with an error about a model it has never heard of.
+    const elsewhere = choice ? options.foreignModel?.(choice.model) : undefined
+    if (elsewhere) throw new Error(`${choice!.model} runs on ${elsewhere}, not on MendCode's own engine; send the message again to run it there, or pick another model with /model`)
+    if (role === "main" && textKind === "agent_message" && !override) turnModels.set(input.sessionId, { choice: selected })
     callTools = callTools.filter((tool) => !workflowToolDenied(input.workflow?.execution, tool.name))
     /** Answer text already shown when the connection dropped; the next attempt continues it in the same item. */
     let carried: { itemId: ItemId; text: string } | undefined
@@ -1497,7 +1514,7 @@ export function createNativeEngine(options: {
     const shellEnvironment = (call.name === "shell" || call.name === "shell_session") && hooks?.has("shell.env", options.cwdFor(input.sessionId)) ? await hooks.environment?.({ sessionId: input.sessionId, cwd: options.cwdFor(input.sessionId) }) : undefined
     const executionShell = options.shell?.(input.sessionId) ?? defaultShell()
     // Scripts a shell call starts can tell which session, model and project they belong to.
-    const sessionEnvironment = call.name === "shell" ? { MENDCODE_SESSION_ID: input.sessionId, MENDCODE_MODEL: choiceFor(options.modelFor?.(input.sessionId, "main"), toolset.agent)?.model ?? options.provider.model, MENDCODE_PROJECT_DIR: options.cwdFor(input.sessionId) } : undefined
+    const sessionEnvironment = call.name === "shell" ? { MENDCODE_SESSION_ID: input.sessionId, MENDCODE_MODEL: choiceFor(modelFor(input.sessionId, "main"), toolset.agent)?.model ?? options.provider.model, MENDCODE_PROJECT_DIR: options.cwdFor(input.sessionId) } : undefined
     // The environment policy shapes what shell commands inherit; hooks and the session variables are added on top of it.
     const shellSettings = call.name === "shell" || call.name === "shell_session" ? options.shellSettings?.() : undefined
     const inherited = shellSettings?.environment ? applyShellEnvironment(process.env, shellSettings.environment) : process.env
@@ -2068,6 +2085,7 @@ export function createNativeEngine(options: {
         input.signal.removeEventListener("abort", abortProvider)
         providerTurnSignals.delete(input.signal)
         providerTurn.abort()
+        turnModels.delete(input.sessionId)
         if (!child) options.reasoning?.release(input.sessionId)
       }
     },
@@ -2101,7 +2119,7 @@ export function createNativeEngine(options: {
       const context: SystemContext = { sessionId, prompt: lastPrompt(messages), ...(catalog ? { tools: catalog } : {}) }
       const parts = options.systemParts?.(cwd, context) ?? [{ id: "system", label: "system prompt", text: options.system(cwd, context) }]
       const system = [...parts, ...(agentText ? [{ id: "agent", label: `agent ${agent!.name}`, text: agentText, count: 1 }] : [])].map((part) => section(`system:${part.id}`, `system · ${part.label}`, part.text.length, part.count))
-      const choice = choiceFor(options.modelFor?.(sessionId, "main"), agent)
+      const choice = choiceFor(modelFor(sessionId, "main"), agent)
       let requestSystem = options.system(cwd, context)
       if (agentText) requestSystem += `\n\n${agentText}`
       const known = secrets?.list(sessionId) ?? []
@@ -2217,8 +2235,8 @@ export function createNativeEngine(options: {
       // The summariser is the main call's model unless the user gave the `compaction` role its own (or picked a model for this `/compact`):
       // that is a choice of another summariser, and its request stays as it was. A compaction while idle always runs on the main call's model.
       const ownModel = (sent: SharedPrefix) => {
-        const summariser = input.selection?.model ?? options.modelFor?.(input.sessionId, "compaction")
-        return (summariser?.model ?? options.provider.model) !== (sent.choice?.model ?? options.provider.model) || !input.selection?.model && fingerprint(summariser) !== fingerprint(options.modelFor?.(input.sessionId, "main"))
+        const summariser = input.selection?.model ?? modelFor(input.sessionId, "compaction")
+        return (summariser?.model ?? options.provider.model) !== (sent.choice?.model ?? options.provider.model) || !input.selection?.model && fingerprint(summariser) !== fingerprint(modelFor(input.sessionId, "main"))
       }
       const sentHistory = last && asLastSent(messages, last)
       let sharedOff: "no-call" | "native-strategy" | "other-model" | "history-changed" | "too-large" | "tool-call" | "empty" | "tool-call-cosplay" | "error" | undefined = !last ? "no-call" : config.strategy === "native" ? "native-strategy" : !input.idle && ownModel(last) ? "other-model" : !sentHistory ? "history-changed" : undefined
@@ -2248,8 +2266,8 @@ export function createNativeEngine(options: {
         const tailored = reason === "manual" && (!!input.instructions || !!input.selection?.model)
         // Whether the native compaction endpoint reads the prompt cache is not known, so a compaction while idle always writes a portable summary (and is not run at all under `strategy: native`).
         const wantsNative = !summary && !tailored && !input.idle && (config.strategy === "native" || config.strategy === "auto")
-        const active = wantsNative ? choiceFor(options.modelFor?.(input.sessionId, "main"), lastAgent.get(input.sessionId)) : undefined
-        const compactChoice = wantsNative ? options.modelFor?.(input.sessionId, "compaction") : undefined
+        const active = wantsNative ? choiceFor(modelFor(input.sessionId, "main"), lastAgent.get(input.sessionId)) : undefined
+        const compactChoice = wantsNative ? modelFor(input.sessionId, "compaction") : undefined
         const roleMatches = !compactChoice || compactChoice.model === (active?.model ?? options.provider.model) && compactChoice.effort === active?.effort && fingerprint(compactChoice.parameters) === fingerprint(active?.parameters)
         const binding = wantsNative && roleMatches ? await compactionDeadline(input.signal, config.timeout_ms ?? DEFAULT_COMPACTION_TIMEOUT_MS, async () => options.provider.nativeBinding?.(active?.model)) : undefined
         if (wantsNative && (!binding || !roleMatches || !options.provider.compact) && config.strategy === "native") throw new NativeCompactionError("unsupported", roleMatches ? "Native compaction is unavailable for this transport" : "Native compaction requires the active model; the compaction role differs")
@@ -2275,7 +2293,7 @@ export function createNativeEngine(options: {
             })
             if (!Array.isArray(result.output) || !result.output.length || result.output.some((item) => !item || typeof item !== "object" || Array.isArray(item))) throw new NativeCompactionError("malformed", "Native checkpoint is malformed")
             if (Buffer.byteLength(JSON.stringify(result.output)) > 4 * 1024 * 1024) throw new NativeCompactionError("oversized", "Native checkpoint exceeds 4 MiB")
-            const current = choiceFor(options.modelFor?.(input.sessionId, "main"), lastAgent.get(input.sessionId))
+            const current = choiceFor(modelFor(input.sessionId, "main"), lastAgent.get(input.sessionId))
             if (fingerprint(current) !== fingerprint(active)) throw new NativeCompactionError("stale", "Active model changed")
             const currentBinding = await compactionDeadline(input.signal, config.timeout_ms ?? DEFAULT_COMPACTION_TIMEOUT_MS, async () => options.provider.nativeBinding?.(active?.model))
             if (binding !== currentBinding) throw new NativeCompactionError("stale", "Native binding changed")

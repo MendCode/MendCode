@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import type { Line } from "../src/ui/theme"
-import { HOME_SECTION_CAPS, homeVisibleSessions, logoRows, renderHome, type HomeSession } from "../src/view/home"
+import { HOME_SECTION_CAPS, homeVisibleSessions, renderHome, type HomeSession } from "../src/view/home"
+import { LOGO_MARK } from "../src/view/logo-mark"
 import { textWidth } from "../src/view/wrap"
 
 const text = (line: Line) => line.map((span) => span.text).join("")
@@ -51,11 +52,11 @@ describe("home header row", () => {
 })
 
 describe("home logo density (v1 homeDensity)", () => {
-  const wordmark = logoRows()
+  const wordmark = LOGO_MARK
   const withLogo = (rows: Line[]) => lines(rows).some((line) => line.includes(wordmark[0]!))
   const plainName = (rows: Line[]) => lines(rows).some((line) => line.trim() === "MendCode")
 
-  test("full: the ASCII logo in the text color, centered, when taller than 23 rows and wider than 64 columns", () => {
+  test("full: the logo in the text color, centered, when taller than 23 rows and wider than 64 columns", () => {
     const rows = renderHome({ ...base, width: 120, height: 34, screenHeight: 40 })
     expect(withLogo(rows)).toBe(true)
     const row = rows.find((line) => text(line).includes(wordmark[0]!))!
