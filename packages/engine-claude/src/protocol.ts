@@ -1,4 +1,5 @@
-import { EARLY_TOOL_CHARS, INPUT_PROGRESS_CHARS, partialToolArgs, toolInputProgress as inputProgress, type ItemId, type PermissionMode, type ReasoningEffort } from "@mendcode/protocol"
+import { EARLY_TOOL_CHARS, INPUT_PROGRESS_CHARS, partialToolArgs, todoListCard, toolInputProgress as inputProgress, type ItemId, type PermissionMode, type ReasoningEffort } from "@mendcode/protocol"
+import { CLAUDE_PLAN_TOOLS, createClaudePlan, todoWriteItems, type ClaudePlan } from "./plan"
 import type { EngineEvent, GlobalEventDraft } from "@mendcode/kernel"
 
 /**
@@ -37,7 +38,7 @@ export function clip(text: string) {
  * model's thinking unless asked, so `--thinking-display summarized` is what makes `thinking_delta` carry words; `thinkingDisplay: false`
  * leaves the flag out for a `claude` that does not know it.
  */
-export function claudeArgs(input: { model?: string | undefined; effort?: ReasoningEffort | undefined; fast?: boolean | undefined; permission: PermissionMode; resume?: string | undefined; thinkingDisplay?: boolean | undefined; appendSystem?: string | undefined }): string[] {
+export function claudeArgs(input: { model?: string | undefined; effort?: ReasoningEffort | undefined; fast?: boolean | undefined; advisor?: string | undefined; permission: PermissionMode; resume?: string | undefined; thinkingDisplay?: boolean | undefined; appendSystem?: string | undefined }): string[] {
   const permission = claudePermissionMode(input.permission)
   const effort = claudeEffort(input.effort)
   return [
@@ -54,6 +55,8 @@ export function claudeArgs(input: { model?: string | undefined; effort?: Reasoni
     // Only makes `bypassPermissions` reachable, so switching to full mid-session needs no restart; the mode decides.
     "--allow-dangerously-skip-permissions",
     ...(input.model ? ["--model", input.model] : []),
+    // Claude Code's own advisor tool; Claude Code refuses an advisor less capable than the main model and says so.
+    ...(input.advisor ? ["--advisor", input.advisor] : []),
     ...(effort ? ["--effort", effort] : []),
     // Fast mode is a setting Claude Code reads at start; passed this way it holds for this process only and is never saved.
     ...(input.fast ? ["--settings", JSON.stringify({ fastMode: true })] : []),
@@ -188,6 +191,9 @@ export function claudeToolTitle(name: string, input: Record<string, any> | undef
     case "Task":
     case "Agent":
       return `agent ${String(args.description ?? args.subagent_type ?? "")}`.trim()
+    // The list's card, as MendCode's own `todo` names it (`todo 2/5`): the progress row and the dock read it from there.
+    case "TodoWrite":
+      return todoListCard(todoWriteItems(args)).title
     default:
       return name
   }
@@ -259,8 +265,13 @@ export function claudeEditPatch(result: unknown): string | undefined {
  * message marked `agentEnd`, with its tool count, tokens and duration). Clients show the thread under the call and leave it out
  * of the main conversation. A sub-agent that ends after its turn did (a background one) is not reported.
  */
-export function createTurnMapper(input: { newItemId(): ItemId; emit(event: EngineEvent): void; model: string; /** Tools the daemon runs and draws itself: no item here. */ ownTools?: string | undefined; /** Every tool call of the main agent, with its arguments. */ onTool?(name: string, args: Record<string, any> | undefined): void }) {
+export function createTurnMapper(input: { newItemId(): ItemId; emit(event: EngineEvent): void; model: string; /** Tools the daemon runs and draws itself: no item here. */ ownTools?: string | undefined; /** Every tool call of the main agent, with its arguments. */ onTool?(name: string, args: Record<string, any> | undefined): void; /** The session's task list, kept across its turns (TaskCreate and TaskUpdate change one task each). */ plan?: ClaudePlan }) {
   const own = (name: unknown) => !!input.ownTools && String(name).startsWith(input.ownTools)
+  const plan = input.plan ?? createClaudePlan()
+  /** The main agent's calls of a plan tool (TodoWrite, TaskCreate, TaskUpdate) by tool-use id: their result becomes the list's card. */
+  const planCalls = new Map<string, { name: string; args: Record<string, any> | undefined }>()
+  /** A sub-agent's TodoWrite checklist by tool-use id: its own list, shown in its thread and never pinned. */
+  const agentTodos = new Map<string, string>()
   const blocks = new Map<number, OpenBlock>()
   const tools = new Map<string, ItemId>()
   /** Agent calls of this turn by their tool-use id, kept past their result: a background agent goes on after it. */
@@ -380,6 +391,7 @@ export function createTurnMapper(input: { newItemId(): ItemId; emit(event: Engin
           args = undefined
         }
         input.onTool?.(open.name ?? "tool", args)
+        if (open.toolUseId && CLAUDE_PLAN_TOOLS.has(open.name ?? "")) planCalls.set(open.toolUseId, { name: open.name!, args })
         if (open.itemId) input.emit({ type: "item.delta", itemId: open.itemId, text: "", input: { ...inputProgress(open.json), done: true } })
         const itemId = open.itemId ?? input.newItemId()
         if (open.toolUseId) tools.set(open.toolUseId, itemId)
@@ -415,6 +427,14 @@ export function createTurnMapper(input: { newItemId(): ItemId; emit(event: Engin
       const late = agentLate && backgroundAgents.has(String(part.tool_use_id)) ? { ...agentLate, background: true } : agentLate
       // A background agent's result is Claude Code's note to its model (ids and how to message it), not something to show.
       const text = !part.is_error && backgroundAgents.has(String(part.tool_use_id)) ? "running in the background" : !part.is_error && patch ? patch : toolResultText(part.content)
+      // A plan tool's result says only that the list changed: the card is the whole list, named `todo d/n` like the native tool's.
+      const call = planCalls.get(String(part.tool_use_id))
+      planCalls.delete(String(part.tool_use_id))
+      const card = call && !part.is_error ? plan.apply(call.name, call.args, text) : undefined
+      if (card) {
+        input.emit({ type: "item.completed", itemId, status: "ok", text: clip(card.text), meta: { tool: card.title, retitled: true } })
+        continue
+      }
       input.emit({ type: "item.completed", itemId, status: part.is_error ? "error" : "ok", text: clip(text), ...(late ? { meta: late } : {}) })
     }
   }
@@ -442,12 +462,15 @@ export function createTurnMapper(input: { newItemId(): ItemId; emit(event: Engin
       } else if (message.type === "assistant" && part?.type === "tool_use" && typeof part.id === "string" && !agentTools.has(part.id) && !own(part.name)) {
         const itemId = input.newItemId()
         agentTools.set(part.id, itemId)
+        if (part.name === "TodoWrite") agentTodos.set(part.id, todoListCard(todoWriteItems(part.input && typeof part.input === "object" ? part.input : undefined)).text)
         input.emit({ type: "item.started", itemId, kind: "tool_call", meta: { tool: claudeToolTitle(String(part.name ?? "tool"), part.input && typeof part.input === "object" ? part.input : undefined).slice(0, 200), agentParent: parent, ...agentModel } })
       } else if (message.type === "user" && part?.type === "tool_result") {
         const itemId = agentTools.get(String(part.tool_use_id))
         if (!itemId) continue
         agentTools.delete(String(part.tool_use_id))
-        input.emit({ type: "item.completed", itemId, status: part.is_error ? "error" : "ok", text: clip(toolResultText(part.content)), meta: { agentParent: parent } })
+        const todos = agentTodos.get(String(part.tool_use_id))
+        agentTodos.delete(String(part.tool_use_id))
+        input.emit({ type: "item.completed", itemId, status: part.is_error ? "error" : "ok", text: clip(todos !== undefined && !part.is_error ? todos : toolResultText(part.content)), meta: { agentParent: parent } })
       }
     }
   }

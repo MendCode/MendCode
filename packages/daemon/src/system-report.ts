@@ -67,7 +67,10 @@ export function systemReport(operation: string, input: Input): SystemReport {
     facts.environment = names.map((name) => ({ name, present: Boolean(environment[name]) }))
     const roles = rolesFor(input.settings, input.directory)
     facts.roles = Object.fromEntries(MODEL_ROLES.map((role) => {
-      const choice = resolveModel({ role, roles, catalog: input.catalog })
+      // These two have no fallback: without their own setting nothing is consulted or reviewed, which is not "the main model".
+      if ((role === "advisor" || role === "permissionReviewer") && !roles[role]) return [role, { model: null, provider: null, off: true, authReady: null, blockers: [] }]
+      // The advisor may be a Claude Code model, which resolveModel leaves out of every role but main.
+      const choice = role === "advisor" ? roles.advisor! : resolveModel({ role, roles, catalog: input.catalog })
       const entry = input.catalog.list().find((entry) => entry.id === choice.model)
       const providerId = entry?.provider ?? (choice.model.includes(":") ? choice.model.split(":")[0] : undefined)
       const provider = providers.find((provider) => provider.id === providerId)

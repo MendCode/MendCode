@@ -4,7 +4,7 @@ import path from "node:path"
 import { MEMORY_ASSISTANT_ARCHIVE_MAX, MemoryAssistantAction, MemoryAssistantThread, redactSecrets } from "@mendcode/protocol"
 import type { MemoryAssistantArchive, MemoryAssistantSelection, MemoryBrowseReport, MemoryId, ModelChoice, MemorySideChatPayload, MemorySideChatResponse } from "@mendcode/protocol"
 import type { Store } from "@mendcode/store"
-import type { DaemonOptions } from "./daemon"
+import type { AuxiliaryComplete } from "./usage-auxiliary"
 import { ASIDE_TIMEOUT_MS } from "./aside"
 
 export const MEMORY_ASSISTANT_SYSTEM = [
@@ -35,7 +35,7 @@ export function parseMemoryAssistantResponse(text: string) {
 export function createMemoryAssistant(input: {
   dir: string
   store: Store
-  complete: DaemonOptions["complete"]
+  complete: AuxiliaryComplete | undefined
   browse(directory: string | undefined, view: "project" | "user" | "all", root?: string): MemoryBrowseReport
   profile(directory: string): string
   draft(directory: string, action: MemoryAssistantAction): MemoryId | undefined
@@ -164,7 +164,7 @@ export function createMemoryAssistant(input: {
       const candidates = input.models?.(directory) ?? (primary ? [primary] : [])
       for (const model of candidates.length ? candidates : [undefined]) {
         try {
-          const answer = await Promise.race([input.complete({ system: MEMORY_ASSISTANT_SYSTEM, prompt, signal, ...(model ? { model } : {}) }), aborted])
+          const answer = await Promise.race([input.complete({ system: MEMORY_ASSISTANT_SYSTEM, prompt, signal, ...(model ? { model } : {}), auxiliary: { role: "memoryAssistant", directory } }), aborted])
           if (signal.aborted || calls.get(target) !== controller) return { text: "Memory side chat canceled", actions: [] }
           const response = parseMemoryAssistantResponse(answer)
           return { text: response.text.slice(0, 24_000), actions: response.actions.map((action) => ({ ...action, ...(action.scope === "user" ? { scope: "global" as const } : {}), ...(action.targetScope === "user" ? { targetScope: "global" as const } : {}) })) }
@@ -205,7 +205,7 @@ export function createMemoryAssistant(input: {
     try {
       const aborted = new Promise<never>((_, reject) => signal.addEventListener("abort", () => reject(new Error("Memory assistant canceled or timed out")), { once: true }))
       const model = input.model(directory)
-      const answer = await Promise.race([input.complete({ system: MEMORY_ASSISTANT_SYSTEM, prompt, signal, ...(model ? { model } : {}) }), aborted])
+      const answer = await Promise.race([input.complete({ system: MEMORY_ASSISTANT_SYSTEM, prompt, signal, ...(model ? { model } : {}), auxiliary: { role: "memoryAssistant", directory } }), aborted])
       if (signal.aborted || calls.get(targetFile) !== controller) return get(directory)
       if (file(directory) !== targetFile) throw new Error("Memory profile changed; ask again")
       const response = parseMemoryAssistantResponse(answer)

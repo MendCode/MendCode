@@ -56,10 +56,16 @@ export const FOOTER_STATS: FooterSegment[] = ["state", "tokens", "cache", "spend
  * `main` for that session. `plan` answers turns in plan mode, `subagent` runs `task`, `dream` curates memory,
  * `aside` answers `/btw` side questions. `small` is the shared default for cheap auxiliary calls (today: `aside`
  * falls back to it before `main`). `permissionReviewer` classifies a pending approval in `smart` permission mode and
- * has no fallback: without its own setting no reviewer runs. Roles added later stay at the end so stored settings keep their meaning.
+ * has no fallback: without its own setting no reviewer runs. `advisor` is the stronger second opinion the main agent
+ * consults (docs/advisor.md) and has no fallback either. Roles added later stay at the end so stored settings keep their meaning.
  */
-export const MODEL_ROLES = ["main", "plan", "subagent", "compaction", "dream", "aside", "small", "permissionReviewer", "memoryExtractor", "memoryAssistant", "memoryConsolidator", "title", "summary", "workflow"] as const
+export const MODEL_ROLES = ["main", "plan", "subagent", "compaction", "dream", "aside", "small", "permissionReviewer", "memoryExtractor", "memoryAssistant", "memoryConsolidator", "title", "summary", "workflow", "advisor"] as const
 export type ModelRole = (typeof MODEL_ROLES)[number]
+/** The moments the engine consults the advisor on its own (docs/advisor.md). */
+export const ADVISOR_CHECKPOINTS = ["plan", "repeat_error", "completion"] as const
+export type AdvisorCheckpoint = (typeof ADVISOR_CHECKPOINTS)[number]
+/** Advisor caps when the `advisor` setting leaves them out. Briefs are measured in tokens of 4 characters. */
+export const ADVISOR_DEFAULTS = { checkpoints: [...ADVISOR_CHECKPOINTS] as AdvisorCheckpoint[], maxCallsPerTurn: 3, maxCallsPerSession: 20, maxBriefTokens: 24_000 }
 /**
  * Every reasoning level a model may offer. `max` is the top level some catalogs list (DeepSeek, GLM, the Codex catalog's
  * gpt-6 models) and `none` turns thinking off where the catalog offers that; both were added after the first five, so

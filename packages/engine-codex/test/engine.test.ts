@@ -506,6 +506,27 @@ describe("codex engine (fake app-server)", () => {
     }
   })
 
+  test("update_plan (turn/plan/updated) becomes MendCode's list card, once per change, so the progress row and the dock show it", async () => {
+    const fake = fakeCodex(standardScript((_params, api) => {
+      const plan = [{ step: "Read the parser", status: "completed" }, { step: "Fix the off-by-one", status: "inProgress" }, { step: "Run the tests", status: "pending" }]
+      api.notify("turn/plan/updated", { threadId: "thr1", turnId: "turn1", explanation: null, plan })
+      api.notify("turn/plan/updated", { threadId: "thr1", turnId: "turn1", explanation: null, plan })
+      api.notify("turn/plan/updated", { threadId: "thr1", turnId: "turn1", explanation: "done", plan: plan.map((step) => ({ ...step, status: "completed" })) })
+      api.notify("turn/plan/updated", { threadId: "thr1", turnId: "turn1", explanation: null, plan: [] })
+      api.notify("turn/completed", { threadId: "thr1", turn: { id: "turn1", status: "completed" } })
+    }))
+    const h = harness(fake)
+    await h.submit("fix it")
+    await until(() => h.events.some((event) => event.type === "turn.completed"))
+    const cards = h.events.filter((event): event is Extract<SessionEvent, { type: "item.started" }> => event.type === "item.started" && event.kind === "tool_call")
+    // The repeated update adds nothing; the empty one clears the list.
+    expect(cards.map((card) => card.meta?.tool)).toEqual(["todo 1/3", "todo 3/3", "todo 0/0"])
+    const text = (itemId: string) => (h.events.find((event) => event.type === "item.completed" && event.itemId === itemId) as { text?: string } | undefined)?.text
+    expect(text(cards[0]!.itemId)).toBe("[x] Read the parser\n[~] Fix the off-by-one\n[ ] Run the tests")
+    expect(text(cards[1]!.itemId)).toBe("[x] Read the parser\n[x] Fix the off-by-one\n[x] Run the tests")
+    expect(checkSessionLog(h.events, { final: true })).toEqual([])
+  })
+
   test("tool titles show the real command without the shell wrapper", () => {
     expect(commandTitle("/bin/zsh -lc ls")).toBe("ls")
     expect(commandTitle("/bin/bash -lc 'git status --short'")).toBe("git status --short")

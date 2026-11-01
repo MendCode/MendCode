@@ -9,6 +9,7 @@ import { clockRows } from "./usage-clock"
 import { textWidth, wrap } from "./wrap"
 import { usageWeatherRows } from "./usage-widgets"
 import { wasteTab } from "./usage-waste-tab"
+import { auxiliaryLabel, auxiliaryOrder, auxiliaryTotals, callCount } from "./usage-auxiliary"
 
 /**
  * The /usage tabs as pure row builders over a UsageReport: Overview (dashboard, heatmap, insights),
@@ -421,6 +422,26 @@ export function modelsTab(view: UsageView): Line[] {
     }),
     [],
   ]
+  // Calls outside the user's turns (titles, summaries, memory, hooks...): their own section, never part of the totals above.
+  const auxiliary = report.auxiliary ?? []
+  if (auxiliary.length) {
+    const total = auxiliaryTotals(auxiliary)
+    const cost = total.costMicros > 0 ? ` · ${money(total.costMicros)}${total.unpriced ? "+" : ""}` : ""
+    rows.push(
+      ...section({
+        title: "Auxiliary calls",
+        subtitle: `Outside your turns · ${callCount(total.calls, thousands)} · ${compact(total.tokens)} tok${cost}`,
+        body: table({
+          head: ["role · model", "calls", "in", "out", "cost"],
+          rows: auxiliaryOrder(auxiliary).map((entry) => [auxiliaryLabel(entry), compact(entry.calls), compact(entry.input), compact(entry.output), entry.costMicros > 0 ? money(entry.costMicros) : "—"]),
+          widths: [7, 8, 7, 9],
+          width,
+        }),
+        width,
+      }),
+      [],
+    )
+  }
   const efforts = report.insights?.efforts ?? []
   const turns = efforts.reduce((total, effort) => total + effort.turns, 0)
   rows.push(

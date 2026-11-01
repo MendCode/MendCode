@@ -82,6 +82,8 @@ import { createToolOutputs, toolOutputSettings } from "./tool-output"
 import { createOneTree } from "./one-tree"
 import { createSessionTranscripts } from "./session-transcripts"
 import { rolesFor, shellFor } from "./profiles"
+import { advisorStatus, claudeAdvisorAlias, createAdvisorHost } from "./advisor-host"
+import { runClaudeAdvisor } from "./advisor-claude"
 import { createMcpAuth, createMcpManager, mcpResourceTools, mcpTools, type McpServerConfig } from "@mendcode/mcp"
 import { createMcpConfigLoader } from "./mcp-loader"
 import { HOST_MCP_SERVER } from "./host-mcp"
@@ -92,13 +94,13 @@ import { computeBuildId } from "@mendcode/build-id"
 import { remoteListenerConfig, validateRemoteListener } from "./remote"
 import { HTTP_WEB } from "./http-web"
 import { startDaemon } from "./daemon"
-import { claudeCodeProbe, codexAppServerProbe, nativeCodexProbe } from "./quota-probes"
+import { claudeCodeProbe, codexAppServerProbe, nativeCodexProbe, quotaProbeDir } from "./quota-probes"
 import { createCodegraphStatus } from "./codegraph-status"
 import { systemPartsWith, type PromptFiles } from "./extensions"
 import { promptContextParts, promptFileOverrides } from "./prompt-context"
 import { outputStyleText } from "./output-styles"
-import { createPromptModes } from "./prompt-modes"
-import { selfKnowledgeText } from "./prompt-guidance"
+import { createPromptModes, visiblePlanPart } from "./prompt-modes"
+import { selfKnowledgeText, visiblePlanText } from "./prompt-guidance"
 import { foreignEngine, invalidChoice, modelEngine, resolveModel, unusableRoles, usableEffort, type ModelCatalog } from "./models"
 import { claudeAlias, claudeCompactEnv, claudeSubagentEnv, createClaudeDetection, createClaudeModelCatalog, probeClaude } from "./claude-models"
 import { createEngineRouter } from "./engine-router"
@@ -412,6 +414,8 @@ function systemParts(root: string, memory: string, prompts: PromptFiles, modelID
     rest: [
       { id: "instructions", label: "project instructions", text: contextFiles ? instructionsFor(root) : "" },
       { id: "skills", label: "skills", text: skillBlock, count: (skillBlock.match(/^- /gm) ?? []).length },
+      // One line while `todo` is listed (balanced and full, feature `visible_plan`): the user follows the list in the progress row.
+      visiblePlanPart(tools),
       { id: "capabilities-index", label: "MendCode capabilities", text: tools ? capabilityIndex(tools) : "" },
       { id: "memory", label: "memory", text: memory, count: (memory.match(/^- \[/gm) ?? []).length },
     ],
@@ -475,7 +479,7 @@ export const daemon = await startDaemon({
   // `/tier computer on` (features.computer) switches it on while the daemon runs; the environment variable still does at start.
   computer: { enabled: process.env.MENDCODE_COMPUTER === "1" ? true : () => extractionSettings().features?.computer === true },
   browser: { enabled: process.env.MENDCODE_BROWSER === "1", ...(process.env.MENDCODE_BROWSER_PATH ? { executable: process.env.MENDCODE_BROWSER_PATH } : {}) },
-  engine: ({ notify, engineBackground, engineAgentEvent, trace, continuity, tasks, clock, store, grants, runLimits, sessionRules, emitGlobal, secrets, memory, background, interactive, workflows, peers, threads, packages, sessionMeta, loops, worktrees, prWatch, prReview, goals, review, customTools, extensionLayers, agents, plans, extensions, skills: skillLoader, recall, computer, browser, harness, compound, budget, aiConfig, inlineShell, reasoning, settingsWrite }) => {
+  engine: ({ notify, engineBackground, engineAgentEvent, trace, continuity, tasks, clock, store, grants, runLimits, sessionRules, emitGlobal, secrets, memory, background, interactive, workflows, peers, threads, packages, sessionMeta, loops, worktrees, prWatch, prReview, goals, review, customTools, extensionLayers, agents, plans, extensions, skills: skillLoader, recall, computer, browser, harness, compound, budget, auxiliary, aiConfig, inlineShell, reasoning, settingsWrite }) => {
     extensionProviders = () => extensions.transportProviders()
     extensionMcpServers = (directory) => extensions.mcpServers(directory)
     extensionVirtualModels = (real) => extensions.virtualModels(real)
@@ -541,15 +545,21 @@ export const daemon = await startDaemon({
     const mainModel = (sessionId: Parameters<typeof store.sessionModel>[0]) => resolveModel({ role: "main", session: store.sessionModel(sessionId), roles: rolesFor(store.settings.get(), store.sessionInfo(sessionId)?.directory), catalog: modelCatalog })
     /** The model one turn runs on: its per-turn override (already validated at submit) or the session's. */
     const turnModel = (sessionId: Parameters<typeof store.sessionModel>[0], override?: ModelChoice) => override ? usableEffort(override, modelCatalog) : mainModel(sessionId)
+    /** The advisor for a session's main model (docs/advisor.md): undefined without the advisor role, otherwise applied or why not. */
+    const advisorFor = (sessionId: Parameters<typeof store.sessionModel>[0]) => advisorStatus({ settings: store.settings.get(), roles: rolesFor(store.settings.get(), store.sessionInfo(sessionId)?.directory), main: mainModel(sessionId), catalog: modelCatalog, safeMode })
     const toolOutputs = createToolOutputs(dir, Date.now, store.writeStoredFile)
     // `/env` credentials for the engines that run their own tools; `engineEnvironment: false` keeps them native-only.
     const credentialsFor = (sessionId: Parameters<typeof store.sessionModel>[0]) => engineEnvironment({ enabled: store.settings.get().engineEnvironment !== false, values: () => secrets.environment?.(sessionId) ?? {} })
     // What an engine with its own system prompt (Claude Code, Codex, pi, ACP) is told after it: what MendCode draws and where its
     // docs are. Read on the first such engine's start only (P5). The minimal prompt mode adds nothing to any engine's prompt.
+    // An engine with a todo or plan tool of its own (all but pi) is told that its list is pinned too, while `visible_plan` is on.
     let harnessRendering: Promise<string> | undefined
-    const harnessSystem = async () => {
+    const harnessSystem = async (ownPlan = true) => {
       const text = `${await (harnessRendering ??= loadTerminalRendering())}\n\n${selfKnowledgeText()}`
-      return (root: string) => (createPromptModes(dir).status(root).mode === "minimal" ? undefined : text)
+      return (root: string) => {
+        if (createPromptModes(dir).status(root).mode === "minimal") return undefined
+        return ownPlan && featureOn(store.settings.get(), "visible_plan", { safeMode }) ? `${text}\n${visiblePlanText().harness}` : text
+      }
     }
     const transcripts = createSessionTranscripts(dir, Date.now, store.writeStoredFile)
     const configured = engineName === "native"
@@ -603,7 +613,12 @@ export const daemon = await startDaemon({
               // are found with `mendcode docs --search`, not guessed from the harness's own tools.
               appendSystem,
               // `/fast` reaches Claude Code on the models that have its fast mode; the process starts with it.
-              modelFor: (sessionId, override) => { const turn = turnModel(sessionId, override); const choice = claudeAlias(turn); return (turn.fast ?? store.settings.get().serviceTier === "fast") && claudeFastModel(choice.model) ? { ...choice, fast: true } : choice },
+              modelFor: (sessionId, override) => {
+                const turn = turnModel(sessionId, override)
+                const choice = claudeAlias(turn)
+                const advisor = claudeAdvisorAlias(advisorFor(sessionId))
+                return { ...((turn.fast ?? store.settings.get().serviceTier === "fast") && claudeFastModel(choice.model) ? { ...choice, fast: true } : choice), ...(advisor ? { advisor } : {}) }
+              },
               bindings: {
                 get: (sessionId) => store.engineBindings.get(sessionId, "claude"),
                 set: (sessionId, claudeSessionId) => store.engineBindings.set(sessionId, "claude", claudeSessionId),
@@ -637,6 +652,7 @@ export const daemon = await startDaemon({
           },
           primary: createNativeEngine({
           compound,
+          ...(process.env.MENDCODE_DEBUG_PROMPT_PREFIX === "1" ? { promptPrefixTrace: logLine } : {}),
           reasoning,
           beforeModel: (request) => budget.guard(request),
           onMissingUsage: () => budget.record(),
@@ -692,13 +708,17 @@ export const daemon = await startDaemon({
           memoryAlways: () => emitGlobal({ type: "settings.changed", settings: store.settings.set({ memoryRequireApproval: false }) }),
           memorySettings: (sessionId) => memorySettings(store.settings.get(), store.sessionDirectory(sessionId)),
           permissionReviewer: createPermissionReviewer({
-            complete: async (request) => {
-              await budget.guard({ model: request.model?.model ?? modelCatalog.defaults.model, signal: request.signal })
+            complete: async ({ sessionId, ...request }) => {
+              const model = request.model?.model ?? modelCatalog.defaults.model
+              await budget.guard({ model, signal: request.signal })
+              let usage: import("./budgets").BudgetUsage | undefined
               try {
                 const answer = await completeWithUsage(request)
+                usage = answer.usage
                 budget.record(answer.usage)
                 return answer.text
               } catch (error) { budget.record(); throw error }
+              finally { auxiliary.record({ role: "permissionReviewer", sessionId }, usage, model) }
             },
             modelFor: (sessionId) => {
               const settings = store.settings.get()
@@ -713,6 +733,30 @@ export const daemon = await startDaemon({
           },
           // A session moved to Claude Code or an ACP agent mid-turn (`/model`, a new default) finishes the turn here on its model.
           foreignModel: (model) => foreignEngine(model, modelCatalog),
+          // The advisor role's model behind the `advisor` tool and checkpoints; its usage arrives as the turn's usage events.
+          advisor: createAdvisorHost({
+            status: advisorFor,
+            settings: () => store.settings.get(),
+            guard: (request) => budget.guard(request),
+            // A Claude Code advisor answers through one headless `claude -p` on the user's Claude login (advisor-claude.ts).
+            claude: {
+              isClaude: (model) => modelEngine(model, modelCatalog) === "claude",
+              complete: async (request) => {
+                try {
+                  const answer = await runClaudeAdvisor({ bin: claudeBin, cwd: quotaProbeDir(dir), ...request })
+                  budget.record(answer.usage)
+                  return answer
+                } catch (error) { budget.record(); throw error }
+              },
+            },
+            complete: async (request) => {
+              try {
+                const answer = await completeWithUsage(request)
+                budget.record(answer.usage)
+                return { text: answer.text, ...(answer.usage ? { usage: answer.usage } : {}) }
+              } catch (error) { budget.record(); throw error }
+            },
+          }),
           subagents: true,
           tasks,
           // Custom agents (`agents/*.md`): the session's selected one and the sub-agents `task` can name; their model is checked against the catalog's efforts.
@@ -841,7 +885,8 @@ export const daemon = await startDaemon({
           modelFor: (sessionId, override) => turnModel(sessionId, override),
           cwdFor: (sessionId) => store.sessionDirectory(sessionId) || cwd,
           environment: credentialsFor,
-          appendSystem: await harnessSystem(),
+          // pi has no todo or plan tool of its own: it is not told of a pinned list.
+          appendSystem: await harnessSystem(false),
           projectTrusted: (root) => (store.settings.get().trustedToolDirs ?? []).some((entry) => canonicalDir(entry) === canonicalDir(root)),
           sandbox: sessionSandbox,
           permissionFor: (sessionId) => store.permissionModeOf(sessionId),

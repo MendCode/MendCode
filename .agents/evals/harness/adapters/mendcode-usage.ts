@@ -11,6 +11,11 @@ export type MendcodeParse = {
   retries: number
   /** Number of lines that were not JSON (progress noise); they never count toward anything. */
   skippedLines: number
+  /**
+   * Advisor consultations (docs/advisor.md) seen as finished `advisor` cards, by trigger, and the tokens the advisor model reported.
+   * Those tokens are already inside `usage` (the advisor's usage is a usage event of the turn); this is only the share.
+   */
+  advisor: { calls: number; byTrigger: Record<string, number>; inputTokens: number; outputTokens: number }
 }
 
 type Event = { type?: string; at?: number; itemId?: string; kind?: string; status?: string; state?: string; [key: string]: unknown }
@@ -38,6 +43,7 @@ export function parseMendcodeEvents(lines: Iterable<string>): MendcodeParse {
   let error: string | null = null
   let retries = 0
   let skippedLines = 0
+  const advisor: MendcodeParse["advisor"] = { calls: 0, byTrigger: {}, inputTokens: 0, outputTokens: 0 }
   for (const line of lines) {
     const text = line.trim()
     if (!text) continue
@@ -62,9 +68,17 @@ export function parseMendcodeEvents(lines: Iterable<string>): MendcodeParse {
       case "item.started":
         if (event.kind === "tool_call" && typeof event.itemId === "string") tools.set(event.itemId, "open")
         break
-      case "item.completed":
+      case "item.completed": {
         if (typeof event.itemId === "string" && tools.has(event.itemId)) tools.set(event.itemId, event.status === "ok" ? "ok" : "failed")
+        const meta = event.meta as Record<string, unknown> | undefined
+        if (typeof meta?.advisorTrigger === "string") {
+          advisor.calls++
+          advisor.byTrigger[meta.advisorTrigger] = (advisor.byTrigger[meta.advisorTrigger] ?? 0) + 1
+          advisor.inputTokens += num(meta.advisorInputTokens)
+          advisor.outputTokens += num(meta.advisorOutputTokens)
+        }
         break
+      }
       case "compaction.updated":
         if (event.state === "packed") compactions++
         break
@@ -102,5 +116,5 @@ export function parseMendcodeEvents(lines: Iterable<string>): MendcodeParse {
     usage.compactions = compactions
   }
   if (startedAt !== undefined && endedAt !== undefined) usage.turnMs = Math.max(0, endedAt - startedAt)
-  return { usage, turnStatus, error, retries, skippedLines }
+  return { usage, turnStatus, error, retries, skippedLines, advisor }
 }

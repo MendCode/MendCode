@@ -6,7 +6,8 @@ import { CONTINUITY_TOOLS, continuityResult } from "./continuity"
 import { declaredRoots, expandedShellPatterns, externalPatterns, matchingRule, nestedShellPatterns, permissionMatch, permissionName, permissionPatterns, policyRules, projectRulesOf, splitDeclared, toolDisabled, withoutBlindAllow } from "./permission-rules"
 import { workflowToolAsks, workflowToolDenied } from "./workflow-policy"
 import { createHash } from "node:crypto"
-import { compactionThreshold, historyTokens, prunable, pruneDue, pruneToolOutputs, splitCompaction } from "./compaction-policy"
+import { createPromptTrace } from "./prompt-trace"
+import { compactionThreshold, historyTokens, prunable, pruneDue, pruneToolOutputs, pruneUrgent, splitCompaction } from "./compaction-policy"
 import { AUTO_RECALL_CHARS, AUTO_RECALL_PREFIX, AUTO_RECALL_TURNS, notInHistory, packedAway, recalledText } from "./auto-recall"
 import { contextFiles, readPaths } from "./context-files"
 import { toolOwner } from "./context-rent"
@@ -23,10 +24,11 @@ import type { BackgroundPort, InteractivePort, LoopPort, PeerPort, ThreadPort, R
 import { cacheHash, cacheProject, passiveCache, selectCache } from "./cache-policy"
 import { z } from "zod"
 import { agentAllows, agentSection, capPermission, LIST_AGENTS, subagentCatalog, subagentListing, subagentName, type AgentPort, type AgentProfile } from "./agents"
-import { PLAN_EXIT_TOOL, PLAN_REVIEW_TOOL, PLAN_TOOL_NAMES, planPhase, safePlanArgs } from "./plan-tools"
+import { PLAN_EXIT_TOOL, PLAN_MODE_NOTE, PLAN_REVIEW_TOOL, PLAN_TOOL_NAMES, looksLikePlan, planPhase, safePlanArgs } from "./plan-tools"
 import { continuationStream } from "./continuation"
 import { pairToolCalls } from "./history"
 import { GOAL_TOOL_NAMES, GOAL_TOOLS, runGoalTool, type GoalPort } from "./goal-tools"
+import { ADVISOR_NUDGE_PREFIX, ADVISOR_TOOL, advisorOutput, buildAdvisorBrief, createAdvisorTracker, type AdvisorConsultation, type AdvisorPort, type AdvisorTracker, type AdvisorTrigger } from "./advisor"
 import { createGrantStore, type GrantStore } from "./grants"
 import { authorityContext, freezeAction, type AuthorityAnchor } from "./permission-context"
 import type { PermissionProvenance, PermissionReview } from "@mendcode/protocol"
@@ -112,7 +114,7 @@ const SHARED_COMPACTION_NOTE = "Do not call any tool: reply with the summary tex
 const DEFAULT_SUMMARY_TOKENS = 4096
 /** What one main call sent ahead of its messages and whether it pruned them: what a later request repeats to share the provider's cached prefix. */
 type SharedPrefix = {
-  system: string; tools: ToolSpec[]; hostedTools: HostedTool[]; choice: ModelChoice | undefined; effort: ModelRequest["effort"]; parameters: ModelRequest["parameters"]; pruned: boolean
+  system: string; tools: ToolSpec[]; hostedTools: HostedTool[]; choice: ModelChoice | undefined; effort: ModelRequest["effort"]; parameters: ModelRequest["parameters"]; pruned: boolean | ReadonlySet<string>
   /** How many history messages the call sent, and their hash as they stood in memory then (`historyDigest`). */
   sent: number; digest: string
   /** The start of the call's turn (`TurnStart`): what that turn changed in memory only. */
@@ -125,8 +127,11 @@ type SharedPrefix = {
 /** What a forked child repeats of its parent's latest main call ahead of the messages (`forkStart`). */
 type ForkPrefix = Pick<SharedPrefix, "system" | "tools" | "hostedTools" | "choice" | "effort" | "parameters" | "cache">
 type ForkStart = { prefix: ForkPrefix; messages: ModelMessage[] }
-/** A turn's start: the history length once its user message was appended, and whether old tool outputs were pruned in place then. */
-type TurnStart = { start: number; pruned: boolean }
+/**
+ * A turn's start: the history length once its user message was appended, whether old tool outputs were pruned in place then, and that message's text
+ * (`prompt`: what the system prompt is built for during the whole turn, however many prompts and notices join it).
+ */
+type TurnStart = { start: number; pruned: boolean; prompt: string }
 const historyDigest = (messages: readonly ModelMessage[]) => {
   const hash = createHash("sha256")
   for (const message of messages) hash.update(JSON.stringify(message)).update("\n")
@@ -405,6 +410,8 @@ export function createNativeEngine(options: {
   /** Compact after a turn whose last model call used at least this many context tokens; a function is asked per session and model (a per-model setting). */
   compactAtTokens?: number | ((sessionId: SessionId, model: string | undefined) => number | undefined)
   compaction?(): CompactionConfig | undefined
+  /** Debug (`MENDCODE_DEBUG_PROMPT_PREFIX=1`): receives one line per provider request with hashes of its instructions, tools, cache route and input items, and where it first differs from the session's previous request. Absent = no cost. */
+  promptPrefixTrace?(line: string): void
   /** Saves a session's full transcript (the engine redacts secrets first) before a portable compaction and returns the local path the summary points to; absent or undefined = no transcript reference. */
   transcript?(input: { sessionId: SessionId; generation: number; markdown: string }): Promise<string | undefined>
   contextWindowFor?(sessionId: SessionId): number | undefined
@@ -527,6 +534,12 @@ export function createNativeEngine(options: {
   secrets?: SecretsPort
   compound?(sessionId: SessionId): CompoundCall | undefined
   /**
+   * The advisor (docs/advisor.md): a second model the main agent consults through the `advisor` tool and at the
+   * engine's checkpoints (plan review, a repeated failure, the end of a turn that edited files). Absent or not enabled
+   * for a session: no tool, no checkpoint, no cost.
+   */
+  advisor?: AdvisorPort
+  /**
    * Inline shell of a custom command (`!`cmd``): the commands the daemon holds for the markers in a prompt's text. The engine runs each
    * as an ordinary `shell` tool call of the turn (permission mode, allow and deny rules, approval card, sandbox, hooks) and swaps the
    * marker for its output before the message is built. Absent: markers stay plain text.
@@ -547,12 +560,39 @@ export function createNativeEngine(options: {
   const subagentToolset: Toolset = { tools: new Map(subagentTools.map((tool) => [tool.name, tool])), specs: [...subagentTools.map(toSpec), ...secretsSpecs, ...snipSpecs], main: false, allowTask: false }
   const mainToolset: Toolset = {
     tools: new Map(tools.map((tool) => [tool.name, tool])),
-    specs: [...tools.map(toSpec), ...secretsSpecs, ...snipSpecs, toSpec(PLAN_TOOL), ...(options.subagents ? [toSpec(TASK_TOOL_SHARED)] : []), ...(options.goals ? GOAL_TOOLS.map(toSpec) : []), toSpec(PLAN_REVIEW_TOOL), toSpec(PLAN_EXIT_TOOL), ...(options.continuity ? CONTINUITY_TOOLS.map(toSpec) : []), ...(options.reasoning ? [toSpec(REASONING_AUTO_TOOL)] : [])],
+    specs: [...tools.map(toSpec), ...secretsSpecs, ...snipSpecs, toSpec(PLAN_TOOL), ...(options.subagents ? [toSpec(TASK_TOOL_SHARED)] : []), ...(options.goals ? GOAL_TOOLS.map(toSpec) : []), ...(options.advisor ? [toSpec(ADVISOR_TOOL)] : []), toSpec(PLAN_REVIEW_TOOL), toSpec(PLAN_EXIT_TOOL), ...(options.continuity ? CONTINUITY_TOOLS.map(toSpec) : []), ...(options.reasoning ? [toSpec(REASONING_AUTO_TOOL)] : [])],
     main: true,
     allowTask: options.subagents === true,
   }
   const specs = mainToolset.specs
   const latestPlans = new Map<SessionId, import("@mendcode/protocol").PlanReview>()
+
+  /** Advisor admission per session (caps, once-per-turn reviews); checkpoint calls carry their trigger by call id. */
+  const advisorTrackers = new Map<SessionId, AdvisorTracker>()
+  const advisorTriggers = new Map<string, AdvisorTrigger>()
+  const advisorTracker = (sessionId: SessionId) => {
+    let tracker = advisorTrackers.get(sessionId)
+    if (!tracker) advisorTrackers.set(sessionId, tracker = createAdvisorTracker())
+    return tracker
+  }
+  /** The advisor applies to this loop: the main agent, the session has one, and the tool survived every narrowing (agent, tier, run limits). */
+  const advisorOffered = (sessionId: SessionId, toolset: Toolset) => toolset.main && !!options.advisor?.enabled(sessionId) && toolset.specs.some((spec) => spec.name === ADVISOR_TOOL.name)
+  /** One consultation: bounded, redacted brief; counted against the caps; its usage reported under the advisor's model. */
+  async function consultAdvisor(input: TurnInput, trigger: AdvisorTrigger, question: string, messages: readonly ModelMessage[], plan?: string): Promise<AdvisorConsultation> {
+    const port = options.advisor!
+    const limits = port.limits(input.sessionId)
+    const diff = trigger === "plan" ? undefined : await port.diff?.(options.cwdFor(input.sessionId), input.signal).catch(() => undefined)
+    const brief = buildAdvisorBrief({ messages, question, trigger, plan: plan ?? latestPlans.get(input.sessionId)?.markdown, diff, maxTokens: limits.maxBriefTokens, mask: (text) => redactSecrets(secrets ? secrets.mask(input.sessionId, text) : text).text })
+    advisorTracker(input.sessionId).consulted(trigger)
+    const consultation = await port.consult({ sessionId: input.sessionId, trigger, brief, signal: input.signal })
+    const usage = consultation.usage
+    if (usage) input.emit({ type: "usage", provider: usage.provider, model: usage.model, input: usage.input, output: usage.output, reasoning: usage.reasoning ?? 0, cacheRead: usage.cacheRead ?? 0, cacheWrite: usage.cacheWrite ?? 0 })
+    return consultation
+  }
+  const ADVISOR_CHECKPOINT_PREFIX = "advisor_checkpoint_"
+  /** What a card carries about a consultation, so a client can count them and their tokens without parsing the output. */
+  const advisorMeta = (trigger: AdvisorTrigger, consultation: AdvisorConsultation) => ({ advisorTrigger: trigger, ...(consultation.model ? { advisorModel: consultation.model } : {}), ...(consultation.account ? { advisorAccount: consultation.account } : {}), ...(consultation.usage ? { advisorInputTokens: consultation.usage.input, advisorOutputTokens: consultation.usage.output } : {}) })
+  const advisorFailed = (consultation: AdvisorConsultation) => consultation.verdict.fallback !== undefined && consultation.verdict.fallback !== "unparsable"
 
   /** Adds project tools to a base toolset for one turn; built-in names win on collision unless the tool says `override`. */
   function withProjectTools(base: Toolset, extra: ProjectTool[]): Toolset {
@@ -571,7 +611,7 @@ export function createNativeEngine(options: {
   function withAgent(base: Toolset, agent: AgentProfile | undefined): Toolset {
     if (!agent) return base
     if (!agent.tools && !agent.deny) return { ...base, agent }
-    const allowed = (name: string) => PLAN_TOOL_NAMES.has(name) || name === SECRETS_TOOL.name || GOAL_TOOL_NAMES.has(name) || agentAllows(agent, name)
+    const allowed = (name: string) => PLAN_TOOL_NAMES.has(name) || name === SECRETS_TOOL.name || GOAL_TOOL_NAMES.has(name) || name === ADVISOR_TOOL.name || agentAllows(agent, name)
     return { ...base, agent, tools: new Map([...base.tools].filter(([name]) => allowed(name))), specs: base.specs.filter((spec) => allowed(spec.name)), allowTask: base.allowTask && allowed(TASK_TOOL.name) }
   }
 
@@ -598,7 +638,7 @@ export function createNativeEngine(options: {
   function withPolicy(base: Toolset): Toolset {
     const rules = rulesFor(base)
     const primaryOnly = policy().experimental?.primary_tools ?? []
-    const allowed = (name: string) => (name !== "session_meta" || !!options.sessionMeta && featureOn(policy(), "session_meta")) && (name !== SNIP_TOOL.name || policy().experimental?.snip === true) && (name !== "worktree" || policy().experimental?.worktree_tool === true) && (name !== "pr_watch" || !!options.prWatch && policy().experimental?.pr_watch === true) && (name !== "threads" || !!options.threads && policy().experimental?.thread_tools === true) && (!SESSION_RECALL_TOOL_NAMES.has(name) || !!options.recall && policy().experimental?.session_recall === true) && (!name.startsWith("tool_") || !CONTINUITY_TOOLS.some((tool) => tool.name === name) || policy().experimental?.async_tools === true) && (!name.startsWith("question_") || !CONTINUITY_TOOLS.some((tool) => tool.name === name) || policy().experimental?.async_questions === true) && !toolDisabled(name, rules) && (base.main || !primaryOnly.some((pattern) => permissionMatch(name, pattern)))
+    const allowed = (name: string) => (name !== ADVISOR_TOOL.name || featureOn(policy(), "advisor")) && (name !== "session_meta" || !!options.sessionMeta && featureOn(policy(), "session_meta")) && (name !== SNIP_TOOL.name || policy().experimental?.snip === true) && (name !== "worktree" || policy().experimental?.worktree_tool === true) && (name !== "pr_watch" || !!options.prWatch && policy().experimental?.pr_watch === true) && (name !== "threads" || !!options.threads && policy().experimental?.thread_tools === true) && (!SESSION_RECALL_TOOL_NAMES.has(name) || !!options.recall && policy().experimental?.session_recall === true) && (!name.startsWith("tool_") || !CONTINUITY_TOOLS.some((tool) => tool.name === name) || policy().experimental?.async_tools === true) && (!name.startsWith("question_") || !CONTINUITY_TOOLS.some((tool) => tool.name === name) || policy().experimental?.async_questions === true) && !toolDisabled(name, rules) && (base.main || !primaryOnly.some((pattern) => permissionMatch(name, pattern)))
     // A tool that declares a tier (`Tool.tier`, docs/tiers.md) is offered only when the user's tier includes it.
     const tier = policy().tier
     const inTier = (name: string) => name === "session_meta" ? featureOn(policy(), "session_meta") : tier === undefined || tierIncludes(tier, base.tools.get(name)?.tier ?? "minimalist")
@@ -627,7 +667,7 @@ export function createNativeEngine(options: {
     const eligible = withPolicy(codeAllowed ? { ...base, specs: [...base.specs.filter((spec) => spec.name !== CODE_TOOL.name), toSpec(CODE_TOOL)], codeCatalog: base, codeActive: active } : base)
     const discovery = discoveryOn()
     const planDeferred = planToolsDeferred()
-    const deferred = (name: string) => name === "packages" || discovery && !primary(name) || planDeferred && PLAN_TOOLS.has(name)
+    const deferred = (name: string) => name === "packages" || discovery && !primary(name) || planDeferred && PLAN_TOOLS.has(name) && !primary(name)
     const allListed = (specs: ToolSpec[]): Toolset => ({ ...eligible, specs, catalog: { listed: specs.map((spec) => spec.name), deferred: [] } })
     if (!eligible.specs.some((spec) => deferred(spec.name))) return allListed(eligible.specs)
     // Without permission to search, keep the allowed catalog usable directly.
@@ -653,7 +693,7 @@ export function createNativeEngine(options: {
   /** The catalogue's cut (docs/tool-discovery.md): the lean core and the plan tools are features of the tier, `tool_discovery: false` keeps the whole catalogue. */
   function catalogMode(): CatalogMode {
     const settings = policy()
-    return { lean: settings.experimental?.tool_discovery !== false && featureOn(settings, "lean_tools"), planTools: featureOn(settings, "plan_tools"), aux: featureOn(settings, "aux_tools"), find: featureOn(settings, "find_tools"), ui: featureOn(settings, "ui_tool") }
+    return { lean: settings.experimental?.tool_discovery !== false && featureOn(settings, "lean_tools"), planTools: featureOn(settings, "plan_tools"), aux: featureOn(settings, "aux_tools"), find: featureOn(settings, "find_tools"), ui: featureOn(settings, "ui_tool"), visiblePlan: featureOn(settings, "visible_plan") }
   }
   const catalogPrimary = () => { const mode = catalogMode(); return (name: string) => isPrimaryIn(name, mode) }
   /** Everything outside the primary set is deferred when asked for (`tool_discovery`) or by the lean catalogue; an explicit false wins. */
@@ -783,6 +823,12 @@ export function createNativeEngine(options: {
   const compactAt = (sessionId: SessionId) => compactionThreshold(compactionConfig(), limitsFor(sessionId), typeof options.compactAtTokens === "function" ? options.compactAtTokens(sessionId, choiceFor(modelFor(sessionId, "main"), lastAgent.get(sessionId))?.model) : options.compactAtTokens)
   /** Tokens of old tool output each session's last request left out, so the size `pruneNow` compares does not fall because of the prune itself. */
   const prunedTokens = new Map<SessionId, number>()
+  const promptTrace = options.promptPrefixTrace ? createPromptTrace(options.promptPrefixTrace) : undefined
+  /**
+   * The tool results each session's current turn prunes, fixed by its first request: a request that changes a result an earlier one sent
+   * makes the provider re-read everything after it uncached. A later turn (or an urgent prune, see `callModel`) decides again.
+   */
+  const turnPrunes = new Map<SessionId, { turn: TurnStart; ids: ReadonlySet<string> }>()
   /**
    * Whether old tool outputs are pruned now (`pruneDue`, compaction-policy.ts): the `prune` setting allows it and the context is close to
    * the compaction threshold. Far from it a prune only costs: the provider re-reads, uncached, everything after the first pruned result.
@@ -923,11 +969,13 @@ export function createNativeEngine(options: {
         const hookRole: ModelRole = share || fork ? "main" : role
         // A compaction call names no tools of its own: it carries the line of the session's last main call, so its prompt stays the main one.
         const catalog = input.catalog ?? lastCatalog.get(input.sessionId)
-        const systemContext: SystemContext = { sessionId: input.sessionId, prompt: lastPrompt(messages), ...(catalog ? { tools: catalog } : {}) }
+        // The prompt is the turn's own: a prompt or notice that joins the turn must not change the system prompt (memory is chosen by it), which every cached token after it depends on.
+        const systemContext: SystemContext = { sessionId: input.sessionId, prompt: turnStarts.get(input.sessionId)?.prompt ?? lastPrompt(messages), ...(catalog ? { tools: catalog } : {}) }
         let system = share ? share.last.system : fork ? fork.system : options.system(cwd, systemContext)
         if (!share && !fork) {
           const agentText = agent ? agentSection(agent) : ""
           if (agentText) system = `${system}\n\n${agentText}`
+          if (role === "plan") system = `${system}\n\n${PLAN_MODE_NOTE}`
           const known = secrets?.list(input.sessionId) ?? []
           if (known.length) system = `${system}\n\n${secretsNote(known)}`
           if (input.turnOptions?.format && role !== "subagent" && textKind === "agent_message") system = `${system}\n\n${STRUCTURED_NOTE}`
@@ -936,8 +984,14 @@ export function createNativeEngine(options: {
         }
         const projection = await checkpointContext(options.provider, { system, messages: resumed, tools: callTools, model: choice?.model, parameters: choice?.parameters, effort: choice?.effort })
         // A fork's inherited messages were pruned as the parent sent them (`forkStart`); a prune counted from the child's end would change them.
-        const pruneEnabled = share ? share.last.pruned : fork ? false : pruneNow(input.sessionId, projection.messages)
+        const ownTurn = turnStarts.get(input.sessionId)
+        const held = !share && !fork && ownTurn ? turnPrunes.get(input.sessionId) : undefined
+        // Inside a turn the first request fixes what is pruned. The one exception is a context about to hit the compaction point, where
+        // another prune is worth one cache miss (a compaction costs more).
+        const keep = held !== undefined && held.turn === ownTurn && !(prunable(projection.messages) && pruneUrgent((contextTokens.get(input.sessionId) ?? 0) + (prunedTokens.get(input.sessionId) ?? 0), compactAt(input.sessionId)))
+        const pruneEnabled: boolean | ReadonlySet<string> = share ? share.last.pruned : fork ? false : keep ? held!.ids : pruneNow(input.sessionId, projection.messages)
         const pruned = pruneToolOutputs(projection.messages, pruneEnabled)
+        if (!share && !fork && ownTurn && !keep) turnPrunes.set(input.sessionId, { turn: ownTurn, ids: pruned.ids })
         if (trackContext) prunedTokens.set(input.sessionId, pruned.tokens)
         let outgoing = pruned.messages
         // Hooks see a copy of the messages (history stays the engine's) and only cost an await when a handler exists.
@@ -991,6 +1045,11 @@ export function createNativeEngine(options: {
         const hostedTools = share ? share.last.hostedTools : fork ? callTools.length ? fork.hostedTools.filter(hostedAllowed) : [] : !compound && textKind === "agent_message" && !final ? (options.hostedTools?.() ?? []).filter(hostedAllowed) : []
         if (hostedOff.size) system = `${system}\n\n${hostedOffNote([...hostedOff])}`
         const transformBody =!compound && hooks?.has("request.before", cwd) && hooks.requestBody ? (body: Record<string, unknown>) => hooks.requestBody!({ sessionId: input.sessionId, cwd, provider: options.provider.idFor?.(choice?.model) ?? options.provider.id, model: choice?.model ?? options.provider.model, body }) : undefined
+        const traceBody = promptTrace ? async (body: Record<string, unknown>) => {
+          const sent = (await transformBody?.(body)) ?? body
+          promptTrace({ sessionId: input.sessionId, role: hookRole, ...(input.turnId ? { turnId: input.turnId } : {}), route: modelRequest.cacheKeyForBody?.(sent) ?? modelRequest.cacheKey, body: sent })
+          return sent
+        } : undefined
         const estimatedTokens = requestEstimates(system, (options.systemParts?.(cwd, systemContext) ?? []).filter((part) => part.id === "memory").map((part) => part.text), outgoing, [...callTools, ...hostedTools])
         const startedAt = Date.now()
         let firstTokenMs: number | null = null
@@ -1001,12 +1060,12 @@ export function createNativeEngine(options: {
         reasoning?.dispatch()
         providerStarted = true
         const maxOutputTokens = compact?.maxOutputTokens ?? shaped?.maxOutputTokens
-        const modelRequest: ModelRequest = { system, messages: request, tools: requestTools, ...(role === "subagent" || options.tasks?.isChild(input.sessionId) || textKind !== "agent_message" || carried ? { initiator: "agent" as const } : {}), ...(projection.nativeContext ? { nativeContext: projection.nativeContext } : {}), ...(maxOutputTokens ? { maxOutputTokens } : {}), ...(hostedTools.length ? { hostedTools } : {}), ...(choice ? { model: choice.model, effort: choice.effort, parameters: choice.parameters, ...(choice.fast !== undefined ? { fast: choice.fast } : {}) } : {}), ...(reasoning ? { effort: reasoning.effort } : {}), ...(parameters ? { parameters } : {}), ...transport, ...(transformBody ? { transformBody } : {}), ...(cacheKey ? { cacheKey } : {}), ...(cacheKeyForBody ? { cacheKeyForBody } : {}), cacheMode, signal: call.signal }
+        const modelRequest: ModelRequest = { system, messages: request, tools: requestTools, ...(role === "subagent" || options.tasks?.isChild(input.sessionId) || textKind !== "agent_message" || carried ? { initiator: "agent" as const } : {}), ...(projection.nativeContext ? { nativeContext: projection.nativeContext } : {}), ...(maxOutputTokens ? { maxOutputTokens } : {}), ...(hostedTools.length ? { hostedTools } : {}), ...(choice ? { model: choice.model, effort: choice.effort, parameters: choice.parameters, ...(choice.fast !== undefined ? { fast: choice.fast } : {}) } : {}), ...(reasoning ? { effort: reasoning.effort } : {}), ...(parameters ? { parameters } : {}), ...transport, ...(traceBody ?? transformBody ? { transformBody: (traceBody ?? transformBody)! } : {}), ...(cacheKey ? { cacheKey } : {}), ...(cacheKeyForBody ? { cacheKeyForBody } : {}), cacheMode, signal: call.signal }
         const cacheTtl = cacheMode === "off" ? undefined : options.cacheTtl?.({ sessionId: input.sessionId, role: hookRole, provider })
         if (cacheTtl) modelRequest.cacheTtl = cacheTtl
         const repeated = share?.last ?? fork
         if (repeated) { modelRequest.effort = repeated.effort; modelRequest.parameters = repeated.parameters }
-        if (role === "main" && textKind === "agent_message" && !compound) lastMain.set(input.sessionId, recorded = { system, tools: callTools, hostedTools, choice, effort: modelRequest.effort, parameters: modelRequest.parameters, pruned: pruneEnabled, sent: messages.length, digest: historyDigest(messages), turn: turnStarts.get(input.sessionId), cache: { mode: cacheMode, key: cacheKey, forBody: cacheKeyForBody } })
+        if (role === "main" && textKind === "agent_message" && !compound) lastMain.set(input.sessionId, recorded = { system, tools: callTools, hostedTools, choice, effort: modelRequest.effort, parameters: modelRequest.parameters, pruned: pruned.ids, sent: messages.length, digest: historyDigest(messages), turn: turnStarts.get(input.sessionId), cache: { mode: cacheMode, key: cacheKey, forBody: cacheKeyForBody } })
         // A plan-mode call is the session's latest request but not one a compaction can repeat (its own model and tools): nothing is on record after it.
         else if (role === "plan" && textKind === "agent_message") lastMain.delete(input.sessionId)
         modelRequest.turnSignal = providerTurnSignals.get(input.signal) ?? input.signal
@@ -1311,7 +1370,7 @@ export function createNativeEngine(options: {
     const early = parentItemId ? undefined : takeEarlyCard(input.sessionId, call.callId)
     const itemId = early?.itemId ?? input.newItemId()
     const title = callTitle(call).slice(0, 200)
-    if (!early) input.emit({ type: "item.started", itemId, kind: "tool_call", meta: { tool: title, ...(parentItemId ? { parentItemId } : {}), ...(call.callId.startsWith("graph_orientation_") ? { injected: true } : {}) } })
+    if (!early) input.emit({ type: "item.started", itemId, kind: "tool_call", meta: { tool: title, ...(parentItemId ? { parentItemId } : {}), ...(call.callId.startsWith("graph_orientation_") || call.callId.startsWith(ADVISOR_CHECKPOINT_PREFIX) ? { injected: true } : {}) } })
     /** A card opened from part of the input is named again at its end when the whole input names it differently. */
     let retitle = early && early.title !== title ? { tool: title, retitled: true } : undefined
     const maskText = (text: string) => (secrets ? secrets.mask(input.sessionId, text) : text)
@@ -1373,7 +1432,7 @@ export function createNativeEngine(options: {
       })
       return { result, stop }
     }
-    const special = PLAN_TOOL_NAMES.has(call.name) || call.name === TASK_TOOL.name || call.name === SECRETS_TOOL.name || GOAL_TOOL_NAMES.has(call.name) || call.name === CODE_TOOL.name
+    const special = PLAN_TOOL_NAMES.has(call.name) || call.name === TASK_TOOL.name || call.name === SECRETS_TOOL.name || GOAL_TOOL_NAMES.has(call.name) || call.name === CODE_TOOL.name || call.name === ADVISOR_TOOL.name
     const workflowDenial = workflowToolDenied(input.workflow?.execution, call.name, toolset.tools.get(call.name)?.permission)
     if (workflowDenial) return finish({ output: workflowDenial, truncated: false, title: call.name, isError: true })
     if (special && workflowToolAsks(input.workflow?.execution, call.name, "execute")) {
@@ -1481,11 +1540,18 @@ export function createNativeEngine(options: {
       if (call.name === PLAN_TOOL.name && modeOf(input, toolset) !== "plan") return finish({ output: "not in plan mode; just do the work", truncated: false, title: "plan", isError: true })
       const data = parsedPlan.data
       const plan = "plan" in data ? data.plan : data.markdown
+      // The plan checkpoint runs before the user sees the plan: a revise/stop verdict sends it back to the agent once per turn.
+      const planAdvice = options.advisor && advisorOffered(input.sessionId, toolset) && advisorTracker(input.sessionId).admit("plan", options.advisor.limits(input.sessionId))
+        ? await consultAdvisor(input, "plan", "Judge this plan before the user reviews it: does it satisfy the request, is anything missing or risky, is there a simpler approach?", messages, plan)
+        : undefined
+      if (planAdvice && !advisorFailed(planAdvice) && planAdvice.verdict.verdict !== "proceed") {
+        return finish({ output: `The advisor reviewed this plan before the user saw it and asked for changes (${planAdvice.verdict.verdict}). Revise the plan and submit it again, or state in the plan why a finding does not apply.\n\n${advisorOutput("plan", planAdvice)}`, truncated: false, title: "plan: advisor requested changes", isError: true, meta: advisorMeta("plan", planAdvice) }, false, `${plan.trim()}\n\n---\nAdvisor (${planAdvice.verdict.verdict}): ${planAdvice.verdict.summary}`)
+      }
       const result = await reviewPlan(input, plan, itemId, toolset, "title" in data ? data.title : undefined, "phase" in data ? data.phase : undefined)
       const reviewed = latestPlans.get(input.sessionId)?.markdown ?? plan.trim()
       args = "plan" in data ? { ...data, plan: reviewed } : { ...data, markdown: reviewed }
       call.args = args
-      return finish(result, false, reviewed)
+      return finish(planAdvice ? { ...result, output: `${result.output}\n\nAdvisor review before the user saw the plan: ${advisorOutput("plan", planAdvice)}`, meta: { ...result.meta, ...advisorMeta("plan", planAdvice) } } : result, false, reviewed)
     }
     if (call.name === TASK_TOOL.name && toolset.allowTask) {
       const args = TASK_TOOL.args.safeParse(call.args)
@@ -1504,6 +1570,18 @@ export function createNativeEngine(options: {
       const args = spec.args.safeParse(call.args)
       if (!args.success) return finish({ output: `invalid arguments for ${call.name}: ${z.prettifyError(args.error)}`, truncated: false, title: call.name, isError: true })
       return finish(runGoalTool(options.goals(input.sessionId), call.name, args.data))
+    }
+    if (call.name === ADVISOR_TOOL.name && options.advisor && toolset.main) {
+      const parsedAdvisor = ADVISOR_TOOL.args.safeParse(call.args)
+      if (!parsedAdvisor.success) return finish({ output: `invalid arguments for advisor: ${z.prettifyError(parsedAdvisor.error)}`, truncated: false, title: "advisor", isError: true })
+      // A checkpoint was admitted when the engine chose to call it; the agent's own call is admitted here.
+      const trigger = advisorTriggers.get(call.callId) ?? "tool"
+      advisorTriggers.delete(call.callId)
+      if (!options.advisor.enabled(input.sessionId)) return finish({ output: "advisor unavailable: no advisor model is set for this session", truncated: false, title: "advisor", isError: true })
+      const refusal = trigger === "tool" ? advisorTracker(input.sessionId).refusal(options.advisor.limits(input.sessionId)) : undefined
+      if (refusal) return finish({ output: `advisor unavailable: ${refusal}`, truncated: false, title: "advisor", isError: true })
+      const consultation = await consultAdvisor(input, trigger, parsedAdvisor.data.question, messages)
+      return finish({ output: advisorOutput(trigger, consultation), truncated: false, title: `advisor · ${consultation.verdict.verdict}`, isError: advisorFailed(consultation), meta: advisorMeta(trigger, consultation) })
     }
     const tool = toolset.tools.get(call.name)
     if (!tool) return finish({ output: `unknown tool: ${call.name}`, truncated: false, title: call.name, isError: true })
@@ -1710,6 +1788,27 @@ export function createNativeEngine(options: {
       await loop.persist?.()
       return stop
     }
+    /**
+     * An advisor checkpoint as an `advisor` call the engine makes itself (same gates and card as the agent's own call).
+     * `attachTo` joins the call to the agent's final message so the history keeps assistant → tool order for every provider.
+     */
+    const advisorCheckpoint = async (trigger: "repeat_error" | "completion", question: string, attachTo?: Extract<ModelMessage, { role: "assistant" }>) => {
+      if (!options.advisor || !advisorOffered(input.sessionId, toolset) || input.signal.aborted) return undefined
+      if (!advisorTracker(input.sessionId).admit(trigger, options.advisor.limits(input.sessionId))) return undefined
+      const callId = `${ADVISOR_CHECKPOINT_PREFIX}${trigger}_${createHash("sha1").update(`${input.turnId}:${messages.length}`).digest("hex").slice(0, 16)}`
+      const call: ToolCall = { name: ADVISOR_TOOL.name, args: { question }, callId }
+      advisorTriggers.set(callId, trigger)
+      const { result, stop } = await runCall(input, call, toolset, false, loadedInstructions, false, false, undefined, messages)
+      advisorTriggers.delete(callId)
+      if (attachTo) attachTo.toolCalls.push(call)
+      else messages.push({ role: "assistant", content: "", toolCalls: [call] })
+      messages.push({ role: "tool", callId, name: call.name, output: result.output, isError: result.isError })
+      await loop.persist?.()
+      let verdict: string | undefined
+      try { verdict = result.isError ? undefined : (JSON.parse(result.output) as { verdict?: string }).verdict } catch { verdict = undefined }
+      return { stop, verdict }
+    }
+    let advisorRepeat = false
     const orientationId = `graph_orientation_${createHash("sha1").update(options.cwdFor(input.sessionId)).digest("hex").slice(0, 16)}`
     if (!messages.some((message) => message.role === "assistant" && message.toolCalls.some((call) => call.callId === orientationId)) && await graphNote("graph_map", { depth: 1 }, orientationId)) return { outcome: { status: "ok" } as TurnOutcome, answer }
     let previous = ""
@@ -1749,6 +1848,9 @@ export function createNativeEngine(options: {
       }
       return { joined: any }
     }
+    /** Plan mode: a review the user accepted or closed is settled (the model's next plain text is its answer, not a new plan); at most two plain-text plans are offered per turn. */
+    let planSettled = false
+    let autoReviews = 0
     for (let step = 0; step < maxSteps; step++) {
       // The last step of the engine's own limit (or the agent's) is a text-only summary of the work and what remains, so the turn never
       // ends on a bare error; a cap the caller set (`--max-turns`) stops the turn as it is.
@@ -1776,6 +1878,11 @@ export function createNativeEngine(options: {
         previous = ""
         repeats = 0
       }
+      // A plan written as plain text in plan mode is shown in the review like a plan_review call (the model was told to use it): the user can apply it.
+      if (!final && !input.signal.aborted && !planSettled && autoReviews < 2 && reply.toolCalls.length === 0 && toolset.main && !loop.structured && !loop.fork && modeOf(input, toolset) === "plan" && looksLikePlan(reply.text)) {
+        autoReviews++
+        reply.toolCalls.push({ callId: `plan_review_${input.turnId}_${step}`, name: PLAN_REVIEW_TOOL.name, args: safePlanArgs({ markdown: reply.text.trim().slice(0, 30_000) }, (text) => secrets ? secrets.mask(input.sessionId, text) : text) })
+      }
       messages.push({ role: "assistant", content: reply.text, toolCalls: reply.toolCalls, ...(reply.reasoning ? { reasoning: reply.reasoning } : {}) })
       await loop.persist?.()
       // A generated image is a file the model can use: without its path the model sees the picture and cannot save it anywhere.
@@ -1795,6 +1902,20 @@ export function createNativeEngine(options: {
       }
       if (input.signal.aborted || reply.toolCalls.length === 0) {
         for (const call of reply.toolCalls) closeEarly(call, "cancelled", "")
+        // Before a turn that edited files ends, the advisor signs off once; revise/stop buys exactly one more step.
+        const last = messages[messages.length - 1]
+        const review = !input.signal.aborted && !final && !loop.structured && step + 1 < maxSteps && last?.role === "assistant"
+          ? await advisorCheckpoint("completion", "The executor is about to finish this turn. Does the result satisfy the request? Check the diff for bugs, missed requirements and unverified claims.", last)
+          : undefined
+        if (review?.stop) return { outcome: { status: "ok" } as TurnOutcome, answer }
+        if (review?.verdict === "revise" || review?.verdict === "stop") {
+          for (const { tool, refs } of toolImages) messages.push({ role: "user", content: toolImageNote(tool, refs), attachments: refs })
+          messages.push({ role: "user", content: review.verdict === "revise"
+            ? `${ADVISOR_NUDGE_PREFIX} The advisor asked for changes. Address its findings, or say briefly why one does not apply, then finish.`
+            : `${ADVISOR_NUDGE_PREFIX} The advisor says to stop. Do not continue the work; tell the user its concern and what you need from them.` })
+          await loop.persist?.()
+          continue
+        }
         for (const { tool, refs } of toolImages) messages.push({ role: "user", content: toolImageNote(tool, refs), attachments: refs })
         if (toolImages.length) await loop.persist?.()
         // A prompt that joins the running turn (steered, or the after-tools policy) and arrived during this answer gets one more model call here instead of a new turn.
@@ -1828,11 +1949,17 @@ export function createNativeEngine(options: {
           ? { result: { output: "cancelled", truncated: false, title: call.name, isError: true }, stop: true }
           : final ? { result: { output: "agent step limit reached; tools are disabled", truncated: false, title: call.name, isError: true }, stop: false } : await runCall(input, call, PLAN_TOOL_NAMES.has(call.name) ? toolset : available, false, loadedInstructions, repeats >= 3, false, undefined, messages)
         closeEarly(call, input.signal.aborted ? "cancelled" : "error", result.output)
+        if (PLAN_TOOL_NAMES.has(call.name)) planSettled = !result.isError
         if (!final && result.isError && FILE_WRITE_TOOLS.has(call.name)) failedWrite = call.name
         if (loop.structured && call.name === STRUCTURED_TOOL && !stop) structuredCall = result.isError ? structuredCall ?? "failed" : "ok"
         if (!result.isError && (call.name === "edit" || call.name === "write")) {
           const path = (call.args as { path?: unknown })?.path
           if (typeof path === "string" && editedPaths.size < 12) editedPaths.add(path)
+        }
+        if (toolset.main && options.advisor && call.name !== ADVISOR_TOOL.name && !input.signal.aborted) {
+          const tracker = advisorTracker(input.sessionId)
+          if (!result.isError && (call.name === "edit" || call.name === "write" || call.name === "apply_patch")) tracker.noteEdit()
+          if (result.isError && tracker.noteFailure(signature, result.output.trim().split("\n", 1)[0]!.slice(0, 200))) advisorRepeat = true
         }
         // Identical captures reuse an image only while its blob is still visible in this model context.
         const priorCapture = call.name === "computer_capture" && typeof result.meta?.sha256 === "string" ? [...messages.flatMap((message) => message.role === "user" ? message.attachments ?? [] : []), ...toolImages.flatMap((image) => image.refs)].find((ref) => ref.sha256 === result.meta!.sha256 && ref.mime.startsWith("image/")) : undefined
@@ -1851,6 +1978,11 @@ export function createNativeEngine(options: {
         }
       }
       for (const path of editedPaths) if (await graphNote("graph_impact", { path }, `graph_impact_${createHash("sha1").update(`${input.turnId}:${step}:${path}`).digest("hex").slice(0, 24)}`)) return { outcome: { status: "ok" } as TurnOutcome, answer }
+      if (advisorRepeat) {
+        advisorRepeat = false
+        const note = await advisorCheckpoint("repeat_error", "The same tool call failed twice with the same error. What is the likely cause, and what should the executor change instead of retrying?")
+        if (note?.stop) return { outcome: { status: "ok" } as TurnOutcome, answer }
+      }
       // Images follow every tool output of the step as user messages; only their refs are kept in history.
       for (const { tool, refs } of toolImages) messages.push({ role: "user", content: toolImageNote(tool, refs), attachments: refs })
       await loop.persist?.()
@@ -1975,7 +2107,7 @@ export function createNativeEngine(options: {
   return {
     forget(sessionId) {
       // A deleted session's prompts, schemas and profiles go with it; a fork of it keeps its own copy (`forkPrefixes` of the fork).
-      for (const map of [latestPlans, lastSpecs, lastCatalog, lastAgent, lastSubagents, lastMain, forkPrefixes, turnStarts, lineages, contextTokens, prunedTokens] as Array<Map<SessionId, unknown>>) map.delete(sessionId)
+      for (const map of [latestPlans, lastSpecs, lastCatalog, lastAgent, lastSubagents, lastMain, forkPrefixes, turnStarts, lineages, contextTokens, prunedTokens, turnPrunes] as Array<Map<SessionId, unknown>>) map.delete(sessionId)
       for (const key of [...earlyCards.keys()]) if (key.startsWith(`${sessionId}\n`)) earlyCards.delete(key)
     },
     async hostTools({ directory, sessionId }) {
@@ -2037,7 +2169,7 @@ export function createNativeEngine(options: {
       if (!compound && !input.turnOptions?.noReply && options.tasks?.isChild(input.sessionId) !== true) recallPackedTurns(input, messages)
       const prunedInPlace = !inherited.length && options.pruneToolOutputs?.() !== false && pruneNow(input.sessionId, messages)
       if (prunedInPlace) pruneHistoryToolOutputs(messages)
-      turnStarts.set(input.sessionId, { start: messages.length, pruned: prunedInPlace })
+      turnStarts.set(input.sessionId, { start: messages.length, pruned: prunedInPlace, prompt: lastPrompt(messages) })
       await options.history.save(input.sessionId, messages)
       // `noReply`: the message is in the transcript and the history; the model is not called.
       if (input.turnOptions?.noReply) return { status: "ok" }
@@ -2057,6 +2189,9 @@ export function createNativeEngine(options: {
       const structured = !child && input.turnOptions?.format ? structuredTool(input.turnOptions.format.schema) : undefined
       if (input.turnOptions?.format && !structured) return { status: "error", code: "structured_output", message: "[ENGINE]: the required output format is not a usable JSON Schema" }
       if (structured) toolset = withProjectTools(toolset, [structured])
+      // The advisor tool is offered only to a session that has an advisor model; each turn starts with fresh per-turn caps.
+      if (options.advisor && !options.advisor.enabled(input.sessionId)) toolset = { ...toolset, specs: toolset.specs.filter((spec) => spec.name !== ADVISOR_TOOL.name) }
+      if (!child) advisorTrackers.get(input.sessionId)?.resetTurn()
       if (compound) {
         const allowed = new Set(compound.critic ? [] : ["read", "write", "edit", "apply_patch", "glob", "grep", "shell", "list"])
         toolset.tools = new Map([...toolset.tools].filter(([name]) => allowed.has(name)))

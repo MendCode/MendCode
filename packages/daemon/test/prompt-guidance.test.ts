@@ -62,15 +62,18 @@ describe("family guidance files", () => {
     const basics = focusBasics()
     expect(basics.length).toBeGreaterThan(500)
     expect(basics.length).toBeLessThanOrEqual(PROMPT_BUDGETS.guide.basics)
-    for (const tool of ["todo", "shell", "loop", "task", "edit", "question"]) expect(basics).toContain(`\`${tool}`)
+    for (const tool of ["shell", "loop", "task", "edit", "question"]) expect(basics).toContain(`\`${tool}`)
+    // `todo` has its own line, sent only while the tool is listed (`visiblePlanPart`): minimalist has no such tool.
+    expect(basics).not.toContain("`todo`")
     expect(basics).not.toMatch(/\d{4}-\d{2}-\d{2}|\{\{/)
     expect(guideText("neutral")).toBe(basics)
     expect(guideText("codex")).toBe(`${basics}\n\n${familyGuidance("codex")!.body}`)
   })
-  test("the focus core is the short part of the basics: preambles, todo, path:line, result first, inside its budget", () => {
+  test("the focus core is the short part of the basics: preambles, path:line, result first, inside its budget", () => {
     const core = focusCore()
     expect(core.length).toBeLessThanOrEqual(PROMPT_BUDGETS.focus.core)
-    for (const habit of ["say in one sentence what you will do", "`todo`", "`tool_search`", "`path:line`", "result first"]) expect(core).toContain(habit)
+    for (const habit of ["say in one sentence what you will do", "`path:line`", "result first"]) expect(core).toContain(habit)
+    expect(core).not.toContain("`todo`")
     // The base prompt's rendering block already says edits show as diff cards; the core does not repeat it.
     expect(core).not.toMatch(/paste diffs/i)
     expect(focusBasics()).not.toContain(core)

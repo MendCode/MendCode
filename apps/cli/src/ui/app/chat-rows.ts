@@ -22,6 +22,8 @@ import { META_MARGIN, promptRow, PROMPT_MARGIN, withRightBlock, withRightLabel }
 import { limitBarVisible, limitChips, limitLine } from "../../view/usage-limit"
 import { renderShortcutOverlay, shortcutEntries } from "../../view/shortcut-overlay"
 import { voiceRow } from "../../view/voice-row"
+import { latestTodos, planProgress, planRow } from "../../view/plan-row"
+import { featureOn } from "@mendcode/protocol/wire"
 import { paintMatches } from "../../view/find"
 import { activityPartsOf, phaseOf, renderWorkingReplacement, renderWorkingRow, quietTurn } from "../../view/working-row"
 import type { ActivityPart } from "@mendcode/protocol/wire"
@@ -217,6 +219,9 @@ export function createChatRows(ctx: AppContext, actions: {
     const vimRows = barRows("vim", vimBuilt, width)
     const voiceBuilt: Line[] = state.voice ? [fit([...inset, ...voiceRow({ voice: state.voice, now: now(), dot: g.dot, width: width - lineWidth(inset) - PROMPT_MARGIN, ascii: !rich })], width)] : []
     const voiceRows = barRows("voice", voiceBuilt, width)
+    // The visible plan (balanced and full, feature `visible_plan`): what the agent works on and how far its list is, one muted row over
+    // the working row while the list has open items. The minimal view and a question card draw none; the open dock lists it whole instead.
+    const plan = rich && !asking && featureOn(state.settingsNow, "visible_plan") ? planProgress(latestTodos(state.transcript.blocks())) : undefined
     // `?` on an empty prompt: what the keys do right now, as bound.
     const shortcutBuilt: Line[] = state.shortcuts && !request ? renderShortcutOverlay({ width, entries: shortcutEntries(state.bindings, { multiline: state.tuiProfile.multiline, backtrack: state.tuiProfile.escBacktrack }), maxRows: Math.max(3, height - 12 - (width >= 70 ? 4 : 2)) }) : []
     const shortcutRows = barRows("shortcuts", shortcutBuilt, width)
@@ -246,13 +251,14 @@ export function createChatRows(ctx: AppContext, actions: {
     // While the compaction panel hosts the scratchpad the dock stays out of its way: one editor, one place.
     const dock: Line[] = rich && state.dockOpen && dockRoom >= DOCK_HEIGHT && !(compactionLive.visible() && compactionLive.mode() === "scratchpad") ? [...dockRows(width, dockRoom), []] : []
     if (!dock.length) { state.scratchArea = undefined; state.scratchCursor = undefined }
+    let planRows: Line[] = plan && !dock.length ? barRows("plan", [fit([...inset, ...planRow({ progress: plan, width: width - lineWidth(inset) - PROMPT_MARGIN, sep: g.sep, ascii: asciiChrome(state), plain: state.accessible })], width)], width) : []
     // The compaction panel takes what is left once the prompt, the footer and six rows of transcript are kept.
-    const live = compactionLive.rows({ width, room: height - agentRows.length - topbar.length - fixedAbove.length - dock.length - (findRow ? 1 : 0) - (working ? 1 : 0) - extAbove.length - commentRows.above.length - below.length - popup.length - promptTop.length - frameBottom.length - cardRows - 7 })
+    const live = compactionLive.rows({ width, room: height - agentRows.length - topbar.length - fixedAbove.length - dock.length - planRows.length - (findRow ? 1 : 0) - (working ? 1 : 0) - extAbove.length - commentRows.above.length - below.length - popup.length - promptTop.length - frameBottom.length - cardRows - 7 })
     if (live?.scratch) {
       state.scratchArea = { top: dock.length + live.scratch.top, left: live.scratch.left, width: live.scratch.width, rows: live.scratch.rows, first: live.scratch.first }
       state.scratchCursor = live.scratch.cursor ? { row: dock.length + live.scratch.cursor.row, col: live.scratch.cursor.col } : undefined
     }
-    const above: Line[] = [...fixedAbove, ...dock, ...(live?.rows ?? []), ...(working ? [working] : []), ...agentRows, ...extAbove, ...commentRows.above, ...(findRow ? [findRow.row] : [])]
+    let above: Line[] = [...fixedAbove, ...dock, ...(live?.rows ?? []), ...planRows, ...(working ? [working] : []), ...agentRows, ...extAbove, ...commentRows.above, ...(findRow ? [findRow.row] : [])]
     // Reserve chrome first: a multiline prompt must not push the tray or footer off a short terminal.
     const editorRows = Math.max(1, Math.min(MAX_EDITOR_ROWS, height - topbar.length - above.length - popup.length - promptTop.length - frameBottom.length - below.length - cardRows - 1))
     const firstRow = Math.max(0, cursorAt - editorRows + 1)
@@ -273,9 +279,17 @@ export function createChatRows(ctx: AppContext, actions: {
       const label = room >= ACTIVITY_MIN_CELLS && !(shownPlaceholder && editor.isEmpty()) ? overlayWorking(room, false) : undefined
       if (label) framed[0] = placeInside({ row: framed[0]!, width, right, label })
     }
-    const chrome = topbar.length + above.length + popup.length + promptTop.length + framed.length + frameBottom.length + below.length
-    // A collapsed sidebar is part of the layout, not an overlay on the newest output or requests.
-    const sheet = !inlineView ? bottomPanel?.(Math.max(0, height - chrome - STICKY_MIN_BODY)) ?? [] : []
+    let chrome = topbar.length + above.length + popup.length + promptTop.length + framed.length + frameBottom.length + below.length
+    const sheetRoom = (rows: number) => Math.max(0, height - rows - STICKY_MIN_BODY)
+    // A collapsed sidebar is part of the layout, not an overlay on the newest output or requests. It is laid out as if the plan row were
+    // not there: on a terminal too short for both the row gives way (the sheet's cards need the height more; the dock still lists the plan).
+    const sheet = !inlineView ? bottomPanel?.(sheetRoom(chrome - planRows.length)) ?? [] : []
+    if (planRows.length && sheet.length > sheetRoom(chrome)) {
+      const yielded = new Set(planRows)
+      above = above.filter((row) => !yielded.has(row))
+      chrome -= planRows.length
+      planRows = []
+    }
     const reserved = chrome + sheet.length
     // Inline mode: the live blocks that fit above the prompt; the rest of the transcript is already in the terminal's scrollback.
     const inlineBody = inlineView?.tail.slice(-Math.max(0, height - reserved))
@@ -364,7 +378,7 @@ export function createChatRows(ctx: AppContext, actions: {
     const panel = sheet.length ? { top: topbar.length + body.length, height: sheet.length } : undefined
     const bodyEnd = topbar.length + body.length + sheet.length
     if (!inlineView) {
-      const commentTop = fixedAbove.length + dock.length + (live?.rows.length ?? 0) + agentRows.length + (working ? 1 : 0) + extAbove.length
+      const commentTop = fixedAbove.length + dock.length + (live?.rows.length ?? 0) + planRows.length + agentRows.length + (working ? 1 : 0) + extAbove.length
       const belowTop = bodyEnd + above.length + popup.length + promptTop.length + framed.length + frameBottom.length +(!minimal && preset === "minimal" ? 1 : 0)
       comments.place({ rows, rule: bodyEnd + above.length + popup.length, ...(commentRows.chip !== undefined ? { chip: bodyEnd + commentTop + commentRows.chip } : {}), ...(commentRows.below.length ? { below: belowTop } : {}), width })
     }
@@ -389,7 +403,7 @@ export function createChatRows(ctx: AppContext, actions: {
     // Where the panels and the popup landed, so a click can pick an option, send a queued message or complete a suggestion.
     // The strip names what each of its rows opens; a custom bar view that re-laid its rows has no such map, so clicks pass through.
     state.agentsArea = state.tuiProfile.showTasks && stripRows.length && stripRows === stripBuilt
-      ? { top: bodyEnd + fixedAbove.length + dock.length + (live?.rows.length ?? 0) + (working ? 1 : 0), ids: strip.ids }
+      ? { top: bodyEnd + fixedAbove.length + dock.length + (live?.rows.length ?? 0) + planRows.length + (working ? 1 : 0), ids: strip.ids }
       : undefined
     state.homeArea = home && !inlineBody && !cleared && homeHits.length ? { top: topbar.length, hits: homeHits } : undefined
     const requestTop = asking ? bodyEnd + above.length + popup.length + promptTop.length : bodyEnd + asciiMascot.length
@@ -402,7 +416,7 @@ export function createChatRows(ctx: AppContext, actions: {
     const cursorRow = bodyEnd + above.length + popup.length + promptTop.length + (cursorAt - firstRow)
     const current = visual[cursorAt]!
     const before = [...new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(current.text)].slice(0, editor.cursorOffset - current.start).map((s) => s.segment).join("")
-    const placements = drawPet({ rows, bottom: topbar.length + body.length, floor: sheet.length === 0 && above.length === (working ? 1 : 0) + agentRows.length ? bodyEnd + above.length : topbar.length + body.length, top: topbar.length, width, shown: petShown && !(home && homeMascot.drawn) })
+    const placements = drawPet({ rows, bottom: topbar.length + body.length, floor: sheet.length === 0 && above.length === (working ? 1 : 0) + agentRows.length + planRows.length ? bodyEnd + above.length : topbar.length + body.length, top: topbar.length, width, shown: petShown && !(home && homeMascot.drawn) })
     // The start screen's pet mascot, where the terminal draws pictures: over the blank cells the home reserved for it.
     if (home && !inlineBody && !cleared) placements.push(...homeMascot.placement(topbar.length).filter((placement) => placement.row + placement.rows <= topbar.length + body.length))
     if (!inlineBody && !home && !cleared) placements.push(...transcriptPlacements({ visible, top: topbar.length + padTop, labelRows: new Set([...labelRows].map((row) => topbar.length + row)), clear: placements }))

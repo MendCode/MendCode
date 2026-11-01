@@ -136,3 +136,20 @@ describe("codex session file", () => {
     expect(merged.compactions).toBe(1)
   })
 })
+
+describe("advisor consultations in a mendcode stream", () => {
+  const card = (itemId: string, meta: Record<string, string | number>) => [
+    JSON.stringify({ type: "item.started", itemId, kind: "tool_call" }),
+    JSON.stringify({ type: "item.completed", itemId, status: "ok", meta: { tool: "advisor · proceed", ...meta } }),
+  ]
+  test("finished advisor cards are counted by trigger with the tokens they report; other cards are not", () => {
+    const lines = [
+      ...card("a", { advisorTrigger: "plan", advisorInputTokens: 1200, advisorOutputTokens: 80 }),
+      ...card("b", { advisorTrigger: "completion", advisorInputTokens: 3000, advisorOutputTokens: 120 }),
+      ...card("c", {}),
+      JSON.stringify({ type: "turn.completed", at: 1 }),
+    ]
+    expect(parseMendcodeEvents(lines).advisor).toEqual({ calls: 2, byTrigger: { plan: 1, completion: 1 }, inputTokens: 4200, outputTokens: 200 })
+    expect(parseMendcodeEvents(["{}"]).advisor).toEqual({ calls: 0, byTrigger: {}, inputTokens: 0, outputTokens: 0 })
+  })
+})

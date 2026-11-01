@@ -71,8 +71,16 @@ being true; `packages/daemon/test/prefix-modes.test.ts` does the same with the r
   shorter than one step cannot show a read at all (the smallest cacheable size was not measured).
 - Messages of earlier turns are not edited far from the compaction threshold. Old tool results are pruned by the compaction
   rules only once the context has reached 80 % of that threshold (`pruneDue`, `compaction-policy.ts`), and a prune makes the
-  provider read uncached everything from the first pruned result on. At a new user turn the signed reasoning of earlier assistant messages is dropped (engine.ts, `appendUser`),
+  provider read uncached everything from the first pruned result on. Which results a turn prunes is fixed by its first request
+  (`turnPrunes`, engine.ts): the context crossing 80 % in the middle of a turn, or a queued prompt or a background notice joining it
+  (which moves the "two latest user turns" protection), no longer rewrites a result an earlier request of the turn already sent. The next
+  turn decides again; only a context within 5 % of the compaction point (`pruneUrgent`) prunes again inside a turn, because a
+  compaction costs more than one uncached read. At a new user turn the signed reasoning of earlier assistant messages is dropped (engine.ts, `appendUser`),
   which changes the request from the first of those messages on for the adapters that replay it (Anthropic thinking, Gemini).
+
+- The system prompt is built once per turn: `SystemContext.prompt` is the prompt the turn started with, not the latest user message, so
+  a queued prompt or a notice that joins the turn cannot pick other memories into the block (the block sits before the whole
+  conversation, and in `smart` mode its text is part of the cache route, so a change there read everything uncached from a new route).
 
 - A portable compaction (manual, automatic or while idle) repeats the session's last main request and appends its summary prompt,
   so the one call that reads the whole history reads it from the cache. It keeps its own request, which shares nothing with the
@@ -244,3 +252,56 @@ always zero, never a partial hit as a changed prefix would give. That points to 
 propagation (the entry from the call just before is not readable yet, or the call landed on another replica), not to the
 harness. It is not proven: the evaluation kept no request bodies. What the harness controls is the price of a miss, which is the
 whole prefix: about 21 K tokens before the lean catalogue and about 3 to 4 K after it.
+
+### Finding where a request stopped repeating the one before
+
+Run the daemon with `MENDCODE_DEBUG_PROMPT_PREFIX=1` (off by default, no cost when off) and every provider request of the native
+engine writes one line to the daemon log (the terminal's log file when it hosts the daemon, stderr otherwise):
+
+```
+[PROMPT-PREFIX]: session=ses_... role=main turn=trn_... call=7 instructions=9c1f02aa tools=51d3e7b0 route=0be2a4c1 items=23 change=item[4] hashes=...
+```
+
+The hashes are 8 hex digits of SHA-1 of the instructions (or `system`), the tool list, the cache route and each serialised input item
+(`input`, `messages` or `contents`, as the request body names them after plugins ran); there is no prompt text, tool output or key in
+the line. `change` compares with the previous request of the same session and role, in the order a prefix cache reads them: `first`,
+`same`, `append` (the new request only added items: the observed prefix is intact), or a list of `tools`, `instructions`, `route`,
+`item[k]` (the first input item that differs: a provider re-reads from there) and `shrunk@n`. A usage record that shows a miss
+(`cacheRead` near zero after a call of more than 10 K tokens) with `tools`, `instructions`, `route`, `item[k]` or `shrunk@n` shows
+a client-side prefix change; `same` and `append` do not. An `append` or `same` miss with stable model, transport and other request
+parameters points to provider-side cache behavior; the hashes alone cannot identify routing, propagation or eviction as its cause.
+`first` has no earlier request to compare. Its code is `prompt-trace.ts`; `test/prune-prefix.test.ts` and
+`test/turn-system-prefix.test.ts` run the engine against a fake Responses host and assert the append-only rule inside a turn.
+
+### In-turn misses measured on one ChatGPT account (2026-11-01)
+
+108 calls of the ChatGPT provider (previous call under 5 minutes earlier and over 10 K tokens, next one reading under 10 % of it)
+missed; 67 were between two calls of one turn. By what the request log can show without bodies: 12 of those followed a `tool_search`
+(11 % of the 110 calls that did, against about 1 % of the others), and about 14 to 21 were in a session whose context stood at 80 % of
+the compaction point, where the prune moved (the total of the prefix falling by 40 to 60 % between two calls of one turn, 11 times,
+and the same turn missing again each time a queued prompt joined). The first group is the prune and the join described above, fixed
+by freezing the turn's prune set. Repeated `tool_search` calls also used to change an earlier item (`searchLoads`,
+tool-discovery.md): the earlier answer lost the definition the later one carried. The adapter now assigns definitions in forward
+history order, keeping each in its first successful search result, and appends an already-loaded notice to a repeated find.
+An overlapping search loads its new tools and acknowledges those already loaded. Failed searches never claim to load tools.
+The remaining roughly 35 to 45 misses are unresolved: without per-call prefix traces, their attribution to the provider is a
+hypothesis, not a measurement that the prefix stayed identical.
+
+### Repeated-search regression and live canary (2026-11-01)
+
+On baseline `e185314e`, four regression cases failed: first-search ownership, byte-for-byte preservation across repeated searches,
+and complete engine tool loops in both `legacy` and `smart` cache modes. After the fix they pass. The mixed/failed/empty search
+cases preserve prior input items, and the tool still executes after repeated discovery. Separate checks cover Responses function
+fallback, Anthropic, Chat Completions and Gemini receipts; these formats keep their existing behavior.
+
+`bun scripts/prompt-cache-canary.ts --live before|after [--dir <MendCode data directory>]` runs a single in-memory turn with the real
+engine and Responses adapter on `gpt-6-luna`, effort `low`: a stable prefix over 2 K tokens, search, repeated search, two deterministic
+tool calls, then a short answer. It prints `PROMPT-PREFIX` lines and the returned input/cached/output usage. Run the same script on
+each revision with its matching label; the label does not emulate the old code. It permits at most six HTTP requests, aborts on an
+error, and uses no daemon or database. It only accepts a valid MendCode-owned subscription-backend login, refuses refresh and never
+falls back to another application's credentials. The plan API route does not currently enable client-executed tool search.
+
+Live verification is **blocked** in this run: MendCode's own credential loader returned `state: none` for the default data directory.
+No provider requests were made and no cache-token measurements were obtained. A valid MendCode-owned subscription-backend login
+(or its actual data-directory location) is required to run the before/after comparison within those credential boundaries. No
+provider-side misses were established by this local regression; the historical unexplained misses remain unresolved.

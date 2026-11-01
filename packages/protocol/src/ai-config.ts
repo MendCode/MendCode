@@ -41,8 +41,10 @@ export type AIConfigIssue = { code: string; path: string; message: string }
 export type AIConfigAlternative = { id: string; strategy: "single" | "cascade" | "critic"; primary: z.infer<typeof ModelChoice>; secondary?: z.infer<typeof ModelChoice>; feasibility: "feasible" | "blocked"; reason: string; estimatedMaxCostUsd: number | null; quality: "unknown" }
 export type AIConfigInspection = {
   action: "inspect"; version: 1; models: AIConfigModel[]; roles: z.infer<typeof ModelRoles>; configSources: AIConfigTarget[]
-  effective: { compactAtTokens: number | null }; missingInformation: string[]; advisor: "off"
+  effective: { compactAtTokens: number | null }; missingInformation: string[]; advisor: AIConfigAdvisor
 }
+/** The advisor as the session would get it: off without the `advisor` role, otherwise the choice and whether it applies (with why not). */
+export type AIConfigAdvisor = "off" | { model: string; effort?: string; checkpoints: string[]; applied: boolean; reason?: string }
 export type AIConfigPlan = {
   action: "plan"; version: 1; alternatives: AIConfigAlternative[]; selectedAlternative: string; patch: AIConfigRecipe
   target: AIConfigTarget; expectedHash: string; diff: string[]; warnings: string[]

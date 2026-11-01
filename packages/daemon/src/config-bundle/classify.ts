@@ -132,7 +132,7 @@ export const PORTABLE_SETTINGS: ReadonlySet<string> = new Set([
  */
 export const APPROVAL_SETTINGS: ReadonlySet<string> = new Set([
   "models", "defaultPermission", "permission", "permissionAllow", "permissionReviewerRole", "smartSandboxTrust", "engineSafetyPrompts", "sandbox", "tools", "threadMcp",
-  "tier", "features", "experimental", "budgets", "serviceTier", "allowedHttpHookUrls", "disabledExtensions", "disabledPackages", "disabledPackageResources",
+  "tier", "features", "experimental", "advisor", "budgets", "serviceTier", "allowedHttpHookUrls", "disabledExtensions", "disabledPackages", "disabledPackageResources",
   "subagentDepth", "subagentMaxChildren", "subagentMaxDescendants", "disabled_models", "enabled_providers", "agent", "default_agent", "defaultAgent", "web",
   "memoryRequireApproval", "evolution", "evolutionWorkflows", "share", "image_generation", "voice", "provider", "instructions", "skills", "dreamMaxTokens",
 ])

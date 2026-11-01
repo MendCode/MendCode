@@ -17,7 +17,8 @@
  *                --fake-solve <ids>    fake adapter only: all | none | comma list (default all)
  *                --fake-mode <mode>    fake adapter only: normal | hang | crash
  *                --engine <name>       mendcode only: native (default) or faux (kit tests; no model flag, no credentials)
- *                --tier <name>         mendcode only: minimalist | balanced | full with that tier's prompt mode (default balanced, focus)
+ *                --advisor <m[#e]>     mendcode only: set the advisor role (docs/advisor.md), e.g. gpt-6.1-sol#high
+ *                --tier <name>        mendcode only: minimalist | balanced | full with that tier's prompt mode (default balanced, focus)
  */
 import { mkdirSync, writeFileSync } from "node:fs"
 import path from "node:path"
@@ -27,7 +28,7 @@ import { runMatrix } from "./lib/runner"
 import { selectTasks } from "./lib/tasks"
 import type { AdapterOptions } from "./lib/types"
 
-const KNOWN = ["harness", "model", "tasks", "repeat", "out", "effort", "data-dir", "auth-from", "timeout-scale", "resume", "keep-work", "dry-run", "codex-bin", "mendcode-bin", "daemon-bin", "fake-solve", "fake-mode", "engine", "tier"]
+const KNOWN = ["harness", "model", "tasks", "repeat", "out", "effort", "data-dir", "auth-from", "timeout-scale", "resume", "keep-work", "dry-run", "codex-bin", "mendcode-bin", "daemon-bin", "fake-solve", "fake-mode", "engine", "tier", "advisor"]
 const TIERS = ["minimalist", "balanced", "full"] as const
 
 export function parseRunArgs(argv: string[]) {
@@ -52,6 +53,7 @@ export function parseRunArgs(argv: string[]) {
     ...(split(stringFlag(args, "daemon-bin")) ? { daemonCommand: split(stringFlag(args, "daemon-bin"))! } : {}),
     ...(engine ? { engine: engine as "native" | "faux" | "claude" } : {}),
     ...(tier ? { tier: tier as (typeof TIERS)[number] } : {}),
+    ...(stringFlag(args, "advisor") ? { advisor: stringFlag(args, "advisor")! } : {}),
     ...(stringFlag(args, "codex-bin") ? { codexBin: stringFlag(args, "codex-bin")! } : {}),
     ...(stringFlag(args, "fake-solve") ? { fakeSolve: stringFlag(args, "fake-solve")! } : {}),
     ...(fakeMode ? { fakeMode: fakeMode as "normal" | "hang" | "crash" } : {}),

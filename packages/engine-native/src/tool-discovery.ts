@@ -65,9 +65,15 @@ export const PLAN_TOOLS: ReadonlySet<string> = new Set(["todo", "get_goal", "cre
  */
 export const AUX_TOOLS: ReadonlySet<string> = new Set(["shell_output", "shell_kill", "task_status", "webfetch", "question", "plan_submit", "plan_review", "plan_exit"])
 
-/** How the catalogue is cut: which tools are always listed. Derived from the lean, plan, auxiliary, find and screen-settings features by the engine. */
-export type CatalogMode = { lean: boolean; planTools: boolean; aux: boolean; find: boolean; ui: boolean }
-export const LEGACY_CATALOG: CatalogMode = { lean: false, planTools: true, aux: true, find: true, ui: true }
+/** The user's visible plan (feature `visible_plan`): listed in every request of balanced and full whatever `plan_tools` says. */
+export const VISIBLE_PLAN_TOOL = "todo"
+
+/**
+ * How the catalogue is cut: which tools are always listed. Derived from the lean, plan, auxiliary, find, screen-settings and
+ * visible-plan features by the engine.
+ */
+export type CatalogMode = { lean: boolean; planTools: boolean; aux: boolean; find: boolean; ui: boolean; visiblePlan: boolean }
+export const LEGACY_CATALOG: CatalogMode = { lean: false, planTools: true, aux: true, find: true, ui: true, visiblePlan: true }
 
 /**
  * The auxiliary tools the conversation already calls for, so nothing that worked with them listed needs a search first: the plan
@@ -88,6 +94,7 @@ export function impliedTools(messages: readonly ModelMessage[], plan: boolean): 
 
 /** Whether `name` is always listed under `mode`; every other tool is deferred behind `tool_search` while discovery is on. */
 export function isPrimaryIn(name: string, mode: CatalogMode): boolean {
+  if (name === VISIBLE_PLAN_TOOL && mode.visiblePlan) return true
   if (PLAN_TOOLS.has(name)) return mode.planTools && (mode.lean || PRIMARY_TOOLS.has(name))
   if (mode.lean && (!mode.aux && AUX_TOOLS.has(name) || !mode.find && FIND_TOOLS.has(name) || !mode.ui && name === UI_TOOL)) return false
   return mode.lean ? LEAN_CORE.has(name) : PRIMARY_TOOLS.has(name)
@@ -186,7 +193,7 @@ export function createToolSearch(catalog: () => readonly ToolSpec[], active: Rea
   const discovered = new Set(active)
   return defineTool({
     name: TOOL_SEARCH_NAME,
-    description: "Find more tools (glob, grep, ls, webfetch, websearch, todo, memory, image generation, computer use, MCP, extensions...) by task, name or keyword; matches become directly callable. Search before assuming one is missing. Finding a tool never grants permission to run it.",
+    description: "Find more tools (glob, grep, ls, webfetch, websearch, memory, image generation, computer use, MCP, extensions...) by task, name or keyword; matches become directly callable. Search before assuming one is missing. Finding a tool never grants permission to run it.",
     permission: "read",
     args: z.strictObject({ query: z.string().max(500), limit: z.number().int().min(1).max(8).optional() }),
     async execute({ query, limit }, { signal }) {

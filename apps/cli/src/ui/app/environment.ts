@@ -1,4 +1,4 @@
-import { createEnvironmentPageState, type EnvInfo, type EnvScope } from "../../view/environment-page"
+import { createEnvironmentPageState, looksLikeDotenv, type EnvInfo, type EnvironmentPageState, type EnvScope, type PastedItem } from "../../view/environment-page"
 import type { AppContext } from "./context"
 
 export function createEnvironmentPanel(ctx: AppContext) {
@@ -35,18 +35,69 @@ export function createEnvironmentPanel(ctx: AppContext) {
     if (privacy && state.page === "env") state.environmentPage.confirm = "privacy"
     requestFrame()
   }
+  /** Asks the daemon what the pasted text holds. Names and statuses come back, never values; the text itself stays in `page.paste`. */
+  async function previewPaste(page: EnvironmentPageState, content: string, keep?: ReadonlySet<string>) {
+    page.busy = true
+    requestFrame()
+    try {
+      const result = await input.send({ type: "env.import", sessionId: state.sessionId, content, scope: page.scope })
+      const items = result.ok ? (result.result?.items as PastedItem[] | undefined) ?? [] : []
+      if (!result.ok || !items.length) { page.paste = undefined; page.error = result.ok ? "No variables found in the pasted text." : "Could not read the pasted text as NAME=value lines." }
+      else {
+        const saveable = items.filter((item) => item.status === "new" || item.status === "replace").map((item) => item.name)
+        page.paste = { content, items, digest: result.result?.digest as string, checked: new Set(keep ? saveable.filter((name) => keep.has(name)) : saveable), cursor: page.paste?.cursor ?? 0 }
+        page.error = ""
+      }
+    } catch { page.paste = undefined; page.error = "Connection unavailable. Nothing has been saved." }
+    finally { page.busy = false }
+  }
+  async function applyPaste(page: EnvironmentPageState) {
+    const paste = page.paste
+    if (!paste) return
+    const names = paste.items.filter((item) => paste.checked.has(item.name)).map((item) => item.name)
+    if (!names.length) { page.error = "Select at least one variable (space), or esc to cancel."; return }
+    page.busy = true
+    requestFrame()
+    try {
+      const result = await input.send({ type: "env.import", sessionId: state.sessionId, content: paste.content, scope: page.scope, digest: paste.digest, names })
+      if (result.ok) {
+        page.paste = undefined; page.edit = undefined; page.error = ""
+        page.notice = `Saved ${names.length} variable${names.length === 1 ? "" : "s"} to ${page.scope} scope, encrypted.`
+        await load()
+      } else page.error = "Could not save the selected variables. Check the vault key and disk space."
+    } catch { page.error = "Connection unavailable. Nothing has been saved." }
+    finally { page.busy = false }
+  }
   async function key(key: string) {
     const page = state.environmentPage
     if (!page) return
     if (page.busy) return
     if (key === "\x1b") {
-      if (page.edit || page.confirm || page.import) { page.edit = undefined; page.confirm = undefined; page.import = undefined; page.error = "" }
+      if (page.paste) { page.paste = undefined; page.error = "" }
+      else if (page.edit || page.confirm || page.import) { page.edit = undefined; page.confirm = undefined; page.import = undefined; page.error = "" }
       else { state.environmentPage = undefined; state.page = "chat" }
       requestFrame()
       return
     }
     if (page.loading) return
-    if (page.import && !page.confirm) {
+    page.notice = ""
+    // A paste arrives as one multi-character string (never an escape sequence); a lone character is an ordinary key.
+    const pasted = key.length > 1 && !key.startsWith("\x1b")
+    if (page.paste) {
+      const paste = page.paste
+      const saveable = paste.items.filter((item) => item.status === "new" || item.status === "replace")
+      if (key === "\x13") {
+        const scopes: EnvScope[] = ["project", "session", "global"]
+        page.scope = scopes[(scopes.indexOf(page.scope) + 1) % scopes.length]!
+        await previewPaste(page, paste.content, paste.checked)
+      } else if (key === "\r" || key === "\n") await applyPaste(page)
+      else if (key === " ") { const item = paste.items[paste.cursor]; if (item && saveable.includes(item)) { if (!paste.checked.delete(item.name)) paste.checked.add(item.name) } }
+      else if (key.toLowerCase() === "a") { if (paste.checked.size === saveable.length) paste.checked.clear(); else for (const item of saveable) paste.checked.add(item.name) }
+      else if (["\x1b[A", "\x1bOA", "k"].includes(key)) paste.cursor = Math.max(0, paste.cursor - 1)
+      else if (["\x1b[B", "\x1bOB", "j"].includes(key)) paste.cursor = Math.min(paste.items.length - 1, paste.cursor + 1)
+    } else if (pasted && looksLikeDotenv(key) && (!page.import && !page.confirm)) {
+      await previewPaste(page, key)
+    } else if (page.import && !page.confirm) {
       if (key === "\x13") {
         const scopes: EnvScope[] = ["project", "session", "global"]
         page.scope = scopes[(scopes.indexOf(page.scope) + 1) % scopes.length]!

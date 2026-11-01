@@ -78,6 +78,8 @@ export async function recordLineage(input: {
   engineOptions?: Partial<Parameters<typeof createNativeEngine>[0]>
   /** Responses only: `tool_search` as the API's client-executed tool search (the ChatGPT backend's default). */
   clientToolSearch?: boolean
+  /** Text a turn lets join it after its model step number `[turn, step]` (a prompt the user queued, or a background notice): the way `takeQueued` hands it over. */
+  joins?: Record<string, string>
   /** Runs after the turns on the same engine and session (a compaction); its model calls answer with `steps`, recorded as one more turn. */
   after?: { steps: Step[]; run(engine: ReturnType<typeof createNativeEngine>, sessionId: ReturnType<typeof ids<"session">>): Promise<void> }
 }): Promise<Recorded[]> {
@@ -95,7 +97,20 @@ export async function recordLineage(input: {
       ...input.engineOptions,
     })
     const sessionId = ids("session")
-    for (const entry of input.turns) await engine.runTurn(turn({ text: entry.text, sessionId, mode: () => "full" }).input)
+    for (const [turnIndex, entry] of input.turns.entries()) {
+      const run = turn({ text: entry.text, sessionId, mode: () => "full" }).input
+      if (input.joins) {
+        const calls = server.requests.length
+        const first = [...Object.keys(input.joins)].filter((key) => key.startsWith(`${turnIndex}.`))
+        run.takeQueued = async () => {
+          const key = `${turnIndex}.${server.requests.length - calls - 1}`
+          const text = first.includes(key) ? input.joins![key] : undefined
+          if (text !== undefined) first.splice(first.indexOf(key), 1)
+          return text === undefined ? undefined : { text, attachments: [] }
+        }
+      }
+      await engine.runTurn(run)
+    }
     await input.after?.run(engine, sessionId)
     return server.requests.map((request, index) => ({ turn: script[index]!.turnIndex, step: script[index]!.stepIndex, body: request.body, headers: request.headers }))
   } finally {

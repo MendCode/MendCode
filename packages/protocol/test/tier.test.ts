@@ -55,10 +55,16 @@ describe("feature manifest", () => {
     expect(featureOn({ tier: "minimalist" }, "usage_resume")).toBe(true)
     expect(featureOn({ tier: "minimalist", features: { usage_resume: false } }, "usage_resume")).toBe(false)
     expect(rows.threads).toEqual([false, true, true])
-    expect(tierDiff("minimalist", "balanced")).toEqual({ added: ["package_tools", "codegraph", "subagents", "script_workflows", "computer", "threads", "pr_watch", "pr_review", "output_filters", "forecast", "review_order", "session_meta", "limit_checkpoint", "graph_context", "handoff", "instruction_includes", "package_capabilities", "caveman", "webfetch_modes", "official_packages", "web_routing", "panel", "panel_models", "file_viewer", "aux_tools", "harness_tools", "ui_tool", "orientation", "git_hub", "git_actions", "compact_notice", "cheap_subagents", "claude_compact", "one_tree"], removed: [] })
+    expect(tierDiff("minimalist", "balanced")).toEqual({ added: ["package_tools", "codegraph", "subagents", "script_workflows", "computer", "threads", "pr_watch", "pr_review", "output_filters", "forecast", "review_order", "session_meta", "limit_checkpoint", "graph_context", "handoff", "instruction_includes", "package_capabilities", "caveman", "webfetch_modes", "official_packages", "web_routing", "panel", "panel_models", "file_viewer", "aux_tools", "harness_tools", "ui_tool", "orientation", "git_hub", "git_actions", "compact_notice", "cheap_subagents", "claude_compact", "one_tree", "advisor", "visible_plan"], removed: [] })
+    // The visible plan (todo listed, its prompt line and the progress row) is balanced's and full's; minimalist has none of it.
+    expect(rows.visible_plan).toEqual([false, true, true])
+    expect(featureOn({}, "visible_plan")).toBe(true)
     // The project backlog is the full tier's alone: no tool and no prompt text, so it costs a request nothing.
     expect(tierDiff("balanced", "full").added).toContain("backlog")
     expect(tierDiff("balanced", "full").added).toContain("voice")
+    // The advisor is only permitted by a tier; it consults nothing until the user picks the advisor model.
+    expect(rows.advisor).toEqual([false, true, true])
+    expect(featureOn({}, "advisor")).toBe(true)
     expect(rows.backlog).toEqual([false, false, true])
     expect(rows.compact_notice).toEqual([false, true, true])
     expect(tierDiff("full", "balanced").removed).toContain("mcp")

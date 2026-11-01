@@ -255,7 +255,8 @@ export function createShellHooks(options: {
   /** The transport of `http` hooks; tests pass a fake. */
   fetch?: (url: string, init: { method: "POST"; headers: Record<string, string>; body: string; signal: AbortSignal; redirect: "manual" }) => Promise<{ status: number; text(): Promise<string> }>
   /** One tool-less model call for `prompt` hooks; without it they fail with a note. */
-  complete?(input: { system: string; prompt: string; signal: AbortSignal }): Promise<string>
+  /** `sessionId`: the session whose event ran the hook, so the call is counted under it (`/usage`, Auxiliary). */
+  complete?(input: { system: string; prompt: string; signal: AbortSignal; sessionId?: string }): Promise<string>
 }) {
   const enabled = options.enabled !== false
   const cache = new Map<string, Loaded>()
@@ -332,7 +333,7 @@ export function createShellHooks(options: {
         message = "no model is available for prompt hooks"
       } else {
         const instruction = hook.prompt!.includes("$ARGUMENTS") ? hook.prompt!.replaceAll("$ARGUMENTS", clip(body, MAX_PROMPT_EVENT)) : `${hook.prompt}\n\n${clip(body, MAX_PROMPT_EVENT)}`
-        stdout = options.mask(ref.sessionId, await options.complete({ system: PROMPT_HOOK_SYSTEM, prompt: instruction, signal: controller.signal }))
+        stdout = options.mask(ref.sessionId, await options.complete({ system: PROMPT_HOOK_SYSTEM, prompt: instruction, signal: controller.signal, sessionId: ref.sessionId }))
         const verdict = promptVerdict(stdout)
         if (!verdict) [outcome, message] = ["failed", "the model's answer could not be read"]
         else if (!verdict.ok) [outcome, reason] = ["blocked", verdict.reason || "blocked by a prompt hook"]

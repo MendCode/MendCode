@@ -1,4 +1,5 @@
 export * from "./engine"
 export * from "./protocol"
+export * from "./plan"
 export * from "./transport"
 export * from "./quota-probe"

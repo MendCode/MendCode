@@ -13,9 +13,9 @@ const functionTool = (tool: ToolSpec) => ({ type: "function", name: tool.name ==
 
 /**
  * Client-executed tool search (docs/tool-discovery.md, "Deferred loading on the ChatGPT backend"): which search result loads which found
- * tool. A found tool is defined once, in the `tool_search_output` of the last successful search that names it, so it travels at the tail of
- * `input` and the `tools` array keeps its bytes. The last, not the first: a model that searches again for a tool it already found must get
- * it in that answer, or it reads the empty result as "no such tool" (the earlier answer then loses it, which re-reads the prompt once). `listed` is what stays in `tools`: everything up to `tool_search`, plus the found tools no
+ * tool. A found tool is defined once, in the `tool_search_output` of the first successful search that names it. Later searches must not
+ * move that definition: every earlier input item stays byte for byte. Repeated finds get an already-loaded notice in `toResponsesInput`.
+ * `listed` is what stays in `tools`: everything up to `tool_search`, plus the found tools no
  * search result in this history carries (activated by `code` or by a direct call), which are appended as before.
  */
 export function searchLoads(tools: readonly ToolSpec[], messages: readonly ModelMessage[]) {
@@ -24,7 +24,7 @@ export function searchLoads(tools: readonly ToolSpec[], messages: readonly Model
   const loads = new Map<string, ToolSpec[]>()
   const searches = messages.filter((message): message is Extract<ModelMessage, { role: "tool" }> => message.role === "tool" && message.name === TOOL_SEARCH_NAME)
   for (const message of searches) loads.set(message.callId, [])
-  for (const message of searches.toReversed()) {
+  for (const message of searches) {
     if (message.isError) continue
     const found: ToolSpec[] = []
     for (const name of message.discoveredTools ?? []) {
@@ -42,6 +42,7 @@ export function searchLoads(tools: readonly ToolSpec[], messages: readonly Model
  */
 export function toResponsesInput(messages: ModelMessage[], loads?: ReadonlyMap<string, readonly ToolSpec[]>) {
   const items: Record<string, unknown>[] = []
+  const loaded = new Set<string>()
   for (const message of messages) {
     if (message.role === "user") {
       const image = (entry: RequestImage) => ({ type: "input_image", image_url: `data:${entry.mime};base64,${entry.base64}` })
@@ -63,8 +64,13 @@ export function toResponsesInput(messages: ModelMessage[], loads?: ReadonlyMap<s
         else items.push({ type: "function_call", call_id: call.callId, name: call.name === TOOL_SEARCH_NAME ? TOOL_SEARCH_WIRE_NAME : call.name, arguments: JSON.stringify(call.args ?? {}) })
       }
     } else if (loads && message.name === TOOL_SEARCH_NAME) {
-      // The definitions are the whole result: the model calls a loaded tool like a listed one. An empty or failed search loads nothing.
-      items.push({ type: "tool_search_output", call_id: message.callId, status: "completed", execution: "client", tools: (loads.get(message.callId) ?? []).map((tool) => ({ ...functionTool(tool), defer_loading: true })) })
+      const found = loads.get(message.callId) ?? []
+      const repeated = message.isError ? [] : [...new Set(message.discoveredTools ?? [])].filter((name) => loaded.has(name))
+      items.push({ type: "tool_search_output", call_id: message.callId, status: "completed", execution: "client", tools: found.map((tool) => ({ ...functionTool(tool), defer_loading: true })) })
+      // The API result carries definitions only. A separate tail item distinguishes a repeated find from "no such tool", without
+      // unsupported fields on tool_search_output or rewriting earlier results. Only definitions already present in this input count.
+      if (repeated.length) items.push({ role: "developer", content: [{ type: "input_text", text: `Tools already loaded: ${repeated.join(", ")}. Use their earlier definitions; they remain available.` }] })
+      for (const tool of found) loaded.add(tool.name)
     } else items.push({ type: "function_call_output", call_id: message.callId, output: message.output })
   }
   return items

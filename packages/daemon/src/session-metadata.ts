@@ -29,7 +29,8 @@ export function cleanTitle(raw: string): string {
  */
 export function createSessionMetadata(input: {
   store: Store
-  complete?: ((input: { system: string; prompt: string; model?: ModelChoice; signal: AbortSignal }) => Promise<string>) | undefined
+  /** `auxiliary` names the call for `/usage` (Auxiliary): its role and session. */
+  complete?: ((input: { system: string; prompt: string; model?: ModelChoice; signal: AbortSignal; auxiliary: { role: "title" | "summary"; sessionId: SessionId } }) => Promise<string>) | undefined
   model(id: SessionId, role: ModelRole): ModelChoice
   settings(): Settings
   changed?(id: SessionId): void
@@ -76,7 +77,7 @@ export function createSessionMetadata(input: {
     pending.set(id, controller)
     const timer = setTimeout(() => controller.abort(), AUXILIARY_TIMEOUT_MS)
     void (async () => {
-      const text = redactSecrets(await input.complete!({ system: config?.prompt || TITLE_SYSTEM, prompt: prompt.slice(0, 24_000), model: modelOf(id, "title", config), signal: controller.signal })).text.trim()
+      const text = redactSecrets(await input.complete!({ system: config?.prompt || TITLE_SYSTEM, prompt: prompt.slice(0, 24_000), model: modelOf(id, "title", config), signal: controller.signal, auxiliary: { role: "title", sessionId: id } })).text.trim()
       if (controller.signal.aborted || !text || !input.store.hasSession(id)) return
       const title = cleanTitle(text)
       if (title && input.store.sessionInfo(id)?.title === titleBefore && !input.store.meta.get(`session.title.manual:${id}`)) {
@@ -122,7 +123,7 @@ export function createSessionMetadata(input: {
     const timer = setTimeout(() => controller.abort(), AUXILIARY_TIMEOUT_MS)
     const done = (async () => {
       try {
-        const text = redactSecrets(await input.complete!({ system: config?.prompt || SUMMARY_SYSTEM, prompt: redactSecrets(transcript).text, model: modelOf(id, "summary", config), signal: controller.signal })).text.trim().slice(0, 500)
+        const text = redactSecrets(await input.complete!({ system: config?.prompt || SUMMARY_SYSTEM, prompt: redactSecrets(transcript).text, model: modelOf(id, "summary", config), signal: controller.signal, auxiliary: { role: "summary", sessionId: id } })).text.trim().slice(0, 500)
         if (controller.signal.aborted || !text || !input.store.hasSession(id)) return saved
         input.store.meta.set(`session.summary:${id}`, text)
         input.store.meta.set(`session.summary.seq:${id}`, String(seq))
@@ -149,7 +150,7 @@ export function createSessionMetadata(input: {
       const fallback = input.model(id, "title")
       const model = { ...fallback, ...(config?.model ? { model: config.model } : {}), ...(config?.effort ? { effort: config.effort } : {}) }
       const raw = await Promise.race([
-        input.complete({ system: config?.prompt || TITLE_SYSTEM, prompt: redactSecrets(prompt).text, model, signal: controller.signal }),
+        input.complete({ system: config?.prompt || TITLE_SYSTEM, prompt: redactSecrets(prompt).text, model, signal: controller.signal, auxiliary: { role: "title", sessionId: id } }),
         new Promise<never>((_, reject) => controller.signal.addEventListener("abort", () => reject(new Error("Title generation cancelled")), { once: true })),
       ])
       const title = cleanTitle(redactSecrets(raw).text)

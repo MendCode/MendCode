@@ -335,6 +335,27 @@ describe("Tokens, Models, Tools, Sessions", () => {
     for (const line of lines) expect(textWidth(text(line))).toBe(140)
   })
 
+  test("Models shows the calls outside turns per role and model, and nothing when there were none", () => {
+    const auxiliary = [
+      { role: "summary", provider: "chatgpt", model: "gpt-6-luna", input: 74_000, output: 2_100, reasoning: 0, cacheRead: 0, cacheWrite: 0, calls: 12, costMicros: 0, costUnknownCalls: 12 },
+      { role: "title", provider: "chatgpt", model: "gpt-6-luna", input: 3_000, output: 90, reasoning: 0, cacheRead: 0, cacheWrite: 0, calls: 9, costMicros: 0, costUnknownCalls: 9 },
+      { role: "summary", provider: "anthropic", model: "claude-haiku-5", input: 1_000, output: 50, reasoning: 0, cacheRead: 0, cacheWrite: 0, calls: 1, costMicros: 20_000, costUnknownCalls: 0 },
+    ]
+    for (const width of [140, 60]) {
+      const lines = render({ report: { ...fixtureReport(), auxiliary }, state: state({ tab: 3 }), width })
+      const all = plain(lines)
+      expect(all.join("\n")).toContain("Auxiliary calls")
+      expect(all.join("\n")).toContain("Outside your turns · 22 calls · 80.2K tok · $0.02+")
+      // A role's models stay together, the role with most tokens first.
+      const order = ["summary · gpt-6-luna", "summary · claude-haiku-5", "title · gpt-6-luna"].map((label) => all.findIndex((line) => line.includes(label)))
+      expect(order.every((index) => index >= 0)).toBe(true)
+      expect([...order].sort((a, b) => a - b)).toEqual(order)
+      expect(all[order[0]!]).toMatch(/summary · gpt-6-luna +12 +74K +2,100 +—/)
+      for (const line of lines) expect(textWidth(text(line))).toBe(width)
+    }
+    expect(joined(render({ state: state({ tab: 3 }) }))).not.toContain("Auxiliary calls")
+  })
+
   test("Tools lists calls, time and errors, and skills with their runs", () => {
     const lines = render({ state: state({ tab: 4 }) })
     expect(joined(lines)).toContain("Tool calls")

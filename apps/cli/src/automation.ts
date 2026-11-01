@@ -15,6 +15,7 @@ import { relativeTime } from "./view/session-list"
 import { labelString, sessionLabel } from "./view/session-label"
 import { formatBytes } from "./view/storage-page"
 import { compact } from "./view/usage-page"
+import { auxiliaryLabel, auxiliaryOrder, auxiliaryTotals, callCount } from "./view/usage-auxiliary"
 import { statsText } from "./stats"
 import { backlogChangeText, backlogCount, backlogLines, parseBacklogWords } from "./view/backlog"
 import type { BacklogReport } from "@mendcode/protocol/wire"
@@ -1100,6 +1101,13 @@ export function usageText(report: UsageReport, days: number) {
   const cost = sum.cost > 0 ? `$${(sum.cost / 1e6).toFixed(2)}${sum.unknown ? ` (+${sum.unknown} unpriced)` : ""}` : sum.unknown ? "n/a" : "$0.00"
   const lines = [`last ${days} days: ${compact(sum.tokens)} tokens${apart ? ` (${apart})` : ""} · ${compact(sum.calls)} calls${report.sessions === undefined ? "" : ` · ${report.sessions} sessions`} · cost ${cost}`]
   for (const model of [...report.models].sort((a, b) => b.input + b.output - (a.input + a.output))) lines.push(`  ${`${model.provider}/${model.model}`.padEnd(36)} ${compact(model.input + model.output).padStart(8)} tokens  ${compact(model.calls).padStart(6)} calls`)
+  // Calls outside turns are counted apart: the headline above is the turns' own.
+  const auxiliary = report.auxiliary ?? []
+  if (auxiliary.length) {
+    const total = auxiliaryTotals(auxiliary)
+    lines.push(`auxiliary (outside turns): ${compact(total.tokens)} tokens · ${callCount(total.calls, compact)} · cost ${total.costMicros > 0 ? `$${(total.costMicros / 1e6).toFixed(2)}${total.unpriced ? ` (+${total.unpriced} unpriced)` : ""}` : total.unpriced ? "n/a" : "$0.00"}`)
+    for (const entry of auxiliaryOrder(auxiliary)) lines.push(`  ${auxiliaryLabel(entry).padEnd(36)} ${callCount(entry.calls, compact).padStart(12)}  ${compact(entry.input).padStart(8)} in  ${compact(entry.output).padStart(7)} out`)
+  }
   return `${lines.join("\n")}\n`
 }
 

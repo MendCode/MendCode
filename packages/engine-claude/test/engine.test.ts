@@ -693,12 +693,18 @@ describe("claude engine permissions", () => {
 
   test("an approved plan leaves plan mode; a rejected one sends the user's changes", async () => {
     const approved = await permissionTurn({ tool_name: "ExitPlanMode", input: { plan: "1. do it" } }, { mode: "plan", answer: () => ({ kind: "approve", scope: "once" }) })
-    expect(approved.asked[0]).toMatchObject({ kind: "approval", title: "Plan ready", detail: "1. do it" })
+    expect(approved.asked[0]).toMatchObject({ kind: "approval", title: "Review plan", tool: "plan_review", planReview: { markdown: "1. do it", phase: "implementation", destination: "build" } })
     expect(approved.decision.behavior).toBe("allow")
     expect(approved.modes).toEqual(["ask"])
     const rejected = await permissionTurn({ tool_name: "ExitPlanMode", input: { plan: "1. do it" } }, { mode: "plan", answer: () => ({ kind: "deny", reason: "add tests" }) })
     expect(rejected.decision).toEqual({ behavior: "deny", message: "The user wants changes to the plan: add tests" })
     expect(rejected.modes).toEqual([])
+    const applied = await permissionTurn({ tool_name: "ExitPlanMode", input: { plan: "1. do it" } }, { mode: "plan", answer: () => ({ kind: "plan_review", action: "apply" }) })
+    expect([applied.decision.behavior, applied.modes]).toEqual(["allow", ["ask"]])
+    const edited = await permissionTurn({ tool_name: "ExitPlanMode", input: { plan: "1. do it" } }, { mode: "plan", answer: () => ({ kind: "plan_review", action: "edit", markdown: "1. do it twice" }) })
+    expect(edited.decision.behavior).toBe("deny")
+    expect((edited.decision as { message: string }).message).toContain("1. do it twice")
+    expect(edited.modes).toEqual([])
   })
 })
 
@@ -995,6 +1001,12 @@ describe("claude protocol helpers", () => {
     expect(claudeArgs({ permission: "plan" })).not.toContain("--append-system-prompt")
     const appended = claudeArgs({ permission: "plan", appendSystem: "A mermaid fence is drawn." })
     expect(appended[appended.indexOf("--append-system-prompt") + 1]).toBe("A mermaid fence is drawn.")
+  })
+
+  test("an advisor alias becomes Claude Code's --advisor flag right after the model; none adds nothing", () => {
+    const args = claudeArgs({ permission: "ask", model: "sonnet", advisor: "opus" })
+    expect(args.slice(args.indexOf("--model"), args.indexOf("--model") + 4)).toEqual(["--model", "sonnet", "--advisor", "opus"])
+    expect(claudeArgs({ permission: "ask", model: "sonnet" })).not.toContain("--advisor")
   })
 
   test("run limits: no CLAUDE.md and no auto memory by variable; a PR review child (both limits) also skips the checkout's settings", () => {

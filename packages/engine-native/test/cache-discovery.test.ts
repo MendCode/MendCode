@@ -2,9 +2,9 @@ import { describe, expect, test } from "bun:test"
 import type { Settings } from "@mendcode/protocol"
 import { defineTool } from "@mendcode/tools"
 import { z } from "zod"
-import { createNativeEngine, createResponsesProvider, memoryHistory, type ModelEvent, type ModelMessage, type ModelProvider, type ModelRequest, type ToolSpec } from "../src"
+import { createNativeEngine, createResponsesProvider, memoryHistory, toGeminiContents, type ModelEvent, type ModelMessage, type ModelProvider, type ModelRequest, type ToolSpec } from "../src"
 import type { CacheBinding } from "../src/cache-policy"
-import { searchLoads } from "../src/openai-responses"
+import { searchLoads, toResponsesInput } from "../src/openai-responses"
 import { TOOL_SEARCH_WIRE_NAME, withoutDiscovered } from "../src/tool-discovery"
 import { fakeServer, sse } from "./fake-server"
 import { callTool, scriptedProvider, stop, turn } from "./harness"
@@ -14,6 +14,41 @@ const binding: CacheBinding = { provider: "openai", model: "test", endpoint: "ht
 const fakeTool = (name: string) => defineTool({ name, description: `tool ${name}`, permission: "read", args: z.object({}), execute: async () => ({ output: `${name} ran`, title: name, isError: false, truncated: false }) })
 
 describe("smart cache key and tool discovery", () => {
+  for (const adapter of ["responses", "anthropic", "chat"] as const) {
+    test(`${adapter}: repeated function-shape discovery preserves receipts and callable tools`, async () => {
+      const searchName = adapter === "responses" ? TOOL_SEARCH_WIRE_NAME : "tool_search"
+      const calls = await recordLineage({
+        adapter, tools: [fileTool("read"), fileTool("notebook_edit")],
+        engineOptions: { permissionPolicy: () => ({ tier: "balanced" }) as Settings },
+        turns: [{ text: "Find twice, then use the notebook tool", steps: [
+          { calls: [{ name: searchName, args: { query: "notebook_edit" } }] },
+          { calls: [{ name: searchName, args: { query: "notebook_edit" } }] },
+          { calls: [{ name: "notebook_edit", args: { path: "a.ipynb" } }] },
+          { text: "Done." },
+        ] }],
+      })
+      expect(calls).toHaveLength(4)
+      // The first discovery still appends a function definition on these providers; repeats change only the conversation tail.
+      for (let index = 2; index < calls.length; index++) expect(comparePrefix(adapter, calls[index - 1]!.body, calls[index]!.body)).toMatchObject({ share: 1, firstDifference: "none" })
+      expect(JSON.stringify(calls[3]!.body)).toContain("notebook_edit a.ipynb")
+    })
+  }
+
+  test("Gemini keeps both discovery receipts and the subsequent tool result", () => {
+    const messages: ModelMessage[] = [{ role: "user", content: "Find twice, then use the tool" }]
+    let previous = toGeminiContents(messages, "gemini-test")
+    for (const [callId, name] of [["s1", "tool_search"], ["s2", "tool_search"], ["n1", "notebook_edit"]]) {
+      messages.push(
+        { role: "assistant", content: "", toolCalls: [{ callId: callId!, name: name!, args: {} }] },
+        { role: "tool", callId: callId!, name: name!, output: name === "tool_search" ? '{"tools":[{"name":"notebook_edit"}]}' : "notebook updated", isError: false, ...(name === "tool_search" ? { discoveredTools: ["notebook_edit"] } : {}) },
+      )
+      const next = toGeminiContents(messages, "gemini-test")
+      expect(next.slice(0, previous.length)).toEqual(previous)
+      expect(next.at(-1)!.parts[0]!.functionResponse?.response.output).toBe(name === "tool_search" ? '{"tools":[{"name":"notebook_edit"}]}' : "notebook updated")
+      previous = next
+    }
+  })
+
   test("finding a tool with tool_search appends to the list and leaves the cache key alone", async () => {
     const { provider, requests } = scriptedProvider([callTool("tool_search", { query: "notebook" }), stop("done")])
     const engine = createNativeEngine({
@@ -128,7 +163,7 @@ describe("client-executed tool search (Responses, the ChatGPT backend's shape)",
     expect(later!.input.at(-1).output).toStartWith("notebook_edit a.ipynb")
   })
 
-  test("searchLoads defines a found tool once, in the last search that names it (a repeated search is never answered empty), and keeps listed what no search result carries", () => {
+  test("searchLoads keeps a found tool in its first successful search and keeps listed what no search result carries", () => {
     const tools = [spec("read"), spec("tool_search"), spec("from_code"), spec("notebook_edit"), spec("lsp")]
     const messages: ModelMessage[] = [
       ...found,
@@ -138,10 +173,65 @@ describe("client-executed tool search (Responses, the ChatGPT backend's shape)",
     ]
     const { loads, listed } = searchLoads(tools, messages)
     // `read` is always listed and `gone` is no longer in the catalogue: neither is defined again.
-    expect([...loads].map(([callId, specs]) => [callId, specs.map((tool) => tool.name)])).toEqual([["s1", []], ["s2", ["notebook_edit", "lsp"]], ["s3", []]])
+    expect([...loads].map(([callId, specs]) => [callId, specs.map((tool) => tool.name)])).toEqual([["s1", ["notebook_edit"]], ["s2", ["lsp"]], ["s3", []]])
     expect(listed.map((tool) => tool.name)).toEqual(["read", "tool_search", "from_code"])
     expect(searchLoads([spec("read"), spec("edit")], messages).listed).toHaveLength(2)
   })
+
+  test("repeated, overlapping, failed and empty searches preserve every earlier input item", () => {
+    const tools = [spec("read"), spec("tool_search"), spec("notebook_edit")]
+    const messages = structuredClone(found)
+    const build = () => toResponsesInput(messages, searchLoads(tools, messages).loads)
+    let previous = build()
+    for (const [callId, names, isError] of [
+      ["repeat", ["notebook_edit"], false],
+      ["mixed", ["notebook_edit", "lsp"], false],
+      ["failed", ["notebook_edit"], true],
+      ["empty", [], false],
+      ["again", ["lsp", "notebook_edit"], false],
+    ] as const) {
+      if (callId === "mixed") tools.push(spec("lsp"))
+      messages.push(
+        { role: "assistant", content: "", toolCalls: [{ callId, name: "tool_search", args: { query: names.join(" ") } }] },
+        { role: "tool", callId, name: "tool_search", output: "{}", isError, discoveredTools: [...names] },
+      )
+      const next = build()
+      expect(next.slice(0, previous.length)).toEqual(previous)
+      const appended = next.slice(previous.length)
+      expect(appended[1]).toMatchObject({ type: "tool_search_output", tools: callId === "mixed" ? [expect.objectContaining({ name: "lsp" })] : [] })
+      if (!isError && names.length) expect(appended[2]).toMatchObject({ role: "developer", content: [{ type: "input_text", text: expect.stringContaining("already loaded") }] })
+      else expect(appended).toHaveLength(2)
+      previous = next
+    }
+    expect(previous.filter((item) => item.type === "tool_search_output").flatMap((item) => item.tools)).toHaveLength(2)
+    // Plain-function providers retain their complete receipts and do not get Responses-only notices.
+    expect(toResponsesInput(messages).filter((item) => item.role === "developer")).toEqual([])
+    expect(messages[2]).toEqual(found[2])
+  })
+
+  for (const promptCache of ["legacy", "smart"] as const) {
+    test(`repeated discovery (${promptCache}) stays append-only through actual engine tool execution`, async () => {
+      const calls = await recordLineage({
+        adapter: "responses", promptCache, clientToolSearch: true,
+        tools: [fileTool("read"), fileTool("notebook_edit")],
+        engineOptions: { permissionPolicy: () => ({ tier: "balanced" }) as Settings },
+        turns: [{ text: "Find the notebook tool twice, then use it twice", steps: [
+          { calls: [{ name: "tool_search", args: { query: "notebook_edit" } }] },
+          { calls: [{ name: "tool_search", args: { query: "notebook_edit" } }] },
+          { calls: [{ name: "notebook_edit", args: { path: "a.ipynb" } }] },
+          { calls: [{ name: "notebook_edit", args: { path: "b.ipynb" } }] },
+          { text: "Done." },
+        ] }],
+      })
+      expect(calls).toHaveLength(5)
+      for (let index = 1; index < calls.length; index++) {
+        expect(comparePrefix("responses", calls[index - 1]!.body, calls[index]!.body)).toMatchObject({ share: 1, firstDifference: "none" })
+        expect(calls[index]!.headers.session_id).toBe(calls[0]!.headers.session_id)
+      }
+      expect(calls[3]!.body.input.at(-1).output).toStartWith("notebook_edit a.ipynb")
+      expect(calls[4]!.body.input.at(-1).output).toStartWith("notebook_edit b.ipynb")
+    })
+  }
 
   test("the request: search entry, no found tool in the list, and a model's tool_search_call becomes a tool_search call for the host", async () => {
     const { server, provider } = hosted(() => sse([

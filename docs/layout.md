@@ -219,6 +219,39 @@ to reserve the tray and footer.
 **Left out.** Extension-provided dock widgets: extensions stay on their slots (`prompt.above` and the others); the dock
 has no slot of its own.
 
+## The visible plan
+
+Feature `visible_plan` (balanced and full; on without a tier; `/tier visible_plan off`). While the session's task list has
+an open item, one muted row sits over the working row, right above the prompt:
+
+```
+    ▸ Fix the off-by-one in the tokenizer's column count · 1/3
+   ───────────────────────────────────────────────────────────
+   ❭
+```
+
+It names the item in progress (the next pending one when none is) and the finished items over the ones not cancelled.
+On a narrow terminal the item is cut with `…` before the count gives way; under eight cells for the item only the
+mark and the count stay (`▸ 1/3`). ASCII chrome marks with `>` (in progress) and `-` (next) and separates with `|`;
+screen-reader mode reads `Plan: Fix the off-by-one…, 1 of 3 done`. The row goes when every item is done or cancelled,
+or the list is cleared (`[]`). While the dock is open (`ctrl+t`) the row steps aside: the Todos panel lists the whole
+plan. On a terminal too short for both, it gives way to the right panel's bottom sheet instead of taking a row from it. The voice row, the queue and the other rows above the prompt keep their places over it. A terminal extension
+restyles it as the `plan` bar (`bar` view). The minimal view and the minimalist tier draw nothing.
+
+What the model is told: `todo` is listed in every request of balanced and full (feature `plan_tools` still keeps the goal
+tools behind `tool_search`), its description says the user sees the list pinned as live progress, when to use it (three or
+more steps, several requests, before the first edit) and not to repeat it in the answer, and focus, guide and full carry
+one line saying the same while `todo` is listed. Minimalist has no `todo` tool at all (the tool declares the balanced
+tier), so neither its schema nor a line about it is sent, and `tool_search` cannot find it.
+
+Every engine's list is drawn the same way. The native `todo` writes a card titled `todo d/n` (done over the items not cancelled, the row's own count) with one `[x]`, `[~]`, `[ ]`
+or `[-]` line per item. Claude Code's `TodoWrite` (the item in progress reads as its `activeForm`) and its
+`TaskCreate`/`TaskUpdate` tasks (kept per Claude Code process; `deleted` removes one), Codex's `update_plan`
+(`turn/plan/updated`) and an ACP agent's `plan` are turned into that card by their engines, so the row, the dock and the
+right panel's Todos card show them too. A sub-agent's own TodoWrite stays in its thread. Codex's `plan` item (plan mode's
+proposal, prose) is not a list and stays an artifact. With `visible_plan` on, Claude Code, Codex and ACP agents are told in
+one line after their own prompt that their list is pinned; pi, which has no list tool, is not.
+
 ## Long transcripts
 
 Mermaid fences in the full renderer support 30 terminal diagram families, including the
@@ -466,6 +499,8 @@ The native `todo` tool replaces the latest session list with `items`; `[]` clear
 Each item has `text`, `status` (`pending`, `in_progress`, `done`, `completed`, `cancelled`) and
 optional `priority` (`high`, `medium`, `low`). Tool cards, the dock and an opt-in TODO sidebar
 show priorities and cancellation; cancelled and finished items are excluded from the open count.
+The progress row above the prompt is [the visible plan](#the-visible-plan); a call still running or one that failed
+leaves the list before it in place.
 Lists and clears survive event replay. Below 70 columns the dock shows one panel.
 
 [Async tools and questions](async-tools.md) also use these panels. Ctrl+T includes persisted

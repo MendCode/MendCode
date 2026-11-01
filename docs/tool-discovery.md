@@ -52,7 +52,7 @@ turn uses about a dozen of them. These features cut the request down; each follo
 | `aux_tools` | off with every tier (on with no tier) | Keeps the situational tools of the core in every request: `shell_output`, `shell_kill`, `task_status`, `webfetch`, `question` and the three plan-mode tools. Off, nothing is removed: each one is listed without a search as soon as the conversation calls for it (the plan tools while the session is in plan mode, `shell_output` and `shell_kill` once a command was started in the background, `task_status` once a sub-agent was launched), and `tool_search` finds any of them before that. | `/tier aux_tools on` |
 | `find_tools` | on with every tier, and with no tier | Keeps `glob` and `grep` in every request. Minimalist without them sent a 864-token first request, under OpenAI's 1,024-token minimum cacheable prompt: the second request of every session was paid in full and, over 36 evaluation runs, uncached input rose 12 % although the first request shrank. With them it is 1,064, still below pi. Off, `shell` searches with `rg` and `tool_search` finds them. | `/tier find_tools off` |
 | `ui_tool` | on with `balanced` and `full`, and with no tier | Keeps `customize_ui` (the user's own screen) in every request: measured with gpt-6-luna on 20 requests like "hide the footer", deferred it was found and used in 14 of 20, the rest looked in the project; listed, 20 of 20. Minimalist defers it. | `/tier ui_tool on` |
-| `plan_tools` | off with every tier (on with no tier) | Keeps `todo` and the goal tools (`get_goal`, `create_goal`, `update_goal`) in every request. A one-turn coding task does not use them (13 `todo` and 1 `update_goal` calls in 36 evaluation runs, the latter an error); `tool_search` finds them. | `features.plan_tools: true` |
+| `plan_tools` | off with every tier (on with no tier) | Keeps `todo` and the goal tools (`get_goal`, `create_goal`, `update_goal`) in every request. A one-turn coding task does not use them (13 `todo` and 1 `update_goal` calls in 36 evaluation runs, the latter an error); `tool_search` finds them. `todo` itself is listed in balanced and full by `visible_plan` ([the visible plan](layout.md#the-visible-plan)): deferred, the model kept a list in 21 % of sessions with five or more edits. Minimalist has no `todo` at all. | `features.plan_tools: true` |
 
 So the first request of a fresh session lists, with no MCP and no skills: minimalist `read`, `write`, `edit`, `apply_patch`,
 `shell`, `glob`, `grep` and `tool_search`; balanced and full those, the three graph lookups and `task`. Measured on the ChatGPT
@@ -99,9 +99,12 @@ MendCode still runs the search itself, with the same catalogue, limits and permi
 | The model's search | `function_call` named `mendcode_tool_search`, `arguments` a JSON string | `{type: "tool_search_call", call_id, execution: "client", arguments: {query, limit?}, status}`, `arguments` an object |
 | The result in `input` | `function_call_output` with the JSON receipt | `{type: "tool_search_output", call_id, status: "completed", execution: "client", tools: [{type: "function", name, description, parameters, strict: false, defer_loading: true}]}` |
 
-A found tool is defined once, in the result of the last successful search that names it: a model that searches again for
-a tool it already has gets it in that answer instead of an empty one (the earlier result then sends `tools: []`, one
-uncached call). A failed search and a search that only finds listed tools send `tools: []`. The model does not see the receipt's
+A found tool is defined once, in the result of the first successful search that names it. A later search keeps that earlier
+result unchanged and loads only new tools. For tools already defined by a search, the adapter appends a short developer message
+after the new `tool_search_output`: `Tools already loaded: <names>. Use their earlier definitions; they remain available.`
+This distinguishes a repeated find from an empty search without duplicating definitions or adding unsupported fields to the
+API result. Failed and empty searches add no notice. A search that only finds listed tools still sends `tools: []`.
+The model does not see the receipt's
 `omitted` count in this shape. Tools activated without a search result in the history (found inside `code`, or called by
 name and refused once) are still appended to `tools`, with the one uncached call that costs. The native compaction
 endpoint (`/responses/compact`) keeps receiving the function shape: the canary did not cover it.

@@ -1222,6 +1222,7 @@ export function createApp(input: AppInput) {
     restoreDraft,
   })
   const { onEvent, onGlobal } = createEvents(ctx, {
+    loadEffectiveModel: () => loadEffectiveModel(),
     loadTasks: subagents.loadTasks,
     reloadTree: sessionTree.reload,
     loadBackgroundSessions: () => loadBackgroundSessions(),

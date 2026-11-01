@@ -6,7 +6,7 @@ import { contextIsEngineWindow, contextLimit } from "../../view/context-meter"
 import { boxPanel, fit } from "../../view/deck"
 import { renderMarkdown } from "../../view/markdown"
 import { modelLabel, servedByProvider, sessionModelId } from "../../view/model-label"
-import { parseTodoText } from "../../view/dock"
+import { latestTodos } from "../../view/plan-row"
 import { sidebarSpec, SIDEBAR_PRESETS, WIDGET_TYPES, PANEL_PRESETS, NEAREST_PRESET, nextPreset, panelPreset, presetOf } from "../../view/sidebar-spec"
 import { panelCard, facts, sparkline, sparkRows, labelValue } from "../../view/panel-card"
 import { panelSession } from "../../view/panel-session"
@@ -462,8 +462,7 @@ export function createRightSidebar(ctx: AppContext, slotContext: (width: number,
         return rows.length ? [...head, ...rows] : [...head, text("Quota windows unavailable", "muted")]
       }
       case "todos": {
-        const todo = state.transcript.blocks().findLast((block) => block.kind === "tool_call" && block.title?.startsWith("todo"))
-        return todosCard({ items: todo ? parseTodoText(todo.text) : [], width, glyphs: ctx.glyphs })
+        return todosCard({ items: latestTodos(state.transcript.blocks()), width, glyphs: ctx.glyphs })
       }
       case "backlog": return backlogCard({ items: state.backlog, off: !featureOn(state.settingsNow, "backlog"), width, glyphs: ctx.glyphs })
       case "changes": return lines(state.changedFiles.length ? [`${state.changedFiles.length} file${state.changedFiles.length === 1 ? "" : "s"} · +${state.diffTotals?.added ?? 0} -${state.diffTotals?.removed ?? 0}`, ...state.changedFiles.map((file) => `${file.status} ${file.path} +${file.additions} -${file.deletions}`)] : [], state.diffTotals ? "No changed files" : "Changes unavailable")

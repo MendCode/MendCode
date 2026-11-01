@@ -1,7 +1,7 @@
 ---
 summary: reasoning effort: set it, and the adaptive JEV evaluator
-docs: reasoning
-aliases: jev, adaptive, think-harder, reasoning-auto, evaluator
+docs: reasoning, advisor
+aliases: jev, adaptive, think-harder, reasoning-auto, evaluator, advisor
 ---
 For: "make it think harder", "lower the effort to save tokens", "what is JEV / adaptive reasoning".
 
@@ -14,3 +14,5 @@ Adaptive effort (JEV; feature jev, tier full; experimental flag reasoning_auto; 
 On this machine: the live line shows whether jev is on in this tier.
 
 Check: /model reasoning shows the mode, consent and decisions used; shadow mode never changes effort.
+
+Advisor (a second model, not more effort): balanced and full ([[feature:advisor]]), off until the user runs /advisor <model>[#effort] (/advisor off, /advisor for status). It saves the advisor role under [[setting:models]], which has no fallback to main. Native sessions get the `advisor` tool and three checkpoints (before a plan is shown, after the same call fails twice, before a turn that edited files closes), each at most once per turn, on a bounded redacted summary; caps are [[setting:advisor]]. A Claude Code model runs through headless `claude -p` on the Claude subscription; Codex, pi and ACP show "not applied". It spends tokens: the user decides, never turn it on for them.

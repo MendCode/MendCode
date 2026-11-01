@@ -179,7 +179,8 @@ export function invalidChoice(choice: ModelChoice, catalog: ModelCatalog, role: 
     if (choice.variant && !info.efforts.includes(choice.variant as never)) return info.efforts.length ? `unknown variant ${choice.variant} for ${choice.model}; use ${info.efforts.join(", ")}` : `${choice.model} does not support provider variants`
   } else if (choice.variant && (!info.variants?.[choice.variant] || info.variants[choice.variant]?.disabled)) return `unknown variant ${choice.variant} for ${choice.model}`
   // A sub-agent on an engine model goes through task's `engine`; the refusal says how, so a model does not fall back to another provider's copy.
-  if (info.engine && role !== "main" && role !== "subagent") return `${choice.model} runs whole sessions through Claude Code; use it for main`
+  // The advisor may name a Claude Code model: Claude Code sessions pass it to `--advisor`, native sessions consult it through the CLI (docs/advisor.md).
+  if (info.engine && role !== "main" && role !== "subagent" && role !== "advisor") return `${choice.model} runs whole sessions through Claude Code; use it for main`
   if (info.engine && role === "subagent") return `${choice.model} runs through ${info.engine === "claude" ? "Claude Code on the user's Claude login" : `the ${info.engine} engine`}; to delegate to it pass engine: "${info.engine}" with this exact model (full tier), not another provider's copy of it`
   if (choice.effort && info.efforts.length > 0 && !info.efforts.includes(choice.effort)) return `${choice.model} supports ${info.efforts.join(", ")}; effort ${choice.effort} is not one of them`
   return undefined

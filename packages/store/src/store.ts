@@ -68,6 +68,7 @@ import { createTurns, type PartialRevert } from "./turns"
 import { createUsageInsights } from "./usage-insights"
 import { createUsageScopes } from "./usage-scopes"
 import { createUsageCalls } from "./usage-calls"
+import { createUsageAuxiliary } from "./usage-auxiliary"
 import { createWorkflowDefinitionRecords } from "./workflow-definitions"
 import { createWorkflowJournal } from "./workflow-journal"
 import { acquireWriterLock } from "./writer-lock"
@@ -493,6 +494,7 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
   const usageScopes = createUsageScopes({ db, dayOf, toolBucket })
   const usageCalls = createUsageCalls({ db, dayOf })
   usageCalls.backfill()
+  const usageAuxiliary = createUsageAuxiliary({ db, dayOf })
   const codec = createCodec({ enabled: options.compress ?? true, objects: eventObjects })
   const engineHistory = createEngineHistory(db)
   const turns = createTurns({ db, codec, history: engineHistory, writeTurn: transcript.writeTurn })
@@ -1603,6 +1605,8 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
     usageScopes,
     /** Every model call and finished compaction in order, for the waste report. */
     usageCalls,
+    /** Model calls outside turns (title, summary, memory, hooks...), by role and model; never part of the turn sums above. */
+    usageAuxiliary,
     usageWidgets: createUsageWidgets(db),
     /** Unsent prompts per session (survive a closed terminal). */
     drafts,

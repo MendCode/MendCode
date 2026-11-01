@@ -7,6 +7,7 @@ import { startDaemon } from "@mendcode/daemon"
 import { createFauxEngine } from "@mendcode/engine-faux"
 import { createIdFactory, type SessionEvent } from "@mendcode/protocol"
 import { EXIT, foldSession, helpText, loopRows, memoryRows, parseAutomation, parseEvery, runAutomation, SCHEMA, sessionRows, usageText, type Automation, type AutomationDeps } from "../src/automation"
+import { statsText } from "../src/stats"
 
 const ids = createIdFactory()
 const NOW = Date.UTC(2026, 8, 26, 12)
@@ -235,10 +236,29 @@ describe("output formatting", () => {
     expect(usageText(report as never, 30).split("\n")[1]).toContain("1.2M tokens")
     expect(usageText({ ...report, days: [{ ...report.days[0]!, cacheRead: 0, reasoning: 50_000 }] } as never, 30).split("\n")[0]).toContain("1.2M tokens (+50K reasoning) · 40 calls")
     expect(usageText(report as never, 30)).toContain("codex/gpt-5.6")
+    expect(usageText(report as never, 30)).not.toContain("auxiliary")
+  })
+
+  test("usage and stats list the calls outside turns apart from the turn totals", () => {
+    const report = { from: "a", to: "b", days: [{ day: "d", input: 1_000, output: 200, reasoning: 0, cacheRead: 0, cacheWrite: 0, costMicros: 0, costUnknownCalls: 0, calls: 4, sessions: 1 }], models: [{ provider: "chatgpt", model: "gpt-6-sol", input: 1_000, output: 200, calls: 4, costMicros: 0 }], quotas: [], sessions: 1,
+      auxiliary: [
+        { role: "title", provider: "chatgpt", model: "gpt-6-luna", input: 3_000, output: 90, reasoning: 0, cacheRead: 0, cacheWrite: 0, calls: 1, costMicros: 0, costUnknownCalls: 1 },
+        { role: "summary", provider: "chatgpt", model: "gpt-6-luna", input: 74_000, output: 2_100, reasoning: 0, cacheRead: 0, cacheWrite: 0, calls: 12, costMicros: 40_000, costUnknownCalls: 0 },
+      ] }
+    const lines = usageText(report as never, 30).split("\n")
+    // The headline is still the turns' own; the auxiliary calls have their own line and rows.
+    expect(lines[0]).toBe("last 30 days: 1,200 tokens · 4 calls · 1 sessions · cost $0.00")
+    expect(lines[2]).toBe("auxiliary (outside turns): 79.2K tokens · 13 calls · cost $0.04 (+1 unpriced)")
+    expect(lines[3]).toMatch(/^ {2}summary · gpt-6-luna +12 calls +74K in +2,100 out$/)
+    expect(lines[4]).toMatch(/^ {2}title · gpt-6-luna +1 call +3,000 in +90 out$/)
+    const stats = statsText(report as never, { kind: "stats" })
+    expect(stats).toContain("Auxiliary Calls")
+    expect(stats).toMatch(/summary · gpt-6-luna +12 calls · 74K in/)
+    expect(statsText({ ...report, auxiliary: undefined } as never, { kind: "stats" })).not.toContain("Auxiliary")
   })
 
   test("usage sends a local-day range and JSON returns the whole report", async () => {
-    const report = { from: "x", to: "y", days: [], models: [], quotas: [] }
+    const report = { from: "x", to: "y", days: [], models: [], quotas: [], auxiliary: [{ role: "summary", provider: "chatgpt", model: "gpt-6-luna", input: 74_000, output: 2_100, reasoning: 0, cacheRead: 0, cacheWrite: 0, calls: 12, costMicros: 0, costUnknownCalls: 12 }] }
     const h = harness({ send: () => ({ ok: true, result: report }) })
     expect(await runAutomation(parsed("usage", "--days", "7", "--json"), h.deps)).toBe(0)
     const sent = h.sent[0] as { from: string; to: string }
@@ -574,6 +594,35 @@ describe("integration with a real daemon (faux engine)", () => {
     const missing = await run("session", "wait", ids("session"), "--timeout", "2")
     expect(missing.code).toBe(1)
     expect(missing.err).toContain("unknown session")
+  })
+
+  test("usage --json and usage carry a /recap call as an auxiliary call, not as turn usage", async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "mendd-auto-aux-"))
+    cleanups.push(() => rmSync(dir, { recursive: true, force: true }))
+    // A fake completion that reports usage; no provider is reached.
+    const daemon = await startDaemon({ dir, socketPath: path.join(dir, "mendd.sock"), engine: ({ clock }) => createFauxEngine({ clock, deltaMs: 1 }),
+      complete: async () => "unused", setupComplete: async () => ({ text: "You asked for a greeting; it was sent.", usage: { provider: "chatgpt", model: "gpt-6-luna", input: 2_400, output: 30 } }) })
+    cleanups.push(() => daemon.stop())
+    let handler: ((event: SessionEvent) => void) | undefined
+    const client = createClient({ socketPath: daemon.socketPath, name: "auto-aux", onEvent: (event) => handler?.(event) })
+    await client.connect()
+    cleanups.push(() => client.close())
+    const run = async (...argv: string[]) => {
+      const out: string[] = []
+      const code = await runAutomation(parsed(...argv), { client, listen: (next) => void (handler = next), out: { write: (t) => out.push(t) }, err: { write: () => {} }, cwd: "/work/app", now: Date.now, onInterrupt: () => {} })
+      return { code, out: out.join("") }
+    }
+    const id = lines([(await run("session", "create", "--json")).out])[0].data.sessionId
+    expect((await run("session", "send", id, "say hello", "--wait", "--json", "--timeout", "20")).code).toBe(0)
+    const before = lines([(await run("usage", "--days", "1", "--json")).out])[0].data
+    expect(before.auxiliary).toBeUndefined()
+    expect((await client.send({ type: "session.recap", sessionId: id } as never)).ok).toBe(true)
+
+    const after = lines([(await run("usage", "--days", "1", "--json")).out])[0].data
+    expect(after.auxiliary).toEqual([{ role: "recap", provider: "chatgpt", model: "gpt-6-luna", input: 2_400, output: 30, reasoning: 0, cacheRead: 0, cacheWrite: 0, calls: 1, costMicros: 0, costUnknownCalls: 1 }])
+    expect(after.days).toEqual(before.days)
+    expect(after.models).toEqual(before.models)
+    expect((await run("usage", "--days", "1")).out).toMatch(/auxiliary \(outside turns\): 2,430 tokens · 1 call[\s\S]*recap · gpt-6-luna +1 call +2,400 in +30 out/)
   })
 })
 

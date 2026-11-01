@@ -12,7 +12,8 @@ import { normalizeTuiProfile } from "../../view/tui-profile"
 import type { FooterSegment } from "@mendcode/protocol/wire"
 import { createThresholds } from "../../view/threshold-notices"
 import { memoryToast } from "../../view/memory-notice"
-import type { Settings, GlobalEvent } from "@mendcode/protocol"
+import type { Settings, GlobalEvent, PermissionMode } from "@mendcode/protocol"
+import { planModeNotice, planModelId } from "../../view/plan-mode-notice"
 import type { AppContext } from "./context"
 import { followPet } from "./pet-follow"
 import { refreshLiveTasks } from "./live-tasks"
@@ -25,6 +26,8 @@ const AGENT_PARENTS_KEPT = 256
 const PUSHED_SESSIONS_MAX = 500
 
 export function createEvents(ctx: AppContext, actions: {
+  /** Asks the daemon which models and agent the session runs now (plan mode changes both). */
+  loadEffectiveModel(): Promise<void>
   loadTasks(): Promise<void>
   /** Draws the open /tree again (a sub-agent changed), keeping the selected row. */
   reloadTree(): Promise<void>
@@ -73,6 +76,13 @@ export function createEvents(ctx: AppContext, actions: {
   /** The memory toast on screen, so the transcript row for the same write (it arrives a moment later) can replace it. */
   let shownMemoryToast: { memoryId: string; toast: unknown } | undefined
 
+  /** Entering plan mode says who plans and that nothing changes before the review; leaving it says what runs now (the models are asked again first). */
+  function announcePlanMode(from: PermissionMode, to: PermissionMode) {
+    if ((from === "plan") === (to === "plan")) return
+    const notice = () => planModeNotice({ from, to, report: state.modelReport, planModel: planModelId(state.modelReport, state.effectiveModel?.model), buildModel: state.effectiveModel?.model, agent: state.agentReport?.current })
+    void actions.loadEffectiveModel().then(() => { say(notice()!, "info"); requestFrame() })
+  }
+
   function onEvent(event: Parameters<typeof state.transcript.apply>[0]) {
     if (event.sessionId !== state.sessionId) return
     // Until the opening window lands, live events wait: applied first they would raise the transcript's cursor past the window and drop it.
@@ -84,7 +94,9 @@ export function createEvents(ctx: AppContext, actions: {
     const following = view.get(state.sessionId).follow
     state.turnState.apply(event)
     state.compactionFacts.apply(event)
+    const permissionBefore = state.transcript.permissionMode
     state.transcript.apply(event)
+    if (event.type === "session.permission") announcePlanMode(permissionBefore, event.mode)
     if (event.type === "item.completed" && event.meta?.memorySaved === true && event.meta.memoryId === shownMemoryToast?.memoryId && ctx.toasts.current === shownMemoryToast?.toast) ctx.toasts.dismiss()
     if (event.type === "session.workspace.changed") {
       input.directory = event.directory

@@ -380,7 +380,9 @@ export const PrivacyGet = lazySchema(() => z.strictObject({ ...base, type: z.lit
 export const PrivacySet = lazySchema(() => z.strictObject({ ...base, type: z.literal("privacy.set"), enabled: z.boolean() }))
 export const EnvList = lazySchema(() => z.strictObject({ ...base, type: z.literal("env.list"), sessionId: SessionId }))
 export const EnvSet = lazySchema(() => z.strictObject({ ...base, type: z.literal("env.set"), sessionId: SessionId, name: z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/).max(128), value: z.string().min(1).max(16_384), scope: z.enum(["session", "project", "global"]) }))
-export const EnvImport = lazySchema(() => z.strictObject({ ...base, type: z.literal("env.import"), sessionId: SessionId, path: z.string().min(1).max(4096), scope: z.enum(["session", "project", "global"]), digest: z.string().regex(/^[a-f0-9]{64}$/).optional() }))
+export const EnvImport = lazySchema(() => z.strictObject({ ...base, type: z.literal("env.import"), sessionId: SessionId, /** Exactly one of `path` (a dotenv file in the project) or `content` (pasted dotenv text); `names` picks a subset of the pasted names when applying. */
+  path: z.string().min(1).max(4096).optional(), content: z.string().min(1).max(1_048_576).optional(), names: z.array(z.string().max(128)).max(1024).optional(),
+  scope: z.enum(["session", "project", "global"]), digest: z.string().regex(/^[a-f0-9]{64}$/).optional() }))
 export const EnvRemove = lazySchema(() => z.strictObject({ ...base, type: z.literal("env.remove"), sessionId: SessionId, name: z.string().max(128), scope: z.enum(["session", "project", "global"]) }))
 
 export const SecretsList = lazySchema(() => z.strictObject({

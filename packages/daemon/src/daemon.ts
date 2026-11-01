@@ -1,7 +1,7 @@
 import { DEFAULT_COMPACT_AT_TOKENS, claudeFastModel, estimateTokens } from "@mendcode/protocol/wire"
 import { claudeAlias } from "./claude-models"
 import { createConsole } from "./console"
-import { readEnvironmentImport } from "./environment-import"
+import { previewPastedEnvironment, readEnvironmentImport } from "./environment-import"
 import { focusedHandoff } from "./focused-handoff"
 import { createLimitCheckpoint } from "./limit-checkpoint"
 import { planHandoff } from "./handoff"
@@ -28,6 +28,7 @@ import { createSessionLifecycle, lifecycleOf } from "./session-lifecycle"
 import { ghProcess } from "./pr-watch"
 import { createContinuity } from "./continuity"
 import { createBudgets, type BudgetPort, type BudgetUsage } from "./budgets"
+import { createAuxiliaryUsage, type AuxiliaryComplete, type AuxiliaryUsagePort } from "./usage-auxiliary"
 import { createSetupService } from "./setup"
 import { createAIConfigService, AIConfigError } from "./ai-config"
 import { createReasoningService } from "./reasoning"
@@ -405,7 +406,7 @@ export type DaemonOptions = RemoteListenerOptions & {
   /** `tcp` listens on 127.0.0.1 behind a per-start secret published in `<dir>/mendd.endpoint` (Windows default); `unix` uses `socketPath`. Defaults from the platform and `MENDCODE_V2_LOCAL_TRANSPORT`. */
   localTransport?: LocalTransport
   defaultDirectory?: string
-  engine(input: { /** Queue a notice in a session from the engine (Claude Code answered a background task's end on its own). */ notify(sessionId: SessionId, text: string): void; /** Background tasks an engine runs by itself (Claude Code's), listed with the daemon's own shells. */ engineBackground(sessionId: SessionId, tasks: ReadonlyArray<{ id: string; description: string; kind: string }>, stop?: (taskId: string) => Promise<void>): void; /** What an engine's background sub-agent does after its turn ended, recorded under that turn. */ engineAgentEvent(sessionId: SessionId, turnId: import("@mendcode/protocol").TurnId, event: import("@mendcode/kernel").EngineEvent): void; trace: import("@mendcode/protocol").TracePort; budget: BudgetPort; reasoning: import("@mendcode/engine-native").ReasoningPort; continuity: import("@mendcode/kernel").ContinuityForSession; tasks: import("@mendcode/kernel").TaskPort; clock: Clock; store: Store; grants: GrantStore; runLimits: RunLimitsStore; sessionRules(sessionId: SessionId): readonly import("@mendcode/protocol").PermissionRule[]; emitGlobal(event: GlobalEventDraft): void; secrets: SecretsPort; memory: MemoryAccess; background(sessionId: SessionId): BackgroundPort; interactive(sessionId: SessionId): InteractivePort; workflows(sessionId: SessionId): WorkflowPort; peers(sessionId: SessionId): PeerPort; sessionMeta(sessionId: SessionId): NonNullable<import("@mendcode/tools").ToolContext["sessionMeta"]>; threads(sessionId: SessionId): import("@mendcode/tools").ThreadPort; packages(sessionId: SessionId): import("@mendcode/tools").PackagePort; loops(sessionId: SessionId): LoopPort; worktrees(sessionId: SessionId): import("@mendcode/tools").WorktreePort; prWatch(sessionId: SessionId): import("@mendcode/tools").PrWatchPort; prReview(sessionId: SessionId): import("@mendcode/tools").PrReviewPort; review(sessionId: SessionId): ReviewPort; goals(sessionId: SessionId): GoalPort; customTools: CustomToolRegistry; skills: SkillLoader; extensionLayers(directory: string): ExtensionLayer[]; agents: AgentPort; plans: { latest(sessionId: SessionId): import("@mendcode/protocol").PlanReview | undefined }; extensions: EngineExtensions; recall(sessionId: SessionId): SessionRecallPort; compound(sessionId: SessionId): CompoundCall | undefined; aiConfig(sessionId: SessionId): import("@mendcode/tools").AIConfigPort; inlineShell(text: string): InlineShell[]; computer(sessionId: SessionId): import("@mendcode/tools").ComputerPort; browser(sessionId: SessionId): import("@mendcode/tools").BrowserPort; harness: { args(sessionId: SessionId): string[]; servers(sessionId: SessionId): ReturnType<ReturnType<typeof createHostMcp>["servers"]>; waiting(): boolean; instructions(sessionId: SessionId, harness?: "claude" | "codex"): Promise<string | undefined> }; /** The local owner's settings write (`mendcode_settings` after the user approved): saved, announced, followed. */ settingsWrite(patch: Record<string, unknown>): Promise<Settings> }): EnginePort & { stop?(): void }
+  engine(input: { /** Queue a notice in a session from the engine (Claude Code answered a background task's end on its own). */ notify(sessionId: SessionId, text: string): void; /** Background tasks an engine runs by itself (Claude Code's), listed with the daemon's own shells. */ engineBackground(sessionId: SessionId, tasks: ReadonlyArray<{ id: string; description: string; kind: string }>, stop?: (taskId: string) => Promise<void>): void; /** What an engine's background sub-agent does after its turn ended, recorded under that turn. */ engineAgentEvent(sessionId: SessionId, turnId: import("@mendcode/protocol").TurnId, event: import("@mendcode/kernel").EngineEvent): void; trace: import("@mendcode/protocol").TracePort; budget: BudgetPort; /** Records an engine's own calls outside a turn (the permission reviewer) for `/usage`. */ auxiliary: AuxiliaryUsagePort; reasoning: import("@mendcode/engine-native").ReasoningPort; continuity: import("@mendcode/kernel").ContinuityForSession; tasks: import("@mendcode/kernel").TaskPort; clock: Clock; store: Store; grants: GrantStore; runLimits: RunLimitsStore; sessionRules(sessionId: SessionId): readonly import("@mendcode/protocol").PermissionRule[]; emitGlobal(event: GlobalEventDraft): void; secrets: SecretsPort; memory: MemoryAccess; background(sessionId: SessionId): BackgroundPort; interactive(sessionId: SessionId): InteractivePort; workflows(sessionId: SessionId): WorkflowPort; peers(sessionId: SessionId): PeerPort; sessionMeta(sessionId: SessionId): NonNullable<import("@mendcode/tools").ToolContext["sessionMeta"]>; threads(sessionId: SessionId): import("@mendcode/tools").ThreadPort; packages(sessionId: SessionId): import("@mendcode/tools").PackagePort; loops(sessionId: SessionId): LoopPort; worktrees(sessionId: SessionId): import("@mendcode/tools").WorktreePort; prWatch(sessionId: SessionId): import("@mendcode/tools").PrWatchPort; prReview(sessionId: SessionId): import("@mendcode/tools").PrReviewPort; review(sessionId: SessionId): ReviewPort; goals(sessionId: SessionId): GoalPort; customTools: CustomToolRegistry; skills: SkillLoader; extensionLayers(directory: string): ExtensionLayer[]; agents: AgentPort; plans: { latest(sessionId: SessionId): import("@mendcode/protocol").PlanReview | undefined }; extensions: EngineExtensions; recall(sessionId: SessionId): SessionRecallPort; compound(sessionId: SessionId): CompoundCall | undefined; aiConfig(sessionId: SessionId): import("@mendcode/tools").AIConfigPort; inlineShell(text: string): InlineShell[]; computer(sessionId: SessionId): import("@mendcode/tools").ComputerPort; browser(sessionId: SessionId): import("@mendcode/tools").BrowserPort; harness: { args(sessionId: SessionId): string[]; servers(sessionId: SessionId): ReturnType<ReturnType<typeof createHostMcp>["servers"]>; waiting(): boolean; instructions(sessionId: SessionId, harness?: "claude" | "codex"): Promise<string | undefined> }; /** The local owner's settings write (`mendcode_settings` after the user approved): saved, announced, followed. */ settingsWrite(patch: Record<string, unknown>): Promise<Settings> }): EnginePort & { stop?(): void }
   reasoningEvaluator?: import("@mendcode/engine-native").ReasoningEvaluator
   /** Extension diagnostics (load failures, the first error of each extension); defaults to stderr. */
   log?(level: "debug" | "info" | "warn" | "error", message: string): void
@@ -872,7 +873,7 @@ export async function startDaemon(options: DaemonOptions) {
     isChild: (sessionId) => store.tasks.list().some((task) => task.taskId === sessionId) || workflows.execution(sessionId as SessionId) !== undefined || asideSessions.isAside(sessionId as SessionId),
     // `http` hooks reach only URLs the user listed in `allowedHttpHookUrls`; `prompt` hooks use the budgeted completion (native engine only).
     allowedHttpUrls: () => store.settings.get().allowedHttpHookUrls,
-    ...(options.complete ? { complete: (request: { system: string; prompt: string; signal: AbortSignal }) => completeBudgeted!(request) } : {}),
+    ...(options.complete ? { complete: ({ sessionId, ...request }: { system: string; prompt: string; signal: AbortSignal; sessionId?: string }) => completeBudgeted!({ ...request, auxiliary: { role: "hook", ...(sessionId && store.hasSession(sessionId as SessionId) ? { sessionId: sessionId as SessionId } : {}) } }) } : {}),
   })
   const pluginMetadata = createPluginMetadata(options.dir)
   /** Custom agents (`agents/*.md` of every layer); project ones follow the directory's trust, like custom tools. */
@@ -1000,27 +1001,36 @@ export async function startDaemon(options: DaemonOptions) {
   const catalog = options.models ?? { selectable: false, list: () => [], defaults: { model: options.info?.model ?? "engine default" } }
   const modelResolutions = createModelResolutions(options.dir)
   const providerAuth =options.providerAuth ?? createProviderAuth({ dir: options.dir, providers: options.providers })
-  const aiConfig = createAIConfigService({ dir: options.dir, catalog, resolve: modelResolutions.apply, settings: () => store.settings.get(), engine: options.info?.engine ?? "unknown", sessionDirectory: (sessionId) => store.sessionDirectory(sessionId), now: () => clock.now(), ...(options.providers ? { providers: () => options.providers!.list(true) } : {}) })
+  const aiConfig = createAIConfigService({ dir: options.dir, catalog, resolve: modelResolutions.apply, settings: () => store.settings.get(), engine: options.info?.engine ?? "unknown", sessionDirectory: (sessionId) => store.sessionDirectory(sessionId), now: () => clock.now(), safeMode: options.safeMode === true, ...(options.providers ? { providers: () => options.providers!.list(true) } : {}) })
   const budgets = createBudgets({ dir: options.dir, settings: () => store.settings.get(), seed: () => store.usageDaily({ from: "0000-01-01", to: "9999-12-31" }).reduce((sum, row) => ({ costMicros: sum.costMicros + row.costMicros, knownCalls: sum.knownCalls + row.calls - row.costUnknownCalls, unknownCalls: sum.unknownCalls + row.costUnknownCalls }), { costMicros: 0, knownCalls: 0, unknownCalls: 0 }) })
   let petGenerator: ReturnType<typeof import("./pet-generator").createPetGenerator> | undefined
   const reasoning = createReasoningService({ safeMode: options.safeMode === true, dir: options.dir, store, catalog, engine: options.info?.engine ?? "unknown", budget: budgets, ...(options.reasoningEvaluator ? { evaluator: options.reasoningEvaluator } : {}) })
   const setup = createSetupService({ dir: options.dir, store, catalog, engine: options.info?.engine ?? "unknown", complete: Boolean(options.complete || options.setupComplete), budgets, prompt: (directory) => promptModes.status(directory), ...(options.info?.login ? { login: options.info.login } : {}), ...(options.providers?.inventory ? { inventory: () => options.providers!.inventory!() } : {}) })
   const setupCalls = new Set<AbortController>()
-  const completeBudgeted: DaemonOptions["complete"] = options.complete ? async (request) => {
+  /** Calls outside turns go to `/usage`'s Auxiliary section (docs/usage.md); the ledger keeps counting them as before. */
+  const auxiliaryUsage = createAuxiliaryUsage({ store, now: () => clock.now(), price: (usage) => budgets.price(usage), log: (message) => logLine("warn", message) })
+  /** One tool-less completion outside a turn: guarded by the budget, counted by the ledger and recorded under `auxiliary`'s role. */
+  const completeBudgeted: AuxiliaryComplete | undefined = options.complete ? async ({ auxiliary, ...request }) => {
     const model = request.model ?? catalog.defaults
     await budgets.guard({ model: model.model, signal: request.signal })
+    let usage: BudgetUsage | undefined
     try {
       const answer = options.setupComplete ? await options.setupComplete(request) : { text: await options.complete!(request) }
+      usage = answer.usage
       budgets.record(answer.usage)
       return answer.text
     } catch (error) { budgets.record(); throw error }
+    finally { auxiliaryUsage.record(auxiliary, usage, model.model) }
   } : undefined
   const extractBudgeted: DaemonOptions["extractMemory"] = options.extractMemory ? async (job, signal) => {
     const model = resolveModel({ role: "memoryExtractor", roles: rolesFor(store.settings.get(), job.directory), catalog })
     await budgets.guard({ model: model.model, signal })
     let usage: BudgetUsage | undefined
     try { return await options.extractMemory!(job, signal, (value) => { usage = value }) }
-    finally { budgets.record(usage) }
+    finally {
+      budgets.record(usage)
+      auxiliaryUsage.record({ role: "memoryExtractor", sessionId: job.sessionId, directory: job.directory }, usage, model.model)
+    }
   } : undefined
   const debug = createDebug({ options, store, agents, extensions: manager, customTools, skills, id: () => ids("session"), paths: (directory) => systemReport("config-paths", { dir: options.dir, directory, socketPath: options.socketPath, engine: options.info?.engine ?? "unknown", settings: store.settings.get(), catalog }).facts.paths })
   const taskClientId = ids("client")
@@ -1154,6 +1164,7 @@ export async function startDaemon(options: DaemonOptions) {
     compound: (sessionId) => compoundCalls.get(sessionId),
     reasoning: reasoning.port,
     budget: budgets,
+    auxiliary: auxiliaryUsage,
     trace,
     // A side session (`/btw`) runs as a child: its agent's tools and model, no orientation, no recall.
     tasks: { ...tasks.modelPort, isChild: (sessionId) => tasks.modelPort.isChild(sessionId) || asideSessions.isAside(sessionId) },
@@ -1765,12 +1776,15 @@ export async function startDaemon(options: DaemonOptions) {
             complete: async (prompt, signal) => {
               const model = resolveModel({ role: "dream", roles: rolesFor(store.settings.get(), directory), catalog })
               await budgets.guard({ model: model.model, signal })
+              let used: BudgetUsage | undefined
               try {
                 const completion = await dream.complete(prompt, signal, model)
                 const usage = typeof completion === "string" ? undefined : completion.usage
-                budgets.record(usage ? { provider: model.model.split(":")[0]!, model: model.model, ...usage } : undefined)
+                used = usage ? { provider: model.model.split(":")[0]!, model: model.model, ...usage } : undefined
+                budgets.record(used)
                 return completion
               } catch (error) { budgets.record(); throw error }
+              finally { auxiliaryUsage.record({ role: "dream", directory }, used, model.model) }
             },
             // A user-scope proposal belongs to the profile of the project Dream read; the category's policy decides what becomes of it.
             propose: (entry) => proposeMemory({ ...entry, directory: entry.directory ?? directory, ...(consolidationPolicy === "preview" ? { forceReview: true } : {}) }).outcome,
@@ -1798,12 +1812,15 @@ export async function startDaemon(options: DaemonOptions) {
             const usable = consolidator && consolidator.model === configured?.model ? consolidator : undefined
             const meter = usable ? (await import("@mendcode/dream")).createMeter({ limit: Math.max(0, (settings.dreamMaxTokens ?? DREAM_DEFAULT_MAX_TOKENS) - result.report.budget.used), signal: job.signal, complete: async (prompt, signal) => {
               await budgets.guard({ model: usable.model, signal })
+              let used: BudgetUsage | undefined
               try {
                 const completion = await dream.complete(prompt, signal, usable)
                 const usage = typeof completion === "string" ? undefined : completion.usage
-                budgets.record(usage ? { provider: usable.model.split(":")[0]!, model: usable.model, ...usage } : undefined)
+                used = usage ? { provider: usable.model.split(":")[0]!, model: usable.model, ...usage } : undefined
+                budgets.record(used)
                 return completion
               } catch (error) { budgets.record(); throw error }
+              finally { auxiliaryUsage.record({ role: "memoryConsolidator", directory }, used, usable.model) }
             } }) : undefined
             const { fallback, ...pass } = await consolidateMemory({ entries: () => store.memories.list({ directory, profile: profileOf(store.settings.get(), directory) }), policy: consolidationPolicy, limit: settings.memoryGlobalCompactionMaxEntries ?? 50,
               apply: async (memory) => { await cliMemory.run(directory, { operation: "apply", memoryId: memory.memoryId }) },
@@ -3451,7 +3468,7 @@ export async function startDaemon(options: DaemonOptions) {
         const roles = rolesFor(store.settings.get(), store.sessionInfo(command.sessionId)?.directory)
         const model = options.models?.selectable ? resolveModel({ role: "aside", session: store.sessionModel(command.sessionId), roles, catalog: options.models }) : undefined
         try {
-          const text = recapText(redactSecrets(await completeBudgeted!({ system: RECAP_SYSTEM, prompt, signal: AbortSignal.timeout(RECAP_TIMEOUT_MS), ...(model ? { model } : {}) })).text)
+          const text = recapText(redactSecrets(await completeBudgeted!({ system: RECAP_SYSTEM, prompt, signal: AbortSignal.timeout(RECAP_TIMEOUT_MS), ...(model ? { model } : {}), auxiliary: { role: "recap", sessionId: command.sessionId } })).text)
           if (!text) return reply(connection, command.id, { ok: false, code: "internal", message: "[DAEMON]: the model returned an empty recap" })
           store.sessionTree.putRecap(command.sessionId, last, text)
           return reply(connection, command.id, { ok: true, result: { text, at: clock.now(), cached: false } })
@@ -3860,7 +3877,21 @@ export async function startDaemon(options: DaemonOptions) {
         if (!store.hasSession(command.sessionId)) return reply(connection, command.id, { ok: false, code: "unknown_session", message: "[ENV]: unknown session" })
         try {
           const directory = store.sessionDirectory(command.sessionId) ?? ""
-          if (command.type === "env.import") {
+          if (command.type === "env.import" && command.content !== undefined) {
+            if (command.path !== undefined) return reply(connection, command.id, { ok: false, code: "invalid_command", message: "[ENV]: give a path or pasted content, not both" })
+            const owned = new Set(store.environment.list(command.sessionId, directory).filter((entry) => entry.scope === command.scope).map((entry) => entry.name))
+            let pasted: ReturnType<typeof previewPastedEnvironment>
+            try { pasted = previewPastedEnvironment(command.content, owned) } catch (error) {
+              return reply(connection, command.id, { ok: false, code: "invalid_command", message: error instanceof Error && /^\[ENV\]: [a-zA-Z0-9 ]+$/.test(error.message) ? error.message : "[ENV]: unable to read pasted text" })
+            }
+            const importable = Object.keys(pasted.values).sort()
+            if (!command.digest) return reply(connection, command.id, { ok: true, result: { names: importable, items: pasted.items, digest: pasted.digest } })
+            if (command.digest !== pasted.digest) return reply(connection, command.id, { ok: false, code: "target_mismatch", message: "[ENV]: pasted text changed; preview it again" })
+            const chosen = command.names ?? importable
+            if (!chosen.length || chosen.some((name) => !Object.hasOwn(pasted.values, name))) return reply(connection, command.id, { ok: false, code: "invalid_command", message: "[ENV]: choose names that were detected and can be saved" })
+            store.environment.setMany(Object.fromEntries(chosen.map((name) => [name, pasted.values[name]!])), { ...command, directory })
+          } else if (command.type === "env.import") {
+            if (command.path === undefined) return reply(connection, command.id, { ok: false, code: "invalid_command", message: "[ENV]: give a path or pasted content" })
             const imported = readEnvironmentImport(directory, command.path)
             if (!command.digest) return reply(connection, command.id, { ok: true, result: { names: Object.keys(imported.values).sort(), digest: imported.digest } })
             if (command.digest !== imported.digest) return reply(connection, command.id, { ok: false, code: "target_mismatch", message: "[ENV]: file changed; preview the import again" })
@@ -5298,7 +5329,7 @@ export async function startDaemon(options: DaemonOptions) {
           let outcome: Parameters<typeof createAgentFile>[2]
           if (command.generate) {
             const model = command.model ? { model: command.model } : options.models?.selectable ? resolveModel({ role: "main", roles: rolesFor(store.settings.get(), command.directory), catalog: options.models }) : undefined
-            const result = model && options.models?.allows?.(model.model) === false ? { fallback: `Model ${model.model} is not available`, calledProvider: false } : await generateAgentContent({ complete: completeBudgeted, description: command.description, name: command.name, model, taken: new Set([...listed.map((agent) => agent.name), ...RESERVED_AGENTS]), signal: connection.signal })
+            const result = model && options.models?.allows?.(model.model) === false ? { fallback: `Model ${model.model} is not available`, calledProvider: false } : await generateAgentContent({ complete: completeBudgeted && ((request) => completeBudgeted({ ...request, auxiliary: { role: "agentGenerate", directory: canonicalDir(command.directory) } })), description: command.description, name: command.name, model, taken: new Set([...listed.map((agent) => agent.name), ...RESERVED_AGENTS]), signal: connection.signal })
             outcome = { ...(result.content ? { generated: result.content } : {}), ...(result.fallback ? { fallback: result.fallback } : {}), calledProvider: result.calledProvider }
           }
           const created = await createAgentFile(options.dir, command, outcome)
@@ -5747,10 +5778,14 @@ export async function startDaemon(options: DaemonOptions) {
             completion.then(resolve, reject).finally(() => signal.removeEventListener("abort", abort))
           })
           budgets.record(answer.usage)
+          auxiliaryUsage.record({ role: "setup", directory: canonicalDir(command.directory) }, answer.usage, model.model)
           attempted = false
           return reply(connection, command.id, { ok: true, result: { text: redactSecrets(answer.text).text.slice(0, 8000), model: model.model, callsProviders: true, writesConfig: false } })
         } catch (error) {
-          if (attempted) budgets.record()
+          if (attempted) {
+            budgets.record()
+            auxiliaryUsage.record({ role: "setup", directory: canonicalDir(command.directory) }, undefined, model.model)
+          }
           return reply(connection, command.id, { ok: false, code: "invalid_command", message: redactSecrets((error as Error).message).text.slice(0, 500) })
         } finally { setupCalls.delete(controller) }
       }

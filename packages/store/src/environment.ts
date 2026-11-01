@@ -9,6 +9,9 @@ export const ENVIRONMENT_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/
 // Never permit credentials to turn shell startup into arbitrary code execution.
 const UNSAFE = /^(PATH|HOME|SHELL|ENV|BASH_ENV|BASHOPTS|SHELLOPTS|IFS|CDPATH|ZDOTDIR|PROMPT_COMMAND|PS4|NODE_OPTIONS|NODE_PATH|PYTHONPATH|PYTHONHOME|RUBYOPT|PERL5OPT|LD_.*|DYLD_.*|MENDCODE_.*)$/i
 
+/** Runtime/shell configuration names no credential may use. */
+export const isRefusedEnvironmentName = (name: string) => UNSAFE.test(name)
+
 export function createEnvironment(dir: string, now: () => number) {
   const file = path.join(dir, "environment.enc")
   const sealed = createSealedFiles(dir, "environment", () => existsSync(file))

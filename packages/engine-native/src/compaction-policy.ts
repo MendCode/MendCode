@@ -68,13 +68,29 @@ export function prunable(messages: readonly ModelMessage[]) {
   return false
 }
 
-/** Old successful tool results only; skill and the two most recent user turns are protected. The caller decides `enabled` (`pruneDue` and the `prune` setting). */
-export function pruneToolOutputs(messages: ModelMessage[], enabled = true) {
-  if (!enabled) return { messages, tokens: 0 }
+/** The share of the compaction threshold from which a prune may still change a turn that has already sent a request (see `pruneToolOutputs`). */
+export const PRUNE_URGENT = 0.95
+export const pruneUrgent = (contextTokens: number, compactAt: number) => contextTokens >= compactAt * PRUNE_URGENT
+
+/**
+ * Old successful tool results only; skill and the two most recent user turns are protected. The caller decides `enabled` (`pruneDue` and
+ * the `prune` setting), or passes the `ids` (tool call ids) an earlier call of the same turn pruned, to prune exactly those: the set a
+ * turn sends is frozen after its first call, because every result that changes inside the prefix makes the provider re-read, uncached,
+ * everything after it (a context that crosses the prune point, or a prompt or notice that joins the turn and moves the two-turn
+ * protection, would otherwise rewrite results the previous call already sent).
+ */
+export function pruneToolOutputs(messages: ModelMessage[], enabled: boolean | ReadonlySet<string> = true): { messages: ModelMessage[]; tokens: number; ids: ReadonlySet<string> } {
+  const none = { messages, tokens: 0, ids: new Set<string>() as ReadonlySet<string> }
+  if (enabled === false) return none
   const selected: number[] = []
+  const frozen = typeof enabled === "boolean" ? undefined : enabled
   let turns = 0, protectedTokens = 0, tokens = 0
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i]!
+    if (frozen) {
+      if (message.role === "tool" && frozen.has(message.callId) && message.output !== "[Old tool output pruned]") { selected.push(i); tokens += estimateTokens(message.output.length) }
+      continue
+    }
     if (message.role === "user") {
       if (message.content.startsWith(SUMMARY_PREFIX)) break
       turns++
@@ -85,11 +101,13 @@ export function pruneToolOutputs(messages: ModelMessage[], enabled = true) {
     protectedTokens += size
     if (protectedTokens > PRUNE_PROTECTED) { selected.push(i); tokens += size }
   }
-  if (tokens <= PRUNE_MINIMUM) return { messages, tokens: 0 }
+  if (!frozen && tokens <= PRUNE_MINIMUM) return none
+  if (!selected.length) return none
   const indices = new Set(selected)
+  const ids = new Set(selected.map((index) => (messages[index] as Extract<ModelMessage, { role: "tool" }>).callId))
   return { messages: messages.map((message, index): ModelMessage => {
     if (!indices.has(index) || message.role !== "tool") return message
     const { loadedInstructions, ...rest } = message
     return { ...rest, output: "[Old tool output pruned]" }
-  }), tokens }
+  }), tokens, ids }
 }

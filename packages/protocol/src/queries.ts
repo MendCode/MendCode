@@ -12,7 +12,7 @@ import { PackageAuthorManifest } from "./package-authoring"
 import { z } from "zod"
 import { CompoundPricing } from "./compound"
 import { QuotaSnapshot, SessionEvent } from "./events"
-import { AGENT_MODES, EVOLUTION_MODES, FOOTER_SEGMENTS, MAX_FRAME_BYTES, MEMORY_CATEGORY_IDS, MEMORY_POLICIES, MODEL_ROLES, OUTPUT_STYLES, PROMPT_CACHE_MODES, REASONING_EFFORTS, SERVICE_TIERS, SESSION_COLORS, TIMELINE_PREVIEW_CHARS } from "./constants"
+import { ADVISOR_CHECKPOINTS, AGENT_MODES, EVOLUTION_MODES, FOOTER_SEGMENTS, MAX_FRAME_BYTES, MEMORY_CATEGORY_IDS, MEMORY_POLICIES, MODEL_ROLES, OUTPUT_STYLES, PROMPT_CACHE_MODES, REASONING_EFFORTS, SERVICE_TIERS, SESSION_COLORS, TIMELINE_PREVIEW_CHARS } from "./constants"
 import { FEATURE_IDS, TIERS } from "./tier-data"
 import { CACHE_LIFETIME_MINUTES_RANGE, CACHE_TTLS } from "./idle-compaction-data"
 import { MODEL_CONTEXT_LIMIT, MODEL_CONTEXT_RANGE } from "./model-context"
@@ -207,6 +207,25 @@ export const UsageModel = lazySchema(() => z.strictObject({
 }))
 export type UsageModel = z.infer<typeof UsageModel>
 
+/**
+ * The model calls the daemon made outside a turn (a title, a summary, memory, a hook, a recap...), by role and model, for the range.
+ * They are not part of `days` or `models`, which count turns only; the budget ledger counts both.
+ */
+export const UsageAuxiliary = lazySchema(() => z.strictObject({
+  role: z.string().max(40),
+  provider: z.string(),
+  model: z.string(),
+  input: Count,
+  output: Count,
+  reasoning: Count,
+  cacheRead: Count,
+  cacheWrite: Count,
+  calls: Count,
+  costMicros: Count,
+  costUnknownCalls: Count,
+}))
+export type UsageAuxiliary = z.infer<typeof UsageAuxiliary>
+
 /** Per-day activity: user prompts and words, model generation time and tool runtime (ms). */
 export const UsageActivityDay = lazySchema(() => z.strictObject({
   day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
@@ -331,6 +350,8 @@ export const UsageReport = lazySchema(() => z.strictObject({
   tools: z.array(UsageTool).optional(),
   /** Tokens command-output filters kept out of the model's context in the range (estimate, chars / 4), by filter; absent from older daemons and when none ran. */
   savings: z.array(z.strictObject({ source: z.string().max(64), calls: Count, tokens: Count })).max(20).optional(),
+  /** Calls outside turns, per role and model; absent from older daemons and when there were none. Not in `days` or `models`. */
+  auxiliary: z.array(UsageAuxiliary).max(200).optional(),
   /** Absent from older daemons, and when no login identity is readable. */
   profile: UsageProfile.optional(),
   /** Absent from older daemons. */
@@ -401,6 +422,13 @@ export const ModelChoice = lazySchema(() => z.strictObject({ model: z.string().m
 export type ModelChoice = z.infer<typeof ModelChoice>
 export const ModelRoles = lazySchema(() => z.partialRecord(z.enum(MODEL_ROLES), ModelChoice))
 export type ModelRoles = z.infer<typeof ModelRoles>
+export const AdvisorSettings = lazySchema(() => z.strictObject({
+  checkpoints: z.array(z.enum(ADVISOR_CHECKPOINTS)).max(ADVISOR_CHECKPOINTS.length).optional(),
+  maxCallsPerTurn: z.number().int().min(1).max(10).optional(),
+  maxCallsPerSession: z.number().int().min(1).max(200).optional(),
+  maxBriefTokens: z.number().int().min(4_000).max(100_000).optional(),
+}))
+export type AdvisorSettings = z.infer<typeof AdvisorSettings>
 
 /** A model recipe from an extension layer's `recipes/<name>.json`: a named, versioned set of roles. */
 export const RecipeInfo = lazySchema(() => z.strictObject({
@@ -607,6 +635,8 @@ const SharedSettings = lazySchema(() => z.strictObject({
     openTelemetry: z.boolean().optional(),
   }).optional(),
   permissionReviewerRole: z.enum(MODEL_ROLES).optional(),
+  /** Caps and checkpoints of the advisor; the advisor runs only when the `advisor` model role is set (docs/advisor.md). */
+  advisor: AdvisorSettings.optional(),
   logLevel: z.enum(["DEBUG", "INFO", "WARN", "ERROR"]).optional(),
   projectThemes: z.record(z.string().min(1).max(4096), z.string().min(1).max(40)).optional(),
   $schema: z.string().max(2048).optional(),

@@ -3,7 +3,7 @@
 `/compound` inspects opt-in native execution: `single`, `cascade`, or `critic`. Configuration is
 `<dataDir>/ai.json`; absent configuration is off. The profile is frozen with its hash, resolved model
 choices and catalog pricing at start. Configuration never changes the current session model or starts a run.
-The `ai_config` advisor/planner remains B70.
+For a second opinion inside a normal session, see the [advisor](advisor.md).
 
 ```json
 {

@@ -1,5 +1,6 @@
 import type { EngineEvent } from "@mendcode/kernel"
-import type { ItemId } from "@mendcode/protocol"
+import type { ItemId, TodoListItem } from "@mendcode/protocol"
+import { todoListCard, todoListStatus } from "@mendcode/protocol/wire"
 import { acpToolText, acpToolTitle, hasInput, mergeToolCall, type AcpToolCall } from "./tool-cards"
 
 export const MAX_TEXT = 60 * 1024
@@ -85,14 +86,22 @@ function rawText(raw: unknown): string {
   }
 }
 
-/** The plan's entries as a checklist: `[x]` done, `[~]` in progress, `[ ]` pending. */
-export function planText(entries: unknown): string {
-  if (!Array.isArray(entries)) return ""
-  return entries
-    .filter(isRecord)
-    .map((entry) => `${entry.status === "completed" ? "[x]" : entry.status === "in_progress" ? "[~]" : "[ ]"} ${String(entry.content ?? "")}`)
-    .join("\n")
+/**
+ * The plan's entries (`{content, status, priority}`) as MendCode's list card (`todo d/n`, then `[x]` done, `[~]` in progress, `[ ]`
+ * pending, each with its priority), so the progress row and the dock show an ACP agent's plan. Entries without text are left out;
+ * an empty plan is an empty card (it clears the list); none when `entries` is not a list.
+ */
+export function planCard(entries: unknown): { title: string; text: string } | undefined {
+  if (!Array.isArray(entries)) return undefined
+  return todoListCard(entries.filter(isRecord).flatMap((entry): TodoListItem[] => {
+    const text = String(entry.content ?? "").trim()
+    const priority = entry.priority === "high" || entry.priority === "medium" || entry.priority === "low" ? entry.priority : undefined
+    return text ? [{ text, status: todoListStatus(entry.status), ...(priority ? { priority } : {}) }] : []
+  }))
 }
+
+/** The plan's checklist text alone (`planCard`), empty when there is none. */
+export const planText = (entries: unknown): string => planCard(entries)?.text ?? ""
 
 type OpenText = { kind: "agent_message" | "reasoning"; itemId: ItemId; text: string }
 
@@ -100,14 +109,15 @@ const terminal = (status: unknown) => status === "completed" || status === "fail
 
 /**
  * Turns the `session/update` notifications of one turn into engine events. Message and thought chunks stream as
- * items; a tool call is one item that completes when its update says completed or failed; the agent's plan is one
- * item that holds the first plan and is completed with the last one when the turn ends.
+ * items; a tool call is one item that completes when its update says completed or failed; each changed plan of the agent
+ * is one finished list card (`planCard`).
  */
 export function createUpdateMapper(input: { newItemId(): ItemId; emit(event: EngineEvent): void }) {
   let open: OpenText | undefined
   // A call is announced (`item.started`) once its input is known, so its card opens with MendCode's name for it (`shell: ls`).
   const tools = new Map<string, { itemId?: ItemId; call: AcpToolCall }>()
-  let plan: { itemId: ItemId; text: string } | undefined
+  /** The checklist of the turn's last plan card: a plan sent again unchanged draws no second card. Per turn: the next turn's first plan draws again. */
+  let lastPlan: string | undefined
 
   function closeText() {
     if (!open) return
@@ -169,15 +179,16 @@ export function createUpdateMapper(input: { newItemId(): ItemId; emit(event: Eng
           if (itemId && terminal(update.status)) finishTool(update, itemId)
           return
         }
+        // Each changed plan is a finished card of its own, as each call of the native `todo` is, so the progress row follows it live.
+        // An empty plan before any other draws nothing; after one, its empty card clears the list.
         case "plan": {
-          const text = planText(update.entries)
-          if (!text) return
-          if (!plan) {
-            closeText()
-            plan = { itemId: input.newItemId(), text }
-            input.emit({ type: "item.started", itemId: plan.itemId, kind: "tool_call", meta: { tool: "plan" } })
-            input.emit({ type: "item.delta", itemId: plan.itemId, text })
-          } else plan.text = text
+          const card = planCard(update.entries)
+          if (!card || card.text === (lastPlan ?? "")) return
+          closeText()
+          lastPlan = card.text
+          const itemId = input.newItemId()
+          input.emit({ type: "item.started", itemId, kind: "tool_call", meta: { tool: card.title } })
+          input.emit({ type: "item.completed", itemId, status: "ok", text: clip(card.text) })
           return
         }
         default:
@@ -186,15 +197,11 @@ export function createUpdateMapper(input: { newItemId(): ItemId; emit(event: Eng
       }
     },
 
-    /** Closes what the turn left open: streamed text and the plan end ok, tool calls without a result end interrupted (or error). */
+    /** Closes what the turn left open: streamed text ends ok, tool calls without a result end interrupted (or error). */
     finish(status: "ok" | "interrupted" | "error") {
       closeText()
       for (const { itemId } of tools.values()) if (itemId) input.emit({ type: "item.completed", itemId, status: status === "error" ? "error" : "interrupted" })
       tools.clear()
-      if (plan) {
-        input.emit({ type: "item.completed", itemId: plan.itemId, status: "ok", text: clip(plan.text) })
-        plan = undefined
-      }
     },
   }
 }

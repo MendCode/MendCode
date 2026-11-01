@@ -13,6 +13,7 @@ import grokFile from "../prompts/focus/grok.prompt.md" with { type: "file" }
 import localFile from "../prompts/focus/local.prompt.md" with { type: "file" }
 import operatorGuideFile from "../prompts/operator-guide.md" with { type: "file" }
 import selfKnowledgeFile from "../prompts/self-knowledge.md" with { type: "file" }
+import visiblePlanFile from "../prompts/visible-plan.md" with { type: "file" }
 import { PROGRAM_NAME } from "@mendcode/program"
 
 /**
@@ -146,4 +147,16 @@ export function operatorGuideText(): string {
 /** The one line every mode but `custom` carries: the model runs inside MendCode and reads its own reference cards with a command, not the web. */
 export function selfKnowledgeText(): string {
   return once("self-knowledge", () => withProgram(readFileSync(selfKnowledgeFile, "utf8").trim()))
+}
+
+/**
+ * The visible plan's two lines (feature `visible_plan`): `native`, sent by focus, guide and full while `todo` is listed; `harness`,
+ * appended for an engine with its own todo or plan tool (Claude Code, Codex, ACP agents), whose list the terminal pins as well.
+ */
+export function visiblePlanText(): { native: string; harness: string } {
+  return once("visible-plan", () => {
+    const [native = "", harness = ""] = readFileSync(visiblePlanFile, "utf8").split(/^<!-- harness -->$/m).map((block) => block.trim())
+    if (!native || !harness) throw new TypeError("[GUIDANCE]: visible-plan.md needs a native line, a <!-- harness --> line and a harness line")
+    return { native, harness }
+  })
 }

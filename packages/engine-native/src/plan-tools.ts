@@ -27,3 +27,14 @@ export function planPhase(markdown: string, prompt: string, requested?: PlanRevi
   const instruction = /\b(?:only (?:a )?plan|plan only|do not implement|don't implement|solo (?:elaborar (?:un )?)?plan|s[oó]lo plan|no implementes|no implementar)\b/i
   return requested === "plan" || isPlanningOnlyPacket(markdown) || instruction.test(prompt) ? "plan" : "implementation"
 }
+
+/** Appended to the system prompt of a call made in plan mode, and to no other (docs/plan-review.md). */
+export const PLAN_MODE_NOTE = "Plan mode is on: the session is read-only, so investigate with read tools and do not edit, write or run commands that change anything. Finish by calling plan_review with the complete plan as Markdown (goal, steps with files, risks, how to verify); the user reviews it there and decides whether to implement. Do not write the final plan as a plain reply."
+
+/** A plain-text reply that reads as a plan (a list or headings, enough text): the host offers it for review when the model did not. */
+export function looksLikePlan(text: string): boolean {
+  const body = text.trim()
+  if (body.length < 120) return false
+  const structure = body.split("\n").filter((line) => /^\s*(?:[-*]\s+\S|\d+[.)]\s+\S|#{1,4}\s+\S)/.test(line)).length
+  return structure >= 3
+}

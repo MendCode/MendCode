@@ -3,8 +3,9 @@ import { accessSync, constants, existsSync, lstatSync, mkdirSync, readFileSync, 
 import path from "node:path"
 import { AIConfigInput, AIConfigRecipe, MODEL_ROLES, redactSecrets, type AIConfigAlternative, type AIConfigInput as Input, type AIConfigInspection, type AIConfigIssue, type AIConfigModel, type AIConfigPlan, type AIConfigReport, type AIConfigTarget, type AIConfigValidation, type ModelChoice, type ModelInfo, type ModelRole, type Settings, type SessionId } from "@mendcode/protocol"
 import { canonicalDir, type AIConfigPort } from "@mendcode/tools"
-import { invalidChoice, type ModelCatalog } from "./models"
+import { invalidChoice, resolveModel, type ModelCatalog } from "./models"
 import { rolesFor } from "./profiles"
+import { advisorReport, advisorStatus } from "./advisor-host"
 
 const MAX_BYTES = 16 * 1024
 const digest = (text: string) => createHash("sha256").update(text).digest("hex")
@@ -25,6 +26,7 @@ export function createAIConfigService(input: {
   now(): number
   /** The catalog with each engine alias's resolved model (`model-resolutions.ts`), so the model reads which Opus `claude-opus` is. */
   resolve?(models: ModelInfo[]): ModelInfo[]
+  safeMode?: boolean
 }) {
   const catalog: ModelCatalog = { ...input.catalog, list: () => input.resolve ? input.resolve(input.catalog.list(true)) : input.catalog.list(true) }
   function root(directory: string, scope: "project" | "global") {
@@ -90,11 +92,14 @@ export function createAIConfigService(input: {
       }
     }
     const list = models()
-    return { action: "inspect", version: 1, models: list, roles: rolesFor(input.settings(), directory), configSources, effective: { compactAtTokens: input.settings().compactAtTokens ?? null }, missingInformation: [
+    const settings = input.settings()
+    const roles = rolesFor(settings, directory)
+    const advisor = advisorReport(advisorStatus({ settings, roles, main: resolveModel({ role: "main", roles, catalog }), catalog, safeMode: input.safeMode === true }), settings)
+    return { action: "inspect", version: 1, models: list, roles, configSources, effective: { compactAtTokens: settings.compactAtTokens ?? null }, missingInformation: [
       ...(list.some((model) => !model.pricing) ? ["Pricing is incomplete; unknown cost and subscription quota are not free API usage."] : []),
       "Comparable dated quality evidence is unavailable.",
       "Model recipes bind roles only; use /compound for cascade or critic and /compaction for compaction profiles.",
-    ], advisor: "off" }
+    ], advisor }
   }
 
   function diff(before: AIConfigRecipe | undefined, after: AIConfigRecipe): string[] {

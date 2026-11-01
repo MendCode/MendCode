@@ -338,3 +338,12 @@ describe("per-session permission rules", () => {
     expect(grantedTurn.asked).toEqual([])
   })
 })
+
+test("the permission reviewer tells its completion which session asks, so its call is counted under it", async () => {
+  const sessions: SessionId[] = []
+  const reviewer = createPermissionReviewer({ complete: async (input) => { sessions.push(input.sessionId); return '{"verdict":"allow","reason":"in scope"}' }, modelFor: () => ({ model: "reviewer-small" }) })
+  const sessionId = ids("session")
+  const verdict = await reviewer.review({ sessionId, tool: "shell", permission: "execute", detail: "ls", cwd: project, rule: { decision: "ask", risk: "uncertain", rule: "destructive", reason: "test" }, signal: new AbortController().signal })
+  expect(verdict.verdict).toBe("allow")
+  expect(sessions).toEqual([sessionId])
+})

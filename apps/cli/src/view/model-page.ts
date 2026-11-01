@@ -9,7 +9,7 @@ import { truncateEnd } from "./session-list"
 import { textWidth } from "./wrap"
 
 /** `session` is this session's own choice; the rest are the settings' roles (MODEL_ROLES, in order). */
-export const MODEL_PAGE_ROWS = ["session", "main", "plan", "subagent", "compaction", "dream", "aside", "small", "permissionReviewer", "memoryExtractor", "memoryAssistant", "memoryConsolidator", "title", "summary", "workflow"] as const satisfies ReadonlyArray<"session" | ModelRole>
+export const MODEL_PAGE_ROWS = ["session", "main", "plan", "subagent", "compaction", "dream", "aside", "small", "permissionReviewer", "memoryExtractor", "memoryAssistant", "memoryConsolidator", "title", "summary", "workflow", "advisor"] as const satisfies ReadonlyArray<"session" | ModelRole>
 export type ModelPageRow = (typeof MODEL_PAGE_ROWS)[number]
 
 /** `recipe` is the recipe the recipe row points at; unset until it is cycled (then the active one, else the first). */
@@ -207,6 +207,8 @@ function inherited(row: ModelPageRow, report: ModelsReport): string {
   // /btw asks the aside role, then small, then the session's own model.
   if (row === "memoryAssistant") return report.roles.memoryExtractor ? `memoryExtractor · ${describe(report.roles.memoryExtractor, report)}` : report.roles.small ? `small · ${describe(report.roles.small, report)}` : "memoryExtractor, small, else main"
   if (row === "memoryConsolidator") return "unset: deterministic Dream consolidation"
+  if (row === "advisor") return "unset: no advisor (/advisor <model>)"
+  if (row === "permissionReviewer") return "unset: no reviewer runs"
   if (row === "aside" || row === "memoryExtractor" || row === "title" || row === "summary") return report.roles.small ? `small · ${describe(report.roles.small, report)}` : "small, else this session's model"
   return "same as main"
 }

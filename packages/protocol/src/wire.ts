@@ -11,6 +11,7 @@ export { estimateTokens } from "./constants"
 export { usageContext, type UsageContextInput } from "./usage-context"
 export * from "./context-forecast"
 export * from "./backlog-data"
+export * from "./todo-list-data"
 export { claudeFastModel, findModel } from "./model-lookup"
 export { clampWindow, modelContextOf, modelRef, MODEL_CONTEXT_LIMIT, MODEL_CONTEXT_RANGE, type ModelContextEntry } from "./model-context"
 import type { Frame } from "./frames"
@@ -54,6 +55,9 @@ export {
   ATTACHMENT_PART_BYTES,
   MAX_FRAME_BYTES,
   MODEL_ROLES,
+  ADVISOR_CHECKPOINTS,
+  ADVISOR_DEFAULTS,
+  type AdvisorCheckpoint,
   OUTPUT_STYLES,
   PROTOCOL_VERSION,
   REASONING_EFFORTS,

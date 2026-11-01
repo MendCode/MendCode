@@ -65,8 +65,11 @@ export function createUsageQuery(store: Store, defaultDirectory = process.cwd())
     // Zero requests all tools; the default dashboard stays at ten.
     const toolLimit = query.toolLimit === 0 ? -1 : query.toolLimit ?? 10
     const savings = store.usageScopes.savings({ ...range, directories: kind === "global" ? known : directories })
+    // Calls outside turns: global shows every one, sessionless ones included; a scope shows those made for its directories.
+    const auxiliary = store.usageAuxiliary.report(kind === "global" ? range : scoped)
     return {
       ...(savings.length ? { savings } : {}),
+      ...(auxiliary.length ? { auxiliary } : {}),
       ...range,
       scope,
       projects,

@@ -15,6 +15,29 @@ no model, and the pull request reviewer keeps working when the daemon starts wit
 
 ### New
 
+- Advisor: `/advisor <model>[#effort]` names a second model (balanced and full, off until you pick one; `/advisor off`, `/advisor` shows
+  status) that the main model consults through an `advisor` tool and the engine consults at three checkpoints (before a plan is
+  shown, after the same call fails twice, before a turn that edited files closes), at most once each per turn. The model sees a
+  bounded 24k-token summary with secrets redacted; consultations are counted under the advisor's model. Claude Code sessions pass a
+  Claude advisor to `--advisor`. `/model` has an advisor row and the AI config page shows the real status ([advisor](docs/advisor.md)).
+  A Claude Code model (`/advisor claude-opus`) can also advise a native session on your Claude subscription, one headless `claude -p`
+  per consultation with no tools; the AI status lists the advisor and the permission reviewer as off when unset, not as the main model.
+- A visible plan (balanced and full, `/tier visible_plan off`): while the agent's task list has open items, one muted row above
+  the prompt shows the item in progress and how far the list is (`▸ Fix the parser · 3/7`); it cuts the item first on a narrow
+  terminal, uses `>` and `|` with ASCII chrome, reads `Plan: Fix the parser, 3 of 7 done` in screen-reader mode, steps aside while
+  the dock is open (ctrl+t, which lists the whole plan) and goes when every item is done. `todo` is now listed in every request of
+  balanced and full, and its description and one prompt line tell the model the user follows it there: use it for work of three or
+  more steps, before the first edit, and do not repeat it in the answer. Claude Code's TodoWrite (the item in progress as its
+  activeForm) and TaskCreate/TaskUpdate, Codex's update_plan and an ACP agent's plan show in the same row, dock and Todos card, and
+  those engines are told in one line that their list is pinned. Minimalist has no `todo` tool at all and no row.
+- Plan mode works as it did in v1: entering it (Shift+Tab, `/plan`) says `Plan mode: read-only · <plan model> plans · you review first`
+  and the footer names the plan model instead of the build one; the model is told it is read-only and to finish with the plan review,
+  and a plan it writes as plain text opens that review anyway, where Enter switches to the build agent and its model and continues
+  (leaving plan mode says which model runs now). Claude Code's `ExitPlanMode` opens the same review page.
+- Paste credentials into `/env`: paste one `NAME=value` or a whole `.env` and MendCode lists the variables it found (names only,
+  with new / replaces / refused / empty status and counts); choose all or a subset with space, `a` and Enter, and they are saved
+  encrypted for the project (Ctrl+S for session or global). Pasting `NAME=value` lines into the value field offers the same
+  list. The pasted text stays in memory until you save or press Esc.
 - The model is told what MendCode can do: a native session's prompt names, in one line, the tools it can load (image generation,
   computer use, memory, web, workflows and others behind `tool_search`), taken from the session's real catalogue, so the model uses
   them instead of saying it cannot. The rendering lines say what this terminal draws (colour swatches, callouts, clickable paths, diff
@@ -98,6 +121,11 @@ no model, and the pull request reviewer keeps working when the daemon starts wit
   with one line per tool call and no tool output or reasoning, in pages of up to 40,000 bytes (`more: cursor=…` asks for the next).
   An exact id may name a session of any project of this MendCode; the list stays this project's. Before, a model asked to read a
   chat by its id searched `~/.claude` and MendCode's database for minutes ([peers](docs/peers.md#read-one-sessions-conversation)).
+- `/usage` shows the model calls MendCode makes outside your turns: session titles and summaries, `/recap`, memory extraction,
+  the Memory assistant, Dream and its consolidation, the permission reviewer, `prompt` hooks, generated agents and the setup
+  helper. The Models tab has an "Auxiliary calls" panel per role and model (`summary · gpt-6-luna · 12 calls · 74K in`), and
+  `mendcode usage`, `mendcode stats` and `--json` (`auxiliary`) list them too. They stay out of the turn totals, so nothing is
+  counted twice; before, they reached only the budget ledger ([usage](docs/usage.md#auxiliary-calls)).
 
 ### Changed
 
@@ -174,6 +202,15 @@ no model, and the pull request reviewer keeps working when the daemon starts wit
 
 ### Fixed
 
+- Repeated `tool_search` calls on the ChatGPT backend keep each tool definition in its first successful search result. Later
+  searches append an already-loaded notice instead of moving the definition and invalidating the earlier prompt prefix.
+  Mixed searches still load new tools; the function-based formats of other providers are unchanged.
+- Fewer full re-reads of the conversation in the middle of a turn: old tool results are pruned once per turn (decided by its first
+  request) instead of again whenever the context crossed 80 % of the compaction point or a queued prompt or a background notice
+  joined the turn, and the memory in the system prompt is chosen by the prompt the turn started with, not by a prompt that joins
+  it. Each of those used to change something early in the request, so the provider read the whole context again, uncached.
+  `MENDCODE_DEBUG_PROMPT_PREFIX=1` makes the daemon log, per provider request, hashes of its instructions, tools, cache route
+  and input items and the first one that differs from the request before (no content; [prompt cache](docs/prompt-cache.md)).
 - `mendcode attach <session id>` opens that session in the terminal again; it stopped at `attach needs an HTTP URL` because the
   remote attach took every `attach` first. An HTTP URL still attaches to a server, and a bare `attach` names both forms.
 - On-device dictation with no language set no longer hears with the model of the Mac's region: English (Panama) picked Apple's

@@ -1412,6 +1412,17 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
     get recentCalls() {
       return usageNotes.calls
     },
+    /** Advisor consultations in the loaded transcript (docs/advisor.md): how many, and the advisor model's tokens. */
+    get advisorUsage() {
+      let calls = 0, input = 0, output = 0
+      for (const block of blocks) {
+        if (block.meta?.advisorTrigger === undefined) continue
+        calls++
+        input += Number(block.meta.advisorInputTokens ?? 0)
+        output += Number(block.meta.advisorOutputTokens ?? 0)
+      }
+      return { calls, input, output }
+    },
     get recentTurnTimes() {
       return usageNotes.turnTimes
     },

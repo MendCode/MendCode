@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises"
-import type { BlobRef, ItemId, ItemKind, SessionId } from "@mendcode/protocol"
+import type { BlobRef, ItemId, ItemKind, SessionId, TodoListItem } from "@mendcode/protocol"
+import { todoListCard, todoListStatus } from "@mendcode/protocol/wire"
 import { processMcpTurn, realClock, type Clock, type EngineEnvironment, type EnginePort, type EngineResolution, type GlobalEventDraft, type TimerHandle, type TurnInput, type TurnOutcome } from "@mendcode/kernel"
 import { createRpc, spawnCodex, type Transport } from "./rpc"
 import { codexLanguageInstruction, codexRunLimits, type CodexRunLimits } from "./run-limits"
@@ -50,6 +51,18 @@ function imageMime(bytes: Uint8Array): string | undefined {
 
 function clip(text: string) {
   return text.length > MAX_TEXT ? `${text.slice(0, MAX_TEXT)}\n…[truncated]` : text
+}
+
+/**
+ * A `turn/plan/updated` checklist (`plan: [{step, status: pending|inProgress|completed}]`) as MendCode's list card; an empty plan is an
+ * empty card (it clears the list), none when `plan` is not a list.
+ */
+export function codexPlanCard(plan: unknown): { title: string; text: string } | undefined {
+  if (!Array.isArray(plan)) return undefined
+  return todoListCard(plan.flatMap((entry): TodoListItem[] => {
+    const step = entry && typeof entry === "object" && typeof entry.step === "string" ? entry.step.trim() : ""
+    return step ? [{ text: step, status: todoListStatus(entry.status) }] : []
+  }))
 }
 
 /** `/bin/zsh -lc 'ls -la'` → `ls -la`: show the command the agent meant, not the shell wrapper. */
@@ -185,6 +198,8 @@ export function createCodexEngine(options: {
   const threads = new Map<SessionId, string>()
   const turnsByCodexTurn = new Map<string, ActiveTurn>()
   const turnsByThread = new Map<string, ActiveTurn>()
+  /** Each thread's last plan checklist, so a repeated `turn/plan/updated` adds no card. */
+  const lastPlan = new Map<string, string>()
   let rpc: ReturnType<typeof createRpc> | undefined
   let transport: Transport | undefined
   let ready: Promise<void> | undefined
@@ -243,6 +258,18 @@ export function createCodexEngine(options: {
           return
         }
         input.emit({ type: "item.completed", itemId, status: failed ? "error" : "ok", ...(typeof text === "string" ? { text: clip(text) } : {}) })
+        return
+      }
+      // `update_plan`: Codex sends the whole checklist each time. It becomes MendCode's own list card (`todo d/n`), so the progress row
+      // and the dock show it; an update that repeats the last list draws nothing, an empty one after a list clears it. (The `plan` item is
+      // plan mode's proposal, prose: an artifact.)
+      case "turn/plan/updated": {
+        const card = codexPlanCard(params?.plan)
+        if (!card || (lastPlan.get(params?.threadId) ?? "") === card.text) return
+        lastPlan.set(params?.threadId, card.text)
+        const itemId = input.newItemId()
+        input.emit({ type: "item.started", itemId, kind: "tool_call", meta: { tool: card.title } })
+        input.emit({ type: "item.completed", itemId, status: "ok", text: clip(card.text) })
         return
       }
       case "thread/tokenUsage/updated": {

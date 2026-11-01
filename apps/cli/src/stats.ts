@@ -1,6 +1,7 @@
 import type { UsageReport } from "@mendcode/protocol"
 import { panelGrid, spread } from "./view/deck"
 import { compact } from "./view/format"
+import { auxiliaryLabel, auxiliaryOrder, auxiliaryTotals, callCount } from "./view/usage-auxiliary"
 import type { Line } from "./ui/theme"
 
 /** Human CLI stats use the same bordered grid as the terminal dashboard; JSON keeps the complete report. */
@@ -25,6 +26,13 @@ export function statsText(report: UsageReport, options: { kind: "stats" | "usage
   const models = [...report.models].sort((a, b) => b.calls - a.calls || a.model.localeCompare(b.model)).slice(0, modelLimit)
   if (modelLimit) groups.push([{ title: "Model Usage", body: models.length ? models.flatMap((m) => [[{ text: `${m.provider}/${m.model}`, fg: "primary" as const }],
     row("  Calls", compact(m.calls)), row("  Input", compact(m.input)), row("  Output", compact(m.output)), row("  Cost", cost(m.costMicros, m.costUnknownCalls))]) : [[{ text: "No model usage", fg: "muted" }]] }])
+  // Calls outside turns, apart from the turns' totals above; shown only when there were some.
+  const auxiliary = report.auxiliary ?? []
+  if (auxiliary.length) {
+    const sum = auxiliaryTotals(auxiliary)
+    groups.push([{ title: "Auxiliary Calls", body: [row("Calls outside turns", compact(sum.calls)), row("Tokens", compact(sum.tokens)), row("Cost", cost(sum.costMicros, sum.unpriced)),
+      ...auxiliaryOrder(auxiliary).map((entry) => row(`  ${auxiliaryLabel(entry)}`, `${callCount(entry.calls, compact)} · ${compact(entry.input)} in`))] }])
+  }
   const tools = [...(report.tools ?? [])].sort((a, b) => b.calls - a.calls || a.tool.localeCompare(b.tool)).slice(0, options.tools || Infinity)
   if (options.kind === "stats" || options.tools !== undefined) {
     const all = (report.tools ?? []).reduce((sum, t) => sum + t.calls, 0)

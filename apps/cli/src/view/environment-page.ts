@@ -6,7 +6,18 @@ import { textWidth, wrap } from "./wrap"
 
 export type EnvScope = "session" | "project" | "global"
 export type EnvInfo = { name: string; scope: EnvScope; updatedAt: number }
+export type PastedItem = { name: string; status: "new" | "replace" | "refused" | "empty"; reason?: string | undefined; duplicates?: number | undefined }
+/** Pasted dotenv text: it begins with a `NAME=value` (or `export NAME=value`) line, so it is offered for detection instead of being saved as one value. */
+export const looksLikeDotenv = (text: string): boolean => {
+  const first = text.split(/\r?\n/).find((line) => line.trim() && !line.trim().startsWith("#"))
+  return !!first && /^\s*(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*\s*=(?!=)/.test(first)
+}
+/** What a paste holds: names and statuses only. The text stays here, in memory, until it is saved or dropped. */
+export type PasteState = { content: string; items: PastedItem[]; digest: string; checked: Set<string>; cursor: number }
 export type EnvironmentPageState = {
+  paste?: PasteState | undefined
+  /** A one-line result of the last change (never a value). */
+  notice?: string | undefined
   entries: EnvInfo[]; selected: number; encrypted?: boolean | undefined; native?: boolean | undefined
   /** The `engineEnvironment` setting: Claude Code, Codex, pi and ACP get the credentials too. */
   engines?: boolean | undefined
@@ -18,12 +29,20 @@ export type EnvironmentPageState = {
 }
 export const createEnvironmentPageState = (): EnvironmentPageState => ({ entries: [], selected: 0, loading: true, busy: false, error: "", scope: "project" })
 
-const HINTS = "↑↓ select · a add · e replace · x remove · i import .env · p encryption · r reload · esc back"
+const HINTS = "↑↓ select · a add · paste .env · e replace · x remove · i import file · p encryption · r reload · esc back"
+const PASTE_HINTS = "↑↓ move · space toggle · a all/none · enter add selected · ctrl+s scope · esc cancel"
 const EDIT_HINTS = "tab field · ctrl+s scope · enter next/save · esc cancel"
 const IMPORT_HINTS = "type dotenv path · ctrl+s scope · enter preview · esc cancel"
 const CONFIRM_HINTS = "y confirm · esc cancel"
 const SCOPE_TONE: Record<EnvScope, ColorName> = { session: "info", project: "accent", global: "synType" }
 const LABEL = 13
+
+/** `12 found · 10 new · 1 replaces · 1 refused (PATH)`: counts of names, never values. */
+export function pasteSummary(items: PastedItem[]): string {
+  const count = (status: PastedItem["status"]) => items.filter((item) => item.status === status)
+  const refused = count("refused"), replaces = count("replace").length, empty = count("empty").length, fresh = count("new").length
+  return [`${items.length} found`, `${fresh} new`, ...(replaces ? [`${replaces} replace${replaces === 1 ? "s" : ""}`] : []), ...(refused.length ? [`${refused.length} refused (${refused.map((item) => item.name).join(", ")})`] : []), ...(empty ? [`${empty} empty`] : [])].join(" · ")
+}
 
 /** One `label  value` row of a panel; the value takes the tone, the label stays quiet. */
 const fact = (label: string, value: string, width: number, fg: ColorName = "body"): Line[] =>
@@ -46,6 +65,28 @@ function work(state: EnvironmentPageState, glyphs: Glyphs, now: number): { title
       [],
       ...prose("Back up keys/chats.key separately. Same-user programs with that key can decrypt.", width),
       ...prose("Exports, previous backups, provider copies and adapter-owned logs are not encrypted.", width),
+    ] }
+  }
+  if (state.paste) {
+    const paste = state.paste
+    return { title: "Detected variables", scroll: paste.cursor + 1, body: (width) => [
+      ...prose(pasteSummary(paste.items), width, "primary"),
+      scope,
+      [],
+      ...paste.items.map((item, index): Line => {
+        const saveable = item.status === "new" || item.status === "replace"
+        const note = item.status === "refused" ? `refused: ${item.reason ?? "not allowed"}` : item.status === "empty" ? "empty value, skipped" : item.status === "replace" ? "replaces existing" : "new"
+        const dup = item.duplicates ? ` · defined ${item.duplicates + 1}x, last wins` : ""
+        return fit([
+          index === paste.cursor ? { text: `${glyphs.user} `, fg: "primary", bold: true } : { text: "  " },
+          { text: saveable ? (paste.checked.has(item.name) ? "[x] " : "[ ] ") : "[-] ", fg: saveable ? "primary" : "muted" },
+          { text: item.name, fg: saveable ? "body" : "muted", bold: index === paste.cursor },
+          { text: `  ${note}${dup}`, fg: item.status === "refused" ? "warning" : "muted" },
+        ], width)
+      }),
+      [],
+      ...(state.error ? [...prose(state.error, width, "warning"), []] : []),
+      ...prose(`Add ${paste.checked.size} selected variable${paste.checked.size === 1 ? "" : "s"}? Enter saves them encrypted; esc drops the pasted text. Values are never shown.`, width),
     ] }
   }
   if (state.confirm === "import") return { title: "Import .env", body: (width) => [
@@ -80,7 +121,7 @@ function work(state: EnvironmentPageState, glyphs: Glyphs, now: number): { title
   if (!state.entries.length) return { title: "Credentials", body: (width) => [
     [{ text: "none yet", fg: "muted" }],
     [],
-    ...prose("a adds one · i imports a .env file · none is ever written", width),
+    ...prose("a adds one · paste NAME=value lines or a whole .env here · i imports a .env file", width),
   ] }
   const nameWidth = Math.max(...state.entries.map((entry) => textWidth(entry.name)))
   return { title: "Credentials", scroll: state.selected, body: (width) => state.entries.map((entry, index) => {
@@ -98,7 +139,7 @@ function work(state: EnvironmentPageState, glyphs: Glyphs, now: number): { title
 
 export function renderEnvironmentPage(state: EnvironmentPageState | undefined, width: number, height: number, options: { glyphs?: Glyphs; now?: number } = {}): Line[] {
   const glyphs = options.glyphs ?? defaultGlyphs()
-  const hints = state?.import && !state.confirm ? IMPORT_HINTS : state?.edit ? EDIT_HINTS : state?.confirm ? CONFIRM_HINTS : HINTS
+  const hints = state?.paste ? PASTE_HINTS : state?.import && !state.confirm ? IMPORT_HINTS : state?.edit ? EDIT_HINTS : state?.confirm ? CONFIRM_HINTS : HINTS
   const inner = Math.max(1, width - 2)
   const count = state?.entries.length ?? 0
   const frame = (body: Line[], status?: { label: string; tone: "warn" | "error" }) => deck({ page: "Environment & privacy", subtitle: "local credentials", summary: `${count} configured`, ...(status ? { status } : {}), body, hints, width, height })
@@ -119,7 +160,8 @@ export function renderEnvironmentPage(state: EnvironmentPageState | undefined, w
   ]
   const notes: Line[] = [
     ...(state.busy ? [clip([{ text: "saving…", fg: "muted" }], inner)] : []),
-    ...(state.error ? prose(state.error, inner, "warning") : []),
+    ...(state.error && !state.paste ? prose(state.error, inner, "warning") : []),
+    ...(state.notice ? prose(state.notice, inner, "success") : []),
   ]
   // Side by side only where the privacy facts fit their column; stacked below that, each at the full width.
   const wide = width >= 110

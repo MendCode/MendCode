@@ -1,5 +1,7 @@
 import { EXPERIMENTAL_FLAGS, FEATURES, OUTPUT_STYLES, TIERS, TIER_BUNDLES, effectiveSettings, featureOn, isFeatureId, isTier, tierRows, type ExperimentalFlag, type OutputStyle } from "@mendcode/protocol/wire"
-import type { ModelChoice, ModelsReport, Settings } from "@mendcode/protocol"
+import { ADVISOR_DEFAULTS } from "@mendcode/protocol/wire"
+import type { AIConfigInspection, ModelChoice, ModelsReport, Settings } from "@mendcode/protocol"
+import { ADVISOR_USAGE, advisorAccount, advisorStatusText } from "../../view/advisor-status"
 import type { TuiProfile } from "../../view/tui-profile"
 import type { AppContext } from "./context"
 import { applyTierBundle } from "./tier"
@@ -70,6 +72,37 @@ export function createQuickSettings(ctx: AppContext, actions: { changeProfile(pa
       requestFrame()
     } else if (!await save({ serviceTier: next ? "fast" : null })) return
     say(next ? `fast mode on · ${reach()}` : "fast mode off", next ? "warning" : "success")
+  }
+
+  /** `/advisor`: show the advisor (choice, whether it applies, this session's consultations and tokens, the account it draws on), set it or turn it off. */
+  async function advisorCommand(args: string) {
+    const word = args.trim()
+    const listed = await input.send({ type: "models.list", ...(state.sessionId ? { sessionId: state.sessionId } : {}) })
+    const models = listed.ok ? (listed.result as ModelsReport).models : []
+    if (word === "" || word === "status") {
+      const inspected = await input.send({ type: "ai.config", directory: input.directory ?? ".", input: { action: "inspect" } } as never)
+      const advisor = inspected.ok ? (inspected.result as AIConfigInspection).advisor : undefined
+      const choice = state.settingsNow.models?.advisor
+      const saved = state.settingsNow.advisor
+      const limits = { checkpoints: saved?.checkpoints ?? ADVISOR_DEFAULTS.checkpoints, maxCallsPerSession: saved?.maxCallsPerSession ?? ADVISOR_DEFAULTS.maxCallsPerSession }
+      say(advisorStatusText({ advisor: advisor ?? (choice ? { model: choice.model, checkpoints: limits.checkpoints, applied: false, reason: "status unavailable" } : "off"), model: models.find((model) => model.id === choice?.model), usage: state.transcript.advisorUsage, maxCallsPerSession: limits.maxCallsPerSession, checkpoints: limits.checkpoints }))
+      return
+    }
+    if (readOnly()) { say("settings are read-only for this terminal", "warning"); return }
+    const settings = await currentSettings()
+    if (word === "off") {
+      const { advisor: _removed, ...rest } = settings.models ?? {}
+      if (!await save({ models: rest })) return
+      say("advisor off", "success")
+      return
+    }
+    const [model, effort, extra] = word.split("#")
+    const info = models.find((candidate) => candidate.id === model)
+    if (!model || extra !== undefined || /\s/.test(word)) { say(ADVISOR_USAGE, "warning"); return }
+    if (!info) { say(`unknown model ${model} · /model lists the models`, "warning"); return }
+    if (effort && !info.efforts.includes(effort as never)) { say(info.efforts.length ? `${model} supports ${info.efforts.join(", ")}` : `${model} has no effort levels`, "warning"); return }
+    if (!await save({ models: { ...settings.models, advisor: { model, ...(effort ? { effort } : {}) } } })) return
+    say(`advisor ${model}${effort ? ` · ${effort}` : ""} · each consultation uses extra tokens · ${advisorAccount(info)}`, "warning")
   }
 
   async function outputStyleCommand(args: string) {
@@ -269,11 +302,12 @@ export function createQuickSettings(ctx: AppContext, actions: { changeProfile(pa
 
   /** True when the text was one of these commands. */
   async function quickCommand(text: string): Promise<boolean> {
-    const match = /^\/(fast|output-style|experimental|tier|debug-config|cd|pwd|graph)(?:\s+(.*))?$/s.exec(text.trim())
+    const match = /^\/(fast|advisor|output-style|experimental|tier|debug-config|cd|pwd|graph)(?:\s+(.*))?$/s.exec(text.trim())
     if (!match) return false
     const args = match[2] ?? ""
     switch (match[1]) {
       case "fast": await fastCommand(args); break
+      case "advisor": await advisorCommand(args); break
       case "output-style": await outputStyleCommand(args); break
       case "experimental": await experimentalCommand(args); break
       case "tier": await tierCommand(args); break

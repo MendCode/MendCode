@@ -87,6 +87,45 @@ seconds. Errors omit upstream bodies. Without an adapter, the panel says “Serv
 `bun scripts/render-frames.ts .agents-frames/B77 --b77 100x30 180x50` renders the dashboard,
 widget picker, region editor, all scopes, scrolled panels and weather states using local fakes.
 
+## Auxiliary calls
+
+Some model calls are not part of any turn you sent: the daemon makes them for you. Each one is counted by role and model, with
+its provider-reported input, output, reasoning and cache tokens and its cost (provider-reported, else `budgets.prices`, else
+unknown), under the session or directory it was made for:
+
+| Role | Call | Where |
+|---|---|---|
+| `title` | a session's generated title (first turn, turn 3, every 15 turns, a requested regeneration) | `session-metadata.ts` |
+| `summary` | a session's summary, written when a reader asks for it | `session-metadata.ts` |
+| `recap` | `/recap` | `session.recap` |
+| `memoryExtractor` | memories extracted after a turn | `memory-extraction.ts` |
+| `memoryAssistant` | the Memory page's assistant and side chat | `memory-assistant.ts` |
+| `dream` / `memoryConsolidator` | a Dream run and its semantic consolidation | `startDream` |
+| `permissionReviewer` | the reviewer of smart-mode approvals (only with the `permissionReviewer` role set) | `permission-reviewer.ts` |
+| `hook` | a `prompt` shell hook | `shell-hooks.ts` |
+| `agentGenerate` | `/agents` create with a generated definition | `agent-generate.ts` |
+| `setup` | the setup helper's answers | `setup.ask` |
+
+`/btw` is not in the list: its side session runs turns, already counted as turn usage.
+
+They are not part of `days`, `models`, the stat tiles or the footer's today count, which stay the turns' own, so nothing is
+counted twice. `usage.query` returns them as `auxiliary` (per role and model, most tokens first, absent when there were none);
+global shows all of them, a project or directory scope those made for its directories. The Models tab adds an "Auxiliary calls"
+panel, and `mendcode usage` and `mendcode stats` add the same rows; `--json` returns the field:
+
+```
+auxiliary (outside turns): 99.8K tokens · 26 calls · cost $0.02 (+25 unpriced)
+  summary · gpt-6-luna                     12 calls       74K in    2,100 out
+  memoryExtractor · gpt-6-luna              4 calls     18.4K in    1,200 out
+  title · gpt-6-luna                        9 calls     3,000 in       90 out
+  hook · claude-haiku-5                      1 call     1,000 in       50 out
+```
+
+A call that fails or reports no usage counts as one call of its role with zero tokens and unknown cost. Recording is
+bookkeeping in every tier: no request, no token and no chrome of its own; the panel appears only on /usage and only when there
+were such calls. The store keeps one row per day, role, model and session (`usage_auxiliary_daily`); rows outlive their session,
+like the global daily sums. The budget ledger ([budgets](budgets.md)) counted these calls before and still does, once.
+
 ## Waste
 
 Tab `7` (Waste) and `mendcode stats --waste` show where a range's tokens were paid for twice and what to change, from

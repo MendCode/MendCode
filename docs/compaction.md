@@ -90,7 +90,7 @@ reason and a link to the full transcript. A second compaction updates the first 
 | Field | Default / behavior |
 | --- | --- |
 | `auto` | `true`; `false` disables automatic checks and the compaction while idle, while `/compact` still works |
-| `prune` | `true`; prune old successful tool outputs only once the context has reached 80 % of the compaction threshold (before that a prune saves nothing and costs an uncached re-read of everything after the first pruned result), and only when it saves over 20k tokens; protect 40k tool tokens, recent turns, skills and errors; original transcript stays intact. `false` never prunes |
+| `prune` | `true`; prune old successful tool outputs only once the context has reached 80 % of the compaction threshold (before that a prune saves nothing and costs an uncached re-read of everything after the first pruned result), and only when it saves over 20k tokens; the set a turn prunes is fixed by its first request (a context that crosses 80 % in the middle of a turn, or a prompt or notice that joins it, prunes nothing more until the next turn, unless the context is within 5 % of the compaction point); protect 40k tool tokens, recent turns, skills and errors; original transcript stays intact. `false` never prunes |
 | `tail_turns` | `2`; recent user turns with their assistant/tool results; `0` preserves none |
 | `preserve_recent_tokens` | 25% of usable input, bounded to 2k–8k; `0` preserves none; oversized turns keep a safe suffix without orphan results |
 | `reserved` | `min(20k, model output limit)`; subtracted from an explicit input limit for the tail budget; otherwise reserve the model output window |

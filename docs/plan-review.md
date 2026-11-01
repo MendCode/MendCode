@@ -14,6 +14,23 @@ and returns to preview. A failed reply keeps the draft. Arrows/PageUp/PageDown s
 `/plan-review` reopens saved decisions; Left/Right selects an older/newer review. Saved decisions are read-only.
 Below 70 columns the panels stack; hints remain in the page header.
 
+## Entering plan mode
+
+Any way of entering plan mode (Shift+Tab, `/plan`, the `plan` agent, a `plan_review` call) is announced by a toast,
+`Plan mode: read-only · <plan model> plans · you review first`, and the footer shows `Plan · plan mode · <plan model>`: the model of the
+`plan` role (the session's model when no role is set), not the one that builds. Leaving it, whichever way, says
+`Plan mode off: build runs on <model>`, with the model asked again from the daemon. Nothing is added to the screen outside plan mode.
+
+While a native call runs in plan mode (and only then) the system prompt ends with one paragraph: the session is read-only, investigate
+with read tools, finish by calling `plan_review` with the complete plan, and do not write the final plan as a plain reply. `plan_submit`,
+`plan_review` and `plan_exit` are listed in the request whatever the tier (`aux_tools` off only defers them outside plan mode).
+
+If a plan-mode turn still ends with a plain-text plan (at least 120 characters and three list items or headings), the host sends it to
+the same review as a `plan_review` call, so the page opens and Enter applies it: the build agent and its model take over and the turn
+continues with the approved text. A short answer or a question is never reviewed. A review the user accepted or closed is not opened
+again for the next plain reply, a rejected one is (feedback, then a revised plan), and at most two plain-text plans are offered per turn.
+Claude Code's `ExitPlanMode` opens the same page; Codex sessions have no plan tool and stay read-only by declining every change.
+
 `settings.set { patch: { planExitAgent: "executor" } }` chooses the default destination (`build` when unset).
 An unknown, hidden, subagent-only or untrusted configured destination falls back to `build`, as in v1.
 An explicit invalid destination is refused without consuming the request. Applying revalidates the destination,

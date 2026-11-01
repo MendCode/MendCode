@@ -117,3 +117,12 @@ test("logLevel persists and filtering follows configuration changes", async () =
   expect(logs.join("\n")).not.toContain("secretvalue123456")
   expect(logs.at(-1)).toBe("visible")
 })
+
+test("the AI status names the configured advisor and permission reviewer, or says they are off, never the main model", () => {
+  const catalog = { selectable: true, list: () => [{ id: "gpt-6-luna", name: "Luna", efforts: [] }, { id: "gpt-6.1-sol", name: "Sol", efforts: ["high" as const] }, { id: "claude-opus", name: "Claude Opus", engine: "claude" as const, efforts: [] }], defaults: { model: "gpt-6-luna" } }
+  const input = { dir: "/tmp/test-data", directory: "/tmp/project", socketPath: "/tmp/test-data/mendd.sock", engine: "native", catalog, which: () => null, environment: {} }
+  const roles = (settings: object) => (systemReport("ai-status", { ...input, settings } as never).facts.roles as Record<string, { model: string | null; off?: boolean; effort?: string }>)
+  expect(roles({ models: { main: { model: "gpt-6-luna" } } })).toMatchObject({ advisor: { model: null, off: true }, permissionReviewer: { model: null, off: true }, main: { model: "gpt-6-luna" } })
+  expect(roles({ models: { main: { model: "gpt-6-luna" }, advisor: { model: "gpt-6.1-sol", effort: "high" }, permissionReviewer: { model: "gpt-6.1-sol" } } })).toMatchObject({ advisor: { model: "gpt-6.1-sol", effort: "high" }, permissionReviewer: { model: "gpt-6.1-sol" } })
+  expect(roles({ models: { advisor: { model: "claude-opus" } } }).advisor).toMatchObject({ model: "claude-opus" })
+})

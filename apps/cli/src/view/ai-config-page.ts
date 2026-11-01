@@ -1,6 +1,7 @@
 import type { AIConfigApplied, AIConfigInspection, AIConfigPlan, AIConfigValidation } from "@mendcode/protocol"
 import type { Line } from "../ui/theme"
 import { appearancePage } from "./appearance-layout"
+import { advisorSummary } from "./advisor-status"
 import { panelGrid, type GridPanel } from "./deck"
 import { wrapSpans } from "./markdown"
 
@@ -31,7 +32,7 @@ export function renderAIConfigPage(input: { state: AIConfigPageState; readOnly: 
   const roles: GridPanel = { title: "Configuration", body: (w) => [
     ...rows(Object.entries(state.inspection?.roles ?? {}).map(([role, choice]) => `${role}: ${choice?.model}${choice?.effort ? ` · ${choice.effort}` : ""}`), w),
     ...(!Object.keys(state.inspection?.roles ?? {}).length ? rows(["No role overrides"], w, "muted") : []),
-    ...rows([`Recipes: ${state.inspection?.configSources.length ?? 0}`, `Advisor: ${state.inspection?.advisor ?? "off"}`, `Autocompact: ${state.inspection?.effective.compactAtTokens ?? "engine default"}`], w, "muted"),
+    ...rows([`Recipes: ${state.inspection?.configSources.length ?? 0}`, `Advisor: ${advisorSummary(state.inspection?.advisor)}`, `Autocompact: ${state.inspection?.effective.compactAtTokens ?? "engine default"}`], w, "muted"),
   ], scroll: state.scroll }
   const proposal: GridPanel = { title: state.plan ? `Preview · ${state.plan.target.scope}` : "Preview", weight: 2, body: (w) => state.plan ? [
     ...rows(state.plan.alternatives.map((item) => `${item.id === state.plan!.selectedAlternative ? "›" : " "} ${item.id} · ${item.primary.model} · ${item.feasibility === "blocked" ? `blocked: ${item.reason}` : item.estimatedMaxCostUsd === null ? "cost unknown" : `$${item.estimatedMaxCostUsd.toFixed(4)} / 32K estimate`}`), w),

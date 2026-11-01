@@ -505,11 +505,11 @@ export type OverlayModel = Readonly<{
 /**
  * The rows around the prompt that are not a card: the working row, the find and prompt-search bars, the attachment chips,
  * the IDE selection, voice, vim and daemon-notice rows, the shortcut overlay, the `@` mention popup, the running sub-agents strip
- * (`agents`) and the session's background commands and agents over the prompt (`background`). A bar is drawn
- * only while the terminal shows it; `rows` is what the built-in drew.
+ * (`agents`), the session's background commands and agents over the prompt (`background`) and the visible plan's progress
+ * row (`plan`). A bar is drawn only while the terminal shows it; `rows` is what the built-in drew.
  */
 export type BarModel = Readonly<{
-  variant: "working" | "find" | "search" | "attachments" | "ide" | "voice" | "vim" | "daemon" | "shortcuts" | "mention" | "agents" | "background"
+  variant: "working" | "find" | "search" | "attachments" | "ide" | "voice" | "vim" | "daemon" | "shortcuts" | "mention" | "agents" | "background" | "plan"
   rows: readonly ViewLine[]
 }>
 

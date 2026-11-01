@@ -15,10 +15,12 @@ import { footerRowBudget, renderFooterRows } from "../../view/footer-rows"
 import { partsLine } from "../../view/stat-parts"
 import { statusLineSpans } from "../../view/status-line"
 import { modelLabel, modelWithEffort, servedByProvider, sessionModelId } from "../../view/model-label"
+import { planModelId } from "../../view/plan-mode-notice"
 import { rightBarCells } from "../../view/right-bar"
 import { maskSecretMarkers } from "../../view/secret-markers"
 import { topbarAnimates, topbarContextArea } from "../../view/topbar"
-import { parseTodoText, renderDock, DOCK_BODY_ROWS, type DockJob } from "../../view/dock"
+import { renderDock, DOCK_BODY_ROWS, type DockJob } from "../../view/dock"
+import { latestTodos } from "../../view/plan-row"
 import { META_MARGIN, PROMPT_MARGIN, renderStatusRow } from "../../view/prompt-chrome"
 import { statusItems } from "../../view/status-items"
 import type { SidebarMode, TuiProfile } from "../../view/tui-profile"
@@ -92,11 +94,8 @@ export function createChrome(ctx: AppContext, actions: {
     return [{ text: " ".repeat(PROMPT_MARGIN) }, ...rendered]
   }
 
-  /** The newest `todo` tool result's checklist (the dock and the sidebar show it). */
-  function currentTodos() {
-    const todo = state.transcript.blocks().findLast((block) => block.kind === "tool_call" && block.title?.startsWith("todo"))
-    return todo ? parseTodoText(todo.text) : []
-  }
+  /** The session's current list (`latestTodos`): the dock, the progress row and the sidebar show it. */
+  const currentTodos = () => latestTodos(state.transcript.blocks())
 
   /** This session's background shell tasks, running ones first, for the dock's Jobs panel. */
   function dockJobs(): DockJob[] {
@@ -258,7 +257,8 @@ export function createChrome(ctx: AppContext, actions: {
 
   /** What the footer slot shows (docs/views.md): everything the first row is built from, as plain data. */
   function footerModel(width: number, provided?: ReturnType<typeof footerSlots>, detailRow = false): { model: FooterModel; slots: ReturnType<typeof footerSlots>; rows: Line[] | undefined } {
-    const model = sessionModelId(state.effectiveModel?.model, usageInForce(state)?.model, state.modelReport)
+    // In plan mode the footer names the model that plans (the `plan` role), not the one that builds.
+    const model = (state.transcript.permissionMode === "plan" ? planModelId(state.modelReport, undefined) : undefined) ?? sessionModelId(state.effectiveModel?.model, usageInForce(state)?.model, state.modelReport)
     const slots = state.shellMode ? undefined : provided ?? footerSlots(width - META_MARGIN - PROMPT_MARGIN)
     const name = state.transcript.permissionMode === "plan" ? "plan" : state.agentReport?.current ?? "build"
     // The model's own provider, else the engine that runs it (a Claude Code model is not served by the native engine the daemon started with).

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createIdFactory, type PermissionMode, type SessionId } from "@mendcode/protocol"
 import type { EngineEvent, EnginePort, EngineRequest, EngineResolution, TurnInput } from "@mendcode/kernel"
-import { ACP_MODEL_PREFIX, acpAgentKey, createAcpAgents, createAcpEngine, parseAcpAgents, withAcpEngine, type AcpAgentConfig, type AcpModelOption } from "../src"
+import { ACP_MODEL_PREFIX, acpAgentKey, createAcpAgents, createAcpEngine, createUpdateMapper, parseAcpAgents, planCard, withAcpEngine, type AcpAgentConfig, type AcpModelOption } from "../src"
 import { spawnAcp } from "../src/transport"
 
 const ids = createIdFactory()
@@ -158,12 +158,34 @@ describe("a normal turn", () => {
     expect(completed[0].text).toBe("@@ -1,1 +1,1 @@\n-const a = 1\n+const a = 2")
     expect(completed[1].text).toContain('"ok": true')
 
+    // Each plan the agent sends is a finished list card at once (MendCode's `todo d/n`), so the progress row follows it during the turn.
     const plan = turnInput({ text: "plan" })
     await engine.runTurn(plan.input)
-    const planStarted = plan.events.find((event) => event.type === "item.started" && event.meta?.tool === "plan") as any
-    expect(planStarted).toBeDefined()
-    const planDone = plan.events.find((event) => event.type === "item.completed" && event.itemId === planStarted.itemId) as any
-    expect(planDone.text).toBe("[x] write code\n[~] test it")
+    const planCards = plan.events.filter((event) => event.type === "item.started" && event.kind === "tool_call") as any[]
+    expect(planCards.map((event) => event.meta?.tool)).toEqual(["todo 0/2", "todo 1/2"])
+    const planText = (itemId: string) => (plan.events.find((event) => event.type === "item.completed" && event.itemId === itemId) as any)?.text
+    expect(planText(planCards[0].itemId)).toBe("[~] (high) write code\n[ ] (medium) test it")
+    expect(planText(planCards[1].itemId)).toBe("[x] (high) write code\n[~] (medium) test it")
+    // The first card ends before the second starts: no plan item waits for the end of the turn.
+    const order = plan.events.map((event) => `${event.type}:${"itemId" in event ? event.itemId : ""}`)
+    expect(order.indexOf(`item.completed:${planCards[0].itemId}`)).toBeLessThan(order.indexOf(`item.started:${planCards[1].itemId}`))
+  })
+
+  test("a plan sent again unchanged adds no card; an empty plan adds none first and clears the list after one", () => {
+    const events: any[] = []
+    let n = 0
+    const mapper = createUpdateMapper({ newItemId: () => `item-${++n}` as never, emit: (event) => void events.push(event) })
+    const entries = [{ content: "one", status: "in_progress", priority: "low" }]
+    mapper.accept({ sessionUpdate: "plan", entries: [] })
+    mapper.accept({ sessionUpdate: "plan", entries })
+    mapper.accept({ sessionUpdate: "plan", entries })
+    mapper.accept({ sessionUpdate: "plan", entries: [] })
+    mapper.finish("ok")
+    expect(events.filter((event) => event.type === "item.started").map((event) => event.meta?.tool)).toEqual(["todo 0/1", "todo 0/0"])
+    expect(events.filter((event) => event.type === "item.completed").map((event) => event.text)).toEqual(["[~] (low) one", ""])
+    expect(planCard([{ content: "  ", status: "pending" }])).toEqual({ title: "todo 0/0", text: "" })
+    expect(planCard("not a list")).toBeUndefined()
+    expect(planCard([{ content: "a", status: "completed" }, { content: "b", status: "pending" }])).toEqual({ title: "todo 1/2", text: "[x] a\n[ ] b" })
   })
 
   test("a permission-gated tool call completes with the agent's own output", async () => {

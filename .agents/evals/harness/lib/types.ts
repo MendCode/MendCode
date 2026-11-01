@@ -70,6 +70,8 @@ export type AdapterOptions = {
   daemonCommand?: string[]
   /** Mendcode: the tier the data dir runs at, with that tier's prompt mode. Default balanced (prompt mode focus). */
   tier?: "minimalist" | "balanced" | "full"
+  /** Mendcode: the advisor role for the run, `<model>` or `<model>#<effort>` (docs/advisor.md); none by default. */
+  advisor?: string
   /** Mendcode: daemon engine. `native` for real runs; `faux` only for kit tests (no provider, no model flag). */
   engine?: "native" | "faux" | "claude"
   /** Claude Code executable (the `claude-code` adapter and the mendcode adapter's `claude` engine). Default `claude` from PATH. */

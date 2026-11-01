@@ -1,6 +1,6 @@
 import { defineTool } from "@mendcode/tools"
 import { z } from "zod"
-import { QuestionBatch } from "@mendcode/protocol"
+import { QuestionBatch, todoListCard, todoListStatus, type TodoListItem } from "@mendcode/protocol"
 
 /** `question`: ask the user when a decision is genuinely theirs; the turn waits for the answer. */
 export const questionTool = defineTool({
@@ -38,15 +38,14 @@ export const questionTool = defineTool({
   },
 })
 
-const TODO_MARK = { pending: "[ ]", in_progress: "[~]", done: "[x]", completed: "[x]", cancelled: "[-]" } as const
-
 /**
- * `todo`: the agent's visible plan for multi-step work. Each call replaces the whole list; the card
- * shows it so the user can follow progress.
+ * `todo`: the agent's visible plan for multi-step work. Each call replaces the whole list; the terminal pins its progress above the
+ * prompt (feature `visible_plan`) and the dock and the card show the whole list. Balanced and up: minimalist has no such tool at all.
  */
 export const todoTool = defineTool({
   name: "todo",
-  description: "Write your task list for multi-step work (replaces the previous list; [] clears it). Set priority high, medium or low. Keep one item in_progress at a time; mark finished items done and abandoned items cancelled.",
+  tier: "balanced",
+  description: "Your visible plan: the user sees it pinned above the prompt as live progress. Call it at the start of any task with 3+ steps or several requests, before the first edit or command. Send the whole list each time (it replaces the previous; [] clears). Keep exactly one item in_progress; mark an item done as soon as it is finished, cancelled if dropped. Skip it for one-step or conversational requests. Do not repeat the list in your reply.",
   permission: "read",
   args: z.object({
     items: z
@@ -54,13 +53,8 @@ export const todoTool = defineTool({
       .max(50),
   }),
   async execute({ items }) {
-    const done = items.filter((item) => item.status === "done" || item.status === "completed").length
-    return {
-      output: items.map((item) => `${TODO_MARK[item.status]} ${item.priority ? `(${item.priority}) ` : ""}${item.text}`).join("\n"),
-      truncated: false,
-      title: `todo ${done}/${items.length}`,
-      isError: false,
-      meta: { done, total: items.length },
-    }
+    const list = items.map((item): TodoListItem => ({ text: item.text, status: todoListStatus(item.status), ...(item.priority ? { priority: item.priority } : {}) }))
+    const card = todoListCard(list)
+    return { output: card.text, truncated: false, title: card.title, isError: false, meta: { done: list.filter((item) => item.status === "done").length, total: items.length } }
   },
 })

@@ -6,8 +6,8 @@ import { createNativeEngine, memoryHistory } from "../src"
 import { AUX_TOOLS, FIND_TOOLS, impliedTools, isPrimaryIn, LEGACY_CATALOG, activeToolNames, type CatalogMode } from "../src/tool-discovery"
 import { callTool, scriptedProvider, stop, turn } from "./harness"
 
-const BALANCED: CatalogMode = { lean: true, planTools: false, aux: false, find: true, ui: true }
-const MINIMALIST: CatalogMode = { lean: true, planTools: false, aux: false, find: false, ui: false }
+const BALANCED: CatalogMode = { lean: true, planTools: false, aux: false, find: true, ui: true, visiblePlan: true }
+const MINIMALIST: CatalogMode = { lean: true, planTools: false, aux: false, find: false, ui: false, visiblePlan: false }
 
 const fakeTool = (name: string, permission: "read" | "write" = "read") => defineTool({
   name, description: `tool ${name}`, permission, args: z.object({}),
@@ -34,7 +34,7 @@ describe("lean tool catalogue (features lean_tools and plan_tools)", () => {
       await lean.engine.runTurn(turn({ text: "go" }).input)
       const names = namesOf(lean.requests[0]!)
       expect(names).toEqual(expect.arrayContaining(["read", "shell", "edit", "tool_search"]))
-      for (const deferred of ["workflow_start", "loop", "worktree", "memory", "notebook_edit", "ai_config", "todo", "update_goal"]) expect(names).not.toContain(deferred)
+      for (const deferred of ["workflow_start", "loop", "worktree", "memory", "notebook_edit", "ai_config", "update_goal"]) expect(names).not.toContain(deferred)
     }
   })
 
@@ -52,13 +52,17 @@ describe("lean tool catalogue (features lean_tools and plan_tools)", () => {
     expect(await run({ tier: "minimalist", features: { ui_tool: true } })).toContain("customize_ui")
   })
 
-  test("plan_tools: no tier lists todo and the goal tools; every tier defers them until the user turns the feature on", async () => {
+  test("plan_tools: every tier defers the goal tools until the user turns the feature on; visible_plan lists todo in balanced and full", async () => {
     for (const tier of ["minimalist", "balanced", "full"] as const) {
       const lean = scenario([stop("a")], { tier })
       await lean.engine.runTurn(turn({ text: "go" }).input)
-      expect(namesOf(lean.requests[0]!)).not.toContain("todo")
+      if (tier === "minimalist") expect(namesOf(lean.requests[0]!)).not.toContain("todo")
+      else expect(namesOf(lean.requests[0]!)).toContain("todo")
       expect(namesOf(lean.requests[0]!)).not.toContain("update_goal")
     }
+    const planOff = scenario([stop("a")], { tier: "balanced", features: { visible_plan: false } })
+    await planOff.engine.runTurn(turn({ text: "go" }).input)
+    expect(namesOf(planOff.requests[0]!)).not.toContain("todo")
     const fullWithPlan = scenario([stop("a")], { tier: "full", features: { plan_tools: true } })
     await fullWithPlan.engine.runTurn(turn({ text: "go" }).input)
     expect(namesOf(fullWithPlan.requests[0]!)).toEqual(expect.arrayContaining(["todo", "update_goal"]))
@@ -100,9 +104,9 @@ describe("lean tool catalogue (features lean_tools and plan_tools)", () => {
   test("each arm reverts by itself: features.lean_tools false, features.plan_tools true, experimental.tool_discovery false", async () => {
     const noLean = scenario([stop("a")], { tier: "balanced", features: { lean_tools: false } })
     await noLean.engine.runTurn(turn({ text: "go" }).input)
-    // The plan tools are still deferred (they have their own switch); the heavy tools are back in the primary set of the legacy discovery.
-    expect(namesOf(noLean.requests[0]!)).toEqual(expect.arrayContaining(["workflow_start", "loop", "memory"]))
-    expect(namesOf(noLean.requests[0]!)).not.toContain("todo")
+    // The goal tools are still deferred (they have their own switch), `todo` is listed by the visible plan; the heavy tools are back in the primary set of the legacy discovery.
+    expect(namesOf(noLean.requests[0]!)).toEqual(expect.arrayContaining(["workflow_start", "loop", "memory", "todo"]))
+    expect(namesOf(noLean.requests[0]!)).not.toContain("update_goal")
     const whole = scenario([stop("a")], { tier: "balanced", experimental: { tool_discovery: false } })
     await whole.engine.runTurn(turn({ text: "go" }).input)
     expect(namesOf(whole.requests[0]!)).toEqual(expect.arrayContaining(["workflow_start", "todo", "ai_config"]))
@@ -119,11 +123,11 @@ describe("lean tool catalogue (features lean_tools and plan_tools)", () => {
   })
 
   test("a deferred tool the model calls directly is refused once as unknown, and is listed from the next request on", async () => {
-    const s = scenario([callTool("todo", {}), stop("done")], { tier: "balanced" })
+    const s = scenario([callTool("loop", {}), stop("done")], { tier: "balanced" })
     await s.engine.runTurn(turn({ text: "go" }).input)
-    expect(namesOf(s.requests[0]!)).not.toContain("todo")
-    expect(s.requests[1]!.messages.some((message) => message.role === "tool" && message.output === "unknown tool: todo")).toBe(true)
-    expect(namesOf(s.requests[1]!)).toContain("todo")
+    expect(namesOf(s.requests[0]!)).not.toContain("loop")
+    expect(s.requests[1]!.messages.some((message) => message.role === "tool" && message.output === "unknown tool: loop")).toBe(true)
+    expect(namesOf(s.requests[1]!)).toContain("loop")
   })
 
   test("a folder the code graph indexes lists its lookups first-hand; a skipped folder leaves them out and keeps sub-agents", async () => {
@@ -161,8 +165,12 @@ describe("lean tool catalogue (features lean_tools and plan_tools)", () => {
     expect(isPrimaryIn("workflow_start", LEGACY_CATALOG)).toBe(true)
     expect(isPrimaryIn("ls", LEGACY_CATALOG)).toBe(true)
     expect(isPrimaryIn("workflow_start", { ...BALANCED, planTools: true, aux: true })).toBe(false)
-    expect(isPrimaryIn("todo", { ...LEGACY_CATALOG, planTools: false })).toBe(false)
-    expect(isPrimaryIn("todo", { ...BALANCED, planTools: true })).toBe(true)
+    expect(isPrimaryIn("todo", { ...LEGACY_CATALOG, planTools: false, visiblePlan: false })).toBe(false)
+    expect(isPrimaryIn("todo", { ...BALANCED, planTools: true, visiblePlan: false })).toBe(true)
+    // The visible plan lists `todo` by itself; the goal tools still follow `plan_tools`.
+    expect(isPrimaryIn("todo", BALANCED)).toBe(true)
+    expect(isPrimaryIn("todo", MINIMALIST)).toBe(false)
+    expect(isPrimaryIn("update_goal", BALANCED)).toBe(false)
     expect(isPrimaryIn("apply_patch", MINIMALIST)).toBe(true)
     expect(isPrimaryIn("plan_submit", { ...BALANCED, aux: true })).toBe(true)
     expect(isPrimaryIn("plan_submit", BALANCED)).toBe(false)

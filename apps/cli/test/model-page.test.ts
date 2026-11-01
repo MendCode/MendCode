@@ -88,6 +88,9 @@ describe("renderModelPage", () => {
     expect(out.find((l) => l.includes("this session"))).toContain("‹ GPT-6-Sol › high")
     expect(out.find((l) => l.includes("main "))).toContain("‹ default · GPT-6-Luna · low ›")
     expect(out.find((l) => l.includes("compaction"))).toContain("same as main")
+    // The advisor and the permission reviewer have no fallback: unset means off, not the main model.
+    expect(out.find((l) => l.includes("advisor"))).toContain("no advisor")
+    expect(out.find((l) => l.includes("permissionReviewer"))).toContain("no reviewer runs")
     expect(out.some((l) => l.includes("GPT-6-Sol") && l.includes("xhigh"))).toBe(true) // models panel shows efforts
     expect(out.some((l) => l.includes("GPT-6-Sol") && l.includes("gpt-6-sol"))).toBe(true) // the exact id stays beside the name where models are picked
   })

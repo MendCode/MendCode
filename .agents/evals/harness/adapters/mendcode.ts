@@ -25,6 +25,13 @@ export function nativeModelRef(model: string): string {
   return model.includes("/") ? model : `chatgpt/${model}`
 }
 
+/** `model` or `model#effort` (as `/advisor` takes it) as the `advisor` role's choice. */
+export function advisorChoice(spec: string): { model: string; effort?: string } {
+  const [model, effort, extra] = spec.split("#")
+  if (!model || extra !== undefined) throw new Error(`[MENDCODE]: --advisor takes <model> or <model>#<effort>, not "${spec}"`)
+  return { model, ...(effort ? { effort } : {}) }
+}
+
 /** The model selection of a native `mendcode run`: `--effort` sets the reasoning effort (`--variant` would name a provider variant), and the CLI refuses a level the model does not list. */
 export function nativeRunArgs(model: string, effort: string): string[] {
   return ["--model", nativeModelRef(model), "--effort", effort]
@@ -76,7 +83,7 @@ export function createMendcodeAdapter(options: AdapterOptions): HarnessAdapter {
   const cli = options.mendcodeCommand ?? [process.execPath, path.join(REPO_ROOT, "apps/cli/src/entry.ts")]
   const daemonCommand = options.daemonCommand ?? [process.execPath, path.join(REPO_ROOT, "packages/daemon/src/main.ts")]
   // `--tier` runs the data dir as `/tier <name>` leaves it: that tier and its bundle's prompt mode. Without it, the balanced focus arm.
-  const settings = { ...MENDCODE_EVAL_SETTINGS, tier: options.tier ?? MENDCODE_EVAL_SETTINGS.tier }
+  const settings = { ...MENDCODE_EVAL_SETTINGS, tier: options.tier ?? MENDCODE_EVAL_SETTINGS.tier, ...(options.advisor ? { models: { advisor: advisorChoice(options.advisor) } } : {}) }
   const promptMode = options.tier ? { mode: TIER_BUNDLES[options.tier].promptMode, focus: MENDCODE_PROMPT_MODE.focus } : MENDCODE_PROMPT_MODE
   let state: State | undefined
   let daemon: ChildProcess | undefined
@@ -197,6 +204,11 @@ export function createMendcodeAdapter(options: AdapterOptions): HarnessAdapter {
         if (parsed.turnStatus === "none" && !result.timedOut) notes.push("no terminal turn event in the stream")
         if (parsed.retries > 0) notes.push(`${parsed.retries} provider retries`)
         if (parsed.usage.inputTokens === null) notes.push("no usage.recorded event: token metrics unavailable")
+        if (options.advisor) {
+          const { calls, byTrigger, inputTokens, outputTokens } = parsed.advisor
+          notes.push(`advisor ${options.advisor}: ${calls} consultations ${JSON.stringify(byTrigger)}, ${inputTokens} in / ${outputTokens} out tokens (inside the totals)`)
+          writeFileSync(path.join(s.context.runDir, "advisor.json"), `${JSON.stringify({ advisor: options.advisor, ...parsed.advisor }, null, 2)}\n`)
+        }
         return { exitCode: result.exitCode, timedOut: result.timedOut, transcriptPath: events, usage: parsed.usage, agentMs: result.durationMs, notes }
       } catch (error) {
         notes.push(error instanceof Error ? error.message : String(error))

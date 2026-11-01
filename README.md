@@ -388,6 +388,8 @@ Generated from [tier-data.ts](packages/protocol/src/tier-data.ts), including eve
 | [Claude Code compacts at MendCode's point](docs/claude-code.md) (`claude_compact`) | — | Included | Included | /tier claude_compact off · compactAtTokens |
 | [Cache countdown (footer)](docs/layout.md) (`cache_countdown`) | — | — | Opt-in | /footer +warm |
 | [One tree: sessions sharing a checkout](docs/one-tree.md) (`one_tree`) | — | Included | Included | /tier one_tree off |
+| [Advisor model](docs/advisor.md) (`advisor`) | — | Opt-in | Opt-in | /advisor &lt;model&gt; |
+| [Visible plan (todo and the progress row)](docs/layout.md) (`visible_plan`) | — | Included | Included | /tier visible_plan off |
 <!-- tiers:end -->
 
 ## Measurements

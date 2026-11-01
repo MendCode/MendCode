@@ -59,8 +59,8 @@ export function parseReview(text: string): { verdict: "allow" | "ask" | "deny"; 
 }
 
 export function createPermissionReviewer(options: {
-  /** One model call: the reviewer's system prompt and the request as text; resolves to the reply text. Must stop when `signal` aborts. */
-  complete(input: { system: string; prompt: string; signal: AbortSignal; model: ModelChoice }): Promise<string>
+  /** One model call: the reviewer's system prompt and the request as text; resolves to the reply text. Must stop when `signal` aborts. `sessionId` is the session asking, for usage. */
+  complete(input: { system: string; prompt: string; signal: AbortSignal; model: ModelChoice; sessionId: SessionId }): Promise<string>
   /** The reviewer model for a session; undefined means no reviewer (the default). */
   modelFor(sessionId: SessionId): ModelChoice | undefined
   timeoutMs?: number
@@ -91,7 +91,7 @@ export function createPermissionReviewer(options: {
         "</call>",
       ].join("\n")
       try {
-        const reply = await Promise.race([options.complete({ system: REVIEWER_SYSTEM, prompt, signal: controller.signal, model }), timedOut])
+        const reply = await Promise.race([options.complete({ system: REVIEWER_SYSTEM, prompt, signal: controller.signal, model, sessionId: request.sessionId }), timedOut])
         if (reply === "timeout") return { verdict: "ask", reason: `the reviewer did not answer within ${Math.round(timeoutMs / 1000)} s`, fallback: "timeout" }
         const parsed = parseReview(reply)
         return parsed ?? { verdict: "ask", reason: "the reviewer's answer could not be read", fallback: "unparsable" }

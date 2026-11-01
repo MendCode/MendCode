@@ -23,6 +23,7 @@ import {
   type QuotaDraft,
 } from "./protocol"
 import { spawnClaude, type ClaudeTransport } from "./transport"
+import { createClaudePlan, type ClaudePlan } from "./plan"
 
 /** A session's `claude` process is stopped after this long without a turn; the next turn resumes it. */
 export const DEFAULT_PROCESS_IDLE_MS = 10 * 60_000
@@ -34,8 +35,11 @@ export const CANCEL_GRACE_MS = 3_000
 /** The longest the rest of a cancelled turn is waited for; a `result` that never came stops being waited for here. */
 const DRAIN_LIMIT_MS = 60_000
 
-/** `fast`: Claude Code's fast mode (`/fast` on a model that has it), fixed when the process starts like the effort. */
-export type ClaudeModelChoice = { model?: string | undefined; effort?: ReasoningEffort | undefined; fast?: boolean | undefined }
+/**
+ * `fast`: Claude Code's fast mode (`/fast` on a model that has it), fixed when the process starts like the effort.
+ * `advisor`: a Claude model alias for Claude Code's own advisor tool (`--advisor`, docs/advisor.md).
+ */
+export type ClaudeModelChoice = { model?: string | undefined; effort?: ReasoningEffort | undefined; fast?: boolean | undefined; advisor?: string | undefined }
 
 type ActiveTurn = {
   input: TurnInput
@@ -112,6 +116,8 @@ type Connection = {
   envKey: string
   /** Ended turns whose background agents still run: their records go on to that turn's mapper, and from it to the daemon. */
   agentTurns: Array<ReturnType<typeof createTurnMapper>>
+  /** The tasks TaskCreate and TaskUpdate keep in this process, so every turn's card shows the whole list. */
+  plan: ClaudePlan
 }
 
 /** The uuid a turn's message carries into Claude Code, the same for the same turn in every process: an undo names it to `rewind_conversation`. */
@@ -121,7 +127,7 @@ export function messageUuid(turnId: string): string {
 }
 
 function sameModel(a: ClaudeModelChoice, b: ClaudeModelChoice) {
-  return (a.model ?? "") === (b.model ?? "") && (a.effort ?? "") === (b.effort ?? "") && !a.fast === !b.fast
+  return (a.model ?? "") === (b.model ?? "") && (a.effort ?? "") === (b.effort ?? "") && !a.fast === !b.fast && (a.advisor ?? "") === (b.advisor ?? "")
 }
 
 const ENGINE_FLAGGED_REASON = "Claude Code asks about this call even though the session is in full access."
@@ -293,8 +299,13 @@ export function createClaudeEngine(options: {
         return allow({ ...args, answers })
       }
       if (name === "ExitPlanMode") {
-        const answer = await ask({ kind: "approval", title: "Plan ready", detail: String(args.plan ?? "").slice(0, MAX_TEXT), tool: name, permission: "write" })
-        if (answer.kind !== "approve") return deny(answer.kind === "deny" && answer.reason ? `The user wants changes to the plan: ${answer.reason}` : "The user did not approve the plan.")
+        // The same review page the native engine opens (docs/plan-review.md); Claude Code leaves plan mode on its own, so only apply continues.
+        const markdown = String(args.plan ?? "").trim().slice(0, 30_000) || "(empty plan)"
+        const answer = await ask({ kind: "approval", title: "Review plan", detail: "", tool: "plan_review", permission: "write", planReview: { markdown, phase: "implementation", destination: "build" } })
+        const reply = answer.kind === "plan_review" ? answer : answer.kind === "approve" ? { action: "apply" as const } : answer.kind === "deny" ? { action: "reject" as const, reason: answer.reason } : { action: "close" as const }
+        if (reply.action === "accept" || reply.action === "close") return deny("The user did not approve the plan.")
+        if (reply.action === "edit") return deny(`The user edited the plan; revise it from this Markdown and submit it again:\n\n${"markdown" in reply && reply.markdown ? reply.markdown : markdown}`)
+        if (reply.action === "reject") return deny(reply.reason ? `The user wants changes to the plan: ${reply.reason}` : "The user did not approve the plan.")
         turn.input.setPermissionMode("ask")
         connection.permission = "default"
         return allow()
@@ -494,7 +505,7 @@ export function createClaudeEngine(options: {
     const extra = { ...options.env?.(sessionId, model), ...environment?.values }
     const env = Object.keys(extra).length ? { env: extra } : {}
     const transport = options.transportFactory?.({ args, cwd, ...env }) ?? spawnClaude({ bin: options.bin ?? "claude", args, cwd, ...env })
-    const connection: Connection = { sessionId, transport, model, permission: claudePermissionMode(permission), pending: new Map(), ready: Promise.resolve(), closed: false, background: 0, agentTurns: [], envKey: environmentKey(environment) }
+    const connection: Connection = { sessionId, transport, model, permission: claudePermissionMode(permission), pending: new Map(), ready: Promise.resolve(), closed: false, background: 0, agentTurns: [], envKey: environmentKey(environment), plan: createClaudePlan() }
     connections.set(sessionId, connection)
     void (async () => {
       try {
@@ -636,7 +647,7 @@ export function createClaudeEngine(options: {
         let sink: (event: EngineEvent) => void = input.emit
         const turn: ActiveTurn = {
           input,
-          mapper: createTurnMapper({ newItemId: input.newItemId, emit: (event) => sink(event), model: connection.model.model ?? "claude", ownTools: options.ownTools, onTool: (name, args) => { if (changesMcpServers(name, args)) connection.reload = true } }),
+          mapper: createTurnMapper({ newItemId: input.newItemId, emit: (event) => sink(event), model: connection.model.model ?? "claude", ownTools: options.ownTools, plan: connection.plan, onTool: (name, args) => { if (changesMcpServers(name, args)) connection.reload = true } }),
           waitingUser: false,
           interrupted: false,
           steered: new Set(),

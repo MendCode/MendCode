@@ -12,6 +12,8 @@
  */
 export const MENDCODE_EVAL_SETTINGS = {
   tier: "balanced",
+  /** A data dir that was never set up reads no Codex login and lists one model (`gpt-6-luna`); this is an installed MendCode's state, so the linked login is used read-only and the account's models are listed. */
+  onboarded: true,
   defaultPermission: "full",
   sandbox: { mode: "workspace-write", network: "off" },
   permission: { external_directory: "deny" },
