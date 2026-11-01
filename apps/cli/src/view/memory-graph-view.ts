@@ -1,13 +1,15 @@
 import type { MemoryEntry, MemoryGraphHealth, MemoryGraphReport, MemoryLink, MemoryLinkKind } from "@mendcode/protocol"
 import type { ColorName, Line } from "../ui/theme"
-import { layoutGraph, nearestNode, renderGraph, type GraphEdge, type GraphGlyphs, type GraphNode, type Layout } from "./ascii-graph"
-import { beside, clip, lineWidth, spread } from "./deck"
+import { GRAPH_GLYPHS_ASCII, layoutGraph, nearestNode, renderGraph, type EdgeStyle, type GraphEdge, type GraphGlyphs, type GraphNode, type Layout } from "./ascii-graph"
+import { clip, columns, fit, lineWidth, panelGrid, spread } from "./deck"
 import { truncateEnd } from "./session-list"
 import { wrap } from "./wrap"
 
 /**
- * The Graph tab body of /memory: a health line, the graph canvas (radial ego view around the selection, or the
- * whole graph) and a detail panel for the selected memory. Pure: the page owns the tab strip and footer.
+ * The Graph tab body of /memory, in the page standard of /changes: a "Graph" panel (health line, the canvas, a legend)
+ * beside a "Memory" panel for the selected memory, each a titled bordered box. The canvas is a radial ego view around
+ * the selection, or the whole graph; edges are braille lines (sub-cell resolution, dotted/solid/dashed by link kind)
+ * and the dots take the color of their category. Pure: the page owns the header, tab strip and footer.
  * In ego mode the layout is centered on the selection, so an arrow key walks along the links and re-centers.
  */
 
@@ -25,8 +27,18 @@ export type MemoryGraphAction = { type: "none" } | { type: "close" } | { type: "
 /** Footer hints for the page to show while the Graph tab is active. */
 export const MEMORY_GRAPH_HINTS = "arrows move · enter focus/all · m mark · c link to mark · x unlink · tab tabs · esc back"
 
-const WIDE_WIDTH = 100
-const GUTTER = 3
+/** Side by side from this width; stacked (graph over memory) from `STACK_WIDTH`; one panel under that. */
+const SPLIT_WIDTH = 90
+const SPLIT_HEIGHT = 9
+const STACK_WIDTH = 50
+const STACK_HEIGHT = 24
+const SINGLE_WIDTH = 30
+const SINGLE_HEIGHT = 7
+/** Cells of a panel taken by its border and side padding. */
+const SIDES = 4
+/** Rows of a panel taken by its border and padding (the boxed look); a compact panel keeps the two border rows only. */
+const PADDED = 4
+const COMPACT = 2
 const NONE: MemoryGraphAction = { type: "none" }
 const DIRECTIONS: Record<string, "up" | "down" | "left" | "right"> = {
   "\x1b[A": "up",
@@ -45,9 +57,20 @@ const DIRECTIONS: Record<string, "up" | "down" | "left" | "right"> = {
 
 const KIND_TONE: Record<MemoryLinkKind, ColorName> = { related: "muted", supports: "success", conflicts: "error", supersedes: "warning" }
 const KIND_DIRECTED: Record<MemoryLinkKind, boolean> = { related: false, supports: true, conflicts: false, supersedes: true }
+const KIND_STYLE: Record<MemoryLinkKind, EdgeStyle> = { related: "dotted", supports: "solid", conflicts: "dashed", supersedes: "solid" }
 const KIND_ORDER: MemoryLinkKind[] = ["conflicts", "supersedes", "supports", "related"]
 const SCOPE_TONE: Record<MemoryEntry["scope"], ColorName> = { project: "heading", user: "link", session: "accent" }
 const STATE_TONE: Record<MemoryGraphHealth["state"], ColorName> = { connected: "success", partial: "warning", disconnected: "muted", empty: "muted" }
+/** Dot colors by category, most used category first; a memory with no category keeps the plain text color. */
+const CATEGORY_TONES: ColorName[] = ["link", "warning", "synType", "success", "synNumber", "synFunction"]
+const UNCATEGORIZED = "uncategorized"
+/** A short sample of each kind's edge for the legend: braille, or ASCII when the glyphs are. */
+const KIND_SAMPLE: Record<MemoryLinkKind, { braille: string; ascii: string }> = {
+  related: { braille: "⠄⠄⠄", ascii: "..." },
+  supports: { braille: "⠤⠤→", ascii: "-->" },
+  conflicts: { braille: "⠤⠀⠤", ascii: "x x" },
+  supersedes: { braille: "⠤⠤→", ascii: "==>" },
+}
 
 const oneLine = (text: string) => text.replace(/\s+/g, " ").trim()
 const plural = (count: number, one: string, many: string) => `${count} ${count === 1 ? one : many}`
@@ -62,30 +85,62 @@ export function selectedMemoryId(report: MemoryGraphReport, state: MemoryGraphSt
   return report.nodes[0]?.memoryId
 }
 
-/** Where the canvas and the detail panel go inside a `width` x `height` body. */
+/** Each category with how many memories carry it and its dot color, most used first (ties alphabetical). */
+export function memoryGraphCategories(report: MemoryGraphReport): Array<{ category: string; count: number; tone: ColorName }> {
+  const counts = new Map<string, number>()
+  for (const node of report.nodes) {
+    const category = node.category || UNCATEGORIZED
+    counts.set(category, (counts.get(category) ?? 0) + 1)
+  }
+  const named = [...counts].filter(([category]) => category !== UNCATEGORIZED).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+  const rows = named.map(([category, count], index) => ({ category, count, tone: CATEGORY_TONES[index % CATEGORY_TONES.length]! }))
+  const rest = counts.get(UNCATEGORIZED)
+  return rest ? [...rows, { category: UNCATEGORIZED, count: rest, tone: "text" as ColorName }] : rows
+}
+
+/** Rows the legend takes under the canvas for a panel body of `room` rows. */
+function legendRows(room: number) {
+  return room >= 14 ? 2 : room >= 9 ? 1 : 0
+}
+
+export type MemoryGraphFrame = "split" | "stack" | "single" | "bare"
+
+/**
+ * Where the panels, the canvas and the detail go inside a `width` x `height` body. `split` is two panels side by side,
+ * `stack` graph over memory, `single` the graph panel with the selection as one line under it, `bare` no frame at all
+ * (a head row and the canvas) for bodies too small to box.
+ */
 export function memoryGraphMetrics(input: { width: number; height: number }) {
   const width = Math.max(0, Math.floor(input.width))
   const height = Math.max(0, Math.floor(input.height))
-  const head = height >= 8 ? 2 : Math.min(1, height)
-  const room = height - head
-  if (width >= WIDE_WIDTH) {
-    const canvasWidth = Math.floor((width - GUTTER) * 0.62)
-    return { head, canvas: { width: canvasWidth, height: room }, detail: { placement: "side" as const, width: width - GUTTER - canvasWidth, height: room } }
+  if (width >= SPLIT_WIDTH && height >= SPLIT_HEIGHT) {
+    const [left = 0, right = 0] = columns(width, [3, 2], 1)
+    const room = height - PADDED
+    const legend = legendRows(room)
+    return { frame: "split" as const, legend, summary: false, panels: { graph: { width: left, height }, detail: { width: right, height } }, canvas: { width: left - SIDES, height: room - 1 - legend }, detail: { width: right - SIDES, height: room } }
   }
-  if (room >= 12) {
-    const detailHeight = Math.min(9, Math.floor(room * 0.4))
-    return { head, canvas: { width, height: room - detailHeight - 1 }, detail: { placement: "below" as const, width, height: detailHeight } }
+  if (width >= STACK_WIDTH && height >= STACK_HEIGHT) {
+    const detailHeight = Math.min(14, Math.floor((height - 1) * 0.45))
+    const graphHeight = height - 1 - detailHeight
+    const room = graphHeight - PADDED
+    const legend = legendRows(room)
+    return { frame: "stack" as const, legend, summary: false, panels: { graph: { width, height: graphHeight }, detail: { width, height: detailHeight } }, canvas: { width: width - SIDES, height: room - 1 - legend }, detail: { width: width - SIDES, height: detailHeight - PADDED } }
   }
-  if (room >= 5) return { head, canvas: { width, height: room - 1 }, detail: { placement: "line" as const, width, height: 1 } }
-  return { head, canvas: { width, height: room }, detail: { placement: "none" as const, width, height: 0 } }
+  if (width >= SINGLE_WIDTH && height >= SINGLE_HEIGHT) {
+    const room = height - COMPACT
+    return { frame: "single" as const, legend: 0, summary: room >= 5, panels: { graph: { width, height }, detail: { width: 0, height: 0 } }, canvas: { width: width - SIDES, height: room - 1 - (room >= 5 ? 1 : 0) }, detail: { width: 0, height: 0 } }
+  }
+  const head = Math.min(1, height)
+  return { frame: "bare" as const, legend: 0, summary: false, panels: { graph: { width, height }, detail: { width: 0, height: 0 } }, canvas: { width, height: height - head }, detail: { width: 0, height: 0 } }
 }
 
 /** The layout both keys and render use, so a move always lands on a node that is on screen. */
 export function memoryGraphLayout(report: MemoryGraphReport, state: MemoryGraphState, size: { width: number; height: number }): Layout {
-  const nodes: GraphNode[] = report.nodes.map((memory) => ({ id: memory.memoryId, label: oneLine(memory.text), tone: SCOPE_TONE[memory.scope] }))
-  const edges: GraphEdge[] = report.links.map((link) => ({ from: link.from, to: link.to, directed: KIND_DIRECTED[link.kind], tone: KIND_TONE[link.kind] }))
+  const tones = new Map(memoryGraphCategories(report).map((entry) => [entry.category, entry.tone]))
+  const nodes: GraphNode[] = report.nodes.map((memory) => ({ id: memory.memoryId, label: oneLine(memory.text), tone: tones.get(memory.category || UNCATEGORIZED) ?? "text" }))
+  const edges: GraphEdge[] = report.links.map((link) => ({ from: link.from, to: link.to, directed: KIND_DIRECTED[link.kind], tone: KIND_TONE[link.kind], style: KIND_STYLE[link.kind] }))
   const focus = state.mode === "ego" ? selectedMemoryId(report, state) : undefined
-  return layoutGraph({ nodes, edges, width: size.width, height: size.height, focus })
+  return layoutGraph({ nodes, edges, width: size.width, height: size.height, focus, firstRing: "cross" })
 }
 
 /**
@@ -136,7 +191,7 @@ export function memoryGraphKey(
   return { state, action: NONE }
 }
 
-function healthLine(health: MemoryGraphHealth, shown: { visible: number; total: number } | undefined, mode: MemoryGraphState["mode"], width: number): Line {
+function healthLine(health: MemoryGraphHealth, shown: { visible: number; total: number } | undefined, width: number): Line {
   const stateTone: ColorName = health.conflicts > 0 ? "error" : STATE_TONE[health.state]
   const left: Line = [
     { text: health.state, fg: stateTone, bold: true },
@@ -147,9 +202,28 @@ function healthLine(health: MemoryGraphHealth, shown: { visible: number; total: 
   ]
   if (health.isolated > 0) left.push({ text: " · ", fg: "muted" }, { text: `${health.isolated} isolated`, fg: "muted" })
   if (health.conflicts > 0) left.push({ text: " · ", fg: "muted" }, { text: plural(health.conflicts, "conflict", "conflicts"), fg: "error", bold: true })
-  const right: Line = [{ text: mode, fg: "text", bold: true }]
-  if (shown && shown.visible < shown.total) right.push({ text: ` · ${shown.visible}/${shown.total} shown`, fg: "muted" })
+  const right: Line = shown && shown.visible < shown.total ? [{ text: `${shown.visible}/${shown.total} shown`, fg: "muted" }] : []
   return lineWidth(left) + lineWidth(right) + 1 <= width ? spread(left, right, width) : clip(left, width)
+}
+
+/** The legend under the canvas: what each dot color and each edge style stands for (only what the graph has). */
+function legend({ report, width, rows, ascii }: { report: MemoryGraphReport; width: number; rows: number; ascii: boolean }): Line[] {
+  if (rows <= 0) return []
+  const dot = ascii ? "o" : "●"
+  const categories: Line = []
+  for (const { category, count, tone } of memoryGraphCategories(report)) {
+    if (categories.length) categories.push({ text: "  " })
+    categories.push({ text: dot, fg: tone }, { text: ` ${category} ${count}`, fg: "muted" })
+  }
+  const present = new Set(report.links.map((link) => link.kind))
+  const kinds: Line = []
+  for (const kind of KIND_ORDER.slice().reverse()) {
+    if (!present.has(kind)) continue
+    if (kinds.length) kinds.push({ text: "  " })
+    kinds.push({ text: ascii ? KIND_SAMPLE[kind].ascii : KIND_SAMPLE[kind].braille, fg: KIND_TONE[kind] }, { text: ` ${kind}`, fg: "muted" })
+  }
+  const out = rows >= 2 ? [categories, kinds] : [categories.length ? categories : kinds]
+  return out.map((line) => clip(line, width))
 }
 
 function linksOf(memoryId: string, links: MemoryLink[]) {
@@ -163,7 +237,9 @@ function linkArrow(kind: MemoryLinkKind, incoming: boolean) {
   return KIND_DIRECTED[kind] ? (incoming ? "←" : "→") : "↔"
 }
 
-/** The selected memory in full: scope, category, profile, its text wrapped, then its links. Exactly `height` rows. */
+const FACT_LABEL = 10
+
+/** The selected memory in full: its text wrapped, labeled facts (scope, category, profile, project, origin), then its links. Exactly `height` rows. */
 function detailRows(input: { report: MemoryGraphReport; selected: string | undefined; width: number; height: number }): Line[] {
   const { report, selected, width, height } = input
   if (height <= 0 || width <= 0) return []
@@ -171,25 +247,30 @@ function detailRows(input: { report: MemoryGraphReport; selected: string | undef
   const rows: Line[] = []
   if (!memory) rows.push([{ text: "no memory selected", fg: "muted", dim: true }])
   else {
-    const meta: Line = [{ text: memory.scope, fg: SCOPE_TONE[memory.scope], bold: true }]
-    if (memory.category) meta.push({ text: " · ", fg: "muted" }, { text: memory.category, fg: "muted" })
-    if (memory.profile) meta.push({ text: " · ", fg: "muted" }, { text: `profile ${memory.profile}`, fg: "muted" })
-    rows.push(clip(meta, width))
-    if (memory.directory) rows.push(clip([{ text: memory.directory, fg: "muted" }], width))
-    rows.push(clip([{ text: `origin ${memory.source === "agent" ? "agent" : "manual"}`, fg: "muted" }], width), [])
-
+    const tones = new Map(memoryGraphCategories(report).map((entry) => [entry.category, entry.tone]))
     const byId = new Map(report.nodes.map((node) => [node.memoryId as string, node]))
     const links = linksOf(memory.memoryId, report.links)
     const text = wrap(oneLine(memory.text), width)
-    const textRoom = links.length > 0 ? Math.max(3, Math.floor((height - rows.length) * 0.5)) : height - rows.length
-    const shownText = text.slice(0, Math.max(1, textRoom))
+    const textRoom = Math.max(2, Math.floor(height * 0.4))
+    const shownText = text.slice(0, textRoom)
     if (text.length > shownText.length) shownText[shownText.length - 1] = truncateEnd(`${shownText[shownText.length - 1]}…`, width)
     for (const line of shownText) rows.push([{ text: line, fg: "text" }])
 
-    rows.push([])
-    if (links.length === 0) rows.push(clip([{ text: "no links · c to link", fg: "muted", dim: true }], width))
-    else {
-      rows.push([{ text: "Links", fg: "text", bold: true }, { text: ` ${links.length}`, fg: "muted" }])
+    const fact = (label: string, value: string, tone: ColorName = "text"): Line => clip([{ text: label.padEnd(FACT_LABEL), fg: "muted" }, { text: truncateEnd(value, Math.max(1, width - FACT_LABEL)), fg: tone }], width)
+    const facts: Line[] = [fact("Scope", memory.scope, SCOPE_TONE[memory.scope])]
+    if (memory.category) facts.push(fact("Category", memory.category, tones.get(memory.category) ?? "text"))
+    if (memory.profile) facts.push(fact("Profile", memory.profile))
+    if (memory.directory) facts.push(fact("Project", memory.directory))
+    facts.push(fact("Origin", memory.source === "agent" ? "agent" : "manual"))
+
+    const left = height - rows.length - 1
+    const factRoom = left >= 12 ? facts.length : left >= 6 ? Math.min(facts.length, 3) : left >= 3 ? Math.min(facts.length, 2) : 0
+    if (factRoom > 0) rows.push([], ...facts.slice(0, factRoom))
+
+    if (links.length === 0) {
+      if (height - rows.length >= 2) rows.push([], clip([{ text: "no links · c to link", fg: "muted", dim: true }], width))
+    } else if (height - rows.length >= 3) {
+      rows.push([], [{ text: "Links", fg: "text", bold: true }, { text: ` ${links.length}`, fg: "muted" }])
       const room = Math.max(0, height - rows.length)
       const shown = links.length > room ? Math.max(0, room - 1) : links.length
       for (const { link, otherId, incoming } of links.slice(0, shown)) {
@@ -226,6 +307,8 @@ export function renderMemoryGraph(input: {
   width: number
   height: number
   glyphs?: Partial<GraphGlyphs> | undefined
+  /** ASCII glyphs and box-line edges instead of braille. */
+  ascii?: boolean | undefined
 }): Line[] {
   const { report, state } = input
   const width = Math.max(0, Math.floor(input.width))
@@ -234,26 +317,38 @@ export function renderMemoryGraph(input: {
   if (!report) return messageBody("loading graph…", width, height)
   if (report.nodes.length === 0) return messageBody("no saved memories yet — approve some in the Saved tab", width, height)
 
+  const ascii = input.ascii === true
   const metrics = memoryGraphMetrics({ width, height })
   const selected = selectedMemoryId(report, state)
   const layout = memoryGraphLayout(report, state, metrics.canvas)
-  const canvas = renderGraph({ layout, width: metrics.canvas.width, height: metrics.canvas.height, selected, marked: state.marked, glyphs: input.glyphs })
+  const glyphs = input.glyphs ?? (ascii ? GRAPH_GLYPHS_ASCII : undefined)
+  const plainText = ascii || input.glyphs !== undefined
+  const edges = plainText ? "lines" : "braille"
+  const canvas = renderGraph({ layout, width: metrics.canvas.width, height: metrics.canvas.height, selected, marked: state.marked, glyphs, edges })
+  const shown = { visible: layout.nodes.length, total: report.nodes.length }
+  const mode = state.mode === "ego" ? "ego" : "all"
 
-  const rows: Line[] = []
-  if (metrics.head > 0) rows.push(healthLine(report.health, { visible: layout.nodes.length, total: report.nodes.length }, state.mode, width))
-  if (metrics.head > 1) rows.push([])
+  let rows: Line[]
+  if (metrics.frame === "bare") {
+    rows = [healthLine(report.health, shown, width), ...canvas]
+  } else {
+    const graphPanel = {
+      title: `Graph · ${mode}`,
+      active: true,
+      body: (inner: number): Line[] => [
+        healthLine(report.health, shown, inner),
+        ...canvas,
+        ...legend({ report, width: inner, rows: metrics.legend, ascii: plainText }),
+        ...(metrics.summary ? [summaryRow(report, selected, inner)] : []),
+      ],
+    }
+    const detailPanel = { title: "Memory", body: (inner: number) => detailRows({ report, selected, width: inner, height: metrics.detail.height }) }
+    if (metrics.frame === "split") rows = panelGrid({ width, compact: false, padding: true, heights: [height], rows: [[{ ...graphPanel, weight: 3 }, { ...detailPanel, weight: 2 }]] })
+    else if (metrics.frame === "stack") rows = panelGrid({ width, compact: false, padding: true, heights: [metrics.panels.graph.height, metrics.panels.detail.height], rows: [[graphPanel], [detailPanel]] })
+    else rows = panelGrid({ width, compact: false, heights: [height], rows: [[graphPanel]] })
+  }
 
-  const { detail } = metrics
-  if (detail.placement === "side") {
-    const panel = detailRows({ report, selected, width: detail.width, height: detail.height })
-    rows.push(...beside([{ lines: canvas, width: metrics.canvas.width }, { lines: panel, width: detail.width }], GUTTER))
-  } else if (detail.placement === "below") {
-    rows.push(...canvas, [], ...detailRows({ report, selected, width: detail.width, height: detail.height }))
-  } else if (detail.placement === "line") {
-    rows.push(...canvas, summaryRow(report, selected, width))
-  } else rows.push(...canvas)
-
-  const out = rows.slice(0, height).map((row) => clip(row, width))
+  const out = rows.slice(0, height).map((row) => fit(row, width))
   while (out.length < height) out.push([])
   return out
 }

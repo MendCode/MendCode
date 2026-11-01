@@ -278,3 +278,55 @@ describe("nearestNode", () => {
     expect(seen.size).toBe(real.nodes.length)
   })
 })
+
+describe("braille edges", () => {
+  const BRAILLE = /[⠁-⣿]/
+  const pair = { nodes: [{ id: "a", label: "alpha" }, { id: "b", label: "beta" }, { id: "c", label: "gamma" }], edges: [{ from: "a", to: "b" }, { from: "a", to: "c" }] satisfies GraphEdge[] }
+  const draw = (edges: GraphEdge[], mode: "lines" | "braille" | undefined) => {
+    const layout = layoutGraph({ nodes: pair.nodes, edges, width: 60, height: 14, focus: "a" })
+    return renderGraph({ layout, width: 60, height: 14, selected: "a", edges: mode })
+  }
+  const dotCount = (rows: Line[]) => [...plain(rows).join("")].reduce((sum, char) => sum + (BRAILLE.test(char) ? char.codePointAt(0)!.toString(2).replace(/0/g, "").length : 0), 0)
+
+  test("braille mode draws the edges in dots, box lines are the default", () => {
+    expect(plain(draw(pair.edges, "braille")).join("")).toMatch(BRAILLE)
+    expect(plain(draw(pair.edges, undefined)).join("")).not.toMatch(BRAILLE)
+    expect(plain(draw(pair.edges, "lines")).join("")).toMatch(/[─│╱╲]/)
+  })
+
+  test("an edge's style thins it out: dotted and dashed have fewer dots than solid", () => {
+    const solid = dotCount(draw([{ from: "a", to: "b", style: "solid" }], "braille"))
+    expect(dotCount(draw([{ from: "a", to: "b", style: "dotted" }], "braille"))).toBeLessThan(solid)
+    expect(dotCount(draw([{ from: "a", to: "b", style: "dashed" }], "braille"))).toBeLessThan(solid)
+    expect(dotCount(draw([{ from: "a", to: "b", style: "dotted" }], "braille"))).toBeGreaterThan(0)
+  })
+
+  test("braille dots keep the edge's tone and never cover a label", () => {
+    const rows = draw([{ from: "a", to: "b", tone: "warning" }, { from: "a", to: "c", tone: "error" }], "braille")
+    const spans = rows.flat()
+    expect(spans.some((span) => span.fg === "warning" && BRAILLE.test(span.text))).toBe(true)
+    expect(spans.some((span) => span.fg === "error" && BRAILLE.test(span.text))).toBe(true)
+    const text = plain(rows).join("\n")
+    for (const label of ["alpha", "beta", "gamma"]) expect(text).toContain(label)
+  })
+
+  test("a directed braille edge ends in an arrow", () => {
+    expect(plain(draw([{ from: "a", to: "b", directed: true }], "braille")).join("")).toMatch(/[→←↑↓↗↘↙↖]/)
+  })
+
+  test("the cross ring puts four neighbors above, right, below and left of the hub; the default puts them on the diagonals", () => {
+    const hub = { nodes: ["h", "n", "e", "s", "w"].map((id) => ({ id, label: id })), edges: ["n", "e", "s", "w"].map((id) => ({ from: "h", to: id })) }
+    const at = (firstRing: "cross" | undefined) => {
+      const layout = layoutGraph({ ...hub, width: 80, height: 21, focus: "h", firstRing })
+      return new Map(layout.nodes.map((node) => [node.id, node]))
+    }
+    const cross = at("cross")
+    const hubMiddle = (cross.get("h")!.x0 + cross.get("h")!.x1) / 2
+    expect(Math.abs(cross.get("n")!.x - hubMiddle)).toBeLessThanOrEqual(1)
+    expect(cross.get("n")!.y).toBeLessThan(cross.get("h")!.y)
+    expect(cross.get("s")!.y).toBeGreaterThan(cross.get("h")!.y)
+    expect(cross.get("e")!.y).toBe(cross.get("h")!.y)
+    const diagonal = at(undefined)
+    expect([...diagonal.values()].filter((node) => node.id !== "h").every((node) => node.x !== diagonal.get("h")!.x)).toBe(true)
+  })
+})

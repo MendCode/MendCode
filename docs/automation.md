@@ -26,7 +26,9 @@ The cards are authored in `packages/daemon/cards/*.md` and compiled with the doc
 
 ## Local support commands (B18)
 
-`--help`/`-h`, `--version`/`-v` and `completion [bash|zsh]` exit without a daemon. Source the generated completion script in the matching shell.
+`--help`/`-h`, `--version`/`-v` and `completion [bash|zsh]` exit without a daemon. `--version` prints the version and its
+channel: `0.0.2 (stable)`, `0.0.2-beta.4 (beta)`, `0.0.2-nightly.20261101.19 (nightly)`, `dev-<sha> (dev)`, or `(local build)`
+for a binary built from a checkout. Source the generated completion script in the matching shell.
 `--print-logs` sends CLI diagnostics to stderr; `--log-level DEBUG|INFO|WARN|ERROR` filters them and is forwarded to a newly launched daemon.
 `--approve` trusts the current project (its hooks, tools and extensions, see [hooks](hooks.md)) before anything runs; `--no-approve` skips the startup trust prompt. `--approve` needs a local daemon.
 `--trace` enables local content-free correlated diagnostics; see [Tracing](tracing.md) for the opt-in OpenTelemetry setting and loopback collector.

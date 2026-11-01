@@ -1,5 +1,5 @@
 import type { DreamRun, EvolutionMode, MemoryCategoryInfo, MemoryEntry, MemoryGraphReport, MemoryKind, MemoryScope } from "@mendcode/protocol"
-import { glyphs as defaultGlyphs, type ColorName, type Glyphs, type Line, type Span } from "../ui/theme"
+import { glyphs as defaultGlyphs, glyphModeOf, type ColorName, type Glyphs, type Line, type Span } from "../ui/theme"
 import { isWide } from "../ui/breakpoints"
 import { beside, deck, deckChrome, type DeckStatus } from "./deck"
 import { createDreamTabState, dreamTabHints, dreamTabKey, renderDreamTab, type DreamTabState } from "./dream-tab"
@@ -133,13 +133,22 @@ export function createMemoryPageState(): MemoryPageState {
 
 /** The Graph tab's canvas for a page of this size; key handling needs it to move the selection on the same layout the render draws. */
 export function memoryGraphCanvas(width: number, height: number, workspaceGrid = false) {
-  if (workspaceGrid) return memoryGraphMetrics({ width: Math.max(1, width - 4), height: Math.max(0, height - 7) }).canvas
+  if (workspaceGrid) return memoryGraphMetrics({ width: Math.max(1, width), height: Math.max(0, height - 3) }).canvas
   return memoryGraphMetrics({ width: Math.max(1, width - 2), height: Math.max(0, height - deckChrome(HINTS.graph, width, { tabs: true })) }).canvas
 }
 
 /** Rows the body of `tab` has on a page of this size (what a scrolling tab may show at once). */
 export function memoryBodyRoom(tab: MemoryPageTab, width: number, height: number) {
   return Math.max(0, height - deckChrome(HINTS[tab], width, { tabs: true }))
+}
+
+/** `hints` with the page's own keys added once: no part repeated, `esc back` last, and `tab tabs` dropped when the hints already say `tab/1-9 tabs`. */
+function pageHints(hints: string, extra: string[]) {
+  const parts: string[] = []
+  for (const part of [...hints.split(" · "), ...extra]) if (!parts.includes(part)) parts.push(part)
+  const withTabs = parts.some((part) => part.startsWith("tab/")) ? parts.filter((part) => part !== "tab tabs") : parts
+  const rest = withTabs.filter((part) => part !== "esc back")
+  return [...rest, ...(withTabs.length > rest.length ? ["esc back"] : [])].join(" · ")
 }
 
 function nextTab(tab: MemoryPageTab, step: number): MemoryPageTab {
@@ -521,7 +530,7 @@ export function renderMemoryPage(input: {
   const glyphs = input.glyphs ?? defaultGlyphs()
   const hints = state.tab === "sharing" && state.sharing.confirmation !== undefined ? "enter enable · ctrl+u clear · esc cancel" : state.tab === "dream" ? `${state.dream.typing === undefined ? "t assistant · " : ""}${dreamTabHints(state.dream)}` : state.pick ? PICK_HINTS : `t assistant · ${HINTS[state.tab]}`
 
-  if (state.workspace.picking !== undefined) return pickerFrame("Memory / Projects", "↑↓ choose · enter select · esc cancel", width, height, renderWorkspacePicker(state.workspace, input.data?.workspaces, input.data?.currentDirectory, width, Math.max(0, height - 2)), `${input.data?.workspaces?.workspaces.length ?? 0} projects${input.data?.workspaces?.omitted ? ` · ${input.data.workspaces.omitted} omitted` : ""}`)
+  if (state.workspace.picking !== undefined) return pickerFrame("Memory · Projects", "↑↓ choose · enter select · esc cancel", width, height, renderWorkspacePicker(state.workspace, input.data?.workspaces, input.data?.currentDirectory, width, Math.max(0, height - 2)), `${input.data?.workspaces?.workspaces.length ?? 0} projects${input.data?.workspaces?.omitted ? ` · ${input.data.workspaces.omitted} omitted` : ""}`)
   const activeTab = PAGE_TAB_ORDER.indexOf(state.tab)
   const byId = new Map(memories.map((m) => [m.memoryId as string, m]))
   const counts = { pending: 0, saved: 0, archived: 0 } as Record<MemoryTab, number>
@@ -536,21 +545,29 @@ export function renderMemoryPage(input: {
   const inner = Math.max(1, width - 2)
   const wide = isWide(width)
   const room = Math.max(0, height - deckChrome(hints, width, { tabs: true }))
-  const gridTab = (title: string, body: (w: number, h: number) => Line[]) => pickerFrame("Memory", `${hints} · w projects · tab tabs · esc back`, width, height, [tabsRow(PAGE_TABS, activeTab, width), ...panelGrid({ width, compact: false, padding: true, heights: [Math.max(0, height - 3)], rows: [[{ title, body: (w) => body(w, Math.max(0, height - 7)) }]] })], subtitle)
-  if (input.data?.workspaces && state.tab === "graph") return gridTab("Memory graph", (w, h) => renderMemoryGraph({ report: input.graph, state: state.graph, width: w, height: h }))
+  const ascii = glyphModeOf(glyphs) === "ascii"
+  // One header for every tab, as /changes has: `Memory · context` with the keys on the right, then the counts, then the tab strip and the panels.
+  const header = (summaryText: string) => (width >= 80 ? { title: `Memory · ${subtitle}`, summary: summaryText } : { title: "Memory", summary: `${subtitle} · ${summaryText}` })
+  const framed = (keys: string, body: Line[], summaryText = summary) => {
+    const { title, summary: line } = header(summaryText)
+    return pickerFrame(title, keys, width, height, [tabsRow(PAGE_TABS, activeTab, width), ...body], line)
+  }
+  const gridKeys = pageHints(hints, ["w projects", "tab tabs", "esc back"])
+  const gridTab = (title: string, body: (w: number, h: number) => Line[]) => framed(gridKeys, panelGrid({ width, compact: false, padding: true, heights: [Math.max(0, height - 3)], rows: [[{ title, body: (w) => body(w, Math.max(0, height - 7)) }]] }))
+  if (input.data?.workspaces && state.tab === "graph") return framed(pageHints(hints, ["w projects"]), renderMemoryGraph({ report: input.graph, state: state.graph, width, height: Math.max(0, height - 3), ascii }))
   if (input.data?.workspaces && state.tab === "dream") return gridTab("Dream", (w, h) => renderDreamTab({ runs: input.dream?.runs, state: state.dream, dreamAt: input.dream?.dreamAt, dreamMaxTokens: input.data?.dreamMaxTokens, pending: counts.pending, width: w, height: h, now }))
   if (input.data?.workspaces && state.tab === "policies") return gridTab("Policies", (w, h) => renderPoliciesTab({ categories: input.data?.categories, state: state.policies, width: w, height: h }))
-  if (state.tab === "evolution") return pickerFrame("Memory / Evolution", `←→ mode · ${EVOLUTION_HINTS.replace(" · ←→ mode", "")}`, width, height, [tabsRow(PAGE_TABS, activeTab, width), ...renderEvolutionTab({ mode: input.data?.evolutionMode ?? "off", data: input.data?.evolution, state: state.evolution, width, height: Math.max(0, height - 3), now })], subtitle)
+  if (state.tab === "evolution") return framed(`←→ mode · ${EVOLUTION_HINTS.replace(" · ←→ mode", "")}`, renderEvolutionTab({ mode: input.data?.evolutionMode ?? "off", data: input.data?.evolution, state: state.evolution, width, height: Math.max(0, height - 3), now }))
   if (input.data?.workspaces && state.tab === "extraction" && width < 70) return gridTab("Extraction", (w, h) => renderExtraction(input.data?.extraction ?? {}, state.extraction, w, h))
-  if (input.data?.workspaces && state.tab === "extraction") return pickerFrame("Memory", `${hints} · w projects · tab tabs · esc back`, width, height, [tabsRow(PAGE_TABS, activeTab, width), ...renderExtraction(input.data?.extraction ?? {}, state.extraction, width, Math.max(0, height - 3))], subtitle)
-  if (state.tab === "sharing") return pickerFrame("Memory / Sharing", hints, width, height, [tabsRow(PAGE_TABS, activeTab, width), ...renderSharing(state.sharing, input.data?.sharing ?? {}, width, Math.max(0, height - 3))], subtitle)
+  if (input.data?.workspaces && state.tab === "extraction") return framed(gridKeys, renderExtraction(input.data?.extraction ?? {}, state.extraction, width, Math.max(0, height - 3)))
+  if (state.tab === "sharing") return framed(hints, renderSharing(state.sharing, input.data?.sharing ?? {}, width, Math.max(0, height - 3)))
   if (state.tab === "extraction") {
     const columns = Math.max(1, width - 4)
     const body = [tabsRow(PAGE_TABS, activeTab, columns), [], ...renderExtraction(input.data?.extraction ?? {}, state.extraction, columns, Math.max(0, height - 4))]
     return appearancePage({ title: "Memory", subtitle: `${subtitle} · ${summary}`, body, hints, width, height })
   }
   if (state.tab === "graph") {
-    const body = renderMemoryGraph({ report: input.graph, state: state.graph, width: inner, height: room })
+    const body = renderMemoryGraph({ report: input.graph, state: state.graph, width: inner, height: room, ascii })
     return deck({ page: "Memory", subtitle, summary, tabs: PAGE_TABS, activeTab, body, hints, width, height })
   }
   if (state.tab === "dream") {
@@ -605,7 +622,7 @@ export function renderMemoryPage(input: {
       { title: `${TAB_LABELS[tab].label} · ${visible.length}`, body: listBody, active: true, weight: 3 },
       ...(wide ? [{ title: "Origin / Detail", body: detailRows({ active, tab, byId, directory, width: detailWidth, now }), weight: 2 }] : []),
     ]] })
-    return pickerFrame("Memory", hints, width, height, [tabsRow(PAGE_TABS, activeTab, width), ...grid], `${subtitle} · ${summary}${input.data.omitted ? ` · ${input.data.omitted} omitted` : ""}`)
+    return framed(hints, grid, `${summary}${input.data.omitted ? ` · ${input.data.omitted} omitted` : ""}`)
   }
   return deck({ page: "Memory", ...(status ? { status } : {}), subtitle, summary, tabs: PAGE_TABS, activeTab, body, hints, width, height })
 }

@@ -55,6 +55,15 @@ export function channelOf(release: Release): Channel | undefined {
   return undefined
 }
 
+/** The channel of a binary's own version (the release tag without its `v`), or undefined for a local build such as `0.0.1-dev`. */
+export function channelOfVersion(version: string): Channel | undefined {
+  const tag = DEV_TAG.test(version) ? version : `v${version}`
+  return channelOf({ tag, prerelease: !STABLE_TAG.test(tag), draft: false, publishedAt: 0, assets: [] })
+}
+
+/** What `mendcode --version` prints: the version and its channel, `0.0.2 (stable)`, or `0.0.1-dev (local build)`. */
+export const versionLine = (version: string) => `${version} (${channelOfVersion(version) ?? "local build"})`
+
 /**
  * The releases a channel takes: its own and every steadier channel's. A newer stable reaches a beta or nightly user, and a channel
  * with no release of its own yet (a new repository's beta) installs the stable one instead of failing.

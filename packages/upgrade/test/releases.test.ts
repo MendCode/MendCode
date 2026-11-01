@@ -1,8 +1,16 @@
 import { describe, expect, test } from "bun:test"
 import { UpgradeError } from "../src/errors"
-import { channelOf, compareSemver, decide, parseReleases, parseVersion, pickRelease, platformAsset, type Release } from "../src/releases"
+import { channelOf, compareSemver, decide, parseReleases, parseVersion, pickRelease, platformAsset, versionLine, type Release } from "../src/releases"
 
 const make = (tag: string, prerelease: boolean, publishedAt = 0, draft = false): Release => ({ tag, prerelease, draft, publishedAt, assets: [] })
+
+test("--version names the channel the binary's version belongs to", () => {
+  expect(versionLine("0.0.2")).toBe("0.0.2 (stable)")
+  expect(versionLine("0.0.2-beta.4")).toBe("0.0.2-beta.4 (beta)")
+  expect(versionLine("0.0.2-nightly.20261101.19")).toBe("0.0.2-nightly.20261101.19 (nightly)")
+  expect(versionLine("dev-1a2b3c4")).toBe("dev-1a2b3c4 (dev)")
+  expect(versionLine("0.0.1-dev")).toBe("0.0.1-dev (local build)")
+})
 
 describe("channels", () => {
   const releases = [

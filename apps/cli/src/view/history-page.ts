@@ -47,7 +47,7 @@ export function renderHistoryPage(input: { state: HistoryState; report: HistoryR
   const hints = state.editing ? "enter search · esc cancel" : state.reader ? "↑↓ scroll · esc back · l live" : width < 70 ? "/ search · enter open · v view · esc back" : "↑↓ · enter open · / search · v view · s split · t tools · Pg↑↓ page · l live · esc back"
   const summary = input.error ? input.error : state.editing ? `Quick Jump / ${state.query}` : `Page ${state.page + 1} · ${state.view} · ${turns.length} turns · tools ${state.tools}${state.query ? ` · / ${state.query}` : ""}${input.loading ? " · loading…" : ""}`
   const preview = (w: number) => historyReaderRows(state.reader ? input.detail ?? selected : selected, state, w, input.now)
-  if (state.reader) return pickerFrame("History / Turn", hints, width, height, panelGrid({ width, compact: false, padding: true, ...(width < 70 ? { maxColumns: 1 } : {}), heights: [room], rows: [[{ title: "Conversation turn", body: preview, scroll: state.scroll }]] }), summary)
+  if (state.reader) return pickerFrame("History · Turn", hints, width, height, panelGrid({ width, compact: false, padding: true, ...(width < 70 ? { maxColumns: 1 } : {}), heights: [room], rows: [[{ title: "Conversation turn", body: preview, scroll: state.scroll }]] }), summary)
   let focus = 0
   const list = (w: number): Line[] => {
     const rows: Line[] = []

@@ -10,7 +10,9 @@ import { cells, textWidth } from "./wrap"
  */
 
 export type GraphNode = { id: string; label: string; tone?: ColorName }
-export type GraphEdge = { from: string; to: string; label?: string; directed?: boolean; tone?: ColorName }
+/** How a braille edge is drawn: unbroken, a dot every other step, or dashes. Box-line edges ignore it. */
+export type EdgeStyle = "solid" | "dotted" | "dashed"
+export type GraphEdge = { from: string; to: string; label?: string; directed?: boolean; tone?: ColorName; style?: EdgeStyle }
 
 /** `x`/`y` is the dot; the label sits to the right (`● label`), the left (`label ●`) or, for a centered hub, after the dot. */
 export type PlacedNode = {
@@ -27,7 +29,7 @@ export type PlacedNode = {
   /** 0 = the hub, 1 = its neighbors, 2 = the next ring; laid-out lists use 1. */
   ring: number
 }
-export type PlacedEdge = { from: string; to: string; label?: string; directed: boolean; tone?: ColorName }
+export type PlacedEdge = { from: string; to: string; label?: string; directed: boolean; tone?: ColorName; style?: EdgeStyle }
 export type Layout = {
   nodes: PlacedNode[]
   edges: PlacedEdge[]
@@ -102,7 +104,7 @@ function buildGraph(nodes: GraphNode[], edges: GraphEdge[]): Graph {
     if (edge.from === edge.to || !byId.has(edge.from) || !byId.has(edge.to)) continue
     neighbors.get(edge.from)!.add(edge.to)
     neighbors.get(edge.to)!.add(edge.from)
-    kept.push({ from: edge.from, to: edge.to, directed: edge.directed === true, ...(edge.label ? { label: edge.label } : {}), ...(edge.tone ? { tone: edge.tone } : {}) })
+    kept.push({ from: edge.from, to: edge.to, directed: edge.directed === true, ...(edge.label ? { label: edge.label } : {}), ...(edge.tone ? { tone: edge.tone } : {}), ...(edge.style ? { style: edge.style } : {}) })
   }
   const adjacency = new Map([...neighbors].map(([id, set]) => [id, [...set].sort()]))
   return { ids: [...byId.keys()], nodes: byId, adjacency, edges: kept, degree: (id) => adjacency.get(id)?.length ?? 0 }
@@ -126,7 +128,8 @@ function distances(graph: Graph, start: string): Map<string, number> {
 class Placer {
   readonly placed: PlacedNode[] = []
   private readonly rows = new Map<number, PlacedNode[]>()
-  constructor(readonly graph: Graph) {}
+  /** `cross`: the first ring starts straight above the hub (four neighbors are a cross); the default puts them on the diagonals. */
+  constructor(readonly graph: Graph, readonly firstRing: "diagonal" | "cross" = "diagonal") {}
 
   private free(y: number, x0: number, x1: number) {
     return (this.rows.get(y) ?? []).every((other) => x0 >= other.x1 + 1 || other.x0 >= x1 + 1)
@@ -226,7 +229,7 @@ function egoLayout(placer: Placer, center: string, dist: Map<string, number>, re
   const sideOf = (angle: number): "left" | "right" => (Math.cos(angle) >= 0 ? "right" : "left")
 
   first.slice(0, cap1).forEach((id, index) => {
-    const angle = cap1 === 1 ? 0 : -Math.PI / 2 + (2 * Math.PI * (index + 0.5)) / cap1
+    const angle = cap1 === 1 ? 0 : placer.firstRing === "cross" ? (cap1 === 2 ? Math.PI * index : -Math.PI / 2 + (2 * Math.PI * index) / cap1) : -Math.PI / 2 + (2 * Math.PI * (index + 0.5)) / cap1
     const spot = at(angle, rx1, ry1)
     if (placer.place({ id, x: spot.x, y: spot.y, side: sideOf(angle), maxLabel: labelMax, rect, ring: 1 })) angles.set(id, angle)
   })
@@ -333,8 +336,8 @@ function simplified(edges: PlacedEdge[], nodes: PlacedNode[]): PlacedEdge[] {
   })
 }
 
-function layoutIn(graph: Graph, width: number, height: number, focus: string | undefined): Layout {
-  const placer = new Placer(graph)
+function layoutIn(graph: Graph, width: number, height: number, focus: string | undefined, firstRing: "diagonal" | "cross"): Layout {
+  const placer = new Placer(graph, firstRing)
   const whole: Rect = { x: 0, y: 0, w: width, h: height }
   if (width >= 1 && height >= 1 && graph.ids.length > 0) {
     if (focus !== undefined && graph.nodes.has(focus)) egoLayout(placer, focus, distances(graph, focus), whole)
@@ -358,13 +361,14 @@ function layoutIn(graph: Graph, width: number, height: number, focus: string | u
  * connected node, other components stacked beside it, unlinked nodes on a shelf. Nodes that do not fit are
  * counted in `hidden` (most connected / nearest first are kept), and a row is reserved for saying so.
  */
-export function layoutGraph(input: { nodes: GraphNode[]; edges: GraphEdge[]; width: number; height: number; focus?: string | undefined }): Layout {
+export function layoutGraph(input: { nodes: GraphNode[]; edges: GraphEdge[]; width: number; height: number; focus?: string | undefined; firstRing?: "diagonal" | "cross" | undefined }): Layout {
   const width = Math.max(0, Math.floor(input.width))
   const height = Math.max(0, Math.floor(input.height))
   const graph = buildGraph(input.nodes, input.edges)
-  const full = layoutIn(graph, width, height, input.focus)
+  const firstRing = input.firstRing ?? "diagonal"
+  const full = layoutIn(graph, width, height, input.focus, firstRing)
   if (full.hidden === 0 || height < 4) return full
-  return layoutIn(graph, width, height - 1, input.focus)
+  return layoutIn(graph, width, height - 1, input.focus, firstRing)
 }
 
 type Kind = "h" | "v" | "u" | "d"
@@ -394,7 +398,16 @@ function bresenham(x0: number, y0: number, x1: number, y1: number): Array<[numbe
   }
 }
 
-const ARROW_ORDER = ["right", "downRight", "down", "downLeft", "left", "upLeft", "up", "upRight"] as const
+/** Braille dot bits by dot row (0-3) and column (0-1) inside a cell: the sub-cell resolution of `edges: "braille"`. */
+const BRAILLE_BITS = [[0x01, 0x08], [0x02, 0x10], [0x04, 0x20], [0x40, 0x80]] as const
+/** Whether dot number `index` along an edge is drawn, by edge style. */
+const BRAILLE_ON: Record<EdgeStyle, (index: number) => boolean> = {
+  solid: () => true,
+  dotted: (index) => index % 3 === 0,
+  dashed: (index) => index % 8 < 5,
+}
+
+const ARROW_ORDER =["right", "downRight", "down", "downLeft", "left", "upLeft", "up", "upRight"] as const
 
 function arrowFor(glyphs: GraphGlyphs, dx: number, dy: number) {
   const octant = (((Math.round(Math.atan2(dy * 2, dx) / (Math.PI / 4)) % 8) + 8) % 8) as number
@@ -431,10 +444,13 @@ function strip({ key: _key, ...span }: Span & { key: string }): Span {
  * ones, edge labels where they fit), then the nodes on top. `selected` is bold with a highlighted label; edges
  * touching it are bold too. `marked` is a second, quieter highlight.
  */
-export function renderGraph(input: { layout: Layout; width: number; height: number; selected?: string | undefined; marked?: string | undefined; glyphs?: Partial<GraphGlyphs> | undefined }): Line[] {
+export function renderGraph(input: { layout: Layout; width: number; height: number; selected?: string | undefined; marked?: string | undefined; glyphs?: Partial<GraphGlyphs> | undefined; edges?: "lines" | "braille" | undefined }): Line[] {
   const width = Math.max(0, Math.floor(input.width))
   const height = Math.max(0, Math.floor(input.height))
   if (height === 0) return []
+  const braille = input.edges === "braille"
+  const masks = new Uint8Array(width * height)
+  const paints: Array<Pick<Cell, "fg" | "bold"> | undefined> = new Array(width * height)
   const glyphs: GraphGlyphs = { ...GRAPH_GLYPHS_UNICODE, ...input.glyphs, arrow: { ...GRAPH_GLYPHS_UNICODE.arrow, ...input.glyphs?.arrow } }
   const { layout, selected, marked } = input
   const canvas: Cell[][] = Array.from({ length: height }, () => Array.from({ length: width }, () => ({ t: " " })))
@@ -449,6 +465,10 @@ export function renderGraph(input: { layout: Layout; width: number; height: numb
   const anchor = (node: PlacedNode) => (node.side === "center" ? { x: Math.floor((node.x0 + node.x1 - 1) / 2), y: node.y } : { x: node.x, y: node.y })
   const touches = (edge: PlacedEdge) => selected !== undefined && (edge.from === selected || edge.to === selected)
 
+  const arrows: Array<{ x: number; y: number; cell: Cell }> = []
+  const flushArrows = () => {
+    for (const arrow of arrows.splice(0)) put(arrow.x, arrow.y, arrow.cell)
+  }
   const chars: Record<Kind, string> = { h: glyphs.h, v: glyphs.v, u: glyphs.up, d: glyphs.down }
   const ordered = [...layout.edges.filter((edge) => !touches(edge)), ...layout.edges.filter(touches)]
   const labels: Array<{ edge: PlacedEdge; x: number; y: number; length: number }> = []
@@ -461,9 +481,21 @@ export function renderGraph(input: { layout: Layout; width: number; height: numb
     const points = bresenham(a.x, a.y, b.x, b.y)
     const style = { fg: edge.tone ?? ("muted" as ColorName), ...(touches(edge) ? { bold: true } : {}) }
     let lastFree = -1
+    if (braille) {
+      const dots = bresenham(a.x * 2 + 1, a.y * 4 + 2, b.x * 2 + 1, b.y * 4 + 2)
+      dots.forEach(([dx, dy], index) => {
+        if (!BRAILLE_ON[edge.style ?? "solid"](index)) return
+        const x = dx >> 1
+        const y = dy >> 2
+        if (x < 0 || x >= width || y < 0 || y >= height || blocked.has(key(x, y))) return
+        masks[y * width + x]! |= BRAILLE_BITS[dy & 3]![dx & 1]!
+        paints[y * width + x] = style
+      })
+    }
     points.forEach(([x, y], index) => {
       if (blocked.has(key(x, y))) return
       lastFree = index
+      if (braille) return
       const next = points[index + 1] ?? points[index - 1] ?? [x, y]
       const sign = index === points.length - 1 && index > 0 ? -1 : 1
       const sx = Math.sign((next[0] - x) * sign)
@@ -480,7 +512,8 @@ export function renderGraph(input: { layout: Layout; width: number; height: numb
     })
     if (edge.directed && lastFree >= 0) {
       const [x, y] = points[lastFree]!
-      put(x, y, { t: arrowFor(glyphs, b.x - a.x, b.y - a.y), ...style, arrow: true })
+      arrows.push({ x, y, cell: { t: arrowFor(glyphs, b.x - a.x, b.y - a.y), ...style, arrow: true } })
+      if (!braille) flushArrows()
     }
     if (edge.label) {
       let best: Array<[number, number]> = []
@@ -495,6 +528,13 @@ export function renderGraph(input: { layout: Layout; width: number; height: numb
       const middle = best[Math.floor(best.length / 2)]
       if (middle) labels.push({ edge, x: middle[0], y: middle[1], length: best.length })
     }
+  }
+
+  if (braille) {
+    masks.forEach((mask, index) => {
+      if (mask) put(index % width, Math.floor(index / width), { t: String.fromCodePoint(0x2800 + mask), ...paints[index]! })
+    })
+    flushArrows()
   }
 
   const taken = new Set<number>()

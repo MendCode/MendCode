@@ -331,7 +331,7 @@ if (automation.ok === true && automation.command.kind === "help") {
   process.exit(0)
 }
 if (automation.ok === true && (automation.command.kind === "version" || automation.command.kind === "completion")) {
-  process.stdout.write(automation.command.kind === "version" ? `${CLI_VERSION}\n` : completionScript(automation.command.shell))
+  process.stdout.write(automation.command.kind === "version" ? `${(await import("@mendcode/upgrade/releases")).versionLine(CLI_VERSION)}\n` : completionScript(automation.command.shell))
   process.exit(0)
 }
 if (automation.ok === true) {

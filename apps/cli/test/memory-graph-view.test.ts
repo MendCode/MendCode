@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import type { MemoryEntry, MemoryGraphReport, MemoryLink } from "@mendcode/protocol"
 import type { Line } from "../src/ui/theme"
 import { nearestNode } from "../src/view/ascii-graph"
-import { createMemoryGraphState, memoryGraphKey, memoryGraphLayout, memoryGraphMetrics, renderMemoryGraph, selectedMemoryId, type MemoryGraphState } from "../src/view/memory-graph-view"
+import { createMemoryGraphState, memoryGraphCategories, memoryGraphKey, memoryGraphLayout, memoryGraphMetrics, renderMemoryGraph, selectedMemoryId, type MemoryGraphState } from "../src/view/memory-graph-view"
 import { textWidth } from "../src/view/wrap"
 
 const NOW = Date.UTC(2026, 8, 26, 12)
@@ -186,50 +186,63 @@ describe("renderMemoryGraph", () => {
     expect(renderMemoryGraph({ report: SAMPLE, state: state(), width: 60, height: 0 })).toEqual([])
   })
 
-  test("the health line shows the state, counts, isolated and conflicts", () => {
-    const rows = plain(renderMemoryGraph({ report: SAMPLE, state: state(), width: 120, height: 24 }))
-    expect(rows[0]).toContain("partial · 6 memories · 5 links · 1 isolated · 1 conflict")
-    expect(rows[0]).toMatch(/ego · 5\/6 shown$/)
+  const healthRow = (rows: Line[]) => plain(rows).find((row) => row.includes(" memor")) ?? ""
+  const titles = (rows: Line[]) => plain(rows).join("\n").match(/┌─ [^─]+/g)?.map((title) => title.slice(3).trim()) ?? []
+
+  test("the Graph panel opens with a health line: the state, counts, isolated and conflicts", () => {
+    const rows = renderMemoryGraph({ report: SAMPLE, state: state(), width: 120, height: 24 })
+    expect(healthRow(rows)).toContain("partial · 6 memories · 5 links · 1 isolated · 1 conflict")
+    expect(healthRow(rows)).toMatch(/5\/6 shown/)
   })
 
   test("the health line uses singular forms and drops zero counts", () => {
     const one = report([memory("x"), memory("y")], [link("x", "y")])
-    expect(plain(renderMemoryGraph({ report: one, state: state(), width: 100, height: 24 }))[0]).toContain("connected · 2 memories · 1 link")
-    expect(plain(renderMemoryGraph({ report: one, state: state(), width: 100, height: 24 }))[0]).not.toContain("isolated")
+    expect(healthRow(renderMemoryGraph({ report: one, state: state(), width: 100, height: 24 }))).toContain("connected · 2 memories · 1 link")
+    expect(healthRow(renderMemoryGraph({ report: one, state: state(), width: 100, height: 24 }))).not.toContain("isolated")
     const solo = report([memory("x")], [])
-    expect(plain(renderMemoryGraph({ report: solo, state: state(), width: 100, height: 24 }))[0]).toContain("disconnected · 1 memory · 0 links")
+    expect(healthRow(renderMemoryGraph({ report: solo, state: state(), width: 100, height: 24 }))).toContain("disconnected · 1 memory · 0 links")
   })
 
   test("the state word is colored by health: connected success, partial warning, disconnected muted, conflicts error", () => {
-    const tone = (graph: MemoryGraphReport) => renderMemoryGraph({ report: graph, state: state(), width: 100, height: 24 })[0]![0]!
+    const tone = (graph: MemoryGraphReport) => renderMemoryGraph({ report: graph, state: state(), width: 100, height: 24 }).flat().find((span) => ["connected", "partial", "disconnected"].includes(span.text))!
     const pair = report([memory("x"), memory("y")], [link("x", "y")])
     expect(tone(pair)).toMatchObject({ text: "connected", fg: "success" })
     expect(tone(report([memory("x"), memory("y"), memory("z")], [link("x", "y")]))).toMatchObject({ text: "partial", fg: "warning" })
     expect(tone(report([memory("x")], []))).toMatchObject({ text: "disconnected", fg: "muted" })
     const conflicted = report([memory("x"), memory("y")], [link("x", "y", "conflicts")])
     expect(tone(conflicted)).toMatchObject({ text: "connected", fg: "error" })
-    const spans = renderMemoryGraph({ report: conflicted, state: state(), width: 100, height: 24 })[0]!
+    const spans = renderMemoryGraph({ report: conflicted, state: state(), width: 100, height: 24 }).flat()
     expect(spans.find((span) => span.text === "1 conflict")).toMatchObject({ fg: "error" })
   })
 
   test("the health line says how many memories the canvas shows when some do not fit", () => {
-    const row = plain(renderMemoryGraph({ report: big(200), state: state({ mode: "all" }), width: 120, height: 30 }))[0]!
-    expect(row).toMatch(/all · \d+\/200 shown$/)
+    const row = healthRow(renderMemoryGraph({ report: big(200), state: state({ mode: "all" }), width: 120, height: 30 }))
+    expect(row).toMatch(/\d+\/200 shown/)
   })
 
-  test("a wide body puts the detail beside the graph, a narrow one below it", () => {
+  test("the two panels are titled boxes like /changes: Graph with its mode, and Memory", () => {
+    expect(titles(renderMemoryGraph({ report: SAMPLE, state: state(), width: 120, height: 24 }))).toEqual(["Graph · ego", "Memory"])
+    expect(titles(renderMemoryGraph({ report: SAMPLE, state: state({ mode: "all" }), width: 120, height: 24 }))).toEqual(["Graph · all", "Memory"])
+    const graphTitle = renderMemoryGraph({ report: SAMPLE, state: state(), width: 120, height: 24 })[0]!
+    expect(graphTitle.find((span) => span.text.includes("┌"))).toMatchObject({ fg: "borderActive" })
+  })
+
+  test("a wide body puts the detail beside the graph, a medium one under it, a small one in the graph panel", () => {
     const wide = plain(renderMemoryGraph({ report: SAMPLE, state: state({ selected: "a" }), width: 120, height: 24 }))
     const textRow = wide.findIndex((row) => row.includes("Use pnpm, never npm, in this repository") && row.indexOf("Use pnpm") > 70)
     expect(textRow).toBeGreaterThan(1)
-    const narrow = plain(renderMemoryGraph({ report: SAMPLE, state: state({ selected: "a" }), width: 80, height: 30 }))
-    const below = narrow.findIndex((row) => row.startsWith("project · tooling"))
-    expect(below).toBeGreaterThan(narrow.length / 2)
+    const medium = plain(renderMemoryGraph({ report: SAMPLE, state: state({ selected: "a" }), width: 80, height: 30 }))
+    expect(titles(renderMemoryGraph({ report: SAMPLE, state: state({ selected: "a" }), width: 80, height: 30 }))).toEqual(["Graph · ego", "Memory"])
+    expect(medium.findIndex((row) => row.includes("Use pnpm, never npm, in this repository"))).toBeGreaterThan(medium.length / 2)
+    expect(titles(renderMemoryGraph({ report: SAMPLE, state: state({ selected: "a" }), width: 70, height: 12 }))).toEqual(["Graph · ego"])
   })
 
-  test("the detail panel shows scope, category, profile, the full text and the links", () => {
+  test("the Memory panel shows the text, scope, category, profile and the links, labeled", () => {
     const rows = plain(renderMemoryGraph({ report: SAMPLE, state: state({ selected: "b" }), width: 140, height: 24 }))
-    const joined = rows.map((row) => row.slice(memoryGraphMetrics({ width: 140, height: 24 }).canvas.width + 3)).join("\n")
-    expect(joined).toContain("user · style · profile work")
+    const joined = rows.map((row) => row.slice(memoryGraphMetrics({ width: 140, height: 24 }).panels.graph.width + 1)).join("\n")
+    expect(joined).toMatch(/Scope\s+user/)
+    expect(joined).toMatch(/Category\s+style/)
+    expect(joined).toMatch(/Profile\s+work/)
     expect(joined).toContain("Prefers terse answers without filler")
     expect(joined).toContain("Links 1")
     expect(joined).toContain("supports ← Use pnpm, never npm, in this repository")
@@ -262,26 +275,54 @@ describe("renderMemoryGraph", () => {
     expect(rows).toHaveLength(24)
   })
 
-  test("edges take their tone from the link kind", () => {
+  test("edges are braille lines that take their tone from the link kind", () => {
     const flat = renderMemoryGraph({ report: SAMPLE, state: state({ selected: "a", mode: "all" }), width: 120, height: 24 }).flat()
-    const line = /[─│╱╲→←↑↓↗↘↙↖]/
-    for (const tone of ["success", "error", "warning", "muted"]) expect(flat.some((span) => span.fg === tone && line.test(span.text))).toBe(true)
+    const braille = /[⠁-⣿]/
+    for (const tone of ["success", "error", "warning", "muted"]) expect(flat.some((span) => span.fg === tone && braille.test(span.text))).toBe(true)
+  })
+
+  test("in ASCII mode edges are box-line characters, not braille", () => {
+    const rows = plain(renderMemoryGraph({ report: SAMPLE, state: state({ selected: "a", mode: "all" }), width: 120, height: 24, ascii: true })).join("\n")
+    expect(rows).not.toMatch(/[⠁-⣿]/)
+    expect(rows).not.toMatch(/[●◉◎]/)
+    expect(rows).toContain("@")
+    expect(rows).toMatch(/[-|]/)
+  })
+
+  test("related links are dotted and conflicts dashed: fewer dots than a supports link of the same length", () => {
+    const dots = (kind: MemoryLink["kind"]) => {
+      const rows = plain(renderMemoryGraph({ report: report([memory("x"), memory("y")], [link("x", "y", kind)]), state: state({ selected: "x", mode: "all" }), width: 100, height: 9 }))
+      return [...rows.join("")].reduce((sum, char) => sum + (/[⠁-⣿]/.test(char) ? [...char.codePointAt(0)!.toString(2)].filter((bit) => bit === "1").length : 0), 0)
+    }
+    expect(dots("related")).toBeGreaterThan(0)
+    expect(dots("related")).toBeLessThan(dots("supports"))
+    expect(dots("conflicts")).toBeLessThan(dots("supports"))
   })
 
   test("supports and supersedes are directed (arrows), related and conflicts are not", () => {
     const arrows = /[→←↑↓↗↘↙↖]/
     const undirected = report([memory("x"), memory("y")], [link("x", "y", "conflicts")])
-    const graphOf = (graph: MemoryGraphReport) => plain(renderMemoryGraph({ report: graph, state: state({ selected: "x", mode: "all" }), width: 80, height: 24 })).slice(2).map((row) => row.slice(0, 50)).join("\n")
+    const graphOf = (graph: MemoryGraphReport) => plain(renderMemoryGraph({ report: graph, state: state({ selected: "x", mode: "all" }), width: 70, height: 12 })).slice(3, 9).join("\n")
     expect(graphOf(undirected)).not.toMatch(arrows)
     expect(graphOf(report([memory("x"), memory("y")], [link("x", "y", "supports")]))).toMatch(arrows)
     expect(graphOf(report([memory("x"), memory("y")], [link("x", "y", "supersedes")]))).toMatch(arrows)
   })
 
-  test("project and user memories get different dot tones", () => {
-    const flat = renderMemoryGraph({ report: SAMPLE, state: state({ selected: "c", mode: "all" }), width: 120, height: 24 }).flat()
-    const dots = flat.filter((span) => span.text.includes("●"))
-    expect(dots.some((span) => span.fg === "heading")).toBe(true)
-    expect(dots.some((span) => span.fg === "link")).toBe(true)
+  test("memories take their dot color from the category, most used first; no category keeps the text color", () => {
+    const graph = report([memory("a", { category: "tooling" }), memory("b", { category: "tooling" }), memory("c", { category: "style" }), memory("d")], [link("a", "b"), link("a", "c"), link("a", "d")])
+    expect(memoryGraphCategories(graph)).toEqual([{ category: "tooling", count: 2, tone: "link" }, { category: "style", count: 1, tone: "warning" }, { category: "uncategorized", count: 1, tone: "text" }])
+    const dots = renderMemoryGraph({ report: graph, state: state({ selected: "a", mode: "all" }), width: 120, height: 24 }).flat().filter((span) => span.text.includes("●"))
+    for (const tone of ["link", "warning", "text"]) expect(dots.some((span) => span.fg === tone)).toBe(true)
+  })
+
+  test("a legend under the canvas names the categories and the link kinds the graph has", () => {
+    const rows = plain(renderMemoryGraph({ report: SAMPLE, state: state(), width: 120, height: 30 })).map((row) => row.slice(0, 80)).join("\n")
+    expect(rows).toMatch(/● tooling 1/)
+    expect(rows).toMatch(/● style 1/)
+    expect(rows).toMatch(/● uncategorized 4/)
+    for (const kind of ["related", "supports", "conflicts", "supersedes"]) expect(rows).toContain(` ${kind}`)
+    const small = plain(renderMemoryGraph({ report: report([memory("x"), memory("y")], [link("x", "y")]), state: state(), width: 120, height: 30 })).join("\n")
+    expect(small).not.toContain(" conflicts")
   })
 
   test("the selected memory is drawn with the selected glyph and the marked one with a ring", () => {
@@ -297,26 +338,41 @@ describe("renderMemoryGraph", () => {
     expect(layoutAll.center).toBe("a")
   })
 
-  test("the ASCII glyph set can be passed through", () => {
+  test("a custom glyph set can be passed through (box-line edges)", () => {
     const rows = plain(renderMemoryGraph({ report: SAMPLE, state: state({ mode: "all" }), width: 120, height: 24, glyphs: { node: "o", selected: "@", h: "-", v: "|", up: "/", down: "\\" } })).join("\n")
     expect(rows).toContain("@")
-    expect(rows).not.toContain("●")
+    expect(rows).not.toMatch(/[⠁-⣿]/)
   })
 
-  test("a short body still shows the selection as one line under the graph", () => {
+  test("a short body still shows the selection as one line under the graph, inside the panel", () => {
     const rows = plain(renderMemoryGraph({ report: SAMPLE, state: state({ selected: "a" }), width: 70, height: 9 }))
-    expect(rows[rows.length - 1]).toBe("project · Use pnpm, never npm, in this repository")
+    expect(rows.some((row) => row.includes("project · Use pnpm, never npm, in this repository"))).toBe(true)
+    expect(rows[rows.length - 1]).toMatch(/^└─+┘$/)
   })
 
-  test("layout metrics: side detail from 100 columns, below under, none when tiny", () => {
-    expect(memoryGraphMetrics({ width: 120, height: 24 })).toMatchObject({ head: 2, detail: { placement: "side" } })
-    expect(memoryGraphMetrics({ width: 99, height: 24 }).detail.placement).toBe("below")
-    expect(memoryGraphMetrics({ width: 60, height: 8 }).detail.placement).toBe("line")
-    expect(memoryGraphMetrics({ width: 60, height: 4 })).toMatchObject({ head: 1, detail: { placement: "none" } })
-    const wide = memoryGraphMetrics({ width: 120, height: 24 })
-    expect(wide.canvas.width + wide.detail.width + 3).toBe(120)
-    const below = memoryGraphMetrics({ width: 80, height: 30 })
-    expect(below.head + below.canvas.height + 1 + below.detail.height).toBe(30)
+  test("layout metrics: split from 90 columns, stacked from 50 wide and 24 tall, one panel under that, bare when tiny", () => {
+    expect(memoryGraphMetrics({ width: 120, height: 24 }).frame).toBe("split")
+    expect(memoryGraphMetrics({ width: 89, height: 40 }).frame).toBe("stack")
+    expect(memoryGraphMetrics({ width: 89, height: 23 }).frame).toBe("single")
+    expect(memoryGraphMetrics({ width: 60, height: 8 }).frame).toBe("single")
+    expect(memoryGraphMetrics({ width: 60, height: 6 }).frame).toBe("bare")
+    expect(memoryGraphMetrics({ width: 29, height: 30 }).frame).toBe("bare")
+    const split = memoryGraphMetrics({ width: 120, height: 24 })
+    expect(split.panels.graph.width + split.panels.detail.width + 1).toBe(120)
+    expect(split.canvas.width).toBe(split.panels.graph.width - 4)
+    expect(1 + split.canvas.height + split.legend).toBe(24 - 4)
+    const stack = memoryGraphMetrics({ width: 80, height: 30 })
+    expect(stack.panels.graph.height + 1 + stack.panels.detail.height).toBe(30)
+    expect(stack.detail.height).toBe(stack.panels.detail.height - 4)
+  })
+
+  test("the canvas the metrics promise is the canvas that is drawn", () => {
+    for (const [width, height] of [[120, 24], [200, 55], [80, 30], [70, 9], [60, 14]] as Array<[number, number]>) {
+      const metrics = memoryGraphMetrics({ width, height })
+      const layout = memoryGraphLayout(SAMPLE, state(), metrics.canvas)
+      expect(layout.width).toBe(metrics.canvas.width)
+      expect(layout.nodes.every((node) => node.x1 <= metrics.canvas.width && node.y < metrics.canvas.height)).toBe(true)
+    }
   })
 
   test("rendering is deterministic", () => {

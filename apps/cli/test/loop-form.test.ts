@@ -560,7 +560,7 @@ describe("/loops in the app", () => {
     expect(created(h)).toEqual([])
     expect(h.sent.filter((command) => command.type === "loop.control")).toEqual([])
     expect(h.text()).toContain("the loop is running; edit it after the run")
-    expect(h.text()).toContain("Loops / Edit")
+    expect(h.text()).toContain("Loops · Edit")
     expect(h.text()).toContain("new objective")
   }, 30_000)
 

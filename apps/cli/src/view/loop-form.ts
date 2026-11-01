@@ -516,5 +516,5 @@ export function renderLoopForm(input: { form: LoopForm; templates: readonly Loop
   else if (preview.ok) body.push([{ text: truncateEnd(`→ ${preview.summary}`, inner), fg: "body" }])
   else body.push([{ text: truncateEnd(`· ${preview.error}`, inner), fg: "warning" }])
   const scroll = Math.max(0, focusRow + 5 - room)
-  return pickerFrame(`Loops / ${form.replaces ? "Edit" : "New"}`, hints, width, height, panelGrid({ width, compact: false, padding: true, heights: [room], maxColumns: 1, rows: [[{ title: form.replaces ? form.replaces.name : "New loop", body, scroll, active: true }]] }), form.error || (preview.ok ? preview.summary : preview.error))
+  return pickerFrame(`Loops · ${form.replaces ? "Edit" : "New"}`, hints, width, height, panelGrid({ width, compact: false, padding: true, heights: [room], maxColumns: 1, rows: [[{ title: form.replaces ? form.replaces.name : "New loop", body, scroll, active: true }]] }), form.error || (preview.ok ? preview.summary : preview.error))
 }

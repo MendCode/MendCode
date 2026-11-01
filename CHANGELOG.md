@@ -9,6 +9,14 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+### Changed
+
+- `mendcode --version` says which channel the binary is from: `0.0.2 (stable)`, `0.0.2-beta.4 (beta)`,
+  `0.0.2-nightly.20261101.19 (nightly)`, or `(local build)` for one built from a checkout.
+
+- `/memory` follows the same page standard as `/changes`: every tab has the `Memory · dir …` header with the keys on the right and the counts under it, and the keys no longer repeat `esc back`. The Graph tab is a **Graph** box beside a **Memory** box for the selected memory (scope, category, project, origin and its links); links are braille lines (dotted for related, solid with an arrow for supports and supersedes, dashed for conflicts), dots take their category's color, and a legend names them. The History, Loops and Memory sub-pages say `History · Turn`, `Loops · New` and `Memory · Projects`, as the other pages do.
+- The README screenshots (`docs/assets/readme`) are drawn from the real views at 200 × 56 cells, a full-screen terminal, by `scripts/readme-images.ts`; a test fails when a view changes and the images do not.
+
 ## v0.0.2 - 2026-11-01
 
 The second stable release: everything in the v0.0.2 betas, from MendCode's own ChatGPT login and an advisor model to a visible

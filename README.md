@@ -197,7 +197,7 @@ memories as related, supports, supersedes or conflicts; a memory linked to one t
 ([memory](docs/memory.md)).
 
 <p align="center">
-  <img src="docs/assets/readme/memory-graph.svg" alt="The memory page's Graph tab: saved memories and their links around the selected one, with its detail below." width="100%">
+  <img src="docs/assets/readme/memory-graph.svg" alt="The memory page's Graph tab: saved memories and their links around the selected one, drawn as braille lines, with the selected memory and its links in a box beside it." width="100%">
 </p>
 
 ### Packages and profiles

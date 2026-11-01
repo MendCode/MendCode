@@ -35,6 +35,7 @@ import { LOOP_CONTROL_USAGE, loopAliases, parseLoopAutomation, isLoopAutomation,
 import { WORKTREE_USAGE, parseWorktree, type WorktreeAutomation } from "./worktree-args"
 import { worktreeText } from "./worktree-output"
 import { UNINSTALL_USAGE } from "@mendcode/upgrade/uninstall-args"
+import { versionLine } from "@mendcode/upgrade/releases"
 import { CACHE_USAGE, parseCache, type CacheAutomation } from "./cache-args"
 import { APPLY_USAGE, parseApply, type ApplyAutomation } from "./apply-args"
 import { packageArguments, packageCatalogText, type PackageAutomation } from "./package-args"
@@ -1320,7 +1321,7 @@ export async function runAutomation(command: Automation, deps: AutomationDeps): 
       return createAgentAutomation({ ...deps, directory: dir, request: daemon, result, fail })(command)
     }
     case "version":
-      out.write(`${packageJson.version}\n`)
+      out.write(`${versionLine(packageJson.version)}\n`)
       return EXIT.ok
     case "mflow": {
       const reply = await daemon({ ...command.request, directory: dir })
