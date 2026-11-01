@@ -90,10 +90,16 @@ export type DaemonServiceDeps = {
   waitStopped(): Promise<void>
   sleep(ms: number): Promise<void>
   now(): number
+  /** The live process holding the data directory's writer lock: a daemon that runs even when it does not answer. */
+  lockOwner?(): number | undefined
 }
 
-export function daemonStatusText(report: DaemonStatusReport | { running: false; dataDir: string }, service?: ServiceResult) {
-  const lines = [`Daemon: ${report.running ? "running" : "stopped"}`, `Data: ${report.dataDir}`]
+/** No daemon answered; `unanswered` is the pid of one that still holds the data directory. */
+type NotAnswering = { running: false; dataDir: string; unanswered?: number }
+
+export function daemonStatusText(report: DaemonStatusReport | NotAnswering, service?: ServiceResult) {
+  const state = report.running ? "running" : report.unanswered ? `not answering · process ${report.unanswered} holds the data directory` : "stopped"
+  const lines = [`Daemon: ${state}`, `Data: ${report.dataDir}`]
   if (report.running) lines.push(`PID: ${report.pid}`, `Engine: ${report.engine}${report.buildId ? ` · ${report.buildId}` : ""}`, `Work: ${report.activeTurns} turns · ${report.backgroundJobs} jobs`, `Loops: ${report.loops.active} active · ${report.loops.running} running · ${report.loops.total} total`, `Dream: ${report.dream.configured ? report.dream.enabled ? report.dream.at : "off" : "unconfigured"}`)
   if (service) lines.push(`Service: ${service.backend} · ${service.installed ? "installed" : "not installed"} · ${service.loaded ? "loaded" : "stopped"}`, `Definition: ${service.definitionPath}`, ...(service.drift?.length ? [`Drift: ${service.drift.join(", ")}`] : []))
   return lines.join("\n") + "\n"
@@ -107,9 +113,12 @@ export function createDaemonServiceCli(deps: DaemonServiceDeps) {
     const result = (data: unknown, text: string) => deps.out.write(command.json ? JSON.stringify({ schema: "mendcode-next.cli.v1", kind: "result", command: name, data }) + "\n" : text)
     try {
       if (command.help) { deps.out.write(DAEMON_USAGE); return 0 }
-      const readStatus = async () => {
+      const readStatus = async (): Promise<DaemonStatusReport | NotAnswering> => {
         peer ??= await deps.connect()
-        if (!peer) return { running: false as const, dataDir: deps.dir }
+        if (!peer) {
+          const owner = deps.lockOwner?.()
+          return { running: false as const, dataDir: deps.dir, ...(owner ? { unanswered: owner } : {}) }
+        }
         const reply = await peer.send({ type: "daemon.status" })
         if (!reply.ok) throw new Error(reply.error.message)
         const report = reply.result as unknown as DaemonStatusReport
@@ -120,8 +129,14 @@ export function createDaemonServiceCli(deps: DaemonServiceDeps) {
         const report = await readStatus()
         if (!command.force && report.running && (report.activeTurns || report.backgroundJobs || report.loops.running)) throw new Error("Daemon is busy; retry with --force to interrupt work")
       }
+      // A daemon that holds the data directory but does not answer: a new one could only fail on the lock, and stop cannot reach it.
+      const unanswered = (report: DaemonStatusReport | NotAnswering) => {
+        if (!report.running && report.unanswered) throw new Error(`Daemon process ${report.unanswered} holds ${deps.dir} but does not answer; stop it (kill ${report.unanswered}) and retry`)
+      }
       const started = async () => {
-        if ((await readStatus()).running) return
+        const before = await readStatus()
+        if (before.running) return
+        unanswered(before)
         const service = await deps.host.status()
         if (service.installed && path.resolve(service.dataDir) === path.resolve(deps.dir)) await deps.host.control("start")
         else await deps.launch()
@@ -177,6 +192,7 @@ export function createDaemonServiceCli(deps: DaemonServiceDeps) {
         await deps.waitStopped()
         const report = await readStatus()
         if (report.running) throw new Error("Daemon is still running")
+        unanswered(report)
         result(report, daemonStatusText(report))
       } else if (command.action === "restart") {
         // Same refusal as stop: work in progress is never interrupted without --force.

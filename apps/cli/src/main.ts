@@ -119,7 +119,7 @@ if (daemonService) {
   const options = { dir, cwd, command, ...(daemonService.engine ? { engine: daemonService.engine } : {}), ...(daemonService.serviceDir ? { serviceDir: daemonService.serviceDir } : {}) }
   const host = runtime.createUserService(options)
   process.exit(await createDaemonServiceCli({
-    dir, cwd, host, out: process.stdout, err: process.stderr, now: Date.now, sleep: Bun.sleep,
+    dir, cwd, host, out: process.stdout, err: process.stderr, now: Date.now, sleep: Bun.sleep, lockOwner: () => runtime.daemonLockOwner(dir),
     connect: async () => {
       const client = createClient({ ...(defaultLocalTransport() === "tcp" || readLocalEndpoint(dir) ? { localTcp: () => readLocalEndpoint(dir) } : { socketPath: path.join(dir, "mendd.sock") }), name: "daemon-control", reconnect: false, timeoutMs: 2000 })
       try { await client.connect(); return client } catch { client.close(); return undefined }
@@ -366,9 +366,10 @@ if (startup?.kind === "tui" && /^(\/\$bunfs\/|[A-Za-z]:[\\/]~BUN[\\/])/.test(Bun
   // Solo is only a wish until the first connection: with a daemon already running this terminal only draws.
   const hosts = soloPending && !(await liveDaemon(daemonDataDir ?? process.env.MENDCODE_V2_DIR ?? DEFAULT_DIR))
   const lean = leanClientEnv(process.env, hosts)
-  // A terminal that will host the daemon also leaves a Claude Code shell's session variables behind in that restart (inherited-env.ts).
-  const inherited = hosts ? hostSessionEnvNames(process.env) : []
-  const next = inherited.length ? withoutHostSessionEnv(lean ?? process.env) : lean
+  // A terminal that will host the daemon also leaves a Claude Code shell's session variables behind in that restart (inherited-env.ts);
+  // it keeps its tuios pane's, being that pane.
+  const inherited = hosts ? hostSessionEnvNames(process.env, { pane: false }) : []
+  const next = inherited.length ? withoutHostSessionEnv(lean ?? process.env, { pane: false }) : lean
   if (inherited.length) log("INFO", droppedEnvLog(inherited)!)
   if (next) (await (await import("./relaunch")).selfExec())?.(process.execPath, process.argv.slice(2), next)
   forgetLeanJit()

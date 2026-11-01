@@ -128,6 +128,15 @@ no model, and the pull request reviewer keeps working when the daemon starts wit
 
 ### Fixed
 
+- A daemon started by a terminal in a tuios pane no longer carries that pane's identity and token (`TUIOS_PANE_ID`,
+  `TUIOS_PANE_TOKEN` and the rest), so the commands of every session stop speaking to tuios as that one pane. A terminal that hosts
+  the daemon in its own process keeps them: it is that pane.
+- `mendcode daemon status` no longer says `stopped` when a daemon holds the data directory but does not answer: it says
+  `not answering · process N holds the data directory`, and `daemon start`, `stop` and `restart` name that process at once
+  instead of waiting 5 seconds for a new daemon that could only fail on the lock.
+- A Claude Code, Codex or ACP session gets MendCode's notices (a PR review's summary and findings) with their line breaks, not as one
+  paragraph; each line after the first is indented, so none can pass for a `User:` line of the handoff.
+- `/reviews` says `updated just now`, not `updated now ago`.
 - PR review: `@mendcode review` on a head with nothing new no longer answers just "published". The reply names the head, says
   no new review was posted, and lists the earlier findings it resolved and the ones still open. An explicit review re-checks the
   open findings, so asking again after a fix closes the threads of the fixed ones, also on a head reviewed before. Where GitHub

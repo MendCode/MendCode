@@ -338,6 +338,7 @@ said in the session only. Full rules: [commands in a pull request](pr-review.md#
 | A fix was not pushed | One of `fix.push`, `fix.personal` (personal reviewers), `/pr publish on`, write access, the fork's maintainer edits, or an unmoved branch was missing. The commit is on `refs/mendcode/fix/<pr>/<time>` in the daemon's clone, and the notice names the reason. |
 | A post timed out | The review may have gone through. MendCode reads the PR for its marker before sending anything again, and never posts twice for the same effect. |
 | The daemon stopped | `mendcode daemon status`. With a user service it restarts by itself. Without one, start MendCode again: the watch, its jobs and its kept commands are in `<dir>/pr-review/` and are picked up. |
+| `daemon status` says `not answering · process N holds the data directory` | A daemon runs but does not answer on its socket, and no new one can start while it holds the lock. Stop it with `kill N`; an open MendCode terminal starts a new one, or run `mendcode daemon start`. |
 
 ## Limits
 

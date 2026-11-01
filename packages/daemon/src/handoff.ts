@@ -34,6 +34,8 @@ export type HandoffPlan = {
 const clip = (text: string, max: number) => (text.length > max ? `${text.slice(0, max)} [cut]` : text)
 const defang = (text: string) => text.replaceAll(HANDOFF_END, "[End of handoff ]")
 const oneLine = (text: string) => text.replace(/\s+/g, " ").trim()
+/** A notice keeps its lines (a PR review's summary, its findings); each one after the first is indented, so none reads as a `User:` or `Assistant:` line. */
+const noticeLines = (text: string) => text.trim().split(/\r?\n/).map((line) => line.trimEnd()).filter((line, index, all) => line || all[index - 1]).join("\n  ")
 const tail = (text: string, max: number) => (text.length > max ? `…${text.slice(text.length - max)}` : text)
 
 function parsed(input: string | undefined): Record<string, unknown> | undefined {
@@ -71,7 +73,7 @@ export function renderTurn(turn: SessionTranscriptTurn): string {
     if (item.kind === "user_message") {
       if (item.source === "shell") {
         if (item.text.trim()) commands.push(`- $ ${clip(oneLine(item.text), COMMAND_CHARS)} (typed by the user)`)
-      } else if (item.source === "notice") lines.push(`System notice: ${clip(oneLine(item.text), NOTICE_CHARS)}`)
+      } else if (item.source === "notice") lines.push(`System notice: ${noticeLines(clip(item.text.trim(), NOTICE_CHARS))}`)
       else if (item.text.trim()) lines.push(`User: ${clip(item.text.trim(), MESSAGE_CHARS)}`)
     } else if (item.kind === "agent_message") {
       if (item.text.trim()) answers.push(clip(item.text.trim(), MESSAGE_CHARS))

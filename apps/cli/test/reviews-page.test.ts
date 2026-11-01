@@ -128,6 +128,14 @@ describe("reviews page render", () => {
     expect(out).toContain("cached not reported")
   })
 
+  test("a job updated this minute reads 'updated just now', never 'now ago'", () => {
+    const fresh = ready(populated().map((entry) => entry.id === "checkpointed" ? { ...entry, updatedAt: NOW - 10_000 } : entry))
+    const state = reviewsPageKey({ ...createReviewsPageState(), selectedId: "checkpointed" }, "\r", fresh.dashboard).state
+    const out = screen(render(fresh, state, 160, 48)).replace(/\s+/g, " ")
+    expect(out).toContain("updated just now")
+    expect(out).not.toContain("now ago")
+  })
+
   test("the waiting job's detail shows why it was routed to that reviewer", () => {
     const state = { ...createReviewsPageState(), selectedId: "waiting", detail: true }
     expect(screen(render(ready(), state, 120, 40)).replace(/\s+/g, " ")).toContain("her device ana-vps is offline")

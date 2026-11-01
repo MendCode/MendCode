@@ -16,6 +16,18 @@ export const HOST_SESSION_ENV = [
 ] as const
 
 /**
+ * What the tuios terminal multiplexer puts in each pane's shell (tuios 0.10.1): that pane's identity, its token and the session it
+ * belongs to. A MendCode terminal in a tuios pane starts the daemon when none runs, and every command, hook or `mendcode` the daemon's
+ * sessions start would then speak to tuios as that one pane (seen live: a daemon carried a Symbex pane's `TUIOS_PANE_TOKEN`). The
+ * terminal itself keeps them (`herdr.ts` reports its own pane), and so does a terminal hosting the daemon in its own process: that
+ * daemon is the pane's and ends with it. A daemon of its own process is no pane's.
+ */
+export const TERMINAL_PANE_ENV = [
+  "TUIOS_ENV", "TUIOS_HOST", "TUIOS_SOCKET", "TUIOS_SESSION", "TUIOS_WINDOW_ID", "TUIOS_PANE_ID", "TUIOS_PANE_TOKEN", "TUIOS_PANE_GRANTS",
+  "TUIOS_PANE_TTY", "TUIOS_RESTORED",
+] as const
+
+/**
  * Names a user may also set, dropped only with the value Claude Code gives them: `AI_AGENT` names Claude Code (`claude-code_<version>_agent`),
  * and in a shell carrying `CLAUDECODE` the `GIT_EDITOR=true` it forces (a commit without `-m` would end empty) and the `TRACEPARENT` of that
  * one tool call's span.
@@ -23,10 +35,13 @@ export const HOST_SESSION_ENV = [
 const OWNED_VALUE_ENV = ["AI_AGENT", "GIT_EDITOR", "TRACEPARENT"] as const
 
 /** Every name this module can drop: the only names a log line about it may carry. */
-export const DROPPABLE_ENV: ReadonlySet<string> = new Set([...HOST_SESSION_ENV, ...OWNED_VALUE_ENV])
+export const DROPPABLE_ENV: ReadonlySet<string> = new Set([...HOST_SESSION_ENV, ...TERMINAL_PANE_ENV, ...OWNED_VALUE_ENV])
 
-/** The names in `environment` that came from a Claude Code session, in a stable order. */
-export function hostSessionEnvNames(environment: NodeJS.ProcessEnv): string[] {
+/** Which inherited names go: `pane: false` keeps a tuios pane's, for a process that is that pane. */
+export type InheritedEnvOptions = { pane?: boolean }
+
+/** The names in `environment` that came from a Claude Code session or (unless `pane: false`) a tuios pane, in a stable order. */
+export function hostSessionEnvNames(environment: NodeJS.ProcessEnv, { pane = true }: InheritedEnvOptions = {}): string[] {
   const fromClaudeShell = environment.CLAUDECODE === "1"
   const owned = (name: (typeof OWNED_VALUE_ENV)[number]) => {
     const value = environment[name]
@@ -35,20 +50,21 @@ export function hostSessionEnvNames(environment: NodeJS.ProcessEnv): string[] {
     if (name === "GIT_EDITOR") return fromClaudeShell && value === "true"
     return fromClaudeShell
   }
-  return [...HOST_SESSION_ENV.filter((name) => environment[name] !== undefined), ...OWNED_VALUE_ENV.filter(owned)]
+  const set = (names: readonly string[]) => names.filter((name) => environment[name] !== undefined)
+  return [...set(HOST_SESSION_ENV), ...(pane ? set(TERMINAL_PANE_ENV) : []), ...OWNED_VALUE_ENV.filter(owned)]
 }
 
 /** Removes them from `environment` in place; returns the names that were set. */
-export function dropHostSessionEnv(environment: NodeJS.ProcessEnv): string[] {
-  const dropped = hostSessionEnvNames(environment)
+export function dropHostSessionEnv(environment: NodeJS.ProcessEnv, options: InheritedEnvOptions = {}): string[] {
+  const dropped = hostSessionEnvNames(environment, options)
   for (const name of dropped) delete environment[name]
   return dropped
 }
 
 /** A copy of `environment` without them, for a daemon this process starts. */
-export function withoutHostSessionEnv(environment: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+export function withoutHostSessionEnv(environment: NodeJS.ProcessEnv, options: InheritedEnvOptions = {}): NodeJS.ProcessEnv {
   const copy = { ...environment }
-  dropHostSessionEnv(copy)
+  dropHostSessionEnv(copy, options)
   return copy
 }
 
@@ -67,7 +83,7 @@ export function parseDroppedEnv(value: string | undefined): string[] {
 
 /** The log line naming what was dropped (names only); undefined when nothing was. */
 export function droppedEnvLog(names: readonly string[]): string | undefined {
-  return names.length ? `[ENV]: dropped inherited Claude Code session variables: ${names.join(", ")}` : undefined
+  return names.length ? `[ENV]: dropped inherited session variables: ${names.join(", ")}` : undefined
 }
 
 /** This program's arguments as the system started it: a compiled binary's `process.argv[1]` is its bundled entry, not an argument. */

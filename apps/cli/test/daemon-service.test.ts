@@ -81,6 +81,24 @@ describe("daemon lifecycle CLI", () => {
     expect(service.calls).not.toContain("launch")
   })
 
+  test("a daemon that holds the data directory but does not answer is named, never reported stopped or raced by a new one", async () => {
+    const status = harness()
+    status.deps.lockOwner = () => 2074
+    expect(await status.run("daemon", "status")).toBe(0)
+    expect(status.output()).toContain("Daemon: not answering · process 2074 holds the data directory")
+    for (const action of ["start", "restart", "stop"]) {
+      const h = harness()
+      h.deps.lockOwner = () => 2074
+      expect(await h.run("daemon", action)).toBe(1)
+      expect(h.error()).toContain("Daemon process 2074 holds /tmp/data but does not answer; stop it (kill 2074) and retry")
+      expect(h.calls).not.toContain("launch")
+    }
+    const free = harness()
+    free.deps.lockOwner = () => undefined
+    expect(await free.run("daemon", "status")).toBe(0)
+    expect(free.output()).toContain("Daemon: stopped")
+  })
+
   test("restart stops an idle daemon, waits for its socket and starts a new one; busy work and force follow stop", async () => {
     expect(parsed("daemon", "restart").action).toBe("restart")
     const idle = harness(true)

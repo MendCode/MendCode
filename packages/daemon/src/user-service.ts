@@ -5,6 +5,7 @@ import { homedir } from "node:os"
 import path from "node:path"
 import { daemonLogPaths, daemonLogs } from "./daemon-logs"
 import { droppedEnvArgs, hostSessionEnvNames, withoutHostSessionEnv } from "@mendcode/client/inherited-env"
+import { writerLockOwner } from "@mendcode/store"
 
 export type ServiceAction = "plan" | "install" | "start" | "stop" | "restart" | "uninstall" | "status" | "logs"
 export type ServiceOptions = { dir: string; cwd: string; command: string[]; engine?: string; serviceDir?: string; platform?: string; home?: string; uid?: number }
@@ -175,6 +176,9 @@ export function createUserService(options: ServiceOptions, execute: ServiceExecu
 }
 
 /** Detached startup owns file descriptors only until spawn; the daemon owns its existing writer lock. */
+/** The live daemon process holding `dir`'s writer lock, answering or not. */
+export const daemonLockOwner = (dir: string) => writerLockOwner(path.join(dir, "mendd.lock"))
+
 export async function launchUserDaemon(options: ServiceOptions) {
   const plan = daemonServicePlan(options)
   await mkdir(path.dirname(plan.stdoutPath), { recursive: true, mode: 0o700 })

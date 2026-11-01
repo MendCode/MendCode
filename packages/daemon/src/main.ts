@@ -129,7 +129,8 @@ const logLine = (message: string) => (hosting.log ? hosting.log("info", message)
 // (docs/claude-code.md, "Started from Claude Code"). The daemon program itself (`mendcode __daemon`, `bun main.ts`, not a command or
 // terminal that hosts it in its own process) restarts in place without them; a launcher that dropped them already names them in `--dropped-env`.
 if (!hosting.active && (process.argv[2] === "__daemon" || Bun.main === import.meta.path)) await restartWithoutHostSessionEnv({ log: logLine })
-const droppedEnv = droppedEnvLog([...parseDroppedEnv(arg("dropped-env")), ...dropHostSessionEnv(process.env)])
+// A terminal hosting the daemon is a tuios pane and keeps that pane's variables (inherited-env.ts).
+const droppedEnv = droppedEnvLog([...parseDroppedEnv(arg("dropped-env")), ...dropHostSessionEnv(process.env, { pane: !hosting.active })])
 if (droppedEnv) logLine(droppedEnv)
 // Before gh, git or an engine runs: a daemon started by `env -i`, launchd or systemd has a PATH without the user's install folders.
 void completeToolPath(process.env)

@@ -18,6 +18,12 @@ function ownerOf(file: string) {
   }
 }
 
+/** The live process holding the lock, if any: a daemon that owns the data directory whether or not it answers on its socket. */
+export function writerLockOwner(file: string): number | undefined {
+  const owner = ownerOf(file)
+  return owner !== undefined && Number.isInteger(owner) && owner > 0 && alive(owner) ? owner : undefined
+}
+
 /**
  * One writer process per data directory (A11). A second daemon fails fast with the owner's pid
  * instead of "recovering" the lock; a lock left by a dead process is replaced.

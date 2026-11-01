@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import { droppedEnvArgs, droppedEnvLog, dropHostSessionEnv, hostSessionEnvNames, ownArguments, parseDroppedEnv, restartWithoutHostSessionEnv, withoutHostSessionEnv } from "@mendcode/client/inherited-env"
+import { DROPPABLE_ENV, droppedEnvArgs, droppedEnvLog, dropHostSessionEnv, hostSessionEnvNames, ownArguments, parseDroppedEnv, restartWithoutHostSessionEnv, withoutHostSessionEnv } from "@mendcode/client/inherited-env"
 import { askHarnessesAndStop, CLAUDE_SHELL_ENV, expectCleanChild, fakeClaude, USER_ENV } from "./inherited-env-fixture"
 
 const cleanups: Array<() => void> = []
@@ -34,6 +34,15 @@ describe("the variables a Claude Code shell leaves behind", () => {
     expect(hostSessionEnvNames({ CLAUDECODE: "1", GIT_EDITOR: "true", TRACEPARENT: "00-abc-def-01" })).toEqual(["CLAUDECODE", "GIT_EDITOR", "TRACEPARENT"])
   })
 
+  test("a daemon started from a tuios pane drops that pane's identity and token; a process that is the pane keeps them", () => {
+    const pane = { TUIOS_ENV: "1", TUIOS_SOCKET: "/tmp/tuios.sock", TUIOS_SESSION: "session-0", TUIOS_PANE_ID: "f52f9980", TUIOS_PANE_TOKEN: "leaked-pane-token", TUIOS_PANE_GRANTS: "agent" }
+    const environment: NodeJS.ProcessEnv = { ...pane, CLAUDECODE: "1", TERM_PROGRAM: "TUIOS", PATH: "/bin" }
+    expect(withoutHostSessionEnv(environment)).toEqual({ TERM_PROGRAM: "TUIOS", PATH: "/bin" })
+    expect(hostSessionEnvNames(environment, { pane: false })).toEqual(["CLAUDECODE"])
+    expect(withoutHostSessionEnv(environment, { pane: false })).toEqual({ ...pane, TERM_PROGRAM: "TUIOS", PATH: "/bin" })
+    expect(parseDroppedEnv("TUIOS_PANE_TOKEN,TUIOS_OTHER")).toEqual(["TUIOS_PANE_TOKEN"])
+  })
+
   test("the copy for a daemon leaves the caller's environment untouched", () => {
     const environment: NodeJS.ProcessEnv = { CLAUDECODE: "1", PATH: "/bin" }
     expect(withoutHostSessionEnv(environment)).toEqual({ PATH: "/bin" })
@@ -45,7 +54,7 @@ describe("the variables a Claude Code shell leaves behind", () => {
     expect(droppedEnvArgs(["CLAUDECODE", "CLAUDE_PID"])).toEqual(["--dropped-env", "CLAUDECODE,CLAUDE_PID"])
     expect(parseDroppedEnv("CLAUDECODE,PATH,\u001b[31mFAKE,CLAUDE_PID")).toEqual(["CLAUDECODE", "CLAUDE_PID"])
     expect(parseDroppedEnv(undefined)).toEqual([])
-    expect(droppedEnvLog(["CLAUDECODE"])).toBe("[ENV]: dropped inherited Claude Code session variables: CLAUDECODE")
+    expect(droppedEnvLog(["CLAUDECODE"])).toBe("[ENV]: dropped inherited session variables: CLAUDECODE")
     expect(droppedEnvLog([])).toBeUndefined()
   })
 
@@ -81,7 +90,8 @@ describe("restarting in place without them", () => {
   test("nothing to drop, or no way to restart (Windows): it returns and logs nothing", async () => {
     const lines: string[] = []
     let execs = 0
-    const absent = Object.fromEntries(Object.keys(CLAUDE_SHELL_ENV).map((name) => [name, undefined]))
+    // Every droppable name absent, a tuios pane's too: the test may run in one.
+    const absent = Object.fromEntries([...DROPPABLE_ENV].map((name) => [name, undefined]))
     await withEnv(absent, () => restartWithoutHostSessionEnv({ log: (line) => lines.push(line), exec: async () => () => { execs++ } }))
     await withEnv(CLAUDE_SHELL_ENV, () => restartWithoutHostSessionEnv({ log: (line) => lines.push(line), exec: async () => undefined }))
     expect(execs).toBe(0)
@@ -108,7 +118,7 @@ describe.skipIf(process.platform === "win32")("a daemon process started from a C
     expectCleanChild(claude)
     await daemon.exited
     const log = await stderr
-    expect(log).toContain("[ENV]: dropped inherited Claude Code session variables: ")
+    expect(log).toContain("[ENV]: dropped inherited session variables: ")
     for (const name of ["CLAUDECODE", "CLAUDE_CODE_CHILD_SESSION", "CLAUDE_CODE_SSE_PORT", "AI_AGENT"]) expect(log).toContain(name)
     for (const value of ["leaked-session-id", "leaked-token", "sk-ant-test-kept"]) expect(log).not.toContain(value)
   }, 40_000)

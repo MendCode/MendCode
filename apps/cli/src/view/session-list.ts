@@ -219,6 +219,12 @@ export function relativeTime(now: number, then: number) {
   return `${Math.floor(days / 7)}w`
 }
 
+/** `relativeTime` as a past moment: "just now", "5m ago". */
+export function timeAgo(now: number, then: number) {
+  const time = relativeTime(now, then)
+  return time === "now" ? "just now" : `${time} ago`
+}
+
 function clampLine(line: Line, width: number): Line {
   const out: Line = []
   let used = 0
@@ -308,7 +314,7 @@ function detailRows({ session, width, now, home, snippet }: { session: SessionSu
     ...(session.color ? [{ label: "color", value: session.color }] : []),
     { label: "state", value: session.state, ...(session.state === "error" ? { tone: "error" as const } : {}) },
     ...(session.draft ? [{ label: "draft", value: draftSizeLabel(session.draft) }] : []),
-    { label: "updated", value: relativeTime(now, at) === "now" ? "just now" : `${relativeTime(now, at)} ago` },
+    { label: "updated", value: timeAgo(now, at) },
     ...(session.archivedAt !== undefined ? [{ label: "archived", value: new Date(session.archivedAt).toISOString().slice(0, 10) }] : []),
     ...(session.queued > 0 ? [{ label: "queued", value: String(session.queued) }] : []),
     { label: "id", value: session.sessionId.slice(0, 16) },

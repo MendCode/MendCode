@@ -5,7 +5,7 @@ import { fit, panelGrid, spread, type GridPanel } from "./deck"
 import { compact, thousands } from "./format"
 import { tabsRow, type PageTab } from "./page"
 import { pickerFrame } from "./picker-frame"
-import { relativeTime } from "./session-list"
+import { relativeTime, timeAgo } from "./session-list"
 import { shortenMiddle, textWidth, truncateEnd, wrap } from "./wrap"
 
 /**
@@ -279,7 +279,7 @@ export function jobDetailRows(job: PrJobSummary, width: number, now: number): Li
   if (job.stop) rows.push([], ...stopRows(job.stop, width, now))
   if (job.error) rows.push([], ...field("error", job.error, width, "error"))
   rows.push([])
-  rows.push(...field("created", `${relativeTime(now, job.createdAt)} ago · updated ${relativeTime(now, job.updatedAt)} ago`, width, "muted"))
+  rows.push(...field("created", `${timeAgo(now, job.createdAt)} · updated ${timeAgo(now, job.updatedAt)}`, width, "muted"))
   return rows.map((line) => clampLine(line, width))
 }
 
@@ -315,7 +315,7 @@ const AVAILABILITY: Record<PrReviewerSummary["availability"], ColorName> = { onl
 function reviewerRows(dashboard: PrReviewDashboard, width: number, now: number, glyphs: Glyphs): Line[] {
   if (!dashboard.reviewers.length) return [[{ text: "No reviewer registered.", fg: "muted" }], ...prose(".mendcode/reviewers.yaml on the base branch lists them", width, "muted")]
   return dashboard.reviewers.flatMap((reviewer): Line[] => {
-    const seen = reviewer.availability !== "online" && reviewer.lastSeenAt !== undefined ? ` · seen ${relativeTime(now, reviewer.lastSeenAt)} ago` : ""
+    const seen = reviewer.availability !== "online" && reviewer.lastSeenAt !== undefined ? ` · seen ${timeAgo(now, reviewer.lastSeenAt)}` : ""
     return [
       clampLine([{ text: `${glyphs.dot} `, fg: AVAILABILITY[reviewer.availability] }, { text: reviewer.id, fg: "text", bold: true }, { text: `  ${reviewer.scope}${reviewer.login ? ` · ${reviewer.login}` : ""}`, fg: "muted" }], width),
       clampLine([{ text: "  " }, { text: reviewer.availability, fg: AVAILABILITY[reviewer.availability] }, { text: `${reviewer.device ? ` · device ${reviewer.device}` : ""}${seen}`, fg: "muted" }], width),
