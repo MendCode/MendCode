@@ -551,6 +551,12 @@ const SharedSettings = lazySchema(() => z.strictObject({
     /** A new session in a Git project is created in a fresh workspace, the way `/warp` → New workspace does (docs/worktrees.md). Off when unset. */
     newSessionWorktree: z.boolean().optional(),
   }).optional(),
+  /**
+   * This device's PR reviewer (docs/pr-review.md "Concurrency"): `concurrency` reviews and `@mendcode` commands run at once, 2
+   * when unset. Per device, not per repository: it is this machine's capacity, shared by every watched repository. The daemon's
+   * background scheduler still runs at most 2 jobs at once in its normal resource mode (4 in high), so 3 and 4 need high.
+   */
+  prReview: z.strictObject({ concurrency: z.number().int().min(1).max(4).optional() }).optional(),
   /** Footer segments in display order; DEFAULT_FOOTER when unset. */
   footer: z.array(z.enum(FOOTER_SEGMENTS)).max(FOOTER_SEGMENTS.length).optional(),
   /** Prompt-cache hints the native engine sends (docs/prompt-cache.md): `legacy` (default) = today's per-session key · `off` = none · `smart` = per-lineage keys and Anthropic breakpoints at tools, system and the last user message. */

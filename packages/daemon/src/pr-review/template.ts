@@ -16,7 +16,11 @@ const CATEGORY_LABEL: Record<PrFinding["category"], string> = { correctness: "Co
 const SEVERITY_ORDER: Record<PrFinding["severity"], number> = { critical: 0, major: 1, minor: 2 }
 
 /** What the review looked at, for the summary's details (docs/pr-review.md, "What a review looks like"). */
-export type ReviewInfo = { files: ReadonlyArray<{ path: string; touched: number }>; profile: string; cap: number; incremental: boolean; notes: readonly string[] }
+export type ReviewInfo = {
+  files: ReadonlyArray<{ path: string; touched: number }>; profile: string; cap: number; incremental: boolean; notes: readonly string[]
+  /** How many candidate findings the separate verify pass judged (0: the review pass raised none, so no verify pass ran). Unset: not known. */
+  checked?: number | undefined
+}
 
 /** A fence longer than any run of backticks in `text`, so a finding's own code never closes it. */
 const fenceFor = (text: string) => "`".repeat(Math.max(3, ...[...text.matchAll(/`+/g)].map((run) => run[0].length + 1)))
@@ -169,6 +173,23 @@ function incompleteVerdict(stop: PrStopReason, total: number): string {
   ].filter(Boolean).join("\n")
 }
 
+const candidates = (count: number) => `${count} candidate${count === 1 ? "" : "s"}`
+
+/**
+ * The details' verification line, true in every case: what the separate verify pass judged (`checked`), or that none ran because
+ * the review pass raised nothing; an incomplete review only claims a check for what it shows. `dropped` counts every candidate
+ * left out, before or after the verify pass.
+ */
+function verificationLine({ stop, unverified, total, dropped, checked }: { stop?: PrStopReason | undefined; unverified: boolean; total: number; dropped: number; checked?: number | undefined }): string {
+  const leftOut = dropped ? `; ${candidates(dropped)} ${dropped === 1 ? "was" : "were"} left out (not confirmed, outside the diff or past the cap)` : ""
+  if (stop) return `- **Verification:** incomplete${stop.remaining ? `; ${stop.remaining}` : ""}; ${total ? "what is shown was checked again by a separate pass" : "nothing is shown"}, nothing unverified is published`
+  if (unverified) return `- **Verification:** the token budget stopped the review before the separate pass; ${candidates(dropped)} ${dropped === 1 ? "was" : "were"} not verified (raise \`budget.tokens_per_pr\` in \`.mendcode/review.yaml\`)`
+  if (checked === 0) return `- **Verification:** the review pass raised no candidate findings, so no separate pass was needed${dropped ? `; ${candidates(dropped)} outside the diff ${dropped === 1 ? "was" : "were"} left out` : ""}`
+  if (!total && checked !== undefined) return `- **Verification:** a separate pass checked ${candidates(checked)} again and confirmed none${leftOut}`
+  if (!total) return `- **Verification:** nothing was confirmed${leftOut}`
+  return `- **Verification:** every finding was checked again by a separate pass${checked !== undefined ? ` (${candidates(checked)} judged)` : ""}${leftOut}`
+}
+
 /**
  * The review's body: the verdict, every finding in one table, what GitHub would not take inline, the details folded, and the head
  * marker. Without a template (or with an empty one and the neutral tone) the body is the built-in layout, byte for byte. With one,
@@ -199,11 +220,7 @@ export function renderReviewBody({ result, inline, moved, repo, info, template, 
   const facts = [
     info ? `- **Files reviewed:** ${info.files.length}${effort ? ` · ${touched} changed line${touched === 1 ? "" : "s"} · estimated review effort ${effort.level}/5, about ${effort.minutes} minutes` : ""}` : "",
     info ? `- **Profile:** ${info.profile} · at most ${info.cap} inline comment${info.cap === 1 ? "" : "s"}` : "",
-    stop
-      ? `- **Verification:** incomplete${stop.remaining ? `; ${stop.remaining}` : ""}; what is shown was checked again by a separate pass, nothing unverified is published`
-      : unverified
-      ? `- **Verification:** the token budget stopped the review before the separate pass; ${result.dropped} candidate${result.dropped === 1 ? " was" : "s were"} not verified (raise \`budget.tokens_per_pr\` in \`.mendcode/review.yaml\`)`
-      : `- **Verification:** every finding was checked again by a separate pass${result.dropped ? `; ${result.dropped} candidate${result.dropped === 1 ? " was" : "s were"} left out (not confirmed, outside the diff or past the cap)` : ""}`,
+    verificationLine({ stop, unverified, total, dropped: result.dropped, checked: info?.checked }),
     `- **Cost:** ${result.tokens.input.toLocaleString("en-US")} tokens in${result.tokens.cached ? ` (${result.tokens.cached.toLocaleString("en-US")} from the provider's cache)` : ""} · ${result.tokens.output.toLocaleString("en-US")} out`,
     ...(info?.notes ?? []).slice(0, 8).map((note) => `- ${note.replace(/^\[PR_REVIEW\]:\s*/, "")}`),
   ].filter(Boolean).join("\n")

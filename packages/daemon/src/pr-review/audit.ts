@@ -102,9 +102,9 @@ export type AuditRun = {
  * `checkpoint` (from an earlier stopped audit of the same head) resumes verification without a second review pass. Never throws:
  * a failure is `status: "failed"` with its reason.
  */
-export async function runAudit({ directory, head = "HEAD", sessionFactory, git = gitRun, config, contextWindow, account, memory, checkpoint }: {
+export async function runAudit({ directory, head = "HEAD", sessionFactory, git = gitRun, config, contextWindow, account, calling, memory, checkpoint }: {
   directory: string; head?: string; sessionFactory: ReviewSessionFactory; git?: GitRun; config?: ReviewConfig | undefined
-  contextWindow?: number | undefined; account?: RunPlatformInput["account"]; memory?: RunPlatformInput["memory"]; checkpoint?: JobCheckpoint | undefined
+  contextWindow?: number | undefined; account?: RunPlatformInput["account"]; calling?: RunPlatformInput["calling"]; memory?: RunPlatformInput["memory"]; checkpoint?: JobCheckpoint | undefined
 }): Promise<AuditRun> {
   const failed = (reason: string, sha = head, extra: Partial<AuditRun> = {}): AuditRun => ({ status: "failed", coverage: "audit", base: EMPTY_TREE, head: sha, reason, files: 0, cut: [], text: `Audit of ${directory} at ${sha.slice(0, 12)}: failed (${reason.replace(/^\[PR_REVIEW\]:\s*/, "")})`, ...extra })
   if (!/^[A-Za-z0-9][A-Za-z0-9._/@^~-]{0,199}$/.test(head) || head.includes("..")) return failed(`[PR_REVIEW]: invalid ref ${JSON.stringify(head.slice(0, 80))}`)
@@ -123,7 +123,7 @@ export async function runAudit({ directory, head = "HEAD", sessionFactory, git =
     const remembered = memory ? await memory({ title: `Audit of ${directory}`, files: context.files.map((file) => file.path) }).catch(() => undefined) : undefined
     const engineConfig = engineConfigFor({ config: effective, context, learnings: read.learnings, budgetTokens: budget.tokensPerPr ?? Number.POSITIVE_INFINITY, plan, memory: remembered })
     const resume = checkpoint?.result && checkpoint.result.head === sha ? checkpoint as ReviewCheckpoint : undefined
-    const attempt = await attemptReview({ sessionFactory, account, context, config: engineConfig, plan, cap: effective.cap, checkpoint: resume })
+    const attempt = await attemptReview({ sessionFactory, account, calling, context, config: engineConfig, plan, cap: effective.cap, checkpoint: resume })
     const base = { status: "reviewed" as const, coverage: "audit" as const, base: EMPTY_TREE, head: sha, config: effective, plan, files: context.files.length, cut: context.cut }
     if (!attempt.ok) return { ...base, reason: "audit incomplete; stopped by the provider's limit", stop: attempt.stop, checkpoint: attempt.checkpoint, text: auditText({ directory, head: sha, cut: context.cut, stop: attempt.stop }) }
     const outcome = attempt.outcome

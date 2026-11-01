@@ -73,6 +73,12 @@ no model, and the pull request reviewer keeps working when the daemon starts wit
 - Mermaid flowcharts with `subgraph` are laid out like the rest: boxes in layers with straight arrows, each subgraph a frame with
   its title in the border, nested subgraphs nested frames. Before, every box of such a diagram was stacked in one column with a
   side channel per connection. A left-to-right one too wide for the chat is drawn top-down instead.
+- PR review: `prReview.concurrency` (1 to 4, default 2) sets how many reviews this device runs at once, across every watched
+  repository. It is a per-device setting that a config bundle or a remote client never changes, and `/pr watch-repo list`, the
+  status and `/reviews` show it ([concurrency](docs/pr-review.md#concurrency)).
+- PR review: an opt-in offline fallback (`routing.offline_fallback` in `.mendcode/reviewers.yaml`) lets a global reviewer take a
+  PR a personal reviewer has not claimed or reviewed within the set minutes. The waiting job names the reviewer and the time, and
+  a personal reviewer that comes back after the fallback posted posts nothing. Without the key nothing changes.
 
 ### Changed
 
@@ -179,8 +185,25 @@ no model, and the pull request reviewer keeps working when the daemon starts wit
 - `edit` cut its diff at 2,000 lines even where the daemon allows more: the output limits were passed to the diff, not to the cut.
 - The context report counts every file a `read` with `paths` named, each with its share of the result; such a read was left out.
 - The built-in search (no ripgrep installed) no longer reports the empty "line" after a file's final newline.
+- PR review: the verification line of a "No findings" review says what happened: no candidates and no separate pass, or N
+  candidates checked again and none confirmed. It no longer says every finding was checked when there were none.
+- PR review: a `requested` watch takes an `@mendcode` comment addressed to no one on a PR that area or label routing gives its
+  login's personal reviewer.
+- PR review: `/pr review` (and your own `@mendcode review`) on an `all` watch reviews as the repository's default global reviewer
+  from `.mendcode/reviewers.yaml` (such as `team`), not as `global`, so a head the watch already reviewed is not posted twice.
+- PR review: a review that posts nothing (this head's review was already posted, or nothing is new on it) says so in its notice
+  instead of a bare "published", and that the pull request keeps the earlier review.
+- PR review: a fix session waiting for your approval was stopped as stalled after 10 minutes: the session's own "waiting for
+  approval" state ended the wait. The wait now lasts until the approval is answered.
+- PR review: a review whose Claude Code child never answered `initialize` (a load spike) is retried with backoff, spending an
+  attempt like a stalled turn, instead of failing until someone retries it from `/reviews`.
+- PR review: the model spend of a call that failed, was stopped or was cut off by a killed daemon is accounted: what the engine
+  reported before it ended, and the call as one without a report. A call killed with the daemon is accounted at the next start.
 
 ### Known limitations
+
+- PR review: a Codex review child still reads your own `~/.codex/AGENTS.md`; codex-cli 0.162.1 has no switch for it, and MendCode
+  never moves or copies `~/.codex`. A Claude Code turn killed with the daemon reports no usage, so its spend stays unknown.
 
 - Sign in with ChatGPT has no device code: sign in on the machine that runs the daemon. On that login there is no native
   compaction (MendCode's own summary is used), no hosted image generation and no `/fast` priority. Device code remains for a

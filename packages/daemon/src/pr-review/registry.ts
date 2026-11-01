@@ -61,6 +61,12 @@ const registrySchema = (forge: RegistryForge) => z.strictObject({
     fallback: z.union([z.literal("none"), ReviewerId]).optional(),
     /** A label on the PR routes it to this reviewer. */
     labels: z.record(z.string().min(1).max(100), ReviewerId).default({}),
+    /**
+     * Opt-in: a pull request routed only to personal reviewers whose MendCode runs on other devices waits `after_minutes` for
+     * them; if none of them claimed or reviewed its head by then, `reviewer` (a global reviewer; unset: `fallback`, else `default`)
+     * reviews it on its own device. Unset: the pull request waits for its personal reviewers, as before.
+     */
+    offline_fallback: z.strictObject({ after_minutes: z.number().int().min(1).max(10_080), reviewer: ReviewerId.optional() }).optional(),
   }).default({ global: "always", labels: {} }),
 })
 type RegistryFile = z.infer<ReturnType<typeof registrySchema>>
@@ -69,8 +75,10 @@ const SCHEMAS = { github: registrySchema("github"), gitlab: registrySchema("gitl
 export type ReviewerRegistry = {
   version: 1
   reviewers: ReviewerEntry[]
-  routing: { default?: string | undefined; global: "always" | "personal-only"; fallback?: string | undefined; labels: Record<string, string> }
+  routing: { default?: string | undefined; global: "always" | "personal-only"; fallback?: string | undefined; labels: Record<string, string>; offlineFallback?: OfflineFallback | undefined }
 }
+/** `routing.offline_fallback` resolved: the global reviewer that stands in, and how long a pull request waits for its personal reviewers first. */
+export type OfflineFallback = { reviewer: string; afterMs: number }
 
 /** The reviewer a repository without `reviewers.yaml` has: today's single repository reviewer, which the repo config still governs. */
 export const IMPLICIT_GLOBAL: ReviewerEntry = { id: "global", scope: "global", areas: [], capabilities: ["review", "fix", "publish"] }
@@ -105,11 +113,27 @@ function semanticProblems(parsed: RegistryFile): string[] {
   }
   if (routing.fallback !== undefined && routing.fallback !== "none") known("routing.fallback", routing.fallback)
   for (const [label, id] of Object.entries(routing.labels)) known(`routing.labels.${label}`, id)
+  if (routing.offline_fallback) {
+    const named = routing.offline_fallback.reviewer
+    const id = offlineFallbackId(parsed.reviewers, routing)
+    const entry = id === undefined ? undefined : ids.get(id)
+    if (named !== undefined) known("routing.offline_fallback.reviewer", named)
+    if (!entry) { if (named === undefined) problems.push("routing.offline_fallback: no global reviewer to stand in; name one in its reviewer") }
+    else if (entry.scope !== "global") problems.push(`routing.offline_fallback.reviewer: "${entry.id}" is a personal reviewer; the fallback must be global`)
+    else if (!entry.capabilities.includes("review")) problems.push(`routing.offline_fallback.reviewer: "${entry.id}" has no review capability`)
+  }
   return problems
 }
 
+/** The reviewer `routing.offline_fallback` names: its own `reviewer`, else `routing.fallback` (a reviewer, not `none`), else the default global one. */
+function offlineFallbackId(reviewers: ReadonlyArray<Pick<ReviewerEntry, "id" | "scope" | "areas">>, routing: RegistryFile["routing"]): string | undefined {
+  if (routing.offline_fallback?.reviewer !== undefined) return routing.offline_fallback.reviewer
+  if (routing.fallback !== undefined && routing.fallback !== "none") return routing.fallback
+  return defaultGlobalOf(reviewers, routing.default)
+}
+
 /** The default global reviewer: `routing.default`, else the first global one without areas, else the first global one. */
-const defaultGlobalOf = (reviewers: readonly ReviewerEntry[], chosen: string | undefined) => {
+const defaultGlobalOf = (reviewers: ReadonlyArray<Pick<ReviewerEntry, "id" | "scope" | "areas">>, chosen: string | undefined) => {
   const globals = reviewers.filter((entry) => entry.scope === "global")
   return chosen ?? (globals.find((entry) => !entry.areas.length) ?? globals[0])?.id
 }
@@ -136,8 +160,10 @@ export function parseRegistry(text: string | undefined, forge: RegistryForge = "
   const { routing } = parsed.data
   const fallbackId = routing.fallback
   const chosen = defaultGlobalOf(reviewers, routing.default)
+  const standIn = routing.offline_fallback ? offlineFallbackId(reviewers, routing) : undefined
+  const offlineFallback = routing.offline_fallback && standIn ? { reviewer: standIn, afterMs: routing.offline_fallback.after_minutes * 60_000 } : undefined
   return {
-    registry: { version: 1, reviewers, routing: { ...(chosen ? { default: chosen } : {}), global: routing.global, ...(fallbackId ? { fallback: fallbackId } : {}), labels: routing.labels } },
+    registry: { version: 1, reviewers, routing: { ...(chosen ? { default: chosen } : {}), global: routing.global, ...(fallbackId ? { fallback: fallbackId } : {}), labels: routing.labels, ...(offlineFallback ? { offlineFallback } : {}) } },
     problems: [],
     source: "file",
   }

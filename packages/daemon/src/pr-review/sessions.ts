@@ -63,13 +63,18 @@ export const turnFailureKind = (message: string, code = ""): TurnFailureKind => 
 export class ReviewTurnError extends Error {
   readonly kind: TurnFailureKind
   readonly resetsAt: number | undefined
+  /** What the provider reported for this turn before it failed or was stopped (a partial report), when it reported anything. */
+  spent: ReviewTurn["tokens"] | undefined
   constructor(message: string, kind: TurnFailureKind, resetsAt?: number | undefined) {
     super(message)
     this.name = "ReviewTurnError"
     this.kind = kind
     this.resetsAt = resetsAt
+    this.spent = undefined
   }
 }
+/** `error` carrying what `tokens` holds, when the turn reported any usage before it ended. */
+const withSpent = <T extends ReviewTurnError>(error: T, tokens: ReviewTurn["tokens"], reported: boolean): T => { if (reported) error.spent = { ...tokens }; return error }
 
 /**
  * A turn the daemon stopped because its child went silent for `TURN_IDLE_MS` (`idle`) or ran past `TURN_CAP_MS` (`cap`). Its kind
@@ -89,6 +94,15 @@ export class ReviewTurnStalled extends ReviewTurnError {
   }
 }
 export const isStalled = (error: unknown): error is ReviewTurnStalled => error instanceof ReviewTurnStalled
+/** The approval was answered, or the child works again: its items, its turn, its usage, or a state other than waiting for one. */
+const endsApprovalWait = (event: SessionEvent) =>
+  event.type === "server.request.resolved" || event.type.startsWith("item.") || event.type.startsWith("turn.") || event.type === "usage.recorded"
+  || (event.type === "foreground.state" && event.state !== "waiting_approval")
+/**
+ * A model child that never answered its start handshake (seen live as `[CLAUDE]: no answer to initialize` with the machine under
+ * heavy load). Nothing about the job caused it, so it is retryable like a stall: each retry spends an attempt, with backoff.
+ */
+export const childNotStarted = (reason: string) => /no answer to initialize/i.test(reason)
 function durationText(ms: number) {
   if (ms < 60_000) return `${Math.max(1, Math.round(ms / 1000))} s`
   const minutes = Math.round(ms / 60_000)
@@ -113,7 +127,7 @@ export function inLanguage(factory: ReviewSessionFactory, language: string): Rev
 
 type Ended = { ok: true; turn: ReviewTurn } | { ok: false; error: ReviewTurnError }
 /** `last`: when the child last sent any event; `asking`: a fix session's approval is with the user, so silence is not a stall. */
-type Waiting = { text: string; message?: string; tokens: ReviewTurn["tokens"]; last: number; asking: boolean; done(result: Ended): void }
+type Waiting = { text: string; message?: string; tokens: ReviewTurn["tokens"]; reported: boolean; last: number; asking: boolean; done(result: Ended): void }
 
 export function createReviewSessions(deps: {
   /**
@@ -149,7 +163,7 @@ export function createReviewSessions(deps: {
    */
   function watchTurn(id: SessionId, started: number): () => void {
     let timer: ReturnType<typeof setTimeout> | undefined
-    const stop = (error: ReviewTurnStalled) => { void deps.cancel(id); waiting.get(id)?.done({ ok: false, error }) }
+    const stop = (error: ReviewTurnStalled) => { void deps.cancel(id); const entry = waiting.get(id); entry?.done({ ok: false, error: withSpent(error, entry.tokens, entry.reported) }) }
     const check = () => {
       const entry = waiting.get(id)
       if (!entry) return
@@ -176,7 +190,7 @@ export function createReviewSessions(deps: {
         id,
         async send(prompt) {
           const started = clock()
-          const ended = new Promise<Ended>((resolve) => waiting.set(id, { text: "", tokens: { input: 0, output: 0, cached: 0 }, last: started, asking: false, done: resolve }))
+          const ended = new Promise<Ended>((resolve) => waiting.set(id, { text: "", tokens: { input: 0, output: 0, cached: 0 }, reported: false, last: started, asking: false, done: resolve }))
           const unwatch = watchTurn(id, started)
           try {
             await deps.submit(id, prompt, editing)
@@ -193,9 +207,11 @@ export function createReviewSessions(deps: {
   function observe(event: SessionEvent) {
     const entry = waiting.get(event.sessionId)
     if (!entry) return
-    // Any event is the child at work; an answered approval (or anything after it) ends a fix session's wait for the user.
+    // Any event is the child at work. A fix session's wait for the user ends with the approval's answer or the work after it, not
+    // with the session's own report that it waits (seen live: `waiting_approval` right after the request cleared the wait, and the
+    // idle watch stopped the fix after 10 minutes of waiting for the user).
     entry.last = clock()
-    entry.asking = false
+    if (endsApprovalWait(event)) entry.asking = false
     switch (event.type) {
       case "item.started":
         if (event.kind === "agent_message") { const set = messages.get(event.sessionId) ?? new Set(); set.add(event.itemId); messages.set(event.sessionId, set) }
@@ -205,6 +221,7 @@ export function createReviewSessions(deps: {
         return
       case "usage.recorded":
         entry.tokens = { input: entry.tokens.input + event.input + event.cacheRead + event.cacheWrite, output: entry.tokens.output + event.output, cached: (entry.tokens.cached ?? 0) + event.cacheRead }
+        entry.reported = true
         return
       case "server.request":
         if (editors.has(event.sessionId)) { entry.asking = true; return }
@@ -215,11 +232,11 @@ export function createReviewSessions(deps: {
       case "turn.failed": {
         const kind = turnFailureKind(event.error.message, event.error.code)
         const resetsAt = kind === "error" ? undefined : parseResetTime(event.error.message, now())
-        return entry.done({ ok: false, error: new ReviewTurnError(`[PR_REVIEW]: the review turn failed: ${event.error.message.slice(0, 300)}`, kind, resetsAt) })
+        return entry.done({ ok: false, error: withSpent(new ReviewTurnError(`[PR_REVIEW]: the review turn failed: ${event.error.message.slice(0, 300)}`, kind, resetsAt), entry.tokens, entry.reported) })
       }
       case "turn.cancelled":
       case "turn.interrupted":
-        return entry.done({ ok: false, error: new ReviewTurnError("[PR_REVIEW]: the review turn stopped", "error") })
+        return entry.done({ ok: false, error: withSpent(new ReviewTurnError("[PR_REVIEW]: the review turn stopped", "error"), entry.tokens, entry.reported) })
     }
   }
 

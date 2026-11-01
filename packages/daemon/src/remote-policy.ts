@@ -8,7 +8,7 @@ const EXECUTION_SETTINGS = ["acpAgents", "tier", "features", "experimental", "to
 /** Proxy, shell and web policy: set on the machine that runs the commands, never by a remote client. */
 export const REMOTE_HOST_SETTINGS = ["proxy", "shellEnvironment", "shellCommandPrefix", "loginShell", "web"]
 /** Every key `settings.set` refuses to a remote or a peer client, whichever rule refuses it. */
-const LOCAL_ONLY_SETTINGS = new Set([...EXECUTION_SETTINGS, ...REMOTE_HOST_SETTINGS, "additionalDirectories", "worktreeGcDays"])
+const LOCAL_ONLY_SETTINGS = new Set([...EXECUTION_SETTINGS, ...REMOTE_HOST_SETTINGS, "additionalDirectories", "worktreeGcDays", "prReview"])
 
 /** Host execution switches cannot be changed by either kind of authenticated peer. */
 export function remoteExecutionSettings(patch: object): boolean {

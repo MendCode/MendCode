@@ -65,6 +65,7 @@ describe("status", () => {
     expect(done.dashboard.metrics).toMatchObject({ running: 1, queued: 1, concurrency: 2 })
     expect(done.dashboard.jobs).toHaveLength(2)
     expect(done.text).toContain("1 running, 1 queued")
+    expect(done.text).toContain("at most 2 at once on this device (prReview.concurrency)")
   })
 
   test("the 24-hour tokens come from the accounting ledger when it is given, not from job totals", async () => {

@@ -74,7 +74,7 @@ export function createPlatformControl(handle: PlatformHandle, deps: PlatformCont
     const tokens = deps.tokens24h?.()
     if (tokens) dashboard = PrReviewDashboard.parse({ ...dashboard, metrics: { ...dashboard.metrics, tokens24h: tokens } })
     const { running, queued, waiting } = dashboard.metrics
-    return { ok: true, text: `${dashboard.watches.length} watch${dashboard.watches.length === 1 ? "" : "es"}, ${dashboard.jobs.length} job${dashboard.jobs.length === 1 ? "" : "s"} (${running} running, ${queued} queued, ${waiting} waiting).`, dashboard }
+    return { ok: true, text: `${dashboard.watches.length} watch${dashboard.watches.length === 1 ? "" : "es"}, ${dashboard.jobs.length} job${dashboard.jobs.length === 1 ? "" : "s"} (${running} running, ${queued} queued, ${waiting} waiting); at most ${dashboard.metrics.concurrency} at once on this device (prReview.concurrency).`, dashboard }
   }
 
   async function pause(input: PlatformControlInput): Promise<PlatformControlResult> {

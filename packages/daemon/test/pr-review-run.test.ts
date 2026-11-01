@@ -225,6 +225,20 @@ describe("runPrReview: stops, checkpoints and resume", () => {
     expect(github.posts()).toHaveLength(1)
   })
 
+  test("a model child that never answered initialize (a load spike) is a retryable failure; another failed turn is not", async () => {
+    const repo = await repository()
+    const startup = children({ fail: { purpose: "review", error: new ReviewTurnError("[PR_REVIEW]: the review turn failed: [CLAUDE]: no answer to initialize", "error") } })
+    const run = await runPrReview(baseInput(repo, startup.factory))
+    expect(run.status).toBe("failed")
+    expect(run.reason).toContain("no answer to initialize")
+    expect(run.retryable).toBe(true)
+
+    const other = children({ fail: { purpose: "review", error: new ReviewTurnError("[PR_REVIEW]: the review turn failed: the model answered without JSON", "error") } })
+    const failed = await runPrReview(baseInput(repo, other.factory))
+    expect(failed.status).toBe("failed")
+    expect(failed.retryable).toBeUndefined()
+  })
+
   test("a checkpoint of another head is not resumed: the review runs again from the start", async () => {
     const repo = await repository()
     const kids = children()
@@ -258,12 +272,55 @@ describe("runPrReview: publishing identity and accounting", () => {
     expect(accounted).toEqual([{ purpose: "review", tokens: { input: 1000, output: 100, cached: 400 } }, { purpose: "verify", tokens: { input: 1000, output: 100, cached: 400 } }])
   })
 
+  test("a second run of a head this reviewer already posted posts nothing, and its notice says so instead of a bare published", async () => {
+    // Seen live (e2e #16): a manual /pr review of a reviewed head told the session "published" while GitHub kept the one review.
+    const repo = await repository()
+    const github = fakeGh()
+    const effects = createEffectLedger({ file: path.join(temp("mc-run-effects-"), "effects.json") })
+    const as = (jobId: string) => ({ effects, reviewer: "global:team", configKey: "cfg1", jobId, isCurrent: () => true })
+    const first = await runPrReview({ ...baseInput(repo, children().factory), publish: true, gh: github.gh, publishAs: as("job1") })
+    expect(first.status).toBe("published")
+    expect(first.reason).toBeUndefined()
+    const second = await runPrReview({ ...baseInput(repo, children().factory), publish: true, gh: github.gh, publishAs: as("job2") })
+    expect(github.posts()).toHaveLength(1)
+    expect(second.report?.duplicate).toBe(true)
+    expect(reviewNotice({ repo: "acme/app", number: 12, run: second }).split("\n")[0]).toBe("PR review of acme/app#12: published (nothing was posted: this head's review 101 was already posted; the pull request keeps the earlier review, not this run's result)")
+
+    // The same head asked again with the state of the first run, as the live #16 was: nothing is new, nothing is posted, it says so.
+    const again = await runPrReview({ ...baseInput(repo, children({ findings: [] }).factory), state: first.state!, full: true, publish: true, gh: github.gh })
+    expect(github.posts()).toHaveLength(1)
+    expect(again.status).toBe("published")
+    expect(again.reason).toBe("nothing was posted: this head was already reviewed and nothing is new; the pull request keeps the earlier review, not this run's result")
+  })
+
   test("without platform fields the run publishes as before (no reviewer marker config, the policy commit as key)", async () => {
     const repo = await repository()
     const github = fakeGh()
     const run = await runPrReview({ ...baseInput(repo, children().factory), publish: true, gh: github.gh })
     expect(run).toMatchObject({ status: "published", configKey: repo.base })
     expect(JSON.parse(github.posts()[0]!.stdin!).body).toContain("config=unversioned")
+  })
+
+  test("a clean PR posts No findings with no verify turn, and its body says no separate pass was needed", async () => {
+    const repo = await repository()
+    const github = fakeGh()
+    const kids = children({ findings: [] })
+    const run = await runPrReview({ ...baseInput(repo, kids.factory), publish: true, gh: github.gh })
+    expect(run.status).toBe("published")
+    expect(kids.purposes()).toEqual(["review"])
+    expect(run.info?.checked).toBe(0)
+    const body = JSON.parse(github.posts()[0]!.stdin!).body as string
+    expect(body).toContain("**No findings**")
+    expect(body).toContain("- **Verification:** the review pass raised no candidate findings, so no separate pass was needed")
+    expect(body).not.toContain("every finding was checked again")
+  })
+
+  test("verified findings carry the number of candidates the verify pass judged", async () => {
+    const repo = await repository()
+    const github = fakeGh()
+    const run = await runPrReview({ ...baseInput(repo, children().factory), publish: true, gh: github.gh })
+    expect(run.info?.checked).toBe(2)
+    expect(JSON.parse(github.posts()[0]!.stdin!).body).toContain("- **Verification:** every finding was checked again by a separate pass (2 candidates judged)")
   })
 })
 

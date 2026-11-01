@@ -251,6 +251,12 @@ Nothing depends on an event the laptop missed. The provider's current state is t
 counted as a failure. Every 10 minutes the waiting daemon reads that PR again. Once Alice's login has submitted a review of the
 head, the waiting job closes as `done`, naming the device that ran it.
 
+**When it stays away (opt-in).** Add `routing.offline_fallback: { after_minutes: 30 }` to `.mendcode/reviewers.yaml` and the
+server's global reviewer takes such a PR after 30 minutes, unless the laptop claims or reviews it first. The waiting job names the
+reviewer and the time (`offline fallback: team reviews this pull request at … unless @alice's MendCode (alice-backend) claims or
+reviews its head first`). When the laptop comes back after the fallback posted, it sees that review and posts nothing. Without
+the key nothing changes. Details: [offline fallback](pr-review.md#reviewers-routing-and-devices).
+
 **When the laptop comes back.** Its daemon's first listing is a catch-up. It reads the open PRs, review requests and assignees,
 and the changed files of at most the 20 newest unreviewed PRs for area routing. It starts what is routed to it and not yet
 reviewed at the current head. The backlog also runs then: open PRs with no review of their head, within `backlog.max_prs` and
@@ -338,10 +344,10 @@ said in the session only. Full rules: [commands in a pull request](pr-review.md#
 - **Hosted workflow:** cannot push fixes, runs no `checks`, has no follow-ups, and does not apply the filters to a comment yet.
 - **Claims are best-effort.** They are not compare-and-swap. Daemons with different logins do not see each other's claims. Only
   the "one MendCode review per head" check keeps them from both posting, after both have spent tokens.
-- **A PR routed to a personal reviewer waits for that laptop.** With `routing.global: personal-only` nothing covers it meanwhile.
-- **A `requested` watch** does not take an `@mendcode` comment addressed to no one on a PR that only area routing gives it.
-  Address it (`@mendcode review @alice`), or request the review.
-- **A Codex review child** still reads your own `~/.codex/AGENTS.md`. Codex has no switch to turn that off.
+- **A PR routed to a personal reviewer waits for that laptop.** With `routing.global: personal-only` nothing covers it meanwhile,
+  unless `routing.offline_fallback` is set (see "When a laptop is off, asleep or offline").
+- **A Codex review child** still reads your own `~/.codex/AGENTS.md`. Codex 0.162.1 has no switch to turn that off, and MendCode
+  never moves or copies `~/.codex` to get around it.
 
 What was verified live and what rests on tests:
 

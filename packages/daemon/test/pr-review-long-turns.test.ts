@@ -103,6 +103,32 @@ describe("a review turn is stopped on silence, not on wall time", () => {
     expect((await fix.send("fix it")).text).toBe("fixed")
     expect(cancelled).toEqual([])
   })
+
+  test("the session's own waiting_approval report after the request keeps the wait; the answer ends it and a later silence stalls", async () => {
+    // Seen live (e2e #16): the daemon reports `waiting_approval` right after the request, which ended the wait, so the fix was
+    // stopped as stalled after 10 minutes of waiting for the user.
+    const { sessions, cancelled } = watched({ idleMs: 60, capMs: 5_000, script: async (emit) => {
+      emit({ type: "server.request", requestId: "req_1" })
+      emit({ type: "foreground.state", state: "waiting_approval" })
+      await Bun.sleep(250)
+      emit({ type: "server.request.resolved", requestId: "req_1", resolution: "approved" })
+      emit({ type: "foreground.state", state: "tool" })
+      await Bun.sleep(20)
+      answer(emit, "fixed")
+    } })
+    const fix = await sessions.factory({ directory: "/x", editing: true })({ purpose: "review" })
+    expect((await fix.send("fix it")).text).toBe("fixed")
+    expect(cancelled).toEqual([])
+
+    const silent = watched({ idleMs: 60, capMs: 5_000, script: async (emit) => {
+      emit({ type: "server.request", requestId: "req_1" })
+      emit({ type: "foreground.state", state: "waiting_approval" })
+      emit({ type: "server.request.resolved", requestId: "req_1", resolution: "approved" })
+    } })
+    const stalled = await silent.sessions.factory({ directory: "/x", editing: true })({ purpose: "review" })
+    await expect(stalled.send("fix it")).rejects.toThrow("stalled")
+    expect(silent.cancelled).toHaveLength(1)
+  })
 })
 
 // ── Large diffs in parts (context.ts, engine.ts) ─────────────────────────────────────────────────────────────────────────

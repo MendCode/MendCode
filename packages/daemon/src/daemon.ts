@@ -2583,6 +2583,13 @@ export async function startDaemon(options: DaemonOptions) {
       ...(options.prReview?.git ? { git: options.prReview.git } : {}),
       ...(options.prReview?.intervalMs ? { intervalMs: options.prReview.intervalMs } : {}),
       enabled: prReviewOn,
+      // This device's capacity, read again at every start: a changed setting applies to the next job (docs/pr-review.md "Concurrency").
+      concurrency: () => store.settings.get().prReview?.concurrency,
+      // A review call a killed daemon left open: what its child session recorded, summed as the review sessions add usage.
+      sessionUsage: (sessionId) => {
+        const total = store.sessionStats.get(sessionId, clock.now())?.usage.total
+        return total ? { input: total.input + total.cacheRead + total.cacheWrite, output: total.output, cached: total.cacheRead } : undefined
+      },
       graphOn: () => !options.prReview?.noGraph && featureOn(store.settings.get(), "codegraph", { safeMode: options.safeMode }),
       sessionDirectory: (sessionId) => store.sessionInfo(sessionId as SessionId)?.directory,
       sessionExists: (sessionId) => store.hasSession(sessionId as SessionId),
@@ -4312,6 +4319,7 @@ export async function startDaemon(options: DaemonOptions) {
       case "settings.set": {
         if ("additionalDirectories" in command.patch && connection.remoteAddress) return reply(connection, command.id, { ok: false, code: "forbidden", message: "[DAEMON]: extra directories are set on the machine that runs the commands" })
         if ("worktreeGcDays" in command.patch && (connection.remoteAddress || connection.peer)) return reply(connection, command.id, { ok: false, code: "forbidden", message: "[DAEMON]: worktree cleanup is set on the machine that holds the worktrees" })
+        if ("prReview" in command.patch && (connection.remoteAddress || connection.peer)) return reply(connection, command.id, { ok: false, code: "forbidden", message: "[DAEMON]: the PR reviewer's concurrency is set on the machine that runs the reviews" })
         if (connection.remoteAddress && REMOTE_HOST_SETTINGS.some((key) => key in command.patch)) return reply(connection, command.id, { ok: false, code: "forbidden", message: "[DAEMON]: proxy, shell and web policy are set on the machine that runs the commands" })
         if ((connection.remoteAddress || connection.peer) && remoteExecutionSettings(command.patch)) return reply(connection, command.id, { ok: false, code: "forbidden", message: "[DAEMON]: execution policy and feature switches are set on the machine that runs the commands" })
         if (connection.remoteAddress && ["sandbox", "trustedToolDirs", "allowedHttpHookUrls", "permission", "permissionAllow", "smartSandboxTrust", "engineSafetyPrompts", "engineEnvironment", "ownLogins", "projectConfig"].some((key) => key in command.patch)) return reply(connection, command.id, { ok: false, code: "forbidden", message: "[DAEMON]: sandbox, trust and saved permission rules are set on the machine that runs the commands" })
@@ -4324,6 +4332,7 @@ export async function startDaemon(options: DaemonOptions) {
         }
         await settingsSaved(before, settings, command.patch)
         if ("instructions" in command.patch) void remoteInstructions(options.dir).prefetch(settings.instructions ?? [])
+        if ("prReview" in command.patch) prReview?.kick()
         return reply(connection, command.id, { ok: true, result: { settings } })
       }
       case "tools.list":

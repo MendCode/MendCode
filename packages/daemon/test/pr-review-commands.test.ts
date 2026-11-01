@@ -15,6 +15,14 @@ import type { GhRun } from "../src/pr-watch"
 const cleanups: Array<() => unknown> = []
 afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup() })
 const temp = (prefix: string) => { const dir = realpathSync(mkdtempSync(path.join(tmpdir(), prefix))); cleanups.push(() => rmSync(dir, { recursive: true, force: true })); return dir }
+
+async function until(check: () => boolean, ms = 5_000) {
+  const end = Date.now() + ms
+  while (!check()) {
+    if (Date.now() > end) throw new Error("timed out")
+    await Bun.sleep(10)
+  }
+}
 const finding: PrFinding = { id: "a".repeat(40), path: "a.ts", line: 1, side: "RIGHT", severity: "major", category: "correctness", summary: "one is now 2", detail: "Callers expect 1.", evidence: ["a.ts:1"] }
 
 /** GitHub for one PR: who may write, what MendCode posted, and the finding comment #77. */
@@ -291,6 +299,8 @@ describe("the watch answers commands", () => {
     await first.tick()
     await settled()
     await first.tick()
+    // The notice is said in the background, after the poll that held the command.
+    await until(() => notices.some((text) => text.includes("is not answered yet")))
     await settled()
     expect(posts).toEqual([])
     expect(notices.filter((text) => text.includes("is not answered yet"))).toEqual(["@mendcode pause from maintainer on acme/app#12 is not answered yet: MendCode posts to acme/app only after /pr publish on, and answers it then."])
@@ -300,6 +310,8 @@ describe("the watch answers commands", () => {
     await settled()
     expect(posts).toEqual([])
     await second.control({ sessionId: "ses_a", action: "publish-on" })
+    // publish-on offers the held command without waiting for it, so its answer is posted in the background.
+    await until(() => posts.length > 0)
     await settled()
     expect(posts).toHaveLength(1)
     expect(posts[0]!.body).toContain("Paused")
@@ -311,6 +323,7 @@ describe("the watch answers commands", () => {
     writeFileSync(file, JSON.stringify(saved))
     const third = start()
     await third.tick()
+    await until(() => JSON.parse(readFileSync(file, "utf8")).watches[0].commands.length === 0)
     await settled()
     expect(posts).toHaveLength(1)
     expect(JSON.parse(readFileSync(file, "utf8")).watches[0].commands).toEqual([])

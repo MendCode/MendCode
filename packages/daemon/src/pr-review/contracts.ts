@@ -80,6 +80,11 @@ export type ReviewJob = {
   title?: string | undefined
   url?: string | undefined
   stack?: PrJobSummary["stack"] | undefined
+  /**
+   * A global reviewer's job under `routing.offline_fallback`: the personal reviewers (registry ids) it stands in for. It waits until
+   * `createdAt` plus the fallback's time, then reviews only if none of them claimed or reviewed the head meanwhile.
+   */
+  covers?: string[] | undefined
 }
 
 /** Who may move a job and where: the ledger refuses a transition not in this table. */
@@ -333,8 +338,13 @@ export type RunPlatformInput = {
   /** Built per run from the reviewer's scope (review-memory.ts); undefined = no memory context. */
   memory?: ((query: { title: string; files: string[] }) => Promise<ReviewMemoryContext | undefined>) | undefined
   contextWindow?: number | undefined
-  /** One call per model turn of the run (accounting.ts `record`). */
-  account?: ((entry: { purpose: "review" | "verify" | "fix" | "explain" | "resume"; tokens: PrTokenUsage }) => void) | undefined
+  /** One call per model turn of the run (accounting.ts `record`); `sessionId`: the child session the turn ran in, when it has one. */
+  account?: ((entry: { purpose: "review" | "verify" | "fix" | "explain" | "resume"; tokens: PrTokenUsage; sessionId?: string | undefined }) => void) | undefined
+  /**
+   * Called as a model turn starts (accounting.ts `begin`, kept on disk); the function it returns is called when the turn ends,
+   * whatever way. A turn the daemon did not see end (it was killed mid-call) is accounted at the next start as unknown.
+   */
+  calling?: ((call: { purpose: "review" | "verify" | "fix" | "explain" | "resume"; sessionId?: string | undefined }) => () => void) | undefined
   /** A stacked PR: its own range starts at the parent's head; the parent's confirmed findings are not repeated. */
   stack?: { base: string; parentFindings: PrFinding[]; parent: number } | undefined
   /** Publishing identity and the guard against stale results (publish.ts). */

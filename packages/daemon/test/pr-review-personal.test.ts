@@ -472,4 +472,47 @@ describe("a requested watch and area routing", () => {
     const list = await laptop.service.control({ sessionId: "ses_alice", action: "list" })
     expect(list.ok && list.text).not.toContain("no reviewer of this daemon is assigned")
   })
+
+  test("an @mendcode review addressed to no one is taken on a PR only area routing gives the login, not on another login's area or the global reviewer's PR", async () => {
+    const reviewers = "reviewers:\n  - id: global\n    scope: global\n  - id: alice-api\n    scope: personal\n    login: alice\n    areas: [\"api-*.ts\"]\n  - id: bob-web\n    scope: personal\n    login: bob\n    areas: [\"web-*.ts\"]\n"
+    // No backlog and no automatic reviews: only the comments start anything.
+    const repo = await repository("enabled: true\nbacklog:\n  max_prs: 0\ntriggers:\n  opened: false\n  synchronize: false\n", reviewers)
+    const hub = github(repo)
+    const api = await repo.push(12, "api-users", "export const users = 1\n")
+    await repo.push(13, "web-page", "export const page = 1\n")
+    await repo.push(14, "docs", "export const docs = 1\n")
+    hub.prs.push({ number: 12, branch: "api-users" }, { number: 13, branch: "web-page" }, { number: 14, branch: "docs" })
+    const laptop = daemon({ repo, hub, login: "alice" })
+    await laptop.service.control({ sessionId: "ses_alice", action: "publish-on" })
+    expect((await laptop.service.control({ sessionId: "ses_alice", action: "watch-repo", role: "requested" })).ok).toBe(true)
+    await laptop.service.tick()
+    expect(laptop.jobs()).toEqual([])
+    hub.polled.push({ number: 12, id: 701, body: "@mendcode review", user: "carol" }, { number: 13, id: 702, body: "@mendcode review", user: "carol" }, { number: 14, id: 703, body: "@mendcode review", user: "carol" })
+    await laptop.service.tick()
+    await until(() => laptop.jobs().some((job) => job.state === "done"))
+    await laptop.service.tick()
+    await Bun.sleep(30)
+    // #12 routes to alice-api by area: hers. #13 is bob's area and #14 the global reviewer's: not hers, and nothing is said on them.
+    expect(laptop.jobs().map((job) => [job.number, job.reviewer, job.trigger, job.state])).toEqual([[12, "alice-api", "comment", "done"]])
+    expect(laptop.jobs()[0]).toMatchObject({ head: api })
+    expect(laptop.inputs.map((input) => input.number)).toEqual([12])
+    expect(replies(hub, 13)).toEqual([])
+    expect(replies(hub, 14)).toEqual([])
+  })
+
+  test("without an area or label route the login's requested watch reads no files for an unaddressed comment and leaves it", async () => {
+    const reviewers = "reviewers:\n  - id: global\n    scope: global\n  - id: alice\n    scope: personal\n    login: alice\n"
+    const repo = await repository("enabled: true\nbacklog:\n  max_prs: 0\ntriggers:\n  opened: false\n", reviewers)
+    const hub = github(repo)
+    await repo.push(12, "api-users", "export const users = 1\n")
+    hub.prs.push({ number: 12, branch: "api-users" })
+    const laptop = daemon({ repo, hub, login: "alice" })
+    expect((await laptop.service.control({ sessionId: "ses_alice", action: "watch-repo", role: "requested" })).ok).toBe(true)
+    await laptop.service.tick()
+    hub.polled.push({ number: 12, id: 801, body: "@mendcode review", user: "carol" })
+    await laptop.service.tick()
+    await Bun.sleep(50)
+    expect(laptop.jobs()).toEqual([])
+    expect(laptop.gh.calls.filter((argv) => argv[0] === "pr" && argv[1] === "view" && argv.includes("files"))).toEqual([])
+  })
 })

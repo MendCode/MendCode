@@ -50,7 +50,16 @@ export type AccountingEntry = z.infer<typeof Entry>
 const Totals = z.object({ tokens: Usage, calls: count, byPurpose: z.partialRecord(z.enum(ACCOUNTING_PURPOSES), Usage), attempts: count, jobs: z.array(z.object({ id: z.string().max(80), attempts: z.number().int().positive() })).max(50) })
 const HeadRecord = z.object({ repo: z.string().min(1).max(200), number: z.number().int().positive(), head: z.string().min(1).max(64), reviewer: z.string().min(1).max(120), updatedAt: z.number().int(), totals: Totals, entries: z.array(Entry) })
 type AccountRecord = z.infer<typeof HeadRecord>
-const File = z.object({ version: z.literal(1), records: z.array(HeadRecord) })
+/** A call that started and has not ended yet (`begin`): one left in the file when the daemon starts was cut off by its death. */
+const OpenCall = z.object({
+  id: z.string().min(1).max(80), at: z.number().int(),
+  repo: z.string().min(1).max(200), number: z.number().int().positive(), head: z.string().min(1).max(64), reviewer: z.string().min(1).max(120),
+  jobId: z.string().min(1).max(80), purpose: z.enum(ACCOUNTING_PURPOSES), attempt: z.number().int().positive(), sessionId: z.string().max(120).optional(),
+})
+type OpenCall = z.infer<typeof OpenCall>
+/** At most this many calls are kept open (a daemon runs a few at once; a leak cannot grow the file). */
+const MAX_OPEN = 200
+const File = z.object({ version: z.literal(1), records: z.array(HeadRecord), open: z.array(OpenCall).max(MAX_OPEN).default([]) })
 
 /** What a PR head cost: the provider's figures summed, `counted` (what `tokens_per_pr` sees), calls and the attempts they spanned. */
 export type AccountTotals = { tokens: PrTokenUsage; counted: number; calls: number; byPurpose: Partial<Record<AccountingPurpose, PrTokenUsage>>; attempts: number; jobs: Array<{ id: string; attempts: number }> }
@@ -74,22 +83,27 @@ const emptyUsage = (): PrTokenUsage => ({ input: 0, output: 0, cached: 0, unrepo
 const isCount = (value: unknown) => typeof value === "number" && Number.isSafeInteger(value) && value >= 0
 
 export function createAccounting({ file, now = Date.now }: { file: string; now?: () => number }) {
-  const records = new Map<string, AccountRecord>(load().map((record) => [keyOf(record), record]))
+  const loaded = load()
+  const records = new Map<string, AccountRecord>(loaded.records.map((record) => [keyOf(record), record]))
+  /** Calls running now (`begin` … `end`), on disk while they run. */
+  const open = new Map<string, OpenCall>()
+  /** The open calls a previous process left: cut off mid-call; `settleCutOff` accounts them. */
+  let cutOff: OpenCall[] = loaded.open
 
-  function load(): AccountRecord[] {
+  function load(): { records: AccountRecord[]; open: OpenCall[] } {
     let text: string
-    try { text = readFileSync(file, "utf8") } catch { return [] }
+    try { text = readFileSync(file, "utf8") } catch { return { records: [], open: [] } }
     try {
       const parsed = File.safeParse(JSON.parse(text))
-      if (parsed.success) return parsed.data.records
+      if (parsed.success) return { records: parsed.data.records, open: parsed.data.open }
     } catch { /* not JSON: set aside below */ }
     try { copyFileSync(file, `${file}.damaged`) } catch { /* the copy is a courtesy; starting empty is the rule */ }
-    return []
+    return { records: [], open: [] }
   }
   function save() {
     mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
     const temp = `${file}.${crypto.randomUUID()}.tmp`
-    writeFileSync(temp, JSON.stringify({ version: 1, records: [...records.values()] }), { mode: 0o600, flag: "wx" })
+    writeFileSync(temp, JSON.stringify({ version: 1, records: [...records.values()], open: [...cutOff, ...open.values()].slice(-MAX_OPEN) }), { mode: 0o600, flag: "wx" })
     renameSync(temp, file)
   }
 
@@ -146,8 +160,60 @@ export function createAccounting({ file, now = Date.now }: { file: string; now?:
     return totalsOf(current)
   }
 
+  /**
+   * A model call starts: kept on disk until `end(id)`, so a daemon killed mid-call leaves a trace the next start accounts. Returns
+   * its id. Throws like `record` for a bad purpose or attempt.
+   */
+  function begin(call: AccountingKey & { jobId: string; purpose: AccountingPurpose; attempt: number; sessionId?: string | undefined }): string {
+    const entry = OpenCall.parse({ id: crypto.randomUUID(), at: now(), repo: call.repo, number: call.number, head: call.head, reviewer: call.reviewer, jobId: call.jobId, purpose: call.purpose, attempt: call.attempt, ...(call.sessionId ? { sessionId: call.sessionId } : {}) })
+    open.set(entry.id, entry)
+    save()
+    return entry.id
+  }
+  /** The call ended (its tokens, or its failure, are `record`ed separately). */
+  function end(id: string) {
+    if (!open.delete(id)) return
+    save()
+  }
+  /**
+   * Accounts the calls a previous process left open: it died mid-call, so the provider's report never came. Each becomes one call
+   * without a report (`unreported`: its spend is unknown, never taken as zero), plus what `reported(sessionId)` says the child
+   * session recorded beyond the calls already accounted for it (an engine that reports usage per model call keeps some), when
+   * the caller can read that. Returns what each settled call was accounted as; runs once, after a start.
+   */
+  function settleCutOff(reported?: (sessionId: string) => PrTokenUsage | undefined): Array<{ jobId: string; tokens: PrTokenUsage }> {
+    const left = cutOff
+    if (!left.length) return []
+    cutOff = []
+    const settled: Array<{ jobId: string; tokens: PrTokenUsage }> = []
+    for (const call of left) {
+      const seen = call.sessionId ? reported?.(call.sessionId) : undefined
+      const counted = call.sessionId ? sessionTotals(call.sessionId) : emptyUsage()
+      const input = Math.max(0, (seen?.input ?? 0) - counted.input)
+      const output = Math.max(0, (seen?.output ?? 0) - counted.output)
+      const cached = Math.min(input, Math.max(0, (seen?.cached ?? 0) - (counted.cached ?? 0)))
+      try {
+        record({ repo: call.repo, number: call.number, head: call.head, reviewer: call.reviewer, jobId: call.jobId, purpose: call.purpose, attempt: call.attempt, input, output, ...(cached ? { cached } : {}), unreported: 1, ...(call.sessionId ? { sessionId: call.sessionId } : {}) })
+        settled.push({ jobId: call.jobId, tokens: { input, output, ...(cached ? { cached } : {}), unreported: 1 } })
+      } catch { /* a bad leftover is dropped */ }
+    }
+    save()
+    return settled
+  }
+  /** What the kept entries already account for one child session. */
+  function sessionTotals(sessionId: string): PrTokenUsage {
+    let tokens = emptyUsage()
+    for (const record of records.values()) for (const entry of record.entries) if (entry.sessionId === sessionId) tokens = addUsage(tokens, usageOf(entry))
+    return tokens
+  }
+
   return {
     record,
+    begin,
+    end,
+    settleCutOff,
+    /** The calls a previous process left open, not settled yet (for the tests and the doctor). */
+    cutOff: () => cutOff.map((call) => ({ ...call })),
     /** The PR head's totals; undefined when no call of it is recorded (or it aged out). */
     totals(key: AccountingKey): AccountTotals | undefined {
       const found = records.get(keyOf(key))

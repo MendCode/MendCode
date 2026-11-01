@@ -1,6 +1,6 @@
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs"
 import path from "node:path"
-import type { PrFinding, PrReviewConfigView, PrReviewDashboard, PrReviewerSummary, PrStopReason } from "@mendcode/protocol"
+import type { PrFinding, PrReviewConfigView, PrReviewDashboard, PrReviewerSummary, PrStopReason, PrTokenUsage } from "@mendcode/protocol"
 import { createIndexer } from "@mendcode/codegraph"
 import { ghProcess, parseRef, type GhRun } from "../pr-watch"
 import { createAccounting, accountingFile } from "./accounting"
@@ -123,10 +123,18 @@ export type PrReviewServiceOptions = {
   editor(owner: string, directory: string): ReviewSessionFactory
   /** Runs `job` on the daemon's job scheduler and resolves when it ends. */
   schedule(run: () => Promise<void>): Promise<void>
-  /** Reviews and commands running at once (default `MAX_CONCURRENT_REVIEWS`, two). */
-  concurrency?: number
+  /**
+   * Reviews and commands running at once (default `MAX_CONCURRENT_REVIEWS`, two): the daemon passes the user's
+   * `prReview.concurrency` setting as a function, read again at every start.
+   */
+  concurrency?: number | (() => number | undefined)
   /** The retry jitter of the job ledger's backoff; tests pin it. */
   random?: () => number
+  /**
+   * What a child session recorded (the store's `usage.recorded` events, summed as the review sessions add them: `input` with the
+   * cached part), for a call a killed daemon left open; absent or undefined, only the unknown call is accounted.
+   */
+  sessionUsage?: (sessionId: string) => PrTokenUsage | undefined
   /** The memory a reviewer's scope allows (daemon.ts binds it to the store); absent, reviews get no memory context. */
   memory?: ReviewMemoryRead
   /** The model window of the owner session's model, for the per-call context budget; absent, the config or the default. */
@@ -311,10 +319,19 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
   }
 
   /** Records one model turn of `job`: in the accounting ledger (per PR head and attempt) and on the job. Never throws. */
-  const accountFor = (job: ReviewJob | undefined, repo: string, number: number, head: string): RunPlatformInput["account"] => job ? ({ purpose, tokens }) => {
-    try { accounting.record({ repo, number, head: head || job.head || "unknown", reviewer: job.reviewer, jobId: job.id, purpose, attempt: job.attempts + 1, input: tokens.input, output: tokens.output, cached: tokens.cached, unreported: tokens.unreported }) } catch { /* a bad report is dropped, the review goes on */ }
+  const accountFor = (job: ReviewJob | undefined, repo: string, number: number, head: string): RunPlatformInput["account"] => job ? ({ purpose, tokens, sessionId }) => {
+    try { accounting.record({ repo, number, head: head || job.head || "unknown", reviewer: job.reviewer, jobId: job.id, purpose, attempt: job.attempts + 1, input: tokens.input, output: tokens.output, cached: tokens.cached, unreported: tokens.unreported, ...(sessionId ? { sessionId, parentSessionId: job.sessionId } : {}) }) } catch { /* a bad report is dropped, the review goes on */ }
     try { ledger.addTokens(job.id, tokens) } catch { /* the job may have been pruned */ }
   } : undefined
+  /** The call `job` starts, kept on disk until it ends: one a killed daemon never ended is accounted as unknown at the next start. */
+  const callingFor = (job: ReviewJob | undefined, repo: string, number: number, head: string): RunPlatformInput["calling"] => job ? ({ purpose, sessionId }) => {
+    const id = accounting.begin({ repo, number, head: head || job.head || "unknown", reviewer: job.reviewer, jobId: job.id, purpose, attempt: job.attempts + 1, ...(sessionId ? { sessionId } : {}) })
+    return () => accounting.end(id)
+  } : undefined
+  // Calls a previous process left open died with it: accounted now, unknown spend as unknown, plus what their child sessions recorded.
+  for (const { jobId, tokens } of accounting.settleCutOff(options.sessionUsage)) {
+    try { ledger.addTokens(jobId, tokens) } catch { /* the job may have been pruned */ }
+  }
 
   /** Review children that tell the job their session id (`reviewSessionId`), so the page can open the review's session. */
   function recordedSessions(factory: ReviewSessionFactory, jobId: string | undefined): ReviewSessionFactory {
@@ -389,7 +406,7 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
         ...(options.graphOn() ? { graph: () => createIndexer({ cacheDir: graphCache, now: Date.now }).graph({ cwd: worktree, signal: AbortSignal.timeout(120_000) }) } : {}),
         ...(current ? { reviewer: { id: current.reviewer, scope, ...(login ? { login } : {}) } } : {}),
         ...(layers ? { layers } : {}),
-        ...(current ? { memory: memoryFor(scope, directory, login), account: accountFor(current, repo, number, head) } : {}),
+        ...(current ? { memory: memoryFor(scope, directory, login), account: accountFor(current, repo, number, head), calling: callingFor(current, repo, number, head) } : {}),
         ...(contextWindow ? { contextWindow } : {}),
         ...(stack ? { stack } : {}),
         ...(current ? { publishAs: { effects, reviewer: current.reviewer, configKey, jobId: current.id, ...(login ? { self: login } : {}), isCurrent: () => isCurrent(current.id) } } : {}),
@@ -462,12 +479,18 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
     if (job) withheld.delete(job.id)
     const reviewer = job ? await reviewerOf(job) : undefined
     if (job && IN_FLIGHT.has(job.state)) {
+      // routing.offline_fallback: a stand-in waits for its time and yields to a personal reviewer that came back; a personal
+      // reviewer whose stand-in works on, or reviewed, this head does not review it a second time.
+      const fallback = await fallbackRefusal(job, { write: false }).catch((): FallbackRefusal => ({ ok: false, until: now() + 60_000, reason: "offline fallback: the pull request could not be read; asked again in a minute" }))
+      if (fallback?.cancel) { move(job.id, "cancelled", { error: fallback.cancel }); return }
+      if (fallback) { settleGate(job, fallback); return }
       // Another device of this reviewer holds the PR: wait for its claim to expire instead of reviewing it a second time; one that
       // already reviewed this head answers the job. A reviewer without `publish` keeps its claim on this device.
       const gate = await claimGate(job, mayDo(reviewer, "publish")).catch((): ClaimGate => ({ ok: true }))
       if (!gate.ok) { settleGate(job, gate); return }
       const assignment = ledger.get(job.id)?.assignment
       if (assignment !== routingReason(assignment)) patchJob(job.id, { assignment: routingReason(assignment) })
+      if (job.covers?.length) await standInTakes(job)
     }
     try { return await reviewJobHeld(entry, job, reviewer) } finally { if (job) await releaseHold(job.id) }
   }
@@ -945,7 +968,7 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
     const refused = await mentionRefusal({ directory, repo, number, config, personal: undefined, manual: true }).catch((error: unknown) => errorText(error))
     if (refused) { void outbox.say(sessionId, `${asked} (this daemon's own login): not run, ${refused}; nothing is posted on the pull request.`); return }
     const reviewer = await commandReviewer(directory)
-    const id = watch.review({ directory, sessionId, number, head: "" }, reviewer.scope === "personal" ? { reviewer: reviewer.id, scope: "personal" } : undefined, forge ? { kind: forge.kind, repo: forge.repo } : undefined)
+    const id = watch.review({ directory, sessionId, number, head: "" }, { reviewer: reviewer.id, scope: reviewer.scope }, forge ? { kind: forge.kind, repo: forge.repo } : undefined)
     void outbox.say(sessionId, id
       ? `${asked} (this daemon's own login): run as your own /pr review; the findings arrive in this session, and the review is posted only as /pr publish allows.`
       : `${asked} (this daemon's own login): not queued, the job ledger is full; /pr review ${number} tries again.`)
@@ -1170,7 +1193,7 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
    * Why a job may not run or write: another device holds the pull request's claim (`holder`), that reviewer's review of the head is
    * on the pull request already from another device (`reviewed`), or the claims could not be read to tell (`retry`).
    */
-  type GateRefusal = { ok: false; reason: string; holder?: Claim | undefined; reviewed?: { id: number; device?: string | undefined } | undefined; retry?: boolean | undefined }
+  type GateRefusal = { ok: false; reason: string; holder?: Claim | undefined; reviewed?: { id: number; device?: string | undefined } | undefined; retry?: boolean | undefined; until?: number | undefined }
   type ClaimGate = { ok: true } | GateRefusal
   /**
    * The claim a running job holds on its pull request (one per job): the local lease with its fence, whether the marker comment is
@@ -1204,7 +1227,7 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
   async function announce({ hold, lease, text, fallback, bodies }: { hold: Hold; lease: Lease; text: string; fallback: boolean; bodies?: readonly string[] | undefined }): Promise<boolean> {
     const { job } = hold
     // A marker longer than a day is ignored by every reader; a lease renewed for longer is announced from a day before its end.
-    const marker = claimMarker({ ...lease, acquiredAt: Math.max(lease.acquiredAt, lease.expiresAt - MAX_CLAIM_TTL_MS) }, claimIdOf(job.reviewer))
+    const marker = claimMarker({ ...lease, acquiredAt: Math.max(lease.acquiredAt, lease.expiresAt - MAX_CLAIM_TTL_MS) }, claimIdOf(job.reviewer), (job.covers ?? []).map(claimIdOf))
     const effect = effects.intend({ kind: "claim", key: effectKey({ kind: "claim", repo: job.repo, number: job.number, reviewer: job.reviewer, configKey: "", head: "", base: "", payload: marker }), jobId: job.id, ...(marker.length <= 500 ? { marker } : {}) })
     if (effect.state === "done") return true
     if (bodies?.some((body) => body.includes(marker))) { effects.done(effect.id); return true }
@@ -1238,7 +1261,7 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
     effects.done(effect.id, remote === undefined ? undefined : String(remote))
     return true
   }
-  const workingText = (hold: Hold, lease: Lease) => `<sub>MendCode: ${whose(hold.entry)} works on this pull request on one of its devices until ${isoMinute(lease.expiresAt)}.</sub>`
+  const workingText = (hold: Hold, lease: Lease) => `<sub>MendCode: ${whose(hold.entry)} works on this pull request on one of its devices until ${isoMinute(lease.expiresAt)}${hold.job.covers?.length ? ` as the offline fallback for ${hold.job.covers.join(", ")}, who did not take it in time (routing.offline_fallback)` : ""}.</sub>`
 
   /**
    * Settles PR `job.number` for a job before it runs (decision 5; best-effort, not compare-and-swap), for a personal reviewer and
@@ -1315,7 +1338,8 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
     try { ownership.release(hold.lease) } catch { /* the lease expires by itself */ }
     if (!hold.visible || hold.commentId === undefined || hold.lost) return
     const released: Lease = { ...hold.lease, expiresAt: Math.max(hold.lease.acquiredAt + 1, now()) }
-    await announce({ hold, lease: released, text: `<sub>MendCode: ${whose(hold.entry)} worked on this pull request on one of its devices; released ${isoMinute(released.expiresAt)}.</sub>`, fallback: false }).catch(() => false)
+    const standIn = hold.job.covers?.length ? ` as the offline fallback for ${hold.job.covers.join(", ")} (routing.offline_fallback)` : ""
+    await announce({ hold, lease: released, text: `<sub>MendCode: ${whose(hold.entry)} worked on this pull request on one of its devices${standIn}; released ${isoMinute(released.expiresAt)}.</sub>`, fallback: false }).catch(() => false)
   }
 
   /**
@@ -1327,6 +1351,11 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
    */
   async function writeGate(job: ReviewJob, { review }: { review: boolean }): Promise<ClaimGate> {
     const refuse = (refusal: GateRefusal) => { withheld.set(job.id, refusal); return refusal }
+    if (review && (job.covers?.length || job.scope === "personal")) {
+      // Two devices that started together: a stand-in yields to its personal reviewer, and neither posts a second review of a head.
+      const fallback = await fallbackRefusal(job, { write: true }).catch(() => undefined)
+      if (fallback && !fallback.cancel) return refuse(fallback)
+    }
     const hold = holds.get(job.id)
     const login = await watch.loginOf(job.directory).catch(() => undefined)
     const elsewhere = async () => {
@@ -1367,7 +1396,7 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
       move(job.id, "done", { assignment, error: undefined, ...(gate.reviewed.device ? { owner: gate.reviewed.device.slice(0, 120) } : {}) })
       return
     }
-    move(job.id, "waiting", { notBefore: (gate.holder?.expiresAt ?? now()) + 1_000, assignment, error: undefined })
+    move(job.id, "waiting", { notBefore: gate.until ?? (gate.holder?.expiresAt ?? now()) + 1_000, assignment, error: undefined })
   }
 
   /**
@@ -1384,6 +1413,90 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
       if (job.stop?.kind === "quota" || job.stop?.kind === "rate_limit") continue
       patchJob(job.id, { notBefore: at })
     }
+  }
+
+  // ── Offline fallback (routing.offline_fallback) ──────────────────────────────────────────────────────────────────────────
+
+  /**
+   * The stand-in job of one PR event on this daemon: when the registry names an offline fallback that runs here, nothing else of
+   * this daemon reviews the PR, and it waits only for personal reviewers of other devices, the fallback's job waits until
+   * `afterMs` from now (`notBefore`), naming whom it covers; `coverGate` decides then whether it still has to review.
+   */
+  function offlineFallbackFor({ registry, reviewers, here, assignments }: { registry: ReviewerRegistry; reviewers: ReadonlyMap<string, ReviewerEntry>; here: { device: string; login?: string | undefined }; assignments: readonly ReviewAssignment[] }): ReviewAssignment | undefined {
+    const fallback = registry.routing.offlineFallback
+    const cover = fallback ? reviewers.get(fallback.reviewer) : undefined
+    if (!fallback || !cover || cover.scope !== "global" || !mayDo(cover, "review") || !runsHere(cover, here)) return undefined
+    if (assignments.some((assignment) => assignment.reviewer === cover.id || assignment.waiting === undefined)) return undefined
+    const away = assignments.filter((assignment) => assignment.scope === "personal" && assignment.waiting !== undefined).map((assignment) => assignment.reviewer)
+    if (!away.length) return undefined
+    const at = now() + fallback.afterMs
+    const minutes = Math.round(fallback.afterMs / 60_000)
+    return {
+      reviewer: cover.id, scope: "global", covers: away, owner: here.device, notBefore: at,
+      assignment: `offline fallback for ${away.join(", ")} after ${minutes} min (routing.offline_fallback)`,
+      waiting: `offline fallback: ${cover.id} reviews this pull request at ${isoMinute(at)} unless ${coveredNames(away, reviewers)} claims or reviews its head first`,
+    }
+  }
+  const coveredNames = (ids: readonly string[], reviewers: ReadonlyMap<string, ReviewerEntry>) => ids.map((id) => { const entry = reviewers.get(id); return entry ? `${whose(entry)} (${id})` : id }).join(" or ")
+
+  /** A stand-in takes its PR: the job's assignment and the session say why and for whom, once. */
+  async function standInTakes(job: ReviewJob) {
+    const login = await watch.loginOf(job.directory).catch(() => undefined)
+    const registry = await registryOf(job.directory, "all", login).catch(() => undefined)
+    const reviewers = new Map((registry?.reviewers ?? []).map((entry) => [entry.id, entry]))
+    const minutes = Math.round((registry?.routing.offlineFallback?.afterMs ?? 0) / 60_000)
+    const why = `offline fallback: ${coveredNames(job.covers ?? [], reviewers)} did not claim or review head ${job.head.slice(0, 12)} within ${minutes} min, so ${job.reviewer} reviews it`
+    patchJob(job.id, { assignment: why.slice(0, 400) })
+    void outbox.say(job.sessionId, `PR review of ${job.repo}#${job.number}: ${why} on this device (routing.offline_fallback in .mendcode/reviewers.yaml).`)
+  }
+
+  /** The claims on a PR in which `cover` (trusted by its login, or the claim's author when it has none) stands in for `personal`. */
+  const coverClaims = (cover: ReviewerEntry, personal: string, claims: readonly Claim[]) =>
+    claims.filter((claim) => claim.reviewer === claimIdOf(cover.id) && !!claim.covers?.includes(claimIdOf(personal)) && (!cover.login || sameLogin(claim.author, cover.login)))
+
+  type FallbackRefusal = GateRefusal & { cancel?: string | undefined }
+  /**
+   * The offline fallback's checks for `job`. A stand-in job (`covers`): before its time it waits (a claim comment woke it early);
+   * a covered reviewer holding a live claim is back, so it waits for that claim; one whose review of the head is on the pull request
+   * answered it. A personal reviewer's job: a live claim of a stand-in covering it makes it wait; a stand-in's review of this head
+   * answers it, so the personal reviewer never posts a second review of a head its fallback reviewed. `write`: the same, right
+   * before a post (a stand-in yields to a covered reviewer's live claim even then; a personal reviewer only to a posted review).
+   */
+  async function fallbackRefusal(job: ReviewJob, { write }: { write: boolean }): Promise<FallbackRefusal | undefined> {
+    const covers = job.covers ?? []
+    if (!covers.length && job.scope !== "personal") return undefined
+    const login = await watch.loginOf(job.directory).catch(() => undefined)
+    const registry = await registryOf(job.directory, "all", login).catch(() => undefined)
+    const fallback = registry?.routing.offlineFallback
+    const reviewers = new Map((registry?.reviewers ?? []).map((entry) => [entry.id, entry]))
+    if (covers.length) {
+      if (!fallback || fallback.reviewer !== job.reviewer) return { ok: false, cancel: "routing.offline_fallback no longer names this reviewer in .mendcode/reviewers.yaml", reason: "" }
+      const due = job.createdAt + fallback.afterMs
+      if (!write && now() < due) return { ok: false, until: due, reason: `offline fallback: ${job.reviewer} reviews this pull request at ${isoMinute(due)} unless ${coveredNames(covers, reviewers)} claims or reviews its head first` }
+      const read = await readClaims(job.repo, job.number, job.directory)
+      if (!read) return { ok: false, until: now() + 60_000, reason: "offline fallback: the pull request's claims could not be read, so it cannot tell whether its personal reviewer is back; asked again in a minute" }
+      for (const id of covers) {
+        const entry = reviewers.get(id)
+        if (!entry) continue
+        const holder = winningClaim(entry, job.repo, job.number, read.claims)
+        if (holder) return { ok: false, holder, reason: `offline fallback not needed now: ${whose(entry)} is back (device ${holder.owner.slice(0, 40)} claimed this pull request until ${isoMinute(holder.expiresAt)}); it reviews there` }
+        const review = entry.login && job.head ? await reviewOfHead(job.repo, job.number, job.head, entry.login, entry.id, job.directory) : undefined
+        if (review !== undefined) return { ok: false, reviewed: { id: review }, reason: `offline fallback not needed: reviewed by ${whose(entry)} (review ${review})` }
+      }
+      return undefined
+    }
+    const cover = fallback ? reviewers.get(fallback.reviewer) : undefined
+    if (!cover || cover.id === job.reviewer) return undefined
+    const read = await readClaims(job.repo, job.number, job.directory)
+    if (!read) return undefined
+    const standing = coverClaims(cover, job.reviewer, read.claims)
+    if (!standing.length) return undefined
+    const live = [...resolveClaims(standing, now()).values()].find((claim) => claim.owner !== deviceOf())
+    if (live && !write) return { ok: false, holder: live, reason: `waiting: ${whose(cover)} stands in for this reviewer (routing.offline_fallback) on device ${live.owner.slice(0, 40)} until ${isoMinute(live.expiresAt)}` }
+    const author = cover.login ?? standing.find((claim) => claim.author)?.author
+    const review = author && job.head ? await reviewOfHead(job.repo, job.number, job.head, author, cover.id, job.directory) : undefined
+    if (review !== undefined) return { ok: false, reviewed: { id: review, device: standing.at(-1)!.owner }, reason: `reviewed by ${whose(cover)} as the offline fallback (review ${review}); not reviewed again here` }
+    return undefined
   }
 
   /** A submitted review of `head` by `login` on PR `number` (that reviewer's MendCode ran elsewhere); undefined when there is none. */
@@ -1407,6 +1520,11 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
     const kept = ledger.list({ repo, states: ["waiting"] }).filter((job) => job.directory === directory && job.notBefore === undefined && job.scope === "personal")
     // A pull request that is no longer open (the listing was complete) has nothing left to wait for.
     if (open) for (const job of kept) if (!open.has(job.number)) move(job.id, "cancelled", { error: "the pull request is no longer open" })
+    // This daemon's offline fallback reviewed the head in this reviewer's place: the record of it is done here too.
+    for (const job of kept) {
+      const standIn = ledger.list({ repo, number: job.number, states: ["done"] }).find((other) => other.head === job.head && !!other.covers?.includes(job.reviewer) && !other.assignment?.startsWith("offline fallback not needed"))
+      if (standIn && ledger.get(job.id)?.state === "waiting" && move(job.id, "running")) move(job.id, "done", { assignment: waitingAssignment(`reviewed on this device by ${standIn.reviewer}, the offline fallback (job ${standIn.id})`, job.assignment) })
+    }
     const away = kept.filter((job) => {
       const entry = reviewers.get(job.reviewer)
       return (!open || open.has(job.number)) && !!entry && !runsHere(entry, here) && at - (refreshed.get(job.id) ?? -Infinity) >= CLAIM_REFRESH_MS
@@ -1448,6 +1566,22 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
     const base: ReviewerRegistry = registry ?? { version: 1, reviewers: [{ id: "global", scope: "global", areas: [], capabilities: ["review", "fix", "publish"] }], routing: { default: "global", global: "always", labels: {} } }
     if (role !== "requested" || !login || base.reviewers.some((entry) => entry.scope === "personal" && entry.login?.toLowerCase() === login.toLowerCase())) return base
     return { ...base, reviewers: [...base.reviewers, implicitPersonal(login)] }
+  }
+
+  /**
+   * A `requested` watch's question for an `@mendcode` comment addressed to no one on a PR that does not request its login: does
+   * routing give that PR to the login's personal reviewer (an area its changed files touch, or a label route)? The same `route` the
+   * watch's reviews follow, so a comment is taken exactly where a review would be. `undefined` when the files cannot be read.
+   */
+  async function routedHere(directory: string, facts: PrFacts): Promise<boolean | undefined> {
+    const login = await watch.loginOf(directory).catch(() => undefined)
+    if (!login) return false
+    const registry = await registryOf(directory, "requested", login)
+    const me = personalOf(registry, login)
+    if (!me.capabilities.includes("review") || !(me.areas.length > 0 || Object.values(registry.routing.labels).includes(me.id))) return false
+    const files = me.areas.length ? facts.files ?? await filesOf(directory, facts.number) : facts.files ?? []
+    if (!files) return undefined
+    return route({ facts, files, registry }).some((assignment) => assignment.reviewer === me.id)
   }
 
   /** The changed files of a PR (for `filters.paths` and area routing), read only for PRs with an event. */
@@ -1583,6 +1717,8 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
           }
           assignments.push({ reviewer: entry.id, scope: entry.scope, assignment: text(assignment.reason), owner: here.device, ...(stack ? { stack } : {}) })
         }
+        const standIn = role === "requested" ? undefined : offlineFallbackFor({ registry, reviewers, here, assignments })
+        if (standIn) assignments.push({ ...standIn, ...(stack ? { stack } : {}) })
         if (assignments.some((assignment) => assignment.waiting === undefined)) return { ok: true, reason: verdict.reason, assignments }
         const why = refused.length ? refused.join("; ") : routed.length ? `routed to ${routed.map((assignment) => `${assignment.reviewer} (${assignment.reason})`).join(", ")}, not to this daemon` : "no reviewer in .mendcode/reviewers.yaml takes it"
         return { ok: true, reason: why, assignments }
@@ -1613,7 +1749,8 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
       decide: async (facts): Promise<BacklogDecision> => {
         const decision = await decide(facts, "backlog")
         if (!decision.ok) return decision
-        const here = decision.assignments.filter((assignment) => assignment.waiting === undefined).map((assignment) => assignment.reviewer)
+        // An offline fallback's job waits on purpose (for the personal reviewers first): it is this daemon's work all the same.
+        const here = decision.assignments.filter((assignment) => assignment.waiting === undefined || assignment.covers?.length).map((assignment) => assignment.reviewer)
         return here.length ? { ok: true, reviewers: here } : { ok: false, reason: decision.reason }
       },
       status: async (facts, reviewer): Promise<HeadStatus> => {
@@ -1641,6 +1778,7 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
     plan,
     forge: forgeOf,
     claimsChanged: wakeClaimWaits,
+    routedHere,
   })
 
   // ── Audit: an explicit review of the whole repository; findings stay in the session ─────────────────────────────────
@@ -1653,7 +1791,7 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
       const contextWindow = options.contextWindow?.(job.sessionId)
       const done = await audit({
         directory: job.directory, head: job.head, git, sessionFactory: recordedSessions(options.sessions(job.sessionId, job.directory), job.id),
-        account: accountFor(job, job.repo, job.number, job.head), memory: memoryFor(job.scope, job.directory, login),
+        account: accountFor(job, job.repo, job.number, job.head), calling: callingFor(job, job.repo, job.number, job.head), memory: memoryFor(job.scope, job.directory, login),
         ...(contextWindow ? { contextWindow } : {}), ...(hasProgress(job.checkpoint) ? { checkpoint: job.checkpoint } : {}),
       })
       if (done.stop && done.status !== "failed") { void outbox.say(job.sessionId, done.text); return checkpointJob({ job, stop: done.stop, checkpoint: done.checkpoint, config: done.config, sessionId: job.sessionId, label }) }
@@ -1700,7 +1838,7 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
     dataDir: options.dir,
     jobs: ledger,
     rows: () => watch.rows(),
-    concurrency: watch.concurrency,
+    get concurrency() { return watch.concurrency },
     repoOf: repoCached,
     loginOf: (directory) => watch.loginOf(directory),
     reviewers: reviewersOf,
@@ -1745,7 +1883,7 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
     const directory = given ?? options.sessionDirectory(sessionId)
     if (!directory || !path.isAbsolute(directory)) return { ok: false, message: "unknown session directory" }
     const done = (text: string) => ({ ok: true as const, text, watches: watch.rows() })
-    if (action === "list") return done(watch.describe())
+    if (action === "list") return done(`${watch.describe()}\nThis device runs at most ${watch.concurrency} review${watch.concurrency === 1 ? "" : "s"} or command${watch.concurrency === 1 ? "" : "s"} at once (prReview.concurrency).`)
     if (action === "unwatch-repo") { const result = watch.unwatchRepo(directory); return result.ok ? done(result.text) : result }
     if (action === "watch-repo") {
       const result = await watch.watchRepo(sessionId, directory, role)
@@ -1785,10 +1923,11 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
       const verdict = eligible({ facts, config: await policyOf(directory, number), trigger: "manual" })
       if (!verdict.ok) return { ok: false, message: `#${number} is not reviewed: ${verdict.reason} (filters in .mendcode/review.yaml on the base branch)` }
     }
-    // A `requested` watch reviews as its login's personal reviewer, under the id reviewers.yaml gives it, so its claims match.
-    const info = watch.watchOf(directory)
-    const personal = info?.role === "requested" && info.login ? personalOf(await registryOf(directory, "requested", info.login).catch(() => ({ version: 1, reviewers: [], routing: { default: "global", global: "always", labels: {} } }) as ReviewerRegistry), info.login) : undefined
-    watch.review({ directory, sessionId, number, head: "" }, personal ? { reviewer: personal.id, scope: "personal" } : undefined, forge ? { kind: forge.kind, repo: forge.repo } : undefined)
+    // A `requested` watch reviews as its login's personal reviewer, an `all` watch as the repository's default global reviewer, each
+    // under the id reviewers.yaml gives it: its claims and its per-head review marker then match the watch's own reviews of that head,
+    // so a head the watch reviewed as `team` is not posted again as `global`.
+    const reviewer = await commandReviewer(directory)
+    watch.review({ directory, sessionId, number, head: "" }, { reviewer: reviewer.id, scope: reviewer.scope }, forge ? { kind: forge.kind, repo: forge.repo } : undefined)
     return done(`Reviewing #${number}. The findings arrive in this session when the review ends (two passes, no edits).`)
   }
 
@@ -1797,6 +1936,8 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
 
   return {
     control, command: commandJob, tick: watch.tick, pending: watch.pending,
+    /** Starts due work now: a raised `prReview.concurrency` fills its new slots without waiting for the next poll. */
+    kick: () => watch.kick(),
     /** The session went idle: notices it could not take earlier are offered now. */
     idle: (sessionId: string) => outbox.flush(sessionId),
     held: outbox.held,

@@ -11,7 +11,7 @@ import { gitRun } from "../src/pr-review/context"
 import type { ReviewSessionFactory } from "../src/pr-review/engine"
 import type { GhCall } from "../src/pr-review/publish"
 import { BACKOFF_BASE_MS, BACKOFF_CAP_MS, createJobLedger, MAX_JOB_ATTEMPTS } from "../src/pr-review/jobs"
-import { createRepoWatch, MAX_CONCURRENT_REVIEWS, MAX_OPEN_PRS, PAUSE_RETRY_MS, PUBLISHER_RETRY_MS, type RepoWatchJob } from "../src/pr-review/repo-watch"
+import { createRepoWatch, MAX_CONCURRENT_REVIEWS, MAX_OPEN_PRS, MAX_REVIEW_CONCURRENCY, PAUSE_RETRY_MS, PUBLISHER_RETRY_MS, type RepoWatchJob } from "../src/pr-review/repo-watch"
 import { createPrReviewService } from "../src/pr-review/service"
 import { createReviewSessions, reviewMessage } from "../src/pr-review/sessions"
 
@@ -732,7 +732,7 @@ describe("durable review jobs", () => {
    * A watch over a fake gh whose jobs the test controls: `hold` keeps each review running until released, `fail` makes each
    * review report an error. The data dir and clock can be shared with a second watch, as a daemon restart would.
    */
-  function durable({ dir = temp("pr-review-jobs-watch-"), clock = { now: 1_000_000 }, hold = false, concurrency, limits, fail }: { dir?: string; clock?: { now: number }; hold?: boolean; concurrency?: number; limits?: import("../src/pr-review/repo-watch").RepoLimits; fail?: () => string | undefined } = {}) {
+  function durable({ dir = temp("pr-review-jobs-watch-"), clock = { now: 1_000_000 }, hold = false, concurrency, limits, fail }: { dir?: string; clock?: { now: number }; hold?: boolean; concurrency?: number | (() => number | undefined); limits?: import("../src/pr-review/repo-watch").RepoLimits; fail?: () => string | undefined } = {}) {
     const gh = fakeList()
     const jobs: RepoWatchJob[] = []
     const releases: Array<() => void> = []
@@ -852,6 +852,33 @@ describe("durable review jobs", () => {
     narrow.releases.shift()!()
     await narrow.settled()
     expect(narrow.jobs.map((job) => job.kind)).toEqual(["review", "command"])
+  })
+
+  test("a concurrency setting is read again at every start: lowering it to 1 runs the rest one at a time, raising it fills the new slots", async () => {
+    const setting: { value: number | undefined } = { value: 1 }
+    const w = durable({ hold: true, concurrency: () => setting.value })
+    await w.watch.watchRepo("ses_a", "/repo")
+    w.gh.state.prs = [1, 2, 3].map((number) => ({ number, headRefOid: sha(number) }))
+    await w.watch.tick()
+    expect(w.jobs.map((job) => job.number)).toEqual([1])
+    expect(w.watch.concurrency).toBe(1)
+    w.releases.shift()!()
+    await w.settled()
+    // One ended, one started: never two at once.
+    expect(w.jobs.map((job) => job.number)).toEqual([1, 2])
+    expect(w.watch.pending()).toMatchObject({ running: 1, queued: 1 })
+    setting.value = 3
+    w.watch.kick()
+    await w.settled()
+    expect(w.jobs.map((job) => job.number)).toEqual([1, 2, 3])
+    expect(w.watch.concurrency).toBe(3)
+    // Unset is the default; out of range is clamped to the scheduler's ceiling.
+    setting.value = undefined
+    expect(w.watch.concurrency).toBe(MAX_CONCURRENT_REVIEWS)
+    setting.value = 99
+    expect(w.watch.concurrency).toBe(MAX_REVIEW_CONCURRENCY)
+    for (const release of w.releases.splice(0)) release()
+    await w.settled()
   })
 
   test("a failing review is retried after a jittered backoff, then failed with its error after MAX_JOB_ATTEMPTS", async () => {

@@ -86,3 +86,41 @@ describe("incomplete reviews", () => {
     expect(body).toContain("Used 61,000 (no internal limit) tokens")
   })
 })
+
+describe("the verification line says what the separate pass did", () => {
+  const line = (body: string) => body.split("\n").find((text) => text.startsWith("- **Verification:**"))
+
+  test("a clean PR whose review pass raised nothing says no separate pass was needed, never that every finding was checked", () => {
+    const body = renderReviewBody({ result: result({ findings: [], dropped: 0 }), inline: 0, moved: [], info: { ...info, checked: 0 } })
+    expect(body).toContain("**No findings**")
+    expect(line(body)).toBe("- **Verification:** the review pass raised no candidate findings, so no separate pass was needed")
+    expect(body).not.toContain("every finding was checked again")
+  })
+
+  test("no verify pass with candidates dropped outside the diff counts them, and names no verifier", () => {
+    const body = renderReviewBody({ result: result({ findings: [], dropped: 2 }), inline: 0, moved: [], info: { ...info, checked: 0 } })
+    expect(line(body)).toBe("- **Verification:** the review pass raised no candidate findings, so no separate pass was needed; 2 candidates outside the diff were left out")
+  })
+
+  test("every candidate dropped by the verifier says how many it checked and that it confirmed none", () => {
+    const body = renderReviewBody({ result: result({ findings: [], dropped: 3 }), inline: 0, moved: [], info: { ...info, checked: 3 } })
+    expect(body).toContain("**No findings**")
+    expect(line(body)).toBe("- **Verification:** a separate pass checked 3 candidates again and confirmed none; 3 candidates were left out (not confirmed, outside the diff or past the cap)")
+  })
+
+  test("verified findings say they were checked and how many candidates the pass judged", () => {
+    const body = renderReviewBody({ result: result(), ...base, info: { ...info, checked: 3 } })
+    expect(line(body)).toBe("- **Verification:** every finding was checked again by a separate pass (3 candidates judged); 1 candidate was left out (not confirmed, outside the diff or past the cap)")
+  })
+
+  test("without the count, no findings claims no check; findings still say they were checked", () => {
+    expect(line(renderReviewBody({ result: result({ findings: [], dropped: 0 }), inline: 0, moved: [], info }))).toBe("- **Verification:** nothing was confirmed")
+    expect(line(renderReviewBody({ result: result(), ...base }))).toBe("- **Verification:** every finding was checked again by a separate pass; 1 candidate was left out (not confirmed, outside the diff or past the cap)")
+  })
+
+  test("a stopped review with nothing verified says nothing is shown instead of claiming a check of what is shown", () => {
+    const stop = { kind: "budget" as const, detail: "Budget reached.", unit: "tokens" as const, used: 61_000, limit: 50_000, resumable: true, remaining: "3 candidates not verified" }
+    expect(line(renderReviewBody({ result: result({ findings: [], dropped: 3, budgetHit: true }), inline: 0, moved: [], info, stop }))).toBe("- **Verification:** incomplete; 3 candidates not verified; nothing is shown, nothing unverified is published")
+    expect(line(renderReviewBody({ result: result({ budgetHit: true }), ...base, stop }))).toBe("- **Verification:** incomplete; 3 candidates not verified; what is shown was checked again by a separate pass, nothing unverified is published")
+  })
+})

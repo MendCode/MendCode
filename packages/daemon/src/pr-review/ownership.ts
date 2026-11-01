@@ -186,8 +186,11 @@ export function createOwnership({ file, now = Date.now }: { file: string; now?: 
 
 // ── PR-level claims across devices ────────────────────────────────────────────────────────────────────────────────────────
 
-/** A lease announced on a pull request: `owner` is the device id, `reviewer` the registry id it works as. */
-export type Claim = Lease & { reviewer: string; repo: string; number: number; author?: string | undefined }
+/**
+ * A lease announced on a pull request: `owner` is the device id, `reviewer` the registry id it works as. `covers`: the personal
+ * reviewers (claim ids) a global reviewer stands in for under `routing.offline_fallback`, so they see it when they come back.
+ */
+export type Claim = Lease & { reviewer: string; repo: string; number: number; author?: string | undefined; covers?: string[] | undefined }
 
 const ReviewerIdPattern = /^[a-z0-9][a-z0-9._-]{0,63}$/
 const RepoPattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}(\/[A-Za-z0-9][A-Za-z0-9._-]{0,99}){1,5}$/
@@ -211,16 +214,18 @@ const ClaimFields = z.object({
   fence: z.coerce.number().int().positive().max(Number.MAX_SAFE_INTEGER),
   acquired: z.coerce.number().int().nonnegative(),
   expires: z.coerce.number().int().nonnegative(),
+  /** Comma-separated claim ids (a reader before this field ignores it). */
+  covers: z.string().regex(/^[a-z0-9][a-z0-9._-]{0,63}(,[a-z0-9][a-z0-9._-]{0,63}){0,9}$/).optional(),
 })
 
 /**
  * The hidden comment that announces `lease` (keyed by `prClaimKey`) for `reviewer` on a pull request. Values are URI-encoded, so
  * nothing in them can close the HTML comment. The lease's owner must be a device id (`device.ts`), which is not a secret.
  */
-export function claimMarker(lease: Lease, reviewer: string): string {
+export function claimMarker(lease: Lease, reviewer: string, covers: readonly string[] = []): string {
   const parsed = parsePrClaimKey(lease.key)
   if (!parsed || parsed.reviewer !== reviewer) throw new TypeError(`[PR_REVIEW]: ${lease.key} is not a claim key of reviewer ${reviewer} (prClaimKey)`)
-  const fields = ClaimFields.parse({ key: lease.key, reviewer, owner: lease.owner, fence: lease.fence, acquired: lease.acquiredAt, expires: lease.expiresAt })
+  const fields = ClaimFields.parse({ key: lease.key, reviewer, owner: lease.owner, fence: lease.fence, acquired: lease.acquiredAt, expires: lease.expiresAt, ...(covers.length ? { covers: [...new Set(covers)].join(",") } : {}) })
   return `<!-- mendcode:claim ${Object.entries(fields).map(([name, value]) => `${name}=${encodeURIComponent(String(value))}`).join(" ")} -->`
 }
 
@@ -245,7 +250,7 @@ export function parseClaims(comments: ReadonlyArray<string | { body: string; aut
       const key = parsePrClaimKey(fields.data.key)
       const { expires, acquired } = fields.data
       if (!key || key.reviewer !== fields.data.reviewer || expires <= acquired || expires - acquired > MAX_CLAIM_TTL_MS) continue
-      claims.push({ key: fields.data.key, owner: fields.data.owner, fence: fields.data.fence, acquiredAt: acquired, expiresAt: expires, reviewer: key.reviewer, repo: key.repo, number: key.number, ...(author ? { author } : {}) })
+      claims.push({ key: fields.data.key, owner: fields.data.owner, fence: fields.data.fence, acquiredAt: acquired, expiresAt: expires, reviewer: key.reviewer, repo: key.repo, number: key.number, ...(author ? { author } : {}), ...(fields.data.covers ? { covers: fields.data.covers.split(",") } : {}) })
     }
   }
   return claims

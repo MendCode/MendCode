@@ -103,6 +103,7 @@ function buildSchemas() {
     title: z.string().max(300).optional(),
     url: z.string().max(500).optional(),
     stack: z.object({ parent: z.number().int().positive().optional(), children: z.array(z.number().int().positive()).max(50), depth: z.number().int().nonnegative() }).optional(),
+    covers: z.array(z.string().min(1).max(120)).min(1).max(10).optional(),
   })
   const File = z.object({ version: z.literal(1), jobs: z.array(z.unknown()) })
   return { Job, File }

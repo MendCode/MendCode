@@ -59,9 +59,10 @@ export type ReviewTrigger = JobTrigger
  * Who reviews one PR event (the platform's routing): one job per assignment. `waiting` is an assignment this daemon only records:
  * a personal reviewer whose MendCode runs elsewhere (another login's daemon, a device it is pinned to, another device's claim). Its
  * job is kept `waiting` with that reason, never started here, and never counted against the cooldowns; with `notBefore` (a claim's
- * expiry) it is started then and settles its claim again.
+ * expiry) it is started then and settles its claim again. `covers`: a global reviewer's job that stands in for these personal
+ * reviewers (`routing.offline_fallback`); it waits until `notBefore` like a claim's expiry.
  */
-export type ReviewAssignment = { reviewer: string; scope: ReviewerScope; assignment?: string | undefined; owner?: string | undefined; stack?: ReviewJob["stack"]; waiting?: string | undefined; notBefore?: number | undefined }
+export type ReviewAssignment = { reviewer: string; scope: ReviewerScope; assignment?: string | undefined; owner?: string | undefined; stack?: ReviewJob["stack"]; waiting?: string | undefined; notBefore?: number | undefined; covers?: string[] | undefined }
 /** Between the reason a job waits and the routing reason in a job's `assignment`, so a later wait replaces only the first part. */
 const WAITING_SEPARATOR = " · assigned: "
 /** The routing reason of a job's `assignment`, without the reason it waited for. */
@@ -225,6 +226,13 @@ export function listedToFacts(pr: ListedPr): PrFacts {
 const repoOfUrl = (url: string | undefined) => /^https:\/\/[^/]+\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)\/pull\/\d+$/.exec(url ?? "")?.[1]
 
 export const MAX_CONCURRENT_REVIEWS = 2
+/** The highest `prReview.concurrency`: the daemon's background scheduler never runs more jobs at once (its `high` resource mode). */
+export const MAX_REVIEW_CONCURRENCY = 4
+/** A concurrency value or setting as a slot count: unset or invalid is the default, anything else is clamped to 1 … `MAX_REVIEW_CONCURRENCY`. */
+export function reviewConcurrency(value: number | undefined): number {
+  if (value === undefined || !Number.isFinite(value)) return MAX_CONCURRENT_REVIEWS
+  return Math.min(MAX_REVIEW_CONCURRENCY, Math.max(1, Math.floor(value)))
+}
 const MAX_REPOS = 10
 /**
  * The run queue's size: work this daemon will run itself (`pending`, `running`, `fixing`, `validating`, and `waiting` jobs that
@@ -277,8 +285,8 @@ export type RepoWatchOptions = {
   followUp?(directory: string, sessionId: string, prs: ReadonlyArray<{ number: number; headRefOid: string }>): Promise<void>
   /** The durable job ledger; absent, the watch keeps one at `<dir>/pr-review/jobs.json`. The watch is its scheduler: it calls `recover()` once. */
   jobs?: JobLedger
-  /** Reviews and commands running at once (default `MAX_CONCURRENT_REVIEWS`). */
-  concurrency?: number
+  /** Reviews and commands running at once (default `MAX_CONCURRENT_REVIEWS`); a function is read again at every start, so a setting changed while running applies to the next job. */
+  concurrency?: number | (() => number | undefined)
   /** For the retry jitter; tests pin it. */
   random?: () => number
   /** Unsuccessful ends (failures and interruptions) before a job is `failed` for good (default `MAX_JOB_ATTEMPTS`). */
@@ -298,6 +306,12 @@ export type RepoWatchOptions = {
    * platform settles the jobs that wait for a claim there again now instead of at its expiry. Due work starts right after.
    */
   claimsChanged?(directory: string, numbers: readonly number[]): void
+  /**
+   * For a `requested` watch: whether the platform's routing (an area or a label of `.mendcode/reviewers.yaml`) gives PR `facts` to
+   * this login's personal reviewer although the PR neither requests nor assigns it; `undefined` when that cannot be read now (the
+   * comment is read again at the next poll). An `@mendcode` comment addressed to no one on such a PR is this reviewer's.
+   */
+  routedHere?(directory: string, facts: PrFacts): Promise<boolean | undefined>
 }
 /** A checkout's forge for the watch: its kind, repository path and adapter (with `comments` and `self`). */
 export type WatchForge = { kind: "gitlab" | "gitea"; repo: string; provider: ReviewProvider }
@@ -340,7 +354,7 @@ export function createRepoWatch(options: RepoWatchOptions) {
   // review requested, a claim that expired) is read from the provider's current state at the first listing, not from events.
   for (const watch of watches) if (!watch.ended) watch.catchUp = true
   const ledger = options.jobs ?? createJobLedger({ file: path.join(options.dir, "pr-review", "jobs.json"), now })
-  const concurrency = Math.max(1, Math.floor(options.concurrency ?? MAX_CONCURRENT_REVIEWS))
+  const concurrency = () => reviewConcurrency(typeof options.concurrency === "function" ? options.concurrency() : options.concurrency)
   const maxAttempts = Math.max(1, Math.floor(options.maxAttempts ?? MAX_JOB_ATTEMPTS))
   /** Commands waiting for a free slot; the commands themselves are durable in watches.json and offered again after a restart. */
   const queue: Array<Extract<RepoWatchJob, { kind: "command" }>> = []
@@ -419,7 +433,7 @@ export function createRepoWatch(options: RepoWatchOptions) {
   function pump() {
     if (stopped || !options.enabled()) return
     const skipped = new Set<string>()
-    while (running < concurrency) {
+    while (running < concurrency()) {
       const command = queue.shift()
       if (command) { startCommand(command); continue }
       const job = ledger.due(now()).find((item) => !runningJobs.has(item.id) && !skipped.has(item.id))
@@ -594,6 +608,7 @@ export function createRepoWatch(options: RepoWatchOptions) {
         provider: watch?.provider ?? forge?.kind ?? "github", repo: watch?.repo ?? forge?.repo ?? repoOfUrl(pr?.url) ?? directory, directory, number, sessionId,
         reviewer: assignment.reviewer, scope: assignment.scope,
         ...(text ? { assignment: text } : {}), ...(assignment.owner ? { owner: assignment.owner } : {}), ...(assignment.stack ? { stack: assignment.stack } : {}),
+        ...(assignment.covers?.length ? { covers: assignment.covers.slice(0, 10) } : {}),
         trigger, coverage: trigger === "synchronize" ? "incremental" : "full", base: pr?.baseRefOid ?? "", head, configKey: "",
         ...(pr?.title ? { title: pr.title.slice(0, 300) } : {}), ...(pr?.url && pr.url.length <= 500 ? { url: pr.url } : {}),
         // Recorded, not run: a reviewer of another daemon waits (offline is not failure); a claim's expiry makes it due again.
@@ -653,6 +668,16 @@ export function createRepoWatch(options: RepoWatchOptions) {
    */
   const takes = ({ command, role, me, requested }: { command: PrCommand; role: RepoRole; me: string | undefined; requested: boolean }) =>
     command.target ? !!me && command.target.toLowerCase() === me : role === "all" || requested
+  /**
+   * `takes` for one comment, with a `requested` watch's routing asked only when it matters (a comment addressed to no one on a PR
+   * that does not request this login): an area or label route to its personal reviewer makes the PR its own. `undefined`: the
+   * routing could not be read, so the comment is left for the next poll.
+   */
+  async function takesComment({ command, role, me, requested, directory, pr }: { command: PrCommand; role: RepoRole; me: string | undefined; requested: boolean; directory: string; pr: ListedPr | undefined }): Promise<boolean | undefined> {
+    if (takes({ command, role, me, requested })) return true
+    if (command.target || role !== "requested" || !pr || !options.routedHere) return false
+    return options.routedHere(directory, listedToFacts(pr)).catch(() => undefined)
+  }
 
   /**
    * `pollComments` on GitLab or Gitea: neither lists a repository's comments since a time, so the comments of each open PR updated
@@ -680,8 +705,10 @@ export function createRepoWatch(options: RepoWatchOptions) {
         if (answered.has(item.id) || !item.body || !item.author) continue
         const command = parsePrCommand(item.body)
         if (!command) continue
+        const mine = await takesComment({ command, role, me, requested: requestedOf(pr), directory: watch.directory, pr })
+        if (mine === undefined) { complete = false; continue }
         answered.add(item.id)
-        if (!takes({ command, role, me, requested: requestedOf(pr) })) continue
+        if (!mine) continue
         const comment: CommandComment = { id: item.id, surface: item.surface, actor: item.author.slice(0, 255), body: item.body.slice(0, 100_000), ...(item.inReplyTo ? { inReplyTo: item.inReplyTo } : {}), ...(item.discussion ? { discussion: item.discussion.slice(0, 64) } : {}), ...(item.path ? { path: item.path.slice(0, 1000) } : {}), ...(item.line ? { line: item.line } : {}) }
         const commands = watch.commands ??= []
         if (!commands.some((stored) => stored.comment.id === item.id)) commands.push({ comment: comment as StoredCommand["comment"], number: pr.number })
@@ -722,8 +749,10 @@ export function createRepoWatch(options: RepoWatchOptions) {
         const command = parsePrCommand(item.body)
         const head = heads.get(number)
         if (!command || !head) continue
+        const mine = await takesComment({ command, role, me, requested: requestedOf(number), directory: watch.directory, pr: prs.find((entry) => entry.number === number) })
+        if (mine === undefined) { complete = false; continue }
         answered.add(item.id)
-        if (!takes({ command, role, me, requested: requestedOf(number) })) continue
+        if (!mine) continue
         const comment: CommandComment = { id: item.id, surface: endpoint === "pulls/comments" ? "review" : "issue", actor: item.user, body: item.body, ...(item.association ? { association: item.association } : {}), ...(item.in_reply_to_id ? { inReplyTo: item.in_reply_to_id } : {}), ...(item.diff_hunk ? { diffHunk: item.diff_hunk } : {}) }
         const commands = watch.commands ??= []
         if (!commands.some((stored) => stored.comment.id === item.id)) commands.push({ comment: comment as StoredCommand["comment"], number })
@@ -1158,7 +1187,8 @@ export function createRepoWatch(options: RepoWatchOptions) {
     tick, watchRepo, unwatchRepo, describe, rows, publishConsent, consentOf, setPublish, isCurrent,
     /** The job ledger this watch schedules (the dashboard and the runners read and checkpoint it). */
     jobs: ledger,
-    concurrency,
+    /** The slots now: the setting as it reads at this moment. */
+    get concurrency() { return concurrency() },
     /** Starts due work now (a job re-queued by hand, a quota wait cut short), without waiting for the next poll. */
     kick: () => pump(),
     /**

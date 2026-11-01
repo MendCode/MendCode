@@ -164,7 +164,8 @@ tier). Local sessions only; remote and peer clients are refused.
   `reason`, `scope`, `patch`, `version`), and the daemon answers them (see the review platform below). `audit` has no slash command;
   it is reached through this action only.
 
-A review is a durable job of the repo watch (`<dir>/pr-review/jobs.json`), at most two at once. The head is fetched into `FETCH_HEAD` only and checked out
+A review is a durable job of the repo watch (`<dir>/pr-review/jobs.json`), at most two at once by default (see
+[Concurrency](#concurrency)). The head is fetched into `FETCH_HEAD` only and checked out
 detached in a throwaway worktree under `<dir>/pr-review/worktrees/` (removed afterwards), so your branches and checkout are never
 touched. The children are hidden sessions on the `explore` agent in plan mode, on the owner session's model; an approval they ask
 for is refused. They read with `read`, `grep`, `glob` and the graph tools; `shell` is not offered to them, since plan mode refuses
@@ -179,7 +180,12 @@ its `codex app-server` with `-c` overrides for that process only: a review child
 directory from the worktree up to its `.git` as an untrusted project (`projects={...={trust_level="untrusted"}}`), so the
 checkout's `.codex/config.toml`, hooks and rules stay disabled even when you trust the repository the worktree belongs to (Codex
 hands a worktree that trust), and a fix session's checkout skills are disabled by path (`skills.config`). Codex has no switch for
-your own `~/.codex/AGENTS.md`, so a Codex review child still gets it; `CODEX_HOME` is never moved. A read outside the
+your own `~/.codex/AGENTS.md`, so a Codex review child still gets it; `CODEX_HOME` is never moved. This is a known limit, not an
+oversight: in codex-cli 0.162.1, `codex debug prompt-input` still renders that file with `project_doc_max_bytes=0`,
+`project_doc_fallback_filenames=[]`, `instructions=""` or `user_instructions=""`, its config schema has no
+`include_user_instructions` key (only the permissions, apps, collaboration-mode and environment ones), no feature flag covers it,
+and `codex app-server` has no such option. The only other way, a separate `CODEX_HOME`, needs your login copied or moved, which
+MendCode never does. A read outside the
 checkout is refused with what may be read instead. A push reviews only the commits since the last reviewed head (the whole PR after a force push) and re-checks the
 published findings in the files it changed, whether their lines were rewritten, moved, or left as they were while code next to
 them changed (a fix often inserts the missing call above the flagged line): one that no longer reproduces gets its thread resolved.
@@ -323,6 +329,12 @@ reads files resends its conversation on every step, so cache reads would stop an
 of an 8-file PR read 207,343 input tokens in its first pass). The cost line shows the cache reads apart. A review the budget
 stopped before verifying says so in its verdict, never "No findings".
 
+The verification line under the verdict says what the separate pass did, so "No findings" never claims a check that did not run:
+"the review pass raised no candidate findings, so no separate pass was needed" when there was nothing to verify; "a separate
+pass checked N candidates again and confirmed none" when every candidate was dropped; "every finding was checked again by a
+separate pass (N candidates judged)" when some were kept; and for a stopped review, that it is incomplete and that nothing
+unverified is published. Candidates outside the diff that were left out are counted on the same line.
+
 ### What a review looks like
 
 The summary (`publish.ts` `reviewBody`) starts with `## MendCode review`, the verdict (`**3 findings** · 🔴 1 critical · 🟠 2 major`,
@@ -395,7 +407,8 @@ left, and ends with a `Head: <sha12>` line.
 A review, verify or fix turn has no fixed time limit, since a large PR's review can rightly take long. A turn is stopped as
 stalled after 10 minutes with no event from the model. A fix session waiting for your approval is not idle, and every turn has a
 hard cap of 2 hours. A stalled turn keeps the job's work in its checkpoint and is retried with backoff from there. A stall is not
-a network outage, so each of its retries spends an attempt. A turn that fails with the network's or the forge's words (a timeout,
+a network outage, so each of its retries spends an attempt. A model child that never answers its start handshake (Claude Code's
+`no answer to initialize`, seen under heavy load) is retried the same way. A turn that fails with the network's or the forge's words (a timeout,
 a 5xx) is a transient failure, as above. A job only moves
 along fixed transitions: a finished job never runs again by itself, and nothing becomes `done` without
 running. The newest 500 finished jobs are kept. A damaged file is set aside (`jobs.json.corrupt-<time>`) and the next poll reads the
@@ -470,8 +483,11 @@ the repository's global reviewer (`routing.global: always`, or only when no pers
 
 `review.yaml` still decides whether a capability is used (`fix.push`, `fix.personal`, `publishers`). A `login` follows the
 checkout's forge, as in `review.yaml`. A global reviewer without a `login` runs on every `all` watch. A `requested` watch takes
-the PRs that request or are assigned to its login, and the PRs that area or label routing gives its login's personal reviewer. It
-does not take an `@mendcode` comment addressed to no one on a PR that only area routing gives it.
+the PRs that request or are assigned to its login, and the PRs that area or label routing gives its login's personal reviewer. An
+`@mendcode` comment addressed to no one is taken on those PRs too: when the PR neither requests nor is assigned to the login, the
+watch routes it through `.mendcode/reviewers.yaml` (its changed files, only when the personal reviewer has `areas` or a label
+route) and takes the comment when routing names that reviewer. A routing read that fails leaves the comment for the next poll; a
+comment addressed to someone else is never taken.
 
 A personal reviewer whose machine is off is not a failure: its work waits. On another daemon such a PR is a `waiting` job with the
 reason ("waiting for @alice's MendCode (offline or another device) …"); it is never run there and never failed. When the reviewer's
@@ -480,6 +496,26 @@ changed files) and skips heads already reviewed, so nothing depends on an event 
 files of at most the 20 newest unreviewed PRs. Every 10 minutes the waiting daemon reads
 that PR again. Once the reviewer's login has submitted a review of the head, the waiting job closes as `done`, naming the device
 that ran it.
+
+**Offline fallback (opt-in).** By default nothing covers a personal reviewer that stays away. With `routing.offline_fallback` in
+`reviewers.yaml`, a global reviewer takes the PR after a set time:
+
+```yaml
+routing:
+  offline_fallback:
+    after_minutes: 30    # 1 to 10080
+    reviewer: team       # optional: a global reviewer with `review`; default `routing.fallback`, then the default global
+```
+
+The daemon that runs that global reviewer records a second `waiting` job next to the personal one, with the reason and the
+recipient: `offline fallback: team reviews this pull request at <time> unless @alice's MendCode (alice-backend) claims or reviews
+its head first`. The personal reviewer keeps priority. At that time, the cover job starts only when no personal reviewer it covers
+holds a live claim on the PR ("offline fallback not needed now: … is back") or has reviewed the head ("not needed: reviewed by …");
+it checks again right before posting. When it runs, its assignment and the session notice say why ("did not claim or review head
+H within 30 min, so team reviews it"), and its claim marker carries `covers=alice-backend`. A personal job that starts later
+waits on that claim, and once the cover's review of the head exists it closes `done` ("reviewed by … as the offline fallback;
+not reviewed again here") without a model call or a post; the waiting record on the other daemon closes the same way. The
+residual window of PR-comment claims (below) applies here too.
 
 Without a coordinator there is one explicit owner per key. Each daemon has a device id (`<dir>/pr-review/device.json`, a random id
 and the hostname as a label; not a secret). Leases (`<dir>/pr-review/ownership.json`) carry a fencing number that only grows: an
@@ -564,7 +600,7 @@ Review children are headless and get no memory block of their own (`noMemory`) a
 use is chosen explicitly from MendCode's native memory and travels in the review prompt as one reference block, with each line's
 scope, id and dates; it is the same text for the native engine, Claude Code and Codex review children. A Claude Code child also
 runs with its own CLAUDE.md files and auto memory off (see above). A Codex child runs with Codex memories off and without the
-worktree's `AGENTS.md` (see above); only your own `~/.codex/AGENTS.md` still reaches it.
+worktree's `AGENTS.md` (see above); only your own `~/.codex/AGENTS.md` still reaches it (no Codex switch removes it; see above).
 
 - The **global** reviewer reads only project memories of the checkout that the user shared (`/memory`, Sharing, `ENABLE PROJECT`),
   and of those only what memory sharing would export (no secret, not `security`, not high sensitivity) and that describes the code
@@ -666,6 +702,23 @@ names (`on_quota: wait`, within `max_wait_minutes`) or stops (`on_quota: stop`);
 third option: no other model, provider, API key or paid usage. Accounting (`<dir>/pr-review/accounting.json`) keeps every call's
 reported input, output and cache figures per PR head, purpose and attempt, across restarts; a call with no report is counted as
 unknown, never as zero.
+
+A call that does not end normally is still accounted, with only what the source reported. A turn that fails, is cancelled or is
+stopped as stalled keeps the usage its engine reported before it ended (a Claude Code turn cut short reports its partial usage)
+and counts as one call without a full report (`unreported`). A call the daemon was running when it was killed is kept in the file
+while it runs (`open`); the next start accounts each one left as `unreported` on its PR head and job, plus what its child session
+recorded beyond the calls already counted for it. Claude Code reports usage at the end of a turn, so a turn killed with the daemon
+usually stays unknown: it is shown as a call without a report, never as an estimate.
+
+### Concurrency
+
+`prReview.concurrency` (`settings.set`, 1 to 4, default 2) is how many reviews or `@mendcode` commands this device runs at once,
+across every watched repository. It is a per-device setting, not a `review.yaml` key: the watch's queue is daemon-wide, so the
+value is this machine's capacity, while repository config applies per review (one repository could not set the limit for
+another). It is a machine setting, so a config bundle never carries it to another device, and a remote or peer client cannot set
+it. A change applies to the next start, without a restart. The background job scheduler shared with Dream, loops and workflows
+also caps how many run (2 in normal mode, 4 in high), so values above 2 take effect only there. `/pr watch-repo list`, the
+`pr_review` status and the `/reviews` page show the value ("running N of M at once").
 
 ### Providers
 
