@@ -9,9 +9,23 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+## v0.0.2 - 2026-11-01
+
+The second stable release: everything in the v0.0.2 betas, from MendCode's own ChatGPT login and an advisor model to a visible
+plan, plan mode as in v1, voice dictation, credentials pasted into `/env` and fewer prompt-cache misses.
+
+### Upgrade notes
+
+- Stable installs move from v0.0.1 with `mendcode upgrade`; beta and nightly installs already have this code from
+  v0.0.2-beta.4 and the nightly of the same day.
+
+## v0.0.2-beta.4 - 2026-11-01
+
 MendCode signs in to ChatGPT for itself with OpenAI's Sign in with ChatGPT, keeps its own list of the models your account can use,
 and Claude models on a new install run in the Claude Code you already have signed in; the setup no longer leaves you at a prompt with
-no model, and the pull request reviewer keeps working when the daemon starts with a short `PATH`.
+no model, and the pull request reviewer keeps working when the daemon starts with a short `PATH`. A second model can advise the
+first (`/advisor`), the agent's task list stays visible above the prompt, plan mode works as in v1, credentials can be pasted into
+`/env` as a whole `.env`, and fewer requests miss the prompt cache.
 
 ### New
 
