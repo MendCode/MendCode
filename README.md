@@ -1,13 +1,59 @@
-# MendCode
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/readme/logo-dark.svg">
+    <img src="docs/assets/readme/logo-light.svg" alt="MendCode" width="160">
+  </picture>
+</p>
 
-[![CI](https://github.com/MendCode/MendCode/actions/workflows/ci.yml/badge.svg)](https://github.com/MendCode/MendCode/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/MendCode/MendCode?include_prereleases&sort=semver)](https://github.com/MendCode/MendCode/releases)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+<h1 align="center">MendCode</h1>
 
-A coding agent for the terminal. One daemon keeps your sessions; any number of terminals attach to them. It runs its own
-native engine with the models you connect, or drives Claude Code, Codex, ACP agents and pi behind the same screen. It indexes
-your code into a graph so the model reads less, packs long conversations instead of forgetting them, and reviews your pull
-requests.
+<p align="center"><strong>A coding agent for the terminal, with sessions that outlive the window.</strong></p>
+
+<p align="center">
+  <a href="https://github.com/MendCode/MendCode/actions/workflows/ci.yml"><img src="https://github.com/MendCode/MendCode/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/MendCode/MendCode/releases"><img src="https://img.shields.io/github/v/release/MendCode/MendCode?include_prereleases&sort=semver&color=3F8F83" alt="Release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-9FB08E" alt="License: MIT"></a>
+  <a href="https://www.mendcode.dev/"><img src="https://img.shields.io/badge/website-mendcode.dev-3F8F83" alt="Website"></a>
+  <a href="docs/"><img src="https://img.shields.io/badge/docs-101_pages-9FB08E" alt="Docs"></a>
+</p>
+
+<p align="center">
+  <a href="https://www.mendcode.dev/">Website</a> ·
+  <a href="#install">Install</a> ·
+  <a href="docs/commands.md">Commands</a> ·
+  <a href="docs/">Docs</a> ·
+  <a href="https://github.com/MendCode/MendCode/releases">Releases</a> ·
+  <a href="CONTRIBUTING.md">Contributing</a>
+</p>
+
+One daemon keeps your sessions; any number of terminals attach to them. MendCode runs its own native engine with the models
+you connect, or drives Claude Code, Codex, ACP agents and pi behind the same screen. It indexes your code into a graph so the
+model reads less, packs long conversations instead of forgetting them, keeps a memory you can read and edit, and reviews your
+pull requests.
+
+<p align="center">
+  <img src="docs/assets/readme/session.svg" alt="A MendCode session: a fix to a coupon cap with its diff, passing tests and to-dos." width="100%">
+</p>
+
+## Contents
+
+- [Why MendCode](#why-mendcode)
+- [Install](#install) · [First run](#first-run)
+- [What it does](#what-it-does): [sessions](#sessions-that-outlive-the-terminal), [pull request reviews](#pull-request-reviews), [memory](#memory-you-can-read-and-edit), [approvals](#approvals), [long work](#goals-loops-and-sub-agents), [/changes](#review-the-diff-before-you-commit), [engines](#one-screen-several-engines)
+- [Status](#status) · [Build from source](#build-from-source)
+- Reference: [views](#replaceable-views), [script workflows](#script-workflows), [Markdown](#markdown-renderer), [process modes](#process-modes), [terminal details](#terminal-details), [tiers](#tiers), [measurements](#measurements), [engines](#engines), [embedding](#embedding), [security](#security-model), [docs](#docs-and-development)
+
+## Why MendCode
+
+| You want | What MendCode does |
+|---|---|
+| Work that survives a closed terminal | Sessions live in a daemon; close the window and the turn keeps running, attach again from any terminal ([remote](docs/remote.md)) |
+| The subscriptions you already pay for | Sign in with ChatGPT, or run Claude Code and Codex as engines with their own logins ([setup](docs/setup.md)) |
+| A model that reads less of your repository | A code graph answers where a symbol is and who calls it, with exact `file:line` ([code graph](docs/code-graph.md)) |
+| Long sessions that do not forget | Compaction packs the conversation and keeps a scratchpad of what was folded ([compaction](docs/compaction.md)) |
+| Reviews you can trust | Two passes on every pull request: one finds defects, a fresh one tries to refute each ([PR reviewer](docs/pr-review.md)) |
+| Control over what runs | The daemon checks every tool call against your permission mode, whatever the prompt says ([permissions](docs/permissions.md)) |
+| As much or as little as you like | Three tiers, minimalist, balanced and full, from a plain prompt to every panel ([tiers](#tiers)) |
 
 ## Install
 
@@ -23,13 +69,63 @@ Windows (PowerShell 5.1 or newer):
 irm https://github.com/MendCode/MendCode/releases/latest/download/install.ps1 | iex
 ```
 
-Then run `mendcode`. The first launch walks you through [/setup](docs/setup.md) (models, permissions) and [/connect](docs/connect.md)
-(credentials). Claude Code, Codex and the other external engines need their own install and login.
+Then run `mendcode`. The binary goes to `~/.local/bin/mendcode` (`%LOCALAPPDATA%\Programs\mendcode` on Windows). Download and
+read the script first if you prefer: it is attached to every [release](https://github.com/MendCode/MendCode/releases).
 
-The binary goes to `~/.local/bin/mendcode` (`%LOCALAPPDATA%\Programs\mendcode` on Windows). The installer checks the binary's
-SHA256 and, when [cosign](https://docs.sigstore.dev/cosign/system_config/installation/) is installed, the signature of the release
-workflow; `MENDCODE_REQUIRE_SIGNATURE=1` refuses to install without that signature. Download and read the script first if you
-prefer: it is attached to every [release](https://github.com/MendCode/MendCode/releases).
+### Installer options
+
+| Option | What it does |
+|---|---|
+| `--channel stable\|beta\|nightly` | Which releases to follow ([channels](#channels)); `upgrade` remembers it |
+| `--tier minimalist\|balanced\|full` | The tier of the first launch (default `balanced`); minimalist opens straight to the prompt, with no setup page ([tiers](#tiers)) |
+| `MENDCODE_VERSION=v0.0.1` | One exact release instead of the newest of the channel |
+| `MENDCODE_INSTALL_DIR=<dir>` | Where the binary goes (default `~/.local/bin`) |
+| `MENDCODE_REQUIRE_SIGNATURE=1` | Refuse to install unless the cosign signature was checked |
+
+Options go after `sh -s --`, for example:
+
+```sh
+curl -fsSL https://github.com/MendCode/MendCode/releases/latest/download/install.sh | sh -s -- --channel nightly --tier full
+```
+
+### What the installer checks and prints
+
+The binary's SHA256 must match its line in the release's `SHA256SUMS` before anything is written. With
+[cosign](https://docs.sigstore.dev/cosign/system_config/installation/) installed, the signatures of `SHA256SUMS` and of the binary
+are checked too, bound to this repository's release workflow and the exact tag. A run ends like this:
+
+```text
+Verified SHA256 and the cosign signature of v0.0.2-nightly.20261101.18
+Installed mendcode 0.0.2-nightly.20261101.18 to /Users/you/.local/bin/mendcode (starting tier: balanced)
+Run mendcode to start. mendcode upgrade updates it; --channel beta or nightly switches channel.
+```
+
+Without cosign the first line says `Verified the SHA256 of <tag>; cosign is not installed, so its signature was not checked`.
+When the install directory is not on your `PATH`, the last line tells you what to add.
+
+<details>
+<summary>Verify a release by hand</summary>
+
+Download the assets into an empty directory, then:
+
+```sh
+tag=v0.0.1
+identity="https://github.com/MendCode/MendCode/.github/workflows/release.yml@refs/tags/$tag"
+issuer=https://token.actions.githubusercontent.com
+cosign verify-blob --bundle SHA256SUMS.sigstore.json \
+  --certificate-identity "$identity" --certificate-oidc-issuer "$issuer" SHA256SUMS
+sha256sum --check SHA256SUMS            # macOS: shasum -a 256 --check SHA256SUMS
+binary=mendcode-0.0.1-linux-x64
+cosign verify-blob --bundle "$binary.sigstore.json" \
+  --certificate-identity "$identity" --certificate-oidc-issuer "$issuer" "$binary"
+# GitHub provenance, attached to every public release:
+gh attestation verify "$binary" --repo MendCode/MendCode \
+  --signer-workflow MendCode/MendCode/.github/workflows/release.yml
+```
+
+Every release also carries an SBOM (`SBOM.cdx.json`) and `release-index.json` ([releases](docs/release.md)).
+
+</details>
 
 ### Channels
 
@@ -59,6 +155,91 @@ binary; your sessions stay in the data directory ([upgrade](docs/upgrade.md)).
 
 `mendcode uninstall` lists exactly what it would remove and asks first; `--keep-data` and `--keep-config` keep your sessions or
 your settings ([uninstall](docs/uninstall.md)).
+
+## First run
+
+`mendcode` opens one setup screen that detects instead of asking ([setup](docs/setup.md)). It lists what it found (a ChatGPT
+login, Claude Code, Codex, API keys, pi) and, for anything missing, the one command or key that fixes it. A recommended model is
+preselected; Enter finishes. Each model option says who runs it and whose login pays:
+
+- **ChatGPT** runs in MendCode's own engine. `/connect chatgpt` is OpenAI's Sign in with ChatGPT: open the link, allow MendCode
+  to use your plan, and the terminal says `ChatGPT connected`.
+- **Claude** models run in your own Claude Code, with its login. MendCode starts it and never reads its credentials.
+- **Codex**, ACP agents and pi run as engines with their own login. API keys for other providers go in with [/connect](docs/connect.md).
+
+`/setup` opens the screen again, `/model` changes the model, `/tier` the tier, and `/permissions` the permission mode. All
+commands: [commands](docs/commands.md).
+
+## What it does
+
+### Sessions that outlive the terminal
+
+Sessions live in a daemon, not in the window. Close the terminal and the turn keeps running; open another and it is on screen as
+it streams. `mendcode -s <id>`, `--continue` or Ctrl+S attach; a reconnecting terminal replays from the last event it saw, and
+`--connect` reaches a daemon on another machine over TLS, where a read-only token only watches ([remote](docs/remote.md),
+[sessions](docs/sessions.md)).
+
+### Pull request reviews
+
+`/pr review <n>` reviews a pull request with your model. One pass finds candidate defects, a second, independent pass tries to
+refute each, and only what it confirms is published as one review with inline comments. The review reads the diff with the
+callers and callees of every symbol it touches, from the [code graph](docs/code-graph.md). It uses your `gh` login: no GitHub App,
+webhook server or stored token. Nothing is posted until `.mendcode/review.yaml` on the base branch sets `enabled: true`, and
+`/pr watch-repo` keeps reviewing new pull requests and pushes. GitLab and Gitea / Forgejo work through adapters
+([PR reviewer](docs/pr-review.md), [team setup](docs/pr-review-setup.md)).
+
+### Memory you can read and edit
+
+The agent proposes what to remember; each category has a policy: saved at once, kept for your review, or dropped. A proposal
+holding a redacted secret always waits for you. `/memory` approves, edits, pins, rescopes or deletes, and its Graph tab links saved
+memories as related, supports, supersedes or conflicts; a memory linked to one that matches the prompt is recalled with it
+([memory](docs/memory.md)).
+
+<p align="center">
+  <img src="docs/assets/readme/memory-graph.svg" alt="The memory page's Graph tab: saved memories and their links around the selected one, with its detail below." width="100%">
+</p>
+
+### Approvals
+
+Every tool call is checked by the daemon against your permission mode before it runs, whatever the model was told: `ask`,
+`edits`, `full`, `plan` or `smart`. An approval answers once or for the session. A pasted key becomes `‹secret:1›` and the model
+sees only the marker. Seatbelt or bubblewrap around the model's shell commands is available and off by default
+([permissions](docs/permissions.md), [sandbox](docs/sandbox.md), [secrets](docs/secrets.md)).
+
+<p align="center">
+  <img src="docs/assets/readme/approval.svg" alt="An approval card: the command the model wants to run, with allow once, allow for this session and reject." width="100%">
+</p>
+
+### Goals, loops and sub-agents
+
+`/goal --budget 200k <objective>` keeps the session taking turns until the objective is met or its token budget runs out. Loops run
+an objective on a schedule, with gates and caps. Sub-agents and background tasks are sessions you can open, follow and stop;
+fan-out sends one prompt to two to eight models, each in its own worktree, and nothing reaches your checkout until you apply it
+([goals](docs/goals.md), [loops](docs/loops.md), [agents](docs/agents.md)).
+
+<p align="center">
+  <img src="docs/assets/readme/goal.svg" alt="A session working toward a goal: the footer shows the goal's tokens used against its budget and the time spent." width="100%">
+</p>
+
+### Review the diff before you commit
+
+`/changes` lists every file the branch changed with its diff beside it. Comment a line, a selection or a hunk, then send the whole
+review back as one message; comments survive reconnects and daemon restarts. Plans get the same treatment: accept, edit, comment
+or reject before any code ([changes](docs/changes.md), [plan review](docs/plan-review.md)).
+
+<p align="center">
+  <img src="docs/assets/readme/changes.svg" alt="The changes page: the files a session changed, with the selected file's diff." width="100%">
+</p>
+
+### One screen, several engines
+
+The native engine runs the models you connect. Claude Code, Codex, ACP agents and pi run behind the same screen, with their own
+logins and tool loops, and sub-agents can run on any of them by model name ([engines](#engines)). Around them: a code graph and
+language servers for navigation ([code graph](docs/code-graph.md), [LSP](docs/lsp.md)), compaction that packs long conversations
+([compaction](docs/compaction.md)), Mermaid diagrams drawn in the terminal ([mermaid](docs/mermaid.md)), native macOS computer use
+bound to the window you approve, off until enabled ([computer](docs/computer.md)), a browser tool ([browser](docs/browser.md)),
+hooks ([hooks](docs/hooks.md)), packages ([packages](docs/packages.md)), push-to-talk dictation ([voice](docs/voice.md)), Telegram
+([channels](docs/channels.md)) and usage-limit checkpoints ([usage limits](docs/usage-limit.md)).
 
 ## Status
 
