@@ -33,6 +33,7 @@ import { scaffoldView } from "../../extensions/view-scaffold"
 import type { PresentationMode } from "../../view/transcript"
 
 export function createPageKeys(ctx: AppContext, actions: {
+  reposKey(key: string): Promise<boolean>
   environmentKey(key: string): Promise<void>
   petPlanKey(key: string): Promise<boolean>
   slashCommands?: () => import("../../view/commands").SlashCommand[]
@@ -211,7 +212,7 @@ export function createPageKeys(ctx: AppContext, actions: {
     } else if (state.page === "tree") {
       await actions.sessionTree.key(key)
     } else if (state.page === "text") {
-      await actions.sessionNav.textKey(key)
+      if (!await actions.reposKey(key)) await actions.sessionNav.textKey(key)
     } else if (state.page === "usage") {
       if (await actions.usageSettingsKey(key)) return
       const open = key === "\r" ? usageSelectedSession(state.usageState, state.usageReport) : undefined

@@ -144,6 +144,8 @@ export type Page = "file" | "tasks" | "stash" | "drafts" | "queue" | "history" |
 
 /** Mutable bindings shared by the entry point and its feature factories. */
 export type AppState = {
+  commandOutput?: { title: string; message: string; hint?: string }
+  commandOutputReturn?: { page: Page; text?: import("../../view/text-page").TextPageState; textReturn?: Page }
   /** The file open in the viewer (the right slot, or the `file` page on a narrow terminal); absent when none is (docs/file-viewer.md). */
   fileViewer?: import("./file-viewer").FileViewerState | undefined
   environmentPage?: import("../../view/environment-page").EnvironmentPageState | undefined

@@ -87,7 +87,7 @@ export function createTuiControl(ctx: AppContext, actions: {
       case "tui.command.execute": return command(event.properties.command)
       case "tui.toast.show":
         state.toastPage = state.page
-        toasts.show({ message: event.properties.message, variant: event.properties.variant, ...(event.properties.title !== undefined ? { title: event.properties.title } : {}) }, event.properties.duration)
+        ctx.say(event.properties.message, event.properties.variant, { ...(event.properties.title !== undefined ? { title: event.properties.title } : {}), ...(event.properties.duration !== undefined ? { ms: event.properties.duration } : {}) })
         return true
       case "tui.session.select":
         dismissPalette()

@@ -1,6 +1,7 @@
 import { parsePrCommand, parsePrReviewCommand, prSections, prSummary, type PrReviewAction, type PrWatchRow } from "../../view/pr-watch"
 import { effectiveSettings, type ExperimentalFlag } from "@mendcode/protocol/wire"
-import { createTextPageState } from "../lazy-pages"
+import { createTextPageState, preload } from "../lazy-pages"
+import { repoSections, type RepoRow } from "../../view/repo-output"
 import type { Settings } from "@mendcode/protocol"
 import type { AppContext } from "./context"
 
@@ -12,13 +13,65 @@ const PR_FLAGS: readonly ExperimentalFlag[] = ["pr_watch", "pr_review"]
 /** `/pr`: the daemon polls linked pull requests through `gh` and wakes the session on a change (docs/pr-watch.md). */
 export function createPrWatchCommand(ctx: AppContext, actions: { setFlags(names: readonly ExperimentalFlag[], next: boolean): Promise<boolean> }) {
   const { input, state, requestFrame, fail, say } = ctx
+  let repos: RepoRow[] = []
+  let selected = 0
+  let repoText = ""
+  let repoPage: typeof state.textPage
+  let busy = false
+  function showRepos() {
+    repoPage = createTextPageState({ title: "Repository watches", summary: "[ ] select · s stop · r restart · R refresh", sections: repoSections(repos, selected, repoText) })
+    repoPage.repos = true
+    state.textPage = repoPage
+    state.page = "text"
+    requestFrame()
+  }
+  async function reposKey(key: string): Promise<boolean> {
+    if (!state.textPage?.repos) return false
+    repoPage = state.textPage
+    if (key === "[" || key === "]") {
+      selected = Math.max(0, Math.min(repos.length - 1, selected + (key === "]" ? 1 : -1)))
+      showRepos()
+      return true
+    }
+    if (!["s", "r", "R"].includes(key)) return false
+    if (busy) return true
+    busy = true
+    try {
+      const row = repos[selected]
+      if (key !== "R" && !row) return true
+      const reply = await input.send({ type: "pr.review", sessionId: state.sessionId, action: key === "R" ? "list" : key === "s" ? "unwatch-repo" : "watch-repo", ...(row && key !== "R" ? { directory: row.directory, ...(key === "r" && (row.role === "all" || row.role === "requested") ? { role: row.role } : {}) } : {}) })
+      if (state.page !== "text" || !state.textPage?.repos) return true
+      if (!reply.ok) { repoText = reply.error.message; showRepos(); return true }
+      takeRepos(reply.result)
+      showRepos()
+    } catch (error) {
+      if (state.page === "text" && state.textPage?.repos) { repoText = error instanceof Error ? error.message : String(error); showRepos() }
+    } finally { busy = false }
+    return true
+  }
+  function takeRepos(result: Record<string, unknown> | undefined) {
+    repos = (Array.isArray(result?.watches) ? result.watches : []) as RepoRow[]
+    repos = repos.toSorted((a, b) => Number(a.state.startsWith("ended")) - Number(b.state.startsWith("ended")))
+    selected = Math.max(0, Math.min(selected, repos.length - 1))
+    repoText = String(result?.text ?? "")
+  }
 
-  /** `/pr review|watch-repo|unwatch-repo|repos|publish` (docs/pr-review.md): the daemon's PR reviewer answers in one line. */
+  /** Repository lists use the shared page; other replies go through the size-aware notice path. */
   async function reviewCommand(command: { action: PrReviewAction; pr?: string; role?: "all" | "requested" }) {
     if (input.remote) return fail("pr: the reviewer runs gh on the daemon's own machine, so this works only from a local session")
     if (!state.sessionId) return fail("pr: no session yet")
-    const reply = await input.send({ type: "pr.review", sessionId: state.sessionId, action: command.action, ...(command.pr ? { pr: command.pr } : {}), ...(command.role ? { role: command.role } : {}) })
+    const parent = state.page
+    const sessionId = state.sessionId
+    const reply = await input.send({ type: "pr.review", sessionId, action: command.action, ...(command.pr ? { pr: command.pr } : {}), ...(command.role ? { role: command.role } : {}) })
+    if (state.page !== parent || state.sessionId !== sessionId) return
     if (!reply.ok) return fail(`pr: ${reply.error.message.replace(/^\[[A-Z-]+\]:\s*/, "")}`)
+    if (command.action === "list") {
+      await preload("pr")
+      takeRepos(reply.result)
+      selected = 0
+      state.textReturn = parent === "text" ? undefined : parent
+      return showRepos()
+    }
     say(String(reply.result?.text ?? "done"), "success", { title: "PR review" })
     return requestFrame()
   }
@@ -72,5 +125,5 @@ export function createPrWatchCommand(ctx: AppContext, actions: { setFlags(names:
     requestFrame()
   }
 
-  return { prCommand }
+  return { prCommand, reposKey }
 }

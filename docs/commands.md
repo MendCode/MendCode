@@ -1,5 +1,7 @@
 # Commands
 
+Short confirmations stay in the notice row. Long replies keep their full text behind **F4**, shown as `F4 full text` on the preview, without interrupting the prompt or an open form. F4 opens the shared scrollable text page; ↑↓, Space, PgUp/PgDn and g/G read the whole reply, and Esc restores the previous page. The latest full reply remains available after its preview expires. The same rule applies to daemon errors and extension replies. `/pr repos` opens its list directly.
+
 `/tsm` opens the terminal-session adapter manager; `/tsm setup`, `activate
 --mux kitty`, `deactivate`, `remove`, `doctor` and `open TARGET` use the same
 daemon contract as automation. See [TSM](tsm.md). Tab completes without executing.

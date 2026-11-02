@@ -9,8 +9,15 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+### New
+
+- `mendcode usage recover` adds the token usage of a Claude Code, Codex or Pi session log to Usage, with a preview first and
+  an undo. See [usage recovery](docs/usage-recovery.md).
+
 ### Changed
 
+- Long command replies open a readable page (F4 shows the full text of a cut notice), and `/pr repos` lists repository
+  watches in a page where they can be stopped and restarted.
 - Compaction uses the session's own model by default, so it reuses the prompt cache; the built-in recipes no longer set a
   `compaction` role, and `/models` notes when a separate compaction model gives that up.
 - The working row's token count shows new input and the context read from the provider's prompt cache separately.

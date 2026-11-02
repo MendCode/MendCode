@@ -99,6 +99,7 @@ export type Automation = Common &
     | { kind: "workflow.show"; id: string }
     | { kind: "workflow.control"; id: string; action: "pause" | "resume" | "stop" | "verify" | "delete" | "retry" | "accept" | "approve" | "reject"; taskId?: string; reason?: string; wait?: true; timeoutMs?: number }
     | { kind: "usage" | "stats"; days?: number; tools?: number; models?: true | number; scope?: "global" | "project" | "directory"; project?: string; waste?: true }
+    | { kind: "usage.recover"; session: string; engine: "claude" | "codex" | "pi"; action: "preview" | "apply" | "undo"; file?: string; fingerprint?: string }
     | { kind: "storage"; clean: boolean; olderThanDays?: number; dryRun: boolean; vacuum: boolean; compact: boolean; offline?: boolean; deltaIdleDays?: number; worktrees: boolean; worktreeIdleDays?: number }
     | { kind: "package.list" }
     | { kind: "recipe.list" }
@@ -579,6 +580,13 @@ export function parseAutomation(argv: string[]): ParseResult {
   }
 
   if (name === "usage" || name === "stats") {
+    if (name === "usage" && sub === "recover") {
+      const engine = str("engine"), session = str("session"), action = rest[0] ?? "preview"
+      if (!session || !["claude", "codex", "pi"].includes(engine ?? "") || !["preview", "apply", "undo"].includes(action) || rest.length > 1) return bad("usage recover [preview|apply|undo] --session ID --engine claude|codex|pi --from-file FILE [--id PREVIEW_FINGERPRINT]")
+      if (action !== "undo" && !str("from-file")) return bad("Recovery needs --from-file FILE")
+      if (action === "apply" && !str("id")) return bad("Apply needs --id PREVIEW_FINGERPRINT")
+      return ok({ kind: "usage.recover", session, engine: engine as "claude" | "codex" | "pi", action: action as "preview" | "apply" | "undo", ...(str("from-file") ? { file: str("from-file")! } : {}), ...(str("id") ? { fingerprint: str("id")! } : {}) })
+    }
     if (sub) return bad(`unexpected argument ${sub}`)
     const days = number(flags, "days", { min: 0, integer: true })
     if (isError(days)) return bad(days.error)
@@ -2006,6 +2014,12 @@ export async function runAutomation(command: Automation, deps: AutomationDeps): 
       return result(report, `${command.kind === "recipe.apply" ? `applied ${command.name}\n` : ""}${recipeRows(report)}`)
     }
 
+    case "usage.recover": {
+      const reply = await daemon({ type: "usage.recover", sessionId: command.session as SessionId, engine: command.engine, action: command.action,
+        ...(command.file ? { file: path.resolve(dir, command.file) } : {}), ...(command.fingerprint ? { fingerprint: command.fingerprint } : {}) })
+      if (!reply.ok) return fail(reply.message)
+      return result(reply.result, JSON.stringify(reply.result, null, 2))
+    }
     case "usage":
     case "stats": {
       const now = deps.now()
