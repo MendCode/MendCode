@@ -6,6 +6,7 @@
 #                                       # it never overwrites a tier or settings that already exist, and /tier changes it later (docs/release.md)
 # While the repository is private the GitHub CLI reads it: `gh auth login` (or GH_TOKEN) is all it needs. Every install checks
 # the SHA256 of the binary and the cosign signature of the release workflow; see docs/release.md.
+param([switch] $Force)
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
@@ -85,6 +86,18 @@ $Version = $Tag -creplace '^v', ''
 $Asset = "mendcode-$Version-windows-x64.exe"
 $Url = "$Base/download/$Tag"
 $InstallDir = if ($env:MENDCODE_INSTALL_DIR) { $env:MENDCODE_INSTALL_DIR } else { Join-Path $env:LOCALAPPDATA 'Programs\mendcode' }
+$Installed = Join-Path $InstallDir 'mendcode.exe'
+if (Test-Path -LiteralPath $Installed) {
+  $Current = ((& $Installed --version 2>$null) -split '\s+')[0]
+  if ($Current -notmatch '^(v|dev-)') { $Current = "v$Current" }
+  if ($Current -ne $Tag -and $Current -match '^v\d+\.\d+\.\d+($|-beta\.|-nightly\.)' -and $Tag -notmatch '^dev-') {
+    $Newest = Select-NewestTag @([pscustomobject] @{ Tag = $Current; Prerelease = $Current.Contains('-') }, [pscustomobject] @{ Tag = $Tag; Prerelease = $Tag.Contains('-') }) 'nightly'
+    if ($Newest -eq $Current) {
+      Write-Warning "Downgrade $Current → $Tag"
+      if (-not $Force) { throw 'refusing to replace a newer binary; use -Force to downgrade' }
+    }
+  }
+}
 $null = New-Item -ItemType Directory -Force -Path $InstallDir
 $Stage = Join-Path $InstallDir ('.mendcode-install.' + [Guid]::NewGuid().ToString('N'))
 $null = New-Item -ItemType Directory -Path $Stage

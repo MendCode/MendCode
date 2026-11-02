@@ -78,8 +78,10 @@ test("search reads a message as it reads now: its edited text, and nothing of a 
     store.sessionSink.append({ sessionId: id, type: "item.completed", itemId, status: "ok", text } as never)
     return itemId
   }
-  const edited = add("alpha plan")
-  const deleted = add("gamma secret plan")
+  const edited = add("alpha plan ".repeat(300))
+  const deleted = add("gamma secret plan ".repeat(300))
+  expect(store.sessionSearch.search({ text: "alpha" })).toHaveLength(1)
+  expect(store.sessionSearch.search({ text: "gamma" })).toHaveLength(1)
   store.reviseMessage({ type: "message.revised", sessionId: id, itemId: edited, turnId, revision: 1, deleted: false, snapshot: { status: "ok", text: "beta plan" } } as never)
   store.reviseMessage({ type: "message.revised", sessionId: id, itemId: deleted, turnId, revision: 1, deleted: true, snapshot: { status: "ok", text: "gamma secret plan" } } as never)
   const hit = (text: string) => store.sessionSearch.search({ text })

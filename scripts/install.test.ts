@@ -12,6 +12,23 @@ const script = path.join(import.meta.dir, "install.sh")
 const body = "#!/bin/sh\nprintf 'fake mendcode\\n'\n"
 const hash = sha256Hex(new TextEncoder().encode(body))
 
+test("installer refuses older stable and prerelease versions unless forced", () => {
+  for (const [current, target] of [["2.0.0", "1.2.3"], ["1.2.3", "1.2.3-beta.9"], ["1.2.3-beta.10", "1.2.3-beta.9"]]) {
+    const box = fixture("Linux", "x86_64", true, target)
+    mkdirSync(box.install)
+    const original = `#!/bin/sh\nprintf '${current} (stable)\\n'\n`
+    writeFileSync(path.join(box.install, "mendcode"), original, { mode: 0o755 })
+    const denied = box.run()
+    expect(denied.exitCode).toBe(1)
+    expect(denied.stderr.toString()).toContain(`v${current} → v${target}`)
+    expect(readFileSync(path.join(box.install, "mendcode"), "utf8")).toBe(original)
+    const forced = box.run({}, ["--force"])
+    expect(forced.exitCode).toBe(0)
+    expect(forced.stderr.toString()).toContain("warning: downgrade")
+    expect(readFileSync(path.join(box.install, "mendcode"), "utf8")).toBe(body)
+  }
+})
+
 function fixture(os = "Linux", arch = "x86_64", hashing = true, version = "1.2.3") {
   const dir = mkdtempSync(path.join(tmpdir(), "mend-install-"))
   temps.push(dir)

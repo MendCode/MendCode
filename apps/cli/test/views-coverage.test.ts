@@ -81,7 +81,6 @@ const COVERAGE: Record<string, Entry> = {
   "shortcut-overlay.ts": { slot: "bar" },
   "working-row.ts": { slot: "bar" },
   "voice-row.ts": { slot: "bar" },
-  "plan-row.ts": { slot: "bar" },
   "agents-strip.ts": { slot: "bar" },
   "background-row.ts": { slot: "bar" },
   // Not a slot of their own, each with its reason.

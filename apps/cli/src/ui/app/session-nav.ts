@@ -43,6 +43,16 @@ export function createSessionNav(ctx: AppContext) {
   async function textKey(key: string) {
     const page = state.textPage
     if (!page) { state.page = "chat"; return requestFrame() }
+    if (key === "\r" && page.confirm) {
+      const confirm = page.confirm
+      page.confirm = undefined
+      page.summary = "Applying setup…"
+      requestFrame()
+      try { await confirm() } catch (error) {
+        if (state.textPage === page) { page.status = "error"; page.error = error instanceof Error ? error.message : "Setup failed; retry the setup command." }
+      }
+      return requestFrame()
+    }
     if (key === "r" && page.title === "Recap" && page.status !== "loading") return recapCommand("refresh")
     const { width, height } = input.screen.size
     const view = textPageViewport(width, state.pageBodyHeight ?? height)

@@ -94,7 +94,7 @@ export function createChrome(ctx: AppContext, actions: {
     return [{ text: " ".repeat(PROMPT_MARGIN) }, ...rendered]
   }
 
-  /** The session's current list (`latestTodos`): the dock, the progress row and the sidebar show it. */
+  /** The session's current list (`latestTodos`): the dock and the sidebar show it. */
   const currentTodos = () => latestTodos(state.transcript.blocks())
 
   /** This session's background shell tasks, running ones first, for the dock's Jobs panel. */
@@ -116,7 +116,8 @@ export function createChrome(ctx: AppContext, actions: {
       width: width - PROMPT_MARGIN * 2,
       todos: currentTodos(),
       questions: state.transcript.pendingRequests.map((request) => ({ kind: request.kind, title: maskSecretMarkers(request.title, secretTail) })),
-      jobs: dockJobs(),
+      showJobs: state.tuiProfile.dockJobs,
+      jobs: state.tuiProfile.dockJobs ? dockJobs() : [],
       now: now(),
       scratch: { lines: state.scratchNote.split("\n"), editing: state.editingScratch !== undefined, editor: ctx.scratchEditor },
       onScratch: (area) => {

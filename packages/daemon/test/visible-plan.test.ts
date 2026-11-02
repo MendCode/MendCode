@@ -41,10 +41,10 @@ async function session(tier: Tier, steps: Parameters<typeof scriptedProvider>[0]
 const named = (request: ModelRequest, name: string) => request.tools.find((tool) => tool.name === name)
 
 describe("visible plan per tier", () => {
-  test("balanced and full list todo with a description that says it is pinned, and carry the plan line once", async () => {
+  test("balanced and full list todo with a description that locates the list, and carry the plan line once", async () => {
     for (const tier of ["balanced", "full"] as const) {
       const [first] = await session(tier)
-      expect(named(first!, "todo")?.description).toContain("pinned above the prompt")
+      expect(named(first!, "todo")?.description).toContain("transcript and Todos dock")
       expect(named(first!, "todo")?.description).toContain("3+ steps")
       expect(first!.system.split(LINE).length - 1).toBe(1)
       // The old line that sent the model to tool_search for it is gone.
@@ -91,6 +91,6 @@ describe("visible plan per tier", () => {
   test("the lines stay one sentence each", () => {
     expect(LINE.length).toBeLessThanOrEqual(200)
     expect(visiblePlanText().harness.length).toBeLessThanOrEqual(200)
-    expect(visiblePlanText().harness).toContain("pins")
+    expect(visiblePlanText().harness).toContain("transcript and Todos dock")
   })
 })

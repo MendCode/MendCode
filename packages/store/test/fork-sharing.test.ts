@@ -361,7 +361,8 @@ describe("large tool output and finished deltas in a fork's transcript", () => {
     const report = store.storageReport()
     // Two tool outputs in the first fork, one in the second: each distinct output is one object.
     expect(report.eventObjects).toBe(2)
-    expect(report.eventObjectRefs).toBe(2 + 2 + 1)
+    // Forks read the parent's rows by address: only the session physically holding a row refers to its output.
+    expect(report.eventObjectRefs).toBe(2)
 
     const expected = [one.output, two.output]
     const outputs = (sessionId: SessionId) => store.readAfter(sessionId, 0, 10_000).flatMap((event) => (event.type === "item.completed" && event.toolInput !== undefined ? [event.text] : []))
@@ -371,6 +372,10 @@ describe("large tool output and finished deltas in a fork's transcript", () => {
 
     store.deleteSession(parent)
     expect(outputs(fork)).toEqual(expected)
+    // The heir now holds both rows (and the other fork reads one of them from it by address).
+    expect(store.storageReport()).toMatchObject({ eventObjects: 2, eventObjectRefs: 2 })
+    store.collectBlobs()
+    expect(outputs(other)).toEqual([one.output])
     expect(store.storageReport().eventObjects).toBe(2)
     store.deleteSession(fork)
     expect(outputs(other)).toEqual([one.output])
@@ -388,7 +393,7 @@ describe("large tool output and finished deltas in a fork's transcript", () => {
     expect(texts(store, fork).filter((text) => text.length < 100)).toEqual(texts(store, parent).filter((text) => text.length < 100))
     const forkEvents = store.readAfter(fork, 0, 10_000)
     expect(forkEvents.some((event) => event.type === "item.delta")).toBe(false)
-    expect(store.readAfter(parent, 0, 10_000).filter((event) => event.type === "item.delta")).toHaveLength(4)
+    expect(store.readAfter(parent, 0, 10_000).filter((event) => event.type === "item.delta")).toHaveLength(0)
     expect(forkEvents.map((event) => event.seq)).toEqual(forkEvents.map((_, i) => i + 1))
     expect(store.turns.list(fork).map((turn) => turn.turnId)).toEqual(store.turns.list(parent).map((turn) => turn.turnId))
     // The tool call kept its shape for the queries that read it in SQL.

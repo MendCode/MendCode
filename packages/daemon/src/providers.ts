@@ -261,9 +261,31 @@ export function createProviderService(options: { dir: string; env?: Env; fetch?:
   }
 
   function save(entries: Record<string, Entry>) {
+    // Only fields changed from the parsed view are owned by this writer. Keep raw future entries/fields.
+    let raw: Record<string, unknown> = {}
+    try {
+      raw = JSON.parse(readFileSync(file, "utf8"))
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("Invalid providers.json")
+    } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw new Error("Cannot save unreadable providers.json; repair it first") }
+    const previous = load().entries
+    const providers = { ...(raw.providers && typeof raw.providers === "object" && !Array.isArray(raw.providers) ? raw.providers as Record<string, unknown> : {}) }
+    for (const id of new Set([...Object.keys(previous), ...Object.keys(entries)])) {
+      const next = entries[id]
+      if (!next) { delete providers[id]; continue }
+      if (JSON.stringify(previous[id]) === JSON.stringify(next)) continue
+      const stored = providers[id]
+      const merged: Record<string, unknown> = stored && typeof stored === "object" && !Array.isArray(stored) ? { ...stored } : {}
+      for (const key of new Set([...Object.keys(previous[id] ?? {}), ...Object.keys(next)])) {
+        const value = (next as Record<string, unknown>)[key]
+        if (JSON.stringify((previous[id] as Record<string, unknown> | undefined)?.[key]) === JSON.stringify(value)) continue
+        if (value === undefined) delete merged[key]
+        else merged[key] = value
+      }
+      providers[id] = merged
+    }
     mkdirSync(options.dir, { recursive: true })
     const temporary = `${file}.${process.pid}.tmp`
-    writeFileSync(temporary, `${JSON.stringify({ providers: entries }, null, 2)}\n`, { mode: 0o600 })
+    writeFileSync(temporary, `${JSON.stringify({ ...raw, providers }, null, 2)}\n`, { mode: 0o600 })
     chmodSync(temporary, 0o600)
     renameSync(temporary, file)
     cache = undefined

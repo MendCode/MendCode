@@ -1,0 +1,40 @@
+// Bun Snapshot v1, https://bun.sh/docs/test/snapshots
+
+exports[`todo dock contract wraps with hanging indent and no clipped words at 100x30 1`] = `
+"┌───────────────────────────────────────────┐ ┌──────────────────────────┐ ┌───────────────────────┐
+│                                           │ │                          │ │                       │
+│ Todos                              1 open │ │ Scratchpad      /scratch │ │ Info       generating │
+│ ▸ Implementar sobres v2 y bloques de      │ │                          │ │ cwd   /work/app       │
+│   contenido conservando los estados y los │ │                          │ │ perm  ask             │
+│   controles existentes para todas las     │ │                          │ │                       │
+│   terminales                              │ │                          │ │                       │
+│                                           │ │                          │ │                       │
+│                                           │ │                          │ │                       │
+└───────────────────────────────────────────┘ └──────────────────────────┘ └───────────────────────┘"
+`;
+
+exports[`todo dock contract wraps with hanging indent and no clipped words at 200x60 1`] = `
+"┌────────────────────────────────────────────────────────────────────────────────────────────────┐ ┌────────────────────────────────────────────────┐ ┌────────────────────────────────────────────────┐
+│                                                                                                │ │                                                │ │                                                │
+│ Todos                                                                                   1 open │ │ Scratchpad                            /scratch │ │ Info                                generating │
+│ ▸ Implementar sobres v2 y bloques de contenido conservando los estados y los controles         │ │                                                │ │ cwd   /work/app                                │
+│   existentes para todas las terminales                                                         │ │                                                │ │ perm  ask                                      │
+│                                                                                                │ │                                                │ │                                                │
+│                                                                                                │ │                                                │ │                                                │
+│                                                                                                │ │                                                │ │                                                │
+│                                                                                                │ │                                                │ │                                                │
+└────────────────────────────────────────────────────────────────────────────────────────────────┘ └────────────────────────────────────────────────┘ └────────────────────────────────────────────────┘"
+`;
+
+exports[`todo dock contract wraps with hanging indent and no clipped words at 80x30 1`] = `
+"┌────────────────────────┐ ┌──────────────────────────┐ ┌──────────────────────┐
+│                        │ │                          │ │                      │
+│ Todos           1 open │ │ Scratchpad      /scratch │ │ Info      generating │
+│ ▸ Implementar sobres   │ │                          │ │ cwd   /work/app      │
+│   v2 y bloques de      │ │                          │ │ perm  ask            │
+│   contenido            │ │                          │ │                      │
+│   conservando los      │ │                          │ │                      │
+│ +1 more                │ │                          │ │                      │
+│                        │ │                          │ │                      │
+└────────────────────────┘ └──────────────────────────┘ └──────────────────────┘"
+`;

@@ -36,12 +36,12 @@ describe("tui profile file", () => {
     expect(readdirSync(path.join(dataDir, "tui"))).toEqual(["profile.json"])
   })
 
-  test("saved slant profiles migrate atomically to the default without losing identity", () => {
+  test("saved slant profiles use the default in memory without rewriting raw identity", () => {
     const dataDir = dir()
     mkdirSync(path.join(dataDir, "tui"), { recursive: true })
     writeFileSync(tuiProfilePath(dataDir), JSON.stringify({ ...custom, logoFont: "slant" }))
     expect(readTuiProfile(dataDir)).toEqual({ ...custom, logoFont: "mendcode" })
-    expect(JSON.parse(readFileSync(tuiProfilePath(dataDir), "utf8"))).toEqual({ ...custom, logoFont: "mendcode" })
+    expect(JSON.parse(readFileSync(tuiProfilePath(dataDir), "utf8"))).toEqual({ ...custom, logoFont: "slant" })
     expect(readdirSync(path.join(dataDir, "tui"))).toEqual(["profile.json"])
   })
 
@@ -113,11 +113,11 @@ describe("tui profile validation", () => {
   })
 })
 
-test("loading a retired font atomically migrates the stored profile", () => {
+test("loading a retired font preserves the stored profile", () => {
   const dataDir = dir()
   mkdirSync(path.join(dataDir, "tui"), { recursive: true })
   writeFileSync(tuiProfilePath(dataDir), JSON.stringify({ logoFont: "shadow", logoText: "ACME", homeLayout: "split", promptLead: "acme>" }))
   expect(readTuiProfile(dataDir)).toMatchObject({ logoFont: "mendcode", logoText: "ACME", homeLayout: "split", promptLead: "acme>" })
-  expect(JSON.parse(readFileSync(tuiProfilePath(dataDir), "utf8")).logoFont).toBe("mendcode")
+  expect(JSON.parse(readFileSync(tuiProfilePath(dataDir), "utf8")).logoFont).toBe("shadow")
   expect(readdirSync(path.join(dataDir, "tui"))).toEqual(["profile.json"])
 })

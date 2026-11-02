@@ -19,6 +19,7 @@ const languages = (first: boolean): SlashArgument[] => ON_DEVICE_LANGUAGES.map((
 
 const ARGUMENTS: Readonly<Record<string, () => readonly SlashArgument[]>> = {
   pr: () => [
+    { word: "setup", summary: "Set up review and GitHub publishing with one confirmation" },
     { word: "on", summary: "Turn on PR watching and the PR reviewer" },
     { word: "off", summary: "Turn off PR watching and the PR reviewer" },
     { word: "review", summary: "Review a pull request now: [pr], the branch's by default" },
@@ -34,6 +35,7 @@ const ARGUMENTS: Readonly<Record<string, () => readonly SlashArgument[]>> = {
     { word: "list", summary: "List this session's watched pull requests" },
   ],
   "pr watch-repo": () => [{ word: "all", summary: "Every pull request: one reviewer for the repository" }, { word: "requested", summary: "Only pull requests that request your review or are assigned to you" }],
+  "pr setup": () => [{ word: "all", summary: "Review every pull request" }, { word: "requested", summary: "Review only requested or assigned pull requests" }],
   "pr publish": () => [{ word: "on", summary: "Post reviews to this repository" }, { word: "off", summary: "Keep reviews in the session only" }],
   experimental: () => EXPERIMENTAL_FLAGS.map((flag) => ({ word: flag.id, summary: flag.summary, more: true as const })),
   "experimental *": () => toggle("the flag"),
@@ -41,7 +43,7 @@ const ARGUMENTS: Readonly<Record<string, () => readonly SlashArgument[]>> = {
   "tier *": () => [...onOff("the feature"), { word: "default", summary: "Follow the tier" }],
   "output-style": () => words("Answer in this style", OUTPUT_STYLES),
   fast: () => [...onOff("the priority service tier"), { word: "status", summary: "Show whether it is on" }],
-  graph: () => [...onOff("code graph indexing"), { word: "auto", summary: "Index when the project is large enough" }, { word: "default", summary: "Set the default for new projects", more: true }],
+  graph: () => [{ word: "setup", summary: "Enable and build the project graph with one confirmation" }, ...onOff("code graph indexing"), { word: "auto", summary: "Index when the project is large enough" }, { word: "default", summary: "Set the default for new projects", more: true }],
   "graph default": () => [...onOff("indexing"), { word: "auto", summary: "Index large projects" }],
   daemon: () => [{ word: "status", summary: "Show the daemon's state" }, { word: "restart", summary: "Restart it when no work runs" }],
   git: () => words("Open this tab", ["changes", "commit", "worktrees", "pr"]),
@@ -58,7 +60,7 @@ const ARGUMENTS: Readonly<Record<string, () => readonly SlashArgument[]>> = {
   "sandbox network": () => onOff("the network"),
   "add-dir": () => [{ word: "save", summary: "Add a directory for good: <path>" }, { word: "remove", summary: "Remove a directory: <path>" }],
   "remote-control": () => [...onOff("remote control"), { word: "pair", summary: "Pair a chat" }, { word: "unpair", summary: "Unpair a chat: [chat id]" }],
-  voice: () => [...onOff("voice"), ...words("Dictation", ["status", "start", "stop", "cancel"]), { word: "language", summary: "Set the language: <code [code]|auto>", more: true }],
+  voice: () => [{ word: "setup", summary: "Check and enable dictation with one confirmation" }, ...onOff("voice"), ...words("Dictation", ["status", "start", "stop", "cancel"]), { word: "language", summary: "Set the language: <code [code]|auto>", more: true }],
   "voice language": () => [{ word: "auto", summary: "Your Mac's first two languages, heard at once" }, ...languages(true)],
   "voice language *": () => languages(false),
   ide: () => [{ word: "on", summary: "Connect an editor: [zed|vscode]" }, { word: "off", summary: "Disconnect the editor" }, { word: "clear", summary: "Forget the editor's selection" }, { word: "refresh", summary: "Read the editor again" }, { word: "open", summary: "Open a file in the editor: [path:line]" }],

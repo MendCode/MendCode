@@ -9,7 +9,7 @@ import { createApp } from "../src/ui/app"
 import { appHarness, cleanTemps, tempDir } from "./session-ui-harness"
 import { reviewFixture } from "./panel-review-fixture"
 import { glyphs, glyphSet, type Line } from "../src/ui/theme"
-import { latestTodos, planProgress, planRow } from "../src/view/plan-row"
+import { latestTodos } from "../src/view/plan-row"
 import { parseTodoText } from "../src/view/dock"
 import type { Block } from "../src/view/transcript"
 import type { PresentationMode } from "../src/view/transcript"
@@ -19,35 +19,7 @@ const NOW = 1_800_000_000_000
 const plain = (line: Line) => line.map((span) => span.text).join("")
 const LIST = "[x] Read the parser\n[~] Fix the off-by-one in the tokenizer's column count\n[ ] Run the tests\n[-] Rewrite the lexer"
 
-describe("planRow (pure)", () => {
-  const progress = planProgress(parseTodoText(LIST))!
-
-  test("the item in progress and finished over not-cancelled items, muted, in one row", () => {
-    expect(progress).toMatchObject({ current: { text: "Fix the off-by-one in the tokenizer's column count" }, done: 1, total: 3 })
-    const row = planRow({ progress, width: 80 })
-    expect(plain(row)).toBe("▸ Fix the off-by-one in the tokenizer's column count · 1/3")
-    expect(row.every((span) => span.fg === "muted")).toBe(true)
-  })
-
-  test("a narrow row cuts the item with … and keeps the count; a very narrow one keeps the mark and count only", () => {
-    expect(plain(planRow({ progress, width: 30 }))).toBe("▸ Fix the off-by-one in… · 1/3")
-    expect(plain(planRow({ progress, width: 30 })).length).toBeLessThanOrEqual(30)
-    expect(plain(planRow({ progress, width: 12 }))).toBe("▸ 1/3")
-  })
-
-  test("ASCII marks with > and -, and the separator it is given; a screen reader gets words without marks", () => {
-    expect(plain(planRow({ progress, width: 80, ascii: true, sep: "|" }))).toBe("> Fix the off-by-one in the tokenizer's column count | 1/3")
-    const next = planProgress(parseTodoText("[x] a\n[ ] Ship it"))!
-    expect(plain(planRow({ progress: next, width: 80, ascii: true, sep: "|" }))).toBe("- Ship it | 1/2")
-    expect(plain(planRow({ progress: next, width: 80 }))).toBe("□ Ship it · 1/2")
-    expect(plain(planRow({ progress, width: 80, plain: true }))).toBe("Plan: Fix the off-by-one in the tokenizer's column count, 1 of 3 done")
-    expect(plain(planRow({ progress, width: 30, plain: true }))).toBe("Plan: Fix the of…, 1 of 3 done")
-  })
-
-  test("nothing open: no progress (every item done or cancelled, or an empty list)", () => {
-    expect(planProgress(parseTodoText("[x] a\n[-] b"))).toBeUndefined()
-    expect(planProgress([])).toBeUndefined()
-  })
+describe("latest todos", () => {
 
   test("the current list is the newest finished card: a running or failed call keeps the one before, an empty one clears it", () => {
     const block = (status: Block["status"], text: string, title = "todo 1/2"): Block => ({ itemId: ids("item"), turnId: ids("turn"), kind: "tool_call", text, title, status })
@@ -86,26 +58,24 @@ function harness(options: { mode?: PresentationMode; width?: number; height?: nu
 }
 const tier = (h: ReturnType<typeof harness>, settings: Partial<Settings>) => h.app.applySettings(settings as Settings)
 
-describe("the pinned progress row in the app", () => {
-  test("balanced: the item in progress and the count sit above the prompt, and go when the list is done", async () => {
+describe("no pinned progress row in the app", () => {
+  test("balanced: the card stays in the transcript without a current-task row", async () => {
     const h = harness()
     tier(h, { tier: "balanced" })
     h.todo(LIST, "todo 1/4")
     const rows = h.text()
     const row = rows.findIndex((line) => line.includes("▸ Fix the off-by-one in the tokenizer's column count · 1/3"))
-    expect(row).toBeGreaterThan(0)
-    expect(row).toBeLessThan(h.promptAt(rows))
+    expect(row).toBe(-1)
+    expect(rows.join("\n")).toContain("Todos 1/4")
     h.todo("[x] Read the parser\n[x] Fix the off-by-one\n[x] Run the tests\n[-] Rewrite the lexer", "todo 3/4")
     expect(h.text().some((line) => /[▸□] .* · \d+\/\d+$/.test(line.trim()))).toBe(false)
   })
 
-  test("full, narrow: the item is cut with … and the count stays; a cleared list removes the row", () => {
+  test("full, narrow: neither an open nor a cleared list adds a row", () => {
     const h = harness({ mode: "full", width: 40 })
     tier(h, { tier: "full" })
     h.todo(LIST)
-    const line = h.text().find((row) => row.includes("· 1/3"))!
-    expect(line).toContain("…")
-    expect(line.length).toBeLessThanOrEqual(40)
+    expect(h.text().some((row) => row.includes("· 1/3"))).toBe(false)
     h.todo("", "todo 0/0")
     expect(h.text().some((row) => row.includes("1/3"))).toBe(false)
   })
@@ -121,7 +91,7 @@ describe("the pinned progress row in the app", () => {
     expect(off.text().some((row) => row.includes("1/3"))).toBe(false)
   })
 
-  test("ctrl+t: the dock lists the whole plan and the row steps aside until it closes", async () => {
+  test("ctrl+t: the dock lists the plan; closing it adds no row", async () => {
     const h = harness({ height: 40 })
     tier(h, { tier: "balanced" })
     h.todo(LIST)
@@ -130,21 +100,21 @@ describe("the pinned progress row in the app", () => {
     expect(open.some((row) => row.includes("Todos") && row.includes("2 open"))).toBe(true)
     expect(open.some((row) => row.includes("· 1/3"))).toBe(false)
     await h.app.onKey("\x14")
-    expect(h.text().some((row) => row.includes("· 1/3"))).toBe(true)
+    expect(h.text().some((row) => row.includes("· 1/3"))).toBe(false)
   })
 
   test("ASCII chrome and screen-reader mode", () => {
     const ascii = harness({ ascii: true })
     tier(ascii, { tier: "balanced" })
     ascii.todo(LIST)
-    expect(ascii.text().some((row) => row.includes("> Fix the off-by-one in the tokenizer's column count | 1/3"))).toBe(true)
+    expect(ascii.text().some((row) => row.includes("> Fix the off-by-one in the tokenizer's column count | 1/3"))).toBe(false)
     const reader = harness({ accessible: true })
     tier(reader, { tier: "balanced" })
     reader.todo(LIST)
-    expect(reader.text().some((row) => row.includes("Plan: Fix the off-by-one in the tokenizer's column count, 1 of 3 done"))).toBe(true)
+    expect(reader.text().some((row) => row.includes("Plan: Fix the off-by-one in the tokenizer's column count, 1 of 3 done"))).toBe(false)
   })
 
-  test("it composes with the voice row: dictating keeps the plan, the voice row above it and the plan right over the prompt", async () => {
+  test("dictating keeps the voice row without a current-task row", async () => {
     const report = (recording: boolean) => ({ enabled: true, recording, ready: true, provider: "openai", model: "gpt-4o-mini-transcribe", maxSeconds: 60, recorder: "rec" })
     const h = appHarness({
       directory: tempDir("mendcode-plan-voice-"),
@@ -158,12 +128,12 @@ describe("the pinned progress row in the app", () => {
     const voice = rows.findIndex((row) => /● ▁{16}\s+0:00/.test(row))
     const plan = rows.findIndex((row) => row.includes("▸ Fix the off-by-one in the tokenizer's column count · 1/3"))
     expect(voice).toBeGreaterThan(0)
-    expect(plan).toBeGreaterThan(voice)
+    expect(plan).toBe(-1)
     await h.app.onInput("/voice cancel\r")
     cleanTemps()
   })
 
-  test("a short terminal with the panel as a bottom sheet: the row gives way rather than cut the sheet, and is back when there is room", async () => {
+  test("bottom sheets have no current-task row at either height", async () => {
     const shown = async (height: number) => {
       const h = reviewFixture({ session: "active", width: 60, height, preset: "pulse", rightSidebar: true })
       await Bun.sleep(15)
@@ -171,19 +141,19 @@ describe("the pinned progress row in the app", () => {
       return h.text().some((row) => row.includes("Fix the next cycle · 1/3"))
     }
     expect(await shown(20)).toBe(false)
-    expect(await shown(60)).toBe(true)
+    expect(await shown(60)).toBe(false)
     cleanTemps()
   })
 })
 
-describe("other engines' lists feed the row and the dock", () => {
+describe("other engines' lists feed the dock without a pinned row", () => {
   const feedsRow = async (events: readonly EngineEvent[], current: string, count: string) => {
     const h = harness({ height: 40 })
     tier(h, { tier: "balanced" })
     h.engine(events)
-    expect(h.text().some((row) => row.includes(`▸ ${current} · ${count}`))).toBe(true)
+    expect(h.text().some((row) => row.includes(`▸ ${current} · ${count}`))).toBe(false)
     await h.app.onKey("\x14")
-    // The dock's Todos panel has the item (with its priority, when it has one); the pinned row has stepped aside.
+    // The dock's Todos panel retains the item and its priority.
     const open = h.text()
     expect(open.some((row) => row.includes("Todos"))).toBe(true)
     expect(open.some((row) => row.includes("▸ ") && row.includes(current) && !row.includes(`· ${count}`))).toBe(true)

@@ -102,6 +102,7 @@ import { osc52Copy } from "./osc52"
 import { createPromptStash } from "./prompt-stash"
 import { placeholderFor, shellPlaceholderFor } from "../view/prompt-chrome"
 import { DEFAULT_TUI_PROFILE, normalizeTuiProfile, readTuiProfile } from "../view/tui-profile"
+import { recoverProfile, profileFile } from "@mendcode/program/profile-history"
 import { ACCESSIBLE_LOOK } from "../view/accessible"
 import { homeTip } from "../view/home-tips"
 import { createTurnState } from "../view/turn-state"
@@ -442,6 +443,12 @@ export function createApp(input: AppInput) {
   appState.toolsState = undefined!
   appState.packagesState = undefined!
   /** The terminal's own look (`<dataDir>/tui/profile.json`, see /customize); read once at start, the defaults without a data dir. */
+  if (!input.profile && input.dataDir) {
+    try {
+      const recovery = recoverProfile(profileFile(input.dataDir))
+      if (recovery.restored) appState.notice = `Restored ${recovery.restored} settings · undo: /customize restore ${recovery.backupId ?? ""}`
+    } catch (error) { appState.notice = `Profile safety: ${error instanceof Error ? error.message : String(error)}` }
+  }
   appState.tuiProfile = input.profile ?? (input.dataDir ? readTuiProfile(input.dataDir) : { ...DEFAULT_TUI_PROFILE })
   // Screen-reader mode from the saved setting or from this run (flag, environment): reduced motion and the plain look, in memory only for a one-off run.
   appState.accessible = input.accessible ?? appState.tuiProfile.accessible

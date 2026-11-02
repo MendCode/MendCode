@@ -271,6 +271,7 @@ export function gatedMatches(query: string, settings: TierSettings, custom: Slas
  * tier before this existed and its handler answers for itself (`/panel`), so that stays.
  */
 export function slashRefusal(text: string, settings: TierSettings, prefs: readonly SlashPreference[] = []): string | undefined {
+  if (/^\/customize\s+restore(?:\s|$)/i.test(text.trim())) return undefined
   const command = parseSlash(text)?.command
   if (!command || command.feature || ANSWERS_FOR_ITSELF.has(command.name) || tierListed(command, settings, prefs)) return undefined
   const needs: Tier = slashTier(command.name)

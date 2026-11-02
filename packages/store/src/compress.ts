@@ -119,7 +119,7 @@ export function createCodec(options: { enabled?: boolean; objects?: { put(text: 
     packEvent(event: SessionEvent, json: string, toolCall: boolean): string {
       if (!enabled || json.length < COMPRESS_MIN_BYTES) return json
       if (event.type !== "item.completed" && event.type !== "item.delta") return json
-      if (!toolCall && !(event.type === "item.completed" && event.toolInput !== undefined)) return json
+      if (!toolCall && event.type !== "item.completed") return json
       const text = event.text
       if (typeof text !== "string" || text.length < COMPRESS_MIN_BYTES) return json
       const bytes = encoder.encode(text)
@@ -127,7 +127,7 @@ export function createCodec(options: { enabled?: boolean; objects?: { put(text: 
       const packed = zstd(bytes)
       if (!packed) return json
       const based = Buffer.from(packed).toString("base64")
-      if (options.objects && based.length < text.length * 0.8) return JSON.stringify({ ...event, text: "", z: text.length, zref: options.objects.put(text) })
+      if (options.objects && (toolCall || event.type === "item.completed" && event.toolInput !== undefined) && based.length < text.length * 0.8) return JSON.stringify({ ...event, text: "", z: text.length, zref: options.objects.put(text) })
       return based.length < text.length * 0.8 ? JSON.stringify({ ...event, text: based, z: text.length }) : json
     },
 
@@ -158,6 +158,53 @@ export type Codec = ReturnType<typeof createCodec>
 
 /** Resolves a shared event object (event-objects.ts) to the base64 of its zstd bytes, the form a packed event carries in `text`. */
 export type ObjectLoader = (sha256: string) => string | undefined
+
+/** An `events` row: the envelope (session, sequence, time, type) lives in its columns. */
+export type EventRow = { session_id: string; seq: number; type: string; at: number; payload: string }
+/** A row read for a known session. */
+export type OwnEventRow = { seq: number; type: string; at: number; payload: string }
+
+/**
+ * SQL for an inherited row's payload (`e` the parent's event, `p` its transcript_prefix address): a legacy payload gets
+ * the reader's session and sequence written into its envelope; a compact one takes them from the address columns.
+ */
+export const INHERITED_PAYLOAD = `CASE WHEN substr(e.payload, 1, 12) = '{"sessionId"' THEN json_set(e.payload, '$.sessionId', p.session_id, '$.seq', p.seq) ELSE e.payload END`
+
+/** Protocol ids/types contain no JSON escapes. Noncanonical legacy JSON is never compacted. */
+function envelopePrefix(sessionId: string, seq: number, at: number, type: string): string {
+  return `{"sessionId":"${sessionId}","seq":${seq},"at":${at},"type":"${type}"`
+}
+
+/** The stored form of an event row: its JSON without the leading envelope its columns already hold. Lossless by construction. */
+export function compactEnvelope(payload: string, event: { sessionId: string; seq: number; at: number; type: string }): string {
+  const prefix = envelopePrefix(event.sessionId, event.seq, event.at, event.type)
+  if (!payload.startsWith(prefix)) return payload
+  const next = payload.charCodeAt(prefix.length)
+  if (next === 44 /* , */) return "{" + payload.slice(prefix.length + 1)
+  return next === 125 /* } */ && payload.length === prefix.length + 1 ? "{}" : payload
+}
+
+/** A payload written before envelopes moved to columns carries its envelope itself. */
+export function hasEnvelope(payload: string): boolean {
+  return payload.startsWith('{"sessionId"')
+}
+
+/** The full serialized event of a row, byte-identical to what was appended. */
+export function eventPayload(row: EventRow): string {
+  if (hasEnvelope(row.payload)) return row.payload
+  const prefix = envelopePrefix(row.session_id, row.seq, row.at, row.type)
+  return prefix + (row.payload === "{}" ? "}" : "," + row.payload.slice(1))
+}
+
+/** The event of a stored row, with the original key order (envelope first). */
+export function eventFromColumns<T = SessionEvent>(sessionId: string, seq: number, at: number, type: string, payload: string, load?: ObjectLoader): T {
+  if (hasEnvelope(payload)) return parseEvent<T>(payload, load)
+  return unpackEvent({ sessionId, seq, at, type, ...(JSON.parse(payload) as Record<string, unknown>) }, load) as T
+}
+
+export function eventFromRow<T = SessionEvent>(row: EventRow, load?: ObjectLoader): T {
+  return eventFromColumns<T>(row.session_id, row.seq, row.at, row.type, row.payload, load)
+}
 
 /** `JSON.parse` of a stored event payload, undoing `packEvent` (and, with `load`, the sharing of large output with forks). */
 export function parseEvent<T = SessionEvent>(payload: StoredValue, load?: ObjectLoader): T {

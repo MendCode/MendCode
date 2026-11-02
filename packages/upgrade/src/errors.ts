@@ -15,6 +15,7 @@ export type UpgradeErrorCode =
   | "verifier-missing"
   | "busy"
   | "unsupported-method"
+  | "downgrade"
 
 export class UpgradeError extends Error {
   constructor(

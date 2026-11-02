@@ -20,14 +20,14 @@ const MAX_REPO_SEGMENTS = 6
 
 export type ProfileKey = { provider: typeof PR_REVIEW_PROVIDERS[number]; repo: string; login: string }
 
-const ProfileVersion = z.strictObject({
+const ProfileVersion = z.looseObject({
   version: z.number().int().positive(),
   at: z.number().int(),
   summary: z.string().min(1).max(200),
   config: z.record(z.string(), z.unknown()),
 })
 export type ProfileVersion = z.infer<typeof ProfileVersion>
-const ProfileFile = z.strictObject({
+const ProfileFile = z.looseObject({
   format: z.literal(1),
   provider: z.enum(PR_REVIEW_PROVIDERS),
   repo: z.string().min(1).max(200),
@@ -82,7 +82,7 @@ export function createProfileStore({ dataDir, now = Date.now }: { dataDir: strin
     if (loaded.problem && existsSync(file)) renameSync(file, `${file}.damaged-${now()}`)
     const versions = loaded.file?.versions ?? []
     const entry: ProfileVersion = { version: (versions.at(-1)?.version ?? 0) + 1, at: now(), summary: summary.trim().slice(0, 200) || "updated", config: structuredClone(config) }
-    write(key, { format: 1, provider: key.provider, repo: key.repo, login: key.login, versions: [...versions, entry].slice(-PROFILE_HISTORY_LIMIT) })
+    write(key, { ...loaded.file, format: 1, provider: key.provider, repo: key.repo, login: key.login, versions: [...versions, entry].slice(-PROFILE_HISTORY_LIMIT) })
     return entry
   }
 
@@ -95,7 +95,7 @@ export function createProfileStore({ dataDir, now = Date.now }: { dataDir: strin
       return { exists: !!last, version: last?.version ?? 0, config: last ? structuredClone(last.config) : {}, ...(last ? { at: last.at } : {}), ...(loaded.problem ? { problem: loaded.problem } : {}) }
     },
     /** Newest first, at most 50. */
-    history(key: ProfileKey): Array<Omit<ProfileVersion, "config">> {
+    history(key: ProfileKey): Array<Pick<ProfileVersion, "version" | "at" | "summary">> {
       return (load(key).file?.versions ?? []).map(({ version, at, summary }) => ({ version, at, summary })).reverse()
     },
     version(key: ProfileKey, version: number): ProfileVersion | undefined {

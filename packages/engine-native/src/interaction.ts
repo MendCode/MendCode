@@ -39,13 +39,13 @@ export const questionTool = defineTool({
 })
 
 /**
- * `todo`: the agent's visible plan for multi-step work. Each call replaces the whole list; the terminal pins its progress above the
- * prompt (feature `visible_plan`) and the dock and the card show the whole list. Balanced and up: minimalist has no such tool at all.
+ * `todo`: the agent's visible plan for multi-step work. Each call replaces the whole list; the transcript card
+ * and Todos dock show it (feature `visible_plan` controls listing and guidance). Balanced and up: minimalist has no such tool at all.
  */
 export const todoTool = defineTool({
   name: "todo",
   tier: "balanced",
-  description: "Your visible plan: the user sees it pinned above the prompt as live progress. Call it at the start of any task with 3+ steps or several requests, before the first edit or command. Send the whole list each time (it replaces the previous; [] clears). Keep exactly one item in_progress; mark an item done as soon as it is finished, cancelled if dropped. Skip it for one-step or conversational requests. Do not repeat the list in your reply.",
+  description: "Your visible plan: the user follows it in the transcript and Todos dock. Call it at the start of any task with 3+ steps or several requests, before the first edit or command. Send the whole list each time (it replaces the previous; [] clears). Keep exactly one item in_progress; mark an item done as soon as it is finished, cancelled if dropped. Skip it for one-step or conversational requests. Do not repeat the list in your reply.",
   permission: "read",
   args: z.object({
     items: z

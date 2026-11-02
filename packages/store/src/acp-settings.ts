@@ -40,7 +40,7 @@ export function createAcpSettings(dir: string) {
         const config = AcpAgentSettings.parse(value)
         const previous = raw[name] as Config | undefined
         const env = Object.fromEntries((config.envKeys ?? []).map((key) => [key, previous?.env?.[key] ?? `\${${key}}`]))
-        raw[name] = { command: config.command, ...(config.args ? { args: config.args } : {}), ...(Object.keys(env).length ? { env } : {}) }
+        raw[name] = { ...previous, command: config.command, args: config.args, env: Object.keys(env).length ? env : undefined }
       }
       return () => {
         const temporary = `${file}.tmp`

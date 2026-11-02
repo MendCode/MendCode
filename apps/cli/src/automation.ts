@@ -138,6 +138,7 @@ export type Automation = Common &
     | DebugAutomation
     | TsmAutomation
     | GithubAutomation
+    | import("./github-args").PrSetupAutomation
     | MflowAutomation
   )
 type PackageScope = "user" | "project"
@@ -1185,6 +1186,7 @@ function eventLine(event: SessionEvent) {
 
 /** Runs one parsed command and resolves with the process exit code. Never throws for expected failures. */
 export async function runAutomation(command: Automation, deps: AutomationDeps): Promise<number> {
+  if (command.kind === "pr.setup") return (await import("./pr-setup-automation")).runPrSetup(command, deps)
   if (isLoopAutomation(command)) return runLoopAutomation(command, deps)
   if (command.kind === "github.install" || command.kind === "github.run" || command.kind === "pr") return (await import("./github-automation")).createGithubAutomation(deps)(command)
   const { client, out, err } = deps

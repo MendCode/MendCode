@@ -212,12 +212,13 @@ and a session another engine packs (Claude Code, Codex, ACP) show nothing. It as
 
 Ten bordered rows above the working row, with padding inside and a blank row above the prompt. Panels: Todos,
 Questions, Subagents, Jobs, Scratchpad and Info. Questions (the session's pending approvals and questions, `!` and `?`),
-Subagents and Jobs show only while there is something in them; an empty Scratchpad can still be focused. When the width
+Subagents show only while there is something in them; Jobs additionally needs `dockJobs: true` (Session chrome > Dock jobs in `/customize`, off by default in every tier). The dock belongs to balanced/full; minimalist gains no chrome. An empty Scratchpad can still be focused. When the width
 cannot hold them an empty Todos panel gives way first, then Scratchpad, Jobs, Subagents, Todos, Questions. Info stays
 unless the focused Scratchpad needs the whole width. On short terminals a multiline prompt scrolls around its cursor
 to reserve the tray and footer.
 
-- **Jobs** are the session's background shell tasks (`background.list`, asked at startup, when the dock opens, on session
+- **Todos** wraps task text with a hanging indent under its marker, using the extra width left by hidden panels. Current tasks come first, then pending, then completed/cancelled; completed text is muted. The five body rows stay capped, with `+N more` counting items not fully shown (including an oversized first item's remaining text). Full text remains in the transcript and sidebar Todos card.
+- **Jobs** stays available through `/jobs` whether or not its dock panel is enabled. It shows the session's background shell tasks (`background.list`, asked at startup, when the dock opens, on session
   activity and after turns): running ones first with their elapsed time, finished ones with `exit N` or `killed`.
   The footer counts running jobs across sessions.
 - **Scratchpad** is a per-project note, persisted by `scratchpad.get/set` in the daemon's data directory (`scratchpads/<sha256 canonical project path>.txt`, at most 8,000 characters). It is excluded from model history. `/scratch`, `ctrl+x s`, or a click in the Scratchpad panel focuses its own instance of the prompt editor inside the tray. Arrows, Home/End, word motion, selection, undo and multiline paste work there; Enter inserts a newline. Changes autosave after 500 ms; Esc returns focus to the unchanged prompt and flushes pending changes. A long note scrolls around the real cursor with a mini scrollbar. Ctrl+T opens padded bordered widgets with a blank row above the prompt. Editing needs the balanced/full view and at least 18 rows.
@@ -227,36 +228,21 @@ has no slot of its own.
 
 ## The visible plan
 
-Feature `visible_plan` (balanced and full; on without a tier; `/tier visible_plan off`). While the session's task list has
-an open item, one muted row sits over the working row, right above the prompt:
-
-```
-    ▸ Fix the off-by-one in the tokenizer's column count · 1/3
-   ───────────────────────────────────────────────────────────
-   ❭
-```
-
-It names the item in progress (the next pending one when none is) and the finished items over the ones not cancelled.
-On a narrow terminal the item is cut with `…` before the count gives way; under eight cells for the item only the
-mark and the count stay (`▸ 1/3`). ASCII chrome marks with `>` (in progress) and `-` (next) and separates with `|`;
-screen-reader mode reads `Plan: Fix the off-by-one…, 1 of 3 done`. The row goes when every item is done or cancelled,
-or the list is cleared (`[]`). While the dock is open (`ctrl+t`) the row steps aside: the Todos panel lists the whole
-plan. On a terminal too short for both, it gives way to the right panel's bottom sheet instead of taking a row from it. The voice row, the queue and the other rows above the prompt keep their places over it. A terminal extension
-restyles it as the `plan` bar (`bar` view). The minimal view and the minimalist tier draw nothing.
+Feature `visible_plan` (balanced and full; on without a tier; `/tier visible_plan off`) controls the tool's listing and guidance, not a progress row. No current-task row is drawn above the working status in any tier or density. The Todos dock (`ctrl+t`), transcript todo card and sidebar Todos card retain the list. `/activity` continues to control the working status, not tasks.
 
 What the model is told: `todo` is listed in every request of balanced and full (feature `plan_tools` still keeps the goal
-tools behind `tool_search`), its description says the user sees the list pinned as live progress, when to use it (three or
+tools behind `tool_search`), its description says the user follows the list in the transcript and Todos dock, when to use it (three or
 more steps, several requests, before the first edit) and not to repeat it in the answer, and focus, guide and full carry
 one line saying the same while `todo` is listed. Minimalist has no `todo` tool at all (the tool declares the balanced
 tier), so neither its schema nor a line about it is sent, and `tool_search` cannot find it.
 
-Every engine's list is drawn the same way. The native `todo` writes a card titled `todo d/n` (done over the items not cancelled, the row's own count) with one `[x]`, `[~]`, `[ ]`
+Every engine's list is drawn the same way. The native `todo` writes a card titled `todo d/n` (done over the items not cancelled) with one `[x]`, `[~]`, `[ ]`
 or `[-]` line per item. Claude Code's `TodoWrite` (the item in progress reads as its `activeForm`) and its
 `TaskCreate`/`TaskUpdate` tasks (kept per Claude Code process; `deleted` removes one), Codex's `update_plan`
-(`turn/plan/updated`) and an ACP agent's `plan` are turned into that card by their engines, so the row, the dock and the
+(`turn/plan/updated`) and an ACP agent's `plan` are turned into that card by their engines, so the dock and the
 right panel's Todos card show them too. A sub-agent's own TodoWrite stays in its thread. Codex's `plan` item (plan mode's
 proposal, prose) is not a list and stays an artifact. With `visible_plan` on, Claude Code, Codex and ACP agents are told in
-one line after their own prompt that their list is pinned; pi, which has no list tool, is not.
+one line after their own prompt where their list is shown; pi, which has no list tool, is not.
 
 ## Long transcripts
 

@@ -12,13 +12,13 @@ export function pluginRoot(input: { dataDir: string; directory: string; global?:
 /** Atomic replace of the `plugin` list, keeping the previous file as a timestamped backup. */
 export function savePluginList(root: string, list: unknown[]) {
   const config = pluginConfig(root)
-  mkdirSync(root, { recursive: true })
+  mkdirSync(root, { recursive: true, mode: 0o700 })
   const temp = `${config.file}.${randomUUID()}.tmp`
-  writeFileSync(temp, `${JSON.stringify({ ...config.value, pluginCompatibility: true, plugin: list }, null, 2)}\n`)
+  writeFileSync(temp, `${JSON.stringify({ ...config.value, pluginCompatibility: true, plugin: list }, null, 2)}\n`, { mode: 0o600 })
   if (existsSync(config.file)) {
     const backups = path.join(root, "plugin-config-backups")
-    mkdirSync(backups, { recursive: true })
-    writeFileSync(path.join(backups, `${Date.now()}-${randomUUID()}.jsonc`), readFileSync(config.file))
+    mkdirSync(backups, { recursive: true, mode: 0o700 })
+    writeFileSync(path.join(backups, `${Date.now()}-${randomUUID()}.jsonc`), readFileSync(config.file), { mode: 0o600 })
   }
   renameSync(temp, config.file)
   return config.file

@@ -1,8 +1,9 @@
 import type { Database } from "bun:sqlite"
-import { unpackText, type ObjectLoader } from "./compress"
+import { unpackText, eventFromColumns, type OwnEventRow, type ObjectLoader } from "./compress"
 import type { ItemId, SessionEvent, SessionId, SessionNotesInput, SessionNotesReport } from "@mendcode/protocol"
 
 type Start = Extract<SessionEvent, { type: "item.started" }>
+const startOf = (sessionId: SessionId, row: OwnEventRow) => eventFromColumns<Start>(sessionId, row.seq, row.at, row.type, row.payload)
 type NoteRow = { version: number; text: string }
 
 /** The kinds a recall page shows, and how many starts are read at once while looking for them. */
@@ -25,8 +26,8 @@ export function createSessionRecallRecords(db: Database, load: ObjectLoader) {
       AND c.type IN ('item.started', 'item.delta', 'item.completed') AND c.type = 'item.completed'
       AND json_extract(c.payload, '$.itemId') = json_extract(e.payload, '$.itemId')
       AND (json_extract(e.payload, '$.kind') != 'tool_call' OR json_extract(c.payload, '$.status') = 'ok'))`
-  const item = db.query<{ payload: string }, [string, string]>(`SELECT e.payload ${visible} AND json_extract(e.payload, '$.itemId') = ?2 LIMIT 1`)
-  const starts = db.query<{ seq: number; payload: string }, [string, number, number]>("SELECT seq, payload FROM events_read WHERE session_id = ? AND type = 'item.started' AND seq < ? ORDER BY seq DESC LIMIT ?")
+  const item = db.query<OwnEventRow, [string, string]>(`SELECT e.seq, e.type, e.at, e.payload ${visible} AND json_extract(e.payload, '$.itemId') = ?2 LIMIT 1`)
+  const starts = db.query<OwnEventRow, [string, number, number]>("SELECT seq, type, at, payload FROM events_read WHERE session_id = ? AND type = 'item.started' AND seq < ? ORDER BY seq DESC LIMIT ?")
   const turnFlags = db.query<{ reverted: number; notice: number }, [string, string]>("SELECT reverted, notice FROM turns_read WHERE session_id = ? AND turn_id = ? LIMIT 1")
   const completion = db.query<{ status: string | null }, [string, string]>(`SELECT json_extract(payload, '$.status') AS status FROM events_read
     WHERE session_id = ? AND json_extract(payload, '$.itemId') = ? AND type IN ('item.started', 'item.delta', 'item.completed')
@@ -37,7 +38,7 @@ export function createSessionRecallRecords(db: Database, load: ObjectLoader) {
   const deltas = db.query<{ seq: number; text: string; z: number | null; zref: string | null }, [string, string, number]>(`SELECT seq, json_extract(payload, '$.text') AS text, json_extract(payload, '$.z') AS z, json_extract(payload, '$.zref') AS zref FROM events_read
     WHERE session_id = ? AND json_extract(payload, '$.itemId') = ? AND type IN ('item.started', 'item.delta', 'item.completed')
     AND type = 'item.delta' AND seq > ? ORDER BY seq LIMIT 1`)
-  const conversation = db.query<{ seq: number; payload: string }, [string, number]>(`SELECT seq, payload FROM events_read WHERE session_id = ? AND type = 'item.started' AND seq < ?
+  const conversation = db.query<OwnEventRow, [string, number]>(`SELECT seq, type, at, payload FROM events_read WHERE session_id = ? AND type = 'item.started' AND seq < ?
     AND json_extract(payload, '$.kind') IN ('user_message', 'agent_message') ORDER BY seq`)
   const sessionTurns = db.query<{ turn_id: string; reverted: number; notice: number }, [string]>("SELECT turn_id, reverted, notice FROM turns_read WHERE session_id = ?")
   const completedTexts = db.query<{ item_id: string; text: string | null; z: number | null; zref: string | null }, [string, number]>(`SELECT json_extract(payload, '$.itemId') AS item_id,
@@ -66,7 +67,7 @@ export function createSessionRecallRecords(db: Database, load: ObjectLoader) {
   return {
     item(sessionId: SessionId, messageId: ItemId): Start | undefined {
       const row = item.get(sessionId, messageId)
-      return row ? JSON.parse(row.payload) : undefined
+      return row ? startOf(sessionId, row) : undefined
     },
     page(sessionId: SessionId, before: number, limit: number): Start[] {
       // Newest first, a batch of starts at a time, each checked on its own (its turn, its completion): one query over the whole
@@ -77,7 +78,7 @@ export function createSessionRecallRecords(db: Database, load: ObjectLoader) {
         const batch = starts.all(sessionId, cursor, RECALL_BATCH)
         for (const row of batch) {
           cursor = row.seq
-          const start = JSON.parse(row.payload) as Start
+          const start = startOf(sessionId, row)
           if (!RECALL_KINDS.has(start.kind)) continue
           const turn = typeof start.turnId === "string" ? turnFlags.get(sessionId, start.turnId) : null
           if (!turn || turn.reverted !== 0 || turn.notice !== 0) continue
@@ -116,7 +117,7 @@ export function createSessionRecallRecords(db: Database, load: ObjectLoader) {
       const texts = new Map(completedTexts.all(sessionId, before).map((row) => [row.item_id, row]))
       const found = new Map<string, { turn: number; at: number; user: string[]; assistant: string[] }>()
       for (const row of conversation.all(sessionId, before)) {
-        const start = JSON.parse(row.payload) as Start
+        const start = startOf(sessionId, row)
         if (typeof start.turnId !== "string" || !kept.has(start.turnId)) continue
         const done = texts.get(start.itemId)
         if (!done) continue

@@ -1,9 +1,72 @@
 # Disk usage
 
-Goal: thousands of sessions and worktrees in well under 1 GB. Everything below is local and additive: an existing
-data dir opens unchanged, every old value stays readable, and nothing is rewritten until you ask (or retention runs).
+Goal: thousands of sessions and worktrees in well under 1 GB. Existing values stay readable. Completed streaming
+items are folded in the background while the daemon is idle; opening a database never migrates its event rows.
+
+## Folded streaming history
+
+While an item runs, every delta remains durable. A self-contained completion folds those rows into one lossless
+compressed block in the same transaction. Normal history reads the completion; historical cuts and exact reconnect
+or synchronization recover original sequences, timestamps and text from the item's block. Existing fork references
+keep their physical source rows. Empty or missing final text, blob-backed completions and oversized blocks retain
+their original deltas. No model history is rebuilt to reopen a session.
+
+Maintenance starts after a delay, pauses during active turns and jobs, resumes from a persistent cursor and returns
+pages using incremental vacuum. It never runs a full VACUUM at startup. Foreground-state history is retained because
+compaction timing and automation still consume it. Storage reports count archived blocks in each session's bytes.
+
+Older executables can read completed messages but do not understand archived delta blocks for exact replay or late
+mid-item cuts. Keep a pre-migration backup when testing this representation; do not downgrade a migrated directory.
+
+When plain delta text concatenates exactly to the completion, an `MDL1` block stores varint sequence gaps,
+signed timestamp differences and UTF-16 chunk lengths instead of repeating text. A historical read slices the
+completion using those lengths, including split surrogate pairs. Other items retain their compressed archive.
+Idle batches also convert eligible existing tuple archives, with a resumable cursor and no startup scan.
+Executables predating `MDL1` cannot read these blocks; this experiment does not install or migrate live data.
+
+## Event envelopes in columns
+
+Every event row already holds its session, sequence, time and type in columns. A new row's JSON payload leaves out
+that leading envelope (`{"sessionId":…,"seq":…,"at":…,"type":…,` becomes `{`) only when it is exactly that prefix, so
+the full event rebuilds byte-identical. Readers put the envelope first again (`compress.ts`, `eventFromColumns`);
+an inherited fork row takes its session and sequence from the address, as `json_set` does for older rows. Rows
+written before this keep their envelope and read as before; after the delta phases, the idle batch converts them
+with its own cursor, checking each rebuilt payload before writing it. A converted row frees space inside its page;
+the file itself shrinks with `storage --compact --offline` or `--vacuum`. Earlier executables cannot read compact
+rows; do not downgrade a written or converted directory.
+
+Measured on a private 863 MB copy: 1,953,057 rows converted with zero byte mismatches, payloads 371 MB → 183 MB
+(`VACUUM INTO` 813 MB → 606 MB), and every replay, recall, revision and permission read compared equal to the
+previous build's, key order included. The session-disk probe goes from 5,571 to 4,424 allocated bytes per short or
+long session (Pi: 4,096 short, 8,192 long). With fork object references held only by physical owners, a fork of
+the 40-turn disk-budget fixture grows by 83 KiB against 285 KiB for a physical copy (before: 102 and 338 KiB).
+
+Sessions without inherited transcript or model history read both by primary key; the inherited (fork) queries are
+kept for the rest and join in key order. The model-history query used to scan every `engine_messages` row.
+
+`bun scripts/session-disk-probe.ts` measures an isolated persistence fixture. Optional
+`--pi-manager /absolute/path/to/pi/dist/core/session-manager.js` compares the installed Pi session writer with the
+same content, without provider calls. It reports logical payloads, physical file growth, allocated bytes, CPU and
+latency separately; fixed empty-database overhead is not included in per-session growth and is reported explicitly.
 
 ## Where the bytes went (measured)
+
+### Profile and settings safety
+
+Profile writes re-read the raw JSON, preserve unknown keys and uninterpretable values, and save the previous bytes in
+`tui/backups/profile-<timestamp>-<unique>-<hash>.json` before an atomic replacement. Backup IDs shown by restore are
+`profile-<timestamp>`. Files are private (0600), new profile directories and backup directories are 0700.
+Unchanged content does not create another backup. Startup compares a content hash with the newest backup and captures
+external changes; keys lost since that backup are recovered automatically. Explicit restore also snapshots its target,
+so a later startup does not reverse a deliberate restore. A stale `profile.json.lock` after a crash blocks writes safely;
+remove that lock directory only after verifying no profile writer is running, then retry.
+
+Retention keeps the newest 30 snapshots plus the newest snapshot of each day in the last 30 days (at most 60).
+Daemon settings use `settings_history` in `mendd.db`, with the same retention and database privacy/encryption as settings.
+Snapshot and settings write share a transaction. `store.settings.history()` lists IDs/times and
+`store.settings.restore(id)` restores a raw snapshot, saving the current settings first. This store API does not restore
+the separate ACP credential/config file. Invalid and future settings remain stored and are ignored only by the runtime view.
+
 
 `packages/store/test/disk-budget.test.ts` writes synthetic sessions (8 turns, 3 tool calls per turn: source and log
 output, model history that repeats it, streaming deltas, 2 file snapshots per turn from a shared repository) into a temp
@@ -52,9 +115,10 @@ Fixed schema/index pages make the small fixture's per-session cost higher than t
 
 ## What changed
 
-- **Compression.** Tool results (and their live output), model history rows and snapshot content over 1 KB are stored as
-  zstd. A tool event keeps its JSON shape (`text` is base64 zstd, `z` the original length), so item id, kind and status
-  stay plain for every query. User and assistant messages are never compressed: search and recall read them in SQL.
+- **Compression.** Tool results (and their live output), completed message text, model history rows and snapshot
+  content over 1 KB use zstd when it saves space. Completed messages keep compressed text inside their event instead
+  of adding shared-object references per fork. Search and recall decode only the messages they read; incomplete
+  message deltas remain uncompressed. Item id, kind and status stay queryable in SQL.
 - **Shared content.** Snapshot file content is content-addressed (`snap_objects`, sha256): the same bytes before one turn
   and after the previous one, or in two sessions of the same repository, are stored once. Objects nothing references go
   with the next clean (and after enough pruned snapshots).
@@ -83,8 +147,10 @@ Now (`packages/store/src/engine-history.ts`, `transcript-prefix.ts`, `event-obje
   writes its own history from then on (there is no shared prefix left to point at).
 - **Large tool output once.** New results go straight to `event_objects` (sha256 of the zstd bytes); older packed output
   moves there on compaction. Physical event rows keep their JSON shape and point at it
-  (`zref`), and every session holding such an event has a row in `event_object_refs`. The object goes with the last
-  session that references it (deleting a session, cleaning, `collectBlobs`).
+  (`zref`), and every session physically holding such an event has a row in `event_object_refs`. A fork reading the
+  row by address relies on the owner's reference; when a deletion hands the row to the fork, the fork gets the
+  reference with it. The object goes with the last session that references it (deleting a session, cleaning,
+  `collectBlobs`).
 - **Finished deltas are not repeated.** A fork's transcript leaves out the streaming deltas of items that have their
   final text (compaction drops them for the same reason); an item still open at the fork point keeps them.
 - **Transcript and turns by reference.** A new fork stores event addresses in `transcript_prefix` and turn addresses
@@ -93,8 +159,8 @@ Now (`packages/store/src/engine-history.ts`, `transcript-prefix.ts`, `event-obje
   session IDs and dense fork sequence numbers are translated on read. Fork-of-fork addresses point straight at the
   physical owner, so reads never walk a recursive chain. Appends store only the fork's own events.
   A projection edit first freezes dependent forks and copies only the affected turn. Deletion/retention hands each
-  physical row to one surviving reader and retargets the others, without N-way copies. Compression registers new
-  object refs for inherited readers; cleanup retains deltas still needed by a mid-turn fork.
+  physical row to one surviving reader, with the row's shared-output reference, and retargets the others, without
+  N-way copies. Cleanup retains deltas still needed by a mid-turn fork.
 - A duplicate index (`recall_event_items` was identical to `events_message_item`) is dropped when the store opens; it was
   about 14% of the events table for every session. Existing forks written before this stay as they were (copies); nothing is
   converted, and no VACUUM runs.

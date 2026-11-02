@@ -162,7 +162,7 @@ export function createSlash(ctx: AppContext, actions: {
   approveRetry: ReturnType<typeof createPermissions>["approveRetry"]
   openDiagram: ReturnType<typeof createDiagram>["openDiagram"]
   setMode: (next: PresentationMode) => void
-  changeProfile: (patch: Partial<TuiProfile>, options?: { session?: boolean }) => void
+  changeProfile: (patch: Partial<TuiProfile>, options?: { session?: boolean; layer?: boolean }) => void
 }) {
   const { input, state, now, editor, localDay, say, fail, requestFrame, setupChoice, drafts } = ctx
   const { openAcp, setSidebar, footerSegments, switchSession, openSessions, attachPasted, loadUsage, loadMemoryCategories, loadMemories, loadContext, loadSecrets, loadChanges, loadPetChoices, loadStorage, loadAgents, loadMcps, authMcp, loadTools, loadPackages, openSetup, loadStatus, loadExtensionsReport, openHooks, trustCommand, agentCommand, themeCommand, modelCommand, openConnect, loadProviders, loadLoops, createLoop, goalCommand, limitCommand, openWorkflows, workflowCommand, askAside, openFetch, setPermission, startDream, undoMemory, runStashCommand, copyAnswer, rewind, forkCommand, exportSession, editScratch, openPermissions, approveRetry, openDiagram, setMode, changeProfile } = actions
@@ -481,6 +481,20 @@ export function createSlash(ctx: AppContext, actions: {
         await openSetup({ advanced: /^advanced$/i.test(parsed.args.trim()) })
         break
       case "customize":
+        if (/^restore(?:\s|$)/.test(parsed.args.trim())) {
+          if (!input.dataDir) { say("Profile restore requires a local data directory", "warning"); break }
+          try {
+            const { runProfileRestore } = await import("../../profile-restore")
+            const result = runProfileRestore(input.dataDir, parsed.args.trim().split(/\s+/).slice(1))
+            say(result.text, "info")
+            if (result.restored) {
+              const { readTuiProfile } = await import("../../view/tui-profile")
+              state.profileBase = readTuiProfile(input.dataDir)
+              changeProfile(state.profileBase, { layer: true })
+            }
+          } catch (error) { say(error instanceof Error ? error.message : String(error), "warning") }
+          break
+        }
         await actions.loadPromptMode()
         state.page = "customize"
         state.customizeState = createCustomizePageState()

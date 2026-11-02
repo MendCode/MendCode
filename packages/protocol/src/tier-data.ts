@@ -103,9 +103,9 @@ export const FEATURES: Readonly<Record<FeatureId, FeatureSpec>> = {
   // Off in every tier: these join the request when their situation arises, or with tool_search, instead of riding along in every first request (docs/tool-discovery.md).
   aux_tools: { label: "Auxiliary tools in every request", tier: "balanced", mode: "tier", cost: ["tools"], legacy: true, optIn: true, own: "/tier aux_tools on", doc: "docs/tool-discovery.md" },
   plan_tools: { label: "Plan and goal tools in every request", tier: "full", mode: "tier", cost: ["tools"], legacy: true, optIn: true, own: "/tier plan_tools on", doc: "docs/tool-discovery.md" },
-  // The model keeps a list the user can follow: `todo` listed in every request with one prompt line, and its progress pinned above the prompt (an engine's own TodoWrite or plan too).
+  // The model keeps a list the user can follow in the transcript and Todos dock (an engine's own TodoWrite or plan too).
   // Minimalist has none of it: the `todo` tool itself belongs to balanced (`Tool.tier`), so it is not even found by tool_search there.
-  visible_plan: { label: "Visible plan (todo and the progress row)", tier: "balanced", mode: "tier", cost: ["tools", "prompt", "chrome"], legacy: true, own: "/tier visible_plan off", doc: "docs/layout.md" },
+  visible_plan: { label: "Visible plan (todo and its guidance)", tier: "balanced", mode: "tier", cost: ["tools", "prompt"], legacy: true, own: "/tier visible_plan off", doc: "docs/layout.md" },
   // On from minimalist: without them its first request fell under the provider's 1,024-token cacheable minimum and the second request was always paid in full (docs/tool-discovery.md).
   find_tools: { label: "glob and grep in every request", tier: "minimalist", mode: "tier", cost: ["tools"], legacy: true, own: "/tier find_tools off", doc: "docs/tool-discovery.md" },
   // customize_ui listed: a model asked to hide a bar used it 20 times of 20; deferred, 14 of 20 (docs/tool-discovery.md).

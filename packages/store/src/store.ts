@@ -4,7 +4,9 @@ import { createContinuityRecords } from "./continuity"
 import { createMemorySharingRecords, sharedMemoryRevision } from "./memory-sharing"
 import { createMessageRevisions } from "./message-revisions"
 import { createTranscriptPrefix } from "./transcript-prefix"
+import { createDeltaFold } from "./delta-fold"
 import { Database } from "bun:sqlite"
+import { createSettingsHistory } from "./settings-history"
 import { openPrivateDatabase } from "./private-database"
 import { createPrivateFiles } from "./private-files"
 import { createEnvironment } from "./environment"
@@ -44,8 +46,9 @@ import {
 } from "@mendcode/protocol"
 import type { GlobalEventDraft, SessionEventDraft } from "@mendcode/kernel"
 import { createBlobFiles } from "./blobs"
-import { createCodec, parseEvent } from "./compress"
+import { createCodec, parseEvent, unpackEvent, eventFromRow, eventFromColumns, eventPayload, compactEnvelope, INHERITED_PAYLOAD, type EventRow, type OwnEventRow } from "./compress"
 import { createEngineHistory } from "./engine-history"
+import { createEventEnvelopes } from "./event-envelopes"
 import { createEventObjects } from "./event-objects"
 import { createStorageUpkeep, type CompactResult, type StorageExtras } from "./storage-upkeep"
 import { createParityRecords } from "./parity-records"
@@ -428,10 +431,13 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
   db.run(`PRAGMA page_size = ${options.pageSize ?? DEFAULT_PAGE_SIZE}`)
   for (const pragma of PRAGMAS) db.run(pragma)
   db.run(DDL)
+  const settingsHistory = createSettingsHistory(db, now)
   migrate(db)
   const transcript = createTranscriptPrefix(db)
   const eventObjects = createEventObjects(db)
   const messages = createMessageRevisions(db, eventObjects.load)
+  const deltaFold = createDeltaFold(db, eventObjects.load)
+  const eventEnvelopes = createEventEnvelopes(db)
   db.run("INSERT OR IGNORE INTO meta(key, value) VALUES ('schema_version', ?)", [String(SCHEMA_VERSION)])
 
   function matchMemories(match: string, options: { directory?: string; limit?: number; profile?: string; session?: SessionId | "all" }): Array<{ memory: MemoryEntry; rank: number }> {
@@ -467,12 +473,16 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
     const where = bound ? `session_id = ?1 AND seq ${bound} ?2` : "session_id = ?1"
     const prefixWhere = bound ? `p.session_id = ?1 AND p.seq ${bound} ?2` : "p.session_id = ?1"
     const limit = bound ? "?3" : "?2"
-    return `SELECT payload FROM (
-      SELECT seq, payload FROM (SELECT seq, payload FROM events WHERE ${where} ORDER BY seq ${order} LIMIT ${limit})
+    return `SELECT session_id, seq, type, at, payload FROM (
+      SELECT session_id, seq, type, at, payload FROM (SELECT session_id, seq, type, at, payload FROM events WHERE ${where} ORDER BY seq ${order} LIMIT ${limit})
       UNION ALL
-      SELECT seq, payload FROM (SELECT p.seq AS seq, json_set(e.payload, '$.sessionId', p.session_id, '$.seq', p.seq) AS payload FROM transcript_prefix p JOIN events e ON e.session_id = p.parent_id AND e.seq = p.parent_seq WHERE ${prefixWhere} ORDER BY p.seq ${order} LIMIT ${limit})
+      SELECT session_id, seq, type, at, payload FROM (SELECT p.session_id, p.seq, e.type, e.at, ${INHERITED_PAYLOAD} AS payload FROM transcript_prefix p JOIN events e ON e.session_id = p.parent_id AND e.seq = p.parent_seq WHERE ${prefixWhere} ORDER BY p.seq ${order} LIMIT ${limit})
     ) ORDER BY seq ${order} LIMIT ${limit}`
   }
+  /** The same page for a session without an inherited transcript: one primary-key range, no merge sort. */
+  const ownEventsPage = (order: "ASC" | "DESC", bound: ">" | "<" | undefined) =>
+    `SELECT seq, type, at, payload FROM events WHERE ${bound ? `session_id = ?1 AND seq ${bound} ?2` : "session_id = ?1"} ORDER BY seq ${order} LIMIT ${bound ? "?3" : "?2"}`
+  const ownEvent = (sessionId: string) => (row: OwnEventRow) => eventFromColumns(sessionId, row.seq, row.at, row.type, row.payload, eventObjects.load)
 
   const q = {
     lastSeq: db.query<{ last_seq: number }, [string]>("SELECT last_seq FROM sessions WHERE id = ?"),
@@ -484,11 +494,16 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
     setActiveTurn: db.query("UPDATE sessions SET active_turn = ? WHERE id = ?"),
     insertSession: db.query("INSERT INTO sessions(id, directory, title, parent_id, created_at) VALUES (?, ?, ?, ?, ?)"),
     insertEvent: db.query("INSERT INTO events(session_id, seq, type, at, payload) VALUES (?, ?, ?, ?, ?)"),
-    readAfter: db.query<{ payload: string }, [string, number, number]>(eventsPage("ASC", ">")),
-    readBefore: db.query<{ payload: string }, [string, number, number]>(eventsPage("DESC", "<")),
-    readNewest: db.query<{ payload: string }, [string, number]>(eventsPage("DESC", undefined)),
-    recentUsage: db.query<{ payload: string }, [string, number]>(
-      "SELECT e.payload FROM events e WHERE e.session_id = ? AND e.type = 'usage.recorded' AND NOT EXISTS (SELECT 1 FROM turns_read t WHERE t.session_id = e.session_id AND t.turn_id = json_extract(e.payload, '$.turnId') AND t.reverted = 1) ORDER BY e.seq DESC LIMIT ?",
+    readAfter: db.query<EventRow, [string, number, number]>(eventsPage("ASC", ">")),
+    readBefore: db.query<EventRow, [string, number, number]>(eventsPage("DESC", "<")),
+    readNewest: db.query<EventRow, [string, number]>(eventsPage("DESC", undefined)),
+    hasTranscriptPrefix: db.query<{ one: number }, [string]>("SELECT 1 AS one FROM transcript_prefix WHERE session_id = ? LIMIT 1"),
+    readOwnAfter: db.query<OwnEventRow, [string, number, number]>(ownEventsPage("ASC", ">")),
+    readOwnBefore: db.query<OwnEventRow, [string, number, number]>(ownEventsPage("DESC", "<")),
+    readOwnNewest: db.query<OwnEventRow, [string, number]>(ownEventsPage("DESC", undefined)),
+    readOwnRange: db.query<OwnEventRow, [string, number, number]>("SELECT seq, type, at, payload FROM events WHERE session_id = ? AND seq > ? AND seq <= ? ORDER BY seq"),
+    recentUsage: db.query<OwnEventRow, [string, number]>(
+      "SELECT e.seq, e.type, e.at, e.payload FROM events e WHERE e.session_id = ? AND e.type = 'usage.recorded' AND NOT EXISTS (SELECT 1 FROM turns_read t WHERE t.session_id = e.session_id AND t.turn_id = json_extract(e.payload, '$.turnId') AND t.reverted = 1) ORDER BY e.seq DESC LIMIT ?",
     ),
     maxGseq: db.query<{ gseq: number | null }, []>("SELECT MAX(gseq) AS gseq FROM global_events"),
     insertGlobal: db.query("INSERT INTO global_events(gseq, type, at, payload) VALUES (?, ?, ?, ?)"),
@@ -526,7 +541,7 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
   const usageAuxiliary = createUsageAuxiliary({ db, dayOf })
   const codec = createCodec({ enabled: options.compress ?? true, objects: eventObjects })
   const engineHistory = createEngineHistory(db)
-  const turns = createTurns({ db, codec, history: engineHistory, writeTurn: transcript.writeTurn })
+  const turns = createTurns({ db, codec, history: engineHistory, load: eventObjects.load, writeTurn: transcript.writeTurn })
   const upkeep = createStorageUpkeep({ db, codec, turns, now, objects: eventObjects })
   // The per-turn projection is built once from the log written before it existed; afterwards every append keeps it current.
   if (!db.query("SELECT 1 FROM meta WHERE key = 'turns_backfill'").get()) {
@@ -541,7 +556,7 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
   const sessionBackground = createSessionBackgroundRecords(db, now)
   const recall = createSessionRecallRecords(db, eventObjects.load)
   const sessionStats = createSessionStatsRecords(db)
-  const sessionSearch = createSessionSearch(db)
+  const sessionSearch = createSessionSearch(db, eventObjects.load)
   const automationLedger = createAutomationLedger(db)
   const workflowJournal = createWorkflowJournal(db)
   // Existing projections can seed available evidence, never reconstruct their missing event history.
@@ -605,13 +620,18 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
     const row = q.lastSeq.get(draft.sessionId)
     if (!row) throw new RangeError(`[STORE]: unknown session ${draft.sessionId}`)
     const event = SessionEvent.parse({ ...draft, seq: row.last_seq + 1, at: importedAt ?? now() })
+    if (event.type === "item.completed" && event.meta?.firstDeltaAt === undefined && Object.keys(event.meta ?? {}).length < 16) {
+      const firstDeltaAt = deltaFold.firstAt(event.sessionId, event.itemId)
+      if (firstDeltaAt !== undefined) event.meta = { ...event.meta, firstDeltaAt }
+    }
     const payload = JSON.stringify(event)
     if (payload.length > MAX_EVENT_BYTES) throw new RangeError(`[STORE]: event ${event.type} is ${payload.length} bytes; use the blob store`)
     const open = event.type === "item.completed" || event.type === "item.delta" ? openItems.get(event.sessionId)?.get(event.itemId) : undefined
     const packed = codec.packEvent(event, payload, open?.kind === "tool_call")
-    const ref = JSON.parse(packed).zref as string | undefined
+    const ref = packed === payload ? undefined : JSON.parse(packed).zref as string | undefined
     if (ref) eventObjects.refer(ref, event.sessionId)
-    q.insertEvent.run(event.sessionId, event.seq, event.type, event.at, packed)
+    q.insertEvent.run(event.sessionId, event.seq, event.type, event.at, compactEnvelope(packed, event))
+    deltaFold.fold(event)
     q.setSeq.run(event.seq, event.at, event.sessionId)
     if (event.type === "item.started" && TRACKED_ITEM_KINDS.has(event.kind)) {
       let items = openItems.get(event.sessionId)
@@ -786,7 +806,7 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
   convertFiles(true)
   return {
     sessionSink: { append: (draft: SessionEventDraft) => appendSession(draft) },
-    projectSync: createProjectSyncRecords(db, appendSession, engineHistory, eventObjects.load),
+    projectSync: createProjectSyncRecords(db, appendSession, engineHistory, eventObjects.load, deltaFold),
     automationLedger,
     messages,
     /** Revision, model history and history marks commit together; no half-edited conversation. */
@@ -1218,10 +1238,25 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
     /** A bounded search over the messages of sessions. */
     sessionSearch,
     settings: {
-      /** Stored settings; entries that no longer validate are dropped rather than failing startup. */
+      history() { return settingsHistory.list().map(({ id, at }) => ({ id, at })) },
+      restore(id: string): Settings {
+        db.transaction(() => {
+          const saved = settingsHistory.list().find((row) => row.id === id)
+          if (!saved) throw new Error("Unknown settings backup")
+          const current = db.query<{ payload: string }, []>("SELECT payload FROM settings WHERE id = 1").get()
+          settingsHistory.snapshot(current?.payload ?? "{}")
+          db.query("INSERT INTO settings(id, payload) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET payload = excluded.payload").run(saved.payload)
+        })()
+        return this.get()
+      },
+      /** Runtime view only; unsupported entries remain in storage for a compatible version. */
       get(): Settings {
         const row = db.query<{ payload: string }, []>("SELECT payload FROM settings WHERE id = 1").get()
-        const raw = row ? JSON.parse(row.payload) as Record<string, unknown> : {}
+        let raw: Record<string, unknown> = {}
+        try {
+          const parsed: unknown = row ? JSON.parse(row.payload) : {}
+          if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) raw = parsed as Record<string, unknown>
+        } catch { /* The history keeps the original; a normal write will refuse to replace corrupt JSON. */ }
         const clean: Record<string, unknown> = {}
         for (const [key, value] of Object.entries(raw)) {
           const kept = savedSetting(key, value)
@@ -1260,7 +1295,19 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
         const { valid, saveAcp } = mergedSettings(current, patch)
         saveAcp?.()
         db.transaction(() => {
-          db.query("INSERT INTO settings(id, payload) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET payload = excluded.payload").run(JSON.stringify(valid))
+          const row = db.query<{ payload: string }, []>("SELECT payload FROM settings WHERE id = 1").get()
+          const raw = row ? JSON.parse(row.payload) as Record<string, unknown> : {}
+          if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("Invalid stored settings; restore a backup before saving")
+          for (const [key, value] of Object.entries(patch)) {
+            if (key === "acpAgents") continue
+            if (value === null) delete raw[key]
+            else raw[key] = (valid as Record<string, unknown>)[key]
+          }
+          const payload = JSON.stringify(raw)
+          if (payload !== row?.payload) {
+            settingsHistory.snapshot(row?.payload ?? "{}")
+            db.query("INSERT INTO settings(id, payload) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET payload = excluded.payload").run(payload)
+          }
           if ((current.evolution ?? "off") !== (valid.evolution ?? "off") || (current.evolutionWorkflows ?? false) !== (valid.evolutionWorkflows ?? false)) {
             db.query("INSERT INTO meta(key, value) VALUES ('evolution-policy-revision', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(randomUUID())
           }
@@ -1322,8 +1369,8 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
         const lastSeq = q.lastSeq.get(from)?.last_seq ?? 0
         let offset = q.lastSeq.get(to)?.last_seq ?? 0
         let events = 0
-        const selectCopied = db.query<{ seq: number; payload: string; source_id: string; source_seq: number }, [string, number, number]>(
-          `SELECT seq, payload, source_id, source_seq FROM events_read e WHERE session_id = ?1 AND seq >= ?2 AND seq < ?3 AND type IN (${COPIED_EVENT_TYPES})
+        const selectCopied = db.query<EventRow & { source_id: string; source_seq: number }, [string, number, number]>(
+          `SELECT session_id, seq, type, at, payload, source_id, source_seq FROM events_read e WHERE session_id = ?1 AND seq >= ?2 AND seq < ?3 AND type IN (${COPIED_EVENT_TYPES})
            AND NOT (type = 'item.delta' AND EXISTS (SELECT 1 FROM events_read c WHERE c.session_id = ?1 AND c.type = 'item.completed' AND c.seq < ?3
              AND json_extract(c.payload, '$.itemId') = json_extract(e.payload, '$.itemId') AND json_extract(c.payload, '$.text') IS NOT NULL AND json_extract(c.payload, '$.blob') IS NULL))
            ORDER BY seq`,
@@ -1334,12 +1381,22 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
           const turn = all[i]!
           if (turn.reverted) continue
           const end = i === through && options.beforeSeq !== undefined ? options.beforeSeq : all[i + 1]?.seq ?? lastSeq + 1
-          const rows = selectCopied.all(from, turn.seq, end)
+          const rows: Array<EventRow & { source_id?: string; source_seq?: number }> = selectCopied.all(from, turn.seq, end)
+          if (i === through && options.beforeSeq !== undefined) {
+            const present = new Set(rows.map(row => row.seq))
+            for (const delta of deltaFold.range(from, turn.seq, end)) if (!present.has(delta.seq)) rows.push({ session_id: from, type: delta.type, at: delta.at, seq: delta.seq, payload: JSON.stringify(delta) })
+            rows.sort((a, b) => a.seq - b.seq)
+          }
           shareTurn.run(to, offset + 1, from, turn.turnId)
           for (const row of rows) {
-            const event = JSON.parse(row.payload) as { zref?: string }
-            if (event.zref) eventObjects.refer(event.zref, to)
-            shareEvent.run(to, ++offset, row.source_id, row.source_seq)
+            // An address keeps reading the owner's row, whose own reference keeps the shared output; only a physical copy refers to it.
+            if (row.source_id !== undefined && row.source_seq !== undefined) shareEvent.run(to, ++offset, row.source_id, row.source_seq)
+            else {
+              const event = JSON.parse(row.payload) as { zref?: string }
+              if (event.zref) eventObjects.refer(event.zref, to)
+              const restored = { ...JSON.parse(eventPayload(row)), sessionId: to, seq: ++offset }
+              q.insertEvent.run(to, offset, row.type, row.at, compactEnvelope(JSON.stringify(restored), { sessionId: to, seq: offset, type: row.type, at: row.at }))
+            }
           }
           events += rows.length
         }
@@ -1414,8 +1471,8 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
       return db.query<{ id: SessionId }, [string]>("SELECT id FROM sessions WHERE parent_id = ? ORDER BY updated_at DESC").all(sessionId).map((row) => row.id)
     },
     itemStart(sessionId: SessionId, itemId: string): Extract<SessionEvent, { type: "item.started" }> | undefined {
-      const row = db.query<{ payload: string }, [string, string]>("SELECT payload FROM events_read WHERE session_id = ? AND type = 'item.started' AND json_extract(payload, '$.itemId') = ? ORDER BY seq LIMIT 1").get(sessionId, itemId)
-      return row ? JSON.parse(row.payload) : undefined
+      const row = db.query<OwnEventRow, [string, string]>("SELECT seq, type, at, payload FROM events_read WHERE session_id = ? AND type = 'item.started' AND json_extract(payload, '$.itemId')= ? ORDER BY seq LIMIT 1").get(sessionId, itemId)
+      return row ? eventFromColumns<Extract<SessionEvent, { type: "item.started" }>>(sessionId, row.seq, row.at, row.type, row.payload) : undefined
     },
     /** The assistant message items that started in event numbers `fromSeq` up to (not including) `toSeq`, oldest first. */
     agentMessageIds(sessionId: SessionId, fromSeq: number, toSeq?: number): string[] {
@@ -1428,8 +1485,8 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
       return db.query<{ status: string }, [string]>("SELECT status FROM turns_read WHERE session_id = ? AND reverted = 0 ORDER BY seq DESC LIMIT 1").get(sessionId)?.status
     },
     pendingRequestsOf(sessionId: SessionId): Array<Extract<SessionEvent, { type: "server.request" }>> {
-      return db.query<{ payload: string }, [string]>(`SELECT e.payload FROM events e WHERE e.session_id = ?1 AND e.type = 'server.request'
-        AND NOT EXISTS (SELECT 1 FROM events r WHERE r.session_id = e.session_id AND r.seq > e.seq AND ((r.type IN ('turn.completed', 'turn.failed', 'turn.cancelled', 'turn.interrupted') AND COALESCE(json_extract(e.payload, '$.async'), 0) = 0) OR (r.type = 'server.request.resolved' AND json_extract(r.payload, '$.requestId') = json_extract(e.payload, '$.requestId')))) ORDER BY e.seq DESC LIMIT 100`).all(sessionId).map((row) => JSON.parse(row.payload))
+      return db.query<OwnEventRow, [string]>(`SELECT e.seq, e.type, e.at, e.payload FROM events e WHERE e.session_id = ?1 AND e.type = 'server.request'
+        AND NOT EXISTS (SELECT 1 FROM events r WHERE r.session_id = e.session_id AND r.seq > e.seq AND ((r.type IN ('turn.completed', 'turn.failed', 'turn.cancelled', 'turn.interrupted') AND COALESCE(json_extract(e.payload, '$.async'), 0) = 0) OR (r.type = 'server.request.resolved' AND json_extract(r.payload, '$.requestId') = json_extract(e.payload, '$.requestId')))) ORDER BY e.seq DESC LIMIT 100`).all(sessionId).map(ownEvent(sessionId)) as Array<Extract<SessionEvent, { type: "server.request" }>>
     },
     sessionSummary(sessionId: SessionId) {
       const row = db.query<SessionRow, [string]>("SELECT id, title, directory, created_at, updated_at, last_seq, parent_id, archived_at FROM sessions WHERE id = ?").get(sessionId)
@@ -1550,16 +1607,37 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
     },
     /** Replay for reconnect: exactly the events after `afterSeq`, in order (I4). */
     readAfter(sessionId: SessionId, afterSeq: number, limit = 1000): SessionEvent[] {
-      return q.readAfter.all(sessionId, afterSeq, limit).map((row) => parseEvent(row.payload, eventObjects.load))
+      if (q.hasTranscriptPrefix.get(sessionId)) return q.readAfter.all(sessionId, afterSeq, limit).map((row) => eventFromRow(row, eventObjects.load))
+      return q.readOwnAfter.all(sessionId, afterSeq, limit).map(ownEvent(sessionId))
+    },
+    readExactAfter(sessionId: SessionId, afterSeq: number, limit = 1000): SessionEvent[] {
+      const through = afterSeq + Math.max(1, Math.min(limit, 1000))
+      const physical = q.hasTranscriptPrefix.get(sessionId)
+        ? db.query<EventRow, [string, number, number]>("SELECT session_id, seq, type, at, payload FROM events_read WHERE session_id = ? AND seq > ? AND seq <= ? ORDER BY seq").all(sessionId, afterSeq, through).map(row => eventFromRow(row, eventObjects.load))
+        : q.readOwnRange.all(sessionId, afterSeq, through).map(ownEvent(sessionId))
+      const present = new Set(physical.map(event => event.seq))
+      for (const event of deltaFold.archived(sessionId, afterSeq, through)) if (!present.has(event.seq)) physical.push(unpackEvent(event as unknown as Record<string, unknown>, eventObjects.load) as SessionEvent)
+      if (!physical.length) {
+        const next = db.query<{ seq: number | null }, [string, number]>(`SELECT min(seq) AS seq FROM (
+          SELECT min(seq) AS seq FROM events_read WHERE session_id = ?1 AND seq > ?2
+          UNION ALL SELECT min(first_seq) AS seq FROM folded_deltas WHERE session_id = ?1 AND first_seq > ?2
+        )`).get(sessionId, through)?.seq
+        if (next !== null && next !== undefined) return this.readExactAfter(sessionId, next - 1, limit)
+      }
+      return physical.sort((a, b) => a.seq - b.seq)
     },
     /** Paging for clients that load the newest events first: the newest `limit` events, or the `limit` just older than `beforeSeq`, in ascending order. */
     readBefore(sessionId: SessionId, beforeSeq: number | undefined, limit: number): SessionEvent[] {
-      const rows = beforeSeq === undefined ? q.readNewest.all(sessionId, limit) : q.readBefore.all(sessionId, beforeSeq, limit)
-      return rows.reverse().map((row) => parseEvent(row.payload, eventObjects.load))
+      if (q.hasTranscriptPrefix.get(sessionId) !== null) {
+        const rows = beforeSeq === undefined ? q.readNewest.all(sessionId, limit) : q.readBefore.all(sessionId, beforeSeq, limit)
+        return rows.reverse().map((row) => eventFromRow(row, eventObjects.load))
+      }
+      const rows = beforeSeq === undefined ? q.readOwnNewest.all(sessionId, limit) : q.readOwnBefore.all(sessionId, beforeSeq, limit)
+      return rows.reverse().map(ownEvent(sessionId))
     },
     /** Context inspection reads only usage payloads: large tool outputs never enter this report. */
     recentUsage(sessionId: SessionId, limit: number): Extract<SessionEvent, { type: "usage.recorded" }>[] {
-      return q.recentUsage.all(sessionId, Math.min(101, Math.max(1, limit))).reverse().map((row) => JSON.parse(row.payload))
+      return q.recentUsage.all(sessionId, Math.min(101, Math.max(1, limit))).reverse().map(ownEvent(sessionId)) as Extract<SessionEvent, { type: "usage.recorded" }>[]
     },
     putBlob(bytes: Uint8Array, mime: string) {
       return blobs.write(bytes, mime)
@@ -1748,7 +1826,10 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
       const num = (sql: string) => Number(one<{ n: number | null }>(sql)?.n ?? 0)
       const dbBytes = fileSize(dbPath)
       const perSession = db
-        .query<{ id: string; bytes: number }, []>("SELECT session_id AS id, SUM(octet_length(payload)) AS bytes FROM events GROUP BY session_id")
+        .query<{ id: string; bytes: number }, []>(`SELECT id, SUM(bytes) AS bytes FROM (
+          SELECT session_id AS id, SUM(octet_length(payload)) AS bytes FROM events GROUP BY session_id
+          UNION ALL SELECT session_id AS id, SUM(length(data)) AS bytes FROM folded_deltas GROUP BY session_id
+        ) GROUP BY id`)
         .all()
       const eventBytes = perSession.reduce((sum, row) => sum + row.bytes, 0)
       const blobBytesBySession = new Map(
@@ -1898,6 +1979,14 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
         db.run("PRAGMA wal_checkpoint(TRUNCATE)")
       }
       return { ...result, bytesReclaimed: Math.max(0, before - sizeOnDisk()), vacuumed: options.vacuum === true }
+    },
+    foldStoredDeltas(limit = 100) {
+      const result = deltaFold.migrate(limit)
+      if (result.removed && num1("PRAGMA auto_vacuum") === 2) db.run("PRAGMA incremental_vacuum(32)")
+      if (!result.complete) return result
+      // Then rows written with their envelope inside the payload, in batches as small as the folding ones.
+      const envelopes = eventEnvelopes.migrate(limit)
+      return { visited: envelopes.visited, removed: 0, complete: envelopes.complete }
     },
     close() {
       try { db.run("PRAGMA wal_checkpoint(TRUNCATE)") } finally { try { db.close() } finally { lock.release() } }

@@ -177,6 +177,7 @@ export const TUI_DEFAULTS: Readonly<Record<string, unknown>> = {
   "placeholderText": "",
   "sidebarHeader": true,
   "showTasks": true,
+  "dockJobs": false,
   "usageClock": true,
   "turnBell": false,
   "turnNotify": "off",

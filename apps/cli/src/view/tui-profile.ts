@@ -1,6 +1,7 @@
 import { sidebarSpec } from "./sidebar-spec"
 import type { SidebarWidget } from "@mendcode/protocol"
 import fs from "node:fs"
+import { updateProfile } from "@mendcode/program/profile-history"
 import path from "node:path"
 import { DEFAULT_LOGO_FONT, DEFAULT_LOGO_TEXT, LOGO_FONTS, LOGO_TEXT_MAX, type LogoFont } from "./logo-fonts"
 import { cells, textWidth } from "./wrap"
@@ -322,6 +323,8 @@ export type TuiProfile = {
   sidebarHeader: boolean
   /** The running sub-agents and background commands listed over the prompt; off leaves them to /tasks and ctrl+t. */
   showTasks: boolean
+  /** Opt-in Jobs panel in the balanced/full dock; minimal draws no dock. */
+  dockJobs: boolean
   /** Show the local block-font clock in the Usage dashboard. */
   usageClock: boolean
   /** Ring the terminal bell when a turn ends (off by default). */
@@ -550,6 +553,7 @@ export const DEFAULT_TUI_PROFILE: Readonly<TuiProfile> = {
   placeholderText: "",
   sidebarHeader: true,
   showTasks: true,
+  dockJobs: false,
   usageClock: true,
   turnBell: false,
   turnNotify: "off",
@@ -894,6 +898,7 @@ export function normalizeTuiProfile(raw: unknown): TuiProfile {
     placeholderText: oneLine(source.placeholderText, 120),
     sidebarHeader: bool("sidebarHeader"),
     showTasks: bool("showTasks"),
+    dockJobs: bool("dockJobs"),
     usageClock: bool("usageClock"),
     turnBell: typeof source.turnBell === "boolean" ? source.turnBell : DEFAULT_TUI_PROFILE.turnBell,
     turnNotify: oneOf(["off", "osc9", "osc777"] as const, source.turnNotify) ?? "off",
@@ -955,7 +960,6 @@ export function readTuiProfile(dataDir: string): TuiProfile {
     if (!fs.existsSync(file)) return { ...DEFAULT_TUI_PROFILE }
     const raw = JSON.parse(fs.readFileSync(file, "utf8"))
     const profile = normalizeTuiProfile(raw)
-    if (raw && ["small", "standard", "shadow", "classic", "opencode", "slant"].includes(raw.logoFont)) writeTuiProfile(dataDir, profile)
     return profile
   } catch {
     return { ...DEFAULT_TUI_PROFILE }
@@ -963,13 +967,21 @@ export function readTuiProfile(dataDir: string): TuiProfile {
 }
 
 /** Saves `profile` (validated again) next to the other terminal files; written whole, then renamed into place. */
-export function writeTuiProfile(dataDir: string, profile: TuiProfile): { ok: true } | { ok: false; error: string } {
+export function writeTuiProfile(dataDir: string, profile: TuiProfile, changed?: readonly string[]): { ok: true } | { ok: false; error: string } {
   const file = tuiProfilePath(dataDir)
   const temp = `${file}.${process.pid}.tmp`
   try {
-    fs.mkdirSync(path.dirname(file), { recursive: true })
-    fs.writeFileSync(temp, `${JSON.stringify(normalizeTuiProfile(profile), null, 2)}\n`)
-    fs.renameSync(temp, file)
+    updateProfile(file, (raw) => {
+      const normalized = normalizeTuiProfile(profile) as unknown as Record<string, unknown>
+      const stored = normalizeTuiProfile(raw) as unknown as Record<string, unknown>
+      const next = { ...raw }
+      for (const key of changed ?? Object.keys(normalized)) {
+        if (!Object.hasOwn(normalized, key)) continue
+        if (!changed && Object.hasOwn(raw, key) && JSON.stringify(raw[key]) !== JSON.stringify(stored[key])) continue
+        next[key] = normalized[key]
+      }
+      return next
+    })
     return { ok: true }
   } catch (error) {
     try {

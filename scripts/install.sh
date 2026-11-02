@@ -16,8 +16,10 @@ fail() { printf 'error: %s\n' "$*" >&2; exit 1; }
 
 channel=${MENDCODE_CHANNEL:-}
 tier=${MENDCODE_TIER:-}
+force=0
 while [ $# -gt 0 ]; do
   case $1 in
+    --force) force=1; shift ;;
     --channel) [ $# -ge 2 ] || fail '--channel needs a value'; channel=$2; shift 2 ;;
     --channel=*) channel=${1#--channel=}; shift ;;
     --tier) [ $# -ge 2 ] || fail '--tier needs a value'; tier=$2; shift 2 ;;
@@ -118,6 +120,19 @@ version=${tag#v}
 asset=mendcode-$version-$os-$arch
 url=$BASE/download/$tag
 install_dir=${MENDCODE_INSTALL_DIR:-$HOME/.local/bin}
+if [ -x "$install_dir/mendcode" ]; then
+  current=$("$install_dir/mendcode" --version 2>/dev/null | awk 'NR == 1 { print $1 }') || current=
+  case $current in v*|dev-*) current_tag=$current ;; *) current_tag=v$current ;; esac
+  if [ "$current_tag" != "$tag" ]; then
+    current_pre=false; case $current_tag in *-*) current_pre=true ;; esac
+    target_pre=false; case $tag in *-*) target_pre=true ;; esac
+    newest=$(printf '%s\t%s\n%s\t%s\n' "$current_tag" "$current_pre" "$tag" "$target_pre" | newest_tag nightly) || newest=
+    if [ "$newest" = "$current_tag" ]; then
+      printf 'warning: downgrade %s → %s\n' "$current_tag" "$tag" >&2
+      [ "$force" = 1 ] || fail 'refusing to replace a newer binary; use --force to downgrade'
+    fi
+  fi
+fi
 mkdir -p "$install_dir"
 stage=$(mktemp -d "$install_dir/.mendcode-install.XXXXXX")
 trap 'rm -rf "$stage"' EXIT

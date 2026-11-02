@@ -145,7 +145,7 @@ describe("event log", () => {
     const reopened = openStore({ dir })
     const replayed = reopened.readAfter(sessionId, 0)
     expect(replayed).toEqual(live)
-    expect(checkSessionLog(replayed, { final: true })).toEqual([])
+    expect(checkSessionLog(replayed, { final: true, folded: true })).toEqual([])
     expect(replayed.filter((e) => e.type === "turn.completed").length).toBe(2)
     reopened.close()
   })

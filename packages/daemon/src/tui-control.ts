@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
 import path from "node:path"
+import { updateProfile, restoreProfile, replaceProfile, profileBackups } from "@mendcode/program/profile-history"
 import { randomUUID } from "node:crypto"
 import { TUI_DEFAULTS, TUI_ENUMS, tuiProblems, type TuiControlInput, type TuiControlReport } from "@mendcode/protocol/wire"
 import { SidebarSpec } from "@mendcode/protocol"
@@ -14,9 +15,9 @@ export function createTuiControl(dir: string) {
     return raw
   }
   function write(target: string, value: unknown) {
-    mkdirSync(path.dirname(target), { recursive: true })
+    mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 })
     const temp = target + "." + randomUUID() + ".tmp"
-    writeFileSync(temp, JSON.stringify(value, null, 2) + "\n")
+    writeFileSync(temp, JSON.stringify(value, null, 2) + "\n", { mode: 0o600 })
     renameSync(temp, target)
   }
   function validate(profile: Record<string, unknown>) {
@@ -30,13 +31,11 @@ export function createTuiControl(dir: string) {
     if (!existsSync(target)) throw new Error("Unknown " + kind.slice(0, -1) + ": " + id)
     return read(target)
   }
-  function change(next: Record<string, unknown>, dryRun: boolean | undefined) {
-    validate(next)
+  function change(patch: Record<string, unknown>, dryRun: boolean | undefined) {
+    validate(patch)
     if (dryRun) return undefined
-    const backupId = randomUUID()
-    write(path.join(root, "backups", backupId + ".json"), { ...TUI_DEFAULTS, ...read(file) })
-    write(path.join(root, "latest-backup.json"), { id: backupId })
-    write(file, next)
+    const { backupId } = updateProfile(file, (raw) => ({ ...raw, ...patch }), true)
+    if (backupId) write(path.join(root, "latest-backup.json"), { id: backupId })
     return backupId
   }
   function run(input: TuiControlInput): TuiControlReport {
@@ -46,16 +45,31 @@ export function createTuiControl(dir: string) {
     let backupId: string | undefined
     const artifacts: string[] = []
     if (input.operation === "apply") {
-      profile = input.profile ? { ...current, ...input.profile } : saved("proposals", input.argument).profile as Record<string, unknown>
-      backupId = change(profile, input.dryRun)
+      const proposal = input.profile ? undefined : saved("proposals", input.argument)
+      const proposed = proposal?.profile as Record<string, unknown> | undefined
+      const keys = Array.isArray(proposal?.changed) ? proposal.changed.filter((key): key is string => typeof key === "string") : Object.keys(proposed ?? {})
+      const patch = input.profile ?? Object.fromEntries(keys.map((key) => [key, proposed?.[key]]))
+      backupId = change(patch, input.dryRun)
+      profile = { ...current, ...patch }
     } else if (input.operation === "apply-preset") {
       if (["compact", "comfortable", "spacious"].includes(input.argument ?? "")) profile = { ...current, density: input.argument }
       else if (input.argument === "toggle-worktree") profile = { ...current, showProject: !current.showProject }
       else throw new Error("Expected compact|comfortable|spacious|toggle-worktree")
-      backupId = change(profile, input.dryRun)
+      backupId = change(input.argument === "toggle-worktree" ? { showProject: profile.showProject } : { density: profile.density }, input.dryRun)
     } else if (input.operation === "rollback") {
-      profile = saved("backups", input.argument ?? read(path.join(root, "latest-backup.json")).id as string | undefined)
-      backupId = change(profile, input.dryRun)
+      const id = input.argument ?? read(path.join(root, "latest-backup.json")).id as string | undefined
+      if (id && profileBackups(file).some((row) => row.id === id)) {
+        const row = profileBackups(file).find((row) => row.id === id)!
+        profile = { ...TUI_DEFAULTS, ...read(row.file) }
+        if (!input.dryRun) backupId = restoreProfile(file, id).backupId
+      } else {
+        profile = saved("backups", id)
+        if (!input.dryRun) {
+          replaceProfile(file, profile)
+          backupId = profileBackups(file)[1]?.id
+        }
+      }
+      if (backupId && !input.dryRun) write(path.join(root, "latest-backup.json"), { id: backupId })
     } else if (input.operation === "propose") {
       const text = input.argument ?? ""
       const patch: Record<string, unknown> = { ...input.profile }
@@ -66,7 +80,7 @@ export function createTuiControl(dir: string) {
       if (/(?:disable|without|no|hide).*worktree/i.test(text)) patch.showProject = false
       if (/plain|raw/i.test(text)) { patch.presentation = "raw"; patch.messageRenderer = "plain" }
       profile = { ...current, ...patch }
-      validate(profile)
+      validate(patch)
       proposalId = randomUUID()
       // Dry-run creates a reviewable proposal; applying it is always a separate operation.
       const target = path.join(root, "proposals", proposalId + ".json")
@@ -74,7 +88,7 @@ export function createTuiControl(dir: string) {
       artifacts.push(target)
     } else if (["preview", "render", "project"].includes(input.operation)) {
       profile = { ...current, ...input.profile }
-      validate(profile)
+      validate(input.profile ?? {})
       const target = path.join(root, "runtime", input.operation + ".json")
       write(target, { architecture: "native-line-grid", profile, state: input.state ?? "home", source: file })
       artifacts.push(target)

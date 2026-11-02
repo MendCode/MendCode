@@ -109,7 +109,8 @@ async function performUpgrade(request: UpgradeRequest, ports: UpgradePorts): Pro
   if (request.check) return { ...found, status: STATUS_OF[decision] }
 
   const save = (lastVersion: string | null) => writeState({ fs, dataDir, state: { channel, lastCheckAt: ports.now(), lastVersion } })
-  if (decision !== "update" && !request.force && !(target && decision === "ahead")) {
+  if (decision === "ahead" && target && !request.force) throw new UpgradeError("downgrade", `refusing downgrade ${request.currentVersion} → ${release.tag}; use --force to install the older version`)
+  if (decision !== "update" && !request.force) {
     await save(state.lastVersion)
     return { ...found, status: STATUS_OF[decision] }
   }

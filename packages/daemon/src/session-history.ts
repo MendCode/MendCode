@@ -749,7 +749,7 @@ function collect(store: Store, sessionId: SessionId, options: ExportOptions): { 
   let stop: number | undefined
   const leftOut = (seq: number) => { truncated = true; if (resume === undefined || seq < resume) resume = seq }
   pages: for (let cursor = options.fromSeq ?? 0; ; ) {
-    const page = store.readAfter(sessionId, cursor, EXPORT_PAGE)
+    const page = options.untilSeq === undefined ? store.readAfter(sessionId, cursor, EXPORT_PAGE) : store.readExactAfter(sessionId, cursor, EXPORT_PAGE)
     for (const event of store.messages.project(page)) {
       if (options.untilSeq !== undefined && event.seq >= options.untilSeq) break pages
       if (total > EXPORT_MAX_CHARS) {
@@ -868,7 +868,7 @@ function collect(store: Store, sessionId: SessionId, options: ExportOptions): { 
           break
       }
     }
-    if (page.length < EXPORT_PAGE) break
+    if (page.length === 0 || options.untilSeq === undefined && page.length < EXPORT_PAGE) break
     cursor = page[page.length - 1]!.seq
   }
   // An item still open (an interrupted turn) keeps what its deltas gave.

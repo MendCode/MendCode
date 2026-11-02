@@ -13,6 +13,15 @@ A package that carries a look (a theme, profile values, keys, views) applies as 
 
 ## /customize
 
+`/customize restore` lists saved profiles with their time and the number of differing keys.
+`/customize restore <id>` restores one, backing up the current file first; the result includes an undo command.
+Headless: `mendcode profile restore [id] [--dir PATH]`, without starting a daemon.
+
+All tiers preserve unknown profile keys and values this version cannot interpret. Defaults are used only in memory;
+an explicit edit can replace a value. At terminal startup, missing keys are recovered from the newest snapshot without
+overwriting present keys. A single notice reports the recovered count and undo command. Invalid JSON is preserved in
+history before recovery; ordinary saves refuse to overwrite it. History lives in `tui/backups/`; see [storage](storage.md).
+
 Slash menu: `tabs` (default), `groups`, `columns`, or `flat`. Minimalist inherits compact
 `flat` until a layout is saved; applying a tier sets its default again. Tabs open on recent:
 pins, the last four used, the eight most used, then essentials. With no recents or visible pins,
@@ -352,6 +361,8 @@ now carries v1's panel, diff and syntax tokens. Ported palettes keep the existin
 including borders ≥3:1 and stronger active borders.
 
 ### Activity status
+
+The current-task row has been removed in every tier and density; `/activity` controls only the working status below. Lists remain in the transcript, Todos dock and sidebar. Session chrome > Dock jobs (`dockJobs`, default `false`) opts into the Jobs dock panel in balanced/full; it adds no chrome to minimalist and does not hide `/jobs`.
 
 Where the working status ("⠋ Running command... · 2m 53s") is drawn is one setting, Session chrome > Activity status (`activityPlacement`, `/activity`):
 

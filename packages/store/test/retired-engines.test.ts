@@ -23,7 +23,7 @@ test("retired engine overrides preserve other saved security settings without ex
     expect(() => store!.settings.set({ features: { cursor: true } })).toThrow()
     expect(store.settings.get().features).toEqual({ mcp: false, pi: false })
     store.settings.set({ theme: "teal" })
-    expect(store.settings.invalid()).toEqual([])
+    expect(store.settings.invalid()).toEqual(["unknown feature opencode: ignored", "unknown feature cursor: ignored"])
     store.close()
     store = openStore({ dir })
     expect(store.settings.get()).toEqual({ theme: "teal", tier: "full", features: { mcp: false, pi: false } })

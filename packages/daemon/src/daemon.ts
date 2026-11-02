@@ -9,6 +9,7 @@ import { planHandoff } from "./handoff"
 import { threadMcpEnabled, type BridgeEngine } from "./thread-mcp-policy"
 import { createHostMcp } from "./host-mcp"
 import { createIdleGc } from "./idle-gc"
+import { createIdleDeltaFold } from "./idle-delta-fold"
 import { createSessionSharing } from "./session-sharing"
 import { createMflow } from "./mflow"
 import { createMflowHttp, mflowListenerAddress } from "./mflow-http"
@@ -2845,6 +2846,11 @@ export async function startDaemon(options: DaemonOptions) {
   workflows.boot()
   armDreamSchedule()
   armRetentionSchedule()
+  const idleDeltaFold = createIdleDeltaFold({ clock,
+    busy: () => [...actors.values()].some(actorWorking) || scheduler.snapshot().length > 0 || engineJobs() > 0,
+    step: () => store.foldStoredDeltas(100),
+    warn: error => logLine("warn", `[DAEMON]: idle delta folding failed: ${error instanceof Error ? error.message : String(error)}`),
+  })
 
   /** Deletes a session and everything it holds; refused while a turn runs in it. */
   function removeSession(sessionId: SessionId): "removed" | "unknown" | "busy" {
@@ -2916,12 +2922,12 @@ export async function startDaemon(options: DaemonOptions) {
     // between the replay and the live stream: no gap, no duplicate (I4).
     connection.subscriptions.set(sessionId, afterSeq)
     for (let cursor = afterSeq; ; ) {
-      const page = store.readAfter(sessionId, cursor, REPLAY_PAGE)
+      const page = store.readExactAfter(sessionId, cursor, REPLAY_PAGE)
       for (const event of page) send(connection, { v: PROTOCOL_VERSION, kind: "event", body: event })
       if (page.length === 0) break
       cursor = page[page.length - 1]!.seq
       connection.subscriptions.set(sessionId, cursor)
-      if (page.length < REPLAY_PAGE) break
+      if (cursor >= (store.lastSeq(sessionId) ?? 0)) break
     }
   }
 
@@ -3816,6 +3822,27 @@ export async function startDaemon(options: DaemonOptions) {
         // Runs gh and git here and posts with the user's own login: never for a remote or peer client.
         if (connection.remoteAddress || connection.peer) return reply(connection, command.id, { ok: false, code: "forbidden", message: "[DAEMON]: the PR reviewer runs gh on this machine and is local only" })
         if (!store.hasSession(command.sessionId)) return reply(connection, command.id, { ok: false, code: "unknown_session", message: "[DAEMON]: unknown session" })
+        if (command.action === "setup-preview" || command.action === "setup-apply") {
+          const { previewQuickSetup } = await import("./pr-review/quick-setup")
+          const directory = store.sessionDirectory(command.sessionId)!
+          const setup = await previewQuickSetup({ directory, dataDir: options.dir, settings: store.settings.get(), safeMode: options.safeMode, role: command.role, git: options.prReview?.git, ...(options.prReview?.run ? { gh: (argv, cwd) => options.prReview!.run!({ argv, cwd }) } : {}) })
+          if (command.action === "setup-preview") return reply(connection, command.id, { ok: true, result: { setup, text: setup.text } })
+          if (setup.problems.length || command.reason !== setup.digest) return reply(connection, command.id, { ok: false, code: "target_mismatch", message: `${setup.text}\nPreview setup again before confirming.` })
+          const before = store.settings.get()
+          if (!prReviewOn()) {
+            const settings = store.settings.set({ experimental: { ...before.experimental, pr_review: true } })
+            globalSink.append({ type: "settings.changed", settings })
+          }
+          const service = await prReviewService()
+          const watched = setup.watch
+            ? await service.control({ sessionId: command.sessionId, action: "watch-repo", role: setup.role })
+            : await service.control({ sessionId: command.sessionId, action: "list" })
+          if (!watched.ok) return reply(connection, command.id, { ok: false, code: "invalid_command", message: `${watched.message}\nPR reviewer may now be enabled; publishing was not changed. Run /pr setup again to retry.` })
+          const published = setup.publish
+            ? await service.control({ sessionId: command.sessionId, action: "publish-on" }) : watched
+          if (!published.ok) return reply(connection, command.id, { ok: false, code: "invalid_command", message: `${published.message}\nThe watch was started; run /pr setup again to retry publishing.` })
+          return reply(connection, command.id, { ok: true, result: { text: `Setup complete.\n${setup.changes.map((line) => `Applied: ${line}`).join("\n")}\n${setup.skipped.join("\n")}\n\n${watched.text}\n${published === watched ? "" : published.text}`, watches: published.watches } })
+        }
         if (!prReviewOn()) return reply(connection, command.id, { ok: false, code: "invalid_command", message: "[DAEMON]: The PR reviewer is off: it reaches the network through gh and spends model calls, so turn it on with /experimental pr_review on (balanced tier or above)" })
         // The platform's fields (job actions, audit, config) go through as given; the service and control.ts validate them.
         const done = await (await prReviewService()).control({ sessionId: command.sessionId, action: command.action, directory: command.directory, pr: command.pr, role: command.role, jobId: command.jobId, reason: command.reason, scope: command.scope, patch: command.patch, version: command.version })
@@ -6260,6 +6287,7 @@ export async function startDaemon(options: DaemonOptions) {
     await compound.dispose()
     dreamTimer?.cancel()
     retentionTimer?.cancel()
+    idleDeltaFold.dispose()
     idleCompaction.dispose()
     memoryAssistant.stop()
     metadata.stop()
