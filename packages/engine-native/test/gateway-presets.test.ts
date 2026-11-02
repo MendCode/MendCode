@@ -14,6 +14,25 @@ const resolved = (id: string, over: Partial<ResolvedProvider> = {}): ResolvedPro
 const hosted = Object.keys(GATEWAY_PRESETS).filter((id) => !GATEWAY_PRESETS[id]!.keyless)
 
 describe("gateway presets", () => {
+  test("opencode-go sends the session's id in x-opencode-session (Go refuses a request without it); calls outside a session share one id; other gateways send none", async () => {
+    const sent: Headers[] = []
+    const fake: Fetch = async (_url, init) => { sent.push(new Headers(init.headers)); return done() }
+    const go = createApiProvider({ provider: resolved("opencode-go"), fetch: fake })
+    await collect(go.stream({ ...request, conversationId: "ses_A", fetch: fake } as typeof request))
+    await collect(go.stream({ ...request, conversationId: "ses_A", fetch: fake } as typeof request))
+    await collect(go.stream({ ...request, conversationId: "ses_B", fetch: fake } as typeof request))
+    await collect(go.stream({ ...request, fetch: fake } as typeof request))
+    await collect(go.stream({ ...request, fetch: fake } as typeof request))
+    expect(sent.map((headers) => headers.get("x-opencode-session")).slice(0, 3)).toEqual(["ses_A", "ses_A", "ses_B"])
+    expect(sent[3]!.get("x-opencode-session")).toMatch(/^mendcode-/)
+    expect(sent[4]!.get("x-opencode-session")).toBe(sent[3]!.get("x-opencode-session"))
+    expect(sent[0]!.get("user-agent")).toBe("mendcode")
+    await collect(createApiProvider({ provider: resolved("opencode-go", { headers: { "User-Agent": "mine/1" } }), fetch: fake }).stream({ ...request, fetch: fake } as typeof request))
+    expect(sent.at(-1)!.get("user-agent")).toBe("mine/1")
+    await collect(createApiProvider({ provider: resolved("fireworks"), fetch: fake }).stream({ ...request, conversationId: "ses_A", fetch: fake } as typeof request))
+    expect(sent.at(-1)!.has("x-opencode-session")).toBe(false)
+  })
+
   test("every gateway id is an opt-in preset and the two tables agree", () => {
     for (const [id, gateway] of Object.entries(GATEWAY_PRESETS)) {
       const preset = PROVIDER_PRESETS[id]!

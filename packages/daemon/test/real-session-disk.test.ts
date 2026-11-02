@@ -1,6 +1,7 @@
 import { afterEach, expect, test } from "bun:test"
 import { Database } from "bun:sqlite"
-import { mkdirSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
 import path from "node:path"
 import type { ModelEvent } from "@mendcode/engine-native"
 import { boot, jumpClock, openSession, until, type NativeHarness } from "./native-harness"
@@ -41,7 +42,7 @@ export function sessionBytes(db: import("bun:sqlite").Database, sessionId: strin
 }
 
 export async function runShortSession() {
-  const project = path.join("/private/tmp", `mc-demo-${process.pid}`)
+  const project = path.join(realpathSync(tmpdir()), `mc-demo-${process.pid}`)
   mkdirSync(path.join(project, "src"), { recursive: true })
   writeFileSync(path.join(project, "src/theme.ts"), THEME + "\n")
   const usage = (input: number, output: number, cacheRead: number): ModelEvent => ({ type: "usage", usage: { input, output, reasoning: 0, cacheRead, cacheWrite: 0 } })

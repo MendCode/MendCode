@@ -43,6 +43,9 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Fixed
 
+- Ask any model to change the default model, tier or permissions and it proposes the change for you to approve, instead of
+  telling you to do it by hand.
+- OpenCode Go answers again: every request carries the session it belongs to, as Go now requires. OpenCode Zen gets it too.
 - Preserve terminal preferences and settings across versions, keep recovery history, and guard against accidental downgrades.
 
 - Changes to a file saved twice in quick succession are no longer missed by model lists, config files, the file viewer or code graph

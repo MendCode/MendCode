@@ -162,6 +162,8 @@ const CAPABILITY_GROUPS: ReadonlyArray<{ tools: readonly string[] | RegExp; name
   { tools: ["browser"] }, { tools: ["screenshot"] }, { tools: ["loop"] },
   { tools: /^workflow_/, name: "workflow_*" },
   { tools: ["lsp"] }, { tools: ["secrets"] }, { tools: ["threads"] }, { tools: ["pr_watch"] }, { tools: ["todo"] },
+  // Deferred, a model asked to change the default model told the user to do it by hand.
+  { tools: ["mendcode_settings"], note: "change MendCode's own settings: default model, tier, permissions" },
 ]
 
 /** The group's present tools in one of the two lists, as the model reads them: `remember/memory`, `computer_* (computer use)`. */
