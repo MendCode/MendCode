@@ -64,7 +64,7 @@ describe("graph autopilot in the daemon", () => {
     expect(h.logs.some((line) => line.startsWith("[GRAPH]:") && line.includes("builds the code graph"))).toBe(true)
   })
 
-  test("a turn after enough new and changed files refreshes the graph, scanning only those files; a turn after few does not", async () => {
+  test("a turn after enough changed code refreshes the graph, scanning only the changed files; a turn after a few small edits does not", async () => {
     const h = await boot()
     h.state.on = true
     const sessionId = await h.open(h.project)
@@ -78,11 +78,12 @@ describe("graph autopilot in the daemon", () => {
     await Bun.sleep(100)
     await h.graphAutopilot.idle(h.project)
     expect(h.scans).toHaveLength(40)
-    change(Array.from({ length: 12 }, (_, index) => `m${index}.ts`), 2_000_000)
+    for (const name of ["big1.ts", "big2.ts"]) writeFileSync(path.join(h.project, name), `export const ${name.slice(0, 4)} = 1\n${"// padding line of ordinary source code\n".repeat(500)}`)
     await h.client.send({ type: "user.submit", sessionId, text: "two", attachments: [] })
-    await h.until(() => h.scans.length >= 52)
-    expect(h.scans).toHaveLength(52)
-    expect(h.logs.some((line) => line.includes("sees 12 of 40 files changed"))).toBe(true)
+    // The three small edits still differ from the index, so the refresh scans them with the two large new files.
+    await h.until(() => h.scans.length >= 45)
+    expect(h.scans).toHaveLength(45)
+    expect(h.logs.some((line) => line.includes("sees 5 of 40 files changed") && line.includes("bytes of code"))).toBe(true)
   })
 
   test("the home folder gets no build, however the session got there", async () => {

@@ -12,6 +12,11 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 ### Changed
 
 - The working row's token count shows new input and the context read from the provider's prompt cache separately.
+- The code graph autopilot refreshes the graph when a lot of code has changed, not after a number of edited files. See
+  [code graph](docs/code-graph.md#autopilot).
+- The full view's footer shows the `rows` preset by default: directory, model and session figures, quota per provider and the code
+  graph, each on its own row. `/footer preset classic` brings back the single-row footer. Balanced and minimalist are unchanged. See
+  [layout](docs/layout.md#footer-by-tier).
 
 ### Fixed
 

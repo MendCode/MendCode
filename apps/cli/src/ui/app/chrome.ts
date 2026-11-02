@@ -11,7 +11,7 @@ import { contextIsEngineWindow, contextLimit } from "../../view/context-meter"
 import type { McpStatusReport } from "@mendcode/protocol"
 import { fastMark, footerParts, quotaText, type FooterInput } from "../../view/footer"
 import { externalEngine, fastApplies } from "../../view/fast-mode"
-import { footerRowBudget, renderFooterRows } from "../../view/footer-rows"
+import { footerQuotaStyle, footerRowBudget, footerRowsOf, renderFooterRows, rowsWithContent } from "../../view/footer-rows"
 import { partsLine } from "../../view/stat-parts"
 import { statusLineSpans } from "../../view/status-line"
 import { modelLabel, modelWithEffort, servedByProvider, sessionModelId } from "../../view/model-label"
@@ -164,7 +164,9 @@ export function createChrome(ctx: AppContext, actions: {
     requestFrame()
   }
 
-  const rowsOn = () => state.tuiProfile.footerRows.length > 0
+  /** The rows the footer draws now: the user's, else the `rows` preset in the full view while nothing was chosen (footer-rows.ts `footerRowsOf`). */
+  const rowsNow = () => footerRowsOf({ mode: state.mode, profile: state.tuiProfile, list: state.customFooter })
+  const rowsOn = () => rowsNow().rows.length > 0
 
   /**
    * The `/footer` list, or undefined while the view's tier places the segments. A saved list equal to the old default (what `/footer
@@ -217,8 +219,8 @@ export function createChrome(ctx: AppContext, actions: {
     const icons = profile.footerIcons !== "none"
     if (!rowsOn() && !icons && !profile.statusColors && !segments.some((segment) => segment === "directory" || segment === "codegraph" || segment === "time")) return {}
     const directory = input.home && input.directory?.startsWith(input.home) ? `~${input.directory.slice(input.home.length)}` : input.directory
-    const graphShown = segments.includes("codegraph") || profile.footerRows.some((row) => row.includes("codegraph"))
-    // The saved tokens cost a `session.savings` request per model call: only a graph the user placed asks it, never the full view's own.
+    const graphShown = segments.includes("codegraph") || rowsNow().rows.some((row) => row.includes("codegraph"))
+    // The saved tokens cost a `session.savings` request per model call: only a graph the user placed asks it, never the full view's own (nor its default rows').
     const graphPlaced = customFooter()?.includes("codegraph") || profile.footerRows.some((row) => row.includes("codegraph"))
     const savedTokens = graphPlaced ? footerSaved() : undefined
     const counts = graphShown && input.directory ? codegraph.get(input.directory) : undefined
@@ -237,9 +239,10 @@ export function createChrome(ctx: AppContext, actions: {
     const usage = usageInForce(state)
     const id = sessionModelId(state.effectiveModel?.model, usage?.model, state.modelReport)
     const threshold = contextLimit(usage, state.settingsNow.compactAtTokens ?? DEFAULT_COMPACT_AT_TOKENS)
-    return renderFooterRows({
-      input: {
+    const { rows, builtIn } = rowsNow()
+    const rowInput: FooterInput = {
         ...feed,
+        ...(builtIn && state.accessible ? { plainQuota: true } : {}),
         stateLabel: STATE_LABEL[state.transcript.foreground], dotOn: true,
         connection: state.connection,
         permission: state.transcript.permissionMode, permissionLabel: PERMISSION_LABEL[state.transcript.permissionMode], showPermission: state.tuiProfile.showPermission,
@@ -249,10 +252,12 @@ export function createChrome(ctx: AppContext, actions: {
         ...(state.transcript.goal ? { goal: state.transcript.goal } : {}),
         // Adaptive reasoning applies to the daemon's own generations only (docs/reasoning.md): a Claude Code, Codex or pi model keeps its own level, unmarked.
         ...(featureOn(state.settingsNow, "jev") && !externalEngine(state.effectiveModel?.model ?? id, state.modelReport) ? { adaptive: true } : {}),
-      },
-      rows: state.tuiProfile.footerRows,
-      limit: footerRowBudget(input.screen.size.height),
-    })
+    }
+    // The built-in default hides the rows with nothing to say (a provider nobody uses here, a graph not counted yet), so the height
+    // budget, which cuts from the bottom, is spent on rows that show something.
+    // The first call of every session is cold: its cache share would only read `cache 0%`, so the default waits for the second call.
+    const shown = builtIn ? rowsWithContent({ input: rowInput, rows: rows.map((row) => state.transcript.sessionUsage.calls < 2 ? row.filter((entry) => entry !== "cache") : row) }) : rows
+    return renderFooterRows({ input: rowInput, rows: shown, limit: footerRowBudget(input.screen.size.height) })
   }
 
   /** What the footer slot shows (docs/views.md): everything the first row is built from, as plain data. */
@@ -288,7 +293,7 @@ export function createChrome(ctx: AppContext, actions: {
       width: width - META_MARGIN - PROMPT_MARGIN,
       glyphs: g, stateLabel: "", state: state.transcript.foreground, dotOn: false,
       connection: "connected", permission: "ask", permissionLabel: "",
-      quotas: [...quotas.values()], quotaStyle: { view: state.tuiProfile.quotaView, color: state.tuiProfile.quotaColor }, now: now(), notice: "",
+      quotas: [...quotas.values()], quotaStyle: footerQuotaStyle({ profile: state.tuiProfile, builtIn: rowsNow().builtIn }), now: now(), notice: "",
       usage: state.transcript.sessionUsage, jobs, sandbox, calls: state.transcript.recentCalls,
       stats: ctx.stats.read(),
       ...(state.transcript.sessionCost !== undefined ? { spentMicros: state.transcript.sessionCost } : {}),

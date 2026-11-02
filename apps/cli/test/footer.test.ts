@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { DEFAULT_TUI_PROFILE } from "../src/view/tui-profile"
 import { DEFAULT_FOOTER, FOOTER_SEGMENTS, createIdFactory, type FooterSegment, type SessionEvent } from "@mendcode/protocol"
 import { createApp } from "../src/ui/app"
 import { glyphs, type Line } from "../src/ui/theme"
@@ -276,6 +277,7 @@ describe("footer in the app", () => {
     const screen = { size: { width: 100, height: 12 }, draw: (rows: Line[]) => void frames.push(rows) } as unknown as Parameters<typeof createApp>[0]["screen"]
     const sessionId = ids("session")
     const app = createApp({
+      profile: { ...DEFAULT_TUI_PROFILE, footerDefaultRows: false },
       // Balanced shows only v1's row under the prompt; the footer segments are the full view's addition.
       sessionId, screen, directory: "/work/app", exit() {}, schedule: (fn: () => void) => fn(), glyphs: glyphs({}), now: () => NOW, mode: "full",
       send: async (command: Record<string, unknown>) => {
@@ -387,7 +389,7 @@ describe("footer in the app", () => {
     await tick()
     const saved = sent.find((c) => c.type === "settings.set") as { patch: { footer: null } }
     expect(saved.patch.footer).toBeNull()
-    expect(screen()).toContain("footer: forecast codegraph cache quota (full view default)")
+    expect(screen()).toContain("rows: 5 (the full view's default; /footer preset classic for one row)")
   })
 
   test("/footer with an unknown segment reports an error and saves nothing", async () => {

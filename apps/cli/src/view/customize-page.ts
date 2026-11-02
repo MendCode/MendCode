@@ -115,6 +115,8 @@ const LABEL_COLUMN = Math.min(25, Math.max(...Object.values(LABELS).map(textWidt
 
 /** The preset the profile's rows are, or `custom`. */
 export function footerPresetOf(profile: TuiProfile): string {
+  // No rows and the default on: the full view shows the `rows` preset by itself (balanced and minimalist their single row).
+  if (profile.footerRows.length === 0 && profile.footerDefaultRows) return "default"
   return FOOTER_PRESET_NAMES.find((name) => JSON.stringify(FOOTER_PRESETS[name]!.rows) === JSON.stringify(profile.footerRows)) ?? "custom"
 }
 
@@ -224,9 +226,11 @@ export function customizePageKey(state: CustomizePageState, key: string, profile
   if (row === "pet") return { state, action: key === "\r" ? { type: "pet" } : { type: "set", patch: { pet: profile.pet && profile.pet !== "off" ? "off" : "mend" } } }
   if (row === "reset") return { state, action: key === "\r" ? { type: "reset" } : NONE }
   if (row === "footerPreset") {
-    const names = FOOTER_PRESET_NAMES
+    const names = ["default", ...FOOTER_PRESET_NAMES]
     const at = names.indexOf(footerPresetOf(profile))
-    const next = FOOTER_PRESETS[names[at < 0 ? (backwards ? names.length - 1 : 0) : (at + (backwards ? -1 : 1) + names.length) % names.length]!]!
+    const name = names[at < 0 ? (backwards ? names.length - 1 : 0) : (at + (backwards ? -1 : 1) + names.length) % names.length]!
+    if (name === "default") return { state, action: { type: "set", patch: { footerRows: [], footerDefaultRows: true } } }
+    const next = FOOTER_PRESETS[name]!
     return { state, action: { type: "set", patch: { footerRows: next.rows.map((entry) => [...entry]), ...(next.profile ?? {}) } } }
   }
   if (row === "toolLayout") {

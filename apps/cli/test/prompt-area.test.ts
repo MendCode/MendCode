@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { DEFAULT_TUI_PROFILE } from "../src/view/tui-profile"
 import { createIdFactory, type SessionEvent } from "@mendcode/protocol"
 import { createApp } from "../src/ui/app"
 import { glyphs, type Line } from "../src/ui/theme"
@@ -20,6 +21,7 @@ function harness(options: { mode?: PresentationMode; width?: number; height?: nu
   const turnId = ids("turn")
   let exited = false
   const app = createApp({
+    profile: { ...DEFAULT_TUI_PROFILE, footerDefaultRows: false },
     sessionId,
     screen,
     directory: "/work/app",

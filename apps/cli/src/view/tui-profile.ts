@@ -250,6 +250,8 @@ export type TuiProfile = {
   quotaRefresh: QuotaRefreshEntry[]
   /** The built-in footer as rows of segment names (docs/customize.md, "Footer rows"); empty is the single default row. */
   footerRows: string[][]
+  /** While `footerRows` is empty and `/footer` never placed segments, the full view's footer is the `rows` preset (on by default); off keeps the single row (`/footer preset classic`). */
+  footerDefaultRows: boolean
   /** Lines the `text:<name>` segment shows: one line, or a list one of which shows per day. */
   footerText: Record<string, string | string[]>
   /** An icon before each footer segment: none, plain Unicode glyphs, or Nerd Font icons. */
@@ -497,6 +499,7 @@ export const DEFAULT_TUI_PROFILE: Readonly<TuiProfile> = {
   footerToday: false,
   quotaRefresh: [],
   footerRows: [],
+  footerDefaultRows: true,
   footerText: {},
   footerIcons: "none",
   messageLayout: "quiet",
@@ -844,6 +847,7 @@ export function normalizeTuiProfile(raw: unknown): TuiProfile {
     footerToday: bool("footerToday"),
     quotaRefresh: normalizeQuotaRefresh(source.quotaRefresh),
     footerRows: normalizeFooterLayout(source.footerRows),
+    footerDefaultRows: bool("footerDefaultRows"),
     footerText: normalizeFooterText(source.footerText),
     footerIcons: oneOf(FOOTER_ICON_MODES, source.footerIcons) ?? "none",
     messageLayout: oneOf(["quiet", "classic"] as const, source.messageLayout) ?? "quiet",

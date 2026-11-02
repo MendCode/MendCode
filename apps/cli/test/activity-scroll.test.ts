@@ -25,7 +25,7 @@ type Scene = { width: number; height: number; side?: Side; profile?: Partial<Tui
 
 async function scene({ width, height, side = "none", profile = {}, clock, reduced }: Scene) {
   const dataDir = tempDir()
-  writeTuiProfile(dataDir, { ...DEFAULT_TUI_PROFILE, sidebar: side === "none" ? "hidden" : "auto", ...(side === "both" ? { rightSidebar: true, sidebarWidgets: structuredClone(SIDEBAR_PRESETS.pulse) } : {}), ...profile })
+  writeTuiProfile(dataDir, { ...DEFAULT_TUI_PROFILE, footerDefaultRows: false, sidebar: side === "none" ? "hidden" : "auto", ...(side === "both" ? { rightSidebar: true, sidebarWidgets: structuredClone(SIDEBAR_PRESETS.pulse) } : {}), ...profile })
   const h = appHarness({ dataDir, directory: tempDir(), width, height, mode: "full", now: () => clock?.at ?? TURN_AT + 173_000 })
   h.app.applySettings({ onboarded: true, ...(reduced ? { reducedMotion: true } : {}) })
   await Bun.sleep(10)

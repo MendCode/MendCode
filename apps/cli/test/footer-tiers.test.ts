@@ -10,13 +10,13 @@ const DIR = "/Users/dev/Code/MendCodeV2"
 const cleanups: Array<() => void> = []
 afterEach(() => { for (const cleanup of cleanups.splice(0)) cleanup() })
 
-type Scene = { mode: "minimal" | "balanced" | "full"; width: number; height?: number; profile?: Partial<TuiProfile>; graph?: boolean; quotas?: boolean; loops?: number; turns?: number }
+type Scene = { mode: "minimal" | "balanced" | "full"; width: number; height?: number; profile?: Partial<TuiProfile>; graph?: boolean; quotas?: boolean; loops?: number; turns?: number; settings?: Record<string, unknown> }
 
 /**
  * A session after a few turns of a growing context, on a fake daemon: GPT-6-Luna at high effort with `/fast` on, one live loop, the
  * code graph indexed and both quota providers read. The rows from the prompt's bottom rule down are what the footer drew.
  */
-async function scene({ mode, width, height = 30, profile = {}, graph = true, quotas = true, loops = 1, turns = 4 }: Scene) {
+async function scene({ mode, width, height = 30, profile = {}, graph = true, quotas = true, loops = 1, turns = 4, settings = {} }: Scene) {
   const layout = scratch()
   cleanups.push(layout.cleanup)
   writeTuiProfile(layout.dataDir, { ...DEFAULT_TUI_PROFILE, sidebar: "hidden", ...profile })
@@ -26,7 +26,7 @@ async function scene({ mode, width, height = 30, profile = {}, graph = true, quo
       ? { ok: true, result: { engine: "native", selectable: true, models: [{ id: "gpt-6-luna", name: "GPT-6-Luna" }], defaults: { model: "gpt-6-luna" }, roles: {}, effective: { model: "gpt-6-luna", effort: "high" }, session: { fast: true } } }
       : command.type === "loop.list" ? { ok: true, result: { loops: Array.from({ length: loops }, (_, at) => ({ loopId: `l${at}`, directory: DIR, state: "active" })) } } : undefined,
   })
-  await h.start({ onboarded: true, tier: mode === "minimal" ? "minimalist" : mode, view: mode, reducedMotion: true } as never)
+  await h.start({ onboarded: true, tier: mode === "minimal" ? "minimalist" : mode, view: mode, reducedMotion: true, ...settings } as never)
   await Bun.sleep(5)
   if (quotas) for (const event of quotaScene("fresh")) h.app.onGlobal(event as never)
   if (graph) h.app.onGlobal({ type: "codegraph.status", gseq: 0, at: NOW, directory: DIR, state: "indexed", files: 2594, symbols: 17641, edges: 41203, partial: false } as never)
@@ -128,41 +128,67 @@ describe("the footer by tier in the app", () => {
     expect((await scene({ mode: "balanced", width: 60 })).below()).toEqual(["   Build · GPT-6-Luna · high · fast · chatgpt │ ↻ 1 loop"])
   })
 
-  test("full: a second row for the code graph, the cache share and the quota windows, compacting before anything gives way", async () => {
+  test("full: the footer is the rows preset until the user chooses one: directory, model and session figures, a row per quota provider, the code graph", async () => {
     const wide = await scene({ mode: "full", width: 160 })
-    expect(wide.below()).toEqual([
-      "   Build · GPT-6-Luna · high · fast · chatgpt │ ↻ 1 loop │ ~12 turns to compact",
-      "   GRAPH 2,594 files · indexed │ cache 85% │ codex 7d █░░░░░░░ 8% resets 5d9h  claude 7d █████░░░ 61% resets 1d23h 5h █░░░░░░░ 11% resets 2h",
+    const rows = wide.below()
+    expect(rows).toHaveLength(5)
+    expect(rows[0]).toStartWith("   ~/Code/MendCodeV2 ")
+    expect(rows[0]).toEndWith("↻ 1 loop")
+    expect(rows.slice(1)).toEqual([
+      "   GPT-6-Luna fast · high:JEV · context 21% · cache 85% · in 106K out 1,200 cr 90K",
+      "   CODEX 7d ███████░ 92% left resets 5d9h · 5h n/a",
+      "   CLAUDE 7d ███░░░░░ 39% left resets 1d23h · 5h ███████░ 89% left resets 2h",
+      "   GRAPH 2,594 files · 17,641 symbols · 41,203 edges · indexed",
     ])
-    expect((await scene({ mode: "full", width: 100 })).below()[1]).toBe("   GRAPH 2,594 files · indexed │ cache 85% │ codex 7d 8%  claude 7d 61% 5h 11%")
-    // Without the quota readings the graph has the room for its whole form.
-    expect((await scene({ mode: "full", width: 100, quotas: false })).below()[1]).toBe("   GRAPH 2,594 files · 17,641 symbols · 41,203 edges · indexed │ cache 85%")
-    expect((await scene({ mode: "full", width: 60 })).below()[1]).toBe("   codex 7d 8%  claude 7d 61% 5h 11%")
-    // The tier's own graph never asks the daemon for its savings: no new request per model call.
+    // The tier's own graph row never asks the daemon for its savings: no new request per model call.
     expect(wide.h.sent.some((command) => command.type === "session.savings")).toBe(false)
   })
 
-  test("full: the graph waits for what the daemon pushed, and the row is absent while nothing has something to show", async () => {
-    const fresh = await scene({ mode: "full", width: 160, graph: false, quotas: false, turns: 0, loops: 0 })
-    expect(fresh.below()).toEqual(["   Build · GPT-6-Luna · high · fast · chatgpt"])
+  test("full: narrow widths keep every row and compact the counts before anything gives way", async () => {
+    const narrow = (await scene({ mode: "full", width: 50 })).below()
+    expect(narrow.slice(1)).toEqual([
+      "   GPT-6-Luna fast · high:JEV · context 21%",
+      "   CODEX 7d 92% left · 5h n/a",
+      "   CLAUDE 7d 39% left · 5h 89% left",
+      "   GRAPH 2,594 files · indexed",
+    ])
+    const classicWidth = (await scene({ mode: "full", width: 80, height: 24 })).below()
+    expect(classicWidth).toHaveLength(5)
+    expect(classicWidth[1]).toBe("   GPT-6-Luna fast · high:JEV · context 21% · cache 85%")
   })
 
-  test("the cache share waits for the second call: the first call of every session is cold", async () => {
-    expect((await scene({ mode: "full", width: 160, graph: false, quotas: false, loops: 0, turns: 1 })).below()).toEqual(["   Build · GPT-6-Luna · high · fast · chatgpt"])
-    expect((await scene({ mode: "full", width: 160, graph: false, quotas: false, loops: 0, turns: 2 })).below()[1]).toBe("   cache 79%")
+  test("full: a provider with no reading and a graph not counted yet leave no row, and the rows under them move up", async () => {
+    const none = (await scene({ mode: "full", width: 160, quotas: false })).below()
+    expect(none.map((row) => row.trim().split(" ")[0])).toEqual(["~/Code/MendCodeV2", "GPT-6-Luna", "GRAPH"])
+    const nothingYet = (await scene({ mode: "full", width: 160, quotas: false, graph: false })).below()
+    expect(nothingYet).toHaveLength(2)
+    expect(nothingYet[1]).toStartWith("   GPT-6-Luna")
   })
 
-  test("full under 24 rows keeps one row: its segments join the first and give way first", async () => {
-    // The row is worth more to the transcript and the panel sheet on a short terminal.
-    const rows = (await scene({ mode: "full", width: 160, height: 23 })).below()
-    expect(rows).toHaveLength(1)
-    expect(rows[0]).toStartWith("   Build · GPT-6-Luna · high · fast · chatgpt │ ↻ 1 loop │ ~12 turns to compact │ GRAPH")
+  test("full: rows are cut to a quarter of the height from the bottom: the graph first, then Claude, then Codex", async () => {
+    // Terminal height / 4, rounded down: 20 rows allow 5, 16 allow 4, 12 allow 3, 8 allow 2.
+    expect((await scene({ mode: "full", width: 160, height: 20 })).below().map((row) => row.trim().split(" ")[0])).toEqual(["~/Code/MendCodeV2", "GPT-6-Luna", "CODEX", "CLAUDE", "GRAPH"])
+    expect((await scene({ mode: "full", width: 160, height: 16 })).below().map((row) => row.trim().split(" ")[0])).toEqual(["~/Code/MendCodeV2", "GPT-6-Luna", "CODEX", "CLAUDE"])
+    expect((await scene({ mode: "full", width: 160, height: 12 })).below().map((row) => row.trim().split(" ")[0])).toEqual(["~/Code/MendCodeV2", "GPT-6-Luna", "CODEX"])
+    expect((await scene({ mode: "full", width: 160, height: 8 })).below().map((row) => row.trim().split(" ")[0])).toEqual(["~/Code/MendCodeV2", "GPT-6-Luna"])
   })
 
-  test("screen-reader mode: one separator, words without marks, quota figures without bars", async () => {
+  test("full: what the user chose wins: their rows, `/footer preset classic` (the single row) and a `/footer` list", async () => {
+    const chosen = (await scene({ mode: "full", width: 160, profile: { footerRows: [["model", "context"]] } })).below()
+    expect(chosen).toHaveLength(1)
+    expect(chosen[0]).toStartWith("   GPT-6-Luna fast · context 21%")
+    const classic = (await scene({ mode: "full", width: 160, profile: { footerDefaultRows: false } })).below()
+    expect(classic).toEqual([
+      "   Build · GPT-6-Luna · high · fast · chatgpt │ ↻ 1 loop │ ~12 turns to compact",
+      "   GRAPH 2,594 files · indexed │ cache 85% │ codex 7d █░░░░░░░ 8% resets 5d9h  claude 7d █████░░░ 61% resets 1d23h 5h █░░░░░░░ 11% resets 2h",
+    ])
+    const listed = (await scene({ mode: "full", width: 160, settings: { footer: ["state", "context"] } })).below()
+    expect(listed).toHaveLength(1)
+  })
+
+  test("screen-reader mode: the default rows keep their words and drop the bars", async () => {
     const rows = (await scene({ mode: "full", width: 160, profile: { accessible: true } })).below()
-    expect(rows[0]).toBe("   Build · GPT-6-Luna · high · fast · chatgpt · 1 loop · ~12 turns to compact")
-    expect(rows[1]).toBe("   GRAPH 2,594 files · 17,641 symbols · 41,203 edges · indexed · cache 85% · codex 7d 8%  claude 7d 61% 5h 11%")
+    expect(rows.slice(2, 4)).toEqual(["   CODEX 7d 92% left · 5h n/a", "   CLAUDE 7d 39% left · 5h 89% left"])
   })
 
   test("ASCII glyphs: a plain bar between groups and no arrow before the loop", async () => {
