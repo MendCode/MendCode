@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test"
 import path from "node:path"
 
-type Step = { uses?: string; run?: string; if?: string; with?: Record<string, unknown>; env?: Record<string, string>; "continue-on-error"?: unknown }
+type Step = { name?: string; uses?: string; run?: string; if?: string; with?: Record<string, unknown>; env?: Record<string, string>; "continue-on-error"?: unknown }
 type Job = { needs?: string | string[]; steps: Step[]; permissions?: Record<string, string>; "timeout-minutes"?: number; strategy?: { matrix: { include: { target: string; runner: string; suffix: string }[] } } }
 type Workflow = { on: { push: { tags: string[] }; workflow_dispatch: { inputs: { tag: { required: boolean } } } }; permissions: Record<string, string>; jobs: Record<string, Job> }
 const workflowsDir = path.join(import.meta.dir, "../.github/workflows")
