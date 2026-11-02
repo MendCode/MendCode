@@ -1,6 +1,7 @@
 import { closeSync, existsSync, openSync, readSync, realpathSync, statSync } from "node:fs"
 import { homedir } from "node:os"
 import path from "node:path"
+import { fileSignature } from "@mendcode/protocol/wire"
 
 /**
  * The one instruction loader. The system prompt (`createInstructionLoader`: session directory up to the project root) and the
@@ -39,7 +40,7 @@ export type InstructionSection = {
   resolved: string
   /** The file's text, already cut to the remaining aggregate budget. */
   text: string
-  /** `mtimeMs:size`: changes when the file is edited. */
+  /** `fileSignature` (inode, size, mtime, ctime): changes when the file is edited. */
   signature: string
   included: boolean
 }
@@ -49,7 +50,7 @@ export const newInstructionState = (): InstructionState => ({ visited: new Set()
 type Cached = { signature: string; text: string }
 const cache = new Map<string, Cached>()
 
-const signatureOf = (info: { mtimeMs: number; size: number }) => `${info.mtimeMs}:${info.size}`
+const signatureOf = fileSignature
 const real = (file: string) => { try { return realpathSync(file) } catch { return undefined } }
 const inside = (root: string, target: string) => {
   const relative = path.relative(root, target)

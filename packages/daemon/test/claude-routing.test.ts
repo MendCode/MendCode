@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { createIdFactory, type ModelInfo, type SessionId } from "@mendcode/protocol"
 import type { EnginePort, TurnInput } from "@mendcode/kernel"
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { CLAUDE_MODELS, claudeAlias, createClaudeModelCatalog } from "../src/claude-models"
@@ -63,6 +63,24 @@ describe("Claude Code models in the catalog", () => {
       expect(defaults(createClaudeModelCatalog(file)())).toEqual([undefined, undefined, undefined, undefined])
       writeFileSync(file, "{ not json")
       expect(defaults(createClaudeModelCatalog(file)())).toEqual([undefined, undefined, undefined, undefined])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("a settings file rewritten within the timestamp resolution (same mtime) is read again", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "claude-settings-"))
+    const file = path.join(dir, "settings.json")
+    const tick = 1_700_000_000
+    const sonnet = (list: ModelInfo[]) => list.find((model) => model.id === "claude-sonnet")?.defaultEffort
+    try {
+      writeFileSync(file, JSON.stringify({ effortLevel: "high" }))
+      utimesSync(file, tick, tick)
+      const list = createClaudeModelCatalog(file)
+      expect(sonnet(list())).toBe("high")
+      writeFileSync(file, JSON.stringify({ effortLevel: "low" }))
+      utimesSync(file, tick, tick)
+      expect(sonnet(list())).toBe("low")
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

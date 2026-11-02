@@ -1,5 +1,6 @@
 import { mkdir, readdir, rename, stat, unlink } from "node:fs/promises"
 import path from "node:path"
+import { fileSignature } from "@mendcode/protocol/wire"
 import { PET_IMPORT_STATES, type PetArtKind, type PetLayout } from "../../../../packages/protocol/src/pet-data"
 import { contentBox, unionBox, type PixelBox } from "../../../../packages/tools/src/pet-resample"
 import type { PetImage } from "./decode"
@@ -132,7 +133,7 @@ export function decodeSprite(bytes: Uint8Array<ArrayBuffer>): Map<PetRow, PetIma
 /** Cache file of a pet: changes when its sheet (path, size, mtime) or its layout does. */
 export async function spritePath(input: { pet: PetInfo; cacheDir: string }, format = FORMAT) {
   const info = await stat(input.pet.sheetPath)
-  const key = Bun.hash(`${input.pet.sheetPath}:${info.size}:${info.mtimeMs}:${format}${input.pet.layout ? `:${JSON.stringify(input.pet.layout)}` : ""}`).toString(36)
+  const key = Bun.hash(`${input.pet.sheetPath}:${fileSignature(info)}:${format}${input.pet.layout ? `:${JSON.stringify(input.pet.layout)}` : ""}`).toString(36)
   return path.join(input.cacheDir, `${input.pet.id}-${key}.sprite`)
 }
 

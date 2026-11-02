@@ -1,6 +1,7 @@
 import { readFileSync, statSync } from "node:fs"
 import path from "node:path"
 import { PROMPT_FILES } from "@mendcode/extension-api"
+import { fileSignature } from "@mendcode/protocol"
 import type { SystemPart } from "@mendcode/engine-native"
 import type { ExtensionLayer } from "@mendcode/packages"
 
@@ -28,7 +29,7 @@ export function createPromptFiles({ layersFor, enabled }: { layersFor(directory:
       for (const [kind, name] of kinds) {
         const file = path.join(layer.dir, name)
         const info = statSync(file, { throwIfNoEntry: false })
-        if (info?.isFile() && info.size <= MAX_PROMPT_FILE_BYTES) found.push({ kind, file, signature: `${file}:${info.mtimeMs}:${info.size}` })
+        if (info?.isFile() && info.size <= MAX_PROMPT_FILE_BYTES) found.push({ kind, file, signature: `${file}:${fileSignature(info)}` })
       }
     }
     const signature = found.map((entry) => entry.signature).join("\n")

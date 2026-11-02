@@ -33,6 +33,23 @@ test("a streaming call is estimated from its text, its reported usage replaces t
   expect([state.input, state.output, state.outputLive, state.estimating]).toEqual([0, 0, 0, false])
 })
 
+test("the working row tells new input from the context the provider read from its cache, so a long turn is not read as 1.7M sent", async () => {
+  const { tokensText } = await import("../src/view/working-row")
+  const state = createTurnState()
+  state.apply(event({ type: "turn.started", turnId: "trn_c", queueId: "que_c" }))
+  // A turn of a real session (2026-11-01, gpt-6-astra): 142K new input and 1.52M of resent context read from the cache.
+  state.apply(usage(100_000, 2_000, { read: 0, write: 0 }))
+  state.apply(usage(42_000, 2_307, { read: 1_520_000, write: 0 }))
+  expect([state.input, state.cached]).toEqual([1_662_000, 1_520_000])
+  expect(tokensText({ input: state.input, cached: state.cached, output: state.output })).toBe("↑142K +1.5M cached ↓4,307 tokens")
+  // Without a cache read the row reads as before.
+  expect(tokensText({ input: 45_200, cached: 0, output: 1_240, estimated: true })).toBe("↑45.2K ↓~1,240 tokens")
+  expect(tokensText({ input: 0, output: 12 })).toBe("↓12 tokens")
+  state.apply(event({ type: "turn.completed", turnId: "trn_c" }))
+  state.apply(event({ type: "turn.started", turnId: "trn_d", queueId: "que_d" }))
+  expect(state.cached).toBe(0)
+})
+
 test("an engine that reports no usage keeps its estimate for the whole turn", () => {
   const state = createTurnState()
   state.apply(event({ type: "turn.started", turnId: "trn_3", queueId: "que_3" }))

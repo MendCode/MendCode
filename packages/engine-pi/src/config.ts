@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
 import { sandboxCommand, type SandboxBackend, type SandboxPolicy } from "@mendcode/tools"
-import type { ModelInfo } from "@mendcode/protocol"
+import { fileSignature, type ModelInfo } from "@mendcode/protocol"
 import { z } from "zod"
 
 export const PI_CONFIG_FILE = "pi.json"
@@ -68,7 +68,7 @@ export function createPiConfig({ dir, optedIn }: { dir: string; optedIn?(): bool
     let stamp: string
     try {
       const info = statSync(file)
-      stamp = `${info.mtimeMs}:${info.size}`
+      stamp = fileSignature(info)
     } catch {
       cached = undefined
       return absent

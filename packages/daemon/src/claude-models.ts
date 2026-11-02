@@ -1,7 +1,7 @@
 import { readFileSync, statSync } from "node:fs"
 import { homedir } from "node:os"
 import path from "node:path"
-import { modelContextOf, REASONING_EFFORTS, type ModelChoice, type ModelInfo, type ReasoningEffort, type Settings } from "@mendcode/protocol"
+import { fileSignature, modelContextOf, REASONING_EFFORTS, type ModelChoice, type ModelInfo, type ReasoningEffort, type Settings } from "@mendcode/protocol"
 
 /** Claude Code's user settings, where `effortLevel` names the level its sessions run at when none is asked for. */
 export const CLAUDE_SETTINGS = path.join(process.env.CLAUDE_CONFIG_DIR || path.join(homedir(), ".claude"), "settings.json")
@@ -25,13 +25,13 @@ export const CLAUDE_MODELS: ModelInfo[] = [
  * the models carry none and Claude Code decides.
  */
 export function createClaudeModelCatalog(file = CLAUDE_SETTINGS) {
-  let cached: { mtimeMs: number; models: ModelInfo[] } | undefined
+  let cached: { signature: string; models: ModelInfo[] } | undefined
   return function list(): ModelInfo[] {
     try {
-      const { mtimeMs } = statSync(file)
-      if (cached?.mtimeMs !== mtimeMs) {
+      const signature = fileSignature(statSync(file))
+      if (cached?.signature !== signature) {
         const level = (JSON.parse(readFileSync(file, "utf8")) as { effortLevel?: unknown } | null)?.effortLevel
-        cached = { mtimeMs, models: CLAUDE_MODELS.map((model) => (isEffort(level) && model.efforts.includes(level) ? { ...model, defaultEffort: level } : model)) }
+        cached = { signature, models: CLAUDE_MODELS.map((model) => (isEffort(level) && model.efforts.includes(level) ? { ...model, defaultEffort: level } : model)) }
       }
       return cached.models
     } catch {

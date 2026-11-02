@@ -1,4 +1,5 @@
 import { accessSync, constants, statSync } from "node:fs"
+import { fileSignature } from "@mendcode/protocol/wire"
 
 /** How often an open terminal looks at its own binary: one `stat`, nothing else. */
 export const RELAUNCH_CHECK_MS = 20_000
@@ -17,7 +18,7 @@ export function binaryStamp(file: string): string | undefined {
     const stat = statSync(file)
     if (!stat.isFile() || stat.size === 0) return undefined
     accessSync(file, constants.X_OK)
-    return `${stat.ino}:${stat.size}:${stat.mtimeMs}`
+    return fileSignature(stat)
   } catch {
     return undefined
   }

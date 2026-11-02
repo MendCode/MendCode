@@ -1,6 +1,6 @@
 import { readFileSync, renameSync, statSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
-import { REASONING_EFFORTS, type ModelInfo, type ReasoningEffort } from "@mendcode/protocol"
+import { fileSignature, REASONING_EFFORTS, type ModelInfo, type ReasoningEffort } from "@mendcode/protocol"
 import { z } from "zod"
 
 export const ACP_AGENTS_FILE = "acp-agents.json"
@@ -94,8 +94,7 @@ export function createAcpAgents({ dir, catalogEfforts, displayName }: { dir: str
   function learned(): Record<string, AcpModelOption[]> {
     let stamp: string
     try {
-      const info = statSync(modelsFile)
-      stamp = `${info.mtimeMs}:${info.size}`
+      stamp = fileSignature(statSync(modelsFile))
     } catch {
       return {}
     }
@@ -111,8 +110,7 @@ export function createAcpAgents({ dir, catalogEfforts, displayName }: { dir: str
   function load(): LoadedAcpAgents {
     let stamp: string
     try {
-      const info = statSync(file)
-      stamp = `${info.mtimeMs}:${info.size}`
+      stamp = fileSignature(statSync(file))
     } catch {
       cached = undefined
       return { agents: {}, issues: [] }
