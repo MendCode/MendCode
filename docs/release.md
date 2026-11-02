@@ -54,7 +54,10 @@ reached 7.3 GB, which the 8 GB runner's OOM killer ended; 40 stay near 2 GB. Bot
 runners at once: `daemon`, `packages rest` with the typecheck, and `cli` in three shards (`MENDCODE_TEST_SHARD=1/3` … `3/3` runs
 every third cli process). On one runner the parts took 1006 s one after another (v0.0.2-beta.4, 17 of the release's 19 minutes);
 in rows the gate takes as long as `daemon`, its slowest row. `sh scripts/test-shards.sh cli` with `MENDCODE_TEST_SHARD=2/3` repeats
-one row locally.
+one row locally. The repository variable `CHECKS_RUNNER` (for example `blacksmith-4vcpu-ubuntu-2404`) moves only these rows to
+another runner; unset, they run on GitHub's `ubuntu-24.04`. Builds, signing and the attestation always run on GitHub-hosted
+runners: `mendcode upgrade` verifies attestations with `--deny-self-hosted-runners`, and a third-party runner counts as
+self-hosted.
 
 When publication is authorized, tag the reviewed commit and push the tag:
 

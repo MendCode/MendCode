@@ -27,7 +27,10 @@ env:
 
 jobs:
   checks:
-    runs-on: ubuntu-24.04
+    # The repository variable CHECKS_RUNNER moves only these test rows to another runner (blacksmith-4vcpu-ubuntu-2404); unset, they
+    # run on GitHub's. Builds, signing and attestation stay on GitHub-hosted runners whatever it says: `mendcode upgrade` verifies
+    # attestations with --deny-self-hosted-runners, and a third-party runner counts as self-hosted.
+    runs-on: ${{ vars.CHECKS_RUNNER || 'ubuntu-24.04' }}
     # The suite in five rows on five runners at once (the same rows as ci.yml). One runner took them one after another: 1006 s on
     # 2026-11-01 (v0.0.2-beta.4: daemon 335, packages 182, rest 35, cli-1..12 454 s together), 17 of the release's 19 minutes. Now the
     # gate takes as long as its slowest row, daemon, about 6 minutes with setup. Every row must pass; fail-fast is off so one run shows
