@@ -24,7 +24,8 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
   watches in a page where they can be stopped and restarted.
 - Completed streaming output uses less session storage while preserving historical cuts and reconnect replay.
 - Session history takes less disk: each event stores its session, number, time and type once, and existing history is
-  converted in the background while the daemon is idle. Forked sessions also store less.
+  converted in the background while the daemon is idle. Forked sessions also store less. Short sessions now take less disk
+  than a Pi session file.
 - Opening a session and starting a turn read the transcript and model history faster.
 - Compaction uses the session's own model by default, so it reuses the prompt cache; the built-in recipes no longer set a
   `compaction` role, and `/models` notes when a separate compaction model gives that up.

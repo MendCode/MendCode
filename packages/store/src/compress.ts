@@ -1,4 +1,5 @@
 import type { SessionEvent } from "@mendcode/protocol"
+import { abbreviateMessage, expandMessage } from "./message-prefix"
 
 /** Text and file content shorter than this stays as it is: the zstd frame would eat the gain. */
 export const COMPRESS_MIN_BYTES = 1024
@@ -72,7 +73,8 @@ export function createCodec(options: { enabled?: boolean; objects?: { put(text: 
 
     /** JSON text of an engine message: plain TEXT when small, a zstd BLOB when that is smaller. */
     packText(text: string): string | Uint8Array {
-      if (!enabled || text.length < COMPRESS_MIN_BYTES) return text
+      if (!enabled) return text
+      if (text.length < COMPRESS_MIN_BYTES) return abbreviateMessage(text)
       // Keep the exact JSON envelope, sharing only content already present in the transcript.
       if (options.objects) {
         let message: Record<string, unknown> | undefined
@@ -94,8 +96,8 @@ export function createCodec(options: { enabled?: boolean; objects?: { put(text: 
     },
     unpackText(value: StoredValue): string {
       if (value === null || value === undefined) return ""
-      if (typeof value === "string") return value
-      if (!isWrapped(value)) return decoder.decode(value)
+      if (typeof value === "string") return expandMessage(value)
+      if (!isWrapped(value)) return expandMessage(decoder.decode(value))
       if (value[4] === KIND_MESSAGE) {
         const body = bodyOf(value)
         const hash = bytesToHex(body.subarray(0, SHA_BYTES))

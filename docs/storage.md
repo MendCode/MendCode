@@ -41,6 +41,24 @@ previous build's, key order included. The session-disk probe goes from 5,571 to 
 long session (Pi: 4,096 short, 8,192 long). With fork object references held only by physical owners, a fork of
 the 40-turn disk-budget fixture grows by 83 KiB against 285 KiB for a physical copy (before: 102 and 338 KiB).
 
+## Repeated fields in model messages and delta blocks
+
+A model message that opens with one of four fixed spellings (`{"role":"user","content":`, the assistant form, the
+assistant form with an empty reply and a tool call, and `{"role":"tool","toolCallId":`) is stored with one control
+character in its place (`message-prefix.ts`); JSON never starts with one, so the codec expands it unambiguously and rows
+written without it read unchanged. Larger messages keep their zstd or shared-output form. `MDL2` delta blocks store the
+sequence steps, time steps and chunk lengths as three columns of groups, each a repeated value or literals, because a
+stream steps its sequence by one and mostly repeats its time and chunk size; the writer keeps whichever of `MDL1` and
+`MDL2` is smaller and both read. The idle batch rewrites existing `MDL1` blocks on its own cursor (`delta-lengths-cursor-v2`),
+only when the columns are smaller and decode to the same entries; old model rows are not rewritten. Earlier executables
+cannot read either form.
+
+The probe's 100 sessions now add 24 pages beyond the empty store (events 14, model history 5, message-item index 3,
+turns 2; delta blocks fit the page the empty table already has), so the allocated growth goes from 4,424 to 3,932 bytes
+per session, short and long (Pi: 4,096 short, 8,192 long). A `VACUUM INTO` of the probe database is two pages smaller than
+the file as written (holes left by folded deltas and half-filled pages); the probe measures the file as written and does
+not compact first.
+
 Sessions without inherited transcript or model history read both by primary key; the inherited (fork) queries are
 kept for the rest and join in key order. The model-history query used to scan every `engine_messages` row.
 
