@@ -19,5 +19,11 @@
     "@mendcode/protocol": "workspace:*",
     "@mendcode/store": "workspace:*",
     "@mendcode/client": "workspace:*"
-  }
+  },
+  "workspaces": [
+    "packages/*",
+    "apps/*",
+    "features/*",
+    "spikes/*"
+  ]
 }
