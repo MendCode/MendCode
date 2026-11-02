@@ -86,7 +86,8 @@ describe("process readings", () => {
       expect(first.footprintMB).toBeGreaterThan(1)
       expect(first.peakFootprintMB).toBeGreaterThanOrEqual(first.footprintMB!)
     }
-    const until = performance.now() + 30
+    // Long enough for Linux's 10 ms CPU ticks to move.
+    const until = performance.now() + 60
     while (performance.now() < until) Math.sqrt(Math.random())
     expect(processStats(process.pid)!.cpuMs).toBeGreaterThan(first.cpuMs)
   })

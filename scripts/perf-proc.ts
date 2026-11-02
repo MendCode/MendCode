@@ -1,7 +1,7 @@
 // Per-process resource readings for the perf scripts, next to `ps` RSS (docs/performance.md).
 // macOS: `proc_pid_rusage(RUSAGE_INFO_V4)` through bun:ffi gives the physical footprint (what the process owns, without the
-// binary's shared clean code pages that RSS counts), its lifetime peak, and user plus system CPU time. Linux: RSS from `ps`,
-// CPU from `ps -o time`; footprint is not available there and stays undefined. Nothing is installed or spawned on macOS.
+// binary's shared clean code pages that RSS counts), its lifetime peak, and user plus system CPU time. Linux: RSS and CPU
+// from `/proc`; footprint is not available there and stays undefined. Elsewhere, `ps`. Nothing is installed or spawned on macOS or Linux.
 const MB = 1048576
 
 export type ProcessStats = {
@@ -53,7 +53,21 @@ function psReader(pid: number): ProcessStats | undefined {
   return { rssMB: +(Number(out[0]) / 1024).toFixed(1), cpuMs: parsePsTime(out[1]!) }
 }
 
-const native = process.platform === "darwin" ? darwinReader() : undefined
+/** Linux: RSS from `/proc/<pid>/status` and CPU from `/proc/<pid>/stat` in clock ticks (USER_HZ, 100 on Linux), finer than `ps -o time`'s whole seconds. */
+function linuxReader(pid: number): ProcessStats | undefined {
+  try {
+    const { readFileSync } = require("node:fs") as typeof import("node:fs")
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf8")
+    // Fields after the command name, which sits in parentheses and may hold spaces: utime and stime are fields 14 and 15.
+    const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ")
+    const rssKB = Number(/^VmRSS:\s+(\d+)/m.exec(readFileSync(`/proc/${pid}/status`, "utf8"))?.[1])
+    const ticks = Number(fields[11]) + Number(fields[12])
+    if (!Number.isFinite(rssKB) || !Number.isFinite(ticks)) return undefined
+    return { rssMB: +(rssKB / 1024).toFixed(1), cpuMs: ticks * 10 }
+  } catch { return undefined }
+}
+
+const native: Reader | undefined = process.platform === "darwin" ? darwinReader() : process.platform === "linux" ? linuxReader : undefined
 
 /** Readings of a live process, or undefined when it is gone. */
 export function processStats(pid: number): ProcessStats | undefined {
