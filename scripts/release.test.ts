@@ -73,6 +73,15 @@ test("the CI workflow runs the same gate on Linux for pull requests and on deman
   expect(job["timeout-minutes"]).toBeGreaterThanOrEqual(20)
   expectPinned(job.steps, ciSource)
   expect(ciSource).toContain("ubuntu-24.04")
+  // CHECKS_RUNNER may move the test rows to a third-party runner; whatever builds, signs or attests stays GitHub-hosted, because
+  // `mendcode upgrade` verifies attestations with --deny-self-hosted-runners.
+  const testRunner = "${{ vars.CHECKS_RUNNER || 'ubuntu-24.04' }}"
+  expect((job as Job & { "runs-on": string })["runs-on"]).toBe(testRunner)
+  for (const [name, other] of Object.entries(workflow.jobs) as [string, Job & { "runs-on": string }][]) {
+    if (name === "checks") expect(other["runs-on"]).toBe(testRunner)
+    else expect(other["runs-on"]).not.toContain("CHECKS_RUNNER")
+  }
+  for (const row of (workflow.jobs.build!.strategy!.matrix.include as { runner: string }[])) expect(row.runner).not.toMatch(/blacksmith|self-hosted/)
   // The scale loosens time budgets for a slow shared runner; it must not leak into the smoke of the release binaries or any local run.
   for (const text of [source, ciSource]) expect(text).not.toContain("MENDCODE_TEST_TIME_SCALE")
   expect(gateSource.match(/MENDCODE_TEST_TIME_SCALE/g)).toHaveLength(1)

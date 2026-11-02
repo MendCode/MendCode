@@ -20,7 +20,8 @@ defaults:
 
 jobs:
   checks:
-    runs-on: ubuntu-24.04
+    # Same runner as the release gate's test rows (CHECKS_RUNNER, GitHub's ubuntu-24.04 when unset).
+    runs-on: ${{ vars.CHECKS_RUNNER || 'ubuntu-24.04' }}
     # Same rows, limit and arithmetic as the release gate (see the checks job of release.yml).
     timeout-minutes: 45
     strategy:
