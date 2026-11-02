@@ -1,6 +1,6 @@
 import type { Database } from "bun:sqlite"
 import type { SessionEvent } from "@mendcode/protocol"
-import { parseEvent } from "./compress"
+import { eventFromRow, type EventRow } from "./compress"
 
 /**
  * One row per model call and one per finished compaction, for the waste report (docs/usage.md, "Waste"): the report needs each
@@ -76,10 +76,10 @@ export function createUsageCalls(input: { db: Database; dayOf(at: number): strin
   /** One pass over the event log the first time these tables exist. */
   function backfill() {
     if (db.query("SELECT 1 FROM meta WHERE key = ?").get(BACKFILL_KEY)) return
-    const rows = db.query<{ payload: string | Uint8Array }, []>("SELECT payload FROM events WHERE type IN ('usage.recorded', 'compaction.updated') ORDER BY session_id, seq")
+    const rows = db.query<EventRow, []>("SELECT session_id, seq, type, at, payload FROM events WHERE type IN ('usage.recorded', 'compaction.updated') ORDER BY session_id, seq")
     db.transaction(() => {
       for (const row of rows.iterate()) {
-        try { record(parseEvent(row.payload)) } catch { /* a row this version cannot read adds nothing */ }
+        try { record(eventFromRow(row)) } catch { /* a row this version cannot read adds nothing */ }
       }
       writing.clear()
       db.query("INSERT INTO meta(key, value) VALUES (?, '1')").run(BACKFILL_KEY)

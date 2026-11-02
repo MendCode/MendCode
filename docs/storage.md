@@ -23,7 +23,44 @@ signed timestamp differences and UTF-16 chunk lengths instead of repeating text.
 completion using those lengths, including split surrogate pairs. Other items retain their compressed archive.
 Idle batches also convert eligible existing tuple archives, with a resumable cursor and no startup scan.
 Executables predating `MDL1` cannot read these blocks; this experiment does not install or migrate live data.
-Compact JSON envelopes were measured and rejected for store-read overhead; full event envelopes remain on disk.
+
+## Event envelopes in columns
+
+Every event row already holds its session, sequence, time and type in columns. A new row's JSON payload leaves out
+that leading envelope (`{"sessionId":…,"seq":…,"at":…,"type":…,` becomes `{`) only when it is exactly that prefix, so
+the full event rebuilds byte-identical. Readers put the envelope first again (`compress.ts`, `eventFromColumns`);
+an inherited fork row takes its session and sequence from the address, as `json_set` does for older rows. Rows
+written before this keep their envelope and read as before; after the delta phases, the idle batch converts them
+with its own cursor, checking each rebuilt payload before writing it. A converted row frees space inside its page;
+the file itself shrinks with `storage --compact --offline` or `--vacuum`. Earlier executables cannot read compact
+rows; do not downgrade a written or converted directory.
+
+Measured on a private 863 MB copy: 1,953,057 rows converted with zero byte mismatches, payloads 371 MB → 183 MB
+(`VACUUM INTO` 813 MB → 606 MB), and every replay, recall, revision and permission read compared equal to the
+previous build's, key order included. The session-disk probe goes from 5,571 to 4,424 allocated bytes per short or
+long session (Pi: 4,096 short, 8,192 long). With fork object references held only by physical owners, a fork of
+the 40-turn disk-budget fixture grows by 83 KiB against 285 KiB for a physical copy (before: 102 and 338 KiB).
+
+## Repeated fields in model messages and delta blocks
+
+A model message that opens with one of four fixed spellings (`{"role":"user","content":`, the assistant form, the
+assistant form with an empty reply and a tool call, and `{"role":"tool","toolCallId":`) is stored with one control
+character in its place (`message-prefix.ts`); JSON never starts with one, so the codec expands it unambiguously and rows
+written without it read unchanged. Larger messages keep their zstd or shared-output form. `MDL2` delta blocks store the
+sequence steps, time steps and chunk lengths as three columns of groups, each a repeated value or literals, because a
+stream steps its sequence by one and mostly repeats its time and chunk size; the writer keeps whichever of `MDL1` and
+`MDL2` is smaller and both read. The idle batch rewrites existing `MDL1` blocks on its own cursor (`delta-lengths-cursor-v2`),
+only when the columns are smaller and decode to the same entries; old model rows are not rewritten. Earlier executables
+cannot read either form.
+
+The probe's 100 sessions now add 24 pages beyond the empty store (events 14, model history 5, message-item index 3,
+turns 2; delta blocks fit the page the empty table already has), so the allocated growth goes from 4,424 to 3,932 bytes
+per session, short and long (Pi: 4,096 short, 8,192 long). A `VACUUM INTO` of the probe database is two pages smaller than
+the file as written (holes left by folded deltas and half-filled pages); the probe measures the file as written and does
+not compact first.
+
+Sessions without inherited transcript or model history read both by primary key; the inherited (fork) queries are
+kept for the rest and join in key order. The model-history query used to scan every `engine_messages` row.
 
 `bun scripts/session-disk-probe.ts` measures an isolated persistence fixture. Optional
 `--pi-manager /absolute/path/to/pi/dist/core/session-manager.js` compares the installed Pi session writer with the
@@ -128,8 +165,10 @@ Now (`packages/store/src/engine-history.ts`, `transcript-prefix.ts`, `event-obje
   writes its own history from then on (there is no shared prefix left to point at).
 - **Large tool output once.** New results go straight to `event_objects` (sha256 of the zstd bytes); older packed output
   moves there on compaction. Physical event rows keep their JSON shape and point at it
-  (`zref`), and every session holding such an event has a row in `event_object_refs`. The object goes with the last
-  session that references it (deleting a session, cleaning, `collectBlobs`).
+  (`zref`), and every session physically holding such an event has a row in `event_object_refs`. A fork reading the
+  row by address relies on the owner's reference; when a deletion hands the row to the fork, the fork gets the
+  reference with it. The object goes with the last session that references it (deleting a session, cleaning,
+  `collectBlobs`).
 - **Finished deltas are not repeated.** A fork's transcript leaves out the streaming deltas of items that have their
   final text (compaction drops them for the same reason); an item still open at the fork point keeps them.
 - **Transcript and turns by reference.** A new fork stores event addresses in `transcript_prefix` and turn addresses
@@ -138,8 +177,8 @@ Now (`packages/store/src/engine-history.ts`, `transcript-prefix.ts`, `event-obje
   session IDs and dense fork sequence numbers are translated on read. Fork-of-fork addresses point straight at the
   physical owner, so reads never walk a recursive chain. Appends store only the fork's own events.
   A projection edit first freezes dependent forks and copies only the affected turn. Deletion/retention hands each
-  physical row to one surviving reader and retargets the others, without N-way copies. Compression registers new
-  object refs for inherited readers; cleanup retains deltas still needed by a mid-turn fork.
+  physical row to one surviving reader, with the row's shared-output reference, and retargets the others, without
+  N-way copies. Cleanup retains deltas still needed by a mid-turn fork.
 - A duplicate index (`recall_event_items` was identical to `events_message_item`) is dropped when the store opens; it was
   about 14% of the events table for every session. Existing forks written before this stay as they were (copies); nothing is
   converted, and no VACUUM runs.

@@ -1,4 +1,5 @@
 import type { Database } from "bun:sqlite"
+import { INHERITED_PAYLOAD } from "./compress"
 
 /** Flat addresses keep fork-of-fork SQL reads bounded and old physical copies unchanged. */
 export function createTranscriptPrefix(db: Database) {
@@ -14,12 +15,16 @@ export function createTranscriptPrefix(db: Database) {
     PRIMARY KEY(session_id, turn_id)
   ) WITHOUT ROWID`)
   db.run("CREATE INDEX IF NOT EXISTS turn_prefix_parent ON turn_prefix(parent_id, turn_id)")
-  db.run(`CREATE VIEW IF NOT EXISTS events_read AS
+  const eventsRead = `CREATE VIEW events_read AS
     SELECT session_id, seq, type, at, payload, session_id AS source_id, seq AS source_seq FROM events
     UNION ALL
-    SELECT p.session_id, p.seq, e.type, e.at,
-      json_set(e.payload, '$.sessionId', p.session_id, '$.seq', p.seq), p.parent_id, p.parent_seq
-    FROM transcript_prefix p JOIN events e ON e.session_id = p.parent_id AND e.seq = p.parent_seq`)
+    SELECT p.session_id, p.seq, e.type, e.at, ${INHERITED_PAYLOAD}, p.parent_id, p.parent_seq
+    FROM transcript_prefix p JOIN events e ON e.session_id = p.parent_id AND e.seq = p.parent_seq`
+  // Replaced only when its definition changed (payloads without an envelope), so opening writes no schema otherwise.
+  if (db.query<{ sql: string }, []>("SELECT sql FROM sqlite_schema WHERE type = 'view' AND name = 'events_read'").get()?.sql !== eventsRead) {
+    db.run("DROP VIEW IF EXISTS events_read")
+    db.run(eventsRead)
+  }
   db.run(`CREATE VIEW IF NOT EXISTS turns_read AS
     SELECT *, session_id AS source_id FROM turns
     UNION ALL
@@ -48,6 +53,9 @@ export function createTranscriptPrefix(db: Database) {
     for (const { seq } of rows) {
       const heir = db.query<{ session_id: string; seq: number }, [string, number]>("SELECT session_id, seq FROM transcript_prefix WHERE parent_id = ? AND parent_seq = ? ORDER BY session_id LIMIT 1").get(sessionId, seq)!
       db.run(`INSERT INTO events SELECT session_id, seq, type, at, payload FROM events_read WHERE session_id = ? AND seq = ?`, [heir.session_id, heir.seq])
+      // The heir now holds the row physically, so it holds the row's shared output too; readers by address never needed one.
+      db.run(`INSERT OR IGNORE INTO event_object_refs(sha256, session_id) SELECT json_extract(payload, '$.zref'), session_id FROM events
+        WHERE session_id = ? AND seq = ? AND json_extract(payload, '$.zref') IS NOT NULL`, [heir.session_id, heir.seq])
       db.run("DELETE FROM transcript_prefix WHERE session_id = ? AND seq = ?", [heir.session_id, heir.seq])
       db.run("UPDATE transcript_prefix SET parent_id = ?, parent_seq = ? WHERE parent_id = ? AND parent_seq = ?", [heir.session_id, heir.seq, sessionId, seq])
     }

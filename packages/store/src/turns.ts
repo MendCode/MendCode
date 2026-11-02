@@ -1,6 +1,6 @@
 import type { Database } from "bun:sqlite"
 import { SessionEvent, TIMELINE_PREVIEW_CHARS, type ChangesReport, type SessionId } from "@mendcode/protocol"
-import { createCodec, DEDUP_MIN_BYTES, parseEvent, type Codec, type ObjectLoader } from "./compress"
+import { createCodec, DEDUP_MIN_BYTES, parseEvent, eventFromRow, type Codec, type ObjectLoader } from "./compress"
 import { createEngineHistory, type EngineHistory } from "./engine-history"
 
 /** The `\0MZ1` header of a wrapped value, and of a content-addressed reference, as SQL blob literals. */
@@ -266,11 +266,11 @@ export function createTurns(input: { db: Database; codec?: Codec; history?: Engi
       WHERE type IN ('turn.started', 'turn.completed', 'turn.cancelled', 'turn.interrupted', 'turn.failed', 'turn.reverted', 'turn.restored')
          OR (type = 'item.started' AND (payload LIKE '%"kind":"user_message"%' OR payload LIKE '%"kind":"compaction"%' OR payload LIKE '%"tool":"shell%'))
       ORDER BY session_id, seq`)
-    const next = db.query<{ payload: string }, [string, number]>("SELECT payload FROM events WHERE session_id = ? AND seq = ? AND type = 'item.completed'")
+    const next = db.query<{ payload: string; seq: number; at: number }, [string, number]>("SELECT payload, seq, at FROM events WHERE session_id = ? AND seq = ? AND type = 'item.completed'")
     for (const row of rows.iterate()) {
       let event: SessionEvent
       try {
-        event = JSON.parse(row.payload) as SessionEvent
+        event = eventFromRow(row, input.load)
       } catch {
         continue
       }
@@ -282,7 +282,7 @@ export function createTurns(input: { db: Database; codec?: Codec; history?: Engi
       if (event.type === "item.started" && event.kind === "user_message") {
         const completed = next.get(row.session_id, row.seq + 1)
         if (completed) {
-          const done = parseEvent(completed.payload, input.load)
+          const done = eventFromRow({ ...completed, session_id: row.session_id, type: "item.completed" }, input.load)
           if (done.type === "item.completed" && done.itemId === event.itemId && done.text !== undefined) q.preview.run(previewOf(done.text), row.session_id, event.itemId)
         }
       }

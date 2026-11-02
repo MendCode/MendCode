@@ -1,6 +1,6 @@
 import type { Database } from "bun:sqlite"
 import type { SessionEvent } from "@mendcode/protocol"
-import { createCodec, unpackEvent, type Codec } from "./compress"
+import { createCodec, eventFromRow, eventPayload, compactEnvelope, type EventRow, type Codec } from "./compress"
 import type { EventObjects } from "./event-objects"
 import type { TurnsStore } from "./turns"
 
@@ -188,8 +188,8 @@ export function createStorageUpkeep(input: { db: Database; codec: Codec; turns: 
   /** Visits each session's events once: a mark per session says how far an earlier pass looked, so a daily pass only reads what is new. */
   function compactEvents(result: CompactResult, limit: number, dryRun: boolean) {
     const previewCodec = createCodec({ enabled: codec.enabled, objects: { put: input.objects.preview, load: input.objects.load } })
-    const select = db.query<{ seq: number; payload: string }, [string, number, number]>(
-      `SELECT seq, payload FROM events WHERE session_id = ? AND seq > ? AND type IN ('item.completed', 'item.delta') AND (length(payload) >= ${COMPRESSIBLE_ROW} OR payload LIKE '%,"z":%')
+    const select = db.query<EventRow, [string, number, number]>(
+      `SELECT session_id, seq, type, at, payload FROM events WHERE session_id = ? AND seq > ? AND type IN ('item.completed', 'item.delta') AND (length(payload) >= ${COMPRESSIBLE_ROW} OR payload LIKE '%,"z":%')
        AND payload NOT LIKE '%"zref":%' ORDER BY seq LIMIT ?`,
     )
     const update = db.query("UPDATE events SET payload = ? WHERE session_id = ? AND seq = ?")
@@ -207,8 +207,8 @@ export function createStorageUpkeep(input: { db: Database; codec: Codec; turns: 
         if (!rows.length) break
         const rewrites: Array<{ seq: number; payload: string }> = []
         for (const row of rows) {
-          const event = unpackEvent(JSON.parse(row.payload) as Record<string, unknown>, input.objects.load) as unknown as SessionEvent
-          const packed = (dryRun ? previewCodec : codec).packEvent(event, row.payload, isToolCall(event))
+          const event = eventFromRow(row, input.objects.load)
+          const packed = compactEnvelope((dryRun ? previewCodec : codec).packEvent(event, eventPayload(row), isToolCall(event)), event)
           if (packed === row.payload) continue
           rewrites.push({ seq: row.seq, payload: packed })
           result.eventRows++
@@ -219,10 +219,8 @@ export function createStorageUpkeep(input: { db: Database; codec: Codec; turns: 
           db.transaction(() => {
             for (const row of rewrites) {
               const hash = JSON.parse(row.payload).zref as string | undefined
+              // Forks reading this row by address rely on this session's reference until a deletion hands them the row.
               if (hash) input.objects.refer(hash, session.id)
-              if (hash) {
-                for (const child of db.query<{ session_id: string }, [string, number]>("SELECT session_id FROM transcript_prefix WHERE parent_id = ? AND parent_seq = ?").all(session.id, row.seq)) input.objects.refer(hash, child.session_id)
-              }
               update.run(row.payload, session.id, row.seq)
             }
             markEvents.run(session.id, cursor)

@@ -1,5 +1,5 @@
 import type { Database } from "bun:sqlite"
-import { parseEvent, type ObjectLoader } from "./compress"
+import { parseEvent, eventFromRow, type EventRow, type ObjectLoader } from "./compress"
 import type { EngineHistory } from "./engine-history"
 import type { SessionEvent, SessionId } from "@mendcode/protocol"
 import type { SessionEventDraft } from "@mendcode/kernel"
@@ -17,7 +17,7 @@ export function createProjectSyncRecords(db: Database, append: (event: SessionEv
           let after = (cursors[session.id] ?? -1) + 1
           while (after < session.last_seq) {
             const through = Math.min(after + 256, session.last_seq)
-            const physical = db.query<{ payload: string }, [string, number, number]>("SELECT payload FROM events_read WHERE session_id = ? AND seq > ? AND seq <= ? ORDER BY seq").all(session.id, after, through).map(row => parseEvent(row.payload, load))
+            const physical = db.query<EventRow, [string, number, number]>("SELECT session_id, seq, type, at, payload FROM events_read WHERE session_id = ? AND seq > ? AND seq <= ? ORDER BY seq").all(session.id, after, through).map(row => eventFromRow(row, load))
             const page = new Map(physical.map(event => [event.seq, event]))
             for (const delta of folded.archived(session.id, after, through)) if (!page.has(delta.seq)) page.set(delta.seq, parseEvent(JSON.stringify(delta), load))
             for (const event of [...page.values()].sort((a, b) => a.seq - b.seq)) {
@@ -35,10 +35,10 @@ export function createProjectSyncRecords(db: Database, append: (event: SessionEv
       let bytes = 0
       let hasMore = false
       // Leaving the loop early must finalize the statement: a cached, half-read cursor keeps the table locked until GC.
-      const statement = db.prepare<{ payload: string }, string[]>(`SELECT e.payload FROM events_read e JOIN sessions s ON s.id = e.session_id WHERE s.directory IN (${directories.map(() => "?").join(",")}) ORDER BY e.seq, e.session_id`)
+      const statement = db.prepare<EventRow, string[]>(`SELECT e.session_id, e.seq, e.type, e.at, e.payload FROM events_read e JOIN sessions s ON s.id = e.session_id WHERE s.directory IN (${directories.map(() => "?").join(",")}) ORDER BY e.seq, e.session_id`)
       try {
         for (const row of statement.iterate(...directories)) {
-          const event = parseEvent(row.payload, load)
+          const event = eventFromRow(row, load)
           if (cursors[event.sessionId] !== undefined && event.seq - 1 <= cursors[event.sessionId]!) continue
           const size = Buffer.byteLength(row.payload) + 250
           if (rows.length >= 2000 || bytes + size > 160_000) { hasMore = true; break }

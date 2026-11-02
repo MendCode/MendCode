@@ -361,7 +361,8 @@ describe("large tool output and finished deltas in a fork's transcript", () => {
     const report = store.storageReport()
     // Two tool outputs in the first fork, one in the second: each distinct output is one object.
     expect(report.eventObjects).toBe(2)
-    expect(report.eventObjectRefs).toBe(2 + 2 + 1)
+    // Forks read the parent's rows by address: only the session physically holding a row refers to its output.
+    expect(report.eventObjectRefs).toBe(2)
 
     const expected = [one.output, two.output]
     const outputs = (sessionId: SessionId) => store.readAfter(sessionId, 0, 10_000).flatMap((event) => (event.type === "item.completed" && event.toolInput !== undefined ? [event.text] : []))
@@ -371,6 +372,10 @@ describe("large tool output and finished deltas in a fork's transcript", () => {
 
     store.deleteSession(parent)
     expect(outputs(fork)).toEqual(expected)
+    // The heir now holds both rows (and the other fork reads one of them from it by address).
+    expect(store.storageReport()).toMatchObject({ eventObjects: 2, eventObjectRefs: 2 })
+    store.collectBlobs()
+    expect(outputs(other)).toEqual([one.output])
     expect(store.storageReport().eventObjects).toBe(2)
     store.deleteSession(fork)
     expect(outputs(other)).toEqual([one.output])

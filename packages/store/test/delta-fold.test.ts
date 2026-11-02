@@ -258,3 +258,35 @@ test("completion and folded deltas roll back together", () => {
     expect(fold.cut("session", "item", 3)).toEqual([])
   } finally { db.close() }
 })
+
+test("idle regrouping rewrites interleaved length blocks as columns on its own cursor and keeps every cut", () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "mend-fold-regroup-")), ids = createIdFactory()
+  const store = openStore({ dir })
+  const sessionId = ids("session"), turnId = ids("turn"), itemId = ids("item")
+  try {
+    store.createSession({ id: sessionId, directory: "/probe", title: "regroup" })
+    store.sessionSink.append({ type: "turn.started", sessionId, turnId, queueId: ids("queue") })
+    store.sessionSink.append({ type: "item.started", sessionId, turnId, itemId, kind: "agent_message" })
+    const original = Array.from({ length: 80 }, (_, i) => store.sessionSink.append({ type: "item.delta", sessionId, itemId, text: i % 9 === 0 ? "ab" : "xyz" }) as Extract<SessionEvent, { type: "item.delta" }>)
+    store.sessionSink.append({ type: "item.completed", sessionId, itemId, status: "ok", text: original.map(e => e.text).join("") })
+    store.sessionSink.append({ type: "turn.completed", sessionId, turnId })
+    const db = new Database(path.join(dir, "mendd.db"))
+    try {
+      const varint = (value: number) => { const out: number[] = []; while (value >= 128) { out.push(value % 128 + 128); value = Math.floor(value / 128) } out.push(value); return out }
+      const plain = [77, 68, 76, 1, ...varint(original.length)]
+      let seq = 0, at = 0
+      for (const event of original) { plain.push(...varint(event.seq - seq), ...varint((event.at - at) * 2), ...varint(event.text.length)); seq = event.seq; at = event.at }
+      db.query("UPDATE folded_deltas SET data = ?").run(Uint8Array.from(plain))
+      const fold = createDeltaFold(db)
+      expect(fold.cut(sessionId, itemId, original[40]!.seq)).toEqual(original.slice(0, 40))
+      let complete = false
+      for (let i = 0; i < 5 && !complete; i++) complete = fold.regroup(1).complete
+      expect(complete).toBe(true)
+      const after = db.query<{ data: Uint8Array }, []>("SELECT data FROM folded_deltas").get()!.data
+      expect(after[3]).toBe(2)
+      expect(after.length).toBeLessThan(plain.length)
+      expect(fold.cut(sessionId, itemId, original[40]!.seq)).toEqual(original.slice(0, 40))
+      expect(fold.cut(sessionId, itemId, Number.MAX_SAFE_INTEGER)).toEqual(original)
+    } finally { db.close() }
+  } finally { store.close() }
+})
