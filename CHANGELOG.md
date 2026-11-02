@@ -9,6 +9,22 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+## v0.0.3 - 2026-11-02
+
+`/memory` follows the same page standard as `/changes` with a graph drawn in braille links, `mendcode --version` names its channel,
+and the code graph autopilot can be turned on in the full tier.
+
+### Upgrade notes
+
+- Same code as v0.0.3-beta.1. The code graph autopilot is off in beta and stable; `/tier graph_autopilot on` turns it on in the
+  full tier.
+
+## v0.0.3-beta.1 - 2026-11-02
+
+`/memory` follows the same page standard as `/changes` with a graph drawn in braille links, the README screenshots are full-screen
+renders of the real views, `mendcode --version` names its channel, and the full tier gains a code graph autopilot (on by default
+only in nightly builds).
+
 ### New
 
 - **Code graph autopilot (nightly only by default).** In the full tier, MendCode now builds the code graph of a real project by itself,
