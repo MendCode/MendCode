@@ -36,6 +36,8 @@ export function createTurnState() {
   let output = 0
   /** Tokens this turn's calls sent (input, cache read and cache written), exact from each call's reported usage. */
   let input = 0
+  /** The part of `input` the provider read from its prompt cache: already sent by an earlier call, not new this turn. */
+  let cached = 0
   /** Characters of answer and reasoning streamed since the last reported usage: the call in flight, not counted yet. */
   let streamed = 0
   let startedAt: number | undefined
@@ -82,6 +84,7 @@ export function createTurnState() {
           endTurn()
           output = 0
           input = 0
+          cached = 0
           streamed = 0
           startedAt = event.at
           totals.turns++
@@ -93,6 +96,7 @@ export function createTurnState() {
           if (startedAt !== undefined) {
             output += event.output + event.reasoning
             input += event.input + event.cacheRead + event.cacheWrite
+            cached += event.cacheRead
             // The call's exact count replaces what its stream suggested.
             streamed = 0
           }
@@ -172,6 +176,10 @@ export function createTurnState() {
     /** Input tokens of this turn's finished calls (exact): what was sent, cache included. */
     get input() {
       return input
+    },
+    /** The part of `input` read from the provider's prompt cache (exact): resent context, not new tokens. */
+    get cached() {
+      return cached
     },
     /** The output so far: the finished calls' exact count plus an estimate of the call still streaming. */
     get outputLive() {

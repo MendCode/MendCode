@@ -74,9 +74,16 @@ export function quietTurn(input: Parameters<typeof stalledFor>[0] & { reasons: b
   return { ...(stalledMs !== undefined ? { stalledMs } : {}), thinking: reasons && stalledMs === undefined && !silence.current && stalledFor(silence) !== undefined }
 }
 
-/** `↑45.2K ↓~1,240 tokens`: sent, then received; `~` while part of it is estimated from the stream. */
-export function tokensText(tokens: { input: number; output: number; estimated?: boolean }): string {
-  return `${tokens.input > 0 ? `↑${compact(tokens.input)} ` : ""}↓${tokens.estimated ? "~" : ""}${compact(tokens.output)} tokens`
+/**
+ * `↑142K +1.5M cached ↓~5,788 tokens`: what the turn's calls sent that the provider had not cached, then the context they resent and
+ * the provider read from its prompt cache, then received; `~` while part of it is estimated from the stream. Every call resends the whole
+ * context, so a long turn's total (here 1.7M) was mostly cache: one sum read as 1.7M sent. No cache read: `↑45.2K ↓~1,240 tokens`.
+ */
+export function tokensText(tokens: { input: number; cached?: number; output: number; estimated?: boolean }): string {
+  const cached = Math.min(tokens.cached ?? 0, tokens.input)
+  const fresh = tokens.input - cached
+  const sent = tokens.input > 0 ? `↑${compact(fresh)} ${cached > 0 ? `+${compact(cached)} cached ` : ""}` : ""
+  return `${sent}↓${tokens.estimated ? "~" : ""}${compact(tokens.output)} tokens`
 }
 
 /** The phase word from the foreground state, the running item and whether a question or an approval waits. */
@@ -106,7 +113,7 @@ export function renderWorkingRow(input: {
   phase: string
   elapsedMs?: number
   /** This turn's tokens: `input` sent and `output` received, exact per finished call; `estimated` while a call is still streaming. */
-  tokens?: { input: number; output: number; estimated?: boolean }
+  tokens?: { input: number; cached?: number; output: number; estimated?: boolean }
   model?: string
   retry?: RetryState
   now: number
