@@ -259,7 +259,7 @@ export const STARTUP_USAGE = [
   "  --add-dir PATH (repeatable, also on run) treats another directory as part of the workspace for this session",
   "  --no-context-files (-nc, also on run) leaves AGENTS.md and the other instruction files out of this session's prompt · --strict-config stops when a setting is invalid",
   "  --isolated starts a private temporary daemon · --diagnostics enables /diagnostics and /snapshot",
-  "  --process daemon|auto|solo: auto (default) or solo runs the daemon inside this terminal's process when none runs; daemon uses a separate one (about a quarter less memory; a hard-killed terminal interrupts its running turn; slower first frame) (or MENDCODE_PROCESS, or the processMode setting)",
+  "  --process daemon|auto|solo: auto (default) or solo runs the daemon inside this terminal's process when none runs (about a quarter less memory; a hard-killed terminal interrupts its running turn; slower first frame); daemon uses a separate one (or MENDCODE_PROCESS, or the processMode setting)",
   "  --no-alt-screen keeps the chat inline so output lands in the terminal scrollback · --alt-screen forces the full screen",
   "  --safe-mode starts with no extensions, packages, shell hooks, MCP or project tools (or MENDCODE_SAFE_MODE=1); see /doctor",
   "  --accessible screen-reader mode: inline screen, no animation, no mouse reporting, plain text (or MENDCODE_ACCESSIBLE=1, or /accessible on)",

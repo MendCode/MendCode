@@ -89,9 +89,12 @@ export function createEvents(ctx: AppContext, actions: {
     if (state.paging && !state.paging.ready && state.paging.loading) { state.paging.held.push(event); return }
     state.lastEventAt = ctx.now()
     const width = chatWidth()
-    const before = state.transcript.totalLines(width)
-    const windowTop = state.transcript.olderBlocks
     const following = view.get(state.sessionId).follow
+    // The growth only matters to a reader who left the bottom (`onGrowth` ignores it otherwise). A streamed delta cannot make the reader follow or
+    // leave, so for a follower it costs no layout here: the next frame lays the growing block out once for all the deltas it covers.
+    const measured = !following || event.type !== "item.delta"
+    const before = measured ? state.transcript.totalLines(width) : 0
+    const windowTop = state.transcript.olderBlocks
     state.turnState.apply(event)
     state.compactionFacts.apply(event)
     const permissionBefore = state.transcript.permissionMode
@@ -141,7 +144,7 @@ export function createEvents(ctx: AppContext, actions: {
     if (event.type === "queue.added" && event.notice) say(event.text.split("\n")[0]!.slice(0, 200), "info")
     // A /compact that did nothing says why; with no card in the transcript it would otherwise just vanish.
     if (event.type === "compaction.updated" && event.state === "skipped" && event.reason === "manual") say(event.note ?? "Nothing to compact", "info")
-    view.onGrowth(state.sessionId, state.transcript.totalLines(chatWidth()) - before)
+    if (measured) view.onGrowth(state.sessionId, state.transcript.totalLines(chatWidth()) - before)
     requestFrame()
   }
 

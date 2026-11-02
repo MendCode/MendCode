@@ -415,9 +415,9 @@ Measured 2026-10-04 on a MacBook Pro (Mac16,8), Apple M4 Pro, 24 GB RAM, macOS 2
 | First frame | 96 ms / 142 ms / 186 ms | Same run as the two-process RSS rows (revision `3066087`, `daemon` mode), 0 / 1,000 / 10,000 messages |
 | Scroll frame p95 | 2.5 ms / 4.7 ms / 3.3 ms | Same run |
 | Streaming frame p95 | 3.6 ms / 7.5 ms / 5.4 ms | Same run |
-| Opt-in one process (`processMode: auto` or `solo`, selected by the minimalist tier; the default is two processes), RSS idle / after use | 113 / 148 MB (0 messages), 133 / 216 MB (10,000) | `bun scripts/perf.ts --mode daemon,solo` on 2026-10-05, load average 5.5 (shared machine, not repeated on an idle one); the same run in two processes, daemon + client: 142 / 195 MB and 148 / 249 MB; real CLI in a pseudo-terminal, 0 messages: 124 MB solo against 167 MB in two processes. [Design](docs/design/memory-single-process.md) |
-| Opt-in one process, frame p95, scroll / stream | 4.5 to 8.4 ms / 5.6 to 9.1 ms | Same run as the one-process RSS row |
-| Opt-in one process, first frame | 180 ms / 196 ms / 210 ms | Same run as the one-process RSS row, 0 / 1,000 / 10,000 messages ([performance](docs/performance.md#solo-mode-one-process)) |
+| One process (`processMode: auto`, the default in every tier, or `solo`; `daemon` keeps two processes and is what the rows above measure), RSS idle / after use | 113 / 148 MB (0 messages), 133 / 216 MB (10,000) | `bun scripts/perf.ts --mode daemon,solo` on 2026-10-05, load average 5.5 (shared machine, not repeated on an idle one); the same run in two processes, daemon + client: 142 / 195 MB and 148 / 249 MB; real CLI in a pseudo-terminal, 0 messages: 124 MB solo against 167 MB in two processes. [Design](docs/design/memory-single-process.md) |
+| One process, frame p95, scroll / stream | 4.5 to 8.4 ms / 5.6 to 9.1 ms | Same run as the one-process RSS row |
+| One process, first frame | 180 ms / 196 ms / 210 ms | Same run as the one-process RSS row, 0 / 1,000 / 10,000 messages ([performance](docs/performance.md#solo-mode-one-process)) |
 
 Disk command: `MEND_DISK_REPORT=1 bun test packages/store/test/disk-budget.test.ts` (5 passed). Each [synthetic session](packages/store/test/synthetic-data.ts) has eight turns, three tool calls/turn, streamed text, model history and file snapshots. Batch sizes share different amounts of data; these are not predictions for arbitrary transcripts or Git worktrees. The [disk test](packages/store/test/disk-budget.test.ts) enforces 210 KiB/session for the small batch and 350 MiB for 2,000 sessions. See [storage](docs/storage.md).
 
