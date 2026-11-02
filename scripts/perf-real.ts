@@ -52,7 +52,8 @@ async function startRig(options: { binary: string; messages: number; tier: Tier 
   try { store.settings.set({ onboarded: true, tier: options.tier, view: TIER_BUNDLES[options.tier].view }) } finally { store.close() }
   const env = { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: home, TMPDIR: root, XDG_CONFIG_HOME: home, XDG_DATA_HOME: home, TERM: "xterm-256color", LANG: "en_US.UTF-8", MENDCODE_TERMINAL_MODE: "0", MENDCODE_IMAGES: "off", MENDCODE_GLYPHS: "unicode" }
   const began = performance.now()
-  const daemon = Bun.spawn([options.binary, "__daemon", "--dir", dir, "--engine", "faux", "--cwd", directory, "--local-only", "--pure"], { cwd: directory, env, stdin: "ignore", stdout: "pipe", stderr: "pipe" })
+  // PERF_DAEMON_ENV (a JSON object) adds the JIT options a build's launcher would start its daemon with (launcher.ts LEAN_JIT.daemon); the rig starts it directly.
+  const daemon = Bun.spawn([options.binary, "__daemon", "--dir", dir, "--engine", "faux", "--cwd", directory, "--local-only", "--pure"], { cwd: directory, env: { ...env, ...(process.env.PERF_DAEMON_ENV ? JSON.parse(process.env.PERF_DAEMON_ENV) as Record<string, string> : {}) }, stdin: "ignore", stdout: "pipe", stderr: "pipe" })
   const reader = daemon.stdout.getReader()
   const decoder = new TextDecoder()
   let seen = ""

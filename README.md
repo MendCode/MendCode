@@ -403,21 +403,23 @@ Generated from [tier-data.ts](packages/protocol/src/tier-data.ts), including eve
 
 ## Measurements
 
-Measured 2026-10-04 on a MacBook Pro (Mac16,8), Apple M4 Pro, 24 GB RAM, macOS 27.0 (26A428), Bun 1.3.13, arm64; source revision `631d5ab`. Synthetic offline workloads, temporary stores and HOME, no real providers or other coding tools.
+Measured 2026-11-02 on a MacBook Pro (Mac16,8), Apple M4 Pro, 24 GB RAM, macOS 27.0 (26A428), Bun 1.3.13, arm64; source revision `b482241f`. Synthetic offline workloads, temporary stores and HOME, no real providers or other coding tools, except the two real-CLI rows. Load average 5–6 (shared machine, not repeated on an idle one).
 
 | Measure | Result | Method |
 |---|---|---|
-| Compiled CLI `help` startup | 99.4 ms | Median of five launches, `compiledTarget` + `measureCliStartup` from [perf.ts](scripts/perf.ts) |
-| Bytes per session, 60-session batch | 206,165 | Rounded batch total / 60 after checkpoint, compression and sharing |
-| Bytes for 2,000 sessions | 345,800,704 (329.8 MiB) | Database + WAL + blobs after checkpoint; 172,900 bytes/session rounded |
-| Daemon RSS, idle / with a client attached | 98 MB / 104–129 MB | `bun scripts/perf.ts` at revision `3066087`, compiled daemon, 0 / 1,000 / 10,000 messages |
-| Client RSS, idle / after scrolling and streaming | 63–71 MB / 107–133 MB | Same run, compiled client |
-| First frame | 96 ms / 142 ms / 186 ms | Same run as the two-process RSS rows (revision `3066087`, `daemon` mode), 0 / 1,000 / 10,000 messages |
-| Scroll frame p95 | 2.5 ms / 4.7 ms / 3.3 ms | Same run |
-| Streaming frame p95 | 3.6 ms / 7.5 ms / 5.4 ms | Same run |
-| One process (`processMode: auto`, the default in every tier, or `solo`; `daemon` keeps two processes and is what the rows above measure), RSS idle / after use | 113 / 148 MB (0 messages), 133 / 216 MB (10,000) | `bun scripts/perf.ts --mode daemon,solo` on 2026-10-05, load average 5.5 (shared machine, not repeated on an idle one); the same run in two processes, daemon + client: 142 / 195 MB and 148 / 249 MB; real CLI in a pseudo-terminal, 0 messages: 124 MB solo against 167 MB in two processes. [Design](docs/design/memory-single-process.md) |
-| One process, frame p95, scroll / stream | 4.5 to 8.4 ms / 5.6 to 9.1 ms | Same run as the one-process RSS row |
-| One process, first frame | 180 ms / 196 ms / 210 ms | Same run as the one-process RSS row, 0 / 1,000 / 10,000 messages ([performance](docs/performance.md#solo-mode-one-process)) |
+| Compiled CLI `help` startup | 59.3 ms | `compiledTarget` + `measureCliStartup` from [perf.ts](scripts/perf.ts) |
+| Bytes per session, 60-session batch | 154,283 | Rounded batch total / 60 after checkpoint, compression and sharing |
+| Bytes for 2,000 sessions | 235,356,160 (224.5 MiB) | Database + WAL + blobs after checkpoint; 117,678 bytes/session rounded |
+| Real CLI at the prompt, one process | 154–155 MB RSS | Installed build in tmux 160×45, clean HOME and data directory, RSS of the new process after 12 s, three launches |
+| Real session on disk | about 5.1 KB | `mendcode run` with one read-only prompt over a small project: every stored byte of that session's rows plus its session row, read after the daemon's idle step, two runs |
+| Daemon RSS, idle / with a client attached | 95–98 MB / 119–130 MB | `bun scripts/perf.ts --mode daemon,solo`, compiled daemon, 0 / 1,000 / 10,000 messages |
+| Client RSS, idle / after scrolling and streaming | 66–74 MB / 131–165 MB | Same run, compiled client |
+| First frame | 163 ms / 198 ms / 220 ms | Same run, `daemon` mode, 0 / 1,000 / 10,000 messages |
+| Scroll frame p95 | 3.5 ms / 5.6 ms / 5.3 ms | Same run |
+| Streaming frame p95 | 5.3 ms / 7.4 ms / 7.3 ms | Same run |
+| One process (`processMode: auto`, the default in every tier, or `solo`; `daemon` keeps two processes and is what the rows above measure), RSS idle / after use | 128 / 220 MB (0 messages), 145 / 305 MB (10,000) | Same run; this rig starts the process without the launcher's compile options, so it reads higher than the real-CLI row. [Design](docs/design/memory-single-process.md) |
+| One process, frame p95, scroll / stream | 1.7 to 8.4 ms / 2.3 to 3.0 ms | Same run as the one-process RSS row |
+| One process, first frame | 304 ms / 323 ms / 342 ms | Same run as the one-process RSS row, 0 / 1,000 / 10,000 messages ([performance](docs/performance.md#solo-mode-one-process)) |
 
 Disk command: `MEND_DISK_REPORT=1 bun test packages/store/test/disk-budget.test.ts` (5 passed). Each [synthetic session](packages/store/test/synthetic-data.ts) has eight turns, three tool calls/turn, streamed text, model history and file snapshots. Batch sizes share different amounts of data; these are not predictions for arbitrary transcripts or Git worktrees. The [disk test](packages/store/test/disk-budget.test.ts) enforces 210 KiB/session for the small batch and 350 MiB for 2,000 sessions. See [storage](docs/storage.md).
 

@@ -35,8 +35,8 @@ export function table(rows: ReturnType<typeof compare>) {
   return rows.map((row) => `${row.worse ? "WORSE " : row.better ? "better" : "      "} ${row.key.padEnd(46)} ${fmt(row.a).padStart(28)} ${fmt(row.b).padStart(28)} ${String(row.changePct).padStart(7)}%`).join("\n")
 }
 
-async function json(command: string[]) {
-  const child = Bun.spawn(command, { cwd: ROOT, stdout: "pipe", stderr: "pipe" })
+async function json(command: string[], env: Record<string, string> = {}) {
+  const child = Bun.spawn(command, { cwd: ROOT, env: { ...process.env, ...env }, stdout: "pipe", stderr: "pipe" })
   const [out, err, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited])
   if (code !== 0) throw new Error(`${command.join(" ")} exited ${code}: ${err.slice(0, 400)}`)
   return JSON.parse(out) as unknown
@@ -48,6 +48,8 @@ if (import.meta.main) {
   const need = (name: string) => path.resolve(flag(name) ?? (() => { throw new Error(`perf-ab: --${name} is required`) })())
   const builds = { a: need("a"), b: need("b") }
   const out = need("out")
+  /** The real-CLI rig starts its daemon itself, without the launcher's JIT environment; these are the options each build's launcher would give it (JSON object, `--a-daemon-env` / `--b-daemon-env`). */
+  const daemonEnv = { a: flag("a-daemon-env"), b: flag("b-daemon-env") }
   mkdirSync(out, { recursive: true })
   const pairs = Number(flag("pairs") ?? 5)
   const results = { a: [] as Record<string, number>[], b: [] as Record<string, number>[] }
@@ -56,7 +58,7 @@ if (import.meta.main) {
       const dir = builds[side]
       const flat: Record<string, number> = {}
       if (!has("no-session")) {
-        const session = (await json(["bun", "scripts/perf-real.ts", "--binary", path.join(dir, "mendcode"), "--idle-seconds", flag("idle-seconds") ?? "60", ...(flag("focus") ? ["--focus", flag("focus")!] : [])]) as { runs: RealResult[] }).runs[0]!
+        const session = (await json(["bun", "scripts/perf-real.ts", "--binary", path.join(dir, "mendcode"), "--idle-seconds", flag("idle-seconds") ?? "60", ...(flag("focus") ? ["--focus", flag("focus")!] : [])], daemonEnv[side] ? { PERF_DAEMON_ENV: daemonEnv[side]! } : {}) as { runs: RealResult[] }).runs[0]!
         writeFileSync(path.join(out, `session-${side}-${pair}.json`), JSON.stringify(session, null, 1))
         Object.assign(flat, Object.fromEntries(Object.entries(flatten(session)).map(([key, value]) => [`real.${key}`, value])))
       }

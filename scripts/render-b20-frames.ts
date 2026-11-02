@@ -47,7 +47,7 @@ export async function renderB20Frames(directory: string, sizes: string[]) {
     await run("show-missing", ["loops", "show", "loop_missing"], {}, 1)
     const finished = await h.client.loopSnapshot(loop.loopId)
     if (!finished.ok) throw new Error(finished.error.message)
-    const normalizeIds = (text: string) => text.replace(/\b(?:ses|lop)_[0-9A-HJKMNP-TV-Z]{26}\b/g, (id) => `${id.slice(0, 4)}${"0".repeat(26)}`)
+    const normalizeIds = (text: string) => text.replace(/\b(?:ses|lop)_[0-9A-HJKMNP-TV-Z]{16}(?:[0-9A-HJKMNP-TV-Z]{10})?\b/g, (id) => `${id.slice(0, 4)}${"0".repeat(16)}`)
     const normalize = (text: string) => normalizeIds(text.split(h.project).join("/tmp/b20-project").split(h.dir).join("/tmp/b20-data"))
     for (const size of sizes.length ? sizes : ["100x30", "180x50"]) {
       const match = /^(\d+)x(\d+)$/.exec(size)
