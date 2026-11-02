@@ -94,7 +94,7 @@ export function createPromptModes(dir: string, options: { defaultModel?(director
     if (patch.mode === undefined && patch.focusID === undefined) throw new Error("Expected mode or focus family")
     const all = choices()
     const current = bareStatus(directory)
-    all[current.directory] = { mode: current.mode, focusID: current.focusID, ...patch }
+    all[current.directory] = { ...all[current.directory], ...patch }
     mkdirSync(dir, { recursive: true })
     const temporary = file + "." + randomUUID() + ".tmp"
     writeFileSync(temporary, JSON.stringify(all, null, 2) + "\n", { mode: 0o600 })

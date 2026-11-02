@@ -151,7 +151,7 @@ export function upgradeText(result: UpgradeResult, { check }: { check: boolean }
     case "ahead":
       return `running ${current} is newer than the newest ${channel} release ${latest}; nothing installed (--force installs ${latest} anyway)\n`
     case "installed":
-      return `installed ${latest} (${channel})${result.downgrade ? " as a downgrade" : ""}: ${result.installedTo}\n${VERIFIED_NOTE[result.verification ?? "attestation"]}\n${RESTART_NOTE}\n${result.rollbackAvailable ? `previous verified version kept: \`${PROGRAM_NAME} upgrade --rollback\` restores it` : "--rollback unavailable: external recovery required"}\n`
+      return `installed ${latest} (${channel})${result.downgrade ? ` as a downgrade from ${current}` : ""}: ${result.installedTo}\n${VERIFIED_NOTE[result.verification ?? "attestation"]}\n${RESTART_NOTE}\n${result.rollbackAvailable ? `previous verified version kept: \`${PROGRAM_NAME} upgrade --rollback\` restores it` : "--rollback unavailable: external recovery required"}\n`
     case "rolled-back":
       return `rolled back: ${result.installedTo} is the previous version again\n${RESTART_NOTE}\n`
   }

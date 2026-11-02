@@ -31,6 +31,8 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Fixed
 
+- Preserve terminal preferences and settings across versions, keep recovery history, and guard against accidental downgrades.
+
 - Changes to a file saved twice in quick succession are no longer missed by model lists, config files, the file viewer or code graph
   excerpts.
 

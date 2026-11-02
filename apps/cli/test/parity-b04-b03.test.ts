@@ -183,7 +183,7 @@ test("daemon profile events update the native transcript without writing a profi
 })
 
 describe("B03 presentation", () => {
-  test("the commands select independent renderer, presentation, scroll and timestamps persist", async () => {
+  test("the commands persist their own keys without leaking session timestamps", async () => {
     const dir = tempDir()
     const h = appHarness({ dataDir: dir })
     const chat = conversation(h.sessionId, h.app.onEvent)
@@ -196,7 +196,7 @@ describe("B03 presentation", () => {
     await h.type("/presentation raw\r")
     expect(readTuiProfile(dir).messageRenderer).toBe("plain")
     await h.type("/submit-scroll clear\r/timestamps\r/username Nora\r")
-    expect(readTuiProfile(dir)).toMatchObject({ submitScroll: "clear", timestamps: true, username: "Nora" })
+    expect(readTuiProfile(dir)).toMatchObject({ submitScroll: "clear", timestamps: false, username: "Nora" })
     expect(h.text().join("\n")).toContain("› Nora")
     expect(h.text().join("\n")).toMatch(/\d:\d\d/)
   })

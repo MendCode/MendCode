@@ -6,6 +6,7 @@ import { createMessageRevisions } from "./message-revisions"
 import { createTranscriptPrefix } from "./transcript-prefix"
 import { createDeltaFold } from "./delta-fold"
 import { Database } from "bun:sqlite"
+import { createSettingsHistory } from "./settings-history"
 import { openPrivateDatabase } from "./private-database"
 import { createPrivateFiles } from "./private-files"
 import { createEnvironment } from "./environment"
@@ -429,6 +430,7 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
   db.run(`PRAGMA page_size = ${options.pageSize ?? DEFAULT_PAGE_SIZE}`)
   for (const pragma of PRAGMAS) db.run(pragma)
   db.run(DDL)
+  const settingsHistory = createSettingsHistory(db, now)
   migrate(db)
   const transcript = createTranscriptPrefix(db)
   const eventObjects = createEventObjects(db)
@@ -1225,10 +1227,25 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
     /** A bounded search over the messages of sessions. */
     sessionSearch,
     settings: {
-      /** Stored settings; entries that no longer validate are dropped rather than failing startup. */
+      history() { return settingsHistory.list().map(({ id, at }) => ({ id, at })) },
+      restore(id: string): Settings {
+        db.transaction(() => {
+          const saved = settingsHistory.list().find((row) => row.id === id)
+          if (!saved) throw new Error("Unknown settings backup")
+          const current = db.query<{ payload: string }, []>("SELECT payload FROM settings WHERE id = 1").get()
+          settingsHistory.snapshot(current?.payload ?? "{}")
+          db.query("INSERT INTO settings(id, payload) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET payload = excluded.payload").run(saved.payload)
+        })()
+        return this.get()
+      },
+      /** Runtime view only; unsupported entries remain in storage for a compatible version. */
       get(): Settings {
         const row = db.query<{ payload: string }, []>("SELECT payload FROM settings WHERE id = 1").get()
-        const raw = row ? JSON.parse(row.payload) as Record<string, unknown> : {}
+        let raw: Record<string, unknown> = {}
+        try {
+          const parsed: unknown = row ? JSON.parse(row.payload) : {}
+          if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) raw = parsed as Record<string, unknown>
+        } catch { /* The history keeps the original; a normal write will refuse to replace corrupt JSON. */ }
         const clean: Record<string, unknown> = {}
         for (const [key, value] of Object.entries(raw)) {
           const kept = savedSetting(key, value)
@@ -1267,7 +1284,19 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
         const { valid, saveAcp } = mergedSettings(current, patch)
         saveAcp?.()
         db.transaction(() => {
-          db.query("INSERT INTO settings(id, payload) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET payload = excluded.payload").run(JSON.stringify(valid))
+          const row = db.query<{ payload: string }, []>("SELECT payload FROM settings WHERE id = 1").get()
+          const raw = row ? JSON.parse(row.payload) as Record<string, unknown> : {}
+          if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("Invalid stored settings; restore a backup before saving")
+          for (const [key, value] of Object.entries(patch)) {
+            if (key === "acpAgents") continue
+            if (value === null) delete raw[key]
+            else raw[key] = (valid as Record<string, unknown>)[key]
+          }
+          const payload = JSON.stringify(raw)
+          if (payload !== row?.payload) {
+            settingsHistory.snapshot(row?.payload ?? "{}")
+            db.query("INSERT INTO settings(id, payload) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET payload = excluded.payload").run(payload)
+          }
           if ((current.evolution ?? "off") !== (valid.evolution ?? "off") || (current.evolutionWorkflows ?? false) !== (valid.evolutionWorkflows ?? false)) {
             db.query("INSERT INTO meta(key, value) VALUES ('evolution-policy-revision', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(randomUUID())
           }

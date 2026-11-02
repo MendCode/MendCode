@@ -1,5 +1,6 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
 import path from "node:path"
+import { updateProfile } from "@mendcode/program/profile-history"
 import { SidebarAction, SidebarSpec, type SidebarWidget } from "@mendcode/protocol"
 import { defineTool, fail } from "@mendcode/tools"
 
@@ -43,10 +44,7 @@ export function updateSidebar(dir: string, directory: string, raw: unknown): Sid
   }
   next = SidebarSpec.parse(next)
   const file = sidebarFile(dir, action.scope === "project" ? directory : undefined)
-  mkdirSync(path.dirname(file), { recursive: true })
-  const temp = `${file}.${process.pid}.tmp`
-  writeFileSync(temp, JSON.stringify({ ...read(file), sidebarWidgets: next, rightSidebar: next.length > 0 }, null, 2) + "\n")
-  renameSync(temp, file)
+  updateProfile(file, (raw) => ({ ...raw, sidebarWidgets: next, rightSidebar: next.length > 0 }))
   return readSidebar(dir, directory)
 }
 export function createSidebarTool(dir: string, changed: (directory: string | undefined, widgets: SidebarWidget[]) => void) {

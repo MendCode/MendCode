@@ -201,7 +201,7 @@ export function createSettings(ctx: AppContext, actions: {
     // With a layer over the profile, what is on screen is not what is stored: the stored profile plus this change is what gets saved.
     if (layered && Object.keys(own).length === 0) return
     const toSave = layered ? normalizeTuiProfile({ ...userProfile, ...own }) : state.tuiProfile
-    const saved = writeTuiProfile(input.dataDir, { ...toSave, ...keptLook, ...(input.directory && state.settingsNow.projectThemes?.[input.directory] ? { theme: userProfile.theme } : {}), sidebarWidgets: own.sidebarWidgets ?? userProfile.sidebarWidgets, rightSidebar: own.rightSidebar ?? userProfile.rightSidebar })
+    const saved = writeTuiProfile(input.dataDir, { ...toSave, ...keptLook, ...(input.directory && state.settingsNow.projectThemes?.[input.directory] ? { theme: userProfile.theme } : {}), sidebarWidgets: own.sidebarWidgets ?? userProfile.sidebarWidgets, rightSidebar: own.rightSidebar ?? userProfile.rightSidebar }, Object.keys(own))
     if (!saved.ok) fail(saved.error)
   }
 

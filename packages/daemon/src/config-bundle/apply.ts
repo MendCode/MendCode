@@ -1,4 +1,5 @@
 import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs"
+import { updateProfile, replaceProfile } from "@mendcode/program/profile-history"
 import path from "node:path"
 import { randomBytes } from "node:crypto"
 import { activationStateJson, parseActivationState } from "@mendcode/protocol/wire"
@@ -258,7 +259,8 @@ function mergeJson(input: { plan: ImportPlan; dataDir: string; folder: string; r
   const backup = backupCopy({ dataDir: input.dataDir, folder: input.folder, relative: input.relative })
   const bytes = Buffer.from(`${JSON.stringify({ ...current, ...input.patch }, null, 2)}\n`)
   input.record({ type: "file", path: input.relative, ...(backup ? { backup } : {}), afterSha256: sha256(bytes) })
-  atomicWrite(file, bytes)
+  if (input.relative === "tui/profile.json") updateProfile(file, (raw) => ({ ...raw, ...input.patch }))
+  else atomicWrite(file, bytes)
 }
 
 /** Every import of this data directory, newest first. */
@@ -301,7 +303,12 @@ export async function rollbackImport(input: { dataDir: string; importId: string;
         undone.push(op.unit)
       } else if (op.type === "file") {
         if (op.afterSha256 && fileSha(path.join(dataDir, op.path)) !== op.afterSha256 && !input.force) { skipped.push(`${op.path}: changed since the import`); continue }
-        if (op.backup) { rmSync(path.join(dataDir, op.path), { force: true }); restore(op.backup, op.path) }
+        if (op.path === "tui/profile.json") {
+          const file = path.join(dataDir, op.path)
+          const before = op.backup ? JSON.parse(readFileSync(path.join(folder, op.backup), "utf8")) as Record<string, unknown> : undefined
+          replaceProfile(file, before)
+        }
+        else if (op.backup) { rmSync(path.join(dataDir, op.path), { force: true }); restore(op.backup, op.path) }
         else rmSync(path.join(dataDir, op.path), { force: true })
         // Pending MCP servers hold a slot of the daemon-wide pending budget until they expire: give the slots back.
         for (const name of op.mcpServers ?? []) mcpPendingBudget(dataDir, `${path.resolve(path.join(dataDir, op.path))}\0${name}`, undefined, Date.now())

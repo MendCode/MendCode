@@ -24,6 +24,11 @@ mendcode upgrade [target] [--channel stable|beta|dev|nightly] [--method direct|c
 
 Exit codes: 0 ok, 1 failure, 64 usage error.
 
+An exact older target requires `--force`; naming its version alone is not consent to downgrade.
+The refusal identifies the running and requested versions. The POSIX installer likewise checks the installed binary's
+version, warns with both versions, and requires `--force`; the PowerShell installer uses `-Force`.
+Stable, beta and nightly versions are ordered numerically; development hashes are not ordered versions.
+
 ## Channels
 
 | Channel | Tags | GitHub flag | Newest is decided by |

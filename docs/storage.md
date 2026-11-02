@@ -32,6 +32,23 @@ latency separately; fixed empty-database overhead is not included in per-session
 
 ## Where the bytes went (measured)
 
+### Profile and settings safety
+
+Profile writes re-read the raw JSON, preserve unknown keys and uninterpretable values, and save the previous bytes in
+`tui/backups/profile-<timestamp>-<unique>-<hash>.json` before an atomic replacement. Backup IDs shown by restore are
+`profile-<timestamp>`. Files are private (0600), new profile directories and backup directories are 0700.
+Unchanged content does not create another backup. Startup compares a content hash with the newest backup and captures
+external changes; keys lost since that backup are recovered automatically. Explicit restore also snapshots its target,
+so a later startup does not reverse a deliberate restore. A stale `profile.json.lock` after a crash blocks writes safely;
+remove that lock directory only after verifying no profile writer is running, then retry.
+
+Retention keeps the newest 30 snapshots plus the newest snapshot of each day in the last 30 days (at most 60).
+Daemon settings use `settings_history` in `mendd.db`, with the same retention and database privacy/encryption as settings.
+Snapshot and settings write share a transaction. `store.settings.history()` lists IDs/times and
+`store.settings.restore(id)` restores a raw snapshot, saving the current settings first. This store API does not restore
+the separate ACP credential/config file. Invalid and future settings remain stored and are ignored only by the runtime view.
+
+
 `packages/store/test/disk-budget.test.ts` writes synthetic sessions (8 turns, 3 tool calls per turn: source and log
 output, model history that repeats it, streaming deltas, 2 file snapshots per turn from a shared repository) into a temp
 data dir, once the way `main` wrote them and once with this change. `MEND_DISK_REPORT=1` prints the table.

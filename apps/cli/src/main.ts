@@ -141,6 +141,20 @@ if (daemonService) {
   })(daemonService))
 }
 // `view list|scaffold` writes files only: no daemon, no terminal.
+if (argv[0] === "profile") {
+  const args = argv.slice(1).filter((value, index, all) => value !== "--dir" && all[index - 1] !== "--dir" && !value.startsWith("--dir="))
+  if (args[0] !== "restore" || args.some((value) => value.startsWith("--"))) {
+    process.stderr.write("usage: mendcode profile restore [id] [--dir PATH] (local only)\n")
+    process.exit(2)
+  }
+  const dir = arg("dir") ?? process.env.MENDCODE_V2_DIR ?? DEFAULT_DIR
+  if (args[1]) refuseFromSession(dir, "restores the user's terminal profile")
+  try {
+    const { runProfileRestore } = await import("./profile-restore")
+    process.stdout.write(runProfileRestore(dir, args.slice(1)).text + "\n")
+    process.exit(0)
+  } catch (error) { process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`); process.exit(1) }
+}
 const viewCommand = parseViewCommand(argv)
 // A starter is this program's own template in a new file, so a session may write one; replacing a view the user already has (`--force`) stays the user's.
 if (viewCommand?.action === "scaffold" && viewCommand.force) refuseFromSession(viewCommand.dir, "replaces an extension view the user has")

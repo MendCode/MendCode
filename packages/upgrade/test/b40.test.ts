@@ -163,10 +163,12 @@ test("B40 refuses symlink aliases into v1 and linked binary paths without changi
   expect(fake.requested).toEqual([])
 })
 
-test("B40 an explicit older target authorizes a downgrade, latest does not", async () => {
+test("B40 an explicit older target requires force, latest does not downgrade", async () => {
   const h = box()
   const fake = fakePorts([candidate()])
   expect(await runUpgrade(h.request({ currentVersion: "1.0.2", target: "latest" }), fake.ports)).toMatchObject({ status: "ahead" })
   expect(existsSync(h.paths.current)).toBe(false)
-  expect(await runUpgrade(h.request({ currentVersion: "1.0.2", target: "1.0.1" }), fake.ports)).toMatchObject({ status: "installed", downgrade: true })
+  await expect(runUpgrade(h.request({ currentVersion: "1.0.2", target: "1.0.1" }), fake.ports)).rejects.toThrow("1.0.2 → v1.0.1; use --force")
+  expect(existsSync(h.paths.current)).toBe(false)
+  expect(await runUpgrade(h.request({ currentVersion: "1.0.2", target: "1.0.1", force: true }), fake.ports)).toMatchObject({ status: "installed", downgrade: true })
 })

@@ -615,7 +615,7 @@ export function createRightSidebar(ctx: AppContext, slotContext: (width: number,
   async function persistVisible(visible: boolean) {
     if (!input.dataDir) return
     const { writeTuiProfile } = await import("../../view/tui-profile")
-    const saved = writeTuiProfile(input.dataDir, { ...readTuiProfile(input.dataDir), rightSidebar: visible })
+    const saved = writeTuiProfile(input.dataDir, { ...readTuiProfile(input.dataDir), rightSidebar: visible }, ["rightSidebar"])
     if (!saved.ok) fail(saved.error)
   }
 
