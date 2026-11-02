@@ -82,6 +82,18 @@ describe("modelPageKey", () => {
 describe("renderModelPage", () => {
   const lines = (over: Partial<Parameters<typeof renderModelPage>[0]> = {}) => renderModelPage({ state: createModelPageState(), report: report(), width: 100, height: 35, ...over }).map(text)
 
+  test("a compaction role that differs from the session's choice says it does not reuse the prompt cache; one that equals it, or none, says nothing", () => {
+    const hint = "own model: it does not reuse the session's prompt cache"
+    const hinted = (over: Partial<ModelsReport>) => lines({ report: report(over) }).filter((l) => l.includes("does not reuse"))
+    expect(hinted({ roles: {} })).toEqual([])
+    expect(hinted({ roles: { compaction: { model: "gpt-6-luna", effort: "low" } } })).toEqual([])
+    expect(hinted({ session: { model: "gpt-6-sol", effort: "high" }, effective: { model: "gpt-6-sol", effort: "high" }, roles: { compaction: { model: "gpt-6-sol", effort: "high" } } })).toEqual([])
+    const other = lines({ report: report({ roles: { compaction: { model: "gpt-6-sol" } } }) })
+    const at = other.findIndex((l) => l.includes("compaction") && l.includes("GPT-6-Sol"))
+    expect(other[at + 1]).toContain(hint)
+    expect(hinted({ roles: { compaction: { model: "gpt-6-luna", effort: "medium" } } })).toHaveLength(1)
+  })
+
   test("shows what the next answer uses, each row with its choice or what it falls back to, and the catalog", () => {
     const out = lines({ report: report({ session: { model: "gpt-6-sol", effort: "high" }, effective: { model: "gpt-6-sol", effort: "high" } }) })
     expect(out.some((l) => l.includes("GPT-6-Sol · high"))).toBe(true) // in summary or body

@@ -213,6 +213,17 @@ function inherited(row: ModelPageRow, report: ModelsReport): string {
   return "same as main"
 }
 
+/** Shown under the compaction row when its choice differs from the session's: such a summary cannot reuse the session's prompt cache. */
+export const COMPACTION_OWN_REQUEST_HINT = "own model: it does not reuse the session's prompt cache"
+
+/** Whether a `compaction` role is set to something other than what the session's main calls use (model, effort or variant). */
+export function compactionHasOwnRequest(report: ModelsReport): boolean {
+  const own = report.roles.compaction
+  if (!own) return false
+  const main = report.effective ?? report.session ?? report.roles.main ?? report.defaults
+  return own.model !== main.model || (own.effort ?? undefined) !== (main.effort ?? undefined) || (own.variant ?? undefined) !== (main.variant ?? undefined)
+}
+
 /** The recipe row (`‹ name ›`, marked when active) and, under it, the recipe's description; or how to add one. */
 function recipeRows(input: { state: ModelPageState; recipes: RecipesReport; nameWidth: number; width: number; glyphs: Glyphs }): Line[] {
   const { state, recipes, nameWidth, width, glyphs } = input
@@ -335,6 +346,7 @@ export function renderModelPage(input: { state: ModelPageState; report?: ModelsR
   } else {
     const nameWidth = Math.max(...MODEL_PAGE_ROWS.map((row) => (row === "session" ? "this session" : row).length)) + 2
     const rolesBody: Line[] = []
+    let hintAt = -1
     const hasVertexAnthropic = report.models.some((model) => model.id.startsWith("google-vertex-anthropic:"))
     const roleWidth = hasVertexAnthropic ? Math.max(1, (width >= 150 ? columns(width, [3, 2])[0]! : width) - 4) : inner
 
@@ -358,6 +370,10 @@ export function renderModelPage(input: { state: ModelPageState; report?: ModelsR
       const available = Math.max(1, roleWidth - nameWidth - 2)
       const shown = hasVertexAnthropic && lineWidth(value) > available ? [...clip(value, available - 1), { text: "…", fg: "muted" as const }] : value
       rolesBody.push(fit([marker, name, ...shown], roleWidth))
+      if (row === "compaction" && compactionHasOwnRequest(report)) {
+        hintAt = index
+        rolesBody.push(fit([{ text: " ".repeat(nameWidth + 2) }, { text: COMPACTION_OWN_REQUEST_HINT, fg: "muted", dim: true }], roleWidth))
+      }
     })
     if (recipes) rolesBody.push(...recipeRows({ state, recipes, nameWidth, width: inner, glyphs }))
 
@@ -371,7 +387,7 @@ export function renderModelPage(input: { state: ModelPageState; report?: ModelsR
     const catalogRoom = Math.max(0, catalogHeight - 4)
     const focusRow = MODEL_PAGE_ROWS[clamp(state.row, MODEL_PAGE_ROWS.length)]!
     const focus = chosen(focusRow, report)?.model ?? (focusRow === "session" ? report.effective?.model : (report.roles.main ?? report.defaults).model)
-    const roles = { title: "Roles", weight: 3, body: rolesBody, scroll: Math.max(0, state.row + 1 - (rolesHeight - 4)), active: true }
+    const roles = { title: "Roles", weight: 3, body: rolesBody, scroll: Math.max(0, state.row + 1 + (hintAt >= 0 && state.row > hintAt ? 1 : 0) - (rolesHeight - 4)), active: true }
     const catalog = { title: "Models", weight: 2, body: (w: number) => windowRows({ rows: modelRows({ report, prefs, width: w, focus }), focus, room: catalogRoom, width: w }) }
     body = sideBySide
       ? panelGrid({ width, compact: false, padding: true, heights: [room], rows: [[roles, catalog]] })

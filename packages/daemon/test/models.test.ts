@@ -17,6 +17,12 @@ const MODELS: ModelInfo[] = [
 const catalog: ModelCatalog = { selectable: true, list: () => MODELS, defaults: { model: "gpt-6-luna", effort: "low" } }
 
 describe("resolveModel", () => {
+  test("an unset compaction role is the session's own choice, else the main role, so the summary can reuse the session's prompt cache", () => {
+    const sol = { model: "gpt-6-sol", effort: "high" as const }
+    expect(resolveModel({ role: "compaction", session: sol, roles: { main: { model: "gpt-6-luna", effort: "low" } }, catalog })).toEqual(sol)
+    expect(resolveModel({ role: "compaction", roles: { main: sol }, catalog })).toEqual(resolveModel({ role: "main", roles: { main: sol }, catalog }))
+    expect(resolveModel({ role: "compaction", session: sol, roles: { compaction: { model: "gpt-6-luna", effort: "low" } }, catalog })).toEqual({ model: "gpt-6-luna", effort: "low" })
+  })
   test("ACP prefix models run main only and never leak into native auxiliary roles", () => {
     const external: ModelCatalog = { ...catalog, list: () => [...MODELS, { id: "acp:local", name: "Local ACP", efforts: [] }] }
     const choice = { model: "acp:local" }

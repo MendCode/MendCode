@@ -366,6 +366,34 @@ function migrate(db: Database) {
   if (!columns("turn_files").has("after_skip_reason")) db.run("ALTER TABLE turn_files ADD COLUMN after_skip_reason TEXT")
   if (!columns("prompt_history").has("kind")) db.run("ALTER TABLE prompt_history ADD COLUMN kind TEXT NOT NULL DEFAULT 'sent'")
   if (!columns("undo_stack").has("partial")) db.run("ALTER TABLE undo_stack ADD COLUMN partial TEXT")
+  clearRecipeCompactionRole(db)
+}
+
+/**
+ * The built-in recipes used to bind `compaction` to gpt-6-luna on low or medium effort, which gave that role a request of its own
+ * and no prompt cache to reuse. A saved role that equals one of those bindings came from applying a recipe, not from a choice:
+ * it is removed once, so the role follows the session's model again. Any other saved value is the user's own and stays.
+ */
+const RECIPE_COMPACTION_BINDINGS = [{ model: "gpt-6-luna", effort: "low" }, { model: "gpt-6-luna", effort: "medium" }]
+function clearRecipeCompactionRole(db: Database) {
+  const done = db.query<{ value: string }, []>("SELECT value FROM meta WHERE key = 'recipe-compaction-role-cleared'").get()
+  if (done) return
+  const row = db.query<{ payload: string }, []>("SELECT payload FROM settings WHERE id = 1").get()
+  db.transaction(() => {
+    if (row) {
+      try {
+        const saved = JSON.parse(row.payload) as { models?: Record<string, unknown> }
+        const role = saved.models?.compaction as Record<string, unknown> | undefined
+        const fromRecipe = role && typeof role === "object" && RECIPE_COMPACTION_BINDINGS.some((binding) => Object.keys(role).length === 2 && role.model === binding.model && role.effort === binding.effort)
+        if (fromRecipe && saved.models) {
+          delete saved.models.compaction
+          if (Object.keys(saved.models).length === 0) delete saved.models
+          db.query("UPDATE settings SET payload = ? WHERE id = 1").run(JSON.stringify(saved))
+        }
+      } catch { /* unreadable settings are reported by `invalid()`, not rewritten here */ }
+    }
+    db.query("INSERT OR IGNORE INTO meta(key, value) VALUES ('recipe-compaction-role-cleared', '1')").run()
+  })()
 }
 
 function blobRefsOf(event: SessionEvent): BlobRef[] {
