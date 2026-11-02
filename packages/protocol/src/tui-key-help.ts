@@ -104,6 +104,7 @@ export const PROFILE_KEY_HELP: Readonly<Record<string, string>> = {
   footerToday: "today's usage in the footer",
   quotaRefresh: "providers whose quota is refreshed on a timer (spends quota; only when the user asks)",
   footerRows: "the footer as rows of segment names (multi-row footer)",
+  footerDefaultRows: "the full view's footer is the rows preset until rows or a /footer list are set (off: the single row)",
   footerText: "texts the footer's text:NAME segments show",
   footerIcons: "icons before footer segments: none, glyph or nerd font",
   messageLayout: "message layout: quiet or classic (with a header row)",

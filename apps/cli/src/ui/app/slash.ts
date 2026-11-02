@@ -36,7 +36,7 @@ import type { createThemePicker } from "./theme-picker"
 import type { FooterSegment } from "@mendcode/protocol/wire"
 import type { PermissionMode, SessionId } from "@mendcode/protocol"
 import { parseFooterCommand } from "../../view/footer"
-import { parseFooterRowsCommand } from "../../view/footer-rows"
+import { footerRowsOf, parseFooterRowsCommand } from "../../view/footer-rows"
 import { parseActivityCommand } from "../../view/activity-status"
 import { parseSlash } from "../../view/commands"
 import { normalizeHomeMascot, SIDEBAR_MODES, type SidebarMode, type TuiProfile } from "../../view/tui-profile"
@@ -195,7 +195,9 @@ export function createSlash(ctx: AppContext, actions: {
   /** `/footer +branch -quota` | `reset` | bare ids; saved at once and echoed in the notice. */
   async function footerCommand(args: string) {
     // `rows N`, `row N a b`, `preset NAME` and `icons MODE` shape the footer's rows (profile keys footerRows, footerIcons).
-    const rows = parseFooterRowsCommand(args, { rows: state.tuiProfile.footerRows, icons: state.tuiProfile.footerIcons })
+    // Editing starts from the rows on screen: the full view's default rows when nothing was chosen.
+    const shownRows = footerRowsOf({ mode: state.mode, profile: state.tuiProfile, list: state.customFooter })
+    const rows = parseFooterRowsCommand(args, { rows: shownRows.rows, icons: state.tuiProfile.footerIcons })
     if (rows) {
       if (rows.ok) changeProfile(rows.patch)
       state.notice = rows.ok ? rows.notice : rows.error
@@ -210,8 +212,9 @@ export function createSlash(ctx: AppContext, actions: {
     // `reset` removes the saved list, so the view's tier places the segments again.
     const reset = args.trim().toLowerCase() === "reset"
     if (args.trim()) await setupChoice({ footer: reset ? null : parsed.segments })
-    if (reset && state.tuiProfile.footerRows.length) changeProfile({ footerRows: [] })
-    const shown = state.tuiProfile.footerRows.length && !reset ? `rows: ${state.tuiProfile.footerRows.length} (/footer rows 0 to clear) · single row: ` : "footer: "
+    if (reset && (state.tuiProfile.footerRows.length || !state.tuiProfile.footerDefaultRows)) changeProfile({ footerRows: [], footerDefaultRows: true })
+    const rowsNow = reset ? footerRowsOf({ mode: state.mode, profile: { footerRows: [], footerDefaultRows: true }, list: undefined }) : footerRowsOf({ mode: state.mode, profile: state.tuiProfile, list: state.customFooter })
+    const shown = rowsNow.rows.length ? `rows: ${rowsNow.rows.length}${rowsNow.builtIn ? " (the full view's default; /footer preset classic for one row)" : " (/footer rows 0 to clear)"} · single row: ` : "footer: "
     const list = reset ? footerSegments() : parsed.segments
     state.notice = `${shown}${list.length ? list.join(" ") : "none"}${reset || !state.customFooter ? ` (${state.mode} view default)` : ""}`
   }

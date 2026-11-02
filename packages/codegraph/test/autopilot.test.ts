@@ -192,45 +192,114 @@ describe("keeping it fresh", () => {
     }
   }
 
-  test("drift below the threshold changes nothing; at the threshold the autopilot refreshes only the changed files", async () => {
-    const { autopilot, indexer, scans, logs } = rig({ maxFiles: 500 })
+  const bigSource = (name: string, bytes: number) => `export function ${name}() { return 1 }\n${"// padding line of ordinary source code\n".repeat(Math.ceil(bytes / 40))}`
+
+  test("the budget is changed code in bytes: about 600 lines of this repository's TypeScript", () => {
+    expect(AUTOPILOT.REFRESH_BYTES).toBe(36 * 1024)
+    expect(AUTOPILOT.TOUCH_BYTES).toBe(200)
+  })
+
+  test("many tiny edits to one small file never reach the budget, however often they happen", async () => {
+    const { autopilot, indexer, scans } = rig({ maxFiles: 500 })
     const dir = project({ files: 40 })
     autopilot.note({ cwd: dir, reason: "session" })
     await settle(autopilot, dir)
     expect(scans).toHaveLength(40)
-    // 40 indexed files: the threshold is max(10, ceil(3%)) = 10.
-    expect(AUTOPILOT.REFRESH_MIN_FILES).toBe(10)
-    touch(dir, Array.from({ length: 9 }, (_, i) => `f${i}.ts`), 1_000_000)
+    for (let round = 1; round <= 60; round++) {
+      touch(dir, ["f0.ts"], 1_000_000 + round)
+      autopilot.note({ cwd: dir, reason: "turn" })
+      await settle(autopilot, dir)
+    }
+    expect(scans).toHaveLength(40)
+    expect(indexer.peek(dir)!.nodes.some((node) => node.name.startsWith("changed_"))).toBe(false)
+  })
+
+  test("thirty small files edited do not refresh: the file-count rule of before is gone", async () => {
+    const { autopilot, scans } = rig({ maxFiles: 500 })
+    const dir = project({ files: 40 })
+    autopilot.note({ cwd: dir, reason: "session" })
+    await settle(autopilot, dir)
+    touch(dir, Array.from({ length: 30 }, (_, i) => `f${i}.ts`), 2_000_000)
     autopilot.note({ cwd: dir, reason: "turn" })
     await settle(autopilot, dir)
     expect(scans).toHaveLength(40)
-    expect(Object.keys(indexer.peek(dir)!.byPath.get("f0.ts") ?? []).length).toBeGreaterThan(0)
-    expect(indexer.peek(dir)!.nodes.some((node) => node.name.startsWith("changed_"))).toBe(false)
-
-    touch(dir, Array.from({ length: 10 }, (_, i) => `f${i}.ts`), 2_000_000)
-    autopilot.note({ cwd: dir, reason: "turn" })
-    await settle(autopilot, dir)
-    expect(scans).toHaveLength(50)
-    expect(indexer.peek(dir)!.nodes.filter((node) => node.name.startsWith("changed_"))).toHaveLength(10)
-    expect(logs.some((line) => line.includes("sees 10 of 40 files changed (threshold 10)"))).toBe(true)
   })
 
-  test("new files count as drift, and a large project's threshold is 3% of its files", async () => {
-    const { autopilot, indexer, scans } = rig({ maxFiles: 2_000 })
-    const dir = project({ files: 500 })
+  test("one large new file refreshes, scanning only that file", async () => {
+    const { autopilot, indexer, scans, logs } = rig({ maxFiles: 500 })
+    const dir = project({ files: 40 })
     autopilot.note({ cwd: dir, reason: "session" })
     await settle(autopilot, dir)
-    expect(scans).toHaveLength(500)
-    // ceil(3% of 500) = 15: fourteen new files wait, the fifteenth makes the refresh.
-    for (let i = 0; i < 14; i++) writeFileSync(join(dir, `new${i}.ts`), `export const n${i} = ${i}\n`)
+    writeFileSync(join(dir, "small-new.ts"), bigSource("smallNew", 20 * 1024))
     autopilot.note({ cwd: dir, reason: "turn" })
     await settle(autopilot, dir)
-    expect(scans).toHaveLength(500)
-    writeFileSync(join(dir, "new14.ts"), "export const n14 = 14\n")
+    expect(scans).toHaveLength(40)
+    writeFileSync(join(dir, "large-new.ts"), bigSource("largeNew", 40 * 1024))
     autopilot.note({ cwd: dir, reason: "turn" })
     await settle(autopilot, dir)
-    expect(scans).toHaveLength(515)
-    expect(indexer.peek(dir)!.files.size).toBe(515)
+    // Both new files count: 20 KB did not make the budget alone, 60 KB together do.
+    expect(scans).toHaveLength(42)
+    expect(indexer.peek(dir)!.nodes.some((node) => node.name === "largeNew")).toBe(true)
+    expect(logs.some((line) => line.includes("sees 2 of 40 files changed") && line.includes("bytes of code"))).toBe(true)
+  })
+
+  test("a big rewrite of one file refreshes by its size change", async () => {
+    const { autopilot, indexer, scans } = rig({ maxFiles: 500 })
+    const dir = project({ files: 40 })
+    autopilot.note({ cwd: dir, reason: "session" })
+    await settle(autopilot, dir)
+    writeFileSync(join(dir, "f3.ts"), bigSource("rewritten", 30 * 1024))
+    autopilot.note({ cwd: dir, reason: "turn" })
+    await settle(autopilot, dir)
+    expect(scans).toHaveLength(40)
+    writeFileSync(join(dir, "f3.ts"), bigSource("rewrittenAgain", 70 * 1024))
+    utimesSync(join(dir, "f3.ts"), 3_000_000, 3_000_000)
+    autopilot.note({ cwd: dir, reason: "turn" })
+    await settle(autopilot, dir)
+    expect(scans).toHaveLength(41)
+    expect(indexer.peek(dir)!.nodes.some((node) => node.name === "rewrittenAgain")).toBe(true)
+  })
+
+  test("deleted files count by the size they were indexed with", async () => {
+    const { autopilot, indexer, scans } = rig({ maxFiles: 500 })
+    const dir = project({ files: 10 })
+    writeFileSync(join(dir, "huge.ts"), bigSource("huge", 50 * 1024))
+    writeFileSync(join(dir, "medium.ts"), bigSource("medium", 20 * 1024))
+    autopilot.note({ cwd: dir, reason: "session" })
+    await settle(autopilot, dir)
+    expect(scans).toHaveLength(12)
+    rmSync(join(dir, "medium.ts"))
+    for (let i = 0; i < 3; i++) rmSync(join(dir, `f${i}.ts`))
+    autopilot.note({ cwd: dir, reason: "turn" })
+    await settle(autopilot, dir)
+    expect(indexer.peek(dir)!.files.has("medium.ts")).toBe(true)
+    rmSync(join(dir, "huge.ts"))
+    autopilot.note({ cwd: dir, reason: "turn" })
+    await settle(autopilot, dir)
+    expect(indexer.peek(dir)!.files.has("huge.ts")).toBe(false)
+    expect(indexer.peek(dir)!.files.size).toBe(7)
+    expect(scans).toHaveLength(12)
+  })
+
+  test("a same-size edit counts at least TOUCH_BYTES, up to the file's own size", async () => {
+    const { autopilot, scans } = rig({ maxFiles: 500 })
+    const dir = join(home, `app${counter++}`)
+    mkdirSync(join(dir, ".git"), { recursive: true })
+    const names = Array.from({ length: 200 }, (_, i) => `m${i}.ts`)
+    for (const name of names) writeFileSync(join(dir, name), bigSource(name.replace(/\W/g, ""), 300))
+    autopilot.note({ cwd: dir, reason: "session" })
+    await settle(autopilot, dir)
+    expect(scans).toHaveLength(200)
+    const rewrite = (list: string[], stamp: number) => { for (const name of list) { writeFileSync(join(dir, name), bigSource(name.replace(/\W/g, ""), 300)); utimesSync(join(dir, name), stamp, stamp) } }
+    // 150 files x 200 bytes = 30,000 B: under the 36,864 B budget. 200 files x 200 B = 40,000 B: over it.
+    rewrite(names.slice(0, 150), 4_000_000)
+    autopilot.note({ cwd: dir, reason: "turn" })
+    await settle(autopilot, dir)
+    expect(scans).toHaveLength(200)
+    rewrite(names, 5_000_000)
+    autopilot.note({ cwd: dir, reason: "turn" })
+    await settle(autopilot, dir)
+    expect(scans).toHaveLength(400)
   })
 
   test("the disk is looked at no more than once per interval, however many turns begin", async () => {

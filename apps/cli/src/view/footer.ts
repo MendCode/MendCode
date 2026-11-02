@@ -41,6 +41,8 @@ export type FooterInput = {
   codegraph?: { on: boolean; savedTokens?: number; /** The counts the daemon last pushed for this project; absent until a graph tool indexed it. */ index?: { state: "indexing" | "indexed"; files: number; symbols: number; edges: number; /** While indexing: the share of the first build done, when the daemon said. */ percent?: number }; /** Why this folder is not indexed (`large folder`, `no git repo`, `off`), as the daemon's gate said. */ skipped?: string }
   /** The profile's `footerText`: what `text:<name>` shows. */
   texts?: Readonly<Record<string, string | readonly string[]>>
+  /** A screen reader gets the quota windows as figures, without bars or reset times (their compact form), at any width. */
+  plainQuota?: boolean
   /** An icon before each segment (`footerIcons`); `ascii` chrome never has one. */
   icons?: { mode: FooterIconMode; ascii?: boolean }
   /** Between the windows of a named provider's quota (the profile's `statusSeparator`). */
@@ -101,7 +103,7 @@ export { quotaText } from "./footer-quota"
 
 /** The `quota` segment (every provider) or `quota:<provider>` (one); the rules for a stale or ended window live in footer-quota.ts. */
 function quotaSpans(input: FooterInput, only?: string): Span[] {
-  return quotaSegmentSpans({ quotas: input.quotas, now: input.now, style: input.quotaStyle ?? { view: "used", color: "pressure" }, glyphs: input.glyphs, width: input.width, ...(only !== undefined ? { only } : {}), ...(input.separator !== undefined ? { separator: input.separator } : {}) })
+  return quotaSegmentSpans({ quotas: input.quotas, now: input.now, style: input.quotaStyle ?? { view: "used", color: "pressure" }, glyphs: input.glyphs, width: input.plainQuota ? 0 : input.width, ...(only !== undefined ? { only } : {}), ...(input.separator !== undefined ? { separator: input.separator } : {}) })
 }
 
 /** The mark of priority processing: the lightning of the footer's icon mode, or the word when there are no icons (`none`, accessible or ASCII chrome). */

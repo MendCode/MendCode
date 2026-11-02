@@ -42,7 +42,7 @@ export type SceneOptions = {
 }
 
 export async function scene(size: Size, { profile = {}, exchanges = [["How should I run the migration?", ANSWER]], mode = "full", dataDir = tempDir(), directory = tempDir(), sessionId, reply, replay, harness: extra = {} }: SceneOptions = {}): Promise<Scene> {
-  writeTuiProfile(dataDir, { ...DEFAULT_TUI_PROFILE, sidebar: "hidden", copyOnSelect: true, ...(size.sidebar ? { rightSidebar: true, sidebarWidgets: structuredClone(SIDEBAR_PRESETS.pulse) } : {}), ...profile } as TuiProfile)
+  writeTuiProfile(dataDir, { ...DEFAULT_TUI_PROFILE, footerDefaultRows: false, sidebar: "hidden", copyOnSelect: true, ...(size.sidebar ? { rightSidebar: true, sidebarWidgets: structuredClone(SIDEBAR_PRESETS.pulse) } : {}), ...profile } as TuiProfile)
   const h = appHarness({ dataDir, directory, width: size.width, height: size.height, mode, ...(sessionId ? { sessionId } : {}), ...(reply ? { reply } : {}), ...extra })
   h.app.applySettings({ onboarded: true })
   await h.app.extensionsReady

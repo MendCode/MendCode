@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { FOOTER_PRESETS, FOOTER_PRESET_NAMES, FOOTER_ROWS_MAX, footerRowsProblems, footerTextLine, tuiProblems } from "@mendcode/protocol/wire"
-import { createCustomizePageState, customizePageKey, CUSTOMIZE_ROWS } from "../src/view/customize-page"
-import { footerRowBudget, parseFooterRowsCommand, renderFooterRows } from "../src/view/footer-rows"
+import { createCustomizePageState, customizePageKey, CUSTOMIZE_ROWS, footerPresetOf } from "../src/view/customize-page"
+import { footerQuotaStyle, footerRowBudget, footerRowsOf, parseFooterRowsCommand, renderFooterRows } from "../src/view/footer-rows"
 import { glyphs } from "../src/ui/theme"
 import { footerIcon } from "../src/ui/footer-icons"
 import { DEFAULT_TUI_PROFILE, normalizeTuiProfile } from "../src/view/tui-profile"
@@ -244,7 +244,13 @@ describe("/customize", () => {
   const row = (name: string) => CUSTOMIZE_ROWS.indexOf(name as never)
   test("the rows, the text and the icons have rows of their own, and the preset cycles", () => {
     for (const name of ["footerPreset", "footerRows", "footerText", "footerIcons"]) expect(row(name)).toBeGreaterThan(-1)
-    const cycled = customizePageKey({ ...createCustomizePageState(), row: row("footerPreset") }, "l", DEFAULT_TUI_PROFILE)
+    // The default (the full view's own rows) is the first stop; classic, the single row, comes next and keeps the full view on it.
+    expect(footerPresetOf(DEFAULT_TUI_PROFILE)).toBe("default")
+    const toClassic = customizePageKey({ ...createCustomizePageState(), row: row("footerPreset") }, "l", DEFAULT_TUI_PROFILE)
+    expect(toClassic.action).toEqual({ type: "set", patch: { footerRows: [], footerDefaultRows: false } })
+    const classic = { ...DEFAULT_TUI_PROFILE, footerDefaultRows: false }
+    expect(footerPresetOf(classic)).toBe("classic")
+    const cycled = customizePageKey({ ...createCustomizePageState(), row: row("footerPreset") }, "l", classic)
     expect(cycled.action).toMatchObject({ type: "set", patch: { footerRows: [["directory", "text:tagline"], ["model", "effort", "context", "cache", "tokens"], ["quota:codex"], ["quota:claude"], ["codegraph"]], quotaView: "left" } })
     const icons = customizePageKey({ ...createCustomizePageState(), row: row("footerIcons") }, "l", DEFAULT_TUI_PROFILE)
     expect(icons.action).toMatchObject({ type: "set", patch: { footerIcons: "glyph" } })
@@ -347,5 +353,43 @@ describe("the codegraph segment shows the index the daemon pushed", () => {
     before.h.app.render()
     const after = await screen({ width: 100 })
     expect(before.text()).toEqual(after.text())
+  })
+})
+
+describe("the full view's default rows", () => {
+  const profile = { footerRows: [] as string[][], footerDefaultRows: true }
+  const rows = FOOTER_PRESETS.rows!.rows
+
+  test("only the full view that nobody configured gets the rows preset; balanced and minimalist keep their footer", () => {
+    expect(footerRowsOf({ mode: "full", profile, list: undefined })).toEqual({ rows, builtIn: true })
+    expect(footerRowsOf({ mode: "balanced", profile, list: undefined }).rows).toEqual([])
+    expect(footerRowsOf({ mode: "minimal", profile, list: undefined }).rows).toEqual([])
+  })
+
+  test("the user's rows, a /footer list and `preset classic` each win; a saved list equal to the old default does not count", () => {
+    expect(footerRowsOf({ mode: "full", profile: { ...profile, footerRows: [["model"]] }, list: undefined })).toEqual({ rows: [["model"]], builtIn: false })
+    expect(footerRowsOf({ mode: "full", profile, list: ["state", "context"] }).rows).toEqual([])
+    expect(footerRowsOf({ mode: "full", profile: { ...profile, footerDefaultRows: false }, list: undefined }).rows).toEqual([])
+    expect(footerRowsOf({ mode: "full", profile, list: ["state", "permission", "context", "quota", "notice"] }).builtIn).toBe(true)
+  })
+
+  test("`preset classic` and `rows 0` turn the default off; a nonzero count edits the rows on screen", () => {
+    expect(parseFooterRowsCommand("preset classic", { rows: [], icons: "none" })).toMatchObject({ ok: true, patch: { footerRows: [], footerDefaultRows: false } })
+    expect(parseFooterRowsCommand("rows 0", { rows: [], icons: "none" })).toMatchObject({ ok: true, patch: { footerRows: [], footerDefaultRows: false } })
+    expect(parseFooterRowsCommand("rows 2", { rows, icons: "none" })).toMatchObject({ ok: true, patch: { footerRows: [rows[0], rows[1]] } })
+    expect(parseFooterRowsCommand("preset rows", { rows: [], icons: "none" })).toMatchObject({ ok: true, patch: { footerRows: rows.map((row) => [...row]), quotaView: "left", quotaColor: "accent" } })
+  })
+
+  test("the quota look is the preset's (left, accent) unless the profile already holds another value", () => {
+    expect(footerQuotaStyle({ profile: { quotaView: "used", quotaColor: "pressure" }, builtIn: true })).toEqual({ view: "left", color: "accent" })
+    expect(footerQuotaStyle({ profile: { quotaView: "used", quotaColor: "accent" }, builtIn: true })).toEqual({ view: "left", color: "accent" })
+    expect(footerQuotaStyle({ profile: { quotaView: "used", quotaColor: "pressure" }, builtIn: false })).toEqual({ view: "used", color: "pressure" })
+  })
+
+  test("the profile defaults to the full view's rows on", () => {
+    expect(DEFAULT_TUI_PROFILE.footerDefaultRows).toBe(true)
+    expect(normalizeTuiProfile({ footerDefaultRows: false }).footerDefaultRows).toBe(false)
+    expect(normalizeTuiProfile({}).footerDefaultRows).toBe(true)
+    expect(tuiProblems({ footerDefaultRows: "no" })).toEqual(["footerDefaultRows: expected boolean"])
   })
 })

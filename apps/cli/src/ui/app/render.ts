@@ -1,4 +1,5 @@
 import { psCard } from "../../view/ps-card"
+import { footerRowsOf } from "../../view/footer-rows"
 import { inProject } from "../../view/project-scope"
 import { renderEnvironmentPage } from "../../view/environment-page"
 import { renderIntroPage, renderOnboardingPage } from "../lazy-pages"
@@ -263,8 +264,8 @@ export function createRender(ctx: AppContext, actions: {
   function pageRows(width: number, height: number, placements: ImagePlacement[] = []): Line[] {
     // Setup draws the model it is choosing; the agent/model bar would show the one in use, so no page of the setup flow carries it.
     const inSetup = state.page === "setup" || state.onboarding !== undefined && state.page === "text"
-    // `footerRows` are the chat's: a page keeps its whole height (the single-row footer still shows on a page).
-    const foot = state.tuiProfile.footerRows.length === 0 && !["diagnostics", "worktrees", "warp", "setup", "intro", "ai-config", "tsm", "mflow", "console", "share"].includes(state.page) && !inSetup && state.tuiProfile.showStatus ? actions.statusRows(width).slice(0, Math.max(0, height - 1)) : []
+    // Footer rows (the user's, or the full view's default) are the chat's: a page keeps its whole height (the single-row footer still shows on a page).
+    const foot = footerRowsOf({ mode: state.mode, profile: state.tuiProfile, list: state.customFooter }).rows.length === 0 && !["diagnostics", "worktrees", "warp", "setup", "intro", "ai-config", "tsm", "mflow", "console", "share"].includes(state.page) && !inSetup && state.tuiProfile.showStatus ? actions.statusRows(width).slice(0, Math.max(0, height - 1)) : []
     const bodyHeight = Math.max(1, height - foot.length)
     const preview = { root: homeRoot(), sessions: homeSessions(), tip: homeTipText, now: now(), chatWidth: actions.transcriptWidth(),agent: state.agentReport?.current ?? "Build", loops: state.liveLoops.size, ...(input.version ? { version: input.version } : {}), ...(state.effectiveModel?.model ? { model: state.effectiveModel.model } : {}), ...(state.effectiveModel?.effort ? { effort: state.effectiveModel.effort } : {}), ...(state.modelReport?.engine ? { provider: state.modelReport.engine } : {}), ...(state.homeMcp ? { mcp: state.homeMcp } : {}), phase: mascotPhase({ state: state.transcript.foreground, connected: state.connection === "connected", retry: state.turnState.retry !== undefined, ...(state.turnState.current ? { current: state.turnState.current } : {}) }), session: (cols: number, rows: number, profile = state.tuiProfile): Line[] => {
       const saved = state.tuiProfile

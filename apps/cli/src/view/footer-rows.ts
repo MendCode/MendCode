@@ -1,4 +1,4 @@
-import { FOOTER_ICON_MODES, FOOTER_PRESETS, FOOTER_PRESET_NAMES, FOOTER_ROWS_MAX, FOOTER_HEIGHT_FRACTION, footerRowsProblems, parseRowSegment, type FooterIconMode } from "@mendcode/protocol/wire"
+import { DEFAULT_FOOTER, FOOTER_DEFAULT_PRESET, FOOTER_ICON_MODES, FOOTER_PRESETS, FOOTER_PRESET_NAMES, FOOTER_ROWS_MAX, FOOTER_HEIGHT_FRACTION, footerRowsProblems, parseRowSegment, quotaReadings, type FooterIconMode } from "@mendcode/protocol/wire"
 import type { Line, Span } from "../ui/theme"
 import { clip, decorate, dropToFit, entryBody, entrySpans, type FooterInput } from "./footer"
 import { lineWidth as widthOf, textWidth } from "./wrap"
@@ -41,7 +41,7 @@ export function renderFooterRows({ input, rows, limit }: { input: FooterInput; r
   })
 }
 
-export type FooterRowsPatch = { footerRows?: string[][]; footerIcons?: FooterIconMode; quotaView?: "used" | "left"; quotaColor?: "pressure" | "accent" }
+export type FooterRowsPatch = { footerRows?: string[][]; footerDefaultRows?: boolean; footerIcons?: FooterIconMode; quotaView?: "used" | "left"; quotaColor?: "pressure" | "accent" }
 export type FooterRowsCommand = { ok: true; patch: FooterRowsPatch; notice: string } | { ok: false; error: string }
 
 /**
@@ -66,7 +66,8 @@ export function parseFooterRowsCommand(args: string, current: { rows: readonly (
   if (word === "rows") {
     const count = Number(rest[0])
     if (rest.length !== 1 || !Number.isInteger(count) || count < 0 || count > FOOTER_ROWS_MAX) return { ok: false, error: `usage: /footer rows 0..${FOOTER_ROWS_MAX} (now ${current.rows.length})` }
-    return { ok: true, patch: { footerRows: current.rows.slice(0, count).map((row) => [...row]) }, notice: count ? `footer rows: ${count}` : "footer rows: off" }
+    // `rows 0` is the single row, also in the full view; a nonzero count is rows the user chose.
+    return { ok: true, patch: { footerRows: current.rows.slice(0, count).map((row) => [...row]), ...(count === 0 ? { footerDefaultRows: false } : {}) }, notice: count ? `footer rows: ${count}` : "footer rows: off" }
   }
   if (word === "row") {
     const at = Number(rest[0])
@@ -82,4 +83,47 @@ export function parseFooterRowsCommand(args: string, current: { rows: readonly (
     return { ok: true, patch: { footerRows: rows }, notice: names.length ? `footer row ${at}: ${names.join(" ")}` : `footer row ${at} removed` }
   }
   return undefined
+}
+
+/**
+ * Whether a row has something to say: a segment with spans, except a named quota with no reading at all (the provider is not used here:
+ * it would read `CODEX n/a`) and the code graph before the daemon pushed any count for this folder (it would read `graph on`).
+ */
+function speaks(entry: string, input: FooterInput): boolean {
+  const { id, arg } = parseRowSegment(entry)
+  if (id === "quota" && arg !== undefined) {
+    const quota = input.quotas.find((candidate) => candidate.provider === arg)
+    return quota !== undefined && quotaReadings([quota], input.now).length > 0
+  }
+  if (id === "codegraph" && input.codegraph?.on && !input.codegraph.index && input.codegraph.skipped === undefined) return false
+  return rowEntry(entry, input).length > 0
+}
+
+/**
+ * The rows of the full view's built-in default without the ones that would be empty or say `n/a` for a provider nobody uses here, so the
+ * height budget goes to rows that show something. An explicit `footerRows` is drawn as written and never passes through this. At least
+ * the first row stays.
+ */
+export function rowsWithContent({ input, rows }: { input: FooterInput; rows: readonly (readonly string[])[] }): string[][] {
+  const kept = rows.filter((row) => row.some((entry) => speaks(entry, input))).map((row) => [...row])
+  return kept.length ? kept : rows.slice(0, 1).map((row) => [...row])
+}
+
+/** Whether a `/footer` list was placed; a saved list equal to the old default (what `/footer reset` once wrote) counts as none. */
+const listPlaced = (list: readonly string[] | undefined): boolean => list !== undefined && !(list.length === DEFAULT_FOOTER.length && list.every((segment, at) => segment === DEFAULT_FOOTER[at]))
+
+/**
+ * The rows the footer draws: the user's `footerRows`; else, in the full view only, the `rows` preset while the user never chose a footer
+ * (no rows, no `/footer` list, `/footer preset classic` not used); else none, which is the single row. Balanced and minimalist keep theirs.
+ */
+export function footerRowsOf({ mode, profile, list }: { mode: "minimal" | "balanced" | "full"; profile: { footerRows: readonly (readonly string[])[]; footerDefaultRows: boolean }; list: readonly string[] | undefined }): { rows: readonly (readonly string[])[]; builtIn: boolean } {
+  if (profile.footerRows.length) return { rows: profile.footerRows, builtIn: false }
+  if (mode === "full" && profile.footerDefaultRows && !listPlaced(list)) return { rows: FOOTER_PRESETS[FOOTER_DEFAULT_PRESET]!.rows, builtIn: true }
+  return { rows: [], builtIn: false }
+}
+
+/** The quota look of the footer: the default rows take the `rows` preset's (left, accent) unless the profile already holds another value. */
+export function footerQuotaStyle({ profile, builtIn }: { profile: { quotaView: "used" | "left"; quotaColor: "pressure" | "accent" }; builtIn: boolean }): { view: "used" | "left"; color: "pressure" | "accent" } {
+  const preset = FOOTER_PRESETS[FOOTER_DEFAULT_PRESET]!.profile
+  return builtIn ? { view: profile.quotaView === "used" ? preset?.quotaView ?? "used" : profile.quotaView, color: profile.quotaColor === "pressure" ? preset?.quotaColor ?? "pressure" : profile.quotaColor } : { view: profile.quotaView, color: profile.quotaColor }
 }

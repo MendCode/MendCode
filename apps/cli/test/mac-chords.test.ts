@@ -217,7 +217,7 @@ describe("the chords in a session", () => {
 
   test("ctrl+x } gives the keyboard to the right panel, as alt+} does", async () => {
     const dataDir = tempDir()
-    writeTuiProfile(dataDir, { ...DEFAULT_TUI_PROFILE, rightSidebar: true, sidebarWidgets: structuredClone(SIDEBAR_PRESETS.galaxy) })
+    writeTuiProfile(dataDir, { ...DEFAULT_TUI_PROFILE, footerDefaultRows: false, rightSidebar: true, sidebarWidgets: structuredClone(SIDEBAR_PRESETS.galaxy) })
     const h = appHarness({ width: 140, height: 30, directory: tempDir(), dataDir, mode: "full", platform: "darwin", env: GHOSTTY })
     h.app.applySettings({ tier: "full", onboarded: true, reducedMotion: true })
     await Bun.sleep(30)

@@ -25,8 +25,12 @@ export type IndexStatus = { cwd: string; state: "indexing" | "indexed" | "none";
 /** The first build of a project in this process: files scanned of those to scan. */
 export type IndexProgress = { done: number; total: number }
 
-/** What changed on disk since the last index: the files a refresh would scan or drop, of those indexed. */
-export type IndexDrift = { changed: number; indexed: number }
+/**
+ * What changed on disk since the last index: the files a refresh would scan or drop, of those indexed, and `bytes`, the amount of code
+ * that moved. A new file counts its size, a deleted one the size it had when indexed, a modified one the larger of its size change and
+ * `touchBytes` (capped by its own size): a same-size edit shows no size change, but a file the disk says was written is not free.
+ */
+export type IndexDrift = { changed: number; indexed: number; bytes: number }
 
 /** The counts of a built graph, one pass over its nodes. */
 export function indexStatus(graph: Graph): IndexStatus {
@@ -45,7 +49,7 @@ export type Indexer = {
   /** Where a build or refresh of `cwd` that is running now stands; undefined when none runs. */
   progress(cwd: string): IndexProgress | undefined
   /** Files new, changed or deleted since the last index, from one walk and no scan; undefined when the project was never indexed. */
-  drift(args: { cwd: string; signal: AbortSignal }): Promise<IndexDrift | undefined>
+  drift(args: { cwd: string; signal: AbortSignal; touchBytes?: number | undefined }): Promise<IndexDrift | undefined>
 }
 
 /** `dirty`: records changed since the graph was last derived (an aborted refresh leaves this set). */
@@ -203,14 +207,20 @@ export function createIndexer({ cacheDir, now, onScan, onIndex, onProgress, maxF
     cachePath,
     peek: (cwd) => states.get(cwd)?.graph,
     progress: (cwd) => progress.get(cwd),
-    async drift({ cwd, signal }) {
+    async drift({ cwd, signal, touchBytes = 0 }) {
       const cache = states.get(cwd)?.cache ?? (await loadCache({ file: cachePath(cwd), cwd }))
       if (!cache) return undefined
       const walk = await walkProject({ cwd, signal, maxFiles })
       let changed = 0
-      for (const [path, walked] of walk.files) if (differs(cache.files[path], walked)) changed++
-      for (const path of Object.keys(cache.files)) if (!walk.files.has(path)) changed++
-      return { changed, indexed: Object.keys(cache.files).length }
+      let bytes = 0
+      for (const [path, walked] of walk.files) {
+        const current = cache.files[path]
+        if (!differs(current, walked)) continue
+        changed++
+        bytes += current === undefined ? walked.size : Math.max(Math.abs(walked.size - current.size), Math.min(walked.size, touchBytes))
+      }
+      for (const [path, current] of Object.entries(cache.files)) if (!walk.files.has(path)) { changed++; bytes += current.size }
+      return { changed, indexed: Object.keys(cache.files).length, bytes }
     },
     graph({ cwd, signal }) {
       touch(cwd)

@@ -126,6 +126,7 @@ export const TUI_DEFAULTS: Readonly<Record<string, unknown>> = {
   "footerToday": false,
   "quotaRefresh": [],
   "footerRows": [],
+  "footerDefaultRows": true,
   "footerText": {},
   "footerIcons": "none",
   "messageLayout": "quiet",

@@ -8,10 +8,14 @@ import type { Indexer } from "./indexer"
  * a wait inside a turn.
  */
 export const AUTOPILOT = {
-  /** New, changed or deleted files below which a refresh is not worth a scan: a coding turn touches a handful, a lookup rescans them anyway. */
-  REFRESH_MIN_FILES: 10,
-  /** The same threshold as a share of the indexed files, the larger of the two counts: a 5,000-file project refreshes at 150, not at 10. */
-  REFRESH_SHARE: 0.03,
+  /**
+   * Changed code, in bytes since the last index, below which a refresh is not worth a scan: 36 KiB, about 600 lines at this repository's
+   * 61 bytes a line (15.3 MB in 248,000 lines of non-test TypeScript), or nine files of the median 4.1 KB. Bytes, not files: a few
+   * strings edited in a small file can never reach it (a file contributes at most its own size), a new or rewritten large file does.
+   */
+  REFRESH_BYTES: 36 * 1024,
+  /** What a modified file counts at least, capped by its size: a same-size edit has no size change to measure. 200 bytes is about three lines; 185 such files reach the budget. */
+  TOUCH_BYTES: 200,
   /** Per project, the least time between two looks at the disk for drift (one walk, no scan): at most one per two minutes, however many turns. */
   CHECK_GAP_MS: 2 * 60_000,
   /** A build that failed is not retried by turns for this long (a tool call may still ask for it). */
@@ -144,11 +148,10 @@ export function createGraphAutopilot(options: AutopilotOptions): GraphAutopilot 
     entry.checkedAt = now()
     const verdict = await eligible(cwd, signal)
     if (!verdict.ok) return decide(cwd, `skips (${verdict.reason})`)
-    const drift = await indexer.drift({ cwd, signal })
+    const drift = await indexer.drift({ cwd, signal, touchBytes: AUTOPILOT.TOUCH_BYTES })
     if (!drift) return
-    const threshold = Math.max(AUTOPILOT.REFRESH_MIN_FILES, Math.ceil(drift.indexed * AUTOPILOT.REFRESH_SHARE))
-    if (drift.changed < threshold) return
-    log(`[GRAPH]: autopilot sees ${drift.changed} of ${drift.indexed} files changed (threshold ${threshold}): ${cwd}`)
+    if (drift.bytes < AUTOPILOT.REFRESH_BYTES) return
+    log(`[GRAPH]: autopilot sees ${drift.changed} of ${drift.indexed} files changed, ${drift.bytes} bytes of code (threshold ${AUTOPILOT.REFRESH_BYTES}): ${cwd}`)
     await start(cwd, entry, "refreshing")
   }
 
