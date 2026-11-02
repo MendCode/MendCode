@@ -322,6 +322,8 @@ export type TuiProfile = {
   sidebarHeader: boolean
   /** The running sub-agents and background commands listed over the prompt; off leaves them to /tasks and ctrl+t. */
   showTasks: boolean
+  /** Opt-in Jobs panel in the balanced/full dock; minimal draws no dock. */
+  dockJobs: boolean
   /** Show the local block-font clock in the Usage dashboard. */
   usageClock: boolean
   /** Ring the terminal bell when a turn ends (off by default). */
@@ -550,6 +552,7 @@ export const DEFAULT_TUI_PROFILE: Readonly<TuiProfile> = {
   placeholderText: "",
   sidebarHeader: true,
   showTasks: true,
+  dockJobs: false,
   usageClock: true,
   turnBell: false,
   turnNotify: "off",
@@ -894,6 +897,7 @@ export function normalizeTuiProfile(raw: unknown): TuiProfile {
     placeholderText: oneLine(source.placeholderText, 120),
     sidebarHeader: bool("sidebarHeader"),
     showTasks: bool("showTasks"),
+    dockJobs: bool("dockJobs"),
     usageClock: bool("usageClock"),
     turnBell: typeof source.turnBell === "boolean" ? source.turnBell : DEFAULT_TUI_PROFILE.turnBell,
     turnNotify: oneOf(["off", "osc9", "osc777"] as const, source.turnNotify) ?? "off",

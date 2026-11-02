@@ -353,6 +353,8 @@ including borders ≥3:1 and stronger active borders.
 
 ### Activity status
 
+The current-task row has been removed in every tier and density; `/activity` controls only the working status below. Lists remain in the transcript, Todos dock and sidebar. Session chrome > Dock jobs (`dockJobs`, default `false`) opts into the Jobs dock panel in balanced/full; it adds no chrome to minimalist and does not hide `/jobs`.
+
 Where the working status ("⠋ Running command... · 2m 53s") is drawn is one setting, Session chrome > Activity status (`activityPlacement`, `/activity`):
 
 | Value | Where | Rows used |

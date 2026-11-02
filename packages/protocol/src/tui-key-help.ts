@@ -155,6 +155,7 @@ export const PROFILE_KEY_HELP: Readonly<Record<string, string>> = {
   placeholderText: "own placeholder text for the empty prompt",
   sidebarHeader: "the sessions sidebar's title row ('Sessions')",
   showTasks: "running sub-agents and background commands listed over the prompt",
+  dockJobs: "opt-in Jobs panel in the balanced/full dock; off by default, /jobs stays available",
   usageClock: "the clock on the usage dashboard",
   turnBell: "ring the terminal bell when a turn ends",
   turnNotify: "a desktop notification when a turn ends",

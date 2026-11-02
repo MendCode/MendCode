@@ -4,6 +4,7 @@ import { createTranscript } from "../src/view/transcript"
 import { createTurnState } from "../src/view/turn-state"
 import { appHarness, cleanTemps, conversation, ids, NOW, tempDir } from "./session-ui-harness"
 import { textWidth } from "../src/view/wrap"
+import { DEFAULT_TUI_PROFILE } from "../src/view/tui-profile"
 import type { ContinuitySummary, SessionEvent } from "@mendcode/protocol"
 import type { AppContext } from "../src/ui/app/context"
 
@@ -31,7 +32,7 @@ test("async questions remain answerable after their originating turn completes a
 
 test("persisted tool-job state reaches the bordered Jobs dock and updates without changing chat content", async () => {
   for (const [width, height] of [[100, 30], [180, 50]]) {
-    const h = appHarness({ width, height, dataDir: tempDir(), directory: "/work/project" })
+    const h = appHarness({ width, height, hostProfile: { ...DEFAULT_TUI_PROFILE, dockJobs: true }, directory: "/work/project" })
     const chat = conversation(h.sessionId, h.app.onEvent), turnId = ids("turn")
     chat.exchange("Read project files", "Independent work is complete.")
     const record: ContinuitySummary = { id: "job_read", sessionId: h.sessionId, turnId, kind: "job", tool: "read", status: "running", generation: 0, createdAt: NOW - 5000, updatedAt: NOW }

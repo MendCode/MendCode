@@ -397,7 +397,7 @@ Generated from [tier-data.ts](packages/protocol/src/tier-data.ts), including eve
 | [Cache countdown (footer)](docs/layout.md) (`cache_countdown`) | — | — | Opt-in | /footer +warm |
 | [One tree: sessions sharing a checkout](docs/one-tree.md) (`one_tree`) | — | Included | Included | /tier one_tree off |
 | [Advisor model](docs/advisor.md) (`advisor`) | — | Opt-in | Opt-in | /advisor &lt;model&gt; |
-| [Visible plan (todo and the progress row)](docs/layout.md) (`visible_plan`) | — | Included | Included | /tier visible_plan off |
+| [Visible plan (todo and its guidance)](docs/layout.md) (`visible_plan`) | — | Included | Included | /tier visible_plan off |
 | [Code graph autopilot](docs/code-graph.md) (`graph_autopilot`) | — | — | Included | /tier graph_autopilot on\|off (on by default in nightly, dev and local builds only) |
 <!-- tiers:end -->
 

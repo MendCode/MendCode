@@ -16,6 +16,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Changed
 
+- The current-task row above the prompt is gone; the dock's Jobs panel is opt-in and Todos wrap with more room.
 - Long command replies open a readable page (F4 shows the full text of a cut notice), and `/pr repos` lists repository
   watches in a page where they can be stopped and restarted.
 - Completed streaming output uses less session storage while preserving historical cuts and reconnect replay.
