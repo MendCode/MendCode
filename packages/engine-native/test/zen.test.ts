@@ -6,6 +6,17 @@ import { collectZen, ZEN_MODELS, ZEN_TOKEN, ZEN_URL, zenFake, zenRequest } from 
 const resolved = (overrides: Partial<ResolvedProvider> = {}): ResolvedProvider => ({ id: "opencode", type: "openai-compatible", baseUrl: ZEN_URL, apiKey: () => ZEN_TOKEN, keyRequired: true, models: ZEN_MODELS, ...overrides })
 
 describe("B10.15 OpenCode Zen native adapter", () => {
+  test("every format carries the session's id in x-opencode-session and names the client", async () => {
+    const sent: Headers[] = []
+    const provider = createApiProvider({ provider: resolved(), fetch: async (url, init) => { sent.push(new Headers(init.headers)); return zenFake(url, init) } })
+    for (const model of ZEN_MODELS) await collectZen(provider.stream({ ...zenRequest(model.id), conversationId: "ses_zen" }))
+    expect(sent.length).toBe(ZEN_MODELS.length)
+    for (const headers of sent) {
+      expect(headers.get("x-opencode-session")).toBe("ses_zen")
+      expect(headers.get("user-agent")).toBe("mendcode")
+    }
+  })
+
   test("routes all four formats through the proxy and preserves text, tools, reasoning and usage", async () => {
     const sent: Array<{ url: string; init: RequestInit; body: Record<string, any> }> = []
     const provider = createApiProvider({ provider: resolved({ headers: { authorization: "wrong", "x-api-key": "wrong", "x-goog-api-key": "wrong" }, npm: "missing-sdk-must-not-load" }), fetch: async (url, init) => { sent.push({ url, init, body: JSON.parse(String(init.body)) }); return zenFake(url, init) } })
