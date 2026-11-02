@@ -186,6 +186,24 @@ export function compactEnvelope(payload: string, event: { sessionId: string; seq
   return next === 125 /* } */ && payload.length === prefix.length + 1 ? "{}" : payload
 }
 
+const PROFILE_KEYS = ["instructions", "memory", "history", "toolResults", "toolSchemas", "media", "total"] as const
+const PROFILE_TEXT = /,"profile":\{"estimatedTokens":\{"instructions":(\d+),"memory":(\d+),"history":(\d+),"toolResults":(\d+),"toolSchemas":(\d+),"media":(\d+),"total":(\d+)\},"firstTokenMs":(\d+|null),"durationMs":(\d+),"toolCount":(\d+),"imageCount":(\d+)\}/
+
+/**
+ * The stored form of a `usage.recorded` request profile: its eleven numbers in a fixed order instead of five nested key
+ * names per call. Only the exact serialization of the protocol's profile is rewritten; `unpackEvent` restores the object.
+ */
+export function compactProfile(payload: string, type: string): string {
+  if (type !== "usage.recorded") return payload
+  return payload.replace(PROFILE_TEXT, (_, ...found: string[]) => `,"profile":[${found.slice(0, 11).join(",")}]`)
+}
+
+function expandProfile(values: unknown[]): Record<string, unknown> {
+  const estimatedTokens: Record<string, unknown> = {}
+  PROFILE_KEYS.forEach((key, index) => { estimatedTokens[key] = values[index] })
+  return { estimatedTokens, firstTokenMs: values[7], durationMs: values[8], toolCount: values[9], imageCount: values[10] }
+}
+
 /** A payload written before envelopes moved to columns carries its envelope itself. */
 export function hasEnvelope(payload: string): boolean {
   return payload.startsWith('{"sessionId"')
@@ -215,6 +233,7 @@ export function parseEvent<T = SessionEvent>(payload: StoredValue, load?: Object
 }
 
 export function unpackEvent(event: Record<string, unknown>, load?: ObjectLoader): Record<string, unknown> {
+  if (Array.isArray(event.profile) && event.profile.length === 11) event.profile = expandProfile(event.profile)
   if (typeof event.zref === "string") {
     const based = load?.(event.zref)
     if (based === undefined) throw new RangeError(`[STORE]: shared output ${event.zref.slice(0, 12)} is not available`)

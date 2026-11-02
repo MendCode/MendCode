@@ -41,6 +41,21 @@ previous build's, key order included. The session-disk probe goes from 5,571 to 
 long session (Pi: 4,096 short, 8,192 long). With fork object references held only by physical owners, a fork of
 the 40-turn disk-budget fixture grows by 83 KiB against 285 KiB for a physical copy (before: 102 and 338 KiB).
 
+## What a settled session no longer keeps
+
+`foreground.state` and `queue.changed` are snapshots: each carries the whole state and every reader of a stored history
+uses the last. When a session settles (its foreground state becomes `idle`) the earlier ones written by the running
+daemon are deleted by an idle step, 10 seconds after the daemon is idle, and the newest of each kind stays
+(`transient-events.ts`; a restart in between leaves them as they are). A reconnecting client still receives the
+newest snapshot; a run that compacted keeps all of them, because the compaction view reads the state change that ended
+it, and a row that a fork's transcript points at stays. Existing rows are not touched.
+
+A `usage.recorded` request profile is stored as its eleven numbers in a fixed order (`compactProfile`) and read back as
+the same object (earlier executables cannot read those rows). A turn that changed no file in the default `tools` scope keeps no `turn_snapshots` row: a missing row
+reads as an unsealed, incomplete, empty one. `packages/daemon/test/real-session-disk.test.ts` drives one short turn (a
+prompt, one `read`, a streamed answer, two usage records, a title) through the daemon with a scripted model and sums
+every column of the session's rows per table, the metric of the public comparison.
+
 ## Repeated fields in model messages and delta blocks
 
 A model message that opens with one of four fixed spellings (`{"role":"user","content":`, the assistant form, the

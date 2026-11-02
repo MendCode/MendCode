@@ -46,9 +46,10 @@ import {
 } from "@mendcode/protocol"
 import type { GlobalEventDraft, SessionEventDraft } from "@mendcode/kernel"
 import { createBlobFiles } from "./blobs"
-import { createCodec, parseEvent, unpackEvent, eventFromRow, eventFromColumns, eventPayload, compactEnvelope, INHERITED_PAYLOAD, type EventRow, type OwnEventRow } from "./compress"
+import { createCodec, parseEvent, unpackEvent, eventFromRow, eventFromColumns, eventPayload, compactEnvelope, compactProfile, INHERITED_PAYLOAD, type EventRow, type OwnEventRow } from "./compress"
 import { createEngineHistory } from "./engine-history"
 import { createEventEnvelopes } from "./event-envelopes"
+import { createTransientEvents } from "./transient-events"
 import { createEventObjects } from "./event-objects"
 import { createStorageUpkeep, type CompactResult, type StorageExtras } from "./storage-upkeep"
 import { createParityRecords } from "./parity-records"
@@ -437,6 +438,7 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
   const eventObjects = createEventObjects(db)
   const messages = createMessageRevisions(db, eventObjects.load)
   const deltaFold = createDeltaFold(db, eventObjects.load)
+  const transientEvents = createTransientEvents(db)
   const eventEnvelopes = createEventEnvelopes(db)
   db.run("INSERT OR IGNORE INTO meta(key, value) VALUES ('schema_version', ?)", [String(SCHEMA_VERSION)])
 
@@ -630,8 +632,9 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
     const packed = codec.packEvent(event, payload, open?.kind === "tool_call")
     const ref = packed === payload ? undefined : JSON.parse(packed).zref as string | undefined
     if (ref) eventObjects.refer(ref, event.sessionId)
-    q.insertEvent.run(event.sessionId, event.seq, event.type, event.at, compactEnvelope(packed, event))
+    q.insertEvent.run(event.sessionId, event.seq, event.type, event.at, compactProfile(compactEnvelope(packed, event), event.type))
     deltaFold.fold(event)
+    transientEvents.record(event)
     q.setSeq.run(event.seq, event.at, event.sessionId)
     if (event.type === "item.started" && TRACKED_ITEM_KINDS.has(event.kind)) {
       let items = openItems.get(event.sessionId)
@@ -1797,6 +1800,7 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
     /** Deletes a session's events and blob references. Usage history is kept (it is an aggregate). */
     deleteSession(sessionId: SessionId) {
       openItems.delete(sessionId)
+      transientEvents.forget(sessionId)
       return db.transaction(() => {
         dropSessionMemories(sessionId)
         db.query("DELETE FROM evolution_evidence WHERE session_id = ?").run(sessionId)
@@ -1979,6 +1983,10 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
         db.run("PRAGMA wal_checkpoint(TRUNCATE)")
       }
       return { ...result, bytesReclaimed: Math.max(0, before - sizeOnDisk()), vacuumed: options.vacuum === true }
+    },
+    /** Deletes the foreground and queue snapshots a settled session superseded (transient-events.ts); the daemon calls it when idle. */
+    pruneSettledEvents(limit = 20) {
+      return transientEvents.prune(limit)
     },
     foldStoredDeltas(limit = 100) {
       const result = deltaFold.migrate(limit)
