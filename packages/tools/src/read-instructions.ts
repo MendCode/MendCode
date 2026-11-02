@@ -5,7 +5,7 @@ import type { ToolContext } from "./tool"
 
 const MAX_BYTES = 16_000
 
-/** What marks one delivered version of an instruction file: its real path and `mtimeMs:size`. An edit changes it, so the file is delivered again. */
+/** What marks one delivered version of an instruction file: its real path and `fileSignature` (inode, size, mtime, ctime). An edit changes it, so the file is delivered again. */
 export const instructionClaim = (resolved: string, signature: string) => `${resolved}#${signature}`
 
 const inside = (root: string, target: string) => {

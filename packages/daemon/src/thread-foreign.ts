@@ -103,7 +103,7 @@ export function createForeignThreads(input: { homes: Required<ForeignHomes>; v1D
     if (parsed.source === "v1") return v1Lines(directory, parsed.key)
     const entry = files(directory, parsed.source).find((candidate) => candidate.key === parsed.key)
     if (!entry) return undefined
-    const cacheKey = `${entry.file}\0${entry.mtime}`
+    const cacheKey = `${entry.file}\0${entry.version}`
     const cached = cache.get(cacheKey)
     if (cached) return cached
     const { text, mtime } = await readRegular(entry.file)

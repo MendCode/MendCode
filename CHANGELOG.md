@@ -9,6 +9,14 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+### Fixed
+
+- A file rewritten twice within the filesystem's timestamp resolution (container overlays, network and FAT volumes) was treated as
+  unchanged: the ChatGPT and Claude model lists, `proxy.caFile`, instruction, skill, custom tool, prompt and goal prompt files,
+  provider and agent configs, the file viewer, imported session transcripts and code graph `source` excerpts kept showing the old
+  content. These caches now compare inode, size, mtime and ctime. A rewrite of the same length in the same tick on a filesystem
+  whose ctime is as coarse is still invisible to the code graph scan, which does not hash files.
+
 ## v0.0.3 - 2026-11-02
 
 `/memory` follows the same page standard as `/changes` with a graph drawn in braille links, `mendcode --version` names its channel,

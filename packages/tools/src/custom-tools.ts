@@ -2,6 +2,7 @@ import { realpathSync } from "node:fs"
 import { readdir, readFile, stat } from "node:fs/promises"
 import { dirname, join, resolve } from "node:path"
 import { defaultLayers, layerAllows, type ExtensionLayer } from "@mendcode/packages"
+import { fileSignature } from "@mendcode/protocol/wire"
 import { z } from "zod"
 import { compileArgsSchema, SchemaError } from "./json-schema"
 import { runManaged } from "./process"
@@ -179,7 +180,7 @@ async function manifestFiles(directory: string): Promise<Array<{ file: string; n
   for (const entry of names) {
     const file = join(directory, entry)
     const info = await stat(file).catch(() => undefined)
-    if (info?.isFile()) found.push({ file, name: entry.slice(0, -".json".length), signature: `${file}:${info.mtimeMs}:${info.size}` })
+    if (info?.isFile()) found.push({ file, name: entry.slice(0, -".json".length), signature: `${file}:${fileSignature(info)}` })
   }
   return found
 }

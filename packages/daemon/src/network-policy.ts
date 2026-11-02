@@ -1,6 +1,6 @@
 import { readFileSync, statSync } from "node:fs"
 import { rootCertificates } from "node:tls"
-import type { Settings } from "@mendcode/protocol"
+import { fileSignature, type Settings } from "@mendcode/protocol"
 
 type Fetch = typeof fetch
 type Proxy = NonNullable<Settings["proxy"]>
@@ -31,12 +31,13 @@ export function bypassesProxy(host: string, noProxy: readonly string[] | undefin
  * Nothing is logged: the proxy URL may carry credentials. Without the setting the request is unchanged (Bun still honours `HTTPS_PROXY`).
  */
 export function createProxyFetch({ settings, base }: { settings(): Settings; base: Fetch }): Fetch {
-  let bundle: { file: string; mtimeMs: number; ca: string[] } | undefined
+  let bundle: { file: string; signature: string; ca: string[] } | undefined
   function authorities(file: string) {
     const info = statSync(file)
     if (!info.isFile() || info.size > MAX_CA_BYTES) throw new Error("[NETWORK]: proxy.caFile must be a PEM file under 2 MB")
-    if (bundle?.file === file && bundle.mtimeMs === info.mtimeMs) return bundle.ca
-    bundle = { file, mtimeMs: info.mtimeMs, ca: [...rootCertificates, readFileSync(file, "utf8")] }
+    const signature = fileSignature(info)
+    if (bundle?.file === file && bundle.signature === signature) return bundle.ca
+    bundle = { file, signature, ca: [...rootCertificates, readFileSync(file, "utf8")] }
     return bundle.ca
   }
   const proxied = ((input: Parameters<Fetch>[0], init?: Parameters<Fetch>[1]) => {

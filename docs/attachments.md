@@ -9,7 +9,7 @@ Nearby `AGENTS.override.md`, `AGENTS.md`, `CLAUDE.md`, or legacy `CONTEXT.md` be
 file reads as a system reminder (first match per directory, outermost first, `@include` lines followed, at most 16 KB).
 This is the same loader as the system prompt's ([instruction files](resources-config.md#instruction-files)), so file
 precedence, includes, limits and the fallback and root-marker settings agree. Native history remembers each loaded file
-and its version (path, mtime and size): re-reading does not repeat unchanged instructions, an edited file is injected
+and its version (path, inode, size, mtime and ctime): re-reading does not repeat unchanged instructions, an edited file is injected
 again, and compaction can make them eligible again. Root/global instructions are in the system prompt.
 
 `/attach <path>` and dropped/pasted paths use the daemon. Project files/directories insert `@path` (quoted for

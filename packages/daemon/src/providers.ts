@@ -2,7 +2,7 @@ import { modelAllowed } from "./models"
 import type { ModelsDev } from "./models-dev"
 import { chmodSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs"
 import path from "node:path"
-import { PROVIDER_ID, ProviderBaseUrl, ProviderId, ProviderModel, ProviderType, ProviderSdkModule, type ModelInfo, type ProviderInfo, type ProviderTestResult, type ProviderAdapter, ProviderOptions, ProviderConfig, ModelParameters, redactSecrets, type ModelChoice, type Settings } from "@mendcode/protocol"
+import { fileSignature, PROVIDER_ID, ProviderBaseUrl, ProviderId, ProviderModel, ProviderType, ProviderSdkModule, type ModelInfo, type ProviderInfo, type ProviderTestResult, type ProviderAdapter, ProviderOptions, ProviderConfig, ModelParameters, redactSecrets, type ModelChoice, type Settings } from "@mendcode/protocol"
 import {
   DEFAULT_PROVIDER_EFFORT,
   PROVIDER_PRESETS,
@@ -232,7 +232,7 @@ export function createProviderService(options: { dir: string; env?: Env; fetch?:
     let insecure = false
     try {
       const stat = statSync(file)
-      stamp = `${stat.mtimeMs}:${stat.size}`
+      stamp = fileSignature(stat)
       insecure = (stat.mode & 0o077) !== 0
     } catch {
       cache = { stamp, entries: {} }

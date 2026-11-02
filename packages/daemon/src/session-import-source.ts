@@ -2,7 +2,7 @@ import { closeSync, constants, openSync, readdirSync, readSync, statSync } from 
 import { open } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import { SESSION_IMPORT_MAX_BYTES, type SessionTranscript } from "@mendcode/protocol"
+import { fileSignature, SESSION_IMPORT_MAX_BYTES, type SessionTranscript } from "@mendcode/protocol"
 import { detectForeign, foreignTranscript, type ForeignKind } from "./session-import-foreign"
 
 /** A foreign transcript can be long (tool output); this bounds what one import reads, before translation trims it. */
@@ -30,17 +30,24 @@ export async function readRegular(file: string, max = FOREIGN_MAX_BYTES): Promis
 const safe = <T>(read: () => T[]): T[] => { try { return read() } catch { return [] } }
 
 /** Claude Code keeps a project's sessions in `projects/<path with every non-alphanumeric character as "-">/`. */
-function claudeFiles(home: string, directory: string): Array<{ file: string; kind: ForeignKind; mtime: number }> {
+function claudeFiles(home: string, directory: string): Candidate[] {
   const root = path.join(home, "projects", path.resolve(directory).replace(/[^a-zA-Z0-9]/g, "-"))
-  return safe(() => readdirSync(root).filter((name) => name.endsWith(".jsonl")).map((name) => ({ file: path.join(root, name), kind: "claude-code" as const, mtime: statSync(path.join(root, name)).mtimeMs })))
+  return safe(() => readdirSync(root).filter((name) => name.endsWith(".jsonl")).map((name) => candidate({ file: path.join(root, name), kind: "claude-code" })))
+}
+
+/** A transcript file: when it was last written (newest first) and `version`, which changes whenever its content does. */
+type Candidate = { file: string; kind: ForeignKind; mtime: number; version: string }
+function candidate({ file, kind }: { file: string; kind: ForeignKind }): Candidate {
+  const info = statSync(file)
+  return { file, kind, mtime: info.mtimeMs, version: fileSignature(info) }
 }
 
 /** Codex files by date; a rollout belongs to the project whose directory its first row (`session_meta`) names. */
-function codexFiles(home: string, directory: string): Array<{ file: string; kind: ForeignKind; mtime: number }> {
+function codexFiles(home: string, directory: string): Candidate[] {
   const root = path.join(home, "sessions")
   const wanted = path.resolve(directory)
   const sorted = (dir: string) => safe(() => readdirSync(dir)).sort().reverse()
-  const out: Array<{ file: string; kind: ForeignKind; mtime: number }> = []
+  const out: Candidate[] = []
   let scanned = 0
   for (const year of sorted(root)) for (const month of sorted(path.join(root, year))) for (const day of sorted(path.join(root, year, month))) for (const name of sorted(path.join(root, year, month, day))) {
     if (!/^rollout-.*\.jsonl$/.test(name) || scanned >= SCANNED_ROLLOUTS) continue
@@ -50,7 +57,7 @@ function codexFiles(home: string, directory: string): Array<{ file: string; kind
       const head = headOf(file)
       const meta = JSON.parse(head) as { type?: string; payload?: { cwd?: unknown }; cwd?: unknown }
       const cwd = meta.payload?.cwd ?? meta.cwd
-      if (typeof cwd === "string" && path.resolve(cwd) === wanted) out.push({ file, kind: "codex", mtime: statSync(file).mtimeMs })
+      if (typeof cwd === "string" && path.resolve(cwd) === wanted) out.push(candidate({ file, kind: "codex" }))
     } catch { /* unreadable or foreign first line: not ours */ }
   }
   return out

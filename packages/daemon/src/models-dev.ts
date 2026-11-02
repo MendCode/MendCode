@@ -1,6 +1,6 @@
 import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs"
 import path from "node:path"
-import { ModelMetadata, type ProviderModel } from "@mendcode/protocol"
+import { fileSignature, ModelMetadata, type ProviderModel } from "@mendcode/protocol"
 import type { Fetch } from "@mendcode/engine-native"
 
 export const MODELS_DEV_URL = "https://models.dev/api.json"
@@ -22,12 +22,12 @@ const KEPT = ["reasoning", "reasoning_options", "cost"] as const
 export function createModelsDev(options: { dir: string; fetch?: Fetch; now?: () => number; log?(message: string): void }) {
   const file = path.join(options.dir, CACHE_FILE)
   const now = options.now ?? Date.now
-  let cache: { stamp: number; providers: Record<string, Record<string, Facts>> } | undefined
+  let cache: { stamp: string; providers: Record<string, Record<string, Facts>> } | undefined
   let refreshing: Promise<boolean> | undefined
 
   function read(): Record<string, Record<string, Facts>> {
-    let stamp: number
-    try { stamp = statSync(file).mtimeMs } catch { return {} }
+    let stamp: string
+    try { stamp = fileSignature(statSync(file)) } catch { return {} }
     if (cache?.stamp === stamp) return cache.providers
     try { cache = { stamp, providers: JSON.parse(readFileSync(file, "utf8")) } } catch { cache = { stamp, providers: {} } }
     return cache.providers

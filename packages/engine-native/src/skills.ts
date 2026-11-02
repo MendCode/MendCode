@@ -1,6 +1,7 @@
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs"
 import path from "node:path"
 import { defaultLayers, emptyDiagnostics, frontmatterBoolean, frontmatterHint, frontmatterList, frontmatterText, layerAllows, layerLabel, layerReads, oneLine, parseFrontmatter, resolvePrecedence, type Candidate, type ExtensionLayer, type ResourceDiagnostics } from "@mendcode/packages"
+import { fileSignature } from "@mendcode/protocol"
 import { defineTool } from "@mendcode/tools"
 import { z } from "zod"
 
@@ -55,14 +56,15 @@ export function skillFolderLine(dir: string) {
 }
 
 type Parsed = { skill: Omit<Skill, "dir" | "source" | "pkg" | "layer">; keys: string[] } | { problem: string }
-const cache = new Map<string, { mtimeMs: number; size: number; value: Parsed & { body: string } }>()
+const cache = new Map<string, { signature: string; value: Parsed & { body: string } }>()
 
 function parseSkill(file: string, folder: string): (Parsed & { body: string }) | { problem: string } {
   let info: ReturnType<typeof statSync>
   try { info = statSync(file) } catch { return { problem: "not readable" } }
   if (info.size > MAX_SKILL_CHARS * 4) return { problem: "larger than 160 KB" }
   const cached = cache.get(file)
-  if (cached?.mtimeMs === info.mtimeMs && cached.size === info.size) return cached.value
+  const signature = fileSignature(info)
+  if (cached?.signature === signature) return cached.value
   let text: string
   try { text = readFileSync(file, "utf8") } catch { return { problem: "not readable" } }
   const front = parseFrontmatter(text)
@@ -99,7 +101,7 @@ function parseSkill(file: string, folder: string): (Parsed & { body: string }) |
     }
   }
   if (cache.size > 1_000) cache.clear()
-  cache.set(file, { mtimeMs: info.mtimeMs, size: info.size, value })
+  cache.set(file, { signature, value })
   return value
 }
 

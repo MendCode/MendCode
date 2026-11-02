@@ -1,6 +1,7 @@
 import { open, realpath } from "node:fs/promises"
 import { join, relative, isAbsolute } from "node:path"
 import type { Graph, GraphNode } from "./graph"
+import { sameFileVersion } from "@mendcode/protocol/wire"
 import { MAX_FILE_BYTES } from "./types"
 
 /** One bounded read per file, shared by all requested symbols. Source remains untrusted tool output. */
@@ -20,11 +21,11 @@ export async function sourceExcerpts({ graph, nodes, signal }: { graph: Graph; n
       try {
         const info = await file.stat()
         const indexed = graph.files.get(path)
-        if (!info.isFile() || info.size > MAX_FILE_BYTES || info.mtimeMs !== indexed?.mtimeMs || info.ctimeMs !== indexed.ctimeMs) continue
+        if (!info.isFile() || info.size > MAX_FILE_BYTES || info.mtimeMs !== indexed?.mtimeMs || info.ctimeMs !== indexed.ctimeMs || info.size !== indexed.size) continue
         const buffer = Buffer.alloc(info.size + 1)
         const { bytesRead } = await file.read(buffer, 0, buffer.length, 0)
         const after = await file.stat()
-        if (bytesRead !== info.size || after.mtimeMs !== info.mtimeMs || after.ctimeMs !== info.ctimeMs) continue
+        if (bytesRead !== info.size || !sameFileVersion(after, info)) continue
         rows = buffer.subarray(0, bytesRead).toString("utf8").split(/\r?\n/)
       } finally { await file.close() }
     } catch { continue }
