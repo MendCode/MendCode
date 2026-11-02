@@ -225,6 +225,13 @@ The shared request is sent when all of these hold; otherwise the own request, as
 | the stored history still starts with the messages that call sent (nothing was edited, removed or snipped since) | `history-changed` |
 | it fits: the last call's context (the provider's count: its request plus its reply; an estimate without one), plus what the history gained since, plus the prompt, is within the model's input limit; when only a context window is stated, the summary's `max_summary_tokens` (4,096 unset) must fit in it too | `too-large` |
 
+With no `compaction` role set, the summariser is the session's own model, effort and variant, including a model chosen for the
+session with `/model`, so the shared request applies. The built-in `quick`, `balanced` and `deep` recipes do not bind `compaction`.
+Set the role only to choose another summariser on purpose; `/models` then shows a muted line under the `compaction` row saying
+it does not reuse the session's prompt cache (shown only while the role differs from what the session uses). A `compaction` role
+saved by an earlier build's recipe (gpt-6-luna on low or medium effort) is removed once on the first start, so it follows the
+session again.
+
 Elapsed time is not a condition. After the cache has expired neither request reads anything from it, and the shared one is then
 larger by the tool list and by the old tool output the own request would have pruned (nothing, far from the compaction point). A
 lifetime guessed too short would give up the whole cached read instead, and most providers state none.

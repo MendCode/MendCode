@@ -11,6 +11,8 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Changed
 
+- Compaction uses the session's own model by default, so it reuses the prompt cache; the built-in recipes no longer set a
+  `compaction` role, and `/models` notes when a separate compaction model gives that up.
 - The working row's token count shows new input and the context read from the provider's prompt cache separately.
 - The code graph autopilot refreshes the graph when a lot of code has changed, not after a number of edited files. See
   [code graph](docs/code-graph.md#autopilot).
