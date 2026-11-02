@@ -224,7 +224,7 @@ export function createChrome(ctx: AppContext, actions: {
     const counts = graphShown && input.directory ? codegraph.get(input.directory) : undefined
     return {
       ...(directory ? { directory } : {}),
-      codegraph: { on: featureOn(state.settingsNow, "codegraph"), ...(savedTokens ? { savedTokens } : {}), ...(counts?.state === "skipped" ? { skipped: counts.reason ?? "off" } : counts ? { index: { state: counts.state === "indexing" ? "indexing" as const : "indexed" as const, files: counts.files, symbols: counts.symbols, edges: counts.edges } } : {}) },
+      codegraph: { on: featureOn(state.settingsNow, "codegraph"), ...(savedTokens ? { savedTokens } : {}), ...(counts?.state === "skipped" ? { skipped: counts.reason ?? "off" } : counts ? { index: { state: counts.state === "indexing" ? "indexing" as const : "indexed" as const, files: counts.files, symbols: counts.symbols, edges: counts.edges, ...(counts.percent !== undefined ? { percent: counts.percent } : {}) } } : {}) },
       texts: profile.footerText,
       ...(icons ? { icons: { mode: profile.footerIcons, ascii: asciiMarks() } } : {}),
       separator: profile.statusSeparator,

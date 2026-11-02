@@ -9,6 +9,19 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+### New
+
+- **Code graph autopilot (nightly only by default).** In the full tier, MendCode now builds the code graph of a real project by itself,
+  in the background, when a session opens or a turn begins there, and refreshes it once ten files (or 3% of the project) are new,
+  changed or deleted, looking at the disk at most every two minutes. The model no longer has to remember to build it: a graph lookup
+  on a project with no graph starts the build and answers `building (42%) ... use grep meanwhile, then call again` instead of giving
+  up, and the system prompt carries one ~70-token line telling it to locate code with `graph_find`/`graph_callers`/`graph_file_api`
+  first and read only the spans they return. Claude Code, Codex and ACP agents get the same line with MendCode's graph tools. It
+  never builds in the home folder, the filesystem root, operating system folders, `node_modules`, a folder with no git repository or
+  project manifest, or a project over 10,000 files (`/graph on|off` still decides). The footer's graph segment shows `indexing… 40%`.
+  On by default only in nightly, dev and local builds while it is tested; in beta and stable it is off until
+  `/tier graph_autopilot on`. Minimalist and balanced are unchanged. See [code graph](docs/code-graph.md#autopilot).
+
 ### Changed
 
 - `mendcode --version` says which channel the binary is from: `0.0.2 (stable)`, `0.0.2-beta.4 (beta)`,

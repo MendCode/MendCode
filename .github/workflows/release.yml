@@ -28,11 +28,20 @@ env:
 jobs:
   checks:
     runs-on: ubuntu-24.04
-    # 45 min (the same limit as ci.yml). Arithmetic: the four parts take 474 s on a developer machine (cli 179, daemon 139, packages 138,
-    # rest 18). The only measurement on this runner is the first release run: its cli part took 609 s against 179 s here, 3.4 times
-    # (2.7 times without the 16 failing tests), so the parts need about 474 s x 3.4 = 27 min, setup and typecheck another 1.5 min.
-    # 45 min is that plus 50 %. A part that hangs is cut at 25 min by MENDCODE_TEST_PART_SECONDS and still leaves room for the other three.
+    # The suite in five rows on five runners at once (the same rows as ci.yml). One runner took them one after another: 1006 s on
+    # 2026-11-01 (v0.0.2-beta.4: daemon 335, packages 182, rest 35, cli-1..12 454 s together), 17 of the release's 19 minutes. Now the
+    # gate takes as long as its slowest row, daemon, about 6 minutes with setup. Every row must pass; fail-fast is off so one run shows
+    # every failing row. 45 min per row as before: a part that hangs is cut at 25 min by MENDCODE_TEST_PART_SECONDS.
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { label: daemon, parts: daemon, shard: "", typecheck: "false" }
+          - { label: packages, parts: packages rest, shard: "", typecheck: "true" }
+          - { label: cli-1of3, parts: cli, shard: 1/3, typecheck: "false" }
+          - { label: cli-2of3, parts: cli, shard: 2/3, typecheck: "false" }
+          - { label: cli-3of3, parts: cli, shard: 3/3, typecheck: "false" }
     outputs:
       version: ${{ steps.channel.outputs.version }}
       prerelease: ${{ steps.channel.outputs.prerelease }}
@@ -57,6 +66,11 @@ jobs:
           echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
       # Typecheck and the whole suite in parts (scripts/test-shards.sh): the gate that fails the release when a part fails.
       - uses: ./.github/actions/checks
+        with:
+          label: ${{ matrix.label }}
+          parts: ${{ matrix.parts }}
+          shard: ${{ matrix.shard }}
+          typecheck: ${{ matrix.typecheck }}
 
   # The title and notes (scripts/release-notes.ts) from CHANGELOG.md at the tag, against the previous release of the channel. It runs
   # beside the gate, so a release without notes fails before anything is built or signed.

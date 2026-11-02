@@ -75,7 +75,7 @@ import { sessionsTool, tellTool } from "./peer-tools"
 import { threadsTool } from "./thread-tool"
 import { packagesTool } from "./packages-tool"
 import { sessionMetaTool } from "./session-meta-tool"
-import { createCodeGraphTools, createCodeOverview, createIndexGate, createIndexer } from "@mendcode/codegraph"
+import { createCodeGraphTools, createCodeOverview, createGraphAutopilot, createIndexGate, createIndexer } from "@mendcode/codegraph"
 import { GRAPH_TOOL_PATTERNS, graphIndexMode } from "./graph-gate"
 import { filteredCatalog, modelAllowed } from "./models"
 import { createToolOutputs, toolOutputSettings } from "./tool-output"
@@ -99,7 +99,7 @@ import { createCodegraphStatus } from "./codegraph-status"
 import { systemPartsWith, type PromptFiles } from "./extensions"
 import { promptContextParts, promptFileOverrides } from "./prompt-context"
 import { outputStyleText } from "./output-styles"
-import { createPromptModes, visiblePlanPart } from "./prompt-modes"
+import { createPromptModes, graphAutopilotPart, visiblePlanPart } from "./prompt-modes"
 import { selfKnowledgeText, visiblePlanText } from "./prompt-guidance"
 import { foreignEngine, invalidChoice, modelEngine, resolveModel, unusableRoles, usableEffort, type ModelCatalog } from "./models"
 import { claudeAlias, claudeCompactEnv, claudeSubagentEnv, createClaudeDetection, createClaudeModelCatalog, probeClaude } from "./claude-models"
@@ -113,7 +113,8 @@ import { readUsageProfile } from "./usage-profile"
 import { windowOverride } from "./session-context-window"
 import { memoryExtractionPrompt } from "./memory-extract-prompt"
 import type { ModelChoice, ModelInfo } from "@mendcode/protocol"
-import { effectiveSettings, featureOn, findModel, modelContextOf } from "@mendcode/protocol"
+import { effectiveSettings, featureOn, findModel, modelContextOf, setBuildChannel } from "@mendcode/protocol"
+import { buildChannelOf } from "../../upgrade/src/releases"
 import { claudeFastModel } from "@mendcode/protocol/wire"
 import { globalTrigger } from "./context-limits"
 import { hosting } from "./hosting"
@@ -125,6 +126,8 @@ export const DEFAULT_DIR = path.join(homedir(), ".mendcode-v2")
 
 /** The daemon's flags: this process's own, or the host's when the terminal runs the daemon in-process (./hosting). */
 const argv = hosting.argv ?? process.argv
+// The channel of this binary, for features that are on by default only in some (graph_autopilot).
+setBuildChannel(buildChannelOf(packageJson.version))
 /** A log line: the daemon's log file when a terminal hosts it (its screen is the TUI), stderr otherwise. */
 const logLine = (message: string) => (hosting.log ? hosting.log("info", message) : console.error(message))
 // Before anything is started: what a Claude Code shell left in the environment must not reach the sessions' commands and programs
@@ -181,11 +184,13 @@ validateRemoteListener(remoteOptions)
 // Code graph tools index lazily on first use; `MENDCODE_CODEGRAPH=0` leaves them out entirely.
 const codegraphStatus = createCodegraphStatus()
 // One indexer for the tools and for the Galaxy panel's code mode (`codegraph.overview`), so both read the same graph of a project.
-const codeIndexer = process.env.MENDCODE_CODEGRAPH === "0" ? undefined : createIndexer({ cacheDir: path.join(dir, "codegraph"), now: Date.now, onIndex: codegraphStatus.publish })
+const codeIndexer = process.env.MENDCODE_CODEGRAPH === "0" ? undefined : createIndexer({ cacheDir: path.join(dir, "codegraph"), now: Date.now, onIndex: codegraphStatus.publish, onProgress: codegraphStatus.publish })
 // Which folders are indexed (docs/code-graph.md): `auto` a git repository under the size limit, or the project's `/graph on|off`.
 const codeGate = codeIndexer ? createIndexGate() : undefined
 const graphGateOf = (cwd: string, signal?: AbortSignal) => codeGate!.check({ cwd, mode: graphIndexMode(extractionSettings(), cwd), signal })
-const codeGraphTools = codeIndexer ? createCodeGraphTools({ cacheDir: path.join(dir, "codegraph"), indexer: codeIndexer, gate: graphGateOf }) : []
+// Builds the graph of a real project by itself and keeps it fresh (feature `graph_autopilot`, nightly/dev/local by default); the same gate decides where.
+const graphAutopilot = codeIndexer && codeGate ? createGraphAutopilot({ indexer: codeIndexer, gate: graphGateOf, enabled: () => featureOn(extractionSettings(), "graph_autopilot", { safeMode }) && featureOn(extractionSettings(), "codegraph", { safeMode }), log: logLine }) : undefined
+const codeGraphTools = codeIndexer ? createCodeGraphTools({ cacheDir: path.join(dir, "codegraph"), indexer: codeIndexer, gate: graphGateOf, ...(graphAutopilot ? { autopilot: graphAutopilot } : {}) }) : []
 /** The graph tools leave the model's list in a folder the gate skips; the footer is told once. Unknown yet (a size not measured): listed. */
 const hiddenGraphTools = (directory: string): readonly string[] => {
   if (!codeGate || !featureOn(extractionSettings(), "codegraph", { safeMode })) return []
@@ -416,6 +421,8 @@ function systemParts(root: string, memory: string, prompts: PromptFiles, modelID
       { id: "skills", label: "skills", text: skillBlock, count: (skillBlock.match(/^- /gm) ?? []).length },
       // One line while `todo` is listed (balanced and full, feature `visible_plan`): the user follows the list in the progress row.
       visiblePlanPart(tools),
+      // One line while the feature is on and `graph_find` is listed: the graph is built and kept fresh for the model, which locates code with it first.
+      graphAutopilotPart({ tools, on: featureOn(extractionSettings(), "graph_autopilot", { safeMode }) }),
       { id: "capabilities-index", label: "MendCode capabilities", text: tools ? capabilityIndex(tools) : "" },
       { id: "memory", label: "memory", text: memory, count: (memory.match(/^- \[/gm) ?? []).length },
     ],
@@ -461,6 +468,7 @@ export const daemon = await startDaemon({
   ...(process.env.MENDCODE_FOREIGN_HOME ? { foreignHome: process.env.MENDCODE_FOREIGN_HOME } : dir === DEFAULT_DIR ? { foreignHome: homedir() } : {}),
   ...(process.env.MENDCODE_REASONING_ENDPOINT && process.env.MENDCODE_REASONING_TOKEN ? { reasoningEvaluator: createLoopbackJevEvaluator({ endpoint: process.env.MENDCODE_REASONING_ENDPOINT, token: process.env.MENDCODE_REASONING_TOKEN }) } : {}),
   codegraphStatus,
+  ...(graphAutopilot ? { graphAutopilot } : {}),
   ...(codeIndexer ? { codeOverview: createCodeOverview({ indexer: codeIndexer }) } : {}),
   ...(codeGate ? { codeGate } : {}),
   // Quota refresh (docs/usage-limit.md): how each provider's windows can be asked for. Nothing runs unless the user's `quotaRefresh` lists the provider.

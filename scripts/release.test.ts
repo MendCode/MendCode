@@ -84,6 +84,39 @@ test("the CI workflow runs the same gate on Linux for pull requests and on deman
   expect(workflow.jobs.checks!["timeout-minutes"]! * 60).toBeGreaterThanOrEqual(partSeconds + 15 * 60)
 })
 
+type CheckRow = { label: string; parts: string; shard: string; typecheck: string }
+const checkRows = (job: Job) => (job.strategy as unknown as { "fail-fast": boolean; matrix: { include: CheckRow[] } })
+
+test("the gate runs on parallel rows that together are the whole suite once, the same rows in CI and in the release", () => {
+  const release = checkRows(workflow.jobs.checks!)
+  const pr = checkRows(ci.jobs.checks!)
+  expect(pr).toEqual(release)
+  expect(release["fail-fast"]).toBe(false)
+  const rows = release.matrix.include
+  expect(new Set(rows.map((row) => row.label)).size).toBe(rows.length)
+  expect(rows.filter((row) => row.typecheck === "true")).toHaveLength(1)
+  // A whole part runs on exactly one row; a sharded part runs on rows 1/N … N/N of one N, so a new cli-13 still lands on a row.
+  const whole = rows.filter((row) => !row.shard).flatMap((row) => row.parts.split(" "))
+  const sharded = rows.filter((row) => row.shard)
+  for (const part of new Set(sharded.map((row) => row.parts))) {
+    const shards = sharded.filter((row) => row.parts === part).map((row) => row.shard)
+    const n = Number(shards[0]!.split("/")[1])
+    expect(shards.toSorted()).toEqual(Array.from({ length: n }, (_, index) => `${index + 1}/${n}`).toSorted())
+    expect(whole).not.toContain(part)
+  }
+  const covered = [...whole, ...new Set(sharded.map((row) => row.parts))]
+  expect(covered.toSorted()).toEqual(["cli", "daemon", "packages", "rest"])
+  expect(new Set(covered).size).toBe(covered.length)
+  // Every row hands its parts, shard and typecheck to the gate; the gate passes them to the script and names its logs per row.
+  for (const job of [workflow.jobs.checks!, ci.jobs.checks!]) {
+    expect(job.steps.find((step) => step.uses === LOCAL_GATE)?.with).toEqual({ label: "${{ matrix.label }}", parts: "${{ matrix.parts }}", shard: "${{ matrix.shard }}", typecheck: "${{ matrix.typecheck }}" })
+  }
+  const tests = gate.runs.steps.find((step) => step.run?.includes("test-shards.sh"))!
+  expect(tests.env).toMatchObject({ MENDCODE_TEST_SHARD: "${{ inputs.shard }}", PARTS: "${{ inputs.parts }}" })
+  expect(gate.runs.steps.find((step) => step.name === "Typecheck")?.if).toBe("inputs.typecheck == 'true'")
+  expect(gateSource).toContain("name: test-logs-${{ inputs.label }}")
+})
+
 test("the gate keeps what it needs to explain a run that ends without a failing test: logs whatever the outcome, a heartbeat, a session per part", () => {
   const tests = gate.runs.steps.find((step) => step.run?.includes("test-shards.sh"))!
   expect(tests.env).toMatchObject({ MENDCODE_TEST_HEARTBEAT_SECONDS: "20", MENDCODE_TEST_NEW_SESSION: "1" })

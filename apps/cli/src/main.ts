@@ -32,11 +32,13 @@ import { parsePackageFileCommand, runPackageFileCommand } from "./package-file-c
 import { PROGRAM_NAME } from "@mendcode/program"
 import { createHerdrReporter, createTuiosChildren, createTuiosMeta, herdrPane, paneState, tuiosPane, waitingChild, type PaneChild, type PaneFacts } from "./herdr"
 import { guardClient, originCapabilities, originRefusal, startedBySession } from "./agent-origin"
-import { AGENT_SHELL_ENV } from "@mendcode/protocol/wire"
+import { AGENT_SHELL_ENV, setBuildChannel } from "@mendcode/protocol/wire"
 import { EXTENSION_DIALOGS_CAPABILITY } from "@mendcode/extension-api"
 
 /** The product version shown on the home screen. */
 const CLI_VERSION = packageJson.version
+// Features that are on by default only in some release channels (graph_autopilot) read the channel of this binary.
+setBuildChannel((await import("@mendcode/upgrade/releases")).buildChannelOf(CLI_VERSION))
 
 let globalOptions: ReturnType<typeof parseGlobalOptions>
 try { globalOptions = parseGlobalOptions(process.argv.slice(2)) } catch (error) {

@@ -14,6 +14,7 @@ import localFile from "../prompts/focus/local.prompt.md" with { type: "file" }
 import operatorGuideFile from "../prompts/operator-guide.md" with { type: "file" }
 import selfKnowledgeFile from "../prompts/self-knowledge.md" with { type: "file" }
 import visiblePlanFile from "../prompts/visible-plan.md" with { type: "file" }
+import graphAutopilotFile from "../prompts/graph-autopilot.md" with { type: "file" }
 import { PROGRAM_NAME } from "@mendcode/program"
 
 /**
@@ -134,6 +135,18 @@ export function guideText(family: PromptFocus): string {
 export function modelNote(family: PromptFocus, modelID: string | undefined): ModelNote | undefined {
   const id = (modelID ?? "").trim()
   return id ? familyGuidance(family)?.notes.find((note) => note.match.test(id)) : undefined
+}
+
+/**
+ * The graph autopilot's two lines (feature `graph_autopilot`): `native`, one line in the system prompt while `graph_find` is listed;
+ * `harness`, appended to what MendCode tells Claude Code, Codex and ACP agents about its graph tools. Static text, so a turn's prompt never changes.
+ */
+export function graphAutopilotText(): { native: string; harness: string } {
+  return once("graph-autopilot", () => {
+    const [native = "", harness = ""] = readFileSync(graphAutopilotFile, "utf8").split(/^<!-- harness -->$/m).map((block) => block.trim())
+    if (!native || !harness) throw new TypeError("[GUIDANCE]: graph-autopilot.md needs a native line, a <!-- harness --> line and a harness line")
+    return { native, harness }
+  })
 }
 
 /** The generated texts name the program as `{{program}}`: the name the user typed (`mendcode`, or a developer's wrapper) is only known at run time. */

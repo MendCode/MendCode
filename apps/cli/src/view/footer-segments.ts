@@ -26,7 +26,7 @@ export const EXTRA_SEGMENTS: Readonly<Record<string, Segment>> = {
     const saved = graph.savedTokens ? [{ text: ` · ~${compact(graph.savedTokens)} saved`, fg: "muted" as const }] : []
     const index = graph.index
     // The counts the daemon pushed when the index last changed; before any graph tool indexed this project there are none, and it reads `graph on`.
-    if (index?.state === "indexing") return [{ text: "GRAPH ", fg: "text", bold: true }, { text: "indexing…", fg: "warning" }, ...saved]
+    if (index?.state === "indexing") return [{ text: "GRAPH ", fg: "text", bold: true }, { text: index.percent !== undefined ? `indexing… ${index.percent}%` : "indexing…", fg: "warning" }, ...saved]
     if (index) {
       const number = (value: number) => value.toLocaleString("en-US")
       // Compact (under the normal breakpoint, as the quota windows): the files alone, `GRAPH 2,594 files · indexed`.

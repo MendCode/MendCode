@@ -5,6 +5,7 @@ import path from "node:path"
 import type { EnginePort, TurnInput } from "@mendcode/kernel"
 import type { SessionId } from "@mendcode/protocol"
 import { PROGRAM_NAME } from "@mendcode/program"
+import { graphAutopilotText } from "./prompt-guidance"
 
 /** The MCP server name Claude Code sees; its tools are `mcp__mendcode__<name>` there. */
 export const HOST_MCP_SERVER = "mendcode"
@@ -19,12 +20,14 @@ type HostTool = Awaited<ReturnType<NonNullable<EnginePort["hostTools"]>>>[number
  * there a deferred MCP tool is a nested tool of its `exec`, listed in `ALL_TOOLS` (codex 0.162). `unbridged` is the session's engine
  * key when it has no thread bridge: sub-agents on MendCode's other models are then off, and the model is told how they are turned on.
  */
-export function hostInstructions(tools: readonly HostTool[], harness: "claude" | "codex" = "claude", unbridged?: string) {
+export function hostInstructions(tools: readonly HostTool[], harness: "claude" | "codex" = "claude", unbridged?: string, graphAutopilot = false) {
   const has = (prefix: string) => tools.some((tool) => tool.name.startsWith(prefix))
   const codex = harness === "codex"
   return [
     `MendCode's own tools, named mcp__mendcode__<tool>. They run in MendCode with its approvals. Where one fits, call it first: it is what the user sees and expects in this app.${codex ? " One not listed as a tool of its own is a nested tool of exec (await tools.mcp__mendcode__graph_find({ query })), named in ALL_TOOLS." : ""}`,
     ...(has("graph_") ? [`Code search and navigation: the project has a prebuilt code graph. For where something is, how it works, who calls it or what a file exports, call mcp__mendcode__graph_find (then graph_callers, graph_file_api, graph_map) BEFORE ${codex ? "rg, grep, find or reading whole files" : "Bash grep/rg/find, Grep, Glob or reading whole files"}. It answers with exact file:line. Fall back to text search only for literal strings in logs or non-code files, or when the graph has no answer.${codex ? "" : " If these tools are listed by name only (deferred), load them once, at the start of the first code task: ToolSearch \"select:mcp__mendcode__graph_find,mcp__mendcode__graph_callers,mcp__mendcode__graph_file_api\"."}`] : []),
+    // The same line a native session carries (feature `graph_autopilot`): MendCode builds and refreshes the graph, so it is never skipped for lack of one.
+    ...(graphAutopilot && has("graph_") ? [graphAutopilotText().harness] : []),
     ...(has("computer_") ? ["Screen and apps: you DO have computer use here. To look at, click or type in an app on the user's computer, call mcp__mendcode__computer_session, computer_observe, computer_key and computer_capture. Do not drive apps with AppleScript or say you have no computer use."] : []),
     ...(has("image_gen") ? [`Images: you DO have image generation here. When the user asks for an image, call mcp__mendcode__image_gen${codex ? "" : " (load it with ToolSearch \"select:mcp__mendcode__image_gen\" if deferred)"}; it saves the file and shows it in MendCode. Do not say you cannot or suggest another tool or engine.`] : []),
     ...(has("webfetch") || has("websearch") ? ["Web: when your own web fetch or search refuses a site, is blocked or is missing, call mcp__mendcode__webfetch (a page, PDF or public repository) or mcp__mendcode__websearch. They run in MendCode from the user's machine; say which one you used."] : []),
@@ -86,6 +89,8 @@ export function createHostMcp(options: {
   call(input: { turn: TurnInput; name: string; args: unknown }): ReturnType<NonNullable<EnginePort["hostCall"]>>
   /** The session's engine key (`claude`, `codex`, `acp:<name>`) when it has no thread bridge, which delegates to MendCode's other models. */
   unbridged?(sessionId: SessionId): string | undefined
+  /** Whether the graph autopilot (feature `graph_autopilot`) is on: the instructions then add its line about the graph tools. */
+  graphAutopilot?(): boolean
   /** Tests inject a listener without opening a socket. */
   listen?(handler: (request: Request) => Promise<Response>): { url: string; stop(): void }
 }) {
@@ -117,7 +122,7 @@ export function createHostMcp(options: {
     const error = (code: number, text: string) => json({ jsonrpc: "2.0", id: message.id, error: { code, message: text } })
     const directory = options.directory(sessionId)
     const listed = async () => (directory ? await options.tools({ directory, sessionId }).catch(() => []) : [])
-    if (message.method === "initialize") return reply({ protocolVersion: ["2025-03-26", "2025-06-18", "2025-11-25"].includes(message.params?.protocolVersion) ? message.params.protocolVersion : "2025-03-26", capabilities: { tools: {} }, serverInfo: { name: HOST_MCP_SERVER, version: "1" }, instructions: hostInstructions(await listed(), "claude", options.unbridged?.(sessionId)) })
+    if (message.method === "initialize") return reply({ protocolVersion: ["2025-03-26", "2025-06-18", "2025-11-25"].includes(message.params?.protocolVersion) ? message.params.protocolVersion : "2025-03-26", capabilities: { tools: {} }, serverInfo: { name: HOST_MCP_SERVER, version: "1" }, instructions: hostInstructions(await listed(), "claude", options.unbridged?.(sessionId), options.graphAutopilot?.() ?? false) })
     if (message.method === "ping") return reply({})
     if (message.method === "tools/list") return reply({ tools: (await listed()).map((tool) => ({ name: tool.name, description: tool.description, inputSchema: mcpInputSchema(tool.parameters) })) })
     if (message.method !== "tools/call") return error(-32601, "Unknown method")
@@ -143,7 +148,7 @@ export function createHostMcp(options: {
       const directory = options.directory(sessionId)
       if (!options.enabled() || !directory) return undefined
       const tools = await options.tools({ directory, sessionId }).catch(() => [])
-      return tools.length ? hostInstructions(tools, harness, options.unbridged?.(sessionId)) : undefined
+      return tools.length ? hostInstructions(tools, harness, options.unbridged?.(sessionId), options.graphAutopilot?.() ?? false) : undefined
     },
     /** `claude` flags that connect one session's process to this server; empty when the feature is off. The same flags every time, so the process is kept between turns. */
     args(sessionId: SessionId): string[] {

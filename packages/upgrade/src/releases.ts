@@ -61,6 +61,9 @@ export function channelOfVersion(version: string): Channel | undefined {
   return channelOf({ tag, prerelease: !STABLE_TAG.test(tag), draft: false, publishedAt: 0, assets: [] })
 }
 
+/** The channel a binary of `version` runs in, for features that are on by default only in some: a build with no release tag is `local`. */
+export const buildChannelOf = (version: string): Channel | "local" => channelOfVersion(version) ?? "local"
+
 /** What `mendcode --version` prints: the version and its channel, `0.0.2 (stable)`, or `0.0.1-dev (local build)`. */
 export const versionLine = (version: string) => `${version} (${channelOfVersion(version) ?? "local build"})`
 

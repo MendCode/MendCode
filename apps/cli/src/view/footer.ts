@@ -38,7 +38,7 @@ export type FooterInput = {
   /** The project directory, home-shortened (`directory`). */
   directory?: string
   /** The code graph tools: on or off for this session, and the tokens its lookups saved when the app counts them (`codegraph`). */
-  codegraph?: { on: boolean; savedTokens?: number; /** The counts the daemon last pushed for this project; absent until a graph tool indexed it. */ index?: { state: "indexing" | "indexed"; files: number; symbols: number; edges: number }; /** Why this folder is not indexed (`large folder`, `no git repo`, `off`), as the daemon's gate said. */ skipped?: string }
+  codegraph?: { on: boolean; savedTokens?: number; /** The counts the daemon last pushed for this project; absent until a graph tool indexed it. */ index?: { state: "indexing" | "indexed"; files: number; symbols: number; edges: number; /** While indexing: the share of the first build done, when the daemon said. */ percent?: number }; /** Why this folder is not indexed (`large folder`, `no git repo`, `off`), as the daemon's gate said. */ skipped?: string }
   /** The profile's `footerText`: what `text:<name>` shows. */
   texts?: Readonly<Record<string, string | readonly string[]>>
   /** An icon before each segment (`footerIcons`); `ascii` chrome never has one. */

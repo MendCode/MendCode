@@ -4,6 +4,7 @@ import { basename, dirname, join, resolve } from "node:path"
 import { cancelled, defineTool, errorMessage, fail, succeed, truncateText, type Tool, type ToolContext, type ToolResult } from "@mendcode/tools"
 import { z } from "zod"
 import type { Graph, GraphNode } from "./graph"
+import type { GraphAutopilot } from "./autopilot"
 import { holdsHome, type GraphGate, type GraphSkipReason } from "./index-gate"
 import { createIndexer, type Indexer, type IndexStatus } from "./indexer"
 import { JG_TIMEOUT_MS, literalSearch, parseJgOutput, runJg, type JgHit } from "./jg"
@@ -31,6 +32,8 @@ export type CodeGraphOptions = {
   indexer?: Indexer | undefined
   /** Whether a folder is indexed (`index-gate.ts`: the mode the settings give the project, git repository, size); default: every folder but the home folder and above. */
   gate?: ((cwd: string, signal: AbortSignal) => Promise<GraphGate>) | undefined
+  /** The graph autopilot (`autopilot.ts`): a lookup in a project with no graph starts the build and answers "building" instead of blocking. Absent: the lookup builds it itself. */
+  autopilot?: GraphAutopilot | undefined
 }
 
 const GRAPH_EDGE_LIMIT = 24
@@ -95,7 +98,7 @@ async function withGraph({
   run,
 }: {
   indexer: Indexer
-  gate: CodeGraphOptions["gate"]
+  gate: Gate
   context: ToolContext
   title: string
   run: (graph: Graph) => Promise<ToolResult> | ToolResult
@@ -104,6 +107,10 @@ async function withGraph({
   const verdict: GraphGate = gate ? await gate(context.cwd, context.signal).catch(() => ({ index: true as const })) : holdsHome(context.cwd) ? { index: false, reason: "home folder" } : { index: true }
   if (context.signal.aborted) return cancelled(title)
   if (!verdict.index) return fail({ title, message: `code graph is off here: ${SKIPPED[verdict.reason]}. Use glob, grep and read.` })
+  // Autopilot: a project with no graph starts its build here, and a build that outlasts the short wait answers at once instead of blocking the turn.
+  const need = await gate?.autopilot?.need({ cwd: context.cwd, signal: context.signal }).catch(() => undefined)
+  if (context.signal.aborted) return cancelled(title)
+  if (need && !need.ready) return succeed({ title, output: need.message, meta: { graph: "building" } })
   try {
     const graph = await indexer.graph({ cwd: context.cwd, signal: context.signal })
     return await run(graph)
@@ -113,7 +120,8 @@ async function withGraph({
   }
 }
 
-type Gate = CodeGraphOptions["gate"]
+/** The gate a tool asks, carrying the autopilot when the daemon runs one (`createCodeGraphTools`). */
+type Gate = (NonNullable<CodeGraphOptions["gate"]> & { autopilot?: GraphAutopilot | undefined }) | undefined
 
 /** The folder at or above `absolute` whose code graph already exists (in memory or as a cache file); none is built for this. */
 export function indexedRootOf(indexer: Indexer, absolute: string): string | undefined {
@@ -477,7 +485,7 @@ function searchTool({ indexer, options }: { indexer: Indexer; options: CodeGraph
   })
 }
 
-function impactTool(indexer: Indexer): Tool {
+function impactTool(indexer: Indexer, autopilot: GraphAutopilot | undefined): Tool {
   return defineTool({
     name: "graph_impact",
     tier: "balanced",
@@ -490,7 +498,12 @@ function impactTool(indexer: Indexer): Tool {
       const scope = projectRelative({ cwd: context.cwd, input: path })
       if (scope === undefined) return fail({ title, message: "path is outside the project" })
       const graph = indexer.peek(context.cwd)
-      if (!graph) return succeed({ title, output: "Graph impact unavailable: no cached orientation. No safety conclusion can be drawn." })
+      if (!graph) {
+        // With the autopilot a missing graph starts building instead of staying missing; the answer says so.
+        const need = await autopilot?.need({ cwd: context.cwd, signal: context.signal }).catch(() => undefined)
+        if (need && !need.ready) return succeed({ title, output: `Graph impact unavailable: ${need.message} No safety conclusion can be drawn.`, meta: { graph: "building" } })
+        return succeed({ title, output: "Graph impact unavailable: no cached orientation. No safety conclusion can be drawn." })
+      }
       const symbols = graph.byPath.get(scope)
       if (!symbols) return succeed({ title, output: `Graph impact unavailable: ${scope} was not indexed in the cached graph. New symbols and files require a fresh graph lookup; no safety conclusion can be drawn.` })
       const levels = depth ?? 2
@@ -529,5 +542,7 @@ function impactTool(indexer: Indexer): Tool {
 /** Read-only code-graph tools; indexing is lazy and incremental, impact uses only the cached graph. */
 export function createCodeGraphTools(options: CodeGraphOptions): Tool[] {
   const indexer = options.indexer ?? createIndexer({ cacheDir: options.cacheDir, now: options.now ?? Date.now, onScan: options.onScan, onIndex: options.onIndex, maxFiles: options.maxFiles })
-  return [findTool(indexer, options.gate), callersTool(indexer, options.gate), fileApiTool(indexer, options.gate), mapTool(indexer, options.gate), searchTool({ indexer, options }), impactTool(indexer)].map((tool) => acrossProjects(indexer, tool))
+  const { autopilot } = options
+  const gate: Gate = autopilot ? Object.assign((cwd: string, signal: AbortSignal) => options.gate ? options.gate(cwd, signal) : Promise.resolve<GraphGate>(holdsHome(cwd) ? { index: false, reason: "home folder" } : { index: true }), { autopilot }) : options.gate
+  return [findTool(indexer, gate), callersTool(indexer, gate), fileApiTool(indexer, gate), mapTool(indexer, gate), searchTool({ indexer, options: { ...options, gate } }), impactTool(indexer, autopilot)].map((tool) => acrossProjects(indexer, tool))
 }

@@ -15,8 +15,18 @@ const RANK: Readonly<Record<Tier, number>> = { minimalist: 0, balanced: 1, full:
 /** True when `tier` includes something that belongs to `needs`. No tier set means no gating: everything behaves as before tiers existed. */
 export const tierIncludes = (tier: Tier | undefined, needs: Tier) => tier === undefined || RANK[tier] >= RANK[needs]
 
-export const FEATURE_IDS = ["slash_menu", "extensions", "packages", "package_tools", "hooks", "mcp", "codegraph", "subagents", "script_workflows", "jev", "pets", "pet_generator", "voice", "computer", "browser", "code_mode", "snip", "worktree_tool", "usage_resume", "threads", "pr_watch", "pr_review", "output_filters", "forecast", "pi", "thread_mcp", "acp_registry", "storage_compact", "review_order", "session_meta", "fanout", "limit_checkpoint", "graph_context", "handoff", "instruction_includes", "package_capabilities", "caveman", "webfetch_modes", "tool_discovery", "official_packages", "orchestration_receipts", "autoresearch", "web_routing", "panel", "panel_orbit", "panel_models", "file_viewer", "memory_ux", "single_process", "lean_tools", "aux_tools", "harness_tools", "plan_tools", "find_tools", "ui_tool", "orientation", "git_hub", "git_actions", "quota_refresh", "idle_compact", "wait_cache", "compact_notice", "backlog", "task_worktree", "task_fork", "cheap_subagents", "claude_compact", "cache_countdown", "one_tree", "advisor", "visible_plan"] as const
+export const FEATURE_IDS = ["slash_menu", "extensions", "packages", "package_tools", "hooks", "mcp", "codegraph", "subagents", "script_workflows", "jev", "pets", "pet_generator", "voice", "computer", "browser", "code_mode", "snip", "worktree_tool", "usage_resume", "threads", "pr_watch", "pr_review", "output_filters", "forecast", "pi", "thread_mcp", "acp_registry", "storage_compact", "review_order", "session_meta", "fanout", "limit_checkpoint", "graph_context", "handoff", "instruction_includes", "package_capabilities", "caveman", "webfetch_modes", "tool_discovery", "official_packages", "orchestration_receipts", "autoresearch", "web_routing", "panel", "panel_orbit", "panel_models", "file_viewer", "memory_ux", "single_process", "lean_tools", "aux_tools", "harness_tools", "plan_tools", "find_tools", "ui_tool", "orientation", "git_hub", "git_actions", "quota_refresh", "idle_compact", "wait_cache", "compact_notice", "backlog", "task_worktree", "task_fork", "cheap_subagents", "claude_compact", "cache_countdown", "one_tree", "advisor", "visible_plan", "graph_autopilot"] as const
 export type FeatureId = (typeof FEATURE_IDS)[number]
+
+/** The release channel of the running binary (`channelOfVersion` in @mendcode/upgrade/releases; `local` is a build with no release tag). */
+export type BuildChannel = "stable" | "beta" | "nightly" | "dev" | "local"
+let builtChannel: BuildChannel | undefined
+/**
+ * Told once at startup by the program that knows its own version (the terminal, the daemon). Features with `channels` are on by default
+ * only in those channels; a process that never said (a library user, a test) is in no channel, so they stay off there.
+ */
+export function setBuildChannel(channel: BuildChannel | undefined): void { builtChannel = channel }
+export const buildChannel = (): BuildChannel | undefined => builtChannel
 
 /** Where a feature costs the user: tokens on every request (tools, prompt), screen chrome, or a model call of its own. */
 export type FeatureCost = "tools" | "prompt" | "chrome" | "calls"
@@ -36,6 +46,8 @@ export type FeatureSpec = {
   optIn?: true
   /** The existing switch that also controls it. */
   own: string
+  /** The release channels where the tier turns it on by default; in the others it is off until `features.<id>: true`. Absent: every channel. */
+  channels?: readonly BuildChannel[]
   /** Built-in tool names (`*` globs) that stay out of the model's tool list while the feature is off. */
   tools?: readonly string[]
   /** The `experimental` flag that carries it. */
@@ -75,6 +87,8 @@ export const FEATURES: Readonly<Record<FeatureId, FeatureSpec>> = {
   quota_refresh: { label: "Quota refresh probe", tier: "minimalist", mode: "permit", cost: ["calls"], legacy: true, own: "/customize · quotaRefresh (off until a provider is listed; each probe spends some of the quota it measures)", safe: true, doc: "docs/usage-limit.md" },
   limit_checkpoint: { label: "Pre-limit checkpoint", tier: "balanced", mode: "tier", cost: [], legacy: false, own: "/tier limit_checkpoint off", doc: "docs/usage-limit.md" },
   graph_context: { label: "Graph orientation and impact", tier: "balanced", mode: "permit", cost: ["prompt"], legacy: false, optIn: true, own: "/tier graph_context on (off until then: the model calls the graph tools itself)", doc: "docs/code-graph.md" },
+  // MendCode builds the code graph of a real project by itself, keeps it fresh and tells the model in one prompt line to use it first (docs/code-graph.md, "Autopilot"). Nightly, dev and local builds only by default while it is tested; elsewhere `/tier graph_autopilot on`.
+  graph_autopilot: { label: "Code graph autopilot", tier: "full", mode: "tier", cost: ["prompt"], legacy: false, channels: ["nightly", "dev", "local"], own: "/tier graph_autopilot on|off (on by default in nightly, dev and local builds only)", doc: "docs/code-graph.md" },
   // Sessions sharing one checkout: a line on a tool result only when it names a file another live session is changing; nothing while a session works alone.
   one_tree: { label: "One tree: sessions sharing a checkout", tier: "balanced", mode: "tier", cost: ["prompt"], legacy: false, own: "/tier one_tree off", doc: "docs/one-tree.md" },
   handoff: { label: "Focused session handoff", tier: "balanced", mode: "tier", cost: [], legacy: false, own: "/handoff <goal>", doc: "docs/sessions.md" },
@@ -197,7 +211,7 @@ export type TierSettings = {
 }
 export type FeatureWhy = "safe-mode" | "override" | "setting" | "tier" | "legacy"
 export type FeatureState = { on: boolean; why: FeatureWhy }
-export type TierOptions = { safeMode?: boolean | undefined }
+export type TierOptions = { safeMode?: boolean | undefined; /** The channel to judge `channels` features by; default: the one the program told (`setBuildChannel`). */ channel?: BuildChannel | undefined }
 
 export const isFeatureId = (value: string): value is FeatureId => (FEATURE_IDS as readonly string[]).includes(value)
 export const isTier = (value: unknown): value is Tier => typeof value === "string" && (TIERS as readonly string[]).includes(value)
@@ -214,6 +228,10 @@ export function featureState(settings: TierSettings, id: FeatureId, options: Tie
     if (typeof flag === "boolean") return { on: flag, why: "setting" }
   }
   if (settings.tier === undefined) return { on: spec.legacy, why: "legacy" }
+  if (spec.channels) {
+    const channel = options.channel ?? builtChannel
+    return { on: tierIncludes(settings.tier, spec.tier) && channel !== undefined && spec.channels.includes(channel), why: "tier" }
+  }
   return { on: spec.mode === "kernel" || tierIncludes(settings.tier, spec.tier), why: "tier" }
 }
 export const featureOn = (settings: TierSettings, id: FeatureId, options: TierOptions = {}) => featureState(settings, id, options).on
@@ -288,6 +306,9 @@ export function tierRows(settings: TierSettings, options: TierOptions = {}): Tie
 export function tierDiff(from: Tier, to: Tier): { added: FeatureId[]; removed: FeatureId[] } {
   const added: FeatureId[] = [], removed: FeatureId[] = []
   for (const id of FEATURE_IDS) {
+    // A feature that is on only in some channels adds and removes nothing in the others.
+    const channels = FEATURES[id].channels
+    if (channels && (builtChannel === undefined || !channels.includes(builtChannel))) continue
     const was = tierIncludes(from, FEATURES[id].tier), now = tierIncludes(to, FEATURES[id].tier)
     if (now && !was) added.push(id)
     if (was && !now) removed.push(id)

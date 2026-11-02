@@ -209,4 +209,23 @@ describe("what the run says about how it ended", () => {
     expect(new Set(named).size).toBe(named.length)
     expect(named.toSorted()).toEqual(all.toSorted())
   }, 60_000)
+
+  test("MENDCODE_TEST_SHARD K/N runs every Nth cli process from the Kth: the shards are disjoint and together run them all", async () => {
+    const processes = Math.ceil([...new Bun.Glob("apps/cli/**/*.test.ts").scanSync({ cwd: path.join(import.meta.dir, "..") })].filter((file) => !file.includes("node_modules")).length / 40)
+    const ran: string[] = []
+    for (const shard of ["1/3", "2/3", "3/3"]) {
+      const { out, code } = await launch({ mode: "pass", part: "cli", env: { MENDCODE_TEST_SHARD: shard } }).text()
+      expect(code).toBe(0)
+      const labels = [...out.matchAll(/^(cli-\d+)\s+\d+s\s+exit 0/gm)].map((match) => match[1]!)
+      const k = Number(shard[0])
+      expect(labels).toEqual(Array.from({ length: processes }, (_, index) => `cli-${index + 1}`).filter((_, index) => index % 3 === k - 1))
+      ran.push(...labels)
+    }
+    expect(ran.toSorted()).toEqual(Array.from({ length: processes }, (_, index) => `cli-${index + 1}`).toSorted())
+    for (const bad of ["0/3", "4/3", "1", "a/b"]) {
+      const { err, code } = await launch({ mode: "pass", part: "cli", env: { MENDCODE_TEST_SHARD: bad } }).text()
+      expect(code).toBe(2)
+      expect(err).toContain("MENDCODE_TEST_SHARD must be K/N")
+    }
+  }, 60_000)
 })

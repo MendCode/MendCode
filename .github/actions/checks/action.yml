@@ -1,6 +1,24 @@
 name: checks
 description: Typecheck and run the whole test suite, in parts, on Linux. Shared by ci.yml and by the release gate in release.yml so both run the same thing.
 
+# The callers run this once per row of a matrix (CHECK_ROWS in scripts/release.test.ts): each row is some parts of
+# scripts/test-shards.sh, or one shard of a part, on a runner of its own, and the rows together are the whole suite.
+inputs:
+  label:
+    description: Names this row's kept logs (test-logs-<label>)
+    required: true
+  parts:
+    description: The parts of scripts/test-shards.sh this row runs (cli daemon packages rest)
+    required: true
+  shard:
+    description: K/N to run every Nth process of those parts starting at the Kth (MENDCODE_TEST_SHARD), or empty for all of them
+    required: false
+    default: ""
+  typecheck:
+    description: "true: this row also typechecks the repository"
+    required: false
+    default: "false"
+
 runs:
   using: composite
   steps:
@@ -31,6 +49,7 @@ runs:
         git --version
         printf 'cpus %s, memory MB %s\n' "$(nproc)" "$(free -m | awk '/^Mem:/ { print $2 }')"
     - name: Typecheck
+      if: inputs.typecheck == 'true'
       shell: bash
       run: bun run typecheck
     - name: Test in parts
@@ -57,7 +76,10 @@ runs:
         GIT_AUTHOR_EMAIL: ci@example.invalid
         GIT_COMMITTER_NAME: ci
         GIT_COMMITTER_EMAIL: ci@example.invalid
-      run: sh scripts/test-shards.sh
+        MENDCODE_TEST_SHARD: ${{ inputs.shard }}
+        PARTS: ${{ inputs.parts }}
+      # $PARTS is a space-separated list of part names and is meant to split into words.
+      run: sh scripts/test-shards.sh $PARTS
     - name: What the machine says about how the tests ended
       # Also after a cancelled job: memory and the kernel's out-of-memory lines are what tell a killed host from a failing test.
       if: always()
@@ -71,7 +93,7 @@ runs:
       if: always()
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
       with:
-        name: test-logs
+        name: test-logs-${{ inputs.label }}
         path: ${{ runner.temp }}/test-logs
         if-no-files-found: ignore
         retention-days: 7

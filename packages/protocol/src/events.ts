@@ -561,6 +561,8 @@ export const CodegraphStatus = lazySchema(() => z.strictObject({
   edges: z.number().int().nonnegative(),
   partial: z.boolean(),
   reason: z.string().max(40).optional(),
+  /** While `indexing`: how much of the first build is done (0 to 99, in steps of ten); absent when it is not known. */
+  percent: z.number().int().min(0).max(100).optional(),
 }))
 export const ReviewChanged =lazySchema(() => z.strictObject({ ...globalBase, type: z.literal("review.changed"), gseq: z.number().int().nonnegative(), sessionId: SessionId, review: ReviewSnapshot, reload: z.boolean().optional() }))
 export const AgentCommandsChanged = lazySchema(() => z.strictObject({ ...globalBase, type: z.literal("agent-commands.changed"), sourceSessionId: SessionId, targetSessionId: SessionId }))

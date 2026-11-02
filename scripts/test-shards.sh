@@ -9,6 +9,7 @@
 # (code frame, error, Expected/Received, stack); for a part that crashed or timed out without a parsable failure: the last 60 lines.
 #
 # environment (all optional; unset locally):
+#   MENDCODE_TEST_SHARD        K/N: run only every Nth process of the selected parts, starting at the Kth (CI spreads cli over runners).
 #   MENDCODE_TEST_TIME_SCALE   a number >= 1: time budgets in tests are multiplied by it (scripts/test-budget.ts) and bun's default
 #                              per-test timeout (5 s) is raised by the same factor. The CI workflows set it; developers do not.
 #   MENDCODE_TEST_PART_SECONDS a wall-clock limit per part (needs `timeout`, i.e. Linux CI): a hung part is killed, reported with the
@@ -62,6 +63,21 @@ fi
 new_session=""
 if [ "${MENDCODE_TEST_NEW_SESSION:-}" = 1 ] && command -v setsid >/dev/null 2>&1 && setsid --wait true >/dev/null 2>&1; then new_session="setsid --wait"; fi
 selected="$*"
+shard_k=0
+shard_n=0
+if [ -n "${MENDCODE_TEST_SHARD:-}" ]; then
+  if ! printf '%s' "$MENDCODE_TEST_SHARD" | grep -Eq '^[1-9][0-9]*/[1-9][0-9]*$'; then
+    echo "test-shards: MENDCODE_TEST_SHARD must be K/N with 1 <= K <= N, got \"$MENDCODE_TEST_SHARD\"" >&2
+    exit 2
+  fi
+  shard_k=${MENDCODE_TEST_SHARD%/*}
+  shard_n=${MENDCODE_TEST_SHARD#*/}
+  if [ "$shard_k" -gt "$shard_n" ]; then
+    echo "test-shards: MENDCODE_TEST_SHARD must be K/N with 1 <= K <= N, got \"$MENDCODE_TEST_SHARD\"" >&2
+    exit 2
+  fi
+fi
+shard_seen=0
 started_all=$(date +%s)
 current_part=""
 current_log=""
@@ -212,6 +228,10 @@ part() {
   # $part_label names one process of a part that runs as several (cli-1 of cli): its lines and its kept log carry the label.
   label=${part_label:-$name}; part_label=""
   case " $selected " in *" $name "*) ;; *) [ -z "$selected" ] || return 0 ;; esac
+  # MENDCODE_TEST_SHARD=K/N: of the processes selected above, in order, run the 1st, (N+1)th, ... of shard K only. The N shards of one
+  # selection are disjoint and together run every one of its processes, however many cli-N the suite grows to.
+  shard_seen=$((shard_seen + 1))
+  if [ "$shard_n" -gt 0 ] && [ $(( (shard_seen - 1) % shard_n )) -ne $((shard_k - 1)) ]; then return 0; fi
   name=$label
   log=$(mktemp)
   if [ -n "$bun_timeout" ]; then set -- --timeout "$bun_timeout" "$@"; fi

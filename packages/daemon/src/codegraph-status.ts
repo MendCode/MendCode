@@ -5,10 +5,10 @@
  * here walks a project or reads a file.
  */
 export type CodegraphStatus =
-  | { directory: string; state: "indexing" | "indexed"; files: number; symbols: number; edges: number; partial: boolean }
+  | { directory: string; state: "indexing" | "indexed"; files: number; symbols: number; edges: number; partial: boolean; percent?: number }
   | { directory: string; state: "skipped"; reason: string }
 type Incoming =
-  | { cwd: string; state: "indexing" | "indexed" | "none"; files: number; symbols: number; edges: number; partial: boolean }
+  | { cwd: string; state: "indexing" | "indexed" | "none"; files: number; symbols: number; edges: number; partial: boolean; percent?: number }
   | { cwd: string; state: "skipped"; reason: string }
 
 /** Directories remembered at once; the least recently reported goes first. */
@@ -25,7 +25,7 @@ export function createCodegraphStatus() {
         for (const listener of listeners) listener({ directory, state: "none" })
         return
       }
-      const status: CodegraphStatus = incoming.state === "skipped" ? { directory, state: "skipped", reason: incoming.reason } : { directory, state: incoming.state, files: incoming.files, symbols: incoming.symbols, edges: incoming.edges, partial: incoming.partial }
+      const status: CodegraphStatus = incoming.state === "skipped" ? { directory, state: "skipped", reason: incoming.reason } : { directory, state: incoming.state, files: incoming.files, symbols: incoming.symbols, edges: incoming.edges, partial: incoming.partial, ...(incoming.percent !== undefined ? { percent: incoming.percent } : {}) }
       latest.delete(directory)
       latest.set(directory, status)
       while (latest.size > CODEGRAPH_STATUS_LIMIT) latest.delete(latest.keys().next().value as string)

@@ -7,7 +7,7 @@
     "background": "flag:async_tools flag:async_questions command:bg command:ps tool:question_start tool:question_status tool:shell_monitor tool:shell_session tool:sleep tool:tool_cancel tool:tool_start tool:tool_status tool:tool_wait",
     "budgets": "feature:usage_resume command:usage command:limit command:stats-project file:spend.json",
     "cache-ttl": "feature:wait_cache feature:cache_countdown setting:promptCacheTtl setting:claudeCacheTtl",
-    "codegraph": "feature:codegraph feature:graph_context feature:orientation command:graph setting:codegraph_index tool:apply_patch tool:code_search tool:diagnostics tool:graph_callers tool:graph_file_api tool:graph_find tool:graph_impact tool:graph_map tool:lsp file:formatter.json file:lsp.json",
+    "codegraph": "feature:codegraph feature:graph_autopilot feature:graph_context feature:orientation command:graph setting:codegraph_index tool:apply_patch tool:code_search tool:diagnostics tool:graph_callers tool:graph_file_api tool:graph_find tool:graph_impact tool:graph_map tool:lsp file:formatter.json file:lsp.json",
     "commands": "feature:slash_menu group:Slash_menu file:mendcode.json",
     "comments": "command:comments group:Comments",
     "compaction": "feature:claude_compact feature:snip flag:auto_recall feature:limit_checkpoint feature:idle_compact feature:compact_notice flag:snip command:compact command:context command:files command:context-window command:compaction group:Compaction setting:compactAtTokens setting:idleCompactAtTokens setting:compactNoticePercent setting:cacheLifetimeMinutes setting:handoffTokenCap setting:promptCache setting:compaction setting:cache setting:cacheProjects tool:snip",

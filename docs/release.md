@@ -50,7 +50,11 @@ preloads `scripts/test-kill-guard.ts`: a test cannot signal pid 0, -1, 1, its ow
 The same script is the release gate: every tag, betas included, runs it once before anything is built. `.github/workflows/ci.yml`
 runs it for pull requests and on demand (`gh workflow run ci.yml --ref main`), not for a push to `main`. `apps/cli` runs as one
 process per 40 test files (`cli-1`, `cli-2`, … in name order): a bun process keeps what each file left, and 193 files in one
-reached 7.3 GB, which the 8 GB runner's OOM killer ended; 40 stay near 2 GB.
+reached 7.3 GB, which the 8 GB runner's OOM killer ended; 40 stay near 2 GB. Both workflows run the gate as five rows on five
+runners at once: `daemon`, `packages rest` with the typecheck, and `cli` in three shards (`MENDCODE_TEST_SHARD=1/3` … `3/3` runs
+every third cli process). On one runner the parts took 1006 s one after another (v0.0.2-beta.4, 17 of the release's 19 minutes);
+in rows the gate takes as long as `daemon`, its slowest row. `sh scripts/test-shards.sh cli` with `MENDCODE_TEST_SHARD=2/3` repeats
+one row locally.
 
 When publication is authorized, tag the reviewed commit and push the tag:
 

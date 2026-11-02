@@ -15,10 +15,18 @@ export type IndexerOptions = {
   maxFiles?: number | undefined
   /** Called when the index of a project starts its first build in this process and whenever a refresh changed it: never per request, never per frame. */
   onIndex?: ((status: IndexStatus) => void) | undefined
+  /** Called while a first build scans, at every tenth of its files (`indexing` with `percent`): a client that shows progress asks for it; `onIndex` stays one event at the start and one at the end. */
+  onProgress?: ((status: IndexStatus) => void) | undefined
 }
 
 /** What an index holds, for a client that shows it: the count of files, symbols and call edges, and whether the first build is still running (`none`: it ended without a graph). */
-export type IndexStatus = { cwd: string; state: "indexing" | "indexed" | "none"; files: number; symbols: number; edges: number; partial: boolean }
+export type IndexStatus = { cwd: string; state: "indexing" | "indexed" | "none"; files: number; symbols: number; edges: number; partial: boolean; /** While `indexing`: how much of the first build is done, 0 to 99, in steps of ten. */ percent?: number }
+
+/** The first build of a project in this process: files scanned of those to scan. */
+export type IndexProgress = { done: number; total: number }
+
+/** What changed on disk since the last index: the files a refresh would scan or drop, of those indexed. */
+export type IndexDrift = { changed: number; indexed: number }
 
 /** The counts of a built graph, one pass over its nodes. */
 export function indexStatus(graph: Graph): IndexStatus {
@@ -34,6 +42,10 @@ export type Indexer = {
   peek(cwd: string): Graph | undefined
   /** Path of the JSON cache file for `cwd`. */
   cachePath(cwd: string): string
+  /** Where a build or refresh of `cwd` that is running now stands; undefined when none runs. */
+  progress(cwd: string): IndexProgress | undefined
+  /** Files new, changed or deleted since the last index, from one walk and no scan; undefined when the project was never indexed. */
+  drift(args: { cwd: string; signal: AbortSignal }): Promise<IndexDrift | undefined>
 }
 
 /** `dirty`: records changed since the graph was last derived (an aborted refresh leaves this set). */
@@ -42,6 +54,11 @@ type State = { cache: CacheFile; graph: Graph | undefined; dirty: boolean }
 const aborted = () => new DOMException("aborted", "AbortError")
 
 export const cacheName = (cwd: string): string => `${createHash("sha1").update(cwd).digest("hex").slice(0, 16)}.json`
+
+/** A walked file that is not what the cache recorded: new, or another mtime, ctime or size. */
+function differs(current: FileRec | undefined, walked: WalkedFile): boolean {
+  return current === undefined || current.mtimeMs !== walked.mtimeMs || current.ctimeMs !== walked.ctimeMs || current.size !== walked.size
+}
 
 function validFile(value: unknown): value is FileRec {
   if (!value || typeof value !== "object") return false
@@ -83,7 +100,7 @@ export const MAX_PROJECTS_IN_MEMORY = 2
 /** A project's graph nobody asked for in this long is dropped from memory; the next question rebuilds it from the cache file. */
 export const IDLE_DROP_MS = 10 * 60_000
 
-export function createIndexer({ cacheDir, now, onScan, onIndex, maxFiles = MAX_INDEXED_FILES }: IndexerOptions): Indexer {
+export function createIndexer({ cacheDir, now, onScan, onIndex, onProgress, maxFiles = MAX_INDEXED_FILES }: IndexerOptions): Indexer {
   const states = new Map<string, State>()
   const queues = new Map<string, Promise<unknown>>()
   /** When each project's graph was last asked for; one left alone for `IDLE_DROP_MS` is dropped from memory (its cache file stays). */
@@ -108,6 +125,7 @@ export function createIndexer({ cacheDir, now, onScan, onIndex, maxFiles = MAX_I
     sweeper.unref?.()
   }
   const busy = new Set<string>()
+  const progress = new Map<string, IndexProgress>()
   const cachePath = (cwd: string) => join(cacheDir, cacheName(cwd))
 
   async function refresh({ cwd, signal }: { cwd: string; signal: AbortSignal }): Promise<Graph> {
@@ -128,9 +146,16 @@ export function createIndexer({ cacheDir, now, onScan, onIndex, maxFiles = MAX_I
     let changed = state.dirty || graftChanged || walk.partial !== cache.partial || state.graph === undefined || JSON.stringify(cache.packages ?? []) !== JSON.stringify(walk.packages)
     let incomplete = walk.partial
     let sinceYield = 0
+    // Files this run will scan: the denominator of the progress a client or a tool result reports for a first build.
+    let toScan = 0
+    for (const [path, walked] of walk.files) if (differs(cache.files[path], walked) && !(wiring && Math.max(walked.mtimeMs, walked.ctimeMs) <= wiring.mtimeMs && wiring.files.has(path))) toScan++
+    const first = state.graph === undefined
+    let scanned = 0
+    let lastTen = 0
+    progress.set(cwd, { done: 0, total: toScan })
     for (const [path, walked] of walk.files) {
       const current = cache.files[path]
-      const unchanged = current !== undefined && current.mtimeMs === walked.mtimeMs && current.ctimeMs === walked.ctimeMs && current.size === walked.size
+      const unchanged = current !== undefined && !differs(current, walked)
       const covered = wiring && Math.max(walked.mtimeMs, walked.ctimeMs) <= wiring.mtimeMs ? wiring.files.get(path) : undefined
       if (covered) {
         cache.files[path] = { mtimeMs: walked.mtimeMs, ctimeMs: walked.ctimeMs, size: walked.size, language: walked.language, source: "graft", imports: covered.imports, symbols: covered.symbols, calls: covered.calls }
@@ -148,6 +173,10 @@ export function createIndexer({ cacheDir, now, onScan, onIndex, maxFiles = MAX_I
       state.dirty = true
       if (rec) cache.files[path] = rec
       else { delete cache.files[path]; incomplete = true }
+      progress.set(cwd, { done: ++scanned, total: toScan })
+      // A first build tells its client at every tenth: enough for a footer to move, never one event per file.
+      const ten = toScan > 0 ? Math.min(9, Math.floor((scanned / toScan) * 10)) : 0
+      if (first && ten > lastTen) { lastTen = ten; onProgress?.({ cwd, state: "indexing", files: scanned, symbols: 0, edges: 0, partial: cache.partial, percent: ten * 10 }) }
     }
     for (const path of Object.keys(cache.files)) {
       if (!walk.files.has(path)) {
@@ -173,6 +202,16 @@ export function createIndexer({ cacheDir, now, onScan, onIndex, maxFiles = MAX_I
   return {
     cachePath,
     peek: (cwd) => states.get(cwd)?.graph,
+    progress: (cwd) => progress.get(cwd),
+    async drift({ cwd, signal }) {
+      const cache = states.get(cwd)?.cache ?? (await loadCache({ file: cachePath(cwd), cwd }))
+      if (!cache) return undefined
+      const walk = await walkProject({ cwd, signal, maxFiles })
+      let changed = 0
+      for (const [path, walked] of walk.files) if (differs(cache.files[path], walked)) changed++
+      for (const path of Object.keys(cache.files)) if (!walk.files.has(path)) changed++
+      return { changed, indexed: Object.keys(cache.files).length }
+    },
     graph({ cwd, signal }) {
       touch(cwd)
       const previous = queues.get(cwd) ?? Promise.resolve()
@@ -181,7 +220,7 @@ export function createIndexer({ cacheDir, now, onScan, onIndex, maxFiles = MAX_I
         // A first build that did not finish leaves no graph: the client drops its "indexing" line.
         if (states.get(cwd)?.graph === undefined) onIndex?.({ cwd, state: "none", files: 0, symbols: 0, edges: 0, partial: false })
         throw error
-      }).finally(() => { if (queues.get(cwd) === run) busy.delete(cwd) })
+      }).finally(() => { progress.delete(cwd); if (queues.get(cwd) === run) busy.delete(cwd) })
       queues.set(cwd, run)
       return run
     },

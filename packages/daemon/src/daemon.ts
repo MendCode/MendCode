@@ -445,6 +445,8 @@ export type DaemonOptions = RemoteListenerOptions & {
   codeOverview?: import("@mendcode/codegraph").CodeOverview
   /** Which folders the code graph indexes (`/graph`, `codegraph_index`; docs/code-graph.md). Absent: every folder but the home folder. */
   codeGate?: import("@mendcode/codegraph").IndexGate
+  /** Builds the code graph of an eligible project when a session opens or a turn begins, and refreshes it past a threshold (feature `graph_autopilot`, docs/code-graph.md). Absent: nothing builds by itself. */
+  graphAutopilot?: import("@mendcode/codegraph").GraphAutopilot
   /** Quota refresh probes (docs/usage-limit.md): how the daemon asks each provider for its windows when the user listed it in `quotaRefresh`. Production supplies the engine paths; tests inject fakes and a short tick. No probe is ever sent without the user's setting. */
   quotaRefresh?: { probes?: Partial<Record<QuotaRefreshProvider, RefreshProbe>>; tickMs?: number; random?: () => number }
   /** Hermetic bridge transport for tests; production binds only 127.0.0.1. */
@@ -1050,6 +1052,7 @@ export async function startDaemon(options: DaemonOptions) {
   const hostBridge = createHostMcp({
     enabled: () => !options.safeMode && featureOn(store.settings.get(), "harness_tools"),
     directory: (sessionId) => store.sessionDirectory(sessionId),
+    graphAutopilot: () => featureOn(store.settings.get(), "graph_autopilot", { safeMode: options.safeMode }),
     tools: async (input) => (await rawEngine.hostTools?.(input)) ?? [],
     call: async (input) => (await rawEngine.hostCall?.(input)) ?? { output: "Native tools are unavailable", isError: true },
     unbridged: (sessionId) => {
@@ -2720,6 +2723,7 @@ export async function startDaemon(options: DaemonOptions) {
     type: "codegraph.status", gseq: 0, at: clock.now(), directory: status.directory, state: status.state,
     files: "files" in status ? status.files : 0, symbols: "symbols" in status ? status.symbols : 0, edges: "edges" in status ? status.edges : 0, partial: "partial" in status ? status.partial : false,
     ...("reason" in status ? { reason: status.reason.slice(0, 40) } : {}),
+    ...("percent" in status && status.percent !== undefined ? { percent: status.percent } : {}),
   })
   /**
    * Whether the code graph indexes `directory` (index-gate.ts), told to the footer once: `skipped` with the reason, or `none` when a skip
@@ -2733,7 +2737,15 @@ export async function startDaemon(options: DaemonOptions) {
     if (!verdict.index) {
       if (last?.state !== "skipped" || last.reason !== verdict.reason) options.codegraphStatus.publish({ cwd: directory, state: "skipped", reason: verdict.reason })
     } else if (last?.state === "skipped") options.codegraphStatus.publish({ cwd: directory, state: "none", files: 0, symbols: 0, edges: 0, partial: false })
+    // A terminal or session in a folder the graph indexes: the autopilot (when its feature is on) builds the graph in the background.
+    if (verdict.index) options.graphAutopilot?.note({ cwd: directory, reason: "session" })
   }
+  // A turn begins: a project with no graph gets its build, one with a stale graph its refresh (the autopilot looks at the disk at most every two minutes).
+  if (options.graphAutopilot) sessionObservers.push((event) => {
+    if (event.type !== "turn.started") return
+    const directory = store.sessionInfo(event.sessionId)?.directory
+    if (directory) options.graphAutopilot?.note({ cwd: directory, reason: "turn" })
+  })
   /** After settings were saved (`settings.set`, an approved `mendcode_settings` proposal): every client hears, then each service that reads them follows. */
   async function settingsSaved(before: Settings, settings: Settings, patch: Record<string, unknown>) {
     globalSink.append({ type: "settings.changed", settings })
@@ -2742,6 +2754,8 @@ export async function startDaemon(options: DaemonOptions) {
       const touched = new Set([...Object.keys(before.projectConfig ?? {}), ...Object.keys(settings.projectConfig ?? {}), ...(options.codegraphStatus?.snapshot() ?? []).map((status) => status.directory)])
       for (const directory of touched) if (graphIndexMode(before, directory) !== graphIndexMode(settings, directory)) void publishGraphGate(directory)
     }
+    // `/graph off`, `/tier graph_autopilot off`: a build or refresh the autopilot has running for a folder that no longer qualifies is cancelled.
+    if ("projectConfig" in patch || "codegraph_index" in patch || "tier" in patch || "features" in patch) options.graphAutopilot?.reconsider()
     continuity.configure()
     await withdrawAsyncNotices()
     if ("trustedToolDirs" in patch || "disabledPackages" in patch || "disabledPackageResources" in patch || "tier" in patch || "features" in patch) extensions.invalidateProject()
@@ -2761,6 +2775,7 @@ export async function startDaemon(options: DaemonOptions) {
     await settingsSaved(before, settings, patch)
     return settings
   }
+  if (options.graphAutopilot) root.onDispose(() => options.graphAutopilot?.stop())
   if (options.codegraphStatus) root.onDispose(options.codegraphStatus.subscribe((status) => {
     const event = codegraphEvent(status)
     for (const connection of connections) if (connection.clientId && !connection.remoteAddress && !connection.peer) send(connection, { v: PROTOCOL_VERSION, kind: "global", body: event })
