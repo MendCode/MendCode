@@ -82,6 +82,9 @@ export function createChatRows(ctx: AppContext, actions: {
   const { compactionLive } = actions
   const { statusRow, suggestionPool, requestPanel, extOn, slotContext, topbarRow, dockRows, promptSlotRows, chatWidth } = actions
 
+  /** The sticky row of the last prompt drawn, by the prompt's text and the width: a long pasted prompt is not collapsed and cut again on every frame of the answer under it. */
+  let stuck: { text: string; width: number; row: Line | undefined } | undefined
+
   /** The row for the newest user prompt when the viewport shows none of it and sits at or below it; undefined while it is in view. */
   function stickyPrompt(visible: ReadonlyArray<{ itemId?: string }>, width: number): Line | undefined {
     const blocks = state.transcript.blocks()
@@ -91,9 +94,11 @@ export function createChatRows(ctx: AppContext, actions: {
     const topId = visible.find((line) => line.itemId !== undefined)?.itemId
     const topAt = topId === undefined ? -1 : blocks.findIndex((block) => block.itemId === topId)
     if (topAt < lastAt) return undefined
+    if (stuck?.text === last.text && stuck.width === width) return stuck.row
     const text = last.text.replace(/\s+/g, " ").trim()
-    if (!text) return undefined
-    return [{ text: " ".repeat(PROMPT_MARGIN) }, { text: truncateEnd(`› ${text}`, Math.max(1, width - PROMPT_MARGIN * 2)), fg: "muted" }]
+    const row: Line | undefined = text ? [{ text: " ".repeat(PROMPT_MARGIN) }, { text: truncateEnd(`› ${text}`, Math.max(1, width - PROMPT_MARGIN * 2)), fg: "muted" }] : undefined
+    stuck = { text: last.text, width, row }
+    return row
   }
 
   /**

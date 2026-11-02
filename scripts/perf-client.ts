@@ -2,12 +2,21 @@
 // include the orchestrator). Prints one JSON line. Wiring mirrors apps/cli/src/main.ts: real client, real app, real screen
 // (the differential renderer encodes every frame) writing into a byte counter instead of a terminal.
 import type { SessionEvent, SessionId, Settings } from "@mendcode/protocol"
+import { processStats } from "./perf-proc"
 
 const MB = 1048576
 const rssMB = () => +(process.memoryUsage().rss / MB).toFixed(1)
 /** JS heap in use at each settled sample: tells heap growth from native memory the runtime keeps. */
 const heapMB: Record<string, number> = {}
-const settled = (label: string) => { Bun.gc(true); heapMB[label] = +(process.memoryUsage().heapUsed / MB).toFixed(1); return rssMB() }
+/** macOS physical footprint (MB) at each settled sample, beside the RSS; empty where the platform does not report it. */
+const footprintMB: Record<string, number> = {}
+const settled = (label: string) => {
+  Bun.gc(true)
+  heapMB[label] = +(process.memoryUsage().heapUsed / MB).toFixed(1)
+  const footprint = processStats(process.pid)?.footprintMB
+  if (footprint !== undefined) footprintMB[label] = footprint
+  return rssMB()
+}
 const arg = (name: string, fallback?: string) => {
   const at = process.argv.indexOf(`--${name}`)
   const value = at >= 0 ? process.argv[at + 1] : fallback
@@ -109,6 +118,7 @@ emit({ type: "turn.started", turnId, queueId: "queue_perfstream" })
 emit({ type: "item.started", turnId, itemId: "item_perfstream", kind: "agent_message" })
 flush()
 const stream: number[] = []
+const cpuBeforeStream = processStats(process.pid)?.cpuMs
 for (let i = 0; i < deltas; i++) {
   const text = `${[1, 7, 4, 11].map((step) => WORDS[(i * step) % WORDS.length]).join(" ")} ${i % 10 === 9 ? "\n\n" : ""}`
   await timed(stream, () => emit({ type: "item.delta", itemId: "item_perfstream", text }))
@@ -116,6 +126,7 @@ for (let i = 0; i < deltas; i++) {
 emit({ type: "item.completed", itemId: "item_perfstream", status: "ok" })
 emit({ type: "turn.completed", turnId })
 flush()
+const cpuStreamMs = cpuBeforeStream === undefined ? undefined : +((processStats(process.pid)?.cpuMs ?? cpuBeforeStream) - cpuBeforeStream).toFixed(1)
 const rssAfter = settled("afterStream")
 
 console.log(JSON.stringify({
@@ -123,6 +134,8 @@ console.log(JSON.stringify({
   rssMB: { boot: rssBoot, imported: rssImported, ...(solo ? { hosted: rssHosted } : {}), idle: rssIdle, scrolledUp: rssScrolledUp, afterStream: rssAfter },
   frameMs: { idle: stats(idle), scrollUp: stats(up), scrollDown: stats(down), stream: stats(stream) },
   heapMB,
+  ...(Object.keys(footprintMB).length ? { footprintMB } : {}),
+  ...(cpuStreamMs === undefined ? {} : { cpuStreamMs }),
   screenBytes: bytes,
 }))
 client.close()

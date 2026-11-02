@@ -1,12 +1,16 @@
 export type FrameStats = { samples: number; p50: number; p95: number; max: number }
 export type PerfResult = {
   messages: number
-  daemon: { rssIdleMB: number; rssWithClientMB: number; readyMs: number }
+  daemon: { rssIdleMB: number; rssWithClientMB: number; readyMs: number; footprintIdleMB?: number; footprintWithClientMB?: number }
   startupMs: { import: number; firstFrame: number }
   rssMB: { boot: number; imported: number; idle: number; scrolledUp: number; afterStream: number }
   heapMB: { idle: number; scrolledUp: number; afterStream: number }
   frameMs: { idle: FrameStats; scrollUp: FrameStats; scrollDown: FrameStats; stream: FrameStats }
   screenBytes: number
+  /** macOS physical footprint (MB) of the client at the settled samples; absent where the platform does not report it. Not budgeted. */
+  footprintMB?: { idle: number; scrolledUp: number; afterStream: number }
+  /** User plus system CPU time the client spent on the 400-delta stream, ms. Not budgeted. */
+  cpuStreamMs?: number
 }
 
 /** The same scenario with the terminal hosting its own daemon (solo mode): one process, so one RSS series, and the time the in-process daemon took to be ready. */

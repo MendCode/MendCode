@@ -27,6 +27,8 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
   converted in the background while the daemon is idle. Forked sessions also store less. Short sessions now take less disk
   than a Pi session file.
 - Opening a session and starting a turn read the transcript and model history faster.
+- The terminal uses less CPU while a reply streams in.
+- `--help` says which `--process` mode uses less memory.
 - Compaction uses the session's own model by default, so it reuses the prompt cache; the built-in recipes no longer set a
   `compaction` role, and `/models` notes when a separate compaction model gives that up.
 - The working row's token count shows new input and the context read from the provider's prompt cache separately.

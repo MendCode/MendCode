@@ -1,5 +1,5 @@
 // Repeatable performance benchmark of the v2 terminal client and daemon (docs/performance.md).
-//   bun scripts/perf.ts [--messages 0,1000,10000] [--runs 1] [--check]
+//   bun scripts/perf.ts [--messages 0,1000,10000] [--runs 1] [--check] [--build-to DIR | --prebuilt DIR]
 // Everything runs on temporary directories with the offline faux engine and a throwaway HOME: no network, no provider,
 // nothing of the user's data. It never launches pi or Codex; their numbers are a documented manual step.
 import { mkdtempSync, mkdirSync, realpathSync, rmSync } from "node:fs"
@@ -10,6 +10,7 @@ import { openStore } from "@mendcode/store"
 
 type SessionEventDraft = Parameters<ReturnType<typeof openStore>["sessionSink"]["append"]>[0]
 import { soloViolations, violations, type PerfResult, type SoloPerfResult } from "./perf-budgets"
+import { processStats } from "./perf-proc"
 
 const ROOT = path.join(import.meta.dir, "..")
 const ENTRY = path.join(ROOT, "apps/cli/src/entry.ts")
@@ -41,6 +42,12 @@ export async function compiledTarget(outDir: string, options: { execArgv?: strin
   return { label: "compiled", daemon: [cli, "__daemon"], client: [probe], cli: [cli] }
 }
 
+/** A target over binaries `compiledTarget` built earlier into `dir` (`mendcode` and `perf-client`): A/B runs alternate builds without compiling again. */
+export function prebuiltTarget(dir: string): Target {
+  const cli = path.join(dir, "mendcode")
+  return { label: "compiled", daemon: [cli, "__daemon"], client: [path.join(dir, "perf-client")], cli: [cli] }
+}
+
 const ANSWERS = [
   "The daemon owns the session log and the client only draws what the events describe. Here is the plan:\n\n- read the config\n- run the check\n- report the result\n\nThe change is small and the tests cover it.",
   "I looked at `src/store.ts` and found the cause: the cache key ignored the directory.\n\n```ts\nconst key = `${directory}:${name}`\nreturn cache.get(key) ?? load(key)\n```\n\nWith the directory in the key both sessions get their own entry.",
@@ -54,12 +61,6 @@ async function run(command: string[], env: Record<string, string>) {
   const [out, err, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited])
   if (code !== 0) throw new Error(`${command.join(" ")} exited ${code}: ${err.slice(0, 500)}`)
   return out
-}
-
-/** Resident set size of a process in MB (ps works on macOS and Linux). */
-async function processRssMB(pid: number) {
-  const out = await new Response(Bun.spawn(["ps", "-o", "rss=", "-p", String(pid)], { stdout: "pipe", stderr: "ignore" }).stdout).text()
-  return +(Number(out.trim()) / 1024).toFixed(1)
 }
 
 /** A data directory holding one session of `messages` finished messages (user and agent alternating), written through the store the daemon uses. */
@@ -112,10 +113,19 @@ export async function measureScenario(target: Target, messages: number, options:
     const daemon = await startDaemonProcess(target, dir, directory)
     try {
       await Bun.sleep(400)
-      const daemonIdleMB = await processRssMB(daemon.pid)
+      const daemonIdle = processStats(daemon.pid)
       const out = await run([...target.client, "--socket", daemon.socketPath, "--session", seeded.sessionId, "--directory", directory, "--data-dir", dir, "--last-seq", String(seeded.lastSeq), ...(options.scrollPresses ? ["--scroll-presses", String(options.scrollPresses)] : [])], { HOME: daemon.home })
       const client = JSON.parse(out.trim().split("\n").at(-1)!) as Omit<PerfResult, "messages" | "daemon">
-      return { messages, daemon: { rssIdleMB: daemonIdleMB, rssWithClientMB: await processRssMB(daemon.pid), readyMs: daemon.readyMs }, ...client }
+      const daemonUsed = processStats(daemon.pid)
+      return {
+        messages,
+        daemon: {
+          rssIdleMB: daemonIdle?.rssMB ?? 0, rssWithClientMB: daemonUsed?.rssMB ?? 0, readyMs: daemon.readyMs,
+          ...(daemonIdle?.footprintMB === undefined ? {} : { footprintIdleMB: daemonIdle.footprintMB }),
+          ...(daemonUsed?.footprintMB === undefined ? {} : { footprintWithClientMB: daemonUsed.footprintMB }),
+        },
+        ...client,
+      }
     } finally { await daemon.stop() }
   } finally { rmSync(dir, { recursive: true, force: true }) }
 }
@@ -165,7 +175,11 @@ if (import.meta.main) {
   const sizes = (flag("messages") ?? "0,1000,10000").split(",").map(Number)
   const buildDir = mkdtempSync(path.join(tmpdir(), "mend-perf-build-"))
   try {
-    const target = process.argv.includes("--source") ? sourceTarget() : await compiledTarget(buildDir, { execArgv: flag("exec-argv") })
+    if (flag("build-to")) {
+      await compiledTarget(path.resolve(flag("build-to")!), { execArgv: flag("exec-argv") })
+      process.exit(0)
+    }
+    const target = process.argv.includes("--source") ? sourceTarget() : flag("prebuilt") ? prebuiltTarget(path.resolve(flag("prebuilt")!)) : await compiledTarget(buildDir, { execArgv: flag("exec-argv") })
     const modes = (flag("mode") ?? "daemon,solo").split(",")
     const results: PerfResult[] = []
     const soloResults: SoloPerfResult[] = []

@@ -6,6 +6,9 @@ import { openStore } from "@mendcode/store"
 import { compiledTarget, measureCliStartup, measureScenario, seedDataDir, summary } from "./perf"
 import { PERF_BUDGETS, soloViolations, violations, type FrameStats, type PerfResult, type SoloPerfResult } from "./perf-budgets"
 import { timeScale } from "./test-budget"
+import { parsePsTime, processStats, spread } from "./perf-proc"
+import { summarize } from "./perf-real"
+import { compare, flatten, table } from "./perf-ab"
 
 const frame = (p95: number): FrameStats => ({ samples: 10, p50: p95 / 2, p95, max: p95 * 2 })
 function result(messages: number, patch: Partial<PerfResult> = {}): PerfResult {
@@ -72,6 +75,58 @@ describe("performance budget rules", () => {
 
   test("the human summary has a row per scenario", () => {
     expect(summary([result(0), result(1000)], 150).split("\n")).toHaveLength(4)
+  })
+})
+
+describe("process readings", () => {
+  test("reads this process: memory, CPU time that grows with work, and the footprint where the platform has one", () => {
+    const first = processStats(process.pid)!
+    expect(first.rssMB).toBeGreaterThan(5)
+    if (process.platform === "darwin") {
+      expect(first.footprintMB).toBeGreaterThan(1)
+      expect(first.peakFootprintMB).toBeGreaterThanOrEqual(first.footprintMB!)
+    }
+    const until = performance.now() + 30
+    while (performance.now() < until) Math.sqrt(Math.random())
+    expect(processStats(process.pid)!.cpuMs).toBeGreaterThan(first.cpuMs)
+  })
+
+  test("a process that is gone reads as undefined", () => {
+    expect(processStats(2 ** 22 + 12345)).toBeUndefined()
+  })
+
+  test("ps time fields convert to milliseconds, with and without hours and days", () => {
+    expect(parsePsTime("0:01.50")).toBe(1500)
+    expect(parsePsTime("2:03.25")).toBe(123_250)
+    expect(parsePsTime("1:00:00.00")).toBe(3_600_000)
+    expect(parsePsTime("1-00:00:01")).toBe(86_401_000)
+  })
+
+  test("the median is the lower middle and the range is kept", () => {
+    expect(spread([5, 1, 3])).toEqual({ median: 3, min: 1, max: 5 })
+    expect(spread([4, 1, 2, 3])).toEqual({ median: 2, min: 1, max: 4 })
+  })
+
+  test("a real-CLI run is summarized per metric over its runs", () => {
+    const run = (ready: number) => ({ startupMs: { firstFrame: 100, ready }, exitMs: 10 }) as never
+    expect(summarize([run(120), run(100), run(110)])["startupMs.ready"]).toEqual({ median: 110, min: 100, max: 120 })
+  })
+})
+
+describe("A/B comparison", () => {
+  test("flattens nested numbers to dotted paths and compares medians against the base range", () => {
+    expect(flatten({ a: { b: 1, c: [2, { d: 3 }] }, e: "x" })).toEqual({ "a.b": 1, "a.c[0]": 2, "a.c[1].d": 3 })
+    const base = [10, 11, 12, 10, 11].map((rss) => ({ rss, cpu: 5 }))
+    const candidate = [14, 15, 13, 14, 16].map((rss) => ({ rss, cpu: 4 }))
+    const rows = compare(base, candidate)
+    expect(rows.find((row) => row.key === "rss")).toMatchObject({ a: { median: 11, min: 10, max: 12 }, b: { median: 14 }, worse: true, better: false })
+    expect(rows.find((row) => row.key === "cpu")).toMatchObject({ better: true, worse: false, changePct: -20 })
+    expect(table(rows)).toContain("WORSE")
+  })
+
+  test("a candidate inside the base range is neither better nor worse", () => {
+    const rows = compare([{ x: 10 }, { x: 14 }, { x: 12 }], [{ x: 13 }, { x: 11 }, { x: 12 }])
+    expect(rows[0]).toMatchObject({ worse: false, better: false })
   })
 })
 

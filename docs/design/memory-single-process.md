@@ -131,12 +131,11 @@ object in the heap statistics above. They remain candidates if a profile of a lo
 
 ## Default
 
-`daemon` is the default (today's two processes), and `auto` is opt-in: the settings row (`/customize`, Terminal, Processes)
-and the minimalist tier bundle select it. The reason is the one trade-off solo cannot remove: when the terminal process
-dies abruptly (SIGKILL, a crash that cannot be caught, power loss), a turn that was running ends as interrupted, where a
-separate daemon would have finished it. Nothing recorded is lost either way (tested), but the product rule is that nothing
-is left half-done, so the saving is offered, not imposed. In the minimalist tier it is part of what the user asked for:
-less memory. Leaving minimalist puts `daemon` back; a choice made under another tier is not touched.
+`auto` is the default in every tier (since 2026-10-13; the first version of this design shipped `daemon` as the default and `auto`
+as opt-in, selected by the settings row (`/customize`, Terminal, Processes) and the minimalist tier bundle). The one trade-off
+solo cannot remove is that when the terminal process dies abruptly (SIGKILL, a crash that cannot be caught, power loss), a turn
+that was running ends as interrupted, where a separate daemon would have finished it. Nothing recorded is lost either way
+(tested). `daemon` stays one setting away for anyone who prefers the separate process.
 
 The trade-off, in one line, as the settings row and `--help` state it: less RAM; a hard-killed terminal interrupts its
 running turn; slower first frame.
