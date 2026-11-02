@@ -1,6 +1,6 @@
 import type { Database } from "bun:sqlite"
 import { SessionEvent, TIMELINE_PREVIEW_CHARS, type ChangesReport, type SessionId } from "@mendcode/protocol"
-import { createCodec, DEDUP_MIN_BYTES, type Codec } from "./compress"
+import { createCodec, DEDUP_MIN_BYTES, parseEvent, type Codec, type ObjectLoader } from "./compress"
 import { createEngineHistory, type EngineHistory } from "./engine-history"
 
 /** The `\0MZ1` header of a wrapped value, and of a content-addressed reference, as SQL blob literals. */
@@ -128,7 +128,7 @@ function stateOf(state: string | null, content: Uint8Array | null, mode: number 
  * The per-turn projection, the turn file snapshots and the undo stack's model-message stash. Every method is a plain
  * query; the store calls `record` inside the transaction that appends the event, so these rows never lag the log.
  */
-export function createTurns(input: { db: Database; codec?: Codec; history?: EngineHistory; writeTurn?: (sessionId: string, turnId: string) => void }) {
+export function createTurns(input: { db: Database; codec?: Codec; history?: EngineHistory; load?: ObjectLoader; writeTurn?: (sessionId: string, turnId: string) => void }) {
   const { db } = input
   const history = input.history ?? createEngineHistory(db)
   const codec = input.codec ?? createCodec()
@@ -211,6 +211,8 @@ export function createTurns(input: { db: Database; codec?: Codec; history?: Engi
 
   /** The projection update for one appended event. */
   function record(event: SessionEvent) {
+    // Streaming does not alter the turn projection; do not query or copy-on-write a turn for every token.
+    if (event.type === "item.delta") return
     const turnId = "turnId" in event ? event.turnId : "itemId" in event
       ? db.query<{ turn_id: string }, [string, string]>("SELECT turn_id FROM turns_read WHERE session_id = ? AND item_id = ?").get(event.sessionId, event.itemId)?.turn_id
       : undefined
@@ -280,7 +282,7 @@ export function createTurns(input: { db: Database; codec?: Codec; history?: Engi
       if (event.type === "item.started" && event.kind === "user_message") {
         const completed = next.get(row.session_id, row.seq + 1)
         if (completed) {
-          const done = JSON.parse(completed.payload) as SessionEvent
+          const done = parseEvent(completed.payload, input.load)
           if (done.type === "item.completed" && done.itemId === event.itemId && done.text !== undefined) q.preview.run(previewOf(done.text), row.session_id, event.itemId)
         }
       }

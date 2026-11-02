@@ -9,6 +9,7 @@ import { planHandoff } from "./handoff"
 import { threadMcpEnabled, type BridgeEngine } from "./thread-mcp-policy"
 import { createHostMcp } from "./host-mcp"
 import { createIdleGc } from "./idle-gc"
+import { createIdleDeltaFold } from "./idle-delta-fold"
 import { createSessionSharing } from "./session-sharing"
 import { createMflow } from "./mflow"
 import { createMflowHttp, mflowListenerAddress } from "./mflow-http"
@@ -2845,6 +2846,11 @@ export async function startDaemon(options: DaemonOptions) {
   workflows.boot()
   armDreamSchedule()
   armRetentionSchedule()
+  const idleDeltaFold = createIdleDeltaFold({ clock,
+    busy: () => [...actors.values()].some(actorWorking) || scheduler.snapshot().length > 0 || engineJobs() > 0,
+    step: () => store.foldStoredDeltas(100),
+    warn: error => logLine("warn", `[DAEMON]: idle delta folding failed: ${error instanceof Error ? error.message : String(error)}`),
+  })
 
   /** Deletes a session and everything it holds; refused while a turn runs in it. */
   function removeSession(sessionId: SessionId): "removed" | "unknown" | "busy" {
@@ -2916,12 +2922,12 @@ export async function startDaemon(options: DaemonOptions) {
     // between the replay and the live stream: no gap, no duplicate (I4).
     connection.subscriptions.set(sessionId, afterSeq)
     for (let cursor = afterSeq; ; ) {
-      const page = store.readAfter(sessionId, cursor, REPLAY_PAGE)
+      const page = store.readExactAfter(sessionId, cursor, REPLAY_PAGE)
       for (const event of page) send(connection, { v: PROTOCOL_VERSION, kind: "event", body: event })
       if (page.length === 0) break
       cursor = page[page.length - 1]!.seq
       connection.subscriptions.set(sessionId, cursor)
-      if (page.length < REPLAY_PAGE) break
+      if (cursor >= (store.lastSeq(sessionId) ?? 0)) break
     }
   }
 
@@ -6260,6 +6266,7 @@ export async function startDaemon(options: DaemonOptions) {
     await compound.dispose()
     dreamTimer?.cancel()
     retentionTimer?.cancel()
+    idleDeltaFold.dispose()
     idleCompaction.dispose()
     memoryAssistant.stop()
     metadata.stop()

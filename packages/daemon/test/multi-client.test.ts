@@ -63,7 +63,7 @@ describe("mendd", () => {
     const total = () => daemon.store.lastSeq(sessionId) ?? 0
     await until(() => b.events.filter((e) => e.type === "turn.completed").length === 3)
     await until(() => a.events.length === total())
-    const truth = daemon.store.readAfter(sessionId, 0, 10_000)
+    const truth = daemon.store.readExactAfter(sessionId, 0, 10_000)
     for (const x of [a, b, c]) expect(x.events).toEqual(truth)
     expect(checkSessionLog(truth, { final: true })).toEqual([])
   })

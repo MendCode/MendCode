@@ -1,7 +1,34 @@
 # Disk usage
 
-Goal: thousands of sessions and worktrees in well under 1 GB. Everything below is local and additive: an existing
-data dir opens unchanged, every old value stays readable, and nothing is rewritten until you ask (or retention runs).
+Goal: thousands of sessions and worktrees in well under 1 GB. Existing values stay readable. Completed streaming
+items are folded in the background while the daemon is idle; opening a database never migrates its event rows.
+
+## Folded streaming history
+
+While an item runs, every delta remains durable. A self-contained completion folds those rows into one lossless
+compressed block in the same transaction. Normal history reads the completion; historical cuts and exact reconnect
+or synchronization recover original sequences, timestamps and text from the item's block. Existing fork references
+keep their physical source rows. Empty or missing final text, blob-backed completions and oversized blocks retain
+their original deltas. No model history is rebuilt to reopen a session.
+
+Maintenance starts after a delay, pauses during active turns and jobs, resumes from a persistent cursor and returns
+pages using incremental vacuum. It never runs a full VACUUM at startup. Foreground-state history is retained because
+compaction timing and automation still consume it. Storage reports count archived blocks in each session's bytes.
+
+Older executables can read completed messages but do not understand archived delta blocks for exact replay or late
+mid-item cuts. Keep a pre-migration backup when testing this representation; do not downgrade a migrated directory.
+
+When plain delta text concatenates exactly to the completion, an `MDL1` block stores varint sequence gaps,
+signed timestamp differences and UTF-16 chunk lengths instead of repeating text. A historical read slices the
+completion using those lengths, including split surrogate pairs. Other items retain their compressed archive.
+Idle batches also convert eligible existing tuple archives, with a resumable cursor and no startup scan.
+Executables predating `MDL1` cannot read these blocks; this experiment does not install or migrate live data.
+Compact JSON envelopes were measured and rejected for store-read overhead; full event envelopes remain on disk.
+
+`bun scripts/session-disk-probe.ts` measures an isolated persistence fixture. Optional
+`--pi-manager /absolute/path/to/pi/dist/core/session-manager.js` compares the installed Pi session writer with the
+same content, without provider calls. It reports logical payloads, physical file growth, allocated bytes, CPU and
+latency separately; fixed empty-database overhead is not included in per-session growth and is reported explicitly.
 
 ## Where the bytes went (measured)
 
@@ -52,9 +79,10 @@ Fixed schema/index pages make the small fixture's per-session cost higher than t
 
 ## What changed
 
-- **Compression.** Tool results (and their live output), model history rows and snapshot content over 1 KB are stored as
-  zstd. A tool event keeps its JSON shape (`text` is base64 zstd, `z` the original length), so item id, kind and status
-  stay plain for every query. User and assistant messages are never compressed: search and recall read them in SQL.
+- **Compression.** Tool results (and their live output), completed message text, model history rows and snapshot
+  content over 1 KB use zstd when it saves space. Completed messages keep compressed text inside their event instead
+  of adding shared-object references per fork. Search and recall decode only the messages they read; incomplete
+  message deltas remain uncompressed. Item id, kind and status stay queryable in SQL.
 - **Shared content.** Snapshot file content is content-addressed (`snap_objects`, sha256): the same bytes before one turn
   and after the previous one, or in two sessions of the same repository, are stored once. Objects nothing references go
   with the next clean (and after enough pruned snapshots).

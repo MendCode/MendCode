@@ -3,10 +3,34 @@ import { parseEvent, type ObjectLoader } from "./compress"
 import type { EngineHistory } from "./engine-history"
 import type { SessionEvent, SessionId } from "@mendcode/protocol"
 import type { SessionEventDraft } from "@mendcode/kernel"
+import type { createDeltaFold } from "./delta-fold"
 
-export function createProjectSyncRecords(db: Database, append: (event: SessionEventDraft, at?: number) => SessionEvent, history: EngineHistory, load: ObjectLoader) {
+export function createProjectSyncRecords(db: Database, append: (event: SessionEventDraft, at?: number) => SessionEvent, history: EngineHistory, load: ObjectLoader, folded?: ReturnType<typeof createDeltaFold>) {
   return {
     history(directories: string[], cursors: Record<string, number>) {
+      if (!directories.length) return { events: [], hasMore: false }
+      if (folded) {
+        const events: SessionEvent[] = []
+        let bytes = 0
+        const sessions = db.query<{ id: SessionId; last_seq: number }, string[]>(`SELECT id, last_seq FROM sessions WHERE directory IN (${directories.map(() => "?").join(",")}) ORDER BY id`).all(...directories)
+        for (const session of sessions) {
+          let after = (cursors[session.id] ?? -1) + 1
+          while (after < session.last_seq) {
+            const through = Math.min(after + 256, session.last_seq)
+            const physical = db.query<{ payload: string }, [string, number, number]>("SELECT payload FROM events_read WHERE session_id = ? AND seq > ? AND seq <= ? ORDER BY seq").all(session.id, after, through).map(row => parseEvent(row.payload, load))
+            const page = new Map(physical.map(event => [event.seq, event]))
+            for (const delta of folded.archived(session.id, after, through)) if (!page.has(delta.seq)) page.set(delta.seq, parseEvent(JSON.stringify(delta), load))
+            for (const event of [...page.values()].sort((a, b) => a.seq - b.seq)) {
+              const size = Buffer.byteLength(JSON.stringify(event)) + 250
+              if (events.length >= 2000 || bytes + size > 160_000) return { events, hasMore: true }
+              events.push(event)
+              bytes += size
+            }
+            after = through
+          }
+        }
+        return { events, hasMore: false }
+      }
       const rows: SessionEvent[] = []
       let bytes = 0
       let hasMore = false

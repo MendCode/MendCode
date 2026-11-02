@@ -237,7 +237,7 @@ export function createProjectRest(input: {
   function storedHistory(sessionId: SessionId): SessionEvent[] {
     const out: SessionEvent[] = []
     for (;;) {
-      const page = input.store.readAfter(sessionId, out.length, 1000)
+      const page = input.store.readExactAfter(sessionId, out.at(-1)?.seq ?? 0, 1000)
       if (!page.length) return out
       out.push(...page)
       if (out.length > MAX_REPLAY_EVENTS) fail("busy", "Session history exceeds the replay limit")

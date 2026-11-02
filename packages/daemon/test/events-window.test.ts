@@ -176,7 +176,7 @@ describe("client window helpers", () => {
       await new Promise((resolve) => setTimeout(resolve, 50))
       expect(streamed.length).toBeGreaterThan(0)
       expect(streamed[0]!.seq).toBe(latest.window.lastSeq + 1)
-      expect(seqs(streamed)).toEqual(seqs(h.store.readAfter(sessionId, latest.window.lastSeq, 10_000)))
+      expect(seqs(streamed)).toEqual(seqs(h.store.readExactAfter(sessionId, latest.window.lastSeq, 10_000)))
 
       const refused = await viewer.loadWindow(createIdFactory()("session") as SessionId)
       expect(refused).toMatchObject({ ok: false, error: { code: "unknown_session" } })

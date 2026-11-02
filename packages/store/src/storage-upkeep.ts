@@ -98,7 +98,8 @@ export function createStorageUpkeep(input: { db: Database; codec: Codec; turns: 
   }
 
   /** Streaming deltas of items that have their final text: replay needs only the completed event. */
-  const deltaTarget = `type = 'item.delta' AND EXISTS (SELECT 1 FROM events c WHERE c.session_id = events.session_id
+  const deltaTarget = `type = 'item.delta' AND EXISTS (SELECT 1 FROM folded_deltas f WHERE f.session_id = events.session_id
+    AND f.item_id = json_extract(events.payload, '$.itemId')) AND EXISTS (SELECT 1 FROM events c WHERE c.session_id = events.session_id
     AND c.type IN ('item.started', 'item.delta', 'item.completed') AND c.type = 'item.completed'
     AND json_extract(c.payload, '$.itemId') = json_extract(events.payload, '$.itemId')
     AND json_extract(c.payload, '$.text') IS NOT NULL AND json_extract(c.payload, '$.blob') IS NULL)`

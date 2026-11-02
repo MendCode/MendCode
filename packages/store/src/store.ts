@@ -4,6 +4,7 @@ import { createContinuityRecords } from "./continuity"
 import { createMemorySharingRecords, sharedMemoryRevision } from "./memory-sharing"
 import { createMessageRevisions } from "./message-revisions"
 import { createTranscriptPrefix } from "./transcript-prefix"
+import { createDeltaFold } from "./delta-fold"
 import { Database } from "bun:sqlite"
 import { openPrivateDatabase } from "./private-database"
 import { createPrivateFiles } from "./private-files"
@@ -44,7 +45,7 @@ import {
 } from "@mendcode/protocol"
 import type { GlobalEventDraft, SessionEventDraft } from "@mendcode/kernel"
 import { createBlobFiles } from "./blobs"
-import { createCodec, parseEvent } from "./compress"
+import { createCodec, parseEvent, unpackEvent } from "./compress"
 import { createEngineHistory } from "./engine-history"
 import { createEventObjects } from "./event-objects"
 import { createStorageUpkeep, type CompactResult, type StorageExtras } from "./storage-upkeep"
@@ -432,6 +433,7 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
   const transcript = createTranscriptPrefix(db)
   const eventObjects = createEventObjects(db)
   const messages = createMessageRevisions(db, eventObjects.load)
+  const deltaFold = createDeltaFold(db, eventObjects.load)
   db.run("INSERT OR IGNORE INTO meta(key, value) VALUES ('schema_version', ?)", [String(SCHEMA_VERSION)])
 
   function matchMemories(match: string, options: { directory?: string; limit?: number; profile?: string; session?: SessionId | "all" }): Array<{ memory: MemoryEntry; rank: number }> {
@@ -526,7 +528,7 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
   const usageAuxiliary = createUsageAuxiliary({ db, dayOf })
   const codec = createCodec({ enabled: options.compress ?? true, objects: eventObjects })
   const engineHistory = createEngineHistory(db)
-  const turns = createTurns({ db, codec, history: engineHistory, writeTurn: transcript.writeTurn })
+  const turns = createTurns({ db, codec, history: engineHistory, load: eventObjects.load, writeTurn: transcript.writeTurn })
   const upkeep = createStorageUpkeep({ db, codec, turns, now, objects: eventObjects })
   // The per-turn projection is built once from the log written before it existed; afterwards every append keeps it current.
   if (!db.query("SELECT 1 FROM meta WHERE key = 'turns_backfill'").get()) {
@@ -541,7 +543,7 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
   const sessionBackground = createSessionBackgroundRecords(db, now)
   const recall = createSessionRecallRecords(db, eventObjects.load)
   const sessionStats = createSessionStatsRecords(db)
-  const sessionSearch = createSessionSearch(db)
+  const sessionSearch = createSessionSearch(db, eventObjects.load)
   const automationLedger = createAutomationLedger(db)
   const workflowJournal = createWorkflowJournal(db)
   // Existing projections can seed available evidence, never reconstruct their missing event history.
@@ -605,13 +607,18 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
     const row = q.lastSeq.get(draft.sessionId)
     if (!row) throw new RangeError(`[STORE]: unknown session ${draft.sessionId}`)
     const event = SessionEvent.parse({ ...draft, seq: row.last_seq + 1, at: importedAt ?? now() })
+    if (event.type === "item.completed" && event.meta?.firstDeltaAt === undefined && Object.keys(event.meta ?? {}).length < 16) {
+      const firstDeltaAt = deltaFold.firstAt(event.sessionId, event.itemId)
+      if (firstDeltaAt !== undefined) event.meta = { ...event.meta, firstDeltaAt }
+    }
     const payload = JSON.stringify(event)
     if (payload.length > MAX_EVENT_BYTES) throw new RangeError(`[STORE]: event ${event.type} is ${payload.length} bytes; use the blob store`)
     const open = event.type === "item.completed" || event.type === "item.delta" ? openItems.get(event.sessionId)?.get(event.itemId) : undefined
     const packed = codec.packEvent(event, payload, open?.kind === "tool_call")
-    const ref = JSON.parse(packed).zref as string | undefined
+    const ref = packed === payload ? undefined : JSON.parse(packed).zref as string | undefined
     if (ref) eventObjects.refer(ref, event.sessionId)
     q.insertEvent.run(event.sessionId, event.seq, event.type, event.at, packed)
+    deltaFold.fold(event)
     q.setSeq.run(event.seq, event.at, event.sessionId)
     if (event.type === "item.started" && TRACKED_ITEM_KINDS.has(event.kind)) {
       let items = openItems.get(event.sessionId)
@@ -786,7 +793,7 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
   convertFiles(true)
   return {
     sessionSink: { append: (draft: SessionEventDraft) => appendSession(draft) },
-    projectSync: createProjectSyncRecords(db, appendSession, engineHistory, eventObjects.load),
+    projectSync: createProjectSyncRecords(db, appendSession, engineHistory, eventObjects.load, deltaFold),
     automationLedger,
     messages,
     /** Revision, model history and history marks commit together; no half-edited conversation. */
@@ -1334,12 +1341,21 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
           const turn = all[i]!
           if (turn.reverted) continue
           const end = i === through && options.beforeSeq !== undefined ? options.beforeSeq : all[i + 1]?.seq ?? lastSeq + 1
-          const rows = selectCopied.all(from, turn.seq, end)
+          const rows: Array<{ seq: number; payload: string; source_id?: string; source_seq?: number }> = selectCopied.all(from, turn.seq, end)
+          if (i === through && options.beforeSeq !== undefined) {
+            const present = new Set(rows.map(row => row.seq))
+            for (const delta of deltaFold.range(from, turn.seq, end)) if (!present.has(delta.seq)) rows.push({ seq: delta.seq, payload: JSON.stringify(delta) })
+            rows.sort((a, b) => a.seq - b.seq)
+          }
           shareTurn.run(to, offset + 1, from, turn.turnId)
           for (const row of rows) {
             const event = JSON.parse(row.payload) as { zref?: string }
             if (event.zref) eventObjects.refer(event.zref, to)
-            shareEvent.run(to, ++offset, row.source_id, row.source_seq)
+            if (row.source_id !== undefined && row.source_seq !== undefined) shareEvent.run(to, ++offset, row.source_id, row.source_seq)
+            else {
+              const restored = { ...JSON.parse(row.payload), sessionId: to, seq: ++offset }
+              q.insertEvent.run(to, offset, restored.type, restored.at, JSON.stringify(restored))
+            }
           }
           events += rows.length
         }
@@ -1552,6 +1568,20 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
     readAfter(sessionId: SessionId, afterSeq: number, limit = 1000): SessionEvent[] {
       return q.readAfter.all(sessionId, afterSeq, limit).map((row) => parseEvent(row.payload, eventObjects.load))
     },
+    readExactAfter(sessionId: SessionId, afterSeq: number, limit = 1000): SessionEvent[] {
+      const through = afterSeq + Math.max(1, Math.min(limit, 1000))
+      const physical = db.query<{ payload: string }, [string, number, number]>("SELECT payload FROM events_read WHERE session_id = ? AND seq > ? AND seq <= ? ORDER BY seq").all(sessionId, afterSeq, through).map(row => parseEvent(row.payload, eventObjects.load))
+      const present = new Set(physical.map(event => event.seq))
+      for (const event of deltaFold.archived(sessionId, afterSeq, through)) if (!present.has(event.seq)) physical.push(unpackEvent(event as unknown as Record<string, unknown>, eventObjects.load) as SessionEvent)
+      if (!physical.length) {
+        const next = db.query<{ seq: number | null }, [string, number]>(`SELECT min(seq) AS seq FROM (
+          SELECT min(seq) AS seq FROM events_read WHERE session_id = ?1 AND seq > ?2
+          UNION ALL SELECT min(first_seq) AS seq FROM folded_deltas WHERE session_id = ?1 AND first_seq > ?2
+        )`).get(sessionId, through)?.seq
+        if (next !== null && next !== undefined) return this.readExactAfter(sessionId, next - 1, limit)
+      }
+      return physical.sort((a, b) => a.seq - b.seq)
+    },
     /** Paging for clients that load the newest events first: the newest `limit` events, or the `limit` just older than `beforeSeq`, in ascending order. */
     readBefore(sessionId: SessionId, beforeSeq: number | undefined, limit: number): SessionEvent[] {
       const rows = beforeSeq === undefined ? q.readNewest.all(sessionId, limit) : q.readBefore.all(sessionId, beforeSeq, limit)
@@ -1748,7 +1778,10 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
       const num = (sql: string) => Number(one<{ n: number | null }>(sql)?.n ?? 0)
       const dbBytes = fileSize(dbPath)
       const perSession = db
-        .query<{ id: string; bytes: number }, []>("SELECT session_id AS id, SUM(octet_length(payload)) AS bytes FROM events GROUP BY session_id")
+        .query<{ id: string; bytes: number }, []>(`SELECT id, SUM(bytes) AS bytes FROM (
+          SELECT session_id AS id, SUM(octet_length(payload)) AS bytes FROM events GROUP BY session_id
+          UNION ALL SELECT session_id AS id, SUM(length(data)) AS bytes FROM folded_deltas GROUP BY session_id
+        ) GROUP BY id`)
         .all()
       const eventBytes = perSession.reduce((sum, row) => sum + row.bytes, 0)
       const blobBytesBySession = new Map(
@@ -1898,6 +1931,11 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
         db.run("PRAGMA wal_checkpoint(TRUNCATE)")
       }
       return { ...result, bytesReclaimed: Math.max(0, before - sizeOnDisk()), vacuumed: options.vacuum === true }
+    },
+    foldStoredDeltas(limit = 100) {
+      const result = deltaFold.migrate(limit)
+      if (result.removed && num1("PRAGMA auto_vacuum") === 2) db.run("PRAGMA incremental_vacuum(32)")
+      return result
     },
     close() {
       try { db.run("PRAGMA wal_checkpoint(TRUNCATE)") } finally { try { db.close() } finally { lock.release() } }

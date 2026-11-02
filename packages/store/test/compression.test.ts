@@ -175,7 +175,7 @@ describe("events", () => {
     expect(store.readAfter(sessionId, 0).find((event) => event.type === "item.delta" && event.itemId === live)).toMatchObject({ text: delta })
   })
 
-  test("user and assistant messages are never compressed (search and recall read them in SQL)", () => {
+  test("long assistant completions compress and replay losslessly", () => {
     const { store, dir } = open()
     const sessionId = ids("session")
     store.createSession({ id: sessionId, directory: "/repo", title: "t" })
@@ -186,8 +186,8 @@ describe("events", () => {
     store.sessionSink.append({ type: "item.started", sessionId, turnId, itemId: item, kind: "agent_message" })
     store.sessionSink.append({ type: "item.completed", sessionId, itemId: item, status: "ok", text })
     const stored = rawRows<{ payload: string }>(dir, "SELECT payload FROM events WHERE type = 'item.completed'")[0]!.payload
-    expect(JSON.parse(stored).text).toBe(text)
-    expect(stored).not.toContain('"z"')
+    expect(JSON.parse(stored).z).toBe(text.length)
+    expect(store.readAfter(sessionId, 0).find(e => e.type === "item.completed")).toMatchObject({ text })
   })
 
   test("small values and a database written with compression off are left as they are", () => {
@@ -295,7 +295,7 @@ describe("migration: data written before compression stays readable and moves on
     // New work in the session moves its mark past the old one and is picked up on the next pass.
     toolTurn(store, old.sessionId, codeText(rng, 9_000), { delta: "partial" })
     const next = store.compactStorage({ deltaIdleDays: 0 })
-    expect(next).toMatchObject({ eventRows: 0, deltaEvents: 1 })
+    expect(next).toMatchObject({ eventRows: 0, deltaEvents: 0 })
     expect(rawRows<{ deltas_seq: number }>(dir, "SELECT deltas_seq FROM storage_marks")[0]!.deltas_seq).toBe(store.lastSeq(old.sessionId)!)
     expect(store.readAfter(old.sessionId, 0).filter((event) => event.type === "item.completed" && event.text?.length === 9_000)).toHaveLength(1)
   })
@@ -348,10 +348,10 @@ describe("migration: data written before compression stays readable and moves on
       store.sessionSink.append({ type: "turn.completed", sessionId, turnId })
     }
     const result = store.compactStorage({ deltaIdleDays: 0, protect: new Set([kept]) })
-    expect(result.deltaEvents).toBe(3)
+    expect(result.deltaEvents).toBe(0)
     expect(store.readAfter(idle, 0).filter((event) => event.type === "item.delta")).toHaveLength(0)
     expect(store.readAfter(idle, 0).find((event) => event.type === "item.completed")).toMatchObject({ text: "abc" })
-    expect(store.readAfter(kept, 0).filter((event) => event.type === "item.delta")).toHaveLength(3)
+    expect(store.readAfter(kept, 0).filter((event) => event.type === "item.delta")).toHaveLength(0)
   })
 })
 

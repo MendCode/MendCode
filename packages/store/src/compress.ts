@@ -119,7 +119,7 @@ export function createCodec(options: { enabled?: boolean; objects?: { put(text: 
     packEvent(event: SessionEvent, json: string, toolCall: boolean): string {
       if (!enabled || json.length < COMPRESS_MIN_BYTES) return json
       if (event.type !== "item.completed" && event.type !== "item.delta") return json
-      if (!toolCall && !(event.type === "item.completed" && event.toolInput !== undefined)) return json
+      if (!toolCall && event.type !== "item.completed") return json
       const text = event.text
       if (typeof text !== "string" || text.length < COMPRESS_MIN_BYTES) return json
       const bytes = encoder.encode(text)
@@ -127,7 +127,7 @@ export function createCodec(options: { enabled?: boolean; objects?: { put(text: 
       const packed = zstd(bytes)
       if (!packed) return json
       const based = Buffer.from(packed).toString("base64")
-      if (options.objects && based.length < text.length * 0.8) return JSON.stringify({ ...event, text: "", z: text.length, zref: options.objects.put(text) })
+      if (options.objects && (toolCall || event.type === "item.completed" && event.toolInput !== undefined) && based.length < text.length * 0.8) return JSON.stringify({ ...event, text: "", z: text.length, zref: options.objects.put(text) })
       return based.length < text.length * 0.8 ? JSON.stringify({ ...event, text: based, z: text.length }) : json
     },
 

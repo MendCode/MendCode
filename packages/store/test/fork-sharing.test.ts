@@ -388,7 +388,7 @@ describe("large tool output and finished deltas in a fork's transcript", () => {
     expect(texts(store, fork).filter((text) => text.length < 100)).toEqual(texts(store, parent).filter((text) => text.length < 100))
     const forkEvents = store.readAfter(fork, 0, 10_000)
     expect(forkEvents.some((event) => event.type === "item.delta")).toBe(false)
-    expect(store.readAfter(parent, 0, 10_000).filter((event) => event.type === "item.delta")).toHaveLength(4)
+    expect(store.readAfter(parent, 0, 10_000).filter((event) => event.type === "item.delta")).toHaveLength(0)
     expect(forkEvents.map((event) => event.seq)).toEqual(forkEvents.map((_, i) => i + 1))
     expect(store.turns.list(fork).map((turn) => turn.turnId)).toEqual(store.turns.list(parent).map((turn) => turn.turnId))
     // The tool call kept its shape for the queries that read it in SQL.
