@@ -92,7 +92,9 @@ export function createTurnSnapshots(input: { store: Store; maxBytes?: number }) 
       const settings = store.settings.get()
       if (settings.snapshot === false) return store.turns.snapshots.put(sessionId, turnId, { root: cwd, scope: "off", complete: false, sealed: false })
       const inventory = settings.snapshotScope === "worktree" ? worktreeFiles(cwd) : undefined
-      if (!inventory) return store.turns.snapshots.put(sessionId, turnId, { root: cwd, scope: "tools", complete: false, sealed: false })
+      // The default scope keeps no record until the turn changed a file: a missing record reads as `tools`, incomplete, unsealed.
+      if (!inventory) return
+
       let left = WORKTREE_SNAPSHOT_MAX_BYTES
       let complete = inventory.complete
       for (const file of inventory.files) {
@@ -144,6 +146,8 @@ export function createTurnSnapshots(input: { store: Store; maxBytes?: number }) 
       }
       const root = record?.root ?? canonicalDirectory(store.sessionDirectory(sessionId) ?? "")
       const summary = summarizeSnapshots(root, store.turns.files.list(sessionId, turnId), complete)
+      // A turn that left no file change in the default scope has nothing to record: readers treat a missing record as an incomplete, empty one.
+      if (!record && summary.files.length === 0 && summary.omittedFiles === 0 && !summary.complete) return
       store.turns.snapshots.put(sessionId, turnId, { root, scope: record?.scope ?? "tools", complete: summary.complete === true, sealed: true, summary })
     },
   }

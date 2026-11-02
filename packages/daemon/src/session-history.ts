@@ -359,7 +359,7 @@ export function createSessionHistory(deps: HistoryDeps) {
         if (!turn) return fail("target_mismatch", "that item is not a user message of this session")
         if (turn.status === "running") return fail("busy", "that message's turn is still running")
         const summary = store.turns.snapshots.get(sessionId, turn.turnId)?.summary
-        return { ok: true, result: { ...(summary ?? { root: info.directory, files: [], omittedFiles: 0, complete: false }), scope: "message" } }
+        return { ok: true, result: { ...(summary ?? { root: canonicalDirectory(info.directory), files: [], omittedFiles: 0, complete: false }), scope: "message" } }
       }
       const combined = new Map<string, FileSnapshot>()
       const archived = new Map<string, ChangesReport["files"][number]>()

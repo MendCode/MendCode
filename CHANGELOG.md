@@ -26,6 +26,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 - Session history takes less disk: each event stores its session, number, time and type once, and existing history is
   converted in the background while the daemon is idle. Forked sessions also store less. Short sessions now take less disk
   than a Pi session file.
+- A finished short session stores fewer rows: settled state snapshots, empty file snapshots and request profiles take less room.
 - Opening a session and starting a turn read the transcript and model history faster.
 - The terminal uses less CPU while a reply streams in.
 - `--help` says which `--process` mode uses less memory.

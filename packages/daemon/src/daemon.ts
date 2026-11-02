@@ -296,6 +296,8 @@ const RECENT_COMMANDS = 1_000
 const DEFAULT_RETENTION_DAYS = 90
 /** `storage.clean` with `compact`: sessions idle this long lose the streaming deltas of their finished messages. */
 const DEFAULT_DELTA_IDLE_DAYS = 3
+/** How long a settled session waits, with the daemon idle, before its superseded foreground and queue snapshots are deleted. */
+const SETTLED_PRUNE_DELAY_MS = 10_000
 const BUSY = new Set(["generating", "tool", "waiting_approval", "compacting", "cancelling"])
 /** `session.tree`: nodes returned in all, how many forks get their unmerged count, and how deep sub-agents of sub-agents go. */
 const TREE_NODES = 400
@@ -1501,6 +1503,7 @@ export async function startDaemon(options: DaemonOptions) {
   })
   extraction.wake()
   const metadata = createSessionMetadata({ store, complete: options.info?.engine === "native" ? completeBudgeted : undefined, settings: () => store.settings.get(), agent: (id, role) => agents.auxiliary(store.sessionDirectory(id)!, role), model: (id, role) => resolveModel({ role, session: store.sessionModel(id), roles: rolesFor(store.settings.get(), store.sessionDirectory(id)), catalog }), changed: (id) => publishActivity(id, actors.get(id)?.snapshot().foreground ?? "idle", true) })
+  let wakeSettledPrune: (() => void) | undefined
   const sessionObservers: Array<(event: SessionEvent) => void> = [asideSessions.observe, tasks.observe, sessionBackground.observe, ownerWake.observe, extraction.observe, metadata.observe, (event) => { if (event.type === "turn.completed") maintainMemory(store.sessionDirectory(event.sessionId)) }]
   // An engine alias (`claude-opus`) resolves to a concrete id in the first answer's usage; remember it so the next launch names it at once.
   sessionObservers.push((event) => {
@@ -2551,6 +2554,7 @@ export async function startDaemon(options: DaemonOptions) {
     sessionSink.append({ type: "session.orchestration", sessionId: group.owner, groupId: group.branches[0]!.sessionId, text: redactSecrets(text).text.slice(0, 8000) })
   }
   sessionObservers.push((event) => {
+    if (event.type === "foreground.state" && event.state === "idle") wakeSettledPrune?.()
     if (["turn.completed", "turn.failed", "turn.cancelled", "turn.interrupted"].includes(event.type) && store.meta.get(`session.fanout.owner:${event.sessionId}`)) queueMicrotask(() => fanoutSummary(event.sessionId))
     if (event.type === "foreground.state" && event.state === "idle" && featureOn(store.settings.get(), "session_meta", { safeMode: options.safeMode })) queueMicrotask(() => lifecycle.evaluate(event.sessionId))
   })
@@ -2846,6 +2850,12 @@ export async function startDaemon(options: DaemonOptions) {
   workflows.boot()
   armDreamSchedule()
   armRetentionSchedule()
+  const idleSettledPrune = createIdleDeltaFold({ clock, delayMs: SETTLED_PRUNE_DELAY_MS, onWake: true,
+    busy: () => [...actors.values()].some(actorWorking) || scheduler.snapshot().length > 0 || engineJobs() > 0,
+    step: () => store.pruneSettledEvents(20),
+    warn: error => logLine("warn", `[DAEMON]: pruning settled session snapshots failed: ${error instanceof Error ? error.message : String(error)}`),
+  })
+  wakeSettledPrune = idleSettledPrune.wake
   const idleDeltaFold = createIdleDeltaFold({ clock,
     busy: () => [...actors.values()].some(actorWorking) || scheduler.snapshot().length > 0 || engineJobs() > 0,
     step: () => store.foldStoredDeltas(100),
@@ -6288,6 +6298,7 @@ export async function startDaemon(options: DaemonOptions) {
     dreamTimer?.cancel()
     retentionTimer?.cancel()
     idleDeltaFold.dispose()
+    idleSettledPrune.dispose()
     idleCompaction.dispose()
     memoryAssistant.stop()
     metadata.stop()
