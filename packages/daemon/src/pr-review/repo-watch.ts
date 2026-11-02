@@ -1058,7 +1058,7 @@ export function createRepoWatch(options: RepoWatchOptions) {
     return queued || waiting ? ` · jobs: ${queued} queued, ${waiting} waiting (another device, a claim or a quota reset)` : ""
   }
   const describe = () => watches.length ? watches.map((watch) => `${watch.directory} · ${watch.ended ? `ended (${watch.ended.reason})` : watch.paused ? `paused (${watch.paused})` : "watching"} · ${roleText(watch)} · ${Object.keys(watch.seen).length} open PR${Object.keys(watch.seen).length === 1 ? "" : "s"}${waitingOf(watch) ? ` · ${waitingOf(watch)} waiting for the cooldown` : ""}${watch.ended ? "" : jobsText(watch.directory) + skippedText(watch)} · publish ${watch.publish ?? "not asked yet"}`).join("\n") : "no repository is watched"
-  const rows = () => watches.map((watch) => ({ directory: watch.directory, state: watch.ended ? `ended (${watch.ended.reason})` : watch.paused ? "paused" : "watching", open: Object.keys(watch.seen).length, publish: watch.publish ?? "not asked", ...(watch.provider ? { provider: watch.provider } : {}) }))
+  const rows = () => watches.map((watch) => ({ directory: watch.directory, role: watch.role ?? "config", state: watch.ended ? `ended (${watch.ended.reason})` : watch.paused ? "paused" : "watching", open: Object.keys(watch.seen).length, publish: watch.publish ?? "not asked", ...(watch.provider ? { provider: watch.provider } : {}) }))
   const find = (directory: string) => watches.find((watch) => watch.directory === directory && !watch.ended)
 
   /** This daemon's `gh` login, which `requested` matches; undefined when gh cannot say. */

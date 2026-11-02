@@ -162,6 +162,18 @@ export function createKeys(ctx: AppContext, actions: {
    * paste…) saves that text as a draft entry of the project's history, with a one-line toast.
    */
   async function onKey(key: string) {
+    if ((key === "\x1bOS" || key === "\x1b[14~") && state.commandOutput && !state.commandOutputReturn) {
+      const output = state.commandOutput
+      const parent = state.page
+      const { preload, createTextPageState } = await import("../lazy-pages")
+      await preload("recap")
+      if (state.page !== parent) return
+      state.commandOutputReturn = { page: parent, ...(state.textPage ? { text: state.textPage } : {}), ...(state.textReturn ? { textReturn: state.textReturn } : {}) }
+      state.textPage = createTextPageState({ title: output.title, sections: [{ lines: [output.message, ...(output.hint ? [output.hint] : [])] }] })
+      state.page = "text"
+      ctx.toasts.dismiss()
+      return requestFrame()
+    }
     const before = plainPrompt() ? editor.text : ""
     const submits = state.submits
     await handleKey(key)

@@ -1,5 +1,6 @@
 import { DEFAULT_COMPACT_AT_TOKENS, claudeFastModel, estimateTokens } from "@mendcode/protocol/wire"
 import { claudeAlias } from "./claude-models"
+import { recoverUsage } from "./usage-recovery"
 import { createConsole } from "./console"
 import { previewPastedEnvironment, readEnvironmentImport } from "./environment-import"
 import { focusedHandoff } from "./focused-handoff"
@@ -5300,6 +5301,11 @@ export async function startDaemon(options: DaemonOptions) {
         const override = windowOverride({ meta: store.meta, sessionId: command.sessionId, model: info, settings: store.settings.get() })
         if (override) return reply(connection, command.id, { ok: true, result: { ...report, sessionId: command.sessionId, contextWindow: override.tokens, ...(override.source === "session" ? { contextWindowOverride: true } : { contextWindowModelSetting: true }) } })
         return reply(connection, command.id, { ok: true, result: { ...report, sessionId: command.sessionId, ...(report.contextWindow === undefined && info?.contextWindow ? { contextWindow: info.contextWindow } : {}) } })
+      }
+      case "usage.recover": {
+        if (connection.remoteAddress || connection.peer) return reply(connection, command.id, { ok: false, code: "forbidden", message: "Usage recovery is local only" })
+        try { return reply(connection, command.id, { ok: true, result: await recoverUsage(store, command) }) }
+        catch { return reply(connection, command.id, { ok: false, code: "invalid_command", message: "Recovery refused: check the idle session, harness binding, JSONL file (32 MiB max) and preview fingerprint." }) }
       }
       case "usage.query": {
         if (command.from > command.to) return reply(connection, command.id, { ok: false, code: "invalid_command", message: "[DAEMON]: usage range is reversed" })

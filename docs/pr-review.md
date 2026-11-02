@@ -1,5 +1,7 @@
 # PR reviewer
 
+`/pr repos` opens a scrollable repository-watch page: directory, state, role, open PRs and publish setting in columns, with ended watches below active ones. `[` and `]` select a repository and reveal its full directory; `s` stops that watch, `r` starts it again with its role, and `R` refreshes. The full daemon report is below the table. Esc closes the page. Long replies from other `/pr` commands and `/reviews` actions offer `F4 full text`, opening the same readable text page without losing the previous screen; short confirmations remain notices.
+
 MendCode reviews pull requests with your own model: a review pass finds candidate defects, a second, independent pass tries to
 refute each one, and only the findings it confirms are published as one GitHub review with inline comments. No SaaS, no GitHub
 App, no webhook server and no stored token. Code: `packages/daemon/src/pr-review/`.

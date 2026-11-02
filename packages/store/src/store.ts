@@ -67,6 +67,7 @@ import { createPromptHistory, type PromptKind } from "./prompt-history"
 import { createTurns, type PartialRevert } from "./turns"
 import { createUsageInsights } from "./usage-insights"
 import { createUsageScopes } from "./usage-scopes"
+import { createUsageRecovery } from "./usage-recovery"
 import { createUsageCalls } from "./usage-calls"
 import { createUsageAuxiliary } from "./usage-auxiliary"
 import { createWorkflowDefinitionRecords } from "./workflow-definitions"
@@ -1471,6 +1472,9 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
     },
     /** Which external conversation (e.g. a Codex thread) backs a session, so restarts resume it. */
     engineBindings: {
+      owners(engine: string, externalId: string): SessionId[] {
+        return db.query<{ session_id: SessionId }, [string, string]>("SELECT session_id FROM engine_bindings WHERE engine = ? AND external_id = ?").all(engine, externalId).map((row) => row.session_id)
+      },
       list(sessionId: SessionId): string[] {
         return db.query<{ engine: string }, [string]>("SELECT engine FROM engine_bindings WHERE session_id = ?").all(sessionId).map((row) => row.engine)
       },
@@ -1631,6 +1635,8 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
     /** Lifetime, peak day, streaks and longest session (all time), with efforts, skills and top sessions for the range. */
     usageInsights: insights.read,
     usageScopes,
+    /** Usage recovered from an external harness's log: separate and reversible, never written into the projections above. */
+    usageRecovery: createUsageRecovery(db),
     /** Every model call and finished compaction in order, for the waste report. */
     usageCalls,
     /** Model calls outside turns (title, summary, memory, hooks...), by role and model; never part of the turn sums above. */

@@ -439,6 +439,17 @@ export const DraftList = lazySchema(() => z.strictObject({
   maxAgeDays: z.number().int().min(1).max(3650).optional(),
 }))
 
+/** Reversible recovery of an external harness's token usage from its JSONL log. Ack result: the preview, the applied rows or `{ undone }`. */
+export const UsageRecover = lazySchema(() => z.strictObject({
+  ...base,
+  type: z.literal("usage.recover"),
+  sessionId: SessionId,
+  engine: z.enum(["claude", "codex", "pi"]),
+  action: z.enum(["preview", "apply", "undo"]),
+  file: z.string().min(1).max(4096).optional(),
+  fingerprint: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+}))
+
 /** Ack result: `UsageReport` for the inclusive local-day range. */
 export const UsageQuery = lazySchema(() => z.strictObject({
   ...base,
@@ -2040,6 +2051,7 @@ export const COMMAND_SCHEMAS = {
   "secrets.reveal": SecretsReveal,
   "secrets.forget": SecretsForget,
   "usage.query": UsageQuery,
+  "usage.recover": UsageRecover,
   "usage.waste": UsageWasteQuery,
   "daemon.shutdown": DaemonShutdown,
   "daemon.info": DaemonInfo,

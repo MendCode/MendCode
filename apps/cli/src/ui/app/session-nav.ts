@@ -51,7 +51,16 @@ export function createSessionNav(ctx: AppContext) {
     // The import page goes back to the page it was opened from, not always to the chat.
     if (result.close) {
       visit++
-      const back = page.title === "Import setup" ? state.textReturn : undefined
+      if (state.commandOutputReturn) {
+        const back = state.commandOutputReturn
+        delete state.commandOutputReturn
+        state.page = back.page
+        if (back.text) state.textPage = back.text
+        else delete state.textPage
+        state.textReturn = back.textReturn
+        return requestFrame()
+      }
+      const back = state.textReturn
       state.textReturn = undefined
       state.page = back && back !== "text" && (back !== "setup" || state.onboarding || state.setupAdvanced) ? back : "chat"
     }

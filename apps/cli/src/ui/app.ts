@@ -544,6 +544,11 @@ export function createApp(input: AppInput) {
     // Success is silent where the result is already on screen (`quiet`): only what failed or tells something new is said. `confirmNotices` brings those back.
     // The notice it would have replaced goes all the same: it spoke of a state that is over.
     if (extra.quiet && !appState.tuiProfile.confirmNotices) return void toasts.dismiss()
+    {
+      // Never steal focus from a form or an async command. The complete latest report stays one key away,
+      // even after its preview expires; only one string is retained and the page module stays lazy.
+      appState.commandOutput = { title: extra.title ?? (variant === "error" ? "Error" : "Command output"), message, ...(extra.hint ? { hint: extra.hint } : {}) }
+    }
     appState.toastPage = appState.page
     toasts.show({ variant, message, ...(extra.title ? { title: extra.title } : {}), ...(extra.hint ? { hint: extra.hint } : {}), ...(extra.oneLine ? { oneLine: true } : {}) }, extra.ms)
   }
@@ -678,7 +683,7 @@ export function createApp(input: AppInput) {
   const { endGoalEdit, saveGoalEdit, goalCommand, confirmGoalPrompt } = createGoal(ctx)
   const { limitCommand, limitKey, limitClick, limitEscape } = createUsageLimit(ctx)
   const { daemonCommand, whenIdle, noteTurnEnded, cancelWait, reconcile: reconcileDaemon } = createDaemon(ctx, { reloadTerminal: async () => refreshThemes() })
-  const { prCommand } = createPrWatchCommand(ctx, { setFlags })
+  const { prCommand, reposKey } = createPrWatchCommand(ctx, { setFlags })
   const returnFlow = createReturn(ctx, { submit: () => submit() })
   const ps = createPs(ctx, { loadAgentShells })
   const { attachmentsOf, stashKey, syncDraft, restoreDraft, restoreUnsent, openDrafts, draftsKey, attachPasted, insertPasted, expandedPrompt, pasteClipboardImage, undoEdit, stashPrompt, restoreStash, runStashCommand, editInExternalEditor, copyAnswer, recallOlder, recallNewer, remember, recordCommand, ranCommand, keepDiscarded, bump, recallEntriesOf, suggestionPool, loadCustomCommands, syncMentions, expandCustom } = createPrompt(ctx, { extOn: () => extOn() })
@@ -878,6 +883,7 @@ export function createApp(input: AppInput) {
     changeProfile: (...args) => changeProfile(...args),
   })
   const { pageKey } = createPageKeys(ctx, {
+    reposKey,
     gitKey: git.gitKey,
     environmentKey: environmentPanel.key,
     petPlanKey,

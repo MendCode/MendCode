@@ -426,7 +426,7 @@ export function createExtensions(ctx: AppContext, actions: {
       const to = from && lines?.to !== undefined && Number.isInteger(lines.to) && lines.to >= from ? lines.to : undefined
       actions.openFile(String(file).slice(0, 4096), from ? { from, ...(to ? { to } : {}) } : undefined)
     },
-    toast: (text, tone = "info") => say(String(text).slice(0, 300), tone),
+    toast: (text, tone = "info") => say(String(text), tone),
     comments: {
       list: () => ctx.comments.pending(),
       add: ({ quote, text }) => ctx.comments.add({ quote: String(quote), text: String(text) }),

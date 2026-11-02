@@ -50,7 +50,7 @@ import { renderSessionList } from "../../view/session-list"
 import type { PresentationMode } from "../../view/transcript"
 import { mascotPhase } from "../../view/mascot"
 import { terminalTitle } from "../../view/terminal-title"
-import { lineWidth as lineWidthOf, textWidth } from "../../view/wrap"
+import { lineWidth as lineWidthOf, textWidth, wrap } from "../../view/wrap"
 import type { ImagePlacement } from "../image-layer"
 import type { Line } from "../theme"
 import type { AppContext } from "./context"
@@ -168,7 +168,11 @@ export function createRender(ctx: AppContext, actions: {
     const chatOffset = sessionsSide === "left" ? leftWidth : 0
     // One row unless the message needs more (an error with detail): the notice row above the prompt, never a box over the transcript. Pages keep the box.
     const current = toasts.current
-    const toastView = (inline: boolean, cols: number) => ctx.views.draw("notice", { kind: "toast", ...(inline ? { inline: true } : {}), variant: current!.variant, ...(current!.title ? { title: current!.title } : {}), message: current!.message, ...(current!.hint ? { hint: current!.hint } : {}) }, { width: cols, height: inline ? 1 : 8 }).lines
+    const toastView = (inline: boolean, cols: number) => {
+      const cut = inline ? toastBoxed({ ...current!, oneLine: false }, cols) : wrap(current!.message.trim(), Math.max(1, Math.min(60, cols - 6) - 6)).length > 6
+      const hint = [current!.hint, ...(cut && !(current!.oneLine && current!.hint) && state.commandOutput?.message === current!.message ? ["F4 full text"] : [])].filter(Boolean).join(" · ")
+      return ctx.views.draw("notice", { kind: "toast", ...(inline ? { inline: true } : {}), variant: current!.variant, ...(current!.title ? { title: current!.title } : {}), message: current!.message, ...(hint ? { hint } : {}) }, { width: cols, height: inline ? 1 : 8 }).lines
+    }
     const boxed = !!current && (state.page !== "chat" || toastBoxed(current, chatCols))
     const toast = boxed ? toastView(false, chatCols) : []
     const accentColors = ["#86efac", "#67e8f9", "#fcd34d", "#c4b5fd", "#fda4af"]
@@ -242,7 +246,10 @@ export function createRender(ctx: AppContext, actions: {
     }
     const { finished, tail } = actions.inline.take(width)
     const start = actions.inline.startLine()
-    const toast = toasts.current ? ctx.views.draw("notice", { kind: "toast", inline: true, variant: toasts.current.variant, ...(toasts.current.title ? { title: toasts.current.title } : {}), message: toasts.current.message, ...(toasts.current.hint ? { hint: toasts.current.hint } : {}) }, { width, height: 1 }).lines[0] : undefined
+    const current = toasts.current
+    const fullHint = current && !(current.oneLine && current.hint) && toastBoxed({ ...current, oneLine: false }, width) && state.commandOutput?.message === current.message
+    const hint = [current?.hint, ...(fullHint ? ["F4 full text"] : [])].filter(Boolean).join(" · ")
+    const toast = current ? ctx.views.draw("notice", { kind: "toast", inline: true, variant: current.variant, ...(current.title ? { title: current.title } : {}), message: current.message, ...(hint ? { hint } : {}) }, { width, height: 1 }).lines[0] : undefined
     const { rows, cursor } = chatRows(width, height - (toast ? 1 : 0), { tail })
     input.screen.draw(toast ? [toast, ...rows] : rows, toast ? { ...cursor, row: cursor.row + 1 } : cursor, [], start ? [start, [], ...finished] : finished)
   }
@@ -341,7 +348,7 @@ export function createRender(ctx: AppContext, actions: {
     else if (state.page === "tree") body = renderTreePage({ model: state.tree?.model, error: state.tree?.error ?? "", state: state.treeState, stats: state.tree?.stats ?? new Map(), width, height: bodyHeight, now: now(), pick: state.tree?.pick ?? false, glyphs: g, label: (id) => modelLabel(id, state.modelReport) })
     else if (state.page === "text" && state.textPage) {
       state.pageBodyHeight = bodyHeight
-      body = renderTextPage({ state: state.textPage, width, height: bodyHeight })
+      body = renderTextPage({ state: state.textPage, width, height: bodyHeight, minimal: state.mode === "minimal" })
     }
     else if (state.page === "pet") body = renderPetPicker({ choices: state.petList, current: state.petPickerMascot ? (state.tuiProfile.logoKind === "mascot" || state.tuiProfile.logoKind === "both" ? state.tuiProfile.homeMascot : "off") : state.tuiProfile.pet || state.settingsNow.pet, ...(state.petPickerMascot ? { mascot: true } : {}), state: state.petPicker, width, height: bodyHeight, graphics: input.screen.imageProtocol !== undefined && input.screen.imageProtocol !== "off", placements, plan: state.petPlan, progress: state.petProgress, busy: state.petGenerating, error: state.petPlanError })
     else if (state.page === "storage") body = renderStoragePage({ report: state.storageReport, error: state.storageError, state: state.storageState, ...(state.storageRetention ? { retentionDays: state.storageRetention } : {}), ...(state.storageWorktreeGc ? { worktreeGcDays: state.storageWorktreeGc } : {}), width, height: bodyHeight, now: now(), glyphs: g })
