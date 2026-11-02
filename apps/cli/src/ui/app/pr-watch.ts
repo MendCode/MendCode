@@ -4,6 +4,7 @@ import { createTextPageState, preload } from "../lazy-pages"
 import { repoSections, type RepoRow } from "../../view/repo-output"
 import type { Settings } from "@mendcode/protocol"
 import type { AppContext } from "./context"
+import { setupPage } from "./setup-confirm"
 
 const TITLE = "Pull requests"
 
@@ -87,6 +88,26 @@ export function createPrWatchCommand(ctx: AppContext, actions: { setFlags(names:
 
   async function prCommand(args: string) {
     const word = args.trim().toLowerCase()
+    if (word === "setup" || word.startsWith("setup ")) {
+      const role = word.split(/\s+/)[1]
+      if (word.split(/\s+/).length > 2 || role && role !== "all" && role !== "requested") return setupPage(ctx, "PR setup", "Usage: /pr setup [all|requested]")
+      if (input.remote) return setupPage(ctx, "PR setup", "PR setup is local only. Open a session on the machine that runs the daemon.")
+      const sessionId = state.sessionId
+      await setupPage(ctx, "PR setup", "Checking login, origin and base-branch configuration…")
+      const page = state.textPage
+      const command = { type: "pr.review" as const, sessionId, ...(role ? { role: role as "all" | "requested" } : {}) }
+      const reply = await input.send({ ...command, action: "setup-preview" })
+      if (state.page !== "text" || state.textPage !== page) return
+      if (!reply.ok) return setupPage(ctx, "PR setup", reply.error.message)
+      const setup = reply.result?.setup as { digest: string; text: string; problems: string[]; changes: string[] } | undefined
+      if (!setup) return setupPage(ctx, "PR setup", "This daemon does not support PR setup. Update it before retrying.")
+      return setupPage(ctx, "PR setup", setup.text, setup.problems.length || !setup.changes.length ? undefined : async () => {
+        const applying = state.textPage
+        const done = await input.send({ ...command, action: "setup-apply", reason: setup.digest })
+        if (state.page !== "text" || state.textPage !== applying) return
+        await setupPage(ctx, "PR repositories", done.ok ? String(done.result?.text ?? "Setup complete") : done.error.message)
+      })
+    }
     if (word === "on" || word === "off") {
       await actions.setFlags(PR_FLAGS, word === "on")
       return requestFrame()

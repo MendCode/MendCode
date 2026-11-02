@@ -13,6 +13,9 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 - `mendcode usage recover` adds the token usage of a Claude Code, Codex or Pi session log to Usage, with a preview first and
   an undo. See [usage recovery](docs/usage-recovery.md).
+- `/pr setup` checks prerequisites and configures repository reviews and publishing with one confirmation; a headless setup command is also available.
+- `/voice setup` guides dictation readiness and explicitly confirms audio uploads before enabling an API provider.
+- `/graph setup` enables and builds the project's code graph with one confirmation, without changing global defaults.
 
 ### Changed
 

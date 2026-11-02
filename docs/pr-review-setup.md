@@ -1,5 +1,24 @@
 # PR reviewer: team setup
 
+## One-step setup
+
+In a local session in the repository clone, run **`/pr setup [all|requested]`**. It checks the origin, `gh` login and
+`.mendcode/review.yaml` on the origin base branch, then shows one confirmation listing what will change. Enter enables the
+reviewer, starts the watch and allows publishing reviews to GitHub using your login. Escape changes nothing. Already-enabled
+steps are skipped; failures and their fixes stay on a scrollable page. The result opens PR repositories.
+
+The default is `all` when the base config's `reviewers` is `all`, otherwise `requested`. The balanced tier or a permitted
+`pr_review` override is required. Setup never changes the tier, model, repository files or remotes. A `public` remote with
+review enabled is identified when origin lacks it; use a clone of that repository rather than silently redirecting origin.
+The quick path currently checks GitHub; the manual commands below remain available for GitLab and Gitea.
+
+Headless: `mendcode pr setup [all|requested] --session ID`. It uses that session's checkout and model and asks once in a terminal.
+For automation, add `--yes` to consent to the listed changes, including model calls and GitHub publishing; without consent it
+returns a preview and exit code 4. `--json` is noninteractive. `--dir DATA` selects the daemon storage.
+
+The base config and machine credentials still need to exist; setup does not commit configuration, install programs, start a
+system service or obtain credentials. A missing base ref reports how to fetch origin and set its default branch.
+
 How to set up MendCode's [PR reviewer](pr-review.md) for a team, including a team whose developers use laptops that are
 sometimes off, asleep or offline. This page is the how-to. For what each key or rule does, follow the links to
 [the reference](pr-review.md).
@@ -134,13 +153,11 @@ The server is one MendCode daemon that watches the repository with `all`. Steps:
 6. **Start the watch from a session on that machine.** Over SSH, in the clone, run `mendcode`, pick the model (`/model`), then:
 
    ```text
-   /pr on
-   /pr watch-repo all
-   /pr publish on
+   /pr setup all
    ```
 
-   `/pr on` turns on `experimental.pr_review`, which the `balanced` tier and above allow ([tiers](tiers.md)). `/pr publish on`
-   answers the one-time question about posting to this repository. Then close the terminal. The watch belongs to the daemon.
+   Confirm the page once, including permission to publish. It enables `experimental.pr_review`, which the `balanced` tier and
+   above allow ([tiers](tiers.md)). Then close the terminal. The watch belongs to the daemon.
    While a watch, a held notice or a later job exists, the daemon does not stop itself when idle
    ([review language and session notices](pr-review.md#review-language-and-session-notices)).
 7. **Check it.** The `/pr watch-repo` answer lists the open PRs it queued for review and every PR it skipped, with the reason.
@@ -198,9 +215,7 @@ routing:
 3. In a MendCode session in the clone:
 
    ```text
-   /pr on
-   /pr watch-repo requested
-   /pr publish on
+   /pr setup requested
    ```
 
 `requested` runs your personal reviewer. It reviews the PRs that request a review from your login or are assigned to you, and the

@@ -658,7 +658,7 @@ export const PrReviewControl = lazySchema(() => z.strictObject({
   ...base,
   type: z.literal("pr.review"),
   sessionId: SessionId,
-  action: z.enum(["watch-repo", "unwatch-repo", "review", "list", "publish-on", "publish-off", "status", "audit", "job-pause", "job-resume", "job-cancel", "job-retry", "take-over", "release", "config-show", "config-preview", "config-apply", "config-revert", "config-history"]),
+  action: z.enum(["setup-preview", "setup-apply", "watch-repo", "unwatch-repo", "review", "list", "publish-on", "publish-off", "status", "audit", "job-pause", "job-resume", "job-cancel", "job-retry", "take-over", "release", "config-show", "config-preview", "config-apply", "config-revert", "config-history"]),
   directory: z.string().min(1).max(4096).optional(),
   pr: z.string().min(1).max(300).optional(),
   /** `watch-repo` only: `all` reviews every PR, `requested` only the ones that request this daemon's forge login; unset, the repo config's `reviewers`. */

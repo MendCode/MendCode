@@ -4,7 +4,7 @@ import type { AppContext } from "./context"
 
 type VoiceSetting = NonNullable<Settings["voice"]>
 
-export const VOICE_USAGE = "usage: /voice [on | off | status | start | stop | cancel | language <code [code]|auto>]"
+export const VOICE_USAGE = "usage: /voice [setup | on | off | status | start | stop | cancel | language <code [code]|auto>]"
 
 /** Auto-repeated keys arrive this close together; a typed one rarely comes three times in a row this fast. */
 const REPEAT_MS = 150
@@ -205,6 +205,10 @@ export function createVoice(ctx: AppContext) {
     const words = (match[1] ?? "").trim().split(/\s+/).filter(Boolean)
     const head = (words[0] ?? "").toLowerCase()
     const current: VoiceSetting = { ...state.settingsNow.voice }
+    if (head === "setup") {
+      await (await import("./feature-setup")).voiceSetup(ctx, words.length === 1)
+      return true
+    }
     if (head === "" || head === "toggle") {
       if (state.voice?.phase === "recording") void finish()
       else if (state.voice?.phase === "starting") stopWhenStarted = true

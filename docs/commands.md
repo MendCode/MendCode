@@ -2,6 +2,19 @@
 
 Short confirmations stay in the notice row. Long replies keep their full text behind **F4**, shown as `F4 full text` on the preview, without interrupting the prompt or an open form. F4 opens the shared scrollable text page; ↑↓, Space, PgUp/PgDn and g/G read the whole reply, and Esc restores the previous page. The latest full reply remains available after its preview expires. The same rule applies to daemon errors and extension replies. `/pr repos` opens its list directly.
 
+## One-step feature setup
+
+- `/pr setup [all|requested]` (balanced): checks prerequisites, then one confirmation enables reviews, watches this repository
+  and allows GitHub publishing. Already-configured steps are skipped. See [PR setup](pr-review-setup.md#one-step-setup).
+  Headless: `mendcode pr setup [all|requested] --session ID [--yes] [--json]`.
+- `/voice setup` (full): shows the selected transcription provider, upload implications and readiness. One confirmation enables
+  dictation without recording; missing credentials, recorder or OS permissions remain visible with recovery guidance.
+- `/graph setup` (balanced): one confirmation enables indexing for this project and builds or refreshes its local code graph.
+  Global defaults, autopilot and model settings stay unchanged; protected folders remain excluded.
+
+Setup uses the existing scrollable page and keyboard controls; Escape cancels before applying. Existing feature subcommands
+continue to work. No setup silently changes tiers or installs dependencies.
+
 `/tsm` opens the terminal-session adapter manager; `/tsm setup`, `activate
 --mux kitty`, `deactivate`, `remove`, `doctor` and `open TARGET` use the same
 daemon contract as automation. See [TSM](tsm.md). Tab completes without executing.

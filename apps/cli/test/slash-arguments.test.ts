@@ -30,7 +30,7 @@ describe("argument words", () => {
   })
 
   test("a blank word lists every word of the command; a partial one puts the exact word, then prefixes, then a word that only contains it", () => {
-    expect(names("pr", "")).toEqual(["pr on", "pr off", "pr review", "pr comments", "pr watch", "pr unwatch", "pr check", "pr watch-repo", "pr unwatch-repo", "pr repos", "pr dashboard", "pr publish", "pr list"])
+    expect(names("pr", "")).toEqual(["pr setup", "pr on", "pr off", "pr review", "pr comments", "pr watch", "pr unwatch", "pr check", "pr watch-repo", "pr unwatch-repo", "pr repos", "pr dashboard", "pr publish", "pr list"])
     expect(names("pr", "watch")).toEqual(["pr watch", "pr watch-repo", "pr unwatch", "pr unwatch-repo"])
     expect(names("pr", "rev")).toEqual(["pr review"])
     expect(names("pr", "zz")).toEqual([])
@@ -54,7 +54,7 @@ describe("argument words", () => {
     const viaAlias = slashSuggestions("/pr-watch o").map((command) => command.name)
     expect(viaAlias.slice(0, 2)).toEqual(["pr on", "pr off"])
     expect(viaAlias).toContain("pr comments")
-    expect(menu("/pr ")?.items.map((item) => item.label).slice(0, 3)).toEqual(["/pr on", "/pr off", "/pr review"])
+    expect(menu("/pr ")?.items.map((item) => item.label).slice(0, 3)).toEqual(["/pr setup", "/pr on", "/pr off"])
     expect(menu("/attach ")).toBeUndefined()
     expect(menu("/pr zz")).toBeUndefined()
   })

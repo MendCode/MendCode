@@ -8,7 +8,7 @@ import { wrap, textWidth, truncateEnd } from "./wrap"
  * Headings are accent rows, `lines` are wrapped paragraphs or `- ` bullets with a hanging indent.
  */
 export type TextSection = { heading?: string; note?: string; lines: string[]; table?: string[][]; muted?: boolean }
-export type TextPageState = { title: string; summary: string; sections: TextSection[]; status: "loading" | "ready" | "error"; error: string; scroll: number; hint?: string; repos?: boolean }
+export type TextPageState = { title: string; summary: string; sections: TextSection[]; status: "loading" | "ready" | "error"; error: string; scroll: number; hint?: string; repos?: boolean; confirm?: (() => Promise<void>) | undefined }
 
 export function createTextPageState(input: { title: string; summary?: string; sections?: TextSection[]; status?: TextPageState["status"]; error?: string; hint?: string }): TextPageState {
   return { title: input.title, summary: input.summary ?? "", sections: input.sections ?? [], status: input.status ?? "ready", error: input.error ?? "", scroll: 0, ...(input.hint ? { hint: input.hint } : {}) }

@@ -268,7 +268,7 @@ if (automation.ok === true && automation.command.kind === "storage" && automatio
     process.exit(1)
   }
 }
-if (remoteAttach && automation.ok === true && (automation.command.kind.startsWith("github.") || automation.command.kind === "pr")) {
+if (remoteAttach && automation.ok === true && (automation.command.kind.startsWith("github.") || automation.command.kind === "pr" || automation.command.kind === "pr.setup")) {
   process.stderr.write("error: GitHub and PR commands are local-only\n")
   process.exit(64)
 }
@@ -320,7 +320,7 @@ if (startup?.isolated) {
   process.once("SIGINT", request)
 }
 const isolatedDir = startup?.isolated ? await mkdtemp(path.join(tmpdir(), "mendcode-isolated-")) : undefined
-const daemonDataDir =isolatedDir ?? startup?.dataDir ?? (automation.ok === true && (automation.command.kind.startsWith("session.") || automation.command.kind.startsWith("catalog.") || automation.command.kind.startsWith("theme.") || automation.command.kind.startsWith("agent.") || ["db", "debug", "debug.wait"].includes(automation.command.kind) || automation.command.kind.startsWith("github.") || automation.command.kind === "pr") ? automation.command.dir : arg("dir"))
+const daemonDataDir =isolatedDir ?? startup?.dataDir ?? (automation.ok === true && (automation.command.kind.startsWith("session.") || automation.command.kind.startsWith("catalog.") || automation.command.kind.startsWith("theme.") || automation.command.kind.startsWith("agent.") || ["db", "debug", "debug.wait"].includes(automation.command.kind) || automation.command.kind.startsWith("github.") || automation.command.kind === "pr" || automation.command.kind === "pr.setup") ? automation.command.dir : arg("dir"))
 const daemonOptions = {
   ...(daemonDataDir ? { dir: daemonDataDir } : {}),
   ...(arg("engine") ? { engine: arg("engine")! } : {}),
