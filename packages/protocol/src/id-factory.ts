@@ -45,9 +45,16 @@ function encodeTime(ms: number) {
   return out
 }
 
+/**
+ * Random characters after the 10 time characters. Ids are stored in many rows of every session, so new ids carry 30 random bits
+ * (6 characters) instead of a full ULID's 80; one factory never repeats within a millisecond, and ids written with the older
+ * 16-character tail keep validating and sorting by time.
+ */
+export const ID_RANDOM_CHARS = 6
+
 function encodeRandom(bytes: Uint8Array) {
   let out = ""
-  for (let i = 0; i < 16; i++) out += CROCKFORD[(bytes[i] ?? 0) % 32]
+  for (let i = 0; i < ID_RANDOM_CHARS; i++) out += CROCKFORD[(bytes[i] ?? 0) % 32]
   return out
 }
 
@@ -73,7 +80,7 @@ export function createIdFactory(options: { now?: () => number; random?: (size: n
   return function nextId<K extends IdKind>(kind: K): IdOf[K] {
     const time = now()
     if (!Number.isSafeInteger(time) || time < 0) throw new RangeError(`[PROTOCOL]: invalid clock value ${time}`)
-    let body = encodeRandom(random(16))
+    let body = encodeRandom(random(ID_RANDOM_CHARS))
     if (time === lastTime && body <= lastRandom) body = incrementBase32(lastRandom)
     lastTime = time
     lastRandom = body

@@ -19,6 +19,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Changed
 
+- A terminal that hosts the daemon, and a separate daemon, hold less memory at the prompt.
 - The current-task row above the prompt is gone; the dock's Jobs panel is opt-in and Todos wrap with more room.
 - Long command replies open a readable page (F4 shows the full text of a cut notice), and `/pr repos` lists repository
   watches in a page where they can be stopped and restarted.
@@ -27,6 +28,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
   converted in the background while the daemon is idle. Forked sessions also store less. Short sessions now take less disk
   than a Pi session file.
 - A finished short session stores fewer rows: settled state snapshots, empty file snapshots and request profiles take less room.
+- New session, turn and item ids are shorter, so every stored row takes less room; existing ids keep working.
 - Opening a session and starting a turn read the transcript and model history faster.
 - The terminal uses less CPU while a reply streams in.
 - `--help` says which `--process` mode uses less memory.

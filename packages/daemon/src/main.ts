@@ -146,7 +146,7 @@ function arg(name: string) {
 }
 
 // Started lean (apps/cli/src/launcher.ts LEAN_JIT): JSC has read its options, so the user's commands run by this daemon get the environment the user had.
-if (process.env.MENDCODE_V2_LEAN_JIT === "1") for (const key of ["BUN_JSC_useDFGJIT", "BUN_JSC_useFTLJIT", "MENDCODE_V2_LEAN_JIT"]) delete process.env[key]
+if (process.env.MENDCODE_V2_LEAN_JIT === "1") for (const key of ["BUN_JSC_useDFGJIT", "BUN_JSC_useFTLJIT", "BUN_JSC_thresholdForJITAfterWarmUp", "BUN_JSC_thresholdForJITSoon", "MENDCODE_V2_LEAN_JIT"]) delete process.env[key]
 const dir = arg("dir") ?? process.env.MENDCODE_V2_DIR ?? DEFAULT_DIR
 
 /**

@@ -289,7 +289,8 @@ async function request(client: Pick<Client, "send">, command: CommandInput) {
   return reply.result ?? {}
 }
 
-const SESSION_ID = /^ses_[0-9A-HJKMNP-TV-Z]{26}$/
+/** A whole id: 16 characters after `ses_`, or 26 for one written before the shorter random tail. */
+const SESSION_ID = /^ses_[0-9A-HJKMNP-TV-Z]{16}(?:[0-9A-HJKMNP-TV-Z]{10})?$/
 
 /**
  * `--session` as typed: a whole id goes through as is; otherwise the case, a missing `ses_`, a piece of the id (its start or

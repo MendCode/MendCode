@@ -79,20 +79,29 @@ test("compiled launchers re-exec themselves; source launchers retain the Bun dae
 
 describe("daemon environments", () => {
   test("by default the daemon starts without the top JIT tier, with a plain fallback; MENDCODE_V2_JIT=1 keeps every tier", () => {
-    expect(daemonEnvs({ PATH: "/bin" })).toEqual([{ PATH: "/bin", BUN_JSC_useFTLJIT: "0", MENDCODE_V2_LEAN_JIT: "1" }, { PATH: "/bin" }])
+    expect(daemonEnvs({ PATH: "/bin" })).toEqual([{ PATH: "/bin", BUN_JSC_useFTLJIT: "0", BUN_JSC_thresholdForJITAfterWarmUp: "8000", BUN_JSC_thresholdForJITSoon: "2000", MENDCODE_V2_LEAN_JIT: "1" }, { PATH: "/bin" }])
     expect(daemonEnvs({ PATH: "/bin", MENDCODE_V2_JIT: "1" })).toEqual([{ PATH: "/bin", MENDCODE_V2_JIT: "1" }])
   })
 
   test("a terminal restarts lean once: without the DFG and FTL tiers, or only without FTL when it hosts the daemon; the marker stops a second restart, and forgetting it restores the user's environment", () => {
     expect(leanClientEnv({ PATH: "/bin" }, false)).toEqual({ PATH: "/bin", BUN_JSC_useDFGJIT: "0", BUN_JSC_useFTLJIT: "0", BUN_JSC_thresholdForJITAfterWarmUp: "8000", BUN_JSC_thresholdForJITSoon: "2000", MENDCODE_V2_LEAN_JIT: "1" })
-    expect(leanClientEnv({ PATH: "/bin" }, true)).toEqual({ PATH: "/bin", BUN_JSC_useFTLJIT: "0", MENDCODE_V2_LEAN_JIT: "1" })
+    expect(leanClientEnv({ PATH: "/bin" }, true)).toEqual({ PATH: "/bin", BUN_JSC_useFTLJIT: "0", BUN_JSC_thresholdForJITAfterWarmUp: "8000", BUN_JSC_thresholdForJITSoon: "2000", MENDCODE_V2_LEAN_JIT: "1" })
     const started = leanClientEnv({ PATH: "/bin" }, false)!
     expect(leanClientEnv(started, false)).toBeUndefined()
     expect(leanClientEnv({ PATH: "/bin", MENDCODE_V2_JIT: "1" }, false)).toBeUndefined()
     expect(leanClientEnv({ PATH: "/bin", BUN_JSC_useJIT: "0" }, false)).toBeUndefined()
     forgetLeanJit(started)
     expect(started).toEqual({ PATH: "/bin" })
-    expect(daemonEnvs(started)[0]).toEqual({ PATH: "/bin", BUN_JSC_useFTLJIT: "0", MENDCODE_V2_LEAN_JIT: "1" })
+    expect(daemonEnvs(started)[0]).toEqual({ PATH: "/bin", BUN_JSC_useFTLJIT: "0", BUN_JSC_thresholdForJITAfterWarmUp: "8000", BUN_JSC_thresholdForJITSoon: "2000", MENDCODE_V2_LEAN_JIT: "1" })
+  })
+
+  test("a daemon and a terminal that hosts one compile functions late too, and both forget every option they started with", () => {
+    for (const env of [daemonEnvs({ PATH: "/bin" })[0]!, leanClientEnv({ PATH: "/bin" }, true)!]) {
+      expect(env.BUN_JSC_thresholdForJITAfterWarmUp).toBe("8000")
+      expect(env.BUN_JSC_thresholdForJITSoon).toBe("2000")
+      forgetLeanJit(env)
+      expect(env).toEqual({ PATH: "/bin" })
+    }
   })
 
   test("MENDCODE_V2_JIT=0 opts into the low-memory environment first, with a plain fallback", () => {

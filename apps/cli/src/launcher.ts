@@ -74,7 +74,7 @@ export function daemonEnvs(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv[] {
  * `MENDCODE_V2_JIT=1` keeps every tier; `MENDCODE_V2_JIT=0` turns the JIT off.
  */
 export const LEAN_JIT = {
-  daemon: { BUN_JSC_useFTLJIT: "0", MENDCODE_V2_LEAN_JIT: "1" },
+  daemon: { BUN_JSC_useFTLJIT: "0", BUN_JSC_thresholdForJITAfterWarmUp: "8000", BUN_JSC_thresholdForJITSoon: "2000", MENDCODE_V2_LEAN_JIT: "1" },
   client: { BUN_JSC_useDFGJIT: "0", BUN_JSC_useFTLJIT: "0", BUN_JSC_thresholdForJITAfterWarmUp: "8000", BUN_JSC_thresholdForJITSoon: "2000", MENDCODE_V2_LEAN_JIT: "1" },
 } as const
 
