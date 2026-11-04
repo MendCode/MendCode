@@ -167,7 +167,7 @@ describe("flowchart layout", () => {
     for (const width of [50, 80, 120, 200]) {
       const result = renderMermaid(source, width)
       if ("lines" in result) for (const line of result.lines) expect(textWidth(text(line))).toBeLessThanOrEqual(width)
-      else expect(result.note).toBe(MERMAID_NOTES.tooWide)
+      else expect(result.note).toBe(MERMAID_NOTES.tooWideRotated)
     }
   })
   test("uses roles: boxes heading, node text body, edges muted, labels code", () => {
@@ -270,9 +270,10 @@ describe("fallbacks", () => {
     expect(renderMermaid("flowchart TD\n A --> \n", 100)).toEqual({ note: MERMAID_NOTES.unsupported })
     expect(renderMermaid("flowchart TD\n ???", 100)).toEqual({ note: MERMAID_NOTES.unsupported })
   })
-  test("a diagram wider than the terminal falls back", () => {
+  test("a diagram wider than the terminal even after wrapping, compacting and rotating falls back", () => {
     const source = `flowchart LR\n ${Array.from({ length: 8 }, (_, i) => `N${i}[Step number ${i}]`).join(" --> ")}`
-    expect(renderMermaid(source, 60)).toEqual({ note: MERMAID_NOTES.tooWide })
+    expect(renderMermaid(source, 12)).toEqual({ note: MERMAID_NOTES.tooWideRotated })
+    expect("lines" in renderMermaid(source, 60)).toBe(true)
     expect("lines" in renderMermaid(source, 400)).toBe(true)
   })
   test("frontmatter is skipped", () => {
@@ -302,9 +303,9 @@ describe("markdown integration", () => {
     expect(lines[lines.length - 1]).toBe(MERMAID_NOTES.unsupported)
   })
   test("too wide diagrams show as source with a note", () => {
-    const source = `flowchart LR\n ${Array.from({ length: 8 }, (_, i) => `N${i}[Step number ${i}]`).join(" --> ")}`
+    const source = `flowchart TD\n R --> ${Array.from({ length: 8 }, (_, i) => `N${i}[Step number ${i}]`).join(" & ")}`
     const lines = plainMarkdown(`\`\`\`mermaid\n${source}\n\`\`\``, 60)
-    expect(lines[lines.length - 1]).toBe(MERMAID_NOTES.tooWide)
+    expect(lines[lines.length - 1]).toBe(MERMAID_NOTES.tooWideTried)
     for (const line of lines) expect(textWidth(line)).toBeLessThanOrEqual(60)
   })
   test("other languages and text after the fence are untouched", () => {

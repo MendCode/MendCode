@@ -58,12 +58,12 @@ export function createPrWatchCommand(ctx: AppContext, actions: { setFlags(names:
   }
 
   /** Repository lists use the shared page; other replies go through the size-aware notice path. */
-  async function reviewCommand(command: { action: PrReviewAction; pr?: string; role?: "all" | "requested" }) {
+  async function reviewCommand(command: { action: PrReviewAction; pr?: string; full?: true; role?: "all" | "requested" }) {
     if (input.remote) return fail("pr: the reviewer runs gh on the daemon's own machine, so this works only from a local session")
     if (!state.sessionId) return fail("pr: no session yet")
     const parent = state.page
     const sessionId = state.sessionId
-    const reply = await input.send({ type: "pr.review", sessionId, action: command.action, ...(command.pr ? { pr: command.pr } : {}), ...(command.role ? { role: command.role } : {}) })
+    const reply = await input.send({ type: "pr.review", sessionId, action: command.action, ...(command.pr ? { pr: command.pr } : {}), ...(command.full ? { full: true } : {}), ...(command.role ? { role: command.role } : {}) })
     if (state.page !== parent || state.sessionId !== sessionId) return
     if (!reply.ok) return fail(`pr: ${reply.error.message.replace(/^\[[A-Z-]+\]:\s*/, "")}`)
     if (command.action === "list") {

@@ -69,6 +69,22 @@ describe("lean tool catalogue (features lean_tools and plan_tools)", () => {
     expect(namesOf(fullWithPlan.requests[0]!)).not.toContain("workflow_start")
   })
 
+  test("a session with an unfinished goal lists the goal tools in every tier without plan_tools, and one without a goal (or with a finished one) does not", async () => {
+    const goal = (status: "active" | "paused" | "blocked" | "complete" | "budget_limited") => ({ goalId: "goal_1", objective: "ship it", status, tokensUsed: 0, timeUsedSeconds: 0, createdAt: 1, updatedAt: 1 })
+    const run = async (tier: "minimalist" | "balanced" | "full", current: ReturnType<typeof goal> | undefined) => {
+      const { provider, requests } = scriptedProvider([stop("a")])
+      const port = { get: () => current as never, create: () => ({ ok: false as const, message: "no" }), update: () => ({ ok: false as const, message: "no" }) }
+      const engine = createNativeEngine({ provider, history: memoryHistory(), tools: NAMES.map((name) => fakeTool(name)), cwdFor: () => "/repo", system: () => "sys", compactionPrompt: "summarize", permissionPolicy: () => ({ tier }), goals: () => port })
+      await engine.runTurn(turn({ text: "go" }).input)
+      return namesOf(requests[0]!)
+    }
+    for (const tier of ["minimalist", "balanced", "full"] as const) {
+      expect(await run(tier, goal("active"))).toEqual(expect.arrayContaining(["get_goal", "create_goal", "update_goal"]))
+      expect(await run(tier, goal("blocked"))).toContain("update_goal")
+      for (const finished of [undefined, goal("complete"), goal("budget_limited")]) expect(await run(tier, finished)).not.toContain("update_goal")
+    }
+  })
+
   test("first request per tier, with the real built-in tools: every tier lists the seven coding tools and tool_search, and nothing auxiliary", async () => {
     const first = async (settings: Settings) => {
       const { provider, requests } = scriptedProvider([stop("a")])
@@ -193,5 +209,7 @@ describe("lean tool catalogue (features lean_tools and plan_tools)", () => {
     expect(impliedTools([calls("shell", { command: "ls" })], false)).toEqual([])
     expect(impliedTools([calls("shell", { command: "bun dev", background: true })], false)).toEqual(["shell_output", "shell_kill"])
     expect(impliedTools([calls("task", { description: "x", prompt: "y" })], false)).toEqual(["task_status"])
+    // A compaction drops the call that started the command, but the registry still holds it.
+    expect(impliedTools([], false, true)).toEqual(["shell_output", "shell_kill"])
   })
 })

@@ -86,6 +86,8 @@ export type AppInput = {
   launchDirectory?: string
   /** Shown on the home screen next to the product name. */
   version?: string
+  /** A development daemon (docs/dev-mode.md): the top bar and the home screen say so. */
+  dev?: boolean
   home?: string
   now?: () => number
   schedule?: (fn: () => void) => void
@@ -119,7 +121,7 @@ export type AppInput = {
   imageAnswers?: { da1?: string; cellPixels?: { width: number; height: number } }
   /**
    * The MendCode data dir (`--dir`). With it the terminal reads `keybindings.json` and loads terminal extensions
-   * from `<dir>/extensions` and packages (plus the project's, when it is trusted); without it, neither.
+   * from `<dir>/extensions` and profiles (plus the project's, when it is trusted); without it, neither.
    */
   dataDir?: string
   pure?: boolean
@@ -145,7 +147,11 @@ export type Page = "file" | "tasks" | "stash" | "drafts" | "queue" | "history" |
 /** Mutable bindings shared by the entry point and its feature factories. */
 export type AppState = {
   commandOutput?: { title: string; message: string; hint?: string }
-  commandOutputReturn?: { page: Page; text?: import("../../view/text-page").TextPageState; textReturn?: Page }
+  /** Pages opened from another page, newest last: esc on the child goes back to the parent (ui/app/page-back.ts). */
+  pageLinks?: import("./page-back").PageLink[]
+  /** The page the last page key ended on, to notice a page an action opened later. */
+  pageSeen?: Page | undefined
+  commandOutputReturn?:{ page: Page; text?: import("../../view/text-page").TextPageState; textReturn?: Page }
   /** The file open in the viewer (the right slot, or the `file` page on a narrow terminal); absent when none is (docs/file-viewer.md). */
   fileViewer?: import("./file-viewer").FileViewerState | undefined
   environmentPage?: import("../../view/environment-page").EnvironmentPageState | undefined
@@ -205,6 +211,8 @@ export type AppState = {
   draftsState?: import("../../view/stash-page").DraftsState
   /** The /queue page: the session's queue with full text, read from the daemon (`queue.list`) and refreshed on every queue change. */
   queueState?: import("../../view/queue-page").QueuePageState | undefined
+  /** The mode this session was in when it entered plan mode, so leaving plan with the cycle key or `/plan` goes back to it (memory only; unknown after a restart). */
+  modeBeforePlan?: { sessionId: string; mode: import("@mendcode/protocol").PermissionMode } | undefined
   /** Set by the flip-send key for the next `user.submit` only: how that one message meets a running turn. */
   nextDelivery?: import("@mendcode/protocol").QueueDelivery | undefined
   /** The mouse selection in the transcript or the prompt, while it is dragged (or kept, with `copyOnSelect` off); and where the last frame put them. */
@@ -244,6 +252,10 @@ export type AppState = {
   /** A sub-agent thread open in the chat's place (ui/app/agent-view.ts): the item of its call, and the session's own transcript while `transcript` is the thread's view. */
   agentView?: import("@mendcode/protocol").ItemId | undefined
   agentRoot?: AppState["transcript"] | undefined
+  /** The conversation's prompt, set aside while a thread is open (each view has its own; the thread's never becomes the saved draft). */
+  agentMainPrompt?: import("./agent-view").ViewPrompt | undefined
+  /** By thread: its own prompt while another view is shown, and the messages sent while it was open (the queue it shows and edits; true once listed). */
+  agentViews?: Map<import("@mendcode/protocol").ItemId, { prompt?: import("./agent-view").ViewPrompt; queued: Map<string, boolean> }> | undefined
   agentBackgrounds?: import("@mendcode/protocol").SessionBackgroundEntry[]
   agentBackgroundError?: string
   extractionJobs?: Omit<import("@mendcode/protocol").ExtractionJob, "text">[]
@@ -452,6 +464,8 @@ export type AppState = {
   loopsError: string
   /** Loops in a live state for this project, kept from `loop.list` and `loop.changed`. */
   liveLoops: Set<string>
+  /** A `/loop` written as a phrase, waiting for its one-line confirmation (enter starts it, `e` edits it, a mode word lowers its permission). */
+  loopDraft?: import("./loops").LoopDraft | undefined
   workflowsState: ReturnType<typeof createWorkflowsPageState>
   workflows: WorkflowSummary[]
   workflowsLoaded: boolean
@@ -522,15 +536,15 @@ export type AppState = {
   profileBase: TuiProfile
   /** What slash commands showed or hid in each session of this terminal (session-look.ts); over the profile, never saved. */
   sessionLook: Map<string, Partial<TuiProfile>>
-  /** What enabled packages' activation profiles currently ask for (extensions/activation.ts, loaded only when one exists). */
+  /** What enabled profiles' activations currently ask for (extensions/activation.ts, loaded only when one exists). */
   activation: import("../../extensions/activation").TuiActivation | undefined
-  /** The keys a package overlay or a running extension holds right now, with the value each put there. */
+  /** The keys a profile overlay or a running extension holds right now, with the value each put there. */
   profileApplied: Record<string, unknown>
   /** What running extensions asked for through `api.settings.set`; gone with them. */
   profileRuntime: Record<string, unknown>
   /** Keys the user chose by hand after a layer held them (profile keys, or `keybindings:<key>`): theirs over every layer. */
   keptKeys: Set<string>
-  /** The value of each kept profile key a package holds: saved per look owner in activation.json, never in the stored profile. */
+  /** The value of each kept profile key a profile holds: saved per look owner in activation.json, never in the stored profile. */
   keptValues: Record<string, unknown>
   customizeState: CustomizePageState
   settingsPageState: SettingsPageState

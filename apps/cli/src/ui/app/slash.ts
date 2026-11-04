@@ -26,7 +26,7 @@ import type { createStorage } from "./storage"
 import type { createAgents } from "./agents"
 import type { createStatus } from "./status"
 import type { createHooks } from "./hooks"
-import { featureOn } from "@mendcode/protocol/wire"
+import { featureOn, TIMESTAMP_PLACES } from "@mendcode/protocol/wire"
 import { BREAKPOINTS } from "../breakpoints"
 import { relaunchMessage, relaunchTargets } from "../../view/relaunch"
 import { sidebarVisible } from "../../view/sidebar"
@@ -37,6 +37,7 @@ import type { FooterSegment } from "@mendcode/protocol/wire"
 import type { PermissionMode, SessionId } from "@mendcode/protocol"
 import { parseFooterCommand } from "../../view/footer"
 import { footerRowsOf, parseFooterRowsCommand } from "../../view/footer-rows"
+import { parseFooterPackCommand } from "../../view/footer-pack"
 import { parseActivityCommand } from "../../view/activity-status"
 import { parseSlash } from "../../view/commands"
 import { normalizeHomeMascot, SIDEBAR_MODES, type SidebarMode, type TuiProfile } from "../../view/tui-profile"
@@ -85,6 +86,8 @@ export function createSlash(ctx: AppContext, actions: {
   ideCommand(args: string): Promise<void>
   setSidebar: (next: SidebarMode) => void
   footerSegments: () => readonly FooterSegment[]
+  footerIsOwn: () => boolean
+  refreshThemes: () => void
   switchSession: ReturnType<typeof createSession>["switchSession"]
   openSessions: ReturnType<typeof createSession>["openSessions"]
   attachPasted: ReturnType<typeof createPrompt>["attachPasted"]
@@ -129,12 +132,13 @@ export function createSlash(ctx: AppContext, actions: {
   whenIdle: ReturnType<typeof createDaemon>["whenIdle"]
   prCommand: ReturnType<typeof createPrWatchCommand>["prCommand"]
   openReviews(): Promise<void>
+  openReviewJob(target: string): Promise<void>
   openWorkflows: ReturnType<typeof createWorkflows>["openWorkflows"]
   workflowCommand: ReturnType<typeof createWorkflows>["workflowCommand"]
   rightSidebarCommand: (args: string, panel?: boolean) => Promise<boolean>
   askAside: ReturnType<typeof createAside>["askAside"]
   openFetch: ReturnType<typeof createAside>["openFetch"]
-  setPermission: (next: PermissionMode) => Promise<void>
+  setPermission: (next: PermissionMode) => Promise<boolean>
   startDream: ReturnType<typeof createMemory>["startDream"]
   undoMemory: ReturnType<typeof createMemory>["undoMemory"]
   runStashCommand: ReturnType<typeof createPrompt>["runStashCommand"]
@@ -165,7 +169,7 @@ export function createSlash(ctx: AppContext, actions: {
   changeProfile: (patch: Partial<TuiProfile>, options?: { session?: boolean; layer?: boolean }) => void
 }) {
   const { input, state, now, editor, localDay, say, fail, requestFrame, setupChoice, drafts } = ctx
-  const { openAcp, setSidebar, footerSegments, switchSession, openSessions, attachPasted, loadUsage, loadMemoryCategories, loadMemories, loadContext, loadSecrets, loadChanges, loadPetChoices, loadStorage, loadAgents, loadMcps, authMcp, loadTools, loadPackages, openSetup, loadStatus, loadExtensionsReport, openHooks, trustCommand, agentCommand, themeCommand, modelCommand, openConnect, loadProviders, loadLoops, createLoop, goalCommand, limitCommand, openWorkflows, workflowCommand, askAside, openFetch, setPermission, startDream, undoMemory, runStashCommand, copyAnswer, rewind, forkCommand, exportSession, editScratch, openPermissions, approveRetry, openDiagram, setMode, changeProfile } = actions
+  const { openAcp, setSidebar, footerSegments, footerIsOwn, refreshThemes, switchSession, openSessions, attachPasted, loadUsage, loadMemoryCategories, loadMemories, loadContext, loadSecrets, loadChanges, loadPetChoices, loadStorage, loadAgents, loadMcps, authMcp, loadTools, loadPackages, openSetup, loadStatus, loadExtensionsReport, openHooks, trustCommand, agentCommand, themeCommand, modelCommand, openConnect, loadProviders, loadLoops, createLoop, goalCommand, limitCommand, openWorkflows, workflowCommand, askAside, openFetch, setPermission, startDream, undoMemory, runStashCommand, copyAnswer, rewind, forkCommand, exportSession, editScratch, openPermissions, approveRetry, openDiagram, setMode, changeProfile } = actions
 
   /** Opens a session `/new` or `/bg` just made: in a fresh workspace when `git.newSessionWorktree` is on, and a line when it could not be. */
   async function enterNewSession(sessionId: SessionId) {
@@ -196,6 +200,18 @@ export function createSlash(ctx: AppContext, actions: {
   async function footerCommand(args: string) {
     // `rows N`, `row N a b`, `preset NAME` and `icons MODE` shape the footer's rows (profile keys footerRows, footerIcons).
     // Editing starts from the rows on screen: the full view's default rows when nothing was chosen.
+    // `pack NAME [text|symbols] [stack|alone]` chooses the footer pack (footer-pack.ts); a footer of the user's own keeps its place.
+    const pack = parseFooterPackCommand(args, { pack: state.tuiProfile.footerPack, symbols: state.tuiProfile.footerPackSymbols, stack: state.tuiProfile.footerPackStack })
+    if (pack) {
+      if (pack.ok) {
+        changeProfile(pack.patch)
+        refreshThemes()
+      }
+      const aside = pack.ok && pack.patch.footerPack !== "off" && !state.tuiProfile.footerPackStack && footerIsOwn()
+      state.notice = pack.ok ? `${pack.notice}${aside ? " · your own footer stays (add stack to draw the pack above it, /footer reset to use the pack)" : ""}` : pack.error
+      requestFrame()
+      return
+    }
     const shownRows = footerRowsOf({ mode: state.mode, profile: state.tuiProfile, list: state.customFooter })
     const rows = parseFooterRowsCommand(args, { rows: shownRows.rows, icons: state.tuiProfile.footerIcons })
     if (rows) {
@@ -466,7 +482,7 @@ export function createSlash(ctx: AppContext, actions: {
         requestFrame()
         await loadTools()
         break
-      case "packages":
+      case "profiles":
         state.page = "packages"
         state.packagesState = createPackagesPageState()
         state.packagesReport = undefined
@@ -482,7 +498,7 @@ export function createSlash(ctx: AppContext, actions: {
         break
       case "customize":
         if (/^restore(?:\s|$)/.test(parsed.args.trim())) {
-          if (!input.dataDir) { say("Profile restore requires a local data directory", "warning"); break }
+          if (!input.dataDir) { say("Restore requires a local data directory", "warning"); break }
           try {
             const { runProfileRestore } = await import("../../profile-restore")
             const result = runProfileRestore(input.dataDir, parsed.args.trim().split(/\s+/).slice(1))
@@ -571,7 +587,13 @@ export function createSlash(ctx: AppContext, actions: {
         }
         break
       }
-      case "timestamps": changeProfile({ timestamps: !state.tuiProfile.timestamps }, { session: true }); break
+      case "timestamps": {
+        // `/timestamps bottom|top|off` sets it; bare (and the bound toggle) it switches between off and the closing line of each turn.
+        const places: readonly string[] = TIMESTAMP_PLACES
+        if (parsed.args && !places.includes(parsed.args)) { state.notice = `usage: /timestamps ${places.join("|")}`; break }
+        changeProfile({ timestamps: (parsed.args || (state.tuiProfile.timestamps === "off" ? "bottom" : "off")) as TuiProfile["timestamps"] }, { session: true })
+        break
+      }
       case "thinking": changeProfile({ reasoning: state.tuiProfile.reasoning === "hidden" ? "expanded" : "hidden" }, { session: true }); break
       case "scrollbar": {
         // `/scrollbar auto|always|off` sets it; bare (and the bound toggle) it switches between off and the bar that was always there when it was on.
@@ -730,9 +752,12 @@ export function createSlash(ctx: AppContext, actions: {
         if (/^\s*dashboard\s*$/i.test(parsed.args)) await actions.openReviews()
         else if (!await actions.prMetadata(parsed.args)) await actions.prCommand(parsed.args)
         break
-      case "reviews":
-        await actions.openReviews()
+      case "reviews": {
+        const opening = /^open\s+(\S+)$/i.exec(parsed.args.trim())
+        if (opening) await actions.openReviewJob(opening[1]!)
+        else await actions.openReviews()
         break
+      }
       case "limit":
         await limitCommand(parsed.args)
         break
@@ -767,7 +792,7 @@ export function createSlash(ctx: AppContext, actions: {
         break
       }
       case "plan":
-        await setPermission(state.transcript.permissionMode === "plan" ? "ask" : "plan")
+        await setPermission(state.transcript.permissionMode === "plan" ? (state.modeBeforePlan?.sessionId === state.sessionId && state.modeBeforePlan.mode !== "plan" ? state.modeBeforePlan.mode : "ask") : "plan")
         break
       case "dream":
         await startDream()

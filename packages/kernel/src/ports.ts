@@ -17,6 +17,10 @@ export type TaskPort = {
   run(parentId: SessionId, input: import("@mendcode/protocol").TaskInput, signal: AbortSignal): Promise<import("@mendcode/protocol").TaskRecord>
   status(parentId: SessionId, input: { task_id?: string | undefined; action?: "list" | "get" | "wait" | "cancel" | undefined; timeout_ms?: number | undefined }, signal: AbortSignal): Promise<string>
   isChild(sessionId: SessionId): boolean
+  /** Whether this session may start sub-agents of its own (`subagentDepth`); a sub-agent without it is offered no way to. */
+  nests?(sessionId: SessionId): boolean
+  /** Whether this session may only read: a shell command that is not on the read-only list is refused, in every permission mode (`/btw`). */
+  readOnly?(sessionId: SessionId): boolean
   /** The parent of a child launched with `fork: true`, whose first turn starts from that parent's context. */
   forkOf?(sessionId: SessionId): SessionId | undefined
 }
@@ -67,6 +71,11 @@ export type EngineEvent =
   | { type: "item.delta"; itemId: ItemId; text: string; input?: import("@mendcode/protocol").ToolInputProgress }
   | { type: "item.completed"; itemId: ItemId; status: ItemStatus; text?: string; toolInput?: string; blob?: BlobRef; attachments?: BlobRef[]; render?: RenderNode; meta?: Record<string, string | number | boolean> }
   | { type: "usage"; provider: string; model: string; input: number; output: number; reasoning: number; cacheRead: number; cacheWrite: number; costMicros?: number; profile?: import("@mendcode/protocol").RequestProfile; thinkingDropped?: true; cacheTtl?: "1h"; context?: number; contextWindow?: number; contextApprox?: true; partial?: true; compactAt?: number }
+  /**
+   * Output tokens the provider has reported so far for the turn that no `usage` has recorded yet (a call still streaming, or every call of an
+   * engine that records one usage at the end). Shown live and never stored; the `usage` that records them replaces it. Never an estimate.
+   */
+  | { type: "usage.live"; output: number }
   /** A failed model call will be retried after `delayMs`; `attempt` counts retries from 1; `offline`: the connection itself failed. */
   | { type: "retrying"; attempt: number; delayMs: number; message: string; offline?: boolean }
 
@@ -87,6 +96,11 @@ export type TurnInput = {
   turnOptions?: import("@mendcode/protocol").TurnOptions | undefined
   /** With `runShell` (`!!command`): the command and its output are shown, not added to the model's history. */
   localShell?: true
+  /**
+   * Set by the daemon for an internal read-only run (PR review, report-only loop, read-only workflow task, side chat, critic): its
+   * plan mode only keeps it read-only, so an engine that tells its model about plan mode sends no plan note for it.
+   */
+  readOnlyRun?: true
   /** Frozen workflow restrictions supplied by the daemon, never by a user.submit payload. */
   workflow?: {
     execution: import("@mendcode/protocol").WorkflowTaskExecution
@@ -142,6 +156,12 @@ export interface EnginePort {
   /** One such call inside the other harness's turn: the same approvals, authority, masking, output limits and card as a native call. */
   hostCall?(input: { turn: TurnInput; name: string; args: unknown }): Promise<{ output: string; isError: boolean; images?: Array<{ mime: "image/png" | "image/jpeg"; bytes: Uint8Array }> }>
   runTurn(input: TurnInput): Promise<TurnOutcome>
+  /**
+   * Optional: builds, a few at a time, what every first turn builds anyway (the tool schemas), awaiting `between` after each
+   * few so the caller can collect their garbage before it piles up. Built in one go inside a turn, it was that turn's largest
+   * burst of memory.
+   */
+  warm?(between: () => Promise<void>): Promise<void>
   /** Optional: runs the user's own `!command` (`input.text`) without a model call; engines without it reject shell mode. */
   runShell?(input: TurnInput): Promise<TurnOutcome>
   /** Checked after each turn; compaction then runs inside the same turn, before the queue advances (I2, I5). */

@@ -4,7 +4,7 @@ import QuartzCore
 
 // Private stdio protocol. AX objects and authority never leave this process.
 typealias Object = [String: Any]
-struct Failure: Error { let message: String }
+struct Failure: Error { let message: String; var code: String? = nil }
 var cancelled = false
 signal(SIGTERM) { _ in cancelled = true }
 signal(SIGINT) { _ in cancelled = true }
@@ -124,8 +124,23 @@ func releaseLease() { if lease >= 0 { flock(lease, LOCK_UN); close(lease); lease
 let app = NSApplication.shared
 app.setActivationPolicy(.accessory)
 
+/** The Accessibility pane of System Settings; the app is listed there once it asked for access (AXIsProcessTrustedWithOptions below). */
+let accessibilityPane = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+var permissionAsked = false
+/** Lists this app under Accessibility (the system dialog) and opens the exact pane, once per run: only when a tool needs the permission. */
+func askForAccessibility() {
+    if permissionAsked { return }
+    permissionAsked = true
+    let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+    _ = AXIsProcessTrustedWithOptions(options)
+    if let url = URL(string: accessibilityPane) { NSWorkspace.shared.open(url) }
+}
 func trusted() throws {
-    if !AXIsProcessTrusted() { try fail("Accessibility permission is missing for MendCode's native helper. In System Settings > Privacy & Security > Accessibility press +, then cmd+shift+G and paste \(Bundle.main.executablePath ?? CommandLine.arguments[0]); no permission prompt was opened. Tell the user this path; do not retry until they confirm.") }
+    if !AXIsProcessTrusted() {
+        askForAccessibility()
+        // `code` tells the daemon to wait for the grant and repeat the request itself; nothing was sent to any app.
+        throw Failure(message: "Accessibility permission is missing for \"MendCode Computer Use\". System Settings > Privacy & Security > Accessibility is open: turn on \"MendCode Computer Use\" (it is already in the list).", code: "accessibility")
+    }
 }
 // AppKit only learns which app is in front, and which apps run or ended, when the main run loop turns; this thread waits in readLine()
 // between requests, so without a turn here the answer stays what it was at the last one (measured: another app came to the front and
@@ -234,6 +249,11 @@ final class CursorStage {
         pointer.anchorPoint = CGPoint(x: 1.0 / 32, y: 35.0 / 40)
         pointer.position = stageTip
         frozen(pointer)
+        // The dart is the size of the user's own pointer, tip on the point: the system arrow is 40 pt tall by default (about 17 pt of it
+        // visible, against the dart's 33 pt) and grows with the Accessibility cursor size, so the dart's scale follows it.
+        let arrow = NSCursor.arrow.image.size.height
+        let scale = min(3, max(0.4, 0.52 * (arrow > 0 ? arrow / 40 : 1)))
+        pointer.setAffineTransform(CGAffineTransform(scaleX: scale, y: scale))
         let rim = dart(), body = dart()
         rim.lineWidth = 6.5; rim.shadowOpacity = 0.34
         rim.fillColor = color(cursorRim); rim.strokeColor = color(cursorRim)
@@ -490,20 +510,34 @@ func showBadge(_ show: Bool) throws {
 // and neither a posted click nor AXPress changed the page). After this attribute, the one VoiceOver sets, links and buttons
 // offer AXPress about 2 s later and it works with the window behind others. It is cleared when the app's last session ends.
 let enhancedInterface = "AXEnhancedUserInterface"
-var webAccessibility = Set<pid_t>()
-func enableWebAccessibility(_ pid: pid_t) -> Bool {
-    if webAccessibility.contains(pid) { return false }
+// Electron builds its page tree only when this one is set (Chromium alone answers to the one above).
+let manualAccessibility = "AXManualAccessibility"
+/** What this helper switched on for each app, so that only those are cleared when the last session ends. */
+var webAccessibility: [pid_t: [String]] = [:]
+/** A window tree this small has not shown its web content: a page offers links or buttons once exposed. Decision only. */
+func poorTree(count: Int, hasProbe: Bool) -> Bool { !hasProbe && count <= 12 }
+/** How a key reaches an app: through its node when that can be focused safely, to the app when nothing safe is focused, never past a secure field. Decision only. */
+func keyRoute(nodeFocusable: Bool, focusedSecure: Bool, focusedOutside: Bool) -> String {
+    if nodeFocusable { return "node" }
+    return focusedSecure || focusedOutside ? "refuse" : "app"
+}
+func enableWebAccessibility(_ pid: pid_t, names: [String] = [enhancedInterface]) -> Bool {
     let app = AXUIElementCreateApplication(pid)
-    // Already on (VoiceOver is running): not ours to switch, or to clear later.
-    if (attribute(app, enhancedInterface) as? Bool) == true { return false }
-    // Chrome answers "not implemented" and switches anyway.
-    _ = AXUIElementSetAttributeValue(app, enhancedInterface as CFString, kCFBooleanTrue)
-    webAccessibility.insert(pid)
-    return true
+    var switched = webAccessibility[pid] ?? []
+    for name in names where !switched.contains(name) {
+        // Already on (VoiceOver is running): not ours to switch, or to clear later.
+        if (attribute(app, name) as? Bool) == true { continue }
+        // Chrome answers "not implemented" and switches anyway.
+        _ = AXUIElementSetAttributeValue(app, name as CFString, kCFBooleanTrue)
+        switched.append(name)
+    }
+    let added = switched.count != (webAccessibility[pid]?.count ?? 0)
+    if !switched.isEmpty { webAccessibility[pid] = switched }
+    return added
 }
 func restoreWebAccessibility(_ pid: pid_t) {
-    guard webAccessibility.remove(pid) != nil else { return }
-    _ = AXUIElementSetAttributeValue(AXUIElementCreateApplication(pid), enhancedInterface as CFString, kCFBooleanFalse)
+    guard let names = webAccessibility.removeValue(forKey: pid) else { return }
+    for name in names { _ = AXUIElementSetAttributeValue(AXUIElementCreateApplication(pid), name as CFString, kCFBooleanFalse) }
 }
 func pressable(_ element: AXUIElement) -> Bool {
     var supported: CFArray?
@@ -519,6 +553,15 @@ func observe(_ target: Object) throws -> Object {
         while !pressable(probe) && Date() < deadline && !cancelled { RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.05)) }
         _ = try selected(target, foreground: false)
         snapshot = walkWindow(window, pid: running.processIdentifier)
+    } else if poorTree(count: snapshot.nodes.count, hasProbe: snapshot.webProbe != nil), enableWebAccessibility(running.processIdentifier, names: [enhancedInterface, manualAccessibility]) {
+        // A webview (Tauri, WebKit, Electron) shows its content only once an assistive app asks: look again while it builds the tree.
+        let deadline = Date(timeIntervalSinceNow: 2)
+        while Date() < deadline && !cancelled {
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.25))
+            _ = try selected(target, foreground: false)
+            snapshot = walkWindow(window, pid: running.processIdentifier)
+            if !poorTree(count: snapshot.nodes.count, hasProbe: snapshot.webProbe != nil) { break }
+        }
     }
     _ = try selected(target, foreground: false)
     return ["nodes": snapshot.nodes, "truncated": snapshot.truncated]
@@ -678,6 +721,14 @@ func focus(_ ref: Reference) throws {
     if let focused = elementAttribute(ax, kAXFocusedUIElementAttribute), descendant(focused, of: ref.element), !secure(focused) { return }
     guard AXUIElementSetAttributeValue(ref.element, kAXFocusedAttribute as CFString, kCFBooleanTrue) == .success, let focused = elementAttribute(ax, kAXFocusedUIElementAttribute), descendant(focused, of: ref.element), !secure(focused) else { try fail("Cannot safely focus this node for keyboard input") }
 }
+/** A key goes to the node when it can be focused; otherwise to the app, as long as no secure field or element outside the window holds the focus. */
+func focusForKey(_ ref: Reference) throws {
+    do { try focus(ref) } catch {
+        let focused = elementAttribute(AXUIElementCreateApplication(ref.pid), kAXFocusedUIElementAttribute)
+        let route = keyRoute(nodeFocusable: false, focusedSecure: focused.map { secure($0) } ?? false, focusedOutside: focused.map { !descendant($0, of: ref.window) } ?? false)
+        if route != "app" { throw error }
+    }
+}
 /** A pointer event for a window that may be behind others: it names the app's window under the point, so the app takes it as its own. */
 func aim(_ event: CGEvent?, at point: CGPoint, pid: pid_t) {
     guard let event = event, let windows = CGWindowListCopyWindowInfo([.optionAll, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { return }
@@ -785,7 +836,8 @@ func perform(_ step: Step, target: Object) throws {
         return
     }
     if name == "key" || name == "typeText" {
-        try focus(ref); _ = try selected(target, foreground: false)
+        if name == "key" { try focusForKey(ref) } else { try focus(ref) }
+        _ = try selected(target, foreground: false)
         if name == "key" {
             guard let key = input["key"] as? String, let code = keyCodes[key] else { try fail("Unsupported key") }
             let modifiers = flags(input["modifiers"] as? [String] ?? [])
@@ -882,6 +934,10 @@ func dispatch(_ request: Object) throws -> Any {
     guard let name = request["method"] as? String else { try fail("Missing method") }
     let target = request["target"] as? Object ?? [:]
     switch name {
+    case "ping":
+        // Who answers and whether macOS lets it control apps; never prompts. `request` is the explicit setup step: list the app and open the pane.
+        if request["request"] as? Bool == true, !AXIsProcessTrusted() { askForAccessibility() }
+        return ["pid": Int(getpid()), "trusted": AXIsProcessTrusted()]
     case "foreground":
         try trusted()
         guard let running = frontmost(), running.bundleIdentifier != nil else { try fail("No identifiable foreground app") }
@@ -1061,6 +1117,16 @@ if let flag = CommandLine.arguments.firstIndex(of: "--cursor-render"), flag + 1 
     }
     exit(0)
 }
+// Decision-only: one webview/key case per stdin line, the routes per stdout line.
+if CommandLine.arguments.contains("--web-plan") {
+    while let line = readLine() {
+        guard let data = line.data(using: .utf8), let input = try? JSONSerialization.jsonObject(with: data) as? Object else { print("{}"); continue }
+        let poor = poorTree(count: input["count"] as? Int ?? 0, hasProbe: input["probe"] as? Bool ?? false)
+        let route = keyRoute(nodeFocusable: input["focusable"] as? Bool ?? false, focusedSecure: input["secure"] as? Bool ?? false, focusedOutside: input["outside"] as? Bool ?? false)
+        print("{\"poor\":\(poor),\"route\":\"\(route)\"}")
+    }
+    exit(0)
+}
 // Decision-only: one recorded accessibility tree per stdin line, the pointer plan per stdout line. No AX object, event or window.
 if CommandLine.arguments.contains("--pointer-plan") {
     while let line = readLine() {
@@ -1092,6 +1158,27 @@ if CommandLine.arguments.contains("--cursor-demo") {
 }
 // Requests come one line at a time. While the cursor or an effect is on screen the wait turns the run loop every 50 ms, so played
 // effects end and an idle cursor rests; otherwise the helper sleeps in poll() until the next line or the end of its input.
+/** Started by LaunchServices (`open -a`) the app is its own responsible process and macOS grants Accessibility to it, not to a terminal. It has no
+ *  pipes then: the daemon names a private socket and the one connection to it replaces stdin and stdout. */
+if let flag = CommandLine.arguments.firstIndex(of: "--socket"), flag + 1 < CommandLine.arguments.count {
+    let path = CommandLine.arguments[flag + 1]
+    var address = sockaddr_un()
+    address.sun_family = sa_family_t(AF_UNIX)
+    let capacity = MemoryLayout.size(ofValue: address.sun_path)
+    guard path.utf8.count < capacity else { exit(2) }
+    withUnsafeMutablePointer(to: &address.sun_path) { $0.withMemoryRebound(to: CChar.self, capacity: capacity) { _ = strncpy($0, path, capacity - 1) } }
+    let server = socket(AF_UNIX, SOCK_STREAM, 0)
+    unlink(path)
+    let bound = withUnsafePointer(to: &address) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(server, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) } }
+    guard server >= 0, bound == 0, chmod(path, 0o600) == 0, listen(server, 1) == 0 else { exit(2) }
+    var wait = pollfd(fd: server, events: Int16(POLLIN), revents: 0)
+    guard poll(&wait, 1, 30_000) > 0 else { unlink(path); exit(3) }
+    let connection = accept(server, nil, nil)
+    unlink(path); close(server)
+    guard connection >= 0, dup2(connection, 0) >= 0, dup2(connection, 1) >= 0 else { exit(2) }
+    if connection > 1 { close(connection) }
+    signal(SIGPIPE, SIG_IGN)
+}
 var pending = [UInt8](), discarding = false
 func nextLine() -> String? {
     while !cancelled {
@@ -1120,11 +1207,14 @@ while !cancelled, let line = nextLine() {
         do {
             guard !line.isEmpty, line.utf8.count <= 131_072, let data = line.data(using: .utf8), let request = try JSONSerialization.jsonObject(with: data) as? Object else { try fail("Invalid bounded JSON request") }
             reply = ["ok": true, "value": try dispatch(request)]
-        } catch { reply = ["ok": false, "error": (error as? Failure)?.message ?? "Native computer operation failed", "delivery": effectStarted ? "unknown" : "not_delivered"] }
+        } catch {
+            reply = ["ok": false, "error": (error as? Failure)?.message ?? "Native computer operation failed", "delivery": effectStarted ? "unknown" : "not_delivered"]
+            if let code = (error as? Failure)?.code { reply["code"] = code }
+        }
         let data = (try? JSONSerialization.data(withJSONObject: reply, options: [.sortedKeys])) ?? Data("{\"ok\":false,\"error\":\"Invalid native output\"}".utf8)
         FileHandle.standardOutput.write(data); FileHandle.standardOutput.write(Data([10]))
     }
 }
 cursorProgram = false
 try? showBadge(false)
-for pid in Array(webAccessibility) { restoreWebAccessibility(pid) }
+for pid in Array(webAccessibility.keys) { restoreWebAccessibility(pid) }

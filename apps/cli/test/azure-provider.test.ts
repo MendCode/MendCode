@@ -72,7 +72,8 @@ describe("B10.02 Azure terminal", () => {
     // The last provider can be below the visible catalog: cycling still selects its deployment.
     await h.type("\x1b[D")
     expect(h.commands("session.model.set").at(-1)).toMatchObject({ choice: { model: "azure:team-coder" } })
-    await h.type("\x1b"); await h.run("/connect azure"); await h.type("\r")
+    // esc leaves the model page for the connect page it came from, and once more leaves that
+    await h.type("\x1b"); await h.type("\x1b"); await h.run("/connect azure"); await h.type("\r")
     expect(h.text()).toContain("team.openai.azure.com")
     expect(h.text()).toContain("team-coder")
     expect(h.everything()).not.toContain(KEY)

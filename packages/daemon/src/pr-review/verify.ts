@@ -24,6 +24,8 @@ export const spent = (tokens: ReviewTurn["tokens"]) => tokens.input - (tokens.ca
  */
 
 export const VERIFY_BATCH = 10
+/** A verify turn is never limited below this, so a nearly spent budget still lets a batch answer. */
+const MIN_VERIFY_LIMIT = 5_000
 export type CheckResult = { command: string; code: number; output: string }
 export type Verdict = NonNullable<PrFinding["verdict"]>
 
@@ -131,13 +133,15 @@ export async function verifyFindings({ sessionFactory, findings, context, checks
     try {
       const session = await sessionFactory({ purpose: "verify" })
       try {
-        let turn = await session.send(verifyPrompt(batch, context, checks, instructions, language))
+        // A verify turn past what is left of the budget is stopped (`ReviewTurnOverBudget`): the batch stays a candidate for the resume.
+        const room = () => Number.isFinite(limit) ? { limit: Math.max(MIN_VERIFY_LIMIT, limit - spent(tokens)) } : undefined
+        let turn = await session.send(verifyPrompt(batch, context, checks, instructions, language), room())
         tokens.input += turn.tokens.input
         tokens.output += turn.tokens.output
         tokens.cached += turn.tokens.cached ?? 0
         let parsed = parseVerdicts(turn.text)
         if (!parsed.ok) {
-          turn = await session.send(`Your answer could not be used: ${parsed.problem}. Answer again with only the JSON object: ${SHAPE}`)
+          turn = await session.send(`Your answer could not be used: ${parsed.problem}. Answer again with only the JSON object: ${SHAPE}`, room())
           tokens.input += turn.tokens.input
           tokens.output += turn.tokens.output
           tokens.cached += turn.tokens.cached ?? 0

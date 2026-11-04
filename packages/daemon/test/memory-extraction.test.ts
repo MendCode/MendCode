@@ -45,23 +45,22 @@ test("completed turns enqueue once; worker persists attempts and proposals witho
   })
   const event = h.turn()
   h.worker.observe(event)
-  await until(() => h.store.extraction.list()[0]?.state === "completed")
-  expect(h.store.extraction.list()).toHaveLength(1)
-  expect(h.store.extraction.list()[0]).toMatchObject({ attempts: 1, proposed: 1 })
+  await until(() => h.proposals.length === 1 && h.store.extraction.list().length === 0)
   expect(h.proposals).toHaveLength(1)
-  expect(h.worker.list()[0]).not.toHaveProperty("text")
+  expect(h.store.extraction.list()).toEqual([])
+  expect(h.worker.status().lastRun).toBe("completed")
 })
 
 test("use and generation are independent; disabling generation or memory prevents enqueue", async () => {
   const h = fixture(async () => [])
   h.store.settings.set({ memoryUse: false })
   h.turn()
-  await until(() => h.store.extraction.list()[0]?.state === "completed")
+  await until(() => h.worker.status().lastRun === "completed")
   h.store.settings.set({ memoryGenerate: false })
   h.turn()
   h.store.settings.set({ memoryEnabled: false, memoryGenerate: true })
   h.turn()
-  expect(h.store.extraction.list()).toHaveLength(1)
+  expect(h.store.extraction.list()).toHaveLength(0)
 })
 
 test("unconfigured extractor leaves a durable queued job with an explicit reason", async () => {
@@ -80,8 +79,7 @@ test("errors retry twice then fail; explicit retry starts a new bounded attempt 
   expect(job.attempts).toBe(3)
   fail = false
   h.worker.retry(job.jobId)
-  await until(() => h.store.extraction.list()[0]?.state === "completed")
-  expect(h.store.extraction.list()[0]!.attempts).toBe(1)
+  await until(() => h.store.extraction.list().length === 0)
   expect(() => h.worker.retry(job.jobId)).toThrow("Only failed")
 })
 
@@ -105,8 +103,7 @@ test("shutdown pauses a live extraction and a new worker recovers the durable jo
   const next = createMemoryExtraction({ store: h.store, settings: () => h.store.settings.get(), now: Date.now, extract: async () => [], commit: () => 0 })
   cleanup.push(() => next.stop())
   next.wake()
-  await until(() => h.store.extraction.list()[0]?.state === "completed")
-  expect(h.store.extraction.list()[0]!.attempts).toBe(1)
+  await until(() => h.store.extraction.list().length === 0)
 })
 
 test("settlement is transactional; failed writes roll back both proposals and completion", () => {

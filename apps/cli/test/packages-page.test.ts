@@ -15,7 +15,7 @@ function pkg(name: string, patch: Partial<PackageInfo> = {}, source: PackageInfo
     key: `${source}:${name}`,
     dir: `/home/me/.mendcode/packages/${name}`,
     enabled: true,
-    manifest: { name, version: "1.2.0", description: `The ${name} package` },
+    manifest: { name, version: "1.2.0", description: `The ${name} profile` },
     install: { source: `github:acme/${name}`, commit: "0123456789abcdef", installedAt: NOW - 3 * 24 * 3600 * 1000 },
     contents: { tools: 2, skills: 1, commands: 3, themes: 1, mcp: true },
     ...patch,
@@ -38,7 +38,7 @@ const press = (state: PackagesPageState, ...keys: string[]) => {
   return { state: current, action }
 }
 
-describe("packages page rendering", () => {
+describe("profiles page rendering", () => {
   test("context cost distinguishes idle metadata, on-demand text and unknown estimates at narrow/wide widths", () => {
     const value = report([pkg("review", { contextCost: { idleTokens: 0, onDemandTokens: 90, method: "chars/4" } })])
     for (const width of [60, 140]) {
@@ -51,8 +51,8 @@ describe("packages page rendering", () => {
   })
   test("title and key hints share the header; summary and panel grid fill the body", () => {
     const rows = plain(render(createPackagesPageState()))
-    expect(rows[0]!.trimStart()).toStartWith("Packages · /repo/app")
-    expect(rows[1]!.trimEnd()).toEndWith("3 packages · 1 off · 1 problem")
+    expect(rows[0]!.trimStart()).toStartWith("Profiles · /repo/app")
+    expect(rows[1]!.trimEnd()).toEndWith("3 profiles · 1 off · 1 problem")
     expect(rows.join("\n")).not.toMatch(/MENDCODE|LIVE/)
     expect(rows[0]).toContain("esc back")
     expect(rows[2]).toContain("┌─ Installed")
@@ -75,7 +75,7 @@ describe("packages page rendering", () => {
     const dots = lines.flatMap((line) => line.filter((span) => span.text.startsWith("● ")).map((span) => span.fg))
     expect(dots).toEqual(["success", "muted", "error"])
   })
-  test("zero counts are omitted and an empty package shows a dash", () => {
+  test("zero counts are omitted and an empty profile shows a dash", () => {
     expect(describeContents({ tools: 0, skills: 1, commands: 0, themes: 0, mcp: false })).toBe("1 skill")
     expect(describeContents({ tools: 1, skills: 0, commands: 0, themes: 0, mcp: true })).toBe("1 tool, mcp")
     expect(describeContents({ tools: 0, skills: 0, commands: 0, themes: 0, mcp: false })).toBe("—")
@@ -92,26 +92,26 @@ describe("packages page rendering", () => {
     expect(text).toMatch(/\d{4}-\d{2}-\d{2} \d{2}:\d{2} · 3d ago/)
     expect(text).toContain("/home/me/.mendcode/packages/toolbox")
   })
-  test("a problem package shows its problem text in full", () => {
+  test("a problem profile shows its problem text in full", () => {
     const text = plain(render({ selected: 2 }, 140, 35)).join("\n")
     expect(text).toContain("problem")
     expect(text).toContain("manifest.json: version must be a string")
     expect(text).toContain("it is fixed")
   })
-  test("an off package says off in its detail", () => {
+  test("an off profile says off in its detail", () => {
     const text = plain(render({ selected: 1 }, 140, 35)).join("\n")
     expect(text).toContain("project:quiet")
     expect(text).toContain("· off")
   })
   test("empty state says how to install", () => {
     const text = plain(render(createPackagesPageState(), 100, 20, report([]))).join("\n")
-    expect(text).toContain("no packages · install with: mendcode package install <folder|github:owner/repo>")
+    expect(text).toContain("no profiles · install with: mendcode profile install <folder|github:owner/repo>")
     const narrow = plain(render(createPackagesPageState(), 60, 20, report([]))).join("\n")
     expect(narrow).toContain("<folder|github:owner/repo>")
   })
   test("loading and failed loading are shown with the right status", () => {
     const loading = plain(render(createPackagesPageState(), 100, 20, "loading")).join("\n")
-    expect(loading).toContain("loading packages…")
+    expect(loading).toContain("loading profiles…")
     expect(loading.split("\n")[1]).not.toMatch(/Error/)
     const failed = render(createPackagesPageState(), 100, 20, "loading", "daemon not reachable")
     expect(plain(failed).join("\n")).toContain("daemon not reachable")
@@ -124,7 +124,7 @@ describe("packages page rendering", () => {
     expect(text).toContain("cannot write settings")
     expect(text).toContain("user:toolbox")
   })
-  test("a pending remove names the package and swaps the header hints", () => {
+  test("a pending remove names the profile and swaps the header hints", () => {
     const lines = render({ selected: 1, confirm: { key: "project:quiet" } })
     const text = plain(lines).join("\n")
     expect(plain(lines)[1]).toContain("Confirm remove")
@@ -164,7 +164,7 @@ describe("packages page rendering", () => {
     expect(beside(110, 35)).toBe(true)
     expect(beside(160, 35)).toBe(true)
   })
-  test("the selected row stays visible with more packages than fit", () => {
+  test("the selected row stays visible with more profiles than fit", () => {
     const many = Array.from({ length: 40 }, (_, i) => pkg(`pkg-${String(i).padStart(2, "0")}`))
     for (const [width, height] of [[60, 20], [100, 35], [160, 35]] as const) {
       for (const selected of [0, 17, 39]) {
@@ -184,7 +184,7 @@ describe("packages page rendering", () => {
   })
 })
 
-describe("packages page keys", () => {
+describe("profiles page keys", () => {
   test("arrows and j/k move the selection within bounds", () => {
     expect(press(createPackagesPageState(), "\x1b[B").state.selected).toBe(1)
     expect(press(createPackagesPageState(), "j", "j", "\x1b[A").state.selected).toBe(1)
@@ -193,7 +193,7 @@ describe("packages page keys", () => {
     const state = createPackagesPageState()
     expect(packagesPageKey(state, "\x1b[A", PACKAGES).state).toBe(state)
   })
-  test("space and e toggle the selected package with the opposite of its current state", () => {
+  test("space and e toggle the selected profile with the opposite of its current state", () => {
     expect(press(createPackagesPageState(), " ").action).toEqual({ type: "enable", key: "user:toolbox", enabled: false })
     expect(press(createPackagesPageState(), "e").action).toEqual({ type: "enable", key: "user:toolbox", enabled: false })
     expect(press(createPackagesPageState(), "j", " ").action).toEqual({ type: "enable", key: "project:quiet", enabled: true })
@@ -223,7 +223,7 @@ describe("packages page keys", () => {
     expect(press(createPackagesPageState(), "q").action).toEqual({ type: "close" })
     expect(press(createPackagesPageState(), "z").action).toEqual({ type: "none" })
   })
-  test("c opens the resource switches of the selected package; keys move, toggle and leave", () => {
+  test("c opens the resource switches of the selected profile; keys move, toggle and leave", () => {
     const opened = press(createPackagesPageState(), "j", "c")
     expect(opened.action).toEqual({ type: "config", key: "project:quiet" })
     expect(opened.state.config).toEqual({ key: "project:quiet", selected: 0 })
@@ -253,7 +253,7 @@ describe("packages page keys", () => {
     }
     expect(plain(render({ ...base, config: { ...base.config!, resources: [] } })).join("\n")).toContain("no switchable resources")
   })
-  test("with no packages only r and close do anything", () => {
+  test("with no profiles only r and close do anything", () => {
     for (const key of [" ", "e", "d", "j", "k"]) expect(packagesPageKey(createPackagesPageState(), key, []).action).toEqual({ type: "none" })
     expect(packagesPageKey(createPackagesPageState(), "r", []).action).toEqual({ type: "reload" })
     expect(packagesPageKey(createPackagesPageState(), "q", []).action).toEqual({ type: "close" })

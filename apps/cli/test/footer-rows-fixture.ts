@@ -42,14 +42,14 @@ export const FIVE_ROWS: Partial<TuiProfile> = {
   quotaColor: "accent",
 }
 
-export type RowsOptions = { profile?: Partial<TuiProfile>; width?: number; height?: number; theme?: string; quotas?: QuotaScene; settings?: Settings; effort?: string; calls?: boolean; /** The daemon's `codegraph.status` for the session's directory, as pushed after a graph tool indexed it. */ graph?: "indexing" | "indexed"; /** The daemon's `session.savings` reply, by source. */ savings?: Array<{ source: string; calls: number; tokens: number }> }
+export type RowsOptions = { profile?: Partial<TuiProfile>; /** The view (tier) the terminal opens in; the footer's built-in rows are the full view's. */ mode?: "minimal" | "balanced" | "full"; width?: number; height?: number; theme?: string; quotas?: QuotaScene; settings?: Settings; effort?: string; calls?: boolean; /** The daemon's `codegraph.status` for the session's directory, as pushed after a graph tool indexed it. */ graph?: "indexing" | "indexed"; /** The daemon's `session.savings` reply, by source. */ savings?: Array<{ source: string; calls: number; tokens: number }> }
 
 /** A session after one model call, with the footer the profile asks for. */
 export async function rowsScreen(options: RowsOptions = {}) {
   const layout = scratch()
   writeTuiProfile(layout.dataDir, { ...DEFAULT_TUI_PROFILE, ...(options.theme ? { theme: options.theme } : {}), ...options.profile })
   const h = await appHarness({
-    dataDir: layout.dataDir, directory: "/Users/dev/Code/MendCodeV2", home: "/Users/dev", width: options.width ?? 160, height: options.height ?? 30,
+    dataDir: layout.dataDir, directory: "/Users/dev/Code/MendCodeV2", home: "/Users/dev", ...(options.mode ? { mode: options.mode } : {}), width: options.width ?? 160, height: options.height ?? 30,
     reply: (command) => command.type === "models.list" ? { ok: true, result: { models: [], effective: { model: "gpt-6.1-sol", effort: options.effort ?? "low" } } } : command.type === "session.savings" && options.savings ? { ok: true, result: { savings: options.savings } } : undefined,
   })
   await h.start({ onboarded: true, tier: "full", reducedMotion: true, ...options.settings })

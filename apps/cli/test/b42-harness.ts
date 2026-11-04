@@ -1,8 +1,11 @@
 import type { AgentsReport, ModelsReport } from "@mendcode/protocol"
 import { appHarness, tempDir } from "./session-ui-harness"
+import { DEFAULT_TUI_PROFILE, writeTuiProfile, type TuiProfile } from "../src/view/tui-profile"
 
 /** The actual app factories, with local catalog and agent replies; no daemon or real user directory. */
-export async function b42Harness(width = 100, height = 30) {
+export async function b42Harness(width = 100, height = 30, profile?: Partial<TuiProfile>) {
+  const dataDir = tempDir("b42-ui-")
+  if (profile) writeTuiProfile(dataDir, { ...DEFAULT_TUI_PROFILE, ...profile })
   const directory = tempDir("b42-project-")
   const agents: AgentsReport = { directory, current: "build", problems: [], agents: [
     { name: "build", description: "Build and verify changes", source: "user", trusted: true, mode: "primary", color: "#22cc88" },
@@ -15,7 +18,7 @@ export async function b42Harness(width = 100, height = 30) {
     { id: "local:fast", name: "Fast · Local", provider: "local", efforts: ["low", "high"], contextWindow: 64000, modalities: { input: ["text"], output: ["text"] }, cost: { input: 1, output: 3 } },
     { id: "local:large", name: "Large · Local", provider: "local", efforts: ["low", "high"], contextWindow: 200000, variants: { careful: { effort: "high", parameters: { temperature: 0.2 } } } },
   ] }
-  const h = appHarness({ width, height, directory, dataDir: tempDir("b42-ui-"), reply: (command) => {
+  const h = appHarness({ width, height, directory, dataDir, reply: (command) => {
     if (command.type === "agents.list") return { ok: true, result: agents }
     if (command.type === "session.agent.set") { agents.current = command.agent ?? "build"; return { ok: true, result: agents } }
     if (command.type === "models.list") return { ok: true, result: models }

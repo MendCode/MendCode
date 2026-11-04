@@ -17,9 +17,9 @@ const models: ModelInfo[] = [
 ]
 const REPORT: ModelsReport = { engine: "native", selectable: true, models, defaults: { model: "gpt-6-sol", effort: "medium" }, roles: {}, effective: { model: "gpt-6-astra", effort: "medium" } }
 
-async function start(input: { withSession: boolean; report?: ModelsReport }) {
+async function start(input: { withSession: boolean; report?: ModelsReport; footerPack?: string }) {
   const dataDir = tempDir()
-  writeTuiProfile(dataDir, { ...DEFAULT_TUI_PROFILE, pet: "off", images: "off", sidebar: "hidden" })
+  writeTuiProfile(dataDir, { ...DEFAULT_TUI_PROFILE, pet: "off", images: "off", sidebar: "hidden", ...(input.footerPack ? { footerPack: input.footerPack } : {}) })
   // Recents as the owner had them, Claude Code models among them.
   writeModelPrefs(dataDir, { favorites: [], recents: ["gpt-6-astra", "claude-opus", "gpt-6.1-sol", "claude-fable", "gpt-5.6-luna"] })
   const h = appHarness({ width: 120, height: 40, dataDir, directory: "/work/app", reply: (command: CommandInput) => {
@@ -75,7 +75,8 @@ describe("the quick switch and the full model page list the same models", () => 
     })
 
     test(`${where}: the bottom bar names the ChatGPT subscription, not the daemon's engine, next to a subscription model`, async () => {
-      const h = await start({ withSession })
+      // The built-in footer (`footerPack: off`) names the provider; the clean pack names no provider at all.
+      const h = await start({ withSession, footerPack: "off" })
       const bar = h.text().find((row) => row.includes("Build ·"))
       // The reasoning effort sits between the model and its provider (`showEffort` is on by default).
       expect(bar).toContain("GPT-6-Astra · medium · chatgpt")

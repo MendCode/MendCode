@@ -16,7 +16,7 @@ import type { PrJobSummary } from "@mendcode/protocol"
 export type { PrReviewPort }
 
 /** The service's `control` as this port uses it (pr-review/service.ts): only `review` and `status`. */
-export type PrReviewControl = (input: { sessionId: string; action: "review" | "status"; pr?: string | undefined }) => Promise<
+export type PrReviewControl = (input: { sessionId: string; action: "review" | "status"; pr?: string | undefined; full?: boolean | undefined }) => Promise<
   | { ok: true; text: string; watches: ReadonlyArray<{ directory: string; publish: string }>; dashboard?: { jobs: readonly PrJobSummary[]; watches: ReadonlyArray<{ directory: string; repo?: string | undefined }> } | undefined }
   | { ok: false; message: string }
 >
@@ -53,8 +53,8 @@ export function createPrReviewPort({ sessionId, directory, control }: { sessionI
         postingLine(await consent()),
       ].join("\n")
     },
-    async review({ pr }) {
-      const done = await control({ sessionId, action: "review", ...(pr ? { pr } : {}) }).catch((error: unknown) => ({ ok: false as const, message: error instanceof Error ? error.message : String(error) }))
+    async review({ pr, full }) {
+      const done = await control({ sessionId, action: "review", ...(pr ? { pr } : {}), ...(full ? { full } : {}) }).catch((error: unknown) => ({ ok: false as const, message: error instanceof Error ? error.message : String(error) }))
       if (!done.ok) return done
       return { ok: true, text: `${done.text}\n${postingLine(done.watches.find((row) => row.directory === directory())?.publish ?? await consent())}` }
     },
@@ -82,6 +82,8 @@ export function createPrReviewPort({ sessionId, directory, control }: { sessionI
 export const PrReviewToolArgs = z.strictObject({
   action: z.enum(["review", "status"]),
   pr: z.string().trim().min(1).max(300).optional().describe("review: the PR number or URL; omitted, the PR of the checkout's current branch"),
+  // No description: every prompt that lists the tool would pay for it. The answer to a review of an already reviewed head names it.
+  full: z.boolean().optional(),
 })
 
 /** `enabled`: `experimental.pr_review` is on (checked on every call). */
@@ -90,8 +92,7 @@ export function createPrReviewTool({ enabled }: { enabled(): boolean }) {
     name: "pr_review",
     tier: "balanced",
     description: [
-      "Have MendCode's own PR reviewer review one pull request of this checkout now (action review, pr: number or URL; omitted, the current branch's PR), exactly as the user's /pr review does: two passes in read-only child sessions, the repository's filters and claims apply, and the findings arrive in this session.",
-      "It posts on the PR only as the user's /pr publish consent allows; until then the review stays in this session. action status lists this checkout's review jobs and the posting consent.",
+      "Have MendCode's own PR reviewer review one pull request of this checkout now (action review, pr: number or URL; omitted, the current branch's PR), exactly as the user's /pr review does: two passes in read-only child sessions, the repository's filters and claims apply, and the findings arrive in this session.",      "It posts on the PR only as the user's /pr publish consent allows; until then the review stays in this session. action status lists this checkout's review jobs and the posting consent.",
       NO_SELF_MENTION,
       "To review every new PR from now on, the user runs /pr watch-repo; to set up or configure the reviewer, use review_config (setup first).",
     ].join(" "),
@@ -110,7 +111,7 @@ export function createPrReviewTool({ enabled }: { enabled(): boolean }) {
       if (!enabled()) return fail({ title, message: "The PR reviewer is off: the user turns it on with /pr on (experimental.pr_review)." })
       const port = context.prReview
       if (!port) return fail({ title, message: "MendCode's PR reviewer is not available in this session (it runs only in a local session of the daemon's machine). Ask the user to run /pr review <n>; do not comment on the PR to trigger it." })
-      const done = args.action === "review" ? await port.review({ pr: args.pr }) : await port.status()
+      const done = args.action === "review" ? await port.review({ pr: args.pr, full: args.full }) : await port.status()
       if (!done.ok) return fail({ title, message: `[PR_REVIEW]: ${done.message}` })
       return { output: done.text, truncated: false, title, isError: false }
     },

@@ -79,6 +79,7 @@ export function createEvents(ctx: AppContext, actions: {
   /** Entering plan mode says who plans and that nothing changes before the review; leaving it says what runs now (the models are asked again first). */
   function announcePlanMode(from: PermissionMode, to: PermissionMode) {
     if ((from === "plan") === (to === "plan")) return
+    if (to === "plan") state.modeBeforePlan = { sessionId: state.sessionId, mode: from }
     const notice = () => planModeNotice({ from, to, report: state.modelReport, planModel: planModelId(state.modelReport, state.effectiveModel?.model), buildModel: state.effectiveModel?.model, agent: state.agentReport?.current })
     void actions.loadEffectiveModel().then(() => { say(notice()!, "info"); requestFrame() })
   }
@@ -214,6 +215,11 @@ export function createEvents(ctx: AppContext, actions: {
       state.todayUsage = { tokens: event.tokens, calls: event.calls, ...(event.costMicros ? { costMicros: event.costMicros } : {}) }
       return requestFrame()
     }
+    // A running count from an engine that records its usage later: the activity line only, and only for the open session's turn.
+    if (event.type === "turn.tokens") {
+      if (event.sessionId === state.sessionId && state.turnState.noteLive(event)) requestFrame()
+      return
+    }
     if (event.type === "agent-commands.changed") return actions.peerCommandsChanged(event.sourceSessionId, event.targetSessionId)
     if (event.type === "task.changed") {
       state.agentParents.delete(event.sessionId)
@@ -221,7 +227,7 @@ export function createEvents(ctx: AppContext, actions: {
       if (state.agentParents.size > AGENT_PARENTS_KEPT) state.agentParents.delete(state.agentParents.keys().next().value!)
       followPet(state)
       if (state.page === "tasks" && event.parentId === state.sessionId) void actions.loadTasks()
-      if (event.parentId === state.sessionId) void refreshLiveTasks(ctx)
+      if (event.parentId === state.sessionId || event.parentId === state.sessionParentId) void refreshLiveTasks(ctx)
       if (state.page === "agents") void actions.loadBackgroundSessions()
       // The agents card and /tree draw the sub-agents' state and model: ask again.
       state.sidebarTreeRev++

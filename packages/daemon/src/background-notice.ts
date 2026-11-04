@@ -7,7 +7,7 @@ const TAIL_LINES = 20
  * session recognises its background notices by how they open and keeps sending them with the user's next message.
  */
 export function isBackgroundNotice(text: string): boolean {
-  return /^\[(background task|monitor) /.test(text)
+  return /^\[(background task|monitor|loop) /.test(text)
 }
 
 /** The message a session gets while a monitored task (`shell_monitor`) prints matching lines. */

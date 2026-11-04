@@ -1,6 +1,6 @@
-import { estimateTokens, usageContext } from "@mendcode/protocol/wire"
+import { estimateTokens, IMAGE_TOKENS, usageContext } from "@mendcode/protocol/wire"
 import { explicitMemoryConsent, memoryWrite, restatesRequest } from "./memory-consent"
-import { condenseCommandOutput, limitToolOutput, pruneToolOutputs as pruneHistoryToolOutputs, redactedToolStream, withReportedSavings } from "./tool-output"
+import { condenseCommandOutput, limitToolOutput, pruneToolOutputs as pruneHistoryToolOutputs, redactedToolStream } from "./tool-output"
 import { recentImageReferences } from "./image-references"
 import { CONTINUITY_TOOLS, continuityResult } from "./continuity"
 import { declaredRoots, expandedShellPatterns, externalPatterns, matchingRule, nestedShellPatterns, permissionMatch, permissionName, permissionPatterns, policyRules, projectRulesOf, splitDeclared, toolDisabled, withoutBlindAllow } from "./permission-rules"
@@ -13,22 +13,23 @@ import { contextFiles, readPaths } from "./context-files"
 import { toolOwner } from "./context-rent"
 import { checkpointContext, checkpointOf, compactionDeadline, fingerprint, NativeCompactionError, portableHistory, type CompactionCheckpoint } from "./compaction-checkpoint"
 import { acceptSummary, RESUME_GUIDANCE, summaryBody } from "./compaction-summary"
-import { assistantPhaseContext, buildCompactionPrompt, compactionTriggerContext, engineAnchor, imageAttachmentContext, languageContinuityContext, latestUserRequestContext, localRescueSummary, preservedTailSnapshotContext, recentOperationalContext, renderTranscript, resumeImageRefs, subagentTaskContext, todoContext, transcriptReferenceContext } from "./compaction-context"
+import { type RunningProcess, assistantPhaseContext, buildCompactionPrompt, compactionTriggerContext, engineAnchor, imageAttachmentContext, languageContinuityContext, latestUserRequestContext, localRescueSummary, preservedTailSnapshotContext, recentOperationalContext, renderTranscript, resumeImageRefs, subagentTaskContext, todoContext, transcriptReferenceContext } from "./compaction-context"
 import type { CompactionConfig } from "@mendcode/protocol"
 import { ReasoningError, type ReasoningPort } from "./reasoning"
 import { requestEstimates } from "./request-profile"
 import type { EngineEvent, EnginePort, EngineResolution, TurnInput, TurnOutcome, TaskPort } from "@mendcode/kernel"
-import { attachmentOrder, inlineTexts, layoutAttachments, pastedText, DEFAULT_COMPACT_AT_TOKENS, EARLY_TOOL_CHARS, INPUT_PROGRESS_CHARS, partialToolArgs, toolInputProgress, normalizeRenderSpec, parseRenderSpec, redactSecrets, type BlobRef, type ContextMessage, type ContextReport, type ContextSection, type ItemId, type ModelChoice, type ModelRole, type PermissionMode, type Settings, type PromptCacheMode, type SessionId } from "@mendcode/protocol"
+import { PLAN_APPLY_DEFAULT, PLAN_APPLY_LABELS, attachmentOrder, inlineTexts, layoutAttachments, pastedText, DEFAULT_COMPACT_AT_TOKENS, EARLY_TOOL_CHARS, INPUT_PROGRESS_CHARS, partialToolArgs, toolInputProgress, normalizeRenderSpec, parseRenderSpec, redactSecrets, type BlobRef, type ContextMessage, type ContextReport, type ContextSection, type ItemId, type ModelChoice, type ModelRole, type PermissionMode, type Settings, type PromptCacheMode, type SessionId } from "@mendcode/protocol"
 import { applyShellEnvironment, defaultShell, type ShellEnvironmentPolicy, type ShellPolicy, type WebPolicy } from "@mendcode/tools"
 import type { BackgroundPort, InteractivePort, LoopPort, PeerPort, ThreadPort, ReviewPort, RecalledTurn, SessionRecallPort, QuestionPrompt, Tool, ToolResult, WorkflowPort, WorktreePort, ComputerPort } from "@mendcode/tools"
 import { cacheHash, cacheProject, passiveCache, selectCache } from "./cache-policy"
 import { z } from "zod"
 import { agentAllows, agentSection, capPermission, LIST_AGENTS, subagentCatalog, subagentListing, subagentName, type AgentPort, type AgentProfile } from "./agents"
-import { PLAN_EXIT_TOOL, PLAN_MODE_NOTE, PLAN_REVIEW_TOOL, PLAN_TOOL_NAMES, looksLikePlan, planPhase, safePlanArgs } from "./plan-tools"
+import { PLAN_EXIT_TOOL, PLAN_MODE_NOTE, PLAN_REVIEW_TOOL, PLAN_TOOL_NAMES, READ_ONLY_RUN_REFUSAL, REPORT_ONLY_NOTE, looksLikePlan, planPhase, safePlanArgs } from "./plan-tools"
 import { continuationStream } from "./continuation"
 import { pairToolCalls } from "./history"
 import { GOAL_TOOL_NAMES, GOAL_TOOLS, runGoalTool, type GoalPort } from "./goal-tools"
-import { ADVISOR_NUDGE_PREFIX, ADVISOR_TOOL, advisorOutput, buildAdvisorBrief, createAdvisorTracker, type AdvisorConsultation, type AdvisorPort, type AdvisorTracker, type AdvisorTrigger } from "./advisor"
+import { ADVISOR_EVIDENCE_LIMITS, changedLines, editedPaths as pathsOfEdit, renderAdvisorFiles, selectAdvisorImages, type AdvisorFileRef } from "./advisor-evidence"
+import { ADVISOR_NUDGE_PREFIX, ADVISOR_TOOL, advisorOutput, advisorRequestIndex, buildAdvisorBrief, createAdvisorTracker, type AdvisorConsultation, type AdvisorPort, type AdvisorTracker, type AdvisorTrigger } from "./advisor"
 import { createGrantStore, type GrantStore } from "./grants"
 import { authorityContext, freezeAction, type AuthorityAnchor } from "./permission-context"
 import type { PermissionProvenance, PermissionReview } from "@mendcode/protocol"
@@ -155,7 +156,7 @@ function asLastSent(messages: ModelMessage[], last: SharedPrefix): ModelMessage[
   if (turn?.pruned) pruneHistoryToolOutputs(replayed.slice(0, turn.start))
   return historyDigest(replayed.slice(0, last.sent)) === last.digest ? replayed : undefined
 }
-type CallInput = Pick<TurnInput, "sessionId" | "signal" | "newItemId" | "emit" | "selection" | "workflow" | "turnOptions"> & Partial<Pick<TurnInput, "ask" | "turnId" | "text">> & { /** The call's tools, listed and deferred, for the system prompt. */ catalog?: ToolCatalog }
+type CallInput = Pick<TurnInput, "sessionId" | "signal" | "newItemId" | "emit" | "selection" | "workflow" | "turnOptions" | "readOnlyRun"> & Partial<Pick<TurnInput, "ask" | "turnId" | "text">> & { /** The call's tools, listed and deferred, for the system prompt. */ catalog?: ToolCatalog }
 
 const SUMMARY_PREFIX = "Summary of the conversation so far (earlier messages were compacted):"
 /** A conservative default below common 200k-token context windows; set per model in config. */
@@ -171,6 +172,8 @@ const DEFAULT_MAX_STEPS = 400
  */
 const DEFAULT_COMPACTION_TIMEOUT_MS = 300_000
 const DEFAULT_TASK_STEPS = 150
+/** Tool schemas `warm` builds between two of its caller's collections: about 1 MB of short-lived allocations. */
+const WARM_SPECS_PER_STEP = 8
 /** The tool a user's `!command` runs through. */
 const SHELL_TOOL = "shell"
 /** Inline shell of a custom command: each command's deadline and the size of what may enter the prompt. */
@@ -181,8 +184,9 @@ const hostedLabel = (tool: HostedTool) => (tool === "web_search" ? "web search" 
 /** What the model is told once a hosted tool was taken out of the step. */
 const hostedOffNote = (tools: readonly HostedTool[]) => `The provider's ${tools.map(hostedLabel).join(" and ")} is failing right now and is off for this step. Do not wait for it: answer with what you have, say that it failed, and use another tool if one can do the job.`
 const INLINE_SHELL_MAX_CHARS = 32_000
-/** Tools a sub-agent never gets: it cannot talk to the user or propose memories on its own. */
-const MAIN_AGENT_ONLY = new Set(["sidebar", "question", "remember", "loop", "worktree", "threads", "packages", "pr_watch", "session_meta"])
+/** Tools a sub-agent never gets: it cannot talk to the user, propose memories, or start workflows on its own. */
+const MAIN_AGENT_ONLY = new Set(["sidebar", "question", "remember", "loop", "worktree", "threads", "profiles", "pr_watch", "session_meta"])
+const mainAgentOnly = (name: string) => MAIN_AGENT_ONLY.has(name) || name.startsWith("workflow_")
 
 /** What `permit` answers: the kernel's resolutions, plus a refusal that came from the permission reviewer rather than the user. */
 type PermitResult = (EngineResolution | { kind: "deny"; reason: string; by: "reviewer" | "rule" }) & { permissionSource?: PermissionReview["source"] }
@@ -311,7 +315,7 @@ function writtenPaths(tool: string, args: unknown): string[] {
   return [...new Set(found)]
 }
 
-function approvalTitle(tool: Tool) {
+function approvalTitle(tool: Tool, args?: unknown) {
   if (["memory", "memory_graph", "remember"].includes(tool.name)) return "Save to memory?"
   const mcp = mcpParts(tool.name)
   if (mcp) return `Use ${mcp.server} tool`
@@ -320,7 +324,12 @@ function approvalTitle(tool: Tool) {
   if (tool.name === "worktree") return "Use a git worktree"
   if (tool.name === "shell_session") return "Run interactive command"
   if (tool.name === "browser") return "Use browser"
-  if (tool.name === "threads") return "Read another session"
+  if (tool.name === "user_browser") return "Use your browser"
+  if (tool.name === "tell") return "Message another session"
+  if (tool.name === "threads") {
+    const action = (args as { action?: unknown } | null | undefined)?.action
+    return action === "start" ? "Open a session in another project" : action === "message" ? "Message another session" : "Read another session"
+  }
   if (tool.name === "pr_review") return "Review a pull request"
   return tool.permission === "execute" ? "Run command" : "Edit files"
 }
@@ -335,7 +344,28 @@ function browserDetail(args: Record<string, unknown>) {
   return `browser ${String(args.action)}`
 }
 
-function approvalDetail(call: ToolCall) {
+/** What the user approves for the extension: installing writes files in their browser profile folders; every other step names its site or element. */
+function userBrowserDetail(args: Record<string, unknown>) {
+  const clip = (value: unknown, max: number) => (typeof value === "string" ? (value.length > max ? `${value.slice(0, max - 1)}…` : value) : "")
+  if (args.action === "install") return "install the MendCode browser extension: writes the extension folder and a native-host manifest for each Chromium browser found (nothing is started)"
+  if (args.action === "allow_site") return `allow MendCode to open and use ${clip(args.origin, 200)} in your browser's MendCode tab group`
+  if (args.action === "open") return `your browser: open ${clip(args.url, 300)} in the MendCode tab group (background)`
+  if (args.action === "type") return `your browser: type ${JSON.stringify(clip(args.text, 120))} into ${clip(args.selector, 120)}${args.submit ? " and press Enter" : ""}`
+  if (args.action === "click") return `your browser: click ${clip(args.selector, 120)} in a MendCode tab`
+  return `your browser ${String(args.action)}`
+}
+
+/** The files a formatted patch preview names (`*** Update File: a.ts`), comma-joined; empty for any other preview. */
+function previewFiles(preview: string): string {
+  const files = [...preview.matchAll(/^\*\*\* (?:Add|Update|Delete) File: (.+)$/gm)].map((match) => match[1]!)
+  return files.join(", ").slice(0, 500)
+}
+
+/**
+ * What the approval is about, as one line. `preview` is the tool's own formatted view that follows the line: with one, a call
+ * with no subject of its own is headed by the files that preview names (else the tool's name) instead of the raw JSON of its arguments.
+ */
+function approvalDetail(call: ToolCall, preview?: string) {
   const args = (call.args ?? {}) as Record<string, unknown>
   if (["memory", "memory_graph", "remember"].includes(call.name)) return `${typeof args.text === "string" ? args.text : `Memory ${args.action ?? "write"}`}\n[${args.scope === "user" || args.scope === "global" ? "user" : "project"}] [${args.category ?? (args.categoryIDs as string[] | undefined)?.[0] ?? "general"}]`
   const mcp = mcpParts(call.name)
@@ -345,11 +375,13 @@ function approvalDetail(call: ToolCall) {
   if (call.name === "worktree" && typeof args.action === "string") return `worktree ${args.action}${typeof args.name === "string" ? ` ${args.name.slice(0, 60)}` : ""}${args.remove === true ? " (remove)" : ""}`
   if (call.name === "shell_session" && typeof args.command === "string") return `interactive (PTY, stays open for input): ${args.command}`
   if (call.name === "browser" && typeof args.action === "string") return browserDetail(args)
+  if (call.name === "user_browser" && typeof args.action === "string") return userBrowserDetail(args)
   if (call.name === "notebook_edit" && typeof args.path === "string") return `${args.action ?? "edit"} cell in ${args.path}`
   if (typeof args.command === "string") return args.command
   if (typeof args.path === "string") return args.path
   if (call.name === "glob" && Array.isArray(args.patterns)) return [args.pattern, ...args.patterns].filter((value): value is string => typeof value === "string").join(", ").slice(0, 500)
   if (call.name === "read" && Array.isArray(args.paths)) return readPaths(args).join(", ").slice(0, 500)
+  if (preview) return previewFiles(preview) || call.name
   return JSON.stringify(call.args).slice(0, 500)
 }
 
@@ -362,6 +394,8 @@ function defaultSleep(ms: number, signal: AbortSignal) {
     signal.addEventListener("abort", done, { once: true })
   })
 }
+
+export type LoopRunPort = { reportOnly(sessionId: SessionId): boolean; inheritedReads(sessionId: SessionId): { all: boolean; roots: string[] } | undefined }
 
 /**
  * MendCode's own agent loop: model call → tool calls → results → model call, until the model stops.
@@ -417,6 +451,8 @@ export function createNativeEngine(options: {
   contextWindowFor?(sessionId: SessionId): number | undefined
   /** The user's own window for a session on a model (`/context-window`, else the model's `modelContext`): it wins over the model's, and over the provider's input limit. */
   contextWindowOverrideFor?(sessionId: SessionId, model: string | undefined): number | undefined
+  /** The user's `defaultContextWindow`: the window of a model no one states one for (not the model list, nor the provider's entry). */
+  defaultContextWindow?(): number | undefined
   /** Bytes of an attached blob (the daemon reads its content-addressed store). */
   readBlob?(ref: BlobRef): Promise<Uint8Array>
   readStoredFile?(file: string): Uint8Array | undefined
@@ -482,7 +518,7 @@ export function createNativeEngine(options: {
   onMissingUsage?(): void
   /** Custom agents (`agents/*.md`): the session's primary agent and the sub-agents `task` can name. Absent = only the built-in behaviour. */
   agents?: AgentPort
-  plans?: { latest(sessionId: SessionId): import("@mendcode/protocol").PlanReview | undefined }
+  plans?: { latest(sessionId: SessionId): import("@mendcode/protocol").PlanReview | undefined; /** The line naming the session's open plan file (feature `plan_files`), kept in a compaction's engine anchor. */ pointer?(sessionId: SessionId): string | undefined; /** The folder of the project's plan files: read and edited like the project, with no external-directory question. */ roots?(sessionId: SessionId): string[]; /** Told when a summary carries the pointer line, so the next message does not repeat it. */ anchored?(sessionId: SessionId): void }
   /** Makes a choice an agent asked for usable (an effort the model does not support falls back to its default); used as is when absent. */
   agentModel?(choice: ModelChoice): ModelChoice
   /** The `promptCache` setting, read at each model call; `legacy` when absent (docs/prompt-cache.md). */
@@ -497,6 +533,12 @@ export function createNativeEngine(options: {
   blobPath?(ref: BlobRef): string
   /** Instruction appended as the last user message when asking the model for a summary (prompts/compaction.md); a function can vary it per project root. */
   compactionPrompt: string | ((cwd: string) => string)
+  /**
+   * Loop runs. `reportOnly`: the session is a report-only run's, which is read-only without plan mode's plan tools and note.
+   * `inheritedReads`: what the loop's creator could read without asking (`all` in full access, else directory roots); the
+   * run's reads of those paths do not ask. Writes never inherit.
+   */
+  loopRun?: LoopRunPort
   /** Offers the `task` tool (sub-agents). */
   tasks?: TaskPort
   subagents?: boolean
@@ -551,20 +593,30 @@ export function createNativeEngine(options: {
   const compactionPromptFor = (cwd: string) => (typeof options.compactionPrompt === "function" ? options.compactionPrompt(cwd) : options.compactionPrompt)
   /** Sessions whose compaction was asked for by `needsCompaction` (the actor compacts right after), so `compact` can tell auto from manual. */
   const autoCompaction = new Set<SessionId>()
-  const toSpec = (tool: { name: string; description: string; args: z.ZodType }): ToolSpec => ({ name: tool.name, description: tool.description, parameters: compactToolSchema(z.toJSONSchema(tool.args) as Record<string, unknown>) })
+  // A tool's JSON Schema is built once, the first time a turn lists the tool, and shared by the main and sub-agent toolsets.
+  // Built for every tool when the engine was created, twice, it was the largest part of a daemon's start (docs/performance.md).
+  const builtSpecs = new WeakMap<object, ToolSpec>()
+  const toSpec = (tool: { name: string; description: string; args: z.ZodType }): ToolSpec => {
+    let spec = builtSpecs.get(tool)
+    if (!spec) builtSpecs.set(tool, spec = { name: tool.name, description: tool.description, parameters: compactToolSchema(z.toJSONSchema(tool.args) as Record<string, unknown>) })
+    return spec
+  }
+  /** `toolset` whose `specs` are built the first time something reads them, then kept. */
+  const withLazySpecs = (toolset: Omit<Toolset, "specs">, build: () => ToolSpec[]): Toolset => {
+    let built: ToolSpec[] | undefined
+    return Object.defineProperty(toolset, "specs", { get: () => built ??= build(), enumerable: true, configurable: true }) as Toolset
+  }
   const tools = [...options.tools, ...(options.recall ? SESSION_RECALL_TOOLS.filter((tool) => !options.tools.some((existing) => existing.name === tool.name)) : [])]
-  const subagentTools = tools.filter((tool) => !MAIN_AGENT_ONLY.has(tool.name))
-  const secretsSpecs = secrets ? [toSpec(SECRETS_TOOL)] : []
+  const subagentTools = tools.filter((tool) => !mainAgentOnly(tool.name))
+  const secretsSpecs = () => secrets ? [toSpec(SECRETS_TOOL)] : []
   // `snip` (experimental.snip) is listed here and kept or dropped per turn by `withPolicy`.
-  const snipSpecs = [toSpec(SNIP_TOOL)]
-  const subagentToolset: Toolset = { tools: new Map(subagentTools.map((tool) => [tool.name, tool])), specs: [...subagentTools.map(toSpec), ...secretsSpecs, ...snipSpecs], main: false, allowTask: false }
-  const mainToolset: Toolset = {
+  const snipSpecs = () => [toSpec(SNIP_TOOL)]
+  const subagentToolset = withLazySpecs({ tools: new Map(subagentTools.map((tool) => [tool.name, tool])), main: false, allowTask: false }, () => [...subagentTools.map(toSpec), ...secretsSpecs(), ...snipSpecs()])
+  const mainToolset = withLazySpecs({
     tools: new Map(tools.map((tool) => [tool.name, tool])),
-    specs: [...tools.map(toSpec), ...secretsSpecs, ...snipSpecs, toSpec(PLAN_TOOL), ...(options.subagents ? [toSpec(TASK_TOOL_SHARED)] : []), ...(options.goals ? GOAL_TOOLS.map(toSpec) : []), ...(options.advisor ? [toSpec(ADVISOR_TOOL)] : []), toSpec(PLAN_REVIEW_TOOL), toSpec(PLAN_EXIT_TOOL), ...(options.continuity ? CONTINUITY_TOOLS.map(toSpec) : []), ...(options.reasoning ? [toSpec(REASONING_AUTO_TOOL)] : [])],
     main: true,
     allowTask: options.subagents === true,
-  }
-  const specs = mainToolset.specs
+  }, () => [...tools.map(toSpec), ...secretsSpecs(), ...snipSpecs(), toSpec(PLAN_TOOL), ...(options.subagents ? [toSpec(TASK_TOOL_SHARED)] : []), ...(options.goals ? GOAL_TOOLS.map(toSpec) : []), ...(options.advisor ? [toSpec(ADVISOR_TOOL)] : []), toSpec(PLAN_REVIEW_TOOL), toSpec(PLAN_EXIT_TOOL), ...(options.continuity ? CONTINUITY_TOOLS.map(toSpec) : []), ...(options.reasoning ? [toSpec(REASONING_AUTO_TOOL)] : [])])
   const latestPlans = new Map<SessionId, import("@mendcode/protocol").PlanReview>()
 
   /** Advisor admission per session (caps, once-per-turn reviews); checkpoint calls carry their trigger by call id. */
@@ -578,13 +630,34 @@ export function createNativeEngine(options: {
   /** The advisor applies to this loop: the main agent, the session has one, and the tool survived every narrowing (agent, tier, run limits). */
   const advisorOffered = (sessionId: SessionId, toolset: Toolset) => toolset.main && !!options.advisor?.enabled(sessionId) && toolset.specs.some((spec) => spec.name === ADVISOR_TOOL.name)
   /** One consultation: bounded, redacted brief; counted against the caps; its usage reported under the advisor's model. */
-  async function consultAdvisor(input: TurnInput, trigger: AdvisorTrigger, question: string, messages: readonly ModelMessage[], plan?: string): Promise<AdvisorConsultation> {
+  async function consultAdvisor(input: TurnInput, trigger: AdvisorTrigger, question: string, messages: readonly ModelMessage[], plan?: string, evidence?: { files?: AdvisorFileRef[] | undefined; images?: string[] | undefined }): Promise<AdvisorConsultation> {
     const port = options.advisor!
     const limits = port.limits(input.sessionId)
-    const diff = trigger === "plan" ? undefined : await port.diff?.(options.cwdFor(input.sessionId), input.signal).catch(() => undefined)
-    const brief = buildAdvisorBrief({ messages, question, trigger, plan: plan ?? latestPlans.get(input.sessionId)?.markdown, diff, maxTokens: limits.maxBriefTokens, mask: (text) => redactSecrets(secrets ? secrets.mask(input.sessionId, text) : text).text })
+    const cwd = options.cwdFor(input.sessionId)
+    const diff = trigger === "plan" ? undefined : await port.diff?.(cwd, input.signal).catch(() => undefined)
+    const notes: string[] = []
+    const images: RequestImage[] = []
+    // The request's own images are part of what the advisor judges against; the executor's named ones come after them.
+    const request = messages[advisorRequestIndex(messages)]
+    const requestImages = request?.role === "user" ? (request.attachments ?? []).filter((ref) => ref.mime.startsWith("image/")) : []
+    if (evidence?.images?.length || requestImages.length) {
+      const named = evidence?.images?.length ? selectAdvisorImages({ wanted: evidence.images, messages }) : { refs: [], missing: [] }
+      const picked = { refs: [...requestImages, ...named.refs.filter((ref) => !requestImages.some((own) => own.sha256 === ref.sha256))].slice(0, ADVISOR_EVIDENCE_LIMITS.maxImages), missing: named.missing }
+      if (!port.acceptsImages?.(input.sessionId)) notes.push(`[${(evidence?.images?.length ?? 0) + requestImages.length} image(s) of the request or named by the executor were not sent: the advisor model does not accept images]`)
+      else {
+        for (const ref of picked.refs) {
+          const bytes = await options.readBlob?.(ref).catch(() => undefined)
+          if (bytes) images.push({ mime: ref.mime, base64: Buffer.from(bytes).toString("base64") })
+          else picked.missing.push(ref.name ?? ref.sha256.slice(0, 12))
+        }
+        if (images.length) notes.push(`[${images.length} image(s) are attached, in order: ${picked.refs.map((ref) => `${ref.name ?? ref.sha256.slice(0, 12)}${requestImages.includes(ref) ? " (from the user's request)" : " (from the executor)"}`).join(", ")}]`)
+        if (picked.missing.length) notes.push(`[images not found in this session: ${picked.missing.join(", ")}]`)
+      }
+    }
+    const files = evidence?.files?.length ? await renderAdvisorFiles({ files: evidence.files, cwd }) : ""
+    const brief = buildAdvisorBrief({ messages, question, trigger, plan: plan ?? latestPlans.get(input.sessionId)?.markdown, diff, evidence: [files, ...notes].filter(Boolean).join("\n\n"), maxTokens: limits.maxBriefTokens, mask: (text) => redactSecrets(secrets ? secrets.mask(input.sessionId, text) : text).text })
     advisorTracker(input.sessionId).consulted(trigger)
-    const consultation = await port.consult({ sessionId: input.sessionId, trigger, brief, signal: input.signal })
+    const consultation = await port.consult({ sessionId: input.sessionId, trigger, brief, ...(images.length ? { images } : {}), signal: input.signal })
     const usage = consultation.usage
     if (usage) input.emit({ type: "usage", provider: usage.provider, model: usage.model, input: usage.input, output: usage.output, reasoning: usage.reasoning ?? 0, cacheRead: usage.cacheRead ?? 0, cacheWrite: usage.cacheWrite ?? 0 })
     return consultation
@@ -642,11 +715,27 @@ export function createNativeEngine(options: {
     // A tool that declares a tier (`Tool.tier`, docs/tiers.md) is offered only when the user's tier includes it.
     const tier = policy().tier
     const inTier = (name: string) => name === "session_meta" ? featureOn(policy(), "session_meta") : tier === undefined || tierIncludes(tier, base.tools.get(name)?.tier ?? "minimalist")
-    const offered = (name: string) => allowed(name) && inTier(name) && (name !== "packages" || !!options.packages && featureOn(policy(), "package_tools"))
+    const offered = (name: string) => allowed(name) && inTier(name) && (name !== "profiles" || !!options.packages && featureOn(policy(), "profile_tools"))
     return { ...base, tools: new Map([...base.tools].filter(([name]) => offered(name))), specs: base.specs.filter((spec) => offered(spec.name)), allowTask: base.allowTask && offered(TASK_TOOL.name) }
   }
 
-  function withDiscovery(base: Toolset, messages: readonly ModelMessage[], plan = false): Toolset {
+  /** A toolset without `plan_submit`, `plan_review` and `plan_exit` (report-only loop runs). */
+  function withoutPlanTools(base: Toolset): Toolset {
+    const keep = (name: string) => !PLAN_TOOL_NAMES.has(name)
+    return { ...base, tools: new Map([...base.tools].filter(([name]) => keep(name))), specs: base.specs.filter((spec) => keep(spec.name)), ...(base.catalog ? { catalog: { listed: base.catalog.listed.filter(keep), deferred: base.catalog.deferred.filter(keep) } } : {}) }
+  }
+
+  /** The session's commands still running, for the compaction anchor. */
+  function runningProcesses(sessionId: SessionId): RunningProcess[] {
+    const at = Date.now()
+    const seconds = (startedAt: number) => Math.max(0, Math.round((at - startedAt) / 1_000))
+    return [
+      ...(options.background?.(sessionId).list() ?? []).map((task): RunningProcess => ({ kind: "background", id: task.id, command: task.command, running: task.status === "running", seconds: seconds(task.startedAt) })),
+      ...(options.interactive?.(sessionId).list() ?? []).map((session): RunningProcess => ({ kind: "terminal", id: session.id, command: session.command, running: session.status === "running", seconds: seconds(session.startedAt) })),
+    ]
+  }
+
+  function withDiscovery(base: Toolset, messages: readonly ModelMessage[], plan = false, sessionId?: SessionId): Toolset {
     // Retain recent conversation during compaction, but renew discovery after its retained turns.
     const checkpoint = checkpointOf(messages)
     let discoveryStart = 0
@@ -662,12 +751,16 @@ export function createNativeEngine(options: {
     const primary = catalogPrimary()
     const active = activeToolNames(messages.slice(discoveryStart), primary)
     // Auxiliary tools the conversation calls for are listed without a search (`impliedTools`), after the ones already found.
-    for (const name of impliedTools(messages.slice(discoveryStart), plan)) if (!primary(name)) active.add(name)
+    for (const name of impliedTools(messages.slice(discoveryStart), plan, sessionId !== undefined && (options.background?.(sessionId).list().length ?? 0) > 0)) if (!primary(name)) active.add(name)
+    // A session with an unfinished goal ends it with `update_goal`, which the continuation text names: the goal tools are listed for as long as it has one
+    // (no search first), and cost nothing in a session without a goal, whatever `plan_tools` says.
+    const goal = sessionId !== undefined && options.goals ? options.goals(sessionId).get() : undefined
+    if (goal && goal.status !== "complete" && goal.status !== "budget_limited") for (const name of GOAL_TOOL_NAMES) if (!primary(name)) active.add(name)
     const codeAllowed = policy().experimental?.code_mode === true && (!base.agent || agentAllows(base.agent, CODE_TOOL.name))
     const eligible = withPolicy(codeAllowed ? { ...base, specs: [...base.specs.filter((spec) => spec.name !== CODE_TOOL.name), toSpec(CODE_TOOL)], codeCatalog: base, codeActive: active } : base)
     const discovery = discoveryOn()
     const planDeferred = planToolsDeferred()
-    const deferred = (name: string) => name === "packages" || discovery && !primary(name) || planDeferred && PLAN_TOOLS.has(name) && !primary(name)
+    const deferred = (name: string) => name === "profiles" || discovery && !primary(name) || planDeferred && PLAN_TOOLS.has(name) && !primary(name)
     const allListed = (specs: ToolSpec[]): Toolset => ({ ...eligible, specs, catalog: { listed: specs.map((spec) => spec.name), deferred: [] } })
     if (!eligible.specs.some((spec) => deferred(spec.name))) return allListed(eligible.specs)
     // Without permission to search, keep the allowed catalog usable directly.
@@ -818,7 +911,9 @@ export function createNativeEngine(options: {
       return { ...rest, contextWindow: override }
     }
     const window = options.contextWindowFor?.(sessionId)
-    return { ...(window ? { contextWindow: window } : {}), ...options.provider.compactionLimits?.(choice?.model) }
+    const limits = { ...(window ? { contextWindow: window } : {}), ...options.provider.compactionLimits?.(choice?.model) }
+    const fallback = options.defaultContextWindow?.()
+    return limits.contextWindow || !fallback ? limits : { ...limits, contextWindow: fallback }
   }
   const compactAt = (sessionId: SessionId) => compactionThreshold(compactionConfig(), limitsFor(sessionId), typeof options.compactAtTokens === "function" ? options.compactAtTokens(sessionId, choiceFor(modelFor(sessionId, "main"), lastAgent.get(sessionId))?.model) : options.compactAtTokens)
   /** Tokens of old tool output each session's last request left out, so the size `pruneNow` compares does not fall because of the prune itself. */
@@ -896,7 +991,7 @@ export function createNativeEngine(options: {
    * answers again cuts the wait short. An answer cut after some text is continued in the same item (the partial goes
    * back as history with the continuation prompt, and whatever the model repeats of it is trimmed).
    */
-  async function callModel(input: CallInput, messages: ModelMessage[], textKind: "agent_message" | "compaction" = "agent_message", callTools: ToolSpec[] = textKind === "agent_message" ? specs : [], role: ModelRole = textKind === "compaction" ? "compaction" : "main", agent?: AgentProfile, compact?: { maxOutputTokens?: number; meta: Record<string, string | number | boolean>; cacheMessages?: readonly ModelMessage[]; /** Repeat the last main call's request (`messages` is then the history alone) and append `prompt` as one more user message. */ share?: { prompt: string; last: SharedPrefix }; /** A forked child's call: the parent's system prompt, tools, model, effort and cache key ahead of the child's own history. */ fork?: ForkPrefix }, final = false) {
+  async function callModel(input: CallInput, messages: ModelMessage[], textKind: "agent_message" | "compaction" = "agent_message", callTools: ToolSpec[] = textKind === "agent_message" ? mainToolset.specs : [], role: ModelRole = textKind === "compaction" ? "compaction" : "main", agent?: AgentProfile, compact?: { maxOutputTokens?: number; meta: Record<string, string | number | boolean>; cacheMessages?: readonly ModelMessage[]; /** Repeat the last main call's request (`messages` is then the history alone) and append `prompt` as one more user message. */ share?: { prompt: string; last: SharedPrefix }; /** A forked child's call: the parent's system prompt, tools, model, effort and cache key ahead of the child's own history. */ fork?: ForkPrefix }, final = false) {
     // A sub-agent's context is its own; the session's context size comes from its main calls only.
     const trackContext = role !== "subagent"
     const share = compact?.share
@@ -975,7 +1070,7 @@ export function createNativeEngine(options: {
         if (!share && !fork) {
           const agentText = agent ? agentSection(agent) : ""
           if (agentText) system = `${system}\n\n${agentText}`
-          if (role === "plan") system = `${system}\n\n${PLAN_MODE_NOTE}`
+          if (role === "plan") system = `${system}\n\n${(input.readOnlyRun === true || options.loopRun?.reportOnly(input.sessionId)) ? REPORT_ONLY_NOTE : PLAN_MODE_NOTE}`
           const known = secrets?.list(input.sessionId) ?? []
           if (known.length) system = `${system}\n\n${secretsNote(known)}`
           if (input.turnOptions?.format && role !== "subagent" && textKind === "agent_message") system = `${system}\n\n${STRUCTURED_NOTE}`
@@ -1231,7 +1326,7 @@ export function createNativeEngine(options: {
    */
   async function permit(input: TurnInput, tool: Tool, call: ToolCall, itemId: ItemId, toolset: Toolset, frozen: ReturnType<typeof freezeAction>, explicitApproval = false): Promise<PermitResult> {
     const parsedPermission = tool.args.safeParse(call.args)
-    const permissionContext = { threads: options.threads?.(input.sessionId) }
+    const permissionContext = { threads: options.threads?.(input.sessionId), peers: options.peers?.(input.sessionId) }
     if (parsedPermission.success && tool.permissionFor) tool = { ...tool, permission: tool.permissionFor(parsedPermission.data, permissionContext) }
     tool = sessionRecallPermission(tool, call.args)
     const mode = modeOf(input, toolset)
@@ -1256,23 +1351,26 @@ export function createNativeEngine(options: {
     const rulePatterns = nested.length ? [...patterns, ...nested] : patterns
     const denied = rulePatterns.some((pattern) => matchingRule(permissionName(tool.name), pattern, rulesFor(toolset, input.sessionId))?.action === "deny")
     if (denied) return settle({ kind: "deny", by: "rule", reason: `permission rule denies ${tool.name}` }, "deterministic", "Permission rule denies the action")
-    if (mode === "plan" && tool.permission !== "read") return { kind: "deny", by: "rule", reason: "plan mode is read-only; investigate, then propose the plan with plan_submit" }
+    // An internal read-only run (a PR review, a report-only loop) is in plan mode only to stay read-only: its refusal says nothing of plans.
+    if (mode === "plan" && tool.permission !== "read") return { kind: "deny", by: "rule", reason: input.readOnlyRun === true || options.loopRun?.reportOnly(input.sessionId) ? READ_ONLY_RUN_REFUSAL : "plan mode is read-only; investigate, then propose the plan with plan_submit" }
     const pluginPermission = hooks?.has("permission.ask", cwd) ? await hooks.permission?.({ sessionId: input.sessionId, cwd, tool: tool.name, args: structuredClone(call.args as Record<string, unknown>) }) : undefined
     if (pluginPermission?.status === "deny") return { kind: "deny", by: "rule", reason: "plugin permission hook denied the action" }
-    const previewOf = (data: unknown) => tool.preview!(data as never, { cwd, signal: input.signal, ...(options.packages ? { packages: options.packages(input.sessionId) } : {}), ...(options.workflows ? { workflows: options.workflows(input.sessionId) } : {}), ...(options.loops ? { loops: options.loops(input.sessionId) } : {}), ...(options.worktrees ? { worktrees: options.worktrees(input.sessionId) } : {}), ...(options.prWatch ? { prWatch: options.prWatch(input.sessionId) } : {}), ...(options.prReview ? { prReview: options.prReview(input.sessionId) } : {}), ...(options.aiConfig ? { aiConfig: options.aiConfig(input.sessionId) } : {}) }).catch(() => undefined)
+    const previewOf = (data: unknown) => tool.preview!(data as never, { cwd, signal: input.signal, ...(options.packages ? { packages: options.packages(input.sessionId) } : {}), ...(options.workflows ? { workflows: options.workflows(input.sessionId) } : {}), ...(options.loops ? { loops: options.loops(input.sessionId) } : {}), ...(options.worktrees ? { worktrees: options.worktrees(input.sessionId) } : {}), ...(options.prWatch ? { prWatch: options.prWatch(input.sessionId) } : {}), ...(options.prReview ? { prReview: options.prReview(input.sessionId) } : {}), ...(options.aiConfig ? { aiConfig: options.aiConfig(input.sessionId) } : {}), ...(options.threads ? { threads: options.threads(input.sessionId) } : {}), ...(options.peers ? { peers: options.peers(input.sessionId) } : {}) }).catch(() => undefined)
     // `approval: "always"`: the user sees exactly what will run, in every mode and whatever the allow rules or grants say (a tool that runs code the model wrote).
-    const always = tool.approval === "always" || parsedPermission.success && tool.approvalFor?.(parsedPermission.data) === true
+    const always = tool.approval === "always" || parsedPermission.success && tool.approvalFor?.(parsedPermission.data, permissionContext) === true
     // Reading another session asks once per call, except in full access (the user chose to run unattended) or when the user's own
     // message names that session's id: either is consent to read it.
     const named = parsedPermission.success && typeof (parsedPermission.data as { sessionId?: unknown }).sessionId === "string" && userText.includes((parsedPermission.data as { sessionId: string }).sessionId)
+    const refusal = parsedPermission.success ? tool.refusalFor?.(parsedPermission.data, permissionContext) : undefined
+    if (refusal) return settle({ kind: "deny", by: "rule", reason: refusal }, "deterministic", refusal)
     const individual = !always && mode !== "full" && !named && parsedPermission.success && tool.individualApprovalFor?.(parsedPermission.data, permissionContext) === true
     if (always || individual) {
       const shown = always && parsedPermission.success && tool.preview ? await previewOf(parsedPermission.data) : undefined
-      const detail = always ? (shown ? `${approvalDetail(call)}\n\n${shown}` : approvalDetail(call)) : `This call reads another session. Attach it with @thread or approve this operation.\n\n${approvalDetail(call)}`
+      const detail = always ? (shown ? `${approvalDetail(call, shown)}\n\n${shown}` : approvalDetail(call)) : `This call reads another session. Attach it with @thread or approve this operation.\n\n${approvalDetail(call)}`
       const refusal = await askRefusal(input, tool, call, detail)
       if (refusal) return settle(refusal, "deterministic", refusal.reason ?? "Blocked by a PermissionRequest hook")
       record("waiting_manual", "manual", "Individual approval required")
-      const answer = await input.ask({ kind: "approval", title: approvalTitle(tool), detail, itemId, tool: tool.name, permission: tool.permission, permissionContext: { name: permissionName(tool.name), patterns, always: [] } })
+      const answer = await input.ask({ kind: "approval", title: approvalTitle(tool, call.args), detail, itemId, tool: tool.name, permission: tool.permission, permissionContext: { name: permissionName(tool.name), patterns, always: [] } })
       if (input.signal.aborted) return settle({ kind: "abandoned" }, "manual", "Approval cancelled")
       if (!withPolicy(toolset).specs.some((spec) => spec.name === tool.name)) return settle({ kind: "deny", by: "rule", reason: `tool unavailable: ${tool.name}` }, "deterministic", "Tool disabled during approval")
       if (rulePatterns.some((pattern) => matchingRule(permissionName(tool.name), pattern, rulesFor(toolset, input.sessionId))?.action === "deny")) return settle({ kind: "deny", by: "rule", reason: `permission rule denies ${tool.name}` }, "deterministic", "Permission changed during approval")
@@ -1287,14 +1385,22 @@ export function createNativeEngine(options: {
         if (readGate && readGate.kind !== "approve") return settle(readGate, "deterministic", "Image reference read refused")
       }
     }
-    const extraRoots = declaredRoots(policy().additionalDirectories, options.runLimits?.(input.sessionId)?.addDirs)
+    const extraRoots = declaredRoots(policy().additionalDirectories, options.runLimits?.(input.sessionId)?.addDirs, options.plans?.roots?.(input.sessionId))
     const allowCommands = options.permissionAllow?.()
     // `smartSandboxTrust` (off by default): a shell command inside an enforced OS sandbox with no network is contained, so smart mode does not ask about a command it merely does not know.
     const sandboxed = mode === "smart" && (tool.name === "shell" || tool.name === "shell_session") && options.smartSandboxTrust?.() === true && options.sandbox?.({ sessionId: input.sessionId, cwd })?.network === false
-    const smart = mode === "smart" ? classifySmart({ tool, args: call.args, cwd, ...(extraRoots.length ? { extraRoots } : {}), ...(allowCommands ? { allowCommands } : {}), ...(sandboxed ? { sandboxed } : {}) }) : undefined
+    const readOnly = options.tasks?.readOnly?.(input.sessionId) === true
+    const smart = mode === "smart" ? classifySmart({ tool, args: call.args, cwd, ...(readOnly ? { readOnly } : {}), ...(extraRoots.length ? { extraRoots } : {}), ...(allowCommands ? { allowCommands } : {}), ...(sandboxed ? { sandboxed } : {}) }) : undefined
+    // A read-only session (`/btw`) runs only what the read-only classification passes; an approval is never the way out.
+    if (readOnly && smart && smart.decision !== "allow") return settle({ kind: "deny", by: "rule", reason: `this session is read-only: ${smart.reason}` }, "deterministic", smart.reason)
     // What nobody should approve by reflex (`rm -rf ~`, `mkfs`) is refused before any prompt, including the external-directory one.
     if (smart?.decision === "deny" && !explicitApproval) return settle({ kind: "deny", by: "rule", reason: `smart mode never runs this: ${smart.reason}` }, "deterministic", smart.reason)
-    const { external: outside, declared } = splitDeclared(externalPatterns(tool.name, call.args, cwd), extraRoots)
+    const split = splitDeclared(externalPatterns(tool.name, call.args, cwd), extraRoots)
+    // A loop run reads what its creator could read without asking (never writes); an explicit external_directory deny still applies to those paths.
+    const inherit = tool.permission === "read" ? options.loopRun?.inheritedReads(input.sessionId) : undefined
+    const inherited = inherit && !inherit.all ? splitDeclared(split.external, inherit.roots) : undefined
+    const outside = inherit?.all ? [] : inherited ? inherited.external : split.external
+    const declared = [...split.declared, ...(inherit?.all ? split.external : inherited?.declared ?? [])]
     const declaredDenied = declared.find((pattern) => matchingRule("external_directory", pattern, rulesFor(toolset, input.sessionId))?.action === "deny")
     if (declaredDenied) return settle({ kind: "deny", by: "rule", reason: `external_directory ${declaredDenied}` }, "deterministic", "External directory rule denies the declared directory")
     if (outside.length) {
@@ -1338,7 +1444,7 @@ export function createNativeEngine(options: {
     if (grants.takeRetry(input.sessionId, frozen.action.fingerprint)) return settle({ kind: "approve", scope: "once" }, "manual", "Retry approved by the user after a reviewer denial")
     const parsed = tool.args.safeParse(call.args)
     const preview = parsed.success && tool.preview ? await previewOf(parsed.data) : undefined
-    let detail = preview ? `${approvalDetail(call)}\n\n${preview}` : approvalDetail(call)
+    let detail = preview ? `${approvalDetail(call, preview)}\n\n${preview}` : approvalDetail(call)
     if (smart) {
       const reviewer = options.permissionReviewer?.enabled(input.sessionId) ? options.permissionReviewer : undefined
       if (reviewer) record("reviewing", "model", "Reviewing causal user authority and execution identity")
@@ -1359,7 +1465,7 @@ export function createNativeEngine(options: {
     const hookRefusal = await askRefusal(input, tool, call, detail)
     if (hookRefusal) return settle(hookRefusal, "deterministic", hookRefusal.reason ?? "Blocked by a PermissionRequest hook")
     record("waiting_manual", "manual", "Waiting for user approval")
-    const answer = await input.ask({ kind: "approval", title: approvalTitle(tool), detail, itemId, tool: tool.name, permission: tool.permission, permissionContext: { name: permissionName(tool.name), patterns, always: patterns } })
+    const answer = await input.ask({ kind: "approval", title: approvalTitle(tool, call.args), detail, itemId, tool: tool.name, permission: tool.permission, permissionContext: { name: permissionName(tool.name), patterns, always: patterns } })
     if (input.signal.aborted) return settle({ kind: "abandoned" }, "manual", "Approval cancelled")
     if (answer.kind === "approve" && answer.scope === "session") grants.add(input.sessionId, tool.name, tool.permission, undefined, undefined, provenance)
     return settle(answer, "manual", answer.kind === "deny" ? answer.reason ?? "User denied" : answer.kind === "approve" ? "User approved" : "Approval abandoned")
@@ -1391,7 +1497,7 @@ export function createNativeEngine(options: {
     const finish = async (raw: ToolResult, stop = false, shown?: string) => {
       const display = shown ?? (raw.display !== undefined && !raw.isError ? redactSecrets(raw.display).text : undefined)
       // Whatever a tool printed, a secret of this session only ever leaves here as its marker.
-      const masked = withReportedSavings({ result: maskResult(raw, (text) => redactSecrets(maskText(text)).text), tool: call.name })
+      const masked = maskResult(raw, (text) => redactSecrets(maskText(text)).text)
       // Command output filters (tool_output.filters): the full text is saved first and the result starts with its path.
       const condensed = await condenseCommandOutput({ result: masked, tool: call.name, args, limits: options.toolOutput?.(), save: options.saveToolOutput })
       const safe = condensed ?? masked
@@ -1527,6 +1633,7 @@ export function createNativeEngine(options: {
       const result = parsed.success ? options.reasoning.requestIncrease(input.sessionId, parsed.data.reason, parsed.data.evidence) : { status: "unchanged", reason: "Concrete verification or technical evidence required" }
       return finish({ output: JSON.stringify(result), truncated: false, title: "Reasoning Auto", isError: !parsed.success })
     }
+    if (PLAN_TOOL_NAMES.has(call.name) && (input.readOnlyRun === true || options.loopRun?.reportOnly(input.sessionId))) return finish({ output: "report-only: write the report as your answer; there is no plan to submit", truncated: false, title: "report-only", isError: true })
     if (PLAN_TOOL_NAMES.has(call.name) && toolset.main) {
       if (call.name === "plan_exit") {
         const args = PLAN_EXIT_TOOL.args.safeParse(call.args)
@@ -1580,7 +1687,7 @@ export function createNativeEngine(options: {
       if (!options.advisor.enabled(input.sessionId)) return finish({ output: "advisor unavailable: no advisor model is set for this session", truncated: false, title: "advisor", isError: true })
       const refusal = trigger === "tool" ? advisorTracker(input.sessionId).refusal(options.advisor.limits(input.sessionId)) : undefined
       if (refusal) return finish({ output: `advisor unavailable: ${refusal}`, truncated: false, title: "advisor", isError: true })
-      const consultation = await consultAdvisor(input, trigger, parsedAdvisor.data.question, messages)
+      const consultation = await consultAdvisor(input, trigger, parsedAdvisor.data.question, messages, undefined, { files: parsedAdvisor.data.files, images: parsedAdvisor.data.images })
       return finish({ output: advisorOutput(trigger, consultation), truncated: false, title: `advisor · ${consultation.verdict.verdict}`, isError: advisorFailed(consultation), meta: advisorMeta(trigger, consultation) })
     }
     const tool = toolset.tools.get(call.name)
@@ -1597,7 +1704,8 @@ export function createNativeEngine(options: {
     const shellSettings = call.name === "shell" || call.name === "shell_session" ? options.shellSettings?.() : undefined
     const inherited = shellSettings?.environment ? applyShellEnvironment(process.env, shellSettings.environment) : process.env
     // A `mendcode` the model runs (`mendcode docs`, `mendcode status`) reads the data directory of the daemon it runs under, not the default one.
-    const dataEnvironment = shellSettings?.dataDir ? { MENDCODE_V2_DIR: shellSettings.dataDir } : undefined
+    // Both names: an older `mendcode` on the PATH reads only the V2 one.
+    const dataEnvironment = shellSettings?.dataDir ? { MENDCODE_DIR: shellSettings.dataDir, MENDCODE_V2_DIR: shellSettings.dataDir } : undefined
     const credentials = options.tools.includes(tool) && (call.name === "shell" || call.name === "shell_session") ? secrets?.environment?.(input.sessionId) : undefined
     let frozen = freezeAction(call.name, boundArgs, options.cwdFor(input.sessionId), sessionEnvironment || shellEnvironment || credentials || dataEnvironment ? { ...inherited, ...dataEnvironment, ...sessionEnvironment, ...shellEnvironment, ...credentials } : inherited, executionShell)
     const shellPolicy = shellSettings?.policy?.prefix || shellSettings?.policy?.login ? shellSettings.policy : undefined
@@ -1851,12 +1959,15 @@ export function createNativeEngine(options: {
     /** Plan mode: a review the user accepted or closed is settled (the model's next plain text is its answer, not a new plan); at most two plain-text plans are offered per turn. */
     let planSettled = false
     let autoReviews = 0
+    const reportOnlyRun = (input.readOnlyRun === true || options.loopRun?.reportOnly(input.sessionId)) === true
     for (let step = 0; step < maxSteps; step++) {
       // The last step of the engine's own limit (or the agent's) is a text-only summary of the work and what remains, so the turn never
       // ends on a bare error; a cap the caller set (`--max-turns`) stops the turn as it is.
       const final = !(loop.cap !== undefined && maxSteps === loop.cap) && step === maxSteps - 1
       if (final) messages.push({ role: "user", content: "The agent step limit is reached. Summarize the work and what remains. Reply with text only; do not call tools." })
-      const available = withDiscovery(toolset, messages, input.permissionMode() === "plan")
+      const discovered = withDiscovery(toolset, messages, input.permissionMode() === "plan", input.sessionId)
+      // A report-only loop run has no plan to submit: the plan tools are not offered.
+      const available = reportOnlyRun ? withoutPlanTools(discovered) : discovered
       if (loop.trackContext) lastSpecs.set(input.sessionId, final ? [] : available.specs)
       if (loop.trackContext && available.catalog) lastCatalog.set(input.sessionId, available.catalog)
       let reply: Awaited<ReturnType<typeof callModel>>
@@ -1879,7 +1990,7 @@ export function createNativeEngine(options: {
         repeats = 0
       }
       // A plan written as plain text in plan mode is shown in the review like a plan_review call (the model was told to use it): the user can apply it.
-      if (!final && !input.signal.aborted && !planSettled && autoReviews < 2 && reply.toolCalls.length === 0 && toolset.main && !loop.structured && !loop.fork && modeOf(input, toolset) === "plan" && looksLikePlan(reply.text)) {
+      if (!final && !input.signal.aborted && !planSettled && !reportOnlyRun && autoReviews < 2 && reply.toolCalls.length === 0 && toolset.main && !loop.structured && !loop.fork && modeOf(input, toolset) === "plan" && looksLikePlan(reply.text)) {
         autoReviews++
         reply.toolCalls.push({ callId: `plan_review_${input.turnId}_${step}`, name: PLAN_REVIEW_TOOL.name, args: safePlanArgs({ markdown: reply.text.trim().slice(0, 30_000) }, (text) => secrets ? secrets.mask(input.sessionId, text) : text) })
       }
@@ -1958,7 +2069,7 @@ export function createNativeEngine(options: {
         }
         if (toolset.main && options.advisor && call.name !== ADVISOR_TOOL.name && !input.signal.aborted) {
           const tracker = advisorTracker(input.sessionId)
-          if (!result.isError && (call.name === "edit" || call.name === "write" || call.name === "apply_patch")) tracker.noteEdit()
+          if (!result.isError && (call.name === "edit" || call.name === "write" || call.name === "apply_patch")) tracker.noteEdit({ paths: pathsOfEdit(call), lines: changedLines(call) })
           if (result.isError && tracker.noteFailure(signature, result.output.trim().split("\n", 1)[0]!.slice(0, 200))) advisorRepeat = true
         }
         // Identical captures reuse an image only while its blob is still visible in this model context.
@@ -2012,6 +2123,8 @@ export function createNativeEngine(options: {
     input.emit({ type: "item.delta", itemId, text: review.markdown })
     const answer = await input.ask({ kind: "approval", title: "Review plan", detail: "", itemId, tool: "plan_review", planReview: review })
     const reply = answer.kind === "plan_review" ? answer : answer.kind === "approve" ? { action: "apply" as const } : answer.kind === "deny" ? { action: "reject" as const, reason: answer.reason } : { action: "close" as const }
+    // No decision (the daemon restarted, the request was cancelled or the turn ended): the user did not reject the plan, and the model must not say so.
+    if (answer.kind === "abandoned") return { output: "Plan review was interrupted before the user decided (no approval and no rejection). Do not treat this as a rejection: ask the user whether to continue, or wait.", truncated: false, title: "plan interrupted", isError: false }
     const markdown = "markdown" in reply && reply.markdown ? reply.markdown : review.markdown
     latestPlans.set(input.sessionId, { ...review, markdown })
     const comments = "comments" in reply && reply.comments ? `\nUser implementation comments:\n${reply.comments}` : ""
@@ -2025,8 +2138,10 @@ export function createNativeEngine(options: {
       Object.assign(toolset, withAgent(withSubagents(withProjectTools(mainToolset, toolset.extras ?? []), [...(toolset.subagents?.values() ?? [])]), target.profile), { agent: target.profile })
       lastAgent.set(input.sessionId, target.profile)
       lastSpecs.set(input.sessionId, toolset.specs)
-      input.setPermissionMode("ask")
-      return { output: `Plan approved. Switched to ${target.name}; implement this approved Markdown and verify it:\n\n${markdown}${comments}`, truncated: false, title: "plan approved", isError: false, meta: { planExitAgent: target.name, phase: review.phase } }
+      // The reviewer's choice, full access unless they picked another: the session runs the approved plan without asking again (docs/plan-review.md).
+      const access = "permission" in reply && reply.permission ? reply.permission : PLAN_APPLY_DEFAULT
+      input.setPermissionMode(access)
+      return { output: `Plan approved. Switched to ${target.name} with ${PLAN_APPLY_LABELS[access]}; implement this approved Markdown and verify it:\n\n${markdown}${comments}`, truncated: false, title: "plan approved", isError: false, meta: { planExitAgent: target.name, phase: review.phase } }
     }
     if (reply.action === "accept") return { output: `Plan accepted. Acceptance does not authorize implementation. Stay read-only and return the approved plan.\n\n${markdown}${comments}`, truncated: false, title: "plan accepted", isError: false }
     if (reply.action === "edit") return { output: `The user edited the plan. Treat this Markdown as the source of truth; stay read-only.\n\n${markdown}${comments}`, truncated: false, title: "plan edited", isError: false }
@@ -2095,12 +2210,20 @@ export function createNativeEngine(options: {
     return { output: `${forkLine}${answer || "(the task finished without an answer)"}`, truncated: false, title, isError: !answer, meta }
   }
 
-  /** What a session's main agent is offered, as a turn would build it. */
-  async function hostToolset(sessionId: SessionId, directory: string): Promise<Toolset> {
+  /** A sub-agent's tools: no advisor, workflows or main-agent tools, and `task` only when `subagentDepth` lets it nest. */
+  function baseToolset(sessionId: SessionId, child: boolean): Toolset {
+    if (!child) return mainToolset
+    const nested = options.subagents === true && options.tasks?.nests?.(sessionId) === true
+    return { ...subagentToolset, specs: [...subagentToolset.specs, ...(nested ? [toSpec(TASK_TOOL_SHARED)] : [])], allowTask: nested }
+  }
+
+  /** What a session's agent is offered, as a turn would build it: a sub-agent on another harness gets a sub-agent's tools. */
+  async function hostToolset(sessionId: SessionId, directory: string, workflow = false): Promise<Toolset> {
     const extra = options.projectTools ? await options.projectTools(directory, sessionId, { host: true }).catch(() => []) : []
     const agent = settle(() => options.agents?.primary(sessionId), undefined)
     const subagents = settle(() => options.agents?.subagents(directory) ?? [], [])
-    return withoutHidden(withRunLimits(withPolicy(withAgent(withSubagents({ ...withProjectTools(mainToolset, extra), extras: extra }, subagents), agent)), options.runLimits?.(sessionId)), directory)
+    const child = options.tasks?.isChild(sessionId) === true || workflow
+    return withoutHidden(withRunLimits(withPolicy(withAgent(withSubagents({ ...withProjectTools(baseToolset(sessionId, child), extra), extras: extra }, subagents), agent)), options.runLimits?.(sessionId)), directory)
   }
   let hostCalls = 0
 
@@ -2115,7 +2238,7 @@ export function createNativeEngine(options: {
       return toolset.specs.filter((spec) => hostable(spec.name)).map((spec) => ({ name: spec.name, description: spec.description, parameters: spec.parameters }))
     },
     async hostCall({ turn, name, args }) {
-      const toolset = await hostToolset(turn.sessionId, options.cwdFor(turn.sessionId))
+      const toolset = await hostToolset(turn.sessionId, options.cwdFor(turn.sessionId), turn.workflow !== undefined)
       if (!hostable(name) || !toolset.tools.has(name)) return { output: `Tool ${name} is not available in this session`, isError: true }
       // The turn's own attachments are the "recent images" an image edit can take; the other harness keeps the rest of the history.
       const history: ModelMessage[] = turn.attachments.length ? [{ role: "user", content: turn.text, attachments: turn.attachments }] : []
@@ -2143,6 +2266,14 @@ export function createNativeEngine(options: {
       const executed = await runCall(run.turn, { callId: `debug-${run.turn.turnId}`, name: run.tool, args: run.params }, toolset, false, undefined, false, true)
       const { output, truncated, title, isError } = executed.result
       return { tools, result: { output, truncated, title, isError } }
+    },
+    async warm(between) {
+      for (let at = 0; at < tools.length; at += WARM_SPECS_PER_STEP) {
+        for (const tool of tools.slice(at, at + WARM_SPECS_PER_STEP)) toSpec(tool)
+        await between()
+      }
+      void mainToolset.specs
+      await between()
     },
     async runTurn(input): Promise<TurnOutcome> {
       const compound = options.compound?.(input.sessionId)
@@ -2179,7 +2310,7 @@ export function createNativeEngine(options: {
       const agent = settle(() => options.agents?.primary(input.sessionId, input.selection?.agent), undefined)
       const subagents = settle(() => options.agents?.subagents(cwd) ?? [], [])
       const child = options.tasks?.isChild(input.sessionId) === true || input.workflow !== undefined
-      const base = child ? { ...subagentToolset, specs: [...subagentToolset.specs, ...(options.subagents ? [toSpec(TASK_TOOL_SHARED)] : [])], allowTask: options.subagents === true } : mainToolset
+      const base = baseToolset(input.sessionId, child)
       const limits = options.runLimits?.(input.sessionId)
       // A prompt's own tool exclusions stack on the session's limits: they only remove tools (and sub-agents, whose tools they cannot bound).
       const turnExcluded = input.turnOptions?.excludeTools ?? []
@@ -2248,7 +2379,7 @@ export function createNativeEngine(options: {
       const agent = lastAgent.has(sessionId) ? lastAgent.get(sessionId) : options.agents?.primary(sessionId)
       const agentText = agent ? agentSection(agent) : ""
       const subagents = lastSubagents.get(sessionId) ?? options.agents?.subagents(cwd) ?? []
-      const fresh = lastSpecs.has(sessionId) && lastCatalog.has(sessionId) ? undefined : withDiscovery(withAgent(withSubagents(withProjectTools(mainToolset, await options.projectTools?.(cwd, sessionId) ?? []), subagents), agent), messages)
+      const fresh = lastSpecs.has(sessionId) && lastCatalog.has(sessionId) ? undefined : withDiscovery(withAgent(withSubagents(withProjectTools(mainToolset, await options.projectTools?.(cwd, sessionId) ?? []), subagents), agent), messages, false, sessionId)
       const toolSpecs = lastSpecs.get(sessionId) ?? fresh!.specs
       const catalog = lastCatalog.get(sessionId) ?? fresh?.catalog
       const context: SystemContext = { sessionId, prompt: lastPrompt(messages), ...(catalog ? { tools: catalog } : {}) }
@@ -2277,6 +2408,7 @@ export function createNativeEngine(options: {
         section("history:user", "history · user", byRole.user.chars, byRole.user.count),
         section("history:assistant", "history · assistant", byRole.assistant.chars, byRole.assistant.count),
         section("history:tool", "history · tool results", byRole.tool.chars, byRole.tool.count),
+        ...(images ? [section("history:images", "history · images", images * IMAGE_TOKENS * 4, images)] : []),
       ]
       const measured = contextTokens.get(sessionId)
       const mcpTools = toolSpecs.filter((spec) => spec.name.startsWith("mcp__")).map((spec) => section(spec.name, spec.name, JSON.stringify(spec).length, 1))
@@ -2556,7 +2688,8 @@ export function createNativeEngine(options: {
         const native = checkpoint.method === "native"
         const retained = portable.length - selected.tail.length
         const resumeImages = native ? [] : resumeImageRefs(portable.slice(0, Math.max(0, retained)), selected.tail)
-        const content = native ? summary : [summary, engineAnchor({ messages: portable, tail: selected.tail }), RESUME_GUIDANCE].filter(Boolean).join("\n\n")
+        const content = native ? summary : [summary, engineAnchor({ messages: portable, tail: selected.tail, processes: runningProcesses(input.sessionId), plan: options.plans?.pointer?.(input.sessionId) }), RESUME_GUIDANCE].filter(Boolean).join("\n\n")
+        if (!native) options.plans?.anchored?.(input.sessionId)
         checkpoint.tailMessages = selected.tail.length
         await options.history.replace(input.sessionId, [{ role: "user", content: `${SUMMARY_PREFIX}\n\n${content}`, compaction: checkpoint, ...(resumeImages.length ? { attachments: resumeImages } : {}) }, ...selected.tail])
         if (nativeItemId) input.emit({ type: "item.completed", itemId: nativeItemId, status: "ok", text: summary, meta })

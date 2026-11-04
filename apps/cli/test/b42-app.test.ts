@@ -46,7 +46,8 @@ test("agent picker, model roles and colored conversation fit all required termin
 })
 
 test("conversation footer uses the current agent color without adding a status row", async () => {
-  const h = await b42Harness()
+  // The built-in footer names the default agent; the default pack names only another one (in the same color).
+  const h = await b42Harness(100, 30, { footerPack: "off" })
   conversation(h.sessionId, h.app.onEvent).exchange("Build", "Done.")
   h.app.render()
   const spans = h.frames.at(-1)!.flat()

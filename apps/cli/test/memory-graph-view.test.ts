@@ -242,7 +242,7 @@ describe("renderMemoryGraph", () => {
     const joined = rows.map((row) => row.slice(memoryGraphMetrics({ width: 140, height: 24 }).panels.graph.width + 1)).join("\n")
     expect(joined).toMatch(/Scope\s+user/)
     expect(joined).toMatch(/Category\s+style/)
-    expect(joined).toMatch(/Profile\s+work/)
+    expect(joined).toMatch(/Area\s+work/)
     expect(joined).toContain("Prefers terse answers without filler")
     expect(joined).toContain("Links 1")
     expect(joined).toContain("supports ← Use pnpm, never npm, in this repository")

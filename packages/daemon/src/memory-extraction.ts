@@ -1,8 +1,8 @@
-import type { ExtractionJob, SessionEvent, Settings } from "@mendcode/protocol"
+import type { ExtractionJob, MemoryEntry, SessionEvent, Settings } from "@mendcode/protocol"
 import type { Store } from "@mendcode/store"
 import { buildDigest } from "@mendcode/dream"
 
-export type ExtractedMemory = { scope: "project" | "user"; text: string; category: string }
+export type ExtractedMemory = { scope: "project" | "user"; text: string; category: string; details?: MemoryEntry["details"] }
 
 /** One bounded worker; jobs and retry deadlines survive daemon shutdown. */
 export function createMemoryExtraction(options: {
@@ -20,6 +20,9 @@ export function createMemoryExtraction(options: {
   let active: AbortController | undefined
   let draining: Promise<void> | undefined
   let timer: ReturnType<typeof setTimeout> | undefined
+  /** Turns extracted by this process (finished jobs keep no row) and when the last one finished. */
+  const done = new Set<string>()
+  let completedAt = 0
   const put = (job: ExtractionJob, patch: Partial<ExtractionJob>) => {
     const next = { ...job, ...patch, updatedAt: now() }
     store.extraction.put(next)
@@ -52,6 +55,10 @@ export function createMemoryExtraction(options: {
           if (stopped || controller.signal.aborted) throw new Error("Extraction stopped")
           if (!enabled(job.directory)) { put(job, { state: "skipped", reason: "Generation disabled" }); continue }
           store.extraction.settle(job, () => options.commit(job, memories))
+          // The finished job left no row: remember the turn here so a repeated event of this process cannot extract it again.
+          done.add(`${job.sessionId}:${job.turnId}`)
+          if (done.size > 256) done.delete(done.values().next().value!)
+          completedAt = now()
           options.settled?.(job)
         } catch (error) {
           if (stopped) put(job, { state: "queued", attempts: job.attempts - 1, reason: "Paused for shutdown" })
@@ -67,7 +74,7 @@ export function createMemoryExtraction(options: {
     wake: () => schedule(),
     status(directory?: string) {
       const jobs = store.extraction.list().filter((job) => !directory || job.directory === directory).sort((a, b) => b.updatedAt - a.updatedAt)
-      return { queue: jobs.filter((job) => job.state === "queued" || job.state === "running").length, lastRun: jobs.find((job) => job.attempts > 0)?.state ?? "never", lastError: jobs.find((job) => job.state === "failed" || job.state === "queued" && !!job.reason)?.reason ?? "none" }
+      return { queue: jobs.filter((job) => job.state === "queued" || job.state === "running").length, lastRun: jobs.find((job) => job.attempts > 0 && job.updatedAt >= completedAt)?.state ?? (completedAt ? "completed" : jobs.find((job) => job.attempts > 0)?.state ?? "never"), lastError: jobs.find((job) => job.state === "failed" || job.state === "queued" && !!job.reason)?.reason ?? "none" }
     },
     list(directory?: string) {
       return store.extraction.list().filter((job) => !directory || job.directory === directory).slice(-80).map(({ text: _text, ...job }) => job)
@@ -81,7 +88,7 @@ export function createMemoryExtraction(options: {
     observe(event: SessionEvent) {
       if (event.type !== "turn.completed" || !enabled(store.sessionDirectory(event.sessionId)) || store.tasks.list().some((task) => task.taskId === event.sessionId) || store.sessionInfo(event.sessionId)?.parentId) return
       const jobs = store.extraction.list()
-      if (jobs.some((job) => job.sessionId === event.sessionId && job.turnId === event.turnId)) return
+      if (done.has(`${event.sessionId}:${event.turnId}`) || jobs.some((job) => job.sessionId === event.sessionId && job.turnId === event.turnId)) return
       if (jobs.filter((job) => ["queued", "running"].includes(job.state)).length >= 128) return
       const events = store.readBefore(event.sessionId, event.seq + 1, 1_000)
       const start = events.findLastIndex((entry) => entry.type === "turn.started" && entry.turnId === event.turnId)

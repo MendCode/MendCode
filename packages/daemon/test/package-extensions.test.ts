@@ -29,7 +29,7 @@ async function boot() {
   const dir = temp("mendd-pkgext-")
   const project = temp("mendd-pkgext-proj-")
   const source = temp("mendd-pkgext-src-")
-  write(path.join(source, "mendcode-package.json"), JSON.stringify({ name: "acme", version: "1.0.0", description: "Acme helpers", extensions: true }))
+  write(path.join(source, "mendcode-profile.json"), JSON.stringify({ name: "acme", version: "1.0.0", description: "Acme helpers", extensions: true }))
   write(path.join(source, "extensions", "guard.ts"), extension("guard"))
   write(path.join(source, "extensions", "audit", "index.ts"), extension("audit"))
   const daemon = await startDaemon({ dir, socketPath: path.join(dir, "mendd.sock"), log: () => {}, engine: ({ clock }) => createFauxEngine({ clock, deltaMs: 1 }) })
@@ -45,10 +45,10 @@ async function boot() {
   return { client, project, source, extensions }
 }
 
-describe("extensions shipped in a package", () => {
-  test("a user package's extensions/ is installed and discovered from the package layer", async () => {
+describe("extensions shipped in a profile", () => {
+  test("a user profile's extensions/ is installed and discovered from the profile layer", async () => {
     const { client, project, source, extensions } = await boot()
-    const installed = await client.send({ type: "packages.install", directory: project, source, scope: "user" })
+    const installed = await client.send({ type: "profiles.install", directory: project, source, scope: "user" })
     expect(installed).toMatchObject({ ok: true, result: { packages: [{ key: "user:acme", contents: { extensions: 2 }, manifest: { extensions: true } }] } })
     const found = await extensions()
     expect(found.map((e) => [e.name, e.source, e.daemon, e.trusted, e.hooks])).toEqual([
@@ -58,9 +58,9 @@ describe("extensions shipped in a package", () => {
     expect(found[1]!.file).toContain(path.join("packages", "acme", "extensions", "guard.ts"))
   })
 
-  test("a project package's extensions stay untrusted until the directory is trusted, and disabling the package removes them", async () => {
+  test("a project profile's extensions stay untrusted until the directory is trusted, and disabling the profile removes them", async () => {
     const { client, project, source, extensions } = await boot()
-    await client.send({ type: "packages.install", directory: project, source, scope: "project" })
+    await client.send({ type: "profiles.install", directory: project, source, scope: "project" })
     expect((await extensions()).map((e) => [e.name, e.trusted, e.daemon])).toEqual([
       ["audit", false, false],
       ["guard", false, false],
@@ -70,14 +70,14 @@ describe("extensions shipped in a package", () => {
       ["audit", true, true],
       ["guard", true, true],
     ])
-    await client.send({ type: "packages.enable", directory: project, key: "project:acme", enabled: false })
+    await client.send({ type: "profiles.enable", directory: project, key: "project:acme", enabled: false })
     expect(await extensions()).toEqual([])
   })
 
-  test("a package that declares extensions it does not ship is refused", async () => {
+  test("a profile that declares extensions it does not ship is refused", async () => {
     const { client, project, source } = await boot()
     rmSync(path.join(source, "extensions"), { recursive: true })
-    const refused = await client.send({ type: "packages.install", directory: project, source, scope: "user" })
+    const refused = await client.send({ type: "profiles.install", directory: project, source, scope: "user" })
     expect(refused.ok).toBe(false)
     expect(!refused.ok && refused.error.message).toContain("declares extensions")
   })

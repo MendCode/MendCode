@@ -54,6 +54,31 @@ test("a bridged turn that leaves a background agent running keeps its process: t
   h.engine.stop()
 })
 
+test("a kept process that has to start again uses the bridge of the turn that joins it, not the released one of the turn that started it", async () => {
+  let turns = 0
+  const started = fakeClaude({
+    onUser(api) {
+      api.push({ type: "system", subtype: "init", session_id: "cc-session-1" })
+      if (++turns === 1) api.push({ type: "system", subtype: "background_tasks_changed", tasks: [{ task_id: "b1", task_type: "local_bash", description: "Run dashboard dev server" }] })
+      api.push(result())
+    },
+  })
+  const restarted = fakeClaude({ onUser(api) { api.push({ type: "system", subtype: "init", session_id: "cc-session-1" }); api.push(result()) } })
+  const h = engineWith([started, restarted])
+  const first = turnInput()
+  const firstBridge = { args: ["--mcp-config", "/tmp/released-turn/mcp.json"], cwd: "/temporary-project", scrub: (text: string) => text }
+  expect(await h.engine.runTurn({ ...first.input, externalMcp: firstBridge })).toEqual({ status: "ok" })
+  expect(h.engine.busy()).toBe(true)
+  // The first turn's bridge folder is gone with its turn; a new effort restarts the kept process for the next turn.
+  h.setModel({ model: "haiku", effort: "high" })
+  const secondBridge = { args: ["--mcp-config", "/tmp/current-turn/mcp.json"], cwd: "/temporary-project", scrub: (text: string) => text }
+  expect(await h.engine.runTurn({ ...turnInput({ sessionId: first.input.sessionId }).input, externalMcp: secondBridge })).toEqual({ status: "ok" })
+  expect(h.spawned).toHaveLength(2)
+  expect(h.spawned[1]!.args).toEqual(expect.arrayContaining(secondBridge.args))
+  expect(h.spawned[1]!.args).not.toContain("/tmp/released-turn/mcp.json")
+  h.engine.stop()
+})
+
 test("a cancel while the attachments are read sends nothing: the turn ends as cancelled and Claude Code never hears the prompt", async () => {
   const fake = fakeClaude({ onUser(api) { api.push(result()) } })
   const abort = new AbortController()
@@ -125,8 +150,28 @@ test("One tree hears Bash output and file writes through a PostToolUse hook, and
   h.engine.stop()
 })
 
+test("Claude Code's own sub-agents are refused the advisor, workflows and MendCode's sub-agent tools; the main agent is not", async () => {
+  const call = (id: string, tool: string, agent?: string) => ({ type: "control_request", request_id: id, request: { subtype: "hook_callback", callback_id: "mendcode-subagent-tools", input: { hook_event_name: "PreToolUse", tool_name: tool, tool_input: {}, ...(agent ? { agent_id: agent } : {}) } } })
+  const fake = fakeClaude({ onUser(api) {
+    api.push({ type: "system", subtype: "init", session_id: "cc-session-1" })
+    api.push(call("hook-1", "mcp__mendcode__advisor", "a1"))
+    api.push(call("hook-2", "mcp__mendcode_threads__delegate_task", "a1"))
+    api.push(call("hook-3", "mcp__mendcode__advisor"))
+    setTimeout(() => api.push(result()), 5)
+  } })
+  const h = engineWith([fake])
+  expect(await h.engine.runTurn(turnInput().input)).toEqual({ status: "ok" })
+  const matcher = new RegExp(`^(${fake.written[0].request.hooks.PreToolUse[0].matcher})$`)
+  for (const name of ["mcp__mendcode__advisor", "mcp__mendcode__workflow_start", "mcp__mendcode_threads__delegate_task", "mcp__mendcode__loop"]) expect(matcher.test(name)).toBe(true)
+  for (const name of ["mcp__mendcode__graph_find", "mcp__mendcode__webfetch", "Bash"]) expect(matcher.test(name)).toBe(false)
+  const answers = fake.written.filter((message) => message.type === "control_response")
+  for (const id of ["hook-1", "hook-2"]) expect(answers).toContainEqual({ type: "control_response", response: { subtype: "success", request_id: id, response: { hookSpecificOutput: expect.objectContaining({ hookEventName: "PreToolUse", permissionDecision: "deny" }) } } })
+  expect(answers).toContainEqual({ type: "control_response", response: { subtype: "success", request_id: "hook-3", response: {} } })
+  h.engine.stop()
+})
+
 /** A scripted stand-in for one `claude` process: `onUser` / `onControl` answer what MendCode writes. */
-function fakeClaude(script: { onUser?(api: FakeApi, content: any[]): void; onControl?(api: FakeApi, request: any): unknown } = {}) {
+function fakeClaude(script: { pid?: number; onUser?(api: FakeApi, content: any[]): void; onControl?(api: FakeApi, request: any): unknown } = {}) {
   const queue: string[] = []
   let wake: (() => void) | undefined
   let exitResolve!: (code: number) => void
@@ -172,6 +217,7 @@ function fakeClaude(script: { onUser?(api: FakeApi, content: any[]): void; onCon
     })(),
     close: () => api.exit(),
     exited,
+    pid: script.pid,
     stderrTail: () => stderr,
   }
   return { transport, written, api }
@@ -320,6 +366,30 @@ describe("claude engine turns", () => {
     api.push(result({ usage: { input_tokens: 15, cache_creation_input_tokens: 3_800, cache_read_input_tokens: 400_000, output_tokens: 1_470, output_tokens_details: { thinking_tokens: 0 } }, modelUsage: { "claude-opus-4-8": { contextWindow: windowTokens } } }))
   }
 
+  test("each session's process is announced with its pid, and its end is reported once", async () => {
+    const started: Array<[string, number]> = []
+    let ended = 0
+    const fake = fakeClaude({ pid: 4242, onUser(api) { api.push(result()) } })
+    const { engine } = engineWith([fake], { onProcess: (sessionId, pid) => { started.push([sessionId, pid]); return () => void ended++ } })
+    const { input } = turnInput()
+    expect(await engine.runTurn(input)).toEqual({ status: "ok" })
+    expect(started).toEqual([[input.sessionId, 4242]])
+    expect(ended).toBe(0)
+    fake.api.exit()
+    await fake.transport.exited
+    await Promise.resolve()
+    expect(ended).toBe(1)
+    engine.stop()
+  })
+
+  test("a transport without a pid announces nothing", async () => {
+    let announced = 0
+    const { engine } = engineWith([fakeClaude({ onUser(api) { api.push(result()) } })], { onProcess: () => void announced++ })
+    expect(await engine.runTurn(turnInput().input)).toEqual({ status: "ok" })
+    expect(announced).toBe(0)
+    engine.stop()
+  })
+
   test("context after a multi-call turn is the last main-thread call's prompt, never the turn's cumulative usage; the usage totals stay the true sums", async () => {
     const { engine } = engineWith([fakeClaude({ onUser: longTurn(200_000) })])
     const { input, events } = turnInput()
@@ -360,6 +430,36 @@ describe("claude engine turns", () => {
     const { input, events } = turnInput()
     await engine.runTurn(input)
     expect(events.filter((event) => event.type === "usage").map((event) => "partial" in event)).toEqual([false])
+    engine.stop()
+  })
+
+  test("the turn's output tokens are sent live as each call reports them, before the result; they never become a usage record", async () => {
+    const { engine } = engineWith([fakeClaude({ onUser: longTurn(200_000) })])
+    const { input, events } = turnInput()
+    await engine.runTurn(input)
+    // The recorded stream of `longTurn`: main-thread calls of 120, 300 and 450 output tokens (the sub-agent's calls are not on the main stream): the figure climbs call by call.
+    const live = events.filter((event) => event.type === "usage.live").map((event) => (event as { output: number }).output)
+    expect(live).toEqual([120, 420, 870])
+    // Every live figure comes before the one usage record of the result.
+    const usageAt = events.findIndex((event) => event.type === "usage")
+    expect(events.map((event, at) => (event.type === "usage.live" ? at : -1)).filter((at) => at >= 0).every((at) => at < usageAt)).toBe(true)
+    expect(events.filter((event) => event.type === "usage")).toHaveLength(1)
+    engine.stop()
+  })
+
+  test("a call's placeholder output at message_start and its whole assistant message show nothing; only the message_delta figure does", async () => {
+    const { engine } = engineWith([fakeClaude({ onUser: (api) => {
+      api.push({ type: "system", subtype: "init", session_id: "cc-session-1" })
+      api.push({ type: "stream_event", event: { type: "message_start", message: { id: "msg_a", model: "claude-opus-4-8", usage: { input_tokens: 5, cache_read_input_tokens: 1000, output_tokens: 1 } } }, parent_tool_use_id: null })
+      streamText(api, 0, "hello there")
+      api.push({ type: "assistant", message: { id: "msg_a", role: "assistant", usage: { input_tokens: 5, cache_read_input_tokens: 1000, output_tokens: 7 }, content: [] }, parent_tool_use_id: null })
+      api.push({ type: "stream_event", event: { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 42 } }, parent_tool_use_id: null })
+      api.push({ type: "stream_event", event: { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 42 } }, parent_tool_use_id: null })
+      api.push(result())
+    } })])
+    const { input, events } = turnInput()
+    await engine.runTurn(input)
+    expect(events.filter((event) => event.type === "usage.live")).toEqual([{ type: "usage.live", output: 42 }])
     engine.stop()
   })
 
@@ -412,6 +512,26 @@ describe("claude engine turns", () => {
     settings.promptCacheTtl = "5m"
     await engine.runTurn(turnInput().input)
     expect("env" in spawned[2]!).toBe(false)
+    engine.stop()
+  })
+
+  test("usage states the compaction window the process was started with; a changed window restarts it at the next turn", async () => {
+    const answer = (api: FakeApi) => {
+      api.push({ type: "system", subtype: "init", session_id: "cc-compact" })
+      streamText(api, 0, "ok")
+      api.push(result({ session_id: "cc-compact", modelUsage: { "claude-sonnet-5": { contextWindow: 1_000_000 } } }))
+    }
+    let window = "200000"
+    const { engine, spawned } = engineWith([fakeClaude({ onUser: answer }), fakeClaude({ onUser: answer })], { env: () => ({ CLAUDE_CODE_AUTO_COMPACT_WINDOW: window }) })
+    const first = turnInput()
+    await engine.runTurn(first.input)
+    expect(first.events.find((event) => event.type === "usage")).toMatchObject({ compactAt: 200_000, contextWindow: 1_000_000 })
+    // The settings changed, but the live process still compacts at what it was started with.
+    window = "475000"
+    const second = turnInput({ sessionId: first.input.sessionId })
+    await engine.runTurn(second.input)
+    expect(spawned).toHaveLength(2)
+    expect(second.events.find((event) => event.type === "usage")).toMatchObject({ compactAt: 475_000 })
     engine.stop()
   })
 
@@ -555,6 +675,15 @@ describe("claude engine turns", () => {
     expect(await engine.runTurn(turnInput().input)).toEqual({ status: "error", code: "claude_missing", message: "[CLAUDE]: `claude` was not found. Install Claude Code and run `claude auth login`." })
   })
 
+  test("a claude that starts and exits at once with a \"not found\" of its own is a start error with its words, not a missing claude", async () => {
+    const refusing = () => fakeClaude({ onControl: (api, request) => request.subtype === "initialize" ? (api.exit("Error: Invalid MCP configuration:\nMCP config file not found: /tmp/gone/mcp.json"), null) : {} })
+    const { engine } = engineWith([refusing(), refusing()])
+    const outcome = await engine.runTurn(turnInput().input)
+    expect(outcome).toMatchObject({ status: "error", code: "claude_start" })
+    expect((outcome as { message: string }).message).toContain("MCP config file not found: /tmp/gone/mcp.json")
+    engine.stop()
+  })
+
   test("a failed result is an error with Claude's message", async () => {
     const fake = fakeClaude({ onUser: (api) => api.push(result({ subtype: "error_during_execution", is_error: true, terminal_reason: "error", errors: ["prompt is too long"] })) })
     const { engine } = engineWith([fake])
@@ -573,7 +702,7 @@ describe("claude engine turns", () => {
 })
 
 describe("claude engine permissions", () => {
-  async function permissionTurn(request: Record<string, unknown>, options: { mode?: PermissionMode; answer?: (request: EngineRequest) => EngineResolution; safetyPrompts?: () => boolean | undefined } = {}) {
+  async function permissionTurn(request: Record<string, unknown>, options: { mode?: PermissionMode; answer?: (request: EngineRequest) => EngineResolution; safetyPrompts?: () => boolean | undefined; engine?: Partial<Parameters<typeof createClaudeEngine>[0]> } = {}) {
     let decision: any
     const fake = fakeClaude({
       async onUser(api) {
@@ -582,7 +711,7 @@ describe("claude engine permissions", () => {
         api.push(result())
       },
     })
-    const { engine, spawned } = engineWith([fake], { safetyPrompts: options.safetyPrompts ?? (() => true) })
+    const { engine, spawned } = engineWith([fake], { safetyPrompts: options.safetyPrompts ?? (() => true), ...options.engine })
     const turn = turnInput({ mode: () => options.mode ?? "ask", ...(options.answer ? { answer: options.answer } : {}) })
     const outcome = await engine.runTurn(turn.input)
     engine.stop()
@@ -695,16 +824,40 @@ describe("claude engine permissions", () => {
     const approved = await permissionTurn({ tool_name: "ExitPlanMode", input: { plan: "1. do it" } }, { mode: "plan", answer: () => ({ kind: "approve", scope: "once" }) })
     expect(approved.asked[0]).toMatchObject({ kind: "approval", title: "Review plan", tool: "plan_review", planReview: { markdown: "1. do it", phase: "implementation", destination: "build" } })
     expect(approved.decision.behavior).toBe("allow")
-    expect(approved.modes).toEqual(["ask"])
+    expect(approved.modes).toEqual(["full"])
     const rejected = await permissionTurn({ tool_name: "ExitPlanMode", input: { plan: "1. do it" } }, { mode: "plan", answer: () => ({ kind: "deny", reason: "add tests" }) })
     expect(rejected.decision).toEqual({ behavior: "deny", message: "The user wants changes to the plan: add tests" })
     expect(rejected.modes).toEqual([])
     const applied = await permissionTurn({ tool_name: "ExitPlanMode", input: { plan: "1. do it" } }, { mode: "plan", answer: () => ({ kind: "plan_review", action: "apply" }) })
-    expect([applied.decision.behavior, applied.modes]).toEqual(["allow", ["ask"]])
+    expect([applied.decision.behavior, applied.modes]).toEqual(["allow", ["full"]])
+    // The reviewer can keep approving: the other accesses stay choices.
+    for (const permission of ["edits", "ask"] as const) {
+      const chosen = await permissionTurn({ tool_name: "ExitPlanMode", input: { plan: "1. do it" } }, { mode: "plan", answer: () => ({ kind: "plan_review", action: "apply", permission }) })
+      expect(chosen.modes).toEqual([permission])
+    }
     const edited = await permissionTurn({ tool_name: "ExitPlanMode", input: { plan: "1. do it" } }, { mode: "plan", answer: () => ({ kind: "plan_review", action: "edit", markdown: "1. do it twice" }) })
     expect(edited.decision.behavior).toBe("deny")
     expect((edited.decision as { message: string }).message).toContain("1. do it twice")
     expect(edited.modes).toEqual([])
+  })
+
+  test("applying a plan moves the session to the plan's destination agent; a rejected or interrupted one does not", async () => {
+    const moves: Array<string | undefined> = []
+    const engine = { planApplied: (_session: SessionId, destination: string | undefined) => void moves.push(destination) }
+    await permissionTurn({ tool_name: "ExitPlanMode", input: { plan: "1. do it" } }, { mode: "plan", answer: () => ({ kind: "plan_review", action: "apply", destination: "review" }), engine })
+    await permissionTurn({ tool_name: "ExitPlanMode", input: { plan: "1. do it" } }, { mode: "plan", answer: () => ({ kind: "approve", scope: "once" }), engine })
+    await permissionTurn({ tool_name: "ExitPlanMode", input: { plan: "1. do it" } }, { mode: "plan", answer: () => ({ kind: "deny", reason: "no" }), engine })
+    await permissionTurn({ tool_name: "ExitPlanMode", input: { plan: "1. do it" } }, { mode: "plan", answer: () => ({ kind: "abandoned" }), engine })
+    expect(moves).toEqual(["review", undefined])
+  })
+
+  test("a plan review that ends without a decision tells the model it was interrupted, not that the user rejected it", async () => {
+    const abandoned = await permissionTurn({ tool_name: "ExitPlanMode", input: { plan: "1. do it" } }, { mode: "plan", answer: () => ({ kind: "abandoned" }) })
+    expect(abandoned.decision.behavior).toBe("deny")
+    const message = (abandoned.decision as { message: string }).message
+    expect(message).toContain("interrupted")
+    expect(message).not.toContain("did not approve")
+    expect(abandoned.modes).toEqual([])
   })
 })
 
@@ -767,6 +920,19 @@ describe("claude thinking blocks", () => {
     expect(events.at(-1)).toEqual({ type: "item.delta", itemId, text: "", input: { chars: json.length, lines: 2001, done: true } })
     mapper.accept({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "toolu_1", content: "File created" }] }, parent_tool_use_id: null })
     expect(events.at(-1)).toMatchObject({ type: "item.completed", itemId, status: "ok" })
+  })
+
+  test("a Write's completion carries what it wrote, so its card shows the code", () => {
+    const content = "line one\nline two\n"
+    const { events, mapper } = mapped([
+      stream({ type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "toolu_w", name: "Write", input: {} } }),
+      stream({ type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: JSON.stringify({ file_path: "/p/a.txt", content }) } }),
+      stream({ type: "content_block_stop", index: 0 }),
+    ])
+    mapper.accept({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "toolu_w", content: "File created successfully at: /p/a.txt" }] }, parent_tool_use_id: null })
+    const done = events.at(-1) as { type: string; toolInput?: string }
+    expect(done.type).toBe("item.completed")
+    expect(JSON.parse(done.toolInput!)).toEqual({ file_path: "/p/a.txt", content })
   })
 
   test("a ToolSearch that answers with tool references says which tools it loaded instead of an empty result", () => {
@@ -1144,6 +1310,8 @@ describe("claude sub-agents", () => {
       "user_message", "done:Locate a.txt.", "reasoning", "done:Check the file first.", "agent_message", "done:The file says hello.", "agent_message", "done:",
     ])
     expect(inThread.find((event) => event.type === "item.started" && event.kind === "reasoning")).toMatchObject({ meta: { agentModel: "claude-sonnet-5-5-20260901" } })
+    // Stored events weigh what they always did: a sub-agent's step carries its parent and model, never a context figure (that would add bytes to every stored step).
+    for (const event of inThread) if (event.type === "item.started") expect(Object.keys(event.meta ?? {}).filter((key) => key !== "agentParent" && key !== "agentModel")).toEqual([])
   })
 
   test("a sub-agent's message about a call this turn did not make is dropped, and a tool it left open closes with the turn", () => {
@@ -1192,6 +1360,52 @@ describe("claude engine background tasks", () => {
     h.engine.stop()
   })
 
+  test("a resumed process's notice about a task an earlier process left is not queued: Claude Code does not answer it, so it would reach the model as the user's words", async () => {
+    const fake = fakeClaude({ onUser(api) { api.push({ type: "system", subtype: "init", session_id: "cc-session-1" }); api.push(result()) } })
+    const notices: string[] = []
+    const h = engineWith([fake], { notify: (_sessionId, text) => void notices.push(text) })
+    expect(await h.engine.runTurn(turnInput().input)).toEqual({ status: "ok" })
+    fake.api.push({ type: "system", subtype: "task_notification", task_id: "b9old", status: "failed", output_file: "", summary: "Orphaned by a previous Claude Code process exit and reported in an aggregate summary." })
+    await Bun.sleep(10)
+    expect(notices).toEqual([])
+    expect(h.engine.busy()).toBe(false)
+    h.engine.stop()
+  })
+
+  test("the tasks a process reports killed while MendCode ends it queue no notice", async () => {
+    const fake = fakeClaude({
+      onUser(api) {
+        api.push({ type: "system", subtype: "init", session_id: "cc-session-1" })
+        api.push({ type: "system", subtype: "background_tasks_changed", tasks: [{ task_id: "b1", task_type: "local_bash", description: "Run dashboard dev server" }] })
+        api.push(result())
+      },
+    })
+    const notices: string[] = []
+    const h = engineWith([fake], { notify: (_sessionId, text) => void notices.push(text) })
+    expect(await h.engine.runTurn(turnInput().input)).toEqual({ status: "ok" })
+    h.engine.stop("restart")
+    fake.api.push({ type: "system", subtype: "task_notification", task_id: "b1", status: "killed", output_file: "", summary: "Run dashboard dev server against local API" })
+    await Bun.sleep(10)
+    expect(notices).toEqual([])
+  })
+
+  test("a notice for a task without an output file has no empty Output line", async () => {
+    const fake = fakeClaude({
+      onUser(api) {
+        api.push({ type: "system", subtype: "init", session_id: "cc-session-1" })
+        api.push({ type: "system", subtype: "background_tasks_changed", tasks: [{ task_id: "b2", task_type: "local_bash", description: "Run tests" }] })
+        api.push(result())
+      },
+    })
+    const notices: string[] = []
+    const h = engineWith([fake], { notify: (_sessionId, text) => void notices.push(text) })
+    expect(await h.engine.runTurn(turnInput().input)).toEqual({ status: "ok" })
+    fake.api.push({ type: "system", subtype: "task_notification", task_id: "b2", status: "completed", output_file: "", summary: "Run tests completed" })
+    await Bun.sleep(10)
+    expect(notices).toEqual(["Run tests completed"])
+    h.engine.stop()
+  })
+
   test("a background agent goes on reporting after its turn: its tools and its end reach the daemon under that turn, and its launch note is not shown", async () => {
     const fake = fakeClaude({
       onUser(api) {
@@ -1219,6 +1433,71 @@ describe("claude engine background tasks", () => {
     ])
     expect(late[0]!.event).toMatchObject({ meta: { tool: "read: /work/app/Cargo.toml" } })
     expect(late[3]!.event).toMatchObject({ text: "T7 done", meta: { agentEnd: true } })
+    h.engine.stop()
+  })
+
+  test("a background agent's own long Bash call (Claude Code 2.1.317 reports it as a task owned by the sub-agent) stays in the agent's thread and never becomes a notice for the main agent", async () => {
+    const fake = fakeClaude({
+      onUser(api) {
+        api.push({ type: "system", subtype: "init", session_id: "cc-session-1" })
+        streamTool(api, 0, "toolu_agent", "Agent", { description: "B1 diff wrap", subagent_type: "general-purpose", prompt: "compare", run_in_background: true })
+        api.push({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_agent", content: "Async agent launched successfully. agentId: a2a7" }] } })
+        api.push({ type: "system", subtype: "background_tasks_changed", tasks: [{ task_id: "a2a7", task_type: "local_agent", description: "B1 diff wrap" }] })
+        streamText(api, 1, "launched")
+        api.push(result())
+      },
+    })
+    const notices: string[] = []
+    const late: EngineEvent[] = []
+    const h = engineWith([fake], { notify: (_sessionId, text) => void notices.push(text), onAgentEvent: (_sessionId, _turnId, event) => void late.push(event) })
+    const first = turnInput()
+    expect(await h.engine.runTurn(first.input)).toEqual({ status: "ok" })
+    const command = "cd /tmp/b1 && gh search code --repo sst/opencode \"diffWrapMode\" --limit 5"
+    // As recorded from Claude Code 2.1.317: the sub-agent's foreground Bash gets a task of its own once it runs a few seconds.
+    fake.api.push({ type: "assistant", parent_tool_use_id: "toolu_agent", message: { content: [{ type: "tool_use", id: "toolu_bash", name: "Bash", input: { command } }] } })
+    fake.api.push({ type: "system", subtype: "task_started", task_id: "brchy3yfk", owned_by_subagent: true, tool_use_id: "toolu_bash", description: command, is_backgrounded: false, parent_task_id: "a2a7", task_type: "local_bash" })
+    fake.api.push({ type: "system", subtype: "task_notification", task_id: "brchy3yfk", tool_use_id: "toolu_bash", status: "completed", output_file: "", summary: command })
+    fake.api.push({ type: "user", parent_tool_use_id: "toolu_agent", message: { content: [{ type: "tool_result", tool_use_id: "toolu_bash", content: "anomalyco/opencode" }] } })
+    await Bun.sleep(10)
+    expect(notices).toEqual([])
+    expect(late.map((event) => event.type)).toEqual(["item.started", "item.completed"])
+    expect(late[0]).toMatchObject({ meta: { tool: `shell: ${command}` } })
+    // The agent's own end is still the notice Claude Code answers.
+    fake.api.push({ type: "system", subtype: "task_notification", task_id: "a2a7", tool_use_id: "toolu_agent", status: "completed", output_file: "/tmp/tasks/a2a7.output", summary: "ok", usage: { tool_uses: 1 } })
+    await Bun.sleep(10)
+    expect(notices).toEqual(["ok\nOutput: /tmp/tasks/a2a7.output"])
+    h.engine.stop()
+  })
+
+  test("a background agent's background shell ends while the user sends a message: no notice turn opens, and the message goes out at once", async () => {
+    let calls = 0
+    const fake = fakeClaude({
+      onUser(api) {
+        calls++
+        api.push({ type: "system", subtype: "init", session_id: "cc-session-1" })
+        if (calls === 1) {
+          streamTool(api, 0, "toolu_agent", "Agent", { description: "B1", subagent_type: "general-purpose", prompt: "run it in the background", run_in_background: true })
+          api.push({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_agent", content: "Async agent launched successfully. agentId: a7dd" }] } })
+        }
+        streamText(api, 1, calls === 1 ? "launched" : "answered")
+        api.push(result())
+      },
+    })
+    const notices: string[] = []
+    const h = engineWith([fake], { notify: (_sessionId, text) => void notices.push(text) })
+    const first = turnInput()
+    expect(await h.engine.runTurn(first.input)).toEqual({ status: "ok" })
+    // As recorded from Claude Code 2.1.317: the sub-agent's `run_in_background` Bash is a task owned by the sub-agent too.
+    fake.api.push({ type: "assistant", parent_tool_use_id: "toolu_agent", message: { content: [{ type: "tool_use", id: "toolu_bg", name: "Bash", input: { command: "sleep 8; echo done-bg", run_in_background: true } }] } })
+    fake.api.push({ type: "system", subtype: "task_started", task_id: "bfhn1fqzd", owned_by_subagent: true, tool_use_id: "toolu_bg", description: "Run delayed echo in background", is_backgrounded: true, parent_task_id: "a7dd", task_type: "local_bash" })
+    // Claude Code lists it among the process's background tasks as well: being listed does not make its end the main agent's.
+    fake.api.push({ type: "system", subtype: "background_tasks_changed", tasks: [{ task_id: "a7dd", task_type: "local_agent", description: "B1" }, { task_id: "bfhn1fqzd", task_type: "local_bash", description: "Run delayed echo in background", parent_task_id: "a7dd" }] })
+    fake.api.push({ type: "system", subtype: "task_notification", task_id: "bfhn1fqzd", tool_use_id: "toolu_bg", status: "completed", output_file: "", summary: "Background command \"Run delayed echo in background\" completed (exit code 0)" })
+    await Bun.sleep(10)
+    expect(notices).toEqual([])
+    const sent = h.engine.runTurn(turnInput({ sessionId: first.input.sessionId, text: "next" }).input)
+    expect(await Promise.race([sent, Bun.sleep(200).then(() => "held")])).toEqual({ status: "ok" })
+    expect(notices).toEqual([])
     h.engine.stop()
   })
 
@@ -1580,5 +1859,70 @@ describe("claude engine background tasks", () => {
     expect(await h.engine.runTurn(next.input)).toEqual({ status: "ok" })
     expect(fake.written.filter((message) => message.type === "user").at(-1).message.content.at(-1).text).toBe("something else")
     h.engine.stop()
+  })
+})
+
+describe("claude engine plan mode note", () => {
+  test("every turn in plan carries the plan note, the first turn after plan says it ended, and other turns carry nothing", async () => {
+    const reply = (api: FakeApi) => { streamText(api, 0, "ok"); api.push(result()) }
+    const fake = fakeClaude({ onUser: reply })
+    const { engine } = engineWith([fake])
+    const sessionId = ids("session")
+    let mode: PermissionMode = "plan"
+    const turn = (text: string) => engine.runTurn(turnInput({ sessionId, text, mode: () => mode }).input)
+    expect(await turn("plan it")).toEqual({ status: "ok" })
+    expect(await turn("and the tests")).toEqual({ status: "ok" })
+    mode = "ask"
+    expect(await turn("now build")).toEqual({ status: "ok" })
+    expect(await turn("and more")).toEqual({ status: "ok" })
+    const sent = fake.written.filter((message) => message.type === "user").map((message) => message.message.content.map((block: any) => block.text))
+    expect(sent[0]).toEqual(["plan it", expect.stringContaining("Plan mode is on")])
+    expect(sent[0]![1]).toContain("ExitPlanMode")
+    expect(sent[1]).toEqual(["and the tests", sent[0]![1]])
+    expect(sent[2]).toEqual(["now build", expect.stringContaining("Plan mode is off")])
+    expect(sent[3]).toEqual(["and more"])
+    engine.stop()
+  })
+
+  test("an internal read-only run in plan mode carries no plan note and no off note", async () => {
+    const fake = fakeClaude({ onUser(api) { streamText(api, 0, "ok"); api.push(result()) } })
+    const { engine } = engineWith([fake])
+    const sessionId = ids("session")
+    let mode: PermissionMode = "plan"
+    const turn = (text: string) => engine.runTurn({ ...turnInput({ sessionId, text, mode: () => mode }).input, readOnlyRun: true })
+    expect(await turn("review it")).toEqual({ status: "ok" })
+    mode = "ask"
+    expect(await turn("again")).toEqual({ status: "ok" })
+    const sent = fake.written.filter((message) => message.type === "user").map((message) => message.message.content.map((block: any) => block.text))
+    expect(sent).toEqual([["review it"], ["again"]])
+    engine.stop()
+  })
+
+  test("an internal read-only run starts Claude Code in its default mode (no plan-mode reminders) and its refusals never name a plan", async () => {
+    let decision: any
+    const fake = fakeClaude({
+      async onUser(api) {
+        decision = await api.ask({ tool_name: "Bash", input: { command: "make" } })
+        streamText(api, 0, "ok")
+        api.push(result())
+      },
+    })
+    const { engine, spawned } = engineWith([fake])
+    const turn = turnInput({ mode: () => "plan" })
+    expect(await engine.runTurn({ ...turn.input, readOnlyRun: true })).toEqual({ status: "ok" })
+    engine.stop()
+    expect(spawned[0]!.args).toEqual(expect.arrayContaining(["--permission-mode", "default"]))
+    expect(fake.written.some((message) => message.request?.subtype === "set_permission_mode" && message.request.mode === "plan")).toBe(false)
+    expect(turn.asked).toHaveLength(0)
+    expect(decision).toEqual({ behavior: "deny", message: "This run is read-only: only read tools are allowed; answer from what you can read." })
+    expect(JSON.stringify(decision)).not.toMatch(/plan/i)
+  })
+
+  test("a slash command in plan is sent as typed", async () => {
+    const fake = fakeClaude({ onUser(api) { streamText(api, 0, "ok"); api.push(result()) } })
+    const { engine } = engineWith([fake])
+    await engine.runTurn(turnInput({ sessionId: ids("session"), text: "/compact", mode: () => "plan" }).input)
+    expect(fake.written.filter((message) => message.type === "user")[0].message.content).toEqual([{ type: "text", text: "/compact" }])
+    engine.stop()
   })
 })

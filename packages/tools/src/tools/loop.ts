@@ -16,6 +16,7 @@ export const loopTool = defineTool({
     '"every 30m", "daily 09:00" (add an IANA zone like "daily 09:00 Europe/Madrid"), "adaptive 30m" (backs off when runs find nothing, speeds up when they act), "external" (fired from outside) or "manual".',
     "mode goal stops when the goal is verified (give criteria, and checks the host can run); monitor repeats until stopped; fixed runs maxRuns times.",
     "Loops you create are report-only by default (runs read and report, never edit); set reportOnly false only when the user asked for edits, and workspace worktree to keep those edits off the user's checkout.",
+    "A loop inherits this session's permission mode (never more) and reads what this session could read; list in reads any path outside the project its runs need, so the user approves it once with the loop. Each run leaves a short notice here unless notify is none.",
     "The user approves every new loop. Do not create a loop for work you can do now.",
   ].join(" "),
   permission: "write",
@@ -35,6 +36,8 @@ export const loopTool = defineTool({
     costBudget: LoopCostBudget.optional().describe("create: opt-in total token/API USD caps; unknown USD blocks by default"),
     rubric: LoopRubric.optional().describe("create, goal: weighted runtime evidence criteria and mandatory blockers"),
     approvalPolicy: LoopApprovalPolicy.optional().describe("create: actions that need user approval; the agent cannot waive or approve gates"),
+    reads: z.array(z.string().min(1).max(4096)).max(10).optional().describe("create: absolute paths outside the project the runs will read; declare them here so the user approves them once, with the loop"),
+    notify: z.enum(["creator", "none"]).optional().describe("create: creator (default) leaves a short notice in this session after every run; none leaves nothing"),
     loopId: z.string().min(1).max(64).optional().describe("pause: the loop id from list"),
   }),
   async preview(args, context) {
@@ -62,6 +65,6 @@ export const loopTool = defineTool({
   },
 })
 
-function createInput(args: { objective?: string | undefined; template?: string | undefined; trigger?: string | undefined; mode?: LoopCreateInput["mode"]; maxRuns?: number | undefined; criteria?: string | undefined; checks?: string[] | undefined; reportOnly?: boolean | undefined; workspace?: LoopCreateInput["workspace"]; runNow?: boolean | undefined; costBudget?: LoopCreateInput["costBudget"]; rubric?: LoopCreateInput["rubric"]; approvalPolicy?: LoopCreateInput["approvalPolicy"] }, name: string): LoopCreateInput {
-  return { name, objective: args.objective, template: args.template, trigger: args.trigger, mode: args.mode, maxRuns: args.maxRuns, criteria: args.criteria, checks: args.checks, reportOnly: args.reportOnly, workspace: args.workspace, runNow: args.runNow, costBudget: args.costBudget, rubric: args.rubric, approvalPolicy: args.approvalPolicy }
+function createInput(args: { objective?: string | undefined; template?: string | undefined; trigger?: string | undefined; mode?: LoopCreateInput["mode"]; maxRuns?: number | undefined; criteria?: string | undefined; checks?: string[] | undefined; reportOnly?: boolean | undefined; workspace?: LoopCreateInput["workspace"]; runNow?: boolean | undefined; costBudget?: LoopCreateInput["costBudget"]; rubric?: LoopCreateInput["rubric"]; approvalPolicy?: LoopCreateInput["approvalPolicy"]; reads?: string[] | undefined; notify?: LoopCreateInput["notify"] }, name: string): LoopCreateInput {
+  return { name, objective: args.objective, template: args.template, trigger: args.trigger, mode: args.mode, maxRuns: args.maxRuns, criteria: args.criteria, checks: args.checks, reportOnly: args.reportOnly, workspace: args.workspace, runNow: args.runNow, costBudget: args.costBudget, rubric: args.rubric, approvalPolicy: args.approvalPolicy, reads: args.reads, notify: args.notify }
 }

@@ -20,7 +20,9 @@ pnpm install --frozen-lockfile --config.minimumReleaseAge=10080
 bun apps/cli/src/entry.ts --dir "$(mktemp -d)"   # run the checkout with throwaway data
 ```
 
-Always pass a throwaway `--dir` while developing, so your real sessions (`~/.mendcode-v2`) are never touched.
+Always pass a throwaway `--dir` while developing, so your real sessions (`~/.mendcode-v2`) are never touched. To program MendCode
+from an installed MendCode, `mendcode dev start|tui|restart` runs the checkout in a second, isolated daemon that restarts without
+cutting your session ([dev mode](docs/dev-mode.md)).
 
 ## Check your change
 

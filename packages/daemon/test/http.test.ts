@@ -164,6 +164,8 @@ test("SSE reuses replay/live frames and cleans subscriptions on cancellation", a
     frames += new TextDecoder().decode(part.value)
   }
   expect(h.daemon.connections()).toBe(1)
+  // The stream said who it is: the cheap count a solo terminal polls agrees with `daemon.status`.
+  expect(h.daemon.clients()).toBe(1)
   await h.command({ type: "user.submit", sessionId: created.sessionId, text: "HTTP streaming", attachments: [] })
   while (!frames.includes('"turn.completed"')) {
     const part = await reader.read()
@@ -175,6 +177,7 @@ test("SSE reuses replay/live frames and cleans subscriptions on cancellation", a
   controller.abort()
   await reader.cancel()
   expect(h.daemon.connections()).toBe(0)
+  expect(h.daemon.clients()).toBe(0)
 })
 
 test("browser app has no remote assets/storage or unsafe content interpolation", async () => {

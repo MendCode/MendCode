@@ -1,5 +1,5 @@
 import type { renderStatusPage } from "../lazy-pages"
-import { DEFAULT_COMPACT_AT_TOKENS } from "@mendcode/protocol/wire"
+import { compactFallback } from "./compact-fallback"
 import { contextLimit } from "../../view/context-meter"
 import type { DaemonInfoReport, ExtensionsReport, ModelsReport } from "@mendcode/protocol"
 import type { TerminalExtension } from "../../view/extensions-page"
@@ -49,7 +49,7 @@ export function createStatus(ctx: AppContext, actions: { loadMcps(): Promise<voi
         permission: state.transcript.permissionMode,
         permissionLabel: permissionLabels[state.transcript.permissionMode],
         state: stateLabels[state.transcript.foreground],
-        ...(contextTokens !== undefined ? { context: { tokens: contextTokens, threshold: contextLimit(usageInForce(state), state.settingsNow.compactAtTokens ?? DEFAULT_COMPACT_AT_TOKENS) } } : {}),
+        ...(contextTokens !== undefined ? { context: { tokens: contextTokens, threshold: contextLimit(usageInForce(state), compactFallback(state)) } } : {}),
       },
       ...(state.mcpsReport ? { mcps: state.mcpsReport } : {}),
       ...(state.mcpsError ? { mcpsError: state.mcpsError } : {}),

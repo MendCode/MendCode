@@ -1,11 +1,15 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
 import path from "node:path"
-import { AsideThread } from "@mendcode/protocol"
+import { AsideArchive, AsideThread } from "@mendcode/protocol"
 import type { SessionEvent } from "@mendcode/protocol"
 
 /** How much of the conversation a side question sees: the most recent part, in characters. */
 export const ASIDE_CONTEXT_CHARS = 24_000
 export const ASIDE_TIMEOUT_MS = 120_000
+/** `/btw history` keeps this many cleared side chats per session, each its last entries with their text cut. */
+export const ASIDE_HISTORY_THREADS = 10
+const ASIDE_HISTORY_ENTRIES = 40
+const ASIDE_HISTORY_TEXT = 4_000
 
 const LABEL: Record<string, string> = { user_message: "User", agent_message: "Assistant", tool_call: "Tool", reasoning: "Thinking" }
 
@@ -64,5 +68,23 @@ export function createAsideStore(dir: string) {
     writeFileSync(temp, JSON.stringify(thread) + "\n")
     renameSync(temp, file(id))
   }
-  return { get, set }
+  const archiveFile = (id: string) => path.join(dir, "asides", `${id}.history.json`)
+  /** The side chats cleared before, newest first; a missing or damaged file is none. */
+  function history(id: string): AsideArchive[] {
+    try {
+      const saved = JSON.parse(readFileSync(archiveFile(id), "utf8")) as unknown
+      return Array.isArray(saved) ? saved.flatMap((entry) => { const parsed = AsideArchive.safeParse(entry); return parsed.success ? [parsed.data] : [] }) : []
+    } catch { return [] }
+  }
+  /** Keeps a cleared thread for `/btw history`: the newest ASIDE_HISTORY_THREADS, each cut to its last entries and their text. */
+  function archive(id: string, thread: AsideThread, at: number) {
+    const messages = thread.messages.filter((message) => message.text.trim()).slice(-ASIDE_HISTORY_ENTRIES).map((message) => ({ ...message, text: message.text.slice(0, ASIDE_HISTORY_TEXT) }))
+    if (!messages.some((message) => message.role === "user")) return
+    const entry: AsideArchive = { at, ...(thread.model ? { model: thread.model } : {}), messages }
+    mkdirSync(path.dirname(archiveFile(id)), { recursive: true })
+    const temp = `${archiveFile(id)}.${process.pid}.tmp`
+    writeFileSync(temp, JSON.stringify([entry, ...history(id)].slice(0, ASIDE_HISTORY_THREADS)) + "\n")
+    renameSync(temp, archiveFile(id))
+  }
+  return { get, set, history, archive }
 }

@@ -18,6 +18,20 @@ describe("edit preview", () => {
     const result = await edit.execute({ path: "f.ts", oldString: "b", newString: "B" }, ctx)
     expect(result.output).toBe(preview!)
   })
+  test("the card's text keeps the unchanged lines around the change; the model's output does not", async () => {
+    const root = tmp()
+    put({ root, path: "f.ts", content: "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n" })
+    const ctx = makeContext({ cwd: root })
+    const result = await edit.execute({ path: "f.ts", oldString: "5\n", newString: "five\n" }, ctx)
+    expect(result.output).toBe("@@ -5,1 +5,1 @@\n-5\n+five")
+    expect(result.display).toBe("@@ -1,10 +1,10 @@\n 1\n 2\n 3\n 4\n-5\n+five\n 6\n 7\n 8\n 9\n 10")
+  })
+  test("context stops at the file's ends and does not count the closing line break", async () => {
+    const root = tmp()
+    put({ root, path: "g.ts", content: "a\nb\nc\n" })
+    const result = await edit.execute({ path: "g.ts", oldString: "b", newString: "B" }, makeContext({ cwd: root }))
+    expect(result.display).toBe("@@ -1,3 +1,3 @@\n a\n-b\n+B\n c")
+  })
   test("is undefined when the edit would fail", async () => {
     const root = tmp()
     put({ root, path: "f.ts", content: "x x" })

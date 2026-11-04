@@ -431,8 +431,16 @@ export function createApp(input: AppInput) {
   const transcriptImages = { generation: () => (appState.imageCards?.images.generation() ?? 0) * 2 + (chartsPainted() ? 1 : 0), slot: (sha256: string, maxCols: number, maxRows?: number) => appState.imageCards?.images.slot(sha256, maxCols, maxRows), charts: chartsPainted }
   /** A generated picture's room: the screen's height less its chrome, at the cell size the graphics layer measured. */
   const imageRoom = () => ({ rows: imageRoomRows(input.screen.size.height), cell: appState.imageCellPixels ?? DEFAULT_IMAGE_ROOM.cell })
+  /** The session's shells and sub-agents running now, from the lists the app already keeps: the latest turn's closing line counts them. */
+  const backgroundNow = () => {
+    let shells = 0
+    let agents = 0
+    for (const shell of appState.agentShells) if (shell.status === "running" && shell.sessionId === appState.sessionId) shell.kind === "agent" ? agents++ : shells++
+    for (const task of appState.liveTasks ?? []) if (task.parentId === appState.sessionId && (task.state === "queued" || task.state === "running" || task.state === "needs_input")) agents++
+    return { shells, agents }
+  }
   /** A transcript with every option the app gives it; a chat switch makes its own through this, so views and model names keep applying. */
-  const newTranscript = () => createTranscript({ glyphs: g, mode: appState.mode, frame: () => appState.spinFrame, motion: () => !appState.reducedMotion, hooks: transcriptHooks, views, images: transcriptImages, secretTail: (n) => secretTail(n), modelLabel: (id) => modelLabel(id, appState.modelReport), now, agent: () => appState.transcript.permissionMode === "plan" ? "Plan" : "Build", compactNotice: () => compactNoticeConfig(appState.settingsNow), subagentRun: (ref) => subagentRunOf(appState, g.sep).ofCall(ref), imageRoom, backgroundRunning: (description) => appState.agentShells.some((shell) => shell.status === "running" && shell.sessionId === appState.sessionId && shell.command === description) })
+  const newTranscript = () => createTranscript({ glyphs: g, mode: appState.mode, frame: () => appState.spinFrame, motion: () => !appState.reducedMotion, hooks: transcriptHooks, views, images: transcriptImages, secretTail: (n) => secretTail(n), modelLabel: (id) => modelLabel(id, appState.modelReport), now, agent: () => appState.transcript.permissionMode === "plan" ? "Plan" : "Build", compactNotice: () => compactNoticeConfig(appState.settingsNow), subagentRun: (ref) => subagentRunOf(appState, g.sep).ofCall(ref), imageRoom, backgroundRunning: (description) => appState.agentShells.some((shell) => shell.status === "running" && shell.sessionId === appState.sessionId && shell.command === description), background: backgroundNow })
   appState.transcript = newTranscript()
   // Page states are created when the page first opens (its module loads lazily, see lazy-pages.ts).
   appState.contextState = {}
@@ -447,7 +455,7 @@ export function createApp(input: AppInput) {
     try {
       const recovery = recoverProfile(profileFile(input.dataDir))
       if (recovery.restored) appState.notice = `Restored ${recovery.restored} settings · undo: /customize restore ${recovery.backupId ?? ""}`
-    } catch (error) { appState.notice = `Profile safety: ${error instanceof Error ? error.message : String(error)}` }
+    } catch (error) { appState.notice = `Terminal settings safety: ${error instanceof Error ? error.message : String(error)}` }
   }
   appState.tuiProfile = input.profile ?? (input.dataDir ? readTuiProfile(input.dataDir) : { ...DEFAULT_TUI_PROFILE })
   // Screen-reader mode from the saved setting or from this run (flag, environment): reduced motion and the plain look, in memory only for a one-off run.
@@ -724,7 +732,7 @@ export function createApp(input: AppInput) {
   const { openMessageActions, copyCommand, exportSession, transcriptActionsKey } = createTranscriptActions(ctx, { loadPage: () => loadPage("transcriptActions"), sessionTitle: (...args) => sessionTitle(...args), rewind, forkAt, copyAnswer })
   const sessionTree = createSessionTree(ctx, { loadPage: (...args) => loadPage(...args), sessionTitle: (...args) => sessionTitle(...args), switchSession: (id) => switchSession(id), jumpTo: (entry) => jumpTo(entry), forkAt: (entry) => forkAt(entry), mergeFork: (id) => mergeFork(id), openMessageActions: (...args) => openMessageActions(...args) })
   const composer = createComposerRecovery(ctx, { attachmentsOf, syncMentions, syncDraft, recallEntriesOf, keepDiscarded, openBacktrack: () => openMessageActions(false, undefined, undefined, true) })
-  const { loadLoops, saveLoop, fireLoop, controlLoop, createLoop, loadLiveLoops, noteLoop } = createLoops(ctx)
+  const { loadLoops, saveLoop, fireLoop, resolveLoopRequest, setLoopMode, confirmLoopDraft, controlLoop, createLoop, loadLiveLoops, noteLoop } = createLoops(ctx, { switchSession: (sessionId) => switchSession(sessionId) })
   const { loadWorkflows, openWorkflows, controlWorkflow, workflowCommand, loadLiveWorkflows, noteWorkflow } = createWorkflows(ctx)
   const automationLedger = createAutomationLedger(ctx)
   const { openPermissions, revokeGrant, approveRetry } = createPermissions(ctx)
@@ -817,6 +825,8 @@ export function createApp(input: AppInput) {
     ideCommand,
     setSidebar: (...args) => setSidebar(...args),
     footerSegments: (...args) => footerSegments(...args),
+    footerIsOwn: () => footerIsOwn(),
+    refreshThemes: () => refreshThemes(),
     switchSession,
     openSessions,
     attachPasted,
@@ -858,6 +868,7 @@ export function createApp(input: AppInput) {
     whenIdle,
     prCommand,
     openReviews: reviews.open,
+    openReviewJob: reviews.openJob,
     titleCommand, pinCommand, settleCommand, prMetadata, fanoutCommand,
     openWorkflows,
     workflowCommand,
@@ -987,6 +998,8 @@ export function createApp(input: AppInput) {
     loadLoops,
     saveLoop,
     fireLoop,
+    resolveLoopRequest,
+    setLoopMode,
     setPermission: (...args) => setPermission(...args),
     revokeGrant,
     diagramLayout,
@@ -1085,6 +1098,7 @@ export function createApp(input: AppInput) {
     changeModelPrefs,
   })
   const { onInput, submit, onEscape } = createInput(ctx, {
+    setPermission: (...args) => setPermission(...args),
     recordSlash: slashMenu.record,
     suggestionPool,
     rewind,
@@ -1104,6 +1118,7 @@ export function createApp(input: AppInput) {
     loadMemories,
     submitPlanDraft: (...args) => submitPlanDraft(...args),
     answerQuestion: (...args) => answerQuestion(...args),
+    confirmLoopDraft: (...args) => confirmLoopDraft(...args),
     questionPaste: (...args) => questionPaste(...args),
     planReviewPaste,
     gitPaste: git.gitPaste,
@@ -1183,6 +1198,8 @@ export function createApp(input: AppInput) {
     footer: (...args) => footer(...args),
     paneFacts: () => paneFacts(),
     statusRows: (...args) => statusRows(...args),
+    promptStatusLine: (...args) => promptStatusLine(...args),
+    homeMascot: () => homeMascot,
   })
   const { chatRows, homeRoot, homeSessions, homeMascot, maxScroll, scrollTranscript } = createChatRows(ctx, {
     slashMenu,
@@ -1204,7 +1221,7 @@ export function createApp(input: AppInput) {
     transcriptWidth: () => transcriptWidth(),
     promptStatusLine: (...args) => promptStatusLine(...args),
   })
-  const { sessionTitle, topbarRow, dockRows, sidebarRows, loadSidebarMcp, setSidebar, statusRow, statusRows, footer, footerSegments, sidebarShown, chatWidth, scrollbarGutter, transcriptWidth, ensureBranch, promptStatusLine, paneFacts } = createChrome(ctx, {
+  const { sessionTitle, topbarRow, dockRows, sidebarRows, loadSidebarMcp, setSidebar, statusRow, statusRows, footer, footerSegments, footerIsOwn, sidebarShown, chatWidth, scrollbarGutter, transcriptWidth, ensureBranch, promptStatusLine, paneFacts } = createChrome(ctx, {
     loadBranch,
     ensureScratch,
     secretTail,
@@ -1309,6 +1326,14 @@ export function createApp(input: AppInput) {
     },
     get page() {
       return appState.page
+    },
+    /** The terminal profile in use, read-only (tests: which /customize rows are listed). */
+    get tuiProfile(): Readonly<import("../view/tui-profile").TuiProfile> {
+      return appState.tuiProfile
+    },
+    /** The view the chat draws in (minimal, balanced, full), read-only. */
+    get viewMode() {
+      return appState.mode
     },
     /** Screen-reader mode and what it forces, read-only (tests, diagnostics). */
     get accessibility() {

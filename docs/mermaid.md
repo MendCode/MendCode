@@ -69,12 +69,12 @@ its top border (`┌─ Title ───┐`; a title row inside for LR/RL) surro
 nest their frames. An edge crossing a frame border is drawn as a crossing, not a break.
 
 When the layered layout is wider than the available columns, the same flow is laid out once
-more with tight spacing and node labels wrapped at 16 cells. A flowchart without subgraphs
-that still overflows is shown as source with the "too wide" note, and `/diagram` draws it at
-full size. A flowchart with subgraphs stays drawn in the chat: an LR flow is laid out
-top-down (RL as BT), and only when that overflows too does the renderer fall back to the
-stacked single-column scene (each box under the previous one, connections on side channels),
-which is also what `graph-scene.ts` still provides to the class, state, ER, architecture and
+more with tight spacing and node labels wrapped at 16 cells (a `<br/>` stays a line break). A
+left-to-right flow that still overflows is laid out top-down (RL as BT), which needs the width of
+one layer instead of the whole chain. A flowchart with subgraphs then falls back to the stacked
+single-column scene (each box under the previous one, connections on side channels). Only when
+none of these fits is the source shown, with a note saying it was too wide even compacted or even
+rotated; `/diagram` draws it at full size. The stacked scene is also what `graph-scene.ts` still provides to the class, state, ER, architecture and
 event-modeling families. Known limits: in LR/RL a back edge leaves a one-line box on the same
 row a forward edge enters, so the two share a segment; subgraphs are keyed by title, so two
 subgraphs with the same title are drawn as one frame.

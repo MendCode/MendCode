@@ -4,6 +4,7 @@ import type { Client, CommandInput } from "@mendcode/client"
 import type { AgentsReport, BlobRef, ReasoningEffort, SessionDetail, SessionId, SessionSummary } from "@mendcode/protocol"
 import { REASONING_EFFORTS } from "@mendcode/protocol/wire"
 import { sessionSelection } from "./session-output"
+import { composeLongText } from "./long-text"
 import { isDraftOnly } from "./view/session-query"
 import { COMPAT } from "./compat"
 import { STDIN_FIRST_BYTE_MS } from "./run-stdin"
@@ -154,8 +155,10 @@ export function parseStartup(argv: string[], probe: FileProbe = {}): Startup {
       values.set(known.flag, value)
     }
   }
+  // `session attach ID` is `attach ID` (listed with the other session commands).
+  if (words[0] === "session" && words[1] === "attach") words.shift()
   // `attach ID` opens the terminal UI on a session (typically one started with `run --bg`).
-  if (words[0] === "attach") {
+  if (words[0] === "attach" && !flags.has("help")) {
     words.shift()
     if (words.length !== 1) throw new Error("attach needs one session id or an HTTP URL")
     if (values.has("session") || flags.has("continue")) throw new Error("attach takes the session id; do not combine it with --session or --continue")
@@ -253,34 +256,66 @@ function distance(a: string, b: string): number {
 }
 
 export const STARTUP_USAGE = [
-  `${PROGRAM_NAME} pet new DESCRIPTION [--usd ESTIMATED_USD_PER_CALL] [--optional] opens the paid-call confirmation in the terminal`,
-  `${PROGRAM_NAME} [PROJECT] [--model P/M] [--agent A] [--continue | --session ID] [--fork]`,
-  "  --prompt TEXT submits once · --initial-message TEXT fills the editor without submitting",
-  "  --add-dir PATH (repeatable, also on run) treats another directory as part of the workspace for this session",
-  "  --no-context-files (-nc, also on run) leaves AGENTS.md and the other instruction files out of this session's prompt · --strict-config stops when a setting is invalid",
-  "  --isolated starts a private temporary daemon · --diagnostics enables /diagnostics and /snapshot",
-  "  --process daemon|auto|solo: auto (default) or solo runs the daemon inside this terminal's process when none runs (about a quarter less memory; a hard-killed terminal interrupts its running turn; slower first frame); daemon uses a separate one (or MENDCODE_PROCESS, or the processMode setting)",
-  "  --no-alt-screen keeps the chat inline so output lands in the terminal scrollback · --alt-screen forces the full screen",
-  "  --safe-mode starts with no extensions, packages, shell hooks, MCP or project tools (or MENDCODE_SAFE_MODE=1); see /doctor",
-  "  --accessible screen-reader mode: inline screen, no animation, no mouse reporting, plain text (or MENDCODE_ACCESSIBLE=1, or /accessible on)",
-  "  --NAME or --NAME=VALUE (also on run) a flag one of your extensions declares (api.registerFlag), for the session this opens",
-  `${PROGRAM_NAME} run [MESSAGE…] [--cwd PROJECT] [--model P/M] [--agent A] [--variant V] [--effort LEVEL]`,
-  "  --effort minimal|low|medium|high|xhigh sets the model's reasoning effort and must be one of that model's levels (also on the TUI; for a Claude Code model --variant LEVEL means the same) · --variant names a provider variant",
-  "  --continue | --session ID · --fork · --command NAME · --file PATH… · --title [TITLE]",
-  "  --file takes the existing paths after it; the first argument that is not one starts the message (--file a.png \"prompt\" and \"prompt\" --file a.png both work)",
-  `  piped stdin is appended to MESSAGE; with a MESSAGE, a stdin that stays silent for ${STDIN_FIRST_BYTE_MS / 1000} s is skipped (a bare - waits for its end)`,
-  "  --format default|json · --thinking · --approve | --dangerously-skip-permissions",
-  "  --output-schema FILE · -o/--output-last-message FILE · --ephemeral · --max-turns N",
-  "  --tools a,b | --no-tools · --exclude-tools a,b · --system-prompt TEXT · --append-system-prompt TEXT",
-  "  -c/--config KEY=VALUE (model, agent, variant, effort, permission, max_turns, tools, exclude_tools, offline, ephemeral, …) · --offline",
-  "  --bg submits the turn and returns the session id at once (approvals wait; use --permission) · follow with ps, logs ID [-f], attach ID, kill ID",
-  "  exit codes: 0 done · 1 failed · 2 stopped · 3 answer rejected by --output-schema · 4 --max-turns reached · 5 approval denied without --approve and nothing ran after it · 64 usage",
-  `${PROGRAM_NAME} attach SESSION_ID · ps · logs SESSION_ID [-f] · kill SESSION_ID`,
-  `${PROGRAM_NAME} acp [--cwd PROJECT]`,
-  `${PROGRAM_NAME} app-server [--cwd PROJECT]   JSON-RPC on stdio for third-party UIs (docs/embedding.md)`,
-  "  --dir DATA (or --data-dir DATA) selects daemon storage, never the project",
-  "  --connect HOST:PORT (also --server-url) / --socket PATH uses the MendCode wire protocol",
-  "  --tui-control opts this terminal into local project control",
+  `usage: ${PROGRAM_NAME} [PROJECT] [options]                   terminal UI`,
+  "  --model P/M · --agent A · --continue | --session ID · --fork",
+  "  --prompt TEXT            submit once",
+  "  --initial-message TEXT   fill the editor without submitting",
+  "  --add-dir PATH           another workspace directory (repeatable; also on run)",
+  "  --no-context-files       leave AGENTS.md and the like out (-nc; also on run)",
+  "  --strict-config          stop when a setting is invalid",
+  "  --isolated               private temporary daemon",
+  "  --diagnostics            enable /diagnostics and /snapshot",
+  "  --process daemon|auto|solo",
+  "                           where the daemon runs (MENDCODE_PROCESS,",
+  "                           processMode setting):",
+  "                           auto and solo use this terminal's process when none",
+  "                           runs: less memory, slower first frame, and a killed",
+  "                           terminal interrupts its turn",
+  "  --no-alt-screen          chat inline, output in scrollback",
+  "  --alt-screen             force the full screen",
+  "  --safe-mode              no extensions, profiles, shell hooks, MCP or project",
+  "                           tools (MENDCODE_SAFE_MODE=1)",
+  "  --accessible             screen-reader mode: inline, no animation, no mouse,",
+  "                           plain text (MENDCODE_ACCESSIBLE=1)",
+  "  --NAME[=VALUE]           a flag one of your extensions declares (also on run)",
+  "  --connect HOST:PORT      another daemon's wire protocol (--server-url)",
+  "  --socket PATH            the same over a socket",
+  "  --dir DATA               daemon storage, never the project (--data-dir)",
+  "  --tui-control            allow local project control from this terminal",
+  "",
+  `usage: ${PROGRAM_NAME} run [MESSAGE...] [options]             one headless turn`,
+  "  --cwd PROJECT · --model P/M · --agent A · --variant V",
+  "  --effort minimal|low|medium|high|xhigh   one of the model's levels",
+  "                           (for a Claude Code model, --variant LEVEL)",
+  "  --continue | --session ID · --fork · --command NAME · --title [TITLE]",
+  "  --file PATH...           attachments; the first argument that is not a path",
+  "                           starts the message",
+  "  --format default|json · --thinking",
+  "  --approve | --dangerously-skip-permissions",
+  "  --output-schema FILE · -o, --output-last-message FILE",
+  "  --ephemeral · --max-turns N · --offline",
+  "  --tools a,b | --no-tools · --exclude-tools a,b",
+  "  --system-prompt TEXT · --append-system-prompt TEXT",
+  "  -c, --config KEY=VALUE   model, agent, variant, effort, permission, max_turns,",
+  "                           tools, exclude_tools, offline, ephemeral, ...",
+  "  --bg                     return the session id at once; approvals wait, so",
+  "                           set --permission",
+  `  Piped stdin is appended to MESSAGE. With a MESSAGE, stdin silent for ${STDIN_FIRST_BYTE_MS / 1000} s`,
+  "  is skipped (a bare - waits for its end).",
+  "  Exit codes: 0 done · 1 failed · 2 stopped · 3 answer rejected by",
+  "  --output-schema · 4 --max-turns reached · 5 approval denied, nothing ran",
+  "  after it · 64 usage",
+  "",
+  `usage: ${PROGRAM_NAME} attach SESSION_ID         open the UI on a session`,
+  `                                         (same: ${PROGRAM_NAME} session attach ID)`,
+  `       ${PROGRAM_NAME} ps                        background sessions running`,
+  `       ${PROGRAM_NAME} logs SESSION_ID [-f]      events of a session`,
+  `       ${PROGRAM_NAME} kill SESSION_ID           cancel its running turn`,
+  `       ${PROGRAM_NAME} acp [--cwd PROJECT]       Agent Client Protocol on stdio`,
+  `       ${PROGRAM_NAME} app-server [--cwd PROJECT]`,
+  "                                         JSON-RPC on stdio (docs/embedding.md)",
+  `       ${PROGRAM_NAME} pet new DESCRIPTION [--usd ESTIMATED_USD_PER_CALL] [--optional]`,
+  "                                         asks to confirm the paid call",
 ].join("\n") + "\n"
 
 async function request(client: Pick<Client, "send">, command: CommandInput) {
@@ -348,12 +383,16 @@ export async function prepareStartup(client: Pick<Client, "send">, options: Star
 export async function prepareRunSubmission(client: Pick<Client, "send">, options: Startup, sessionId: SessionId, directory: string, prompt: string, remote = false): Promise<CommandInput> {
   if (remote && options.files.length) throw new Error("file attachments disabled while remote")
   const attachments: BlobRef[] = []
-  let fileText = ""
+  const texts: Array<{ name: string; content: string }> = []
   for (const file of options.files) {
     const result = await request(client, { type: "attachment.paste", path: path.resolve(directory, file), allowDirectory: true })
     if (result.kind === "image") attachments.push(result.attachment as BlobRef)
-    else fileText += `\n\n[${result.name}]\n${result.content}`
+    else texts.push({ name: String(result.name), content: String(result.content) })
   }
-  if (options.command) return { type: "commands.execute", sessionId, name: options.command.replace(/^\//, ""), args: prompt, attachments, ...(fileText ? { contextText: fileText } : {}) }
-  return { type: "user.submit", sessionId, text: prompt + fileText, attachments }
+  const composed = await composeLongText({ send: async (put) => { const reply = await client.send(put); return reply.ok ? { ok: true, attachment: (reply.result as { attachment?: BlobRef } | undefined)?.attachment } : { ok: false, message: reply.error.message } }, prompt, files: texts })
+  if (!composed.ok) throw new Error(composed.message)
+  attachments.push(...composed.attachments)
+  const { fileText } = composed
+  if (options.command) return { type: "commands.execute", sessionId, name: options.command.replace(/^\//, ""), args: composed.prompt, attachments, ...(fileText ? { contextText: fileText } : {}) }
+  return { type: "user.submit", sessionId, text: composed.prompt + fileText, attachments }
 }

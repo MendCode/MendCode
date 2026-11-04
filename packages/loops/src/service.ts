@@ -3,8 +3,8 @@ import { addUsage, carriedUsage, loopBudgetGate, type UsageEvent } from "./budge
 import { evaluateRubric, rubricGate } from "./rubric"
 import { approvalGate, protectedGate, reviewLoop, reviewSettingsChanged, reviewSettingsGate, type LoopReviewInput } from "./review"
 import type { Clock, TimerHandle } from "@mendcode/kernel"
-import type { createIdFactory, Loop, LoopAudit, LoopBudget, LoopCostBudget, LoopRubric, LoopApprovalPolicy, LoopGate, LoopId, LoopRun, LoopRunTrigger, LoopTickResult, LoopTrigger, LoopWorktree, QueueId, SessionEvent, SessionId, TurnId } from "@mendcode/protocol"
-import { startedQueueIds } from "@mendcode/protocol"
+import type { createIdFactory, Loop, LoopAudit, LoopBudget, LoopCostBudget, LoopRubric, LoopApprovalPolicy, LoopGate, LoopId, LoopRun, LoopRunTrigger, LoopTickResult, LoopTrigger, LoopWorktree, PermissionMode, QueueId, SessionEvent, SessionId, TurnId } from "@mendcode/protocol"
+import { redactSecrets, startedQueueIds } from "@mendcode/protocol"
 import { auditPrompt, parseVerdict, rejectionFeedback } from "./audit"
 import type { CheckRunner } from "./checks"
 import { createVerifier } from "./verifier"
@@ -13,6 +13,8 @@ import { beginRun, finishRun, finishVerification, runPrompt } from "./runs"
 import { getLoopTemplate, templateCriteria, templateObjective } from "./templates"
 
 type IdFactory = ReturnType<typeof createIdFactory>
+
+const APPROVAL_TIMEOUT_MS = 15 * 60_000
 
 export interface LoopStorePort {
   all(): Loop[]
@@ -50,6 +52,13 @@ export type CreateLoopInput = {
   costBudget?: LoopCostBudget
   rubric?: LoopRubric
   approvalPolicy?: LoopApprovalPolicy
+  /** The session that creates the loop: its reads are inherited and it gets a notice per run. */
+  creatorSessionId?: SessionId
+  notify?: "creator" | "none"
+  /** The permission mode the loop's sessions start in (already capped by the creator's). */
+  permission?: PermissionMode
+  /** Paths outside the project the runs will read. */
+  reads?: string[]
 }
 
 export type UpdateLoopInput = { [K in keyof Omit<CreateLoopInput, "directory">]?: CreateLoopInput[K] | undefined }
@@ -67,6 +76,9 @@ export function loopUpdateInput(loop: Loop, patch: UpdateLoopInput): CreateLoopI
     ...(loop.costBudget ? { costBudget: loop.costBudget } : {}),
     ...(loop.rubric ? { rubric: loop.rubric } : {}),
     ...(loop.approvalPolicy ? { approvalPolicy: loop.approvalPolicy } : {}),
+    ...(loop.notify ? { notify: loop.notify } : {}),
+    ...(loop.permission ? { permission: loop.permission } : {}),
+    ...(loop.reads ? { reads: loop.reads } : {}),
     ...fields,
   }
 }
@@ -108,6 +120,8 @@ type Live = {
   started: Map<string, TurnId>
   reportOnly?: boolean
   usageRecorded?: boolean
+  /** Why the host cancelled the turn (an approval nobody gave in time); the run then ends as failed with this message. */
+  timedOut?: string
 }
 
 /**
@@ -120,7 +134,11 @@ export function createLoopService(options: {
   clock: Clock
   ids: IdFactory
   /** `readOnly` sessions start in plan mode (the auditor's). */
-  createSession(input: { directory: string; title: string; readOnly?: boolean }): SessionId
+  createSession(input: { directory: string; title: string; readOnly?: boolean; permission?: PermissionMode }): SessionId
+  /** A run ended: tell the creator session (the host masks secrets and queues the notice). Absent = no notices. */
+  notify?(input: { loop: Loop; run: LoopRun }): void
+  /** How long a run may wait for an approval before it ends with a clear message (default 15 minutes). */
+  approvalTimeoutMs?: number
   submit(input: { sessionId: SessionId; text: string }): Promise<{ queueId: QueueId } | { error: string }>
   /** Runs one check program; without it, loops with checks can never pass them. */
   runCheck?: CheckRunner
@@ -137,6 +155,8 @@ export function createLoopService(options: {
   const loops = new Map<LoopId, Loop>(store.all().map((loop) => [loop.loopId, loop]))
   const bySession = new Map<SessionId, Live>()
   const usageSeq = new Map<SessionId, number>()
+  /** One timer per loop waiting on an approval (see `approvalTimeoutMs`). */
+  const waitTimers = new Map<LoopId, TimerHandle>()
   let timer: TimerHandle | undefined
   const observers = new Set<(loop: Loop) => void>()
   const tickWaiters = new Set<() => void>()
@@ -209,7 +229,7 @@ export function createLoopService(options: {
     let sessionId = loop.sessionId
     let worktree: LoopWorktree | undefined
     if (reportOnly) {
-      sessionId = options.createSession({ directory: loop.directory, title: `loop · ${loop.name} · report ${running.runs}`, readOnly: true })
+      sessionId = options.createSession({ directory: loop.directory, title: `loop · ${loop.name} · report ${running.runs}`, readOnly: true, ...(loop.permission ? { permission: loop.permission } : {}) })
       patchRun(loop.loopId, running.runs, { sessionId })
     } else if (loop.workspace === "worktree") {
       const previous = loop.history.at(-1)?.worktree
@@ -234,7 +254,7 @@ export function createLoopService(options: {
         return
       }
       worktree = { path: made.path, branch: made.branch, base: made.base, state: "active" }
-      sessionId = options.createSession({ directory: made.path, title: `loop · ${loop.name} · run ${running.runs}`, ...(loop.reportOnly ? { readOnly: true } : {}) })
+      sessionId = options.createSession({ directory: made.path, title: `loop · ${loop.name} · run ${running.runs}`, ...(loop.reportOnly ? { readOnly: true } : {}), ...(loop.permission ? { permission: loop.permission } : {}) })
       patchRun(loop.loopId, running.runs, { sessionId, worktree })
     }
     const live: Live = { loopId: loop.loopId, run: running.runs, lastAnswer: "", answerItems: new Set(), started: new Map(), ...(reportOnly ? { reportOnly: true } : {}) }
@@ -283,8 +303,11 @@ export function createLoopService(options: {
     if (!loop) return
     for (const [sessionId, entry] of bySession) if (entry === live) { bySession.delete(sessionId); usageSeq.delete(sessionId) }
     // A one-off report cannot claim an editing objective complete or launch host validation commands.
-    const end = { outcome, finalText: live.reportOnly ? live.lastAnswer.replace(/(status\s*:\s*)complete\b/gi, "$1continue") : live.lastAnswer, at: clock.now() }
+    waitTimers.get(live.loopId)?.cancel()
+    waitTimers.delete(live.loopId)
+    const end = { outcome: live.timedOut && outcome === "cancelled" ? "failed" as const : outcome, finalText: live.reportOnly ? live.lastAnswer.replace(/(status\s*:\s*)complete\b/gi, "$1continue") : live.lastAnswer, at: clock.now() }
     let next = finishRun(loop, end)
+    if (live.timedOut && next.state === "active") next = { ...next, reason: live.timedOut }
     const run = next.history.at(-1)
     if (run?.checkpoint) {
       const checkpointHash = createHash("sha256").update(JSON.stringify([run.run, run.startedAt, run.checkpoint])).digest("hex")
@@ -302,14 +325,23 @@ export function createLoopService(options: {
       void releaseLease(live.loopId).then(() => {
         const fresh = loops.get(live.loopId)
         if (!fresh) return
-        put({ ...next, ...(fresh.state === "stopped" || fresh.state === "paused" ? { state: fresh.state, reason: fresh.reason } : {}), history: fresh.history.map((entry) => entry.run === next.runs ? { ...next.history.at(-1)!, ...(entry.worktree ? { worktree: entry.worktree } : {}) } : entry) })
+        const saved = put({ ...next, ...(fresh.state === "stopped" || fresh.state === "paused" ? { state: fresh.state, reason: fresh.reason } : {}), history: fresh.history.map((entry) => entry.run === next.runs ? { ...next.history.at(-1)!, ...(entry.worktree ? { worktree: entry.worktree } : {}) } : entry) })
+        announce(saved, next.runs)
         arm()
       })
       return
     }
-    put(next)
+    const saved = put(next)
+    announce(saved, next.runs)
     arm()
     if (next.state === "verifying") void verify(next)
+  }
+
+  /** One short notice per ended run, to the session that created the loop (never to a loop without one). */
+  function announce(loop: Loop, runNumber: number) {
+    const run = loop.history.find((entry) => entry.run === runNumber)
+    if (!options.notify || !run || run.endedAt === undefined || !loop.creatorSessionId || loop.notify === "none") return
+    try { options.notify({ loop, run }) } catch {}
   }
 
   /** In-flight verifications, so pause, stop and accept can abort their checks. */
@@ -431,12 +463,27 @@ export function createLoopService(options: {
     if (event.type === "item.completed" && event.text && live.answerItems.has(event.itemId)) live.lastAnswer = event.text
     if (event.type === "server.request" && event.turnId === live.turnId) {
       const loop = loops.get(live.loopId)
-      if (loop?.state === "running") put({ ...loop, state: "needs_input", reason: event.title, updatedAt: clock.now() })
+      if (loop?.state === "running") {
+        // The request's text can carry a command with a secret in it; the loop record is listed to every client, so it is stored redacted.
+        const waiting = { sessionId: event.sessionId, requestId: event.requestId, kind: event.kind, title: redactSecrets(event.title).text.slice(0, 500), detail: redactSecrets(event.detail).text.slice(0, 2_000), ...(event.tool ? { tool: event.tool } : {}), at: clock.now() }
+        put({ ...loop, state: "needs_input", reason: event.title, waiting, updatedAt: clock.now() })
+        const limit = options.approvalTimeoutMs ?? APPROVAL_TIMEOUT_MS
+        waitTimers.get(live.loopId)?.cancel()
+        waitTimers.set(live.loopId, clock.setTimer(limit, () => {
+          waitTimers.delete(live.loopId)
+          const current = loops.get(live.loopId)
+          if (current?.state !== "needs_input" || current.waiting?.requestId !== event.requestId || !live.turnId) return
+          live.timedOut = `no answer to "${event.title}" in ${Math.round(limit / 60_000)}m; the run was ended (approve it in /loops to let the next run through)`
+          options.cancelTurn?.({ sessionId: event.sessionId, turnId: live.turnId })
+        }))
+      }
     }
     if (event.type === "server.request.resolved") {
       const loop = loops.get(live.loopId)
       if (loop?.state === "needs_input") {
-        const { reason: _reason, ...rest } = loop
+        waitTimers.get(live.loopId)?.cancel()
+        waitTimers.delete(live.loopId)
+        const { reason: _reason, waiting: _waiting, ...rest } = loop
         put({ ...rest, state: "running", updatedAt: clock.now() })
       }
     }
@@ -455,6 +502,11 @@ export function createLoopService(options: {
     return next ?? loop
   }
 
+  function forSession(sessionId: SessionId): Loop | undefined {
+    for (const loop of loops.values()) if (loop.sessionId === sessionId || loop.history.some((run) => run.sessionId === sessionId)) return loop
+    return undefined
+  }
+
   return {
     /** Throws on what `createProblems` reports; callers that take user input check it first. */
     create(input: CreateLoopInput): Loop {
@@ -462,7 +514,7 @@ export function createLoopService(options: {
       if (problem) throw new Error(`[LOOP]: ${problem}`)
       const { template, objective, trigger, budget, criteria, reportOnly } = resolveCreateInput(input)
       const now = clock.now()
-      const sessionId = options.createSession({ directory: input.directory, title: `loop · ${input.name}`, ...(reportOnly ? { readOnly: true } : {}) })
+      const sessionId = options.createSession({ directory: input.directory, title: `loop · ${input.name}`, ...(reportOnly ? { readOnly: true } : {}), ...(input.permission ? { permission: input.permission } : {}) })
       const wake = input.draft ? undefined : input.runNow ? now : nextWake(trigger, now)
       const loop: Loop = {
         loopId: ids("loop"),
@@ -480,6 +532,9 @@ export function createLoopService(options: {
         ...(template ? { template: template.id } : {}),
         ...(reportOnly ? { reportOnly: true } : {}),
         ...(input.workspace === "worktree" ? { workspace: "worktree" as const } : {}),
+        ...(input.creatorSessionId ? { creatorSessionId: input.creatorSessionId, notify: input.notify ?? "creator" } : input.notify ? { notify: input.notify } : {}),
+        ...(input.permission ? { permission: input.permission } : {}),
+        ...(input.reads?.length ? { reads: input.reads } : {}),
         state: input.draft ? "paused" : "active",
         ...(input.draft ? { draft: true, reason: "Draft; activate to schedule runs" } : {}),
         sessionId,
@@ -504,7 +559,7 @@ export function createLoopService(options: {
         if (problem) throw new Error(`[LOOP]: ${problem}`)
         const { template, objective, trigger, budget, criteria, reportOnly } = resolveCreateInput(input)
         const now = clock.now()
-        const { nextWakeAt: _wake, adaptiveMs: _pace, pendingFire: _fire, criteria: _criteria, checks: _checks, audit: _audit, reportOnly: _reportOnly, workspace: _workspace, ...rest } = loop
+        const { nextWakeAt: _wake, adaptiveMs: _pace, pendingFire: _fire, criteria: _criteria, checks: _checks, audit: _audit, reportOnly: _reportOnly, workspace: _workspace, notify: _notify, permission: _permission, reads: _reads, ...rest } = loop
         const pace = JSON.stringify(trigger) !== JSON.stringify(loop.trigger) ? undefined : loop.adaptiveMs
         const audit = budget.mode === "goal" ? input.audit ?? (patch.budget || patch.template ? "independent" : undefined) : undefined
         const sameTrigger = JSON.stringify(trigger) === JSON.stringify(loop.trigger)
@@ -524,6 +579,9 @@ export function createLoopService(options: {
           ...(template ? { template: template.id } : {}),
           ...(reportOnly !== undefined ? { reportOnly } : {}),
           ...(input.workspace !== undefined ? { workspace: input.workspace } : {}),
+          ...(input.notify !== undefined ? { notify: input.notify } : {}),
+          ...(input.permission !== undefined ? { permission: input.permission } : {}),
+          ...(input.reads?.length ? { reads: input.reads } : {}),
           ...(pace !== undefined && trigger.kind === "adaptive" ? { adaptiveMs: pace } : {}),
           ...(loop.pendingFire && trigger.kind === "external" ? { pendingFire: loop.pendingFire } : {}),
           ...(wake !== undefined ? { nextWakeAt: wake } : {}),
@@ -658,6 +716,12 @@ export function createLoopService(options: {
       return true
     },
     observe,
+    /** The loop a session belongs to (its root session or one of its runs' sessions). */
+    forSession,
+    /** Whether a session is a report-only run's (its prompt and tools are the report's, not plan mode's). */
+    reportOnlySession(sessionId: SessionId): boolean {
+      return bySession.get(sessionId)?.reportOnly === true || forSession(sessionId)?.reportOnly === true
+    },
     /**
      * After a restart: a run that was in progress was interrupted with the daemon (its turn is marked
      * interrupted by crash recovery), so it is closed as interrupted; overdue loops run once, no catch-up.
@@ -673,6 +737,8 @@ export function createLoopService(options: {
     dispose() {
       timer?.cancel()
       timer = undefined
+      for (const waiting of waitTimers.values()) waiting.cancel()
+      waitTimers.clear()
       for (const controller of verifications.values()) controller.abort()
       for (const interrupt of [...tickWaiters]) interrupt()
     },

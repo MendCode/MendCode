@@ -9,17 +9,18 @@ const requests = (h: NativeHarness) => h.events.filter((event) => event.type ===
 const notices = (h: NativeHarness) => h.events.filter((event) => event.type === "item.completed" && event.meta?.memorySaved === true)
 
 test("explicit Spanish consent saves once, normalized extractor duplicate writes nothing", async () => {
-  const h = await boot({ memoryTools: true, steps: [callTool("memory_graph", fact), stop("done")], extractMemory: async () => [{ scope: "user", text: "  THE USER'S name IS   Nora.  ", category: "preferences" }] })
+  let extracted = 0
+  const h = await boot({ memoryTools: true, steps: [callTool("memory_graph", fact), stop("done")], extractMemory: async () => { extracted++; return [{ scope: "user", text: "  THE USER'S name IS   Nora.  ", category: "preferences" }] } })
   all.push(h)
   const id = await openSession(h, "ask")
   await h.client.send({ type: "settings.set", patch: { memoryGenerate: true } })
   await say(h, id, "me llamo Nora recuerda eso")
-  await until(() => h.store.extraction.list()[0]?.state === "completed")
+  await until(() => extracted === 1 && h.store.extraction.list().length === 0)
   expect(requests(h)).toHaveLength(0)
   expect(saved(h)).toHaveLength(1)
   expect(notices(h)).toHaveLength(1)
   expect(notices(h)[0]).toMatchObject({ text: `Memory  saved · user · "The user's name is Nora."`, meta: { memoryChange: "saved", memoryScope: "user", memoryText: "The user's name is Nora." } })
-  expect(h.store.extraction.list()[0]?.proposed).toBe(0)
+  expect(h.store.memories.list().filter((memory) => memory.status === "pending")).toHaveLength(0)
 })
 
 for (const decision of ["save", "edit", "reject", "always"] as const) test(`model memory approval: ${decision}`, async () => {
@@ -79,7 +80,7 @@ test("extractor announces only committed saved facts, not pending or failed prop
   const id = await openSession(h)
   await h.client.send({ type: "settings.set", patch: { memoryGenerate: true, memoryPolicies: { commands: "auto" } } })
   await say(h, id, "A durable rule")
-  await until(() => h.store.extraction.list()[0]?.state === "completed")
+  await until(() => count === 1 && h.store.extraction.list().length === 0)
   expect(notices(h)).toHaveLength(0)
   await h.client.send({ type: "settings.set", patch: { memoryRequireApproval: false } })
   await say(h, id, "Another durable rule")

@@ -12,7 +12,7 @@ import { remoteExecutionCommand, remoteExecutionSettings } from "../src/remote-p
 const ids = createIdFactory()
 
 test("remote execution installers cannot bypass the settings gate", () => {
-  for (const type of ["packages.install", "packages.enable", "packages.resource", "packages.install-catalog", "packages.install-source", "packages.add-source", "mcp.decide", "tools.trust"]) {
+  for (const type of ["profiles.install", "profiles.enable", "profiles.resource", "profiles.install-catalog", "profiles.install-source", "profiles.add-source", "mcp.decide", "tools.trust"]) {
     expect(remoteExecutionCommand(type)).toBe(true)
   }
   expect(remoteExecutionCommand("session.list")).toBe(false)
@@ -22,7 +22,7 @@ test("remote feature aliases cannot re-enable host execution", () => {
   for (const patch of [
     { experimental: { thread_tools: true, pr_watch: true } },
     { tools: { "mcp__*": true } },
-    { disabledExtensions: null }, { disabledPackages: null }, { disabledPackageResources: null },
+    { disabledExtensions: null }, { disabledProfiles: null }, { disabledProfileResources: null },
   ]) expect(remoteExecutionSettings(patch)).toBe(true)
   expect(remoteExecutionSettings({ theme: "dark" })).toBe(false)
 })
@@ -64,16 +64,16 @@ test("a full-access remote peer cannot weaken the sandbox, trust a project, allo
     { experimental: { thread_tools: true, pr_watch: true, reasoning_auto: true } },
     { tools: { "mcp__*": true, threads: true } },
     { disabledExtensions: null },
-    { disabledPackages: null },
-    { disabledPackageResources: null },
+    { disabledProfiles: null },
+    { disabledProfileResources: null },
     { projectConfig: { [project]: { permission: { bash: { "*": "allow" as const } } } } },
   ]
   const before = JSON.stringify(daemon.store.settings.get())
   for (const patch of patches) expect(await remote.send({ type: "settings.set", patch })).toMatchObject({ ok: false, error: { code: "forbidden" } })
   for (const command of [
-    { type: "packages.enable" as const, directory: project, key: "project:evil", enabled: true },
-    { type: "packages.resource" as const, directory: project, key: "project:evil", resource: "extensions/x.ts", enabled: true },
-    { type: "packages.install-source" as const, directory: project, sourceId: "evil", scope: "project" as const },
+    { type: "profiles.enable" as const, directory: project, key: "project:evil", enabled: true },
+    { type: "profiles.resource" as const, directory: project, key: "project:evil", resource: "extensions/x.ts", enabled: true },
+    { type: "profiles.install-source" as const, directory: project, sourceId: "evil", scope: "project" as const },
     { type: "mcp.decide" as const, directory: project, server: "evil", scope: "project" as const, revision: "fake", approve: true },
   ]) expect(await remote.send(command)).toMatchObject({ ok: false, error: { code: "forbidden" } })
   expect(await remote.send({ type: "tools.trust", directory: project, trusted: true })).toMatchObject({ ok: false, error: { code: "forbidden" } })

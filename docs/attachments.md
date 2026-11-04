@@ -13,7 +13,7 @@ and its version (path, inode, size, mtime and ctime): re-reading does not repeat
 again, and compaction can make them eligible again. Root/global instructions are in the system prompt.
 
 `/attach <path>` and dropped/pasted paths use the daemon. Project files/directories insert `@path` (quoted for
-spaces). External text files are inlined up to 200 KiB; external directories are bounded sorted listings.
+spaces). External text files are read up to 200 KiB; external directories are bounded sorted listings.
 Existing pasted-image limits remain 20 MiB; pasted PDFs have the 5 MiB limit.
 
 Bracketed text pastes remain literal across stdin reads. Empty paste events do nothing; only the
@@ -29,6 +29,18 @@ text right where the label stands, in that turn and in every later one. The nati
 ordered parts and in the plain text, so every provider gets it); Claude Code, Codex, pi and ACP agents get it put back into the
 message text, including a message that joins a running turn. Text typed by hand (not pasted) over 64 KB, or a single paste over
 4 MiB, is not sent: the prompt stays as it was and says why.
+
+## Long text from `run` and `session send`
+
+A message is at most 64 KiB (65,536 characters) of text, less room the daemon keeps for what it adds. A positional prompt, piped
+stdin or a `--file` text that would pass it is sent once as a `text/plain` attachment instead (`prompt.txt`, or the file's name with
+`.txt`); the message keeps only its `[name]` label and the model reads the whole text where the label stands, in that turn and the
+next ones. The largest piece moves first, so a short prompt next to one big file stays as typed. Nothing is stored twice: a text that
+fits stays in the message, one that does not is stored only as the attachment. Each prompt or text file is limited to 200 KiB
+(204,800 bytes); over that, the command stops before sending and says which one, its size and the limit (`the prompt is 250,021
+bytes; the limit is 204,800`, `huge.md ... larger than 200 KB (250,021 bytes; the limit is 204,800)`). A command the daemon
+still refuses for length names the field, the size sent and the limit (`daemon rejected user.submit · text is 65,537 characters;
+the limit is 65,536`).
 
 ## Inline tokens
 

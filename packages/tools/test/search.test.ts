@@ -55,13 +55,13 @@ describe("glob", () => {
     expect(result.meta?.matches).toBe(3)
     expect(result.title).toBe("Glob src/**/*.ts, test/**/*.ts, **/a.ts")
   })
-  test("`pattern` and `patterns` together are one merged search; neither, an empty list or more than 8 is refused", async () => {
+  test("`pattern` and `patterns` together are one merged search; neither, an empty list or more than 32 is refused", async () => {
     const ctx = makeContext({ cwd: twoTrees() })
     expect((await runTool(glob, { pattern: "docs/*.ts", patterns: ["test/**/*.ts"] }, ctx)).output.split("\n")).toEqual(["docs/c.ts", "test/a.test.ts"])
     expect((await runTool(glob, {}, ctx)).output).toContain("glob needs `pattern` or `patterns`")
     expect((await runTool(glob, { patterns: [] }, ctx)).output).toContain("invalid arguments: patterns")
-    expect((await runTool(glob, { patterns: Array.from({ length: 9 }, (_, index) => `${index}/*`) }, ctx)).output).toContain("invalid arguments: patterns")
-    expect((await runTool(glob, { patterns: Array.from({ length: 8 }, (_, index) => `${index}/*`) }, ctx)).output).toBe("No files found")
+    expect((await runTool(glob, { patterns: Array.from({ length: 33 }, (_, index) => `${index}/*`) }, ctx)).output).toContain("max 32 patterns per call; split them into several calls")
+    expect((await runTool(glob, { patterns: Array.from({ length: 32 }, (_, index) => `${index}/*`) }, ctx)).output).toBe("No files found")
   })
   test("the result cap is shared by all the patterns of a call", async () => {
     const root = tmp()

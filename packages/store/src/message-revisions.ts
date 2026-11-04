@@ -3,7 +3,8 @@ import { eventFromColumns, type OwnEventRow, type ObjectLoader } from "./compres
 import type { ItemId, MessageRevision, SessionEvent, SessionId } from "@mendcode/protocol"
 import { projectMessageEvent } from "@mendcode/protocol/wire"
 
-export function createMessageRevisions(db: Database, load: ObjectLoader) {
+/** `sealedItem`: an item's rows in sealed turn blocks (sealed-turns.ts), which `events_read` does not hold. */
+export function createMessageRevisions(db: Database, load: ObjectLoader, sealedItem: (sessionId: string, itemId: string) => OwnEventRow[] = () => []) {
   db.run(`CREATE TABLE IF NOT EXISTS message_revisions (
     session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
     item_id TEXT NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(session_id, item_id)
@@ -20,6 +21,7 @@ export function createMessageRevisions(db: Database, load: ObjectLoader) {
     revision,
     has(sessionId: SessionId, itemId: ItemId) {
       return db.query("SELECT 1 FROM events_read WHERE session_id = ? AND type = 'item.started' AND json_extract(payload, '$.itemId') = ? LIMIT 1").get(sessionId, itemId) !== null
+        || sealedItem(sessionId, itemId).some((row) => row.type === "item.started")
     },
     record(event: SessionEvent) {
       if (event.type === "message.revised") put.run(event.sessionId, event.itemId, JSON.stringify(event))
@@ -34,7 +36,7 @@ export function createMessageRevisions(db: Database, load: ObjectLoader) {
       })
     },
     read(sessionId: SessionId, itemId: ItemId) {
-      const rows = item.all(sessionId, itemId)
+      const rows = sealedItem(sessionId, itemId).concat(item.all(sessionId, itemId))
       if (rows.length > 10000) throw new RangeError("message event limit exceeded")
       const events = rows.map((row) => eventFromColumns(sessionId, row.seq, row.at, row.type, row.payload, load))
       const start = events.find((event): event is Extract<SessionEvent, { type: "item.started" }> => event.type === "item.started")

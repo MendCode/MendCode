@@ -18,7 +18,7 @@ test("B49 parser accepts all eight flags, aliases and rejects conflicting target
   expect(parsed(["cache", "off", "--global", "--project-path=../other", "--format=text"])).toMatchObject({ operation: "disable", json: false, target: { projectPath: "../other" } })
   expect(parsed(["cache", "status", "--global=false"])).toMatchObject({ target: {} })
   expect(parsed(["cache", "--help"])).toMatchObject({ kind: "help", topic: "cache" })
-  expect(helpText()).toContain("cache <status|enable")
+  expect(helpText()).toContain("cache <command>")
   expect(completionScript("bash")).toContain("cache) words='status enable on disable off'")
   for (const args of [["enable", "--model", "m"], ["enable", "--project-path", "/tmp/x"], ["disable", "--session", "s", "--provider", "p"], ["status", "--scope", "global"], ["status", "--format", "table"], ["status", "--json=bad"], ["status", "--unknown"], ["enable", "--provider"], ["status", "extra"]]) expect(parseAutomation(["cache", ...args]).ok).toBe(false)
   expect(parsed(["session", "rename", "ses_x", "cache"])).toMatchObject({ kind: "session.rename", title: "cache" })

@@ -99,6 +99,9 @@ export function readDetail({ name, detail, pattern }: { name: ReadTool; detail: 
  * `Read 5 files · List 2 · Grep 3`: the calls of a folded run, in the order the tools are listed above. `spelled` (the full view's
  * `calm` density) says what each count counts: `Read 5 files · List 2 folders · Grep 3 patterns`.
  */
+/** The row a folded run of shell commands draws: `Ran 6 shell commands`. */
+export const shellRunLabel = (count: number) => `Ran ${plural(count, "shell command")}`
+
 export function foldLabel(names: readonly string[], spelled = false): string {
   const count = (tool: ReadTool) => names.filter((name) => name === tool).length
   const parts = [

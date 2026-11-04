@@ -5,7 +5,7 @@ import type { Line } from "../ui/theme"
 export const PAGE_TITLES: Readonly<Record<string, string>> = {
   file: "File", tasks: "Tasks", stash: "Stash", drafts: "Drafts", queue: "Queue", history: "Prompt history", skills: "Skills", variants: "Variants",
   "model-picker": "Models", sessions: "Sessions", usage: "Usage", help: "Help", changes: "Changes", memory: "Memory", context: "Context",
-  mcps: "MCP servers", acp: "ACP agents", tools: "Tools", packages: "Packages", loops: "Loops", storage: "Storage", setup: "Setup",
+  mcps: "MCP servers", acp: "ACP agents", tools: "Tools", packages: "Profiles", loops: "Loops", storage: "Storage", setup: "Setup",
   model: "Model", agent: "Agent", theme: "Themes", agents: "Agent View", pet: "Pet", workflows: "Workflows", extension: "Extension",
   customize: "Customize", settings: "Settings", status: "Status", extensions: "Extensions", hooks: "Hooks", connect: "Connect",
   providers: "Providers", secrets: "Secrets", env: "Environment", tree: "Session tree", text: "Document", permissions: "Permissions",

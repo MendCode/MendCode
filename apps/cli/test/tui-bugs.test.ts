@@ -103,7 +103,10 @@ test("the pet stands on the prompt while a turn works: the working line does not
 
 test("the pet stays while the transcript scrolls: a row reaching its cells is cut short and the jump pill stops before it", async () => {
   const width = 100
-  const h = appHarness({ width, height: 30, dataDir: tempDir(), directory: tempDir(), pets: { dirs: [{ dir: path.join(import.meta.dir, "fixtures/pets"), source: "user" }], cacheDir: tempDir(), images: false } })
+  const petData = tempDir()
+  // Every row under the pet is the answer's, not the short closing line of the turn.
+  writeTuiProfile(petData, { ...DEFAULT_TUI_PROFILE, timestamps: "off" })
+  const h = appHarness({ width, height: 30, dataDir: petData, directory: tempDir(), pets: { dirs: [{ dir: path.join(import.meta.dir, "fixtures/pets"), source: "user" }], cacheDir: tempDir(), images: false } })
   h.app.applySettings({ onboarded: true, tier: "full", pet: "user:tiny", reducedMotion: true })
   await h.app.petReady
   const chat = conversation(h.sessionId, (event) => h.app.onEvent(event))
@@ -174,7 +177,8 @@ test("pet reserves the collapsed right sheet", async () => {
 test("a kitty pet image leaves the rows under it whole (it is transparent); a pet without that protocol cuts them at its edge", async () => {
   const frame = async (kitty: boolean) => {
     const dataDir = tempDir()
-    writeTuiProfile(dataDir, { ...DEFAULT_TUI_PROFILE, panelNarrow: "sheet", rightSidebar: false })
+    // The rows under the pet are the answer's, not the short closing line of the turn.
+    writeTuiProfile(dataDir, { ...DEFAULT_TUI_PROFILE, panelNarrow: "sheet", rightSidebar: false, timestamps: "off" })
     const rows: string[][] = []
     const placed: Array<Array<{ slot: string; row: number; rows: number; col: number }>> = []
     const screen = { size: { width: 100, height: 24 }, draw: (lines: Array<Array<{ text: string }>>, _cursor?: unknown, images?: Array<{ slot: string; row: number; rows: number; col: number }>) => { rows.push(lines.map((line) => line.map((span) => span.text).join(""))); placed.push(images ?? []) }, write() {}, ...(kitty ? { imageProtocol: "kitty" } : {}) }

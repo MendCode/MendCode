@@ -17,7 +17,7 @@ function markdownNames(dir: string, prefix = ""): string[] {
 
 const stems = (dir: string, extension: RegExp) => entries(dir).filter((entry) => entry.isFile() && extension.test(entry.name) && !entry.name.endsWith(".d.ts")).map((entry) => entry.name.replace(extension, ""))
 
-/** The switchable resources a package folder ships, by kind; names follow what each loader calls them. Nothing is read or imported. */
+/** The switchable resources a profile folder ships, by kind; names follow what each loader calls them. Nothing is read or imported. */
 export function packageResourceIds(dir: string): Array<{ id: string; kind: ResourceKind; name: string }> {
   const names: Record<ResourceKind, string[]> = {
     skills: entries(path.join(dir, "skills")).filter((entry) => entry.isDirectory() && existsSync(path.join(dir, "skills", entry.name, "SKILL.md"))).map((entry) => entry.name),
@@ -33,7 +33,7 @@ export function packageResourceIds(dir: string): Array<{ id: string; kind: Resou
   return RESOURCE_KINDS.flatMap((kind) => names[kind].map((name) => ({ id: resourceId(kind, name), kind, name }))).slice(0, MAX_PACKAGE_RESOURCES)
 }
 
-/** Every installed package (optionally one key) with its resources and whether each is on. */
+/** Every installed profile (optionally one key) with its resources and whether each is on. */
 export function listPackageResources(input: { userDir: string; directory: string; disabledResources?: readonly string[]; key?: string | undefined }): PackageResources[] {
   const off = new Set(input.disabledResources ?? [])
   return listPackages({ userDir: input.userDir, directory: input.directory })
@@ -41,7 +41,7 @@ export function listPackageResources(input: { userDir: string; directory: string
     .map((pkg) => ({ key: pkg.key, name: pkg.name, source: pkg.source, resources: packageResourceIds(pkg.dir).map((resource) => ({ ...resource, enabled: !off.has(resourceKey(pkg.key, resource.id)) })) }))
 }
 
-/** Settings value after switching one resource; throws when the package or resource does not exist. */
+/** Settings value after switching one resource; throws when the profile or resource does not exist. */
 export function setResourceEnabled(input: { userDir: string; directory: string; disabledResources: readonly string[]; key: string; resource: string; enabled: boolean }): string[] {
   const found = listPackageResources({ userDir: input.userDir, directory: input.directory, key: input.key })[0]
   if (!found) throw new PackageError(`${input.key} is not installed`)

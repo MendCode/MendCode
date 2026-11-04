@@ -1,3 +1,4 @@
+import { IMAGE_TOKENS } from "@mendcode/protocol/wire"
 import type { ContextReport } from "@mendcode/protocol"
 import type { ColorName, Glyphs, Line, Span } from "../ui/theme"
 import { beside, boxPanel, columns, fit, panelGrid, spread } from "./deck"
@@ -41,6 +42,7 @@ const CATEGORIES: Array<{ id: string; label: string; color: ColorName; glyph: st
   { id: "memory", label: "Memory", color: "warning", glyph: "◇" },
   { id: "skills", label: "Skills", color: "code", glyph: "◈" },
   { id: "messages", label: "Messages", color: "text", glyph: "▪" },
+  { id: "harness", label: "Harness base", color: "heading", glyph: "■" },
 ]
 const label = (text: string): Span => ({ text, fg: "muted" })
 const value = (text: string): Span => ({ text, fg: "text", bold: true })
@@ -61,16 +63,22 @@ function slices(report: ContextReport) {
   return [...grouped.values()]
 }
 
+/** Tokens in use: the provider's count of the last call when there is one; the estimate is only the fallback. */
+export const contextUsed = (report: ContextReport) => report.measuredTokens ?? report.estimatedTokens
+
+/** A harness (Claude Code) that has not answered yet: what it sends beyond the history is unknown, so no number is shown. */
+const harnessUnmeasured = (report: ContextReport) => report.harness !== undefined && report.measuredTokens === undefined
+
 export function contextWindowSlices(report: ContextReport) {
   const limit = report.contextWindow ?? report.compactAtTokens
   const categories = slices(report)
   const attributed = categories.reduce((sum, entry) => sum + entry.tokens, 0)
-  const used = Math.max(attributed, report.estimatedTokens)
+  const used = Math.max(attributed, contextUsed(report))
   const buffer = report.contextWindow === undefined ? 0 : Math.max(0, limit - report.compactAtTokens)
   const free = Math.max(0, limit - used - buffer)
   return {
     limit,
-    categories: [...CATEGORIES.map((entry) => ({ ...entry, tokens: categories.find((part) => part.id === entry.id)?.tokens ?? 0, known: categories.some((part) => part.id === entry.id) })),
+    categories: [...CATEGORIES.filter((entry) => report.harness === undefined ? entry.id !== "harness" : entry.id === "harness" || entry.id === "messages").map((entry) => ({ ...entry, label: entry.id === "harness" ? categories.find((part) => part.id === "harness")?.label ?? entry.label : entry.label, tokens: categories.find((part) => part.id === entry.id)?.tokens ?? 0, known: categories.some((part) => part.id === entry.id) })),
       ...(used > attributed ? [{ id: "unknown", label: "Unattributed", tokens: used - attributed, known: true, color: "muted" as const, glyph: "?" }] : []),
       { id: "free", label: "Free space", tokens: free, known: true, color: "border" as const, glyph: "·" },
       { id: "buffer", label: "Autocompact buffer", tokens: buffer, known: report.contextWindow !== undefined, color: "secondary" as const, glyph: "▒" }],
@@ -93,16 +101,20 @@ export function contextGlyphGrid(report: ContextReport): Line[] {
 
 function overview(report: ContextReport, width: number): Line[] {
   const { limit, categories } = contextWindowSlices(report)
-  const pressure = report.estimatedTokens / report.compactAtTokens
+  const used = contextUsed(report)
+  const point = report.compactAtTokens
+  const pressure = used / point
+  const unmeasured = harnessUnmeasured(report)
+  const headline = unmeasured ? `— / ${tokens(point)}` : `${report.measuredTokens === undefined ? "≈" : ""}${tokens(used)} / ${tokens(point)} (${(used / point * 100).toFixed(1)}%)`
   const meta: Line[] = [
     [value(report.model)],
     [label(`id ${report.sessionId ?? "unavailable"}`)],
-    [{ text: `≈${tokens(report.estimatedTokens)} / ${tokens(limit)} (${(report.estimatedTokens / limit * 100).toFixed(1)}%)`, fg: pressure >= 0.9 ? "error" : pressure >= 0.7 ? "warning" : "success", bold: true }],
-    [label(report.contextWindow === undefined ? "Window unknown · compact threshold shown" : `Autocompact at ${tokens(report.compactAtTokens)}${report.contextWindowOverride ? " · window set with /context-window" : ""}`)],
-    [label(report.measuredTokens === undefined ? "Measured: none yet" : `Measured: ${tokens(report.measuredTokens)} at last call`)],
-    ...categories.map((entry): Line => [{ text: `${entry.glyph} `, fg: entry.color }, { text: `${entry.label}: ${entry.known ? `${tokens(entry.tokens)} tokens (${(entry.tokens / limit * 100).toFixed(1)}%)` : "unavailable"}`, fg: entry.color }]),
-    ...(report.images ? [[label(`${report.images} images · tokens not estimated`)]] : []),
-    ...(report.contextWindow !== undefined && report.estimatedTokens > report.compactAtTokens ? [[{ text: `${tokens(report.estimatedTokens - report.compactAtTokens)} tokens in buffer`, fg: "warning" } as Span]] : []),
+    [{ text: headline, fg: unmeasured ? "muted" : pressure >= 0.9 ? "error" : pressure >= 0.7 ? "warning" : "success", bold: true }],
+    [label(`Used: ${unmeasured ? `— until ${report.harness} answers` : report.measuredTokens === undefined ? "estimated" : "measured"} · compacts at ${tokens(point)}`)],
+    [label(report.contextWindow === undefined ? "Model window: unknown" : `Model window: ${tokens(report.contextWindow)}${report.contextWindowOverride ? " · set with /context-window" : ""}`)],
+    ...categories.filter((entry) => report.harness === undefined || entry.known || entry.id === "free" || entry.id === "buffer").map((entry): Line => [{ text: `${entry.glyph} `, fg: entry.color }, { text: `${entry.label}: ${entry.known ? `${tokens(entry.tokens)} tokens (${(entry.tokens / limit * 100).toFixed(1)}%)` : "unavailable"}`, fg: entry.color }]),
+    ...(report.images ? [[label(`${report.images} images · ≈${tokens(report.images * IMAGE_TOKENS)} tokens estimated (${tokens(IMAGE_TOKENS)} each)`)]] : []),
+    ...(report.contextWindow !== undefined && used > point ? [[{ text: `${tokens(used - point)} tokens past the compaction point`, fg: "warning" } as Span]] : []),
   ]
   const metaWidth = Math.max(1, width - 22)
   const wrapped = meta.flatMap((row) => row.length === 1 ? wrap(row[0]!.text, metaWidth).map((text): Line => [{ ...row[0]!, text }]) : wrap(row.map((span) => span.text).join(""), metaWidth).map((text): Line => [{ text, fg: row[0]?.fg ?? "text" }]))
@@ -131,9 +143,9 @@ export function contextSuggestions(report: ContextReport): string[] {
     if (owner.owner !== "built-in" && owner.uses === 0 && owner.tokens >= IDLE_RENT_TOKENS) out.push(`${owner.owner} adds ≈${tokens(owner.tokens)} tokens to every request (${owner.tools} tool${owner.tools === 1 ? "" : "s"}) and none was called in this history. Turn it off in /mcp or /extensions, or use /tier.`)
   }
   const result = report.largest.find((message) => message.role === "tool" && message.tokens >= Math.max(1000, report.compactAtTokens * 0.01))
-  if (result) out.push(`Largest tool result: ${tokens(result.tokens)} tokens (${(result.tokens / Math.max(1, report.estimatedTokens) * 100).toFixed(1)}% of used). Narrow this output: ${result.preview}`)
+  if (result) out.push(`Largest tool result: ${tokens(result.tokens)} tokens (${(result.tokens / Math.max(1, contextUsed(report)) * 100).toFixed(1)}% of used). Narrow this output: ${result.preview}`)
   for (const read of report.repeatedReads ?? []) out.push(`Re-read ${read.path} ${read.count} times · ${tokens(read.tokens)} tokens. Reuse the previous read when the file is unchanged.`)
-  if (report.estimatedTokens >= report.compactAtTokens * 0.9) out.push(`Only ${tokens(Math.max(0, report.compactAtTokens - report.estimatedTokens))} tokens before autocompact. /compact can summarize this history now.`)
+  if (!harnessUnmeasured(report) && contextUsed(report) >= report.compactAtTokens * 0.9) out.push(`Only ${tokens(Math.max(0, report.compactAtTokens - contextUsed(report)))} tokens before autocompact. /compact can summarize this history now.`)
   return out
 }
 

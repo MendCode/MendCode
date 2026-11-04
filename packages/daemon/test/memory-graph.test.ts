@@ -78,7 +78,7 @@ describe("memory graph", () => {
   test("the graph follows profiles: another profile's user memories are not nodes", async () => {
     const { client, project, add, graph } = await boot()
     await add("mine", "user")
-    await client.send({ type: "settings.set", patch: { profiles: [{ name: "work", directories: [project] }] } })
+    await client.send({ type: "settings.set", patch: { areas: [{ name: "work", directories: [project] }] } })
     await add("work fact", "user")
     expect((await graph()).nodes.map((node) => node.text)).toEqual(["work fact"])
   })

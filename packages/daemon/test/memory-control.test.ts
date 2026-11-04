@@ -58,7 +58,7 @@ describe("B19 daemon memory controls", () => {
   })
   test("user imports and CRUD cannot escape their profile or declared scope", async () => {
     const h = await boot()
-    await h.client.send({ type: "settings.set", patch: { profiles: [{ name: "company", directories: ["/company"] }] } })
+    await h.client.send({ type: "settings.set", patch: { areas: [{ name: "company", directories: ["/company"] }] } })
     const user = (await h.control({ operation: "propose", text: "A company preference", scope: "user" }, "/company")).proposal as MemoryEntry
     expect(user).toMatchObject({ scope: "user", profile: "company" })
     expect(await h.client.memoryControl("/repo", { operation: "apply", memoryId: user.memoryId })).toMatchObject({ ok: false })
@@ -163,8 +163,8 @@ describe("B19 daemon memory controls", () => {
     const sessionId = created.ok && created.result?.sessionId as SessionId
     if (!sessionId) throw new Error("No session")
     await h.client.send({ type: "user.submit", sessionId, text: "Our build procedure", attachments: [] })
-    for (let i = 0; i < 200 && !h.daemon.store.extraction.list().some((job) => job.state === "completed"); i++) await Bun.sleep(5)
-    expect(h.daemon.store.extraction.list()[0]).toMatchObject({ state: "completed", proposed: 1, directory: "/repo" })
+    for (let i = 0; i < 200 && h.daemon.store.memories.list().length === 0; i++) await Bun.sleep(5)
+    expect(h.daemon.store.extraction.list()).toEqual([])
     expect(h.daemon.store.settings.get().memoryGenerate).toBeUndefined()
     expect(h.daemon.store.memories.list()[0]).toMatchObject({ status: "pending", text: "Build this repository with pnpm build" })
   })

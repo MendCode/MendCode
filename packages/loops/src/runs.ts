@@ -29,7 +29,7 @@ export function runPrompt(loop: Loop, run: number, context: RunContext = {}) {
     "",
     `Objective:\n${loop.objective}`,
     ...(context.fired ? ["", `This run was fired from outside${context.fired.note ? `: ${context.fired.note}` : "."}`] : []),
-    ...(loop.reportOnly ? ["", "Report-only loop: you can read and search but cannot edit files or run commands. Report what you found and what you would change; do not try to change anything, and do not use plan_submit."] : []),
+    ...(loop.reportOnly ? ["", "Report-only: write the report as your answer. You can read and search but cannot edit files or run commands; report what you found and what you would change. There is no plan to submit: do not call plan_review, plan_exit or plan_submit."] : []),
     ...(context.worktreeBranch ? ["", `You are in a private git worktree of the project (branch ${context.worktreeBranch}), not the user's checkout. Edit freely here; if you change files, commit them on this branch so the work can be reviewed and merged. Never touch the user's checkout.`] : []),
     ...(loop.costBudget ? ["", `Usage caps: ${JSON.stringify(loop.costBudget)}. Used: ${JSON.stringify(loop.usage ?? { tokens: 0, costMicros: 0, unknownCostCalls: 0 })}.`] : []),
     ...(loop.rubric ? ["", `Runtime rubric: ${JSON.stringify(loop.rubric)}. Scores are computed by the host from evidence, not by you.`] : []),
@@ -83,7 +83,7 @@ export function finishRun(loop: Loop, end: RunEnd): Loop {
   const current = history.at(-1)
   if (current && current.endedAt === undefined) history[history.length - 1] = { ...current, endedAt: end.at, outcome: end.outcome, ...(checkpoint ? { checkpoint } : {}) }
   // The run has seen the feedback of the previous rejection; a new one replaces it if this claim fails too.
-  const { feedback: _seen, ...unfed } = loop
+  const { feedback: _seen, waiting: _waiting, ...unfed } = loop
   const base = { ...unfed, history: history.slice(-HISTORY), updatedAt: end.at }
   const stop = (state: LoopState, reason: string) => {
     const { nextWakeAt: _drop, pendingFire: _fire, ...rest } = base
@@ -102,6 +102,24 @@ export function finishRun(loop: Loop, end: RunEnd): Loop {
   const adaptiveMs = loop.trigger.kind === "adaptive" ? paceAfter(loop.trigger, loop.adaptiveMs, checkpoint?.activity) : undefined
   const next = loop.pendingFire ? end.at : nextWake(loop.trigger, end.at, { adaptiveMs })
   return { ...base, ...(adaptiveMs !== undefined ? { adaptiveMs } : {}), state: "active", ...(next !== undefined ? { nextWakeAt: next } : {}), ...(end.outcome === "failed" ? { reason: "last run failed" } : {}) }
+}
+
+const NOTICE_SUMMARY = 200
+
+/**
+ * The short notice a run leaves in the session that created the loop. It opens with `[loop ` (the queue recognises it like a
+ * background task's), says how the run ended in a line of at most 300 characters, and names the loop session so it can be opened.
+ */
+export function runNotice(loop: Loop, run: LoopRun): string {
+  const how = run.outcome === "completed" ? (run.checkpoint?.status ?? "done") : (run.outcome ?? "ended")
+  const said = (run.checkpoint?.summary || (run.outcome === "completed" ? "" : loop.reason ?? "")).replace(/\s+/g, " ").trim()
+  const next = loop.nextWakeAt !== undefined && loop.state === "active" ? `next ${new Date(loop.nextWakeAt).toISOString().slice(11, 16)}Z` : loop.state
+  return `[loop "${loop.name.slice(0, 80)}" · run ${run.run} ${how}] ${said.length > NOTICE_SUMMARY ? `${said.slice(0, NOTICE_SUMMARY - 1)}…` : said || "no summary"} (${next} · session ${run.sessionId ?? loop.sessionId} · /loop open ${loop.loopId})`
+}
+
+/** What the loops left in a session since the user's last message, folded into one line for the model: the latest notice of each loop, with how many runs it stands for. */
+export function foldRunNotices(entries: ReadonlyArray<{ text: string; runs: number }>): string {
+  return `[loops since your last message] ${entries.map((entry) => (entry.runs > 1 ? `${entry.text} (+${entry.runs - 1} earlier runs)` : entry.text)).join(" | ")}`
 }
 
 /** A completion claim is verified when the loop has host checks or an independent audit. */

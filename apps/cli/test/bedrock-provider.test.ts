@@ -70,7 +70,8 @@ describe("B10.01 Bedrock CLI and terminal", () => {
     await h.type("m"); expect(h.app.page).toBe("model")
     await h.type("\x1b[D")
     expect(h.commands("session.model.set").at(-1)).toMatchObject({ choice: { model: "amazon-bedrock:amazon.nova-lite-v1:0" } })
-    await h.type("\x1b"); await h.run("/connect bedrock"); await h.type("\r")
+    // esc leaves the model page for the connect page it came from, and once more leaves that
+    await h.type("\x1b"); await h.type("\x1b"); await h.run("/connect bedrock"); await h.type("\r")
     expect(h.text()).toContain("team")
     expect(h.text()).toContain("amazon.nova-lite-v1:0")
     await h.type("\x1b"); await h.type("\x1b")

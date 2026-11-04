@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises"
 import { z } from "zod"
 import { defineTool } from "../tool"
-import { atomicWrite, boundPreview, displayPath, errorMessage, fail, renderDiff, resolvePath, succeed, truncateText, withFileLock } from "../util"
+import { atomicWrite, boundPreview, DIFF_CONTEXT_LINES, displayPath, errorMessage, fail, renderDiff, resolvePath, succeed, truncateText, withFileLock } from "../util"
 
 function countOccurrences({ text, needle }: { text: string; needle: string }): number {
   let count = 0
@@ -120,13 +120,19 @@ export default defineTool({
         return plan
       })
       if (typeof planned === "string") return fail({ title, message: planned })
-      const capped = truncateText({ text: renderDiff({ before: planned.before, after: planned.after }), ...(context.outputLimits ? { limits: { maxBytes: 8 * 1024 * 1024, maxLines: 100000 } } : {}) })
-      return succeed({
-        title,
-        output: capped.text,
-        truncated: capped.truncated,
-        meta: { path: abs, replacements: planned.replacements, ...(edits.length > 1 ? { edits: edits.length } : {}) },
-      })
+      const limits = context.outputLimits ? { limits: { maxBytes: 8 * 1024 * 1024, maxLines: 100000 } } : {}
+      const capped = truncateText({ text: renderDiff({ before: planned.before, after: planned.after }), ...limits })
+      // The card shows the unchanged lines around the change; the model is told the change alone.
+      const framed = truncateText({ text: renderDiff({ before: planned.before, after: planned.after, context: DIFF_CONTEXT_LINES }), ...limits })
+      return {
+        ...succeed({
+          title,
+          output: capped.text,
+          truncated: capped.truncated,
+          meta: { path: abs, replacements: planned.replacements, ...(edits.length > 1 ? { edits: edits.length } : {}) },
+        }),
+        display: framed.text,
+      }
     } catch (error) {
       return fail({ title, message: `cannot edit ${shown}: ${errorMessage(error)}` })
     }

@@ -2,7 +2,7 @@ import { writeFileSync } from "node:fs"
 import path from "node:path"
 import { UI5_PAGES, ui5Harness } from "../apps/cli/test/ui-5-harness"
 import { ui4Harness } from "../apps/cli/test/ui-4-harness"
-import { CUSTOMIZE_ROWS } from "../apps/cli/src/view/customize-page"
+import { CUSTOMIZE_ROWS, customizeSteps } from "../apps/cli/src/view/customize-page"
 import { fit } from "../apps/cli/src/view/deck"
 import { textWidth } from "../apps/cli/src/view/wrap"
 
@@ -39,7 +39,7 @@ export async function renderUi5Frames(directory: string, sizes: string[]) {
       await h.app.onKey("\x1b")
     }
     await h.type("/customize\r")
-    for (let i = 0; i < CUSTOMIZE_ROWS.indexOf("usageClock"); i++) await h.app.onKey("\x1b[B")
+    for (let i = 0; i < customizeSteps("usageClock", h.app.tuiProfile, { mode: h.app.viewMode }); i++) await h.app.onKey("\x1b[B")
     save("customize-usage-clock")
     await h.app.onKey("\x1b")
     await h.app.onKey("\x03")

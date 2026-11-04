@@ -7,7 +7,8 @@ import { createExtensionRuntime } from "../src/extensions/runtime"
 import { discoverExtensions } from "../src/extensions/discover"
 import { scaffoldView, viewStarter } from "../src/extensions/view-scaffold"
 import { parseViewCommand } from "../src/view-args"
-import { readTuiProfile } from "../src/view/tui-profile"
+import { readTuiProfile, type TuiProfile } from "../src/view/tui-profile"
+import { customizeSteps } from "../src/view/customize-page"
 import { appHarness, extension, scratch } from "./extensions-harness"
 
 /** /customize > Views (list, disable, reset, scaffold) and `mendcode view`. */
@@ -22,11 +23,14 @@ async function open(body: string) {
   const h = await appHarness({ dataDir: temp.dataDir, directory: temp.project, width: 140, height: 50 })
   await h.start({ onboarded: true })
   h.message("hello there", "an answer")
-  await h.type("/customize\r")
-  // Rows: UI modules, Export look, then Views.
-  await h.key("j")
-  await h.key("j")
+  await toViews(h)
   return { h, temp }
+}
+
+/** /customize, then down to Advanced > Views. */
+async function toViews(h: Awaited<ReturnType<typeof appHarness>>) {
+  await h.type("/customize\r")
+  for (let n = 0; n < customizeSteps("views", h.app.tuiProfile as TuiProfile, { mode: h.app.viewMode }); n++) await h.key("j")
 }
 
 describe("/customize > Views", () => {
@@ -37,17 +41,13 @@ describe("/customize > Views", () => {
     expect(h.text()).toContain("user look")
     await h.key("\x1b")
     expect(h.text()).toContain("USER<hello there>")
-    await h.type("/customize\r")
-    await h.key("j")
-    await h.key("j")
+    await toViews(h)
     await h.key("\r")
     expect(readTuiProfile(temp.dataDir).disabledViews).toEqual(["message.user"])
     expect(h.text()).toContain("off")
     await h.key("\x1b")
     expect(h.text()).not.toContain("USER<hello there>")
-    await h.type("/customize\r")
-    await h.key("j")
-    await h.key("j")
+    await toViews(h)
     await h.key("r")
     expect(readTuiProfile(temp.dataDir).disabledViews).toEqual([])
     await h.key("\x1b")
@@ -58,9 +58,7 @@ describe("/customize > Views", () => {
     const { h } = await open(`api.view("message.user", () => { throw new Error("kaput") })`)
     await h.key("\x1b")
     for (let n = 0; n < 3; n++) h.message(`again ${n}`, "ok")
-    await h.type("/customize\r")
-    await h.key("j")
-    await h.key("j")
+    await toViews(h)
     expect(h.text()).toContain("stopped")
     expect(h.text()).toContain("threw: kaput")
   })

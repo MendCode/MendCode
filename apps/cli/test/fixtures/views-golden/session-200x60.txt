@@ -1,4 +1,4 @@
-51cd120ee43691e7
+c1e56d42bd50de9e
   Sessions                   ← focus │   git /work/app
                                      │
   Active                             │   › Why does the second session see the first one's config? Please look at src/store.ts and fix it.
@@ -16,14 +16,15 @@
                                      │
                                      │      ✗ bun test src/store.test.ts  3 pass · 1 fail  exit 1                                                                                                  1.8s
                                      │      │ bun test v1.3
+                                     │      │
                                      │      │ 3 pass
                                      │      │ 1 fail
                                      │      │ error: expected "a" received "b"
                                      │
                                      │      ✎ Edit src/store.ts  3 lines                                                                                                                             1s
-                                     │      │ Edited src/store.ts
-                                     │      │ - const key = name
-                                     │      │ + const key = `${directory}:${name}`
+                                     │        Edited src/store.ts
+                                     │        - const key = name
+                                     │        + const key = `${directory}:${name}`
                                      │
                                      │   • The cache key ignored the directory.
                                      │
@@ -36,16 +37,15 @@
                                      │
                                      │     See the docs (https://example.com) for details.
                                      │
+                                     │     took 15s · ended 11:50 AM
+                                     │
                                      │   › Thanks. Run the whole suite once more.
                                      │
                                      │      $ bun test  212 pass · 0 fail                                                                                                                          9.1s
                                      │
                                      │   • All 212 tests pass.
                                      │
-                                     │
-                                     │
-                                     │
-                                     │
+                                     │     took 7s · ended 11:50 AM
                                      │
                                      │
                                      │
@@ -58,4 +58,4 @@
                                      │   ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
                                      │   ❭
                                      │   ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-                                     │    Build
+                                     │    /work/app

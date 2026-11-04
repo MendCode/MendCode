@@ -29,6 +29,12 @@ export function planPhase(markdown: string, prompt: string, requested?: PlanRevi
 }
 
 /** Appended to the system prompt of a call made in plan mode, and to no other (docs/plan-review.md). */
+/** What a report-only loop run gets instead of the plan mode note: it has no plan to submit. */
+/** What a read-only internal run is told when it tries a tool that changes something: no plan, no plan mode, just the rule. */
+export const READ_ONLY_RUN_REFUSAL = "this run is read-only: only read tools are allowed; answer from what you can read"
+// No word of plans: the plan tools are not offered to it, and a PR reviewer told about plans read it as a restriction on its review.
+export const REPORT_ONLY_NOTE = "Report-only: write the report as your answer. The session is read-only, so investigate with read tools and change nothing."
+
 export const PLAN_MODE_NOTE = "Plan mode is on: the session is read-only, so investigate with read tools and do not edit, write or run commands that change anything. Finish by calling plan_review with the complete plan as Markdown (goal, steps with files, risks, how to verify); the user reviews it there and decides whether to implement. Do not write the final plan as a plain reply."
 
 /** A plain-text reply that reads as a plan (a list or headings, enough text): the host offers it for review when the model did not. */

@@ -138,7 +138,12 @@ export function createEnvironmentPanel(ctx: AppContext) {
           finally { page.busy = false }
         }
       } else if (key === "\x7f" || key === "\b") edit[edit.field] = [...edit[edit.field]].slice(0, -1).join("")
-      else if (!/[\x00-\x1f\x7f-\x9f]/.test(key)) edit[edit.field] = (edit[edit.field] + key).slice(0, edit.field === "name" ? 128 : 16_384)
+      else if (pasted) {
+        // A paste is a value until proven a name: the name field is drawn in clear, so only something shaped like a name stays there.
+        const text = key.replace(/\r\n?/g, "\n")
+        if (edit.field === "name" && /^[A-Za-z0-9_]+$/.test(text)) edit.name = (edit.name + text).slice(0, 128)
+        else { edit.field = "value"; edit.value = (edit.value + text).replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, "").slice(0, 16_384) }
+      } else if (edit.field === "name" ? /^[A-Za-z0-9_]$/.test(key) : !/[\x00-\x1f\x7f-\x9f]/.test(key)) edit[edit.field] = (edit[edit.field] + key).slice(0, edit.field === "name" ? 128 : 16_384)
     } else if (page.confirm) {
       if (key.toLowerCase() !== "y") return
       page.busy = true
@@ -154,6 +159,11 @@ export function createEnvironmentPanel(ctx: AppContext) {
         else page.error = result && !result.ok && result.error.code === "busy" ? "Wait for active turns and jobs to finish, then retry." : "Change failed. Check disk space, local access and vault keys."
       } catch { page.error = "Connection unavailable. Reload to check whether the change completed." }
       finally { page.busy = false }
+    } else if (pasted) {
+      // Text pasted on the list is a value to add, never a command: it goes straight into the masked field.
+      page.scope = "project"
+      page.edit = { name: "", value: key.replace(/\r\n?/g, "\n").replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f]/g, "").slice(0, 16_384), field: "name" }
+      page.error = ""
     } else if (key === "r") await load()
     else if (key === "i") { page.scope = "project"; page.import = { path: ".env" }; page.error = "" }
     else if (key === "p" && page.encrypted !== undefined) page.confirm = "privacy"

@@ -85,7 +85,7 @@ for (const [name, source] of Object.entries(examples)) {
         }
         dump(`chat-${name}`, harness.rows(), width, height)
         if (name === "messages") {
-          await harness.type("/customize\r")
+          await harness.type("/settings extensions\r")
           expect(harness.text()).toContain("Extensions")
           expect(harness.text()).toContain("matrix-messages")
           dump("customize-extensions", harness.rows(), width, height)

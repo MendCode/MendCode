@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import type { SessionId, Settings } from "@mendcode/protocol"
 import { defineTool } from "@mendcode/tools"
 import { z } from "zod"
-import { createNativeEngine, memoryHistory } from "../src"
+import { advisorLimits, createNativeEngine, memoryHistory } from "../src"
 import { hostable } from "../src/host-tools"
 import { scriptedProvider, turn } from "./harness"
 
@@ -66,5 +66,22 @@ describe("native tools lent to another harness", () => {
     const approved = turn({ text: "", mode: () => "ask", answers: [{ kind: "approve", scope: "once" }] })
     expect((await engine.hostCall!({ turn: approved.input, name: "customize_ui", args: {} })).isError).toBe(false)
     expect(ran).toEqual(["customize_ui"])
+  })
+})
+
+describe("native tools lent to a sub-agent on another harness", () => {
+  test("a child session is lent no advisor or workflow tool, and cannot call them", async () => {
+    const { provider } = scriptedProvider([])
+    const advisor = { enabled: () => true, limits: () => advisorLimits(undefined), consult: async () => { throw new Error("must not consult") }, diff: async () => "" }
+    const child = new Set<string>(["ses_child"])
+    const engine = createNativeEngine({
+      provider, history: memoryHistory(), tools: [fakeTool("graph_find"), fakeTool("workflow_start", "write")], cwdFor: () => "/repo", system: () => "sys", compactionPrompt: "summarize", advisor,
+      tasks: { isChild: (sessionId) => child.has(sessionId), run: async () => { throw new Error("unexpected task") }, status: async () => "" },
+    })
+    const lent = async (sessionId: string) => (await engine.hostTools!({ directory: "/repo", sessionId: sessionId as SessionId })).map((tool) => tool.name).sort()
+    expect(await lent("ses_main")).toEqual(["advisor", "graph_find", "workflow_start"])
+    expect(await lent("ses_child")).toEqual(["graph_find"])
+    const { input } = turn({ text: "", sessionId: "ses_child" as SessionId })
+    for (const name of ["advisor", "workflow_start"]) expect(await engine.hostCall!({ turn: input, name, args: {} })).toEqual({ output: `Tool ${name} is not available in this session`, isError: true })
   })
 })

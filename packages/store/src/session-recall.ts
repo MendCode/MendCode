@@ -1,5 +1,6 @@
 import type { Database } from "bun:sqlite"
 import { unpackText, eventFromColumns, type OwnEventRow, type ObjectLoader } from "./compress"
+import type { ThawFilter } from "./sealed-turns"
 import type { ItemId, SessionEvent, SessionId, SessionNotesInput, SessionNotesReport } from "@mendcode/protocol"
 
 type Start = Extract<SessionEvent, { type: "item.started" }>
@@ -10,7 +11,27 @@ type NoteRow = { version: number; text: string }
 const RECALL_KINDS = new Set(["user_message", "agent_message", "tool_call"])
 const RECALL_BATCH = 64
 
-export function createSessionRecallRecords(db: Database, load: ObjectLoader) {
+const ITEM_ID = /"itemId":"([^"]+)"/
+/**
+ * The sealed rows `turns` and a message's `chunks` read: user and assistant message starts, those items' deltas and
+ * completions (a start precedes its item's other rows in a block), and compactions. Tool output is never copied.
+ */
+function conversationThaw(): ThawFilter {
+  const messages = new Set<string>()
+  return {
+    key: "recall-conversation",
+    accept(row) {
+      if (row.type === "compaction.updated") return true
+      const item = ITEM_ID.exec(row.payload)?.[1]
+      if (!item) return false
+      if (row.type === "item.started" && (row.payload.includes('"user_message"') || row.payload.includes('"agent_message"'))) messages.add(item)
+      return messages.has(item)
+    },
+  }
+}
+
+/** `thaw` makes a session's sealed turns visible to `events_all` (sealed-turns.ts) before its statements run; no filter thaws every row. */
+export function createSessionRecallRecords(db: Database, load: ObjectLoader, thaw: (sessionId: string, filter?: ThawFilter) => void = () => {}) {
   db.run(`CREATE TABLE IF NOT EXISTS session_note_revisions (
     session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
     version INTEGER NOT NULL, text TEXT NOT NULL,
@@ -19,32 +40,32 @@ export function createSessionRecallRecords(db: Database, load: ObjectLoader) {
   // `events_message_item` (message-revisions.ts) indexes exactly the same expression and rows; a second copy of it cost
   // about 14% of the events table for nothing. A database that has both loses this one (an index is rebuilt from the rows).
   db.run("DROP INDEX IF EXISTS recall_event_items")
-  const visible = `FROM events_read e JOIN turns_read t ON t.session_id = e.session_id AND t.turn_id = json_extract(e.payload, '$.turnId')
+  const visible = `FROM events_all e JOIN turns_read t ON t.session_id = e.session_id AND t.turn_id = json_extract(e.payload, '$.turnId')
     WHERE e.session_id = ?1 AND e.type = 'item.started' AND t.reverted = 0 AND t.notice = 0
     AND json_extract(e.payload, '$.kind') IN ('user_message', 'agent_message', 'tool_call')
-    AND EXISTS (SELECT 1 FROM events_read c WHERE c.session_id = e.session_id
+    AND EXISTS (SELECT 1 FROM events_all c WHERE c.session_id = e.session_id
       AND c.type IN ('item.started', 'item.delta', 'item.completed') AND c.type = 'item.completed'
       AND json_extract(c.payload, '$.itemId') = json_extract(e.payload, '$.itemId')
       AND (json_extract(e.payload, '$.kind') != 'tool_call' OR json_extract(c.payload, '$.status') = 'ok'))`
   const item = db.query<OwnEventRow, [string, string]>(`SELECT e.seq, e.type, e.at, e.payload ${visible} AND json_extract(e.payload, '$.itemId') = ?2 LIMIT 1`)
-  const starts = db.query<OwnEventRow, [string, number, number]>("SELECT seq, type, at, payload FROM events_read WHERE session_id = ? AND type = 'item.started' AND seq < ? ORDER BY seq DESC LIMIT ?")
+  const starts = db.query<OwnEventRow, [string, number, number]>("SELECT seq, type, at, payload FROM events_all WHERE session_id = ? AND type = 'item.started' AND seq < ? ORDER BY seq DESC LIMIT ?")
   const turnFlags = db.query<{ reverted: number; notice: number }, [string, string]>("SELECT reverted, notice FROM turns_read WHERE session_id = ? AND turn_id = ? LIMIT 1")
-  const completion = db.query<{ status: string | null }, [string, string]>(`SELECT json_extract(payload, '$.status') AS status FROM events_read
+  const completion = db.query<{ status: string | null }, [string, string]>(`SELECT json_extract(payload, '$.status') AS status FROM events_all
     WHERE session_id = ? AND json_extract(payload, '$.itemId') = ? AND type IN ('item.started', 'item.delta', 'item.completed')
     AND type = 'item.completed' ORDER BY seq DESC LIMIT 1`)
-  const completed = db.query<{ text: string | null; z: number | null; zref: string | null }, [string, string]>(`SELECT json_extract(payload, '$.text') AS text, json_extract(payload, '$.z') AS z, json_extract(payload, '$.zref') AS zref FROM events_read
+  const completed = db.query<{ text: string | null; z: number | null; zref: string | null }, [string, string]>(`SELECT json_extract(payload, '$.text') AS text, json_extract(payload, '$.z') AS z, json_extract(payload, '$.zref') AS zref FROM events_all
     WHERE session_id = ? AND json_extract(payload, '$.itemId') = ? AND type IN ('item.started', 'item.delta', 'item.completed')
     AND type = 'item.completed' ORDER BY seq DESC LIMIT 1`)
-  const deltas = db.query<{ seq: number; text: string; z: number | null; zref: string | null }, [string, string, number]>(`SELECT seq, json_extract(payload, '$.text') AS text, json_extract(payload, '$.z') AS z, json_extract(payload, '$.zref') AS zref FROM events_read
+  const deltas = db.query<{ seq: number; text: string; z: number | null; zref: string | null }, [string, string, number]>(`SELECT seq, json_extract(payload, '$.text') AS text, json_extract(payload, '$.z') AS z, json_extract(payload, '$.zref') AS zref FROM events_all
     WHERE session_id = ? AND json_extract(payload, '$.itemId') = ? AND type IN ('item.started', 'item.delta', 'item.completed')
     AND type = 'item.delta' AND seq > ? ORDER BY seq LIMIT 1`)
-  const conversation = db.query<OwnEventRow, [string, number]>(`SELECT seq, type, at, payload FROM events_read WHERE session_id = ? AND type = 'item.started' AND seq < ?
+  const conversation = db.query<OwnEventRow, [string, number]>(`SELECT seq, type, at, payload FROM events_all WHERE session_id = ? AND type = 'item.started' AND seq < ?
     AND json_extract(payload, '$.kind') IN ('user_message', 'agent_message') ORDER BY seq`)
   const sessionTurns = db.query<{ turn_id: string; reverted: number; notice: number }, [string]>("SELECT turn_id, reverted, notice FROM turns_read WHERE session_id = ?")
   const completedTexts = db.query<{ item_id: string; text: string | null; z: number | null; zref: string | null }, [string, number]>(`SELECT json_extract(payload, '$.itemId') AS item_id,
-    json_extract(payload, '$.text') AS text, json_extract(payload, '$.z') AS z, json_extract(payload, '$.zref') AS zref FROM events_read
+    json_extract(payload, '$.text') AS text, json_extract(payload, '$.z') AS z, json_extract(payload, '$.zref') AS zref FROM events_all
     WHERE session_id = ? AND type = 'item.completed' AND seq < ?`)
-  const packed = db.query<{ seq: number | null }, [string]>(`SELECT max(seq) AS seq FROM events_read WHERE session_id = ? AND type = 'compaction.updated'
+  const packed = db.query<{ seq: number | null }, [string]>(`SELECT max(seq) AS seq FROM events_all WHERE session_id = ? AND type = 'compaction.updated'
     AND json_extract(payload, '$.state') = 'packed'`)
   const head = db.query<NoteRow, [string]>("SELECT version, text FROM session_note_revisions WHERE session_id = ? ORDER BY version DESC LIMIT 1")
   const revision = db.query<NoteRow, [string, number]>("SELECT version, text FROM session_note_revisions WHERE session_id = ? AND version = ?")
@@ -66,12 +87,14 @@ export function createSessionRecallRecords(db: Database, load: ObjectLoader) {
   })
   return {
     item(sessionId: SessionId, messageId: ItemId): Start | undefined {
+      thaw(sessionId)
       const row = item.get(sessionId, messageId)
       return row ? startOf(sessionId, row) : undefined
     },
     page(sessionId: SessionId, before: number, limit: number): Start[] {
       // Newest first, a batch of starts at a time, each checked on its own (its turn, its completion): one query over the whole
       // session re-read every event for each candidate and took 32 s on a session of 165,000 events.
+      thaw(sessionId)
       const found: Start[] = []
       let cursor = before
       while (found.length < limit) {
@@ -93,6 +116,7 @@ export function createSessionRecallRecords(db: Database, load: ObjectLoader) {
     },
     *chunks(start: Start): IterableIterator<string> {
       if (start.kind === "tool_call") yield `${typeof start.meta?.tool === "string" ? start.meta.tool : "tool"}: `
+      thaw(start.sessionId, start.kind === "user_message" || start.kind === "agent_message" ? conversationThaw() : undefined)
       const final = completed.get(start.sessionId, start.itemId)
       if (typeof final?.text === "string") { yield unpackText(final.text, final.z, final.zref, load) ?? final.text; return }
       let after = start.seq
@@ -105,6 +129,7 @@ export function createSessionRecallRecords(db: Database, load: ObjectLoader) {
     },
     /** The seq of the latest finished compaction of this session, if any. */
     packedAt(sessionId: SessionId): number | undefined {
+      thaw(sessionId, conversationThaw())
       return packed.get(sessionId)?.seq ?? undefined
     },
     /**
@@ -113,6 +138,7 @@ export function createSessionRecallRecords(db: Database, load: ObjectLoader) {
      */
     turns(sessionId: SessionId, before: number): Array<{ turn: number; at: number; user: string; assistant: string }> {
       // Three reads of the whole session instead of one query per item: per item, 42 turns of a 180,000-event session took 22 s.
+      thaw(sessionId, conversationThaw())
       const kept = new Set(sessionTurns.all(sessionId).filter((turn) => turn.reverted === 0 && turn.notice === 0).map((turn) => turn.turn_id))
       const texts = new Map(completedTexts.all(sessionId, before).map((row) => [row.item_id, row]))
       const found = new Map<string, { turn: number; at: number; user: string[]; assistant: string[] }>()

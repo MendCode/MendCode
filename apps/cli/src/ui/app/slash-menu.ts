@@ -31,7 +31,7 @@ export function createSlashMenu(ctx: AppContext, actions: { suggestionPool(): Sl
       state.suggestion = 0
       previous = editor.text
     }
-    return slashMenuModel({ text: editor.text, custom: actions.suggestionPool(), profile: state.tuiProfile, settings: state.settingsNow, recents, state: navigation, selected: state.suggestion, width, height, bindings: state.bindings, ascii: state.tuiProfile.accessible || asciiChrome(state) })
+    return slashMenuModel({ text: editor.text, ...(input.directory && !input.remote ? { directory: input.directory } : {}), custom: actions.suggestionPool(), profile: state.tuiProfile, settings: state.settingsNow, recents, state: navigation, selected: state.suggestion, width, height, bindings: state.bindings, ascii: state.tuiProfile.accessible || asciiChrome(state) })
   }
   /** The public data of a command: what a custom view sees. */
   const publicCommand = ({ name, aliases, summary, group, shortcut, setting, custom, ext, mcp }: { name: string; aliases: readonly string[]; summary: string; group: string; shortcut?: string | undefined; setting?: string | undefined; custom?: true | undefined; ext?: true | undefined; mcp?: true | undefined }) => ({ name, aliases, summary, group, ...(shortcut ? { shortcut } : {}), ...(setting ? { setting } : {}), ...(custom ? { custom } : {}), ...(ext ? { ext } : {}), ...(mcp ? { mcp } : {}) })

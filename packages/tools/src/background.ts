@@ -48,8 +48,8 @@ export const BACKGROUND_LIMITS = {
   maxRunning: 8,
   /** Output kept per task; older output scrolls out. */
   maxBufferChars: 256_000,
-  /** A task still running after this long is stopped and reported. */
-  maxLifetimeMs: 6 * 60 * 60 * 1_000,
+  /** A task still running after this long is stopped and reported; 0 (the default) lets it run until it ends, the agent or the user stops it, or its chat is deleted. */
+  maxLifetimeMs: 0,
   /** Finished tasks kept readable (P11); the oldest are forgotten first. */
   maxFinished: 32,
   /** Matching lines are batched this long before they reach the session. */
@@ -89,6 +89,8 @@ export function createBackgroundTasks(options: {
   onWatch?(sessionId: string, task: BackgroundTaskInfo, lines: string[], final: boolean): void
   now?(): number
   limits?: Partial<Record<keyof typeof BACKGROUND_LIMITS, number>>
+  /** The lifetime cap in force when a task starts (the `processLimits` setting); undefined keeps `limits`, 0 is no cap. */
+  lifetimeMs?(): number | undefined
 }) {
   const limits = { ...BACKGROUND_LIMITS, ...options.limits }
   const now = options.now ?? Date.now
@@ -184,7 +186,8 @@ export function createBackgroundTasks(options: {
       },
     }
     tasks.set(id, entry)
-    const lifetime = setTimeout(() => entry.terminate("lifetime"), limits.maxLifetimeMs)
+    const cap = options.lifetimeMs?.() ?? limits.maxLifetimeMs
+    const lifetime = cap > 0 ? setTimeout(() => entry.terminate("lifetime"), cap) : undefined
     const decoders = { stdout: new StringDecoder("utf8"), stderr: new StringDecoder("utf8") }
     // A binary chunk can end in half a character; the decoder then opens the next, textual chunk with a replacement mark.
     let afterBinary = false

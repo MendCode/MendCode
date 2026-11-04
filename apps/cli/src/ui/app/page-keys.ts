@@ -29,6 +29,7 @@ import { DEFAULT_TUI_PROFILE, normalizeHomeMascot, type TuiProfile } from "../..
 import { sessionListKey } from "../../view/session-list"
 import { slashCatalog } from "../../view/commands"
 import { viewRows } from "./view-rows"
+import { followPage } from "./page-back"
 import { scaffoldView } from "../../extensions/view-scaffold"
 import type { PresentationMode } from "../../view/transcript"
 
@@ -130,7 +131,9 @@ export function createPageKeys(ctx: AppContext, actions: {
   loadLoops: ReturnType<typeof createLoops>["loadLoops"]
   saveLoop: ReturnType<typeof createLoops>["saveLoop"]
   fireLoop: ReturnType<typeof createLoops>["fireLoop"]
-  setPermission: (next: PermissionMode) => Promise<void>
+  resolveLoopRequest: ReturnType<typeof createLoops>["resolveLoopRequest"]
+  setLoopMode: ReturnType<typeof createLoops>["setLoopMode"]
+  setPermission: (next: PermissionMode) => Promise<boolean>
   revokeGrant: ReturnType<typeof createPermissions>["revokeGrant"]
   diagramLayout: ReturnType<typeof createDiagram>["diagramLayout"]
   controlWorkflow: ReturnType<typeof createWorkflows>["controlWorkflow"]
@@ -144,7 +147,7 @@ export function createPageKeys(ctx: AppContext, actions: {
   ensureSelectedDiff: ReturnType<typeof createChanges>["ensureSelectedDiff"]
 }) {
   const { input, state, now, editor, localDay, requestFrame, copyText, setupChoice } = ctx
-  const { acpKey, closeExtensionPage, switchSession, changeSession, forkAt, jumpTo, loadUsage, memoryPageData, loadMemoryGraph, loadDreamRuns, loadMemoryCategories, loadEvolution, loadDreamReport, memoryAction, loadSharing, storageAction, dropRevealedSecret, revealSecret, forgetSecret, restartMcp, authMcp, copyAuthMcp, loadTools, loadPackages, chooseAgent, modelAction, connectAction, providersAction, setupValues, applyRecipe, changeProfile, openFromPage, settingsValues, loadStatus, terminalExtensions, loadExtensionsReport, loadHooks, setTrust, controlLoop, loadLoops, saveLoop, fireLoop, setPermission, revokeGrant, diagramLayout, controlWorkflow, loadWorkflows, loadContext, saveReview, loadChanges, sendReview, ensureSelectedDiff } = actions
+  const { acpKey, closeExtensionPage, switchSession, changeSession, forkAt, jumpTo, loadUsage, memoryPageData, loadMemoryGraph, loadDreamRuns, loadMemoryCategories, loadEvolution, loadDreamReport, memoryAction, loadSharing, storageAction, dropRevealedSecret, revealSecret, forgetSecret, restartMcp, authMcp, copyAuthMcp, loadTools, loadPackages, chooseAgent, modelAction, connectAction, providersAction, setupValues, applyRecipe, changeProfile, openFromPage, settingsValues, loadStatus, terminalExtensions, loadExtensionsReport, loadHooks, setTrust, controlLoop, loadLoops, saveLoop, fireLoop, resolveLoopRequest, setLoopMode, setPermission, revokeGrant, diagramLayout, controlWorkflow, loadWorkflows, loadContext, saveReview, loadChanges, sendReview, ensureSelectedDiff } = actions
 
   async function handlePageKey(key: string) {
     if (state.automationLedger) return actions.automationLedgerKey(key)
@@ -256,7 +259,8 @@ export function createPageKeys(ctx: AppContext, actions: {
       else await memoryAction(result.action)
     } else if (state.page === "pet") {
       if (await actions.petPlanKey(key)) return
-      const result = petPickerKey(state.petPicker, key, state.petList ?? [])
+      const shownNow = state.petPickerMascot ? (state.tuiProfile.logoKind === "mascot" || state.tuiProfile.logoKind === "both" ? state.tuiProfile.homeMascot : "off") : state.tuiProfile.pet || state.settingsNow.pet
+      const result = petPickerKey(state.petPicker, key, state.petList ?? [], shownNow)
       state.petPicker = result.state
       if (result.action.type !== "none") state.page = "chat"
       if (result.action.type === "choose" && state.petPickerMascot) {
@@ -346,13 +350,13 @@ export function createPageKeys(ctx: AppContext, actions: {
       if (action.type === "close") state.page = "chat"
       else if (action.type === "marketplace") await actions.openMarketplace()
       else if (action.type === "precedence") void actions.openPrecedence()
-      else if (action.type === "disable-all") void loadPackages({ type: "packages.disable-all", directory }, "all packages deselected")
+      else if (action.type === "disable-all") void loadPackages({ type: "profiles.disable-all", directory }, "all profiles deselected")
       else if (action.type === "reload") void loadPackages()
-      else if (action.type === "enable") void loadPackages({ type: "packages.enable", directory, key: action.key, enabled: action.enabled, ...(action.switch ? { switch: true } : {}) }, `${action.key} ${action.enabled ? "on" : "off"}`)
+      else if (action.type === "enable") void loadPackages({ type: "profiles.enable", directory, key: action.key, enabled: action.enabled, ...(action.switch ? { switch: true } : {}) }, `${action.key} ${action.enabled ? "on" : "off"}`)
       else if (action.type === "keep") actions.profileLayers().keep(action.key, action.on)
-      else if (action.type === "remove") void loadPackages({ type: "packages.remove", directory, name: action.name, scope: action.scope }, `removed ${action.scope}:${action.name} (in the Trash for 30 days: mendcode package restore)`)
-      else if (action.type === "config") void loadPackages({ type: "packages.config", directory, key: action.key })
-      else if (action.type === "resource") void loadPackages({ type: "packages.resource", directory, key: action.key, resource: action.resource, enabled: action.enabled }, `${action.resource} ${action.enabled ? "on" : "off"}`)
+      else if (action.type === "remove") void loadPackages({ type: "profiles.remove", directory, name: action.name, scope: action.scope }, `removed ${action.scope}:${action.name} (in the Trash for 30 days: mendcode profile restore)`)
+      else if (action.type === "config") void loadPackages({ type: "profiles.config", directory, key: action.key })
+      else if (action.type === "resource") void loadPackages({ type: "profiles.resource", directory, key: action.key, resource: action.resource, enabled: action.enabled }, `${action.resource} ${action.enabled ? "on" : "off"}`)
     } else if (state.page === "agent") {
       const result = agentPickerKey(state.agentPicker, key, state.agentReport)
       state.agentPicker = result.state
@@ -392,7 +396,7 @@ export function createPageKeys(ctx: AppContext, actions: {
       }
     } else if (state.page === "customize" || state.page === "settings" && state.settingsPageState.tui) {
       const modules = [...new Set([...(state.ext?.loaded ?? []).filter((entry) => entry.tui).map((entry) => entry.name), ...(state.ext?.problems ?? []).map((problem) => problem.extension)])].map((name) => ({ name, enabled: !state.tuiProfile.disabledUiExtensions.includes(name), errors: [] }))
-      const result = customizePageKey(state.customizeState, key, { ...state.tuiProfile, ...(input.directory && state.settingsNow.projectThemes?.[input.directory] ? { theme: activeTheme().name } : {}), pet: state.tuiProfile.pet || state.settingsNow.pet || "off" }, modules, actions.slashCommands?.() ?? slashCatalog(), viewRows(state))
+      const result = customizePageKey(state.customizeState, key, { ...state.tuiProfile, ...(input.directory && state.settingsNow.projectThemes?.[input.directory] ? { theme: activeTheme().name } : {}), pet: state.tuiProfile.pet || state.settingsNow.pet || "off" }, modules, actions.slashCommands?.() ?? slashCatalog(), viewRows(state), { mode: state.mode, ...(state.ext?.slotOwner("footer.replace") ? { footerExtension: state.ext.slotOwner("footer.replace")! } : {}) })
       state.customizeState = result.state
       const { action } = result
       if (action.type === "close") state.page = "chat"
@@ -492,6 +496,8 @@ export function createPageKeys(ctx: AppContext, actions: {
           state.loopsLoaded = false
           await loadLoops()
         } else if (action.type === "save") await saveLoop(action)
+        else if (action.type === "resolve") await resolveLoopRequest(action)
+        else if (action.type === "mode") await setLoopMode(action.loopId, action.permission)
         else if (action.type === "fire") await fireLoop(action.loopId)
         else if (action.type === "copy") copyText(action.text, "the fire command")
       }
@@ -563,7 +569,22 @@ export function createPageKeys(ctx: AppContext, actions: {
     requestFrame()
   }
 
+  /** Every page's key goes through here: a page opened from another page closes back to it (esc), whichever page it is. */
   async function pageKey(key: string) {
+    // A page an action opened after the last key returned (a daemon reply) is a step from the page that key ended on.
+    if (state.pageSeen !== undefined && state.pageSeen !== state.page) state.pageLinks = followPage({ links: state.pageLinks ?? [], before: state.pageSeen, after: state.page, key: "" }).links
+    const before = state.page
+    await dispatchPageKey(key)
+    const followed = followPage({ links: state.pageLinks ?? [], before, after: state.page, key })
+    state.pageLinks = followed.links
+    if (followed.page !== state.page) {
+      state.page = followed.page
+      requestFrame()
+    }
+    state.pageSeen = state.page
+  }
+
+  async function dispatchPageKey(key: string) {
     if (state.page === "compaction") return actions.compactionKey(key)
     if (state.page === "history") {
       const keys = /^[\x20-\x7e -￿]{2,}$/u.test(key) ? [...key] : [key]

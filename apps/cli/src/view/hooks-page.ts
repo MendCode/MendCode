@@ -19,7 +19,7 @@ const NONE: HooksPageAction = { type: "none" }
 const UP = new Set(["\x1b[A", "\x1bOA", "\x10", "k"])
 const DOWN = new Set(["\x1b[B", "\x1bOB", "\x0e", "j"])
 const SWITCH = new Set(["\t", "\x1b[Z", "\x1b[C", "\x1b[D", "h", "l"])
-const HINTS = "↑↓ select · tab or 1/2 switch · t trust this project · r refresh · esc back"
+const HINTS = "↑↓ select · tab or 1/2 switch · enter or t trust this project · r refresh · esc back"
 const PROMPT_HINTS = "y trust this project · n not now"
 const TABS = [{ key: "1", label: "Hooks" }, { key: "2", label: "Recent runs" }]
 const EXAMPLE = ["{", '  "hooks": { "PreToolUse": [ { "matcher": "bash",', '    "hooks": [ { "type": "command", "command": "./check.sh", "timeout": 10 } ] } ] }', "}"]
@@ -55,7 +55,7 @@ export function hooksPageKey(state: HooksPageState, key: string, report: HooksRe
   }
   if (UP.has(key)) return go(state.selected - 1)
   if (DOWN.has(key)) return go(state.selected + 1)
-  if (key === "t" && report) return { state, action: { type: "trust", trusted: !report.trusted } }
+  if ((key === "t" || key === " " || key === "\r") && report) return { state, action: { type: "trust", trusted: !report.trusted } }
   return { state, action: NONE }
 }
 
@@ -87,7 +87,7 @@ function hookDetail({ hook, width }: { hook: HookInfo; width: number }): Line[] 
     ...wrap(`${hook.kind === "http" ? "posts" : hook.kind === "prompt" ? "asks " : "runs "} ${hook.command.replace(/\s+/g, " ")}`, width).slice(0, 3).map((text): Line => fit([{ text, fg: "body" }], width)),
     fit([{ text: `when  ${hook.matcher ? `${hook.event} · matches ${hook.matcher}` : hook.event} · ${hook.kind ?? "command"} · timeout ${formatDuration(hook.timeoutMs)}`, fg: "muted" }], width),
     fit([{ text: `layer ${hook.layer ?? hook.source}`, fg: "muted" }], width),
-    fit([{ text: `file  ${truncateEnd(hook.file, width - 6)}${hook.pkg && !hook.layer ? ` (package ${hook.pkg})` : ""}`, fg: "muted", dim: true }], width),
+    fit([{ text: `file  ${truncateEnd(hook.file, width - 6)}${hook.pkg && !hook.layer ? ` (profile ${hook.pkg})` : ""}`, fg: "muted", dim: true }], width),
   ]
   if (notAllowed(hook)) lines.push(...wrap("not allowed: add this url to the allowedHttpHookUrls setting to let it run", width).map((text): Line => fit([{ text, fg: "warning" }], width)))
   else if (!hook.active) lines.push(...wrap("not trusted: press t to let this project's hooks run (they run as commands, as you)", width).map((text): Line => fit([{ text, fg: "warning" }], width)))

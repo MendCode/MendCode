@@ -1,7 +1,7 @@
 import { MemoryConfigPatch, ProjectRuntimeConfig, RestConfig, RestProjectConfig, RestUpgradeResult, Settings, redactSecrets, type ModelRoles, type ProcessMemory, type RestConfig as Config, type RestLogInput, type RestUpgradeInput } from "@mendcode/protocol"
 import type { Store } from "@mendcode/store"
 import { isDeepStrictEqual } from "node:util"
-import { defaultPermissionFor, rolesFor, shellFor } from "./profiles"
+import { defaultPermissionFor, rolesFor, shellFor } from "./areas"
 import type { ConfigExtras, ServerConfigExtras } from "./server-config-extras"
 import { memorySettings } from "./memory-config"
 import { catalogModel, invalidChoice, type ModelCatalog } from "./models"

@@ -1,7 +1,7 @@
 import { writeFileSync } from "node:fs"
 import path from "node:path"
 import { appHarness, ids, NOW, tempDir } from "../apps/cli/test/session-ui-harness"
-import { CUSTOMIZE_ROWS } from "../apps/cli/src/view/customize-page"
+import { CUSTOMIZE_ROWS, customizeSteps } from "../apps/cli/src/view/customize-page"
 import { fit } from "../apps/cli/src/view/deck"
 import { textWidth } from "../apps/cli/src/view/wrap"
 
@@ -18,7 +18,7 @@ export async function renderB39Frames(directory: string, sizes: string[]) {
       writeFileSync(path.join(directory, `${name}-${size}.txt`), h.frames.at(-1)!.map((row) => fit(row, width).map((span) => span.text).join("")).join("\n") + "\n")
     }
     await h.type("/customize\r")
-    for (let row = 0; row < CUSTOMIZE_ROWS.indexOf("activitySound"); row++) await h.app.onKey("\x1b[B")
+    for (let row = 0; row < customizeSteps("activitySound", h.app.tuiProfile, { mode: h.app.viewMode }); row++) await h.app.onKey("\x1b[B")
     save("customize-sound-off")
     await h.app.onKey("\x1b[C")
     save("customize-sound-pulse")

@@ -6,13 +6,13 @@ import { auditPackageTree, manifestCompatProblem, type PackageHost } from "./ins
 import { extensionsProblem, MANIFEST_FILE, readManifest } from "./manifest"
 
 /**
- * `mendcode package check <dir>`: everything that can be said about a package folder without running any of it. Errors would stop an
+ * `mendcode profile check <dir>`: everything that can be said about a profile folder without running any of it. Errors would stop an
  * install or an enable (the daemon applies the same schema, compat and activation rules); warnings are things to look at before
  * sharing it. Read-only.
  */
 export type PackageCheck = { ok: boolean; name?: string; errors: string[]; warnings: string[]; notes: string[] }
 
-const JSON_KINDS = PACKAGE_KINDS.filter((kind) => kind.paths.some((entry) => entry.endsWith(".json")) || ["tools", "recipes", "workflows", "themes", "contracts"].includes(kind.id))
+const JSON_KINDS = PACKAGE_KINDS.filter((kind) => kind.paths.some((entry) => entry.endsWith(".json")) || ["tools", "recipes", "workflows", "themes", "footerPacks", "contracts"].includes(kind.id))
 const MAX_JSON_BYTES = 1024 * 1024
 
 function jsonFiles(dir: string, depth = 0): string[] {
@@ -91,7 +91,7 @@ export function checkPackage(input: { dir: string; host: PackageHost; knownSlots
     }
   }
 
-  // The activation profile.
+  // The activation.
   const rawActivation: unknown = (manifest as { activate?: unknown }).activate
   if (rawActivation !== undefined) {
     const problems = activationProblems(rawActivation)
@@ -101,7 +101,7 @@ export function checkPackage(input: { dir: string; host: PackageHost; knownSlots
       if (JSON.stringify(activation).length > ACTIVATION_MAX_BYTES * 0.75) warnings.push(`activate is ${Math.round(JSON.stringify(activation).length / 1024)} KB of the ${ACTIVATION_MAX_BYTES / 1024} KB allowed`)
       if (activation.keybindings) {
         const file = path.join(dir, activation.keybindings)
-        if (!statSync(file, { throwIfNoEntry: false })?.isFile()) errors.push(`activate.keybindings: ${activation.keybindings} is not in the package`)
+        if (!statSync(file, { throwIfNoEntry: false })?.isFile()) errors.push(`activate.keybindings: ${activation.keybindings} is not in the profile`)
         else {
           try {
             const json = JSON.parse(readFileSync(file, "utf8")) as unknown
@@ -115,9 +115,9 @@ export function checkPackage(input: { dir: string; host: PackageHost; knownSlots
         if (!moduleExists(dir, module)) errors.push(`activate.views.${slot}: no module "${module}" in extensions/`)
         if (input.knownSlots && !input.knownSlots.includes(slot)) errors.push(`activate.views.${slot}: not a view slot (known: ${input.knownSlots.join(", ")})`)
       }
-      if (activation.theme && !themeNames(dir).has(activation.theme)) warnings.push(`activate.theme "${activation.theme}" is not in the package's themes/: it must be a theme the user already has`)
-      for (const file of activation.promptFiles ?? []) if (!existsSync(path.join(dir, file))) errors.push(`activate.promptFiles: ${file} is not in the package`)
-      if (!activation.views && existsSync(path.join(dir, "extensions"))) notes.push("extensions/ modules load for everyone who enables the package; list view modules in activate.views to load them only while the package owns the look")
+      if (activation.theme && !themeNames(dir).has(activation.theme)) warnings.push(`activate.theme "${activation.theme}" is not in the profile's themes/: it must be a theme the user already has`)
+      for (const file of activation.promptFiles ?? []) if (!existsSync(path.join(dir, file))) errors.push(`activate.promptFiles: ${file} is not in the profile`)
+      if (!activation.views && existsSync(path.join(dir, "extensions"))) notes.push("extensions/ modules load for everyone who enables the profile; list view modules in activate.views to load them only while the profile owns the look")
     }
   }
 
@@ -125,7 +125,7 @@ export function checkPackage(input: { dir: string; host: PackageHost; knownSlots
   const found = packageCapabilities(dir)
   const declared = new Set(found.declared)
   for (const name of found.observed) if (!declared.has(name)) errors.push(`code appears to use "${name}" but capabilities does not declare it`)
-  for (const name of found.declared) if (!found.observed.includes(name)) warnings.push(`capabilities declares "${name}" but no code of the package appears to use it`)
+  for (const name of found.declared) if (!found.observed.includes(name)) warnings.push(`capabilities declares "${name}" but no code of the profile appears to use it`)
   if (!found.complete) warnings.push("the capability scan was cut short (large tree or links); declared capabilities are not verified")
   const environment = new Set(found.declaredEnvironment ?? [])
   for (const name of found.observedEnvironment ?? []) if (!environment.has(name)) warnings.push(`code reads the environment variable ${name}; declare it in "environment"`)
@@ -135,7 +135,7 @@ export function checkPackage(input: { dir: string; host: PackageHost; knownSlots
   return { ok: errors.length === 0, name: manifest.name, errors, warnings, notes }
 }
 
-/** The lines `package check` prints. */
+/** The lines `profile check` prints. */
 export function formatCheck(result: PackageCheck): string[] {
   return [
     ...result.errors.map((line) => `error   ${line}`),

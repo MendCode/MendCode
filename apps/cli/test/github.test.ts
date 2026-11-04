@@ -57,7 +57,7 @@ test("B48 parser accepts inline/global options and rejects ambiguous, malformed 
     expect(JSON.stringify(parsed)).not.toContain("private")
   }
   expect(helpText("github")).toContain("--event JSON")
-  expect(helpText()).toContain("github run")
+  expect(helpText()).toContain("github install|run")
   expect(parseAutomation(["github", "--help"])).toMatchObject({ ok: true, command: { kind: "help", topic: "github" } })
   expect(parseRemoteFlags(["--dir", "/tmp/data", "github", "run", "--token", "private", "--event", githubEvent()]).args).toContain("private")
   expect(() => parseRemoteFlags(["session", "list", "--token", "private"])).toThrow("not supported")

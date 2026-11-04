@@ -8,9 +8,11 @@ reviewer, starts the watch and allows publishing reviews to GitHub using your lo
 steps are skipped; failures and their fixes stay on a scrollable page. The result opens PR repositories.
 
 The default is `all` when the base config's `reviewers` is `all`, otherwise `requested`. The balanced tier or a permitted
-`pr_review` override is required. Setup never changes the tier, model, repository files or remotes. A `public` remote with
+`pr_review` override is required; when the tier does not include it (unset or minimalist), setup lists "Allow the PR reviewer in this tier (features.pr_review: true; the tier stays …)" among its changes and writes it on confirmation. Safe mode and an explicit `features.pr_review: false` stay problems it will not override; the latter says how to turn it back on. Setup never changes the tier, model, repository files or remotes. A `public` remote with
 review enabled is identified when origin lacks it; use a clone of that repository rather than silently redirecting origin.
 The quick path currently checks GitHub; the manual commands below remain available for GitLab and Gitea.
+
+A development daemon ([dev mode](dev-mode.md)) records the watch but never runs it; setup says so. When something needs attention, nothing is applied, even with `--yes`, and the output ends with "Nothing changed".
 
 Headless: `mendcode pr setup [all|requested] --session ID`. It uses that session's checkout and model and asks once in a terminal.
 For automation, add `--yes` to consent to the listed changes, including model calls and GitHub publishing; without consent it

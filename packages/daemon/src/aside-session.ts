@@ -14,10 +14,12 @@ const MAX_TEXT = 24_000
 
 export const ASIDE_BRIEF = [
   "You are the side chat (/btw) of a coding session the user is running in parallel. The <session> blocks below show that session's",
-  "transcript, read-only: it keeps running, and nothing you say or do enters it. Answer the user's side questions about it.",
+  "transcript, read-only: it keeps running, and nothing you say or do enters it. Answer the user's side questions about it. A block",
+  "that starts with … is the recent part of a longer session, and tool results in it are cut: read the file or run the command to",
+  "see the rest, and say so when what you were not shown matters.",
   "You may read files, search and run read-only commands (git status, git log, git diff, ls) to check facts before answering. Never",
-  "change files, install, commit, push or start long-running processes. A command that needs approval is refused here: say what the",
-  "user can run instead. Be brief and direct. Answer in the language of the question.",
+  "change files, install, commit, push or start long-running processes: the main session may be editing the same files. A command",
+  "that needs approval is refused here: say what the user can run instead. Be brief and direct. Answer in the language of the question.",
 ].join(" ")
 
 const sideKey = (main: SessionId) => `aside.session:${main}`
@@ -25,7 +27,7 @@ const mainKey = (side: SessionId) => `aside.main:${side}`
 const seenKey = (main: SessionId) => `aside.seen:${main}`
 
 /** `cleared`: `/btw clear` stopped it; its end publishes nothing and the side session is deleted. */
-type Live = { main: SessionId; thread: AsideThread; items: Map<string, number>; done(thread: AsideThread): void; cleared?: true }
+type Live = { main: SessionId; thread: AsideThread; items: Map<string, number>; started: Map<string, number>; done(thread: AsideThread): void; cleared?: true }
 
 export function createAsideSessions(deps: {
   meta: { get(key: string): string | undefined; set(key: string, value: string): void }
@@ -35,8 +37,9 @@ export function createAsideSessions(deps: {
   create(main: SessionId, directory: string): SessionId
   /** Puts the aside model on the side session and returns its label for the panel. */
   model(main: SessionId, side: SessionId): string | undefined
-  /** The main session's transcript after `afterSeq` (the last part of it when there is a lot), and the last seq it covers. */
-  transcript(main: SessionId, afterSeq: number): { text: string; seq: number }
+  /** The main session's transcript after `afterSeq` (the last part of it when there is a lot), the last seq it covers, and whether its start was cut. */
+  transcript(main: SessionId, afterSeq: number): { text: string; seq: number; cut: boolean }
+  now(): number
   permission(main: SessionId): PermissionMode
   submit(side: SessionId, text: string, mode: PermissionMode): Promise<void>
   cancel(side: SessionId): Promise<void>
@@ -110,7 +113,9 @@ export function createAsideSessions(deps: {
       const prompt = `${fresh ? `${ASIDE_BRIEF}\n\n` : ""}${block}\n\nSide question: ${question}`
       const previous = deps.thread(main)
       const { error: _error, status: _status, ...kept } = previous
-      const entry: Live = { main, thread: { ...kept, messages: [...kept.messages, { role: "user", text: question }], busy: true, ...(model ? { model } : {}) }, items: new Map(), done: () => undefined }
+      // What the side chat has seen of the main session so far: grows with each update, starts over with a new side session.
+      const context = { ...(fresh ? {} : kept.context ?? {}), seen: (fresh ? 0 : kept.context?.seen ?? 0) + update.text.length, cut: (fresh ? false : kept.context?.cut ?? false) || update.cut }
+      const entry: Live = { main, thread: { ...kept, messages: [...kept.messages, { role: "user", text: question }], busy: true, context, ...(model ? { model } : {}) }, items: new Map(), started: new Map(), done: () => undefined }
       const ended = new Promise<AsideThread>((resolve) => { entry.done = resolve })
       live.set(side, entry)
       publish(entry, true)
@@ -145,7 +150,8 @@ export function createAsideSessions(deps: {
             setStatus(entry)
           } else if (event.kind === "tool_call") {
             const tool = typeof event.meta?.tool === "string" ? event.meta.tool.replace(/\s+/g, " ").trim() : "tool"
-            entry.items.set(event.itemId, messages.push({ role: "tool", text: tool.slice(0, 200) }) - 1)
+            entry.items.set(event.itemId, messages.push({ role: "tool", text: tool.slice(0, 200), status: "running" }) - 1)
+            entry.started.set(event.itemId, deps.now())
             setStatus(entry, `Running ${tool.split(":")[0]!.trim()}…`)
           } else if (event.kind === "reasoning") setStatus(entry, "Thinking…")
           else return
@@ -163,8 +169,18 @@ export function createAsideSessions(deps: {
           entry.items.delete(event.itemId)
           const message = messages[index]!
           if (message.role === "assistant") message.text = deps.redact((event.text ?? message.text).trim()).slice(0, MAX_TEXT)
-          else if (event.status !== "ok") message.text = `${message.text} · ${event.status}`.slice(0, 240)
+          else {
+            message.status = event.status === "ok" ? "ok" : "error"
+            message.ms = Math.max(0, deps.now() - (entry.started.get(event.itemId) ?? deps.now()))
+          }
+          entry.started.delete(event.itemId)
           setStatus(entry)
+          return publish(entry, false)
+        }
+        case "usage.recorded": {
+          // The side model's last prompt: what it read this call, and how much of it the provider served from its cache.
+          const tokens = event.input + event.cacheRead + event.cacheWrite
+          entry.thread = { ...entry.thread, context: { seen: 0, cut: false, ...entry.thread.context, tokens, cached: event.cacheRead } }
           return publish(entry, false)
         }
         case "turn.retrying":
@@ -172,7 +188,7 @@ export function createAsideSessions(deps: {
           return publish(entry, false)
         case "server.request":
           // Nobody answers an approval in the side chat: the request is refused and the model says what to run instead.
-          messages.push({ role: "tool", text: "needed approval: refused in the side chat" })
+          messages.push({ role: "tool", text: "needed approval: refused in the side chat", status: "error" })
           deps.deny(event.sessionId, event.requestId, "The side chat cannot ask for approval. Do not retry: answer with what you know and tell the user what to run in the main chat.")
           return publish(entry, false)
         case "turn.completed":

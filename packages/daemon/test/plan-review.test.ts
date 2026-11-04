@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from "bun:test"
 import path from "node:path"
 import type { SessionId } from "@mendcode/protocol"
-import { readPlanReviews } from "../src/plan-review"
+import { readPlanReviews, remotePlanReply } from "../src/plan-review"
 import { boot, callTool, openSession, put, stop, until, type NativeHarness } from "./native-harness"
 
 const harnesses: NativeHarness[] = []
@@ -32,7 +32,8 @@ test("apply persists edited Markdown, comments and destination; the next call us
   expect(h.requests[1]).toMatchObject({ model: "gpt-6-sol", effort: "high", system: "BASE\n\n# Agent: executor\n\nCheck reconnect races." })
   expect(h.requests[1]!.tools.some((tool) => tool.name === "write")).toBe(false)
   expect(h.store.sessionAgent(sessionId)).toBe("executor")
-  expect(h.store.permissionModeOf(sessionId)).toBe("ask")
+  // Applying a plan runs it with full access unless the reviewer picked another access.
+  expect(h.store.permissionModeOf(sessionId)).toBe("full")
   const record = readPlanReviews(h.store, sessionId)[0]!
   expect(record).toMatchObject({ markdown, destination: "executor", phase: "implementation", reply: { action: "apply", markdown, comments: "Keep retries bounded" } })
   expect(h.events.filter((event) => event.type === "item.completed" && event.text === markdown)).toHaveLength(1)
@@ -40,7 +41,17 @@ test("apply persists edited Markdown, comments and destination; the next call us
   expect(h.requests[1]!.messages.find((message) => message.role === "assistant")).toMatchObject({ toolCalls: [{ name: "plan_review", args: { markdown } }] })
   const again = await h.client.reviewPlan(sessionId, request.requestId, { action: "apply" })
   expect(again.ok).toBe(false)
-  expect(h.store.permissionModeOf(sessionId)).toBe("ask")
+  expect(h.store.permissionModeOf(sessionId)).toBe("full")
+})
+
+test("applying with a chosen access keeps it, and the durable reply records it", async () => {
+  const h = await start({ steps: [callTool("plan_review", { markdown: "# Plan\n\n1. Fix reconnect" }), stop("implemented")] })
+  const sessionId = await openSession(h, "plan" as never)
+  const request = await pending(h, sessionId)
+  expect((await h.client.reviewPlan(sessionId, request.requestId, { action: "apply", permission: "edits" })).ok).toBe(true)
+  await settled(h, sessionId)
+  expect(h.store.permissionModeOf(sessionId)).toBe("edits")
+  expect(readPlanReviews(h.store, sessionId)[0]).toMatchObject({ reply: { action: "apply", permission: "edits" } })
 })
 
 for (const action of ["accept", "edit", "reject", "close"] as const) test(`${action} remains read-only and has a durable reply`, async () => {
@@ -154,4 +165,11 @@ test("the read-only report redacts plan titles and user review text before persi
   expect(JSON.stringify(result)).not.toContain(secret)
   expect(JSON.stringify(h.requests[1]!.messages)).not.toContain(secret)
   expect(JSON.stringify(readPlanReviews(h.store, sessionId))).not.toContain(secret)
+})
+
+test("a remote apply without a named access runs in ask; full only when that reply asks for it; local replies and other actions are untouched", () => {
+  expect(remotePlanReply({ kind: "plan_review", action: "apply" }, true)).toMatchObject({ permission: "ask" })
+  expect(remotePlanReply({ kind: "plan_review", action: "apply", permission: "full" }, true)).toMatchObject({ permission: "full" })
+  expect(remotePlanReply({ kind: "plan_review", action: "apply" }, false)).not.toHaveProperty("permission")
+  expect(remotePlanReply({ kind: "plan_review", action: "accept" }, true)).not.toHaveProperty("permission")
 })

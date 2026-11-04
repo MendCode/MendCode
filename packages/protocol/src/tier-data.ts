@@ -15,7 +15,7 @@ const RANK: Readonly<Record<Tier, number>> = { minimalist: 0, balanced: 1, full:
 /** True when `tier` includes something that belongs to `needs`. No tier set means no gating: everything behaves as before tiers existed. */
 export const tierIncludes = (tier: Tier | undefined, needs: Tier) => tier === undefined || RANK[tier] >= RANK[needs]
 
-export const FEATURE_IDS = ["slash_menu", "extensions", "packages", "package_tools", "hooks", "mcp", "codegraph", "subagents", "script_workflows", "jev", "pets", "pet_generator", "voice", "computer", "browser", "code_mode", "snip", "worktree_tool", "usage_resume", "threads", "pr_watch", "pr_review", "output_filters", "forecast", "pi", "thread_mcp", "acp_registry", "storage_compact", "review_order", "session_meta", "fanout", "limit_checkpoint", "graph_context", "handoff", "instruction_includes", "package_capabilities", "caveman", "webfetch_modes", "tool_discovery", "official_packages", "orchestration_receipts", "autoresearch", "web_routing", "panel", "panel_orbit", "panel_models", "file_viewer", "memory_ux", "single_process", "lean_tools", "aux_tools", "harness_tools", "plan_tools", "find_tools", "ui_tool", "orientation", "git_hub", "git_actions", "quota_refresh", "idle_compact", "wait_cache", "compact_notice", "backlog", "task_worktree", "task_fork", "cheap_subagents", "claude_compact", "cache_countdown", "one_tree", "advisor", "visible_plan", "graph_autopilot"] as const
+export const FEATURE_IDS = ["slash_menu", "extensions", "profiles", "profile_tools", "hooks", "mcp", "codegraph", "subagents", "script_workflows", "jev", "pets", "pet_generator", "voice", "computer", "browser", "code_mode", "snip", "worktree_tool", "usage_resume", "threads", "pr_watch", "pr_review", "output_filters", "forecast", "pi", "thread_mcp", "acp_registry", "storage_compact", "review_order", "session_meta", "fanout", "limit_checkpoint", "graph_context", "handoff", "instruction_includes", "profile_capabilities", "caveman", "webfetch_modes", "tool_discovery", "official_profiles", "orchestration_receipts", "autoresearch", "web_routing", "panel", "panel_orbit", "panel_models", "file_viewer", "memory_ux", "single_process", "lean_tools", "aux_tools", "harness_tools", "plan_tools", "find_tools", "ui_tool", "orientation", "git_hub", "git_actions", "quota_refresh", "idle_compact", "wait_cache", "compact_notice", "backlog", "task_worktree", "task_fork", "cheap_subagents", "claude_compact", "cache_countdown", "one_tree", "advisor", "visible_plan", "graph_autopilot", "memory_auto", "resume_context", "plan_files"] as const
 export type FeatureId = (typeof FEATURE_IDS)[number]
 
 /** The release channel of the running binary (`channelOfVersion` in @mendcode/upgrade/releases; `local` is a build with no release tag). */
@@ -52,6 +52,11 @@ export type FeatureSpec = {
   tools?: readonly string[]
   /** The `experimental` flag that carries it. */
   flag?: string
+  /**
+   * For a `permit` feature with a `flag`: the lowest tier whose default turns that flag on, when the user has not set it. What the user wrote
+   * (`/experimental <flag> on|off`) always wins, and the feature must be allowed by the tier too. Seen through `effectiveSettings`.
+   */
+  flagOnFrom?: Tier
   experimental?: true
   /** Safe mode (`--safe-mode`) turns it off. */
   safe?: true
@@ -69,12 +74,12 @@ export const FEATURES: Readonly<Record<FeatureId, FeatureSpec>> = {
   file_viewer: { label: "File viewer (click a path)", tier: "balanced", mode: "tier", cost: ["chrome"], legacy: false, own: "/customize · pathClick · /open", doc: "docs/file-viewer.md" },
   // /git: tabs for Changes, Commit and Worktrees, and a local commit of the files you tick. Nothing leaves the machine. Off with no tier and in minimalist, where /changes and /worktrees are the pages they were.
   git_hub: { label: "Git page (review, commit, worktrees)", tier: "balanced", mode: "tier", cost: ["chrome"], legacy: false, own: "/git · git.defaultTab", doc: "docs/git.md" },
-  // Push, "publish to GitHub (private)" and "create pull request" from the Git page, and its PR tab: they reach the network through the user's own git and gh logins. Allowed from balanced; `experimental.git_actions` must also be on, so no tier turns network on by itself. No tool, no prompt text.
-  git_actions: { label: "Git page push and pull request", tier: "balanced", mode: "permit", cost: [], legacy: true, own: "experimental.git_actions", flag: "git_actions", doc: "docs/git.md" },
+  // Push, "publish to GitHub (private)" and "create pull request" from the Git page, and its PR tab: they reach the network through the user's own git and gh logins. Allowed from balanced, where `experimental.git_actions` must also be on; full turns that switch on by default (`flagOnFrom`), since every push and pull request still shows its exact command on a card and waits for Enter. No tool, no prompt text, no tokens.
+  git_actions: { label: "Git page push and pull request", tier: "balanced", mode: "permit", cost: [], legacy: true, own: "experimental.git_actions", flag: "git_actions", flagOnFrom: "full", doc: "docs/git.md" },
   memory_ux: { label: "Memory consent and management", tier: "minimalist", mode: "kernel", cost: [], legacy: true, own: "memoryEnabled · memoryRequireApproval · /memory", safe: true, doc: "docs/memory.md" },
   // Not a feature that turns on or off: the setting every tier has, with the value the minimalist bundle picks.
   single_process: { label: "One process per terminal (solo)", tier: "minimalist", mode: "kernel", cost: [], legacy: true, own: "/customize · processMode · --process (auto in every tier: one process while one terminal is open, less RAM; a second client moves the daemon to its own process; solo keeps it in the terminal; daemon keeps the separate process)", safe: true, doc: "docs/design/memory-single-process.md" },
-  official_packages: { label: "Official package kit", tier: "balanced", mode: "permit", cost: [], legacy: true, own: "Explicit local catalog install", doc: "docs/packages.md" },
+  official_profiles: { label: "Official profile kit", tier: "balanced", mode: "permit", cost: [], legacy: true, own: "Explicit local catalog install", doc: "docs/profiles.md" },
   orchestration_receipts: { label: "Durable orchestration receipts", tier: "minimalist", mode: "kernel", cost: [], legacy: true, own: "clientRequestId on thread mutations", safe: true, doc: "docs/thread-mcp.md" },
   autoresearch: { label: "Metric experiments", tier: "full", mode: "permit", cost: [], legacy: true, own: "On-demand metric-experiment skill", doc: "docs/loops.md" },
   web_routing: { label: "Explicit web routes", tier: "balanced", mode: "permit", cost: [], legacy: true, own: "On-demand explicit-web skill", doc: "docs/tools-web.md" },
@@ -89,11 +94,17 @@ export const FEATURES: Readonly<Record<FeatureId, FeatureSpec>> = {
   graph_context: { label: "Graph orientation and impact", tier: "balanced", mode: "permit", cost: ["prompt"], legacy: false, optIn: true, own: "/tier graph_context on (off until then: the model calls the graph tools itself)", doc: "docs/code-graph.md" },
   // MendCode builds the code graph of a real project by itself, keeps it fresh and tells the model in one prompt line to use it first (docs/code-graph.md, "Autopilot"). Nightly, dev and local builds only by default while it is tested; elsewhere `/tier graph_autopilot on`.
   graph_autopilot: { label: "Code graph autopilot", tier: "full", mode: "tier", cost: ["prompt"], legacy: false, channels: ["nightly", "dev", "local"], own: "/tier graph_autopilot on|off (on by default in nightly, dev and local builds only)", doc: "docs/code-graph.md" },
+  // Full: memory works by itself. Unset memory switches default on (use in prompts, generate after turns, no approval, nightly auto-consolidation, wider caps); a switch the user set keeps its value.
+  memory_auto: { label: "Automatic memory (use, generate, nightly consolidation)", tier: "full", mode: "tier", cost: ["prompt", "calls"], legacy: false, own: "/tier memory_auto off · memoryUse · memoryGenerate · memoryRequireApproval · dreamConsolidationPolicy (a switch you set wins)", doc: "docs/memory.md" },
+  // Full: the system prompt of a new chat carries a bounded note of what this project's and other projects' latest sessions were doing.
+  resume_context: { label: "Resume note in a new chat", tier: "full", mode: "tier", cost: ["prompt"], legacy: false, own: "/tier resume_context off", doc: "docs/memory.md" },
+  // A plan the user accepted or applied is kept as a Markdown file; a session without a plan writes and sends nothing (docs/plan-review.md).
+  plan_files: { label: "Plans kept as Markdown files", tier: "balanced", mode: "tier", cost: [], legacy: false, own: "/tier plan_files off · plan_files_location", doc: "docs/plan-review.md" },
   // Sessions sharing one checkout: a line on a tool result only when it names a file another live session is changing; nothing while a session works alone.
   one_tree: { label: "One tree: sessions sharing a checkout", tier: "balanced", mode: "tier", cost: ["prompt"], legacy: false, own: "/tier one_tree off", doc: "docs/one-tree.md" },
   handoff: { label: "Focused session handoff", tier: "balanced", mode: "tier", cost: [], legacy: false, own: "/handoff <goal>", doc: "docs/sessions.md" },
   instruction_includes: { label: "Instruction includes", tier: "balanced", mode: "tier", cost: ["prompt"], legacy: false, own: "@relative/path in AGENTS.md", doc: "docs/prompt-modes.md" },
-  package_capabilities: { label: "Package capability preview", tier: "balanced", mode: "tier", cost: [], legacy: false, own: "/marketplace preview", doc: "docs/packages.md" },
+  profile_capabilities: { label: "Profile capability preview", tier: "balanced", mode: "tier", cost: [], legacy: false, own: "/marketplace preview", doc: "docs/profiles.md" },
   caveman: { label: "Caveman prose style", tier: "balanced", mode: "permit", cost: [], legacy: false, own: "/output-style caveman", doc: "docs/prompt-modes.md" },
   webfetch_modes: { label: "PDF and repository fetch", tier: "balanced", mode: "permit", cost: [], legacy: false, own: "webfetch mode", doc: "docs/tools-web.md" },
   tool_discovery: { label: "Deferred MCP tools", tier: "full", mode: "tier", cost: [], legacy: false, own: "experimental.tool_discovery", doc: "docs/tool-discovery.md" },
@@ -114,8 +125,8 @@ export const FEATURES: Readonly<Record<FeatureId, FeatureSpec>> = {
   acp_registry: { label: "ACP registry", tier: "full", mode: "tier", cost: [], legacy: false, own: "/tier acp_registry on", safe: true, doc: "docs/acp-engine.md" },
   storage_compact: { label: "Lossless storage compaction", tier: "minimalist", mode: "permit", cost: [], legacy: true, own: "storage --compact --offline --dir DATA", doc: "docs/storage.md" },
   extensions: { label: "Extensions", tier: "minimalist", mode: "kernel", cost: [], legacy: true, own: "MENDCODE_EXTENSIONS=0 · --pure", safe: true, doc: "docs/extensions.md" },
-  packages: { label: "Installed packages", tier: "minimalist", mode: "kernel", cost: ["prompt", "tools"], legacy: true, own: "disabledPackages · /marketplace", safe: true, doc: "docs/packages.md" },
-  package_tools: { label: "Package chat tools", tier: "balanced", mode: "tier", cost: ["tools"], legacy: false, own: "features.package_tools", tools: ["packages"], safe: true, doc: "docs/packages.md" },
+  profiles: { label: "Installed profiles", tier: "minimalist", mode: "kernel", cost: ["prompt", "tools"], legacy: true, own: "disabledProfiles · /marketplace", safe: true, doc: "docs/profiles.md" },
+  profile_tools: { label: "Profile chat tools", tier: "balanced", mode: "tier", cost: ["tools"], legacy: false, own: "features.profile_tools", tools: ["profiles"], safe: true, doc: "docs/profiles.md" },
   usage_resume: { label: "Auto-resume at usage limit", tier: "minimalist", mode: "tier", cost: [], legacy: true, own: "/limit cancel", doc: "docs/usage-limit.md" },
   hooks: { label: "Shell hooks", tier: "minimalist", mode: "kernel", cost: [], legacy: true, own: "MENDCODE_HOOKS=0", safe: true, doc: "docs/hooks.md" },
   mcp: { label: "MCP servers", tier: "full", mode: "tier", cost: ["tools"], legacy: true, own: "mcp.json", tools: ["mcp__*", "mcp_resource_*"], safe: true, doc: "docs/mcp-oauth.md" },
@@ -137,7 +148,7 @@ export const FEATURES: Readonly<Record<FeatureId, FeatureSpec>> = {
   pet_generator: { label: "Experimental pet generator", tier: "full", mode: "permit", cost: ["calls"], legacy: false, own: "/pet new (explicit confirmation)", experimental: true, safe: true, doc: "docs/customize.md" },
   voice: { label: "Voice dictation", tier: "full", mode: "permit", cost: ["calls"], legacy: true, own: "voice.enabled", off: { voice: { enabled: false } }, doc: "docs/voice.md" },
   computer: { label: "Computer control", tier: "balanced", mode: "permit", cost: ["tools"], legacy: false, optIn: true, own: "/tier computer on (macOS; off until then)", tools: ["computer_*"], doc: "docs/computer.md" },
-  browser: { label: "Headless browser", tier: "full", mode: "permit", cost: ["tools"], legacy: true, own: "MENDCODE_BROWSER=1", tools: ["browser"], doc: "docs/browser.md" },
+  browser: { label: "Headless browser", tier: "full", mode: "permit", cost: ["tools"], legacy: true, own: "MENDCODE_BROWSER=1 · MENDCODE_BROWSER_EXTENSION=1", tools: ["browser", "user_browser"], doc: "docs/browser.md" },
   code_mode: { label: "Code Mode", tier: "full", mode: "permit", cost: ["tools"], legacy: true, own: "experimental.code_mode", flag: "code_mode", doc: "docs/code-mode.md" },
   // One compaction call of its own, in an idle session of at least `idleCompactAtTokens`, just before the provider's prompt cache expires: the history is read at the cached price one last time instead of at the full price on the next message. Off with no tier.
   idle_compact: { label: "Compact while idle", tier: "full", mode: "tier", cost: ["calls"], legacy: false, own: "/tier idle_compact off · /settings · idle compact", doc: "docs/compaction.md" },
@@ -200,7 +211,7 @@ export const slashTier = (name: string): Tier => (MINIMALIST_SLASH as readonly s
  * Estimated tokens of system prompt plus tool definitions on every request, per tier, for the test pool of tools
  * (packages/daemon/test/tier.test.ts holds each tier to it). Setup and the tutorial quote it as "what it costs in context".
  */
-export const TIER_BASELINE_TOKENS: Readonly<Record<Tier, number>> = { minimalist: 3_500, balanced: 5_000, full: 6_400 }
+export const TIER_BASELINE_TOKENS: Readonly<Record<Tier, number>> = { minimalist: 3_500, balanced: 4_800, full: 6_400 }
 
 /** The slice of Settings the manifest reads; a real Settings object fits. */
 export type TierSettings = {
@@ -253,6 +264,7 @@ export function effectiveSettings<S extends object>(settings: S, options: TierOp
     if (state.why === "legacy" || state.why === "setting") continue
     if (spec.flag) {
       if (state.on && spec.mode === "tier" && experimental[spec.flag] !== true) { experimental[spec.flag] = true; changed = true }
+      if (state.on && spec.mode === "permit" && spec.flagOnFrom && typeof experimental[spec.flag] !== "boolean" && input.tier !== undefined && tierIncludes(input.tier, spec.flagOnFrom)) { experimental[spec.flag] = true; changed = true }
       if (!state.on && experimental[spec.flag] !== false) { experimental[spec.flag] = false; changed = true }
     }
     if (state.on) continue

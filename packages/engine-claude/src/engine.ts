@@ -1,4 +1,4 @@
-import type { BlobRef, PermissionMode, ReasoningEffort, SessionId, TurnId } from "@mendcode/protocol"
+import { PLAN_APPLY_DEFAULT, createPlanTurnNotes, type BlobRef, type PermissionMode, type ReasoningEffort, type SessionId, type TurnId } from "@mendcode/protocol"
 import { layoutAttachments } from "@mendcode/protocol/wire"
 import { createHash, randomUUID } from "node:crypto"
 import { environmentKey, processMcpTurn, realClock, type Clock, type EngineEnvironment, type EngineEvent, type EnginePort, type EngineResolution, type TimerHandle, type TurnInput, type TurnOutcome } from "@mendcode/kernel"
@@ -24,11 +24,14 @@ import {
 } from "./protocol"
 import { spawnClaude, type ClaudeTransport } from "./transport"
 import { createClaudePlan, type ClaudePlan } from "./plan"
+import { claudePlanFile } from "./plan-file"
 
 /** A session's `claude` process is stopped after this long without a turn; the next turn resumes it. */
 export const DEFAULT_PROCESS_IDLE_MS = 10 * 60_000
 /** Records of a turn Claude Code runs on its own that are kept until its notice is shown; a runaway one is cut there. */
 const MAX_UNSOLICITED = 2_000
+/** Sub-agent tool tasks remembered until their end (`agentTasks`); one that never reports its end is forgotten past this many. */
+const MAX_AGENT_TASKS = 256
 const CONTROL_TIMEOUT_MS = 30_000
 /** Esc gives Claude Code this long to stop a turn on its own; then the turn ends here and what it still sends is dropped. */
 export const CANCEL_GRACE_MS = 3_000
@@ -71,6 +74,18 @@ const ONE_TREE_HOOK = "mendcode-one-tree"
 /** The Claude Code tools One tree hears about: the shell, whose output names files, and the ones that write a file. */
 const ONE_TREE_TOOLS = "Bash|Edit|Write|MultiEdit|NotebookEdit"
 
+/** The id of the `PreToolUse` hook that keeps MendCode's main-agent tools from Claude Code's own sub-agents. */
+const SUBAGENT_TOOLS_HOOK = "mendcode-subagent-tools"
+/** MendCode's tools only the main agent uses: the advisor, workflows, sub-agents of its own (threads, loops) and the user-facing ones. */
+const MAIN_AGENT_TOOLS = "mcp__mendcode__(advisor|workflow_.*|threads|loop|sidebar|remember|worktree|packages|pr_watch|session_meta)|mcp__mendcode_threads__.*"
+
+/** A `PreToolUse` answer: a call one of Claude Code's sub-agents makes (it carries `agent_id`) is refused, the main agent's goes on. */
+export function subagentToolAnswer(input: unknown) {
+  const hook = (input ?? {}) as { agent_id?: unknown; tool_name?: unknown }
+  if (typeof hook.agent_id !== "string" || !hook.agent_id) return {}
+  return { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: `${String(hook.tool_name)} is for the main agent only; a sub-agent does its task with its other tools and reports back.` } }
+}
+
 /** What a `PostToolUse` call wrote and printed, from Claude Code's hook input. */
 export function oneTreeCall(input: unknown): { written: string[]; output: string; cwd?: string; agent?: string } {
   const hook = (input ?? {}) as { tool_name?: unknown; tool_input?: Record<string, unknown>; tool_response?: unknown; cwd?: unknown; agent_id?: unknown }
@@ -97,6 +112,8 @@ type Connection = {
   closed: boolean
   /** Background tasks Claude Code reports running (`background_tasks_changed`): while any runs, the process is kept. */
   background: number
+  /** Every background task this process reported running: a notice about any other one (orphaned by an earlier process) is not this process's to answer. */
+  tasks: Set<string>
   /** A turn ended here before Claude Code finished stopping it (`CANCEL_GRACE_MS`): its last records are dropped up to its `result`. */
   draining?: boolean
   /**
@@ -114,8 +131,16 @@ type Connection = {
   lifecycle?: boolean
   /** `environmentKey` of the credentials the process started with. */
   envKey: string
+  /** The compaction window this process was started with (`CLAUDE_CODE_AUTO_COMPACT_WINDOW`): what it really compacts at, whatever the settings say now. */
+  compactAt: number | undefined
   /** Ended turns whose background agents still run: their records go on to that turn's mapper, and from it to the daemon. */
   agentTurns: Array<ReturnType<typeof createTurnMapper>>
+  /**
+   * Tasks a sub-agent's own tools run, by task id, from Claude Code's `task_started` (`owned_by_subagent`) to their `task_notification`.
+   * Claude Code 2.1.317 reports a sub-agent's long Bash call this way; the call belongs to that agent's thread, and the main agent never
+   * answers its end, so it is no background task of the session's own.
+   */
+  agentTasks: Set<string>
   /** The tasks TaskCreate and TaskUpdate keep in this process, so every turn's card shows the whole list. */
   plan: ClaudePlan
 }
@@ -144,6 +169,9 @@ function toolDetail(name: string, args: Record<string, any>, reason: unknown) {
  * the turn, answers tool permissions, questions and plan approval, and reads the subscription's rate limits.
  * No credentials are read or copied. One process per session stays up between turns and is resumed after a stop.
  */
+/** Claude Code reminds the model of plan mode only now and then, so every turn in plan carries a short note; module-wide because a turn with its own MCP servers runs in a fresh engine. */
+const planNotes = createPlanTurnNotes("tool")
+
 export function createClaudeEngine(options: {
   bin?: string
   clock?: Clock
@@ -162,6 +190,8 @@ export function createClaudeEngine(options: {
    * when it runs them, so here they are allowed without a second question and get no second card.
    */
   ownTools?: string
+  /** An applied plan: the session moves to the plan's destination agent (the reviewer's choice, else the configured one), as the native engine does. */
+  planApplied?(sessionId: SessionId, destination: string | undefined): void
   /** Text added after Claude Code's own system prompt for a project directory: what MendCode draws that Claude Code's terminal does not. */
   appendSystem?(cwd: string): string | undefined
   /**
@@ -184,6 +214,11 @@ export function createClaudeEngine(options: {
   /** The session's `/env` credentials: in the process environment, and their names in the appended system prompt. */
   environment?(sessionId: SessionId): EngineEnvironment | undefined
   transportFactory?(input: { args: string[]; cwd: string; env?: Record<string, string> }): ClaudeTransport
+  /**
+   * A session's Claude Code process started with this pid. The daemon records it as the session's own, so a `mendcode` client
+   * run from that process's tools is known by its session. Returns what to call when the process has ended.
+   */
+  onProcess?(sessionId: SessionId, pid: number): (() => void) | void
   trace?: (direction: "in" | "out", line: string) => void
   /** Queue a notice in a session (a background task ended). Without it, what Claude Code does on its own between turns is not shown. */
   notify?(sessionId: SessionId, text: string): void
@@ -206,6 +241,8 @@ export function createClaudeEngine(options: {
    */
   const kept = new Map<SessionId, ReturnType<typeof createClaudeEngine>>()
   const inTurn = new Set<ReturnType<typeof createClaudeEngine>>()
+  /** The bridge each bridged process starts with: the latest turn's, so a restart never points at a released lease. */
+  const bridges = new WeakMap<ReturnType<typeof createClaudeEngine>, { current: NonNullable<TurnInput["externalMcp"]> }>()
   const settle = (sessionId: SessionId, isolated: ReturnType<typeof createClaudeEngine>) => {
     if (inTurn.has(isolated)) return
     if (isolated.busy()) { kept.set(sessionId, isolated); return }
@@ -301,12 +338,16 @@ export function createClaudeEngine(options: {
       if (name === "ExitPlanMode") {
         // The same review page the native engine opens (docs/plan-review.md); Claude Code leaves plan mode on its own, so only apply continues.
         const markdown = String(args.plan ?? "").trim().slice(0, 30_000) || "(empty plan)"
-        const answer = await ask({ kind: "approval", title: "Review plan", detail: "", tool: "plan_review", permission: "write", planReview: { markdown, phase: "implementation", destination: "build" } })
+        const file = claudePlanFile(markdown, args.planFilePath ?? args.plan_file_path)
+        const answer = await ask({ kind: "approval", title: "Review plan", detail: "", tool: "plan_review", permission: "write", planReview: { markdown, phase: "implementation", destination: "build", ...(file ? { file } : {}) } })
+        // No decision (the daemon restarted, the request was cancelled or the turn ended): the user did not reject the plan, and the model must not say so.
+        if (answer.kind === "abandoned") return deny("Plan review was interrupted before the user decided (no approval and no rejection). Do not treat this as a rejection: ask the user whether to continue, or wait.")
         const reply = answer.kind === "plan_review" ? answer : answer.kind === "approve" ? { action: "apply" as const } : answer.kind === "deny" ? { action: "reject" as const, reason: answer.reason } : { action: "close" as const }
         if (reply.action === "accept" || reply.action === "close") return deny("The user did not approve the plan.")
         if (reply.action === "edit") return deny(`The user edited the plan; revise it from this Markdown and submit it again:\n\n${"markdown" in reply && reply.markdown ? reply.markdown : markdown}`)
         if (reply.action === "reject") return deny(reply.reason ? `The user wants changes to the plan: ${reply.reason}` : "The user did not approve the plan.")
-        turn.input.setPermissionMode("ask")
+        turn.input.setPermissionMode("permission" in reply && reply.permission ? reply.permission : PLAN_APPLY_DEFAULT)
+        options.planApplied?.(turn.input.sessionId, "destination" in reply ? reply.destination : undefined)
         connection.permission = "default"
         return allow()
       }
@@ -317,7 +358,7 @@ export function createClaudeEngine(options: {
       // Full access is the user's choice to run unattended, so it is allowed; `engineSafetyPrompts: true` shows it as an approval instead.
       const flagged = mode === "full" && connection.permission === "bypassPermissions" && options.safetyPrompts?.() === true
       if (!flagged && (mode === "full" || (mode === "edits" && permission === "write"))) return allow()
-      if (mode === "plan" && permission !== "read") return deny("Plan mode: only reading is allowed until the plan is approved.")
+      if (mode === "plan" && permission !== "read") return deny(turn.input.readOnlyRun === true ? "This run is read-only: only read tools are allowed; answer from what you can read." : "Plan mode: only reading is allowed until the plan is approved.")
       // `description` is Claude's short label (often just the file name); only `decision_reason` says why it asks.
       const reason = flagged && !(typeof request.decision_reason === "string" && request.decision_reason.trim()) ? ENGINE_FLAGGED_REASON : request.decision_reason
       const answer = await ask({ kind: "approval", title: String(request.title ?? claudeToolTitle(name, args)).slice(0, 200), detail: toolDetail(name, args, reason), tool: name, permission, ...(flagged ? { engineFlagged: true as const } : {}) })
@@ -337,6 +378,10 @@ export function createClaudeEngine(options: {
 
   /** A hook registered at `initialize`; every callback is answered, an empty one when there is nothing to add, so Claude Code never waits. */
   async function answerHook(connection: Connection, message: ClaudeMessage) {
+    if (message.request?.callback_id === SUBAGENT_TOOLS_HOOK) {
+      if (!connection.closed) write(connection, controlResponse(String(message.request_id), subagentToolAnswer(message.request?.input)))
+      return
+    }
     if (message.request?.callback_id === ONE_TREE_HOOK) {
       let line: string | undefined
       try {
@@ -403,6 +448,7 @@ export function createClaudeEngine(options: {
       const tasks = (message.tasks as Array<Record<string, unknown>>).filter((task) => task && typeof task.task_id === "string")
         .map((task) => ({ id: String(task.task_id), description: String(task.description ?? "").slice(0, 200), kind: String(task.task_type ?? "") }))
       connection.background = tasks.length
+      for (const task of tasks) connection.tasks.add(task.id)
       if (tasks.length) connection.idle?.cancel()
       // An MCP change waited for the background tasks; with none left and no turn open, the process restarts now.
       else if (!connection.turn && connection.reload) { close(connection, "MCP servers changed"); return }
@@ -413,6 +459,7 @@ export function createClaudeEngine(options: {
       })
       return
     }
+    if (agentTask(connection, message)) return
     // A background agent of an ended turn: its records go to that turn; Claude Code's notice that it ended is also read below.
     const owner = connection.agentTurns.find((mapper) => mapper.owns(message))
     if (owner) {
@@ -439,6 +486,21 @@ export function createClaudeEngine(options: {
     // A tool result of the turn itself is where Claude Code can take a message in: queued ones go to it now, as it does with a
     // message typed while it works (it reads them after the running step's tool results, or answers them right after this turn).
     if (message.type === "user" && !message.parent_tool_use_id && Array.isArray(message.message?.content) && message.message.content.some((part: { type?: string }) => part?.type === "tool_result")) void steerQueued(connection, turn)
+  }
+
+  /**
+   * True for Claude Code's notice that a sub-agent's own tool started or ended (`agentTasks`). Its tool is already drawn in the
+   * agent's thread; read as a background task of the session, its end opened a turn of the main agent that showed the agent's
+   * command as a message and held the queue until Claude Code next answered.
+   */
+  function agentTask(connection: Connection, message: ClaudeMessage): boolean {
+    if (message.type !== "system" || typeof message.task_id !== "string") return false
+    if (message.subtype === "task_started" && message.owned_by_subagent === true) {
+      if (connection.agentTasks.size >= MAX_AGENT_TASKS) connection.agentTasks.clear()
+      connection.agentTasks.add(message.task_id)
+      return true
+    }
+    return message.subtype === "task_notification" && connection.agentTasks.delete(message.task_id)
   }
 
   /** Writes what the user queued while the turn runs to Claude Code, which takes it into the turn the way it takes a typed message. */
@@ -480,8 +542,13 @@ export function createClaudeEngine(options: {
   function between(connection: Connection, message: ClaudeMessage) {
     if (message.type === "system" && message.subtype === "task_notification") {
       if (!options.notify || connection.unsolicited) return
+      // Claude Code answers on its own only for a task of this live process. A process MendCode is ending reports its tasks
+      // killed, and a resumed one reports the tasks an earlier process left (orphaned) into the conversation without answering:
+      // a notice for either would reach the model as a message from the user.
+      if (connection.closed || !connection.tasks.has(String(message.task_id))) return
       const summary = typeof message.summary === "string" && message.summary.trim() ? message.summary.trim() : `Background task ${String(message.task_id ?? "")} ended (${String(message.status ?? "unknown")})`
-      const notice = `${summary.slice(0, 500)}${typeof message.output_file === "string" ? `\nOutput: ${message.output_file.slice(0, 500)}` : ""}`
+      const output = typeof message.output_file === "string" ? message.output_file.trim() : ""
+      const notice = `${summary.slice(0, 500)}${output ? `\nOutput: ${output.slice(0, 500)}` : ""}`
       connection.unsolicited = { notice, records: [] }
       connection.idle?.cancel()
       options.notify(connection.sessionId, notice)
@@ -497,6 +564,12 @@ export function createClaudeEngine(options: {
     if (!connection.closed && connection.background === 0 && !connection.unsolicited) connection.idle = clock.setTimer(processIdleMs, () => close(connection, "idle"))
   }
 
+  /** The window a process started with `env` compacts at: its variable, else the daemon's own. */
+  function compactWindow(env: Record<string, string | undefined>): number | undefined {
+    const value = Number(env.CLAUDE_CODE_AUTO_COMPACT_WINDOW ?? process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW)
+    return Number.isFinite(value) && value > 0 ? Math.round(value) : undefined
+  }
+
   function open(sessionId: SessionId, model: ClaudeModelChoice, permission: PermissionMode, withThinkingDisplay: boolean): Connection {
     const cwd = options.cwdFor(sessionId)
     const environment = options.environment?.(sessionId)
@@ -505,8 +578,12 @@ export function createClaudeEngine(options: {
     const extra = { ...options.env?.(sessionId, model), ...environment?.values }
     const env = Object.keys(extra).length ? { env: extra } : {}
     const transport = options.transportFactory?.({ args, cwd, ...env }) ?? spawnClaude({ bin: options.bin ?? "claude", args, cwd, ...env })
-    const connection: Connection = { sessionId, transport, model, permission: claudePermissionMode(permission), pending: new Map(), ready: Promise.resolve(), closed: false, background: 0, agentTurns: [], envKey: environmentKey(environment), plan: createClaudePlan() }
+    const connection: Connection = { sessionId, transport, model, permission: claudePermissionMode(permission), pending: new Map(), ready: Promise.resolve(), closed: false, background: 0, tasks: new Set(), agentTurns: [], agentTasks: new Set(), envKey: environmentKey(environment), compactAt: compactWindow(extra), plan: createClaudePlan() }
     connections.set(sessionId, connection)
+    if (options.onProcess && transport.pid) {
+      const ended = options.onProcess(sessionId, transport.pid)
+      if (ended) void transport.exited.then(ended, ended)
+    }
     void (async () => {
       try {
         for await (const line of transport.lines) {
@@ -529,20 +606,22 @@ export function createClaudeEngine(options: {
       connection.turn?.finish({ status: "error", code: "claude_exited", message: `[CLAUDE]: claude exited during the turn${tail ? `: ${tail.slice(-1_000)}` : ""}` })
       close(connection, `process exited${tail ? `: ${tail.slice(-200)}` : ""}`)
     })()
-    const hooks = { ...(options.subagentContext ? { SubagentStart: [{ hookCallbackIds: [SUBAGENT_HOOK] }] } : {}), ...(options.oneTree ? { PostToolUse: [{ matcher: ONE_TREE_TOOLS, hookCallbackIds: [ONE_TREE_HOOK] }] } : {}) }
-    connection.ready = control(connection, { subtype: "initialize", ...(Object.keys(hooks).length ? { hooks } : {}) }).then(() => undefined)
+    const hooks = { ...(options.subagentContext ? { SubagentStart: [{ hookCallbackIds: [SUBAGENT_HOOK] }] } : {}), PreToolUse: [{ matcher: MAIN_AGENT_TOOLS, hookCallbackIds: [SUBAGENT_TOOLS_HOOK] }], ...(options.oneTree ? { PostToolUse: [{ matcher: ONE_TREE_TOOLS, hookCallbackIds: [ONE_TREE_HOOK] }] } : {}) }
+    connection.ready = control(connection, { subtype: "initialize", hooks }).then(() => undefined)
     return connection
   }
 
   async function connectionFor(input: TurnInput): Promise<Connection> {
     const model = options.modelFor(input.sessionId, input.selection?.model)
-    const mode = input.permissionMode()
+    // An internal read-only run (a PR review, a report-only loop) is in plan mode only to stay read-only: Claude Code runs it in its
+    // default mode, so its own plan-mode reminders never reach the run, and every tool that would change something is refused here.
+    const mode = input.readOnlyRun === true && input.permissionMode() === "plan" ? "ask" : input.permissionMode()
     let connection = connections.get(input.sessionId)
     // Effort is fixed when Claude Code starts, so a new model or effort restarts the process and resumes the session.
     // New `/env` credentials restart it too, unless a background agent would be lost: they wait for the next start.
     // An MCP change that waited for background tasks is made before a turn once none runs.
-    if (connection && (!sameModel(connection.model, model) || (connection.background === 0 && (connection.reload || connection.envKey !== environmentKey(options.environment?.(input.sessionId)))))) {
-      close(connection, !sameModel(connection.model, model) ? `model, effort or fast changed (${connection.model.model ?? "default"}/${connection.model.effort ?? "default"}${connection.model.fast ? "/fast" : ""} → ${model.model ?? "default"}/${model.effort ?? "default"}${model.fast ? "/fast" : ""})` : connection.reload ? "MCP servers changed" : "credentials changed")
+    if (connection && (!sameModel(connection.model, model) || (connection.background === 0 && (connection.reload || connection.envKey !== environmentKey(options.environment?.(input.sessionId)) || connection.compactAt !== compactWindow({ ...options.env?.(input.sessionId, model) }))))) {
+      close(connection, !sameModel(connection.model, model) ? `model, effort or fast changed (${connection.model.model ?? "default"}/${connection.model.effort ?? "default"}${connection.model.fast ? "/fast" : ""} → ${model.model ?? "default"}/${model.effort ?? "default"}${model.fast ? "/fast" : ""})` : connection.reload ? "MCP servers changed" : connection.compactAt !== compactWindow({ ...options.env?.(input.sessionId, model) }) ? "compaction point changed" : "credentials changed")
       connection = undefined
     }
     connection ??= open(input.sessionId, model, mode, thinkingDisplay)
@@ -605,20 +684,26 @@ export function createClaudeEngine(options: {
         if (plain) close(plain, "a turn with its own MCP servers")
         // Background agents of an earlier bridged turn still run in its process: this turn joins them there, so they live on. That
         // process's bridge was the earlier turn's, so its thread tools answer that the bridge is gone until a new process starts.
+        // When that process has to start again (new model, effort or credentials), it starts with this turn's bridge: the earlier
+        // turn's config file went with its turn, and Claude Code refuses to start on it.
         const running = kept.get(input.sessionId)
-        if (running?.busy()) {
+        const joined = running && bridges.get(running)
+        if (running?.busy() && joined) {
+          joined.current = input.externalMcp
           inTurn.add(running)
-          try { return await running.runTurn({ ...input, externalMcp: undefined }) }
-          finally { inTurn.delete(running); settle(input.sessionId, running) }
+          const turn = processMcpTurn(input)
+          try { return await running.runTurn(turn) }
+          finally { turn.flushProcessMcp(); inTurn.delete(running); settle(input.sessionId, running) }
         }
         if (running) settle(input.sessionId, running)
-        const mcp = input.externalMcp
+        const bridge = { current: input.externalMcp }
         const { trace: _trace, ...processOptions } = options
         const sessionId = input.sessionId
         // Its background agents ending is when a process kept for them stops.
-        const isolated: ReturnType<typeof createClaudeEngine> = createClaudeEngine({ ...processOptions, processArgs: mcp.args, waitingForMcp: () => mcp.waiting?.() === true || options.waitingForMcp?.() === true, cwdFor: () => mcp.cwd,
+        const isolated: ReturnType<typeof createClaudeEngine> = createClaudeEngine({ ...processOptions, get processArgs() { return bridge.current.args }, waitingForMcp: () => bridge.current.waiting?.() === true || options.waitingForMcp?.() === true, cwdFor: () => bridge.current.cwd,
           onBackground: (id, tasks, stop) => { options.onBackground?.(id, tasks, stop); if (!tasks.length) queueMicrotask(() => settle(sessionId, isolated)) } })
         isolatedEngines.add(isolated)
+        bridges.set(isolated, bridge)
         inTurn.add(isolated)
         const turn = processMcpTurn(input)
         // The process lives for the bridge lease, and on while the background agents it started run. Saved bindings resume the same conversation next turn.
@@ -630,12 +715,16 @@ export function createClaudeEngine(options: {
         connection = await connectionFor(input)
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
-        const missing = /ENOENT|not found|No such file/i.test(message)
-        return missing
+        // Only a `claude` that could not be started is missing; one that started and exited said why, and its words are kept.
+        const unstarted = !message.startsWith("[CLAUDE]") && /ENOENT|Executable not found|not found in \$PATH/i.test(message)
+        return unstarted
           ? { status: "error", code: "claude_missing", message: "[CLAUDE]: `claude` was not found. Install Claude Code and run `claude auth login`." }
           : { status: "error", code: "claude_start", message: message.startsWith("[CLAUDE]") ? message : `[CLAUDE]: ${message}` }
       }
       const body = await content(input)
+      // A slash command (Claude Code's own `/compact`) is sent as typed.
+      const planNote = input.text.startsWith("/") ? undefined : planNotes.next(input.sessionId, input.permissionMode() === "plan", input.readOnlyRun === true)
+      if (planNote) body.push({ type: "text", text: planNote })
       // A cancel while the process started or the attachments were read: its abort event is gone, so nothing may be sent now.
       if (input.signal.aborted) {
         keepIdle(connection)
@@ -647,7 +736,7 @@ export function createClaudeEngine(options: {
         let sink: (event: EngineEvent) => void = input.emit
         const turn: ActiveTurn = {
           input,
-          mapper: createTurnMapper({ newItemId: input.newItemId, emit: (event) => sink(event), model: connection.model.model ?? "claude", ownTools: options.ownTools, plan: connection.plan, onTool: (name, args) => { if (changesMcpServers(name, args)) connection.reload = true } }),
+          mapper: createTurnMapper({ newItemId: input.newItemId, emit: (event) => sink(event), model: connection.model.model ?? "claude", ownTools: options.ownTools, plan: connection.plan, compactAt: connection.compactAt, onTool: (name, args) => { if (changesMcpServers(name, args)) connection.reload = true } }),
           waitingUser: false,
           interrupted: false,
           steered: new Set(),

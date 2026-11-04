@@ -106,7 +106,7 @@ function localFolder(location: string, cwd: string) {
   return realpathSync(folder)
 }
 
-/** Local catalogs are explicit and contain metadata only. Reading never imports package code or uses the network. */
+/** Local catalogs are explicit and contain metadata only. Reading never imports profile code or uses the network. */
 export function createPackageRegistry(input: { userDir: string; directory: string; disabled?: readonly string[]; fetchers?: PackageFetchers; capabilities?: boolean; host?: PackageHost }) {
   const file = path.join(input.userDir, "package-sources.json")
   const cacheFile = (id: string) => path.join(input.userDir, CACHE_DIR, `${id}.json`)
@@ -162,7 +162,7 @@ export function createPackageRegistry(input: { userDir: string; directory: strin
     const { url, integrity } = pack.source!
     const spec = integrity && url.startsWith("npm:") && !url.includes("#") ? `${url}#${integrity}` : url
     let problem: string | undefined
-    try { parsePackageSource(spec, input.directory) } catch (error) { problem = error instanceof PackageError ? error.message.replace("[PACKAGES]: ", "") : "invalid source" }
+    try { parsePackageSource(spec, input.directory) } catch (error) { problem = error instanceof PackageError ? error.message.replace("[PROFILES]: ", "") : "invalid source" }
     if (!problem && !isPinnedSpec(spec)) problem = "source is not pinned: use npm:name@x.y.z or a full git commit"
     return { name: pack.id, version: pack.version, description: pack.description ?? "", sourceId, location: spec, tags: [...(pack.tags ?? []), "remote"], ...(pack.title ? { title: pack.title } : {}), contents: { tools: 0, skills: 0, commands: 0, themes: 0, mcp: false }, state: found ? found.enabled ? "active" : "installed" : "available", remote: true, ...(problem ? { problem } : {}) }
   }
@@ -172,10 +172,10 @@ export function createPackageRegistry(input: { userDir: string; directory: strin
       if (names.has(pack.id)) throw new PackageError(`duplicate catalog id: ${pack.id}`)
       names.add(pack.id)
       if (pack.source && SPEC_URL.test(pack.source.url)) return specEntry(pack, source.id)
-      if (!root) throw new PackageError(`package ${pack.id} in remote source ${source.id} must name an npm or git source`)
+      if (!root) throw new PackageError(`profile ${pack.id} in remote source ${source.id} must name an npm or git source`)
       const location = localFolder(pack.source?.url ?? ".", root)
       const relative = path.relative(root, location)
-      if (relative.startsWith(`..${path.sep}`) || relative === ".." || path.isAbsolute(relative)) throw new PackageError(`package ${pack.id} escapes source folder`)
+      if (relative.startsWith(`..${path.sep}`) || relative === ".." || path.isAbsolute(relative)) throw new PackageError(`profile ${pack.id} escapes source folder`)
       return entry(pack.id, pack.version, pack.description ?? "", source.id, location, pack)
     })
   }
@@ -201,7 +201,7 @@ export function createPackageRegistry(input: { userDir: string; directory: strin
     const found = installed().find((item) => item.name === name)
     const manifest = readManifest(location)
     const mismatch = "manifest" in manifest && (manifest.manifest.name !== name || manifest.manifest.version !== version)
-    const problem = "problem" in manifest ? manifest.problem : mismatch ? "catalog name/version differs from package manifest" : undefined
+    const problem = "problem" in manifest ? manifest.problem : mismatch ? "catalog name/version differs from profile manifest" : undefined
     return { name, version, description, sourceId, location, tags: metadata.tags ?? [], ...(metadata.title ? { title: metadata.title } : {}), contents: packageContents(location), state: found ? found.enabled ? "active" : "installed" : "available", ...(problem ? { problem } : {}) }
   }
   function catalog(source: PackageSourceInfo): PackageCatalogEntry[] {
@@ -251,9 +251,9 @@ export function createPackageRegistry(input: { userDir: string; directory: strin
   }
   function show(name?: string, sourceId?: string) {
     const entries = search("", sourceId).entries.filter((item) => !name || item.name === name)
-    if (!entries.length) throw new PackageError(`package not found: ${name ?? sourceId}`)
-    // One source install is deterministic; a multi-pack source requires an explicit package choice.
-    if (entries.length !== 1) throw new PackageError(name ? `ambiguous package ${name}; choose a source` : "source contains several packages; choose a package")
+    if (!entries.length) throw new PackageError(`profile not found: ${name ?? sourceId}`)
+    // One source install is deterministic; a multi-pack source requires an explicit profile choice.
+    if (entries.length !== 1) throw new PackageError(name ? `ambiguous profile ${name}; choose a source` : "source contains several profiles; choose a profile")
     return entries[0]!
   }
   function preview(name: string | undefined, sourceId: string | undefined, scope: ExtensionSource): PackagePreviewReport {

@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import { extensionLayers, INSTALL_RECORD_FILE, installPackage, listPackages, MANIFEST_FILE, parsePackageSource, readLayerThemes, removePackage } from "../src"
+import { extensionLayers, INSTALL_RECORD_FILE, installPackage, listPackages, MANIFEST_FILE, parsePackageSource, readLayerThemes, readLayerToolDesigns, removePackage } from "../src"
 
 const cleanups: string[] = []
 afterEach(() => {
@@ -20,7 +20,7 @@ function write(file: string, text: string) {
   writeFileSync(file, text)
 }
 
-/** A package source folder with a manifest, one tool, one skill and one command. */
+/** A profile source folder with a manifest, one tool, one skill and one command. */
 function source(name = "acme", extra: Record<string, string> = {}) {
   const dir = temp("pkg-src-")
   write(path.join(dir, MANIFEST_FILE), JSON.stringify({ name, version: "1.0.0", description: "Acme helpers" }))
@@ -36,7 +36,7 @@ function roots() {
 }
 
 describe("extension layers", () => {
-  test("lowest precedence first: user packages, user, project packages, project; disabled packages are left out", () => {
+  test("lowest precedence first: user profiles, user, project profiles, project; disabled profiles are left out", () => {
     const { userDir, directory } = roots()
     for (const name of ["b-pkg", "a-pkg"]) mkdirSync(path.join(userDir, "packages", name), { recursive: true })
     mkdirSync(path.join(directory, ".mendcode", "packages", "team"), { recursive: true })
@@ -52,7 +52,7 @@ describe("extension layers", () => {
   })
 })
 
-describe("package sources", () => {
+describe("profile sources", () => {
   test("github, git and URL specs become git sources with an optional ref; anything else must be a folder", () => {
     expect(parsePackageSource("github:acme/tools#v1", "/")).toEqual({ kind: "git", url: "https://github.com/acme/tools.git", ref: "v1" })
     expect(parsePackageSource("git:ssh://host/x.git", "/")).toEqual({ kind: "git", url: "ssh://host/x.git" })
@@ -78,7 +78,7 @@ describe("install, list, remove", () => {
     expect(info!.problem).toBeUndefined()
   })
 
-  test("installing over an existing package needs replace, and then swaps it in", async () => {
+  test("installing over an existing profile needs replace, and then swaps it in", async () => {
     const { userDir, directory } = roots()
     await installPackage({ spec: source(), scope: "project", userDir, directory })
     await expect(installPackage({ spec: source(), scope: "project", userDir, directory })).rejects.toThrow("already installed")
@@ -98,7 +98,7 @@ describe("install, list, remove", () => {
     const bare = temp("pkg-bare-")
     await expect(installPackage({ spec: bare, scope: "user", userDir, directory })).rejects.toThrow(`no ${MANIFEST_FILE}`)
     const badName = source("Bad Name")
-    await expect(installPackage({ spec: badName, scope: "user", userDir, directory })).rejects.toThrow("invalid mendcode-package.json")
+    await expect(installPackage({ spec: badName, scope: "user", userDir, directory })).rejects.toThrow("invalid mendcode-profile.json")
     expect(listPackages({ userDir, directory })).toEqual([])
     expect(existsSync(path.join(userDir, "packages")) ? readdirSync(path.join(userDir, "packages")) : []).toEqual([])
   })
@@ -119,7 +119,7 @@ describe("install, list, remove", () => {
     await expect(installPackage({ spec: `git:file://${repo}#nope`, scope: "user", userDir, directory, replace: true })).rejects.toThrow("git clone failed")
   })
 
-  test("remove deletes only an installed package folder", async () => {
+  test("remove deletes only an installed profile folder", async () => {
     const { userDir, directory } = roots()
     await installPackage({ spec: source(), scope: "user", userDir, directory })
     expect(removePackage({ name: "../packages", scope: "user", userDir, directory })).toBe(false)
@@ -128,7 +128,7 @@ describe("install, list, remove", () => {
     expect(listPackages({ userDir, directory })).toEqual([])
   })
 
-  test("a folder whose manifest names another package is listed with the mismatch", () => {
+  test("a folder whose manifest names another profile is listed with the mismatch", () => {
     const { userDir, directory } = roots()
     write(path.join(userDir, "packages", "one", MANIFEST_FILE), JSON.stringify({ name: "two", version: "1", description: "d" }))
     expect(listPackages({ userDir, directory })[0]!.problem).toContain('says "two"')
@@ -155,12 +155,26 @@ describe("theme files", () => {
     expect(themes.find((t) => t.name === "broken")!.problem).toStartWith("invalid JSON")
     expect(themes.find((t) => t.name === "Bad Name")!.problem).toContain("theme file names")
   })
+
+  test("tool designs are read from each layer's tool-designs/*.json the same way, apart from the themes", () => {
+    const { userDir, directory } = roots()
+    const pkg = path.join(userDir, "packages", "acme")
+    write(path.join(pkg, "tool-designs", "ledger.json"), JSON.stringify({ header: { label: false } }))
+    write(path.join(pkg, "themes", "dusk.json"), "{}")
+    write(path.join(directory, ".mendcode", "tool-designs", "ledger.json"), JSON.stringify({ label: "Project ledger" }))
+    write(path.join(directory, ".mendcode", "tool-designs", "Bad Name.json"), "{}")
+    const designs = readLayerToolDesigns(extensionLayers({ userDir, directory }))
+    expect(designs.map((d) => [d.name, d.source])).toEqual([["Bad Name", "project"], ["ledger", "project"]])
+    expect(designs.find((d) => d.name === "ledger")!.json).toEqual({ label: "Project ledger" })
+    expect(designs.find((d) => d.name === "Bad Name")!.problem).toContain("design file names")
+    expect(readLayerThemes(extensionLayers({ userDir, directory })).map((t) => t.name)).toEqual(["dusk"])
+  })
 })
 
-describe("packages that ship extensions", () => {
+describe("profiles that ship extensions", () => {
   const extension = (name: string) => `export default { name: ${JSON.stringify(name)}, daemon() {} }\n`
 
-  test("an extensions/ folder installs whole, is counted, and its package layer is where the loader looks", async () => {
+  test("an extensions/ folder installs whole, is counted, and its profile layer is where the loader looks", async () => {
     const { userDir, directory } = roots()
     const from = source("acme", {
       "extensions/guard.ts": extension("guard"),
@@ -181,7 +195,7 @@ describe("packages that ship extensions", () => {
     expect(extensionLayers({ userDir, directory }).find((layer) => layer.pkg === "acme")).toMatchObject({ dir: path.join(userDir, "packages", "acme"), source: "user" })
   })
 
-  test("a package without an extensions declaration still installs its extensions/, and one without the folder counts zero", async () => {
+  test("a profile without an extensions declaration still installs its extensions/, and one without the folder counts zero", async () => {
     const { userDir, directory } = roots()
     const result = await installPackage({ spec: source("quiet", { "extensions/a.js": "export default { name: 'a' }\n" }), scope: "project", userDir, directory })
     expect(result.contents.extensions).toBe(1)
@@ -197,7 +211,7 @@ describe("packages that ship extensions", () => {
     const secret = source("acme", { "extensions/guard.ts": extension("guard"), "extensions/.env": "TOKEN=x", "extensions/keys/signing.pem": "k" })
     await expect(installPackage({ spec: secret, scope: "user", userDir, directory })).rejects.toThrow(/extensions\/\.env: looks like a secret[\s\S]*signing\.pem/)
     const many = source("acme", Object.fromEntries(Array.from({ length: 2_001 }, (_, i) => [`extensions/e${i}.ts`, "x"])))
-    await expect(installPackage({ spec: many, scope: "user", userDir, directory })).rejects.toThrow(/files; a package holds at most/)
+    await expect(installPackage({ spec: many, scope: "user", userDir, directory })).rejects.toThrow(/files; a profile holds at most/)
     expect(listPackages({ userDir, directory })).toEqual([])
     expect(existsSync(path.join(userDir, "packages")) ? readdirSync(path.join(userDir, "packages")) : []).toEqual([])
   })

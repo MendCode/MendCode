@@ -72,7 +72,7 @@ export async function hasWriteAccess({ gh, repo, actor, association, provider }:
 /** Where a comment was written: the conversation (issue comment) or a review thread (its `inReplyTo` is the thread's first comment). */
 /** `association`: GitHub's author association of the commenter, the fallback when the reviewer may not read permissions. */
 /** `discussion`: the GitLab discussion the comment belongs to, where its reply goes. */
-export type CommandComment = { id: number; surface: "issue" | "review"; actor: string; body: string; association?: string | undefined; inReplyTo?: number | undefined; diffHunk?: string | undefined; path?: string | undefined; line?: number | undefined; discussion?: string | undefined }
+export type CommandComment = { id: number; createdAt?: string | undefined; surface: "issue" | "review"; actor: string; body: string; association?: string | undefined; inReplyTo?: number | undefined; diffHunk?: string | undefined; path?: string | undefined; line?: number | undefined; discussion?: string | undefined }
 /**
  * What a fix did. `ok` is a commit made after the checks passed: `pushed` to the PR's branch, or not (`fix.push` off) and `kept` on
  * a local ref. Not `ok` pushed nothing; `kept` names the local ref holding a commit that was made but not pushed (a push refused or

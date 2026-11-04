@@ -262,3 +262,18 @@ test("CLI aliases reach a local daemon: metadata, custom command, send, wait, ex
   expect((await run("delete", sessionId)).code).toBe(0)
   expect((await run("get", sessionId)).code).toBe(1)
 })
+
+test("session send moves a prompt over the message limit to one text attachment and refuses one over 200 KiB with its size", async () => {
+  const stored = { sha256: "b".repeat(64), bytes: 1, mime: "text/plain" }
+  const h = fake((command) => {
+    if (command.type === "models.list") return { ok: true, result: { defaults: { model: "gpt-6-luna" }, roles: {}, models: [{ id: "gpt-6-luna" }] } }
+    if (command.type === "attachment.put") return { ok: true, result: { attachment: stored } }
+    return { ok: true, result: { queueId: ids("queue") } }
+  })
+  expect(await runAutomation(parsed("session", "send", id, "x".repeat(96_645), "--async"), h.deps)).toBe(0)
+  expect(h.commands.filter((command) => command.type === "attachment.put")).toHaveLength(1)
+  expect(h.commands.at(-1)).toMatchObject({ type: "user.submit", text: "[prompt.txt]", attachments: [{ ...stored, label: "[prompt.txt]" }] })
+  const before = h.commands.length
+  expect(await runAutomation(parsed("session", "send", id, "x".repeat(250_000), "--async"), h.deps)).not.toBe(0)
+  expect(h.commands.length).toBe(before)
+})

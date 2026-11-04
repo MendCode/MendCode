@@ -19,7 +19,7 @@ function temp() {
   cleanup.push(() => rmSync(dir, { recursive: true, force: true }))
   return dir
 }
-const official = path.resolve(import.meta.dir, "../../../examples/official-packages")
+const official = path.resolve(import.meta.dir, "../../../examples/official-profiles")
 const names = readdirSync(official, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort()
 
 async function boot() {
@@ -62,7 +62,7 @@ async function boot() {
   return { dir, project, client, daemon, token, report, system: () => systemFor(project) }
 }
 
-test("W10: each unused official package adds zero base context tokens in every tier and scope", async () => {
+test("W10: each unused official profile adds zero base context tokens in every tier and scope", async () => {
   const h = await boot()
   expect(names.length).toBeGreaterThan(0)
   for (const tier of ["minimalist", "balanced", "full"] as Tier[]) {
@@ -74,7 +74,7 @@ test("W10: each unused official package adds zero base context tokens in every t
       const baselineSystem = h.system()
       for (const scope of ["user", "project"] as const) {
         for (const name of names) {
-          const reply = await h.client.send({ type: "packages.install", directory: h.project, source: path.join(official, name), scope })
+          const reply = await h.client.send({ type: "profiles.install", directory: h.project, source: path.join(official, name), scope })
           expect(reply.ok).toBe(true)
           const measured = await h.report()
           console.log(`${tier}/${mode}/${scope} ${name}: base=${baseline.estimatedTokens} installed=${measured.estimatedTokens} delta=${measured.estimatedTokens - baseline.estimatedTokens} (chars/4)`)
@@ -82,19 +82,19 @@ test("W10: each unused official package adds zero base context tokens in every t
           // Exact text comparison also catches equal-sized replacement/rounding effects.
           expect(measured.sections).toEqual(baseline.sections)
           expect(h.system()).toBe(baselineSystem)
-          const listed = await h.client.send({ type: "packages.list", directory: h.project })
+          const listed = await h.client.send({ type: "profiles.list", directory: h.project })
           expect(listed.ok).toBe(true)
           if (!listed.ok) throw new Error(listed.error.message)
           const pkg = PackagesReport.parse(listed.result).packages.find((pkg) => pkg.key === `${scope}:${name}`)!
           expect(pkg.contextCost).toMatchObject({ idleTokens: 0, method: "chars/4" })
           expect(pkg.contextCost!.onDemandTokens).toBeGreaterThan(0)
-          expect(await h.client.send({ type: "packages.remove", directory: h.project, name, scope })).toMatchObject({ ok: true })
+          expect(await h.client.send({ type: "profiles.remove", directory: h.project, name, scope })).toMatchObject({ ok: true })
         }
         // Combined installations must also stay free of unused metadata.
-        for (const name of names) expect(await h.client.send({ type: "packages.install", directory: h.project, source: path.join(official, name), scope })).toMatchObject({ ok: true })
+        for (const name of names) expect(await h.client.send({ type: "profiles.install", directory: h.project, source: path.join(official, name), scope })).toMatchObject({ ok: true })
         expect((await h.report()).sections).toEqual(baseline.sections)
         expect(h.system()).toBe(baselineSystem)
-        for (const name of names) expect(await h.client.send({ type: "packages.remove", directory: h.project, name, scope })).toMatchObject({ ok: true })
+        for (const name of names) expect(await h.client.send({ type: "profiles.remove", directory: h.project, name, scope })).toMatchObject({ ok: true })
       }
     }
   }
@@ -105,28 +105,28 @@ test("the measurement detects an ordinary skill's idle metadata; explicit skills
   await h.client.send({ type: "settings.set", patch: { tier: "full" } })
   await h.client.send({ type: "prompt.set", directory: h.project, mode: "full" })
   const baseline = await h.report()
-  await h.client.send({ type: "packages.install", directory: h.project, source: path.join(official, "mendcode-web-routing"), scope: "project" })
+  await h.client.send({ type: "profiles.install", directory: h.project, source: path.join(official, "mendcode-web-routing"), scope: "project" })
   expect(await h.client.send({ type: "skills.load", directory: h.project, name: "explicit-web" })).toMatchObject({ ok: true, result: { body: expect.stringContaining("fallback disabled") } })
   const folder = path.join(h.project, ".mendcode/packages/mendcode-web-routing/skills/explicit-web")
   writeFileSync(path.join(folder, "SKILL.md"), "---\nname: explicit-web\ndescription: ordinary discovery\n---\nBody")
   expect((await h.report()).estimatedTokens).toBeGreaterThan(baseline.estimatedTokens)
-  const listed = await h.client.send({ type: "packages.list", directory: h.project })
+  const listed = await h.client.send({ type: "profiles.list", directory: h.project })
   if (!listed.ok) throw new Error(listed.error.message)
   expect(PackagesReport.parse(listed.result).packages[0]!.contextCost!.idleTokens).toBeGreaterThan(0)
 })
 
-test("context estimates fail unknown for config/code/symlinks and packages.list is local only", async () => {
+test("context estimates fail unknown for config/code/symlinks and profiles.list is local only", async () => {
   const h = await boot()
-  await h.client.send({ type: "packages.install", directory: h.project, source: path.join(official, "mendcode-review"), scope: "project" })
+  await h.client.send({ type: "profiles.install", directory: h.project, source: path.join(official, "mendcode-review"), scope: "project" })
   const folder = path.join(h.project, ".mendcode/packages/mendcode-review")
   const readCost = async () => {
-    const reply = await h.client.send({ type: "packages.list", directory: h.project })
+    const reply = await h.client.send({ type: "profiles.list", directory: h.project })
     if (!reply.ok) throw new Error(reply.error.message)
     return PackagesReport.parse(reply.result).packages[0]!.contextCost
   }
   const original = await readCost()
   expect(original).toMatchObject({ idleTokens: 0, method: "chars/4" })
-  // A prompt override changes the base; never certify it as a zero-cost data package.
+  // A prompt override changes the base; never certify it as a zero-cost data profile.
   writeFileSync(path.join(folder, "APPEND_SYSTEM.md"), "Injected context")
   expect(await readCost()).toBeUndefined()
   rmSync(path.join(folder, "APPEND_SYSTEM.md"))
@@ -136,16 +136,16 @@ test("context estimates fail unknown for config/code/symlinks and packages.list 
   expect(await readCost()).toEqual(original)
   mkdirSync(path.join(folder, "commands/nested"))
   const outside = path.join(h.dir, "outside.md")
-  writeFileSync(outside, "Fixture data outside the package")
+  writeFileSync(outside, "Fixture data outside the profile")
   symlinkSync(outside, path.join(folder, "commands/nested/leak.md"))
-  const reply = await h.client.send({ type: "packages.list", directory: h.project })
+  const reply = await h.client.send({ type: "profiles.list", directory: h.project })
   expect(reply.ok).toBe(true)
   if (reply.ok) expect(PackagesReport.parse(reply.result).packages[0]).not.toHaveProperty("contextCost")
-  expect(isReadOnlyCommand("packages.list")).toBe(false)
+  expect(isReadOnlyCommand("profiles.list")).toBe(false)
   const ids = createIdFactory()
   const remote = await h.daemon.httpAdapter!.fetch(new Request("http://127.0.0.1/command", {
     method: "POST", headers: { authorization: `Bearer ${h.token}`, "content-type": "application/json" },
-    body: JSON.stringify({ id: ids("command"), clientId: ids("client"), type: "packages.list", directory: h.project }),
+    body: JSON.stringify({ id: ids("command"), clientId: ids("client"), type: "profiles.list", directory: h.project }),
   }))
   expect(await remote!.json()).toMatchObject({ error: { code: "forbidden" } })
 })

@@ -20,6 +20,8 @@ const Published = z.object({ commentId: z.number().int().optional(), threadId: z
 export const ReviewState = z.object({
   version: z.literal(1),
   lastHead: z.string().max(64).optional(),
+  /** The config version (`runConfigKey`) the review of `lastHead` ran with: a later `@mendcode review` reviews only what is new while it is unchanged. */
+  configKey: z.string().max(200).optional(),
   published: z.record(z.string(), Published),
   /** `@mendcode pause`: new pushes are not reviewed until `@mendcode resume`. */
   paused: z.boolean().optional(),

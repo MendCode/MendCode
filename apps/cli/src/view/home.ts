@@ -35,6 +35,8 @@ export type HomeInput = {
   width: number
   /** Whole-terminal height, which v1's density rules use; `height` when absent. */
   screenHeight?: number
+  /** Whole-terminal width for the same rules (a preview pane draws the home the terminal shows); `width` when absent. */
+  screenWidth?: number
   version?: string
   /** The project root, already shortened with `~`. */
   root: string
@@ -58,7 +60,12 @@ export type HomeInput = {
   footer?: HomeFooter
   /** The pixel mascot's current frame, when one is chosen and loaded (`ui/app/home-mascot.ts`); the home decides whether it fits. */
   mascot?: HomeMascot
+  /** The prompt's place on the home (`homeInput`): blank rows under the logo, and `placed` told where. A home that cannot make room never calls it. */
+  prompt?: HomePrompt
 }
+
+/** `rows` blank rows for the prompt under the identity: `top` keeps the logo at the top, `center` centers logo and prompt together. */
+export type HomePrompt = { rows: number; at: "center" | "top"; placed?: (row: number) => void }
 
 /** Where the home drew the mascot: rows and columns of the home's own lines, and the box in cells. */
 export type HomeMascotBox = { row: number; col: number; cols: number; rows: number }
@@ -235,7 +242,7 @@ function headerRow(input: { width: number; root: string; version?: string; pad: 
 export function renderHome(input: HomeInput): Line[] {
   const { width } = input
   const screenHeight = input.screenHeight ?? input.height
-  const size = input.bare ? "tiny" : density(width, screenHeight)
+  const size = input.bare ? "tiny" : density(input.screenWidth ?? width, screenHeight)
   if (size === "tiny") return centeredHome({ ...input, below: input.below ?? [] }, size)
   // v1's bottom row takes the last row of the home; an extension's `welcome.below` rows win over the tip.
   const footer = input.footer && input.height >= MIN_FOOTER_HEIGHT ? footerRow({ width, footer: input.footer, ...(input.version ? { version: input.version } : {}) }) : undefined
@@ -400,11 +407,17 @@ function centeredHome(input: HomeInput & { below: readonly Line[] }, size: Densi
   const belowRows = below.slice(0, Math.max(0, height - header.length - 4))
   const belowSpace = belowRows.length > 0 ? belowRows.length + 1 : 0
   const room = Math.max(0, height - header.length - 1 - belowSpace)
+  // The prompt's rows (homeInput center or top) come right under the identity, the panel after them.
+  const promptRows = input.prompt?.rows ?? 0
+  let lead = 0
   const build = (logo: Line[] | undefined, panelRoom: number): Line[] => {
-    const view = input.look?.homePanel === false ? [] : input.look?.homeRightPanel === "actions" ? actionsPanel(Math.min(44, width - 4), height < 14 ? 1 : panelRoom).map((row) => centerIn(row, width)) : sessions.length
-      ? fitAgentView({ sessions, panelWidth, caps: HOME_SECTION_CAPS, now: input.now ?? Date.now(), spinner: input.spinner ?? 0, ...(input.selectedId !== undefined ? { selectedId: input.selectedId } : {}), room: panelRoom }).map((row): Line => [{ text: " ".repeat(inset) }, ...row])
+    const listRoom = promptRows ? panelRoom - promptRows - gap : panelRoom
+    const view = input.look?.homePanel === false ? [] : input.look?.homeRightPanel === "actions" ? actionsPanel(Math.min(44, width - 4), height < 14 ? 1 : listRoom).map((row) => centerIn(row, width)) : sessions.length
+      ? fitAgentView({ sessions, panelWidth, caps: HOME_SECTION_CAPS, now: input.now ?? Date.now(), spinner: input.spinner ?? 0, ...(input.selectedId !== undefined ? { selectedId: input.selectedId } : {}), room: listRoom }).map((row): Line => [{ text: " ".repeat(inset) }, ...row])
       : [center([{ text: EMPTY_TITLE, fg: "muted" }])]
-    return [...(logo ? [...logo, ...(view.length ? blank(gap) : [])] : []), ...view]
+    const identity = logo ? [...logo, ...(view.length || promptRows ? blank(gap) : [])] : []
+    lead = identity.length
+    return [...identity, ...blank(promptRows), ...(promptRows && view.length ? blank(gap) : []), ...view]
   }
   // The shortest wordmark shrinks the Agent View to fit (v1); a taller font is used only when the whole Agent View fits beside it.
   let content: Line[] | undefined
@@ -427,8 +440,11 @@ function centeredHome(input: HomeInput & { below: readonly Line[] }, size: Densi
     }
   }
   content ??= build(undefined, room)
-  const top = 1 + Math.max(0, Math.floor((room - content.length) / 2))
+  // `top` keeps the identity under the header; `center` centers the identity and the prompt, the panel hanging below them.
+  const spare = Math.max(0, room - content.length)
+  const top = 1 + (input.prompt?.at === "top" ? 0 : input.prompt ? Math.min(spare, Math.max(0, Math.floor((room - lead - promptRows) / 2))) : Math.floor(spare / 2))
   if (mascotAt) input.mascot?.shown?.({ ...mascotAt, row: header.length + top + mascotAt.row })
+  if (promptRows && lead + promptRows <= room) input.prompt?.placed?.(header.length + top + lead)
   return [...header, ...blank(top), ...content.slice(0, room), ...(belowRows.length > 0 ? [[], ...belowRows] : [])]
 }
 

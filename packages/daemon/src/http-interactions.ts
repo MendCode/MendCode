@@ -56,7 +56,7 @@ export function createHttpInteractions(input: {
           const { answers } = RestQuestionReply.parse(await input.body(request))
           decision = { kind: "answer", answers, text: answers.map((answer) => answer.join(", ")).join("\n") }
         }
-      } else decision = { kind: "plan_review", ...RestPlanReviewReply.parse(await input.body(request)) }
+      } else decision = { kind: "plan_review", permission: "ask", ...RestPlanReviewReply.parse(await input.body(request)) }
       const pending = InteractionReport.parse(await call({ type: "interaction.list", directory, kind })).requests.find((item) => item.id === id)
       if (!pending) return json({ error: { code: "not_found", message: "Request not pending" } }, 404)
       await call({ type: "request.resolve", sessionId: pending.sessionID, requestId: id, decision })

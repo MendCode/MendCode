@@ -1,7 +1,8 @@
+import { AI_CONFIG_HELP } from "./help-text"
 import type { Common, ParseResult } from "./automation"
 import { PROGRAM_NAME } from "@mendcode/program"
 
-export const AI_CONFIG_USAGE = `usage: ${PROGRAM_NAME} ai-config inspect|plan|validate|apply [--input JSON | --file FILE] [--scope project|global] [--target PATH] [--expected-hash HASH] [--yes] [--dir DIR] [--json]`
+export const AI_CONFIG_USAGE = AI_CONFIG_HELP
 export type AIConfigAutomation = Common & { kind: "ai.config"; action: "inspect" | "plan" | "validate" | "apply"; input?: string; file?: string; scope?: "project" | "global"; target?: string; expectedHash?: string; yes: boolean }
 
 export function parseAIConfig(argv: string[]): ParseResult | undefined {

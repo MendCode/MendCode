@@ -36,7 +36,7 @@ export function createDoctor(ctx: AppContext, parts: { precedenceReport(): Promi
     // Safe mode and the tier decide what loads at all, so a broken setup is checked against them first.
     const tier = state.settingsNow.tier
     const modeSection = { heading: "Mode", note: input.safeMode ? "safe mode" : tier ?? "no tier", lines: [
-      input.safeMode ? "- safe mode on: no extensions, packages, shell hooks, MCP or project tools · restart without --safe-mode to load them" : `- safe mode off · ${PROGRAM_NAME} --safe-mode starts without extensions, packages, hooks and MCP`,
+      input.safeMode ? "- safe mode on: no extensions, profiles, shell hooks, MCP or project tools · restart without --safe-mode to load them" : `- safe mode off · ${PROGRAM_NAME} --safe-mode starts without extensions, profiles, hooks and MCP`,
       `- tier: ${tier ?? "none (every feature at its own default)"} · /tier lists what it includes`,
     ] }
     state.textPage = createTextPageState({ title: "Doctor", summary: "/doctor again to refresh · /terminal-setup for keys · /customize for the settings named here", sections: [terminalSection, modeSection] })
@@ -60,7 +60,7 @@ export function createDoctor(ctx: AppContext, parts: { precedenceReport(): Promi
     if (!collisions.length) return
     state.textPage = createTextPageState({ title: "Doctor", summary: state.textPage.summary, sections: [...sections, { heading: "Slash commands", note: `${collisions.length} shadowed`, lines: collisions.map((line) => `- ${line}`) }] })
     requestFrame()
-    // Names more than one layer holds (skills, commands, themes, views, keys...) and which one is in force: the same report as /packages.
+    // Names more than one layer holds (skills, commands, themes, views, keys...) and which one is in force: the same report as /profiles.
     const report = await parts.precedenceReport()
     if (token !== visit || state.page !== "text" || state.textPage?.title !== "Doctor") return
     const overrides = parts.precedenceSections(report)

@@ -59,7 +59,7 @@ export function statusScripts(layers: readonly ExtensionLayer[]): { scripts: Sta
       if (!entry.command) continue
       bySide.set(side, {
         side,
-        // "./x" anywhere in the command is the layer's folder (a package ships its script next to the file).
+        // "./x" anywhere in the command is the layer's folder (a profile ships its script next to the file).
         command: entry.command.map((part) => (/^\.{1,2}[\\/]/.test(part) ? path.resolve(layer.dir, part) : part)),
         refreshMs: entry.refreshMs ?? DEFAULT_REFRESH_MS,
         timeoutMs: entry.timeoutMs ?? DEFAULT_SCRIPT_TIMEOUT_MS,

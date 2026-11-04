@@ -49,7 +49,7 @@ type Entry = {
  * session. Deliberately separate from the PTY HTTP service: nothing here has a route, a ticket or a remote client, and
  * a session only ever sees the processes it started. Nothing runs, and no timer exists, until the first start.
  */
-export function createInteractiveProcesses(options: { driver?: PtyDriver; now?: () => number; limits?: Partial<Record<keyof typeof INTERACTIVE_LIMITS, number>> } = {}) {
+export function createInteractiveProcesses(options: { driver?: PtyDriver; now?: () => number; limits?: Partial<Record<keyof typeof INTERACTIVE_LIMITS, number>>; /** The caps in force at each sweep (the `processLimits` setting); a missing field keeps `limits`, 0 is no cap. */ caps?: () => { idleMs?: number | undefined; maxLifetimeMs?: number | undefined } } = {}) {
   const limits = { ...INTERACTIVE_LIMITS, ...options.limits }
   const driver = options.driver ?? nativePtyDriver()
   const now = options.now ?? Date.now
@@ -95,9 +95,12 @@ export function createInteractiveProcesses(options: { driver?: PtyDriver; now?: 
   }
   function sweep() {
     const time = now()
+    const caps = options.caps?.()
+    const maxLifetimeMs = caps?.maxLifetimeMs ?? limits.maxLifetimeMs
+    const idleMs = caps?.idleMs ?? limits.idleMs
     for (const entry of running()) {
-      if (time - entry.info.startedAt >= limits.maxLifetimeMs) terminate(entry, "lifetime")
-      else if (time - entry.lastTouched >= limits.idleMs) terminate(entry, "idle")
+      if (maxLifetimeMs > 0 && time - entry.info.startedAt >= maxLifetimeMs) terminate(entry, "lifetime")
+      else if (idleMs > 0 && time - entry.lastTouched >= idleMs) terminate(entry, "idle")
     }
     stopSweeper()
   }

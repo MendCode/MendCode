@@ -6,6 +6,8 @@ import type { Clock } from "@mendcode/kernel"
 import { excerpt } from "./session-recall"
 import { sessionStatsText } from "./session-stats-text"
 import { foreignRef, foreignSourceName, type ForeignLine, type ForeignThreads } from "./thread-foreign"
+import { MAX_PEER_SESSIONS } from "./peers"
+import { compactList, sessionListLines, shortSuffix } from "./session-list-text"
 
 /** What `@thread` attaches: the newest messages, each cut, the whole capped by an estimate of 4 characters per token. */
 export const THREAD_SNAPSHOT = { messages: 6, tokens: 3_000, messageChars: 900, requestChars: 1_500, checkpointChars: 3_000 } as const
@@ -19,6 +21,7 @@ const MAX_WAIT = 120
 const MAX_MENTIONS = 3
 /** How many chats of other programs one list names, newest first. */
 const FOREIGN_LISTED = 12
+const FOREIGN_HEADER = "Other programs' chats of this project (read and search only; each read asks the user): id · age · title"
 const MAX_GRANT_SESSIONS = 64
 const ANSWER_ITEMS = 256
 const WAIT_POLL_MS = 250
@@ -55,12 +58,16 @@ type ThreadsInput = {
   sleep?(ms: number): Promise<void>
   /** Chats other programs keep for the same project (Codex, Claude Code, the previous MendCode). Absent: `threads` knows only this daemon's sessions. */
   foreign?: ForeignThreads
+  /** What a new session in `directory` would get (folder, permission mode, trust), for the approval of `threads start`. */
+  startPlan?(from: SessionId, directory: string): string
 }
 
 /**
  * Other sessions of the same project as the `threads` tool and `@thread` see them (docs/sessions.md § threads): bounded,
- * redacted text only. Nothing here reaches another project, and no remote client reaches it (the daemon refuses those
- * before this module is asked). Secret markers stay markers: the store holds markers, never the values.
+ * redacted text only. Reading, searching, stats, interrupting and merging stay within the project. Another project's
+ * sessions can be listed, written to and waited on, and a session opened there, only through the `threads` tool, which asks
+ * the user for each such call (docs/peers.md); no remote client reaches this module (the daemon refuses those before it is
+ * asked). Secret markers stay markers: the store holds markers, never the values.
  */
 export function createThreads(input: ThreadsInput) {
   const { store } = input
@@ -72,7 +79,8 @@ export function createThreads(input: ThreadsInput) {
   const started = new Map<SessionId, number>()
   const answerItems = new Map<string, SessionId>()
   const answers = new Map<SessionId, string>()
-  const awaitingTurn =(id: SessionId) => (messaged.get(id) ?? 0) > (started.get(id) ?? 0)
+  const startedAt = (id: SessionId) => started.get(id) ?? 0
+  const awaitingTurn = (id: SessionId) => (messaged.get(id) ?? 0) > startedAt(id)
   const trimTicks = (map: Map<SessionId, number>) => {
     while (map.size > MAX_GRANT_SESSIONS * 4) map.delete(map.keys().next().value!)
   }
@@ -85,16 +93,26 @@ export function createThreads(input: ThreadsInput) {
     while (granted.size > MAX_GRANT_SESSIONS) granted.delete(granted.keys().next().value!)
   }
 
+  /** `ref` as a full id when it is the end of one session's id (what lists print), anywhere in this daemon; `ref` itself otherwise. */
+  const expandRef = (from: SessionId, ref: string) => input.peers(from).expand?.(ref) ?? ref
+
   /** The session `ref` names (a full id, or the end of one, as `@thread:` writes it) when it is in `from`'s project. */
-  function resolve(from: SessionId, ref: string): { ok: true; id: SessionId; title: string } | { ok: false; message: string } {
+  function resolve(from: SessionId, ref: string, elsewhere = false): { ok: true; id: SessionId; title: string } | { ok: false; message: string } {
     const origin = store.sessionInfo(from)
     if (!origin) return { ok: false, message: "unknown session" }
+    // Another project's session is named by its full id only (as `threads list scope=all` prints it), and only a session of its own, not a sub-agent's.
+    if (elsewhere) {
+      // The short id a list prints names the session as well as the full one.
+      const full = expandRef(from, ref)
+      const other = store.sessionInfo(full as SessionId)
+      if (other && canonicalDir(other.directory) !== canonicalDir(origin.directory)) return other.parentId ? { ok: false, message: `${ref} is a sub-agent session; use its project's top-level session` } : { ok: true, id: full as SessionId, title: other.title }
+    }
     // A full id (`ses_…`) is looked up as is; sub-agent sessions are children, so the end-of-id search includes them.
     let id = store.sessionInfo(ref as SessionId) ? (ref as SessionId) : undefined
     if (!id) {
       const needle = ref.toLowerCase()
       const matches = store.listSessions({ directory: origin.directory, roots: false, limit: 500 }).filter((session) => session.sessionId.toLowerCase().endsWith(needle))
-      if (matches.length > 1) return { ok: false, message: `${ref} matches more than one session; use the full id from threads list` }
+      if (matches.length > 1) return { ok: false, message: `${ref} matches more than one session; use more characters of the id` }
       id = matches[0]?.sessionId as SessionId | undefined
     }
     const info = id ? store.sessionInfo(id) : undefined
@@ -255,14 +273,39 @@ export function createThreads(input: ThreadsInput) {
           const resolved = resolve(from, ref)
           return resolved.ok && descendantOf(resolved.id, from)
         },
-        list(limit) {
-          const sessions = input.peers(from).list(limit)
-          const sessionLine = (session: (typeof sessions)[number]) => `sessionId=${session.sessionId} title=${JSON.stringify(oneLine(session.title, 160))} state=${session.state} updatedAt=${new Date(session.updatedAt).toISOString()}${granted.get(from)?.has(session.sessionId as SessionId) ? " attached=yes" : ""}`
+        projectOf: (ref) => {
           const origin = store.sessionInfo(from)
-          const others = origin && input.foreign ? input.foreign.list(origin.directory).slice(0, FOREIGN_LISTED) : []
-          const foreign = others.map((chat) => `sessionId=${chat.id} source=${JSON.stringify(foreignSourceName(chat.source))}${chat.title ? ` title=${JSON.stringify(oneLine(chat.title, 160))}` : ""} updatedAt=${new Date(chat.updatedAt).toISOString()} readonly=yes`)
-          if (foreign.length) return { ok: true, output: [...(sessions.length ? sessions.map(sessionLine) : ["No other sessions in this project."]), "Chats of this project in other programs (read and search only, each read asks the user):", ...foreign].join("\n") }
-          return { ok: true, output: sessions.length ? sessions.map(sessionLine).join("\n") : "No other sessions in this project." }
+          const other = store.sessionInfo(expandRef(from, ref) as SessionId)
+          return origin !== undefined && other !== undefined && canonicalDir(other.directory) !== canonicalDir(origin.directory) ? other.directory : undefined
+        },
+        refusal: (ref) => input.peers(from).refusal?.(expandRef(from, ref)),
+        startPlan: (directory) => input.startPlan?.(from, directory) ?? "Open a new session in another project",
+        async start(request) {
+          const started = await input.peers(from).start?.(request)
+          if (!started) return { ok: false, message: "starting sessions is not available here" }
+          if (!started.ok) return started
+          // `wait` counts the first message as pending until that session's turn starts (unless it already did).
+          if (!startedAt(started.sessionId as SessionId)) messaged.set(started.sessionId as SessionId, ++tick)
+          return { ok: true, output: `Opened session ${started.sessionId} in ${started.directory} (permission ${started.permission}; ${started.trusted ? "trusted folder" : "folder not trusted, so its project tools stay off"}) and sent it the first message. Its answer arrives here as a notice, or use threads wait with its id.` }
+        },
+        list(limit, where) {
+          const sessions = input.peers(from).list(limit, where)
+          const filtered = where?.query !== undefined || where?.state !== undefined
+          const across = where?.scope === "all" || where?.directory !== undefined || where?.project !== undefined
+          const none = across || filtered ? "No sessions found." : "No other sessions in this project."
+          const now = input.clock.now()
+          const lines = sessions.length ? sessionListLines({ sessions, now, capped: limit !== undefined && limit > MAX_PEER_SESSIONS, attached: (id) => granted.get(from)?.has(id as SessionId) === true }) : [none]
+          const origin = store.sessionInfo(from)
+          // Chats of other programs belong to this project's plain list; a filter or another project's list leaves them out.
+          const others = origin && input.foreign && !across && !filtered ? input.foreign.list(origin.directory).slice(0, FOREIGN_LISTED) : []
+          if (!others.length) return { ok: true, output: lines.join("\n") }
+          const keys = others.map((chat) => chat.id)
+          const foreign = compactList({
+            header: FOREIGN_HEADER,
+            now,
+            rows: others.map((chat) => ({ id: `${chat.source}:${shortSuffix(chat.id.slice(chat.source.length + 1), keys.map((key) => key.slice(key.indexOf(":") + 1)))}`, at: chat.updatedAt, title: chat.title ?? null, folder: foreignSourceName(chat.source) })),
+          })
+          return { ok: true, output: [...lines, ...foreign].join("\n") }
         },
         stats(request) {
           const own = !request.sessionId || request.sessionId === from || from.toLowerCase().endsWith(request.sessionId.toLowerCase())
@@ -286,12 +329,12 @@ export function createThreads(input: ThreadsInput) {
           return { ok: true, output: [head(id, title), ...(matches.length ? matches : [`(no match in the ${page.items.length} messages scanned)`]), cursorLine(page.items, page.more)].join("\n") }
         }),
         message: async (request) => {
-          const resolved = resolve(from, request.sessionId)
+          const resolved = resolve(from, request.sessionId, request.elsewhere === true)
           if (!resolved.ok) return resolved
           // Marked before the send: the target's turn may start before `tell` returns, and that start must count.
           const previous = messaged.get(resolved.id)
           messaged.set(resolved.id, ++tick)
-          const sent = await input.peers(from).tell(resolved.id, request.text)
+          const sent = await input.peers(from).tell(resolved.id, request.text, request.elsewhere === true ? { elsewhere: true } : undefined)
           if (!sent.ok) {
             if (previous === undefined) messaged.delete(resolved.id)
             else messaged.set(resolved.id, previous)
@@ -301,7 +344,7 @@ export function createThreads(input: ThreadsInput) {
           return { ok: true, output: `Message queued for ${resolved.id}. ${sent.waiting ? "That session is busy; it reads the message when its turn ends." : "That session is answering now."} Its answer arrives here as a notice, or use threads wait.` }
         },
         wait: async (request) => {
-          const resolved = resolve(from, request.sessionId)
+          const resolved = resolve(from, request.sessionId, request.elsewhere === true)
           if (!resolved.ok) return resolved
           const seconds = Math.min(MAX_WAIT, Math.max(1, Math.floor(request.timeoutSeconds ?? DEFAULT_WAIT)))
           const until = input.clock.now() + seconds * 1_000

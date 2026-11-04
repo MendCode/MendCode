@@ -1,7 +1,8 @@
+import { APPLY_HELP } from "./help-text"
 import type { Common, ParseResult } from "./automation"
 import { PROGRAM_NAME } from "@mendcode/program"
 
-export const APPLY_USAGE = `usage: ${PROGRAM_NAME} apply [SESSION_ID | --session ID] [--to DIR] [--check] [--json] [--dir DATA]\n  applies the files a session changed (default: the project's latest session) onto another checkout; all or nothing, never overwrites a file that differs from the diff`
+export const APPLY_USAGE = APPLY_HELP
 export type ApplyAutomation = { kind: "apply"; session?: string; to?: string; check: boolean }
 
 export function parseApply(argv: string[]): ParseResult | undefined {

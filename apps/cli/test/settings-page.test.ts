@@ -25,8 +25,8 @@ const FULL: Settings = {
   pet: "codex:luna",
   footer: ["state", "model"],
   trustedToolDirs: ["/a", "/b"],
-  disabledPackages: ["user:x"],
-  profiles: [{ name: "work", directories: ["/w"] }],
+  disabledProfiles: ["user:x"],
+  areas: [{ name: "work", directories: ["/w"] }],
   models: { main: { model: "gpt-6" }, fast: { model: "mini" } },
 }
 
@@ -50,7 +50,7 @@ describe("/settings page", () => {
     const text = h.text()
     for (const title of ["Appearance", "Behavior", "Models", "Memory", "Storage", "More", "Subagents", "Queue"]) expect(text).toContain(title)
     for (const row of ["at once        ‹ default (4) ›", "whole tree     ‹ default (16) ›"]) expect(text).toContain(row)
-    for (const label of ["theme", "view", "motion", "pet", "footer", "permission", "compact at", "idle compact", "cache ttl", "claude ttl", "profiles", "trusted tools", "disabled pkgs", "onboarded", "roles", "dream at", "retention", "customize", "extensions"]) expect(text).toContain(label)
+    for (const label of ["theme", "view", "motion", "pet", "footer", "permission", "compact at", "idle compact", "cache ttl", "claude ttl", "areas", "trusted tools", "disabled pkgs", "onboarded", "roles", "dream at", "retention", "customize", "extensions"]) expect(text).toContain(label)
     for (const value of ["‹ mend ›", "‹ balanced ›", "‹ normal ›", "codex:luna", "2 segments", "‹ edits ›", "‹ 200k ›", "work", "2 directories", "1 off", "‹ on ›", "gpt-6 · 1 more role", "‹ 04:15 ›", "‹ 90 days ›"]) expect(text).toContain(value)
     expect(text).toContain(`${SETTINGS_GROUPS.flatMap((group) => group.rows).length} settings`)
     expect(h.rows()).toHaveLength(50)
@@ -59,10 +59,10 @@ describe("/settings page", () => {
   test("the page covers every field of Settings exactly once", () => {
     const ids = SETTINGS_GROUPS.flatMap((group) => group.rows.map((row) => row.id))
     expect(new Set(ids).size).toBe(ids.length)
-    const fields = ["profiles", "models", "theme", "view", "defaultPermission", "compactAtTokens", "reducedMotion", "pet", "trustedToolDirs", "disabledPackages", "dreamAt", "retentionDays", "worktreeGcDays", "footer", "onboarded"]
+    const fields = ["areas", "models", "theme", "view", "defaultPermission", "compactAtTokens", "reducedMotion", "pet", "trustedToolDirs", "disabledProfiles", "dreamAt", "retentionDays", "worktreeGcDays", "footer", "onboarded"]
     for (const field of fields) expect(ids as string[]).toContain(field)
     // Pinned to the protocol: a setting added there without a row here fails this list.
-    const source = Object.keys(({ profiles: 1, models: 1, theme: 1, view: 1, defaultPermission: 1, compactAtTokens: 1, reducedMotion: 1, pet: 1, trustedToolDirs: 1, disabledPackages: 1, dreamAt: 1, retentionDays: 1, worktreeGcDays: 1, footer: 1, onboarded: 1 } satisfies Record<keyof Settings, 1>))
+    const source = Object.keys(({ areas: 1, models: 1, theme: 1, view: 1, defaultPermission: 1, compactAtTokens: 1, reducedMotion: 1, pet: 1, trustedToolDirs: 1, disabledProfiles: 1, dreamAt: 1, retentionDays: 1, worktreeGcDays: 1, footer: 1, onboarded: 1 } satisfies Record<keyof Settings, 1>))
     expect(source.sort()).toEqual([...fields].sort())
   })
 
@@ -192,7 +192,7 @@ describe("/settings page", () => {
     expect(patches(plain)).toEqual([])
   })
 
-  test("profiles are shown, not edited here", async () => {
+  test("areas are shown, not edited here", async () => {
     const h = await open(FULL)
     await down(h, 11)
     for (const key of ["\r", RIGHT, LEFT, " "]) await h.key(key)
@@ -200,7 +200,7 @@ describe("/settings page", () => {
     expect(h.text()).toContain("not editable here")
   })
 
-  test("link rows open /customize, /extensions, /model, /tools, /packages and /storage", async () => {
+  test("link rows open /customize, /extensions, /model, /tools, /profiles and /storage", async () => {
     const reply = (command: Record<string, unknown>) => (command.type === "extensions.list" ? { ok: true, result: { extensions: [] } } : undefined)
     const rows: Array<[number, string]> = [[12, "tools"], [13, "packages"], [15, "model"], [19, "storage"], [20, "customize"], [21, "extensions"], [22, "acp"]]
     for (const [count, page] of rows) {

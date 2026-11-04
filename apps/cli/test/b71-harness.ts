@@ -1,9 +1,13 @@
 import { codeModeFixture } from "../../../packages/engine-native/test/code-mode-fixture"
 import { turn } from "../../../packages/engine-native/test/harness"
 import { appHarness, conversation, ids, tempDir } from "./session-ui-harness"
+import { DEFAULT_TUI_PROFILE, writeTuiProfile } from "../src/view/tui-profile"
 
 export async function b71Harness(width: number, height: number, state: Parameters<typeof codeModeFixture>[0] = "selected") {
-  const h = appHarness({ width, height, dataDir: tempDir(), directory: "/work/project" })
+  const dataDir = tempDir()
+  // The smallest screens pin the card and the answer; the turn's closing line would push the card's title out of them.
+  writeTuiProfile(dataDir, { ...DEFAULT_TUI_PROFILE, timestamps: "off" })
+  const h = appHarness({ width, height, dataDir, directory: "/work/project" })
   h.app.applySettings({ onboarded: true, reducedMotion: true, experimental: { code_mode: true, tool_discovery: true } })
   const fixture = codeModeFixture(state)
   const chat = conversation(h.sessionId, h.app.onEvent)

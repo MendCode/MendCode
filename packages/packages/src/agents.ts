@@ -5,7 +5,7 @@ import { claudeFormat, layerAllows, layerReads, type ExtensionLayer, type Extens
 import { layerLabel, type ResourceDiagnostics } from "./resource-report"
 
 /**
- * Custom agents: `agents/<name>.md` in every extension layer (packages, the user's folder, the project's `.mendcode`).
+ * Custom agents: `agents/<name>.md` in every extension layer (profiles, the user's folder, the project's `.mendcode`).
  * The frontmatter configures the agent, the body is added to the system prompt of every model call the agent makes.
  * A later layer wins on the same name. This module only reads and validates files; trust, selection and running an agent
  * belong to the daemon and the engine.
@@ -15,7 +15,7 @@ export const AGENT_MODE_VALUES = ["primary", "subagent", "all"] as const
 export type AgentModeValue = (typeof AGENT_MODE_VALUES)[number]
 export const AGENT_PERMISSIONS = ["plan", "ask", "smart", "edits", "full"] as const
 export type AgentPermissionValue = (typeof AGENT_PERMISSIONS)[number]
-/** The protocol's REASONING_EFFORTS (this package does not depend on the protocol). A Claude Code agent file's `max` still reads as `xhigh` below. */
+/** The protocol's REASONING_EFFORTS (this profile does not depend on the protocol). A Claude Code agent file's `max` still reads as `xhigh` below. */
 const EFFORTS = ["minimal", "low", "medium", "high", "xhigh", "max", "none"] as const
 type EffortValue = (typeof EFFORTS)[number]
 

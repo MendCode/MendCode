@@ -146,6 +146,35 @@ test("after-tools never consumes while a tool is open, a request is pending, or 
   expect(h.actor.snapshot()).toMatchObject({ held: true, foreground: "queued" })
 })
 
+test("after-tools: a sub-agent's open tools neither hold the queue nor move the turn's state; the main agent's own tool does", async () => {
+  const h = setup("after-tools")
+  await h.submit("first")
+  const input = h.manual.last().input
+  await h.submit("next")
+  const call = input.newItemId()
+  input.emit({ type: "item.started", itemId: call, kind: "tool_call", meta: { tool: "agent B1", subagent: true, background: true } })
+  input.emit({ type: "item.completed", itemId: call, status: "ok", text: "running in the background" })
+  await flush()
+  const states = () => h.h.events.filter((e) => e.type === "foreground.state").map((e) => e.state)
+  const before = states().length
+  const agentTool = input.newItemId()
+  const agentThought = input.newItemId()
+  input.emit({ type: "item.started", itemId: agentTool, kind: "tool_call", meta: { tool: "shell: gh search code", agentParent: call } })
+  input.emit({ type: "item.started", itemId: agentThought, kind: "reasoning", meta: { agentParent: call } })
+  await flush()
+  expect(states().slice(before)).toEqual([])
+  expect(await input.takeQueued?.()).toMatchObject({ text: "next" })
+  await h.submit("later")
+  const own = input.newItemId()
+  input.emit({ type: "item.started", itemId: own, kind: "tool_call", meta: { tool: "shell: ls" } })
+  expect(await input.takeQueued?.()).toBeUndefined()
+  input.emit({ type: "item.completed", itemId: agentTool, status: "ok" })
+  await flush()
+  expect(h.actor.snapshot().foreground).toBe("tool")
+  input.emit({ type: "item.completed", itemId: own, status: "ok" })
+  expect(await input.takeQueued?.()).toMatchObject({ text: "later" })
+})
+
 for (const kind of ["shell", "compact", "selection"] as const) test(`after-tools preserves the ${kind} turn boundary`, async () => {
   const h = setup("after-tools")
   await h.submit("first")

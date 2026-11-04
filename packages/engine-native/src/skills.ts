@@ -13,7 +13,7 @@ export type Skill = {
   pkg?: string
   /** `on-demand: true`: kept out of the prompt catalog; an explicit selection can still load it. */
   onDemand?: boolean
-  /** The layer it came from (`user`, `project`, `package acme`, `.claude (project)`). */
+  /** The layer it came from (`user`, `project`, `profile acme`, `.claude (project)`). */
   layer: string
   /** `allowed-tools`: read and shown, never enforced or pre-approved (see `notes`). */
   allowedTools?: string[]
@@ -153,7 +153,7 @@ function scan(spec: Source, diagnostics: ResourceDiagnostics): Array<Candidate<S
 
 /**
  * Skills are folders with a SKILL.md (frontmatter `name`, `description`) in each extension layer's `skills/`
- * (packages, then the user's, then the project's `.mendcode/skills`; `.agents/skills` and `.claude/skills` sit under their scope's own folder);
+ * (profiles, then the user's, then the project's `.mendcode/skills`; `.agents/skills` and `.claude/skills` sit under their scope's own folder);
  * a later layer wins on the same name, and only then is the 100-skill cap applied (lowest-priority layers drop first).
  * Frontmatter is YAML (Claude Code, Codex and pi formats). Only names and descriptions go into the prompt; the body is
  * loaded on demand by the `skill` tool. `on-demand: true` also keeps metadata out of the prompt; explicit CLI/user selection can still load it.
@@ -249,8 +249,8 @@ export function createSkillTool(loader: SkillLoader, options: { docs?: string } 
         const shown = known.slice(0, UNKNOWN_SKILL_LISTED).join(", ")
         const rest = known.length - UNKNOWN_SKILL_LISTED
         const listed = known.length ? ` (available: ${shown}${rest > 0 ? `, and ${rest} more: call skill with no name for the full list` : ""})` : " (no skills installed)"
-        // A skill is a file the user or a package puts in a skills folder; naming a URL or a topic loads nothing, so the model should not retry.
-        const install = options.docs ? `. A skill is installed as a SKILL.md in a skills folder or a package, not by naming it: ${options.docs}` : ""
+        // A skill is a file the user or a profile puts in a skills folder; naming a URL or a topic loads nothing, so the model should not retry.
+        const install = options.docs ? `. A skill is installed as a SKILL.md in a skills folder or a profile, not by naming it: ${options.docs}` : ""
         return { output: `unknown skill: ${name}${listed}${install}`, truncated: false, title: `skill: ${name}`, isError: true }
       }
       const notes = loaded.skill.notes.map((note) => `Note: ${note}`)

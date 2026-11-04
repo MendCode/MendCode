@@ -12,11 +12,11 @@ export function packageAuthoringHarness(width = 100, height = 30) {
   const registry = () => createPackageRegistry({ directory, userDir })
   const author = (action: "create" | "update", version = "1.0.0") => authorLocalPackage({ directory, action, metadata: { id: "review-kit", title: "Review Kit", description: "Project review command and skill", version }, include: ["commands", "skills"], now: () => NOW })
   const h = appHarness({ width, height, directory, dataDir: userDir, reply: async (command) => {
-    if (command.type === "packages.search") return { ok: true, result: registry().search(command.query, command.sourceId) }
-    if (command.type === "packages.sources") return { ok: true, result: { sources: registry().sources() } }
-    if (command.type === "packages.preview") return { ok: true, result: registry().preview(command.name, command.sourceId, command.scope) }
-    if (command.type === "packages.list") return { ok: true, result: { directory, packages: listPackages({ directory, userDir }) } }
-    if (command.type === "packages.install-catalog") {
+    if (command.type === "profiles.search") return { ok: true, result: registry().search(command.query, command.sourceId) }
+    if (command.type === "profiles.sources") return { ok: true, result: { sources: registry().sources() } }
+    if (command.type === "profiles.preview") return { ok: true, result: registry().preview(command.name, command.sourceId, command.scope) }
+    if (command.type === "profiles.list") return { ok: true, result: { directory, packages: listPackages({ directory, userDir }) } }
+    if (command.type === "profiles.install-catalog") {
       await registry().install(command.name, command.sourceId, command.scope, command.replace, () => NOW)
       return { ok: true, result: { directory, packages: listPackages({ directory, userDir }) } }
     }

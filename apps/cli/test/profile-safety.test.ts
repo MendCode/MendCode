@@ -101,10 +101,10 @@ test("restore listing counts differences and restore snapshots first; damaged JS
   expect(box.raw().theme).toBe("old")
   expect(listProfileBackups(box.file).some((item) => !item.valid)).toBe(true)
 })
-test("headless profile restore lists without a daemon or terminal", () => {
+test("headless customize restore lists without a daemon or terminal", () => {
   const box = fixture({ theme: "old" })
   updateProfile(box.file, (raw) => ({ ...raw, theme: "new" }))
-  const result = Bun.spawnSync([process.execPath, "apps/cli/src/main.ts", "profile", "restore", "--dir", box.dir], { cwd: path.resolve(import.meta.dir, "../../.."), env: { PATH: process.env.PATH, HOME: box.dir, MENDCODE_V2_DIR: box.dir }, stdout: "pipe", stderr: "pipe" })
+  const result = Bun.spawnSync([process.execPath, "apps/cli/src/main.ts", "customize", "restore", "--dir", box.dir], { cwd: path.resolve(import.meta.dir, "../../.."), env: { PATH: process.env.PATH, HOME: box.dir, MENDCODE_V2_DIR: box.dir }, stdout: "pipe", stderr: "pipe" })
   expect({ code: result.exitCode, error: result.stderr.toString() }).toEqual({ code: 0, error: "" })
   expect(result.stdout.toString()).toContain("1 settings differ")
 })
@@ -124,5 +124,5 @@ test("minimalist terminal restores missing settings and /customize restore lists
   const id = listProfileBackups(box.file).find((row) => row.differences === 1)!.id
   await h.type(`/customize restore ${id}`); await h.key("\r")
   expect(box.raw().showTopbar).toBeUndefined()
-  expect(h.text()).toContain("Profile restored")
+  expect(h.text()).toContain("Terminal settings restored")
 })

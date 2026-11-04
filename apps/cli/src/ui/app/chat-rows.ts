@@ -10,7 +10,10 @@ import { goalSpans } from "../../view/goal"
 const BACKGROUND_NOTICE = /^\[(background task|monitor) /
 import { modelLabel, sessionModelId } from "../../view/model-label"
 import { renderHeaderSlot } from "../../view/topbar"
-import { agentThreadHeader } from "../../view/agent-thread-header"
+import { agentContextLine, cuePlaceholder, tintFrame } from "../../view/agent-cue"
+import { agentThreadHeader, threadState } from "../../view/agent-thread-header"
+import { parentTitle, viewedAgent } from "./agent-cue"
+import { frameBottom as frameBottomEdge, frameSides, frameTop } from "../../view/agent-frame"
 import { DOCK_HEIGHT } from "../../view/dock"
 import { textWidth, truncateEnd } from "../../view/wrap"
 import { leaderHint, LEADER_TIMEOUT_MS } from "../keymap"
@@ -28,7 +31,7 @@ import type { ActivityPart } from "@mendcode/protocol/wire"
 import { ACTIVITY_MIN_CELLS, insideRoom, placeInside } from "../../view/activity-status"
 import { jumpFrom, jumpPill, jumpText, offsetForThumb, overlayAt, scrollbarGlyphs, scrollbarShown, scrollThumb, SCROLLBAR_LINGER_MS, withScrollbar } from "../../view/scroll-chrome"
 import { SPINNER_FRAMES } from "../../view/tool-card"
-import { renderAgentsStrip } from "../../view/agents-strip"
+import { doing, renderAgentsStrip } from "../../view/agents-strip"
 import { refreshLiveTasks } from "./live-tasks"
 import { sessionChildren } from "./session-children"
 import { fit, lineWidth } from "../../view/deck"
@@ -38,9 +41,10 @@ import { homeLook, renderWelcomeReplacement } from "../../view/home"
 import { mascotPhase, mascotRows } from "../../view/mascot"
 import { createHomeMascot } from "./home-mascot"
 import { rowsWidth } from "../../view/logo-fonts"
-import type { HomeSession } from "../../view/home"
+import type { HomePrompt, HomeSession } from "../../view/home"
 import type { ImagePlacement } from "../image-layer"
-import { activeTheme, type Line } from "../theme"
+import { activeTheme, type ColorName, type Line } from "../theme"
+import { subagentColor } from "../../view/agent-color"
 import { mendBeat, mendChatLines } from "../../view/mend-sprite"
 import type { ViewLine } from "../../view/transcript"
 import { CHART_KEY } from "../../view/chart-picture"
@@ -52,6 +56,7 @@ import { asciiChrome } from "./glyph-mode"
 import { overlayRule, ruleRight } from "../../view/status-line"
 import { BUSY, DOUBLE_ESC_MS, MAX_EDITOR_ROWS } from "./constants"
 import { queuePolicy } from "./queue-policy"
+import { readableText } from "../../view/reply-comments"
 import { waitingNotice } from "./daemon"
 
 /** Below this many transcript rows the pinned prompt would crowd the conversation out. */
@@ -74,7 +79,7 @@ export function createChatRows(ctx: AppContext, actions: {
   /** Cells the transcript leaves free for the scrollbar, and the columns its text is laid out in. */
   scrollbarGutter: () => number
   transcriptWidth: () => number
-  promptStatusLine: (room: number) => Line | undefined
+  promptStatusLine: (room: number, activity?: Line) => Line | undefined
   loadEarlier(): Promise<void>
   compactionLive: ReturnType<typeof import("./compaction-live").createCompactionLive>
 }) {
@@ -95,7 +100,7 @@ export function createChatRows(ctx: AppContext, actions: {
     const topAt = topId === undefined ? -1 : blocks.findIndex((block) => block.itemId === topId)
     if (topAt < lastAt) return undefined
     if (stuck?.text === last.text && stuck.width === width) return stuck.row
-    const text = last.text.replace(/\s+/g, " ").trim()
+    const text = readableText(last.text, { quotes: false }).replace(/\s+/g, " ").trim()
     const row: Line | undefined = text ? [{ text: " ".repeat(PROMPT_MARGIN) }, { text: truncateEnd(`› ${text}`, Math.max(1, width - PROMPT_MARGIN * 2)), fg: "muted" }] : undefined
     stuck = { text: last.text, width, row }
     return row
@@ -121,14 +126,22 @@ export function createChatRows(ctx: AppContext, actions: {
     const customChrome = state.ext?.promptChrome()
     const preset = customChrome?.preset ?? state.tuiProfile.promptChrome
     const lead = customChrome?.lead ?? state.tuiProfile.promptLead
-    const frame = comments.frame(ctx.views.frame({ preset, lead, border: customChrome?.border ?? state.tuiProfile.promptBorder, borders: state.tuiProfile.promptGlyphs, rich }, { width }), width)
+    const plainFrame = comments.frame(ctx.views.frame({ preset, lead, border: customChrome?.border ?? state.tuiProfile.promptBorder, borders: state.tuiProfile.promptGlyphs, rich }, { width }), width)
+    // Inside a sub-agent the prompt wears its colour, so the input is never taken for the conversation's.
+    const viewed = inlineView || home ? undefined : viewedAgent(state)
+    const frame = viewed && rich ? tintFrame(plainFrame, viewed.color, lead) : plainFrame
     // `promptStatus: border` lays the READY › model › … line over the top rule (rules and boxes; the tinted minimal preset has no rule).
-    const statusRule = rich && preset !== "minimal" && frame.top.length === 1 ? actions.promptStatusLine(width - PROMPT_MARGIN * 2 - 6) : undefined
+    const statusRoom = width - PROMPT_MARGIN * 2 - 6
+    const borderStatus = rich && preset !== "minimal" && frame.top.length === 1 ? actions.promptStatusLine(statusRoom) : undefined
+    // That line already says the state: while a turn works the activity takes the state's place in it, and no row of its own repeats
+    // it (the spinner, what runs, time and tokens; the rest of the line gives way first when the rule is short).
+    const mergedActivity = borderStatus && !asking ? overlayWorking(Math.max(12, Math.floor(statusRoom * 0.6)), true) : undefined
+    const statusRule = mergedActivity ? actions.promptStatusLine(statusRoom, mergedActivity) : borderStatus
     // The activity status: `above` lies over the top rule and `inside` over the prompt's first row, so neither takes a row from the transcript or
     // the prompt. A host without that rule or row (the minimal view and preset) keeps the classic row, and `off` keeps only a retry or the Esc hint.
     const ruleOffset = PROMPT_MARGIN + (preset === "top-bottom" ? 2 : 3)
     const overlay: "above" | "inside" | undefined = state.tuiProfile.activityPlacement === "above" && rich && preset !== "minimal" && frame.top.length === 1 ? "above" : state.tuiProfile.activityPlacement === "inside" && rich ? "inside" : undefined
-    const workingBuilt = asking ? undefined : overlay === "above" ? overlayWorking(width - ruleOffset - 4, true) : workingRow(width, overlay !== undefined)
+    const workingBuilt = asking || borderStatus ? undefined : overlay === "above" ? overlayWorking(width - ruleOffset - 4, true) : workingRow(width, overlay !== undefined)
     // It takes the rule from the status line while the turn works; the status line is back when it stops.
     // A one-line notice lies over the same rule for the seconds it lasts: it takes no row, so nothing on screen moves when it comes or goes.
     // Only a host without that rule (the minimal view and preset) gives it a row of its own.
@@ -137,7 +150,7 @@ export function createChatRows(ctx: AppContext, actions: {
     // A newer build installed under this terminal: on the right of the prompt's top rule until the restart into it, so it takes no
     // row (the pet keeps standing on the prompt). Only a prompt without that rule gives it a right-aligned row of its own.
     // After the restart into it, the same place says so until the first key: a restart nobody watched still gets seen.
-    const updateText = state.updateReady ? `${g.ok} Update installed ${g.sep} /restart to update` : state.updated ? `${g.ok} Updated to the new build` : ""
+    const updateText = state.updateReady ? `${g.ok} New build installed ${g.sep} /restart to switch` : state.updated ? `${g.ok} Updated to the new build` : ""
     const updateOnRule = updateText !== "" && !asking && rich && preset !== "minimal" && frame.top.length === 1
     const promptRule: Line[] = asking ? [] : toastSpans?.length ? [overlayRule(frame.top[0]!, toastSpans, ruleOffset)] : overlay === "above" && workingBuilt?.length ? [overlayRule(frame.top[0]!, workingBuilt, ruleOffset)] : statusRule?.length ? [overlayRule(frame.top[0]!, statusRule, ruleOffset)] : frame.top
     const promptTop: Line[] = updateOnRule && promptRule.length === 1 ? [ruleRight(promptRule[0]!, [{ text: updateText, fg: "success" }])] : promptRule
@@ -147,7 +160,7 @@ export function createChatRows(ctx: AppContext, actions: {
     const visual = editor.visualLines()
     const cursorAt = Math.max(0, visual.findLastIndex((line) => line.start <= editor.cursorOffset))
     // `showPlaceholder` off leaves the empty prompt blank; `placeholderText` replaces the built-in examples.
-    const shownPlaceholder = state.shellMode ? (rich ? state.shellPlaceholder : undefined) : rich && home && state.tuiProfile.showPlaceholder ? state.tuiProfile.placeholderText || state.placeholder : undefined
+    const shownPlaceholder = state.shellMode ? (rich ? state.shellPlaceholder : undefined) : viewed && rich ? cuePlaceholder({ kind: viewed.kind, name: viewed.name, sep: g.sep, width: width - frame.inset - PROMPT_MARGIN - 2 }) : rich && home && state.tuiProfile.showPlaceholder ? state.tuiProfile.placeholderText || state.placeholder : undefined
     const popupRowsMax = Math.max(1, Math.min(POPUP_ROWS, height - 14))
     const menu = !state.transcript.pendingRequests.length && !state.editingScratch && editorLines.length === 1 && !state.shellMode ? actions.slashMenu.model(width, Math.max(3, height - 9)) : undefined
     const suggestions = menu?.items ?? []
@@ -192,18 +205,24 @@ export function createChatRows(ctx: AppContext, actions: {
     if (!topbarShown && !headerSlot) state.contextArea = undefined
     let topbar: Line[] = inlineView ? [] : headerSlot ? renderHeaderSlot(headerSlot, width - PROMPT_MARGIN * 2).map((row): Line => [{ text: " ".repeat(PROMPT_MARGIN) }, ...row]) : topbarShown && (input.remote || rich && !home) ? [topbarRow(width)] : []
     // A sub-agent's thread open in the chat's place says whose it is, right under the top bar (or at the top without one).
-    const openThreads = state.agentView && !inlineView && (topbar.length || !topbarShown && rich && !home) ? (state.agentRoot ?? state.transcript).agentThreads() : []
+    const openThreads = viewed?.kind === "thread" && (topbar.length || !topbarShown && rich && !home) ? (state.agentRoot ?? state.transcript).agentThreads() : []
     const openAt = openThreads.findIndex((thread) => thread.itemId === state.agentView)
-    if (openAt >= 0) topbar = [...topbar, ...agentThreadHeader({ thread: openThreads[openAt]!, index: openAt, count: openThreads.length, now: now(), width, inset: PROMPT_MARGIN, sep: g.sep, rule: g.rule })]
+    // A sub-agent's view (its thread, or the session of a child task) has a border all around it, in the sub-agent's own colour,
+    // so it is never taken for the conversation: the top edge here, the sides over the margins and the bottom edge under the body.
+    const boxed = !inlineView && rich && !home && (openAt >= 0 || viewed?.kind === "child")
+    const boxColor: ColorName = viewed?.color ?? "primary"
+    const boxTop = topbar.length
+    if (boxed) topbar = [...topbar, frameTop({ width, color: boxColor, ascii: !rich || asciiGlyphs(), label: "sub-agent" })]
+    if (openAt >= 0) topbar = [...topbar, ...agentThreadHeader({ thread: openThreads[openAt]!, index: openAt, count: openThreads.length, now: now(), width, inset: PROMPT_MARGIN, sep: g.sep, rule: g.rule, parent: parentTitle(state, viewed!) })]
     const findBuilt = state.find ? actions.findBar(width) : state.promptSearch ? actions.searchBar(width) : undefined
     const findDrawn = findBuilt ? barRows(state.find ? "find" : "search", [findBuilt.row], width) : []
     const findRow = findBuilt && findDrawn[0] ? { row: findDrawn[0], cursor: findDrawn[0] === findBuilt.row ? findBuilt.cursor : findDrawn[0].reduce((sum, span) => sum + textWidth(span.text), 0) } : undefined
-    const asciiMascot = !inlineView && rich && state.tuiProfile.activityMascot && home === false && workingBuilt ? activityArt().map((line): Line => [{ text: " ".repeat(META_MARGIN) }, ...line]) : []
+    const asciiMascot = !inlineView && rich && state.tuiProfile.activityMascot && home === false && (workingBuilt || mergedActivity) ? activityArt().map((line): Line => [{ text: " ".repeat(META_MARGIN) }, ...line]) : []
     const extAbove = promptSlotRows("prompt.above", width, height)
     const extBelow = promptSlotRows("prompt.below", width, height)
     // Pending comments on the answer (docs/editor.md): the reply bar and the chips above the prompt, or the chips under it.
     const commentRows = inlineView ? { above: [] as Line[], below: [] as Line[], chip: undefined } : comments.rows({ width, height })
-    // The minimal view has no footer of its own; rows the user (or a package's look) set in `footerRows` are asked for, so they show,
+    // The minimal view has no footer of its own; rows the user (or a profile's look) set in `footerRows` are asked for, so they show,
     // and so is the footer an extension draws in or beside (`footer.*` slots).
     const extFooter = !!state.ext && extOn() && (["footer.replace", "footer.left", "footer.right"] as const).some((slot) => state.ext!.hasSlot(slot))
     const minimalRows = minimal && state.tuiProfile.showStatus && (state.tuiProfile.footerRows.length > 0 || extFooter) ? actions.statusRows(width) : []
@@ -241,7 +260,16 @@ export function createChatRows(ctx: AppContext, actions: {
     // background commands right over the prompt; the multiplexer's pane reports the same children (session-children.ts).
     const { tasks: stripList, commands: backgroundItems, activity: childActivity } = sessionChildren(state, { now: now(), sep: g.sep })
     // With sub-agents in the strip, the commands are rows of its tree: one block for everything that runs, not two lists.
-    const strip = rich && !inlineView && stripList.length ? renderAgentsStrip({ run: subagentRunOf(state, g.sep).ofTask, tasks: stripList, activity: childActivity, now: now(), width: width - (agentsPet ? agentsPet.cols + 1 : 0), inset: PROMPT_MARGIN + 1, glyphs: g, root: !working, openHint: `ctrl+x ↓ open ${g.sep} /tasks`, ...(!asking ? { commands: backgroundItems } : {}) }) : { rows: [], ids: [] }
+    const strip = rich && !inlineView && stripList.length ? renderAgentsStrip({ run: subagentRunOf(state, g.sep).ofTask, ...(state.agentView ?? (state.sessionParentId ? state.sessionId : undefined) ? { open: (state.agentView ?? state.sessionId) as string } : {}), tasks: stripList, activity: childActivity, now: now(), width: width - (agentsPet ? agentsPet.cols + 1 : 0), inset: PROMPT_MARGIN + 1, glyphs: g, root: !working, openHint: `ctrl+x ↓ open ${g.sep} /tasks`, ...(!asking ? { commands: backgroundItems } : {}) }) : { rows: [], ids: [] }
+    // The line that says where the reader is: a child's session (the thread has its header), and every sub-agent view in the minimal tier.
+    // It lives in the top rows, so it shows whether or not the session's top bar does.
+    if (viewed && (viewed.kind === "child" || !rich)) {
+      const child = viewed.kind === "child" ? stripList.find((task) => task.taskId === viewed.taskId) : undefined
+      const siblings = viewed.kind === "thread" ? (state.agentRoot ?? state.transcript).agentThreads().length : 0
+      const hints = viewed.kind === "child" ? ["↑ parent · ←→ siblings", "↑ parent · ←→", "↑ parent"] : siblings > 1 ? ["←→ · ↑ back", "↑ back"] : ["↑ back"]
+      const there = viewed.kind === "thread" ? threadState(viewed.thread) : child ? doing(child, childActivity(child.taskId), g.sep) : undefined
+      topbar = [...topbar, agentContextLine({ name: viewed.name, color: viewed.color, ...(there ? { state: there } : {}), parent: parentTitle(state, viewed), hints, width, inset: PROMPT_MARGIN, sep: g.sep })]
+    }
     const stripBuilt: Line[] = strip.rows
     const stripRows: Line[] = stripBuilt.length ? barRows("agents", stripBuilt, width) : []
     const backgroundBuilt = !asking && !inlineView && !stripBuilt.length ? barRows("background", backgroundRows({ items: backgroundItems, full: state.mode === "full", width, now: now(), inset: PROMPT_MARGIN + 1, ascii: !rich }), width) : []
@@ -252,7 +280,7 @@ export function createChatRows(ctx: AppContext, actions: {
     const dock: Line[] = rich && state.dockOpen && dockRoom >= DOCK_HEIGHT && !(compactionLive.visible() && compactionLive.mode() === "scratchpad") ? [...dockRows(width, dockRoom), []] : []
     if (!dock.length) { state.scratchArea = undefined; state.scratchCursor = undefined }
     // The compaction panel takes what is left once the prompt, the footer and six rows of transcript are kept.
-    const live = compactionLive.rows({ width, room: height - agentRows.length - topbar.length - fixedAbove.length - dock.length - (findRow ? 1 : 0) - (working ? 1 : 0) - extAbove.length - commentRows.above.length - below.length - popup.length - promptTop.length - frameBottom.length - cardRows - 7 })
+    const live = compactionLive.rows({ indicator: workingBuilt !== undefined, width, room: height - agentRows.length - topbar.length - fixedAbove.length - dock.length - (findRow ? 1 : 0) - (working ? 1 : 0) - extAbove.length - commentRows.above.length - below.length - popup.length - promptTop.length - frameBottom.length - cardRows - 7 })
     if (live?.scratch) {
       state.scratchArea = { top: dock.length + live.scratch.top, left: live.scratch.left, width: live.scratch.width, rows: live.scratch.rows, first: live.scratch.first }
       state.scratchCursor = live.scratch.cursor ? { row: dock.length + live.scratch.cursor.row, col: live.scratch.cursor.col } : undefined
@@ -267,7 +295,14 @@ export function createChatRows(ctx: AppContext, actions: {
     const rawReplacement = !asking && !replacement && !state.shellMode ?state.ext?.slot("prompt.replace", slotContext(width, editorRows))?.slice(0, editorRows) : undefined
     // The prompt's own selection (shift-arrows) or the one dragged with the mouse.
     const framedCount = asking ? request!.rows.length : replacement?.lines.length ?? rawReplacement?.length ?? shown.length
-    const promptMap = { width, bodyTop: 0, body: [], promptTop: height - below.length - frameBottom.length - framedCount, promptRows: !asking && !replacement && !rawReplacement ? framedCount : 0, promptBelow: frameBottom.length, promptFirst: firstRow, promptInset: frame.inset, promptLines: visual }
+    // `homeInput` center or top: the home leaves the prompt's rows under its logo and the prompt is drawn there (what sits over the prompt
+    // goes over the rows just above it); the footer stays at the bottom. Only where the home made room: not the split layout, a tiny screen
+    // or an extension's own home (the split layout keeps it at the bottom), and never with a question card in the prompt's place.
+    const homePlace = home && !inlineView && !asking && rich && state.tuiProfile.homeInput !== "bottom" && state.tuiProfile.homeLayout !== "split" ? state.tuiProfile.homeInput : undefined
+    let homeGap: number | undefined
+    const homeLifted = homePlace ? emptyState(width, Math.max(1, height - topbar.length - below.length), { rows: promptTop.length + framedCount + frameBottom.length, at: homePlace, placed: (row) => { homeGap = row } }) : undefined
+    const lifted = homeLifted && homeGap !== undefined ? { rows: homeLifted, above: Math.max(0, homeGap - above.length - popup.length) } : undefined
+    const promptMap = { width, bodyTop: 0, body: [], promptTop: lifted ? topbar.length + lifted.above + above.length + popup.length + promptTop.length : height - below.length - frameBottom.length - framedCount, promptRows: !asking && !replacement && !rawReplacement ? framedCount : 0, promptBelow: frameBottom.length, promptFirst: firstRow, promptInset: frame.inset, promptLines: visual }
     const selected = (state.selection?.area === "prompt" ? promptRange(promptMap, state.selection) : undefined) ?? editor.selection
     const framed: Line[] = asking ? request!.rows : replacement?.lines ?? rawReplacement ?? shown.map((line, i) => frame.row(promptRow({ text: line.text, ...(selected ? { selection: { start: Math.max(0, selected.start - line.start), end: Math.max(0, Math.min(line.end, selected.end) - line.start) } } : {}), first: firstRow + i === 0, rich, glyphs: g, lead, shell: state.shellMode, tokens: looks, ...(shownPlaceholder && editor.isEmpty() ? { placeholder: shownPlaceholder } : {}) })))
     // `inside`: the status sits at the right end of the prompt's first row, only where the typed text leaves room for it. The text and the
@@ -281,11 +316,12 @@ export function createChatRows(ctx: AppContext, actions: {
     const chrome = topbar.length + above.length + popup.length + promptTop.length + framed.length + frameBottom.length + below.length
     const sheetRoom = (rows: number) => Math.max(0, height - rows - STICKY_MIN_BODY)
     // A collapsed sidebar reserves its own space above the prompt.
-    const sheet = !inlineView ? bottomPanel?.(sheetRoom(chrome)) ?? [] : []
+    const sheet = !inlineView && !lifted ? bottomPanel?.(sheetRoom(chrome)) ?? [] : []
     const reserved = chrome + sheet.length
     // Inline mode: the live blocks that fit above the prompt; the rest of the transcript is already in the terminal's scrollback.
     const inlineBody = inlineView?.tail.slice(-Math.max(0, height - reserved))
-    let bodyHeight = inlineBody ? inlineBody.length : Math.max(1, height - reserved)
+    // The bottom edge of a sub-agent's border takes the body's last row.
+    let bodyHeight = inlineBody ? inlineBody.length : Math.max(1, height - reserved - (boxed ? 1 : 0))
     const localState = view.get(state.sessionId)
     // The transcript's text is laid out one column short of the chat column while the scrollbar is `auto` or `always`: that column is the
     // bar's, drawn or blank, so showing and hiding it never reflows a line (docs/customize.md, "Scrolling").
@@ -308,7 +344,7 @@ export function createChatRows(ctx: AppContext, actions: {
     const hovered = state.hoverLink
     // The address under the pointer is underlined on every row it covers, the way a browser shows a link.
     const underHover = (lines: Line[]) => hovered ? lines.map((line) => line.some((span) => span.link === hovered) ? line.map((span) => span.link === hovered ? { ...span, underline: true } : span) : line) : lines
-    const body: Line[] = inlineBody ? plainRows(inlineBody) : cleared ? plainRows(cleared) : (home ? emptyState(width, bodyHeight).slice(0, bodyHeight) : underHover(linked(visible.map((l) => l.spans))))
+    const body: Line[] = inlineBody ? plainRows(inlineBody) : cleared ? plainRows(cleared) : (lifted ? lifted.rows : home ? emptyState(width, bodyHeight).slice(0, bodyHeight) : underHover(linked(visible.map((l) => l.spans))))
     // A transcript shorter than the body starts under the top bar after one blank row and the free rows sit between its last
     // message and the prompt; once it overflows the view follows the bottom.
     const topAnchored = !inlineBody && !home && !cleared && visible.length < bodyHeight
@@ -365,17 +401,23 @@ export function createChatRows(ctx: AppContext, actions: {
       body.splice(0, body.length, ...withScrollbar({ rows: body, width, thumb, glyphs: scrollbarGlyphs(state.tuiProfile.scrollbarGlyphs, g), shown }))
       if (shown && thumb) scrollbar = { col: width - 1, top: topbar.length, rows: body.length, thumb, total, viewport: bodyHeight }
     }
+    if (boxed) body.push(frameBottomEdge({ width, color: boxColor, ascii: !rich || asciiGlyphs() }))
     // Minimal keeps the last row empty: the prompt's closing rule stays full width (the screen never draws the bottom-right cell).
-    const rows: Line[] = [...topbar, ...body, ...sheet, ...above, ...popup, ...promptTop, ...framed, ...frameBottom, ...below]
+    const promptBlock = [...above, ...popup, ...promptTop, ...framed, ...frameBottom]
+    const rows: Line[] = lifted ? [...topbar, ...body.slice(0, lifted.above), ...promptBlock, ...body.slice(lifted.above + promptBlock.length), ...below] : [...topbar, ...body, ...sheet, ...promptBlock, ...below]
+    if (boxed) for (let at = boxTop + 1; at < topbar.length + body.length - 1; at++) rows[at] = frameSides({ line: rows[at]!, width, color: boxColor, ascii: !rich || asciiGlyphs() })
     const panel = sheet.length ? { top: topbar.length + body.length, height: sheet.length } : undefined
-    const bodyEnd = topbar.length + body.length + sheet.length
+    // Where the rows over the prompt start: under the body, or under the logo when the home lifted the prompt.
+    const bodyEnd = lifted ? topbar.length + lifted.above : topbar.length + body.length + sheet.length
     if (!inlineView) {
       const commentTop = fixedAbove.length + dock.length + (live?.rows.length ?? 0) + agentRows.length + (working ? 1 : 0) + extAbove.length
-      const belowTop = bodyEnd + above.length + popup.length + promptTop.length + framed.length + frameBottom.length +(!minimal && preset === "minimal" ? 1 : 0)
+      const belowTop = rows.length - below.length + (!minimal && preset === "minimal" ? 1 : 0)
       comments.place({ rows, rule: bodyEnd + above.length + popup.length, ...(commentRows.chip !== undefined ? { chip: bodyEnd + commentTop + commentRows.chip } : {}), ...(commentRows.below.length ? { below: belowTop } : {}), width })
     }
     // What a mouse selection reads: the transcript rows as laid out (not as decorated above) and where the prompt landed.
-    const bodyLine = (line: { text: string; gutter?: number; soft?: "space" | "none"; itemId?: string; fold?: number; copy?: BodyLine["copy"] }): BodyLine => ({ text: line.text, gutter: line.gutter ?? 0, ...(line.itemId ? { itemId: line.itemId } : {}), ...(line.soft ? { soft: line.soft } : {}), ...(line.fold !== undefined && line.itemId ? { fold: { itemId: line.itemId, ordinal: line.fold } } : {}), ...(line.copy ? { copy: line.copy } : {}) })
+    // A row between turns (a turn's closing line, a note) belongs to no message: like a blank row it is not what a comment quotes or
+    // what the open-path key reads as "the item in view".
+    const bodyLine = (line: { text: string; gutter?: number; soft?: "space" | "none"; itemId?: string; kind?: string; fold?: number; copy?: BodyLine["copy"] }): BodyLine => ({ text: line.text, gutter: line.gutter ?? 0, ...(line.itemId && line.kind !== "status" ? { itemId: line.itemId } : {}), ...(line.soft ? { soft: line.soft } : {}), ...(line.fold !== undefined && line.itemId ? { fold: { itemId: line.itemId, ordinal: line.fold } } : {}), ...(line.copy ? { copy: line.copy } : {}) })
     const bodyLines: Array<BodyLine | undefined> = home || cleared ? body.map(() => undefined) : [...body.slice(0, padTop).map(() => undefined), ...visible.map(bodyLine), ...body.slice(padTop + visible.length).map(() => undefined)]
     // A scrolling transcript keeps its selection in transcript rows, so a drag past the edge can scroll and still copy what left the screen.
     const scrolls = !inlineBody && !home && !cleared
@@ -408,7 +450,7 @@ export function createChatRows(ctx: AppContext, actions: {
     const cursorRow = bodyEnd + above.length + popup.length + promptTop.length + (cursorAt - firstRow)
     const current = visual[cursorAt]!
     const before = [...new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(current.text)].slice(0, editor.cursorOffset - current.start).map((s) => s.segment).join("")
-    const placements = drawPet({ rows, bottom: topbar.length + body.length, floor: sheet.length === 0 && above.length === (working ? 1 : 0) + agentRows.length ? bodyEnd + above.length : topbar.length + body.length, top: topbar.length, width, shown: petShown && !(home && homeMascot.drawn) })
+    const placements = drawPet({ rows, bottom: topbar.length + body.length, floor: sheet.length === 0 && above.length === (working ? 1 : 0) + agentRows.length ? bodyEnd + above.length : topbar.length + body.length, top: topbar.length, width, shown: petShown && !lifted && !(home && homeMascot.drawn) })
     // The start screen's pet mascot, where the terminal draws pictures: over the blank cells the home reserved for it.
     if (home && !inlineBody && !cleared) placements.push(...homeMascot.placement(topbar.length).filter((placement) => placement.row + placement.rows <= topbar.length + body.length))
     if (!inlineBody && !home && !cleared) placements.push(...transcriptPlacements({ visible, top: topbar.length + padTop, labelRows: new Set([...labelRows].map((row) => topbar.length + row)), clear: placements }))
@@ -445,7 +487,7 @@ export function createChatRows(ctx: AppContext, actions: {
     ascii: () => asciiGlyphs(),
   })
 
-  function emptyState(width: number, height: number): Line[] {
+  function emptyState(width: number, height: number, prompt?: HomePrompt): Line[] {
     homeHits = []
     const root = homeRoot()
     // Balanced and full show v1's home; minimal keeps only the name and the project, like Pi.
@@ -469,8 +511,8 @@ export function createChatRows(ctx: AppContext, actions: {
       look: { ...homeLook(profile), ...(asciiGlyphs() ? { ascii: true } : {}) } as never,
       ...(state.tuiProfile.homeTips ? { tip: homeTipText } : {}),
       ...(state.tuiProfile.homeFooter && !footerTaken ? { footer: state.homeMcp ? { mcp: state.homeMcp } : {} } : {}),
-      ...(input.version ? { version: input.version } : {}),
-    }, { width, height, extra: { ...(below ? { below } : {}), ...(mascot ? { mascot } : {}) } })
+      ...(input.version ? { version: input.dev ? `${input.version} DEV` : input.version } : {}),
+    }, { width, height, extra: { ...(below ? { below } : {}), ...(mascot ? { mascot } : {}), ...(prompt ? { prompt } : {}) } })
     homeHits = drawn.hits.flatMap((hit) => (hit.action === "open" && typeof hit.arg === "string" ? [{ row: hit.row, from: hit.from, to: hit.to, sessionId: hit.arg }] : []))
     return drawn.lines
   }
@@ -689,6 +731,12 @@ export function createChatRows(ctx: AppContext, actions: {
     return onRule ? workingRow(room, true) : undefined
   }
 
+  /** How the activity status is laid out (`activityStyle`, `activityTokens`). */
+  function activityLook() {
+    const figures = state.tuiProfile.activityTokens.split(",").filter(Boolean)
+    return { style: state.tuiProfile.activityStyle, groupSeparator: g.sep, ...(figures.length ? { tokenFigures: figures } : {}) }
+  }
+
   function workingRow(width: number, overlay = false, partsOverride?: readonly ActivityPart[]): Line | undefined {
     // Over the prompt's chrome (`activityPlacement` above or inside) the line has no margin of its own and its parts are set off by a glyph.
     const margin = overlay || state.mode === "minimal" ? 0 : META_MARGIN
@@ -703,6 +751,7 @@ export function createChatRows(ctx: AppContext, actions: {
         width,
         margin,
         parts: partsOverride ?? activityPartsOf(state.tuiProfile.activityParts),
+        ...activityLook(),
         ...(overlay ? { separator: g.sep } : {}),
         spinner: state.reducedMotion ? "⋯" : SPINNER_FRAMES[state.spinFrame % SPINNER_FRAMES.length]!,
         phase: thread.last ? `${truncateEnd(thread.last, 60)}...` : "Working...",
@@ -742,6 +791,7 @@ export function createChatRows(ctx: AppContext, actions: {
       width,
       margin,
       parts: partsOverride ?? activityPartsOf(state.tuiProfile.activityParts),
+      ...activityLook(),
       stats: ctx.stats.read(),
       ...(overlay ? { separator: g.sep } : {}),
       ...(state.transcript.queue.length ? { queued: state.transcript.queue.length } : {}),
@@ -751,7 +801,7 @@ export function createChatRows(ctx: AppContext, actions: {
       ...(state.tuiProfile.showActivityModel && state.effectiveModel?.model ? { model: modelLabel(sessionModelId(state.effectiveModel.model, state.transcript.lastUsage?.model, state.modelReport)!, state.modelReport) } : {}),
       ...(state.tuiProfile.showElapsed && !state.accessible && state.turnState.startedAt !== undefined ? { elapsedMs: now() - state.turnState.startedAt } : {}),
       ...(retry ? { retry } : {}),
-      ...(state.tuiProfile.showTokens && (state.turnState.outputLive > 0 || state.turnState.input > 0) ? { tokens: { input: state.turnState.input, cached: state.turnState.cached, output: state.turnState.outputLive, estimated: state.turnState.estimating } } : {}),
+      ...(state.tuiProfile.showTokens && (state.turnState.outputLive > 0 || state.turnState.input > 0) ? { tokens: { input: state.turnState.input, cached: state.turnState.cached, output: state.turnState.outputLive } } : {}),
       now: now(),
       interruptHint: state.tuiProfile.showInterruptHint && hint,
       ...(stalledMs !== undefined ? { stalledMs } : {}),

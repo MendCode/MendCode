@@ -37,7 +37,7 @@ export function createMemoryModel(input: {
   const entries = (directory: string) => store.memories.list({ directory, profile: input.profile(directory) })
   function target(directory: string, id: MemoryId | undefined) {
     const found = entries(directory).find((entry) => entry.memoryId === id && !entry.details?.action)
-    if (!found) throw new Error("Unknown memory in this project/profile")
+    if (!found) throw new Error("Unknown memory in this project/area")
     return found
   }
   function details(args: ModelInput, current?: MemoryDetails): MemoryDetails {

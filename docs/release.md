@@ -252,7 +252,7 @@ install cosign 2.6.1 or newer to check the signature, and set `MENDCODE_REQUIRE_
 launch starts in. It is the same binary for all three, and the choice is only a starting point: no argument means `balanced`, a
 value that is none of the three stops the installer before anything is written, and `--tier` composes with `--channel`.
 
-The installer records it as a fourth line of its receipt, `.mendcode-v2-install`, beside the binary (`schema`, `binary`, `sha256`, `tier`;
+The installer records it as a fourth line of its receipt, `.mendcode-install`, beside the binary (`schema`, `binary`, `sha256`, `tier`;
 a receipt from before `--tier` has no such line, and [uninstall](uninstall.md) accepts both). Nothing else is written, and the installer still
 never runs the binary or touches the data directory. The first launch reads the line (beside the running binary, then in
 `MENDCODE_INSTALL_DIR`, then the installer's default directory; a source run reads only `MENDCODE_INSTALL_DIR`) and applies it only when

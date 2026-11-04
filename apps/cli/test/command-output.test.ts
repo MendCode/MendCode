@@ -40,6 +40,17 @@ test("repos opens a table, scrolls to the complete report, and actions target th
   expect(h.text().join("\n")).not.toContain("Repository watches")
 })
 
+test("/pr review [pr] full asks the daemon to review the head again whole; without it, no full flag is sent", async () => {
+  const h = appHarness({ reply: (command) => command.type === "pr.review" ? { ok: true, result: { text: "ok" } } : undefined })
+  await h.type("/pr review 7 full\r")
+  expect(h.sentOf("pr.review").at(-1)).toMatchObject({ action: "review", pr: "7", full: true })
+  await h.type("/pr review full\r")
+  expect(h.sentOf("pr.review").at(-1)).toMatchObject({ action: "review", full: true })
+  expect(h.sentOf("pr.review").at(-1)).not.toHaveProperty("pr")
+  await h.type("/pr review 7\r")
+  expect(h.sentOf("pr.review").at(-1)).not.toHaveProperty("full")
+})
+
 test("long daemon replies and notices use a scrollable page, short confirmations do not", async () => {
   const h = appHarness({ reply: (command) => command.type === "pr.review" ? { ok: true, result: { text: report } } : undefined })
   await h.type("/pr review 7\r")

@@ -10,7 +10,7 @@ export const projectTrusted = ({ trustedToolDirs, directory }: { trustedToolDirs
 
 /**
  * The MCP config the daemon's manager reads for a directory: every layer's `mcp.json`, with the project's own servers (and
- * its packages') held back as `needs trust` until the directory is trusted. Nothing is created, spawned or contacted for them.
+ * its profiles') held back as `needs trust` until the directory is trusted. Nothing is created, spawned or contacted for them.
  */
 export function createMcpConfigLoader({ userDir, layers, allowed, trustedDirs, extensionServers }: {
   userDir: string

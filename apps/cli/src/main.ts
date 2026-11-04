@@ -1,15 +1,15 @@
 #!/usr/bin/env bun
 import { parseRemoteFlags, parseTokenCommand, remoteTransport, REMOTE_DISABLED_NOTE, runTokenCommand } from "./remote"
-import { createClient } from "@mendcode/client"
+import { createClient, type CommandInput } from "@mendcode/client"
 import { defaultLocalTransport, localEndpointPath, readLocalEndpoint } from "@mendcode/client/local-endpoint"
 import type { GlobalEvent, SessionEvent, SessionId, SessionSummary, Settings, ThemesReport } from "@mendcode/protocol"
-import { helpText, parseAutomation, runAutomation, SCHEMA } from "./automation"
+import type { ParseResult } from "./automation"
 import { COMPAT, compatEnvelope } from "./compat"
 import { computeBuildId } from "@mendcode/build-id"
 import { homedir, tmpdir } from "node:os"
 import { mkdtemp, realpath, stat } from "node:fs/promises"
 import path from "node:path"
-import { DEFAULT_DIR, ensureDaemon, stopIfStale, terminateDaemon, waitForSocketGone } from "./launcher"
+import { DEFAULT_DIR, runInherited, ensureDaemon, envDataDir, stopIfStale, terminateDaemon, waitForSocketGone } from "./launcher"
 import { resolveProcessMode, startsSolo } from "./process-modes"
 import { createHeadlessRun } from "./run"
 import { loadRunOutput, type RunOutput } from "./run-output"
@@ -30,6 +30,7 @@ import { parseViewCommand, runViewCommand } from "./view-args"
 import { parseDocsCommand } from "./docs-args"
 import { parsePackageFileCommand, runPackageFileCommand } from "./package-file-command"
 import { PROGRAM_NAME } from "@mendcode/program"
+import { sameDir } from "@mendcode/program/data-dir"
 import { createHerdrReporter, createTuiosChildren, createTuiosMeta, herdrPane, paneState, tuiosPane, waitingChild, type PaneChild, type PaneFacts } from "./herdr"
 import { guardClient, originCapabilities, originRefusal, startedBySession } from "./agent-origin"
 import { AGENT_SHELL_ENV, setBuildChannel } from "@mendcode/protocol/wire"
@@ -47,7 +48,7 @@ try { globalOptions = parseGlobalOptions(process.argv.slice(2)) } catch (error) 
 }
 const log = cliLogger(globalOptions, process.stderr)
 /** The data directory a command works on, as the session mark names it. */
-const originDir = (dir?: string) => path.resolve(dir ?? process.env.MENDCODE_V2_DIR ?? DEFAULT_DIR)
+const originDir = (dir?: string) => path.resolve(dir ?? envDataDir())
 /**
  * Started from a session's own shell against the daemon that session runs under: what only the user decides stops here
  * (docs/permissions.md). `anywhere`: the command changes this installation, whatever data directory it names.
@@ -58,7 +59,7 @@ function refuseFromSession(dir: string | undefined, what: string, anywhere = fal
   process.exit(1)
 }
 const rawArgv = globalOptions.args
-/** `--safe-mode` / MENDCODE_SAFE_MODE=1: a pure start that also leaves out packages, shell hooks, MCP and project tools (docs/tiers.md). */
+/** `--safe-mode` / MENDCODE_SAFE_MODE=1: a pure start that also leaves out profiles, shell hooks, MCP and project tools (docs/tiers.md). */
 const safeMode = globalOptions.safeMode === true || process.env.MENDCODE_SAFE_MODE === "1"
 const pure = globalOptions.pure === true || safeMode
 try {
@@ -104,6 +105,17 @@ if (globalOptions.approve === true && remoteAttach) {
   process.stderr.write("error: --approve is local-only; trust a remote project on its own machine\n")
   process.exit(64)
 }
+// `dev` starts the checkout's own CLI on a separate data directory and never connects to the main daemon (docs/dev-mode.md). Loaded on demand.
+if (argv[0] === "dev") {
+  const dev = await import("./dev-mode")
+  const parsed = dev.parseDev(argv)
+  if (typeof parsed === "string") { process.stderr.write(`error: ${parsed}\n${dev.DEV_USAGE}`); process.exit(64) }
+  process.exit(await dev.runDev(parsed, {
+    env: process.env, cwd: process.cwd(), out: process.stdout, err: process.stderr, execPath: process.execPath, main: Bun.main, which: Bun.which,
+    own: path.resolve(import.meta.dir, "../../.."),
+    spawn: ({ command, env, cwd }) => runInherited({ command, env, cwd }),
+  }))
+}
 let daemonService: DaemonServiceCommand | undefined
 try { daemonService = parseDaemonService(argv) } catch (error) {
   process.stderr.write(`error: ${error instanceof Error ? error.message : "Invalid daemon command"}\n${DAEMON_USAGE}`)
@@ -113,7 +125,7 @@ if (daemonService) {
   if (remoteAttach) { process.stderr.write("error: daemon lifecycle commands are local-only\n"); process.exit(64) }
   if (daemonService.help) { process.stdout.write(DAEMON_USAGE); process.exit(0) }
   if (!["status", "logs", "plan"].includes(daemonService.action)) refuseFromSession(daemonService.dir, "stops, starts or reinstalls the daemon every session runs under")
-  const dir = path.resolve(daemonService.dir ?? process.env.MENDCODE_V2_DIR ?? DEFAULT_DIR)
+  const dir = path.resolve(daemonService.dir ?? envDataDir())
   const cwd = path.resolve(daemonService.cwd ?? process.cwd())
   const runtime = await import("../../../packages/daemon/src/user-service")
   const command = daemonCommand()
@@ -141,14 +153,14 @@ if (daemonService) {
   })(daemonService))
 }
 // `view list|scaffold` writes files only: no daemon, no terminal.
-if (argv[0] === "profile") {
+if (argv[0] === "customize") {
   const args = argv.slice(1).filter((value, index, all) => value !== "--dir" && all[index - 1] !== "--dir" && !value.startsWith("--dir="))
   if (args[0] !== "restore" || args.some((value) => value.startsWith("--"))) {
-    process.stderr.write("usage: mendcode profile restore [id] [--dir PATH] (local only)\n")
+    process.stderr.write("usage: mendcode customize restore [id] [--dir PATH] (local only)\n")
     process.exit(2)
   }
-  const dir = arg("dir") ?? process.env.MENDCODE_V2_DIR ?? DEFAULT_DIR
-  if (args[1]) refuseFromSession(dir, "restores the user's terminal profile")
+  const dir = arg("dir") ?? envDataDir()
+  if (args[1]) refuseFromSession(dir, "restores the user's terminal settings")
   try {
     const { runProfileRestore } = await import("./profile-restore")
     process.stdout.write(runProfileRestore(dir, args.slice(1)).text + "\n")
@@ -158,11 +170,18 @@ if (argv[0] === "profile") {
 const viewCommand = parseViewCommand(argv)
 // A starter is this program's own template in a new file, so a session may write one; replacing a view the user already has (`--force`) stays the user's.
 if (viewCommand?.action === "scaffold" && viewCommand.force) refuseFromSession(viewCommand.dir, "replaces an extension view the user has")
-if (viewCommand) process.exit(runViewCommand(viewCommand, { dataDir: viewCommand.dir ?? process.env.MENDCODE_V2_DIR ?? DEFAULT_DIR, out: process.stdout, err: process.stderr }))
+if (viewCommand) process.exit(runViewCommand(viewCommand, { dataDir: viewCommand.dir ?? envDataDir(), out: process.stdout, err: process.stderr }))
 // `docs [topic]` prints a reference card of this version from the binary and local files; a daemon is asked only when one already runs. The cards load on demand.
 const docsCommand = parseDocsCommand(argv)
-if (docsCommand) process.exit(await (await import("./docs-run")).runDocsCommand(docsCommand, { dataDir: docsCommand.dir ?? process.env.MENDCODE_V2_DIR ?? DEFAULT_DIR, cwd: process.cwd(), out: process.stdout, err: process.stderr }))
-// `package new|check` work on package folders only: no daemon, no terminal.
+if (docsCommand) process.exit(await (await import("./docs-run")).runDocsCommand(docsCommand, { dataDir: docsCommand.dir ?? envDataDir(), cwd: process.cwd(), out: process.stdout, err: process.stderr }))
+// `usage --quota` reads the quota windows a running daemon already holds: no daemon is started and no provider is asked.
+if (argv.includes("usage") && argv.includes("--quota")) {
+  const { parseUsageQuota, runUsageQuota } = await import("./usage-quota")
+  const quotaCommand = parseUsageQuota(argv)
+  if (quotaCommand && remoteAttach) { process.stderr.write("error: usage --quota is local-only\n"); process.exit(64) }
+  if (quotaCommand) process.exit(await runUsageQuota(quotaCommand, { dataDir: envDataDir(), out: process.stdout, err: process.stderr }))
+}
+// `profile new|check` work on profile folders only: no daemon, no terminal.
 const packageFileCommand = parsePackageFileCommand(argv)
 if (packageFileCommand) process.exit(await runPackageFileCommand(packageFileCommand, { cwd: process.cwd(), version: CLI_VERSION, out: process.stdout, err: process.stderr }))
 function arg(name: string) {
@@ -254,7 +273,12 @@ if (migrate?.isMigrateCommand(argv)) {
   process.exit(await migrate.runMigrateCommand(parsed.command, { out: process.stdout, err: process.stderr, home: homedir() }))
 }
 
-const automation = parseAutomation(globalOptions.offline ? [...argv, "--offline"] : argv)
+// The subcommand parsers and runners (automation.ts and everything it reaches) load only when there is something to parse: a
+// plain `mendcode` opens the terminal without evaluating them.
+const automationArgv = globalOptions.offline ? [...argv, "--offline"] : argv
+const automationModule = automationArgv.length ? await import("./automation") : undefined
+const automation: ParseResult = automationModule?.parseAutomation(automationArgv) ?? { ok: "none" }
+const automationApi = async () => automationModule ?? await import("./automation")
 if (automation.ok === true && automation.command.kind === "storage" && automation.command.offline) {
   if (remoteAttach) { process.stderr.write("error: offline storage compaction is local-only\n"); process.exit(64) }
   if (!automation.command.dryRun) refuseFromSession(arg("dir"), "rewrites the stored sessions")
@@ -339,11 +363,12 @@ if (compat && automation.ok === "none" && startup?.kind !== "run") {
 }
 if (automation.ok === false) {
   if (compat) process.stdout.write(`${JSON.stringify(compatEnvelope({ kind: "error", command: automation.topic ?? "usage", error: { code: "usage", message: automation.message } }))}\n`)
-  else process.stderr.write(`error: ${automation.message}\n${helpText(automation.topic)}`)
+  else process.stderr.write(`error: ${automation.message}\n${(await automationApi()).helpText(automation.topic)}`)
   process.exit(64)
 }
 if (automation.ok === true && automation.command.kind === "help") {
-  process.stdout.write(helpText(automation.command.topic) + (automation.command.topic ? "" : STARTUP_USAGE))
+  const topic = automation.command.topic
+  process.stdout.write(topic && ["tui", "run", "attach", "acp", "app-server", "pet"].includes(topic) ? STARTUP_USAGE : (await automationApi()).helpText(topic))
   process.exit(0)
 }
 if (automation.ok === true && (automation.command.kind === "version" || automation.command.kind === "completion")) {
@@ -353,7 +378,7 @@ if (automation.ok === true && (automation.command.kind === "version" || automati
 if (automation.ok === true) {
   if (automation.command.kind === "generate" && automation.command.backend === "httpapi") {
     const { loadHttpApi, renderHttpApi } = await import("./generate-httpapi")
-    const text = renderHttpApi({ spec: await loadHttpApi(), json: automation.command.json, compat: automation.command.compat, schema: SCHEMA, now: Date.now() })
+    const text = renderHttpApi({ spec: await loadHttpApi(), json: automation.command.json, compat: automation.command.compat, schema: (await automationApi()).SCHEMA, now: Date.now() })
     // The document exceeds a pipe's buffer: exit only after the write is flushed.
     await new Promise<void>((resolve) => process.stdout.write(text, () => resolve()))
     process.exit(0)
@@ -364,7 +389,20 @@ const fromSession = !remoteAttach && startedBySession({ env: process.env, dir: o
 if (flag("restart-daemon") && !remoteAttach) refuseFromSession(daemonDataDir, "stops the daemon every session runs under")
 // A session never starts or drives another session with approvals off: that would be more authority than it has.
 if (!remoteAttach && (flag("approve") || flag("dangerously-skip-permissions"))) refuseFromSession(daemonDataDir, "starts or drives a session with approvals off")
-if (flag("restart-daemon")) await terminateDaemon(daemonDataDir)
+if (flag("restart-daemon")) {
+  const stopped = await terminateDaemon(daemonDataDir, { report: (message) => process.stderr.write(`${message}\n`) })
+  // On its own it restarts the daemon and ends; the terminal opens with the next `mendcode`. With a command (`run`, ...) that command goes on.
+  if (startup?.kind === "tui") {
+    try {
+      const started = await ensureDaemon({ dir: daemonDataDir ?? envDataDir() })
+      process.stdout.write(`${stopped ? "daemon restarted" : "daemon started"}${started.started ? "" : " (already running)"}\n`)
+    } catch (error) {
+      process.stderr.write(`error: ${error instanceof Error ? error.message : String(error)}\n`)
+      process.exit(1)
+    }
+    process.exit(0)
+  }
+}
 
 /**
  * Solo mode (solo.ts): an interactive local terminal that finds no daemon runs it in this process. Decided once, at the
@@ -372,7 +410,7 @@ if (flag("restart-daemon")) await terminateDaemon(daemonDataDir)
  * that is already running (or an installed user service) keeps the separate-process shape.
  */
 const processMode = startup?.kind === "tui" && !remoteAttach
-  ? resolveProcessMode({ flag: globalOptions.processMode, env: process.env.MENDCODE_PROCESS, profile: readTuiProfile(daemonDataDir ?? process.env.MENDCODE_V2_DIR ?? DEFAULT_DIR).processMode })
+  ? resolveProcessMode({ flag: globalOptions.processMode, env: process.env.MENDCODE_PROCESS, profile: readTuiProfile(daemonDataDir ?? envDataDir()).processMode })
   : "daemon"
 let soloPending = startsSolo({ mode: processMode, interactive: startup?.kind === "tui", remote: remoteAttach, explicitSocket: Boolean(transportFlags.socketPath), printLogs: globalOptions.printLogs })
 // A compiled interactive terminal restarts itself once, in place (`execve`: same pid, same terminal), with fewer JIT tiers: they are
@@ -380,8 +418,8 @@ let soloPending = startsSolo({ mode: processMode, interactive: startup?.kind ===
 if (startup?.kind === "tui" && /^(\/\$bunfs\/|[A-Za-z]:[\\/]~BUN[\\/])/.test(Bun.main)) {
   const { leanClientEnv, forgetLeanJit, liveDaemon } = await import("./launcher")
   // Solo is only a wish until the first connection: with a daemon already running this terminal only draws.
-  const hosts = soloPending && !(await liveDaemon(daemonDataDir ?? process.env.MENDCODE_V2_DIR ?? DEFAULT_DIR))
-  const lean = leanClientEnv(process.env, hosts)
+  const hosts = soloPending && !(await liveDaemon(daemonDataDir ?? envDataDir()))
+  const lean = leanClientEnv(process.env)
   // A terminal that will host the daemon also leaves a Claude Code shell's session variables behind in that restart (inherited-env.ts);
   // it keeps its tuios pane's, being that pane.
   const inherited = hosts ? hostSessionEnvNames(process.env, { pane: false }) : []
@@ -438,13 +476,11 @@ async function connect() {
   if (fromSession) guardClient(next, process.argv.slice(2))
   if (pure) {
     const info = await next.send({ type: "daemon.info" })
-    if (!info.ok || info.result?.extensionsEnabled !== false) {
+    // --safe-mode implies --pure; the refusal names the flag that was typed.
+    const typed = safeMode ? "--safe-mode" : "--pure"
+    if (!info.ok || info.result?.extensionsEnabled !== false || (safeMode && info.result?.safeMode !== true)) {
       next.close()
-      throw new Error("--pure requires a daemon started with --pure; use a separate --dir or --isolated")
-    }
-    if (safeMode && info.result?.safeMode !== true) {
-      next.close()
-      throw new Error("--safe-mode requires a daemon started with --safe-mode; use a separate --dir or --isolated")
+      throw new Error(`${typed} requires a daemon started with ${typed}; use a separate --dir or --isolated`)
     }
   }
   log("INFO", "daemon connected")
@@ -578,6 +614,8 @@ async function finish(code: number) {
     for (let waited = 0; soloHost && !soloHost.stopped && waited < 5_000; waited += 20) await Bun.sleep(20)
   } else await leaveSoloHost(code === 129)
   client.close()
+  // The restore sequences are already written; the process ends only once the terminal has taken them.
+  await Promise.race([new Promise<void>((resolve) => { try { process.stdout.write("", () => resolve()) } catch { resolve() } }), Bun.sleep(200)])
   process.exit(code)
 }
 if (isolatedDir) {
@@ -610,7 +648,7 @@ if (automation.ok === true) {
     },
   }
   process.stdout.on("error", (error: NodeJS.ErrnoException) => process.exit(error.code === "EPIPE" ? 0 : 1))
-  const code = await runAutomation(automation.command, {
+  const code = await (await automationApi()).runAutomation(automation.command, {
     client,
     listen: (handler) => void (listener = handler ? { onEvent: handler } : undefined),
     listenGlobal: (handler) => void (globalListener = handler),
@@ -755,7 +793,7 @@ async function extraDirectories(entries: readonly string[]) {
 }
 
 /** Scripted-run limits and the session's permission mode reach the daemon before anything is submitted; a daemon that cannot honour them fails the run instead of running it unrestricted. */
-async function applyRunLimits(options: Startup, target: SessionId, instruction?: string) {
+async function applyRunLimits(options: Startup, target: SessionId, instruction?: string, submission?: CommandInput) {
   const appendSystemPrompt = [options.appendSystemPrompt, instruction].filter(Boolean).join("\n\n")
   const limits = {
     ...(options.maxTurns ? { maxSteps: options.maxTurns } : {}),
@@ -772,8 +810,17 @@ async function applyRunLimits(options: Startup, target: SessionId, instruction?:
     if (!reply.ok) throw new Error(`the daemon did not accept the run limits (${reply.error.message}); restart it with --restart-daemon`)
   }
   if (options.permission) {
-    const reply = await client.send({ type: "session.permission.set", sessionId: target, mode: options.permission })
-    if (!reply.ok) throw new Error(reply.error.message)
+    // The prompt goes along: from a session's shell (which the daemon recognises, whatever this environment says), a mode
+    // above that session's own is then put to the user on a card instead of refused at once. Other clients ignore it.
+    const launch = submission ? (await import("@mendcode/protocol/launch")).launchOf(submission as Parameters<typeof import("@mendcode/protocol/launch").launchOf>[0]) : undefined
+    const reply = await client.send({ type: "session.permission.set", sessionId: target, mode: options.permission, ...(launch ? { launch } : {}) })
+    if (!reply.ok) {
+      const unapproved = reply.error.code === "forbidden" && reply.error.message.includes("; not approved: ")
+      if (!unapproved) throw new Error(reply.error.message)
+      // The child this run just made never ran: it does not stay behind as an empty session.
+      if (!options.session && !options.continue) await deleteSession(target)
+      throw new Error(`${reply.error.message}\nAn operator starts it from their own terminal with:\n  ${(await import("./operator-command")).operatorCommand(process.argv.slice(2), directory!)}`)
+    }
   }
   // Flags MendCode does not know belong to an extension; the daemon refuses one no extension of the project declares.
   if (options.extensionFlags) {
@@ -792,8 +839,8 @@ if (startup?.kind === "tui" && (startup.offline || startup.addDirs || startup.no
 if (startup?.kind === "run") {
   let submission: Awaited<ReturnType<typeof prepareRunSubmission>>
   try {
-    await applyRunLimits(startup, sessionId!, runOutput?.instruction)
     submission = await prepareRunSubmission(client, startup, sessionId!, directory!, runPrompt, remoteAttach)
+    await applyRunLimits(startup, sessionId!, runOutput?.instruction, submission)
   } catch (error) {
     process.stderr.write(`error: ${error instanceof Error ? error.message : String(error)}\n`)
     if (startup.ephemeral) await deleteSession(sessionId!)
@@ -833,18 +880,27 @@ if (startup?.kind === "run") {
 }
 
 // A `pr` command that checked out its branch continues here as a terminal without having loaded them.
-const [{ createApp }, { createScreen }, { keyboardWanted }, { currentLayout }, { createCrashGuard }, { registerThemes, setTheme }, { themesFromFiles }, { PRESENTATION_MODES }, { accessibleMode }] = await (terminalModules ?? loadTerminalModules())
-// Theme files of the packages, the user's and the project's `themes/` join the built-ins before settings apply.
+const [{ createApp }, { createScreen }, { keyboardWanted }, { currentLayout }, { createCrashGuard }, { registerThemes, setTheme }, { themesFromFiles }, { PRESENTATION_MODES, registerToolDesignFiles }, { accessibleMode }] = await (terminalModules ?? loadTerminalModules())
+// Theme files of the profiles, the user's and the project's `themes/` join the built-ins before settings apply.
 const themeFiles = await client.send({ type: "themes.list", directory: directory! })
 if (themeFiles.ok) {
   const { themes, problems } = themesFromFiles((themeFiles.result as ThemesReport | undefined)?.themes ?? [])
   registerThemes(themes)
   if (process.env.MENDCODE_THEME) setTheme(process.env.MENDCODE_THEME)
   if (problems.length) startupNotice = [startupNotice, `theme ${problems[0]!.name}: ${problems[0]!.message}${problems.length > 1 ? ` (+${problems.length - 1} more)` : ""}`].filter(Boolean).join(" · ")
+  // The tool designs of the same layers (`tool-designs/<name>.json`) come in the same reply.
+  const designProblems = registerToolDesignFiles((themeFiles.result as ThemesReport | undefined)?.toolDesigns)
+  if (designProblems.length) startupNotice = [startupNotice, `tool design ${designProblems[0]!.name}: ${designProblems[0]!.message}${designProblems.length > 1 ? ` (+${designProblems.length - 1} more)` : ""}`].filter(Boolean).join(" · ")
+  // Footer pack files come in the same answer; with none the module is not touched here (the app loads it with the footer).
+  const packFiles = (themeFiles.result as ThemesReport | undefined)?.footerPacks ?? []
+  if (packFiles.length) {
+    const packProblems = (await import("./view/footer-pack")).registerFooterPacks(packFiles)
+    if (packProblems.length) startupNotice = [startupNotice, `footer pack ${packProblems[0]!.name}: ${packProblems[0]!.message}${packProblems.length > 1 ? ` (+${packProblems.length - 1} more)` : ""}`].filter(Boolean).join(" · ")
+  }
 }
 
 // The app applies the terminal-local image protocol from /customize before its first frame.
-const dataDir = daemonDataDir ?? process.env.MENDCODE_V2_DIR ?? DEFAULT_DIR
+const dataDir = daemonDataDir ?? envDataDir()
 // The alternate screen is the default; `--no-alt-screen`, MENDCODE_ALT_SCREEN=0 or the saved `altScreen` setting keep the chat inline.
 // Screen-reader mode (`--accessible`, MENDCODE_ACCESSIBLE=1 or the saved `accessible` setting) keeps the chat inline and turns mouse reporting off, unless `--alt-screen` says otherwise.
 const accessible = accessibleMode({ flag: startup?.accessible, env: process.env, saved: remoteAttach ? false : readTuiProfile(dataDir).accessible })
@@ -859,14 +915,19 @@ const terminalOut = {
 }
 const screen = createScreen(terminalOut, process.env,{ inline: !altScreen, keyboard: keyboardWanted(readTuiProfile(dataDir).keyProtocol, process.platform), ...(accessible ? { mouse: false } : {}), ...(relaunched === "restart" || relaunched === "terminal" ? { keepFrame: true } : {}) })
 // Whatever way the process ends, the keyboard flags it pushed come off: a shell that kept them would get escape codes for every key.
-process.once("exit", () => screen.releaseKeyboard())
+// The screen too: a process that ends by process.exit (a kill, a second ctrl+c, a fast close) leaves the alternate screen, the mouse modes and the cursor as the shell had them. Leaving twice is a no-op.
+process.once("exit", () => { screen.leave(); screen.releaseKeyboard() })
 // A plain `kill` ends the process without running the handler above; with the flags pushed that would leave the shell in the protocol.
 // A terminal that hosts the daemon leaves the way a closed one does instead: other sessions' turns finish first (a second SIGTERM stops them).
-if (!startup?.isolated) process.once("SIGTERM", () => {
-  if (!soloHost || soloHost.stopped) return process.exit(143)
-  soloHost.log("warn", "[SOLO]: SIGTERM while hosting the daemon; leaving after the running work")
-  exit(143)
-})
+const killed = (signal: "SIGTERM" | "SIGINT", code: number) => {
+  if (!soloHost || soloHost.stopped) return process.exit(code)
+  soloHost.log("warn", `[SOLO]: ${signal} while hosting the daemon; leaving after the running work`)
+  exit(code)
+}
+if (!startup?.isolated) {
+  process.once("SIGTERM", () => killed("SIGTERM", 143))
+  process.once("SIGINT", () => killed("SIGINT", 130))
+}
 // Whatever ends this process with the daemon still in it (a kill, process.exit) is in the daemon log; a SIGKILL or a native crash leaves no line at all.
 process.once("exit", (code) => {
   if (soloHost && !soloHost.stopped) soloHost.log("warn", `[SOLO]: the terminal hosting the daemon exited (code ${code}); turns still running end as interrupted`)
@@ -951,6 +1012,7 @@ app = createApp({
   ...(startup?.prompt !== undefined ? { startup: { prompt: startup.prompt } } : startup?.initialMessage !== undefined ? { startup: { initialMessage: startup.initialMessage } } : {}),
   ...(startup?.diagnostics ? { diagnostics: { memory: () => process.memoryUsage(), snapshot: async () => (await import("./diagnostics")).writeSnapshot(dataDir, "tui") } } : {}),
   version: CLI_VERSION,
+  ...(process.env.MENDCODE_DEV && sameDir(process.env.MENDCODE_DEV, dataDir) ? { dev: true } : {}),
   pure,
   ...(safeMode ? { safeMode: true } : {}),
   ...(process.env.HOME ? { home: process.env.HOME } : {}),
@@ -1005,7 +1067,7 @@ if (saved.ok) {
 }
 // Raw mode before the screen asks the terminal anything: a terminal still echoing prints the answer to the keyboard query (`^[[?1;2;4c`) as text.
 process.stdin.setRawMode?.(true)
-screen.enter()
+if (!leaving) screen.enter() // a close during start has already left: entering now would strand the alternate screen
 // An error nobody caught shows the crash screen (the draft saved, the terminal restored on leaving) instead of a stack trace over the alternate screen.
 const crash = createCrashGuard({ screen, now: Date.now, version: CLI_VERSION, env: process.env, home: process.env.HOME, saveDrafts: draftsSaved, exit: (code) => (leaving ? undefined : exit(code)), resume: () => app?.render() })
 // With the daemon in this process an error nobody caught can come from either side. The process survives it (a separate daemon would have died with its turn):
@@ -1039,6 +1101,8 @@ if (soloHost && processMode === "auto") {
   const { HAND_OFF_CHECK_MS, handOffWanted } = await import("./solo")
   const handOff = setInterval(async () => {
     if (!soloHost || soloHost.stopped || leaving) return clearInterval(handOff)
+    // Alone with the daemon there is nothing to hand off: the full status (settings, loops, jobs) is read only once another client is here.
+    if (soloHost.clients() <= 1) return
     const status = await client.send({ type: "daemon.status" }).catch(() => undefined)
     if (!status?.ok || !handOffWanted(status.result)) return
     clearInterval(handOff)

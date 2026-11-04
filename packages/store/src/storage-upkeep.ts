@@ -51,8 +51,12 @@ export function createStorageUpkeep(input: { db: Database; codec: Codec; turns: 
   const num = (sql: string) => Number(get<{ n: number | null }>(sql)?.n ?? 0)
 
   function extras(): StorageExtras {
+    // Settled turns sealed into blocks (sealed-turns.ts) are one line: their rows' types are inside the compressed blocks.
     const eventTypes = db
-      .query<EventTypeBytes, []>("SELECT type, COUNT(*) AS count, SUM(octet_length(payload)) AS bytes FROM events GROUP BY type ORDER BY bytes DESC LIMIT 6")
+      .query<EventTypeBytes, []>(`SELECT type, count, bytes FROM (
+        SELECT type, COUNT(*) AS count, SUM(octet_length(payload)) AS bytes FROM events GROUP BY type
+        UNION ALL SELECT 'sealed turns' AS type, COUNT(*) AS count, SUM(length(data)) AS bytes FROM turn_blocks HAVING COUNT(*) > 0
+      ) ORDER BY bytes DESC LIMIT 6`)
       .all()
     const snap = turns.storage.stats()
     const inline = ["turn_files.before_content", "turn_files.after_content", "turn_call_files.before_content"].reduce((total, ref) => {

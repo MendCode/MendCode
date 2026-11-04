@@ -351,13 +351,13 @@ export function createExtensionRuntime(options: ExtensionRuntimeOptions) {
         claimed.push({ surface: "commands", name: `action:${id}`, owner })
         changed()
       },
-      view(name: string, render: unknown) {
+      view(name: string, render: unknown, settings?: { handles?: unknown }) {
         check()
         const legacy = name === "slashMenu"
         const slot = legacy ? "slash.menu" : name
         if (!isViewSlot(slot)) fail(`unknown view slot "${String(name)}" (known: ${VIEW_SLOT_NAMES.join(", ")})`)
         if (typeof render !== "function") fail(`view ${String(name)} needs a function`)
-        viewRegistry.register(owner, slot as ViewSlot, render as (input: never) => unknown, legacy)
+        viewRegistry.register(owner, slot as ViewSlot, render as (input: never) => unknown, legacy, Array.isArray(settings?.handles) ? settings.handles.filter((item): item is string => typeof item === "string") : [])
         claimed.push({ surface: "views", name: slot, owner })
       },
       redraw() {
@@ -486,7 +486,7 @@ export function createExtensionRuntime(options: ExtensionRuntimeOptions) {
       return claimed.flatMap(({ surface, name, owner }) => {
         const rank = loaded.findIndex((extension) => extension.name === owner)
         const extension = loaded[rank]
-        return extension ? [{ surface, name, rank, layer: extension.pkg ? `package ${extension.source}:${extension.pkg}` : extension.source }] : []
+        return extension ? [{ surface, name, rank, layer: extension.pkg ? `profile ${extension.source}:${extension.pkg}` : extension.source }] : []
       })
     },
     /** What each loaded extension registered in this terminal (for `/extensions`); a slot or renderer an error disabled says so. */
@@ -509,8 +509,10 @@ export function createExtensionRuntime(options: ExtensionRuntimeOptions) {
      * The view-slot registry (docs/views.md): `has`/`call` are what the view host uses; `status` and `reset` feed
      * `/customize` → Views. Faults open a circuit breaker per view; nothing a view does reaches a frame.
      */
-    views: { has: viewRegistry.has, call: viewRegistry.call, status: viewRegistry.status, reset: viewRegistry.reset } satisfies CustomViews & { status: ViewRegistry["status"]; reset: ViewRegistry["reset"] },
+    views: { has: viewRegistry.has, call: viewRegistry.call, handles: viewRegistry.handles, status: viewRegistry.status, reset: viewRegistry.reset } satisfies CustomViews & { status: ViewRegistry["status"]; reset: ViewRegistry["reset"] },
     hasSlot: (name: SlotName) => slots.some((entry) => entry.name === name && !entry.disabled),
+    /** The extension that draws `name` (the last one loaded wins, as in `slot`), for a page that says who owns a part of the screen. */
+    slotOwner: (name: SlotName): string | undefined => slots.findLast((entry) => entry.name === name && !entry.disabled)?.owner,
 
     /** Lines for a slot, theme-mapped and fitted to `ctx.width`; undefined when no extension draws there (keep the default). */
     slot(name: SlotName, ctx: SlotContext): Line[] | undefined {

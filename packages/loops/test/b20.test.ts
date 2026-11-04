@@ -99,7 +99,7 @@ test("B20 one-off report uses a read-only session and cannot complete an editing
   await flush()
   expect(h.sessions.at(-1)).toMatchObject({ readOnly: true })
   expect(h.submitted.at(-1)?.sessionId).not.toBe(loop.sessionId)
-  expect(h.submitted.at(-1)?.text).toContain("Report-only loop")
+  expect(h.submitted.at(-1)?.text).toContain("Report-only: write the report as your answer")
   expect(h.submitted.at(-1)?.text).not.toContain("bun test")
   h.complete("complete")
   expect(await tick).toMatchObject([{ state: "active", run: 1 }])

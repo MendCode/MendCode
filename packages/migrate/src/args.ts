@@ -125,8 +125,8 @@ function realResolve(target: string) {
   return path.join(realpathSync(existing), ...rest)
 }
 
-/** Legacy MendCode locations; the import never writes under them. */
-export const v1Homes = (home: string) => [path.join(home, ".mendcode"), path.join(home, ".local", "share", "mendcode")]
+/** Legacy MendCode locations (`~/.mendcode-v1` once `~/.mendcode` became this version's folder); the import never writes under them. */
+export const v1Homes = (home: string) => [path.join(home, ".mendcode-v1"), path.join(home, ".local", "share", "mendcode")]
 
 /** The absolute source and target directories, or a refusal. Nothing is created here. */
 export function resolveTargets({ from, dir, home }: { from: string; dir: string; home: string }) {

@@ -130,9 +130,23 @@ describe("the working row's parts", () => {
 
   test("the default parts draw the classic row, byte for byte", () => {
     expect(text(renderWorkingRow({ ...base, interruptHint: true }))).toBe("  * Generating...  1m 21s  luna  ↑45.2K ↓1,240 tokens  [esc again to interrupt]")
-    // While a call streams, its output is an estimate until the provider reports the exact count; an engine that reports no input has no ↑.
-    expect(text(renderWorkingRow({ ...base, tokens: { input: 0, output: 310, estimated: true } }))).toBe("  * Generating...  1m 21s  luna  ↓~310 tokens")
+    // An engine that reports no input has no ↑.
+    expect(text(renderWorkingRow({ ...base, tokens: { input: 0, output: 310 } }))).toBe("  * Generating...  1m 21s  luna  ↓310 tokens")
     expect(text(renderWorkingRow({ width: 100, margin: 2, spinner: "*", phase: "Generating...", elapsedMs: 90_000, now: 0, stalledMs: 62_000 }))).toBe("  * Generating...  1m 30s  no response for 1m 2s")
+  })
+
+  test("the inline style groups the data parts after the verb, as Claude Code does", () => {
+    const inline = { ...base, style: "inline" as const, groupSeparator: "·", tokens: { input: 45_200, output: 88_600 } }
+    expect(text(renderWorkingRow({ ...inline, model: undefined as never }))).toBe("  * Generating… (1m 21s · ↓ 88.6k tokens)")
+    expect(text(renderWorkingRow({ ...inline, interruptHint: true }))).toBe("  * Generating… (1m 21s · luna · ↓ 88.6k tokens)  [esc again to interrupt]")
+    expect(text(renderWorkingRow({ ...inline, tokenFigures: ["in", "cache", "out"], tokens: { input: 1_500_000, cached: 1_400_000, output: 88_600 } }))).toBe("  * Generating… (1m 21s · luna · ↑ 100k +1.4M cached ↓ 88.6k tokens)")
+    // The list still orders what is drawn; with nothing in the group there are no empty parentheses.
+    expect(text(renderWorkingRow({ ...inline, parts: activityPartsOf("verb,spinner,elapsed") }))).toBe("  Generating…  * (1m 21s)")
+    expect(text(renderWorkingRow({ ...inline, parts: activityPartsOf("spinner,verb,tps") , tokensPerSecond: 0 }))).toBe("  * Generating…")
+    expect(text(renderWorkingRow({ ...inline, parts: activityPartsOf("spinner,elapsed") }))).toBe("  * (1m 21s)")
+    // On a rule the glyph is the group's separator too, and the style never draws wider than the room.
+    expect(text(renderWorkingRow({ ...inline, margin: 0, separator: g.sep, groupSeparator: g.sep, parts: activityPartsOf("spinner,verb,elapsed,tokens") }))).toBe("* Generating… (1m 21s · ↓ 88.6k tokens)")
+    for (const width of [8, 20, 40]) expect(textWidth(text(renderWorkingRow({ ...inline, width, margin: 0 })))).toBeLessThanOrEqual(width)
   })
 
   test("the list orders them, leaves out what it does not name, and adds the opt-in ones", () => {

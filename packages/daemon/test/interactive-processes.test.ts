@@ -199,6 +199,21 @@ describe("interactive processes", () => {
     await until(async () => (await read(port("s2"), b.id, 0))?.session.status === "killed")
   })
 
+  test("no cap by default: an untouched session keeps running, and a cap from the setting applies at the next sweep", async () => {
+    let clock = 1_000
+    let caps: { idleMs?: number; maxLifetimeMs?: number } = {}
+    const { port, registry, start } = setup({ now: () => clock, caps: () => caps })
+    const kept = start()
+    clock += 30 * 24 * 60 * 60_000
+    registry.sweep()
+    expect((await read(port(), kept.id, 0))?.session.status).toBe("running")
+    caps = { idleMs: 60_000 }
+    clock += 61_000
+    registry.sweep()
+    await until(async () => (await read(port(), kept.id, 0))?.session.status === "killed")
+    expect((await read(port(), kept.id, 0))?.session.killedBy).toBe("idle")
+  })
+
   test("a session nobody touched for the idle timeout is stopped, and one in use is not", async () => {
     let clock = 1_000
     const { port, registry, start } = setup({ now: () => clock, limits: { idleMs: 10_000, maxLifetimeMs: 100_000 } })

@@ -27,7 +27,7 @@ Activation is opt-in and saves configuration only. It starts disabled in a new d
 after a daemon restart saved enabled rooms require Start again. No project scaffold, installation,
 file synchronization or network listener is enabled implicitly. Plan saves a dry run under the data
 directory. Doctor checks token/URL readiness, plan presence and coordination availability.
-Legacy status explicitly reports live sync unavailable rather than guessing installed package state.
+Legacy status explicitly reports live sync unavailable rather than guessing installed profile state.
 
 The default relay is `embedded`: peers in this daemon use one serialized coordinator. Rooms isolate
 file paths, write leases exclude other reads/writes, reads can coexist, and multi-file acquisition is

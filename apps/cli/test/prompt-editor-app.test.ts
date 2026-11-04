@@ -1,4 +1,4 @@
-import { CUSTOMIZE_ROWS } from "../src/view/customize-page"
+import { CUSTOMIZE_ROWS, customizeSteps } from "../src/view/customize-page"
 import { afterEach, describe, expect, test } from "bun:test"
 import { readFileSync } from "node:fs"
 import type { EditRequest, EditResult } from "@mendcode/editor-launch"
@@ -310,7 +310,7 @@ describe("turn bell", () => {
     await h.start()
     await h.type("/customize")
     await h.key("\r")
-    for (let i = 0; i < CUSTOMIZE_ROWS.indexOf("turnBell"); i++) await h.key("\x1b[B")
+    for (let i = 0; i < customizeSteps("turnBell", h.app.tuiProfile, { mode: h.app.viewMode }); i++) await h.key("\x1b[B")
     expect(h.text()).toContain("Bell")
     await h.key("\r")
     expect(JSON.parse(readFileSync(`${dataDir}/tui/profile.json`, "utf8")).turnBell).toBe(true)

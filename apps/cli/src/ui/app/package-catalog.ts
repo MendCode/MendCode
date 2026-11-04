@@ -16,7 +16,7 @@ export function createPackageCatalogPages(ctx: AppContext) {
   async function load() {
     const revision = ++epoch
     const mode = page.mode
-    const reply = await send(mode === "assets" ? { type: "packages.assets", directory } : mode === "sources" ? { type: "packages.sources", directory } : { type: "packages.search", directory, ...(page.sourceId ? { sourceId: page.sourceId } : {}) })
+    const reply = await send(mode === "assets" ? { type: "profiles.assets", directory } : mode === "sources" ? { type: "profiles.sources", directory } : { type: "profiles.search", directory, ...(page.sourceId ? { sourceId: page.sourceId } : {}) })
     if (revision !== epoch) return
     error = reply.ok ? "" : reply.error.message
     if (reply.ok) {
@@ -47,7 +47,7 @@ export function createPackageCatalogPages(ctx: AppContext) {
   async function inspect() {
     const selected = catalogMatches(report, page.query)[page.selected]
     if (!selected) return
-    const reply = await send({ type: "packages.preview", directory, sourceId: selected.sourceId, name: selected.name, scope: page.scope })
+    const reply = await send({ type: "profiles.preview", directory, sourceId: selected.sourceId, name: selected.name, scope: page.scope })
     error = reply.ok ? "" : reply.error.message
     preview = reply.ok ? reply.result as PackagePreviewReport : undefined
     page.scroll = 0
@@ -60,7 +60,7 @@ export function createPackageCatalogPages(ctx: AppContext) {
         if (page.editing === "query") delete page.editing
         else if (page.editing === "id") { page.draftId = page.input.trim(); page.input = ""; page.editing = "location" }
         else {
-          const reply = await send({ type: "packages.add-source", directory, sourceId: page.draftId, location: page.input.trim(), enabled: false })
+          const reply = await send({ type: "profiles.add-source", directory, sourceId: page.draftId, location: page.input.trim(), enabled: false })
           error = reply.ok ? "" : reply.error.message
           if (reply.ok) { delete page.editing; sources = reply.result?.sources as PackageSourceInfo[] ?? [] }
         }
@@ -75,8 +75,8 @@ export function createPackageCatalogPages(ctx: AppContext) {
       if (key === "y") {
         const target = sources[page.selected]
         const reply = confirmation === "install" && preview && !preview.problems.length
-          ? await send({ type: "packages.install-catalog", directory, sourceId: preview.entry.sourceId, name: preview.entry.name, scope: page.scope, ...(preview.action === "replace" ? { replace: true } : {}) })
-          : confirmation === "remove-source" && target ? await send({ type: "packages.remove-source", directory, sourceId: target.id }) : undefined
+          ? await send({ type: "profiles.install-catalog", directory, sourceId: preview.entry.sourceId, name: preview.entry.name, scope: page.scope, ...(preview.action === "replace" ? { replace: true } : {}) })
+          : confirmation === "remove-source" && target ? await send({ type: "profiles.remove-source", directory, sourceId: target.id }) : undefined
         error = reply && !reply.ok ? reply.error.message : ""
         if (reply?.ok) { preview = undefined; await load() }
       }
@@ -98,12 +98,12 @@ export function createPackageCatalogPages(ctx: AppContext) {
         else if (key === "a") { page.editing = "id"; page.input = "" }
         else if (key === "u" && source?.remote) {
           error = ""
-          const reply = await send({ type: "packages.refresh", directory, sourceId: source.id })
+          const reply = await send({ type: "profiles.refresh", directory, sourceId: source.id })
           error = reply.ok ? "" : reply.error.message
           if (reply.ok) sources = reply.result?.sources as PackageSourceInfo[] ?? []
         }
         else if (key === "e" && source && !source.builtin) {
-          const reply = await send({ type: "packages.add-source", directory, sourceId: source.id, location: source.location, enabled: !source.enabled })
+          const reply = await send({ type: "profiles.add-source", directory, sourceId: source.id, location: source.location, enabled: !source.enabled })
           error = reply.ok ? "" : reply.error.message
           if (reply.ok) sources = reply.result?.sources as PackageSourceInfo[] ?? []
         } else if (key === "d" && source && !source.builtin) page.confirm = "remove-source"

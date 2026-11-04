@@ -81,6 +81,10 @@ describe("capability line", () => {
     expect(capabilityIndex({ listed: ["todo", "loop"], deferred: [] })).toBe("MendCode tools listed here: loop, todo. Do not claim you lack them.")
     expect(capabilityIndex({ listed: ["read", "tool_search"], deferred: ["screenshot"] })).toBe("MendCode tools reached through `tool_search` (load, then call): screenshot. Do not claim you lack them.")
     expect(capabilityIndex({ listed: ["read", "edit"], deferred: ["custom__audit"] })).toBe("")
+    // A model asked to change the default model must know it can propose the change instead of sending the user to do it.
+    // "Rename the title" is the session's title, not a screen setting of the listed customize_ui.
+    expect(capabilityIndex({ listed: ["read", "customize_ui", "tool_search"], deferred: ["session_meta"] })).toContain("session_meta (rename this session's title, pin or archive it)")
+    expect(capabilityIndex({ listed: ["read", "tool_search"], deferred: ["mendcode_settings"] })).toBe("MendCode tools reached through `tool_search` (load, then call): mendcode_settings (change MendCode's own settings: default model, tier, permissions, context window). Do not claim you lack them.")
   })
   test("computer use is named only when a computer_ tool is in the catalogue", () => {
     expect(capabilityIndex({ listed: [], deferred: ["image_gen"] })).not.toContain("computer")

@@ -1,8 +1,9 @@
+import { CACHE_HELP } from "./help-text"
 import type { CacheMutation } from "@mendcode/protocol"
 import type { Common, ParseResult } from "./automation"
 import { PROGRAM_NAME } from "@mendcode/program"
 
-export const CACHE_USAGE = `usage: ${PROGRAM_NAME} cache <status|enable|on|disable|off> [--global] [--provider ID [--model EXACT]] [--session ID] [--project-path PATH] [--scope session|project] [--format text|json] [--json] [--dir DATA]`
+export const CACHE_USAGE = CACHE_HELP
 export type CacheAutomation = { kind: "cache"; operation: "status" | "enable" | "disable"; target: Omit<CacheMutation, "directory" | "action"> }
 const booleans = new Set(["global", "json", "help"])
 const values = new Set(["provider", "model", "session", "project-path", "scope", "format", "dir", "data-dir"])

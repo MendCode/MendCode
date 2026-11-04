@@ -16,10 +16,10 @@ export type ResourceDiagnostics = {
 
 export const emptyDiagnostics = (): ResourceDiagnostics => ({ overridden: [], dropped: [], ignored: [], notes: [], problems: [] })
 
-/** `package user:acme`, `.claude (project)`, `built in`, `user`, `project`: how a layer is named in reports. The scope keeps a user and a project package of one name apart. */
+/** `profile user:acme`, `.claude (project)`, `built in`, `user`, `project`: how a layer is named in reports. The scope keeps a user and a project profile of one name apart. */
 export function layerLabel(layer: Pick<ExtensionLayer, "source" | "pkg" | "foreign">) {
   if (layer.pkg === BUILTIN_PACKAGE) return "built in"
-  if (layer.pkg) return `package ${layer.source}:${layer.pkg}`
+  if (layer.pkg) return `profile ${layer.source}:${layer.pkg}`
   if (layer.foreign?.origin === "parent") return "a parent folder's .mendcode (project)"
   if (layer.foreign) return `.${layer.foreign.origin} (${layer.source})`
   return layer.source

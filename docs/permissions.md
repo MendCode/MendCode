@@ -26,8 +26,8 @@ Approving with "for this session" records a **grant** for that tool; later calls
 | `git-internals` | a path inside `.git/` (hooks and config run or leak code) | asks (high) |
 | `agent-config` | a path inside `.mendcode/` (hooks, tools and extensions the daemon runs later, outside any sandbox) | asks (high) |
 | `runs-program` | an option or variable that makes an allow-listed command run another program: `rg --pre`, `git grep -O`, `sort --compress-program`, a leading `PATH=`, `LD_PRELOAD=`, `GIT_*=`… | asks (high) |
-| `outside-project` | a path (argument, flag value, redirection target, `workdir`, `cd`) that is not inside the project, including `..`, `~` and symlinks that lead out; `/dev/null` is fine | asks (high) |
-| `network` | `curl`, `wget`, `ssh`, `npx`…, `git push/pull/fetch/clone`, package installs/updates (`bun install`, `npm add`…), any URL in the command | asks (high) |
+| `outside-project` | a path (argument, flag value, redirection target, `workdir`, `cd`) that is not inside the project, including `..`, `~` and symlinks that lead out (relative paths count from the directory the command runs in: the call's `workdir`, then each plain `cd DIR`; a `cd` whose target the text does not give asks); `/dev/null` is fine | asks (high) |
+| `network` | `curl`, `wget`, `ssh`, `npx`…, `git push/pull/fetch/clone`, profile installs/updates (`bun install`, `npm add`…), any URL in the command | asks (high) |
 | `autonomy` | `loop`, `workflow_start`, `tell` (start autonomous work or message another session) | asks (high) |
 | `shell-expansion` | `$VAR`, `$(…)`, backticks or `<(…)` outside single quotes: what runs cannot be read from the text. A saved wildcard allow rule (`ls *`) never covers such a command | asks (uncertain) |
 | `unlisted-command` | a command that is not allow-listed and matched no risk rule | asks (uncertain) |
@@ -87,7 +87,7 @@ Compared with the public `openai/codex` repository (`codex-rs/core/src/exec_poli
 | Reviewer | guardian | optional reviewer role: only clears `uncertain` calls, sees causal user authority and execution fingerprints, never a high-risk one |
 | Grants | per command prefix amendment | smart grants bind the exact action and user authority; never cover a high-risk call |
 
-**`smartSandboxTrust`.** Codex's strongest idea is that the sandbox, not a prompt, protects against what rules cannot read. v2 keeps rules in front and adds the same thing as an opt-in: with `smartSandboxTrust: true`, the OS sandbox on (`read-only` or `workspace-write`) and `network: off`, an `unlisted-command` or `shell-expansion` call runs without asking (rule `sandboxed`). Every rule that flags a risk still asks: deleting project files, network, paths outside the project, secrets, `.git`, `.mendcode`, package installs. The sandbox confines writes and the network; **reads stay open** (a script can read `~/.ssh` and print it into the transcript), which Codex accepts too. Decision taken: off by default; needs the user's own `settings.set`, refused for remote peers. With no sandbox backend the shell tool refuses to run at all (`docs/sandbox.md`), so the setting never runs anything unconfined.
+**`smartSandboxTrust`.** Codex's strongest idea is that the sandbox, not a prompt, protects against what rules cannot read. v2 keeps rules in front and adds the same thing as an opt-in: with `smartSandboxTrust: true`, the OS sandbox on (`read-only` or `workspace-write`) and `network: off`, an `unlisted-command` or `shell-expansion` call runs without asking (rule `sandboxed`). Every rule that flags a risk still asks: deleting project files, network, paths outside the project, secrets, `.git`, `.mendcode`, profile installs. The sandbox confines writes and the network; **reads stay open** (a script can read `~/.ssh` and print it into the transcript), which Codex accepts too. Decision taken: off by default; needs the user's own `settings.set`, refused for remote peers. With no sandbox backend the shell tool refuses to run at all (`docs/sandbox.md`), so the setting never runs anything unconfined.
 
 ## Blast-radius preview
 
@@ -247,8 +247,8 @@ The [Git page](git.md)'s push, publish and pull request actions are not model to
 
 A session runs shell commands, and `mendcode` is on the PATH there. From that shell a session can read (`docs`, `status`,
 `models`, `context`, `session list|get|events`, `control-plane … status`) and nothing else that is the user's to decide:
-it cannot change permission defaults or rules, settings, models, recipes, profiles, provider credentials, MCP servers,
-packages, extensions, themes, the prompt mode, memory, loops, workflows, remote tokens, sharing or the console account,
+it cannot change permission defaults or rules, settings, models, recipes, areas, provider credentials, MCP servers,
+profiles, extensions, themes, the prompt mode, memory, loops, workflows, remote tokens, sharing or the console account,
 and it cannot stop, restart, upgrade or uninstall anything. This holds in every permission mode, `full` included. The
 same commands from your own terminal, from the TUI, from cron and from CI work as before. A daemon setting you ask the
 model to change goes through the `mendcode_settings` tool instead, which saves nothing until you approve the exact change
@@ -262,7 +262,8 @@ files of the data directory or hand a command to another service (cron, launchd,
 Three layers, strongest first:
 
 1. **The daemon** does not take a client's word for who it is. On the local Unix socket it reads the connecting process
-   from the kernel and looks for it among the processes sessions started (`shell`, background tasks, `shell_session`):
+   from the kernel and looks for it among the processes sessions started (`shell`, background tasks, `shell_session`, and each session's Claude Code process
+   when its engine is Claude Code):
    a client that descends from one, or still belongs to the terminal session one of them led after that one ended, is
    agent-origin. So is every other descendant of the daemon process (engines, MCP servers, hooks), except a terminal you
    opened through the daemon. Every session command also gets a hard file-size limit of 512 PiB, which a process can
@@ -283,11 +284,23 @@ review (`--approve` and `--dangerously-skip-permissions` are refused); it can de
 started. A caller whose session cannot be identified counts as `ask`. Sub-agents the engine starts through its own tools
 are a different path and are unchanged.
 
+**A child with more authority, approved by you.** `mendcode run … --permission smart` (or `-c permission=smart`) from a
+session in a lower mode is not refused at once when you are there to decide. If a terminal of yours has the launching
+session open (or, failing that, another session of its project), one card appears there: the model, the folder, extra
+folders, the mode, the title, the turn limit and the prompt (shortened on the card when long; a replaced or appended system
+prompt is named). Approve once starts that child in that mode with exactly that prompt; the launching session cannot send
+it anything else afterwards (it can still read it, stop it, lower its mode or remove it). Deny, dismissing the card, or no
+answer within 120 seconds keeps the refusal, and the empty child is removed. With no terminal of yours on it (a headless
+run, a loop, only remote or peer clients connected) it is refused at once, as before, and the error ends with the exact
+command to run from your own terminal. Only `edits` and `smart` can be asked for this way, never `full`, only for a child
+the caller has just started, and only your local terminal can approve (a remote or peer client can only dismiss the
+card). Nothing is raised without your answer. Every tier.
+
 **Another data directory** is not yours to protect: `mendcode --dir /tmp/x …` from a session's shell talks to another
 daemon and is not held back by the tool or the CLI (that daemon applies the same rules to its own sessions). `upgrade` and
 `uninstall` are refused whatever directory they name.
 
-**Known limits.** On Windows, and with `MENDCODE_V2_LOCAL_TRANSPORT=tcp`, the socket carries no process identity: the CLI's
+**Known limits.** On Windows, and with `MENDCODE_LOCAL_TRANSPORT=tcp`, the socket carries no process identity: the CLI's
 refusal and the tool's are what is left. On macOS a hand-written client (not the CLI) that both starts a new terminal
 session and detaches from its parent is not recognised. A `!command` you type in the prompt runs through the same tool and
 is refused like the model's; run it in your terminal. A hook script that calls a write command is refused too. If your own

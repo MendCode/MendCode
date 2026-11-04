@@ -5,11 +5,11 @@ import { estimateTokens } from "@mendcode/protocol/wire"
 import type { PackageInfo } from "@mendcode/protocol"
 import type { ExtensionLayer } from "@mendcode/packages"
 
-/** Data-only packages have a measurable skill index and text loaded on demand. Code/config costs stay unknown. */
+/** Data-only profiles have a measurable skill index and text loaded on demand. Code/config costs stay unknown. */
 export function packageContextCost(pkg: PackageInfo, layer?: ExtensionLayer): PackageInfo["contextCost"] {
   try {
     if (pkg.problem || lstatSync(pkg.dir).isSymbolicLink()) return undefined
-    const allowed = new Set(["mendcode-package.json", ".mendcode-install.json", "commands", "skills"])
+    const allowed = new Set(["mendcode-profile.json", "mendcode-package.json", ".mendcode-install.json", "commands", "skills"])
     if (readdirSync(pkg.dir).some((name) => !allowed.has(name))) return undefined
     let files = 0, bytes = 0, chars = 0
     function visit(dir: string, depth: number) {

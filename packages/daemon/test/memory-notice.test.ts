@@ -102,7 +102,7 @@ test("the extractor waits for review on a fact that restates the request, and sa
   const id = await openSession(h)
   await h.client.send({ type: "settings.set", patch: { memoryGenerate: true, memoryRequireApproval: false, memoryPolicies: { preferences: "auto" } } })
   await say(h, id, REQUEST)
-  await until(() => h.store.extraction.list()[0]?.state === "completed")
+  await until(() => pending(h).length === 1 && h.store.extraction.list().length === 0)
   expect(saved(h)).toHaveLength(0)
   expect(pending(h).map((entry) => entry.text)).toEqual([RESTATED])
   expect(notices(h)).toHaveLength(0)

@@ -6,6 +6,7 @@ import type { EnginePort, TurnInput } from "@mendcode/kernel"
 import type { SessionId } from "@mendcode/protocol"
 import { PROGRAM_NAME } from "@mendcode/program"
 import { graphAutopilotText } from "./prompt-guidance"
+import { hostMcpPrefix } from "./host-mcp-sweep"
 
 /** The MCP server name Claude Code sees; its tools are `mcp__mendcode__<name>` there. */
 export const HOST_MCP_SERVER = "mendcode"
@@ -188,7 +189,7 @@ export function createHostMcp(options: {
     })()
     let entry = sessions.get(sessionId)
     if (!entry) {
-      const dir = mkdtempSync(path.join(tmpdir(), "mendcode-host-mcp-"))
+      const dir = mkdtempSync(path.join(tmpdir(), hostMcpPrefix()))
       entry = { token: randomBytes(32).toString("hex"), dir, file: path.join(dir, "mcp.json") }
       sessions.set(sessionId, entry)
     }

@@ -128,6 +128,7 @@ export function createPeerOrigin(options: { pid?: number; platform?: string; des
 }
 
 const MAX_CREATED = 2000
+const ATTACHMENTS = new Set<string>(["attachment.add", "attachment.put", "attachment.paste"])
 
 /**
  * What an agent-origin client may do. `open` commands pass, `owner` commands never do, and session work is held to the
@@ -146,6 +147,8 @@ export function createAgentGate(input: { modeOf(sessionId: SessionId): Permissio
     ceiling,
     /** The mode a session this client starts gets: the usual one, never above the caller's own. */
     cap: (origin: AgentOrigin, mode: PermissionMode): PermissionMode => capPermission(mode, ceiling(origin)),
+    /** Whether this calling session (known by id) started `target`. */
+    startedHere: (origin: AgentOrigin, target: string) => Boolean(origin.sessionId) && created.get(target) === origin.sessionId,
     started(origin: AgentOrigin, sessionId: string) {
       created.set(sessionId, origin.sessionId ?? "")
       if (created.size > MAX_CREATED) created.delete(created.keys().next().value!)
@@ -156,7 +159,8 @@ export function createAgentGate(input: { modeOf(sessionId: SessionId): Permissio
       if (kind === "open") return undefined
       if (kind === "owner") return refuse(`${command.type} changes what only the user decides (permissions, settings, credentials, extensions, scheduled work, other sessions or the daemon)`)
       if (command.type === "session.create") return undefined
-      const target = "sessionId" in command && typeof command.sessionId === "string" ? command.sessionId : undefined
+      // Storing a file the caller's own shell can already read grants nothing: a session-less attachment counts as the caller's own.
+      const target = "sessionId" in command && typeof command.sessionId === "string" ? command.sessionId : ATTACHMENTS.has(command.type) ? origin.sessionId : undefined
       if (!target) return refuse(`${command.type} without a session`)
       const level = ceiling(origin)
       if (command.type === "request.resolve" && command.decision.kind !== "deny") return refuse(`${command.type} (${command.decision.kind}): a session cannot answer an approval, a question or a plan review on the user's behalf`)
@@ -166,3 +170,7 @@ export function createAgentGate(input: { modeOf(sessionId: SessionId): Permissio
     },
   }
 }
+
+/** The user's own interactive terminal: it draws cards, is local, and is neither a session's shell nor a remote or peer client. */
+export const isHumanTerminal = (connection: { dialogs?: boolean | undefined; agent?: unknown; remoteAddress?: string | undefined; peer?: unknown }) =>
+  connection.dialogs === true && !connection.agent && !connection.remoteAddress && !connection.peer

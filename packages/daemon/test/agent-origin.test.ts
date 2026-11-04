@@ -29,7 +29,7 @@ describe("what an agent-origin client may ask", () => {
     // The project backlog is the user's list: a session reads it and never writes it.
     expect(agentCommandClass("backlog.get")).toBe("open")
     // `pet.manage` carries `/pet import` (it reads a file the caller names and writes the pet store) and the paid generator: the user's.
-    for (const type of ["pet.manage", "backlog.change", "settings.set", "permissions.set-default", "permissions.set-reviewer-role", "permissions.revoke", "permissions.retry", "models.default.set", "recipes.apply", "providers.set", "providers.auth.authorize", "mcp.add", "mcp.decide", "tools.trust", "extensions.disable", "packages.install", "plugins.install", "memory.add", "memory.policy", "loop.create", "loop.fire", "workflow.start", "workflow.permissions", "daemon.shutdown", "server.config.update", "server.upgrade", "secrets.reveal", "env.set", "privacy.set", "user.shell", "tui.change", "tui.control.send", "pty.create", "cache.set", "console.configure", "setup.preset", "budget.set", "session.share", "session.agent-command.update", "an.unknown.command"]) {
+    for (const type of ["pet.manage", "backlog.change", "settings.set", "permissions.set-default", "permissions.set-reviewer-role", "permissions.revoke", "permissions.retry", "models.default.set", "recipes.apply", "providers.set", "providers.auth.authorize", "mcp.add", "mcp.decide", "tools.trust", "extensions.disable", "profiles.install", "plugins.install", "memory.add", "memory.policy", "loop.create", "loop.fire", "workflow.start", "workflow.permissions", "daemon.shutdown", "server.config.update", "server.upgrade", "secrets.reveal", "env.set", "privacy.set", "user.shell", "tui.change", "tui.control.send", "pty.create", "cache.set", "console.configure", "setup.preset", "budget.set", "session.share", "session.agent-command.update", "an.unknown.command"]) {
       expect(`${type}:${agentCommandClass(type)}`).toBe(`${type}:owner`)
     }
     // Nothing is in both lists, and what a read-only remote token may ask is never the owner's alone.
@@ -68,6 +68,13 @@ describe("what an agent-origin client may ask", () => {
     expect(g.cap(ask, "full")).toBe("ask")
     expect(g.cap(full, "full")).toBe("full")
     expect(g.cap(full, "plan")).toBe("plan")
+  })
+
+  test("a known session attaches a file without naming a session (run --file); an unknown caller still cannot", () => {
+    const g = gate()
+    expect(g.check(ask, command({ type: "attachment.paste", path: "/work/a.png" }))).toBeUndefined()
+    expect(g.check(unknown, command({ type: "attachment.paste", path: "/work/a.png" }))).toContain("without a session")
+    expect(g.check(ask, command({ type: "attachment.paste", sessionId: "ses_other_full", path: "/work/a.png" }))).toContain("more authority")
   })
 
   test("a session never answers an approval, and removes only sessions it started", () => {
@@ -242,5 +249,86 @@ describe.skipIf(process.platform === "win32")("end to end: a real daemon, a real
     const sent = await run(`./evade session send ${privileged} hello --async`)
     expect(sent.isError).toBe(true)
     expect(sent.output).toContain("more authority")
+  }, 120_000)
+})
+
+describe.skipIf(process.platform === "win32")("a child above the caller's mode, end to end with the real CLI", () => {
+  const main = path.resolve(import.meta.dir, "../../../apps/cli/src/main.ts")
+
+  async function boot(withTerminal: boolean) {
+    const dir = temp("mcev-p-elev-")
+    const project = temp("mcev-p-elev-project-")
+    const daemon = await startDaemon({ dir, socketPath: path.join(dir, "mendd.sock"), defaultDirectory: project, buildId: computeBuildId(), engine: ({ clock }) => createFauxEngine({ clock, deltaMs: 1 }) })
+    const events: Array<{ type: string; sessionId?: string; requestId?: string; questions?: Array<{ context?: string }> }> = []
+    const terminal = createClient({ socketPath: daemon.socketPath, name: "owner", ...(withTerminal ? { capabilities: ["extension-dialogs"] } : {}), onEvent: (event) => void events.push(event as never) })
+    await terminal.connect()
+    cleanups.push(() => daemon.stop(), () => terminal.close())
+    const created = await terminal.send({ type: "session.create", directory: project, title: "seda" })
+    if (!created.ok) throw new Error(created.error.message)
+    const sessionId = created.result!.sessionId as SessionId
+    await terminal.subscribe(sessionId, 0)
+    const evade = path.join(project, "evade")
+    writeFileSync(evade, `#!/bin/sh\nexec env -u ${AGENT_SHELL_ENV} -u MENDCODE_SESSION_ID ${JSON.stringify(process.execPath)} ${JSON.stringify(main)} "$@"\n`)
+    chmodSync(evade, 0o755)
+    const environment = { ...process.env, MENDCODE_V2_DIR: dir, MENDCODE_SESSION_ID: sessionId }
+    const run = (command: string) => shell.execute({ command, timeoutMs: 60_000 }, { cwd: project, signal: new AbortController().signal, environment })
+    const card = async () => {
+      for (let i = 0; i < 400; i++) {
+        const found = events.find((event) => event.type === "server.request" && event.sessionId === sessionId)
+        if (found) return found
+        await Bun.sleep(25)
+      }
+      throw new Error("no card")
+    }
+    const sessions = async () => {
+      const reply = await terminal.send({ type: "session.list" })
+      if (!reply.ok) throw new Error(reply.error.message)
+      return (reply.result!.sessions as Array<{ sessionId: SessionId; title: string }>)
+    }
+    const modeOf = async (id: SessionId) => {
+      const reply = await terminal.send({ type: "session.events", sessionId: id, after: 0 })
+      if (!reply.ok) throw new Error(reply.error.message)
+      return (reply.result!.events as Array<{ type: string; mode?: string }>).filter((event) => event.type === "session.permission").at(-1)?.mode ?? "ask"
+    }
+    return { terminal, sessionId, run, card, sessions, modeOf, project }
+  }
+  const launch = "./evade run --bg --title owner -c permission=smart 'fix the flaky test'"
+
+  test("approved on the user's terminal: the child starts in smart with that prompt, and takes nothing else from the launcher", async () => {
+    const h = await boot(true)
+    const running = h.run(launch)
+    const card = await h.card()
+    const context = card.questions?.[0]?.context ?? ""
+    for (const part of ["owner", "smart", h.project, "fix the flaky test", "Model:"]) expect(context).toContain(part)
+    expect((await h.terminal.send({ type: "request.resolve", sessionId: h.sessionId, requestId: card.requestId as never, decision: { kind: "answer", text: "Approve once", answers: [["Approve once"]] } })).ok).toBe(true)
+    const result = await running
+    expect(result.isError).toBe(false)
+    const child = result.output.trim().split("\n").find((line) => line.startsWith("ses_"))!.trim() as SessionId
+    expect(await h.modeOf(child)).toBe("smart")
+    const more = await h.run(`./evade session send ${child} 'and also this' --async`)
+    expect(more.isError).toBe(true)
+    expect(more.output).toContain("one prompt")
+  }, 120_000)
+
+  test("denied: refused as before, and the empty child does not stay behind", async () => {
+    const h = await boot(true)
+    const before = (await h.sessions()).length
+    const running = h.run(launch)
+    const card = await h.card()
+    expect((await h.terminal.send({ type: "request.resolve", sessionId: h.sessionId, requestId: card.requestId as never, decision: { kind: "deny" } })).ok).toBe(true)
+    const result = await running
+    expect(result.isError).toBe(true)
+    expect(result.output).toContain("the user denied it")
+    expect((await h.sessions()).length).toBe(before)
+  }, 120_000)
+
+  test("no terminal of the user's (headless): refused at once, saying how an operator starts it", async () => {
+    const h = await boot(false)
+    const result = await h.run(launch)
+    expect(result.isError).toBe(true)
+    expect(result.output).toContain("above the calling session's own mode (ask)")
+    expect(result.output).toContain("no one has the launching session or its project open in a local terminal")
+    expect(result.output).toContain("An operator starts it from their own terminal with:")
+    expect(result.output).toContain(`run --cwd ${h.project} --bg --title owner -c permission=smart 'fix the flaky test'`)
   }, 120_000)
 })

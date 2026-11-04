@@ -11,7 +11,7 @@ import { appHarness } from "../apps/cli/test/session-ui-harness"
 import { registerThemes, setTheme } from "../apps/cli/src/ui/theme"
 import { themesFromFiles } from "../apps/cli/src/ui/theme-files"
 import { DEFAULT_TUI_PROFILE, writeTuiProfile } from "../apps/cli/src/view/tui-profile"
-import { CUSTOMIZE_ROWS } from "../apps/cli/src/view/customize-page"
+import { CUSTOMIZE_ROWS, customizeSteps } from "../apps/cli/src/view/customize-page"
 import { editorRows } from "../apps/cli/src/view/editor"
 import { fit } from "../apps/cli/src/view/deck"
 import { textWidth } from "../apps/cli/src/view/wrap"
@@ -77,7 +77,7 @@ export async function renderB65Frames(directory: string, sizes: string[]) {
         fixture.app.render()
         save(`home-${scope}-theme`, fixture.text())
         await fixture.type("/customize\r")
-        for (let row = 0; row < CUSTOMIZE_ROWS.indexOf("theme"); row++) await fixture.app.onKey("\x1b[B")
+        for (let row = 0; row < customizeSteps("theme", fixture.app.tuiProfile, { mode: fixture.app.viewMode }); row++) await fixture.app.onKey("\x1b[B")
         fixture.app.render()
         save(`customize-${scope}-theme`, fixture.text())
       }

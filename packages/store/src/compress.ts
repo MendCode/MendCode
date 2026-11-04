@@ -1,4 +1,6 @@
+import { deflateRawSync, inflateRawSync } from "node:zlib"
 import type { SessionEvent } from "@mendcode/protocol"
+import { MESSAGE_DICTIONARY_V1 } from "./message-dictionary"
 import { abbreviateMessage, expandMessage } from "./message-prefix"
 
 /** Text and file content shorter than this stays as it is: the zstd frame would eat the gain. */
@@ -11,6 +13,8 @@ const KIND_ZSTD = 0x5a
 const KIND_RAW = 0x52
 const KIND_REF = 0x46
 const KIND_MESSAGE = 0x45
+/** A small model message deflated against `MESSAGE_DICTIONARY_V1` (message-dictionary.ts); the body inflates to its abbreviated form. */
+const KIND_DICT = 0x44
 const HEADER_BYTES = 9
 const SHA_BYTES = 32
 
@@ -71,10 +75,20 @@ export function createCodec(options: { enabled?: boolean; objects?: { put(text: 
   return {
     enabled,
 
-    /** JSON text of an engine message: plain TEXT when small, a zstd BLOB when that is smaller. */
+    /**
+     * JSON text of an engine message. Under `COMPRESS_MIN_BYTES`: deflated against the message dictionary when that is smaller,
+     * its abbreviated TEXT otherwise (MendCode's own sessions: 46 % smaller than as TEXT, against 31 % for zstd alone). From there:
+     * a zstd BLOB when that is smaller.
+     */
     packText(text: string): string | Uint8Array {
       if (!enabled) return text
-      if (text.length < COMPRESS_MIN_BYTES) return abbreviateMessage(text)
+      if (text.length < COMPRESS_MIN_BYTES) {
+        const short = abbreviateMessage(text)
+        const bytes = encoder.encode(short)
+        if (decoder.decode(bytes) !== short) return short
+        const packed = deflateRawSync(bytes, { level: 9, dictionary: MESSAGE_DICTIONARY_V1 })
+        return packed.byteLength + HEADER_BYTES < bytes.byteLength ? wrap(KIND_DICT, Buffer.byteLength(text), packed) : short
+      }
       // Keep the exact JSON envelope, sharing only content already present in the transcript.
       if (options.objects) {
         let message: Record<string, unknown> | undefined
@@ -108,6 +122,7 @@ export function createCodec(options: { enabled?: boolean; objects?: { put(text: 
         return JSON.stringify(message)
       }
       if (value[4] === KIND_ZSTD) return decoder.decode(Bun.zstdDecompressSync(bodyOf(value)))
+      if (value[4] === KIND_DICT) return expandMessage(decoder.decode(inflateRawSync(bodyOf(value), { dictionary: MESSAGE_DICTIONARY_V1 })))
       return decoder.decode(bodyOf(value))
     },
     /** Raw size of a packed text: how much the row would take without compression. */

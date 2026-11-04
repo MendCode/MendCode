@@ -18,13 +18,11 @@ export type RequestExtras = {
   planReview?: import("@mendcode/protocol").PlanReview
 }
 
-export type RunningItem = { kind: ItemKind; tool?: string; /** The model is still writing the call's input; the tool has not started. */ writing?: boolean; /** Input characters written so far. */ inputChars?: number }
+export type RunningItem = { kind: ItemKind; tool?: string; /** What the call acts on (a shell call's command), from its title. */ detail?: string; /** The model is still writing the call's input; the tool has not started. */ writing?: boolean; /** Input characters written so far. */ inputChars?: number }
 
 /** A queued entry as the user typed it: its text (the original request when an extension rewrote it), attachments and what kind it is. */
 export type QueuedPrompt = { text: string; attachments: BlobRef[]; kind: "message" | "shell" | "notice" | "compact" }
 const QUEUED_KEPT = 64
-/** Characters of streamed text per token, for the estimate shown until the provider reports the call's exact usage. */
-const CHARS_PER_TOKEN = 4
 
 /**
  * What the prompt area needs from a session's events and the transcript does not keep: when the turn
@@ -38,8 +36,9 @@ export function createTurnState() {
   let input = 0
   /** The part of `input` the provider read from its prompt cache: already sent by an earlier call, not new this turn. */
   let cached = 0
-  /** Characters of answer and reasoning streamed since the last reported usage: the call in flight, not counted yet. */
-  let streamed = 0
+  /** Output tokens the engine reported for the turn in flight that no usage record holds yet (`turn.tokens`): shown, never stored; a record replaces it. */
+  let liveOutput = 0
+  let turnId: string | undefined
   let startedAt: number | undefined
   let retry: RetryState | undefined
   const running = new Map<ItemId, RunningItem>()
@@ -49,6 +48,10 @@ export function createTurnState() {
   const shellQueued = new Set<QueueId>()
   /** The full text of what is queued (the queue event carries only a 200-character preview), so a queued prompt can be pulled back to edit. Entries leave with the queue. */
   const queuedText = new Map<QueueId, QueuedPrompt>()
+  /** Entries the last queue change took out (they start a turn next), until `turn.started` claims one. */
+  let departed = new Map<QueueId, QueuedPrompt>()
+  /** What the running turn's message was as typed (text and attachments), so Esc Esc can hand it back without asking the daemon. Gone with the turn. */
+  let sent: QueuedPrompt | undefined
   /** Turns started and tokens used in this session since the client attached (for the exit summary). */
   const totals = { turns: 0, input: 0, output: 0 }
 
@@ -69,8 +72,10 @@ export function createTurnState() {
   }
 
   function endTurn() {
+    liveOutput = 0
     startedAt = undefined
     retry = undefined
+    sent = undefined
     running.clear()
   }
 
@@ -82,14 +87,17 @@ export function createTurnState() {
       switch (event.type) {
         case "turn.started":
           endTurn()
+          sent = event.joinedQueueIds?.length ? undefined : departed.get(event.queueId)
+          departed = new Map()
           output = 0
           input = 0
           cached = 0
-          streamed = 0
+          turnId = event.turnId
           startedAt = event.at
           totals.turns++
           break
         case "usage.recorded":
+          liveOutput = 0
           // v1: input counts the cache, output counts the reasoning.
           totals.input += event.input + event.cacheRead + event.cacheWrite
           totals.output += event.output + event.reasoning
@@ -97,8 +105,6 @@ export function createTurnState() {
             output += event.output + event.reasoning
             input += event.input + event.cacheRead + event.cacheWrite
             cached += event.cacheRead
-            // The call's exact count replaces what its stream suggested.
-            streamed = 0
           }
           break
         case "turn.retrying":
@@ -106,18 +112,19 @@ export function createTurnState() {
           break
         case "item.started": {
           retry = undefined
+          // A sub-agent's step shows in its own thread and row: the working row names what the main agent does, steady while agents work.
+          if (typeof event.meta?.agentParent === "string") break
           const tool = typeof event.meta?.tool === "string" ? event.meta.tool.split(":")[0]!.trim() : undefined
-          running.set(event.itemId, { kind: event.kind, ...(tool ? { tool } : {}) })
+          const full = typeof event.meta?.tool === "string" ? event.meta.tool : ""
+          const detail = tool === "shell" && full.includes(":") ?full.slice(full.indexOf(":") + 1).trim() : ""
+          running.set(event.itemId, { kind: event.kind, ...(tool ? { tool } : {}), ...(detail ? { detail } : {}) })
           break
         }
         case "item.delta": {
           retry = undefined
           const item = running.get(event.itemId)
-          if (startedAt !== undefined && (item?.kind === "agent_message" || item?.kind === "reasoning")) streamed += event.text.length
           if (item && event.input) {
-            // A tool input counts toward the turn's streamed tokens as it is written.
-            if (startedAt !== undefined) streamed += Math.max(0, event.input.chars - (item.inputChars ?? 0))
-            running.set(event.itemId, { kind: item.kind, ...(item.tool ? { tool: item.tool } : {}), ...(event.input.done ? {} : { writing: true }), inputChars: event.input.chars })
+            running.set(event.itemId, { kind: item.kind, ...(item.tool ? { tool: item.tool } : {}), ...(item.detail ? { detail: item.detail } : {}), ...(event.input.done ? {} : { writing: true }), inputChars: event.input.chars })
           }
           break
         }
@@ -152,7 +159,8 @@ export function createTurnState() {
         case "queue.changed": {
           const queued = new Set(event.queue.map((entry) => entry.queueId))
           for (const queueId of shellQueued) if (!queued.has(queueId)) shellQueued.delete(queueId)
-          for (const queueId of queuedText.keys()) if (!queued.has(queueId)) queuedText.delete(queueId)
+          departed = new Map()
+          for (const [queueId, prompt] of queuedText) if (!queued.has(queueId)) { departed.set(queueId, prompt); queuedText.delete(queueId) }
           break
         }
       }
@@ -169,9 +177,19 @@ export function createTurnState() {
     get current(): RunningItem | undefined {
       return [...running.values()].at(-1)
     },
-    /** Output tokens of this turn's finished calls (exact). */
+    /** Output tokens of this turn's finished calls: what each call's usage reported, never an estimate. */
     get output() {
       return output
+    },
+    /** The output so far: the finished calls' reported count plus what the engine has reported for the work no usage record holds yet. Never an estimate. */
+    get outputLive() {
+      return output + liveOutput
+    },
+    /** `turn.tokens`: the engine's running output count for the turn in flight; a push for another turn, or between turns, is dropped. Returns whether it changed. */
+    noteLive(event: { turnId: string; output: number }) {
+      if (startedAt === undefined || event.turnId !== turnId || event.output === liveOutput) return false
+      liveOutput = event.output
+      return true
     },
     /** Input tokens of this turn's finished calls (exact): what was sent, cache included. */
     get input() {
@@ -181,18 +199,14 @@ export function createTurnState() {
     get cached() {
       return cached
     },
-    /** The output so far: the finished calls' exact count plus an estimate of the call still streaming. */
-    get outputLive() {
-      return output + Math.ceil(streamed / CHARS_PER_TOKEN)
-    },
-    /** True while part of `outputLive` is an estimate (a call is streaming, or the engine reports no usage). */
-    get estimating() {
-      return streamed > 0
-    },
     get totals() {
       return totals as Readonly<typeof totals>
     },
     isShellQueued: (queueId: QueueId) => shellQueued.has(queueId),
+    /** The running turn's own message as typed, when this client saw it start; undefined otherwise (several joined, or attached mid-turn). */
+    get sentPrompt() {
+      return sent
+    },
     queuedPrompt: (queueId: QueueId): QueuedPrompt | undefined => queuedText.get(queueId),
     extras: (requestId: RequestId): RequestExtras => requests.get(requestId) ?? {},
   }

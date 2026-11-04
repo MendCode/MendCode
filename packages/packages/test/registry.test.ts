@@ -12,7 +12,7 @@ function fixture() {
   const userDir = temp(), directory = temp(), source = temp()
   const pack = (name: string) => {
     const folder = path.join(source, name)
-    write(path.join(folder, "mendcode-package.json"), JSON.stringify({ name, version: "1.2.0", description: `${name} helpers` }))
+    write(path.join(folder, "mendcode-profile.json"), JSON.stringify({ name, version: "1.2.0", description: `${name} helpers` }))
     write(path.join(folder, "skills", "review", "SKILL.md"), "Review code")
     write(path.join(folder, "commands", "review.md"), "Review $ARGUMENTS")
     return folder
@@ -50,7 +50,7 @@ test("show and preview do not install, execute extensions or change settings", (
   expect(readFileSync(path.join(f.userDir, "package-sources.json"), "utf8")).toBe(before)
 })
 
-test("catalog install uses the audited v2 installer; replaces are explicit and state reflects disabled packages", async () => {
+test("catalog install uses the audited v2 installer; replaces are explicit and state reflects disabled profiles", async () => {
   const f = fixture()
   f.registry.addSource("team", f.source, true)
   await f.registry.install("alpha", "team", "user", false, () => 42)
@@ -64,7 +64,7 @@ test("catalog install uses the audited v2 installer; replaces are explicit and s
 test("source application and ambiguous ids require one explicit target", async () => {
   const f = fixture()
   f.registry.addSource("team", f.source, true)
-  await expect(f.registry.install(undefined, "team", "user")).rejects.toThrow("several packages")
+  await expect(f.registry.install(undefined, "team", "user")).rejects.toThrow("several profiles")
   f.registry.addSource("single", f.beta, true)
   await f.registry.install(undefined, "single", "project")
   expect(listPackages(f)).toMatchObject([{ name: "beta", source: "project" }])
@@ -82,7 +82,7 @@ test("links, secrets and dishonest catalog metadata cannot be installed", async 
   expect(plan.problems.some((item) => item.includes("links"))).toBe(true)
   await expect(f.registry.install("alpha", "team", "user")).rejects.toThrow("secret")
   expect(listPackages(f)).toEqual([])
-  write(path.join(f.beta, "mendcode-package.json"), JSON.stringify({ name: "different", version: "9", description: "changed" }))
+  write(path.join(f.beta, "mendcode-profile.json"), JSON.stringify({ name: "different", version: "9", description: "changed" }))
   await expect(f.registry.install("beta", "team", "user")).rejects.toThrow("differs")
 })
 
@@ -144,7 +144,7 @@ test("source preview excludes files the installer skips and staged catalog metad
   write(path.join(f.alpha, "node_modules", "fixture", ".env"), "ignored fixture")
   f.registry.addSource("single", f.alpha, true)
   expect(f.registry.preview(undefined, "single", "user").problems).toEqual([])
-  await expect(installPackage({ spec: f.alpha, scope: "user", userDir: f.userDir, directory: f.directory, expected: { name: "alpha", version: "changed" } })).rejects.toThrow("staged package manifest")
+  await expect(installPackage({ spec: f.alpha, scope: "user", userDir: f.userDir, directory: f.directory, expected: { name: "alpha", version: "changed" } })).rejects.toThrow("staged profile manifest")
   expect(listPackages(f)).toEqual([])
   await f.registry.install(undefined, "single", "user")
   expect(existsSync(path.join(f.userDir, "packages", "alpha", ".git"))).toBe(false)

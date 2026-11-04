@@ -90,7 +90,7 @@ Nothing is lost: the full masked output is saved first (same `<dataDir>/tool-out
 starts with `[filtered tests: 249 → 10 lines, ~2327 tokens saved. Full output: <path>]`; read the path with `read` offset/limit
 or `grep`. With no way to save it, or a saving under 60 estimated tokens (the header must pay for itself), the output is
 returned untouched. A filtered result still over the line/byte caps is cut as before and says the unfiltered copy is at the
-path above. `meta.savedTokens` (chars / 4, an estimate, not billed) and `meta.filter` ride on the completed tool item;
+path above. `meta.savedTokens` (chars / 4, an estimate, not billed, measured against what the output limits would have shown the model without the filter) and `meta.filter` ride on the completed tool item;
 `/usage` > Tools sums them per filter as "Tokens saved". The recorded-run test in
 `packages/engine-native/test/output-filters.test.ts` is the budget: a 241-test passing run drops from over 2,000 to under 150
 estimated tokens. Other tools (read, grep, edit…) are not filtered. No external binary and no model call is involved.

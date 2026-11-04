@@ -1,6 +1,8 @@
 import type { Database } from "bun:sqlite"
 import { TaskRecord, ExtractionJob } from "@mendcode/protocol"
 
+const FAILED_KEPT = 20
+
 /** The daemon is the only writer. Claims and admission never cross an await. */
 export function createParityRecords(db: Database) {
   db.run(`CREATE TABLE IF NOT EXISTS child_tasks (
@@ -33,15 +35,21 @@ export function createParityRecords(db: Database) {
       put(job: ExtractionJob) {
         db.query("INSERT OR REPLACE INTO memory_extractions VALUES (?, ?, ?, ?)").run(job.jobId, job.sessionId, job.turnId, JSON.stringify(ExtractionJob.parse(job)))
       },
-      settle(job: ExtractionJob, commit: () => number) {
-        db.transaction(() => {
+      /**
+       * Writes the job's proposals and removes the job in one transaction: a finished job leaves no row (a row per turn grew every
+       * session). A turn is observed once, from its live `turn.completed` event, so nothing is extracted twice after a restart.
+       */
+      settle(job: ExtractionJob, commit: () => number): number {
+        return db.transaction(() => {
           const proposed = commit()
-          this.put({ ...job, state: "completed", proposed })
+          db.query("DELETE FROM memory_extractions WHERE id = ?").run(job.jobId)
+          return proposed
         })()
       },
+      /** Only queued and running jobs (to resume them) and the newest FAILED_KEPT failed or skipped ones (to retry them) stay. */
       prune() {
         const terminal = this.list().filter((job) => !["queued", "running"].includes(job.state))
-        for (const job of terminal.slice(0, Math.max(0, terminal.length - 256))) db.query("DELETE FROM memory_extractions WHERE id = ?").run(job.jobId)
+        for (const job of terminal.slice(0, Math.max(0, terminal.length - FAILED_KEPT))) db.query("DELETE FROM memory_extractions WHERE id = ?").run(job.jobId)
       },
     },
   }

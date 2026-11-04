@@ -6,19 +6,19 @@ import { parseKeybindings, type KeybindingEntry } from "./keybindings"
 import type { ActivationManifest } from "./discover"
 
 /**
- * The terminal's half of package activation: reads the enabled packages' `activate` sections and `activation.json`, and combines them
- * with the pure `resolveActivation` the daemon uses for its reports. Loaded with a dynamic import and only when an enabled package
- * declares an activation, so a terminal without any never parses this module (docs/packages.md, apps/cli/test/footprint.test.ts).
- * Nothing here writes: the overlay is computed each time, so removing a package removes it.
+ * The terminal's half of profile activation: reads the enabled profiles' `activate` sections and `activation.json`, and combines them
+ * with the pure `resolveActivation` the daemon uses for its reports. Loaded with a dynamic import and only when an enabled profile
+ * declares an activation, so a terminal without any never parses this module (docs/profiles.md, apps/cli/test/footprint.test.ts).
+ * Nothing here writes: the overlay is computed each time, so removing a profile removes it.
  */
 
 const MAX_KEYBINDINGS_BYTES = 64 * 1024
 
 export type TuiActivation = {
   result: ActivationResult
-  /** Keybinding entries of the packages, merged (later package wins), in the format of `keybindings.json`. */
+  /** Keybinding entries of the profiles, merged (later profile wins), in the format of `keybindings.json`. */
   keybindings: KeybindingEntry[]
-  /** Why a package's activation (or keybindings file) was not used; shown in /help and /packages. */
+  /** Why a profile's activation (or keybindings file) was not used; shown in /help and /profiles. */
   problems: string[]
 }
 
@@ -78,5 +78,5 @@ export function loadActivation(input: { manifests: readonly ActivationManifest[]
   const merged: Record<string, string | null> = {}
   for (const entry of result.keybindings) merged[entry.spec] = entry.action
   const parsed = parseKeybindings(JSON.stringify(merged))
-  return { result, keybindings: parsed.entries, problems: [...problems, ...parsed.problems.map((line) => `packages: ${line}`)] }
+  return { result, keybindings: parsed.entries, problems: [...problems, ...parsed.problems.map((line) => `profiles: ${line}`)] }
 }

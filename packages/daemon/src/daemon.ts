@@ -1,5 +1,5 @@
-import { DEFAULT_COMPACT_AT_TOKENS, claudeFastModel, estimateTokens } from "@mendcode/protocol/wire"
-import { claudeAlias } from "./claude-models"
+import { CACHE_SAMPLES_MAX, CACHE_SAMPLE_MIN_PROMPT_TOKENS, CACHE_SAMPLE_WINDOW_MS, DEFAULT_COMPACT_AT_TOKENS, claudeFastModel, estimateTokens, usageContext } from "@mendcode/protocol/wire"
+import { claudeAlias, claudeCompactEnv } from "./claude-models"
 import { recoverUsage } from "./usage-recovery"
 import { createConsole } from "./console"
 import { previewPastedEnvironment, readEnvironmentImport } from "./environment-import"
@@ -47,7 +47,7 @@ import { queryDatabase } from "./debug-db"
 import { createTracing, validateOtlp, type OtlpExporter } from "./tracing"
 import { createMemoryModel } from "./memory-model"
 import { createMemoryControl } from "./memory-control"
-import { memorySettings } from "./memory-config"
+import { consolidationCategories, memorySettings } from "./memory-config"
 import { daemonLogs } from "./daemon-logs"
 import { consolidateMemory } from "./memory-consolidation"
 import { createSemanticConsolidator } from "./memory-consolidator"
@@ -68,7 +68,8 @@ import { createFileFrecency } from "./file-frecency"
 import { createModelResolutions } from "./model-resolutions"
 import { createMemorySharing } from "./memory-sharing"
 import { createMemoryWorkspaces } from "./memory-workspaces"
-import { readPlanReviews } from "./plan-review"
+import { readPlanReviews, remotePlanReply } from "./plan-review"
+import { createPlanFiles, planListLines } from "./plan-files"
 import { permissionsStatus } from "./permissions"
 import { readScratchpad, writeScratchpad } from "./scratchpad"
 import { changeBacklog, readBacklog } from "./backlog"
@@ -89,7 +90,7 @@ import { defaultLocalTransport, localEndpointPath, removeLocalEndpoint, writeLoc
 import { homedir } from "node:os"
 import path from "node:path"
 import { remoteInstructions } from "./remote-instructions"
-import { ancestorLayers, BUILTIN_PACKAGE, claimLook, diagnosticLines, emptyDiagnostics, extensionLayers, foreignLayers, withForeignLayers, installPackage, listPackages, LookOwnedError, manifestCompatProblem, packageKey, PackageError, PackageNotInstalledError, readLayerThemes, releaseLook, removePackage, restorePackage, RESERVED_AGENTS, stageCapturedLook, type ExtensionLayer, type PackageHost, type ResourceDiagnostics } from "@mendcode/packages"
+import { ancestorLayers, BUILTIN_PACKAGE, claimLook, diagnosticLines, emptyDiagnostics, extensionLayers, foreignLayers, withForeignLayers, installPackage, listPackages, LookOwnedError, manifestCompatProblem, packageKey, PackageError, PackageNotInstalledError, readLayerFooterPacks, readLayerThemes, readLayerToolDesigns, releaseLook, removePackage, restorePackage, RESERVED_AGENTS, stageCapturedLook, type ExtensionLayer, type PackageHost, type ResourceDiagnostics } from "@mendcode/packages"
 import { EXTENSION_API_VERSION } from "@mendcode/extension-api"
 import { canonicalDir, createCustomToolRegistry, shell, type CustomToolRegistry, type SessionRecallPort } from "@mendcode/tools"
 import { createPackageCatalog } from "./package-catalog"
@@ -118,7 +119,7 @@ import { createQuotaRefresh, windowsSpent, type RefreshProbe } from "./quota-ref
 import type { CodegraphStatus, CodegraphStatusHub } from "./codegraph-status"
 import { graphIndexMode } from "./graph-gate"
 import { normalizeQuotaRefresh, type QuotaRefreshProvider } from "@mendcode/protocol/wire"
-import { capPermission, memoryNoticeMeta, memoryNoticeText, restatesRequest, structuredValidator } from "@mendcode/engine-native"
+import { capPermission, declaredRoots, memoryNoticeMeta, memoryNoticeText, restatesRequest, structuredValidator } from "@mendcode/engine-native"
 import { memoryMaintenance } from "./memory-maintenance"
 import { createMemoryExtraction, type ExtractedMemory } from "./memory-extraction"
 import { createChildTasks } from "./child-tasks"
@@ -132,6 +133,7 @@ import { createSecretsService } from "./secrets"
 import { createEngineHooks, createExtensions, createPromptFiles, forgetSessionEntries, type DaemonExtensions, type PromptFiles } from "./extensions"
 import { createExtensionSessions } from "./extension-sessions"
 import { createExtensionDialogs, DIALOGS_CAPABILITY } from "./extension-dialogs"
+import type { createChildElevation as CreateChildElevation } from "./child-elevation"
 import { createStatusScripts } from "./status-scripts"
 import { approvalRulePatch, offerFor } from "./approval-rules"
 import { createShellHooks } from "./shell-hooks"
@@ -216,6 +218,7 @@ import {
   type Settings,
   type SessionId,
   type UsageProfile,
+  agentRefusal,
 } from "@mendcode/protocol"
 import { effectiveSettings, featureOn, modelContextOf } from "@mendcode/protocol/wire"
 import {
@@ -232,10 +235,11 @@ import {
   type SessionEventDraft,
 } from "@mendcode/kernel"
 import { openStore, type Store } from "@mendcode/store"
-import { checkProblems, createLoopService, createProblems, describeTemplate, loopUpdateInput, LOOP_TEMPLATES, type CreateLoopInput } from "@mendcode/loops"
+import { checkProblems, createLoopService, createProblems, describeTemplate, foldRunNotices, loopUpdateInput, LOOP_TEMPLATES, runNotice, type CreateLoopInput } from "@mendcode/loops"
 import { createLoopControl } from "./loop-control"
 import { runLoopCheck, workspaceFingerprint } from "./loop-checks"
 import { createLoopPort } from "./loop-port"
+import { LOOP_INTERPRET_SYSTEM, LOOP_INTERPRET_TIMEOUT_MS, loopInterpretRequest, readInterpretation } from "./loop-interpret"
 import { createWorktreePort } from "./worktree-port"
 import { createPrWatch, type GhRun } from "./pr-watch"
 import { createReviewSessions, REVIEW_AGENT, REVIEW_EXCLUDED_TOOLS, reviewMessage } from "./pr-review/sessions"
@@ -246,14 +250,15 @@ import { createWorkflowRouter } from "./workflow-routing"
 import { createWorkflowMerge } from "./workflow-merge"
 import { createTaskWorktrees } from "./task-worktree"
 import { createAutomationLedgerHost } from "./automation-ledger"
-import { defaultPermissionFor, profileOf, rolesFor, rolesPatch, shellFor } from "./profiles"
+import { areaOf, defaultPermissionFor, rolesFor, rolesPatch, shellFor } from "./areas"
 import { memoryGraph } from "./memory-graph"
 import { checkWindow, dateKey, nextCheckIn, windows } from "./dream-schedule"
 import { createEvolutionPromotions } from "./evolution-promotion"
 import { createPeers } from "./peers"
 import { createThreads, threadMentions } from "./threads"
 import { tierDisabledPackages } from "./package-tier"
-import { createAgentGate, createPeerOrigin, type AgentOrigin } from "./agent-origin"
+import { createAgentGate, createPeerOrigin, isHumanTerminal, type AgentOrigin } from "./agent-origin"
+import { createSessionStarter } from "./session-start"
 import { continuationTurnOptions, REMOTE_HOST_SETTINGS, remoteExecutionCommand, remoteExecutionSettings, remoteTurnOptions } from "./remote-policy"
 import { SETTINGS_PROPOSAL_LOCAL } from "./settings-tool"
 import { createAgentCommands } from "./agent-commands"
@@ -279,6 +284,7 @@ import { backgroundNotice, isBackgroundNotice, watchNotice } from "./background-
 import { catalogId, catalogModel, filteredCatalog, imageRefusal, invalidChoice, modelsReport, nearModels, resolveModel, usableEffort, modelEngine, type ModelCatalog } from "./models"
 import type { ProviderService } from "./providers"
 import { createActivityThrottle } from "./session-activity"
+import { createLiveTokens } from "./live-tokens"
 import { createUsageToday, localDay } from "./usage-today"
 import type { WastePrice } from "./usage-waste"
 import { createUsageQuery, createUsageWaste } from "./usage"
@@ -410,7 +416,7 @@ export type DaemonOptions = RemoteListenerOptions & {
   /** `tcp` listens on 127.0.0.1 behind a per-start secret published in `<dir>/mendd.endpoint` (Windows default); `unix` uses `socketPath`. Defaults from the platform and `MENDCODE_V2_LOCAL_TRANSPORT`. */
   localTransport?: LocalTransport
   defaultDirectory?: string
-  engine(input: { /** Queue a notice in a session from the engine (Claude Code answered a background task's end on its own). */ notify(sessionId: SessionId, text: string): void; /** Background tasks an engine runs by itself (Claude Code's), listed with the daemon's own shells. */ engineBackground(sessionId: SessionId, tasks: ReadonlyArray<{ id: string; description: string; kind: string }>, stop?: (taskId: string) => Promise<void>): void; /** What an engine's background sub-agent does after its turn ended, recorded under that turn. */ engineAgentEvent(sessionId: SessionId, turnId: import("@mendcode/protocol").TurnId, event: import("@mendcode/kernel").EngineEvent): void; trace: import("@mendcode/protocol").TracePort; budget: BudgetPort; /** Records an engine's own calls outside a turn (the permission reviewer) for `/usage`. */ auxiliary: AuxiliaryUsagePort; reasoning: import("@mendcode/engine-native").ReasoningPort; continuity: import("@mendcode/kernel").ContinuityForSession; tasks: import("@mendcode/kernel").TaskPort; clock: Clock; store: Store; grants: GrantStore; runLimits: RunLimitsStore; sessionRules(sessionId: SessionId): readonly import("@mendcode/protocol").PermissionRule[]; emitGlobal(event: GlobalEventDraft): void; secrets: SecretsPort; memory: MemoryAccess; background(sessionId: SessionId): BackgroundPort; interactive(sessionId: SessionId): InteractivePort; workflows(sessionId: SessionId): WorkflowPort; peers(sessionId: SessionId): PeerPort; sessionMeta(sessionId: SessionId): NonNullable<import("@mendcode/tools").ToolContext["sessionMeta"]>; threads(sessionId: SessionId): import("@mendcode/tools").ThreadPort; packages(sessionId: SessionId): import("@mendcode/tools").PackagePort; loops(sessionId: SessionId): LoopPort; worktrees(sessionId: SessionId): import("@mendcode/tools").WorktreePort; prWatch(sessionId: SessionId): import("@mendcode/tools").PrWatchPort; prReview(sessionId: SessionId): import("@mendcode/tools").PrReviewPort; review(sessionId: SessionId): ReviewPort; goals(sessionId: SessionId): GoalPort; customTools: CustomToolRegistry; skills: SkillLoader; extensionLayers(directory: string): ExtensionLayer[]; agents: AgentPort; plans: { latest(sessionId: SessionId): import("@mendcode/protocol").PlanReview | undefined }; extensions: EngineExtensions; recall(sessionId: SessionId): SessionRecallPort; compound(sessionId: SessionId): CompoundCall | undefined; aiConfig(sessionId: SessionId): import("@mendcode/tools").AIConfigPort; inlineShell(text: string): InlineShell[]; computer(sessionId: SessionId): import("@mendcode/tools").ComputerPort; browser(sessionId: SessionId): import("@mendcode/tools").BrowserPort; harness: { args(sessionId: SessionId): string[]; servers(sessionId: SessionId): ReturnType<ReturnType<typeof createHostMcp>["servers"]>; waiting(): boolean; instructions(sessionId: SessionId, harness?: "claude" | "codex"): Promise<string | undefined> }; /** The local owner's settings write (`mendcode_settings` after the user approved): saved, announced, followed. */ settingsWrite(patch: Record<string, unknown>): Promise<Settings> }): EnginePort & { stop?(): void }
+  engine(input: { /** Queue a notice in a session from the engine (Claude Code answered a background task's end on its own). */ notify(sessionId: SessionId, text: string): void; /** Background tasks an engine runs by itself (Claude Code's), listed with the daemon's own shells. */ engineBackground(sessionId: SessionId, tasks: ReadonlyArray<{ id: string; description: string; kind: string }>, stop?: (taskId: string) => Promise<void>): void; /** What an engine's background sub-agent does after its turn ended, recorded under that turn. */ engineAgentEvent(sessionId: SessionId, turnId: import("@mendcode/protocol").TurnId, event: import("@mendcode/kernel").EngineEvent): void; trace: import("@mendcode/protocol").TracePort; budget: BudgetPort; /** Records an engine's own calls outside a turn (the permission reviewer) for `/usage`. */ auxiliary: AuxiliaryUsagePort; reasoning: import("@mendcode/engine-native").ReasoningPort; continuity: import("@mendcode/kernel").ContinuityForSession; tasks: import("@mendcode/kernel").TaskPort; clock: Clock; store: Store; grants: GrantStore; runLimits: RunLimitsStore; sessionRules(sessionId: SessionId): readonly import("@mendcode/protocol").PermissionRule[]; emitGlobal(event: GlobalEventDraft): void; secrets: SecretsPort; memory: MemoryAccess; background(sessionId: SessionId): BackgroundPort; interactive(sessionId: SessionId): InteractivePort; workflows(sessionId: SessionId): WorkflowPort; peers(sessionId: SessionId): PeerPort; sessionMeta(sessionId: SessionId): NonNullable<import("@mendcode/tools").ToolContext["sessionMeta"]>; threads(sessionId: SessionId): import("@mendcode/tools").ThreadPort; packages(sessionId: SessionId): import("@mendcode/tools").PackagePort; loops(sessionId: SessionId): LoopPort; loopRun: import("@mendcode/engine-native").LoopRunPort; worktrees(sessionId: SessionId): import("@mendcode/tools").WorktreePort; prWatch(sessionId: SessionId): import("@mendcode/tools").PrWatchPort; prReview(sessionId: SessionId): import("@mendcode/tools").PrReviewPort; review(sessionId: SessionId): ReviewPort; goals(sessionId: SessionId): GoalPort; customTools: CustomToolRegistry; skills: SkillLoader; extensionLayers(directory: string): ExtensionLayer[]; agents: AgentPort; plans: { latest(sessionId: SessionId): import("@mendcode/protocol").PlanReview | undefined; pointer?(sessionId: SessionId): string | undefined; roots?(sessionId: SessionId): string[]; anchored?(sessionId: SessionId): void }; extensions: EngineExtensions; recall(sessionId: SessionId): SessionRecallPort; compound(sessionId: SessionId): CompoundCall | undefined; aiConfig(sessionId: SessionId): import("@mendcode/tools").AIConfigPort; inlineShell(text: string): InlineShell[]; computer(sessionId: SessionId): import("@mendcode/tools").ComputerPort; browser(sessionId: SessionId): import("@mendcode/tools").BrowserPort; harness: { args(sessionId: SessionId): string[]; servers(sessionId: SessionId): ReturnType<ReturnType<typeof createHostMcp>["servers"]>; waiting(): boolean; instructions(sessionId: SessionId, harness?: "claude" | "codex"): Promise<string | undefined> }; /** The local owner's settings write (`mendcode_settings` after the user approved): saved, announced, followed. */ settingsWrite(patch: Record<string, unknown>): Promise<Settings> }): EnginePort & { stop?(): void }
   reasoningEvaluator?: import("@mendcode/engine-native").ReasoningEvaluator
   /** Extension diagnostics (load failures, the first error of each extension); defaults to stderr. */
   log?(level: "debug" | "info" | "warn" | "error", message: string): void
@@ -427,10 +433,12 @@ export type DaemonOptions = RemoteListenerOptions & {
   extensionsEnabled?: boolean
   /** Whether shell command hooks (`hooks.json`) run at all; defaults to `MENDCODE_HOOKS !== "0"`. */
   shellHooksEnabled?: boolean
-  /** `--safe-mode`: reported in `daemon.info`; the host also turns extensions, hooks, MCP and project tools off (docs/tiers.md). Packages are dropped here. */
+  /** `--safe-mode`: reported in `daemon.info`; the host also turns extensions, hooks, MCP and project tools off (docs/tiers.md). Profiles are dropped here. */
   safeMode?: boolean
   clock?: Clock
   cancelGraceMs?: number
+  /** A development daemon (docs/dev-mode.md): the PR review watch, Dream and loop triggers never run in it, whatever its settings say. */
+  dev?: boolean
   /** Reported in the handshake so clients can detect a stale daemon. */
   buildId?: string
   mcp?: McpControl
@@ -660,17 +668,19 @@ export async function startDaemon(options: DaemonOptions) {
    * next tool result (so the model that started the task is not left waiting for it); an idle session is woken by it, and after a user
    * cancel it waits for the user (FC-13).
    */
-  const interactive = createInteractiveProcesses(options.interactive?.driver ? { driver: options.interactive.driver } : {})
+  // Commands the agent leaves running have no cap unless the user sets `processLimits` (docs/interactive-tools.md); read at each start and sweep.
+  const minutesToMs = (minutes: number | undefined) => minutes === undefined ? undefined : minutes * 60_000
+  const interactive = createInteractiveProcesses({ ...(options.interactive?.driver ? { driver: options.interactive.driver } : {}), caps: () => { const limits = store.settings.get().processLimits; return { idleMs: minutesToMs(limits?.idleMinutes), maxLifetimeMs: minutesToMs(limits?.lifetimeMinutes) } } })
   // The exit notice is dropped unread once shell_output gave the model that task's exit and final output itself.
-  const background: ReturnType<typeof createBackgroundTasks> = createBackgroundTasks({ onExit: (sessionId, task, tail) => void actorFor(sessionId as SessionId)?.notify(secrets.mask(sessionId as SessionId, backgroundNotice(task, tail)), undefined, false, "steer", true, () => background.exitShown(sessionId, task.id)), onWatch: (sessionId, task, lines, final) => void actorFor(sessionId as SessionId)?.notify(secrets.mask(sessionId as SessionId, watchNotice(task, lines, final)), undefined, false, "steer", true) })
+  const background: ReturnType<typeof createBackgroundTasks> = createBackgroundTasks({ lifetimeMs: () => minutesToMs(store.settings.get().processLimits?.lifetimeMinutes), onExit: (sessionId, task, tail) => void actorFor(sessionId as SessionId)?.notify(secrets.mask(sessionId as SessionId, backgroundNotice(task, tail)), undefined, false, "steer", true, () => background.exitShown(sessionId, task.id)), onWatch: (sessionId, task, lines, final) => void actorFor(sessionId as SessionId)?.notify(secrets.mask(sessionId as SessionId, watchNotice(task, lines, final)), undefined, false, "steer", true) })
 
-  /** Where extensions are found for a project: what ships with MendCode, enabled packages, then the user's and the project's own folders. */
+  /** Where extensions are found for a project: what ships with MendCode, enabled profiles, then the user's and the project's own folders. */
   const builtin = builtinDir(options.dir)
-  // Safe mode drops every installed package (user and project); MendCode's own folder and the user's and project's own folders stay.
-  const runtimeDisabledPackages = () => [...(store.settings.get().disabledPackages ?? []), ...tierDisabledPackages(store.settings.get())]
-  /** What a package's `compatibility` is checked against when it is installed or enabled. */
+  // Safe mode drops every installed profile (user and project); MendCode's own folder and the user's and project's own folders stay.
+  const runtimeDisabledPackages = () => [...(store.settings.get().disabledProfiles ?? []), ...tierDisabledPackages(store.settings.get())]
+  /** What a profile's `compatibility` is checked against when it is installed or enabled. */
   const packageHost: PackageHost = { appVersion: options.runtimeInfo?.version ?? DEV_VERSION, apiVersion: EXTENSION_API_VERSION }
-  const layersFor = (directory: string) => extensionLayers({ userDir: options.dir, directory: path.resolve(directory), disabled: runtimeDisabledPackages(), disabledResources: store.settings.get().disabledPackageResources ?? [], builtinDir: builtin })
+  const layersFor = (directory: string) => extensionLayers({ userDir: options.dir, directory: path.resolve(directory), disabled: runtimeDisabledPackages(), disabledResources: store.settings.get().disabledProfileResources ?? [], builtinDir: builtin })
     .filter((layer) => !options.safeMode || !layer.pkg || layer.pkg === BUILTIN_PACKAGE)
   /**
    * The layers the skill, command and agent loaders read: `layersFor` plus the data-only `.agents` and `.claude` folders (settings
@@ -682,73 +692,73 @@ export async function startDaemon(options: DaemonOptions) {
     const foreign = store.settings.get().foreignResources === false ? { user: [], project: [] } : foreignLayers({ directory: path.resolve(directory), home: options.foreignHome })
     return withForeignLayers(layers, { user: foreign.user, project: [...parents, ...foreign.project] }, options.dir)
   }
-  const packageCatalog = createPackageCatalog({ capabilities: () => featureOn(store.settings.get(), "package_capabilities"), host: packageHost, userDir: options.dir, now: clock.now, disabled: () => store.settings.get().disabledPackages ?? [], runtimeDisabled: runtimeDisabledPackages, disabledResources: () => store.settings.get().disabledPackageResources ?? [], ...(options.packageFetchers ? { fetchers: options.packageFetchers } : {}), layers: layersFor, promptMode: (directory) => promptModes.status(directory).mode, setDisabled: (keys) => {
-    const settings = store.settings.set({ disabledPackages: keys.length ? keys : null })
+  const packageCatalog = createPackageCatalog({ capabilities: () => featureOn(store.settings.get(), "profile_capabilities"), host: packageHost, userDir: options.dir, now: clock.now, disabled: () => store.settings.get().disabledProfiles ?? [], runtimeDisabled: runtimeDisabledPackages, disabledResources: () => store.settings.get().disabledProfileResources ?? [], ...(options.packageFetchers ? { fetchers: options.packageFetchers } : {}), layers: layersFor, promptMode: (directory) => promptModes.status(directory).mode, setDisabled: (keys) => {
+    const settings = store.settings.set({ disabledProfiles: keys.length ? keys : null })
     globalSink.append({ type: "settings.changed", settings })
   }, setDisabledResources: (keys) => {
-    const settings = store.settings.set({ disabledPackageResources: keys.length ? keys : null })
+    const settings = store.settings.set({ disabledProfileResources: keys.length ? keys : null })
     globalSink.append({ type: "settings.changed", settings })
   }, reload: (directory) => reloadPackages(directory) })
   const packageAuthoring = createPackageAuthoring({ settings: () => store.settings.get(), prompt: (directory) => promptModes.status(directory), tui: () => tuiControl.run({ operation: "status" }).profile, now: clock.now, reload: (directory) => reloadPackages(directory) })
-  /** After a package is installed, enabled, disabled, removed or edited: the MCP server set is rebuilt (stale servers stop) before the UI reloads. */
+  /** After a profile is installed, enabled, disabled, removed or edited: the MCP server set is rebuilt (stale servers stop) before the UI reloads. */
   const reloadPackages = async (directory: string) => {
     await options.mcp?.invalidate?.()
     return uiReload.reload(directory)
   }
 
-  type ManagedCommand = Extract<Command, { type: "packages.list" | "packages.install" | "packages.capture" | "packages.remove" | "packages.restore" | "packages.enable" }>
+  type ManagedCommand = Extract<Command, { type: "profiles.list" | "profiles.install" | "profiles.capture" | "profiles.remove" | "profiles.restore" | "profiles.enable" }>
   async function managePackages(command: ManagedCommand): Promise<Record<string, unknown>> {
     const directory = path.resolve(command.directory)
-    if (command.type === "packages.capture") {
-      // The stored profile becomes a package's look, installed through the same audit and look claim as any folder.
+    if (command.type === "profiles.capture") {
+      // The stored profile becomes a profile's look, installed through the same audit and look claim as any folder.
       const staged = stageCapturedLook({ userDir: options.dir, name: command.name, profile: tuiControl.run({ operation: "status" }).profile })
       try {
-        const report = await managePackages({ ...command, type: "packages.install", source: staged.dir, scope: "user" })
+        const report = await managePackages({ ...command, type: "profiles.install", source: staged.dir, scope: "user" })
         return { ...report, skipped: staged.skipped }
       } finally { staged.cleanup() }
     }
-    const setDisabled = (keys: string[]) => globalSink.append({ type: "settings.changed", settings: store.settings.set({ disabledPackages: keys.length ? keys : null }) })
+    const setDisabled = (keys: string[]) => globalSink.append({ type: "settings.changed", settings: store.settings.set({ disabledProfiles: keys.length ? keys : null }) })
     try {
-      if (command.type === "packages.install") {
+      if (command.type === "profiles.install") {
         const installed = await installPackage({ spec: command.source, scope: command.scope, userDir: options.dir, directory, replace: command.replace === true, now: clock.now, host: packageHost, ...(options.packageFetchers ? { fetchers: options.packageFetchers } : {}) })
         const key = packageKey(command.scope, installed.name)
-        const disabled = store.settings.get().disabledPackages ?? []
+        const disabled = store.settings.get().disabledProfiles ?? []
         const next = disabled.filter((entry) => entry !== key)
         if (next.length !== disabled.length) setDisabled(next)
-        // Installing enables it, so it claims the look like `packages.enable` does; when another package owns the look this one stays installed but off.
+        // Installing enables it, so it claims the look like `profiles.enable` does; when another profile owns the look this one stays installed but off.
         try { claimLook({ userDir: options.dir, directory, key, disabled: runtimeDisabledPackages() }) } catch (error) {
           if (error instanceof LookOwnedError) { setDisabled([...new Set([...next, key])]); await reloadPackages(directory) }
           throw error
         }
       }
-      if (command.type === "packages.remove") {
+      if (command.type === "profiles.remove") {
         if (!removePackage({ name: command.name, scope: command.scope, userDir: options.dir, directory, purge: command.purge === true, now: clock.now }))
           throw new PackageNotInstalledError(`${packageKey(command.scope, command.name)} is not installed`)
         releaseLook({ userDir: options.dir, directory, key: packageKey(command.scope, command.name) })
       }
-      if (command.type === "packages.restore") {
+      if (command.type === "profiles.restore") {
         restorePackage({ name: command.name, scope: command.scope, userDir: options.dir, directory })
         // Back from the Trash it stays off until the user enables it (which checks it again).
-        setDisabled([...new Set([...(store.settings.get().disabledPackages ?? []), packageKey(command.scope, command.name)])])
+        setDisabled([...new Set([...(store.settings.get().disabledProfiles ?? []), packageKey(command.scope, command.name)])])
       }
-      if (command.type === "packages.enable") {
+      if (command.type === "profiles.enable") {
         const pkg = listPackages({ userDir: options.dir, directory }).find((item) => item.key === command.key)
         if (!pkg) throw new PackageError(`${command.key} is not installed`)
         if (command.enabled && pkg.manifest) {
           const incompatible = manifestCompatProblem(pkg.manifest, packageHost)
           if (incompatible) throw new PackageError(`${command.key} ${incompatible}`)
         }
-        // Claiming the look can refuse (another package owns it); that happens before anything is changed.
+        // Claiming the look can refuse (another profile owns it); that happens before anything is changed.
         const claim = command.enabled ? claimLook({ userDir: options.dir, directory, key: command.key, disabled: runtimeDisabledPackages(), ...(command.switch ? { switch: true } : {}) }) : undefined
         if (!command.enabled) releaseLook({ userDir: options.dir, directory, key: command.key })
-        const current = store.settings.get().disabledPackages ?? []
+        const current = store.settings.get().disabledProfiles ?? []
         setDisabled(command.enabled ? [...new Set([...current.filter((key) => key !== command.key), ...(claim?.off ? [claim.off] : [])])] : [...new Set([...current, command.key])])
       }
     } catch (error) {
       if (error instanceof PackageError) throw error
       throw error
     }
-    if (command.type !== "packages.list") await reloadPackages(directory)
+    if (command.type !== "profiles.list") await reloadPackages(directory)
     const packages = listPackages({ userDir: options.dir, directory, disabled: runtimeDisabledPackages() })
     const layers = resourceLayersFor(directory)
     for (const pkg of packages) {
@@ -764,7 +774,7 @@ export async function startDaemon(options: DaemonOptions) {
     if (!port) {
       const directory = store.sessionDirectory(sessionId)
       if (!directory) throw new PackageError("Session directory unavailable")
-      port = createSelfPackages({ userDir: options.dir, directory, host: packageHost, local: () => !options.safeMode && featureOn(store.settings.get(), "package_tools") && store.meta.get(`session.local-tools.restricted:${sessionId}`) !== "true", trusted: () => (store.settings.get().trustedToolDirs ?? []).includes(canonicalDir(directory)), disabled: runtimeDisabledPackages, disabledResources: () => store.settings.get().disabledPackageResources ?? [], layers: () => resourceLayersFor(directory), manage: (command) => managePackages(command as ManagedCommand), catalog: (command) => packageCatalog(command as Parameters<typeof packageCatalog>[0]) })
+      port = createSelfPackages({ userDir: options.dir, directory, host: packageHost, local: () => !options.safeMode && featureOn(store.settings.get(), "profile_tools") && store.meta.get(`session.local-tools.restricted:${sessionId}`) !== "true", trusted: () => (store.settings.get().trustedToolDirs ?? []).includes(canonicalDir(directory)), disabled: runtimeDisabledPackages, disabledResources: () => store.settings.get().disabledProfileResources ?? [], layers: () => resourceLayersFor(directory), manage: (command) => managePackages(command as ManagedCommand), catalog: (command) => packageCatalog(command as Parameters<typeof packageCatalog>[0]) })
       selfPackagePorts.set(sessionId, port)
     }
     return port
@@ -782,7 +792,7 @@ export async function startDaemon(options: DaemonOptions) {
     },
   })
 
-  /** Custom tools of every layer's `tools/`; project ones (the project's own and its packages') once the directory is trusted. */
+  /** Custom tools of every layer's `tools/`; project ones (the project's own and its profiles') once the directory is trusted. */
   const customTools = createCustomToolRegistry({ userDir: options.dir, trustedDirs: () => store.settings.get().trustedToolDirs ?? [], layers: layersFor })
 
   /**
@@ -862,6 +872,47 @@ export async function startDaemon(options: DaemonOptions) {
     mask: (sessionId, text) => secrets.mask(sessionId, text),
   })
   /**
+   * A session's shell asking for a child above its own mode: one card to the user (child-elevation.ts). The module loads on the
+   * first such request; until then there is nothing pending or approved, so the other calls have nothing to do.
+   */
+  let elevation: ReturnType<typeof CreateChildElevation> | undefined
+  let elevationLoading: Promise<ReturnType<typeof CreateChildElevation>> | undefined
+  async function askChildElevation(input: Parameters<ReturnType<typeof CreateChildElevation>["request"]>[0]) {
+    elevationLoading ??= import("./child-elevation").then((module) => (elevation = module.createChildElevation({
+        humanSessions(launcher) {
+          const project = store.sessionDirectory(launcher)
+          const open = [...connections].filter(isHumanTerminal).flatMap((connection) => [...connection.subscriptions.keys()])
+          const nearby = project ? open.filter((id) => id !== launcher && store.sessionDirectory(id) !== undefined && canonicalDir(store.sessionDirectory(id)!) === canonicalDir(project)) : []
+          return [...new Set([...open.filter((id) => id === launcher), ...nearby])]
+        },
+        turnOf: (sessionId) => actors.get(sessionId)?.snapshot().turnId,
+        requestId: () => ids("request"),
+        turnId: () => ids("turn"),
+        emit: (event) => void sessionSink.append(event),
+        mask: (sessionId, text) => secrets.mask(sessionId, text),
+        facts(child) {
+          const directory = store.sessionDirectory(child) ?? ""
+          const model = resolveModel({ role: "main", session: store.sessionModel(child), roles: rolesFor(store.settings.get(), directory), catalog })
+          const limits = runLimits.get(child)
+          const agent = store.sessionAgent(child)
+          return {
+            title: store.sessionInfo(child)?.title ?? "",
+            directory,
+            model: `${model.model}${model.effort ? ` (effort ${model.effort})` : ""}`,
+            ...(agent && agent !== "build" ? { agent } : {}),
+            ...(limits?.addDirs?.length ? { addDirs: limits.addDirs } : {}),
+            ...(limits?.maxSteps ? { maxTurns: limits.maxSteps } : {}),
+            ...(limits?.systemPrompt !== undefined ? { systemPrompt: "replaced" as const } : limits?.appendSystemPrompt ? { systemPrompt: "appended" as const } : {}),
+          }
+        },
+        fresh: (child) => store.turns.list(child).length === 0 && store.queueOf(child).length === 0 && actors.get(child)?.snapshot().turnId === undefined,
+        async apply(child, mode, clientId) {
+          await actorFor(child)?.handle({ id: ids("command"), clientId: (clientId ?? taskClientId) as never, type: "session.permission.set", sessionId: child, mode })
+        },
+      })))
+    return (await elevationLoading).request(input)
+  }
+  /**
    * Shell command hooks (`hooks.json`): user ones run as configured, project ones only in a directory trusted for project
    * tools. They are read from this machine's folders only; nothing a client sends configures them. `MENDCODE_HOOKS=0` turns them off.
    */
@@ -934,16 +985,20 @@ export async function startDaemon(options: DaemonOptions) {
     },
     transcript(main, afterSeq) {
       const last = store.lastSeq(main) ?? 0
-      const events = visibleEvents(store.readAfter(main, Math.max(afterSeq, last - 4_000), 4_000))
+      const from = Math.max(afterSeq, last - 4_000)
+      const events = visibleEvents(store.readAfter(main, from, 4_000))
       // What is still being written is sent again, finished, with the next question.
       const open = new Map<string, number>()
       for (const event of events) {
         if (event.type === "item.started") open.set(event.itemId, event.seq)
         else if (event.type === "item.completed") open.delete(event.itemId)
       }
-      return { text: asideTranscript(events), seq: open.size ? Math.min(...open.values()) - 1 : last }
+      const text = asideTranscript(events)
+      return { text, seq: open.size ? Math.min(...open.values()) - 1 : last, cut: from > afterSeq || text.startsWith("…") }
     },
-    permission: (main) => capPermission(livePermission(main), agents.port().primary(main)?.permission),
+    now: () => clock.now(),
+    // The main session's mode, but a full-access one counts as `smart` here; the engine then runs only read-only commands in a side session (`tasks.readOnly`), whatever the mode (docs/btw.md).
+    permission: (main) => capPermission(capPermission(livePermission(main), agents.port().primary(main)?.permission), "smart"),
     async submit(side, text, mode) {
       const actor = actorFor(side)
       if (!actor) throw new Error("side session is gone")
@@ -982,7 +1037,7 @@ export async function startDaemon(options: DaemonOptions) {
   const skills = createSkillLoader({ userDir: options.dir, layers: resourceLayersFor, paths: (directory) => projectSources(directory, store.settings.get()).skills, enabled: (directory, name) => !(store.settings.get().disabledSkills?.[canonicalDir(directory)] ?? []).includes(name) })
   /**
    * Command files plus the enabled skills the user can run as `/name`; built-in and custom commands win a name clash and the clash is reported.
-   * What ships with MendCode itself (the `builtin` package's skills) stays out of the slash menu: the model and `/skills` reach it, the menu keeps its fixed built-in list.
+   * What ships with MendCode itself (the `builtin` profile's skills) stays out of the slash menu: the model and `/skills` reach it, the menu keeps its fixed built-in list.
    */
   const slashSkills = (directory: string) => skills.list(directory).filter((skill) => skill.pkg !== BUILTIN_PACKAGE && skills.enabled(directory, skill.name))
   const loadCustomCommands = (input: Parameters<typeof loadCommandFiles>[0]) => loadCommandFiles({ ...input, skills: slashSkills(input.directory) })
@@ -1131,6 +1186,8 @@ export async function startDaemon(options: DaemonOptions) {
       if (turnId) await actorFor(sessionId)!.handle({ id: ids("command"), clientId: taskClientId, type: "turn.cancel", sessionId, turnId })
     },
   })
+  /** Whether a session may start sub-agents: a side question never, a workflow task only when `subagentDepth` nests, anything else below that depth. */
+  const nests = (sessionId: SessionId) => asideSessions.isAside(sessionId) ? false : workflows.execution(sessionId) !== undefined ? (store.settings.get().subagentDepth ?? 1) > 1 : tasks.port.nests(sessionId)
   /** `@name message` to a child this session already has: it continues that child (docs/agents.md, "`@agent` mentions"). */
   const mentionRouting = createMentionRouting({
     children: (parentId) => tasks.list(parentId),
@@ -1174,7 +1231,7 @@ export async function startDaemon(options: DaemonOptions) {
     auxiliary: auxiliaryUsage,
     trace,
     // A side session (`/btw`) runs as a child: its agent's tools and model, no orientation, no recall.
-    tasks: { ...tasks.modelPort, isChild: (sessionId) => tasks.modelPort.isChild(sessionId) || asideSessions.isAside(sessionId) },
+    tasks: { ...tasks.modelPort, isChild: (sessionId) => tasks.modelPort.isChild(sessionId) || asideSessions.isAside(sessionId), nests, readOnly: (sessionId) => asideSessions.isAside(sessionId) },
     clock,
     store,
     grants,
@@ -1186,7 +1243,7 @@ export async function startDaemon(options: DaemonOptions) {
     secrets,
     extensionLayers: layersFor,
     agents: agents.port(),
-    plans: { latest: (sessionId) => readPlanReviews(store, sessionId, 1)[0] },
+    plans: { latest: (sessionId) => readPlanReviews(store, sessionId, 1)[0], pointer: (sessionId) => planFiles.pointer(sessionId), roots: (sessionId) => planFiles.roots(sessionId), anchored: (sessionId) => planFiles.anchored(sessionId) },
     background: (sessionId) => background.forSession(sessionId),
     interactive: (sessionId) => interactive.forSession(sessionId),
     // The host is built below; tools only call this during turns, after startup.
@@ -1211,7 +1268,9 @@ export async function startDaemon(options: DaemonOptions) {
     },
     review: (sessionId) => reviews.port(sessionId),
     // Built below with the loop service; tools only call this during turns.
-    loops: (sessionId) => createLoopPort({ directory: store.sessionInfo(sessionId)?.directory ?? process.cwd(), service: loops, create: createLoop }),
+    loops: (sessionId) => createLoopPort({ directory: store.sessionInfo(sessionId)?.directory ?? process.cwd(), sessionId, service: loops, create: createLoop }),
+    // Loop runs: report-only runs have no plan tools; reads the loop's creator could make without asking do not ask again.
+    loopRun: { reportOnly: (sessionId) => loops.reportOnlySession(sessionId), inheritedReads: (sessionId) => loopInheritedReads(sessionId) },
     // The project service is built on first use; the `worktree` tool only calls this during turns.
     worktrees: (sessionId) => worktreePort(sessionId),
     prWatch: (sessionId) => prWatch.port(sessionId),
@@ -1231,9 +1290,9 @@ export async function startDaemon(options: DaemonOptions) {
     emitGlobal: (event) => void globalSink.append(event),
     memory: {
       request: (directory, input) => modelMemory.request(directory, input),
-      saved: (directory) => store.memories.list({ directory, status: "saved", profile: profileOf(store.settings.get(), directory) }),
-      visible: ({ directory, sessionId }) => store.memories.list({ directory, status: "saved", profile: profileOf(store.settings.get(), directory), ...(sessionId ? { session: sessionId } : {}) }),
-      related: ({ directory, sessionId, prompt, limit }) => store.memories.related({ text: prompt, directory, limit, profile: profileOf(store.settings.get(), directory), ...(sessionId ? { session: sessionId } : {}) }),
+      saved: (directory) => store.memories.list({ directory, status: "saved", profile: areaOf(store.settings.get(), directory) }),
+      visible: ({ directory, sessionId }) => store.memories.list({ directory, status: "saved", profile: areaOf(store.settings.get(), directory), ...(sessionId ? { session: sessionId } : {}) }),
+      related: ({ directory, sessionId, prompt, limit }) => store.memories.related({ text: prompt, directory, limit, profile: areaOf(store.settings.get(), directory), ...(sessionId ? { session: sessionId } : {}) }),
       links: (memoryIds) => store.memories.links(memoryIds),
       propose: (entry) => proposeMemory(entry),
       graph: (directory) => graphFor(directory),
@@ -1300,9 +1359,18 @@ export async function startDaemon(options: DaemonOptions) {
     return { text: inlined.text, attachments: inlined.refs }
   }
 
+  /** Loop notices the creator's model has not read yet: one entry per loop, folded into the user's next message. In memory only; the transcript keeps every notice. */
+  const LOOP_NOTES_MAX = 5
+  type LoopNote = { text: string; runs: number; seq: number }
+  const loopNotes = new Map<SessionId, Map<string, LoopNote>>()
   const engine: typeof rawEngine = {
     ...rawEngine,
     async runTurn(turn) {
+      const unread = !turn.authority?.synthetic ? loopNotes.get(turn.sessionId) : undefined
+      if (unread?.size) {
+        loopNotes.delete(turn.sessionId)
+        turn = { ...turn, text: `${foldRunNotices([...unread.values()])}\n\n${turn.text}` }
+      }
       // A system continuation must not acquire tools its paused peer turn could not call, including after restart.
       const restrictionKey = `session.local-tools.restricted:${turn.sessionId}`
       if (turn.authority?.synthetic) {
@@ -1357,11 +1425,14 @@ export async function startDaemon(options: DaemonOptions) {
       const carried = portable.prepare({ sessionId: turn.sessionId, turnId: turn.turnId, key: engineKeyOf(model) })
       // An engine of another program (Claude Code, an ACP agent) takes the agent override as a permission ceiling and instructions.
       const profile = agents.port().primary(turn.sessionId, turn.selection?.agent)
-      const routed = withHandoff(external ? withExternalAgent(turn, profile) : turn, carried.blocks)
+      // After a compaction (whichever engine did it) the first turn is told where the plan file is, not given the plan.
+      const planNote = planFiles.afterCompaction(turn.sessionId)
+      const routed = withHandoff(external ? withExternalAgent(turn, profile, () => agents.port().primary(turn.sessionId, turn.selection?.agent)) : turn, planNote ? [...carried.blocks, planNote.text] : carried.blocks)
       const key = model.model.startsWith("acp:") ? acpAgentKey(model.model) as `acp:${string}` : modelEngine(model, catalog) ?? options.info?.engine
       let lease: ReturnType<NonNullable<typeof threadBridge>["open"]> | undefined
       try {
-        if ((key === "claude" || key === "codex" || key?.startsWith("acp:")) && threadMcpEnabled(store.settings.get(), key as BridgeEngine, options.safeMode)) {
+        // A sub-agent gets no thread bridge (no sub-agents of its own) unless `subagentDepth` lets it nest.
+        if (nests(turn.sessionId) && (key === "claude" || key === "codex" || key?.startsWith("acp:")) && threadMcpEnabled(store.settings.get(), key as BridgeEngine, options.safeMode)) {
           const bridgeKey = key as BridgeEngine
           const module = await import("./thread-mcp")
           const { createOrchestrationReceipts } = await import("./orchestration-receipts")
@@ -1401,7 +1472,9 @@ export async function startDaemon(options: DaemonOptions) {
         // Calls Claude Code, Codex or an ACP agent makes to MendCode's tools during this turn run as calls of this turn.
         const leave = key === "claude" || key === "codex" || key?.startsWith("acp:") ? hostBridge.enter(routed) : undefined
         const outcome = await rawEngine.runTurn(routed).finally(() => leave?.())
-        if (outcome.status === "ok") carried.commit()
+        if (outcome.status === "ok") { carried.commit(); planNote?.done() }
+        // The native engine keeps its own turn in its history however it ended: it is not handed to it again as another engine's.
+        else if (!external) carried.ran()
         return outcome.status === "error" && lease ? { ...outcome, message: lease.scrub(outcome.message) } : outcome
       } catch (error) {
         if (lease) throw new Error(lease.scrub(error instanceof Error ? error.message : String(error)))
@@ -1454,7 +1527,7 @@ export async function startDaemon(options: DaemonOptions) {
       const asked = job.text.split("\n").filter((line) => line.startsWith("user:")).map((line) => line.slice(5)).join(" ")
       for (const memory of memories.slice(0, 20)) {
         if (!memory.text.trim() || memory.text.length > 2_000) continue
-        const entries = store.memories.list({ directory: job.directory, profile: profileOf(store.settings.get(), job.directory) })
+        const entries = store.memories.list({ directory: job.directory, profile: areaOf(store.settings.get(), job.directory) })
         const normalized = (text: string) => text.normalize("NFKC").toLowerCase().replace(/\s+/g, " ").trim()
         if (entries.some((entry) => normalized(entry.text) === normalized(memory.text) && entry.status !== "archived")) continue
         const result = proposeMemory({ ...memory, directory: job.directory, forceReview: memorySettings(store.settings.get(), job.directory).memoryRequireApproval !== false || restatesRequest(asked, memory.text) })
@@ -1480,7 +1553,7 @@ export async function startDaemon(options: DaemonOptions) {
   })
   function maintainMemory(directory?: string) {
     const settings = memorySettings(store.settings.get(), directory)
-    const report = memoryMaintenance(store.memories.list({ ...(directory ? { directory } : {}), profile: profileOf(settings, directory) }), settings.memoryMaintenance)
+    const report = memoryMaintenance(store.memories.list({ ...(directory ? { directory } : {}), profile: areaOf(settings, directory) }), settings.memoryMaintenance)
     if (report.policy === "auto-consolidate" && settings.memoryEnabled !== false) for (const duplicate of report.duplicates) {
       store.memories.update(duplicate.memoryId, { status: "archived" })
       globalSink.append({ type: "memory.changed", memoryId: duplicate.memoryId, change: "updated" })
@@ -1504,7 +1577,9 @@ export async function startDaemon(options: DaemonOptions) {
   extraction.wake()
   const metadata = createSessionMetadata({ store, complete: options.info?.engine === "native" ? completeBudgeted : undefined, settings: () => store.settings.get(), agent: (id, role) => agents.auxiliary(store.sessionDirectory(id)!, role), model: (id, role) => resolveModel({ role, session: store.sessionModel(id), roles: rolesFor(store.settings.get(), store.sessionDirectory(id)), catalog }), changed: (id) => publishActivity(id, actors.get(id)?.snapshot().foreground ?? "idle", true) })
   let wakeSettledPrune: (() => void) | undefined
-  const sessionObservers: Array<(event: SessionEvent) => void> = [asideSessions.observe, tasks.observe, sessionBackground.observe, ownerWake.observe, extraction.observe, metadata.observe, (event) => { if (event.type === "turn.completed") maintainMemory(store.sessionDirectory(event.sessionId)) }]
+  /** Accepted and applied plans as Markdown files (feature `plan_files`, docs/plan-review.md). */
+  const planFiles = createPlanFiles({ dir: options.dir, enabled: () => featureOn(store.settings.get(), "plan_files", { safeMode: options.safeMode === true }), location: () => store.settings.get().plan_files_location ?? "data", directoryOf: (sessionId) => store.sessionDirectory(sessionId), now: () => clock.now() })
+  const sessionObservers: Array<(event: SessionEvent) => void> = [planFiles.observe,asideSessions.observe, tasks.observe, sessionBackground.observe, ownerWake.observe, extraction.observe, metadata.observe, (event) => { if (event.type === "turn.completed") maintainMemory(store.sessionDirectory(event.sessionId)) }]
   // An engine alias (`claude-opus`) resolves to a concrete id in the first answer's usage; remember it so the next launch names it at once.
   sessionObservers.push((event) => {
     if (event.type !== "usage.recorded") return
@@ -1516,6 +1591,12 @@ export async function startDaemon(options: DaemonOptions) {
   })
   const interactions = createInteractions((sessionId) => store.sessionDirectory(sessionId))
   sessionObservers.push(interactions.observe)
+  // A child's context grows with each model call: the Agents strip of its parent asks again when one is recorded.
+  sessionObservers.push((event) => {
+    if (event.type !== "usage.recorded" || !tasks.port.isChild(event.sessionId)) return
+    const parentId = store.sessionInfo(event.sessionId)?.parentId as SessionId | undefined
+    if (parentId) globalSink.append({ type: "task.changed", sessionId: event.sessionId, parentId })
+  })
   // Idle bridge children are sessions too. Reuse the lineage invalidation event for their turns.
   sessionObservers.push((event) => {
     if (!["turn.started", "turn.completed", "turn.failed", "turn.cancelled", "turn.interrupted", "server.request", "server.request.resolved"].includes(event.type)) return
@@ -1730,6 +1811,21 @@ export async function startDaemon(options: DaemonOptions) {
       for (const connection of connections) if (connection.clientId) send(connection, { v: PROTOCOL_VERSION, kind: "global", body: event })
     },
   })
+  /** The running turn's output tokens as the engine reports them before any usage record holds them: pushed to every terminal, throttled per session, never stored. */
+  const liveTokens = createLiveTokens({
+    clock,
+    emit: (event) => {
+      for (const connection of connections) if (connection.clientId) send(connection, { v: PROTOCOL_VERSION, kind: "global", body: event })
+    },
+  })
+  /** A running child with how full its context is, from the last model call its own session recorded (the Agents strip shows it). */
+  function withContext<T extends { taskId: SessionId; state: string }>(task: T): T & { context?: { tokens: number; limit?: number } } {
+    if (task.state !== "running" && task.state !== "needs_input") return task
+    const last = store.recentUsage(task.taskId, 1).at(-1)
+    if (last?.context === undefined) return task
+    const limit = last.contextWindow ?? last.compactAt
+    return { ...task, context: { tokens: last.context, ...(limit ? { limit } : {}) } }
+  }
   /** Chats a terminal's "new chat" handed out that nothing was typed in yet: other terminals do not hear of them until they have something. */
   const quietEmpties = new Set<SessionId>()
   /** Sub-agent sessions that asked the user something: their activity is published until they end. */
@@ -1780,7 +1876,7 @@ export async function startDaemon(options: DaemonOptions) {
             // Newest events of each session, and its last event number: an unchanged session reuses its cached digest without reading them.
             sessions: (dir) =>
               store.listSessions({ directory: dir, limit: 12 }).map((s) => ({ sessionId: s.sessionId, title: s.title, seq: s.lastSeq, events: () => visibleEvents(store.readAfter(s.sessionId, Math.max(0, s.lastSeq - 2_000), 2_000)) })),
-            memories: (dir) => store.memories.list({ directory: dir, profile: profileOf(store.settings.get(), dir) }),
+            memories: (dir) => store.memories.list({ directory: dir, profile: areaOf(store.settings.get(), dir) }),
             complete: async (prompt, signal) => {
               const model = resolveModel({ role: "dream", roles: rolesFor(store.settings.get(), directory), catalog })
               await budgets.guard({ model: model.model, signal })
@@ -1830,7 +1926,7 @@ export async function startDaemon(options: DaemonOptions) {
               } catch (error) { budgets.record(); throw error }
               finally { auxiliaryUsage.record({ role: "memoryConsolidator", directory }, used, usable.model) }
             } }) : undefined
-            const { fallback, ...pass } = await consolidateMemory({ entries: () => store.memories.list({ directory, profile: profileOf(store.settings.get(), directory) }), policy: consolidationPolicy, limit: settings.memoryGlobalCompactionMaxEntries ?? 50,
+            const { fallback, ...pass } = await consolidateMemory({ entries: () => store.memories.list({ directory, profile: areaOf(store.settings.get(), directory) }), policy: consolidationPolicy, limit: settings.memoryGlobalCompactionMaxEntries ?? 50, categories: consolidationCategories(store.settings.get()), holdForReview: trigger !== "manual" && featureOn(store.settings.get(), "memory_auto"),
               apply: async (memory) => { await cliMemory.run(directory, { operation: "apply", memoryId: memory.memoryId }) },
               archive: (memory) => { store.memories.update(memory.memoryId, { status: "archived" }); globalSink.append({ type: "memory.changed", memoryId: memory.memoryId, change: "updated" }) },
               ...(meter ? { semantic: createSemanticConsolidator({ call: meter.call }) } : {}),
@@ -1845,7 +1941,11 @@ export async function startDaemon(options: DaemonOptions) {
           // A bug or a storage error must not leave the run "running" forever: that would refuse every later run of the project.
           closing = { status: "failed", error: error instanceof Error ? error.message.slice(0, 500) : String(error) }
         }
-        const finished = store.dreamRuns.finish(run.runId, closing)
+        // A daemon that stopped mid-run is resumed at its next start (resumeInterruptedDreams), not reported as a model failure.
+        if (job.signal.aborted && closing!.status === "failed") closing = { ...closing!, error: `${DREAM_INTERRUPTED}: the daemon stopped` }
+        // Nightly compaction: exact duplicates among generated memories are archived with the pass (policy memoryMaintenance).
+        else if (closing!.status !== "failed") maintainMemory(directory)
+        const finished = store.dreamRuns.finish(run.runId, closing!)
         if (finished) { globalSink.append({ type: "dream.changed", run: finished }); finish(finished) }
       },
     })
@@ -1860,6 +1960,18 @@ export async function startDaemon(options: DaemonOptions) {
    * the schedule on or changing its time never recovers a window retroactively. Off (no timer) while dreamAt is unset — P6.
    */
   const DREAM_WINDOW_KEY = "dream.window"
+  const DREAM_INTERRUPTED = "Interrupted"
+  /** A run left `running` by a crash or kill is closed now, so it is found by `interruptedDreams` and never blocks its project. */
+  store.dreamRuns.abandonRunning(`${DREAM_INTERRUPTED}: the daemon stopped`)
+  /**
+   * Projects whose newest run (within 36 h) was cut short by a stop: they run again, one run each. Session digests the cut run
+   * already built are cached, so the resumed run only does what is left. A project with a newer run is not listed.
+   */
+  function interruptedDreams(): string[] {
+    const since = clock.now() - 36 * 3_600_000
+    return [...new Set(store.dreamRuns.list().filter((run) => run.status === "failed" && run.startedAt >= since && run.error?.startsWith(DREAM_INTERRUPTED)).map((run) => run.directory))]
+      .filter((directory) => store.dreamRuns.list(directory)[0]?.error?.startsWith(DREAM_INTERRUPTED))
+  }
   let dreamTimer: TimerHandle | undefined
   /** `reset`: the schedule was just turned on or moved, so the window that already passed today counts as handled. */
   function armDreamSchedule(reset = false): { status: string; reason: string; runs: Array<{ runId: number }> } {
@@ -1867,7 +1979,7 @@ export async function startDaemon(options: DaemonOptions) {
     dreamTimer = undefined
     const at = store.settings.get().dreamAt
     const runs: Array<{ runId: number }> = []
-    if (!at || !options.dream) return { status: "skipped", reason: !at ? "Schedule disabled" : "Dream is not configured", runs }
+    if (!at || !options.dream || options.dev) return { status: "skipped", reason: options.dev ? "Development daemon" : !at ? "Schedule disabled" : "Dream is not configured", runs }
     const handled = store.meta.get(DREAM_WINDOW_KEY)
     if (reset || handled === undefined) store.meta.set(DREAM_WINDOW_KEY, dateKey(windows(clock.now(), at).last))
     else {
@@ -1881,6 +1993,10 @@ export async function startDaemon(options: DaemonOptions) {
           if (!("error" in started)) runs.push({ runId: started.runId })
         }
       }
+    }
+    for (const directory of interruptedDreams()) {
+      const started = startDream(directory, "recovered")
+      if (!("error" in started)) runs.push({ runId: started.runId })
     }
     dreamTimer = clock.setTimer(nextCheckIn(clock.now(), at), () => armDreamSchedule())
     return { status: runs.length ? "started" : "skipped", reason: runs.length ? "Daily window due" : "No unhandled active window", runs }
@@ -1919,6 +2035,7 @@ export async function startDaemon(options: DaemonOptions) {
         sessionScopes.delete(id)
         scheduler.setForegroundBusy(id, false)
         activity.forget(id)
+        liveTokens.forget(id)
         secrets.drop(id)
       }
     }
@@ -1948,10 +2065,10 @@ export async function startDaemon(options: DaemonOptions) {
 
   /** Users save directly; agent proposals land as pending for review (approval-first, like v1). */
   /** The saved memories visible from `directory` (its profile's user memories and its project's) as a graph. */
-  const workspaceMemory = createMemoryWorkspaces({ store, profile: (directory) => profileOf(store.settings.get(), directory) })
-  const sharingMemory = createMemorySharing({ dir: options.dir, store, profile: (directory) => profileOf(store.settings.get(), directory), id: () => ids("memory"), changed: (memoryId) => announceMemory(memoryId, "added") })
+  const workspaceMemory = createMemoryWorkspaces({ store, profile: (directory) => areaOf(store.settings.get(), directory) })
+  const sharingMemory = createMemorySharing({ dir: options.dir, store, profile: (directory) => areaOf(store.settings.get(), directory), id: () => ids("memory"), changed: (memoryId) => announceMemory(memoryId, "added") })
 
-  const modelMemory = createMemoryModel({ store, profile: (directory) => profileOf(store.settings.get(), directory), id: () => ids("memory"), categories: categoriesReport, changed: (memoryId, change, entry) => announceMemory(memoryId, change, entry), propose: proposeMemory,
+  const modelMemory = createMemoryModel({ store, profile: (directory) => areaOf(store.settings.get(), directory), id: () => ids("memory"), categories: categoriesReport, changed: (memoryId, change, entry) => announceMemory(memoryId, change, entry), propose: proposeMemory,
     control: {
       categoryPolicy: (category, policy) => {
         const policies = { ...store.settings.get().memoryPolicies }
@@ -1963,11 +2080,11 @@ export async function startDaemon(options: DaemonOptions) {
       dreamAt: (at) => { globalSink.append({ type: "settings.changed", settings: store.settings.set({ dreamAt: at }) }); armDreamSchedule(true) },
       dryRun: (directory) => { const started = startDream(directory, "manual", "preview"); return "error" in started ? { error: started.error } : { runId: started.runId } },
     } })
-  const cliMemory = createMemoryControl({ store, profile: (directory) => profileOf(store.settings.get(), directory), id: () => ids("memory"), now: () => clock.now(), extract: extractBudgeted, resolve: modelMemory.resolve,
+  const cliMemory = createMemoryControl({ store, profile: (directory) => areaOf(store.settings.get(), directory), id: () => ids("memory"), now: () => clock.now(), extract: extractBudgeted, resolve: modelMemory.resolve,
     changed: (memoryId, change, entry) => announceMemory(memoryId, change, entry),
     settingsChanged: () => { globalSink.append({ type: "settings.changed", settings: store.settings.get() }); extraction.wake() },
   })
-  const memoryAssistant = createMemoryAssistant({ dir: options.dir, store, complete: completeBudgeted, browse: workspaceMemory.browse, profile: (directory) => profileOf(store.settings.get(), directory), draft: modelMemory.draft, model: (directory) => options.models?.selectable ? resolveModel({ role: "memoryAssistant", roles: rolesFor(store.settings.get(), directory), catalog: options.models }) : undefined, models: (directory) => {
+  const memoryAssistant = createMemoryAssistant({ dir: options.dir, store, complete: completeBudgeted, browse: workspaceMemory.browse, profile: (directory) => areaOf(store.settings.get(), directory), draft: modelMemory.draft, model: (directory) => options.models?.selectable ? resolveModel({ role: "memoryAssistant", roles: rolesFor(store.settings.get(), directory), catalog: options.models }) : undefined, models: (directory) => {
     if (!options.models?.selectable) return []
     const roles = rolesFor(store.settings.get(), directory)
     const candidates = (["memoryAssistant", "memoryExtractor", "small", "main"] as const).map((role) => resolveModel({ role, roles, catalog: options.models! }))
@@ -1975,7 +2092,7 @@ export async function startDaemon(options: DaemonOptions) {
   }, now: () => clock.now() })
 
   function graphFor(directory: string | undefined) {
-    const saved = store.memories.list({ ...(directory ? { directory, profile: profileOf(store.settings.get(), directory) } : {}), status: "saved" })
+    const saved = store.memories.list({ ...(directory ? { directory, profile: areaOf(store.settings.get(), directory) } : {}), status: "saved" })
     return memoryGraph(saved, store.memories.links(saved.map((memory) => memory.memoryId)))
   }
 
@@ -1994,7 +2111,7 @@ export async function startDaemon(options: DaemonOptions) {
   function addMemory(entry: { scope: MemoryScope; directory?: string; sessionId?: SessionId; text: string; category: string; source: "user" | "agent"; status: "saved" | "pending"; pinned?: boolean; details?: MemoryEntry["details"] }) {
     const memoryId = ids("memory")
     const directory = entry.scope === "session" && entry.sessionId ? store.sessionInfo(entry.sessionId)?.directory : entry.directory
-    const place = entry.scope === "user" ? { profile: profileOf(store.settings.get(), directory) } : directory ? { directory } : {}
+    const place = entry.scope === "user" ? { profile: areaOf(store.settings.get(), directory) } : directory ? { directory } : {}
     store.memories.add({
       memoryId,
       scope: entry.scope,
@@ -2032,7 +2149,7 @@ export async function startDaemon(options: DaemonOptions) {
       const directory = store.sessionInfo(sessionId)?.directory
       return { place: { scope: "session", sessionId, ...(directory ? { directory } : {}) } }
     }
-    return { place: { scope: "user", profile: current.scope === "user" ? (current.profile ?? profileOf(store.settings.get(), undefined)) : profileOf(store.settings.get(), current.directory) } }
+    return { place: { scope: "user", profile: current.scope === "user" ? (current.profile ?? areaOf(store.settings.get(), undefined)) : areaOf(store.settings.get(), current.directory) } }
   }
 
   /**
@@ -2045,7 +2162,7 @@ export async function startDaemon(options: DaemonOptions) {
     const safe = redactSecrets(entry.text)
     const settings = memorySettings(store.settings.get(), entry.directory)
     if (settings.memoryEnabled === false) return { outcome: "dropped" }
-    const entries = store.memories.list({ ...(entry.directory ? { directory: entry.directory } : {}), profile: profileOf(settings, entry.directory) }).filter((memory) => memory.status !== "archived")
+    const entries = store.memories.list({ ...(entry.directory ? { directory: entry.directory } : {}), profile: areaOf(settings, entry.directory) }).filter((memory) => memory.status !== "archived")
     if (entries.length >= (settings.memoryMaxEntries ?? 50)) return { outcome: "dropped" }
     if (entry.scope === "project" && entries.filter((memory) => memory.scope === "project").length >= (settings.memoryProjectMaxEntries ?? 3)) return { outcome: "dropped" }
     const policy = memoryPolicyFor(entry.category, settings.memoryPolicies)
@@ -2129,6 +2246,7 @@ export async function startDaemon(options: DaemonOptions) {
         publishActivity(sessionId, state)
         if (state === "idle") { queueMicrotask(() => maybeEvict(sessionId)); idleGc.idle() }
       },
+      onLiveOutput: (turnId, output) => liveTokens.push(sessionId, turnId, output),
       onPause: () => publishActivity(sessionId, actors.get(sessionId)?.snapshot().foreground ?? "idle", true),
     })
     actors.set(sessionId, actor)
@@ -2202,15 +2320,15 @@ export async function startDaemon(options: DaemonOptions) {
     store: store.loops,
     clock,
     ids,
-    createSession: ({ directory, title, readOnly }) => {
+    createSession: ({ directory, title, readOnly, permission }) => {
       const id = ids("session")
       store.createSession({ id, directory, title })
       store.meta.set(`session.title.manual:${id}`, "true")
       announceSession(id, directory)
       const actor = actorFor(id)
       // The mailbox keeps order: plan mode is set before the audit prompt that follows is handled.
-      // A loop's own session follows the user's default for new sessions, like any session they create.
-      const mode = readOnly ? "plan" : defaultPermissionFor(store.settings.get(), directory)
+      // A loop's own session has the mode it inherited from its creator, else the user's default for new sessions.
+      const mode = readOnly ? "plan" : permission ?? defaultPermissionFor(store.settings.get(), directory)
       if (mode && mode !== "ask") void actor?.handle({ id: ids("command"), clientId: loopClientId, type: "session.permission.set", sessionId: id, mode })
       return id
     },
@@ -2229,9 +2347,24 @@ export async function startDaemon(options: DaemonOptions) {
     // A hung auditor is cancelled by its exact turn (explicit target, FC-09/10).
     cancelTurn: ({ sessionId, turnId }) => actorFor(sessionId)?.handle({ id: ids("command"), clientId: loopClientId, type: "turn.cancel", sessionId, turnId }),
     onChange: (loop) => void globalSink.append({ type: "loop.changed", loop }),
+    // One short notice per run in the session that created the loop: one card per loop in the transcript (a `session.orchestration` event, replaced while unread), no turn and no model call; the model reads it with the user's next message.
+    notify: ({ loop, run }) => {
+      const creator = loop.creatorSessionId
+      if (!creator || !store.hasSession(creator)) return
+      const text = secrets.mask(creator, runNotice(loop, run))
+      const waiting = loopNotes.get(creator) ?? new Map<string, LoopNote>()
+      const earlier = waiting.get(loop.loopId)
+      const runs = (earlier?.runs ?? 0) + 1
+      // One card per loop in the transcript (keyed by the loop); a notice nobody read yet is replaced, not stacked.
+      const card = sessionSink.append({ type: "session.orchestration", sessionId: creator, groupId: `loop:${loop.loopId}`.slice(0, 64), text: runs > 1 ? `${text} · ${runs} runs` : text })
+      if (earlier) store.dropSupersededCard(creator, earlier.seq)
+      waiting.set(loop.loopId, { text, runs, seq: card.seq })
+      for (const oldest of [...waiting.keys()].slice(0, Math.max(0, waiting.size - LOOP_NOTES_MAX))) waiting.delete(oldest)
+      loopNotes.set(creator, waiting)
+    },
   })
   sessionObservers.push(loops.observe)
-  loops.start()
+  if (!options.dev) loops.start()
 
   /** Creates and edits share the input checks and the worktree's git checkout requirement. */
   async function loopProblem(input: CreateLoopInput): Promise<string | undefined> {
@@ -2244,7 +2377,23 @@ export async function startDaemon(options: DaemonOptions) {
   async function createLoop(input: CreateLoopInput): Promise<{ ok: true; loop: ReturnType<typeof loops.create> } | { ok: false; message: string }> {
     const problem = await loopProblem(input)
     if (problem) return { ok: false, message: problem }
-    return { ok: true, loop: loops.create(input) }
+    // The loop starts with its creator's permission mode and never has more than it: a creator in full access makes a full-access loop.
+    const creatorMode = input.creatorSessionId && store.hasSession(input.creatorSessionId) ? livePermission(input.creatorSessionId) : undefined
+    const permission = creatorMode ? capPermission(input.permission ?? creatorMode, creatorMode) : input.permission
+    return { ok: true, loop: loops.create({ ...input, ...(permission ? { permission } : {}) }) }
+  }
+
+  /** What a loop's session may read without asking: anything when its creator is in full access, else the creator's extra directories and external-directory grants, plus the paths declared at creation. */
+  function loopInheritedReads(sessionId: SessionId): { all: boolean; roots: string[] } | undefined {
+    const loop = loops.forSession(sessionId)
+    if (!loop) return undefined
+    const roots = [...declaredRoots(loop.reads)]
+    const creator = loop.creatorSessionId
+    if (creator && store.hasSession(creator)) {
+      if (livePermission(creator) === "full") return { all: true, roots }
+      roots.push(...declaredRoots(store.settings.get().additionalDirectories, runLimits.get(creator)?.addDirs), ...grants.list(creator).filter((grant) => grant.rulePermission === "external_directory" && grant.pattern).map((grant) => grant.pattern!.replace(/\/\*$/, "")))
+    }
+    return roots.length ? { all: false, roots } : undefined
   }
 
   /** Workflows: the host loads its package only when a workflow command arrives or a run is still live. */
@@ -2342,6 +2491,7 @@ export async function startDaemon(options: DaemonOptions) {
       if (background.listAll(sessionId).some((task) => task.status === "running")) return false
       return !tasks.list(sessionId).some((task) => task.state === "queued" || task.state === "running" || task.state === "needs_input")
     },
+    history: ({ provider, ttl }) => store.usageCalls.cacheSamples({ provider, ttl: ttl === "1h" ? "1h" : null, since: clock.now() - CACHE_SAMPLE_WINDOW_MS, minPrompt: CACHE_SAMPLE_MIN_PROMPT_TOKENS, limit: CACHE_SAMPLES_MAX }),
     compact: async (sessionId) => (await actorFor(sessionId)?.compactIdle()) ?? false,
   })
   sessionObservers.push(idleCompaction.observe)
@@ -2354,10 +2504,13 @@ export async function startDaemon(options: DaemonOptions) {
     const restricted = { ...workflow, reserveChild: () => execution.budget?.maxDepth !== undefined && depth >= execution.budget.maxDepth ? false : workflow.reserveChild() }
     return { ...input, workflow: restricted, selection: { ...input.selection, ...(execution.model ? { model: execution.model } : {}), ...(execution.agent && depth === 1 ? { agent: execution.agent } : {}) }, permissionMode: () => execution.readOnly ? "plan" as const : capPermission(input.permissionMode(), execution.permission) }
   }
-  engine.runTurn = (input) => runWorkflowTurn(routedWorkflowInput(input))
+  /** An internal run in plan mode only to stay read-only (the engines then send it no plan note). */
+  const readOnlyRun = (sessionId: SessionId) => reviewSessions.isReview(sessionId) && !reviewSessions.isEditor(sessionId) || loops.reportOnlySession(sessionId) || workflowContext(sessionId)?.workflow.execution.readOnly === true || asideSessions.isAside(sessionId) || compoundCalls.get(sessionId)?.critic === true
+  const markedRun = <T extends { sessionId: SessionId }>(input: T): T => readOnlyRun(input.sessionId) ? { ...input, readOnlyRun: true } : input
+  engine.runTurn = (input) => runWorkflowTurn(markedRun(routedWorkflowInput(input)))
   if (engine.runShell) {
     const runWorkflowShell = engine.runShell.bind(engine)
-    engine.runShell = (input) => runWorkflowShell(routedWorkflowInput(input))
+    engine.runShell = (input) => runWorkflowShell(markedRun(routedWorkflowInput(input)))
   }
 
   const compoundClientId = ids("client")
@@ -2470,6 +2623,27 @@ export async function startDaemon(options: DaemonOptions) {
   sessionObservers.push(agentCommands.observe)
   agentCommands.recover()
 
+  /** A session opens another in a different project's folder (`threads start`, docs/peers.md): that folder's own mode, never above the opener's. */
+  const sessionStarter = createSessionStarter({
+    store,
+    home: homedir(),
+    safeMode: options.safeMode,
+    id: () => ids("session"),
+    permissionOf: (sessionId) => livePermission(sessionId),
+    agentFor: (directory) => {
+      const settings = store.settings.get()
+      const configured = settings.projectConfig?.[canonicalDir(directory)]?.defaultAgent ?? settings.defaultAgent
+      try { return configured && !agents.selectable(directory, configured) ? configured : agents.defaultName(directory) } catch { return undefined }
+    },
+    opened: async ({ sessionId, directory, mode }) => {
+      sessionSharing.created(sessionId)
+      announceSession(sessionId, directory)
+      publishActivity(sessionId, "idle", true)
+      const actor = actorFor(sessionId)
+      if (actor && mode !== "ask") await actor.handle({ id: ids("command"), clientId: taskClientId, type: "session.permission.set", sessionId, mode })
+    },
+  })
+
   /** Messages between the sessions of one project (`sessions`, `tell`); answers return to the sender as notices. */
   const peers = createPeers({
     clock,
@@ -2480,15 +2654,30 @@ export async function startDaemon(options: DaemonOptions) {
       const page = history.read({ sessionId, cursor })
       return page.ok ? { ok: true, output: page.result.text, ...(page.result.next ? { next: page.result.next } : {}) } : { ok: false, message: page.message.replace(/^\[DAEMON\]: /, "") }
     },
+    // Plan files follow the rules of reading a session: this project's by default, others by scope or exact id, and local only.
+    plans: (from, where) => {
+      if (store.meta.get(`session.local-tools.restricted:${from}`) === "true") return { ok: false, message: "reading plans is local only" }
+      const own = store.sessionDirectory(from)
+      const found = planFiles.list(where?.scope === "all" ? { all: true } : { directory: where?.directory ?? own })
+      return { ok: true, output: found.length ? planListLines(found, clock.now(), planFiles.list({ all: true }).map((plan) => plan.id)).join("\n") : "No plan files.", count: found.length }
+    },
+    readPlan: (from, id) => {
+      if (store.meta.get(`session.local-tools.restricted:${from}`) === "true") return { ok: false, message: "reading plans is local only" }
+      const plan = planFiles.read(id, store.sessionDirectory(from))
+      return plan.ok ? { ok: true, output: plan.text } : plan
+    },
     waiting: (sessionId) => agentCommands.waiting(sessionId),
-    deliver: async (from, to, text, mode) => {
+    deliver: async (from, to, text, mode, elsewhere) => {
       const waiting = actors.get(to)?.snapshot().foreground !== undefined && actors.get(to)?.snapshot().foreground !== "idle"
       try {
-        const command = await agentCommands.create(from, to, { kind: "peer_message", text: text.slice(0, 4000), ...(mode ? { mode } : {}) })
+        const command = await agentCommands.create(from, to, { kind: "peer_message", text: text.slice(0, 4000), ...(mode ? { mode } : {}) }, undefined, { elsewhere: elsewhere === true })
         return command.queueId ? { ok: true, waiting } : { ok: false, message: command.error ?? "Target could not take the message" }
       } catch (error) { return { ok: false, message: String(error) } }
     },
     sessions: (directory, limit) => store.listSessions({ directory, limit }),
+    everywhere: (limit) => store.listSessions({ limit, hideEmpty: true }),
+    authority: (sessionId) => livePermission(sessionId),
+    create: (request) => sessionStarter.start(request),
     info: (sessionId) => store.sessionInfo(sessionId),
     state: (sessionId) => actors.get(sessionId)?.snapshot().foreground ?? "idle",
     notify: async (sessionId, text, delivery) => actorFor(sessionId)?.notify(text, undefined, false, delivery),
@@ -2501,6 +2690,7 @@ export async function startDaemon(options: DaemonOptions) {
     clock,
     store,
     ...(options.foreignThreads ? { foreign: createForeignThreads(options.foreignThreads) } : {}),
+    startPlan: (from, directory) => sessionStarter.plan(from, directory),
     peers: (sessionId) => peers.port(sessionId),
     state: (sessionId) => actors.get(sessionId)?.snapshot().foreground ?? "idle",
     busy: (sessionId) => {
@@ -2564,7 +2754,7 @@ export async function startDaemon(options: DaemonOptions) {
     dir: options.dir,
     ...(options.prWatch?.run ? { run: options.prWatch.run } : {}),
     ...(options.prWatch?.intervalMs ? { intervalMs: options.prWatch.intervalMs } : {}),
-    enabled: () => effectiveSettings(store.settings.get(), { safeMode: options.safeMode }).experimental?.pr_watch === true,
+    enabled: () => !options.dev && effectiveSettings(store.settings.get(), { safeMode: options.safeMode }).experimental?.pr_watch === true,
     sessionExists: (sessionId) => store.hasSession(sessionId as SessionId),
     sessionDirectory: (sessionId) => store.sessionInfo(sessionId as SessionId)?.directory,
     notify: async (sessionId, text) => actorFor(sessionId as SessionId)?.notify(text, undefined, true),
@@ -2573,6 +2763,7 @@ export async function startDaemon(options: DaemonOptions) {
   root.onDispose(prWatch.stop)
 
   /** The PR reviewer (docs/pr-review.md): needs the tier's permit and `experimental.pr_review`; nothing loads until a watch exists or `/pr review` runs. */
+  // A development daemon reviews on request (`/pr review`, the tool); only the watch is off there.
   const prReviewOn = () => featureOn(store.settings.get(), "pr_review", { safeMode: options.safeMode }) && effectiveSettings(store.settings.get(), { safeMode: options.safeMode }).experimental?.pr_review === true
   const reviewSessions = createReviewSessions({
     create({ owner, directory, title, model: chosen, editing, language }) {
@@ -2621,7 +2812,7 @@ export async function startDaemon(options: DaemonOptions) {
     const settings = store.settings.get()
     const shared = scope === "global" && (await sharingMemory.status("project", directory).catch(() => undefined))?.enabled === true
     const { reviewMemoryContext } = await import("./pr-review/review-memory")
-    return reviewMemoryContext({ reader: { memories: store.memories, projectShared: () => shared }, scope, profile: profileOf(settings, directory), directory, login, settings, query, budgetTokens, now: clock.now() })
+    return reviewMemoryContext({ reader: { memories: store.memories, projectShared: () => shared }, scope, profile: areaOf(settings, directory), directory, login, settings, query, budgetTokens, now: clock.now() })
   }
   /** The window of the model a review runs on (the watch session's model): the session's own, the model's setting, else the catalog's. */
   function reviewContextWindow(sessionId: string): number | undefined {
@@ -2631,12 +2822,13 @@ export async function startDaemon(options: DaemonOptions) {
     if (own) return own
     const choice = options.models ? resolveModel({ role: "main", session: store.sessionModel(id), roles: rolesFor(store.settings.get(), store.sessionInfo(id)?.directory), catalog: options.models }) : undefined
     const info = options.models && choice ? catalogModel(options.models, choice.model) : undefined
-    return modelContextOf(store.settings.get(), info)?.window ?? info?.contextWindow
+    return modelContextOf(store.settings.get(), info)?.window ?? info?.contextWindow ?? store.settings.get().defaultContextWindow
   }
   let prReview: import("./pr-review/service").PrReviewService | undefined
   async function prReviewService() {
     if (prReview) return prReview
     const { createPrReviewService } = await import("./pr-review/service")
+    const { chooseReaderModel } = await import("./pr-review/reader-models")
     prReview ??= createPrReviewService({
       memory: reviewMemory,
       contextWindow: reviewContextWindow,
@@ -2648,6 +2840,15 @@ export async function startDaemon(options: DaemonOptions) {
       enabled: prReviewOn,
       // This device's capacity, read again at every start: a changed setting applies to the next job (docs/pr-review.md "Concurrency").
       concurrency: () => store.settings.get().prReview?.concurrency,
+      perfAttrib: () => store.settings.get().prReview?.perfAttrib,
+      // The reviewer's own spend, per day, model and directory (the role `prReview`): its turns are in the usage totals already, under
+      // whatever model the child ran on, and their per-call rows leave with the child session.
+      reviewUsage: ({ directory, childSessionId, tokens }) => {
+        const choice = childSessionId && store.hasSession(childSessionId as SessionId) ? store.sessionModel(childSessionId as SessionId) : undefined
+        const [provider, model] = choice?.model.includes(":") ? [choice.model.split(":")[0]!, choice.model.slice(choice.model.indexOf(":") + 1)] : ["", choice?.model ?? ""]
+        const cacheRead = tokens.cached ?? 0
+        auxiliaryUsage.record({ role: "prReview", directory }, { provider, model, input: Math.max(0, tokens.input - cacheRead), output: tokens.output, cacheRead }, model)
+      },
       // A review call a killed daemon left open: what its child session recorded, summed as the review sessions add usage.
       sessionUsage: (sessionId) => {
         const total = store.sessionStats.get(sessionId, clock.now())?.usage.total
@@ -2666,6 +2867,18 @@ export async function startDaemon(options: DaemonOptions) {
       },
       sessions: (owner, directory) => options.prReview?.sessions?.(owner, directory) ?? reviewSessions.factory({ owner, directory }),
       editor: (owner, directory) => options.prReview?.sessions?.(owner, directory) ?? reviewSessions.factory({ owner, directory, editing: true }),
+      // Readers run on the cheapest model of the owner's own provider and transport (reader-models.ts), as hidden review children.
+      readers: (owner, directory) => ({
+        tier: store.settings.get().tier,
+        source(requested) {
+          if (!options.models) return { ok: false, reason: "no model catalog" }
+          const ownerModel = store.hasSession(owner as SessionId) ? store.sessionModel(owner as SessionId) : undefined
+          const reviewer = ownerModel ?? resolveModel({ role: "main", roles: rolesFor(store.settings.get(), directory), catalog: options.models })
+          const picked = chooseReaderModel({ owner: reviewer, catalog: options.models, requested })
+          if (!picked.ok) return picked
+          return { ok: true, model: picked.model, factory: options.prReview?.sessions?.(owner, directory) ?? reviewSessions.factory({ owner, directory, model: { model: picked.model } }) }
+        },
+      }),
       schedule: (run) => new Promise<void>((resolve) => { scheduler.schedule({ jobType: "pr_review", priority: "P4", run: async () => { try { await run() } finally { resolve() } } }) }),
     })
     root.onDispose(prReview.stop)
@@ -2764,11 +2977,11 @@ export async function startDaemon(options: DaemonOptions) {
     if ("projectConfig" in patch || "codegraph_index" in patch || "tier" in patch || "features" in patch) options.graphAutopilot?.reconsider()
     continuity.configure()
     await withdrawAsyncNotices()
-    if ("trustedToolDirs" in patch || "disabledPackages" in patch || "disabledPackageResources" in patch || "tier" in patch || "features" in patch) extensions.invalidateProject()
+    if ("trustedToolDirs" in patch || "disabledProfiles" in patch || "disabledProfileResources" in patch || "tier" in patch || "features" in patch) extensions.invalidateProject()
     if ("trustedToolDirs" in patch) uiReload.sync()
-    if ("models" in patch || "profiles" in patch || "experimental" in patch || "tier" in patch || "features" in patch) reasoning.port.invalidate()
-    // MCP follows the tier, the packages and the project trust: the cached config is dropped and servers that are no longer allowed stop.
-    if ("tier" in patch || "features" in patch || "trustedToolDirs" in patch || "disabledPackages" in patch || "disabledPackageResources" in patch) await options.mcp?.invalidate?.(undefined)
+    if ("models" in patch || "areas" in patch || "experimental" in patch || "tier" in patch || "features" in patch) reasoning.port.invalidate()
+    // MCP follows the tier, the profiles and the project trust: the cached config is dropped and servers that are no longer allowed stop.
+    if ("tier" in patch || "features" in patch || "trustedToolDirs" in patch || "disabledProfiles" in patch || "disabledProfileResources" in patch) await options.mcp?.invalidate?.(undefined)
     armDreamSchedule("dreamAt" in patch)
     extraction.wake()
     armRetentionSchedule()
@@ -2840,7 +3053,7 @@ export async function startDaemon(options: DaemonOptions) {
       if (store.goals.current(sessionId)?.goal.status === "usage_limited" && goals.handle({ id: ids("command"), clientId: taskClientId, type: "goal.update", sessionId, status: "active" }).ok) return true
       const actor = actorFor(sessionId)
       if (!actor) return false
-      const text = "The provider's usage limit has reset. Continue the work you were doing when it stopped, from where you left off."
+      const text = "The provider's usage limit is lifted. Pick the work back up where it stopped."
       if (await actor.steer({ text, label: "usage limit · resumed", meta: { usageLimit: "resume" }, force: true })) return true
       return (await actor.notify(text)) !== undefined
     },
@@ -2850,12 +3063,22 @@ export async function startDaemon(options: DaemonOptions) {
   workflows.boot()
   armDreamSchedule()
   armRetentionSchedule()
+  // Images pasted and never sent leave a file no row owns; the first idle step after start removes week-old ones.
+  let straysSwept = false
   const idleSettledPrune = createIdleDeltaFold({ clock, delayMs: SETTLED_PRUNE_DELAY_MS, onWake: true,
     busy: () => [...actors.values()].some(actorWorking) || scheduler.snapshot().length > 0 || engineJobs() > 0,
-    step: () => store.pruneSettledEvents(20),
+    step: () => {
+      if (!straysSwept) { straysSwept = true; store.removeStrayBlobs() }
+      const pruned = store.pruneSettledEvents(20)
+      const sealed = store.sealSettledTurns(50)
+      return { complete: pruned.complete && sealed.complete }
+    },
     warn: error => logLine("warn", `[DAEMON]: pruning settled session snapshots failed: ${error instanceof Error ? error.message : String(error)}`),
   })
   wakeSettledPrune = idleSettledPrune.wake
+  // Once at start too: history settled before this daemon ran (an upgrade, a crash mid-step) seals without waiting for a turn.
+  idleSettledPrune.wake()
+  idleGc.started(engine.warm ? (between) => engine.warm!(between) : undefined)
   const idleDeltaFold = createIdleDeltaFold({ clock,
     busy: () => [...actors.values()].some(actorWorking) || scheduler.snapshot().length > 0 || engineJobs() > 0,
     step: () => store.foldStoredDeltas(100),
@@ -2876,6 +3099,7 @@ export async function startDaemon(options: DaemonOptions) {
     sessionScopes.delete(sessionId)
     scheduler.setForegroundBusy(sessionId, false)
     activity.forget(sessionId)
+    liveTokens.forget(sessionId)
     continuity.cancelSession(sessionId)
     background.killSession(sessionId)
     interactive.killSession(sessionId)
@@ -2888,6 +3112,7 @@ export async function startDaemon(options: DaemonOptions) {
     secrets.drop(sessionId)
     grants.revoke(sessionId, "all")
     runLimits.delete(sessionId)
+    elevation?.forget(sessionId)
     forgetSessionEntries(options.dir, sessionId)
     sessionPermissions.delete(sessionId)
     selfPackagePorts.delete(sessionId)
@@ -3034,7 +3259,17 @@ export async function startDaemon(options: DaemonOptions) {
     // A client a session started from its own shell never changes permissions, settings or another session's authority.
     if (connection.agent && command.type !== "hello") {
       const refusal = agentGate.check(connection.agent, command)
+      // A child above the caller's own mode, with the prompt it will run: the user may approve it on one card.
+      if (refusal && command.type === "session.permission.set" && command.launch) {
+        const origin = connection.agent
+        const ceiling = agentGate.ceiling(origin)
+        const why = await askChildElevation({ origin, child: command.sessionId, mode: command.mode, ceiling, text: command.launch.text, images: command.launch.images, startedByCaller: agentGate.startedHere(origin, command.sessionId), alive: () => connections.has(connection) })
+        if (why) return reply(connection, command.id, { ok: false, code: "forbidden", message: `${refusal.replace(/\.(?= A session cannot)/, `; not approved: ${why}.`)}` })
+        return reply(connection, command.id, { ok: true })
+      }
       if (refusal) return reply(connection, command.id, { ok: false, code: "forbidden", message: refusal })
+      const held = elevation?.check(connection.agent, command, agentGate.ceiling(connection.agent))
+      if (held) return reply(connection, command.id, { ok: false, code: "forbidden", message: `[DAEMON]: ${agentRefusal({ what: held })}` })
     }
     // A read-only peer observes projects the daemon already knows; it cannot point a read at any other folder of the machine.
     if (connection.peer?.readOnly && command.type !== "hello" && command.type !== "session.list" && "directory" in command && typeof command.directory === "string" && !knownProjectDirectory(command.directory)) {
@@ -3119,8 +3354,11 @@ export async function startDaemon(options: DaemonOptions) {
     const lastUsage = store.recentUsage(sessionId, 1)[0]
     const info = catalogModel(options.models!, harness.model)
     const { turns } = history.portableTurns({ sessionId, turns: store.turns.list(sessionId).filter((turn) => !turn.reverted), maxChars: HARNESS_CONTEXT_CHARS, keepFirst: false })
-    const contextWindow = readContextWindow(store.meta, sessionId) ?? lastUsage?.contextWindow ?? info?.contextWindow
-    return harnessContextReport({ harness: harness.name, model: harness.model, turns, lastUsage, contextWindow, compactAtTokens: lastUsage?.compactAt ?? contextWindow ?? DEFAULT_COMPACT_AT_TOKENS })
+    // Claude Code's catalog window (200k) is not what it serves (1M on some plans): until a call reports it, the window is unknown.
+    const contextWindow = readContextWindow(store.meta, sessionId) ?? lastUsage?.contextWindow ?? (harness.name === "Claude Code" ? undefined : info?.contextWindow)
+    // Where the process compacts: what it was started with (its last call says), else what the next one will be given, else its window.
+    const handed = harness.name === "Claude Code" ? Number(claudeCompactEnv({ model: harness.model, settings: store.settings.get(), on: featureOn(store.settings.get(), "claude_compact", { safeMode: options.safeMode === true }) })?.CLAUDE_CODE_AUTO_COMPACT_WINDOW) || undefined : undefined
+    return harnessContextReport({ harness: harness.name, model: harness.model, turns, lastUsage, contextWindow, compactAtTokens: lastUsage?.compactAt ?? handed ?? contextWindow ?? DEFAULT_COMPACT_AT_TOKENS })
   }
   const restMutations = createRestMutations({ store, messages: restSessions.messages, apply: (command) => messageMutations.apply(command) })
 
@@ -3169,6 +3407,7 @@ export async function startDaemon(options: DaemonOptions) {
         sessionScopes.delete(id)
         scheduler.setForegroundBusy(id, false)
         activity.forget(id)
+        liveTokens.forget(id)
       }
       extensions.invalidateAll()
       options.mcp?.invalidate?.(directory)
@@ -3610,7 +3849,7 @@ export async function startDaemon(options: DaemonOptions) {
           if (problem) return reply(connection, command.id, { ok: false, code: "target_mismatch", message: `[DAEMON]: ${problem}` })
         }
         if (command.type === "request.resolve") {
-          const result = extensionDialogs.resolve(command) ?? continuity.resolve(command)
+          const result = elevation?.resolve(command, isHumanTerminal(connection)) ?? extensionDialogs.resolve(command) ?? continuity.resolve(command)
           if (result) return reply(connection, command.id, result)
         }
         const actor = actorFor(command.sessionId)
@@ -3668,7 +3907,7 @@ export async function startDaemon(options: DaemonOptions) {
             if ("ok" in swapped) return reply(connection, command.id, swapped)
             decision[field] = swapped.text
           }
-          safe = { ...command, decision }
+          safe = { ...command, decision: remotePlanReply(decision, Boolean(connection.remoteAddress || connection.peer)) }
         }
         if (command.type === "user.submit" || command.type === "user.shell" || command.type === "session.compaction.set") {
           if (command.type === "user.submit") {
@@ -3835,12 +4074,12 @@ export async function startDaemon(options: DaemonOptions) {
         if (command.action === "setup-preview" || command.action === "setup-apply") {
           const { previewQuickSetup } = await import("./pr-review/quick-setup")
           const directory = store.sessionDirectory(command.sessionId)!
-          const setup = await previewQuickSetup({ directory, dataDir: options.dir, settings: store.settings.get(), safeMode: options.safeMode, role: command.role, git: options.prReview?.git, ...(options.prReview?.run ? { gh: (argv, cwd) => options.prReview!.run!({ argv, cwd }) } : {}) })
+          const setup = await previewQuickSetup({ directory, dataDir: options.dir, settings: store.settings.get(), safeMode: options.safeMode, dev: options.dev === true, role: command.role, git: options.prReview?.git, ...(options.prReview?.run ? { gh: (argv, cwd) => options.prReview!.run!({ argv, cwd }) } : {}) })
           if (command.action === "setup-preview") return reply(connection, command.id, { ok: true, result: { setup, text: setup.text } })
           if (setup.problems.length || command.reason !== setup.digest) return reply(connection, command.id, { ok: false, code: "target_mismatch", message: `${setup.text}\nPreview setup again before confirming.` })
           const before = store.settings.get()
           if (!prReviewOn()) {
-            const settings = store.settings.set({ experimental: { ...before.experimental, pr_review: true } })
+            const settings = store.settings.set({ experimental: { ...before.experimental, pr_review: true }, ...(setup.unlock ? { features: { ...before.features, pr_review: true } } : {}) })
             globalSink.append({ type: "settings.changed", settings })
           }
           const service = await prReviewService()
@@ -3851,11 +4090,11 @@ export async function startDaemon(options: DaemonOptions) {
           const published = setup.publish
             ? await service.control({ sessionId: command.sessionId, action: "publish-on" }) : watched
           if (!published.ok) return reply(connection, command.id, { ok: false, code: "invalid_command", message: `${published.message}\nThe watch was started; run /pr setup again to retry publishing.` })
-          return reply(connection, command.id, { ok: true, result: { text: `Setup complete.\n${setup.changes.map((line) => `Applied: ${line}`).join("\n")}\n${setup.skipped.join("\n")}\n\n${watched.text}\n${published === watched ? "" : published.text}`, watches: published.watches } })
+          return reply(connection, command.id, { ok: true, result: { text: `Setup complete.\n${setup.changes.map((line) => `Applied: ${line}`).join("\n")}${setup.dev && setup.watch ? "\nDevelopment daemon: the watch is recorded and does not run." : ""}\n${setup.skipped.join("\n")}\n\n${watched.text}\n${published === watched ? "" : published.text}`, watches: published.watches } })
         }
         if (!prReviewOn()) return reply(connection, command.id, { ok: false, code: "invalid_command", message: "[DAEMON]: The PR reviewer is off: it reaches the network through gh and spends model calls, so turn it on with /experimental pr_review on (balanced tier or above)" })
         // The platform's fields (job actions, audit, config) go through as given; the service and control.ts validate them.
-        const done = await (await prReviewService()).control({ sessionId: command.sessionId, action: command.action, directory: command.directory, pr: command.pr, role: command.role, jobId: command.jobId, reason: command.reason, scope: command.scope, patch: command.patch, version: command.version })
+        const done = await (await prReviewService()).control({ sessionId: command.sessionId, action: command.action, directory: command.directory, pr: command.pr, full: command.full, role: command.role, jobId: command.jobId, reason: command.reason, scope: command.scope, patch: command.patch, version: command.version })
         if (!done.ok) return reply(connection, command.id, { ok: false, code: "invalid_command", message: `[DAEMON]: ${done.message}` })
         return reply(connection, command.id, { ok: true, result: { text: done.text, watches: done.watches, ...(done.dashboard ? { dashboard: done.dashboard } : {}), ...(done.config ? { config: done.config } : {}) } })
       }
@@ -3985,10 +4224,11 @@ export async function startDaemon(options: DaemonOptions) {
         if (command.type === "session.aside.clear") {
           // The side session goes with its history; the next question starts a new one.
           await asideSessions.clear(command.sessionId, true)
+          asides.archive(command.sessionId, asides.get(command.sessionId), clock.now())
           asides.set(command.sessionId, { messages: [], busy: false })
           publishAside(command.sessionId, asides.get(command.sessionId))
         }
-        return reply(connection, command.id, { ok: true, result: { thread: asides.get(command.sessionId) } })
+        return reply(connection, command.id, { ok: true, result: { thread: asides.get(command.sessionId), ...(command.type === "session.aside.get" && command.history ? { history: asides.history(command.sessionId) } : {}) } })
       }
       case "session.aside": {
         if (!store.hasSession(command.sessionId)) return reply(connection, command.id, { ok: false, code: "unknown_session", message: "[DAEMON]: unknown session" })
@@ -4033,8 +4273,13 @@ export async function startDaemon(options: DaemonOptions) {
         return reply(connection, command.id, { ok: true, result: { run, consolidation: run.report?.consolidation ?? null, callsProviders: (run.report?.model.calls ?? 0) + (run.report?.consolidation?.semantic?.calls ?? 0) > 0, readsSecrets: false } })
       }
       case "loop.create": {
-        const { name, directory, objective, criteria, trigger, budget, runNow, checks, audit, template, reportOnly, workspace, costBudget, rubric, approvalPolicy } = command
+        const { name, directory, objective, criteria, trigger, budget, runNow, checks, audit, template, reportOnly, workspace, costBudget, rubric, approvalPolicy, creatorSessionId, notify, permission, reads } = command
+        if (creatorSessionId && !store.hasSession(creatorSessionId)) return reply(connection, command.id, { ok: false, code: "unknown_session", message: "[DAEMON]: unknown creator session" })
         const created = await createLoop({
+          ...(creatorSessionId ? { creatorSessionId } : {}),
+          ...(notify ? { notify } : {}),
+          ...(permission ? { permission } : {}),
+          ...(reads?.length ? { reads } : {}),
           name,
           directory,
           ...(objective ? { objective } : {}),
@@ -4065,12 +4310,27 @@ export async function startDaemon(options: DaemonOptions) {
         if (!current) return reply(connection, command.id, { ok: false, code: "target_mismatch", message: "[DAEMON]: unknown loop" })
         if (current !== before) return reply(connection, command.id, { ok: false, code: "busy", message: "[DAEMON]: the loop changed; retry the edit" })
         if (current.state === "running" || current.state === "needs_input" || current.state === "verifying") return reply(connection, command.id, { ok: false, code: "busy", message: "[DAEMON]: the loop is running; edit it after the run" })
+        // A loop never has more than its creator: lowering it is free, raising it is capped at the creator's mode.
+        const creatorMode = before.creatorSessionId && store.hasSession(before.creatorSessionId) ? livePermission(before.creatorSessionId) : undefined
+        if (patch.permission && creatorMode) patch.permission = capPermission(patch.permission, creatorMode)
         const loop = loops.update(loopId, patch)!
-        if (!!loop.reportOnly !== !!before.reportOnly) {
-          const mode = loop.reportOnly ? "plan" : defaultPermissionFor(store.settings.get(), loop.directory) ?? "ask"
+        if (!!loop.reportOnly !== !!before.reportOnly || loop.permission !== before.permission) {
+          const mode = loop.reportOnly ? "plan" : loop.permission ?? defaultPermissionFor(store.settings.get(), loop.directory) ?? "ask"
           await actorFor(loop.sessionId)?.handle({ id: command.id, clientId: command.clientId, type: "session.permission.set", sessionId: loop.sessionId, mode })
         }
         return reply(connection, command.id, { ok: true, result: { loop } })
+      }
+      case "loop.interpret": {
+        if (!completeBudgeted) return reply(connection, command.id, { ok: false, code: "invalid_command", message: "[DAEMON]: reading a schedule phrase needs the native engine" })
+        const directory = command.directory ?? options.defaultDirectory
+        const model = options.models?.selectable ? resolveModel({ role: "small", roles: rolesFor(store.settings.get(), directory), catalog: options.models }) : undefined
+        try {
+          const answer = await completeBudgeted({ system: LOOP_INTERPRET_SYSTEM, prompt: loopInterpretRequest(redactSecrets(command.text).text), signal: AbortSignal.timeout(LOOP_INTERPRET_TIMEOUT_MS), ...(model ? { model } : {}), auxiliary: { role: "loopInterpret", ...(directory ? { directory } : {}) } })
+          const read = readInterpretation(answer)
+          return read ? reply(connection, command.id, { ok: true, result: read }) : reply(connection, command.id, { ok: false, code: "invalid_command", message: "[DAEMON]: the model did not return a schedule; write it as /loop every 30m <what to do>" })
+        } catch (error) {
+          return reply(connection, command.id, { ok: false, code: "internal", message: `[DAEMON]: ${(error instanceof Error ? error.message : String(error)).slice(0, 300)}` })
+        }
       }
       case "loop.templates":
         return reply(connection, command.id, { ok: true, result: { templates: LOOP_TEMPLATES.map(describeTemplate) } })
@@ -4168,7 +4428,7 @@ export async function startDaemon(options: DaemonOptions) {
           return reply(connection, command.id, { ok: true, result: { thread, archives: memoryAssistant.archives(directory) } })
         } catch (error) { return reply(connection, command.id, { ok: false, code: "invalid_command", message: error instanceof Error ? error.message : String(error) }) }
       case "memory.extraction.list":
-        return reply(connection, command.id, { ok: true, result: { jobs: extraction.list(command.directory), status: extraction.status(command.directory), configured: extraction.configured, maintenance: memoryMaintenance(store.memories.list({ ...(command.directory ? { directory: command.directory } : {}), profile: profileOf(store.settings.get(), command.directory) }), memorySettings(store.settings.get(), command.directory).memoryMaintenance) } })
+        return reply(connection, command.id, { ok: true, result: { jobs: extraction.list(command.directory), status: extraction.status(command.directory), configured: extraction.configured, maintenance: memoryMaintenance(store.memories.list({ ...(command.directory ? { directory: command.directory } : {}), profile: areaOf(store.settings.get(), command.directory) }), memorySettings(store.settings.get(), command.directory).memoryMaintenance) } })
       case "memory.extraction.retry":
         try { extraction.retry(command.jobId); return reply(connection, command.id, { ok: true }) }
         catch (error) { return reply(connection, command.id, { ok: false, code: "target_mismatch", message: String(error) }) }
@@ -4190,7 +4450,7 @@ export async function startDaemon(options: DaemonOptions) {
       case "memory.list":
         return reply(connection, command.id, {
           ok: true,
-          result: { memories: store.memories.list({ ...(command.directory ? { directory: command.directory, profile: profileOf(store.settings.get(), command.directory) } : {}), ...(command.status ? { status: command.status } : {}), ...(command.session ? { session: command.session } : {}) }) },
+          result: { memories: store.memories.list({ ...(command.directory ? { directory: command.directory, profile: areaOf(store.settings.get(), command.directory) } : {}), ...(command.status ? { status: command.status } : {}), ...(command.session ? { session: command.session } : {}) }) },
         })
       case "memory.search":
         return reply(connection, command.id, {
@@ -4198,7 +4458,7 @@ export async function startDaemon(options: DaemonOptions) {
           result: {
             memories: store.memories.search({
               query: command.query,
-              ...(command.directory ? { directory: command.directory, profile: profileOf(store.settings.get(), command.directory) } : {}),
+              ...(command.directory ? { directory: command.directory, profile: areaOf(store.settings.get(), command.directory) } : {}),
               ...(command.session ? { session: command.session } : {}),
               ...(command.limit ? { limit: command.limit } : {}),
             }),
@@ -4262,7 +4522,7 @@ export async function startDaemon(options: DaemonOptions) {
         if (command.scope === "project" && !command.directory) return reply(connection, command.id, { ok: false, code: "invalid_command", message: "[DAEMON]: project memory needs a directory" })
         if (command.scope === "session" && !(command.sessionId && store.hasSession(command.sessionId))) return reply(connection, command.id, { ok: false, code: "invalid_command", message: "[DAEMON]: session memory needs the id of an existing session" })
         const directory = command.scope === "session" ? store.sessionInfo(command.sessionId!)?.directory : command.directory
-        if (command.pinned && store.memories.pinnedIn({ scope: command.scope, ...(directory ? { directory } : {}), profile: profileOf(store.settings.get(), directory), ...(command.sessionId ? { sessionId: command.sessionId } : {}) }) >= MAX_PINNED_MEMORIES)
+        if (command.pinned && store.memories.pinnedIn({ scope: command.scope, ...(directory ? { directory } : {}), profile: areaOf(store.settings.get(), directory), ...(command.sessionId ? { sessionId: command.sessionId } : {}) }) >= MAX_PINNED_MEMORIES)
           return reply(connection, command.id, { ok: false, code: "invalid_command", message: `[DAEMON]: at most ${MAX_PINNED_MEMORIES} memories can be pinned for a profile, project or session` })
         const memoryId = addMemory({
           scope: command.scope,
@@ -4473,13 +4733,13 @@ export async function startDaemon(options: DaemonOptions) {
         const { tools, issues } = await customTools.list(directory)
         return reply(connection, command.id, { ok: true, result: { directory, tools, issues } })
       }
-      case "packages.list":
-      case "packages.install":
-      case "packages.capture":
-      case "packages.remove":
-      case "packages.restore":
-      case "packages.enable": {
-        if (connection.remoteAddress || connection.peer) return reply(connection, command.id, { ok: false, code: "forbidden", message: "[PACKAGES]: package context reads local files; local only" })
+      case "profiles.list":
+      case "profiles.install":
+      case "profiles.capture":
+      case "profiles.remove":
+      case "profiles.restore":
+      case "profiles.enable": {
+        if (connection.remoteAddress || connection.peer) return reply(connection, command.id, { ok: false, code: "forbidden", message: "[PROFILES]: profile context reads local files; local only" })
         try { return reply(connection, command.id, { ok: true, result: await managePackages(command) }) }
         catch (error) {
           if (error instanceof PackageNotInstalledError) return reply(connection, command.id, { ok: false, code: "target_mismatch", message: error.message })
@@ -4487,28 +4747,28 @@ export async function startDaemon(options: DaemonOptions) {
           throw error
         }
       }
-      case "packages.search":
-      case "packages.show":
-      case "packages.preview":
-      case "packages.sources":
-      case "packages.add-source":
-      case "packages.remove-source":
-      case "packages.refresh":
-      case "packages.config":
-      case "packages.resource":
-      case "packages.install-catalog":
-      case "packages.install-source":
-      case "packages.disable-all":
-      case "packages.assets": {
+      case "profiles.search":
+      case "profiles.show":
+      case "profiles.preview":
+      case "profiles.sources":
+      case "profiles.add-source":
+      case "profiles.remove-source":
+      case "profiles.refresh":
+      case "profiles.config":
+      case "profiles.resource":
+      case "profiles.install-catalog":
+      case "profiles.install-source":
+      case "profiles.disable-all":
+      case "profiles.assets": {
         try { return reply(connection, command.id, { ok: true, result: await packageCatalog(command) }) }
         catch (error) {
           if (error instanceof PackageError) return reply(connection, command.id, { ok: false, code: "invalid_command", message: error.message })
           throw error
         }
       }
-      case "packages.create":
-      case "packages.update":
-      case "packages.delete-local": {
+      case "profiles.create":
+      case "profiles.update":
+      case "profiles.delete-local": {
         try { return reply(connection, command.id, { ok: true, result: await packageAuthoring(command) }) }
         catch (error) {
           if (error instanceof PackageError) return reply(connection, command.id, { ok: false, code: "invalid_command", message: error.message })
@@ -4685,8 +4945,10 @@ export async function startDaemon(options: DaemonOptions) {
         }
         return reply(connection, command.id, { ok: true })
       }
-      case "themes.list":
-        return reply(connection, command.id, { ok: true, result: { themes: readLayerThemes(layersFor(command.directory)) } })
+      case "themes.list": {
+        const layers = layersFor(command.directory)
+        return reply(connection, command.id, { ok: true, result: { themes: readLayerThemes(layers), toolDesigns: readLayerToolDesigns(layers), footerPacks: readLayerFooterPacks(layers) } })
+      }
       case "theme.validate":
       case "theme.install":
       case "theme.select": {
@@ -5138,7 +5400,7 @@ export async function startDaemon(options: DaemonOptions) {
         catch (error) { return reply(connection, command.id, { ok: false, code: "target_mismatch", message: String(error).slice(0, 500) }) }
       }
       case "task.list":
-        return reply(connection, command.id, { ok: true, result: { tasks: tasks.list(command.sessionId) } })
+        return reply(connection, command.id, { ok: true, result: { tasks: tasks.list(command.sessionId).map(withContext) } })
       case "task.run":
       case "task.status": {
         try {
@@ -5335,9 +5597,13 @@ export async function startDaemon(options: DaemonOptions) {
         const toolOwners = owned.length && baseReport.rent ? await extensions.toolOwners(store.sessionDirectory(command.sessionId)!).catch(() => new Map<string, string>()) : undefined
         const report = toolOwners?.size ? { ...withExtensions, rent: baseReport.rent!.map((entry) => toolOwners.has(entry.tool) ? { ...entry, owner: `extension:${toolOwners.get(entry.tool)}` } : entry) } : withExtensions
         const info = options.models ? catalogModel(options.models, report.model) : undefined
+        // The provider's count of the last call, derived from what usage already stores (the `context` column stays empty for most providers); not once a compaction packed the history since.
+        const lastCall = report.measuredTokens === undefined ? store.recentUsage(command.sessionId, 1)[0] : undefined
+        const measured = lastCall && !store.readAfter(command.sessionId, lastCall.seq, 500).some((event) => event.type === "compaction.updated" && event.state === "packed") ? usageContext(lastCall) : undefined
+        const measuredPart = measured !== undefined ? { measuredTokens: measured } : {}
         const override = windowOverride({ meta: store.meta, sessionId: command.sessionId, model: info, settings: store.settings.get() })
-        if (override) return reply(connection, command.id, { ok: true, result: { ...report, sessionId: command.sessionId, contextWindow: override.tokens, ...(override.source === "session" ? { contextWindowOverride: true } : { contextWindowModelSetting: true }) } })
-        return reply(connection, command.id, { ok: true, result: { ...report, sessionId: command.sessionId, ...(report.contextWindow === undefined && info?.contextWindow ? { contextWindow: info.contextWindow } : {}) } })
+        if (override) return reply(connection, command.id, { ok: true, result: { ...report, ...measuredPart, sessionId: command.sessionId, contextWindow: override.tokens, ...(override.source === "session" ? { contextWindowOverride: true } : { contextWindowModelSetting: true }) } })
+        return reply(connection, command.id, { ok: true, result: { ...report, ...measuredPart, sessionId: command.sessionId, ...(report.contextWindow === undefined && info?.contextWindow ? { contextWindow: info.contextWindow } : {}) } })
       }
       case "usage.recover": {
         if (connection.remoteAddress || connection.peer) return reply(connection, command.id, { ok: false, code: "forbidden", message: "Usage recovery is local only" })
@@ -5500,7 +5766,7 @@ export async function startDaemon(options: DaemonOptions) {
         const compactSettings = store.settings.get()
         // A model's `modelContext` (a window or compaction point made permanent for it) is listed beside the catalog's window.
         const withSetting = (model: ModelInfo) => { const contextSetting = modelContextOf(compactSettings, model); return contextSetting ? { ...model, contextSetting } : model }
-        const models = catalog.selectable ? listed.models.map((model) => { const compactAtTokens = modelCompactAt({ model, providers: compactProviders, settings: compactSettings }); return withSetting(compactAtTokens ? { ...model, compactAtTokens } : model) }) : listed.models.map(withSetting)
+        const models = catalog.selectable ? listed.models.map((model) => { const compactAtTokens = model.engine === "claude" ? Number(claudeCompactEnv({ model: model.id, settings: compactSettings, on: featureOn(compactSettings, "claude_compact", { safeMode: options.safeMode === true }) })?.CLAUDE_CODE_AUTO_COMPACT_WINDOW) || undefined : modelCompactAt({ model, providers: compactProviders, settings: compactSettings }); return withSetting(compactAtTokens ? { ...model, compactAtTokens } : model) }) : listed.models.map(withSetting)
         return reply(connection, command.id, { ok: true, result: { ...listed, models, ...(sessionId ? { reasoning: reasoning.report(store.sessionInfo(sessionId)!.directory, sessionId) } : {}), ...(handoff ? { handoff } : {}) } })
       }
       case "reasoning.status": {
@@ -6309,6 +6575,7 @@ export async function startDaemon(options: DaemonOptions) {
     await extraction.stop()
     continuity.stop()
     extensionDialogs.stop()
+    elevation?.stop()
     background.stop()
     interactive.stop()
     statusLines.stop()
@@ -6362,6 +6629,8 @@ export async function startDaemon(options: DaemonOptions) {
     mflowPort: mflowListener?.port,
     remotePeers: () => [...connections].filter((c) => c.peer).map((c) => ({ address: c.remoteAddress, tokenName: c.peer!.name, readOnly: c.peer!.readOnly })),
     connections: () => connections.size,
+    /** Connections that said who they are: `daemon.status`'s `clients`, without building the rest of the status. */
+    clients: () => { let n = 0; for (const peer of connections) if (peer.clientId) n++; return n },
     attachLoopback,
     serverEventSubscriptions: () => serverEventObservers.size,
     /** Whether the workflow service was built (P6: false on a daemon that never saw a workflow). */

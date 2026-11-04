@@ -612,7 +612,7 @@ describe("comments on an answer: the basic flow", () => {
       await s.h.app.onKey(mouse(0, 30, end, true))
       const rule = screen(s.h).find((row) => row.includes("copied"))!
       expect(rule).toContain(`${COMMENT_HINT} comment`)
-      expect(rule).toContain("Update installed")
+      expect(rule).toContain("New build installed")
       // The comment is on the answer's text, without the blank rows the drag ended in.
       await key(s, ALT_Q)
       await typeText(s, "ok")

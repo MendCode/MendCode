@@ -93,10 +93,10 @@ describe("asking the terminal", () => {
 
   test("the terminal is in raw mode before the screen asks: its answer is never echoed as text", async () => {
     const main = await Bun.file(new URL("../src/main.ts", import.meta.url)).text()
-    const raw = main.indexOf("process.stdin.setRawMode?.(true)\nscreen.enter()")
+    const raw = main.indexOf("process.stdin.setRawMode?.(true)\nif (!leaving) screen.enter()")
     expect(raw).toBeGreaterThan(0)
-    // The start has one `screen.enter()` at column 0, and it is the one right after raw mode.
-    expect(main.indexOf("\nscreen.enter()")).toBe(main.indexOf("\n", raw))
+    // The start has one `screen.enter()` at column 0 (skipped when a close already began), and it is the one right after raw mode.
+    expect(main.indexOf("\nif (!leaving) screen.enter()")).toBe(main.indexOf("\n", raw))
   })
 
   test("a terminal that only answers the device query is left alone and no stray bytes reach the keys", () => {

@@ -106,6 +106,8 @@ export function createRender(ctx: AppContext, actions: {
   /** The open extension modal as a card over the screen; undefined when none is open (or it closed itself). */
   extensionModalOverlay: (width: number, height: number) => { rows: Line[]; top: number; left: number; title?: string } | undefined
   footer: (width: number) => Line
+  promptStatusLine: (room: number) => Line | undefined
+  homeMascot: () => { art(): import("../../view/home").HomeMascot | undefined; placement(top: number): ImagePlacement[] }
   paneFacts: () => { model?: string; contextPercent?: number; costMicros?: number }
   statusRows: (width: number) => Line[]
   planReviewFrame: (width: number, height: number) => { rows: Line[]; cursor?: { row: number; col: number } } | undefined
@@ -192,7 +194,7 @@ export function createRender(ctx: AppContext, actions: {
         const sheetHeight = Math.min(Math.floor(height * .55), room)
         if (sheetHeight < 3) return []
         // An open side chat is being typed in and keeps its sheet; the cards give the chat back its rows (`panelNarrow: hide`).
-        return chat.open ? sideChatRows(chat, chatCols, sheetHeight) : state.tuiProfile.rightSidebar && state.tuiProfile.panelNarrow === "sheet" ? actions.rightRows(chatCols, sheetHeight) : []
+        return chat.open ? sideChatRows(chat, chatCols, sheetHeight, undefined, now()) : state.tuiProfile.rightSidebar && state.tuiProfile.panelNarrow === "sheet" ? actions.rightRows(chatCols, sheetHeight) : []
       } : undefined
       let laid = chatRows(chatCols, height, undefined, bottomPanel, current && !boxed ? toastView(true, chatCols)[0] : undefined)
       const spot = toast.length ? toastSpot({ rows: laid.rows, top: laid.body.top, bottom: laid.body.end, box: toast, width: chatCols }) : undefined
@@ -268,26 +270,27 @@ export function createRender(ctx: AppContext, actions: {
     return rows === built.rows ? built : { rows, top: 0, left: 0, cursor: { row: 0, col: 0 } }
   }
 
+  /** `draw` with `profile` as the terminal's profile, then the saved one back: a preview draws what the change would look like. */
+  function withProfile<T>(profile: import("../../view/tui-profile").TuiProfile, draw: () => T): T {
+    const saved = state.tuiProfile
+    state.tuiProfile = profile
+    try { return draw() } finally { state.tuiProfile = saved }
+  }
+
   function pageRows(width: number, height: number, placements: ImagePlacement[] = []): Line[] {
+    const customizing = state.page === "customize" || state.page === "settings" && state.settingsPageState.tui !== undefined
+    // An extension that replaces the footer owns it: the page says so instead of offering rows that cannot change it.
+    const footerOwner = customizing && state.ext ? state.ext.slotOwner("footer.replace") : undefined
     // Setup draws the model it is choosing; the agent/model bar would show the one in use, so no page of the setup flow carries it.
     const inSetup = state.page === "setup" || state.onboarding !== undefined && state.page === "text"
     // Footer rows (the user's, or the full view's default) are the chat's: a page keeps its whole height (the single-row footer still shows on a page).
     const foot = footerRowsOf({ mode: state.mode, profile: state.tuiProfile, list: state.customFooter }).rows.length === 0 && !["diagnostics", "worktrees", "warp", "setup", "intro", "ai-config", "tsm", "mflow", "console", "share"].includes(state.page) && !inSetup && state.tuiProfile.showStatus ? actions.statusRows(width).slice(0, Math.max(0, height - 1)) : []
     const bodyHeight = Math.max(1, height - foot.length)
-    const preview = { root: homeRoot(), sessions: homeSessions(), tip: homeTipText, now: now(), chatWidth: actions.transcriptWidth(),agent: state.agentReport?.current ?? "Build", loops: state.liveLoops.size, ...(input.version ? { version: input.version } : {}), ...(state.effectiveModel?.model ? { model: state.effectiveModel.model } : {}), ...(state.effectiveModel?.effort ? { effort: state.effectiveModel.effort } : {}), ...(state.modelReport?.engine ? { provider: state.modelReport.engine } : {}), ...(state.homeMcp ? { mcp: state.homeMcp } : {}), phase: mascotPhase({ state: state.transcript.foreground, connected: state.connection === "connected", retry: state.turnState.retry !== undefined, ...(state.turnState.current ? { current: state.turnState.current } : {}) }), session: (cols: number, rows: number, profile = state.tuiProfile): Line[] => {
-      const saved = state.tuiProfile
-      const glyphsNow = { state, glyphs: ctx.glyphs, pinned: input.glyphs, env: input.env ?? process.env }
-      state.tuiProfile = profile
-      applyGlyphMode(glyphsNow)
-      state.transcript.setAppearance(profile)
-      // The sample shows the previewed glyph set even while the rest of the frame keeps the saved one.
-      const ascii = state.glyphMode === "ascii"
-      try {
-        const rows_ = state.transcript.blocks().length ? [actions.topbarRow(cols), ...state.transcript.viewport(cols, Math.max(0, rows - 1)).map((line) => line.spans)] : [[{ text: "No conversation yet", fg: "muted" as const }]]
-        return ascii ? rows_.map(asciiLine) : rows_
-      }
-      finally { state.tuiProfile = saved; applyGlyphMode(glyphsNow); state.transcript.setAppearance(saved) }
-    } }
+    const preview = { root: homeRoot(), sessions: homeSessions(), tip: homeTipText, now: now(), chatWidth: actions.transcriptWidth(),agent: state.agentReport?.current ?? "Build", loops: state.liveLoops.size, ...(input.version ? { version: input.version } : {}), ...(state.effectiveModel?.model ? { model: state.effectiveModel.model } : {}), ...(state.effectiveModel?.effort ? { effort: state.effectiveModel.effort } : {}), ...(state.modelReport?.engine ? { provider: state.modelReport.engine } : {}), ...(state.homeMcp ? { mcp: state.homeMcp } : {}), phase: mascotPhase({ state: state.transcript.foreground, connected: state.connection === "connected", retry: state.turnState.retry !== undefined, ...(state.turnState.current ? { current: state.turnState.current } : {}) }), mode: state.mode, session: { title: actions.sessionTitle(), ...(state.gitBranch ? { branch: state.gitBranch } : {}) },
+      // The chat's own footer and status line, drawn with the previewed profile: the user's footer rows and extensions are what the pane shows.
+      footer: (cols: number, profile: import("../../view/tui-profile").TuiProfile) => withProfile(profile, () => actions.statusRows(cols)),
+      statusLine: (room: number, profile: import("../../view/tui-profile").TuiProfile) => withProfile(profile, () => actions.promptStatusLine(room)),
+      ...(customizing ? { mascot: actions.homeMascot().art() } : {}) }
     let body: Line[] = []
     if (state.page === "file") body = actions.fileOpen.pageRows(width, bodyHeight)
     else if (state.automationLedger) body = renderAutomationLedger({ state: state.automationLedger, width, height: bodyHeight })
@@ -415,6 +418,9 @@ export function createRender(ctx: AppContext, actions: {
         ...(state.promptReport ? { promptStatus: state.promptReport } : {}),
         graphIndex: state.settingsNow.codegraph_index ?? "auto",
         preview,
+        facts: { mode: state.mode, ...(footerOwner ? { footerExtension: footerOwner } : {}) },
+        // The home's pet picture, placed over the preview's blank cells where the terminal draws pictures.
+        mascotAt: (origin) => placements.push(...actions.homeMascot().placement(origin.row).map((placement) => ({ ...placement, col: placement.col + origin.col }))),
         width,
         height: bodyHeight,
         glyphs: g,

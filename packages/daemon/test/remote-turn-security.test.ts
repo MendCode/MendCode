@@ -34,35 +34,35 @@ test("peer turns cannot call thread or PR tools, even in full mode with forged t
     expect(touched).toBe(false)
     expect(requests[0]!.tools.some((tool) => tool.name === name)).toBe(false)
   }
-  expect(remoteTurnOptions({ excludeTools: ["write"], noReply: true })).toMatchObject({ noReply: true, excludeTools: ["write", "threads", "packages", "pr_watch", "review_config", "pr_review", "session_meta", "graph_*", "webfetch", "memory", "memory_graph", "remember", "workflow_script"] })
+  expect(remoteTurnOptions({ excludeTools: ["write"], noReply: true })).toMatchObject({ noReply: true, excludeTools: ["write", "threads", "profiles", "packages", "pr_watch", "review_config", "pr_review", "session_meta", "graph_*", "webfetch", "memory", "memory_graph", "remember", "workflow_script"] })
 })
 
-test("peer turns cannot reach the packages tool through tool discovery or a forged call, in any permission mode", async () => {
+test("peer turns cannot reach the profiles tool through tool discovery or a forged call, in any permission mode", async () => {
   for (const peer of [false, true]) for (const mode of ["full", "ask"] as const) {
     const ran: string[] = []
     const port: PackagePort = { preview: async () => "{}", run: async (request) => { ran.push(request.action); return { ok: true } } }
-    const { provider, requests } = scriptedProvider([callTool("tool_search", { query: "packages" }), callTool("packages", { action: "list" }), callTool("packages", { action: "remove", key: "user:acme" }), stop("done")])
+    const { provider, requests } = scriptedProvider([callTool("tool_search", { query: "profiles" }), callTool("profiles", { action: "list" }), callTool("profiles", { action: "remove", key: "user:acme" }), stop("done")])
     const engine = createNativeEngine({
       provider, history: memoryHistory(), cwdFor: () => "/temp/repo", system: () => "sys", compactionPrompt: "summary",
       tools: [packagesTool], permissionPolicy: () => ({ tier: "full", experimental: { tool_discovery: true } }), packages: () => port,
     })
-    const t = turn({ text: "manage packages", mode: () => mode, answers: [{ kind: "approve", scope: "once" }] })
+    const t = turn({ text: "manage profiles", mode: () => mode, answers: [{ kind: "approve", scope: "once" }] })
     if (peer) t.input.turnOptions = remoteTurnOptions({ excludeTools: [] })
     await engine.runTurn(t.input)
     if (peer) {
       expect(ran).toEqual([])
-      for (const request of requests) expect(request.tools.some((tool) => tool.name === "packages")).toBe(false)
+      for (const request of requests) expect(request.tools.some((tool) => tool.name === "profiles")).toBe(false)
       // `tool_search` stays for the auxiliary tools every tier defers; it never finds the excluded tool.
       const searches = requests.at(-1)!.messages.filter((message) => message.role === "tool" && message.name === "tool_search")
       expect(searches).toHaveLength(1)
-      for (const search of searches) expect(search.role === "tool" && search.output).not.toContain('"name":"packages"')
+      for (const search of searches) expect(search.role === "tool" && search.output).not.toContain('"name":"profiles"')
     } else expect(ran).toContain("list")
   }
 })
 
 test("automatic continuations retain the paused peer turn's local tool restrictions", () => {
-  expect(continuationTurnOptions(undefined, true)).toMatchObject({ excludeTools: ["threads", "packages", "pr_watch", "review_config", "pr_review", "session_meta", "graph_*", "webfetch", "memory", "memory_graph", "remember", "workflow_script"] })
-  expect(continuationTurnOptions({ excludeTools: ["write"] }, true)).toMatchObject({ excludeTools: ["write", "threads", "packages", "pr_watch", "review_config", "pr_review", "session_meta", "graph_*", "webfetch", "memory", "memory_graph", "remember", "workflow_script"] })
+  expect(continuationTurnOptions(undefined, true)).toMatchObject({ excludeTools: ["threads", "profiles", "packages", "pr_watch", "review_config", "pr_review", "session_meta", "graph_*", "webfetch", "memory", "memory_graph", "remember", "workflow_script"] })
+  expect(continuationTurnOptions({ excludeTools: ["write"] }, true)).toMatchObject({ excludeTools: ["write", "threads", "profiles", "packages", "pr_watch", "review_config", "pr_review", "session_meta", "graph_*", "webfetch", "memory", "memory_graph", "remember", "workflow_script"] })
   expect(continuationTurnOptions(undefined, false)).toBeUndefined()
 })
 

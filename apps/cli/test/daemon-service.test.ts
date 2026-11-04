@@ -166,7 +166,7 @@ test("the real CLI service help remains lazy and local-only validation precedes 
       const process = Bun.spawnSync(["bun", entry, "--dir", dir, ...args], { stdout: "pipe", stderr: "pipe" })
       expect(process.exitCode).toBe(args.includes("--socket") ? 64 : 0)
       expect(process.stderr.toString()).not.toContain("ENOENT")
-      expect(process.stdout.toString() + process.stderr.toString()).toContain(args.includes("--socket") ? "local-only" : "daemon service")
+      expect(process.stdout.toString() + process.stderr.toString()).toContain(args.includes("--socket") ? "local-only" : "service <action>")
     }
     const script = `process.argv = [process.execPath, ${JSON.stringify(entry)}, "daemon", "service", "--help"]; const stop = new Error("exit"); process.stdout.write = () => true; process.exit = () => { throw stop }; try { await import(${JSON.stringify(entry)}) } catch (e) { if (e !== stop) throw e }; const cache = Object.keys(require.cache); console.error(JSON.stringify({ zod: cache.some(k => k.includes("/zod/")), host: cache.some(k => k.endsWith("/user-service.ts")) }))`
     const probe = Bun.spawnSync(["bun", "-e", script], { stdout: "pipe", stderr: "pipe" })

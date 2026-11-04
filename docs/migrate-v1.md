@@ -22,7 +22,7 @@ Exit codes: `0` done, `1` done with session errors (or an unexpected failure), `
 ## What is refused
 
 - `--dir` or `--from` missing.
-- `--dir` equal to or inside `--from`, or inside `~/.mendcode` or `~/.local/share/mendcode` (symbolic links are resolved first).
+- `--dir` equal to or inside `--from`, or inside `~/.mendcode-v1` (where v1's `~/.mendcode` is set aside) or `~/.local/share/mendcode` (symbolic links are resolved first).
 - `--from` without `mendcode-local.db`.
 - A `--dir` that a MendCode daemon is using: stop it first (`stop MendCode first (a daemon is using <dir>)`). The import takes the same writer lock as the daemon.
 

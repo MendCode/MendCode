@@ -37,6 +37,7 @@ export const RestPlanReviewReply = lazySchema(() => z.strictObject({
   markdown: z.string().min(1).max(30_000).optional(),
   reason: z.string().max(2000).optional(),
   comments: z.string().max(4000).optional(),
+  permission: z.enum(["full", "edits", "ask"]).optional(),
 }))
 
 export const MemorySideChatPayload = lazySchema(() => z.strictObject({

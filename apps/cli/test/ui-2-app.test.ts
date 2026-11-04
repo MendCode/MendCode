@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test"
 import type { Loop } from "@mendcode/protocol"
 import { createTranscript } from "../src/view/transcript"
 import { createTurnState } from "../src/view/turn-state"
-import { CUSTOMIZE_ROWS } from "../src/view/customize-page"
+import { CUSTOMIZE_ROWS, customizeSteps } from "../src/view/customize-page"
 import { DEFAULT_TUI_PROFILE, readTuiProfile, writeTuiProfile, type TuiProfile } from "../src/view/tui-profile"
 import { SETUP_ROWS } from "../src/view/setup-page"
 import { textWidth } from "../src/view/wrap"
@@ -12,7 +12,7 @@ afterEach(cleanTemps)
 const text = (h: Harness) => h.text().join("\n")
 async function change(h: Harness, field: typeof CUSTOMIZE_ROWS[number], key = " ") {
   await h.type("/customize\r")
-  for (let i = 0; i < CUSTOMIZE_ROWS.indexOf(field); i++) await h.app.onKey("\x1b[B")
+  for (let i = 0; i < customizeSteps(field, h.app.tuiProfile, { mode: h.app.viewMode }); i++) await h.app.onKey("\x1b[B")
   await h.app.onKey(key)
   await h.app.onKey("\x1b")
   h.app.render()
@@ -81,7 +81,8 @@ test("Agent View lists waiting, looping and working sessions, a finished one und
 })
 
 test("footer and session chrome controls change real data immediately", async () => {
-  const { h } = create({ showEffort: true }, 100, 30)
+  // The built-in footer's toggles (provider, agent): the default pack draws neither, so this runs on `footerPack: off`.
+  const { h } = create({ showEffort: true, footerPack: "off" }, 100, 30)
   await Bun.sleep(5)
   const chat = conversation(h.sessionId, h.app.onEvent)
   chat.exchange("Keep the transcript", "Answer stays visible")

@@ -10,8 +10,8 @@ import type { ReviewSessionFactory } from "../src/pr-review/engine"
 import { findingId } from "../src/pr-review/findings"
 import type { GhCall } from "../src/pr-review/publish"
 import { reviewNotice, runConfigKey, runPrReview } from "../src/pr-review/run"
-import { ReviewTurnError } from "../src/pr-review/sessions"
-import { emptyState } from "../src/pr-review/state"
+import { ReviewTurnError, ReviewTurnOverBudget } from "../src/pr-review/sessions"
+import { emptyState, reviewMarker } from "../src/pr-review/state"
 
 /**
  * runPrReview with the platform fields (contracts.ts `RunPlatformInput`): config layers, coverage, stacks, budget stops, quota
@@ -54,7 +54,7 @@ const candidate = ({ path: file, line, summary, category = "correctness" }: Cand
 const LOOP = { path: "src/math.ts", line: 3, summary: "The loop skips the first value" }
 const HALF = { path: "src/math.ts", line: 6, summary: "half() truncates odd numbers" }
 
-type Turn = { purpose: "review" | "verify"; prompt: string }
+type Turn = { purpose: "review" | "verify" | "read"; prompt: string }
 /**
  * Children that answer the review pass with `findings` and confirm every finding a verify turn names. `fail` throws on the
  * first turn of that purpose (once); `tokens` is each turn's report.
@@ -176,18 +176,40 @@ describe("runPrReview: coverage and stacks", () => {
 })
 
 describe("runPrReview: stops, checkpoints and resume", () => {
-  test("a budget stop checkpoints the candidates and publishes nothing, even with gh and publish", async () => {
+  test("a review pass that alone passes the cap never ends empty: one short closing check verifies its candidates and the review is posted whole", async () => {
     const repo = await repository({ baseConfig: "enabled: true\nbudget:\n  tokens_per_pr: 10000\n" })
     const kids = children({ tokens: { input: 20_000, output: 100 } })
     const github = fakeGh()
     const run = await runPrReview({ ...baseInput(repo, kids.factory), publish: true, gh: github.gh })
-    expect(kids.purposes()).toEqual(["review"])
-    expect(github.posts()).toEqual([])
-    expect(run.status).toBe("reviewed")
+    expect(kids.purposes()).toEqual(["review", "verify"])
+    expect(kids.turns[1]!.prompt).toContain("short closing check")
+    // The closing check carries the findings, not the diff again.
+    expect(kids.turns[1]!.prompt).not.toContain("diff --git")
+    expect(github.posts()).toHaveLength(1)
+    expect(run.status).toBe("published")
+    expect(run.stop).toBeUndefined()
+    expect(run.outcome!.partial).toBeUndefined()
+    expect(run.outcome!.result.findings).toHaveLength(2)
+    expect(JSON.parse(github.posts()[0]!.stdin!).body).toContain("## MendCode review")
+  })
+
+  test("a budget stop whose closing check cannot judge the candidates posts nothing as a finding and keeps them for the resume", async () => {
+    const repo = await repository({ baseConfig: "enabled: true\nbudget:\n  tokens_per_pr: 10000\n" })
+    const kids = children({ tokens: { input: 20_000, output: 100 }, fail: { purpose: "verify", error: new Error("[PR_REVIEW]: the closing check crashed") } })
+    const github = fakeGh()
+    const run = await runPrReview({ ...baseInput(repo, kids.factory), publish: true, gh: github.gh })
+    expect(kids.purposes()).toEqual(["review", "verify"])
+    const body = JSON.parse(github.posts()[0]!.stdin!) as { body: string; comments: unknown[] }
+    // Posted as a partial review that says nothing was verified; the two candidates are counted, not published.
+    expect(body.comments).toEqual([])
+    expect(body.body).toContain("## MendCode partial review")
+    expect(body.body).toContain("2 candidate findings were found but not verified")
+    expect(body.body).not.toContain(reviewMarker(repo.head))
+    expect(run.status).toBe("published")
     expect(run.stop).toMatchObject({ kind: "budget", unit: "tokens", limit: 10_000, resumable: true })
     expect(run.checkpoint!.candidates).toHaveLength(2)
-    expect(run.reason).toContain("nothing was published")
-    expect(reviewNotice({ repo: "acme/app", number: 12, run })).toContain("Stopped at MendCode's token budget")
+    expect(run.state.lastHead).toBeUndefined()
+    expect(reviewNotice({ repo: "acme/app", number: 12, run })).toContain("Partial review:")
   })
 
   test("a quota in the review pass is a resumable checkpoint, not a failure", async () => {
@@ -324,6 +346,49 @@ describe("runPrReview: publishing identity and accounting", () => {
   })
 })
 
+describe("runPrReview: onlyIfPublishable", () => {
+  /** A `gh` whose reviews list holds one MendCode review of `head` by `login`; everything else is empty. */
+  const withReviewBy = (head: string, login: string): GhCall => async ({ argv }) =>
+    /\/pulls\/12\/reviews\?/.test(argv[1] ?? "") ? { code: 0, out: JSON.stringify([{ id: 5, state: "COMMENTED", commit_id: head, body: `## MendCode review\n${reviewMarker(head)}`, user: { login, type: "User" }, author_association: "OWNER" }]) } : { code: 0, out: "[]" }
+
+  test("a reviewer that may not post, or whose head another publisher already reviewed, is skipped before any model call", async () => {
+    const repo = await repository()
+    const denied = children()
+    const refused = await runPrReview({ ...baseInput(repo, denied.factory), publish: true, onlyIfPublishable: true, gh: fakeGh().gh, publisher: { login: "nora", check: async () => ({ ok: false, reason: "@nora has no write access to acme/app" }) } })
+    expect(refused).toMatchObject({ status: "skipped", notPublisher: true })
+    expect(refused.reason).toBe("@nora has no write access to acme/app; nothing was sent to a model")
+    expect(denied.turns).toEqual([])
+
+    const taken = children()
+    const stood = await runPrReview({ ...baseInput(repo, taken.factory), publish: true, onlyIfPublishable: true, gh: withReviewBy(repo.head, "obed"), publisher: { login: "nora", check: async () => ({ ok: true }) } })
+    expect(stood).toMatchObject({ status: "skipped", notPublisher: true })
+    expect(stood.reason).toBe("@obed already posted a MendCode review of this head; nothing was sent to a model")
+    expect(taken.turns).toEqual([])
+  })
+
+  test("a reviewer that may post still reviews, and a manual run keeps its review in the session as before", async () => {
+    const repo = await repository()
+    const open = children()
+    const posted = await runPrReview({ ...baseInput(repo, open.factory), publish: true, onlyIfPublishable: true, gh: fakeGh().gh, publisher: { login: "nora", check: async () => ({ ok: true }) } })
+    expect(posted.status).toBe("published")
+    expect(open.turns.length).toBeGreaterThan(0)
+
+    const manual = children()
+    const kept = await runPrReview({ ...baseInput(repo, manual.factory), publish: true, gh: withReviewBy(repo.head, "obed"), publisher: { login: "nora", check: async () => ({ ok: true }) } })
+    expect(kept).toMatchObject({ status: "reviewed", notPublisher: true })
+    expect(kept.reason).toBe("@obed already posted a MendCode review of this head; kept in this session")
+    expect(manual.turns.length).toBeGreaterThan(0)
+  })
+
+  test("a run that does not publish is not gated", async () => {
+    const repo = await repository()
+    const kids = children()
+    const run = await runPrReview({ ...baseInput(repo, kids.factory), publish: false, onlyIfPublishable: true, gh: fakeGh().gh, publisher: { login: "nora", check: async () => ({ ok: false, reason: "no" }) } })
+    expect(run.status).toBe("reviewed")
+    expect(kids.turns.length).toBeGreaterThan(0)
+  })
+})
+
 describe("runAudit", () => {
   test("audits HEAD against the empty tree, keeps the findings in the session and never calls gh", async () => {
     const repo = await repository()
@@ -347,5 +412,165 @@ describe("runAudit", () => {
     expect(audit.cut).toContainEqual({ path: "big/a.ts", reason: "budget" })
     expect(kids.turns[0]!.prompt).toContain("left out 1 file: big/a.ts")
     expect(kids.turns[0]!.prompt).toContain("src/math.ts")
+  })
+})
+
+describe("runPrReview: the review ends early and stays within what its diff earns", () => {
+  test("a first pass that says it could not review ends the review: no verification, nothing published, no 'no new findings'", async () => {
+    const repo = await repository()
+    const github = fakeGh()
+    const turns: string[] = []
+    const factory: ReviewSessionFactory = async ({ purpose }) => ({
+      async send() { turns.push(purpose); return { text: JSON.stringify({ summary: "x", findings: [], incomplete: "my tools are read-only and I could not open the changed files" }), tokens: { input: 1000, output: 50 } } },
+      async close() {},
+    })
+    const run = await runPrReview({ ...baseInput(repo, factory), publish: true, gh: github.gh })
+    expect(turns).toEqual(["review"])
+    expect(github.posts()).toEqual([])
+    expect(run.reason).toContain("review incomplete")
+    expect(run.reason).toContain("nothing was published")
+    expect(run.reason).not.toContain("no new findings")
+  })
+
+  test("a defect the verification discarded is named as ruled out, never as a finding", async () => {
+    const repo = await repository()
+    const factory: ReviewSessionFactory = async ({ purpose }) => ({
+      async send(prompt) {
+        if (purpose === "review") return { text: JSON.stringify({ summary: "Changes the math helpers.", findings: [LOOP, HALF].map(candidate) }), tokens: { input: 100, output: 10 } }
+        const ids = prompt.slice(prompt.indexOf("<findings"), prompt.indexOf("</findings>")).split("\n").flatMap((line) => { try { const value = JSON.parse(line) as { id?: string; path?: string; line?: number }; return value.id ? [value] : [] } catch { return [] } })
+        return { text: JSON.stringify({ verdicts: ids.map((entry) => ({ id: entry.id, verdict: entry.line === 6 ? "rejected" : "confirmed", evidence: [`${entry.path}:${entry.line}`], reason: "the caller never passes odd numbers" })) }), tokens: { input: 100, output: 10 } }
+      },
+      async close() {},
+    })
+    const run = await runPrReview(baseInput(repo, factory))
+    expect(run.outcome!.result.findings.map((finding) => finding.line)).toEqual([3])
+    expect(run.outcome!.result.summary).toContain("ruled out")
+    expect(run.outcome!.result.summary).toContain("half() truncates odd numbers")
+  })
+})
+
+/**
+ * The real case of #23: a diff of four parts under a cap that carries one or two of them. The review used to stop with nothing posted;
+ * it now closes with one short check and posts a partial review, and the next run reviews only what is missing.
+ */
+describe("runPrReview: a review that reaches the cap closes as a partial one", () => {
+  const PARTS = ["src/p1.ts", "src/p2.ts", "src/p3.ts", "src/p4.ts"]
+  const body = (name: string) => Array.from({ length: 150 }, (_, i) => `export const ${name}_${i} = ${i} // padding that makes the diff of this file about the size of one review part`).join("\n") + "\n"
+
+  /** main with a config, feature adding four large files: with `context_tokens: 8000` every file is its own part. */
+  async function fourParts(budget: string) {
+    const dir = temp("mc-run-parts-")
+    await git(dir, "init", "-q", "-b", "main")
+    write(dir, ".mendcode/review.yaml", `enabled: true\nbudget:\n${budget}\n`)
+    write(dir, "README.md", "app\n")
+    await git(dir, "add", "-A")
+    await git(dir, "commit", "-q", "-m", "base")
+    const base = await git(dir, "rev-parse", "HEAD")
+    await git(dir, "checkout", "-q", "-b", "feature")
+    for (const file of PARTS) write(dir, file, body(path.basename(file, ".ts")))
+    await git(dir, "add", "-A")
+    await git(dir, "commit", "-q", "-m", "feature")
+    return { dir, base, head: await git(dir, "rev-parse", "HEAD") }
+  }
+
+  /** Review children that report one defect per file their part names and confirm every id a verify turn names; `cost` is each review turn's input tokens, by call order. */
+  function partKids(cost: (review: number) => number) {
+    const reviewed: string[][] = []
+    const verified: string[][] = []
+    const prompts: string[] = []
+    const factory: ReviewSessionFactory = async ({ purpose }) => ({
+      async send(prompt) {
+        prompts.push(prompt)
+        if (purpose === "review") {
+          const files = [...new Set([...prompt.matchAll(/^diff --git a\/(\S+) /gm)].map((match) => match[1]!))]
+          reviewed.push(files)
+          const findings = files.map((file) => candidate({ path: file, line: 1, summary: `unchecked shape in ${file}` }))
+          return { text: JSON.stringify({ summary: `Adds ${files.join(", ")}.`, findings }), tokens: { input: cost(reviewed.length), output: 0 } }
+        }
+        const ids = prompt.slice(prompt.indexOf("<findings"), prompt.indexOf("</findings>")).split("\n").flatMap((line) => { try { const value = JSON.parse(line) as { id?: string; path?: string }; return value.id ? [value] : [] } catch { return [] } })
+        verified.push(ids.map((entry) => entry.path!))
+        return { text: JSON.stringify({ verdicts: ids.map((entry) => ({ id: entry.id, verdict: "confirmed", evidence: [`${entry.path}:1`] })) }), tokens: { input: 500, output: 0 } }
+      },
+      async close() {},
+    })
+    return { factory, reviewed, verified, prompts }
+  }
+  const BUDGET = "  tokens_per_pr: 40000\n  context_tokens: 8000"
+
+  test("it stops after part 1, posts a partial review of what it verified, lists what it did not review, and the next run reviews only the rest", async () => {
+    const repo = await fourParts(BUDGET)
+    const first = partKids((review) => review === 1 ? 12_000 : 1_000)
+    const github = fakeGh()
+    const run = await runPrReview({ ...baseInput(repo, first.factory), publish: true, gh: github.gh })
+    expect(first.reviewed).toEqual([[PARTS[0]!]])
+    // One closing check over part 1's candidate: its prompt holds the finding, not the diff, and says it is short.
+    expect(first.verified).toEqual([[PARTS[0]!]])
+    expect(first.prompts.at(-1)).toContain("short closing check")
+    expect(first.prompts.at(-1)).not.toContain("diff --git")
+    expect(run.status).toBe("published")
+    expect(run.outcome!.partial).toMatchObject({ reviewed: [PARTS[0]!], notReviewed: PARTS.slice(1), unverified: 0 })
+    expect(run.info!.partial).toMatchObject({ number: 12 })
+    expect(run.outcome!.result.findings.map((finding) => finding.path)).toEqual([PARTS[0]!])
+    expect(run.stop).toMatchObject({ kind: "budget", resumable: true, remaining: "3 of 4 parts of the diff not reviewed" })
+    expect(run.checkpoint).toMatchObject({ phase: "analysis 1/4", candidates: [] })
+    expect(run.checkpoint!.verified.map((finding) => finding.path)).toEqual([PARTS[0]!])
+    expect(run.checkpoint!.result!.tokens).toEqual({ input: 0, output: 0, cached: 0 })
+
+    const posted = JSON.parse(github.posts()[0]!.stdin!) as { body: string; comments: Array<{ path: string }> }
+    expect(posted.comments.map((comment) => comment.path)).toEqual([PARTS[0]!])
+    expect(posted.body).toContain("## MendCode partial review")
+    expect(posted.body).toContain("**Partial review** · 1 of 4 files reviewed")
+    for (const file of PARTS.slice(1)) expect(posted.body).toContain(`\`${file}\``)
+    expect(posted.body).toContain("/pr review 12")
+    expect(posted.body).toContain("budget.tokens_per_pr")
+    expect(posted.body).not.toContain(reviewMarker(repo.head))
+    // A partial review is not a review of the head: the dedupe state does not know this head.
+    expect(run.state.lastHead).toBeUndefined()
+    expect(Object.keys(run.state.published)).toHaveLength(1)
+
+    // The next /pr review (the job's checkpoint, the state the partial left): only parts 2 to 4 are reviewed, the verified finding is not judged again.
+    const second = partKids(() => 1_000)
+    const rest = await runPrReview({ ...baseInput(repo, second.factory), publish: true, gh: github.gh, state: run.state, checkpoint: run.checkpoint })
+    expect(second.reviewed).toEqual(PARTS.slice(1).map((file) => [file]))
+    expect(second.verified.flat().sort()).toEqual(PARTS.slice(1))
+    expect(rest.status).toBe("published")
+    expect(rest.stop).toBeUndefined()
+    expect(rest.outcome!.partial).toBeUndefined()
+    expect(rest.outcome!.result.findings.map((finding) => finding.path).sort()).toEqual(PARTS)
+    expect(rest.state.lastHead).toBe(repo.head)
+    const whole = JSON.parse(github.posts()[1]!.stdin!) as { body: string; comments: Array<{ path: string }> }
+    expect(whole.body).toContain("## MendCode review")
+    expect(whole.body).toContain(reviewMarker(repo.head))
+    // Part 1's finding was posted with the partial review: only the new ones are comments now.
+    expect(whole.comments.map((comment) => comment.path).sort()).toEqual(PARTS.slice(1))
+  })
+
+  test("it stops after part 2: both parts are listed as reviewed, the other two as not reviewed", async () => {
+    const repo = await fourParts(BUDGET)
+    // Part 1 is cheap and part 2 is not: after part 1 the rest still fits, after part 2 it does not.
+    const kids = partKids((review) => review === 1 ? 2_000 : 16_000)
+    const github = fakeGh()
+    const run = await runPrReview({ ...baseInput(repo, kids.factory), publish: true, gh: github.gh })
+    expect(kids.reviewed).toEqual([[PARTS[0]!], [PARTS[1]!]])
+    expect(run.outcome!.partial).toMatchObject({ reviewed: PARTS.slice(0, 2), notReviewed: PARTS.slice(2) })
+    expect(run.outcome!.result.findings.map((finding) => finding.path).sort()).toEqual(PARTS.slice(0, 2))
+    expect(run.checkpoint!.phase).toBe("analysis 2/4")
+    expect(github.posts()).toHaveLength(1)
+  })
+
+  test("a turn that counts past the cap in part 3 keeps parts 1 and 2: they are posted as a partial review, not lost", async () => {
+    const repo = await fourParts("  tokens_per_pr: 1000000\n  context_tokens: 8000")
+    const kids = partKids(() => 1_000)
+    let reviews = 0
+    const over: ReviewSessionFactory = async (input) => {
+      const child = await kids.factory(input)
+      return { async send(prompt, options) { if (input.purpose === "review" && ++reviews === 3) throw new ReviewTurnOverBudget(10_000, 342_037); return child.send(prompt, options) }, close: () => child.close() }
+    }
+    const github = fakeGh()
+    const run = await runPrReview({ ...baseInput(repo, over), publish: true, gh: github.gh })
+    expect(run.outcome?.partial).toMatchObject({ reviewed: PARTS.slice(0, 2), notReviewed: PARTS.slice(2) })
+    expect(run.status).toBe("published")
+    expect(run.stop).toMatchObject({ kind: "budget", resumable: true })
+    expect(JSON.parse(github.posts()[0]!.stdin!).body).toContain("## MendCode partial review")
   })
 })

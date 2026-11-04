@@ -12,7 +12,7 @@ MendCode reads, as data only, the folders other agents use:
 | `<project>/.claude/{skills,commands,agents}`, `~/.claude/{skills,commands,agents}` | skills, slash commands, agents |
 | `.mendcode` of the project's parent folders inside its repository (`repo/.mendcode` when you open `repo/apps/web`) | skills, slash commands, agents |
 
-- MendCode's own folders win on the same name: `.claude` sits under `~/.mendcode-v2` (user) and `<project>/.mendcode` (project). The project's `.agents`/`.claude` beat the user's own folder.
+- MendCode's own folders win on the same name: `.claude` sits under `~/.mendcode` (user) and `<project>/.mendcode` (project). The project's `.agents`/`.claude` beat the user's own folder.
 - Nothing executable is read from them: no tools, hooks, MCP, extensions or `mendcode.json`.
 - Parent folders: the walk goes from the project's parent up to the folder holding `.git`, farthest first, so the nearest
   folder wins and the project's own `.mendcode` wins over all of them. A project that is itself the repository root, a
@@ -68,9 +68,9 @@ Honoured means applied; noted means read and shown as a note (on load, in `/skil
 | anything else (`context`, `hooks`, `paths`, …) | ignored, listed once | ignored, listed once |
 | Codex `$NAME` placeholders (`argument-hint: FILE=<path>`) | not applicable | not substituted: noted; use `$1`…`$9` or `$ARGUMENTS` |
 
-Skill commands: `/skill-name args` sends the skill's folder and body with `$ARGUMENTS` filled (arguments are appended when the body has no placeholder). Only `$ARGUMENTS` is replaced, and `!` shell markers in a skill body are never run. A skill whose `/name` is taken by a built-in or a custom command does not become a command; `/doctor` says so. Skills of the package that ships with MendCode itself stay out of the slash menu (the model and `/skills` reach them). The `skill` tool called with no `name` lists the skills it can load, which is how the model finds them in `minimal` mode, where the prompt carries no catalog.
+Skill commands: `/skill-name args` sends the skill's folder and body with `$ARGUMENTS` filled (arguments are appended when the body has no placeholder). Only `$ARGUMENTS` is replaced, and `!` shell markers in a skill body are never run. A skill whose `/name` is taken by a built-in or a custom command does not become a command; `/doctor` says so. Skills of the profile that ships with MendCode itself stay out of the slash menu (the model and `/skills` reach them). The `skill` tool called with no `name` lists the skills it can load, which is how the model finds them in `minimal` mode, where the prompt carries no catalog.
 
-Reload: the daemon watches the data directory (skills, commands, agents and extensions of its own and of its packages) and, for projects trusted for project tools, the project's `.mendcode`, `.claude` and `.agents` folders including their packages, with an 80 ms debounce and at most 16 project folders. An edit reloads extensions and tells terminals; an untrusted project is never watched.
+Reload: the daemon watches the data directory (skills, commands, agents and extensions of its own and of its profiles) and, for projects trusted for project tools, the project's `.mendcode`, `.claude` and `.agents` folders including their profiles, with an 80 ms debounce and at most 16 project folders. An edit reloads extensions and tells terminals; an untrusted project is never watched.
 
 ## Shell policy
 

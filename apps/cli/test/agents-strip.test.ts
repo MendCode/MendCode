@@ -206,3 +206,25 @@ test("what a sub-agent runs on is a line under its row, in its own colours, and 
   expect(rows[0]).toMatch(/Review the Swift sources\s+bg\s+Opus 5\.5\s+thinking/)
   for (const row of rows) expect(textWidth(row)).toBeLessThanOrEqual(80)
 })
+
+test("a running sub-agent says how full its context is: a percentage against a known limit, the tokens alone without one", () => {
+  const tasks = [task({ taskId: "ses_a", context: { tokens: 91_000, limit: 100_000 } } as never), task({ taskId: "ses_b", description: "Rank the feed", context: { tokens: 42_000 } } as never), task({ taskId: "ses_c", description: "No call yet" })]
+  const rows = draw(tasks)
+  expect(rows[0]).toMatch(/ctx 91%\s+1m 12s$/)
+  expect(rows[1]).toMatch(/ctx 42K\s+1m 12s$/)
+  // A row without the figure keeps its time in the same column.
+  expect(rows[2]!.search(/\d+m \d+s$/)).toBe(rows[0]!.search(/\d+m \d+s$/))
+  // A narrow strip leaves the column out before it crowds the description.
+  expect(draw(tasks, {}, 60).join("\n")).not.toContain("ctx")
+  for (const width of [60, 80, 120]) for (const row of draw(tasks, {}, width)) expect(textWidth(row)).toBeLessThanOrEqual(width)
+})
+
+test("the sub-agent open in the chat is marked and stays listed after it ended", () => {
+  const ended = task({ taskId: "ses_old", description: "Finished long ago", state: "completed", updatedAt: NOW - 10 * AGENT_DONE_MS })
+  const tasks = [task({ taskId: "ses_a" }), ended]
+  expect(stripTasks(tasks, NOW).map((each) => each.taskId)).toEqual(["ses_a"])
+  expect(stripTasks(tasks, NOW, "ses_old").map((each) => each.taskId)).toEqual(["ses_a", "ses_old"])
+  const rows = renderAgentsStrip({ tasks, open: "ses_old", activity: () => undefined, now: NOW, width: 120, inset: 3, glyphs: glyphs({}), root: false, openHint: "ctrl+x ↓ open · /tasks" }).rows.map((line) => line.map((span) => span.text).join(""))
+  expect(rows[0]).toMatch(/^   ├ Review/)
+  expect(rows[1]).toMatch(/^   └▸Finished long ago.*done/)
+})

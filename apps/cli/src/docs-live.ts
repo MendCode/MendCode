@@ -197,7 +197,7 @@ const PROVIDERS: Record<string, Provider> = {
   commands: (context) => commandsLines(context),
   skills: folder("skills"),
   agents: folder("agents"),
-  packages: folder("packages"),
+  profiles: folder("packages"),
   hooks: (context) => {
     const files = [path.join(context.dataDir, "hooks.json"), path.join(context.cwd, ".mendcode", "hooks.json")].filter(exists)
     const events = files.flatMap((file) => {

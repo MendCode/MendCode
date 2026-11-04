@@ -310,7 +310,7 @@ export const UsageRecorded = lazySchema(() => z.strictObject({
   partial: z.literal(true).optional(),
   /**
    * Where MendCode will pack this session's history, in tokens, for the model and window of this call (the user's `compactAtTokens`,
-   * or the threshold percentage of the model's window). The context meter's limit when the engine does not compact on its own.
+   * or the threshold percentage of the model's window), or the window Claude Code was started with. The context meter's limit.
    */
   compactAt: z.number().int().positive().optional(),
 }))
@@ -531,6 +531,19 @@ export const UsageToday = lazySchema(() => z.strictObject({
   costMicros: z.number().int().positive().optional(),
 }))
 
+/**
+ * Output tokens the provider has reported so far for a running turn and no recorded usage holds yet, for the activity line.
+ * Ephemeral like session.activity: `gseq` is always 0 and nothing is stored. Throttled per session; `output` 0 says a usage record took them.
+ */
+export const TurnTokens = lazySchema(() => z.strictObject({
+  gseq: z.number().int().nonnegative(),
+  at: z.number().int().nonnegative(),
+  type: z.literal("turn.tokens"),
+  sessionId: SessionId,
+  turnId: TurnId,
+  output: z.number().int().nonnegative(),
+}))
+
 /** MCP status changed; clients refresh mcp.status for this directory. */
 export const McpChanged = lazySchema(() => z.strictObject({
   ...globalBase,
@@ -574,7 +587,7 @@ export const MflowWaiting = lazySchema(() => z.strictObject({ ...globalBase, typ
 export const TuiControlRequest = lazySchema(() => z.strictObject({ ...globalBase, type: z.literal("tui.control.request"), directory: z.string().max(4096), ...TuiRequest.shape }))
 /** An on-device dictation of this terminal, live: the microphone level (0..1) and the transcript so far. Sent only to the terminal that records. */
 export const VoiceLive = lazySchema(() => z.strictObject({ ...globalBase, type: z.literal("voice.live"), level: z.number().min(0).max(1).optional(), text: z.string().max(20_000).optional() }))
-export const GlobalEvent = lazySchema(() => z.discriminatedUnion("type", [VoiceLive, ExtensionsChanged, ExtensionFeedback, CodegraphStatus, TuiChanged, AsideChanged, SidebarChanged, UsageToday, JobStateChanged, QuotaSnapshot, MemoryChanged, SettingsChanged, SessionActivity, LoopChanged, WorkflowChanged, DreamChanged, StatusLineChanged, McpChanged, ReviewChanged, AgentCommandsChanged, SessionBackgroundChanged, ChildTaskChanged, ServerLifecycle, ReleaseAvailable, MflowWaiting, TuiControlRequest]))
+export const GlobalEvent = lazySchema(() => z.discriminatedUnion("type", [VoiceLive, ExtensionsChanged, ExtensionFeedback, CodegraphStatus, TuiChanged, AsideChanged, SidebarChanged, UsageToday, TurnTokens, JobStateChanged, QuotaSnapshot, MemoryChanged, SettingsChanged, SessionActivity, LoopChanged, WorkflowChanged, DreamChanged, StatusLineChanged, McpChanged, ReviewChanged, AgentCommandsChanged, SessionBackgroundChanged, ChildTaskChanged, ServerLifecycle, ReleaseAvailable, MflowWaiting, TuiControlRequest]))
 export type GlobalEvent = z.infer<typeof GlobalEvent>
 
 export const ErrorPayload = lazySchema(() => z.strictObject({

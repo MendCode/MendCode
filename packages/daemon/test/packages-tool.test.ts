@@ -9,20 +9,20 @@ import { remoteTurnOptions } from "../src/remote-policy"
 function scenario(action: string, approved: boolean, tier: "balanced" | "full" | "minimalist" = "balanced") {
   const calls: string[] = []
   const port: PackagePort = { preview: async () => '{"source":"configured","version":"1.0.0","capabilities":[],"changes":{"overlayKeys":["density"]}}', run: async (request) => { calls.push(request.action); return { ok: true } } }
-  const { provider, requests } = scriptedProvider([callTool("tool_search", { query: "packages" }), callTool("packages", { action }), stop("done")])
+  const { provider, requests } = scriptedProvider([callTool("tool_search", { query: "profiles" }), callTool("profiles", { action }), stop("done")])
   const engine = createNativeEngine({ provider, tools: [packagesTool], history: memoryHistory(), cwdFor: () => "/tmp", system: () => "sys", compactionPrompt: "summarize", permissionPolicy: () => ({ tier, experimental: { tool_discovery: false } }), packages: () => port })
-  const run = turn({ text: "manage packages", mode: () => "full", answers: approved ? [{ kind: "approve", scope: "once" }] : [{ kind: "deny" }] })
+  const run = turn({ text: "manage profiles", mode: () => "full", answers: approved ? [{ kind: "approve", scope: "once" }] : [{ kind: "deny" }] })
   return { engine, run, requests, calls }
 }
 
-test("package schema is absent from initial context even with discovery off, then discoverable", async () => {
+test("profile schema is absent from initial context even with discovery off, then discoverable", async () => {
   const fixture = scenario("list", true)
   const before = await fixture.engine.contextReport!(fixture.run.input.sessionId)
-  expect(JSON.stringify(before)).not.toContain('"name":"packages"')
+  expect(JSON.stringify(before)).not.toContain('"name":"profiles"')
   await fixture.engine.runTurn(fixture.run.input)
   expect(fixture.requests[0]!.tools.map((tool) => tool.name)).toContain("tool_search")
-  expect(fixture.requests[0]!.tools.map((tool) => tool.name)).not.toContain("packages")
-  expect(fixture.requests[1]!.tools.map((tool) => tool.name)).toContain("packages")
+  expect(fixture.requests[0]!.tools.map((tool) => tool.name)).not.toContain("profiles")
+  expect(fixture.requests[1]!.tools.map((tool) => tool.name)).toContain("profiles")
   expect(fixture.calls).toEqual(["list"])
 })
 
@@ -47,30 +47,30 @@ test("reads need no approval; minimalist and remote turn limits exclude the tool
   }
   const fixture = scenario("list", true, "minimalist")
   await fixture.engine.runTurn(fixture.run.input)
-  expect(fixture.requests[0]!.tools.map((tool) => tool.name)).not.toContain("packages")
+  expect(fixture.requests[0]!.tools.map((tool) => tool.name)).not.toContain("profiles")
   expect(fixture.requests[0]!.tools.map((tool) => tool.name)).not.toContain("tool_search")
   expect(fixture.calls).toEqual([])
-  expect(remoteTurnOptions()?.excludeTools).toContain("packages")
+  expect(remoteTurnOptions()?.excludeTools).toContain("profiles")
 })
 
 test("safe mode keeps the tool and its discovery out and nothing runs, whatever the tier", async () => {
   for (const safeMode of [false, true]) {
     const calls: string[] = []
     const port: PackagePort = { preview: async () => "{}", run: async (request) => { calls.push(request.action); return { ok: true } } }
-    const { provider, requests } = scriptedProvider([callTool("tool_search", { query: "packages" }), callTool("packages", { action: "list" }), stop("done")])
+    const { provider, requests } = scriptedProvider([callTool("tool_search", { query: "profiles" }), callTool("profiles", { action: "list" }), stop("done")])
     const engine = createNativeEngine({ provider, tools: [packagesTool], history: memoryHistory(), cwdFor: () => "/tmp", system: () => "sys", compactionPrompt: "summarize", permissionPolicy: () => effectiveSettings({ tier: "full" }, { safeMode }), packages: () => port })
-    await engine.runTurn(turn({ text: "manage packages", mode: () => "full" }).input)
+    await engine.runTurn(turn({ text: "manage profiles", mode: () => "full" }).input)
     const offered = requests.flatMap((request) => request.tools.map((tool) => tool.name))
-    expect(offered.includes("packages")).toBe(!safeMode)
-    // `tool_search` stays for the auxiliary tools every tier defers; in safe mode it never finds `packages`.
+    expect(offered.includes("profiles")).toBe(!safeMode)
+    // `tool_search` stays for the auxiliary tools every tier defers; in safe mode it never finds `profiles`.
     const search = requests.at(-1)!.messages.find((message) => message.role === "tool" && message.name === "tool_search")
-    expect(search?.role === "tool" && search.output.includes('"name":"packages"')).toBe(!safeMode)
+    expect(search?.role === "tool" && search.output.includes('"name":"profiles"')).toBe(!safeMode)
     expect(calls).toEqual(safeMode ? [] : ["list"])
   }
 })
 
-test("no packages command is a read for a read-only peer", () => {
-  const packageCommands = Object.keys(COMMAND_SCHEMAS).filter((type) => type.startsWith("packages."))
+test("no profiles command is a read for a read-only peer", () => {
+  const packageCommands = Object.keys(COMMAND_SCHEMAS).filter((type) => type.startsWith("profiles."))
   expect(packageCommands.length).toBeGreaterThan(10)
   for (const type of packageCommands) expect(READ_ONLY_COMMANDS as readonly string[]).not.toContain(type)
 })

@@ -164,7 +164,8 @@ test("v1/Codex paths, their parents, and directory aliases are rejected before r
   writeFileSync(path.join(v1, "history"), "v1 untouched")
   const alias = path.join(h.root, "alias")
   symlinkSync(v1, alias)
-  for (const dir of [h.home, path.join(h.home, ".mendcode"), v1, path.join(v1, "child"), path.dirname(v1), path.join(h.home, ".codex"), alias]) {
+  // MendCode v1's folder set aside (`~/.mendcode-v1`) is protected; `~/.mendcode` is this version's own data directory now.
+  for (const dir of [h.home, path.join(h.home, ".mendcode-v1"), v1, path.join(v1, "child"), path.dirname(v1), path.join(h.home, ".codex"), alias]) {
     expect(await runUninstallCommand({ ...h.command("--force"), dir }, h.deps)).toBe(1)
   }
   expect(readFileSync(path.join(v1, "history"), "utf8")).toBe("v1 untouched")

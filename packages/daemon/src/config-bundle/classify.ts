@@ -10,7 +10,7 @@ export type MatrixColumn = "exportable" | "omitted" | "machine" | "approval" | "
 /**
  * How an exported entry arrives on the target. `write`: copied into the data directory. `quarantine`: copied beside the import
  * journal, never into a folder a loader reads (code, hooks, scripts). `mcp-pending`: added as a pending MCP server the user
- * approves in `/mcp`. `package`: installed with the package installer. `tui-profile`/`activation`: merged key by key.
+ * approves in `/mcp`. `profile`: installed with the profile installer. `tui-profile`/`activation`: merged key by key.
  */
 export type ImportAction = "write" | "quarantine" | "mcp-pending" | "package" | "tui-profile" | "activation" | "none"
 
@@ -44,15 +44,15 @@ const FIXED: Record<string, EntryRule> = {
   ...Object.fromEntries(OPERATIONAL_NAMES.map((name) => [name, OPERATIONAL])),
   "builtin": rule("omitted", "none", false, "ships with MendCode; the target's own version is used"),
   "AGENTS.md": rule("exportable", "write", true, "global instructions"),
-  "activation.json": rule("exportable", "activation", true, "which package owns the look and the keys you kept"),
-  "packages": rule("exportable", "package", true, "installed packages, with their on/off state"),
-  "pets": rule("omitted", "none", false, "your pets keep a private reference image; `/pet export` makes a shareable package"),
+  "activation.json": rule("exportable", "activation", true, "which profile owns the look and the keys you kept"),
+  "packages": rule("exportable", "package", true, "installed profiles, with their on/off state"),
+  "pets": rule("omitted", "none", false, "your pets keep a private reference image; `/pet export` makes a shareable profile"),
   "prompt-context.json": rule("machine", "none", false, "prompt mode per project folder of this machine"),
   "package-sources.json": rule("machine", "none", false, "catalog sources point at folders of this machine"),
   "acp-agents.json": rule("approval", "quarantine", true, "external agent commands: review, then add them on the target"),
 }
 
-/** Resource folders and files a loader reads in the user layer, from the one table of package kinds. */
+/** Resource folders and files a loader reads in the user layer, from the one table of profile kinds. */
 for (const kind of PACKAGE_KINDS) {
   if (kind.id === "pets" || kind.id === "tuiProfile" || kind.id === "worktreePolicy") continue
   const paths = [...kind.paths, ...("exportPaths" in kind ? kind.exportPaths : [])]
@@ -118,12 +118,12 @@ export function classifyEntry(relative: string, probe?: () => { head: Uint8Array
 
 /** Settings a bundle carries and an import applies through `settings.set`: preferences that grant nothing. */
 export const PORTABLE_SETTINGS: ReadonlySet<string> = new Set([
-  "theme", "view", "pet", "reducedMotion", "compactAtTokens", "modelContext", "idleCompactAtTokens", "compactNoticePercent", "cacheLifetimeMinutes", "promptCacheTtl",
+  "theme", "view", "pet", "reducedMotion", "compactAtTokens", "modelContext", "defaultContextWindow", "idleCompactAtTokens", "compactNoticePercent", "cacheLifetimeMinutes", "promptCacheTtl",
   "claudeCacheTtl", "handoffTokenCap", "disabledSkills", "agentMentions", "memoryMaintenance", "memoryEnabled", "memoryUse", "memoryGenerate", "memoryMaxPromptTokens",
   "memoryMaxEntries", "memoryProjectMaxEntries", "memoryPolicies", "memoryGlobalCompactionMaxEntries", "dreamConsolidationPolicy", "retentionDays", "worktreeBranch",
-  "git", "footer", "promptCache", "outputStyle", "planExitAgent", "plan_exit_agent", "logLevel", "tool_output", "codegraph_index", "foreignResources",
+  "git", "footer", "promptCache", "outputStyle", "planExitAgent", "plan_exit_agent", "plan_files_location", "logLevel", "tool_output", "codegraph_index", "foreignResources",
   "instructionFallbacks", "projectRootMarkers", "queue", "snapshot", "snapshotScope", "compaction", "cache", "allowMessageEdits", "subagent_variant",
-  "subagentOwnerWake", "subagentCatalog",
+  "subagentOwnerWake", "subagentCatalog", "processLimits",
 ])
 
 /**
@@ -132,14 +132,14 @@ export const PORTABLE_SETTINGS: ReadonlySet<string> = new Set([
  */
 export const APPROVAL_SETTINGS: ReadonlySet<string> = new Set([
   "models", "defaultPermission", "permission", "permissionAllow", "permissionReviewerRole", "smartSandboxTrust", "engineSafetyPrompts", "sandbox", "tools", "threadMcp",
-  "tier", "features", "experimental", "advisor", "budgets", "serviceTier", "allowedHttpHookUrls", "disabledExtensions", "disabledPackages", "disabledPackageResources",
+  "tier", "features", "experimental", "advisor", "budgets", "serviceTier", "allowedHttpHookUrls", "disabledExtensions", "disabledProfiles", "disabledProfileResources",
   "subagentDepth", "subagentMaxChildren", "subagentMaxDescendants", "disabled_models", "enabled_providers", "agent", "default_agent", "defaultAgent", "web",
   "memoryRequireApproval", "evolution", "evolutionWorkflows", "share", "image_generation", "voice", "provider", "instructions", "skills", "dreamMaxTokens",
 ])
 
 /** Settings that describe this machine (folders, shells, environment, schedules): shown in the report, never applied. */
 export const MACHINE_SETTINGS: ReadonlySet<string> = new Set([
-  "trustedToolDirs", "additionalDirectories", "projectConfig", "projectThemes", "memoryProjects", "cacheProjects", "profiles", "acpAgents", "proxy", "shellEnvironment",
+  "trustedToolDirs", "additionalDirectories", "projectConfig", "projectThemes", "memoryProjects", "cacheProjects", "areas", "profiles", "acpAgents", "proxy", "shellEnvironment",
   "shellCommandPrefix", "loginShell", "shell", "engineEnvironment", "ownLogins", "watcher", "onboarded", "$schema", "setupPreset", "worktreeGcDays", "prReview", "enterprise", "autoupdate", "dreamAt",
 ])
 
@@ -152,5 +152,5 @@ export function classifySetting(key: string): SettingClass {
   return "approval"
 }
 
-/** Terminal-profile keys that start things, touch the clipboard or the network: the same keys a package may not set. */
+/** Terminal-profile keys that start things, touch the clipboard or the network: the same keys a profile may not set. */
 export const APPROVAL_PROFILE_KEYS: ReadonlySet<string> = ACTIVATION_DENIED_PROFILE_KEYS

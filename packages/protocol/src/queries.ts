@@ -18,7 +18,7 @@ import { CACHE_LIFETIME_MINUTES_RANGE, CACHE_TTLS } from "./idle-compaction-data
 import { MODEL_CONTEXT_LIMIT, MODEL_CONTEXT_RANGE } from "./model-context"
 import { BlobRef, ItemId, MemoryId, SessionId, TurnId } from "./ids"
 import { ForegroundState } from "./states"
-import { DEFAULT_PROFILE, PROFILE_NAME } from "./profiles"
+import { DEFAULT_AREA, AREA_NAME } from "./areas"
 import { ImageGenerationSettings } from "./image-generation"
 import { VoiceSettings } from "./voice"
 import { lazySchema } from "./lazy"
@@ -282,6 +282,8 @@ export type ContextRent = z.infer<typeof ContextRent>
 /** What fills a session's context, by source. Estimates are chars / 4; `measuredTokens` is exact (last model call's usage). */
 export const ContextReport = lazySchema(() => z.strictObject({
   model: z.string(),
+  /** Set when another program (Claude Code, Codex) keeps the request itself: what it sends beyond the history is one measured lump. */
+  harness: z.string().optional(),
   sessionId: SessionId.optional(),
   /** Known model window; absent when the engine/catalog cannot supply it. */
   contextWindow: z.number().int().positive().optional(),
@@ -296,10 +298,12 @@ export const ContextReport = lazySchema(() => z.strictObject({
   sections: z.array(ContextSection),
   /** The five largest history messages, biggest first. */
   largest: z.array(ContextMessage).max(5),
-  /** Attached images in history; their token cost is not estimated. */
+  /** Attached images in history; each counts `IMAGE_TOKENS` in the estimate. */
   images: z.number().int().nonnegative(),
   estimatedTokens: z.number().int().nonnegative(),
+  /** The provider's count for the last call; the estimate is only the fallback when it is absent. */
   measuredTokens: z.number().int().nonnegative().optional(),
+  /** Where this session compacts: MendCode's point, or the one the engine was given (Claude Code's `CLAUDE_CODE_AUTO_COMPACT_WINDOW`). */
   compactAtTokens: z.number().int().positive(),
   /** True when `contextWindow` is the user's `session.context-window` override, not the catalog's. */
   contextWindowOverride: z.boolean().optional(),
@@ -447,16 +451,16 @@ export const RecipesReport = lazySchema(() => z.strictObject({ recipes: z.array(
 export type RecipesReport = z.infer<typeof RecipesReport>
 
 /**
- * A profile by folder (`company` for `~/Code/acme/*`): sessions under its folders use its memory, its model roles and
- * its default permission. Everything outside every profile is `personal`, which uses the top-level settings.
+ * An area by folder (`company` for `~/Code/acme/*`): sessions under its folders use its memory, its model roles and
+ * its default permission. Everything outside every area is `personal`, which uses the top-level settings.
  */
-export const Profile = lazySchema(() => z.strictObject({
-  name: z.string().regex(PROFILE_NAME).refine((name) => name !== DEFAULT_PROFILE, { message: `"${DEFAULT_PROFILE}" is the default profile` }),
+export const Area = lazySchema(() => z.strictObject({
+  name: z.string().regex(AREA_NAME).refine((name) => name !== DEFAULT_AREA, { message: `"${DEFAULT_AREA}" is the default area` }),
   directories: z.array(z.string().min(1).max(4096)).min(1).max(16),
   models: ModelRoles.optional(),
   defaultPermission: z.enum(["ask", "edits", "full", "smart"]).optional(),
 }))
-export type Profile = z.infer<typeof Profile>
+export type Area = z.infer<typeof Area>
 
 /** User settings, owned by the daemon and pushed to every terminal on change. All fields optional. */
 /** ACP configuration exposed to clients: environment names only. Values stay in acp-agents.json. */
@@ -471,11 +475,11 @@ export const AcpAgentName = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/
 const SharedSettings = lazySchema(() => z.strictObject({
   /** settings.set merges entries; null removes one. Backed by the existing ACP config file. */
   acpAgents: z.record(AcpAgentName, AcpAgentSettings).optional(),
-  /** Folder profiles (at most 8, unique names); see `Profile`. */
-  profiles: z
-    .array(Profile)
+  /** Areas (at most 8, unique names); see `Area`. The older `profiles` key is read as `areas` (store). */
+  areas: z
+    .array(Area)
     .max(8)
-    .refine((profiles) => new Set(profiles.map((profile) => profile.name)).size === profiles.length, { message: "profile names must be unique" })
+    .refine((areas) => new Set(areas.map((area) => area.name)).size === areas.length, { message: "area names must be unique" })
     .optional(),
   /** Model per role; unset roles use `main`, an unset `main` uses the engine default. */
   models: ModelRoles.optional(),
@@ -512,12 +516,19 @@ const SharedSettings = lazySchema(() => z.strictObject({
     z.strictObject({ window: z.number().int().min(MODEL_CONTEXT_RANGE.min).max(MODEL_CONTEXT_RANGE.max).optional(), compactAt: z.number().int().min(MODEL_CONTEXT_RANGE.min).max(MODEL_CONTEXT_RANGE.max).optional() })
       .refine((entry) => entry.window !== undefined || entry.compactAt !== undefined, { message: "set window, compactAt or both" }),
   ).refine((entries) => Object.keys(entries).length <= MODEL_CONTEXT_LIMIT, { message: `at most ${MODEL_CONTEXT_LIMIT} models` }).optional(),
+  /**
+   * One context window, in tokens, for every model that has no window of its own: none in the model list, none in its provider entry, none
+   * from the engine. A model's `modelContext` window, a session's `/context-window` and a window the model list knows all win over it.
+   */
+  defaultContextWindow: z.number().int().min(MODEL_CONTEXT_RANGE.min).max(MODEL_CONTEXT_RANGE.max).optional(),
   /** Compaction while idle (feature `idle_compact`, docs/compaction.md): the least context, in tokens, a session must hold to be compacted before its prompt cache expires. Default 100000. */
   idleCompactAtTokens: z.number().int().min(8_000).max(2_000_000).optional(),
   /** Notice before a compaction (feature `compact_notice`, docs/compaction.md): the share of the compaction point, in percent, at which the transcript says once how far the compaction is. Default 80; `off` never says it. */
   compactNoticePercent: z.union([z.literal("off"), z.number().int().min(10).max(99)]).optional(),
   /** Minutes a provider keeps a prompt prefix after the last call, by provider id; replaces the built-in lifetime, and gives one to a provider that has none (compaction while idle stays off for it until then). */
   cacheLifetimeMinutes: z.record(z.string().regex(/^[a-z][a-z0-9_-]{0,31}$/), z.number().int().min(CACHE_LIFETIME_MINUTES_RANGE.min).max(CACHE_LIFETIME_MINUTES_RANGE.max)).optional(),
+  /** Optional caps on the commands the agent leaves running (`shell` with `background`, `shell_session`; docs/interactive-tools.md). By default none: a command runs until it ends, the agent or the user stops it, or its chat is deleted. `lifetimeMinutes` stops one that runs longer; `idleMinutes` stops a `shell_session` terminal no tool call touched for that long. 0 or unset is no cap. */
+  processLimits: z.object({ lifetimeMinutes: z.number().int().min(0).max(525_600).optional(), idleMinutes: z.number().int().min(0).max(525_600).optional() }).optional(),
   /** How long Anthropic keeps what the native engine caches (docs/prompt-cache.md, "Cache lifetime"): `5m` (default, no `ttl` sent) or `1h` (`ttl: "1h"` on every breakpoint; writes cost 2x the input price instead of 1.25x). Anthropic API and Claude on Vertex only. */
   promptCacheTtl: z.enum(CACHE_TTLS).optional(),
   /** Opt-in: a `promptCacheTtl` of `1h` is also given to Claude Code when it is the engine, as `CLAUDE_CODE_PROMPT_CACHE_TTL` and `CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL` in its process environment (Claude Code v2.1.242 or later). Off when unset. */
@@ -529,13 +540,13 @@ const SharedSettings = lazySchema(() => z.strictObject({
   pet: z.string().max(120).optional(),
   /** Project roots whose `.mendcode/tools` custom tools the user trusted to run; project tools stay off elsewhere. */
   trustedToolDirs: z.array(z.string().max(4096)).max(200).optional(),
-  /** Installed packages turned off (`user:name` / `project:name`); everything else installed is on. */
+  /** Installed profiles turned off (`user:name` / `project:name`); everything else installed is on. */
   disabledSkills: z.record(z.string().max(4096), z.array(z.string().max(100)).max(100)).optional(),
-  disabledPackages: z.array(z.string().max(200)).max(500).optional(),
+  disabledProfiles: z.array(z.string().max(200)).max(500).optional(),
   /** Extension names turned off (`extensions.disable`): never run in the daemon, skipped by terminals. */
   disabledExtensions: z.array(z.string().max(64)).max(200).optional(),
-  /** Single resources of installed packages turned off (`user:pkg/skills/foo`, `project:pkg/commands/review`); `packages.resource` edits it. */
-  disabledPackageResources: z.array(z.string().max(300)).max(1000).optional(),
+  /** Single resources of installed profiles turned off (`user:pkg/skills/foo`, `project:pkg/commands/review`); `profiles.resource` edits it. */
+  disabledProfileResources: z.array(z.string().max(300)).max(1000).optional(),
   /** Daily local time ("HH:MM") for Dream in every project active in the last 24 h; off when unset. */
   dreamAt: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).optional(),
   /** Model tokens one Dream run may spend in all its calls; DREAM_DEFAULT_MAX_TOKENS when unset. The run stops cleanly and its report says so. */
@@ -584,7 +595,7 @@ const SharedSettings = lazySchema(() => z.strictObject({
    * when unset. Per device, not per repository: it is this machine's capacity, shared by every watched repository. The daemon's
    * background scheduler still runs at most 2 jobs at once in its normal resource mode (4 in high), so 3 and 4 need high.
    */
-  prReview: z.strictObject({ concurrency: z.number().int().min(1).max(4).optional() }).optional(),
+  prReview: z.strictObject({ concurrency: z.number().int().min(1).max(4).optional(), /** Off: the reviewer of MendCode's own repository does not measure a pull request's cost (docs/pr-review.md "Performance"). On when unset. */ perfAttrib: z.boolean().optional() }).optional(),
   /** Footer segments in display order; DEFAULT_FOOTER when unset. */
   footer: z.array(z.enum(FOOTER_SEGMENTS)).max(FOOTER_SEGMENTS.length).optional(),
   /** Prompt-cache hints the native engine sends (docs/prompt-cache.md): `legacy` (default) = today's per-session key · `off` = none · `smart` = per-lineage keys and Anthropic breakpoints at tools, system and the last user message. */
@@ -656,6 +667,8 @@ const SharedSettings = lazySchema(() => z.strictObject({
   subagent_variant: z.string().min(1).max(100).optional(),
   default_agent: z.string().min(1).max(64).optional(),
   plan_exit_agent: z.string().min(1).max(64).optional(),
+  /** Where accepted and applied plans are kept as Markdown (docs/plan-review.md): `data` (default) in the project's folder of the data directory, `repo` in `.mendcode/plans/` of the project. */
+  plan_files_location: z.enum(["data", "repo"]).optional(),
   agent: z.record(z.string().regex(/^[a-z0-9][a-z0-9_-]{0,63}$/), AgentConfig).optional(),
   provider: z.record(z.string().min(1).max(32), ProviderConfig).optional(),
   /** `filters`: condense command output (ANSI, passing tests, repeats) with the full output kept on disk; unset follows the tier's `output_filters` feature. */
@@ -752,7 +765,7 @@ export const DaemonInfoReport = lazySchema(() => z.strictObject({
   pid: z.number().int(),
   buildId: z.string().optional(),
   extensionsEnabled: z.boolean().optional(),
-  /** True when the daemon runs with `--safe-mode`: no extensions, packages, hooks, MCP or project tools. */
+  /** True when the daemon runs with `--safe-mode`: no extensions, profiles, hooks, MCP or project tools. */
   safeMode: z.boolean().optional(),
   /** Subscription login check; absent for engines that do not use one. `message` explains a failure. */
   login: z.strictObject({ ok: z.boolean(), message: z.string().optional() }).optional(),
@@ -798,7 +811,7 @@ export const ModelInfo = lazySchema(() => z.strictObject({
   contextSetting: z.strictObject({ window: z.number().int().positive().optional(), compactAt: z.number().int().positive().optional() }).optional(),
   /**
    * `models.list` only: where the native engine packs a session on this model under the settings in force (`compactAtTokens`, the
-   * `compaction` object, provider and model overrides; 160k when no window is known). Absent for a model another engine runs.
+   * `compaction` object, provider and model overrides; 160k when no window is known); for Claude Code the window `claude_compact` hands it. Absent for a model another engine runs on its own point.
    */
   compactAtTokens: z.number().int().positive().optional(),
   /** `false` when the provider is configured to refuse image input; absent otherwise (see also `modalities.input`). */
@@ -1078,7 +1091,7 @@ export const CustomToolInfo = lazySchema(() => z.strictObject({
   command: z.array(z.string()),
   /** User tools are always trusted; project tools follow the directory's trust. */
   trusted: z.boolean(),
-  /** The package that ships the tool, if any. */
+  /** The profile that ships the tool, if any. */
   pkg: z.string().optional(),
 }))
 export type CustomToolInfo = z.infer<typeof CustomToolInfo>
@@ -1086,7 +1099,7 @@ export type CustomToolInfo = z.infer<typeof CustomToolInfo>
 /** One extension module found for a project (code that changes the daemon and/or the terminal); untrusted project ones are listed but never imported. */
 export const ExtensionInfo = lazySchema(() => z.strictObject({
   name: z.string(),
-  /** `package` for an installed package's extension, else the folder it was found in. */
+  /** `profile` for an installed profile's extension, else the folder it was found in. */
   source: z.enum(["user", "project", "package"]),
   file: z.string(),
   /** The module exports a `daemon` half / a `tui` half (false for a module that did not load). */
@@ -1151,7 +1164,7 @@ export const HookInfo = lazySchema(() => z.strictObject({
   active: z.boolean(),
   /** How the hook runs; absent from daemons that only had commands. */
   kind: z.enum(["command", "http", "prompt"]).optional(),
-  /** Which layer's `hooks.json` it came from: `user`, `project` or `package <name>`. */
+  /** Which layer's `hooks.json` it came from: `user`, `project` or `profile <name>`. */
   layer: z.string().max(200).optional(),
   /** Why an inactive hook does not run (project directory untrusted, http hook not allowed). */
   inactiveReason: z.string().max(200).optional(),
@@ -1186,11 +1199,11 @@ export const HooksReport = lazySchema(() => z.strictObject({
 }))
 export type HooksReport = z.infer<typeof HooksReport>
 
-/** One installed package: a folder of extensions (tools, skills, commands, themes, mcp.json, extensions/) with a manifest. */
+/** One installed profile: a folder of extensions (tools, skills, commands, themes, mcp.json, extensions/) with a manifest. */
 export const PackageInfo = lazySchema(() => z.strictObject({
   name: z.string(),
   source: z.enum(["user", "project"]),
-  /** `user:name` / `project:name`, as used by `packages.enable` and `Settings.disabledPackages`. */
+  /** `user:name` / `project:name`, as used by `profiles.enable` and `Settings.disabledProfiles`. */
   key: z.string(),
   dir: z.string(),
   enabled: z.boolean(),
@@ -1220,7 +1233,8 @@ export const ThemeFile = lazySchema(() => z.strictObject({
 }))
 export type ThemeFile = z.infer<typeof ThemeFile>
 
-export const ThemesReport = lazySchema(() => z.strictObject({ themes: z.array(ThemeFile) }))
+/** `toolDesigns`: the layers' `tool-designs/<name>.json` (the tool cards' looks), found and parsed like theme files; an older daemon has none. `footerPacks`: the layers' `footer-packs/<name>.json`, the same shape; the client checks a pack as it checks a palette. */
+export const ThemesReport = lazySchema(() => z.strictObject({ themes: z.array(ThemeFile), toolDesigns: z.array(ThemeFile).optional(), footerPacks: z.array(ThemeFile).optional() }))
 export type ThemesReport = z.infer<typeof ThemesReport>
 
 export const CustomToolsReport = lazySchema(() => z.strictObject({
@@ -1232,7 +1246,7 @@ export type CustomToolsReport = z.infer<typeof CustomToolsReport>
 
 /**
  * One agent a session can run as (`agents.list`). `build` and `plan` are built in; the rest come from `agents/*.md` of
- * an extension layer. A project agent (the project's own or its packages') is `trusted` only once the directory is
+ * an extension layer. A project agent (the project's own or its profiles') is `trusted` only once the directory is
  * trusted for project tools; an untrusted one is listed but cannot be selected or called.
  */
 export const AgentInfo = lazySchema(() => z.strictObject({
@@ -1240,7 +1254,7 @@ export const AgentInfo = lazySchema(() => z.strictObject({
   description: z.string(),
   mode: z.enum(AGENT_MODES),
   source: z.enum(["builtin", "user", "project"]),
-  /** The package that ships the agent, if any. */
+  /** The profile that ships the agent, if any. */
   pkg: z.string().optional(),
   file: z.string().optional(),
   model: z.string().optional(),

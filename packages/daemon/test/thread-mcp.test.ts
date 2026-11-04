@@ -82,6 +82,7 @@ test("ACP leases use a session server list, per-agent opt-in and the existing re
   expect(h.lease.args).toEqual([])
   expect(h.lease.servers[0]).toMatchObject({ type: "http", name: "mendcode_threads", url: "http://127.0.0.1:12345/mcp" })
   expect((await h.call("thread_list")).result.isError).toBe(false)
+  expect((await h.call("thread_list", { limit: 500, query: "a", state: "idle" })).result.isError).toBe(false)
   h.enable(false)
   expect((await h.request("tools/list")).status).toBe(401)
   const idle = fixture("acp:demo")

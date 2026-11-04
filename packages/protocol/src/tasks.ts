@@ -59,6 +59,12 @@ export const TaskRecord = lazySchema(() => z.strictObject({
     files: z.array(z.string().max(300)).max(20),
   }).optional(),
   /**
+   * How full the child's context is while it works: the tokens its last model call carried and the limit they count against (the
+   * compaction point or the model's window), as the child's own session recorded them. Added when the list is asked for, never stored;
+   * absent when the child has made no call yet or its engine reports no context.
+   */
+  context: z.strictObject({ tokens: z.number().int().nonnegative(), limit: z.number().int().positive().optional() }).optional(),
+  /**
    * An isolated child (`isolation: "worktree"`): its worktree, the commit it started from and, once it ended, the branch its
    * changes were committed to and their size. Nothing is merged into the parent's checkout.
    */

@@ -42,7 +42,8 @@ export function createScreen(
   options: { images?: ImageLayer; cellPixels?: CellPixels; inline?: boolean; mouse?: boolean; keyboard?: boolean; collectGarbage?: () => void; /** This process replaced one that left its frame on the alternate screen (`/restart`): the first frame paints over it instead of clearing. */ keepFrame?: boolean } = {},
 ) {
   // Frame-driven collection (memory-governor.ts); tests pass `collectGarbage` to watch the schedule.
-  const governor = createMemoryGovernor({ every: framesPerCollection(env), ...(options.collectGarbage ? { collect: options.collectGarbage } : {}) })
+  // An explicit MENDCODE_GC_FRAMES sets the whole cadence, start-up frames included.
+  const governor = createMemoryGovernor({ every: framesPerCollection(env), ...(env.MENDCODE_GC_FRAMES === undefined ? {} : { startupFrames: 0 }), ...(options.collectGarbage ? { collect: options.collectGarbage } : {}) })
   let previous: string[] = []
   let held: Line[] | undefined
   // Inline mode (--no-alt-screen): the chat lives in a region at the bottom of the normal screen and finished output
@@ -118,7 +119,7 @@ export function createScreen(
     get focus() { return focus },
     /** Asks the terminal for its mode and for later changes; the answers arrive through `consumeTerminalInput`. */
     requestTerminalMode() {
-      if (!modeAllowed || modeSubscribed) return
+      if (!modeAllowed || modeSubscribed || left) return
       modeSubscribed = true
       output.write(MODE_SUBSCRIBE)
     },
@@ -131,7 +132,7 @@ export function createScreen(
     /** Switching protocols first overwrites old placements, then forces text to be restored next frame. */
     setImages(next?: ImageLayer) {
       const clear = images?.clearAll()
-      if (clear) output.write(clear)
+      if (clear && !left) output.write(clear)
       images = inline ? undefined : next
       images?.setSize?.(size.width, size.height)
       previous = []
@@ -147,7 +148,7 @@ export function createScreen(
     get inline() { return inline },
     /** Inline mode only: shows a page or an overlay on the alternate screen, or goes back to the inline region. */
     fullscreen(on: boolean) {
-      if (!inline || on === alt || held) return
+      if (!inline || on === alt || held || left) return
       alt = on
       previous = []
       // The alternate screen keeps its own flag stack: the keys of a page there use the protocol too, and the flags come off before it is left.
@@ -170,6 +171,8 @@ export function createScreen(
      * reset, but the alternate screen and its frame stay, so nothing flashes between the two.
      */
     leave(handOver = false) {
+      // Leaving twice (two quick exits, then the process's exit handler) must not pop modes the shell pushed or print over it.
+      if (left) return
       entered = false
       left = true
       geometry.stop()
@@ -204,13 +207,13 @@ export function createScreen(
     get held() { return held !== undefined },
     /** The terminal cursor's shape (DECSCUSR), written only when it changes; vim mode uses a block outside insert mode. */
     setCursorShape(shape: "default" | "bar" | "block") {
-      if (shape === cursorShape) return
+      if (shape === cursorShape || left) return
       cursorShape = shape
       output.write(shape === "block" ? "\x1b[2 q" : shape === "bar" ? "\x1b[6 q" : "\x1b[0 q")
     },
     /** Sets the window title when it changed; control characters are dropped and it is capped at 80 cells. */
     setTitle(next: string) {
-      if (!titles) return
+      if (!titles || left) return
       const clean = [...cells(next.replace(/[\x00-\x1f\x7f]/g, " "))].map((cell) => cell.text).join("").slice(0, 80)
       if (clean === title) return
       title = clean
@@ -218,6 +221,7 @@ export function createScreen(
     },
     /** A control sequence outside the frame: the bell, or an OSC 52 clipboard write. It draws nothing, so the row diff stays valid. */
     write(data: string) {
+      if (left) return
       output.write(data)
     },
     /** Forgets what was drawn, so the next `draw` repaints every row (after another program used the terminal). */
@@ -232,6 +236,7 @@ export function createScreen(
       previous = []
       images?.setSize?.(width, height)
       images?.invalidate()
+      if (left) return
       // The terminal reflows the old rows in its own way: the region is erased where it was and drawn again.
       output.write(inline && !alt ? region.clear() : "\x1b[2J")
     },

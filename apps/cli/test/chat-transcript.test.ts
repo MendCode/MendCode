@@ -37,10 +37,10 @@ function stream() {
   return { emit, item, turn, events }
 }
 
-function view(events: SessionEvent[], options: { mode?: PresentationMode; width?: number; height?: number; timestamps?: boolean } = {}) {
+function view(events: SessionEvent[], options: { mode?: PresentationMode; width?: number; height?: number; timestamps?: "bottom" | "top" | "off" } = {}) {
   const t = createTranscript({ appearance: { messageLayout: "classic", messageMeta: "full", userIcon: "●", userLead: "", userLabel: true, assistantLead: "", userTint: false }, glyphs: glyphs({}), mode: options.mode ?? "balanced", now: () => NOW })
   // These tests pin the whole preview the full view prints, which is the `dense` density.
-  t.setAppearance({ reasoning: "auto", toolOutput: "auto", toolDensity: "dense", timestamps: options.timestamps ?? false })
+  t.setAppearance({ reasoning: "auto", toolOutput: "auto", toolDensity: "dense", timestamps: options.timestamps ?? "off" })
   for (const event of events) t.apply(event)
   const lines = t.viewport(options.width ?? 100, options.height ?? 200)
   return { t, lines, text: lines.map((l) => l.text).filter((l) => l.trim()) }
@@ -52,7 +52,9 @@ describe("turn end lines", () => {
     const turnId = turn()
     item(turnId, "agent_message", { text: "hello" })
     emit({ type: "turn.completed", turnId })
-    expect(view(events, { timestamps: true }).text.at(-1)).toMatch(/ · done \d{1,2}:\d{2} [AP]M$/)
+    // The meta line carries the time with the time over each message (`top`) and with the closing line's place (`bottom`).
+    expect(view(events, { timestamps: "top" }).text.at(-1)).toMatch(/ · done \d{1,2}:\d{2} [AP]M$/)
+    expect(view(events, { timestamps: "bottom" }).text.at(-1)).toMatch(/ · done \d{1,2}:\d{2} [AP]M$/)
     expect(view(events).text.at(-1)).not.toContain("done")
   })
 
@@ -151,7 +153,7 @@ describe("user message", () => {
   test("has a `● You` header, the time on the right and no left bar or message fill", () => {
     const { item, turn, events } = stream()
     item(turn(), "user_message", { text: "hello there" })
-    const { lines } = view(events, { width: 60, timestamps: true })
+    const { lines } = view(events, { width: 60, timestamps: "top" })
     const rows = lines.slice(0, 4)
     // v1's columns: the panel starts at column 3, the header and text are inset by two inside it.
     expect(rows[0]!.text).toMatch(/^ {5}● You {2,}3:49 PM {2}$/)
@@ -390,7 +392,7 @@ describe("tools", () => {
     const { text } = view(withTool("edit: src/a.ts", diff(60)))
     expect(text[0]).toBe("     ✎ Edit src/a.ts  +60")
     expect(text.filter((l) => /\+ line \d+/.test(l))).toHaveLength(40)
-    expect(text.at(-1)).toBe("     │ … +20 lines")
+    expect(text.at(-1)).toBe("       … +20 lines")
     expect(view(withTool("edit: src/a.ts", diff(60)), { mode: "minimal" }).text.filter((l) => /\+ line \d+/.test(l)).length).toBeLessThan(40)
     const full = view(withTool("edit: src/a.ts", diff(60)), { mode: "full" }).text
     expect(full.filter((l) => /\+ line \d+/.test(l))).toHaveLength(40)
@@ -401,7 +403,7 @@ describe("tools", () => {
   test("a diff has one line-number column, aligned to the widest, no `@@` row, and marks what changed inside a line", () => {
     const text = ["@@ -98,3 +98,3 @@", " keep", "-const total = items.length", "+const total = items.length + extra", " tail"].join("\n")
     const { text: rows, lines } = view(withTool("edit: src/a.ts", text))
-    expect(rows.slice(1).map((row) => row.trimEnd())).toEqual(["     │  98   keep", "     │  99 - const total = items.length", "     │  99 + const total = items.length + extra", "     │ 100   tail"])
+    expect(rows.slice(1).map((row) => row.trimEnd())).toEqual(["        98   keep", "        99 - const total = items.length", "        99 + const total = items.length + extra", "       100   tail"])
     const added = lines.find((l) => l.text.includes("+ const total"))!
     expect(added.spans.find((s) => s.text === " + extra")).toMatchObject({ fg: "success", bold: true })
     expect(added.spans.find((s) => s.text.startsWith("const total"))).toMatchObject({ fg: "body", bg: "diffAddedBg" })

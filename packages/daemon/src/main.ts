@@ -1,9 +1,12 @@
 #!/usr/bin/env bun
+import "@mendcode/protocol/zod-config"
+import { dataDirFromEnv, defaultDataDirNow, isDefaultDataDir, mendEnv, sameDir } from "@mendcode/program/data-dir"
 import { engineEnvironment } from "./engine-environment"
 import { instructionControls, projectSources } from "./project-control"
 import { remoteInstructions } from "./remote-instructions"
 import { createWebfetchResources } from "./webfetch-resources"
 import { installNetworkPolicy } from "./network-policy"
+import { sweepHostMcpDirs } from "./host-mcp-sweep"
 import { systemWithLimits } from "./run-limits"
 import { memorySettings } from "./memory-config"
 import packageJson from "../../../apps/cli/package.json"
@@ -47,7 +50,6 @@ import {
   loadCompactionPrompt,
   loadContinuationPrompt,
   loadSystemPrompt,
-  loadTerminalRendering,
   NATIVE_DEFAULTS,
   policyRules,
   toolDisabled,
@@ -57,7 +59,7 @@ import {
 } from "@mendcode/engine-native"
 import { createModelsDev } from "./models-dev"
 import { acpAgentName } from "./acp-registry"
-import { BUILTIN_TOOLS, sandboxPolicy, canonicalDir, shellSession, createToolDefine, createWebSearchTool, loopTool, worktreeTool, prWatchTool, createComputerTools, browserTool, type Tool, aiConfigTool } from "@mendcode/tools"
+import { BUILTIN_TOOLS, sandboxPolicy, canonicalDir, shellSession, createToolDefine, createWebSearchTool, loopTool, worktreeTool, prWatchTool, createComputerTools, browserTool, createUserBrowserTool, type Tool, aiConfigTool, agentProcesses } from "@mendcode/tools"
 import { createDaemonImageGenTool } from "./image-generation"
 import { ptyAvailable } from "./pty-native"
 import { createAcpAgents, createAcpEngine, withAcpEngine } from "@mendcode/engine-acp"
@@ -75,13 +77,13 @@ import { sessionsTool, tellTool } from "./peer-tools"
 import { threadsTool } from "./thread-tool"
 import { packagesTool } from "./packages-tool"
 import { sessionMetaTool } from "./session-meta-tool"
-import { createCodeGraphTools, createCodeOverview, createGraphAutopilot, createIndexGate, createIndexer } from "@mendcode/codegraph"
+import { createCodeGraphTools, createCodeOverview, createGraphAutopilot, createIndexGate, createIndexer, scanHostCommand } from "@mendcode/codegraph"
 import { GRAPH_TOOL_PATTERNS, graphIndexMode } from "./graph-gate"
 import { filteredCatalog, modelAllowed } from "./models"
 import { createToolOutputs, toolOutputSettings } from "./tool-output"
 import { createOneTree } from "./one-tree"
 import { createSessionTranscripts } from "./session-transcripts"
-import { rolesFor, shellFor } from "./profiles"
+import { rolesFor, shellFor } from "./areas"
 import { advisorStatus, claudeAdvisorAlias, createAdvisorHost } from "./advisor-host"
 import { runClaudeAdvisor } from "./advisor-claude"
 import { createMcpAuth, createMcpManager, mcpResourceTools, mcpTools, type McpServerConfig } from "@mendcode/mcp"
@@ -100,8 +102,8 @@ import { systemPartsWith, type PromptFiles } from "./extensions"
 import { promptContextParts, promptFileOverrides } from "./prompt-context"
 import { outputStyleText } from "./output-styles"
 import { createPromptModes, graphAutopilotPart, visiblePlanPart } from "./prompt-modes"
-import { selfKnowledgeText, visiblePlanText } from "./prompt-guidance"
-import { foreignEngine, invalidChoice, modelEngine, resolveModel, unusableRoles, usableEffort, type ModelCatalog } from "./models"
+import { renderingFor, renderingText, selfKnowledgeText, visiblePlanText } from "./prompt-guidance"
+import { foreignEngine, imageRefusal, invalidChoice, modelEngine, resolveModel, unusableRoles, usableEffort, type ModelCatalog } from "./models"
 import { claudeAlias, claudeCompactEnv, claudeSubagentEnv, createClaudeDetection, createClaudeModelCatalog, probeClaude } from "./claude-models"
 import { createEngineRouter } from "./engine-router"
 import { withCodexEngine } from "./codex-router"
@@ -112,6 +114,7 @@ import { createCacheTtl } from "./cache-ttl"
 import { readUsageProfile } from "./usage-profile"
 import { windowOverride } from "./session-context-window"
 import { memoryExtractionPrompt } from "./memory-extract-prompt"
+import { createResumeSource } from "./memory-resume"
 import type { ModelChoice, ModelInfo } from "@mendcode/protocol"
 import { effectiveSettings, featureOn, findModel, modelContextOf, setBuildChannel } from "@mendcode/protocol"
 import { buildChannelOf } from "../../upgrade/src/releases"
@@ -121,8 +124,8 @@ import { hosting } from "./hosting"
 import { createLocalDictation } from "./voice-local"
 import { DETACHED_IDLE_EXIT_MS, runsAsUserService } from "./user-service"
 
-/** Data lives in ~/.mendcode-v2, fully separate from legacy MendCode (~/.local/share/mendcode is never touched). */
-export const DEFAULT_DIR = path.join(homedir(), ".mendcode-v2")
+/** Data lives in ~/.mendcode (moved from ~/.mendcode-v2 by the CLI, apps/cli/src/data-dir-move.ts); ~/.local/share/mendcode is never touched. */
+export const DEFAULT_DIR = defaultDataDirNow()
 
 /** The daemon's flags: this process's own, or the host's when the terminal runs the daemon in-process (./hosting). */
 const argv = hosting.argv ?? process.argv
@@ -147,7 +150,11 @@ function arg(name: string) {
 
 // Started lean (apps/cli/src/launcher.ts LEAN_JIT): JSC has read its options, so the user's commands run by this daemon get the environment the user had.
 if (process.env.MENDCODE_V2_LEAN_JIT === "1") for (const key of ["BUN_JSC_useDFGJIT", "BUN_JSC_useFTLJIT", "BUN_JSC_thresholdForJITAfterWarmUp", "BUN_JSC_thresholdForJITSoon", "MENDCODE_V2_LEAN_JIT"]) delete process.env[key]
-const dir = arg("dir") ?? process.env.MENDCODE_V2_DIR ?? DEFAULT_DIR
+const dir = arg("dir") ?? dataDirFromEnv(process.env) ?? DEFAULT_DIR
+/** The default directory under either name: a user service still started with `--dir ~/.mendcode-v2` reads the same home layers. */
+const atDefaultDir = isDefaultDataDir(dir)
+/** `mendcode dev` (docs/dev-mode.md): a development daemon, never on the user's own data directory. */
+const devDaemon = Boolean(process.env.MENDCODE_DEV) && !atDefaultDir && sameDir(process.env.MENDCODE_DEV!, dir)
 
 /**
  * The PR reviewer's config control for `review_config`, loaded on the tool's first call (config layers, profiles and YAML stay out
@@ -171,7 +178,7 @@ function lazyReviewSetup(dataDir: string, memory: SetupMemory, memoryEnabled: (d
     createReviewSetup({ dataDir, memory, memoryEnabled, gh: (argv, cwd) => ghProcess({ argv, cwd }) }))
   return { run: async (directory) => (await load()).run(directory) }
 }
-/** `--safe-mode` (or MENDCODE_SAFE_MODE=1): no extensions, packages, shell hooks, MCP or project tools, whatever the settings say (docs/tiers.md). */
+/** `--safe-mode` (or MENDCODE_SAFE_MODE=1): no extensions, profiles, shell hooks, MCP or project tools, whatever the settings say (docs/tiers.md). */
 const safeMode = argv.includes("--safe-mode") || process.env.MENDCODE_SAFE_MODE === "1"
 // Settings `proxy` (docs/resources-config.md): every outbound request of this process goes through one policy-aware fetch.
 installNetworkPolicy({ settings: () => { try { return extractionSettings() } catch { return {} } } })
@@ -184,7 +191,7 @@ validateRemoteListener(remoteOptions)
 // Code graph tools index lazily on first use; `MENDCODE_CODEGRAPH=0` leaves them out entirely.
 const codegraphStatus = createCodegraphStatus()
 // One indexer for the tools and for the Galaxy panel's code mode (`codegraph.overview`), so both read the same graph of a project.
-const codeIndexer = process.env.MENDCODE_CODEGRAPH === "0" ? undefined : createIndexer({ cacheDir: path.join(dir, "codegraph"), now: Date.now, onIndex: codegraphStatus.publish, onProgress: codegraphStatus.publish })
+const codeIndexer = process.env.MENDCODE_CODEGRAPH === "0" ? undefined : createIndexer({ cacheDir: path.join(dir, "codegraph"), now: Date.now, onIndex: codegraphStatus.publish, onProgress: codegraphStatus.publish, scanHost: scanHostCommand() })
 // Which folders are indexed (docs/code-graph.md): `auto` a git repository under the size limit, or the project's `/graph on|off`.
 const codeGate = codeIndexer ? createIndexGate() : undefined
 const graphGateOf = (cwd: string, signal?: AbortSignal) => codeGate!.check({ cwd, mode: graphIndexMode(extractionSettings(), cwd), signal })
@@ -202,7 +209,7 @@ const hiddenGraphTools = (directory: string): readonly string[] => {
 }
 const socketPath = arg("socket") ?? path.join(dir, "mendd.sock")
 /** native = MendCode's own loop on the user's ChatGPT subscription; codex = Codex app-server; faux = offline test engine. */
-const engineName = arg("engine") ?? process.env.MENDCODE_V2_ENGINE ?? "native"
+const engineName = arg("engine") ?? mendEnv(process.env, "ENGINE") ?? "native"
 const cwd = arg("cwd") ?? process.cwd()
 
 const systemPrompt = engineName === "native" ? await loadSystemPrompt() : () => ""
@@ -211,11 +218,11 @@ const continuationPrompt = engineName === "native" ? await loadContinuationPromp
 /** Project AGENTS.md / CLAUDE.md plus the user's global ~/.mendcode-v2/AGENTS.md. */
 const instructionsFor = createInstructionLoader({ globalFile: path.join(dir, "AGENTS.md"), paths: (root) => projectSources(root, extractionSettings(), remoteInstructions(dir).pathFor).instructions, ...instructionControls(() => extractionSettings()) })
 /**
- * Extension layers (enabled packages, the user's and the project's own folders). The daemon's version reads
- * the disabled packages from settings; it replaces this default when the daemon builds the engine, before any turn.
+ * Extension layers (enabled profiles, the user's and the project's own folders). The daemon's version reads
+ * the disabled profiles from settings; it replaces this default when the daemon builds the engine, before any turn.
  */
 let layersFor = (directory: string): ExtensionLayer[] => defaultLayers({ userDir: dir, directory })
-/** Skills of every layer: packages, ~/.mendcode-v2/skills, project .mendcode/skills. */
+/** Skills of every layer: profiles, ~/.mendcode-v2/skills, project .mendcode/skills. */
 let skills = createSkillLoader({ userDir: dir, layers: (cwd) => layersFor(cwd) })
 /**
  * MCP servers from every layer's mcp.json. Nothing runs until a turn in a project with servers configured;
@@ -226,6 +233,8 @@ let skills = createSkillLoader({ userDir: dir, layers: (cwd) => layersFor(cwd) }
 const mcpAllowed = () => featureOn(extractionSettings(), "mcp", { safeMode })
 /** Servers extensions register (`api.registerMcpServer`); bound once the daemon built its extensions. */
 let extensionMcpServers: (directory: string) => Promise<Record<string, McpServerConfig>> = async () => ({})
+// Opt-in (MENDCODE_BROWSER_EXTENSION=1): the user's own browser through the MendCode extension. Nothing is loaded, opened or listened on otherwise.
+const userBrowser = process.env.MENDCODE_BROWSER_EXTENSION === "1" ? (await import("./browser-bridge")).createUserBrowserBridge({ enabled: true, dataDir: dir, home: homedir() }) : undefined
 const mcp = createMcpManager({ configLoader: createMcpConfigLoader({ userDir: dir, layers: (directory) => layersFor(directory), allowed: mcpAllowed, trustedDirs: () => extractionSettings().trustedToolDirs, extensionServers: (directory) => extensionMcpServers(directory) }), auth: createMcpAuth({ dir }) })
 /** Language servers are lazy, provisioned only from offline caches, and stopped after 5 idle minutes. */
 const lsp = createLspManager({ cacheDir: path.join(dir, "lsp") })
@@ -301,6 +310,8 @@ const acpAgents = createAcpAgents({
     return facts ? catalogEfforts(facts) : undefined
   },
 })
+// The directories of daemons that died without stopping are removed once, a while after start, a few at a time.
+setTimeout(() => void sweepHostMcpDirs().catch(() => undefined), 10_000).unref?.()
 // The catalog is only fetched for a daemon with somewhere to use it, and well after the first frame.
 if (engineName === "native") setTimeout(() => { if (providerService.models(true).length > 0 || acpAgents.models().length > 0) void modelsDev.refresh() }, 5_000).unref?.()
 /**
@@ -375,7 +386,7 @@ function routedProvider(input: { onResponseHeaders?: (headers: Headers) => void 
 let completionTrace: import("@mendcode/protocol").TracePort | undefined
 /** One Tree's memory of a session (set where it is built), dropped when the session is deleted. */
 let forgetOneTree: ((sessionId: import("@mendcode/protocol").SessionId) => void) | undefined
-async function completeWithUsage(input: { system: string; prompt: string; signal: AbortSignal; model?: ModelChoice | undefined; onText?(text: string): void }) {
+async function completeWithUsage(input: { system: string; prompt: string; images?: import("@mendcode/engine-native").RequestImage[]; signal: AbortSignal; model?: ModelChoice | undefined; onText?(text: string): void }) {
   const span = completionTrace?.start("session.llm")
   let status: "ok" | "error" = "ok"
   let text = ""
@@ -384,7 +395,7 @@ async function completeWithUsage(input: { system: string; prompt: string; signal
     const provider = routedProvider()
     // An ACP agent runs whole sessions, not single completions: a session on one falls back to the default model here.
     const model = input.model && acpAgents.agentOf(input.model.model) === undefined ? usableEffort(input.model, modelCatalog) : undefined
-    for await (const event of provider.stream({ system: input.system, messages: [{ role: "user", content: input.prompt }], tools: [], ...(model ? { model: model.model, effort: model.effort, parameters: model.parameters } : {}), signal: input.signal })) {
+    for await (const event of provider.stream({ system: input.system, messages: [{ role: "user", content: input.prompt, ...(input.images?.length ? { images: input.images } : {}) }], tools: [], ...(model ? { model: model.model, effort: model.effort, parameters: model.parameters } : {}), signal: input.signal })) {
       if (event.type === "text") {
         text += event.delta
         input.onText?.(event.delta)
@@ -439,7 +450,7 @@ const createFauxEngine = engineName !== "native" && engineName !== "codex" ? (aw
 
 const otlp = otlpFromEnvironment(process.env)
 /** The home whose other programs this daemon may read: the user's for the default data directory, a given one for tests, none for a private `--dir`. */
-const foreignRoot = process.env.MENDCODE_FOREIGN_HOME || (dir === DEFAULT_DIR ? homedir() : undefined)
+const foreignRoot = process.env.MENDCODE_FOREIGN_HOME || (atDefaultDir ? homedir() : undefined)
 export const daemon = await startDaemon({
   ...(arg("http-listen") ? { httpListen: arg("http-listen")! } : {}),
   runtimeInfo: { version: packageJson.version, channel: packageJson.version.includes("beta") ? "beta" : packageJson.version.includes("dev") ? "dev" : "stable" },
@@ -460,12 +471,13 @@ export const daemon = await startDaemon({
   // Everything this process starts (engines, MCP servers, hooks) is not the user at a terminal (docs/permissions.md).
   agentOrigin: { descendants: true },
   ...(arg("local-transport") ? { localTransport: arg("local-transport") as "tcp" | "unix" } : {}),
+  ...(devDaemon ? { dev: true } : {}),
   ...(argv.includes("--pure") || safeMode ? { extensionsEnabled: false } : {}),
   ...(safeMode ? { safeMode: true, shellHooksEnabled: false } : {}),
   // ~/.agents and ~/.claude are read only by a daemon on the default data directory (or one told where home is), so a private --dir stays self-contained.
   // The same rule for the chats other programs keep (`threads`): only the daemon on the default data directory reads them.
   ...(foreignRoot ? { foreignThreads: { homes: { claude: process.env.CLAUDE_CONFIG_DIR?.trim() || path.join(foreignRoot, ".claude"), codex: process.env.CODEX_HOME?.trim() || path.join(foreignRoot, ".codex") }, v1Db: path.join(process.env.MENDCODE_FOREIGN_HOME ? path.join(foreignRoot, ".local", "share") : process.env.XDG_DATA_HOME?.trim() || path.join(foreignRoot, ".local", "share"), "mendcode", "mendcode-local.db") } } : {}),
-  ...(process.env.MENDCODE_FOREIGN_HOME ? { foreignHome: process.env.MENDCODE_FOREIGN_HOME } : dir === DEFAULT_DIR ? { foreignHome: homedir() } : {}),
+  ...(process.env.MENDCODE_FOREIGN_HOME ? { foreignHome: process.env.MENDCODE_FOREIGN_HOME } : atDefaultDir ? { foreignHome: homedir() } : {}),
   ...(process.env.MENDCODE_REASONING_ENDPOINT && process.env.MENDCODE_REASONING_TOKEN ? { reasoningEvaluator: createLoopbackJevEvaluator({ endpoint: process.env.MENDCODE_REASONING_ENDPOINT, token: process.env.MENDCODE_REASONING_TOKEN }) } : {}),
   codegraphStatus,
   ...(graphAutopilot ? { graphAutopilot } : {}),
@@ -487,7 +499,7 @@ export const daemon = await startDaemon({
   // `/tier computer on` (features.computer) switches it on while the daemon runs; the environment variable still does at start.
   computer: { enabled: process.env.MENDCODE_COMPUTER === "1" ? true : () => extractionSettings().features?.computer === true },
   browser: { enabled: process.env.MENDCODE_BROWSER === "1", ...(process.env.MENDCODE_BROWSER_PATH ? { executable: process.env.MENDCODE_BROWSER_PATH } : {}) },
-  engine: ({ notify, engineBackground, engineAgentEvent, trace, continuity, tasks, clock, store, grants, runLimits, sessionRules, emitGlobal, secrets, memory, background, interactive, workflows, peers, threads, packages, sessionMeta, loops, worktrees, prWatch, prReview, goals, review, customTools, extensionLayers, agents, plans, extensions, skills: skillLoader, recall, computer, browser, harness, compound, budget, auxiliary, aiConfig, inlineShell, reasoning, settingsWrite }) => {
+  engine: ({ notify, engineBackground, engineAgentEvent, trace, continuity, tasks, clock, store, grants, runLimits, sessionRules, emitGlobal, secrets, memory, background, interactive, workflows, peers, threads, packages, sessionMeta, loops, loopRun, worktrees, prWatch, prReview, goals, review, customTools, extensionLayers, agents, plans, extensions, skills: skillLoader, recall, computer, browser, harness, compound, budget, auxiliary, aiConfig, inlineShell, reasoning, settingsWrite }) => {
     extensionProviders = () => extensions.transportProviders()
     extensionMcpServers = (directory) => extensions.mcpServers(directory)
     extensionVirtualModels = (real) => extensions.virtualModels(real)
@@ -520,7 +532,13 @@ export const daemon = await startDaemon({
     skills = skillLoader
     // Memories are ranked for the session's latest prompt (full-text matches, recency, links; pinned always in) instead of all being injected.
     const memorySelector = createMemorySelector(memory, { settings: (directory) => memorySettings(store.settings.get(), directory) })
-    const memoryFor = (root: string, context: SystemContext | undefined) => memorySelector.block({ directory: root, prompt: context?.prompt ?? "", ...(context ? { sessionId: context.sessionId } : {}) })
+    // Feature `resume_context`: the note rides in the system prompt part with the memory block, frozen per session in memory, so it adds nothing to the stored history.
+    const resumeFor = createResumeSource({ store, now: Date.now, enabled: () => featureOn(store.settings.get(), "resume_context", { safeMode }) })
+    const memoryFor = (root: string, context: SystemContext | undefined) => {
+      const block = memorySelector.block({ directory: root, prompt: context?.prompt ?? "", ...(context ? { sessionId: context.sessionId } : {}) })
+      const resume = context ? resumeFor(context.sessionId, root) : ""
+      return resume ? (block ? `${block}\n\n${resume}` : resume) : block
+    }
     // No search key: the subscription's own search endpoint answers with the login the engine already uses (MENDCODE_WEB_SEARCH=0 turns it off).
     const subscriptionSearch = process.env.MENDCODE_WEB_SEARCH === "0" ? undefined : {
       baseUrl: CHATGPT_CODEX_BASE_URL,
@@ -544,11 +562,12 @@ export const daemon = await startDaemon({
     builtinTools.push(createReviewConfigTool({ control: lazyReviewConfigControl(dir), enabled: prReviewOn, setup: lazyReviewSetup(dir, memory, (directory) => memorySettings(store.settings.get(), directory).memoryEnabled !== false) }))
     // `pr_review` (pr_review): one PR reviewed now by the daemon's own reviewer (the session's `prReview` port), never by a comment.
     builtinTools.push(createPrReviewTool({ enabled: prReviewOn }))
-    // Interactive sessions need a pseudo-terminal: macOS and Linux under Bun, Windows only with MENDCODE_V2_CONPTY=1. Elsewhere the model only sees `shell`.
+    // Interactive sessions need a pseudo-terminal: macOS and Linux under Bun, Windows only with MENDCODE_CONPTY=1. Elsewhere the model only sees `shell`.
     if (ptyAvailable()) builtinTools.push(shellSession)
     // Registered wherever they can work; the feature `computer` (off until `/tier computer on`) keeps them out of the model's tool list.
     if (process.platform === "darwin" || process.env.MENDCODE_COMPUTER === "1") builtinTools.push(...createComputerTools())
     if (process.env.MENDCODE_BROWSER === "1") builtinTools.push(browserTool)
+    if (userBrowser) { builtinTools.push(createUserBrowserTool({ port: userBrowser.port() })); userBrowser.start() }
     extensions.setBuiltinTools(builtinTools)
     const mainModel = (sessionId: Parameters<typeof store.sessionModel>[0]) => resolveModel({ role: "main", session: store.sessionModel(sessionId), roles: rolesFor(store.settings.get(), store.sessionInfo(sessionId)?.directory), catalog: modelCatalog })
     /** The model one turn runs on: its per-turn override (already validated at submit) or the session's. */
@@ -561,11 +580,12 @@ export const daemon = await startDaemon({
     // What an engine with its own system prompt (Claude Code, Codex, pi, ACP) is told after it: what MendCode draws and where its
     // docs are. Read on the first such engine's start only (P5). The minimal prompt mode adds nothing to any engine's prompt.
     // An engine with a todo or plan tool of its own (all but pi) is told that its list is pinned too, while `visible_plan` is on.
-    let harnessRendering: Promise<string> | undefined
     const harnessSystem = async (ownPlan = true) => {
-      const text = `${await (harnessRendering ??= loadTerminalRendering())}\n\n${selfKnowledgeText()}`
       return (root: string) => {
-        if (createPromptModes(dir).status(root).mode === "minimal") return undefined
+        const mode = createPromptModes(dir).status(root).mode
+        if (mode === "minimal") return undefined
+        // A custom prompt keeps the short note it always had; the modes that send a rendering text to a native model send the same to an engine.
+        const text = `${renderingFor(mode) || renderingText().short}\n\n${selfKnowledgeText()}`
         return ownPlan && featureOn(store.settings.get(), "visible_plan", { safeMode }) ? `${text}\n${visiblePlanText().harness}` : text
       }
     }
@@ -617,6 +637,9 @@ export const daemon = await startDaemon({
               subagentContext: (sessionId) => harness.instructions(sessionId),
               oneTree: oneTree.note,
               ownTools: `mcp__${HOST_MCP_SERVER}__`,
+              // The Claude Code process is the session's own: a `mendcode` client run by its tools is agent-origin with this session's mode.
+              onProcess: (sessionId, pid) => { const tracked = agentProcesses.agent(pid, sessionId); return () => tracked.exited() },
+              planApplied: (sessionId, destination) => { const target = agents.planExit?.(sessionId, destination); if (target) agents.select?.(sessionId, target.name) },
               // The same MendCode docs pointer a native session carries: slash commands, the PR reviewer and other MendCode features
               // are found with `mendcode docs --search`, not guessed from the harness's own tools.
               appendSystem,
@@ -698,6 +721,7 @@ export const daemon = await startDaemon({
           computer,
           browser,
           loops,
+          loopRun,
           worktrees,
           prWatch,
           prReview,
@@ -746,6 +770,7 @@ export const daemon = await startDaemon({
             status: advisorFor,
             settings: () => store.settings.get(),
             guard: (request) => budget.guard(request),
+            acceptsImages: (model) => imageRefusal(model, modelCatalog) === undefined,
             // A Claude Code advisor answers through one headless `claude -p` on the user's Claude login (advisor-claude.ts).
             claude: {
               isClaude: (model) => modelEngine(model, modelCatalog) === "claude",
@@ -809,6 +834,7 @@ export const daemon = await startDaemon({
           transcript: (input) => transcripts.save(input),
           readStoredFile: store.readStoredFile,
           contextWindowFor: (sessionId) => modelCatalog.list().find((model) => model.id === mainModel(sessionId).model)?.contextWindow,
+          defaultContextWindow: () => store.settings.get().defaultContextWindow,
           contextWindowOverrideFor: (sessionId, model) => windowOverride({ meta: store.meta, sessionId, model: model ? findModel(modelCatalog.list(), model) : undefined, settings: store.settings.get() })?.tokens,
           cwdFor: (sessionId) => store.sessionDirectory(sessionId) || cwd,
           // `read` and `@file` load nearby instructions by the same rules (names, root markers, includes) as the system prompt.
@@ -959,7 +985,8 @@ export const daemon = await startDaemon({
   ...(engineName === "native" ? { providers: providerService, providerAuth } : {}),
   ...(engineName === "native" ? { dream: { complete: dreamComplete }, complete, setupComplete: completeWithUsage,
     extractMemory: async (job, signal, onUsage) => {
-      const result = await dreamComplete(memoryExtractionPrompt(job.text), signal, resolveModel({ role: "memoryExtractor", roles: rolesFor(extractionSettings(), job.directory), catalog: modelCatalog }))
+      const fullMemory = featureOn(extractionSettings(), "memory_auto")
+      const result = await dreamComplete(memoryExtractionPrompt(job.text, fullMemory), signal, resolveModel({ role: "memoryExtractor", roles: rolesFor(extractionSettings(), job.directory), catalog: modelCatalog }))
       if (typeof result !== "string" && result.usage) onUsage?.(result.usage)
       const text = typeof result === "string" ? result : result.text
       const parsed = JSON.parse(text.replace(/^```(?:json)?\s*|\s*```$/g, ""))
@@ -968,7 +995,12 @@ export const daemon = await startDaemon({
         if (typeof entry !== "object" || !entry) throw new Error("Invalid extracted memory")
         const memory = entry as Record<string, unknown>
         if (!["project", "user"].includes(String(memory.scope)) || typeof memory.text !== "string" || !memory.text.trim() || memory.text.length > 2_000 || typeof memory.category !== "string") throw new Error("Invalid extracted memory")
-        return { scope: memory.scope as "project" | "user", text: memory.text, category: memory.category }
+        // Scores (full tier prompt) only tighten what nightly consolidation does; an unreadable one is left out and the gates' defaults apply.
+        const score = (value: unknown) => typeof value === "number" && value >= 0 && value <= 1 ? value : undefined
+        const [confidence, durability, changeRisk] = [score(memory.confidence), score(memory.durability), score(memory.changeRisk)]
+        const sensitivity = memory.sensitivity === "low" || memory.sensitivity === "medium" || memory.sensitivity === "high" ? memory.sensitivity : undefined
+        const details = { ...(confidence !== undefined ? { confidence } : {}), ...(durability !== undefined ? { durability } : {}), ...(changeRisk !== undefined ? { changeRisk } : {}), ...(sensitivity ? { sensitivity } : {}) }
+        return { scope: memory.scope as "project" | "user", text: memory.text, category: memory.category, ...(Object.keys(details).length ? { details } : {}) }
       })
     },
   } : {}),
@@ -985,6 +1017,7 @@ export const daemon = await startDaemon({
     stopClaude?.()
     stopAcp?.()
     stopPi?.()
+    userBrowser?.stop()
     void Promise.allSettled([mcp.stop(), lsp.stop(), formatter.stop()]).finally(() => hosting.active ? hosting.onStopped?.() : process.exit(0))
   },
 })
@@ -997,6 +1030,7 @@ for (const signal of hosting.active ? [] : ["SIGINT", "SIGTERM"] as const) {
     stopClaude?.()
     stopAcp?.()
     stopPi?.()
+    userBrowser?.stop()
     void Promise.allSettled([daemon.stop(), mcp.stop(), lsp.stop(), formatter.stop()]).then(() => process.exit(0))
   })
 }
@@ -1006,5 +1040,6 @@ export async function stopDaemon() {
   stopClaude?.()
   stopAcp?.()
   stopPi?.()
+  userBrowser?.stop()
   await Promise.allSettled([daemon.stop(), mcp.stop(), lsp.stop(), formatter.stop()])
 }

@@ -221,5 +221,5 @@ test("workspace discovery uses persisted memory/session origins; browsing all ke
   expect(report.workspaces.find((item) => item.root === "/history")).toMatchObject({ source: "historical-session", sessions: 1 })
   expect(h.workspaces.browse("/repo", "all").memories.map((item) => item.text).sort()).toEqual(["Current project", "Older project", "Personal preference"].sort())
   expect(h.workspaces.browse("/repo", "user").memories.map((item) => item.text)).toEqual(["Personal preference"])
-  expect(() => h.workspaces.browse("/repo", "project", "/other-profile")).toThrow("another profile")
+  expect(() => h.workspaces.browse("/repo", "project", "/other-profile")).toThrow("another area")
 })

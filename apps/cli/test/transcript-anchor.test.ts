@@ -23,6 +23,8 @@ async function chat({ width, height, view, exchanges }: { width: number; height:
 
 const rowOf = (h: Harness, needle: string) => h.text().findIndex((row) => row.includes(needle))
 const promptRule = (h: Harness) => h.text().findIndex((row) => RULE.test(row))
+/** The last turn's closing line: the transcript's last row. */
+const closingRow = (h: Harness) => h.text().findLastIndex((row) => /took \d+s · ended /.test(row))
 
 describe("a transcript shorter than the body", () => {
   for (const [width, height] of [[60, 20], [100, 30], [200, 60]] as const) {
@@ -37,27 +39,29 @@ describe("a transcript shorter than the body", () => {
         const chatOf = (row: string) => (width >= 120 ? row.slice(38) : row)
         expect(h.text().slice(topbar, first).every((row) => chatOf(row).trim() === "")).toBe(true)
         expect(last).toBe(first + 2)
-        expect(rule).toBeGreaterThan(last + 1)
-        expect(h.text().slice(last + 1, rule).every((row) => chatOf(row).trim() === "")).toBe(true)
+        // The turn's closing line sits one blank row under the answer (the minimal view has none).
+        const closing = view === "minimal" ? last : last + 2
+        if (view !== "minimal") expect(chatOf(h.text()[closing]!).trim()).toMatch(/^took \d+s · ended /)
+        expect(rule).toBeGreaterThan(closing + 1)
+        expect(h.text().slice(closing + 1, rule).every((row) => chatOf(row).trim() === "")).toBe(true)
       })
     }
   }
 
   test("a transcript that fills the body follows the bottom as before: no gap above the prompt, no blank band above the top", async () => {
     const h = await chat({ width: 100, height: 30, view: "balanced", exchanges: 30 })
-    const last = rowOf(h, "answer 29")
-    expect(promptRule(h) - last).toBe(2)
+    expect(promptRule(h) - closingRow(h)).toBe(2)
     expect(h.text()[2]!.trim()).not.toBe("")
     expect(h.text().slice(1, 4).filter((row) => row.trim() === "").length).toBeLessThan(3)
   })
 
   test("the layout switches at the first row that overflows", async () => {
-    // Each exchange takes four rows; with a 30 row screen the body is 20 rows.
+    // Each exchange takes six rows with its closing line; with a 30 row screen the body is 20 rows.
     const short = await chat({ width: 100, height: 30, view: "balanced", exchanges: 3 })
     expect(rowOf(short, "question 0")).toBe(2)
-    const overflow = await chat({ width: 100, height: 30, view: "balanced", exchanges: 8 })
+    const overflow = await chat({ width: 100, height: 30, view: "balanced", exchanges: 6 })
     expect(rowOf(overflow, "question 0")).toBe(-1)
-    expect(promptRule(overflow) - rowOf(overflow, "answer 7")).toBe(2)
+    expect(promptRule(overflow) - closingRow(overflow)).toBe(2)
   })
 
   test("a drag over the first message and its answer copies exactly their text", async () => {

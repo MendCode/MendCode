@@ -4,8 +4,8 @@ import path from "node:path"
 import { textWidth } from "../src/view/wrap"
 import { appHarness, scratch } from "./extensions-harness"
 
-/** examples/packages/tool-renderers: its two modules, loaded as the user's extensions, draw real calls. */
-const PACKAGE = path.resolve(import.meta.dir, "../../../examples/packages/tool-renderers")
+/** examples/profiles/tool-renderers: its two modules, loaded as the user's extensions, draw real calls. */
+const PACKAGE = path.resolve(import.meta.dir, "../../../examples/profiles/tool-renderers")
 const made: Array<ReturnType<typeof scratch>> = []
 afterEach(() => {
   for (const item of made.splice(0)) item.cleanup()
@@ -20,8 +20,8 @@ async function app(width: number) {
   return h
 }
 
-test("the package manifest declares its extensions and no capabilities", () => {
-  const manifest = JSON.parse(readFileSync(path.join(PACKAGE, "mendcode-package.json"), "utf8"))
+test("the profile manifest declares its extensions and no capabilities", () => {
+  const manifest = JSON.parse(readFileSync(path.join(PACKAGE, "mendcode-profile.json"), "utf8"))
   expect(manifest).toMatchObject({ name: "tool-renderers", extensions: true, capabilities: [] })
 })
 

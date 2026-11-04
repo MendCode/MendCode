@@ -6,7 +6,7 @@ const count = (tokens: number) => tokens.toLocaleString("en-US")
 
 /** Three lines: the model and its window, where the history is packed and what sets that, how full the context is. Each number names its source. */
 export function contextLimitsLines(limits: NonNullable<RecentContextReport["limits"]>): string[] {
-  const windowSource = { session: "this session's /context-window", "model-setting": "the modelContext setting for this model", engine: "reported by the engine", catalog: "model list", unknown: "" }[limits.contextWindowSource]
+  const windowSource = { session: "this session's /context-window", "model-setting": "the modelContext setting for this model", engine: "reported by the engine", catalog: "model list", "default-setting": "the defaultContextWindow setting", unknown: "" }[limits.contextWindowSource]
   const max = limits.maxContextWindow ? ` · max ${count(limits.maxContextWindow)}` : ""
   const window = limits.contextWindow ? `context window ${count(limits.contextWindow)} tokens (${windowSource})${max}` : `context window not stated by the model list${max}`
   const basis = limits.inputLimit ? "input limit" : "window"
@@ -92,7 +92,7 @@ export function systemText(report: SystemReport) {
   if (report.operation === "precedence") {
     const facts = report.facts as unknown as PrecedenceFacts
     const sections = describePrecedence(resolvePrecedence(facts.claims))
-    const lines = [`Precedence of files, lowest layer first: ${facts.layers.join(" > ")} (the last listed is in force; profile keys, keys and views of the terminal are in /packages p)`]
+    const lines = [`Precedence of files, lowest layer first: ${facts.layers.join(" > ")} (the last listed is in force; terminal settings, keys and views are in /profiles p)`]
     for (const section of sections) lines.push("", section.heading, ...section.lines)
     if (facts.truncated) lines.push("", "more than 2000 entries; the list is cut")
     return `${lines.join("\n")}\n`
@@ -100,7 +100,7 @@ export function systemText(report: SystemReport) {
   return `${JSON.stringify(report.facts, null, 2)}\n`
 }
 
-const COMMANDS = ["backlog", "run", "export", "acp", "app-server", "session", "memory", "loop", "workflow", "usage", "storage", "package", "recipe", "profile", "control-plane", "tui", "help", "context", "status", "doctor", "debug", "generate", "completion", "agent", "import", "uninstall", "cache", "daemon", "loops", "db", "tsm", "github", "pr", "ps", "logs", "kill", "attach"]
+export const COMMANDS = ["backlog", "run", "export", "acp", "app-server", "session", "memory", "loop", "workflow", "usage", "storage", "profile", "recipe", "area", "customize", "control-plane", "tui", "help", "context", "status", "doctor", "debug", "generate", "completion", "agent", "import", "uninstall", "cache", "daemon", "loops", "db", "tsm", "github", "pr", "ps", "logs", "kill", "attach"]
 const SUBCOMMANDS: Record<string, string> = {
   "control-plane": "ai system tui tsm", ai: "env status", env: "status",
   system: "status doctor check toolchain config-paths config-layers precedence adapter-status", debug: "rg config info paths scrap skill startup agent file lsp snapshot wait", rg: "tree files search",

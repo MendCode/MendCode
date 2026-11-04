@@ -180,8 +180,9 @@ test("the nightly workflow runs daily, writes only from its one job, and its she
 
 /** Runs the tagging step in a throwaway repository with a `gh` that only logs its arguments. */
 function tagStep(setup: (git: (...args: string[]) => void) => void) {
-  const { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, chmodSync } = require("node:fs") as typeof import("node:fs")
+  const { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, chmodSync, rmSync } = require("node:fs") as typeof import("node:fs")
   const dir = mkdtempSync(path.join(require("node:os").tmpdir(), "mendcode-nightly-"))
+  try {
   const bin = path.join(dir, "bin")
   mkdirSync(bin)
   const log = path.join(dir, "gh.log")
@@ -199,6 +200,7 @@ function tagStep(setup: (git: (...args: string[]) => void) => void) {
   const script = nightly.jobs.tag!.steps.find((step) => step.run?.includes("gh workflow run"))!.run!
   const result = Bun.spawnSync([Bun.which("bash")!, "-e", "-c", script], { cwd: repo, env: { ...env, RUN: "42", GITHUB_REPOSITORY: "MendCode/MendCode" }, stdout: "pipe", stderr: "pipe" })
   return { code: result.exitCode, out: result.stdout.toString() + result.stderr.toString(), gh: existsSync(log) ? readFileSync(log, "utf8") : "" }
+  } finally { rmSync(dir, { recursive: true, force: true }) }
 }
 
 test("a nightly takes the patch after the newest stable, or the package version before one, and is dispatched on its own tag", () => {

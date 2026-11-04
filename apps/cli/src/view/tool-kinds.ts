@@ -2,13 +2,14 @@ import type { ColorName, Line, Span } from "../ui/theme"
 import { subagentColor } from "./agent-color"
 import type { ToolCardInput, ToolLevel } from "./tool-card"
 import { clip } from "./deck"
-import { markFold, markGutter } from "./line-meta"
+import { markFold, markGutter, markSoftWrapped } from "./line-meta"
 import { wrapSpans } from "./markdown"
 import { formatDuration, formatElapsed } from "./time"
 import { BRIEF_ROWS, EXCERPT_ROWS, globGroups, GRID_ROWS, GREP_FILES, GREP_LINES_PER_FILE, grepGroups, listGrid, noteRow, PAGE_LINES, readExcerpt, readPage, SHAPE_ROWS, shapeLines, webLines, type BodyContext } from "./tool-bodies"
 import { directoryEntries, formatBytes, jsonShape, parseGrep, parseListing, parseRead, resultShape, shellSummary, webInfo } from "./tool-data"
 import { bodyWidth, factSpans, FOLD_CARD, FOLD_PAGE, glyphOf, headerRow, INDENT, marksOf, railPrefix, toneOf, type Marks, type StatusTone } from "./tool-frame"
-import { lineWidth, textWidth, truncateEnd } from "./wrap"
+import { DEFAULT_TOOL_DESIGN, glyphText, type ToolDesign } from "./tool-design"
+import { cells, lineWidth, textWidth, truncateEnd } from "./wrap"
 
 /**
  * One function per kind of call for `balanced` (a header, at most a few body rows) and `full` (the same header over a richer
@@ -34,6 +35,10 @@ export type CardContext = {
   line: boolean
   brief: boolean
   body: BodyContext
+  /** The tool design (the `toolDesign` setting): header, rule, diff, output and colours. */
+  design: ToolDesign
+  /** The cells a header's continuation rows start with: the rule, or blank when the design hangs the body from a branch. */
+  continuation: Span[]
 }
 
 export function cardContext({ input, name, detail, level, ascii }: { input: ToolCardInput; name: string; detail: string; level: ToolLevel; ascii: boolean }): CardContext {
@@ -42,11 +47,34 @@ export function cardContext({ input, name, detail, level, ascii }: { input: Tool
   const cancelled = input.status === "cancelled"
   const status: StatusTone = running ? (input.awaiting ? "awaiting" : "running") : failed ? "failed" : cancelled ? "cancelled" : input.awaiting ? "awaiting" : "ok"
   const marks = marksOf(ascii)
-  const rule = toneOf(status).rule
+  const design = input.design ?? DEFAULT_TOOL_DESIGN
+  // A design's resting colour holds while the call is finished and fine; running, waiting and failing keep the status colours.
+  const rule = status === "ok" && design.colors.rule ? design.colors.rule : toneOf(status).rule
   // A call kept to one row draws like the summary level wherever the summary has no row of its own to add: only the header.
   const line = input.density === "line" && level !== "full" && !running && !failed
   const brief = input.density === "brief" && level !== "full"
-  return { input, name, detail, level: line ? "summary" : level, ascii, marks, status, running, failed, cancelled, line, brief, body: { prefix: railPrefix({ rule, marks }), width: bodyWidth(input.width), marks } }
+  const shown = input.rail !== false && design.rail.kind !== "none"
+  const prefix = railPrefix({ rule, marks, shown, glyph: glyphText(design.rail.glyph, ascii) })
+  const continuation = design.rail.kind === "branch" ? railPrefix({ rule, marks, shown: false }) : prefix
+  return { input, name, detail, level: line ? "summary" : level, ascii, marks, status, running, failed, cancelled, line, brief, body: { prefix, width: bodyWidth(input.width), marks }, design, continuation }
+}
+
+/**
+ * A design whose body hangs from a branch draws its rule on the first body row under each header only; the rows after it keep the
+ * same columns, blank. Rows are changed in place so their marks (folds, gutters) stay.
+ */
+export function branchRows(c: CardContext, rows: Line[]): Line[] {
+  if (c.design.rail.kind !== "branch" || c.input.rail === false) return rows
+  const rail = c.body.prefix[1]!
+  let open = false
+  for (const row of rows) {
+    const onRail = row[0]?.text === INDENT && row[1]?.text === rail.text && row[1]?.fg === rail.fg
+    if (!onRail) open = false
+    // The blank cell takes the tint of the cell after it, so a tinted diff row still starts at the rule's column.
+    else if (open) row[1] = { text: " ", ...(row[2]?.bg ? { bg: row[2].bg } : {}) }
+    else open = true
+  }
+  return rows
 }
 
 /** The marker at the start of a card: the kind's glyph in the status colour; a failed call has the failure mark instead, so the state reads without colour. */
@@ -57,8 +85,14 @@ export function glyphSpan(c: CardContext): Span {
     return { text: frames[c.input.frame % frames.length]!, fg: tone.glyph }
   }
   if (c.failed) return { text: c.marks.failed, fg: tone.glyph }
-  return { text: glyphOf({ name: c.name, ascii: c.ascii }), fg: tone.glyph, ...(tone.dim ? { dim: true } : {}) }
+  const { header, colors } = c.design
+  const text = header.mark === "bullet" ? glyphText(header.bullet, c.ascii) : glyphOf({ name: c.name, ascii: c.ascii })
+  const fg = c.status === "ok" && colors.mark ? colors.mark : tone.glyph
+  return { text, fg, ...(tone.dim && !(c.status === "ok" && colors.mark) ? { dim: true } : {}) }
 }
+
+/** What the header shows as the label: the tool's name, unless the design leaves it out where a target says what was called. */
+const shownLabel = (c: CardContext, parts: HeaderParts) => (parts.label && (c.design.header.label || !parts.target) ? parts.label : undefined)
 
 /** The card's duration for the header's right edge: only from a second on, a running one counting. */
 function durationOf(c: CardContext): string | undefined {
@@ -94,11 +128,14 @@ export function header(c: CardContext, parts: HeaderParts, fold = true): Line {
   const right = c.running ? undefined : time
   const writing = writingFact(c)
   const facts = [...statusFacts(c, parts.facts), ...(writing ? [writing] : []), ...(c.running && time ? [time] : [])]
+  const label = shownLabel(c, parts)
   const row = clip(headerRow({
     glyph: glyphSpan(c),
-    ...(parts.label ? { label: parts.label } : {}),
+    ...(label ? { label } : {}),
     ...(parts.target ? { target: parts.target } : {}),
-    targetTone: parts.targetTone ?? (c.line ? "muted" : "text"),
+    targetTone: parts.targetTone ?? (c.line ? "muted" : c.design.colors.target),
+    labelTone: c.design.colors.label,
+    ...(c.design.header.call === "parens" ? { parens: true } : {}),
     ...(c.line ? { plain: true } : {}),
     ...(facts.length ? { facts: factSpans(facts) } : {}),
     ...(right ? { right } : {}),
@@ -126,18 +163,21 @@ export function headerRows(c: CardContext, parts: HeaderParts & { wrap?: boolean
   const edge = width - 1
   const glyph = glyphSpan(c)
   const start = INDENT.length + textWidth(glyph.text) + 1
-  const label = parts.label ?? ""
+  const label = shownLabel(c, parts) ?? ""
   const target = parts.target ?? ""
-  if (start + textWidth(label) + (label && target ? 1 : 0) + textWidth(target) <= edge) return [one]
+  const parens = c.design.header.call === "parens" && !!label && !!target
+  if (start + textWidth(label) + (label && target ? (parens ? 2 : 1) : 0) + textWidth(target) <= edge) return [one]
   const strike = c.cancelled ? { strike: true as const } : {}
+  const labelTone = c.design.colors.label
   const text: Span[] = [
-    ...(label ? [{ text: label, fg: "muted" as const, ...strike }] : []),
-    ...(label && target ? [{ text: " " }] : []),
-    ...(target ? [{ text: target, fg: parts.targetTone ?? "text", bold: true, ...strike } as Span] : []),
+    ...(label ? [{ text: label, fg: labelTone, ...strike }] : []),
+    ...(label && target ? [{ text: parens ? "(" : " ", ...(parens ? { fg: labelTone } : {}) }] : []),
+    ...(target ? [{ text: target, fg: parts.targetTone ?? c.design.colors.target, bold: true, ...strike } as Span] : []),
+    ...(parens ? [{ text: ")", fg: labelTone }] : []),
   ]
   const lead: Span[] = [{ text: INDENT }, glyph, { text: " " }]
-  const rows = wrapSpans(text, edge, lead, c.body.prefix)
-  const prefixWidth = textWidth(c.body.prefix.map((span) => span.text).join(""))
+  const rows = wrapSpans(text, edge, lead, c.continuation)
+  const prefixWidth = textWidth(c.continuation.map((span) => span.text).join(""))
   for (const row of rows.slice(1)) markGutter(row, prefixWidth)
   const time = durationOf(c)
   const tail = factSpans([...statusFacts(c, parts.facts), ...(time ? [time] : [])])
@@ -147,7 +187,7 @@ export function headerRows(c: CardContext, parts: HeaderParts & { wrap?: boolean
   } else if (tail.length) {
     const last = rows[rows.length - 1]!
     if (lineWidth(last) + 2 + lineWidth(tail) <= edge) rows[rows.length - 1] = [...last, { text: "  " }, ...tail]
-    else rows.push(clip([...c.body.prefix, ...tail], edge))
+    else rows.push(clip([...c.continuation, ...tail], edge))
   }
   if (fold) markFold(rows[0]!, FOLD_CARD)
   return rows
@@ -157,13 +197,43 @@ const plural = (count: number, one: string, many = `${one}s`) => `${count.toLoca
 const ANSI = /\x1b\[[0-9;?]*[A-Za-z]|\r/g
 export const linesOf = (text: string) => text.replace(ANSI, "").replace(/\s+$/, "").split("\n").filter((line) => line.length > 0)
 
+/** What a command printed, line by line, as it printed it: indentation and blank lines stay; only the trailing whitespace of each line (and of the output) goes. */
+export const outputLines = (text: string): string[] => {
+  const body = text.replace(ANSI, "").replace(/\s+$/, "").replace(/[^\S\n]+(?=\n)/g, "")
+  return body ? (body.includes("\t") ? body.replace(/\t/g, "  ") : body).split("\n") : []
+}
+
+/** One line of output as rows of the card: it keeps its indentation, a blank line stays a row, and a long line is cut at the edge into rows that copy back as one. */
+function verbatimRows({ text, tone, dim, width, prefix }: { text: string; tone: ColorName; dim: boolean; width: number; prefix: Span[] }): Line[] {
+  const room = Math.max(1, width - prefix.reduce((sum, span) => sum + textWidth(span.text), 0))
+  const rows: Line[] = []
+  let chunk = ""
+  let used = 0
+  const flush = () => {
+    const row: Line = [...prefix, { text: chunk, fg: tone, ...(dim ? { dim: true } : {}) }]
+    if (rows.length) markSoftWrapped(row, "none")
+    rows.push(row)
+    chunk = ""
+    used = 0
+  }
+  for (const cell of cells(text)) {
+    if (used + cell.width > room && chunk) flush()
+    chunk += cell.text
+    used += cell.width
+  }
+  if (chunk) flush()
+  else if (!rows.length) rows.push([...prefix])
+  return rows
+}
+
 /** The rows of an opened card's whole body: one page of TOOL_PAGE lines, with the footer that turns the page or closes the card. */
-export function pagedLines({ lines, c, tone, dim = true }: { lines: string[]; c: CardContext; tone: ColorName; dim?: boolean }): Line[] {
+export function pagedLines({ lines, c, tone, dim = true, verbatim = false }: { lines: string[]; c: CardContext; tone: ColorName; dim?: boolean; verbatim?: boolean }): Line[] {
   const pages = Math.max(1, Math.ceil(lines.length / PAGE_LINES))
   const at = Math.min(Math.max(0, c.input.page ?? 0), pages - 1)
   const from = at * PAGE_LINES
   const to = Math.min(lines.length, from + PAGE_LINES)
-  const rows = lines.slice(from, to).flatMap((text) => wrapSpans([{ text, fg: tone, ...(dim ? { dim: true } : {}) }], c.body.width + c.body.prefix.reduce((sum, span) => sum + textWidth(span.text), 0), c.body.prefix, c.body.prefix))
+  const edge = c.body.width + c.body.prefix.reduce((sum, span) => sum + textWidth(span.text), 0)
+  const rows = lines.slice(from, to).flatMap((text) => verbatim ? verbatimRows({ text, tone, dim, width: edge, prefix: c.body.prefix }) : wrapSpans([{ text, fg: tone, ...(dim ? { dim: true } : {}) }], edge, c.body.prefix, c.body.prefix))
   if (pages > 1) rows.push(noteRow(c.body, `lines ${from + 1}-${to} of ${lines.length} ${c.marks.dot} ${at < pages - 1 ? "click or ctrl+x f for the next page" : "click or ctrl+o to close"}`, at < pages - 1 ? FOLD_PAGE : FOLD_CARD))
   return rows
 }
@@ -288,12 +358,13 @@ export function grepCard(c: CardContext, pattern: string | undefined): Line[] | 
 }
 
 /** Rows of the tail of a shell's output that fit `cap`, wrapped; what is cut above them becomes `… +N lines`. */
-function tail({ c, lines, cap, tone }: { c: CardContext; lines: string[]; cap: number; tone: ColorName }): Line[] {
+function tail({ c, lines, cap, tone, verbatim = false }: { c: CardContext; lines: string[]; cap: number; tone: ColorName; verbatim?: boolean }): Line[] {
   const room = c.body.width
   const rows: Line[] = []
   let taken = 0
   while (taken < lines.length && rows.length < cap) {
-    const next = wrapSpans([{ text: lines[lines.length - 1 - taken]!, fg: tone }], room, c.body.prefix, c.body.prefix)
+    const text = lines[lines.length - 1 - taken]!
+    const next = verbatim ? verbatimRows({ text, tone, dim: false, width: room, prefix: c.body.prefix }) : wrapSpans([{ text, fg: tone }], room, c.body.prefix, c.body.prefix)
     if (rows.length > 0 && rows.length + next.length > cap) break
     rows.unshift(...next)
     taken++
@@ -306,7 +377,7 @@ function tail({ c, lines, cap, tone }: { c: CardContext; lines: string[]; cap: n
 /** `$ bun test  241 pass · 0 fail  12.4s` over the tail of its output. */
 export function shellCard(c: CardContext, limits: { summary: number; preview: number; failed: number }): Line[] {
   const { input } = c
-  const output = linesOf(input.text)
+  const output = outputLines(input.text)
   const exit = input.exitCode
   const summary = c.running ? undefined : shellSummary({ command: c.detail, text: input.text, exitCode: exit })
   // A call kept to a row or to a short preview says the shape of what it printed instead of printing it: `json · 1,155 lines`.
@@ -322,14 +393,17 @@ export function shellCard(c: CardContext, limits: { summary: number; preview: nu
   // The command wraps under its rail where the card shows a body (the `full` view, an opened card) and ends in `…` in the one-row summary.
   // It keeps the command colour whatever the exit code was: the failure is the marker, the badge and the rule.
   const head = headerRows(c, { target: c.detail || "shell", targetTone: c.input.awaiting ? "warning" : c.line ? "muted" : "primary", facts, middle: true, wrap: true }, !c.running && output.length > 0)
-  if (c.running) return [...head, ...(output.length ? tail({ c, lines: output, cap: input.tailLines, tone: "muted" }) : [noteRow(c.body, "No output yet")])]
+  const tone = c.design.colors.output
+  if (c.running) return [...head, ...(output.length ? tail({ c, lines: output, cap: input.tailLines, tone, verbatim: true }) : [noteRow(c.body, "No output yet")])]
   if (!output.length || c.line) return head
   const passing = summary !== undefined && !c.failed
-  if (c.level === "full") return [...head, ...pagedLines({ lines: output, c, tone: "muted", dim: !c.failed })]
+  if (c.level === "full") return [...head, ...pagedLines({ lines: output, c, tone, dim: !c.failed, verbatim: true })]
   // A passing run's summary in the header says everything its output would; the rows come when the card is opened.
   if (shape || passing) return head
-  const cap = c.failed ? (c.brief ? BRIEF_ROWS.shellFailed : limits.failed) : c.brief ? BRIEF_ROWS.shell : c.level === "preview" ? limits.preview : limits.summary
-  return cap > 0 ? [...head, ...tail({ c, lines: output, cap, tone: "muted" })] : head
+  // The collapsed card's rows are the design's (`output.rows`); the default design's are `limits.summary`.
+  const summaryRows = c.design === DEFAULT_TOOL_DESIGN ? limits.summary : c.design.output.rows
+  const cap = c.failed ? (c.brief ? BRIEF_ROWS.shellFailed : limits.failed) : c.brief ? BRIEF_ROWS.shell : c.level === "preview" ? limits.preview : summaryRows
+  return cap > 0 ? [...head, ...tail({ c, lines: output, cap, tone, verbatim: true })] : head
 }
 
 /** `Fetch  Writing tests  bun.sh · 48 KB`; `full` adds the first lines of the text. */

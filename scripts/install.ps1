@@ -138,8 +138,10 @@ try {
   $Destination = Join-Path $InstallDir 'mendcode.exe'
   if (Test-Path -LiteralPath $Destination) { [IO.File]::Replace($Binary, $Destination, $null) }
   else { [IO.File]::Move($Binary, $Destination) }
-  $Receipt = "schema=mendcode-v2.install.v1`nbinary=mendcode.exe`nsha256=$Expected`ntier=$Tier`n"
-  [IO.File]::WriteAllText((Join-Path $InstallDir '.mendcode-v2-install'), $Receipt, (New-Object Text.UTF8Encoding($false)))
+  $Receipt = "schema=mendcode.install.v1`nbinary=mendcode.exe`nsha256=$Expected`ntier=$Tier`n"
+  [IO.File]::WriteAllText((Join-Path $InstallDir '.mendcode-install'), $Receipt, (New-Object Text.UTF8Encoding($false)))
+  # An earlier installer's receipt, under the old name; the new one replaces it.
+  Remove-Item -LiteralPath (Join-Path $InstallDir '.mendcode-v2-install') -ErrorAction SilentlyContinue
   $UserPath = [Environment]::GetEnvironmentVariable('Path', 'User')
   $Entries = @($UserPath -split ';' | ForEach-Object { $_.Trim().TrimEnd('\') })
   if ($Entries -notcontains $InstallDir.TrimEnd('\')) {

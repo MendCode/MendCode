@@ -1,4 +1,4 @@
-52d4000ec179f1b3
+4a91bea45dcbfe78
   git /work/app
   › Why does the second session see the first one's config? Please look at src/store.ts and fix it.
 
@@ -16,16 +16,16 @@
 
      ✗ bun test src/store.test.ts  3 pass · 1 fail  exit 1                                     1.8s
      │ bun test v1.3
+     │
      │ 3 pass
      │ 1 fail
      │ error: expected "a" received "b"
 
      ✎ Edit src/store.ts  3 lines                                                                1s
-     │ Edited src/store.ts
-     │ - const key = name
-     │ + const key = `${directory}:${name}`
-                                                                                   ↓ latest · End
+       Edited src/store.ts
+       - const key = name
+       + const key = `${directory}:${name}`                                        ↓ latest · End
   ────────────────────────────────────────────────────────────────────────────────────────────────
   ❭
   ────────────────────────────────────────────────────────────────────────────────────────────────
-   Build
+   /work/app

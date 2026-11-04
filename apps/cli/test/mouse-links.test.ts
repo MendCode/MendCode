@@ -143,6 +143,8 @@ test("clicking the jump-to-latest label follows the newest output again", async 
   const reply = Array.from({ length: 70 }, (_, i) => `line ${String(i + 1).padStart(2, "0")} of the answer`).join("\n\n")
   conversation(h.sessionId, h.app.onEvent).exchange("Count for me", reply)
   h.app.render()
+  // Two wheel steps up: the first only takes the turn's closing line out of view.
+  await h.app.onKey("\x1b[<64;10;10M")
   await h.app.onKey("\x1b[<64;10;10M")
   h.app.render()
   const row = rowOf(h, "↓ latest")

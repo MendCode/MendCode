@@ -13,5 +13,5 @@
     "noEmit": true
   },
   "include": ["packages/*/src", "packages/*/test", "apps/*/src", "features/*/src", "scripts", "examples"],
-  "exclude": ["examples/packages", "examples/extensions"]
+  "exclude": ["examples/profiles", "examples/extensions"]
 }

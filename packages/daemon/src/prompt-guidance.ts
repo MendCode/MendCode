@@ -14,6 +14,7 @@ import localFile from "../prompts/focus/local.prompt.md" with { type: "file" }
 import operatorGuideFile from "../prompts/operator-guide.md" with { type: "file" }
 import selfKnowledgeFile from "../prompts/self-knowledge.md" with { type: "file" }
 import visiblePlanFile from "../prompts/visible-plan.md" with { type: "file" }
+import renderingFile from "../prompts/rendering.md" with { type: "file" }
 import graphAutopilotFile from "../prompts/graph-autopilot.md" with { type: "file" }
 import { PROGRAM_NAME } from "@mendcode/program"
 
@@ -42,15 +43,19 @@ export const PROMPT_BUDGETS = {
   // twice; the misses moved around. "before or when X do Y" and "not ... a one-time check" (it had checked git status once for "before any
   // write, refuse on a dirty tree"), with the tool's check action and the cards, made it 14 and 15 of 15 (395 bytes).
   // Both lines merged (screen parts, then behavior): 428 bytes, measured again with both evals.
-  selfKnowledge: 430,
+  // 430 -> 470: "(never read its binary or source)": a model asked to change the context window ran strings and python over the binary for a minute.
+  // 470 -> 630: the one-line language rule (reply in the user's latest message language, never switch on its own) rides on this line in every mode but custom.
+  selfKnowledge: 630,
   // `focus` (the default) had only a one-sentence family note: the core gives it the guide's every-call habits (preambles, `todo`,
   // `path:line`, result first) and the model note joins it; together they stay under 1,200 characters over that focus (not measured with an eval).
   focus: { core: 600 },
   guide: { basics: 1_100, family: 3_000, modelNote: 600 },
   // 1,500: the guide names every card topic (45 of them now, 22 before) so the model picks one without a call; the prose was trimmed first.
-  full: { operatorGuide: 1_500 },
+  // 1,500 -> 1,750: the `change` map card name and the rule not to read the binary or source to change MendCode.
+  full: { operatorGuide: 1_750 },
   // full 7,400 -> 7,800: the base prompt's terminal rendering block (+389 characters, sent to every engine) put codex full at 7,619.
-  composed: { guide: 6_500, full: 7_800 },
+  // full 8,050 -> 8,100: the language rule on the docs pointer (+161 characters) put codex full at 8,081.
+  composed: { guide: 6_500, full: 8_100 },
 } as const
 
 export type ModelNote = { label: string; match: RegExp; text: string }
@@ -172,4 +177,21 @@ export function visiblePlanText(): { native: string; harness: string } {
     if (!native || !harness) throw new TypeError("[GUIDANCE]: visible-plan.md needs a native line, a <!-- harness --> line and a harness line")
     return { native, harness }
   })
+}
+
+/**
+ * What the terminal draws in an answer (Markdown, Mermaid, callouts), as two texts of `rendering.md`: `full` with the exact syntax and
+ * when each form earns its place (`guide` and `full` modes), `short` one sentence (`focus`, the balanced tier). `minimal` sends neither.
+ */
+export function renderingText(): { full: string; short: string } {
+  return once("rendering", () => {
+    const [full = "", short = ""] = readFileSync(renderingFile, "utf8").split(/^<!-- short -->$/m).map((block) => block.trim())
+    if (!full || !short) throw new TypeError("[GUIDANCE]: rendering.md needs a full text, a <!-- short --> line and a short text")
+    return { full, short }
+  })
+}
+
+/** The rendering text a prompt mode sends: `full` in guide and full, `short` in focus, nothing in minimal and custom. */
+export function renderingFor(mode: string): string {
+  return mode === "guide" || mode === "full" ? renderingText().full : mode === "focus" ? renderingText().short : ""
 }

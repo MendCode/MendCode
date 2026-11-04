@@ -1,6 +1,9 @@
 import { expect, test } from "bun:test"
 import type { ModelInfo, SessionId, Settings } from "@mendcode/protocol"
-import { advisorReport, advisorStatus, claudeAdvisorAlias, createAdvisorHost } from "../src/advisor-host"
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { advisorDiff, advisorReport, advisorStatus, claudeAdvisorAlias, createAdvisorHost } from "../src/advisor-host"
 
 const models: ModelInfo[] = [
   { id: "gpt-6-luna", name: "Luna", efforts: ["low", "medium", "high"] },
@@ -77,4 +80,31 @@ test("a Claude Code advisor applies to a native session and its consultations go
   const consulted = await host.consult({ sessionId: session, trigger: "tool", brief: "brief", signal: new AbortController().signal })
   expect(routed).toEqual(["claude:claude-opus"])
   expect(consulted).toMatchObject({ verdict: { verdict: "revise" }, account: "Claude subscription", usage: { provider: "claude", input: 40, output: 9 } })
+})
+
+test("the working-tree diff names untracked files, which git diff never shows", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "advisor-diff-"))
+  try {
+    const git = (...args: string[]) => Bun.spawnSync(["git", "-c", "user.name=t", "-c", "user.email=t@t", ...args], { cwd: dir })
+    git("init", "-q")
+    writeFileSync(join(dir, "tracked.txt"), "one\n")
+    git("add", ".")
+    git("commit", "-qm", "init")
+    writeFileSync(join(dir, "tracked.txt"), "two\n")
+    writeFileSync(join(dir, "new-page.html"), "<p>hi</p>\n")
+    const diff = await advisorDiff(dir, new AbortController().signal)
+    expect(diff).toContain("+two")
+    expect(diff).toContain("Untracked files, not part of the diff above (1): new-page.html")
+  } finally { rmSync(dir, { recursive: true, force: true }) }
+})
+
+test("an advisor model takes images only when the catalog says so and it is not a Claude Code model", () => {
+  const host = (accepts: boolean, claude: boolean) => createAdvisorHost({
+    status: () => ({ choice: { model: "gpt-6.1-sol" }, applied: true, engine: "native" }), settings: () => ({}) as Settings, guard: async () => {},
+    acceptsImages: () => accepts, complete: async () => ({ text: "{}" }),
+    ...(claude ? { claude: { isClaude: () => true, complete: async () => ({ text: "{}" }) } } : {}),
+  })
+  expect(host(true, false).acceptsImages?.(session)).toBe(true)
+  expect(host(false, false).acceptsImages?.(session)).toBe(false)
+  expect(host(true, true).acceptsImages?.(session)).toBe(false)
 })

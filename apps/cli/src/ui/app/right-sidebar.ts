@@ -1,7 +1,7 @@
 import { estimateTokens } from "@mendcode/protocol/wire"
+import { compactFallback } from "./compact-fallback"
 import type { SidebarWidget, McpStatusReport, Loop, SessionTreeNode, WorkflowSummary, ChangesReport, ContextReport } from "@mendcode/protocol"
 import type { SlotContext } from "@mendcode/extension-api"
-import { DEFAULT_COMPACT_AT_TOKENS } from "@mendcode/protocol/wire"
 import { contextIsEngineWindow, contextLimit } from "../../view/context-meter"
 import { boxPanel, fit } from "../../view/deck"
 import { renderMarkdown } from "../../view/markdown"
@@ -160,7 +160,7 @@ export function createRightSidebar(ctx: AppContext, slotContext: (width: number,
     const reply = await input.send({ type: "sidebar.get", directory })
     if (directory !== (input.directory ?? process.cwd())) return
     if (reply.ok && Array.isArray(reply.result?.widgets)) {
-      // The cards of an enabled package are a layer over the stored spec (profile-layers.ts): asking the daemon must not wipe them.
+      // The cards of an enabled profile are a layer over the stored spec (profile-layers.ts): asking the daemon must not wipe them.
       // Saving or editing from here is the user's own change, which then wins over the layer.
       // A session that chose its own cards (`/panel <preset>`) keeps them.
       if (!("sidebarWidgets" in state.profileApplied) && !state.sessionLook.get(state.sessionId)?.sidebarWidgets) state.tuiProfile.sidebarWidgets = sidebarSpec(reply.result.widgets)
@@ -352,7 +352,7 @@ export function createRightSidebar(ctx: AppContext, slotContext: (width: number,
     const alerts: Alert[] = []
     if (state.connection !== "connected") alerts.push({ level: state.connection === "closed" ? "error" : "warning", text: state.connection === "closed" ? "Disconnected" : "Offline, reconnecting" })
     const tokens = state.transcript.lastUsage?.contextTokens
-    const limit = contextLimit(state.transcript.lastUsage, state.settingsNow.compactAtTokens ?? DEFAULT_COMPACT_AT_TOKENS)
+    const limit = contextLimit(state.transcript.lastUsage, compactFallback(state))
     if (tokens !== undefined && limit > 0 && tokens / limit >= .75) alerts.push({ level: tokens / limit >= .9 ? "error" : "warning", text: `Context ${state.transcript.lastUsage?.contextApprox ? "~" : ""}${Math.round(tokens / limit * 100)}% of the ${contextIsEngineWindow(state.transcript.lastUsage) ? "model window" : "compaction limit"}` })
     for (const quota of ctx.quotas.values()) if (quotaFresh(quota.fetchedAt, now())) for (const window of quota.windows) if (window.usedPercent >= 70) alerts.push({ level: window.usedPercent >= 90 ? "error" : "warning", text: `${quota.provider} ${window.label} ${Math.round(window.usedPercent)}% used` })
     for (const server of state.sidebarMcp ?? []) if (server.enabled && server.state === "failed") alerts.push({ level: "error", text: `MCP ${server.name} failed${server.lastError ? `: ${server.lastError}` : ""}` })
@@ -374,7 +374,7 @@ export function createRightSidebar(ctx: AppContext, slotContext: (width: number,
         const calls = state.transcript.recentCalls
         const timed = calls.filter((call) => call.durationMs !== undefined && call.durationMs > 0)
         const rate = timed.length ? timed.reduce((sum, call) => sum + call.output + call.reasoning, 0) / timed.reduce((sum, call) => sum + call.durationMs!, 0) * 60_000 : undefined
-        const forecast = forecastTurns(state.transcript.recentContexts, contextLimit(state.transcript.lastUsage, state.settingsNow.compactAtTokens ?? DEFAULT_COMPACT_AT_TOKENS))
+        const forecast = forecastTurns(state.transcript.recentContexts, contextLimit(state.transcript.lastUsage, compactFallback(state)))
         const times = state.transcript.recentTurnTimes
         // Nothing timed yet is one calm line, not four "unavailable" rows.
         if (rate === undefined && !forecast && !times.length) return [text("No timed turns yet", "muted")]
@@ -414,7 +414,7 @@ export function createRightSidebar(ctx: AppContext, slotContext: (width: number,
       case "orbit": if (orbit) projectWhileEmpty()
         return !orbitAllowed() ? [text("Galaxy needs full tier", "muted")] : orbit ? orbit.renderOrbit(inCode() ? codeGraph ?? emptyGraph : snapshot().graph, width, Math.max(1, orbitHeight), { ...activeCamera(), focused: state.rightFocus, aspect: cellAspect }, ascii(), { now: now(), busy: isRunning(), reduced: state.reducedMotion }, inCode() ? orbitCode!.codeOrbitView(code, width) : { mode: "session" }) : [text("Loading galaxy", "muted")]
       case "context": {
-        const rows = contextCard({ ...(usage?.contextTokens !== undefined ? { tokens: usage.contextTokens } : {}), compactAt: contextLimit(usage, state.settingsNow.compactAtTokens ?? DEFAULT_COMPACT_AT_TOKENS), ...(usage?.contextWindow ?? modelInfo()?.contextWindow ? { window: (usage?.contextWindow ?? modelInfo()!.contextWindow)! } : {}), ...(cacheMiss() ? { cacheMiss: "last call missed" } : {}) }, width, ctx.glyphs)
+        const rows = contextCard({ ...(usage?.contextTokens !== undefined ? { tokens: usage.contextTokens } : {}), compactAt: contextLimit(usage, compactFallback(state)), ...(usage?.contextWindow ?? modelInfo()?.contextWindow ? { window: (usage?.contextWindow ?? modelInfo()!.contextWindow)! } : {}), ...(cacheMiss() ? { cacheMiss: "last call missed" } : {}) }, width, ctx.glyphs)
         const growth = state.transcript.recentContexts.map((sample) => sample.tokens)
         // No reading, no growth line: the card is one muted sentence.
         return usage?.contextTokens === undefined || !growth.length ? rows : [...rows, text(`Grow ${sparkline(growth, width - 5, ascii())}`, "muted")]
@@ -508,7 +508,7 @@ export function createRightSidebar(ctx: AppContext, slotContext: (width: number,
       let body = shown.map((line) => fit(line.map((span) => ({ ...span, text: span.text.replace(/[\x00-\x1f\x7f-\x9f]/g, "") })), width - 2))
       if (widget.options.maxRows && body.length > widget.options.maxRows) body = [...body.slice(0, widget.options.maxRows), text(`${body.length - widget.options.maxRows} more`, "muted")]
       const title = widget.title ?? widget.type[0]!.toUpperCase() + widget.type.slice(1)
-      const value = widget.type === "agent" ? ctx.stateLabels[state.transcript.foreground] : widget.type === "context" && state.transcript.lastUsage?.contextTokens !== undefined ? `${Math.round(state.transcript.lastUsage.contextTokens / contextLimit(state.transcript.lastUsage, state.settingsNow.compactAtTokens ?? DEFAULT_COMPACT_AT_TOKENS) * 100)}%` : widget.type === "queue" && state.transcript.queue.length > 0 ? `${state.transcript.queue.length}` : widget.type === "tokens" && state.transcript.sessionUsage.calls > 0 ? `${state.transcript.sessionUsage.calls} call${state.transcript.sessionUsage.calls === 1 ? "" : "s"}` : widget.type === "orbit" ? inCode() ? orbitCode!.codeOrbitValue(code) : `${snapshot().graph.nodes.length} nodes` : ""
+      const value = widget.type === "agent" ? ctx.stateLabels[state.transcript.foreground] : widget.type === "context" && state.transcript.lastUsage?.contextTokens !== undefined ? `${Math.round(state.transcript.lastUsage.contextTokens / contextLimit(state.transcript.lastUsage, compactFallback(state)) * 100)}%` : widget.type === "queue" && state.transcript.queue.length > 0 ? `${state.transcript.queue.length}` : widget.type === "tokens" && state.transcript.sessionUsage.calls > 0 ? `${state.transcript.sessionUsage.calls} call${state.transcript.sessionUsage.calls === 1 ? "" : "s"}` : widget.type === "orbit" ? inCode() ? orbitCode!.codeOrbitValue(code) : `${snapshot().graph.nodes.length} nodes` : ""
       const color = widget.type === "agent" ? isRunning() ? "primary" : state.transcript.foreground === "error" ? "error" : "success" : "primary"
       return panelCard({ title, value, body, width, color, ascii: ascii() })
     }
@@ -572,7 +572,7 @@ export function createRightSidebar(ctx: AppContext, slotContext: (width: number,
     const addChat = (title?: string) => {
       if (chatArea) return
       chatArea = { top: panels.length, height: chatHeight }
-      panels.push(...sideChatRows(chat, width, chatHeight, title))
+      panels.push(...sideChatRows(chat, width, chatHeight, title, now()))
     }
     if (implicitChat) addChat()
     // A bar shorter than its cards keeps the `high` ones (and drops `low`, then `normal`, first) instead of scrolling past them; without priorities it scrolls.

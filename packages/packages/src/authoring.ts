@@ -36,7 +36,7 @@ function readState(source: string): z.infer<typeof stateSchema> {
   const file = safePath(source, STATE_FILE)
   if (!existsSync(file)) return { version: 0 as const, metadata: {} as PackageAuthorMetadata, selection: [...PACKAGE_SELECTIONS] }
   const parsed = stateSchema.safeParse(json(file))
-  if (!parsed.success) throw new PackageError("invalid package authoring metadata")
+  if (!parsed.success) throw new PackageError("invalid profile authoring metadata")
   return parsed.data
 }
 function write(file: string, value: unknown) {
@@ -46,7 +46,7 @@ function selection(include: string[] | undefined, exclude: string[] | undefined,
   if (include === undefined && exclude === undefined) return previous
   const targets = [...include ?? [], ...exclude ?? []]
   const unknown = targets.filter((item) => item !== "all" && !PACKAGE_SELECTIONS.includes(item as PackageSelection))
-  if (unknown.length) throw new PackageError(`unknown package include/exclude target: ${unknown.join(", ")}`)
+  if (unknown.length) throw new PackageError(`unknown profile include/exclude target: ${unknown.join(", ")}`)
   const wanted = !include?.length || include.includes("all") ? PACKAGE_SELECTIONS : include
   return PACKAGE_SELECTIONS.filter((item) => wanted.includes(item) && !exclude?.includes("all") && !exclude?.includes(item))
 }
@@ -54,12 +54,12 @@ function secretSafe(text: string, relative: string) {
   if (redactSecrets(text).count) throw new PackageError(`${relative}: contains credentials; use secret references before exporting`)
 }
 
-/** Exports only selected project configuration, never providers, databases, history or installed packages. */
+/** Exports only selected project configuration, never providers, databases, history or installed profiles. */
 export function authorLocalPackage(input: { directory: string; action: "create" | "update"; metadata?: PackageAuthorMetadata; include?: string[]; exclude?: string[]; settings?: Partial<Record<PackageSelection, unknown>>; now?: () => number }): PackageAuthoringReport {
   const { directory, source } = projectRoot(input.directory)
   const previous = readState(source)
   const metadata = PackageAuthorMetadata.safeParse({ ...previous.metadata, ...input.metadata })
-  if (!metadata.success) throw new PackageError("invalid package metadata")
+  if (!metadata.success) throw new PackageError("invalid profile metadata")
   const chosen = selection(input.include, input.exclude, previous.selection)
   const reselection = input.include !== undefined || input.exclude !== undefined
   const savedFiles = !reselection && previous.artifacts ? new Set(previous.artifacts) : undefined
@@ -88,7 +88,7 @@ export function authorLocalPackage(input: { directory: string; action: "create" 
     const portable = relative.split(path.sep).join("/")
     if (savedFiles && !savedFiles.has(portable)) return
     bytes += info.size
-    if (files.length >= MAX_PACKAGE_FILES - 2 || bytes > MAX_PACKAGE_BYTES - 64 * 1024) throw new PackageError("selected package exceeds the file/byte limit")
+    if (files.length >= MAX_PACKAGE_FILES - 2 || bytes > MAX_PACKAGE_BYTES - 64 * 1024) throw new PackageError("selected profile exceeds the file/byte limit")
     const content = readFileSync(full)
     // MCP literal env/header credentials do not become shareable just because their keys are innocuous.
     if (relative === "mcp.json" || relative.startsWith(`mcp${path.sep}`)) {
@@ -106,7 +106,7 @@ export function authorLocalPackage(input: { directory: string; action: "create" 
     secretSafe(content.toString("utf8"), relative)
     files.push({ relative: portable, bytes: content })
   }
-  // What each selection copies comes from the one table of package kinds, the same one the loaders and `package check` use.
+  // What each selection copies comes from the one table of profile kinds, the same one the loaders and `profile check` use.
   for (const kind of chosen) for (const relative of exportPathsFor(kind)) collect(relative)
   const snapshotSettings = Object.fromEntries(SETTINGS.filter((key) => chosen.includes(key) && input.settings?.[key] !== undefined).map((key) => [key, input.settings![key]]))
   secretSafe(JSON.stringify(snapshotSettings), "runtime-pack.json")

@@ -102,7 +102,8 @@ describe("workflows in the chat", () => {
     app.applySettings({})
     await Bun.sleep(5)
     app.render()
-    expect(text().at(-1)).toContain("◇ 2 workflows ?")
+    // The default pack counts them in words and says when one waits (the built-in footer of `footerPack: off` drew `◇ 2 workflows ?`).
+    expect(text().at(-1)).toContain("2 workflows · needs input")
   })
 
   test("workflow.changed keeps the count and the open page current", async () => {
@@ -123,12 +124,12 @@ describe("workflows in the chat", () => {
 describe("profile in the chat", () => {
   test("a project inside a profile's folder leads the row under the prompt with its name; personal shows nothing", async () => {
     const company = harness()
-    company.app.applySettings({ profiles: [{ name: "company", directories: ["/work/*"] }] } as never)
+    company.app.applySettings({ areas: [{ name: "company", directories: ["/work/*"] }] } as never)
     company.app.render()
     // The home screen shows the sessions sidebar at this width; the row leads its own column.
     expect(company.text().at(-1)).toMatch(/^(?:.*│ )? {3}◆ company/)
     const personal = harness()
-    personal.app.applySettings({ profiles: [{ name: "company", directories: ["/elsewhere"] }] } as never)
+    personal.app.applySettings({ areas: [{ name: "company", directories: ["/elsewhere"] }] } as never)
     personal.app.render()
     expect(personal.text().at(-1)).not.toContain("◆")
   })

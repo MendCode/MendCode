@@ -114,7 +114,7 @@ test("fuzz-ish malformed inputs and adversarial layout stay bounded for every fa
 })
 
 test("oversized layouts really render in the viewer and pan horizontally", () => {
-  const source = "flowchart LR\n" + Array.from({ length: 30 }, (_, i) => `N${i}[Step ${i}]`).join(" --> ")
+  const source = "flowchart TD\nR --> " + Array.from({ length: 30 }, (_, i) => `N${i}[Step ${i}]`).join(" & ")
   expect("note" in renderMermaid(source, 100)).toBe(true)
   const layout = layoutDiagram({ source, zoom: 0, render: renderMermaid })
   expect(layout.note).toBeUndefined()

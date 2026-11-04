@@ -36,16 +36,16 @@ describe("skills", () => {
     expect(loader.block(tmp())).toContain("notes")
   })
 
-  test("package layers add skills tagged with their package; the user's own skill of the same name wins", () => {
+  test("profile layers add skills tagged with their profile; the user's own skill of the same name wins", () => {
     const user = tmp()
     const project = tmp()
     const pkg = path.join(user, "packages", "acme")
-    skill(path.join(pkg, "skills"), "deploy", "---\ndescription: package deploy\n---\nbody")
-    skill(path.join(pkg, "skills"), "lint", "---\ndescription: package lint\n---\nbody")
+    skill(path.join(pkg, "skills"), "deploy", "---\ndescription: profile deploy\n---\nbody")
+    skill(path.join(pkg, "skills"), "lint", "---\ndescription: profile lint\n---\nbody")
     skill(path.join(user, "skills"), "lint", "---\ndescription: my lint\n---\nbody")
     const loader = createSkillLoader({ userDir: user, layers: (cwd) => [{ dir: pkg, source: "user", pkg: "acme" }, { dir: user, source: "user" }, { dir: path.join(cwd, ".mendcode"), source: "project" }] })
     expect(loader.list(project).map((s) => [s.name, s.description, s.pkg])).toEqual([
-      ["deploy", "package deploy", "acme"],
+      ["deploy", "profile deploy", "acme"],
       ["lint", "my lint", undefined],
     ])
   })
@@ -74,7 +74,7 @@ describe("skills", () => {
     expect(listed).toContain("skill-11, and 19 more: call skill with no name for the full list")
     expect(listed).not.toContain("skill-12")
     expect(plain.output).not.toContain("docs skills")
-    expect(withDocs.output).toBe(`${plain.output}. A skill is installed as a SKILL.md in a skills folder or a package, not by naming it: mendcode docs skills`)
+    expect(withDocs.output).toBe(`${plain.output}. A skill is installed as a SKILL.md in a skills folder or a profile, not by naming it: mendcode docs skills`)
     expect(withDocs.output.length).toBeLessThan(500)
     expect((await createSkillTool(createSkillLoader({ userDir: tmp() }), { docs: "mendcode docs skills" }).execute({ name: "x" }, { cwd: tmp(), signal })).output).toContain("(no skills installed). A skill is installed")
   })

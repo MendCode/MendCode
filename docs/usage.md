@@ -87,6 +87,15 @@ seconds. Errors omit upstream bodies. Without an adapter, the panel says “Serv
 `bun scripts/render-frames.ts .agents-frames/B77 --b77 100x30 180x50` renders the dashboard,
 widget picker, region editor, all scopes, scrolled panels and weather states using local fakes.
 
+## Quota from the command line
+
+`mendcode usage --quota` prints the provider quota windows the footer shows, one line each (`codex 5h  62% left (38% used)
+· resets in 2h · seen 1m ago`). `--json` prints `{ now, daemon, quota: [{ provider, window, usedPercent, leftPercent,
+resetsAt?, observedAt, ageMs, stale }] }`, the same list `api.usage()` gives an extension. It is read-only and free: it asks a
+daemon that already runs for the readings it holds, starts no daemon and sends nothing to any provider. Without a running
+daemon `daemon` is `false` and the list is empty: every window is unknown. A window not listed is unknown, never 0% or 100%.
+Local only; every tier.
+
 ## Auxiliary calls
 
 Some model calls are not part of any turn you sent: the daemon makes them for you. Each one is counted by role and model, with
@@ -105,6 +114,13 @@ unknown), under the session or directory it was made for:
 | `hook` | a `prompt` shell hook | `shell-hooks.ts` |
 | `agentGenerate` | `/agents` create with a generated definition | `agent-generate.ts` |
 | `setup` | the setup helper's answers | `setup.ask` |
+| `loopInterpret` | `/loop` with a schedule phrase the local parser did not read | `loop.interpret` |
+| `prReview` | the PR reviewer's own turns (review, verify, fix children), one row per day, model and directory | `pr-review/service.ts` |
+
+`prReview` is the one role that attributes instead of adding: the reviewer's child sessions are hidden sessions whose turns the
+days and models already count (and their per-call rows go when the session is deleted), so its row says how much of those totals
+was the reviewer's. It is listed marked "(in the totals above)" and left out of the "outside turns" sum. Its input is what the
+provider did not serve from its cache; cached tokens are in `cacheRead`.
 
 `/btw` is not in the list: its side session runs turns, already counted as turn usage.
 
@@ -123,8 +139,8 @@ auxiliary (outside turns): 99.8K tokens · 26 calls · cost $0.02 (+25 unpriced)
 
 A call that fails or reports no usage counts as one call of its role with zero tokens and unknown cost. Recording is
 bookkeeping in every tier: no request, no token and no chrome of its own; the panel appears only on /usage and only when there
-were such calls. The store keeps one row per day, role, model and session (`usage_auxiliary_daily`); rows outlive their session,
-like the global daily sums. The budget ledger ([budgets](budgets.md)) counted these calls before and still does, once.
+were such calls. The store keeps one row per day, role, model and directory (`usage_auxiliary_daily`), like the global daily sums:
+every session of a project that day adds to the same row. The budget ledger ([budgets](budgets.md)) counted these calls before and still does, once.
 
 ## Waste
 

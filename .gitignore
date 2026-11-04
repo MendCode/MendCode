@@ -39,3 +39,6 @@ benchmarks/out/
 /docs/tasks/
 /legacy/
 /specs/voice-notes-*.md
+
+# bun build --compile leaves these beside its working directory
+*.bun-build

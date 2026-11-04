@@ -1,0 +1,444 @@
+{
+  "lockfileVersion": 1,
+  "configVersion": 1,
+  "workspaces": {
+    "": {
+      "name": "mendcode",
+      "dependencies": {
+        "@mendcode/client": "workspace:*",
+        "@mendcode/protocol": "workspace:*",
+        "@mendcode/store": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/bun": "1.3.13",
+        "typescript": "7.0.2",
+      },
+    },
+    "apps/cli": {
+      "name": "@mendcode/cli",
+      "version": "0.0.1-dev",
+      "bin": {
+        "mendcode": "./src/entry.ts",
+      },
+      "dependencies": {
+        "@jsquash/webp": "1.5.0",
+        "@mendcode/build-id": "workspace:*",
+        "@mendcode/client": "workspace:*",
+        "@mendcode/editor-launch": "workspace:*",
+        "@mendcode/extension-api": "workspace:*",
+        "@mendcode/loops": "workspace:*",
+        "@mendcode/migrate": "workspace:*",
+        "@mendcode/program": "workspace:*",
+        "@mendcode/protocol": "workspace:*",
+        "@mendcode/upgrade": "workspace:*",
+      },
+      "devDependencies": {
+        "@mendcode/daemon": "workspace:*",
+        "@mendcode/engine-faux": "workspace:*",
+        "@mendcode/engine-native": "workspace:*",
+      },
+    },
+    "packages/build-id": {
+      "name": "@mendcode/build-id",
+      "version": "0.0.0",
+    },
+    "packages/client": {
+      "name": "@mendcode/client",
+      "version": "0.0.0",
+      "dependencies": {
+        "@mendcode/protocol": "workspace:*",
+      },
+    },
+    "packages/codegraph": {
+      "name": "@mendcode/codegraph",
+      "version": "0.0.0",
+      "dependencies": {
+        "@mendcode/tools": "workspace:*",
+        "zod": "4.6.6",
+      },
+      "devDependencies": {
+        "@mendcode/protocol": "workspace:*",
+      },
+    },
+    "packages/daemon": {
+      "name": "@mendcode/daemon",
+      "version": "0.0.0",
+      "bin": {
+        "mendd": "./src/main.ts",
+      },
+      "dependencies": {
+        "@mendcode/build-id": "workspace:*",
+        "@mendcode/client": "workspace:*",
+        "@mendcode/codegraph": "workspace:*",
+        "@mendcode/dream": "workspace:*",
+        "@mendcode/engine-acp": "workspace:*",
+        "@mendcode/engine-claude": "workspace:*",
+        "@mendcode/engine-codex": "workspace:*",
+        "@mendcode/engine-faux": "workspace:*",
+        "@mendcode/engine-native": "workspace:*",
+        "@mendcode/engine-pi": "workspace:*",
+        "@mendcode/extension-api": "workspace:*",
+        "@mendcode/kernel": "workspace:*",
+        "@mendcode/loops": "workspace:*",
+        "@mendcode/lsp": "workspace:*",
+        "@mendcode/mcp": "workspace:*",
+        "@mendcode/packages": "workspace:*",
+        "@mendcode/program": "workspace:*",
+        "@mendcode/protocol": "workspace:*",
+        "@mendcode/store": "workspace:*",
+        "@mendcode/tools": "workspace:*",
+        "@mendcode/workflows": "workspace:*",
+        "zod": "4.6.6",
+      },
+      "devDependencies": {
+        "@mendcode/testkit": "workspace:*",
+      },
+    },
+    "packages/dream": {
+      "name": "@mendcode/dream",
+      "version": "0.0.0",
+      "dependencies": {
+        "@mendcode/protocol": "workspace:*",
+        "zod": "4.6.6",
+      },
+    },
+    "packages/editor-launch": {
+      "name": "@mendcode/editor-launch",
+      "version": "0.0.0",
+    },
+    "packages/engine-acp": {
+      "name": "@mendcode/engine-acp",
+      "version": "0.0.0",
+      "dependencies": {
+        "@mendcode/kernel": "workspace:*",
+        "@mendcode/protocol": "workspace:*",
+        "zod": "4.6.6",
+      },
+      "devDependencies": {
+        "@mendcode/testkit": "workspace:*",
+      },
+    },
+    "packages/engine-claude": {
+      "name": "@mendcode/engine-claude",
+      "version": "0.0.0",
+      "dependencies": {
+        "@mendcode/kernel": "workspace:*",
+        "@mendcode/protocol": "workspace:*",
+      },
+      "devDependencies": {
+        "@mendcode/testkit": "workspace:*",
+      },
+    },
+    "packages/engine-codex": {
+      "name": "@mendcode/engine-codex",
+      "version": "0.0.0",
+      "dependencies": {
+        "@mendcode/kernel": "workspace:*",
+        "@mendcode/protocol": "workspace:*",
+      },
+      "devDependencies": {
+        "@mendcode/testkit": "workspace:*",
+      },
+    },
+    "packages/engine-faux": {
+      "name": "@mendcode/engine-faux",
+      "version": "0.0.0",
+      "dependencies": {
+        "@mendcode/kernel": "workspace:*",
+        "@mendcode/protocol": "workspace:*",
+      },
+    },
+    "packages/engine-native": {
+      "name": "@mendcode/engine-native",
+      "version": "0.0.0",
+      "dependencies": {
+        "@mendcode/extension-api": "workspace:*",
+        "@mendcode/kernel": "workspace:*",
+        "@mendcode/packages": "workspace:*",
+        "@mendcode/protocol": "workspace:*",
+        "@mendcode/tools": "workspace:*",
+        "zod": "4.6.6",
+      },
+    },
+    "packages/engine-pi": {
+      "name": "@mendcode/engine-pi",
+      "version": "0.0.0",
+      "dependencies": {
+        "@mendcode/kernel": "workspace:*",
+        "@mendcode/protocol": "workspace:*",
+        "@mendcode/tools": "workspace:*",
+        "zod": "4.6.6",
+      },
+      "devDependencies": {
+        "@mendcode/testkit": "workspace:*",
+      },
+    },
+    "packages/extension-api": {
+      "name": "@mendcode/extension-api",
+      "version": "0.0.0",
+    },
+    "packages/kernel": {
+      "name": "@mendcode/kernel",
+      "version": "0.0.0",
+      "dependencies": {
+        "@mendcode/protocol": "workspace:*",
+      },
+    },
+    "packages/loops": {
+      "name": "@mendcode/loops",
+      "version": "0.0.0",
+      "dependencies": {
+        "@mendcode/kernel": "workspace:*",
+        "@mendcode/protocol": "workspace:*",
+        "zod": "4.6.6",
+      },
+    },
+    "packages/lsp": {
+      "name": "@mendcode/lsp",
+      "version": "0.0.0",
+      "dependencies": {
+        "@mendcode/tools": "workspace:*",
+        "zod": "4.6.6",
+      },
+    },
+    "packages/mcp": {
+      "name": "@mendcode/mcp",
+      "version": "0.0.0",
+      "dependencies": {
+        "@mendcode/packages": "workspace:*",
+        "@mendcode/tools": "workspace:*",
+        "zod": "4.6.6",
+      },
+    },
+    "packages/migrate": {
+      "name": "@mendcode/migrate",
+      "version": "0.0.0",
+      "dependencies": {
+        "@mendcode/program": "workspace:*",
+        "@mendcode/protocol": "workspace:*",
+        "@mendcode/store": "workspace:*",
+      },
+      "devDependencies": {
+        "@mendcode/engine-native": "workspace:*",
+      },
+    },
+    "packages/packages": {
+      "name": "@mendcode/packages",
+      "version": "0.0.0",
+      "dependencies": {
+        "zod": "4.6.6",
+      },
+    },
+    "packages/program": {
+      "name": "@mendcode/program",
+      "version": "0.0.0",
+    },
+    "packages/protocol": {
+      "name": "@mendcode/protocol",
+      "version": "0.0.0",
+      "dependencies": {
+        "zod": "4.6.6",
+      },
+    },
+    "packages/store": {
+      "name": "@mendcode/store",
+      "version": "0.0.0",
+      "dependencies": {
+        "@mendcode/kernel": "workspace:*",
+        "@mendcode/protocol": "workspace:*",
+      },
+      "devDependencies": {
+        "@mendcode/testkit": "workspace:*",
+      },
+    },
+    "packages/testkit": {
+      "name": "@mendcode/testkit",
+      "version": "0.0.0",
+      "dependencies": {
+        "@mendcode/kernel": "workspace:*",
+        "@mendcode/protocol": "workspace:*",
+        "@mendcode/workflows": "workspace:*",
+      },
+    },
+    "packages/tools": {
+      "name": "@mendcode/tools",
+      "version": "0.0.0",
+      "dependencies": {
+        "@mendcode/packages": "workspace:*",
+        "@mendcode/program": "workspace:*",
+        "zod": "4.6.6",
+      },
+    },
+    "packages/upgrade": {
+      "name": "@mendcode/upgrade",
+      "version": "0.0.0",
+      "dependencies": {
+        "@mendcode/program": "workspace:*",
+      },
+    },
+    "packages/workflows": {
+      "name": "@mendcode/workflows",
+      "version": "0.0.0",
+      "dependencies": {
+        "@mendcode/loops": "workspace:*",
+        "@mendcode/protocol": "workspace:*",
+        "zod": "4.6.6",
+      },
+    },
+    "spikes/render": {
+      "name": "spike-render",
+      "dependencies": {
+        "@opentui/core": "0.5.11",
+      },
+    },
+  },
+  "packages": {
+    "@jsquash/webp": ["@jsquash/webp@1.5.0", "", { "dependencies": { "wasm-feature-detect": "1.9.0" } }, "sha512-KggLoj2MnRSfIqTeKe1EmbljTX2vuV7mh79k89PCL1pyqiDULcPM1L47twxXt0hkb68F70bXiL31MxsuoZtKFw=="],
+
+    "@mendcode/build-id": ["@mendcode/build-id@workspace:packages/build-id"],
+
+    "@mendcode/cli": ["@mendcode/cli@workspace:apps/cli"],
+
+    "@mendcode/client": ["@mendcode/client@workspace:packages/client"],
+
+    "@mendcode/codegraph": ["@mendcode/codegraph@workspace:packages/codegraph"],
+
+    "@mendcode/daemon": ["@mendcode/daemon@workspace:packages/daemon"],
+
+    "@mendcode/dream": ["@mendcode/dream@workspace:packages/dream"],
+
+    "@mendcode/editor-launch": ["@mendcode/editor-launch@workspace:packages/editor-launch"],
+
+    "@mendcode/engine-acp": ["@mendcode/engine-acp@workspace:packages/engine-acp"],
+
+    "@mendcode/engine-claude": ["@mendcode/engine-claude@workspace:packages/engine-claude"],
+
+    "@mendcode/engine-codex": ["@mendcode/engine-codex@workspace:packages/engine-codex"],
+
+    "@mendcode/engine-faux": ["@mendcode/engine-faux@workspace:packages/engine-faux"],
+
+    "@mendcode/engine-native": ["@mendcode/engine-native@workspace:packages/engine-native"],
+
+    "@mendcode/engine-pi": ["@mendcode/engine-pi@workspace:packages/engine-pi"],
+
+    "@mendcode/extension-api": ["@mendcode/extension-api@workspace:packages/extension-api"],
+
+    "@mendcode/kernel": ["@mendcode/kernel@workspace:packages/kernel"],
+
+    "@mendcode/loops": ["@mendcode/loops@workspace:packages/loops"],
+
+    "@mendcode/lsp": ["@mendcode/lsp@workspace:packages/lsp"],
+
+    "@mendcode/mcp": ["@mendcode/mcp@workspace:packages/mcp"],
+
+    "@mendcode/migrate": ["@mendcode/migrate@workspace:packages/migrate"],
+
+    "@mendcode/packages": ["@mendcode/packages@workspace:packages/packages"],
+
+    "@mendcode/program": ["@mendcode/program@workspace:packages/program"],
+
+    "@mendcode/protocol": ["@mendcode/protocol@workspace:packages/protocol"],
+
+    "@mendcode/store": ["@mendcode/store@workspace:packages/store"],
+
+    "@mendcode/testkit": ["@mendcode/testkit@workspace:packages/testkit"],
+
+    "@mendcode/tools": ["@mendcode/tools@workspace:packages/tools"],
+
+    "@mendcode/upgrade": ["@mendcode/upgrade@workspace:packages/upgrade"],
+
+    "@mendcode/workflows": ["@mendcode/workflows@workspace:packages/workflows"],
+
+    "@opentui/core": ["@opentui/core@0.5.11", "", { "dependencies": { "bun-ffi-structs": "0.3.1", "diff": "9.0.0", "marked": "17.0.1", "string-width": "7.2.0", "strip-ansi": "7.1.2" }, "optionalDependencies": { "@opentui/core-darwin-arm64": "0.5.11", "@opentui/core-darwin-x64": "0.5.11", "@opentui/core-linux-arm64": "0.5.11", "@opentui/core-linux-arm64-musl": "0.5.11", "@opentui/core-linux-x64": "0.5.11", "@opentui/core-linux-x64-musl": "0.5.11", "@opentui/core-win32-arm64": "0.5.11", "@opentui/core-win32-x64": "0.5.11" }, "peerDependencies": { "web-tree-sitter": "0.25.10" } }, "sha512-pImMfjCNx7JUp9Df1LRZBDLisWqgzOLXZKXO+hh3jA9ujBFPQnZOqbG+/N5uVAAX8IZGaqhYSQRwSZIFBmcfbQ=="],
+
+    "@opentui/core-darwin-arm64": ["@opentui/core-darwin-arm64@0.5.11", "", { "os": "darwin", "cpu": "arm64" }, "sha512-DRXY5ioq+n1ZNAMAcaFaBunr0cmi2gqucjbTW7lgFp8t9uN3fNZnLTDOqkCTQtT2XhrU4GXqySaPSQ4qFG/EAQ=="],
+
+    "@opentui/core-darwin-x64": ["@opentui/core-darwin-x64@0.5.11", "", { "os": "darwin", "cpu": "x64" }, "sha512-yP/8GliJDiJNm8YYJKvgWuy6xyCEd8d4GwBVOIzCFOI7ZIbGP8GOTvmwIjRW4Paw20pTttWMWyRoQiCvOXvH2g=="],
+
+    "@opentui/core-linux-arm64": ["@opentui/core-linux-arm64@0.5.11", "", { "os": "linux", "cpu": "arm64" }, "sha512-zBIsRFHlLUYFNhapRSNt9dz4mC8gZ4Wxcfy3A+2AwqsgCipcr2FkIuAXYqN08q+IvqFX7DfqgIFGWDNedHTPUg=="],
+
+    "@opentui/core-linux-arm64-musl": ["@opentui/core-linux-arm64-musl@0.5.11", "", { "os": "linux", "cpu": "arm64" }, "sha512-x+xeR2LYibvIi/qQetRjJR008sFRve60QuDcO8ItxUwzFeKTDzl5CEiZpBXfm5I4FhRNuyuj0TSPIFadMvrjFQ=="],
+
+    "@opentui/core-linux-x64": ["@opentui/core-linux-x64@0.5.11", "", { "os": "linux", "cpu": "x64" }, "sha512-pSOXqOADrv+zINOgR3FDFA9zVRaim3zl8/yhtO+X9rEJ6f34z3gDund0Gf88hNJSMpZK5xWtipEVm28RY5VF8w=="],
+
+    "@opentui/core-linux-x64-musl": ["@opentui/core-linux-x64-musl@0.5.11", "", { "os": "linux", "cpu": "x64" }, "sha512-MyqOnSs8pTYG2xmFr1xt6xZIuHu2Xu4pkle9my9JdE+WClmusHf0YN9Eas6jQLAq5XUi34r22wMeK0juk93zyw=="],
+
+    "@opentui/core-win32-arm64": ["@opentui/core-win32-arm64@0.5.11", "", { "os": "win32", "cpu": "arm64" }, "sha512-MGGRXIDJ//HyaqC5ndSr7/CUl+ICdYEAMcjbA00UWsthh4ZO/rYhPkyqOaTn5ck6+G4ca3/+M76J+jImMYTjNg=="],
+
+    "@opentui/core-win32-x64": ["@opentui/core-win32-x64@0.5.11", "", { "os": "win32", "cpu": "x64" }, "sha512-sMEGX9rhiPd1gBa190jzj5uIdzKCMImxHmr22hJLxIRWqejxWvqGnRBkW68wT8NfMViDiMtZWavgWL7GgmYCAQ=="],
+
+    "@types/bun": ["@types/bun@1.3.13", "", { "dependencies": { "bun-types": "1.3.13" } }, "sha512-9fqXWk5YIHGGnUau9TEi+qdlTYDAnOj+xLCmSTwXfAIqXr2x4tytJb43E9uCvt09zJURKXwAtkoH4nLQfzeTXw=="],
+
+    "@types/node": ["@types/node@26.6.2", "", { "dependencies": { "undici-types": "8.9.0" } }, "sha512-X1P21scMv4zGKLYqjdGjaKa7COa0RKVYYZZN/NfvLQ1JegxFhdhpZG/Lyn8AXx6CDUavKAd11v6BvfpkDByK8g=="],
+
+    "@typescript/typescript-aix-ppc64": ["@typescript/typescript-aix-ppc64@7.0.2", "", { "os": "aix", "cpu": "ppc64" }, "sha512-MTKKkWB7p/0E9xi1d1tHtZ5PiLkGEMIq88pK2CubZjOsLtYTLqhgIgi6zepFa+9GHZ6h05NMCkQxGKiPXMxXtQ=="],
+
+    "@typescript/typescript-darwin-arm64": ["@typescript/typescript-darwin-arm64@7.0.2", "", { "os": "darwin", "cpu": "arm64" }, "sha512-gowzar9MwS/aRWp6f3a4KUqzRjAZjOsmGNCM6LcTgXum+dBfgsBVMN+AgvOCCbguXyick6LJhpBszxMebJ8syA=="],
+
+    "@typescript/typescript-darwin-x64": ["@typescript/typescript-darwin-x64@7.0.2", "", { "os": "darwin", "cpu": "x64" }, "sha512-SZ9xZInqApNlNGc9s0W1VSsktYSOe9cFqNOIqmN1Gs8SmkjKZYFt017G4VwPxASInODuAdbTW7sXiFUf893RgA=="],
+
+    "@typescript/typescript-freebsd-arm64": ["@typescript/typescript-freebsd-arm64@7.0.2", "", { "os": "freebsd", "cpu": "arm64" }, "sha512-W5NH4y/J0plIIS5b2xvTEkU7JFxyqdMAOgf+Ilhl0vHQXKO5dZoxd+C/jEtq56c4F3wk71RB4BMRQ2XdI+bwYQ=="],
+
+    "@typescript/typescript-freebsd-x64": ["@typescript/typescript-freebsd-x64@7.0.2", "", { "os": "freebsd", "cpu": "x64" }, "sha512-UMGDx5sTpzNw3WiPebH7l90IWfJggEd+egHt/q6p7/Cm3zqoV7VxkGXt+3DxPIw8CcmvAB0j3sVVfbhX+M4Tpw=="],
+
+    "@typescript/typescript-linux-arm": ["@typescript/typescript-linux-arm@7.0.2", "", { "os": "linux", "cpu": "arm" }, "sha512-gffT3xPz9sR7j/YJExkyPntrI0P2EP9XbOyWzth2/Gs0RstK+90RBcO0ncXoXy/beYll1SXw846Nf2zdnEz0QQ=="],
+
+    "@typescript/typescript-linux-arm64": ["@typescript/typescript-linux-arm64@7.0.2", "", { "os": "linux", "cpu": "arm64" }, "sha512-Qh4eU4/y3yDjnfjjyPYihMj5/ODIlmt+Bzu17OI+fiSRDW57QmU5SiN63exPRNJPKUzcc1INa1NXdrJ+MqHjUQ=="],
+
+    "@typescript/typescript-linux-loong64": ["@typescript/typescript-linux-loong64@7.0.2", "", { "os": "linux", "cpu": "none" }, "sha512-uEHck9i8hoAzXPiYRib1O7miOnz23SxIeVl6F4LXox+qov1K35jHcEW6VHKvZI+pyvl7fZEP4MCU5LYvIq1GuQ=="],
+
+    "@typescript/typescript-linux-mips64el": ["@typescript/typescript-linux-mips64el@7.0.2", "", { "os": "linux", "cpu": "none" }, "sha512-R4KvAMnE43W5Qeqb0Ly56O3mWMWIAgsMyz36DCaycd5nbg/9kzm0liw3JocfRqyJY0KPmzFjbswozXyW0DnIYA=="],
+
+    "@typescript/typescript-linux-ppc64": ["@typescript/typescript-linux-ppc64@7.0.2", "", { "os": "linux", "cpu": "ppc64" }, "sha512-DORx5b3sd/4S7eayxm4FQv+A7CrkUIGRaHiwI8oiHTAI1fAPWhF4J0vAlkC8biAlHSVVwxMQ3tjZ2/DVbnQiiA=="],
+
+    "@typescript/typescript-linux-riscv64": ["@typescript/typescript-linux-riscv64@7.0.2", "", { "os": "linux", "cpu": "none" }, "sha512-wf0jqEDOjrPRnKwYRyyJDRo11KMbvMFrU+q4zqKyChODBzvlkbhNQfKvLxQCcwTpdDaXSHZTVuh0JoCrKCUMHQ=="],
+
+    "@typescript/typescript-linux-s390x": ["@typescript/typescript-linux-s390x@7.0.2", "", { "os": "linux", "cpu": "s390x" }, "sha512-IkwJc3L7yhytWd/ewjyxNDfOmswCm9GWMJT/ue/dU4aZNbwZeYAetq42VyLmsmSjvoX7z74X6ZaYCtzAr0EuGw=="],
+
+    "@typescript/typescript-linux-x64": ["@typescript/typescript-linux-x64@7.0.2", "", { "os": "linux", "cpu": "x64" }, "sha512-EYdf2cNg7rgCWJnxCdJ+F3V39O8ihb37eHAu1LK8oAFizgTQbPOK7zHHXbPt8rX24COqODXeI3sIf0fCXG7H/A=="],
+
+    "@typescript/typescript-netbsd-arm64": ["@typescript/typescript-netbsd-arm64@7.0.2", "", { "os": "none", "cpu": "arm64" }, "sha512-+polYF4MF04aPpO5FTkHran9yUQDSXqy5GiSDKpsll5jy3l3+g9QLhpf39T+ePtefhXLOGrLl0QIjkQP6VnelA=="],
+
+    "@typescript/typescript-netbsd-x64": ["@typescript/typescript-netbsd-x64@7.0.2", "", { "os": "none", "cpu": "x64" }, "sha512-8YIT0EHM/3dq10ZOVF/A7pc/YSMtbcecct4rWtexrnSCHOPcpC2KTLXfTCR6vDpnSiY12heNb1GiN/wu+T/FyA=="],
+
+    "@typescript/typescript-openbsd-arm64": ["@typescript/typescript-openbsd-arm64@7.0.2", "", { "os": "openbsd", "cpu": "arm64" }, "sha512-APT8+ClYnuYm1u9+kgGXoMj2VzWzcymwh2gNSQVySHfkRDGOTVkoWLjCmOQSaO+PoqQ57B0flRp9SA+7GnnkzQ=="],
+
+    "@typescript/typescript-openbsd-x64": ["@typescript/typescript-openbsd-x64@7.0.2", "", { "os": "openbsd", "cpu": "x64" }, "sha512-yX7s+Q0Dln0Dt9tEzZsAjXXR/+ytBM7AlglaqyeMPxQszJ1JhlJdZ6jLA+IzldHtflX81em7lDao1xXu+aRRkg=="],
+
+    "@typescript/typescript-sunos-x64": ["@typescript/typescript-sunos-x64@7.0.2", "", { "os": "sunos", "cpu": "x64" }, "sha512-dLJDGaLZ1D4HPQn62u1n8mBDkJREwMsAkCdkwd4Ieqw+x3TUyTsqY0YiBCtE6H6OzzgGk3iuZ3vFWRS+E8/d1g=="],
+
+    "@typescript/typescript-win32-arm64": ["@typescript/typescript-win32-arm64@7.0.2", "", { "os": "win32", "cpu": "arm64" }, "sha512-Gyl1Vy6OsWesLzmq+EP0Fb7b4Nid5232AvcA2SFcdYreldpNtYFFofPjnt62y9hQy7VTaZp65ICJjuAQRaVcIQ=="],
+
+    "@typescript/typescript-win32-x64": ["@typescript/typescript-win32-x64@7.0.2", "", { "os": "win32", "cpu": "x64" }, "sha512-0BQ3HkAHHlKLSp1qRvf3SUhGpGsDuhB/jgFw75guyqbxJqEaS0Cw/VFO8i2nHglJUzQCRtMMR/IBAKE3ETMC4g=="],
+
+    "ansi-regex": ["ansi-regex@6.3.0", "", {}, "sha512-WpDfL7NO6j7tH88IDBNVdUJxDh9nmCteAVW9dsep846XdwF4naCBK+/tGLX3KJgcpgMRXCFlTM2hKGoK9FsdrQ=="],
+
+    "bun-ffi-structs": ["bun-ffi-structs@0.3.1", "", { "peerDependencies": { "typescript": "7.0.2" } }, "sha512-3gM7PpVWLyrwxWjcilSiGuhWanhZivvo6l0u573NziPH6f/gwk6McbaYgn7oJWov6pKGRTDbrg94W5DcJsKTtQ=="],
+
+    "bun-types": ["bun-types@1.3.13", "", { "dependencies": { "@types/node": "26.6.2" } }, "sha512-QXKeHLlOLqQX9LgYaHJfzdBaV21T63HhFJnvuRCcjZiaUDpbs5ED1MgxbMra71CsryN/1dAoXuJJJwIv/2drVA=="],
+
+    "diff": ["diff@9.0.0", "", {}, "sha512-svtcdpS8CgJyqAjEQIXdb3OjhFVVYjzGAPO8WGCmRbrml64SPw/jJD4GoE98aR7r25A0XcgrK3F02yw9R/vhQw=="],
+
+    "emoji-regex": ["emoji-regex@10.6.0", "", {}, "sha512-toUI84YS5YmxW219erniWD0CIVOo46xGKColeNQRgOzDorgBi1v4D71/OFzgD9GO2UGKIv1C3Sp8DAn0+j5w7A=="],
+
+    "get-east-asian-width": ["get-east-asian-width@1.7.0", "", {}, "sha512-XjH1AECxf0giL2V1aU8vKyRR2ppRUb5c0EvT7zuJTokQ74bNo52zOtghqdWIqrhUD79fo3x0WfKZdOqxF6LG1Q=="],
+
+    "marked": ["marked@17.0.1", "", { "bin": { "marked": "bin/marked.js" } }, "sha512-boeBdiS0ghpWcSwoNm/jJBwdpFaMnZWRzjA6SkUMYb40SVaN1x7mmfGKp0jvexGcx+7y2La5zRZsYFZI6Qpypg=="],
+
+    "spike-render": ["spike-render@workspace:spikes/render"],
+
+    "string-width": ["string-width@7.2.0", "", { "dependencies": { "emoji-regex": "10.6.0", "get-east-asian-width": "1.7.0", "strip-ansi": "7.1.2" } }, "sha512-tsaTIkKW9b4N+AEj+SVA+WhJzV7/zMhcSu78mLKWSk7cXMOSHsBKFWUs0fWwq8QyK3MgJBQRX6Gbi4kYbdvGkQ=="],
+
+    "strip-ansi": ["strip-ansi@7.1.2", "", { "dependencies": { "ansi-regex": "6.3.0" } }, "sha512-gmBGslpoQJtgnMAvOVqGZpEz9dyoKTCzy2nfz/n8aIFhN/jCE/rCmcxabB6jOOHV+0WNnylOxaxBQPSvcWklhA=="],
+
+    "typescript": ["typescript@7.0.2", "", { "optionalDependencies": { "@typescript/typescript-aix-ppc64": "7.0.2", "@typescript/typescript-darwin-arm64": "7.0.2", "@typescript/typescript-darwin-x64": "7.0.2", "@typescript/typescript-freebsd-arm64": "7.0.2", "@typescript/typescript-freebsd-x64": "7.0.2", "@typescript/typescript-linux-arm": "7.0.2", "@typescript/typescript-linux-arm64": "7.0.2", "@typescript/typescript-linux-loong64": "7.0.2", "@typescript/typescript-linux-mips64el": "7.0.2", "@typescript/typescript-linux-ppc64": "7.0.2", "@typescript/typescript-linux-riscv64": "7.0.2", "@typescript/typescript-linux-s390x": "7.0.2", "@typescript/typescript-linux-x64": "7.0.2", "@typescript/typescript-netbsd-arm64": "7.0.2", "@typescript/typescript-netbsd-x64": "7.0.2", "@typescript/typescript-openbsd-arm64": "7.0.2", "@typescript/typescript-openbsd-x64": "7.0.2", "@typescript/typescript-sunos-x64": "7.0.2", "@typescript/typescript-win32-arm64": "7.0.2", "@typescript/typescript-win32-x64": "7.0.2" }, "bin": { "tsc": "bin/tsc" } }, "sha512-8FYau96o3NKOhbjKi/qNvG/W5jhzxkbdm5sj9AbZ/5T5sWqn3hJgLfGx27sRKZWTvyzCP8dLRBTf5tBTSRVUNA=="],
+
+    "undici-types": ["undici-types@8.9.0", "", {}, "sha512-KTDyRTYX8sWmKXAikPHHSyc63CRPETMctyjKFupcC6OBLXT3xsN0e9aF7m+mIXutFWpUXuedtowG7iLOzp0kQg=="],
+
+    "wasm-feature-detect": ["wasm-feature-detect@1.9.0", "", {}, "sha512-zonE+xlIIYtxPy++L24ow0hAD8CICb4+FgPyROd3buyXIqsJvUEDkBgfCCoXOd1Hu3DUr0GOfnPIdcGV+YpNaA=="],
+
+    "web-tree-sitter": ["web-tree-sitter@0.25.10", "", {}, "sha512-Y09sF44/13XvgVKgO2cNDw5rGk6s26MgoZPXLESvMXeefBf7i6/73eFurre0IsTW6E14Y0ArIzhUMmjoc7xyzA=="],
+
+    "zod": ["zod@4.6.6", "", {}, "sha512-4UmzQUF5fxvfcYHlbjBmejU+w+hbDnWFx4aS8kBx7nPBHcO2SqPbpAG8snbdg+Xse4pRefR98hgjFgIMCI/UhA=="],
+  }
+}

@@ -44,7 +44,7 @@ const BODIES: Partial<Record<ViewSlot, string>> = {
 
 export const viewFileName = (slot: ViewSlot) => `view-${slot.replace(/\./g, "-")}.ts`
 
-/** The starter module of one view slot; `name` is the extension name (the default is unique per slot; a package gives its own so two packages never clash). */
+/** The starter module of one view slot; `name` is the extension name (the default is unique per slot; a profile gives its own so two profiles never clash). */
 export function viewStarter(slot: ViewSlot, name = `view-${slot.replace(/\./g, "-")}`): string {
   const info = VIEW_SLOTS[slot]
   const frame = slot === "prompt.frame"

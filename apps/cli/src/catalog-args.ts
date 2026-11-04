@@ -1,3 +1,4 @@
+import { MODELS_HELP, PROVIDERS_HELP, MCP_HELP } from "./help-text"
 import type { McpConfigInput, ProviderType } from "@mendcode/protocol"
 import type { Common, ParseResult } from "./automation"
 import { COMPAT } from "./compat"
@@ -11,9 +12,9 @@ export type CatalogAutomation =
   | { kind: "catalog.auth"; operation: "status" | "login-plan" | "login" | "refresh" | "logout"; provider?: string; method?: string; execute: boolean; open: boolean }
 
 export const CATALOG_USAGE = {
-  models: `usage: ${PROGRAM_NAME} models [provider] [--verbose] [--refresh] [--json]\n  control-plane models status|show|plan|presets\n  control-plane models set-default <provider> <model> [--auth-mode api-key|chatgpt-subscription-oauth] [--enable] [--dry-run]\n  control-plane models use-preset <name> [--enable] [--dry-run]`,
-  providers: `usage: ${PROGRAM_NAME} providers list|logout [--provider ID]\n  providers login [url] [--provider ID] [--method LABEL] [--api-key-env VAR] [--provider-type TYPE --base-url URL]\n  control-plane providers auth|status|adapters\n  control-plane providers smoke [--provider ID] [--model ID] [--execute]\n  control-plane auth status [provider]\n  control-plane auth login-plan|login <provider> [--method browser|headless|api-key] [--execute]\n  control-plane auth refresh|logout chatgpt --execute\n  providers login --provider azure [--azure-resource NAME | --base-url URL] --deployments IDS [--entra-token-env VAR] [--api-version VERSION] [--use-completion-urls] [--use-deployment-based-urls]\n  providers login --provider amazon-bedrock [--method aws-chain|api-key] [--aws-region REGION] [--aws-profile PROFILE] [--models IDS] [--aws-metadata] [--aws-credential-process]\n  providers login --provider google-vertex [--gcp-project ID] [--vertex-location LOCATION] [--models IDS] [--google-token-env VAR] [--vertex-quota-project ID] [--google-metadata]`,
-  mcp: `usage: ${PROGRAM_NAME} mcp list|auth [name]|auth list|logout [name]|debug <name>\n  mcp add [name] [--scope user|project] [--url URL [--no-oauth] [--client-id ID] [--client-secret-env VAR] [--callback-port PORT] [--redirect-uri URI] | -- COMMAND ARG…] [--replace] [--dry-run]\n  control-plane mcp status|preview|add-local <name> <command> [args…]`,
+  models: MODELS_HELP,
+  providers: PROVIDERS_HELP,
+  mcp: MCP_HELP,
 }
 
 const VALUES = new Set(["dir", "data-dir", "engine", "format", "compat", "provider", "model", "auth-mode", "api-key-env", "provider-type", "base-url", "scope", "url", "client-id", "client-secret-env", "method", "callback-port", "redirect-uri", "azure-resource", "api-version", "deployments", "entra-token-env", "aws-region", "aws-profile", "models", "gcp-project", "vertex-location", "google-token-env", "vertex-quota-project", "cloudflare-account", "cloudflare-gateway"])

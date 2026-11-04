@@ -1,5 +1,5 @@
 import type { BlobRef, PermissionMode, SessionId } from "@mendcode/protocol"
-import { layoutAttachments } from "@mendcode/protocol/wire"
+import { createPlanTurnNotes, layoutAttachments } from "@mendcode/protocol/wire"
 import { environmentKey, processMcpTurn, realClock, type Clock, type EngineEnvironment, type EnginePort, type EngineRequest, type EngineResolution, type TimerHandle, type TurnInput, type TurnOutcome } from "@mendcode/kernel"
 import type { AcpAgentConfig, AcpModelOption } from "./agents"
 import { AcpRpcError, createRpcPeer, type RpcPeer } from "./rpc"
@@ -108,6 +108,9 @@ function permissionDetail(params: Json): string {
  * through the normal approval flow and cancels with `session/cancel`. No file-system or terminal capability is
  * offered, so the agent works in its own sandbox. One process per session stays up between turns.
  */
+/** An ACP agent is never told MendCode's mode, so every turn in plan carries a short note; module-wide like the process-per-turn engines of the others. */
+const planNotes = createPlanTurnNotes("reply")
+
 export function createAcpEngine(options: AcpEngineOptions): EnginePort & { stop(): void } {
   const clock = options.clock ?? realClock
   const idleMs = options.idleMs
@@ -380,6 +383,8 @@ export function createAcpEngine(options: AcpEngineOptions): EnginePort & { stop(
         }
       }
       const body = await content(input, connection)
+      const planNote = planNotes.next(input.sessionId, input.permissionMode() === "plan", input.readOnlyRun === true)
+      if (planNote) body.push({ type: "text", text: planNote })
       // A cancel while the agent started or the attachments were read: its abort event is gone, so nothing may be sent now.
       if (input.signal.aborted) {
         if (!connection.closed) connection.idle = clock.setTimer(processIdleMs, () => close(connection))

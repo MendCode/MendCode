@@ -1,7 +1,10 @@
 import { textWidth } from "./wrap"
 
-/** Cell-drawn wordmarks: v1's pixel font plus three terminal-sized block and line fonts. */
-export const LOGO_FONTS = ["mendcode", "compact", "solid", "outline"] as const
+/**
+ * Cell-drawn wordmarks: v1's pixel font plus terminal-sized block, line and dot fonts. A font is data: a glyph table, or one of
+ * the tables below drawn another way (`DERIVED`); adding one is a row there, never a renderer of its own.
+ */
+export const LOGO_FONTS = ["mendcode", "compact", "solid", "outline", "rounded", "double", "shade", "braille"] as const
 export type LogoFont = (typeof LOGO_FONTS)[number]
 
 export const DEFAULT_LOGO_FONT: LogoFont = "mendcode"
@@ -10,17 +13,27 @@ export const DEFAULT_LOGO_TEXT = "MENDCODE"
 export const LOGO_FONT_NOTE: Readonly<Record<LogoFont, string>> = {
   mendcode: "v1 pixel wordmark",
   compact: "three rows · half-block strokes",
-  solid: "five rows · solid strokes",
+  solid: "five rows · square block pixels",
   outline: "five rows · single-line boxes",
+  rounded: "five rows · lines with round corners",
+  double: "five rows · double lines",
+  shade: "five rows · shaded block pixels",
+  braille: "two rows · braille dots",
 }
 
-export const LOGO_TEXT_MAX: Readonly<Record<LogoFont, number>> = { mendcode: 18, compact: 18, solid: 18, outline: 18 }
+/** Letters a font draws. A wordmark wider than the home gives way to the plain name there, so no font cuts a saved text. */
+export const LOGO_TEXT_MAX: Readonly<Record<LogoFont, number>> = { mendcode: 18, compact: 18, solid: 18, outline: 18, rounded: 18, double: 18, shade: 18, braille: 18 }
+const BRAILLE_CELLS = Array.from({ length: 256 }, (_, bits) => (bits ? String.fromCodePoint(0x2800 + bits) : " ")).join("")
 /** Allowed drawing characters, including padding. Glyph keys do not affect this set. */
 export const LOGO_FONT_CHARACTERS: Readonly<Record<LogoFont, string>> = {
   mendcode: " █▀▄",
   compact: " █▀▄",
   solid: " █",
   outline: " ┌┐└┘─│├┤┬┴┼╷╵╱╲╳·╭╮╰╯",
+  rounded: " ╭╮╰╯─│├┤┬┴┼╷╵╱╲╳·",
+  double: " ╔╗╚╝═║╠╣╦╩╬╱╲╳·",
+  shade: " ▓",
+  braille: BRAILLE_CELLS,
 }
 const GAP = " "
 
@@ -182,7 +195,8 @@ const OUTLINE_LETTERS: Glyphs = {
   "9": ["┌───┐", "│   │", "└───┤", "    │", "────┘"]
 }
 
-const solid: Glyphs = Object.fromEntries(Object.entries(PIXELS).map(([char, rows]) => [char, rows.map((row) => row.replace(/1/g, "█").replace(/0/g, " "))]))
+// A cell is twice as tall as it is wide: two cells per pixel make the pixels square, so strokes are as thick across as down.
+const solid: Glyphs = Object.fromEntries(Object.entries(PIXELS).map(([char, rows]) => [char, rows.map((row) => row.replace(/1/g, "██").replace(/0/g, "  "))]))
 const compact: Glyphs = Object.fromEntries(Object.entries(PIXELS).map(([char, rows]) => [char, [0, 2, 4].map((y) => Array.from({ length: 5 }, (_, x) => {
   const top = rows[y]![x] === "1"
   const bottom = rows[y + 1]?.[x] === "1"
@@ -225,12 +239,40 @@ const outline: Glyphs = { ...OUTLINE_LETTERS,
 }
 // Add punctuation to the retained pixel wordmark without changing its existing glyphs.
 const pixel: Glyphs = { ...compact, ...MENDCODE }
-export const LOGO_GLYPHS: Readonly<Record<LogoFont, Glyphs>> = { mendcode: pixel, compact, solid, outline }
-const HEIGHT: Readonly<Record<LogoFont, number>> = { mendcode: 3, compact: 3, solid: 5, outline: 5 }
+
+/** Each glyph of `table` with its line characters swapped (`map`): the line fonts that share the outline's letters. */
+const relined = (table: Glyphs, map: Readonly<Record<string, string>>): Glyphs => Object.fromEntries(Object.entries(table).map(([char, rows]) => [char, rows.map((row) => [...row].map((cell) => map[cell] ?? cell).join(""))]))
+
+/** The 5x5 pixels in braille: a cell holds 2 x 4 dots, so a glyph is three cells by two rows. */
+const braille = (rows: readonly string[]): string[] => [0, 4].map((top) => [0, 2, 4].map((left) => {
+  const on = (x: number, y: number) => rows[top + y]?.[left + x] === "1"
+  const bits = [[0, 0, 0x01], [0, 1, 0x02], [0, 2, 0x04], [1, 0, 0x08], [1, 1, 0x10], [1, 2, 0x20], [0, 3, 0x40], [1, 3, 0x80]].reduce((sum, [x, y, bit]) => (on(x!, y!) ? sum | bit! : sum), 0)
+  return BRAILLE_CELLS[bits]!
+}).join(""))
+
+/** The fonts built from another table, made the first time one is drawn: a profile that never picks them never builds them. */
+const DERIVED: Readonly<Record<"rounded" | "double" | "shade" | "braille", () => Glyphs>> = {
+  rounded: () => relined(outline, { "┌": "╭", "┐": "╮", "└": "╰", "┘": "╯" }),
+  double: () => relined(outline, { "─": "═", "│": "║", "┌": "╔", "┐": "╗", "└": "╚", "┘": "╝", "├": "╠", "┤": "╣", "┬": "╦", "┴": "╩", "┼": "╬", "╷": "║", "╵": "║", "╭": "╔", "╮": "╗", "╰": "╚", "╯": "╝" }),
+  shade: () => Object.fromEntries(Object.entries(solid).map(([char, rows]) => [char, rows.map((row) => row.replace(/█/g, "▓"))])),
+  braille: () => Object.fromEntries(Object.entries(PIXELS).map(([char, rows]) => [char, braille(rows)])),
+}
+const built = new Map<LogoFont, Glyphs>()
+const glyphsOf = (font: LogoFont): Glyphs => {
+  if (font === "mendcode") return pixel
+  if (font === "compact") return compact
+  if (font === "solid") return solid
+  if (font === "outline") return outline
+  let table = built.get(font)
+  if (!table) built.set(font, table = DERIVED[font]())
+  return table
+}
+export const LOGO_GLYPHS: Readonly<Record<LogoFont, Glyphs>> = Object.defineProperties({} as Record<LogoFont, Glyphs>, Object.fromEntries(LOGO_FONTS.map((font) => [font, { get: () => glyphsOf(font), enumerable: true }])))
+const HEIGHT: Readonly<Record<LogoFont, number>> = { mendcode: 3, compact: 3, solid: 5, outline: 5, rounded: 5, double: 5, shade: 5, braille: 2 }
 
 /** Rows of the wordmark for `text` in `font`: upper-cased, cut at the font's letter cap, rows right-trimmed. */
 export function logoRowsFor(text: string, font: LogoFont = DEFAULT_LOGO_FONT): string[] {
-  const glyphs = LOGO_GLYPHS[font]
+  const glyphs = glyphsOf(font)
   const normalized = (text.trim() || DEFAULT_LOGO_TEXT).toUpperCase().slice(0, LOGO_TEXT_MAX[font])
   const rows: string[][] = Array.from({ length: HEIGHT[font] }, () => [])
   for (const char of normalized) {

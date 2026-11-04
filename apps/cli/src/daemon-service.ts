@@ -1,17 +1,13 @@
+import { DAEMON_HELP } from "./help-text"
 import path from "node:path"
+import { sameDir } from "@mendcode/program/data-dir"
 import type { CommandInput, CommandReply } from "@mendcode/client"
 import type { DaemonStatusReport, DaemonLogsReport } from "@mendcode/protocol"
 import { redactSecrets } from "@mendcode/protocol/wire"
 import type { ServiceAction, ServiceOptions, ServiceResult } from "../../../packages/daemon/src/user-service"
 import { PROGRAM_NAME } from "@mendcode/program"
 
-export const DAEMON_USAGE = `usage: ${PROGRAM_NAME} daemon <start|run|status|logs|stop|restart> [--dir D] [--json]
-  daemon service <plan|install|start|stop|restart|status|logs|uninstall> (macOS/Linux)
-    [--service-dir D] [--cwd PROJECT] [--engine ENGINE]
-  [control-plane] loops daemon [--once [--execute]] | service <action> (macOS/Linux)
-  [control-plane] memory dream daemon [--once [--execute]] | service <action> (macOS/Linux)
-  --lines N (1–1000)   --force (interrupt active work)
-`
+export const DAEMON_USAGE = `${DAEMON_HELP}\n`
 
 export type DaemonServiceCommand = {
   action: ServiceAction | "run" | "tick"
@@ -122,8 +118,15 @@ export function createDaemonServiceCli(deps: DaemonServiceDeps) {
         const reply = await peer.send({ type: "daemon.status" })
         if (!reply.ok) throw new Error(reply.error.message)
         const report = reply.result as unknown as DaemonStatusReport
-        if (path.resolve(report.dataDir) !== path.resolve(deps.dir)) throw new Error("Daemon data directory mismatch")
+        // Followed through links: a daemon an older terminal started on `~/.mendcode-v2` serves `~/.mendcode` after the move.
+        if (!sameDir(report.dataDir, deps.dir)) throw new Error("Daemon data directory mismatch")
         return report
+      }
+      // The socket is gone before the process is: the next start waits for the writer lock to be released, or it would find a daemon that "does not answer".
+      const stopped = async () => {
+        await deps.waitStopped()
+        const deadline = deps.now() + 5000
+        while (deps.lockOwner?.() && deps.now() < deadline) await deps.sleep(20)
       }
       const busy = async () => {
         const report = await readStatus()
@@ -161,19 +164,19 @@ export function createDaemonServiceCli(deps: DaemonServiceDeps) {
             const reply = await peer.send({ type: "daemon.shutdown", ...(command.force ? { force: true } : {}) })
             if (!reply.ok) throw new Error(reply.error.message)
             peer.close(); peer = undefined
-            await deps.waitStopped()
+            await stopped()
           }
           if (command.action === "restart" && service.loaded) {
             await deps.host.control("stop")
             peer?.close(); peer = undefined
-            await deps.waitStopped()
+            await stopped()
           }
         }
         const service = await deps.host.control(command.action === "restart" ? "start" : command.action)
         if (["start", "restart"].includes(command.action)) await started()
         if (["stop", "uninstall"].includes(command.action)) {
           peer?.close(); peer = undefined
-          await deps.waitStopped()
+          await stopped()
         }
         const report = await readStatus()
         result({ ...service, daemon: report }, command.action === "plan" ? `Service: ${service.backend}\nDefinition: ${service.definitionPath}\nCommand: ${service.programArguments.join(" ")}\nstdout: ${service.stdoutPath}\nstderr: ${service.stderrPath}\n` : daemonStatusText(report, service))
@@ -189,7 +192,7 @@ export function createDaemonServiceCli(deps: DaemonServiceDeps) {
           if (!reply.ok) throw new Error(reply.error.message)
         }
         peer?.close(); peer = undefined
-        await deps.waitStopped()
+        await stopped()
         const report = await readStatus()
         if (report.running) throw new Error("Daemon is still running")
         unanswered(report)
@@ -204,7 +207,7 @@ export function createDaemonServiceCli(deps: DaemonServiceDeps) {
           if (!reply.ok) throw new Error(reply.error.message)
         }
         peer?.close(); peer = undefined
-        await deps.waitStopped()
+        await stopped()
         await started()
         const report = await readStatus()
         result(report, daemonStatusText(report))

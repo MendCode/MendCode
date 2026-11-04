@@ -124,7 +124,7 @@ export function createTranscriptActions(ctx: AppContext, actions: {
     requestFrame()
   }
 
-  const displayOptions = () => ({ reasoning: state.tuiProfile.reasoning !== "hidden", toolDetails: state.tuiProfile.toolOutput !== "collapsed", assistantMetadata: state.tuiProfile.messageMeta !== "off", timestamps: state.tuiProfile.timestamps })
+  const displayOptions = () => ({ reasoning: state.tuiProfile.reasoning !== "hidden", toolDetails: state.tuiProfile.toolOutput !== "collapsed", assistantMetadata: state.tuiProfile.messageMeta !== "off", timestamps: state.tuiProfile.timestamps === "top" })
 
   async function copyCommand(args: string) {
     if (args === "pick") return openMessageActions(true)

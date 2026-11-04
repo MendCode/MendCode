@@ -55,7 +55,7 @@ export type CustomToolInfo = {
   command: string[]
   /** User tools are always trusted; project tools follow the directory's trust. */
   trusted: boolean
-  /** The package that ships the tool, if any. */
+  /** The profile that ships the tool, if any. */
   pkg?: string
 }
 

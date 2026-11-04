@@ -15,7 +15,7 @@ import { loadSprite } from "../src/pets/sprite"
 import { createHomeMascot, isPetMascot } from "../src/ui/app/home-mascot"
 import { createTerminalFocus } from "../src/ui/terminal-focus"
 import { setTheme, type Line } from "../src/ui/theme"
-import { customizePageKey, CUSTOMIZE_ROWS } from "../src/view/customize-page"
+import { customizePageKey, CUSTOMIZE_ROWS, rowShown } from "../src/view/customize-page"
 import { renderHome, type HomeMascot, type HomeMascotBox } from "../src/view/home"
 import { DEFAULT_TUI_PROFILE, normalizeTuiProfile, readTuiProfile, tuiProfilePath, writeTuiProfile, type TuiProfile } from "../src/view/tui-profile"
 import { LOGO_MARK } from "../src/view/logo-mark"
@@ -946,9 +946,11 @@ describe("the mascot's settings and commands", () => {
     expect(featureOn({ tier: "balanced", features: { pets: true } }, "pets")).toBe(true)
   })
 
-  test("/customize has its three rows under the logo kind: the mascot opens its list, motion toggles, size cycles", () => {
+  test("/customize has its three rows in the logo part, listed for a mascot: the mascot opens its list, motion toggles, size cycles", () => {
     const at = (row: string) => CUSTOMIZE_ROWS.indexOf(row as never)
-    expect([at("homeMascot"), at("mascotMotion"), at("mascotSize")]).toEqual([at("logoKind") + 1, at("logoKind") + 2, at("logoKind") + 3])
+    expect([at("mascotMotion"), at("mascotSize")]).toEqual([at("homeMascot") + 1, at("homeMascot") + 2])
+    expect(at("homeMascot")).toBeGreaterThan(at("logoKind"))
+    for (const logoKind of ["mascot", "both", "wordmark"] as const) expect(rowShown("homeMascot", { ...DEFAULT_TUI_PROFILE, logoKind })).toBe(logoKind !== "wordmark")
     const key = (row: string, press: string) => customizePageKey({ row: at(row) }, press, DEFAULT_TUI_PROFILE)
     expect(key("homeMascot", "\r").action).toEqual({ type: "open", command: "mascot" })
     expect(key("mascotMotion", "\x1b[C").action).toEqual({ type: "set", patch: { mascotMotion: false } })

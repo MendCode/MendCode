@@ -135,7 +135,7 @@ test("install, regenerate one state, rename, portable package export and Trash d
   await item.generator.manage("local", { action: "rename", petId, name: "Owl" })
   const exported = await item.generator.manage("local", { action: "export", petId })
   const exportedDir = exported.directory as string
-  expect(JSON.parse(readFileSync(path.join(exportedDir, "mendcode-package.json"), "utf8"))).toMatchObject({ extensions: false })
+  expect(JSON.parse(readFileSync(path.join(exportedDir, "mendcode-profile.json"), "utf8"))).toMatchObject({ extensions: false })
   expect(JSON.parse(readFileSync(path.join(exportedDir, "pets", petId, "pet.json"), "utf8"))).toMatchObject({ displayName: "Owl" })
   expect(PACKAGE_KINDS.find((kind) => kind.id === "pets")).toMatchObject({ selection: "pets", executable: false })
   item.set({ image_generation: { enabled: false } })

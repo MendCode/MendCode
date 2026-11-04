@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { createCustomizePageState, customizePageKey, CUSTOMIZE_ROWS } from "../src/view/customize-page"
+import { createCustomizePageState, customizePageKey, CUSTOMIZE_ROWS, customizeSteps } from "../src/view/customize-page"
 import { parseDiff, renderSplitDiffRows, renderToolCard, splitDiffAt, SPLIT_DIFF_AUTO_WIDTH, SPLIT_DIFF_MIN_WIDTH } from "../src/view/tool-card"
 import { DEFAULT_TUI_PROFILE, normalizeTuiProfile, readTuiProfile, writeTuiProfile } from "../src/view/tui-profile"
 import { textWidth } from "../src/view/wrap"
@@ -112,7 +112,7 @@ describe("diffView in the running app", () => {
       const h = appHarness({ dataDir, width, height })
       apps.push(h)
       await h.type("/customize\r")
-      for (let i = 0; i < row; i++) await h.app.onKey("\x1b[B")
+      for (let i = 0; i < customizeSteps("diffView", h.app.tuiProfile, { mode: h.app.viewMode }); i++) await h.app.onKey("\x1b[B")
       expect(h.text().join("\n")).toMatch(/Diff view +‹ unified ›/)
       expect(h.text().join("\n")).toContain("Diff preview")
       await h.app.onKey("\x1b[C")

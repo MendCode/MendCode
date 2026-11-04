@@ -34,12 +34,12 @@ test("create/update/delete-local cross client + protocol + daemon with real loca
   expect(data).not.toContain("private-model-value")
   expect(await f.client.packageCatalog(f.project, "review", "local")).toMatchObject({ ok: true, report: { entries: [{ name: "review", state: "available" }] } })
   expect(await f.client.packagePreview(f.project, "local", "review")).toMatchObject({ ok: true, report: { problems: [] } })
-  expect(await f.client.send({ type: "packages.list", directory: f.project })).toMatchObject({ result: { packages: [] } })
+  expect(await f.client.send({ type: "profiles.list", directory: f.project })).toMatchObject({ result: { packages: [] } })
   const updated = await f.client.authorPackage(f.project, "update", { metadata: { version: "2.0.0" } })
   expect(updated).toMatchObject({ ok: true, report: { version: "2.0.0", title: "Review Kit" } })
   if (!updated.ok) throw new Error(updated.error.message)
   expect(existsSync(path.join(f.project, updated.report.backupPath!))).toBe(true)
-  const installed = await f.client.send({ type: "packages.install-catalog", directory: f.project, name: "review", sourceId: "local", scope: "project" })
+  const installed = await f.client.send({ type: "profiles.install-catalog", directory: f.project, name: "review", sourceId: "local", scope: "project" })
   expect(installed.ok).toBe(true)
   if (!installed.ok) throw new Error(installed.error.message)
   expect(PackagesReport.parse(installed.result)).toMatchObject({ packages: [{ manifest: { title: "Review Kit", version: "2.0.0" } }] })
@@ -48,16 +48,16 @@ test("create/update/delete-local cross client + protocol + daemon with real loca
   if (!removed.ok) throw new Error(removed.error.message)
   expect(PackageDeleteLocalReport.parse(removed.report)).toMatchObject({ selectionCleared: true, localArtifactsTouched: false })
   expect(existsSync(path.join(f.project, ".mendcode/commands/review.md"))).toBe(true)
-  expect(await f.client.send({ type: "packages.list", directory: f.project })).toMatchObject({ result: { packages: [{ name: "review" }] } })
+  expect(await f.client.send({ type: "profiles.list", directory: f.project })).toMatchObject({ result: { packages: [{ name: "review" }] } })
 })
 
 test("protocol rejects unsupported options and authoring mutations are never read-only commands", () => {
   const ids = createIdFactory(), base = { id: ids("command"), clientId: ids("client"), directory: "/tmp/project" }
-  for (const type of ["packages.create", "packages.update", "packages.delete-local"] as const) {
+  for (const type of ["profiles.create", "profiles.update", "profiles.delete-local"] as const) {
     expect(Command.safeParse({ ...base, type }).success).toBe(true)
     expect(isReadOnlyCommand(type)).toBe(false)
   }
-  for (const extra of [{ include: ["unknown"] }, { metadata: { id: "../escape" } }, { metadata: { signatureRequired: true } }, { activate: true }]) expect(Command.safeParse({ ...base, type: "packages.create", ...extra }).success).toBe(false)
+  for (const extra of [{ include: ["unknown"] }, { metadata: { id: "../escape" } }, { metadata: { signatureRequired: true } }, { activate: true }]) expect(Command.safeParse({ ...base, type: "profiles.create", ...extra }).success).toBe(false)
 })
 
 test("failed secret audit returns an actionable daemon error and leaves the authored revision unchanged", async () => {

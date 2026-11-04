@@ -100,6 +100,10 @@ export type HeaderInput = {
   strike?: boolean
   /** The target is plain weight rather than bold (a call kept to one row reads behind the assistant's text). */
   plain?: boolean
+  /** The label's colour (the tool design's); undefined is `muted`. */
+  labelTone?: ColorName
+  /** `Edit(src/a.ts)` instead of `Edit src/a.ts` (a tool design's `header.call: parens`). */
+  parens?: boolean
 }
 
 /** Smallest slice of the row the target keeps before the facts start to give way. */
@@ -116,13 +120,16 @@ export function headerRow(input: HeaderInput): Line {
   const rightWidth = right ? textWidth(right) + 2 : 0
   const target = input.target ?? ""
   const start = INDENT.length + textWidth(input.glyph.text) + 1
+  const parens = input.parens === true && !!input.label && !!target
   // A label is a tool's name and keeps its room before the target; an engine's whole title can land there too, and then it ends in `…` like a target.
   const labelRoom = Math.max(1, edge - start - rightWidth - (target ? 2 : 0))
   const label = input.label ? truncateEnd(input.label, labelRoom) : ""
-  const lead: Span[] = [{ text: INDENT }, input.glyph, { text: " " }, ...(label ? [{ text: label, fg: "muted" as const, ...(input.strike ? { strike: true } : {}) }] : [])]
+  const strike = input.strike ? { strike: true } : {}
+  const lead: Span[] = [{ text: INDENT }, input.glyph, { text: " " }, ...(label ? [{ text: label, fg: input.labelTone ?? ("muted" as const), ...strike }] : [])]
   let used = lead.reduce((sum, span) => sum + textWidth(span.text), 0)
   let facts = input.facts ?? []
-  const space = input.label && target ? 1 : 0
+  // `Edit(target)` takes its brackets where `Edit target` takes a space.
+  const space = input.label && target ? (parens ? 2 : 1) : 0
   const room = (extra: number) => edge - used - space - rightWidth - extra
   const factsWidth = (list: Span[]) => (list.length ? 2 + list.reduce((sum, span) => sum + textWidth(span.text), 0) : 0)
   // Drop facts from the end until the target keeps its minimum.
@@ -130,15 +137,21 @@ export function headerRow(input: HeaderInput): Line {
   const targetRoom = Math.max(1, room(factsWidth(facts)))
   const shown = input.middle ? shortenMiddle(target, targetRoom) : truncateEnd(target, targetRoom)
   const row: Line = [...lead]
-  if (shown) row.push({ text: `${space ? " " : ""}${shown}`, fg: input.targetTone ?? "text", ...(input.plain ? {} : { bold: true }), ...(input.strike ? { strike: true } : {}) })
+  const targetSpan = (text: string): Span => ({ text, fg: input.targetTone ?? "text", ...(input.plain ? {} : { bold: true }), ...strike })
+  if (shown && parens) row.push({ text: "(", fg: input.labelTone ?? "muted", ...strike }, targetSpan(shown), { text: ")", fg: input.labelTone ?? "muted", ...strike })
+  else if (shown) row.push(targetSpan(`${space ? " " : ""}${shown}`))
   if (facts.length) row.push({ text: "  " }, ...facts)
   used = row.reduce((sum, span) => sum + textWidth(span.text), 0)
   if (right && edge - used - rightWidth >= 0) row.push({ text: " ".repeat(edge - used - textWidth(right)) }, { text: right, fg: "muted" })
   return row
 }
 
-/** The leading cells of a body row: the card's indent, then the rule in the card's colour. */
-export const railPrefix = ({ rule, marks }: { rule: ColorName; marks: Marks }): Span[] => [{ text: INDENT }, { text: `${marks.rail} `, fg: rule }]
+/**
+ * The leading cells of a body row: the card's indent, the rule in the card's colour, then the cell between the rule and the body
+ * (its own span, so a tinted diff row can start its tint right after the rule). `glyph` is a tool design's rule; the default is the
+ * thin rule of `marks`.
+ */
+export const railPrefix = ({ rule, marks, shown = true, glyph }: { rule: ColorName; marks: Marks; shown?: boolean; glyph?: string }): Span[] => [{ text: INDENT }, shown ? { text: glyph ?? marks.rail, fg: rule } : { text: " " }, { text: " " }]
 
 /** Cells of a body row after the rule; the last column is left empty. */
 export const bodyWidth = (width: number) => Math.max(1, width - INDENT.length - 2 - 1)

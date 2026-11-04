@@ -82,18 +82,18 @@ describe("agents per layer", () => {
     return { userDir, directory, projectDir: path.join(directory, ".mendcode") }
   }
 
-  test("user, project and package agents are found; the later layer wins a name, the project's own last", () => {
+  test("user, project and profile agents are found; the later layer wins a name, the project's own last", () => {
     const { userDir, directory, projectDir } = layout()
-    write(path.join(userDir, "packages", "acme", "agents", "shared.md"), agentFile("description: from the user package"))
-    write(path.join(userDir, "packages", "acme", "agents", "pkg-only.md"), agentFile("description: only in the package"))
+    write(path.join(userDir, "packages", "acme", "agents", "shared.md"), agentFile("description: from the user profile"))
+    write(path.join(userDir, "packages", "acme", "agents", "pkg-only.md"), agentFile("description: only in the profile"))
     write(path.join(userDir, "agents", "shared.md"), agentFile("description: from the user folder"))
-    write(path.join(projectDir, "packages", "tools", "agents", "shared.md"), agentFile("description: from a project package"))
+    write(path.join(projectDir, "packages", "tools", "agents", "shared.md"), agentFile("description: from a project profile"))
     write(path.join(projectDir, "agents", "shared.md"), agentFile("description: from the project folder"))
     write(path.join(projectDir, "agents", "notes.txt"), "not an agent")
     const { agents, problems } = readLayerAgents(extensionLayers({ userDir, directory }), { projectTrusted: true })
     expect(problems).toEqual([])
     expect(agents.map((a) => [a.name, a.description, a.source, a.pkg])).toEqual([
-      ["pkg-only", "only in the package", "user", "acme"],
+      ["pkg-only", "only in the profile", "user", "acme"],
       ["shared", "from the project folder", "project", undefined],
     ])
   })
@@ -103,17 +103,17 @@ describe("agents per layer", () => {
     write(path.join(userDir, "agents", "shared.md"), agentFile("description: the user's"))
     write(path.join(projectDir, "agents", "shared.md"), agentFile("description: the project's"))
     write(path.join(projectDir, "agents", "theirs.md"), agentFile("description: only the project has it"))
-    write(path.join(projectDir, "packages", "p", "agents", "pk.md"), agentFile("description: a project package's"))
+    write(path.join(projectDir, "packages", "p", "agents", "pk.md"), agentFile("description: a project profile's"))
     const untrusted = readLayerAgents(extensionLayers({ userDir, directory }), { projectTrusted: false }).agents
     expect(untrusted.map((a) => [a.name, a.description, a.trusted])).toEqual([
-      ["pk", "a project package's", false],
+      ["pk", "a project profile's", false],
       ["shared", "the user's", true],
       ["shared", "the project's", false],
       ["theirs", "only the project has it", false],
     ])
     const trusted = readLayerAgents(extensionLayers({ userDir, directory }), { projectTrusted: true }).agents
     expect(trusted.map((a) => [a.name, a.description, a.trusted])).toEqual([
-      ["pk", "a project package's", true],
+      ["pk", "a project profile's", true],
       ["shared", "the project's", true],
       ["theirs", "only the project has it", true],
     ])
@@ -132,11 +132,11 @@ describe("agents per layer", () => {
     ])
   })
 
-  test("a package's agents/ folder is counted in its contents and travels with an install", async () => {
+  test("a profile's agents/ folder is counted in its contents and travels with an install", async () => {
     const userDir = temp("agents-user-")
     const directory = temp("agents-project-")
     const src = temp("agents-src-")
-    write(path.join(src, "mendcode-package.json"), JSON.stringify({ name: "acme", version: "1.0.0", description: "Acme" }))
+    write(path.join(src, "mendcode-profile.json"), JSON.stringify({ name: "acme", version: "1.0.0", description: "Acme" }))
     write(path.join(src, "agents", "one.md"), agentFile("description: one"))
     write(path.join(src, "agents", "two.md"), agentFile("description: two"))
     write(path.join(src, "agents", ".hidden.md"), agentFile("description: hidden"))

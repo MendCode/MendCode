@@ -11,14 +11,83 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### New
 
+- `mendcode dev start|restart|stop|status|tui|run`: a second daemon on its own data directory that runs the current checkout, marked DEV and restarted without touching the daemon your sessions use, so MendCode can be programmed from MendCode. See [dev mode](docs/dev-mode.md).
+- `mendcode usage --quota [--json]` prints the quota windows the footer shows, read from the running daemon; nothing is sent to a provider. See [usage](docs/usage.md#quota-from-the-command-line).
+- A session that runs `mendcode run --permission smart` above its own mode now asks you on one card (model, folder, mode, title, prompt) when your terminal has it open; approving starts that child with that prompt only. Without you there it is still refused, and the error gives the command to run yourself. See [permissions](docs/permissions.md#what-a-session-cannot-do-from-its-own-shell).
+- `/customize` is regrouped: the common sections first (Look, Home, Prompt & footer, Chat, Activity), Extensions, Views, the slash menu and terminal internals under Advanced. A row that depends on one switched off is hidden with it. See [customize](docs/customize.md).
+- `/` in `/customize` filters the rows by name, section or what they change.
+- Home > Input position puts the chat input at the bottom, centered under the logo or at the top of the start screen.
+- Logo fonts rounded, double, shade and braille.
+- Footer packs: the footer's whole look in one data file, chosen with `/footer pack NAME` or Footer pack in `/customize`. Built in: `clean` (the new default: folder and branch, then model, effort and context), `powerline`, `minimal`, `badges`, `bars` and `plain`, each with a words-only form. Parts like changes, running shells, cost or a low quota show only when they matter, and the context changes colour at 70% and 90%. A footer you made yourself is never covered; `footerPack: off` brings back the previous footer. Profiles can ship packs. See [customize](docs/customize.md#footer-packs).
+- With the status line in the prompt's border, the activity takes the place of `READY` there instead of a row of its own, and the footer no longer repeats the model, effort, context or branch.- With `MENDCODE_BROWSER_EXTENSION=1` the model can work in your own Chrome, Arc, Brave or Edge, in a "MendCode" tab group and background tabs, on sites you allow. It asks before installing the extension. See [browser](docs/browser.md#your-own-browser-extension).
+- The PR reviewer measures MendCode's own pull requests (start-up, memory, size) and puts the table in the review; a rise above the noise is a critical finding. `prReview.perfAttrib: false` turns it off. See [PR review](docs/pr-review.md#performance-of-mendcodes-own-pull-requests).
+- `/reviews open <job id>` opens a PR review's reviewer session, and a running review shows its phase in `/reviews`. See [PR review](docs/pr-review.md).
+- `@mendcode review full` reviews the whole PR; plain `@mendcode review` reviews only what is new since the last full review. See [PR review](docs/pr-review.md).
+- The PR reviewer sends data, results and generated files to readers on a cheap model (or a local summary) instead of reading them whole; `readers` in `.mendcode/review.yaml` sets how many read at once. See [PR review](docs/pr-review.md#data-files-and-readers).
+- The PR reviewer's own tokens show in `/usage` as the `prReview` role. See [usage](docs/usage.md#auxiliary-calls).
+- `budget.tokens_per_diff_token` scales a review's token cap with its diff. See [PR review](docs/pr-review.md).- `threads` and `sessions` ask for up to 100 sessions (10 by default) and take `query`, `state` and `project` filters. See [peers](docs/peers.md#sessions).
+- `/loop` understands phrases in Spanish and English (`/loop cada 5 minutos ve diciéndome`, `/loop daily at 9am check the issues`) and asks for one line of confirmation before it starts; with no interval it paces itself (`adaptive`), and a schedule it cannot read is converted by the small model. The strict form (`/loop every 30m …`) is unchanged. See [loops](docs/loops.md#natural-language).
+- A loop starts with the permission mode of the session that created it (never more): from full access it asks nothing, and a report-only loop reads any path like its creator. From a session that asks, it reads what that session could read and asks about the rest; the footer shows `needs input` and `/loops` shows the request and answers it with `a`, `o` or `x`. A run nobody answers ends with a clear message. See [loops](docs/loops.md#permissions-and-approvals).
+- Every loop run leaves a short notice in the session that created the loop, with a link to the loop's session; it starts no model turn and the model reads it with your next message (`/loop open <id>`); `notify: none` turns it off. See [loops](docs/loops.md#notices-in-the-creator-session).
+- Accepted and applied plans are saved as Markdown files per project (outside your repository unless `plan_files_location` is `repo`). After a compaction the agent is told where its plan is, other sessions list and read plans with `sessions plans=true`, and the `todo` list keeps the plan's steps up to date. Balanced and full; Claude Code's own plan file is used as is.
+- Sessions can list, message and open sessions in other projects, like Claude Code's ListAgents and SendMessage: `sessions scope=all`, `tell` and `threads message` to any session, and `threads start` for a new session in another folder with a first message. Each of those asks you every time, the receiver gets the message marked as an agent's from another project, and nothing is ever above the sender's permission. See [peers](docs/peers.md#other-projects).
+- Approving a plan (Enter, or comment then apply) now runs it with full access, as Claude Code does when it leaves plan mode; `m` on the plan page picks auto edits or ask before edits instead, and the page and the "Plan mode off" notice name the access. See [plan review](docs/plan-review.md).
+- The assistant is told what the terminal draws according to the tier: full gets the Markdown, Mermaid and callout syntax and when to use each, balanced one short line, minimalist nothing.
+- `/btw history` lists the side chats you cleared and opens one to read. The row under the side chat's name says how much of the session it sees and how much of its prompt came from the cache. See [/btw](docs/btw.md).
+- Full tier: memory works by itself. Saved facts reach prompts, decisions and the state of the work are proposed after turns, and the nightly Dream saves what passes its checks. See [memory by tier](docs/memory.md#memory-by-tier).
+- Full tier: a new chat opens with a short note of what your latest sessions, in this project and others, were doing.
+- Dream picks up where it stopped when the daemon was stopped mid-run.
+- `/cd`, `/add-dir` and `/attach` complete paths as you type: Tab walks into the highlighted directory.
+- The assistant replies in the language of your latest message (English when unclear) and no longer switches language on its own.
 - `mendcode usage recover` adds the token usage of a Claude Code, Codex or Pi session log to Usage, with a preview first and
   an undo. See [usage recovery](docs/usage-recovery.md).
+- The advisor sees the images attached to your request and can answer with a short code snippet or ASCII sketch. See
+  [advisor](docs/advisor.md#what-the-advisor-sees).
 - `/pr setup` checks prerequisites and configures repository reviews and publishing with one confirmation; a headless setup command is also available.
 - `/voice setup` guides dictation readiness and explicitly confirms audio uploads before enabling an API provider.
 - `/graph setup` enables and builds the project's code graph with one confirmation, without changing global defaults.
+- Tool design (`toolDesign` in `/customize`): one choice that changes the whole look of the tool cards. Besides the default, `branch` (a bullet per call and a branch under it) and `terse` (no rule, plain diff signs); a profile can bring its own as `tool-designs/<name>.json`. See [customize](docs/customize.md#scrolling).
+- Each turn ends with a dim line under the answer: how long it took, when it ended and which shells or sub-agents still run. `timestamps` is now `bottom` (that line), `top` (the time over each message) or `off`. See [customize](docs/customize.md).
+- Three or more shell commands in a row fold into one `Ran 6 shell commands` row that opens on click, like reading calls.
+- The `defaultContextWindow` setting gives one context window to every model that has none of its own; a model's `modelContext` window and `/context-window` still win. The assistant now finds how to change a context window, a model, a theme or a title from `mendcode docs change` without reading MendCode's files.
 
 ### Changed
 
+- Inside a sub-agent the chat says so everywhere: one line under the top edge with its name, state, parent session and the keys back (also with the top bar off, and alone in the `minimal` tier), its row in the Agents strip filled, and the prompt in its colour with a hint of whom a message goes to.
+- The compaction card is two rows (stage with its bar, context before and after) and shows one loading spinner, the activity line's, instead of three.
+- A PR review that reaches its token cap now posts a partial review of what it verified and lists what it did not review, and the next `/pr review` continues with the rest. See [PR review](docs/pr-review.md#a-review-that-reaches-the-cap).- `/pr review` (and `@mendcode review`) of a head already reviewed with the same config answers at once and runs nothing; `/pr review <n> full` reviews it again. See [PR review](docs/pr-review.md).
+- The `/customize` preview draws what the picked row changes: the home with the pet, a sample chat with the top bar, the prompt with its status line and your real footer, the activity, the diff.
+- Numbers in `/customize` edit with Enter and step with the arrows.
+- With your own footer rows `/customize` says so and hides the one-row footer parts, and the model edits your rows instead of replacing them.
+- Folder profiles are now called areas: `mendcode area add|list|remove` and the `areas` setting (the old `profiles` setting is still read), and `mendcode profile restore` is `mendcode customize restore`. See [areas](docs/areas.md).
+- Packages are now called profiles: `mendcode profile ...`, `/profiles`, the `profiles` tool and `mendcode-profile.json`. The old names (`mendcode package`, `/packages`, `/pkg`, `mendcode-package.json`, `disabledPackages`) still work. See [profiles](docs/profiles.md).
+- The notice for an installed update now reads `New build installed · /restart to switch`, and the message that resumes work after a usage limit lifts is worded in MendCode's own voice.
+- `/context`, the footer and the sidebar show the same used / compaction point for a session, before and after the first message; `/context` uses the provider's count of the last call (images are estimated at 1,500 tokens each) and says whether the figure is measured or estimated. With Claude Code the point is the one its process was given, the model window is listed apart, and a changed `claude_compact` point restarts the process at the next turn. See [Claude Code](docs/claude-code.md).
+- The session lists of `threads` and `sessions` (and the plan list, and other programs' chats) are shorter: one header, rows grouped by project, short ids that every tool accepts, ages like `3m`, and the state only when a session is busy.
+- A wide flowchart is drawn in the chat instead of shown as source: long labels wrap (`<br/>` still breaks a line), spacing tightens, and a left-to-right flow turns top-down when it still does not fit. The note says what was tried when nothing fits.
+- Full tier: the Git page's push, publish and pull request are on by default (`/experimental git_actions off` turns them off); each one still shows its command on a card and waits for Enter. Balanced keeps them behind the switch. See [git](docs/git.md#the-switch).
+- A session with a `/goal` now has the goal tools in its request in every tier, so the agent can mark the goal complete or blocked without searching for the tool first; sessions without a goal are unchanged.
+- The computer-use cursor is now the size of your own pointer, about half of what it was, and follows the Accessibility cursor size.
+- The balanced tier's prompt is about 240 tokens lighter: its description of the terminal's drawing is one sentence instead of the full block.
+- The tools a `/btw` answer runs look like the transcript's tool rows. The side chat is read-only in every permission mode: only read-only commands run, never `touch`, `mv` or a redirection into a file; set its model with `models.aside`.
+- The activity line reads like Claude Code's: `⠋ Running command… (2m 53s · ↓ 88.6k tokens)`. `activityStyle` brings back the older look (`classic`) and `activityTokens` adds the sent and cached token figures. Token counts are the provider's exact usage, with no `~`.
+- The full view's footer is one row (directory, model, effort, cache, quota, code graph) without repeating the context; `/footer preset rows` brings back the five rows.
+- Each running sub-agent task in the Agents strip says how full its context is (not Claude Code's own sub-agents). Opening a sub-agent draws a full border around its view and keeps the Agents strip, with the open one marked.
+- Commands the assistant leaves running in the background or in a terminal no longer stop after a few hours or when left untouched; they run until they end, you stop them or the chat is deleted. The `processLimits` setting (`lifetimeMinutes`, `idleMinutes`) adds a cap if you want one.
+- Compaction while idle follows the prompt-cache lifetime the provider's responses show, not a fixed five minutes, so ChatGPT and OpenAI sessions are compacted less often when their cache lasts longer. See [prompt cache](docs/prompt-cache.md#observed-lifetime).
+- After a compaction the assistant still knows which commands are running and can read their output.
+- Edit, write and patch cards no longer draw a vertical rule beside their body (`toolRail` brings it back for any tool), show three unchanged lines around each change (`diffContext`) and cap a very long line at a few rows (`diffLineRows`). A Write through Claude Code shows its code as added lines.
+- A running shell call names its command in the activity row from the start.
+- Images you pasted and never sent are deleted from disk after a week.
+- With chat encryption on, MendCode starts faster, uses much less memory, and no longer rewrites the encrypted database when nothing changed.
+- MendCode uses less memory right after it starts.
+- Answering a message takes much less memory, most of all the first one of a session.
+- A terminal that runs MendCode in one process holds less memory, and building a project's code graph is no slower for it.
+- Short messages and short turns take less disk.
+- Finished turns are stored compressed in the background, so sessions take much less disk, and search, stats and session
+  recall run faster.
+- MendCode keeps its data in `~/.mendcode`. The first start moves `~/.mendcode-v2` there and leaves a link with the old name,
+  so sessions, settings and sign-ins carry over. `MENDCODE_DIR` names another folder; `MENDCODE_V2_DIR` still works.
 - A terminal that hosts the daemon, and a separate daemon, hold less memory at the prompt.
 - The current-task row above the prompt is gone; the dock's Jobs panel is opt-in and Todos wrap with more room.
 - Long command replies open a readable page (F4 shows the full text of a cut notice), and `/pr repos` lists repository
@@ -40,17 +109,97 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 - The full view's footer shows the `rows` preset by default: directory, model and session figures, quota per provider and the code
   graph, each on its own row. `/footer preset classic` brings back the single-row footer. Balanced and minimalist are unchanged. See
   [layout](docs/layout.md#footer-by-tier).
+- The advisor no longer signs off small turns, such as a config value or a one-line fix; the agent can still ask it. See
+  [advisor](docs/advisor.md#when-it-is-consulted).
 
 ### Fixed
 
+- `mendcode --restart-daemon` only stops a process that is a MendCode daemon for that data directory; a stale `mendd.lock` whose pid was reused is reported and left alone (a dead owner's lock is removed), and the command restarts the daemon and exits instead of opening the terminal (#2).
+- A turn that shows nothing (an idle compaction with nothing to compact) no longer adds a second "ended" line under the answer.
+- `mendcode run` and `session send` accept a long prompt or a long `--file` text (up to 200 KiB each): what does not fit a message goes as a text attachment and the model reads all of it. Over that, the error names the prompt or file, its size and the limit, and "daemon rejected" for a text that is too long now says the same. See [attachments](docs/attachments.md#long-text-from-run-and-session-send).
+- A PR review that finishes before you answer `/pr publish` is kept, also across a daemon restart, and `/pr publish on` posts it as found; if the pull request moved on, it says so and posts nothing, and it says when no finished review was waiting.
+- `/pr setup` and `mendcode pr setup` on a tier without the PR reviewer now apply once confirmed (they also allow the reviewer with `features.pr_review: true`; the tier is not changed); when something blocks it, the output ends with "Nothing changed". On a development daemon it says the watch is recorded and does not run.
+- Smart mode resolves relative paths in a shell command against the directory it runs in (the call's `workdir`, then each `cd`), so `../../node_modules/.bin/tsc` from `packages/widgets` no longer asks as "outside the project". A path that really leaves the project still asks.
+- PR review readers on Claude Code are no longer stopped at their token bound after they have already answered: the bound now covers the harness's own prompt and the model's thinking, so the data summaries come from the cheap model instead of a local scan.
+- `glob` takes up to 32 patterns per call, and a longer list says so and how to split it.
+- PR review readers never run on an ACP harness model (such as an OpenCode one listed under the ChatGPT login): they use the cheap model of the reviewer's own provider.
+- A PR review whose data files were summarized by readers is no longer stopped as "could not review" because the model noted it saw summaries or could not run tests: with findings, or a walkthrough, it goes on to verify and publishes with the model's note. The review prompt now says the data arrives summarized and that there is no shell.
+- In a Claude Code session, `mendcode run` from its shell is known as that session: `--file` attaches instead of being refused, and `--permission smart` above the session's mode asks you on the approval card.
+- `mendcode run --file` from a session's own shell attaches the files instead of being refused.
+- PR reviews and report-only loops are no longer told about plans when they try a change (MendCode's own engine and Claude Code), and Claude Code runs them outside its plan mode, so a reviewer never mistakes plan mode for a limit on its review.
+- A PR review whose diff does not fit its token budget stops before it spends: it says so up front, or before the next part of a large diff, instead of after. See [PR review](docs/pr-review.md#budgets-quotas-and-accounting).
+- The solid logo font draws square letters, and `/customize` rows no longer cut or run together.
+- The green and red tint of changed lines in a tool card's diff starts right at the card's rule, with no gap of background before the line number.
+- PR review notices link to the pull request (and the review they name) on GitHub, and show a job by a short id with the `/reviews open` hint, so narrow terminals keep the important words. See [PR review](docs/pr-review.md).
+- Computer use on apps whose content is a webview (Tauri, WebKit, Electron): the page's content is exposed, a key reaches the app when no node can take focus, and a thin result tells the model to look again before giving up. See [computer use](docs/computer.md).
+- The folders MendCode makes in the system temporary directory for Claude Code, Codex and ACP sessions are removed when the daemon stops, and a daemon that died leaves none behind: the next start clears them.
+- `--safe-mode` against a daemon not started with it names `--safe-mode` in its refusal, not `--pure`.
+- A repeated `/pr review` joins the review already running, and one comment gets one notice however many watches the repository has.
+- A review that cannot read the change ends as incomplete without verifying, and no longer says "nothing was posted: no new findings".
+- A thread reply such as `Fixed in <head>` no longer counts as a review of that head.
+- A message with comments stays a card under your own `message.user` view unless the view declares `handles: ["comments"]`, and the pinned prompt row and the message list show it as `1 comment` instead of its tags.
+- `mendcode package check` no longer reports network or file use for a value such as `claude-sonnet` or `magnet`: only imports and requires of those modules count.
+- PR reviews, report-only loops, read-only workflow tasks and side chats on Codex, Pi, ACP and Claude Code are no longer told to present a plan.
+- Esc Esc on a message nobody answered yet brings it back into the prompt at once with its images, even with a draft or a queued message behind it; when it cannot, the notice says the model already answered.
+- A report-only loop run no longer waits on "Review plan": it is not offered the plan tools or the plan mode note, and writes its report as the answer.
+- Applying a plan on Claude Code or an ACP agent lifts the plan agent's read-only limit at once, so the next write in the same turn is allowed, and the session moves to the plan's destination agent.
+- Leaving plan mode with Shift+Tab or `/plan` returns to the mode the session had before it.
+- A plan review that ends with no decision (the daemon restarted, the request was cancelled) tells the model it was interrupted, not that you rejected the plan.
+- Plan mode on Claude Code, Codex, pi and ACP agents names the model that really plans (the session's), and those engines are reminded on every plan turn that the session is read-only and the plan is for your review.
+- The Plan review page draws the plan like the chat does (diagrams, callouts, tables), scrolls with the wheel and trackpad, and holds its drawing while you scroll.
+- Applying a plan against a daemon older than the access choice works: it is applied once without the choice and the page says to run `/daemon restart`.
+- The activity line of a Claude Code or pi session shows the tokens received while the turn runs, not only when it ends.
+- The footer says plan mode once instead of `Plan · plan mode`.
+- A shell card shows a command's output as it printed it: indentation and blank lines stay.
+- `/plan <text>` enters plan mode and sends the text as your message.
+- Approving a patch shows the files it touches over the diff, without the raw patch JSON.
+- Computer use works once Accessibility is on: the helper is now "MendCode Computer Use.app" with a fixed name and path, macOS lists it by itself and System Settings opens on the right pane when a tool needs it. No path to paste. Old "mendcode-computer" entries in Accessibility can be removed with `-`; see [computer](docs/computer.md#setup).
+- Memories no longer pile up in Pending when Dream runs on schedule or from `/dream`: the full tier consolidates them, and a Dream run stopped by a restart no longer blocks its project.
+- Dream uses your `small` model when no `dream` model is set, instead of the main one.
+- A value pasted in `/env` is always masked: pasting on the list opens the add form, and the name field only takes name characters.
+- With Caps Lock on, the letter shortcuts of settings and of the pages work as without it; capitals with a meaning of their own, like `G` or `J`, keep it.
+- `mendcode session attach ID` opens the session like `mendcode attach ID`.
+- `mendcode --help` is one grouped list of every command, and the help of every command fits 80 columns with one usage line.
+- The code graph's "tokens saved" compares each lookup with what you would have used instead (a grep, a line range, reading the file) rather than with whole files. The project map shows none. See [code graph](docs/code-graph.md#how-the-saving-is-estimated).
+- graft's own "tokens saved" line is no longer added to `/usage`, the footer or the map card.
+- The "tokens saved" of command output filters no longer counts output beyond what the model would have been shown.
+- A Claude Code turn after a cancelled one whose background command still ran no longer fails with "`claude` was not
+  found"; a Claude Code that refuses to start shows its own reason.
+- Claude Code's reports about background tasks of an earlier or ended process no longer arrive as messages for the model.
+- Switching between two MendCode models after a failed or cancelled turn no longer says the conversation came from
+  Claude Code, and no longer adds that turn to the history twice.
+- Sub-agents on every engine no longer get the advisor, workflows or sub-agents of their own; `subagentDepth` above 1
+  still lets them delegate.
+- While the advisor runs, the working row says "Consulting advisor..." instead of "Patching..." or "Running command...".
+- The advisor no longer takes an image read during the turn for your request, and sees the turn's edits and the checks it
+  ran, so it stops asking for evidence the turn already has.
+- Esc in a page opened from another (Settings, then Disk usage) goes back to that page instead of leaving to the chat.
+- The mouse wheel and trackpad scroll every page with rows or text, including Usage.
+- Enter or space turns the pet off from `/pet`, trusts a project in `/tools` and `/hooks`, and switches the IDE bridge on or off.
+- Closing MendCode quickly, or with Ctrl+C or a termination signal, no longer leaves part of the screen painted.
+- With Claude Code, a background sub-agent's commands stay in its own thread: they no longer show as a message of the main agent, change the working row or hold queued messages back.
+- A queued message with comments comes back to edit as your text and its comment chips, and goes out again with them; the queue never shows their markup.
+- A Claude Code sub-agent's thread has its own prompt and queue: the conversation's draft and queued messages wait untouched until you return.
+- An automatic PR review checks that it may post, and that no other reviewer already has, before it spends any tokens.
+- The advisor sees a short summary of the session (earlier edits apart from this turn's, this turn's checks) and the untracked files, and the executor can pass it files with a line range and images; the extra evidence is capped and says what was cut.
+- `@MendCode review` gets no extra reply when this reviewer's own review of the head was posted after the comment.
+- `@mendcode review` no longer counts the empty review GitHub records when someone replies in a review thread as a review of
+  the head.
+- Session titles name what you asked; a model no longer answers your message in the title (such as saying it cannot see an
+  image).
+- Asking to rename the title renames the session, not a part of the screen.
+- Ask any model to change the default model, tier or permissions and it proposes the change for you to approve, instead of
+  telling you to do it by hand.
 - OpenCode Go answers again: every request carries the session it belongs to, as Go now requires. OpenCode Zen gets it too.
 - Preserve terminal preferences and settings across versions, keep recovery history, and guard against accidental downgrades.
-
 - Changes to a file saved twice in quick succession are no longer missed by model lists, config files, the file viewer or code graph
   excerpts.
 
 ### Upgrade notes
 
+- `timestamps: true` in your profile reads as `bottom`: the time moves from over each message to the line that closes each turn. `/timestamps top` brings back the old look.
+- A `~/.mendcode` left by MendCode v1 is renamed to `~/.mendcode-v1`, nothing deleted, and OpenCode's folders that pointed
+  into it follow. A terminal of the earlier version still open keeps the move for the next start.
 - Earlier versions cannot read session history written or converted by this one. Keep a copy of the data directory before
   upgrading if you may need to go back.
 

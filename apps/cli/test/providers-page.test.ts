@@ -234,6 +234,8 @@ describe("/providers in the app", () => {
     expect(h.app.page).toBe("connect")
     expect(h.text()).toContain("Connect a provider")
     await h.type("\x1b")
+    expect(h.app.page).toBe("providers")
+    await h.type("\x1b")
     expect(h.app.page).toBe("chat")
     await h.run("/providers")
     await h.type("\x1b")

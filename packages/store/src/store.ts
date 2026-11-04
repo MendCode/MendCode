@@ -17,7 +17,9 @@ import { createUsageWidgets } from "./usage-widgets"
 import { existsSync, lstatSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs"
 import path from "node:path"
 import {
-  DEFAULT_PROFILE,
+  DEFAULT_AREA,
+  RENAMED_SETTINGS,
+  currentSettingKeys,
   type MemoryLink,
   type MemoryLinkKind,
   GlobalEvent,
@@ -50,6 +52,7 @@ import { createCodec, parseEvent, unpackEvent, eventFromRow, eventFromColumns, e
 import { createEngineHistory } from "./engine-history"
 import { createEventEnvelopes } from "./event-envelopes"
 import { createTransientEvents } from "./transient-events"
+import { createSealedTurns } from "./sealed-turns"
 import { createEventObjects } from "./event-objects"
 import { createStorageUpkeep, type CompactResult, type StorageExtras } from "./storage-upkeep"
 import { createParityRecords } from "./parity-records"
@@ -87,6 +90,21 @@ function savedSetting(key: string, value: unknown): unknown {
   return Object.fromEntries(Object.entries(value).filter(([id]) => id !== "opencode" && id !== "cursor"))
 }
 
+/** The saved entries of a settings payload that still validate, one key at a time; corrupt JSON reads as no settings. */
+function validSettings(payload: string | undefined): Record<string, unknown> {
+  let raw: Record<string, unknown> = {}
+  try {
+    const parsed: unknown = payload ? JSON.parse(payload) : {}
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) raw = parsed as Record<string, unknown>
+  } catch { /* The history keeps the original; a normal write will refuse to replace corrupt JSON. */ }
+  const clean: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(currentSettingKeys(raw))) {
+    const kept = savedSetting(key, value)
+    if (Settings.safeParse({ [key]: kept }).success) clean[key] = kept
+  }
+  return clean
+}
+
 type MemoryRow = {
   id: string
   scope: string
@@ -119,7 +137,7 @@ const MEMORY_SELECT = `SELECT ${memoryColumns()} FROM memories`
 /** Links one memory may have, so the graph (and its payload) stays bounded (P11). */
 export const MAX_MEMORY_LINKS = 16
 /** The stored profile of a memory: '' for personal, so rows from before profiles belong to personal. */
-const profileKey = (profile: string | undefined) => (profile === undefined ? null : profile === DEFAULT_PROFILE ? "" : profile)
+const profileKey = (profile: string | undefined) => (profile === undefined ? null : profile === DEFAULT_AREA ? "" : profile)
 
 function toMemory(row: MemoryRow): MemoryEntry {
   return {
@@ -286,6 +304,8 @@ const DAY_MS = 86_400_000
 const CLEAN_BATCH = 25
 /** A blob file no row knows about is an abandoned upload only after this long (an attachment may be about to be sent). */
 const STRAY_GRACE_MS = 3_600_000
+/** The daemon's own sweep of pasted-and-never-sent images waits longer than a manual clean: a draft may sit for days. */
+const STRAY_SWEEP_GRACE_MS = 7 * DAY_MS
 const TOP_SESSIONS = 10
 /** Loops in these states are done; every other loop keeps its root session. */
 const FINISHED_LOOP_STATES = new Set(["stopped", "completed"])
@@ -319,6 +339,8 @@ export function toolBucket(tool: string | undefined) {
 const wordCount = (text: string) => (text.trim() ? text.trim().split(/\s+/).length : 0)
 
 /** The events of a turn a fork at a message takes along: what a transcript draws. */
+/** Free pages one idle settled step returns to the file system (8 MB of 4 KB pages). */
+const RECLAIM_PAGES_PER_STEP = 2048
 const COPIED_EVENT_TYPES = ["turn.started", "turn.completed", "turn.cancelled", "turn.interrupted", "turn.failed", "item.started", "item.delta", "item.completed", "server.request", "server.request.resolved"].map((type) => `'${type}'`).join(", ")
 
 const TERMINAL_TURN_EVENTS = new Set(["turn.completed", "turn.cancelled", "turn.interrupted", "turn.failed"])
@@ -436,8 +458,9 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
   migrate(db)
   const transcript = createTranscriptPrefix(db)
   const eventObjects = createEventObjects(db)
-  const messages = createMessageRevisions(db, eventObjects.load)
-  const deltaFold = createDeltaFold(db, eventObjects.load)
+  const sealedTurns = createSealedTurns(db)
+  const messages = createMessageRevisions(db, eventObjects.load, (sessionId, itemId) => sealedTurns.item(sessionId, itemId))
+  const deltaFold = createDeltaFold(db, eventObjects.load, (sessionId, seq) => sealedTurns.rowAt(sessionId, seq))
   const transientEvents = createTransientEvents(db)
   const eventEnvelopes = createEventEnvelopes(db)
   db.run("INSERT OR IGNORE INTO meta(key, value) VALUES ('schema_version', ?)", [String(SCHEMA_VERSION)])
@@ -485,6 +508,26 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
   const ownEventsPage = (order: "ASC" | "DESC", bound: ">" | "<" | undefined) =>
     `SELECT seq, type, at, payload FROM events WHERE ${bound ? `session_id = ?1 AND seq ${bound} ?2` : "session_id = ?1"} ORDER BY seq ${order} LIMIT ${bound ? "?3" : "?2"}`
   const ownEvent = (sessionId: string) => (row: OwnEventRow) => eventFromColumns(sessionId, row.seq, row.at, row.type, row.payload, eventObjects.load)
+  /** A session's own rows after `afterSeq`: its sealed prefix (sealed-turns.ts) first, then `events`. */
+  function ownAfter(sessionId: string, afterSeq: number, limit: number): OwnEventRow[] {
+    const sealed = sealedTurns.sealedThrough(sessionId)
+    if (afterSeq >= sealed) return q.readOwnAfter.all(sessionId, afterSeq, limit)
+    const rows = sealedTurns.after(sessionId, afterSeq, limit)
+    return rows.length < limit ? rows.concat(q.readOwnAfter.all(sessionId, sealed, limit - rows.length)) : rows
+  }
+  function ownRange(sessionId: string, afterSeq: number, through: number): OwnEventRow[] {
+    const sealed = sealedTurns.sealedThrough(sessionId)
+    if (afterSeq >= sealed) return q.readOwnRange.all(sessionId, afterSeq, through)
+    return sealedTurns.rows(sessionId, afterSeq, Math.min(through, sealed)).concat(through > sealed ? q.readOwnRange.all(sessionId, sealed, through) : [])
+  }
+  /** The newest `limit` own rows before `beforeSeq` (or overall), ascending. */
+  function ownBefore(sessionId: string, beforeSeq: number | undefined, limit: number): OwnEventRow[] {
+    const rows = (beforeSeq === undefined ? q.readOwnNewest.all(sessionId, limit) : q.readOwnBefore.all(sessionId, beforeSeq, limit)).reverse()
+    const sealed = sealedTurns.sealedThrough(sessionId)
+    if (!sealed || rows.length >= limit) return rows
+    const below = Math.min(beforeSeq ?? Number.MAX_SAFE_INTEGER, rows[0]?.seq ?? Number.MAX_SAFE_INTEGER, sealed + 1)
+    return sealedTurns.before(sessionId, below, limit - rows.length).concat(rows)
+  }
 
   const q = {
     lastSeq: db.query<{ last_seq: number }, [string]>("SELECT last_seq FROM sessions WHERE id = ?"),
@@ -507,6 +550,7 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
     recentUsage: db.query<OwnEventRow, [string, number]>(
       "SELECT e.seq, e.type, e.at, e.payload FROM events e WHERE e.session_id = ? AND e.type = 'usage.recorded' AND NOT EXISTS (SELECT 1 FROM turns_read t WHERE t.session_id = e.session_id AND t.turn_id = json_extract(e.payload, '$.turnId') AND t.reverted = 1) ORDER BY e.seq DESC LIMIT ?",
     ),
+    revertedTurn: db.query<{ one: number }, [string, string]>("SELECT 1 AS one FROM turns_read WHERE session_id = ? AND turn_id = ? AND reverted = 1"),
     maxGseq: db.query<{ gseq: number | null }, []>("SELECT MAX(gseq) AS gseq FROM global_events"),
     insertGlobal: db.query("INSERT INTO global_events(gseq, type, at, payload) VALUES (?, ?, ?, ?)"),
     upsertUsage: db.query(`
@@ -555,10 +599,10 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
   const agentCommands = createAgentCommandRecords(db, now)
   const continuity = createContinuityRecords(db)
   const parity = createParityRecords(db)
-  const sessionBackground = createSessionBackgroundRecords(db, now)
-  const recall = createSessionRecallRecords(db, eventObjects.load)
-  const sessionStats = createSessionStatsRecords(db)
-  const sessionSearch = createSessionSearch(db, eventObjects.load)
+  const sessionBackground = createSessionBackgroundRecords(db, now, sealedTurns)
+  const recall = createSessionRecallRecords(db, eventObjects.load, (sessionId, filter) => sealedTurns.thaw(sessionId, filter ? { filter } : {}))
+  const sessionStats = createSessionStatsRecords(db, (sessionId, filter) => sealedTurns.thawOwn(sessionId, { filter }), (sessionId) => sealedTurns.summary(sessionId))
+  const sessionSearch = createSessionSearch(db, eventObjects.load, sealedTurns)
   const automationLedger = createAutomationLedger(db)
   const workflowJournal = createWorkflowJournal(db)
   // Existing projections can seed available evidence, never reconstruct their missing event history.
@@ -590,9 +634,16 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
   const goals = createGoals({ db, now })
   const usagePauses = createUsagePauses(db)
   const acpSettings = createAcpSettings(options.dir)
+  /**
+   * The validated view of the saved settings text. The daemon reads settings over a thousand times between start and the
+   * end of a first turn, and parsing and validating every key each time made tens of MB of garbage per turn. The row is
+   * still read on every call, so a write from any process is seen at once.
+   */
+  let settingsView: { payload: string | undefined; clean: Record<string, unknown> } | undefined
   /** `current` with `patch` merged (`null` removes a key) and validated; `saveAcp` writes the ACP part, which lives in its own file. */
   const mergedSettings = (current: Settings, patch: Record<string, unknown>) => {
     const next: Record<string, unknown> = { ...current }
+    patch = currentSettingKeys(patch)
     delete next.acpAgents
     const saveAcp = "acpAgents" in patch ? acpSettings.prepare(patch.acpAgents) : undefined
     for (const [key, value] of Object.entries(patch)) {
@@ -635,6 +686,7 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
     q.insertEvent.run(event.sessionId, event.seq, event.type, event.at, compactProfile(compactEnvelope(packed, event), event.type))
     deltaFold.fold(event)
     transientEvents.record(event)
+    if (event.type === "turn.completed" || event.type === "turn.failed" || event.type === "turn.cancelled" || event.type === "turn.interrupted") sealedTurns.noteEnd(event.sessionId)
     q.setSeq.run(event.seq, event.at, event.sessionId)
     if (event.type === "item.started" && TRACKED_ITEM_KINDS.has(event.kind)) {
       let items = openItems.get(event.sessionId)
@@ -721,8 +773,9 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
 
   /** Files in the blob store that no `blobs` row owns (abandoned uploads, partial writes), old enough to be safe. */
   function strayFiles(graceMs = STRAY_GRACE_MS) {
-    // An image attached to an unsent draft has no `blobs` row yet; it is kept like an owned one.
-    const known = new Set(db.query<{ sha256: string }, []>(`SELECT sha256 FROM blobs UNION SELECT * FROM (${draftBlobsSql})`).all().map((row) => row.sha256))
+    // An image attached to an unsent draft or to a message still waiting in the queue has no `blobs` row yet; it is kept like an owned one.
+    const known = new Set(db.query<{ sha256: string }, []>(`SELECT sha256 FROM blobs UNION SELECT * FROM (${draftBlobsSql})
+      UNION SELECT json_extract(value, '$.sha256') FROM queue_items, json_each(queue_items.attachments)`).all().map((row) => row.sha256))
     const cutoff = Date.now() - graceMs
     return blobs.scan().filter((file) => !known.has(file.name) && file.mtimeMs <= cutoff)
   }
@@ -768,6 +821,10 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
     for (const row of db.query<{ session_id: string; id: string; objective_file: string | null }, []>("SELECT g.session_id, g.id, g.objective_file FROM goals g JOIN sessions s ON s.id = g.session_id").all()) keep(row.session_id, row.id, row.objective_file)
     // History is capped in the goals table; its session events still own older objective files.
     for (const row of db.query<{ session_id: string; id: string; file: string | null }, []>("SELECT e.session_id, json_extract(e.payload, '$.goal.goalId') AS id, json_extract(e.payload, '$.goal.objectiveFile') AS file FROM events e JOIN sessions s ON s.id = e.session_id WHERE e.type = 'goal.changed'").all()) keep(row.session_id, row.id, row.file)
+    for (const row of sealedTurns.everyRow(["goal.changed"])) {
+      const goal = (JSON.parse(row.payload) as { goal?: { goalId?: string; objectiveFile?: string } }).goal
+      keep(row.session_id, goal?.goalId as string, goal?.objectiveFile ?? null)
+    }
     return files.map((file) => ({ ...file, orphan: !liveFiles.has(file.file) }))
   }
 
@@ -809,7 +866,7 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
   convertFiles(true)
   return {
     sessionSink: { append: (draft: SessionEventDraft) => appendSession(draft) },
-    projectSync: createProjectSyncRecords(db, appendSession, engineHistory, eventObjects.load, deltaFold),
+    projectSync: createProjectSyncRecords(db, appendSession, engineHistory, eventObjects.load, deltaFold, sealedTurns),
     automationLedger,
     messages,
     /** Revision, model history and history marks commit together; no half-edited conversation. */
@@ -828,7 +885,7 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
         return appendSession(draft) as import("@mendcode/protocol").MessageRevision
       })()
     },
-    permissionRecords: createPermissionRecords(db, now, eventObjects.load),
+    permissionRecords: createPermissionRecords(db, now, eventObjects.load, sealedTurns),
     globalSink: { append: (draft: GlobalEventDraft) => appendGlobal(draft) },
     createSession,
     /** A validated transcript enters atomically, with fresh IDs and its original event times. */
@@ -1033,6 +1090,15 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
           runId,
         )
         return this.get(runId)
+      },
+      /**
+       * Closes runs a stopped daemon left `running` (a crash or kill never reached `finish`), which would refuse every later run of
+       * the project. Returns the directories and the ids closed.
+       */
+      abandonRunning(error: string): Array<{ runId: number; directory: string }> {
+        const rows = db.query<{ id: number; directory: string }, []>("SELECT id, directory FROM dream_runs WHERE status = 'running'").all()
+        if (rows.length) db.query("UPDATE dream_runs SET status = 'failed', ended_at = ?, error = ? WHERE status = 'running'").run(now(), error.slice(0, 500))
+        return rows.map((row) => ({ runId: row.id, directory: row.directory }))
       },
       /** One run with its report. */
       get(runId: number): DreamRun | undefined {
@@ -1254,17 +1320,9 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
       },
       /** Runtime view only; unsupported entries remain in storage for a compatible version. */
       get(): Settings {
-        const row = db.query<{ payload: string }, []>("SELECT payload FROM settings WHERE id = 1").get()
-        let raw: Record<string, unknown> = {}
-        try {
-          const parsed: unknown = row ? JSON.parse(row.payload) : {}
-          if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) raw = parsed as Record<string, unknown>
-        } catch { /* The history keeps the original; a normal write will refuse to replace corrupt JSON. */ }
-        const clean: Record<string, unknown> = {}
-        for (const [key, value] of Object.entries(raw)) {
-          const kept = savedSetting(key, value)
-          if (Settings.safeParse({ [key]: kept }).success) clean[key] = kept
-        }
+        const payload = db.query<{ payload: string }, []>("SELECT payload FROM settings WHERE id = 1").get()?.payload
+        if (!settingsView || settingsView.payload !== payload) settingsView = { payload, clean: validSettings(payload) }
+        const clean = structuredClone(settingsView.clean)
         const acpAgents = acpSettings.get()
         delete clean.acpAgents
         if (Object.keys(acpAgents).length) clean.acpAgents = acpAgents
@@ -1276,7 +1334,7 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
         let raw: Record<string, unknown> = {}
         try { raw = row ? JSON.parse(row.payload) as Record<string, unknown> : {} } catch { return ["saved settings are not valid JSON"] }
         const lines: string[] = []
-        for (const [key, value] of Object.entries(raw)) {
+        for (const [key, value] of Object.entries(currentSettingKeys(raw))) {
           if (key === "features" && value && typeof value === "object" && !Array.isArray(value)) {
             for (const id of ["opencode", "cursor"]) if (Object.hasOwn(value, id)) lines.push(`unknown feature ${id}: ignored`)
           }
@@ -1295,12 +1353,14 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
       /** Merges a patch; `null` removes a key. Throws a ZodError when the result is invalid. */
       set(patch: Record<string, unknown>): Settings {
         const current = this.get()
+        patch = currentSettingKeys(patch)
         const { valid, saveAcp } = mergedSettings(current, patch)
         saveAcp?.()
         db.transaction(() => {
           const row = db.query<{ payload: string }, []>("SELECT payload FROM settings WHERE id = 1").get()
           const raw = row ? JSON.parse(row.payload) as Record<string, unknown> : {}
           if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("Invalid stored settings; restore a backup before saving")
+          for (const [old, now] of Object.entries(RENAMED_SETTINGS)) if (now in patch) delete raw[old]
           for (const [key, value] of Object.entries(patch)) {
             if (key === "acpAgents") continue
             if (value === null) delete raw[key]
@@ -1358,6 +1418,8 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
      */
     forkConversation(from: SessionId, to: SessionId, options: { throughTurnId: string; cuts: Record<string, number>; beforeSeq?: number }) {
       return db.transaction(() => {
+        // A fork's transcript points at its parent's rows; sealed turns go back to rows first (and never seal again while shared).
+        sealedTurns.unseal(from)
         let messages = 0
         for (const engine of engineHistory.engines(from)) {
           const cut = options.cuts[engine]
@@ -1474,15 +1536,22 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
       return db.query<{ id: SessionId }, [string]>("SELECT id FROM sessions WHERE parent_id = ? ORDER BY updated_at DESC").all(sessionId).map((row) => row.id)
     },
     itemStart(sessionId: SessionId, itemId: string): Extract<SessionEvent, { type: "item.started" }> | undefined {
-      const row = db.query<OwnEventRow, [string, string]>("SELECT seq, type, at, payload FROM events_read WHERE session_id = ? AND type = 'item.started' AND json_extract(payload, '$.itemId')= ? ORDER BY seq LIMIT 1").get(sessionId, itemId)
+      const row = sealedTurns.withId(sessionId, "itemId", itemId, ["item.started"])[0]
+        ?? db.query<OwnEventRow, [string, string]>("SELECT seq, type, at, payload FROM events_read WHERE session_id = ? AND type = 'item.started' AND json_extract(payload, '$.itemId')= ? ORDER BY seq LIMIT 1").get(sessionId, itemId)
       return row ? eventFromColumns<Extract<SessionEvent, { type: "item.started" }>>(sessionId, row.seq, row.at, row.type, row.payload) : undefined
     },
     /** The assistant message items that started in event numbers `fromSeq` up to (not including) `toSeq`, oldest first. */
     agentMessageIds(sessionId: SessionId, fromSeq: number, toSeq?: number): string[] {
-      return db
+      const sealed = sealedTurns.rows(sessionId, fromSeq - 1, Math.min((toSeq ?? Number.MAX_SAFE_INTEGER) - 1, sealedTurns.sealedThrough(sessionId)))
+        .flatMap((row) => {
+          if (row.type !== "item.started") return []
+          const fields = JSON.parse(row.payload) as { itemId?: string; kind?: string }
+          return fields.kind === "agent_message" && fields.itemId ? [fields.itemId] : []
+        })
+      return sealed.concat(db
         .query<{ itemId: string }, [string, number, number]>("SELECT json_extract(payload, '$.itemId') AS itemId FROM events_read WHERE session_id = ? AND type = 'item.started' AND json_extract(payload, '$.kind') = 'agent_message' AND seq >= ? AND seq < ? ORDER BY seq")
         .all(sessionId, fromSeq, toSeq ?? Number.MAX_SAFE_INTEGER)
-        .map((row) => row.itemId)
+        .map((row) => row.itemId))
     },
     lastTurnStatus(sessionId: SessionId) {
       return db.query<{ status: string }, [string]>("SELECT status FROM turns_read WHERE session_id = ? AND reverted = 0 ORDER BY seq DESC LIMIT 1").get(sessionId)?.status
@@ -1600,6 +1669,7 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
           ...(row.kind === "shell" ? { shell: true as const } : {}),
           ...(() => {
             const payload = db.query<{ payload: string }, [string, string]>("SELECT payload FROM events WHERE session_id = ? AND type = 'queue.added' AND json_extract(payload, '$.queueId') = ? ORDER BY seq DESC LIMIT 1").get(sessionId, row.queue_id)?.payload
+              ?? sealedTurns.withId(sessionId, "queueId", row.queue_id, ["queue.added"]).at(-1)?.payload
             const event = payload ? JSON.parse(payload) as Extract<SessionEvent, { type: "queue.added" }> : undefined
             return { ...(event?.selection ? { selection: event.selection } : {}), ...(event?.turnOptions ? { turnOptions: event.turnOptions } : {}),...(event?.displayText !== undefined ? { displayText: event.displayText } : {}), ...(event?.messageId ? { messageId: event.messageId } : {}), ...(row.kind === "compact" && event?.instructions ? { instructions: event.instructions } : {}), ...(row.kind === "shell" && event?.local ? { local: true as const } : {}) }
           })(),
@@ -1611,13 +1681,13 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
     /** Replay for reconnect: exactly the events after `afterSeq`, in order (I4). */
     readAfter(sessionId: SessionId, afterSeq: number, limit = 1000): SessionEvent[] {
       if (q.hasTranscriptPrefix.get(sessionId)) return q.readAfter.all(sessionId, afterSeq, limit).map((row) => eventFromRow(row, eventObjects.load))
-      return q.readOwnAfter.all(sessionId, afterSeq, limit).map(ownEvent(sessionId))
+      return ownAfter(sessionId, afterSeq, limit).map(ownEvent(sessionId))
     },
     readExactAfter(sessionId: SessionId, afterSeq: number, limit = 1000): SessionEvent[] {
       const through = afterSeq + Math.max(1, Math.min(limit, 1000))
       const physical = q.hasTranscriptPrefix.get(sessionId)
         ? db.query<EventRow, [string, number, number]>("SELECT session_id, seq, type, at, payload FROM events_read WHERE session_id = ? AND seq > ? AND seq <= ? ORDER BY seq").all(sessionId, afterSeq, through).map(row => eventFromRow(row, eventObjects.load))
-        : q.readOwnRange.all(sessionId, afterSeq, through).map(ownEvent(sessionId))
+        : ownRange(sessionId, afterSeq, through).map(ownEvent(sessionId))
       const present = new Set(physical.map(event => event.seq))
       for (const event of deltaFold.archived(sessionId, afterSeq, through)) if (!present.has(event.seq)) physical.push(unpackEvent(event as unknown as Record<string, unknown>, eventObjects.load) as SessionEvent)
       if (!physical.length) {
@@ -1625,7 +1695,9 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
           SELECT min(seq) AS seq FROM events_read WHERE session_id = ?1 AND seq > ?2
           UNION ALL SELECT min(first_seq) AS seq FROM folded_deltas WHERE session_id = ?1 AND first_seq > ?2
         )`).get(sessionId, through)?.seq
-        if (next !== null && next !== undefined) return this.readExactAfter(sessionId, next - 1, limit)
+        const sealedNext = sealedTurns.after(sessionId, through, 1)[0]?.seq
+        const first = [next, sealedNext].filter((seq): seq is number => typeof seq === "number").sort((a, b) => a - b)[0]
+        if (first !== undefined) return this.readExactAfter(sessionId, first - 1, limit)
       }
       return physical.sort((a, b) => a.seq - b.seq)
     },
@@ -1635,12 +1707,19 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
         const rows = beforeSeq === undefined ? q.readNewest.all(sessionId, limit) : q.readBefore.all(sessionId, beforeSeq, limit)
         return rows.reverse().map((row) => eventFromRow(row, eventObjects.load))
       }
-      const rows = beforeSeq === undefined ? q.readOwnNewest.all(sessionId, limit) : q.readOwnBefore.all(sessionId, beforeSeq, limit)
-      return rows.reverse().map(ownEvent(sessionId))
+      return ownBefore(sessionId, beforeSeq, limit).map(ownEvent(sessionId))
     },
     /** Context inspection reads only usage payloads: large tool outputs never enter this report. */
     recentUsage(sessionId: SessionId, limit: number): Extract<SessionEvent, { type: "usage.recorded" }>[] {
-      return q.recentUsage.all(sessionId, Math.min(101, Math.max(1, limit))).reverse().map(ownEvent(sessionId)) as Extract<SessionEvent, { type: "usage.recorded" }>[]
+      const wanted = Math.min(101, Math.max(1, limit))
+      const rows = q.recentUsage.all(sessionId, wanted)
+      // Older usage of sealed turns (sealed-turns.ts), with the same reverted-turn exclusion.
+      if (rows.length < wanted) rows.push(...sealedTurns.newest(sessionId, (row) => {
+        if (row.type !== "usage.recorded") return false
+        const turnId = (JSON.parse(row.payload) as { turnId?: string }).turnId
+        return !turnId || !q.revertedTurn.get(sessionId, turnId)
+      }, wanted - rows.length))
+      return rows.reverse().map(ownEvent(sessionId)) as Extract<SessionEvent, { type: "usage.recorded" }>[]
     },
     putBlob(bytes: Uint8Array, mime: string) {
       return blobs.write(bytes, mime)
@@ -1801,6 +1880,7 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
     deleteSession(sessionId: SessionId) {
       openItems.delete(sessionId)
       transientEvents.forget(sessionId)
+      sealedTurns.forget(sessionId)
       return db.transaction(() => {
         dropSessionMemories(sessionId)
         db.query("DELETE FROM evolution_evidence WHERE session_id = ?").run(sessionId)
@@ -1822,6 +1902,19 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
       return result
     },
     /**
+     * Deletes blob files no row owns and no draft holds that are older than `graceMs` (a week by default): images pasted
+     * and never sent. Only files go; rows and sessions are untouched, so it is safe whenever the daemon is idle.
+     */
+    removeStrayBlobs(graceMs = STRAY_SWEEP_GRACE_MS) {
+      let freedBytes = 0
+      const strays = strayFiles(graceMs)
+      for (const file of strays) {
+        blobs.remove(file.name)
+        freedBytes += file.bytes
+      }
+      return { removed: strays.length, freedBytes }
+    },
+    /**
      * Where the disk goes. Aggregates only: one pass over events for per-session bytes (octet_length
      * reads the record header, not the payload), no per-row work in JS beyond the session count.
      */
@@ -1832,6 +1925,7 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
       const perSession = db
         .query<{ id: string; bytes: number }, []>(`SELECT id, SUM(bytes) AS bytes FROM (
           SELECT session_id AS id, SUM(octet_length(payload)) AS bytes FROM events GROUP BY session_id
+          UNION ALL SELECT session_id AS id, SUM(length(data)) AS bytes FROM turn_blocks GROUP BY session_id
           UNION ALL SELECT session_id AS id, SUM(length(data)) AS bytes FROM folded_deltas GROUP BY session_id
         ) GROUP BY id`)
         .all()
@@ -1933,7 +2027,7 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
       const base = { dryRun, olderThanDays: options.olderThanDays, sessionsRemoved: ids.length, eventsRemoved, protectedSessions: old.length - eligible.length, goalFilesRemoved: orphanObjectives.length }
       if (dryRun) {
         const strays = strayFiles(options.strayGraceMs)
-        const estimate = sum("SELECT SUM(octet_length(payload)) AS n FROM events WHERE session_id IN (SELECT id FROM clean_ids)") + sum("SELECT SUM(octet_length(payload)) AS n FROM engine_messages WHERE session_id IN (SELECT id FROM clean_ids)") + Number(freed?.bytes ?? 0) + strays.reduce((total, file) => total + file.bytes, 0) + orphanObjectives.reduce((total, file) => total + file.bytes, 0)
+        const estimate = sum("SELECT SUM(octet_length(payload)) AS n FROM events WHERE session_id IN (SELECT id FROM clean_ids)") + sum("SELECT SUM(length(data)) AS n FROM turn_blocks WHERE session_id IN (SELECT id FROM clean_ids)") + sum("SELECT SUM(octet_length(payload)) AS n FROM engine_messages WHERE session_id IN (SELECT id FROM clean_ids)") + Number(freed?.bytes ?? 0) + strays.reduce((total, file) => total + file.bytes, 0) + orphanObjectives.reduce((total, file) => total + file.bytes, 0)
         db.run("DELETE FROM clean_ids")
         return { ...base, blobsRemoved: (freed?.n ?? 0) + strays.length, bytesReclaimed: estimate, vacuumed: false, sessionIds: ids }
       }
@@ -1984,9 +2078,32 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
       }
       return { ...result, bytesReclaimed: Math.max(0, before - sizeOnDisk()), vacuumed: options.vacuum === true }
     },
+    /**
+     * Removes one `session.orchestration` row a newer row of the same card replaced (a loop's unread notice). The card is keyed by
+     * its group id, so clients that saw the old row update it in place; readers of the log see only the newer one. A row another
+     * session's transcript points at stays.
+     */
+    dropSupersededCard(sessionId: SessionId, seq: number): boolean {
+      return db.query(`DELETE FROM events WHERE session_id = ?1 AND seq = ?2 AND type = 'session.orchestration'
+        AND NOT EXISTS (SELECT 1 FROM transcript_prefix p WHERE p.parent_id = ?1 AND p.parent_seq = ?2)`).run(sessionId, seq).changes > 0
+    },
     /** Deletes the foreground and queue snapshots a settled session superseded (transient-events.ts); the daemon calls it when idle. */
     pruneSettledEvents(limit = 20) {
       return transientEvents.prune(limit)
+    },
+    /** Moves settled turns into blocks (sealed-turns.ts), after the snapshot pruning; the daemon calls it when idle. */
+    sealSettledTurns(limit = 50) {
+      // A completion folds its deltas when it is written; this retries the turn's items before their rows move into a block.
+      const result = sealedTurns.seal(limit, (sessionId, rows) => {
+        let removed = 0
+        for (const row of rows) if (row.type === "item.completed") removed += deltaFold.fold(eventFromColumns(sessionId, row.seq, row.at, row.type, row.payload, eventObjects.load))
+        return removed
+      })
+      // Sealing a backlog frees most of the events table: hand it back to the file system a bounded step at a time (about
+      // 50 ms per step on a laptop) until no free page is left, instead of keeping the file at its old size.
+      if (num1("PRAGMA auto_vacuum") !== 2 || !num1("PRAGMA freelist_count")) return result
+      db.run(`PRAGMA incremental_vacuum(${RECLAIM_PAGES_PER_STEP})`)
+      return { ...result, complete: result.complete && !num1("PRAGMA freelist_count") }
     },
     foldStoredDeltas(limit = 100) {
       const result = deltaFold.migrate(limit)

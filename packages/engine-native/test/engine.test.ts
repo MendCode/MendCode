@@ -163,6 +163,41 @@ describe("native engine loop", () => {
     }
   })
 
+  test("a patch approval is headed by the files it touches, not by the raw JSON of the patch, and carries the diff", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "native-preview-"))
+    try {
+      writeFileSync(join(dir, "a.ts"), "one\ntwo\nthree\n")
+      writeFileSync(join(dir, "b.ts"), "x\ny\n")
+      const patch = ["*** Begin Patch", "*** Update File: a.ts", "@@", "-two", "+TWO", "*** Update File: b.ts", "@@", "-y", "+Y", "*** End Patch"].join("\n")
+      const { provider } = scriptedProvider([callTool("apply_patch", { patch }), stop("ok")])
+      const engine = createNativeEngine({ provider, tools: [applyPatch], history: memoryHistory(), cwdFor: () => dir, system: () => "sys", compactionPrompt: "summarize" })
+      const { input, asked } = turn({ text: "patch", answers: [{ kind: "deny" }] })
+      await engine.runTurn(input)
+      const detail = (asked[0] as { detail: string }).detail
+      expect(detail.split("\n")[0]).toBe("a.ts, b.ts")
+      expect(detail).not.toContain("Begin Patch\\n")
+      expect(detail).not.toContain('{"patch"')
+      expect(detail).toContain("*** Update File: a.ts")
+      expect(detail).toContain("+TWO")
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("a patch whose preview cannot be computed keeps the arguments as its detail", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "native-preview-"))
+    try {
+      const patch = ["*** Begin Patch", "*** Update File: missing.ts", "@@", "-x", "+y", "*** End Patch"].join("\n")
+      const { provider } = scriptedProvider([callTool("apply_patch", { patch }), stop("ok")])
+      const engine = createNativeEngine({ provider, tools: [applyPatch], history: memoryHistory(), cwdFor: () => dir, system: () => "sys", compactionPrompt: "summarize" })
+      const { input, asked } = turn({ text: "patch", answers: [{ kind: "deny" }] })
+      await engine.runTurn(input)
+      expect((asked[0] as { detail: string }).detail).toStartWith('{"patch":')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
   test("a preview that cannot be computed leaves the approval detail as the plain path", async () => {
     const dir = mkdtempSync(join(tmpdir(), "native-preview-"))
     try {
@@ -489,6 +524,20 @@ describe("native engine loop", () => {
     expect(requests[1]!.messages.at(-1)).toMatchObject({ output: "unknown tool: task", isError: true })
   })
 
+  test("an internal read-only run (a PR review) in plan mode is refused a change without any word of plans or plan_submit", async () => {
+    const log: string[] = []
+    const { provider, requests } = scriptedProvider([callTool("write", { path: "a.ts" }), stop("done")])
+    const { input, asked } = turn({ text: "review it", mode: () => "plan" })
+    await createNativeEngine({ provider, tools: [writeTool(log)], history: memoryHistory(), cwdFor: () => "/repo", system: () => "sys", compactionPrompt: "s" }).runTurn({ ...input, readOnlyRun: true })
+    const refusal = requests[1]!.messages.at(-1) as { output: string; isError: boolean }
+    expect(refusal.isError).toBe(true)
+    expect(refusal.output).toContain("this run is read-only")
+    expect(refusal.output).not.toMatch(/plan/i)
+    expect(requests[0]!.system).not.toMatch(/plan mode/i)
+    expect(asked).toHaveLength(0)
+    expect(log).toEqual([])
+  })
+
   test("plan mode: changes are refused, the plan is shown and approval leaves plan mode so the build can proceed", async () => {
     const log: string[] = []
     let mode: PermissionMode = "plan"
@@ -507,9 +556,10 @@ describe("native engine loop", () => {
     await createNativeEngine({ provider, tools: [writeTool(log)], history: memoryHistory(), cwdFor: () => "/repo", system: () => "sys", compactionPrompt: "s" }).runTurn(input)
     expect(requests[1]!.messages.at(-1)).toMatchObject({ isError: true })
     expect((requests[1]!.messages.at(-1) as { output: string }).output).toContain("plan mode is read-only")
-    expect(asked.map((a) => a.title)).toEqual(["Review plan", "Edit files"])
+    // Approving the plan takes full access, so the edit that follows runs without a second question.
+    expect(asked.map((a) => a.title)).toEqual(["Review plan"])
     expect(events.some((e) => e.type === "item.delta" && e.text.includes("1. edit a.ts"))).toBe(true)
-    expect(mode as PermissionMode).toBe("ask")
+    expect(mode as PermissionMode).toBe("full")
     expect(log).toEqual(["a.ts"])
   })
 

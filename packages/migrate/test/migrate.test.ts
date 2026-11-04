@@ -293,9 +293,9 @@ describe("refusals", () => {
     expect(fingerprint(env.from)).toEqual(before)
   })
 
-  test("a target inside ~/.mendcode or ~/.local/share/mendcode is refused", async () => {
+  test("a target inside ~/.mendcode-v1 (v1's folder set aside) or ~/.local/share/mendcode is refused", async () => {
     const env = setup()
-    for (const v1Home of [".mendcode", path.join(".local", "share", "mendcode")]) {
+    for (const v1Home of [".mendcode-v1", path.join(".local", "share", "mendcode")]) {
       const dir = path.join(env.home, v1Home, "next")
       await expect(runMigration({ from: env.from, dir, home: env.home })).rejects.toMatchObject({ code: "dir-is-v1" })
       expect(existsSync(dir)).toBe(false)

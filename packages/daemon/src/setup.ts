@@ -2,7 +2,7 @@ import { MODEL_ROLES, type ModelChoice, type SetupPreset, type SetupReport } fro
 import type { Store } from "@mendcode/store"
 import { canonicalDir } from "@mendcode/tools"
 import { invalidChoice, modelEngine, resolveModel, type ModelCatalog } from "./models"
-import { rolesFor } from "./profiles"
+import { rolesFor } from "./areas"
 import type { createBudgets } from "./budgets"
 import { mkdirSync, renameSync, writeFileSync } from "node:fs"
 import path from "node:path"

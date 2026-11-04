@@ -209,13 +209,15 @@ describe("/permissions in the app", () => {
     expect(h.text()).toContain("none yet")
   })
 
-  test("a digit sets the mode through the daemon; m goes to /model; esc returns to the chat", async () => {
+  test("a digit sets the mode through the daemon; m goes to /model; esc goes back to /permissions, then the chat", async () => {
     const h = await open()
     await h.key("4")
     expect(h.sent.filter((command) => command.type === "session.permission.set")).toEqual([{ type: "session.permission.set", sessionId: h.sessionId, mode: "smart" }])
     await h.key("m")
     await Bun.sleep(15)
     expect(h.app.page).toBe("model")
+    await h.key("\x1b")
+    expect(h.app.page).toBe("permissions")
     await h.key("\x1b")
     expect(h.app.page).toBe("chat")
   })

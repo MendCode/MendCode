@@ -262,7 +262,7 @@ describe("status surface in the app", () => {
     advance(STALL_AFTER_MS + 5_000)
     app.render()
     expect(all()).not.toContain("no response")
-    expect(all()).toContain("Waiting on T3 engine spike (resume)...")
+    expect(all()).toContain("Waiting on T3 engine spike (resume)…")
   })
 
   test("an engine's background agent joins the agents strip in its own colour, like any sub-agent; a background command stays a plain row", async () => {

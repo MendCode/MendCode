@@ -14,7 +14,7 @@ type Entry = { signature: string; overrides: PromptOverrides }
 
 /**
  * `SYSTEM.md`, `APPEND_SYSTEM.md` and `COMPACTION.md` of the extension layers: the last layer that has a file wins,
- * so the project's own folder beats its packages, which beat the user's folder. Reads are cached by mtime and size,
+ * so the project's own folder beats its profiles, which beat the user's folder. Reads are cached by mtime and size,
  * so a turn costs a few `stat` calls and an edited file applies to the next model call.
  */
 export function createPromptFiles({ layersFor, enabled }: { layersFor(directory: string): ExtensionLayer[]; enabled: boolean }) {

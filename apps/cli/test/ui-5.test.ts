@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test"
-import { CUSTOMIZE_ROWS } from "../src/view/customize-page"
+import { CUSTOMIZE_ROWS, customizeSteps } from "../src/view/customize-page"
 import { textWidth } from "../src/view/wrap"
 import { cleanTemps, appHarness, tempDir } from "./session-ui-harness"
 import { ui4Harness } from "./ui-4-harness"
@@ -50,7 +50,7 @@ test("Usage clock can be disabled and persists in an isolated terminal profile",
     expect(h.text().join("\n")).toContain("┌─ Clock")
     await h.app.onKey("\x1b")
     await h.type("/customize\r")
-    for (let i = 0; i < CUSTOMIZE_ROWS.indexOf("usageClock"); i++) await h.app.onKey("\x1b[B")
+    for (let i = 0; i < customizeSteps("usageClock", h.app.tuiProfile, { mode: h.app.viewMode }); i++) await h.app.onKey("\x1b[B")
     await h.app.onKey(" ")
     await h.app.onKey("\x1b")
     await h.type("/usage\r")

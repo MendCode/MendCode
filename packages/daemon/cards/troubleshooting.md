@@ -11,8 +11,8 @@ Look before you change anything (read-only):
   Read logs only through daemon logs. /fetch shows project and install details, /mend-assets the runtime assets, /intro replays the intro, /changelog what changed.
 
 Fix, each one the user's decision:
-  A bad extension, package, hook, MCP server or project tool: {{program}} --safe-mode starts without any of them; then disable the culprit in /extensions or /packages, or MENDCODE_EXTENSIONS=0, MENDCODE_HOOKS=0, --pure. /doctor names what failed.
-  /restart: this terminal, same chat, after the running response. /reload: extensions, packages, keys, themes, no restart. Daemon not answering: {{program}} daemon restart (--force interrupts work: say so). Never kill others' processes.
+  A bad extension, profile, hook, MCP server or project tool: {{program}} --safe-mode starts without any of them; then disable the culprit in /extensions or /profiles, or MENDCODE_EXTENSIONS=0, MENDCODE_HOOKS=0, --pure. /doctor names what failed.
+  /restart: this terminal, same chat, after the running response. /reload: extensions, profiles, keys, themes, no restart. Daemon not answering: {{program}} daemon restart (--force interrupts work: say so). Never kill others' processes.
   Keys, Shift+Enter, tmux: /terminal-setup. Screen reader: /accessible, --accessible, MENDCODE_ACCESSIBLE=1.
   First run or no model: /setup lists what it found (ChatGPT login, Claude Code, Codex, API keys) and the command that fixes each; /connect adds a key; /tutorial tours the terminal.
 

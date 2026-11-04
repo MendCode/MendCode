@@ -50,7 +50,7 @@ export function ui5Harness(width = 160, height = 45) {
       case "memory.graph": result = { facts: [], links: [], categories: [], partial: false }; break
       case "mcp.status": result = { servers: [{ name: "local-search", command: "./local-mcp", enabled: true, state: "running", tools: 4, pid: 42, stderr: ["Ready"] }], issues: [] }; break
       case "tools.list": result = { directory, tools: [{ name: "checks", toolName: "custom__checks", source: "project", file: `${directory}/checks.json`, command: ["./checks"], description: "Run local checks", trusted: true }], issues: [] }; break
-      case "packages.list": result = { directory, packages: [{ name: "local-tools", key: "project:local-tools", source: "project", dir: `${directory}/local-tools`, enabled: true, manifest: { name: "local-tools", version: "1.0.0", description: "Local development tools" }, contents: { tools: 2, skills: 1, commands: 0, themes: 0, mcp: false } }] }; break
+      case "profiles.list": result = { directory, packages: [{ name: "local-tools", key: "project:local-tools", source: "project", dir: `${directory}/local-tools`, enabled: true, manifest: { name: "local-tools", version: "1.0.0", description: "Local development tools" }, contents: { tools: 2, skills: 1, commands: 0, themes: 0, mcp: false } }] }; break
       case "loop.list": result = { loops }; break
       case "workflow.list": result = { workflows }; break
       case "background.list": result = { tasks: [{ sessionId, id: "bg-checks", cwd: directory, command: "bun test", status: "running", startedAt: NOW - 1000 }] }; break

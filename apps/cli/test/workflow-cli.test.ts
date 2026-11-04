@@ -168,7 +168,7 @@ describe("workflow argument parsing", () => {
   test("help lists the workflow commands and the needs-input exit code", () => {
     expect(parsed("workflow", "--help")).toMatchObject({ kind: "help", topic: "workflow" })
     expect(helpText("workflow")).toStartWith("usage: mendcode workflow")
-    expect(helpText()).toContain("mendcode workflow <command>")
+    expect(helpText()).toContain("workflow <command>")
     expect(helpText("workflow")).toContain("accept <id> --reason")
     expect(helpText("workflow")).toContain("save <file.json|name>")
     expect(helpText("loop")).not.toContain("revision")

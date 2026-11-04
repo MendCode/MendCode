@@ -919,7 +919,7 @@ function layeredFlowchart(flow: Flow, maxWidth: number, options: LayoutOptions):
 /** The same flow with every node label re-wrapped to a narrower column, for a second attempt at a tight width. */
 function narrowed(flow: Flow, labelWidth: number): Flow {
   const nodes = new Map<string, FlowNode>()
-  for (const [id, node] of flow.nodes) nodes.set(id, { ...node, lines: wrap(node.lines.join(" "), labelWidth) })
+  for (const [id, node] of flow.nodes) nodes.set(id, { ...node, lines: node.lines.flatMap((line) => wrap(line, labelWidth)) })
   return { ...flow, nodes }
 }
 
@@ -932,12 +932,11 @@ function sceneFlowchart(flow: Flow, maxWidth: number): { lines: Line[] } | { not
 }
 
 /**
- * Layered layout first, at the usual spacing; when that overflows the width, once more with tight spacing and
- * narrower boxes. A flowchart without subgraphs that still does not fit keeps the note: the chat shows its source
- * and `/diagram` draws it at full size. One with subgraphs was always drawn in the chat (the stacked scene, before
- * clusters were laid out), so it goes on: a left-to-right flow is laid out top-down (RL as BT), which needs the
- * width of one layer instead of the whole chain, and the stacked single-column scene comes only when nothing
- * layered fits. A diagram that cannot be drawn at all keeps the first attempt's note.
+ * Drawn whenever it can be, in this order: the layered layout at the usual spacing; tight spacing with node labels
+ * wrapped at 16 cells (a `<br/>` stays a line break); a left-to-right flow laid out top-down (RL as BT), which needs
+ * the width of one layer instead of the whole chain, at both spacings; and, for a flowchart with subgraphs, the
+ * stacked single-column scene. Only when none fits is the source shown, with a note that says every step was tried.
+ * A diagram that cannot be drawn for another reason keeps the first attempt's note.
  */
 export function renderFlowchart(flow: Flow, maxWidth: number): { lines: Line[] } | { note: string } {
   if (flow.nodes.size > MAX_NODES) return { note: MERMAID_NOTES.tooComplex }
@@ -947,13 +946,14 @@ export function renderFlowchart(flow: Flow, maxWidth: number): { lines: Line[] }
   if (!retry) return first
   const compact = layeredFlowchart(narrowed(flow, 16), maxWidth, { spacing: 3 })
   if ("lines" in compact) return compact
-  if (!flow.groups?.size) return first
   if (flow.direction === "LR" || flow.direction === "RL") {
     const turned: Flow = { ...flow, direction: flow.direction === "LR" ? "TD" : "BT" }
     for (const attempt of [layeredFlowchart(turned, maxWidth, { spacing: 14 }), layeredFlowchart(narrowed(turned, 16), maxWidth, { spacing: 3 })]) if ("lines" in attempt) return attempt
   }
+  const final = first.note !== MERMAID_NOTES.tooWide ? first : { note: flow.direction === "LR" || flow.direction === "RL" ? MERMAID_NOTES.tooWideRotated : MERMAID_NOTES.tooWideTried }
+  if (!flow.groups?.size) return final
   const stacked = sceneFlowchart(narrowed(flow, 24), maxWidth)
-  return "lines" in stacked ? stacked : first
+  return "lines" in stacked ? stacked : final
 }
 
 // ---------------------------------------------------------------------------------------------

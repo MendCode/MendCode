@@ -1,6 +1,7 @@
 import { afterEach, expect, test } from "bun:test"
 import { appHarness, cleanTemps, conversation, tempDir } from "./session-ui-harness"
 import { DEFAULT_TUI_PROFILE, writeTuiProfile } from "../src/view/tui-profile"
+import { textWidth } from "../src/view/wrap"
 
 afterEach(cleanTemps)
 
@@ -15,6 +16,8 @@ async function chat(shells: Array<Record<string, unknown>> = []) {
       if (command.type === "session.children") return { ok: true, result: { sessions: [] } } as never
       if (command.type === "task.list") return { ok: true, result: { tasks: [] } } as never
       if (command.type === "background.list") return { ok: true, result: { tasks: shells.map((shell) => ({ sessionId: h.sessionId, ...shell })) } } as never
+      if (command.type === "user.submit") return { ok: true, result: { queueId: "queue_thread" } } as never
+      if (command.type === "queue.remove") return { ok: true } as never
       return undefined
     },
   })
@@ -81,7 +84,7 @@ test("an open background sub-agent moves after its parent's turn ended: its mode
   const text = screen(h)
   expect(text).toMatch(/general-purpose · claude-sonnet-5-5 · await/)
   expect(text).toContain("Checking the size next.")
-  expect(text).toMatch(/read \/work\/a\.txt\.\.\./)
+  expect(text).toMatch(/read \/work\/a\.txt…/)
 })
 
 test("a sub-agent that ended says what it took under its call and is no longer listed as at work", async () => {
@@ -271,7 +274,7 @@ test("an open sub-agent's thread has a header: its name, its place among its sib
   expect(head).toBeGreaterThan(-1)
   expect(rows[head]).toContain("1 of 2 · ←→ · ↑ back")
   expect(rows[head + 1]).toMatch(/general-purpose · await · 1 tool · [^·]+ · read \/work\/a\.txt/)
-  expect(rows[head + 2]).toMatch(/│\s+─{20,}\s*$/)
+  expect(rows[head + 2]).toMatch(/│\s+─{20,}\s*│$/)
 })
 
 test("with background commands listed under the sub-agents, a click on the first row still opens the first sub-agent, and a command's row opens /ps on it", async () => {
@@ -376,4 +379,88 @@ test("a stopped sub-agent's row goes once a turn begun after the stop has ended;
   talk.emit({ type: "turn.completed", turnId: "turn_2" })
   h.app.render()
   expect(screen(h)).not.toContain("stopped by you")
+})
+
+test("an open sub-agent's thread has its own prompt and its own queue: the conversation's draft and queued messages wait, untouched, until it is back", async () => {
+  const { h, talk } = await chat()
+  talk.emit({ type: "queue.added", queueId: "queue_main", text: "queued in the conversation", attachments: [] })
+  talk.emit({ type: "queue.changed", queue: [{ queueId: "queue_main", preview: "queued in the conversation", attachments: 0 }] })
+  await h.type("main draft")
+  await h.type("\x18\x1b[B")
+  h.app.render()
+  expect(screen(h)).toContain("1 of 2 · ←→ · ↑ back")
+  expect(h.app.editor.text).toBe("")
+  expect(screen(h)).not.toContain("queued in the conversation")
+  // ↑ on the thread's empty prompt has nothing of its own queued: it returns to the conversation instead of taking its message.
+  await h.type("\x1b[A")
+  h.app.render()
+  expect(h.sentOf("queue.remove")).toHaveLength(0)
+  expect(h.app.editor.text).toBe("main draft")
+  expect(screen(h)).toContain("queued in the conversation")
+  // A message sent from the thread is queued in the thread's view; alt+↑ there takes only it back.
+  await h.type("\x18\x1b[B")
+  await h.type("from the thread\r")
+  const sent = h.sentOf("user.submit").at(-1) as { text: string }
+  expect(sent.text).toBe("from the thread")
+  talk.emit({ type: "queue.added", queueId: "queue_thread", text: "from the thread", attachments: [] })
+  talk.emit({ type: "queue.changed", queue: [{ queueId: "queue_main", preview: "queued in the conversation", attachments: 0 }, { queueId: "queue_thread", preview: "from the thread", attachments: 0 }] })
+  h.app.render()
+  expect(screen(h)).toContain("from the thread")
+  expect(screen(h)).not.toContain("queued in the conversation")
+  await h.type("\x1b[1;3A")
+  expect(h.sentOf("queue.remove").map((command) => (command as { queueId: string }).queueId)).toEqual(["queue_thread"])
+  expect(h.app.editor.text).toBe("from the thread")
+  talk.emit({ type: "queue.changed", queue: [{ queueId: "queue_main", preview: "queued in the conversation", attachments: 0 }] })
+  // The thread's text never becomes the session's saved draft; once its prompt is empty, ↑ returns to the conversation as it was left.
+  expect(h.sentOf("draft.set").map((command) => (command as { text: string }).text)).not.toContain("from the thread")
+  await h.type("\x7f".repeat("from the thread".length))
+  await h.type("\x1b[A")
+  h.app.render()
+  expect(h.app.editor.text).toBe("main draft")
+  expect(screen(h)).toContain("queued in the conversation")
+})
+
+test("an open sub-agent has a full border, the Agents strip stays under it with that agent marked", async () => {
+  const { h, child } = await chat()
+  child("item_a", "item_a_say", "agent_message", { agentModel: "claude-opus-5-5-20260901" })
+  h.app.render()
+  const closed = h.text()
+  expect(closed.some((row) => row.includes("╭"))).toBe(false)
+  await h.type("\x18\x1b[B")
+  h.app.render()
+  const all = h.text()
+  const top = all.findIndex((row) => row.includes("╭─ sub-agent "))
+  const bottom = all.findIndex((row) => row.includes("╰"))
+  expect(top).toBeGreaterThanOrEqual(0)
+  expect(bottom).toBeGreaterThan(top + 3)
+  // The chat column is what follows the sidebar's rule; the border is that column's whole width.
+  const left = all[top]!.indexOf("╭")
+  const rows = all.map((row) => row.slice(left))
+  expect(rows[top]!.endsWith("╮")).toBe(true)
+  expect(rows[bottom]!.endsWith("╯")).toBe(true)
+  // Every row between the corners has both sides, and nothing is wider than the screen.
+  for (const row of rows.slice(top + 1, bottom)) {
+    expect(row.startsWith("│")).toBe(true)
+    expect(row.trimEnd().endsWith("│")).toBe(true)
+  }
+  expect(all.every((row) => textWidth(row) <= 110)).toBe(true)
+  // The bottom panel is still there, with the open agent marked.
+  const strip = rows.slice(bottom + 1).join("\n")
+  expect(strip).toMatch(/├▸Read a\.txt\s+await/)
+  expect(strip).toMatch(/└ Read b\.txt\s+await/)
+  // The prompt below it is not inside the border.
+  expect(rows.slice(bottom + 1).some((row) => row.includes("❭"))).toBe(true)
+  await h.type("\x1b[A")
+  h.app.render()
+  expect(h.text().some((row) => row.includes("╭") || row.includes("╰"))).toBe(false)
+})
+
+test("an open sub-agent that has ended stays in the strip", async () => {
+  const { h, talk, child } = await chat()
+  await h.type("\x18\x1b[B")
+  child("item_a", "item_a_end", "agent_message")
+  talk.emit({ type: "item.completed", itemId: "item_a_end", status: "ok", text: "done", meta: { agentParent: "item_a", agentEnd: true, toolCalls: 1, tokens: 1_000, durationMs: 100 } })
+  talk.emit({ type: "item.completed", itemId: "item_a", status: "ok", text: "done" })
+  h.app.render()
+  expect(screen(h)).toMatch(/▸Read a\.txt\s+await\s+done/)
 })

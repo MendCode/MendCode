@@ -21,6 +21,10 @@ Dream does not read whole transcripts. For each of the 12 newest sessions of the
 
 Secrets are redacted before anything is kept. A digest is cached and reused while its session has not changed (the session's last event number is the same and the digest format is the same); a session that changes gets a new one, and deleting a session deletes its digest. Digests are at most a few KB each.
 
+## Model and interruptions
+
+Dream uses the `dream` model role (`/model`); unset, it falls back to the `small` role and then to `main`, so a cheap `small` model runs the nightly pass without more setup. A run cut short because the daemon stopped (or was killed) is closed as `Interrupted` at the next start and run again once for its project, only while the schedule is on and within 36 hours; digests it already built are cached, so the second run starts where the first stopped. After a successful pass, exact duplicates among generated memories are archived when `memoryMaintenance` is `auto-consolidate`.
+
 ## Safety report
 
 Every run stores a report (`DreamRun.report`; `dream.list` carries it for the newest five runs, `dream.list` with `runId` returns any run's):

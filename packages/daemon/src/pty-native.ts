@@ -16,12 +16,12 @@ function executable(file: string) {
 
 /**
  * Whether this host can open a pseudo-terminal. macOS and Linux use `Bun.Terminal`. On Windows, ConPTY is reached the
- * same way only when the runtime exposes it and the user opts in with `MENDCODE_V2_CONPTY=1`; it is unverified there,
+ * same way only when the runtime exposes it and the user opts in with `MENDCODE_CONPTY=1` (or `MENDCODE_V2_CONPTY=1`); it is unverified there,
  * so it stays off by default and the model sees `shell` (PowerShell) only.
  */
 export function ptyAvailable({ platform = process.platform, env = process.env, terminal = typeof Bun.Terminal === "function" }: { platform?: string; env?: Record<string, string | undefined>; terminal?: boolean } = {}) {
   if (!terminal) return false
-  return platform !== "win32" || env.MENDCODE_V2_CONPTY === "1"
+  return platform !== "win32" || (env.MENDCODE_CONPTY || env.MENDCODE_V2_CONPTY) === "1"
 }
 
 export function nativePtyDriver(): PtyDriver {

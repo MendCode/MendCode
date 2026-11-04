@@ -1,6 +1,6 @@
 # View slots
 
-A user file or a package can replace how any named part of the terminal is drawn: messages, tool cards, the
+A user file or a profile can replace how any named part of the terminal is drawn: messages, tool cards, the
 approval box, the prompt frame, the bars, the home screen and more. Every slot follows one contract, and the
 built-in look is drawn through the same contract, so what a custom view receives is exactly what the default
 receives.
@@ -40,14 +40,14 @@ export default {
 - **User file**: `<data dir>/extensions/<name>.ts`. A session's own model may write the starter too (it is MendCode's template in a new file); `--force`, which replaces a view you already have, is refused from a session, and the code it then writes goes through `customize_ui`, which asks you. `mendcode view scaffold <slot>` (or `/customize` > Views >
   New view file) writes a commented starter, `view-<slot>.ts`, and never overwrites a file (`--force` does).
   `mendcode view list` prints every slot. Both work on files only and never start a daemon.
-- **Package**: a package's `extensions/` folder, like any terminal extension. A package that wants to own the look lists its views in `activate.views` (slot to module) and they load only while it owns the look ([packages](packages.md#make-your-own-mendcode-in-10-minutes)); `mendcode package new` writes two to start from, and `examples/packages/retro/` is a full reskin. A view that never returns cannot be interrupted from inside the process: the 4 ms budget and three strikes bound a view across frames, not inside one call; use `--safe-mode` to start without it.
+- **Profile**: a profile's `extensions/` folder, like any terminal extension. A profile that wants to own the look lists its views in `activate.views` (slot to module) and they load only while it owns the look ([profiles](packages.md#make-your-own-mendcode-in-10-minutes)); `mendcode profile new` writes two to start from, and `examples/profiles/retro/` is a full reskin. A view that never returns cannot be interrupted from inside the process: the 4 ms budget and three strikes bound a view across frames, not inside one call; use `--safe-mode` to start without it.
 - **Project files** load only where the project is trusted, the same rule as every project extension. Remote terminals
   and pure (`--safe-mode`) terminals never load extensions, so a peer or a remote session cannot install a view in
   another terminal.
 - **Hot reload**: edits are picked up by the daemon's existing watcher (`extensions.changed`); finished transcript
   rows are laid out again.
 - **`/customize` > Views** states above its rows that views are not sandboxed, and lists the slots that have a custom view (and the one you are on) with the owner
-  (`user <name>`, `project <name>`, `package <name>`, or built-in), the number of faults, the last error and the
+  (`user <name>`, `project <name>`, `profile <name>`, or built-in), the number of faults, the last error and the
   average time per call. Left/right pick a slot, Enter turns its custom view off or on (`disabledViews` in the
   profile), `r` resets it (clears faults and the off switch), and the next row writes a starter for the picked slot.
 
@@ -117,7 +117,7 @@ A custom `approval` or `question` view restyles; it cannot change what a decisio
 Drawn once per finished item. `message.user` input: `itemId`, `turnId`, `text`, `at?`, `time` (formatted, or `""` when
 timestamps are off; a `!command` always has it), `mode` (`minimal | balanced | full`), `style` (`layout`, `icon`,
 `lead`, `label`, `tint`), `variant` (`message | shell | notice`), `local?`, `attachments?`, `images`, `username`,
-`expanded`, and for a sent set of comments on an answer (docs/editor.md) `comments?`: the `comments` (`n`, `of`, `quote`, `cut`, `text`), the `note`, `head?` and `tail?`, with the `layout?` and `collapse?` settings the built-in draws them by. `message.assistant` adds `renderer`, `details`, `detailsAll` and `body`: the message as rows (Markdown as the
+`expanded`, and for a sent set of comments on an answer (docs/editor.md) `comments?`: the `comments` (`n`, `of`, `quote`, `cut`, `text`), the `note`, `head?` and `tail?`, with the `layout?` and `collapse?` settings the built-in draws them by. The terminal draws a set of comments (the typed message and the card) even when a `message.user` view is installed; a view takes them over only by declaring it, `api.view("message.user", render, { handles: ["comments"] })`, and then receives `comments` and draws them. `builtin` is unchanged. `message.assistant` adds `renderer`, `details`, `detailsAll` and `body`: the message as rows (Markdown as the
 renderer allows, no lead or time), laid out 4 cells narrower than `width` so a rail or an indent fits. `message.reasoning`:
 `text`, `running`, `ms?`, `rows`, `oneLine`, `hidden`. Actions: none.
 
@@ -241,7 +241,10 @@ cached, and have no clickable regions (actions: none). Return `undefined` for a 
   reason?, error? }`, drawn as the status line or the error box), `goal` (`goal`), `limit` (`limit`), `note` (`note`, a cache
   note), `undone` (`undone` = messages removed by a rewind) or `checkpoint`. `meta` is the profile's message-meta level and
   `mode` the presentation mode. `at` is when the row was made (a turn end: when the turn ended) and `time` that time
-  formatted, or `""` while timestamps are off; with them on the built-in ends the line with `done 5:25 PM`.
+  formatted, or `""` while `timestamps` is `off`; with it on the built-in ends the meta line with `done 5:25 PM`. An `end` also
+  has `timestamps` (`bottom`, `top` or `off`), `textColumn` (where the answer's text starts) and, on the latest turn while
+  `timestamps` is `bottom`, `running { shells, agents }`: with `meta: off` the built-in draws its closing line
+  (`took 2m 14s · ended 2:04 PM · 1 shell still running`) from these. A message's own `time` is set only with `timestamps: top`.
 
 ### page, overlay, bar (the envelope slots)
 

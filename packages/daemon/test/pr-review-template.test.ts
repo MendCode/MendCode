@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { PrFinding, type PrReviewResult } from "@mendcode/protocol"
 import { ReviewConfig } from "../src/pr-review/config"
 import { findingId } from "../src/pr-review/findings"
+import { isMendCodeReview } from "../src/pr-review/publishers"
 import { renderReviewBody, reviewBody, type ReviewInfo } from "../src/pr-review/template"
 
 const finding = (line: number, severity: PrFinding["severity"], summary: string) => PrFinding.parse({ id: findingId({ path: "src/a.ts", line, category: "correctness", summary }), path: "src/a.ts", line, side: "RIGHT", severity, category: "correctness", summary, detail: "Why it breaks.", evidence: ["src/a.ts:1"], verdict: "confirmed" })
@@ -122,5 +123,33 @@ describe("the verification line says what the separate pass did", () => {
     const stop = { kind: "budget" as const, detail: "Budget reached.", unit: "tokens" as const, used: 61_000, limit: 50_000, resumable: true, remaining: "3 candidates not verified" }
     expect(line(renderReviewBody({ result: result({ findings: [], dropped: 3, budgetHit: true }), inline: 0, moved: [], info, stop }))).toBe("- **Verification:** incomplete; 3 candidates not verified; nothing is shown, nothing unverified is published")
     expect(line(renderReviewBody({ result: result({ budgetHit: true }), ...base, stop }))).toBe("- **Verification:** incomplete; 3 candidates not verified; what is shown was checked again by a separate pass, nothing unverified is published")
+  })
+})
+
+describe("a partial review's body", () => {
+  const partial = { reviewed: ["src/a.ts"], notReviewed: ["src/b.ts", "src/c.ts"], unverified: 2, why: "Stopped before part 2 of 3.", number: 23 }
+  const body = renderReviewBody({ result: result({ budgetHit: true }), ...base, info: { ...info, partial } })
+  const lineOf = (text: string, prefix: string) => text.split("\n").find((entry) => entry.startsWith(prefix))
+
+  test("it says partial first, names what was and was not reviewed, why, and how to ask for the rest", () => {
+    expect(body.startsWith("## MendCode partial review\n\n**Partial review** · 1 of 3 files reviewed, 2 candidate findings not verified · 2 verified findings below")).toBe(true)
+    expect(body).toContain("Stopped before part 2 of 3.")
+    expect(lineOf(body, "**Reviewed:**")).toBe("**Reviewed:** `src/a.ts`")
+    expect(lineOf(body, "**Not reviewed:**")).toBe("**Not reviewed:** `src/b.ts`, `src/c.ts`")
+    expect(body).toContain("2 candidate findings were found but not verified, so they are not published.")
+    expect(body).toContain("`/pr review 23` continues from this checkpoint")
+    expect(body).toContain("budget.tokens_per_pr")
+    expect(lineOf(body, "- **Verification:**")).toBe("- **Verification:** partial; what is shown was checked again by a separate pass; 2 candidates not verified and not published")
+  })
+
+  test("it is not a review of the head: no head marker, and not a MendCode review for another reviewer's stand-down or the dedupe", () => {
+    expect(body).not.toContain("mendcode:review head=")
+    expect(isMendCodeReview(body)).toBe(false)
+    expect(isMendCodeReview(reviewBody({ result: result(), ...base }))).toBe(true)
+  })
+
+  test("a template cannot hide the partial verdict", () => {
+    const hidden = renderReviewBody({ result: result({ budgetHit: true }), ...base, info: { ...info, partial }, template: template({ sections: [{ id: "verdict", enabled: false }] }) })
+    expect(hidden).toContain("**Partial review**")
   })
 })

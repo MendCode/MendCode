@@ -2,6 +2,7 @@ import { Database } from "bun:sqlite"
 import { existsSync } from "node:fs"
 import path from "node:path"
 import type { SessionTranscript } from "@mendcode/protocol"
+import { MIN_SHORT_ID } from "./session-list-text"
 import { latestCandidates, readRegular, translate, type ForeignHomes } from "./session-import-source"
 
 /** Where a chat that is not a MendCode session of this daemon comes from. `v1`: the previous MendCode's own database. */
@@ -96,12 +97,26 @@ export function createForeignThreads(input: { homes: Required<ForeignHomes>; v1D
     }, undefined)
   }
 
+  /** The one key of `keys` that `key` is the end of (what a list prints); `key` itself when it is a whole key or names none or several. */
+  function fullKey(keys: readonly string[], key: string): string {
+    if (key.length < MIN_SHORT_ID || keys.includes(key)) return key
+    const hits = keys.filter((candidate) => candidate.toLowerCase().endsWith(key.toLowerCase()))
+    return hits.length === 1 ? hits[0]! : key
+  }
+
   /** The chat as lines, oldest first; undefined when `ref` is not a chat of this directory. */
   async function lines(directory: string, ref: string): Promise<ForeignLine[] | undefined> {
     const parsed = foreignRef(ref)
     if (!parsed) return undefined
-    if (parsed.source === "v1") return v1Lines(directory, parsed.key)
-    const entry = files(directory, parsed.source).find((candidate) => candidate.key === parsed.key)
+    // The short key a list prints is the end of the full one; it names the one chat of this directory that ends that way.
+    if (parsed.source === "v1") {
+      const exact = v1Lines(directory, parsed.key)
+      if (exact || parsed.key.length < MIN_SHORT_ID) return exact
+      return v1Lines(directory, fullKey(list(directory).filter((chat) => chat.source === "v1").map((chat) => chat.id.slice("v1:".length)), parsed.key))
+    }
+    const candidates = files(directory, parsed.source)
+    const key = fullKey(candidates.map((candidate) => candidate.key), parsed.key)
+    const entry = candidates.find((candidate) => candidate.key === key)
     if (!entry) return undefined
     const cacheKey = `${entry.file}\0${entry.version}`
     const cached = cache.get(cacheKey)

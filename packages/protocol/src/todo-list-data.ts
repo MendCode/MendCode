@@ -33,3 +33,16 @@ export function todoListCard(items: readonly TodoListItem[]): { title: string; t
     text: items.map((item) => `${MARK[item.status]} ${item.priority ? `(${item.priority}) ` : ""}${item.text.replace(/\s+/g, " ").trim()}`).join("\n"),
   }
 }
+
+/** The checklist text of a card (`todoListCard`) back as items; lines that are not checklist lines are skipped. */
+export function parseTodoListText(text: string): TodoListItem[] {
+  const items: TodoListItem[] = []
+  for (const line of text.split("\n")) {
+    const match = /^\s*\[([ xX~-])\]\s+(.*)$/.exec(line)
+    if (!match) continue
+    const mark = match[1]!.toLowerCase()
+    const priority = /^\((high|medium|low)\) (.*)$/.exec(match[2]!)
+    items.push({ text: (priority?.[2] ?? match[2]!).trim(), status: mark === "x" ? "done" : mark === "~" ? "in_progress" : mark === "-" ? "cancelled" : "pending", ...(priority ? { priority: priority[1] as NonNullable<TodoListItem["priority"]> } : {}) })
+  }
+  return items
+}

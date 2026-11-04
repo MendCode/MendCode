@@ -41,7 +41,8 @@ export function createPrompt(ctx: AppContext, actions: { extOn(): boolean }) {
   const expandedPrompt = () => expandPastes(editor.text, livePastes(state.pastes, editor.text))
 
   function syncDraft() {
-    if (input.remote?.readOnly || state.page !== "chat" || state.editingScratch) return
+    // A sub-agent's thread has a prompt of its own: the session's saved draft stays the conversation's.
+    if (input.remote?.readOnly || state.page !== "chat" || state.editingScratch || state.agentView) return
     if (drafts.changed(state.sessionId, { text: expandedPrompt(), images: draftRefs(state.attachments, editor.text) })) state.notice = "draft over 64 KB: saved truncated"
   }
 

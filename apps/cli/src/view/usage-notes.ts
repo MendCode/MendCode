@@ -154,10 +154,10 @@ export function createUsageNotes(options: { notice?: () => CompactNoticeConfig |
       else contexts.push({ turnId: event.turnId, tokens: call.context })
       if (contexts.length > RECENT_CONTEXTS) contexts.shift()
       const config = options.notice?.()
-      const limitTokens = event.contextWindow ?? event.compactAt
+      const limitTokens = event.compactAt ?? event.contextWindow
       const unknownWindow = !event.contextWindow && config?.compactAtTokens === undefined && event.compactAt === DEFAULT_COMPACT_AT_TOKENS
       if (config && limitTokens && (config.autoCompact || !unknownWindow) && notice.crossed(call.context, limitTokens, config.percent)) {
-        const estimate = compactEstimate({ tokens: call.context, limitTokens, limit: event.contextWindow ? "window" : "compaction", auto: config.autoCompact, samples: contexts })
+        const estimate = compactEstimate({ tokens: call.context, limitTokens, limit: event.compactAt ? "compaction" : "window", auto: config.autoCompact, samples: contexts })
         notes.push({ kind: "context", text: compactEstimateText(estimate, compact) })
       }
       return notes

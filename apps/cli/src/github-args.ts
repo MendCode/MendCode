@@ -1,10 +1,12 @@
+import { PR_HELP } from "./help-text"
+import { GITHUB_HELP } from "./help-text"
 import type { ReasoningEffort } from "@mendcode/protocol"
 import { REASONING_EFFORTS } from "@mendcode/protocol/wire"
 import type { ParseResult, Common } from "./automation"
 import { PROGRAM_NAME } from "@mendcode/program"
 
-export const GITHUB_USAGE = `usage: ${PROGRAM_NAME} github install [--model PROVIDER/MODEL] [--write]\n       ${PROGRAM_NAME} github install --hosted --model PROVIDER/MODEL --release TAG --sha256 HEX [--write]\n       ${PROGRAM_NAME} github run [--event JSON] [--token TOKEN] [--model PROVIDER/MODEL] [--variant NAME] [--effort LEVEL] [--prompt TEXT] [--mentions /mc,/mendcode] [--publish] [--approve] [--thinking] [--attachments] [--review]\n  --dir DATA selects daemon storage; --project PATH selects the checkout; --json\n  Defaults: workflow preview, local response, no publishing or tool approval\n  Actions: GITHUB_EVENT_PATH/NAME, GITHUB_REPOSITORY/ACTOR, GH_TOKEN or GITHUB_TOKEN, MODEL, VARIANT, EFFORT, PROMPT, MENTIONS`
-export const PR_USAGE = `usage: ${PROGRAM_NAME} pr setup [all|requested] --session ID [--yes] [--json] [--dir DATA]\n       ${PROGRAM_NAME} pr NUMBER [--token TOKEN] [--no-tui] [--json] [--dir DATA] [--project PATH]\n  Setup uses the session's checkout and model; --yes consents to watching, model calls and GitHub publishing.\n  NUMBER: clean checkout only; opens MendCode on pr/NUMBER; donor session links are skipped`
+export const GITHUB_USAGE = GITHUB_HELP
+export const PR_USAGE = PR_HELP
 export type GithubAutomation = { kind: "github.install"; model?: string; write: boolean; hosted?: boolean; release?: string; sha256?: string } | { kind: "github.run"; event?: string; token?: string; model?: string; variant?: string; effort?: ReasoningEffort; prompt?: string; mentions?: string[]; publish: boolean; approve: boolean; thinking: boolean; attachments: boolean; review?: boolean } | { kind: "pr"; number: number; token?: string; noTui: boolean }
 export type PrSetupAutomation = { kind: "pr.setup"; session: string; role?: "all" | "requested"; yes: boolean }
 const values = new Set(["session", "dir", "data-dir", "project", "cwd", "engine", "format", "compat", "token", "model", "variant", "effort", "event", "prompt", "mentions", "connect", "server-url", "ca", "token-file", "socket", "release", "sha256"])

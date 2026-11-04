@@ -10,7 +10,7 @@ export async function runPrSetup(command: PrSetupAutomation & Common, deps: Auto
   if (!preview.ok) { emit({ error: preview.error.message }, preview.error.message); return 1 }
   const setup = preview.result?.setup as { text: string; digest: string; changes: string[]; problems: string[] } | undefined
   if (!setup) { emit({ error: "unsupported" }, "The daemon does not support PR setup."); return 1 }
-  if (setup.problems.length || !setup.changes.length) { emit({ setup }, setup.text); return setup.problems.length ? 1 : 0 }
+  if (setup.problems.length || !setup.changes.length) { emit({ setup, applied: false }, setup.problems.length ? `${setup.text}\n\nNothing changed: fix what needs attention above, then run this again.` : setup.text); return setup.problems.length ? 1 : 0 }
   if (!command.json) deps.out.write(`${setup.text}\n`)
   const yes = command.yes || (!command.json && deps.prompt && await deps.prompt({ title: "PR setup", label: "Apply these changes, including GitHub publishing?", options: [{ value: "yes", label: "Apply setup" }, { value: "no", label: "Cancel" }] }) === "yes")
   if (!yes) { emit({ setup, applied: false }, "Nothing changed. Use --yes to consent to the listed changes, including GitHub publishing."); return 4 }

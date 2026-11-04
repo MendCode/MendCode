@@ -64,8 +64,8 @@ for (const [os, arch] of [["Darwin", "arm64"], ["Darwin", "x86_64"], ["Linux", "
     expect({ code: result.exitCode, stderr: result.stderr.toString() }).toEqual({ code: 0, stderr: "" })
     expect(readFileSync(path.join(box.install, "mendcode"), "utf8")).toBe(body)
     expect(statSync(path.join(box.install, "mendcode")).mode & 0o777).toBe(0o755)
-    expect(readdirSync(box.install).sort()).toEqual([".mendcode-v2-install", "mendcode"])
-    expect(readFileSync(path.join(box.install, ".mendcode-v2-install"), "utf8")).toBe(`schema=mendcode-v2.install.v1\nbinary=mendcode\nsha256=${hash}\ntier=balanced\n`)
+    expect(readdirSync(box.install).sort()).toEqual([".mendcode-install", "mendcode"])
+    expect(readFileSync(path.join(box.install, ".mendcode-install"), "utf8")).toBe(`schema=mendcode.install.v1\nbinary=mendcode\nsha256=${hash}\ntier=balanced\n`)
     expect(result.stdout.toString()).toContain("PATH")
     expect(existsSync(path.join(box.dir, "home"))).toBe(false)
   })
@@ -292,12 +292,12 @@ test("an unknown channel, a channel with an exact version and a stray argument a
 
 test("--tier, --tier= and MENDCODE_TIER record the starting tier in the receipt, balanced when none is given, and the binary is the same", () => {
   const box = fixture()
-  const receipt = () => readFileSync(path.join(box.install, ".mendcode-v2-install"), "utf8")
+  const receipt = () => readFileSync(path.join(box.install, ".mendcode-install"), "utf8")
   for (const [args, extra, tier] of [[["--tier", "minimalist"], {}, "minimalist"], [["--tier=full"], {}, "full"], [[], { MENDCODE_TIER: "minimalist" }, "minimalist"], [["--tier", "balanced"], { MENDCODE_TIER: "full" }, "balanced"], [[], {}, "balanced"]] as const) {
     rmSync(box.install, { recursive: true, force: true })
     const result = box.run({ ...extra }, [...args])
     expect({ code: result.exitCode, stderr: result.stderr.toString() }).toEqual({ code: 0, stderr: "" })
-    expect(receipt()).toBe(`schema=mendcode-v2.install.v1\nbinary=mendcode\nsha256=${hash}\ntier=${tier}\n`)
+    expect(receipt()).toBe(`schema=mendcode.install.v1\nbinary=mendcode\nsha256=${hash}\ntier=${tier}\n`)
     expect(result.stdout.toString()).toContain(`starting tier: ${tier}`)
     expect(readFileSync(path.join(box.install, "mendcode"), "utf8")).toBe(body)
   }

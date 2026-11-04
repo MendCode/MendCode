@@ -4,6 +4,8 @@ export type ClaudeTransport = {
   lines: AsyncIterable<string>
   close(): void
   exited: Promise<number>
+  /** The operating-system process id, when there is a real process behind this transport. */
+  pid?: number | undefined
   stderrTail(): string
 }
 
@@ -59,6 +61,7 @@ export function spawnClaude(options: { bin: string; args: string[]; cwd: string;
     lines: lines(),
     close: () => proc.kill(),
     exited: proc.exited,
+    pid: proc.pid,
     stderrTail: () => tail.trim(),
   }
 }

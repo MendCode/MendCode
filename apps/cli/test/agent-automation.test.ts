@@ -12,7 +12,7 @@ describe("B66 agent CLI parsing", () => {
     expect(parseAutomation(["agent", "list", "--format=json"])).toMatchObject({ command: { kind: "agent.list", json: true } })
     expect(parseAutomation(["debug", "agent", "reviewer", "--tool", "read", "--params", '{"path":"docs/agents.md"}'])).toMatchObject({ command: { kind: "agent.debug", tool: "read", params: { path: "docs/agents.md" } } })
     expect(parseAutomation(["agent", "--help"])).toMatchObject({ command: { kind: "help", topic: "agent" } })
-    expect(helpText("agent")).toContain("agent create")
+    expect(helpText("agent")).toContain("create")
     expect(completionScript("bash")).toContain("agent) words='create list'")
     expect(parseAutomation(["debug", "rg", "tree"]).ok).toBe(true)
   })

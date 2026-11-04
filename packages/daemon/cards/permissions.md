@@ -5,7 +5,7 @@ aliases: permission, approvals, approval, sandbox, trust, security
 ---
 Every tool call is read, write or execute. Modes (per session; the default for new sessions is the defaultPermission setting):
   ask: asks for writes and commands | edits: runs edits, asks for commands | smart: runs low-risk calls by fixed rules, asks about the rest | full: runs unless a deny rule matches | plan: read-only until a plan is approved
-Reads of .env files ask in every mode. "For this session" approves that tool for the session. Deny rules always win. A denied call is the user's decision: adapt, never retry it. Package changes need an approval card even in full.
+Reads of .env files ask in every mode. "For this session" approves that tool for the session. Deny rules always win. A denied call is the user's decision: adapt, never retry it. Profile changes need an approval card even in full.
 Smart mode runs reads, edits inside the project, and allow-listed commands (ls, cat, grep, read-only git, the project's own test and build commands, and mendcode docs [--search] words on its own line). It asks for destructive commands, secrets paths, .git and .mendcode paths, anything outside the project, network, loops, unlisted commands and $ or backtick expansion; it refuses rm -r of / or ~ and similar outright. Every prompt says why it asks.
 
 Change (your shell's change commands and --approve are refused in all modes; when the user asks, propose it with mendcode_settings, e.g. {"defaultPermission":"edits"}, saved on their Apply):

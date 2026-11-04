@@ -57,6 +57,8 @@ export type SoloHost = {
   stop(): Promise<void>
   /** Appends to the daemon's own log (`<dir>/logs/daemon.stderr.log`): the terminal's screen is not a place for it. */
   log(level: "info" | "warn" | "error", message: string): void
+  /** Clients attached right now, this terminal's own included: a count, not a `daemon.status`. */
+  clients(): number
 }
 
 export type HostOptions = {
@@ -118,9 +120,14 @@ async function startInProcess(options: HostOptions): Promise<SoloHost> {
   hosting.log = log
   hosting.onStopped = () => { stopped = true }
   const main = await import("../../../packages/daemon/src/main")
+  // The daemon's start-up garbage (its modules, store, catalogs) is collected before the terminal builds its screen, so the
+  // screen reuses those pages instead of asking the system for more: about 5 ms that lower the start peak by about 6 MB
+  // and the resident size of an idle prompt by about 5 (docs/performance.md).
+  Bun.gc(true)
   return {
     attach: main.daemon.attachLoopback,
     log,
+    clients: () => main.daemon.clients(),
     get stopped() { return stopped },
     async stop() {
       if (stopped) return

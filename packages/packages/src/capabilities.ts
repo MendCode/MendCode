@@ -15,9 +15,10 @@ export function packageCapabilities(directory: string): PackageCapabilities {
     hooks: /\b(?:registerHook|on)\s*\(\s*["'](?:tool\.|session\.|turn\.|compact\.|before_|after_)/,
     tools: /\b(?:registerTool|defineTool)\s*\(/,
     commands: /\bregisterCommand\s*\(/,
-    network: /\bfetch\s*\(|(?:node:)?(?:https?|net|tls)["']|\bWebSocket\s*\(/,
+    // A module name counts only as an import or require of it, so a value like "claude-sonnet" or "magnet" is not network use.
+    network: /\bfetch\s*\(|(?:\bfrom|\brequire\s*\(|\bimport\s*\()\s*["'](?:node:)?(?:https?|net|tls)["']|\bWebSocket\s*\(/,
     processes: /\bBun\.spawn|child_process|\b(?:exec|spawn)\s*\(/,
-    filesystem: /(?:node:)?fs(?:\/promises)?["']/,
+    filesystem: /(?:\bfrom|\brequire\s*\(|\bimport\s*\()\s*["'](?:node:)?fs(?:\/promises)?["']/,
   }
   const walk = (dir: string, depth: number) => {
     if (depth > 8) {

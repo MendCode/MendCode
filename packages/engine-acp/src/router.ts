@@ -22,6 +22,7 @@ export function withAcpEngine(input: { base: EnginePort; acp: () => Promise<Engi
       return engine.runTurn(turn)
     },
     ...(base.runShell ? { runShell: base.runShell.bind(base) } : {}),
+    ...(base.warm ? { warm: base.warm.bind(base) } : {}),
     needsCompaction: (sessionId) => !input.usesAcp(sessionId) && base.needsCompaction(sessionId),
     ...(base.contextReport
       ? {

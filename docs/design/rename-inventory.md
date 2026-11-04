@@ -53,10 +53,17 @@ Kept, not product names: `v2` as a technical identifier (provider-auth `source: 
 | Keychain | none: credentials live in the data directory; there is no keychain entry |
 | `.gitignore` | `.mendcode-v2/` |
 
+**Done (2026-11-02):** the data directory is `~/.mendcode`. On its first start a new version moves `~/.mendcode-v2` there and leaves
+`~/.mendcode-v2` as a link to it (`packages/program/src/data-dir.ts`, `apps/cli/src/data-dir-move.ts`); a v1 `~/.mendcode` is set aside in
+`~/.mendcode-v1` and v1's OpenCode/XDG links follow it; a detached daemon is stopped first and a user service is re-pointed. `MENDCODE_DIR`,
+`MENDCODE_JIT`, `MENDCODE_ENGINE`, `MENDCODE_CONPTY` and `MENDCODE_LOCAL_TRANSPORT` are the documented names and the `MENDCODE_V2_*`
+spellings are still read; the receipt is `.mendcode-install` (`.mendcode-v2-install` still read). The service label, the Windows trash
+folder and the protocol identifiers (`mendcode-v2-mflow`, the `mendcode-v2` memory format) keep their names. What follows is the earlier plan.
+
 The legacy product owns `~/.mendcode` and `~/.local/share/mendcode` on existing machines; the data directory, its guard (`v1Dirs` in `packages/upgrade/src/install.ts`) and
 `migrate-v1` refuse to write there. Moving to those names would shadow real user data.
 
-Recommended migration (not implemented): (1) new installs choose `~/.mendcode` only when no legacy data exists there, otherwise keep `~/.mendcode-v2`; (2) an explicit
+Recommended migration (earlier plan): (1) new installs choose `~/.mendcode` only when no legacy data exists there, otherwise keep `~/.mendcode-v2`; (2) an explicit
 `mendcode migrate` moves a `~/.mendcode-v2` directory to the new name, renames `bin/mendcode-next*` to `bin/mendcode*`, the receipt, the service label and the Windows trash folder together,
 leaves a pointer file for one release, and refuses while a daemon holds `mendd.lock`; (3) add `MENDCODE_DIR` as the documented spelling of `MENDCODE_V2_DIR` and the other `MENDCODE_V2_*` variables,
 reading both for two releases, so scripts do not break; (4) only then drop the schema id question (`mendcode-next.cli.v1`) with a `schema` selector, since `mendcode.cli.v1` is taken.

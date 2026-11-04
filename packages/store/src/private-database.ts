@@ -20,7 +20,7 @@ export function openPrivateDatabase(dir: string, file: string) {
   }
   const sealed = createSealedFiles(dir, "chats", () => [file, ...["blobs", "session-transcripts", "tool-output", "goals"].map((name) => path.join(dir, name))].some(hasEncryptedFiles))
   let enabled = existsSync(file) && isSealedFile(file)
-  let live = enabled ? Database.deserialize(sealed.open(readFileSync(file), "database")) : new Database(file, { create: true, strict: true })
+  let live = enabled ? Database.deserialize(sealed.openFile(file, "database")) : new Database(file, { create: true, strict: true })
   let generation = 0
   let depth = 0
   let ready = false
@@ -30,9 +30,23 @@ export function openPrivateDatabase(dir: string, file: string) {
   if (existing) for (const name of readdirSync(dir)) {
     if (privateTempTarget(name) === path.basename(file)) cleanPrivateTemp(path.join(dir, name), () => { live.query("PRAGMA schema_version").get() })
   }
+  // What the snapshot on disk holds: rows changed on this connection (triggers included), the schema, the user version and
+  // the page layout (vacuum, auto_vacuum). A statement that changed none of them (`INSERT OR IGNORE` of a present row,
+  // `CREATE TABLE IF NOT EXISTS`) leaves the snapshot as it is instead of sealing the whole database again.
+  let persisted: string | undefined
+  const contentMark = () => {
+    const row = live.query<Record<string, number>, []>(`SELECT total_changes() AS c, (SELECT schema_version FROM pragma_schema_version) AS s,
+      (SELECT user_version FROM pragma_user_version) AS u, (SELECT page_count FROM pragma_page_count) AS p,
+      (SELECT freelist_count FROM pragma_freelist_count) AS f, (SELECT auto_vacuum FROM pragma_auto_vacuum) AS v`).get()!
+    return `${generation}:${row.c}:${row.s}:${row.u}:${row.p}:${row.f}:${row.v}`
+  }
+  // A snapshot just opened is what the file holds.
+  if (enabled) persisted = contentMark()
   function persist() {
     if (!enabled || !ready || depth || live.inTransaction) return
-    try { atomicPrivateWrite(file, sealed.seal(live.serialize(), "database")); failed = undefined }
+    const mark = contentMark()
+    if (mark === persisted) return
+    try { sealed.sealToFile(file, live.serialize(), "database"); failed = undefined; persisted = mark }
     catch (error) { failed = error; throw error }
   }
   const check = () => { if (failed) throw failed }
@@ -89,8 +103,7 @@ export function openPrivateDatabase(dir: string, file: string) {
         bytes[19] = 1
         const replacement = Database.deserialize(bytes)
         replacement.run("PRAGMA journal_mode = MEMORY; PRAGMA foreign_keys = ON; PRAGMA temp_store = MEMORY")
-        const encrypted = sealed.seal(bytes, "database")
-        try { atomicPrivateWrite(file, encrypted) }
+        try { sealed.sealToFile(file, bytes, "database") }
         catch (error) {
           if (isSealedFile(file)) {
             live.close(); live = replacement; generation++; enabled = true; failed = error
@@ -101,6 +114,7 @@ export function openPrivateDatabase(dir: string, file: string) {
         live = replacement
         generation++
         enabled = true
+        persisted = contentMark()
         for (const suffix of ["-wal", "-shm", "-journal"]) rmSync(`${file}${suffix}`, { force: true })
       } else {
         const bytes = live.serialize()

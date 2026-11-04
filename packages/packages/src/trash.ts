@@ -3,7 +3,7 @@ import path from "node:path"
 import { randomUUID } from "node:crypto"
 
 /**
- * The Trash packages use, for authoring (`packages delete-local`) and for removing an installed package: `<base>/.Trash/<label>@<ms>@<id>`,
+ * The Trash profiles use, for authoring (`profiles delete-local`) and for removing an installed profile: `<base>/.Trash/<label>@<ms>@<id>`,
  * where `base` is the scope's data folder (the data dir, or `<project>/.mendcode`). Nothing is deleted when it moves there;
  * it can be restored for TRASH_RETENTION_MS, and anything older is deleted the next time something moves to the Trash.
  */

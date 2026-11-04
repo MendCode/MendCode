@@ -152,12 +152,34 @@ starts to must change its constant here.
 |---|---|---|
 | Anthropic API (provider type `anthropic`) | 5 minutes (`ANTHROPIC_CACHE_LIFETIME_MS`); 1 hour (`ANTHROPIC_CACHE_LIFETIME_1H_MS`) after a call that was answered with `ttl: "1h"` in its request (`cacheTtl: "1h"` on its `usage.recorded`) | Anthropic's documentation: `cache_control: { type: "ephemeral" }` without `ttl` is 5 minutes, with `ttl: "1h"` one hour, each refreshed by a read. Not measured here |
 | Claude on Vertex (type `google-vertex-anthropic`) | unknown without `ttl`, as before; 1 hour after a call answered with `ttl: "1h"` | Anthropic's documentation lists Google Cloud among the platforms with the 1-hour duration. Not measured here |
-| OpenAI API (type `openai` at `https://api.openai.com`) | 5 minutes (`OPENAI_CACHE_LIFETIME_MS`) | OpenAI's guide: 5 to 10 minutes of inactivity without `prompt_cache_retention`; the lower bound. Not measured here |
-| ChatGPT subscription (`chatgpt`) | 5 minutes (`CHATGPT_CACHE_LIFETIME_MS`) | **An assumption** with one measured lower bound: on 2026-10-12 (gpt-6.1-sol, one sample) an identical request 4 min 30 s after the first read 5,376 of 5,562 input tokens from the cache. Nothing longer was sampled |
+| OpenAI API (type `openai` at `https://api.openai.com`) | 5 minutes (`OPENAI_CACHE_LIFETIME_MS`) until a longer one is observed | OpenAI's guide (checked 2026-11-03): in-memory retention is typically 5 to 10 minutes of inactivity and up to an hour; the extended `24h` retention is the default for some models and organizations (GPT-5.5 accepts only `24h`) and typically lasts about 30 minutes of inactivity, up to 24 hours. MendCode does not send `prompt_cache_retention`, so which applies depends on the account: the lower bound is the fallback and the observed lifetime (below) replaces it when longer |
+| ChatGPT subscription (`chatgpt`) | 5 minutes (`CHATGPT_CACHE_LIFETIME_MS`) until the observed lifetime exists | **An assumption** with one measured lower bound: on 2026-10-12 (gpt-6.1-sol, one sample) an identical request 4 min 30 s after the first read 5,376 of 5,562 input tokens from the cache. On 2026-11-03 the stored calls of the author's sessions (432 pairs of 2 minutes or more) read the cache in 83 to 100 % of the gaps up to 20 minutes, 61 % at 20 to 30 and mostly under a quarter past 3 hours: the observed lifetime was about 19 minutes. No retention of ten hours showed |
 | Every other provider (OpenAI-style hosts that are not OpenAI, Chat Completions hosts, Gemini, Bedrock, Vertex, Copilot, ...) | unknown | Nobody: no compaction while idle for it, never at a guessed time |
 
 `cacheLifetimeMinutes: { "<provider id>": minutes }` (`settings.set`) replaces a row or fills an unknown one. A lifetime that is too
 long here is the costly mistake (the compaction then reads at the full price); too short only compacts earlier than needed.
+
+### Observed lifetime
+
+The table's values are fallbacks: providers change their retention without notice, so the compaction while idle follows what each
+response shows (`observedCacheLifetime`, `packages/protocol/src/idle-compaction-data.ts`). Every main call that follows an earlier call
+of the same session is a sample: the gap since that call and whether the response read the conversation's prefix (cached tokens of at least half the previous prompt; the instructions and tools alone are cached across sessions). Gaps under 2 minutes and calls (or previous calls) whose
+prompt is under 4,096 tokens, whose previous call was compacted away, or that changed provider or `ttl` are not samples. Gaps are grouped
+(1, 2, 3, 5, 7, 10, 15, 20, 30, 45, 60, 90, 120, 180, 240, 360, 720, 1,440 minutes); a group with three or more samples is alive when at
+least 80 % read the cache. The lifetime is the longest gap that read the cache before the first group that mostly missed.
+
+| Observed | Replaces |
+|---|---|
+| a lifetime longer than the fallback | the documented or assumed one |
+| a lifetime seen ending (a later group missed), shorter or longer | the assumed one (ChatGPT) |
+| nothing, or too few samples | nothing: the fallback stays |
+
+The provider's lifetime is never replaced when the `cacheLifetimeMinutes` entry is set. A provider with no fallback only gets an observed one once
+it was seen ending. Samples are read from the stored calls of the last 14 days when the provider's first call is seen after the daemon starts, and
+grow with each call, 400 at most per provider and lifetime request. `mendcode context <sessionID>` shows `observed` as the source.
+
+Limit: a session of 100,000 tokens or more is compacted before the lifetime in force ends, so it never shows what the cache does later. Longer gaps
+come from smaller sessions, other sessions that were left alone, and the stored history. A changed prefix (a rewound or edited history) counts as a miss.
 
 To measure the ChatGPT backend (one live test, not run yet): in one session send a prompt of at least 6,000 tokens, then the identical
 request again after N minutes of silence, and read `cacheRead` of the second `usage.recorded` (`mendcode context <sessionID>`). Repeat

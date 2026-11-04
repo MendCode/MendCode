@@ -41,6 +41,8 @@ export type JobCheckpoint = {
   decisions: Array<{ phase: string; action: "added" | "skipped" | "kept"; reason: string }>
   /** The template's own sections the review pass wrote (`template.sections` with a prompt), so a resumed review still renders them. */
   sections?: Record<string, string> | undefined
+  /** The readers' summaries of this head (readers.ts), so a resume of the same head does not pay for them again. */
+  readers?: Array<{ id: string; paths: string[]; text: string; by: string }> | undefined
 }
 
 export type ReviewJob = {

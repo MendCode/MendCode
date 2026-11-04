@@ -2,7 +2,9 @@ import { USAGE_WIDGET_IDS } from "./usage-widget-data"
 import { SLASH_LAYOUTS, slashProfileProblems } from "./slash-menu-data"
 import { parseMarkdownColors } from "./theme-data"
 import { FOOTER_ICON_MODES, footerRowsProblems, footerTextProblems } from "./footer-rows-data"
+import { FOOTER_PACK_DEFAULT, FOOTER_PACK_NAME, FOOTER_PACK_SYMBOLS } from "./footer-pack-data"
 import { quotaRefreshProblems } from "./quota-refresh-data"
+import { DEFAULT_TOOL_DESIGN_NAME, TIMESTAMP_PLACES, TOOL_DESIGN_NAME, TOOL_RAIL_DEFAULT, toolRailProblems } from "./tool-rail-data"
 
 /**
  * The named parts of the session stats registry (apps/cli/src/view/stat-parts.ts), shared by the footer (`/footer`), the activity
@@ -22,6 +24,12 @@ export const ACTIVITY_PARTS = ["spinner", "verb", "elapsed", "stalled", "model",
 export type ActivityPart = (typeof ACTIVITY_PARTS)[number]
 /** What the row shows without any setting: `tps` and `queue` are opt-in. */
 export const ACTIVITY_PARTS_DEFAULT = "spinner,verb,elapsed,stalled,model,tokens,interrupt"
+/** How the activity status lays its parts out: `inline` is `⠋ Generating… (2m 53s · ↓ 4.3k tokens)`, `classic` one run of parts with blanks between. */
+export const ACTIVITY_STYLES = ["inline", "classic"] as const
+/** The token figures of the `tokens` part, in order: `out` received, `in` sent new, `cache` resent from the provider's cache. */
+export const ACTIVITY_TOKEN_PARTS = ["out", "in", "cache"] as const
+/** The names in `text` that are not token figures (empty when the list is valid); an empty list is the style's own default. */
+export const unknownActivityTokens = (text: string): string[] => text.split(",").map((name) => name.trim()).filter((name) => name && !(ACTIVITY_TOKEN_PARTS as readonly string[]).includes(name))
 /** The names in `text` that are not activity parts (empty when the list is valid). */
 export const unknownActivityParts = (text: string): string[] => text.split(",").map((name) => name.trim()).filter((name) => name && !(ACTIVITY_PARTS as readonly string[]).includes(name))
 
@@ -40,7 +48,7 @@ export const TUI_DEFAULTS: Readonly<Record<string, unknown>> = {
   "promptContext": "focus",
   "messageRenderer": "full",
   "submitScroll": "bottom",
-  "timestamps": false,
+  "timestamps": "bottom",
   "username": "",
   "showUsername": false,
   "scrollbar": "off",
@@ -49,6 +57,8 @@ export const TUI_DEFAULTS: Readonly<Record<string, unknown>> = {
   "jumpText": "",
   "activityPlacement": "transcript",
   "activityParts": ACTIVITY_PARTS_DEFAULT,
+  "activityStyle": "inline",
+  "activityTokens": "",
   "comments": "auto",
   "commentKey": "comment",
   "commentHint": "prompt",
@@ -88,6 +98,10 @@ export const TUI_DEFAULTS: Readonly<Record<string, unknown>> = {
   "codeMapCard": "auto",
   "toolDensity": "calm",
   "diffView": "unified",
+  "diffContext": 3,
+  "diffLineRows": 4,
+  "toolRail": TOOL_RAIL_DEFAULT,
+  "toolDesign": DEFAULT_TOOL_DESIGN_NAME,
   "tagline": "",
   "promptGlyphs": "",
   "activityMessages": "",
@@ -129,6 +143,9 @@ export const TUI_DEFAULTS: Readonly<Record<string, unknown>> = {
   "footerDefaultRows": true,
   "footerText": {},
   "footerIcons": "none",
+  "footerPack": FOOTER_PACK_DEFAULT,
+  "footerPackSymbols": "auto",
+  "footerPackStack": false,
   "messageLayout": "quiet",
   "userIcon": "",
   "assistantIcon": "",
@@ -169,6 +186,7 @@ export const TUI_DEFAULTS: Readonly<Record<string, unknown>> = {
   "logoFont": "mendcode",
   "productName": "MendCode",
   "homeLayout": "centered",
+  "homeInput": "bottom",
   "homeTips": false,
   "homeFooter": false,
   "homeHeader": true,
@@ -232,8 +250,9 @@ export const TUI_ENUMS: Readonly<Record<string, readonly string[]>> = {
   "contextStyle": ["bar", "percent", "both"],
   "messageLayout": ["quiet", "classic"],
   "messageMeta": ["off", "compact", "full"],
+  "timestamps": TIMESTAMP_PLACES,
   "themeLock": ["", "dark", "light"],
-  "logoFont": ["mendcode", "compact", "solid", "outline"],
+  "logoFont": ["mendcode", "compact", "solid", "outline", "rounded", "double", "shade", "braille"],
   "promptContext": ["minimal", "focus", "guide", "full", "custom"],
   "presentation": [
     "auto",
@@ -293,6 +312,7 @@ export const TUI_ENUMS: Readonly<Record<string, readonly string[]>> = {
     "centered",
     "split"
   ],
+  "homeInput": ["bottom", "center", "top"],
   "homeRightPanel": [
     "actions",
     "agentManager"
@@ -338,12 +358,14 @@ export const TUI_ENUMS: Readonly<Record<string, readonly string[]>> = {
   "jumpHint": ["right", "center", "left", "off"],
   "attachmentChips": ["inline", "above", "both"],
   "activityPlacement": ["transcript", "above", "inside", "off"],
+  "activityStyle": ACTIVITY_STYLES,
   "comments": ["auto", "on", "off"],
   "commentKey": ["comment", "quote"],
   "altLabel": ["auto", "alt", "opt", "symbol"],
   "quotaView": ["used", "left"],
   "quotaColor": ["pressure", "accent"],
   "footerIcons": FOOTER_ICON_MODES,
+  "footerPackSymbols": FOOTER_PACK_SYMBOLS,
   "keyProtocol": ["auto", "off"],
   "optionKeys": ["auto", "off"],
   "commentHint": ["prompt", "passage", "off"],
@@ -408,6 +430,8 @@ export function tuiProblems(raw: unknown): string[] {
     const expected = TUI_DEFAULTS[key]
     // `scrollbar` was a boolean before it had modes: the old value is still read (true is `always`).
     if (key === "scrollbar" && typeof value === "boolean") continue
+    // So was `timestamps` (true reads as `bottom`, false as `off`).
+    if (key === "timestamps" && typeof value === "boolean") continue
     if (Array.isArray(expected) ? !Array.isArray(value) : typeof value !== typeof expected) problems.push(`${key}: expected ${Array.isArray(expected) ? "array" : typeof expected}`)
     else if (TUI_ENUMS[key] && !TUI_ENUMS[key]!.includes(value as string)) problems.push(`${key}: expected ${TUI_ENUMS[key]!.join("|")}`)
     else if (key === "homeMascot" && !HOME_MASCOT.test(value as string)) problems.push("homeMascot: expected mend or a pet reference (user:<id>, codex:<id>, package:<id>; /pet lists them)")
@@ -415,6 +439,7 @@ export function tuiProblems(raw: unknown): string[] {
     else if (key === "quotaRefresh") problems.push(...quotaRefreshProblems(value))
     else if (key === "footerRows") problems.push(...footerRowsProblems(value))
     else if (key === "footerText") problems.push(...footerTextProblems(value))
+    else if (key === "footerPack" && !FOOTER_PACK_NAME.test(value as string)) problems.push("footerPack: a pack name (clean, powerline, minimal, badges, bars, plain, a footer-packs/<name>.json file, or off)")
     else if (key === "markdownColors" && ((value as string).length > 2048 || parseMarkdownColors(value as string).error)) problems.push(`markdownColors: ${(value as string).length > 2048 ? "too long" : parseMarkdownColors(value as string).error}`)
     else if (key === "disabledUiExtensions" && ((value as unknown[]).length > 128 || (value as unknown[]).some((name) => typeof name !== "string" || name.length < 1 || name.length > 64 || /[\x00-\x1f\x7f]/.test(name)))) problems.push("disabledUiExtensions: expected up to 128 module names")
     else if (key === "disabledViews" && ((value as unknown[]).length > 32 || (value as unknown[]).some((name) => typeof name !== "string" || !/^[a-z]+(\.[a-z]+)?$/.test(name)))) problems.push("disabledViews: expected up to 32 view slot names")
@@ -430,8 +455,13 @@ export function tuiProblems(raw: unknown): string[] {
     else if (key === "pasteSummaryMinChars" &&(!Number.isInteger(value) || Number(value) < 1 || Number(value) > 100000)) problems.push("pasteSummaryMinChars: expected integer 1..100000")
     else if ((key === "statusLeft" || key === "statusRight") && String(value).split(",").some((name) => name.trim() && !["mode", "model", "provider", "reasoning", "variant", "context", "permissionMode", "commandsHint", "agentsHint", "quota"].includes(name.trim()))) problems.push(`${key}: unknown status segment`)
     else if (key === "activityParts" && (unknownActivityParts(value as string).length || String(value).length > 256)) problems.push(`activityParts: expected a comma list of ${ACTIVITY_PARTS.join(", ")}`)
+    else if (key === "activityTokens" && (unknownActivityTokens(value as string).length || String(value).length > 32)) problems.push(`activityTokens: expected a comma list of ${ACTIVITY_TOKEN_PARTS.join(", ")}, or empty`)
     else if (key === "topbarStats" && (unknownStatParts(value as string).length || String(value).length > 128)) problems.push(`topbarStats: expected a comma list of ${STAT_PART_IDS.join(", ")}`)
-    else if (key === "jumpText" && String(value).length > 40) problems.push("jumpText: at most 40 characters")
+    else if (key === "toolRail") problems.push(...toolRailProblems(value))
+    else if (key === "toolDesign" && !TOOL_DESIGN_NAME.test(String(value))) problems.push("toolDesign: expected a design name (rail, branch, terse or a tool-designs/<name>.json; letters, digits, . _ -, at most 40)")
+    else if (key === "diffContext" && (!Number.isInteger(value) || Number(value) < 0 || Number(value) > 6)) problems.push("diffContext: expected integer 0..6")
+    else if (key === "diffLineRows" && (!Number.isInteger(value) || Number(value) < 1 || Number(value) > 50)) problems.push("diffLineRows: expected integer 1..50")
+    else if (key === "jumpText" &&String(value).length > 40) problems.push("jumpText: at most 40 characters")
     else if (key === "commentHintSeconds" && (!Number.isInteger(value) || Number(value) < 1 || Number(value) > 60)) problems.push("commentHintSeconds: expected integer 1..60")
     else if (key === "commentCollapse" && (!Number.isInteger(value) || Number(value) < 6 || Number(value) > 40)) problems.push("commentCollapse: expected integer 6..40")
     else if (key === "commentMax" && (!Number.isInteger(value) || Number(value) < 1 || Number(value) > 9)) problems.push("commentMax: expected integer 1..9")

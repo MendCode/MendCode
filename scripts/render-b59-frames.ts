@@ -1,7 +1,7 @@
 import { writeFileSync } from "node:fs"
 import path from "node:path"
 import { b59Harness } from "../apps/cli/test/b59-harness"
-import { CUSTOMIZE_ROWS } from "../apps/cli/src/view/customize-page"
+import { CUSTOMIZE_ROWS, customizeSteps } from "../apps/cli/src/view/customize-page"
 import { fit } from "../apps/cli/src/view/deck"
 import { textWidth } from "../apps/cli/src/view/wrap"
 
@@ -31,7 +31,7 @@ export async function renderB59Frames(directory: string, sizes: string[]) {
     }
     h.profile({ compactionStyle: "cockpit" })
     await h.type("/customize\r")
-    for (let i = 0; i < CUSTOMIZE_ROWS.indexOf("compactionStyle"); i++) await h.app.onKey("\x1b[B")
+    for (let i = 0; i < customizeSteps("compactionStyle", h.app.tuiProfile, { mode: h.app.viewMode }); i++) await h.app.onKey("\x1b[B")
     save("customize-compaction")
     await h.app.onKey("\x1b[B")
     await h.app.onKey("\x1b[B")

@@ -6,13 +6,17 @@ import { capPermission, type AgentProfile } from "@mendcode/engine-native"
  * engines own their tools and context, so what MendCode can apply is the agent's permission ceiling (a `plan` agent
  * makes the turn read-only) and its instructions, which go in front of the message the engine receives. The message
  * the user sees, and the authority text the permission checks read, stay as typed.
+ *
+ * The ceiling is read live (`current`, the agent the session has now): applying a plan changes the session's mode and
+ * agent in the middle of the turn, and a ceiling captured at its start would keep the turn read-only after the approval.
  */
-export function withExternalAgent(turn: TurnInput, profile: Pick<AgentProfile, "name" | "prompt" | "permission"> | undefined): TurnInput {
+export function withExternalAgent(turn: TurnInput, profile: Pick<AgentProfile, "name" | "prompt" | "permission"> | undefined, current?: () => Pick<AgentProfile, "permission"> | undefined): TurnInput {
   if (!profile) return turn
   const instructions = profile.prompt.trim()
   const text = instructions ? `[Instructions of agent "${profile.name}" for this message]\n${instructions}\n[End of agent instructions]\n\n${turn.text}` : turn.text
   const cap = profile.permission
-  return { ...turn, text, ...(cap ? { permissionMode: () => capPermission(turn.permissionMode(), cap) } : {}) }
+  if (!cap && !current) return { ...turn, text }
+  return { ...turn, text, permissionMode: () => capPermission(turn.permissionMode(), current ? current()?.permission : cap) }
 }
 
 /**

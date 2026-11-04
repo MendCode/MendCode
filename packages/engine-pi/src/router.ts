@@ -22,6 +22,7 @@ export function withPiEngine(input: { base: EnginePort; pi: (sessionId: SessionI
       return engine.runTurn(turn)
     },
     ...(base.runShell ? { runShell: base.runShell.bind(base) } : {}),
+    ...(base.warm ? { warm: base.warm.bind(base) } : {}),
     needsCompaction: (sessionId) => !input.usesPi(sessionId) && base.needsCompaction(sessionId),
     ...(base.contextReport
       ? {

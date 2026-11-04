@@ -1,22 +1,25 @@
 import { createHash } from "node:crypto"
-import type { PrFinding, PrStopReason, PrTokenUsage } from "@mendcode/protocol"
+import type { PrFinding, PrStopReason, PrTokenUsage, Tier } from "@mendcode/protocol"
+import { groupFiles, READER_SHARE, READERS_BY_TIER, readersNote, readGroups, type ReaderSource, type ReaderSummary, type ReadResult } from "./readers"
+import { cheapReaderList, isCheapReaderModel } from "./reader-models"
 import type { Graph } from "@mendcode/codegraph"
-import { failureStop, budgetPolicy, stopText } from "./budget"
-import { buildReviewContext, gitRun, type GitRun, type ReviewContext } from "./context"
+import { failureStop, budgetPolicy, scaledBudget, stopText } from "./budget"
+import { buildReviewContext, gitRun, type ContextReaders, type GitRun, type ReviewContext } from "./context"
 import { ignoredBy, promptConfig, readReviewConfig, type ReviewConfig } from "./config"
 import { effectiveConfig } from "./config-layers"
 import type { JobCheckpoint, PhasePlan, ReviewMemoryContext, ReviewProvider, RunPlatformInput, RunPlatformOutput } from "./contracts"
-import { resumeReview, ReviewPassError, reviewPullRequest, type ReviewCheckpoint, type ReviewEngineConfig, type ReviewOutcome, type ReviewSessionFactory } from "./engine"
+import { closeCheckpoint, resumeReview, ReviewPassError, reviewPullRequest, type ReviewCheckpoint, type ReviewEngineConfig, type ReviewOutcome, type ReviewSessionFactory } from "./engine"
 import { dedupeInherited, lineReader } from "./fingerprint"
 import { resolveReviewLanguage, withReviewLanguage } from "./language"
 import { parsePartPhase, phaseFacts, phasesBefore, planPhases } from "./phases"
+import { measurePerf, perfBody, perfFinding, perfNote, perfPrompt, type PerfOptions, type PerfOutcome } from "./perf"
 import { publishReview, publishThroughProvider, type GhCall, type PublishReport, type ReviewInfo } from "./publish"
 import type { PublishCheck } from "./publishers"
 import { reviewedBy, reviewedThrough } from "./publishers"
 import type { PullRequestInfo } from "./pull-request"
-import { childNotStarted, isStalled, ReviewTurnError, type ReviewTurnStalled } from "./sessions"
+import { childNotStarted, isOverBudget, isStalled, ReviewTurnError, type ReviewTurnOverBudget, type ReviewTurnStalled } from "./sessions"
 import { reviewRange, type ReviewState } from "./state"
-import { fixedFindings, runChecks, type CheckResult } from "./verify"
+import { fixedFindings, runChecks, spent, type CheckResult } from "./verify"
 
 /**
  * One review of one pull request, the same for the daemon's repo watch and the hosted-runner Action (docs/pr-review.md): the repo
@@ -94,6 +97,12 @@ export type RunPrReviewInput = {
    * publisher already posted a review of this head.
    */
   publisher?: { login: string | undefined; check(config: ReviewConfig): Promise<PublishCheck> }
+  /**
+   * A run nobody is waiting on (a watch's automatic review, a fix round's re-review): when it means to publish, whether this
+   * reviewer may post and whether another publisher already reviewed the head is asked before the context is built or a model is
+   * called, and a run that could not post is skipped. A manual `/pr review` keeps its review for the user's session instead.
+   */
+  onlyIfPublishable?: boolean
   /** Reads the PR's reviews for `reviewedBy`, when `gh` (which only a publishing run gets) is absent. */
   read?: GhCall
   /**
@@ -106,7 +115,23 @@ export type RunPrReviewInput = {
    * incremental review, so a round counts only what the re-check closed, published or not.
    */
   recheck?: readonly PrFinding[]
+  /**
+   * The cost phase of a MendCode pull request (perf.ts): when set, and the checkout is the MendCode repository and the diff can
+   * change what it costs, `scripts/perf-attrib.ts` runs as a subprocess before the model pass and its table goes to the model and
+   * the review. Absent (the hosted runner, a repository that is not MendCode, `prReview.perfAttrib: false`): no phase.
+   */
+  perf?: PerfOptions | undefined
+  /** The head is in a fork: the phase would build and run the fork's code, so it says it did not. */
+  fork?: boolean
+  /**
+   * The reviewer's readers (readers.ts): the install tier (how many read at once when `readers.parallel` is unset) and the cheap
+   * model of the reviewer's own provider with the factory of its children, or why there is none. Absent (the hosted runner):
+   * data files get local summaries, never a model.
+   */
+  readers?: RunReaders | undefined
 } & RunPlatformInput
+
+export type RunReaders = { tier?: Tier | undefined; source(requested?: string | undefined): ReaderSource }
 
 // ── Shared with audit.ts ─────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -154,18 +179,19 @@ type Calling = RunPlatformInput["calling"]
 export function meteredSessions({ factory, account, calling, resuming, failures, language }: { factory: ReviewSessionFactory; account: Account; calling?: Calling; resuming: boolean; failures: ReviewTurnError[]; language?: string | undefined }): ReviewSessionFactory {
   return async ({ purpose }) => {
     const session = await factory({ purpose, ...(language ? { language } : {}) })
-    const label = resuming && purpose === "verify" ? "resume" : purpose
+    // A reader's turn is review-pass work in the ledger (its child session tells /usage which model ran it).
+    const label = purpose === "read" ? "review" : resuming && purpose === "verify" ? "resume" : purpose
     const id = (session as { id?: unknown }).id
     const sessionId = typeof id === "string" && id.length <= 120 ? id : undefined
     const of = sessionId ? { sessionId } : {}
     return {
       ...session,
-      async send(prompt: string) {
+      async send(prompt: string, options?: { limit?: number | undefined }) {
         // Kept on disk while the call runs: a daemon killed mid-call leaves it, and the next start accounts it as unknown.
         let ended: (() => void) | undefined
         try { ended = calling?.({ purpose: label, ...of }) } catch { /* accounting never stops a review */ }
         try {
-          const turn = await session.send(prompt)
+          const turn = await session.send(prompt, options)
           const tokens: PrTokenUsage = { input: turn.tokens.input, output: turn.tokens.output, ...(turn.tokens.cached !== undefined ? { cached: turn.tokens.cached } : {}) }
           account?.({ purpose: label, tokens, ...of })
           return turn
@@ -189,6 +215,14 @@ export function turnStop(error: ReviewTurnError, remaining?: string): PrStopReas
   return { ...stop, ...(error.kind !== "error" ? { kind: error.kind } : {}), ...(error.resetsAt !== undefined ? { resetsAt: error.resetsAt } : {}) }
 }
 const providerLimit = (error: unknown): ReviewTurnError | undefined => error instanceof ReviewTurnError && error.kind !== "error" ? error : undefined
+/** A turn the daemon stopped at its token limit as a resumable `budget` stop: what was counted, and which settings raise it. */
+export function overBudgetStop(error: ReviewTurnOverBudget, remaining?: string): PrStopReason {
+  return {
+    kind: "budget",
+    detail: `A model turn counted ${Math.round(error.used).toLocaleString("en-US")} tokens against the ${Math.round(error.limit).toLocaleString("en-US")} left for it (what the turns before it left of this review's cap: budget.tokens_per_pr, scaled by the diff's size with budget.tokens_per_diff_token) before it answered, so it was stopped.`,
+    unit: "tokens", used: Math.round(error.used), limit: Math.round(error.limit), resumable: true, ...(remaining ? { remaining } : {}),
+  }
+}
 
 export type ReviewAttempt =
   | { ok: true; outcome: ReviewOutcome; limit?: ReviewTurnError | undefined; stalled?: ReviewTurnStalled | undefined }
@@ -223,11 +257,32 @@ export async function attemptReview({ sessionFactory, account, calling, context,
     const remaining = partial?.checkpoint.result ? partial.remaining : "the review pass has not finished"
     const limit = providerLimit(failure)
     if (limit) return { ok: false, stop: turnStop(limit, remaining), checkpoint: kept }
+    if (isOverBudget(failure)) {
+      const stop = overBudgetStop(failure, remaining)
+      // A turn counted past the cap: the parts reviewed before it are not lost. One short closing check, then a partial review.
+      if (partial) {
+        const progressed = !checkpoint || (parsePartPhase(partial.checkpoint.phase)?.done ?? 0) > (parsePartPhase(checkpoint.phase)?.done ?? 0)
+        const closed = await closeCheckpoint({ sessionFactory: factory, context, config, cap, checkpoint: partial.checkpoint, stop, progressed }).catch(() => undefined)
+        if (closed) return { ok: true, outcome: closed }
+      }
+      return { ok: false, stop, checkpoint: kept }
+    }
     if (isStalled(failure)) return { ok: false, stalled: failure, checkpoint: kept }
     throw failure
   }
   const stalled = failures.filter(isStalled).at(-1)
   if (stalled && outcome.stop && !outcome.verified) return { ok: true, outcome, stalled }
+  const over = failures.filter(isOverBudget).at(-1)
+  if (over && outcome.stop && !outcome.verified) {
+    // A verify turn counted past the cap: what it judged before is kept, and one short closing check verifies the strongest of the rest.
+    if (outcome.checkpoint) {
+      const progressed = !checkpoint || outcome.checkpoint.verified.length > checkpoint.verified.length
+      const closed = await closeCheckpoint({ sessionFactory: factory, context, config, cap, checkpoint: outcome.checkpoint as ReviewCheckpoint, stop: overBudgetStop(over, outcome.stop.remaining), progressed }).catch(() => undefined)
+      if (closed) return { ok: true, outcome: closed }
+    }
+    outcome = { ...outcome, stop: overBudgetStop(over, outcome.stop.remaining), result: { ...outcome.result, summary: outcome.result.summary.replace(/Verification failed \(.*\); nothing was published\./, "Stopped at the token budget before every candidate was verified; nothing was published.") } }
+    return { ok: true, outcome, limit: over }
+  }
   const limit = failures.filter((entry) => !!providerLimit(entry)).at(-1)
   if (limit && outcome.stop && !outcome.verified) {
     outcome = { ...outcome, stop: turnStop(limit, outcome.stop.remaining), result: { ...outcome.result, summary: outcome.result.summary.replace(/Verification failed \(.*\); nothing was published\./, `Stopped by the provider's ${limit.kind === "quota" ? "quota" : "rate limit"} before every candidate was verified; nothing was published.`) } }
@@ -239,6 +294,21 @@ export async function attemptReview({ sessionFactory, account, calling, context,
 // ── runPrReview ──────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 const isAncestor = async (git: GitRun, directory: string, ancestor: string, of: string) => (await git(["merge-base", "--is-ancestor", ancestor, of], directory)).code === 0
+
+/**
+ * Why this run's review could not be posted by this reviewer, or undefined: the repository's `publishers` does not let it post, or
+ * another publisher already has a MendCode review of this head. Asked before the model (`onlyIfPublishable`) or after it.
+ */
+async function publishBlock({ input, config }: { input: RunPrReviewInput; config: ReviewConfig }): Promise<{ kind: "not-allowed"; why: string } | { kind: "other"; login: string } | undefined> {
+  const publisher = input.publisher
+  if (!publisher) return undefined
+  const allowed = await publisher.check(config)
+  if (!allowed.ok) return { kind: "not-allowed", why: allowed.reason }
+  const reader = input.gh ?? input.read
+  const other = input.provider ? await reviewedThrough({ provider: input.provider, repo: input.repo, number: input.number, head: input.head, rule: config.publishers, self: publisher.login })
+    : reader ? await reviewedBy({ gh: reader, repo: input.repo, number: input.number, head: input.head, rule: config.publishers, self: publisher.login }) : undefined
+  return other ? { kind: "other", login: other } : undefined
+}
 
 /**
  * The range to review. A resume reviews exactly the range its checkpoint was taken on (`result.base..result.head`, the same head
@@ -285,6 +355,61 @@ function stalledReason(error: ReviewTurnStalled, kept: string | undefined): stri
     : `review incomplete, ${words}; the retry runs the review pass again; nothing was published`
 }
 
+/** The base branch's `.gitattributes`, bounded; the PR's own never decides what the review pass reads. */
+async function baseAttributes(git: GitRun, directory: string, ref: string): Promise<string | undefined> {
+  const done = await git(["show", `${ref}:.gitattributes`], directory).catch(() => undefined)
+  return done && done.code === 0 ? done.out.slice(0, 256 * 1024) : undefined
+}
+
+/**
+ * The readers of one run (readers.ts), bound to the config, the reviewer's reader source and the run's accounting: `read` is what
+ * the context calls; `spent` what the readers counted, which comes off the review's cap; `note` the line for the summary and the
+ * session notice; `summaries` what the checkpoint keeps for a resume of this head, which reads none of them again.
+ */
+function runReaders({ input, config, resume }: { input: RunPrReviewInput; config: ReviewConfig; resume: ReviewCheckpoint | undefined }) {
+  const parallel = config.readers.parallel ?? READERS_BY_TIER[input.readers?.tier ?? "balanced"]
+  const notes: string[] = []
+  const total: ReadResult = { summaries: new Map(), tokens: { input: 0, output: 0, cached: 0 }, calls: 0, byModel: 0, byLocal: 0, reasons: [] }
+  const kept: ReaderSummary[] = []
+  let reused = 0
+  let source: ReaderSource | undefined
+  const pick = (): ReaderSource => {
+    if (source) return source
+    const wanted = config.readers.model
+    if (wanted && !isCheapReaderModel(wanted)) notes.push(`readers.model ${wanted} was refused: it is not a cheap reader model (${cheapReaderList()}); the automatic pick was used.`)
+    const asked = wanted && isCheapReaderModel(wanted) ? wanted : undefined
+    let picked: ReaderSource = input.readers ? input.readers.source(asked) : { ok: false, reason: "this runner has no reader model" }
+    if (!picked.ok && asked && input.readers) { notes.push(`readers.model ${asked} was refused: ${picked.reason}; the automatic pick was used.`); picked = input.readers.source(undefined) }
+    source = picked.ok ? { ...picked, factory: meteredSessions({ factory: picked.factory, account: input.account, calling: input.calling, resuming: false, failures: [] }) } : picked
+    return source
+  }
+  const read: ContextReaders = async ({ data, cut, diffTokens }) => {
+    const groups = groupFiles({ data, cut })
+    const cached = resume?.readers ?? []
+    const covered = (group: (typeof groups)[number]) => cached.find((summary) => summary.paths.length === group.files.length && group.files.every((entry) => summary.paths.includes(entry.file.path)))
+    const out: ReaderSummary[] = []
+    const fresh = groups.filter((group) => { const hit = covered(group); if (hit) { out.push(hit); reused += hit.paths.length } return !hit })
+    if (fresh.length) {
+      const cap = scaledBudget(config.budget, diffTokens)
+      const allowance = cap === undefined ? Number.POSITIVE_INFINITY : Math.floor(cap * READER_SHARE) - spent(total.tokens)
+      const result = await readGroups({ groups: fresh, source: pick(), parallel, allowance })
+      out.push(...result.summaries.values())
+      total.tokens = { input: total.tokens.input + result.tokens.input, output: total.tokens.output + result.tokens.output, cached: (total.tokens.cached ?? 0) + (result.tokens.cached ?? 0) }
+      total.calls += result.calls; total.byModel += result.byModel; total.byLocal += result.byLocal
+      total.model ??= result.model
+      for (const reason of result.reasons) if (!total.reasons.includes(reason)) total.reasons.push(reason)
+    }
+    kept.push(...out)
+    return out
+  }
+  const note = () => [
+    ...notes,
+    readersNote(total, parallel),
+    reused ? `Readers: the summaries of ${reused.toLocaleString("en-US")} file${reused === 1 ? "" : "s"} were kept from this head's earlier run, not read again.` : undefined,
+  ].filter((line): line is string => !!line)
+  return { read, note, spent: () => spent(total.tokens), summaries: () => kept }
+}
+
 export async function runPrReview(input: RunPrReviewInput): Promise<ReviewRun & RunPlatformOutput> {
   const run = await reviewRun(input)
   return { ...run, head: input.head }
@@ -308,20 +433,40 @@ async function reviewRun(input: RunPrReviewInput): Promise<ReviewRun & RunPlatfo
   const resume = input.checkpoint?.result && input.checkpoint.result.head === input.head ? input.checkpoint as ReviewCheckpoint : undefined
   if (input.checkpoint && !resume) notes.push(input.checkpoint.result ? `The checkpoint was taken on head ${input.checkpoint.result.head.slice(0, 12)}, not this one: reviewed again from the start.` : "The checkpoint holds no finished review pass: the review pass runs again.")
   const range = await chooseRange({ input, git, full: config.coverage === "full", resume })
-  if (!range) return skipped("this head was already reviewed")
+  if (!range) return skipped(`head ${input.head.slice(0, 12)} was already reviewed, so nothing was sent to a model; /pr review ${input.number} full reviews it again whole`)
   const incremental = range.incremental
+  if (input.onlyIfPublishable && input.publish && config.enabled && (input.gh || input.provider)) {
+    const blocked = await publishBlock({ input, config })
+    if (blocked) return { ...skipped(`${blocked.kind === "other" ? `@${blocked.login} already posted a MendCode review of this head` : blocked.why}; nothing was sent to a model`), notPublisher: true as const }
+  }
   try {
     const graph = await input.graph?.().catch(() => undefined)
     const budget = budgetPolicy(config, { contextWindow: input.contextWindow })
-    const context = await buildReviewContext({ directory: input.directory, base: range.base, head: range.head, budgetTokens: budget.contextTokens, graph, git, ignore: ignoredBy(config) })
+    const readers = config.readers.enabled ? runReaders({ input, config, resume }) : undefined
+    const attributes = readers ? await baseAttributes(git, input.directory, policyRef) : undefined
+    const context = await buildReviewContext({ directory: input.directory, base: range.base, head: range.head, budgetTokens: budget.contextTokens, graph, git, ignore: ignoredBy(config), readers: readers?.read, attributes })
     context.notes.unshift(...notes)
+    if (readers) context.notes.push(...readers.note())
     if (input.pullRequest) context.pullRequest = input.pullRequest
     if (incremental) context.notes.push(`Incremental review: only the commits since ${range.base.slice(0, 12)}.`)
     else if (input.stack && range.base === input.stack.base) context.notes.push(`Stacked on #${input.stack.parent}: only this pull request's own commits since #${input.stack.parent}'s head ${input.stack.base.slice(0, 12)}.`)
+    // The cost phase: a subprocess with execution, outside the model's read-only pass; it never fails or blocks the review.
+    const perf: PerfOutcome | undefined = input.perf ? await measurePerf({ directory: input.directory, base: input.base, head: input.head, git, options: input.perf, fork: input.fork === true }) : undefined
+    if (perf) {
+      context.perf = perfPrompt(perf)
+      const note = perfNote(perf)
+      if (note) context.notes.push(note)
+    }
     const plan = planPhases({ config: config.phases, facts: phaseFacts({ context, fixMode: config.fix.mode, stacked: !!input.stack }) })
     const files = context.files.map((file) => file.path)
     const memory = input.memory ? await input.memory({ title: input.pullRequest?.title ?? `${input.repo}#${input.number}`, files }).catch(() => { context.notes.push("The reviewer's memory context could not be read; reviewed without it."); return undefined }) : undefined
-    const engineConfig = engineConfigFor({ config, context, learnings: read.learnings, budgetTokens: budget.tokensPerPr ?? Number.POSITIVE_INFINITY, plan, memory })
+    // The cap follows the change: the whole diff's size (all its parts), under `tokens_per_pr`.
+    // The diffs readers read count too, so the cap is the same with or without them; what the readers counted comes off it.
+    const diffTokens = (context.parts ? context.parts.reduce((sum, part) => sum + part.tokens, 0) : context.tokens) + (context.readTokens ?? 0)
+    const cap = scaledBudget(config.budget, diffTokens)
+    const budgetTokens = cap === undefined ? Number.POSITIVE_INFINITY : Math.max(10_000, cap - (readers?.spent() ?? 0))
+    const engineConfig = engineConfigFor({ config, context, learnings: read.learnings, budgetTokens, plan, memory })
+    const withReaders = <T extends JobCheckpoint>(checkpoint: T): T => readers?.summaries().length ? { ...checkpoint, readers: readers.summaries() } : checkpoint
     const checks = config.checks.length ? () => (input.checks ?? ((directory, commands) => runChecks({ directory, commands })))(input.directory, config.checks) : undefined
     const common = { state, config, incremental, configKey, plan }
     const attempt = await attemptReview({ sessionFactory: input.sessionFactory, account: input.account, calling: input.calling, context, config: engineConfig, plan, cap: config.cap, checks, checkpoint: resume })
@@ -329,9 +474,9 @@ async function reviewRun(input: RunPrReviewInput): Promise<ReviewRun & RunPlatfo
     if (!attempt.ok && attempt.stalled) {
       const part = attempt.checkpoint.result ? parsePartPhase(attempt.checkpoint.phase) : undefined
       const kept = part ? `${part.done} of ${part.total} parts of the diff reviewed, ${plural(attempt.checkpoint.candidates.length, "candidate finding")}` : undefined
-      return { status: "failed", reason: stalledReason(attempt.stalled, kept), ...common, checkpoint: attempt.checkpoint, retryable: true }
+      return { status: "failed", reason: stalledReason(attempt.stalled, kept), ...common, checkpoint: withReaders(attempt.checkpoint), retryable: true }
     }
-    if (!attempt.ok) return { status: "reviewed", reason: `review incomplete, stopped by the provider's ${attempt.stop.kind === "quota" ? "quota" : "rate limit"}; nothing was published`, ...common, stop: attempt.stop, checkpoint: attempt.checkpoint, retryable: true }
+    if (!attempt.ok) return { status: "reviewed", reason: `review incomplete, stopped ${attempt.stop.kind === "budget" ? "at the token budget" : `by the provider's ${attempt.stop.kind === "quota" ? "quota" : "rate limit"}`}; nothing was published`, ...common, stop: attempt.stop, checkpoint: withReaders(attempt.checkpoint), ...(attempt.stop.kind === "budget" ? {} : { retryable: true as const }) }
     let outcome = attempt.outcome
     let inherited = 0
     if (input.stack) {
@@ -341,6 +486,10 @@ async function reviewRun(input: RunPrReviewInput): Promise<ReviewRun & RunPlatfo
       outcome = { ...outcome, result: { ...outcome.result, findings: shown.kept }, ...(outcome.checkpoint && pending ? { checkpoint: { ...outcome.checkpoint, candidates: pending.kept } } : {}) }
     }
     const complete = !outcome.stop
+    // A measured rise is a critical finding of its own: it does not depend on what the model noticed.
+    const risen = perf && complete ? perfFinding({ outcome: perf, context }) : undefined
+    const risenAdded = !!risen && !outcome.result.findings.some((finding) => finding.id === risen.id)
+    if (risen && risenAdded) outcome ={ ...outcome, result: { ...outcome.result, findings: [risen, ...outcome.result.findings] }, candidates: [risen, ...outcome.candidates] }
     const published = Object.values(input.state.published).flatMap((entry) => entry.finding && !entry.resolved ? [entry.finding] : [])
     const previous = [...published, ...(input.recheck ?? []).filter((finding) => !published.some((known) => known.id === finding.id))]
     // An explicit full review re-checks the open findings too: otherwise asking again after a fix could never close their threads.
@@ -349,30 +498,31 @@ async function reviewRun(input: RunPrReviewInput): Promise<ReviewRun & RunPlatfo
     // The base of the result is the PR's base, so a later incremental review still knows where the PR starts.
     const result = { ...outcome.result, base: input.base }
     const inheritedNote = inherited ? [`${plural(inherited, "finding")} #${input.stack!.parent} already reported ${inherited === 1 ? "was" : "were"} left out (this pull request is stacked on it).`] : []
-    const info: ReviewInfo = { files: context.files.map((file) => ({ path: file.path, touched: file.touched.length })), profile: config.profile, cap: config.cap, incremental, notes: [...context.notes.filter((note) => !note.startsWith("Incremental review:")), ...inheritedNote], ...(complete ? { checked: outcome.candidates.length } : {}) }
+    const info: ReviewInfo = { files: context.files.map((file) => ({ path: file.path, touched: file.touched.length })), profile: config.profile, cap: config.cap, incremental, notes: [...context.notes.filter((note) => !note.startsWith("Incremental review:")), ...inheritedNote], ...(complete ? { checked: outcome.candidates.length - (risenAdded ? 1 : 0) } : {}), ...(perf && perfBody(perf) ? { perf: perfBody(perf) } : {}), ...(outcome.partial ? { partial: { ...outcome.partial, number: input.number } } : {}) }
     // Always a checkpoint: the plan's decisions; complete, every judged finding; stopped, what a resume verifies.
-    const checkpoint: JobCheckpoint = outcome.checkpoint ?? {
+    const checkpoint: JobCheckpoint = withReaders(outcome.checkpoint ?? {
       completedPhases: outcome.completedPhases ?? [], candidates: [], verified: outcome.candidates, result: outcome.result,
       rounds: input.checkpoint?.rounds ?? [], decisions: plan.decisions, ...(outcome.sections ? { sections: outcome.sections } : {}),
-    }
+    })
     const reviewed = { ...common, outcome: { ...outcome, result }, info, checkpoint, ...(inherited ? { inherited } : {}), ...(rechecked ? { fixed } : {}) }
-    if (outcome.stop) {
+    // A review that reached its token budget and closed with a short check is posted as a partial review, never as nothing. Its stop and
+    // checkpoint stay with the job (`keep`), so the next /pr review continues with the parts and candidates still missing.
+    const closing = !!outcome.partial && outcome.stop?.kind === "budget"
+    const keep = closing ? { stop: outcome.stop! } : {}
+    if (outcome.stop && !closing) {
       const stop = outcome.stop
       if (attempt.stalled) return { status: "failed", reason: stalledReason(attempt.stalled, stop.remaining), ...reviewed, retryable: true }
       if (!outcome.verified && !attempt.limit) return { status: "failed", reason: "verification failed; nothing was published", ...reviewed, stop }
-      return { status: "reviewed", reason: `review incomplete (${stop.kind}); nothing was published`, ...reviewed, stop, ...(attempt.limit ? { retryable: true as const } : {}) }
+      // An "error" stop of a complete verify pass is the review pass saying it could not review the change: its words, not a bare kind.
+      return { status: "reviewed", reason: `review incomplete (${stop.kind === "error" ? stop.detail.replace(/^The review pass/, "the review pass") : stop.kind}); nothing was published`, ...reviewed, stop, ...(attempt.limit ? { retryable: true as const } : {}) }
     }
     if (!outcome.verified) return { status: "failed", reason: "verification failed; nothing was published", ...reviewed }
-    const reader = input.gh ?? input.read
     const provider = input.provider
     if (input.publisher && config.enabled) {
-      const allowed = await input.publisher.check(config)
-      if (!allowed.ok) return { status: "reviewed", reason: `kept in this session: ${allowed.reason}`, notPublisher: true, ...reviewed }
-      const other = provider ? await reviewedThrough({ provider, repo: input.repo, number: input.number, head: input.head, rule: config.publishers, self: input.publisher.login })
-        : reader ? await reviewedBy({ gh: reader, repo: input.repo, number: input.number, head: input.head, rule: config.publishers, self: input.publisher.login }) : undefined
-      if (other) return { status: "reviewed", reason: `@${other} already posted a MendCode review of this head; kept in this session`, notPublisher: true, ...reviewed }
+      const blocked = await publishBlock({ input, config })
+      if (blocked) return { status: "reviewed", reason: blocked.kind === "other" ? `@${blocked.login} already posted a MendCode review of this head; kept in this session` : `kept in this session: ${blocked.why}`, notPublisher: true, ...reviewed, ...keep }
     }
-    if (!(input.gh || provider) || !input.publish || !config.enabled) return { status: "reviewed", ...(!config.enabled ? { reason: "publishing needs enabled: true in .mendcode/review.yaml on the base branch" } : {}), ...reviewed }
+    if (!(input.gh || provider) || !input.publish || !config.enabled) return { status: "reviewed", ...(!config.enabled ? { reason: "publishing needs enabled: true in .mendcode/review.yaml on the base branch" } : {}), ...reviewed, ...keep }
     const as = input.publishAs
     if (provider) {
       const report = await publishThroughProvider({
@@ -383,7 +533,7 @@ async function reviewRun(input: RunPrReviewInput): Promise<ReviewRun & RunPlatfo
       if (report.stale) return { status: "reviewed", reason: report.reason ?? "the head moved; nothing was posted", ...reviewed, report, stale: true }
       if (report.uncertain) return { status: "failed", reason: report.reason ?? "the forge did not confirm the review", ...reviewed, report, retryable: true }
       if (!report.posted && !report.duplicate && / refused the review/.test(report.reason ?? "")) return { status: "failed", reason: report.reason!, ...reviewed, report }
-      return { status: "published", ...notPosted(report), ...reviewed, report, state: report.state }
+      return { status: "published", ...notPosted(report), ...reviewed, ...keep, report, state: report.state }
     }
     const report = await publishReview({
       repo: input.repo, number: input.number, result, previous: state, process: input.gh!, resolve: fixed, info,
@@ -393,7 +543,7 @@ async function reviewRun(input: RunPrReviewInput): Promise<ReviewRun & RunPlatfo
     if (report.stale) return { status: "reviewed", reason: report.reason ?? "the head moved; nothing was posted", ...reviewed, report, stale: true }
     if (report.uncertain) return { status: "failed", reason: report.reason ?? "GitHub did not confirm the review", ...reviewed, report, retryable: true }
     if (!report.posted && report.reason?.startsWith("GitHub refused")) return { status: "failed", reason: report.reason, ...reviewed, report }
-    return { status: "published", ...notPosted(report), ...reviewed, report, state: report.state }
+    return { status: "published", ...notPosted(report), ...reviewed, ...keep, report, state: report.state }
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error)
     return { status: "failed", reason, state: input.state, config, incremental, configKey, ...(childNotStarted(reason) ? { retryable: true as const } : {}) }

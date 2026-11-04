@@ -8,7 +8,7 @@ export function createPets(ctx: AppContext, actions: { changeProfile(patch: Part
 
   async function packagePets() {
     if (!input.pets || input.remote) return
-    const reply = await input.send({ type: "packages.list", directory: input.directory ?? "" })
+    const reply = await input.send({ type: "profiles.list", directory: input.directory ?? "" })
     input.pets.dirs.splice(0, input.pets.dirs.length, ...input.pets.dirs.filter((entry) => entry.source !== "package"))
     if (!reply.ok) return
     const report = reply.result as import("@mendcode/protocol").PackagesReport | undefined
@@ -100,7 +100,7 @@ export function createPets(ctx: AppContext, actions: { changeProfile(patch: Part
         if (command.action === "delete" && state.tuiProfile.homeMascot === `user:${command.petId}`) actions.changeProfile({ homeMascot: "mend" })
         await loadPetChoices()
         state.page = "pet"
-        say(command.action === "export" ? `Pet package: ${reply.result?.directory}` : command.action === "delete" ? "Pet moved to Trash" : "Pet renamed", "success")
+        say(command.action === "export" ? `Pet profile: ${reply.result?.directory}` : command.action === "delete" ? "Pet moved to Trash" : "Pet renamed", "success")
       }
       requestFrame()
       return true

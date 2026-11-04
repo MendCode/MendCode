@@ -12,7 +12,7 @@ function pkg(name: string, source: PackageInfo["source"], patch: Partial<Package
     key: `${source}:${name}`,
     dir: source === "user" ? `/Users/dev/.mendcode/packages/${name}` : `/Users/dev/Code/atlas/.mendcode/packages/${name}`,
     enabled: true,
-    manifest: { name, version: "1.0.0", description: `Package ${name}` },
+    manifest: { name, version: "1.0.0", description: `Profile ${name}` },
     install: { source: `github:acme/${name}`, commit: "9f2c1ab7d3e4550c8a1b", installedAt: NOW - 2 * DAY },
     contents: { tools: 1, skills: 0, commands: 0, themes: 0, mcp: false },
     ...patch,
@@ -34,7 +34,7 @@ const report: PackagesReport = {
     }),
     pkg("legacy-lint", "project", { enabled: false, manifest: { name: "legacy-lint", version: "0.9.0", description: "Old linter wrapper" }, contents: { tools: 1, skills: 0, commands: 1, themes: 0, mcp: false } }),
     pkg("half-installed", "user", {
-      problem: "manifest.json: version must be a string (received number 2); the package cannot load until the manifest is fixed. Reinstall it or edit the file at the folder shown below.",
+      problem: "manifest.json: version must be a string (received number 2); the profile cannot load until the manifest is fixed. Reinstall it or edit the file at the folder shown below.",
       manifest: undefined,
       install: undefined,
       contents: { tools: 0, skills: 0, commands: 0, themes: 0, mcp: false },
