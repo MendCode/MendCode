@@ -72,6 +72,8 @@ export function createTutorialEngine(options: TutorialEngineOptions) {
   const settings: Record<string, unknown> = { onboarded: true, ...options.settings }
   let choice: { model: string; effort?: string } = { model: MODELS[0]!.id, effort: "medium" }
   let current = ""
+  /** What the running turn was asked, for an Esc Esc that takes the message back. */
+  let runningText = ""
   let running: { sessionId: string; turnId: string; abort: AbortController; done: Promise<void> } | undefined
   let fileText = BEFORE.join("\n")
   let edited = false
@@ -215,6 +217,7 @@ export function createTutorialEngine(options: TutorialEngineOptions) {
   function start(session: Stored, text: string, queueId: string) {
     const turnId = id("turn")
     lastTurn = turnId
+    runningText = text
     const abort = new AbortController()
     stats.turnsStarted += 1
     emit(session, { type: "foreground.state", state: "generating", turnId })
@@ -291,6 +294,11 @@ export function createTutorialEngine(options: TutorialEngineOptions) {
       }
       case "session.get": { const session = sessions.get(String(c.sessionId)); return session ? ok({ session: summary(session) }) : fail("no such practice session") }
       case "session.undo": {
+        // Esc Esc on a turn nothing answered: the turn stops and the message comes back, as the daemon does.
+        if (c.cancelRunning === true && running) {
+          running.abort.abort()
+          return ok({ turnIds: [running.turnId], files: { restored: [], removed: [], skipped: [] }, history: { messages: 1, tracked: true }, shellUntracked: false, notes: [], prompt: { text: runningText, attachments: [] }, canRedo: false, changes: [] })
+        }
         if (!edited || !lastTurn) return fail("nothing to undo in practice yet")
         edited = false
         fileText = BEFORE.join("\n")

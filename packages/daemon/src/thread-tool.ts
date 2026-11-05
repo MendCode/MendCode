@@ -14,22 +14,25 @@ export const threadsTool = defineTool({
   name: "threads",
   tier: "balanced",
   description: [
-    "Work with this project's other local sessions. action=list shows them (id, title, state, busy; scope=all or directory=<folder>: other projects'); stats gives a session's figures, this one without sessionId (time per turn, day and hour, usage per model, tools, sub-agents, approval waits; no message text, no approval): use it for how long a session worked or what it spent; search finds text in it (follow `more: before=` for older pages);",
+    "Work with this project's other local sessions. action=list shows them, newest first (id, state if busy, age, title; 10, limit up to 100; query, state, project narrow it; scope=all or directory=<folder>: other projects'); stats gives a session's figures, this one without sessionId (time per turn, day and hour, usage per model, tools, sub-agents, approval waits; no message text, no approval): use it for how long a session worked or what it spent; search finds text in it (follow `more: before=`);",
     "message queues a self-contained plain-text message (its answer returns as a notice); wait blocks up to timeoutSeconds until the session is idle and returns its last answer, without stopping it; interrupt cancels its running turn.",
     "merge_back brings what a fork of this session did since it branched into this session as context for its next message (a fork of this session only; no model call).",
-    "list also names this project's chats in other programs (ids codex:…, claude:…, v1:… for Codex, Claude Code and the previous MendCode): read and search work on them, nothing else, and each one asks the user.",
-    "start opens a session in another project's folder (absolute directory) with text as its first message; message and wait take another project's full id. Those always ask the user (a target above this session is refused first), arrive marked as an agent's, and never reach a session above this one's permission.",
-    "Read, search, stats, interrupt and merge_back: this project only. Use an exact id from list. Reading another session needs approval unless the user attached it with @thread. Reasoning is never shown and secrets stay as markers.",
+    "list also names this project's chats in other programs (codex:…, claude:…, v1:…): read and search only, each asks the user.",
+    "start opens a session in another project's folder (absolute directory) with text as its first message; message and wait take another project's id from list scope=all. Those always ask the user, arrive marked as an agent's, and never reach a session above this one's permission.",
+    "Read, search, stats, interrupt, merge_back: this project only; use the id as printed. Reading another session needs approval unless the user attached it with @thread. Reasoning is never shown; secrets stay markers.",
   ].join(" "),
   permission: "write",
   args: z.object({
     action: z.enum(ACTIONS),
-    sessionId: z.string().min(4).max(64).optional().describe("Exact id from list (not needed for list; stats without it is this session)"),
+    sessionId: z.string().min(4).max(64).optional().describe("Id from list (not needed for list; stats without it is this session)"),
     text: z.string().min(1).max(8_000).optional().describe("message, start: text to send; search: text to find"),
     scope: z.enum(["project", "all"]).optional().describe("list: project (default) or all"),
     directory: z.string().min(1).max(1_024).optional().describe("start: the other project's absolute folder; list: only that folder"),
     title: z.string().min(1).max(120).optional().describe("start: its title"),
-    limit: z.number().int().min(1).max(10).optional().describe("read, search, list: how many to return"),
+    limit: z.number().min(1).optional().describe("list: default 10, max 100; read, search: max 10"),
+    query: z.string().min(1).optional().describe("list: title contains"),
+    state: z.enum(["busy", "idle"]).optional().describe("list: only busy or idle"),
+    project: z.string().min(1).optional().describe("list: folder contains"),
     before: z.string().max(100).optional().describe("read, search: the `before=` cursor of the previous page"),
     timeoutSeconds: z.number().int().min(1).max(120).optional().describe("wait: seconds to wait, default 60"),
   }),
@@ -74,7 +77,7 @@ export const threadsTool = defineTool({
     const text = args.text ?? ""
     // Only a session of another project is addressed as such, which is exactly what `approvalFor` asked the user about.
     const elsewhere = sessionId && port.projectOf?.(sessionId) !== undefined ? { elsewhere: true } : {}
-    const result = args.action === "list" ? port.list(args.limit, { scope: args.scope, directory: args.directory })
+    const result = args.action === "list" ? port.list(args.limit, { scope: args.scope, directory: args.directory, query: args.query, state: args.state, project: args.project })
       : args.action === "start" ? await (port.start?.({ directory: args.directory!, text, title: args.title }) ?? Promise.resolve({ ok: false as const, message: "starting sessions is not available here" }))
       : args.action === "stats" ? port.stats({ sessionId: args.sessionId })
       : args.action === "read" ? await port.read({ sessionId, limit: args.limit, before: args.before })

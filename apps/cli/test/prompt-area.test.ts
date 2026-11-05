@@ -353,6 +353,94 @@ describe("prompt area in the app", () => {
     expect(sent.some((command) => command.type === "session.undo")).toBe(false)
   })
 
+  describe("Esc Esc on a message with images that nothing answered yet", () => {
+    const blob = (index: number) => ({ sha256: index.toString(16).padStart(64, "0"), bytes: 1000, mime: "image/png", name: `shot-${index}.png`, label: `[Image #${index}]`, at: 0 })
+    const images = Array.from({ length: 12 }, (_, index) => blob(index + 1))
+    const sentText = `te marcare todos los slops ${images.map((image) => image.label).join(" ")} revisalos`
+    const report = (text: string) => ({ ok: true, result: { turnIds: [], itemId: "x", files: { restored: [], removed: [], skipped: [] }, history: { messages: 1, tracked: true }, shellUntracked: false, notes: [], prompt: { text, attachments: images }, canRedo: true, changes: [] } })
+
+    /** The message as the daemon sends it: queued, taken out of the queue, turn started, the user message item. */
+    function sentMessage(options: { send?: (command: Record<string, unknown>) => unknown } = {}) {
+      const rig = harness({ send: options.send ?? ((command) => command.type === "session.undo" ? report(sentText) : undefined) })
+      const queueId = ids("queue")
+      const message = ids("item")
+      rig.ev({ type: "queue.added", queueId, text: sentText, attachments: images })
+      rig.ev({ type: "queue.changed", queue: [{ queueId, preview: sentText.slice(0, 200), attachments: 12, kind: "message" }] })
+      rig.ev({ type: "queue.changed", queue: [] })
+      rig.ev({ type: "turn.started", turnId: rig.turnId, queueId })
+      rig.ev({ type: "item.started", turnId: rig.turnId, itemId: message, kind: "user_message" })
+      rig.ev({ type: "item.completed", itemId: message, status: "ok", text: sentText })
+      rig.ev({ type: "foreground.state", state: "generating", turnId: rig.turnId })
+      return { ...rig, message }
+    }
+
+    /** Enter on whatever the prompt holds: what the next message would carry. */
+    async function resend(rig: ReturnType<typeof sentMessage>) {
+      await rig.app.onKey("\r")
+      return rig.sent.findLast((command) => command.type === "user.submit") as { text: string; attachments: Array<{ label?: string }> } | undefined
+    }
+
+    test("a screenshot queued behind it does not stop it: the message and the queued one come back, in order, with every image", async () => {
+      const rig = sentMessage()
+      const { app, ev, sent, message } = rig
+      const queued = ids("queue")
+      ev({ type: "queue.added", queueId: queued, text: "[Image #18]", attachments: [blob(18)] })
+      ev({ type: "queue.changed", queue: [{ queueId: queued, preview: "[Image #18]", attachments: 1, kind: "message" }] })
+      await app.onKey("\x1b")
+      await app.onKey("\x1b")
+      expect(sent.some((command) => command.type === "turn.cancel")).toBe(false)
+      expect(sent.find((command) => command.type === "session.undo")).toMatchObject({ atItemId: message, cancelRunning: true })
+      expect(sent.find((command) => command.type === "queue.remove")).toMatchObject({ queueId: queued })
+      expect(app.editor.text).toBe(`${sentText}\n[Image #18]`)
+      const again = await resend(rig)
+      expect(again?.attachments.map((attachment) => attachment.label)).toEqual([...images.map((image) => image.label), "[Image #18]"])
+    })
+
+    test("a draft in the prompt does not stop it: the message goes in front of what was typed", async () => {
+      const rig = sentMessage()
+      await type(rig.app, "otra cosa")
+      await rig.app.onKey("\x1b")
+      await rig.app.onKey("\x1b")
+      expect(rig.sent.some((command) => command.type === "turn.cancel")).toBe(false)
+      expect(rig.app.editor.text).toBe(`${sentText}\notra cosa`)
+      expect((await resend(rig))?.attachments).toHaveLength(12)
+    })
+
+    test("the prompt is filled before the daemon answers the undo", async () => {
+      let release: (reply: unknown) => void = () => {}
+      const rig = sentMessage({ send: (command) => command.type === "session.undo" ? new Promise((resolve) => { release = resolve }) : undefined })
+      await rig.app.onKey("\x1b")
+      const second = rig.app.onKey("\x1b")
+      await new Promise((resolve) => setTimeout(resolve, 5))
+      expect(rig.app.editor.text).toBe(sentText)
+      release(report(sentText))
+      await second
+      expect(rig.app.editor.text).toBe(sentText)
+      expect((await resend(rig))?.attachments).toHaveLength(12)
+    })
+
+    test("an undo the daemon refuses puts the prompt back as it was", async () => {
+      const rig = sentMessage({ send: (command) => command.type === "session.undo" ? { ok: false, error: { code: "invalid_state", message: "nothing to undo" } } : undefined })
+      await type(rig.app, "borrador")
+      await rig.app.onKey("\x1b")
+      await rig.app.onKey("\x1b")
+      expect(rig.app.editor.text).toBe("borrador")
+      expect(rig.text().some((row) => row.includes("nothing to undo"))).toBe(true)
+    })
+
+    test("once the model answered, the interrupt says why the message was not taken back", async () => {
+      const rig = sentMessage()
+      const answer = ids("item")
+      rig.ev({ type: "item.started", turnId: rig.turnId, itemId: answer, kind: "agent_message" })
+      rig.ev({ type: "item.delta", itemId: answer, text: "Arranco con la revisión. ".repeat(12) })
+      await rig.app.onKey("\x1b")
+      await rig.app.onKey("\x1b")
+      expect(rig.sent.some((command) => command.type === "turn.cancel")).toBe(true)
+      expect(rig.sent.some((command) => command.type === "session.undo")).toBe(false)
+      expect(rig.text().some((row) => row.includes("already answered · esc esc to edit"))).toBe(true)
+    })
+  })
+
   test("a newer build installed under the terminal is said once on the right of the prompt's top rule, taking no row", () => {
     const { app, text } = harness({ width: 100 })
     app.render()

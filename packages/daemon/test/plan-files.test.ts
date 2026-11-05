@@ -6,7 +6,7 @@ import { todoTool } from "@mendcode/engine-native"
 import type { SessionEvent, SessionId } from "@mendcode/protocol"
 import { createPeers } from "../src/peers"
 import { sessionsTool } from "../src/peer-tools"
-import { createPlanFiles, planLine, projectFolder } from "../src/plan-files"
+import { createPlanFiles, planListLines, projectFolder } from "../src/plan-files"
 import { boot, callTool, openSession, stop, until, type NativeHarness } from "./native-harness"
 
 const harnesses: NativeHarness[] = []
@@ -160,7 +160,13 @@ test("plans list for the project and for all, read by id, with the feature off n
   expect(listed.map((plan) => plan.title).sort()).toEqual(["One", "Two"])
   expect(u.files.list({ all: true })).toHaveLength(2)
   const two = listed.find((plan) => plan.title === "Two")!
-  expect(planLine(two)).toContain(`plan=${two.id}`)
+  const lines = planListLines(listed, Date.parse(two.updated) + 120_000)
+  expect(lines[0]).toBe("id · status steps · age · title")
+  expect(lines.some((line) => line.includes("Two") && line.includes("2m"))).toBe(true)
+  const shortId = /(plan-\S+) · /.exec(lines.find((line) => line.includes("Two"))!)![1]!
+  expect(shortId.length).toBeLessThan(two.id.length + 1)
+  const viaShort = u.files.read(shortId)
+  expect(viaShort.ok && viaShort.entry.id).toBe(two.id)
   const read = u.files.read(two.id)
   expect(read.ok && read.text).toContain("1. b edited")
   expect(u.files.read("plan-../../etc").ok).toBe(false)
@@ -181,13 +187,13 @@ test("sessions plans=true lists and reads plans through the peer port, local onl
   const peers = createPeers({
     clock: { now: () => 0 } as never,
     sessions: () => [], info: () => ({ title: "t", directory: u.project }), state: () => "idle", notify: async () => undefined,
-    plans: (from, where) => restricted.has(from) ? { ok: false, message: "reading plans is local only" } : (() => { const found = u.files.list(where?.scope === "all" ? { all: true } : { directory: where?.directory ?? u.project }); return { ok: true as const, output: found.map(planLine).join("\n"), count: found.length } })(),
+    plans: (from, where) => restricted.has(from) ? { ok: false, message: "reading plans is local only" } : (() => { const found = u.files.list(where?.scope === "all" ? { all: true } : { directory: where?.directory ?? u.project }); return { ok: true as const, output: planListLines(found, 0).join("\n"), count: found.length } })(),
     readPlan: (from, id) => { const plan = u.files.read(id, u.project); return plan.ok ? { ok: true, output: plan.text } : plan },
   })
   const context = (from: string) => ({ peers: peers.port(from as SessionId) }) as never
   const listed = await sessionsTool.execute({ plans: true }, context("ses_other0001"))
-  expect(listed.output).toContain("title=\"Shared\"")
-  const id = /plan=(\S+)/.exec(listed.output)![1]!
+  expect(listed.output).toContain("Shared")
+  const id = /(plan-\S+) · /.exec(listed.output)![1]!
   const read = await sessionsTool.execute({ read: id }, context("ses_other0001"))
   expect(read.output).toContain("1. share me")
   restricted.add("ses_remote01")

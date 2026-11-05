@@ -92,6 +92,8 @@ export type SessionActorOptions = {
   onForeground?(state: ForegroundState): void
   /** The pause flag changed (`pause`/`resume`), so panels can show it even when the foreground state did not move. */
   onPause?(paused: boolean): void
+  /** The running turn's output tokens not yet in a recorded usage (0 once one records them). Live only: nothing is stored. */
+  onLiveOutput?(turnId: TurnId, output: number): void
   /** Queue recovered after a restart. It starts held: nothing runs until the user acts. */
   restoredQueue?: Array<{ queueId: QueueId; text: string; displayText?: string; authorityText?: string; attachments: BlobRef[]; messageId?: ItemId; selection?: TurnInput["selection"]; turnOptions?: TurnInput["turnOptions"]; compact?: true; instructions?: string; notice?: true; shell?: true; local?: true; rides?: true }>
   /** Persisted mode of the session (default "ask"). */
@@ -449,8 +451,10 @@ export function createSessionActor(options: SessionActorOptions) {
   function onEngineEvent(turnId: TurnId, event: EngineEvent) {
     if (!isLive(turnId) || !active) return
     const turn = active
+    if (event.type === "usage.live") return options.onLiveOutput?.(turnId, event.output)
     if (event.type === "usage") {
       const { type: _type, ...usage } = event
+      options.onLiveOutput?.(turnId, 0)
       emit({ type: "usage.recorded", sessionId, turnId, ...usage })
       return
     }

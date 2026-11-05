@@ -58,3 +58,28 @@ test("an engine that reports no usage has no token count: nothing is estimated f
   for (let index = 0; index < 5; index++) state.apply(event({ type: "item.delta", itemId: "itm_a", text: "word " }))
   expect([state.input, state.output]).toEqual([0, 0])
 })
+
+test("an engine's running output count shows while the turn runs, is replaced by the usage that records it, and never outlives its turn", () => {
+  const state = createTurnState()
+  state.apply(event({ type: "turn.started", turnId: "trn_live", queueId: "que_live" }))
+  expect(state.outputLive).toBe(0)
+  expect(state.noteLive({ turnId: "trn_live", output: 120 })).toBe(true)
+  expect([state.output, state.outputLive]).toEqual([0, 120])
+  // The same figure again changes nothing; a push for another turn is dropped.
+  expect(state.noteLive({ turnId: "trn_live", output: 120 })).toBe(false)
+  expect(state.noteLive({ turnId: "trn_other", output: 999 })).toBe(false)
+  expect(state.noteLive({ turnId: "trn_live", output: 420 })).toBe(true)
+  expect(state.outputLive).toBe(420)
+  // The record holds the figures: the live count is not added to it.
+  state.apply(usage(10, 450))
+  expect([state.output, state.outputLive]).toEqual([450, 450])
+  // A figure for the next call on top of the recorded ones (pi records per message).
+  state.noteLive({ turnId: "trn_live", output: 30 })
+  expect(state.outputLive).toBe(480)
+  // The session's exit totals count records only.
+  expect(state.totals.output).toBe(450)
+  state.apply(event({ type: "turn.completed", turnId: "trn_live" }))
+  expect(state.outputLive).toBe(450)
+  // Late, after the turn: dropped.
+  expect(state.noteLive({ turnId: "trn_live", output: 500 })).toBe(false)
+})

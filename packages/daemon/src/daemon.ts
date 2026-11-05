@@ -69,7 +69,7 @@ import { createModelResolutions } from "./model-resolutions"
 import { createMemorySharing } from "./memory-sharing"
 import { createMemoryWorkspaces } from "./memory-workspaces"
 import { readPlanReviews, remotePlanReply } from "./plan-review"
-import { createPlanFiles, planLine } from "./plan-files"
+import { createPlanFiles, planListLines } from "./plan-files"
 import { permissionsStatus } from "./permissions"
 import { readScratchpad, writeScratchpad } from "./scratchpad"
 import { changeBacklog, readBacklog } from "./backlog"
@@ -281,6 +281,7 @@ import { backgroundNotice, isBackgroundNotice, watchNotice } from "./background-
 import { catalogId, catalogModel, filteredCatalog, imageRefusal, invalidChoice, modelsReport, nearModels, resolveModel, usableEffort, modelEngine, type ModelCatalog } from "./models"
 import type { ProviderService } from "./providers"
 import { createActivityThrottle } from "./session-activity"
+import { createLiveTokens } from "./live-tokens"
 import { createUsageToday, localDay } from "./usage-today"
 import type { WastePrice } from "./usage-waste"
 import { createUsageQuery, createUsageWaste } from "./usage"
@@ -1753,6 +1754,13 @@ export async function startDaemon(options: DaemonOptions) {
       for (const connection of connections) if (connection.clientId) send(connection, { v: PROTOCOL_VERSION, kind: "global", body: event })
     },
   })
+  /** The running turn's output tokens as the engine reports them before any usage record holds them: pushed to every terminal, throttled per session, never stored. */
+  const liveTokens = createLiveTokens({
+    clock,
+    emit: (event) => {
+      for (const connection of connections) if (connection.clientId) send(connection, { v: PROTOCOL_VERSION, kind: "global", body: event })
+    },
+  })
   /** A running child with how full its context is, from the last model call its own session recorded (the Agents strip shows it). */
   function withContext<T extends { taskId: SessionId; state: string }>(task: T): T & { context?: { tokens: number; limit?: number } } {
     if (task.state !== "running" && task.state !== "needs_input") return task
@@ -1970,6 +1978,7 @@ export async function startDaemon(options: DaemonOptions) {
         sessionScopes.delete(id)
         scheduler.setForegroundBusy(id, false)
         activity.forget(id)
+        liveTokens.forget(id)
         secrets.drop(id)
       }
     }
@@ -2180,6 +2189,7 @@ export async function startDaemon(options: DaemonOptions) {
         publishActivity(sessionId, state)
         if (state === "idle") { queueMicrotask(() => maybeEvict(sessionId)); idleGc.idle() }
       },
+      onLiveOutput: (turnId, output) => liveTokens.push(sessionId, turnId, output),
       onPause: () => publishActivity(sessionId, actors.get(sessionId)?.snapshot().foreground ?? "idle", true),
     })
     actors.set(sessionId, actor)
@@ -2558,7 +2568,7 @@ export async function startDaemon(options: DaemonOptions) {
       if (store.meta.get(`session.local-tools.restricted:${from}`) === "true") return { ok: false, message: "reading plans is local only" }
       const own = store.sessionDirectory(from)
       const found = planFiles.list(where?.scope === "all" ? { all: true } : { directory: where?.directory ?? own })
-      return { ok: true, output: found.length ? found.map(planLine).join("\n") : "No plan files.", count: found.length }
+      return { ok: true, output: found.length ? planListLines(found, clock.now(), planFiles.list({ all: true }).map((plan) => plan.id)).join("\n") : "No plan files.", count: found.length }
     },
     readPlan: (from, id) => {
       if (store.meta.get(`session.local-tools.restricted:${from}`) === "true") return { ok: false, message: "reading plans is local only" }
@@ -2975,6 +2985,7 @@ export async function startDaemon(options: DaemonOptions) {
     sessionScopes.delete(sessionId)
     scheduler.setForegroundBusy(sessionId, false)
     activity.forget(sessionId)
+    liveTokens.forget(sessionId)
     continuity.cancelSession(sessionId)
     background.killSession(sessionId)
     interactive.killSession(sessionId)
@@ -3268,6 +3279,7 @@ export async function startDaemon(options: DaemonOptions) {
         sessionScopes.delete(id)
         scheduler.setForegroundBusy(id, false)
         activity.forget(id)
+        liveTokens.forget(id)
       }
       extensions.invalidateAll()
       options.mcp?.invalidate?.(directory)

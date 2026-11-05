@@ -72,10 +72,11 @@ describe("sessions of other projects: listing", () => {
 
     expect(h.peers(a).list(undefined, { directory: h.otherDir }).map((session) => session.sessionId)).toEqual([c])
     const text = h.threads(a).list(undefined, { scope: "all" })
-    expect(text.ok && text.output).toContain(`sessionId=${c} title="billing" project=${JSON.stringify(h.otherDir)} state=idle busy=no`)
+    expect(text.ok && text.output).toContain(`${c.slice(-8)} · `)
+    expect(text.ok && text.output).toContain(" · billing")
 
     const sessions = await sessionsTool.execute({ scope: "all" }, ctx(h.peers(a), h.threads(a)))
-    expect(sessions.output).toContain(`project=${JSON.stringify(h.otherDir)}`)
+    expect(sessions.output).toContain(h.otherDir)
   })
 
   test("a busy session is listed as busy", async () => {
@@ -85,7 +86,8 @@ describe("sessions of other projects: listing", () => {
     await h.client.send({ type: "user.submit", sessionId: c, text: "/tool 1500", attachments: [] })
     await until(() => h.peers(a).list(undefined, { scope: "all" }).find((session) => session.sessionId === c)?.state !== "idle")
     const listed = h.threads(a).list(undefined, { scope: "all" })
-    expect(listed.ok && listed.output).toContain("busy=yes")
+    expect(listed.ok && listed.output).toMatch(/\S{8} · [a-z_]+ · \d+m · billing/)
+    expect(listed.ok && listed.output).not.toContain(" · idle")
   })
 })
 

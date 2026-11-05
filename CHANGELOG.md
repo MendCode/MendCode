@@ -11,6 +11,8 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### New
 
+- `threads` and `sessions` ask for up to 100 sessions (10 by default) and take `query`, `state` and `project` filters. See [peers](docs/peers.md#sessions).
+
 - Accepted and applied plans are saved as Markdown files per project (outside your repository unless `plan_files_location` is `repo`). After a compaction the agent is told where its plan is, other sessions list and read plans with `sessions plans=true`, and the `todo` list keeps the plan's steps up to date. Balanced and full; Claude Code's own plan file is used as is.
 - Sessions can list, message and open sessions in other projects, like Claude Code's ListAgents and SendMessage: `sessions scope=all`, `tell` and `threads message` to any session, and `threads start` for a new session in another folder with a first message. Each of those asks you every time, the receiver gets the message marked as an agent's from another project, and nothing is ever above the sender's permission. See [peers](docs/peers.md#other-projects).
 - Approving a plan (Enter, or comment then apply) now runs it with full access, as Claude Code does when it leaves plan mode; `m` on the plan page picks auto edits or ask before edits instead, and the page and the "Plan mode off" notice name the access. See [plan review](docs/plan-review.md).
@@ -31,6 +33,8 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 - The `defaultContextWindow` setting gives one context window to every model that has none of its own; a model's `modelContext` window and `/context-window` still win. The assistant now finds how to change a context window, a model, a theme or a title from `mendcode docs change` without reading MendCode's files.
 
 ### Changed
+
+- The session lists of `threads` and `sessions` (and the plan list, and other programs' chats) are shorter: one header, rows grouped by project, short ids that every tool accepts, ages like `3m`, and the state only when a session is busy.
 
 - A wide flowchart is drawn in the chat instead of shown as source: long labels wrap (`<br/>` still breaks a line), spacing tightens, and a left-to-right flow turns top-down when it still does not fit. The note says what was tried when nothing fits.
 - Full tier: the Git page's push, publish and pull request are on by default (`/experimental git_actions off` turns them off); each one still shows its command on a card and waits for Enter. Balanced keeps them behind the switch. See [git](docs/git.md#the-switch).
@@ -82,12 +86,14 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Fixed
 
+- Esc Esc on a message nobody answered yet brings it back into the prompt at once with its images, even with a draft or a queued message behind it; when it cannot, the notice says the model already answered.
 - Applying a plan on Claude Code or an ACP agent lifts the plan agent's read-only limit at once, so the next write in the same turn is allowed, and the session moves to the plan's destination agent.
 - Leaving plan mode with Shift+Tab or `/plan` returns to the mode the session had before it.
 - A plan review that ends with no decision (the daemon restarted, the request was cancelled) tells the model it was interrupted, not that you rejected the plan.
 - Plan mode on Claude Code, Codex, pi and ACP agents names the model that really plans (the session's), and those engines are reminded on every plan turn that the session is read-only and the plan is for your review.
 - The Plan review page draws the plan like the chat does (diagrams, callouts, tables), scrolls with the wheel and trackpad, and holds its drawing while you scroll.
 - Applying a plan against a daemon older than the access choice works: it is applied once without the choice and the page says to run `/daemon restart`.
+- The activity line of a Claude Code or pi session shows the tokens received while the turn runs, not only when it ends.
 - The footer says plan mode once instead of `Plan · plan mode`.
 - A shell card shows a command's output as it printed it: indentation and blank lines stay.
 - `/plan <text>` enters plan mode and sends the text as your message.

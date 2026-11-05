@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto"
-import { mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from "node:fs"
 import path from "node:path"
 import { parseTodoListText, redactSecrets, type SessionEvent, type SessionId, type TodoListItem } from "@mendcode/protocol"
+import { compactList, MIN_SHORT_ID, shortSuffix } from "./session-list-text"
 
 /**
  * An accepted or applied plan, kept as a Markdown file (docs/plan-review.md, "Plan files"). The file is written when the user
@@ -65,8 +66,28 @@ function parse(text: string) {
 
 const progressBlock = (items: readonly TodoListItem[]) => [PROGRESS_START, "## Progress", "", ...items.map((item) => `- ${STEP_MARK[item.status]} ${item.text.replace(/\s+/g, " ").trim()}`), PROGRESS_END].join("\n")
 
-/** One plan as `sessions plans=true` lists it. */
-export const planLine = (plan: PlanFile) => `plan=${plan.id} title=${JSON.stringify(plan.title)} status=${plan.status}${plan.steps ? ` steps=${plan.steps.done}/${plan.steps.total}` : ""} session=${plan.session} updated=${plan.updated} project=${JSON.stringify(plan.project)} path=${JSON.stringify(plan.path)}`
+export const PLAN_HEADER = "id · status steps · age · title"
+
+/** The id of a plan as a list prints it: `plan-` and the shortest end of the name (at least 8 characters, never starting with a dash) no other plan shares. `read` takes it as is. */
+export function shortPlanId(id: string, universe: readonly string[]): string {
+  const name = id.slice("plan-".length)
+  let end = shortSuffix(name, universe.map((other) => other.slice("plan-".length)))
+  while (end.startsWith("-") && end.length < name.length) end = name.slice(-(end.length + 1))
+  return `plan-${end}`
+}
+
+/**
+ * The plans `sessions plans=true` lists, grouped by project: a header, then `id · status steps · age · title`. The session and the
+ * file are in the plan itself (`read=<id>`); `universe` is every plan id the short ids must stay unique among.
+ */
+export function planListLines(plans: readonly PlanFile[], now: number, universe: readonly string[] = plans.map((plan) => plan.id)): string[] {
+  const everyone = [...new Set([...universe, ...plans.map((plan) => plan.id)])]
+  return compactList({
+    header: PLAN_HEADER,
+    now,
+    rows: plans.map((plan) => ({ id: shortPlanId(plan.id, everyone), state: `${plan.status}${plan.steps ? ` ${plan.steps.done}/${plan.steps.total}` : ""}`, at: Date.parse(plan.updated) || now, title: plan.title, folder: plan.project })),
+  })
+}
 
 export function createPlanFiles(input: {
   /** The data directory; plans live in `<dir>/plans/<project>/` unless the project keeps them in the repository. */
@@ -238,8 +259,18 @@ export function createPlanFiles(input: {
       if (!PLAN_ID.test(id)) return { ok: false, message: `${id} is not a plan id (plan-…); sessions plans=true lists them` }
       const folders = [...(directory ? [dataFolder(directory), repoFolder(directory)] : [])]
       try { for (const name of readdirSync(path.join(input.dir, "plans"))) folders.push(path.join(input.dir, "plans", name)) } catch { /* none */ }
+      // A short id (what lists print) is `plan-` and the end of the name: it names the one plan whose name ends that way.
+      let wanted = id
+      if (id.length - "plan-".length >= MIN_SHORT_ID && !folders.some((folder) => existsSync(path.join(folder, `${id}.md`)))) {
+        const end = `${id.slice("plan-".length)}.md`
+        const hits = new Set<string>()
+        for (const folder of folders) {
+          try { for (const name of readdirSync(folder)) if (name.startsWith("plan-") && name.endsWith(end)) hits.add(name.slice(0, -".md".length)) } catch { /* no such folder */ }
+        }
+        if (hits.size === 1) wanted = [...hits][0]!
+      }
       for (const folder of folders) {
-        const file = path.join(folder, `${id}.md`)
+        const file = path.join(folder, `${wanted}.md`)
         try {
           const text = readFileSync(file, "utf8")
           const entry = entryOf(file, text)

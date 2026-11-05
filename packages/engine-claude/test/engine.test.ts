@@ -408,6 +408,36 @@ describe("claude engine turns", () => {
     engine.stop()
   })
 
+  test("the turn's output tokens are sent live as each call reports them, before the result; they never become a usage record", async () => {
+    const { engine } = engineWith([fakeClaude({ onUser: longTurn(200_000) })])
+    const { input, events } = turnInput()
+    await engine.runTurn(input)
+    // The recorded stream of `longTurn`: main-thread calls of 120, 300 and 450 output tokens (the sub-agent's calls are not on the main stream): the figure climbs call by call.
+    const live = events.filter((event) => event.type === "usage.live").map((event) => (event as { output: number }).output)
+    expect(live).toEqual([120, 420, 870])
+    // Every live figure comes before the one usage record of the result.
+    const usageAt = events.findIndex((event) => event.type === "usage")
+    expect(events.map((event, at) => (event.type === "usage.live" ? at : -1)).filter((at) => at >= 0).every((at) => at < usageAt)).toBe(true)
+    expect(events.filter((event) => event.type === "usage")).toHaveLength(1)
+    engine.stop()
+  })
+
+  test("a call's placeholder output at message_start and its whole assistant message show nothing; only the message_delta figure does", async () => {
+    const { engine } = engineWith([fakeClaude({ onUser: (api) => {
+      api.push({ type: "system", subtype: "init", session_id: "cc-session-1" })
+      api.push({ type: "stream_event", event: { type: "message_start", message: { id: "msg_a", model: "claude-opus-4-8", usage: { input_tokens: 5, cache_read_input_tokens: 1000, output_tokens: 1 } } }, parent_tool_use_id: null })
+      streamText(api, 0, "hello there")
+      api.push({ type: "assistant", message: { id: "msg_a", role: "assistant", usage: { input_tokens: 5, cache_read_input_tokens: 1000, output_tokens: 7 }, content: [] }, parent_tool_use_id: null })
+      api.push({ type: "stream_event", event: { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 42 } }, parent_tool_use_id: null })
+      api.push({ type: "stream_event", event: { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 42 } }, parent_tool_use_id: null })
+      api.push(result())
+    } })])
+    const { input, events } = turnInput()
+    await engine.runTurn(input)
+    expect(events.filter((event) => event.type === "usage.live")).toEqual([{ type: "usage.live", output: 42 }])
+    engine.stop()
+  })
+
   test("a turn with no main-thread call on the stream reports no context rather than the cumulative totals", async () => {
     const { engine } = engineWith([fakeClaude({ onUser: (api) => { api.push({ type: "system", subtype: "init", session_id: "cc-session-1" }); api.push(result()) } })])
     const { input, events } = turnInput()

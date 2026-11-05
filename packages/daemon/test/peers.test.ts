@@ -56,6 +56,29 @@ describe("peers", () => {
     expect(listed[0]).toMatchObject({ title: "ui", state: "idle" })
   })
 
+  test("sessions lists ten by default and a limit above the maximum returns it, with the short id accepted by read and tell", async () => {
+    const { create, port } = await boot()
+    const a = await create("/work/app", "api")
+    for (let n = 0; n < 104; n++) await create("/work/app", `chat ${n}`)
+    const ctx = { cwd: "/work/app", signal: new AbortController().signal, peers: port(a) } as never
+    const byDefault = (await sessionsTool.execute({}, ctx)).output.split("\n")
+    expect(byDefault).toHaveLength(11)
+    expect(byDefault[0]).toBe("id · [state] · age · title")
+    const huge = (await sessionsTool.execute({ limit: 5_000 }, ctx)).output.split("\n")
+    expect(huge).toHaveLength(102)
+    expect(huge.at(-1)).toBe("showing 100 (max)")
+    expect(sessionsTool.args.safeParse({ limit: 5_000 }).success).toBe(true)
+    const narrowed = (await sessionsTool.execute({ query: "chat 7", state: "idle" }, ctx)).output
+    expect(narrowed).toContain(" · chat 7")
+    expect(narrowed).not.toContain(" · chat 1 ")
+    const short = byDefault[1]!.split(" · ")[0]!
+    expect(port(a).expand!(short).endsWith(short)).toBe(true)
+    expect(port(a).expand!(short).length).toBeGreaterThan(short.length)
+    const read = await sessionsTool.execute({ read: short }, ctx)
+    expect(read.isError).toBe(false)
+    expect(port(a).expand!("nope")).toBe("nope")
+  })
+
   test("sessions stats reports a session of this project (or self) with its turns and time, and refuses one of another project", async () => {
     const { client, create, of, port } = await boot()
     const a = await create("/work/app", "api")

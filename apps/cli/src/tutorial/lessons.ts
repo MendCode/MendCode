@@ -148,7 +148,7 @@ export const LESSONS: readonly Lesson[] = [
     steps: [
       { label: "start a long turn", done: (s) => s.flags.has("sawBusy") },
       { label: "queue a second message", done: (s) => s.stats.queued > 0 },
-      { label: "stop it", done: (s) => s.sent.some((command) => command.type === "turn.cancel" || command.type === "queue.steer" || command.type === "queue.promote") },
+      { label: "stop it", done: (s) => s.sent.some((command) => command.type === "turn.cancel" || command.type === "session.undo" || command.type === "queue.steer" || command.type === "queue.promote") },
     ],
     hint: (b) => `enter queues · esc esc stops · ${named(b, "queue.send", "ctrl+s")} sends now`,
     show: () => [{ type: "keys", keys: [KEY.enter], echo: "enter" }, { type: "wait", until: "busy" }, { type: "text", text: "then summarize it" }, { type: "keys", keys: [KEY.enter], echo: "enter" }, { type: "keys", keys: [KEY.esc, KEY.esc], echo: "esc esc" }, { type: "wait", until: "idle" }],

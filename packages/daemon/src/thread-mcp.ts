@@ -13,13 +13,15 @@ import type { createOrchestrationReceipts } from "./orchestration-receipts"
 
 const target = { sessionId: z.string().min(4).max(64) }
 const paging = { limit: z.number().int().min(1).max(10).optional(), before: z.string().max(100).optional() }
+/** The list takes up to 100 (a larger number is not an error: 100 come back); read and search pages stay at 10. */
+const listing = { limit: z.number().min(1).optional(), query: z.string().min(1).optional(), state: z.enum(["busy", "idle"]).optional() }
 const retry = { clientRequestId: z.string().min(1).max(128).optional() }
 /** The engines delegate_task takes; another catalog engine (OpenCode, Cursor) runs whole sessions only. */
 const DELEGATE_ENGINE = /^(native|claude|codex|pi|acp:[a-zA-Z0-9_.-]+)$/
 /** Model ids named per engine in the bridge's instructions; the rest are counted, and `mendcode models` lists them. */
 const MODELS_PER_ENGINE = 10
 const schemas = {
-  thread_list: z.strictObject({ limit: paging.limit }),
+  thread_list: z.strictObject(listing),
   thread_create: z.strictObject({ title: z.string().min(1).max(80), ...retry }),
   thread_message: z.strictObject({ ...target, text: z.string().min(1).max(8_000), ...retry }),
   thread_wait: z.strictObject({ ...target, timeoutSeconds: z.number().int().min(1).max(120).optional() }),
@@ -38,7 +40,7 @@ const schemas = {
 }
 type Name = keyof typeof schemas
 const descriptions: Record<Name, string> = {
-  thread_list: "List other local threads in this project. Use their exact ids.",
+  thread_list: "List other local threads in this project, newest first: id (use it as printed), state when busy, age, title. 10 by default, limit up to 100; query (title) and state narrow it.",
   thread_create: "Create an idle child thread in this project with inherited permissions. Use thread_message to start it.",
   thread_message: "Send a self-contained message to another project thread. Normal approvals and peer rate limits apply.",
   thread_wait: "Wait until a project thread is idle and read its latest answer. Timeout does not cancel it.",
@@ -203,7 +205,7 @@ export function createThreadMcp(options: {
           if (!await input.authorize(name, args, read) || !valid(lease)) return { ok: false, message: "Thread operation denied" }
           const execute = async (): Promise<ThreadResult> => {
             switch (name) {
-              case "thread_list": return input.threads.list(args.limit as number | undefined)
+              case "thread_list": return input.threads.list(args.limit as number | undefined, { query: args.query as string | undefined, state: args.state as "busy" | "idle" | undefined })
               case "thread_create": return input.create(String(args.title))
               case "thread_message": return input.threads.message(args as { sessionId: string; text: string })
               case "thread_read": return input.threads.read(args as { sessionId: string; limit?: number; before?: string })

@@ -288,5 +288,5 @@ export function createComposerRecovery(ctx: AppContext, actions: {
     await actions.openBacktrack()
   }
 
-  return { editQueued, canEditQueued, sendQueueNext, restoreQueue, backtrackEscape, openBacktrack, openSearch, searchKey, searchPaste, searchRow }
+  return { place, editQueued, canEditQueued, sendQueueNext, restoreQueue, backtrackEscape, openBacktrack, openSearch, searchKey, searchPaste, searchRow }
 }

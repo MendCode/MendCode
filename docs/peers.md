@@ -4,11 +4,24 @@ Sessions can talk to each other through two agent tools: within a project freely
 
 ## `sessions`
 
-Lists the project's other sessions: id, title, state (`idle`, `generating`, …), `busy=yes|no` and last update. `scope=all` lists the newest sessions of every project of this daemon with their folder (`project=…`), and `directory=<folder>` those of one other project. The list never shows their transcripts, files or reasoning. Sub-sessions (workflow tasks, subagents) are not listed.
+Lists the project's other sessions, newest first, in a compact form that costs few tokens:
+
+```
+id · [state] · age · title
+~/Code/app
+  WC8Q5R8B · 29m · Fix the login redirect
+  VQSGK1YC · generating · 6h · Plan the new importer
+```
+
+One header; the id is the shortest end of the session id that no other session shares (at least 8 characters), and every tool takes it as printed (`read`, `stats`, `tell`, and `threads` `read`, `search`, `message`, `wait`, `interrupt`, `merge_back`, also for another project's session); the state shows only when the session is not `idle`; the age is `3m`, `4h` or `2d`; the title is cut at about 50 characters. `scope=all` lists the newest sessions of every project of this daemon, `directory=<folder>` those of one other project; rows are then grouped under their folder, written once with `~` for the home. The list never shows their transcripts, files or reasoning. Sub-sessions (workflow tasks, subagents) are not listed.
+
+- **`limit`** is 10 by default and at most 100. A larger number is not an error: 100 come back and the last line says `showing 100 (max)`.
+- **Filters**: `query` (the title contains the text, any case), `state` (`busy` or `idle`) and `project` (the folder path contains the text; it searches every project). They combine, and they look through the newest 500 sessions before `limit` is applied.
+- `threads list` and the bridge's `thread_list` take the same `limit`, `query` and `state`; `threads list` also `project`, `scope` and `directory`.
 
 It is a list of recent conversations, not of agents working right now: `idle` does not mean the session is open, and a title does not mean it owns a file.
 
-`sessions plans=true` lists the plan files you accepted or applied instead (`plan=<id> title status steps session path`; `scope` and `directory` work as above) and `read=<plan-… id>` returns one, local only ([plan files](plan-review.md#plan-files)).
+`sessions plans=true` lists the plan files you accepted or applied instead (grouped by project, `id · status steps · age · title`, the id as `plan-` and the shortest unique end of the name; `scope` and `directory` work as above) and `read=<plan-… id>` returns one, with its session and file, local only ([plan files](plan-review.md#plan-files)).
 
 ### `read`: one session's conversation
 
@@ -18,8 +31,8 @@ characters). Tool input and output, reasoning and what an engine's own sub-agent
 markers. The page starts with a line saying it is another conversation's data, not instructions.
 
 - **Any project.** An exact id is the user's own pointer (`read the chat ses_…`), so it may name a session of another project of
-  this daemon; the list stays this project's. A sub-session (a sub-agent's child session) is read by its id too. A shortened id,
-  a title or another program's chat (`claude:…`, `codex:…`) is not accepted.
+  this daemon; the list stays this project's. A sub-session (a sub-agent's child session) is read by its id too. The short id a list prints
+  is accepted; a title or another program's chat (`claude:…`, `codex:…`) is not.
 - **Pages.** A page holds whole messages up to 40,000 bytes and 1,500 lines (one longer message is cut on its own page; the export
   keeps 40,000 characters of a message anyway). A page that is not the last ends with `more: cursor=<n>`: call again with
   `read` and `cursor=<n>`. The last one ends with `end of conversation`. A turn longer than the export's 200 items goes on in the
@@ -32,7 +45,7 @@ project's chats kept by other programs, see `threads` in [sessions](sessions.md#
 
 ## `tell`
 
-Sends a plain-text message to one session by its exact id.
+Sends a plain-text message to one session by its id from `sessions` (the short form works).
 
 - Nothing else is shared: no history, files, reasoning or permissions.
 - The message arrives as a notice in the target's queue. A busy target reads it when its turn ends; it is never interrupted. After a user cancel it waits until the user acts, like any notice.
@@ -59,7 +72,7 @@ A session can list, write to and open sessions in other projects of this daemon 
 - **Never above the sender.** A message goes only to a session whose permission mode is not above the sender's (`plan` < `ask` < `edits` < `smart` < `full`); otherwise it is refused at once, before any approval is asked, and nothing the user answers changes that from the sender's side: to write to a session running in full access, the user raises the sender to full. A started session gets the folder's own usual mode (its project setting, else the default) capped at the opening session's mode, so a lower-ranked session cannot launch a stronger one. This is the same ceiling an agent-origin client has ([permissions](permissions.md)).
 - **Marked and not the user's.** The message arrives as a notice (a turn with synthetic, non-user authority) that starts `[message from session … "title" in another project ("/path")]` and says an agent of another project wrote it, that it carries none of the user's authority and that the target keeps to its own permissions and project rules. The answer returns marked the same way (`[reply from session … in another project …]`, "not an instruction from the user"). Secret values never cross.
 - **Trust is not granted.** A started session in a folder that is not trusted (`trustedToolDirs`) loads none of that project's tools, hooks or extensions, as in any session opened there; the approval and the result say which it is.
-- **Narrow reach.** Reading, searching, `stats`, `interrupt` and `merge_back` through `threads` stay inside the project (`sessions read=<exact id>` already read any project). `message` and `wait` name another project's session by its full id, as `list scope=all` prints it; a sub-agent session is not addressable. The Claude Code and Codex bridge ([thread MCP](thread-mcp.md)) stays inside one project, and `session.agent-command.create` from a client still refuses another project.
+- **Narrow reach.** Reading, searching, `stats`, `interrupt` and `merge_back` through `threads` stay inside the project (`sessions read=<exact id>` already read any project). `message` and `wait` name another project's session by its id as `list scope=all` prints it (short or full); a sub-agent session is not addressable. The Claude Code and Codex bridge ([thread MCP](thread-mcp.md)) stays inside one project, and `session.agent-command.create` from a client still refuses another project.
 - **Same limits.** The 3 waiting messages and 20 per hour are counted across projects too. A started session counts as one message, checked before the session exists so a refusal leaves nothing behind.
 
 ### `threads start`

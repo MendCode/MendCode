@@ -6,6 +6,8 @@ import type { Clock } from "@mendcode/kernel"
 import { excerpt } from "./session-recall"
 import { sessionStatsText } from "./session-stats-text"
 import { foreignRef, foreignSourceName, type ForeignLine, type ForeignThreads } from "./thread-foreign"
+import { MAX_PEER_SESSIONS } from "./peers"
+import { compactList, sessionListLines, shortSuffix } from "./session-list-text"
 
 /** What `@thread` attaches: the newest messages, each cut, the whole capped by an estimate of 4 characters per token. */
 export const THREAD_SNAPSHOT = { messages: 6, tokens: 3_000, messageChars: 900, requestChars: 1_500, checkpointChars: 3_000 } as const
@@ -19,6 +21,7 @@ const MAX_WAIT = 120
 const MAX_MENTIONS = 3
 /** How many chats of other programs one list names, newest first. */
 const FOREIGN_LISTED = 12
+const FOREIGN_HEADER = "Other programs' chats of this project (read and search only; each read asks the user): id · age · title"
 const MAX_GRANT_SESSIONS = 64
 const ANSWER_ITEMS = 256
 const WAIT_POLL_MS = 250
@@ -90,21 +93,26 @@ export function createThreads(input: ThreadsInput) {
     while (granted.size > MAX_GRANT_SESSIONS) granted.delete(granted.keys().next().value!)
   }
 
+  /** `ref` as a full id when it is the end of one session's id (what lists print), anywhere in this daemon; `ref` itself otherwise. */
+  const expandRef = (from: SessionId, ref: string) => input.peers(from).expand?.(ref) ?? ref
+
   /** The session `ref` names (a full id, or the end of one, as `@thread:` writes it) when it is in `from`'s project. */
   function resolve(from: SessionId, ref: string, elsewhere = false): { ok: true; id: SessionId; title: string } | { ok: false; message: string } {
     const origin = store.sessionInfo(from)
     if (!origin) return { ok: false, message: "unknown session" }
     // Another project's session is named by its full id only (as `threads list scope=all` prints it), and only a session of its own, not a sub-agent's.
     if (elsewhere) {
-      const other = store.sessionInfo(ref as SessionId)
-      if (other && canonicalDir(other.directory) !== canonicalDir(origin.directory)) return other.parentId ? { ok: false, message: `${ref} is a sub-agent session; use its project's top-level session` } : { ok: true, id: ref as SessionId, title: other.title }
+      // The short id a list prints names the session as well as the full one.
+      const full = expandRef(from, ref)
+      const other = store.sessionInfo(full as SessionId)
+      if (other && canonicalDir(other.directory) !== canonicalDir(origin.directory)) return other.parentId ? { ok: false, message: `${ref} is a sub-agent session; use its project's top-level session` } : { ok: true, id: full as SessionId, title: other.title }
     }
     // A full id (`ses_…`) is looked up as is; sub-agent sessions are children, so the end-of-id search includes them.
     let id = store.sessionInfo(ref as SessionId) ? (ref as SessionId) : undefined
     if (!id) {
       const needle = ref.toLowerCase()
       const matches = store.listSessions({ directory: origin.directory, roots: false, limit: 500 }).filter((session) => session.sessionId.toLowerCase().endsWith(needle))
-      if (matches.length > 1) return { ok: false, message: `${ref} matches more than one session; use the full id from threads list` }
+      if (matches.length > 1) return { ok: false, message: `${ref} matches more than one session; use more characters of the id` }
       id = matches[0]?.sessionId as SessionId | undefined
     }
     const info = id ? store.sessionInfo(id) : undefined
@@ -267,10 +275,10 @@ export function createThreads(input: ThreadsInput) {
         },
         projectOf: (ref) => {
           const origin = store.sessionInfo(from)
-          const other = store.sessionInfo(ref as SessionId)
+          const other = store.sessionInfo(expandRef(from, ref) as SessionId)
           return origin !== undefined && other !== undefined && canonicalDir(other.directory) !== canonicalDir(origin.directory) ? other.directory : undefined
         },
-        refusal: (ref) => input.peers(from).refusal?.(ref),
+        refusal: (ref) => input.peers(from).refusal?.(expandRef(from, ref)),
         startPlan: (directory) => input.startPlan?.(from, directory) ?? "Open a new session in another project",
         async start(request) {
           const started = await input.peers(from).start?.(request)
@@ -282,14 +290,22 @@ export function createThreads(input: ThreadsInput) {
         },
         list(limit, where) {
           const sessions = input.peers(from).list(limit, where)
-          const across = where?.scope === "all" || where?.directory !== undefined
-          const none = across ? "No sessions found." : "No other sessions in this project."
-          const sessionLine = (session: (typeof sessions)[number]) => `sessionId=${session.sessionId} title=${JSON.stringify(oneLine(session.title, 160))}${session.directory === undefined ? "" : ` project=${JSON.stringify(session.directory)}`} state=${session.state} busy=${session.state === "idle" ? "no" : "yes"} updatedAt=${new Date(session.updatedAt).toISOString()}${granted.get(from)?.has(session.sessionId as SessionId) ? " attached=yes" : ""}`
+          const filtered = where?.query !== undefined || where?.state !== undefined
+          const across = where?.scope === "all" || where?.directory !== undefined || where?.project !== undefined
+          const none = across || filtered ? "No sessions found." : "No other sessions in this project."
+          const now = input.clock.now()
+          const lines = sessions.length ? sessionListLines({ sessions, now, capped: limit !== undefined && limit > MAX_PEER_SESSIONS, attached: (id) => granted.get(from)?.has(id as SessionId) === true }) : [none]
           const origin = store.sessionInfo(from)
-          const others = origin && input.foreign && !across ? input.foreign.list(origin.directory).slice(0, FOREIGN_LISTED) : []
-          const foreign = others.map((chat) => `sessionId=${chat.id} source=${JSON.stringify(foreignSourceName(chat.source))}${chat.title ? ` title=${JSON.stringify(oneLine(chat.title, 160))}` : ""} updatedAt=${new Date(chat.updatedAt).toISOString()} readonly=yes`)
-          if (foreign.length) return { ok: true, output: [...(sessions.length ? sessions.map(sessionLine) : [none]), "Chats of this project in other programs (read and search only, each read asks the user):", ...foreign].join("\n") }
-          return { ok: true, output: sessions.length ? sessions.map(sessionLine).join("\n") : none }
+          // Chats of other programs belong to this project's plain list; a filter or another project's list leaves them out.
+          const others = origin && input.foreign && !across && !filtered ? input.foreign.list(origin.directory).slice(0, FOREIGN_LISTED) : []
+          if (!others.length) return { ok: true, output: lines.join("\n") }
+          const keys = others.map((chat) => chat.id)
+          const foreign = compactList({
+            header: FOREIGN_HEADER,
+            now,
+            rows: others.map((chat) => ({ id: `${chat.source}:${shortSuffix(chat.id.slice(chat.source.length + 1), keys.map((key) => key.slice(key.indexOf(":") + 1)))}`, at: chat.updatedAt, title: chat.title ?? null, folder: foreignSourceName(chat.source) })),
+          })
+          return { ok: true, output: [...lines, ...foreign].join("\n") }
         },
         stats(request) {
           const own = !request.sessionId || request.sessionId === from || from.toLowerCase().endsWith(request.sessionId.toLowerCase())

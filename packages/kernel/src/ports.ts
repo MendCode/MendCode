@@ -71,6 +71,11 @@ export type EngineEvent =
   | { type: "item.delta"; itemId: ItemId; text: string; input?: import("@mendcode/protocol").ToolInputProgress }
   | { type: "item.completed"; itemId: ItemId; status: ItemStatus; text?: string; toolInput?: string; blob?: BlobRef; attachments?: BlobRef[]; render?: RenderNode; meta?: Record<string, string | number | boolean> }
   | { type: "usage"; provider: string; model: string; input: number; output: number; reasoning: number; cacheRead: number; cacheWrite: number; costMicros?: number; profile?: import("@mendcode/protocol").RequestProfile; thinkingDropped?: true; cacheTtl?: "1h"; context?: number; contextWindow?: number; contextApprox?: true; partial?: true; compactAt?: number }
+  /**
+   * Output tokens the provider has reported so far for the turn that no `usage` has recorded yet (a call still streaming, or every call of an
+   * engine that records one usage at the end). Shown live and never stored; the `usage` that records them replaces it. Never an estimate.
+   */
+  | { type: "usage.live"; output: number }
   /** A failed model call will be retried after `delayMs`; `attempt` counts retries from 1; `offline`: the connection itself failed. */
   | { type: "retrying"; attempt: number; delayMs: number; message: string; offline?: boolean }
 

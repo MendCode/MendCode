@@ -1,8 +1,13 @@
 import { permissionRank, type PermissionMode, type QueueId, type SessionEvent, type SessionId, type TurnId } from "@mendcode/protocol"
 import type { Clock } from "@mendcode/kernel"
 import type { PeerPort, PeerScope, PeerSession } from "@mendcode/tools"
+import { expandSuffix, MIN_SHORT_ID, shortSuffix } from "./session-list-text"
 
-export const MAX_PEER_SESSIONS = 32
+/** Sessions one list names: ten unless the caller asks for more, never above the maximum (a larger number returns the maximum). */
+export const DEFAULT_PEER_SESSIONS = 10
+export const MAX_PEER_SESSIONS = 100
+/** How many of the newest sessions a filter or a short id looks through. */
+const SCAN_PEER_SESSIONS = 500
 /** Messages one session may have waiting for an answer at once, and may send per hour (no ping-pong storms). */
 export const MAX_WAITING_PER_SESSION = 3
 export const MAX_TELLS_PER_HOUR = 20
@@ -138,8 +143,16 @@ export function createPeers(input: {
       if (delivery) finish(delivery, ending)
     },
     port(from: SessionId): PeerPort {
+      /** Every top-level session a short id can name: this project's and every project's newest. */
+      const universe = () => {
+        const own = input.info(from)?.directory
+        return [...new Set([...(own ? input.sessions(own, SCAN_PEER_SESSIONS) : []), ...(input.everywhere?.(SCAN_PEER_SESSIONS) ?? [])].map((session) => session.sessionId))]
+      }
+      const expand = (ref: string) => (input.info(ref as SessionId) || ref.length < MIN_SHORT_ID ? ref : expandSuffix(ref, universe()))
       return {
-        stats(target) {
+        expand,
+        stats(requested) {
+          const target = requested === "self" ? requested : expand(requested)
           const id = (target === "self" || target === from ? from : target) as SessionId
           const origin = input.info(from)
           const info = input.info(id)
@@ -148,31 +161,50 @@ export function createPeers(input: {
           return text ? { ok: true, output: text } : { ok: false, message: "session figures are not available here" }
         },
         // An exact id is the user's own pointer, so it may name a session of another project; listing stays within this one.
-        read(target, cursor) {
+        read(requested, cursor) {
+          const target = expand(requested)
           if (!input.info(target as SessionId)) return { ok: false, message: `no session ${target}; read needs its exact id (ses_…)` }
           return input.read?.(from, target as SessionId, cursor) ?? { ok: false, message: "reading sessions is not available here" }
         },
         plans: (where) => input.plans?.(from, where) ?? { ok: false, message: "plan files are not available here" },
         readPlan: (id) => input.readPlan?.(from, id) ?? { ok: false, message: "plan files are not available here" },
-        list(limit = MAX_PEER_SESSIONS, where): PeerSession[] {
+        list(limit = DEFAULT_PEER_SESSIONS, where): PeerSession[] {
           const own = input.info(from)?.directory
           if (!own) return []
+          // More than the maximum is not an error: the maximum is returned (the caller says so).
           const count = Math.min(MAX_PEER_SESSIONS, Math.max(1, Math.floor(limit)))
-          const across = where?.scope === "all" || where?.directory !== undefined
-          const found: Array<{ sessionId: string; title: string; updatedAt: number; directory?: string }> = where?.scope === "all" && input.everywhere
-            ? input.everywhere(count + 1)
-            : input.sessions(where?.directory ?? own, count + 1).map((session) => (across ? { ...session, directory: where?.directory ?? own } : session))
-          return found
+          const query = where?.query?.trim().toLowerCase()
+          const project = where?.project?.trim().toLowerCase()
+          const filtered = Boolean(query || project || where?.state)
+          // A project name searches every project.
+          const everywhere = (where?.scope === "all" || project !== undefined) && input.everywhere
+          const across = where?.scope === "all" || where?.directory !== undefined || project !== undefined
+          // A filter drops rows after the read, so it looks through the newest sessions, not just the ones that would be shown.
+          const wanted = filtered ? SCAN_PEER_SESSIONS : count + 1
+          const found: Array<{ sessionId: string; title: string; updatedAt: number; directory?: string }> = everywhere
+            ? input.everywhere!(wanted)
+            : input.sessions(where?.directory ?? own, wanted).map((session) => (across ? { ...session, directory: where?.directory ?? own } : session))
+          const rows = found
             .filter((session) => session.sessionId !== from)
+            .filter((session) => !query || session.title.toLowerCase().includes(query))
+            .filter((session) => !project || (session.directory ?? "").toLowerCase().includes(project))
+            .map((session) => ({ session, state: input.state(session.sessionId as SessionId) }))
+            .filter(({ state }) => where?.state === undefined || (where.state === "idle") === (state === "idle"))
             .slice(0, count)
-            .map((session) => ({ sessionId: session.sessionId, title: session.title.slice(0, 160), state: input.state(session.sessionId as SessionId), updatedAt: session.updatedAt, ...(across && session.directory !== undefined ? { directory: session.directory } : {}) }))
+          if (!rows.length) return []
+          const everyone = [...new Set([...universe(), ...rows.map(({ session }) => session.sessionId)])]
+          return rows.map(({ session, state }) => ({ sessionId: session.sessionId, title: session.title.slice(0, 160), state, updatedAt: session.updatedAt, shortId: shortSuffix(session.sessionId, everyone), ...(across && session.directory !== undefined ? { directory: session.directory } : {}) }))
         },
-        projectOf(target) {
+        projectOf(requested) {
+          const target = expand(requested)
           const destination = input.info(target as SessionId)
           const source = input.info(from)
           return destination !== undefined && source !== undefined && destination.directory !== source.directory ? destination.directory : undefined
         },
-        refusal: (target) => (input.info(target as SessionId) && input.info(from)?.directory !== input.info(target as SessionId)?.directory ? authorityRefusal(from, target as SessionId) : undefined),
+        refusal: (requested) => {
+          const target = expand(requested)
+          return input.info(target as SessionId) && input.info(from)?.directory !== input.info(target as SessionId)?.directory ? authorityRefusal(from, target as SessionId) : undefined
+        },
         async start(request) {
           if (!input.create) return { ok: false, message: "starting sessions is not available here" }
           const source = input.info(from)
@@ -188,7 +220,8 @@ export function createPeers(input: {
           if (!delivered.ok) return { ok: false, message: `the session ${created.sessionId} was opened in ${created.directory} but could not take the first message: ${delivered.message}` }
           return { ok: true, sessionId: created.sessionId, directory: created.directory, permission: created.permission, trusted: created.trusted }
         },
-        async tell(target, text, options) {
+        async tell(requested, text, options) {
+          const target = expand(requested)
           const requestKey = options?.clientRequestId ? `${from}>${target}:${options.clientRequestId}` : undefined
           const earlier = requestKey ? requests.get(requestKey) : undefined
           if (earlier) return earlier

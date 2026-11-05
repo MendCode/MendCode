@@ -167,10 +167,10 @@ export type PrWatchPort = {
 }
 
 /** One other session of the same project, as `sessions` shows it: never its transcript. */
-export type PeerSession = { sessionId: string; title: string; state: string; updatedAt: number; /** Set when the list spans projects (`scope: "all"` or a `directory`). */ directory?: string }
+export type PeerSession = { sessionId: string; title: string; state: string; updatedAt: number; /** Set when the list spans projects (`scope: "all"` or a `directory`). */ directory?: string; /** The shortest end of the id (at least 8 characters) that no other session shares: what lists print and every tool accepts as the id. */ shortId?: string }
 
 /** What a list covers: this session's project (default), every project of this daemon, or one other project's folder. */
-export type PeerScope = { scope?: "project" | "all" | undefined; directory?: string | undefined }
+export type PeerScope = { scope?: "project" | "all" | undefined; directory?: string | undefined; /** Only sessions whose title contains this text. */ query?: string | undefined; /** Only sessions that are working (`busy`) or not (`idle`). */ state?: "busy" | "idle" | undefined; /** Only sessions whose folder contains this text; it searches every project. */ project?: string | undefined }
 
 /** A session started in another project's folder with a first message; the message and its answer follow the `tell` rules. */
 export type PeerStart = { directory: string; text: string; title?: string | undefined }
@@ -182,6 +182,8 @@ export type PeerStartResult = { ok: true; sessionId: string; directory: string; 
  */
 export type PeerPort = {
   list(limit?: number, where?: PeerScope): PeerSession[]
+  /** The full id a short one (the end of it, at least 8 characters) names among this daemon's sessions; `ref` itself when it is a full id or names none or several. */
+  expand?(ref: string): string
   /** The folder of `target` when it is a session of another project than this one (sending to it always asks the user); undefined otherwise. */
   projectOf?(target: string): string | undefined
   /** Why a message to `target` (another project's session) would be refused for authority, or undefined. */

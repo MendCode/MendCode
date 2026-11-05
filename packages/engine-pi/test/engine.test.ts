@@ -9,6 +9,7 @@ import { classifySmart } from "../../engine-native/src/smart-permissions"
 import {
   createPiConfig,
   createPiEngine,
+  createPiMapper,
   GATE_MARK,
   GATE_SOURCE,
   GATE_READY,
@@ -172,6 +173,23 @@ test("plan mode refuses a tool even when an earlier turn approved it for the ses
   const planned = turnInput({ sessionId, text: "tool bash", mode: () => "plan" })
   expect(await engine.runTurn(planned.input)).toEqual({ status: "ok" })
   expect(texts(planned.events, "agent_message").join("\n")).toContain("picked:deny")
+})
+
+describe("live output tokens", () => {
+  test("a message's cumulative output is sent live while it streams, once per change, and starts over with the next message", () => {
+    const events: EngineEvent[] = []
+    const mapper = createPiMapper({ newItemId: () => ids("item"), emit: (event) => void events.push(event) })
+    const update = (output: number, delta: string) => mapper.accept({ type: "message_update", usage: { input: 100, output, cacheRead: 0, cacheWrite: 0 }, assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta } })
+    update(0, "a")
+    update(12, "b")
+    update(12, "c")
+    update(31, "d")
+    mapper.accept({ type: "message_end", message: { role: "assistant", provider: "p", model: "m", usage: { input: 100, output: 40, cacheRead: 0, cacheWrite: 0 }, stopReason: "stop" } })
+    update(5, "e")
+    expect(events.filter((event) => event.type === "usage.live")).toEqual([{ type: "usage.live", output: 12 }, { type: "usage.live", output: 31 }, { type: "usage.live", output: 5 }])
+    // The message's own usage is still the one record.
+    expect(events.filter((event) => event.type === "usage")).toHaveLength(1)
+  })
 })
 
 describe("a normal turn", () => {

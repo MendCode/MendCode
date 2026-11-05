@@ -71,7 +71,7 @@ export function createSession(ctx: AppContext, actions: {
   }
 
   /** `/undo` and `/redo`: the daemon's report as a card; files changed after the turn make it ask before overwriting them (`force`). */
-  async function rewind(kind: RewindKind, force = false, atItemId?: ItemId, prompt?: string, images?: BlobRef[]) {
+  async function rewind(kind: RewindKind, force = false, atItemId?: ItemId, prompt?: string, images?: BlobRef[], placed = false) {
     const sessionId = state.sessionId
     const reply = await input.send({ type: kind === "undo" ? "session.undo" : "session.redo", sessionId, ...(force ? { force: true } : {}), ...(kind === "undo" && atItemId ? { atItemId } : {}), ...(kind === "undo" && state.transcript.activeTurn ? { cancelRunning: true } : {}) })
     if (sessionId !== state.sessionId) return
@@ -94,6 +94,7 @@ export function createSession(ctx: AppContext, actions: {
       images = report.prompt.attachments
     }
     if (kind === "redo" && report.canRedo !== true) { prompt = ""; images = [] }
+    if (placed) return requestFrame()
     if (prompt !== undefined) {
       ctx.editor.replaceAll(prompt)
       state.attachments = pendingFromRefs(images ?? [])

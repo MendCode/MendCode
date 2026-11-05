@@ -215,6 +215,11 @@ export function createEvents(ctx: AppContext, actions: {
       state.todayUsage = { tokens: event.tokens, calls: event.calls, ...(event.costMicros ? { costMicros: event.costMicros } : {}) }
       return requestFrame()
     }
+    // A running count from an engine that records its usage later: the activity line only, and only for the open session's turn.
+    if (event.type === "turn.tokens") {
+      if (event.sessionId === state.sessionId && state.turnState.noteLive(event)) requestFrame()
+      return
+    }
     if (event.type === "agent-commands.changed") return actions.peerCommandsChanged(event.sourceSessionId, event.targetSessionId)
     if (event.type === "task.changed") {
       state.agentParents.delete(event.sessionId)

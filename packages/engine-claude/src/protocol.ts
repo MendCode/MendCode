@@ -299,24 +299,40 @@ export function createTurnMapper(input: { newItemId(): ItemId; emit(event: Engin
   const spent = new Map<string, { input: number; output: number; cacheRead: number; cacheWrite: number; model: string | undefined }>()
   /** Whether the `result` message reported the turn's usage (then the per-call sums are not sent). */
   let reported = false
+  /** The calls' output tokens summed so far (kept in step with `spent`), and the sum last sent live. */
+  let liveOutput = 0
+  let liveSent = 0
   const count = (value: unknown) => (typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0)
 
   /** A call's figures arrive more than once (start, delta, whole message): each field keeps its largest value, never a sum. */
   function noteSpend(id: unknown, usage: any, callModel?: unknown) {
     if (typeof id !== "string" || !id || !usage || typeof usage !== "object") return
     const was = spent.get(id)
+    const output = Math.max(was?.output ?? 0, count(usage.output_tokens))
+    liveOutput += output - (was?.output ?? 0)
     spent.set(id, {
       input: Math.max(was?.input ?? 0, count(usage.input_tokens)),
-      output: Math.max(was?.output ?? 0, count(usage.output_tokens)),
+      output,
       cacheRead: Math.max(was?.cacheRead ?? 0, count(usage.cache_read_input_tokens)),
       cacheWrite: Math.max(was?.cacheWrite ?? 0, count(usage.cache_creation_input_tokens)),
       model: typeof callModel === "string" ? callModel : was?.model,
     })
   }
 
+  /**
+   * Claude Code's `result` is the only usage it sends, at the turn's end. Until then the turn's output tokens are what its calls reported,
+   * shown live when a call's `message_delta` gives its cumulative figure (the other copies of it can lag the call, so they publish nothing).
+   */
+  function publishLive() {
+    if (reported || liveOutput <= liveSent) return
+    liveSent = liveOutput
+    input.emit({ type: "usage.live", output: liveOutput })
+  }
+
   /** One call's usage arrives up to three times (`message_start`, `message_delta`, the whole `assistant` message), each repeating the same call: the figures are set, never added. */
-  function noteCall(id: unknown, usage: any, callModel?: unknown) {
-    noteSpend(id, usage, callModel)
+  function noteCall(id: unknown, usage: any, callModel?: unknown, started = false) {
+    // `message_start` carries a placeholder output (1) before the model has written anything: it is no figure to show or sum.
+    noteSpend(id, started && usage && typeof usage === "object" ? { ...usage, output_tokens: 0 } : usage, callModel)
     if (!usage || typeof usage !== "object") return
     const prompt = count(usage.input_tokens) + count(usage.cache_read_input_tokens) + count(usage.cache_creation_input_tokens)
     const output = count(usage.output_tokens)
@@ -335,11 +351,14 @@ export function createTurnMapper(input: { newItemId(): ItemId; emit(event: Engin
     if (event?.type === "message_start") {
       blocks.clear()
       if (typeof event.message?.model === "string") model = event.message.model
-      noteCall(event.message?.id, event.message?.usage, event.message?.model)
+      noteCall(event.message?.id, event.message?.usage, event.message?.model, true)
       return
     }
     if (event?.type === "message_delta") {
-      if (lastCall) noteCall(lastCall.id, { output_tokens: event.usage?.output_tokens })
+      if (lastCall) {
+        noteCall(lastCall.id, { output_tokens: event.usage?.output_tokens })
+        publishLive()
+      }
       return
     }
     if (event?.type === "content_block_start") {
