@@ -57,7 +57,8 @@ describe("B10.04 Vertex terminal and automation", () => {
     await h.type("m"); expect(h.app.page).toBe("model")
     await h.type("\x1b[D")
     expect(h.commands("session.model.set").at(-1)).toMatchObject({ choice: { model: "google-vertex:gemini-2.5-flash" } })
-    await h.type("\x1b"); await h.run("/connect google-vertex")
+    // esc leaves the model page for the connect page it came from, and once more leaves that
+    await h.type("\x1b"); await h.type("\x1b"); await h.run("/connect google-vertex")
     expect(h.text()).toContain("team-project")
     expect(h.text()).toContain("TEAM_TOKEN")
     expect(h.text()).toContain("billing-project")

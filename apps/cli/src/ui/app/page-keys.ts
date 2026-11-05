@@ -29,6 +29,7 @@ import { DEFAULT_TUI_PROFILE, normalizeHomeMascot, type TuiProfile } from "../..
 import { sessionListKey } from "../../view/session-list"
 import { slashCatalog } from "../../view/commands"
 import { viewRows } from "./view-rows"
+import { followPage } from "./page-back"
 import { scaffoldView } from "../../extensions/view-scaffold"
 import type { PresentationMode } from "../../view/transcript"
 
@@ -256,7 +257,8 @@ export function createPageKeys(ctx: AppContext, actions: {
       else await memoryAction(result.action)
     } else if (state.page === "pet") {
       if (await actions.petPlanKey(key)) return
-      const result = petPickerKey(state.petPicker, key, state.petList ?? [])
+      const shownNow = state.petPickerMascot ? (state.tuiProfile.logoKind === "mascot" || state.tuiProfile.logoKind === "both" ? state.tuiProfile.homeMascot : "off") : state.tuiProfile.pet || state.settingsNow.pet
+      const result = petPickerKey(state.petPicker, key, state.petList ?? [], shownNow)
       state.petPicker = result.state
       if (result.action.type !== "none") state.page = "chat"
       if (result.action.type === "choose" && state.petPickerMascot) {
@@ -563,7 +565,22 @@ export function createPageKeys(ctx: AppContext, actions: {
     requestFrame()
   }
 
+  /** Every page's key goes through here: a page opened from another page closes back to it (esc), whichever page it is. */
   async function pageKey(key: string) {
+    // A page an action opened after the last key returned (a daemon reply) is a step from the page that key ended on.
+    if (state.pageSeen !== undefined && state.pageSeen !== state.page) state.pageLinks = followPage({ links: state.pageLinks ?? [], before: state.pageSeen, after: state.page, key: "" }).links
+    const before = state.page
+    await dispatchPageKey(key)
+    const followed = followPage({ links: state.pageLinks ?? [], before, after: state.page, key })
+    state.pageLinks = followed.links
+    if (followed.page !== state.page) {
+      state.page = followed.page
+      requestFrame()
+    }
+    state.pageSeen = state.page
+  }
+
+  async function dispatchPageKey(key: string) {
     if (state.page === "compaction") return actions.compactionKey(key)
     if (state.page === "history") {
       const keys = /^[\x20-\x7e -￿]{2,}$/u.test(key) ? [...key] : [key]

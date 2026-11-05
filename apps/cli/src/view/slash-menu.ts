@@ -47,7 +47,7 @@ export function menuCatalog(custom: SlashCommand[], profile: TuiProfile, setting
   })
 }
 
-export function slashMenuModel(input: { text: string; custom: SlashCommand[]; profile: TuiProfile; settings: TierSettings; recents: readonly SlashRecent[]; state: SlashMenuState; selected: number; width: number; height: number; ascii: boolean; bindings?: Bindings }): MenuModel | undefined {
+export function slashMenuModel(input: { text: string; /** The session directory a path argument (`/cd src/`) is read from; absent for a remote terminal. */ directory?: string; custom: SlashCommand[]; profile: TuiProfile; settings: TierSettings; recents: readonly SlashRecent[]; state: SlashMenuState; selected: number; width: number; height: number; ascii: boolean; bindings?: Bindings }): MenuModel | undefined {
   const argumentWords = /^\/[^\s/]+\s/.test(input.text)
   if (!/^\/[^\s/]*$/.test(input.text) && !argumentWords) return undefined
   const { profile, state } = input
@@ -73,7 +73,7 @@ export function slashMenuModel(input: { text: string; custom: SlashCommand[]; pr
   const commandItem = (command: SlashCommand): MenuModel["items"][number] => ({ kind: "command", label: `/${command.name}`, group: command.group, command })
   let items: MenuModel["items"]
   if (argumentWords) {
-    items = slashSuggestions(input.text, input.custom, catalog, input.recents).filter((command) => !command.feature || featureOn(input.settings, command.feature)).map(commandItem)
+    items = slashSuggestions(input.text, input.custom, catalog, input.recents, input.directory).filter((command) => !command.feature || featureOn(input.settings, command.feature)).map(commandItem)
     if (!items.length) return undefined
   }
   else if (query) items = [...slashSuggestions(input.text, input.custom, catalog, input.recents).map(commandItem), ...gatedMatches(query, input.settings, input.custom).map(({ command, hint }) => ({ ...commandItem({ ...command, summary: hint }), gated: hint }))]

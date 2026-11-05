@@ -3,6 +3,7 @@ import { FEATURES, featureState, slashTier, tierIncludes, type FeatureId, type S
 import { SLASH_TIERS, SLASH_TIER_CAPS, slashMatch } from "./slash-match"
 import { POPUP_ROWS, popupWindowStart, renderPopup } from "./popup"
 import { argumentMatches } from "./slash-arguments"
+import { pathMatches, takesPath } from "./path-arguments"
 
 export type SlashCommand = {
   name: string
@@ -20,7 +21,7 @@ export type SlashCommand = {
   /** Set on the catalog the command editor shows: the tier does not list it unless the user's `hidden: false` does. */
   tierHidden?: true
   /** A row of a command's argument words (`/pr publish`, view/slash-arguments.ts): `more` when another word follows it. */
-  argument?: { more: boolean }
+  argument?: { more: boolean; /** A path: Tab writes it without a space (a directory ends with `/`), and Enter sends the line as typed. */ path?: true }
 }
 
 export const SLASH_COMMANDS: SlashCommand[] = [
@@ -287,11 +288,12 @@ export function slashRefusal(text: string, settings: TierSettings, prefs: readon
  * The commands `text` matches, best match first. Among equal matches the ones used before come first, the most used ahead
  * (`/s` with `/sessions` in the recents puts it over `/settings`); an exact name or alias still wins over a used prefix.
  */
-export function slashSuggestions(text: string, custom: SlashCommand[] = [], catalog?: SlashCommand[], recents: ReadonlyArray<{ name: string; count: number; last: number }> = []): SlashCommand[] {
+export function slashSuggestions(text: string, custom: SlashCommand[] = [], catalog?: SlashCommand[], recents: ReadonlyArray<{ name: string; count: number; last: number }> = [], directory?: string): SlashCommand[] {
   const typed = /^\/(\S+)\s+([\s\S]*)$/.exec(text)
   if (typed) {
     const command = (catalog ?? slashCatalog(custom)).find((candidate) => names(candidate).includes(typed[1]!.toLowerCase()))
     if (!command || command.custom || command.ext) return []
+    if (takesPath(command.name)) return pathMatches({ command: command.name, args: typed[2]!, base: directory }).map((match) => ({ name: match.name, group: command.group, aliases: [], summary: match.summary, argument: { more: false, path: true as const } }))
     return argumentMatches(command.name, typed[2]!).map((option) => ({ name: option.name, group: command.group, aliases: [], summary: option.summary, ...(option.feature ? { feature: option.feature } : {}), argument: { more: option.more === true } }))
   }
   if (!text.startsWith("/") || text.startsWith("//") || /\s/.test(text)) return []

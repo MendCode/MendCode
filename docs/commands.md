@@ -106,8 +106,10 @@ After a command's name and a space the `/` menu lists the fixed words that comma
 `/tier `, `/graph `, `/sandbox `, `/git `, `/stash ` and the others the same way. The exact word comes first, then words that start with
 what is typed, then words that only contain it. Tab writes the highlighted word and a space, so a second Tab goes on to the next word
 (`/pr pub` Tab `/pr publish ` Tab `/pr publish on `). Enter on a half-typed word runs the highlighted one; on a word another word must
-follow (`publish`) it only writes it; on a blank word (`/experimental `) it runs the command as typed. Paths, numbers and free text
-are never guessed: no row is shown for them. A command the tier leaves out lists no words, and a word of a feature that is off
+follow (`publish`) it only writes it; on a blank word (`/experimental `) it runs the command as typed. Numbers and free text
+are never guessed: no row is shown for them. A path is: `/cd `, `/add-dir ` and `/attach ` list the entries of the directory typed so far
+(`view/path-arguments.ts`, relative to the session directory, `~/` is home, hidden entries once you type a dot), directories first and ending in `/`.
+Tab writes the highlighted path without a space so the next Tab goes inside it; Enter sends the line as typed. Local terminals only. A command the tier leaves out lists no words, and a word of a feature that is off
 (`/panel galaxy`) is left out.
 
 ## Aliases

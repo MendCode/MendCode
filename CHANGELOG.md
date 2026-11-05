@@ -11,6 +11,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### New
 
+- `/cd`, `/add-dir` and `/attach` complete paths as you type: Tab walks into the highlighted directory.
 - The assistant replies in the language of your latest message (English when unclear) and no longer switches language on its own.
 - `mendcode usage recover` adds the token usage of a Claude Code, Codex or Pi session log to Usage, with a preview first and
   an undo. See [usage recovery](docs/usage-recovery.md).
@@ -70,6 +71,10 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 - While the advisor runs, the working row says "Consulting advisor..." instead of "Patching..." or "Running command...".
 - The advisor no longer takes an image read during the turn for your request, and sees the turn's edits and the checks it
   ran, so it stops asking for evidence the turn already has.
+- Esc in a page opened from another (Settings, then Disk usage) goes back to that page instead of leaving to the chat.
+- The mouse wheel and trackpad scroll every page with rows or text, including Usage.
+- Enter or space turns the pet off from `/pet`, trusts a project in `/tools` and `/hooks`, and switches the IDE bridge on or off.
+- Closing MendCode quickly, or with Ctrl+C or a termination signal, no longer leaves part of the screen painted.
 - An automatic PR review checks that it may post, and that no other reviewer already has, before it spends any tokens.
 - The advisor sees a short summary of the session (earlier edits apart from this turn's, this turn's checks) and the untracked files, and the executor can pass it files with a line range and images; the extra evidence is capped and says what was cut.
 - `@MendCode review` gets no extra reply when this reviewer's own review of the head was posted after the comment.

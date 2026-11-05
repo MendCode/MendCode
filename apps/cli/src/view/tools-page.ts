@@ -16,7 +16,7 @@ const UP = new Set(["\x1b[A", "\x1bOA", "\x10", "k"])
 const DOWN = new Set(["\x1b[B", "\x1bOB", "\x0e", "j"])
 const MAX_DESCRIPTION_LINES = 3
 
-const HINTS = "↑↓ select · t trust this project · esc back"
+const HINTS = "↑↓ select · enter or t trust this project · esc back"
 
 const EXAMPLE = ["{", '  "description": "Count words in a file",', '  "command": ["./wc.sh"],', '  "args": { "type": "object", "properties": { "path": { "type": "string" } }, "required": ["path"] }', "}"]
 
@@ -39,7 +39,7 @@ export function toolsPageKey(state: ToolsPageState, key: string, tools: CustomTo
   if (key === "\x1b" || key === "q") return { state, action: { type: "close" } }
   if (UP.has(key)) return go(selected - 1)
   if (DOWN.has(key)) return go(selected + 1)
-  if (key === "t") {
+  if (key === "t" || key === " " || key === "\r") {
     const project = projectTools(tools)
     if (project.length === 0) return { state, action: NONE }
     return { state, action: { type: "trust", trusted: !project.every((tool) => tool.trusted) } }

@@ -49,6 +49,6 @@ export function renderIdePage(input: { state: IdeState | undefined; width: numbe
   } }
   const body = panelGrid({ width: Math.max(1, width - 4), compact: false, padding: true, maxColumns: compact ? 1 : 2,
     heights: compact ? [top, Math.max(4, room - top - 1)] : [room], rows: compact ? [[bridge], [preview]] : [[bridge, preview]] })
-  const hints = compact ? "↑↓ · e on/off · c clear · o open · r · esc" : "↑↓ scroll · e on/off · c clear · o open · r refresh · esc back"
+  const hints = compact ? "↑↓ · e on/off · c clear · o open · r · esc" : "↑↓ scroll · enter on/off · c clear · o open · r refresh · esc back"
   return appearancePage({ title: "IDE", hints, body, width, height })
 }

@@ -583,6 +583,8 @@ async function finish(code: number) {
     for (let waited = 0; soloHost && !soloHost.stopped && waited < 5_000; waited += 20) await Bun.sleep(20)
   } else await leaveSoloHost(code === 129)
   client.close()
+  // The restore sequences are already written; the process ends only once the terminal has taken them.
+  await Promise.race([new Promise<void>((resolve) => { try { process.stdout.write("", () => resolve()) } catch { resolve() } }), Bun.sleep(200)])
   process.exit(code)
 }
 if (isolatedDir) {
@@ -864,14 +866,19 @@ const terminalOut = {
 }
 const screen = createScreen(terminalOut, process.env,{ inline: !altScreen, keyboard: keyboardWanted(readTuiProfile(dataDir).keyProtocol, process.platform), ...(accessible ? { mouse: false } : {}), ...(relaunched === "restart" || relaunched === "terminal" ? { keepFrame: true } : {}) })
 // Whatever way the process ends, the keyboard flags it pushed come off: a shell that kept them would get escape codes for every key.
-process.once("exit", () => screen.releaseKeyboard())
+// The screen too: a process that ends by process.exit (a kill, a second ctrl+c, a fast close) leaves the alternate screen, the mouse modes and the cursor as the shell had them. Leaving twice is a no-op.
+process.once("exit", () => { screen.leave(); screen.releaseKeyboard() })
 // A plain `kill` ends the process without running the handler above; with the flags pushed that would leave the shell in the protocol.
 // A terminal that hosts the daemon leaves the way a closed one does instead: other sessions' turns finish first (a second SIGTERM stops them).
-if (!startup?.isolated) process.once("SIGTERM", () => {
-  if (!soloHost || soloHost.stopped) return process.exit(143)
-  soloHost.log("warn", "[SOLO]: SIGTERM while hosting the daemon; leaving after the running work")
-  exit(143)
-})
+const killed = (signal: "SIGTERM" | "SIGINT", code: number) => {
+  if (!soloHost || soloHost.stopped) return process.exit(code)
+  soloHost.log("warn", `[SOLO]: ${signal} while hosting the daemon; leaving after the running work`)
+  exit(code)
+}
+if (!startup?.isolated) {
+  process.once("SIGTERM", () => killed("SIGTERM", 143))
+  process.once("SIGINT", () => killed("SIGINT", 130))
+}
 // Whatever ends this process with the daemon still in it (a kill, process.exit) is in the daemon log; a SIGKILL or a native crash leaves no line at all.
 process.once("exit", (code) => {
   if (soloHost && !soloHost.stopped) soloHost.log("warn", `[SOLO]: the terminal hosting the daemon exited (code ${code}); turns still running end as interrupted`)
@@ -1010,7 +1017,7 @@ if (saved.ok) {
 }
 // Raw mode before the screen asks the terminal anything: a terminal still echoing prints the answer to the keyboard query (`^[[?1;2;4c`) as text.
 process.stdin.setRawMode?.(true)
-screen.enter()
+if (!leaving) screen.enter() // a close during start has already left: entering now would strand the alternate screen
 // An error nobody caught shows the crash screen (the draft saved, the terminal restored on leaving) instead of a stack trace over the alternate screen.
 const crash = createCrashGuard({ screen, now: Date.now, version: CLI_VERSION, env: process.env, home: process.env.HOME, saveDrafts: draftsSaved, exit: (code) => (leaving ? undefined : exit(code)), resume: () => app?.render() })
 // With the daemon in this process an error nobody caught can come from either side. The process survives it (a separate daemon would have died with its turn):

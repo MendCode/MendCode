@@ -145,7 +145,11 @@ export type Page = "file" | "tasks" | "stash" | "drafts" | "queue" | "history" |
 /** Mutable bindings shared by the entry point and its feature factories. */
 export type AppState = {
   commandOutput?: { title: string; message: string; hint?: string }
-  commandOutputReturn?: { page: Page; text?: import("../../view/text-page").TextPageState; textReturn?: Page }
+  /** Pages opened from another page, newest last: esc on the child goes back to the parent (ui/app/page-back.ts). */
+  pageLinks?: import("./page-back").PageLink[]
+  /** The page the last page key ended on, to notice a page an action opened later. */
+  pageSeen?: Page | undefined
+  commandOutputReturn?:{ page: Page; text?: import("../../view/text-page").TextPageState; textReturn?: Page }
   /** The file open in the viewer (the right slot, or the `file` page on a narrow terminal); absent when none is (docs/file-viewer.md). */
   fileViewer?: import("./file-viewer").FileViewerState | undefined
   environmentPage?: import("../../view/environment-page").EnvironmentPageState | undefined

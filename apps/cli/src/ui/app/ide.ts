@@ -133,7 +133,7 @@ export function createIde(ctx: AppContext) {
     const local = current()
     if (key === "\x1b" || key === "q") state.page = "chat"
     else if (key === "r") await load()
-    else if (key === "e") await configure(!local.report?.enabled)
+    else if (key === "e" || key === " " || key === "\r") await configure(!local.report?.enabled)
     else if (key === "c") clear()
     else if (key === "o") await open()
     else if (key === "\x1b[A" || key === "k") local.scroll = Math.max(0, local.scroll - 1)
