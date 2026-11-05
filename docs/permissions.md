@@ -46,7 +46,7 @@ A command line is split at unquoted `&&`, `||`, `;`, `|`, `&` and newlines; ever
 
 **Session grants.** In smart mode a grant covers only the same action fingerprint and causal user authority, with complete execution identity, and never a high-risk call. Changing the command, script identity, environment, or user turn asks again. Other modes retain tool/path session scopes.
 
-Claude Code sessions (engine `claude`) and the Codex engine treat `smart` as `ask`.
+Claude Code sessions (engine `claude`) decide `smart` with the same rules for Claude's Edit, Write, NotebookEdit and Bash calls (other Claude tools still ask), so an edit inside the project runs without asking. The Codex engine treats `smart` as `ask`.
 
 ### Permission reviewer (optional)
 

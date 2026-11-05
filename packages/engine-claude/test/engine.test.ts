@@ -741,6 +741,39 @@ describe("claude engine permissions", () => {
     expect(asked[0]!.detail).toBe("/p/hello.txt\n\nhi")
   })
 
+  describe("smart mode asks the injected rules", () => {
+    const smart: NonNullable<Parameters<typeof createClaudeEngine>[0]["smart"]> = ({ tool, args, cwd }) => {
+      const record = args as Record<string, string>
+      if (tool === "Bash") return record.command === "rm -rf ~" ? { decision: "deny", reason: "wipes the home directory" } : { decision: "ask", reason: "an unlisted command" }
+      if (tool === "Edit") return String(record.file_path).startsWith(`${cwd}/`) ? { decision: "allow", reason: "edit inside the project" } : { decision: "ask", reason: "outside the project" }
+      return undefined
+    }
+    const approve = () => ({ kind: "approve", scope: "once" }) as EngineResolution
+
+    test("an edit inside the project runs without an approval", async () => {
+      const turn = await permissionTurn({ tool_name: "Edit", input: { file_path: "/p/a.ts" } }, { mode: "smart", engine: { smart, cwdFor: () => "/p" } })
+      expect(turn.decision.behavior).toBe("allow")
+      expect(turn.asked).toHaveLength(0)
+    })
+    test("an edit outside the project asks, with the rule's reason", async () => {
+      const turn = await permissionTurn({ tool_name: "Edit", input: { file_path: "/other/a.ts" } }, { mode: "smart", answer: approve, engine: { smart, cwdFor: () => "/p" } })
+      expect(turn.asked).toHaveLength(1)
+      expect(turn.asked[0]!.detail).toContain("outside the project")
+    })
+    test("a forbidden command is refused without asking", async () => {
+      const turn = await permissionTurn({ tool_name: "Bash", input: { command: "rm -rf ~" } }, { mode: "smart", answer: approve, engine: { smart, cwdFor: () => "/p" } })
+      expect(turn.decision).toEqual({ behavior: "deny", message: "smart mode never runs this: wipes the home directory" })
+      expect(turn.asked).toHaveLength(0)
+    })
+    test("a tool the rules do not judge still asks, and ask mode never consults them", async () => {
+      expect((await permissionTurn({ tool_name: "WebFetch", input: { url: "https://x.test" } }, { mode: "smart", answer: approve, engine: { smart, cwdFor: () => "/p" } })).asked).toHaveLength(1)
+      let consulted = false
+      const ask = await permissionTurn({ tool_name: "Edit", input: { file_path: "/p/a.ts" } }, { mode: "ask", answer: approve, engine: { smart: () => { consulted = true; return { decision: "allow", reason: "x" } }, cwdFor: () => "/p" } })
+      expect(ask.asked).toHaveLength(1)
+      expect(consulted).toBe(false)
+    })
+  })
+
   describe("a call Claude Code flags although the session is in full access (bypass mode)", () => {
     const dangerous = { tool_name: "Bash", input: { command: "mkdir -p /tmp/x && cd /tmp/x && rm -f * && curl example.test" }, decision_reason: "Dangerous rm operation", permission_suggestions: [{ type: "addRules", rules: [{ toolName: "Bash", ruleContent: "rm:*" }], behavior: "allow", destination: "localSettings" }] }
 

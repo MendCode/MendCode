@@ -636,6 +636,20 @@ export const daemon = await startDaemon({
               waitingForMcp: harness.waiting,
               subagentContext: (sessionId) => harness.instructions(sessionId),
               oneTree: oneTree.note,
+              // Smart mode decides as it does natively: Claude's tool names become the native ones the rules know.
+              smart: ({ sessionId, tool, permission, args, cwd: root }) => {
+                const record = (args ?? {}) as Record<string, unknown>
+                const native = tool === "Edit" || tool === "MultiEdit" ? { name: "edit", args: { path: record.file_path } }
+                  : tool === "Write" ? { name: "write", args: { path: record.file_path } }
+                  : tool === "NotebookEdit" ? { name: "notebook_edit", args: { path: record.notebook_path } }
+                  : tool === "Bash" ? { name: "shell", args: { command: record.command } }
+                  : undefined
+                if (!native) return undefined
+                const settings = store.settings.get()
+                const extraRoots = declaredRoots(settings.additionalDirectories, runLimits.get(sessionId)?.addDirs)
+                const { decision, reason } = classifySmart({ tool: { name: native.name, permission }, args: native.args, cwd: root, ...(extraRoots.length ? { extraRoots } : {}), ...(settings.permissionAllow ? { allowCommands: settings.permissionAllow } : {}) })
+                return { decision, reason }
+              },
               ownTools: `mcp__${HOST_MCP_SERVER}__`,
               // The Claude Code process is the session's own: a `mendcode` client run by its tools is agent-origin with this session's mode.
               onProcess: (sessionId, pid) => { const tracked = agentProcesses.agent(pid, sessionId); return () => tracked.exited() },
