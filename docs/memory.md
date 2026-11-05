@@ -105,6 +105,20 @@ The agent does not get every saved memory, only the ones that matter for what yo
 
 The score of a memory is its match, its recency (half-life of 30 days), its links to matches, a small lift for `preferences`, `constraints` and `security` and for the session's own memories, minus a penalty when another saved memory *supersedes* it. A memory already shown earlier in the session gets a lift too, so the prompt changes only when the ranking clearly does (this keeps the provider's prompt cache useful). When the block leaves memories out it says how many and points to `memory_graph` search.
 
+## Memory by tier
+
+| tier | memory |
+|---|---|
+| minimalist | Exactly the switches you set. Nothing is injected, extracted or consolidated until you turn it on |
+| balanced | Same: the switches you set. A new chat starts clean |
+| full | `memory_auto` fills the switches you never set: facts reach prompts, a post-turn extractor keeps decisions, preferences and the state of the work (with scores), Dream consolidates Pending every night and archives duplicates, and the caps are 20 project and 100 total entries. `resume_context` adds a note of at most 1 800 characters to the system prompt of a new chat |
+
+A switch present in your settings (global or project) always wins over the tier. `/tier memory_auto off` and `/tier resume_context off` turn either one off.
+
+Nightly consolidation in full saves a Pending proposal when its scores pass the gates (confidence ≥ .9, durability ≥ .85, change risk ≤ .2, low sensitivity) and its category is commands, stack, constraints, conventions, preferences, architecture, objective or release. A proposal that needs a person (other categories, redacted or sensitive text, revisions of user or pinned facts) stays in Pending instead of being archived. A proposal below the score gates or already remembered is archived and can be restored.
+
+The resume note (part of the system prompt, next to the memory block; nothing is stored in the session) lists the newest sessions of this project (three) and of other projects in the last 7 days (three), each as its goal and where it stopped, from the session's recap when one exists, otherwise from its digest. It is built once per session and kept in the daemon's memory, so every request carries the same text and the cached prompt prefix holds; after a daemon restart a chat that already has turns drops it (one cache miss).
+
 ## Scopes
 
 | scope | visible to | removed |

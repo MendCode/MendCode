@@ -1,8 +1,8 @@
-import type { ExtractionJob, SessionEvent, Settings } from "@mendcode/protocol"
+import type { ExtractionJob, MemoryEntry, SessionEvent, Settings } from "@mendcode/protocol"
 import type { Store } from "@mendcode/store"
 import { buildDigest } from "@mendcode/dream"
 
-export type ExtractedMemory = { scope: "project" | "user"; text: string; category: string }
+export type ExtractedMemory = { scope: "project" | "user"; text: string; category: string; details?: MemoryEntry["details"] }
 
 /** One bounded worker; jobs and retry deadlines survive daemon shutdown. */
 export function createMemoryExtraction(options: {

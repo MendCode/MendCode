@@ -14,6 +14,9 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 - Approving a plan (Enter, or comment then apply) now runs it with full access, as Claude Code does when it leaves plan mode; `m` on the plan page picks auto edits or ask before edits instead, and the page and the "Plan mode off" notice name the access. See [plan review](docs/plan-review.md).
 - The assistant is told what the terminal draws according to the tier: full gets the Markdown, Mermaid and callout syntax and when to use each, balanced one short line, minimalist nothing.
 - `/btw history` lists the side chats you cleared and opens one to read. The row under the side chat's name says how much of the session it sees and how much of its prompt came from the cache. See [/btw](docs/btw.md).
+- Full tier: memory works by itself. Saved facts reach prompts, decisions and the state of the work are proposed after turns, and the nightly Dream saves what passes its checks. See [memory by tier](docs/memory.md#memory-by-tier).
+- Full tier: a new chat opens with a short note of what your latest sessions, in this project and others, were doing.
+- Dream picks up where it stopped when the daemon was stopped mid-run.
 - `/cd`, `/add-dir` and `/attach` complete paths as you type: Tab walks into the highlighted directory.
 - The assistant replies in the language of your latest message (English when unclear) and no longer switches language on its own.
 - `mendcode usage recover` adds the token usage of a Claude Code, Codex or Pi session log to Usage, with a preview first and
@@ -70,6 +73,8 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Fixed
 
+- Memories no longer pile up in Pending when Dream runs on schedule or from `/dream`: the full tier consolidates them, and a Dream run stopped by a restart no longer blocks its project.
+- Dream uses your `small` model when no `dream` model is set, instead of the main one.
 - A Claude Code turn after a cancelled one whose background command still ran no longer fails with "`claude` was not
   found"; a Claude Code that refuses to start shows its own reason.
 - Claude Code's reports about background tasks of an earlier or ended process no longer arrive as messages for the model.

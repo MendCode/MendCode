@@ -47,7 +47,7 @@ import { queryDatabase } from "./debug-db"
 import { createTracing, validateOtlp, type OtlpExporter } from "./tracing"
 import { createMemoryModel } from "./memory-model"
 import { createMemoryControl } from "./memory-control"
-import { memorySettings } from "./memory-config"
+import { consolidationCategories, memorySettings } from "./memory-config"
 import { daemonLogs } from "./daemon-logs"
 import { consolidateMemory } from "./memory-consolidation"
 import { createSemanticConsolidator } from "./memory-consolidator"
@@ -1841,7 +1841,7 @@ export async function startDaemon(options: DaemonOptions) {
               } catch (error) { budgets.record(); throw error }
               finally { auxiliaryUsage.record({ role: "memoryConsolidator", directory }, used, usable.model) }
             } }) : undefined
-            const { fallback, ...pass } = await consolidateMemory({ entries: () => store.memories.list({ directory, profile: profileOf(store.settings.get(), directory) }), policy: consolidationPolicy, limit: settings.memoryGlobalCompactionMaxEntries ?? 50,
+            const { fallback, ...pass } = await consolidateMemory({ entries: () => store.memories.list({ directory, profile: profileOf(store.settings.get(), directory) }), policy: consolidationPolicy, limit: settings.memoryGlobalCompactionMaxEntries ?? 50, categories: consolidationCategories(store.settings.get()), holdForReview: trigger !== "manual" && featureOn(store.settings.get(), "memory_auto"),
               apply: async (memory) => { await cliMemory.run(directory, { operation: "apply", memoryId: memory.memoryId }) },
               archive: (memory) => { store.memories.update(memory.memoryId, { status: "archived" }); globalSink.append({ type: "memory.changed", memoryId: memory.memoryId, change: "updated" }) },
               ...(meter ? { semantic: createSemanticConsolidator({ call: meter.call }) } : {}),
@@ -1856,7 +1856,11 @@ export async function startDaemon(options: DaemonOptions) {
           // A bug or a storage error must not leave the run "running" forever: that would refuse every later run of the project.
           closing = { status: "failed", error: error instanceof Error ? error.message.slice(0, 500) : String(error) }
         }
-        const finished = store.dreamRuns.finish(run.runId, closing)
+        // A daemon that stopped mid-run is resumed at its next start (resumeInterruptedDreams), not reported as a model failure.
+        if (job.signal.aborted && closing!.status === "failed") closing = { ...closing!, error: `${DREAM_INTERRUPTED}: the daemon stopped` }
+        // Nightly compaction: exact duplicates among generated memories are archived with the pass (policy memoryMaintenance).
+        else if (closing!.status !== "failed") maintainMemory(directory)
+        const finished = store.dreamRuns.finish(run.runId, closing!)
         if (finished) { globalSink.append({ type: "dream.changed", run: finished }); finish(finished) }
       },
     })
@@ -1871,6 +1875,18 @@ export async function startDaemon(options: DaemonOptions) {
    * the schedule on or changing its time never recovers a window retroactively. Off (no timer) while dreamAt is unset — P6.
    */
   const DREAM_WINDOW_KEY = "dream.window"
+  const DREAM_INTERRUPTED = "Interrupted"
+  /** A run left `running` by a crash or kill is closed now, so it is found by `interruptedDreams` and never blocks its project. */
+  store.dreamRuns.abandonRunning(`${DREAM_INTERRUPTED}: the daemon stopped`)
+  /**
+   * Projects whose newest run (within 36 h) was cut short by a stop: they run again, one run each. Session digests the cut run
+   * already built are cached, so the resumed run only does what is left. A project with a newer run is not listed.
+   */
+  function interruptedDreams(): string[] {
+    const since = clock.now() - 36 * 3_600_000
+    return [...new Set(store.dreamRuns.list().filter((run) => run.status === "failed" && run.startedAt >= since && run.error?.startsWith(DREAM_INTERRUPTED)).map((run) => run.directory))]
+      .filter((directory) => store.dreamRuns.list(directory)[0]?.error?.startsWith(DREAM_INTERRUPTED))
+  }
   let dreamTimer: TimerHandle | undefined
   /** `reset`: the schedule was just turned on or moved, so the window that already passed today counts as handled. */
   function armDreamSchedule(reset = false): { status: string; reason: string; runs: Array<{ runId: number }> } {
@@ -1892,6 +1908,10 @@ export async function startDaemon(options: DaemonOptions) {
           if (!("error" in started)) runs.push({ runId: started.runId })
         }
       }
+    }
+    for (const directory of interruptedDreams()) {
+      const started = startDream(directory, "recovered")
+      if (!("error" in started)) runs.push({ runId: started.runId })
     }
     dreamTimer = clock.setTimer(nextCheckIn(clock.now(), at), () => armDreamSchedule())
     return { status: runs.length ? "started" : "skipped", reason: runs.length ? "Daily window due" : "No unhandled active window", runs }

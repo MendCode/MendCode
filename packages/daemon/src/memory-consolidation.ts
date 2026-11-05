@@ -28,6 +28,10 @@ export async function consolidateMemory(input: {
   entries(): MemoryEntry[]
   policy: "disabled" | "preview" | "auto-consolidate"
   limit: number
+  /** Categories the host may save without a person looking (default: commands, stack, constraints, conventions). */
+  categories?: readonly string[]
+  /** A proposal the gates send to a person stays Pending instead of being archived (the unattended nightly pass). */
+  holdForReview?: boolean
   apply(memory: MemoryEntry): Promise<void>
   archive(memory: MemoryEntry): void
   semantic?: SemanticConsolidator
@@ -71,7 +75,7 @@ export async function consolidateMemory(input: {
       : scored.confidence < .9 ? "Confidence below .9"
       : scored.durability < .85 ? "Durability below .85"
       : scored.changeRisk > .2 ? "Change risk above .2"
-      : !["commands", "stack", "constraints", "conventions"].includes(memory.category) ? "Category requires review"
+      : !(input.categories ?? ["commands", "stack", "constraints", "conventions"]).includes(memory.category) ? "Category requires review"
       : target?.pinned || target?.source === "user" ? "User and pinned facts require explicit approval" : undefined
     // What the model recommended instead of applying: archive it, mark it a duplicate of a known memory, or leave it for a person.
     let verdict: { outcome: "archived" | "kept"; reason: string; canonicalId?: string } | undefined
@@ -89,6 +93,7 @@ export async function consolidateMemory(input: {
     const extra = { by, ...(verdict?.canonicalId ? { canonicalId: verdict.canonicalId } : {}) }
     if (input.policy === "preview") record({ memoryId: memory.memoryId, outcome: "preview", reason: clip(verdict ? `Would ${verdict.outcome === "kept" ? "keep pending" : "archive"}: ${verdict.reason}` : unsafe ?? "Eligible to apply"), ...extra })
     else if (verdict?.outcome === "kept") record({ memoryId: memory.memoryId, outcome: "kept", reason: clip(verdict.reason), ...extra })
+    else if (!verdict && input.holdForReview && unsafe && /requires (explicit approval|review)$/.test(unsafe)) record({ memoryId: memory.memoryId, outcome: "kept", reason: clip(unsafe), by: "host" })
     else {
       const archive = Boolean(verdict ?? unsafe)
       try {

@@ -113,6 +113,7 @@ import { createCacheTtl } from "./cache-ttl"
 import { readUsageProfile } from "./usage-profile"
 import { windowOverride } from "./session-context-window"
 import { memoryExtractionPrompt } from "./memory-extract-prompt"
+import { createResumeSource } from "./memory-resume"
 import type { ModelChoice, ModelInfo } from "@mendcode/protocol"
 import { effectiveSettings, featureOn, findModel, modelContextOf, setBuildChannel } from "@mendcode/protocol"
 import { buildChannelOf } from "../../upgrade/src/releases"
@@ -523,7 +524,13 @@ export const daemon = await startDaemon({
     skills = skillLoader
     // Memories are ranked for the session's latest prompt (full-text matches, recency, links; pinned always in) instead of all being injected.
     const memorySelector = createMemorySelector(memory, { settings: (directory) => memorySettings(store.settings.get(), directory) })
-    const memoryFor = (root: string, context: SystemContext | undefined) => memorySelector.block({ directory: root, prompt: context?.prompt ?? "", ...(context ? { sessionId: context.sessionId } : {}) })
+    // Feature `resume_context`: the note rides in the system prompt part with the memory block, frozen per session in memory, so it adds nothing to the stored history.
+    const resumeFor = createResumeSource({ store, now: Date.now, enabled: () => featureOn(store.settings.get(), "resume_context", { safeMode }) })
+    const memoryFor = (root: string, context: SystemContext | undefined) => {
+      const block = memorySelector.block({ directory: root, prompt: context?.prompt ?? "", ...(context ? { sessionId: context.sessionId } : {}) })
+      const resume = context ? resumeFor(context.sessionId, root) : ""
+      return resume ? (block ? `${block}\n\n${resume}` : resume) : block
+    }
     // No search key: the subscription's own search endpoint answers with the login the engine already uses (MENDCODE_WEB_SEARCH=0 turns it off).
     const subscriptionSearch = process.env.MENDCODE_WEB_SEARCH === "0" ? undefined : {
       baseUrl: CHATGPT_CODEX_BASE_URL,
@@ -965,7 +972,8 @@ export const daemon = await startDaemon({
   ...(engineName === "native" ? { providers: providerService, providerAuth } : {}),
   ...(engineName === "native" ? { dream: { complete: dreamComplete }, complete, setupComplete: completeWithUsage,
     extractMemory: async (job, signal, onUsage) => {
-      const result = await dreamComplete(memoryExtractionPrompt(job.text), signal, resolveModel({ role: "memoryExtractor", roles: rolesFor(extractionSettings(), job.directory), catalog: modelCatalog }))
+      const fullMemory = featureOn(extractionSettings(), "memory_auto")
+      const result = await dreamComplete(memoryExtractionPrompt(job.text, fullMemory), signal, resolveModel({ role: "memoryExtractor", roles: rolesFor(extractionSettings(), job.directory), catalog: modelCatalog }))
       if (typeof result !== "string" && result.usage) onUsage?.(result.usage)
       const text = typeof result === "string" ? result : result.text
       const parsed = JSON.parse(text.replace(/^```(?:json)?\s*|\s*```$/g, ""))
@@ -974,7 +982,12 @@ export const daemon = await startDaemon({
         if (typeof entry !== "object" || !entry) throw new Error("Invalid extracted memory")
         const memory = entry as Record<string, unknown>
         if (!["project", "user"].includes(String(memory.scope)) || typeof memory.text !== "string" || !memory.text.trim() || memory.text.length > 2_000 || typeof memory.category !== "string") throw new Error("Invalid extracted memory")
-        return { scope: memory.scope as "project" | "user", text: memory.text, category: memory.category }
+        // Scores (full tier prompt) only tighten what nightly consolidation does; an unreadable one is left out and the gates' defaults apply.
+        const score = (value: unknown) => typeof value === "number" && value >= 0 && value <= 1 ? value : undefined
+        const [confidence, durability, changeRisk] = [score(memory.confidence), score(memory.durability), score(memory.changeRisk)]
+        const sensitivity = memory.sensitivity === "low" || memory.sensitivity === "medium" || memory.sensitivity === "high" ? memory.sensitivity : undefined
+        const details = { ...(confidence !== undefined ? { confidence } : {}), ...(durability !== undefined ? { durability } : {}), ...(changeRisk !== undefined ? { changeRisk } : {}), ...(sensitivity ? { sensitivity } : {}) }
+        return { scope: memory.scope as "project" | "user", text: memory.text, category: memory.category, ...(Object.keys(details).length ? { details } : {}) }
       })
     },
   } : {}),

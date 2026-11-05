@@ -53,7 +53,7 @@ export function foreignEngine(model: string, catalog: ModelCatalog): string | un
  * Roles that try other roles' settings before falling back to main: `aside` (`/btw`) uses `small`, the shared
  * default for cheap auxiliary calls, when the user set one.
  */
-export const ROLE_FALLBACKS: Partial<Record<ModelRole, readonly ModelRole[]>> = { aside: ["small"], memoryExtractor: ["small"], memoryAssistant: ["memoryExtractor", "small"], title: ["small"], summary: ["small"] }
+export const ROLE_FALLBACKS: Partial<Record<ModelRole, readonly ModelRole[]>> = { aside: ["small"], dream: ["small"], memoryExtractor: ["small"], memoryAssistant: ["memoryExtractor", "small"], title: ["small"], summary: ["small"] }
 
 /**
  * The model for one call. `main` is the session's own choice, else the `main` setting, else the default.

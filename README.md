@@ -399,6 +399,8 @@ Generated from [tier-data.ts](packages/protocol/src/tier-data.ts), including eve
 | [Advisor model](docs/advisor.md) (`advisor`) | — | Opt-in | Opt-in | /advisor &lt;model&gt; |
 | [Visible plan (todo and its guidance)](docs/layout.md) (`visible_plan`) | — | Included | Included | /tier visible_plan off |
 | [Code graph autopilot](docs/code-graph.md) (`graph_autopilot`) | — | — | Included | /tier graph_autopilot on\|off (on by default in nightly, dev and local builds only) |
+| [Automatic memory (use, generate, nightly consolidation)](docs/memory.md) (`memory_auto`) | — | — | Included | /tier memory_auto off · memoryUse · memoryGenerate · memoryRequireApproval · dreamConsolidationPolicy (a switch you set wins) |
+| [Resume note in a new chat](docs/memory.md) (`resume_context`) | — | — | Included | /tier resume_context off |
 <!-- tiers:end -->
 
 ## Measurements

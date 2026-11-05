@@ -1088,6 +1088,15 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
         )
         return this.get(runId)
       },
+      /**
+       * Closes runs a stopped daemon left `running` (a crash or kill never reached `finish`), which would refuse every later run of
+       * the project. Returns the directories and the ids closed.
+       */
+      abandonRunning(error: string): Array<{ runId: number; directory: string }> {
+        const rows = db.query<{ id: number; directory: string }, []>("SELECT id, directory FROM dream_runs WHERE status = 'running'").all()
+        if (rows.length) db.query("UPDATE dream_runs SET status = 'failed', ended_at = ?, error = ? WHERE status = 'running'").run(now(), error.slice(0, 500))
+        return rows.map((row) => ({ runId: row.id, directory: row.directory }))
+      },
       /** One run with its report. */
       get(runId: number): DreamRun | undefined {
         const row = db.query<DreamRunRow, [number]>("SELECT * FROM dream_runs WHERE id = ?").get(runId)
