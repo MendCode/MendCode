@@ -1,10 +1,11 @@
 import { afterEach, expect, test } from "bun:test"
-import { createHash } from "node:crypto"
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { NotDelivered } from "../src/computer-accessibility"
 import { createNativeComputer } from "../src/computer-native"
+import { launchChild } from "../src/computer-app"
+import { computerOutput } from "@mendcode/tools"
 
 // A stand-in helper in the place of the compiled one: nothing is compiled and no real application is touched.
 // Like the real helper it waits in a blocking read that SIGTERM does not end, and cleans up when its input ends.
@@ -31,14 +32,11 @@ afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: tru
 async function standIn() {
   const dir = mkdtempSync(path.join(tmpdir(), "mc-native-"))
   dirs.push(dir)
-  const source = await Bun.file(path.join(import.meta.dir, "../assets/computer.swift")).text()
-  const hash = createHash("sha256").update(source).update(process.arch).digest("hex").slice(0, 20)
-  const binary = path.join(dir, "computer-native", hash, "mendcode-computer")
-  mkdirSync(path.dirname(binary), { recursive: true })
+  const binary = path.join(dir, "stand-in")
   writeFileSync(binary, STAND_IN)
   chmodSync(binary, 0o700)
   const lines = (file: string) => existsSync(file) ? (Bun.spawnSync(["/bin/cat", file]).stdout.toString().trim().split("\n").filter(Boolean)) : []
-  return { dir, started: () => lines(`${binary}.started`), cleaned: () => lines(`${binary}.cleaned`) }
+  return { dir, options: { executable: binary, launch: launchChild }, started: () => lines(`${binary}.started`), cleaned: () => lines(`${binary}.cleaned`) }
 }
 
 async function until(check: () => boolean, ms: number) {
@@ -48,7 +46,7 @@ async function until(check: () => boolean, ms: number) {
 }
 
 test.skipIf(process.platform === "win32")("a cancelled action ends the idle helper through its input, so the cursor and the input lease go at once", async () => {
-  const f = await standIn(), os = createNativeComputer(f.dir)
+  const f = await standIn(), os = createNativeComputer(f.dir, f.options)
   try {
     const abort = new AbortController()
     await os.indicator(abort.signal, async () => { abort.abort() }).catch(() => {})
@@ -60,7 +58,7 @@ test.skipIf(process.platform === "win32")("a cancelled action ends the idle help
 })
 
 test.skipIf(process.platform === "win32")("the next operation starts a new helper only after the cancelled one has ended", async () => {
-  const f = await standIn(), os = createNativeComputer(f.dir)
+  const f = await standIn(), os = createNativeComputer(f.dir, f.options)
   try {
     const abort = new AbortController()
     await os.indicator(abort.signal, async () => { abort.abort() }).catch(() => {})
@@ -73,7 +71,7 @@ test.skipIf(process.platform === "win32")("the next operation starts a new helpe
 })
 
 test.skipIf(process.platform === "win32")("identify returns the approved process only: a helper answer for another process, or none, is not the target", async () => {
-  const f = await standIn(), os = createNativeComputer(f.dir)
+  const f = await standIn(), os = createNativeComputer(f.dir, f.options)
   try {
     const target = (pid: number) => ({ pid, bundleID: "local.editor", appName: "Editor" })
     expect(await os.identify(target(7), new AbortController().signal)).toEqual(target(7))
@@ -83,7 +81,7 @@ test.skipIf(process.platform === "win32")("identify returns the approved process
 })
 
 test.skipIf(process.platform === "win32")("a refusal the helper marks not delivered stays one, keeps the helper, and batch outcomes come back per step", async () => {
-  const f = await standIn(), os = createNativeComputer(f.dir)
+  const f = await standIn(), os = createNativeComputer(f.dir, f.options)
   try {
     const target = { pid: 7, bundleID: "local.editor", appName: "Editor" }, step = { revision: 1, nodeID: "0.1", action: "press" as const, role: "AXButton" }
     const refused = await os.action(target, step, new AbortController().signal).catch((error) => error)
@@ -92,4 +90,52 @@ test.skipIf(process.platform === "win32")("a refusal the helper marks not delive
     expect(await os.batch!(target, [step, step], new AbortController().signal)).toEqual([{ index: 0, outcome: "dispatched" }, { index: 1, outcome: "unknown", error: "AXPress failed" }])
     expect(f.started()).toHaveLength(1)
   } finally { os.stop?.() }
+})
+
+// A stand-in whose Accessibility permission is the existence of a file next to it.
+const PERMISSION = `#!/bin/bash
+while IFS= read -r line; do
+  case "$line" in
+    *'"method":"ping"'*) if [ -e "$0.granted" ]; then echo '{"ok":true,"value":{"pid":1,"trusted":true}}'; else echo '{"ok":true,"value":{"pid":1,"trusted":false}}'; fi ;;
+    *'"method":"foreground"'*) echo "x" >> "$0.asked"; if [ -e "$0.granted" ]; then echo '{"ok":true,"value":{"pid":7,"bundleID":"local.editor","appName":"Editor"}}'; else echo '{"ok":false,"error":"Accessibility permission is missing","delivery":"not_delivered","code":"accessibility"}'; fi ;;
+    *) echo '{"ok":true,"value":null}' ;;
+  esac
+done
+`
+async function withoutPermission(wait: { timeoutMs: number; intervalMs: number }) {
+  const dir = mkdtempSync(path.join(tmpdir(), "mc-native-"))
+  dirs.push(dir)
+  const binary = path.join(dir, "stand-in")
+  writeFileSync(binary, PERMISSION)
+  chmodSync(binary, 0o700)
+  return { binary, os: createNativeComputer(dir, { executable: binary, launch: launchChild, permissionWait: wait }), grant: () => writeFileSync(`${binary}.granted`, ""), asked: () => existsSync(`${binary}.asked`) ? Bun.spawnSync(["/bin/cat", `${binary}.asked`]).stdout.toString().trim().split("\n").length : 0 }
+}
+
+test.skipIf(process.platform === "win32")("a tool that needs Accessibility waits for the grant and then continues by itself, saying that it waits", async () => {
+  const f = await withoutPermission({ timeoutMs: 5000, intervalMs: 20 })
+  const said: string[] = []
+  try {
+    setTimeout(f.grant, 150)
+    const target = await computerOutput.run((chunk) => said.push(chunk), () => f.os.foreground(new AbortController().signal))
+    expect(target).toEqual({ pid: 7, bundleID: "local.editor", appName: "Editor" })
+    expect(said.join("")).toContain("Waiting for Accessibility permission… (System Settings is open)")
+    expect(f.asked()).toBe(2)
+  } finally { f.os.stop?.() }
+})
+
+test.skipIf(process.platform === "win32")("without the grant the wait ends with what to turn on, and Esc ends it earlier", async () => {
+  const f = await withoutPermission({ timeoutMs: 150, intervalMs: 20 })
+  try {
+    const refused = await f.os.foreground(new AbortController().signal).catch((error) => error)
+    expect(refused).toBeInstanceOf(NotDelivered)
+    expect(refused.message).toContain("MendCode Computer Use")
+    expect(refused.message).toContain("Privacy & Security > Accessibility")
+    const long = await withoutPermission({ timeoutMs: 60_000, intervalMs: 20 })
+    const abort = new AbortController()
+    setTimeout(() => abort.abort(), 100)
+    const began = Date.now()
+    await long.os.foreground(abort.signal).catch(() => {})
+    expect(Date.now() - began).toBeLessThan(2000)
+    long.os.stop?.()
+  } finally { f.os.stop?.() }
 })

@@ -1,6 +1,7 @@
 import { ComputerSessionInput, ComputerObserveInput, ComputerCodeInput, type ComputerTarget } from "@mendcode/protocol"
 import { defineTool } from "../tool"
 import { fail } from "../util"
+import { withComputerOutput } from "./computer-output"
 
 /** Host-only authority: never decoded from model arguments. */
 export type ComputerActivation = {
@@ -18,7 +19,7 @@ export function createComputerSessionTools() {
       permission: "execute",
       args: ComputerSessionInput,
       async execute(input, context) {
-        return context.computer?.session ? context.computer.session(input, context.signal) : fail({ title: "MendCode Computer", message: "Computer sessions are disabled" })
+        return context.computer?.session ? withComputerOutput(context, () => context.computer!.session!(input, context.signal)) : fail({ title: "MendCode Computer", message: "Computer sessions are disabled" })
       },
     }),
     defineTool({
@@ -27,7 +28,7 @@ export function createComputerSessionTools() {
       permission: "execute",
       args: ComputerObserveInput,
       async execute(input, context) {
-        return context.computer?.observe ? context.computer.observe(input, context.signal) : fail({ title: "Computer semantic observation", message: "Computer sessions are disabled" })
+        return context.computer?.observe ? withComputerOutput(context, () => context.computer!.observe!(input, context.signal)) : fail({ title: "Computer semantic observation", message: "Computer sessions are disabled" })
       },
     }),
     defineTool({
@@ -36,7 +37,7 @@ export function createComputerSessionTools() {
       permission: "execute",
       args: ComputerCodeInput,
       async execute(input, context) {
-        return context.computer?.code ? context.computer.code(input, context.signal) : fail({ title: "Computer code", message: "Computer sessions are disabled" })
+        return context.computer?.code ? withComputerOutput(context, () => context.computer!.code!(input, context.signal)) : fail({ title: "Computer code", message: "Computer sessions are disabled" })
       },
     }),
   ]

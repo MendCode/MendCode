@@ -54,8 +54,9 @@ test.skipIf(!canCompile)("a move bows to one side, overshoots its target and lan
 })
 
 test.skipIf(!canCompile)("the cursor is a white dart with a dark rim, and its action label sits in a black pill below and right of the tip", () => {
-  // Stage points, y up: the tip is at (160, 172); the dart's body, its rim below the lowest corner, the pill's left padding, empty space.
-  const run = Bun.spawnSync([helper, "--cursor-render", "Click"], { stdin: new TextEncoder().encode("[171,161]\n[163.2,135.6]\n[183,130]\n[20,20]\n") })
+  // Stage points, y up: the tip is at (160, 172); the dart (drawn at the size of the system pointer, 0.52 of its 32 x 40 box) has its body,
+  // its rim below the lowest corner, then the pill's left padding, and empty space.
+  const run = Bun.spawnSync([helper, "--cursor-render", "Click"], { stdin: new TextEncoder().encode("[165.7,166.3]\n[161.7,153.1]\n[183,130]\n[20,20]\n") })
   const [body, rim, pill, empty] = run.stdout.toString().trim().split("\n").map((line) => JSON.parse(line) as number[])
   expect(body).toEqual([255, 255, 255, 255])
   expect(rim![3]).toBe(255)

@@ -34,6 +34,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 - A wide flowchart is drawn in the chat instead of shown as source: long labels wrap (`<br/>` still breaks a line), spacing tightens, and a left-to-right flow turns top-down when it still does not fit. The note says what was tried when nothing fits.
 - Full tier: the Git page's push, publish and pull request are on by default (`/experimental git_actions off` turns them off); each one still shows its command on a card and waits for Enter. Balanced keeps them behind the switch. See [git](docs/git.md#the-switch).
 - A session with a `/goal` now has the goal tools in its request in every tier, so the agent can mark the goal complete or blocked without searching for the tool first; sessions without a goal are unchanged.
+- The computer-use cursor is now the size of your own pointer, about half of what it was, and follows the Accessibility cursor size.
 - The balanced tier's prompt is about 240 tokens lighter: its description of the terminal's drawing is one sentence instead of the full block.
 - The tools a `/btw` answer runs look like the transcript's tool rows. The side chat is read-only in every permission mode: only read-only commands run, never `touch`, `mv` or a redirection into a file; set its model with `models.aside`.
 - The activity line reads like Claude Code's: `⠋ Running command… (2m 53s · ↓ 88.6k tokens)`. `activityStyle` brings back the older look (`classic`) and `activityTokens` adds the sent and cached token figures. Token counts are the provider's exact usage, with no `~`.
@@ -84,6 +85,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 - A shell card shows a command's output as it printed it: indentation and blank lines stay.
 - `/plan <text>` enters plan mode and sends the text as your message.
 - Approving a patch shows the files it touches over the diff, without the raw patch JSON.
+- Computer use works once Accessibility is on: the helper is now "MendCode Computer Use.app" with a fixed name and path, macOS lists it by itself and System Settings opens on the right pane when a tool needs it. No path to paste. Old "mendcode-computer" entries in Accessibility can be removed with `-`; see [computer](docs/computer.md#setup).
 - Memories no longer pile up in Pending when Dream runs on schedule or from `/dream`: the full tier consolidates them, and a Dream run stopped by a restart no longer blocks its project.
 - Dream uses your `small` model when no `dream` model is set, instead of the main one.
 - A value pasted in `/env` is always masked: pasting on the list opens the add form, and the name field only takes name characters.
