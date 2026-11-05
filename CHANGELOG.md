@@ -9,6 +9,10 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+### Fixed
+
+- `mendcode --help` says `--no-context-files` leaves instruction files out while skills stay; `--exclude-tools skill` hides them.
+
 ## v0.0.4-beta.1 - 2026-11-05
 
 Packages become profiles and areas, sessions gain threads, side chats and resumable turns after a restart, the PR reviewer

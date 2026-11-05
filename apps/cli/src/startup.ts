@@ -261,7 +261,7 @@ export const STARTUP_USAGE = [
   "  --prompt TEXT            submit once",
   "  --initial-message TEXT   fill the editor without submitting",
   "  --add-dir PATH           another workspace directory (repeatable; also on run)",
-  "  --no-context-files       leave instruction files out; skills stay (-nc; also on run)",
+  "  --no-context-files       no instruction files; skills stay (-nc; also run)",
   "  --strict-config          stop when a setting is invalid",
   "  --isolated               private temporary daemon",
   "  --diagnostics            enable /diagnostics and /snapshot",
