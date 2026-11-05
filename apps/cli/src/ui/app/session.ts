@@ -420,6 +420,8 @@ export function createSession(ctx: AppContext, actions: {
     const detail = await input.send({ type: "session.get", sessionId })
     if (sessionId !== state.sessionId) return
     if (detail.ok && detail.result?.session) state.sessionParentId = (detail.result.session as import("@mendcode/protocol").SessionDetail).parentId
+    // The strip lists the parent's sub-agents once this session is known to be one.
+    if (state.sessionParentId) void refreshLiveTasks(ctx)
     void acquireBackgroundWriter(sessionId)
     requestFrame()
   }

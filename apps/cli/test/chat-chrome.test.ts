@@ -106,10 +106,10 @@ describe("UI-1 chat chrome", () => {
       await Bun.sleep(5)
       h.app.onGlobal({ type: "usage.today", gseq: 1, at: NOW, day: "2026-09-30", tokens: 0, calls: 0 } as never)
       h.app.render()
-      // Both views name the reasoning effort beside the model (`showEffort` is on by default). Full is the `rows` preset: its quota rows
+      // Both views name the reasoning effort beside the model (`showEffort` is on by default). Full is the `line` preset: its quota rows
       // have no reading to show and are absent, and after one cold call its cache share would only read `cache 0%`.
       const below = () => h.text().slice(h.text().findLastIndex((row) => /^ *─+ *$/.test(row)) + 1).map((row) => row.trim())
-      expect(below()).toEqual(mode === "balanced" ? ["Build · GPT-6-Luna · medium · codex"] : ["/work/app", "GPT-6-Luna · medium · context 15% · in 24K out 600"])
+      expect(below()).toEqual(mode === "balanced" ? ["Build · GPT-6-Luna · medium · codex"] : ["/work/app · GPT-6-Luna · medium · graph on"])
       expect(below().join("\n")).not.toMatch(/ready|today|quota/)
       h.app.onGlobal({ type: "usage.today", gseq: 2, at: NOW, day: "2026-09-30", tokens: 2400, calls: 1 } as never)
       expect(below().join("\n")).not.toContain("today")

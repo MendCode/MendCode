@@ -23,6 +23,12 @@ export const ACTIVITY_PARTS = ["spinner", "verb", "elapsed", "stalled", "model",
 export type ActivityPart = (typeof ACTIVITY_PARTS)[number]
 /** What the row shows without any setting: `tps` and `queue` are opt-in. */
 export const ACTIVITY_PARTS_DEFAULT = "spinner,verb,elapsed,stalled,model,tokens,interrupt"
+/** How the activity status lays its parts out: `inline` is `⠋ Generating… (2m 53s · ↓ 4.3k tokens)`, `classic` one run of parts with blanks between. */
+export const ACTIVITY_STYLES = ["inline", "classic"] as const
+/** The token figures of the `tokens` part, in order: `out` received, `in` sent new, `cache` resent from the provider's cache. */
+export const ACTIVITY_TOKEN_PARTS = ["out", "in", "cache"] as const
+/** The names in `text` that are not token figures (empty when the list is valid); an empty list is the style's own default. */
+export const unknownActivityTokens = (text: string): string[] => text.split(",").map((name) => name.trim()).filter((name) => name && !(ACTIVITY_TOKEN_PARTS as readonly string[]).includes(name))
 /** The names in `text` that are not activity parts (empty when the list is valid). */
 export const unknownActivityParts = (text: string): string[] => text.split(",").map((name) => name.trim()).filter((name) => name && !(ACTIVITY_PARTS as readonly string[]).includes(name))
 
@@ -50,6 +56,8 @@ export const TUI_DEFAULTS: Readonly<Record<string, unknown>> = {
   "jumpText": "",
   "activityPlacement": "transcript",
   "activityParts": ACTIVITY_PARTS_DEFAULT,
+  "activityStyle": "inline",
+  "activityTokens": "",
   "comments": "auto",
   "commentKey": "comment",
   "commentHint": "prompt",
@@ -342,6 +350,7 @@ export const TUI_ENUMS: Readonly<Record<string, readonly string[]>> = {
   "jumpHint": ["right", "center", "left", "off"],
   "attachmentChips": ["inline", "above", "both"],
   "activityPlacement": ["transcript", "above", "inside", "off"],
+  "activityStyle": ACTIVITY_STYLES,
   "comments": ["auto", "on", "off"],
   "commentKey": ["comment", "quote"],
   "altLabel": ["auto", "alt", "opt", "symbol"],
@@ -434,6 +443,7 @@ export function tuiProblems(raw: unknown): string[] {
     else if (key === "pasteSummaryMinChars" &&(!Number.isInteger(value) || Number(value) < 1 || Number(value) > 100000)) problems.push("pasteSummaryMinChars: expected integer 1..100000")
     else if ((key === "statusLeft" || key === "statusRight") && String(value).split(",").some((name) => name.trim() && !["mode", "model", "provider", "reasoning", "variant", "context", "permissionMode", "commandsHint", "agentsHint", "quota"].includes(name.trim()))) problems.push(`${key}: unknown status segment`)
     else if (key === "activityParts" && (unknownActivityParts(value as string).length || String(value).length > 256)) problems.push(`activityParts: expected a comma list of ${ACTIVITY_PARTS.join(", ")}`)
+    else if (key === "activityTokens" && (unknownActivityTokens(value as string).length || String(value).length > 32)) problems.push(`activityTokens: expected a comma list of ${ACTIVITY_TOKEN_PARTS.join(", ")}, or empty`)
     else if (key === "topbarStats" && (unknownStatParts(value as string).length || String(value).length > 128)) problems.push(`topbarStats: expected a comma list of ${STAT_PART_IDS.join(", ")}`)
     else if (key === "toolRail") problems.push(...toolRailProblems(value))
     else if (key === "diffContext" && (!Number.isInteger(value) || Number(value) < 0 || Number(value) > 6)) problems.push("diffContext: expected integer 0..6")

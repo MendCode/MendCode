@@ -27,6 +27,8 @@ export const PROFILE_KEY_HELP: Readonly<Record<string, string>> = {
   jumpText: "the text of the 'jump to latest' button",
   activityPlacement: "the working/activity line (spinner, 'thinking', elapsed) while a turn runs: transcript row, above the prompt, inside it, or off",
   activityParts: "which parts the activity line shows, comma list (spinner, verb, elapsed, model, tokens, interrupt, ...)",
+  activityStyle: "how the activity line is laid out: inline ('Generating… (2m 53s · ↓ 4.3k tokens)') or classic (parts separated by blanks)",
+  activityTokens: "which token figures the activity line's tokens part shows, comma list of out, in, cache (empty: out for inline, in,cache,out for classic)",
   comments: "commenting on passages of an answer",
   commentKey: "what alt+q does with a selection: comment or quote",
   commentHint: "where the offer to comment shows: by the prompt, by the passage, or off",

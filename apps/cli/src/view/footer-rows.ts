@@ -1,6 +1,6 @@
 import { DEFAULT_FOOTER, FOOTER_DEFAULT_PRESET, FOOTER_ICON_MODES, FOOTER_PRESETS, FOOTER_PRESET_NAMES, FOOTER_ROWS_MAX, FOOTER_HEIGHT_FRACTION, footerRowsProblems, parseRowSegment, quotaReadings, type FooterIconMode } from "@mendcode/protocol/wire"
 import type { Line, Span } from "../ui/theme"
-import { clip, decorate, dropToFit, entryBody, entrySpans, type FooterInput } from "./footer"
+import { clip, decorate, DROP_RANK, dropToFit, entryBody, entrySpans, type FooterInput } from "./footer"
 import { lineWidth as widthOf, textWidth } from "./wrap"
 
 /**
@@ -21,6 +21,26 @@ function rowEntry(entry: string, input: FooterInput): Span[] {
   return entrySpans(entry, input)
 }
 
+/** The width a segment is asked for its narrower form at (the quota windows lose their bars and reset times under 60 cells). */
+const NARROW_WIDTH = 40
+
+/**
+ * Gives a part its narrower form, when it has one, until the row fits: the lowest-ranked part first, the later of equal rank before the
+ * earlier. What still does not fit is then dropped by `dropToFit`; a form given here is lost again on the frame where the row has room.
+ */
+function compactToFit(parts: Array<{ id: string; spans: Span[]; compact?: Span[] | undefined }>, width: number, gap: number): void {
+  const total = () => parts.reduce((sum, part, index) => sum + widthOf(part.spans) + (index ? gap : 0), 0)
+  const rank = (part: { id: string }) => DROP_RANK[parseRowSegment(part.id).id] ?? 2
+  const smaller = (part: { spans: Span[]; compact?: Span[] | undefined }) => part.compact !== undefined && widthOf(part.compact) < widthOf(part.spans)
+  while (total() > width) {
+    const candidates = parts.filter(smaller)
+    if (!candidates.length) return
+    const lowest = Math.min(...candidates.map(rank))
+    const next = candidates.findLast((part) => rank(part) === lowest)!
+    next.spans = next.compact!
+  }
+}
+
 /**
  * The rows, each at most `input.width` cells, without margins. The first `limit` rows are drawn; a non-default permission always shows on
  * the first row, as the goal does in the single row, so a row layout cannot hide by accident that the agent can write; the user's own
@@ -30,7 +50,8 @@ export function renderFooterRows({ input, rows, limit }: { input: FooterInput; r
   const separator = input.separator ?? " · "
   return rows.slice(0, Math.max(1, limit)).map((row, index) => {
     const entries = index === 0 && input.showPermission !== false && input.permission !== "ask" && !row.includes("permission") ? [...row, "permission"] : row
-    const parts = entries.map((entry) => ({ id: entry, spans: rowEntry(entry, input) })).filter((part) => part.spans.length > 0)
+    const parts = entries.map((entry) => ({ id: entry, spans: rowEntry(entry, input), compact: rowEntry(entry, { ...input, width: NARROW_WIDTH }) as Span[] | undefined })).filter((part) => part.spans.length > 0)
+    compactToFit(parts, input.width, textWidth(separator))
     dropToFit(parts, input.width, textWidth(separator))
     const line: Line = []
     parts.forEach((part, at) => {

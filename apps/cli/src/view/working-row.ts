@@ -78,16 +78,28 @@ export function quietTurn(input: Parameters<typeof stalledFor>[0] & { reasons: b
   return { ...(stalledMs !== undefined ? { stalledMs } : {}), thinking: reasons && stalledMs === undefined && !silence.current && stalledFor(silence) !== undefined }
 }
 
+/** `88.6K` as Claude Code writes it: `88.6k`. */
+const lowerUnit = (value: number) => compact(value).replace(/K$/, "k")
+
 /**
- * `↑142K +1.5M cached ↓~5,788 tokens`: what the turn's calls sent that the provider had not cached, then the context they resent and
- * the provider read from its prompt cache, then received; `~` while part of it is estimated from the stream. Every call resends the whole
- * context, so a long turn's total (here 1.7M) was mostly cache: one sum read as 1.7M sent. No cache read: `↑45.2K ↓~1,240 tokens`.
+ * The turn's tokens, exact: what each finished model call reported (the provider's own usage, never an estimate, so no `~`).
+ * Classic: `↑142K +1.5M cached ↓5,788 tokens`, what the turn's calls sent that the provider had not cached, then the context they resent
+ * and the provider read from its prompt cache (every call resends the whole context, so a long turn's sum is mostly cache), then received.
+ * Inline: `↓ 88.6k tokens`, the received figure alone unless `show` (the `activityTokens` setting) lists `in` and `cache` too.
  */
-export function tokensText(tokens: { input: number; cached?: number; output: number; estimated?: boolean }): string {
+export function tokensText(tokens: { input: number; cached?: number; output: number }, options: { style?: "inline" | "classic"; show?: readonly string[] } = {}): string {
+  const inline = options.style === "inline"
+  const show = options.show?.length ? options.show : inline ? ["out"] : ["in", "cache", "out"]
   const cached = Math.min(tokens.cached ?? 0, tokens.input)
   const fresh = tokens.input - cached
-  const sent = tokens.input > 0 ? `↑${compact(fresh)} ${cached > 0 ? `+${compact(cached)} cached ` : ""}` : ""
-  return `${sent}↓${tokens.estimated ? "~" : ""}${compact(tokens.output)} tokens`
+  const number = inline ? lowerUnit : compact
+  const arrow = inline ? " " : ""
+  const pieces = show.flatMap((name) =>
+    name === "in" && tokens.input > 0 ? [`↑${arrow}${number(fresh)}`]
+    : name === "cache" && cached > 0 ? [`+${number(cached)} cached`]
+    : name === "out" ? [`↓${arrow}${number(tokens.output)}`]
+    : [])
+  return `${pieces.join(" ")} tokens`
 }
 
 /** The phase word from the foreground state, the running item and whether a question or an approval waits. */
@@ -121,8 +133,14 @@ export function renderWorkingRow(input: {
   spinner: string
   phase: string
   elapsedMs?: number
-  /** This turn's tokens: `input` sent and `output` received, exact per finished call; `estimated` while a call is still streaming. */
-  tokens?: { input: number; cached?: number; output: number; estimated?: boolean }
+  /** This turn's tokens: `input` sent and `output` received, exact: the sum of what each finished call's usage reported. */
+  tokens?: { input: number; cached?: number; output: number }
+  /** `inline` (the profile's default) draws the verb and then the data parts in one group, `Generating… (2m 53s · ↓ 4.3k tokens)`; `classic` (without a style) is one run of parts. */
+  style?: "inline" | "classic"
+  /** The figures of the `tokens` part (`activityTokens`); empty is the style's own. */
+  tokenFigures?: readonly string[]
+  /** Between the data parts inside the inline group. */
+  groupSeparator?: string
   model?: string
   retry?: RetryState
   now: number
@@ -156,22 +174,44 @@ export function renderWorkingRow(input: {
     else spans.push({ text: `${gap}${input.spinner} `, fg })
     gap = ""
   }
+  const inline = (input.style ?? "classic") === "inline"
+  const tokenOptions = { style: input.style ?? "classic", ...(input.tokenFigures ? { show: input.tokenFigures } : {}) } as const
   /** One part, when it has something to say: the turn's own text is `head`, the rest follows a retry too. */
-  const draw = (part: ActivityPart, head: boolean) => {
-    if (head && part === "spinner") addSpinner(input.stalledMs === undefined ? "text" : "warning")
-    else if (head && part === "verb") add(input.phase, "text")
-    else if (head && part === "elapsed" && input.elapsedMs !== undefined) add(formatElapsed(input.elapsedMs), "text")
-    else if (head && part === "stalled" && input.stalledMs !== undefined) add(`no response for ${formatElapsed(input.stalledMs)}`, "warning")
-    else if (part === "model" && input.model) add(input.model, "muted")
-    else if (part === "tokens" && input.tokens) add(tokensText(input.tokens), "muted")
-    else if (part === "tps" && input.tokensPerSecond) add(`${input.tokensPerSecond} tok/s`, "muted")
-    else if (part === "queue" && input.queued) add(`${input.queued} queued`, "muted")
-    else if (part === "interrupt" && input.interruptHint) add("[esc again to interrupt]", "warning")
+  const piece = (part: ActivityPart, head: boolean): { text: string; fg: ColorName } | undefined => {
+    if (head && part === "verb") return { text: inline ? input.phase.replace(/\.{3}$/, "…") : input.phase, fg: "text" }
+    if (head && part === "elapsed" && input.elapsedMs !== undefined) return { text: formatElapsed(input.elapsedMs), fg: "text" }
+    if (head && part === "stalled" && input.stalledMs !== undefined) return { text: `no response for ${formatElapsed(input.stalledMs)}`, fg: "warning" }
+    if (part === "model" && input.model) return { text: input.model, fg: "muted" }
+    if (part === "tokens" && input.tokens) return { text: tokensText(input.tokens, tokenOptions), fg: "muted" }
+    if (part === "tps" && input.tokensPerSecond) return { text: `${input.tokensPerSecond} tok/s`, fg: "muted" }
+    if (part === "queue" && input.queued) return { text: `${input.queued} queued`, fg: "muted" }
+    if (part === "interrupt" && input.interruptHint) return { text: "[esc again to interrupt]", fg: "warning" }
     // The session figures of the stats registry; `tokens` and `tps` above stay this turn's own live numbers.
-    else if (input.stats && isStatPart(part) && !TURN_PARTS.has(part)) {
+    if (input.stats && isStatPart(part) && !TURN_PARTS.has(part)) {
       const spans = partSpans(part, input.stats, { quiet: true })
-      if (spans.length) add(spans.map((span) => span.text).join(""), spans.find((span) => span.fg !== "muted")?.fg ?? "muted")
+      if (spans.length) return { text: spans.map((span) => span.text).join(""), fg: spans.find((span) => span.fg !== "muted")?.fg ?? "muted" }
     }
+    return undefined
+  }
+  /** The inline style's group: the data parts between parentheses, `(2m 53s · ↓ 4.3k tokens)`; the spinner, the verb and the Esc hint stay outside it. */
+  const GROUPED: ReadonlySet<ActivityPart> = new Set(["spinner", "verb", "interrupt"])
+  const grouped: Array<{ text: string; fg: ColorName }> = []
+  const flushGroup = () => {
+    if (!grouped.length) return
+    const glue = input.groupSeparator ?? (separator.trim() || "·")
+    const lead = gap ? " " : ""
+    const body = grouped.flatMap((each, at): Span[] => [...(at ? [{ text: ` ${glue} `, fg: "muted" as const }] : []), { text: each.text, fg: each.fg }])
+    spans.push({ text: `${lead}(`, fg: "muted" }, ...body, { text: ")", fg: "muted" })
+    gap = separator
+    grouped.length = 0
+  }
+  const draw = (part: ActivityPart, head: boolean) => {
+    if (head && part === "spinner") return addSpinner(input.stalledMs === undefined ? "text" : "warning")
+    const found = piece(part, head)
+    if (!found) return
+    if (inline && !GROUPED.has(part)) return void grouped.push(found)
+    if (inline && part === "interrupt") flushGroup()
+    add(found.text, found.fg)
   }
   if (input.retry?.offlineSince !== undefined) {
     // The connection is down (offline, asleep): the turn is waiting, not failing, so the tone is a warning.
@@ -182,6 +222,7 @@ export function renderWorkingRow(input: {
     spans.push({ text: input.width - input.margin - textWidth(lead) - textWidth(tail) >= 0 ? lead : `${input.spinner} Offline · ${waited}`, fg: "warning" }, { text: tail, fg: "muted" })
     gap = separator
     for (const part of parts) draw(part, false)
+    flushGroup()
   } else if (input.retry) {
     const seconds = Math.max(0, Math.ceil((input.retry.nextAt - input.now) / 1000))
     const tail = `[retrying in ${seconds}s attempt #${input.retry.attempt}]`
@@ -194,8 +235,10 @@ export function renderWorkingRow(input: {
     spans.push({ text: `${lead} `, fg: "error" }, ...(message ? [{ text: `${message} `, fg: "error" as const }] : []), { text: tail, fg: "error" })
     gap = separator
     for (const part of parts) draw(part, false)
+    flushGroup()
   } else {
     for (const part of parts) draw(part, true)
+    flushGroup()
   }
   return clip(spans, input.width)
 }

@@ -11,7 +11,7 @@ A session, top to bottom:
   messages: timestamps; your label: username + showUsername; the answer's label: assistantName; userLead (›), assistantLead (•), userIcon, assistantIcon, userTint, messageLayout quiet|classic, messageMeta
   thinking blocks: reasoning hidden|collapsed|expanded; tool cards: toolOutput, toolDensity; answers: messageRenderer, tableStyle, headingStyle
   scrollbar: scrollbar auto|always|off; jump-to-latest pill: jumpHint off|right|center|left, jumpText
-  activity line while a turn runs: activityPlacement transcript|above|inside|off, showActivity, showElapsed, showTokens, showInterruptHint, activityParts
+  activity line while a turn runs: activityPlacement transcript|above|inside|off, showActivity, showElapsed, showTokens, showInterruptHint, activityParts, activityStyle, activityTokens
   running sub-agents and commands over the prompt: showTasks
   prompt box: promptChrome box|top-bottom|minimal|ascii-box, promptBorder single|rounded|double|ascii, promptLead (the ❭ symbol), promptGlyphs, promptStatus border
   empty prompt's example text: showPlaceholder, placeholderText

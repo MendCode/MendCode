@@ -11,6 +11,7 @@ const BACKGROUND_NOTICE = /^\[(background task|monitor) /
 import { modelLabel, sessionModelId } from "../../view/model-label"
 import { renderHeaderSlot } from "../../view/topbar"
 import { agentThreadHeader } from "../../view/agent-thread-header"
+import { frameBottom as frameBottomEdge, frameSides, frameTop } from "../../view/agent-frame"
 import { DOCK_HEIGHT } from "../../view/dock"
 import { textWidth, truncateEnd } from "../../view/wrap"
 import { leaderHint, LEADER_TIMEOUT_MS } from "../keymap"
@@ -40,7 +41,8 @@ import { createHomeMascot } from "./home-mascot"
 import { rowsWidth } from "../../view/logo-fonts"
 import type { HomeSession } from "../../view/home"
 import type { ImagePlacement } from "../image-layer"
-import { activeTheme, type Line } from "../theme"
+import { activeTheme, type ColorName, type Line } from "../theme"
+import { subagentColor } from "../../view/agent-color"
 import { mendBeat, mendChatLines } from "../../view/mend-sprite"
 import type { ViewLine } from "../../view/transcript"
 import { CHART_KEY } from "../../view/chart-picture"
@@ -194,6 +196,13 @@ export function createChatRows(ctx: AppContext, actions: {
     // A sub-agent's thread open in the chat's place says whose it is, right under the top bar (or at the top without one).
     const openThreads = state.agentView && !inlineView && (topbar.length || !topbarShown && rich && !home) ? (state.agentRoot ?? state.transcript).agentThreads() : []
     const openAt = openThreads.findIndex((thread) => thread.itemId === state.agentView)
+    // A sub-agent's view (its thread, or the session of a child task) has a border all around it, in the sub-agent's own colour,
+    // so it is never taken for the conversation: the top edge here, the sides over the margins and the bottom edge under the body.
+    const childName = state.sessionParentId && !state.agentView ? state.liveTasks?.find((task) => task.taskId === state.sessionId)?.description : undefined
+    const boxed = !inlineView && rich && !home && (openAt >= 0 || (state.sessionParentId !== undefined && !state.agentView && topbar.length > 0))
+    const boxColor: ColorName = openAt >= 0 ? subagentColor(openThreads[openAt]!.description) : childName ? subagentColor(childName) : "primary"
+    const boxTop = topbar.length
+    if (boxed) topbar = [...topbar, frameTop({ width, color: boxColor, ascii: !rich || asciiGlyphs(), label: "sub-agent", ...(openAt < 0 ? { hint: width < 70 ? "↑ parent · ←→" : "↑ parent · ←→ siblings" } : {}) })]
     if (openAt >= 0) topbar = [...topbar, ...agentThreadHeader({ thread: openThreads[openAt]!, index: openAt, count: openThreads.length, now: now(), width, inset: PROMPT_MARGIN, sep: g.sep, rule: g.rule })]
     const findBuilt = state.find ? actions.findBar(width) : state.promptSearch ? actions.searchBar(width) : undefined
     const findDrawn = findBuilt ? barRows(state.find ? "find" : "search", [findBuilt.row], width) : []
@@ -241,7 +250,7 @@ export function createChatRows(ctx: AppContext, actions: {
     // background commands right over the prompt; the multiplexer's pane reports the same children (session-children.ts).
     const { tasks: stripList, commands: backgroundItems, activity: childActivity } = sessionChildren(state, { now: now(), sep: g.sep })
     // With sub-agents in the strip, the commands are rows of its tree: one block for everything that runs, not two lists.
-    const strip = rich && !inlineView && stripList.length ? renderAgentsStrip({ run: subagentRunOf(state, g.sep).ofTask, tasks: stripList, activity: childActivity, now: now(), width: width - (agentsPet ? agentsPet.cols + 1 : 0), inset: PROMPT_MARGIN + 1, glyphs: g, root: !working, openHint: `ctrl+x ↓ open ${g.sep} /tasks`, ...(!asking ? { commands: backgroundItems } : {}) }) : { rows: [], ids: [] }
+    const strip = rich && !inlineView && stripList.length ? renderAgentsStrip({ run: subagentRunOf(state, g.sep).ofTask, ...(state.agentView ?? (state.sessionParentId ? state.sessionId : undefined) ? { open: (state.agentView ?? state.sessionId) as string } : {}), tasks: stripList, activity: childActivity, now: now(), width: width - (agentsPet ? agentsPet.cols + 1 : 0), inset: PROMPT_MARGIN + 1, glyphs: g, root: !working, openHint: `ctrl+x ↓ open ${g.sep} /tasks`, ...(!asking ? { commands: backgroundItems } : {}) }) : { rows: [], ids: [] }
     const stripBuilt: Line[] = strip.rows
     const stripRows: Line[] = stripBuilt.length ? barRows("agents", stripBuilt, width) : []
     const backgroundBuilt = !asking && !inlineView && !stripBuilt.length ? barRows("background", backgroundRows({ items: backgroundItems, full: state.mode === "full", width, now: now(), inset: PROMPT_MARGIN + 1, ascii: !rich }), width) : []
@@ -285,7 +294,8 @@ export function createChatRows(ctx: AppContext, actions: {
     const reserved = chrome + sheet.length
     // Inline mode: the live blocks that fit above the prompt; the rest of the transcript is already in the terminal's scrollback.
     const inlineBody = inlineView?.tail.slice(-Math.max(0, height - reserved))
-    let bodyHeight = inlineBody ? inlineBody.length : Math.max(1, height - reserved)
+    // The bottom edge of a sub-agent's border takes the body's last row.
+    let bodyHeight = inlineBody ? inlineBody.length : Math.max(1, height - reserved - (boxed ? 1 : 0))
     const localState = view.get(state.sessionId)
     // The transcript's text is laid out one column short of the chat column while the scrollbar is `auto` or `always`: that column is the
     // bar's, drawn or blank, so showing and hiding it never reflows a line (docs/customize.md, "Scrolling").
@@ -365,8 +375,10 @@ export function createChatRows(ctx: AppContext, actions: {
       body.splice(0, body.length, ...withScrollbar({ rows: body, width, thumb, glyphs: scrollbarGlyphs(state.tuiProfile.scrollbarGlyphs, g), shown }))
       if (shown && thumb) scrollbar = { col: width - 1, top: topbar.length, rows: body.length, thumb, total, viewport: bodyHeight }
     }
+    if (boxed) body.push(frameBottomEdge({ width, color: boxColor, ascii: !rich || asciiGlyphs() }))
     // Minimal keeps the last row empty: the prompt's closing rule stays full width (the screen never draws the bottom-right cell).
     const rows: Line[] = [...topbar, ...body, ...sheet, ...above, ...popup, ...promptTop, ...framed, ...frameBottom, ...below]
+    if (boxed) for (let at = boxTop + 1; at < topbar.length + body.length - 1; at++) rows[at] = frameSides({ line: rows[at]!, width, color: boxColor, ascii: !rich || asciiGlyphs() })
     const panel = sheet.length ? { top: topbar.length + body.length, height: sheet.length } : undefined
     const bodyEnd = topbar.length + body.length + sheet.length
     if (!inlineView) {
@@ -689,6 +701,12 @@ export function createChatRows(ctx: AppContext, actions: {
     return onRule ? workingRow(room, true) : undefined
   }
 
+  /** How the activity status is laid out (`activityStyle`, `activityTokens`). */
+  function activityLook() {
+    const figures = state.tuiProfile.activityTokens.split(",").filter(Boolean)
+    return { style: state.tuiProfile.activityStyle, groupSeparator: g.sep, ...(figures.length ? { tokenFigures: figures } : {}) }
+  }
+
   function workingRow(width: number, overlay = false, partsOverride?: readonly ActivityPart[]): Line | undefined {
     // Over the prompt's chrome (`activityPlacement` above or inside) the line has no margin of its own and its parts are set off by a glyph.
     const margin = overlay || state.mode === "minimal" ? 0 : META_MARGIN
@@ -703,6 +721,7 @@ export function createChatRows(ctx: AppContext, actions: {
         width,
         margin,
         parts: partsOverride ?? activityPartsOf(state.tuiProfile.activityParts),
+        ...activityLook(),
         ...(overlay ? { separator: g.sep } : {}),
         spinner: state.reducedMotion ? "⋯" : SPINNER_FRAMES[state.spinFrame % SPINNER_FRAMES.length]!,
         phase: thread.last ? `${truncateEnd(thread.last, 60)}...` : "Working...",
@@ -742,16 +761,17 @@ export function createChatRows(ctx: AppContext, actions: {
       width,
       margin,
       parts: partsOverride ?? activityPartsOf(state.tuiProfile.activityParts),
+      ...activityLook(),
       stats: ctx.stats.read(),
       ...(overlay ? { separator: g.sep } : {}),
       ...(state.transcript.queue.length ? { queued: state.transcript.queue.length } : {}),
-      ...(elapsedMs !== undefined && elapsedMs >= 2_000 && state.turnState.outputLive > 0 ? { tokensPerSecond: Math.round(state.turnState.outputLive / (elapsedMs / 1000)) } : {}),
+      ...(elapsedMs !== undefined && elapsedMs >= 2_000 && state.turnState.output > 0 ? { tokensPerSecond: Math.round(state.turnState.output / (elapsedMs / 1000)) } : {}),
       spinner: state.reducedMotion ? "⋯" : SPINNER_FRAMES[state.spinFrame % SPINNER_FRAMES.length]!,
       phase: (state.tuiProfile.activityMessages ? JSON.parse(state.tuiProfile.activityMessages)[mascotPhase({ state: localState, connected: state.connection === "connected", retry: retry !== undefined, ...(current ? { current } : {}) })] : undefined) ?? (awaited ? `Waiting on ${backgroundName(awaited.command, 48)}...` : thinkingQuietly ? "Thinking..." : phaseOf({ state: localState, ...(current ? { current } : {}), ...(waiting ? { waiting } : {}) })),
       ...(state.tuiProfile.showActivityModel && state.effectiveModel?.model ? { model: modelLabel(sessionModelId(state.effectiveModel.model, state.transcript.lastUsage?.model, state.modelReport)!, state.modelReport) } : {}),
       ...(state.tuiProfile.showElapsed && !state.accessible && state.turnState.startedAt !== undefined ? { elapsedMs: now() - state.turnState.startedAt } : {}),
       ...(retry ? { retry } : {}),
-      ...(state.tuiProfile.showTokens && (state.turnState.outputLive > 0 || state.turnState.input > 0) ? { tokens: { input: state.turnState.input, cached: state.turnState.cached, output: state.turnState.outputLive, estimated: state.turnState.estimating } } : {}),
+      ...(state.tuiProfile.showTokens && (state.turnState.output > 0 || state.turnState.input > 0) ? { tokens: { input: state.turnState.input, cached: state.turnState.cached, output: state.turnState.output } } : {}),
       now: now(),
       interruptHint: state.tuiProfile.showInterruptHint && hint,
       ...(stalledMs !== undefined ? { stalledMs } : {}),

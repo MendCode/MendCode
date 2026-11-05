@@ -91,7 +91,7 @@ const GAP = "  "
 /** State and notice are never dropped when the footer overflows. */
 const KEPT = new Set<FooterSegment>(["state", "notice"])
 /** When the footer overflows the lowest rank goes first, the later one of equal rank before the earlier: telemetry, then quota and spend, then branch and model, with the goal and the context last. */
-const DROP_RANK: Readonly<Record<string, number>> = { ttft: 1, tps: 1, spend: 1, cache: 1, tokens: 1, update: 1, vim: 2, sandbox: 2, jobs: 2, forecast: 2, effort: 2, hit: 1, think: 1, calls: 1, ctx: 2, today: 3, cost: 3, quota: 3, branch: 4, model: 5, permission: 6, goal: 7, context: 8, codegraph: 1, time: 1, text: 1, directory: 4, warm: 2 }
+export const DROP_RANK: Readonly<Record<string, number>> = { ttft: 1, tps: 1, spend: 1, cache: 1, tokens: 1, update: 1, vim: 2, sandbox: 2, jobs: 2, forecast: 2, effort: 2, hit: 1, think: 1, calls: 1, ctx: 2, today: 3, cost: 3, quota: 3, branch: 4, model: 5, permission: 6, goal: 7, context: 8, codegraph: 1, time: 1, text: 1, directory: 4, warm: 2 }
 
 export { formatCost, formatSpeed, formatTtft } from "./stat-parts"
 

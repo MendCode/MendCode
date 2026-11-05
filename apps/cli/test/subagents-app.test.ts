@@ -155,3 +155,22 @@ test("task, background and child-chat screens fit all required terminal geometri
     }
   }
 })
+
+test("inside a child's own session its view has a border, and the Agents strip still lists the parent's sub-agents with this one marked", async () => {
+  const h = start(120, 30)
+  await h.type("/tasks\r")
+  await h.app.onKey("\r")
+  await Bun.sleep(10)
+  conversation(h.first, h.app.onEvent).exchange("Inspect the outbox", "Queued notices survive restart.")
+  h.app.render()
+  const rows = h.text()
+  expect(rows.some((row) => row.includes("╭─ sub-agent ") && row.includes("↑ parent"))).toBe(true)
+  expect(rows.some((row) => row.startsWith("╰") || row.includes("╰─"))).toBe(true)
+  expect(rows.filter((row) => row.includes("▸")).length).toBe(1)
+  expect(h.sentOf("task.list").some((command) => command.sessionId === h.parent)).toBe(true)
+  // Back in the parent there is no border.
+  await h.app.onKey("\x1b[A")
+  await Bun.sleep(10)
+  h.app.render()
+  expect(h.text().some((row) => row.includes("╭─ sub-agent "))).toBe(false)
+})

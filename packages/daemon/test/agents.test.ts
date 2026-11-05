@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import path from "node:path"
-import { createIdFactory, type AgentsReport } from "@mendcode/protocol"
+import { createIdFactory, type AgentsReport, type SessionId } from "@mendcode/protocol"
 import type { ModelEvent } from "@mendcode/engine-native"
 import { defineTool } from "@mendcode/tools"
 import { z } from "zod"
@@ -212,5 +212,33 @@ describe("agents in a session's turns", () => {
     const sessionId = await openSession(h)
     await say(h, sessionId, "go")
     expect(h.requests[2]!.messages.at(-1)).toMatchObject({ role: "tool", name: "task", output: expect.stringMatching(/w0 w1 w2[\s\S]*w399/) })
+  })
+})
+
+describe("task.list context", () => {
+  const taskRow = (parent: SessionId, child: SessionId, state: "running" | "completed") => ({ taskId: child, parentId: parent, rootId: parent, depth: 1, generation: 1, description: "scan", agent: "explore", background: true, state, result: "", createdAt: 1, updatedAt: 2 })
+  const listed = async (h: NativeHarness, sessionId: SessionId) => ((await h.client.send({ type: "task.list", sessionId })) as { result?: { tasks?: Array<{ context?: { tokens: number; limit?: number } }> } }).result!.tasks!
+
+  test("a running child carries its last call's context and window when listed, and nothing of it is stored", async () => {
+    const h = await start()
+    const parent = await openSession(h)
+    const child = await openSession(h)
+    h.store.tasks.put(taskRow(parent, child, "running"))
+    h.store.sessionSink.append({ type: "usage.recorded", sessionId: child, turnId: createIdFactory()("turn"), provider: "fake", model: "m", input: 10, output: 4, reasoning: 0, cacheRead: 0, cacheWrite: 0, context: 91_000, contextWindow: 200_000 })
+    expect((await listed(h, parent))[0]!.context).toEqual({ tokens: 91_000, limit: 200_000 })
+    // The record itself has no context: it is added at list time only.
+    expect(h.store.tasks.list()[0]).not.toHaveProperty("context")
+  })
+
+  test("a child that has ended, or has made no call yet, lists without a context", async () => {
+    const h = await start()
+    const parent = await openSession(h)
+    const child = await openSession(h)
+    h.store.tasks.put(taskRow(parent, child, "running"))
+    expect((await listed(h, parent))[0]).not.toHaveProperty("context")
+    h.store.sessionSink.append({ type: "usage.recorded", sessionId: child, turnId: createIdFactory()("turn"), provider: "fake", model: "m", input: 10, output: 4, reasoning: 0, cacheRead: 0, cacheWrite: 0, context: 5_000 })
+    expect((await listed(h, parent))[0]!.context).toEqual({ tokens: 5_000 })
+    h.store.tasks.put(taskRow(parent, child, "completed"))
+    expect((await listed(h, parent))[0]).not.toHaveProperty("context")
   })
 })

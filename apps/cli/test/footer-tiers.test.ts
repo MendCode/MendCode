@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { createIdFactory, FOOTER_SEGMENTS, FOOTER_SEGMENT_TIER, tierFooter } from "@mendcode/protocol/wire"
+import { createIdFactory, FOOTER_PRESETS, FOOTER_SEGMENTS, FOOTER_SEGMENT_TIER, tierFooter } from "@mendcode/protocol/wire"
 import { DEFAULT_TUI_PROFILE, writeTuiProfile, type TuiProfile } from "../src/view/tui-profile"
 import { layoutGroups, renderDetailRow, renderStatusRow, type FooterRowPart } from "../src/view/prompt-chrome"
 import { appHarness, plain, scratch } from "./extensions-harness"
@@ -128,49 +128,43 @@ describe("the footer by tier in the app", () => {
     expect((await scene({ mode: "balanced", width: 60 })).below()).toEqual(["   Build · GPT-6-Luna · high · fast · chatgpt │ ↻ 1 loop"])
   })
 
-  test("full: the footer is the rows preset until the user chooses one: directory, model and session figures, a row per quota provider, the code graph", async () => {
+  test("full: the footer is the line preset until the user chooses one: directory, model, effort, cache, quotas and graph on one row, the loop at the right", async () => {
     const wide = await scene({ mode: "full", width: 160 })
     const rows = wide.below()
-    expect(rows).toHaveLength(5)
-    expect(rows[0]).toStartWith("   ~/Code/MendCodeV2 ")
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toStartWith("   ~/Code/MendCodeV2 · GPT-6-Luna fast · high:JEV · cache 85% · codex 7d 92% left  claude 7d 39% left 5h 89% left · GRAPH 2,594 files · indexed")
     expect(rows[0]).toEndWith("↻ 1 loop")
-    expect(rows.slice(1)).toEqual([
-      "   GPT-6-Luna fast · high:JEV · context 21% · cache 85% · in 106K out 1,200 cr 90K",
-      "   CODEX 7d ███████░ 92% left resets 5d9h · 5h n/a",
-      "   CLAUDE 7d ███░░░░░ 39% left resets 1d23h · 5h ███████░ 89% left resets 2h",
-      "   GRAPH 2,594 files · 17,641 symbols · 41,203 edges · indexed",
-    ])
+    // The context is the prompt's own figure: the footer does not repeat it.
+    expect(rows[0]).not.toContain("context")
     // The tier's own graph row never asks the daemon for its savings: no new request per model call.
     expect(wide.h.sent.some((command) => command.type === "session.savings")).toBe(false)
   })
 
-  test("full: narrow widths keep every row and compact the counts before anything gives way", async () => {
-    const narrow = (await scene({ mode: "full", width: 50 })).below()
-    expect(narrow.slice(1)).toEqual([
-      "   GPT-6-Luna fast · high:JEV · context 21%",
-      "   CODEX 7d 92% left · 5h n/a",
-      "   CLAUDE 7d 39% left · 5h 89% left",
-      "   GRAPH 2,594 files · indexed",
-    ])
-    const classicWidth = (await scene({ mode: "full", width: 80, height: 24 })).below()
-    expect(classicWidth).toHaveLength(5)
-    expect(classicWidth[1]).toBe("   GPT-6-Luna fast · high:JEV · context 21% · cache 85%")
+  test("full: narrow widths compact the counts, then drop the lowest ranks, and keep the directory and model", async () => {
+    expect((await scene({ mode: "full", width: 120 })).below()).toEqual(["   ~/Code/MendCodeV2 · GPT-6-Luna fast · high:JEV · cache 85% · codex 7d 92% left  claude 7d 39% left 5h 89%  ↻ 1 loop"])
+    expect((await scene({ mode: "full", width: 50 })).below()).toEqual(["   ~/Code/MendCodeV2 · GPT-6-Luna fast  ↻ 1 loop"])
+    expect((await scene({ mode: "full", width: 80, height: 24 })).below()).toEqual(["   ~/Code/MendCodeV2 · GPT-6-Luna fast                                ↻ 1 loop"])
   })
 
-  test("full: a provider with no reading and a graph not counted yet leave no row, and the rows under them move up", async () => {
+  test("full: a provider with no reading and a graph not counted yet leave nothing in the row", async () => {
     const none = (await scene({ mode: "full", width: 160, quotas: false })).below()
-    expect(none.map((row) => row.trim().split(" ")[0])).toEqual(["~/Code/MendCodeV2", "GPT-6-Luna", "GRAPH"])
+    expect(none).toHaveLength(1)
+    expect(none[0]).not.toContain("codex")
+    expect(none[0]).toContain("GRAPH 2,594 files")
     const nothingYet = (await scene({ mode: "full", width: 160, quotas: false, graph: false })).below()
-    expect(nothingYet).toHaveLength(2)
-    expect(nothingYet[1]).toStartWith("   GPT-6-Luna")
+    expect(nothingYet).toHaveLength(1)
+    expect(nothingYet[0]).toStartWith("   ~/Code/MendCodeV2 · GPT-6-Luna")
   })
 
-  test("full: rows are cut to a quarter of the height from the bottom: the graph first, then Claude, then Codex", async () => {
-    // Terminal height / 4, rounded down: 20 rows allow 5, 16 allow 4, 12 allow 3, 8 allow 2.
-    expect((await scene({ mode: "full", width: 160, height: 20 })).below().map((row) => row.trim().split(" ")[0])).toEqual(["~/Code/MendCodeV2", "GPT-6-Luna", "CODEX", "CLAUDE", "GRAPH"])
-    expect((await scene({ mode: "full", width: 160, height: 16 })).below().map((row) => row.trim().split(" ")[0])).toEqual(["~/Code/MendCodeV2", "GPT-6-Luna", "CODEX", "CLAUDE"])
-    expect((await scene({ mode: "full", width: 160, height: 12 })).below().map((row) => row.trim().split(" ")[0])).toEqual(["~/Code/MendCodeV2", "GPT-6-Luna", "CODEX"])
-    expect((await scene({ mode: "full", width: 160, height: 8 })).below().map((row) => row.trim().split(" ")[0])).toEqual(["~/Code/MendCodeV2", "GPT-6-Luna"])
+  test("full: the line is one row at any height", async () => {
+    for (const height of [20, 12, 8]) expect((await scene({ mode: "full", width: 160, height })).below()).toHaveLength(1)
+  })
+
+  test("full: `rows` brings back the five-row footer", async () => {
+    const rows = (await scene({ mode: "full", width: 160, profile: { footerRows: FOOTER_PRESETS.rows!.rows.map((row) => [...row]) } })).below()
+    expect(rows).toHaveLength(5)
+    expect(rows[1]).toBe("   GPT-6-Luna fast · high:JEV · context 21% · cache 85% · in 106K out 1,200 cr 90K")
+    expect(rows[2]).toStartWith("   CODEX 7d ")
   })
 
   test("full: what the user chose wins: their rows, `/footer preset classic` (the single row) and a `/footer` list", async () => {
@@ -188,7 +182,9 @@ describe("the footer by tier in the app", () => {
 
   test("screen-reader mode: the default rows keep their words and drop the bars", async () => {
     const rows = (await scene({ mode: "full", width: 160, profile: { accessible: true } })).below()
-    expect(rows.slice(2, 4)).toEqual(["   CODEX 7d 92% left · 5h n/a", "   CLAUDE 7d 39% left · 5h 89% left"])
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toContain("codex 7d 92% left")
+    expect(rows[0]).not.toMatch(/[█░]/)
   })
 
   test("ASCII glyphs: a plain bar between groups and no arrow before the loop", async () => {

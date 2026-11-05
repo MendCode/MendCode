@@ -1216,6 +1216,8 @@ describe("claude sub-agents", () => {
       "user_message", "done:Locate a.txt.", "reasoning", "done:Check the file first.", "agent_message", "done:The file says hello.", "agent_message", "done:",
     ])
     expect(inThread.find((event) => event.type === "item.started" && event.kind === "reasoning")).toMatchObject({ meta: { agentModel: "claude-sonnet-5-5-20260901" } })
+    // Stored events weigh what they always did: a sub-agent's step carries its parent and model, never a context figure (that would add bytes to every stored step).
+    for (const event of inThread) if (event.type === "item.started") expect(Object.keys(event.meta ?? {}).filter((key) => key !== "agentParent" && key !== "agentModel")).toEqual([])
   })
 
   test("a sub-agent's message about a call this turn did not make is dropped, and a tool it left open closes with the turn", () => {

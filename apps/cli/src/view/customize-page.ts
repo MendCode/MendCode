@@ -319,7 +319,7 @@ export function customizePreview(input: { profile: TuiProfile; preview: Customiz
   const placement = input.surface === "status" && profile.showActivity ? profile.activityPlacement : "off"
   const ruleOffset = PROMPT_MARGIN + (profile.promptChrome === "top-bottom" ? 2 : 3)
   const sample = (room: number, overlay: boolean): Line => renderWorkingRow({
-    width: room, margin: overlay ? 0 : META_MARGIN, spinner: SPINNER_FRAMES[0], phase: "Generating...", now: preview.now, parts: activityPartsOf(profile.activityParts), stats: SAMPLE_STATS, ...(overlay ? { separator: glyphs.sep } : {}),
+    width: room, margin: overlay ? 0 : META_MARGIN, spinner: SPINNER_FRAMES[0], phase: "Generating...", now: preview.now, parts: activityPartsOf(profile.activityParts), style: profile.activityStyle, groupSeparator: glyphs.sep, ...(profile.activityTokens ? { tokenFigures: profile.activityTokens.split(",") } : {}), stats: SAMPLE_STATS, ...(overlay ? { separator: glyphs.sep } : {}),
     ...(profile.showElapsed ? { elapsedMs: 81_000 } : {}), ...(profile.showTokens ? { tokens: { input: 45_200, output: 1240 } } : {}), tokensPerSecond: 42, queued: 1, interruptHint: profile.showInterruptHint,
     ...(profile.showActivityModel && preview.model ? { model: preview.model } : {}),
   })

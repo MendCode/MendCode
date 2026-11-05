@@ -23,8 +23,6 @@ export type RunningItem = { kind: ItemKind; tool?: string; /** What the call act
 /** A queued entry as the user typed it: its text (the original request when an extension rewrote it), attachments and what kind it is. */
 export type QueuedPrompt = { text: string; attachments: BlobRef[]; kind: "message" | "shell" | "notice" | "compact" }
 const QUEUED_KEPT = 64
-/** Characters of streamed text per token, for the estimate shown until the provider reports the call's exact usage. */
-const CHARS_PER_TOKEN = 4
 
 /**
  * What the prompt area needs from a session's events and the transcript does not keep: when the turn
@@ -38,8 +36,6 @@ export function createTurnState() {
   let input = 0
   /** The part of `input` the provider read from its prompt cache: already sent by an earlier call, not new this turn. */
   let cached = 0
-  /** Characters of answer and reasoning streamed since the last reported usage: the call in flight, not counted yet. */
-  let streamed = 0
   let startedAt: number | undefined
   let retry: RetryState | undefined
   const running = new Map<ItemId, RunningItem>()
@@ -85,7 +81,6 @@ export function createTurnState() {
           output = 0
           input = 0
           cached = 0
-          streamed = 0
           startedAt = event.at
           totals.turns++
           break
@@ -97,8 +92,6 @@ export function createTurnState() {
             output += event.output + event.reasoning
             input += event.input + event.cacheRead + event.cacheWrite
             cached += event.cacheRead
-            // The call's exact count replaces what its stream suggested.
-            streamed = 0
           }
           break
         case "turn.retrying":
@@ -117,10 +110,7 @@ export function createTurnState() {
         case "item.delta": {
           retry = undefined
           const item = running.get(event.itemId)
-          if (startedAt !== undefined && (item?.kind === "agent_message" || item?.kind === "reasoning")) streamed += event.text.length
           if (item && event.input) {
-            // A tool input counts toward the turn's streamed tokens as it is written.
-            if (startedAt !== undefined) streamed += Math.max(0, event.input.chars - (item.inputChars ?? 0))
             running.set(event.itemId, { kind: item.kind, ...(item.tool ? { tool: item.tool } : {}), ...(item.detail ? { detail: item.detail } : {}), ...(event.input.done ? {} : { writing: true }), inputChars: event.input.chars })
           }
           break
@@ -173,7 +163,7 @@ export function createTurnState() {
     get current(): RunningItem | undefined {
       return [...running.values()].at(-1)
     },
-    /** Output tokens of this turn's finished calls (exact). */
+    /** Output tokens of this turn's finished calls: what each call's usage reported, never an estimate. */
     get output() {
       return output
     },
@@ -184,14 +174,6 @@ export function createTurnState() {
     /** The part of `input` read from the provider's prompt cache (exact): resent context, not new tokens. */
     get cached() {
       return cached
-    },
-    /** The output so far: the finished calls' exact count plus an estimate of the call still streaming. */
-    get outputLive() {
-      return output + Math.ceil(streamed / CHARS_PER_TOKEN)
-    },
-    /** True while part of `outputLive` is an estimate (a call is streaming, or the engine reports no usage). */
-    get estimating() {
-      return streamed > 0
     },
     get totals() {
       return totals as Readonly<typeof totals>

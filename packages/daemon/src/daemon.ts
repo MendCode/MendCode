@@ -1527,6 +1527,12 @@ export async function startDaemon(options: DaemonOptions) {
   })
   const interactions = createInteractions((sessionId) => store.sessionDirectory(sessionId))
   sessionObservers.push(interactions.observe)
+  // A child's context grows with each model call: the Agents strip of its parent asks again when one is recorded.
+  sessionObservers.push((event) => {
+    if (event.type !== "usage.recorded" || !tasks.port.isChild(event.sessionId)) return
+    const parentId = store.sessionInfo(event.sessionId)?.parentId as SessionId | undefined
+    if (parentId) globalSink.append({ type: "task.changed", sessionId: event.sessionId, parentId })
+  })
   // Idle bridge children are sessions too. Reuse the lineage invalidation event for their turns.
   sessionObservers.push((event) => {
     if (!["turn.started", "turn.completed", "turn.failed", "turn.cancelled", "turn.interrupted", "server.request", "server.request.resolved"].includes(event.type)) return
@@ -1741,6 +1747,14 @@ export async function startDaemon(options: DaemonOptions) {
       for (const connection of connections) if (connection.clientId) send(connection, { v: PROTOCOL_VERSION, kind: "global", body: event })
     },
   })
+  /** A running child with how full its context is, from the last model call its own session recorded (the Agents strip shows it). */
+  function withContext<T extends { taskId: SessionId; state: string }>(task: T): T & { context?: { tokens: number; limit?: number } } {
+    if (task.state !== "running" && task.state !== "needs_input") return task
+    const last = store.recentUsage(task.taskId, 1).at(-1)
+    if (last?.context === undefined) return task
+    const limit = last.contextWindow ?? last.compactAt
+    return { ...task, context: { tokens: last.context, ...(limit ? { limit } : {}) } }
+  }
   /** Chats a terminal's "new chat" handed out that nothing was typed in yet: other terminals do not hear of them until they have something. */
   const quietEmpties = new Set<SessionId>()
   /** Sub-agent sessions that asked the user something: their activity is published until they end. */
@@ -5181,7 +5195,7 @@ export async function startDaemon(options: DaemonOptions) {
         catch (error) { return reply(connection, command.id, { ok: false, code: "target_mismatch", message: String(error).slice(0, 500) }) }
       }
       case "task.list":
-        return reply(connection, command.id, { ok: true, result: { tasks: tasks.list(command.sessionId) } })
+        return reply(connection, command.id, { ok: true, result: { tasks: tasks.list(command.sessionId).map(withContext) } })
       case "task.run":
       case "task.status": {
         try {

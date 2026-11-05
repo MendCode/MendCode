@@ -173,7 +173,7 @@ shows it (the state in the working row, the context in the top bar, notices over
 |---|---|
 | minimal | none; nothing is added (`footerRows` or an extension slot still draw their own rows) |
 | balanced | `Build · GPT-6-Luna · high · fast · native │ ↻ 1 loop │ ~12 turns to compact`: agent, a permission other than ask, model, reasoning effort (`showEffort`), `fast` (`fast n/a` when `/fast` never reaches the model), engine; then the goal, loops and workflows; then each placed segment (`forecast` by default) |
-| full | the `rows` preset, while you never chose rows or a `/footer` list: up to five rows, `~/Code/app` (with the loops at the right), `GPT-6-Luna fast · high:JEV · context 21% · cache 85% · in 106K out 1,200 cr 90K`, `CODEX 7d ███████░ 92% left resets 5d9h · 5h n/a`, `CLAUDE 7d ███░░░░░ 39% left resets 1d23h · 5h …`, `GRAPH 2,594 files · 17,641 symbols · 41,203 edges · indexed` (see below) |
+| full | the `line` preset, while you never chose rows or a `/footer` list: one row, `~/Code/app · GPT-6-Luna · high:JEV · cache 85% · codex 7d ███████░ 92% left resets 5d9h · claude 7d ███░░░░░ 39% left resets 1d23h · GRAPH 2,594 files · indexed` (the context is the top bar's; `/footer preset rows` is the five-row layout, see below) |
 
 - Groups are split by a muted ` │ ` (` | ` in ASCII chrome); the items of a group by the separator (`statusSeparator`, ` · `). Only
   explicit right-hand content keeps the right edge: hints, `statusRight`, script and extension right slots, connection trouble.
@@ -181,17 +181,18 @@ shows it (the state in the working row, the context in the top bar, notices over
   alone), the lowest-ranked first; then parts give way in rank order: segments, extension and script items, profile and PR, the
   engine, the effort, fast, the loops, the goal, the model. The agent and a permission that acts without asking never give way (at
   worst they are cut with `…`). A compacted segment gets its whole form back when it fits again.
-- Full's default is the `rows` preset (`FOOTER_PRESETS.rows`) with its quota look (`quotaView: left`, `quotaColor: accent`, unless
-  the profile already holds another value). It applies only in the full view and only while `footerRows` is empty, `/footer` placed
-  no list and `footerDefaultRows` is on; `footerRows`, a `/footer` list, `/footer preset classic` (also `/footer rows 0`, and the
-  `classic` stop of the `/customize` preset row) or `/footer reset` back to the default decide otherwise. A row with nothing to say is
+- Full's default is the `line` preset (`FOOTER_PRESETS.line`, one row) with its quota look (`quotaView: left`, `quotaColor: accent`,
+  unless the profile already holds another value). It applies only in the full view and only while `footerRows` is empty, `/footer`
+  placed no list and `footerDefaultRows` is on; `footerRows`, a `/footer` list, `/footer preset classic` (also `/footer rows 0`, and the
+  `classic` stop of the `/customize` preset row) or `/footer reset` back to the default decide otherwise. An item with nothing to say is
   not drawn: a provider with no quota reading (no Codex or no Claude login), the code graph before the daemon pushed this folder's
   status (it never asks for the saved tokens, which a placed `codegraph` asks once per model call), and the cache share until the
-  second call (the first is always cold). Your own rows are drawn as written. Like any rows, the footer is cut to a quarter of the
-  terminal's height from the bottom, so the order of giving way is the graph, then Claude's quota, then Codex's, then the model row;
-  the directory row stays (20 rows show all five, 16 four, 12 three, 8 two). Pages (`/usage`, `/packages`) do not carry the rows.
-  The old full footer (the balanced row with agent, `fast`, loops and the forecast, plus a second row of graph, cache and quota) is
-  `/footer preset classic`.
+  second call (the first is always cold). The row does not repeat the context, which the top bar's Context bar shows. When it does
+  not fit, the quota windows give up their bars first, then the code graph, the effort, the cache share and the quotas give way in
+  that order. Your own rows are drawn as written, cut to a quarter of the terminal's height from the bottom. Pages (`/usage`,
+  `/packages`) do not carry the rows. `/footer preset rows` is the earlier default, five rows (directory and tagline, model and
+  context, the Codex quota, the Claude quota, the code graph); `/footer preset classic` the balanced row with agent, `fast`, loops
+  and the forecast, plus a second row of graph, cache and quota.
 - Screen-reader mode: one separator everywhere, counts as words (`1 loop`, not `↻ 1 loop`) and quota figures without bars. ASCII
   glyphs: `|` between groups and no marks before counts. Nothing in the footer moves, so reduced motion changes nothing here.
 - `showEffort` is on by default and `/tier balanced|full` turns it on; a profile saved before keeps its own value (Customize > Prompt &

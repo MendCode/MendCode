@@ -221,7 +221,7 @@ export function createEvents(ctx: AppContext, actions: {
       if (state.agentParents.size > AGENT_PARENTS_KEPT) state.agentParents.delete(state.agentParents.keys().next().value!)
       followPet(state)
       if (state.page === "tasks" && event.parentId === state.sessionId) void actions.loadTasks()
-      if (event.parentId === state.sessionId) void refreshLiveTasks(ctx)
+      if (event.parentId === state.sessionId || event.parentId === state.sessionParentId) void refreshLiveTasks(ctx)
       if (state.page === "agents") void actions.loadBackgroundSessions()
       // The agents card and /tree draw the sub-agents' state and model: ask again.
       state.sidebarTreeRev++

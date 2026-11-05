@@ -389,7 +389,7 @@ describe("footer in the app", () => {
     await tick()
     const saved = sent.find((c) => c.type === "settings.set") as { patch: { footer: null } }
     expect(saved.patch.footer).toBeNull()
-    expect(screen()).toContain("rows: 5 (the full view's default; /footer preset classic for one row)")
+    expect(screen()).toContain("rows: 1 (the full view's default; /footer preset classic for one row)")
   })
 
   test("/footer with an unknown segment reports an error and saves nothing", async () => {

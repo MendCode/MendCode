@@ -1,6 +1,7 @@
 import type { ForegroundState, TaskRecord } from "@mendcode/protocol"
 import { subagentColor } from "./agent-color"
-import type { Glyphs, Line, Span } from "../ui/theme"
+import type { ColorName, Glyphs, Line, Span } from "../ui/theme"
+import { compact } from "./format"
 import { clip, fit, lineWidth, spread } from "./deck"
 import { formatElapsed } from "./time"
 import { truncateEnd } from "./wrap"
@@ -16,7 +17,7 @@ export const COMMANDS_SHOWN = 3
 const ACTIVE: ReadonlySet<TaskRecord["state"]> = new Set(["queued", "running", "needs_input"])
 
 /** What a row of the strip needs of a sub-agent: a child task of the daemon, or a thread an engine reports inside the session. */
-export type StripTask = Pick<TaskRecord, "taskId" | "description" | "agent" | "background" | "state" | "createdAt" | "updatedAt" | "startedAt"> & { run?: TaskRecord["run"]; /** Stopped by the user's esc: its row stays, saying how to start it again. */ stoppedByUser?: true }
+export type StripTask = Pick<TaskRecord, "taskId" | "description" | "agent" | "background" | "state" | "createdAt" | "updatedAt" | "startedAt"> & { run?: TaskRecord["run"]; /** How full its context is: the tokens, and the limit when it is known. */ context?: { tokens: number; limit?: number | undefined } | undefined; /** Stopped by the user's esc: its row stays, saying how to start it again. */ stoppedByUser?: true }
 
 /**
  * What a sub-agent runs on, in one line: `Sol 6.1 · openai · native · low · fast`. Each fact has its own colour, so the line reads
@@ -38,9 +39,12 @@ export function runSpans(run: NonNullable<TaskRecord["run"]>, shownModel: (id: s
 /** What the daemon's activity push says of a sub-agent's session while its turn runs. */
 export type AgentActivity = { state: ForegroundState; since?: number; tool?: string; pending?: string; paused?: boolean }
 
-/** The sub-agents of the open session worth a row now: the ones at work, then the ones that ended a moment ago or that the user stopped. */
-export function stripTasks<T extends StripTask>(tasks: readonly T[], now: number): T[] {
-  const shown = tasks.filter((task) => ACTIVE.has(task.state) || task.stoppedByUser || now - task.updatedAt < AGENT_DONE_MS)
+/**
+ * The sub-agents of the open session worth a row now: the ones at work, then the ones that ended a moment ago or that the user stopped.
+ * The one open in the chat (`open`) keeps its row however long ago it ended, so the list never loses the agent being read.
+ */
+export function stripTasks<T extends StripTask>(tasks: readonly T[], now: number, open?: string): T[] {
+  const shown = tasks.filter((task) => ACTIVE.has(task.state) || task.stoppedByUser || task.taskId === open || now - task.updatedAt < AGENT_DONE_MS)
   return [...shown.filter((task) => ACTIVE.has(task.state)), ...shown.filter((task) => !ACTIVE.has(task.state))]
 }
 
@@ -63,6 +67,13 @@ function doing(task: StripTask, activity: AgentActivity | undefined, sep: string
   return { text: "thinking", fg: "muted" }
 }
 
+/** `ctx 42%` against a known limit (amber from 60 %, red from 85 %, as the footer's), else the tokens alone: `ctx 42K`. */
+export function contextText(context: NonNullable<StripTask["context"]>): { text: string; fg: ColorName } {
+  if (!context.limit) return { text: `ctx ${compact(context.tokens)}`, fg: "muted" }
+  const percent = Math.round((context.tokens / context.limit) * 100)
+  return { text: `ctx ${percent}%`, fg: percent >= 85 ? "error" : percent >= 60 ? "warning" : "muted" }
+}
+
 /** Rows the strip may take when each sub-agent says what it runs on a line of its own; past it the model goes on the row. */
 export const DETAIL_ROWS = 8
 
@@ -74,8 +85,8 @@ export const DETAIL_ROWS = 8
  * What a sub-agent runs on (`run`) is a line of its own under its row while the strip fits in `DETAIL_ROWS`, or the model alone on
  * the row past it. `ids` names what each row opens (a sub-agent, a background item), so a click never counts rows to find it.
  */
-export function renderAgentsStrip(input: { tasks: readonly StripTask[]; /** What a sub-agent runs on, when the rows say it. */ run?: (task: StripTask) => Span[] | undefined; activity(taskId: string): AgentActivity | undefined; now: number; width: number; inset: number; glyphs: Glyphs; root: boolean; openHint: string; /** The session's background commands (and engine tasks no thread names): rows of the same tree, so one block lists all that runs. */ commands?: readonly (BackgroundItem & { id?: string })[] }): { rows: Line[]; ids: Array<string | undefined> } {
-  const tasks = stripTasks(input.tasks, input.now)
+export function renderAgentsStrip(input: { tasks: readonly StripTask[]; /** The sub-agent open in the chat's place: its row is marked and stays listed. */ open?: string; /** What a sub-agent runs on, when the rows say it. */ run?: (task: StripTask) => Span[] | undefined; activity(taskId: string): AgentActivity | undefined; now: number; width: number; inset: number; glyphs: Glyphs; root: boolean; openHint: string; /** The session's background commands (and engine tasks no thread names): rows of the same tree, so one block lists all that runs. */ commands?: readonly (BackgroundItem & { id?: string })[] }): { rows: Line[]; ids: Array<string | undefined> } {
+  const tasks = stripTasks(input.tasks, input.now, input.open)
   if (!tasks.length) return { rows: [], ids: [] }
   const commands = input.commands ?? []
   const { width, glyphs: g } = input
@@ -107,7 +118,10 @@ export function renderAgentsStrip(input: { tasks: readonly StripTask[]; /** What
   const detail = runs.size > 0 && rows.length + shown.length + runs.size + shownCommands.length + (more ? 1 : 0) <= DETAIL_ROWS
   const inline = detail ? new Map<string, Span[]>() : new Map([...runs].map(([id, spans]) => [id, spans.slice(0, 1)]))
   const runWidth = inline.size ? Math.min(20, Math.max(...[...inline.values()].map(lineWidth))) : 0
-  const TIME = 9
+  // How full each one's context is, a column only when a row has the figure and the strip is wide enough for it.
+  const contexts = new Map(shown.flatMap((task) => (task.context ? [[task.taskId, contextText(task.context)] as const] : [])))
+  const ctxWidth = room >= 60 && contexts.size ? Math.max(...[...contexts.values()].map((entry) => cells(entry.text))) : 0
+  const TIME = 9 + (ctxWidth ? ctxWidth + 1 : 0)
   const free = Math.max(8, room - 2 - (agentWidth ? agentWidth + 2 : 0) - (modeWidth ? modeWidth + 2 : 0) - (runWidth ? runWidth + 2 : 0) - 2 - TIME)
   const statusWant = Math.max(...shown.map((task) => cells(doing(task, input.activity(task.taskId), g.sep).text)))
   // A row the user stopped names the command that starts it again: that status is read whole, the descriptions give way.
@@ -122,16 +136,18 @@ export function renderAgentsStrip(input: { tasks: readonly StripTask[]; /** What
     const since = task.startedAt ?? (running && activity?.since ? Math.min(activity.since, task.createdAt) : task.createdAt)
     const elapsed = formatElapsed((running ? input.now : task.updatedAt) - since)
     const last = index === shown.length - 1 && !more && !shownCommands.length
+    const here = task.taskId === input.open
     const left: Line = [
-      { text: last ? "└ " : "├ ", fg: "muted" },
-      ...fit([{ text: truncateEnd(described(task), titleWidth), fg: running ? subagentColor(task.description) : "muted" }], titleWidth),
+      here ? { text: last ? "└▸" : "├▸", fg: subagentColor(task.description), bold: true } : { text: last ? "└ " : "├ ", fg: "muted" },
+      ...fit([{ text: truncateEnd(described(task), titleWidth), fg: running || here ? subagentColor(task.description) : "muted", ...(here ? { bold: true } : {}) }], titleWidth),
       ...(agentWidth ? [{ text: `  ${task.agent.slice(0, agentWidth).padEnd(agentWidth)}`, fg: "muted" as const }] : []),
       ...(modeWidth ? [{ text: `  ${(task.background ? "bg" : "await").padEnd(modeWidth)}`, fg: task.background ? ("muted" as const) : ("accent" as const) }] : []),
       ...(runWidth ? [{ text: "  " }, ...fit(clip(inline.get(task.taskId) ?? [], runWidth), runWidth)] : []),
       { text: "  " },
       { ...status, text: truncateEnd(status.text, statusWidth) },
     ]
-    push([pad, ...fit(left, room - TIME), { text: elapsed.padStart(TIME), fg: "muted" }], task.taskId)
+    const ctx = contexts.get(task.taskId)
+    push([pad, ...fit(left, room - TIME), ...(ctxWidth ? [{ text: ` ${(ctx?.text ?? "").padStart(ctxWidth)}`, fg: ctx?.fg ?? ("muted" as const) }] : []), { text: elapsed.padStart(9), fg: "muted" }], task.taskId)
     const facts = detail ? runs.get(task.taskId) : undefined
     if (facts) push([pad, { text: last ? "    " : "│   ", fg: "muted" }, ...clip(facts, Math.max(1, room - 4))], task.taskId)
   })
@@ -143,7 +159,7 @@ export function renderAgentsStrip(input: { tasks: readonly StripTask[]; /** What
       ...(agentWidth ? [{ text: `  ${"".padEnd(agentWidth)}` }] : []),
       ...(modeWidth ? [{ text: `  ${(item.kind === "agent" ? "bg" : "cmd").padEnd(modeWidth)}`, fg: "muted" as const }] : []),
     ]
-    push([pad, ...fit(left, room - TIME), { text: formatElapsed(input.now - item.startedAt).padStart(TIME), fg: "muted" }], item.id)
+    push([pad, ...fit(left, room - TIME), ...(ctxWidth ? [{ text: " ".repeat(ctxWidth + 1) }] : []), { text: formatElapsed(input.now - item.startedAt).padStart(9), fg: "muted" }], item.id)
   })
   if (more) push([pad, { text: `└ +${more} more ${g.sep} ${commands.length > shownCommands.length ? "/ps" : "/tasks"}`, fg: "muted" }])
   return { rows, ids }

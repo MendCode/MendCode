@@ -32,6 +32,9 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 - The balanced tier's prompt is about 240 tokens lighter: its description of the terminal's drawing is one sentence instead of the full block.
 - The tools a `/btw` answer runs look like the transcript's tool rows. The side chat is read-only in every permission mode: only read-only commands run, never `touch`, `mv` or a redirection into a file; set its model with `models.aside`.
+- The activity line reads like Claude Code's: `⠋ Running command… (2m 53s · ↓ 88.6k tokens)`. `activityStyle` brings back the older look (`classic`) and `activityTokens` adds the sent and cached token figures. Token counts are the provider's exact usage, with no `~`.
+- The full view's footer is one row (directory, model, effort, cache, quota, code graph) without repeating the context; `/footer preset rows` brings back the five rows.
+- Each running sub-agent task in the Agents strip says how full its context is (not Claude Code's own sub-agents). Opening a sub-agent draws a full border around its view and keeps the Agents strip, with the open one marked.
 - Commands the assistant leaves running in the background or in a terminal no longer stop after a few hours or when left untouched; they run until they end, you stop them or the chat is deleted. The `processLimits` setting (`lifetimeMinutes`, `idleMinutes`) adds a cap if you want one.
 - Compaction while idle follows the prompt-cache lifetime the provider's responses show, not a fixed five minutes, so ChatGPT and OpenAI sessions are compacted less often when their cache lasts longer. See [prompt cache](docs/prompt-cache.md#observed-lifetime).
 - After a compaction the assistant still knows which commands are running and can read their output.

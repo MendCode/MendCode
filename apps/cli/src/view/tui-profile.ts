@@ -9,7 +9,7 @@ import { IMAGE_MODES, type ImageMode } from "../pets/detect"
 import { FILE_OPENERS, type FileOpener } from "./links"
 import { PROCESS_MODES, type ProcessMode } from "../process-modes"
 import { GLYPH_CHOICES, type GlyphChoice } from "../ui/theme"
-import { ACTIVITY_PARTS, ACTIVITY_PARTS_DEFAULT, QUOTA_REFRESH_DEFAULT_MINUTES, normalizeQuotaRefresh, type QuotaRefreshEntry, FOOTER_ICON_MODES, STAT_PART_IDS, footerRowsProblems, footerTextProblems, normalizeUsageWidgets, type FooterIconMode, type UsageWidgetId } from "@mendcode/protocol/wire"
+import { ACTIVITY_PARTS, ACTIVITY_PARTS_DEFAULT, ACTIVITY_STYLES, unknownActivityTokens, QUOTA_REFRESH_DEFAULT_MINUTES, normalizeQuotaRefresh, type QuotaRefreshEntry, FOOTER_ICON_MODES, STAT_PART_IDS, footerRowsProblems, footerTextProblems, normalizeUsageWidgets, type FooterIconMode, type UsageWidgetId } from "@mendcode/protocol/wire"
 import { parseMarkdownColors, TOOL_RAIL_DEFAULT, toolRailProblems } from "@mendcode/protocol/wire"
 import { SLASH_LAYOUTS, slashProfileProblems, type SlashLayout, type SlashGroup, type SlashPreference } from "@mendcode/protocol/wire"
 import { DEFAULT_IMAGE_WAIT_CANVAS, DEFAULT_IMAGE_WAIT_INTERVAL, IMAGE_WAIT_COLORS, IMAGE_WAIT_LIMITS, IMAGE_WAIT_MODES, normalizeImageWaitArt, normalizeImageWaitCanvas, imageWaitPresetNames, type ImageWaitArt, type ImageWaitCanvas, type ImageWaitColor, type ImageWaitMode } from "./image-wait"
@@ -141,6 +141,10 @@ export type TuiProfile = {
   activityPlacement: "transcript" | "above" | "inside" | "off"
   /** The parts it shows, in order (`ACTIVITY_PARTS`); a part the old `show*` toggles switch off stays hidden. */
   activityParts: string
+  /** How the parts are laid out: `inline` (`Generating… (2m 53s · ↓ 4.3k tokens)`) or `classic` (one run of parts, blanks between). */
+  activityStyle: (typeof ACTIVITY_STYLES)[number]
+  /** The figures of the `tokens` part, a comma list of `out`, `in`, `cache`; empty is the style's own (`out` inline; `in,cache,out` classic). */
+  activityTokens: string
   /** Comments on passages of an answer (docs/editor.md): `auto` is on in the balanced and full views and off in minimal. */
   comments: (typeof COMMENT_MODES)[number]
   /** What `alt+q` (and its `ctrl+x w` chord) does with a selection: comment on it, or quote it into the prompt as before. `ctrl+g` always comments. */
@@ -431,6 +435,8 @@ export const DEFAULT_TUI_PROFILE: Readonly<TuiProfile> = {
   jumpText: "",
   activityPlacement: "transcript",
   activityParts: ACTIVITY_PARTS_DEFAULT,
+  activityStyle: "inline",
+  activityTokens: "",
   comments: "auto",
   commentKey: "comment",
   commentHint: "prompt",
@@ -780,6 +786,8 @@ export function normalizeTuiProfile(raw: unknown): TuiProfile {
     jumpText: oneLine(source.jumpText, 40),
     activityPlacement: oneOf(["transcript", "above", "inside", "off"] as const, source.activityPlacement) ?? "transcript",
     activityParts: normalizeActivityParts(source.activityParts),
+    activityStyle: oneOf(ACTIVITY_STYLES, source.activityStyle) ?? "inline",
+    activityTokens: typeof source.activityTokens === "string" && !unknownActivityTokens(source.activityTokens).length && source.activityTokens.length <= 32 ? source.activityTokens.split(",").map((name) => name.trim()).filter(Boolean).join(",") : "",
     comments: oneOf(COMMENT_MODES, source.comments) ?? "auto",
     commentKey: oneOf(COMMENT_KEYS, source.commentKey) ?? "comment",
     commentHint: oneOf(COMMENT_HINTS, source.commentHint) ?? "prompt",

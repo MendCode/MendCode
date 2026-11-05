@@ -5,9 +5,9 @@ aliases: statusline, status-line, status, statusbar
 ---
 Multi-row footers are settings (footerRows, presets, icons); an extension is only for data MendCode does not have. Use what is built in first. To copy another tool's status line (Pi, Claude Code, Codex), map each part to a built-in segment or to MendCode's usage data ({{program}} docs usage), keep its icons (footerIcons), and tell the user which parts have no source (shown as unavailable). Apply at once, do not ask first: /footer reset undoes it. Never read another program's files or caches: MendCode's own readings are the only source, and a window it does not know is unknown. Footer rows stay under the prompt, never in prompt.above.
 
-A. Settings only, no file (customize_ui settings, or the user's /footer → [[setting:footer]]):
-  The five-row layout (preset rows): footerRows [["directory","text:tagline"],["model","effort","context","cache","tokens"],["quota:codex"],["quota:claude"],["codegraph"]], footerText {"tagline":"keep the contract"} (text:NAME reads footerText.NAME), footerIcons nerd|glyph|none.
-  Up to 12 rows, a quarter of the terminal height; a row that does not fit loses its last segments. /footer preset classic|rows|compact|telemetry, /footer reset.
+A. Settings only, no file (customize_ui settings, or the user's /footer → [[setting:footer]]).
+  Five rows (preset rows): footerRows [["directory","text:tagline"],["model","effort","context","cache","tokens"],["quota:codex"],["quota:claude"],["codegraph"]], footerText {"tagline":"keep the contract"} (text:NAME reads footerText.NAME), footerIcons nerd|glyph|none.
+  Up to 12 rows, a quarter of the height. Full's default is preset line, one row. /footer preset classic|line|rows|compact|telemetry, /footer reset.
   Segments: directory branch model effort (:JEV when adaptive) context cache tokens quota quota:codex quota:claude codegraph time text:name state permission today cost goal jobs sandbox vim update ttft tps spend forecast ctx hit think calls notice. codegraph shows files, symbols, edges once a graph tool indexed the project. No source: "synced".
   quota: a bar and % left per window; an ended window is n/a, an old reading is dimmed with its age (62% left ~2d), a fresh one keeps its reset countdown. quotaView used|left, quotaColor pressure|accent.
   quotaRefresh (off; {{program}} docs usage) spends quota on a timer: set it when the user asks for live usage, else offer it.
