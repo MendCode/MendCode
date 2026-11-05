@@ -52,6 +52,38 @@ Three more scripts, none of them budgeted, measure what the probe cannot:
 
 Reading the A/B tables: a flag on a metric whose code did not change (a scroll frame after a change to streaming) is the noise of five runs; repeat that metric before believing it. The exit time after a long session is bimodal on this machine (about 9 or 23 ms in both builds); the exit time of a cold launch is a stable 9 ms.
 
+## Attribution A/B (`scripts/perf-attrib.ts`)
+
+The macOS footprint of a whole process moves 5 to 10 MB between identical runs (after a reply: a 8.7 MB spread over six runs of one build), so a 2 MB difference needs a dozen rounds per side and still does not say what grew. `perf-attrib` measures the parts, most of which do not move between identical runs, in one session per side on the offline faux engine (no login, no network, throwaway HOME and data):
+
+```
+bun scripts/perf-attrib.ts --base REF|BINARY --cand REF|BINARY [--rounds 2] [--rest 20] [--layout solo|split] [--json] [--markdown] [--out DIR] [--keep]
+bun scripts/perf-attrib.ts --calibrate BINARY [--rounds 3]       # same build on both sides; rewrites scripts/perf-attrib-noise.json
+bun scripts/perf-attrib.ts --rescore DIR [--markdown] [--write-noise]   # score runs saved with --out again
+```
+
+A `REF` is any commit: it is built in a temporary `git worktree` (`bun install --frozen-lockfile`, `scripts/build.ts`) that is removed at the end. A `BINARY` is copied and never touched. Sides alternate within each round. `solo` (default) is the terminal hosting the daemon, as a user runs it, the one the skill's baseline measures; `split` is a terminal plus a daemon process of its own, with `tui.*` and `daemon.*` metrics.
+
+| Metric (names in the JSON) | How | Noise between identical runs |
+|---|---|---|
+| `*.heap.type.<Type>` | JS object count per type, `bun:jsc` `heapStats()` after a full GC | none for most types (0 for the median) |
+| `*.rest.ctor.<kind>:<Name>.bytes/.count`, `js_live_b`, `js_code_b` | bytes per constructor from a V8 heap snapshot at rest; `js_live_b` is the sum without compiled code (JIT timing moves compiled code by up to 1 MB) | `ModuleRecord` 85 B; `js_live_b` 38 KB; `code:*` up to 0.7 MB |
+| `*.heap.size_b`, `extra_b`, `objects`, `protected` | `heapStats()` totals | `size_b` 1.2 MB, `objects` 0.9 % |
+| `*.region.<Name>` | dirty plus swapped MB per region, `vmmap --summary` (macOS) or `smaps_rollup` (Linux) | 0.1 to 0.6 MB per region |
+| `*.fp_mb`, `peak_mb`, `rss_mb` | `scripts/perf-proc.ts`; RSS is shown, never judged | footprint 1.4 MB ready, 4.8 MB rest, 8.7 MB after a reply |
+| `*.cpu_ms.ready/after/rest` | CPU from spawn to ready, for the reply, for the idle seconds | 40 / 135 / 20 ms |
+| `disk.bytes`, `disk.table.<name>` | bytes of every column of the session's rows, as `bench/real.ts` | 0 |
+| `binary.bytes` | size of the file | 0 |
+| module list | `require.cache` of the ready process; a compiled build's chunks have hash names, so they are told apart by size | 0 |
+
+Memory is taken before the heap probe at each phase and the probe (a collection, and the snapshot at rest) after it, so a phase is never measured through its own probe; the later phases carry the same probe on both sides. The probe is `scripts/perf-attrib-preload.ts`, loaded with `BUN_OPTIONS=--preload` by the script only. The product has no hook for it, so a build that is not being measured has no timer, handler or import to pay for (`perf-attrib.test.ts` checks that nothing under `apps` or `packages` reads the dump variable and that the preload registers nothing without `PERF_ATTRIB_DIR`). It also works on binaries built before this script existed.
+
+**Noise threshold.** `--calibrate` runs one build against itself and stores, per metric, the widest spread (max minus min) seen in `scripts/perf-attrib-noise.json`. A comparison flags a metric when the difference of the medians exceeds 1.5 times that spread (a floor of 0.2 MB applies to memory). Metrics calibration never saw get 5 % of their value with a floor per unit. Recalibrate after changing the machine, the Bun version or the script's scenario. The committed file was measured with `solo`; `split` metrics reuse it where the names match and fall back to the default otherwise. Not done: CPU by function (`--cpu-prof`); CPU is reported per phase only.
+
+**Output.** `--markdown` is a compact table with the verdict on its first line, ready for a review; `--json` is versioned (`schema`) and carries every metric as `{base, cand, delta, threshold, status}`. The verdict is `igual` (nothing above the noise), `baja X`, or `sube X`, followed by the regions, object types, constructors and disk tables that explain it. The exit code is 1 when the verdict is `sube` (CI or a reviewer treats it as a finding) and 0 otherwise. The report also prints the skill's reference line (real model, 2026-11-03: footprint 64 / 66 MB, peak 80 MB, 2.6 KB per session); the faux engine writes less per session and a tool-less reply, so that line orients and does not gate. The optional mode with a real login is not implemented here: use `bench/real.ts` of the skill for it.
+
+Reading a report: a `sube` caused only by deterministic metrics (a few hundred objects, tens of KB of JS, the binary) is a real, small cost of new code; a `sube` in a footprint or region row with the JS metrics flat is a native allocation (a buffer, a mapping, a child) and needs `--layout split` or a profile. Rows that are all `same` with a footprint difference in the raw numbers mean the footprint difference was noise.
+
 ## Budgets
 
 `scripts/perf-budgets.ts` holds them and `scripts/perf.test.ts` fails when a run exceeds one (rules unit-tested, and the compiled measurement for 0, 1,000 and 10,000 messages, about 15 s). They are measured values plus headroom: RSS about 1.25x, frame times and start-up 4x (the real frame limit is 16.7 ms). Raise one only with the reason in the commit. The numbers are macOS ones; on Linux x64 every absolute RSS budget is 25 MB higher (`PLATFORM_RSS_MB`: the same binary measures about 22 MB more there and grows the same), growth budgets are not.
