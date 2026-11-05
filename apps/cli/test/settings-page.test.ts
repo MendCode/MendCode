@@ -166,19 +166,27 @@ describe("/settings page", () => {
     expect(patches(h).at(-1)).toEqual({ type: "settings.set", patch: { retentionDays: 45 } })
   })
 
-  test("worktree cleanup cycles through off, 7, 14 and 30 days or takes a typed count from 1", async () => {
+  test("worktree cleanup starts at 14 days and cycles through off (0), 7, 14 and 30 or takes a typed count", async () => {
     const h = await open({ onboarded: true })
     await down(h, 18)
     expect(h.text()).toContain("worktree gc")
+    expect(h.text()).toContain("14 days")
     await h.key(RIGHT)
-    expect(patches(h).at(-1)).toEqual({ type: "settings.set", patch: { worktreeGcDays: 7 } })
-    await h.type("0")
+    expect(patches(h).at(-1)).toEqual({ type: "settings.set", patch: { worktreeGcDays: 30 } })
+    await h.type("4000")
     await h.key("\r")
-    expect(h.text()).toContain("days must be 1-3650")
-    await h.key("\x7f")
+    expect(h.text()).toContain("days must be 0-3650")
+    for (let i = 0; i < 4; i++) await h.key("\x7f")
     await h.type("21")
     await h.key("\r")
     expect(patches(h).at(-1)).toEqual({ type: "settings.set", patch: { worktreeGcDays: 21 } })
+  })
+
+  test("worktree cleanup is turned off with 0, which the cycle reaches from 7 days", async () => {
+    const h = await open({ onboarded: true, worktreeGcDays: 7 })
+    await down(h, 18)
+    await h.key(LEFT)
+    expect(patches(h).at(-1)).toEqual({ type: "settings.set", patch: { worktreeGcDays: 0 } })
   })
 
   test("footer: a custom one resets to the default, the default does nothing", async () => {

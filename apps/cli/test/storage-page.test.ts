@@ -78,6 +78,9 @@ describe("storage page keys", () => {
     expect(packed.find((line) => line.startsWith("compression"))).toMatch(/5,000 rows packed · saves 250.0 MB · z moves older data/)
     expect(packed.find((line) => line.startsWith("worktrees"))).toContain("off · set worktreeGcDays in settings to enable · w now · trash 3.0 MB")
     expect(plain(render({ worktreeGcDays: 14 })).map(unwrapPanel).find((line) => line.startsWith("worktrees"))).toContain("idle > 14 days go daily 03:30")
+    const capped = (bytes: number) => plain(render({ worktreeGcDays: 14, report: report({ worktreeCapBytes: 10 * GB, worktreeBytes: bytes }) })).map(unwrapPanel).join(" ")
+    expect(capped(4 * GB)).toContain("4.0 GB of 10.0 GB")
+    expect(capped(12 * GB)).toContain("over the cap: 12.0 GB of 10.0 GB")
     expect(plain(render({ report: report({ compressedRows: 0 }) })).map(unwrapPanel).find((line) => line.startsWith("compression"))).toContain("nothing packed yet")
   })
 

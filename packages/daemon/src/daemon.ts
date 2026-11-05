@@ -221,6 +221,8 @@ import {
   type SessionId,
   type UsageProfile,
   agentRefusal,
+  effectiveWorktreeGcDays,
+  worktreeCapBytes,
 } from "@mendcode/protocol"
 import { effectiveSettings, featureOn, modelContextOf } from "@mendcode/protocol/wire"
 import {
@@ -249,7 +251,7 @@ import { createPrReviewPort } from "./pr-review-tool"
 import { createGitWorktrees, isGitCheckout } from "./loop-worktree"
 import { createWorkflowsHost } from "./workflows"
 import { createWorkflowRouter } from "./workflow-routing"
-import { createWorkflowMerge } from "./workflow-merge"
+import { createWorkflowMerge, workflowWorktreeHeld } from "./workflow-merge"
 import { createTaskWorktrees } from "./task-worktree"
 import { createAutomationLedgerHost } from "./automation-ledger"
 import { areaOf, defaultPermissionFor, rolesFor, rolesPatch, shellFor } from "./areas"
@@ -317,6 +319,8 @@ type Connection = {
   id: number
   response?(frame: Frame): void
   signal?: AbortSignal
+  /** Aborted when the client goes away, so work started for it (a worktree scan) stops. */
+  ended?: AbortController
   directory?: string
   trace?: boolean
   remoteAddress?: string
@@ -2042,7 +2046,25 @@ export async function startDaemon(options: DaemonOptions) {
    * Storage retention. `storage.clean` and the daily timer share this: sessions open in a terminal are
    * protected on top of the store's own rules (active turn, queue, live loop).
    */
-  async function cleanStorage(input: { olderThanDays: number; dryRun?: boolean; vacuum?: boolean; compact?: boolean; deltaIdleDays?: number; worktrees?: boolean; worktreeIdleDays?: number }) {
+  /** Aborted when the client that asked has gone away (or timed out and closed its connection). */
+  const clientGone = (connection: Connection) => connection.signal && connection.ended ? AbortSignal.any([connection.signal, connection.ended.signal]) : connection.signal ?? connection.ended?.signal
+
+  async function cleanWorktrees(input: { dryRun?: boolean; worktreeIdleDays?: number; artifacts?: boolean; external?: boolean; signal?: AbortSignal }) {
+    const capBytes = worktreeCapBytes(store.settings.get().worktreeCapGb)
+    const worktrees = await projectRestService().storage.clean({
+      ...(input.worktreeIdleDays === undefined ? {} : { idleDays: input.worktreeIdleDays }),
+      ...(input.dryRun ? { dryRun: true } : {}),
+      ...(input.artifacts ? { artifacts: true } : {}),
+      ...(input.external ? { external: true } : {}),
+      ...(capBytes && !input.artifacts ? { capBytes } : {}),
+      ...(input.signal ? { signal: input.signal } : {}),
+    })
+    return { worktreesRemoved: worktrees.removed, worktreeBytes: worktrees.bytes }
+  }
+
+  async function cleanStorage(input: { olderThanDays: number; dryRun?: boolean; vacuum?: boolean; compact?: boolean; deltaIdleDays?: number; worktrees?: boolean; worktreeIdleDays?: number; artifacts?: boolean; external?: boolean; worktreesOnly?: boolean; signal?: AbortSignal }) {
+    // `mendcode worktrees gc`: only the worktrees, the database is not touched.
+    if (input.worktreesOnly) return { dryRun: input.dryRun === true, olderThanDays: 0, sessionsRemoved: 0, eventsRemoved: 0, blobsRemoved: 0, bytesReclaimed: 0, protectedSessions: 0, vacuumed: false, ...await cleanWorktrees(input) }
     const protect = new Set<string>()
     for (const connection of connections) for (const id of connection.subscriptions.keys()) protect.add(id)
     // A full vacuum goes last, after compaction has rewritten rows, so it gives back everything at once.
@@ -2059,10 +2081,7 @@ export async function startDaemon(options: DaemonOptions) {
         deltaEventsRemoved: compacted.deltaEvents,
       }
     }
-    if (input.worktrees) {
-      const worktrees = await projectRestService().storage.clean({ ...(input.worktreeIdleDays === undefined ? {} : { idleDays: input.worktreeIdleDays }), ...(input.dryRun ? { dryRun: true } : {}) })
-      result = { ...result, worktreesRemoved: worktrees.removed, worktreeBytes: worktrees.bytes }
-    }
+    if (input.worktrees || input.artifacts) result = { ...result, ...await cleanWorktrees(input) }
     if (!input.dryRun) {
       // Idle actors of removed sessions hold nothing worth keeping; drop them like a deleted session.
       for (const id of sessionIds as SessionId[]) {
@@ -2085,12 +2104,13 @@ export async function startDaemon(options: DaemonOptions) {
     retentionTimer?.cancel()
     retentionTimer = undefined
     const armed = store.settings.get()
-    if (!armed.retentionDays && !armed.worktreeGcDays) return
+    if (!armed.retentionDays && !effectiveWorktreeGcDays(armed.worktreeGcDays)) return
     const next = new Date(clock.now())
     next.setHours(RETENTION_AT.hours, RETENTION_AT.minutes, 0, 0)
     if (next.getTime() <= clock.now()) next.setDate(next.getDate() + 1)
     retentionTimer = clock.setTimer(next.getTime() - clock.now(), () => {
-      const { retentionDays, worktreeGcDays } = store.settings.get()
+      const { retentionDays } = store.settings.get()
+      const worktreeGcDays = effectiveWorktreeGcDays(store.settings.get().worktreeGcDays)
       // Retention also compacts: what the daily pass keeps is moved into the compact forms.
       if (retentionDays || worktreeGcDays) {
         void cleanStorage({ olderThanDays: retentionDays ?? 0, ...(retentionDays ? { compact: true } : {}), ...(worktreeGcDays ? { worktrees: true, worktreeIdleDays: worktreeGcDays } : {}) }).catch((error: unknown) => logLine("warn", `[DAEMON]: daily storage pass failed: ${error instanceof Error ? error.message : String(error)}`))
@@ -3262,7 +3282,7 @@ export async function startDaemon(options: DaemonOptions) {
   function projectRestService() {
     return projectRest ??= createProjectRest({
       dir: options.dir, defaultDirectory: options.defaultDirectory ?? process.cwd(), store, workspaces: workspaceCatalog, manager: worktrees,
-      occupied: (directory) => store.listSessions({ directory, roots: false, archived: true, limit: 1 }).length > 0 || loops.list(directory).length > 0 || store.workflows.all().some((run) => run.directory === directory),
+      occupied: (directory) => store.listSessions({ directory, roots: false, archived: true, limit: 1 }).length > 0 || loops.list(directory).length > 0 || store.workflows.all().some((run) => run.directory === directory || workflowWorktreeHeld({ dir: options.dir, run, directory })),
       busy: (id) => Boolean(actors.get(id)?.snapshot().turnId || store.lastTurnStatus(id) === "running" || store.queueOf(id).length || busyAside(id)),
       busyAside,
       // A move during the session's own turn (the `worktree` tool) keeps the turn and drops only the approvals.
@@ -4676,13 +4696,20 @@ export async function startDaemon(options: DaemonOptions) {
           return reply(connection, command.id, { ok: false, code: error instanceof FileApiError && error.code === "forbidden" ? "forbidden" : "invalid_command", message: error instanceof FileApiError ? error.message : "File edit failed" })
         }
       }
-      case "storage.report":
-        return reply(connection, command.id, { ok: true, result: { ...store.storageReport(), trashBytes: await projectRestService().storage.trashBytes() } })
+      case "storage.report": {
+        const cap = worktreeCapBytes(store.settings.get().worktreeCapGb)
+        return reply(connection, command.id, { ok: true, result: { ...store.storageReport(), trashBytes: await projectRestService().storage.trashBytes("cached"), ...(cap ? { worktreeCapBytes: cap, worktreeBytes: await projectRestService().storage.managedBytes(clientGone(connection)) } : {}) } })
+      }
       case "storage.worktrees":
         if (connection.remoteAddress || connection.peer) return reply(connection, command.id, { ok: false, code: "forbidden", message: "[DAEMON]: worktree storage is local only" })
-        return reply(connection, command.id, { ok: true, result: await projectRestService().storage.report(command.idleDays) })
+        return reply(connection, command.id, { ok: true, result: await projectRestService().storage.report(command.idleDays, clientGone(connection), {
+          ...(command.measure ? { measure: command.measure } : {}),
+          ...(command.artifacts ? { artifacts: true } : {}),
+          ...(command.external ? { external: true } : {}),
+          ...(worktreeCapBytes(store.settings.get().worktreeCapGb) ? { capBytes: worktreeCapBytes(store.settings.get().worktreeCapGb)! } : {}),
+        }) })
       case "storage.clean":
-        if (command.worktrees && (connection.remoteAddress || connection.peer)) return reply(connection, command.id, { ok: false, code: "forbidden", message: "[DAEMON]: cleaning worktrees is local only" })
+        if ((command.worktrees || command.artifacts || command.external || command.worktreesOnly) && (connection.remoteAddress || connection.peer)) return reply(connection, command.id, { ok: false, code: "forbidden", message: "[DAEMON]: cleaning worktrees is local only" })
         return reply(connection, command.id, {
           ok: true,
           result: await cleanStorage({
@@ -4692,6 +4719,10 @@ export async function startDaemon(options: DaemonOptions) {
             ...(command.compact ? { compact: true } : {}),
             ...(command.deltaIdleDays === undefined ? {} : { deltaIdleDays: command.deltaIdleDays }),
             ...(command.worktrees ? { worktrees: true } : {}),
+            ...(command.artifacts ? { artifacts: true } : {}),
+            ...(command.external ? { external: true } : {}),
+            ...(command.worktreesOnly ? { worktreesOnly: true } : {}),
+            ...(clientGone(connection) ? { signal: clientGone(connection)! } : {}),
             ...(command.worktreeIdleDays === undefined ? {} : { worktreeIdleDays: command.worktreeIdleDays }),
           }),
         })
@@ -4759,7 +4790,7 @@ export async function startDaemon(options: DaemonOptions) {
       }
       case "settings.set": {
         if ("additionalDirectories" in command.patch && connection.remoteAddress) return reply(connection, command.id, { ok: false, code: "forbidden", message: "[DAEMON]: extra directories are set on the machine that runs the commands" })
-        if ("worktreeGcDays" in command.patch && (connection.remoteAddress || connection.peer)) return reply(connection, command.id, { ok: false, code: "forbidden", message: "[DAEMON]: worktree cleanup is set on the machine that holds the worktrees" })
+        if (("worktreeGcDays" in command.patch || "worktreeCapGb" in command.patch) && (connection.remoteAddress || connection.peer)) return reply(connection, command.id, { ok: false, code: "forbidden", message: "[DAEMON]: worktree cleanup is set on the machine that holds the worktrees" })
         if ("prReview" in command.patch && (connection.remoteAddress || connection.peer)) return reply(connection, command.id, { ok: false, code: "forbidden", message: "[DAEMON]: the PR reviewer's concurrency is set on the machine that runs the reviews" })
         if (connection.remoteAddress && REMOTE_HOST_SETTINGS.some((key) => key in command.patch)) return reply(connection, command.id, { ok: false, code: "forbidden", message: "[DAEMON]: proxy, shell and web policy are set on the machine that runs the commands" })
         if ((connection.remoteAddress || connection.peer) && remoteExecutionSettings(command.patch)) return reply(connection, command.id, { ok: false, code: "forbidden", message: "[DAEMON]: execution policy and feature switches are set on the machine that runs the commands" })
@@ -6288,7 +6319,7 @@ export async function startDaemon(options: DaemonOptions) {
   function socketHandlers(remote: boolean, local = false): Bun.SocketHandler<Connection> {
     function open(socket: Bun.Socket<Connection>) {
       if (socket.data) return
-      const connection: Connection = { id: nextConnection++, socket, pending: [], backlog: 0, decoder: new TextDecoder(), buffer: "", subscriptions: new Map(), statusWatches: new Map() }
+      const connection: Connection = { id: nextConnection++, socket, pending: [], backlog: 0, decoder: new TextDecoder(), buffer: "", subscriptions: new Map(), statusWatches: new Map(), ended: new AbortController() }
       socket.data = connection
       connections.add(connection)
       // Unix socket: the kernel says which process connected. Loopback TCP carries no such fact; there only the client's own word is left.
@@ -6371,6 +6402,7 @@ export async function startDaemon(options: DaemonOptions) {
       close(socket) {
         if (!socket.data) return
         clearTimeout(socket.data.authTimer)
+        socket.data.ended?.abort()
         audio.forget(socket.data)
         voice.forget(socket.data)
         connections.delete(socket.data)
@@ -6469,6 +6501,7 @@ export async function startDaemon(options: DaemonOptions) {
     for (const key of [...partialUploads.keys()]) if (key.startsWith(`${connection.id}:`)) partialUploads.delete(key)
   }
   function closeHttp(connection: Connection) {
+    connection.ended?.abort()
     connections.delete(connection)
     forgetUploads(connection)
     uiReload.forget(connection)

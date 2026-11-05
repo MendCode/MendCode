@@ -809,6 +809,12 @@ export const StorageClean = lazySchema(() => z.strictObject({
   /** Also removes the daemon's merged, clean, unused worktrees idle `worktreeIdleDays` (default 14) and old trash. Local only. */
   worktrees: z.boolean().optional(),
   worktreeIdleDays: z.number().int().min(0).max(3650).optional(),
+  /** Instead of removing worktrees: removes heavy ignored output (dist, target, .next) of idle worktrees and stale `bun build` leftovers. Local only. */
+  artifacts: z.boolean().optional(),
+  /** Also removes worktrees git lists that MendCode did not make, when clean, merged and idle. Local only. */
+  external: z.boolean().optional(),
+  /** Only the worktree part: no session retention, vacuum or compaction (`mendcode worktrees gc`). Local only. */
+  worktreesOnly: z.boolean().optional(),
 }))
 
 /** Lists the worktrees the daemon created (size, state, whether cleaning would remove them) and the trash. Local only. Ack: `StorageWorktreesReport`. */
@@ -816,6 +822,12 @@ export const StorageWorktrees = lazySchema(() => z.strictObject({
   ...base,
   type: z.literal("storage.worktrees"),
   idleDays: z.number().int().min(0).max(3650).optional(),
+  /** Also lists heavy ignored output and stale build leftovers. */
+  artifacts: z.boolean().optional(),
+  /** "cached": answer at once with the sizes already known (unknown ones flagged); "full" (default) measures every worktree first. */
+  measure: z.enum(["cached", "full"]).optional(),
+  /** Also lists the worktrees git knows in each project that MendCode did not make. */
+  external: z.boolean().optional(),
 }))
 
 /** Ack result: `ContextReport`; `invalid_command` when the engine cannot report its context. */

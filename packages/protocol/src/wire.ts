@@ -144,3 +144,4 @@ export { FILE_VIEW_MAX_BYTES, FILE_VIEW_MAX_ROWS, FILE_VIEW_MAX_LINE, FILE_VIEW_
 export { highlight, isHighlighted, HIGHLIGHT_LANGUAGES, lexEntry, sanitizeState, isFreshState, type HighlightState } from "./syntax"
 export { ideContext, ideSelectionKey, type IdePosition, type IdeEditorName, type IdeSelection, type IdeReport, type IdeOpenReport } from "./ide-data"
 export { SLASH_LAYOUTS, SLASH_GROUPS, slashProfileProblems, type SlashLayout, type SlashGroupId, type SlashGroup, type SlashPreference } from "./slash-menu-data"
+export { DEFAULT_WORKTREE_GC_DAYS, effectiveWorktreeGcDays, worktreeCapBytes } from "./worktree-gc-data"

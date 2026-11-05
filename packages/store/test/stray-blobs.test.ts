@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test"
-import { existsSync, mkdtempSync, rmSync, utimesSync } from "node:fs"
+import { existsSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { createIdFactory, type SessionId } from "@mendcode/protocol"
@@ -84,4 +84,14 @@ test("with encryption on, the sweep removes only the sealed stray and sent image
   expect(existsSync(store.blobPath(stray.sha256))).toBe(false)
   expect(new Uint8Array(store.readBlob(sent.sha256))).toEqual(image(7))
   store.close()
+})
+
+test("loose files in the blobs folder (.DS_Store) are skipped by the scan, the stray sweep and the byte total", () => {
+  const { dir, store } = setup()
+  const blob = store.putBlob(image(3), "image/png")
+  writeFileSync(path.join(dir, "blobs", ".DS_Store"), "finder")
+  writeFileSync(path.join(dir, "blobs", "notes.txt"), "loose")
+  expect(() => store.removeStrayBlobs()).not.toThrow()
+  expect(store.storageReport().blobBytes).toBe(4096)
+  expect(existsSync(store.blobPath(blob.sha256))).toBe(true)
 })

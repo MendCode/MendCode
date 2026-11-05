@@ -41,6 +41,7 @@ import { worktreeText } from "./worktree-output"
 import { UNINSTALL_USAGE } from "@mendcode/upgrade/uninstall-args"
 import { versionLine } from "@mendcode/upgrade/releases"
 import { CACHE_USAGE, parseCache, type CacheAutomation } from "./cache-args"
+import { WORKTREES_USAGE, parseWorktrees, type WorktreesAutomation } from "./worktrees-args"
 import { APPLY_USAGE, parseApply, type ApplyAutomation } from "./apply-args"
 import { packageArguments, packageCatalogText, type PackageAutomation } from "./package-args"
 import { AI_CONFIG_USAGE, parseAIConfig, type AIConfigAutomation } from "./ai-config-args"
@@ -133,7 +134,7 @@ export type Automation = Common &
     | LoopAutomation
     | ProjectAutomation
     | WorktreeAutomation
-    | CacheAutomation | ApplyAutomation
+    | CacheAutomation | ApplyAutomation | WorktreesAutomation
     | PackageAutomation
     | { kind: "plugin.install"; spec: string; global: boolean; force: boolean }
     | { kind: "plugin.auth"; provider?: string; method: number }
@@ -333,6 +334,7 @@ export const USAGE: Record<string, string> = {
   export: TRANSFER_EXPORT_USAGE,
   import: TRANSFER_IMPORT_USAGE,
   worktree: WORKTREE_USAGE,
+  worktrees: WORKTREES_USAGE,
   mflow: MFLOW_USAGE,
   uninstall: UNINSTALL_USAGE,
   cache: CACHE_USAGE,
@@ -423,6 +425,8 @@ export function parseAutomation(argv: string[]): ParseResult {
   if (mflow) return mflow
   const worktree = parseWorktree(argv)
   if (worktree) return worktree
+  const worktrees = parseWorktrees(argv)
+  if (worktrees) return worktrees
   if (argv[0] === "control-plane" && ["workflow", "workflows"].includes(argv[1] ?? "")) argv = argv.slice(1)
   if (argv[0] === "workflows") argv = ["workflow", ...(argv.length === 1 ? ["list"] : argv.slice(1))]
   const cache = parseCache(argv)
@@ -1288,6 +1292,10 @@ export async function runAutomation(command: Automation, deps: AutomationDeps): 
     case "apply": {
       const { createApplyAutomation } = await import("./apply-automation")
       return createApplyAutomation({ client, directory: dir, result, fail })(command)
+    }
+    case "worktrees": {
+      const { createWorktreesAutomation } = await import("./worktrees-automation")
+      return createWorktreesAutomation({ client, err, result, fail })(command)
     }
     case "cache": {
       const { createCacheAutomation } = await import("./cache-automation")

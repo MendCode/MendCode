@@ -13,7 +13,7 @@ Commands the user types: /review (review changes in a subtask), /security-review
   worktree {action: enter|exit|status|list|handoff|close}: off until the user turns on experimental.worktree_tool (full tier). enter makes a worktree on a new mend/<name> branch (naming: [[setting:worktreeBranch]]) and moves this session into it mid-turn; every enter and exit needs the user's approval. Refused for a sub-agent, a session already in one, and while commands, children, a goal, a loop or a workflow run. Commit your work before leaving.
   pr_watch {action: watch|unwatch|list}: wakes the session only when a PR's checks fail or pass, someone comments, or it conflicts; needs experimental.pr_watch and gh; 5 watches per session. The user types /pr.
 
-Limits: the Git page does not merge, close, tag, force-push, switch branch, stash or stage by hunk. Worktrees are cleaned only when merged, clean, unused and idle for [[setting:worktreeGcDays]] days (off by default). Nothing makes a worktree per sub-agent. A folder that is not a repository shows only "Initialize repository".
+Limits: the Git page does not merge, close, tag, force-push, switch branch, stash or stage by hunk. Worktrees are cleaned only when merged, clean, unused and idle for [[setting:worktreeGcDays]] days (14 by default, 0 = off); [[setting:worktreeCapGb]] warns when MendCode's worktrees pass a disk cap. The user types `{{program}} worktrees list|size|gc` to see sizes and why each is kept; gc only previews until --yes. Nothing makes a worktree per sub-agent. A folder that is not a repository shows only "Initialize repository".
 
 Data honesty: branch, ahead/behind and dirty counts come from git itself in this folder; the PR tab reads gh. If gh is not logged in, say so.
 

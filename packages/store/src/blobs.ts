@@ -84,11 +84,17 @@ export function createBlobFiles(root: string, privacy?: { enabled(): boolean; se
     /** Every file in the store (including partial `.tmp` writes) with size and mtime. */
     scan() {
       const files: Array<{ name: string; bytes: number; mtimeMs: number }> = []
-      for (const dir of readdirSync(root)) {
-        const full = path.join(root, dir)
-        for (const file of readdirSync(full)) {
-          const stat = statSync(path.join(full, file))
-          files.push({ name: file, bytes: stat.size, mtimeMs: stat.mtimeMs })
+      // Only the two-letter shard directories hold blobs; a stray file next to them (.DS_Store) is not a shard, and an entry that vanishes mid-scan is skipped.
+      for (const dir of readdirSync(root, { withFileTypes: true })) {
+        if (!dir.isDirectory()) continue
+        const full = path.join(root, dir.name)
+        let names: string[]
+        try { names = readdirSync(full) } catch { continue }
+        for (const file of names) {
+          try {
+            const stat = statSync(path.join(full, file))
+            if (stat.isFile()) files.push({ name: file, bytes: stat.size, mtimeMs: stat.mtimeMs })
+          } catch { /* removed while scanning */ }
         }
       }
       return files

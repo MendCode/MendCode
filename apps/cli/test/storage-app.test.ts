@@ -112,11 +112,11 @@ describe("storage page in the app", () => {
     const { app, sent, text, tick } = await harness(trees)
     await app.onKey("w")
     await tick()
-    expect(sent.find((c) => c.type === "storage.clean")).toEqual({ type: "storage.clean", olderThanDays: 0, dryRun: true, worktrees: true })
+    expect(sent.find((c) => c.type === "storage.clean")).toEqual({ type: "storage.clean", olderThanDays: 0, dryRun: true, worktrees: true, worktreeIdleDays: 14 })
     expect(text().some((line) => line.includes("remove 2 merged, clean, unused worktrees or trash entries (≈3.0 GB)? y/n"))).toBe(true)
     await app.onKey("y")
     await tick()
-    expect(sent.filter((c) => c.type === "storage.clean").at(-1)).toEqual({ type: "storage.clean", olderThanDays: 0, worktrees: true })
+    expect(sent.filter((c) => c.type === "storage.clean").at(-1)).toEqual({ type: "storage.clean", olderThanDays: 0, worktrees: true, worktreeIdleDays: 14 })
   })
 
   test("esc leaves the page", async () => {

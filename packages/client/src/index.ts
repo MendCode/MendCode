@@ -28,6 +28,8 @@ export function commandTimeout(command: CommandInput | Command, defaultMs: numbe
   if (command.type === "setup.ask") return Math.max(defaultMs, 35_000)
   // From a session's shell, a mode above its own can wait on the user's card (daemon `ELEVATION_WAIT_MS`).
   if (command.type === "session.permission.set" && command.launch) return Math.max(defaultMs, 125_000)
+  // A scan of many large worktrees measures disk; the daemon stops it when the client leaves.
+  if (command.type === "storage.worktrees" || command.type === "storage.clean" && (command.worktrees || command.artifacts || command.worktreesOnly)) return Math.max(defaultMs, 10 * 60_000)
   if (command.type === "release.check") return Math.max(defaultMs, 30_000)
   // A PR review is two model passes over the whole diff; the hosted workflow's job stops at 30 minutes.
   if (command.type === "github.run" && command.input.review) return Math.max(defaultMs, 35 * 60_000)

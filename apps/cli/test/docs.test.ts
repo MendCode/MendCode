@@ -234,7 +234,7 @@ describe("docs: live lines of the feature cards", () => {
   const context = (settings?: Record<string, unknown>) => ({ dataDir: temp(), cwd: temp(), settings, prompt: undefined })
   test("a card about features says on or off with the reason and the switch, and without a daemon it says nothing is known", () => {
     expect(liveLines("git", context({ tier: "minimalist" })).join("\n")).toMatch(/off \(tier minimalist\) · \/tier balanced includes it/)
-    expect(liveLines("git", context({ tier: "balanced" })).join("\n")).toContain("worktreeGcDays off (default)")
+    expect(liveLines("git", context({ tier: "balanced" })).join("\n")).toContain("worktreeGcDays 14 (default)")
     expect(liveLines("git", context(undefined)).join("\n")).toContain("no daemon running")
     expect(liveLines("memory", context({ tier: "balanced", memoryUse: true })).join("\n")).toMatch(/memoryUse true · memoryGenerate false \(default\)/)
   })

@@ -1,4 +1,5 @@
 import { formatBytes, storageConfirmClean, storageNote } from "../lazy-pages"
+import { effectiveWorktreeGcDays } from "@mendcode/protocol/wire"
 import type { Settings, StorageCleanResult, StorageReport } from "@mendcode/protocol"
 import type { StoragePageAction } from "../../view/storage-page"
 import type { AppContext } from "./context"
@@ -13,7 +14,7 @@ export function createStorage(ctx: AppContext) {
       state.storageError = ""
     } else state.storageError = reply.error.code === "invalid_command" ? "the daemon is older than this terminal; restart it" : reply.error.message
     state.storageRetention = settings.ok ? (settings.result?.settings as Settings | undefined)?.retentionDays : undefined
-    state.storageWorktreeGc = settings.ok ? (settings.result?.settings as Settings | undefined)?.worktreeGcDays : undefined
+    state.storageWorktreeGc = settings.ok ? effectiveWorktreeGcDays((settings.result?.settings as Settings | undefined)?.worktreeGcDays) : undefined
     requestFrame()
   }
 

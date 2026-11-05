@@ -73,15 +73,35 @@ describe("storage over the wire", () => {
     }
   })
 
-  test("worktreeGcDays is a local setting between 1 and 3650 days, cleared with null", async () => {
+  test("worktrees: a cached listing, a worktrees-only clean, and a client that leaves mid-request does not stop the daemon", async () => {
+    const { client, daemon } = await boot()
+    const cached = await client.send({ type: "storage.worktrees", measure: "cached", external: true })
+    expect(StorageWorktreesReport.parse(cached.ok ? cached.result : {})).toMatchObject({ worktrees: [] })
+    const only = await client.send({ type: "storage.clean", olderThanDays: 0, worktreesOnly: true, worktrees: true, dryRun: true })
+    expect(StorageCleanResult.parse(only.ok ? only.result : {})).toMatchObject({ dryRun: true, sessionsRemoved: 0, worktreesRemoved: 0 })
+    // A second client asks and goes away before the answer; the daemon keeps serving.
+    const leaver = createClient({ socketPath: daemon.socketPath, name: "leaver" })
+    await leaver.connect()
+    void leaver.send({ type: "storage.worktrees" })
+    leaver.close()
+    const after = await client.send({ type: "storage.worktrees", measure: "cached" })
+    expect(after.ok).toBe(true)
+  })
+
+  test("worktreeGcDays is a local setting between 0 (off) and 3650 days, cleared with null", async () => {
     const { client, remote } = await boot()
-    expect((await client.send({ type: "settings.set", patch: { worktreeGcDays: 0 } })).ok).toBe(false)
+    const peer = await remote(false)
+    expect((await client.send({ type: "settings.set", patch: { worktreeGcDays: 3651 } })).ok).toBe(false)
+    expect((await client.send({ type: "settings.set", patch: { worktreeGcDays: 0 } })).ok).toBe(true)
+    expect((await client.send({ type: "settings.set", patch: { worktreeCapGb: 0 } })).ok).toBe(false)
+    expect((await client.send({ type: "settings.set", patch: { worktreeCapGb: 20 } })).ok).toBe(true)
+    expect(await peer.send({ type: "settings.set", patch: { worktreeCapGb: 5 } })).toMatchObject({ ok: false, error: { code: "forbidden" } })
     expect((await client.send({ type: "settings.set", patch: { worktreeGcDays: 14 } })).ok).toBe(true)
     const read = await client.send({ type: "settings.get" })
     expect(read.ok && (read.result?.settings as { worktreeGcDays?: number }).worktreeGcDays).toBe(14)
     expect((await client.send({ type: "settings.set", patch: { worktreeGcDays: null } as never })).ok).toBe(true)
     const cleared = await client.send({ type: "settings.get" })
     expect(cleared.ok && (cleared.result?.settings as { worktreeGcDays?: number }).worktreeGcDays).toBeUndefined()
-    expect(await (await remote(false)).send({ type: "settings.set", patch: { worktreeGcDays: 14 } })).toMatchObject({ ok: false, error: { code: "forbidden" } })
+    expect(await peer.send({ type: "settings.set", patch: { worktreeGcDays: 14 } })).toMatchObject({ ok: false, error: { code: "forbidden" } })
   })
 })

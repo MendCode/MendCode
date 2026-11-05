@@ -575,8 +575,10 @@ const SharedSettings = lazySchema(() => z.strictObject({
   memoryPolicies: z.partialRecord(z.enum(MEMORY_CATEGORY_IDS), z.enum(MEMORY_POLICIES)).optional(),
   /** Once a day (03:30 local) remove sessions idle for this many days, then orphan blobs; off when unset. */
   retentionDays: z.number().int().min(7).max(3650).optional(),
-  /** In the same daily pass (03:30 local): remove the daemon's merged, clean, unused worktrees idle this many days; off when unset. */
-  worktreeGcDays: z.number().int().min(1).max(3650).optional(),
+  /** In the same daily pass (03:30 local): remove the daemon's merged, clean, unused worktrees idle this many days; 14 when unset, 0 turns it off. */
+  worktreeGcDays: z.number().int().min(0).max(3650).optional(),
+  /** Disk cap in GB for the worktrees MendCode manages: the storage page warns above it and the daily pass frees safe ones first; nothing unsafe is removed. Unset = no cap. */
+  worktreeCapGb: z.number().int().min(1).max(100_000).optional(),
   /**
    * Branch names of worktrees the `worktree` tool creates (docs/worktrees.md): `static` (default) = `prefix` (default `mend/`) plus the name · `semantic` = the
    * model picks a short type prefix such as `fix` or `feat` and the branch is `<type>/<name>` · `custom` = the model follows `instruction` and names the whole branch.
@@ -895,6 +897,9 @@ export const StorageReport = lazySchema(() => z.strictObject({
   savedBytes: z.number().int().nonnegative().optional(),
   /** Daemon trash (worktrees removed with a safety copy kept); old entries go with `storage clean --worktrees`. */
   trashBytes: z.number().int().nonnegative().optional(),
+  /** With `worktreeCapGb` set: what MendCode's worktrees take and the cap, so the page can warn. */
+  worktreeBytes: z.number().int().nonnegative().optional(),
+  worktreeCapBytes: z.number().int().positive().optional(),
   /**
    * Forks share the model history they start from instead of copying it: `forkRefs` histories point at a parent,
    * `sharedMessages` / `sharedBytes` are what they read through those references (logical size; stored once, so not in `engineBytes` again).
@@ -911,11 +916,15 @@ export type StorageReport = z.infer<typeof StorageReport>
 
 export const StorageWorktree = lazySchema(() => z.strictObject({
   directory: z.string().max(4096),
+  /** Who made it: a project sandbox, a loop, fan-out, workflow, workflow merge or compound run, or a worktree git lists that MendCode did not make. */
+  kind: z.enum(["sandbox", "loop", "fanout", "workflow", "merge", "compound", "external"]).optional(),
   branch: z.string().max(300).nullable(),
   bytes: z.number().int().nonnegative(),
   /** merged: branch is in the project's HEAD · unmerged: has commits not merged · missing: directory is gone. */
   state: z.enum(["merged", "unmerged", "missing"]),
   clean: z.boolean(),
+  /** false: `bytes` is 0 because the size has not been measured yet (a listing answers without measuring; `worktrees size` does). */
+  bytesKnown: z.literal(false).optional(),
   idleDays: z.number().int().nonnegative(),
   /** A session, loop or workflow works in it. */
   occupied: z.boolean(),
@@ -925,6 +934,16 @@ export const StorageWorktree = lazySchema(() => z.strictObject({
 }))
 export type StorageWorktree = z.infer<typeof StorageWorktree>
 
+export const StorageArtifact = lazySchema(() => z.strictObject({
+  /** The worktree (or project checkout) that holds it. */
+  directory: z.string().max(4096),
+  /** Path relative to `directory`. */
+  path: z.string().max(4096),
+  bytes: z.number().int().nonnegative(),
+  kind: z.enum(["directory", "bun-build"]),
+}))
+export type StorageArtifact = z.infer<typeof StorageArtifact>
+
 export const StorageWorktreesReport = lazySchema(() => z.strictObject({
   worktrees: z.array(StorageWorktree).max(500),
   totalBytes: z.number().int().nonnegative(),
@@ -932,6 +951,14 @@ export const StorageWorktreesReport = lazySchema(() => z.strictObject({
   trashBytes: z.number().int().nonnegative(),
   /** Bytes inside the daemon's loop worktree root (`loop-worktrees`). */
   loopBytes: z.number().int().nonnegative(),
+  /** `worktreeCapGb` in bytes and what MendCode's own worktrees take (external ones do not count), when a cap is set. */
+  capBytes: z.number().int().positive().optional(),
+  managedBytes: z.number().int().nonnegative().optional(),
+  /** How many worktrees have no measured size yet. */
+  unmeasured: z.number().int().positive().optional(),
+  /** Heavy ignored output (dist, target, .next, node_modules) of idle worktrees and stale `bun build` leftovers; listed only when asked. */
+  artifacts: z.array(StorageArtifact).max(500).optional(),
+  artifactBytes: z.number().int().nonnegative().optional(),
 }))
 export type StorageWorktreesReport = z.infer<typeof StorageWorktreesReport>
 

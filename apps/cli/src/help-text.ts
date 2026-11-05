@@ -461,3 +461,21 @@ export const STORAGE_HELP = text([
   "",
   "  --older-than 90d  --delta-idle 3d  --worktree-idle 14d",
 ])
+
+export const WORKTREES_HELP = text([
+  `usage: ${P} worktrees <command> [options]`,
+  "",
+  "  list                    each worktree: size, state, why it is kept",
+  "  size                    totals per kind, the disk cap and heavy ignored output",
+  "  gc                      what cleaning would remove; --yes removes it",
+  "",
+  "options:",
+  "  --yes                   gc: remove (without it gc only previews)",
+  "  --artifacts             gc: only heavy ignored output (dist, target, .next)",
+  "                          and stale bun-build files of idle worktrees",
+  "  --idle 14d              idle days before a worktree qualifies",
+  "  --json  --dir DATA",
+  "",
+  "A worktree is removed only when clean, merged, unused and idle. Worktrees",
+  "git lists that MendCode did not make are shown, and removed only by gc --yes.",
+])

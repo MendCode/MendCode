@@ -1,5 +1,5 @@
 import { foldLetter } from "../ui/caps-lock"
-import { DEFAULT_COMPACT_AT_TOKENS, DEFAULT_COMPACT_NOTICE_PERCENT, DEFAULT_IDLE_COMPACT_AT_TOKENS, featureOn } from "@mendcode/protocol/wire"
+import { DEFAULT_COMPACT_AT_TOKENS, DEFAULT_COMPACT_NOTICE_PERCENT, DEFAULT_IDLE_COMPACT_AT_TOKENS, DEFAULT_WORKTREE_GC_DAYS, featureOn } from "@mendcode/protocol/wire"
 import type { Settings } from "@mendcode/protocol"
 import { glyphs as defaultGlyphs, type ColorName, type Glyphs, type Line, type Span } from "../ui/theme"
 import { panelGrid, clip, fit, columns } from "./deck"
@@ -118,7 +118,7 @@ const SUBAGENT_TREE_PRESETS = ["8", "default", "32", "64", "128", "256"]
 const COMPACT_RANGE = { min: 8_000, max: 2_000_000 }
 const RETENTION_RANGE = { min: 7, max: 3_650 }
 const WORKTREE_GC_PRESETS = ["off", "7", "14", "30"]
-const WORKTREE_GC_RANGE = { min: 1, max: 3_650 }
+const WORKTREE_GC_RANGE = { min: 0, max: 3_650 }
 const UP = new Set(["\x1b[A", "\x1bOA", "\x10", "k"])
 const DOWN = new Set(["\x1b[B", "\x1bOB", "\x0e", "j"])
 const LEFT = new Set(["\x1b[D", "\x1bOD", "h"])
@@ -240,8 +240,8 @@ function choose(def: RowDef, values: SettingsValues, themes: readonly string[], 
       return { type: "set", patch: { retentionDays: next === "off" ? null : Number(next) } }
     }
     case "worktreeGcDays": {
-      const next = cycle(WORKTREE_GC_PRESETS, settings.worktreeGcDays === undefined ? "off" : String(settings.worktreeGcDays), direction)
-      return { type: "set", patch: { worktreeGcDays: next === "off" ? null : Number(next) } }
+      const next = cycle(WORKTREE_GC_PRESETS, settings.worktreeGcDays === 0 ? "off" : String(settings.worktreeGcDays ?? DEFAULT_WORKTREE_GC_DAYS), direction)
+      return { type: "set", patch: { worktreeGcDays: next === "off" ? 0 : Number(next) } }
     }
     case "footer":
       // A custom footer goes back to the default; choosing segments is `/footer +branch -quota`.
@@ -433,7 +433,7 @@ function shown(def: RowDef, values: SettingsValues, state: SettingsPageState): S
     case "worktreeGcDays":
       return state.typing !== undefined
         ? { text: `${state.typing}_`, fg: "warning", note: "days · enter saves · esc cancels", arrows: true }
-        : { text: settings.worktreeGcDays === undefined ? "off" : `${settings.worktreeGcDays} days`, fg: settings.worktreeGcDays === undefined ? "muted" : "text", note: "remove merged, clean, unused worktrees · type days", arrows: true }
+        : { text: settings.worktreeGcDays === 0 ? "off" : `${settings.worktreeGcDays ?? DEFAULT_WORKTREE_GC_DAYS} days`, fg: settings.worktreeGcDays === 0 ? "muted" : "text", note: "remove merged, clean, unused worktrees · type days", arrows: true }
     case "storage":
       return { text: "", fg: "muted", note: "enter opens /storage", arrows: false }
     case "customize":
@@ -526,7 +526,7 @@ const SETTINGS_HELP: Record<SettingsRow, string> = {
   acp: "Open /acp to manage opt-in external agent definitions. Unconfigured agents are not launched.",
   dreamAt: "off disables daily memory consolidation; HH:MM schedules it at that local time.",
   retentionDays: "off keeps idle sessions. Choose 30/90/180/365 or type 7-3650 days to set retention.",
-  worktreeGcDays: "off keeps worktrees. Choose 7/14/30 or type 1-3650 days. Only merged, clean, unused worktrees qualify.",
+  worktreeGcDays: "Default 14 days. off (0) keeps worktrees. Choose 7/14/30 or type days. Only merged, clean, unused worktrees qualify.",
   storage: "Open /storage to inspect disk usage and explicit cleanup options. Viewing usage removes nothing.",
   customize: "Open /customize for prompt, transcript and home appearance. Changes preview live and save locally.",
   extensions: "Open /extensions to inspect registered commands, tools and UI modules, including load errors.",

@@ -11,6 +11,8 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### New
 
+- `mendcode worktrees list|size|gc`: every worktree with its size, state and why it is kept, including worktrees git lists that MendCode did not make. `gc` previews and `--yes` removes; `gc --artifacts` clears `dist`, `target`, `.next` and `bun build` leftovers of idle worktrees without removing them. See [storage](docs/storage.md#what-changed).
+- `worktreeCapGb` warns on `/storage` when MendCode's worktrees pass a size you choose and frees only safe ones to get under it.
 - A daemon restart no longer leaves your turns interrupted for good: sessions it stopped, including `run --bg` children, continue when it starts again, and a `run --bg` child keeps its launching session across the restart. A session that cannot continue tells its launcher. `daemon restart` says which turns are running when it refuses, and what `--force` interrupted. Turn it off with `resumeAfterRestart: false`. See [automation](docs/automation.md#background-sessions-b17).
 - Sessions started with `run --bg` that wait for approval are announced: the launching session is told once (it cannot approve), and your terminal gets one card with Approve all, Deny all or One by one. `session status` and `logs` name what a session waits on.
 - `mendcode dev start|restart|stop|status|tui|run`: a second daemon on its own data directory that runs the current checkout, marked DEV and restarted without touching the daemon your sessions use, so MendCode can be programmed from MendCode. See [dev mode](docs/dev-mode.md).
@@ -56,6 +58,10 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Changed
 
+- Unused worktrees are cleaned by default: clean, merged ones idle for 14 days go in the daily pass (`worktreeGcDays: 0` turns it off). Worktrees of workflows, merges, compound runs and loops are included, and a compound run that changed nothing removes its worktree when it ends.
+- `mendcode worktrees list` answers at once and `size` shows its progress, however many large worktrees there are; sizes are measured with `du`, scans stop when the client leaves, and identical scans are shared.
+- The blobs scan skips loose files such as `.DS_Store` instead of failing to prune snapshots.
+- `bun run build` deletes the leftover `.bun-build` temp files from its output folder.
 - Image generation uses GPT Image 2.6 (2.5 if your account lacks it), and `image_gen` can make transparent PNGs. See [tools](docs/tools-web.md).
 - Inside a sub-agent the chat says so everywhere: one line under the top edge with its name, state, parent session and the keys back (also with the top bar off, and alone in the `minimal` tier), its row in the Agents strip filled, and the prompt in its colour with a hint of whom a message goes to.
 - The compaction card keeps its frame and shows no spinner of its own while the activity line shows one, so only one loader runs.
