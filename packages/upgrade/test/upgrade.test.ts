@@ -70,15 +70,16 @@ describe("install", () => {
 
   test("refuses a data directory that is, or is inside, a legacy MendCode directory", () => {
     const home = "/home/someone"
-    for (const dir of ["/home/someone/.mendcode", "/home/someone/.mendcode/x", "/home/someone/.local/share/mendcode", "/home/someone/.local/share/mendcode/bin"]) {
+    for (const dir of ["/home/someone/.mendcode-v1", "/home/someone/.mendcode-v1/x", "/home/someone/.local/share/mendcode", "/home/someone/.local/share/mendcode/bin"]) {
       expect(() => resolveDataDir({ dataDir: dir, home })).toThrow("legacy MendCode")
     }
+    expect(resolveDataDir({ dataDir: "/home/someone/.mendcode", home })).toBe("/home/someone/.mendcode")
     expect(resolveDataDir({ dataDir: "/home/someone/.mendcode-v2", home })).toBe("/home/someone/.mendcode-v2")
   })
 
   test("never writes when the data directory belongs to v1", async () => {
     const box = sandbox()
-    const v1 = path.join(box.home, ".mendcode")
+    const v1 = path.join(box.home, ".mendcode-v1")
     mkdirSync(v1, { recursive: true })
     const { ports } = fakePorts([release({ tag: "v1.1.0", binaries: linux("x") })])
     expect((await failure(runUpgrade(box.request({ dataDir: v1 }), ports))).code).toBe("bad-data-dir")

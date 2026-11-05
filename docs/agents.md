@@ -11,8 +11,8 @@ call it makes. Ported from v1 (`agent/agent.ts`, `.mendcode/agent/*.md`) onto v2
 
 | Layer | Folder | Trust |
 |---|---|---|
-| a user package | `~/.mendcode-v2/packages/<pkg>/agents/` | always |
-| the user's own | `~/.mendcode-v2/agents/` | always |
+| a user package | `~/.mendcode/packages/<pkg>/agents/` | always |
+| the user's own | `~/.mendcode/agents/` | always |
 | a project package | `<project>/.mendcode/packages/<pkg>/agents/` | project must be trusted |
 | the project's own | `<project>/.mendcode/agents/` | project must be trusted |
 

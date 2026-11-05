@@ -19,7 +19,7 @@ export function resolveRepo(env: Record<string, string | undefined>) {
 }
 
 export type UpgradeRequest = {
-  /** The data directory exactly as the rest of the CLI resolves it (--dir, MENDCODE_V2_DIR, default). */
+  /** The data directory exactly as the rest of the CLI resolves it (--dir, MENDCODE_DIR or MENDCODE_V2_DIR, default). */
   dataDir: string
   home: string
   /** `owner/name`; not read for a rollback. */

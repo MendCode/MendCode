@@ -1,4 +1,5 @@
 import path from "node:path"
+import { sameDir } from "@mendcode/program/data-dir"
 import type { CommandInput, CommandReply } from "@mendcode/client"
 import type { DaemonStatusReport, DaemonLogsReport } from "@mendcode/protocol"
 import { redactSecrets } from "@mendcode/protocol/wire"
@@ -122,7 +123,8 @@ export function createDaemonServiceCli(deps: DaemonServiceDeps) {
         const reply = await peer.send({ type: "daemon.status" })
         if (!reply.ok) throw new Error(reply.error.message)
         const report = reply.result as unknown as DaemonStatusReport
-        if (path.resolve(report.dataDir) !== path.resolve(deps.dir)) throw new Error("Daemon data directory mismatch")
+        // Followed through links: a daemon an older terminal started on `~/.mendcode-v2` serves `~/.mendcode` after the move.
+        if (!sameDir(report.dataDir, deps.dir)) throw new Error("Daemon data directory mismatch")
         return report
       }
       const busy = async () => {

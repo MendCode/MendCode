@@ -4,5 +4,5 @@
   "private": true,
   "type": "module",
   "exports": { ".": "./src/index.ts", "./media": "./src/media.ts" },
-  "dependencies": { "@mendcode/packages": "workspace:*", "zod": "4.6.6" }
+  "dependencies": { "@mendcode/packages": "workspace:*", "@mendcode/program": "workspace:*", "zod": "4.6.6" }
 }

@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { dataDirFromEnv, defaultDataDirNow, isDefaultDataDir, mendEnv } from "@mendcode/program/data-dir"
 import { engineEnvironment } from "./engine-environment"
 import { instructionControls, projectSources } from "./project-control"
 import { remoteInstructions } from "./remote-instructions"
@@ -121,8 +122,8 @@ import { hosting } from "./hosting"
 import { createLocalDictation } from "./voice-local"
 import { DETACHED_IDLE_EXIT_MS, runsAsUserService } from "./user-service"
 
-/** Data lives in ~/.mendcode-v2, fully separate from legacy MendCode (~/.local/share/mendcode is never touched). */
-export const DEFAULT_DIR = path.join(homedir(), ".mendcode-v2")
+/** Data lives in ~/.mendcode (moved from ~/.mendcode-v2 by the CLI, apps/cli/src/data-dir-move.ts); ~/.local/share/mendcode is never touched. */
+export const DEFAULT_DIR = defaultDataDirNow()
 
 /** The daemon's flags: this process's own, or the host's when the terminal runs the daemon in-process (./hosting). */
 const argv = hosting.argv ?? process.argv
@@ -147,7 +148,9 @@ function arg(name: string) {
 
 // Started lean (apps/cli/src/launcher.ts LEAN_JIT): JSC has read its options, so the user's commands run by this daemon get the environment the user had.
 if (process.env.MENDCODE_V2_LEAN_JIT === "1") for (const key of ["BUN_JSC_useDFGJIT", "BUN_JSC_useFTLJIT", "BUN_JSC_thresholdForJITAfterWarmUp", "BUN_JSC_thresholdForJITSoon", "MENDCODE_V2_LEAN_JIT"]) delete process.env[key]
-const dir = arg("dir") ?? process.env.MENDCODE_V2_DIR ?? DEFAULT_DIR
+const dir = arg("dir") ?? dataDirFromEnv(process.env) ?? DEFAULT_DIR
+/** The default directory under either name: a user service still started with `--dir ~/.mendcode-v2` reads the same home layers. */
+const atDefaultDir = isDefaultDataDir(dir)
 
 /**
  * The PR reviewer's config control for `review_config`, loaded on the tool's first call (config layers, profiles and YAML stay out
@@ -202,7 +205,7 @@ const hiddenGraphTools = (directory: string): readonly string[] => {
 }
 const socketPath = arg("socket") ?? path.join(dir, "mendd.sock")
 /** native = MendCode's own loop on the user's ChatGPT subscription; codex = Codex app-server; faux = offline test engine. */
-const engineName = arg("engine") ?? process.env.MENDCODE_V2_ENGINE ?? "native"
+const engineName = arg("engine") ?? mendEnv(process.env, "ENGINE") ?? "native"
 const cwd = arg("cwd") ?? process.cwd()
 
 const systemPrompt = engineName === "native" ? await loadSystemPrompt() : () => ""
@@ -439,7 +442,7 @@ const createFauxEngine = engineName !== "native" && engineName !== "codex" ? (aw
 
 const otlp = otlpFromEnvironment(process.env)
 /** The home whose other programs this daemon may read: the user's for the default data directory, a given one for tests, none for a private `--dir`. */
-const foreignRoot = process.env.MENDCODE_FOREIGN_HOME || (dir === DEFAULT_DIR ? homedir() : undefined)
+const foreignRoot = process.env.MENDCODE_FOREIGN_HOME || (atDefaultDir ? homedir() : undefined)
 export const daemon = await startDaemon({
   ...(arg("http-listen") ? { httpListen: arg("http-listen")! } : {}),
   runtimeInfo: { version: packageJson.version, channel: packageJson.version.includes("beta") ? "beta" : packageJson.version.includes("dev") ? "dev" : "stable" },
@@ -465,7 +468,7 @@ export const daemon = await startDaemon({
   // ~/.agents and ~/.claude are read only by a daemon on the default data directory (or one told where home is), so a private --dir stays self-contained.
   // The same rule for the chats other programs keep (`threads`): only the daemon on the default data directory reads them.
   ...(foreignRoot ? { foreignThreads: { homes: { claude: process.env.CLAUDE_CONFIG_DIR?.trim() || path.join(foreignRoot, ".claude"), codex: process.env.CODEX_HOME?.trim() || path.join(foreignRoot, ".codex") }, v1Db: path.join(process.env.MENDCODE_FOREIGN_HOME ? path.join(foreignRoot, ".local", "share") : process.env.XDG_DATA_HOME?.trim() || path.join(foreignRoot, ".local", "share"), "mendcode", "mendcode-local.db") } } : {}),
-  ...(process.env.MENDCODE_FOREIGN_HOME ? { foreignHome: process.env.MENDCODE_FOREIGN_HOME } : dir === DEFAULT_DIR ? { foreignHome: homedir() } : {}),
+  ...(process.env.MENDCODE_FOREIGN_HOME ? { foreignHome: process.env.MENDCODE_FOREIGN_HOME } : atDefaultDir ? { foreignHome: homedir() } : {}),
   ...(process.env.MENDCODE_REASONING_ENDPOINT && process.env.MENDCODE_REASONING_TOKEN ? { reasoningEvaluator: createLoopbackJevEvaluator({ endpoint: process.env.MENDCODE_REASONING_ENDPOINT, token: process.env.MENDCODE_REASONING_TOKEN }) } : {}),
   codegraphStatus,
   ...(graphAutopilot ? { graphAutopilot } : {}),
@@ -544,7 +547,7 @@ export const daemon = await startDaemon({
     builtinTools.push(createReviewConfigTool({ control: lazyReviewConfigControl(dir), enabled: prReviewOn, setup: lazyReviewSetup(dir, memory, (directory) => memorySettings(store.settings.get(), directory).memoryEnabled !== false) }))
     // `pr_review` (pr_review): one PR reviewed now by the daemon's own reviewer (the session's `prReview` port), never by a comment.
     builtinTools.push(createPrReviewTool({ enabled: prReviewOn }))
-    // Interactive sessions need a pseudo-terminal: macOS and Linux under Bun, Windows only with MENDCODE_V2_CONPTY=1. Elsewhere the model only sees `shell`.
+    // Interactive sessions need a pseudo-terminal: macOS and Linux under Bun, Windows only with MENDCODE_CONPTY=1. Elsewhere the model only sees `shell`.
     if (ptyAvailable()) builtinTools.push(shellSession)
     // Registered wherever they can work; the feature `computer` (off until `/tier computer on`) keeps them out of the model's tool list.
     if (process.platform === "darwin" || process.env.MENDCODE_COMPUTER === "1") builtinTools.push(...createComputerTools())

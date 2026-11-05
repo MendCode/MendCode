@@ -1597,7 +1597,8 @@ export function createNativeEngine(options: {
     const shellSettings = call.name === "shell" || call.name === "shell_session" ? options.shellSettings?.() : undefined
     const inherited = shellSettings?.environment ? applyShellEnvironment(process.env, shellSettings.environment) : process.env
     // A `mendcode` the model runs (`mendcode docs`, `mendcode status`) reads the data directory of the daemon it runs under, not the default one.
-    const dataEnvironment = shellSettings?.dataDir ? { MENDCODE_V2_DIR: shellSettings.dataDir } : undefined
+    // Both names: an older `mendcode` on the PATH reads only the V2 one.
+    const dataEnvironment = shellSettings?.dataDir ? { MENDCODE_DIR: shellSettings.dataDir, MENDCODE_V2_DIR: shellSettings.dataDir } : undefined
     const credentials = options.tools.includes(tool) && (call.name === "shell" || call.name === "shell_session") ? secrets?.environment?.(input.sessionId) : undefined
     let frozen = freezeAction(call.name, boundArgs, options.cwdFor(input.sessionId), sessionEnvironment || shellEnvironment || credentials || dataEnvironment ? { ...inherited, ...dataEnvironment, ...sessionEnvironment, ...shellEnvironment, ...credentials } : inherited, executionShell)
     const shellPolicy = shellSettings?.policy?.prefix || shellSettings?.policy?.login ? shellSettings.policy : undefined

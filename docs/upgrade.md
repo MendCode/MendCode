@@ -20,7 +20,7 @@ mendcode upgrade [target] [--channel stable|beta|dev|nightly] [--method direct|c
 | `--force` | install even when already up to date, or when the release is older than the running version |
 | `--rollback` | go back to the previous binary; running it again returns to the newer one |
 | `--json` | one line `{"schema":"mendcode-next.cli.v1","kind":"result"\|"error","command":"upgrade",...}` |
-| `--dir D` | data directory, like the rest of the CLI (`--dir`, else `MENDCODE_V2_DIR`, else `~/.mendcode-v2`) |
+| `--dir D` | data directory, like the rest of the CLI (`--dir`, else `MENDCODE_DIR`, else `~/.mendcode`) |
 
 Exit codes: 0 ok, 1 failure, 64 usage error.
 

@@ -143,14 +143,14 @@ been verified on a Windows machine.
   `<dir>/mendd.endpoint` (owner-only, atomic) and removes it on stop. A client reads that file on every connect and sends
   the secret as its first frame; any other first frame, or a wrong secret, closes the connection with no echo. The
   connection is local (no peer, no read-only limit), so GitHub, clipboard and other local-data commands work as on a
-  Unix socket. Elsewhere it is opt-in: `MENDCODE_V2_LOCAL_TRANSPORT=tcp` (or `--local-transport tcp` on the daemon);
+  Unix socket. Elsewhere it is opt-in: `MENDCODE_LOCAL_TRANSPORT=tcp` (or `--local-transport tcp` on the daemon);
   `unix` forces sockets on Windows. The launcher finds a running daemon on either transport. `--socket` still means a Unix
   socket attach. Anything that can read the daemon directory has full daemon authority, as with the socket.
 - **Shell tool.** `shell`, background tasks and `!command` run in `pwsh`, else `powershell`, else `%ComSpec%`, unless the
   `shell` setting names another (`bash`/`sh` keep `-c`; `cmd` gets `/d /s /c`). PowerShell runs with `-NoLogo -NoProfile
   -NonInteractive`, UTF-8 output, and a native command's exit code is restored. Timeouts and cancel stop the whole tree
   with `taskkill /T` (no console window opens). POSIX hosts keep `/bin/sh -c`.
-- **Interactive sessions (ConPTY).** Off on Windows by default: the model sees `shell` only. `MENDCODE_V2_CONPTY=1` offers
+- **Interactive sessions (ConPTY).** Off on Windows by default: the model sees `shell` only. `MENDCODE_CONPTY=1` offers
   `shell_session` and the terminal pane when the Bun runtime exposes `Bun.Terminal` there; that path is unverified.
 - **Host limits.** Persistent user service activation is macOS/Linux only. Windows uses manual `daemon start|run`; Authenticode signing and a Windows CI daemon smoke are outside the local implementation checks.
 

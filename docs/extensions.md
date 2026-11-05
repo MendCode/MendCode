@@ -11,7 +11,7 @@ They reload through the existing customize-ui watcher and share the extension re
 a failed view shows a notice and falls back to tabs until reload.
 
 ```ts
-// ~/.mendcode-v2/extensions/guard.ts  (or <project>/.mendcode/extensions/guard.ts)
+// ~/.mendcode/extensions/guard.ts  (or <project>/.mendcode/extensions/guard.ts)
 export default {
   name: "guard",
   daemon(api) {
@@ -88,7 +88,7 @@ check fails on an empty install and passes on a reference solution, with no mode
 ## Where they are found
 
 `<layer>/extensions/*.ts|js` and `<layer>/extensions/<name>/index.ts|js`, in every extension layer, in this order
-(the order hooks run in): builtin package, user packages, the user's folder (`~/.mendcode-v2`), project packages,
+(the order hooks run in): builtin package, user packages, the user's folder (`~/.mendcode`), project packages,
 the project's `.mendcode/`. Files ending `.d.ts`, dotfiles and folders without an index are ignored; at most 64 per layer.
 
 - User-layer modules (user folder, user packages) load once for the whole daemon.

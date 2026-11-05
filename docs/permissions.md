@@ -287,7 +287,7 @@ are a different path and are unchanged.
 daemon and is not held back by the tool or the CLI (that daemon applies the same rules to its own sessions). `upgrade` and
 `uninstall` are refused whatever directory they name.
 
-**Known limits.** On Windows, and with `MENDCODE_V2_LOCAL_TRANSPORT=tcp`, the socket carries no process identity: the CLI's
+**Known limits.** On Windows, and with `MENDCODE_LOCAL_TRANSPORT=tcp`, the socket carries no process identity: the CLI's
 refusal and the tool's are what is left. On macOS a hand-written client (not the CLI) that both starts a new terminal
 session and detaches from its parent is not recognised. A `!command` you type in the prompt runs through the same tool and
 is refused like the model's; run it in your terminal. A hook script that calls a write command is refused too. If your own

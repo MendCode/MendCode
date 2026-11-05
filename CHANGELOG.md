@@ -19,6 +19,8 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Changed
 
+- MendCode keeps its data in `~/.mendcode`. The first start moves `~/.mendcode-v2` there and leaves a link with the old name,
+  so sessions, settings and sign-ins carry over. `MENDCODE_DIR` names another folder; `MENDCODE_V2_DIR` still works.
 - A terminal that hosts the daemon, and a separate daemon, hold less memory at the prompt.
 - The current-task row above the prompt is gone; the dock's Jobs panel is opt-in and Todos wrap with more room.
 - Long command replies open a readable page (F4 shows the full text of a cut notice), and `/pr repos` lists repository
@@ -53,6 +55,8 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Upgrade notes
 
+- A `~/.mendcode` left by MendCode v1 is renamed to `~/.mendcode-v1`, nothing deleted, and OpenCode's folders that pointed
+  into it follow. A terminal of the earlier version still open keeps the move for the next start.
 - Earlier versions cannot read session history written or converted by this one. Keep a copy of the data directory before
   upgrading if you may need to go back.
 

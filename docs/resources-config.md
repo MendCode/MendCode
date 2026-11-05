@@ -12,7 +12,7 @@ MendCode reads, as data only, the folders other agents use:
 | `<project>/.claude/{skills,commands,agents}`, `~/.claude/{skills,commands,agents}` | skills, slash commands, agents |
 | `.mendcode` of the project's parent folders inside its repository (`repo/.mendcode` when you open `repo/apps/web`) | skills, slash commands, agents |
 
-- MendCode's own folders win on the same name: `.claude` sits under `~/.mendcode-v2` (user) and `<project>/.mendcode` (project). The project's `.agents`/`.claude` beat the user's own folder.
+- MendCode's own folders win on the same name: `.claude` sits under `~/.mendcode` (user) and `<project>/.mendcode` (project). The project's `.agents`/`.claude` beat the user's own folder.
 - Nothing executable is read from them: no tools, hooks, MCP, extensions or `mendcode.json`.
 - Parent folders: the walk goes from the project's parent up to the folder holding `.git`, farthest first, so the nearest
   folder wins and the project's own `.mendcode` wins over all of them. A project that is itself the repository root, a

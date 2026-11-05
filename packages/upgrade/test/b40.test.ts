@@ -148,7 +148,7 @@ test("B40 verified rollback refuses incompatible schemas and missing release ind
 
 test("B40 refuses symlink aliases into v1 and linked binary paths without changing their targets", async () => {
   const h = box()
-  const legacy = path.join(h.tmp.dir, ".mendcode")
+  const legacy = path.join(h.tmp.dir, ".mendcode-v1")
   mkdirSync(legacy)
   const alias = path.join(h.tmp.dir, "alias")
   symlinkSync(legacy, alias)

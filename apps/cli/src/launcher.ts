@@ -1,12 +1,14 @@
 import { spawn } from "node:child_process"
 import { existsSync, readFileSync } from "node:fs"
-import { homedir } from "node:os"
 import path from "node:path"
+import { dataDirFromEnv, defaultDataDirNow, mendEnv, sameDir } from "@mendcode/program/data-dir"
 import { defaultLocalTransport, localEndpointPath, readLocalEndpoint } from "@mendcode/client/local-endpoint"
 import { droppedEnvArgs, hostSessionEnvNames, withoutHostSessionEnv } from "@mendcode/client/inherited-env"
 
-/** Same default as the daemon; legacy MendCode data (~/.local/share/mendcode) is never used. */
-export const DEFAULT_DIR = path.join(homedir(), ".mendcode-v2")
+/** Same default as the daemon: ~/.mendcode, or ~/.mendcode-v2 while its move could not happen yet (data-dir-move.ts). */
+export const DEFAULT_DIR = defaultDataDirNow()
+/** The data directory of this run: `--dir`, else `MENDCODE_DIR` (or `MENDCODE_V2_DIR`), else the default. */
+export const envDataDir = (env: Readonly<Record<string, string | undefined>> = process.env) => dataDirFromEnv(env) ?? DEFAULT_DIR
 const DAEMON_MAIN = path.join(import.meta.dir, "../../../packages/daemon/src/main.ts")
 
 /** Bun 1.3's virtual filesystem paths (including the Windows spelling). */
@@ -54,13 +56,14 @@ export async function liveDaemon(dir: string): Promise<{ socketPath: string; tcp
  * Environments to try, in order, for a new daemon. The JIT stays on by default: the daemon runs the
  * agent loop, diffs, projections and compaction, and pure-JS work is up to ~7.6x slower without it
  * (measured), which matters more than the ≈9 MB of RSS it costs (P-rule: low latency first). Opt in
- * with `MENDCODE_V2_JIT=0` on a memory-constrained machine; an explicit `BUN_JSC_useJIT` is respected
+ * with `MENDCODE_JIT=0` on a memory-constrained machine; an explicit `BUN_JSC_useJIT` is respected
  * as-is. JSC options are not a stable Bun API, so the low-memory environment always falls back to a
  * plain one if the daemon dies at once (e.g. Bun rejecting the option after an upgrade).
  */
 export function daemonEnvs(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv[] {
-  if (base.MENDCODE_V2_JIT === "1" || base.BUN_JSC_useJIT !== undefined || base.BUN_JSC_useFTLJIT !== undefined) return [base]
-  if (base.MENDCODE_V2_JIT === "0") return [{ ...base, BUN_JSC_useJIT: "0" }, base]
+  const jit = mendEnv(base, "JIT")
+  if (jit === "1" || base.BUN_JSC_useJIT !== undefined || base.BUN_JSC_useFTLJIT !== undefined) return [base]
+  if (jit === "0") return [{ ...base, BUN_JSC_useJIT: "0" }, base]
   return [{ ...base, ...LEAN_JIT.daemon }, base]
 }
 
@@ -71,7 +74,7 @@ export function daemonEnvs(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv[] {
  * It also compiles a function to machine code only after 16 times the usual warm-up (`thresholdForJIT*`): the code that runs
  * every frame still gets there within the first frames, the code that runs a few times per command stays interpreted, and the
  * terminal keeps about 10 MB less after use with the same frame times (docs/performance.md).
- * `MENDCODE_V2_JIT=1` keeps every tier; `MENDCODE_V2_JIT=0` turns the JIT off.
+ * `MENDCODE_JIT=1` keeps every tier; `MENDCODE_JIT=0` turns the JIT off (`MENDCODE_V2_JIT` is still read).
  */
 export const LEAN_JIT = {
   daemon: { BUN_JSC_useFTLJIT: "0", BUN_JSC_thresholdForJITAfterWarmUp: "8000", BUN_JSC_thresholdForJITSoon: "2000", MENDCODE_V2_LEAN_JIT: "1" },
@@ -89,7 +92,7 @@ export function forgetLeanJit(env: NodeJS.ProcessEnv = process.env) {
 
 /** The environment a terminal restarts itself under to run with fewer JIT tiers; undefined when it already does or should not. */
 export function leanClientEnv(env: NodeJS.ProcessEnv, hostsDaemon: boolean): NodeJS.ProcessEnv | undefined {
-  if (env.MENDCODE_V2_JIT === "1" || env.MENDCODE_V2_LEAN_JIT || env.BUN_JSC_useJIT !== undefined || env.BUN_JSC_useDFGJIT !== undefined || env.BUN_JSC_useFTLJIT !== undefined) return undefined
+  if (mendEnv(env, "JIT") === "1" || env.MENDCODE_V2_LEAN_JIT || env.BUN_JSC_useJIT !== undefined || env.BUN_JSC_useDFGJIT !== undefined || env.BUN_JSC_useFTLJIT !== undefined) return undefined
   return { ...env, ...(hostsDaemon ? LEAN_JIT.daemon : LEAN_JIT.client) }
 }
 
@@ -99,7 +102,7 @@ export function leanClientEnv(env: NodeJS.ProcessEnv, hostsDaemon: boolean): Nod
  * and the loser's client simply connects to the winner.
  */
 export async function ensureDaemon(options: { dir?: string; timeoutMs?: number; engine?: string; cwd?: string; logLevel?: "DEBUG" | "INFO" | "WARN" | "ERROR"; printLogs?: boolean; pure?: boolean; safeMode?: boolean; trace?: boolean; /** Solo mode (solo.ts): when nothing is running and no installed service owns startup, this process hosts the daemon. */ solo?: boolean } = {}): Promise<{ socketPath: string; tcp: boolean; dir: string; started: boolean; host?: import("./solo").SoloHost }> {
-  const dir = options.dir ?? process.env.MENDCODE_V2_DIR ?? DEFAULT_DIR
+  const dir = options.dir ?? envDataDir()
   const found = await liveDaemon(dir)
   if (found) return { ...found, started: false }
   // An installed user service owns startup; a terminal must not race it with a detached competitor.
@@ -109,7 +112,7 @@ export async function ensureDaemon(options: { dir?: string; timeoutMs?: number; 
     if (command[0] === "bun") command[0] = process.execPath
     const service = createUserService({ dir, cwd: options.cwd ?? process.cwd(), command })
     const status = await service.status()
-    if (status.installed && status.dataDir === path.resolve(dir)) {
+    if (status.installed && sameDir(status.dataDir, dir)) {
       await service.control("start")
       const deadline = Date.now() + (options.timeoutMs ?? 5_000)
       while (Date.now() < deadline) {
@@ -190,7 +193,7 @@ export function isDaemonPid(pid: number, { self = process.pid, parent = process.
 }
 
 /** `--restart-daemon`: SIGTERM the lock owner (graceful: running turns end as interrupted and resume later). */
-export async function terminateDaemon(dir = process.env.MENDCODE_V2_DIR ?? DEFAULT_DIR) {
+export async function terminateDaemon(dir = envDataDir()) {
   const lock = path.join(dir, "mendd.lock")
   if (!existsSync(lock)) return false
   const pid = Number(await Bun.file(lock).text())

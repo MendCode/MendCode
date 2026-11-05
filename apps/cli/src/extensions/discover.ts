@@ -3,6 +3,10 @@ import path from "node:path"
 import { EXTENSIONS_DIR } from "@mendcode/extension-api"
 import { discoverPluginFiles, type PluginFile } from "@mendcode/extension-api/plugin-files"
 
+const resolvedDir = (dir: string) => { try { return realpathSync(dir) } catch { return path.resolve(dir) } }
+/** The home folder's `.mendcode` is the data directory: one user layer, never a project one too (the daemon's `projectIsUserDir`). */
+const projectIsUserDir = ({ userDir, directory }: { userDir: string; directory: string }) => resolvedDir(path.join(directory, ".mendcode")) === resolvedDir(userDir)
+
 /**
  * Finds extension modules on disk: `<layer>/extensions/*.ts|js` and `<layer>/extensions/<name>/index.ts|js` for the
  * user dir, its packages, the project's `.mendcode/` and the project's packages. Pure filesystem; it imports nothing
@@ -70,7 +74,7 @@ export function discoverExtensions(input: { dataDir: string; directory?: string 
       .flatMap(({ name, dir }) => [...modulesIn(path.join(dir, EXTENSIONS_DIR), source, name, resourcesOff), ...discoverPluginFiles(dir, input.dataDir, "tui").map((file) => ({ ...file, source, pkg: name }))])
   // Same order as the daemon's layers (packages/packages/src/layers.ts): the user's packages, then the user's own folder, then the project's packages, then its own folder. Later wins.
   const user = [...packages("user", path.join(input.dataDir, PACKAGES_DIR)), ...modulesIn(path.join(input.dataDir, EXTENSIONS_DIR), "user"), ...discoverPluginFiles(input.dataDir, input.dataDir, "tui").map((file) => ({ ...file, source: "user" as const }))]
-  if (!input.directory) return user
+  if (!input.directory || projectIsUserDir({ userDir: input.dataDir, directory: input.directory })) return user
   const project = path.join(input.directory, ".mendcode")
   return [...user, ...packages("project", path.join(project, PACKAGES_DIR)), ...modulesIn(path.join(project, EXTENSIONS_DIR), "project"), ...[project, input.directory].flatMap((root) => discoverPluginFiles(root, input.dataDir, "tui").map((file) => ({ ...file, source: "project" as const })))]
 }
@@ -109,6 +113,6 @@ export function activationManifests(input: { dataDir: string; directory?: string
     }
   }
   scan("user", path.join(input.dataDir, PACKAGES_DIR))
-  if (input.directory) scan("project", path.join(input.directory, ".mendcode", PACKAGES_DIR))
+  if (input.directory && !projectIsUserDir({ userDir: input.dataDir, directory: input.directory })) scan("project", path.join(input.directory, ".mendcode", PACKAGES_DIR))
   return found
 }

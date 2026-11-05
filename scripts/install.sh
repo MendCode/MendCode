@@ -168,8 +168,10 @@ else
 fi
 chmod 755 "$stage/$asset"
 mv -f "$stage/$asset" "$install_dir/mendcode"
-printf 'schema=mendcode-v2.install.v1\nbinary=mendcode\nsha256=%s\ntier=%s\n' "$actual" "$tier" > "$stage/ownership"
-mv -f "$stage/ownership" "$install_dir/.mendcode-v2-install"
+printf 'schema=mendcode.install.v1\nbinary=mendcode\nsha256=%s\ntier=%s\n' "$actual" "$tier" > "$stage/ownership"
+mv -f "$stage/ownership" "$install_dir/.mendcode-install"
+# An earlier installer's receipt, under the old name; the new one replaces it.
+rm -f "$install_dir/.mendcode-v2-install"
 printf 'Installed mendcode %s to %s/mendcode (starting tier: %s)\n' "$version" "$install_dir" "$tier"
 case ":$PATH:" in
   *":$install_dir:"*) printf 'Run mendcode to start. mendcode upgrade updates it; --channel beta or nightly switches channel.\n' ;;
@@ -177,8 +179,9 @@ case ":$PATH:" in
 esac
 # Service installation is explicit; it does not start the daemon in this shell.
 if [ "${MENDCODE_INSTALL_SERVICE:-0}" = 1 ]; then
-  if [ -n "${MENDCODE_V2_DIR:-}" ]; then
-    "$install_dir/mendcode" daemon service install --dir "$MENDCODE_V2_DIR"
+  service_dir="${MENDCODE_DIR:-${MENDCODE_V2_DIR:-}}"
+  if [ -n "$service_dir" ]; then
+    "$install_dir/mendcode" daemon service install --dir "$service_dir"
   else
     "$install_dir/mendcode" daemon service install
   fi

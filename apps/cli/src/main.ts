@@ -9,7 +9,7 @@ import { computeBuildId } from "@mendcode/build-id"
 import { homedir, tmpdir } from "node:os"
 import { mkdtemp, realpath, stat } from "node:fs/promises"
 import path from "node:path"
-import { DEFAULT_DIR, ensureDaemon, stopIfStale, terminateDaemon, waitForSocketGone } from "./launcher"
+import { DEFAULT_DIR, ensureDaemon, envDataDir, stopIfStale, terminateDaemon, waitForSocketGone } from "./launcher"
 import { resolveProcessMode, startsSolo } from "./process-modes"
 import { createHeadlessRun } from "./run"
 import { loadRunOutput, type RunOutput } from "./run-output"
@@ -47,7 +47,7 @@ try { globalOptions = parseGlobalOptions(process.argv.slice(2)) } catch (error) 
 }
 const log = cliLogger(globalOptions, process.stderr)
 /** The data directory a command works on, as the session mark names it. */
-const originDir = (dir?: string) => path.resolve(dir ?? process.env.MENDCODE_V2_DIR ?? DEFAULT_DIR)
+const originDir = (dir?: string) => path.resolve(dir ?? envDataDir())
 /**
  * Started from a session's own shell against the daemon that session runs under: what only the user decides stops here
  * (docs/permissions.md). `anywhere`: the command changes this installation, whatever data directory it names.
@@ -113,7 +113,7 @@ if (daemonService) {
   if (remoteAttach) { process.stderr.write("error: daemon lifecycle commands are local-only\n"); process.exit(64) }
   if (daemonService.help) { process.stdout.write(DAEMON_USAGE); process.exit(0) }
   if (!["status", "logs", "plan"].includes(daemonService.action)) refuseFromSession(daemonService.dir, "stops, starts or reinstalls the daemon every session runs under")
-  const dir = path.resolve(daemonService.dir ?? process.env.MENDCODE_V2_DIR ?? DEFAULT_DIR)
+  const dir = path.resolve(daemonService.dir ?? envDataDir())
   const cwd = path.resolve(daemonService.cwd ?? process.cwd())
   const runtime = await import("../../../packages/daemon/src/user-service")
   const command = daemonCommand()
@@ -147,7 +147,7 @@ if (argv[0] === "profile") {
     process.stderr.write("usage: mendcode profile restore [id] [--dir PATH] (local only)\n")
     process.exit(2)
   }
-  const dir = arg("dir") ?? process.env.MENDCODE_V2_DIR ?? DEFAULT_DIR
+  const dir = arg("dir") ?? envDataDir()
   if (args[1]) refuseFromSession(dir, "restores the user's terminal profile")
   try {
     const { runProfileRestore } = await import("./profile-restore")
@@ -158,10 +158,10 @@ if (argv[0] === "profile") {
 const viewCommand = parseViewCommand(argv)
 // A starter is this program's own template in a new file, so a session may write one; replacing a view the user already has (`--force`) stays the user's.
 if (viewCommand?.action === "scaffold" && viewCommand.force) refuseFromSession(viewCommand.dir, "replaces an extension view the user has")
-if (viewCommand) process.exit(runViewCommand(viewCommand, { dataDir: viewCommand.dir ?? process.env.MENDCODE_V2_DIR ?? DEFAULT_DIR, out: process.stdout, err: process.stderr }))
+if (viewCommand) process.exit(runViewCommand(viewCommand, { dataDir: viewCommand.dir ?? envDataDir(), out: process.stdout, err: process.stderr }))
 // `docs [topic]` prints a reference card of this version from the binary and local files; a daemon is asked only when one already runs. The cards load on demand.
 const docsCommand = parseDocsCommand(argv)
-if (docsCommand) process.exit(await (await import("./docs-run")).runDocsCommand(docsCommand, { dataDir: docsCommand.dir ?? process.env.MENDCODE_V2_DIR ?? DEFAULT_DIR, cwd: process.cwd(), out: process.stdout, err: process.stderr }))
+if (docsCommand) process.exit(await (await import("./docs-run")).runDocsCommand(docsCommand, { dataDir: docsCommand.dir ?? envDataDir(), cwd: process.cwd(), out: process.stdout, err: process.stderr }))
 // `package new|check` work on package folders only: no daemon, no terminal.
 const packageFileCommand = parsePackageFileCommand(argv)
 if (packageFileCommand) process.exit(await runPackageFileCommand(packageFileCommand, { cwd: process.cwd(), version: CLI_VERSION, out: process.stdout, err: process.stderr }))
@@ -372,7 +372,7 @@ if (flag("restart-daemon")) await terminateDaemon(daemonDataDir)
  * that is already running (or an installed user service) keeps the separate-process shape.
  */
 const processMode = startup?.kind === "tui" && !remoteAttach
-  ? resolveProcessMode({ flag: globalOptions.processMode, env: process.env.MENDCODE_PROCESS, profile: readTuiProfile(daemonDataDir ?? process.env.MENDCODE_V2_DIR ?? DEFAULT_DIR).processMode })
+  ? resolveProcessMode({ flag: globalOptions.processMode, env: process.env.MENDCODE_PROCESS, profile: readTuiProfile(daemonDataDir ?? envDataDir()).processMode })
   : "daemon"
 let soloPending = startsSolo({ mode: processMode, interactive: startup?.kind === "tui", remote: remoteAttach, explicitSocket: Boolean(transportFlags.socketPath), printLogs: globalOptions.printLogs })
 // A compiled interactive terminal restarts itself once, in place (`execve`: same pid, same terminal), with fewer JIT tiers: they are
@@ -380,7 +380,7 @@ let soloPending = startsSolo({ mode: processMode, interactive: startup?.kind ===
 if (startup?.kind === "tui" && /^(\/\$bunfs\/|[A-Za-z]:[\\/]~BUN[\\/])/.test(Bun.main)) {
   const { leanClientEnv, forgetLeanJit, liveDaemon } = await import("./launcher")
   // Solo is only a wish until the first connection: with a daemon already running this terminal only draws.
-  const hosts = soloPending && !(await liveDaemon(daemonDataDir ?? process.env.MENDCODE_V2_DIR ?? DEFAULT_DIR))
+  const hosts = soloPending && !(await liveDaemon(daemonDataDir ?? envDataDir()))
   const lean = leanClientEnv(process.env, hosts)
   // A terminal that will host the daemon also leaves a Claude Code shell's session variables behind in that restart (inherited-env.ts);
   // it keeps its tuios pane's, being that pane.
@@ -844,7 +844,7 @@ if (themeFiles.ok) {
 }
 
 // The app applies the terminal-local image protocol from /customize before its first frame.
-const dataDir = daemonDataDir ?? process.env.MENDCODE_V2_DIR ?? DEFAULT_DIR
+const dataDir = daemonDataDir ?? envDataDir()
 // The alternate screen is the default; `--no-alt-screen`, MENDCODE_ALT_SCREEN=0 or the saved `altScreen` setting keep the chat inline.
 // Screen-reader mode (`--accessible`, MENDCODE_ACCESSIBLE=1 or the saved `accessible` setting) keeps the chat inline and turns mouse reporting off, unless `--alt-screen` says otherwise.
 const accessible = accessibleMode({ flag: startup?.accessible, env: process.env, saved: remoteAttach ? false : readTuiProfile(dataDir).accessible })

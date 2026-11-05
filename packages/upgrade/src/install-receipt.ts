@@ -2,16 +2,25 @@ import { existsSync, lstatSync, readFileSync } from "node:fs"
 import path from "node:path"
 
 /**
- * The installer's receipt, `.mendcode-v2-install` beside the binary (scripts/install.sh, install.ps1; docs/install.md):
+ * The installer's receipt, `.mendcode-install` beside the binary (scripts/install.sh, install.ps1; docs/install.md):
  * `schema`, `binary`, `sha256` and, since the installers take `--tier`, the starting `tier`. Uninstall checks the first
- * three; the first launch reads the tier. A receipt from an installer that predates `tier` has no such line.
+ * three; the first launch reads the tier. A receipt from an installer that predates `tier` has no such line. Earlier
+ * installers wrote `.mendcode-v2-install` with schema `mendcode-v2.install.v1`; both are still read.
  */
-export const INSTALL_RECEIPT = ".mendcode-v2-install"
+export const INSTALL_RECEIPT = ".mendcode-install"
+export const LEGACY_INSTALL_RECEIPT = ".mendcode-v2-install"
+
+/** The receipt beside a binary in `dir`: the current name, else the earlier one when only it exists. */
+export function receiptIn(dir: string) {
+  const current = path.join(dir, INSTALL_RECEIPT)
+  const legacy = path.join(dir, LEGACY_INSTALL_RECEIPT)
+  return !existsSync(current) && existsSync(legacy) ? legacy : current
+}
 const INSTALL_TIERS = ["minimalist", "balanced", "full"] as const
 export type InstallTier = (typeof INSTALL_TIERS)[number]
 export type InstallReceipt = { binary: string; sha256: string; tier?: InstallTier }
 
-const RECEIPT = /^schema=mendcode-v2\.install\.v1\nbinary=(mendcode(?:\.exe)?)\nsha256=([a-f0-9]{64})\n(?:tier=(minimalist|balanced|full)\n)?$/
+const RECEIPT = /^schema=mendcode(?:-v2)?\.install\.v1\nbinary=(mendcode(?:\.exe)?)\nsha256=([a-f0-9]{64})\n(?:tier=(minimalist|balanced|full)\n)?$/
 
 /** The receipt's fields, or undefined when the text is not exactly a receipt. */
 export function parseInstallReceipt(text: string): InstallReceipt | undefined {
@@ -30,7 +39,7 @@ export function readInstallPreset({ runningBinary, env, home, platform }: { runn
   const dirs = [runningBinary ? path.dirname(runningBinary) : undefined, env.MENDCODE_INSTALL_DIR || undefined, runningBinary ? defaultDir : undefined]
   for (const dir of dirs) {
     if (!dir) continue
-    const file = path.join(dir, INSTALL_RECEIPT)
+    const file = receiptIn(dir)
     try {
       if (!existsSync(file) || !lstatSync(file).isFile()) continue
       const receipt = parseInstallReceipt(readFileSync(file, "utf8"))

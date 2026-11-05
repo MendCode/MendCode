@@ -258,7 +258,7 @@ Version 0.x: expect changes between releases, and back up your data before upgra
   run on real Linux machines yet, and Windows has no script host and no daemon smoke test ([workflows](docs/workflows.md#security-model), [releases](docs/release.md)).
 - **Tested against fake transports, not real accounts:** Claude Code, Codex, ACP and pi as engines, the GitHub automation,
   the Telegram bridge and MCP OAuth ([GitHub](docs/github.md), [channels](docs/channels.md), [MCP OAuth](docs/mcp-oauth.md)).
-- **Your data:** `--dir`, else `MENDCODE_V2_DIR`, else `~/.mendcode-v2`. To back it up, quit every terminal, run
+- **Your data:** `--dir`, else `MENDCODE_DIR`, else `~/.mendcode`. To back it up, quit every terminal, run
   `mendcode daemon stop` and copy the whole directory (the database with its `-wal` and `-shm` files, `blobs/`, and `keys/`, which
   the encrypted secrets need) ([storage](docs/storage.md), [secrets](docs/secrets.md)).
 

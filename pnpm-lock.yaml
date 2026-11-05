@@ -365,6 +365,9 @@ importers:
       '@mendcode/packages':
         specifier: workspace:*
         version: link:../packages
+      '@mendcode/program':
+        specifier: workspace:*
+        version: link:../program
       zod:
         specifier: 4.6.6
         version: 4.6.6

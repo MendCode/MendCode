@@ -63,7 +63,7 @@ export function systemReport(operation: string, input: Input): SystemReport {
     facts.models = modelsReport({ engine: input.engine, catalog: input.catalog, roles: rolesFor(input.settings, input.directory), sessionKnown: false })
     const providers = input.providers?.list() ?? []
     facts.providers = providers.map(({ id, enabled, hasKey, models, error }) => ({ id, enabled, hasKey, models, ...(error ? { error } : {}) }))
-    const names = ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "OPENROUTER_API_KEY", "GROQ_API_KEY", "DEEPSEEK_API_KEY", "MENDCODE_V2_ENGINE"]
+    const names = ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "OPENROUTER_API_KEY", "GROQ_API_KEY", "DEEPSEEK_API_KEY", "MENDCODE_ENGINE", "MENDCODE_V2_ENGINE"]
     facts.environment = names.map((name) => ({ name, present: Boolean(environment[name]) }))
     const roles = rolesFor(input.settings, input.directory)
     facts.roles = Object.fromEntries(MODEL_ROLES.map((role) => {

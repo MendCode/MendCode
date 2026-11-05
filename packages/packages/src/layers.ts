@@ -69,6 +69,10 @@ export function packageDirs(root: string): Array<{ name: string; dir: string }> 
 /** What ships with MendCode itself (e.g. the skill that teaches extending it); below everything the user installs. */
 export const BUILTIN_PACKAGE = "builtin"
 
+const resolved = (dir: string) => { try { return realpathSync(dir) } catch { return path.resolve(dir) } }
+/** Whether `<directory>/.mendcode` is the data directory itself (a session in the home folder, `~/.mendcode`): then it is the user layer only. */
+export const projectIsUserDir = ({ userDir, directory }: { userDir: string; directory: string }) => resolved(path.join(directory, ".mendcode")) === resolved(userDir)
+
 /** The layers for a project, lowest precedence first. Disabled packages are left out. */
 export function extensionLayers({ userDir, directory, disabled = [], disabledResources = [], builtinDir }: { userDir: string; directory: string; disabled?: readonly string[]; disabledResources?: readonly string[]; builtinDir?: string }): ExtensionLayer[] {
   const off = new Set(disabled)
@@ -81,14 +85,16 @@ export function extensionLayers({ userDir, directory, disabled = [], disabledRes
         return { dir, source, pkg: name, ...(resources.length ? { off: resources } : {}) }
       })
   const builtin: ExtensionLayer[] = builtinDir ? [{ dir: builtinDir, source: "user", pkg: BUILTIN_PACKAGE }] : []
-  return [...builtin, ...packages("user"), { dir: userDir, source: "user" }, ...packages("project"), { dir: path.join(directory, ".mendcode"), source: "project" }]
+  const user: ExtensionLayer[] = [...builtin, ...packages("user"), { dir: userDir, source: "user" }]
+  if (projectIsUserDir({ userDir, directory })) return user
+  return [...user, ...packages("project"), { dir: path.join(directory, ".mendcode"), source: "project" }]
 }
 
 /** The layers a loader sees when it is not given any: just the user's and the project's own folders. */
 export function defaultLayers({ userDir, directory }: { userDir: string; directory: string }): ExtensionLayer[] {
   return [
     { dir: userDir, source: "user" },
-    { dir: path.join(directory, ".mendcode"), source: "project" },
+    ...(projectIsUserDir({ userDir, directory }) ? [] : [{ dir: path.join(directory, ".mendcode"), source: "project" as const }]),
   ]
 }
 

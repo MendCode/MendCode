@@ -1,6 +1,7 @@
 import { realpathSync } from "node:fs"
 import { homedir } from "node:os"
 import path from "node:path"
+import { defaultDataDirNow } from "@mendcode/program/data-dir"
 import { AGENT_SHELL_ENV, AGENT_SHELL_FILE_BLOCKS, agentRefusal } from "@mendcode/protocol/wire"
 
 /**
@@ -16,7 +17,7 @@ const shellName = (shell: string) => (shell.split(/[\\/]/).pop() ?? shell).toLow
 
 /** The data directory a session's own `mendcode` reads: the daemon's (the engine exports it), else the default one. */
 export function agentDataDir(environment: Readonly<NodeJS.ProcessEnv> | undefined) {
-  return path.resolve(environment?.MENDCODE_V2_DIR || path.join(homedir(), ".mendcode-v2"))
+  return path.resolve(environment?.MENDCODE_DIR || environment?.MENDCODE_V2_DIR || defaultDataDirNow(homedir()))
 }
 
 /** The environment of a command a session starts: the caller's plus the variable that names the daemon it runs under. */
@@ -265,7 +266,7 @@ function checkCommand(words: string[], lookup: Lookup, depth: number): string | 
     const match = ASSIGNMENT.exec(word)
     if (!match) return false
     lookup.variables.set(match[1]!, expand(match[2]!, lookup.variables))
-    if (match[1] === "MENDCODE_V2_DIR") directory = lookup.variables.get(match[1])
+    if (match[1] === "MENDCODE_DIR" || match[1] === "MENDCODE_V2_DIR") directory = lookup.variables.get(match[1])
     return true
   }
   for (let i = 0; i < words.length; i++) {
