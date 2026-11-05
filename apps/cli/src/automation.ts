@@ -23,6 +23,7 @@ import { parsePromptAutomation, type PromptAutomation } from "./prompt-automatio
 import { parseSession, sessionDirectories, type SessionAutomation } from "./session-args"
 import { sessionHuman, sessionModelPrefix, sessionSelection } from "./session-output"
 import { parseGlobalOptions } from "./global-options"
+import { composeLongText } from "./long-text"
 import { COMPLETION_SHELLS, completionScript, contextText, systemText, type CompletionShell } from "./support-output"
 import packageJson from "../package.json"
 import { CATALOG_USAGE, parseCatalog, type CatalogAutomation } from "./catalog-args"
@@ -1485,17 +1486,21 @@ export async function runAutomation(command: Automation, deps: AutomationDeps): 
       const selected = await sessionSelection(client, command, { sessionId: command.id as SessionId })
       if (!selected.ok) return fail(selected.message)
       const attachments: import("@mendcode/protocol").BlobRef[] = []
-      let fileText = ""
+      const texts: Array<{ name: string; content: string }> = []
       for (const file of command.files ?? []) {
         const added = await daemon({ type: "attachment.paste", path: path.resolve(dir, file) })
         if (!added.ok) return fail(added.message)
         if (added.result.kind === "image") attachments.push(added.result.attachment as import("@mendcode/protocol").BlobRef)
-        else fileText += `\n\n[${added.result.name}]\n${added.result.content}`
+        else texts.push({ name: String(added.result.name), content: String(added.result.content) })
       }
-      const text = command.text + fileText
+      const composed = await composeLongText({ send: async (put) => { const reply = await daemon(put); return reply.ok ? { ok: true, attachment: reply.result.attachment as import("@mendcode/protocol").BlobRef | undefined } : { ok: false, message: reply.message } }, prompt: command.text, files: texts })
+      if (!composed.ok) return fail(composed.message)
+      const { fileText } = composed
+      attachments.push(...composed.attachments)
+      const text = composed.prompt + fileText
       const selection = selected.agent || selected.model ? { selection: { ...(selected.agent ? { agent: selected.agent } : {}), ...(selected.model ? { model: selected.model } : {}) } } : {}
       const submission = command.command
-        ? { type: "commands.execute" as const, sessionId: command.id as SessionId, name: command.command.replace(/^\//, ""), args: command.text, attachments, ...(fileText ? { contextText: fileText } : {}), ...selection }
+        ? { type: "commands.execute" as const, sessionId: command.id as SessionId, name: command.command.replace(/^\//, ""), args: composed.prompt, attachments, ...(fileText ? { contextText: fileText } : {}), ...selection }
         : { type: "user.submit" as const, sessionId: command.id as SessionId, text, attachments, ...selection, ...(command.mode ? { delivery: command.mode === "auto" ? "steer" as const : command.mode } : {}), ...(command.requestId ? { clientRequestId: command.requestId } : {}) }
       if (!command.wait) {
         const reply = await daemon(submission)

@@ -78,7 +78,7 @@ The unverified OpenCode serve and Cursor SDK adapters and their tier switches ha
 | `script_workflows` (`workflow_script` tool, `/workflows run`; [script workflows](workflows.md#script-workflows)) | balanced | tier | `tools.workflow_script`; the tool is deferred (found through `tool_search`), so it costs no context until used |
 | `threads` (`threads` tool; [sessions](sessions.md)) | balanced | tier | `experimental.thread_tools` (off without a tier) |
 | `pr_watch` (`pr_watch` tool, `/pr`; [pr-watch](pr-watch.md)) | balanced | permit | `experimental.pr_watch` (network through `gh`; never on by itself) |
-| `pr_review` (`/pr review`, `/pr watch-repo`; [pr-review](pr-review.md)) | balanced | permit | `experimental.pr_review` (network through `gh`, model calls; off with no tier; posting also needs the repo's `enabled: true`) |
+| `pr_review` (`/pr review`, `/pr watch-repo`; [pr-review](pr-review.md)) | balanced | permit | `experimental.pr_review` (network through `gh`, model calls; off with no tier; `/pr setup` can allow it in a lower tier with `features.pr_review: true`; posting also needs the repo's `enabled: true`) |
 | `output_filters` (command output filters, "tokens saved"; [advanced-config](advanced-config.md#command-output-filters)) | balanced | tier | `tool_output.filters` (off without a tier) |
 | `forecast` (footer `~N turns to compact`; [layout](layout.md)) | balanced | tier | `/footer +forecast` (off without a tier) |
 | `lean_tools` (only the coding core in every request, the rest through `tool_search`; [tool discovery](tool-discovery.md#lean-catalogue-and-plan-tools-tier-defaults)) | minimalist | tier | `/tier lean_tools off` (off without a tier) |

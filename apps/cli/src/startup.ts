@@ -4,6 +4,7 @@ import type { Client, CommandInput } from "@mendcode/client"
 import type { AgentsReport, BlobRef, ReasoningEffort, SessionDetail, SessionId, SessionSummary } from "@mendcode/protocol"
 import { REASONING_EFFORTS } from "@mendcode/protocol/wire"
 import { sessionSelection } from "./session-output"
+import { composeLongText } from "./long-text"
 import { isDraftOnly } from "./view/session-query"
 import { COMPAT } from "./compat"
 import { STDIN_FIRST_BYTE_MS } from "./run-stdin"
@@ -382,12 +383,16 @@ export async function prepareStartup(client: Pick<Client, "send">, options: Star
 export async function prepareRunSubmission(client: Pick<Client, "send">, options: Startup, sessionId: SessionId, directory: string, prompt: string, remote = false): Promise<CommandInput> {
   if (remote && options.files.length) throw new Error("file attachments disabled while remote")
   const attachments: BlobRef[] = []
-  let fileText = ""
+  const texts: Array<{ name: string; content: string }> = []
   for (const file of options.files) {
     const result = await request(client, { type: "attachment.paste", path: path.resolve(directory, file), allowDirectory: true })
     if (result.kind === "image") attachments.push(result.attachment as BlobRef)
-    else fileText += `\n\n[${result.name}]\n${result.content}`
+    else texts.push({ name: String(result.name), content: String(result.content) })
   }
-  if (options.command) return { type: "commands.execute", sessionId, name: options.command.replace(/^\//, ""), args: prompt, attachments, ...(fileText ? { contextText: fileText } : {}) }
-  return { type: "user.submit", sessionId, text: prompt + fileText, attachments }
+  const composed = await composeLongText({ send: async (put) => { const reply = await client.send(put); return reply.ok ? { ok: true, attachment: (reply.result as { attachment?: BlobRef } | undefined)?.attachment } : { ok: false, message: reply.error.message } }, prompt, files: texts })
+  if (!composed.ok) throw new Error(composed.message)
+  attachments.push(...composed.attachments)
+  const { fileText } = composed
+  if (options.command) return { type: "commands.execute", sessionId, name: options.command.replace(/^\//, ""), args: composed.prompt, attachments, ...(fileText ? { contextText: fileText } : {}) }
+  return { type: "user.submit", sessionId, text: composed.prompt + fileText, attachments }
 }

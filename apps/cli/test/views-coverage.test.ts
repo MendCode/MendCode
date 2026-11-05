@@ -92,6 +92,7 @@ const COVERAGE: Record<string, Entry> = {
   "reply-comments-sent.ts": { allow: "the sent set of comments inside the built-in `message.user` renderer (message-views.ts); a custom `message.user` view replaces it and receives the parts as `comments` with the layout and collapse settings" },
   "reply-comments-view.ts": { allow: "the comment chips, list and reply bar are drawn from geometry the terminal also measures (marks, click areas, the prompt rule); they are customized by the comment settings (placement, style, glyphs, wording, theme roles) and the `api.comments` hooks" },
   "image-actions.ts": { allow: "the generated picture's button row (open, folder, copy path) is click geometry the terminal measures, like a code block's copy header; the card itself draws through the tool-card slot" },
+  "agent-cue.ts": { allow: "the context line, prompt tint and open-row fill of a sub-agent's view: chat chrome the terminal measures (the border, the strip rows and the prompt rules it overlays); the strip itself draws through bar.agents" },
   "links.ts": { allow: "post-processes rows that were already drawn (adds hyperlinks); it has no pixels of its own" },
   "stat-parts.ts": { allow: "the registry of named session figures (labels, formatters, thresholds); the footer, the activity status, the top bar and the sidebar stats card draw them through their own slots" },
   "overlay.ts": { allow: "composites already drawn rows over each other; it has no content of its own" },

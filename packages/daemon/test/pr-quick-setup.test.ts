@@ -39,7 +39,7 @@ test("already configured is a no-op; personal config and explicit role are respe
   expect((await previewQuickSetup({ ...h.input, role: "all" })).role).toBe("all")
 })
 test("logged-out, wrong origin, forbidden tier and missing base config are actionable", async () => {
-  for (const [options, text] of [[{ logout: true }, "gh auth login"], [{ origin: "/local/repo" }, "Origin is not"], [{ tier: "minimalist" }, "balanced tier"], [{ missing: true }, "Commit it there"]] as const) {
+  for (const [options, text] of [[{ logout: true }, "gh auth login"], [{ origin: "/local/repo" }, "Origin is not"], [{ missing: true }, "Commit it there"]] as const) {
     expect((await previewQuickSetup(fixture(options).input)).problems.join("\n")).toContain(text)
   }
 })
@@ -51,4 +51,13 @@ test("public remote is detected without changing git state; digest binds the pre
   const a = fixture(); const first = await previewQuickSetup(a.input)
   expect((await previewQuickSetup(a.input)).digest).toBe(first.digest)
   expect((await previewQuickSetup({ ...a.input, role: "requested" })).digest).not.toBe(first.digest)
+})
+test("a tier that lacks the reviewer is unlocked by the plan itself without changing it; an explicit off and safe mode stay problems", async () => {
+  const h = fixture()
+  const unset = await previewQuickSetup({ ...h.input, settings: {} })
+  expect(unset.problems).toEqual([]); expect(unset.unlock).toBe(true); expect(unset.text).toContain("features.pr_review: true")
+  expect((await previewQuickSetup({ ...h.input, settings: { features: { pr_review: false } } })).problems.join("\n")).toContain("on purpose")
+  expect((await previewQuickSetup({ ...h.input, settings: {}, safeMode: true })).problems.join("\n")).toContain("balanced tier")
+  const minimalist = await previewQuickSetup({ ...fixture({ tier: "minimalist" }).input })
+  expect(minimalist.problems).toEqual([]); expect(minimalist.unlock).toBe(true); expect(minimalist.text).toContain("the tier stays minimalist")
 })

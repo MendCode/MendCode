@@ -202,7 +202,7 @@ tier). Local sessions only; remote and peer clients are refused.
   word, the repo config's `reviewers` decides; running the command again with the other word changes the watch in place. The login is
   read once with `gh api user`.
 - Before the first post to a repository the session is asked once: `/pr publish on` posts that review (as found, no second model
-  call) and later ones, `/pr publish off` keeps reviews in the session as notices.
+  call) and later ones. A review that finished while posting was not allowed (asked, unanswered or declined) is kept in `<dir>/pr-review/held.json`, so it survives a daemon restart; `publish-on` posts it while its head is still the pull request's head, otherwise it says the head moved and posts nothing, and it says when no finished review was waiting. One held review per pull request. `/pr publish off` keeps reviews in the session as notices.
 - Protocol: `pr.review` (`sessionId`, `action`: `watch-repo | unwatch-repo | review | list | publish-on | publish-off`, `directory`, `pr`, `role`: `all | requested`).
   The schema also accepts the platform's actions (`status`, `audit`, `job-pause`, `job-resume`, `job-cancel`, `job-retry`,
   `take-over`, `release`, `config-show`, `config-preview`, `config-apply`, `config-revert`, `config-history`, with `jobId`,

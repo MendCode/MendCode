@@ -177,6 +177,11 @@ export function createClient(options: {
     if (reply.ok || body.type === "hello" || reply.error.code !== "invalid_command") return reply
     if (!reply.error.message.startsWith("[PROTOCOL]:") && reply.error.message !== "invalid remote command frame") return reply
     options.onRejected?.({ command: body.type, detail: reply.error.message })
+    const tooLong = [...reply.error.message.matchAll(/Too big: expected string to have <=(\d+) characters\s*→ at body\.([\w.[\]]+)/g)].flatMap((match) => {
+      const value = match[2]!.split(/[.[\]]+/).filter(Boolean).reduce<unknown>((into, key) => (into && typeof into === "object" ? (into as Record<string, unknown>)[key] : undefined), body)
+      return typeof value === "string" ? [`${match[2]} is ${value.length.toLocaleString("en-US")} characters; the limit is ${Number(match[1]).toLocaleString("en-US")}`] : []
+    })
+    if (tooLong.length) return { ok: false, error: { ...reply.error, message: `daemon rejected ${body.type} · ${tooLong.join("; ")}` } }
     // The same build parses what this client builds: the value itself is wrong (a mistyped id), not the daemon's age.
     if (options.buildId && daemonBuildId === options.buildId) {
       const fields = [...new Set([...reply.error.message.matchAll(/→ at body\.([\w.[\]]+)/g)].map((match) => match[1]!))]

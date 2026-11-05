@@ -53,6 +53,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Changed
 
+- Inside a sub-agent the chat says so everywhere: one line under the top edge with its name, state, parent session and the keys back (also with the top bar off, and alone in the `minimal` tier), its row in the Agents strip filled, and the prompt in its colour with a hint of whom a message goes to.
 - The compaction card is two rows (stage with its bar, context before and after) and shows one loading spinner, the activity line's, instead of three.
 - A PR review that reaches its token cap now posts a partial review of what it verified and lists what it did not review, and the next `/pr review` continues with the rest. See [PR review](docs/pr-review.md#a-review-that-reaches-the-cap).- `/pr review` (and `@mendcode review`) of a head already reviewed with the same config answers at once and runs nothing; `/pr review <n> full` reviews it again. See [PR review](docs/pr-review.md).
 - The `/customize` preview draws what the picked row changes: the home with the pet, a sample chat with the top bar, the prompt with its status line and your real footer, the activity, the diff.
@@ -113,8 +114,12 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Fixed
 
+- `mendcode run` and `session send` accept a long prompt or a long `--file` text (up to 200 KiB each): what does not fit a message goes as a text attachment and the model reads all of it. Over that, the error names the prompt or file, its size and the limit, and "daemon rejected" for a text that is too long now says the same. See [attachments](docs/attachments.md#long-text-from-run-and-session-send).
+- A PR review that finishes before you answer `/pr publish` is kept, also across a daemon restart, and `/pr publish on` posts it as found; if the pull request moved on, it says so and posts nothing, and it says when no finished review was waiting.
+- `/pr setup` and `mendcode pr setup` on a tier without the PR reviewer now apply once confirmed (they also allow the reviewer with `features.pr_review: true`; the tier is not changed); when something blocks it, the output ends with "Nothing changed". On a development daemon it says the watch is recorded and does not run.
 - Smart mode resolves relative paths in a shell command against the directory it runs in (the call's `workdir`, then each `cd`), so `../../node_modules/.bin/tsc` from `packages/widgets` no longer asks as "outside the project". A path that really leaves the project still asks.
 - PR review readers on Claude Code are no longer stopped at their token bound after they have already answered: the bound now covers the harness's own prompt and the model's thinking, so the data summaries come from the cheap model instead of a local scan.
+- `glob` takes up to 32 patterns per call, and a longer list says so and how to split it.
 - PR review readers never run on an ACP harness model (such as an OpenCode one listed under the ChatGPT login): they use the cheap model of the reviewer's own provider.
 - A PR review whose data files were summarized by readers is no longer stopped as "could not review" because the model noted it saw summaries or could not run tests: with findings, or a walkthrough, it goes on to verify and publishes with the model's note. The review prompt now says the data arrives summarized and that there is no shell.
 - In a Claude Code session, `mendcode run` from its shell is known as that session: `--file` attaches instead of being refused, and `--permission smart` above the session's mode asks you on the approval card.

@@ -29,6 +29,7 @@ import { pushKept, runFix, type FixSource } from "./fix"
 import { answersRequest, answeredBy,answeredThrough, answersMarker, headReviewedBy, headReviewedThrough, isMendCodeReview, mayPublish, mayPublishThrough, type PublishCheck } from "./publishers"
 import { readPullRequestInfo } from "./pull-request"
 import { createOutbox } from "./outbox"
+import { createHeldStore, type HeldReview } from "./held"
 import { failureKind } from "./outage"
 import { resolveReviewLanguage } from "./language"
 import { lacksText, mayDo, readRegistry, route, runsHere, type ReviewerRegistry } from "./registry"
@@ -226,7 +227,7 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
   const root = path.join(options.dir, "pr-review")
   const outbox = createOutbox({ file: path.join(root, "outbox.json"), notify: options.notify, sessionExists: options.sessionExists })
   const realOutbox = outbox
-  const held = new Map<string, Array<() => Promise<void>>>()
+  const held = createHeldStore(path.join(root, "held.json"))
   /** The last checkout step queued on each directory: parallel fetches and worktree adds on one `.git` fail on its locks. */
   const checkouts = new Map<string, Promise<unknown>>()
 
@@ -606,30 +607,40 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
     }
   }
 
-  /** Holds a finished review until `/pr publish on`; posted as it was found (no second model call), only while its head is current. */
+  /**
+   * Keeps a finished review that could not post for lack of consent (asked, still open, or declined) in `held.json` until
+   * `/pr publish on`: it survives a daemon restart, and is posted as it was found (no second model call), only while its head is current.
+   */
   function holdReview({ sessionId, directory, number, run: first, jobId }: { sessionId: string; directory: string; number: number; run: Reviewed; jobId?: string | undefined }) {
     const consent = watch.publishConsent(directory)
-    if (consent === "denied") return
-    const list = held.get(directory) ?? []
-    const result = first.outcome!.result
     const job = jobId ? ledger.get(jobId) : undefined
-    list.push(async () => {
-      if (jobId && !(await isCurrent(jobId))) { void outbox.say(sessionId, `The held review of ${first.repo}#${number} was not posted: the pull request moved past ${first.head.slice(0, 12)}; its new head is reviewed on its own.`); return }
-      const login = await watch.loginOf(directory)
-      const forge = await forgeOf(directory)
-      const common = {
-        repo: first.repo, number, result, previous: readReviewState(options.dir, first.repo, number), ...(first.info ? { info: first.info } : {}),
-        ...(first.config?.template.sections.length ? { template: first.config.template } : {}), ...(first.outcome?.sections ? { sections: first.outcome.sections } : {}),
-        ...(job ? { effects, reviewer: job.reviewer, configKey: first.configKey ?? job.configKey, jobId: job.id, isCurrent: () => isCurrent(job.id) } : {}),
-      }
-      const report = forge ? await publishThroughProvider({ provider: forge.provider, ...common }) : await publishReview({ ...common, process: call, ...(job && login ? { self: login } : {}) })
-      // With the config it ran under, as a review posted at once keeps it: a later `@mendcode review` or `/pr review` of this head knows it.
-      const configKey = first.configKey ?? job?.configKey
-      if (report.posted) writeReviewState(options.dir, first.repo, number, { ...report.state, ...(configKey ? { configKey } : {}) })
-      void outbox.say(sessionId, report.posted ? `Posted the held review of ${first.repo}#${number} (${report.comments} inline comment${report.comments === 1 ? "" : "s"}).` : `The held review of ${first.repo}#${number} was not posted: ${report.reason ?? "unknown reason"}.`)
+    held.add({
+      sessionId, directory, repo: first.repo, number, head: first.head, result: first.outcome!.result, at: now(),
+      ...(first.forge ? { forge: first.forge } : {}), ...(job ? { jobId: job.id } : {}), ...((first.configKey ?? job?.configKey) ? { configKey: (first.configKey ?? job?.configKey)! } : {}),
+      ...(first.info ? { info: first.info } : {}), ...(first.config?.template.sections.length ? { template: first.config.template } : {}),
+      ...(first.outcome?.sections ? { sections: first.outcome.sections } : {}),
     })
-    held.set(directory, list)
     if (consent === "ask") void outbox.say(sessionId, `MendCode has never posted a review to ${first.repo}. Type /pr publish on to post this review and later ones to ${first.forge ?? "GitHub"}, or /pr publish off to keep reviews in this session. You are asked once.`)
+  }
+
+  /** Posts a held review as it was found. A head that moved since is said and not posted. */
+  async function postHeld(review: HeldReview) {
+    const { sessionId, directory, number, repo } = review
+    const job = review.jobId ? ledger.get(review.jobId) : undefined
+    const live = await remoteHead(directory, number)
+    if ((live && live !== review.head) || (review.jobId && !(await isCurrent(review.jobId)))) { void outbox.say(sessionId, `The held review of ${repo}#${number} was not posted: the pull request moved past ${review.head.slice(0, 12)}; its new head is reviewed on its own.`); return }
+    const login = await watch.loginOf(directory)
+    const forge = await forgeOf(directory)
+    const common = {
+      repo, number, result: review.result, previous: readReviewState(options.dir, repo, number), ...(review.info ? { info: review.info } : {}),
+      ...(review.template ? { template: review.template as never } : {}), ...(review.sections ? { sections: review.sections } : {}),
+      ...(job ? { effects, reviewer: job.reviewer, configKey: review.configKey ?? job.configKey, jobId: job.id, isCurrent: () => isCurrent(job.id) } : {}),
+    }
+    const report = forge ? await publishThroughProvider({ provider: forge.provider, ...common }) : await publishReview({ ...common, process: call, ...(job && login ? { self: login } : {}) })
+    // With the config it ran under, as a review posted at once keeps it: a later `@mendcode review` or `/pr review` of this head knows it.
+    const configKey = review.configKey ?? job?.configKey
+    if (report.posted) writeReviewState(options.dir, repo, number, { ...report.state, ...(configKey ? { configKey } : {}) })
+    void outbox.say(sessionId, report.posted ? `Posted the held review of ${repo}#${number} (${report.comments} inline comment${report.comments === 1 ? "" : "s"}).` : `The held review of ${repo}#${number} was not posted: ${report.reason ?? "unknown reason"}.`)
   }
 
   /**
@@ -1975,10 +1986,10 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
     }
     if (action === "publish-on" || action === "publish-off") {
       watch.setPublish(directory, sessionId, action === "publish-on" ? "allowed" : "denied")
-      const waiting = held.get(directory) ?? []
-      held.delete(directory)
-      if (action === "publish-on") for (const post of waiting) void options.schedule(post)
-      return done(action === "publish-on" ? `Reviews of this repository are posted to ${(await forgeOf(directory))?.name ?? "GitHub"} from now on${waiting.length ? `; posting ${waiting.length} held review${waiting.length === 1 ? "" : "s"}` : ""}.` : "Reviews of this repository stay in this session.")
+      // `publish-off` keeps what is held (a later `publish-on` posts it while its head is current).
+      const waiting = action === "publish-on" ? held.take(directory) : []
+      for (const review of waiting) void options.schedule(() => postHeld(review))
+      return done(action === "publish-on" ? `Reviews of this repository are posted to ${(await forgeOf(directory))?.name ?? "GitHub"} from now on${waiting.length ? `; posting ${waiting.length} held review${waiting.length === 1 ? "" : "s"}` : "; no finished review was waiting"}.` : "Reviews of this repository stay in this session.")
     }
     if (action !== "review") {
       const result = await platform.run({ sessionId, action, directory, jobId, reason, scope, patch, version })

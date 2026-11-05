@@ -10,7 +10,9 @@ import { goalSpans } from "../../view/goal"
 const BACKGROUND_NOTICE = /^\[(background task|monitor) /
 import { modelLabel, sessionModelId } from "../../view/model-label"
 import { renderHeaderSlot } from "../../view/topbar"
-import { agentThreadHeader } from "../../view/agent-thread-header"
+import { agentContextLine, cuePlaceholder, tintFrame } from "../../view/agent-cue"
+import { agentThreadHeader, threadState } from "../../view/agent-thread-header"
+import { parentTitle, viewedAgent } from "./agent-cue"
 import { frameBottom as frameBottomEdge, frameSides, frameTop } from "../../view/agent-frame"
 import { DOCK_HEIGHT } from "../../view/dock"
 import { textWidth, truncateEnd } from "../../view/wrap"
@@ -29,7 +31,7 @@ import type { ActivityPart } from "@mendcode/protocol/wire"
 import { ACTIVITY_MIN_CELLS, insideRoom, placeInside } from "../../view/activity-status"
 import { jumpFrom, jumpPill, jumpText, offsetForThumb, overlayAt, scrollbarGlyphs, scrollbarShown, scrollThumb, SCROLLBAR_LINGER_MS, withScrollbar } from "../../view/scroll-chrome"
 import { SPINNER_FRAMES } from "../../view/tool-card"
-import { renderAgentsStrip } from "../../view/agents-strip"
+import { doing, renderAgentsStrip } from "../../view/agents-strip"
 import { refreshLiveTasks } from "./live-tasks"
 import { sessionChildren } from "./session-children"
 import { fit, lineWidth } from "../../view/deck"
@@ -124,7 +126,10 @@ export function createChatRows(ctx: AppContext, actions: {
     const customChrome = state.ext?.promptChrome()
     const preset = customChrome?.preset ?? state.tuiProfile.promptChrome
     const lead = customChrome?.lead ?? state.tuiProfile.promptLead
-    const frame = comments.frame(ctx.views.frame({ preset, lead, border: customChrome?.border ?? state.tuiProfile.promptBorder, borders: state.tuiProfile.promptGlyphs, rich }, { width }), width)
+    const plainFrame = comments.frame(ctx.views.frame({ preset, lead, border: customChrome?.border ?? state.tuiProfile.promptBorder, borders: state.tuiProfile.promptGlyphs, rich }, { width }), width)
+    // Inside a sub-agent the prompt wears its colour, so the input is never taken for the conversation's.
+    const viewed = inlineView || home ? undefined : viewedAgent(state)
+    const frame = viewed && rich ? tintFrame(plainFrame, viewed.color, lead) : plainFrame
     // `promptStatus: border` lays the READY › model › … line over the top rule (rules and boxes; the tinted minimal preset has no rule).
     const statusRoom = width - PROMPT_MARGIN * 2 - 6
     const borderStatus = rich && preset !== "minimal" && frame.top.length === 1 ? actions.promptStatusLine(statusRoom) : undefined
@@ -155,7 +160,7 @@ export function createChatRows(ctx: AppContext, actions: {
     const visual = editor.visualLines()
     const cursorAt = Math.max(0, visual.findLastIndex((line) => line.start <= editor.cursorOffset))
     // `showPlaceholder` off leaves the empty prompt blank; `placeholderText` replaces the built-in examples.
-    const shownPlaceholder = state.shellMode ? (rich ? state.shellPlaceholder : undefined) : rich && home && state.tuiProfile.showPlaceholder ? state.tuiProfile.placeholderText || state.placeholder : undefined
+    const shownPlaceholder = state.shellMode ? (rich ? state.shellPlaceholder : undefined) : viewed && rich ? cuePlaceholder({ kind: viewed.kind, name: viewed.name, sep: g.sep, width: width - frame.inset - PROMPT_MARGIN - 2 }) : rich && home && state.tuiProfile.showPlaceholder ? state.tuiProfile.placeholderText || state.placeholder : undefined
     const popupRowsMax = Math.max(1, Math.min(POPUP_ROWS, height - 14))
     const menu = !state.transcript.pendingRequests.length && !state.editingScratch && editorLines.length === 1 && !state.shellMode ? actions.slashMenu.model(width, Math.max(3, height - 9)) : undefined
     const suggestions = menu?.items ?? []
@@ -200,16 +205,15 @@ export function createChatRows(ctx: AppContext, actions: {
     if (!topbarShown && !headerSlot) state.contextArea = undefined
     let topbar: Line[] = inlineView ? [] : headerSlot ? renderHeaderSlot(headerSlot, width - PROMPT_MARGIN * 2).map((row): Line => [{ text: " ".repeat(PROMPT_MARGIN) }, ...row]) : topbarShown && (input.remote || rich && !home) ? [topbarRow(width)] : []
     // A sub-agent's thread open in the chat's place says whose it is, right under the top bar (or at the top without one).
-    const openThreads = state.agentView && !inlineView && (topbar.length || !topbarShown && rich && !home) ? (state.agentRoot ?? state.transcript).agentThreads() : []
+    const openThreads = viewed?.kind === "thread" && (topbar.length || !topbarShown && rich && !home) ? (state.agentRoot ?? state.transcript).agentThreads() : []
     const openAt = openThreads.findIndex((thread) => thread.itemId === state.agentView)
     // A sub-agent's view (its thread, or the session of a child task) has a border all around it, in the sub-agent's own colour,
     // so it is never taken for the conversation: the top edge here, the sides over the margins and the bottom edge under the body.
-    const childName = state.sessionParentId && !state.agentView ? state.liveTasks?.find((task) => task.taskId === state.sessionId)?.description : undefined
-    const boxed = !inlineView && rich && !home && (openAt >= 0 || (state.sessionParentId !== undefined && !state.agentView && topbar.length > 0))
-    const boxColor: ColorName = openAt >= 0 ? subagentColor(openThreads[openAt]!.description) : childName ? subagentColor(childName) : "primary"
+    const boxed = !inlineView && rich && !home && (openAt >= 0 || viewed?.kind === "child")
+    const boxColor: ColorName = viewed?.color ?? "primary"
     const boxTop = topbar.length
-    if (boxed) topbar = [...topbar, frameTop({ width, color: boxColor, ascii: !rich || asciiGlyphs(), label: "sub-agent", ...(openAt < 0 ? { hint: width < 70 ? "↑ parent · ←→" : "↑ parent · ←→ siblings" } : {}) })]
-    if (openAt >= 0) topbar = [...topbar, ...agentThreadHeader({ thread: openThreads[openAt]!, index: openAt, count: openThreads.length, now: now(), width, inset: PROMPT_MARGIN, sep: g.sep, rule: g.rule })]
+    if (boxed) topbar = [...topbar, frameTop({ width, color: boxColor, ascii: !rich || asciiGlyphs(), label: "sub-agent" })]
+    if (openAt >= 0) topbar = [...topbar, ...agentThreadHeader({ thread: openThreads[openAt]!, index: openAt, count: openThreads.length, now: now(), width, inset: PROMPT_MARGIN, sep: g.sep, rule: g.rule, parent: parentTitle(state, viewed!) })]
     const findBuilt = state.find ? actions.findBar(width) : state.promptSearch ? actions.searchBar(width) : undefined
     const findDrawn = findBuilt ? barRows(state.find ? "find" : "search", [findBuilt.row], width) : []
     const findRow = findBuilt && findDrawn[0] ? { row: findDrawn[0], cursor: findDrawn[0] === findBuilt.row ? findBuilt.cursor : findDrawn[0].reduce((sum, span) => sum + textWidth(span.text), 0) } : undefined
@@ -257,6 +261,15 @@ export function createChatRows(ctx: AppContext, actions: {
     const { tasks: stripList, commands: backgroundItems, activity: childActivity } = sessionChildren(state, { now: now(), sep: g.sep })
     // With sub-agents in the strip, the commands are rows of its tree: one block for everything that runs, not two lists.
     const strip = rich && !inlineView && stripList.length ? renderAgentsStrip({ run: subagentRunOf(state, g.sep).ofTask, ...(state.agentView ?? (state.sessionParentId ? state.sessionId : undefined) ? { open: (state.agentView ?? state.sessionId) as string } : {}), tasks: stripList, activity: childActivity, now: now(), width: width - (agentsPet ? agentsPet.cols + 1 : 0), inset: PROMPT_MARGIN + 1, glyphs: g, root: !working, openHint: `ctrl+x ↓ open ${g.sep} /tasks`, ...(!asking ? { commands: backgroundItems } : {}) }) : { rows: [], ids: [] }
+    // The line that says where the reader is: a child's session (the thread has its header), and every sub-agent view in the minimal tier.
+    // It lives in the top rows, so it shows whether or not the session's top bar does.
+    if (viewed && (viewed.kind === "child" || !rich)) {
+      const child = viewed.kind === "child" ? stripList.find((task) => task.taskId === viewed.taskId) : undefined
+      const siblings = viewed.kind === "thread" ? (state.agentRoot ?? state.transcript).agentThreads().length : 0
+      const hints = viewed.kind === "child" ? ["↑ parent · ←→ siblings", "↑ parent · ←→", "↑ parent"] : siblings > 1 ? ["←→ · ↑ back", "↑ back"] : ["↑ back"]
+      const there = viewed.kind === "thread" ? threadState(viewed.thread) : child ? doing(child, childActivity(child.taskId), g.sep) : undefined
+      topbar = [...topbar, agentContextLine({ name: viewed.name, color: viewed.color, ...(there ? { state: there } : {}), parent: parentTitle(state, viewed), hints, width, inset: PROMPT_MARGIN, sep: g.sep })]
+    }
     const stripBuilt: Line[] = strip.rows
     const stripRows: Line[] = stripBuilt.length ? barRows("agents", stripBuilt, width) : []
     const backgroundBuilt = !asking && !inlineView && !stripBuilt.length ? barRows("background", backgroundRows({ items: backgroundItems, full: state.mode === "full", width, now: now(), inset: PROMPT_MARGIN + 1, ascii: !rich }), width) : []

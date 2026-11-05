@@ -6,7 +6,7 @@ import { displayPath, errorMessage, fail, missingPathMessage, resolvePath, succe
 
 const MAX_RESULTS = 1000
 /** Most patterns one call may merge; they share the result cap. */
-const MAX_PATTERNS = 8
+const MAX_PATTERNS = 32
 /** Overrides the entry budget of a walk (used by tests). */
 export const GLOB_MAX_ENTRIES_ENV = "MENDCODE_GLOB_MAX_ENTRIES"
 
@@ -18,7 +18,7 @@ export default defineTool({
   permission: "read",
   args: z.object({
     pattern: z.string().min(1).optional().describe("Glob pattern"),
-    patterns: z.array(z.string().min(1)).min(1).max(MAX_PATTERNS).optional(),
+    patterns: z.array(z.string().min(1)).min(1).max(MAX_PATTERNS, `max ${MAX_PATTERNS} patterns per call; split them into several calls`).optional(),
     path: z.string().optional().describe("Directory to search (default: project root)"),
   }),
   async execute({ pattern, patterns, path }, context) {

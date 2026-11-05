@@ -172,7 +172,7 @@ export async function resolvePastedPath(rawPath: string, options: { home?: strin
     if (mention) return { kind: "mention", path: mention }
   }
 
-  if (info.size > MAX_TEXT_ATTACHMENT_BYTES) throw new AttachmentError(`${path.basename(file)} is not a supported image and is larger than 200 KB`)
+  if (info.size > MAX_TEXT_ATTACHMENT_BYTES) throw new AttachmentError(`${path.basename(file)} is not a supported image and is larger than 200 KB (${info.size.toLocaleString("en-US")} bytes; the limit is ${MAX_TEXT_ATTACHMENT_BYTES.toLocaleString("en-US")})`)
   const bytes = new Uint8Array(await Bun.file(file).arrayBuffer())
   const text = decodeUtf8Strict(bytes)
   if (text === undefined) throw new AttachmentError(`${path.basename(file)} is not a supported image and is not valid UTF-8 text`)

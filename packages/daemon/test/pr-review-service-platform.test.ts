@@ -102,9 +102,9 @@ const checkpointOf = (head: string, base: string, extra: Partial<JobCheckpoint> 
 
 type Answer = (input: RunPrReviewInput, call: number) => Partial<ReviewRun> & Pick<ReviewRun, "status">
 
-function harness({ repo, yaml, answer, now, audit, reviewUsage }: { reviewUsage?: NonNullable<Parameters<typeof createPrReviewService>[0]["reviewUsage"]>; repo: Awaited<ReturnType<typeof repository>>; yaml: string; answer: Answer; now?: () => number; audit?: (input: { directory: string; head?: string }) => Promise<AuditRun> }) {
+function harness({ repo, yaml, answer, now, audit, reviewUsage, data: given }: { data?: string; reviewUsage?: NonNullable<Parameters<typeof createPrReviewService>[0]["reviewUsage"]>; repo: Awaited<ReturnType<typeof repository>>; yaml: string; answer: Answer; now?: () => number; audit?: (input: { directory: string; head?: string }) => Promise<AuditRun> }) {
   const gh = fakeGh(repo)
-  const data = temp("svc-data-")
+  const data = given ?? temp("svc-data-")
   const notices: string[] = []
   const inputs: RunPrReviewInput[] = []
   const config = parseReviewConfig(yaml).config
@@ -214,6 +214,51 @@ describe("held reviews", () => {
     await until(() => h.notices.some((text) => text.startsWith("The held review")))
     expect(h.notices.find((text) => text.startsWith("The held review"))).toContain("was not posted: the pull request moved past")
     expect(h.gh.posts).toEqual([])
+  })
+})
+
+describe("held reviews survive a restart", () => {
+  const answer = (input: RunPrReviewInput) => ({ status: "reviewed" as const, outcome: { result: result(input.head, input.base, [finding()]) } as never, checkpoint: checkpointOf(input.head, input.base) })
+
+  test("a review finished without consent is kept on disk; the next service posts it on publish-on with no second model call", async () => {
+    const repo = await repository("enabled: true\n")
+    await repo.push(12, "feature", "export const one = 2\n")
+    const first = harness({ repo, yaml: "enabled: true\n", answer })
+    first.gh.prs.push({ number: 12, branch: "feature", baseRef: "main" })
+    await first.service.control({ sessionId: "ses_a", action: "review", pr: "12" })
+    await until(() => first.jobs().some((job) => job.state === "done"))
+    first.service.stop()
+    // A new daemon on the same data directory: the answer arrives there.
+    const second = harness({ repo, yaml: "enabled: true\n", answer, data: first.data })
+    second.gh.prs.push({ number: 12, branch: "feature", baseRef: "main" })
+    const yes = await second.service.control({ sessionId: "ses_a", action: "publish-on" })
+    expect(yes.ok && yes.text).toContain("posting 1 held review")
+    await until(() => second.notices.some((text) => text.startsWith("Posted the held review")))
+    expect(second.inputs).toHaveLength(0)
+    expect(second.gh.posts.length).toBeGreaterThan(0)
+  })
+
+  test("a declined repository still keeps the finished review; a later publish-on posts it, and a moved head is said and not posted", async () => {
+    const repo = await repository("enabled: true\n")
+    await repo.push(12, "feature", "export const one = 2\n")
+    const h = harness({ repo, yaml: "enabled: true\n", answer })
+    h.gh.prs.push({ number: 12, branch: "feature", baseRef: "main" })
+    await h.service.control({ sessionId: "ses_a", action: "publish-off" })
+    await h.service.control({ sessionId: "ses_a", action: "review", pr: "12" })
+    await until(() => h.jobs().some((job) => job.state === "done"))
+    await repo.push(12, "feature", "export const one = 3\n")
+    const yes = await h.service.control({ sessionId: "ses_a", action: "publish-on" })
+    expect(yes.ok && yes.text).toContain("posting 1 held review")
+    await until(() => h.notices.some((text) => text.startsWith("The held review")))
+    expect(h.notices.find((text) => text.startsWith("The held review"))).toContain("moved past")
+    expect(h.gh.posts).toEqual([])
+  })
+
+  test("publish-on with nothing finished says so", async () => {
+    const repo = await repository("enabled: true\n")
+    const h = harness({ repo, yaml: "enabled: true\n", answer })
+    const yes = await h.service.control({ sessionId: "ses_a", action: "publish-on" })
+    expect(yes.ok && yes.text).toContain("no finished review was waiting")
   })
 })
 

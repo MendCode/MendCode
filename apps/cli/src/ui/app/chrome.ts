@@ -88,8 +88,7 @@ export function createChrome(ctx: AppContext, actions: {
       ...(topbarStats.length ? { stats: topbarStats } : {}),
       contextHover: state.contextHover === true,
       contextStyle: state.tuiProfile.contextStyle,
-      // An open sub-agent thread names its keys in its own header (agent-thread-header.ts).
-      ...(state.agentView ? {} : state.sessionParentId ? { navigation: width < 70 ? "↑ parent · ←→" : "↑ parent · ←→ siblings" } : {}),
+      // A sub-agent's view names its keys in its own context line (agent-cue.ts), top bar or none.
       ...(!state.reducedMotion && topbarAnimates({ width: room, title }) ? { tick: state.topbarTick } : {}),
     }
     const area = topbarContextArea({ ...bar, width: room })

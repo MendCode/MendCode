@@ -4074,12 +4074,12 @@ export async function startDaemon(options: DaemonOptions) {
         if (command.action === "setup-preview" || command.action === "setup-apply") {
           const { previewQuickSetup } = await import("./pr-review/quick-setup")
           const directory = store.sessionDirectory(command.sessionId)!
-          const setup = await previewQuickSetup({ directory, dataDir: options.dir, settings: store.settings.get(), safeMode: options.safeMode, role: command.role, git: options.prReview?.git, ...(options.prReview?.run ? { gh: (argv, cwd) => options.prReview!.run!({ argv, cwd }) } : {}) })
+          const setup = await previewQuickSetup({ directory, dataDir: options.dir, settings: store.settings.get(), safeMode: options.safeMode, dev: options.dev === true, role: command.role, git: options.prReview?.git, ...(options.prReview?.run ? { gh: (argv, cwd) => options.prReview!.run!({ argv, cwd }) } : {}) })
           if (command.action === "setup-preview") return reply(connection, command.id, { ok: true, result: { setup, text: setup.text } })
           if (setup.problems.length || command.reason !== setup.digest) return reply(connection, command.id, { ok: false, code: "target_mismatch", message: `${setup.text}\nPreview setup again before confirming.` })
           const before = store.settings.get()
           if (!prReviewOn()) {
-            const settings = store.settings.set({ experimental: { ...before.experimental, pr_review: true } })
+            const settings = store.settings.set({ experimental: { ...before.experimental, pr_review: true }, ...(setup.unlock ? { features: { ...before.features, pr_review: true } } : {}) })
             globalSink.append({ type: "settings.changed", settings })
           }
           const service = await prReviewService()
@@ -4090,7 +4090,7 @@ export async function startDaemon(options: DaemonOptions) {
           const published = setup.publish
             ? await service.control({ sessionId: command.sessionId, action: "publish-on" }) : watched
           if (!published.ok) return reply(connection, command.id, { ok: false, code: "invalid_command", message: `${published.message}\nThe watch was started; run /pr setup again to retry publishing.` })
-          return reply(connection, command.id, { ok: true, result: { text: `Setup complete.\n${setup.changes.map((line) => `Applied: ${line}`).join("\n")}\n${setup.skipped.join("\n")}\n\n${watched.text}\n${published === watched ? "" : published.text}`, watches: published.watches } })
+          return reply(connection, command.id, { ok: true, result: { text: `Setup complete.\n${setup.changes.map((line) => `Applied: ${line}`).join("\n")}${setup.dev && setup.watch ? "\nDevelopment daemon: the watch is recorded and does not run." : ""}\n${setup.skipped.join("\n")}\n\n${watched.text}\n${published === watched ? "" : published.text}`, watches: published.watches } })
         }
         if (!prReviewOn()) return reply(connection, command.id, { ok: false, code: "invalid_command", message: "[DAEMON]: The PR reviewer is off: it reaches the network through gh and spends model calls, so turn it on with /experimental pr_review on (balanced tier or above)" })
         // The platform's fields (job actions, audit, config) go through as given; the service and control.ts validate them.

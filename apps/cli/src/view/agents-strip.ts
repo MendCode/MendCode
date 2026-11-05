@@ -6,6 +6,7 @@ import { clip, fit, lineWidth, spread } from "./deck"
 import { formatElapsed } from "./time"
 import { truncateEnd } from "./wrap"
 import { backgroundName, type BackgroundItem } from "./background-row"
+import { markOpenRow } from "./agent-cue"
 
 /** Rows of sub-agents the strip shows before it says how many more there are. */
 export const AGENTS_SHOWN = 4
@@ -53,7 +54,8 @@ export function stripActive(tasks: readonly StripTask[]): boolean {
   return tasks.some((task) => ACTIVE.has(task.state))
 }
 
-function doing(task: StripTask, activity: AgentActivity | undefined, sep: string): Span {
+/** What a row says it is doing now, or how it ended. */
+export function doing(task: StripTask, activity: AgentActivity | undefined, sep: string): Span {
   if (task.state === "completed") return { text: "done", fg: "success" }
   if (task.state === "failed") return { text: "failed", fg: "error" }
   if (task.stoppedByUser) return { text: `stopped by you ${sep} /relaunch`, fg: "warning" }
@@ -147,9 +149,11 @@ export function renderAgentsStrip(input: { tasks: readonly StripTask[]; /** The 
       { ...status, text: truncateEnd(status.text, statusWidth) },
     ]
     const ctx = contexts.get(task.taskId)
-    push([pad, ...fit(left, room - TIME), ...(ctxWidth ? [{ text: ` ${(ctx?.text ?? "").padStart(ctxWidth)}`, fg: ctx?.fg ?? ("muted" as const) }] : []), { text: elapsed.padStart(9), fg: "muted" }], task.taskId)
+    // The sub-agent being read has its whole row filled, so the reader sees which one they are inside.
+    const own = (line: Line): Line => (here ? markOpenRow(line) : line)
+    push([pad, ...own([...fit(left, room - TIME), ...(ctxWidth ? [{ text: ` ${(ctx?.text ?? "").padStart(ctxWidth)}`, fg: ctx?.fg ?? ("muted" as const) }] : []), { text: elapsed.padStart(9), fg: "muted" }])], task.taskId)
     const facts = detail ? runs.get(task.taskId) : undefined
-    if (facts) push([pad, { text: last ? "    " : "│   ", fg: "muted" }, ...clip(facts, Math.max(1, room - 4))], task.taskId)
+    if (facts) push([pad, ...own(here ? fit([{ text: last ? "    " : "│   ", fg: "muted" }, ...clip(facts, Math.max(1, room - 4))], room) : [{ text: last ? "    " : "│   ", fg: "muted" }, ...clip(facts, Math.max(1, room - 4))])], task.taskId)
   })
   // A command has no activity of its own to show: its line, `cmd` (or `bg` for an engine's own agent) and how long it has run.
   shownCommands.forEach((item, index) => {
