@@ -866,6 +866,12 @@ if (themeFiles.ok) {
   // The tool designs of the same layers (`tool-designs/<name>.json`) come in the same reply.
   const designProblems = registerToolDesignFiles((themeFiles.result as ThemesReport | undefined)?.toolDesigns)
   if (designProblems.length) startupNotice = [startupNotice, `tool design ${designProblems[0]!.name}: ${designProblems[0]!.message}${designProblems.length > 1 ? ` (+${designProblems.length - 1} more)` : ""}`].filter(Boolean).join(" · ")
+  // Footer pack files come in the same answer; with none the module is not touched here (the app loads it with the footer).
+  const packFiles = (themeFiles.result as ThemesReport | undefined)?.footerPacks ?? []
+  if (packFiles.length) {
+    const packProblems = (await import("./view/footer-pack")).registerFooterPacks(packFiles)
+    if (packProblems.length) startupNotice = [startupNotice, `footer pack ${packProblems[0]!.name}: ${packProblems[0]!.message}${packProblems.length > 1 ? ` (+${packProblems.length - 1} more)` : ""}`].filter(Boolean).join(" · ")
+  }
 }
 
 // The app applies the terminal-local image protocol from /customize before its first frame.

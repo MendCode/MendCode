@@ -1,4 +1,4 @@
-import { DEFAULT_FOOTER, FOOTER_DEFAULT_PRESET, FOOTER_ICON_MODES, FOOTER_PRESETS, FOOTER_PRESET_NAMES, FOOTER_ROWS_MAX, FOOTER_HEIGHT_FRACTION, footerRowsProblems, parseRowSegment, quotaReadings, type FooterIconMode } from "@mendcode/protocol/wire"
+import { DEFAULT_FOOTER, FOOTER_DEFAULT_PRESET, FOOTER_PACK_OFF, FOOTER_ICON_MODES, FOOTER_PRESETS, FOOTER_PRESET_NAMES, FOOTER_ROWS_MAX, FOOTER_HEIGHT_FRACTION, footerRowsProblems, parseRowSegment, quotaReadings, type FooterIconMode } from "@mendcode/protocol/wire"
 import type { Line, Span } from "../ui/theme"
 import { clip, decorate, DROP_RANK, dropToFit, entryBody, entrySpans, type FooterInput } from "./footer"
 import { lineWidth as widthOf, textWidth } from "./wrap"
@@ -137,9 +137,10 @@ const listPlaced = (list: readonly string[] | undefined): boolean => list !== un
  * The rows the footer draws: the user's `footerRows`; else, in the full view only, the `rows` preset while the user never chose a footer
  * (no rows, no `/footer` list, `/footer preset classic` not used); else none, which is the single row. Balanced and minimalist keep theirs.
  */
-export function footerRowsOf({ mode, profile, list }: { mode: "minimal" | "balanced" | "full"; profile: { footerRows: readonly (readonly string[])[]; footerDefaultRows: boolean }; list: readonly string[] | undefined }): { rows: readonly (readonly string[])[]; builtIn: boolean } {
+export function footerRowsOf({ mode, profile, list }: { mode: "minimal" | "balanced" | "full"; profile: { footerRows: readonly (readonly string[])[]; footerDefaultRows: boolean; footerPack?: string }; list: readonly string[] | undefined }): { rows: readonly (readonly string[])[]; builtIn: boolean } {
   if (profile.footerRows.length) return { rows: profile.footerRows, builtIn: false }
-  if (mode === "full" && profile.footerDefaultRows && !listPlaced(list)) return { rows: FOOTER_PRESETS[FOOTER_DEFAULT_PRESET]!.rows, builtIn: true }
+  // A footer pack (footer-pack.ts) is the default footer now; the `line` rows are the full view's only with `footerPack: off`.
+  if (mode === "full" && profile.footerDefaultRows && !listPlaced(list) && (profile.footerPack ?? FOOTER_PACK_OFF) === FOOTER_PACK_OFF) return { rows: FOOTER_PRESETS[FOOTER_DEFAULT_PRESET]!.rows, builtIn: true }
   return { rows: [], builtIn: false }
 }
 

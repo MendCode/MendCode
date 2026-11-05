@@ -825,6 +825,8 @@ export function createApp(input: AppInput) {
     ideCommand,
     setSidebar: (...args) => setSidebar(...args),
     footerSegments: (...args) => footerSegments(...args),
+    footerIsOwn: () => footerIsOwn(),
+    refreshThemes: () => refreshThemes(),
     switchSession,
     openSessions,
     attachPasted,
@@ -1219,7 +1221,7 @@ export function createApp(input: AppInput) {
     transcriptWidth: () => transcriptWidth(),
     promptStatusLine: (...args) => promptStatusLine(...args),
   })
-  const { sessionTitle, topbarRow, dockRows, sidebarRows, loadSidebarMcp, setSidebar, statusRow, statusRows, footer, footerSegments, sidebarShown, chatWidth, scrollbarGutter, transcriptWidth, ensureBranch, promptStatusLine, paneFacts } = createChrome(ctx, {
+  const { sessionTitle, topbarRow, dockRows, sidebarRows, loadSidebarMcp, setSidebar, statusRow, statusRows, footer, footerSegments, footerIsOwn, sidebarShown, chatWidth, scrollbarGutter, transcriptWidth, ensureBranch, promptStatusLine, paneFacts } = createChrome(ctx, {
     loadBranch,
     ensureScratch,
     secretTail,

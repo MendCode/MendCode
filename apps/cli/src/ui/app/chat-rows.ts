@@ -77,7 +77,7 @@ export function createChatRows(ctx: AppContext, actions: {
   /** Cells the transcript leaves free for the scrollbar, and the columns its text is laid out in. */
   scrollbarGutter: () => number
   transcriptWidth: () => number
-  promptStatusLine: (room: number) => Line | undefined
+  promptStatusLine: (room: number, activity?: Line) => Line | undefined
   loadEarlier(): Promise<void>
   compactionLive: ReturnType<typeof import("./compaction-live").createCompactionLive>
 }) {
@@ -126,12 +126,17 @@ export function createChatRows(ctx: AppContext, actions: {
     const lead = customChrome?.lead ?? state.tuiProfile.promptLead
     const frame = comments.frame(ctx.views.frame({ preset, lead, border: customChrome?.border ?? state.tuiProfile.promptBorder, borders: state.tuiProfile.promptGlyphs, rich }, { width }), width)
     // `promptStatus: border` lays the READY › model › … line over the top rule (rules and boxes; the tinted minimal preset has no rule).
-    const statusRule = rich && preset !== "minimal" && frame.top.length === 1 ? actions.promptStatusLine(width - PROMPT_MARGIN * 2 - 6) : undefined
+    const statusRoom = width - PROMPT_MARGIN * 2 - 6
+    const borderStatus = rich && preset !== "minimal" && frame.top.length === 1 ? actions.promptStatusLine(statusRoom) : undefined
+    // That line already says the state: while a turn works the activity takes the state's place in it, and no row of its own repeats
+    // it (the spinner, what runs, time and tokens; the rest of the line gives way first when the rule is short).
+    const mergedActivity = borderStatus && !asking ? overlayWorking(Math.max(12, Math.floor(statusRoom * 0.6)), true) : undefined
+    const statusRule = mergedActivity ? actions.promptStatusLine(statusRoom, mergedActivity) : borderStatus
     // The activity status: `above` lies over the top rule and `inside` over the prompt's first row, so neither takes a row from the transcript or
     // the prompt. A host without that rule or row (the minimal view and preset) keeps the classic row, and `off` keeps only a retry or the Esc hint.
     const ruleOffset = PROMPT_MARGIN + (preset === "top-bottom" ? 2 : 3)
     const overlay: "above" | "inside" | undefined = state.tuiProfile.activityPlacement === "above" && rich && preset !== "minimal" && frame.top.length === 1 ? "above" : state.tuiProfile.activityPlacement === "inside" && rich ? "inside" : undefined
-    const workingBuilt = asking ? undefined : overlay === "above" ? overlayWorking(width - ruleOffset - 4, true) : workingRow(width, overlay !== undefined)
+    const workingBuilt = asking || borderStatus ? undefined : overlay === "above" ? overlayWorking(width - ruleOffset - 4, true) : workingRow(width, overlay !== undefined)
     // It takes the rule from the status line while the turn works; the status line is back when it stops.
     // A one-line notice lies over the same rule for the seconds it lasts: it takes no row, so nothing on screen moves when it comes or goes.
     // Only a host without that rule (the minimal view and preset) gives it a row of its own.
@@ -208,7 +213,7 @@ export function createChatRows(ctx: AppContext, actions: {
     const findBuilt = state.find ? actions.findBar(width) : state.promptSearch ? actions.searchBar(width) : undefined
     const findDrawn = findBuilt ? barRows(state.find ? "find" : "search", [findBuilt.row], width) : []
     const findRow = findBuilt && findDrawn[0] ? { row: findDrawn[0], cursor: findDrawn[0] === findBuilt.row ? findBuilt.cursor : findDrawn[0].reduce((sum, span) => sum + textWidth(span.text), 0) } : undefined
-    const asciiMascot = !inlineView && rich && state.tuiProfile.activityMascot && home === false && workingBuilt ? activityArt().map((line): Line => [{ text: " ".repeat(META_MARGIN) }, ...line]) : []
+    const asciiMascot = !inlineView && rich && state.tuiProfile.activityMascot && home === false && (workingBuilt || mergedActivity) ? activityArt().map((line): Line => [{ text: " ".repeat(META_MARGIN) }, ...line]) : []
     const extAbove = promptSlotRows("prompt.above", width, height)
     const extBelow = promptSlotRows("prompt.below", width, height)
     // Pending comments on the answer (docs/editor.md): the reply bar and the chips above the prompt, or the chips under it.

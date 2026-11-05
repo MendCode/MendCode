@@ -132,7 +132,8 @@ tier). Local sessions only; remote and peer clients are refused.
 - `/pr review [pr]` reviews one pull request now (the current branch's when omitted), even when the repo config is off; posting still
   needs `enabled: true`. A head already reviewed with the same config is answered at once ("already reviewed at …, so nothing was
   run"), before anything is spent; `/pr review [pr] full` (the tool's `full: true`) reviews it again whole. A plain `@mendcode review` on such a head is
-  skipped the same way.
+  skipped the same way. A head that only has a partial review (it reached the cap) is not reviewed: `/pr review` continues it with
+  what is missing.
 - The `pr_review` tool is the model's way to do the same. It has two actions:
   - `review` follows the session's permission mode like a command: full access runs it, other modes ask ("Review a pull
     request"), and a grant for the session or always holds. The repository's filters and the PR claims apply, and the review is posted only as
@@ -333,8 +334,9 @@ inline comment per new finding on the diff's new side, with a ```suggestion bloc
 review carries `<!-- mendcode:review head=SHA -->` and each comment `<!-- mendcode:f=ID -->` (the finding's sha1 of path, line,
 category and summary): a finding already posted is never posted again, the same head is never reviewed twice, and a later head with
 nothing new posts nothing. A comment GitHub refuses (422) moves into the summary and the request is sent once more; any other failure
-posts nothing and the findings stay in the session. Over `budget.tokens_per_pr` the review says it stopped and publishes only what
-it confirmed. The budget counts input the provider did not serve from its cache, plus output: a child that
+posts nothing and the findings stay in the session. Over `budget.tokens_per_pr` the review closes with one short check and publishes
+only what it confirmed, as a partial review that says what it did not cover
+([a review that reaches the cap](#a-review-that-reaches-the-cap)). The budget counts input the provider did not serve from its cache, plus output: a child that
 reads files resends its conversation on every step, so cache reads would stop an ordinary PR before verification (one live review
 of an 8-file PR read 207,343 input tokens in its first pass). The cost line shows the cache reads apart. A review the budget
 stopped before verifying says so in its verdict, never "No findings".
@@ -711,7 +713,7 @@ recorded in `accounting.json`, under purpose `resume` for a resumed verify pass.
 The cap a review actually gets scales with its diff: `min(tokens_per_pr, 150,000 + tokens_per_diff_token x diff tokens)`, so a
 one-commit review cannot spend a whole-PR allowance. It is enforced inside a model turn too: a turn whose reported tokens reach
 what is left of the review pass's share (80%) or of the verify budget is cancelled, and the review ends as incomplete ("stopped at
-the token budget; nothing was published") with its checkpoint, instead of finishing the turn first. A personal config can only
+the token budget") with its checkpoint, instead of finishing the turn first; the review then closes as a partial one. A personal config can only
 lower `tokens_per_diff_token`.
 
 Before each call of the review pass (each part of a large diff) the reviewer checks that the rest of the diff fits what the pass has
@@ -719,6 +721,30 @@ left. Before the first call the floor is the diff's own size; after some parts, 
 counted per diff token (a diff of numbers, such as JSON results, counts far more than its size suggests). A diff that cannot fit
 is never sent ("Nothing was sent to a model"), and a rest that cannot fit stops before the next part instead of paying for it.
 Both are budget stops with their checkpoint: raise `tokens_per_pr` and retry, and the review continues from the parts it has.
+
+#### A review that reaches the cap
+
+A review never ends without a result. When it reaches the cap, or the rest of the diff cannot fit under it, it makes one compact
+closing check and publishes what it verified as a **partial** review:
+
+- The closing check is one verify call over the strongest candidate findings it already has (the most severe first, at most 8). It
+  reads the findings and the lines they cite, never the diff again, and never reviews another part. It has its own small limit,
+  30,000 counted tokens on top of the cap (a turn is stopped after the request that passes it, so a little more can be counted); it
+  is the only spending past `tokens_per_pr`. A closing that fails still closes: the candidates it could not judge are counted.
+- Nothing unverified is published as a finding. The review says how many candidates were found but not verified.
+- The post is headed `## MendCode partial review` and says first that it is partial: which files were reviewed and which were not,
+  why (the cap, with the figures), and how to get the rest. It carries no head marker, so it is not a review of that head for the
+  dedupe, for another reviewer's stand-down or for a hosted runner's state.
+- The job stays `checkpointed` with the parts not reviewed and the candidates not verified. `/pr review <n>` (or `@mendcode
+  review`) continues that same job from its checkpoint: only the missing parts are reviewed, candidates already verified are not
+  judged again, and findings already posted are not posted twice. The continuation counts its own spending under the same cap, so it
+  gets a fresh allowance; if it reaches the cap again it closes as a partial review again, with more covered. When it completes, the
+  review is posted whole and the head counts as reviewed.
+- `/pr review <n> full` drops the checkpoint and reviews the whole diff again; raising `budget.tokens_per_pr` lets a continuation
+  finish in one go. A continuation that cannot review even one more part under the cap makes no progress, says so and posts
+  nothing new. A review with no internal cap (`tokens_per_pr: null`) is never stopped by it.
+- A stop by the provider's quota or a rate limit is not this: it waits or stops as before, and nothing is published until it
+  resumes.
 
 When the first pass says it could not review the change (a restriction on its tools or mode, files it could not read: the
 `incomplete` key of its answer, or a summary that says "the review is incomplete" with no findings), the review ends there as

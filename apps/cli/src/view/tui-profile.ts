@@ -9,7 +9,7 @@ import { IMAGE_MODES, type ImageMode } from "../pets/detect"
 import { FILE_OPENERS, type FileOpener } from "./links"
 import { PROCESS_MODES, type ProcessMode } from "../process-modes"
 import { GLYPH_CHOICES, type GlyphChoice } from "../ui/theme"
-import { ACTIVITY_PARTS, ACTIVITY_PARTS_DEFAULT, ACTIVITY_STYLES, unknownActivityTokens, QUOTA_REFRESH_DEFAULT_MINUTES, normalizeQuotaRefresh, type QuotaRefreshEntry, FOOTER_ICON_MODES, STAT_PART_IDS, footerRowsProblems, footerTextProblems, normalizeUsageWidgets, type FooterIconMode, type UsageWidgetId } from "@mendcode/protocol/wire"
+import { ACTIVITY_PARTS, ACTIVITY_PARTS_DEFAULT, ACTIVITY_STYLES, unknownActivityTokens, QUOTA_REFRESH_DEFAULT_MINUTES, normalizeQuotaRefresh, type QuotaRefreshEntry, FOOTER_ICON_MODES, FOOTER_PACK_DEFAULT, FOOTER_PACK_NAME, FOOTER_PACK_SYMBOLS, STAT_PART_IDS, footerRowsProblems, footerTextProblems, normalizeUsageWidgets, type FooterIconMode, type FooterPackSymbols, type UsageWidgetId } from "@mendcode/protocol/wire"
 import { DEFAULT_TOOL_DESIGN_NAME, parseMarkdownColors, TIMESTAMP_PLACES, TOOL_DESIGN_NAME, TOOL_RAIL_DEFAULT, toolRailProblems } from "@mendcode/protocol/wire"
 import { SLASH_LAYOUTS, slashProfileProblems, type SlashLayout, type SlashGroup, type SlashPreference } from "@mendcode/protocol/wire"
 import { DEFAULT_IMAGE_WAIT_CANVAS, DEFAULT_IMAGE_WAIT_INTERVAL, IMAGE_WAIT_COLORS, IMAGE_WAIT_LIMITS, IMAGE_WAIT_MODES, normalizeImageWaitArt, normalizeImageWaitCanvas, imageWaitPresetNames, type ImageWaitArt, type ImageWaitCanvas, type ImageWaitColor, type ImageWaitMode } from "./image-wait"
@@ -283,6 +283,12 @@ export type TuiProfile = {
   footerText: Record<string, string | string[]>
   /** An icon before each footer segment: none, plain Unicode glyphs, or Nerd Font icons. */
   footerIcons: FooterIconMode
+  /** The footer's look as a pack (docs/customize.md, "Footer packs"): `clean` by default, `off` for the built-in rows; never drawn over a footer of the user's own. */
+  footerPack: string
+  /** The pack's glyphs: the terminal's glyph set (`auto`) or words only (`text`). */
+  footerPackSymbols: FooterPackSymbols
+  /** With a footer of the user's own, the pack is drawn above it instead of standing aside. */
+  footerPackStack: boolean
   messageLayout: "quiet" | "classic"
   userIcon: string
   assistantIcon: string
@@ -538,6 +544,9 @@ export const DEFAULT_TUI_PROFILE: Readonly<TuiProfile> = {
   footerDefaultRows: true,
   footerText: {},
   footerIcons: "none",
+  footerPack: FOOTER_PACK_DEFAULT,
+  footerPackSymbols: "auto",
+  footerPackStack: false,
   messageLayout: "quiet",
   userIcon: "",
   assistantIcon: "",
@@ -894,6 +903,9 @@ export function normalizeTuiProfile(raw: unknown): TuiProfile {
     footerDefaultRows: bool("footerDefaultRows"),
     footerText: normalizeFooterText(source.footerText),
     footerIcons: oneOf(FOOTER_ICON_MODES, source.footerIcons) ?? "none",
+    footerPack: typeof source.footerPack === "string" && FOOTER_PACK_NAME.test(source.footerPack) ? source.footerPack : FOOTER_PACK_DEFAULT,
+    footerPackSymbols: oneOf(FOOTER_PACK_SYMBOLS, source.footerPackSymbols) ?? "auto",
+    footerPackStack: bool("footerPackStack"),
     messageLayout: oneOf(["quiet", "classic"] as const, source.messageLayout) ?? "quiet",
     userIcon: oneLine(source.userIcon, 4),
     assistantIcon: oneLine(source.assistantIcon, 4),

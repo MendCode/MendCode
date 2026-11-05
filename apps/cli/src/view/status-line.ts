@@ -19,6 +19,8 @@ export type StatusLineInput = {
   /** The engine's figures disagreed and the context was clamped: the percent is drawn `~N%`. */
   contextApprox?: boolean
   glyphs: Glyphs
+  /** The activity status while a turn works (`⠋ Running cd … (11s · ↓ 644 tokens)`): it takes the state's place, so no row of its own repeats it. */
+  activity?: Line
 }
 
 const BUSY = new Set<ForegroundState>(["generating", "tool", "compacting", "cancelling"])
@@ -32,10 +34,11 @@ function contextColor(percent: number): ColorName {
 }
 
 /** The pieces in order; each a span group. Fewer drop from the end (context and state last) when `width` is short. */
-export function statusLineSpans({ stateLabel, state, model, effort, repo, branch, contextPercent, contextLabel, contextApprox, glyphs }: StatusLineInput, width: number): Line {
+export function statusLineSpans({ stateLabel, state, model, effort, repo, branch, contextPercent, contextLabel, contextApprox, glyphs, activity }: StatusLineInput, width: number): Line {
   const arrow = glyphs.rule === "-" ? ">" : "›"
   const parts: Array<{ keep: number; spans: Span[] }> = [
-    { keep: 9, spans: [{ text: stateLabel.toUpperCase(), fg: stateColor(state), bold: true }] },
+    // While a turn works the activity (spinner, what runs, time and tokens) is the state: one line says it, not two.
+    { keep: 9, spans: activity?.length ? [...activity] : [{ text: stateLabel.toUpperCase(), fg: stateColor(state), bold: true }] },
     ...(model ? [{ keep: 6, spans: [{ text: model, fg: "text" as const }] }] : []),
     ...(effort ? [{ keep: 3, spans: [{ text: effort, fg: "muted" as const }] }] : []),
     ...(repo ? [{ keep: 4, spans: [{ text: repo, fg: "body" as const }] }] : []),
@@ -51,9 +54,21 @@ export function statusLineSpans({ stateLabel, state, model, effort, repo, branch
   }
   const line = join(kept)
   if (total(kept) <= width) return line
-  // Even the state alone is wider than the room: cut it.
-  const only = line[0]!
-  return [{ ...only, text: truncateEnd(only.text, Math.max(0, width)) }]
+  // Even the state alone is wider than the room: cut it, span by span (the activity has several).
+  const cut: Line = []
+  let used = 0
+  for (const span of line) {
+    const cells = textWidth(span.text)
+    if (used + cells <= width) {
+      cut.push(span)
+      used += cells
+      continue
+    }
+    const text = truncateEnd(span.text, Math.max(0, width - used))
+    if (text) cut.push({ ...span, text })
+    break
+  }
+  return cut
 }
 
 /**

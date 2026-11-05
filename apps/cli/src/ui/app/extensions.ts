@@ -189,8 +189,8 @@ export function createExtensions(ctx: AppContext, actions: {
     state.keptValues = { ...state.activation.result.keptValues }
     layers.sync()
     rebuildBindings()
-    // A profile theme file may have been edited: ask for the theme files again.
-    if (state.activation.result.overlay.theme) actions.refreshThemes()
+    // A profile theme or footer pack file may have been edited: ask for the look files again.
+    if (state.activation.result.overlay.theme || state.activation.result.overlay.footerPack) actions.refreshThemes()
     return state.activation.result.suppressed
   }
 

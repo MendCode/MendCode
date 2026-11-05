@@ -13,6 +13,8 @@ import type { McpStatusReport } from "@mendcode/protocol"
 import { fastMark, footerParts, quotaText, type FooterInput } from "../../view/footer"
 import { externalEngine, fastApplies } from "../../view/fast-mode"
 import { footerQuotaStyle, footerRowBudget, footerRowsOf, renderFooterRows, rowsWithContent } from "../../view/footer-rows"
+import { footerPackNamed, packPlaces, renderFooterPack, type PackFacts, type PackGlyphs } from "../../view/footer-pack"
+import type { FooterPackFile } from "@mendcode/protocol/wire"
 import { partsLine } from "../../view/stat-parts"
 import { statusLineSpans } from "../../view/status-line"
 import { modelLabel, modelWithEffort, servedByProvider, sessionModelId } from "../../view/model-label"
@@ -367,6 +369,8 @@ export function createChrome(ctx: AppContext, actions: {
   /** The first footer row, through the footer view slot. */
   function statusRow(width: number, provided?: ReturnType<typeof footerSlots>): Line {
     if (!state.tuiProfile.showStatus) return []
+    const packed = packFooter(width, state.shellMode ? undefined : provided ?? footerSlots(width - META_MARGIN - PROMPT_MARGIN))
+    if (packed) return packed.rows[0] ?? []
     const { model, slots } = footerModel(width, provided)
     return ctx.views.draw("footer", model, { width, height: 1, extra: { ...(slots ? { ext: slots } : {}) } }).lines[0] ?? []
   }
@@ -375,7 +379,7 @@ export function createChrome(ctx: AppContext, actions: {
   const statusInBorder = () => state.tuiProfile.promptStatus === "border" && state.mode !== "minimal" && !state.shellMode && (state.ext?.promptChrome()?.preset ?? state.tuiProfile.promptChrome) !== "minimal"
 
   /** `READY › model › effort › repo › branch › ctx 42%` for the prompt's top rule, `room` cells wide; undefined when it is off. */
-  function promptStatusLine(room: number): Line | undefined {
+  function promptStatusLine(room: number, activity?: Line): Line | undefined {
     if (!statusInBorder()) return undefined
     if (state.gitBranch === undefined && !state.branchRequested) {
       state.branchRequested = true
@@ -388,6 +392,7 @@ export function createChrome(ctx: AppContext, actions: {
     const repo = input.directory ? input.directory.split(/[\\/]/).filter(Boolean).at(-1) : undefined
     return statusLineSpans({
       stateLabel: STATE_LABEL[state.transcript.foreground], state: state.transcript.foreground, glyphs: g,
+      ...(activity?.length ? { activity } : {}),
       ...(model ? { model: modelLabel(model, state.modelReport) } : {}), ...(effort ? { effort } : {}), ...(repo ? { repo } : {}),
       ...(state.gitBranch ? { branch: state.gitBranch } : {}),
       ...(tokens !== undefined && threshold > 0 ? { contextPercent: Math.round(tokens / threshold * 100), ...(contextIsEngineWindow(usageInForce(state)) ? { contextLabel: "ctx" } : {}), ...(usageInForce(state)?.contextApprox ? { contextApprox: true } : {}) } : {}),
@@ -415,9 +420,137 @@ export function createChrome(ctx: AppContext, actions: {
     return statusRow(width)
   }
 
+  // ─── Footer packs (docs/customize.md "Footer packs") ────────────────────────────────────────────────────────────────
+
+  /**
+   * Whether the footer is one the user made: rows (their own or a preset's), `/footer preset classic`, a `/footer` list, a `statusLeft`
+   * or `statusRight` template, a status line script, an extension's footer slot or a footer view. A pack never draws over it.
+   */
+  function ownFooter(slots: ReturnType<typeof footerSlots>): boolean {
+    const profile = state.tuiProfile
+    // The quota and today opt-ins are off by default: turning one on is the user shaping the built-in footer.
+    return profile.footerRows.length > 0 || !profile.footerDefaultRows || customFooter() !== undefined || profile.statusLeft !== "" || profile.statusRight !== "" || profile.footerQuota || profile.footerToday
+      || !!(state.statusLine && (state.statusLine.left.length || state.statusLine.right.length || state.statusLine.leftRows?.length || state.statusLine.rightRows?.length))
+      || !!(slots && (slots.left?.length || slots.right?.length || slots.replace || slots.rows?.length)) || ctx.views.hasCustom("footer")
+  }
+
+  /**
+   * What says a turn ended in this folder and session: the changes are asked again after every turn (changes.ts `loadDiffTotals`), so
+   * their object is a new one each time. What a pack reads from git is asked once per mark, never per frame or on a timer.
+   */
+  const turnMark = () => ({ where: `${input.directory}:${state.sessionId}`, totals: state.diffTotals })
+  const sameMark = (a: ReturnType<typeof turnMark> | undefined, b: ReturnType<typeof turnMark>) => a !== undefined && a.where === b.where && a.totals === b.totals
+  /** A pack asks git nothing before the settings arrive (`ensureBranch`): a render before them sends no command, like the built-in footer. */
+  let packGitAllowed = false
+
+  /** git's state for a pack that shows it (`git`): asked at start and after each turn while such a pack is in force. */
+  let packGit: { mark: ReturnType<typeof turnMark>; value?: NonNullable<PackFacts["git"]> } | undefined
+  function packGitState(): PackFacts["git"] {
+    const mark = turnMark()
+    if (!packGitAllowed || sameMark(packGit?.mark, mark) || !input.directory) return packGit?.value
+    const entry: { mark: ReturnType<typeof turnMark>; value?: NonNullable<PackFacts["git"]> } = { mark, ...(packGit?.value ? { value: packGit.value } : {}) }
+    packGit = entry
+    void input.send({ type: "git.status", directory: input.directory }).then((reply) => {
+      if (!reply.ok || packGit !== entry) return
+      const found = (reply.result ?? {}) as Record<string, unknown>
+      const count = (name: string) => (typeof found[name] === "number" ? found[name] as number : 0)
+      entry.value = { staged: count("staged"), unstaged: count("unstaged"), untracked: count("untracked"), conflicts: count("conflicts"), ...(typeof found.ahead === "number" ? { ahead: found.ahead } : {}), ...(typeof found.behind === "number" ? { behind: found.behind } : {}) }
+      requestFrame()
+    })
+    return entry.value
+  }
+
+  /**
+   * The branch for a pack that shows it: asked once, as the top bar asks it (no request when the top bar already did); a pack with
+   * git's state asks it again after each turn with that state, since a turn may switch it.
+   */
+  let packBranchMark: ReturnType<typeof turnMark> | undefined
+  function packBranch(pack: FooterPackFile) {
+    if (!packGitAllowed) return
+    const status = packPlaces(pack, "git")
+    if (!status && !packPlaces(pack, "branch")) return
+    if (!status) {
+      if (state.gitBranch !== undefined || state.branchRequested) return
+    } else {
+      const mark = turnMark()
+      if (sameMark(packBranchMark, mark)) return
+      packBranchMark = mark
+    }
+    state.branchRequested = true
+    void loadBranch()
+  }
+
+  /** The glyph set the pack is drawn with: words only for `footerPackSymbols: text` and a screen reader, ASCII on ASCII chrome. */
+  const packGlyphs = (): PackGlyphs => (state.tuiProfile.accessible || state.accessible || state.tuiProfile.footerPackSymbols === "text" ? "text" : asciiMarks() ? "ascii" : state.glyphMode)
+
+  /** What the pack can say this frame. With the status line in the prompt's border, what it already says (folder, branch, model, effort, context) is left out. */
+  function packFacts(pack: FooterPackFile): PackFacts {
+    const usage = usageInForce(state)
+    const border = statusInBorder()
+    const id = (state.transcript.permissionMode === "plan" ? planModelId(state.modelReport, state.effectiveModel?.model) : undefined) ?? sessionModelId(state.effectiveModel?.model, usage?.model, state.modelReport)
+    const threshold = contextLimit(usage, compactFallback(state))
+    const name = state.transcript.permissionMode === "plan" ? "plan" : state.agentReport?.current ?? "build"
+    const profile = state.tuiProfile
+    const directory = input.home && input.directory?.startsWith(input.home) ? `~${input.directory.slice(input.home.length)}` : input.directory
+    const fastOn = state.modelReport?.session?.fast ?? state.settingsNow.serviceTier === "fast"
+    const hints: Line = []
+    if (profile.showCommandHint) hints.push({ text: "ctrl-p commands", fg: "muted" })
+    if (profile.showAgentHint) hints.push(...(hints.length ? [{ text: "  " }] : []), { text: "/agents", fg: "muted" })
+    if (state.mflowWait) hints.unshift({ text: `Mflow ${state.mflowWait.file.slice(0, 30)} · ${Math.max(0, Math.ceil((state.mflowWait.deadlineAt - now()) / 1000))}s`, fg: "secondary" }, ...(hints.length ? [{ text: "  " }] : []))
+    const loopsWaiting = state.loops.filter((loop) => loop.state === "needs_input" && state.liveLoops.has(loop.loopId)).length
+    const flowsWaiting = [...state.liveWorkflows.values()].filter(Boolean).length
+    if (!border) packBranch(pack)
+    return {
+      now: now(),
+      ...(!border && areaName() !== DEFAULT_AREA ? { area: areaName() } : {}),
+      ...(!border && directory ? { directory } : {}),
+      ...(!border && state.gitBranch ? { branch: state.gitBranch } : {}),
+      ...(!border && packPlaces(pack, "git") ? (() => { const git = packGitState(); return git ? { git } : {} })() : {}),
+      ...(state.diffTotals ? { diff: state.diffTotals } : {}),
+      ...(!border && profile.showModel && id ? { model: modelLabel(id, state.modelReport) } : {}),
+      ...(!border && profile.showModel && id && fastOn ? { fast: { mark: fastMark(profile.footerIcons === "none" ? {} : { icons: { mode: profile.footerIcons, ...(packGlyphs() === "ascii" || packGlyphs() === "text" ? { ascii: true } : {}) } }), applies: fastApplies(state.effectiveModel?.model ?? id, state.modelReport) } } : {}),
+      ...(!border && profile.showEffort && state.effectiveModel?.effort ? { effort: state.effectiveModel.effort } : {}),
+      ...(featureOn(state.settingsNow, "jev") && !externalEngine(state.effectiveModel?.model ?? id, state.modelReport) ? { adaptive: true } : {}),
+      ...(!border && usage?.contextTokens !== undefined && threshold > 0 ? { context: { tokens: usage.contextTokens, limit: threshold, ...(usage.contextApprox ? { approx: true } : {}) } } : {}),
+      quotas: [...quotas.values()],
+      ...(state.transcript.sessionCost !== undefined ? { costMicros: state.transcript.sessionCost } : {}),
+      jobs: state.agentShells.filter((shell) => shell.status === "running" && shell.sessionId === state.sessionId).length,
+      loops: state.liveLoops.size,
+      workflows: state.liveWorkflows.size,
+      agents: state.liveTasks?.filter((task) => task.parentId === state.sessionId && task.state === "running").length ?? 0,
+      waiting: loopsWaiting + flowsWaiting,
+      ...(state.transcript.goal ? { goal: goalSpans(state.transcript.goal, now(), g) } : {}),
+      ...(profile.showAgent ? { mode: name.charAt(0).toUpperCase() + name.slice(1), modeColor: agentColor(state.agentReport?.agents.find((agent) => agent.name === name)) } : {}),
+      ...(profile.showPermission ? { permission: state.transcript.permissionMode, permissionLabel: PERMISSION_LABEL[state.transcript.permissionMode] } : {}),
+      connection: state.connection,
+      ...(hints.length ? { hints } : {}),
+    }
+  }
+
+  /**
+   * The pack's rows, when a pack draws: the footer is not the user's own (or `footerPackStack` stacks the pack above it), the prompt is
+   * not in shell mode, and `footerPack` is not `off`. `stack` says the user's footer follows.
+   */
+  function packFooter(width: number, slots: ReturnType<typeof footerSlots>): { rows: Line[]; stack: boolean } | undefined {
+    if (state.shellMode) return undefined
+    const pack = footerPackNamed(state.tuiProfile.footerPack)
+    if (!pack) return undefined
+    const own = ownFooter(slots)
+    if (own && !state.tuiProfile.footerPackStack) return undefined
+    // The footer slot's built-in look: a custom `footer` view counts as the user's own footer (`ownFooter`), so it replaces the pack.
+    return { rows: renderFooterPack({ pack, facts: packFacts(pack), width, glyphs: packGlyphs(), limit: footerRowBudget(input.screen.size.height) }), stack: own }
+  }
+
   function statusRows(width: number): Line[] {
     if (!state.tuiProfile.showStatus) return []
     const slots = state.shellMode ? undefined : footerSlots(width - META_MARGIN - PROMPT_MARGIN)
+    const packed = packFooter(width, slots)
+    if (packed && !packed.stack) return packed.rows
+    const own = builtinStatusRows(width, slots)
+    return packed ? [...packed.rows, ...own].slice(0, Math.max(packed.rows.length + 1, footerRowBudget(input.screen.size.height))) : own
+  }
+
+  function builtinStatusRows(width: number, slots: ReturnType<typeof footerSlots>): Line[] {
     const left = state.shellMode || slots?.replace ? [] : state.statusLine?.leftRows ?? []
     const right = state.shellMode || slots?.replace ? [] : state.statusLine?.rightRows ?? []
     // The full view's second row takes the place no script, extension or `footerRows` row needs, and only on a terminal of at least the
@@ -468,8 +601,12 @@ export function createChrome(ctx: AppContext, actions: {
   const transcriptWidth = () => Math.max(1, chatWidth() - scrollbarGutter())
 
   const ensureBranch = () => {
+    packGitAllowed = true
     if ((footerSegments().includes("branch") || state.tuiProfile.footerRows.some((row) => row.includes("branch")) || state.tuiProfile.titleTemplate.includes("{branch}")) && state.gitBranch === undefined) void loadBranch()
   }
 
-  return { sessionTitle, topbarRow, dockRows, sidebarRows, loadSidebarMcp, setSidebar, statusRow, statusRows, footer, footerSegments, sidebarShown, chatWidth, scrollbarGutter, transcriptWidth, ensureBranch, promptStatusLine, paneFacts }
+  /** Whether the footer on screen is one the user made, so a pack stands aside (`/footer pack` says so). */
+  const footerIsOwn = () => ownFooter(state.shellMode ? undefined : footerSlots(input.screen.size.width - META_MARGIN - PROMPT_MARGIN))
+
+  return { sessionTitle, topbarRow, dockRows, sidebarRows, loadSidebarMcp, setSidebar, statusRow, statusRows, footer, footerSegments, footerIsOwn, sidebarShown, chatWidth, scrollbarGutter, transcriptWidth, ensureBranch, promptStatusLine, paneFacts }
 }

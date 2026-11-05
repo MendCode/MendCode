@@ -6,7 +6,7 @@ import { buildReviewContext, gitRun, type GitRun, type ReviewContext } from "./c
 import { ignoredBy, promptConfig, readReviewConfig, type ReviewConfig } from "./config"
 import { effectiveConfig } from "./config-layers"
 import type { JobCheckpoint, PhasePlan, ReviewMemoryContext, ReviewProvider, RunPlatformInput, RunPlatformOutput } from "./contracts"
-import { resumeReview, ReviewPassError, reviewPullRequest, type ReviewCheckpoint, type ReviewEngineConfig, type ReviewOutcome, type ReviewSessionFactory } from "./engine"
+import { closeCheckpoint, resumeReview, ReviewPassError, reviewPullRequest, type ReviewCheckpoint, type ReviewEngineConfig, type ReviewOutcome, type ReviewSessionFactory } from "./engine"
 import { dedupeInherited, lineReader } from "./fingerprint"
 import { resolveReviewLanguage, withReviewLanguage } from "./language"
 import { parsePartPhase, phaseFacts, phasesBefore, planPhases } from "./phases"
@@ -246,7 +246,16 @@ export async function attemptReview({ sessionFactory, account, calling, context,
     const remaining = partial?.checkpoint.result ? partial.remaining : "the review pass has not finished"
     const limit = providerLimit(failure)
     if (limit) return { ok: false, stop: turnStop(limit, remaining), checkpoint: kept }
-    if (isOverBudget(failure)) return { ok: false, stop: overBudgetStop(failure, remaining), checkpoint: kept }
+    if (isOverBudget(failure)) {
+      const stop = overBudgetStop(failure, remaining)
+      // A turn counted past the cap: the parts reviewed before it are not lost. One short closing check, then a partial review.
+      if (partial) {
+        const progressed = !checkpoint || (parsePartPhase(partial.checkpoint.phase)?.done ?? 0) > (parsePartPhase(checkpoint.phase)?.done ?? 0)
+        const closed = await closeCheckpoint({ sessionFactory: factory, context, config, cap, checkpoint: partial.checkpoint, stop, progressed }).catch(() => undefined)
+        if (closed) return { ok: true, outcome: closed }
+      }
+      return { ok: false, stop, checkpoint: kept }
+    }
     if (isStalled(failure)) return { ok: false, stalled: failure, checkpoint: kept }
     throw failure
   }
@@ -254,6 +263,12 @@ export async function attemptReview({ sessionFactory, account, calling, context,
   if (stalled && outcome.stop && !outcome.verified) return { ok: true, outcome, stalled }
   const over = failures.filter(isOverBudget).at(-1)
   if (over && outcome.stop && !outcome.verified) {
+    // A verify turn counted past the cap: what it judged before is kept, and one short closing check verifies the strongest of the rest.
+    if (outcome.checkpoint) {
+      const progressed = !checkpoint || outcome.checkpoint.verified.length > checkpoint.verified.length
+      const closed = await closeCheckpoint({ sessionFactory: factory, context, config, cap, checkpoint: outcome.checkpoint as ReviewCheckpoint, stop: overBudgetStop(over, outcome.stop.remaining), progressed }).catch(() => undefined)
+      if (closed) return { ok: true, outcome: closed }
+    }
     outcome = { ...outcome, stop: overBudgetStop(over, outcome.stop.remaining), result: { ...outcome.result, summary: outcome.result.summary.replace(/Verification failed \(.*\); nothing was published\./, "Stopped at the token budget before every candidate was verified; nothing was published.") } }
     return { ok: true, outcome, limit: over }
   }
@@ -410,14 +425,18 @@ async function reviewRun(input: RunPrReviewInput): Promise<ReviewRun & RunPlatfo
     // The base of the result is the PR's base, so a later incremental review still knows where the PR starts.
     const result = { ...outcome.result, base: input.base }
     const inheritedNote = inherited ? [`${plural(inherited, "finding")} #${input.stack!.parent} already reported ${inherited === 1 ? "was" : "were"} left out (this pull request is stacked on it).`] : []
-    const info: ReviewInfo = { files: context.files.map((file) => ({ path: file.path, touched: file.touched.length })), profile: config.profile, cap: config.cap, incremental, notes: [...context.notes.filter((note) => !note.startsWith("Incremental review:")), ...inheritedNote], ...(complete ? { checked: outcome.candidates.length - (risenAdded ? 1 : 0) } : {}), ...(perf && perfBody(perf) ? { perf: perfBody(perf) } : {}) }
+    const info: ReviewInfo = { files: context.files.map((file) => ({ path: file.path, touched: file.touched.length })), profile: config.profile, cap: config.cap, incremental, notes: [...context.notes.filter((note) => !note.startsWith("Incremental review:")), ...inheritedNote], ...(complete ? { checked: outcome.candidates.length - (risenAdded ? 1 : 0) } : {}), ...(perf && perfBody(perf) ? { perf: perfBody(perf) } : {}), ...(outcome.partial ? { partial: { ...outcome.partial, number: input.number } } : {}) }
     // Always a checkpoint: the plan's decisions; complete, every judged finding; stopped, what a resume verifies.
     const checkpoint: JobCheckpoint = outcome.checkpoint ?? {
       completedPhases: outcome.completedPhases ?? [], candidates: [], verified: outcome.candidates, result: outcome.result,
       rounds: input.checkpoint?.rounds ?? [], decisions: plan.decisions, ...(outcome.sections ? { sections: outcome.sections } : {}),
     }
     const reviewed = { ...common, outcome: { ...outcome, result }, info, checkpoint, ...(inherited ? { inherited } : {}), ...(rechecked ? { fixed } : {}) }
-    if (outcome.stop) {
+    // A review that reached its token budget and closed with a short check is posted as a partial review, never as nothing. Its stop and
+    // checkpoint stay with the job (`keep`), so the next /pr review continues with the parts and candidates still missing.
+    const closing = !!outcome.partial && outcome.stop?.kind === "budget"
+    const keep = closing ? { stop: outcome.stop! } : {}
+    if (outcome.stop && !closing) {
       const stop = outcome.stop
       if (attempt.stalled) return { status: "failed", reason: stalledReason(attempt.stalled, stop.remaining), ...reviewed, retryable: true }
       if (!outcome.verified && !attempt.limit) return { status: "failed", reason: "verification failed; nothing was published", ...reviewed, stop }
@@ -428,9 +447,9 @@ async function reviewRun(input: RunPrReviewInput): Promise<ReviewRun & RunPlatfo
     const provider = input.provider
     if (input.publisher && config.enabled) {
       const blocked = await publishBlock({ input, config })
-      if (blocked) return { status: "reviewed", reason: blocked.kind === "other" ? `@${blocked.login} already posted a MendCode review of this head; kept in this session` : `kept in this session: ${blocked.why}`, notPublisher: true, ...reviewed }
+      if (blocked) return { status: "reviewed", reason: blocked.kind === "other" ? `@${blocked.login} already posted a MendCode review of this head; kept in this session` : `kept in this session: ${blocked.why}`, notPublisher: true, ...reviewed, ...keep }
     }
-    if (!(input.gh || provider) || !input.publish || !config.enabled) return { status: "reviewed", ...(!config.enabled ? { reason: "publishing needs enabled: true in .mendcode/review.yaml on the base branch" } : {}), ...reviewed }
+    if (!(input.gh || provider) || !input.publish || !config.enabled) return { status: "reviewed", ...(!config.enabled ? { reason: "publishing needs enabled: true in .mendcode/review.yaml on the base branch" } : {}), ...reviewed, ...keep }
     const as = input.publishAs
     if (provider) {
       const report = await publishThroughProvider({
@@ -441,7 +460,7 @@ async function reviewRun(input: RunPrReviewInput): Promise<ReviewRun & RunPlatfo
       if (report.stale) return { status: "reviewed", reason: report.reason ?? "the head moved; nothing was posted", ...reviewed, report, stale: true }
       if (report.uncertain) return { status: "failed", reason: report.reason ?? "the forge did not confirm the review", ...reviewed, report, retryable: true }
       if (!report.posted && !report.duplicate && / refused the review/.test(report.reason ?? "")) return { status: "failed", reason: report.reason!, ...reviewed, report }
-      return { status: "published", ...notPosted(report), ...reviewed, report, state: report.state }
+      return { status: "published", ...notPosted(report), ...reviewed, ...keep, report, state: report.state }
     }
     const report = await publishReview({
       repo: input.repo, number: input.number, result, previous: state, process: input.gh!, resolve: fixed, info,
@@ -451,7 +470,7 @@ async function reviewRun(input: RunPrReviewInput): Promise<ReviewRun & RunPlatfo
     if (report.stale) return { status: "reviewed", reason: report.reason ?? "the head moved; nothing was posted", ...reviewed, report, stale: true }
     if (report.uncertain) return { status: "failed", reason: report.reason ?? "GitHub did not confirm the review", ...reviewed, report, retryable: true }
     if (!report.posted && report.reason?.startsWith("GitHub refused")) return { status: "failed", reason: report.reason, ...reviewed, report }
-    return { status: "published", ...notPosted(report), ...reviewed, report, state: report.state }
+    return { status: "published", ...notPosted(report), ...reviewed, ...keep, report, state: report.state }
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error)
     return { status: "failed", reason, state: input.state, config, incremental, configKey, ...(childNotStarted(reason) ? { retryable: true as const } : {}) }

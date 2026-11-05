@@ -15,7 +15,7 @@ Names, reconciled. `minimal`/`balanced`/`full` already mean three different thin
 | Prompt mode (`/prompt-mode`, [prompt modes](prompt-modes.md)) | `minimal`, `focus`, `guide`, `full`, `custom` | `/tier` sets the project's mode: minimalist `minimal`, balanced `focus`, full `full`; `guide` is never set by a tier |
 | Jobs dock panel (terminal settings) | `dockJobs: false` by default in every tier; opt-in through `/customize` > Top & side > Dock jobs | Only the balanced/full dock renders it; minimalist stays chrome-free and `/jobs` remains independent |
 | Density (terminal settings) | `compact`, `comfortable`, `spacious` | `/tier` sets `compact` for minimalist, `comfortable` otherwise; minimalist also hides the right bar; balanced and full turn `showEffort` on |
-| Footer (the row under the prompt) | follows the view | minimal has none; balanced places its segments; full is the five-row `rows` preset until you choose a footer ([layout](layout.md#footer-by-tier)) |
+| Footer (the row under the prompt) | follows the view | minimal has none; balanced and full draw the `clean` footer pack until you choose a footer (`footerPack`, [customize](customize.md#footer-packs)); with `footerPack: off` balanced places its segments and full draws the `line` preset ([layout](layout.md#footer-by-tier)) |
 | Feature modules | the manifest below | follow the tier live |
 
 The bundle is written once by `/tier <name>` (or the Tier row of `/setup`), like a preset: a later change to one switch stays. Feature modules are different: they follow `tier` every time they are read, so a tier change needs no restart.

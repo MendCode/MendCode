@@ -1,4 +1,4 @@
-cf021fc42d8c0cec
+4a91bea45dcbfe78
   git /work/app
   › Why does the second session see the first one's config? Please look at src/store.ts and fix it.
 
@@ -28,4 +28,4 @@ cf021fc42d8c0cec
   ────────────────────────────────────────────────────────────────────────────────────────────────
   ❭
   ────────────────────────────────────────────────────────────────────────────────────────────────
-   Build
+   /work/app

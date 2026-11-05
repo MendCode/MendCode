@@ -276,13 +276,17 @@ describe("a stalled or budget-stopped review keeps the parts it finished", () =>
     expect(stopped.stop!.detail).toContain(`Stopped before part 2 of ${total} without spending on it`)
     expect(stopped.stop!.remaining).toContain(`${total - 1} of ${total} parts of the diff not reviewed`)
     expect(stopped.checkpoint!.phase).toBe(partPhase(1, total))
-    expect(stopped.result.findings).toEqual([])
+    // It does not end empty: the closing check verified part 1's candidates, and the rest is said to be missing.
+    expect(stopped.partial).toMatchObject({ reviewed: context.parts![0]!.files, notReviewed: context.parts!.slice(1).flatMap((part) => part.files), unverified: 0 })
+    expect(stopped.result.findings.map((finding) => finding.path)).toEqual(context.parts![0]!.files)
     expect(stopped.result.summary).toContain(`the ${total - 1} remaining parts need about`)
 
+    // An allowance too small for any further part makes no progress, and says so.
     const again = partsEngine()
-    const stuck = await resumeReview({ sessionFactory: again.factory, context, config: config({ budgetTokens }), checkpoint: stopped.checkpoint!, cap: 50 })
+    const stuck = await resumeReview({ sessionFactory: again.factory, context, config: config({ budgetTokens: 1_000 }), checkpoint: stopped.checkpoint!, cap: 50 })
     expect(again.reviews()).toBe(0)
     expect(stuck.stop).toMatchObject({ kind: "no_progress", resumable: false })
+    expect(stuck.partial).toBeUndefined()
 
     const raised = await resumeReview({ sessionFactory: again.factory, context, config: config(), checkpoint: stopped.checkpoint!, cap: 50 })
     expect(again.reviewed).toEqual(context.parts!.slice(1).map((part) => part.files))

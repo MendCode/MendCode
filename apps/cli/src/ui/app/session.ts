@@ -431,8 +431,10 @@ export function createSession(ctx: AppContext, actions: {
   async function loadBranch() {
     if (!input.directory) return
     const reply = await input.send({ type: "git.branch", directory: input.directory })
+    const before = state.gitBranch ?? ""
     state.gitBranch = reply.ok && typeof reply.result?.branch === "string" ? reply.result.branch : ""
-    requestFrame()
+    // A frame only when what is drawn changes: no branch draws as an unknown one, so an empty reply schedules nothing.
+    if (state.gitBranch !== before) requestFrame()
   }
 
   return { releaseBackgroundWriter, navigateMessage, renameSession, forkSession, rewind, jumpTo, forkAt, forkCommand, mergeFork, switchSession, changeSession, searchSessionContent, reloadSessions, openSessions, loadTitle, loadBranch, recoverMissingSession, verifySession }

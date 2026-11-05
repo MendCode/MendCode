@@ -17,7 +17,8 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 - `/` in `/customize` filters the rows by name, section or what they change.
 - Home > Input position puts the chat input at the bottom, centered under the logo or at the top of the start screen.
 - Logo fonts rounded, double, shade and braille.
-- With `MENDCODE_BROWSER_EXTENSION=1` the model can work in your own Chrome, Arc, Brave or Edge, in a "MendCode" tab group and background tabs, on sites you allow. It asks before installing the extension. See [browser](docs/browser.md#your-own-browser-extension).
+- Footer packs: the footer's whole look in one data file, chosen with `/footer pack NAME` or Footer pack in `/customize`. Built in: `clean` (the new default: folder and branch, then model, effort and context), `powerline`, `minimal`, `badges`, `bars` and `plain`, each with a words-only form. Parts like changes, running shells, cost or a low quota show only when they matter, and the context changes colour at 70% and 90%. A footer you made yourself is never covered; `footerPack: off` brings back the previous footer. Profiles can ship packs. See [customize](docs/customize.md#footer-packs).
+- With the status line in the prompt's border, the activity takes the place of `READY` there instead of a row of its own, and the footer no longer repeats the model, effort, context or branch.- With `MENDCODE_BROWSER_EXTENSION=1` the model can work in your own Chrome, Arc, Brave or Edge, in a "MendCode" tab group and background tabs, on sites you allow. It asks before installing the extension. See [browser](docs/browser.md#your-own-browser-extension).
 - The PR reviewer measures MendCode's own pull requests (start-up, memory, size) and puts the table in the review; a rise above the noise is a critical finding. `prReview.perfAttrib: false` turns it off. See [PR review](docs/pr-review.md#performance-of-mendcodes-own-pull-requests).
 - `/reviews open <job id>` opens a PR review's reviewer session, and a running review shows its phase in `/reviews`. See [PR review](docs/pr-review.md).
 - `@mendcode review full` reviews the whole PR; plain `@mendcode review` reviews only what is new since the last full review. See [PR review](docs/pr-review.md).
@@ -51,7 +52,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 ### Changed
 
 - The compaction card is two rows (stage with its bar, context before and after) and shows one loading spinner, the activity line's, instead of three.
-- `/pr review` (and `@mendcode review`) of a head already reviewed with the same config answers at once and runs nothing; `/pr review <n> full` reviews it again. See [PR review](docs/pr-review.md).
+- A PR review that reaches its token cap now posts a partial review of what it verified and lists what it did not review, and the next `/pr review` continues with the rest. See [PR review](docs/pr-review.md#a-review-that-reaches-the-cap).- `/pr review` (and `@mendcode review`) of a head already reviewed with the same config answers at once and runs nothing; `/pr review <n> full` reviews it again. See [PR review](docs/pr-review.md).
 - The `/customize` preview draws what the picked row changes: the home with the pet, a sample chat with the top bar, the prompt with its status line and your real footer, the activity, the diff.
 - Numbers in `/customize` edit with Enter and step with the arrows.
 - With your own footer rows `/customize` says so and hides the one-row footer parts, and the model edits your rows instead of replacing them.

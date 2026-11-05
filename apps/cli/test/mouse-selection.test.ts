@@ -10,10 +10,10 @@ const drag = (col: number, row: number) => `\x1b[<32;${col + 1};${row + 1}M`
 const release = (col: number, row: number) => `\x1b[<0;${col + 1};${row + 1}m`
 const osc52 = (h: Harness) => h.written.filter((data) => data.startsWith("\x1b]52;c;")).map((data) => Buffer.from(data.slice(7, -1), "base64").toString("utf8"))
 
-async function chat(options: { copyOnSelect?: boolean; width?: number } = {}) {
+async function chat(options: { copyOnSelect?: boolean; width?: number; directory?: string } = {}) {
   const dataDir = tempDir()
   writeTuiProfile(dataDir, { ...DEFAULT_TUI_PROFILE, ...(options.copyOnSelect === undefined ? {} : { copyOnSelect: options.copyOnSelect }) })
-  const h = appHarness({ dataDir, width: options.width ?? 100, height: 30 })
+  const h = appHarness({ dataDir, width: options.width ?? 100, height: 30, ...(options.directory ? { directory: options.directory } : {}) })
   h.app.applySettings({ onboarded: true })
   await Bun.sleep(10)
   const talk = conversation(h.sessionId, h.app.onEvent)
@@ -194,7 +194,8 @@ test("a kept selection (copy on select off) survives the wheel and still copies 
 })
 
 test("the footer under the prompt is selectable: a drag copies its text, a plain click selects nothing", async () => {
-  const h = await chat()
+  // The default pack draws only what it knows: a folder gives the row its text.
+  const h = await chat({ directory: "/work/app" })
   const rows = h.text()
   const footer = rows.length - 1 - [...rows].reverse().findIndex((row) => row.trim().length > 0)
   const text = rows[footer]!

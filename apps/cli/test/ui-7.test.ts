@@ -132,7 +132,7 @@ for (const chrome of PROMPT_CHROMES) test(`${chrome}: footer outside input with 
     const h = appHarness({ dataDir, width, height, directory: "/work/app" })
     conversation(h.sessionId, h.app.onEvent).exchange("Check", "Ready")
     await h.type("\x14")
-    const rows = h.text(), footer = rows.findLastIndex((row) => /Build/.test(row))
+    const rows = h.text(), footer = rows.findLastIndex((row) => /\/work\/app/.test(row))
     const bottom = rows.findLastIndex((row) => /─{10}|═{10}|={10}/.test(row))
     expect(h.frames.at(-1)).toHaveLength(height)
     expect(rows.every((row) => textWidth(row) <= width)).toBe(true)
@@ -293,11 +293,11 @@ for (const chrome of PROMPT_CHROMES) test(`${chrome}: tray and multiline prompt 
   conversation(h.sessionId, h.app.onEvent).exchange("Hello", "Ready")
   await h.type("\x1b[200~one\ntwo\nthree\nfour\nfive\nsix\x1b[201~\x18s")
   await h.type("tray note")
-  expect(h.text().at(-1)).toContain("Build")
+  expect(h.text().at(-1)).toContain("/work/app")
   let cursor = h.cursors.at(-1)!
   expect(h.text()[cursor.row]).toContain("tray note")
   await h.type("\x1b")
-  expect(h.text().at(-1)).toContain("Build")
+  expect(h.text().at(-1)).toContain("/work/app")
   cursor = h.cursors.at(-1)!
   expect(h.text()[cursor.row]).toContain("six")
   expect(h.app.editor.text).toBe("one\ntwo\nthree\nfour\nfive\nsix")

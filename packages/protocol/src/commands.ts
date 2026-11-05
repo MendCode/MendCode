@@ -1327,7 +1327,7 @@ export const ProvidersRefresh = lazySchema(() => z.strictObject({
   provider: ProviderId,
 }))
 
-/** Theme files (`themes/<name>.json`) of every extension layer for a project, parsed but not validated. Ack: `ThemesReport`. */
+/** Theme files (`themes/<name>.json`) and footer pack files (`footer-packs/<name>.json`) of every extension layer for a project, parsed but not validated. Ack: `ThemesReport`. */
 export const ThemesList = lazySchema(() => z.strictObject({
   ...base,
   type: z.literal("themes.list"),

@@ -9,7 +9,8 @@ The user's footer wins: with footerRows (or footer.replace) showModel, showProvi
 
 A. Settings only, no file (customize_ui settings, or the user's /footer → [[setting:footer]]).
   Five rows (preset rows): footerRows [["directory","text:tagline"],["model","effort","context","cache","tokens"],["quota:codex"],["quota:claude"],["codegraph"]], footerText {"tagline":"keep the contract"} (text:NAME reads footerText.NAME), footerIcons nerd|glyph|none.
-  Up to 12 rows, a quarter of the height. Full's default is preset line, one row. /footer preset classic|line|rows|compact|telemetry, /footer reset.
+  Up to 12 rows, a quarter of the height. /footer preset classic|line|rows|compact|telemetry, /footer reset.
+  Default: a footer pack (docs footer-packs).
   Segments: directory branch model effort (:JEV when adaptive) context cache tokens quota quota:codex quota:claude codegraph time text:name state permission today cost goal jobs sandbox vim update ttft tps spend forecast ctx hit think calls notice. codegraph shows files, symbols, edges once indexed. No source: "synced".
   quota: a bar and % left per window (old readings dimmed with their age, ended ones n/a). quotaView used|left, quotaColor pressure|accent.
   quotaRefresh (off; {{program}} docs usage) spends quota on a timer: set it when the user asks for live usage, else offer it.

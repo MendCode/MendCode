@@ -455,7 +455,8 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
         ...(checkpoint ? { checkpoint } : {}),
         ...(recheck?.length ? { recheck } : {}),
       })
-      if (reviewed.status === "published") writeReviewState(options.dir, repo, number, { ...reviewed.state, configKey })
+      // A partial review keeps the state of the last whole one (its head and config): it is not a review of this head.
+      if (reviewed.status === "published") writeReviewState(options.dir, repo, number, reviewed.state.lastHead === head ? { ...reviewed.state, configKey } : reviewed.state)
       return { ...reviewed, repo, head, base: pr.baseRefOid, ...(forge ? { forge: forge.name } : {}) }
     } finally {
       await git(["worktree", "remove", "--force", worktree], directory)
@@ -2013,6 +2014,17 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
       if (repo && state?.lastHead === facts.head) {
         const configKey = await configKeyNow({ directory, repo, base: facts.base, baseRef: facts.baseRef, scope: reviewer.scope }).catch(() => undefined)
         if (configKey && reviewedUnder({ repo, number, head: facts.head, configKey, state })) return done(`#${number} was already reviewed at ${facts.head.slice(0, 12)} with this config, so nothing was run. To review it again whole: /pr review ${number} full (pr_review with full: true).`)
+      }
+    }
+    // A review that closed as partial at the token budget keeps its job checkpointed: asking again continues it with the parts and
+    // candidates still missing, under a fresh allowance. `full` drops that checkpoint and reviews the whole diff again.
+    const partial = facts ? ledger.list({ number, states: ["checkpointed"] }).find((job) => job.directory === directory && job.reviewer === reviewer.id && job.head === facts.head && job.coverage !== "audit" && job.stop?.kind === "budget" && hasProgress(job.checkpoint)) : undefined
+    if (partial) {
+      if (full) move(partial.id, "cancelled", { error: "replaced by a full review of the whole diff" })
+      else {
+        patchJob(partial.id, { sessionId })
+        const continued = await handle.retry(partial.id, "/pr review continues the partial review")
+        return continued.ok ? done(`${continued.text} The findings arrive in this session when it ends. ${OPEN_HINT(partial.id)}`) : { ok: false, message: continued.message }
       }
     }
     const queued = watch.review({ directory, sessionId, number, head: "" }, { reviewer: reviewer.id, scope: reviewer.scope }, forge ? { kind: forge.kind, repo: forge.repo } : undefined)

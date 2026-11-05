@@ -12,7 +12,7 @@ import { extensionsProblem, MANIFEST_FILE, readManifest } from "./manifest"
  */
 export type PackageCheck = { ok: boolean; name?: string; errors: string[]; warnings: string[]; notes: string[] }
 
-const JSON_KINDS = PACKAGE_KINDS.filter((kind) => kind.paths.some((entry) => entry.endsWith(".json")) || ["tools", "recipes", "workflows", "themes", "contracts"].includes(kind.id))
+const JSON_KINDS = PACKAGE_KINDS.filter((kind) => kind.paths.some((entry) => entry.endsWith(".json")) || ["tools", "recipes", "workflows", "themes", "footerPacks", "contracts"].includes(kind.id))
 const MAX_JSON_BYTES = 1024 * 1024
 
 function jsonFiles(dir: string, depth = 0): string[] {

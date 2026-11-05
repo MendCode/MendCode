@@ -11,6 +11,7 @@ import { configureKeyLabels } from "../key-labels"
 import { keyboardWanted } from "../keyboard-protocol"
 import { themesFromFiles } from "../theme-files"
 import { DEFAULT_TOOL_DESIGN_NAME, registerToolDesignFiles } from "../../view/tool-design"
+import { registerFooterPacks } from "../../view/footer-pack"
 import type { ThemesReport } from "@mendcode/protocol"
 import type { Settings, PermissionMode } from "@mendcode/protocol"
 import { featureOn } from "@mendcode/protocol/wire"
@@ -134,6 +135,7 @@ export function createSettings(ctx: AppContext, actions: {
       registerThemes(themesFromFiles((reply.result as ThemesReport | undefined)?.themes ?? []).themes)
       registerDesigns(reply.result as ThemesReport | undefined)
       setTheme(themeInForce(state.settingsNow) || "mend")
+      registerFooterPacks((reply.result as ThemesReport | undefined)?.footerPacks ?? [])
       requestFrame()
     })
   }

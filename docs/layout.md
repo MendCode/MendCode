@@ -172,8 +172,9 @@ shows it (the state in the working row, the context in the top bar, notices over
 | View | Row under the prompt |
 |---|---|
 | minimal | none; nothing is added (`footerRows` or an extension slot still draw their own rows) |
-| balanced | `Build · GPT-6-Luna · high · fast · native │ ↻ 1 loop │ ~12 turns to compact`: agent, a permission other than ask, model, reasoning effort (`showEffort`), `fast` (`fast n/a` when `/fast` never reaches the model), engine; then the goal, loops and workflows; then each placed segment (`forecast` by default) |
-| full | the `line` preset, while you never chose rows or a `/footer` list: one row, `~/Code/app · GPT-6-Luna · high:JEV · cache 85% · codex 7d ███████░ 92% left resets 5d9h · claude 7d ███░░░░░ 39% left resets 1d23h · GRAPH 2,594 files · indexed` (the context is the top bar's; `/footer preset rows` is the five-row layout, see below) |
+| balanced and full, by default | the `clean` footer pack: `~/Code/app · main` then `GPT-6-Luna · high · ◔ 24%` on the right, the rest only when it matters ([customize.md](customize.md#footer-packs)); a footer you made is drawn as written instead |
+| balanced, `footerPack: off` | `Build · GPT-6-Luna · high · fast · native │ ↻ 1 loop │ ~12 turns to compact`: agent, a permission other than ask, model, reasoning effort (`showEffort`), `fast` (`fast n/a` when `/fast` never reaches the model), engine; then the goal, loops and workflows; then each placed segment (`forecast` by default) |
+| full, `footerPack: off` | the `line` preset, while you never chose rows or a `/footer` list: one row, `~/Code/app · GPT-6-Luna · high:JEV · cache 85% · codex 7d ███████░ 92% left resets 5d9h · claude 7d ███░░░░░ 39% left resets 1d23h · GRAPH 2,594 files · indexed` (the context is the top bar's; `/footer preset rows` is the five-row layout, see below) |
 
 - Groups are split by a muted ` │ ` (` | ` in ASCII chrome); the items of a group by the separator (`statusSeparator`, ` · `). Only
   explicit right-hand content keeps the right edge: hints, `statusRight`, script and extension right slots, connection trouble.

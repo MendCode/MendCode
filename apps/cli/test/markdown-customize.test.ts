@@ -14,10 +14,10 @@ const page = (state: CustomizePageState, profile: TuiProfile = DEFAULT_TUI_PROFI
   renderCustomizePage({ state, profile, preview: { root: "/work", tip: "", now: 0 }, width, height }).map((line) => line.map((span) => span.text).join(""))
 
 describe("the Markdown group in /customize", () => {
-  test("has a row for each setting, under Look after the diff view, and hides with raw chat", () => {
+  test("has a row for each setting, under Look after the tool design, and hides with raw chat", () => {
     const start = CUSTOMIZE_ROWS.indexOf("tableStyle")
     expect(CUSTOMIZE_ROWS.slice(start, start + 5)).toEqual(["tableStyle", "headingStyle", "markdownCopyHints", "markdownRtl", "markdownColors"])
-    expect(CUSTOMIZE_ROWS[start - 1]).toBe("diffView")
+    expect(CUSTOMIZE_ROWS[start - 1]).toBe("toolDesign")
     expect(rowShown("tableStyle", DEFAULT_TUI_PROFILE)).toBe(true)
     expect(rowShown("tableStyle", { ...DEFAULT_TUI_PROFILE, presentation: "raw", messageRenderer: "plain" })).toBe(false)
   })

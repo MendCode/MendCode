@@ -37,6 +37,7 @@ import type { FooterSegment } from "@mendcode/protocol/wire"
 import type { PermissionMode, SessionId } from "@mendcode/protocol"
 import { parseFooterCommand } from "../../view/footer"
 import { footerRowsOf, parseFooterRowsCommand } from "../../view/footer-rows"
+import { parseFooterPackCommand } from "../../view/footer-pack"
 import { parseActivityCommand } from "../../view/activity-status"
 import { parseSlash } from "../../view/commands"
 import { normalizeHomeMascot, SIDEBAR_MODES, type SidebarMode, type TuiProfile } from "../../view/tui-profile"
@@ -85,6 +86,8 @@ export function createSlash(ctx: AppContext, actions: {
   ideCommand(args: string): Promise<void>
   setSidebar: (next: SidebarMode) => void
   footerSegments: () => readonly FooterSegment[]
+  footerIsOwn: () => boolean
+  refreshThemes: () => void
   switchSession: ReturnType<typeof createSession>["switchSession"]
   openSessions: ReturnType<typeof createSession>["openSessions"]
   attachPasted: ReturnType<typeof createPrompt>["attachPasted"]
@@ -166,7 +169,7 @@ export function createSlash(ctx: AppContext, actions: {
   changeProfile: (patch: Partial<TuiProfile>, options?: { session?: boolean; layer?: boolean }) => void
 }) {
   const { input, state, now, editor, localDay, say, fail, requestFrame, setupChoice, drafts } = ctx
-  const { openAcp, setSidebar, footerSegments, switchSession, openSessions, attachPasted, loadUsage, loadMemoryCategories, loadMemories, loadContext, loadSecrets, loadChanges, loadPetChoices, loadStorage, loadAgents, loadMcps, authMcp, loadTools, loadPackages, openSetup, loadStatus, loadExtensionsReport, openHooks, trustCommand, agentCommand, themeCommand, modelCommand, openConnect, loadProviders, loadLoops, createLoop, goalCommand, limitCommand, openWorkflows, workflowCommand, askAside, openFetch, setPermission, startDream, undoMemory, runStashCommand, copyAnswer, rewind, forkCommand, exportSession, editScratch, openPermissions, approveRetry, openDiagram, setMode, changeProfile } = actions
+  const { openAcp, setSidebar, footerSegments, footerIsOwn, refreshThemes, switchSession, openSessions, attachPasted, loadUsage, loadMemoryCategories, loadMemories, loadContext, loadSecrets, loadChanges, loadPetChoices, loadStorage, loadAgents, loadMcps, authMcp, loadTools, loadPackages, openSetup, loadStatus, loadExtensionsReport, openHooks, trustCommand, agentCommand, themeCommand, modelCommand, openConnect, loadProviders, loadLoops, createLoop, goalCommand, limitCommand, openWorkflows, workflowCommand, askAside, openFetch, setPermission, startDream, undoMemory, runStashCommand, copyAnswer, rewind, forkCommand, exportSession, editScratch, openPermissions, approveRetry, openDiagram, setMode, changeProfile } = actions
 
   /** Opens a session `/new` or `/bg` just made: in a fresh workspace when `git.newSessionWorktree` is on, and a line when it could not be. */
   async function enterNewSession(sessionId: SessionId) {
@@ -197,6 +200,18 @@ export function createSlash(ctx: AppContext, actions: {
   async function footerCommand(args: string) {
     // `rows N`, `row N a b`, `preset NAME` and `icons MODE` shape the footer's rows (profile keys footerRows, footerIcons).
     // Editing starts from the rows on screen: the full view's default rows when nothing was chosen.
+    // `pack NAME [text|symbols] [stack|alone]` chooses the footer pack (footer-pack.ts); a footer of the user's own keeps its place.
+    const pack = parseFooterPackCommand(args, { pack: state.tuiProfile.footerPack, symbols: state.tuiProfile.footerPackSymbols, stack: state.tuiProfile.footerPackStack })
+    if (pack) {
+      if (pack.ok) {
+        changeProfile(pack.patch)
+        refreshThemes()
+      }
+      const aside = pack.ok && pack.patch.footerPack !== "off" && !state.tuiProfile.footerPackStack && footerIsOwn()
+      state.notice = pack.ok ? `${pack.notice}${aside ? " · your own footer stays (add stack to draw the pack above it, /footer reset to use the pack)" : ""}` : pack.error
+      requestFrame()
+      return
+    }
     const shownRows = footerRowsOf({ mode: state.mode, profile: state.tuiProfile, list: state.customFooter })
     const rows = parseFooterRowsCommand(args, { rows: shownRows.rows, icons: state.tuiProfile.footerIcons })
     if (rows) {

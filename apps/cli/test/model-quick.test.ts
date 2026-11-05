@@ -307,7 +307,7 @@ describe("a Claude Code alias reads by its resolved version from the first catal
     await h.type("")
     expect(h.text().find((row) => row.includes("READY"))).toContain("READY › Opus 5.5 › high")
     const bar = await chat({ width: 120, height: 40 }, claude)
-    // The balanced row names the reasoning effort beside the model.
-    expect(bar.text().find((row) => row.includes("Build ·"))).toContain("Build · Opus 5.5 · high · claude")
+    // The balanced row (the clean pack) names the reasoning effort beside the model.
+    expect(bar.text().at(-1)).toContain("Opus 5.5 · high")
   })
 })

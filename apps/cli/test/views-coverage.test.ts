@@ -67,6 +67,7 @@ const COVERAGE: Record<string, Entry> = {
   "queue-panel.ts": { slot: "notice" },
   "footer.ts": { slot: "footer" },
   "footer-rows.ts": { slot: "footer" },
+  "footer-pack.ts": { slot: "footer" },
   "home.ts": { slot: "home" },
   "home-tips.ts": { slot: "home" },
   "mascot.ts": { slot: "home" },

@@ -49,6 +49,33 @@ function readLayerFiles(layers: readonly ExtensionLayer[], folder: (layer: Exten
   return [...byName.values()]
 }
 
+/** A footer pack file as found: `footer-packs/<name>.json` in any layer, read and parsed like a theme; the client checks it. */
+export type FooterPackFileEntry = ThemeFile
+
+export const MAX_FOOTER_PACK_FILES = 50
+
+/** Every layer's footer pack files (docs/customize.md "Footer packs"), lowest precedence first; a later layer's file replaces one of the same name. */
+export function readLayerFooterPacks(layers: readonly ExtensionLayer[]): FooterPackFileEntry[] {
+  const byName = new Map<string, FooterPackFileEntry>()
+  for (const layer of layers) {
+    let entries: string[]
+    const dir = path.join(layer.dir, "footer-packs")
+    try {
+      entries = readdirSync(dir).filter((entry) => entry.endsWith(".json")).sort()
+    } catch {
+      continue
+    }
+    for (const entry of entries) {
+      if (byName.size >= MAX_FOOTER_PACK_FILES) break
+      const name = entry.slice(0, -".json".length).toLowerCase()
+      const file = path.join(dir, entry)
+      byName.delete(name)
+      byName.set(name, { name, file, source: layer.source, ...(layer.pkg ? { pkg: layer.pkg } : {}), ...parseThemeFile(file, name, "footer pack") })
+    }
+  }
+  return [...byName.values()]
+}
+
 function parseThemeFile(file: string, name: string, noun: string): { json: unknown } | { problem: string } {
   if (!THEME_NAME.test(name)) return { problem: `${noun} file names use letters, digits, dot, underscore and hyphen (max 40)` }
   const size = statSync(file, { throwIfNoEntry: false })?.size

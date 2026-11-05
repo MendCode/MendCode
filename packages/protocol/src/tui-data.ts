@@ -2,6 +2,7 @@ import { USAGE_WIDGET_IDS } from "./usage-widget-data"
 import { SLASH_LAYOUTS, slashProfileProblems } from "./slash-menu-data"
 import { parseMarkdownColors } from "./theme-data"
 import { FOOTER_ICON_MODES, footerRowsProblems, footerTextProblems } from "./footer-rows-data"
+import { FOOTER_PACK_DEFAULT, FOOTER_PACK_NAME, FOOTER_PACK_SYMBOLS } from "./footer-pack-data"
 import { quotaRefreshProblems } from "./quota-refresh-data"
 import { DEFAULT_TOOL_DESIGN_NAME, TIMESTAMP_PLACES, TOOL_DESIGN_NAME, TOOL_RAIL_DEFAULT, toolRailProblems } from "./tool-rail-data"
 
@@ -142,6 +143,9 @@ export const TUI_DEFAULTS: Readonly<Record<string, unknown>> = {
   "footerDefaultRows": true,
   "footerText": {},
   "footerIcons": "none",
+  "footerPack": FOOTER_PACK_DEFAULT,
+  "footerPackSymbols": "auto",
+  "footerPackStack": false,
   "messageLayout": "quiet",
   "userIcon": "",
   "assistantIcon": "",
@@ -361,6 +365,7 @@ export const TUI_ENUMS: Readonly<Record<string, readonly string[]>> = {
   "quotaView": ["used", "left"],
   "quotaColor": ["pressure", "accent"],
   "footerIcons": FOOTER_ICON_MODES,
+  "footerPackSymbols": FOOTER_PACK_SYMBOLS,
   "keyProtocol": ["auto", "off"],
   "optionKeys": ["auto", "off"],
   "commentHint": ["prompt", "passage", "off"],
@@ -434,6 +439,7 @@ export function tuiProblems(raw: unknown): string[] {
     else if (key === "quotaRefresh") problems.push(...quotaRefreshProblems(value))
     else if (key === "footerRows") problems.push(...footerRowsProblems(value))
     else if (key === "footerText") problems.push(...footerTextProblems(value))
+    else if (key === "footerPack" && !FOOTER_PACK_NAME.test(value as string)) problems.push("footerPack: a pack name (clean, powerline, minimal, badges, bars, plain, a footer-packs/<name>.json file, or off)")
     else if (key === "markdownColors" && ((value as string).length > 2048 || parseMarkdownColors(value as string).error)) problems.push(`markdownColors: ${(value as string).length > 2048 ? "too long" : parseMarkdownColors(value as string).error}`)
     else if (key === "disabledUiExtensions" && ((value as unknown[]).length > 128 || (value as unknown[]).some((name) => typeof name !== "string" || name.length < 1 || name.length > 64 || /[\x00-\x1f\x7f]/.test(name)))) problems.push("disabledUiExtensions: expected up to 128 module names")
     else if (key === "disabledViews" && ((value as unknown[]).length > 32 || (value as unknown[]).some((name) => typeof name !== "string" || !/^[a-z]+(\.[a-z]+)?$/.test(name)))) problems.push("disabledViews: expected up to 32 view slot names")

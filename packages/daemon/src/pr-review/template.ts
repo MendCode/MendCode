@@ -22,6 +22,20 @@ export type ReviewInfo = {
   checked?: number | undefined
   /** The cost table measured for a MendCode pull request (perf.ts `perfBody`), shown in the review details. */
   perf?: string | undefined
+  /** Set when the review closed at the token budget before it was whole: the body says so first, and what it covered and did not. */
+  partial?: PartialReview | undefined
+}
+
+/** What a partial review covered (`close.ts` builds it): the files reviewed and not, the candidates left unverified, and why it stopped. */
+export type PartialReview = {
+  reviewed: readonly string[]
+  notReviewed: readonly string[]
+  /** Candidate findings the closing check did not verify: counted here, never published. */
+  unverified: number
+  /** Why it stopped, in one sentence with the figures. */
+  why: string
+  /** The pull request's number, for the command that asks for the rest. */
+  number?: number | undefined
 }
 
 /** A fence longer than any run of backticks in `text`, so a finding's own code never closes it. */
@@ -175,6 +189,23 @@ function incompleteVerdict(stop: PrStopReason, total: number): string {
   ].filter(Boolean).join("\n")
 }
 
+const fileList = (files: readonly string[], shown = 30) => `${files.slice(0, shown).map(code).join(", ")}${files.length > shown ? `, and ${files.length - shown} more` : ""}`
+
+/** The partial verdict: that it is partial first, then what was reviewed, what was not, why, and how to ask for the rest. */
+function partialVerdict(partial: PartialReview, total: number): string {
+  const all = partial.reviewed.length + partial.notReviewed.length
+  const ask = partial.number ? `\`/pr review ${partial.number}\`` : "`/pr review <n>`"
+  const plural = (count: number) => count === 1 ? "" : "s"
+  return [
+    `**Partial review** · ${partial.notReviewed.length ? `${partial.reviewed.length} of ${all} files reviewed` : `all ${all} files reviewed`}${partial.unverified ? `, ${partial.unverified} candidate finding${plural(partial.unverified)} not verified` : ""} · ${total} verified finding${plural(total)} below`,
+    partial.why,
+    ...(partial.reviewed.length ? [`**Reviewed:** ${fileList(partial.reviewed)}`] : []),
+    ...(partial.notReviewed.length ? [`**Not reviewed:** ${fileList(partial.notReviewed)}`] : []),
+    ...(partial.unverified ? [`${partial.unverified} candidate finding${partial.unverified === 1 ? " was" : "s were"} found but not verified, so ${partial.unverified === 1 ? "it is" : "they are"} not published.`] : []),
+    `To get the rest: ${ask} continues from this checkpoint with what is missing, \`full\` after it reviews the whole diff again, or raise \`budget.tokens_per_pr\` in \`.mendcode/review.yaml\`.`,
+  ].join("\n\n")
+}
+
 const candidates = (count: number) => `${count} candidate${count === 1 ? "" : "s"}`
 
 /**
@@ -182,7 +213,8 @@ const candidates = (count: number) => `${count} candidate${count === 1 ? "" : "s
  * the review pass raised nothing; an incomplete review only claims a check for what it shows. `dropped` counts every candidate
  * left out, before or after the verify pass.
  */
-function verificationLine({ stop, unverified, total, dropped, checked }: { stop?: PrStopReason | undefined; unverified: boolean; total: number; dropped: number; checked?: number | undefined }): string {
+function verificationLine({ stop, unverified, total, dropped, checked, partial }: { stop?: PrStopReason | undefined; unverified: boolean; total: number; dropped: number; checked?: number | undefined; partial?: PartialReview | undefined }): string {
+  if (partial) return `- **Verification:** partial; ${total ? "what is shown was checked again by a separate pass" : "nothing was confirmed"}${partial.unverified ? `; ${candidates(partial.unverified)} not verified and not published` : ""}`
   const leftOut = dropped ? `; ${candidates(dropped)} ${dropped === 1 ? "was" : "were"} left out (not confirmed, outside the diff or past the cap)` : ""
   if (stop) return `- **Verification:** incomplete${stop.remaining ? `; ${stop.remaining}` : ""}; ${total ? "what is shown was checked again by a separate pass" : "nothing is shown"}, nothing unverified is published`
   if (unverified) return `- **Verification:** the token budget stopped the review before the separate pass; ${candidates(dropped)} ${dropped === 1 ? "was" : "were"} not verified (raise \`budget.tokens_per_pr\` in \`.mendcode/review.yaml\`)`
@@ -206,7 +238,10 @@ export function renderReviewBody({ result, inline, moved, repo, info, template, 
   const counts = (Object.keys(SEVERITY_LABEL) as Array<PrFinding["severity"]>).map((severity) => [severity, findings.filter((finding) => finding.severity === severity).length] as const).filter(([, count]) => count > 0)
   const link = (finding: PrFinding) => repo ? `[\`${where(finding)}\`](https://github.com/${repo}/blob/${result.head}/${finding.path.split("/").map(encodeURIComponent).join("/")}#L${finding.line}${finding.endLine && finding.endLine > finding.line ? `-L${finding.endLine}` : ""})` : `\`${where(finding)}\``
   const unverified = result.budgetHit && !total && result.dropped > 0
-  const verdict = stop
+  const partial = info?.partial
+  const verdict = partial
+    ? partialVerdict(partial, total)
+    : stop
     ? incompleteVerdict(stop, total)
     : unverified
     ? `**Stopped at the token budget** · ${result.dropped} candidate finding${result.dropped === 1 ? " was" : "s were"} not verified, so nothing is published`
@@ -222,7 +257,7 @@ export function renderReviewBody({ result, inline, moved, repo, info, template, 
   const facts = [
     info ? `- **Files reviewed:** ${info.files.length}${effort ? ` · ${touched} changed line${touched === 1 ? "" : "s"} · estimated review effort ${effort.level}/5, about ${effort.minutes} minutes` : ""}` : "",
     info ? `- **Profile:** ${info.profile} · at most ${info.cap} inline comment${info.cap === 1 ? "" : "s"}` : "",
-    verificationLine({ stop, unverified, total, dropped: result.dropped, checked: info?.checked }),
+    verificationLine({ stop, unverified, total, dropped: result.dropped, checked: info?.checked, partial }),
     `- **Cost:** ${result.tokens.input.toLocaleString("en-US")} tokens in${result.tokens.cached ? ` (${result.tokens.cached.toLocaleString("en-US")} from the provider's cache)` : ""} · ${result.tokens.output.toLocaleString("en-US")} out`,
     ...(info?.notes ?? []).slice(0, 8).map((note) => `- ${note.replace(/^\[PR_REVIEW\]:\s*/, "")}`),
   ].filter(Boolean).join("\n")
@@ -253,9 +288,11 @@ export function renderReviewBody({ result, inline, moved, repo, info, template, 
   const listed = (template?.sections ?? []).filter((section, index, all) => all.findIndex((other) => other.id === section.id) === index)
   const hidden = new Set(listed.filter((section) => section.enabled === false).map((section) => section.id))
   // An incomplete review always says so: its verdict cannot be hidden.
-  if (stop) hidden.delete("verdict")
+  if (stop || partial) hidden.delete("verdict")
   const order = [...listed.map((section) => section.id), ...BUILTIN_SECTIONS.filter((id) => !listed.some((section) => section.id === id))].filter((id) => !hidden.has(id))
-  return ["## MendCode review", ...order.map(render), language ? languageMarker(language) : "", reviewMarker(result.head)].filter(Boolean).join("\n\n")
+  // A partial review is not a review of the head: it has neither the heading nor the head marker that say "reviewed" (`isMendCodeReview`,
+  // another reviewer's stand-down, a hosted runner's state), so the rest is still asked for and done.
+  return [partial ? "## MendCode partial review" : "## MendCode review", ...order.map(render), language ? languageMarker(language) : "", partial ? "" : reviewMarker(result.head)].filter(Boolean).join("\n\n")
 }
 
 /** The built-in layout (`renderReviewBody` without a template): what `publish.ts` posts. */

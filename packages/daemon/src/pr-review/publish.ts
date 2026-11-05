@@ -242,16 +242,18 @@ export async function publishReview({ repo, number, result, previous, process: g
   template?: ReviewTemplate | undefined; sections?: Readonly<Record<string, string>> | undefined
 }): Promise<PublishReport> {
   const fresh = result.findings.filter((finding) => !previous.published[finding.id])
-  const state: ReviewState = { ...previous, published: { ...previous.published }, lastHead: result.head }
+  const partial = info?.partial
+  // A partial review is not a review of the head: the state keeps the last head that was whole, so the next `/pr review` is not answered as "already reviewed".
+  const state: ReviewState = { ...previous, published: { ...previous.published }, ...(partial ? {} : { lastHead: result.head }) }
   // A later head (or the same one asked again) with nothing new posts no second notification; it only closes the threads it fixed.
-  if (!fresh.length && previous.lastHead) {
+  if (!fresh.length && previous.lastHead && !partial) {
     const same = previous.lastHead === result.head
     if (same && !resolve.length) return { posted: false, comments: 0, movedToBody: 0, resolved: 0, state: previous, reason: "this head was already reviewed and nothing is new" }
     if (await isStale(isCurrent)) return { posted: false, comments: 0, movedToBody: 0, resolved: 0, state: previous, reason: STALE, stale: true }
     const resolved = await resolveThreads({ gh, repo, number, ids: resolve, state, head: result.head })
     return { posted: false, comments: 0, movedToBody: 0, resolved, state, reason: same ? "this head was already reviewed and nothing is new" : "no new findings on this head" }
   }
-  const key = effectKey({ kind: "review", repo, number, reviewer, configKey, head: result.head, base: result.base, payload: fresh.map((finding) => finding.id).sort().join(",") })
+  const key = effectKey({ kind: "review", repo, number, reviewer, configKey, head: result.head, base: result.base, payload: `${fresh.map((finding) => finding.id).sort().join(",")}${partial ? `;partial ${partial.reviewed.length}/${partial.notReviewed.length}/${partial.unverified}` : ""}` })
   const marker = reviewerMarker({ reviewer, configKey, key })
   const posted = await postReviewOnce({
     gh, repo, number, head: result.head, items: fresh, marker, key, effects, jobId, isCurrent, self,
@@ -350,16 +352,18 @@ export async function publishThroughProvider({ provider, repo, number, result, p
   template?: ReviewTemplate | undefined; sections?: Readonly<Record<string, string>> | undefined
 }): Promise<PublishReport> {
   const fresh = result.findings.filter((finding) => !previous.published[finding.id])
-  const state: ReviewState = { ...previous, published: { ...previous.published }, lastHead: result.head }
+  const partial = info?.partial
+  // A partial review is not a review of the head: the state keeps the last head that was whole, so the next `/pr review` is not answered as "already reviewed".
+  const state: ReviewState = { ...previous, published: { ...previous.published }, ...(partial ? {} : { lastHead: result.head }) }
   const name = provider.kind === "gitlab" ? "GitLab" : provider.kind === "gitea" ? "Gitea" : "GitHub"
-  if (!fresh.length && previous.lastHead) {
+  if (!fresh.length && previous.lastHead && !partial) {
     const same = previous.lastHead === result.head
     if (same && !resolve.length) return { posted: false, comments: 0, movedToBody: 0, resolved: 0, state: previous, reason: "this head was already reviewed and nothing is new" }
     if (await isStale(isCurrent)) return { posted: false, comments: 0, movedToBody: 0, resolved: 0, state: previous, reason: STALE, stale: true }
     const resolved = await resolveThroughProvider({ provider, repo, number, ids: resolve, state })
     return { posted: false, comments: 0, movedToBody: 0, resolved, state, reason: same ? "this head was already reviewed and nothing is new" : "no new findings on this head" }
   }
-  const key = effectKey({ kind: "review", repo, number, reviewer, configKey, head: result.head, base: result.base, payload: fresh.map((finding) => finding.id).sort().join(",") })
+  const key = effectKey({ kind: "review", repo, number, reviewer, configKey, head: result.head, base: result.base, payload: `${fresh.map((finding) => finding.id).sort().join(",")}${partial ? `;partial ${partial.reviewed.length}/${partial.notReviewed.length}/${partial.unverified}` : ""}` })
   const marker = reviewerMarker({ reviewer, configKey, key })
   const failed = (reason: string, flags: Partial<PublishReport>): PublishReport => ({ posted: false, comments: 0, movedToBody: 0, resolved: 0, state: previous, reason, ...flags })
   const remoteId = (remote: string | undefined) => { const id = Number(/(\d+)$/.exec(remote ?? "")?.[1]); return Number.isSafeInteger(id) && id > 0 ? id : undefined }

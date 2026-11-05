@@ -1,10 +1,11 @@
 import type { PrFinding, PrReviewResult, PrStopReason, PrWalkthrough } from "@mendcode/protocol"
+import { CLOSE_INSTRUCTION, CLOSE_MAX_CANDIDATES, CLOSE_TOKENS, NOTHING_PUBLISHED_TAIL, partialNote, partialReview } from "./close"
 import { symbolsText, type ReviewContext } from "./context"
 import type { JobCheckpoint, PhasePlan, ReviewMemoryContext } from "./contracts"
 import { FINDINGS_SHAPE, parseFindings, SECTION_TEXT, uniqueFindings } from "./findings"
 import { DEFAULT_PHASE_PLAN, parsePartPhase, partPhase, phasePrompt, phasesBefore, reviewStages, validationGate } from "./phases"
 import { pullRequestText } from "./pull-request"
-import { isBuiltinSection, languageInstruction } from "./template"
+import { isBuiltinSection, languageInstruction, type PartialReview } from "./template"
 import { publishable, rankFindings, spent, VerificationError, verifyFindings, type CheckResult, type VerifyResult } from "./verify"
 
 /**
@@ -162,6 +163,12 @@ export type ReviewOutcome = {
   completedPhases?: string[] | undefined
   /** The deterministic closing gate (`validationGate`): a failed one never closes the job as done. */
   validation?: { ok: boolean; reason: string } | undefined
+  /**
+   * Set when the review reached its token budget and closed with one short check (`closeReview`): `result.findings` are the verified
+   * ones, `stop` says why, and `checkpoint` keeps the parts and candidates still missing, with a fresh allowance for the continuation.
+   * Such an outcome is published as a partial review, and it is not a review of the head for the dedupe.
+   */
+  partial?: PartialReview | undefined
 }
 
 /**
@@ -292,26 +299,107 @@ export async function reviewPullRequest({ sessionFactory, context, config, cap, 
 /** The review pass (from `from` when it resumes a diff in parts), then the verify pass over every candidate of every part. */
 async function reviewAndVerify({ sessionFactory, context, config, cap, checks, from, prior }: { sessionFactory: ReviewSessionFactory; context: ReviewContext; config: ReviewEngineConfig; cap: number; checks?: (() => Promise<CheckResult[]>) | undefined; from?: PassStart | undefined; prior?: ReviewCheckpoint | undefined }): Promise<ReviewOutcome> {
   const pass = await reviewPass({ sessionFactory, context, config, from, prior })
-  if (pass.partial) return partialStop({ pass, context, config, progressed: !from || pass.partial.done > from.done, prior })
+  // Candidates a stopped review already judged (and may have published) are not judged again.
+  const before = from && prior ? prior.verified : []
+  const closing = { sessionFactory, context, config, cap, prior }
+  if (pass.partial) {
+    const progressed = !from || pass.partial.done > from.done
+    const stopped = partialStop({ pass, context, config, progressed, prior })
+    // The budget cannot carry the rest: one short closing check, then the verified findings are published as a partial review.
+    if (!progressed || pass.partial.done < 1) return stopped
+    return await closeReview({ ...closing, pass, judged: before, tokens: pass.result.tokens, done: pass.partial.done, stop: stopped.stop!, progressed }) ?? stopped
+  }
   // The review pass says it could not review the change: no verifier, no re-check, no post. The work after a pass that read nothing is waste.
   if (pass.incomplete) return incompleteStop({ pass, config, prior })
   const found = pass.result
-  if (!found.findings.length) return conclude({ pass, judged: [], pending: [], tokens: found.tokens, config, cap, prior })
-  // The review pass alone spent the budget: every candidate is kept for the resume, none is sent to a verifier.
-  if (found.budgetHit) return conclude({ pass, judged: [], pending: found.findings, tokens: found.tokens, config, cap, prior })
+  const judgedIds = new Set(before.map((finding) => finding.id))
+  const unjudged = before.length ? found.findings.filter((finding) => !judgedIds.has(finding.id)) : found.findings
+  if (!unjudged.length) return conclude({ pass, judged: before, pending: [], tokens: found.tokens, config, cap, prior })
+  const closeIfStopped = async (outcome: ReviewOutcome, judged: PrFinding[], tokens: Tokens) => outcome.stop ? await closeReview({ ...closing, pass, judged, tokens, stop: outcome.stop, progressed: true }) ?? outcome : outcome
+  // The review pass alone spent the budget: every candidate is kept for the resume, none is sent to the full verify pass.
+  if (found.budgetHit) return closeIfStopped(conclude({ pass, judged: before, pending: unjudged, tokens: found.tokens, config, cap, prior }), before, found.tokens)
   let verified: VerifyResult
   try {
-    verified = await verifyFindings({ sessionFactory, findings: found.findings, context, checks: checks ? await checks() : [], budget: config.budgetTokens - spent(found.tokens), instructions: phasePrompt(config.phases, "corroboration"), language: config.language })
+    verified = await verifyFindings({ sessionFactory, findings: unjudged, context, checks: checks ? await checks() : [], budget: config.budgetTokens - spent(found.tokens), instructions: phasePrompt(config.phases, "corroboration"), language: config.language })
   } catch (error) {
-    return verifyFailed({ pass, judged: [], remaining: found.findings, before: found.tokens, error, config, prior })
+    return verifyFailed({ pass, judged: before, remaining: unjudged, before: found.tokens, error, config, prior })
   }
-  return conclude({ pass, judged: verified.findings, pending: verified.pending, tokens: add(found.tokens, verified.tokens), config, cap, prior })
+  const judged = [...before, ...verified.findings]
+  const tokens = add(found.tokens, verified.tokens)
+  return closeIfStopped(conclude({ pass, judged, pending: verified.pending, tokens, config, cap, prior }), judged, tokens)
+}
+
+const NO_TOKENS: Tokens = { input: 0, output: 0, cached: 0 }
+
+/**
+ * The closing of a review that reached its token budget (close.ts): one short verify call over the strongest candidates not
+ * judged yet, bounded on its own (`CLOSE_TOKENS`, one batch), never another pass over the diff. What it verified joins what was
+ * judged; the rest is counted and kept. When nothing is left to review or verify the review is whole and publishes as one; else
+ * the outcome is `partial`: the verified findings, what was and was not covered, and a checkpoint that continues with the missing
+ * parts and candidates under a fresh allowance (the stopped run's spending is its own, and stays in the job's ledger).
+ * `done`: parts of the diff reviewed (all of them when absent). Undefined when the closing adds nothing (`progressed` false and
+ * nothing verified): the caller keeps its own stop.
+ */
+async function closeReview({ sessionFactory, context, config, cap, pass, judged, tokens, done, stop, prior, progressed }: { sessionFactory: ReviewSessionFactory; context: ReviewContext; config: ReviewEngineConfig; cap: number; pass: Pass; judged: readonly PrFinding[]; tokens: Tokens; done?: number | undefined; stop: PrStopReason; prior?: ReviewCheckpoint | undefined; progressed: boolean }): Promise<ReviewOutcome | undefined> {
+  if (!Number.isFinite(config.budgetTokens)) return undefined
+  const found = pass.result
+  const total = context.parts && context.parts.length > 1 ? context.parts.length : 1
+  const reviewedParts = Math.min(total, done ?? total)
+  const judgedIds = new Set(judged.map((finding) => finding.id))
+  const pending = uniqueFindings(found.findings).filter((finding) => !judgedIds.has(finding.id))
+  let verified: PrFinding[] = []
+  let extra: Tokens = NO_TOKENS
+  const picked = rankFindings(pending, CLOSE_MAX_CANDIDATES).shown
+  if (picked.length) {
+    try {
+      const closed = await verifyFindings({ sessionFactory, findings: picked, context, budget: CLOSE_TOKENS, instructions: [phasePrompt(config.phases, "corroboration"), CLOSE_INSTRUCTION].filter(Boolean).join(" "), language: config.language })
+      verified = closed.findings
+      extra = closed.tokens
+    } catch (error) {
+      // A closing that fails still closes: what it judged before failing counts, the rest is reported as not verified.
+      if (error instanceof VerificationError) { verified = error.partial.findings; extra = error.partial.tokens }
+    }
+  }
+  if (!progressed && !verified.length) return undefined
+  const judgedAll = [...judged, ...verified]
+  const doneIds = new Set(judgedAll.map((finding) => finding.id))
+  const left = pending.filter((finding) => !doneIds.has(finding.id))
+  const base = conclude({ pass, judged: judgedAll, pending: left, tokens: add(tokens, extra), config, cap, prior })
+  const whole = reviewedParts >= total
+  if (!left.length && whole) return base
+  const plan = config.phases ?? DEFAULT_PHASE_PLAN
+  const partial = partialReview({ context, done: reviewedParts, total, unverified: left.length, why: stop.detail })
+  const remaining = [whole ? "" : `${total - reviewedParts} of ${total} parts of the diff not reviewed`, left.length ? `${plural(left.length, "candidate")} not verified` : ""].filter(Boolean).join("; ")
+  const checkpoint: ReviewCheckpoint = whole && base.checkpoint
+    ? { ...base.checkpoint, result: { ...(base.checkpoint.result ?? found), tokens: NO_TOKENS } }
+    : { phase: partPhase(reviewedParts, total), completedPhases: phasesBefore(plan, "analysis"), candidates: left, verified: judgedAll, result: { ...found, findings: [], tokens: NO_TOKENS, budgetHit: true }, rounds: prior?.rounds ?? [], decisions: prior?.decisions ?? plan.decisions, ...(pass.sections ? { sections: pass.sections } : {}) }
+  return {
+    ...base,
+    result: { ...base.result, summary: [base.result.summary, partialNote(partial)].filter(Boolean).join("\n"), budgetHit: true },
+    candidates: [...judgedAll, ...left], completedPhases: checkpoint.completedPhases, validation: validationGate({ complete: false, verified: true }),
+    partial, stop: { ...stop, resumable: true, remaining }, checkpoint,
+  }
+}
+
+/**
+ * `closeReview` for a review that stopped with a checkpoint: a turn of the review pass counted past the cap (the parts before it
+ * are kept), or one of the verify pass did (the candidates it judged are kept). Undefined when the checkpoint holds no reviewed
+ * part or verified work, or the diff splits differently now: the stop then stays as it is.
+ */
+export async function closeCheckpoint({ sessionFactory, context, config, cap, checkpoint, stop, progressed }: { sessionFactory: ReviewSessionFactory; context: ReviewContext; config: ReviewEngineConfig; cap: number; checkpoint: ReviewCheckpoint; stop: PrStopReason; progressed: boolean }): Promise<ReviewOutcome | undefined> {
+  const found = checkpoint.result
+  if (!found) return undefined
+  const parts = parsePartPhase(checkpoint.phase)
+  const total = context.parts && context.parts.length > 1 ? context.parts.length : 1
+  if (parts && (parts.total !== total || parts.done < 1)) return undefined
+  const pass: Pass = { result: { ...found, findings: uniqueFindings(checkpoint.candidates) }, ...(checkpoint.sections ? { sections: checkpoint.sections } : {}) }
+  return closeReview({ sessionFactory, context, config, cap, pass, judged: checkpoint.verified, tokens: found.tokens, done: parts?.done, stop, prior: checkpoint, progressed })
 }
 
 /** What a review pass of a diff in parts keeps after `done` parts: their candidates, and their merged pass for the resume. */
 function passCheckpoint({ pass, done, total, config, prior }: { pass: Pass | undefined; done: number; total: number; config: ReviewEngineConfig; prior?: ReviewCheckpoint | undefined }): ReviewCheckpoint {
   const plan = config.phases ?? DEFAULT_PHASE_PLAN
-  const common = { completedPhases: phasesBefore(plan, "analysis"), verified: [], rounds: prior?.rounds ?? [], decisions: prior?.decisions ?? plan.decisions }
+  const common = { completedPhases: phasesBefore(plan, "analysis"), verified: prior?.verified ?? [], rounds: prior?.rounds ?? [], decisions: prior?.decisions ?? plan.decisions }
   if (!pass) return { phase: "analysis", candidates: [], ...common }
   return { phase: partPhase(done, total), candidates: pass.result.findings, result: { ...pass.result, findings: [], budgetHit: true }, ...common, ...(pass.sections ? { sections: pass.sections } : {}) }
 }
@@ -348,7 +436,7 @@ const tokensText = (value: number) => Math.round(value).toLocaleString("en-US")
 function shortText({ short, done, total, budget }: { short: Shortfall; done: number; total: number; budget: number }): string {
   const allowed = `${tokensText(short.left)} tokens ${done ? "left of" : "that"} this review's pass may spend (${Math.round(REVIEW_PASS_SHARE * 100)}% of its cap of ${budgetText(budget)}: budget.tokens_per_pr, scaled by the diff's size with budget.tokens_per_diff_token)`
   if (!done) return `Nothing was sent to a model: reviewing this diff${total > 1 ? ` (${total} parts)` : ""} needs at least about ${tokensText(short.needed)} tokens, more than the ${allowed}. Nothing is published; raise budget.tokens_per_pr, or set it to null for no internal cap, to review it.`
-  return `Stopped before part ${done + 1} of ${total} without spending on it: the ${plural(done, "part")} reviewed counted about ${short.rate.toFixed(1)} tokens per diff token, so the ${plural(total - done, "remaining part")} need about ${tokensText(short.needed)}, more than the ${allowed}. Nothing is published until the rest is reviewed and every candidate verified; raise budget.tokens_per_pr and resume.`
+  return `Stopped before part ${done + 1} of ${total} without spending on it: the ${plural(done, "part")} reviewed counted about ${short.rate.toFixed(1)} tokens per diff token, so the ${plural(total - done, "remaining part")} need about ${tokensText(short.needed)}, more than the ${allowed}.${NOTHING_PUBLISHED_TAIL}`
 }
 
 /**
@@ -404,7 +492,14 @@ export async function resumeReview({ sessionFactory, context, config, checkpoint
     return verifyFailed({ pass, judged: checkpoint.verified, remaining, before: found.tokens, error, config, prior: checkpoint })
   }
   const tokens = add(found.tokens, verified.tokens)
-  const outcome = conclude({ pass, judged: [...checkpoint.verified, ...verified.findings], pending: verified.pending, tokens, config, cap, prior: checkpoint })
+  const judged = [...checkpoint.verified, ...verified.findings]
+  const outcome = conclude({ pass, judged, pending: verified.pending, tokens, config, cap, prior: checkpoint })
+  if (outcome.stop) {
+    // The allowance ran out again: the same short closing check, published as partial when it added something to the last post.
+    const candidates: Pass = { result: { ...found, findings: uniqueFindings(checkpoint.candidates) }, ...sections }
+    const closed = await closeReview({ sessionFactory, context, config, cap, pass: candidates, judged, tokens, stop: outcome.stop, prior: checkpoint, progressed: verified.findings.length > 0 })
+    if (closed) return closed
+  }
   if (verified.findings.length || !verified.pending.length) return outcome
   return {
     ...outcome,

@@ -20,7 +20,7 @@ import { FILE_OPENERS } from "./links"
 import { DEFAULT_IMAGE_ROOM, IMAGE_WAIT_COLORS, IMAGE_WAIT_MODES, IMAGE_WAIT_PRESETS, imageWaitConfig, imageWaitPresetNames } from "./image-wait"
 import { mascotRows } from "./mascot"
 import { STATUS_BUILTINS } from "./status-items"
-import { ACTIVITY_PARTS, FOOTER_ICON_MODES, FOOTER_PRESETS, FOOTER_PRESET_NAMES, footerRowsProblems, footerSegmentProblem, footerTextProblems, QUOTA_REFRESH_CLAUDE, QUOTA_REFRESH_COST, QUOTA_REFRESH_MIN_MINUTES, quotaRefreshProblems, parseMarkdownColors, STAT_PART_IDS, tuiProblems, unknownActivityParts, unknownStatParts } from "@mendcode/protocol/wire"
+import { ACTIVITY_PARTS, FOOTER_ICON_MODES, FOOTER_PACK_BUILTINS, FOOTER_PACK_OFF,FOOTER_PRESETS, FOOTER_PRESET_NAMES, footerRowsProblems, footerSegmentProblem, footerTextProblems, QUOTA_REFRESH_CLAUDE, QUOTA_REFRESH_COST, QUOTA_REFRESH_MIN_MINUTES, quotaRefreshProblems, parseMarkdownColors, STAT_PART_IDS, tuiProblems, unknownActivityParts, unknownStatParts } from "@mendcode/protocol/wire"
 import { markdownStyleFor, renderMarkdown } from "./markdown"
 import { MARKDOWN_SAMPLE } from "./markdown-sample"
 import { renderTopbar, truncateMiddle } from "./topbar"
@@ -54,7 +54,7 @@ export const GROUPS = [
   ] },
   { title: "Prompt & footer", parts: [
     { title: "Prompt", rows: ["promptChrome", "promptBorder", "promptGlyphs", "promptLead", "promptStatus", "attachmentChips"] },
-    { title: "Footer", rows: ["showStatus", "footerPreset", "footerRows", "footerText", "footerIcons", "statusSeparator", "showAgent", "showModel", "showProvider", "showEffort", "showPermission", "showCommandHint", "showAgentHint", "footerToday"] },
+    { title: "Footer", rows: ["showStatus", "footerPack", "footerPreset", "footerRows", "footerText", "footerIcons", "statusSeparator", "showAgent", "showModel", "showProvider", "showEffort", "showPermission", "showCommandHint", "showAgentHint", "footerToday"] },
     { title: "Segments", rows: ["statusLeft", "statusRight", "statusColors"] },
     { title: "Quota", rows: ["footerQuota", "quotaView", "quotaColor", "quotaRefresh"] },
   ] },
@@ -195,7 +195,7 @@ const COMMENT_TEXT_HELP: Record<(typeof COMMENT_TEXT_ROWS)[number], string> = {
   commentEntry: "Needs {quote} and {text}; may use {n} {of} {cut}; write line breaks as \\n",
 }
 const CHOICES: Partial<Record<CustomizeRow, readonly string[]>> = {
-  footerIcons: FOOTER_ICON_MODES, glyphs: GLYPH_CHOICES, altLabel: ALT_LABELS, quotaView: QUOTA_VIEWS, quotaColor: QUOTA_COLORS, keyProtocol: KEY_PROTOCOLS, optionKeys: OPTION_KEYS, viewerWrap: ["auto", "on", "off"],
+  footerIcons: FOOTER_ICON_MODES, footerPack: [...FOOTER_PACK_BUILTINS, FOOTER_PACK_OFF], glyphs: GLYPH_CHOICES, altLabel: ALT_LABELS, quotaView: QUOTA_VIEWS, quotaColor: QUOTA_COLORS, keyProtocol: KEY_PROTOCOLS, optionKeys: OPTION_KEYS, viewerWrap: ["auto", "on", "off"],
   comments: COMMENT_MODES, commentKey: COMMENT_KEYS, commentHint: COMMENT_HINTS, commentChips: COMMENT_CHIPS, commentChipStyle: COMMENT_CHIP_STYLES, commentSentLayout: COMMENT_SENT_LAYOUTS,
   slashMenu: SLASH_LAYOUTS, processMode: ["daemon", "auto", "solo"],
   imageWait: IMAGE_WAIT_MODES, imageWaitColor: IMAGE_WAIT_COLORS,
@@ -233,7 +233,7 @@ export const LABELS: Record<CustomizeRow, string> = {
   tagline: "Tagline", promptGlyphs: "Border glyphs", activityStates: "Mascot states JSON", activityMessages: "Activity text JSON", showActivityModel: "Activity model", doneSymbol: "Completion symbol",
   presentation: "Chat presentation", reasoning: "Reasoning", toolLayout: "Tool layout", toolOutput: "Tool output", toolDensity: "Tool density", codeMapCard: "Code map card", diffView: "Diff view", toolDesign: "Tool design",
   logoKind: "Logo kind", homeMascot: "Mascot", mascotMotion: "Mascot motion", mascotSize: "Mascot size", logoText: "Logo text", logoFont: "Logo font", customAscii: "Logo art", productName: "Product name", homeLayout: "Welcome layout", homeInput: "Input position", homeRightPanel: "Split panel", density: "Density", homeTips: "Tips", homeFooter: "Home footer", homeHeader: "Home header", homePanel: "Home panel", showPlaceholder: "Prompt example", placeholderText: "Example text",
-  promptBorder: "Prompt border", showAgent: "Agent label", showEffort: "Reasoning effort", showPermission: "Permissions", quotaRefresh: "Quota refresh", footerPreset: "Footer preset", footerRows: "Footer rows", footerText: "Footer text JSON", footerIcons: "Footer icons", glyphs: "Glyphs", footerQuota: "Footer quota", quotaView: "Quota shows", quotaColor: "Quota colour", footerToday: "Footer today",
+  promptBorder: "Prompt border", showAgent: "Agent label", showEffort: "Reasoning effort", showPermission: "Permissions", quotaRefresh: "Quota refresh", footerPack: "Footer pack", footerPreset: "Footer preset", footerRows: "Footer rows", footerText: "Footer text JSON", footerIcons: "Footer icons", glyphs: "Glyphs", footerQuota: "Footer quota", quotaView: "Quota shows", quotaColor: "Quota colour", footerToday: "Footer today",
   promptChrome: "Prompt chrome", promptLead: "Prompt lead", statusSeparator: "Separator", showModel: "Model", showProvider: "Provider", showStatus: "Footer", showCommandHint: "Commands hint", showAgentHint: "Agents hint", attachmentChips: "Attachments",
   contextBar: "Context bar", contextStyle: "Context style", topbarStats: "Top bar stats", showTopbar: "Top bar", showSessionTitle: "Session title", stickyPrompt: "Pinned prompt", showTasks: "Running tasks", dockJobs: "Dock jobs", showProject: "Project location", showDiffLines: "Diff lines", showDiffFiles: "Changed files", terminalTitle: "Window title", titleTemplate: "Title template", titleActivity: "Title activity", showStalled: "Stalled hint", usageNotices: "Limit notices", cacheNotices: "Cache notices", confirmNotices: "Confirmations", sessionAccent: "Session accent", showActivity: "Activity text", showElapsed: "Elapsed time", showTokens: "Activity tokens", showInterruptHint: "Interrupt hint", activityMascot: "Activity mascot",
   usageClock: "Usage clock", altScreen: "Alternate screen", accessible: "Screen reader", turnNotify: "Desktop notice", notifyWhen: "Notify when", autoRecap: "Recap on return", idleReturn: "Idle prompt", resumePrompts: "Resume prompts", sidebar: "Sidebar", sidebarSide: "Sidebar side", sidebarHeader: "Sidebar header", panelNarrow: "Panel when narrow", panelHeader: "Panel header", theme: "Theme", turnBell: "Bell", images: "Images", transcriptImages: "Transcript images", hyperlinks: "Hyperlinks", fileOpener: "File opener", pathClick: "Click on a path", viewerNumbers: "Viewer line numbers", viewerWrap: "Viewer wrap", viewerFocus: "Viewer takes focus", wheelLines: "Wheel lines", altLabel: "Alt key label", keyProtocol: "Key reports", optionKeys: "Option characters", rightClickPaste: "Right-click paste", pet: "Pet", petSize: "Pet size", reset: "Reset to defaults",

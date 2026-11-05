@@ -81,7 +81,8 @@ test("Agent View lists waiting, looping and working sessions, a finished one und
 })
 
 test("footer and session chrome controls change real data immediately", async () => {
-  const { h } = create({ showEffort: true }, 100, 30)
+  // The built-in footer's toggles (provider, agent): the default pack draws neither, so this runs on `footerPack: off`.
+  const { h } = create({ showEffort: true, footerPack: "off" }, 100, 30)
   await Bun.sleep(5)
   const chat = conversation(h.sessionId, h.app.onEvent)
   chat.exchange("Keep the transcript", "Answer stays visible")

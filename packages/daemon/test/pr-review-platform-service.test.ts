@@ -9,6 +9,7 @@ import type { ReviewSessionFactory } from "../src/pr-review/engine"
 import { findingId } from "../src/pr-review/findings"
 import type { GhCall } from "../src/pr-review/publish"
 import { createPrReviewService } from "../src/pr-review/service"
+import { readReviewState } from "../src/pr-review/state"
 
 /**
  * Platform scenarios end to end through `createPrReviewService` with the real review run (run.ts, the engine, publishing through
@@ -175,7 +176,7 @@ function daemon({ repo, hub, login, brain, data = temp(`e2e-${login}-`), now }: 
 const reviewsBy = (hub: ReturnType<typeof github>, number: number, login: string) => (hub.reviews.get(number) ?? []).filter((review) => review.user.login === login)
 
 describe("budget stop, checkpoint and retry through the service", () => {
-  test("a budget stop after the review pass is checkpointed with the candidate; job-retry after raising the budget verifies it without a second review pass and posts once", async () => {
+  test("a review pass that alone passes the cap is closed by one short check and posted whole: nothing is left checkpointed", async () => {
     const repo = await repository("enabled: true\nbudget:\n  tokens_per_pr: 10000\n")
     const head = await repo.push(12, "feature", "export const one = 2\n")
     const hub = github(repo, ["ana"])
@@ -184,29 +185,108 @@ describe("budget stop, checkpoint and retry through the service", () => {
     const ana = daemon({ repo, hub, login: "ana", brain })
     await ana.service.control({ sessionId: "ses_a", action: "publish-on" })
     expect((await ana.service.control({ sessionId: "ses_a", action: "review", pr: "12" })).ok).toBe(true)
-    await until(() => ana.jobs()[0]?.state === "checkpointed")
-    const stopped = ana.jobs()[0]!
-    expect(brain.asked).toEqual(["review"])
-    expect(stopped).toMatchObject({ head, stop: { kind: "budget", resumable: true } })
-    expect(stopped.checkpoint.candidates.map((finding) => finding.id)).toEqual([FINDING_ID])
-    expect(stopped.notBefore).toBeUndefined()
-    expect(hub.posts).toEqual([])
-    expect(ana.notices.some((text) => text.includes("Stopped at MendCode's token budget"))).toBe(true)
-
-    // The repository raises the budget on its base branch; the retry reads that policy and resumes from the checkpoint.
-    await repo.policy("enabled: true\nbudget:\n  tokens_per_pr: null\n")
-    const retried = await ana.service.control({ sessionId: "ses_a", action: "job-retry", jobId: stopped.id, reason: "raised tokens_per_pr" })
-    expect(retried.ok && retried.text).toContain("continuing from its checkpoint")
     await until(() => ana.jobs()[0]?.state === "done")
     expect(brain.asked).toEqual(["review", "verify"])
     const posted = reviewsBy(hub, 12, "ana")
     expect(posted).toHaveLength(1)
-    expect(posted[0]!.commit_id).toBe(head)
-    expect(posted[0]!.body).toContain("mendcode:reviewer=global")
+    expect(posted[0]!).toMatchObject({ commit_id: head })
+    expect(posted[0]!.body).toContain("## MendCode review")
     expect(ana.service.platform.effects.pending()).toEqual([])
-    const totals = ana.service.platform.accounting.totals({ repo: "acme/app", number: 12, head, reviewer: "global" })!
-    expect(totals.calls).toBe(2)
-    expect(Object.keys(totals.byPurpose).sort()).toEqual(["resume", "review"])
+  })
+})
+
+describe("a review that reaches the cap through the service", () => {
+  /** Four large new files as PR `number`'s head: with `context_tokens: 8000` each is its own part of the diff. */
+  async function pushFour(repo: Awaited<ReturnType<typeof repository>>, number: number) {
+    await git(repo.dir, "checkout", "-q", "-b", "big", "main")
+    for (const file of FOUR) writeFileSync(path.join(repo.dir, file), Array.from({ length: 150 }, (_, i) => `export const ${file.replace(/\W/g, "_")}_${i} = ${i} // padding that makes this file about the size of one review part`).join("\n") + "\n")
+    await git(repo.dir, "add", "-A")
+    await git(repo.dir, "commit", "-q", "-m", "four big files")
+    await git(repo.dir, "push", "-q", "-f", "origin", `big:refs/heads/big`, `big:refs/pull/${number}/head`)
+    const sha = await git(repo.dir, "rev-parse", "HEAD")
+    await git(repo.dir, "checkout", "-q", "main")
+    return sha
+  }
+  const FOUR = ["p1.ts", "p2.ts", "p3.ts", "p4.ts"]
+
+  /** Children that report one defect per file of the part they are shown and confirm what a verify turn names; the first review costs 12,000 tokens, the others 1,000. */
+  function parts() {
+    const asked: string[] = []
+    const reviewed: string[][] = []
+    const factory = (): ReviewSessionFactory => async ({ purpose }) => ({
+      id: `ses_${purpose}`,
+      async send(prompt: string) {
+        asked.push(purpose)
+        if (purpose === "review") {
+          const files = [...new Set([...prompt.matchAll(/^diff --git a\/(\S+) /gm)].map((match) => match[1]!))]
+          reviewed.push(files)
+          const findings = files.map((file) => ({ path: file, line: 1, severity: "major", category: "correctness", summary: `unchecked shape in ${file}`, detail: "d", evidence: [`${file}:1`] }))
+          return { text: JSON.stringify({ summary: `Adds ${files.join(", ")}.`, findings }), tokens: { input: reviewed.length === 1 ? 12_000 : 1_000, output: 0 } }
+        }
+        const ids = [...prompt.matchAll(/"id":"([0-9a-f]{40})"/g)].map((match) => match[1]!)
+        return { text: JSON.stringify({ verdicts: ids.map((id) => ({ id, verdict: "confirmed", evidence: ["a.ts:1"] })) }), tokens: { input: 500, output: 0 } }
+      },
+      async close() {},
+    }) as never
+    return { factory, asked, reviewed, started: () => asked.length > 0 }
+  }
+
+  test("a partial review is posted and is not a review of the head: the next /pr review continues the same job with the missing parts, and only then is the head answered as reviewed", async () => {
+    const repo = await repository("enabled: true\nbudget:\n  tokens_per_pr: 40000\n  context_tokens: 8000\n")
+    const head = await pushFour(repo, 12)
+    const hub = github(repo, ["ana"])
+    hub.prs.push({ number: 12, branch: "big" })
+    const brain = parts()
+    const ana = daemon({ repo, hub, login: "ana", brain })
+    await ana.service.control({ sessionId: "ses_a", action: "publish-on" })
+    expect((await ana.service.control({ sessionId: "ses_a", action: "review", pr: "12" })).ok).toBe(true)
+    await until(() => ana.jobs()[0]?.state === "checkpointed")
+    const stopped = ana.jobs()[0]!
+    expect(brain.reviewed).toEqual([["p1.ts"]])
+    expect(stopped).toMatchObject({ head, stop: { kind: "budget", resumable: true }, checkpoint: { phase: "analysis 1/4" } })
+    const partial = reviewsBy(hub, 12, "ana")
+    expect(partial).toHaveLength(1)
+    expect(partial[0]!.body).toContain("## MendCode partial review")
+    expect(partial[0]!.body).toContain("`p2.ts`, `p3.ts`, `p4.ts`")
+    expect(partial[0]!.comments).toHaveLength(1)
+    expect(readReviewState(ana.data, "acme/app", 12).lastHead).toBeUndefined()
+    expect(ana.notices.join("\n")).toContain("Partial review: 1 of 4 files reviewed")
+
+    // Not "already reviewed": the same job continues from its checkpoint with parts 2 to 4.
+    const again = await ana.service.control({ sessionId: "ses_a", action: "review", pr: "12" })
+    expect(again.ok && again.text).toContain("continuing from its checkpoint")
+    await until(() => ana.jobs()[0]?.state === "done")
+    expect(ana.jobs()).toHaveLength(1)
+    expect(brain.reviewed).toEqual([["p1.ts"], ["p2.ts"], ["p3.ts"], ["p4.ts"]])
+    const posted = reviewsBy(hub, 12, "ana")
+    expect(posted).toHaveLength(2)
+    expect(posted[1]!.body).toContain("## MendCode review")
+    expect(posted[1]!.comments).toHaveLength(3)
+    expect(readReviewState(ana.data, "acme/app", 12).lastHead).toBe(head)
+
+    // Now the head is reviewed whole: asking again is answered at once, no model call.
+    const calls = brain.asked.length
+    const third = await ana.service.control({ sessionId: "ses_a", action: "review", pr: "12" })
+    expect(third.ok && third.text).toContain("was already reviewed")
+    expect(brain.asked).toHaveLength(calls)
+  })
+
+  test("/pr review full after a partial review drops its checkpoint and reviews the whole diff again", async () => {
+    const repo = await repository("enabled: true\nbudget:\n  tokens_per_pr: 40000\n  context_tokens: 8000\n")
+    await pushFour(repo, 12)
+    const hub = github(repo, ["ana"])
+    hub.prs.push({ number: 12, branch: "big" })
+    const brain = parts()
+    const ana = daemon({ repo, hub, login: "ana", brain })
+    await ana.service.control({ sessionId: "ses_a", action: "publish-on" })
+    await ana.service.control({ sessionId: "ses_a", action: "review", pr: "12" })
+    await until(() => ana.jobs()[0]?.state === "checkpointed")
+    const first = ana.jobs()[0]!
+    await ana.service.control({ sessionId: "ses_a", action: "review", pr: "12", full: true })
+    await until(() => ana.jobs().length === 2 && ana.jobs().every((job) => job.state !== "pending" && job.state !== "running"))
+    expect(ana.jobs().find((job) => job.id === first.id)!.state).toBe("cancelled")
+    // The whole diff is reviewed again from part 1 (the first run's part, then the full run's parts).
+    expect(brain.reviewed[1]).toEqual(["p1.ts"])
   })
 })
 

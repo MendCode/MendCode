@@ -102,7 +102,8 @@ describe("workflows in the chat", () => {
     app.applySettings({})
     await Bun.sleep(5)
     app.render()
-    expect(text().at(-1)).toContain("◇ 2 workflows ?")
+    // The default pack counts them in words and says when one waits (the built-in footer of `footerPack: off` drew `◇ 2 workflows ?`).
+    expect(text().at(-1)).toContain("2 workflows · needs input")
   })
 
   test("workflow.changed keeps the count and the open page current", async () => {

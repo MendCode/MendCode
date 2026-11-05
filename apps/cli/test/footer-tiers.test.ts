@@ -19,7 +19,8 @@ type Scene = { mode: "minimal" | "balanced" | "full"; width: number; height?: nu
 async function scene({ mode, width, height = 30, profile = {}, graph = true, quotas = true, loops = 1, turns = 4, settings = {} }: Scene) {
   const layout = scratch()
   cleanups.push(layout.cleanup)
-  writeTuiProfile(layout.dataDir, { ...DEFAULT_TUI_PROFILE, sidebar: "hidden", ...profile })
+  // These scenes pin the built-in footer under the packs: `footerPack: off` (footer-pack.test.ts covers the packs, `clean` the default).
+  writeTuiProfile(layout.dataDir, { ...DEFAULT_TUI_PROFILE, sidebar: "hidden", footerPack: "off", ...profile })
   const h = await appHarness({
     dataDir: layout.dataDir, directory: DIR, home: "/Users/dev", width, height, mode,
     reply: (command) => command.type === "models.list"
