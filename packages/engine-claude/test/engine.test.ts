@@ -749,12 +749,17 @@ describe("claude engine permissions", () => {
     const approved = await permissionTurn({ tool_name: "ExitPlanMode", input: { plan: "1. do it" } }, { mode: "plan", answer: () => ({ kind: "approve", scope: "once" }) })
     expect(approved.asked[0]).toMatchObject({ kind: "approval", title: "Review plan", tool: "plan_review", planReview: { markdown: "1. do it", phase: "implementation", destination: "build" } })
     expect(approved.decision.behavior).toBe("allow")
-    expect(approved.modes).toEqual(["ask"])
+    expect(approved.modes).toEqual(["full"])
     const rejected = await permissionTurn({ tool_name: "ExitPlanMode", input: { plan: "1. do it" } }, { mode: "plan", answer: () => ({ kind: "deny", reason: "add tests" }) })
     expect(rejected.decision).toEqual({ behavior: "deny", message: "The user wants changes to the plan: add tests" })
     expect(rejected.modes).toEqual([])
     const applied = await permissionTurn({ tool_name: "ExitPlanMode", input: { plan: "1. do it" } }, { mode: "plan", answer: () => ({ kind: "plan_review", action: "apply" }) })
-    expect([applied.decision.behavior, applied.modes]).toEqual(["allow", ["ask"]])
+    expect([applied.decision.behavior, applied.modes]).toEqual(["allow", ["full"]])
+    // The reviewer can keep approving: the other accesses stay choices.
+    for (const permission of ["edits", "ask"] as const) {
+      const chosen = await permissionTurn({ tool_name: "ExitPlanMode", input: { plan: "1. do it" } }, { mode: "plan", answer: () => ({ kind: "plan_review", action: "apply", permission }) })
+      expect(chosen.modes).toEqual([permission])
+    }
     const edited = await permissionTurn({ tool_name: "ExitPlanMode", input: { plan: "1. do it" } }, { mode: "plan", answer: () => ({ kind: "plan_review", action: "edit", markdown: "1. do it twice" }) })
     expect(edited.decision.behavior).toBe("deny")
     expect((edited.decision as { message: string }).message).toContain("1. do it twice")

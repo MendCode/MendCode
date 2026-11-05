@@ -33,6 +33,42 @@ test("accept does not apply; planning-only Enter accepts; reject sends a reason 
   }
 })
 
+test("applying takes full access by default, the page says so before the key, and m picks another access without removing the rest", async () => {
+  const h = await planHarness()
+  expect(h.text().join("\n")).toContain("full access")
+  expect(h.text().join("\n")).toContain("m access")
+  await h.app.onKey("\r")
+  expect(h.sentOf("request.resolve").at(-1)).toMatchObject({ decision: { kind: "plan_review", action: "apply", permission: "full" } })
+  for (const [presses, expected, label] of [[1, "edits", "auto edits"], [2, "ask", "ask before edits"], [3, "full", "full access"]] as const) {
+    const again = await planHarness()
+    for (let i = 0; i < presses; i++) await again.app.onKey("m")
+    expect(again.text().join("\n")).toContain(label)
+    await again.app.onKey("\r")
+    expect(again.sentOf("request.resolve").at(-1)).toMatchObject({ decision: { action: "apply", permission: expected } })
+  }
+})
+
+test("on a remote daemon the page defaults to ask before edits, and m can still choose full access", async () => {
+  const h = await planHarness(100, 30, "implementation", false, { host: "box:7777", readOnly: false })
+  expect(h.text().join("\n")).toContain("ask before edits")
+  await h.app.onKey("\r")
+  expect(h.sentOf("request.resolve").at(-1)).toMatchObject({ decision: { action: "apply", permission: "ask" } })
+  const chosen = await planHarness(100, 30, "implementation", false, { host: "box:7777", readOnly: false })
+  await chosen.app.onKey("m")
+  await chosen.app.onKey("\r")
+  expect(chosen.sentOf("request.resolve").at(-1)).toMatchObject({ decision: { action: "apply", permission: "full" } })
+})
+
+test("accepting without implementation and a planning-only packet carry no access", async () => {
+  const accepted = await planHarness()
+  await accepted.app.onKey("a")
+  expect(accepted.sentOf("request.resolve").at(-1)!.decision).not.toHaveProperty("permission")
+  const planning = await planHarness(100, 30, "plan")
+  expect(planning.text().join("\n")).not.toContain("full access")
+  await planning.app.onKey("\r")
+  expect(planning.sentOf("request.resolve").at(-1)!.decision).not.toHaveProperty("permission")
+})
+
 test("a rejected reply keeps edited content and the review open", async () => {
   const h = await planHarness(100, 30, "implementation", true)
   await h.app.onKey("e")

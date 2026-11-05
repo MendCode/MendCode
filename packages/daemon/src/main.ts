@@ -49,7 +49,6 @@ import {
   loadCompactionPrompt,
   loadContinuationPrompt,
   loadSystemPrompt,
-  loadTerminalRendering,
   NATIVE_DEFAULTS,
   policyRules,
   toolDisabled,
@@ -102,7 +101,7 @@ import { systemPartsWith, type PromptFiles } from "./extensions"
 import { promptContextParts, promptFileOverrides } from "./prompt-context"
 import { outputStyleText } from "./output-styles"
 import { createPromptModes, graphAutopilotPart, visiblePlanPart } from "./prompt-modes"
-import { selfKnowledgeText, visiblePlanText } from "./prompt-guidance"
+import { renderingFor, renderingText, selfKnowledgeText, visiblePlanText } from "./prompt-guidance"
 import { foreignEngine, imageRefusal, invalidChoice, modelEngine, resolveModel, unusableRoles, usableEffort, type ModelCatalog } from "./models"
 import { claudeAlias, claudeCompactEnv, claudeSubagentEnv, createClaudeDetection, createClaudeModelCatalog, probeClaude } from "./claude-models"
 import { createEngineRouter } from "./engine-router"
@@ -565,11 +564,12 @@ export const daemon = await startDaemon({
     // What an engine with its own system prompt (Claude Code, Codex, pi, ACP) is told after it: what MendCode draws and where its
     // docs are. Read on the first such engine's start only (P5). The minimal prompt mode adds nothing to any engine's prompt.
     // An engine with a todo or plan tool of its own (all but pi) is told that its list is pinned too, while `visible_plan` is on.
-    let harnessRendering: Promise<string> | undefined
     const harnessSystem = async (ownPlan = true) => {
-      const text = `${await (harnessRendering ??= loadTerminalRendering())}\n\n${selfKnowledgeText()}`
       return (root: string) => {
-        if (createPromptModes(dir).status(root).mode === "minimal") return undefined
+        const mode = createPromptModes(dir).status(root).mode
+        if (mode === "minimal") return undefined
+        // A custom prompt keeps the short note it always had; the modes that send a rendering text to a native model send the same to an engine.
+        const text = `${renderingFor(mode) || renderingText().short}\n\n${selfKnowledgeText()}`
         return ownPlan && featureOn(store.settings.get(), "visible_plan", { safeMode }) ? `${text}\n${visiblePlanText().harness}` : text
       }
     }

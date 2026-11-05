@@ -18,7 +18,7 @@ import type { CompactionConfig } from "@mendcode/protocol"
 import { ReasoningError, type ReasoningPort } from "./reasoning"
 import { requestEstimates } from "./request-profile"
 import type { EngineEvent, EnginePort, EngineResolution, TurnInput, TurnOutcome, TaskPort } from "@mendcode/kernel"
-import { attachmentOrder, inlineTexts, layoutAttachments, pastedText, DEFAULT_COMPACT_AT_TOKENS, EARLY_TOOL_CHARS, INPUT_PROGRESS_CHARS, partialToolArgs, toolInputProgress, normalizeRenderSpec, parseRenderSpec, redactSecrets, type BlobRef, type ContextMessage, type ContextReport, type ContextSection, type ItemId, type ModelChoice, type ModelRole, type PermissionMode, type Settings, type PromptCacheMode, type SessionId } from "@mendcode/protocol"
+import { PLAN_APPLY_DEFAULT, PLAN_APPLY_LABELS, attachmentOrder, inlineTexts, layoutAttachments, pastedText, DEFAULT_COMPACT_AT_TOKENS, EARLY_TOOL_CHARS, INPUT_PROGRESS_CHARS, partialToolArgs, toolInputProgress, normalizeRenderSpec, parseRenderSpec, redactSecrets, type BlobRef, type ContextMessage, type ContextReport, type ContextSection, type ItemId, type ModelChoice, type ModelRole, type PermissionMode, type Settings, type PromptCacheMode, type SessionId } from "@mendcode/protocol"
 import { applyShellEnvironment, defaultShell, type ShellEnvironmentPolicy, type ShellPolicy, type WebPolicy } from "@mendcode/tools"
 import type { BackgroundPort, InteractivePort, LoopPort, PeerPort, ThreadPort, ReviewPort, RecalledTurn, SessionRecallPort, QuestionPrompt, Tool, ToolResult, WorkflowPort, WorktreePort, ComputerPort } from "@mendcode/tools"
 import { cacheHash, cacheProject, passiveCache, selectCache } from "./cache-policy"
@@ -2075,8 +2075,10 @@ export function createNativeEngine(options: {
       Object.assign(toolset, withAgent(withSubagents(withProjectTools(mainToolset, toolset.extras ?? []), [...(toolset.subagents?.values() ?? [])]), target.profile), { agent: target.profile })
       lastAgent.set(input.sessionId, target.profile)
       lastSpecs.set(input.sessionId, toolset.specs)
-      input.setPermissionMode("ask")
-      return { output: `Plan approved. Switched to ${target.name}; implement this approved Markdown and verify it:\n\n${markdown}${comments}`, truncated: false, title: "plan approved", isError: false, meta: { planExitAgent: target.name, phase: review.phase } }
+      // The reviewer's choice, full access unless they picked another: the session runs the approved plan without asking again (docs/plan-review.md).
+      const access = "permission" in reply && reply.permission ? reply.permission : PLAN_APPLY_DEFAULT
+      input.setPermissionMode(access)
+      return { output: `Plan approved. Switched to ${target.name} with ${PLAN_APPLY_LABELS[access]}; implement this approved Markdown and verify it:\n\n${markdown}${comments}`, truncated: false, title: "plan approved", isError: false, meta: { planExitAgent: target.name, phase: review.phase } }
     }
     if (reply.action === "accept") return { output: `Plan accepted. Acceptance does not authorize implementation. Stay read-only and return the approved plan.\n\n${markdown}${comments}`, truncated: false, title: "plan accepted", isError: false }
     if (reply.action === "edit") return { output: `The user edited the plan. Treat this Markdown as the source of truth; stay read-only.\n\n${markdown}${comments}`, truncated: false, title: "plan edited", isError: false }

@@ -8,11 +8,22 @@ including edits saved before a daemon restart. Review requests and replies live 
 
 The terminal opens a dedicated Markdown preview with a bordered panel grid. Enter explicitly applies;
 `a` accepts without implementation, `e` edits, `c` adds comments, `r` rejects with a reason, `t` cycles
-trusted primary destinations, and Esc closes without authorization. In an editor Enter inserts a newline,
+trusted primary destinations, `m` cycles the access the session takes (`full access`, `auto edits`,
+`ask before edits`), and Esc closes without authorization. In an editor Enter inserts a newline,
 Ctrl+O applies the edited plan/comments, Ctrl+S sends an edit for further planning, and Esc keeps the draft
 and returns to preview. A failed reply keeps the draft. Arrows/PageUp/PageDown scroll the plan.
 `/plan-review` reopens saved decisions; Left/Right selects an older/newer review. Saved decisions are read-only.
 Below 70 columns the panels stack; hints remain in the page header.
+
+## Access after applying
+
+Applying a plan (Enter, or Ctrl+O after comments or edits) takes **full access** by default, like leaving plan mode with
+acceptance in Claude Code: the approved plan runs without a question for every edit and command. The Review panel shows
+`Access  full access` before the key is pressed, `m` cycles it to `auto edits` or `ask before edits` (the old behavior), and
+leaving plan mode says where the session landed: `Plan mode off: build runs on <model> · full access`. The reply carries it as
+`permission: "full" | "edits" | "ask"`; a remote terminal defaults the page to `ask before edits` and the daemon runs a remote apply that names no access in `ask` (`full` only when that reply asks for it); the REST bridge (`POST /plan-review/:id/reply`) keeps `ask` unless the body sets
+`permission`. Accepting without implementation, editing, rejecting, closing and planning-only packets change no access and stay
+in plan mode. Deny rules and the engine's own safety checks still apply in full access ([permissions](permissions.md)).
 
 ## Entering plan mode
 

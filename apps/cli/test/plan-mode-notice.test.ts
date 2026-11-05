@@ -32,6 +32,8 @@ test("leaving plan mode names the agent and the model that run now, and other mo
   await Bun.sleep(5)
   h.app.render()
   expect(h.text().join("\n")).toMatch(/Plan mode off: build runs on .*luna/i)
+  expect(h.text().join("\n")).toMatch(/Plan mode off: build runs on .*luna.* · ask before edits/i)
+  expect(planModeNotice({ from: "plan", to: "full", report: undefined, planModel: undefined, buildModel: undefined, agent: undefined })).toBe("Plan mode off: build · full access")
   expect(planModeNotice({ from: "ask", to: "edits", report: undefined, planModel: undefined, buildModel: undefined, agent: undefined })).toBeUndefined()
   expect(planModeNotice({ from: "plan", to: "plan", report: undefined, planModel: undefined, buildModel: undefined, agent: undefined })).toBeUndefined()
 })

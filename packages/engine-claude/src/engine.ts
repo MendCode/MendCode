@@ -1,4 +1,4 @@
-import type { BlobRef, PermissionMode, ReasoningEffort, SessionId, TurnId } from "@mendcode/protocol"
+import { PLAN_APPLY_DEFAULT, type BlobRef, type PermissionMode, type ReasoningEffort, type SessionId, type TurnId } from "@mendcode/protocol"
 import { layoutAttachments } from "@mendcode/protocol/wire"
 import { createHash, randomUUID } from "node:crypto"
 import { environmentKey, processMcpTurn, realClock, type Clock, type EngineEnvironment, type EngineEvent, type EnginePort, type EngineResolution, type TimerHandle, type TurnInput, type TurnOutcome } from "@mendcode/kernel"
@@ -330,7 +330,7 @@ export function createClaudeEngine(options: {
         if (reply.action === "accept" || reply.action === "close") return deny("The user did not approve the plan.")
         if (reply.action === "edit") return deny(`The user edited the plan; revise it from this Markdown and submit it again:\n\n${"markdown" in reply && reply.markdown ? reply.markdown : markdown}`)
         if (reply.action === "reject") return deny(reply.reason ? `The user wants changes to the plan: ${reply.reason}` : "The user did not approve the plan.")
-        turn.input.setPermissionMode("ask")
+        turn.input.setPermissionMode("permission" in reply && reply.permission ? reply.permission : PLAN_APPLY_DEFAULT)
         connection.permission = "default"
         return allow()
       }

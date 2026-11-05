@@ -34,3 +34,11 @@ export function readPlanReviews(store: Store, sessionId: SessionId, limit = 20):
   }
   return records
 }
+
+/**
+ * A remote connection may not widen the session's permissions on its own: its plan applied without a named access runs in `ask`
+ * (the daemon already keeps permission and sandbox changes local); `full` only when that very reply asks for it.
+ */
+export function remotePlanReply<T extends PlanReviewReply>(decision: T, remote: boolean): T {
+  return remote && decision.action === "apply" && !decision.permission ? { ...decision, permission: "ask" } : decision
+}

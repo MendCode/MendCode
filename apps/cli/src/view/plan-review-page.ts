@@ -1,3 +1,4 @@
+import { PLAN_APPLY_LABELS, type PlanApplyPermission } from "@mendcode/protocol/wire"
 import type { PlanReviewRecord } from "@mendcode/protocol"
 import type { Line } from "../ui/theme"
 import { columns, fit, panelGrid, spread } from "./deck"
@@ -12,6 +13,8 @@ export type PlanDraft = {
   markdown: string
   comments: string
   destination: string
+  /** The access the session takes when the plan is applied (`m` cycles it). */
+  permission: PlanApplyPermission
   scroll: number
   editor: ReturnType<typeof createEditor>
   note: string
@@ -28,13 +31,16 @@ export function renderPlanReviewPage(input: { record: PlanReviewRecord; draft: P
   const textRoom = compact ? main : main - 4
   draft.editor.setVisualWidth(textRoom)
   const primary = record.phase === "plan" ? "accept" : "apply"
-  const hints = !pending ? "←→ review · ↑↓ scroll · esc back" : draft.stage === "preview" ? width < 90 ? `↵ ${primary} · e edit · c notes · r reject · esc` : `enter ${primary} · a accept · e edit · c comments · r reject · t agent · esc close` : draft.stage === "reject" ? "enter reject · esc preview" : `ctrl-o ${primary} · ctrl-s save · esc preview`
+  const hints = !pending ? "←→ review · ↑↓ scroll · esc back" : draft.stage === "preview" ? width < 90 ? `↵ ${primary} · e edit · c notes · r reject · esc` : `enter ${primary} · a accept · e edit · c comments · r reject · t agent · m access · esc close` : draft.stage === "reject" ? "enter reject · esc preview" : `ctrl-o ${primary} · ctrl-s save · esc preview`
   const status = pending ? "Pending" : record.reply?.action ?? "Interrupted"
   const meta: Line[] = [
     [{ text: "Status  ", fg: "primary" }, { text: status, fg: "text" }],
     [{ text: "Phase   ", fg: "primary" }, { text: record.phase, fg: "text" }],
     [{ text: "Agent   ", fg: "primary" }, { text: draft.destination, fg: "text" }],
   ]
+  // What applying does to the permissions, said before the keypress (a planning-only packet accepts and changes nothing); a saved apply says what it did.
+  const access = pending ? record.phase === "plan" ? undefined : draft.permission : record.reply?.action === "apply" ? record.reply.permission : undefined
+  if (access) meta.push([{ text: "Access  ", fg: "primary" }, { text: PLAN_APPLY_LABELS[access], fg: pending && access === "full" ? "warning" : "text" }])
   if (draft.comments) meta.push([{ text: "Comments  ", fg: "primary" }, { text: `${draft.comments.length} chars`, fg: "text" }])
   if (record.reply?.reason) meta.push([{ text: "Reason  ", fg: "primary" }, { text: `${record.reply.reason.length} chars`, fg: "text" }])
   if (record.phase === "plan") meta.push([], [{ text: "Planning only", fg: "warning" }])

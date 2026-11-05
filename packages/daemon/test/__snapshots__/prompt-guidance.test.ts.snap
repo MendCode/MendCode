@@ -28,7 +28,10 @@ How to work here:
 - Answer with the result first, then the check you ran and its outcome, and what stays unverified.
 
 ## [binding] Prompt binding
-Model: gpt-6-sol. Role: main. Workflow: interactive. Use only capabilities exposed by the runtime; do not infer tools, transport, quota or reasoning settings from this binding."
+Model: gpt-6-sol. Role: main. Workflow: interactive. Use only capabilities exposed by the runtime; do not infer tools, transport, quota or reasoning settings from this binding.
+
+## [rendering] terminal rendering
+Terminal rendering: Markdown (tables, code) is drawn. A \`\`\`mermaid fence draws a diagram when structure beats prose; \`> [!NOTE]\` or \`> [!WARNING]\` makes a callout. Images are not drawn."
 `;
 
 exports[`composed system prompt snapshots codex guide 1`] = `
@@ -66,7 +69,14 @@ GPT family (OpenAI) guidance:
 - Final answer: the outcome first, in one or two short paragraphs or at most five flat bullets; no headings for small tasks, no nested lists, no pasted file contents. Name files as \`path:line\`. Offer a next step only when one is natural.
 
 ## [binding] Prompt binding
-Model: gpt-6-sol. Role: main. Workflow: interactive. Use only capabilities exposed by the runtime; do not infer tools, transport, quota or reasoning settings from this binding."
+Model: gpt-6-sol. Role: main. Workflow: interactive. Use only capabilities exposed by the runtime; do not infer tools, transport, quota or reasoning settings from this binding.
+
+## [rendering] terminal rendering
+Terminal rendering (assistant messages), used when it makes the answer clearer:
+- Markdown renders (tables, code, links). Math shows as Unicode: \`$a^2$\`, \`$$…$$\`. Long detail: \`<details><summary>Title</summary>…</details>\`; \`<br>\`, \`<kbd>\`, \`<sub>\`, \`<sup>\` work.
+- A \`\`\`mermaid fence renders as a text diagram when structure beats prose: flows and decisions, message sequences, states, data relations, hierarchies, schedules, architecture. Keep simple facts as text. Numbers the user wants as a chart: \`xychart-beta\` or \`pie\`. Families: flowchart, sequence, class, state, ER, gantt, pie, mindmap, timeline, journey, gitGraph, quadrant, requirement, C4, xychart, sankey, block, packet, architecture, kanban, radar, venn, treemap, swimlane, zenuml, eventmodeling, ishikawa, wardley, cynefin, treeview.
+- Callouts: open a quote with \`> [!NOTE]\` (also TIP, IMPORTANT, WARNING, CAUTION), the text on the \`> \` lines below. WARNING for a risk of loss or breakage, NOTE for context; one or two per answer.
+- \`#RRGGBB\` colours show a swatch; a path with a slash (\`src/app.ts:42\`) is a clickable link. \`![alt](path)\` images are not drawn (\`read\` shows an image file)."
 `;
 
 exports[`composed system prompt snapshots codex full 1`] = `
@@ -106,6 +116,13 @@ GPT family (OpenAI) guidance:
 ## [binding] Prompt binding
 Model: gpt-6-sol. Role: main. Workflow: interactive. Use only capabilities exposed by the runtime; do not infer tools, transport, quota or reasoning settings from this binding.
 
+## [rendering] terminal rendering
+Terminal rendering (assistant messages), used when it makes the answer clearer:
+- Markdown renders (tables, code, links). Math shows as Unicode: \`$a^2$\`, \`$$…$$\`. Long detail: \`<details><summary>Title</summary>…</details>\`; \`<br>\`, \`<kbd>\`, \`<sub>\`, \`<sup>\` work.
+- A \`\`\`mermaid fence renders as a text diagram when structure beats prose: flows and decisions, message sequences, states, data relations, hierarchies, schedules, architecture. Keep simple facts as text. Numbers the user wants as a chart: \`xychart-beta\` or \`pie\`. Families: flowchart, sequence, class, state, ER, gantt, pie, mindmap, timeline, journey, gitGraph, quadrant, requirement, C4, xychart, sankey, block, packet, architecture, kanban, radar, venn, treemap, swimlane, zenuml, eventmodeling, ishikawa, wardley, cynefin, treeview.
+- Callouts: open a quote with \`> [!NOTE]\` (also TIP, IMPORTANT, WARNING, CAUTION), the text on the \`> \` lines below. WARNING for a risk of loss or breakage, NOTE for context; one or two per answer.
+- \`#RRGGBB\` colours show a swatch; a path with a slash (\`src/app.ts:42\`) is a clickable link. \`![alt](path)\` images are not drawn (\`read\` shows an image file).
+
 ## [capabilities] MendCode operator guide
 MendCode operator note: \`mendcode docs <topic>\` prints the card and live state (topics: agents, attachments, automation, background, backlog, budgets, cache-ttl, change, codegraph, commands, comments, compaction, computer, customize, engines, extend, extend-session, extensions, footer, git, goals, hooks, key-actions, keys, layout, loops, mcp, memory, models, one-tree, packages, permissions, pet, pr-review, prompt-modes, reasoning, remote, screen-parts, secrets, session-stats, sessions, settings, skills, subagents, theme, threads, tiers, tools, transcript, troubleshooting, usage, viewer, web, workflows).
 - Files: the data dir (\`~/.mendcode\` or the daemon's \`--dir\`) and a project's \`.mendcode/\` hold \`mcp.json\`, \`hooks.json\`, \`keybindings.json\` and folders \`extensions/ skills/ commands/ agents/ tools/ themes/ packages/\`; the project layer wins. Project code runs only after the user trusts the project (\`/tools\`).
@@ -143,7 +160,10 @@ How to work here:
 - Answer with the result first, then the check you ran and its outcome, and what stays unverified.
 
 ## [binding] Prompt binding
-Model: ollama:qwen2.5-coder:7b. Role: main. Workflow: interactive. Use only capabilities exposed by the runtime; do not infer tools, transport, quota or reasoning settings from this binding."
+Model: ollama:qwen2.5-coder:7b. Role: main. Workflow: interactive. Use only capabilities exposed by the runtime; do not infer tools, transport, quota or reasoning settings from this binding.
+
+## [rendering] terminal rendering
+Terminal rendering: Markdown (tables, code) is drawn. A \`\`\`mermaid fence draws a diagram when structure beats prose; \`> [!NOTE]\` or \`> [!WARNING]\` makes a callout. Images are not drawn."
 `;
 
 exports[`composed system prompt snapshots local guide 1`] = `
@@ -180,7 +200,14 @@ Local model guidance. Be strict and brief.
 - Answer in a few plain sentences after the work is done.
 
 ## [binding] Prompt binding
-Model: ollama:qwen2.5-coder:7b. Role: main. Workflow: interactive. Use only capabilities exposed by the runtime; do not infer tools, transport, quota or reasoning settings from this binding."
+Model: ollama:qwen2.5-coder:7b. Role: main. Workflow: interactive. Use only capabilities exposed by the runtime; do not infer tools, transport, quota or reasoning settings from this binding.
+
+## [rendering] terminal rendering
+Terminal rendering (assistant messages), used when it makes the answer clearer:
+- Markdown renders (tables, code, links). Math shows as Unicode: \`$a^2$\`, \`$$…$$\`. Long detail: \`<details><summary>Title</summary>…</details>\`; \`<br>\`, \`<kbd>\`, \`<sub>\`, \`<sup>\` work.
+- A \`\`\`mermaid fence renders as a text diagram when structure beats prose: flows and decisions, message sequences, states, data relations, hierarchies, schedules, architecture. Keep simple facts as text. Numbers the user wants as a chart: \`xychart-beta\` or \`pie\`. Families: flowchart, sequence, class, state, ER, gantt, pie, mindmap, timeline, journey, gitGraph, quadrant, requirement, C4, xychart, sankey, block, packet, architecture, kanban, radar, venn, treemap, swimlane, zenuml, eventmodeling, ishikawa, wardley, cynefin, treeview.
+- Callouts: open a quote with \`> [!NOTE]\` (also TIP, IMPORTANT, WARNING, CAUTION), the text on the \`> \` lines below. WARNING for a risk of loss or breakage, NOTE for context; one or two per answer.
+- \`#RRGGBB\` colours show a swatch; a path with a slash (\`src/app.ts:42\`) is a clickable link. \`![alt](path)\` images are not drawn (\`read\` shows an image file)."
 `;
 
 exports[`composed system prompt snapshots local full 1`] = `
@@ -218,6 +245,13 @@ Local model guidance. Be strict and brief.
 
 ## [binding] Prompt binding
 Model: ollama:qwen2.5-coder:7b. Role: main. Workflow: interactive. Use only capabilities exposed by the runtime; do not infer tools, transport, quota or reasoning settings from this binding.
+
+## [rendering] terminal rendering
+Terminal rendering (assistant messages), used when it makes the answer clearer:
+- Markdown renders (tables, code, links). Math shows as Unicode: \`$a^2$\`, \`$$…$$\`. Long detail: \`<details><summary>Title</summary>…</details>\`; \`<br>\`, \`<kbd>\`, \`<sub>\`, \`<sup>\` work.
+- A \`\`\`mermaid fence renders as a text diagram when structure beats prose: flows and decisions, message sequences, states, data relations, hierarchies, schedules, architecture. Keep simple facts as text. Numbers the user wants as a chart: \`xychart-beta\` or \`pie\`. Families: flowchart, sequence, class, state, ER, gantt, pie, mindmap, timeline, journey, gitGraph, quadrant, requirement, C4, xychart, sankey, block, packet, architecture, kanban, radar, venn, treemap, swimlane, zenuml, eventmodeling, ishikawa, wardley, cynefin, treeview.
+- Callouts: open a quote with \`> [!NOTE]\` (also TIP, IMPORTANT, WARNING, CAUTION), the text on the \`> \` lines below. WARNING for a risk of loss or breakage, NOTE for context; one or two per answer.
+- \`#RRGGBB\` colours show a swatch; a path with a slash (\`src/app.ts:42\`) is a clickable link. \`![alt](path)\` images are not drawn (\`read\` shows an image file).
 
 ## [capabilities] MendCode operator guide
 MendCode operator note: \`mendcode docs <topic>\` prints the card and live state (topics: agents, attachments, automation, background, backlog, budgets, cache-ttl, change, codegraph, commands, comments, compaction, computer, customize, engines, extend, extend-session, extensions, footer, git, goals, hooks, key-actions, keys, layout, loops, mcp, memory, models, one-tree, packages, permissions, pet, pr-review, prompt-modes, reasoning, remote, screen-parts, secrets, session-stats, sessions, settings, skills, subagents, theme, threads, tiers, tools, transcript, troubleshooting, usage, viewer, web, workflows).

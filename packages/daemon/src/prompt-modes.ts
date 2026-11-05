@@ -7,7 +7,7 @@ import { NATIVE_DEFAULTS, type SystemPart, type ToolCatalog } from "@mendcode/en
 import { createTuiControl } from "./tui-control"
 import { promptBehavior } from "./prompt-behavior"
 import { resolveFocus } from "./prompt-focus"
-import { focusCore, graphAutopilotText, guideText, operatorGuideText, selfKnowledgeText, visiblePlanText } from "./prompt-guidance"
+import { focusCore, graphAutopilotText, guideText, operatorGuideText, renderingFor, selfKnowledgeText, visiblePlanText } from "./prompt-guidance"
 
 type Choice = { mode?: PromptMode; focusID?: PromptFocusChoice }
 export const FOCUS_CONTEXT: Record<PromptFocus, { files: string[]; behavior: string }> = {
@@ -205,6 +205,8 @@ function buildParts({ mode, focusID, resolved, root, parts, override, custom }: 
     result.push(longGuidance ? { id: "focus-guide", label: "Provider guide", text: guideText(resolved) } : { id: "focus-core", label: "Working core", text: focusCore() })
     if (override.modelID || override.role || override.workflow) result.push({ id: "binding", label: "Prompt binding", text: `Model: ${override.modelID ?? "runtime"}. Role: ${override.role ?? "main"}. Workflow: ${override.workflow ?? "interactive"}. Use only capabilities exposed by the runtime; do not infer tools, transport, quota or reasoning settings from this binding.` })
     result.push(...promptBehavior(resolved, override))
+    // What the terminal draws, as much as the tier asks for: one sentence in focus (balanced), the exact syntax in guide and full.
+    result.push({ id: "rendering", label: "terminal rendering", text: renderingFor(mode) })
     if (mode === "full") {
       const instructions = parts.find((part) => part.id === "instructions")?.text ?? ""
       for (const relative of FOCUS_CONTEXT[resolved].files) {

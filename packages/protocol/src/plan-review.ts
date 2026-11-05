@@ -1,6 +1,7 @@
 import { z } from "zod"
 import { RequestId, SessionId, TurnId } from "./ids"
 import { lazySchema } from "./lazy"
+import { PLAN_APPLY_PERMISSIONS } from "./plan-review-data"
 
 export const PlanReview = lazySchema(() => z.strictObject({
   markdown: z.string().min(1).max(30_000),
@@ -17,6 +18,7 @@ export const PlanReviewReply = lazySchema(() => z.strictObject({
   comments: z.string().max(4000).optional(),
   reason: z.string().max(2000).optional(),
   destination: z.string().min(1).max(64).optional(),
+  permission: z.enum(PLAN_APPLY_PERMISSIONS).optional(),
 }))
 export type PlanReviewReply = z.infer<typeof PlanReviewReply>
 
@@ -29,3 +31,5 @@ export const PlanReviewRecord = lazySchema(() => PlanReview.extend({
   reply: PlanReviewReply.optional(),
 }))
 export type PlanReviewRecord = z.infer<typeof PlanReviewRecord>
+
+export { PLAN_APPLY_PERMISSIONS, PLAN_APPLY_DEFAULT, PLAN_APPLY_LABELS, type PlanApplyPermission } from "./plan-review-data"

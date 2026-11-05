@@ -68,7 +68,7 @@ import { createFileFrecency } from "./file-frecency"
 import { createModelResolutions } from "./model-resolutions"
 import { createMemorySharing } from "./memory-sharing"
 import { createMemoryWorkspaces } from "./memory-workspaces"
-import { readPlanReviews } from "./plan-review"
+import { readPlanReviews, remotePlanReply } from "./plan-review"
 import { permissionsStatus } from "./permissions"
 import { readScratchpad, writeScratchpad } from "./scratchpad"
 import { changeBacklog, readBacklog } from "./backlog"
@@ -3686,7 +3686,7 @@ export async function startDaemon(options: DaemonOptions) {
             if ("ok" in swapped) return reply(connection, command.id, swapped)
             decision[field] = swapped.text
           }
-          safe = { ...command, decision }
+          safe = { ...command, decision: remotePlanReply(decision, Boolean(connection.remoteAddress || connection.peer)) }
         }
         if (command.type === "user.submit" || command.type === "user.shell" || command.type === "session.compaction.set") {
           if (command.type === "user.submit") {

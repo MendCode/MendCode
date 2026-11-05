@@ -507,9 +507,10 @@ describe("native engine loop", () => {
     await createNativeEngine({ provider, tools: [writeTool(log)], history: memoryHistory(), cwdFor: () => "/repo", system: () => "sys", compactionPrompt: "s" }).runTurn(input)
     expect(requests[1]!.messages.at(-1)).toMatchObject({ isError: true })
     expect((requests[1]!.messages.at(-1) as { output: string }).output).toContain("plan mode is read-only")
-    expect(asked.map((a) => a.title)).toEqual(["Review plan", "Edit files"])
+    // Approving the plan takes full access, so the edit that follows runs without a second question.
+    expect(asked.map((a) => a.title)).toEqual(["Review plan"])
     expect(events.some((e) => e.type === "item.delta" && e.text.includes("1. edit a.ts"))).toBe(true)
-    expect(mode as PermissionMode).toBe("ask")
+    expect(mode as PermissionMode).toBe("full")
     expect(log).toEqual(["a.ts"])
   })
 

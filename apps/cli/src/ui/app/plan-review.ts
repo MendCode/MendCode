@@ -1,3 +1,4 @@
+import { PLAN_APPLY_DEFAULT, PLAN_APPLY_PERMISSIONS } from "@mendcode/protocol/wire"
 import type { PlanReviewRecord, PlanReviewReply } from "@mendcode/protocol"
 import { createEditor } from "../../view/editor"
 import type { PlanDraft, PlanStage } from "../../view/plan-review-page"
@@ -25,7 +26,7 @@ export function createPlanReview(ctx: AppContext) {
     const view = current()
     if (!view) return undefined
     if (draft?.id !== view.record.requestId) {
-      draft = { id: view.record.requestId, stage: "preview", markdown: view.record.markdown, comments: view.record.reply?.comments ?? "", destination: view.record.destination, scroll: 0, editor: createEditor({ wordWrap: true }), note: "" }
+      draft = { id: view.record.requestId, stage: "preview", markdown: view.record.markdown, comments: view.record.reply?.comments ?? "", destination: view.record.destination, permission: view.record.reply?.permission ?? (input.remote ? "ask" : PLAN_APPLY_DEFAULT), scroll: 0, editor: createEditor({ wordWrap: true }), note: "" }
       busy = false
     }
     return { ...view, draft: draft! }
@@ -66,7 +67,7 @@ export function createPlanReview(ctx: AppContext) {
     if (!markdown.trim()) { draft.note = "Plan is empty"; return requestFrame() }
     if (markdown.length > 30_000 || comments.length > 4000 || draft.stage === "reject" && draft.editor.text.length > 2000) { draft.note = "Review exceeds the text limit"; return requestFrame() }
     busy = true
-    const reply = await input.send({ type: "request.resolve", sessionId: state.sessionId, requestId: record.requestId, decision: { kind: "plan_review", action, ...(action === "apply" || action === "accept" || action === "edit" ? { markdown, ...(comments.trim() ? { comments: comments.trim() } : {}), destination: draft.destination } : {}), ...(action === "reject" && draft.editor.text.trim() ? { reason: draft.editor.text.trim() } : {}) } })
+    const reply = await input.send({ type: "request.resolve", sessionId: state.sessionId, requestId: record.requestId, decision: { kind: "plan_review", action, ...(action === "apply" || action === "accept" || action === "edit" ? { markdown, ...(comments.trim() ? { comments: comments.trim() } : {}), destination: draft.destination, ...(action === "apply" ? { permission: draft.permission } : {}) } : {}), ...(action === "reject" && draft.editor.text.trim() ? { reason: draft.editor.text.trim() } : {}) } })
     busy = false
     if (record.sessionId !== state.sessionId) return
     if (!reply.ok) draft.note = reply.error.message
@@ -98,6 +99,7 @@ export function createPlanReview(ctx: AppContext) {
       else if (key === "e") stage("edit")
       else if (key === "c") stage("comments")
       else if (key === "r") stage("reject")
+      else if (key === "m") active.permission = PLAN_APPLY_PERMISSIONS[(PLAN_APPLY_PERMISSIONS.indexOf(active.permission) + 1) % PLAN_APPLY_PERMISSIONS.length]!
       else if (key === "t") {
         const reply = await input.send({ type: "agents.list", sessionId: state.sessionId })
         if (!reply.ok) active.note = reply.error.message

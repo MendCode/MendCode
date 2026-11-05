@@ -25,17 +25,3 @@ export async function loadSystemPrompt(file: string = NATIVE_DEFAULTS.systemProm
   const template = await Bun.file(file).text()
   return (cwd: string) => template.replaceAll("{{cwd}}", cwd)
 }
-
-/**
- * The "Terminal rendering" lines of the packaged prompt: what an answer may use because MendCode draws it (Markdown, math,
- * Mermaid diagrams and charts). An engine with its own system prompt (Claude Code) gets these lines appended, so the model
- * knows a diagram is drawn here; without them it never writes one.
- */
-export async function loadTerminalRendering(file: string = NATIVE_DEFAULTS.systemPromptFile) {
-  const lines = (await Bun.file(file).text()).split("\n")
-  const start = lines.findIndex((line) => line.startsWith("Terminal rendering"))
-  if (start < 0) return ""
-  const rest = lines.slice(start + 1)
-  const end = rest.findIndex((line) => !line.startsWith("- "))
-  return [lines[start]!, ...(end < 0 ? rest : rest.slice(0, end))].join("\n")
-}

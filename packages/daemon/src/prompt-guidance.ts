@@ -14,6 +14,7 @@ import localFile from "../prompts/focus/local.prompt.md" with { type: "file" }
 import operatorGuideFile from "../prompts/operator-guide.md" with { type: "file" }
 import selfKnowledgeFile from "../prompts/self-knowledge.md" with { type: "file" }
 import visiblePlanFile from "../prompts/visible-plan.md" with { type: "file" }
+import renderingFile from "../prompts/rendering.md" with { type: "file" }
 import graphAutopilotFile from "../prompts/graph-autopilot.md" with { type: "file" }
 import { PROGRAM_NAME } from "@mendcode/program"
 
@@ -176,4 +177,21 @@ export function visiblePlanText(): { native: string; harness: string } {
     if (!native || !harness) throw new TypeError("[GUIDANCE]: visible-plan.md needs a native line, a <!-- harness --> line and a harness line")
     return { native, harness }
   })
+}
+
+/**
+ * What the terminal draws in an answer (Markdown, Mermaid, callouts), as two texts of `rendering.md`: `full` with the exact syntax and
+ * when each form earns its place (`guide` and `full` modes), `short` one sentence (`focus`, the balanced tier). `minimal` sends neither.
+ */
+export function renderingText(): { full: string; short: string } {
+  return once("rendering", () => {
+    const [full = "", short = ""] = readFileSync(renderingFile, "utf8").split(/^<!-- short -->$/m).map((block) => block.trim())
+    if (!full || !short) throw new TypeError("[GUIDANCE]: rendering.md needs a full text, a <!-- short --> line and a short text")
+    return { full, short }
+  })
+}
+
+/** The rendering text a prompt mode sends: `full` in guide and full, `short` in focus, nothing in minimal and custom. */
+export function renderingFor(mode: string): string {
+  return mode === "guide" || mode === "full" ? renderingText().full : mode === "focus" ? renderingText().short : ""
 }

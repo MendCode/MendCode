@@ -149,7 +149,7 @@ describe("focus is what it was before the provider guide", () => {
   const old = ["codex", "claude", "gemini", "kimi", "deepseek", "mistral", "neutral"]
   const models = [undefined, "gpt-6-astra", "gpt-5.6", "claude-sonnet-5-5", "claude-opus-5", "deepseek-v4-pro", "kimi-k2.5"]
   /** The parts the fixture predates: the one-line docs pointer, and in focus the working core and the model note. What is left must be the pinned output byte for byte. */
-  const ADDED = ["self-knowledge", "focus-core", "model-guidance"]
+  const ADDED = ["self-knowledge", "focus-core", "model-guidance", "rendering"]
   const withoutPointer = (composed: ReturnType<typeof composePromptParts>) => composed.parts.filter((part) => !ADDED.includes(part.id))
   test("minimal and focus parts are identical to the pre-change output for every earlier family, model and role, plus the docs pointer and, in focus, the core and the model note", () => {
     const dir = temp()
@@ -215,7 +215,7 @@ describe("composition by mode", () => {
       expect(added.text.length).toBeLessThanOrEqual(PROMPT_BUDGETS.guide.basics + PROMPT_BUDGETS.guide.family)
       // One of the two, never both: the core would repeat what the basics already say.
       expect(guide.parts.map((part) => part.id === "focus-guide" ? "focus-core" : part.id)).toEqual(focus.parts.map((part) => part.id))
-      expect(guide.parts.filter((part) => part.id !== "focus-guide")).toEqual(focus.parts.filter((part) => part.id !== "focus-core"))
+      expect(guide.parts.filter((part) => part.id !== "focus-guide" && part.id !== "rendering")).toEqual(focus.parts.filter((part) => part.id !== "focus-core" && part.id !== "rendering"))
       for (const composed of [guide, full]) expect(composed.parts.some((part) => part.id === "focus-core")).toBe(false)
       expect(joined(guide.parts).length).toBeLessThanOrEqual(PROMPT_BUDGETS.composed.guide)
       expect(joined(full.parts).length).toBeLessThanOrEqual(PROMPT_BUDGETS.composed.full)
@@ -390,14 +390,15 @@ describe("the docs pointer: one line in every mode but custom", () => {
     const dir = temp(), root = temp()
     expect(composePromptParts(dir, root, await baseParts(root), { mode: "custom", focusID: "codex" }).parts.some((part) => part.id === "self-knowledge")).toBe(false)
   })
-  test("minimal stays small with it: the boundary and the pointer, a quarter the size of focus", async () => {
+  test("minimal stays small with it: the boundary and the pointer, under half the size of focus", async () => {
     for (const family of FAMILIES) {
       const place = { dir: temp(), root: "/project" }
       const minimal = joined((await compose("minimal", family, place)).parts), focus = joined((await compose("focus", family, place)).parts)
       // 920: the pointer names the screen's parts (look requests) and MendCode's behavior (extensions): 428 bytes (PROMPT_BUDGETS.selfKnowledge).
       // 960 -> 1,120: the language rule (161 characters) is on the same line.
       expect(minimal.length).toBeLessThanOrEqual(1_120)
-      expect(minimal.length * 3).toBeLessThan(focus.length)
+      // 3x -> 2x: focus carries one sentence about what the terminal draws instead of the long block, so it got smaller, not minimal bigger.
+      expect(minimal.length * 2).toBeLessThan(focus.length)
       expect(minimal).toContain(selfKnowledgeText())
     }
   })
