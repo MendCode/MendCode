@@ -141,6 +141,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Fixed
 
+- Exporting a long session keeps how it ends: the oldest turns are left out (and the export says so) instead of the newest.
 - Current Claude models on Amazon Bedrock work at every `/effort`: they get adaptive thinking instead of a token budget they reject. Older Claude models are unchanged.
 - Shell commands the model runs no longer leave memory behind in the daemon.
 - With the Claude Code engine, smart mode lets edits inside the project run without asking, as it does with the native engine.

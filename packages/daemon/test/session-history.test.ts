@@ -542,7 +542,7 @@ describe("session.export", () => {
     expect(exported.text).not.toContain(OPENAI_KEY)
   })
 
-  test("an export larger than the ack frame drops the end of the session and says so", async () => {
+  test("an export larger than the ack frame leaves out the oldest turns, keeps how the session ends and says so", async () => {
     const huge = "word ".repeat(7_000)
     const h = await boot({ steps: Array.from({ length: 12 }, (_, i) => stop(`answer ${i}`)) })
     const sessionId = await open(h)
@@ -552,9 +552,28 @@ describe("session.export", () => {
       expect(exported.truncated).toBe(true)
       expect(exported.turns).toBeGreaterThan(0)
       expect(exported.turns).toBeLessThan(12)
+      expect(exported.text).toContain("answer 11")
+      expect(exported.text).not.toContain("answer 0")
       if (format === "json") expect(JSON.parse(exported.text).truncated).toBe(true)
-      else expect(exported.text).toContain("Export truncated")
+      else expect(exported.text).toContain("Earlier turns left out")
     }
+  })
+
+  test("a session past the export's text budget exports its newest whole turns, not its first ones", async () => {
+    const long = "line of text ".repeat(400)
+    const h = await boot({ steps: Array.from({ length: 40 }, (_, i) => stop(`reply ${i} ${long}`)) })
+    const sessionId = await open(h)
+    for (let i = 0; i < 40; i++) await say(h, sessionId, `question ${i} ${long}`)
+    const exported = result(await h.client.send({ type: "session.export", sessionId, format: "markdown" }), SessionExportResult)
+    expect(exported.truncated).toBe(true)
+    expect(exported.turns).toBeLessThan(40)
+    expect(exported.text).toContain("question 39")
+    expect(exported.text).toContain("reply 39")
+    expect(exported.text).not.toContain("## User\n\nquestion 0 ")
+    expect(exported.text.split("\n\n")[2]).toBe("> Earlier turns left out: the export keeps the most recent turns that fit.")
+    // Whole turns: every kept question has its reply.
+    const kept = [...exported.text.matchAll(/## User\n\nquestion (\d+) /g)].map((match) => match[1])
+    expect([...exported.text.matchAll(/reply (\d+) /g)].map((match) => match[1])).toEqual(kept)
   })
 })
 
