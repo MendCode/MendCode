@@ -43,6 +43,8 @@ export type ReviewEngineConfig = {
    * no internal cap. Reaching it checkpoints the candidates, it never drops them.
    */
   budgetTokens: number
+  /** `min_score`: findings the verifier scored below it are not published (unset: 0). */
+  minScore?: number | undefined
   /** Reference context from memory (review-memory.ts), with provenance: shown to the review pass as context, never as instructions. */
   memory?: ReviewMemoryContext | undefined
   /** The stages of this review (`planPhases`): stage prompts go into the review pass, `corroboration`'s into the verify pass. */
@@ -243,7 +245,7 @@ function budgetStop(tokens: Tokens, config: ReviewEngineConfig, pending: number)
 function conclude({ pass, judged, pending, tokens, config, cap, prior }: { pass: Pass; judged: PrFinding[]; pending: PrFinding[]; tokens: Tokens; config: ReviewEngineConfig; cap: number; prior?: ReviewCheckpoint | undefined }): ReviewOutcome {
   const found = pass.result
   const plan = config.phases ?? DEFAULT_PHASE_PLAN
-  const kept = publishable(judged, config.profile)
+  const kept = publishable(judged, config.profile, config.minScore)
   const walkthrough = found.walkthrough ? withRiskFloor(found.walkthrough, kept) : undefined
   const { shown, folded } = rankFindings(kept, cap)
   const rejected = judged.length - kept.length

@@ -39,7 +39,7 @@ import { createRepoWatch, listedToFacts, MAX_CONCURRENT_REVIEWS, MAX_OPEN_PRS, p
 import { buildStackGraph, stackChanges, stackSummary } from "./stacks"
 import { controlOf, release, takeOver } from "./takeover"
 import { runChecks } from "./verify"
-import { layeredConfig, reviewNotice, runConfigKey, runPrReview, type ReviewRun, type RunPrReviewInput, type RunReaders } from "./run"
+import { layeredConfig, reviewNotice, runConfigKey, runPrReview, type ReviewRun, type RunFallbacks, type RunPrReviewInput, type RunReaders } from "./run"
 import { readReviewState, REVIEW_MARKER, stateFromMarkers, writeReviewState, type ReviewState } from "./state"
 
 /**
@@ -129,6 +129,8 @@ export type PrReviewServiceOptions = {
    * its children's factory. Absent: data files get local summaries only.
    */
   readers?(owner: string, directory: string): RunReaders
+  /** `fallback_models` of `owner`'s reviews in `directory`: a model entry as a session factory on the reviewer's own provider, or why not (fallback.ts). Absent: none. */
+  fallbacks?(owner: string, directory: string): RunFallbacks
   /** Runs `job` on the daemon's job scheduler and resolves when it ends. */
   schedule(run: () => Promise<void>): Promise<void>
   /**
@@ -453,6 +455,7 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
         publisher: { login, check: (config) => publisherOf(directory, repo, config.publishers) }, read: call,
         sessionFactory: recordedSessions(options.sessions(sessionId, worktree), current?.id),
         ...(options.readers ? { readers: options.readers(sessionId, worktree) } : {}),
+        ...(options.fallbacks ? { fallbacks: options.fallbacks(sessionId, worktree) } : {}),
         // GitLab and Gitea: the title and the description the adapter read (linked issues are read through gh on GitHub), so
         // `template.language: auto` judges the language from both.
         pullRequest: forge ? { title: typeof pr.title === "string" ? pr.title : "", body: typeof pr.body === "string" ? pr.body : "", issues: [] } : await readPullRequestInfo({ gh: call, repo, title: typeof pr.title === "string" ? pr.title : "", body: typeof pr.body === "string" ? pr.body : "" }),

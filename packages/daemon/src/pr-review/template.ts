@@ -24,6 +24,8 @@ export type ReviewInfo = {
   checked?: number | undefined
   /** The cost table measured for a MendCode pull request (perf.ts `perfBody`), shown in the review details. */
   perf?: string | undefined
+  /** Set when a `fallback_models` entry reviewed instead of the reviewer's own model (fallback.ts): its id and why the own model was left. */
+  fallback?: { model: string; why?: string | undefined } | undefined
   /** Set when the review closed at the token budget before it was whole: the body says so first, and what it covered and did not. */
   partial?: PartialReview | undefined
 }
@@ -70,12 +72,13 @@ export function agentPrompt(finding: PrFinding): string {
 /** One inline comment: severity, category and how sure, the problem, a suggestion block, then evidence and an agent prompt folded. */
 export function commentBody(finding: PrFinding): string {
   const sure = finding.verdict === "plausible" ? "plausible, not confirmed" : "confirmed by a second pass"
+  const score = finding.score !== undefined ? ` · <sub>score ${finding.score}/10</sub>` : ""
   const suggestion = finding.suggestion && !finding.suggestion.replacement.includes("```") ? `\`\`\`suggestion\n${finding.suggestion.replacement.replace(/\n$/, "")}\n\`\`\`` : ""
   const evidence = finding.evidence.length ? details(`Evidence (${finding.evidence.length})`, finding.evidence.slice(0, 12).map((item) => `- \`${item.replace(/`/g, "'")}\``).join("\n")) : ""
   const prompt = agentPrompt(finding)
   const fence = fenceFor(prompt)
   return [
-    `**${SEVERITY_MARK[finding.severity]} ${SEVERITY_LABEL[finding.severity]}** · **${CATEGORY_LABEL[finding.category]}** · ${sure}`,
+    `**${SEVERITY_MARK[finding.severity]} ${SEVERITY_LABEL[finding.severity]}** · **${CATEGORY_LABEL[finding.category]}** · ${sure}${score}`,
     `**${finding.summary}**`,
     finding.detail,
     suggestion,
@@ -251,7 +254,7 @@ export function renderReviewBody({ result, inline, moved, repo, info, template, 
     ? `**${total} finding${total === 1 ? "" : "s"}** · ${counts.map(([severity, count]) => `${SEVERITY_MARK[severity]} ${count} ${severity}`).join(" · ")}`
     : "**No findings** · nothing in this change was confirmed as a problem"
   const scope = `head \`${result.head.slice(0, 12)}\`${info?.incremental ? ` · only the commits since the last review${info.since ? ` at \`${info.since.slice(0, 7)}\`` : ""}` : ""}${result.budgetHit ? " · stopped at the token budget" : ""}`
-  const table = findings.length ? ["| | Finding | Where |", "|:-:|:--|:--|", ...findings.map((finding) => `| ${SEVERITY_MARK[finding.severity]} | ${cell(finding.summary)}${finding.verdict === "plausible" ? " *(plausible)*" : ""} | ${link(finding)} |`)].join("\n") : ""
+  const table = findings.length ? ["| | Finding | Where |", "|:-:|:--|:--|", ...findings.map((finding) => `| ${SEVERITY_MARK[finding.severity]} | ${cell(finding.summary)}${finding.verdict === "plausible" ? " *(plausible)*" : ""}${finding.score !== undefined ? ` <sub>${finding.score}/10</sub>` : ""} | ${link(finding)} |`)].join("\n") : ""
   const titles = new Map((template?.sections ?? []).flatMap((section) => section.title ? [[section.id, section.title.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\n/g, " ")] as const] : []))
   const outside = moved.length ? details(`${titles.get("outside") ?? "Not on a line GitHub shows in this diff"} (${moved.length})`, moved.map((finding) => `- ${link(finding)} **${SEVERITY_LABEL[finding.severity]}** · ${CATEGORY_LABEL[finding.category]}: ${finding.summary}\n\n  ${finding.detail.replace(/\n/g, "\n  ")}`).join("\n\n"), true) : ""
   const touched = info?.files.reduce((sum, file) => sum + file.touched, 0) ?? 0
@@ -259,6 +262,7 @@ export function renderReviewBody({ result, inline, moved, repo, info, template, 
   const facts = [
     info ? `- **Files reviewed:** ${info.files.length}${effort ? ` · ${touched} changed line${touched === 1 ? "" : "s"} · estimated review effort ${effort.level}/5, about ${effort.minutes} minutes` : ""}` : "",
     info ? `- **Profile:** ${info.profile} · at most ${info.cap} inline comment${info.cap === 1 ? "" : "s"}` : "",
+    info?.fallback ? `- **Model:** reviewed by fallback model \`${info.fallback.model.replace(/`/g, "'")}\`${info.fallback.why ? ` after the reviewer's own model failed (${info.fallback.why.replace(/[`\r\n]+/g, " ").replace(/@/g, "@\u200b")})` : ""}` : "",
     verificationLine({ stop, unverified, total, dropped: result.dropped, checked: info?.checked, partial }),
     `- **Cost:** ${result.tokens.input.toLocaleString("en-US")} tokens in${result.tokens.cached ? ` (${result.tokens.cached.toLocaleString("en-US")} from the provider's cache)` : ""} · ${result.tokens.output.toLocaleString("en-US")} out`,
     ...(info?.notes ?? []).slice(0, 8).map((note) => `- ${note.replace(/^\[PR_REVIEW\]:\s*/, "")}`),

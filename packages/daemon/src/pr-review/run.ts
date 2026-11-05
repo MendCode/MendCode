@@ -9,6 +9,7 @@ import { ignoredBy, promptConfig, readReviewConfig, type ReviewConfig } from "./
 import { effectiveConfig } from "./config-layers"
 import type { JobCheckpoint, PhasePlan, ReviewMemoryContext, ReviewProvider, RunPlatformInput, RunPlatformOutput } from "./contracts"
 import { closeCheckpoint, resumeReview, ReviewPassError, reviewPullRequest, type ReviewCheckpoint, type ReviewEngineConfig, type ReviewOutcome, type ReviewSessionFactory } from "./engine"
+import { fallbackUsed, newFallbackState, withFallbacks, type FallbackSource, type FallbackState } from "./fallback"
 import { dedupeInherited, lineReader } from "./fingerprint"
 import { resolveReviewLanguage, withReviewLanguage } from "./language"
 import { parsePartPhase, phaseFacts, phasesBefore, planPhases } from "./phases"
@@ -129,7 +130,12 @@ export type RunPrReviewInput = {
    * data files get local summaries, never a model.
    */
   readers?: RunReaders | undefined
+  /** Where `fallback_models` resolve to sessions (the reviewer's own provider, the allowed model list). */
+  fallbacks?: RunFallbacks | undefined
 } & RunPlatformInput
+
+/** `fallback_models`: the factory of each model the run may move to (fallback.ts), or why it may not; absent (the hosted runner): none. */
+export type RunFallbacks = { source(model: string): { ok: true; model: string; factory: ReviewSessionFactory } | { ok: false; reason: string } }
 
 export type RunReaders = { tier?: Tier | undefined; source(requested?: string | undefined): ReaderSource }
 
@@ -239,12 +245,13 @@ export type ReviewAttempt =
  * keeping the engine's checkpoint and its candidates. A stalled turn (`ReviewTurnStalled`) keeps what was done before it the same
  * way, for a retry. Any other error propagates.
  */
-export async function attemptReview({ sessionFactory, account, calling, context, config, plan, cap, checks, checkpoint }: {
-  sessionFactory: ReviewSessionFactory; account: Account; calling?: Calling; context: ReviewContext; config: ReviewEngineConfig; plan: PhasePlan; cap: number
+export async function attemptReview({ sessionFactory, account, calling, context, config, plan, cap, checks, checkpoint, fallbacks }: {
+  sessionFactory: ReviewSessionFactory; fallbacks?: { sources: readonly FallbackSource[]; state: FallbackState } | undefined; account: Account; calling?: Calling; context: ReviewContext; config: ReviewEngineConfig; plan: PhasePlan; cap: number
   checks?: (() => Promise<CheckResult[]>) | undefined; checkpoint?: ReviewCheckpoint | undefined
 }): Promise<ReviewAttempt> {
   const failures: ReviewTurnError[] = []
-  const factory = meteredSessions({ factory: sessionFactory, account, calling, resuming: !!checkpoint, failures, language: config.language })
+  const metered = (factory: ReviewSessionFactory) => meteredSessions({ factory, account, calling, resuming: !!checkpoint, failures, language: config.language })
+  const factory = fallbacks?.sources.length ? withFallbacks({ primary: metered(sessionFactory), sources: fallbacks.sources.map((source) => ({ model: source.model, factory: metered(source.factory) })), state: fallbacks.state }) : metered(sessionFactory)
   let outcome: ReviewOutcome
   try {
     outcome = checkpoint
@@ -469,7 +476,15 @@ async function reviewRun(input: RunPrReviewInput): Promise<ReviewRun & RunPlatfo
     const withReaders = <T extends JobCheckpoint>(checkpoint: T): T => readers?.summaries().length ? { ...checkpoint, readers: readers.summaries() } : checkpoint
     const checks = config.checks.length ? () => (input.checks ?? ((directory, commands) => runChecks({ directory, commands })))(input.directory, config.checks) : undefined
     const common = { state, config, incremental, configKey, plan }
-    const attempt = await attemptReview({ sessionFactory: input.sessionFactory, account: input.account, calling: input.calling, context, config: engineConfig, plan, cap: config.cap, checks, checkpoint: resume })
+    const fallbackSources: FallbackSource[] = []
+    for (const requested of config.fallback_models) {
+      const picked = input.fallbacks?.source(requested) ?? { ok: false as const, reason: "this run has no model catalog to resolve it" }
+      if (picked.ok) { if (!fallbackSources.some((source) => source.model === picked.model)) fallbackSources.push({ model: picked.model, factory: picked.factory }) }
+      else context.notes.push(`fallback_models: ${picked.reason}; skipped.`)
+    }
+    const fallbackState = newFallbackState()
+    const fallbacks = { sources: fallbackSources, state: fallbackState }
+    const attempt = await attemptReview({ sessionFactory: input.sessionFactory, account: input.account, calling: input.calling, context, config: engineConfig, plan, cap: config.cap, checks, checkpoint: resume, fallbacks })
     // A stalled turn: a retryable failure with no stop, so the job keeps the checkpoint and is tried again with backoff.
     if (!attempt.ok && attempt.stalled) {
       const part = attempt.checkpoint.result ? parsePartPhase(attempt.checkpoint.phase) : undefined
@@ -494,11 +509,13 @@ async function reviewRun(input: RunPrReviewInput): Promise<ReviewRun & RunPlatfo
     const previous = [...published, ...(input.recheck ?? []).filter((finding) => !published.some((known) => known.id === finding.id))]
     // An explicit full review re-checks the open findings too: otherwise asking again after a fix could never close their threads.
     const rechecked = complete && (incremental || !!input.full)
-    const fixed = rechecked && previous.length ? await fixedFindings({ sessionFactory: meteredSessions({ factory: input.sessionFactory, account: input.account, calling: input.calling, resuming: false, failures: [], language: config.template.language }), previous, context, language: config.template.language }) : []
+    const recheckFactory = (factory: ReviewSessionFactory) => meteredSessions({ factory, account: input.account, calling: input.calling, resuming: false, failures: [], language: config.template.language })
+    const fixed = rechecked && previous.length ? await fixedFindings({ sessionFactory: withFallbacks({ primary: recheckFactory(input.sessionFactory), sources: fallbackSources.map((source) => ({ model: source.model, factory: recheckFactory(source.factory) })), state: fallbackState }), previous, context, language: config.template.language }) : []
     // The base of the result is the PR's base, so a later incremental review still knows where the PR starts.
     const result = { ...outcome.result, base: input.base }
     const inheritedNote = inherited ? [`${plural(inherited, "finding")} #${input.stack!.parent} already reported ${inherited === 1 ? "was" : "were"} left out (this pull request is stacked on it).`] : []
-    const info: ReviewInfo = { files: context.files.map((file) => ({ path: file.path, touched: file.touched.length })), profile: config.profile, cap: config.cap, incremental, ...(incremental ? { since: range.base } : {}), notes: [...context.notes.filter((note) => !note.startsWith("Incremental review:")), ...inheritedNote], ...(complete ? { checked: outcome.candidates.length - (risenAdded ? 1 : 0) } : {}), ...(perf && perfBody(perf) ? { perf: perfBody(perf) } : {}), ...(outcome.partial ? { partial: { ...outcome.partial, number: input.number } } : {}) }
+    const usedModel = fallbackUsed(fallbackState, fallbackSources)
+    const info: ReviewInfo = { ...(usedModel ? { fallback: { model: usedModel, ...(fallbackState.reason ? { why: fallbackState.reason } : {}) } } : {}), files: context.files.map((file) => ({ path: file.path, touched: file.touched.length })), profile: config.profile, cap: config.cap, incremental, ...(incremental ? { since: range.base } : {}), notes: [...context.notes.filter((note) => !note.startsWith("Incremental review:")), ...inheritedNote], ...(complete ? { checked: outcome.candidates.length - (risenAdded ? 1 : 0) } : {}), ...(perf && perfBody(perf) ? { perf: perfBody(perf) } : {}), ...(outcome.partial ? { partial: { ...outcome.partial, number: input.number } } : {}) }
     // Always a checkpoint: the plan's decisions; complete, every judged finding; stopped, what a resume verifies.
     const checkpoint: JobCheckpoint = withReaders(outcome.checkpoint ?? {
       completedPhases: outcome.completedPhases ?? [], candidates: [], verified: outcome.candidates, result: outcome.result,

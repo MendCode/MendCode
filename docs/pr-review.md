@@ -19,7 +19,11 @@ is off or asleep, troubleshooting), see [PR reviewer: team setup](pr-review-setu
 1. **Context.** The diff of `base...head` and, for every symbol a hunk touches, its callers and callees from the [code graph](code-graph.md)
    (depth 2, at most 12 each). No vector index: the graph gives the blast radius, the child reads files with its own read-only tools.
    The context stays inside half of `budget.context_tokens` (200,000 when unset), which bounds one call, not the PR's total; callers
-   are cut first, then the largest files' diffs, and the summary says so. A diff that still does not fit one call is reviewed in
+   are cut first, then the largest files' diffs (files outside the repository's main language before the largest file of it, the
+   main language being the one most files of the code graph have), and the summary says so. A hunk that only deletes lines is not
+   sent: its file keeps its header and gains one line with the number of deleted lines and where they were, so the prompt only ever
+   shrinks (on a large test PR of 24 files, 12 of them deleted, the diff went from about 40,300 to 8,700 estimated tokens; a PR
+   that deletes little saves little). A diff that still does not fit one call is reviewed in
    parts of whole files (at most 12), one review call each. Their candidates are merged before one verify pass, and a stopped job's
    checkpoint names its progress (`analysis 3/5`).
    Data, outputs and generated files (result JSON, CSV, lockfiles, minified files, snapshots, large fixtures, assets) do not go
@@ -36,12 +40,14 @@ is off or asleep, troubleshooting), see [PR reviewer: team setup](pr-review-setu
    failed). It is a description, not a claim: a group or check that does not fit is left out and an invalid walkthrough never
    fails the review.
 3. **Verify pass.** A fresh child, never the one that found them, is told to refute each finding (at most 10 per turn): `confirmed`,
-   `plausible` or `rejected`. Only confirmed findings are published; the `strict` profile also publishes plausible ones, marked as such.
+   `plausible` or `rejected`, with a `score` from 0 to 10 in the same answer (how certain the defect is and how much it matters; no extra
+   call). Only confirmed findings are published; the `strict` profile also publishes plausible ones, marked as such.
    A finding the verifier did not judge counts as rejected; a verifier that fails publishes nothing and the summary says so.
 4. **Merge risk floor.** The review pass judges the risk before anything is verified, so the risk is never below what the
    confirmed findings show: a confirmed critical finding makes it high, a major one at least medium, and the reason starts with
    the count ("1 confirmed critical finding."). A rejected finding raises nothing.
-5. **Rank and cap.** Confirmed first, then critical, major, minor, then category; at most `cap` (8) are shown and the rest are one line,
+5. **Rank and cap.** `min_score` first drops findings the verifier scored below it (default 0, nothing dropped; a finding with no score is
+   never dropped). Then confirmed first, then critical, major, minor, then the higher score, then category; at most `cap` (8) are shown and the rest are one line,
    "And N smaller notes not shown", in the summary.
 
 ## Repository config
@@ -53,6 +59,8 @@ preset: balanced        # balanced (the defaults below) | quiet | strict | on-re
 enabled: false          # nothing is posted until this is true on the base branch (a watch still reviews into its own session)
 profile: normal         # quiet (critical and major only) | normal | strict (also maintainability, and plausible findings)
 cap: 8                  # 1..30 inline comments per review
+min_score: 0            # 0..10: findings the verify pass scored lower are not published (0 = all, as before); the score shows small in the comment
+fallback_models: []     # up to 5 models tried in order when the reviewer's own model fails with a provider error or is not available (below)
 paths:                  # extra instructions for files matching a glob; only globs the diff touches reach the prompt
   - glob: "packages/daemon/**"
     instructions: treat races as major
@@ -414,7 +422,7 @@ how many candidates the verify pass left out, the tokens spent, and the notes (n
 lists the `@mendcode` commands.
 
 An inline comment (`commentBody`) leads with `**🟠 Major** · **Correctness** · confirmed by a second pass` (or `plausible, not
-confirmed`), then the problem in bold, why, a ```suggestion block when the fix stays on the commented lines, and folded:
+confirmed`) and the verifier's `score 8/10` in small text, then the problem in bold, why, a ```suggestion block when the fix stays on the commented lines, and folded:
 **Evidence** (the `file:line` references) and **Prompt for an AI agent**, which tells an agent to treat the finding as data, check it
 against the current code and change nothing when it no longer holds. Marks are plain characters, never hosted images, so the review
 reads the same on GitHub Enterprise and in a mail notification. Besides the id marker each comment carries the finding itself as
@@ -757,6 +765,15 @@ with its parent (same path, code line, category and summary, wherever the line m
 parent's branch. Findings keep their identity across new SHAs (moved, `needs-recheck` when their line changed, `deleted`). A cycle
 or an ambiguous parent is reported and the PR is reviewed against its base. MendCode never restacks: it says what to run
 (`gt restack` or `git rebase --onto …`) and which files would conflict.
+
+### Fallback models
+
+`fallback_models` (base branch only, empty by default) lists models a review moves to when its own model fails with a provider error
+or is not available (`the model does not exist`, a server error). It never moves for a quota or a rate limit (`budget.on_quota`
+decides those, unchanged), a stalled turn, the token cap or a stopped turn. Each entry must be in the model list you allow and on the
+reviewer's own engine and provider; one that is not is skipped and the review details say why. The move happens before a session has
+answered anything, so no conversation changes model half way; the sessions after it start on the fallback. The review details then
+read `Model: reviewed by fallback model X after the reviewer's own model failed (…)`; a review that needed none says nothing.
 
 ### Budgets, quotas and accounting
 

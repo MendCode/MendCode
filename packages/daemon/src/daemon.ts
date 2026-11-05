@@ -2911,6 +2911,7 @@ export async function startDaemon(options: DaemonOptions) {
     if (prReview) return prReview
     const { createPrReviewService } = await import("./pr-review/service")
     const { chooseReaderModel } = await import("./pr-review/reader-models")
+    const { chooseFallbackModel } = await import("./pr-review/fallback")
     prReview ??= createPrReviewService({
       memory: reviewMemory,
       contextWindow: reviewContextWindow,
@@ -2957,6 +2958,17 @@ export async function startDaemon(options: DaemonOptions) {
           const ownerModel = store.hasSession(owner as SessionId) ? store.sessionModel(owner as SessionId) : undefined
           const reviewer = ownerModel ?? resolveModel({ role: "main", roles: rolesFor(store.settings.get(), directory), catalog: options.models })
           const picked = chooseReaderModel({ owner: reviewer, catalog: options.models, requested })
+          if (!picked.ok) return picked
+          return { ok: true, model: picked.model, factory: options.prReview?.sessions?.(owner, directory) ?? reviewSessions.factory({ owner, directory, model: { model: picked.model } }) }
+        },
+      }),
+      // Fallback models: same engine and provider as the reviewer's model, inside the allowed list (fallback.ts), as hidden review children.
+      fallbacks: (owner, directory) => ({
+        source(requested) {
+          if (!options.models) return { ok: false, reason: "no model catalog" }
+          const ownerModel = store.hasSession(owner as SessionId) ? store.sessionModel(owner as SessionId) : undefined
+          const reviewer = ownerModel ?? resolveModel({ role: "main", roles: rolesFor(store.settings.get(), directory), catalog: options.models })
+          const picked = chooseFallbackModel({ owner: reviewer, catalog: options.models, requested })
           if (!picked.ok) return picked
           return { ok: true, model: picked.model, factory: options.prReview?.sessions?.(owner, directory) ?? reviewSessions.factory({ owner, directory, model: { model: picked.model } }) }
         },
