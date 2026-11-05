@@ -180,8 +180,28 @@ Fixed schema/index pages make the small fixture's per-session cost higher than t
   Cleaning removes only a worktree that is merged (its branch is in HEAD or the default branch), clean (no uncommitted or
   untracked files), unused (no session, loop or workflow) and idle for 14 days; it uses plain `git worktree remove`
   (no `--force`, so git itself refuses unsafe removals) and `branch -d`. Old copies in the daemon trash go too.
+  The sweep covers project sandboxes and the worktrees of loops, fan-outs, workflows (routing workspaces and merge
+  worktrees) and compound runs. A detached worktree counts as merged when its commit is in the project's history or
+  held by a branch or tag. A compound run that ends with nothing changed removes its worktree at once (like a loop).
+  `mendcode worktrees list|size|gc` shows each worktree with its size, state and why it is kept; `gc` only previews
+  until `--yes`. Worktrees `git worktree list` shows that MendCode did not make appear in `list` and `size`, and `gc --yes`
+  removes them only under the same rules (clean, merged, idle); the daily pass never touches them.
+- **Measuring many worktrees.** Sizes come from the system's `du -sk` (nothing is walked or kept in the daemon),
+  at most two at a time, and a measured size is reused while the folder is unchanged (10 minutes at most).
+  `worktrees list` answers at once with the sizes it knows (`?` for the rest, plus a note); `worktrees size` measures
+  everything and prints `measuring worktrees: n/m` while it works, and its request is allowed to take minutes.
+  Two identical requests at the same time share one scan, and a scan stops when the client that asked has gone
+  away (a removal that has started finishes). The daily pass uses the same code.
+- **Worktree cap.** `worktreeCapGb` (settings file; unset = no cap) warns on the storage page when MendCode's own worktrees
+  take more than that. The daily pass and `gc --yes` then also free clean, merged, unused worktrees that are not idle yet,
+  oldest first, until the rest fits. Anything with changes, unmerged commits or a session stays, even over the cap.
+- **Build output.** `mendcode worktrees gc --artifacts [--yes]` removes ignored output (`dist`, `build`, `out`, `target`,
+  `.next`, `.nuxt`, `.turbo`, `.svelte-kit`, `.parcel-cache`, `coverage`, `node_modules`) of idle, unused worktrees without
+  removing the worktree. A directory must be ignored by git and hold no tracked file. It also removes `bun build --compile`
+  leftovers (`.<hash>-00000000.bun-build`, as large as the executable) older than ten minutes in those worktrees and in
+  the projects' own checkouts. `scripts/build.ts` deletes the ones older than five minutes next to its output after each build.
 - **Retention.** `retentionDays` (daily 03:30) now also compacts and drops the streaming deltas of finished messages in
-  sessions idle 3 days (the final text stays in the completed event). `worktreeGcDays` (off by default, `/settings`) adds the
+  sessions idle 3 days (the final text stays in the completed event). `worktreeGcDays` (14 by default, `0` = off, `/settings`) adds the
   worktree cleanup to the same daily pass. A per-session mark means a daily pass only reads what is new.
 - **Images pasted and never sent.** A paste writes the image to `blobs/` before the message exists; when the message is
   never sent, the file has no `blobs` row. The daemon's first idle step after it starts removes such files once they are a
@@ -235,6 +255,7 @@ output. `storage` prints a `forks:` line when any exists.
 
 ```text
 mendcode --dir DATA storage                       report: disk, bytes per turn, snapshots, compression, top sessions
+mendcode --dir DATA worktrees list|size|gc [--yes] [--artifacts] [--idle 14d]   see Worktrees above
 mendcode --dir DATA storage --worktrees           worktrees the daemon created: size, merged or not, why one is kept
 mendcode --dir DATA storage --compact [--dry-run] pack old data, drop finished deltas (--delta-idle 3d)
 mendcode --dir DATA storage --compact --offline [--dry-run] convert pages without starting a daemon
@@ -261,8 +282,8 @@ flags. Existing row packing remains the separate online `--compact` operation.
 
 ## Decisions
 
-- Daily worktree removal is opt-in (`worktreeGcDays` unset), because it deletes directories. Manual cleaning always asks
-  after a dry run. `storage.worktrees` and cleaning worktrees are refused for remote and peer clients, and
+- Daily worktree removal is on by default (14 days; `worktreeGcDays: 0` turns it off) and removes only what a manual
+  clean would: clean, merged, unused and idle, by plain `git worktree remove`. Manual cleaning always asks after a dry run. `storage.worktrees` and cleaning worktrees are refused for remote and peer clients, and
   `worktreeGcDays` cannot be set remotely; neither is a read-only command.
 - Old data is not repacked on startup: `--compact` (or retention) does it, so an upgrade never makes the daemon busy.
 - An existing database keeps its page size unless the user explicitly runs offline compaction; startup/retention never convert pages.

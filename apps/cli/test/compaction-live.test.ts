@@ -8,7 +8,7 @@ import { snake } from "../src/view/arcade/snake"
 import { breakout } from "../src/view/arcade/breakout"
 import { bar, compactTokens, sparkline } from "../src/view/compaction-live"
 import { createCompactionFacts } from "../src/view/compaction-facts"
-import { CUSTOMIZE_ROWS, customizeSteps } from "../src/view/customize-page"
+import { customizeSteps } from "../src/view/customize-page"
 import { readTuiProfile, type TuiProfile } from "../src/view/tui-profile"
 import { textWidth } from "../src/view/wrap"
 
@@ -51,34 +51,27 @@ async function liveIntervals(run: (live: Set<unknown>) => Promise<void>) {
   try { await run(live) } finally { globalThis.setInterval = set; globalThis.clearInterval = clear }
 }
 
-test("the default panel is two plain rows: the stage with its bar, then the context before to after", async () => {
+test("the default panel is framed, names the phase, shows stage progress and tokens before to after, and the elapsed time", async () => {
   const h = await compacting("panel")
   const screen = text(h)
-  expect(screen).not.toContain("╭─ Compacting context")
-  expect(screen).toMatch(new RegExp(`Writing memory\\s+${BAR}\\s+2/3`))
+  expect(screen).toContain("╭─ Compacting context")
+  expect(screen).toContain("Writing memory")
+  expect(screen).toContain("step 2 of 3")
+  expect(screen).toContain("14s")
   expect(screen).toMatch(/Context\s+66\.8k\s+→\s+tail ~248 \+ memory/)
-  expect(screen).not.toContain("Capture")
-  const rows = h.text()
-  const stage = rows.findIndex((row) => row.includes("Writing memory"))
-  expect(rows[stage + 1]).toContain("Context")
+  expect(screen).toContain("● Capture")
+  expect(screen).toContain("tail ~248 kept")
   fits(h, 100, 34)
 })
 
-test("while compacting there is one loading indicator: the activity line, not the card", async () => {
+test("while compacting the card is framed and has no spinner of its own: the activity line's is the only one", async () => {
   for (const mode of MODES) {
     const h = await compacting(mode)
     const spinners = h.text().join("\n").match(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/g) ?? []
     expect(spinners.length).toBe(1)
+    expect(text(h)).toMatch(/Compacting…/)
   }
-})
-
-test("compactionProgress off keeps the stage name but no bar in the default panel", async () => {
-  const h = await compacting("panel")
-  h.profile({ compactionPanel: "panel", compactionProgress: false })
-  h.app.render()
-  const screen = text(h)
-  expect(screen).toContain("Writing memory")
-  expect(screen).not.toMatch(/█|░/)
+  expect(text(await compacting("panel"))).toContain("╭─ Compacting context")
 })
 
 test("stats mode charts only what the events reported: context against the limit, cache split, trend, saved and progress", async () => {
@@ -125,16 +118,16 @@ test("under 70 columns every mode drops its frame and keeps a compact layout ins
     expect(text(narrow)).toMatch(/Compact|Scratchpad|Snake/)
     fits(narrow, 60, 30)
   }
-  expect(text(await compacting("panel", [60, 30]))).toContain("2/3")
+  expect(text(await compacting("panel", [60, 30]))).toContain("step 2 of 3")
   expect(text(await compacting("stats", [60, 30]))).toMatch(new RegExp(`Context\\s+${BAR}\\s+66\\.8k/160k 42%`))
   expect(text(await compacting("arcade", [60, 30]))).toContain("tab plays")
 })
 
 test("a terminal too short for the chosen mode falls back to the quiet line", async () => {
-  const short = await compacting("arcade", [100, 13])
+  const short = await compacting("arcade", [100, 17])
   expect(text(short)).not.toContain("Arcade")
   expect(text(short)).toContain("Compacting context ·")
-  fits(short, 100, 13)
+  fits(short, 100, 17)
 })
 
 test("the panel is a /customize choice that persists", async () => {

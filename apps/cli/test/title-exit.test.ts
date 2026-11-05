@@ -65,6 +65,12 @@ describe("exit summary", () => {
     )
   })
 
+  test("the cache is told apart from the prompt, as /usage counts it", () => {
+    expect(exitSummary({ sessionId: "ses_1", title: "t", turns: 2, input: 51_657, cacheRead: 487_680, cacheWrite: 63_900, output: 2_389, elapsedMs: 65_000 })).toBe(
+      "MendCode · t\n  ↑51.7K +488K cached +63.9K cache write ↓2,389 · 2 turns · 1m 5s\n  resume: mendcode --session ses_1\n",
+    )
+  })
+
   test("a reopened chat that ran no turn still says how to come back, without a usage line", () => {
     expect(exitSummary({ sessionId: "ses_1", title: "fix reconnect", turns: 0, input: 0, output: 0, elapsedMs: 5_000, hasHistory: true })).toBe(
       "MendCode · fix reconnect\n  resume: mendcode --session ses_1\n",

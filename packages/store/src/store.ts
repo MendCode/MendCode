@@ -56,6 +56,7 @@ import { createSealedTurns } from "./sealed-turns"
 import { createEventObjects } from "./event-objects"
 import { createStorageUpkeep, type CompactResult, type StorageExtras } from "./storage-upkeep"
 import { createParityRecords } from "./parity-records"
+import { createRestartResume } from "./restart-resume"
 import { createSessionRecallRecords } from "./session-recall"
 import { createSessionStatsRecords } from "./session-stats"
 import { createAutomationLedger } from "./automation-ledger"
@@ -599,6 +600,7 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
   const agentCommands = createAgentCommandRecords(db, now)
   const continuity = createContinuityRecords(db)
   const parity = createParityRecords(db)
+  const restartResume = createRestartResume(db)
   const sessionBackground = createSessionBackgroundRecords(db, now, sealedTurns)
   const recall = createSessionRecallRecords(db, eventObjects.load, (sessionId, filter) => sealedTurns.thaw(sessionId, filter ? { filter } : {}))
   const sessionStats = createSessionStatsRecords(db, (sessionId, filter) => sealedTurns.thawOwn(sessionId, { filter }), (sessionId) => sealedTurns.summary(sessionId))
@@ -1298,6 +1300,9 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
     agentCommands,
     sessionBackground,
     detached: parity.detached,
+    /** Which session started a child from its shell, and the turns a shutdown interrupted that the next start resumes. */
+    launchers: restartResume.launchers,
+    resumes: restartResume.resumes,
     tasks: parity.tasks,
     continuity,
     extraction: parity.extraction,

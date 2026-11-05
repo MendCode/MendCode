@@ -44,9 +44,9 @@ describe("image_gen with OpenAI", () => {
     expect(result.isError).toBe(false)
     expect(calls[0]?.url).toBe("https://api.openai.com/v1/images/generations")
     expect(calls[0]?.headers.authorization).toBe("Bearer oa-secret")
-    expect(calls[0]?.body).toMatchObject({ model: "gpt-image-2", size: "1024x1024", n: 1 })
+    expect(calls[0]?.body).toMatchObject({ model: "gpt-image-2.6-sunburst", size: "1024x1024", n: 1 })
     // Before the request, the terminal's wait canvas is told what is being made; the key never appears.
-    expect(live.join("")).toBe("model openai/gpt-image-2\nsize 1024x1024\n")
+    expect(live.join("")).toBe("model openai/gpt-image-2.6-sunburst\nsize 1024x1024\n")
     expect(calls[0]?.body.response_format).toBeUndefined()
     expect(readFileSync(join(cwd, "generated/a-red-fox-in-snow-1.png")).equals(PNG)).toBe(true)
     expect(result.output).toContain("generated/a-red-fox-in-snow-1.png")

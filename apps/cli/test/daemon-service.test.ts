@@ -117,6 +117,22 @@ describe("daemon lifecycle CLI", () => {
     expect(busy.calls).toContain("daemon.shutdown")
   })
 
+  test("a busy refusal names the turns and who started them; --force says what it interrupted and that it resumes", async () => {
+    const busy = harness(true)
+    busy.report.activeTurns = 2
+    busy.report.work = [{ sessionId: "ses_a", title: "owner-a", launcher: "ses_l", launcherTitle: "seda" }, { sessionId: "ses_b", title: "own session" }]
+    expect(await busy.run("daemon", "restart")).toBe(1)
+    expect(busy.error()).toContain('Daemon is busy: 2 turns running: ses_a "owner-a" started by ses_l "seda"; ses_b "own session"; retry with --force')
+    expect(busy.error()).toContain("resume when the daemon starts again")
+    expect(await busy.run("daemon", "restart", "--force")).toBe(0)
+    expect(busy.output()).toContain('Interrupted 2 turns running: ses_a "owner-a" started by ses_l "seda"; ses_b "own session". They resume when the daemon starts again')
+    const json = harness(true)
+    json.report.activeTurns = 1
+    json.report.work = [{ sessionId: "ses_a", title: "owner-a" }]
+    expect(await json.run("daemon", "stop", "--force", "--json")).toBe(0)
+    expect(JSON.parse(json.output()).data.interrupted).toEqual({ turns: 1, sessions: [{ sessionId: "ses_a", title: "owner-a" }] })
+  })
+
   test("busy work cannot be interrupted implicitly; force is explicit", async () => {
     for (const args of [["daemon", "stop"], ["daemon", "service", "restart"], ["daemon", "service", "uninstall"]]) {
       const h = harness(true, true, true)

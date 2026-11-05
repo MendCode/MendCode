@@ -124,6 +124,7 @@ import { memoryMaintenance } from "./memory-maintenance"
 import { createMemoryExtraction, type ExtractedMemory } from "./memory-extraction"
 import { createChildTasks } from "./child-tasks"
 import { createTaskOwnerWake } from "./task-owner-wake"
+import { createRestartResume } from "./restart-resume"
 import { createSessionBackground } from "./session-background"
 import { createAgentRegistry } from "./agents"
 import { createAgentFile } from "./agent-create"
@@ -134,6 +135,7 @@ import { createEngineHooks, createExtensions, createPromptFiles, forgetSessionEn
 import { createExtensionSessions } from "./extension-sessions"
 import { createExtensionDialogs, DIALOGS_CAPABILITY } from "./extension-dialogs"
 import type { createChildElevation as CreateChildElevation } from "./child-elevation"
+import type { createChildApprovals as CreateChildApprovals } from "./child-approvals"
 import { createStatusScripts } from "./status-scripts"
 import { approvalRulePatch, offerFor } from "./approval-rules"
 import { createShellHooks } from "./shell-hooks"
@@ -219,6 +221,8 @@ import {
   type SessionId,
   type UsageProfile,
   agentRefusal,
+  effectiveWorktreeGcDays,
+  worktreeCapBytes,
 } from "@mendcode/protocol"
 import { effectiveSettings, featureOn, modelContextOf } from "@mendcode/protocol/wire"
 import {
@@ -247,7 +251,7 @@ import { createPrReviewPort } from "./pr-review-tool"
 import { createGitWorktrees, isGitCheckout } from "./loop-worktree"
 import { createWorkflowsHost } from "./workflows"
 import { createWorkflowRouter } from "./workflow-routing"
-import { createWorkflowMerge } from "./workflow-merge"
+import { createWorkflowMerge, workflowWorktreeHeld } from "./workflow-merge"
 import { createTaskWorktrees } from "./task-worktree"
 import { createAutomationLedgerHost } from "./automation-ledger"
 import { areaOf, defaultPermissionFor, rolesFor, rolesPatch, shellFor } from "./areas"
@@ -315,6 +319,8 @@ type Connection = {
   id: number
   response?(frame: Frame): void
   signal?: AbortSignal
+  /** Aborted when the client goes away, so work started for it (a worktree scan) stops. */
+  ended?: AbortController
   directory?: string
   trace?: boolean
   remoteAddress?: string
@@ -911,6 +917,40 @@ export async function startDaemon(options: DaemonOptions) {
         },
       })))
     return (await elevationLoading).request(input)
+  }
+  /**
+   * Approvals sessions started from another session's shell wait for, grouped for their launcher (child-approvals.ts). The module
+   * loads when the first such request appears; a daemon whose sessions are all the user's own never loads it.
+   */
+  let childApprovals: ReturnType<typeof CreateChildApprovals> | undefined
+  let childApprovalsLoading: Promise<void> | undefined
+  let launcherOf: (child: string) => string | undefined = () => undefined
+  function observeChildApprovals(event: SessionEvent) {
+    if (childApprovals) return childApprovals.observe(event)
+    if (event.type !== "server.request" || event.async || !launcherOf(event.sessionId)) return
+    childApprovalsLoading ??= import("./child-approvals").then((module) => {
+      childApprovals = module.createChildApprovals({
+        launcherOf: (child) => launcherOf(child) as SessionId | undefined,
+        humanSessions: (launcher) => {
+          const project = store.sessionDirectory(launcher)
+          const open = [...connections].filter(isHumanTerminal).flatMap((connection) => [...connection.subscriptions.keys()])
+          const nearby = project ? open.filter((id) => id !== launcher && store.sessionDirectory(id) !== undefined && canonicalDir(store.sessionDirectory(id)!) === canonicalDir(project)) : []
+          return [...new Set([...open.filter((id) => id === launcher), ...nearby])]
+        },
+        title: (sessionId) => store.sessionInfo(sessionId)?.title ?? "",
+        turnOf: (sessionId) => actors.get(sessionId)?.snapshot().turnId,
+        requestId: () => ids("request"),
+        turnId: () => ids("turn"),
+        queueId: () => ids("queue"),
+        emit: (draft) => void sessionSink.append(draft),
+        mask: (sessionId, text) => secrets.mask(sessionId, text),
+        notify: async (launcher, text, queueId) => actorFor(launcher)?.notify(text, queueId, false, "steer"),
+        async resolveChild({ child, requestId, decision, clientId }) {
+          await actorFor(child)?.handle({ id: ids("command"), clientId: (clientId ?? taskClientId) as never, type: "request.resolve", sessionId: child, requestId, decision })
+        },
+      })
+    })
+    void childApprovalsLoading.then(() => childApprovals?.observe(event))
   }
   /**
    * Shell command hooks (`hooks.json`): user ones run as configured, project ones only in a directory trusted for project
@@ -1579,7 +1619,7 @@ export async function startDaemon(options: DaemonOptions) {
   let wakeSettledPrune: (() => void) | undefined
   /** Accepted and applied plans as Markdown files (feature `plan_files`, docs/plan-review.md). */
   const planFiles = createPlanFiles({ dir: options.dir, enabled: () => featureOn(store.settings.get(), "plan_files", { safeMode: options.safeMode === true }), location: () => store.settings.get().plan_files_location ?? "data", directoryOf: (sessionId) => store.sessionDirectory(sessionId), now: () => clock.now() })
-  const sessionObservers: Array<(event: SessionEvent) => void> = [planFiles.observe,asideSessions.observe, tasks.observe, sessionBackground.observe, ownerWake.observe, extraction.observe, metadata.observe, (event) => { if (event.type === "turn.completed") maintainMemory(store.sessionDirectory(event.sessionId)) }]
+  const sessionObservers: Array<(event: SessionEvent) => void> = [planFiles.observe,asideSessions.observe, tasks.observe, sessionBackground.observe, ownerWake.observe, (event) => observeChildApprovals(event), extraction.observe, metadata.observe, (event) => { if (event.type === "turn.completed") maintainMemory(store.sessionDirectory(event.sessionId)) }]
   // An engine alias (`claude-opus`) resolves to a concrete id in the first answer's usage; remember it so the next launch names it at once.
   sessionObservers.push((event) => {
     if (event.type !== "usage.recorded") return
@@ -2006,7 +2046,25 @@ export async function startDaemon(options: DaemonOptions) {
    * Storage retention. `storage.clean` and the daily timer share this: sessions open in a terminal are
    * protected on top of the store's own rules (active turn, queue, live loop).
    */
-  async function cleanStorage(input: { olderThanDays: number; dryRun?: boolean; vacuum?: boolean; compact?: boolean; deltaIdleDays?: number; worktrees?: boolean; worktreeIdleDays?: number }) {
+  /** Aborted when the client that asked has gone away (or timed out and closed its connection). */
+  const clientGone = (connection: Connection) => connection.signal && connection.ended ? AbortSignal.any([connection.signal, connection.ended.signal]) : connection.signal ?? connection.ended?.signal
+
+  async function cleanWorktrees(input: { dryRun?: boolean; worktreeIdleDays?: number; artifacts?: boolean; external?: boolean; signal?: AbortSignal }) {
+    const capBytes = worktreeCapBytes(store.settings.get().worktreeCapGb)
+    const worktrees = await projectRestService().storage.clean({
+      ...(input.worktreeIdleDays === undefined ? {} : { idleDays: input.worktreeIdleDays }),
+      ...(input.dryRun ? { dryRun: true } : {}),
+      ...(input.artifacts ? { artifacts: true } : {}),
+      ...(input.external ? { external: true } : {}),
+      ...(capBytes && !input.artifacts ? { capBytes } : {}),
+      ...(input.signal ? { signal: input.signal } : {}),
+    })
+    return { worktreesRemoved: worktrees.removed, worktreeBytes: worktrees.bytes }
+  }
+
+  async function cleanStorage(input: { olderThanDays: number; dryRun?: boolean; vacuum?: boolean; compact?: boolean; deltaIdleDays?: number; worktrees?: boolean; worktreeIdleDays?: number; artifacts?: boolean; external?: boolean; worktreesOnly?: boolean; signal?: AbortSignal }) {
+    // `mendcode worktrees gc`: only the worktrees, the database is not touched.
+    if (input.worktreesOnly) return { dryRun: input.dryRun === true, olderThanDays: 0, sessionsRemoved: 0, eventsRemoved: 0, blobsRemoved: 0, bytesReclaimed: 0, protectedSessions: 0, vacuumed: false, ...await cleanWorktrees(input) }
     const protect = new Set<string>()
     for (const connection of connections) for (const id of connection.subscriptions.keys()) protect.add(id)
     // A full vacuum goes last, after compaction has rewritten rows, so it gives back everything at once.
@@ -2023,10 +2081,7 @@ export async function startDaemon(options: DaemonOptions) {
         deltaEventsRemoved: compacted.deltaEvents,
       }
     }
-    if (input.worktrees) {
-      const worktrees = await projectRestService().storage.clean({ ...(input.worktreeIdleDays === undefined ? {} : { idleDays: input.worktreeIdleDays }), ...(input.dryRun ? { dryRun: true } : {}) })
-      result = { ...result, worktreesRemoved: worktrees.removed, worktreeBytes: worktrees.bytes }
-    }
+    if (input.worktrees || input.artifacts) result = { ...result, ...await cleanWorktrees(input) }
     if (!input.dryRun) {
       // Idle actors of removed sessions hold nothing worth keeping; drop them like a deleted session.
       for (const id of sessionIds as SessionId[]) {
@@ -2049,12 +2104,13 @@ export async function startDaemon(options: DaemonOptions) {
     retentionTimer?.cancel()
     retentionTimer = undefined
     const armed = store.settings.get()
-    if (!armed.retentionDays && !armed.worktreeGcDays) return
+    if (!armed.retentionDays && !effectiveWorktreeGcDays(armed.worktreeGcDays)) return
     const next = new Date(clock.now())
     next.setHours(RETENTION_AT.hours, RETENTION_AT.minutes, 0, 0)
     if (next.getTime() <= clock.now()) next.setDate(next.getDate() + 1)
     retentionTimer = clock.setTimer(next.getTime() - clock.now(), () => {
-      const { retentionDays, worktreeGcDays } = store.settings.get()
+      const { retentionDays } = store.settings.get()
+      const worktreeGcDays = effectiveWorktreeGcDays(store.settings.get().worktreeGcDays)
       // Retention also compacts: what the daily pass keeps is moved into the compact forms.
       if (retentionDays || worktreeGcDays) {
         void cleanStorage({ olderThanDays: retentionDays ?? 0, ...(retentionDays ? { compact: true } : {}), ...(worktreeGcDays ? { worktrees: true, worktreeIdleDays: worktreeGcDays } : {}) }).catch((error: unknown) => logLine("warn", `[DAEMON]: daily storage pass failed: ${error instanceof Error ? error.message : String(error)}`))
@@ -2282,6 +2338,23 @@ export async function startDaemon(options: DaemonOptions) {
     }
   }
 
+  /**
+   * Turns an orderly shutdown interrupted are carried on by this start with one steering turn each (restart-resume.ts); a turn that
+   * was running when a daemon died without stopping is only closed below, never re-run (FC-37, I15).
+   */
+  const restartResume = createRestartResume({
+    store,
+    enabled: () => store.settings.get().resumeAfterRestart !== false,
+    now: () => clock.now(),
+    lastTurn: lastTurnEvents,
+    resume: async (sessionId, text) => (await actorFor(sessionId)?.steer({ text, label: "daemon restarted · resumed", meta: { restart: "resume" } })) ?? false,
+    tell: async (launcher, text, queueId) => actorFor(launcher)?.notify(text, queueId, false, "steer"),
+    title: (sessionId) => secrets.mask(sessionId, store.sessionInfo(sessionId)?.title ?? ""),
+    queueId: () => ids("queue"),
+    log: logLine,
+  })
+  sessionObservers.push(restartResume.observe)
+
   /** A turn that was running when the previous daemon died is closed as interrupted, never re-run (FC-37, I15). */
   function recoverInterruptedTurns() {
     for (const { sessionId } of store.sessionsWithActiveTurn()) {
@@ -2299,7 +2372,9 @@ export async function startDaemon(options: DaemonOptions) {
       }
       for (const requestId of openRequests) sessionSink.append({ type: "server.request.resolved", sessionId, requestId: requestId as never, resolution: "abandoned", ...(planRequests.has(requestId) ? { planReview: { kind: "plan_review", action: "close", reason: "Interrupted by restart" } } : {}) })
       for (const itemId of openItems) sessionSink.append({ type: "item.completed", sessionId, itemId: itemId as never, status: "interrupted" })
-      sessionSink.append({ type: "turn.interrupted", sessionId, turnId: started.turnId, reason: "restart" })
+      // A shutdown that did not wait for the engine (it kept running past the stop) still recorded the turn: the cause stays on the event.
+      const shutdown = store.resumes.get(sessionId)?.turnId === started.turnId
+      sessionSink.append({ type: "turn.interrupted", sessionId, turnId: started.turnId, reason: "restart", ...(shutdown ? { cause: "daemon_shutdown" as const } : {}) })
       sessionSink.append({ type: "foreground.state", sessionId, state: store.queueOf(sessionId).length > 0 ? "queued" : "idle" })
       // Only a daemon that ended without stopping (a kill, a crash, the process hosting it gone) leaves a turn open.
       logLine("warn", `[DAEMON]: session ${sessionId} had a turn running when the previous daemon ended without stopping; marked interrupted`)
@@ -2309,6 +2384,9 @@ export async function startDaemon(options: DaemonOptions) {
   for (const task of store.tasks.list()) if (task.background && task.state === "interrupted" && ["queued", "working", "needs_input"].includes(store.sessionBackground.get(task.taskId)?.state ?? "")) sessionBackground.register(task.taskId, { state: "stopped", summary: task.result.slice(0, 4000) })
   ownerWake.schedule()
   continuity.recover()
+  // After start has finished (the listener is up, the engine is ready): a bounded page of the table, then one steering turn per session.
+  const resumeTimer = setTimeout(() => void restartResume.start().catch((error) => logLine("warn", `[DAEMON]: resuming interrupted turns failed: ${error instanceof Error ? error.message : String(error)}`)), 0)
+  resumeTimer.unref?.()
 
   /**
    * Loops: each run is a normal message in the loop's root session, submitted as the daemon's own
@@ -3113,6 +3191,7 @@ export async function startDaemon(options: DaemonOptions) {
     grants.revoke(sessionId, "all")
     runLimits.delete(sessionId)
     elevation?.forget(sessionId)
+    childApprovals?.forget(sessionId)
     forgetSessionEntries(options.dir, sessionId)
     sessionPermissions.delete(sessionId)
     selfPackagePorts.delete(sessionId)
@@ -3203,7 +3282,7 @@ export async function startDaemon(options: DaemonOptions) {
   function projectRestService() {
     return projectRest ??= createProjectRest({
       dir: options.dir, defaultDirectory: options.defaultDirectory ?? process.cwd(), store, workspaces: workspaceCatalog, manager: worktrees,
-      occupied: (directory) => store.listSessions({ directory, roots: false, archived: true, limit: 1 }).length > 0 || loops.list(directory).length > 0 || store.workflows.all().some((run) => run.directory === directory),
+      occupied: (directory) => store.listSessions({ directory, roots: false, archived: true, limit: 1 }).length > 0 || loops.list(directory).length > 0 || store.workflows.all().some((run) => run.directory === directory || workflowWorktreeHeld({ dir: options.dir, run, directory })),
       busy: (id) => Boolean(actors.get(id)?.snapshot().turnId || store.lastTurnStatus(id) === "running" || store.queueOf(id).length || busyAside(id)),
       busyAside,
       // A move during the session's own turn (the `worktree` tool) keeps the turn and drops only the approvals.
@@ -3244,7 +3323,8 @@ export async function startDaemon(options: DaemonOptions) {
   }
 
   const peerOrigin = createPeerOrigin({ descendants: options.agentOrigin?.descendants === true })
-  const agentGate = createAgentGate({ modeOf: (sessionId) => (store.hasSession(sessionId) ? livePermission(sessionId) : undefined) })
+  const agentGate = createAgentGate({ modeOf: (sessionId) => (store.hasSession(sessionId) ? livePermission(sessionId) : undefined), launchers: store.launchers })
+  launcherOf = agentGate.launcherOf
 
   async function handleOnce(connection: Connection, command: Command) {
     if (connection.rejected) return
@@ -3849,7 +3929,7 @@ export async function startDaemon(options: DaemonOptions) {
           if (problem) return reply(connection, command.id, { ok: false, code: "target_mismatch", message: `[DAEMON]: ${problem}` })
         }
         if (command.type === "request.resolve") {
-          const result = elevation?.resolve(command, isHumanTerminal(connection)) ?? extensionDialogs.resolve(command) ?? continuity.resolve(command)
+          const result = childApprovals?.resolve(command, isHumanTerminal(connection)) ?? elevation?.resolve(command, isHumanTerminal(connection)) ?? extensionDialogs.resolve(command) ?? continuity.resolve(command)
           if (result) return reply(connection, command.id, result)
         }
         const actor = actorFor(command.sessionId)
@@ -4616,13 +4696,20 @@ export async function startDaemon(options: DaemonOptions) {
           return reply(connection, command.id, { ok: false, code: error instanceof FileApiError && error.code === "forbidden" ? "forbidden" : "invalid_command", message: error instanceof FileApiError ? error.message : "File edit failed" })
         }
       }
-      case "storage.report":
-        return reply(connection, command.id, { ok: true, result: { ...store.storageReport(), trashBytes: await projectRestService().storage.trashBytes() } })
+      case "storage.report": {
+        const cap = worktreeCapBytes(store.settings.get().worktreeCapGb)
+        return reply(connection, command.id, { ok: true, result: { ...store.storageReport(), trashBytes: await projectRestService().storage.trashBytes("cached"), ...(cap ? { worktreeCapBytes: cap, worktreeBytes: await projectRestService().storage.managedBytes(clientGone(connection)) } : {}) } })
+      }
       case "storage.worktrees":
         if (connection.remoteAddress || connection.peer) return reply(connection, command.id, { ok: false, code: "forbidden", message: "[DAEMON]: worktree storage is local only" })
-        return reply(connection, command.id, { ok: true, result: await projectRestService().storage.report(command.idleDays) })
+        return reply(connection, command.id, { ok: true, result: await projectRestService().storage.report(command.idleDays, clientGone(connection), {
+          ...(command.measure ? { measure: command.measure } : {}),
+          ...(command.artifacts ? { artifacts: true } : {}),
+          ...(command.external ? { external: true } : {}),
+          ...(worktreeCapBytes(store.settings.get().worktreeCapGb) ? { capBytes: worktreeCapBytes(store.settings.get().worktreeCapGb)! } : {}),
+        }) })
       case "storage.clean":
-        if (command.worktrees && (connection.remoteAddress || connection.peer)) return reply(connection, command.id, { ok: false, code: "forbidden", message: "[DAEMON]: cleaning worktrees is local only" })
+        if ((command.worktrees || command.artifacts || command.external || command.worktreesOnly) && (connection.remoteAddress || connection.peer)) return reply(connection, command.id, { ok: false, code: "forbidden", message: "[DAEMON]: cleaning worktrees is local only" })
         return reply(connection, command.id, {
           ok: true,
           result: await cleanStorage({
@@ -4632,6 +4719,10 @@ export async function startDaemon(options: DaemonOptions) {
             ...(command.compact ? { compact: true } : {}),
             ...(command.deltaIdleDays === undefined ? {} : { deltaIdleDays: command.deltaIdleDays }),
             ...(command.worktrees ? { worktrees: true } : {}),
+            ...(command.artifacts ? { artifacts: true } : {}),
+            ...(command.external ? { external: true } : {}),
+            ...(command.worktreesOnly ? { worktreesOnly: true } : {}),
+            ...(clientGone(connection) ? { signal: clientGone(connection)! } : {}),
             ...(command.worktreeIdleDays === undefined ? {} : { worktreeIdleDays: command.worktreeIdleDays }),
           }),
         })
@@ -4699,7 +4790,7 @@ export async function startDaemon(options: DaemonOptions) {
       }
       case "settings.set": {
         if ("additionalDirectories" in command.patch && connection.remoteAddress) return reply(connection, command.id, { ok: false, code: "forbidden", message: "[DAEMON]: extra directories are set on the machine that runs the commands" })
-        if ("worktreeGcDays" in command.patch && (connection.remoteAddress || connection.peer)) return reply(connection, command.id, { ok: false, code: "forbidden", message: "[DAEMON]: worktree cleanup is set on the machine that holds the worktrees" })
+        if (("worktreeGcDays" in command.patch || "worktreeCapGb" in command.patch) && (connection.remoteAddress || connection.peer)) return reply(connection, command.id, { ok: false, code: "forbidden", message: "[DAEMON]: worktree cleanup is set on the machine that holds the worktrees" })
         if ("prReview" in command.patch && (connection.remoteAddress || connection.peer)) return reply(connection, command.id, { ok: false, code: "forbidden", message: "[DAEMON]: the PR reviewer's concurrency is set on the machine that runs the reviews" })
         if (connection.remoteAddress && REMOTE_HOST_SETTINGS.some((key) => key in command.patch)) return reply(connection, command.id, { ok: false, code: "forbidden", message: "[DAEMON]: proxy, shell and web policy are set on the machine that runs the commands" })
         if ((connection.remoteAddress || connection.peer) && remoteExecutionSettings(command.patch)) return reply(connection, command.id, { ok: false, code: "forbidden", message: "[DAEMON]: execution policy and feature switches are set on the machine that runs the commands" })
@@ -5906,6 +5997,7 @@ export async function startDaemon(options: DaemonOptions) {
           ...(options.buildId ? { buildId: options.buildId } : {}),
           clients: [...connections].filter((peer) => peer.clientId).length,
           activeTurns: [...actors.values()].filter(actorWorking).length,
+          work: workingSessions(),
           backgroundJobs: scheduler.snapshot().length + engineJobs(),
           loops: { total: entries.length, active: entries.filter((loop) => loop.state === "active").length, running: entries.filter((loop) => ["running", "needs_input", "verifying"].includes(loop.state)).length },
           dream: { configured: Boolean(options.dream), enabled: Boolean(at), at: at ?? null, handled: store.meta.get(DREAM_WINDOW_KEY) ?? null },
@@ -6227,7 +6319,7 @@ export async function startDaemon(options: DaemonOptions) {
   function socketHandlers(remote: boolean, local = false): Bun.SocketHandler<Connection> {
     function open(socket: Bun.Socket<Connection>) {
       if (socket.data) return
-      const connection: Connection = { id: nextConnection++, socket, pending: [], backlog: 0, decoder: new TextDecoder(), buffer: "", subscriptions: new Map(), statusWatches: new Map() }
+      const connection: Connection = { id: nextConnection++, socket, pending: [], backlog: 0, decoder: new TextDecoder(), buffer: "", subscriptions: new Map(), statusWatches: new Map(), ended: new AbortController() }
       socket.data = connection
       connections.add(connection)
       // Unix socket: the kernel says which process connected. Loopback TCP carries no such fact; there only the client's own word is left.
@@ -6310,6 +6402,7 @@ export async function startDaemon(options: DaemonOptions) {
       close(socket) {
         if (!socket.data) return
         clearTimeout(socket.data.authTimer)
+        socket.data.ended?.abort()
         audio.forget(socket.data)
         voice.forget(socket.data)
         connections.delete(socket.data)
@@ -6408,6 +6501,7 @@ export async function startDaemon(options: DaemonOptions) {
     for (const key of [...partialUploads.keys()]) if (key.startsWith(`${connection.id}:`)) partialUploads.delete(key)
   }
   function closeHttp(connection: Connection) {
+    connection.ended?.abort()
     connections.delete(connection)
     forgetUploads(connection)
     uiReload.forget(connection)
@@ -6523,6 +6617,14 @@ export async function startDaemon(options: DaemonOptions) {
       ],
     }
   }
+  /** The sessions with a turn running, newest 20, with who started each from its shell: what `daemon restart --force` would interrupt. */
+  function workingSessions() {
+    const label = (sessionId: SessionId) => secrets.mask(sessionId, store.sessionInfo(sessionId)?.title ?? "").slice(0, 100)
+    return [...actors].filter(([, actor]) => actorWorking(actor)).slice(0, 20).map(([sessionId]) => {
+      const launcher = agentGate.launcherOf(sessionId)
+      return { sessionId, title: label(sessionId), ...(launcher && store.hasSession(launcher as SessionId) ? { launcher, launcherTitle: label(launcher as SessionId) } : {}) }
+    })
+  }
   /** Since when nothing has needed this daemon: no client, no work, nothing standing. */
   let unneededSince: number | undefined
   /** A restart asked while work ran (`daemon.shutdown` with `whenIdle`): it stops the daemon once that work ends. */
@@ -6539,6 +6641,8 @@ export async function startDaemon(options: DaemonOptions) {
 
   /** Graceful stop: running turns end as interrupted(restart), resources are released, the lock is freed. */
   async function stop() {
+    restartResume.stop()
+    clearTimeout(resumeTimer)
     threadBridge?.stop()
     hostBridge.stop()
     idleGc.stop()
@@ -6576,6 +6680,7 @@ export async function startDaemon(options: DaemonOptions) {
     continuity.stop()
     extensionDialogs.stop()
     elevation?.stop()
+    childApprovals?.stop()
     background.stop()
     interactive.stop()
     statusLines.stop()
@@ -6593,7 +6698,12 @@ export async function startDaemon(options: DaemonOptions) {
     await sessionHttpListener?.stop(true)
     listener.stop(true)
     for (const connection of connections) connection.socket.end()
-    await Promise.all([...actors.values()].map((actor) => actor.interrupt("restart")))
+    // The turns this orderly stop ends are kept for the next start to resume.
+    for (const [sessionId, actor] of actors) {
+      const now = actor.snapshot()
+      if (now.turnId && !now.stopping && now.foreground !== "compacting") restartResume.record(sessionId, now.turnId)
+    }
+    await Promise.all([...actors.values()].map((actor) => actor.interrupt("restart", "daemon_shutdown")))
     for (let i = 0; i < 20 && [...actors.values()].some((actor) => actor.snapshot().turnId); i++) await new Promise((r) => setTimeout(r, 10))
     engine.stop?.()
     for (const active of tracedTurns.values()) active.span.end("cancelled")

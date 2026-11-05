@@ -38,7 +38,7 @@ import { buildStackGraph, stackChanges, stackSummary } from "./stacks"
 import { controlOf, release, takeOver } from "./takeover"
 import { runChecks } from "./verify"
 import { layeredConfig, reviewNotice, runConfigKey, runPrReview, type ReviewRun, type RunPrReviewInput, type RunReaders } from "./run"
-import { readReviewState, REVIEW_MARKER, writeReviewState, type ReviewState } from "./state"
+import { readReviewState, REVIEW_MARKER, stateFromMarkers, writeReviewState, type ReviewState } from "./state"
 
 /**
  * The daemon's PR reviewer (docs/pr-review.md): the repo watch, `/pr review`, and the throwaway worktree each review reads. A review
@@ -422,9 +422,14 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
     })
     const graphCache = `${worktree}.graph`
     try {
-      const state = readReviewState(options.dir, repo, number)
       const policy = base ? await policyBase(directory, base) : undefined
       const login = await watch.loginOf(directory)
+      const known = readReviewState(options.dir, repo, number)
+      // No saved state (another device, a wiped data dir) but this login's review is on the PR: its head marker is the last reviewed
+      // head, so a push reviews what changed since it (run.ts `chooseRange` checks it is still in the branch) instead of the whole PR.
+      const posted = known.lastHead || !login ? undefined : await reviewsOf(repo, number, directory).catch(() => undefined)
+      const postedHead = posted ? stateFromMarkers({ reviews: (posted as Array<{ body?: string; submitted_at?: string; state?: string; user?: { login?: string } }>).filter((review) => review?.state !== "PENDING" && review?.state !== "DISMISSED" && sameLogin(review.user?.login, login)), comments: [] }).lastHead : undefined
+      const state = postedHead ? { ...known, lastHead: postedHead } : known
       const current = job ? ledger.get(job.id) ?? job : undefined
       const scope = current?.scope ?? "global"
       const personal = scope === "personal" ? personalLayer(repo, login) : undefined
@@ -1695,9 +1700,13 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
     try { const claimed = ownership.claim(key, deviceOf(), WATCH_LEASE_MS); if (claimed.ok) leases.set(key, claimed.lease.expiresAt) } catch { /* availability only */ }
   }
 
-  /** Whether `repo` + PR `number` at `head` was reviewed by `reviewer` already (the review state, or a finished job). */
+  /**
+   * Whether a catch-up leaves `repo` + PR `number` at `head` alone for `reviewer`: it was reviewed (the review state, or a finished
+   * job), or its job failed for good (an error that retrying does not change). The failure was told once; /reviews still lists it
+   * and its retry runs it again, but a daemon start does not queue it and announce it again.
+   */
   const reviewedHead = (repo: string, reviewer: string, number: number, head: string) =>
-    readReviewState(options.dir, repo, number).lastHead === head || ledger.list({ repo, number, reviewer }).some((job) => job.head === head && job.state === "done")
+    readReviewState(options.dir, repo, number).lastHead === head || ledger.list({ repo, number, reviewer }).some((job) => job.head === head && (job.state === "done" || (job.state === "failed" && failureKind(job.error ?? "") !== "transient")))
 
   async function plan({ directory, role, login, prs, catchUp }: { directory: string; sessionId: string; role: RepoRole; login?: string | undefined; prs: PrFacts[]; catchUp: boolean }): Promise<WatchPlan> {
     const config = await baseConfig(directory)

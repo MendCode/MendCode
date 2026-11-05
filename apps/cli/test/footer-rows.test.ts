@@ -125,6 +125,20 @@ describe("the built-in footer takes any number of rows by settings alone", () =>
     expect(renderFooterRows({ input: { ...input, permission: "ask" }, rows: [["model"]], limit: 5 }).map((line) => line.length)).toEqual([0])
   })
 
+  test("a narrow row cuts its tagline with an ellipsis and keeps the directory; the tagline goes only when a few cells are all there is", () => {
+    const input = { segments: [], width: 60, glyphs: glyphs({}), stateLabel: "ready", state: "idle", dotOn: true, connection: "connected", permission: "ask", permissionLabel: "ask", quotas: [], now: NOW, notice: "", directory: "~/Code/repos/codeconfig", texts: { tagline: "Día de los Símbolos Patrios — bandera arriba, tests también" } } as const
+    const row = (width: number) => renderFooterRows({ input: { ...input, width }, rows: [["directory", "text:tagline"]], limit: 1 })[0]!.map((span) => span.text).join("")
+    expect(row(120)).toBe("~/Code/repos/codeconfig · Día de los Símbolos Patrios — bandera arriba, tests también")
+    const narrow = row(60)
+    expect(narrow.startsWith("~/Code/repos/codeconfig · Día")).toBe(true)
+    expect(narrow.endsWith("…")).toBe(true)
+    expect(textWidth(narrow)).toBeLessThanOrEqual(60)
+    // Cells for only the separator and a couple of letters: the tagline is dropped whole, not left as a stub.
+    expect(row(28)).toBe("~/Code/repos/codeconfig")
+    // A directory longer than the row is cut too, never dropped.
+    expect(row(12)).toMatch(/^~\/Code.*…$/)
+  })
+
   test("statusColors recolours a segment by name, and the separator is the profile's", async () => {
     const made = await screen({ profile: { ...FIVE_ROWS, statusColors: '{"directory":"#ff8800"}', statusSeparator: " | " } })
     const row = made.lines().find((line) => line.some((span) => span.text === "~/Code/MendCodeV2"))!

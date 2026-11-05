@@ -1,6 +1,7 @@
 import path from "node:path"
 import { mkdirSync } from "node:fs"
 import { computeBuildId } from "../packages/build-id/src"
+import { removeBunBuildLeftovers } from "./bun-build-leftovers"
 
 export const TARGETS = ["darwin-arm64", "darwin-x64", "linux-x64", "linux-arm64", "windows-x64"] as const
 
@@ -31,6 +32,8 @@ const child = Bun.spawn([
   path.join(root, "apps/cli/src/entry.ts"), "--outfile", outfile,
 ], { cwd: path.dirname(outfile), stdout: "inherit", stderr: "inherit" })
 const code = await child.exited
+// bun leaves one executable-sized temp file per compile next to the output; whether the build worked or not, old ones go.
+removeBunBuildLeftovers(path.dirname(outfile))
 if (code !== 0) process.exit(code)
 // Bun 1.3 can leave a stale ad-hoc Mach-O signature after appending the bundle.
 if (process.platform === "darwin" && (!target || target.startsWith("darwin-"))) {

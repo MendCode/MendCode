@@ -118,6 +118,7 @@ test("a restart abandons a pending plan durably without applying it", async () =
   const h = await start({ steps: [callTool("plan_review", { markdown: "Never apply automatically" })] })
   const sessionId = await openSession(h, "plan" as never)
   await pending(h, sessionId)
+  await h.client.send({ type: "settings.set", patch: { resumeAfterRestart: false } })
   await h.daemon.stop()
   const restarted = await start({ dir: h.dir, project: h.project })
   expect(readPlanReviews(restarted.store, sessionId)[0]!.reply).toMatchObject({ action: "close" })

@@ -423,6 +423,7 @@ export const renderSidebarEditor: typeof import("../view/sidebar-editor").render
 type HistoryMod = typeof import("../view/history-page")
 export const createHistoryState: HistoryMod["createHistoryState"] = (...args) => history.get().createHistoryState(...args)
 export const historyTurns: HistoryMod["historyTurns"] = (...args) => history.get().historyTurns(...args)
+export const historySearchKey: HistoryMod["historySearchKey"] = (...args) => history.get().historySearchKey(...args)
 export const historyReaderRows: typeof import("../view/history-page").historyReaderRows = (...args) => history.get().historyReaderRows(...args)
 export const renderHistoryPage: HistoryMod["renderHistoryPage"] = (...args) => history.get().renderHistoryPage(...args)
 type SkillsMod = typeof import("../view/skills-page")
@@ -498,6 +499,7 @@ export const renderCompoundPage: typeof import("../view/compound-page").renderCo
 type MarketplaceMod = typeof import("../view/marketplace-page")
 export const createMarketplaceState: MarketplaceMod["createMarketplaceState"] = (...args) => marketplace.get().createMarketplaceState(...args)
 export const catalogMatches: MarketplaceMod["catalogMatches"] = (...args) => marketplace.get().catalogMatches(...args)
+export const catalogSearchKey: MarketplaceMod["catalogSearchKey"] = (...args) => marketplace.get().catalogSearchKey(...args)
 export const renderMarketplacePage: MarketplaceMod["renderMarketplacePage"] = (...args) => marketplace.get().renderMarketplacePage(...args)
 
 export const renderIntroPage: SetupMod["renderIntroPage"] = (...args) => setup.get().renderIntroPage(...args)

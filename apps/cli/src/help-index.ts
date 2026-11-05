@@ -53,6 +53,7 @@ export const HELP_GROUPS: readonly HelpGroup[] = [
     e("usage", "usage [--days N]", "tokens and cost per day"),
     e("stats", "stats [--days N]", "usage over all time, --waste for savings"),
     e("storage", "storage [--clean]", "where disk goes; clean and compact"),
+    e("worktrees", "worktrees list|size|gc", "worktree disk use; gc previews, --yes removes"),
     e("status", "status", "daemon, models and project at a glance"),
     e("doctor", "doctor", "check this installation"),
     e("debug", "debug <command>", "diagnostics: config, paths, files, lsp"),

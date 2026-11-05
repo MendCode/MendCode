@@ -138,6 +138,13 @@ function breakdown(report: StorageReport, width: number): Line[] {
   ]
 }
 
+/** With a worktree cap set: how much of it MendCode's worktrees use, and a warning above it (nothing unsafe is removed to get under). */
+function worktreeCapNote(report: StorageReport) {
+  const used = report.worktreeBytes ?? 0
+  const cap = report.worktreeCapBytes ?? 0
+  return used > cap ? `over the cap: ${formatBytes(used)} of ${formatBytes(cap)} · w frees what is safe` : `${formatBytes(used)} of ${formatBytes(cap)}`
+}
+
 function settingRows(report: StorageReport, retentionDays: number | undefined, width: number, worktreeGcDays?: number): Line[] {
   return kvList(
     [
@@ -152,6 +159,7 @@ function settingRows(report: StorageReport, retentionDays: number | undefined, w
         ? [{ label: "forks", value: `${thousands(report.forkRefs)} share ${thousands(report.sharedMessages ?? 0)} messages of their parent · ${formatBytes(report.sharedBytes ?? 0)} stored once` }]
         : []),
       { label: "worktrees", value: worktreeGcDays ? `merged, clean, unused ones idle > ${worktreeGcDays} days go daily 03:30 · w now` : `off · set worktreeGcDays in settings to enable · w now${report.trashBytes ? ` · trash ${formatBytes(report.trashBytes)}` : ""}` },
+      ...(report.worktreeCapBytes ? [{ label: "worktree cap", value: worktreeCapNote(report) }] : []),
     ],
     width,
   )

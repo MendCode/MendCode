@@ -57,7 +57,7 @@ describe("/connect: search", () => {
     expect(page).toContain("OpenRouter")
     expect(page).toContain("OpenCode (free)")
     expect(page).not.toContain("Anthropic")
-    expect(page).toContain("type to filter · ↑↓ select · enter connect · esc end search")
+    expect(page).toContain("type to filter · ↑↓ select · enter connect · esc clear")
     const lettered = connectKey(typeAll(createConnectState(), ["/", "k"]), "q")
     expect(lettered.action).toEqual({ type: "none" })
     expect(lettered.state.query).toBe("kq")

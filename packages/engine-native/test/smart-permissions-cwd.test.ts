@@ -10,7 +10,7 @@ const project = path.join(parent, "worktree")
 mkdirSync(path.join(project, "packages", "widgets"), { recursive: true })
 
 const shell = (command: string, workdir?: string) =>
-  classifySmart({ tool: { name: "shell", permission: "execute" }, args: { command, ...(workdir ? { workdir } : {}) }, cwd: project, allowCommands: ["bun test", "../../node_modules/.bin/tsc"] })
+  classifySmart({ tool: { name: "shell", permission: "execute" }, args: { command, ...(workdir ? { workdir } : {}) }, cwd: project, allowCommands: ["bun test"] })
 
 const REPORTED = 'bun scripts/gen-registry.ts; ../../node_modules/.bin/tsc --noEmit -p .; bun test'
 
@@ -53,5 +53,28 @@ describe("smart mode resolves relative paths against the directory the command r
   test("a cd whose target the text does not give asks", () => {
     expect(shell("cd - && cat a")).toMatchObject({ decision: "ask" })
     expect(shell("cd $DIR && cat a")).toMatchObject({ decision: "ask" })
+  })
+})
+
+describe("smart mode judges a project node_modules binary as the command it names", () => {
+  test("tsc through node_modules/.bin runs like tsc, from the root and from a subdirectory", () => {
+    expect(shell("node_modules/.bin/tsc --noEmit -p .")).toMatchObject({ decision: "allow" })
+    expect(shell("../../node_modules/.bin/tsc --noEmit -p .", "packages/widgets")).toMatchObject({ decision: "allow" })
+  })
+
+  test("a binary with no known command still asks, and one outside the project still asks", () => {
+    expect(shell("node_modules/.bin/some-tool --run")).toMatchObject({ decision: "ask", rule: "unlisted-command" })
+    expect(shell("../../../node_modules/.bin/tsc -p .", "packages/widgets")).toMatchObject({ decision: "ask", rule: "outside-project" })
+  })
+
+  test("the exit status in an echo hides nothing, other expansions still ask", () => {
+    expect(shell('echo "GEN_EXIT=$?"')).toMatchObject({ decision: "allow" })
+    expect(shell('echo "$HOME"')).toMatchObject({ decision: "ask", rule: "shell-expansion" })
+  })
+
+  test("the reported line only asks for the project script it runs", () => {
+    const verdict = shell('bun scripts/gen-registry.ts; echo "GEN_EXIT=$?"; ../../node_modules/.bin/tsc --noEmit -p .; echo "TSC_EXIT=$?"; bun test', "packages/widgets")
+    expect(verdict).toMatchObject({ decision: "ask", rule: "unlisted-command", reason: "bun is not on the allow list" })
+    expect(shell('echo "GEN_EXIT=$?"; ../../node_modules/.bin/tsc --noEmit -p .; echo "TSC_EXIT=$?"; bun test', "packages/widgets")).toMatchObject({ decision: "allow" })
   })
 })

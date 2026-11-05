@@ -118,6 +118,7 @@ test("a turn the daemon restart interrupted reads as interrupted, a user cancel 
   const root = await openSession(h)
   await h.client.send({ type: "user.submit", sessionId: root, text: "running", attachments: [] })
   await until(() => h.requests.length === 1)
+  await h.client.send({ type: "settings.set", patch: { resumeAfterRestart: false } })
   await h.daemon.stop()
   h.client.close()
   const resumed = await native({ dir, project: dir, steps: [hang] })

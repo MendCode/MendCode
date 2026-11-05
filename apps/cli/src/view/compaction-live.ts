@@ -9,7 +9,7 @@ import { textWidth } from "./wrap"
 
 export type LiveMode = TuiProfile["compactionPanel"]
 
-/** Narrower than this the framed panels drop their frame and keep a few plain rows. */
+/** Narrower than this the panels drop their frame and keep three or four plain rows. */
 export const LIVE_COMPACT_WIDTH = 70
 export type LiveInput = {
   mode: LiveMode
@@ -25,8 +25,6 @@ export type LiveInput = {
   now: number
   /** The loading glyph; empty when the activity line above the prompt already shows one, so there is a single indicator. */
   spinner: string
-  /** The stage bar (`compactionProgress`); the default panel keeps only the stage name when false. */
-  progress?: boolean
   arcade?: { view: ArcadeView; focused: boolean; fieldRows: number }
   scratch?: { text: string; editing: boolean; editor?: ReturnType<typeof import("./editor").createEditor>; readOnly: boolean }
 }
@@ -104,6 +102,21 @@ const lead = (input: LiveInput) => (input.spinner ? `${input.spinner} ` : "")
 
 const label = (text: string): Span => ({ text: text.padEnd(9), fg: "muted" })
 
+function stageRow(facts: CompactionSnapshot, spinner: string): Line {
+  const step = stepOf(facts)
+  const memory = facts.method === "native" ? "Checkpoint" : "Memory"
+  const names = ["Capture", memory, "Pack"]
+  const spans: Span[] = []
+  names.forEach((name, index) => {
+    const done = index + 1 < step || (index + 1 === step && facts.phase === "packed")
+    const current = index + 1 === step && !done
+    if (index) spans.push({ text: "   " })
+    spans.push({ text: `${done ? "●" : current ? spinner : "○"} ${name}`, fg: done ? "success" : current ? "primary" : "muted", ...(current ? { bold: true } : {}) })
+  })
+  if (facts.tailTokens) spans.push({ text: `   tail ~${compactTokens(facts.tailTokens)} kept`, fg: "muted" })
+  return spans
+}
+
 /** `84.2k → …`: the context the compaction replaces, then what replaces it once both the tail and the memory are known. */
 function contextShift(facts: CompactionSnapshot): Span[] {
   if (!facts.before) return [{ text: "no model call recorded yet", fg: "muted" }]
@@ -136,19 +149,23 @@ function quietRow(input: LiveInput): Line {
   return fit([{ text, fg: "muted" }], input.width)
 }
 
-/**
- * The default card, two plain rows: the stage with its bar, then the context before and after. It carries no spinner of its own
- * while the activity line above the prompt shows one (`spinner` empty); the elapsed time is that line's too.
- */
 function panelRows(input: LiveInput): Line[] {
   const { facts, width } = input
-  const showBar = input.progress !== false
-  const elapsed = input.spinner ? elapsedText(input) : undefined
-  const head: Span[] = [{ text: lead(input), fg: "primary" }, { text: phaseText(facts), fg: "text", bold: true }]
-  const tail = `  ${stepOf(facts)}/${STEPS.length}${elapsed ? ` · ${elapsed}` : ""}`
-  const used = textWidth(head.map((span) => span.text).join("")) + tail.length + 2
-  const first: Line = showBar && width - used >= 6 ? [...head, { text: "  " }, ...bar(progressOf(facts, elapsedOf(input) ?? 0), Math.min(40, width - used), facts.phase === "packed" ? "success" : "primary"), { text: tail, fg: "muted" }] : [...head, { text: tail, fg: "muted" }]
-  return [fit(first, width), fit([label("Context"), ...contextShift(facts)], width)]
+  const elapsed = elapsedText(input)
+  if (width < LIVE_COMPACT_WIDTH) {
+    return [
+      fit([{ text: lead(input), fg: "primary" }, { text: "Compacting", fg: "text", bold: true }, { text: ` · ${phaseText(facts).toLowerCase()}${elapsed ? ` · ${elapsed}` : ""}`, fg: "muted" }], width),
+      fit(progressRow(input, width), width),
+      fit(contextShift(facts), width),
+    ]
+  }
+  const body: Line[] = [
+    spread([{ text: lead(input), fg: "primary" }, { text: phaseText(facts), fg: "text", bold: true }], [{ text: facts.reason ? `${facts.reason} compaction` : "compaction", fg: "muted" }], width - 4),
+    progressRow(input, width - 4),
+    [label("Context"), ...contextShift(facts)],
+    stageRow(facts, input.spinner || "◐"),
+  ]
+  return boxed({ title: "Compacting context", ...(elapsed ? { right: elapsed } : {}), rows: body, width })
 }
 
 function statsRows(input: LiveInput): Line[] {
@@ -265,14 +282,14 @@ function scratchRows(input: LiveInput): { rows: Line[]; scratch?: NonNullable<Li
 export function liveRowsNeeded(mode: LiveMode, width: number, field = 0): number {
   const compact = width < LIVE_COMPACT_WIDTH
   if (mode === "quiet") return 1
-  if (mode === "panel") return 2
+  if (mode === "panel") return compact ? 3 : 6
   if (mode === "stats") return compact ? 5 : 7
   if (mode === "scratchpad") return compact ? 3 : 4
   return field + 2
 }
 
 /**
- * The compaction panel while the context is being compacted. `panel` is the two-row default (stage with its bar,
+ * The compaction panel while the context is being compacted. `panel` is the framed default (phase, stage bar,
  * tokens before and after), `stats` charts what the events reported, `arcade` and `scratchpad` host a game and the
  * project note, `quiet` is one line. A mode that does not fit `maxRows` gives way to a smaller one.
  */

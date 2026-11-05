@@ -182,6 +182,7 @@ describe("the commands the other helps list are accepted", () => {
     ["ai-config", ["ai-config", "inspect"]], ["agent", ["agent", "list"]], ["agent", ["agent", "create"]],
     ["prompt", ["prompt", "sources"]], ["prompt", ["prompt", "build"]], ["prompt", ["prompt", "mode"]], ["prompt", ["prompt", "cycle-mode"]],
     ["recipe", ["recipe", "list"]], ["recipe", ["recipe", "apply", "n"]],
+    ...["list", "size", "gc"].map((word): [string, string[]] => ["worktrees", ["worktrees", word]]),
     ["storage", ["storage", "--clean"]], ["storage", ["storage", "--compact"]], ["storage", ["storage", "--worktrees"]], ["storage", ["storage", "--dry-run", "--clean"]],
     ["generate", ["generate", "--httpapi"]], ["export", ["export", "--sanitize"]], ["import", ["import", "--latest"]], ["context", ["context", S]], ["apply", ["apply", "--check"]],
   ]

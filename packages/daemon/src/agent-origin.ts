@@ -136,11 +136,12 @@ const ATTACHMENTS = new Set<string>(["attachment.add", "attachment.put", "attach
  * more authority than it has, or delete, archive or rename a session it did not start. A caller whose session is unknown
  * counts as `ask`.
  */
-export function createAgentGate(input: { modeOf(sessionId: SessionId): PermissionMode | undefined }) {
-  /** Sessions started by agent-origin clients, with the session that started each ("" when unknown). In memory: after a restart only the mode comparison is left. */
+export function createAgentGate(input: { modeOf(sessionId: SessionId): PermissionMode | undefined; /** Keeps which session started a child, so the link outlives the daemon. */ launchers?: { get(child: string): string | undefined; set(child: string, launcher: string): void } }) {
+  /** Sessions started by agent-origin clients, with the session that started each ("" when unknown). The known launchers are also kept in `input.launchers`; one started by a caller whose session is unknown is not. */
   const created = new Map<string, string>()
+  const launcherFor = (target: string): string | undefined => created.get(target) ?? input.launchers?.get(target)
   const ceiling = (origin: AgentOrigin): PermissionMode => (origin.sessionId ? input.modeOf(origin.sessionId as SessionId) : undefined) ?? "ask"
-  const mine = (origin: AgentOrigin, target: string) => target === origin.sessionId || created.get(target) === (origin.sessionId ?? "")
+  const mine = (origin: AgentOrigin, target: string) => target === origin.sessionId || launcherFor(target) === (origin.sessionId ?? "")
   const within = (origin: AgentOrigin, target: string) => mine(origin, target) || permissionRank(input.modeOf(target as SessionId) ?? "full") <= permissionRank(ceiling(origin))
   const refuse = (what: string) => `[DAEMON]: ${agentRefusal({ what })}`
   return {
@@ -148,9 +149,12 @@ export function createAgentGate(input: { modeOf(sessionId: SessionId): Permissio
     /** The mode a session this client starts gets: the usual one, never above the caller's own. */
     cap: (origin: AgentOrigin, mode: PermissionMode): PermissionMode => capPermission(mode, ceiling(origin)),
     /** Whether this calling session (known by id) started `target`. */
-    startedHere: (origin: AgentOrigin, target: string) => Boolean(origin.sessionId) && created.get(target) === origin.sessionId,
+    startedHere: (origin: AgentOrigin, target: string) => Boolean(origin.sessionId) && launcherFor(target) === origin.sessionId,
+    /** The session that started `target` from its shell, or undefined (unknown, or started by a caller whose session was not known). */
+    launcherOf: (target: string): string | undefined => launcherFor(target) || undefined,
     started(origin: AgentOrigin, sessionId: string) {
       created.set(sessionId, origin.sessionId ?? "")
+      if (origin.sessionId) input.launchers?.set(sessionId, origin.sessionId)
       if (created.size > MAX_CREATED) created.delete(created.keys().next().value!)
     },
     /** Why `command` is refused to this client; undefined when it may run. */

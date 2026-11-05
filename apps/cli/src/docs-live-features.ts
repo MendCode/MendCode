@@ -72,7 +72,7 @@ export const FEATURE_PROVIDERS: Record<string, Provider> = {
     settingsLine(settings, { subagentDepth: 1, subagentMaxChildren: 4, subagentMaxDescendants: 16, subagentOwnerWake: true, subagentCatalog: 6, agentMentions: "address" }),
     folderLine(context, "agents"),
   ]),
-  git: aboutFeatures(["git_hub", "git_actions", "worktree_tool", "pr_watch", "review_order"], { worktreeGcDays: "off" }),
+  git: aboutFeatures(["git_hub", "git_actions", "worktree_tool", "pr_watch", "review_order"], { worktreeGcDays: 14, worktreeCapGb: "off" }),
   codegraph: aboutFeatures(["codegraph", "graph_context", "orientation", "lean_tools"]),
   computer: aboutFeatures(["computer", "browser"]),
   web: aboutFeatures(["webfetch_modes", "web_routing"], {}, (_context, settings) => [

@@ -12,6 +12,13 @@ import { hostMcpPrefix } from "./host-mcp-sweep"
 export const HOST_MCP_SERVER = "mendcode"
 /** Tool arguments are small; a larger body is not a tool call. */
 const MAX_BODY = 1024 * 1024
+/**
+ * How long a tool call may wait on the user's answer before the harness is told it is pending. Claude Code gives a call to this
+ * server about a minute and then drops it with "The operation timed out", which reads as a failure; the card stays open for the
+ * user while the turn runs, and the call is answered as pending well before that.
+ */
+export const HOST_PENDING_MS = 40_000
+export const HOST_PENDING_TEXT = "Pending: the user has not answered yet. The card is on their screen in MendCode and stays open while this turn runs; if they approve it, it takes effect then. Do not call this tool again for the same thing. Tell the user what is waiting for them and where, and check the outcome later by reading the state (for settings: action get)."
 const json = (body: unknown, status = 200) => Response.json(body, { status })
 type HostTool = Awaited<ReturnType<NonNullable<EnginePort["hostTools"]>>>[number]
 
@@ -38,7 +45,7 @@ export function hostInstructions(tools: readonly HostTool[], harness: "claude" |
     ...(has("review_config") ? ["PR reviewer settings: mcp__mendcode__review_config. Always pass scope: global is the repository's reviewer (.mendcode/review.yaml, shared with everyone), personal is the user's own reviewer profile for this repository. When the user did not say which, ask them; never change global when they meant their own. To set up PR review with the user, call action setup first (no scope, read only) and walk them through its questions."] : []),
     ...(has("pr_review") ? ["Review one PR now: mcp__mendcode__pr_review with action review (MendCode's own reviewer, as /pr review <n>; it posts only as the user's /pr publish consent allows). Never post an @mendcode comment, or anything else, from the user's account to start a review."] : []),
     ...(has("review_config") && !has("pr_review") ? ["Never post an @mendcode comment from the user's account to start a review: the user runs /pr review <n>."] : []),
-    ...(has("mendcode_settings") ? ["MendCode's daemon settings (tier, permissions, models and roles, compaction, budgets, output style, experimental): you CAN change them. Read with mcp__mendcode__mendcode_settings get, then propose the exact patch; the user approves it on a card and only then is it saved. Do not tell the user to change it themselves, and do not edit MendCode's database or run mendcode commands to do it."] : []),
+    ...(has("mendcode_settings") ? ["MendCode's daemon settings (tier, permissions, models and roles, compaction, budgets, output style, experimental): you CAN change them. Read with mcp__mendcode__mendcode_settings get, then propose the exact patch; the user approves it on a card and only then is it saved (\"Pending\" means the card waits for them: do not propose it again). Do not tell the user to change it themselves, and do not edit MendCode's database or run mendcode commands to do it."] : []),
     ...(unbridged ? [`Sub-agents on MendCode's other models (\`${PROGRAM_NAME} models\`) need the full tier and /tier thread_mcp on ${unbridged}; your own sub-agent tool runs only this harness's. Say that, never that such a model does not exist.`] : []),
   ].join("\n")
 }
@@ -92,6 +99,8 @@ export function createHostMcp(options: {
   unbridged?(sessionId: SessionId): string | undefined
   /** Whether the graph autopilot (feature `graph_autopilot`) is on: the instructions then add its line about the graph tools. */
   graphAutopilot?(): boolean
+  /** Tests shorten how long a call waits on the user before it is answered as pending. */
+  pendingMs?: number
   /** Tests inject a listener without opening a socket. */
   listen?(handler: (request: Request) => Promise<Response>): { url: string; stop(): void }
 }) {
@@ -132,14 +141,28 @@ export function createHostMcp(options: {
     const turn = turns.get(sessionId)
     if (!turn || turn.signal.aborted) return reply({ content: [{ type: "text", text: "No turn is running in this session" }], isError: true })
     pending++
+    // The call keeps running when its answer is pending; only the reply to the harness is cut short, and only while the user is the one being waited on.
+    const startedAt = Date.now()
+    let asking = 0
+    let timer: ReturnType<typeof setTimeout> | undefined
+    let onPending!: () => void
+    const timedOut = new Promise<"pending">((resolve) => { onPending = () => resolve("pending") })
+    const watch = () => {
+      clearTimeout(timer)
+      if (asking > 0) timer = setTimeout(onPending, Math.max(0, (options.pendingMs ?? HOST_PENDING_MS) - (Date.now() - startedAt)))
+    }
+    const counted: TurnInput = { ...turn, ask: async (request) => { asking++; watch(); try { return await turn.ask(request) } finally { asking--; watch() } } }
+    const running = options.call({ turn: counted, name, args: message.params?.arguments ?? {} })
+    void running.then(() => undefined, () => undefined).finally(() => { clearTimeout(timer); pending-- })
     try {
-      const result = await options.call({ turn, name, args: message.params?.arguments ?? {} })
+      const result = await Promise.race([running, timedOut])
+      if (result === "pending") return reply({ content: [{ type: "text", text: HOST_PENDING_TEXT }], isError: false })
       const token = sessions.get(sessionId)?.token
       const text = token ? result.output.replaceAll(token, "[redacted]") : result.output
       return reply({ content: [{ type: "text", text }, ...(result.images ?? []).map((image) => ({ type: "image", mimeType: image.mime, data: Buffer.from(image.bytes).toString("base64") }))], isError: result.isError })
     } catch (failure) {
       return reply({ content: [{ type: "text", text: `Tool failed: ${failure instanceof Error ? failure.message : String(failure)}` }], isError: true })
-    } finally { pending-- }
+    }
   }
 
   return {

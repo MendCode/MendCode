@@ -73,7 +73,9 @@ the session id (`--json`: `{"sessionId","status":"started"}`). It cannot combine
 `--dangerously-skip-permissions`, `--thinking`, `--ephemeral`, `--output-schema` or `-o`: nobody is attached to answer
 an approval, so the turn waits for `attach`; use `--permission` to choose the mode up front. Follow it with shorthands
 over `session`: `ps` (= `session list --active`, `--all-projects` for every project), `logs ID [-f]` (= `session
-events ID [--follow]`), `kill ID` (= `session cancel ID`) and `attach ID` (opens the TUI on that session).
+events ID [--follow]`), `kill ID` (= `session cancel ID`; a session blocked on you shows `Waiting: …` in `session status ID` and a `waiting for approval` line in `logs`, and its launcher is told, see [permissions](permissions.md#what-a-session-cannot-do-from-its-own-shell)) and `attach ID` (opens the TUI on that session).
+
+**A daemon restart does not drop a background session.** The session that started a child from its shell is stored with the child (its `parent_id` stays empty), so the link and the approval notices survive a restart. When the daemon stops in an orderly way (`daemon stop|restart --force`, `/daemon restart`, an upgrade), the turns it interrupts end with `turn.interrupted` carrying `cause: "daemon_shutdown"`; the next start gives each of those sessions one new turn that tells the agent to pick the work back up (the old turn is not re-run, and an Esc or an error never carries that cause). At most 16 sessions resume per start, a session is resumed at most 3 times in a row, and nothing older than 6 hours is resumed. A session that cannot be resumed (deleted, its `!` shell command, messages waiting in its queue, `resumeAfterRestart: false`, over a cap) sends one notice to the session that launched it, if any. A daemon that was killed or crashed does not resume anything: its turns end as interrupted without the cause. Every tier.
 
 ## Scripting flags for `run` (B2)
 
@@ -286,7 +288,10 @@ found by a daemon an agent restarted with a short `PATH`.
 and Dream. macOS uses launchd; Linux uses systemd user units. Install enables login startup without starting immediately;
 start is explicit. `--dir D`, `--cwd PROJECT`, `--engine ENGINE` and `--service-dir D` configure its binding.
 A second data directory cannot overwrite an existing binding. Uninstall retains the definition under `<dir>/service/trash`.
-Stop/restart/uninstall refuse active turns, loop verification and background jobs unless `--force` is given.
+Stop/restart/uninstall refuse active turns, loop verification and background jobs unless `--force` is given. The refusal names the
+running turns, their sessions and who started each from its shell (`Daemon is busy: 2 turns running: ses_… "title" started by ses_… "title"; …`);
+with `--force` the command prints what it interrupted (`--json`: `interrupted`), and those turns resume when the daemon starts again
+(see [background sessions](#background-sessions-b17); `resumeAfterRestart` in the settings turns that off).
 Persistent activation is supported only on macOS/Linux. Windows service mutations fail before creating files or invoking a manager; use `daemon start` or `daemon run` with the local loopback transport instead. No Task Scheduler integration is advertised.
 
 `[control-plane] loops daemon|service …` (also `loop`) and `[control-plane] memory dream daemon|service …` alias

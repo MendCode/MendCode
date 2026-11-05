@@ -244,6 +244,19 @@ describe("the jump-to-latest button", () => {
     }
   }
 
+  test("it never covers text: a transcript row that reaches its columns keeps its words and the pill takes a row of its own", async () => {
+    const s = await scene({ width: 100, height: 30 })
+    s.talk.exchange("Count for me", Array.from({ length: 90 }, (_, i) => `row ${String(i + 1).padStart(2, "0")} ${"word ".repeat(15)}end`).join("\n"))
+    rows(s.h)
+    await s.h.app.onKey(WHEEL_UP)
+    const lines = rows(s.h)
+    const at = pillRow(lines)
+    expect(at).toBeGreaterThan(-1)
+    expect(lines[at]!.replace(/↓ latest · End/, "").trim()).toBe("")
+    // The row above is a whole line of the answer, not one with a hole where the pill would sit.
+    expect(lines[at - 1]).toMatch(/word end\s*$/)
+  })
+
   test("the owner's session: full view, both sidebars, 200 columns, scrolled up in a long transcript", async () => {
     const { h } = await scrolled({ width: 210, height: 60, side: "both" })
     const lines = rows(h)

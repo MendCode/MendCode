@@ -123,7 +123,7 @@ export const PORTABLE_SETTINGS: ReadonlySet<string> = new Set([
   "memoryMaxEntries", "memoryProjectMaxEntries", "memoryPolicies", "memoryGlobalCompactionMaxEntries", "dreamConsolidationPolicy", "retentionDays", "worktreeBranch",
   "git", "footer", "promptCache", "outputStyle", "planExitAgent", "plan_exit_agent", "plan_files_location", "logLevel", "tool_output", "codegraph_index", "foreignResources",
   "instructionFallbacks", "projectRootMarkers", "queue", "snapshot", "snapshotScope", "compaction", "cache", "allowMessageEdits", "subagent_variant",
-  "subagentOwnerWake", "subagentCatalog", "processLimits",
+  "subagentOwnerWake", "subagentCatalog", "processLimits", "resumeAfterRestart",
 ])
 
 /**
@@ -140,7 +140,7 @@ export const APPROVAL_SETTINGS: ReadonlySet<string> = new Set([
 /** Settings that describe this machine (folders, shells, environment, schedules): shown in the report, never applied. */
 export const MACHINE_SETTINGS: ReadonlySet<string> = new Set([
   "trustedToolDirs", "additionalDirectories", "projectConfig", "projectThemes", "memoryProjects", "cacheProjects", "areas", "profiles", "acpAgents", "proxy", "shellEnvironment",
-  "shellCommandPrefix", "loginShell", "shell", "engineEnvironment", "ownLogins", "watcher", "onboarded", "$schema", "setupPreset", "worktreeGcDays", "prReview", "enterprise", "autoupdate", "dreamAt",
+  "shellCommandPrefix", "loginShell", "shell", "engineEnvironment", "ownLogins", "watcher", "onboarded", "$schema", "setupPreset", "worktreeGcDays", "worktreeCapGb", "prReview", "enterprise", "autoupdate", "dreamAt",
 ])
 
 export type SettingClass = "portable" | "approval" | "machine"

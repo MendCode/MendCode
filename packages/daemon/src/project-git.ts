@@ -5,12 +5,12 @@ export class ProjectRestError extends Error {
 }
 
 /** Fixed argv, bounded output and lifetime; no Git network operations. */
-export async function projectGit(directory: string, args: string[], signal?: AbortSignal, limit = 180_000) {
+export async function projectGit(directory: string, args: string[], signal?: AbortSignal, limit = 180_000, timeoutMs = 5000) {
   if (signal?.aborted) throw new ProjectRestError("busy", "Request cancelled")
   const child = Bun.spawn(["git", "--no-optional-locks", "-C", directory, "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false", "--no-pager", ...args], { stdin: "ignore", stdout: "pipe", stderr: "ignore", env: { ...process.env, GIT_TERMINAL_PROMPT: "0", LC_ALL: "C" } })
   let stopped = false
   const stop = () => { stopped = true; child.kill() }
-  const timer = setTimeout(stop, 5000)
+  const timer = setTimeout(stop, timeoutMs)
   signal?.addEventListener("abort", stop, { once: true })
   let bytes = 0
   const chunks: Uint8Array[] = []

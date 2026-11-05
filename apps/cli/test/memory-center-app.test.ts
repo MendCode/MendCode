@@ -109,7 +109,7 @@ describe("/memory commands from the new keys", () => {
     expect(h.text()).toContain("approve it first to change its scope")
     await h.key("p")
     expect(h.text()).toContain("only saved memories can be pinned")
-    expect(h.text()).not.toContain("/ s")
+    expect(h.text()).not.toContain("/ s_")
   })
 })
 

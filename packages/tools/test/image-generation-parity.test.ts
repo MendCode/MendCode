@@ -153,3 +153,35 @@ test("long echoed tokens are redacted before error truncation; cancellation star
   expect((await h.run({ prompt: "Icon" }, makeContext({ cwd: h.cwd, signal: abort.signal }))).output).toBe("cancelled")
   expect(h.calls).toHaveLength(0)
 })
+
+test("the default model falls back to 2.5 once when 2.6 is refused, and says so", async () => {
+  const models: string[] = []
+  const fetch: FetchLike = async (_url, init) => {
+    const model = JSON.parse(String(init?.body)).model
+    models.push(model)
+    return model === "gpt-image-2.6-sunburst" ? new Response("unknown model", { status: 400 }) : image()
+  }
+  const h = setup({ enabled: true, adapter: "codex-oauth" }, fetch)
+  const result = await h.run({ prompt: "Green icon" })
+  expect(result.isError).toBe(false)
+  expect(models).toEqual(["gpt-image-2.6-sunburst", "gpt-image-2.5-sunburst"])
+  expect(result.output).toContain("model: gpt-image-2.5-sunburst (gpt-image-2.6-sunburst was not available for this account)")
+})
+
+test("an explicitly configured model is never swapped for the fallback", async () => {
+  const models: string[] = []
+  const h = setup(cfg({ model: "openai/gpt-image-2.6-flare" }), async (_url, init) => { models.push(JSON.parse(String(init?.body)).model); return new Response("nope", { status: 400 }) })
+  expect((await h.run({ prompt: "Green icon" })).isError).toBe(true)
+  expect(models).toEqual(["gpt-image-2.6-flare"])
+})
+
+test("transparent_background asks for a transparent PNG; options still win", async () => {
+  const h = setup(cfg({ model: undefined, options: { quality: "high" } }))
+  await h.run({ prompt: "Sticker of a fox", transparent_background: true })
+  expect(JSON.parse(String(h.calls[0]?.init.body))).toMatchObject({ background: "transparent", output_format: "png", quality: "high", model: "gpt-image-2.6-sunburst" })
+})
+
+test("the prompt argument carries the short prompting guide", () => {
+  const tool = createImageGenTool({ env: { OPENAI_API_KEY: "k" } })!
+  expect((tool.args as unknown as { shape: { prompt: { description?: string } } }).shape.prompt.description).toContain("exact text in quotes")
+})

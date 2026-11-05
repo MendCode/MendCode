@@ -269,3 +269,22 @@ describe("nothing the model receives changes", () => {
     expect(jsonShape(["bun test v1", "ok"])).toBeUndefined()
   })
 })
+
+describe("a customize_ui result at the default density", () => {
+  const json = JSON.stringify({ keys: Array.from({ length: 6 }, (_, i) => ({ key: `k${i}`, what: "texts the footer's text:NAME segments show", type: "object", now: { tagline: "keep the contract" } })), next: "customize_ui settings with the key that fits" })
+  const events = (): SessionEvent[] => [
+    { sessionId: "s", seq: 1, at: 1, type: "turn.started", turnId: "t" } as never,
+    ...["a", "b"].flatMap((id, i) => [
+      { sessionId: "s", seq: 2 + i * 2, at: 2, type: "item.started", turnId: "t", itemId: id, kind: "tool_call", meta: { tool: "customize_ui footerText" } } as never,
+      { sessionId: "s", seq: 3 + i * 2, at: 3, type: "item.completed", itemId: id, status: "ok", text: json } as never,
+    ]),
+  ]
+
+  for (const mode of ["balanced", "full"] as const) {
+    test(`${mode}: the call is its header row with the shape, and the raw JSON is not drawn`, () => {
+      const out = text(build({ mode, events: events() }))
+      expect(out.filter((row) => row.includes("customize_ui footerText  object · 2 keys"))).toHaveLength(2)
+      expect(out.join("\n")).not.toContain('"keys"')
+    })
+  }
+})

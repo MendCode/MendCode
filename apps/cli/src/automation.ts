@@ -41,6 +41,7 @@ import { worktreeText } from "./worktree-output"
 import { UNINSTALL_USAGE } from "@mendcode/upgrade/uninstall-args"
 import { versionLine } from "@mendcode/upgrade/releases"
 import { CACHE_USAGE, parseCache, type CacheAutomation } from "./cache-args"
+import { WORKTREES_USAGE, parseWorktrees, type WorktreesAutomation } from "./worktrees-args"
 import { APPLY_USAGE, parseApply, type ApplyAutomation } from "./apply-args"
 import { packageArguments, packageCatalogText, type PackageAutomation } from "./package-args"
 import { AI_CONFIG_USAGE, parseAIConfig, type AIConfigAutomation } from "./ai-config-args"
@@ -133,7 +134,7 @@ export type Automation = Common &
     | LoopAutomation
     | ProjectAutomation
     | WorktreeAutomation
-    | CacheAutomation | ApplyAutomation
+    | CacheAutomation | ApplyAutomation | WorktreesAutomation
     | PackageAutomation
     | { kind: "plugin.install"; spec: string; global: boolean; force: boolean }
     | { kind: "plugin.auth"; provider?: string; method: number }
@@ -333,6 +334,7 @@ export const USAGE: Record<string, string> = {
   export: TRANSFER_EXPORT_USAGE,
   import: TRANSFER_IMPORT_USAGE,
   worktree: WORKTREE_USAGE,
+  worktrees: WORKTREES_USAGE,
   mflow: MFLOW_USAGE,
   uninstall: UNINSTALL_USAGE,
   cache: CACHE_USAGE,
@@ -423,6 +425,8 @@ export function parseAutomation(argv: string[]): ParseResult {
   if (mflow) return mflow
   const worktree = parseWorktree(argv)
   if (worktree) return worktree
+  const worktrees = parseWorktrees(argv)
+  if (worktrees) return worktrees
   if (argv[0] === "control-plane" && ["workflow", "workflows"].includes(argv[1] ?? "")) argv = argv.slice(1)
   if (argv[0] === "workflows") argv = ["workflow", ...(argv.length === 1 ? ["list"] : argv.slice(1))]
   const cache = parseCache(argv)
@@ -1209,6 +1213,12 @@ export function worktreeStorageText(report: StorageWorktreesReport) {
 }
 
 function eventLine(event: SessionEvent) {
+  // What a session waits for is the one thing a launcher reading `logs` needs to see, so it is named, not just typed.
+  if (event.type === "server.request") {
+    const asked = (event.kind === "approval" ? `${event.tool ?? "tool"}: ${event.detail || event.title}` : event.title).replace(/\s+/g, " ").slice(0, 160)
+    return `#${event.seq} ${event.type} ${event.kind === "approval" ? "waiting for approval" : "waiting for an answer"} ${event.requestId}: ${asked}\n`
+  }
+  if (event.type === "server.request.resolved") return `#${event.seq} ${event.type} ${event.requestId} ${event.resolution}\n`
   const detail = "text" in event && typeof event.text === "string" ? ` ${event.text.replace(/\s+/g, " ").slice(0, 80)}` : "kind" in event ? ` ${String(event.kind)}` : ""
   return `#${event.seq} ${event.type}${detail}\n`
 }
@@ -1282,6 +1292,10 @@ export async function runAutomation(command: Automation, deps: AutomationDeps): 
     case "apply": {
       const { createApplyAutomation } = await import("./apply-automation")
       return createApplyAutomation({ client, directory: dir, result, fail })(command)
+    }
+    case "worktrees": {
+      const { createWorktreesAutomation } = await import("./worktrees-automation")
+      return createWorktreesAutomation({ client, err, result, fail })(command)
     }
     case "cache": {
       const { createCacheAutomation } = await import("./cache-automation")
@@ -1561,7 +1575,11 @@ export async function runAutomation(command: Automation, deps: AutomationDeps): 
       const reply = await daemon(command.kind === "session.get" ? { type: "session.get", sessionId: command.id as SessionId } : { type: "session.inspect", sessionId: command.id as SessionId, limit: command.kind === "session.inspect" ? command.limit : 20, ...(command.kind === "session.inspect" && command.summary ? { summary: true } : {}) })
       if (!reply.ok) return fail(reply.message)
       const session = reply.result.session as import("@mendcode/protocol").SessionDetail
-      return result(reply.result, sessionHuman(session))
+      // A session blocked on the user says on what, so whoever launched it does not have to read its events to find out.
+      const blocked = command.kind === "session.status" && session.status.startsWith("waiting") ? await daemon({ type: "session.inspect", sessionId: command.id as SessionId, limit: 1 }) : undefined
+      const pending = blocked?.ok ? (blocked.result.pending as import("@mendcode/protocol").SessionInspection["pending"]) : undefined
+      const waiting = pending ? [...pending.permissions, ...pending.questions].filter((event): event is Extract<SessionEvent, { type: "server.request" }> => event.type === "server.request").map((event) => ({ requestId: event.requestId, kind: event.kind, ...(event.tool ? { tool: event.tool } : {}), detail: (event.detail || event.title).replace(/\s+/g, " ").slice(0, 200) })) : []
+      return result(waiting.length ? { ...reply.result, waiting } : reply.result, sessionHuman(session, waiting))
     }
 
     case "session.stats": {

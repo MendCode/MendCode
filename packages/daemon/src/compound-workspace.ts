@@ -61,3 +61,14 @@ export async function compoundSnapshot(directory: string, signal: AbortSignal, e
   }
   return { base, fingerprint: hash.digest("hex"), diff: redactSecrets(diff).text, files }
 }
+
+/** Ends a compound workspace that produced nothing: clean and still on its base commit, so removing it loses nothing. A candidate stays for review. */
+export async function releaseEmptyCompoundWorkspace(directory: string, workspace: string, base: string): Promise<boolean> {
+  const signal = AbortSignal.timeout(15_000)
+  try {
+    if (await git(workspace, ["status", "--porcelain", "--untracked-files=normal"], signal) !== "") return false
+    if (await git(workspace, ["rev-parse", "HEAD"], signal) !== base) return false
+    await git(directory, ["worktree", "remove", workspace], signal)
+    return true
+  } catch { return false }
+}

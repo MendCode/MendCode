@@ -10,7 +10,7 @@ import { createWorktreeManager } from "./worktrees"
 import { readGitBranch } from "./git-branch"
 import { defaultBranch, projectGit, projectGitRoot, ProjectRestError } from "./project-git"
 import { createRestWorktrees } from "./worktree-rest"
-import { createWorktreeGc } from "./worktree-gc"
+import { createWorktreeGc, type WorktreeScope } from "./worktree-gc"
 import { normalizeReplay } from "./sync-replay"
 
 /** A session a replay may continue stays bounded: at most this many events, and four blobs mid-upload. */
@@ -416,9 +416,11 @@ export function createProjectRest(input: {
     return result
   }
   return { cd, warpInTurn, storage: {
-    report: (idleDays: number | undefined, signal?: AbortSignal) => serialized(() => gc.report(idleDays, signal)),
-    clean: (options: { idleDays?: number; dryRun?: boolean }) => serialized(() => gc.clean(options)),
-    trashBytes: () => gc.trashBytes(),
+    // Read-only and long: not behind the queue, so other project requests and the progress polls are not held up by a scan.
+    report: (idleDays: number | undefined, signal?: AbortSignal, scope?: WorktreeScope) => closed ? Promise.reject(new ProjectRestError("busy", "Project service stopped")) : gc.report(idleDays, signal, scope),
+    clean: (options: WorktreeScope & { idleDays?: number; dryRun?: boolean; signal?: AbortSignal }) => options.dryRun ? gc.clean(options) : serialized(() => gc.clean(options)),
+    trashBytes: (mode?: "cached" | "full") => gc.trashBytes(mode),
+    managedBytes: (signal?: AbortSignal) => gc.managedBytes(signal),
   }, async close() { closed = true; for (const call of calls) call.abort(); await pending }, locked(directory: string) {
     const resolved = path.resolve(directory)
     return [...locks].some((lock) => resolved === lock || resolved.startsWith(lock + path.sep))

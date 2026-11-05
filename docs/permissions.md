@@ -29,7 +29,7 @@ Approving with "for this session" records a **grant** for that tool; later calls
 | `outside-project` | a path (argument, flag value, redirection target, `workdir`, `cd`) that is not inside the project, including `..`, `~` and symlinks that lead out (relative paths count from the directory the command runs in: the call's `workdir`, then each plain `cd DIR`; a `cd` whose target the text does not give asks); `/dev/null` is fine | asks (high) |
 | `network` | `curl`, `wget`, `ssh`, `npx`…, `git push/pull/fetch/clone`, profile installs/updates (`bun install`, `npm add`…), any URL in the command | asks (high) |
 | `autonomy` | `loop`, `workflow_start`, `tell` (start autonomous work or message another session) | asks (high) |
-| `shell-expansion` | `$VAR`, `$(…)`, backticks or `<(…)` outside single quotes: what runs cannot be read from the text. A saved wildcard allow rule (`ls *`) never covers such a command | asks (uncertain) |
+| `shell-expansion` | `$VAR`, `$(…)`, backticks or `<(…)` outside single quotes (`$?`, the last exit status, is not one): what runs cannot be read from the text. A saved wildcard allow rule (`ls *`) never covers such a command | asks (uncertain) |
 | `unlisted-command` | a command that is not allow-listed and matched no risk rule | asks (uncertain) |
 | `unclear-target` | an edit whose file cannot be read from its arguments | asks (uncertain) |
 | `unknown-tool` | MCP tools, custom tools, any other write/execute tool | asks (uncertain) |
@@ -42,7 +42,7 @@ A command line is split at unquoted `&&`, `||`, `;`, `|`, `&` and newlines; ever
 
 **Refusals.** The `forbidden` rule is the only one that never prompts: nothing in a coding session needs it, and a prompt is one reflexive click from a wiped machine. A `permissionAllow` prefix, the sandbox setting and a session grant cannot lift it. `full` mode (explicit user choice) and your own `!command` are not affected. The model is told `smart mode never runs this: <why>`.
 
-**Allow list.** Built in: read-only commands (`ls`, `cat`, `head`, `tail`, `wc`, `grep`, `rg`, `sort`, `diff`, `jq`, `echo`, `pwd`, `cd`, `find` without `-delete/-exec`, `sed` without `-i`…), local file work inside the project (`mkdir`, `touch`, `cp`, `mv`), read-only `git` (`status`, `diff`, `log`, `show`, `branch` listing, `rev-parse`, `blame`…), the program's own reference cards (`mendcode docs` or `mendcode docs <topic>` as the whole command line: the bare program name and one plain topic word, nothing before, after or around it), and the project's own checks (`bun test`, `bun run typecheck|lint|build|check`, `npm test`, `tsc`, `cargo test`, `go test`, `pytest`…). Add your own prefixes with the `permissionAllow` setting (`["make test", "git commit"]`): a prefix matches the first words of a command, and it can never override a risk rule (`git commit -m x && git push` still asks for `network`).
+**Allow list.** Built in: read-only commands (`ls`, `cat`, `head`, `tail`, `wc`, `grep`, `rg`, `sort`, `diff`, `jq`, `echo`, `pwd`, `cd`, `find` without `-delete/-exec`, `sed` without `-i`…), local file work inside the project (`mkdir`, `touch`, `cp`, `mv`), read-only `git` (`status`, `diff`, `log`, `show`, `branch` listing, `rev-parse`, `blame`…), the program's own reference cards (`mendcode docs` or `mendcode docs <topic>` as the whole command line: the bare program name and one plain topic word, nothing before, after or around it), and the project's own checks (`bun test`, `bun run typecheck|lint|build|check`, `npm test`, `tsc`, `cargo test`, `go test`, `pytest`…); a binary of the project's own `node_modules/.bin` given by path (`../../node_modules/.bin/tsc`) is judged as the command it names (`tsc`), and one outside the project is still `outside-project`. Add your own prefixes with the `permissionAllow` setting (`["make test", "git commit"]`): a prefix matches the first words of a command, and it can never override a risk rule (`git commit -m x && git push` still asks for `network`).
 
 **Session grants.** In smart mode a grant covers only the same action fingerprint and causal user authority, with complete execution identity, and never a high-risk call. Changing the command, script identity, environment, or user turn asks again. Other modes retain tool/path session scopes.
 
@@ -295,6 +295,17 @@ run, a loop, only remote or peer clients connected) it is refused at once, as be
 command to run from your own terminal. Only `edits` and `smart` can be asked for this way, never `full`, only for a child
 the caller has just started, and only your local terminal can approve (a remote or peer client can only dismiss the
 card). Nothing is raised without your answer. Every tier.
+
+**Children waiting for approval.** A session started from another session's shell (`mendcode run --bg`) has no terminal
+attached, so its approval used to wait unseen. Now, within a second or two of the first one, the launching session's model gets
+one notice listing what waits (it cannot approve, and is told not to poll or work around it), and a terminal of yours that has the
+launching session (or another session of its project) open gets one card: **Approve all (N)**, **Deny all** or **One by one**.
+Approve all answers exactly the requests the card listed, once each, not ones that arrived later; **One by one** opens a card per
+child. A choice a child asks with options (such as a `mendcode_settings` proposal) is shown the same way and your pick is
+forwarded. Only your own local terminal answers; dismissing a card answers nothing. A request answered in the child's own session
+leaves the card. `mendcode session status ID` names what a child waits on (`Waiting: approval …`) and `mendcode logs ID` shows
+`waiting for approval` lines. Nothing runs until a child waits. The link to the launching session is stored with the
+child, so it survives a daemon restart: a child that waits after one is announced to the same launcher. Every tier.
 
 **Another data directory** is not yours to protect: `mendcode --dir /tmp/x …` from a session's shell talks to another
 daemon and is not held back by the tool or the CLI (that daemon applies the same rules to its own sessions). `upgrade` and

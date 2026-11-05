@@ -18,6 +18,8 @@ const SEVERITY_ORDER: Record<PrFinding["severity"], number> = { critical: 0, maj
 /** What the review looked at, for the summary's details (docs/pr-review.md, "What a review looks like"). */
 export type ReviewInfo = {
   files: ReadonlyArray<{ path: string; touched: number }>; profile: string; cap: number; incremental: boolean; notes: readonly string[]
+  /** The head the last review covered, for an incremental review: the summary says it covers what changed since it. */
+  since?: string | undefined
   /** How many candidate findings the separate verify pass judged (0: the review pass raised none, so no verify pass ran). Unset: not known. */
   checked?: number | undefined
   /** The cost table measured for a MendCode pull request (perf.ts `perfBody`), shown in the review details. */
@@ -248,7 +250,7 @@ export function renderReviewBody({ result, inline, moved, repo, info, template, 
     : total
     ? `**${total} finding${total === 1 ? "" : "s"}** · ${counts.map(([severity, count]) => `${SEVERITY_MARK[severity]} ${count} ${severity}`).join(" · ")}`
     : "**No findings** · nothing in this change was confirmed as a problem"
-  const scope = `head \`${result.head.slice(0, 12)}\`${info?.incremental ? ` · only the commits since the last review` : ""}${result.budgetHit ? " · stopped at the token budget" : ""}`
+  const scope = `head \`${result.head.slice(0, 12)}\`${info?.incremental ? ` · only the commits since the last review${info.since ? ` at \`${info.since.slice(0, 7)}\`` : ""}` : ""}${result.budgetHit ? " · stopped at the token budget" : ""}`
   const table = findings.length ? ["| | Finding | Where |", "|:-:|:--|:--|", ...findings.map((finding) => `| ${SEVERITY_MARK[finding.severity]} | ${cell(finding.summary)}${finding.verdict === "plausible" ? " *(plausible)*" : ""} | ${link(finding)} |`)].join("\n") : ""
   const titles = new Map((template?.sections ?? []).flatMap((section) => section.title ? [[section.id, section.title.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\n/g, " ")] as const] : []))
   const outside = moved.length ? details(`${titles.get("outside") ?? "Not on a line GitHub shows in this diff"} (${moved.length})`, moved.map((finding) => `- ${link(finding)} **${SEVERITY_LABEL[finding.severity]}** · ${CATEGORY_LABEL[finding.category]}: ${finding.summary}\n\n  ${finding.detail.replace(/\n/g, "\n  ")}`).join("\n\n"), true) : ""
