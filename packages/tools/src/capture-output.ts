@@ -4,7 +4,7 @@ import path from "node:path"
 
 let captures = 0
 /** How often a running child's output size is checked against the limit (one `fstat` each). */
-const WATCH_MS = 10
+export const WATCH_MS = 10
 
 export type CaptureOptions = {
   cwd?: string | undefined
@@ -24,8 +24,8 @@ export type CaptureOptions = {
 /** `stopped`: the time limit, a cancel or (without `keepOnLimit`) the size limit ended it and `out` is empty. `truncated`: more than `limit` bytes were written. */
 export type Captured = { code: number; stopped: boolean; truncated: boolean; out: string; err: string }
 
-const temporary = () => path.join(tmpdir(), `mendcode-capture-${process.pid}-${captures++}`)
-const open = (file: string) => openSync(file, constants.O_RDWR | constants.O_APPEND | constants.O_CREAT | constants.O_EXCL, 0o600)
+export const temporary = () => path.join(tmpdir(), `mendcode-capture-${process.pid}-${captures++}`)
+export const open = (file: string) => openSync(file, constants.O_RDWR | constants.O_APPEND | constants.O_CREAT | constants.O_EXCL, 0o600)
 
 function head(fd: number, limit: number) {
   const size = Math.min(fstatSync(fd).size, limit)
@@ -84,4 +84,29 @@ export async function captureOutput(argv: string[], options: CaptureOptions): Pr
     if (fds.err !== undefined) closeSync(fds.err)
     for (const file of [files.out, files.err]) if (file) try { unlinkSync(file) } catch { /* never created */ }
   }
+}
+
+/**
+ * A child's output file read as it grows: each `next()` returns the bytes written since the last call (at most `chunk` of them),
+ * or `undefined` when there are none yet. The streaming counterpart of `captureOutput` for a child whose output is shown while it runs.
+ */
+export function followFile({ fd, chunk = 65536 }: { fd: number; chunk?: number }) {
+  const buffer = Buffer.allocUnsafe(chunk)
+  let offset = 0
+  return {
+    /** Bytes the child has written so far, read or not. */
+    written: () => fstatSync(fd).size,
+    next(): Buffer | undefined {
+      const count = readSync(fd, buffer, 0, chunk, offset)
+      if (count <= 0) return undefined
+      offset += count
+      return buffer.subarray(0, count)
+    },
+  }
+}
+
+/** Closes and removes the files of a capture; a file already gone is fine. */
+export function discardFiles({ fds, files }: { fds: readonly (number | undefined)[]; files: readonly (string | undefined)[] }) {
+  for (const fd of fds) if (fd !== undefined) try { closeSync(fd) } catch { /* closed */ }
+  for (const file of files) if (file) try { unlinkSync(file) } catch { /* never created or already removed */ }
 }
