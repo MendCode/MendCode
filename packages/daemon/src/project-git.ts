@@ -1,39 +1,8 @@
-import { readFileSync, realpathSync, statSync, unlinkSync } from "node:fs"
-import { tmpdir } from "node:os"
-import path from "node:path"
+import { realpathSync } from "node:fs"
+import { captureOutput } from "@mendcode/tools"
 
 export class ProjectRestError extends Error {
   constructor(public code: "invalid_command" | "unsupported" | "busy" | "target_mismatch" | "unknown_session", message: string) { super(message) }
-}
-
-let captures = 0
-
-/**
- * Runs `argv` and returns its standard output (at most `limit` bytes) within `timeoutMs`. The output goes through a
- * temporary file removed afterwards, not a pipe: Bun holds about half a megabyte of native buffer for every piped child,
- * which a scan of many worktrees turns into tens of megabytes the system does not take back.
- */
-export async function captureOutput(argv: string[], options: { env?: Record<string, string | undefined>; signal?: AbortSignal | undefined; limit: number; timeoutMs: number }) {
-  const file = path.join(tmpdir(), `mendcode-capture-${process.pid}-${captures++}`)
-  const child = Bun.spawn(argv, { stdin: "ignore", stdout: Bun.file(file), stderr: "ignore", ...(options.env ? { env: options.env } : {}) })
-  let stopped = false
-  const stop = () => { stopped = true; child.kill() }
-  const timer = setTimeout(stop, options.timeoutMs)
-  // A file has no backpressure: its size is watched while the child runs.
-  const watch = setInterval(() => { try { if (statSync(file).size > options.limit) stop() } catch { /* not created yet */ } }, 50)
-  options.signal?.addEventListener("abort", stop, { once: true })
-  try {
-    const code = await child.exited
-    let size = 0
-    try { size = statSync(file).size } catch { /* nothing written */ }
-    if (size > options.limit) stopped = true
-    return { code, stopped, out: stopped ? "" : readFileSync(file, "utf8") }
-  } finally {
-    clearTimeout(timer)
-    clearInterval(watch)
-    options.signal?.removeEventListener("abort", stop)
-    try { unlinkSync(file) } catch { /* never created */ }
-  }
 }
 
 /** Fixed argv, bounded output and lifetime; no Git network operations. */

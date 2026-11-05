@@ -207,6 +207,15 @@ for (const { name, fallback } of modes) {
       expect(result.truncated).toBe(true)
       expect(result.meta?.matches).toBe(500)
     })
+    // The built-in walker skips files over 2 MB, so only rg meets output this large.
+    ;(fallback ? test.skip : t)("a search whose output is megabytes still ends at the match cap", async () => {
+      setup()
+      const root = tmp()
+      put({ root, path: "big.txt", content: Array.from({ length: 6000 }, () => `hit ${"x".repeat(900)}`).join("\n") })
+      const result = await grep.execute({ pattern: "hit" }, makeContext({ cwd: root }))
+      expect(result.truncated).toBe(true)
+      expect(result.meta?.matches).toBe(500)
+    })
     t("searches a single file and errors on missing path", async () => {
       setup()
       const root = tmp()

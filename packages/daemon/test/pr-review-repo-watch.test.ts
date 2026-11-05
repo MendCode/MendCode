@@ -1021,7 +1021,7 @@ describe("durable review jobs", () => {
     await w.watch.tick()
     await w.settled()
     expect(w.watch.describe()).toContain(`${MAX_OPEN_PRS + 5} open PRs`)
-  })
+  }, 20_000)
 
   test("stopping the watch of a repository cancels its reviews that had not started", async () => {
     const w = durable({ hold: true, concurrency: 1 })

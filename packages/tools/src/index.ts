@@ -4,6 +4,7 @@ export { canonicalDir, createCustomToolRegistry, CUSTOM_TOOL_PREFIX, DEFAULT_CUS
 export type { CustomTool, CustomToolInfo, CustomToolIssue, CustomToolRegistry, CustomToolSource } from "./custom-tools"
 export { compileArgsSchema, SchemaError } from "./json-schema"
 export { runManaged } from "./process"
+export { captureOutput, type CaptureOptions, type Captured } from "./capture-output"
 export { defaultShell, isSignalablePid, killProcessTree, shellArgv, shellFamily, shellSpawnOptions, type ShellFamily } from "./platform-shell"
 export { agentDataDir, agentLimitPrefix, agentProcesses, agentShellEnvironment, agentShellLaunch, ownerCommandRefusal } from "./agent-origin"
 export { applyShellEnvironment, withShellPrefix, type ShellEnvironmentPolicy, type ShellPolicy } from "./shell-policy"

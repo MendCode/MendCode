@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
 import path from "node:path"
 import { z } from "zod"
-import type { PrWatchPort } from "@mendcode/tools"
+import { captureOutput, type PrWatchPort } from "@mendcode/tools"
 import { redactSecrets } from "@mendcode/protocol/wire"
 import { clockMark, elapsed, failureKind, OUTAGE_LIMIT_MS, outageGap, type ClockMark } from "./pr-review/outage"
 
@@ -20,25 +20,9 @@ const GH_TIMEOUT_MS = 15_000
 /** `gh` without a shell. A missing `gh` is a failed result (exit 127), never a throw. */
 export const ghProcess: GhRun = async ({ argv, cwd }) => {
   try {
-    const child = Bun.spawn(["gh", ...argv], { cwd, stdin: "ignore", stdout: "pipe", stderr: "pipe", env: { ...process.env, GH_PROMPT_DISABLED: "1", GH_NO_UPDATE_NOTIFIER: "1", GH_PAGER: "cat", NO_COLOR: "1" } })
-    const timer = setTimeout(() => child.kill(), GH_TIMEOUT_MS)
-    try {
-      const read = async (stream: ReadableStream<Uint8Array>, limit: number) => {
-        const chunks: Uint8Array[] = []
-        let bytes = 0
-        const reader = stream.getReader()
-        while (true) {
-          const part = await reader.read()
-          if (part.done) break
-          bytes += part.value.byteLength
-          if (bytes > limit) { child.kill(); throw new Error("gh output is too large") }
-          chunks.push(part.value)
-        }
-        return Buffer.concat(chunks).toString("utf8").trim()
-      }
-      const [out, err] = await Promise.all([read(child.stdout, OUTPUT_LIMIT), read(child.stderr, 64 * 1024)])
-      return { code: await child.exited, out, err }
-    } finally { clearTimeout(timer) }
+    const result = await captureOutput(["gh", ...argv], { cwd, stderr: "capture", env: { ...process.env, GH_PROMPT_DISABLED: "1", GH_NO_UPDATE_NOTIFIER: "1", GH_PAGER: "cat", NO_COLOR: "1" }, limit: OUTPUT_LIMIT, timeoutMs: GH_TIMEOUT_MS })
+    if (result.truncated) throw new Error("gh output is too large")
+    return { code: result.code, out: result.out.trim(), err: result.err.trim() }
   } catch (error) {
     return { code: 127, out: "", err: error instanceof Error ? error.message : String(error) }
   }
