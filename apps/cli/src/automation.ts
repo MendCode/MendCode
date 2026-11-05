@@ -53,7 +53,7 @@ import { PROGRAM_NAME } from "@mendcode/program"
 
 /** Every JSON line carries this so scripts can pin the contract. */
 export const SCHEMA = "mendcode-next.cli.v1"
-/** `denied` is `session send --wait` only: the turn completed but an approval was denied for lack of --approve and nothing ran after it (run.ts). */
+/** `denied` is retained for compatibility; `session send` now leaves unapproved requests pending. */
 export const EXIT = { ok: 0, failed: 1, stopped: 2, timeout: 3, needsInput: 4, denied: 5, usage: 64 } as const
 
 export const NAMES = ["backlog", "session", "memory", "loop", "workflow", "usage", "storage", "profile", "package", "recipe", "area", "customize", "control-plane", "tui", "help", "stats", "prompt", "context", "status", "doctor", "debug", "generate", "completion", "export", "import", "worktree", "workflows", "packages", "profiles", "marketplace", "runtime", "plugin", "plug", "plugin-auth", "db", "tsm", "github", "pr", "mflow", "console", "share", "login", "logout", "switch", "orgs", "open"] as const
@@ -195,6 +195,7 @@ export const USAGE: Record<string, string> = {
     "  inspect  --limit N --summary",
     "  send     --async | --wait   --mode auto|queue|steer|restart",
     "           --approve | --dangerously-skip-permissions",
+    "           without either flag, approvals stay pending for the terminal owner",
     "           --agent A --model P/M --variant V --effort LEVEL",
     "           --file PATH (repeatable) --command NAME",
     "  wait     --timeout-ms MS --interval-ms MS --idle",
@@ -1525,7 +1526,7 @@ export async function runAutomation(command: Automation, deps: AutomationDeps): 
         return result({ sessionId: task?.taskId ?? command.id, queueId: reply.result.queueId, ...(command.mode ? { steered } : {}), ...(task ? { task } : {}) }, `${steered ? "steered" : "queued"} ${reply.result.queueId}${task ? ` · ${task.taskId}` : ""}\n`)
       }
       const jsonOut = { write: (text: string) => void text.split("\n").filter(Boolean).forEach((entry) => line({ kind: "event", event: JSON.parse(entry) })) }
-      const run = createHeadlessRun({ client: client as Client, sessionId: command.id as SessionId, prompt: text, json: command.json, approve: command.approve, ...(command.skipPermissions ? { skipPermissions: true } : {}), out: command.json ? jsonOut : out, err, submit: () => client.send(submission) })
+      const run = createHeadlessRun({ client: client as Client, sessionId: command.id as SessionId, prompt: text, json: command.json, approve: command.approve, unapproved: "pending", ...(command.skipPermissions ? { skipPermissions: true } : {}), out: command.json ? jsonOut : out, err, submit: () => client.send(submission) })
       let after = 0
       let observedSession = command.id as SessionId
       const consume = (event: SessionEvent) => {

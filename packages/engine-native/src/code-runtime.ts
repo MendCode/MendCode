@@ -3,7 +3,8 @@ import { compileRegExp } from "./code-regex"
 import { CClass, Callable, CDate, CMap, CParams, CSet, CURL, Deferred, Flow, Gen, MAX_ITEMS, Native, Scope, Thrown, UNINITIALIZED, blocked, brands, data, describe, isError, isInstanceOf, isPlain, isRuntime, isWrapper, makeError, markError, object, privates, utf8, type Construction, type PrivateSlot } from "./code-values"
 import { installGlobals, libraryMember } from "./code-library"
 
-export const CODE_LIMITS = { maxCodeBytes: 32_768, maxToolCalls: 16, maxOutputBytes: 24_576, timeoutMs: 30_000, maxValueBytes: 1_048_576, maxOperations: 500_000, maxAllocatedBytes: 8_388_608 } as const
+import { CODE_LIMITS } from "./code-limits"
+export { CODE_LIMITS } from "./code-limits"
 export type CodeLimits = { -readonly [K in keyof typeof CODE_LIMITS]: number }
 export type CodeResult = {
   ok: boolean

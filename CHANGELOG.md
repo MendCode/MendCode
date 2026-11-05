@@ -9,12 +9,33 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+## v0.0.4 - 2026-11-05
+
+Profiles and areas, threads and side chats, turns that resume after a restart, a PR reviewer that describes, scores and
+shows its progress, and a terminal that starts lighter by loading what a session does not use only when it is needed.
+
+### Upgrade notes
+
+- Same code as v0.0.4-beta.2.
+
+## v0.0.4-beta.2 - 2026-11-05
+
+The terminal starts lighter: the parts a session does not use load only when they are needed, so the idle prompt uses less
+memory. `--no-context-files` also leaves out prompt files, and a busy daemon is no longer reported as stopped.
+
 ### Changed
 
+- The terminal loads the web server, GitHub and PR review, engines and providers you do not use, MCP, LSP, loops, Dream and the code graph only when needed, so the idle prompt uses less memory.
+
+- An idle terminal keeps fewer prepared database statements in memory, creating them only when needed.
+- The terminal leaves command-only pages and help text unloaded until needed, keeping the idle prompt lighter without changing the start screen.
+- The terminal loads computer and browser controls and other optional daemon helpers only when needed, keeping the idle prompt lighter.
 - The "What fits you" prompt on a release page sits right under Install, and it updates an older MendCode first with that channel's command.
 
 ### Fixed
 
+- Quota and live documentation no longer report an unresponsive daemon as stopped.
+- `session send` without `--approve` leaves pending tool approvals for the terminal owner instead of silently denying them, including in child sessions.
 - `mendcode --help` says `--no-context-files` leaves instruction files out while skills stay; `--exclude-tools skill` hides them.
 - `--no-context-files` also leaves out `SYSTEM.md` and `APPEND_SYSTEM.md`, including the ones an installed package brings.
 

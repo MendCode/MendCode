@@ -119,6 +119,64 @@ The same run in two processes (daemon + client): 142 / 195 MB, 147 / 243, 148 / 
 
 ## Findings
 
+- Start-up loads less code (2026-11-05). The terminal, which hosts the daemon, evaluated about 5.1 MB of JS source at
+  start, including HTTP/REST, GitHub and PR review, engines and providers a session does not use, MCP, LSP, loops,
+  Dream, the code graph, terminal pages, daemon helpers and all 64 Zod locales. Each now loads on first use (Zod keeps
+  only English through a patched dependency). Compiled build, balanced tier, logged in, one real reply, medians of 3
+  alternating runs (`real.ts`), before → after, with pi on the same runs: RSS at the prompt 135 → 127 MB (pi 133),
+  footprint 69 → 62 MB (pi 82), peak footprint 82 → 73 MB (pi 99), after the reply RSS 146 → 139 MB (pi 140) and
+  footprint 71 → 65 MB (pi 89), disk per session unchanged (2.64 KB; pi 2.86 KB), binary 71.995 → 71.814 MB. CPU of the
+  first turn rose 1.02 → 1.09 s because the deferred modules load during it; the owner accepted that cost.
+
+- The store prepares SQLite statements on first use, not when its modules declare their queries at open
+  (`packages/store/src/private-database.ts`). Used statements stay cached, and privacy-mode connection replacements
+  reprepare them on demand; transactions and synchronous store APIs are unchanged. The regression test
+  `packages/store/test/lazy-statements.test.ts` counts native statement identities: a fresh store fell from 222 to 38,
+  and reopening prepares 32 (Bun 1.3.13, empty store; the test caps either at 45). It also checks reuse, rollback,
+  bound parameters and privacy switches. This defers native allocations, not module evaluation: before/after
+  `bun build --splitting --minify --target=bun --metafile=dist/probe/meta.json --outdir dist/probe/split apps/cli/src/entry.ts`
+  kept the same 1,088 inputs in the static chunk closure of CLI entry, CLI main and hosted daemon main (excluding dynamic
+  feature imports): no files removed, 0 KB deferred, 4,287,052 to 4,287,053 bundled bytes. A split build alone cannot
+  measure the memory saving; these checks do not launch MendCode or establish a live-prompt footprint reduction.
+- The terminal's Help, Models and Environment pages now join the first-use page registry; the Tasks page no longer loads
+  just to format live task usage. Model search also preloads its return page before it can draw. CLI help text stays behind
+  command use: daemon/docs parsing loads only for matching words, TSM parsing after `/tsm`, and transport parsing shares
+  only the small GitHub invocation check rather than its full parser. The start screen, prompt and saved logo fonts remain
+  synchronous. The command catalog stays eager because dispatch and feature gating use it, not just the slash menu.
+  Split-build metadata against `1e37c0fe` shows 5,527,419 → 5,471,647 bytes in the static closure of the solo-terminal roots
+  (55.772 KB less minified code); ten files totaling 102.351 KB of source leave it. This is build-graph evidence, not a
+  measured footprint or first-frame timing improvement; no CLI or daemon was launched. See the
+  [file list, reproduction and checks](../task-evidence/lazy-cli-pages/README.md).
+- The daemon defers native computer and headless browser controls until the first operation, not when a tool port is requested.
+  Concurrent first calls share one control, and shutdown during loading still stops it; an unused control is never loaded just
+  to shut down or forget a session. Extension session/dialog adapters load only for a daemon extension, plugin adapters only
+  for a plugin, and preflight only for an extension file. Git mutations, setup import, database queries and diagnostic snapshots
+  load their command helpers on demand. These boundaries preserve the same permissions and feature switches.
+  Split-build evidence against `1e37c0fe` (Bun 1.3.13), without executing MendCode:
+
+  ```sh
+  bun build --splitting --minify --target=bun --metafile=dist/probe/meta.json --outdir dist/probe/split apps/cli/src/entry.ts
+  ```
+
+  Run before and after, preserving the first metafile as `dist/probe/before.json`. Follow static output imports from the
+  entry, CLI main, daemon main, solo host and terminal modules named by `loadTerminalModules` in CLI main; do not follow
+  optional dynamic imports. `packages/daemon/test/startup-graph.test.ts` checks these same roots and the deferred helpers,
+  including shared chunks. Their JavaScript totals were **5,533,031 → 5,436,773 bytes**, a net **96.258 KB** reduction
+  (decimal KB), including the new lazy wrappers. Files no longer reachable from those roots:
+
+  | Files under `packages/daemon/src/` unless noted | Original source KB |
+  |---|---:|
+  | `computer.ts`, `computer-sessions.ts`, `computer-accessibility.ts`, `computer-program.ts`, `computer-hints.ts`, `computer-app.ts`, `computer-native.ts` | 70.543 |
+  | `browser.ts`, `browser-cdp.ts`, `browser-scripts.ts` | 38.862 |
+  | `extensions/plugin-adapter.ts`, `extensions/plugin-tool.ts`, `extensions/session-api.ts`, `extensions/dialogs.ts` | 21.459 |
+  | `git-commit.ts`, `git-init.ts`, `git-publish.ts`, `git-push.ts`, `git-pr.ts`, `setup-import.ts`, `debug-db.ts`, `diagnostics.ts` | 56.631 |
+  | `packages/extension-api/src/preflight.ts` | 2.458 |
+
+  Total removed TypeScript source: **189.953 KB**. The computer Swift asset's reference also leaves startup; its 86.631 KB
+  of source is **not** counted as evaluated JavaScript. This is build-graph evidence, not a runtime footprint measurement.
+  History/export and provider catalogs retain synchronous consumers; ACP registry names are read by the synchronous model
+  catalog, and usage-reset parsing is also imported by PR review. Those boundaries remain unchanged here, as do other lanes'
+  REST, engine, GitHub/reviewer, workflow, MCP/LSP, loop, dream and code-graph modules.
 - Fixed: streaming re-rendered the whole answer's markdown at every delta, so a frame cost grew with the answer (p95 20 ms at 18 KB). `renderMarkdown` now keeps the rows before the last safe blank line and renders only the tail; p95 is about 4 ms and flat. A differential test (`apps/cli/test/markdown-settled.test.ts`) checks it against the whole renderer on generated documents, chunk by chunk.
 - Fixed, daemon: the protocol's zod schemas. Importing all ~900 of them cost 301k heap objects and 47 MB RSS in the compiled binary (a 33 MB process grew to 81 MB; now 44 MB). Every schema is built the first time something touches it (`packages/protocol/src/lazy.ts`: `lazySchema(() => z.strictObject(...))`, a stand-in that forwards to the real schema, so `parse`, `.extend`, `.shape`, `z.infer` and composition work unchanged). Importing the protocol builds 20 of them; an idle daemon builds about 50 (settings and provider config); each command a client sends builds only its own, because `decodeFrame` and `parseCommand` look the command up in `COMMAND_SCHEMAS` by `type` instead of walking the 370-way union (`Command` itself is still the full union, built for documentation and for the error text of an unknown `type`). Rules: a wrapper schema (`z.lazy`, `.optional()`, `.transform()`, `.pipe()` at the root) is not wrapped, because zod's JSON Schema output finds those by identity; `packages/protocol/test/lazy-schemas.test.ts` converts every export to JSON Schema, compares `decodeFrame` and `parseCommand` with the full schemas, and counts what an import and a command build. All 923 exports produce byte-identical JSON Schema before and after.
 - Fixed, client: the RSS that grows over the first frames was not JS data (the heap stays near 8 MB) but garbage the runtime collects late: a frame builds a few hundred KB of rows, spans and strings, and the process keeps asking the OS for fresh pages until a collection runs (`footprint` on a paused client reported 36 MB physical and 45 MB reclaimable of the 110 MB `ps` showed). The screen now runs a full collection after every 8th drawn frame (`apps/cli/src/ui/memory-governor.ts`; about 2 ms on a 10 to 25 MB heap, 1% of a 60 fps stream); `MENDCODE_GC_FRAMES=N` changes the interval and `0` turns it off. A collection costs time in proportion to the heap, so one that takes more than 4 ms stretches the wait to the next in proportion (a 250 ms collection on a large heap waits 62 intervals); on the shared heap of a `bun test apps/cli` process, two image tests that draw a hundred frames through a real screen went from 1 s to 8 s locally and past the 15 s limit on a CI runner before that. Row encoding no longer allocates an object per cell for ASCII and narrow text (`takeCells`).

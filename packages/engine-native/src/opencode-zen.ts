@@ -1,8 +1,6 @@
 import type { ProviderModel, ProviderType } from "@mendcode/protocol"
-import { createAnthropicProvider } from "./anthropic-messages"
 import { outboundEndpoint } from "./endpoint-policy"
 import { OPENCODE_SESSION_HEADER, withSessionHeader } from "./gateway-presets"
-import { createGeminiProvider } from "./google-gemini"
 import { createChatCompletionsProvider } from "./openai-compatible"
 import { createResponsesProvider } from "./openai-responses"
 import type { ResolvedProvider } from "./provider-factory"
@@ -54,8 +52,8 @@ export function createZenProvider(input: { provider: ResolvedProvider; fetch?: F
         return (request.fetch ?? input.fetch ?? fetch)(url, { ...init, headers, redirect: "error" })
       }
       const common = { id: provider.id, model, baseUrl: provider.baseUrl, apiKey: () => key, ...(provider.headers ? { headers: provider.headers } : {}), fetch: doFetch, idleTimeoutMs: input.idleTimeoutMs ?? (provider.chunkTimeout === false ? 0 : provider.chunkTimeout ?? 60_000), takesImages: () => metadata.images !== false && (!metadata.modalities || metadata.modalities.input.includes("image")) }
-      const adapter = type === "anthropic" ? createAnthropicProvider(common)
-        : type === "google" ? createGeminiProvider(common)
+      const adapter = type === "anthropic" ? (await import("./anthropic-messages")).createAnthropicProvider(common)
+        : type === "google" ? (await import("./google-gemini")).createGeminiProvider(common)
         : type === "openai" ? createResponsesProvider({ ...common, headers: async () => ({ ...provider.headers, authorization: `Bearer ${key}` }), routingHeader: false, hostedTools: [], authHint: "rejected the proxy token; reconnect with /connect opencode" })
         : createChatCompletionsProvider({ ...common, requireKey: true, ...(provider.reasoningStyle ? { reasoningStyle: provider.reasoningStyle } : {}), reasoningLevels: () => catalogEfforts(metadata, provider.reasoningStyle) })
       try { yield* adapter.stream({ ...request, fetch: doFetch }) } catch (error) {

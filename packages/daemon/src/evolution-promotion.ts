@@ -3,7 +3,7 @@ import { linkSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync,
 import path from "node:path"
 import { EvolutionSuggestion, findSecrets, parseEvolutionWorkflow, type EvolutionReceipt } from "@mendcode/protocol"
 import type { Store } from "@mendcode/store"
-import { validatePlan } from "@mendcode/workflows"
+import { validatePlan } from "../../workflows/src/plan"
 
 const hash = (body: string) => createHash("sha256").update(body).digest("hex")
 const sensitive = (body: string) => findSecrets(body).length > 0 || /-----BEGIN|\b(?:password|passwd|secret|api[_-]?key|access[_-]?token|refresh[_-]?token|credential|authorization)\b|\bBearer\s+\S+/i.test(body)

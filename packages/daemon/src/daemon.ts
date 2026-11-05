@@ -14,11 +14,10 @@ import { createSessionSharing } from "./session-sharing"
 import { createMflow } from "./mflow"
 import { createMflowHttp, mflowListenerAddress } from "./mflow-http"
 import { createMflowHooks } from "./mflow-hooks"
-import { commandPromptText } from "@mendcode/mcp"
-import { createProjectRest } from "./project-rest"
+import type { createProjectRest } from "./project-rest"
 import { ProjectRestError } from "./project-git"
 import { createProjectControl, projectSources } from "./project-control"
-import { createGithub, githubLocalOnly, githubProcess, githubToolSummary, type GithubProcess } from "./github"
+import type { GithubProcess } from "./github"
 import { createStaticShare } from "./session-static-share"
 import { sandboxStatus } from "./sandbox-status"
 import { createChannels, type ChannelsOptions } from "./channels"
@@ -27,12 +26,10 @@ import { sessionStatsText } from "./session-stats-text"
 import { createFanout } from "./fanout"
 import { attachPrReference } from "./pr-reference"
 import { createSessionLifecycle, lifecycleOf } from "./session-lifecycle"
-import { ghProcess } from "./pr-watch"
 import { createContinuity } from "./continuity"
 import { createBudgets, type BudgetPort, type BudgetUsage } from "./budgets"
 import { createAuxiliaryUsage, type AuxiliaryComplete, type AuxiliaryUsagePort } from "./usage-auxiliary"
 import { createSetupService } from "./setup"
-import { createAIConfigService, AIConfigError } from "./ai-config"
 import { createReasoningService } from "./reasoning"
 import { createActivityAudio, type AudioPlayer } from "./activity-audio"
 import { createVoice, type VoiceRecorder } from "./voice"
@@ -43,7 +40,6 @@ import { createCacheControl } from "./cache"
 import { createMessageMutations } from "./message-mutations"
 import { createSessionHttpApi, validateSessionHttpListener } from "./session-http"
 import { createDebug } from "./debug"
-import { queryDatabase } from "./debug-db"
 import { createTracing, validateOtlp, type OtlpExporter } from "./tracing"
 import { createMemoryModel } from "./memory-model"
 import { createMemoryControl } from "./memory-control"
@@ -55,12 +51,7 @@ import { createMemoryAssistant } from "./memory-assistant"
 import { createInteractions } from "./interactions"
 import { readFileApi } from "./file-rest"
 import { viewFile } from "./file-view"
-import { GitCommitRefusal, gitCommit } from "./git-commit"
 import { GIT_ACTIONS_OFF, denyingRule } from "./git-actions-policy"
-import { gitPrCreate, gitPrView } from "./git-pr"
-import { gitInit } from "./git-init"
-import { gitPublish } from "./git-publish"
-import { gitPush } from "./git-push"
 import { GitActionRefusal } from "./git-remote"
 import { editFile } from "./file-edit"
 import { FileApiError } from "./file-rest-process"
@@ -74,13 +65,14 @@ import { permissionsStatus } from "./permissions"
 import { readScratchpad, writeScratchpad } from "./scratchpad"
 import { changeBacklog, readBacklog } from "./backlog"
 import { createSessionRecall, SessionRecallError } from "./session-recall"
-import { createComputerControl, type ComputerOptions } from "./computer"
-import { createBrowserControl, type BrowserOptions } from "./browser"
+import type { ComputerOptions } from "./computer"
+import type { BrowserOptions } from "./browser"
+import { createLazyComputerControl, createLazyBrowserControl } from "./lazy-controls"
 import { parseRemoteAddress } from "@mendcode/protocol/wire"
-import { writeDiagnosticsSnapshot } from "./diagnostics"
 import { remoteBackoff, remoteTokens, validateRemoteListener, type RemoteListenerOptions } from "./remote"
 import { isLoopbackHost, isReadOnlyCommand } from "@mendcode/protocol/wire"
-import { createHttpAdapter, httpConfig, type HttpOptions, type HttpPeer } from "./http"
+import type { createHttpAdapter, HttpPeer } from "./http"
+import { httpConfig, type HttpOptions } from "./http-config"
 import { createPtyService, PtyError } from "./pty"
 import type { PtyDriver } from "./pty-native"
 import { createWorkspaces } from "./workspaces"
@@ -103,7 +95,7 @@ import { composePromptParts, createPromptModes, promptBuildReport } from "./prom
 import { promptFilesFor } from "./prompt-context"
 import { createUiReload, type UiReloadReport } from "./customize-ui"
 import { NotGitError, readChanges } from "./changes"
-import { expandCommand, loadCustomCommands as loadCommandFiles, mcpCommands, mcpCatalogCommands, skillCommandText } from "./custom-commands"
+import type { loadCustomCommands as loadCommandFiles } from "./custom-commands"
 import { fileClaims } from "./precedence"
 import { createSelfPackages } from "./self-packages"
 import { createCommandExecution } from "./command-execution"
@@ -148,8 +140,9 @@ import { createSessionAutomation } from "./session-automation"
 import { readContextWindow, windowOverride } from "./session-context-window"
 import { sessionContextWindow } from "./model-context-window"
 import { createMentionRouting, expandAgentMentions, leadingMention } from "./agent-mentions"
-import { createRestSessions } from "./session-rest"
-import { createRestMutations } from "./session-rest-mutate"
+import type { createRestSessions } from "./session-rest"
+import type { createRestMutations } from "./session-rest-mutate"
+import { readRestArchives } from "./session-rest-archives"
 import { createServerControl, processMemory } from "./server-control"
 import { createServerConfigExtras } from "./server-config-extras"
 import { createSessionHistory } from "./session-history"
@@ -163,14 +156,12 @@ import type { ContextReport } from "@mendcode/protocol"
 const HARNESS_CONTEXT_CHARS = 4_000_000
 import { createSessionTransfer } from "./session-transfer"
 import { createForeignThreads } from "./thread-foreign"
-import { createSetupImport } from "./setup-import"
 import { createTurnSnapshots, withTurnSnapshots } from "./turn-snapshots"
 import { activeRecipe, readRecipes } from "./recipes"
-import { createCompoundHost } from "./compound"
+import type { createCompoundHost } from "./compound"
 import type { CompoundCall } from "@mendcode/engine-native"
 import { catalogChoice, catalogConfig, catalogPresets } from "./catalog-control"
 import { createProviderAuth, type ProviderAuthService } from "./provider-auth"
-import { createCatalogRest, CatalogRestError } from "./catalog-rest"
 import { addMcpConfig, decideMcpConfig, pendingMcpServers } from "./mcp-config"
 import { builtinDir } from "./builtin"
 import { installPlugin } from "./extensions/plugin-install"
@@ -239,17 +230,19 @@ import {
   type SessionEventDraft,
 } from "@mendcode/kernel"
 import { openStore, type Store } from "@mendcode/store"
-import { checkProblems, createLoopService, createProblems, describeTemplate, foldRunNotices, loopUpdateInput, LOOP_TEMPLATES, runNotice, type CreateLoopInput } from "@mendcode/loops"
-import { createLoopControl } from "./loop-control"
+import type { CreateLoopInput } from "@mendcode/loops"
+import { createLazyLoops } from "./lazy-loops"
 import { runLoopCheck, workspaceFingerprint } from "./loop-checks"
 import { createLoopPort } from "./loop-port"
 import { LOOP_INTERPRET_SYSTEM, LOOP_INTERPRET_TIMEOUT_MS, loopInterpretRequest, readInterpretation } from "./loop-interpret"
 import { createWorktreePort } from "./worktree-port"
-import { createPrWatch, type GhRun } from "./pr-watch"
-import { createReviewSessions, REVIEW_AGENT, REVIEW_EXCLUDED_TOOLS, reviewMessage } from "./pr-review/sessions"
-import { createPrReviewPort } from "./pr-review-tool"
+import type { GhRun } from "./pr-watch"
+import { lazyPrWatch } from "./lazy-pr-watch"
+import { hasSavedPrWork } from "./saved-pr-work"
+import { lazyReviewSessions } from "./lazy-review-sessions"
+import { lazyPrReviewPort } from "./lazy-pr-review-port"
 import { createGitWorktrees, isGitCheckout } from "./loop-worktree"
-import { createWorkflowsHost } from "./workflows"
+import { lazyWorkflows } from "./lazy-workflows"
 import { createWorkflowRouter } from "./workflow-routing"
 import { createWorkflowMerge, workflowWorktreeHeld } from "./workflow-merge"
 import { createTaskWorktrees } from "./task-worktree"
@@ -272,7 +265,7 @@ import { RECAP_SYSTEM, RECAP_TIMEOUT_MS, recapPrompt, recapText } from "./recap"
 import { readSidebar, sidebarScope, updateSidebar } from "./sidebar"
 import { systemReport } from "./system-report"
 import { recentContext } from "./recent-context"
-import { acpAgentKey } from "@mendcode/engine-acp"
+import { acpAgentKey } from "../../engine-acp/src/agents"
 import { contextLimits, modelCompactAt } from "./context-limits"
 import { createIdleCompaction } from "./idle-compaction"
 import { queryFiles } from "./files-query"
@@ -574,13 +567,18 @@ export async function startDaemon(options: DaemonOptions) {
   const storeWarnings: string[] = []
   let warnStore = (message: string) => { storeWarnings.push(message) }
   const store = openStore({ dir: options.dir, now: () => clock.now(), warn: (message) => warnStore(message) })
+  // Saved loops need recovery at launch. Finish their import before arming any startup timers;
+  // an empty store leaves the scheduler module unevaluated until a loop is used.
+  const configuredLoops = store.loops.all().length ? await import("@mendcode/loops") : undefined
   // Instruction URLs in the user's settings are downloaded ahead, so the first prompt already has them (remote-instructions.ts).
   void remoteInstructions(options.dir).prefetch(store.settings.get().instructions ?? [])
   if (options.models) options = { ...options, models: filteredCatalog(options.models, () => store.settings.get()) }
   const worktrees = createWorktreeManager({ dir: options.dir, sessions: (directory) => store.listSessions({ directory, limit: 100 }).map((session) => session.sessionId), focus: (directory) => promptModes.status(directory).focusID })
   const evolutionPromotions = createEvolutionPromotions({ store, dir: options.dir, now: () => clock.now() })
   const tsm = createTsmManager({ dir: options.dir, worktrees })
-  const github = createGithub(options.githubProcess ? { process: options.githubProcess } : {})
+  let github: ReturnType<typeof import("./github").createGithub> | undefined
+  const githubProcess: GithubProcess = async (input) => (await import("./github")).githubProcess(input)
+  const ghProcess: GhRun = async (input) => (await import("./pr-watch")).ghProcess(input)
   const ids = createIdFactory({ now: () => clock.now() })
   const registry = createResourceRegistry()
   const root = createScope({ name: "mendd", clock, registry })
@@ -1084,29 +1082,30 @@ export async function startDaemon(options: DaemonOptions) {
    * What ships with MendCode itself (the `builtin` profile's skills) stays out of the slash menu: the model and `/skills` reach it, the menu keeps its fixed built-in list.
    */
   const slashSkills = (directory: string) => skills.list(directory).filter((skill) => skill.pkg !== BUILTIN_PACKAGE && skills.enabled(directory, skill.name))
-  const loadCustomCommands = (input: Parameters<typeof loadCommandFiles>[0]) => loadCommandFiles({ ...input, skills: slashSkills(input.directory) })
+  const loadCustomCommands = async (input: Parameters<typeof loadCommandFiles>[0]) => (await import("./custom-commands")).loadCustomCommands({ ...input, skills: slashSkills(input.directory) })
   /**
    * What `/doctor` prints about skills, commands and agents: names another layer overrides, entries a cap left out, fields
    * no loader reads, fields read but not applied, and files that failed. One line per finding, in the same words everywhere.
    */
   const resourceChecks = async (directory: string): Promise<Array<{ name: string; ok: boolean; detail: string }>> => {
     const commandReport = emptyDiagnostics()
-    await loadCommandFiles({ directory, userDir: options.dir, layers: resourceLayersFor(directory), skills: slashSkills(directory), report: commandReport })
+    await (await import("./custom-commands")).loadCustomCommands({ directory, userDir: options.dir, layers: resourceLayersFor(directory), skills: slashSkills(directory), report: commandReport })
     const agentReport = agents.report({ directory })
     const agentFindings: ResourceDiagnostics = { ...emptyDiagnostics(), overridden: agentReport.overridden ?? [], problems: agentReport.problems }
     const all: Array<[string, ResourceDiagnostics]> = [["skills", skills.inspect(directory).diagnostics], ["commands", commandReport], ["agents", agentFindings]]
     return all.flatMap(([kind, diagnostics]) => diagnosticLines(diagnostics, 12).map((detail) => ({ name: `${kind} resources`, ok: diagnostics.problems.length === 0 && diagnostics.dropped.length === 0, detail })))
   }
   /** `/name args` of a skill: the skill's text goes in as an argument so shell markers inside it stay inert. */
-  const skillInvocation = (directory: string, command: { name: string; skill?: boolean | undefined }, args: string) => {
+  const skillInvocation = async (directory: string, command: { name: string; skill?: boolean | undefined }, args: string) => {
     const loaded = command.skill ? skills.load(directory, command.name, { user: true }) : undefined
     if (command.skill && !loaded) throw new Error(`skill ${command.name} is not available`)
-    return loaded ? skillCommandText({ dir: loaded.skill.dir, body: loaded.body }, args) : undefined
+    return loaded ? (await import("./custom-commands")).skillCommandText({ dir: loaded.skill.dir, body: loaded.body }, args) : undefined
   }
   const catalog = options.models ?? { selectable: false, list: () => [], defaults: { model: options.info?.model ?? "engine default" } }
   const modelResolutions = createModelResolutions(options.dir)
   const providerAuth =options.providerAuth ?? createProviderAuth({ dir: options.dir, providers: options.providers })
-  const aiConfig = createAIConfigService({ dir: options.dir, catalog, resolve: modelResolutions.apply, settings: () => store.settings.get(), engine: options.info?.engine ?? "unknown", sessionDirectory: (sessionId) => store.sessionDirectory(sessionId), now: () => clock.now(), safeMode: options.safeMode === true, ...(options.providers ? { providers: () => options.providers!.list(true) } : {}) })
+  let aiConfig: Promise<ReturnType<typeof import("./ai-config").createAIConfigService>> | undefined
+  const getAIConfig = () => (aiConfig ??= import("./ai-config").then(({ createAIConfigService }) => createAIConfigService({ dir: options.dir, catalog, resolve: modelResolutions.apply, settings: () => store.settings.get(), engine: options.info?.engine ?? "unknown", sessionDirectory: (sessionId) => store.sessionDirectory(sessionId), now: () => clock.now(), safeMode: options.safeMode === true, ...(options.providers ? { providers: () => options.providers!.list(true) } : {}) })))
   const budgets = createBudgets({ dir: options.dir, settings: () => store.settings.get(), seed: () => store.usageDaily({ from: "0000-01-01", to: "9999-12-31" }).reduce((sum, row) => ({ costMicros: sum.costMicros + row.costMicros, knownCalls: sum.knownCalls + row.calls - row.costUnknownCalls, unknownCalls: sum.unknownCalls + row.costUnknownCalls }), { costMicros: 0, knownCalls: 0, unknownCalls: 0 }) })
   let petGenerator: ReturnType<typeof import("./pet-generator").createPetGenerator> | undefined
   const reasoning = createReasoningService({ safeMode: options.safeMode === true, dir: options.dir, store, catalog, engine: options.info?.engine ?? "unknown", budget: budgets, ...(options.reasoningEvaluator ? { evaluator: options.reasoningEvaluator } : {}) })
@@ -1241,8 +1240,8 @@ export async function startDaemon(options: DaemonOptions) {
     failed: (parentId, task, message) => void actorFor(parentId)?.notify(secrets.mask(parentId, `A message for @${task.agent} (task ${task.taskId}) could not be sent when it finished: ${message}`)),
   })
   const recall = createSessionRecall(store)
-  const computer = createComputerControl(store, options.dir, { ...options.computer, enabled: computerOn })
-  const browser = createBrowserControl({ ...options.browser, hasSession: (sessionId) => store.hasSession(sessionId as SessionId) })
+  const computer = createLazyComputerControl(store, options.dir, { ...options.computer, enabled: computerOn })
+  const browser = createLazyBrowserControl({ ...options.browser, hasSession: (sessionId) => store.hasSession(sessionId as SessionId) })
 
   /** Inline shell of custom commands: held here, run by the engine as `shell` tool calls of the turn (docs/commands.md). */
   const inlineShells = createInlineShellTable()
@@ -1253,7 +1252,7 @@ export async function startDaemon(options: DaemonOptions) {
     prompt: async (input) => {
       if (!options.mcp?.getPrompt && !options.mcp?.getPromptResult) throw new Error("MCP prompts are unavailable")
       const result = await (options.mcp.getPromptResult?.(input) ?? options.mcp.getPrompt!(input))
-      return typeof result === "string" ? result : commandPromptText(result)
+      return typeof result === "string" ? result : (await import("../../mcp/src/prompts")).promptText(result)
     },
   })
   const continuity = createContinuity({ store, now: () => clock.now(), requestId: () => ids("request"), emit: (event) => void sessionSink.append(event), mask: (sessionId, text) => secrets.mask(sessionId, text), notify: async (record, text) => actorFor(record.sessionId)?.notify(text) })
@@ -1320,7 +1319,7 @@ export async function startDaemon(options: DaemonOptions) {
     prWatch: (sessionId) => prWatch.port(sessionId),
     // `pr_review`: the session's `/pr review` and the reviewer's jobs, through the service's own control (built on first use). Like
     // `pr.review` it runs gh on this machine, so a session restricted to local tools is refused.
-    prReview: (sessionId) => createPrReviewPort({
+    prReview: (sessionId) => lazyPrReviewPort({
       sessionId,
       directory: () => store.sessionInfo(sessionId)?.directory,
       control: async (input) => store.meta.get(`session.local-tools.restricted:${sessionId}`) === "true" ? { ok: false, message: "the PR reviewer runs gh on this machine and is local only" }
@@ -1329,7 +1328,7 @@ export async function startDaemon(options: DaemonOptions) {
     }),
     // Built below with the goal service; the goal tools only call this during turns.
     goals: (sessionId) => goals.port(sessionId),
-    aiConfig: (sessionId) => aiConfig.port(sessionId),
+    aiConfig: (sessionId) => ({ run: async (input) => (await getAIConfig()).port(sessionId).run(input) }),
     inlineShell: (text) => inlineShells.find(text),
     emitGlobal: (event) => void globalSink.append(event),
     memory: {
@@ -1413,6 +1412,7 @@ export async function startDaemon(options: DaemonOptions) {
       const unread = !turn.authority?.synthetic ? loopNotes.get(turn.sessionId) : undefined
       if (unread?.size) {
         loopNotes.delete(turn.sessionId)
+        const { foldRunNotices } = await import("@mendcode/loops")
         turn = { ...turn, text: `${foldRunNotices([...unread.values()])}\n\n${turn.text}` }
       }
       // A system continuation must not acquire tools its paused peer turn could not call, including after restart.
@@ -1604,9 +1604,11 @@ export async function startDaemon(options: DaemonOptions) {
     }
     return report
   }
-  const catalogRest = createCatalogRest({
+  let catalogRest: Promise<ReturnType<typeof import("./catalog-rest").createCatalogRest>> | undefined
+  const getCatalogRest = () => (catalogRest ??= import("./catalog-rest").then(({ createCatalogRest }) => createCatalogRest({
     providers: options.providers, auth: providerAuth, extensions, catalog, engine, mcp: options.mcp, lsp: options.lsp,
     commands: async (directory) => {
+      const { mcpCommands, mcpCatalogCommands } = await import("./custom-commands")
       const commands = await loadCustomCommands({ directory, userDir: options.dir, layers: resourceLayersFor(directory), prompts: mcpCommands(options.mcp?.cachedPrompts?.(directory) ?? []), extra: await extensions.commandEntries(directory) })
       const prompts = (await options.mcp?.catalog?.(directory))?.prompts ?? []
       const seen = new Set(commands.map((command) => command.name))
@@ -1617,7 +1619,7 @@ export async function startDaemon(options: DaemonOptions) {
       return commands.map(({ body, mcp: _mcp, ...summary }) => ({ ...summary, template: body }))
     },
     changed: (directory, server) => { if (!stopped) globalSink.append({ type: "mcp.changed", directory, server }) },
-  })
+  })))
   extraction.wake()
   const metadata = createSessionMetadata({ store, complete: options.info?.engine === "native" ? completeBudgeted : undefined, settings: () => store.settings.get(), agent: (id, role) => agents.auxiliary(store.sessionDirectory(id)!, role), model: (id, role) => resolveModel({ role, session: store.sessionModel(id), roles: rolesFor(store.settings.get(), store.sessionDirectory(id)), catalog }), changed: (id) => publishActivity(id, actors.get(id)?.snapshot().foreground ?? "idle", true) })
   let wakeSettledPrune: (() => void) | undefined
@@ -1787,7 +1789,6 @@ export async function startDaemon(options: DaemonOptions) {
 
   /** Undo, redo, fork points, timeline and export. Busy means a turn is running or still finishing: its history must not be rewritten under it. */
   const transfers = createSessionTransfer({ store, ids })
-  const setupImport = createSetupImport({ dir: options.dir })
   const history = createSessionHistory({
     store,
     snapshots,
@@ -2055,7 +2056,7 @@ export async function startDaemon(options: DaemonOptions) {
 
   async function cleanWorktrees(input: { dryRun?: boolean; worktreeIdleDays?: number; artifacts?: boolean; external?: boolean; signal?: AbortSignal }) {
     const capBytes = worktreeCapBytes(store.settings.get().worktreeCapGb)
-    const worktrees = await projectRestService().storage.clean({
+    const worktrees = await (await projectRestService()).storage.clean({
       ...(input.worktreeIdleDays === undefined ? {} : { idleDays: input.worktreeIdleDays }),
       ...(input.dryRun ? { dryRun: true } : {}),
       ...(input.artifacts ? { artifacts: true } : {}),
@@ -2398,58 +2399,64 @@ export async function startDaemon(options: DaemonOptions) {
    * interrupted run is closed as interrupted.
    */
   const loopClientId = ids("client")
-  const loops = createLoopService({
-    store: store.loops,
-    clock,
-    ids,
-    createSession: ({ directory, title, readOnly, permission }) => {
-      const id = ids("session")
-      store.createSession({ id, directory, title })
-      store.meta.set(`session.title.manual:${id}`, "true")
-      announceSession(id, directory)
-      const actor = actorFor(id)
-      // The mailbox keeps order: plan mode is set before the audit prompt that follows is handled.
-      // A loop's own session has the mode it inherited from its creator, else the user's default for new sessions.
-      const mode = readOnly ? "plan" : permission ?? defaultPermissionFor(store.settings.get(), directory)
-      if (mode && mode !== "ask") void actor?.handle({ id: ids("command"), clientId: loopClientId, type: "session.permission.set", sessionId: id, mode })
-      return id
-    },
-    runCheck: runLoopCheck,
-    fingerprint: workspaceFingerprint,
-    // Worktree loops: each run gets its own git worktree under the data dir, never inside the user's checkout.
-    worktree: createGitWorktrees({ root: path.join(options.dir, "loop-worktrees") }),
-    submit: async ({ sessionId, text }) => {
-      const actor = actorFor(sessionId)
-      if (!actor) return { error: "loop session no longer exists" }
-      const swapped = captured(sessionId, text)
-      if ("ok" in swapped) return { error: swapped.message }
-      const result = await actor.handle({ id: ids("command"), clientId: loopClientId, type: "user.submit", sessionId, text: swapped.text, attachments: [] })
-      return result.ok ? { queueId: result.result?.queueId as QueueId } : { error: result.message }
-    },
-    // A hung auditor is cancelled by its exact turn (explicit target, FC-09/10).
-    cancelTurn: ({ sessionId, turnId }) => actorFor(sessionId)?.handle({ id: ids("command"), clientId: loopClientId, type: "turn.cancel", sessionId, turnId }),
-    onChange: (loop) => void globalSink.append({ type: "loop.changed", loop }),
-    // One short notice per run in the session that created the loop: one card per loop in the transcript (a `session.orchestration` event, replaced while unread), no turn and no model call; the model reads it with the user's next message.
-    notify: ({ loop, run }) => {
-      const creator = loop.creatorSessionId
-      if (!creator || !store.hasSession(creator)) return
-      const text = secrets.mask(creator, runNotice(loop, run))
-      const waiting = loopNotes.get(creator) ?? new Map<string, LoopNote>()
-      const earlier = waiting.get(loop.loopId)
-      const runs = (earlier?.runs ?? 0) + 1
-      // One card per loop in the transcript (keyed by the loop); a notice nobody read yet is replaced, not stacked.
-      const card = sessionSink.append({ type: "session.orchestration", sessionId: creator, groupId: `loop:${loop.loopId}`.slice(0, 64), text: runs > 1 ? `${text} · ${runs} runs` : text })
-      if (earlier) store.dropSupersededCard(creator, earlier.seq)
-      waiting.set(loop.loopId, { text, runs, seq: card.seq })
-      for (const oldest of [...waiting.keys()].slice(0, Math.max(0, waiting.size - LOOP_NOTES_MAX))) waiting.delete(oldest)
-      loopNotes.set(creator, waiting)
-    },
-  })
+  const lazyLoops = createLazyLoops(async () => {
+    const { createLoopService, runNotice } = configuredLoops ?? await import("@mendcode/loops")
+    const service = createLoopService({
+      store: store.loops,
+      clock,
+      ids,
+      createSession: ({ directory, title, readOnly, permission }) => {
+        const id = ids("session")
+        store.createSession({ id, directory, title })
+        store.meta.set(`session.title.manual:${id}`, "true")
+        announceSession(id, directory)
+        const actor = actorFor(id)
+        // The mailbox keeps order: plan mode is set before the audit prompt that follows is handled.
+        // A loop's own session has the mode it inherited from its creator, else the user's default for new sessions.
+        const mode = readOnly ? "plan" : permission ?? defaultPermissionFor(store.settings.get(), directory)
+        if (mode && mode !== "ask") void actor?.handle({ id: ids("command"), clientId: loopClientId, type: "session.permission.set", sessionId: id, mode })
+        return id
+      },
+      runCheck: runLoopCheck,
+      fingerprint: workspaceFingerprint,
+      // Worktree loops: each run gets its own git worktree under the data dir, never inside the user's checkout.
+      worktree: createGitWorktrees({ root: path.join(options.dir, "loop-worktrees") }),
+      submit: async ({ sessionId, text }) => {
+        const actor = actorFor(sessionId)
+        if (!actor) return { error: "loop session no longer exists" }
+        const swapped = captured(sessionId, text)
+        if ("ok" in swapped) return { error: swapped.message }
+        const result = await actor.handle({ id: ids("command"), clientId: loopClientId, type: "user.submit", sessionId, text: swapped.text, attachments: [] })
+        return result.ok ? { queueId: result.result?.queueId as QueueId } : { error: result.message }
+      },
+      // A hung auditor is cancelled by its exact turn (explicit target, FC-09/10).
+      cancelTurn: ({ sessionId, turnId }) => actorFor(sessionId)?.handle({ id: ids("command"), clientId: loopClientId, type: "turn.cancel", sessionId, turnId }),
+      onChange: (loop) => void globalSink.append({ type: "loop.changed", loop }),
+      // One short notice per run in the session that created the loop: one card per loop in the transcript (a `session.orchestration` event, replaced while unread), no turn and no model call; the model reads it with the user's next message.
+      notify: ({ loop, run }) => {
+        const creator = loop.creatorSessionId
+        if (!creator || !store.hasSession(creator)) return
+        const text = secrets.mask(creator, runNotice(loop, run))
+        const waiting = loopNotes.get(creator) ?? new Map<string, LoopNote>()
+        const earlier = waiting.get(loop.loopId)
+        const runs = (earlier?.runs ?? 0) + 1
+        // One card per loop in the transcript (keyed by the loop); a notice nobody read yet is replaced, not stacked.
+        const card = sessionSink.append({ type: "session.orchestration", sessionId: creator, groupId: `loop:${loop.loopId}`.slice(0, 64), text: runs > 1 ? `${text} · ${runs} runs` : text })
+        if (earlier) store.dropSupersededCard(creator, earlier.seq)
+        waiting.set(loop.loopId, { text, runs, seq: card.seq })
+        for (const oldest of [...waiting.keys()].slice(0, Math.max(0, waiting.size - LOOP_NOTES_MAX))) waiting.delete(oldest)
+        loopNotes.set(creator, waiting)
+      },
+    })
+    return service
+  }, !options.dev)
+  const loops = lazyLoops.service
   sessionObservers.push(loops.observe)
-  if (!options.dev) loops.start()
+  if (configuredLoops) await lazyLoops.load()
 
   /** Creates and edits share the input checks and the worktree's git checkout requirement. */
   async function loopProblem(input: CreateLoopInput): Promise<string | undefined> {
+    const { checkProblems, createProblems } = await import("@mendcode/loops")
     const problems = [...checkProblems(input.checks ?? []), ...(createProblems(input) ? [createProblems(input)!] : [])]
     if (problems.length) return problems[0]!
     if (input.workspace === "worktree" && !(await isGitCheckout(input.directory))) return `${input.directory} is not a git checkout, so its runs cannot use worktrees`
@@ -2462,7 +2469,7 @@ export async function startDaemon(options: DaemonOptions) {
     // The loop starts with its creator's permission mode and never has more than it: a creator in full access makes a full-access loop.
     const creatorMode = input.creatorSessionId && store.hasSession(input.creatorSessionId) ? livePermission(input.creatorSessionId) : undefined
     const permission = creatorMode ? capPermission(input.permission ?? creatorMode, creatorMode) : input.permission
-    return { ok: true, loop: loops.create({ ...input, ...(permission ? { permission } : {}) }) }
+    return { ok: true, loop: (await lazyLoops.load()).create({ ...input, ...(permission ? { permission } : {}) }) }
   }
 
   /** What a loop's session may read without asking: anything when its creator is in full access, else the creator's extra directories and external-directory grants, plus the paths declared at creation. */
@@ -2482,7 +2489,7 @@ export async function startDaemon(options: DaemonOptions) {
   const workflowClientId = ids("client")
   const workflowRouter = createWorkflowRouter({ dir: options.dir, catalog, crossEngine: () => options.safeMode ? "cross-engine agents are off in safe mode" : store.settings.get().tier !== "full" || !featureOn(store.settings.get(), "subagents") ? "an agent on another engine needs the full tier" : undefined, roles: (directory) => rolesFor(store.settings.get(), directory), sessionModel: (run) => run.originSessionId ? store.sessionModel(run.originSessionId) : undefined, agent: (directory, name) => agents.port().subagents(directory).find((agent) => agent.name === name) })
   const automationLedger = createAutomationLedgerHost(store)
-  const workflows = createWorkflowsHost({
+  const workflows = lazyWorkflows({
     store: store.workflows,
     definitions: store.workflowDefinitions,
     clock,
@@ -2596,7 +2603,8 @@ export async function startDaemon(options: DaemonOptions) {
   }
 
   const compoundClientId = ids("client")
-  const compound = createCompoundHost({
+  let compound: Promise<ReturnType<typeof createCompoundHost>> | undefined
+  const getCompound = () => (compound ??= import("./compound").then(({ createCompoundHost }) => createCompoundHost({
     ...options.compoundHost,
     dir: options.dir, catalog, supported: options.info?.engine === "native",
     roles: (directory) => rolesFor(store.settings.get(), directory),
@@ -2646,7 +2654,7 @@ export async function startDaemon(options: DaemonOptions) {
         compoundCalls.delete(sessionId)
       }
     },
-  })
+  })))
 
   /** Child tasks of a session and, recursively, theirs that still run (bounded: a stop never walks an unbounded tree). */
   function activeDescendants(sessionId: SessionId): SessionId[] {
@@ -2832,7 +2840,7 @@ export async function startDaemon(options: DaemonOptions) {
   })
 
   /** Linked pull requests polled through `gh`; wakes a session only on a change (docs/pr-watch.md). Off unless `experimental.pr_watch` is on. */
-  const prWatch = createPrWatch({
+  const prWatch = await lazyPrWatch({
     dir: options.dir,
     ...(options.prWatch?.run ? { run: options.prWatch.run } : {}),
     ...(options.prWatch?.intervalMs ? { intervalMs: options.prWatch.intervalMs } : {}),
@@ -2847,7 +2855,7 @@ export async function startDaemon(options: DaemonOptions) {
   /** The PR reviewer (docs/pr-review.md): needs the tier's permit and `experimental.pr_review`; nothing loads until a watch exists or `/pr review` runs. */
   // A development daemon reviews on request (`/pr review`, the tool); only the watch is off there.
   const prReviewOn = () => featureOn(store.settings.get(), "pr_review", { safeMode: options.safeMode }) && effectiveSettings(store.settings.get(), { safeMode: options.safeMode }).experimental?.pr_review === true
-  const reviewSessions = createReviewSessions({
+  const reviewSessions = lazyReviewSessions(({ createReviewSessions, REVIEW_AGENT, REVIEW_EXCLUDED_TOOLS, reviewMessage }) => createReviewSessions({
     create({ owner, directory, title, model: chosen, editing, language }) {
       const id = ids("session")
       const parent = owner && store.hasSession(owner as SessionId) ? owner as SessionId : undefined
@@ -2883,7 +2891,7 @@ export async function startDaemon(options: DaemonOptions) {
       const attempt = () => { if (!stopped && removeSession(id) === "busy" && ++tries < 50) setTimeout(attempt, 100).unref?.() }
       setTimeout(attempt, 0).unref?.()
     },
-  })
+  }))
   sessionObservers.push(reviewSessions.observe)
   /**
    * The memory a review may use (R05, pr-review/review-memory.ts), chosen by the reviewer's scope: the global reviewer reads only
@@ -2986,7 +2994,7 @@ export async function startDaemon(options: DaemonOptions) {
     return prReview
   }
   // jobs.json too: a queued `/pr review` or audit with no watch is recovered after a restart.
-  if (["watches.json", "outbox.json", "jobs.json"].some((file) => existsSync(path.join(options.dir, "pr-review", file)))) void prReviewService()
+  if (([ ["watches.json", "watches"], ["outbox.json", "sessions"], ["jobs.json", "jobs"] ] as const).some(([file, key]) => hasSavedPrWork(path.join(options.dir, "pr-review", file), key))) void prReviewService()
   /**
    * The PR reviewer's standing work (`keepAliveReport`): a watch that has not ended (paused ones retry by themselves), notices held for
    * a session, and jobs this daemon still runs later (queued, waiting for a time, a claim or a slot, or checkpointed until a quota
@@ -3298,11 +3306,13 @@ export async function startDaemon(options: DaemonOptions) {
   }
   /** The `worktree` tool's view of one session: creating, entering and leaving a git worktree workspace. */
   function worktreePort(sessionId: SessionId) {
-    const service = projectRestService()
-    return createWorktreePort({ sessionId, store, dataDir: options.dir, settings: () => store.settings.get(), host: { run: (directory, request, signal) => service.run(directory, request, signal), warpInTurn: (input) => service.warpInTurn(input) } })
+    return createWorktreePort({ sessionId, store, dataDir: options.dir, settings: () => store.settings.get(), host: { run: async (directory, request, signal) => (await projectRestService()).run(directory, request, signal), warpInTurn: async (input) => (await projectRestService()).warpInTurn(input) } })
   }
   let projectRest: ReturnType<typeof createProjectRest> | undefined
-  function projectRestService() {
+  async function projectRestService() {
+    if (projectRest) return projectRest
+    const { createProjectRest } = await import("./project-rest")
+    // Check after the import so concurrent first requests share one service.
     return projectRest ??= createProjectRest({
       dir: options.dir, defaultDirectory: options.defaultDirectory ?? process.cwd(), store, workspaces: workspaceCatalog, manager: worktrees,
       occupied: (directory) => store.listSessions({ directory, roots: false, archived: true, limit: 1 }).length > 0 || loops.list(directory).length > 0 || store.workflows.all().some((run) => run.directory === directory || workflowWorktreeHeld({ dir: options.dir, run, directory })),
@@ -3432,17 +3442,27 @@ export async function startDaemon(options: DaemonOptions) {
   }
 
   const sessionAutomation = createSessionAutomation({ store, foreground: (id) => actors.get(id)?.snapshot().foreground, loops: () => loops.list(), tasks: (id) => tasks.list(id) })
-  const loopControl = createLoopControl({ service: loops, create: createLoop, now: clock.now, children: (id) => tasks.list(id).map((task) => ({ sessionId: task.taskId, title: task.description, state: task.state })) })
-  const restSessions = createRestSessions({ dir: options.dir, store, permissions: sessionPermissions, now: () => clock.now(), detail: sessionAutomation.detail, actor: actorFor, mask: (id, text) => secrets.mask(id, text),
-  changes: (id, itemId) => { const outcome = history.changes({ sessionId: id, ...(itemId ? { atItemId: itemId } : {}) }); return outcome.ok ? outcome.result : undefined },
-  model: (id) => {
-    if (!options.models?.selectable) return undefined
-    const choice = resolveModel({ role: "main", session: store.sessionModel(id), roles: rolesFor(store.settings.get(), store.sessionDirectory(id)), catalog: options.models })
-    const info = catalogModel(options.models, choice.model)
-    if (!info) return undefined
-    return { providerID: info.provider ?? "openai", modelID: info.provider && choice.model.startsWith(`${info.provider}:`) ? choice.model.slice(info.provider.length + 1) : choice.model, ...(choice.variant ? { variant: choice.variant } : {}) }
-  } })
-  sessionObservers.push(restSessions.observe)
+  const loopControl = async (command: Parameters<ReturnType<typeof import("./loop-control").createLoopControl>>[0]) => {
+    const { createLoopControl } = await import("./loop-control")
+    return createLoopControl({ service: await lazyLoops.load(), create: createLoop, now: clock.now, children: (id) => tasks.list(id).map((task) => ({ sessionId: task.taskId, title: task.description, state: task.state })) })(command)
+  }
+  const restArchives = readRestArchives(options.dir)
+  let restSessions: ReturnType<typeof createRestSessions> | undefined
+  async function restSessionService() {
+    if (restSessions) return restSessions
+    const { createRestSessions } = await import("./session-rest")
+    return restSessions ??= createRestSessions({ dir: options.dir, archives: restArchives, store, permissions: sessionPermissions, now: () => clock.now(), detail: sessionAutomation.detail, actor: actorFor, mask: (id, text) => secrets.mask(id, text),
+      changes: (id, itemId) => { const outcome = history.changes({ sessionId: id, ...(itemId ? { atItemId: itemId } : {}) }); return outcome.ok ? outcome.result : undefined },
+      model: (id) => {
+        if (!options.models?.selectable) return undefined
+        const choice = resolveModel({ role: "main", session: store.sessionModel(id), roles: rolesFor(store.settings.get(), store.sessionDirectory(id)), catalog: options.models })
+        const info = catalogModel(options.models, choice.model)
+        if (!info) return undefined
+        return { providerID: info.provider ?? "openai", modelID: info.provider && choice.model.startsWith(`${info.provider}:`) ? choice.model.slice(info.provider.length + 1) : choice.model, ...(choice.variant ? { variant: choice.variant } : {}) }
+      },
+    })
+  }
+  sessionObservers.push(() => restSessions?.observe())
 
   /** The harness that keeps this session's request itself (Claude Code, Codex), by the model it runs on; undefined for the daemon's own engine. */
   function harnessOf(sessionId: SessionId): { name: string; model: string } | undefined {
@@ -3463,7 +3483,13 @@ export async function startDaemon(options: DaemonOptions) {
     const handed = harness.name === "Claude Code" ? Number(claudeCompactEnv({ model: harness.model, settings: store.settings.get(), on: featureOn(store.settings.get(), "claude_compact", { safeMode: options.safeMode === true }) })?.CLAUDE_CODE_AUTO_COMPACT_WINDOW) || undefined : undefined
     return harnessContextReport({ harness: harness.name, model: harness.model, turns, lastUsage, contextWindow, compactAtTokens: lastUsage?.compactAt ?? handed ?? contextWindow ?? DEFAULT_COMPACT_AT_TOKENS })
   }
-  const restMutations = createRestMutations({ store, messages: restSessions.messages, apply: (command) => messageMutations.apply(command) })
+  let restMutations: ReturnType<typeof createRestMutations> | undefined
+  async function restMutationService() {
+    if (restMutations) return restMutations
+    const { createRestMutations } = await import("./session-rest-mutate")
+    const sessions = await restSessionService()
+    return restMutations ??= createRestMutations({ store, messages: sessions.messages, apply: (command) => messageMutations.apply(command) })
+  }
 
   const fileFrecency = createFileFrecency(options.dir)
   const serverConfigExtras = createServerConfigExtras({ dir: options.dir, changed: ({ mcp, plugin, directory }) => {
@@ -3553,6 +3579,7 @@ export async function startDaemon(options: DaemonOptions) {
     const cached = recentCommands.get(cacheKey(connection, command.id))
     if (cached && command.type !== "trace.configure") return send(connection, cached)
     if (!connection.clientId) return reply(connection, command.id, { ok: false, code: "invalid_command", message: "[DAEMON]: hello required first" })
+    if (command.type.startsWith("loop.") && command.type !== "loop.list") await lazyLoops.load()
     switch (command.type) {
       case "tui.control.register":
       case "tui.control.send":
@@ -3919,7 +3946,7 @@ export async function startDaemon(options: DaemonOptions) {
       }
       case "session.cd": {
         if (connection.remoteAddress) return reply(connection, command.id, { ok: false, code: "forbidden", message: "[DAEMON]: changing a session directory is local only" })
-        try { return reply(connection, command.id, { ok: true, result: projectRestService().cd(command.sessionId, command.path) }) }
+        try { return reply(connection, command.id, { ok: true, result: (await projectRestService()).cd(command.sessionId, command.path) }) }
         catch (error) { return reply(connection, command.id, { ok: false, code: error instanceof ProjectRestError ? error.code : "invalid_command", message: error instanceof ProjectRestError ? `[DAEMON]: ${error.message}` : "[DAEMON]: directory change failed" }) }
       }
       case "session.import": {
@@ -3931,6 +3958,7 @@ export async function startDaemon(options: DaemonOptions) {
       case "setup.import": {
         if (connection.remoteAddress) return reply(connection, command.id, { ok: false, code: "forbidden", message: "[IMPORT]: setup import reads local files and is local only" })
         try {
+          const setupImport = (await import("./setup-import")).createSetupImport({ dir: options.dir })
           const report = await setupImport.run({ directory: command.directory, from: command.from ?? "auto", apply: command.apply === true, ...(command.only ? { only: command.only } : {}) })
           const servers = report.items.filter((item) => item.kind === "mcp" && item.status === "imported")
           if (servers.length) {
@@ -4246,15 +4274,18 @@ export async function startDaemon(options: DaemonOptions) {
         const denied = denyingRule({ settings: store.settings.get(), directory: command.directory, session: command.sessionId ? sessionPermissions.effective(command.sessionId) : undefined })
         try {
           if (command.type === "git.push") {
+            const { gitPush } = await import("./git-push")
             const done = await gitPush({ directory: command.directory, denied, ...(command.confirm !== undefined ? { confirm: command.confirm } : {}), ...(command.preview ? { preview: true } : {}) })
             if (done.pushed) gitNote(command.sessionId, command.id, `Git page: pushed ${done.plan.branch} to ${done.plan.remote} (${done.plan.commitsTotal} ${done.plan.commitsTotal === 1 ? "commit" : "commits"}).`)
             return reply(connection, command.id, { ok: true, result: done })
           }
           if (command.type === "git.publish") {
+            const { gitPublish } = await import("./git-publish")
             const done = await gitPublish({ directory: command.directory, denied, ...(command.name !== undefined ? { name: command.name } : {}), ...(command.owner !== undefined ? { owner: command.owner } : {}), ...(command.description !== undefined ? { description: command.description } : {}), ...(command.preview ? { preview: true } : {}) })
             if (done.published) gitNote(command.sessionId, command.id, `Git page: published ${done.plan.repo} as a private repository and added origin (nothing pushed).`)
             return reply(connection, command.id, { ok: true, result: done })
           }
+          const { gitPrCreate, gitPrView } = await import("./git-pr")
           if (command.type === "git.pr.view") return reply(connection, command.id, { ok: true, result: await gitPrView({ directory: command.directory, denied }) })
           const done = await gitPrCreate({ directory: command.directory, denied, ...(command.title !== undefined ? { title: command.title } : {}), ...(command.body !== undefined ? { body: command.body } : {}), ...(command.base !== undefined ? { base: command.base } : {}), ...(command.draft ? { draft: true } : {}), ...(command.preview ? { preview: true } : {}) })
           if (done.created) gitNote(command.sessionId, command.id, `Git page: opened a pull request from ${done.plan.branch} into ${done.plan.base}${done.url ? `: ${done.url}` : ""}.`)
@@ -4270,6 +4301,7 @@ export async function startDaemon(options: DaemonOptions) {
         const project = store.sessionDirectory(command.sessionId)
         if (!project) return reply(connection, command.id, { ok: false, code: "unknown_session", message: "[GIT]: unknown session" })
         try {
+          const { gitInit } = await import("./git-init")
           const done = await gitInit({ directory: command.directory, project, ...(command.preview ? { preview: true } : {}) })
           if (done.initialized) gitNote(command.sessionId, command.id, `Git page: initialized a git repository in ${done.plan.directory} (branch ${done.plan.branch}, nothing committed).`)
           return reply(connection, command.id, { ok: true, result: done })
@@ -4281,6 +4313,7 @@ export async function startDaemon(options: DaemonOptions) {
       case "git.commit": {
         // Runs git and the repository's hooks on this machine: never for a remote or peer client, and not a read-only command.
         if (connection.remoteAddress || connection.peer) return reply(connection, command.id, { ok: false, code: "forbidden", message: "[GIT]: commits run on this machine and are local only" })
+        const { gitCommit, GitCommitRefusal } = await import("./git-commit")
         try {
           return reply(connection, command.id, { ok: true, result: await gitCommit({ directory: command.directory, message: command.message, paths: command.paths, ...(command.preview ? { preview: true } : {}) }) })
         } catch (error) {
@@ -4438,6 +4471,7 @@ export async function startDaemon(options: DaemonOptions) {
         return reply(connection, command.id, { ok: true, result: { loop: created.loop } })
       }
       case "loop.update": {
+        const { loopUpdateInput } = await import("@mendcode/loops")
         const { loopId, type: _type, id: _id, clientId: _client, ...patch } = command
         const before = loops.get(loopId)
         if (!before) return reply(connection, command.id, { ok: false, code: "target_mismatch", message: "[DAEMON]: unknown loop" })
@@ -4470,8 +4504,10 @@ export async function startDaemon(options: DaemonOptions) {
           return reply(connection, command.id, { ok: false, code: "internal", message: `[DAEMON]: ${(error instanceof Error ? error.message : String(error)).slice(0, 300)}` })
         }
       }
-      case "loop.templates":
+      case "loop.templates": {
+        const { LOOP_TEMPLATES, describeTemplate } = await import("@mendcode/loops")
         return reply(connection, command.id, { ok: true, result: { templates: LOOP_TEMPLATES.map(describeTemplate) } })
+      }
       case "loop.fire": {
         const fired = loops.fire(command.loopId, command.note)
         if (!fired.ok) return reply(connection, command.id, { ok: false, code: fired.reason === "unknown" ? "target_mismatch" : fired.reason === "inactive" ? "busy" : "invalid_command", message: `[DAEMON]: ${fired.message}` })
@@ -4756,11 +4792,11 @@ export async function startDaemon(options: DaemonOptions) {
       }
       case "storage.report": {
         const cap = worktreeCapBytes(store.settings.get().worktreeCapGb)
-        return reply(connection, command.id, { ok: true, result: { ...store.storageReport(), trashBytes: await projectRestService().storage.trashBytes("cached"), ...(cap ? { worktreeCapBytes: cap, worktreeBytes: await projectRestService().storage.managedBytes(clientGone(connection)) } : {}) } })
+        return reply(connection, command.id, { ok: true, result: { ...store.storageReport(), trashBytes: await (await projectRestService()).storage.trashBytes("cached"), ...(cap ? { worktreeCapBytes: cap, worktreeBytes: await (await projectRestService()).storage.managedBytes(clientGone(connection)) } : {}) } })
       }
       case "storage.worktrees":
         if (connection.remoteAddress || connection.peer) return reply(connection, command.id, { ok: false, code: "forbidden", message: "[DAEMON]: worktree storage is local only" })
-        return reply(connection, command.id, { ok: true, result: await projectRestService().storage.report(command.idleDays, clientGone(connection), {
+        return reply(connection, command.id, { ok: true, result: await (await projectRestService()).storage.report(command.idleDays, clientGone(connection), {
           ...(command.measure ? { measure: command.measure } : {}),
           ...(command.artifacts ? { artifacts: true } : {}),
           ...(command.external ? { external: true } : {}),
@@ -4840,8 +4876,9 @@ export async function startDaemon(options: DaemonOptions) {
         }
       }
       case "ai.config": {
+        const { AIConfigError } = await import("./ai-config")
         try {
-          return reply(connection, command.id, { ok: true, result: aiConfig.run(command.directory, command.input) })
+          return reply(connection, command.id, { ok: true, result: (await getAIConfig()).run(command.directory, command.input) })
         } catch (error) {
           return reply(connection, command.id, { ok: false, code: error instanceof AIConfigError ? error.code : "invalid_command", message: `[DAEMON]: ${redactSecrets(error instanceof Error ? error.message : String(error)).text.slice(0, 500)}` })
         }
@@ -4949,6 +4986,7 @@ export async function startDaemon(options: DaemonOptions) {
       case "compound.cancel": {
         if (connection.remoteAddress && !isLoopbackHost(connection.remoteAddress)) return reply(connection, command.id, { ok: false, code: "invalid_command", message: "Compound control requires a local or authenticated loopback client" })
         try {
+          const compound = await getCompound()
           if (command.type === "compound.start") {
             const origin = command.input.originSessionId
             if (origin && (!store.hasSession(origin) || canonicalDir(store.sessionDirectory(origin)!) !== canonicalDir(command.input.directory))) throw new Error("Origin session must belong to the compound project")
@@ -5113,6 +5151,7 @@ export async function startDaemon(options: DaemonOptions) {
       }
       case "commands.list": {
         try {
+          const { mcpCommands, mcpCatalogCommands } = await import("./custom-commands")
           const commands = await loadCustomCommands({ directory: command.directory, userDir: options.dir, layers: resourceLayersFor(command.directory), prompts: connection.peer?.readOnly ? [] : mcpCommands(options.mcp?.cachedPrompts?.(command.directory) ?? []), extra: connection.peer?.readOnly ? [] : await extensions.commandEntries(command.directory) })
           if (!connection.peer?.readOnly && options.mcp?.catalog) {
             const catalog = await options.mcp.catalog(command.directory)
@@ -5125,6 +5164,7 @@ export async function startDaemon(options: DaemonOptions) {
         } catch (error) { return reply(connection, command.id, { ok: false, code: "invalid_command", message: String(error) }) }
       }
       case "commands.discover": {
+        const { mcpCommands } = await import("./custom-commands")
         const discovered = await options.mcp?.listPrompts?.(command.directory) ?? { prompts: [], issues: [] }
         const commands = mcpCommands(discovered.prompts).map(({ body: _body, mcp: _mcp, ...summary }) => summary)
         return reply(connection, command.id, { ok: true, result: { commands, issues: discovered.issues } })
@@ -5135,6 +5175,7 @@ export async function startDaemon(options: DaemonOptions) {
         const displayText = `/${command.name.toLowerCase()}${command.args.trim() ? ` ${command.args.trim()}` : ""}`
         try {
           if (await extensions.hasCommand(directory, command.name)) return handle(connection, { ...command, type: "user.submit", text: displayText, attachments: command.attachments ?? [] })
+          const { mcpCommands, mcpCatalogCommands } = await import("./custom-commands")
           let definition = (await loadCustomCommands({ directory, userDir: options.dir, layers: resourceLayersFor(directory), prompts: mcpCommands(options.mcp?.cachedPrompts?.(directory) ?? []) })).find((entry) => entry.name === command.name.toLowerCase())
           if (!definition && command.name.includes(":")) definition = mcpCommands((await options.mcp?.listPrompts?.(directory))?.prompts ?? []).find((entry) => entry.name === command.name.toLowerCase())
           let fromCatalog = false
@@ -5150,7 +5191,7 @@ export async function startDaemon(options: DaemonOptions) {
           if (!definition) throw new Error(`unknown command /${command.name}`)
           const sessionModel = resolveModel({ role: "main", session: store.sessionModel(command.sessionId), roles: rolesFor(store.settings.get(), directory), catalog })
           let invocation = { command: definition, args: command.args }
-          const skillText = skillInvocation(directory, definition, command.args)
+          const skillText = await skillInvocation(directory, definition, command.args)
           if (skillText !== undefined) invocation = { command: { ...definition, body: "$ARGUMENTS" }, args: skillText }
           if (fromCatalog) {
             const prompt = await expandMcpPrompt(options.mcp!, directory, command.name, command.args)
@@ -5256,8 +5297,8 @@ export async function startDaemon(options: DaemonOptions) {
           return reply(connection, command.id, { ok: false, code: "target_mismatch", message: `[DAEMON]: unknown command /${command.name}` })
         }
         let skillText: string | undefined
-        try { skillText = skillInvocation(command.directory, found, command.args) } catch (error) { return reply(connection, command.id, { ok: false, code: "target_mismatch", message: `[DAEMON]: ${(error as Error).message}` }) }
-        return reply(connection, command.id, { ok: true, result: { prompt: skillText ?? expandCommand(found.body, command.args), ...(found.agent ? { agent: found.agent } : {}), ...(found.model ? { model: found.model } : {}), ...(found.subtask !== undefined ? { subtask: found.subtask } : {}) } })
+        try { skillText = await skillInvocation(command.directory, found, command.args) } catch (error) { return reply(connection, command.id, { ok: false, code: "target_mismatch", message: `[DAEMON]: ${(error as Error).message}` }) }
+        return reply(connection, command.id, { ok: true, result: { prompt: skillText ?? (await import("./custom-commands")).expandCommand(found.body, command.args), ...(found.agent ? { agent: found.agent } : {}), ...(found.model ? { model: found.model } : {}), ...(found.subtask !== undefined ? { subtask: found.subtask } : {}) } })
       }
       case "mcp.catalog":
       case "mcp.resources.list":
@@ -5423,7 +5464,8 @@ export async function startDaemon(options: DaemonOptions) {
         return reply(connection, command.id, { ok: true, result: { servers: report.servers.map((server) => ({ ...server, ...(server.pending ? { pending: { ...server.pending, details: [] } } : {}), command: mask(server.command), stderr: server.stderr.map(mask), ...(server.lastError !== undefined ? { lastError: mask(server.lastError) } : {}) })), issues: report.issues.map((issue) => ({ ...issue, message: mask(issue.message) })) } })
       }
       case "catalog.rest": {
-        try { return reply(connection, command.id, { ok: true, result: await catalogRest.run(command.directory, command.input, connection.signal ?? new AbortController().signal) }) }
+        const { CatalogRestError } = await import("./catalog-rest")
+        try { return reply(connection, command.id, { ok: true, result: await (await getCatalogRest()).run(command.directory, command.input, connection.signal ?? new AbortController().signal) }) }
         catch (error) { return reply(connection, command.id, { ok: false, code: error instanceof CatalogRestError ? error.code : "invalid_command", message: error instanceof CatalogRestError ? error.message : "Catalog operation failed" }) }
       }
       case "lsp.query": {
@@ -5510,7 +5552,7 @@ export async function startDaemon(options: DaemonOptions) {
           result: { ...registry.snapshot(), connections: connections.size, actors: actors.size, jobs: scheduler.snapshot().length, rssBytes: process.memoryUsage().rss, memory: process.memoryUsage(), pid: process.pid, uptime: process.uptime() },
         })
       case "diagnostics.snapshot":
-        return reply(connection, command.id, { ok: true, result: { path: await writeDiagnosticsSnapshot(options.dir) } })
+        return reply(connection, command.id, { ok: true, result: { path: await (await import("./diagnostics")).writeDiagnosticsSnapshot(options.dir) } })
       case "job.schedule":
       case "job.cancel":
         return reply(connection, command.id, { ok: false, code: "invalid_command", message: "[DAEMON]: no job types are registered in F1" })
@@ -6137,7 +6179,7 @@ export async function startDaemon(options: DaemonOptions) {
       case "debug.query":
       case "db.query": {
         try {
-          const result = command.type === "debug.query" ? await debug(canonicalDir(command.directory), command.input) : await queryDatabase(options.dir, command.operation, command.sql)
+          const result = command.type === "debug.query" ? await debug(canonicalDir(command.directory), command.input) : await (await import("./debug-db")).queryDatabase(options.dir, command.operation, command.sql)
           return reply(connection, command.id, { ok: true, result })
         } catch (error) {
           return reply(connection, command.id, { ok: false, code: "invalid_command", message: `[DAEMON]: ${redactSecrets(error instanceof Error ? error.message : String(error)).text.slice(0, 1000)}` })
@@ -6155,7 +6197,7 @@ export async function startDaemon(options: DaemonOptions) {
         catch (error) { return reply(connection, command.id, { ok: false, code: "invalid_command", message: redactSecrets(error instanceof Error ? error.message : String(error)).text.slice(0, 1000) }) }
       }
       case "project.rest": {
-        try { return reply(connection, command.id, { ok: true, result: await projectRestService().run(command.directory, command.input, connection.signal ?? new AbortController().signal) }) }
+        try { return reply(connection, command.id, { ok: true, result: await (await projectRestService()).run(command.directory, command.input, connection.signal ?? new AbortController().signal) }) }
         catch (error) { return reply(connection, command.id, { ok: false, code: error instanceof ProjectRestError ? error.code : "invalid_command", message: error instanceof ProjectRestError ? error.message : "Project operation failed" }) }
       }
       case "workspace.query": {
@@ -6173,16 +6215,16 @@ export async function startDaemon(options: DaemonOptions) {
         }
       }
       case "session.rest.read":
-        return reply(connection, command.id, restSessions.read(command.directory, command.input))
+        return reply(connection, command.id, (await restSessionService()).read(command.directory, command.input))
       case "session.rest.update": {
-        const result = restSessions.update(command)
+        const result = (await restSessionService()).update(command)
         if (result.ok) publishActivity(command.sessionId, actors.get(command.sessionId)?.snapshot().foreground ?? "idle", true)
         return reply(connection, command.id, result)
       }
       case "session.rest.control":
-        return reply(connection, command.id, await restSessions.control(command, connection.signal))
+        return reply(connection, command.id, await (await restSessionService()).control(command, connection.signal))
       case "session.rest.mutate":
-        return reply(connection, command.id, restMutations.mutate(command))
+        return reply(connection, command.id, (await restMutationService()).mutate(command))
       case "server.health":
         return reply(connection, command.id, { ok: true, result: { healthy: true, version: options.runtimeInfo?.version ?? DEV_VERSION, channel: options.runtimeInfo?.channel ?? "dev", protocolVersion: PROTOCOL_VERSION, buildId: options.buildId ?? "unknown", mdns: { requested: serverConfig.mdns, published: false, domain: serverConfig.mdnsDomain, reason: "loopback listener" } } })
       case "server.memory":
@@ -6278,8 +6320,10 @@ export async function startDaemon(options: DaemonOptions) {
       case "github.run":
       case "github.finish":
       case "pr.checkout": {
-        if (!githubLocalOnly(connection.remoteAddress)) return reply(connection, command.id, { ok: false, code: "forbidden", message: "GitHub commands require the local Unix socket" })
+        if (connection.remoteAddress !== undefined) return reply(connection, command.id, { ok: false, code: "forbidden", message: "GitHub commands require the local Unix socket" })
         try {
+          const { createGithub, githubToolSummary } = await import("./github")
+          github ??= createGithub(options.githubProcess ? { process: options.githubProcess } : {})
           if (command.type === "github.install") {
             // A hosted runner runs exactly the model the workflow names: an id the catalog does not know fails there, so it fails here with the near ones.
             const catalog = options.models
@@ -6586,6 +6630,7 @@ export async function startDaemon(options: DaemonOptions) {
     if (remoteConfig) remoteListener = Bun.listen<Connection>({ ...remoteConfig, socket: socketHandlers(true) })
     if (sessionHttpConfig) sessionHttpListener = Bun.serve({ ...sessionHttpConfig, fetch: sessionHttp, maxRequestBodySize: 80 * 1024, idleTimeout: 0 })
     if (serverConfig.enabled) {
+      const { createHttpAdapter } = await import("./http")
       httpAdapter = createHttpAdapter({ dir: options.dir, directory: options.defaultDirectory ?? process.cwd(), config: serverConfig, workspaces: workspaceCatalog(), buildId: options.buildId, web: options.web, bridge: {
         pty: { consume: pty.consume, connect: (peer, directory, id, socket, cursor) => pty.connect({ peer, directory }, id, socket, cursor) },
         events: (_peer, directory, write) => {
@@ -6709,7 +6754,7 @@ export async function startDaemon(options: DaemonOptions) {
     audio.dispose()
     voice.dispose()
     await releases.stop()
-    await github.dispose()
+    await github?.dispose()
     computer.stop()
     await browser.stop()
     uiReload.stop()
@@ -6722,7 +6767,7 @@ export async function startDaemon(options: DaemonOptions) {
     loops.dispose()
     providerAuth.stop()
     workflows.dispose()
-    await compound.dispose()
+    if (compound) await (await compound).dispose()
     dreamTimer?.cancel()
     retentionTimer?.cancel()
     idleDeltaFold.dispose()
@@ -6750,7 +6795,7 @@ export async function startDaemon(options: DaemonOptions) {
     httpAdapter?.close()
     pty.dispose()
     serverEventObservers.clear()
-    restSessions.close()
+    restSessions?.close()
     await httpListener?.stop(true)
     remoteListener?.stop(true)
     await sessionHttpListener?.stop(true)

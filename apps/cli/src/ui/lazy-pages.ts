@@ -21,6 +21,9 @@ function lazyModule<T>(name: string, load: () => Promise<T>): Loaded<T> {
 }
 
 const tasks = lazyModule("tasks-page", () => import("../view/tasks-page"))
+const help = lazyModule("help-page", () => import("../view/help-page"))
+const modelPage = lazyModule("model-page", () => import("../view/model-page"))
+const environment = lazyModule("environment-page", () => import("../view/environment-page"))
 const usage = lazyModule("usage-page", () => import("../view/usage-page"))
 const memory = lazyModule("memory-page", () => import("../view/memory-page"))
 const context = lazyModule("context-page", () => import("../view/context-page"))
@@ -104,6 +107,9 @@ const tutorialSandbox = lazyModule("tutorial-sandbox", () => import("../tutorial
 
 /** Modules behind each slash command that opens a page (or needs one to run). */
 export const PAGE_MODULES = {
+  help: [help],
+  modelPage: [modelPage],
+  env: [environment],
   tasks: [tasks],
   usage: [usage],
   memory: [memory],
@@ -148,7 +154,7 @@ export const PAGE_MODULES = {
   history: [history],
   skills: [skills],
   variants: [modelPicker],
-  modelPicker: [modelPicker],
+  modelPicker: [modelPicker, modelPage],
   modelQuick: [modelPicker, modelQuick],
   timeline: [sessionTree],
   tree: [sessionTree],
@@ -192,7 +198,7 @@ export const PAGE_MODULES = {
 export type PageName = keyof typeof PAGE_MODULES
 
 /** Names of the lazily loaded modules, for the footprint test. */
-export const LAZY_MODULE_FILES = ["stash-page", "queue-page","history-page", "skills-page", "model-picker", "acp-page", "agent-picker", "theme-picker", "usage-page", "memory-page", "context-page", "changes-page", "git-page", "git-commit-page", "git-pr-page", "git-init-page", "mcps-page", "tools-page", "packages-page", "storage-page", "agents-page", "loops-page", "loop-command", "workflows-page", "workflow-command", "setup-page", "onboarding-page", "onboarding-detect", "customize-page", "settings-page", "status-page", "extensions-page", "hooks-page", "palette", "approval-diff", "pet-picker", "connect-page", "providers-page", "secrets-page", "session-tree-page", "text-page", "whatsnew-page", "review-activity", "permissions-page", "mermaid-viewer", "sidebar-editor", "transcript-actions-page", "plan-review-page", "prompt-mode-page", "compaction-page", "agent-commands-page", "diagnostics-page", "worktrees-page", "automation-ledger-page", "compound-page", "marketplace-page", "ai-config-page", "reasoning-page", "release-page", "tsm-page", "ide-page", "mflow-page", "reviews-page", "reviews-keys", "console-page", "compaction-live", "compaction-arcade", "keymap-page", "terminal-setup-page", "tutorial-page", "model-quick", "file-viewer"] as const
+export const LAZY_MODULE_FILES = ["help-page", "model-page", "environment-page", "tasks-page", "stash-page", "queue-page","history-page", "skills-page", "model-picker", "acp-page", "agent-picker", "theme-picker", "usage-page", "memory-page", "context-page", "changes-page", "git-page", "git-commit-page", "git-pr-page", "git-init-page", "mcps-page", "tools-page", "packages-page", "storage-page", "agents-page", "loops-page", "loop-command", "workflows-page", "workflow-command", "setup-page", "onboarding-page", "onboarding-detect", "customize-page", "settings-page", "status-page", "extensions-page", "hooks-page", "palette", "approval-diff", "pet-picker", "connect-page", "providers-page", "secrets-page", "session-tree-page", "text-page", "whatsnew-page", "review-activity", "permissions-page", "mermaid-viewer", "sidebar-editor", "transcript-actions-page", "plan-review-page", "prompt-mode-page", "compaction-page", "agent-commands-page", "diagnostics-page", "worktrees-page", "automation-ledger-page", "compound-page", "marketplace-page", "ai-config-page", "reasoning-page", "release-page", "tsm-page", "ide-page", "mflow-page", "reviews-page", "reviews-keys", "console-page", "compaction-live", "compaction-arcade", "keymap-page", "terminal-setup-page", "tutorial-page", "model-quick", "file-viewer"] as const
 
 /** The lazily loaded modules a slash command needs, if any. */
 export function slashPage(command: string): PageName | undefined {
@@ -217,6 +223,21 @@ export async function preload(name: PageName, options: { onSlow?: () => void; sl
     if (timer) clearTimeout(timer)
   }
 }
+
+type HelpMod = typeof import("../view/help-page")
+export const renderHelpPage: HelpMod["renderHelpPage"] = (...args) => help.get().renderHelpPage(...args)
+export const helpKeyRows: HelpMod["helpKeyRows"] = (...args) => help.get().helpKeyRows(...args)
+export const helpPageWindow: HelpMod["helpPageWindow"] = (...args) => help.get().helpPageWindow(...args)
+
+type ModelPageMod = typeof import("../view/model-page")
+export const createModelPageState: ModelPageMod["createModelPageState"] = (...args) => modelPage.get().createModelPageState(...args)
+export const renderModelPage: ModelPageMod["renderModelPage"] = (...args) => modelPage.get().renderModelPage(...args)
+export const modelPageKey: ModelPageMod["modelPageKey"] = (...args) => modelPage.get().modelPageKey(...args)
+
+type EnvironmentMod = typeof import("../view/environment-page")
+export const createEnvironmentPageState: EnvironmentMod["createEnvironmentPageState"] = (...args) => environment.get().createEnvironmentPageState(...args)
+export const looksLikeDotenv: EnvironmentMod["looksLikeDotenv"] = (...args) => environment.get().looksLikeDotenv(...args)
+export const renderEnvironmentPage: EnvironmentMod["renderEnvironmentPage"] = (...args) => environment.get().renderEnvironmentPage(...args)
 
 type UsageMod = typeof import("../view/usage-page")
 export const createUsagePageState: UsageMod["createUsagePageState"] = (...args) => usage.get().createUsagePageState(...args)

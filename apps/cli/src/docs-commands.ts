@@ -10,7 +10,7 @@ import { readTuiProfile } from "./view/tui-profile"
  * menu groups them, what the user's profile changed, their own commands and what the next tier adds. Reads files and the daemon's
  * settings that the caller passes in; nothing here writes or starts a process.
  */
-export type CommandsContext = { dataDir: string; cwd: string; settings: Record<string, unknown> | undefined; detail?: string | undefined }
+export type CommandsContext = { dataDir: string; cwd: string; settings: Record<string, unknown> | undefined; detail?: string | undefined; daemonUnanswered?: boolean | undefined }
 
 /** Summaries are listed with the names while the whole list stays under this many characters; past it the names go alone and one command's detail is a lookup away. */
 export const SUMMARY_BUDGET = 2_000
@@ -122,7 +122,7 @@ export function commandsLines(context: CommandsContext): string[] {
   const rows = mine.filter((command) => command.setting)
   const own = ownCommands(context)
   const json = JSON.stringify(profile.prefs)
-  const tier =context.settings ? (settings.tier ? `${settings.tier} (/tier changes it)` : "none set (every built-in whose feature is on is offered)") : "not known (no daemon is running: shown as if none were set)"
+  const tier = context.settings ? (settings.tier ? `${settings.tier} (/tier changes it)` : "none set (every built-in whose feature is on is offered)") : `not known (${context.daemonUnanswered ? "daemon did not answer" : "no daemon is running"}: shown as if none were set)`
   const yours = [hidden.length ? `hidden: ${hidden.join(", ")}` : "", pinned.length ? `pinned: ${pinned.join(", ")}` : "", moved.length ? `moved: ${moved.join(", ")}` : "", aliases.length ? `aliases: ${aliases.join(", ")}` : ""].filter(Boolean)
   return [
     `tier: ${tier} · ${mine.length - rows.length} commands in the menu, grouped as the menu groups them (name=alias)`,

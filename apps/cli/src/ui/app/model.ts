@@ -3,9 +3,9 @@ import { noteRecent, setModelDefault, toggleFavorite, withModelDefault, writeMod
 import type { AgentsReport, RecipesReport } from "@mendcode/protocol"
 import type { ModelChoice, ModelRoles, ModelsReport, ReasoningReport, Settings } from "@mendcode/protocol"
 import { modelLabel, modelWithEffort } from "../../view/model-label"
-import { createModelPageState, type ModelPageAction } from "../../view/model-page"
+import type { ModelPageAction, ModelPageRow } from "../../view/model-page"
+import { createModelPageState } from "../lazy-pages"
 import { createModelPickerState, createModelQuickState, modelOptions, quickChoice, stepQuickValue, variantOptions } from "../lazy-pages"
-import { groupModels, MODEL_PAGE_ROWS, type ModelPageRow } from "../../view/model-page"
 import type { preload } from "../lazy-pages"
 import type { AppContext } from "./context"
 
@@ -70,6 +70,7 @@ export function createModel(ctx: AppContext, actions: { loadPage(name: Parameter
 
   /** The full page: this session, every role, recipes and the catalog. */
   async function openModelPage() {
+    await actions.loadPage("modelPage")
     state.modelQuick = undefined
     state.page = "model"
     state.modelState = createModelPageState()
@@ -205,7 +206,10 @@ export function createModel(ctx: AppContext, actions: { loadPage(name: Parameter
       state.modelError = ""
       await loadReasoning()
     }
-    else if (action.type === "picker") await openModelPicker(MODEL_PAGE_ROWS[state.modelState.row] ?? "session")
+    else if (action.type === "picker") {
+      const { MODEL_PAGE_ROWS } = await import("../../view/model-page")
+      await openModelPicker(MODEL_PAGE_ROWS[state.modelState.row] ?? "session")
+    }
     else if (action.type === "providers") { await openModelPicker(); state.modelPicker.providers = true }
     else if (action.type === "close") state.page = "chat"
     else if (action.type === "recipe") await applyRecipe(action.name)
@@ -259,6 +263,7 @@ export function createModel(ctx: AppContext, actions: { loadPage(name: Parameter
     takeModels(reply)
   }
   async function modelPickerKey(key: string) {
+    const { groupModels } = await import("../../view/model-page")
     const picker = state.modelPicker
     const groups = groupModels(state.modelReport?.models ?? [])
     const entries = modelOptions(state.modelReport, state.modelPrefs, picker)

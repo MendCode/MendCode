@@ -19,19 +19,7 @@ import {
   createCopilotAuth,
   copilotUrl,
   type CopilotAuth,
-  azureBaseUrl,
-  createAzureEntraCredential,
-  createAwsCredentialChain,
-  bedrockRegion,
-  bedrockBaseUrl,
   awsEndpoint,
-  vertexRouting,
-  vertexAnthropicRouting,
-  isVertexType,
-  VERTEX_ANTHROPIC_MODEL,
-  vertexBaseUrl,
-  vertexEndpoint,
-  createGoogleAdcCredential,
   xaiBaseUrl,
   xaiVariants,
   mistralBaseUrl,
@@ -48,7 +36,6 @@ import {
   sapAiConfig,
   parseSapServiceKey,
   zenmuxUrl,
-  geminiUrl,
   gitlabUrl,
   gitlabConfig,
   cerebrasUrl,
@@ -68,6 +55,8 @@ import {
   cloudflareGatewayBaseUrl,
   CLOUDFLARE_GATEWAY_MODEL,
 } from "@mendcode/engine-native"
+import { azureBaseUrl, bedrockRegion, bedrockBaseUrl, vertexRouting, vertexAnthropicRouting, isVertexType, VERTEX_ANTHROPIC_MODEL, vertexBaseUrl, vertexEndpoint, geminiUrl } from "../../engine-native/src/provider-endpoints"
+import { createAwsCredentialChain, createAzureEntraCredential, createGoogleAdcCredential } from "../../engine-native/src/lazy-credentials"
 import { z } from "zod"
 import { CompactionOverride } from "@mendcode/protocol"
 import { AzureOptions } from "@mendcode/protocol"

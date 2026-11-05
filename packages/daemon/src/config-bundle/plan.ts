@@ -1,7 +1,7 @@
 import { existsSync, lstatSync, readdirSync, readFileSync, readlinkSync } from "node:fs"
 import path from "node:path"
 import { currentSettingKeys, parseActivationState, tuiProblems, type ActivationState, type SavedLook } from "@mendcode/protocol/wire"
-import { serverConfigSchema } from "@mendcode/mcp"
+import { serverConfigSchema } from "../../../mcp/src/config"
 import { readMcpServers } from "../mcp-config"
 import { settingsDiff } from "../settings-tool"
 import { canonicalJson, entryBytes, sha256, type Bundle, type BundleEntry, type BundleExclusion, type BundlePackage } from "./bundle"

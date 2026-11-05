@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import { serverConfigSchema } from "@mendcode/mcp"
+import { serverConfigSchema } from "../../mcp/src/config"
 import { redactSecrets, type McpConfigInput, type SetupImportItem, type SetupImportReport } from "@mendcode/protocol"
 import { setupImportKey } from "@mendcode/protocol/wire"
 import { addMcpConfig, readMcpServers } from "./mcp-config"

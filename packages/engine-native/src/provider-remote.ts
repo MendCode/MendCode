@@ -1,10 +1,8 @@
 import { ProviderModel, type ProviderTestResult } from "@mendcode/protocol"
 import { authHeaders, createApiProvider, safeMessage, type ResolvedProvider } from "./provider-factory"
 import { httpFailure, joinUrl, scrub, type Fetch } from "./provider-http"
-import { fetchGeminiModels } from "./google-models"
 import { copilotModel } from "./github-copilot"
 import { COPILOT_HEADERS, copilotUrl } from "./github-copilot-auth"
-import { fetchBedrockModels } from "./amazon-bedrock"
 import { xaiBaseUrl, xaiVariants } from "./xai-responses"
 import { mistralBaseUrl, mistralModel } from "./mistral"
 import { deepinfraBaseUrl, deepinfraHeaders, isDeepInfra } from "./deepinfra"
@@ -80,7 +78,7 @@ export async function fetchProviderModels(input: { provider: ResolvedProvider; f
   if (provider.type === "xai") xaiBaseUrl(provider.baseUrl)
   if (provider.type === "mistral") mistralBaseUrl(provider.baseUrl)
   if (provider.type === "google-vertex" || provider.type === "google-vertex-anthropic") return provider.models
-  if (provider.type === "amazon-bedrock") return fetchBedrockModels(input)
+  if (provider.type === "amazon-bedrock") return (await import("./amazon-bedrock")).fetchBedrockModels(input)
   // Azure model names are user-owned deployment ids. The global /models catalog cannot discover those.
   if (provider.type === "azure") {
     if (!provider.models.length) throw new Error(`[PROVIDER]: ${provider.id} needs explicit deployment ids in models; Azure refresh does not discover deployments`)
@@ -109,7 +107,7 @@ export async function fetchProviderModels(input: { provider: ResolvedProvider; f
   if (provider.id === "zenmux") zenmuxUrl(provider.baseUrl)
   if (provider.id === "kilo") kiloUrl(provider.baseUrl)
   if (isGatewayPreset(provider.id)) gatewayUrl(provider.id, provider.baseUrl)
-  if (provider.type === "google") return fetchGeminiModels({ ...input, timeoutMs: input.timeoutMs ?? REFRESH_TIMEOUT_MS, maxModels: MAX_REFRESHED_MODELS })
+  if (provider.type === "google") return (await import("./google-models")).fetchGeminiModels({ ...input, timeoutMs: input.timeoutMs ?? REFRESH_TIMEOUT_MS, maxModels: MAX_REFRESHED_MODELS })
   const doFetch: Fetch = input.fetch ?? ((url, init) => fetch(url, init))
   const key = (provider.type === "github-copilot" ? await provider.copilotToken?.() : undefined) ?? provider.apiKey()
   if ((!key || provider.id === "opencode" && key === "public") && (isDeepInfra(provider) || isCerebras(provider) || togetherai || provider.keyRequired || ["perplexity", "alibaba", "opencode", "llmgateway", "nvidia", "zenmux", "kilo"].includes(provider.id))) throw new Error(`[AUTH]: no API key for ${provider.id}; set it with providers.set or the provider's environment variable`)

@@ -23,12 +23,11 @@ import { parseGlobalOptions, cliLogger } from "./global-options"
 import { completionScript } from "./support-output"
 import { sessionToMarkdown } from "./export"
 import { HTTP_USAGE, parseServerCommand } from "./http-cli"
-import { createDaemonServiceCli, DAEMON_USAGE, parseDaemonService, type DaemonServiceCommand } from "./daemon-service"
+import type { DaemonServiceCommand } from "./daemon-service"
 import { daemonCommand } from "./launcher"
 import { clearRestart, markRestart } from "./restart-mark"
 import { droppedEnvLog, hostSessionEnvNames, restartWithoutHostSessionEnv, withoutHostSessionEnv } from "@mendcode/client/inherited-env"
 import { parseViewCommand, runViewCommand } from "./view-args"
-import { parseDocsCommand } from "./docs-args"
 import { parsePackageFileCommand, runPackageFileCommand } from "./package-file-command"
 import { PROGRAM_NAME } from "@mendcode/program"
 import { sameDir } from "@mendcode/program/data-dir"
@@ -117,42 +116,46 @@ if (argv[0] === "dev") {
     spawn: ({ command, env, cwd }) => runInherited({ command, env, cwd }),
   }))
 }
-let daemonService: DaemonServiceCommand | undefined
-try { daemonService = parseDaemonService(argv) } catch (error) {
-  process.stderr.write(`error: ${error instanceof Error ? error.message : "Invalid daemon command"}\n${DAEMON_USAGE}`)
-  process.exit(64)
-}
-if (daemonService) {
-  if (remoteAttach) { process.stderr.write("error: daemon lifecycle commands are local-only\n"); process.exit(64) }
-  if (daemonService.help) { process.stdout.write(DAEMON_USAGE); process.exit(0) }
-  if (!["status", "logs", "plan"].includes(daemonService.action)) refuseFromSession(daemonService.dir, "stops, starts or reinstalls the daemon every session runs under")
-  const dir = path.resolve(daemonService.dir ?? envDataDir())
-  const cwd = path.resolve(daemonService.cwd ?? process.cwd())
-  const runtime = await import("../../../packages/daemon/src/user-service")
-  const command = daemonCommand()
-  if (command[0] === "bun") command[0] = process.execPath
-  const options = { dir, cwd, command, ...(daemonService.engine ? { engine: daemonService.engine } : {}), ...(daemonService.serviceDir ? { serviceDir: daemonService.serviceDir } : {}) }
-  const host = runtime.createUserService(options)
-  process.exit(await createDaemonServiceCli({
-    dir, cwd, host, out: process.stdout, err: process.stderr, now: Date.now, sleep: Bun.sleep, lockOwner: () => runtime.daemonLockOwner(dir),
-    connect: async () => {
-      const client = createClient({ ...(defaultLocalTransport() === "tcp" || readLocalEndpoint(dir) ? { localTcp: () => readLocalEndpoint(dir) } : { socketPath: path.join(dir, "mendd.sock") }), name: "daemon-control", reconnect: false, timeoutMs: 2000 })
-      try { await client.connect(); return client } catch { client.close(); return undefined }
-    },
-    launch: async () => { await runtime.launchUserDaemon(options) },
-    restarting: (on) => (on ? markRestart(dir) : clearRestart(dir)),
-    foreground: async () => {
-      // The daemon runs in this process: it restarts once, in place, without a Claude Code shell's session variables (inherited-env.ts).
-      await restartWithoutHostSessionEnv({ log: (line) => process.stderr.write(`${line}\n`) })
-      process.argv = [process.execPath, "__daemon", ...host.plan.programArguments.slice(command.length)]
-      await import("../../../packages/daemon/src/main")
-      await new Promise<void>(() => {})
-    },
-    waitStopped: async () => {
-      await waitForSocketGone(path.join(dir, "mendd.sock"), 5000)
-      await waitForSocketGone(localEndpointPath(dir), 5000)
-    },
-  })(daemonService))
+// A superset of the parser's aliases: flags and their values are still interpreted by the same parser.
+if (argv.includes("daemon") || argv.includes("service")) {
+  const { createDaemonServiceCli, DAEMON_USAGE, parseDaemonService } = await import("./daemon-service")
+  let daemonService: DaemonServiceCommand | undefined
+  try { daemonService = parseDaemonService(argv) } catch (error) {
+    process.stderr.write(`error: ${error instanceof Error ? error.message : "Invalid daemon command"}\n${DAEMON_USAGE}`)
+    process.exit(64)
+  }
+  if (daemonService) {
+    if (remoteAttach) { process.stderr.write("error: daemon lifecycle commands are local-only\n"); process.exit(64) }
+    if (daemonService.help) { process.stdout.write(DAEMON_USAGE); process.exit(0) }
+    if (!["status", "logs", "plan"].includes(daemonService.action)) refuseFromSession(daemonService.dir, "stops, starts or reinstalls the daemon every session runs under")
+    const dir = path.resolve(daemonService.dir ?? envDataDir())
+    const cwd = path.resolve(daemonService.cwd ?? process.cwd())
+    const runtime = await import("../../../packages/daemon/src/user-service")
+    const command = daemonCommand()
+    if (command[0] === "bun") command[0] = process.execPath
+    const options = { dir, cwd, command, ...(daemonService.engine ? { engine: daemonService.engine } : {}), ...(daemonService.serviceDir ? { serviceDir: daemonService.serviceDir } : {}) }
+    const host = runtime.createUserService(options)
+    process.exit(await createDaemonServiceCli({
+      dir, cwd, host, out: process.stdout, err: process.stderr, now: Date.now, sleep: Bun.sleep, lockOwner: () => runtime.daemonLockOwner(dir),
+      connect: async () => {
+        const client = createClient({ ...(defaultLocalTransport() === "tcp" || readLocalEndpoint(dir) ? { localTcp: () => readLocalEndpoint(dir) } : { socketPath: path.join(dir, "mendd.sock") }), name: "daemon-control", reconnect: false, timeoutMs: 2000 })
+        try { await client.connect(); return client } catch { client.close(); return undefined }
+      },
+      launch: async () => { await runtime.launchUserDaemon(options) },
+      restarting: (on) => (on ? markRestart(dir) : clearRestart(dir)),
+      foreground: async () => {
+        // The daemon runs in this process: it restarts once, in place, without a Claude Code shell's session variables (inherited-env.ts).
+        await restartWithoutHostSessionEnv({ log: (line) => process.stderr.write(`${line}\n`) })
+        process.argv = [process.execPath, "__daemon", ...host.plan.programArguments.slice(command.length)]
+        await import("../../../packages/daemon/src/main")
+        await new Promise<void>(() => {})
+      },
+      waitStopped: async () => {
+        await waitForSocketGone(path.join(dir, "mendd.sock"), 5000)
+        await waitForSocketGone(localEndpointPath(dir), 5000)
+      },
+    })(daemonService))
+  }
 }
 // `view list|scaffold` writes files only: no daemon, no terminal.
 if (argv[0] === "customize") {
@@ -174,7 +177,7 @@ const viewCommand = parseViewCommand(argv)
 if (viewCommand?.action === "scaffold" && viewCommand.force) refuseFromSession(viewCommand.dir, "replaces an extension view the user has")
 if (viewCommand) process.exit(runViewCommand(viewCommand, { dataDir: viewCommand.dir ?? envDataDir(), out: process.stdout, err: process.stderr }))
 // `docs [topic]` prints a reference card of this version from the binary and local files; a daemon is asked only when one already runs. The cards load on demand.
-const docsCommand = parseDocsCommand(argv)
+const docsCommand = argv.includes("docs") ? (await import("./docs-args")).parseDocsCommand(argv) : undefined
 if (docsCommand) process.exit(await (await import("./docs-run")).runDocsCommand(docsCommand, { dataDir: docsCommand.dir ?? envDataDir(), cwd: process.cwd(), out: process.stdout, err: process.stderr }))
 // `usage --quota` reads the quota windows a running daemon already holds: no daemon is started and no provider is asked.
 if (argv.includes("usage") && argv.includes("--quota")) {

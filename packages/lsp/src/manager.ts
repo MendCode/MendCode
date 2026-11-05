@@ -6,10 +6,11 @@ import { createLspClient, type LspClient, type LspClientOptions, type LspDiagnos
 import { languageIdForFile, matchesFile, loadLspRegistry, type LoadedRegistry, type LspServerSpec } from "./registry"
 import { createOfflineBootstrap, PROVISIONED_SERVERS, localCommand, serverInitialization, serverRoot } from "./bootstrap"
 import { presetUnavailable } from "./other-launch"
+import { DEFAULT_TIMEOUT_MS } from "./timeouts"
 
 export const DEFAULT_IDLE_MS = 5 * 60 * 1000
 export const DEFAULT_SETTLE_MS = 1_500
-export const DEFAULT_TIMEOUT_MS = 4_000
+export { DEFAULT_TIMEOUT_MS } from "./timeouts"
 /** How long a failed provisioning or warm-up of one (project root, server) is remembered before it is tried again. */
 export const DEFAULT_RETRY_MS = 10 * 60 * 1000
 const MAX_REMEMBERED = 256

@@ -1,4 +1,4 @@
-import { parseTrigger } from "@mendcode/loops"
+import { parseTrigger } from "../../loops/src/schedule"
 
 export const LOOP_INTERPRET_TIMEOUT_MS = 20_000
 

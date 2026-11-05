@@ -1,6 +1,6 @@
 import { readdir, readFile, stat } from "node:fs/promises"
 import { join } from "node:path"
-import { languageOf } from "./scan"
+import { languageOf } from "./language"
 import { MAX_FILE_BYTES, type Language, type WorkspacePackage } from "./types"
 import { workspacePackage } from "./workspace"
 

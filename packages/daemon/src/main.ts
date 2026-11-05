@@ -62,14 +62,16 @@ import { acpAgentName } from "./acp-registry"
 import { BUILTIN_TOOLS, sandboxPolicy, canonicalDir, shellSession, createToolDefine, createWebSearchTool, loopTool, worktreeTool, prWatchTool, createComputerTools, browserTool, createUserBrowserTool, type Tool, aiConfigTool, agentProcesses } from "@mendcode/tools"
 import { createDaemonImageGenTool } from "./image-generation"
 import { ptyAvailable } from "./pty-native"
-import { createAcpAgents, createAcpEngine, withAcpEngine } from "@mendcode/engine-acp"
-import { createPiConfig, createPiEngine, piCapabilities, probePi, withPiEngine } from "@mendcode/engine-pi"
+import { createAcpAgents } from "../../engine-acp/src/agents"
+import { withAcpEngine } from "../../engine-acp/src/router"
+import { createPiConfig, piCapabilities, probePi } from "../../engine-pi/src/config"
+import { withPiEngine } from "../../engine-pi/src/router"
 import { createSidebarTool } from "./sidebar"
 import { createCustomizeUiTool } from "./customize-ui"
 import { createExtendTool, extensionToolCheck } from "./extend-tool"
 import { createSettingsTool } from "./settings-tool"
 import { createReviewConfigTool, type ReviewSetupPort } from "./review-config-tool"
-import { createPrReviewTool } from "./pr-review-tool"
+import { createPrReviewTool } from "./pr-review-tool-definition"
 import type { ConfigControl } from "./pr-review/config-control"
 import type { ReviewSetup, SetupMemory } from "./pr-review/setup"
 import { workflowScriptTool, workflowStartTool, workflowStatusTool, workflowSaveTool, workflowControlTool, workflowEventsTool, workflowArtifactsTool } from "./workflow-tools"
@@ -77,7 +79,7 @@ import { sessionsTool, tellTool } from "./peer-tools"
 import { threadsTool } from "./thread-tool"
 import { packagesTool } from "./packages-tool"
 import { sessionMetaTool } from "./session-meta-tool"
-import { createCodeGraphTools, createCodeOverview, createGraphAutopilot, createIndexGate, createIndexer, scanHostCommand } from "@mendcode/codegraph"
+import { createLazyCodegraph } from "./lazy-codegraph"
 import { GRAPH_TOOL_PATTERNS, graphIndexMode } from "./graph-gate"
 import { filteredCatalog, modelAllowed } from "./models"
 import { createToolOutputs, toolOutputSettings } from "./tool-output"
@@ -86,15 +88,15 @@ import { createSessionTranscripts } from "./session-transcripts"
 import { rolesFor, shellFor } from "./areas"
 import { advisorStatus, claudeAdvisorAlias, createAdvisorHost } from "./advisor-host"
 import { runClaudeAdvisor } from "./advisor-claude"
-import { createMcpAuth, createMcpManager, mcpResourceTools, mcpTools, type McpServerConfig } from "@mendcode/mcp"
+import type { McpServerConfig } from "@mendcode/mcp"
+import { createLazyMcp } from "./lazy-mcp"
 import { createMcpConfigLoader } from "./mcp-loader"
 import { HOST_MCP_SERVER } from "./host-mcp"
 import { defaultLayers, type ExtensionLayer } from "@mendcode/packages"
-import { createAfterWrite, createDiagnosticsTool, createFormatterManager, createLspManager, createLspTool, installLspServer } from "@mendcode/lsp"
+import { createLazyLsp } from "./lazy-lsp"
 import { realClock } from "@mendcode/kernel"
 import { computeBuildId } from "@mendcode/build-id"
 import { remoteListenerConfig, validateRemoteListener } from "./remote"
-import { HTTP_WEB } from "./http-web"
 import { startDaemon } from "./daemon"
 import { claudeCodeProbe, codexAppServerProbe, nativeCodexProbe, quotaProbeDir } from "./quota-probes"
 import { createCodegraphStatus } from "./codegraph-status"
@@ -191,13 +193,12 @@ validateRemoteListener(remoteOptions)
 // Code graph tools index lazily on first use; `MENDCODE_CODEGRAPH=0` leaves them out entirely.
 const codegraphStatus = createCodegraphStatus()
 // One indexer for the tools and for the Galaxy panel's code mode (`codegraph.overview`), so both read the same graph of a project.
-const codeIndexer = process.env.MENDCODE_CODEGRAPH === "0" ? undefined : createIndexer({ cacheDir: path.join(dir, "codegraph"), now: Date.now, onIndex: codegraphStatus.publish, onProgress: codegraphStatus.publish, scanHost: scanHostCommand() })
+const graph = process.env.MENDCODE_CODEGRAPH === "0" ? undefined : createLazyCodegraph({ cacheDir: path.join(dir, "codegraph"), publish: codegraphStatus.publish, mode: (cwd) => graphIndexMode(extractionSettings(), cwd), enabled: () => featureOn(extractionSettings(), "graph_autopilot", { safeMode }) && featureOn(extractionSettings(), "codegraph", { safeMode }), log: logLine })
 // Which folders are indexed (docs/code-graph.md): `auto` a git repository under the size limit, or the project's `/graph on|off`.
-const codeGate = codeIndexer ? createIndexGate() : undefined
-const graphGateOf = (cwd: string, signal?: AbortSignal) => codeGate!.check({ cwd, mode: graphIndexMode(extractionSettings(), cwd), signal })
+const codeGate = graph?.gate
 // Builds the graph of a real project by itself and keeps it fresh (feature `graph_autopilot`, nightly/dev/local by default); the same gate decides where.
-const graphAutopilot = codeIndexer && codeGate ? createGraphAutopilot({ indexer: codeIndexer, gate: graphGateOf, enabled: () => featureOn(extractionSettings(), "graph_autopilot", { safeMode }) && featureOn(extractionSettings(), "codegraph", { safeMode }), log: logLine }) : undefined
-const codeGraphTools = codeIndexer ? createCodeGraphTools({ cacheDir: path.join(dir, "codegraph"), indexer: codeIndexer, gate: graphGateOf, ...(graphAutopilot ? { autopilot: graphAutopilot } : {}) }) : []
+const graphAutopilot = graph?.autopilot
+const codeGraphTools = graph?.tools ?? []
 /** The graph tools leave the model's list in a folder the gate skips; the footer is told once. Unknown yet (a size not measured): listed. */
 const hiddenGraphTools = (directory: string): readonly string[] => {
   if (!codeGate || !featureOn(extractionSettings(), "codegraph", { safeMode })) return []
@@ -235,10 +236,8 @@ const mcpAllowed = () => featureOn(extractionSettings(), "mcp", { safeMode })
 let extensionMcpServers: (directory: string) => Promise<Record<string, McpServerConfig>> = async () => ({})
 // Opt-in (MENDCODE_BROWSER_EXTENSION=1): the user's own browser through the MendCode extension. Nothing is loaded, opened or listened on otherwise.
 const userBrowser = process.env.MENDCODE_BROWSER_EXTENSION === "1" ? (await import("./browser-bridge")).createUserBrowserBridge({ enabled: true, dataDir: dir, home: homedir() }) : undefined
-const mcp = createMcpManager({ configLoader: createMcpConfigLoader({ userDir: dir, layers: (directory) => layersFor(directory), allowed: mcpAllowed, trustedDirs: () => extractionSettings().trustedToolDirs, extensionServers: (directory) => extensionMcpServers(directory) }), auth: createMcpAuth({ dir }) })
+const mcp = createLazyMcp({ configLoader: createMcpConfigLoader({ userDir: dir, layers: (directory) => layersFor(directory), allowed: mcpAllowed, trustedDirs: () => extractionSettings().trustedToolDirs, extensionServers: (directory) => extensionMcpServers(directory) }), load: async (configLoader) => { const { createMcpManager, createMcpAuth } = await import("@mendcode/mcp"); return createMcpManager({ configLoader, auth: createMcpAuth({ dir }) }) } })
 /** Language servers are lazy, provisioned only from offline caches, and stopped after 5 idle minutes. */
-const lsp = createLspManager({ cacheDir: path.join(dir, "lsp") })
-const formatter = createFormatterManager()
 /**
  * After a write: a configured formatter finishes first (4 s limit per file). Diagnostics come only from a language server that is already
  * running, waited for 300 ms; what it reports later (within 4 s) goes on the session's next tool result. A write never starts a server
@@ -254,7 +253,7 @@ const lspWarmUp = () => {
   const rules = policyRules(effectiveSettings(extractionSettings(), { safeMode }))
   return !(toolDisabled("lsp", rules) && toolDisabled("diagnostics", rules))
 }
-const afterWrite = createAfterWrite({ manager: lsp, formatter, budgetMs: 4_000, diagnosticsWaitMs: 300, warmUp: lspWarmUp })
+const { lsp, formatter, afterWrite, lspTool, diagnosticsTool } = createLazyLsp({ cacheDir: path.join(dir, "lsp"), warmUp: lspWarmUp })
 /**
  * Claude Code's models when the user's own `claude` is installed (MENDCODE_CLAUDE=0 hides them; MENDCODE_CLAUDE_BIN points at a
  * `claude` outside PATH). The subscription's own models are `chatgptModels` below. Only the native engine lets the user choose.
@@ -456,7 +455,7 @@ export const daemon = await startDaemon({
   ...(arg("http-listen") ? { httpListen: arg("http-listen")! } : {}),
   runtimeInfo: { version: packageJson.version, channel: packageJson.version.includes("beta") ? "beta" : packageJson.version.includes("dev") ? "dev" : "stable" },
   ...(arg("http-server") ? { http: JSON.parse(arg("http-server")!) } : {}),
-  ...(argv.includes("--web") ? { web: HTTP_WEB } : {}),
+  ...(argv.includes("--web") ? { web: (await import("./http-web")).HTTP_WEB } : {}),
   ...(hosting.log ? { log: hosting.log } : {}),
   release: { version: packageJson.version },
   trace: argv.includes("--trace") || process.env.MENDCODE_TRACE === "1",
@@ -482,7 +481,7 @@ export const daemon = await startDaemon({
   ...(process.env.MENDCODE_REASONING_ENDPOINT && process.env.MENDCODE_REASONING_TOKEN ? { reasoningEvaluator: createLoopbackJevEvaluator({ endpoint: process.env.MENDCODE_REASONING_ENDPOINT, token: process.env.MENDCODE_REASONING_TOKEN }) } : {}),
   codegraphStatus,
   ...(graphAutopilot ? { graphAutopilot } : {}),
-  ...(codeIndexer ? { codeOverview: createCodeOverview({ indexer: codeIndexer }) } : {}),
+  ...(graph ? { codeOverview: graph.overview } : {}),
   ...(codeGate ? { codeGate } : {}),
   // Quota refresh (docs/usage-limit.md): how each provider's windows can be asked for. Nothing runs unless the user's `quotaRefresh` lists the provider.
   quotaRefresh: {
@@ -551,7 +550,7 @@ export const daemon = await startDaemon({
     // A Claude Code session (`host`) has no image tool of its own: the ChatGPT login or an OpenAI key makes image_gen work there unconfigured,
     // as the hosted `image_generation` does for a native session. MENDCODE_IMAGE_GEN=0 turns both off.
     const imageGenTool = (host = false) => createDaemonImageGenTool({ dir, settings: () => store.settings.get(), provider: routedProvider(), models: () => modelCatalog.list(), credentials: (id) => providerService.imageTransport?.(id), subscriptionHeaders, ...(host ? { implicit: () => process.env.MENDCODE_IMAGE_GEN !== "0" && (subscriptionBackend() || providerService.imageTransport?.("openai") !== undefined) } : {}) })
-    const builtinTools = [...BUILTIN_TOOLS, ...keyedTools, createDiagnosticsTool(lsp), questionTool, todoTool, createSkillTool(skills, { docs: `${PROGRAM_NAME} docs skills` }), createRememberTool(memory.propose, memory), createMemoryGraphTool(memory), createToolDefine({ userDir: dir }), workflowStartTool, workflowScriptTool, workflowStatusTool, createSidebarTool(dir, (directory, widgets) => emitGlobal({ type: "sidebar.changed", ...(directory ? { directory } : {}), widgets })), sessionsTool, tellTool, threadsTool, packagesTool, sessionMetaTool, loopTool, worktreeTool, prWatchTool, ...codeGraphTools, createLspTool(lsp), workflowSaveTool, workflowControlTool, workflowEventsTool, workflowArtifactsTool, aiConfigTool]
+    const builtinTools = [...BUILTIN_TOOLS, ...keyedTools, diagnosticsTool, questionTool, todoTool, createSkillTool(skills, { docs: `${PROGRAM_NAME} docs skills` }), createRememberTool(memory.propose, memory), createMemoryGraphTool(memory), createToolDefine({ userDir: dir }), workflowStartTool, workflowScriptTool, workflowStatusTool, createSidebarTool(dir, (directory, widgets) => emitGlobal({ type: "sidebar.changed", ...(directory ? { directory } : {}), widgets })), sessionsTool, tellTool, threadsTool, packagesTool, sessionMetaTool, loopTool, worktreeTool, prWatchTool, ...codeGraphTools, lspTool, workflowSaveTool, workflowControlTool, workflowEventsTool, workflowArtifactsTool, aiConfigTool]
     // Extensions tell an override from a clash, and `api.builtinTool` wraps, by these.
     builtinTools.push(createCustomizeUiTool(dir, extensions.reload, emitGlobal))
     builtinTools.push(createExtendTool({ dir, extensions: { reload: extensions.reload, report: extensions.report, routeInput: extensions.routeInput, checkTool: extensionToolCheck(extensions) } }))
@@ -596,6 +595,7 @@ export const daemon = await startDaemon({
           usesAcp: (sessionId, override) => acpAgents.agentOf(turnModel(sessionId, override).model) !== undefined,
           // Created on the first ACP turn only (P5). The agent's session id is kept per (session, agent) so a restart can resume it.
           acp: async () => {
+            const { createAcpEngine } = await import("@mendcode/engine-acp")
             const engine = createAcpEngine({
               agents: acpAgents,
               agentFor: (sessionId, override) => acpAgents.agentOf(turnModel(sessionId, override).model),
@@ -841,7 +841,7 @@ export const daemon = await startDaemon({
           projectTools: async (root, sessionId, scope) => {
             const image = imageGenTool(scope?.host === true)
             const mcpOn = mcpAllowed()
-            return [...(image ? [image] : []), ...(mcpOn ? await mcpTools(mcp, root).catch(() => []) : []), ...(mcpOn ? await mcpResourceTools({ manager: mcp, directory: root }).catch(() => []) : []), ...(safeMode ? [] : await customTools.tools(root).catch(() => [])), ...(await extensions.tools(root, sessionId).catch(() => []))]
+            return [...(image ? [image] : []), ...(mcpOn ? await import("../../mcp/src/tools").then(({ mcpTools }) => mcpTools(mcp, root)).catch(() => []) : []), ...(mcpOn ? await import("../../mcp/src/resource-tools").then(({ mcpResourceTools }) => mcpResourceTools({ manager: mcp, directory: root })).catch(() => []) : []), ...(safeMode ? [] : await customTools.tools(root).catch(() => [])), ...(await extensions.tools(root, sessionId).catch(() => []))]
           },
           afterWrite,
           lateWriteNotes: afterWrite.late,
@@ -934,6 +934,7 @@ export const daemon = await startDaemon({
       base: withCodex,
       usesPi: (sessionId, override) => piEnabled() && modelEngine(turnModel(sessionId, override), modelCatalog) === "pi",
       pi: async (sessionId) => {
+        const { createPiEngine } = await import("@mendcode/engine-pi")
         const resolved = piConfig.resolved()
         const sandbox = sessionSandbox({ sessionId, cwd: store.sessionDirectory(sessionId) || cwd })
         const probe = await probePi({ command: resolved.command, env: resolved.env, ...(sandbox ? { sandbox } : {}) })
@@ -1004,7 +1005,7 @@ export const daemon = await startDaemon({
   },
   mcp,
   lsp,
-  lspInstall: ({ server, cwd }) => installLspServer({ id: server, cwd, cacheDir: path.join(dir, "lsp") }),
+  lspInstall: async ({ server, cwd }) => (await import("../../lsp/src/bootstrap")).installLspServer({ id: server, cwd, cacheDir: path.join(dir, "lsp") }),
   formatter,
   models: modelCatalog,
   ...(engineName === "native" ? { providers: providerService, providerAuth } : {}),
