@@ -208,7 +208,7 @@ const providerLimit = (error: unknown): ReviewTurnError | undefined => error ins
 export function overBudgetStop(error: ReviewTurnOverBudget, remaining?: string): PrStopReason {
   return {
     kind: "budget",
-    detail: `A model turn reached the token limit of this review (${Math.round(error.used).toLocaleString("en-US")} tokens counted of ${Math.round(error.limit).toLocaleString("en-US")}; the limit follows the size of the diff, budget.tokens_per_diff_token, up to budget.tokens_per_pr) before it answered, so it was stopped.`,
+    detail: `A model turn counted ${Math.round(error.used).toLocaleString("en-US")} tokens against the ${Math.round(error.limit).toLocaleString("en-US")} left for it (what the turns before it left of this review's cap: budget.tokens_per_pr, scaled by the diff's size with budget.tokens_per_diff_token) before it answered, so it was stopped.`,
     unit: "tokens", used: Math.round(error.used), limit: Math.round(error.limit), resumable: true, ...(remaining ? { remaining } : {}),
   }
 }
@@ -352,7 +352,7 @@ async function reviewRun(input: RunPrReviewInput): Promise<ReviewRun & RunPlatfo
   const resume = input.checkpoint?.result && input.checkpoint.result.head === input.head ? input.checkpoint as ReviewCheckpoint : undefined
   if (input.checkpoint && !resume) notes.push(input.checkpoint.result ? `The checkpoint was taken on head ${input.checkpoint.result.head.slice(0, 12)}, not this one: reviewed again from the start.` : "The checkpoint holds no finished review pass: the review pass runs again.")
   const range = await chooseRange({ input, git, full: config.coverage === "full", resume })
-  if (!range) return skipped("this head was already reviewed")
+  if (!range) return skipped(`head ${input.head.slice(0, 12)} was already reviewed, so nothing was sent to a model; /pr review ${input.number} full reviews it again whole`)
   const incremental = range.incremental
   if (input.onlyIfPublishable && input.publish && config.enabled && (input.gh || input.provider)) {
     const blocked = await publishBlock({ input, config })

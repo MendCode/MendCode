@@ -662,6 +662,8 @@ export const PrReviewControl = lazySchema(() => z.strictObject({
   action: z.enum(["setup-preview", "setup-apply", "watch-repo", "unwatch-repo", "review", "list", "publish-on", "publish-off", "status", "audit", "job-pause", "job-resume", "job-cancel", "job-retry", "take-over", "release", "config-show", "config-preview", "config-apply", "config-revert", "config-history"]),
   directory: z.string().min(1).max(4096).optional(),
   pr: z.string().min(1).max(300).optional(),
+  /** `review` only: review the head whole even when it was already reviewed with the same config (otherwise answered at once, nothing run). */
+  full: z.boolean().optional(),
   /** `watch-repo` only: `all` reviews every PR, `requested` only the ones that request this daemon's forge login; unset, the repo config's `reviewers`. */
   role: z.enum(["all", "requested"]).optional(),
   jobId: z.string().min(1).max(80).optional(),

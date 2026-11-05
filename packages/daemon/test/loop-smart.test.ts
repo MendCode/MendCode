@@ -132,7 +132,8 @@ describe("a loop created from a session in full access", () => {
     expect(readDone(h, loop)).toBeDefined()
     const refused = loopEvents(h, loop).filter((event) => event.type === "item.completed" && event.status === "error")
     expect(refused).toHaveLength(2)
-    expect(refused.every((event) => event.type === "item.completed" && event.text?.includes("plan mode is read-only"))).toBe(true)
+    // In plan mode only to stay read-only: the refusal names the rule, never a plan to submit.
+    expect(refused.every((event) => event.type === "item.completed" && event.text?.includes("this run is read-only"))).toBe(true)
     expect(existsSync(path.join(h.outside, "hack.txt"))).toBe(false)
     expect(existsSync(path.join(h.project, "hack.txt"))).toBe(false)
     expect(h.state(loop.loopId)).toMatchObject({ state: "active", history: [{ outcome: "completed", checkpoint: { status: "continue" } }] })

@@ -486,6 +486,39 @@ describe("PR review service", () => {
     expect(posts).toHaveLength(1)
     expect(path.join(data, "pr-review", "acme", "app", "12.json")).toBeTruthy()
   })
+
+  test("/pr review of a head already reviewed with the same config answers at once and runs nothing; full reviews it again", async () => {
+    const { reviewer, notices, posts, data, turns } = await service()
+    await reviewer.control({ sessionId: "ses_a", action: "review", pr: "12" })
+    for (let i = 0; i < 100 && notices.length < 2; i++) await Bun.sleep(20)
+    await reviewer.control({ sessionId: "ses_a", action: "publish-on" })
+    for (let i = 0; i < 100 && !posts.length; i++) await Bun.sleep(20)
+    expect(posts).toHaveLength(1)
+    expect(turns()).toBe(2)
+    const state = JSON.parse(readFileSync(path.join(data, "pr-review", "acme", "app", "12.json"), "utf8")) as { lastHead?: string; configKey?: string }
+    expect(state.configKey).toBeDefined()
+    const head = state.lastHead!
+    // As on #22 at 0384447e: asked again on the same head and config. Answered now, no job, no model call.
+    const again = await reviewer.control({ sessionId: "ses_a", action: "review", pr: "12" })
+    expect(again.ok && again.text).toBe(`#12 was already reviewed at ${head.slice(0, 12)} with this config, so nothing was run. To review it again whole: /pr review 12 full (pr_review with full: true).`)
+    await Bun.sleep(100)
+    expect(turns()).toBe(2)
+    // A state an older version wrote has no config key (the real 22.json): the finished job of that head says which config it ran with.
+    const file = path.join(data, "pr-review", "acme", "app", "12.json")
+    const { configKey: _dropped, ...legacy } = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>
+    writeFileSync(file, JSON.stringify(legacy))
+    const legacyAgain = await reviewer.control({ sessionId: "ses_a", action: "review", pr: "12" })
+    expect(legacyAgain.ok && legacyAgain.text).toContain("was already reviewed at")
+    await Bun.sleep(100)
+    expect(turns()).toBe(2)
+    // `full` is the explicit ask: the head is reviewed again whole (and, nothing being new, posts nothing).
+    const full = await reviewer.control({ sessionId: "ses_a", action: "review", pr: "12", full: true })
+    expect(full.ok && full.text).toContain("Reviewing #12.")
+    // Review, verify, and the re-check of the open finding an explicit full review does.
+    for (let i = 0; i < 150 && turns() < 5; i++) await Bun.sleep(20)
+    expect(turns()).toBe(5)
+    expect(posts).toHaveLength(1)
+  })
 })
 
 describe("daemon", () => {

@@ -24,7 +24,7 @@ import type { BackgroundPort, InteractivePort, LoopPort, PeerPort, ThreadPort, R
 import { cacheHash, cacheProject, passiveCache, selectCache } from "./cache-policy"
 import { z } from "zod"
 import { agentAllows, agentSection, capPermission, LIST_AGENTS, subagentCatalog, subagentListing, subagentName, type AgentPort, type AgentProfile } from "./agents"
-import { PLAN_EXIT_TOOL, PLAN_MODE_NOTE, PLAN_REVIEW_TOOL, PLAN_TOOL_NAMES, REPORT_ONLY_NOTE, looksLikePlan, planPhase, safePlanArgs } from "./plan-tools"
+import { PLAN_EXIT_TOOL, PLAN_MODE_NOTE, PLAN_REVIEW_TOOL, PLAN_TOOL_NAMES, READ_ONLY_RUN_REFUSAL, REPORT_ONLY_NOTE, looksLikePlan, planPhase, safePlanArgs } from "./plan-tools"
 import { continuationStream } from "./continuation"
 import { pairToolCalls } from "./history"
 import { GOAL_TOOL_NAMES, GOAL_TOOLS, runGoalTool, type GoalPort } from "./goal-tools"
@@ -1351,7 +1351,8 @@ export function createNativeEngine(options: {
     const rulePatterns = nested.length ? [...patterns, ...nested] : patterns
     const denied = rulePatterns.some((pattern) => matchingRule(permissionName(tool.name), pattern, rulesFor(toolset, input.sessionId))?.action === "deny")
     if (denied) return settle({ kind: "deny", by: "rule", reason: `permission rule denies ${tool.name}` }, "deterministic", "Permission rule denies the action")
-    if (mode === "plan" && tool.permission !== "read") return { kind: "deny", by: "rule", reason: "plan mode is read-only; investigate, then propose the plan with plan_submit" }
+    // An internal read-only run (a PR review, a report-only loop) is in plan mode only to stay read-only: its refusal says nothing of plans.
+    if (mode === "plan" && tool.permission !== "read") return { kind: "deny", by: "rule", reason: input.readOnlyRun === true || options.loopRun?.reportOnly(input.sessionId) ? READ_ONLY_RUN_REFUSAL : "plan mode is read-only; investigate, then propose the plan with plan_submit" }
     const pluginPermission = hooks?.has("permission.ask", cwd) ? await hooks.permission?.({ sessionId: input.sessionId, cwd, tool: tool.name, args: structuredClone(call.args as Record<string, unknown>) }) : undefined
     if (pluginPermission?.status === "deny") return { kind: "deny", by: "rule", reason: "plugin permission hook denied the action" }
     const previewOf = (data: unknown) => tool.preview!(data as never, { cwd, signal: input.signal, ...(options.packages ? { packages: options.packages(input.sessionId) } : {}), ...(options.workflows ? { workflows: options.workflows(input.sessionId) } : {}), ...(options.loops ? { loops: options.loops(input.sessionId) } : {}), ...(options.worktrees ? { worktrees: options.worktrees(input.sessionId) } : {}), ...(options.prWatch ? { prWatch: options.prWatch(input.sessionId) } : {}), ...(options.prReview ? { prReview: options.prReview(input.sessionId) } : {}), ...(options.aiConfig ? { aiConfig: options.aiConfig(input.sessionId) } : {}), ...(options.threads ? { threads: options.threads(input.sessionId) } : {}), ...(options.peers ? { peers: options.peers(input.sessionId) } : {}) }).catch(() => undefined)

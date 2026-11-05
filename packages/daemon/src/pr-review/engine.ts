@@ -164,9 +164,14 @@ export type ReviewOutcome = {
   validation?: { ok: boolean; reason: string } | undefined
 }
 
-/** `partial`: the review pass of a diff in parts stopped (the budget) after `done` of `total` parts; its summary is the model's only. */
-type Pass = { result: PrReviewResult; sections?: Record<string, string> | undefined; partial?: { done: number; total: number } | undefined; incomplete?: string | undefined }
+/**
+ * `partial`: the review pass of a diff in parts stopped (the budget) after `done` of `total` parts; its summary is the model's only.
+ * `short`: it stopped before a part because the rest could not be afforded (`passShortfall`), not after spending it.
+ */
+type Pass = { result: PrReviewResult; sections?: Record<string, string> | undefined; partial?: { done: number; total: number } | undefined; incomplete?: string | undefined; short?: Shortfall | undefined }
 type Tokens = ReviewTurn["tokens"]
+/** The result of a review pass that sent nothing. */
+const emptyResult = (context: ReviewContext): PrReviewResult => ({ head: context.head, base: context.base, findings: [], dropped: 0, summary: "", tokens: { input: 0, output: 0, cached: 0 }, budgetHit: true })
 /** Where a review pass of a diff in parts starts: after `done` parts, whose merged pass (findings: the candidates so far) is `pass`. */
 type PassStart = { done: number; pass: Pass }
 
@@ -185,6 +190,24 @@ export class ReviewPassError extends Error {
 export const REVIEW_PASS_SHARE = 0.8
 /** A turn is never limited below this: a repair turn after a nearly spent pass still gets room to answer. */
 const MIN_TURN_LIMIT = 5_000
+
+/** What the parts not reviewed yet would cost (`needed`), against what the review pass has left (`left`); `rate`: tokens counted per diff token. */
+export type Shortfall = { needed: number; left: number; rate: number }
+
+/**
+ * Whether the review pass can still afford every part from `index` on, asked before each part is sent. A review call costs at least
+ * its own diff: before any part that estimate is the floor; after some, the parts reviewed show what one estimated diff token really
+ * counts (the harness, the brief and the files the child reads come on top, and a dense diff such as JSON numbers has more tokens
+ * than its estimate), and the rest is projected at that rate. Undefined when it fits, or when there is no internal cap.
+ */
+export function passShortfall({ parts, index, used, budgetTokens }: { parts: ReadonlyArray<{ tokens: number }>; index: number; used: number; budgetTokens: number }): Shortfall | undefined {
+  if (!Number.isFinite(budgetTokens)) return undefined
+  const left = Math.floor(budgetTokens * REVIEW_PASS_SHARE) - used
+  const reviewed = parts.slice(0, index).reduce((sum, part) => sum + part.tokens, 0)
+  const rate = reviewed > 0 && used > 0 ? Math.max(1, used / reviewed) : 1
+  const needed = Math.ceil(parts.slice(index).reduce((sum, part) => sum + part.tokens, 0) * rate)
+  return needed > left ? { needed, left: Math.max(0, left), rate } : undefined
+}
 
 const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? "" : "s"}`
 const budgetText = (budget: number) => Number.isFinite(budget) ? budget.toLocaleString("en-US") : "no internal cap"
@@ -305,16 +328,27 @@ function partialStop({ pass, context, config, progressed, prior }: { pass: Pass;
   const left = `${total - done} of ${total} parts of the diff not reviewed${candidates.length ? `; ${plural(candidates.length, "candidate finding")} not verified` : ""}`
   const used = Math.max(0, spent(found.tokens))
   const limit = Number.isFinite(config.budgetTokens) ? { limit: config.budgetTokens } : {}
+  const short = pass.short ? shortText({ short: pass.short, done, total, budget: config.budgetTokens }) : undefined
   const stop: PrStopReason = progressed
-    ? { kind: "budget", detail: `The pull request's token budget (${budgetText(config.budgetTokens)}) was reached after part ${done} of ${total} of the review pass; the ${plural(candidates.length, "candidate finding")} found so far ${candidates.length === 1 ? "is" : "are"} kept for the resume.`, unit: "tokens", used, ...limit, resumable: true, remaining: left }
-    : { kind: "no_progress", detail: `The resume reviewed no further part of the diff: the token budget (${budgetText(config.budgetTokens)}) is still spent. Raise budget.tokens_per_pr, or set it to null for no internal cap, and resume again.`, unit: "tokens", used, ...limit, resumable: false, remaining: left }
-  const checkpoint = passCheckpoint({ pass, done, total, config, prior })
-  const summary = [found.summary, ...context.notes, `Stopped at the token budget after part ${done} of ${total} of the review pass; nothing is published until the rest is reviewed and every candidate verified.`].filter(Boolean).join("\n")
+    ? { kind: "budget", detail: short ?? `The pull request's token budget (${budgetText(config.budgetTokens)}) was reached after part ${done} of ${total} of the review pass; the ${plural(candidates.length, "candidate finding")} found so far ${candidates.length === 1 ? "is" : "are"} kept for the resume.`, unit: "tokens", used, ...limit, resumable: true, remaining: left }
+    : { kind: "no_progress", detail: `The resume reviewed no further part of the diff: the token budget (${budgetText(config.budgetTokens)}) is still ${short ? "too small for the rest" : "spent"}. Raise budget.tokens_per_pr, or set it to null for no internal cap, and resume again.`, unit: "tokens", used, ...limit, resumable: false, remaining: left }
+  // Nothing reviewed and nothing spent: no pass to keep, so a retry (with a larger budget) starts the review pass from the start.
+  const checkpoint = passCheckpoint({ pass: done || used ? pass : undefined, done, total, config, prior })
+  const summary = [found.summary, ...context.notes, short ?? `Stopped at the token budget after part ${done} of ${total} of the review pass; nothing is published until the rest is reviewed and every candidate verified.`].filter(Boolean).join("\n")
   return {
     result: { ...found, findings: [], dropped: found.dropped + candidates.length, summary, budgetHit: true },
     verified: true, folded: 0, candidates, completedPhases: checkpoint.completedPhases, validation: validationGate({ complete: false, verified: true }), stop, checkpoint,
     ...(pass.sections ? { sections: pass.sections } : {}),
   }
+}
+
+const tokensText = (value: number) => Math.round(value).toLocaleString("en-US")
+
+/** Why the review pass stopped before a part it could not afford: what the rest needs, what was left, and that it was not spent. */
+function shortText({ short, done, total, budget }: { short: Shortfall; done: number; total: number; budget: number }): string {
+  const allowed = `${tokensText(short.left)} tokens ${done ? "left of" : "that"} this review's pass may spend (${Math.round(REVIEW_PASS_SHARE * 100)}% of its cap of ${budgetText(budget)}: budget.tokens_per_pr, scaled by the diff's size with budget.tokens_per_diff_token)`
+  if (!done) return `Nothing was sent to a model: reviewing this diff${total > 1 ? ` (${total} parts)` : ""} needs at least about ${tokensText(short.needed)} tokens, more than the ${allowed}. Nothing is published; raise budget.tokens_per_pr, or set it to null for no internal cap, to review it.`
+  return `Stopped before part ${done + 1} of ${total} without spending on it: the ${plural(done, "part")} reviewed counted about ${short.rate.toFixed(1)} tokens per diff token, so the ${plural(total - done, "remaining part")} need about ${tokensText(short.needed)}, more than the ${allowed}. Nothing is published until the rest is reviewed and every candidate verified; raise budget.tokens_per_pr and resume.`
 }
 
 /**
@@ -406,6 +440,9 @@ export async function runReview({ sessionFactory, context, config }: { sessionFa
 async function reviewPass({ sessionFactory, context, config, from, prior }: { sessionFactory: ReviewSessionFactory; context: ReviewContext; config: ReviewEngineConfig; from?: PassStart | undefined; prior?: ReviewCheckpoint | undefined }): Promise<Pass> {
   const parts = context.parts && context.parts.length > 1 ? context.parts : undefined
   if (!parts) {
+    // A diff larger than all the review pass may spend is never sent: one call would pay for it and still be stopped.
+    const short = from ? undefined : passShortfall({ parts: [context], index: 0, used: 0, budgetTokens: config.budgetTokens })
+    if (short) return { result: emptyResult(context), partial: { done: 0, total: 1 }, short }
     const pass = await onePass({ sessionFactory, context, whole: context, config, notes: true, used: from ? spent(from.pass.result.tokens) : 0 })
     if (!from) return pass
     const tokens = add(from.pass.result.tokens, pass.result.tokens)
@@ -414,7 +451,9 @@ async function reviewPass({ sessionFactory, context, config, from, prior }: { se
   const total = parts.length
   let merged = from?.pass
   for (let index = from?.done ?? 0; index < total; index++) {
-    if (merged && spent(merged.result.tokens) >= config.budgetTokens) return { ...merged, partial: { done: index, total } }
+    // Asked before each part is sent: a part the budget cannot carry, or a rest it cannot finish, is not paid for and then stopped.
+    const short = passShortfall({ parts, index, used: merged ? spent(merged.result.tokens) : 0, budgetTokens: config.budgetTokens })
+    if (short) return { ...(merged ?? { result: emptyResult(context) }), partial: { done: index, total }, short }
     let pass: Pass
     try {
       pass = await onePass({ sessionFactory, context: partContext(context, index), whole: context, config, notes: false, used: merged ? spent(merged.result.tokens) : 0 })

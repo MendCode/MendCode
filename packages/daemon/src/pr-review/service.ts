@@ -37,7 +37,7 @@ import { buildStackGraph, stackChanges, stackSummary } from "./stacks"
 import { controlOf, release, takeOver } from "./takeover"
 import { runChecks } from "./verify"
 import { layeredConfig, reviewNotice, runConfigKey, runPrReview, type ReviewRun, type RunPrReviewInput } from "./run"
-import { readReviewState, REVIEW_MARKER, writeReviewState } from "./state"
+import { readReviewState, REVIEW_MARKER, writeReviewState, type ReviewState } from "./state"
 
 /**
  * The daemon's PR reviewer (docs/pr-review.md): the repo watch, `/pr review`, and the throwaway worktree each review reads. A review
@@ -369,6 +369,24 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
 
   /** `forge`: GitLab or Gitea by name, for what the session is told; unset on GitHub. */
   type Reviewed = ReviewRun & { repo: string; head: string; base: string; forge?: string | undefined }
+  /**
+   * Whether `head` was already reviewed whole under `configKey`: it is the review state's last head, with that config. A state an
+   * older version wrote has no config key; then a finished job of that head that ran with it says which config it was.
+   */
+  function reviewedUnder({ repo, number, head, configKey, state }: { repo: string; number: number; head: string; configKey: string; state: ReviewState }): boolean {
+    if (state.lastHead !== head) return false
+    if (state.configKey !== undefined) return state.configKey === configKey
+    // By number and head: a `/pr review` job names its checkout until a watch names the repository.
+    return ledger.list({ number, states: ["done"] }).some((job) => job.head === head && job.coverage !== "audit" && job.configKey === configKey && (job.repo === repo || path.isAbsolute(job.repo)))
+  }
+
+  /** The config key a review of this PR would run under now (`runConfigKey`): its base branch's current tip, and the reviewer's personal layer. */
+  async function configKeyNow({ directory, repo, base, baseRef, scope }: { directory: string; repo: string; base: string; baseRef: string | undefined; scope: ReviewerScope }): Promise<string> {
+    const policy = baseRef && /^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$/.test(baseRef) && !baseRef.includes("..") ? await policyBase(directory, baseRef) : undefined
+    const personal = scope === "personal" ? personalLayer(repo, await watch.loginOf(directory)) : undefined
+    return runConfigKey({ policy: policy ?? base, layers: personal !== undefined ? { personal } : undefined })
+  }
+
   /** `fresh`: the job's checkpoint is not handed to the run (the review of a pushed fix: a new head, its own range). */
   async function reviewOne({ sessionId, directory, number, publish, manual, job, fresh = false, recheck, onlyNew = false }: { sessionId: string; directory: string; number: number; publish: boolean; manual: boolean; job?: ReviewJob | undefined; fresh?: boolean; recheck?: readonly PrFinding[] | undefined; onlyNew?: boolean }): Promise<Reviewed> {
     const repo = await repoOf(directory)
@@ -414,9 +432,11 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
       // `onlyNew` (an `@mendcode review` comment): a head whose ancestor was reviewed with this same config is reviewed like a push
       // (the commits since, and the open findings re-checked); anything else, and every explicit `/pr review`, reviews the whole PR.
       const onlyNewCommits = onlyNew && !checkpoint && !!state.lastHead && state.lastHead !== head && state.configKey === configKey
+      // `@mendcode review` on a head already reviewed with this config: nothing is new, so it is skipped before any model call.
+      const nothingNew = onlyNew && !checkpoint && reviewedUnder({ repo, number, head, configKey, state })
       const reviewed = await review({
         // A watched repository that has not enabled publishing is still reviewed, into this session only: the user started the watch.
-        repo, number, directory: worktree, base: pr.baseRefOid, head, ...(policy ? { policy } : {}), state, git, publish, force: true, full: manual && !onlyNewCommits, onlyIfPublishable: !manual,
+        repo, number, directory: worktree, base: pr.baseRefOid, head, ...(policy ? { policy } : {}), state, git, publish, force: true, full: manual && !onlyNewCommits && !nothingNew, onlyIfPublishable: !manual,
         publisher: { login, check: (config) => publisherOf(directory, repo, config.publishers) }, read: call,
         sessionFactory: recordedSessions(options.sessions(sessionId, worktree), current?.id),
         // GitLab and Gitea: the title and the description the adapter read (linked issues are read through gh on GitHub), so
@@ -596,7 +616,9 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
         ...(job ? { effects, reviewer: job.reviewer, configKey: first.configKey ?? job.configKey, jobId: job.id, isCurrent: () => isCurrent(job.id) } : {}),
       }
       const report = forge ? await publishThroughProvider({ provider: forge.provider, ...common }) : await publishReview({ ...common, process: call, ...(job && login ? { self: login } : {}) })
-      if (report.posted) writeReviewState(options.dir, first.repo, number, report.state)
+      // With the config it ran under, as a review posted at once keeps it: a later `@mendcode review` or `/pr review` of this head knows it.
+      const configKey = first.configKey ?? job?.configKey
+      if (report.posted) writeReviewState(options.dir, first.repo, number, { ...report.state, ...(configKey ? { configKey } : {}) })
       void outbox.say(sessionId, report.posted ? `Posted the held review of ${first.repo}#${number} (${report.comments} inline comment${report.comments === 1 ? "" : "s"}).` : `The held review of ${first.repo}#${number} was not posted: ${report.reason ?? "unknown reason"}.`)
     })
     held.set(directory, list)
@@ -1928,10 +1950,11 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
   const configControl = createConfigControl({ dataDir: options.dir, repo: (directory) => repoCached(directory).catch(() => undefined), login: (directory) => watch.loginOf(directory), git, now, provider: "github", profiles })
   const platform = createPlatformControl(handle, { configControl, takeover: { takeOver, release }, now, tokens24h: () => accounting.last24h().tokens })
 
-  type ControlInput = { sessionId: string; action: PrReviewAction; directory?: string | undefined; pr?: string | undefined; role?: "all" | "requested" | undefined; jobId?: string | undefined; reason?: string | undefined; scope?: ReviewerScope | undefined; patch?: Record<string, unknown> | undefined; version?: number | undefined }
+  /** `full` (`review` only): review the head whole even when it was already reviewed with this config. */
+  type ControlInput = { sessionId: string; action: PrReviewAction; directory?: string | undefined; pr?: string | undefined; full?: boolean | undefined; role?: "all" | "requested" | undefined; jobId?: string | undefined; reason?: string | undefined; scope?: ReviewerScope | undefined; patch?: Record<string, unknown> | undefined; version?: number | undefined }
   type ControlResult = { ok: true; text: string; watches: ReturnType<typeof watch.rows>; dashboard?: PrReviewDashboard; config?: PrReviewConfigView } | { ok: false; message: string }
 
-  async function control({ sessionId, action, directory: given, pr, role, jobId, reason, scope, patch, version }: ControlInput): Promise<ControlResult> {
+  async function control({ sessionId, action, directory: given, pr, full, role, jobId, reason, scope, patch, version }: ControlInput): Promise<ControlResult> {
     if (!options.enabled()) return { ok: false, message: PR_REVIEW_DISABLED }
     const directory = given ?? options.sessionDirectory(sessionId)
     if (!directory || !path.isAbsolute(directory)) return { ok: false, message: "unknown session directory" }
@@ -1983,6 +2006,15 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
     // A review of this PR that is queued or running already is the one this request asks for: it joins it, nothing is spent twice.
     const joined = watch.openReview(directory, number, "", reviewer.id)
     if (joined) return done(`#${number} is already being reviewed (job ${joined.id}, ${joined.state}${joined.checkpoint.phase ? `, ${joined.checkpoint.phase}` : ""}${joined.head ? `, head ${joined.head.slice(0, 12)}` : ""}); this request joined it, and the findings arrive in the session that started it. ${OPEN_HINT(joined.id)}`)
+    // The same head under the same config was reviewed already: answered now, before anything is spent, unless `full` is asked.
+    if (facts && !full) {
+      const repo = await repoCached(directory).catch(() => undefined)
+      const state = repo ? readReviewState(options.dir, repo, number) : undefined
+      if (repo && state?.lastHead === facts.head) {
+        const configKey = await configKeyNow({ directory, repo, base: facts.base, baseRef: facts.baseRef, scope: reviewer.scope }).catch(() => undefined)
+        if (configKey && reviewedUnder({ repo, number, head: facts.head, configKey, state })) return done(`#${number} was already reviewed at ${facts.head.slice(0, 12)} with this config, so nothing was run. To review it again whole: /pr review ${number} full (pr_review with full: true).`)
+      }
+    }
     const queued = watch.review({ directory, sessionId, number, head: "" }, { reviewer: reviewer.id, scope: reviewer.scope }, forge ? { kind: forge.kind, repo: forge.repo } : undefined)
     return done(`Reviewing #${number}. The findings arrive in this session when the review ends (two passes, no edits).${queued ? ` Job ${queued}: ${OPEN_HINT(queued)}` : ""}`)
   }

@@ -18,8 +18,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 - `/reviews open <job id>` opens a PR review's reviewer session, and a running review shows its phase in `/reviews`. See [PR review](docs/pr-review.md).
 - `@mendcode review full` reviews the whole PR; plain `@mendcode review` reviews only what is new since the last full review. See [PR review](docs/pr-review.md).
 - The PR reviewer's own tokens show in `/usage` as the `prReview` role. See [usage](docs/usage.md#auxiliary-calls).
-- `budget.tokens_per_diff_token` scales a review's token cap with its diff. See [PR review](docs/pr-review.md).
-- `threads` and `sessions` ask for up to 100 sessions (10 by default) and take `query`, `state` and `project` filters. See [peers](docs/peers.md#sessions).
+- `budget.tokens_per_diff_token` scales a review's token cap with its diff. See [PR review](docs/pr-review.md).- `threads` and `sessions` ask for up to 100 sessions (10 by default) and take `query`, `state` and `project` filters. See [peers](docs/peers.md#sessions).
 - `/loop` understands phrases in Spanish and English (`/loop cada 5 minutos ve diciéndome`, `/loop daily at 9am check the issues`) and asks for one line of confirmation before it starts; with no interval it paces itself (`adaptive`), and a schedule it cannot read is converted by the small model. The strict form (`/loop every 30m …`) is unchanged. See [loops](docs/loops.md#natural-language).
 - A loop starts with the permission mode of the session that created it (never more): from full access it asks nothing, and a report-only loop reads any path like its creator. From a session that asks, it reads what that session could read and asks about the rest; the footer shows `needs input` and `/loops` shows the request and answers it with `a`, `o` or `x`. A run nobody answers ends with a clear message. See [loops](docs/loops.md#permissions-and-approvals).
 - Every loop run leaves a short notice in the session that created the loop, with a link to the loop's session; it starts no model turn and the model reads it with your next message (`/loop open <id>`); `notify: none` turns it off. See [loops](docs/loops.md#notices-in-the-creator-session).
@@ -45,6 +44,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 ### Changed
 
 - The compaction card is two rows (stage with its bar, context before and after) and shows one loading spinner, the activity line's, instead of three.
+- `/pr review` (and `@mendcode review`) of a head already reviewed with the same config answers at once and runs nothing; `/pr review <n> full` reviews it again. See [PR review](docs/pr-review.md).
 - Folder profiles are now called areas: `mendcode area add|list|remove` and the `areas` setting (the old `profiles` setting is still read), and `mendcode profile restore` is `mendcode customize restore`. See [areas](docs/areas.md).
 - Packages are now called profiles: `mendcode profile ...`, `/profiles`, the `profiles` tool and `mendcode-profile.json`. The old names (`mendcode package`, `/packages`, `/pkg`, `mendcode-package.json`, `disabledPackages`) still work. See [profiles](docs/profiles.md).
 - The notice for an installed update now reads `New build installed · /restart to switch`, and the message that resumes work after a usage limit lifts is worded in MendCode's own voice.
@@ -100,6 +100,8 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Fixed
 
+- PR reviews and report-only loops are no longer told about plans when they try a change (MendCode's own engine and Claude Code), and Claude Code runs them outside its plan mode, so a reviewer never mistakes plan mode for a limit on its review.
+- A PR review whose diff does not fit its token budget stops before it spends: it says so up front, or before the next part of a large diff, instead of after. See [PR review](docs/pr-review.md#budgets-quotas-and-accounting).
 - PR review notices link to the pull request (and the review they name) on GitHub, and show a job by a short id with the `/reviews open` hint, so narrow terminals keep the important words. See [PR review](docs/pr-review.md).
 - Computer use on apps whose content is a webview (Tauri, WebKit, Electron): the page's content is exposed, a key reaches the app when no node can take focus, and a thin result tells the model to look again before giving up. See [computer use](docs/computer.md).
 - The folders MendCode makes in the system temporary directory for Claude Code, Codex and ACP sessions are removed when the daemon stops, and a daemon that died leaves none behind: the next start clears them.

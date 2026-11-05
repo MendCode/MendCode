@@ -1873,6 +1873,26 @@ describe("claude engine plan mode note", () => {
     engine.stop()
   })
 
+  test("an internal read-only run starts Claude Code in its default mode (no plan-mode reminders) and its refusals never name a plan", async () => {
+    let decision: any
+    const fake = fakeClaude({
+      async onUser(api) {
+        decision = await api.ask({ tool_name: "Bash", input: { command: "make" } })
+        streamText(api, 0, "ok")
+        api.push(result())
+      },
+    })
+    const { engine, spawned } = engineWith([fake])
+    const turn = turnInput({ mode: () => "plan" })
+    expect(await engine.runTurn({ ...turn.input, readOnlyRun: true })).toEqual({ status: "ok" })
+    engine.stop()
+    expect(spawned[0]!.args).toEqual(expect.arrayContaining(["--permission-mode", "default"]))
+    expect(fake.written.some((message) => message.request?.subtype === "set_permission_mode" && message.request.mode === "plan")).toBe(false)
+    expect(turn.asked).toHaveLength(0)
+    expect(decision).toEqual({ behavior: "deny", message: "This run is read-only: only read tools are allowed; answer from what you can read." })
+    expect(JSON.stringify(decision)).not.toMatch(/plan/i)
+  })
+
   test("a slash command in plan is sent as typed", async () => {
     const fake = fakeClaude({ onUser(api) { streamText(api, 0, "ok"); api.push(result()) } })
     const { engine } = engineWith([fake])

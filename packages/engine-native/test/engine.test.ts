@@ -524,6 +524,20 @@ describe("native engine loop", () => {
     expect(requests[1]!.messages.at(-1)).toMatchObject({ output: "unknown tool: task", isError: true })
   })
 
+  test("an internal read-only run (a PR review) in plan mode is refused a change without any word of plans or plan_submit", async () => {
+    const log: string[] = []
+    const { provider, requests } = scriptedProvider([callTool("write", { path: "a.ts" }), stop("done")])
+    const { input, asked } = turn({ text: "review it", mode: () => "plan" })
+    await createNativeEngine({ provider, tools: [writeTool(log)], history: memoryHistory(), cwdFor: () => "/repo", system: () => "sys", compactionPrompt: "s" }).runTurn({ ...input, readOnlyRun: true })
+    const refusal = requests[1]!.messages.at(-1) as { output: string; isError: boolean }
+    expect(refusal.isError).toBe(true)
+    expect(refusal.output).toContain("this run is read-only")
+    expect(refusal.output).not.toMatch(/plan/i)
+    expect(requests[0]!.system).not.toMatch(/plan mode/i)
+    expect(asked).toHaveLength(0)
+    expect(log).toEqual([])
+  })
+
   test("plan mode: changes are refused, the plan is shown and approval leaves plan mode so the build can proceed", async () => {
     const log: string[] = []
     let mode: PermissionMode = "plan"

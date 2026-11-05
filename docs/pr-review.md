@@ -130,7 +130,9 @@ It is **off by default**: it reaches the network through `gh` (or a [GitLab or G
 tier). Local sessions only; remote and peer clients are refused.
 
 - `/pr review [pr]` reviews one pull request now (the current branch's when omitted), even when the repo config is off; posting still
-  needs `enabled: true`.
+  needs `enabled: true`. A head already reviewed with the same config is answered at once ("already reviewed at …, so nothing was
+  run"), before anything is spent; `/pr review [pr] full` (the tool's `full: true`) reviews it again whole. A plain `@mendcode review` on such a head is
+  skipped the same way.
 - The `pr_review` tool is the model's way to do the same. It has two actions:
   - `review` follows the session's permission mode like a command: full access runs it, other modes ask ("Review a pull
     request"), and a grant for the session or always holds. The repository's filters and the PR claims apply, and the review is posted only as
@@ -711,6 +713,12 @@ one-commit review cannot spend a whole-PR allowance. It is enforced inside a mod
 what is left of the review pass's share (80%) or of the verify budget is cancelled, and the review ends as incomplete ("stopped at
 the token budget; nothing was published") with its checkpoint, instead of finishing the turn first. A personal config can only
 lower `tokens_per_diff_token`.
+
+Before each call of the review pass (each part of a large diff) the reviewer checks that the rest of the diff fits what the pass has
+left. Before the first call the floor is the diff's own size; after some parts, the rest is projected at what those parts really
+counted per diff token (a diff of numbers, such as JSON results, counts far more than its size suggests). A diff that cannot fit
+is never sent ("Nothing was sent to a model"), and a rest that cannot fit stops before the next part instead of paying for it.
+Both are budget stops with their checkpoint: raise `tokens_per_pr` and retry, and the review continues from the parts it has.
 
 When the first pass says it could not review the change (a restriction on its tools or mode, files it could not read: the
 `incomplete` key of its answer, or a summary that says "the review is incomplete" with no findings), the review ends there as

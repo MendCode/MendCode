@@ -158,7 +158,8 @@ export type WorktreePort = {
 export type PrReviewPort = {
   /** What a review of `pr` now would do, for the approval text; never throws. */
   preview(input: { pr?: string | undefined }): Promise<string>
-  review(input: { pr?: string | undefined }): Promise<{ ok: true; text: string } | { ok: false; message: string }>
+  /** `full`: review the head whole even when it was already reviewed with the same config. */
+  review(input: { pr?: string | undefined; full?: boolean | undefined }): Promise<{ ok: true; text: string } | { ok: false; message: string }>
   status(): Promise<{ ok: true; text: string } | { ok: false; message: string }>
 }
 

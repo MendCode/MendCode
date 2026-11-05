@@ -353,7 +353,7 @@ export function createClaudeEngine(options: {
       // Full access is the user's choice to run unattended, so it is allowed; `engineSafetyPrompts: true` shows it as an approval instead.
       const flagged = mode === "full" && connection.permission === "bypassPermissions" && options.safetyPrompts?.() === true
       if (!flagged && (mode === "full" || (mode === "edits" && permission === "write"))) return allow()
-      if (mode === "plan" && permission !== "read") return deny("Plan mode: only reading is allowed until the plan is approved.")
+      if (mode === "plan" && permission !== "read") return deny(turn.input.readOnlyRun === true ? "This run is read-only: only read tools are allowed; answer from what you can read." : "Plan mode: only reading is allowed until the plan is approved.")
       // `description` is Claude's short label (often just the file name); only `decision_reason` says why it asks.
       const reason = flagged && !(typeof request.decision_reason === "string" && request.decision_reason.trim()) ? ENGINE_FLAGGED_REASON : request.decision_reason
       const answer = await ask({ kind: "approval", title: String(request.title ?? claudeToolTitle(name, args)).slice(0, 200), detail: toolDetail(name, args, reason), tool: name, permission, ...(flagged ? { engineFlagged: true as const } : {}) })
@@ -604,7 +604,9 @@ export function createClaudeEngine(options: {
 
   async function connectionFor(input: TurnInput): Promise<Connection> {
     const model = options.modelFor(input.sessionId, input.selection?.model)
-    const mode = input.permissionMode()
+    // An internal read-only run (a PR review, a report-only loop) is in plan mode only to stay read-only: Claude Code runs it in its
+    // default mode, so its own plan-mode reminders never reach the run, and every tool that would change something is refused here.
+    const mode = input.readOnlyRun === true && input.permissionMode() === "plan" ? "ask" : input.permissionMode()
     let connection = connections.get(input.sessionId)
     // Effort is fixed when Claude Code starts, so a new model or effort restarts the process and resumes the session.
     // New `/env` credentials restart it too, unless a background agent would be lost: they wait for the next start.

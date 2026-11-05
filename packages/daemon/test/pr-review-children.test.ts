@@ -47,7 +47,7 @@ const skill = defineTool({ name: "skill", description: "Load a skill", permissio
 const memoryTools = ["memory", "memory_graph", "remember"].map((name) => defineTool({ name, description: `Stands for ${name}`, permission: "read", args: z.object({}), execute: async () => ({ output: "user memory: prefers tabs", truncated: false, title: name, isError: false }) }))
 
 /** Runs `/pr review 12` in a real daemon whose review child is the scripted model `steps`; returns what the child was offered and got. */
-async function reviewWith(steps: ModelEvent[][], outcome = "reviewed") {
+async function reviewWith(steps: ModelEvent[][], outcome = "reviewed", { parentMode }: { parentMode?: "plan" | "ask" | "full" } = {}) {
   const { dir: project, base, head } = await repository()
   const data = temp("pr-child-data-")
   const run: GhRun = async ({ argv }) => {
@@ -75,14 +75,23 @@ async function reviewWith(steps: ModelEvent[][], outcome = "reviewed") {
   const created = await client.send({ type: "session.create", directory: project, title: "t" })
   const sessionId = (created.ok ? created.result?.sessionId : undefined) as SessionId
   await client.send({ type: "settings.set", patch: { tier: "balanced", experimental: { pr_review: true } } })
+  if (parentMode) expect(await client.send({ type: "session.permission.set", sessionId, mode: parentMode })).toMatchObject({ ok: true })
   expect(await client.send({ type: "pr.review", sessionId, action: "review", pr: "12" })).toMatchObject({ ok: true })
   const notice = () => daemon.store.readAfter(sessionId, 0, 10_000).flatMap((event) => event.type === "queue.added" && event.notice && event.text.startsWith("PR review of") ? [event.text] : [])[0]
   for (let i = 0; i < 300 && !notice(); i++) await Bun.sleep(20)
   expect(notice()).toContain(`PR review of acme/app#12: ${outcome}`)
   // The review turn's last model call holds every tool result of that turn.
   const results = requests.map((request) => request.messages.filter((message) => message.role === "tool")).reduce((most, next) => next.length > most.length ? next : most, [])
-  return { offered: requests[0]!.tools.map((tool) => tool.name), results, limits }
+  return { offered: requests[0]!.tools.map((tool) => tool.name), results, limits, requests }
 }
+
+test("a review started from a session in plan mode inherits neither plan mode's note, its plan tools nor its refusal words (#22: 'the active planning restriction prevented delivery')", async () => {
+  const { offered, results, requests } = await reviewWith([callTool("write", { path: "a.ts", content: "x" }), callTool("read", { path: "a.ts" }), stop(JSON.stringify({ summary: "Changes one.", findings: [] }))], "reviewed", { parentMode: "plan" })
+  for (const name of ["plan_submit", "plan_review", "plan_exit"]) expect(offered).not.toContain(name)
+  for (const request of requests) expect(request.system).not.toMatch(/plan mode|plan_review|complete plan/i)
+  expect(JSON.stringify(requests.flatMap((request) => request.messages))).not.toMatch(/plan mode|plan_submit|Present the complete plan/i)
+  expect(JSON.stringify(results[1])).toContain("export const one = 2")
+})
 
 test("a review child reads the pull request with read, grep and glob; it is not offered shell, which plan mode refuses on every call (a live review: 'repository reads were denied')", async () => {
   // The review child's model reads the changed file the way models often do, with a command first, then with `read`.
