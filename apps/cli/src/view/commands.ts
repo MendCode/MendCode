@@ -101,6 +101,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   { name: "privacy", group: "context", aliases: [], summary: "Toggle optional local chat encryption" },
   { name: "secrets", group: "context", aliases: [], summary: "Manage pasted secrets" },
   { name: "ps", group: "agents", aliases: [], summary: "Show or stop background commands" },
+  { name: "approvals", group: "agents", aliases: [], summary: "Jump to children waiting for approval" },
   { name: "tasks", group: "agents", feature: "subagents", aliases: [], summary: "Browse child sessions" },
   { name: "relaunch", group: "agents", aliases: [], summary: "Start again the sub-agents esc stopped" },
   { name: "bg", group: "agents", aliases: ["background"], summary: "Detach to Agent View" },

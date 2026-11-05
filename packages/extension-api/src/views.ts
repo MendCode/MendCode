@@ -145,7 +145,7 @@ export type ToolCardModel = Readonly<{
   mapDetail?: "balanced" | "full"
 }>
 
-export type ApprovalOption = Readonly<{ label: string; /** The letter key that also picks it ("" when none). */ key: string; choice: "once" | "session" | "project" | "user" | "deny" | "note" | "edit" | "comment" }>
+export type ApprovalOption = Readonly<{ label: string; /** The letter key that also picks it ("" when none). */ key: string; choice: "once" | "session" | "project" | "user" | "deny" | "note" | "edit" | "comment" | "answer" }>
 export type ApprovalModel = Readonly<{
   requestId: string
   /** `panel` is the boxed prompt; `inline` is the minimal view's one-line prompt. */

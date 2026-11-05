@@ -328,6 +328,12 @@ export function createSlash(ctx: AppContext, actions: {
       case "sessions":
         await openSessions()
         break
+      case "approvals": {
+        const launcher = [...state.childWaiting.keys()].find((id) => id !== state.sessionId) ?? [...state.childWaiting.keys()][0]
+        if (!launcher) say("no child session waits for approval", "info")
+        else if (launcher !== state.sessionId) await switchSession(launcher as SessionId)
+        break
+      }
       // `/open src/app.rs:120-140` opens a file in the viewer (`@` completes the path); `/open close` or a bare `/open` with a file open closes it.
       case "open": {
         const raw = parsed.args.trim()

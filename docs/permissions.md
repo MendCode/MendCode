@@ -299,10 +299,12 @@ card). Nothing is raised without your answer. Every tier.
 **Children waiting for approval.** A session started from another session's shell (`mendcode run --bg`) has no terminal
 attached, so its approval used to wait unseen. Now, within a second or two of the first one, the launching session's model gets
 one notice listing what waits (it cannot approve, and is told not to poll or work around it), and a terminal of yours that has the
-launching session (or another session of its project) open gets one card: **Approve all (N)**, **Deny all** or **One by one**.
-Approve all answers exactly the requests the card listed, once each, not ones that arrived later; **One by one** opens a card per
-child. A choice a child asks with options (such as a `mendcode_settings` proposal) is shown the same way and your pick is
-forwarded. Only your own local terminal answers; dismissing a card answers nothing. A request answered in the child's own session
+launching session (or another session of its project) open gets one card, drawn like any tool approval: **Allow all (N)**, **Reject all** or **One by one**, with a row per child
+(`title · tool: detail`). Allow all answers exactly the requests the card listed, once each, not ones that arrived later;
+**One by one** opens a card per child (**Allow once** or **Reject**). A choice a child asks with options (such as a `mendcode_settings` proposal) is shown the same way and your pick is
+forwarded. Every other terminal of yours, on any session, shows a notice with the child's and the launcher's names and
+`child approvals · /approvals` in the footer's agents segment; `/approvals` opens the launching session, where the card is. The
+notice goes when the children are answered. Only your own local terminal answers; dismissing a card answers nothing. A request answered in the child's own session
 leaves the card. `mendcode session status ID` names what a child waits on (`Waiting: approval …`) and `mendcode logs ID` shows
 `waiting for approval` lines. Nothing runs until a child waits. The link to the launching session is stored with the
 child, so it survives a daemon restart: a child that waits after one is announced to the same launcher. Every tier.

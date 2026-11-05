@@ -945,6 +945,10 @@ export async function startDaemon(options: DaemonOptions) {
         emit: (draft) => void sessionSink.append(draft),
         mask: (sessionId, text) => secrets.mask(sessionId, text),
         notify: async (launcher, text, queueId) => actorFor(launcher)?.notify(text, queueId, false, "steer"),
+        announce: (waiting) => {
+          const event: GlobalEvent = { type: "children.waiting", gseq: 0, at: clock.now(), ...waiting }
+          for (const connection of connections) if (connection.clientId && isHumanTerminal(connection)) send(connection, { v: PROTOCOL_VERSION, kind: "global", body: event })
+        },
         async resolveChild({ child, requestId, decision, clientId }) {
           await actorFor(child)?.handle({ id: ids("command"), clientId: (clientId ?? taskClientId) as never, type: "request.resolve", sessionId: child, requestId, decision })
         },
@@ -3515,6 +3519,8 @@ export async function startDaemon(options: DaemonOptions) {
       for (const quota of store.latestQuota()) send(connection, { v: PROTOCOL_VERSION, kind: "global", body: quota })
       // The code graph's last counts per project (a local terminal's footer); none is computed here.
       if (!connection.remoteAddress && !connection.peer) for (const status of options.codegraphStatus?.snapshot() ?? []) send(connection, { v: PROTOCOL_VERSION, kind: "global", body: codegraphEvent(status) })
+      // Children that wait for approval now, for a terminal that opens while they do.
+      if (isHumanTerminal(connection)) for (const waiting of childApprovals?.snapshot() ?? []) send(connection, { v: PROTOCOL_VERSION, kind: "global", body: { type: "children.waiting", gseq: 0, at: clock.now(), ...waiting } })
       // Whether the graph indexes this terminal's folder, so its footer can say a skip before the first turn; measured once, in the background.
       if (!connection.remoteAddress && !connection.peer && connection.directory) void publishGraphGate(connection.directory)
       send(connection, { v: PROTOCOL_VERSION, kind: "global", body: usageToday.snapshot() })

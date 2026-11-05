@@ -26,7 +26,7 @@ export type PanelRows = { rows: Line[]; hits: PanelHit[] }
  * `edit` and `comment` are plan-review choices and `note` is a rejection with a note; the terminal handles those itself
  * (the typed text goes back as the reason). `project` and `user` approve once and also save an allow rule. The others resolve the request.
  */
-export type ApprovalChoice = { label: string; key: string; choice: "once" | "session" | "project" | "user" | "deny" | "note" | "edit" | "comment" }
+export type ApprovalChoice = { label: string; key: string; choice: "once" | "session" | "project" | "user" | "deny" | "note" | "edit" | "comment" | "answer" }
 
 export const PLAN_TITLE = "Review plan"
 
@@ -44,7 +44,18 @@ export function ruleOffer(request: Pick<PanelRequest, "title" | "tool" | "permis
  * row. Those have no letter key: a prompt typed as an answer must never start by saving a rule.
  * A call the engine flagged although the session is in full access (`flagged`) offers only "Allow once" and "Reject".
  */
-export function approvalOptions(title: string, offer?: ApprovalRuleOffer, flagged?: boolean): ApprovalChoice[] {
+export function approvalOptions(title: string, offer?: ApprovalRuleOffer, flagged?: boolean, own?: ReadonlyArray<{ label: string }>): ApprovalChoice[] {
+  // An approval the daemon words itself (children waiting for the launcher): its labels go back as the answer; the letter is the first free initial.
+  if (own?.length) {
+    const taken = new Set<string>()
+    return own.map((option) => {
+      // Rejecting is "d" in every approval; the others take their initial.
+      const initial = /^(reject|deny)/i.test(option.label.trim()) ? "d" : option.label.trim().charAt(0).toLowerCase()
+      const key = /^[a-z]$/.test(initial) && !taken.has(initial) ? initial : ""
+      if (key) taken.add(key)
+      return { label: option.label, key, choice: "answer" }
+    })
+  }
   if (flagged) return [
     { label: "Allow once", key: "a", choice: "once" },
     { label: "Reject", key: "d", choice: "deny" },
@@ -72,7 +83,7 @@ export function approvalOptions(title: string, offer?: ApprovalRuleOffer, flagge
 }
 
 /** The choices of the pending request as the panel shows them. */
-export const approvalChoicesOf = (request: PanelRequest | undefined): ApprovalChoice[] => (request ? approvalOptions(request.title, ruleOffer(request), request.engineFlagged === true) : [])
+export const approvalChoicesOf = (request: PanelRequest | undefined): ApprovalChoice[] => (request ? approvalOptions(request.title, ruleOffer(request), request.engineFlagged === true, request.options) : [])
 
 /** v1's per-permission icon (`permission.tsx`); glyphs missing from common terminal fonts (⚙ ⟳) fall back to △. */
 export function permissionIcon(tool: string | undefined): string {
@@ -87,8 +98,8 @@ export function permissionIcon(tool: string | undefined): string {
 }
 
 /** `Allow <Title>?` for a tool approval; a plan review keeps its own title. */
-export function approvalTitle(title: string) {
-  return title === PLAN_TITLE || title === "Save to memory?" ? title : `Allow ${title}?`
+export function approvalTitle(title: string, own = false) {
+  return own || title === PLAN_TITLE || title === "Save to memory?" ? title : `Allow ${title}?`
 }
 
 /** The protocol limit of a deny reason: the only text an approval can carry back. */
@@ -119,7 +130,7 @@ export function renderApprovalPanel(input: {
   const { width, request } = input
   const rail: ColorName = "muted"
   const row = (line: Line) => boxRow({ line, width, rail })
-  const rows: Line[] = [row([{ text: ` ${permissionIcon(request.tool)} `, fg: "muted" }, { text: approvalTitle(request.title), fg: "text", bold: true }])]
+  const rows: Line[] = [row([{ text: ` ${permissionIcon(request.tool)} `, fg: "muted" }, { text: approvalTitle(request.title, (input.choices ?? []).some((option) => option.choice === "answer")), fg: "text", bold: true }])]
   if (request.title === "Save to memory?") {
     const parts = request.detail.split("\n")
     const chips = parts.pop() ?? ""

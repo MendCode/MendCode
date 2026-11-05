@@ -284,6 +284,8 @@ export type AppState = {
   mcpsError: string
   acpState: import("../../view/acp-page").AcpPageState
   agentSessions: Map<string, AgentSession>
+  /** Sessions another session started that wait for approval, by the launcher (`children.waiting`). */
+  childWaiting: Map<string, { launcherTitle: string; total: number; children: Array<{ sessionId: string; title: string }> }>
   agentTitles: Map<string, string>
   /** The parent of each sub-agent session a `task.changed` named (the activity push does not carry it): the session pet's `agents` state reads it. */
   agentParents: Map<string, string>

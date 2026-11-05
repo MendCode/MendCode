@@ -198,6 +198,7 @@ export function createApp(input: AppInput) {
     mcpsError: "",
     acpState: { selected: 0 },
     agentSessions: new Map<string, AgentSession>(),
+    childWaiting: new Map(),
     agentTitles: new Map<string, string>(),
     agentParents: new Map<string, string>(),
     agentShells: [],

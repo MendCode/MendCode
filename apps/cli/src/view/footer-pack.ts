@@ -86,6 +86,8 @@ export type PackFacts = {
   jobs?: number
   loops?: number
   workflows?: number
+  /** Children (sessions another session started) waiting for approval whose card is in another session than the open one; `/approvals` goes there. */
+  childApprovals?: number
   agents?: number
   waiting?: number
   goal?: Line
@@ -216,9 +218,10 @@ function segment(id: FooterPackSegment, facts: PackFacts, pack: FooterPackFile, 
         ...(facts.agents ? [`${facts.agents} agent${facts.agents === 1 ? "" : "s"}`] : []),
         ...(facts.loops ? [`${facts.loops} loop${facts.loops === 1 ? "" : "s"}`] : []),
         ...(facts.workflows ? [`${facts.workflows} workflow${facts.workflows === 1 ? "" : "s"}`] : []),
+        ...(facts.childApprovals ? [`${facts.childApprovals} child approval${facts.childApprovals === 1 ? "" : "s"}`] : []),
       ]
       if (!words.length) return undefined
-      return { spans: [...lead(look, id), { text: words.join(" "), fg: facts.waiting ? "warning" : color("secondary") }, ...(facts.waiting ? [{ text: " · needs input", fg: "warning" as const }] : [])] }
+      return { spans: [...lead(look, id), { text: words.join(" "), fg: facts.waiting ? "warning" : color("secondary") }, ...(facts.childApprovals ? [{ text: " · /approvals", fg: "warning" as const }] : facts.waiting ? [{ text: " · needs input", fg: "warning" as const }] : [])] }
     }
     case "goal":
       return facts.goal?.length ? { spans: [...facts.goal] } : undefined

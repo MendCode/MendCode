@@ -62,8 +62,13 @@ function approvalInline(m: BuiltinInput<"approval">, g: Glyphs): Line[] {
 }
 
 /** The key row of the minimal view's approval: what each key does. Not clickable. */
-function approvalInlineKeys(m: Pick<BuiltinInput<"approval">, "width" | "plan">): Line[] {
+function approvalInlineKeys(m: Pick<BuiltinInput<"approval">, "width" | "plan" | "options">): Line[] {
   const { width } = m
+  // The daemon's own choices (children waiting): every one with its key, as worded.
+  if (m.options.length && m.options.every((option) => option.choice === "answer")) {
+    const spans = m.options.flatMap((option): import("../ui/theme").Span[] => [{ text: option.key ? `[${option.key}] ` : "", fg: option.key === "d" ? "error" : "primary", bold: true }, { text: `${option.label}   `, fg: "muted" }])
+    return wrapSpans([{ text: "  " }, ...spans], width)
+  }
   return wrapSpans([
     { text: "  [a] ", fg: "primary", bold: true },
     { text: m.plan ? "approve & build   " : "approve   ", fg: "muted" },

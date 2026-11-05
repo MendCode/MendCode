@@ -52,6 +52,8 @@ export function createChrome(ctx: AppContext, actions: {
   footerSlots: (width: number) => { left?: Line; right?: Line; replace?: Line; rows?: Array<{ left?: Line; right?: Line; replace?: Line }> } | undefined
 }) {
   const { input, state, now, editor, stateLabels: STATE_LABEL, permissionLabels: PERMISSION_LABEL, say, requestFrame, glyphs: g, quotas, codegraph } = ctx
+  /** Children waiting for approval whose card is not in the open session: the footer says so and `/approvals` goes there. */
+  const childrenWaitingElsewhere = () => [...state.childWaiting].reduce((sum, [launcher, waiting]) => sum + (launcher === state.sessionId ? 0 : waiting.total), 0)
   const { loadBranch, ensureScratch, secretTail, agentSubtasks, changeProfile, footerSlots } = actions
   const cacheClock = createCacheClock({ send: (command) => input.send(command), requestFrame })
 
@@ -518,7 +520,8 @@ export function createChrome(ctx: AppContext, actions: {
       loops: state.liveLoops.size,
       workflows: state.liveWorkflows.size,
       agents: state.liveTasks?.filter((task) => task.parentId === state.sessionId && task.state === "running").length ?? 0,
-      waiting: loopsWaiting + flowsWaiting,
+      waiting: loopsWaiting + flowsWaiting + childrenWaitingElsewhere(),
+      ...(childrenWaitingElsewhere() ? { childApprovals: childrenWaitingElsewhere() } : {}),
       ...(state.transcript.goal ? { goal: goalSpans(state.transcript.goal, now(), g) } : {}),
       ...(profile.showAgent ? { mode: name.charAt(0).toUpperCase() + name.slice(1), modeColor: agentColor(state.agentReport?.agents.find((agent) => agent.name === name)) } : {}),
       ...(profile.showPermission ? { permission: state.transcript.permissionMode, permissionLabel: PERMISSION_LABEL[state.transcript.permissionMode] } : {}),

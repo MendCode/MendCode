@@ -21,6 +21,8 @@ daemon contract as automation. See [TSM](tsm.md). Tab completes without executin
 
 `/init [focus]` investigates repository commands, instructions, CI and source before guiding creation or improvement of `AGENTS.md`. It runs in the current session; writing uses the normal tools and permission policy.
 
+`/approvals` goes to the session whose card lists the child sessions waiting for your approval.
+
 `/review [commit|branch|pr]` starts a saved child conversation, leaving the parent's selection and history unchanged. No argument reviews uncommitted changes, a commit uses `git show`, a branch compares its merge-base diff, and a PR requires the agent's available GitHub tooling. Enter opens the child in the TUI; reopen or cancel it with `/tasks`. Headless `--command review` waits for that child's result (or returns its id with `session send --async`). The prompt instructs review-only behavior; tool permissions remain the caller's policy.
 
 `/git [changes | commit | worktrees]` opens the [Git page](git.md): review, a local commit of the files you tick, and worktrees. It has no alias; `/changes`, `/diff`, `/worktrees` and `/warp` open the same page on their tab.
