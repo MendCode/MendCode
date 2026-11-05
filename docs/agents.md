@@ -11,9 +11,9 @@ call it makes. Ported from v1 (`agent/agent.ts`, `.mendcode/agent/*.md`) onto v2
 
 | Layer | Folder | Trust |
 |---|---|---|
-| a user package | `~/.mendcode/packages/<pkg>/agents/` | always |
+| a user profile | `~/.mendcode/packages/<pkg>/agents/` | always |
 | the user's own | `~/.mendcode/agents/` | always |
-| a project package | `<project>/.mendcode/packages/<pkg>/agents/` | project must be trusted |
+| a project profile | `<project>/.mendcode/packages/<pkg>/agents/` | project must be trusted |
 | the project's own | `<project>/.mendcode/agents/` | project must be trusted |
 
 A later layer wins a name, and only then is the 100-agent cap applied (the lowest-priority layers drop first); `agents.list` carries `overridden` entries and the dropped ones appear under `problems`, and `/doctor` prints both. **Trust** is the one custom tools use (`tools.trust`, `/tools`, the `trustedToolDirs` setting):
@@ -171,9 +171,9 @@ name with no child yet, or `agentMentions: "delegate"` (setting; default `addres
 
 A `/prompt-name` expansion of a markdown file per layer is exactly what `commands/*.md` already is (`$ARGUMENTS`, positional arguments,
 `argument-hint`, nested folders as `name:space`, the same layers, `commands.list` / `commands.expand`, `/name` in the
-prompt), so a second folder would be a duplicate with a different name. Put fragments in `commands/`. Packages carry
-`commands/` and `agents/`; the package manifest needs no new field for agents (markdown, nothing to declare like
-`extensions`), and `packages.list` counts them in `contents.agents`.
+prompt), so a second folder would be a duplicate with a different name. Put fragments in `commands/`. Profiles carry
+`commands/` and `agents/`; the profile manifest needs no new field for agents (markdown, nothing to declare like
+`extensions`), and `profiles.list` counts them in `contents.agents`.
 
 Commands also accept JSON templates and agent/model/subtask attributes. `/init` guides repository instructions; `/review` opens a saved child. See [commands.md](commands.md) for execution, shell/file expansion and MCP prompts.
 

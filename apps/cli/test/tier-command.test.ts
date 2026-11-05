@@ -210,7 +210,7 @@ describe("setup", () => {
     const row = SETUP_ROWS.indexOf("tier")
     const draw = (tier?: "minimalist" | "balanced" | "full") => renderSetupPage({ state: { row }, values: { ...values, ...(tier ? { tier } : {}) }, checks: { connected: true, quotas: [] }, firstRun: false, width: 140, height: 50 }).map((line) => line.map((span) => span.text).join("")).join("\n")
     expect(draw("minimalist")).toContain("‹ minimalist ›")
-    expect(draw("minimalist")).toContain("next balanced: +package_tools +codegraph +subagents")
+    expect(draw("minimalist")).toContain("next balanced: +profile_tools +codegraph +subagents")
     expect(draw("balanced")).toContain("next full: +mcp +jev +pets")
     expect(draw("full")).toContain("next: no tier")
     expect(draw()).toContain("‹ none ›")

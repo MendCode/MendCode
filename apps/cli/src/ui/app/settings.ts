@@ -125,7 +125,7 @@ export function createSettings(ctx: AppContext, actions: {
 
   const settingsValues = () => ({ settings: state.settingsNow, theme: themeSelection(), view: state.mode, reducedMotion: state.reducedMotion })
 
-  /** Theme files come from the daemon's layers (a package's `themes/`); asks again and registers them, so a package's theme appears when it turns on and is gone when it turns off. */
+  /** Theme files come from the daemon's layers (a profile's `themes/`); asks again and registers them, so a profile's theme appears when it turns on and is gone when it turns off. */
   function refreshThemes() {
     void input.send({ type: "themes.list", directory: input.directory ?? "" }).then((reply) => {
       if (!reply.ok) return
@@ -143,7 +143,7 @@ export function createSettings(ctx: AppContext, actions: {
 
   /**
    * One change to the terminal's own look: applied at once (the home and prompt redraw), then saved next to the other terminal files.
-   * A `layer` change (a package's activation or an extension's `settings.set`) is applied but never saved and never touches the
+   * A `layer` change (a profile's activation or an extension's `settings.set`) is applied but never saved and never touches the
    * user's settings: the stored profile stays the user's own (profile-layers.ts).
    */
   function changeProfile(requested: Partial<TuiProfile>, options: { layer?: boolean; session?: boolean } = {}) {
@@ -153,7 +153,7 @@ export function createSettings(ctx: AppContext, actions: {
     // A `session` change (a slash command's show/hide) is this session's in this terminal: applied, kept in memory, never saved.
     const stored = !options.layer && !options.session
     const coupling = patch.showContext !== undefined && patch.contextBar === undefined ? { contextBar: patch.showContext ? "top" as const : "off" as const } : {}
-    // Keys a package holds keep the user's value with the look's owners (activation.json), so the stored profile gets only the rest.
+    // Keys a profile holds keep the user's value with the look's owners (activation.json), so the stored profile gets only the rest.
     const held = new Set(stored ? profileLayers.userChanged({ ...patch, ...coupling }) : [])
     const own = Object.fromEntries(Object.entries({ ...patch, ...coupling }).filter(([key]) => !held.has(key))) as Partial<TuiProfile>
     state.tuiProfile = normalizeTuiProfile({ ...state.tuiProfile, ...patch, ...coupling })
@@ -206,7 +206,7 @@ export function createSettings(ctx: AppContext, actions: {
     if (!saved.ok) fail(saved.error)
   }
 
-  /** The stored profile with a package's activation and running extensions' requests over it; see profile-layers.ts. */
+  /** The stored profile with a profile's activation and running extensions' requests over it; see profile-layers.ts. */
   const profileLayers = createProfileLayers(ctx, { changeProfile })
 
   // ─── Prompt editor: undo/redo, stash, external editor, copy ─────────────────────────────────────────────────────────

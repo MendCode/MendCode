@@ -4,7 +4,7 @@ import { BUILTIN_VIEWS, HOST_BLOCKS, builtinFrame, type BuiltinResult, type Fram
 import { rebase, secure, validArgFor } from "./view-safety"
 
 /**
- * The view-slot host (docs/views.md). Every part of the terminal that a user or package may redraw asks the host:
+ * The view-slot host (docs/views.md). Every part of the terminal that a user or profile may redraw asks the host:
  * a custom view registered through the extension runtime answers first, then the built-in renderer of the same slot,
  * which receives the same typed input. A terminal without extensions never loads the runtime and pays one property read.
  *

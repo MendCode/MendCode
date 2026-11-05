@@ -185,7 +185,7 @@ const hostedLabel = (tool: HostedTool) => (tool === "web_search" ? "web search" 
 const hostedOffNote = (tools: readonly HostedTool[]) => `The provider's ${tools.map(hostedLabel).join(" and ")} is failing right now and is off for this step. Do not wait for it: answer with what you have, say that it failed, and use another tool if one can do the job.`
 const INLINE_SHELL_MAX_CHARS = 32_000
 /** Tools a sub-agent never gets: it cannot talk to the user, propose memories, or start workflows on its own. */
-const MAIN_AGENT_ONLY = new Set(["sidebar", "question", "remember", "loop", "worktree", "threads", "packages", "pr_watch", "session_meta"])
+const MAIN_AGENT_ONLY = new Set(["sidebar", "question", "remember", "loop", "worktree", "threads", "profiles", "pr_watch", "session_meta"])
 const mainAgentOnly = (name: string) => MAIN_AGENT_ONLY.has(name) || name.startsWith("workflow_")
 
 /** What `permit` answers: the kernel's resolutions, plus a refusal that came from the permission reviewer rather than the user. */
@@ -715,7 +715,7 @@ export function createNativeEngine(options: {
     // A tool that declares a tier (`Tool.tier`, docs/tiers.md) is offered only when the user's tier includes it.
     const tier = policy().tier
     const inTier = (name: string) => name === "session_meta" ? featureOn(policy(), "session_meta") : tier === undefined || tierIncludes(tier, base.tools.get(name)?.tier ?? "minimalist")
-    const offered = (name: string) => allowed(name) && inTier(name) && (name !== "packages" || !!options.packages && featureOn(policy(), "package_tools"))
+    const offered = (name: string) => allowed(name) && inTier(name) && (name !== "profiles" || !!options.packages && featureOn(policy(), "profile_tools"))
     return { ...base, tools: new Map([...base.tools].filter(([name]) => offered(name))), specs: base.specs.filter((spec) => offered(spec.name)), allowTask: base.allowTask && offered(TASK_TOOL.name) }
   }
 
@@ -760,7 +760,7 @@ export function createNativeEngine(options: {
     const eligible = withPolicy(codeAllowed ? { ...base, specs: [...base.specs.filter((spec) => spec.name !== CODE_TOOL.name), toSpec(CODE_TOOL)], codeCatalog: base, codeActive: active } : base)
     const discovery = discoveryOn()
     const planDeferred = planToolsDeferred()
-    const deferred = (name: string) => name === "packages" || discovery && !primary(name) || planDeferred && PLAN_TOOLS.has(name) && !primary(name)
+    const deferred = (name: string) => name === "profiles" || discovery && !primary(name) || planDeferred && PLAN_TOOLS.has(name) && !primary(name)
     const allListed = (specs: ToolSpec[]): Toolset => ({ ...eligible, specs, catalog: { listed: specs.map((spec) => spec.name), deferred: [] } })
     if (!eligible.specs.some((spec) => deferred(spec.name))) return allListed(eligible.specs)
     // Without permission to search, keep the allowed catalog usable directly.

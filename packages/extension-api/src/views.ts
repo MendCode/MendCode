@@ -1,5 +1,5 @@
 /**
- * View slots: one contract that lets an extension or a package replace how a part of the terminal is drawn.
+ * View slots: one contract that lets an extension or a profile replace how a part of the terminal is drawn.
  * Types and one small constant table only (no zod, no imports), so view authors and the thin client share it:
  * `import type { ViewRenderer } from "@mendcode/extension-api/views"`.
  *

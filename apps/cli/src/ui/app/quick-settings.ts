@@ -180,7 +180,7 @@ export function createQuickSettings(ctx: AppContext, actions: { changeProfile(pa
         sections: [
           { heading: "Now", note: settings.tier ?? "no tier", lines: [
             settings.tier ? `- ${settings.tier}: ${TIER_BUNDLES[settings.tier].summary}` : "- no tier set: every feature keeps its own default",
-            ...(input.safeMode ? ["- safe mode: no extensions, packages, hooks, MCP or project tools"] : []),
+            ...(input.safeMode ? ["- safe mode: no extensions, profiles, hooks, MCP or project tools"] : []),
           ] },
           { heading: "Bundles", lines: TIERS.map((tier) => {
             const bundle = TIER_BUNDLES[tier]

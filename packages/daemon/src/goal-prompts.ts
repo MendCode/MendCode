@@ -40,7 +40,7 @@ type Cached = { signature: string; text: string }
 
 /**
  * The goal templates: the packaged ones, overridable like the other prompts by `goals/<kind>.md` in an extension layer
- * (the last layer that has the file wins, so the project's own folder beats its packages, which beat the user's folder).
+ * (the last layer that has the file wins, so the project's own folder beats its profiles, which beat the user's folder).
  * Reads are cached by mtime and size.
  */
 export function createGoalPrompts(input: { layersFor(directory: string): ExtensionLayer[]; enabled?: boolean; packagedDir?: string }) {

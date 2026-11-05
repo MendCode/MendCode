@@ -18,7 +18,7 @@ import { CACHE_LIFETIME_MINUTES_RANGE, CACHE_TTLS } from "./idle-compaction-data
 import { MODEL_CONTEXT_LIMIT, MODEL_CONTEXT_RANGE } from "./model-context"
 import { BlobRef, ItemId, MemoryId, SessionId, TurnId } from "./ids"
 import { ForegroundState } from "./states"
-import { DEFAULT_PROFILE, PROFILE_NAME } from "./profiles"
+import { DEFAULT_AREA, AREA_NAME } from "./areas"
 import { ImageGenerationSettings } from "./image-generation"
 import { VoiceSettings } from "./voice"
 import { lazySchema } from "./lazy"
@@ -451,16 +451,16 @@ export const RecipesReport = lazySchema(() => z.strictObject({ recipes: z.array(
 export type RecipesReport = z.infer<typeof RecipesReport>
 
 /**
- * A profile by folder (`company` for `~/Code/acme/*`): sessions under its folders use its memory, its model roles and
- * its default permission. Everything outside every profile is `personal`, which uses the top-level settings.
+ * An area by folder (`company` for `~/Code/acme/*`): sessions under its folders use its memory, its model roles and
+ * its default permission. Everything outside every area is `personal`, which uses the top-level settings.
  */
-export const Profile = lazySchema(() => z.strictObject({
-  name: z.string().regex(PROFILE_NAME).refine((name) => name !== DEFAULT_PROFILE, { message: `"${DEFAULT_PROFILE}" is the default profile` }),
+export const Area = lazySchema(() => z.strictObject({
+  name: z.string().regex(AREA_NAME).refine((name) => name !== DEFAULT_AREA, { message: `"${DEFAULT_AREA}" is the default area` }),
   directories: z.array(z.string().min(1).max(4096)).min(1).max(16),
   models: ModelRoles.optional(),
   defaultPermission: z.enum(["ask", "edits", "full", "smart"]).optional(),
 }))
-export type Profile = z.infer<typeof Profile>
+export type Area = z.infer<typeof Area>
 
 /** User settings, owned by the daemon and pushed to every terminal on change. All fields optional. */
 /** ACP configuration exposed to clients: environment names only. Values stay in acp-agents.json. */
@@ -475,11 +475,11 @@ export const AcpAgentName = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/
 const SharedSettings = lazySchema(() => z.strictObject({
   /** settings.set merges entries; null removes one. Backed by the existing ACP config file. */
   acpAgents: z.record(AcpAgentName, AcpAgentSettings).optional(),
-  /** Folder profiles (at most 8, unique names); see `Profile`. */
-  profiles: z
-    .array(Profile)
+  /** Areas (at most 8, unique names); see `Area`. The older `profiles` key is read as `areas` (store). */
+  areas: z
+    .array(Area)
     .max(8)
-    .refine((profiles) => new Set(profiles.map((profile) => profile.name)).size === profiles.length, { message: "profile names must be unique" })
+    .refine((areas) => new Set(areas.map((area) => area.name)).size === areas.length, { message: "area names must be unique" })
     .optional(),
   /** Model per role; unset roles use `main`, an unset `main` uses the engine default. */
   models: ModelRoles.optional(),
@@ -540,13 +540,13 @@ const SharedSettings = lazySchema(() => z.strictObject({
   pet: z.string().max(120).optional(),
   /** Project roots whose `.mendcode/tools` custom tools the user trusted to run; project tools stay off elsewhere. */
   trustedToolDirs: z.array(z.string().max(4096)).max(200).optional(),
-  /** Installed packages turned off (`user:name` / `project:name`); everything else installed is on. */
+  /** Installed profiles turned off (`user:name` / `project:name`); everything else installed is on. */
   disabledSkills: z.record(z.string().max(4096), z.array(z.string().max(100)).max(100)).optional(),
-  disabledPackages: z.array(z.string().max(200)).max(500).optional(),
+  disabledProfiles: z.array(z.string().max(200)).max(500).optional(),
   /** Extension names turned off (`extensions.disable`): never run in the daemon, skipped by terminals. */
   disabledExtensions: z.array(z.string().max(64)).max(200).optional(),
-  /** Single resources of installed packages turned off (`user:pkg/skills/foo`, `project:pkg/commands/review`); `packages.resource` edits it. */
-  disabledPackageResources: z.array(z.string().max(300)).max(1000).optional(),
+  /** Single resources of installed profiles turned off (`user:pkg/skills/foo`, `project:pkg/commands/review`); `profiles.resource` edits it. */
+  disabledProfileResources: z.array(z.string().max(300)).max(1000).optional(),
   /** Daily local time ("HH:MM") for Dream in every project active in the last 24 h; off when unset. */
   dreamAt: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).optional(),
   /** Model tokens one Dream run may spend in all its calls; DREAM_DEFAULT_MAX_TOKENS when unset. The run stops cleanly and its report says so. */
@@ -765,7 +765,7 @@ export const DaemonInfoReport = lazySchema(() => z.strictObject({
   pid: z.number().int(),
   buildId: z.string().optional(),
   extensionsEnabled: z.boolean().optional(),
-  /** True when the daemon runs with `--safe-mode`: no extensions, packages, hooks, MCP or project tools. */
+  /** True when the daemon runs with `--safe-mode`: no extensions, profiles, hooks, MCP or project tools. */
   safeMode: z.boolean().optional(),
   /** Subscription login check; absent for engines that do not use one. `message` explains a failure. */
   login: z.strictObject({ ok: z.boolean(), message: z.string().optional() }).optional(),
@@ -1091,7 +1091,7 @@ export const CustomToolInfo = lazySchema(() => z.strictObject({
   command: z.array(z.string()),
   /** User tools are always trusted; project tools follow the directory's trust. */
   trusted: z.boolean(),
-  /** The package that ships the tool, if any. */
+  /** The profile that ships the tool, if any. */
   pkg: z.string().optional(),
 }))
 export type CustomToolInfo = z.infer<typeof CustomToolInfo>
@@ -1099,7 +1099,7 @@ export type CustomToolInfo = z.infer<typeof CustomToolInfo>
 /** One extension module found for a project (code that changes the daemon and/or the terminal); untrusted project ones are listed but never imported. */
 export const ExtensionInfo = lazySchema(() => z.strictObject({
   name: z.string(),
-  /** `package` for an installed package's extension, else the folder it was found in. */
+  /** `profile` for an installed profile's extension, else the folder it was found in. */
   source: z.enum(["user", "project", "package"]),
   file: z.string(),
   /** The module exports a `daemon` half / a `tui` half (false for a module that did not load). */
@@ -1164,7 +1164,7 @@ export const HookInfo = lazySchema(() => z.strictObject({
   active: z.boolean(),
   /** How the hook runs; absent from daemons that only had commands. */
   kind: z.enum(["command", "http", "prompt"]).optional(),
-  /** Which layer's `hooks.json` it came from: `user`, `project` or `package <name>`. */
+  /** Which layer's `hooks.json` it came from: `user`, `project` or `profile <name>`. */
   layer: z.string().max(200).optional(),
   /** Why an inactive hook does not run (project directory untrusted, http hook not allowed). */
   inactiveReason: z.string().max(200).optional(),
@@ -1199,11 +1199,11 @@ export const HooksReport = lazySchema(() => z.strictObject({
 }))
 export type HooksReport = z.infer<typeof HooksReport>
 
-/** One installed package: a folder of extensions (tools, skills, commands, themes, mcp.json, extensions/) with a manifest. */
+/** One installed profile: a folder of extensions (tools, skills, commands, themes, mcp.json, extensions/) with a manifest. */
 export const PackageInfo = lazySchema(() => z.strictObject({
   name: z.string(),
   source: z.enum(["user", "project"]),
-  /** `user:name` / `project:name`, as used by `packages.enable` and `Settings.disabledPackages`. */
+  /** `user:name` / `project:name`, as used by `profiles.enable` and `Settings.disabledProfiles`. */
   key: z.string(),
   dir: z.string(),
   enabled: z.boolean(),
@@ -1245,7 +1245,7 @@ export type CustomToolsReport = z.infer<typeof CustomToolsReport>
 
 /**
  * One agent a session can run as (`agents.list`). `build` and `plan` are built in; the rest come from `agents/*.md` of
- * an extension layer. A project agent (the project's own or its packages') is `trusted` only once the directory is
+ * an extension layer. A project agent (the project's own or its profiles') is `trusted` only once the directory is
  * trusted for project tools; an untrusted one is listed but cannot be selected or called.
  */
 export const AgentInfo = lazySchema(() => z.strictObject({
@@ -1253,7 +1253,7 @@ export const AgentInfo = lazySchema(() => z.strictObject({
   description: z.string(),
   mode: z.enum(AGENT_MODES),
   source: z.enum(["builtin", "user", "project"]),
-  /** The package that ships the agent, if any. */
+  /** The profile that ships the agent, if any. */
   pkg: z.string().optional(),
   file: z.string().optional(),
   model: z.string().optional(),

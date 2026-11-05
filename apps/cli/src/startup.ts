@@ -272,7 +272,7 @@ export const STARTUP_USAGE = [
   "                           terminal interrupts its turn",
   "  --no-alt-screen          chat inline, output in scrollback",
   "  --alt-screen             force the full screen",
-  "  --safe-mode              no extensions, packages, shell hooks, MCP or project",
+  "  --safe-mode              no extensions, profiles, shell hooks, MCP or project",
   "                           tools (MENDCODE_SAFE_MODE=1)",
   "  --accessible             screen-reader mode: inline, no animation, no mouse,",
   "                           plain text (MENDCODE_ACCESSIBLE=1)",

@@ -160,7 +160,7 @@ export function createRightSidebar(ctx: AppContext, slotContext: (width: number,
     const reply = await input.send({ type: "sidebar.get", directory })
     if (directory !== (input.directory ?? process.cwd())) return
     if (reply.ok && Array.isArray(reply.result?.widgets)) {
-      // The cards of an enabled package are a layer over the stored spec (profile-layers.ts): asking the daemon must not wipe them.
+      // The cards of an enabled profile are a layer over the stored spec (profile-layers.ts): asking the daemon must not wipe them.
       // Saving or editing from here is the user's own change, which then wins over the layer.
       // A session that chose its own cards (`/panel <preset>`) keeps them.
       if (!("sidebarWidgets" in state.profileApplied) && !state.sessionLook.get(state.sessionId)?.sidebarWidgets) state.tuiProfile.sidebarWidgets = sidebarSpec(reply.result.widgets)

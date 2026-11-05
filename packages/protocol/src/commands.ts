@@ -9,6 +9,7 @@ import { ServerHealth, ServerMemory, ServerConfigGet, ServerConfigUpdate, Server
 import { MemoryControlInput, DreamControlInput } from "./memory-control"
 import { MemoryWorkspaceList, MemoryBrowse, MemorySharingStatus, MemorySharingConfigure, MemorySharingExport, MemorySharingImport } from "./memory-sharing"
 import { z } from "zod"
+import { currentSettingKeys } from "./settings-renames"
 import { attachmentPlacementProblem } from "./attachment-layout"
 import { MessagePart, MessagePartId, MessageTarget } from "./message-parts"
 import { PlanReviewReply } from "./plan-review"
@@ -1099,7 +1100,8 @@ export const AcpRegistry = lazySchema(() => z.strictObject({
 export const SettingsSet = lazySchema(() => z.strictObject({
   ...base,
   type: z.literal("settings.set"),
-  patch: z.record(z.string(), z.unknown()),
+  /** Names renamed in a later version (`profiles` is now `areas`) are read as their current names. */
+  patch: z.record(z.string(), z.unknown()).transform(currentSettingKeys),
 }))
 
 /** Read-only: never starts a server. Ack: `McpStatusReport` (configured servers of `directory` plus config issues). */
@@ -1143,7 +1145,7 @@ export const ToolsTrust = lazySchema(() => z.strictObject({
 
 /**
  * Lists the extensions (TypeScript modules: hooks, tools, commands, terminal slots) of a project root: the user's,
- * packages' and the project's own. Loads them on first use; project ones only when the directory is trusted
+ * profiles' and the project's own. Loads them on first use; project ones only when the directory is trusted
  * (`tools.trust`). Ack: `ExtensionsReport`.
  */
 export const ExtensionsList = lazySchema(() => z.strictObject({
@@ -1153,7 +1155,7 @@ export const ExtensionsList = lazySchema(() => z.strictObject({
 }))
 
 /**
- * Lists the shell command hooks (`hooks.json`) configured for a project root: the user's, packages' and the project's own,
+ * Lists the shell command hooks (`hooks.json`) configured for a project root: the user's, profiles' and the project's own,
  * which of them run (project ones only when the directory is trusted, `tools.trust`), the recent runs, and what in the
  * project still waits for trust. Local clients only; never a read-only (remote) command. Ack: `HooksReport`.
  */
@@ -1175,20 +1177,20 @@ export const ExtensionsDisable = lazySchema(() => z.strictObject({ ...base, type
 export const ExtensionsFlags = lazySchema(() => z.strictObject({ ...base, type: z.literal("extensions.flags"), sessionId: SessionId, flags: z.record(z.string().regex(/^[a-z][a-z0-9-]{0,39}$/), z.union([z.string().min(1).max(300), z.boolean()])).refine((flags) => Object.keys(flags).length <= 16, "at most 16 extension flags") }))
 export const ExtensionsExport = lazySchema(() => z.strictObject({ ...base, type: z.literal("extensions.export"), directory: z.string().min(1).max(4096) }))
 
-/** Lists installed packages for a project root (the user's and the project's). Ack: `PackagesReport`. */
+/** Lists installed profiles for a project root (the user's and the project's). Ack: `PackagesReport`. */
 export const PackagesList = lazySchema(() => z.strictObject({
   ...base,
-  type: z.literal("packages.list"),
+  type: z.literal("profiles.list"),
   directory: z.string().min(1).max(4096),
 }))
 
 /**
- * Installs a package from a local folder or git (`github:owner/repo#ref`, `git:<url>`, `https://…`). The daemon
+ * Installs a profile from a local folder or git (`github:owner/repo#ref`, `git:<url>`, `https://…`). The daemon
  * stages, audits (manifest, links, secrets, size) and moves it into place. Ack: `PackagesReport` after the install.
  */
 export const PackagesInstall = lazySchema(() => z.strictObject({
   ...base,
-  type: z.literal("packages.install"),
+  type: z.literal("profiles.install"),
   directory: z.string().min(1).max(4096),
   source: z.string().min(1).max(2048),
   scope: z.enum(["user", "project"]),
@@ -1196,45 +1198,45 @@ export const PackagesInstall = lazySchema(() => z.strictObject({
 }))
 
 /**
- * Saves the user's stored terminal profile as a user package named `name` whose activation sets those keys (`activate.tuiProfile`,
- * keys a package may set only), then installs it like `packages.install`: a look to switch to later from `/packages`. It copies no
+ * Saves the user's stored terminal profile as a user profile named `name` whose activation sets those keys (`activate.tuiProfile`,
+ * keys a profile may set only), then installs it like `profiles.install`: a look to switch to later from `/profiles`. It copies no
  * code, keybindings or settings. Ack: `PackagesReport`.
  */
 export const PackagesCapture = lazySchema(() => z.strictObject({
   ...base,
-  type: z.literal("packages.capture"),
+  type: z.literal("profiles.capture"),
   directory: z.string().min(1).max(4096),
   name: z.string().regex(/^[a-z0-9][a-z0-9._-]{0,63}$/),
   replace: z.boolean().optional(),
 }))
 
-/** Removes an installed package: it moves to the Trash (restorable with `packages.restore` for 30 days) unless `purge` deletes it. Ack: `PackagesReport`. */
+/** Removes an installed profile: it moves to the Trash (restorable with `profiles.restore` for 30 days) unless `purge` deletes it. Ack: `PackagesReport`. */
 export const PackagesRemove = lazySchema(() => z.strictObject({
   ...base,
-  type: z.literal("packages.remove"),
+  type: z.literal("profiles.remove"),
   directory: z.string().min(1).max(4096),
   name: z.string().min(1).max(64),
   scope: z.enum(["user", "project"]),
   purge: z.boolean().optional(),
 }))
 
-/** Brings the newest trashed copy of a removed package back (disabled until enabled). Ack: `PackagesReport`. */
+/** Brings the newest trashed copy of a removed profile back (disabled until enabled). Ack: `PackagesReport`. */
 export const PackagesRestore = lazySchema(() => z.strictObject({
   ...base,
-  type: z.literal("packages.restore"),
+  type: z.literal("profiles.restore"),
   directory: z.string().min(1).max(4096),
   name: z.string().min(1).max(64),
   scope: z.enum(["user", "project"]),
 }))
 
 /**
- * Turns an installed package on or off without removing it. Enabling checks the package's `compatibility` and, when it
- * brings a look, claims it: another package that owns the look is replaced only with `switch`. Ack: `PackagesReport`;
+ * Turns an installed profile on or off without removing it. Enabling checks the profile's `compatibility` and, when it
+ * brings a look, claims it: another profile that owns the look is replaced only with `switch`. Ack: `PackagesReport`;
  * everyone gets `settings.changed`.
  */
 export const PackagesEnable = lazySchema(() => z.strictObject({
   ...base,
-  type: z.literal("packages.enable"),
+  type: z.literal("profiles.enable"),
   directory: z.string().min(1).max(4096),
   key: z.string().min(1).max(200),
   enabled: z.boolean(),
@@ -2141,12 +2143,12 @@ export const COMMAND_SCHEMAS = {
   "extensions.disable": ExtensionsDisable,
   "extensions.flags": ExtensionsFlags,
   "extensions.export": ExtensionsExport,
-  "packages.list": PackagesList,
-  "packages.install": PackagesInstall,
-  "packages.capture": PackagesCapture,
-  "packages.remove": PackagesRemove,
-  "packages.restore": PackagesRestore,
-  "packages.enable": PackagesEnable,
+  "profiles.list": PackagesList,
+  "profiles.install": PackagesInstall,
+  "profiles.capture": PackagesCapture,
+  "profiles.remove": PackagesRemove,
+  "profiles.restore": PackagesRestore,
+  "profiles.enable": PackagesEnable,
   "themes.list": ThemesList,
   "status.watch": StatusWatch,
   "recipes.list": RecipesList,
@@ -2276,22 +2278,22 @@ export const COMMAND_SCHEMAS = {
   "session.message.delete": SessionDeleteMessage,
   "session.part.delete": SessionDeletePart,
   "session.part.update": SessionUpdatePart,
-  "packages.search": PackagesSearch,
-  "packages.show": PackagesShow,
-  "packages.preview": PackagesPreview,
-  "packages.sources": PackagesSources,
-  "packages.add-source": PackagesAddSource,
-  "packages.remove-source": PackagesRemoveSource,
-  "packages.install-catalog": PackagesInstallCatalog,
-  "packages.install-source": PackagesInstallSource,
-  "packages.disable-all": PackagesDisableAll,
-  "packages.assets": PackagesAssets,
-  "packages.refresh": PackagesRefresh,
-  "packages.config": PackagesConfig,
-  "packages.resource": PackagesResource,
-  "packages.create": PackagesCreate,
-  "packages.update": PackagesUpdate,
-  "packages.delete-local": PackagesDeleteLocal,
+  "profiles.search": PackagesSearch,
+  "profiles.show": PackagesShow,
+  "profiles.preview": PackagesPreview,
+  "profiles.sources": PackagesSources,
+  "profiles.add-source": PackagesAddSource,
+  "profiles.remove-source": PackagesRemoveSource,
+  "profiles.install-catalog": PackagesInstallCatalog,
+  "profiles.install-source": PackagesInstallSource,
+  "profiles.disable-all": PackagesDisableAll,
+  "profiles.assets": PackagesAssets,
+  "profiles.refresh": PackagesRefresh,
+  "profiles.config": PackagesConfig,
+  "profiles.resource": PackagesResource,
+  "profiles.create": PackagesCreate,
+  "profiles.update": PackagesUpdate,
+  "profiles.delete-local": PackagesDeleteLocal,
   "plugins.install": PluginsInstall,
   "plugins.auth-methods": PluginsAuthMethods,
   "plugins.auth-start": PluginsAuthStart,
@@ -2411,11 +2413,24 @@ export const Command = lazySchema(() => z.discriminatedUnion("type", Object.valu
 export type Command = z.infer<typeof Command>
 export type CommandType = Command["type"]
 
+/** Command types of an older client that the current name replaces: `packages.*` is now `profiles.*`. */
+const LEGACY_COMMAND_PREFIXES: ReadonlyArray<readonly [string, string]> = [["packages.", "profiles."]]
+
+/** `input` with an older command `type` under its current name; anything else is returned as it is. */
+function withCurrentType(input: unknown): unknown {
+  if (typeof input !== "object" || input === null) return input
+  const type = (input as { type?: unknown }).type
+  if (typeof type !== "string") return input
+  const legacy = LEGACY_COMMAND_PREFIXES.find(([old]) => type.startsWith(old))
+  return legacy ? { ...input, type: legacy[1] + type.slice(legacy[0].length) } : input
+}
+
 /**
  * Validates one command with the schema its `type` names. Same result and issues as `Command.safeParse`; only the
  * schema of that command is built. An unknown or missing `type` goes through the full union for its error message.
  */
 export function parseCommand(input: unknown): z.ZodSafeParseResult<Command> {
+  input = withCurrentType(input)
   const type = typeof input === "object" && input !== null ? (input as { type?: unknown }).type : undefined
   const schema: z.ZodType<Command> = typeof type === "string" && Object.hasOwn(COMMAND_SCHEMAS, type) ? COMMAND_SCHEMAS[type as CommandType] : Command
   return schema.safeParse(input)

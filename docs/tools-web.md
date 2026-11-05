@@ -77,7 +77,7 @@ The canvas has the shape and the cells of the picture it waits for, and the fini
 
 The field loops one of the built-in presets (`drops` by default, `cycle`, `constellation`, `orbit`, `pulse`, `scanner`) or your own frames, one frame per 280 ms. It moves with the busy pulse the app already runs while a turn works, so it adds no timer and stops when the call ends. Reduced motion (`MENDCODE_REDUCED_MOTION=1`, the setting, or screen-reader mode) and `imageWait: "static"` hold the first frame.
 
-`/customize` → Image generation sets the profile keys `imageWait` (`animated`, `static`), `imageWaitPreset`, `imageWaitSpeed` (ms per frame, 80–5000), `imageWaitColor` (`mixed` accents the moving marks, `accent`, `muted`) and `imageWaitMeta` (the model and size rows). Two more live in `<dataDir>/tui/profile.json`:
+`/customize` → Image generation sets the customize keys `imageWait` (`animated`, `static`), `imageWaitPreset`, `imageWaitSpeed` (ms per frame, 80–5000), `imageWaitColor` (`mixed` accents the moving marks, `accent`, `muted`) and `imageWaitMeta` (the model and size rows). Two more live in `<dataDir>/tui/profile.json`:
 
 ```json
 {

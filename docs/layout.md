@@ -90,7 +90,7 @@ every slot, page and modal renderer ([extensions](extensions-tui.md#slots)).
 | wide | 110 to 149 | pages put detail beside the list; chat shows left project sessions (`auto`) |
 | xl | 150 and up | larger grids; chat keeps the left session list |
 
-Pages on the wide breakpoint: sessions, setup, changes, loops, workflows, memory, packages, MCP servers, tools and help.
+Pages on the wide breakpoint: sessions, setup, changes, loops, workflows, memory, profiles, MCP servers, tools and help.
 They used to switch at 120 columns (workflows at 120 columns of inner width, that is 122 of terminal width); the spec says
 110, so a terminal of 110 to 119 columns now gets the side-by-side layout. Three places keep a threshold of their own that
 is not a spec breakpoint: the status and memory-graph pages switch at 100, and the pet needs 80
@@ -119,7 +119,7 @@ gives chat 121 columns. The declarative [right sidebar](sidebar.md) is empty and
 | `always` (legacy) | same as `auto` |
 | `hidden` | never |
 
-The minimal view and a session with nothing in it (the home screen) never show it. The mode is a TUI profile setting
+The minimal view and a session with nothing in it (the home screen) never show it. The mode is a terminal settings setting
 (`sidebar` in `<dataDir>/tui/profile.json`, like the rest of `/customize`): `/sidebar auto|always|hidden` sets it,
 `/sidebar` or `ctrl+x b` (bindable as `sidebar.toggle`) toggles it: a visible sidebar is hidden, a hidden one comes back as
 `auto` (under 110 columns it says there is no room and changes nothing). Existing `auto` profiles now mean left sessions
@@ -190,7 +190,7 @@ shows it (the state in the working row, the context in the top bar, notices over
   second call (the first is always cold). The row does not repeat the context, which the top bar's Context bar shows. When it does
   not fit, the quota windows give up their bars first, then the code graph, the effort, the cache share and the quotas give way in
   that order. Your own rows are drawn as written, cut to a quarter of the terminal's height from the bottom. Pages (`/usage`,
-  `/packages`) do not carry the rows. `/footer preset rows` is the earlier default, five rows (directory and tagline, model and
+  `/profiles`) do not carry the rows. `/footer preset rows` is the earlier default, five rows (directory and tagline, model and
   context, the Codex quota, the Claude quota, the code graph); `/footer preset classic` the balanced row with agent, `fast`, loops
   and the forecast, plus a second row of graph, cache and quota.
 - Screen-reader mode: one separator everywhere, counts as words (`1 loop`, not `↻ 1 loop`) and quota figures without bars. ASCII
@@ -277,7 +277,7 @@ takes a row, so a turn starting or ending never moves the transcript. All of it 
 [customize.md](customize.md#activity-status) and measured by `bun scripts/render-activity-scroll-frames.ts <directory> [before|after]`.
 
 A transcript shorter than the body is top-anchored: it starts under the top bar after one blank row and the free rows sit
-between its last message and the prompt (a short toast lies over the prompt's top rule and takes no row, so nothing moves when it comes or goes; only the minimal view, which has no rule, gives it a row above the prompt; a command's own report (`/daemon`, `/footer`, a usage line) uses the same slot for 8 seconds, so there is one place for notices and the footer holds state only; success is silent where the result is already on screen (text copied by selecting, a draft saved or restored, a quote or queued prompt put back in the prompt, comments parked or back, a goal set): only what failed or tells something new is said, and the `confirmNotices` profile key (Customize > Confirmations) brings those confirmations back; a toast that needs several lines, such as an error with detail, takes the first empty place at its right, below the top bar and the pinned prompt, and with none falls back to that row, never over text). Once it overflows the view
+between its last message and the prompt (a short toast lies over the prompt's top rule and takes no row, so nothing moves when it comes or goes; only the minimal view, which has no rule, gives it a row above the prompt; a command's own report (`/daemon`, `/footer`, a usage line) uses the same slot for 8 seconds, so there is one place for notices and the footer holds state only; success is silent where the result is already on screen (text copied by selecting, a draft saved or restored, a quote or queued prompt put back in the prompt, comments parked or back, a goal set): only what failed or tells something new is said, and the `confirmNotices` customize key (Customize > Confirmations) brings those confirmations back; a toast that needs several lines, such as an error with detail, takes the first empty place at its right, below the top bar and the pinned prompt, and with none falls back to that row, never over text). Once it overflows the view
 follows the bottom as above. Mouse selection, the find highlights, images and the pet use the same rows as drawn.
 
 ## Inline mode (no alternate screen)
@@ -349,7 +349,7 @@ A failed call says so with its marker, a word and its rule, and nothing else on 
 (`x` in ASCII) in the error role instead of the kind's glyph, the header carries `exit 2` (a shell), `HTTP 404` (a fetch) or
 `failed` / `interrupted` in the error role, and the rule at the left is the error role. The command or target keeps its normal
 colour. The output under the rule is the muted output role, like a passing call's; a short error (one or two lines, such as
-`[PACKAGES]: Package tree exceeds approval budget`) is the normal text colour so it reads at once. A shell's output is stdout and
+`[PROFILES]: Profile tree exceeds approval budget`) is the normal text colour so it reads at once. A shell's output is stdout and
 stderr merged, so its lines cannot be told apart and none is tinted. A long error shows its first 3 lines (a shell its last 12,
 or 4 in the `calm` and `standard` densities) and `… +N lines`, which opens the card. Without colour the state is still the `✗`
 and the word.

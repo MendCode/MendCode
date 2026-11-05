@@ -248,7 +248,7 @@ import { createWorkflowRouter } from "./workflow-routing"
 import { createWorkflowMerge } from "./workflow-merge"
 import { createTaskWorktrees } from "./task-worktree"
 import { createAutomationLedgerHost } from "./automation-ledger"
-import { defaultPermissionFor, profileOf, rolesFor, rolesPatch, shellFor } from "./profiles"
+import { areaOf, defaultPermissionFor, rolesFor, rolesPatch, shellFor } from "./areas"
 import { memoryGraph } from "./memory-graph"
 import { checkWindow, dateKey, nextCheckIn, windows } from "./dream-schedule"
 import { createEvolutionPromotions } from "./evolution-promotion"
@@ -431,7 +431,7 @@ export type DaemonOptions = RemoteListenerOptions & {
   extensionsEnabled?: boolean
   /** Whether shell command hooks (`hooks.json`) run at all; defaults to `MENDCODE_HOOKS !== "0"`. */
   shellHooksEnabled?: boolean
-  /** `--safe-mode`: reported in `daemon.info`; the host also turns extensions, hooks, MCP and project tools off (docs/tiers.md). Packages are dropped here. */
+  /** `--safe-mode`: reported in `daemon.info`; the host also turns extensions, hooks, MCP and project tools off (docs/tiers.md). Profiles are dropped here. */
   safeMode?: boolean
   clock?: Clock
   cancelGraceMs?: number
@@ -670,13 +670,13 @@ export async function startDaemon(options: DaemonOptions) {
   // The exit notice is dropped unread once shell_output gave the model that task's exit and final output itself.
   const background: ReturnType<typeof createBackgroundTasks> = createBackgroundTasks({ lifetimeMs: () => minutesToMs(store.settings.get().processLimits?.lifetimeMinutes), onExit: (sessionId, task, tail) => void actorFor(sessionId as SessionId)?.notify(secrets.mask(sessionId as SessionId, backgroundNotice(task, tail)), undefined, false, "steer", true, () => background.exitShown(sessionId, task.id)), onWatch: (sessionId, task, lines, final) => void actorFor(sessionId as SessionId)?.notify(secrets.mask(sessionId as SessionId, watchNotice(task, lines, final)), undefined, false, "steer", true) })
 
-  /** Where extensions are found for a project: what ships with MendCode, enabled packages, then the user's and the project's own folders. */
+  /** Where extensions are found for a project: what ships with MendCode, enabled profiles, then the user's and the project's own folders. */
   const builtin = builtinDir(options.dir)
-  // Safe mode drops every installed package (user and project); MendCode's own folder and the user's and project's own folders stay.
-  const runtimeDisabledPackages = () => [...(store.settings.get().disabledPackages ?? []), ...tierDisabledPackages(store.settings.get())]
-  /** What a package's `compatibility` is checked against when it is installed or enabled. */
+  // Safe mode drops every installed profile (user and project); MendCode's own folder and the user's and project's own folders stay.
+  const runtimeDisabledPackages = () => [...(store.settings.get().disabledProfiles ?? []), ...tierDisabledPackages(store.settings.get())]
+  /** What a profile's `compatibility` is checked against when it is installed or enabled. */
   const packageHost: PackageHost = { appVersion: options.runtimeInfo?.version ?? DEV_VERSION, apiVersion: EXTENSION_API_VERSION }
-  const layersFor = (directory: string) => extensionLayers({ userDir: options.dir, directory: path.resolve(directory), disabled: runtimeDisabledPackages(), disabledResources: store.settings.get().disabledPackageResources ?? [], builtinDir: builtin })
+  const layersFor = (directory: string) => extensionLayers({ userDir: options.dir, directory: path.resolve(directory), disabled: runtimeDisabledPackages(), disabledResources: store.settings.get().disabledProfileResources ?? [], builtinDir: builtin })
     .filter((layer) => !options.safeMode || !layer.pkg || layer.pkg === BUILTIN_PACKAGE)
   /**
    * The layers the skill, command and agent loaders read: `layersFor` plus the data-only `.agents` and `.claude` folders (settings
@@ -688,73 +688,73 @@ export async function startDaemon(options: DaemonOptions) {
     const foreign = store.settings.get().foreignResources === false ? { user: [], project: [] } : foreignLayers({ directory: path.resolve(directory), home: options.foreignHome })
     return withForeignLayers(layers, { user: foreign.user, project: [...parents, ...foreign.project] }, options.dir)
   }
-  const packageCatalog = createPackageCatalog({ capabilities: () => featureOn(store.settings.get(), "package_capabilities"), host: packageHost, userDir: options.dir, now: clock.now, disabled: () => store.settings.get().disabledPackages ?? [], runtimeDisabled: runtimeDisabledPackages, disabledResources: () => store.settings.get().disabledPackageResources ?? [], ...(options.packageFetchers ? { fetchers: options.packageFetchers } : {}), layers: layersFor, promptMode: (directory) => promptModes.status(directory).mode, setDisabled: (keys) => {
-    const settings = store.settings.set({ disabledPackages: keys.length ? keys : null })
+  const packageCatalog = createPackageCatalog({ capabilities: () => featureOn(store.settings.get(), "profile_capabilities"), host: packageHost, userDir: options.dir, now: clock.now, disabled: () => store.settings.get().disabledProfiles ?? [], runtimeDisabled: runtimeDisabledPackages, disabledResources: () => store.settings.get().disabledProfileResources ?? [], ...(options.packageFetchers ? { fetchers: options.packageFetchers } : {}), layers: layersFor, promptMode: (directory) => promptModes.status(directory).mode, setDisabled: (keys) => {
+    const settings = store.settings.set({ disabledProfiles: keys.length ? keys : null })
     globalSink.append({ type: "settings.changed", settings })
   }, setDisabledResources: (keys) => {
-    const settings = store.settings.set({ disabledPackageResources: keys.length ? keys : null })
+    const settings = store.settings.set({ disabledProfileResources: keys.length ? keys : null })
     globalSink.append({ type: "settings.changed", settings })
   }, reload: (directory) => reloadPackages(directory) })
   const packageAuthoring = createPackageAuthoring({ settings: () => store.settings.get(), prompt: (directory) => promptModes.status(directory), tui: () => tuiControl.run({ operation: "status" }).profile, now: clock.now, reload: (directory) => reloadPackages(directory) })
-  /** After a package is installed, enabled, disabled, removed or edited: the MCP server set is rebuilt (stale servers stop) before the UI reloads. */
+  /** After a profile is installed, enabled, disabled, removed or edited: the MCP server set is rebuilt (stale servers stop) before the UI reloads. */
   const reloadPackages = async (directory: string) => {
     await options.mcp?.invalidate?.()
     return uiReload.reload(directory)
   }
 
-  type ManagedCommand = Extract<Command, { type: "packages.list" | "packages.install" | "packages.capture" | "packages.remove" | "packages.restore" | "packages.enable" }>
+  type ManagedCommand = Extract<Command, { type: "profiles.list" | "profiles.install" | "profiles.capture" | "profiles.remove" | "profiles.restore" | "profiles.enable" }>
   async function managePackages(command: ManagedCommand): Promise<Record<string, unknown>> {
     const directory = path.resolve(command.directory)
-    if (command.type === "packages.capture") {
-      // The stored profile becomes a package's look, installed through the same audit and look claim as any folder.
+    if (command.type === "profiles.capture") {
+      // The stored profile becomes a profile's look, installed through the same audit and look claim as any folder.
       const staged = stageCapturedLook({ userDir: options.dir, name: command.name, profile: tuiControl.run({ operation: "status" }).profile })
       try {
-        const report = await managePackages({ ...command, type: "packages.install", source: staged.dir, scope: "user" })
+        const report = await managePackages({ ...command, type: "profiles.install", source: staged.dir, scope: "user" })
         return { ...report, skipped: staged.skipped }
       } finally { staged.cleanup() }
     }
-    const setDisabled = (keys: string[]) => globalSink.append({ type: "settings.changed", settings: store.settings.set({ disabledPackages: keys.length ? keys : null }) })
+    const setDisabled = (keys: string[]) => globalSink.append({ type: "settings.changed", settings: store.settings.set({ disabledProfiles: keys.length ? keys : null }) })
     try {
-      if (command.type === "packages.install") {
+      if (command.type === "profiles.install") {
         const installed = await installPackage({ spec: command.source, scope: command.scope, userDir: options.dir, directory, replace: command.replace === true, now: clock.now, host: packageHost, ...(options.packageFetchers ? { fetchers: options.packageFetchers } : {}) })
         const key = packageKey(command.scope, installed.name)
-        const disabled = store.settings.get().disabledPackages ?? []
+        const disabled = store.settings.get().disabledProfiles ?? []
         const next = disabled.filter((entry) => entry !== key)
         if (next.length !== disabled.length) setDisabled(next)
-        // Installing enables it, so it claims the look like `packages.enable` does; when another package owns the look this one stays installed but off.
+        // Installing enables it, so it claims the look like `profiles.enable` does; when another profile owns the look this one stays installed but off.
         try { claimLook({ userDir: options.dir, directory, key, disabled: runtimeDisabledPackages() }) } catch (error) {
           if (error instanceof LookOwnedError) { setDisabled([...new Set([...next, key])]); await reloadPackages(directory) }
           throw error
         }
       }
-      if (command.type === "packages.remove") {
+      if (command.type === "profiles.remove") {
         if (!removePackage({ name: command.name, scope: command.scope, userDir: options.dir, directory, purge: command.purge === true, now: clock.now }))
           throw new PackageNotInstalledError(`${packageKey(command.scope, command.name)} is not installed`)
         releaseLook({ userDir: options.dir, directory, key: packageKey(command.scope, command.name) })
       }
-      if (command.type === "packages.restore") {
+      if (command.type === "profiles.restore") {
         restorePackage({ name: command.name, scope: command.scope, userDir: options.dir, directory })
         // Back from the Trash it stays off until the user enables it (which checks it again).
-        setDisabled([...new Set([...(store.settings.get().disabledPackages ?? []), packageKey(command.scope, command.name)])])
+        setDisabled([...new Set([...(store.settings.get().disabledProfiles ?? []), packageKey(command.scope, command.name)])])
       }
-      if (command.type === "packages.enable") {
+      if (command.type === "profiles.enable") {
         const pkg = listPackages({ userDir: options.dir, directory }).find((item) => item.key === command.key)
         if (!pkg) throw new PackageError(`${command.key} is not installed`)
         if (command.enabled && pkg.manifest) {
           const incompatible = manifestCompatProblem(pkg.manifest, packageHost)
           if (incompatible) throw new PackageError(`${command.key} ${incompatible}`)
         }
-        // Claiming the look can refuse (another package owns it); that happens before anything is changed.
+        // Claiming the look can refuse (another profile owns it); that happens before anything is changed.
         const claim = command.enabled ? claimLook({ userDir: options.dir, directory, key: command.key, disabled: runtimeDisabledPackages(), ...(command.switch ? { switch: true } : {}) }) : undefined
         if (!command.enabled) releaseLook({ userDir: options.dir, directory, key: command.key })
-        const current = store.settings.get().disabledPackages ?? []
+        const current = store.settings.get().disabledProfiles ?? []
         setDisabled(command.enabled ? [...new Set([...current.filter((key) => key !== command.key), ...(claim?.off ? [claim.off] : [])])] : [...new Set([...current, command.key])])
       }
     } catch (error) {
       if (error instanceof PackageError) throw error
       throw error
     }
-    if (command.type !== "packages.list") await reloadPackages(directory)
+    if (command.type !== "profiles.list") await reloadPackages(directory)
     const packages = listPackages({ userDir: options.dir, directory, disabled: runtimeDisabledPackages() })
     const layers = resourceLayersFor(directory)
     for (const pkg of packages) {
@@ -770,7 +770,7 @@ export async function startDaemon(options: DaemonOptions) {
     if (!port) {
       const directory = store.sessionDirectory(sessionId)
       if (!directory) throw new PackageError("Session directory unavailable")
-      port = createSelfPackages({ userDir: options.dir, directory, host: packageHost, local: () => !options.safeMode && featureOn(store.settings.get(), "package_tools") && store.meta.get(`session.local-tools.restricted:${sessionId}`) !== "true", trusted: () => (store.settings.get().trustedToolDirs ?? []).includes(canonicalDir(directory)), disabled: runtimeDisabledPackages, disabledResources: () => store.settings.get().disabledPackageResources ?? [], layers: () => resourceLayersFor(directory), manage: (command) => managePackages(command as ManagedCommand), catalog: (command) => packageCatalog(command as Parameters<typeof packageCatalog>[0]) })
+      port = createSelfPackages({ userDir: options.dir, directory, host: packageHost, local: () => !options.safeMode && featureOn(store.settings.get(), "profile_tools") && store.meta.get(`session.local-tools.restricted:${sessionId}`) !== "true", trusted: () => (store.settings.get().trustedToolDirs ?? []).includes(canonicalDir(directory)), disabled: runtimeDisabledPackages, disabledResources: () => store.settings.get().disabledProfileResources ?? [], layers: () => resourceLayersFor(directory), manage: (command) => managePackages(command as ManagedCommand), catalog: (command) => packageCatalog(command as Parameters<typeof packageCatalog>[0]) })
       selfPackagePorts.set(sessionId, port)
     }
     return port
@@ -788,7 +788,7 @@ export async function startDaemon(options: DaemonOptions) {
     },
   })
 
-  /** Custom tools of every layer's `tools/`; project ones (the project's own and its packages') once the directory is trusted. */
+  /** Custom tools of every layer's `tools/`; project ones (the project's own and its profiles') once the directory is trusted. */
   const customTools = createCustomToolRegistry({ userDir: options.dir, trustedDirs: () => store.settings.get().trustedToolDirs ?? [], layers: layersFor })
 
   /**
@@ -992,7 +992,7 @@ export async function startDaemon(options: DaemonOptions) {
   const skills = createSkillLoader({ userDir: options.dir, layers: resourceLayersFor, paths: (directory) => projectSources(directory, store.settings.get()).skills, enabled: (directory, name) => !(store.settings.get().disabledSkills?.[canonicalDir(directory)] ?? []).includes(name) })
   /**
    * Command files plus the enabled skills the user can run as `/name`; built-in and custom commands win a name clash and the clash is reported.
-   * What ships with MendCode itself (the `builtin` package's skills) stays out of the slash menu: the model and `/skills` reach it, the menu keeps its fixed built-in list.
+   * What ships with MendCode itself (the `builtin` profile's skills) stays out of the slash menu: the model and `/skills` reach it, the menu keeps its fixed built-in list.
    */
   const slashSkills = (directory: string) => skills.list(directory).filter((skill) => skill.pkg !== BUILTIN_PACKAGE && skills.enabled(directory, skill.name))
   const loadCustomCommands = (input: Parameters<typeof loadCommandFiles>[0]) => loadCommandFiles({ ...input, skills: slashSkills(input.directory) })
@@ -1245,9 +1245,9 @@ export async function startDaemon(options: DaemonOptions) {
     emitGlobal: (event) => void globalSink.append(event),
     memory: {
       request: (directory, input) => modelMemory.request(directory, input),
-      saved: (directory) => store.memories.list({ directory, status: "saved", profile: profileOf(store.settings.get(), directory) }),
-      visible: ({ directory, sessionId }) => store.memories.list({ directory, status: "saved", profile: profileOf(store.settings.get(), directory), ...(sessionId ? { session: sessionId } : {}) }),
-      related: ({ directory, sessionId, prompt, limit }) => store.memories.related({ text: prompt, directory, limit, profile: profileOf(store.settings.get(), directory), ...(sessionId ? { session: sessionId } : {}) }),
+      saved: (directory) => store.memories.list({ directory, status: "saved", profile: areaOf(store.settings.get(), directory) }),
+      visible: ({ directory, sessionId }) => store.memories.list({ directory, status: "saved", profile: areaOf(store.settings.get(), directory), ...(sessionId ? { session: sessionId } : {}) }),
+      related: ({ directory, sessionId, prompt, limit }) => store.memories.related({ text: prompt, directory, limit, profile: areaOf(store.settings.get(), directory), ...(sessionId ? { session: sessionId } : {}) }),
       links: (memoryIds) => store.memories.links(memoryIds),
       propose: (entry) => proposeMemory(entry),
       graph: (directory) => graphFor(directory),
@@ -1482,7 +1482,7 @@ export async function startDaemon(options: DaemonOptions) {
       const asked = job.text.split("\n").filter((line) => line.startsWith("user:")).map((line) => line.slice(5)).join(" ")
       for (const memory of memories.slice(0, 20)) {
         if (!memory.text.trim() || memory.text.length > 2_000) continue
-        const entries = store.memories.list({ directory: job.directory, profile: profileOf(store.settings.get(), job.directory) })
+        const entries = store.memories.list({ directory: job.directory, profile: areaOf(store.settings.get(), job.directory) })
         const normalized = (text: string) => text.normalize("NFKC").toLowerCase().replace(/\s+/g, " ").trim()
         if (entries.some((entry) => normalized(entry.text) === normalized(memory.text) && entry.status !== "archived")) continue
         const result = proposeMemory({ ...memory, directory: job.directory, forceReview: memorySettings(store.settings.get(), job.directory).memoryRequireApproval !== false || restatesRequest(asked, memory.text) })
@@ -1508,7 +1508,7 @@ export async function startDaemon(options: DaemonOptions) {
   })
   function maintainMemory(directory?: string) {
     const settings = memorySettings(store.settings.get(), directory)
-    const report = memoryMaintenance(store.memories.list({ ...(directory ? { directory } : {}), profile: profileOf(settings, directory) }), settings.memoryMaintenance)
+    const report = memoryMaintenance(store.memories.list({ ...(directory ? { directory } : {}), profile: areaOf(settings, directory) }), settings.memoryMaintenance)
     if (report.policy === "auto-consolidate" && settings.memoryEnabled !== false) for (const duplicate of report.duplicates) {
       store.memories.update(duplicate.memoryId, { status: "archived" })
       globalSink.append({ type: "memory.changed", memoryId: duplicate.memoryId, change: "updated" })
@@ -1831,7 +1831,7 @@ export async function startDaemon(options: DaemonOptions) {
             // Newest events of each session, and its last event number: an unchanged session reuses its cached digest without reading them.
             sessions: (dir) =>
               store.listSessions({ directory: dir, limit: 12 }).map((s) => ({ sessionId: s.sessionId, title: s.title, seq: s.lastSeq, events: () => visibleEvents(store.readAfter(s.sessionId, Math.max(0, s.lastSeq - 2_000), 2_000)) })),
-            memories: (dir) => store.memories.list({ directory: dir, profile: profileOf(store.settings.get(), dir) }),
+            memories: (dir) => store.memories.list({ directory: dir, profile: areaOf(store.settings.get(), dir) }),
             complete: async (prompt, signal) => {
               const model = resolveModel({ role: "dream", roles: rolesFor(store.settings.get(), directory), catalog })
               await budgets.guard({ model: model.model, signal })
@@ -1881,7 +1881,7 @@ export async function startDaemon(options: DaemonOptions) {
               } catch (error) { budgets.record(); throw error }
               finally { auxiliaryUsage.record({ role: "memoryConsolidator", directory }, used, usable.model) }
             } }) : undefined
-            const { fallback, ...pass } = await consolidateMemory({ entries: () => store.memories.list({ directory, profile: profileOf(store.settings.get(), directory) }), policy: consolidationPolicy, limit: settings.memoryGlobalCompactionMaxEntries ?? 50, categories: consolidationCategories(store.settings.get()), holdForReview: trigger !== "manual" && featureOn(store.settings.get(), "memory_auto"),
+            const { fallback, ...pass } = await consolidateMemory({ entries: () => store.memories.list({ directory, profile: areaOf(store.settings.get(), directory) }), policy: consolidationPolicy, limit: settings.memoryGlobalCompactionMaxEntries ?? 50, categories: consolidationCategories(store.settings.get()), holdForReview: trigger !== "manual" && featureOn(store.settings.get(), "memory_auto"),
               apply: async (memory) => { await cliMemory.run(directory, { operation: "apply", memoryId: memory.memoryId }) },
               archive: (memory) => { store.memories.update(memory.memoryId, { status: "archived" }); globalSink.append({ type: "memory.changed", memoryId: memory.memoryId, change: "updated" }) },
               ...(meter ? { semantic: createSemanticConsolidator({ call: meter.call }) } : {}),
@@ -2020,10 +2020,10 @@ export async function startDaemon(options: DaemonOptions) {
 
   /** Users save directly; agent proposals land as pending for review (approval-first, like v1). */
   /** The saved memories visible from `directory` (its profile's user memories and its project's) as a graph. */
-  const workspaceMemory = createMemoryWorkspaces({ store, profile: (directory) => profileOf(store.settings.get(), directory) })
-  const sharingMemory = createMemorySharing({ dir: options.dir, store, profile: (directory) => profileOf(store.settings.get(), directory), id: () => ids("memory"), changed: (memoryId) => announceMemory(memoryId, "added") })
+  const workspaceMemory = createMemoryWorkspaces({ store, profile: (directory) => areaOf(store.settings.get(), directory) })
+  const sharingMemory = createMemorySharing({ dir: options.dir, store, profile: (directory) => areaOf(store.settings.get(), directory), id: () => ids("memory"), changed: (memoryId) => announceMemory(memoryId, "added") })
 
-  const modelMemory = createMemoryModel({ store, profile: (directory) => profileOf(store.settings.get(), directory), id: () => ids("memory"), categories: categoriesReport, changed: (memoryId, change, entry) => announceMemory(memoryId, change, entry), propose: proposeMemory,
+  const modelMemory = createMemoryModel({ store, profile: (directory) => areaOf(store.settings.get(), directory), id: () => ids("memory"), categories: categoriesReport, changed: (memoryId, change, entry) => announceMemory(memoryId, change, entry), propose: proposeMemory,
     control: {
       categoryPolicy: (category, policy) => {
         const policies = { ...store.settings.get().memoryPolicies }
@@ -2035,11 +2035,11 @@ export async function startDaemon(options: DaemonOptions) {
       dreamAt: (at) => { globalSink.append({ type: "settings.changed", settings: store.settings.set({ dreamAt: at }) }); armDreamSchedule(true) },
       dryRun: (directory) => { const started = startDream(directory, "manual", "preview"); return "error" in started ? { error: started.error } : { runId: started.runId } },
     } })
-  const cliMemory = createMemoryControl({ store, profile: (directory) => profileOf(store.settings.get(), directory), id: () => ids("memory"), now: () => clock.now(), extract: extractBudgeted, resolve: modelMemory.resolve,
+  const cliMemory = createMemoryControl({ store, profile: (directory) => areaOf(store.settings.get(), directory), id: () => ids("memory"), now: () => clock.now(), extract: extractBudgeted, resolve: modelMemory.resolve,
     changed: (memoryId, change, entry) => announceMemory(memoryId, change, entry),
     settingsChanged: () => { globalSink.append({ type: "settings.changed", settings: store.settings.get() }); extraction.wake() },
   })
-  const memoryAssistant = createMemoryAssistant({ dir: options.dir, store, complete: completeBudgeted, browse: workspaceMemory.browse, profile: (directory) => profileOf(store.settings.get(), directory), draft: modelMemory.draft, model: (directory) => options.models?.selectable ? resolveModel({ role: "memoryAssistant", roles: rolesFor(store.settings.get(), directory), catalog: options.models }) : undefined, models: (directory) => {
+  const memoryAssistant = createMemoryAssistant({ dir: options.dir, store, complete: completeBudgeted, browse: workspaceMemory.browse, profile: (directory) => areaOf(store.settings.get(), directory), draft: modelMemory.draft, model: (directory) => options.models?.selectable ? resolveModel({ role: "memoryAssistant", roles: rolesFor(store.settings.get(), directory), catalog: options.models }) : undefined, models: (directory) => {
     if (!options.models?.selectable) return []
     const roles = rolesFor(store.settings.get(), directory)
     const candidates = (["memoryAssistant", "memoryExtractor", "small", "main"] as const).map((role) => resolveModel({ role, roles, catalog: options.models! }))
@@ -2047,7 +2047,7 @@ export async function startDaemon(options: DaemonOptions) {
   }, now: () => clock.now() })
 
   function graphFor(directory: string | undefined) {
-    const saved = store.memories.list({ ...(directory ? { directory, profile: profileOf(store.settings.get(), directory) } : {}), status: "saved" })
+    const saved = store.memories.list({ ...(directory ? { directory, profile: areaOf(store.settings.get(), directory) } : {}), status: "saved" })
     return memoryGraph(saved, store.memories.links(saved.map((memory) => memory.memoryId)))
   }
 
@@ -2066,7 +2066,7 @@ export async function startDaemon(options: DaemonOptions) {
   function addMemory(entry: { scope: MemoryScope; directory?: string; sessionId?: SessionId; text: string; category: string; source: "user" | "agent"; status: "saved" | "pending"; pinned?: boolean; details?: MemoryEntry["details"] }) {
     const memoryId = ids("memory")
     const directory = entry.scope === "session" && entry.sessionId ? store.sessionInfo(entry.sessionId)?.directory : entry.directory
-    const place = entry.scope === "user" ? { profile: profileOf(store.settings.get(), directory) } : directory ? { directory } : {}
+    const place = entry.scope === "user" ? { profile: areaOf(store.settings.get(), directory) } : directory ? { directory } : {}
     store.memories.add({
       memoryId,
       scope: entry.scope,
@@ -2104,7 +2104,7 @@ export async function startDaemon(options: DaemonOptions) {
       const directory = store.sessionInfo(sessionId)?.directory
       return { place: { scope: "session", sessionId, ...(directory ? { directory } : {}) } }
     }
-    return { place: { scope: "user", profile: current.scope === "user" ? (current.profile ?? profileOf(store.settings.get(), undefined)) : profileOf(store.settings.get(), current.directory) } }
+    return { place: { scope: "user", profile: current.scope === "user" ? (current.profile ?? areaOf(store.settings.get(), undefined)) : areaOf(store.settings.get(), current.directory) } }
   }
 
   /**
@@ -2117,7 +2117,7 @@ export async function startDaemon(options: DaemonOptions) {
     const safe = redactSecrets(entry.text)
     const settings = memorySettings(store.settings.get(), entry.directory)
     if (settings.memoryEnabled === false) return { outcome: "dropped" }
-    const entries = store.memories.list({ ...(entry.directory ? { directory: entry.directory } : {}), profile: profileOf(settings, entry.directory) }).filter((memory) => memory.status !== "archived")
+    const entries = store.memories.list({ ...(entry.directory ? { directory: entry.directory } : {}), profile: areaOf(settings, entry.directory) }).filter((memory) => memory.status !== "archived")
     if (entries.length >= (settings.memoryMaxEntries ?? 50)) return { outcome: "dropped" }
     if (entry.scope === "project" && entries.filter((memory) => memory.scope === "project").length >= (settings.memoryProjectMaxEntries ?? 3)) return { outcome: "dropped" }
     const policy = memoryPolicyFor(entry.category, settings.memoryPolicies)
@@ -2766,7 +2766,7 @@ export async function startDaemon(options: DaemonOptions) {
     const settings = store.settings.get()
     const shared = scope === "global" && (await sharingMemory.status("project", directory).catch(() => undefined))?.enabled === true
     const { reviewMemoryContext } = await import("./pr-review/review-memory")
-    return reviewMemoryContext({ reader: { memories: store.memories, projectShared: () => shared }, scope, profile: profileOf(settings, directory), directory, login, settings, query, budgetTokens, now: clock.now() })
+    return reviewMemoryContext({ reader: { memories: store.memories, projectShared: () => shared }, scope, profile: areaOf(settings, directory), directory, login, settings, query, budgetTokens, now: clock.now() })
   }
   /** The window of the model a review runs on (the watch session's model): the session's own, the model's setting, else the catalog's. */
   function reviewContextWindow(sessionId: string): number | undefined {
@@ -2918,11 +2918,11 @@ export async function startDaemon(options: DaemonOptions) {
     if ("projectConfig" in patch || "codegraph_index" in patch || "tier" in patch || "features" in patch) options.graphAutopilot?.reconsider()
     continuity.configure()
     await withdrawAsyncNotices()
-    if ("trustedToolDirs" in patch || "disabledPackages" in patch || "disabledPackageResources" in patch || "tier" in patch || "features" in patch) extensions.invalidateProject()
+    if ("trustedToolDirs" in patch || "disabledProfiles" in patch || "disabledProfileResources" in patch || "tier" in patch || "features" in patch) extensions.invalidateProject()
     if ("trustedToolDirs" in patch) uiReload.sync()
-    if ("models" in patch || "profiles" in patch || "experimental" in patch || "tier" in patch || "features" in patch) reasoning.port.invalidate()
-    // MCP follows the tier, the packages and the project trust: the cached config is dropped and servers that are no longer allowed stop.
-    if ("tier" in patch || "features" in patch || "trustedToolDirs" in patch || "disabledPackages" in patch || "disabledPackageResources" in patch) await options.mcp?.invalidate?.(undefined)
+    if ("models" in patch || "areas" in patch || "experimental" in patch || "tier" in patch || "features" in patch) reasoning.port.invalidate()
+    // MCP follows the tier, the profiles and the project trust: the cached config is dropped and servers that are no longer allowed stop.
+    if ("tier" in patch || "features" in patch || "trustedToolDirs" in patch || "disabledProfiles" in patch || "disabledProfileResources" in patch) await options.mcp?.invalidate?.(undefined)
     armDreamSchedule("dreamAt" in patch)
     extraction.wake()
     armRetentionSchedule()
@@ -4358,7 +4358,7 @@ export async function startDaemon(options: DaemonOptions) {
           return reply(connection, command.id, { ok: true, result: { thread, archives: memoryAssistant.archives(directory) } })
         } catch (error) { return reply(connection, command.id, { ok: false, code: "invalid_command", message: error instanceof Error ? error.message : String(error) }) }
       case "memory.extraction.list":
-        return reply(connection, command.id, { ok: true, result: { jobs: extraction.list(command.directory), status: extraction.status(command.directory), configured: extraction.configured, maintenance: memoryMaintenance(store.memories.list({ ...(command.directory ? { directory: command.directory } : {}), profile: profileOf(store.settings.get(), command.directory) }), memorySettings(store.settings.get(), command.directory).memoryMaintenance) } })
+        return reply(connection, command.id, { ok: true, result: { jobs: extraction.list(command.directory), status: extraction.status(command.directory), configured: extraction.configured, maintenance: memoryMaintenance(store.memories.list({ ...(command.directory ? { directory: command.directory } : {}), profile: areaOf(store.settings.get(), command.directory) }), memorySettings(store.settings.get(), command.directory).memoryMaintenance) } })
       case "memory.extraction.retry":
         try { extraction.retry(command.jobId); return reply(connection, command.id, { ok: true }) }
         catch (error) { return reply(connection, command.id, { ok: false, code: "target_mismatch", message: String(error) }) }
@@ -4380,7 +4380,7 @@ export async function startDaemon(options: DaemonOptions) {
       case "memory.list":
         return reply(connection, command.id, {
           ok: true,
-          result: { memories: store.memories.list({ ...(command.directory ? { directory: command.directory, profile: profileOf(store.settings.get(), command.directory) } : {}), ...(command.status ? { status: command.status } : {}), ...(command.session ? { session: command.session } : {}) }) },
+          result: { memories: store.memories.list({ ...(command.directory ? { directory: command.directory, profile: areaOf(store.settings.get(), command.directory) } : {}), ...(command.status ? { status: command.status } : {}), ...(command.session ? { session: command.session } : {}) }) },
         })
       case "memory.search":
         return reply(connection, command.id, {
@@ -4388,7 +4388,7 @@ export async function startDaemon(options: DaemonOptions) {
           result: {
             memories: store.memories.search({
               query: command.query,
-              ...(command.directory ? { directory: command.directory, profile: profileOf(store.settings.get(), command.directory) } : {}),
+              ...(command.directory ? { directory: command.directory, profile: areaOf(store.settings.get(), command.directory) } : {}),
               ...(command.session ? { session: command.session } : {}),
               ...(command.limit ? { limit: command.limit } : {}),
             }),
@@ -4452,7 +4452,7 @@ export async function startDaemon(options: DaemonOptions) {
         if (command.scope === "project" && !command.directory) return reply(connection, command.id, { ok: false, code: "invalid_command", message: "[DAEMON]: project memory needs a directory" })
         if (command.scope === "session" && !(command.sessionId && store.hasSession(command.sessionId))) return reply(connection, command.id, { ok: false, code: "invalid_command", message: "[DAEMON]: session memory needs the id of an existing session" })
         const directory = command.scope === "session" ? store.sessionInfo(command.sessionId!)?.directory : command.directory
-        if (command.pinned && store.memories.pinnedIn({ scope: command.scope, ...(directory ? { directory } : {}), profile: profileOf(store.settings.get(), directory), ...(command.sessionId ? { sessionId: command.sessionId } : {}) }) >= MAX_PINNED_MEMORIES)
+        if (command.pinned && store.memories.pinnedIn({ scope: command.scope, ...(directory ? { directory } : {}), profile: areaOf(store.settings.get(), directory), ...(command.sessionId ? { sessionId: command.sessionId } : {}) }) >= MAX_PINNED_MEMORIES)
           return reply(connection, command.id, { ok: false, code: "invalid_command", message: `[DAEMON]: at most ${MAX_PINNED_MEMORIES} memories can be pinned for a profile, project or session` })
         const memoryId = addMemory({
           scope: command.scope,
@@ -4663,13 +4663,13 @@ export async function startDaemon(options: DaemonOptions) {
         const { tools, issues } = await customTools.list(directory)
         return reply(connection, command.id, { ok: true, result: { directory, tools, issues } })
       }
-      case "packages.list":
-      case "packages.install":
-      case "packages.capture":
-      case "packages.remove":
-      case "packages.restore":
-      case "packages.enable": {
-        if (connection.remoteAddress || connection.peer) return reply(connection, command.id, { ok: false, code: "forbidden", message: "[PACKAGES]: package context reads local files; local only" })
+      case "profiles.list":
+      case "profiles.install":
+      case "profiles.capture":
+      case "profiles.remove":
+      case "profiles.restore":
+      case "profiles.enable": {
+        if (connection.remoteAddress || connection.peer) return reply(connection, command.id, { ok: false, code: "forbidden", message: "[PROFILES]: profile context reads local files; local only" })
         try { return reply(connection, command.id, { ok: true, result: await managePackages(command) }) }
         catch (error) {
           if (error instanceof PackageNotInstalledError) return reply(connection, command.id, { ok: false, code: "target_mismatch", message: error.message })
@@ -4677,28 +4677,28 @@ export async function startDaemon(options: DaemonOptions) {
           throw error
         }
       }
-      case "packages.search":
-      case "packages.show":
-      case "packages.preview":
-      case "packages.sources":
-      case "packages.add-source":
-      case "packages.remove-source":
-      case "packages.refresh":
-      case "packages.config":
-      case "packages.resource":
-      case "packages.install-catalog":
-      case "packages.install-source":
-      case "packages.disable-all":
-      case "packages.assets": {
+      case "profiles.search":
+      case "profiles.show":
+      case "profiles.preview":
+      case "profiles.sources":
+      case "profiles.add-source":
+      case "profiles.remove-source":
+      case "profiles.refresh":
+      case "profiles.config":
+      case "profiles.resource":
+      case "profiles.install-catalog":
+      case "profiles.install-source":
+      case "profiles.disable-all":
+      case "profiles.assets": {
         try { return reply(connection, command.id, { ok: true, result: await packageCatalog(command) }) }
         catch (error) {
           if (error instanceof PackageError) return reply(connection, command.id, { ok: false, code: "invalid_command", message: error.message })
           throw error
         }
       }
-      case "packages.create":
-      case "packages.update":
-      case "packages.delete-local": {
+      case "profiles.create":
+      case "profiles.update":
+      case "profiles.delete-local": {
         try { return reply(connection, command.id, { ok: true, result: await packageAuthoring(command) }) }
         catch (error) {
           if (error instanceof PackageError) return reply(connection, command.id, { ok: false, code: "invalid_command", message: error.message })

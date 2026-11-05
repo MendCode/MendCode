@@ -83,7 +83,7 @@ import { filteredCatalog, modelAllowed } from "./models"
 import { createToolOutputs, toolOutputSettings } from "./tool-output"
 import { createOneTree } from "./one-tree"
 import { createSessionTranscripts } from "./session-transcripts"
-import { rolesFor, shellFor } from "./profiles"
+import { rolesFor, shellFor } from "./areas"
 import { advisorStatus, claudeAdvisorAlias, createAdvisorHost } from "./advisor-host"
 import { runClaudeAdvisor } from "./advisor-claude"
 import { createMcpAuth, createMcpManager, mcpResourceTools, mcpTools, type McpServerConfig } from "@mendcode/mcp"
@@ -176,7 +176,7 @@ function lazyReviewSetup(dataDir: string, memory: SetupMemory, memoryEnabled: (d
     createReviewSetup({ dataDir, memory, memoryEnabled, gh: (argv, cwd) => ghProcess({ argv, cwd }) }))
   return { run: async (directory) => (await load()).run(directory) }
 }
-/** `--safe-mode` (or MENDCODE_SAFE_MODE=1): no extensions, packages, shell hooks, MCP or project tools, whatever the settings say (docs/tiers.md). */
+/** `--safe-mode` (or MENDCODE_SAFE_MODE=1): no extensions, profiles, shell hooks, MCP or project tools, whatever the settings say (docs/tiers.md). */
 const safeMode = argv.includes("--safe-mode") || process.env.MENDCODE_SAFE_MODE === "1"
 // Settings `proxy` (docs/resources-config.md): every outbound request of this process goes through one policy-aware fetch.
 installNetworkPolicy({ settings: () => { try { return extractionSettings() } catch { return {} } } })
@@ -216,11 +216,11 @@ const continuationPrompt = engineName === "native" ? await loadContinuationPromp
 /** Project AGENTS.md / CLAUDE.md plus the user's global ~/.mendcode-v2/AGENTS.md. */
 const instructionsFor = createInstructionLoader({ globalFile: path.join(dir, "AGENTS.md"), paths: (root) => projectSources(root, extractionSettings(), remoteInstructions(dir).pathFor).instructions, ...instructionControls(() => extractionSettings()) })
 /**
- * Extension layers (enabled packages, the user's and the project's own folders). The daemon's version reads
- * the disabled packages from settings; it replaces this default when the daemon builds the engine, before any turn.
+ * Extension layers (enabled profiles, the user's and the project's own folders). The daemon's version reads
+ * the disabled profiles from settings; it replaces this default when the daemon builds the engine, before any turn.
  */
 let layersFor = (directory: string): ExtensionLayer[] => defaultLayers({ userDir: dir, directory })
-/** Skills of every layer: packages, ~/.mendcode-v2/skills, project .mendcode/skills. */
+/** Skills of every layer: profiles, ~/.mendcode-v2/skills, project .mendcode/skills. */
 let skills = createSkillLoader({ userDir: dir, layers: (cwd) => layersFor(cwd) })
 /**
  * MCP servers from every layer's mcp.json. Nothing runs until a turn in a project with servers configured;

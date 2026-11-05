@@ -1,9 +1,9 @@
 ---
-summary: every part of the screen and the profile key that changes it
-docs: profile-keys, customize, layout
+summary: every part of the screen and the customize key that changes it
+docs: customize-keys, customize, layout
 aliases: parts, chrome, topbar, top-bar, header, placeholder, labels, hide
 ---
-Every part of the user's screen is a profile key. Change it yourself, now: customize_ui {"action":"settings","values":{"showTopbar":false}} applies live to every terminal (never send the user to /customize instead). Unsure of a name: customize_ui {"action":"keys","query":"<words for the part>"} returns the keys with their values. Not in your tool list: tool_search finds customize_ui.
+Every part of the user's screen is a customize key. Change it yourself, now: customize_ui {"action":"settings","values":{"showTopbar":false}} applies live to every terminal (never send the user to /customize instead). Unsure of a name: customize_ui {"action":"keys","query":"<words for the part>"} returns the keys with their values. Not in your tool list: tool_search finds customize_ui.
 
 A session, top to bottom:
   top bar (project, title, context): showTopbar false removes the row; its parts showProject, showSessionTitle, contextBar off, showDiffLines, showDiffFiles, topbarStats

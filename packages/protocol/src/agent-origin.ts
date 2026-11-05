@@ -26,9 +26,9 @@ export const AGENT_OPEN_COMMANDS = [
   "budget.status", "budget.doctor", "setup.status", "setup.plan", "setup.doctor", "release.inspect", "compound.get", "channels.status",
   "prompt.status", "prompt.sources", "prompt.build", "themes.list", "theme.validate", "tui.query", "sidebar.get", "status.watch", "console.get",
   "console.listOrgs", "console.accounts", "server.config.get", "tsm.query", "ide.query", "mflow.query",
-  // tools, extensions, packages, MCP
+  // tools, extensions, profiles, MCP
   "tools.list", "skills.list", "skills.load", "commands.list", "commands.discover", "commands.expand", "extensions.list", "extensions.report", "hooks.list",
-  "packages.list", "packages.search", "packages.show", "packages.sources", "packages.assets", "mcp.status", "mcp.catalog", "mcp.resources.list",
+  "profiles.list", "profiles.search", "profiles.show", "profiles.sources", "profiles.assets", "mcp.status", "mcp.catalog", "mcp.resources.list",
   "mcp.resource.read", "mcp.prompts.list", "mcp.prompt.get", "formatter.status", "lsp.query",
   // memory, loops, workflows: reading
   "memory.list", "memory.search", "memory.graph", "memory.categories", "memory.workspaces", "memory.browse", "memory.sharing.status",

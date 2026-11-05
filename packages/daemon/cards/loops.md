@@ -14,7 +14,7 @@ Worktree: workspace worktree gives each run its own git worktree and branch loop
 
 The user's page: /loops (alias /loop): c new loop, t from a template, e edit, p pause or resume, n run now, a accept, s stop, d delete, f fire an external loop. From the user's shell (yours may only list and read; use the loop tool): {{program}} loop list [--all] | create [--every 1h|--daily 09:00] [--goal] [--runs N] "objective" | pause|resume|stop|run|delete <id> | fire <id>.
 
-Metric experiments (feature autoresearch, full tier, on demand): the optional mendcode-autoresearch skill package, loaded by name, drives a loop that accepts a numeric improvement only when the correctness gates pass and the iteration, token and cost caps hold ({{program}} docs packages).
+Metric experiments (feature autoresearch, full tier, on demand): the optional mendcode-autoresearch skill profile, loaded by name, drives a loop that accepts a numeric improvement only when the correctness gates pass and the iteration, token and cost caps hold ({{program}} docs profiles).
 Not the same: pr_watch wakes a session with no model call only when a pull request changes ({{program}} docs git); the pr-watch loop template spends a model turn on every wake.
 
 Limits: a paused, blocked or finished loop refuses a fire; edits to a running loop are refused until the run ends. Scheduling, the user daemon service, usage caps and the run ledger: {{program}} docs automation.

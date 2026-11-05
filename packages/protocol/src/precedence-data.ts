@@ -2,7 +2,7 @@
  * The one precedence report: for every surface of MendCode that layers can fill (skills, commands, agents, tools, hooks, MCP servers,
  * themes, view slots, panel widgets, keybindings, workflows, recipes, contracts, prompt files, profile keys), which layer's entry is
  * the effective one and which entries it overrides. The daemon builds claims from the files of every layer, the terminal from what
- * is registered in it; both resolve them here, so `/packages`, `/doctor` and the tests read one answer.
+ * is registered in it; both resolve them here, so `/profiles`, `/doctor` and the tests read one answer.
  *
  * Data and pure functions only (no zod), shared with the thin client. Rules this encodes, one per surface, are the loaders' own:
  * a later layer replaces an earlier one of the same name; hooks from every layer run together; the last layer's prompt file wins
@@ -19,11 +19,11 @@ export const PRECEDENCE_MODE: Readonly<Record<PrecedenceSurface, "override" | "m
 }
 
 export const PRECEDENCE_LABELS: Readonly<Record<PrecedenceSurface, string>> = {
-  profile: "Profile keys", skills: "Skills", commands: "Slash commands", agents: "Agents", tools: "Custom tools", hooks: "Shell hooks", mcp: "MCP servers", themes: "Themes",
+  profile: "Terminal settings", skills: "Skills", commands: "Slash commands", agents: "Agents", tools: "Custom tools", hooks: "Shell hooks", mcp: "MCP servers", themes: "Themes",
   views: "View slots", widgets: "Panel widgets", keybindings: "Keybindings", workflows: "Workflows", recipes: "Recipes", contracts: "Contracts", promptFiles: "Prompt files", pages: "Pages",
 }
 
-/** One layer's entry for one name. `rank` orders layers, lowest precedence first; `layer` is how it is shown ("user", "package user:retro", "project"). */
+/** One layer's entry for one name. `rank` orders layers, lowest precedence first; `layer` is how it is shown ("user", "profile user:retro", "project"). */
 export type PrecedenceClaim = { surface: PrecedenceSurface; name: string; layer: string; rank: number; note?: string; /** Present but not applied (a project's code without project trust): never effective, never overrides. */ inactive?: boolean }
 export type PrecedenceEntry = { layer: string; note?: string }
 export type PrecedenceRow = { surface: PrecedenceSurface; name: string; effective: PrecedenceEntry[]; overridden: PrecedenceEntry[]; inactive: PrecedenceEntry[] }

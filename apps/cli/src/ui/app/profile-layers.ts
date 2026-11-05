@@ -6,19 +6,19 @@ import type { AppContext } from "./context"
 
 /**
  * The terminal profile as layers. What is stored (`<dataDir>/tui/profile.json`) is the user's own and is only ever written by the
- * user's own changes. Over it come, in this order: a package's activation overlay and what a running extension asked for through
+ * user's own changes. Over it come, in this order: a profile's activation overlay and what a running extension asked for through
  * `api.settings.set`; both are in memory only. A key the user changes by hand while a layer holds it is `kept`: the user's value
- * wins from then on (docs/packages.md):
+ * wins from then on (docs/profiles.md):
  *
- *   effective = kept (user, after the layer)  >  extension request  >  package overlay  >  the stored profile
+ *   effective = kept (user, after the layer)  >  extension request  >  profile overlay  >  the stored profile
  *
- * A kept key a package holds keeps its value in `activation.json`, in the slot of the packages that own the look then, not in the
- * stored profile: switching the look to another package and back finds it as it was left, and the other package (or no package)
+ * A kept key a profile holds keeps its value in `activation.json`, in the slot of the profiles that own the look then, not in the
+ * stored profile: switching the look to another profile and back finds it as it was left, and the other profile (or no profile)
  * never sees it. A kept key only an extension holds is written to the stored profile as before.
  *
  * Taking a layer away (disable, remove, reload) puts the stored value back for every key it still holds, and a key the user changed
  * directly in the meantime is left alone. Nothing here loads the activation code: that module is imported by extensions.ts only
- * when an enabled package declares an activation.
+ * when an enabled profile declares an activation.
  */
 
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
@@ -34,10 +34,10 @@ export function createProfileLayers(ctx: AppContext, actions: { changeProfile(pa
   const onScreen = (key: string) => state.tuiProfile[key as keyof TuiProfile]
 
   const overlay = () => state.activation?.result.overlay ?? {}
-  /** A key a package's overlay holds: a hand change to it is saved with the look's owners, not in the stored profile. */
+  /** A key a profile's overlay holds: a hand change to it is saved with the look's owners, not in the stored profile. */
   const packageHeld = (key: string) => key in overlay()
 
-  /** The keys the layers want right now: the user's kept value where they kept one under a package, else what the layers ask. */
+  /** The keys the layers want right now: the user's kept value where they kept one under a profile, else what the layers ask. */
   function desired(): Record<string, unknown> {
     const out: Record<string, unknown> = {}
     for (const [key, value] of Object.entries({ ...overlay(), ...state.profileRuntime })) if (!state.keptKeys.has(key)) out[key] = normalized(key, value)
@@ -45,7 +45,7 @@ export function createProfileLayers(ctx: AppContext, actions: { changeProfile(pa
     return out
   }
 
-  /** The user chose `value` for a key a layer holds: kept, and (under a package) remembered with the look's owners. */
+  /** The user chose `value` for a key a layer holds: kept, and (under a profile) remembered with the look's owners. */
   function keepValue(key: string, value: unknown) {
     state.keptKeys.add(key)
     if (packageHeld(key)) state.keptValues[key] = value
@@ -104,7 +104,7 @@ export function createProfileLayers(ctx: AppContext, actions: { changeProfile(pa
       state.profileRuntime = {}
     },
     /**
-     * The user changed these keys by hand: the ones a layer holds are theirs from now on. Returns the keys a package holds, which the
+     * The user changed these keys by hand: the ones a layer holds are theirs from now on. Returns the keys a profile holds, which the
      * caller leaves out of the stored profile (their value is saved with the look's owners).
      */
     userChanged(patch: Record<string, unknown>): string[] {
@@ -118,7 +118,7 @@ export function createProfileLayers(ctx: AppContext, actions: { changeProfile(pa
       if (Object.keys(patch).some((key) => state.keptKeys.has(key))) persistKept()
       return held
     },
-    /** `keep mine` on one key (or `use package` when `on` is false): a profile key or `keybindings:<key>`. */
+    /** `keep mine` on one key (or `use profile` when `on` is false): a profile key or `keybindings:<key>`. */
     keep(key: string, on: boolean) {
       if (on && !key.startsWith("keybindings:")) keepValue(key, normalized(key, stored()[key]))
       else if (on) state.keptKeys.add(key)
@@ -126,7 +126,7 @@ export function createProfileLayers(ctx: AppContext, actions: { changeProfile(pa
       persistKept()
       sync()
     },
-    /** Keybinding keys the user chose in the keymap editor while a package binds the same key. */
+    /** Keybinding keys the user chose in the keymap editor while a profile binds the same key. */
     keepKeybindings(specs: readonly string[]) {
       const bound = new Set((state.activation?.keybindings ?? []).map((entry) => entry.spec))
       const mine = specs.filter((spec) => bound.has(spec))

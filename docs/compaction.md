@@ -189,7 +189,7 @@ nobody states: there is nothing to predict.
 
 The threshold is the `compactNoticePercent` setting: a percentage of that limit from 10 to 99 (default 80), or `"off"`. In
 `/settings`, section Behavior, row `compact notice` cycles default, 50, 60, 70, 90 and off. It replaces the `context at 81% of
-the compaction threshold` toast that `Limit notices` raised at 80% and 95%; that profile key now covers provider quota only.
+the compaction threshold` toast that `Limit notices` raised at 80% and 95%; that customize key now covers provider quota only.
 
 `mendcode context <sessionID>` prints the same estimate as its fourth line whenever a context and a limit are known, whether or
 not the threshold is reached, and says where the notice stands:

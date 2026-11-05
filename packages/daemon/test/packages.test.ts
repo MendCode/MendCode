@@ -28,11 +28,11 @@ async function boot() {
   const dir = temp("mendd-pkg-")
   const project = temp("mendd-pkg-proj-")
   const source = temp("mendd-pkg-src-")
-  write(path.join(source, "mendcode-package.json"), JSON.stringify({ name: "acme", version: "1.2.0", description: "Acme helpers" }))
-  write(path.join(source, "tools", "hello.json"), JSON.stringify({ description: "package hello", command: ["echo", "hi"] }))
-  write(path.join(source, "commands", "ship.md"), "---\ndescription: ship from the package\n---\nShip $ARGUMENTS")
-  write(path.join(source, "commands", "review.md"), "package review")
-  // The project's own command of the same name wins over the package's.
+  write(path.join(source, "mendcode-profile.json"), JSON.stringify({ name: "acme", version: "1.2.0", description: "Acme helpers" }))
+  write(path.join(source, "tools", "hello.json"), JSON.stringify({ description: "profile hello", command: ["echo", "hi"] }))
+  write(path.join(source, "commands", "ship.md"), "---\ndescription: ship from the profile\n---\nShip $ARGUMENTS")
+  write(path.join(source, "commands", "review.md"), "profile review")
+  // The project's own command of the same name wins over the profile's.
   write(path.join(project, ".mendcode", "commands", "review.md"), "project review")
   let layers: ((directory: string) => ExtensionLayer[]) | undefined
   const daemon = await startDaemon({
@@ -48,10 +48,10 @@ async function boot() {
   return { client, dir, project, source, layers: () => layers!, result }
 }
 
-describe("packages commands", () => {
-  test("an installed user package adds its tools and commands; the project's own files still win; disabling takes it all away", async () => {
+describe("profiles commands", () => {
+  test("an installed user profile adds its tools and commands; the project's own files still win; disabling takes it all away", async () => {
     const { client, project, source, layers, result } = await boot()
-    const installed = await client.send({ type: "packages.install", directory: project, source, scope: "user" })
+    const installed = await client.send({ type: "profiles.install", directory: project, source, scope: "user" })
     expect(installed.ok).toBe(true)
     expect(result<PackagesReport>(installed).packages).toMatchObject([{ key: "user:acme", enabled: true, manifest: { version: "1.2.0" }, contents: { tools: 1, commands: 2 } }])
 
@@ -77,46 +77,46 @@ describe("packages commands", () => {
     expect(existsSync(path.join(layers()(project)[0]!.dir, "recipes", "quick.json"))).toBe(true)
     expect(existsSync(path.join(layers()(project)[0]!.dir, "skills"))).toBe(false)
 
-    const disabled = await client.send({ type: "packages.enable", directory: project, key: "user:acme", enabled: false })
+    const disabled = await client.send({ type: "profiles.enable", directory: project, key: "user:acme", enabled: false })
     expect(result<PackagesReport>(disabled).packages[0]!.enabled).toBe(false)
-    expect(await client.send({ type: "settings.get" })).toMatchObject({ result: { settings: { disabledPackages: ["user:acme"] } } })
+    expect(await client.send({ type: "settings.get" })).toMatchObject({ result: { settings: { disabledProfiles: ["user:acme"] } } })
     expect(result<CustomToolsReport>(await client.send({ type: "tools.list", directory: project })).tools).toEqual([])
     expect(layers()(project).map((l) => l.pkg ?? l.source)).toEqual(["builtin", "user", "project"])
 
-    await client.send({ type: "packages.enable", directory: project, key: "user:acme", enabled: true })
-    expect(result<{ settings: Record<string, unknown> }>(await client.send({ type: "settings.get" })).settings.disabledPackages).toBeUndefined()
+    await client.send({ type: "profiles.enable", directory: project, key: "user:acme", enabled: true })
+    expect(result<{ settings: Record<string, unknown> }>(await client.send({ type: "settings.get" })).settings.disabledProfiles).toBeUndefined()
   })
 
   test("themes.list returns every layer's theme files for the client to validate", async () => {
     const { client, project, source, result } = await boot()
     write(path.join(source, "themes", "dusk.json"), JSON.stringify({ background: "#101010", colors: {} }))
-    await client.send({ type: "packages.install", directory: project, source, scope: "user" })
+    await client.send({ type: "profiles.install", directory: project, source, scope: "user" })
     const themes = result<ThemesReport>(await client.send({ type: "themes.list", directory: project })).themes
     expect(themes).toMatchObject([{ name: "dusk", source: "user", pkg: "acme", json: { background: "#101010" } }])
   })
 
-  test("a project package's tools follow the project's trust", async () => {
+  test("a project profile's tools follow the project's trust", async () => {
     const { client, project, source, result } = await boot()
-    await client.send({ type: "packages.install", directory: project, source, scope: "project" })
+    await client.send({ type: "profiles.install", directory: project, source, scope: "project" })
     const before = result<CustomToolsReport>(await client.send({ type: "tools.list", directory: project })).tools
     expect(before.map((t) => [t.toolName, t.source, t.trusted])).toEqual([["custom__hello", "project", false]])
     const after = result<CustomToolsReport>(await client.send({ type: "tools.trust", directory: project, trusted: true })).tools
     expect(after[0]!.trusted).toBe(true)
   })
 
-  test("a refused install and removing a missing package are errors; remove moves an installed one to the Trash and purge deletes it", async () => {
+  test("a refused install and removing a missing profile are errors; remove moves an installed one to the Trash and purge deletes it", async () => {
     const { client, dir, project, source, result } = await boot()
     write(path.join(source, ".env"), "TOKEN=x")
-    const refused = await client.send({ type: "packages.install", directory: project, source, scope: "user" })
+    const refused = await client.send({ type: "profiles.install", directory: project, source, scope: "user" })
     expect(refused).toMatchObject({ ok: false, error: { code: "invalid_command" } })
     expect(refused.ok ? "" : refused.error.message).toContain(".env: looks like a secret")
     rmSync(path.join(source, ".env"))
-    await client.send({ type: "packages.install", directory: project, source, scope: "user" })
-    expect(result<PackagesReport>(await client.send({ type: "packages.remove", directory: project, name: "acme", scope: "user" })).packages).toEqual([])
+    await client.send({ type: "profiles.install", directory: project, source, scope: "user" })
+    expect(result<PackagesReport>(await client.send({ type: "profiles.remove", directory: project, name: "acme", scope: "user" })).packages).toEqual([])
     expect(JSON.stringify(listTrash({ base: dir }))).toContain("acme")
-    expect(await client.send({ type: "packages.remove", directory: project, name: "acme", scope: "user" })).toMatchObject({ ok: false, error: { code: "target_mismatch", message: "[PACKAGES]: user:acme is not installed" } })
-    expect(result<PackagesReport>(await client.send({ type: "packages.restore", directory: project, name: "acme", scope: "user" })).packages.map((pkg) => pkg.key)).toEqual(["user:acme"])
-    expect(result<PackagesReport>(await client.send({ type: "packages.remove", directory: project, name: "acme", scope: "user", purge: true })).packages).toEqual([])
-    expect(await client.send({ type: "packages.restore", directory: project, name: "acme", scope: "user" })).toMatchObject({ ok: false, error: { code: "invalid_command" } })
+    expect(await client.send({ type: "profiles.remove", directory: project, name: "acme", scope: "user" })).toMatchObject({ ok: false, error: { code: "target_mismatch", message: "[PROFILES]: user:acme is not installed" } })
+    expect(result<PackagesReport>(await client.send({ type: "profiles.restore", directory: project, name: "acme", scope: "user" })).packages.map((pkg) => pkg.key)).toEqual(["user:acme"])
+    expect(result<PackagesReport>(await client.send({ type: "profiles.remove", directory: project, name: "acme", scope: "user", purge: true })).packages).toEqual([])
+    expect(await client.send({ type: "profiles.restore", directory: project, name: "acme", scope: "user" })).toMatchObject({ ok: false, error: { code: "invalid_command" } })
   })
 })

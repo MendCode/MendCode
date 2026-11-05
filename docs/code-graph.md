@@ -148,7 +148,7 @@ Calls are attributed to their containing declarations. TS/JS named/default impor
 
 `this.f()`, `self.f()` and Go receiver calls resolve to sibling methods; `Type.f()` / `Type::f()` resolve to known types. Imported class aliases and namespace calls are supported, as are optional TS/JS calls (`f?.()`, `ns?.f()`). Unknown receivers (`obj.f()`, `JSON.parse()`) are not treated as project functions. Explicit Graft target ids that disappeared do not fall back to name guesses.
 
-Relative script imports support extension substitution (`.js` → `.ts`, `.mjs` → `.mts`, `.cjs` → `.cts`). Workspace packages are discovered from project `package.json` files, without installing dependencies: `exports` conditions and wildcard subpaths, or `source`/`types`/`module`/`main` entrypoints, resolve only to indexed project files. Private/blocked subpaths and targets escaping a package are not followed. Conditions are a source-first navigation heuristic, not a runtime module loader.
+Relative script imports support extension substitution (`.js` → `.ts`, `.mjs` → `.mts`, `.cjs` → `.cts`). Workspace packages are discovered from project `package.json` files, without installing dependencies: `exports` conditions and wildcard subpaths, or `source`/`types`/`module`/`main` entrypoints, resolve only to indexed project files. Private/blocked subpaths and targets escaping a profile are not followed. Conditions are a source-first navigation heuristic, not a runtime module loader.
 
 Skipped: `node_modules`, `.git`, `dist`, `build`, `graft`, `__pycache__`, `coverage`, hidden directories, `target` next to a `Cargo.toml`, `*.min.*`, files over 512 KB, files with NUL bytes, symlinks, and `.gitignore` matches. Root and nested ignore files support ordered `!` negations, directory-relative anchors, globs and escaped leading `#`/`!`. Like Git, negating a child cannot reinclude it while its parent directory remains ignored. Hard-skipped directories cannot be re-enabled. This is a bounded source walker, not a full Git implementation (no global excludes or tracked-file overrides).
 
@@ -163,7 +163,7 @@ Skipped: `node_modules`, `.git`, `dist`, `build`, `graft`, `__pycache__`, `cover
   "builtAt": 1700000000000,
   "graftMtimeMs": null,
   "graftStamp": null,
-  "packages": [],
+  "profiles": [],
   "partial": false,
   "files": {
     "src/a.ts": {

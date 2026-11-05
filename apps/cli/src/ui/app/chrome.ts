@@ -7,7 +7,7 @@ import type { createAgents } from "./agents"
 import { goalSpans } from "../../view/goal"
 import { BREAKPOINTS, breakpointOf } from "../breakpoints"
 import { chatColumns, projectSessions, SIDEBAR_WIDTH, sidebarVisible } from "../../view/sidebar"
-import { DEFAULT_FOOTER, DEFAULT_PROFILE, FOOTER_SEGMENT_TIER, featureOn, profileFor, tierFooter, type FooterSegment } from "@mendcode/protocol/wire"
+import { DEFAULT_FOOTER, DEFAULT_AREA, FOOTER_SEGMENT_TIER, featureOn, areaFor, tierFooter, type FooterSegment } from "@mendcode/protocol/wire"
 import { contextIsEngineWindow, contextLimit } from "../../view/context-meter"
 import type { McpStatusReport } from "@mendcode/protocol"
 import { fastMark, footerParts, quotaText, type FooterInput } from "../../view/footer"
@@ -351,7 +351,7 @@ export function createChrome(ctx: AppContext, actions: {
       connection: state.connection,
       ...(state.tuiProfile.showPermission ? { permission: state.transcript.permissionMode } : {}),
       permissionLabel: PERMISSION_LABEL[state.transcript.permissionMode],
-      ...(profileName() !== DEFAULT_PROFILE ? { profile: profileName() } : {}),
+      ...(areaName() !== DEFAULT_AREA ? { area: areaName() } : {}),
       ...(state.transcript.goal && !state.shellMode ? { goal: goalSpans(state.transcript.goal, now(), g) } : {}),
       loops: state.liveLoops.size,
       ...(state.loops.some((loop) => loop.state === "needs_input" && state.liveLoops.has(loop.loopId)) ? { loopsWaiting: state.loops.filter((loop) => loop.state === "needs_input" && state.liveLoops.has(loop.loopId)).length } : {}),
@@ -406,9 +406,9 @@ export function createChrome(ctx: AppContext, actions: {
     }
   }
 
-  /** The folder profile of this terminal's project, from the pushed settings. */
-  function profileName() {
-    return profileFor(input.directory, state.settingsNow.profiles, input.home)
+  /** The area of this terminal's project, from the pushed settings. */
+  function areaName() {
+    return areaFor(input.directory, state.settingsNow.areas, input.home)
   }
 
   function footer(width: number): Line {

@@ -239,7 +239,7 @@ function linkArrow(kind: MemoryLinkKind, incoming: boolean) {
 
 const FACT_LABEL = 10
 
-/** The selected memory in full: its text wrapped, labeled facts (scope, category, profile, project, origin), then its links. Exactly `height` rows. */
+/** The selected memory in full: its text wrapped, labeled facts (scope, category, area, project, origin), then its links. Exactly `height` rows. */
 function detailRows(input: { report: MemoryGraphReport; selected: string | undefined; width: number; height: number }): Line[] {
   const { report, selected, width, height } = input
   if (height <= 0 || width <= 0) return []
@@ -259,7 +259,7 @@ function detailRows(input: { report: MemoryGraphReport; selected: string | undef
     const fact = (label: string, value: string, tone: ColorName = "text"): Line => clip([{ text: label.padEnd(FACT_LABEL), fg: "muted" }, { text: truncateEnd(value, Math.max(1, width - FACT_LABEL)), fg: tone }], width)
     const facts: Line[] = [fact("Scope", memory.scope, SCOPE_TONE[memory.scope])]
     if (memory.category) facts.push(fact("Category", memory.category, tones.get(memory.category) ?? "text"))
-    if (memory.profile) facts.push(fact("Profile", memory.profile))
+    if (memory.profile) facts.push(fact("Area", memory.profile))
     if (memory.directory) facts.push(fact("Project", memory.directory))
     facts.push(fact("Origin", memory.source === "agent" ? "agent" : "manual"))
 

@@ -87,7 +87,7 @@ function hookDetail({ hook, width }: { hook: HookInfo; width: number }): Line[] 
     ...wrap(`${hook.kind === "http" ? "posts" : hook.kind === "prompt" ? "asks " : "runs "} ${hook.command.replace(/\s+/g, " ")}`, width).slice(0, 3).map((text): Line => fit([{ text, fg: "body" }], width)),
     fit([{ text: `when  ${hook.matcher ? `${hook.event} · matches ${hook.matcher}` : hook.event} · ${hook.kind ?? "command"} · timeout ${formatDuration(hook.timeoutMs)}`, fg: "muted" }], width),
     fit([{ text: `layer ${hook.layer ?? hook.source}`, fg: "muted" }], width),
-    fit([{ text: `file  ${truncateEnd(hook.file, width - 6)}${hook.pkg && !hook.layer ? ` (package ${hook.pkg})` : ""}`, fg: "muted", dim: true }], width),
+    fit([{ text: `file  ${truncateEnd(hook.file, width - 6)}${hook.pkg && !hook.layer ? ` (profile ${hook.pkg})` : ""}`, fg: "muted", dim: true }], width),
   ]
   if (notAllowed(hook)) lines.push(...wrap("not allowed: add this url to the allowedHttpHookUrls setting to let it run", width).map((text): Line => fit([{ text, fg: "warning" }], width)))
   else if (!hook.active) lines.push(...wrap("not trusted: press t to let this project's hooks run (they run as commands, as you)", width).map((text): Line => fit([{ text, fg: "warning" }], width)))

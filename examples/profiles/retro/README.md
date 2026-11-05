@@ -1,19 +1,19 @@
 # Retro
 
-A full reskin of MendCode in phosphor amber, as one package. It is the reference for `docs/packages.md`: every file below changes
-one thing, and enabling the package applies them together as an overlay. Disabling or removing it puts everything back; nothing is
+A full reskin of MendCode in phosphor amber, as one profile. It is the reference for `docs/profiles.md`: every file below changes
+one thing, and enabling the profile applies them together as an overlay. Disabling or removing it puts everything back; nothing is
 written into your settings.
 
 ```sh
-mendcode package check examples/packages/retro
-mendcode package install examples/packages/retro
+mendcode profile check examples/profiles/retro
+mendcode profile install examples/profiles/retro
 ```
 
-`/packages` then shows what it overrides (`o`), turns it off (`d`) and lets you keep one of your own settings (`k`).
+`/profiles` then shows what it overrides (`o`), turns it off (`d`) and lets you keep one of your own settings (`k`).
 
 | File | What it changes |
 |---|---|
-| `mendcode-package.json` | `activate`: the theme, the profile keys, the keybindings file and which modules draw which view |
+| `mendcode-profile.json` | `activate`: the theme, the customize keys, the keybindings file and which modules draw which view |
 | `themes/retro.json` | the color theme |
 | `extensions/message-assistant.ts` | assistant messages: a rail and a `[ASSISTANT]` tag |
 | `extensions/tool-card.ts` | tool calls as line-printer entries, foldable by clicking the tag |
@@ -27,4 +27,4 @@ mendcode package install examples/packages/retro
 
 The engine and provider transport, permission and trust state, the prompt editor, the dock and the live compaction panel, and
 page bodies as typed data. Its two view modules are code: they run in the terminal with your permissions, so read them before
-you enable the package (they are short).
+you enable the profile (they are short).

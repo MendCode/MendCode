@@ -47,12 +47,12 @@ describe("precedence from the CLI", () => {
     expect(parsed("control-plane", "system", "precedence")).toMatchObject({ kind: "system", operation: "precedence" })
     const claims = [
       { surface: "skills", name: "review", layer: "user", rank: 1 },
-      { surface: "skills", name: "review", layer: "package user:kit", rank: 0 },
+      { surface: "skills", name: "review", layer: "profile user:kit", rank: 0 },
       { surface: "skills", name: "review", layer: "project", rank: 3 },
     ]
-    const text = systemText({ operation: "precedence", ok: true, checks: [], failures: [], facts: { claims, layers: ["package user:kit", "user", "project"], truncated: false } })
+    const text = systemText({ operation: "precedence", ok: true, checks: [], failures: [], facts: { claims, layers: ["profile user:kit", "user", "project"], truncated: false } })
     expect(text).toContain("Skills")
-    expect(text).toContain("- review: project · overrides user, package user:kit")
+    expect(text).toContain("- review: project · overrides user, profile user:kit")
     expect(completionScript("bash")).toContain("precedence")
   })
 })

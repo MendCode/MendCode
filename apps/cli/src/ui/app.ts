@@ -447,7 +447,7 @@ export function createApp(input: AppInput) {
     try {
       const recovery = recoverProfile(profileFile(input.dataDir))
       if (recovery.restored) appState.notice = `Restored ${recovery.restored} settings · undo: /customize restore ${recovery.backupId ?? ""}`
-    } catch (error) { appState.notice = `Profile safety: ${error instanceof Error ? error.message : String(error)}` }
+    } catch (error) { appState.notice = `Terminal settings safety: ${error instanceof Error ? error.message : String(error)}` }
   }
   appState.tuiProfile = input.profile ?? (input.dataDir ? readTuiProfile(input.dataDir) : { ...DEFAULT_TUI_PROFILE })
   // Screen-reader mode from the saved setting or from this run (flag, environment): reduced motion and the plain look, in memory only for a one-off run.

@@ -71,7 +71,7 @@ describe("docs: the list and the cards", () => {
   })
   test("the set covers what a user asks a model to change", () => {
     const topics = CARDS.cards.map((card) => card.topic)
-    for (const topic of ["settings", "theme", "keys", "extensions", "footer", "commands", "tiers", "prompt-modes", "models", "permissions", "tools", "skills", "agents", "hooks", "mcp", "packages"]) expect(topics).toContain(topic)
+    for (const topic of ["settings", "theme", "keys", "extensions", "footer", "commands", "tiers", "prompt-modes", "models", "permissions", "tools", "skills", "agents", "hooks", "mcp", "profiles"]) expect(topics).toContain(topic)
   })
   test("a topic prints its card: a header line, the text with the program name filled in, exit 0", async () => {
     const { code, out } = await run(["docs", "extensions"])
@@ -104,7 +104,7 @@ describe("docs: the list and the cards", () => {
     const { code, out, err } = await run(["docs", "packages", "prompt-modes", "extensions"], place)
     expect({ code, err }).toEqual({ code: 0, err: "" })
     const headers = [...out.matchAll(new RegExp(`^${PROGRAM_NAME} docs ([a-z-]+):`, "gm"))].map((match) => match[1])
-    expect(headers).toEqual(["packages", "prompt-modes", "extensions"])
+    expect(headers).toEqual(["profiles", "prompt-modes", "extensions"])
     const again = await run(["docs", "footer", "statusline", "footer"], place)
     expect([...again.out.matchAll(new RegExp(`^${PROGRAM_NAME} docs ([a-z-]+):`, "gm"))]).toHaveLength(1)
     expect(await run(["docs", "footer"], place)).toMatchObject({ out: again.out })

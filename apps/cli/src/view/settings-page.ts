@@ -12,13 +12,13 @@ import type { TuiProfile } from "./tui-profile"
 
 /**
  * `/settings`: every daemon setting in one place, grouped, with the same edits the setup page makes (each one is a
- * `settings.set` patch, saved at once). Settings that hold lists or folder rules (models, profiles, trusted directories,
- * disabled packages, the footer) are shown here and edited where they live: the row says where.
+ * `settings.set` patch, saved at once). Settings that hold lists or folder rules (models, areas, trusted directories,
+ * disabled profiles, the footer) are shown here and edited where they live: the row says where.
  */
 
 export type SettingsRow =
   | "theme" | "view" | "reducedMotion" | "pet" | "footer"
-  | "defaultPermission" | "compactAtTokens" | "idleCompactAtTokens" | "compactNoticePercent" | "promptCacheTtl" | "claudeCacheTtl" | "profiles" | "trustedToolDirs" | "disabledPackages" | "onboarded"
+  | "defaultPermission" | "compactAtTokens" | "idleCompactAtTokens" | "compactNoticePercent" | "promptCacheTtl" | "claudeCacheTtl" | "areas" | "trustedToolDirs" | "disabledProfiles" | "onboarded"
   | "models" | "acp"
   | "dreamAt"
   | "retentionDays" | "worktreeGcDays" | "storage"
@@ -49,9 +49,9 @@ export const SETTINGS_GROUPS: ReadonlyArray<{ title: string; rows: readonly RowD
       { id: "promptCacheTtl", label: "cache ttl", kind: "cycle" },
       { id: "claudeCacheTtl", label: "claude ttl", kind: "toggle" },
       { id: "compactNoticePercent", label: "compact notice", kind: "cycle" },
-      { id: "profiles", label: "profiles", kind: "readonly" },
+      { id: "areas", label: "areas", kind: "readonly" },
       { id: "trustedToolDirs", label: "trusted tools", kind: "link" },
-      { id: "disabledPackages", label: "disabled pkgs", kind: "link" },
+      { id: "disabledProfiles", label: "disabled pkgs", kind: "link" },
       { id: "onboarded", label: "onboarded", kind: "toggle" },
     ],
   },
@@ -253,15 +253,15 @@ function choose(def: RowDef, values: SettingsValues, themes: readonly string[], 
       return { type: "open", command: "acp" }
     case "trustedToolDirs":
       return { type: "open", command: "tools" }
-    case "disabledPackages":
-      return { type: "open", command: "packages" }
+    case "disabledProfiles":
+      return { type: "open", command: "profiles" }
     case "storage":
       return { type: "open", command: "storage" }
     case "customize":
       return { type: "open", command: "customize" }
     case "extensions":
       return { type: "open", command: "extensions" }
-    case "profiles":
+    case "areas":
       return NONE
     case "queue":
       return { type: "set", patch: { queue: { mode: cycle(["after-response", "after-tools", "immediate"], settings.queue?.mode ?? "after-response", direction) } } }
@@ -379,12 +379,12 @@ function shown(def: RowDef, values: SettingsValues, state: SettingsPageState): S
     }
     case "claudeCacheTtl":
       return { ...on(settings.claudeCacheTtl === true), note: settings.claudeCacheTtl === true && settings.promptCacheTtl !== "1h" ? "needs cache ttl 1h" : "1h also to Claude Code", arrows: true }
-    case "profiles":
-      return { text: settings.profiles?.length ? settings.profiles.map((profile) => profile.name).join(", ") : "none", fg: settings.profiles?.length ? "text" : "muted", note: "folder rules · not editable here", arrows: false }
+    case "areas":
+      return { text: settings.areas?.length ? settings.areas.map((area) => area.name).join(", ") : "none", fg: settings.areas?.length ? "text" : "muted", note: "folder rules · not editable here", arrows: false }
     case "trustedToolDirs":
       return { text: `${settings.trustedToolDirs?.length ?? 0} ${settings.trustedToolDirs?.length === 1 ? "directory" : "directories"}`, fg: settings.trustedToolDirs?.length ? "text" : "muted", note: "enter opens /tools", arrows: false }
-    case "disabledPackages":
-      return { text: `${settings.disabledPackages?.length ?? 0} off`, fg: settings.disabledPackages?.length ? "warning" : "muted", note: "enter opens /packages", arrows: false }
+    case "disabledProfiles":
+      return { text: `${settings.disabledProfiles?.length ?? 0} off`, fg: settings.disabledProfiles?.length ? "warning" : "muted", note: "enter opens /profiles", arrows: false }
     case "onboarded":
       return { ...on(settings.onboarded === true), note: "first-run setup done", arrows: true }
     case "acp":
@@ -481,9 +481,9 @@ const SETTINGS_HELP: Record<SettingsRow, string> = {
   compactNoticePercent: "Default 80. When a call leaves the context at this share of the compaction point, the transcript says once how many tokens are left, about how many turns that is (from three turns of growth on) and that /compact packs it now. off never says it; compactNoticePercent in settings.json takes 10-99. /tier compact_notice on|off switches the feature.",
   promptCacheTtl: "5m (default) or 1h: how long Anthropic keeps what the native engine caches. 1h survives waits up to an hour; cache writes then cost 2x the input price instead of 1.25x. Anthropic API and Claude on Vertex only. At 5m, /tier wait_cache on|off (on in the full tier) switches a session to 1h once its calls were twice 5 to 60 minutes apart.",
   claudeCacheTtl: "off by default. on: a cache ttl of 1h is also given to Claude Code when it is the engine (CLAUDE_CODE_PROMPT_CACHE_TTL and CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL, Claude Code 2.1.242 or later), from its next process on. At 5m nothing is passed and Claude Code keeps its own defaults.",
-  profiles: "Named folder rules select models and permissions. Read-only here; edit profiles in settings configuration.",
+  areas: "Named folder rules select models and permissions. Read-only here; edit areas with `mendcode area`.",
   trustedToolDirs: "Open /tools to inspect local tool trust. Trusted directories allow their configured tools to load.",
-  disabledPackages: "Open /packages to enable or disable installed extension packages. Disabled packages do not load.",
+  disabledProfiles: "Open /profiles to enable or disable installed extension profiles. Disabled profiles do not load.",
   onboarded: "on records completed setup; off offers setup on the next start.",
   models: "Open /model roles to choose main and helper roles. Unset roles use engine defaults.",
   acp: "Open /acp to manage opt-in external agent definitions. Unconfigured agents are not launched.",

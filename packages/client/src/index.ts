@@ -878,19 +878,19 @@ export function createClient(options: {
       return request({ type: "session.part.update", sessionId, messageId, partId: part.id, part, expectedRevision, id: ids("command"), clientId }, true)
     },
     async packageCatalog(directory: string, query = "", sourceId?: string): Promise<{ ok: true; report: import("@mendcode/protocol").PackageCatalogReport } | { ok: false; error: ErrorPayload }> {
-      const reply = await request({ type: "packages.search", id: ids("command"), clientId, directory, query, ...(sourceId ? { sourceId } : {}) }, true)
+      const reply = await request({ type: "profiles.search", id: ids("command"), clientId, directory, query, ...(sourceId ? { sourceId } : {}) }, true)
       return reply.ok ? { ok: true, report: reply.result as unknown as import("@mendcode/protocol").PackageCatalogReport } : reply
     },
     async packagePreview(directory: string, sourceId: string, name?: string, scope: "user" | "project" = "user"): Promise<{ ok: true; report: import("@mendcode/protocol").PackagePreviewReport } | { ok: false; error: ErrorPayload }> {
-      const reply = await request({ type: "packages.preview", id: ids("command"), clientId, directory, sourceId, scope, ...(name ? { name } : {}) }, true)
+      const reply = await request({ type: "profiles.preview", id: ids("command"), clientId, directory, sourceId, scope, ...(name ? { name } : {}) }, true)
       return reply.ok ? { ok: true, report: reply.result as unknown as import("@mendcode/protocol").PackagePreviewReport } : reply
     },
-    async authorPackage(directory: string, action: "create" | "update", options: Omit<Extract<CommandInput, { type: "packages.create" }>, "type" | "directory"> = {}): Promise<{ ok: true; report: import("@mendcode/protocol").PackageAuthoringReport } | { ok: false; error: ErrorPayload }> {
-      const reply = await request({ type: action === "create" ? "packages.create" : "packages.update", id: ids("command"), clientId, directory, ...options }, true)
+    async authorPackage(directory: string, action: "create" | "update", options: Omit<Extract<CommandInput, { type: "profiles.create" }>, "type" | "directory"> = {}): Promise<{ ok: true; report: import("@mendcode/protocol").PackageAuthoringReport } | { ok: false; error: ErrorPayload }> {
+      const reply = await request({ type: action === "create" ? "profiles.create" : "profiles.update", id: ids("command"), clientId, directory, ...options }, true)
       return reply.ok ? { ok: true, report: reply.result as unknown as import("@mendcode/protocol").PackageAuthoringReport } : reply
     },
     async deleteLocalPackage(directory: string): Promise<{ ok: true; report: import("@mendcode/protocol").PackageDeleteLocalReport } | { ok: false; error: ErrorPayload }> {
-      const reply = await request({ type: "packages.delete-local", id: ids("command"), clientId, directory }, true)
+      const reply = await request({ type: "profiles.delete-local", id: ids("command"), clientId, directory }, true)
       return reply.ok ? { ok: true, report: reply.result as unknown as import("@mendcode/protocol").PackageDeleteLocalReport } : reply
     },
     installPlugin(directory: string, spec: string, options: { global?: boolean; force?: boolean } = {}) {

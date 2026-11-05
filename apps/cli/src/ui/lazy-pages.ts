@@ -111,7 +111,7 @@ export const PAGE_MODULES = {
   mcps: [mcps],
   acp: [acp],
   tools: [tools],
-  packages: [packages],
+  profiles: [packages],
   agent: [agentPicker],
   theme: [themePicker],
   agents: [agents, peerCommands],

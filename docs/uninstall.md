@@ -12,7 +12,7 @@ Only known v2 files are moved. Unknown files, symlinks and unverified databases/
 
 | Option | Preserved |
 |---|---|
-| `--keep-config` | SQLite settings, providers/ACP/MCP, terminal profile/keybindings, extensions, packages, agents, skills, commands, tools, themes, recipes and pet sources |
+| `--keep-config` | SQLite settings, providers/ACP/MCP, terminal settings/keybindings, extensions, packages, agents, skills, commands, tools, themes, recipes and pet sources |
 | `--keep-data` | SQLite sessions/events, usage/memory, encrypted session secrets and their key, blobs, snapshots, goals, reviews, side chats and project scratchpads |
 | Both | Original database and both file groups |
 

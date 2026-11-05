@@ -55,7 +55,7 @@ describe("feature manifest", () => {
     expect(featureOn({ tier: "minimalist" }, "usage_resume")).toBe(true)
     expect(featureOn({ tier: "minimalist", features: { usage_resume: false } }, "usage_resume")).toBe(false)
     expect(rows.threads).toEqual([false, true, true])
-    expect(tierDiff("minimalist", "balanced")).toEqual({ added: ["package_tools", "codegraph", "subagents", "script_workflows", "computer", "threads", "pr_watch", "pr_review", "output_filters", "forecast", "review_order", "session_meta", "limit_checkpoint", "graph_context", "handoff", "instruction_includes", "package_capabilities", "caveman", "webfetch_modes", "official_packages", "web_routing", "panel", "panel_models", "file_viewer", "aux_tools", "harness_tools", "ui_tool", "orientation", "git_hub", "git_actions", "compact_notice", "cheap_subagents", "claude_compact", "one_tree", "advisor", "visible_plan", "plan_files"], removed: [] })
+    expect(tierDiff("minimalist", "balanced")).toEqual({ added: ["profile_tools", "codegraph", "subagents", "script_workflows", "computer", "threads", "pr_watch", "pr_review", "output_filters", "forecast", "review_order", "session_meta", "limit_checkpoint", "graph_context", "handoff", "instruction_includes", "profile_capabilities", "caveman", "webfetch_modes", "official_profiles", "web_routing", "panel", "panel_models", "file_viewer", "aux_tools", "harness_tools", "ui_tool", "orientation", "git_hub", "git_actions", "compact_notice", "cheap_subagents", "claude_compact", "one_tree", "advisor", "visible_plan", "plan_files"], removed: [] })
     // The visible plan (todo listed, its prompt line and the progress row) is balanced's and full's; minimalist has none of it.
     expect(rows.visible_plan).toEqual([false, true, true])
     expect(featureOn({}, "visible_plan")).toBe(true)
@@ -131,7 +131,7 @@ describe("featureState", () => {
     expect(featureOn({ tier: "minimalist", features: { hooks: false } }, "hooks")).toBe(true)
     expect(featureOn({}, "hooks", { safeMode: true })).toBe(false)
     expect(featureOn({}, "extensions", { safeMode: true })).toBe(false)
-    expect(featureOn({}, "packages", { safeMode: true })).toBe(false)
+    expect(featureOn({}, "profiles", { safeMode: true })).toBe(false)
     expect(featureOn({}, "mcp", { safeMode: true })).toBe(false)
     expect(featureOn({}, "codegraph", { safeMode: true })).toBe(true)
   })
@@ -205,7 +205,7 @@ describe("effectiveSettings", () => {
   test("safe mode alone turns MCP off without a tier", () => {
     const safe = effectiveSettings({} as TierSettings, { safeMode: true })
     // Safe mode keeps the chat-side package manager off too: it installs and enables code the session would then load.
-    expect(safe.tools).toEqual({ "mcp__*": false, "mcp_resource_*": false, packages: false, session_meta: false, "computer_*": false })
+    expect(safe.tools).toEqual({ "mcp__*": false, "mcp_resource_*": false, profiles: false, session_meta: false, "computer_*": false })
   })
 })
 

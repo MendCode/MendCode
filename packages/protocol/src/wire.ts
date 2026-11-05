@@ -34,7 +34,7 @@ export { AGENT_OPEN_COMMANDS, AGENT_CAPPED_COMMANDS, AGENT_ORIGIN_CAPABILITY, AG
 export { approvalRuleOffer, withApprovalRules, type ApprovalRule, type ApprovalRuleOffer, type ApprovalRuleLevel } from "./approval-rule"
 
 export { createIdFactory, ID_PREFIXES } from "./id-factory"
-export { DEFAULT_PROFILE, PROFILE_NAME, profileFor, type ProfileRule } from "./profiles"
+export { DEFAULT_AREA, AREA_NAME, areaFor, type AreaRule } from "./areas"
 export { findSecrets, redactEventText, redactSecrets, replaceSecretMarkers, replaceSecrets, secretMarker, type Redaction, type SecretFinding } from "./redact"
 export { DEFAULT_IDLE_COMPACT_AT_TOKENS, IDLE_COMPACT_MARGIN_MS, ANTHROPIC_CACHE_LIFETIME_MS, OPENAI_CACHE_LIFETIME_MS, CHATGPT_CACHE_LIFETIME_MS, ANTHROPIC_CACHE_LIFETIME_1H_MS, CACHE_TTLS, CACHE_TTL_PROVIDER_TYPES, WAIT_CACHE_AFTER, nextWaitCache, type CacheTtl, type WaitCacheState, CACHE_LIFETIME_MINUTES_RANGE, IDLE_COMPACT_OFF_REASONS, IDLE_COMPACT_NOTE, cacheLifetime, observedCacheLifetime, CACHE_HIT_SHARE, CACHE_SAMPLES_MAX, CACHE_SAMPLE_MIN_GAP_MS, CACHE_SAMPLE_WINDOW_MS, CACHE_SAMPLE_MIN_PROMPT_TOKENS, type CacheSample, type ObservedCacheLifetime, type CacheLifetime, type CacheLifetimeSource, type IdleCompactOffReason } from "./idle-compaction-data"
 export {
@@ -126,6 +126,7 @@ export { AGENT_CREATE_PERMISSIONS, AGENT_CREATE_NAME, agentName } from "./agent-
 
 export * from "./project-data"
 export { adaptiveBounds } from "./loop-wire"
+export { RENAMED_SETTINGS, RENAMED_FEATURES, RENAMED_TOOLS, currentSettingKeys } from "./settings-renames"
 export { projectMessageEvent, revisedEvents } from "./message-projection"
 
 export type { BudgetPolicy, BudgetPrice, BudgetReport, SetupReport, SetupPreset } from "./setup"

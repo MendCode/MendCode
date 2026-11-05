@@ -33,11 +33,11 @@ describe("the built-in footer takes any number of rows by settings alone", () =>
     expect((await screen({ profile: { presentation: "minimal" } })).text().some((row) => row.includes("gpt-6.1-sol") || row.includes("GPT-6.1-Sol"))).toBe(false)
     const full = await screen({ profile: FIVE_ROWS })
     expect(has(full.text())).toBe(true)
-    await full.h.type("/packages")
+    await full.h.type("/profiles")
     await full.h.key("\r")
     await Bun.sleep(10)
     full.h.app.render()
-    expect(full.text().some((row) => row.includes("Packages"))).toBe(true)
+    expect(full.text().some((row) => row.includes("Profiles"))).toBe(true)
     expect(full.text().some((row) => row.includes("CODEX"))).toBe(false)
   })
 

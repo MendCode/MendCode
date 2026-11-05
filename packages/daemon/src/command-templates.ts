@@ -23,7 +23,7 @@ Focus and constraints: $ARGUMENTS
 
 Investigate README files, manifests, workspace and lockfile configuration, build/test/lint/typecheck scripts, CI, existing AGENTS.md and other instruction files, and mendcode.json first. Read representative entrypoints only where the architecture remains unclear. Prefer executable configuration over conflicting prose.
 
-Write compact, verified, repository-specific instructions: exact development and focused test commands, package ownership and entrypoints, non-obvious conventions, generated files, prerequisites and operational pitfalls. Preserve useful existing instructions; improve them in place instead of blindly rewriting. Omit generic advice, exhaustive file trees, speculation and facts obvious from filenames. Every line should prevent a mistake an agent would otherwise make.
+Write compact, verified, repository-specific instructions: exact development and focused test commands, profile ownership and entrypoints, non-obvious conventions, generated files, prerequisites and operational pitfalls. Preserve useful existing instructions; improve them in place instead of blindly rewriting. Omit generic advice, exhaustive file trees, speculation and facts obvious from filenames. Every line should prevent a mistake an agent would otherwise make.
 
 Ask one short batch of questions only for material conventions the repository cannot answer. Do not ask about documented facts. Respect existing instructions and user constraints.`,
     },

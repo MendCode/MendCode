@@ -486,7 +486,7 @@ export function createExtensionRuntime(options: ExtensionRuntimeOptions) {
       return claimed.flatMap(({ surface, name, owner }) => {
         const rank = loaded.findIndex((extension) => extension.name === owner)
         const extension = loaded[rank]
-        return extension ? [{ surface, name, rank, layer: extension.pkg ? `package ${extension.source}:${extension.pkg}` : extension.source }] : []
+        return extension ? [{ surface, name, rank, layer: extension.pkg ? `profile ${extension.source}:${extension.pkg}` : extension.source }] : []
       })
     },
     /** What each loaded extension registered in this terminal (for `/extensions`); a slot or renderer an error disabled says so. */

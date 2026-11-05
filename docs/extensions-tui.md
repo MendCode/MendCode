@@ -8,12 +8,12 @@ Per layer, `extensions/*.ts|js` and `extensions/<name>/index.ts|js`:
 
 | Layer | Path |
 |---|---|
-| user packages | `<data dir>/packages/<name>/extensions` |
+| user profiles | `<data dir>/packages/<name>/extensions` |
 | user | `<data dir>/extensions` |
-| project packages | `<project>/.mendcode/packages/<name>/extensions` |
+| project profiles | `<project>/.mendcode/packages/<name>/extensions` |
 | project | `<project>/.mendcode/extensions` |
 
-`<data dir>` is the CLI's `--dir` (else `MENDCODE_DIR`, else `~/.mendcode`). Modules load in that order, which is the daemon's layer order (user packages, your own folder, project packages, the project's folder; a later module wins a name, key or slot); within a layer, by file name. Versions before the precedence report loaded your own folder first. `/packages` then `p` and `/doctor` list every name more than one module registers and which one is in force ([packages](packages.md#one-precedence-report)). Packages disabled in the daemon's settings (`disabledPackages`, `user:name` / `project:name`) are skipped. Files starting with `.` and `.d.ts` files are ignored.
+`<data dir>` is the CLI's `--dir` (else `MENDCODE_DIR`, else `~/.mendcode`). Modules load in that order, which is the daemon's layer order (user profiles, your own folder, project profiles, the project's folder; a later module wins a name, key or slot); within a layer, by file name. Versions before the precedence report loaded your own folder first. `/profiles` then `p` and `/doctor` list every name more than one module registers and which one is in force ([profiles](packages.md#one-precedence-report)). Profiles disabled in the daemon's settings (`disabledProfiles`, `user:name` / `project:name`) are skipped. Files starting with `.` and `.d.ts` files are ignored.
 
 A module is loaded with a dynamic `import()` only when at least one file exists: a terminal without extensions never parses the runtime (`apps/cli/test/extensions-loader.test.ts` checks this in a fresh process), and draws no extra work per frame.
 
@@ -39,7 +39,7 @@ Project extensions (`.mendcode/extensions`, `.mendcode/packages/*/extensions`) a
 
 Limit: `/tools` → `t` only acts when the project has custom tools, so a project with extensions and no tools cannot be trusted from that page today (the daemon's `tools.trust` command works for any directory).
 
-Disabling a package that is already loaded reloads the terminal half. `/customize` → Extensions can disable individual terminal modules by name, independently of their daemon half.
+Disabling a profile that is already loaded reloads the terminal half. `/customize` → Extensions can disable individual terminal modules by name, independently of their daemon half.
 
 ## Live reload and agent customization
 
@@ -59,7 +59,7 @@ export default {
 }
 ```
 
-The writing tool `customize_ui` uses the normal tool permission gate: plan mode cannot write, and approval/denial follows the active permission policy. Its model-visible schema includes every profile key and its API description includes the terminal contract. Actions:
+The writing tool `customize_ui` uses the normal tool permission gate: plan mode cannot write, and approval/denial follows the active permission policy. Its model-visible schema includes every customize key and its API description includes the terminal contract. Actions:
 
 - `{action: "settings", values: {userIcon: "◆", messageMeta: "off"}}` applies a validated `/customize` patch and reloads.
 - `{action: "write", file: "look.ts", content: "export default ..."}` writes a complete user module.
@@ -114,7 +114,7 @@ Output is cut to the slot's width (replace-style slots are padded to it), at mos
 
 **Arguments.** `detail` is the text after the tool name in the title (a command, a path). Once the call finished, `args` holds every argument the tool got, with `detail` among them, and `final` is `true`; while it runs, or when the daemon cut long arguments (it keeps 4000 characters, secrets redacted), `args` is `{ detail }` and `final` is `false`. Everything is read-only: `args` and every object and list in it are frozen (assigning throws in module code), strings over 2000 characters end in `…`, lists keep 100 items and nesting stops at 6 levels.
 
-**Which renderer draws.** `tool` is a name or a pattern ending in `*`: `mcp__github__*`, `mcp__*`, `*` (a `*` anywhere else is refused at load). For each call the exact name is asked first, then the longest matching prefix, then `*`; among equals the later registration wins (a later package, or a later call in the same file). A renderer that returns `undefined` passes the call to the next one, and after the last comes the default card.
+**Which renderer draws.** `tool` is a name or a pattern ending in `*`: `mcp__github__*`, `mcp__*`, `*` (a `*` anywhere else is refused at load). For each call the exact name is asked first, then the longest matching prefix, then `*`; among equals the later registration wins (a later profile, or a later call in the same file). A renderer that returns `undefined` passes the call to the next one, and after the last comes the default card.
 
 ```ts
 // Every GitHub MCP call as one line with its repository; other MCP tools keep the default card.
@@ -125,7 +125,7 @@ api.renderTool("mcp__github__*", ({ tool, args, final, status }) => final
 
 Renderers apply in `balanced` and `full` (`minimal` draws one-line rows); cards are cached once finished, so keep a renderer a pure function of its input.
 
-A complete package with two renderers is `examples/packages/tool-renderers/`: `shell` as `$ command` with its folder, background flag and the last lines of output, and every `mcp__github__*` call as action, `owner/repo #number` and title, each passing the call on when its arguments are missing.
+A complete profile with two renderers is `examples/profiles/tool-renderers/`: `shell` as `$ command` with its folder, background flag and the last lines of output, and every `mcp__github__*` call as action, `owner/repo #number` and title, each passing the call on when its arguments are missing.
 
 `api.markdown((text) => string)` remains the assistant-only shorthand. `api.markdown(role, (text, ctx) => string)` selects `user`, `assistant`, `tool` or `meta` (reasoning/status/notices). Transforms chain in load order and only alter display text; they never mutate transcript data or model context. User transformed markdown renders as markdown, rather than the default plain tinted message.
 
@@ -164,7 +164,7 @@ api.widget("tray", "where", where)
 api.widget("sidebar", "where", where)
 ```
 
-`api.settings.get(key)` reads a `/customize` profile value; `get()` returns the full profile. `api.settings.set(key, value)` or `set({...})` validates a patch like `/customize`, applies it immediately and refreshes cached messages. It is a layer over your profile for as long as the extension is loaded: nothing is written to your stored profile, a value you choose yourself in `/customize` wins over it, and unloading the extension puts your stored value back. Keys/defaults are in `view/tui-profile.ts` and the additive wire validator in `packages/protocol/src/tui-data.ts`; unknown keys/invalid values throw. Setup changes are staged and committed only if `tui()` succeeds; failed/timed-out setup removes its registrations and staged settings. Styles, slots and profile changes from `api.settings` are all runtime-only. `disabledUiExtensions` stores terminal module names. API version remains 1; all new methods are additive.
+`api.settings.get(key)` reads a `/customize` profile value; `get()` returns the full profile. `api.settings.set(key, value)` or `set({...})` validates a patch like `/customize`, applies it immediately and refreshes cached messages. It is a layer over your profile for as long as the extension is loaded: nothing is written to your stored terminal settings, a value you choose yourself in `/customize` wins over it, and unloading the extension puts your stored value back. Keys/defaults are in `view/tui-profile.ts` and the additive wire validator in `packages/protocol/src/tui-data.ts`; unknown keys/invalid values throw. Setup changes are staged and committed only if `tui()` succeeds; failed/timed-out setup removes its registrations and staged settings. Styles, slots and profile changes from `api.settings` are all runtime-only. `disabledUiExtensions` stores terminal module names. API version remains 1; all new methods are additive.
 
 ```ts
 // Side-by-side diffs while this module is loaded, unless you chose a diff view in /customize yourself.
@@ -379,7 +379,7 @@ export default {
 ### Every tier
 
 Terminal extensions load at every tier: the terminal never asks the tier before discovering or importing them (`extensions` is a
-kernel feature, [tiers](tiers.md)), and only `--pure`, `--safe-mode`, a remote attach, `disabledPackages` and `/customize` → Extensions
+kernel feature, [tiers](tiers.md)), and only `--pure`, `--safe-mode`, a remote attach, `disabledProfiles` and `/customize` → Extensions
 leave them out. Their commands, pages, modals, actions and keys work the same in minimalist, balanced and full; their commands and
 actions are listed in the slash menu and the palette under minimalist too (they are the user's own). The minimal view that minimalist
 selects has no top bar or footer of its own, but it draws an extension's `header.replace` and `footer.*` slots. What a view still

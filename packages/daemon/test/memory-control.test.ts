@@ -58,7 +58,7 @@ describe("B19 daemon memory controls", () => {
   })
   test("user imports and CRUD cannot escape their profile or declared scope", async () => {
     const h = await boot()
-    await h.client.send({ type: "settings.set", patch: { profiles: [{ name: "company", directories: ["/company"] }] } })
+    await h.client.send({ type: "settings.set", patch: { areas: [{ name: "company", directories: ["/company"] }] } })
     const user = (await h.control({ operation: "propose", text: "A company preference", scope: "user" }, "/company")).proposal as MemoryEntry
     expect(user).toMatchObject({ scope: "user", profile: "company" })
     expect(await h.client.memoryControl("/repo", { operation: "apply", memoryId: user.memoryId })).toMatchObject({ ok: false })

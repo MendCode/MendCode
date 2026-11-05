@@ -126,7 +126,7 @@ test("installed package pet is discoverable and previewed with idle fallback", a
 test("slash UI requires y, escape cancels and remote clients cannot plan", async () => {
   const dir = mkdtempSync(path.join(tmpdir(), "mend-pet-ui-"))
   dirs.push(dir)
-  const harness = appHarness({ pets: { dirs: [], cacheDir: dir, images: false }, reply: (command) => command.type === "pet.manage" ? { ok: true, result: command.input.action === "plan" ? { plan } : { ref: "user:fixture" } } : command.type === "packages.list" ? { ok: true, result: { directory: dir, packages: [] } } : { ok: true } })
+  const harness = appHarness({ pets: { dirs: [], cacheDir: dir, images: false }, reply: (command) => command.type === "pet.manage" ? { ok: true, result: command.input.action === "plan" ? { plan } : { ref: "user:fixture" } } : command.type === "profiles.list" ? { ok: true, result: { directory: dir, packages: [] } } : { ok: true } })
   harness.app.applySettings({ onboarded: true })
   await harness.type("/pet new blue owl --usd 0.1\r")
   expect(harness.text().join("\n")).toContain("image calls  6")
@@ -146,7 +146,7 @@ test("deleting the selected pet persists off in the local profile", async () => 
   const dir = mkdtempSync(path.join(tmpdir(), "mend-pet-delete-ui-"))
   dirs.push(dir)
   writeTuiProfile(dir, { ...DEFAULT_TUI_PROFILE, pet: "user:fixture" })
-  const harness = appHarness({ dataDir: dir, pets: { dirs: [], cacheDir: dir, images: false }, reply: (command) => command.type === "packages.list" ? { ok: true, result: { directory: dir, packages: [] } } : command.type === "pet.manage" ? { ok: true, result: {} } : undefined })
+  const harness = appHarness({ dataDir: dir, pets: { dirs: [], cacheDir: dir, images: false }, reply: (command) => command.type === "profiles.list" ? { ok: true, result: { directory: dir, packages: [] } } : command.type === "pet.manage" ? { ok: true, result: {} } : undefined })
   harness.app.applySettings({ onboarded: true })
   await harness.type("/pet delete fixture --confirm\r")
   expect(readTuiProfile(dir).pet).toBe("off")

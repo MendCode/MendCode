@@ -10,7 +10,7 @@ import { defineTool, read, write, shell, taskStatus, type Tool } from "@mendcode
 import { z } from "zod"
 import { startDaemon } from "../src"
 import { filteredCatalog, foreignEngine, resolveModel, usableEffort } from "../src/models"
-import { rolesFor } from "../src/profiles"
+import { rolesFor } from "../src/areas"
 import { windowOverride } from "../src/session-context-window"
 
 /** The daemon with the native engine on a scripted provider (no network, temp directories only), for tests of daemon features that shape model calls. */

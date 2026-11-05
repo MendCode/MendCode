@@ -1,8 +1,8 @@
 # Tiers and safe mode
 
-The balanced/full `package_tools` feature offers the local `packages` tool only after `tool_search` discovery, even when general tool discovery is off. Its mutations always require approval; full permission mode does not bypass package review.
+The balanced/full `profile_tools` feature offers the local `profiles` tool only after `tool_search` discovery, even when general tool discovery is off. Its mutations always require approval; full permission mode does not bypass profile review.
 
-Balanced/full also includes pre-limit compaction checkpoints, native graph orientation/impact, focused handoff, instruction includes and static package capability previews. Caveman style and PDF/GitHub fetch modes require explicit selection. Full defaults MCP discovery on unless explicitly disabled. The event-stream model-spending watcher (I28) is excluded by lead decision.
+Balanced/full also includes pre-limit compaction checkpoints, native graph orientation/impact, focused handoff, instruction includes and static profile capability previews. Caveman style and PDF/GitHub fetch modes require explicit selection. Full defaults MCP discovery on unless explicitly disabled. The event-stream model-spending watcher (I28) is excluded by lead decision.
 
 One `tier` setting (`minimalist`, `balanced`, `full`) selects a bundle of switches that already exist. It adds no new meaning to the setup presets, the chat view, density or prompt modes: a tier only chooses which of their existing values to set and which feature modules are on. Every feature stays individually switchable. With no `tier` set, nothing changes: every feature keeps the default it had before tiers.
 
@@ -13,8 +13,8 @@ Names, reconciled. `minimal`/`balanced`/`full` already mean three different thin
 | Setup preset (`/setup`, [setup](setup.md)) | `default`, `minimal`, `full`, `custom` | Nothing. A tier never writes the preset or its memory and approval choices |
 | Chat view (`view`, [layout](layout.md)) | `minimal`, `balanced`, `full` | `/tier` sets it to the tier's view |
 | Prompt mode (`/prompt-mode`, [prompt modes](prompt-modes.md)) | `minimal`, `focus`, `guide`, `full`, `custom` | `/tier` sets the project's mode: minimalist `minimal`, balanced `focus`, full `full`; `guide` is never set by a tier |
-| Jobs dock panel (terminal profile) | `dockJobs: false` by default in every tier; opt-in through `/customize` > Session chrome > Dock jobs | Only the balanced/full dock renders it; minimalist stays chrome-free and `/jobs` remains independent |
-| Density (terminal profile) | `compact`, `comfortable`, `spacious` | `/tier` sets `compact` for minimalist, `comfortable` otherwise; minimalist also hides the right bar; balanced and full turn `showEffort` on |
+| Jobs dock panel (terminal settings) | `dockJobs: false` by default in every tier; opt-in through `/customize` > Session chrome > Dock jobs | Only the balanced/full dock renders it; minimalist stays chrome-free and `/jobs` remains independent |
+| Density (terminal settings) | `compact`, `comfortable`, `spacious` | `/tier` sets `compact` for minimalist, `comfortable` otherwise; minimalist also hides the right bar; balanced and full turn `showEffort` on |
 | Footer (the row under the prompt) | follows the view | minimal has none; balanced places its segments; full is the five-row `rows` preset until you choose a footer ([layout](layout.md#footer-by-tier)) |
 | Feature modules | the manifest below | follow the tier live |
 
@@ -71,7 +71,7 @@ The unverified OpenCode serve and Cursor SDK adapters and their tier switches ha
 
 | Feature | Tier | Mode | Own switch |
 |---|---|---|---|
-| `extensions`, `packages`, `hooks` | minimalist | kernel | only `--safe-mode`, `MENDCODE_EXTENSIONS=0`, `MENDCODE_HOOKS=0`, `disabledPackages` |
+| `extensions`, `profiles`, `hooks` | minimalist | kernel | only `--safe-mode`, `MENDCODE_EXTENSIONS=0`, `MENDCODE_HOOKS=0`, `disabledProfiles` |
 | `usage_resume` (auto-resume at a usage limit, [usage-limit](usage-limit.md)) | minimalist | tier | `/tier usage_resume off`; armed by default in every tier |
 | `codegraph` (graph_*, code_search) | balanced | tier | `MENDCODE_CODEGRAPH=0` |
 | `subagents` (`task`) | balanced | tier | `tools.task` |
@@ -113,8 +113,8 @@ The unverified OpenCode serve and Cursor SDK adapters and their tier switches ha
 | `computer` ([computer](computer.md)), `graph_context` ([code graph](code-graph.md)) | balanced | opt-in | `/tier computer on`, `/tier graph_context on`; no tier turns them on |
 | `pi` (your own pi as an engine; [pi-engine](pi-engine.md)) | full | permit | `pi.json` or `/tier pi on` |
 | `storage_compact` ([storage](storage.md)) | minimalist | permit | explicit offline compaction; `features.storage_compact: false` refuses it |
-| `official_packages` ([local catalog](packages.md#small-official-kit-and-trust-preview)) | balanced | permit | explicit installation; gates all three official packages |
-| `autoresearch` / `web_routing` | full / balanced | permit | explicit installation; also require `official_packages` |
+| `official_profiles` ([local catalog](packages.md#small-official-kit-and-trust-preview)) | balanced | permit | explicit installation; gates all three official profiles |
+| `autoresearch` / `web_routing` | full / balanced | permit | explicit installation; also require `official_profiles` |
 
 Modes: `tier` features are on when the tier includes them. `permit` features are opt-in or risky: the tier only allows them and their own switch must still be on, so no tier ever turns on computer control, the browser or dictation by itself. `kernel` features are not tier-gated.
 
@@ -130,7 +130,7 @@ Peers cannot change execution switches through `experimental`, `tools`, disabled
 installation endpoints. Safe mode remains a host startup choice, checked before stored feature overrides. Local overrides
 outside safe mode keep their documented meaning.
 
-`mendcode --safe-mode` (or `MENDCODE_SAFE_MODE=1`) starts with no extensions (daemon or terminal), no installed packages, no shell hooks, no MCP and no project custom tools, whatever the settings say. It builds on `--pure`: the daemon must have been started in safe mode, so use a separate `--dir` or `--isolated` when another daemon is running. Skills and commands in your own folders still load (they are prompt data, not code). `/doctor` shows a Mode section, and `daemon.info` reports `safeMode`. Settings are untouched, so restarting without the flag restores everything.
+`mendcode --safe-mode` (or `MENDCODE_SAFE_MODE=1`) starts with no extensions (daemon or terminal), no installed profiles, no shell hooks, no MCP and no project custom tools, whatever the settings say. It builds on `--pure`: the daemon must have been started in safe mode, so use a separate `--dir` or `--isolated` when another daemon is running. Skills and commands in your own folders still load (they are prompt data, not code). `/doctor` shows a Mode section, and `daemon.info` reports `safeMode`. Settings are untouched, so restarting without the flag restores everything.
 
 ## Baseline budget
 

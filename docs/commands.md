@@ -62,7 +62,7 @@ Markdown in `command/*.md` or `commands/*.md` accepts the same `description`, `a
 
 A JSON `template` may be `{file:./prompts/audit.md}` (v1's and opencode's spelling, also inside a longer template): the
 file's text, relative to the config file, read when commands load. It must stay inside the project (for the project's own
-files), the data directory or the package, and be at most 256 KB; an entry whose file is missing or outside is listed in
+files), the data directory or the profile, and be at most 256 KB; an entry whose file is missing or outside is listed in
 `/doctor` and skipped.
 
 `$ARGUMENTS` preserves the argument string. `$1`, `$2`, … bind quoted positional arguments; the highest numbered placeholder consumes the remaining arguments. With no placeholders, arguments are appended. `@file` and `@directory` use the native engine's project mention resolver and trust rules.
@@ -81,7 +81,7 @@ A custom command or skill can also be named after other text: typing `/` at the 
 
 TUI Tab completes without executing; Enter sends `commands.execute`. `run --command NAME` and `session send ID --command NAME` use the same daemon path with attachments and separate file context. `commands.expand` remains a read-only text compatibility helper, not an execution endpoint. Neither `commands.execute` nor `commands.discover` is available to read-only peers.
 
-`/tier [minimalist|balanced|full|off]` and `/tier <feature> on|off|default`: the feature tier and per-feature overrides ([tiers](tiers.md)). `--safe-mode` starts without extensions, packages, hooks, MCP and project tools.
+`/tier [minimalist|balanced|full|off]` and `/tier <feature> on|off|default`: the feature tier and per-feature overrides ([tiers](tiers.md)). `--safe-mode` starts without extensions, profiles, hooks, MCP and project tools.
 
 B17 small commands: `/fast [on|off]` ([fast mode](providers.md)), `/output-style [name]` ([styles](prompt-modes.md)),
 `/experimental [flag [on|off]]` (lists the boolean `experimental` flags, all off by default, and
@@ -114,7 +114,7 @@ Tab writes the highlighted path without a space so the next Tab goes inside it; 
 
 ## Aliases
 
-A built-in command has at most one other name, and only when it is the word people bring from other tools or a universal short form. `/quit` is the one command with two (`/exit`, `/q`). The aliases are `/changes`=`/diff`, `/sessions`=`/resume`, `/settings`=`/config`, `/quit`=`/exit` `/q`, `/help`=`/?`, `/mcps`=`/mcp`, `/find`=`/search`, `/usage`=`/stats`, `/model`=`/models`, `/theme`=`/themes`, `/keymap`=`/keybindings`, `/context`=`/ctx`, `/memory`=`/mem`, `/extensions`=`/ext`, `/packages`=`/pkg`, `/workflows`=`/wf`, `/loops`=`/loop`, `/bg`=`/background`, `/permissions`=`/perm`, `/providers`=`/provider`, `/jump-to-latest`=`/jump`, `/pr`=`/pr-watch`.
+A built-in command has at most one other name, and only when it is the word people bring from other tools or a universal short form. `/quit` is the one command with two (`/exit`, `/q`). The aliases are `/changes`=`/diff`, `/sessions`=`/resume`, `/settings`=`/config`, `/quit`=`/exit` `/q`, `/help`=`/?`, `/mcps`=`/mcp`, `/find`=`/search`, `/usage`=`/stats`, `/model`=`/models`, `/theme`=`/themes`, `/keymap`=`/keybindings`, `/context`=`/ctx`, `/memory`=`/mem`, `/extensions`=`/ext`, `/profiles`=`/pkg`, `/workflows`=`/wf`, `/loops`=`/loop`, `/bg`=`/background`, `/permissions`=`/perm`, `/providers`=`/provider`, `/jump-to-latest`=`/jump`, `/pr`=`/pr-watch`.
 
 A command whose feature is off is left out of browsing and of prefix matches, but its exact name or alias finds one muted
 row that says how to turn it on: `/pr  off · /tier balanced` when the tier does not include it, `off · /experimental <flag> on`
@@ -123,6 +123,6 @@ runs nothing and shows the same line; `/panel` and `/sidebar` still answer for t
 
 A name that used to be an alias is no command and nothing runs: the terminal answers one line, `/tui is now /customize`, and keeps the prompt out of the history. The line is a fixed table of the removed names, never a guess; a command file, an extension command or a profile alias of the same name is run instead. `/commit-push` and `/commit-pr` were two behaviours under one name: they are now `/commit push` and `/commit pr`. The old pr-comments name is now `/pr comments`: every pull request word lives under `/pr`.
 
-Your own aliases are `aliases` on an entry of `slashCommands` in the terminal profile: `{ "name": "changes", "aliases": ["d"] }` makes `/d` run `/changes` (the arguments follow). `/customize` > Slash menu > Edit commands shows them; see [customize](customize.md#aliases-of-your-own).
+Your own aliases are `aliases` on an entry of `slashCommands` in the terminal settings: `{ "name": "changes", "aliases": ["d"] }` makes `/d` run `/changes` (the arguments follow). `/customize` > Slash menu > Edit commands shows them; see [customize](customize.md#aliases-of-your-own).
 
 `/ps` opens a card over the prompt with what runs in the background of the open session: the commands the model started with `shell` in the background and the background commands and agents of Claude Code, each with its kind and run time. ↑↓ select, `x` stops the selected item, `a` stops all of them, Esc closes. The row over the prompt that names background work ends with `/ps`. A command the user stopped is `killed (user)` when the model reads it, and nothing wakes the model for it; a Claude Code task is stopped through Claude Code's own `stop_task` request, and one it refuses is named in the notice. Clients send `background.stop` with the session and, for one item, the id `background.list` gave it.

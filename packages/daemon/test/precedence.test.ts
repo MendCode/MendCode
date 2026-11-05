@@ -29,12 +29,12 @@ function write(file: string, text: string) {
 const skill = (name: string, description: string) => `---\nname: ${name}\ndescription: ${description}\n---\nbody\n`
 const hooks = JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: "command", command: "true" }] }] } })
 
-/** The same names in the user's folder, a user package, the project's folder and a project package, so every surface has a choice to make. */
+/** The same names in the user's folder, a user profile, the project's folder and a project profile, so every surface has a choice to make. */
 function fixture(dir: string, project: string) {
   const userPackage = path.join(dir, "packages", "pk")
   const projectPackage = path.join(project, ".mendcode", "packages", "pp")
-  write(path.join(userPackage, "mendcode-package.json"), JSON.stringify({ name: "pk", version: "1.0.0", description: "user package" }))
-  write(path.join(projectPackage, "mendcode-package.json"), JSON.stringify({ name: "pp", version: "1.0.0", description: "project package" }))
+  write(path.join(userPackage, "mendcode-profile.json"), JSON.stringify({ name: "pk", version: "1.0.0", description: "user profile" }))
+  write(path.join(projectPackage, "mendcode-profile.json"), JSON.stringify({ name: "pp", version: "1.0.0", description: "project profile" }))
   for (const root of [userPackage, dir, projectPackage, path.join(project, ".mendcode")]) {
     write(path.join(root, "skills", "shared", "SKILL.md"), skill("shared", `from ${root}`))
     write(path.join(root, "commands", "shared.md"), `---\ndescription: from ${path.basename(root)}\n---\nbody`)
@@ -67,17 +67,17 @@ async function facts(trusted: boolean): Promise<{ rows: ReturnType<typeof resolv
 
 test("every file surface names the effective layer and the layers it overrides, in the daemon's own layer order", async () => {
   const { rows, data } = await facts(true)
-  expect(data.layers).toEqual(["built in", "package user:pk", "user", "package project:pp", "project"])
+  expect(data.layers).toEqual(["built in", "profile user:pk", "user", "profile project:pp", "project"])
   for (const surface of ["skills", "commands", "agents", "themes", "recipes", "mcp", "workflows", "promptFiles"] as const) {
     const row = rows.find((candidate) => candidate.surface === surface && candidate.name.startsWith("shared") || candidate.surface === surface && candidate.name === "SYSTEM.md")
     expect(row, surface).toBeDefined()
     expect(row!.effective, surface).toEqual([{ layer: "project" }])
-    expect(row!.overridden.map((entry) => entry.layer), surface).toEqual(["package project:pp", "user", "package user:pk"])
+    expect(row!.overridden.map((entry) => entry.layer), surface).toEqual(["profile project:pp", "user", "profile user:pk"])
   }
   // Hooks of every layer run together: nothing is overridden.
   const stop = rows.find((row) => row.surface === "hooks" && row.name === "Stop")!
   expect(stop.overridden).toEqual([])
-  expect(stop.effective.map((entry) => entry.layer)).toEqual(["package user:pk", "user", "package project:pp", "project"])
+  expect(stop.effective.map((entry) => entry.layer)).toEqual(["profile user:pk", "user", "profile project:pp", "project"])
   // A name only one layer holds is effective with nothing to report.
   expect(rows.find((row) => row.name === "only-user")).toEqual({ surface: "skills", name: "only-user", effective: [{ layer: "user" }], overridden: [], inactive: [] })
 })
@@ -86,20 +86,20 @@ test("the report agrees with the loaders that own the precedence", async () => {
   const { rows, dir, project } = await facts(true)
   const layers = extensionLayers({ userDir: dir, directory: project })
   const loaded = createSkillLoader({ userDir: dir, layers: () => layers }).list(project).find((entry) => entry.name === "shared")!
-  expect(rows.find((row) => row.surface === "skills" && row.name === "shared")!.effective[0]!.layer).toBe(loaded.pkg ? `package ${loaded.source}:${loaded.pkg}` : loaded.source)
+  expect(rows.find((row) => row.surface === "skills" && row.name === "shared")!.effective[0]!.layer).toBe(loaded.pkg ? `profile ${loaded.source}:${loaded.pkg}` : loaded.source)
   const command = (await loadCustomCommands({ directory: project, userDir: dir, layers })).find((entry) => entry.name === "shared")!
-  expect(rows.find((row) => row.surface === "commands" && row.name === "shared")!.effective[0]!.layer).toBe(command.pkg ? `package ${command.source}:${command.pkg}` : command.source)
+  expect(rows.find((row) => row.surface === "commands" && row.name === "shared")!.effective[0]!.layer).toBe(command.pkg ? `profile ${command.source}:${command.pkg}` : command.source)
 })
 
 test("without project trust the project's agents and hooks are listed as not applied and never override", async () => {
   const { rows } = await facts(false)
   const agent = rows.find((row) => row.surface === "agents" && row.name === "shared")!
   expect(agent.effective).toEqual([{ layer: "user" }])
-  expect(agent.inactive.map((entry) => entry.layer)).toEqual(["project", "package project:pp"])
+  expect(agent.inactive.map((entry) => entry.layer)).toEqual(["project", "profile project:pp"])
   const stop = rows.find((row) => row.surface === "hooks" && row.name === "Stop")!
-  expect(stop.effective.map((entry) => entry.layer)).toEqual(["package user:pk", "user"])
+  expect(stop.effective.map((entry) => entry.layer)).toEqual(["profile user:pk", "user"])
   expect(conflictRows(rows).length).toBeGreaterThan(0)
   const text = describePrecedence(rows, { onlyConflicts: true }).flatMap((section) => section.lines).join("\n")
-  expect(text).toContain("shared: project · overrides package project:pp, user, package user:pk")
+  expect(text).toContain("shared: project · overrides profile project:pp, user, profile user:pk")
   expect(text).toContain("not applied")
 })

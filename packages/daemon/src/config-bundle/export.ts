@@ -6,7 +6,7 @@ import { redactSettings } from "../settings-tool"
 import { BUNDLE_FORMAT, BUNDLE_VERSION, BundleManifest, ConfigBundleError, MAX_REASON, MAX_WARNING, manifestHash, MAX_BUNDLE_BYTES, MAX_BUNDLE_ENTRIES, sha256, type Bundle, type BundleEntry, type BundleExclusion, type BundlePackage, type BundleSettings } from "./bundle"
 import { APPROVAL_PROFILE_KEYS, classifyEntry, classifySetting, nativeBinary, type ImportAction, type MatrixColumn } from "./classify"
 
-/** One row of the inventory: a data-directory entry (or package, or settings key) and where it falls in the matrix. */
+/** One row of the inventory: a data-directory entry (or profile, or settings key) and where it falls in the matrix. */
 export type InventoryRow = { item: string; kind: "file" | "folder" | "link" | "package" | "setting" | "profile-key"; column: MatrixColumn; exported: boolean; action: ImportAction | "settings" | "pending-approval"; reason: string; files?: number; bytes?: number }
 
 export type ExportInput = {
@@ -23,7 +23,7 @@ export type ExportInput = {
   allowFlagged?: readonly string[] | undefined
 }
 
-/** Entries every package layer treats as code that runs on its own once the package is enabled. */
+/** Entries every profile layer treats as code that runs on its own once the profile is enabled. */
 const AUTO_RUN = new Set<string>([...EXECUTABLE_PACKAGE_PATHS, ...PACKAGE_KINDS.filter((kind) => kind.executable).flatMap((kind) => ("exportPaths" in kind ? kind.exportPaths : []).map((entry) => entry.split("/")[0]!))])
 const SECRET_NAME = /^(\.env(\..*)?|.*\.(pem|key|p12|pfx|keystore)|id_(rsa|ed25519|ecdsa)(\.pub)?|credentials(\.json)?|\.netrc|\.npmrc)$/i
 const MAX_TEXT_SCAN = 8 * 1024 * 1024
@@ -112,7 +112,7 @@ export function packageTreeHash(entries: Array<Pick<BundleEntry, "path" | "sha25
   return sha256(entries.filter((entry) => entry.path.startsWith(prefix) && entry.path !== `${prefix}${INSTALL_RECORD_FILE}`).map((entry) => `${entry.path.slice(prefix.length)}\0${entry.sha256}`).sort().join("\n"))
 }
 
-/** sha256 over a package folder's files, the way `packageTreeHash` sees a bundle: the obtained side of a comparison. */
+/** sha256 over a profile folder's files, the way `packageTreeHash` sees a bundle: the obtained side of a comparison. */
 export function installedTreeHash(dir: string): { sha256: string; files: number } | undefined {
   const lines: string[] = []
   let ok = true
@@ -155,7 +155,7 @@ export function bundleSettings(settings: Record<string, unknown>): BundleSetting
 
 /**
  * Reads the data directory without changing anything and builds the bundle: every exported file with its sha256, every
- * package with its state, the settings split by authority, and a visible line for everything left out and why.
+ * profile with its state, the settings split by authority, and a visible line for everything left out and why.
  */
 export function exportBundle(input: ExportInput): { bundle: Bundle; inventory: InventoryRow[] } {
   const dataDir = path.resolve(input.dataDir)
@@ -164,8 +164,8 @@ export function exportBundle(input: ExportInput): { bundle: Bundle; inventory: I
   const warnings: string[] = []
   const inventory: InventoryRow[] = []
   const packages: BundlePackage[] = []
-  const disabledPackages = Array.isArray(input.settings.disabledPackages) ? input.settings.disabledPackages as string[] : []
-  const disabledResources = Array.isArray(input.settings.disabledPackageResources) ? input.settings.disabledPackageResources as string[] : []
+  const disabledProfiles = Array.isArray(input.settings.disabledProfiles) ? input.settings.disabledProfiles as string[] : []
+  const disabledResources = Array.isArray(input.settings.disabledProfileResources) ? input.settings.disabledProfileResources as string[] : []
 
   for (const name of readdirSync(dataDir).sort()) {
     const full = path.join(dataDir, name)
@@ -216,7 +216,7 @@ export function exportBundle(input: ExportInput): { bundle: Bundle; inventory: I
         const read = readManifest(dir)
         if ("problem" in read) { refuse(`invalid manifest: ${read.problem}`); continue }
         const audit = auditPackageTree(dir)
-        if (audit.length) { refuse(`refused by the package audit: ${audit.slice(0, 3).join("; ")}`, "approval"); continue }
+        if (audit.length) { refuse(`refused by the profile audit: ${audit.slice(0, 3).join("; ")}`, "approval"); continue }
         const before = collected.entries.length
         const pkgExcluded: BundleExclusion[] = []
         walk({ root: dataDir, relative: item, excluded: pkgExcluded, visit: (fileFull, relative) => {
@@ -224,7 +224,7 @@ export function exportBundle(input: ExportInput): { bundle: Bundle; inventory: I
           addFile({ full: fileFull, relative, action: "package", home: input.home, into: collected, excluded: pkgExcluded })
         } })
         if (pkgExcluded.length) {
-          // A package travels whole or not at all: a missing file would install a different package under the same name.
+          // A profile travels whole or not at all: a missing file would install a different profile under the same name.
           collected.entries.splice(before).forEach((entry) => { delete collected.files[entry.path]; collected.bytes -= entry.bytes })
           refuse(`cannot travel whole: ${pkgExcluded.slice(0, 3).map((entry) => `${entry.path} (${entry.reason})`).join("; ")}`, pkgExcluded[0]!.column)
           continue
@@ -234,13 +234,13 @@ export function exportBundle(input: ExportInput): { bundle: Bundle; inventory: I
         const autoRuns = [...top.filter((entry) => AUTO_RUN.has(entry)), ...(read.manifest.extensions && !top.includes("extensions") ? ["extensions"] : [])]
         const pkgEntries = collected.entries.slice(before)
         packages.push({
-          name: pkgName, ...(read.manifest.version ? { version: read.manifest.version } : {}), enabled: !disabledPackages.includes(key),
+          name: pkgName, ...(read.manifest.version ? { version: read.manifest.version } : {}), enabled: !disabledProfiles.includes(key),
           disabledResources: disabledResources.filter((entry) => entry.startsWith(`${key}/`)).map((entry) => entry.slice(key.length + 1)),
           autoRuns, treeSha256: packageTreeHash(pkgEntries, pkgName), files: pkgEntries.length,
         })
         const hinted = pkgEntries.filter((entry) => entry.hostHints?.length)
         if (hinted.length) warnings.push(`${item}: ${hinted.length} file${hinted.length === 1 ? "" : "s"} name this machine (${[...new Set(hinted.flatMap((entry) => entry.hostHints!))].slice(0, 3).join(", ")})`)
-        inventory.push({ item, kind: "package", column: autoRuns.length ? "approval" : "exportable", exported: true, action: autoRuns.length ? "quarantine" : "package", reason: autoRuns.length ? `runs code once enabled (${autoRuns.join(", ")}): copied to quarantine` : `${read.manifest.version ?? ""} ${disabledPackages.includes(key) ? "off" : "on"}; installed with the package installer`.trim(), files: pkgEntries.length, bytes: pkgEntries.reduce((sum, entry) => sum + entry.bytes, 0) })
+        inventory.push({ item, kind: "package", column: autoRuns.length ? "approval" : "exportable", exported: true, action: autoRuns.length ? "quarantine" : "package", reason: autoRuns.length ? `runs code once enabled (${autoRuns.join(", ")}): copied to quarantine` : `${read.manifest.version ?? ""} ${disabledProfiles.includes(key) ? "off" : "on"}; installed with the profile installer`.trim(), files: pkgEntries.length, bytes: pkgEntries.reduce((sum, entry) => sum + entry.bytes, 0) })
       }
       continue
     }

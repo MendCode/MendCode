@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test"
 import { createPackageTestHost } from "../src/package-host"
 
-test("package fixtures share explicit events, deterministic clock and model transcripts", async () => {
+test("profile fixtures share explicit events, deterministic clock and model transcripts", async () => {
   const host = createPackageTestHost<{ type: "turn" }>(["fixture answer"])
   let calls = 0
   const dispose = host.on(() => { calls++ })

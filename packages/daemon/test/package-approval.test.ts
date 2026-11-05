@@ -24,9 +24,9 @@ function write(file: string, text: string, mode?: number) {
   if (mode) chmodSync(file, mode)
 }
 
-/** A package shaped like the one a real session could not enable from chat: 31 skills with references, vendored references in nested folders, a 1.1 MB JSON and a few scripts. */
+/** A profile shaped like the one a real session could not enable from chat: 31 skills with references, vendored references in nested folders, a 1.1 MB JSON and a few scripts. */
 function sedaShaped(root: string) {
-  write(path.join(root, "mendcode-package.json"), JSON.stringify({ name: "seda", version: "1.0.0", description: "seda skills" }))
+  write(path.join(root, "mendcode-profile.json"), JSON.stringify({ name: "seda", version: "1.0.0", description: "seda skills" }))
   for (let skill = 0; skill < 31; skill++) {
     const name = `skill-${String(skill).padStart(2, "0")}`
     write(path.join(root, "skills", name, "SKILL.md"), `---\nname: ${name}\ndescription: ${name} workflow\n---\n${"step\n".repeat(400)}`)
@@ -44,7 +44,7 @@ function sedaShaped(root: string) {
 async function fixture() {
   const dir = temp(), project = temp(), source = temp()
   sedaShaped(path.join(source, "seda"))
-  write(path.join(source, "small", "mendcode-package.json"), JSON.stringify({ name: "small", version: "1.0.0", description: "small package" }))
+  write(path.join(source, "small", "mendcode-profile.json"), JSON.stringify({ name: "small", version: "1.0.0", description: "small profile" }))
   write(path.join(source, "small", "skills", "tiny", "SKILL.md"), "---\nname: tiny\ndescription: tiny\n---\ntiny")
   write(path.join(source, "marketplace-index.json"), JSON.stringify({ version: 0, packs: ["seda", "small"].map((name) => ({ id: name, version: "1.0.0", source: { url: name } })) }))
   let getPort!: (id: SessionId) => PackagePort
@@ -54,7 +54,7 @@ async function fixture() {
   await client.connect()
   cleanups.push(() => client.close())
   await client.send({ type: "settings.set", patch: { tier: "balanced" } })
-  expect(await client.send({ type: "packages.add-source", directory: project, sourceId: "team", location: source, enabled: true })).toMatchObject({ ok: true })
+  expect(await client.send({ type: "profiles.add-source", directory: project, sourceId: "team", location: source, enabled: true })).toMatchObject({ ok: true })
   const created = await client.send({ type: "session.create", directory: project })
   if (!created.ok) throw new Error(created.error.message)
   const port = getPort(created.result!.sessionId as SessionId)
@@ -65,7 +65,7 @@ async function fixture() {
 
 const install = (name: string): PackageRequest => ({ action: "install", name, sourceId: "team", scope: "user" })
 
-describe("a package of the size of a real skill pack is approved from chat", () => {
+describe("a profile of the size of a real skill pack is approved from chat", () => {
   test("the fixture is over what the approval used to take (256 files, 2 MiB), and over neither hard limit", async () => {
     const root = temp()
     sedaShaped(root)
@@ -111,7 +111,7 @@ describe("a package of the size of a real skill pack is approved from chat", () 
     expect(await port.run({ action: "info", key: "user:seda" })).toMatchObject({ key: "user:seda" })
   })
 
-  test("a small package still previews with a small summary", async () => {
+  test("a small profile still previews with a small summary", async () => {
     const { port } = await fixture()
     const report = JSON.parse(await port.preview(install("small")))
     expect(report.tree).toMatchObject({ files: 2, runnable: [] })
@@ -130,7 +130,7 @@ describe("a tree over a hard limit is refused with the limit, the measured value
   test("too many files", async () => {
     const message = await refused((installed) => { for (let file = 0; file <= TREE_LIMITS.files; file++) write(path.join(installed, "refs", `f${file}.md`), "x") })
     expect(message).toMatch(new RegExp(`files \\(limit ${TREE_LIMITS.files}, found 20\\d\\d\\)`))
-    expect(message).toContain(`${PROGRAM_NAME} package enable small`)
+    expect(message).toContain(`${PROGRAM_NAME} profile enable small`)
     expect(message).toContain("Nothing was changed")
     expect(message).not.toContain("approval budget")
   })
@@ -138,7 +138,7 @@ describe("a tree over a hard limit is refused with the limit, the measured value
   test("too many bytes", async () => {
     const message = await refused((installed) => write(path.join(installed, "refs", "big.bin"), "x".repeat(TREE_LIMITS.bytes + 1024 * 1024)))
     expect(message).toContain("total size (limit 20.0 MB, found 21.0 MB)")
-    expect(message).toContain(`${PROGRAM_NAME} package enable small`)
+    expect(message).toContain(`${PROGRAM_NAME} profile enable small`)
   })
 
   test("nested too deep", async () => {
@@ -154,15 +154,15 @@ describe("a tree over a hard limit is refused with the limit, the measured value
 
   test("the alternative follows the request: disable, remove, switch-look and a project package name their own command", async () => {
     const big = (installed: string) => { for (let file = 0; file <= TREE_LIMITS.files; file++) write(path.join(installed, "refs", `f${file}.md`), "x") }
-    expect(await refused(big, (name) => ({ action: "disable", key: `user:${name}` }))).toContain(`${PROGRAM_NAME} package disable small`)
-    expect(await refused(big, (name) => ({ action: "remove", key: `user:${name}` }))).toContain(`${PROGRAM_NAME} package remove small`)
-    expect(await refused(big, (name) => ({ action: "info", key: `user:${name}` }))).toContain(`${PROGRAM_NAME} package check `)
+    expect(await refused(big, (name) => ({ action: "disable", key: `user:${name}` }))).toContain(`${PROGRAM_NAME} profile disable small`)
+    expect(await refused(big, (name) => ({ action: "remove", key: `user:${name}` }))).toContain(`${PROGRAM_NAME} profile remove small`)
+    expect(await refused(big, (name) => ({ action: "info", key: `user:${name}` }))).toContain(`${PROGRAM_NAME} profile check `)
   })
 
   test("links stay refused, as before", async () => {
     const outside = temp()
     write(path.join(outside, "private.txt"), "test-only data")
     const message = await refused((installed) => symlinkSync(path.join(outside, "private.txt"), path.join(installed, "linked.txt")))
-    expect(message).toContain("Linked package resources cannot be approved")
+    expect(message).toContain("Linked profile resources cannot be approved")
   })
 })

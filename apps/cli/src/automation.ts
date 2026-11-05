@@ -6,8 +6,8 @@ import { parseDebug, DEBUG_USAGE, DATABASE_USAGE, type DebugAutomation } from ".
 import path from "node:path"
 import { MEMORY_USAGE, parseMemoryAutomation, type MemoryAutomation } from "./memory-automation"
 import type { Client } from "@mendcode/client"
-import type { GlobalEvent, Loop, MemoryEntry, PackageInfo, Profile, RecipesReport, Settings, SessionEvent, SessionId, SessionSummary, StorageCleanResult, StorageReport, StorageWorktreesReport, UsageReport, UsageWasteReport, WorkflowRun, WorkflowSummary } from "@mendcode/protocol"
-import { MODEL_ROLES, TUI_OPERATIONS, DEFAULT_PROFILE, PROFILE_NAME, profileFor, promptCostLine, promptCostOf, promptCostWarning, type PromptStatus, type SchemaIndex, type SchemaPage } from "@mendcode/protocol/wire"
+import type { GlobalEvent, Loop, MemoryEntry, PackageInfo, Area, RecipesReport, Settings, SessionEvent, SessionId, SessionSummary, StorageCleanResult, StorageReport, StorageWorktreesReport, UsageReport, UsageWasteReport, WorkflowRun, WorkflowSummary } from "@mendcode/protocol"
+import { MODEL_ROLES, TUI_OPERATIONS, DEFAULT_AREA, AREA_NAME, areaFor, promptCostLine, promptCostOf, promptCostWarning, type PromptStatus, type SchemaIndex, type SchemaPage } from "@mendcode/protocol/wire"
 import { createHeadlessRun } from "./run"
 import { COMPAT, compatEnvelope } from "./compat"
 import { isScriptFile, parseRunArguments } from "./view/workflow-script"
@@ -32,7 +32,7 @@ import { AGENT_USAGE, parseAgent, type AgentAutomation } from "./agent-args"
 import { parseTransferExport, parseTransferImport, TRANSFER_EXPORT_USAGE, TRANSFER_IMPORT_USAGE, type TransferImport } from "./session-transfer-args"
 import { jobAliases } from "./job-aliases"
 import { indexText, tidyHelp } from "./help-index"
-import { BACKLOG_HELP, CONTEXT_HELP, CONTROL_PLANE_HELP, GENERATE_HELP, PLUGIN_HELP, PROFILE_HELP, PROMPT_HELP, RECIPE_HELP, STATS_HELP, STORAGE_HELP, USAGE_HELP } from "./help-text"
+import { BACKLOG_HELP, CONTEXT_HELP, CONTROL_PLANE_HELP, GENERATE_HELP, PLUGIN_HELP, AREA_HELP, CUSTOMIZE_HELP, PROMPT_HELP, RECIPE_HELP, STATS_HELP, STORAGE_HELP, USAGE_HELP } from "./help-text"
 import { DOCS_USAGE } from "./docs-args"
 import { loopAliases, parseLoopAutomation, isLoopAutomation, runLoopAutomation, type LoopAutomation } from "./loop-automation"
 import { WORKTREE_USAGE, parseWorktree, type WorktreeAutomation } from "./worktree-args"
@@ -54,7 +54,7 @@ export const SCHEMA = "mendcode-next.cli.v1"
 /** `denied` is `session send --wait` only: the turn completed but an approval was denied for lack of --approve and nothing ran after it (run.ts). */
 export const EXIT = { ok: 0, failed: 1, stopped: 2, timeout: 3, needsInput: 4, denied: 5, usage: 64 } as const
 
-export const NAMES = ["backlog", "session", "memory", "loop", "workflow", "usage", "storage", "package", "recipe", "profile", "control-plane", "tui", "help", "stats", "prompt", "context", "status", "doctor", "debug", "generate", "completion", "export", "import", "worktree", "workflows", "packages", "marketplace", "runtime", "plugin", "plug", "plugin-auth", "db", "tsm", "github", "pr", "mflow", "console", "share", "login", "logout", "switch", "orgs", "open"] as const
+export const NAMES = ["backlog", "session", "memory", "loop", "workflow", "usage", "storage", "profile", "package", "recipe", "area", "customize", "control-plane", "tui", "help", "stats", "prompt", "context", "status", "doctor", "debug", "generate", "completion", "export", "import", "worktree", "workflows", "packages", "profiles", "marketplace", "runtime", "plugin", "plug", "plugin-auth", "db", "tsm", "github", "pr", "mflow", "console", "share", "login", "logout", "switch", "orgs", "open"] as const
 const BOOLEAN_FLAGS = new Set(["json", "all", "wait", "approve", "dangerously-skip-permissions", "follow", "user", "now", "goal", "help", "clean", "dry-run", "vacuum", "compact", "worktrees", "project", "replace", "yes", "no-audit", "preview", "auto", "deterministic", "apply", "enable", "disable", "use", "no-use", "input", "no-input", "generate", "no-generate", "output", "no-output", "show-full", "all-projects", "active", "archived", "restore", "async", "keep-open", "idle", "version", "httpapi", "hono", "index", "sanitize", "latest", "reasoning", "no-reasoning", "no-tools", "metadata", "no-metadata", "timestamps", "no-timestamps", "purge", "switch", "summary"])
 const VALUE_FLAGS = new Set(["dir", "commit", "title", "limit", "timeout", "after", "every", "daily", "runs", "days", "engine", "session", "format", "name", "criteria", "category", "status", "older-than", "delta-idle", "worktree-idle", "permission", "task", "reason", "note", "compat", "state", "preset", "proposal", "backup", "scope", "tags", "from-file", "from", "max-proposals", "mode", "provider", "model", "max-prompt-tokens", "max-entries", "project-max-entries", "global-compaction-max-entries", "dream-consolidation-policy", "tools", "focus", "role", "workflow", "data-dir", "parent", "agent", "variant", "effort", "max-count", "since", "search", "message-id", "timeout-ms", "interval-ms", "command", "query", "id", "description", "kind", "channel", "source-type", "source-url", "compat-mendcode", "compat-runtime-pack", "plan-file", "definition-id", "revision-id", "task-id", "source", "before", "run", "location", "url", "type", "entry", "request-id", "args", "out", "agents", "tokens", "usd", "minutes"])
 /** Flags that may be given several times; their values are collected in order. */
@@ -104,18 +104,18 @@ export type Automation = Common &
     | { kind: "usage" | "stats"; days?: number; tools?: number; models?: true | number; scope?: "global" | "project" | "directory"; project?: string; waste?: true }
     | { kind: "usage.recover"; session: string; engine: "claude" | "codex" | "pi"; action: "preview" | "apply" | "undo"; file?: string; fingerprint?: string }
     | { kind: "storage"; clean: boolean; olderThanDays?: number; dryRun: boolean; vacuum: boolean; compact: boolean; offline?: boolean; deltaIdleDays?: number; worktrees: boolean; worktreeIdleDays?: number }
-    | { kind: "package.list" }
-    | { kind: "recipe.list" }
     | { kind: "profile.list" }
-    | { kind: "profile.add"; name: string; folders: string[]; permission?: "ask" | "edits" | "full" }
-    | { kind: "profile.remove"; name: string }
+    | { kind: "recipe.list" }
+    | { kind: "area.list" }
+    | { kind: "area.add"; name: string; folders: string[]; permission?: "ask" | "edits" | "full" }
+    | { kind: "area.remove"; name: string }
     | { kind: "recipe.apply"; name: string }
-    | { kind: "package.install"; source: string; scope: PackageScope; replace: boolean }
-    | { kind: "package.capture"; name: string; replace: boolean }
+    | { kind: "profile.install"; source: string; scope: PackageScope; replace: boolean }
+    | { kind: "profile.capture"; name: string; replace: boolean }
     | { kind: "lsp.install"; server: "typescript" | "python" | "go" }
-    | { kind: "package.remove"; name: string; scope: PackageScope; purge: boolean }
-    | { kind: "package.restore"; name: string; scope: PackageScope }
-    | { kind: "package.enable"; name: string; scope: PackageScope; enabled: boolean; switch: boolean }
+    | { kind: "profile.remove"; name: string; scope: PackageScope; purge: boolean }
+    | { kind: "profile.restore"; name: string; scope: PackageScope }
+    | { kind: "profile.enable"; name: string; scope: PackageScope; enabled: boolean; switch: boolean }
     | PromptAutomation
     | { kind: "permissions"; operation: "status" | "set-default" | "set-reviewer-role"; mode?: "approval" | "smart" | "full_access" | "ask" | "edits" | "full"; role?: import("@mendcode/protocol").ModelRole }
     | { kind: "version" }
@@ -256,7 +256,7 @@ export const USAGE: Record<string, string> = {
     "",
     "  list|status             --all",
     "  save <file.json|name>   --definition-id ID --name NAME --description TEXT",
-    "                          --source manual|saved|template|package|",
+    "                          --source manual|saved|template|profile|",
     "                          session-generated",
     "  definitions             --limit N",
     "  revision <revision-id>",
@@ -285,12 +285,13 @@ export const USAGE: Record<string, string> = {
   ].join("\n"),
   usage: USAGE_HELP,
   recipe: RECIPE_HELP,
-  profile: PROFILE_HELP,
-  package: [
-    `usage: ${PROGRAM_NAME} package <command> [--project] [--json]`,
+  area: AREA_HELP,
+  customize: CUSTOMIZE_HELP,
+  profile: [
+    `usage: ${PROGRAM_NAME} profile <command> [--project] [--json]`,
     "  (user scope; --project: this directory's .mendcode/packages)",
     "",
-    "  list                    installed packages: what each adds, on or off",
+    "  list                    installed profiles: what each adds, on or off",
     "  status                  same as list",
     "  install <source>        folder, npm:name@x.y.z[#sha512-...], github:owner/repo#ref",
     "                          or git:URL; --replace. npm and a full git commit are pinned",
@@ -298,19 +299,19 @@ export const USAGE: Record<string, string> = {
     "  enable|disable <name>   --switch: its look replaces the one in force",
     "  deselect <name>         stop using it",
     "  disable-all             --project   (also: deselect-all)",
-    "  config [name]           a package's resources",
+    "  config [name]           a profile's resources",
     "  config <name> enable|disable <skills|commands|agents|themes|tools|extensions>/<name>",
     "  remove <name>           to the Trash for 30 days (--purge deletes it for good)",
     "  restore <name>          bring the newest trashed copy back (off until enabled)",
-    "  new <name>              scaffold a complete package (--dir PARENT)",
+    "  new <name>              scaffold a complete profile (--dir PARENT)",
     "  check [folder]          validate: schema, compat, capabilities, forbidden keys, size",
-    "  create|update           snapshot local project assets into a package:",
+    "  create|update           snapshot local project assets into a profile:",
     "                          --id ID --title NAME --description TEXT --version x.y.z",
     "                          --include all|commands,skills,... --exclude models,...",
     "                          --kind KIND --channel CHANNEL --source-type TYPE",
     "                          --source-url URL --compat-mendcode RANGE",
     "                          --compat-runtime-pack RANGE",
-    "  delete-local            retire a generated package; originals stay",
+    "  delete-local            retire a generated profile; originals stay",
     "  search [query] [source]",
     "  show|preview <name> [source]",
     "  assets",
@@ -319,7 +320,7 @@ export const USAGE: Record<string, string> = {
     "  install-source|use-source <source>   --replace",
     "  refresh <source>        download a remote (https) catalog index",
     "  remove-source <id>",
-    "  aliases: packages, marketplace, runtime registry (also under control-plane)",
+    "  aliases: profiles, marketplace, runtime registry (also under control-plane)",
   ].join("\n"),
   storage: STORAGE_HELP,
   stats: STATS_HELP,
@@ -362,7 +363,7 @@ function tokenize(argv: string[]) {
     }
     const [rawName, inline] = token.slice(2).split(/=(.*)/s, 2)
     const name = rawName!
-    const packageAuthoring = ["package", "packages", "marketplace"].includes(positionals[0] ?? "") && ["create", "update"].includes(positionals[1] ?? "") || positionals[0] === "control-plane" && ["packages", "marketplace"].includes(positionals[1] ?? "") && ["create", "update"].includes(positionals[2] ?? "")
+    const packageAuthoring = ["profile", "profiles", "package", "packages", "marketplace"].includes(positionals[0] ?? "") && ["create", "update"].includes(positionals[1] ?? "") || positionals[0] === "control-plane" && ["profiles", "packages", "marketplace"].includes(positionals[1] ?? "") && ["create", "update"].includes(positionals[2] ?? "")
     const packageVersion = name === "version" && positionals[0] === "control-plane" && positionals[1] === "project" && positionals[2] === "package-set"
     if (name === "version" && packageAuthoring) {
       const value = inline ?? argv[++i]
@@ -487,7 +488,7 @@ export function parseAutomation(argv: string[]): ParseResult {
   if (name === "plugin-auth") return rest.length > 1 || rest[0] !== undefined && !/^\d+$/.test(rest[0]) ? bad("plugin-auth needs a provider and optional method index") : ok({ kind: "plugin.auth", ...(sub ? { provider: sub } : {}), method: Number(rest[0] ?? 0) })
 
   const registry = name === "runtime" && sub === "registry" || name === "control-plane" && sub === "runtime" && rest[0] === "registry"
-  const packageArgs = registry ? positionals.slice(name === "runtime" ? 2 : 3) : name === "control-plane" && ["packages", "marketplace"].includes(sub ?? "") ? positionals.slice(2) : ["package", "packages", "marketplace"].includes(name) ? positionals.slice(1) : undefined
+  const packageArgs = registry ? positionals.slice(name === "runtime" ? 2 : 3) : name === "control-plane" && ["profiles", "packages", "marketplace"].includes(sub ?? "") ? positionals.slice(2) : ["profile", "profiles", "package", "packages", "marketplace"].includes(name) ? positionals.slice(1) : undefined
   if (packageArgs) {
     const parsed = packageArguments(packageArgs, flags, registry, repeated)
     if (parsed) return "error" in parsed ? bad(parsed.error) : ok(parsed)
@@ -666,21 +667,21 @@ export function parseAutomation(argv: string[]): ParseResult {
     })
   }
 
-  if (name === "profile") {
+  if (name === "area") {
     const permission = str("permission")
     if (permission !== undefined && !["ask", "edits", "full"].includes(permission)) return bad("--permission needs ask, edits or full")
     switch (sub) {
       case undefined:
       case "list":
-        return ok({ kind: "profile.list" })
+        return ok({ kind: "area.list" })
       case "add":
-        if (!rest[0] || !PROFILE_NAME.test(rest[0]) || rest[0] === DEFAULT_PROFILE) return bad(`profile add needs a name (lowercase letters, digits, -; not "${DEFAULT_PROFILE}")`)
-        if (rest.length < 2) return bad("profile add needs at least one folder")
-        return ok({ kind: "profile.add", name: rest[0], folders: rest.slice(1), ...(permission ? { permission: permission as "ask" | "edits" | "full" } : {}) })
+        if (!rest[0] || !AREA_NAME.test(rest[0]) || rest[0] === DEFAULT_AREA) return bad(`area add needs a name (lowercase letters, digits, -; not "${DEFAULT_AREA}")`)
+        if (rest.length < 2) return bad("area add needs at least one folder")
+        return ok({ kind: "area.add", name: rest[0], folders: rest.slice(1), ...(permission ? { permission: permission as "ask" | "edits" | "full" } : {}) })
       case "remove":
-        return rest[0] ? ok({ kind: "profile.remove", name: rest[0] }) : bad("profile remove needs <name>")
+        return rest[0] ? ok({ kind: "area.remove", name: rest[0] }) : bad("area remove needs <name>")
       default:
-        return bad(`unknown profile command "${sub}"`)
+        return bad(`unknown area command "${sub}"`)
     }
   }
 
@@ -696,27 +697,27 @@ export function parseAutomation(argv: string[]): ParseResult {
     return bad(sub ? `unknown recipe command "${sub}"` : "recipe needs a command")
   }
 
-  if (["package", "packages", "marketplace"].includes(name) || name === "control-plane" && ["packages", "marketplace"].includes(sub ?? "")) {
+  if (["profile", "profiles", "package", "packages", "marketplace"].includes(name) || name === "control-plane" && ["profiles", "packages", "marketplace"].includes(sub ?? "")) {
     const scope: PackageScope = flags.has("project") ? "project" : "user"
     const [action = "status", target] = packageArgs ?? []
     switch (action) {
       case "status":
       case "list":
-        return ok({ kind: "package.list" })
+        return ok({ kind: "profile.list" })
       case "install":
-        return target ? ok({ kind: "package.install", source: target, scope, replace: flags.has("replace") }) : bad("package install needs <folder|npm:name@x.y.z|github:owner/repo|git:URL>")
+        return target ? ok({ kind: "profile.install", source: target, scope, replace: flags.has("replace") }) : bad("profile install needs <folder|npm:name@x.y.z|github:owner/repo|git:URL>")
       case "capture":
-        return target && /^[a-z0-9][a-z0-9._-]{0,63}$/.test(target) ? ok({ kind: "package.capture", name: target, replace: flags.has("replace") }) : bad("package capture needs <name> (lowercase letters, digits, . _ -) [--replace]")
+        return target && /^[a-z0-9][a-z0-9._-]{0,63}$/.test(target) ? ok({ kind: "profile.capture", name: target, replace: flags.has("replace") }) : bad("profile capture needs <name> (lowercase letters, digits, . _ -) [--replace]")
       case "remove":
-        return target ? ok({ kind: "package.remove", name: target, scope, purge: flags.has("purge") }) : bad("package remove needs <name> [--purge]")
+        return target ? ok({ kind: "profile.remove", name: target, scope, purge: flags.has("purge") }) : bad("profile remove needs <name> [--purge]")
       case "restore":
-        return target ? ok({ kind: "package.restore", name: target, scope }) : bad("package restore needs <name>")
+        return target ? ok({ kind: "profile.restore", name: target, scope }) : bad("profile restore needs <name>")
       case "enable":
       case "disable":
       case "deselect":
-        return target ? ok({ kind: "package.enable", name: target.replace(/^(user|project):/, ""), scope: target.startsWith("project:") ? "project" : target.startsWith("user:") ? "user" : scope, enabled: action === "enable", switch: flags.has("switch") }) : bad(`package ${action} needs <name>`)
+        return target ? ok({ kind: "profile.enable", name: target.replace(/^(user|project):/, ""), scope: target.startsWith("project:") ? "project" : target.startsWith("user:") ? "user" : scope, enabled: action === "enable", switch: flags.has("switch") }) : bad(`profile ${action} needs <name>`)
       default:
-        return bad(`unknown package command "${action}"`)
+        return bad(`unknown profile command "${action}"`)
     }
   }
 
@@ -918,7 +919,11 @@ export function parseAutomation(argv: string[]): ParseResult {
 /** A plan argument ending in `.json` or containing a slash is a file; anything else is a saved plan name. */
 export const isPlanFile = (target: string) => target.endsWith(".json") || target.includes("/")
 
+/** Older words for a command that still run it: their help is the help of the current one. */
+const HELP_OF: Readonly<Record<string, string>> = { package: "profile", packages: "profile", profiles: "profile" }
+
 export function helpText(topic?: string) {
+  topic = topic === undefined ? topic : HELP_OF[topic] ?? topic
   return `${tidyHelp(topic === "project" ? PROJECT_USAGE : topic === "control-plane" ? USAGE[topic] + "\n" + PROJECT_USAGE + "\n" + MFLOW_USAGE : (topic && USAGE[topic]) || HELP)}\n`
 }
 
@@ -932,7 +937,7 @@ export type AutomationDeps = {
   out: { write(text: string): unknown }
   err: { write(text: string): unknown }
   cwd: string
-  /** Home directory, for `~` in profile folders. */
+  /** Home directory, for `~` in area folders. */
   home?: string
   now(): number
   /** Ctrl-C / SIGTERM: ends a `--follow` stream cleanly. */
@@ -1010,10 +1015,10 @@ function triggerText(loop: Loop) {
   return t.kind === "adaptive" ? `adaptive ~${every}` : `every ${every}`
 }
 
-export function profileRows(profiles: readonly Profile[], current: string) {
+export function areaRows(areas: readonly Area[], current: string) {
   const rows = [
-    `${current === DEFAULT_PROFILE ? "*" : " "} ${DEFAULT_PROFILE.padEnd(16)} everything else`,
-    ...profiles.map((profile) => `${profile.name === current ? "*" : " "} ${profile.name.padEnd(16)} ${profile.directories.join(", ")}${profile.defaultPermission ? `  · ${profile.defaultPermission}` : ""}${profile.models ? "  · own roles" : ""}`),
+    `${current === DEFAULT_AREA ? "*" : " "} ${DEFAULT_AREA.padEnd(16)} everything else`,
+    ...areas.map((area) => `${area.name === current ? "*" : " "} ${area.name.padEnd(16)} ${area.directories.join(", ")}${area.defaultPermission ? `  · ${area.defaultPermission}` : ""}${area.models ? "  · own roles" : ""}`),
   ]
   return `${rows.join("\n")}\n`
 }
@@ -1172,7 +1177,7 @@ function contentsText(contents: PackageInfo["contents"]) {
 }
 
 export function packageRows(packages: PackageInfo[]) {
-  if (packages.length === 0) return "no packages\n"
+  if (packages.length === 0) return "no profiles\n"
   return (
     packages
       .map((p) => {
@@ -1963,10 +1968,10 @@ export async function runAutomation(command: Automation, deps: AutomationDeps): 
         return result(data, command.provider ? `Authenticated ${command.provider}\n` : `${(data.providers as Array<{ provider: string; methods: Array<{ label: string }> }> | undefined ?? []).map((entry) => `${entry.provider}: ${entry.methods.map((method, index) => `${index} ${method.label}`).join(" · ")}`).join("\n")}\n`)
       } catch (error) { return fail(error instanceof Error ? error.message : "plugin login failed", EXIT.failed) }
     }
-    case "package.catalog": {
+    case "profile.catalog": {
       const reply = await daemon({ ...command.request, directory: dir })
       if (!reply.ok) return fail(reply.message, EXIT.failed, reply.code)
-      const config = command.request.type === "packages.config" || command.request.type === "packages.resource"
+      const config = command.request.type === "profiles.config" || command.request.type === "profiles.resource"
       return result(reply.result, Array.isArray(reply.result.packages) && !config ? packageRows(reply.result.packages as PackageInfo[]) : packageCatalogText(reply.result))
     }
     case "lsp.install": {
@@ -1976,59 +1981,59 @@ export async function runAutomation(command: Automation, deps: AutomationDeps): 
       const installed = reply.result as { command?: string[]; already?: boolean }
       return result(installed, `${installed.already ? "already installed" : "installed"}: ${(installed.command ?? []).join(" ")}\n`)
     }
-    case "package.capture": {
-      const reply = await daemon({ type: "packages.capture", directory: dir, name: command.name, ...(command.replace ? { replace: true } : {}) })
+    case "profile.capture": {
+      const reply = await daemon({ type: "profiles.capture", directory: dir, name: command.name, ...(command.replace ? { replace: true } : {}) })
       if (!reply.ok) return fail(reply.message)
       const packages = (reply.result.packages ?? []) as PackageInfo[]
       const skipped = (reply.result.skipped ?? []) as string[]
-      return result({ packages, skipped }, `captured user:${command.name} from your terminal profile${skipped.length ? ` (left out, not a package's to set: ${skipped.join(", ")})` : ""}\n${packageRows(packages.filter((p) => p.key === `user:${command.name}`))}`)
+      return result({ packages, skipped }, `captured user:${command.name} from your terminal profile${skipped.length ? ` (left out, not a profile's to set: ${skipped.join(", ")})` : ""}\n${packageRows(packages.filter((p) => p.key === `user:${command.name}`))}`)
     }
-    case "package.list":
-    case "package.install":
-    case "package.remove":
-    case "package.restore":
-    case "package.enable": {
+    case "profile.list":
+    case "profile.install":
+    case "profile.remove":
+    case "profile.restore":
+    case "profile.enable": {
       const reply =
-        command.kind === "package.list"
-          ? await daemon({ type: "packages.list", directory: dir })
-          : command.kind === "package.install"
-            ? await daemon({ type: "packages.install", directory: dir, source: command.source, scope: command.scope, ...(command.replace ? { replace: true } : {}) })
-            : command.kind === "package.remove"
-              ? await daemon({ type: "packages.remove", directory: dir, name: command.name, scope: command.scope, ...(command.purge ? { purge: true } : {}) })
-              : command.kind === "package.restore"
-                ? await daemon({ type: "packages.restore", directory: dir, name: command.name, scope: command.scope })
-                : await daemon({ type: "packages.enable", directory: dir, key: `${command.scope}:${command.name}`, enabled: command.enabled, ...(command.switch ? { switch: true } : {}) })
+        command.kind === "profile.list"
+          ? await daemon({ type: "profiles.list", directory: dir })
+          : command.kind === "profile.install"
+            ? await daemon({ type: "profiles.install", directory: dir, source: command.source, scope: command.scope, ...(command.replace ? { replace: true } : {}) })
+            : command.kind === "profile.remove"
+              ? await daemon({ type: "profiles.remove", directory: dir, name: command.name, scope: command.scope, ...(command.purge ? { purge: true } : {}) })
+              : command.kind === "profile.restore"
+                ? await daemon({ type: "profiles.restore", directory: dir, name: command.name, scope: command.scope })
+                : await daemon({ type: "profiles.enable", directory: dir, key: `${command.scope}:${command.name}`, enabled: command.enabled, ...(command.switch ? { switch: true } : {}) })
       if (!reply.ok) return fail(reply.message)
       const packages = (reply.result.packages ?? []) as PackageInfo[]
-      if (command.kind === "package.list") return result({ packages }, packageRows(packages))
-      const key = command.kind === "package.install" ? undefined : `${command.scope}:${command.name}`
-      const done = command.kind === "package.install" ? "installed" : command.kind === "package.remove" ? (command.purge ? "removed for good" : "removed (in the Trash for 30 days: package restore)") : command.kind === "package.restore" ? "restored (off until enabled)" : command.enabled ? "enabled" : "disabled"
-      return result({ packages }, `${done}${key ? ` ${key}` : ""}\n${command.kind === "package.remove" ? "" : packageRows(key ? packages.filter((p) => p.key === key) : packages)}`)
+      if (command.kind === "profile.list") return result({ packages }, packageRows(packages))
+      const key = command.kind === "profile.install" ? undefined : `${command.scope}:${command.name}`
+      const done = command.kind === "profile.install" ? "installed" : command.kind === "profile.remove" ? (command.purge ? "removed for good" : "removed (in the Trash for 30 days: profile restore)") : command.kind === "profile.restore" ? "restored (off until enabled)" : command.enabled ? "enabled" : "disabled"
+      return result({ packages }, `${done}${key ? ` ${key}` : ""}\n${command.kind === "profile.remove" ? "" : packageRows(key ? packages.filter((p) => p.key === key) : packages)}`)
     }
 
-    case "profile.list":
-    case "profile.add":
-    case "profile.remove": {
+    case "area.list":
+    case "area.add":
+    case "area.remove": {
       const current = await daemon({ type: "settings.get" })
       if (!current.ok) return fail(current.message)
-      const profiles = ((current.result.settings as Settings | undefined)?.profiles ?? []) as Profile[]
-      let next = profiles
-      if (command.kind === "profile.add") {
-        // Relative folders are taken from here; `~` stays so the profile follows the home directory.
+      const areas = ((current.result.settings as Settings | undefined)?.areas ?? []) as Area[]
+      let next = areas
+      if (command.kind === "area.add") {
+        // Relative folders are taken from here; `~` stays so the area follows the home directory.
         const folders = command.folders.map((folder) => (folder.startsWith("~") ? folder : path.resolve(dir, folder)))
-        const entry: Profile = { name: command.name, directories: folders, ...(command.permission ? { defaultPermission: command.permission } : {}) }
-        const existing = profiles.find((profile) => profile.name === command.name)
-        next = existing ? profiles.map((profile) => (profile.name === command.name ? { ...existing, ...entry } : profile)) : [...profiles, entry]
-      } else if (command.kind === "profile.remove") {
-        if (!profiles.some((profile) => profile.name === command.name)) return fail(`no profile named ${command.name}`)
-        next = profiles.filter((profile) => profile.name !== command.name)
+        const entry: Area = { name: command.name, directories: folders, ...(command.permission ? { defaultPermission: command.permission } : {}) }
+        const existing = areas.find((area) => area.name === command.name)
+        next = existing ? areas.map((area) => (area.name === command.name ? { ...existing, ...entry } : area)) : [...areas, entry]
+      } else if (command.kind === "area.remove") {
+        if (!areas.some((area) => area.name === command.name)) return fail(`no area named ${command.name}`)
+        next = areas.filter((area) => area.name !== command.name)
       }
-      if (next !== profiles) {
-        const set = await daemon({ type: "settings.set", patch: { profiles: next.length ? next : null } })
+      if (next !== areas) {
+        const set = await daemon({ type: "settings.set", patch: { areas: next.length ? next : null } })
         if (!set.ok) return fail(set.message)
       }
-      const here = profileFor(dir, next, deps.home)
-      return result({ profiles: next, current: here }, profileRows(next, here))
+      const here = areaFor(dir, next, deps.home)
+      return result({ areas: next, current: here }, areaRows(next, here))
     }
 
     case "recipe.list":

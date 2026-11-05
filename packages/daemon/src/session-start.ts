@@ -3,7 +3,7 @@ import path from "node:path"
 import { capPermission, type PermissionMode, type SessionId } from "@mendcode/protocol"
 import type { Store } from "@mendcode/store"
 import { canonicalDir } from "@mendcode/tools"
-import { defaultPermissionFor } from "./profiles"
+import { defaultPermissionFor } from "./areas"
 
 export type SessionStartResult = { ok: true; sessionId: SessionId; permission: PermissionMode; trusted: boolean; directory: string } | { ok: false; message: string }
 

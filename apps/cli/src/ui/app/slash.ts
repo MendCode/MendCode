@@ -467,7 +467,7 @@ export function createSlash(ctx: AppContext, actions: {
         requestFrame()
         await loadTools()
         break
-      case "packages":
+      case "profiles":
         state.page = "packages"
         state.packagesState = createPackagesPageState()
         state.packagesReport = undefined
@@ -483,7 +483,7 @@ export function createSlash(ctx: AppContext, actions: {
         break
       case "customize":
         if (/^restore(?:\s|$)/.test(parsed.args.trim())) {
-          if (!input.dataDir) { say("Profile restore requires a local data directory", "warning"); break }
+          if (!input.dataDir) { say("Restore requires a local data directory", "warning"); break }
           try {
             const { runProfileRestore } = await import("../../profile-restore")
             const result = runProfileRestore(input.dataDir, parsed.args.trim().split(/\s+/).slice(1))

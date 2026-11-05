@@ -82,7 +82,7 @@ export const FEATURE_PROVIDERS: Record<string, Provider> = {
   reasoning: aboutFeatures(["jev"]),
   pet: aboutFeatures(["pets", "pet_generator"]),
   tools: aboutFeatures(["lean_tools", "tool_discovery", "code_mode", "output_filters"]),
-  packages: aboutFeatures(["packages", "package_tools", "package_capabilities", "official_packages"]),
+  profiles: aboutFeatures(["profiles", "profile_tools", "profile_capabilities", "official_profiles"]),
   memory: aboutFeatures(["memory_ux"], { memoryEnabled: true, memoryUse: false, memoryGenerate: false, memoryRequireApproval: true, memoryMaxEntries: 50, memoryMaxPromptTokens: 10_000, dreamAt: "off" }),
   goals: aboutFeatures(["plan_tools"]),
   threads: aboutFeatures(["threads", "handoff"]),

@@ -159,8 +159,8 @@ export type StatusRowInput = {
   /** Named only when it is not the default `ask`: the row stays v1's `model · effort` otherwise. */
   permission?: PermissionMode
   permissionLabel?: string
-  /** The folder profile of this project when it is not `personal` (leads the row as `◆ name`). */
-  profile?: string
+  /** The area of this project when it is not `personal` (leads the row as `◆ name`). */
+  area?: string
   pr?: { number: number; state: string }
   loops: number
   /** Of `loops`, those waiting on an approval or an answer: the count says `needs input` and takes the warning color. */
@@ -218,11 +218,11 @@ function rowNote(input: StatusRowInput): string {
   return [connection, input.notice].filter(Boolean).join(" · ")
 }
 
-/** Who answers and how: the leading script segments, the folder profile, the PR, the agent, a non-default permission, model, effort, fast and engine. */
+/** Who answers and how: the leading script segments, the area, the PR, the agent, a non-default permission, model, effort, fast and engine. */
 function identityParts(input: StatusRowInput): FooterRowPart[] {
   const parts: FooterRowPart[] = []
   for (const segment of input.scriptLeft ?? []) if (segment.text && segment.prepend) parts.push({ id: "script", spans: [segmentSpan(segment)], rank: 2 })
-  if (input.profile) parts.push({ id: "profile", spans: [{ text: `${input.plainMarks ? "" : "◆ "}${input.profile}`, fg: "heading", bold: true }], rank: 3 })
+  if (input.area) parts.push({ id: "area", spans: [{ text: `${input.plainMarks ? "" : "◆ "}${input.area}`, fg: "heading", bold: true }], rank: 3 })
   if (input.pr) parts.push({ id: "pr", spans: [{ text: `#${input.pr.number} ${input.pr.state.toLowerCase()}`, fg: "link", bold: true }], rank: 3 })
   if (input.agent) parts.push({ id: "agent", spans: [{ text: input.agent, fg: "primary", ...input.agentColor, bold: true }], rank: KEEP })
   // A permission that lets the agent act without asking never gives way: at worst it is cut with `…`.
@@ -335,7 +335,7 @@ export function renderDetailRow({ parts, width, separator = " · ", divider = " 
  * The default row under the prompt, read left to right in groups split by a quiet divider: who answers and how (agent, permission,
  * model, effort, fast, engine), what runs (goal, loops, workflows), then each footer segment. Explicit right-hand content (counters and
  * hints, `statusRight`, script and extension right slots) and connection trouble keep the right edge. When the row is narrow the
- * lowest-ranked parts give way first: segments, then the extension and script items, the profile and PR, the engine, the effort, fast
+ * lowest-ranked parts give way first: segments, then the extension and script items, the area and PR, the engine, the effort, fast
  * and the loops, the goal, the model; the agent and a permission that acts without asking stay.
  */
 function groupedRow(input: StatusRowInput): Line {

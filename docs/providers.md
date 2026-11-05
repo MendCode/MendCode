@@ -116,7 +116,7 @@ on save and gone when the extension is: see [extensions](extensions.md#providers
 | `models[].compoundPricing` | Optional `{inputUsdPer1M, outputUsdPer1M, cacheReadUsdPer1M, cacheWriteUsdPer1M, source}` for compound USD reservations. Record the price source; missing/all-zero prices stay unknown. See [Compound](compound.md). |
 | `enabled` | `false` hides the provider's models and refuses its calls. |
 | `compaction` | `{ token_limit?, threshold? }` applies to the provider; a model's `compaction` overrides it. `providers.set` accepts `null` to clear the provider override. |
-| `npm` | An already installed SDK package, absolute module path or local `file://` URL. Adding/changing it disables the provider until `enabled: true` is explicitly set. No automatic installation. |
+| `npm` | An already installed SDK profile, absolute module path or local `file://` URL. Adding/changing it disables the provider until `enabled: true` is explicitly set. No automatic installation. |
 
 The file is written with mode 0600 (atomic rename); a file with wider permissions is tightened when read. Unknown fields survive a rewrite.
 

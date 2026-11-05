@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, statSync } from "node:fs"
 import { homedir } from "node:os"
 import path from "node:path"
-import { DEFAULT_PROFILE, profileFor, redactSecrets } from "@mendcode/protocol/wire"
+import { DEFAULT_AREA, areaFor, redactSecrets } from "@mendcode/protocol/wire"
 import type { Settings } from "@mendcode/protocol"
 import { projectSources } from "./project-control"
 
@@ -30,7 +30,7 @@ function entriesOf(record: Record<string, unknown>): string[] {
 }
 
 /**
- * The layered view behind `/debug-config`: built-in defaults, the user's saved settings, the profile a folder falls
+ * The layered view behind `/debug-config`: built-in defaults, the user's saved settings, the area a folder falls
  * under, the project's own files, then environment overrides. Reads only local files the daemon already owns; no
  * value that looks like a credential is shown, and environment variables list their names only.
  */
@@ -46,8 +46,8 @@ export function configLayers(input: { dir: string; directory: string; settings: 
   const saved = input.settings as Record<string, unknown>
   layers.push({ id: "user", label: "User settings", source: `${path.join(input.dir, "mendd.db")}#settings`, present: Object.keys(saved).length > 0, entries: entriesOf(saved) })
 
-  const profile = profileFor(input.directory, input.settings.profiles, home)
-  layers.push({ id: "profile", label: "Profile", source: "settings.profiles", present: profile !== DEFAULT_PROFILE, entries: [`profile = ${profile}`], note: profile === DEFAULT_PROFILE ? "no profile folder contains this directory" : "memories, model roles and default permission follow it" })
+  const area = areaFor(input.directory, input.settings.areas, home)
+  layers.push({ id: "area", label: "Area", source: "settings.areas", present: area !== DEFAULT_AREA, entries: [`area = ${area}`], note: area === DEFAULT_AREA ? "no area folder contains this directory" : "memories, model roles and default permission follow it" })
 
   const overlay = (input.settings.projectConfig?.[input.directory] ?? {}) as Record<string, unknown>
   layers.push({ id: "project-settings", label: "Project overrides", source: "settings.projectConfig", present: Object.keys(overlay).length > 0, entries: entriesOf(overlay), note: "models, default permission and default agent for this project" })

@@ -5,7 +5,7 @@ import { createSchemaCatalog, Frame, MODEL_ROLES, type SchemaCatalog, type Setti
 import type { ProviderService } from "./providers"
 import type { ModelCatalog } from "./models"
 import { modelsReport, resolveModel } from "./models"
-import { rolesFor } from "./profiles"
+import { rolesFor } from "./areas"
 import { configLayers } from "./config-layers"
 
 let schemaCatalog: SchemaCatalog | undefined

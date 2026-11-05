@@ -2,16 +2,16 @@ import { TUI_DEFAULTS, tuiProblems } from "./tui-data"
 import { isTier, TIER_BUNDLES, type Tier } from "./tier-data"
 
 /**
- * A package's activation profile (`"activate"` in mendcode-package.json): the look and keys it brings as one unit, applied as an
- * OVERLAY over the user's own settings and removed again when the package is disabled or removed (docs/packages.md).
+ * A profile's activation (`"activate"` in mendcode-profile.json): the look and keys it brings as one unit, applied as an
+ * OVERLAY over the user's own settings and removed again when the profile is disabled or removed (docs/profiles.md).
  *
  * Data and pure functions only, no imports that load zod, so the daemon (manifest validation, enable), the thin terminal client
- * (applying it) and `package check` share one definition of what is allowed and how overlays combine.
+ * (applying it) and `profile check` share one definition of what is allowed and how overlays combine.
  *
- *   effective value = what the user chose after the package was activated  >  the package's overlay  >  the user's own value
+ *   effective value = what the user chose after the profile was activated  >  the profile's overlay  >  the user's own value
  *
  * Nothing here is ever written into the user's stored profile, keybindings or settings: the overlay is computed from the enabled
- * packages every time, so there is nothing to undo when it goes away.
+ * profiles every time, so there is nothing to undo when it goes away.
  */
 
 export const ACTIVATION_KEYS = ["theme", "tuiProfile", "keybindings", "tier", "promptFiles", "views", "panelPreset"] as const
@@ -20,27 +20,27 @@ export const ACTIVATION_PANEL_PRESETS = ["pulse", "crew", "ledger", "focus", "fu
 export const ACTIVATION_MAX_BYTES = 16 * 1024
 
 export type Activation = {
-  /** A theme shipped in the package's `themes/` (or any registered one). */
+  /** A theme shipped in the profile's `themes/` (or any registered one). */
   theme?: string
   /** A subset of the terminal profile (`/customize`), validated like the profile itself. */
   tuiProfile?: Record<string, unknown>
-  /** A file of the package in the format of `keybindings.json`. */
+  /** A file of the profile in the format of `keybindings.json`. */
   keybindings?: string
   /** The terminal-side part of a tier bundle: presentation, density and whether the right panel hides. Features, prompt mode and process mode stay the user's. */
   tier?: Tier
-  /** Prompt files the package ships and expects to apply (they take effect through the layer; this makes them visible and checked). */
+  /** Prompt files the profile ships and expects to apply (they take effect through the layer; this makes them visible and checked). */
   promptFiles?: string[]
-  /** View slot -> module of `extensions/` that draws it. Those modules load only while the package owns the look. */
+  /** View slot -> module of `extensions/` that draws it. Those modules load only while the profile owns the look. */
   views?: Record<string, string>
   /** One of the right panel's presets; shows the panel. */
   panelPreset?: string
 }
 
-/** Names a package may never set through activation, anywhere in the profile it ships: they are the user's authority, not a look. */
-const FORBIDDEN = /^(permissions?|permissionMode|approvals?|approvalRules?|autoApprove|trust(ed\w*)?|providers?|credentials?|secrets?|apiKeys?|tokens?|passwords?|budgets?|features|experimental|tools|hooks|mcp|sandbox|network|models?|disabledPackages|disabledPackageResources|safeMode)$/i
-export const ACTIVATION_FORBIDDEN_MESSAGE = "a package cannot set permissions, approvals, providers, credentials, trust, budgets or other settings of the user's authority"
+/** Names a profile may never set through activation, anywhere in the profile it ships: they are the user's authority, not a look. */
+const FORBIDDEN = /^(permissions?|permissionMode|approvals?|approvalRules?|autoApprove|trust(ed\w*)?|providers?|credentials?|secrets?|apiKeys?|tokens?|passwords?|budgets?|features|experimental|tools|hooks|mcp|sandbox|network|models?|disabledProfiles|disabledProfileResources|safeMode)$/i
+export const ACTIVATION_FORBIDDEN_MESSAGE = "a profile cannot set permissions, approvals, providers, credentials, trust, budgets or other settings of the user's authority"
 
-/** Valid terminal-profile keys a package still may not set: they start things, spend calls, touch the clipboard or the network, or switch the user's own extensions off. */
+/** Valid terminal-profile keys a profile still may not set: they start things, spend calls, touch the clipboard or the network, or switch the user's own extensions off. */
 export const ACTIVATION_DENIED_PROFILE_KEYS: ReadonlySet<string> = new Set([
   "processMode", "accessible", "altScreen", "disabledUiExtensions", "disabledViews", "copyOnSelect", "rightClickPaste", "autoRecap",
   "usageWeatherEnabled", "usageWeatherRegion", "turnBell", "turnNotify", "fileOpener", "pathClick", "viewerFocus", "draftRetentionDays", "resumePrompts", "idleReturn",
@@ -62,7 +62,7 @@ export function activationProblems(raw: unknown): string[] {
     if (FORBIDDEN.test(key)) { problems.push(`activate.${key}: ${ACTIVATION_FORBIDDEN_MESSAGE}`); continue }
     if (!(ACTIVATION_KEYS as readonly string[]).includes(key)) { problems.push(`activate.${key}: unknown key (known: ${ACTIVATION_KEYS.join(", ")})`); continue }
     if (key === "theme" && (typeof value !== "string" || !THEME_NAME.test(value))) problems.push("activate.theme: expected a theme name")
-    else if (key === "keybindings" && (typeof value !== "string" || !FILE_PATH.test(value))) problems.push("activate.keybindings: expected a relative .json path inside the package")
+    else if (key === "keybindings" && (typeof value !== "string" || !FILE_PATH.test(value))) problems.push("activate.keybindings: expected a relative .json path inside the profile")
     else if (key === "tier" && !isTier(value)) problems.push("activate.tier: expected minimalist, balanced or full")
     else if (key === "panelPreset" && !(ACTIVATION_PANEL_PRESETS as readonly unknown[]).includes(value)) problems.push(`activate.panelPreset: expected ${ACTIVATION_PANEL_PRESETS.filter((preset) => preset !== "orbit").join(", ")}`)
     else if (key === "promptFiles") {
@@ -84,7 +84,7 @@ export function activationProblems(raw: unknown): string[] {
   return problems
 }
 
-/** Whether the activation changes how MendCode looks (so only one package may own it per scope). Keybindings and prompt files are independent. */
+/** Whether the activation changes how MendCode looks (so only one profile may own it per scope). Keybindings and prompt files are independent. */
 export const hasLook = (activation: Activation) => Boolean(activation.theme || activation.tier || activation.panelPreset || (activation.tuiProfile && Object.keys(activation.tuiProfile).length) || (activation.views && Object.keys(activation.views).length))
 
 export type ProfileOrigin = "tier" | "panel" | "theme" | "profile"
@@ -117,7 +117,7 @@ export type ActivationPackage = {
   key: string
   scope: ActivationScope
   activation: Activation
-  /** The package's keybindings file, parsed: `{ "ctrl+g": "action" | null }`. */
+  /** The profile's keybindings file, parsed: `{ "ctrl+g": "action" | null }`. */
   keybindings?: Record<string, string | null>
 }
 /** What the user chose by hand under one set of look owners: the keys (`keptKey`) and, for profile keys, the values. */
@@ -145,14 +145,14 @@ export type ActivationResult = {
   rows: OverrideRow[]
   keybindings: Array<{ spec: string; action: string | null; package: string }>
   promptFiles: Array<{ file: string; package: string }>
-  /** `user:name/extensions/module` of look modules whose package does not own the look: loaders skip them. */
+  /** `user:name/extensions/module` of look modules whose profile does not own the look: loaders skip them. */
   suppressed: string[]
   waiting: WaitingLook[]
   conflicts: string[]
   /** Identifies the set of owners; `kept` is valid only while it is unchanged. */
   signature: string
   kept: string[]
-  /** The values the user chose for kept profile keys under these owners; applied over the package like the overlay. */
+  /** The values the user chose for kept profile keys under these owners; applied over the profile like the overlay. */
   keptValues: Record<string, unknown>
 }
 
@@ -186,7 +186,7 @@ export function saveLook(state: ActivationState, signature: string, slot: SavedL
 
 export const keptKey =(kind: "profile" | "keybinding", name: string) => kind === "profile" ? name : `keybindings:${name}`
 
-/** The owner among look candidates (lowest precedence first): the recorded one while it still qualifies, else the highest-precedence package. */
+/** The owner among look candidates (lowest precedence first): the recorded one while it still qualifies, else the highest-precedence profile. */
 export function lookOwner(candidates: readonly string[], recorded?: string): string | undefined {
   return recorded !== undefined && candidates.includes(recorded) ? recorded : candidates.at(-1)
 }
@@ -203,12 +203,12 @@ export function describeChanges(activation: Activation, base: Record<string, unk
 }
 
 /**
- * Combines the enabled packages' activations. Per scope one package owns the look (the recorded owner while it is still enabled
+ * Combines the enabled profiles' activations. Per scope one profile owns the look (the recorded owner while it is still enabled
  * and has one, else the highest-precedence one); project owners layer over user owners and only count when the project is
- * trusted. Keybindings and prompt files are independent: they merge across packages, later wins, every clash is reported.
+ * trusted. Keybindings and prompt files are independent: they merge across profiles, later wins, every clash is reported.
  */
 export function resolveActivation(input: {
-  /** Enabled packages with an activation, lowest precedence first (user packages, then project packages). */
+  /** Enabled profiles with an activation, lowest precedence first (user profiles, then project profiles). */
   packages: readonly ActivationPackage[]
   state: Record<ActivationScope, ActivationState>
   projectTrusted: boolean

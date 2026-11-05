@@ -269,7 +269,7 @@ export function createPetGenerator(input: { dir: string; settings(): Settings; b
       if (lstatSync(file).size > (name === "pet.json" ? 65536 : IMPORT_BUDGET.storedBytes)) throw new Error("Pet export file too large")
       writeFileSync(path.join(petDir, name), readFileSync(file), { mode: 0o600 })
     }
-    writeFileSync(path.join(target, "mendcode-package.json"), JSON.stringify({ name: `pet-${manifest.id}`, version: "1.0.0", description: manifest.description.slice(0, 500), extensions: false }, null, 2) + "\n", { mode: 0o600 })
+    writeFileSync(path.join(target, "mendcode-profile.json"), JSON.stringify({ name: `pet-${manifest.id}`, version: "1.0.0", description: manifest.description.slice(0, 500), extensions: false }, null, 2) + "\n", { mode: 0o600 })
     return { directory: target, petId: request.petId }
   }
   return { manage }

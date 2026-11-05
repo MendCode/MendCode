@@ -73,7 +73,7 @@ describe("install replace is atomic", () => {
     expect(listTrash({ base: userDir, label: "acme" })).toHaveLength(1)
   })
 
-  test("a package that needs a newer app is refused before anything is written", async () => {
+  test("a profile that needs a newer app is refused before anything is written", async () => {
     const { userDir, directory } = roots()
     const host = { appVersion: "1.2.0", apiVersion: 1 }
     await expect(installPackage({ spec: source("1.0.0", { compatibility: { mendcode: ">=2.0.0" } }), scope: "user", userDir, directory, host })).rejects.toThrow(/>=2\.0\.0/)
@@ -95,7 +95,7 @@ describe("the Trash", () => {
     expect(listTrash({ base: userDir, label: "acme" })).toHaveLength(0)
   })
 
-  test("a failed move leaves the package installed", async () => {
+  test("a failed move leaves the profile installed", async () => {
     const { userDir, directory } = roots()
     await installPackage({ spec: source("1.0.0"), scope: "user", userDir, directory })
     expect(() => removePackage({ name: "acme", scope: "user", userDir, directory, rename: () => { throw new Error("no space") } })).toThrow("no space")
@@ -158,8 +158,8 @@ describe("one table of resource kinds", () => {
     expect([...found].filter((name) => !known.has(name))).toEqual([])
   })
 
-  test("a package folder with an entry no loader reads is reported", () => {
-    expect(unknownPackageEntries(["skills", "hooks.json", "README.md", "mendcode-package.json", "mystery"])).toEqual(["mystery"])
+  test("a profile folder with an entry no loader reads is reported", () => {
+    expect(unknownPackageEntries(["skills", "hooks.json", "README.md", "mendcode-profile.json", "mystery"])).toEqual(["mystery"])
   })
 })
 
@@ -167,13 +167,13 @@ describe("resolving activations", () => {
   const pkg = (key: string, activation: ActivationPackage["activation"], extra: Partial<ActivationPackage> = {}): ActivationPackage => ({ key, scope: "user", activation, ...extra })
   const resolve = (packages: ActivationPackage[], overrides: Partial<Parameters<typeof resolveActivation>[0]> = {}) => resolveActivation({ packages, state: { user: { kept: [] }, project: { kept: [] } } as never, projectTrusted: true, base: {}, panel: () => undefined, ...overrides })
 
-  test("two packages with a look: the recorded owner has it, the other waits and nothing of it applies", () => {
+  test("two profiles with a look: the recorded owner has it, the other waits and nothing of it applies", () => {
     const result = resolve([pkg("user:a", { tuiProfile: { username: "A" } }), pkg("user:b", { tuiProfile: { username: "B", homeLayout: "split" } })], { state: { user: { kept: [], look: "user:a" }, project: { kept: [] } } as never })
     expect(result.overlay).toEqual({ username: "A" })
     expect(result.waiting).toMatchObject([{ package: "user:b", owner: "user:a" }])
   })
 
-  test("independent keys from different packages merge, and a key bound twice is a visible conflict", () => {
+  test("independent keys from different profiles merge, and a key bound twice is a visible conflict", () => {
     const result = resolve([
       pkg("user:a", { keybindings: "keys.json" }, { keybindings: { "ctrl+g": "palette", "ctrl+y": "help" } }),
       pkg("user:b", { keybindings: "keys.json" }, { keybindings: { "ctrl+g": "help", "ctrl+u": "palette" } }),
@@ -182,7 +182,7 @@ describe("resolving activations", () => {
     expect(result.conflicts.join("\n")).toMatch(/ctrl\+g.*user:b wins over user:a/)
   })
 
-  test("a project package is ignored without trust", () => {
+  test("a project profile is ignored without trust", () => {
     const result = resolve([pkg("project:p", { tuiProfile: { username: "P" } }, { scope: "project" })], { projectTrusted: false })
     expect(result.overlay).toEqual({})
   })
@@ -194,7 +194,7 @@ describe("resolving activations", () => {
     expect(Object.keys(kept.applied)).toEqual(["username"])
   })
 
-  test("a saved slot applies the user's value over its owners' package, and only under those owners", async () => {
+  test("a saved slot applies the user's value over its owners' profile, and only under those owners", async () => {
     const { activationStateJson, parseActivationState, saveLook } = await import("@mendcode/protocol/wire")
     const a = [pkg("user:a", { tuiProfile: { username: "A", homeLayout: "split" } })]
     const b = [pkg("user:b", { tuiProfile: { username: "B", homeLayout: "split" } })]
@@ -232,7 +232,7 @@ describe("resolving activations", () => {
 })
 
 describe("the exporter covers every kind in the table", () => {
-  test("one file per path the table lists lands in the exported package", async () => {
+  test("one file per path the table lists lands in the exported profile", async () => {
     const { authorLocalPackage, LOCAL_PACKAGE_DIR } = await import("../src")
     const directory = temp("life-export-")
     const base = path.join(directory, ".mendcode")

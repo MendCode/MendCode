@@ -30,7 +30,7 @@ export function createExtensions(ctx: AppContext, actions: {
   changeProfile: (patch: Partial<TuiProfile>) => void
   /** The profile layers (resolved after the app is composed): activation overlay, extension requests and what the user kept. */
   profileLayers: () => ProfileLayers
-  /** Asks the daemon for theme files again (a package's theme edited, turned on or off). */
+  /** Asks the daemon for theme files again (a profile's theme edited, turned on or off). */
   refreshThemes: () => void
   /** Opens a file in the viewer (`api.openFile`); the viewer refuses what is outside the workspace or not a file. */
   openFile: (path: string, lines?: { from: number; to?: number }) => void
@@ -100,7 +100,7 @@ export function createExtensions(ctx: AppContext, actions: {
   let keptNotes: string[] = []
 
   function extensionProblemLines(): string[] {
-    return [...keybindingFile.problems, ...state.extKeyProblems, ...(state.activation?.problems ?? []), ...(state.activation?.result.conflicts ?? []).map((line) => `packages: ${line}`), ...keptNotes, ...(state.ext?.conflicts ?? []).map((entry) => entry.message), ...(state.ext?.problems ?? []).map((problem) => `${problem.extension}: ${problem.message}`)]
+    return [...keybindingFile.problems, ...state.extKeyProblems, ...(state.activation?.problems ?? []), ...(state.activation?.result.conflicts ?? []).map((line) => `profiles: ${line}`), ...keptNotes, ...(state.ext?.conflicts ?? []).map((entry) => entry.message), ...(state.ext?.problems ?? []).map((problem) => `${problem.extension}: ${problem.message}`)]
   }
 
   /** One toast for everything that went wrong at startup; later problems toast once per extension. */
@@ -112,7 +112,7 @@ export function createExtensions(ctx: AppContext, actions: {
   }
 
   /**
-   * `keybindings.json`, with the enabled packages' keybindings over it: a key the user chose by hand after a package took it
+   * `keybindings.json`, with the enabled profiles' keybindings over it: a key the user chose by hand after a profile took it
    * (the keymap editor, or `keep mine`) stays theirs, so it is applied again last.
    */
   function fileEntries() {
@@ -139,7 +139,7 @@ export function createExtensions(ctx: AppContext, actions: {
   function reloadKeybindings() {
     if (!input.dataDir) return
     const fresh = readKeybindings(input.dataDir)
-    // A key the keymap editor changed while a package binds it is the user's from now on.
+    // A key the keymap editor changed while a profile binds it is the user's from now on.
     const before = new Map(keybindingFile.entries.map((entry) => [entry.spec, JSON.stringify(entry.action)]))
     const changed = fresh.entries.filter((entry) => before.get(entry.spec) !== JSON.stringify(entry.action)).map((entry) => entry.spec)
     if (changed.length && actions.profileLayers().keepKeybindings(changed)) requestFrame()
@@ -165,14 +165,14 @@ export function createExtensions(ctx: AppContext, actions: {
   }
 
   /**
-   * The enabled packages' activation profiles (docs/packages.md): computed from their manifests, layered over the user's profile and
-   * keybindings, never saved. Returns the look modules of packages that do not own the look (the loaders skip them). The activation
-   * code loads only when an enabled package declares one.
+   * The enabled profiles' activations (docs/profiles.md): computed from their manifests, layered over the user's profile and
+   * keybindings, never saved. Returns the look modules of profiles that do not own the look (the loaders skip them). The activation
+   * code loads only when an enabled profile declares one.
    */
   async function syncActivation(): Promise<string[]> {
     if (!input.dataDir) return []
     const layers = actions.profileLayers()
-    const manifests = activationManifests({ dataDir: input.dataDir, directory: input.directory, disabled: state.settingsNow.disabledPackages })
+    const manifests = activationManifests({ dataDir: input.dataDir, directory: input.directory, disabled: state.settingsNow.disabledProfiles })
     if (manifests.length === 0) {
       if (state.activation) {
         state.activation = undefined
@@ -181,7 +181,7 @@ export function createExtensions(ctx: AppContext, actions: {
       }
       return []
     }
-    // A project package's activation applies only where its code may run: the same trust as project tools.
+    // A project profile's activation applies only where its code may run: the same trust as project tools.
     const projectTrusted = manifests.some((entry) => entry.source === "project") && (projectTrustedBySettings() || (await projectTrustedByDaemon()))
     const { loadActivation } = await import("../../extensions/activation")
     state.activation = loadActivation({ manifests, dataDir: input.dataDir, directory: input.directory, projectTrusted, base: readTuiProfile(input.dataDir) })
@@ -189,7 +189,7 @@ export function createExtensions(ctx: AppContext, actions: {
     state.keptValues = { ...state.activation.result.keptValues }
     layers.sync()
     rebuildBindings()
-    // A package theme file may have been edited: ask for the theme files again.
+    // A profile theme file may have been edited: ask for the theme files again.
     if (state.activation.result.overlay.theme) actions.refreshThemes()
     return state.activation.result.suppressed
   }
@@ -198,7 +198,7 @@ export function createExtensions(ctx: AppContext, actions: {
   async function loadExtensions(reportedRevision = 0) {
     if (input.remote || input.pure || !input.dataDir) return
     const suppressed = await syncActivation()
-    const all = discoverExtensions({ dataDir: input.dataDir, directory: input.directory, disabled: state.settingsNow.disabledPackages, disabledResources: [...(state.settingsNow.disabledPackageResources ?? []), ...suppressed] })
+    const all = discoverExtensions({ dataDir: input.dataDir, directory: input.directory, disabled: state.settingsNow.disabledProfiles, disabledResources: [...(state.settingsNow.disabledProfileResources ?? []), ...suppressed] })
     const project = all.filter((file) => file.source === "project")
     const trusted = project.length > 0 && (projectTrustedBySettings() || (await projectTrustedByDaemon()))
     const files = trusted ? all : all.filter((file) => file.source === "user")
@@ -226,7 +226,7 @@ export function createExtensions(ctx: AppContext, actions: {
           usage: ctx.usage,
           navigate: openExtensionPage,
           plugin: { version: input.version ?? "dev", directory: input.directory ?? "", current: () => state.sessionId, request: input.send },
-          reservedCommands: new Set(SLASH_COMMANDS.flatMap((command) => [command.name, ...command.aliases])),
+          reservedCommands: new Set(SLASH_COMMANDS.flatMap((command) => [command.name, ...command.aliases, ...(command.hiddenAliases ?? [])])),
           // Deferred: a renderer can be disabled in the middle of drawing the transcript, which must not be reset under its feet.
           onChange: () =>
             queueMicrotask(() => {
@@ -274,10 +274,10 @@ export function createExtensions(ctx: AppContext, actions: {
     requestFrame()
   }
 
-  /** Starts (or, when trust or the disabled packages changed, repeats) discovery; modules already loaded are not loaded twice. */
+  /** Starts (or, when trust or the disabled profiles changed, repeats) discovery; modules already loaded are not loaded twice. */
   function syncExtensions() {
     if (input.remote || input.pure || !input.dataDir) return
-    const key = JSON.stringify([projectTrustedBySettings(), state.settingsNow.disabledPackages ?? [], state.settingsNow.disabledPackageResources ?? [], state.tuiProfile.disabledUiExtensions])
+    const key = JSON.stringify([projectTrustedBySettings(), state.settingsNow.disabledProfiles ?? [], state.settingsNow.disabledProfileResources ?? [], state.tuiProfile.disabledUiExtensions])
     if (state.extStarted && key === state.extSettingsKey) return
     state.extStarted = true
     state.extSettingsKey = key

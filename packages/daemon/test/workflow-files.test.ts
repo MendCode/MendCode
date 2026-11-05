@@ -24,7 +24,7 @@ function write(file: string, value: unknown) {
 const contract = (text: string) => ({ criteria: [{ id: "tests", text, owners: ["impl"] }], checks: [{ id: "unit", command: "bun test", covers: ["tests"] }] })
 const plan = (name: string, extra: Record<string, unknown> = {}) => ({ name, objective: "Do it.", tasks: [{ kind: "agent", id: "impl", title: "Impl", prompt: "go" }], ...extra })
 
-/** user package → user files → project files, lowest precedence first, like `extensionLayers`. */
+/** user profile → user files → project files, lowest precedence first, like `extensionLayers`. */
 function layers() {
   const pkg = temp("wf-pkg-")
   const user = temp("wf-user-")
@@ -40,7 +40,7 @@ function layers() {
 describe("readContracts", () => {
   test("a later layer replaces a contract of the same name and keeps where it came from", () => {
     const { pkg, user, project, list } = layers()
-    write(path.join(pkg, "contracts", "release-gate.json"), contract("from the package"))
+    write(path.join(pkg, "contracts", "release-gate.json"), contract("from the profile"))
     write(path.join(pkg, "contracts", "docs.json"), contract("docs"))
     write(path.join(user, "contracts", "release-gate.json"), contract("from the user"))
     write(path.join(project, "contracts", "release-gate.json"), contract("from the project"))

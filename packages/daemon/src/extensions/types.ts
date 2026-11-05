@@ -1,6 +1,6 @@
 import type { DaemonHookName, ExtensionCommand, ExtensionTool } from "@mendcode/extension-api"
 
-/** Where an extension module came from: a user/project folder of its own, or an installed package (builtin included). */
+/** Where an extension module came from: a user/project folder of its own, or an installed profile (builtin included). */
 export type ExtensionOrigin = "user" | "project" | "package"
 
 /** The most errors kept per extension; the rest are dropped (the first ones explain the rest). */
@@ -24,7 +24,7 @@ export type ExtensionRecord = {
   /** The extension's own name; the file's name when the module did not load. */
   name: string
   origin: ExtensionOrigin
-  /** The package that ships the extension, for `origin: "package"`. */
+  /** The profile that ships the extension, for `origin: "profile"`. */
   pkg?: string
   /** Which side of the trust line the layer is on: `project` layers load only in trusted directories. */
   layer: "user" | "project"

@@ -13,10 +13,10 @@ const temp = () => {
   return dir
 }
 
-test("declared capabilities and static hints never execute package code or expose source", () => {
+test("declared capabilities and static hints never execute profile code or expose source", () => {
   const root = temp()
   mkdirSync(path.join(root, "extensions"))
-  writeFileSync(path.join(root, "mendcode-package.json"), JSON.stringify({ name: "test", version: "1", description: "test", capabilities: ["network"], extensions: true }))
+  writeFileSync(path.join(root, "mendcode-profile.json"), JSON.stringify({ name: "test", version: "1", description: "test", capabilities: ["network"], extensions: true }))
   writeFileSync(path.join(root, "extensions", "index.ts"), 'throw new Error("DO NOT IMPORT secret literal")\napi.registerTool({})\napi.registerCommand("x", {})\napi.on("tool.before", fn)\nfetch("https://example.test")')
   const report = packageCapabilities(root)
   expect(report).toEqual({ declared: ["network"], declaredEnvironment: [], observed: ["commands", "hooks", "network", "tools"], observedEnvironment: [], complete: true })
@@ -31,7 +31,7 @@ test("declared capabilities and static hints never execute package code or expos
 test("a JSON value or string ending in net, http, tls or fs is not network or filesystem use", () => {
   const root = temp()
   mkdirSync(path.join(root, "recipes"))
-  writeFileSync(path.join(root, "mendcode-package.json"), JSON.stringify({ name: "test", version: "1", description: "test", capabilities: [] }))
+  writeFileSync(path.join(root, "mendcode-profile.json"), JSON.stringify({ name: "test", version: "1", description: "test", capabilities: [] }))
   writeFileSync(path.join(root, "recipes", "r.json"), JSON.stringify({ description: "magnet", roles: { main: { model: "claude-sonnet" }, small: { model: "net" } }, note: "https", other: "dfs" }))
   expect(packageCapabilities(root).observed).toEqual([])
 })
@@ -39,7 +39,7 @@ test("a JSON value or string ending in net, http, tls or fs is not network or fi
 test("imports and requires of the network and file modules are still found", () => {
   const root = temp()
   mkdirSync(path.join(root, "extensions"))
-  writeFileSync(path.join(root, "mendcode-package.json"), JSON.stringify({ name: "test", version: "1", description: "test", capabilities: [] }))
+  writeFileSync(path.join(root, "mendcode-profile.json"), JSON.stringify({ name: "test", version: "1", description: "test", capabilities: [] }))
   writeFileSync(path.join(root, "extensions", "a.ts"), 'import net from "node:net"\nimport { readFileSync } from "fs"')
   writeFileSync(path.join(root, "extensions", "b.js"), 'const tls = require("tls")\nconst h = await import("https")\nconst fsp = require( "node:fs/promises" )')
   expect(packageCapabilities(root).observed).toEqual(["filesystem", "network"])

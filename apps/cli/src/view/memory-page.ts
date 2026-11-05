@@ -120,7 +120,7 @@ const TAB_LABELS: Record<MemoryPageTab, { label: string; short: string }> = {
 }
 const PAGE_TABS: PageTab[] = PAGE_TAB_ORDER.map((tab, index) => ({ key: String(index + 1), ...TAB_LABELS[tab] }))
 const SCOPE_CHOICES: ReadonlyArray<{ id: MemoryScope; note: string }> = [
-  { id: "user", note: "every project of your profile" },
+  { id: "user", note: "every project of your area" },
   { id: "project", note: "this project only" },
   { id: "session", note: "this session only" },
 ]

@@ -1,8 +1,8 @@
 import type { PackageSelection } from "./package-authoring-data"
 
 /**
- * The one table of what a package folder (or any extension layer) can hold. Loaders, the installer's audit, the exporter
- * (`packages create`), `package check` and the scaffold read it, so they cannot disagree about what exists. A test fails when a
+ * The one table of what a profile folder (or any extension layer) can hold. Loaders, the installer's audit, the exporter
+ * (`profiles create`), `profile check` and the scaffold read it, so they cannot disagree about what exists. A test fails when a
  * loader reads a path this table does not list. Data only, no imports at runtime: the thin client shares it.
  *
  * `paths` are what loaders read, relative to the layer root. `exportPaths` are extra places the exporter also copies for the
@@ -15,7 +15,7 @@ export type PackageKindSpec = {
   readonly exportPaths?: readonly string[]
   readonly selection?: PackageSelection
   readonly executable: boolean
-  /** Can be switched on and off one by one (`Settings.disabledPackageResources`). */
+  /** Can be switched on and off one by one (`Settings.disabledProfileResources`). */
   readonly switchable: boolean
   /** Who reads it: the daemon's loaders, the terminal, both, or nobody (exported and installed only). */
   readonly readBy: "daemon" | "terminal" | "both" | "none"
@@ -50,11 +50,11 @@ export const PACKAGE_KINDS = [
 export type PackageKindId = (typeof PACKAGE_KINDS)[number]["id"]
 type Switchable = Extract<(typeof PACKAGE_KINDS)[number], { switchable: true }>["id"]
 
-/** The kinds one resource of which can be switched on and off (the `kind/name` ids of `Settings.disabledPackageResources`). */
+/** The kinds one resource of which can be switched on and off (the `kind/name` ids of `Settings.disabledProfileResources`). */
 export const SWITCHABLE_KINDS: readonly Switchable[] = PACKAGE_KINDS.filter((kind) => kind.switchable).map((kind) => kind.id as Switchable)
 
-/** Files and folders a package carries that are not resources: the manifest, the install record and what people expect next to code. */
-export const PACKAGE_META_ENTRIES: readonly string[] = ["mendcode-package.json", ".mendcode-install.json", "runtime-pack.json", "README.md", "README", "LICENSE", "LICENSE.md", "CHANGELOG.md", "docs", "examples", "test", "tests", "package.json", "tsconfig.json", ".gitignore", ".gitattributes"]
+/** Files and folders a profile carries that are not resources: the manifest, the install record and what people expect next to code. */
+export const PACKAGE_META_ENTRIES: readonly string[] = ["mendcode-profile.json", "mendcode-package.json", ".mendcode-install.json", "runtime-pack.json", "README.md", "README", "LICENSE", "LICENSE.md", "CHANGELOG.md", "docs", "examples", "test", "tests", "package.json", "tsconfig.json", ".gitignore", ".gitattributes"]
 
 /** Every path a loader reads (the first segment of each), for "does anything read this?" questions. */
 export const PACKAGE_READ_PATHS: readonly string[] = PACKAGE_KINDS.flatMap((kind) => kind.paths)
@@ -64,11 +64,11 @@ export function exportPathsFor(selection: PackageSelection): string[] {
   return PACKAGE_KINDS.filter((kind) => "selection" in kind && kind.selection === selection).flatMap((kind) => [...kind.paths, ...("exportPaths" in kind ? kind.exportPaths : [])])
 }
 
-/** The top-level entries of a package nothing reads or installs: a typo (`skill/`) or leftover. */
+/** The top-level entries of a profile nothing reads or installs: a typo (`skill/`) or leftover. */
 export function unknownPackageEntries(names: readonly string[]): string[] {
   const known = new Set<string>([...PACKAGE_META_ENTRIES, ...PACKAGE_KINDS.flatMap((kind) => [...kind.paths, ...("exportPaths" in kind ? kind.exportPaths : [])].map((path) => path.split("/")[0]!))])
   return names.filter((name) => !known.has(name) && !name.startsWith("."))
 }
 
-/** The kinds that run code or commands: what a package must say honestly it ships. */
+/** The kinds that run code or commands: what a profile must say honestly it ships. */
 export const EXECUTABLE_PACKAGE_PATHS: readonly string[] = PACKAGE_KINDS.filter((kind) => kind.executable).flatMap((kind) => kind.paths)

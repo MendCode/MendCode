@@ -46,7 +46,7 @@ export function preflightModule(file: string): string | undefined {
       } catch {
         return `${label}cannot resolve "${specifier}"`
       }
-      // Only the user's own sibling files are followed; installed packages are not parsed again.
+      // Only the user's own sibling files are followed; installed profiles are not parsed again.
       if (path.isAbsolute(resolved) && SOURCE.test(resolved) && !resolved.includes(`${path.sep}node_modules${path.sep}`)) queue.push(resolved)
     }
   }

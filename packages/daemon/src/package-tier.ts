@@ -1,7 +1,7 @@
 import { featureOn, type TierSettings } from "@mendcode/protocol/wire"
 
 const PACKAGE_FEATURES = {
-  "mendcode-review": "official_packages",
+  "mendcode-review": "official_profiles",
   "mendcode-autoresearch": "autoresearch",
   "mendcode-web-routing": "web_routing",
 } as const
@@ -9,7 +9,7 @@ const PACKAGE_FEATURES = {
 /** Installed data stays on disk; tier switches decide whether loaders may use it. */
 export function packageTierAllows(settings: TierSettings, name: string) {
   const feature = PACKAGE_FEATURES[name as keyof typeof PACKAGE_FEATURES]
-  return !feature || featureOn(settings, "official_packages") && featureOn(settings, feature)
+  return !feature || featureOn(settings, "official_profiles") && featureOn(settings, feature)
 }
 
 export function tierDisabledPackages(settings: TierSettings) {

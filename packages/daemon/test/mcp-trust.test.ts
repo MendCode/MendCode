@@ -58,15 +58,15 @@ test("trust changes and package changes make the daemon rebuild the MCP server s
     return invalidated.length
   }
   const source = path.join(temp(), "pkg")
-  cpSync(path.resolve(import.meta.dir, "../../../examples/official-packages/mendcode-review"), source, { recursive: true })
+  cpSync(path.resolve(import.meta.dir, "../../../examples/official-profiles/mendcode-review"), source, { recursive: true })
   expect(await calls(() => client.send({ type: "tools.trust", directory, trusted: true }))).toBeGreaterThan(0)
   expect(await calls(() => client.send({ type: "tools.trust", directory, trusted: false }))).toBeGreaterThan(0)
-  expect(await calls(() => client.send({ type: "packages.install", directory, source, scope: "project" }))).toBeGreaterThan(0)
-  expect(await calls(() => client.send({ type: "packages.enable", directory, key: "project:mendcode-review", enabled: false }))).toBeGreaterThan(0)
-  expect(await calls(() => client.send({ type: "packages.enable", directory, key: "project:mendcode-review", enabled: true }))).toBeGreaterThan(0)
-  expect(await calls(() => client.send({ type: "settings.set", patch: { disabledPackages: ["user:other"] } }))).toBeGreaterThan(0)
+  expect(await calls(() => client.send({ type: "profiles.install", directory, source, scope: "project" }))).toBeGreaterThan(0)
+  expect(await calls(() => client.send({ type: "profiles.enable", directory, key: "project:mendcode-review", enabled: false }))).toBeGreaterThan(0)
+  expect(await calls(() => client.send({ type: "profiles.enable", directory, key: "project:mendcode-review", enabled: true }))).toBeGreaterThan(0)
+  expect(await calls(() => client.send({ type: "settings.set", patch: { disabledProfiles: ["user:other"] } }))).toBeGreaterThan(0)
   expect(await calls(() => client.send({ type: "settings.set", patch: { trustedToolDirs: [directory] } }))).toBeGreaterThan(0)
-  expect(await calls(() => client.send({ type: "packages.remove", directory, name: "mendcode-review", scope: "project" }))).toBeGreaterThan(0)
+  expect(await calls(() => client.send({ type: "profiles.remove", directory, name: "mendcode-review", scope: "project" }))).toBeGreaterThan(0)
   expect(await calls(() => client.send({ type: "settings.set", patch: { theme: "dark" } as never }))).toBe(0)
 })
 

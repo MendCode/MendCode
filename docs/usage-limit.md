@@ -54,7 +54,7 @@ The resume continues the session's own history as a steering turn that tells the
 
 ## Quota refresh
 
-A provider's quota windows are known only when a turn on that provider ran, so on a session that uses another provider they age. `quotaRefresh` (profile key, `/customize` > Prompt & footer > Quota refresh, or `customize_ui` settings) lists the providers whose windows the daemon asks for on a timer: `[{"provider":"codex","everyMinutes":15,"model":"..."}]`, each provider once, `everyMinutes` 5 to 1440 (default 15), `model` optional (the cheapest model of the catalogue by name, Haiku for Claude Code). In `/customize` it is one line, `codex:15, claude:30:claude-haiku`. **It is off by default, and nothing is sent until you list a provider.**
+A provider's quota windows are known only when a turn on that provider ran, so on a session that uses another provider they age. `quotaRefresh` (customize key, `/customize` > Prompt & footer > Quota refresh, or `customize_ui` settings) lists the providers whose windows the daemon asks for on a timer: `[{"provider":"codex","everyMinutes":15,"model":"..."}]`, each provider once, `everyMinutes` 5 to 1440 (default 15), `model` optional (the cheapest model of the catalogue by name, Haiku for Claude Code). In `/customize` it is one line, `codex:15, claude:30:claude-haiku`. **It is off by default, and nothing is sent until you list a provider.**
 
 **It costs quota.** Every probe is a real request on your login, so it spends some of the quota it measures (the Codex engine's probe only reads its rate limits and costs none). How much is not measured here: it depends on the provider and your plan. The setting row, the `usage` card and `mendcode docs usage` say so; ask before turning it on for someone else.
 

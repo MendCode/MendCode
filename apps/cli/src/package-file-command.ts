@@ -4,10 +4,10 @@ import { VIEW_SLOT_NAMES } from "@mendcode/extension-api/views"
 import { PROGRAM_NAME } from "@mendcode/program"
 
 /**
- * `mendcode package new <name> [--dir PARENT]` and `mendcode package check <dir>`: they work on package folders only, so they never
- * start or contact a daemon (like `view scaffold`). `check` loads the package library (zod) only when it runs.
+ * `mendcode profile new <name> [--dir PARENT]` and `mendcode profile check <dir>`: they work on profile folders only, so they never
+ * start or contact a daemon (like `view scaffold`). `check` loads the profile library (zod) only when it runs.
  */
-export const PACKAGE_FILE_USAGE = `usage: ${PROGRAM_NAME} package new <name> [--dir PARENT]   a complete, commented package in PARENT/<name> (default: here)\n       ${PROGRAM_NAME} package check [<folder>]       schema, compat, capabilities, activation and size limits of a package folder (default: here)\n`
+export const PACKAGE_FILE_USAGE = `usage: ${PROGRAM_NAME} profile new <name> [--dir PARENT]   a complete, commented profile in PARENT/<name> (default: here)\n       ${PROGRAM_NAME} profile check [<folder>]       schema, compat, capabilities, activation and size limits of a profile folder (default: here)\n`
 
 export type PackageFileCommand = { help: boolean; action: "new" | "check"; target?: string; dir?: string; error?: string }
 
@@ -28,9 +28,9 @@ export function parsePackageFileCommand(argv: string[]): PackageFileCommand | un
     } else words.push(token)
   }
   const [command, action, target, extra] = words
-  if (command !== "package" || (action !== "new" && action !== "check")) return undefined
-  if (action === "new" && (!target || extra)) return { help, action, ...(dir ? { dir } : {}), error: error ?? "package new needs one name" }
-  if (action === "check" && extra) return { help, action, ...(target ? { target } : {}), error: error ?? "package check takes one folder" }
+  if (!["profile", "package", "packages"].includes(command ?? "") || (action !== "new" && action !== "check")) return undefined
+  if (action === "new" && (!target || extra)) return { help, action, ...(dir ? { dir } : {}), error: error ?? "profile new needs one name" }
+  if (action === "check" && extra) return { help, action, ...(target ? { target } : {}), error: error ?? "profile check takes one folder" }
   return { help, action, ...(target ? { target } : {}), ...(dir ? { dir } : {}), ...(error ? { error } : {}) }
 }
 
@@ -44,7 +44,7 @@ export async function runPackageFileCommand(command: PackageFileCommand, io: Io)
     const { scaffoldPackage } = await import("./package-scaffold")
     const result = scaffoldPackage({ name: command.target!, parent: path.resolve(io.cwd, command.dir ?? ".") })
     if (!result.ok) { io.err.write(`error: ${result.message}\n`); return 1 }
-    io.out.write(`wrote ${result.dir} (${result.files.length} files)\nnext: ${PROGRAM_NAME} package check ${result.dir}, then ${PROGRAM_NAME} package install ${result.dir}\n`)
+    io.out.write(`wrote ${result.dir} (${result.files.length} files)\nnext: ${PROGRAM_NAME} profile check ${result.dir}, then ${PROGRAM_NAME} profile install ${result.dir}\n`)
     return 0
   }
   const folder = path.resolve(io.cwd, command.target ?? ".")

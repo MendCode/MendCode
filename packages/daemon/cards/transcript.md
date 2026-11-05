@@ -1,11 +1,11 @@
 ---
 summary: how the chat is drawn: tool output, density, markdown, reasoning, scroll
-docs: customize, profile-keys, layout, accessibility, return
+docs: customize, customize-keys, layout, accessibility, return
 aliases: tool-output, chat, conversation, rendering, markdown, scrollbar, timestamps, thinking, density-tools, messages
 ---
 For: "show the full tool output", "fewer tool cards", "hide / show the thinking", "tables look wrong", "timestamps", "scrollbar", "where did the answer go after sending".
 
-Each is a profile key: apply with customize_ui {"action":"settings","values":{"toolOutput":"expanded"}} (in minimalist find the tool with tool_search; it validates and applies live to every terminal), or the user's /customize group Session chrome. Keys and allowed values: {{program}} control-plane tui schema. Look and colours: {{program}} docs customize.
+Each is a customize key: apply with customize_ui {"action":"settings","values":{"toolOutput":"expanded"}} (in minimalist find the tool with tool_search; it validates and applies live to every terminal), or the user's /customize group Session chrome. Keys and allowed values: {{program}} control-plane tui schema. Look and colours: {{program}} docs customize.
   Tool cards: [[setting:toolOutput]] auto|collapsed|expanded (what a finished card shows; ctrl+o opens one by hand and wins); [[setting:toolDensity]] calm (default, one row per finished call) | standard | dense (full view only); [[setting:codeMapCard]] auto|open|folded.
   Diff cards (no /customize row): toolRail list like read:off,shell:on (name, prefix* or *; last match wins; file tools off by default) for the rule beside a card; diffContext 0..6 unchanged lines around a change (3); diffLineRows 1..50 rows a long line takes before … (4).
   Reasoning: [[setting:reasoning]] auto|hidden|collapsed|expanded, or the user's /thinking toggle.
@@ -21,4 +21,4 @@ Tell the user what changed. The balanced and minimal views ignore toolDensity; t
 
 Check: the customize_ui result lists errors (a bad value changes nothing). You cannot see the screen: say the look was not verified visually.
 
-Not a profile key: colors of the theme ({{program}} docs theme), the footer ({{program}} docs footer), the right panel ({{program}} docs layout).
+Not a customize key: colors of the theme ({{program}} docs theme), the footer ({{program}} docs footer), the right panel ({{program}} docs layout).

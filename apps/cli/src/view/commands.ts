@@ -11,6 +11,8 @@ export type SlashCommand = {
   feature?: FeatureId
   setting?: string
   aliases: string[]
+  /** Older names that still run the command; not listed in the menu, the help or the docs. */
+  hiddenAliases?: string[]
   summary: string
   shortcut?: string
   /** From .mendcode/commands: inserted as text so its arguments can follow. */
@@ -121,7 +123,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   { name: "limit", group: "session", aliases: [], summary: "Resume a turn paused by a usage limit" },
   { name: "daemon", group: "more", aliases: [], summary: "Show or restart the daemon" },
   { name: "restart", group: "more", aliases: [], summary: "Restart this terminal on the same session" },
-  { name: "reload", group: "more", aliases: [], summary: "Reload extensions, packages, keys and themes" },
+  { name: "reload", group: "more", aliases: [], summary: "Reload extensions, profiles, keys and themes" },
   { name: "pr", group: "code", feature: "pr_watch", aliases: ["pr-watch"], summary: "Review, watch and comment on pull requests" },
   { name: "reviews", group: "code", feature: "pr_review", aliases: [], summary: "Manage PR review jobs and reviewers" },
   { name: "loops", group: "agents", aliases: ["loop"], summary: "Manage loops" },
@@ -130,7 +132,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   { name: "acp", group: "setup", aliases: [], summary: "Configure ACP agents" },
   { name: "mcps", group: "setup", feature: "mcp", aliases: ["mcp"], summary: "Manage MCP servers" },
   { name: "tools", group: "setup", aliases: [], summary: "Manage custom tools" },
-  { name: "packages", group: "setup", feature: "packages", aliases: ["pkg"], summary: "Manage packages" },
+  { name: "profiles", group: "setup", feature: "profiles", aliases: [], hiddenAliases: ["packages", "pkg"], summary: "Manage profiles" },
   { name: "footer", group: "look", aliases: [], summary: "Customize footer segments" },
   { name: "theme", group: "look", aliases: ["themes"], summary: "Pick a theme" },
   { name: "pet", group: "look", feature: "pets", aliases: [], summary: "Choose a pet" },
@@ -170,7 +172,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   { name: "worktrees", group: "code", aliases: [], summary: "Manage worktrees and previews" },
   { name: "warp", group: "more", aliases: [], summary: "Choose a workspace" },
   { name: "compound", group: "agents", aliases: [], summary: "Run a bounded agent workflow" },
-  { name: "marketplace", group: "setup", feature: "packages", aliases: [], summary: "Browse the package catalog" },
+  { name: "marketplace", group: "setup", feature: "profiles", aliases: [], summary: "Browse the profile catalog" },
   { name: "mend-assets", group: "more", aliases: [], summary: "Inspect runtime assets" },
   { name: "intro", group: "look", aliases: [], summary: "Replay MendCode intro" },
   { name: "ai-config", group: "setup", aliases: [], summary: "Inspect, preview and save model recipes" },
@@ -198,7 +200,7 @@ export function takesArguments(command: SlashCommand) {
 }
 
 function names(command: SlashCommand) {
-  return [command.name, ...command.aliases]
+  return [command.name, ...command.aliases, ...(command.hiddenAliases ?? [])]
 }
 
 /** Matches "/name" or "/alias" optionally followed by args. Leading space, "//" and unknown names are not commands. */

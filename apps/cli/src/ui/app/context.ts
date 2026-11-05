@@ -119,7 +119,7 @@ export type AppInput = {
   imageAnswers?: { da1?: string; cellPixels?: { width: number; height: number } }
   /**
    * The MendCode data dir (`--dir`). With it the terminal reads `keybindings.json` and loads terminal extensions
-   * from `<dir>/extensions` and packages (plus the project's, when it is trusted); without it, neither.
+   * from `<dir>/extensions` and profiles (plus the project's, when it is trusted); without it, neither.
    */
   dataDir?: string
   pure?: boolean
@@ -534,15 +534,15 @@ export type AppState = {
   profileBase: TuiProfile
   /** What slash commands showed or hid in each session of this terminal (session-look.ts); over the profile, never saved. */
   sessionLook: Map<string, Partial<TuiProfile>>
-  /** What enabled packages' activation profiles currently ask for (extensions/activation.ts, loaded only when one exists). */
+  /** What enabled profiles' activations currently ask for (extensions/activation.ts, loaded only when one exists). */
   activation: import("../../extensions/activation").TuiActivation | undefined
-  /** The keys a package overlay or a running extension holds right now, with the value each put there. */
+  /** The keys a profile overlay or a running extension holds right now, with the value each put there. */
   profileApplied: Record<string, unknown>
   /** What running extensions asked for through `api.settings.set`; gone with them. */
   profileRuntime: Record<string, unknown>
   /** Keys the user chose by hand after a layer held them (profile keys, or `keybindings:<key>`): theirs over every layer. */
   keptKeys: Set<string>
-  /** The value of each kept profile key a package holds: saved per look owner in activation.json, never in the stored profile. */
+  /** The value of each kept profile key a profile holds: saved per look owner in activation.json, never in the stored profile. */
   keptValues: Record<string, unknown>
   customizeState: CustomizePageState
   settingsPageState: SettingsPageState

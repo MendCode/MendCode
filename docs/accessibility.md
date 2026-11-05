@@ -4,7 +4,7 @@ Screen-reader mode makes the terminal easy to follow with a screen reader or a b
 
 Turn it on with any of:
 
-- `/accessible on` (also `off` and `toggle`), or `/customize` > Terminal > Screen reader. Saved in the terminal profile.
+- `/accessible on` (also `off` and `toggle`), or `/customize` > Terminal > Screen reader. Saved in the terminal settings.
 - `mendcode --accessible` for one run.
 - `MENDCODE_ACCESSIBLE=1` for every run of that shell (`MENDCODE_ACCESSIBLE=0` turns a saved setting off for that run).
 

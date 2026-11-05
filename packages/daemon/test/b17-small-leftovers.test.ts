@@ -65,14 +65,14 @@ describe("config layers", () => {
     const project = temp("mend-layers-proj-")
     mkdirSync(path.join(project, ".mendcode"))
     writeFileSync(path.join(project, ".mendcode", "project.json"), JSON.stringify({ version: 1, instructions: ["../outside.md"], apiToken: "sk-should-not-show" }))
-    const settings = { theme: "fjord", serviceTier: "fast", experimental: { code_mode: true }, provider: { openai: { apiKey: "sk-secret-value-123456" } }, profiles: [{ name: "work", directories: [project] }] } as unknown as Settings
+    const settings = { theme: "fjord", serviceTier: "fast", experimental: { code_mode: true }, provider: { openai: { apiKey: "sk-secret-value-123456" } }, areas: [{ name: "work", directories: [project] }] } as unknown as Settings
     const { layers, warnings } = configLayers({ dir, directory: project, settings, environment: { MENDCODE_THEME: "x", PATH: "/bin", MENDCODE_V2_ENGINE: "native" }, home: "/home/nobody" })
-    expect(layers.map((layer) => layer.id)).toEqual(["defaults", "user", "profile", "project-settings", "project", "environment"])
+    expect(layers.map((layer) => layer.id)).toEqual(["defaults", "user", "area", "project-settings", "project", "environment"])
     const user = layers.find((layer) => layer.id === "user")!
     expect(user.entries).toContain("theme = fjord")
     expect(user.entries).toContain("serviceTier = fast")
     expect(user.entries).toContain("provider · 1 key")
-    expect(layers.find((layer) => layer.id === "profile")!.entries).toEqual(["profile = work"])
+    expect(layers.find((layer) => layer.id === "area")!.entries).toEqual(["area = work"])
     expect(layers.find((layer) => layer.id === "project")!.entries).toContain("apiToken · hidden")
     expect(layers.find((layer) => layer.id === "environment")!.entries).toEqual(["MENDCODE_THEME", "MENDCODE_V2_ENGINE"])
     expect(JSON.stringify(layers)).not.toContain("sk-")

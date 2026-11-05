@@ -7,7 +7,7 @@ import { createFauxEngine } from "@mendcode/engine-faux"
 import { createIdFactory, ProcessMemory, type GlobalEvent, type McpStatusReport, type SessionEvent, type SessionId, type Settings } from "@mendcode/protocol"
 import { startDaemon, type DaemonOptions } from "../src/daemon"
 import { remoteTokens } from "../src/remote"
-import { defaultPermissionFor, rolesFor, rolesPatch, shellFor } from "../src/profiles"
+import { defaultPermissionFor, rolesFor, rolesPatch, shellFor } from "../src/areas"
 import { httpConfig, httpOpenApi } from "../src/http"
 import { cleanTemps, tempDir } from "../../../apps/cli/test/session-ui-harness"
 
@@ -153,10 +153,10 @@ test("B82 unsupported donor config returns 501, malformed fields 400, and read-o
 test("B82 canonical project overrides preserve existing profiles configured through a symlink", () => {
   const directory = realpathSync(tempDir()), link = path.join(tempDir(), "project")
   symlinkSync(directory, link)
-  const settings: Settings = { models: { main: { model: "global" } }, defaultPermission: "ask", profiles: [{ name: "work", directories: [link], models: { main: { model: "profile" } }, defaultPermission: "edits" }] }
+  const settings: Settings = { models: { main: { model: "global" } }, defaultPermission: "ask", areas: [{ name: "work", directories: [link], models: { main: { model: "profile" } }, defaultPermission: "edits" }] }
   expect(rolesFor(settings, link)).toEqual({ main: { model: "profile" } })
   expect(defaultPermissionFor(settings, link)).toBe("edits")
-  expect(rolesPatch(settings, link, { main: { model: "changed" } })).toMatchObject({ profiles: [{ name: "work", models: { main: { model: "changed" } } }] })
+  expect(rolesPatch(settings, link, { main: { model: "changed" } })).toMatchObject({ areas: [{ name: "work", models: { main: { model: "changed" } } }] })
   settings.projectConfig = { [directory]: { models: { small: { model: "project" } }, defaultPermission: "full" } }
   expect(rolesFor(settings, link)).toEqual({ main: { model: "profile" }, small: { model: "project" } })
   expect(defaultPermissionFor(settings, link)).toBe("full")

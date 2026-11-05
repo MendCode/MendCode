@@ -1,6 +1,6 @@
 # View slots
 
-A user file or a package can replace how any named part of the terminal is drawn: messages, tool cards, the
+A user file or a profile can replace how any named part of the terminal is drawn: messages, tool cards, the
 approval box, the prompt frame, the bars, the home screen and more. Every slot follows one contract, and the
 built-in look is drawn through the same contract, so what a custom view receives is exactly what the default
 receives.
@@ -40,14 +40,14 @@ export default {
 - **User file**: `<data dir>/extensions/<name>.ts`. A session's own model may write the starter too (it is MendCode's template in a new file); `--force`, which replaces a view you already have, is refused from a session, and the code it then writes goes through `customize_ui`, which asks you. `mendcode view scaffold <slot>` (or `/customize` > Views >
   New view file) writes a commented starter, `view-<slot>.ts`, and never overwrites a file (`--force` does).
   `mendcode view list` prints every slot. Both work on files only and never start a daemon.
-- **Package**: a package's `extensions/` folder, like any terminal extension. A package that wants to own the look lists its views in `activate.views` (slot to module) and they load only while it owns the look ([packages](packages.md#make-your-own-mendcode-in-10-minutes)); `mendcode package new` writes two to start from, and `examples/packages/retro/` is a full reskin. A view that never returns cannot be interrupted from inside the process: the 4 ms budget and three strikes bound a view across frames, not inside one call; use `--safe-mode` to start without it.
+- **Profile**: a profile's `extensions/` folder, like any terminal extension. A profile that wants to own the look lists its views in `activate.views` (slot to module) and they load only while it owns the look ([profiles](packages.md#make-your-own-mendcode-in-10-minutes)); `mendcode profile new` writes two to start from, and `examples/profiles/retro/` is a full reskin. A view that never returns cannot be interrupted from inside the process: the 4 ms budget and three strikes bound a view across frames, not inside one call; use `--safe-mode` to start without it.
 - **Project files** load only where the project is trusted, the same rule as every project extension. Remote terminals
   and pure (`--safe-mode`) terminals never load extensions, so a peer or a remote session cannot install a view in
   another terminal.
 - **Hot reload**: edits are picked up by the daemon's existing watcher (`extensions.changed`); finished transcript
   rows are laid out again.
 - **`/customize` > Views** states above its rows that views are not sandboxed, and lists the slots that have a custom view (and the one you are on) with the owner
-  (`user <name>`, `project <name>`, `package <name>`, or built-in), the number of faults, the last error and the
+  (`user <name>`, `project <name>`, `profile <name>`, or built-in), the number of faults, the last error and the
   average time per call. Left/right pick a slot, Enter turns its custom view off or on (`disabledViews` in the
   profile), `r` resets it (clears faults and the off switch), and the next row writes a starter for the picked slot.
 

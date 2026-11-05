@@ -27,7 +27,7 @@ function put(root: string, relative: string, text: string) {
 }
 const parts = [{ id: "base", label: "native", text: "native harness" }, { id: "instructions", label: "project", text: "project rules" }, { id: "skills", label: "skills", text: "skill catalogue" }, { id: "append", label: "extension", text: "extension append" }, { id: "memory", label: "memory", text: "memory rules" }]
 
-test("project modes and all six families persist independently of folder profiles and other projects", () => {
+test("project modes and all six families persist independently of areas and other projects", () => {
   const dir = temp(), project = temp(), other = temp()
   const modes = createPromptModes(dir)
   expect(modes.status(project)).toMatchObject({ mode: "focus", focusID: "auto", available: ["minimal", "focus", "guide", "full"] })

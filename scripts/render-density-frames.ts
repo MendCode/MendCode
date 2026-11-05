@@ -116,7 +116,7 @@ for (const width of [100, 80]) {
 // The Galaxy panel's Top block (and its neighbours) at the panel's default width and at 32 columns.
 const orbitGraph: OrbitGraph = (() => {
   const node = (id: string, kind: OrbitGraph["nodes"][number]["kind"], label: string, activity: number, at = DENSITY_NOW - 60_000) => ({ id, kind, label, target: label, activity, at })
-  const nodes = [node("agent:session", "agent", "This session", 38), node("tool:glob", "tool", "glob", 8), node("tool:grep", "tool", "grep", 8), node("tool:read", "tool", "read", 5), node("tool:web_search", "tool", "web_search", 4), node("file:docs-commands", "file", "apps/cli/src/docs-commands.ts", 3), node("file:packages-md", "file", "docs/packages.md", 2), node("mcp:graft", "mcp", "graft", 0)]
+  const nodes = [node("agent:session", "agent", "This session", 38), node("tool:glob", "tool", "glob", 8), node("tool:grep", "tool", "grep", 8), node("tool:read", "tool", "read", 5), node("tool:web_search", "tool", "web_search", 4), node("file:docs-commands", "file", "apps/cli/src/docs-commands.ts", 3), node("file:packages-md", "file", "docs/profiles.md", 2), node("mcp:graft", "mcp", "graft", 0)]
   return { nodes, edges: [["agent:session", "tool:glob"], ["agent:session", "tool:grep"], ["agent:session", "tool:read"], ["tool:read", "file:packages-md"], ["tool:grep", "file:docs-commands"]], touches: [{ from: "tool:read", to: "file:packages-md", at: DENSITY_NOW - 20_000 }, { from: "tool:grep", to: "file:docs-commands", at: DENSITY_NOW - 90_000 }] }
 })()
 const camera: OrbitCamera = { yaw: 0.6, pitch: 0.2, selected: 0, focused: true }

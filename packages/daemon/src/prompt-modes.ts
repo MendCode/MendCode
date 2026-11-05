@@ -55,7 +55,7 @@ export function readProjectPrompt(root: string) {
 }
 
 /**
- * Project choices live in the daemon data dir; folder profiles and model settings remain independent.
+ * Project choices live in the daemon data dir; areas and model settings remain independent.
  * `defaultModel` names the model a status is read for when the caller names none (the project's main model),
  * so `auto` can show which family it resolves to.
  */

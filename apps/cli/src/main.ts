@@ -58,7 +58,7 @@ function refuseFromSession(dir: string | undefined, what: string, anywhere = fal
   process.exit(1)
 }
 const rawArgv = globalOptions.args
-/** `--safe-mode` / MENDCODE_SAFE_MODE=1: a pure start that also leaves out packages, shell hooks, MCP and project tools (docs/tiers.md). */
+/** `--safe-mode` / MENDCODE_SAFE_MODE=1: a pure start that also leaves out profiles, shell hooks, MCP and project tools (docs/tiers.md). */
 const safeMode = globalOptions.safeMode === true || process.env.MENDCODE_SAFE_MODE === "1"
 const pure = globalOptions.pure === true || safeMode
 try {
@@ -141,14 +141,14 @@ if (daemonService) {
   })(daemonService))
 }
 // `view list|scaffold` writes files only: no daemon, no terminal.
-if (argv[0] === "profile") {
+if (argv[0] === "customize") {
   const args = argv.slice(1).filter((value, index, all) => value !== "--dir" && all[index - 1] !== "--dir" && !value.startsWith("--dir="))
   if (args[0] !== "restore" || args.some((value) => value.startsWith("--"))) {
-    process.stderr.write("usage: mendcode profile restore [id] [--dir PATH] (local only)\n")
+    process.stderr.write("usage: mendcode customize restore [id] [--dir PATH] (local only)\n")
     process.exit(2)
   }
   const dir = arg("dir") ?? envDataDir()
-  if (args[1]) refuseFromSession(dir, "restores the user's terminal profile")
+  if (args[1]) refuseFromSession(dir, "restores the user's terminal settings")
   try {
     const { runProfileRestore } = await import("./profile-restore")
     process.stdout.write(runProfileRestore(dir, args.slice(1)).text + "\n")
@@ -162,7 +162,7 @@ if (viewCommand) process.exit(runViewCommand(viewCommand, { dataDir: viewCommand
 // `docs [topic]` prints a reference card of this version from the binary and local files; a daemon is asked only when one already runs. The cards load on demand.
 const docsCommand = parseDocsCommand(argv)
 if (docsCommand) process.exit(await (await import("./docs-run")).runDocsCommand(docsCommand, { dataDir: docsCommand.dir ?? envDataDir(), cwd: process.cwd(), out: process.stdout, err: process.stderr }))
-// `package new|check` work on package folders only: no daemon, no terminal.
+// `profile new|check` work on profile folders only: no daemon, no terminal.
 const packageFileCommand = parsePackageFileCommand(argv)
 if (packageFileCommand) process.exit(await runPackageFileCommand(packageFileCommand, { cwd: process.cwd(), version: CLI_VERSION, out: process.stdout, err: process.stderr }))
 function arg(name: string) {
@@ -840,7 +840,7 @@ if (startup?.kind === "run") {
 
 // A `pr` command that checked out its branch continues here as a terminal without having loaded them.
 const [{ createApp }, { createScreen }, { keyboardWanted }, { currentLayout }, { createCrashGuard }, { registerThemes, setTheme }, { themesFromFiles }, { PRESENTATION_MODES }, { accessibleMode }] = await (terminalModules ?? loadTerminalModules())
-// Theme files of the packages, the user's and the project's `themes/` join the built-ins before settings apply.
+// Theme files of the profiles, the user's and the project's `themes/` join the built-ins before settings apply.
 const themeFiles = await client.send({ type: "themes.list", directory: directory! })
 if (themeFiles.ok) {
   const { themes, problems } = themesFromFiles((themeFiles.result as ThemesReport | undefined)?.themes ?? [])

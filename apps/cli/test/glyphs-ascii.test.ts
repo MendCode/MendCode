@@ -26,7 +26,7 @@ const ANSWER = [
 ].join("\n")
 
 /** Pages a user reaches from the prompt; each opens, draws and closes with Esc. */
-const PAGES = ["/customize", "/setup", "/changes", "/usage", "/help", "/settings", "/tools", "/memory", "/agents", "/packages", "/extensions", "/hooks", "/context", "/loops", "/workflows", "/mcps", "/secrets", "/permissions", "/keymap", "/terminal-setup", "/theme", "/model", "/status", "/diagnostics", "/pet", "/sidebar", "/tasks", "/history"]
+const PAGES = ["/customize", "/setup", "/changes", "/usage", "/help", "/settings", "/tools", "/memory", "/agents", "/profiles", "/extensions", "/hooks", "/context", "/loops", "/workflows", "/mcps", "/secrets", "/permissions", "/keymap", "/terminal-setup", "/theme", "/model", "/status", "/diagnostics", "/pet", "/sidebar", "/tasks", "/history"]
 
 const nonAscii = (frame: readonly Line[]) => frame.map(plain).filter((row) => /[^\x20-\x7e]/.test(row))
 

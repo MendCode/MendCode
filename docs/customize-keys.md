@@ -1,6 +1,6 @@
-# Terminal profile keys
+# Customize keys
 
-Every row of the `/customize` page is a key of the terminal profile (`<data dir>/tui/profile.json`). Each key is also the name `customize_ui` and `api.settings.get/set` take, and the name a package's `activate.tuiProfile` may carry (a package may not set the keys that start things or touch the clipboard, see [customize](customize.md)). The page groups them in the sections below; the label is what the page calls the row. Allowed values, types and defaults of this version: `mendcode control-plane tui schema`; the values now: `mendcode control-plane tui profile`.
+Every row of the `/customize` page is a key of the terminal settings (`<data dir>/tui/profile.json`). Each key is also the name `customize_ui` and `api.settings.get/set` take, and the name a profile's `activate.tuiProfile` may carry (a profile may not set the keys that start things or touch the clipboard, see [customize](customize.md)). The page groups them in the sections below; the label is what the page calls the row. Allowed values, types and defaults of this version: `mendcode control-plane tui schema`; the values now: `mendcode control-plane terminal settings`.
 
 A test holds this list to the page: a row added to `/customize` without a line here fails it.
 

@@ -4,7 +4,13 @@ import { z } from "zod"
 import { PackageAuthorManifest } from "@mendcode/protocol"
 import { packageDirs, packageKey, packagesRoot, PACKAGE_NAME, type ExtensionSource } from "./layers"
 
-export const MANIFEST_FILE = "mendcode-package.json"
+export const MANIFEST_FILE = "mendcode-profile.json"
+/** What the manifest was called when profiles were called packages: still read (and the profile keeps loading), never written. */
+export const LEGACY_MANIFEST_FILE = "mendcode-package.json"
+/** The manifest a folder holds: the current name, else the older one, else the current name (to be created). */
+export function manifestFileIn(dir: string): string {
+  return !existsSync(path.join(dir, MANIFEST_FILE)) && existsSync(path.join(dir, LEGACY_MANIFEST_FILE)) ? LEGACY_MANIFEST_FILE : MANIFEST_FILE
+}
 export const INSTALL_RECORD_FILE = ".mendcode-install.json"
 const MAX_MANIFEST_BYTES = 32 * 1024
 
@@ -15,7 +21,7 @@ export const packageManifestSchema = z.strictObject({
   author: z.string().max(200).optional(),
   homepage: z.string().max(500).optional(),
   license: z.string().max(100).optional(),
-  /** `true` when the package ships TypeScript extensions in `extensions/` (code that runs in the daemon), `false` for none. Checked at install. */
+  /** `true` when the profile ships TypeScript extensions in `extensions/` (code that runs in the daemon), `false` for none. Checked at install. */
   extensions: z.boolean().optional(),
   capabilities: z.array(z.enum(["hooks", "tools", "commands", "network", "processes", "filesystem"])).max(32).optional(),
 }).extend(PackageAuthorManifest.shape)
@@ -24,7 +30,7 @@ export type PackageManifest = z.infer<typeof packageManifestSchema>
 export const installRecordSchema = z.object({ source: z.string(), commit: z.string().optional(), integrity: z.string().optional(), pinned: z.boolean().optional(), installedAt: z.number() })
 export type InstallRecord = z.infer<typeof installRecordSchema>
 
-/** What a package adds, counted from its kind folders (nothing is loaded or run to count it). */
+/** What a profile adds, counted from its kind folders (nothing is loaded or run to count it). */
 export type PackageContents = { tools: number; skills: number; commands: number; themes: number; mcp: boolean; extensions: number; agents: number }
 
 export type PackageInfo = {
@@ -36,23 +42,24 @@ export type PackageInfo = {
   manifest?: PackageManifest
   install?: InstallRecord
   contents: PackageContents
-  /** Why the manifest cannot be used; the package's files still load, like any folder of extensions. */
+  /** Why the manifest cannot be used; the profile's files still load, like any folder of extensions. */
   problem?: string
 }
 
 export function readManifest(dir: string): { manifest: PackageManifest } | { problem: string } {
-  const file = path.join(dir, MANIFEST_FILE)
+  const name = manifestFileIn(dir)
+  const file = path.join(dir, name)
   const size = statSync(file, { throwIfNoEntry: false })?.size
   if (size === undefined) return { problem: `no ${MANIFEST_FILE}` }
-  if (size > MAX_MANIFEST_BYTES) return { problem: `${MANIFEST_FILE} is larger than ${MAX_MANIFEST_BYTES / 1024} KB` }
+  if (size > MAX_MANIFEST_BYTES) return { problem: `${name} is larger than ${MAX_MANIFEST_BYTES / 1024} KB` }
   let json: unknown
   try {
     json = JSON.parse(readFileSync(file, "utf8"))
   } catch (error) {
-    return { problem: `invalid JSON in ${MANIFEST_FILE}: ${(error as Error).message}` }
+    return { problem: `invalid JSON in ${name}: ${(error as Error).message}` }
   }
   const parsed = packageManifestSchema.safeParse(json)
-  if (!parsed.success) return { problem: `invalid ${MANIFEST_FILE}: ${parsed.error.issues.map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`).join("; ")}` }
+  if (!parsed.success) return { problem: `invalid ${name}: ${parsed.error.issues.map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`).join("; ")}` }
   return { manifest: parsed.data }
 }
 
@@ -85,7 +92,7 @@ function countExtensions(dir: string): number {
   }).length
 }
 
-/** Why the manifest's `extensions` declaration and the folder disagree, if they do: a package must say honestly whether it ships code. */
+/** Why the manifest's `extensions` declaration and the folder disagree, if they do: a profile must say honestly whether it ships code. */
 export function extensionsProblem({ manifest, dir }: { manifest: PackageManifest; dir: string }): string | undefined {
   if (manifest.extensions === undefined) return undefined
   const found = countExtensions(dir)
@@ -106,7 +113,7 @@ export function packageContents(dir: string): PackageContents {
   }
 }
 
-/** Every installed package of both scopes, user first, with what it adds and whether it is enabled. */
+/** Every installed profile of both scopes, user first, with what it adds and whether it is enabled. */
 export function listPackages({ userDir, directory, disabled = [] }: { userDir: string; directory: string; disabled?: readonly string[] }): PackageInfo[] {
   const off = new Set(disabled)
   const out: PackageInfo[] = []

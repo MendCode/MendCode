@@ -23,7 +23,7 @@ try {
     const gate = new Promise<void>((resolve) => { release = resolve })
     let calls = 0
     const generator = createPetGenerator({ dir, settings: () => settings, budgets, image: () => async () => { calls++; if (calls === 4) { started!(); await gate }; return { ok: true, model: "fixture-image", images: [{ type: "png", bytes: fixturePng() }] } } })
-    const harness = appHarness({ width: width!, height: height!, dataDir: dir, pets: { dirs: [{ dir: path.join(dir, "pets"), source: "user" }], cacheDir: path.join(dir, "cache"), images: false }, reply: async (command) => command.type === "pet.manage" ? { ok: true, result: await generator.manage("frames", command.input) } : command.type === "packages.list" ? { ok: true, result: { directory: dir, packages: [] } } : { ok: true } })
+    const harness = appHarness({ width: width!, height: height!, dataDir: dir, pets: { dirs: [{ dir: path.join(dir, "pets"), source: "user" }], cacheDir: path.join(dir, "cache"), images: false }, reply: async (command) => command.type === "pet.manage" ? { ok: true, result: await generator.manage("frames", command.input) } : command.type === "profiles.list" ? { ok: true, result: { directory: dir, packages: [] } } : { ok: true } })
     harness.app.applySettings({ ...settings, onboarded: true })
     const save = (name: string) => {
       harness.app.render()

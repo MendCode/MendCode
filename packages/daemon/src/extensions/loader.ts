@@ -39,7 +39,7 @@ const messageOf = (error: unknown) => (error instanceof Error ? error.message : 
 export type ExtensionsOptions = {
   /** The MendCode data dir: extensions keep private data in `<dataDir>/extensions-data/<name>`. */
   dataDir: string
-  /** Extension layers of a project (packages, the user's and the project's own folders), lowest precedence first. */
+  /** Extension layers of a project (profiles, the user's and the project's own folders), lowest precedence first. */
   layersFor(directory: string): ExtensionLayer[]
   /** Whether project-layer code may run in `directory`: the same trust as project custom tools. */
   isTrusted(directory: string): boolean
@@ -241,7 +241,7 @@ export function createExtensions(options: ExtensionsOptions) {
         const problem = virtualModelProblem(model)
         if (problem) return fail(record, problem)
         // The catalog serves every project, so a project's own extension cannot add to it (like a provider).
-        if (record.layer === "project") return fail(record, "registerVirtualModel: a virtual model comes from a user extension (<data dir>/extensions or a user package), not a project")
+        if (record.layer === "project") return fail(record, "registerVirtualModel: a virtual model comes from a user extension (<data dir>/extensions or a user profile), not a project")
         record.virtualModels ??= []
         if (record.virtualModels.some((entry) => entry.id === model.id)) return fail(record, `registerVirtualModel: ${model.id} is registered twice`)
         record.virtualModels.push({ id: model.id, models: [...model.models], ...(model.name ? { name: model.name } : {}), ...(model.route ? { route: model.route } : {}) })
@@ -316,7 +316,7 @@ export function createExtensions(options: ExtensionsOptions) {
         const problem = providerProblem(value)
         if (problem) return fail(record, problem)
         // Providers serve every project (like providers.json in the data dir), so a project's own extension cannot add one.
-        if (value.baseUrl !== undefined && record.layer === "project") return fail(record, "registerProvider: a provider with baseUrl comes from a user extension (<data dir>/extensions or a user package), not a project")
+        if (value.baseUrl !== undefined && record.layer === "project") return fail(record, "registerProvider: a provider with baseUrl comes from a user extension (<data dir>/extensions or a user profile), not a project")
         record.provider = value
       },
       exec: extensionExec,
@@ -413,7 +413,7 @@ export function createExtensions(options: ExtensionsOptions) {
     return records
   }
 
-  /** User-layer extensions (user folder, user packages, builtin): the same for every directory, loaded once. */
+  /** User-layer extensions (user folder, user profiles, builtin): the same for every directory, loaded once. */
   let userRecords: Promise<ExtensionRecord[]> | undefined
   const candidatesFor = (layer: ExtensionLayer) => [...discover(layer), ...discoverPluginFiles(layer.dir, options.dataDir, "server").map((file) => ({ ...file, layer })), ...(layer.source === "project" && !layer.pkg && path.basename(layer.dir) === ".mendcode" ? discoverPluginFiles(path.dirname(layer.dir), options.dataDir, "server").map((file) => ({ ...file, layer })) : [])]
   async function loadUser(layers: ExtensionLayer[], directory: string) {

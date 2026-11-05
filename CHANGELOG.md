@@ -42,6 +42,8 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Changed
 
+- Folder profiles are now called areas: `mendcode area add|list|remove` and the `areas` setting (the old `profiles` setting is still read), and `mendcode profile restore` is `mendcode customize restore`. See [areas](docs/areas.md).
+- Packages are now called profiles: `mendcode profile ...`, `/profiles`, the `profiles` tool and `mendcode-profile.json`. The old names (`mendcode package`, `/packages`, `/pkg`, `mendcode-package.json`, `disabledPackages`) still work. See [profiles](docs/profiles.md).
 - The notice for an installed update now reads `New build installed · /restart to switch`, and the message that resumes work after a usage limit lifts is worded in MendCode's own voice.
 - `/context`, the footer and the sidebar show the same used / compaction point for a session, before and after the first message; `/context` uses the provider's count of the last call (images are estimated at 1,500 tokens each) and says whether the figure is measured or estimated. With Claude Code the point is the one its process was given, the model window is listed apart, and a changed `claude_compact` point restarts the process at the next turn. See [Claude Code](docs/claude-code.md).
 - The session lists of `threads` and `sessions` (and the plan list, and other programs' chats) are shorter: one header, rows grouped by project, short ids that every tool accepts, ages like `3m`, and the state only when a session is busy.

@@ -350,13 +350,13 @@ export function createPageKeys(ctx: AppContext, actions: {
       if (action.type === "close") state.page = "chat"
       else if (action.type === "marketplace") await actions.openMarketplace()
       else if (action.type === "precedence") void actions.openPrecedence()
-      else if (action.type === "disable-all") void loadPackages({ type: "packages.disable-all", directory }, "all packages deselected")
+      else if (action.type === "disable-all") void loadPackages({ type: "profiles.disable-all", directory }, "all profiles deselected")
       else if (action.type === "reload") void loadPackages()
-      else if (action.type === "enable") void loadPackages({ type: "packages.enable", directory, key: action.key, enabled: action.enabled, ...(action.switch ? { switch: true } : {}) }, `${action.key} ${action.enabled ? "on" : "off"}`)
+      else if (action.type === "enable") void loadPackages({ type: "profiles.enable", directory, key: action.key, enabled: action.enabled, ...(action.switch ? { switch: true } : {}) }, `${action.key} ${action.enabled ? "on" : "off"}`)
       else if (action.type === "keep") actions.profileLayers().keep(action.key, action.on)
-      else if (action.type === "remove") void loadPackages({ type: "packages.remove", directory, name: action.name, scope: action.scope }, `removed ${action.scope}:${action.name} (in the Trash for 30 days: mendcode package restore)`)
-      else if (action.type === "config") void loadPackages({ type: "packages.config", directory, key: action.key })
-      else if (action.type === "resource") void loadPackages({ type: "packages.resource", directory, key: action.key, resource: action.resource, enabled: action.enabled }, `${action.resource} ${action.enabled ? "on" : "off"}`)
+      else if (action.type === "remove") void loadPackages({ type: "profiles.remove", directory, name: action.name, scope: action.scope }, `removed ${action.scope}:${action.name} (in the Trash for 30 days: mendcode profile restore)`)
+      else if (action.type === "config") void loadPackages({ type: "profiles.config", directory, key: action.key })
+      else if (action.type === "resource") void loadPackages({ type: "profiles.resource", directory, key: action.key, resource: action.resource, enabled: action.enabled }, `${action.resource} ${action.enabled ? "on" : "off"}`)
     } else if (state.page === "agent") {
       const result = agentPickerKey(state.agentPicker, key, state.agentReport)
       state.agentPicker = result.state

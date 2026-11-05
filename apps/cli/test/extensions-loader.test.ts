@@ -32,7 +32,7 @@ describe("discovery", () => {
     write("project/.mendcode/packages/pk/extensions/q.ts", "export default {}")
     write("project/.mendcode/extensions/z.ts", "export default {}")
     const found = discoverExtensions({ dataDir, directory: project })
-    // The daemon's layer order: user packages, the user's folder, project packages, the project's folder; later wins.
+    // The daemon's layer order: user profiles, the user's folder, project profiles, the project's folder; later wins.
     expect(found.map((file) => path.relative(dataDir.replace(/data$/, ""), file.file))).toEqual([
       "data/packages/pkg/extensions/p.ts",
       "data/extensions/a-folder/index.js",
@@ -45,7 +45,7 @@ describe("discovery", () => {
     expect(found[2]!.dir).toEndWith("data/extensions")
   })
 
-  test("disabled packages are skipped, and a missing directory is an empty list", () => {
+  test("disabled profiles are skipped, and a missing directory is an empty list", () => {
     const { dataDir, project, write } = layout()
     write("data/packages/off/extensions/p.ts", "export default {}")
     write("data/packages/on/extensions/p.ts", "export default {}")
@@ -55,7 +55,7 @@ describe("discovery", () => {
     expect(discoverExtensions({ dataDir: path.join(dataDir, "missing"), directory: path.join(project, "missing") })).toEqual([])
   })
 
-  test("a package's single extensions can be switched off by resource key; its other modules stay", () => {
+  test("a profile's single extensions can be switched off by resource key; its other modules stay", () => {
     const { dataDir, project, write } = layout()
     write("data/packages/kit/extensions/a.ts", "export default {}")
     write("data/packages/kit/extensions/b/index.ts", "export default {}")
@@ -66,7 +66,7 @@ describe("discovery", () => {
 })
 
 describe("loading into the app", () => {
-  test("modules load in the daemon's layer order (user packages, user, project packages, project); transforms chain in that order", async () => {
+  test("modules load in the daemon's layer order (user profiles, user, project profiles, project); transforms chain in that order", async () => {
     const { dataDir, project, write } = layout()
     write("data/extensions/b-user.ts", tag("user", "user"))
     write("data/packages/pkg/extensions/p.ts", tag("userpkg", "userpkg"))
@@ -78,12 +78,12 @@ describe("loading into the app", () => {
     expect(h.text()).toContain("hi [userpkg] [user] [projpkg] [project]")
   })
 
-  test("a package the daemon reports as disabled is not loaded", async () => {
+  test("a profile the daemon reports as disabled is not loaded", async () => {
     const { dataDir, project, write } = layout()
     write("data/packages/pkg/extensions/p.ts", tag("userpkg", "userpkg"))
     write("data/extensions/u.ts", tag("user", "user"))
     const h = await appHarness({ dataDir, directory: project })
-    await h.start({ disabledPackages: ["user:pkg"] })
+    await h.start({ disabledProfiles: ["user:pkg"] })
     h.message("question", "hi")
     expect(h.text()).toContain("hi [user]")
     expect(h.text()).not.toContain("[userpkg]")

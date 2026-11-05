@@ -1,6 +1,6 @@
 import { createVirtualClock } from "@mendcode/kernel"
 
-/** Public package fixtures: explicit events, scripted model answers and virtual time. Never calls a provider. */
+/** Public profile fixtures: explicit events, scripted model answers and virtual time. Never calls a provider. */
 export function createPackageTestHost<T>(answers: readonly string[] = []) {
   const clock = createVirtualClock()
   const listeners = new Set<(event: T) => void>()

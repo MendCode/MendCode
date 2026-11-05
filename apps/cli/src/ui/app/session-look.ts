@@ -71,7 +71,7 @@ export function switchSessionLook(ctx: AppContext, previous: string, apply: (pat
   for (const key of new Set([...Object.keys(left), ...Object.keys(own)])) {
     // The panel's cards come from the daemon's spec (right-sidebar.ts `loadSpec`), not from the profile.
     if (key === "sidebarWidgets" && !(key in own)) continue
-    // Under a session's own value is what the terminal would show without it: a package or extension layer, else the stored profile.
+    // Under a session's own value is what the terminal would show without it: a profile or extension layer, else the stored profile.
     patch[key] = key in own ? own[key as keyof TuiProfile] : key in state.profileApplied ? state.profileApplied[key] : state.profileBase[key as keyof TuiProfile]
   }
   if (Object.keys(patch).length) apply(patch as Partial<TuiProfile>)

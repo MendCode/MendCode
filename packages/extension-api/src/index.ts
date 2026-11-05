@@ -3,7 +3,7 @@
  * Types only and zod-free, so both the daemon and the thin terminal client can import it.
  *
  * Discovery: `extensions/*.ts` (or `extensions/<name>/index.ts`) in every layer — the user dir, the project's
- * `.mendcode/`, and enabled packages. Project extensions load only in trusted directories, like project tools.
+ * `.mendcode/`, and enabled profiles. Project extensions load only in trusted directories, like project tools.
  * One module may export both halves; each process calls only its own:
  *
  *   export default defineExtension({
@@ -13,8 +13,8 @@
  *   })
  *
  * Isolation: a hook that throws or exceeds HOOK_TIMEOUT_MS is skipped and reported once per extension in
- * `/extensions`; it never fails the turn. Hooks of several extensions run in load order (user, user packages,
- * project packages, project); the first `block` wins, rewrites chain.
+ * `/extensions`; it never fails the turn. Hooks of several extensions run in load order (user, user profiles,
+ * project profiles, project); the first `block` wins, rewrites chain.
  */
 
 import type { SlashMenuModel, ViewOptions, ViewRenderer, ViewSlot } from "./views"

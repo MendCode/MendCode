@@ -53,7 +53,7 @@ export const BundlePackage = z.strictObject({
   name: z.string().regex(/^[a-z0-9][a-z0-9._-]{0,63}$/),
   version: z.string().max(64).optional(),
   enabled: z.boolean(),
-  /** `skills/foo`, `commands/bar`: the package's own resources switched off. */
+  /** `skills/foo`, `commands/bar`: the profile's own resources switched off. */
   disabledResources: z.array(z.string().max(200)).max(500),
   /** Top-level entries that run code on their own once enabled (tools, hooks, MCP, extensions, workflows, status line). */
   autoRuns: z.array(z.string().max(100)).max(50),

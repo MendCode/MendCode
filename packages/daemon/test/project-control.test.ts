@@ -112,9 +112,9 @@ test("context refresh/show detect same-sized edits, removals and local script/de
   expect(String((await h.run({ operation: "context-show" })).text)).toContain("Missing optional inputs")
 })
 
-test("package metadata patches only supplied fields, clears empty values and reports invalid config", async () => {
+test("profile metadata patches only supplied fields, clears empty values and reports invalid config", async () => {
   const h = await fixture()
-  put(h.project, "package.json", JSON.stringify({ name: "fallback", description: "package description" }))
+  put(h.project, "package.json", JSON.stringify({ name: "fallback", description: "profile description" }))
   put(h.project, ".mendcode/project.json", JSON.stringify({ preserved: 7, package: { version: "2.0", source: { type: "git" }, selection: { tools: ["review"] } } }))
   expect(await h.run({ operation: "package-show" })).toMatchObject({ title: "fallback", version: "2.0", channel: "local", selection: { tools: ["review"] } })
   expect(await h.run({ operation: "package-set", patch: { id: "test", title: "Sample", description: "Owned", kind: "bundle", channel: "stable", sourceURL: "https://example.test", compatMendcode: ">=2", compatRuntimePack: "native" } })).toMatchObject({ id: "test", source: { type: "git", url: "https://example.test" }, compatibility: { mendcode: ">=2", runtimePack: "native" } })

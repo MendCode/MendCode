@@ -39,7 +39,7 @@ pull requests.
 
 - [Why MendCode](#why-mendcode)
 - [Install](#install) · [First run](#first-run)
-- [What it does](#what-it-does): [sessions](#sessions-that-outlive-the-terminal), [pull request reviews](#pull-request-reviews), [memory](#memory-you-can-read-and-edit), [packages and profiles](#packages-and-profiles), [long work](#goals-loops-and-sub-agents), [/changes](#review-the-diff-before-you-commit), [engines](#one-screen-several-engines)
+- [What it does](#what-it-does): [sessions](#sessions-that-outlive-the-terminal), [pull request reviews](#pull-request-reviews), [memory](#memory-you-can-read-and-edit), [profiles and areas](#profiles-and-areas), [long work](#goals-loops-and-sub-agents), [/changes](#review-the-diff-before-you-commit), [engines](#one-screen-several-engines)
 - [Status](#status) · [Build from source](#build-from-source)
 - Reference: [views](#replaceable-views), [script workflows](#script-workflows), [Markdown](#markdown-renderer), [process modes](#process-modes), [terminal details](#terminal-details), [tiers](#tiers), [measurements](#measurements), [engines](#engines), [embedding](#embedding), [security](#security-model), [docs](#docs-and-development)
 
@@ -52,8 +52,8 @@ pull requests.
 | A model that reads less of your repository | A code graph answers where a symbol is and who calls it, with exact `file:line` ([code graph](docs/code-graph.md)) |
 | Long sessions that do not forget | Compaction packs the conversation and keeps a scratchpad of what was folded ([compaction](docs/compaction.md)) |
 | Reviews you can trust | Two passes on every pull request: one finds defects, a fresh one tries to refute each ([PR reviewer](docs/pr-review.md)) |
-| A whole setup you can swap and share | One package carries a theme, home screen, prompt, keys, views, skills and commands; turning it off puts everything back ([packages](docs/packages.md)) |
-| Work kept apart from personal | A profile is a set of folders with its own user memories, model roles and default permission, applied without switching ([profiles](docs/profiles.md)) |
+| A whole setup you can swap and share | One profile carries a theme, home screen, prompt, keys, views, skills and commands; turning it off puts everything back ([profiles](docs/profiles.md)) |
+| Work kept apart from personal | An area is a set of folders with its own user memories, model roles and default permission, applied without switching ([areas](docs/areas.md)) |
 | As much or as little as you like | Three tiers, minimalist, balanced and full, from a plain prompt to every panel ([tiers](#tiers)) |
 
 ## Install
@@ -200,22 +200,22 @@ memories as related, supports, supersedes or conflicts; a memory linked to one t
   <img src="docs/assets/readme/memory-graph.svg" alt="The memory page's Graph tab: saved memories and their links around the selected one, drawn as braille lines, with the selected memory and its links in a box beside it." width="100%">
 </p>
 
-### Packages and profiles
+### Profiles and areas
 
-A package is a whole setup in one folder: a theme, the terminal profile (logo, home screen, prompt box, density, slash menu,
+A profile is a whole setup in one folder: a theme, the terminal settings (logo, home screen, prompt box, density, slash menu,
 panel cards), the right panel, keybindings, prompt files and any of the 22 view slots that draw the transcript, plus the skills,
 commands, agents, MCP servers and workflows it adds. It is an overlay: nothing is written into your settings, and turning it off
-puts everything back. `/packages` then `o` lists every setting, key and view it takes over, and `k` keeps your own value for one.
-`mendcode package new mylook` writes a complete package to start from, and anyone installs yours with
-`mendcode package install github:you/mylook` ([packages](docs/packages.md)).
+puts everything back. `/profiles` then `o` lists every setting, key and view it takes over, and `k` keeps your own value for one.
+`mendcode profile new mylook` writes a complete profile to start from, and anyone installs yours with
+`mendcode profile install github:you/mylook` ([profiles](docs/profiles.md)).
 
-A profile is a set of folders. `mendcode profile add company ~/Code/acme` gives everything under it its own user memories, model
+An area is a set of folders. `mendcode area add company ~/Code/acme` gives everything under it its own user memories, model
 roles and default permission; open a terminal there and you are working as `company`, shown as `◆ company` under the prompt.
-Everything else is personal ([profiles](docs/profiles.md)). Your own setup moves to another machine as one checked file
+Everything else is personal ([areas](docs/areas.md)). Your own setup moves to another machine as one checked file
 ([config bundles](docs/config-bundle.md)).
 
 <p align="center">
-  <img src="docs/assets/readme/packages.svg" alt="The packages page listing what the retro example package takes over: theme, home screen, prompt box, slash menu, panel cards, two keys and two views, each from the default to the package's value." width="100%">
+  <img src="docs/assets/readme/profiles.svg" alt="The profiles page listing what the retro example profile takes over: theme, home screen, prompt box, slash menu, panel cards, two keys and two views, each from the default to the profile's value." width="100%">
 </p>
 
 ### Goals, loops and sub-agents
@@ -329,8 +329,8 @@ Generated from [tier-data.ts](packages/protocol/src/tier-data.ts), including eve
 |---|---|---|---|---|
 | [Slash menu layouts](docs/customize.md) (`slash_menu`) | Kernel | Kernel | Kernel | /customize · slashMenu · slashCommands (minimalist lists 20 commands, flat) |
 | [Extensions](docs/extensions.md) (`extensions`) | Kernel | Kernel | Kernel | MENDCODE_EXTENSIONS=0 · --pure |
-| [Installed packages](docs/packages.md) (`packages`) | Kernel | Kernel | Kernel | disabledPackages · /marketplace |
-| [Package chat tools](docs/packages.md) (`package_tools`) | — | Included | Included | features.package_tools |
+| [Installed profiles](docs/profiles.md) (`profiles`) | Kernel | Kernel | Kernel | disabledProfiles · /marketplace |
+| [Profile chat tools](docs/profiles.md) (`profile_tools`) | — | Included | Included | features.profile_tools |
 | [Shell hooks](docs/hooks.md) (`hooks`) | Kernel | Kernel | Kernel | MENDCODE_HOOKS=0 |
 | [MCP servers](docs/mcp-oauth.md) (`mcp`) | — | — | Included | mcp.json |
 | [Code graph tools](docs/code-graph.md) (`codegraph`) | — | Included | Included | MENDCODE_CODEGRAPH=0 |
@@ -362,11 +362,11 @@ Generated from [tier-data.ts](packages/protocol/src/tier-data.ts), including eve
 | [Graph orientation and impact](docs/code-graph.md) (`graph_context`) | — | Opt-in | Opt-in | /tier graph_context on (off until then: the model calls the graph tools itself) |
 | [Focused session handoff](docs/sessions.md) (`handoff`) | — | Included | Included | /handoff &lt;goal&gt; |
 | [Instruction includes](docs/prompt-modes.md) (`instruction_includes`) | — | Included | Included | @relative/path in AGENTS.md |
-| [Package capability preview](docs/packages.md) (`package_capabilities`) | — | Included | Included | /marketplace preview |
+| [Profile capability preview](docs/profiles.md) (`profile_capabilities`) | — | Included | Included | /marketplace preview |
 | [Caveman prose style](docs/prompt-modes.md) (`caveman`) | — | Opt-in | Opt-in | /output-style caveman |
 | [PDF and repository fetch](docs/tools-web.md) (`webfetch_modes`) | — | Opt-in | Opt-in | webfetch mode |
 | [Deferred MCP tools](docs/tool-discovery.md) (`tool_discovery`) | — | — | Included | experimental.tool_discovery |
-| [Official package kit](docs/packages.md) (`official_packages`) | — | Opt-in | Opt-in | Explicit local catalog install |
+| [Official profile kit](docs/profiles.md) (`official_profiles`) | — | Opt-in | Opt-in | Explicit local catalog install |
 | [Durable orchestration receipts](docs/thread-mcp.md) (`orchestration_receipts`) | Kernel | Kernel | Kernel | clientRequestId on thread mutations |
 | [Metric experiments](docs/loops.md) (`autoresearch`) | — | — | Opt-in | On-demand metric-experiment skill |
 | [Explicit web routes](docs/tools-web.md) (`web_routing`) | — | Opt-in | Opt-in | On-demand explicit-web skill |
@@ -453,7 +453,7 @@ External engines retain their own authentication and tool loops. Fake transports
 
 ## Docs and development
 
-[Commands](docs/commands.md) · [Customization](docs/customize.md) · [Views](docs/views.md) · [Workflows](docs/workflows.md) · [Memory](docs/memory.md) · [Compaction](docs/compaction.md) · [Worktrees](docs/worktrees.md) · [Packages](docs/packages.md) · [Usage limits](docs/usage-limit.md) · [Upgrade](docs/upgrade.md) · [Uninstall](docs/uninstall.md) · [Migrating from the legacy MendCode](docs/migrate-v1.md)
+[Commands](docs/commands.md) · [Customization](docs/customize.md) · [Views](docs/views.md) · [Workflows](docs/workflows.md) · [Memory](docs/memory.md) · [Compaction](docs/compaction.md) · [Worktrees](docs/worktrees.md) · [Profiles](docs/profiles.md) · [Usage limits](docs/usage-limit.md) · [Upgrade](docs/upgrade.md) · [Uninstall](docs/uninstall.md) · [Migrating from the legacy MendCode](docs/migrate-v1.md)
 
 ```sh
 bun test scripts/readme-tiers.test.ts apps/cli/test/footprint.test.ts apps/cli/test/tui-automation.test.ts

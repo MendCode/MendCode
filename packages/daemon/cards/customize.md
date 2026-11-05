@@ -1,7 +1,7 @@
 ---
-summary: the terminal look: profile keys, presets, schema, rollback
+summary: the terminal look: customize keys, presets, schema, rollback
 docs: customize, automation, config-bundle
-aliases: look, profile, appearance, ui, density, logo, view, config-bundle, migrate-setup
+aliases: look, terminal-settings, appearance, ui, density, logo, view, config-bundle, migrate-setup
 ---
 The look of the terminal is a profile (<data dir>/tui/profile.json): theme, density, view, prompt box and border, logo, tagline, home layout, footer, sidebar, markdown style, pet, slash menu, and about 190 more keys.
 
@@ -14,7 +14,7 @@ Current values: {{program}} control-plane tui profile  (or status)
 Presets (the user's terminal; from your shell use customize_ui, the CLI only reads): {{program}} control-plane tui apply-preset compact|comfortable|spacious|toggle-worktree. Every apply returns a backup id; {{program}} control-plane tui rollback [--backup ID] restores it. --dry-run validates without changing.
 The user's way: /customize (a page with every control and a live preview), /theme, /view.
 
-Not a profile key: the theme itself has its own card (theme), key bindings (keys), the footer rows, icons and presets (footerRows and /footer preset: card footer; no extension needed), layout and drawing that need code (extensions).
-Packages can carry a whole look (theme, profile values, keys, views) and turn it on and off: {{program}} docs packages.
-A package may not set keys that start things or touch the clipboard (processMode, altScreen, copyOnSelect, turnNotify, fileOpener, ...); only the user sets those, with /customize.
-Move the user's whole setup (profile, own skills/commands/agents, AGENTS.md, keybindings, installed packages and their state, preference settings) to another machine: {{program}} config-bundle inventory | export <file> | inspect <file> | import <file> (preview; prints a plan id) | import <file> --apply --plan ID [--on-conflict keep|replace] [--resolve ITEM=keep|replace] [--rewrite-home] | rollback <import-id>. Secrets, history and trust never travel; code is quarantined, MCP arrives pending in /mcp, models/permissions/budgets wait in pending.json; journal.json, backups and report.json stay under config-imports/<id>/. A session cannot apply one: give the user the command. packages create is different: it snapshots a project's .mendcode/ only.
+Not a customize key: the theme itself has its own card (theme), key bindings (keys), the footer rows, icons and presets (footerRows and /footer preset: card footer; no extension needed), layout and drawing that need code (extensions).
+Profiles can carry a whole look (theme, profile values, keys, views) and turn it on and off: {{program}} docs profiles.
+A profile may not set keys that start things or touch the clipboard (processMode, altScreen, copyOnSelect, turnNotify, fileOpener, ...); only the user sets those, with /customize.
+Move the user's whole setup (profile, own skills/commands/agents, AGENTS.md, keybindings, installed profiles and their state, preference settings) to another machine: {{program}} config-bundle inventory | export <file> | inspect <file> | import <file> (preview; prints a plan id) | import <file> --apply --plan ID [--on-conflict keep|replace] [--resolve ITEM=keep|replace] [--rewrite-home] | rollback <import-id>. Secrets, history and trust never travel; code is quarantined, MCP arrives pending in /mcp, models/permissions/budgets wait in pending.json; journal.json, backups and report.json stay under config-imports/<id>/. A session cannot apply one: give the user the command. profiles create is different: it snapshots a project's .mendcode/ only.

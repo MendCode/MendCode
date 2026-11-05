@@ -224,11 +224,11 @@ function memoryFrame(): Line[] {
   return renderMemoryPage({ memories: nodes, state, directory: "/work/shop-api", width: COLUMNS, height: ROWS, now: NOW, graph, data: { workspaces: { workspaces: [], omitted: 0 }, currentDirectory: "/work/shop-api" } })
 }
 
-const RETRO = new URL("../examples/packages/retro/", import.meta.url).pathname
+const RETRO = new URL("../examples/profiles/retro/", import.meta.url).pathname
 
 /** /packages, overrides list: what the retro example package takes over, resolved by the daemon's own resolver from its real manifest and keys. */
 function packagesFrame(): Line[] {
-  const manifest = JSON.parse(readFileSync(path.join(RETRO, "mendcode-package.json"), "utf8")) as { activate: Activation; name: string; version: string; description: string }
+  const manifest = JSON.parse(readFileSync(path.join(RETRO, "mendcode-profile.json"), "utf8")) as { activate: Activation; name: string; version: string; description: string }
   const keybindings = JSON.parse(readFileSync(path.join(RETRO, "keybindings.json"), "utf8")) as Record<string, string>
   const key = "user:retro"
   const retro: PackageInfo = {
@@ -356,7 +356,7 @@ export const SCENES: Scene[] = [
   { file: "goal.svg", title: "mendcode — /goal", frame: () => shopSession({ goal: true }) },
   { file: "changes.svg", title: "mendcode — /changes", frame: changesFrame },
   { file: "memory-graph.svg", title: "mendcode — /memory", frame: memoryFrame },
-  { file: "packages.svg", title: "mendcode — /packages", frame: packagesFrame },
+  { file: "profiles.svg", title: "mendcode — /packages", frame: packagesFrame },
 ]
 
 export const IMAGES_DIR = new URL("../docs/assets/readme/", import.meta.url).pathname

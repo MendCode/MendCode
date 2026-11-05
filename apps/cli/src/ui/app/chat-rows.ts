@@ -213,7 +213,7 @@ export function createChatRows(ctx: AppContext, actions: {
     const extBelow = promptSlotRows("prompt.below", width, height)
     // Pending comments on the answer (docs/editor.md): the reply bar and the chips above the prompt, or the chips under it.
     const commentRows = inlineView ? { above: [] as Line[], below: [] as Line[], chip: undefined } : comments.rows({ width, height })
-    // The minimal view has no footer of its own; rows the user (or a package's look) set in `footerRows` are asked for, so they show,
+    // The minimal view has no footer of its own; rows the user (or a profile's look) set in `footerRows` are asked for, so they show,
     // and so is the footer an extension draws in or beside (`footer.*` slots).
     const extFooter = !!state.ext && extOn() && (["footer.replace", "footer.left", "footer.right"] as const).some((slot) => state.ext!.hasSlot(slot))
     const minimalRows = minimal && state.tuiProfile.showStatus && (state.tuiProfile.footerRows.length > 0 || extFooter) ? actions.statusRows(width) : []

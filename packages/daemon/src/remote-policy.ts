@@ -1,10 +1,10 @@
 import type { TurnOptions } from "@mendcode/protocol"
 
 export function remoteExecutionCommand(type: string): boolean {
-  return ["tools.trust", "packages.install", "packages.capture", "lsp.install", "packages.remove", "packages.restore", "packages.enable", "packages.resource", "packages.preview", "packages.install-catalog", "packages.install-source", "packages.add-source", "packages.remove-source", "packages.refresh", "packages.disable-all", "mcp.decide"].includes(type)
+  return ["tools.trust", "profiles.install", "profiles.capture", "lsp.install", "profiles.remove", "profiles.restore", "profiles.enable", "profiles.resource", "profiles.preview", "profiles.install-catalog", "profiles.install-source", "profiles.add-source", "profiles.remove-source", "profiles.refresh", "profiles.disable-all", "mcp.decide"].includes(type)
 }
 
-const EXECUTION_SETTINGS = ["acpAgents", "tier", "features", "experimental", "tools", "threadMcp", "disabledExtensions", "disabledPackages", "disabledPackageResources", "sandbox", "trustedToolDirs", "allowedHttpHookUrls", "permission", "permissionAllow", "smartSandboxTrust", "engineSafetyPrompts", "engineEnvironment", "ownLogins", "projectConfig"]
+const EXECUTION_SETTINGS = ["acpAgents", "tier", "features", "experimental", "tools", "threadMcp", "disabledExtensions", "disabledProfiles", "disabledProfileResources", "sandbox", "trustedToolDirs", "allowedHttpHookUrls", "permission", "permissionAllow", "smartSandboxTrust", "engineSafetyPrompts", "engineEnvironment", "ownLogins", "projectConfig"]
 /** Proxy, shell and web policy: set on the machine that runs the commands, never by a remote client. */
 export const REMOTE_HOST_SETTINGS = ["proxy", "shellEnvironment", "shellCommandPrefix", "loginShell", "web"]
 /** Every key `settings.set` refuses to a remote or a peer client, whichever rule refuses it. */
@@ -22,7 +22,7 @@ export function localOnlySettings(patch: object): string[] {
 
 /** Native turns from a peer must not acquire the new host-local tool surfaces. */
 export function remoteTurnOptions(options?: TurnOptions): TurnOptions {
-  return { ...options, excludeTools: [...new Set([...(options?.excludeTools ?? []), "threads", "packages", "pr_watch", "review_config", "pr_review", "session_meta", "graph_*", "webfetch", "memory", "memory_graph", "remember", "workflow_script"])] }
+  return { ...options, excludeTools: [...new Set([...(options?.excludeTools ?? []), "threads", "profiles", "packages", "pr_watch", "review_config", "pr_review", "session_meta", "graph_*", "webfetch", "memory", "memory_graph", "remember", "workflow_script"])] }
 }
 
 export function continuationTurnOptions(options: TurnOptions | undefined, restricted: boolean): TurnOptions | undefined {

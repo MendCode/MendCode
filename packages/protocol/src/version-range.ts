@@ -1,5 +1,5 @@
 /**
- * The version ranges a package's `compatibility.mendcode` may use, checked at enable (docs/packages.md). Pure and tiny on
+ * The version ranges a package's `compatibility.mendcode` may use, checked at enable (docs/profiles.md). Pure and tiny on
  * purpose: `>=1.2.0`, `^0.3`, `~1.2.3`, `1.x`, `*`, an exact `1.2.3`, and several of them joined by spaces (all must hold).
  * A pre-release or build suffix on the app's version is ignored: `0.0.1-dev` counts as `0.0.1`.
  */

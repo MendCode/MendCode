@@ -23,17 +23,17 @@ function write(file: string, text: string) {
   writeFileSync(file, text)
 }
 
-/** Broken packages in the data dir before the daemon starts: it must come up, answer, and keep the good package working. */
-test("a daemon with broken packages installed starts, lists them with their problem, and the good package still works", async () => {
+/** Broken profiles in the data dir before the daemon starts: it must come up, answer, and keep the good profile working. */
+test("a daemon with broken profiles installed starts, lists them with their problem, and the good profile still works", async () => {
   const dir = temp("mendd-broken-")
   const project = temp("mendd-broken-proj-")
   const packages = path.join(dir, "packages")
-  write(path.join(packages, "good", "mendcode-package.json"), JSON.stringify({ name: "good", version: "1.0.0", description: "works" }))
+  write(path.join(packages, "good", "mendcode-profile.json"), JSON.stringify({ name: "good", version: "1.0.0", description: "works" }))
   write(path.join(packages, "good", "commands", "hello.md"), "say hello")
   // Invalid manifest.
-  write(path.join(packages, "badmanifest", "mendcode-package.json"), "{ not json")
+  write(path.join(packages, "badmanifest", "mendcode-profile.json"), "{ not json")
   // Valid manifest, every loader fed garbage.
-  write(path.join(packages, "garbage", "mendcode-package.json"), JSON.stringify({ name: "garbage", version: "1.0.0", description: "garbage everywhere", activate: { tuiProfile: { permissionMode: "bypass" } } }))
+  write(path.join(packages, "garbage", "mendcode-profile.json"), JSON.stringify({ name: "garbage", version: "1.0.0", description: "garbage everywhere", activate: { tuiProfile: { permissionMode: "bypass" } } }))
   write(path.join(packages, "garbage", "tools", "broken.json"), "{ nope")
   write(path.join(packages, "garbage", "hooks.json"), "[[[")
   write(path.join(packages, "garbage", "mcp.json"), "not json")
@@ -44,7 +44,7 @@ test("a daemon with broken packages installed starts, lists them with their prob
   write(path.join(packages, "garbage", "extensions", "throws.ts"), "throw new Error('boom at import')")
   write(path.join(packages, "garbage", "SYSTEM.md"), "x".repeat(10))
   // A manifest that names a file that does not exist.
-  write(path.join(packages, "ghost", "mendcode-package.json"), JSON.stringify({ name: "ghost", version: "1.0.0", description: "g", activate: { keybindings: "missing.json" } }))
+  write(path.join(packages, "ghost", "mendcode-profile.json"), JSON.stringify({ name: "ghost", version: "1.0.0", description: "g", activate: { keybindings: "missing.json" } }))
 
   const daemon = await startDaemon({ dir, socketPath: path.join(dir, "mendd.sock"), engine: ({ clock }) => createFauxEngine({ clock, deltaMs: 1 }) })
   cleanups.push(() => daemon.stop())
@@ -52,7 +52,7 @@ test("a daemon with broken packages installed starts, lists them with their prob
   await client.connect()
   cleanups.push(() => client.close())
 
-  const list = await client.send({ type: "packages.list", directory: project })
+  const list = await client.send({ type: "profiles.list", directory: project })
   expect(list.ok).toBe(true)
   const report = ((list as { result?: unknown }).result as PackagesReport).packages
   expect(report.map((pkg) => pkg.key).sort()).toEqual(["user:badmanifest", "user:garbage", "user:ghost", "user:good"])

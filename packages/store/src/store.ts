@@ -17,7 +17,9 @@ import { createUsageWidgets } from "./usage-widgets"
 import { existsSync, lstatSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs"
 import path from "node:path"
 import {
-  DEFAULT_PROFILE,
+  DEFAULT_AREA,
+  RENAMED_SETTINGS,
+  currentSettingKeys,
   type MemoryLink,
   type MemoryLinkKind,
   GlobalEvent,
@@ -96,7 +98,7 @@ function validSettings(payload: string | undefined): Record<string, unknown> {
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) raw = parsed as Record<string, unknown>
   } catch { /* The history keeps the original; a normal write will refuse to replace corrupt JSON. */ }
   const clean: Record<string, unknown> = {}
-  for (const [key, value] of Object.entries(raw)) {
+  for (const [key, value] of Object.entries(currentSettingKeys(raw))) {
     const kept = savedSetting(key, value)
     if (Settings.safeParse({ [key]: kept }).success) clean[key] = kept
   }
@@ -135,7 +137,7 @@ const MEMORY_SELECT = `SELECT ${memoryColumns()} FROM memories`
 /** Links one memory may have, so the graph (and its payload) stays bounded (P11). */
 export const MAX_MEMORY_LINKS = 16
 /** The stored profile of a memory: '' for personal, so rows from before profiles belong to personal. */
-const profileKey = (profile: string | undefined) => (profile === undefined ? null : profile === DEFAULT_PROFILE ? "" : profile)
+const profileKey = (profile: string | undefined) => (profile === undefined ? null : profile === DEFAULT_AREA ? "" : profile)
 
 function toMemory(row: MemoryRow): MemoryEntry {
   return {
@@ -641,6 +643,7 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
   /** `current` with `patch` merged (`null` removes a key) and validated; `saveAcp` writes the ACP part, which lives in its own file. */
   const mergedSettings = (current: Settings, patch: Record<string, unknown>) => {
     const next: Record<string, unknown> = { ...current }
+    patch = currentSettingKeys(patch)
     delete next.acpAgents
     const saveAcp = "acpAgents" in patch ? acpSettings.prepare(patch.acpAgents) : undefined
     for (const [key, value] of Object.entries(patch)) {
@@ -1331,7 +1334,7 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
         let raw: Record<string, unknown> = {}
         try { raw = row ? JSON.parse(row.payload) as Record<string, unknown> : {} } catch { return ["saved settings are not valid JSON"] }
         const lines: string[] = []
-        for (const [key, value] of Object.entries(raw)) {
+        for (const [key, value] of Object.entries(currentSettingKeys(raw))) {
           if (key === "features" && value && typeof value === "object" && !Array.isArray(value)) {
             for (const id of ["opencode", "cursor"]) if (Object.hasOwn(value, id)) lines.push(`unknown feature ${id}: ignored`)
           }
@@ -1350,12 +1353,14 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
       /** Merges a patch; `null` removes a key. Throws a ZodError when the result is invalid. */
       set(patch: Record<string, unknown>): Settings {
         const current = this.get()
+        patch = currentSettingKeys(patch)
         const { valid, saveAcp } = mergedSettings(current, patch)
         saveAcp?.()
         db.transaction(() => {
           const row = db.query<{ payload: string }, []>("SELECT payload FROM settings WHERE id = 1").get()
           const raw = row ? JSON.parse(row.payload) as Record<string, unknown> : {}
           if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("Invalid stored settings; restore a backup before saving")
+          for (const [old, now] of Object.entries(RENAMED_SETTINGS)) if (now in patch) delete raw[old]
           for (const [key, value] of Object.entries(patch)) {
             if (key === "acpAgents") continue
             if (value === null) delete raw[key]

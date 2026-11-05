@@ -15,12 +15,12 @@ import { appHarness } from "./extensions-harness"
 import { budgetMs } from "../../../scripts/test-budget"
 
 /**
- * The promise of docs/packages.md, end to end on a real daemon in a temp dir: install a full reskin, enable it, every surface
+ * The promise of docs/profiles.md, end to end on a real daemon in a temp dir: install a full reskin, enable it, every surface
  * changes, edit it and it reloads, disable it and every frame equals the default byte for byte, remove it and it stays that way.
  * `PACKAGE_RESKIN_FRAMES=<dir>` also writes the frames (plain text, and with colors) for reading.
  */
 
-const EXAMPLE = path.join(import.meta.dir, "..", "..", "..", "examples", "packages", "retro")
+const EXAMPLE = path.join(import.meta.dir, "..", "..", "..", "examples", "profiles", "retro")
 const SIZES = [{ width: 100, height: 30 }, { width: 200, height: 60 }] as const
 const FRAMES_OUT = process.env.PACKAGE_RESKIN_FRAMES
 
@@ -57,7 +57,7 @@ async function boot() {
 type Boot = Awaited<ReturnType<typeof boot>>
 type Surface = "chat" | "slash" | "home"
 
-/** One live terminal per surface and size: the same instance goes default -> package -> default, like a user's would. */
+/** One live terminal per surface and size: the same instance goes default -> profile -> default, like a user's would. */
 async function terminal(env: Boot, size: { width: number; height: number }, surface: Surface) {
   const h = await appHarness({ dataDir: env.dir, directory: env.project, width: size.width, height: size.height, reply: (command) => env.client.send(command as never) })
   await h.start({ onboarded: true, ...(await env.settings()) } as never)
@@ -117,7 +117,7 @@ async function shots(all: Array<{ key: string; h: Terminal }>) {
   return out
 }
 
-describe("the Retro package changes every surface and puts everything back", () => {
+describe("the Retro profile changes every surface and puts everything back", () => {
   test("install -> enable -> frames differ per surface -> hot reload -> disable -> byte-equal default -> remove", async () => {
     // The palette is process-wide state another test file may have left behind: start from the default one.
     setTheme("mend")
@@ -131,8 +131,8 @@ describe("the Retro package changes every surface and puts everything back", () 
 
     const base = await shots(live)
 
-    // Install: the package comes on, claims the look and applies as an overlay.
-    const installed = await env.send({ type: "packages.install", source: EXAMPLE, scope: "user" })
+    // Install: the profile comes on, claims the look and applies as an overlay.
+    const installed = await env.send({ type: "profiles.install", source: EXAMPLE, scope: "user" })
     expect(installed.ok).toBe(true)
     expect((installed.result as PackagesReport).packages.map((pkg) => [pkg.key, pkg.enabled])).toEqual([["user:retro", true]])
     await sync(env, terminals)
@@ -148,17 +148,17 @@ describe("the Retro package changes every surface and puts everything back", () 
     expect(on[at(small, "chat")]!.plain).toMatch(/\[READ\] src\/main\.ts/)
     expect(on[at(small, "chat")]!.plain).toMatch(/\[SHELL\] make test/)
     expect(base[at(small, "chat")]!.plain).not.toMatch(/\[ASSISTANT\]|\[READ\]/)
-    // Slash menu: its own layout, with the package's pinned command in it.
+    // Slash menu: its own layout, with the profile's pinned command in it.
     expect(on[at(small, "slash")]!.plain).toContain("retro-crt")
     expect(base[at(small, "slash")]!.plain).not.toContain("retro-crt")
-    // Home: wordmark and tagline from the package.
+    // Home: wordmark and tagline from the profile.
     expect(on[at(small, "home")]!.plain).toContain("phosphor edition")
     expect(base[at(small, "home")]!.plain).not.toContain("phosphor edition")
     // Skill and workflow reach the daemon's layers.
     const skills = (await env.send({ type: "skills.list" })).result as { skills: Array<{ name: string }> }
     expect(skills.skills.map((skill) => skill.name)).toContain("retro-style")
     expect(readWorkflowScripts(extensionLayers({ userDir: env.dir, directory: env.project })).map((script) => script.name)).toContain("retro-review")
-    // Keybindings and panel: alt+g is the package's key and opens the right panel with the package's cards.
+    // Keybindings and panel: alt+g is the profile's key and opens the right panel with the profile's cards.
     const chat = live.find((entry) => entry.key === at(large, "chat"))!.h
     const closed = plain(chat.frames.at(-1)!)
     await chat.key("\x1bg")
@@ -178,17 +178,17 @@ describe("the Retro package changes every surface and puts everything back", () 
     await chat.key("\x1bg")
     expect(plain(chat.frames.at(-1)!)).toBe(closed)
 
-    // One precedence report (/packages, p): which layer is in force for every key the package takes, and what it overrides.
-    await chat.type("/packages")
+    // One precedence report (/profiles, p): which layer is in force for every key the profile takes, and what it overrides.
+    await chat.type("/profiles")
     await chat.key("\r")
     await Bun.sleep(80)
     await chat.key("p")
     // `p` asks the daemon for the layers' files and opens the page when the answer is in: wait for the page, not for a fixed time.
     const precedence = await frameWith(chat, "Precedence")
-    if (FRAMES_OUT) writeFileSync(path.join(FRAMES_OUT, `retro-${at(large, "chat")}-packages-precedence.txt`), `${at(large, "chat")} /packages p (retro)\n${"=".repeat(40)}\n${precedence}\n`)
+    if (FRAMES_OUT) writeFileSync(path.join(FRAMES_OUT, `retro-${at(large, "chat")}-packages-precedence.txt`), `${at(large, "chat")} /profiles p (retro)\n${"=".repeat(40)}\n${precedence}\n`)
     expect(precedence).toContain("Precedence")
-    expect(precedence).toContain("Profile keys")
-    expect(precedence).toMatch(/promptBorder: package user:retro \(profile\) · overrides your settings/)
+    expect(precedence).toContain("Terminal settings")
+    expect(precedence).toMatch(/promptBorder: profile user:retro \(terminal settings\) · overrides your settings/)
     await chat.key("\x1b")
     await chat.key("\x1b")
     chat.app.render()
@@ -203,16 +203,16 @@ describe("the Retro package changes every surface and puts everything back", () 
     expect(edited[at(large, "chat")]!.plain).not.toContain("▌")
 
     // Disable: every frame is the default again, byte for byte.
-    const disabled = await env.send({ type: "packages.enable", key: "user:retro", enabled: false })
+    const disabled = await env.send({ type: "profiles.enable", key: "user:retro", enabled: false })
     expect(disabled.ok).toBe(true)
     await sync(env, terminals)
     const off = await shots(live)
     for (const key of Object.keys(base)) expect([key, off[key]!.ansi]).toEqual([key, base[key]!.ansi])
-    // The package only ever wrote its own off switch.
-    expect((await env.settings()).disabledPackages).toEqual(["user:retro"])
+    // The profile only ever wrote its own off switch.
+    expect((await env.settings()).disabledProfiles).toEqual(["user:retro"])
 
     // Remove: still the default, and the folder is in the Trash, restorable.
-    const removed = await env.send({ type: "packages.remove", name: "retro", scope: "user" })
+    const removed = await env.send({ type: "profiles.remove", name: "retro", scope: "user" })
     expect(removed.ok).toBe(true)
     await sync(env, terminals)
     const gone = await shots(live)

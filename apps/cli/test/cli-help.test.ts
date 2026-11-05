@@ -120,14 +120,14 @@ describe("every command's help", () => {
   })
 
   test("the subcommands listed by the larger helps are accepted", () => {
-    for (const topic of ["memory", "loop", "workflow", "recipe", "profile", "package", "backlog"]) {
+    for (const topic of ["memory", "loop", "workflow", "recipe", "area", "profile", "backlog"]) {
       const lines = helpText(topic).split("\n").filter((line) => /^ {2}[a-z]/.test(line))
       const subs = [...new Set(lines.flatMap((line) => /^ {2}(\S+)/.exec(line)![1]!.split("|")))].filter((word) => /^[a-z][a-z-]*$/.test(word))
       expect(subs.length).toBeGreaterThan(1)
       for (const sub of subs) {
         const parsed = parseAutomation([topic, sub, "x", "y"])
         const unknown = parsed.ok === false && /unknown/.test(parsed.message)
-        const elsewhere = topic === "package" && parsePackageFileCommand(["package", sub, "x"]) !== undefined
+        const elsewhere = topic === "profile" && parsePackageFileCommand(["profile", sub, "x"]) !== undefined
         expect([topic, sub, !unknown || elsewhere]).toEqual([topic, sub, true])
       }
     }

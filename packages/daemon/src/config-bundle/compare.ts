@@ -29,7 +29,7 @@ export function compareWithBundle(input: { plan: ImportPlan; dataDir: string; se
   const { plan } = input
   const dataDir = path.resolve(input.dataDir)
   const rows: CompareRow[] = []
-  const disabled = Array.isArray(input.settings.disabledPackages) ? input.settings.disabledPackages as string[] : []
+  const disabled = Array.isArray(input.settings.disabledProfiles) ? input.settings.disabledProfiles as string[] : []
   const profile = readJson(path.join(dataDir, "tui", "profile.json"))
   let servers: Record<string, Record<string, unknown>> = {}
   try { servers = readMcpServers(path.join(dataDir, "mcp.json")) } catch { servers = {} }

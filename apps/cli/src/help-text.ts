@@ -260,7 +260,7 @@ export const PLUGIN_HELP = text([
 export const RECIPE_HELP = text([
   `usage: ${P} recipe <command> [--json]`,
   "",
-  "  list                    recipes of every layer (built-in, packages, user,",
+  "  list                    recipes of every layer (built-in, profiles, user,",
   "                          project); * marks the active one",
   "  apply <name>            set every model role from the recipe",
 ])
@@ -353,7 +353,7 @@ export const CONTROL_PLANE_HELP = text([
   "  budget status|doctor",
   "",
   "Other areas have their own help: project, worktree, mflow, tsm, models,",
-  "providers, auth, mcp, memory, prompt, loops, workflows, packages.",
+  "providers, auth, mcp, memory, prompt, loops, workflows, profiles.",
 ])
 
 export const PROJECT_HELP = text([
@@ -395,15 +395,25 @@ export const CONFIG_BUNDLE_HELP = text([
   "  rollback <import-id>    undo one import (--force: also items changed since)",
 ])
 
-export const PROFILE_HELP = text([
-  `usage: ${P} profile <command> [--json]`,
+export const AREA_HELP = text([
+  `usage: ${P} area <command> [--json]`,
   "",
-  "Folder profiles: sessions under a profile's folders use its memory, roles and",
+  "Areas: sessions under an area's folders use its memory, roles and",
   "default permission.",
   "",
-  "  list                    profiles, their folders, this directory's profile",
+  "  list                    areas, their folders, this directory's area",
   "  add <name> <folder>...  add or replace; --permission ask|edits|full",
   "  remove <name>           its user memories stay, tagged, but are not used",
+])
+
+export const CUSTOMIZE_HELP = text([
+  `usage: ${P} customize restore [id] [--dir PATH]`,
+  "",
+  "Restore the terminal settings (what /customize edits) from a saved backup;",
+  "local only, no daemon.",
+  "",
+  "  restore                 list the backups with their time and differing keys",
+  "  restore <id>            restore one (the current ones are backed up)",
 ])
 
 export const AGENT_HELP = text([
