@@ -5,7 +5,7 @@ import type { createChanges } from "./changes"
 import type { createMemory } from "./memory"
 import type { createSecrets } from "./secrets"
 import type { createAgents } from "./agents"
-import { preload } from "../lazy-pages"
+import { loadReviewActivity, preload } from "../lazy-pages"
 import { sidebarVisible } from "../../view/sidebar"
 import { withPushedDraft } from "../../view/session-label"
 import { normalizeTuiProfile } from "../../view/tui-profile"
@@ -160,6 +160,7 @@ export function createEvents(ctx: AppContext, actions: {
     // The PR reviews running now, whole: the watching session draws their steps and the footer of any other session names them.
     if (event.type === "pr.review.activity") {
       state.reviewActivity = event.jobs
+      if (event.jobs.length) void loadReviewActivity().then(requestFrame, () => undefined)
       requestFrame()
       return
     }

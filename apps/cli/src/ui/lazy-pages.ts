@@ -66,6 +66,11 @@ const modelQuick = lazyModule("model-quick", () => import("../view/model-quick")
 const sessionTree = lazyModule("session-tree-page", () => import("../view/session-tree-page"))
 const textPage = lazyModule("text-page", () => import("../view/text-page"))
 const whatsNewPage = lazyModule("whatsnew-page", () => import("../view/whatsnew-page"))
+/** The running PR reviews' steps and footer word: loaded with the first activity that has a job, so a terminal that never sees a review pays nothing. */
+const reviewActivity = lazyModule("review-activity", () => import("../view/review-activity"))
+export const loadReviewActivity = () => reviewActivity.load()
+/** The review-activity view once loaded; undefined before (nothing to draw yet). */
+export const reviewActivityView = () => (reviewActivity.loaded() ? reviewActivity.get() : undefined)
 const permissions = lazyModule("permissions-page", () => import("../view/permissions-page"))
 const sidebar = lazyModule("sidebar-editor", () => import("../view/sidebar-editor"))
 const promptMode = lazyModule("prompt-mode-page", () => import("../view/prompt-mode-page"))
@@ -187,7 +192,7 @@ export const PAGE_MODULES = {
 export type PageName = keyof typeof PAGE_MODULES
 
 /** Names of the lazily loaded modules, for the footprint test. */
-export const LAZY_MODULE_FILES = ["stash-page", "queue-page","history-page", "skills-page", "model-picker", "acp-page", "agent-picker", "theme-picker", "usage-page", "memory-page", "context-page", "changes-page", "git-page", "git-commit-page", "git-pr-page", "git-init-page", "mcps-page", "tools-page", "packages-page", "storage-page", "agents-page", "loops-page", "loop-command", "workflows-page", "workflow-command", "setup-page", "onboarding-page", "onboarding-detect", "customize-page", "settings-page", "status-page", "extensions-page", "hooks-page", "palette", "approval-diff", "pet-picker", "connect-page", "providers-page", "secrets-page", "session-tree-page", "text-page", "whatsnew-page", "permissions-page", "mermaid-viewer", "sidebar-editor", "transcript-actions-page", "plan-review-page", "prompt-mode-page", "compaction-page", "agent-commands-page", "diagnostics-page", "worktrees-page", "automation-ledger-page", "compound-page", "marketplace-page", "ai-config-page", "reasoning-page", "release-page", "tsm-page", "ide-page", "mflow-page", "reviews-page", "reviews-keys", "console-page", "compaction-live", "compaction-arcade", "keymap-page", "terminal-setup-page", "tutorial-page", "model-quick", "file-viewer"] as const
+export const LAZY_MODULE_FILES = ["stash-page", "queue-page","history-page", "skills-page", "model-picker", "acp-page", "agent-picker", "theme-picker", "usage-page", "memory-page", "context-page", "changes-page", "git-page", "git-commit-page", "git-pr-page", "git-init-page", "mcps-page", "tools-page", "packages-page", "storage-page", "agents-page", "loops-page", "loop-command", "workflows-page", "workflow-command", "setup-page", "onboarding-page", "onboarding-detect", "customize-page", "settings-page", "status-page", "extensions-page", "hooks-page", "palette", "approval-diff", "pet-picker", "connect-page", "providers-page", "secrets-page", "session-tree-page", "text-page", "whatsnew-page", "review-activity", "permissions-page", "mermaid-viewer", "sidebar-editor", "transcript-actions-page", "plan-review-page", "prompt-mode-page", "compaction-page", "agent-commands-page", "diagnostics-page", "worktrees-page", "automation-ledger-page", "compound-page", "marketplace-page", "ai-config-page", "reasoning-page", "release-page", "tsm-page", "ide-page", "mflow-page", "reviews-page", "reviews-keys", "console-page", "compaction-live", "compaction-arcade", "keymap-page", "terminal-setup-page", "tutorial-page", "model-quick", "file-viewer"] as const
 
 /** The lazily loaded modules a slash command needs, if any. */
 export function slashPage(command: string): PageName | undefined {

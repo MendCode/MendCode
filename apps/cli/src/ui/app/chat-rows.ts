@@ -1,4 +1,5 @@
 import { homedir } from "node:os"
+import { reviewActivityView } from "../lazy-pages"
 import { HOME_RECENT_MS, HOME_WORKING, inProject } from "../../view/project-scope"
 import { featureOn, ideSelectionKey } from "@mendcode/protocol/wire"
 import { subagentRunOf } from "./subagent-run"
@@ -36,7 +37,6 @@ import { refreshLiveTasks } from "./live-tasks"
 import { sessionChildren } from "./session-children"
 import { fit, lineWidth } from "../../view/deck"
 import { backgroundRows, backgroundName } from "../../view/background-row"
-import { reviewPhase, reviewsIn, reviewStartedAt, reviewStepRows } from "../../view/review-activity"
 import { linkRows } from "../../view/links"
 import { homeLook, renderWelcomeReplacement } from "../../view/home"
 import { mascotPhase, mascotRows } from "../../view/mascot"
@@ -288,8 +288,9 @@ export function createChatRows(ctx: AppContext, actions: {
       state.scratchCursor = live.scratch.cursor ? { row: dock.length + live.scratch.cursor.row, col: live.scratch.cursor.col } : undefined
     }
     // A PR review of this session's watch: its steps as tool rows over the working line, gone when the run ends (its note stays).
-    const reviewing = !inlineView && rich && !asking ? reviewsIn(state.reviewActivity, state.sessionId) : []
-    const reviewRows: Line[] = reviewing.length ? barRows("background", reviewStepRows({ jobs: reviewing, width, frame: state.spinFrame, now: now(), ascii: asciiGlyphs() }), width) : []
+    const reviewView = state.reviewActivity.length ? reviewActivityView() : undefined
+    const reviewing = reviewView && !inlineView && rich && !asking ? reviewView.reviewsIn(state.reviewActivity, state.sessionId) : []
+    const reviewRows: Line[] = reviewView && reviewing.length ? barRows("background", reviewView.reviewStepRows({ jobs: reviewing, width, frame: state.spinFrame, now: now(), ascii: asciiGlyphs() }), width) : []
     const above: Line[] = [...fixedAbove, ...dock, ...(live?.rows ?? []), ...reviewRows, ...(working ? [working] : []), ...agentRows, ...extAbove, ...commentRows.above, ...(findRow ? [findRow.row] : [])]
     // Reserve chrome first: a multiline prompt must not push the tray or footer off a short terminal.
     const editorRows = Math.max(1, Math.min(MAX_EDITOR_ROWS, height - topbar.length - above.length - popup.length - promptTop.length - frameBottom.length - below.length - cardRows - 1))
@@ -781,8 +782,9 @@ export function createChatRows(ctx: AppContext, actions: {
     const active = BUSY.has(localState) || localState === "waiting_approval" || retry !== undefined
     // An idle session whose watch has a PR review running shows that review at work, as a turn would show (docs/pr-review.md).
     if (!active) {
-      const reviews = reviewsIn(state.reviewActivity, state.sessionId)
-      if (!reviews.length || !state.tuiProfile.showActivity || state.tuiProfile.activityPlacement === "off") return undefined
+      const reviewView = state.reviewActivity.length ? reviewActivityView() : undefined
+      const reviews = reviewView ? reviewView.reviewsIn(state.reviewActivity, state.sessionId) : []
+      if (!reviewView || !reviews.length || !state.tuiProfile.showActivity || state.tuiProfile.activityPlacement === "off") return undefined
       return renderWorkingRow({
         width,
         margin,
@@ -790,8 +792,8 @@ export function createChatRows(ctx: AppContext, actions: {
         ...activityLook(),
         ...(overlay ? { separator: g.sep } : {}),
         spinner: state.reducedMotion ? "⋯" : SPINNER_FRAMES[state.spinFrame % SPINNER_FRAMES.length]!,
-        phase: reviewPhase(reviews),
-        ...(state.tuiProfile.showElapsed && !state.accessible ? { elapsedMs: now() - reviewStartedAt(reviews) } : {}),
+        phase: reviewView.reviewPhase(reviews),
+        ...(state.tuiProfile.showElapsed && !state.accessible ? { elapsedMs: now() - reviewView.reviewStartedAt(reviews) } : {}),
         now: now(),
         interruptHint: false,
       })

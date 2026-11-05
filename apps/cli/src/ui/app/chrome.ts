@@ -5,7 +5,7 @@ import type { createScratch } from "./scratch"
 import type { createSecrets } from "./secrets"
 import type { createAgents } from "./agents"
 import { goalSpans } from "../../view/goal"
-import { reviewFooterWord } from "../../view/review-activity"
+import { reviewActivityView } from "../lazy-pages"
 import { BREAKPOINTS, breakpointOf } from "../breakpoints"
 import { chatColumns, projectSessions, SIDEBAR_WIDTH, sidebarVisible } from "../../view/sidebar"
 import { DEFAULT_FOOTER, DEFAULT_AREA, FOOTER_SEGMENT_TIER, featureOn, areaFor, tierFooter, type FooterSegment } from "@mendcode/protocol/wire"
@@ -516,7 +516,7 @@ export function createChrome(ctx: AppContext, actions: {
       ...(featureOn(state.settingsNow, "jev") && !externalEngine(state.effectiveModel?.model ?? id, state.modelReport) ? { adaptive: true } : {}),
       ...(!border && usage?.contextTokens !== undefined && threshold > 0 ? { context: { tokens: usage.contextTokens, limit: threshold, ...(usage.contextApprox ? { approx: true } : {}) } } : {}),
       quotas: [...quotas.values()],
-      ...(reviewFooterWord(state.reviewActivity, state.sessionId) ? { reviewing: reviewFooterWord(state.reviewActivity, state.sessionId)! } : {}),
+      ...((reviewing) => (reviewing ? { reviewing } : {}))(state.reviewActivity.length ? reviewActivityView()?.reviewFooterWord(state.reviewActivity, state.sessionId) : undefined),
       ...(state.transcript.sessionCost !== undefined ? { costMicros: state.transcript.sessionCost } : {}),
       jobs: state.agentShells.filter((shell) => shell.status === "running" && shell.sessionId === state.sessionId).length,
       loops: state.liveLoops.size,

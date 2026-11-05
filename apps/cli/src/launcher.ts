@@ -5,7 +5,6 @@ import { dataDirFromEnv, defaultDataDirNow, mendEnv, sameDir } from "@mendcode/p
 import { inspectLockOwner, type OwnerProbe } from "@mendcode/program/daemon-identity"
 import { defaultLocalTransport, localEndpointPath, readLocalEndpoint } from "@mendcode/client/local-endpoint"
 import { droppedEnvArgs, hostSessionEnvNames, withoutHostSessionEnv } from "@mendcode/client/inherited-env"
-import { restartPending } from "./restart-mark"
 
 /** Same default as the daemon: ~/.mendcode, or ~/.mendcode-v2 while its move could not happen yet (data-dir-move.ts). */
 export const DEFAULT_DIR = defaultDataDirNow()
@@ -110,6 +109,8 @@ export async function ensureDaemon(options: { dir?: string; timeoutMs?: number; 
   const found = await liveDaemon(dir)
   if (found) return { ...found, started: false }
   // A `daemon restart` in progress starts the next daemon itself, with the environment it was given: wait for that one.
+  // Loaded only here, when no daemon answered: a terminal that finds its daemon reads nothing more at start.
+  const { restartPending } = await import("./restart-mark")
   if (restartPending(dir)) {
     do {
       await Bun.sleep(50)

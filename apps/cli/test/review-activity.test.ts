@@ -1,7 +1,8 @@
-import { describe, expect, test } from "bun:test"
+import { beforeAll, describe, expect, test } from "bun:test"
 import { writeFileSync } from "node:fs"
 import { createIdFactory, type GlobalEvent, type SessionEvent } from "@mendcode/protocol"
 import { createApp } from "../src/ui/app"
+import { loadReviewActivity } from "../src/ui/lazy-pages"
 import { glyphs, type Line } from "../src/ui/theme"
 import { reviewFooterWord, reviewPhase, type ReviewActivityJob } from "../src/view/review-activity"
 
@@ -45,6 +46,8 @@ const running = (sessionId: string, patch: Partial<ReviewActivityJob> = {}): Rev
 })
 
 describe("a PR review at work", () => {
+  // The view loads with the first activity that has a job (lazy-pages.ts); these cases draw it at once.
+  beforeAll(() => loadReviewActivity())
   test("the watching session shows the steps as tool rows and the activity status with the PR, phase and time", () => {
     const h = harness()
     h.note("Watching Eden-sudo/Symbex-1.")
