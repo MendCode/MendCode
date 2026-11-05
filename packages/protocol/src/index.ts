@@ -1,3 +1,5 @@
+// First, so every schema built after it checks without generated code (zod-config.ts).
+import "./zod-config"
 export * from "./tasks"
 export { estimateTokens } from "./constants"
 export type { AcpRegistryEntry, AcpRegistryReport } from "./acp-registry-data"

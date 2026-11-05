@@ -41,6 +41,18 @@ test("finished turns make no summary call: five turns cost the two title calls a
   expect(summaries()).toHaveLength(0)
 })
 
+test("the title model reads the user's message as material to name inside tags, told never to answer it or talk about attachments", async () => {
+  const { h, titles } = await start(1)
+  await h.client.send({ type: "settings.set", patch: { tier: "full" } })
+  const sessionId = await openSession(h)
+  await say(h, sessionId, "describe esta imagen por favor")
+  await until(() => titles().length === 1)
+  const call = titles()[0]!
+  expect(call.prompt).toBe("<messages>\ndescribe esta imagen por favor\n</messages>")
+  expect(call.system).toContain("Do not answer it")
+  expect(call.system).toContain("what you can or cannot see")
+})
+
 test("a reader that asks writes one summary, the same read again reuses it, and a new turn makes the next read write one more", async () => {
   const { h, summaries } = await start(3)
   await h.client.send({ type: "settings.set", patch: { tier: "balanced" } })

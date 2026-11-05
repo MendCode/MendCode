@@ -45,6 +45,9 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Fixed
 
+- Session titles name what you asked; a model no longer answers your message in the title (such as saying it cannot see an
+  image).
+- Asking to rename the title renames the session, not a part of the screen.
 - Ask any model to change the default model, tier or permissions and it proposes the change for you to approve, instead of
   telling you to do it by hand.
 - OpenCode Go answers again: every request carries the session it belongs to, as Go now requires. OpenCode Zen gets it too.

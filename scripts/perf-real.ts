@@ -90,7 +90,9 @@ function openCli(rig: Rig, input: { binary: string; directory: string; cols: num
     },
   })
   // `--pure` keeps extensions out (the PTY smoke does the same); a user does not pass it, and it adds a `daemon.info` round trip to the start, so `--no-pure` measures the usual launch.
-  const cli = Bun.spawn([input.binary, "--dir", rig.dir, "--engine", "faux", ...(process.argv.includes("--no-pure") ? [] : ["--pure"])], { cwd: input.directory, env: rig.env, terminal })
+  // PERF_CLIENT_ENV (a JSON object) adds JIT options to the terminal, as PERF_DAEMON_ENV does to the daemon.
+  const clientEnv = { ...rig.env, ...(process.env.PERF_CLIENT_ENV ? JSON.parse(process.env.PERF_CLIENT_ENV) as Record<string, string> : {}) }
+  const cli = Bun.spawn([input.binary, "--dir", rig.dir, "--engine", "faux", ...(process.argv.includes("--no-pure") ? [] : ["--pure"])], { cwd: input.directory, env: clientEnv, terminal })
   const count = (char: string) => screen.text().split(char).length - 1
   /** Resolves when `check()` holds, checked on every chunk of output; rejects after `timeoutMs`. */
   const until = (check: () => boolean, label: string, timeoutMs = 20_000) => new Promise<number>((resolve, reject) => {

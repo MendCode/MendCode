@@ -551,20 +551,30 @@ export function createNativeEngine(options: {
   const compactionPromptFor = (cwd: string) => (typeof options.compactionPrompt === "function" ? options.compactionPrompt(cwd) : options.compactionPrompt)
   /** Sessions whose compaction was asked for by `needsCompaction` (the actor compacts right after), so `compact` can tell auto from manual. */
   const autoCompaction = new Set<SessionId>()
-  const toSpec = (tool: { name: string; description: string; args: z.ZodType }): ToolSpec => ({ name: tool.name, description: tool.description, parameters: compactToolSchema(z.toJSONSchema(tool.args) as Record<string, unknown>) })
+  // A tool's JSON Schema is built once, the first time a turn lists the tool, and shared by the main and sub-agent toolsets.
+  // Built for every tool when the engine was created, twice, it was the largest part of a daemon's start (docs/performance.md).
+  const builtSpecs = new WeakMap<object, ToolSpec>()
+  const toSpec = (tool: { name: string; description: string; args: z.ZodType }): ToolSpec => {
+    let spec = builtSpecs.get(tool)
+    if (!spec) builtSpecs.set(tool, spec = { name: tool.name, description: tool.description, parameters: compactToolSchema(z.toJSONSchema(tool.args) as Record<string, unknown>) })
+    return spec
+  }
+  /** `toolset` whose `specs` are built the first time something reads them, then kept. */
+  const withLazySpecs = (toolset: Omit<Toolset, "specs">, build: () => ToolSpec[]): Toolset => {
+    let built: ToolSpec[] | undefined
+    return Object.defineProperty(toolset, "specs", { get: () => built ??= build(), enumerable: true, configurable: true }) as Toolset
+  }
   const tools = [...options.tools, ...(options.recall ? SESSION_RECALL_TOOLS.filter((tool) => !options.tools.some((existing) => existing.name === tool.name)) : [])]
   const subagentTools = tools.filter((tool) => !MAIN_AGENT_ONLY.has(tool.name))
-  const secretsSpecs = secrets ? [toSpec(SECRETS_TOOL)] : []
+  const secretsSpecs = () => secrets ? [toSpec(SECRETS_TOOL)] : []
   // `snip` (experimental.snip) is listed here and kept or dropped per turn by `withPolicy`.
-  const snipSpecs = [toSpec(SNIP_TOOL)]
-  const subagentToolset: Toolset = { tools: new Map(subagentTools.map((tool) => [tool.name, tool])), specs: [...subagentTools.map(toSpec), ...secretsSpecs, ...snipSpecs], main: false, allowTask: false }
-  const mainToolset: Toolset = {
+  const snipSpecs = () => [toSpec(SNIP_TOOL)]
+  const subagentToolset = withLazySpecs({ tools: new Map(subagentTools.map((tool) => [tool.name, tool])), main: false, allowTask: false }, () => [...subagentTools.map(toSpec), ...secretsSpecs(), ...snipSpecs()])
+  const mainToolset = withLazySpecs({
     tools: new Map(tools.map((tool) => [tool.name, tool])),
-    specs: [...tools.map(toSpec), ...secretsSpecs, ...snipSpecs, toSpec(PLAN_TOOL), ...(options.subagents ? [toSpec(TASK_TOOL_SHARED)] : []), ...(options.goals ? GOAL_TOOLS.map(toSpec) : []), ...(options.advisor ? [toSpec(ADVISOR_TOOL)] : []), toSpec(PLAN_REVIEW_TOOL), toSpec(PLAN_EXIT_TOOL), ...(options.continuity ? CONTINUITY_TOOLS.map(toSpec) : []), ...(options.reasoning ? [toSpec(REASONING_AUTO_TOOL)] : [])],
     main: true,
     allowTask: options.subagents === true,
-  }
-  const specs = mainToolset.specs
+  }, () => [...tools.map(toSpec), ...secretsSpecs(), ...snipSpecs(), toSpec(PLAN_TOOL), ...(options.subagents ? [toSpec(TASK_TOOL_SHARED)] : []), ...(options.goals ? GOAL_TOOLS.map(toSpec) : []), ...(options.advisor ? [toSpec(ADVISOR_TOOL)] : []), toSpec(PLAN_REVIEW_TOOL), toSpec(PLAN_EXIT_TOOL), ...(options.continuity ? CONTINUITY_TOOLS.map(toSpec) : []), ...(options.reasoning ? [toSpec(REASONING_AUTO_TOOL)] : [])])
   const latestPlans = new Map<SessionId, import("@mendcode/protocol").PlanReview>()
 
   /** Advisor admission per session (caps, once-per-turn reviews); checkpoint calls carry their trigger by call id. */
@@ -896,7 +906,7 @@ export function createNativeEngine(options: {
    * answers again cuts the wait short. An answer cut after some text is continued in the same item (the partial goes
    * back as history with the continuation prompt, and whatever the model repeats of it is trimmed).
    */
-  async function callModel(input: CallInput, messages: ModelMessage[], textKind: "agent_message" | "compaction" = "agent_message", callTools: ToolSpec[] = textKind === "agent_message" ? specs : [], role: ModelRole = textKind === "compaction" ? "compaction" : "main", agent?: AgentProfile, compact?: { maxOutputTokens?: number; meta: Record<string, string | number | boolean>; cacheMessages?: readonly ModelMessage[]; /** Repeat the last main call's request (`messages` is then the history alone) and append `prompt` as one more user message. */ share?: { prompt: string; last: SharedPrefix }; /** A forked child's call: the parent's system prompt, tools, model, effort and cache key ahead of the child's own history. */ fork?: ForkPrefix }, final = false) {
+  async function callModel(input: CallInput, messages: ModelMessage[], textKind: "agent_message" | "compaction" = "agent_message", callTools: ToolSpec[] = textKind === "agent_message" ? mainToolset.specs : [], role: ModelRole = textKind === "compaction" ? "compaction" : "main", agent?: AgentProfile, compact?: { maxOutputTokens?: number; meta: Record<string, string | number | boolean>; cacheMessages?: readonly ModelMessage[]; /** Repeat the last main call's request (`messages` is then the history alone) and append `prompt` as one more user message. */ share?: { prompt: string; last: SharedPrefix }; /** A forked child's call: the parent's system prompt, tools, model, effort and cache key ahead of the child's own history. */ fork?: ForkPrefix }, final = false) {
     // A sub-agent's context is its own; the session's context size comes from its main calls only.
     const trackContext = role !== "subagent"
     const share = compact?.share

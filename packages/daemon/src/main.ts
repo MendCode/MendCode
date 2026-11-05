@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import "@mendcode/protocol/zod-config"
 import { dataDirFromEnv, defaultDataDirNow, isDefaultDataDir, mendEnv } from "@mendcode/program/data-dir"
 import { engineEnvironment } from "./engine-environment"
 import { instructionControls, projectSources } from "./project-control"
