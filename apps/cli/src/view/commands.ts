@@ -57,6 +57,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   { name: "label", group: "session", aliases: [], summary: "Bookmark the latest message" },
   { name: "recap", group: "context", aliases: [], summary: "Summarize this session" },
   { name: "changelog", group: "more", aliases: [], summary: "Show MendCode changes" },
+  { name: "whatsnew", group: "more", feature: "whats_new", aliases: [], summary: "Show changes that fit how you work" },
   { name: "export", group: "session", aliases: [], summary: "Export the transcript" },
   { name: "import", group: "session", aliases: [], summary: "Import a Claude Code or Codex session" },
   { name: "fast", group: "setup", aliases: [], summary: "Toggle priority service" },
@@ -195,7 +196,7 @@ export function runsOnSelect(command: SlashCommand) {
   return command.custom !== true && command.ext !== true && !ARGUMENT_COMMANDS.has(command.name)
 }
 
-const OPTIONAL_ARGUMENTS = new Set(["limit", "daemon", "pr", "context-window", "rename", "view", "agent", "model", "permissions", "fork", "recap", "export", "import", "sandbox", "add-dir", "fast", "advisor", "output-style", "experimental", "tier", "sidebar", "find", "stash", "copy", "diagram", "mcp", "mcps", "footer", "theme", "pet", "mascot", "prompt-chrome", "presentation", "message-rendering", "submit-scroll", "timestamps", "scrollbar", "jump-to-latest", "activity", "comments", "prompt-mode", "username", "queue", "compound", "release-channel", "tsm", "mflow", "remote-control", "vim", "multiline", "prompt-history", "backlog"])
+const OPTIONAL_ARGUMENTS = new Set(["limit", "daemon", "pr", "context-window", "rename", "view", "agent", "model", "permissions", "fork", "recap", "export", "import", "sandbox", "add-dir", "fast", "advisor", "output-style", "experimental", "tier", "sidebar", "find", "stash", "copy", "diagram", "mcp", "mcps", "footer", "theme", "pet", "mascot", "prompt-chrome", "presentation", "message-rendering", "submit-scroll", "timestamps", "scrollbar", "jump-to-latest", "activity", "comments", "prompt-mode", "username", "queue", "compound", "release-channel", "tsm", "mflow", "remote-control", "vim", "multiline", "prompt-history", "backlog", "whatsnew"])
 export function takesArguments(command: SlashCommand) {
   return command.name === "panel" || !runsOnSelect(command) || OPTIONAL_ARGUMENTS.has(command.name)
 }

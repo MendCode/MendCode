@@ -72,6 +72,7 @@ export function createPageKeys(ctx: AppContext, actions: {
   variantsKey(key: string): Promise<void>
   closeExtensionPage: () => void
   sessionNav: ReturnType<typeof import("./session-nav").createSessionNav>
+  whatsNewKey(key: string): Promise<void>
   sessionTree: ReturnType<typeof import("./session-tree").createSessionTree>
   switchSession: ReturnType<typeof createSession>["switchSession"]
   changeSession: ReturnType<typeof createSession>["changeSession"]
@@ -586,6 +587,7 @@ export function createPageKeys(ctx: AppContext, actions: {
 
   async function dispatchPageKey(key: string) {
     if (state.page === "compaction") return actions.compactionKey(key)
+    if (state.page === "whatsnew") return actions.whatsNewKey(key)
     if (state.page === "history") {
       const keys = /^[\x20-\x7e -￿]{2,}$/u.test(key) ? [...key] : [key]
       for (const each of keys) {

@@ -4,6 +4,7 @@
     "attachments": "feature:voice command:voice command:attach setting:image_generation setting:voice tool:image_gen",
     "automation": "setting:resumeAfterRestart",
     "backlog": "feature:backlog command:backlog",
+    "whats-new": "feature:whats_new command:whatsnew",
     "plans": "feature:plan_files setting:plan_files_location",
     "one-tree": "feature:one_tree",
     "background": "setting:processLimits flag:async_tools flag:async_questions command:bg command:ps tool:question_start tool:question_status tool:shell_monitor tool:shell_session tool:sleep tool:tool_cancel tool:tool_start tool:tool_status tool:tool_wait",

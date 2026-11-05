@@ -15,7 +15,7 @@ import type { createSecrets } from "./secrets"
 import type { createAgents } from "./agents"
 import type { createStatus } from "./status"
 import { renderMessageActions, renderExportOptions } from "../lazy-pages"
-import { renderTreePage, renderTextPage, renderCompactionPage, renderPromptModePage, renderStashPage, renderDraftsPage, renderHistoryPage, renderSkillsPage, renderModelPicker, renderVariantPicker } from "../lazy-pages"
+import { renderTreePage, renderTextPage, renderCompactionPage, renderPromptModePage, renderStashPage, renderDraftsPage, renderHistoryPage, renderSkillsPage, renderModelPicker, renderVariantPicker, renderWhatsNewPage } from "../lazy-pages"
 import { renderDiagnosticsPage, renderQueuePage } from "../lazy-pages"
 import { renderIdePage } from "../lazy-pages"
 import { renderWorktreesPage } from "../lazy-pages"
@@ -303,7 +303,8 @@ export function createRender(ctx: AppContext, actions: {
       const result = renderCompactionPage({ ...(data ? { data } : {}), state: state.compactionView!, profile: state.tuiProfile, readOnly: input.remote?.readOnly === true, width, height: bodyHeight })
       body = result.rows
       state.compactionCursor = result.cursor
-    } else if (state.page === "history") body = renderHistoryPage({ state: state.historyState, report: state.historyReport, detail: state.historyDetail, error: state.historyError, loading: state.historyLoading, width, height: bodyHeight, now: now() })
+    } else if (state.page === "whatsnew" && state.whatsNew) body = renderWhatsNewPage({ state: state.whatsNew, width, height: bodyHeight })
+    else if (state.page === "history") body = renderHistoryPage({ state: state.historyState, report: state.historyReport, detail: state.historyDetail, error: state.historyError, loading: state.historyLoading, width, height: bodyHeight, now: now() })
     else if (state.page === "prompt-mode") body = renderPromptModePage({ state: state.promptModeState!, ...(state.promptReport ? { report: state.promptReport } : {}), error: state.promptError ?? "", width, height: bodyHeight })
     else if (state.page === "compound") body = renderCompoundPage({ ...(state.compoundReport ? { report: state.compoundReport } : {}), state: state.compoundPage!, width, height: bodyHeight, readOnly: input.remote?.readOnly ?? false })
     else if (state.page === "skills") body = renderSkillsPage({ state: state.skillsState, report: state.skillsReport, error: state.skillsError, width, height: bodyHeight })

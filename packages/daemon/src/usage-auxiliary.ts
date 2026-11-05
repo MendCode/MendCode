@@ -9,11 +9,11 @@ import type { BudgetUsage } from "./budgets"
  * sessions whose turns `usage.recorded` already counted in the days and models (and whose per-call rows go with the session), so
  * this row says how much of those totals the reviewer spent; reports leave it out of "outside turns" sums.
  */
-export const AUXILIARY_ROLES = ["title", "summary", "recap", "memoryExtractor", "memoryAssistant", "memoryConsolidator", "dream", "permissionReviewer", "hook", "agentGenerate", "setup", "loopInterpret", "prReview"] as const
+export const AUXILIARY_ROLES = ["title", "summary", "recap", "memoryExtractor", "memoryAssistant", "memoryConsolidator", "dream", "permissionReviewer", "hook", "agentGenerate", "setup", "loopInterpret", "prReview", "whatsNew"] as const
 export type AuxiliaryRole = (typeof AUXILIARY_ROLES)[number]
 export type AuxiliaryCall = { role: AuxiliaryRole; sessionId?: SessionId | undefined; directory?: string | undefined }
 /** The daemon's budgeted completion for calls outside a turn: `auxiliary` says whose call it is. */
-export type AuxiliaryComplete = (input: { system: string; prompt: string; signal: AbortSignal; model?: ModelChoice; onText?(text: string): void; auxiliary: AuxiliaryCall }) => Promise<string>
+export type AuxiliaryComplete = (input: { system: string; prompt: string; signal: AbortSignal; model?: ModelChoice; onText?(text: string): void; auxiliary: AuxiliaryCall; onUsage?(usage: BudgetUsage | undefined): void }) => Promise<string>
 export type AuxiliaryUsagePort = {
   /** One finished or failed call: `usage` as the provider reported it; none counts a call of `model` with unknown tokens and cost. */
   record(call: AuxiliaryCall, usage: BudgetUsage | undefined, model: string): void

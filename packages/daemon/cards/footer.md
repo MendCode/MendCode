@@ -1,5 +1,5 @@
 ---
-summary: footer rows, icons, presets by settings; code only for data MendCode lacks
+summary: footer rows, icons, presets; code only for data MendCode lacks
 docs: extensions-tui, customize
 aliases: statusline, status-line, status, statusbar
 ---

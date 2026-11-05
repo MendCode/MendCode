@@ -1,6 +1,6 @@
 import { homedir } from "node:os"
 import { HOME_RECENT_MS, HOME_WORKING, inProject } from "../../view/project-scope"
-import { ideSelectionKey } from "@mendcode/protocol/wire"
+import { featureOn, ideSelectionKey } from "@mendcode/protocol/wire"
 import { subagentRunOf } from "./subagent-run"
 import type { createPrompt } from "./prompt"
 import { PET_MIN_WIDTH } from "../breakpoints"
@@ -150,8 +150,9 @@ export function createChatRows(ctx: AppContext, actions: {
     const toastAbove = toastSpans ? undefined : toastRow
     // A newer build installed under this terminal: on the right of the prompt's top rule until the restart into it, so it takes no
     // row (the pet keeps standing on the prompt). Only a prompt without that rule gives it a right-aligned row of its own.
-    // After the restart into it, the same place says so until the first key: a restart nobody watched still gets seen.
-    const updateText = state.updateReady ? `${g.ok} New build installed ${g.sep} /restart to switch` : state.updated ? `${g.ok} Updated to the new build` : ""
+    // After the restart into it, the same place says so until the first key: a restart nobody watched still gets seen. That one
+    // notice names /whatsnew where the tier has it (docs/whats-new.md); the build that changed is the one running now.
+    const updateText = state.updateReady ? `${g.ok} New build installed ${g.sep} /restart to switch` : state.updated ? `${g.ok} Updated to the new build${featureOn(state.settingsNow, "whats_new") ? ` ${g.sep} /whatsnew` : ""}` : ""
     const updateOnRule = updateText !== "" && !asking && rich && preset !== "minimal" && frame.top.length === 1
     const promptRule: Line[] = asking ? [] : toastSpans?.length ? [overlayRule(frame.top[0]!, toastSpans, ruleOffset)] : overlay === "above" && workingBuilt?.length ? [overlayRule(frame.top[0]!, workingBuilt, ruleOffset)] : statusRule?.length ? [overlayRule(frame.top[0]!, statusRule, ruleOffset)] : frame.top
     const promptTop: Line[] = updateOnRule && promptRule.length === 1 ? [ruleRight(promptRule[0]!, [{ text: updateText, fg: "success" }])] : promptRule

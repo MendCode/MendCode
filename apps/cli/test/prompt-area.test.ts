@@ -462,10 +462,20 @@ describe("prompt area in the app", () => {
     app.render()
     const rows = text().filter((row) => row.includes("Updated to the new build"))
     expect(rows).toHaveLength(1)
-    expect(rows[0]!.trimEnd()).toMatch(/^ {2}─{40,} ✓ Updated to the new build ─{3}$/)
+    // The one notice that names /whatsnew (docs/whats-new.md): the changes it lists are this build's.
+    expect(rows[0]!.trimEnd()).toMatch(/^ {2}─{40,} ✓ Updated to the new build · \/whatsnew ─{3}$/)
     await app.onInput("a")
     app.render()
     expect(text().some((row) => row.includes("Updated to the new build"))).toBe(false)
+  })
+
+  test("after the restart, minimalist (no /whatsnew) says only that the build changed", () => {
+    const { app, text } = harness({ width: 100, updated: true })
+    app.applySettings({ tier: "minimalist" })
+    app.render()
+    const row = text().find((line) => line.includes("Updated to the new build"))
+    expect(row).toBeDefined()
+    expect(row).not.toContain("/whatsnew")
   })
 
   test("a provider retry shows in the working row with a live countdown until the next event", () => {

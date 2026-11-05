@@ -729,6 +729,10 @@ export function createApp(input: AppInput) {
     openTree: (options) => sessionTree.open(options),
   })
   const sessionNav = createSessionNav(ctx)
+  // `/whatsnew` loads its controller on first use: a terminal that never opens it pays nothing at start-up.
+  let whatsNewController: Promise<ReturnType<typeof import("./app/whats-new").createWhatsNew>> | undefined
+  const loadWhatsNew = () => (whatsNewController ??= import("./app/whats-new").then((module) => module.createWhatsNew(ctx)))
+  const whatsNew = { command: async (args: string) => (await loadWhatsNew()).command(args), key: async (key: string) => (await loadWhatsNew()).key(key) }
   const { titleCommand, pinCommand, settleCommand, prMetadata } = createSessionLifecycle(ctx, reloadSessions)
   const { fanoutCommand } = createFanout(ctx, { switchSession, openChanges: async () => { await loadPage("changes"); ctx.state.page = "changes"; await loadChanges() } })
   const { openMessageActions, copyCommand, exportSession, transcriptActionsKey } = createTranscriptActions(ctx, { loadPage: () => loadPage("transcriptActions"), sessionTitle: (...args) => sessionTitle(...args), rewind, forkAt, copyAnswer })
@@ -883,6 +887,7 @@ export function createApp(input: AppInput) {
     runStashCommand,
     openDrafts,
     sessionNav,
+    whatsNew,
     sessionTree,
     copyAnswer,
     rewind,
@@ -911,6 +916,7 @@ export function createApp(input: AppInput) {
     openPrecedence,
     slashCommands: () => editableCatalog(suggestionPool(), appState.settingsNow),
     sessionNav,
+    whatsNewKey: whatsNew.key,
     sessionTree,
     tasksKey: subagents.tasksKey,
     controlSession,

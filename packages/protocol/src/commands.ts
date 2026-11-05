@@ -1814,6 +1814,15 @@ export const SessionLabel = lazySchema(() => z.strictObject({
  */
 export const SessionRecap = lazySchema(() => z.strictObject({ ...base, type: z.literal("session.recap"), sessionId: SessionId, refresh: z.boolean().optional() }))
 
+/**
+ * `/whatsnew` (docs/whats-new.md): one model call (the aside role, else the session's model) that reads the changes the terminal
+ * sends with this machine's memories, effective settings and recent session titles of `directory`, and answers which of them fit
+ * the user. Local terminals only. `dryRun` builds the request and returns its model and estimated tokens without calling it.
+ * Ack: `{ model, estimate, suggestions?, usage? }`; a suggestion's `patch` was validated as `settings.set` would and comes with its `diff`.
+ * `changes` is at most `WHATS_NEW_MAX_CHANGES` (changelog.ts; written out here so the protocol does not load that module).
+ */
+export const WhatsNewAsk = lazySchema(() => z.strictObject({ ...base, type: z.literal("whatsnew.ask"), directory: z.string().min(1).max(4096), sessionId: SessionId.optional(), version: z.string().min(1).max(80), changes: z.string().min(1).max(16_000), dryRun: z.boolean().optional() }))
+
 export const SessionChildren = lazySchema(() => z.strictObject({ ...base, type: z.literal("session.children"), sessionId: SessionId }))
 export const SessionBackgroundList = lazySchema(() => z.strictObject({ ...base, type: z.literal("session.background.list"), directory: z.string().max(4096).optional() }))
 export const SessionBackgroundRegister = lazySchema(() => z.strictObject({ ...base, type: z.literal("session.background.register"), sessionId: SessionId, ...SessionBackgroundPatch.shape }))
@@ -2247,6 +2256,7 @@ export const COMMAND_SCHEMAS = {
   "session.merge": SessionMerge,
   "session.label": SessionLabel,
   "session.recap": SessionRecap,
+  "whatsnew.ask": WhatsNewAsk,
   "session.children": SessionChildren,
   "session.background.list": SessionBackgroundList,
   "session.background.register": SessionBackgroundRegister,

@@ -404,6 +404,7 @@ Generated from [tier-data.ts](packages/protocol/src/tier-data.ts), including eve
 | [Resume note in a new chat](docs/memory.md) (`resume_context`) | — | — | Included | /tier resume_context off |
 | [Plans kept as Markdown files](docs/plan-review.md) (`plan_files`) | — | Included | Included | /tier plan_files off · plan_files_location |
 | [Claude message threads](docs/message-threads.md) (`message_threads`) | Included | Included | Included | /tier message_threads off · zeroDataRetention |
+| [What's new for you](docs/whats-new.md) (`whats_new`) | — | Included | Included | /whatsnew · /whatsnew all · /tier whats_new off |
 <!-- tiers:end -->
 
 ## Measurements

@@ -1,5 +1,5 @@
 ---
-summary: open a file or folder in the viewer beside the chat; click a path; diagrams
+summary: open a file or folder beside the chat; click a path; diagrams
 docs: file-viewer, mermaid, changes
 aliases: file-viewer, open, path-click, preview, mermaid, diagram, pathclick
 ---

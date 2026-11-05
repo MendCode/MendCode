@@ -1115,7 +1115,7 @@ export async function startDaemon(options: DaemonOptions) {
   /** Calls outside turns go to `/usage`'s Auxiliary section (docs/usage.md); the ledger keeps counting them as before. */
   const auxiliaryUsage = createAuxiliaryUsage({ store, now: () => clock.now(), price: (usage) => budgets.price(usage), log: (message) => logLine("warn", message) })
   /** One tool-less completion outside a turn: guarded by the budget, counted by the ledger and recorded under `auxiliary`'s role. */
-  const completeBudgeted: AuxiliaryComplete | undefined = options.complete ? async ({ auxiliary, ...request }) => {
+  const completeBudgeted: AuxiliaryComplete | undefined = options.complete ? async ({ auxiliary, onUsage, ...request }) => {
     const model = request.model ?? catalog.defaults
     await budgets.guard({ model: model.model, signal: request.signal })
     let usage: BudgetUsage | undefined
@@ -1125,7 +1125,7 @@ export async function startDaemon(options: DaemonOptions) {
       budgets.record(answer.usage)
       return answer.text
     } catch (error) { budgets.record(); throw error }
-    finally { auxiliaryUsage.record(auxiliary, usage, model.model) }
+    finally { auxiliaryUsage.record(auxiliary, usage, model.model); onUsage?.(usage) }
   } : undefined
   const extractBudgeted: DaemonOptions["extractMemory"] = options.extractMemory ? async (job, signal) => {
     const model = resolveModel({ role: "memoryExtractor", roles: rolesFor(store.settings.get(), job.directory), catalog })
@@ -3851,6 +3851,36 @@ export async function startDaemon(options: DaemonOptions) {
           if (!text) return reply(connection, command.id, { ok: false, code: "internal", message: "[DAEMON]: the model returned an empty recap" })
           store.sessionTree.putRecap(command.sessionId, last, text)
           return reply(connection, command.id, { ok: true, result: { text, at: clock.now(), cached: false } })
+        } catch (error) {
+          return reply(connection, command.id, { ok: false, code: "internal", message: `[DAEMON]: ${(error instanceof Error ? error.message : String(error)).slice(0, 500)}` })
+        }
+      }
+      case "whatsnew.ask": {
+        // It reads this machine's memories, settings and session titles: a local terminal only (docs/whats-new.md).
+        if (connection.remoteAddress || connection.peer) return reply(connection, command.id, { ok: false, code: "forbidden", message: "[DAEMON]: /whatsnew reads local memories and settings and is local only" })
+        const saved = store.settings.get()
+        if (!featureOn(saved, "whats_new", { safeMode: options.safeMode })) return reply(connection, command.id, { ok: false, code: "invalid_command", message: "[DAEMON]: /whatsnew is off in this tier (/tier whats_new on)" })
+        if (!completeBudgeted) return reply(connection, command.id, { ok: false, code: "invalid_command", message: "[DAEMON]: /whatsnew needs the native engine; /whatsnew all lists the changes" })
+        const { checkSuggestions, parseWhatsNew, whatsNewContext, whatsNewRequest, WHATS_NEW_TIMEOUT_MS } = await import("./whats-new")
+        const directory = command.directory
+        const memoryOn = memorySettings(saved, directory).memoryEnabled !== false
+        const context = whatsNewContext({
+          memories: memoryOn ? store.memories.list({ directory, status: "saved", profile: areaOf(saved, directory) }) : [],
+          settings: effectiveSettings(saved, { safeMode: options.safeMode }),
+          sessions: store.listSessions({ directory, limit: 30 }),
+        })
+        const request = whatsNewRequest({ version: command.version, changes: command.changes, context })
+        const roles = rolesFor(saved, directory)
+        const session = command.sessionId && store.hasSession(command.sessionId) ? store.sessionModel(command.sessionId) : undefined
+        const model = resolveModel({ role: "aside", session, roles, catalog })
+        const shown = { model: model.model, estimate: request.estimate, memories: context.memories.length, sessions: context.sessions.length }
+        if (command.dryRun) return reply(connection, command.id, { ok: true, result: shown })
+        let usage: BudgetUsage | undefined
+        try {
+          const text = redactSecrets(await completeBudgeted({ system: request.system, prompt: request.prompt, signal: AbortSignal.timeout(WHATS_NEW_TIMEOUT_MS), ...(options.models?.selectable ? { model } : {}), auxiliary: { role: "whatsNew", directory, ...(command.sessionId ? { sessionId: command.sessionId } : {}) }, onUsage: (value) => { usage = value } })).text
+          const suggestions = checkSuggestions(parseWhatsNew(text), { settings: saved, check: (patch) => store.settings.check(patch) })
+          const cost = usage ? usage.costMicros ?? budgets.price(usage) : undefined
+          return reply(connection, command.id, { ok: true, result: { ...shown, suggestions, ...(usage ? { usage: { input: usage.input, output: usage.output, ...(cost !== undefined ? { costMicros: cost } : {}) } } : {}) } })
         } catch (error) {
           return reply(connection, command.id, { ok: false, code: "internal", message: `[DAEMON]: ${(error instanceof Error ? error.message : String(error)).slice(0, 500)}` })
         }

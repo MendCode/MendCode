@@ -65,6 +65,7 @@ const modelPicker = lazyModule("model-picker", () => import("../view/model-picke
 const modelQuick = lazyModule("model-quick", () => import("../view/model-quick"))
 const sessionTree = lazyModule("session-tree-page", () => import("../view/session-tree-page"))
 const textPage = lazyModule("text-page", () => import("../view/text-page"))
+const whatsNewPage = lazyModule("whatsnew-page", () => import("../view/whatsnew-page"))
 const permissions = lazyModule("permissions-page", () => import("../view/permissions-page"))
 const sidebar = lazyModule("sidebar-editor", () => import("../view/sidebar-editor"))
 const promptMode = lazyModule("prompt-mode-page", () => import("../view/prompt-mode-page"))
@@ -149,6 +150,7 @@ export const PAGE_MODULES = {
   recap: [textPage],
   pr: [textPage],
   changelog: [textPage],
+  whatsnew: [whatsNewPage],
   permissions: [permissions],
   diagram: [diagram],
   sidebar: [sidebar],
@@ -185,7 +187,7 @@ export const PAGE_MODULES = {
 export type PageName = keyof typeof PAGE_MODULES
 
 /** Names of the lazily loaded modules, for the footprint test. */
-export const LAZY_MODULE_FILES = ["stash-page", "queue-page","history-page", "skills-page", "model-picker", "acp-page", "agent-picker", "theme-picker", "usage-page", "memory-page", "context-page", "changes-page", "git-page", "git-commit-page", "git-pr-page", "git-init-page", "mcps-page", "tools-page", "packages-page", "storage-page", "agents-page", "loops-page", "loop-command", "workflows-page", "workflow-command", "setup-page", "onboarding-page", "onboarding-detect", "customize-page", "settings-page", "status-page", "extensions-page", "hooks-page", "palette", "approval-diff", "pet-picker", "connect-page", "providers-page", "secrets-page", "session-tree-page", "text-page", "permissions-page", "mermaid-viewer", "sidebar-editor", "transcript-actions-page", "plan-review-page", "prompt-mode-page", "compaction-page", "agent-commands-page", "diagnostics-page", "worktrees-page", "automation-ledger-page", "compound-page", "marketplace-page", "ai-config-page", "reasoning-page", "release-page", "tsm-page", "ide-page", "mflow-page", "reviews-page", "reviews-keys", "console-page", "compaction-live", "compaction-arcade", "keymap-page", "terminal-setup-page", "tutorial-page", "model-quick", "file-viewer"] as const
+export const LAZY_MODULE_FILES = ["stash-page", "queue-page","history-page", "skills-page", "model-picker", "acp-page", "agent-picker", "theme-picker", "usage-page", "memory-page", "context-page", "changes-page", "git-page", "git-commit-page", "git-pr-page", "git-init-page", "mcps-page", "tools-page", "packages-page", "storage-page", "agents-page", "loops-page", "loop-command", "workflows-page", "workflow-command", "setup-page", "onboarding-page", "onboarding-detect", "customize-page", "settings-page", "status-page", "extensions-page", "hooks-page", "palette", "approval-diff", "pet-picker", "connect-page", "providers-page", "secrets-page", "session-tree-page", "text-page", "whatsnew-page", "permissions-page", "mermaid-viewer", "sidebar-editor", "transcript-actions-page", "plan-review-page", "prompt-mode-page", "compaction-page", "agent-commands-page", "diagnostics-page", "worktrees-page", "automation-ledger-page", "compound-page", "marketplace-page", "ai-config-page", "reasoning-page", "release-page", "tsm-page", "ide-page", "mflow-page", "reviews-page", "reviews-keys", "console-page", "compaction-live", "compaction-arcade", "keymap-page", "terminal-setup-page", "tutorial-page", "model-quick", "file-viewer"] as const
 
 /** The lazily loaded modules a slash command needs, if any. */
 export function slashPage(command: string): PageName | undefined {
@@ -372,6 +374,11 @@ export const textPageRows: TextPageMod["textPageRows"] = (...args) => textPage.g
 export const textPageKey: TextPageMod["textPageKey"] = (...args) => textPage.get().textPageKey(...args)
 export const textPageViewport: TextPageMod["textPageViewport"] = (...args) => textPage.get().textPageViewport(...args)
 export const renderTextPage: TextPageMod["renderTextPage"] = (...args) => textPage.get().renderTextPage(...args)
+
+type WhatsNewMod = typeof import("../view/whatsnew-page")
+export const createWhatsNewState: WhatsNewMod["createWhatsNewState"] = (...args) => whatsNewPage.get().createWhatsNewState(...args)
+export const whatsNewKey: WhatsNewMod["whatsNewKey"] = (...args) => whatsNewPage.get().whatsNewKey(...args)
+export const renderWhatsNewPage: WhatsNewMod["renderWhatsNewPage"] = (...args) => whatsNewPage.get().renderWhatsNewPage(...args)
 
 type PermissionsMod = typeof import("../view/permissions-page")
 export const createPermissionsPageState: PermissionsMod["createPermissionsPageState"] = (...args) => permissions.get().createPermissionsPageState(...args)

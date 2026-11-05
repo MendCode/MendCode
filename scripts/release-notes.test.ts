@@ -273,3 +273,24 @@ test("the command reads CHANGELOG.md and the commits from git and writes the tit
     expect(Bun.file(path.join(dir, "notes.md")).size).toBe(0)
   } finally { rmSync(dir, { recursive: true, force: true }) }
 })
+
+describe("the copyable prompt ends every release page", () => {
+  test("a stable, a beta and the Nightly end with the prompt that names their own page", () => {
+    const stable = RICH.replace("## v0.0.4-beta.1", "## v0.0.4")
+    const unreleased = "## Unreleased\n\nToday's build.\n\n### Fixed\n\n- A fixed thing.\n"
+    const pages: [string, string][] = [
+      [releaseNotes(input("v0.0.4", { releases: [release("v0.0.3")], changelog: stable, tagChangelog: stable })), "/releases/tag/v0.0.4"],
+      [releaseNotes(input("v0.0.4-beta.1", { releases: RICH_RELEASES, changelog: RICH, tagChangelog: RICH })), "/releases/tag/v0.0.4-beta.1"],
+      [releaseNotes(input("v0.0.4-nightly.20261105.7", { releases: [...RICH_RELEASES, release("v0.0.4-nightly.20261104.5")], changelog: unreleased, tagChangelog: unreleased, previousChangelog: "## Unreleased\n" })), "/releases/tag/nightly"],
+    ]
+    for (const [notes, page] of pages) {
+      const at = notes.lastIndexOf("## What fits you")
+      const block = notes.slice(at)
+      expect(at).toBeGreaterThan(notes.indexOf("**Changelog**"))
+      expect(block).toContain("Paste this into any MendCode session:")
+      expect(block).toContain("Read only: do not change any setting unless I ask.")
+      expect(block).toContain(page)
+      expect(block.trimEnd().endsWith("```")).toBe(true)
+    }
+  })
+})

@@ -1,5 +1,6 @@
 import { readFileSync, writeFileSync } from "node:fs"
 import { channelOf, compareSemver, MOVING_NIGHTLY_TAG, parseReleases, parseVersion, pickRelease, type Channel, type Release } from "../packages/upgrade/src/releases"
+import { brief, emptyItems, highlights, MAX_HIGHLIGHTS, NOTE_GROUPS, parseChangelog, sentences, whatsNewPrompt, type ChangelogSection, type NoteGroup } from "../packages/protocol/src/changelog"
 
 /**
  * The title and notes of a GitHub release (docs/release.md, "Release titles and notes"). The public repository holds one snapshot
@@ -9,47 +10,13 @@ import { channelOf, compareSemver, MOVING_NIGHTLY_TAG, parseReleases, parseVersi
  * The previous release is the updater's (`pickRelease`): a nightly follows the newest older nightly, beta or stable.
  */
 
-export const NOTE_GROUPS = ["New", "Changed", "Fixed", "Upgrade notes", "Known limitations"] as const
-type Group = (typeof NOTE_GROUPS)[number]
-export type ChangelogSection = { name: string; summary: string; items: Record<Group, string[]> }
+// The parser, the one-line highlights and the copyable prompt are shared with `/changelog` and `/whatsnew` (docs/whats-new.md).
+export { NOTE_GROUPS, brief, highlight, highlights, parseChangelog, sentences, type ChangelogSection } from "../packages/protocol/src/changelog"
+type Group = NoteGroup
 
 const fail = (message: string): never => { throw new Error(`[RELEASE_NOTES]: ${message}`) }
-const emptyItems = (): Record<Group, string[]> => ({ New: [], Changed: [], Fixed: [], "Upgrade notes": [], "Known limitations": [] })
 const itemCount = (section: ChangelogSection) => NOTE_GROUPS.reduce((total, group) => total + section.items[group].length, 0)
 const channelOfTag = (tag: string) => channelOf({ tag, prerelease: tag.includes("-"), draft: false, publishedAt: 0, assets: [] })
-
-/** `## Unreleased` or `## <tag> - <date> ...`, a summary paragraph, then `### <group>` lists of `- ` items. */
-export function parseChangelog(text: string): Map<string, ChangelogSection> {
-  const sections = new Map<string, ChangelogSection>()
-  let section: ChangelogSection | undefined
-  let group: Group | undefined
-  const summary: string[] = []
-  const close = () => { if (section) section.summary = summary.join("\n").trim(); summary.length = 0 }
-  for (const line of text.split("\n")) {
-    const heading = /^## (\S+)/.exec(line)
-    if (heading) {
-      close()
-      if (sections.has(heading[1]!)) fail(`CHANGELOG.md has two "## ${heading[1]}" sections`)
-      section = { name: heading[1]!, summary: "", items: emptyItems() }
-      sections.set(section.name, section)
-      group = undefined
-      continue
-    }
-    if (!section) continue
-    const sub = /^### (.+?)\s*$/.exec(line)
-    if (sub) {
-      if (!NOTE_GROUPS.includes(sub[1] as Group)) fail(`CHANGELOG.md ${section.name}: unknown heading "### ${sub[1]}" (use ${NOTE_GROUPS.join(", ")})`)
-      group = sub[1] as Group
-      continue
-    }
-    if (!group) { summary.push(line); continue }
-    const list = section.items[group]
-    if (line.startsWith("- ")) list.push(line.slice(2).trim())
-    else if (/^\s+\S/.test(line) && list.length) list[list.length - 1] += ` ${line.trim()}`
-  }
-  close()
-  return sections
-}
 
 /** "MendCode v0.0.2", "MendCode v0.0.2 Beta 4", "MendCode Nightly" (the one moving release), "MendCode Dev 1a2b3c4". */
 export function releaseTitle(tag: string): string {
@@ -65,59 +32,7 @@ export function releaseTitle(tag: string): string {
 /** The tag of the GitHub release that carries `tag`'s files: every build has its own, except a nightly, which replaces the one `nightly`. */
 export const releaseTagOf = (tag: string) => (channelOfTag(tag) === "nightly" ? MOVING_NIGHTLY_TAG : tag)
 
-const MAX_HIGHLIGHTS = 8
 const MAX_LIST = 6
-
-/** The first `count` sentences of `text` on one line (a sentence ends at . ! or ? before a capital letter, a quote, a bracket or the end). */
-export function sentences(text: string, count: number): string {
-  const flat = text.replace(/\s+/g, " ").trim()
-  let end = 0
-  for (let found = 0; found < count; found++) {
-    const next = /[.!?](?=\s+[A-Z`\[(*"]|$)/.exec(flat.slice(end))
-    if (!next) return flat
-    end += next.index + 1
-  }
-  return flat.slice(0, end)
-}
-
-/**
- * One line for a list: the first sentence; when that is longer than `max`, it ends at its last colon or semicolon (or comma) that
- * leaves a readable start, else at a word with `…`. Links and code spans stay whole.
- */
-export function brief(item: string, max = 150): string {
-  const line = sentences(item, 1)
-  if (line.length <= max) return line
-  const head = line.slice(0, max)
-  // A cut keeps code spans, links and parentheses whole, and leaves some words (not only a code span) before it.
-  const whole = (index: number) => {
-    const before = head.slice(0, index)
-    const count = (character: string) => before.split(character).length - 1
-    return count("`") % 2 === 0 && count("(") === count(")") && count("[") === count("]") && before.replace(/`[^`]*`/g, "").trim().length >= 20
-  }
-  for (const [separator, least] of [[/[:;] /g, 40], [/, /g, 60]] as const) {
-    const at = [...head.matchAll(separator)].filter((found) => found.index! >= least && whole(found.index!)).pop()
-    if (at) return `${head.slice(0, at.index!)}.`
-  }
-  const cut = head.replace(/\s+\S*$/, "")
-  return `${cut.replace(/[,;:(\s]+$/, "")}…`
-}
-
-/** A highlight reads like a headline: the bold lead of the item (`**Footer packs.**`) and one sentence after it, or the first sentence. */
-export function highlight(item: string): string {
-  const lead = /^\*\*(.+?)\*\*\s*(.*)$/s.exec(item)
-  if (!lead) return brief(item, 150)
-  const title = lead[1]!.replace(/\.$/, "")
-  const rest = brief(lead[2]!, 130)
-  return rest ? `**${title}.** ${rest}` : `**${title}.**`
-}
-
-/**
- * The same short list the release page, the nightly page and any in-app "what's new" show: the new things first, then the changes,
- * at most eight, each one line. Fixes never crowd it out (they have their own list).
- */
-export function highlights(items: Record<Group, string[]>): string[] {
-  return [...items.New, ...items.Changed].slice(0, MAX_HIGHLIGHTS).map(highlight)
-}
 
 /** The release `tag` follows: the newest published release older than it that its channel takes. */
 export function previousRelease(tag: string, releases: readonly Release[]): Release | undefined {
@@ -255,7 +170,13 @@ export function releaseNotes(input: NotesInput): string {
     ...(input.commits.length > listed.length ? [`- … and ${input.commits.length - listed.length} more`] : []), "")
   if (input.files.length) lines.push(`${input.files.length} file${input.files.length === 1 ? "" : "s"} changed: ${areas(input.files)}.`, "")
   lines.push("</details>", "", `**Changelog**: [CHANGELOG.md](${url}/blob/${input.tag}/CHANGELOG.md)${previous ? ` · [compare with ${previous.tag}](${url}/compare/${previous.tag}...${input.tag})` : ` · [commits](${url}/commits/${input.tag})`}`, "")
+  lines.push(...askBlock(input.tag, `${url}/releases/tag/${source}`))
   return lines.join("\n")
+}
+
+/** The last block of every release page: a prompt to paste into any MendCode session (docs/whats-new.md, "The copyable prompt"). */
+export function askBlock(tag: string, page: string): string[] {
+  return ["## What fits you", "", "Paste this into any MendCode session:", "", "```text", whatsNewPrompt({ version: tag, changes: `on ${page}` }), "```", ""]
 }
 
 if (import.meta.main) {

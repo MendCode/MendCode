@@ -88,11 +88,14 @@ are the exact commits of those tags. The page reads short first, in this order:
 - one or two sentences (the start of the summary paragraph), then a line with the channel, the previous release and the commit it was built from;
 - **What's new**: at most eight one-line highlights, the section's `New` items and then its `Changed` ones, in the order the CHANGELOG
   lists them (put the most important first). An item that starts with a bold lead (`**Footer packs.** …`) shows the lead and one
-  sentence; the rest of the item stays in the full details. The same function (`highlights` in `scripts/release-notes.ts`) is the one to use wherever an in-app "what's new" is built from these sections;
+  sentence; the rest of the item stays in the full details. The same function (`highlights` in `packages/protocol/src/changelog.ts`) builds `/changelog` and `/whatsnew` in the app ([what's new](whats-new.md));
 - **Fixes** and **Changes**: at most six one-line items each, then how many more the full details hold; **Upgrade notes** and **Known limitations** the same way;
 - how to install this channel;
 - **Full details**, folded: every item of the section in full, how to verify (`SHA256SUMS`, the cosign bundles, GitHub provenance), the commits since the previous release and the changed files by area;
-- a link to `CHANGELOG.md` at the tag and the compare link.
+- a link to `CHANGELOG.md` at the tag and the compare link;
+- **What fits you**: a short prompt to paste into any MendCode session, naming this version and its release page, that asks
+  the session which changes fit the user (read only, in the user's language; [what's new](whats-new.md#the-copyable-prompt)).
+  The script adds it to every release, so CHANGELOG.md has no copy of it.
 
 Where the text comes from:
 
