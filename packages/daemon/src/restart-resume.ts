@@ -22,13 +22,15 @@ export function createRestartResume(deps: {
     resumes: { put(entry: PendingResume): void; list(limit: number): PendingResume[]; remove(sessionId: string): void }
     launchers: { get(child: string): string | undefined }
     hasSession(sessionId: SessionId): boolean
-    queueOf(sessionId: SessionId): unknown[]
   }
   enabled(): boolean
   now(): number
   /** The events from the session's last `turn.started` on; undefined when it never started a turn. */
   lastTurn(sessionId: SessionId): SessionEvent[] | undefined
-  /** Starts the steering turn; false when the session is busy, held or has queued messages. */
+  /**
+   * Starts the steering turn ahead of the messages that waited behind the interrupted turn (the queue the restart restored), which
+   * follow it; false when the session is busy, paused or held by a cancel.
+   */
   resume(sessionId: SessionId, text: string): Promise<boolean>
   /** Tells the model of the launching session; resolves once queued. */
   tell(launcher: SessionId, text: string, queueId: QueueId): Promise<unknown>
@@ -64,7 +66,6 @@ export function createRestartResume(deps: {
     if (!deps.enabled()) return { reason: "resumeAfterRestart is off in the settings" }
     if (entry.attempts >= RESUME_MAX_ATTEMPTS) return { reason: `it was already resumed ${entry.attempts} times and a shutdown stopped it each time` }
     if (deps.now() - entry.at > RESUME_MAX_AGE_MS) return { reason: "the daemon stayed down for hours" }
-    if (deps.store.queueOf(entry.sessionId as SessionId).length > 0) return { reason: "messages are waiting in its queue" }
     return undefined
   }
 

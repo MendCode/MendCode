@@ -1,5 +1,5 @@
 ---
-summary: long commands, servers, watchers and interactive programs in the background
+summary: long commands, servers, watchers and programs in the background
 docs: interactive-tools, async-tools, pty, tool-discovery
 aliases: bg-shell, jobs, daemonize, dev-server, watcher, detach, shell-session, pty, sleep
 ---

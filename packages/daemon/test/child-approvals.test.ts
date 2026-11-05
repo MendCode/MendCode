@@ -11,6 +11,7 @@ function harness(input: { humans?: SessionId[] } = {}) {
   const notices: Array<{ launcher: string; text: string }> = []
   const answered: Array<{ child: string; requestId: string; approve: boolean }> = []
   const mirrored: Array<{ child: string; requestId: string; text: string }> = []
+  const announcements: Array<{ launcher: string; launcherTitle: string; total: number; children: Array<{ sessionId: string; title: string }> }> = []
   let n = 0
   const links = new Map<string, string>([[kids.a, launcher], [kids.b, launcher], [kids.c, "ses_elsewhere"]])
   const approvals = createChildApprovals({
@@ -22,6 +23,7 @@ function harness(input: { humans?: SessionId[] } = {}) {
     turnId: () => "turn_new" as TurnId,
     queueId: () => `que_${++n}` as QueueId,
     emit: (event) => void events.push(event),
+    announce: (waiting) => void announcements.push(waiting),
     mask: (_id, text) => text.replaceAll("sk-secret", "[secret]"),
     notify: async (target, text) => void notices.push({ launcher: target, text }),
     resolveChild: async ({ child, requestId, decision }) => void (decision.kind === "answer" ? mirrored.push({ child, requestId, text: decision.text }) : answered.push({ child, requestId, approve: decision.kind === "approve" })),
@@ -33,7 +35,7 @@ function harness(input: { humans?: SessionId[] } = {}) {
   const cards = () => events.filter((event): event is Extract<SessionEventDraft, { type: "server.request" }> => event.type === "server.request")
   const answer = (card: { requestId: RequestId; sessionId: SessionId }, label: string, human = true) =>
     approvals.resolve({ v: 1, id: "cmd", clientId: "cli_user", type: "request.resolve", sessionId: card.sessionId, requestId: card.requestId, decision: { kind: "answer", text: label, answers: [[label]] } } as unknown as Extract<Command, { type: "request.resolve" }>, human)
-  return { approvals, events, notices, answered, mirrored, ask, settle, cards, answer }
+  return { approvals, announcements, events, notices, answered, mirrored, ask, settle, cards, answer }
 }
 
 describe("approvals that sessions started from another session wait for", () => {
@@ -53,9 +55,11 @@ describe("approvals that sessions started from another session wait for", () => 
     expect(mine.text).toContain("You cannot approve")
     const [card] = h.cards()
     expect(h.cards()).toHaveLength(2)
-    expect(card).toMatchObject({ sessionId: launcher, kind: "question", async: true })
-    expect(card!.questions![0]!.options!.map((option) => option.label)).toEqual(["Approve all (2)", "Deny all", "One by one"])
-    expect(card!.questions![0]!.context).toContain("bun test [secret]")
+    // An ordinary approval card (same panel as a tool's), with the daemon's own choices.
+    expect(card).toMatchObject({ sessionId: launcher, kind: "approval", async: true })
+    expect(card!.options!.map((option) => option.label)).toEqual(["Allow all (2)", "Reject all", "One by one"])
+    expect(card!.detail).toContain("owner ses_a · shell: bun scripts/gen.ts")
+    expect(card!.detail).toContain("bun test [secret]")
     expect(h.answered).toEqual([])
   })
 
@@ -75,7 +79,7 @@ describe("approvals that sessions started from another session wait for", () => 
     const card = h.cards()[0]!
     // A request that arrives after the card was drawn is not covered by it.
     h.ask(kids.a, "req_late")
-    expect(h.answer(card, "Approve all (2)")).toEqual({ ok: true })
+    expect(h.answer(card, "Allow all (2)")).toEqual({ ok: true })
     await h.settle()
     expect(h.answered.filter((entry) => entry.requestId !== "req_late")).toEqual([{ child: kids.a, requestId: "req_a", approve: true }, { child: kids.b, requestId: "req_b", approve: true }])
     expect(h.answered.some((entry) => entry.requestId === "req_late")).toBe(false)
@@ -87,7 +91,7 @@ describe("approvals that sessions started from another session wait for", () => 
     h.ask(kids.a, "req_a")
     await h.settle()
     const card = h.cards()[0]!
-    expect(h.answer(card, "Approve all (1)", false)).toMatchObject({ ok: false, code: "forbidden" })
+    expect(h.answer(card, "Allow all (1)", false)).toMatchObject({ ok: false, code: "forbidden" })
     expect(h.answered).toEqual([])
     expect(h.approvals.resolve({ v: 1, id: "c", clientId: "c", type: "request.resolve", sessionId: card.sessionId, requestId: card.requestId, decision: { kind: "deny" } } as never, false)).toEqual({ ok: true })
     await h.settle()
@@ -102,16 +106,16 @@ describe("approvals that sessions started from another session wait for", () => 
     h.answer(h.cards()[0]!, "One by one")
     const singles = h.cards().slice(1)
     expect(singles).toHaveLength(2)
-    expect(singles[0]!.questions![0]!.options!.map((option) => option.label)).toEqual(["Approve once", "Deny"])
-    h.answer(singles[0]!, "Approve once")
-    h.answer(singles[1]!, "Deny")
+    expect(singles[0]!.options!.map((option) => option.label)).toEqual(["Allow once", "Reject"])
+    h.answer(singles[0]!, "Allow once")
+    h.answer(singles[1]!, "Reject")
     await h.settle()
     expect(h.answered).toEqual([{ child: kids.a, requestId: "req_a", approve: true }, { child: kids.b, requestId: "req_b", approve: false }])
 
     const other = harness()
     other.ask(kids.a, "req_a")
     await other.settle()
-    other.answer(other.cards()[0]!, "Deny all")
+    other.answer(other.cards()[0]!, "Reject all")
     await other.settle()
     expect(other.answered).toEqual([{ child: kids.a, requestId: "req_a", approve: false }])
   })
@@ -126,7 +130,7 @@ describe("approvals that sessions started from another session wait for", () => 
     await h.settle()
     expect(h.events.find((event) => event.type === "server.request.resolved" && event.requestId === first.requestId)).toMatchObject({ resolution: "abandoned" })
     const second = h.cards()[1]!
-    expect(second.questions![0]!.options![0]!.label).toBe("Approve all (1)")
+    expect(second.options![0]!.label).toBe("Allow all (1)")
     h.approvals.observe({ type: "server.request.resolved", sessionId: kids.b, requestId: "req_b", resolution: "approved" } as unknown as SessionEvent)
     await h.settle()
     expect(h.events.find((event) => event.type === "server.request.resolved" && event.requestId === second.requestId)).toMatchObject({ resolution: "abandoned" })
@@ -183,5 +187,31 @@ describe("approvals that sessions started from another session wait for", () => 
     second.ask(kids.a, "req_a")
     second.approvals.forget(kids.a)
     expect(second.approvals.pending(launcher)).toEqual([])
+  })
+
+  test("every terminal is told who waits, and again with none once they are answered", async () => {
+    const h = harness()
+    h.ask(kids.a, "req_a")
+    h.ask(kids.b, "req_b")
+    await h.settle()
+    expect(h.announcements).toHaveLength(1)
+    expect(h.announcements[0]).toMatchObject({ launcher, launcherTitle: `owner ${launcher}`, total: 2, children: [{ sessionId: kids.a, title: `owner ${kids.a}` }, { sessionId: kids.b }] })
+    expect(h.approvals.snapshot()).toHaveLength(1)
+    h.approvals.observe({ type: "server.request.resolved", sessionId: kids.a, requestId: "req_a", resolution: "approved" } as unknown as SessionEvent)
+    expect(h.announcements.at(-1)).toMatchObject({ total: 1, children: [{ sessionId: kids.b }] })
+    h.approvals.observe({ type: "server.request.resolved", sessionId: kids.b, requestId: "req_b", resolution: "denied" } as unknown as SessionEvent)
+    expect(h.announcements.at(-1)).toMatchObject({ total: 0, children: [] })
+    expect(h.approvals.snapshot()).toEqual([])
+  })
+
+  test("the single card is a tool approval for that child with the same Allow once and Reject", async () => {
+    const h = harness()
+    h.ask(kids.a, "req_a", "bun test sk-secret")
+    await h.settle()
+    h.answer(h.cards()[0]!, "One by one")
+    const single = h.cards()[1]!
+    expect(single).toMatchObject({ kind: "approval", tool: "shell", async: true })
+    expect(single.detail).toBe("shell: bun test [secret]")
+    expect(single.questions).toBeUndefined()
   })
 })

@@ -145,7 +145,7 @@ export type ToolCardModel = Readonly<{
   mapDetail?: "balanced" | "full"
 }>
 
-export type ApprovalOption = Readonly<{ label: string; /** The letter key that also picks it ("" when none). */ key: string; choice: "once" | "session" | "project" | "user" | "deny" | "note" | "edit" | "comment" }>
+export type ApprovalOption = Readonly<{ label: string; /** The letter key that also picks it ("" when none). */ key: string; choice: "once" | "session" | "project" | "user" | "deny" | "note" | "edit" | "comment" | "answer" }>
 export type ApprovalModel = Readonly<{
   requestId: string
   /** `panel` is the boxed prompt; `inline` is the minimal view's one-line prompt. */
@@ -224,7 +224,7 @@ export type LimitAction = "resume" | "schedule" | "cancel" | "snooze" | "dismiss
 export type NoticeModel =
   | Readonly<{ kind: "toast"; variant: "info" | "success" | "warning" | "error"; title?: string; message: string; /** What to do next (`/memory undo`), muted and kept whole when one row has to cut the message. */ hint?: string; /** One row, not a floating box: the notice row above the prompt, or the inline live region. */ inline?: boolean }>
   | Readonly<{ kind: "limit"; view: Readonly<{ state: "paused" | "scheduled" | "snoozed" | "ready"; provider?: string; message: string; resetsAt?: number }>; chips: readonly Readonly<{ action: LimitAction; label: string }>[] }>
-  | Readonly<{ kind: "queue"; previews: readonly string[]; delivery: readonly (("queue" | "steer" | "restart") | undefined)[]; held: boolean; paused: boolean; mode?: string; shell: readonly number[]; /** Positions that are system notices, not the user's messages. */ notices?: readonly number[] }>
+  | Readonly<{ kind: "queue"; previews: readonly string[]; delivery: readonly (("queue" | "steer" | "restart") | undefined)[]; held: boolean; /** What ended the last turn, which is why a held queue waits. */ heldBy?: "cancel" | "restart" | "interrupt"; paused: boolean; mode?: string; shell: readonly number[]; /** Positions that are system notices, not the user's messages. */ notices?: readonly number[] }>
 
 export type ScriptSegment = Readonly<{ text: string; fg?: string | undefined; bold?: boolean | undefined; prepend?: boolean | undefined }>
 /** The rows under the prompt (agent, model, runtime, counters). Spans inside are theme spans. */

@@ -100,6 +100,7 @@ test("queue selection survives a daemon restart and applies only to that queued 
   await h.client.send({ type: "user.submit", sessionId: root, text: "running", attachments: [] })
   await until(() => h.requests.length === 1)
   await h.client.send({ type: "user.submit", sessionId: root, text: "queued", attachments: [], selection: { model: { model: "gpt-6-luna", variant: "high" }, agent: "plan" } })
+  await h.client.send({ type: "settings.set", patch: { resumeAfterRestart: false } })
   await h.daemon.stop()
   h.client.close()
   const resumed = await native({ dir, project: dir, steps: [stop("resumed"), stop("new turn")] })

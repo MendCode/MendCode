@@ -66,9 +66,9 @@ export function patchLayer(layer: ConfigLayer, patch: Record<string, unknown>): 
 const MODE_RANK: Record<ReviewConfig["mode"], number> = { "on-request": 0, labels: 1, auto: 2 }
 const FIX_RANK: Record<ReviewConfig["fix"]["mode"], number> = { review: 0, "fix-once": 1, "fix-loop": 2 }
 /** Keys only the repository sets; a personal or task layer may repeat the value, never change it. */
-const CONTROLLED = new Set<ConfigKey>(["checks", "publishers", "reviewers", "preset", "backlog"])
+const CONTROLLED = new Set<ConfigKey>(["checks", "publishers", "reviewers", "preset", "backlog", "commands", "fallback_models"])
 /** Keys a personal or task layer sets freely: they change how a review reads, not what it may do or whose PRs it takes. */
-const RESTYLE = new Set<ConfigKey>(["profile", "cap", "template", "phases", "coverage", "readers"])
+const RESTYLE = new Set<ConfigKey>(["profile", "cap", "min_score", "template", "phases", "coverage", "readers"])
 
 const globWithin = (inner: string, outer: string) => inner === outer || (() => { try { return new Bun.Glob(outer).match(inner) } catch { return false } })()
 

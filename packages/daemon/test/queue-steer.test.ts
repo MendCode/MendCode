@@ -36,6 +36,7 @@ test("reorder and edit persist across a restart, and queue.list reads them back"
   expect(await h.client.send({ type: "queue.reorder", sessionId, queueId: b, to: "top" })).toMatchObject({ ok: true, result: { position: 0 } })
   expect(await h.client.send({ type: "queue.edit", sessionId, queueId: a, text: "a fixed" })).toMatchObject({ ok: true })
   expect(await h.client.send({ type: "queue.list", sessionId })).toMatchObject({ ok: true, result: { entries: [{ queueId: b, text: "b" }, { queueId: a, text: "a fixed" }] } })
+  await h.client.send({ type: "settings.set", patch: { resumeAfterRestart: false } })
   await h.client.close()
   await h.daemon.stop()
   const again = await boot({ dir: h.dir, project: h.project, steps: [stop("one"), stop("two")] })

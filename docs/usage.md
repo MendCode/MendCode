@@ -115,6 +115,7 @@ unknown), under the session or directory it was made for:
 | `agentGenerate` | `/agents` create with a generated definition | `agent-generate.ts` |
 | `setup` | the setup helper's answers | `setup.ask` |
 | `loopInterpret` | `/loop` with a schedule phrase the local parser did not read | `loop.interpret` |
+| `whatsNew` | `/whatsnew` picking the changes that fit you ([what's new](whats-new.md)) | `whatsnew.ask` |
 | `prReview` | the PR reviewer's own turns (review, verify, fix children), one row per day, model and directory | `pr-review/service.ts` |
 
 `prReview` is the one role that attributes instead of adding: the reviewer's child sessions are hidden sessions whose turns the

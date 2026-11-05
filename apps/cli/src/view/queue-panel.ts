@@ -14,7 +14,7 @@ const SEND = " ↗ SEND "
 const HELD_INDENT = "  "
 
 /** v1's queued previews and send chip, inside the shared panel grid. Chip coordinates are local to these rows. */
-export function renderQueuePanel(input: { width: number; previews: readonly string[]; /** Per-message delivery (steer, wait, next), by position. */ delivery?: ReadonlyArray<"queue" | "steer" | "restart" | undefined>; held: boolean; paused?: boolean; mode?: NonNullable<Settings["queue"]>["mode"]; shell?: ReadonlySet<number>; /** Positions that are system notices (a background task ended). */ notices?: ReadonlySet<number> }): { rows: Line[]; sendChip?: { row: number; from: number; to: number } } {
+export function renderQueuePanel(input: { width: number; previews: readonly string[]; /** Per-message delivery (steer, wait, next), by position. */ delivery?: ReadonlyArray<"queue" | "steer" | "restart" | undefined>; held: boolean; /** What ended the last turn, which is why a held queue waits. */ heldBy?: "cancel" | "restart" | "interrupt"; paused?: boolean; mode?: NonNullable<Settings["queue"]>["mode"]; shell?: ReadonlySet<number>; /** Positions that are system notices (a background task ended). */ notices?: ReadonlySet<number> }): { rows: Line[]; sendChip?: { row: number; from: number; to: number } } {
   const { width, previews } = input
   if (previews.length === 0) return { rows: [] }
   // Nothing of the user's is waiting, only notices of the session's own background work: one muted line, not a box of messages to send.
@@ -48,8 +48,10 @@ export function renderQueuePanel(input: { width: number; previews: readonly stri
   })
   if (previews.length > QUEUE_SHOWN) body.push([{ text: `+${previews.length - QUEUE_SHOWN} more`, fg: "muted" }])
   const mode = input.mode ?? "after-response"
-  // Held says why: a cancel stops the queue too, so a message of another session or a task does not restart what the user stopped.
-  const label = input.paused ? "Paused" : input.held ? "Held since your cancel" : mode === "after-tools" ? "After tools" : mode === "immediate" ? "Sending" : "After response"
+  // Held says why: a cancel stops the queue too, so a message of another session or a task does not restart what the user stopped;
+  // a restart or an interruption holds what waited behind the turn it stopped.
+  const held = input.heldBy === "restart" ? "Held since the restart" : input.heldBy === "interrupt" ? "Held since the interruption" : input.heldBy === "cancel" ? "Held since your cancel" : "Held"
+  const label = input.paused ? "Paused" : input.held ? held : mode === "after-tools" ? "After tools" : mode === "immediate" ? "Sending" : "After response"
   const hints = keyText(input.paused ? padded ? "/unpause to continue · ctrl+k drop last" : "/unpause · ctrl+k drop" : padded ? `ctrl+s ${input.held ? "sends them" : "send now"} · ctrl+k drop last · ${preferChord() ? "ctrl+x ^" : "alt+↑"} edit` : "ctrl+s send · ctrl+k drop")
   const header = fit(spread([{ text: "Queue", fg: "primary" }], [{ text: hints, fg: "muted" }], width), width)
   const rows = [header, ...panelGrid({ rows: [[{ title: `${previews.length} queued · ${label}`, body }]], width, compact: false, maxColumns: 1, padding: padded })]

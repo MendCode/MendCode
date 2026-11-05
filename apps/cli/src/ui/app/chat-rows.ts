@@ -1,6 +1,7 @@
 import { homedir } from "node:os"
+import { reviewActivityView } from "../lazy-pages"
 import { HOME_RECENT_MS, HOME_WORKING, inProject } from "../../view/project-scope"
-import { ideSelectionKey } from "@mendcode/protocol/wire"
+import { featureOn, ideSelectionKey } from "@mendcode/protocol/wire"
 import { subagentRunOf } from "./subagent-run"
 import type { createPrompt } from "./prompt"
 import { PET_MIN_WIDTH } from "../breakpoints"
@@ -149,8 +150,9 @@ export function createChatRows(ctx: AppContext, actions: {
     const toastAbove = toastSpans ? undefined : toastRow
     // A newer build installed under this terminal: on the right of the prompt's top rule until the restart into it, so it takes no
     // row (the pet keeps standing on the prompt). Only a prompt without that rule gives it a right-aligned row of its own.
-    // After the restart into it, the same place says so until the first key: a restart nobody watched still gets seen.
-    const updateText = state.updateReady ? `${g.ok} New build installed ${g.sep} /restart to switch` : state.updated ? `${g.ok} Updated to the new build` : ""
+    // After the restart into it, the same place says so until the first key: a restart nobody watched still gets seen. That one
+    // notice names /whatsnew where the tier has it (docs/whats-new.md); the build that changed is the one running now.
+    const updateText = state.updateReady ? `${g.ok} New build installed ${g.sep} /restart to switch` : state.updated ? `${g.ok} Updated to the new build${featureOn(state.settingsNow, "whats_new") ? ` ${g.sep} /whatsnew` : ""}` : ""
     const updateOnRule = updateText !== "" && !asking && rich && preset !== "minimal" && frame.top.length === 1
     const promptRule: Line[] = asking ? [] : toastSpans?.length ? [overlayRule(frame.top[0]!, toastSpans, ruleOffset)] : overlay === "above" && workingBuilt?.length ? [overlayRule(frame.top[0]!, workingBuilt, ruleOffset)] : statusRule?.length ? [overlayRule(frame.top[0]!, statusRule, ruleOffset)] : frame.top
     const promptTop: Line[] = updateOnRule && promptRule.length === 1 ? [ruleRight(promptRule[0]!, [{ text: updateText, fg: "success" }])] : promptRule
@@ -189,7 +191,7 @@ export function createChatRows(ctx: AppContext, actions: {
     /** Rows the question card takes in the prompt's place, besides the one prompt row the room sums below already count. */
     const cardRows = asking ? Math.max(0, request!.rows.length - 1) : 0
     const shellQueued = new Set(state.transcript.queue.flatMap((entry, index) => (state.turnState.isShellQueued(entry.queueId) ? [index] : [])))
-    const queueDrawn = ctx.views.draw("notice", { kind: "queue", previews: state.transcript.queue.map((entry) => entry.preview), delivery: state.transcript.queue.map((entry) => entry.delivery), held: state.transcript.foreground === "queued", paused: (state.agentSessions.get(state.sessionId)?.paused ?? state.sessions.find((session) => session.sessionId === state.sessionId)?.paused) === true, shell: [...shellQueued], notices: state.transcript.queue.flatMap((entry, index) => (entry.notice && BACKGROUND_NOTICE.test(entry.preview) ? [index] : [])), mode: queuePolicy(state) }, { width, height: 12 })
+    const queueDrawn = ctx.views.draw("notice", { kind: "queue", previews: state.transcript.queue.map((entry) => entry.preview), delivery: state.transcript.queue.map((entry) => entry.delivery), held: state.transcript.foreground === "queued", ...(state.transcript.lastStop ? { heldBy: state.transcript.lastStop } : {}), paused: (state.agentSessions.get(state.sessionId)?.paused ?? state.sessions.find((session) => session.sessionId === state.sessionId)?.paused) === true, shell: [...shellQueued], notices: state.transcript.queue.flatMap((entry, index) => (entry.notice && BACKGROUND_NOTICE.test(entry.preview) ? [index] : [])), mode: queuePolicy(state) }, { width, height: 12 })
     const sendHit = queueDrawn.hits.find((hit) => hit.action === "send")
     const queue = { rows: queueDrawn.lines, sendChip: sendHit ? { row: sendHit.row, from: sendHit.from, to: sendHit.to } : undefined }
     // A turn paused by the provider's usage limit: the bar offers Resume at reset and Snooze until reset (docs/usage-limit.md).
@@ -285,7 +287,11 @@ export function createChatRows(ctx: AppContext, actions: {
       state.scratchArea = { top: dock.length + live.scratch.top, left: live.scratch.left, width: live.scratch.width, rows: live.scratch.rows, first: live.scratch.first }
       state.scratchCursor = live.scratch.cursor ? { row: dock.length + live.scratch.cursor.row, col: live.scratch.cursor.col } : undefined
     }
-    const above: Line[] = [...fixedAbove, ...dock, ...(live?.rows ?? []), ...(working ? [working] : []), ...agentRows, ...extAbove, ...commentRows.above, ...(findRow ? [findRow.row] : [])]
+    // A PR review of this session's watch: its steps as tool rows over the working line, gone when the run ends (its note stays).
+    const reviewView = state.reviewActivity.length ? reviewActivityView() : undefined
+    const reviewing = reviewView && !inlineView && rich && !asking ? reviewView.reviewsIn(state.reviewActivity, state.sessionId) : []
+    const reviewRows: Line[] = reviewView && reviewing.length ? barRows("background", reviewView.reviewStepRows({ jobs: reviewing, width, frame: state.spinFrame, now: now(), ascii: asciiGlyphs() }), width) : []
+    const above: Line[] = [...fixedAbove, ...dock, ...(live?.rows ?? []), ...reviewRows, ...(working ? [working] : []), ...agentRows, ...extAbove, ...commentRows.above, ...(findRow ? [findRow.row] : [])]
     // Reserve chrome first: a multiline prompt must not push the tray or footer off a short terminal.
     const editorRows = Math.max(1, Math.min(MAX_EDITOR_ROWS, height - topbar.length - above.length - popup.length - promptTop.length - frameBottom.length - below.length - cardRows - 1))
     const firstRow = Math.max(0, cursorAt - editorRows + 1)
@@ -774,7 +780,24 @@ export function createChatRows(ctx: AppContext, actions: {
     const retry = state.turnState.retry
     const hint = state.escArmedAt > 0 && now() - state.escArmedAt <= DOUBLE_ESC_MS && state.transcript.activeTurn !== undefined
     const active = BUSY.has(localState) || localState === "waiting_approval" || retry !== undefined
-    if (!active) return undefined
+    // An idle session whose watch has a PR review running shows that review at work, as a turn would show (docs/pr-review.md).
+    if (!active) {
+      const reviewView = state.reviewActivity.length ? reviewActivityView() : undefined
+      const reviews = reviewView ? reviewView.reviewsIn(state.reviewActivity, state.sessionId) : []
+      if (!reviewView || !reviews.length || !state.tuiProfile.showActivity || state.tuiProfile.activityPlacement === "off") return undefined
+      return renderWorkingRow({
+        width,
+        margin,
+        parts: (partsOverride ?? activityPartsOf(state.tuiProfile.activityParts)).filter((part) => part === "spinner" || part === "verb" || part === "elapsed"),
+        ...activityLook(),
+        ...(overlay ? { separator: g.sep } : {}),
+        spinner: state.reducedMotion ? "⋯" : SPINNER_FRAMES[state.spinFrame % SPINNER_FRAMES.length]!,
+        phase: reviewView.reviewPhase(reviews),
+        ...(state.tuiProfile.showElapsed && !state.accessible ? { elapsedMs: now() - reviewView.reviewStartedAt(reviews) } : {}),
+        now: now(),
+        interruptHint: false,
+      })
+    }
     if (!state.tuiProfile.showActivity && !retry && !hint) return undefined
     // `off` keeps what the user must see (a retry, the Esc hint) and nothing else, as the minimal view does.
     if (state.tuiProfile.activityPlacement === "off" && !retry && !hint) return undefined

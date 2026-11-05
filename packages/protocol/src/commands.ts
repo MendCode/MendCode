@@ -645,7 +645,7 @@ export const PrWatchControl = lazySchema(() => z.strictObject({
 /**
  * The PR reviewer (docs/pr-review.md), run by the daemon through the user's own forge CLI (`gh`, `glab`) or Gitea token: `watch-repo` reviews every new pull request and
  * new head of the session's repository (`directory` when given), `unwatch-repo` stops that, `review` reviews one PR now (`pr`: a
- * number, `#number` or a github.com pull URL; the current branch's PR when omitted), `list` shows the watches, `publish-on` and
+ * number, `#number` or a github.com pull URL; the current branch's PR when omitted), `describe` writes that PR's description from its review, `list` shows the watches, `publish-on` and
  * `publish-off` answer the one question asked before the first post to a repository; `role` is whose PRs a `watch-repo` takes. Notices go to `sessionId`. Needs
  * `experimental.pr_review`; local clients only. Ack: `{ text, watches }`, plus `dashboard` for `status` and `config` for the `config-*` actions.
  *
@@ -659,7 +659,7 @@ export const PrReviewControl = lazySchema(() => z.strictObject({
   ...base,
   type: z.literal("pr.review"),
   sessionId: SessionId,
-  action: z.enum(["setup-preview", "setup-apply", "watch-repo", "unwatch-repo", "review", "list", "publish-on", "publish-off", "status", "audit", "job-pause", "job-resume", "job-cancel", "job-retry", "take-over", "release", "config-show", "config-preview", "config-apply", "config-revert", "config-history"]),
+  action: z.enum(["setup-preview", "setup-apply", "watch-repo", "unwatch-repo", "review", "describe", "list", "publish-on", "publish-off", "status", "audit", "job-pause", "job-resume", "job-cancel", "job-retry", "take-over", "release", "config-show", "config-preview", "config-apply", "config-revert", "config-history"]),
   directory: z.string().min(1).max(4096).optional(),
   pr: z.string().min(1).max(300).optional(),
   /** `review` only: review the head whole even when it was already reviewed with the same config (otherwise answered at once, nothing run). */
@@ -1814,6 +1814,15 @@ export const SessionLabel = lazySchema(() => z.strictObject({
  */
 export const SessionRecap = lazySchema(() => z.strictObject({ ...base, type: z.literal("session.recap"), sessionId: SessionId, refresh: z.boolean().optional() }))
 
+/**
+ * `/whatsnew` (docs/whats-new.md): one model call (the aside role, else the session's model) that reads the changes the terminal
+ * sends with this machine's memories, effective settings and recent session titles of `directory`, and answers which of them fit
+ * the user. Local terminals only. `dryRun` builds the request and returns its model and estimated tokens without calling it.
+ * Ack: `{ model, estimate, suggestions?, usage? }`; a suggestion's `patch` was validated as `settings.set` would and comes with its `diff`.
+ * `changes` is at most `WHATS_NEW_MAX_CHANGES` (changelog.ts; written out here so the protocol does not load that module).
+ */
+export const WhatsNewAsk = lazySchema(() => z.strictObject({ ...base, type: z.literal("whatsnew.ask"), directory: z.string().min(1).max(4096), sessionId: SessionId.optional(), version: z.string().min(1).max(80), changes: z.string().min(1).max(16_000), dryRun: z.boolean().optional() }))
+
 export const SessionChildren = lazySchema(() => z.strictObject({ ...base, type: z.literal("session.children"), sessionId: SessionId }))
 export const SessionBackgroundList = lazySchema(() => z.strictObject({ ...base, type: z.literal("session.background.list"), directory: z.string().max(4096).optional() }))
 export const SessionBackgroundRegister = lazySchema(() => z.strictObject({ ...base, type: z.literal("session.background.register"), sessionId: SessionId, ...SessionBackgroundPatch.shape }))
@@ -2247,6 +2256,7 @@ export const COMMAND_SCHEMAS = {
   "session.merge": SessionMerge,
   "session.label": SessionLabel,
   "session.recap": SessionRecap,
+  "whatsnew.ask": WhatsNewAsk,
   "session.children": SessionChildren,
   "session.background.list": SessionBackgroundList,
   "session.background.register": SessionBackgroundRegister,

@@ -1,5 +1,6 @@
 import { lstat } from "node:fs/promises"
 import type { ChangedFile, ChangesReport } from "@mendcode/protocol"
+import { captureOutput } from "@mendcode/tools"
 
 const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 const MAX_FILES = 300
@@ -17,10 +18,13 @@ export class NotGitError extends Error {
   }
 }
 
+/** Past this a diff is cut: the report keeps well under a megabyte of it anyway. */
+const GIT_OUTPUT_BYTES = 32 * 1024 * 1024
+const GIT_TIMEOUT_MS = 60_000
+
 async function git(cwd: string, args: string[]) {
-  const proc = Bun.spawn(["git", "-C", cwd, "--no-pager", ...args], { stdout: "pipe", stderr: "pipe", env: { ...process.env, GIT_OPTIONAL_LOCKS: "0", LC_ALL: "C" } })
-  const [stdout, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited])
-  return { stdout, ok: code === 0 }
+  const result = await captureOutput(["git", "-C", cwd, "--no-pager", ...args], { env: { ...process.env, GIT_OPTIONAL_LOCKS: "0", LC_ALL: "C" }, limit: GIT_OUTPUT_BYTES, timeoutMs: GIT_TIMEOUT_MS, keepOnLimit: true })
+  return { stdout: result.out, ok: result.code === 0 && !result.stopped }
 }
 
 /** Size inside the JSON frame: quotes, backslashes, tabs and control characters are escaped. */

@@ -59,6 +59,33 @@ describe("a child above the caller's mode, put to the user", () => {
     expect(h.elevation.check({ via: "process", sessionId: "ses_other" }, submit("anything"), "ask")).toBeUndefined()
   })
 
+  test("the card offers full access as the user's own pick: it says it asks nothing, and choosing it sets full", async () => {
+    for (const asked of ["smart", "edits"] as const) {
+      const h = harness()
+      const pending = h.ask(asked)
+      const question = h.card()!.questions![0]!
+      expect(question.options!.map((option) => option.label)).toEqual(["Approve once", "Approve in full access", "Deny"])
+      expect(question.options![1]!.description).toContain("asks nothing")
+      expect(question.context).toContain("Full access is your choice only")
+      expect(h.resolve({ kind: "answer", text: "Approve in full access", answers: [["Approve in full access"]] })).toEqual({ ok: true })
+      expect(await pending).toBeUndefined()
+      expect(h.applied).toEqual([{ child, mode: "full" }])
+      // Approved for one prompt, as with the mode asked for; lowering it is still allowed.
+      expect(h.elevation.check(origin, submit("fix the flaky test sk-secret"), "ask")).toBeUndefined()
+      expect(h.elevation.check(origin, submit("more"), "ask")).toContain("one prompt")
+    }
+  })
+
+  test("full access is never picked by a session: not asked for, and not answered from a non-human client", async () => {
+    expect(await harness().ask("full")).toContain("never approved this way")
+    const h = harness()
+    const pending = h.ask()
+    expect(h.resolve({ kind: "answer", text: "Approve in full access", answers: [["Approve in full access"]] }, false)).toMatchObject({ ok: false, code: "forbidden" })
+    expect(h.applied).toEqual([])
+    expect(h.resolve({ kind: "deny" }, false)).toEqual({ ok: true })
+    expect(await pending).toBe("the user denied it")
+  })
+
   test("denied, dismissed or unanswered: the refusal stands and nothing is set", async () => {
     const decisions: Array<Extract<Command, { type: "request.resolve" }>["decision"]> = [{ kind: "answer", text: "Deny", answers: [["Deny"]] }, { kind: "deny" }]
     for (const decision of decisions) {

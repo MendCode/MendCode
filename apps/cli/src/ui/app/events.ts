@@ -5,7 +5,7 @@ import type { createChanges } from "./changes"
 import type { createMemory } from "./memory"
 import type { createSecrets } from "./secrets"
 import type { createAgents } from "./agents"
-import { preload } from "../lazy-pages"
+import { loadReviewActivity, preload } from "../lazy-pages"
 import { sidebarVisible } from "../../view/sidebar"
 import { withPushedDraft } from "../../view/session-label"
 import { normalizeTuiProfile } from "../../view/tui-profile"
@@ -157,6 +157,13 @@ export function createEvents(ctx: AppContext, actions: {
       return
     }
     if (event.type === "review.changed") return actions.noteReview(event)
+    // The PR reviews running now, whole: the watching session draws their steps and the footer of any other session names them.
+    if (event.type === "pr.review.activity") {
+      state.reviewActivity = event.jobs
+      if (event.jobs.length) void loadReviewActivity().then(requestFrame, () => undefined)
+      requestFrame()
+      return
+    }
     // The code graph's counts for one project directory: kept for the footer's `codegraph` segment, which reads them only when it draws.
     if (event.type === "codegraph.status") {
       if (event.state === "none") codegraph.delete(event.directory)
@@ -165,6 +172,18 @@ export function createEvents(ctx: AppContext, actions: {
       return
     }
     // `api.toast` from a daemon extension: the toast line only. The prompt, its focus and the transcript are untouched, and nothing reaches the model.
+    if (event.type === "children.waiting") {
+      const before = state.childWaiting.get(event.launcher)
+      if (event.total) state.childWaiting.set(event.launcher, { launcherTitle: event.launcherTitle, total: event.total, children: event.children })
+      else state.childWaiting.delete(event.launcher)
+      // The terminal that has the launcher open shows the card itself; any other says who waits and where to answer.
+      const fresh = event.children.filter((child) => !before?.children.some((known) => known.sessionId === child.sessionId))
+      if (fresh.length && event.launcher !== state.sessionId) {
+        const who = fresh.length === 1 ? `"${fresh[0]!.title}"` : `${fresh.length} child sessions`
+        say(`${who} from "${event.launcherTitle || event.launcher}" ${fresh.length === 1 ? "waits" : "wait"} for approval`, "warning", { hint: "/approvals", oneLine: true, ms: 12_000 })
+      }
+      return requestFrame()
+    }
     if (event.type === "extension.feedback") return say(`${event.extension}: ${event.text}`, event.level)
     if (event.type === "extensions.changed") {
       void actions.reloadExtensions(event.revision)

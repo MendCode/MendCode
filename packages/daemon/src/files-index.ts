@@ -3,7 +3,7 @@ import { readdir } from "node:fs/promises"
 import path from "node:path"
 import { fileIgnore } from "./file-ignore"
 import type { FileEntry } from "@mendcode/protocol"
-import { canonicalDir } from "@mendcode/tools"
+import { canonicalDir, captureOutput } from "@mendcode/tools"
 import { indexEntry, rankEntries, type IndexedEntry } from "./file-score"
 
 const MAX_ENTRIES = 50_000
@@ -13,6 +13,9 @@ const MAX_LIMIT = 200
 const CACHE_TTL_MS = 4_000
 /** Bound on the non-git fallback walk; past it the walk stops and the cache is marked partial (never blocks the daemon). */
 const WALK_BUDGET_MS = 800
+/** The listing of a tree is dropped, not cut, past this: the walk below then takes over. */
+const GIT_OUTPUT_BYTES = 64 * 1024 * 1024
+const GIT_TIMEOUT_MS = 30_000
 const SKIP_DIRS = new Set(["node_modules", ".git", "dist", "build", ".next", ".turbo", "coverage", "out"])
 
 type CacheEntry = { entries: IndexedEntry[]; builtAt: number; partial: boolean; building?: Promise<void> }
@@ -20,9 +23,8 @@ const cache = new Map<string, CacheEntry>()
 
 async function git(cwd: string, args: string[]) {
   try {
-    const proc = Bun.spawn(["git", "-C", cwd, ...args], { stdout: "pipe", stderr: "pipe", env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" } })
-    const [stdout, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited])
-    return code === 0 ? stdout : undefined
+    const result = await captureOutput(["git", "-C", cwd, ...args], { env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" }, limit: GIT_OUTPUT_BYTES, timeoutMs: GIT_TIMEOUT_MS })
+    return result.code === 0 && !result.stopped ? result.out : undefined
   } catch {
     return undefined
   }

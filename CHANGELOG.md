@@ -11,10 +11,22 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### New
 
+- The PR reviewer's `@mendcode describe` (and `/pr describe`) writes a summary into the pull request's description from its review, in a marked section that never touches what a person wrote; the title changes only with `commands.describe_title`, and a label is added only if the repository has one. `@mendcode resolve` closes the threads of findings the last review marked fixed, and `@mendcode approve` (off unless `commands.approve` is on) approves a head whose last review confirmed nothing. See [PR review](docs/pr-review.md#commands-in-a-pull-request).
+- PR reviewer: the verify pass scores each finding from 0 to 10, shown small on the comment; `min_score` in `.mendcode/review.yaml` hides the lower ones and the higher scores come first before `cap` cuts. See [PR reviewer](docs/pr-review.md).
+- PR reviewer: `fallback_models` names models a review moves to when its own model fails or is not available (never for a quota); the review says which model reviewed.
+- PR reviewer: hunks that only delete lines are sent as one line, and a diff too large for one call keeps the repository's main language longest, so reviews read fewer tokens.
+- A PR review at work shows in the session that watches the repository: its steps as tool rows and the activity status with the PR, its phase and its time, gone with the final note. Other sessions name it in the footer (`reviewing Symbex-1#25`). See [PR reviewer](docs/pr-review.md#seeing-a-review-run).
+- `/reviews` lists one row per pull request with its earlier runs in the detail, so Failed holds only PRs whose last run failed; running rows show their live phase and time, done ones what they found, and this daemon's own jobs say `this device`.
+
+- With an Anthropic API key, the native engine keeps each conversation in a Claude message thread (beta) and sends only the new messages on each call: the same price, a shorter wait for the first token in long conversations. Turn it off with `/tier message_threads off`; set `zeroDataRetention: true` if your organization requires zero data retention. See [message threads](docs/message-threads.md).
+- The card that approves a child above its launcher's mode also offers Approve in full access: the child asks nothing. Only you pick it on the card; a session still cannot ask for full. See [permissions](docs/permissions.md#what-a-session-cannot-do-from-its-own-shell).
+- In smart mode, reading the skills and instruction files MendCode loaded for the session no longer asks for external directory access, also through symlinks. Edits there and secrets files still ask. See [permissions](docs/permissions.md#skills-and-instructions).
+
 - `mendcode worktrees list|size|gc`: every worktree with its size, state and why it is kept, including worktrees git lists that MendCode did not make. `gc` previews and `--yes` removes; `gc --artifacts` clears `dist`, `target`, `.next` and `bun build` leftovers of idle worktrees without removing them. See [storage](docs/storage.md#what-changed).
+- `/whatsnew` shows what changed since your last look and which changes fit what you usually do, each with an action you confirm before it applies; `/whatsnew all` lists every change with no model call. `/changelog` reads the changelog packed into the build, and every release page ends with a prompt to paste into any session. See [what's new](docs/whats-new.md).
 - `worktreeCapGb` warns on `/storage` when MendCode's worktrees pass a size you choose and frees only safe ones to get under it.
 - A daemon restart no longer leaves your turns interrupted for good: sessions it stopped, including `run --bg` children, continue when it starts again, and a `run --bg` child keeps its launching session across the restart. A session that cannot continue tells its launcher. `daemon restart` says which turns are running when it refuses, and what `--force` interrupted. Turn it off with `resumeAfterRestart: false`. See [automation](docs/automation.md#background-sessions-b17).
-- Sessions started with `run --bg` that wait for approval are announced: the launching session is told once (it cannot approve), and your terminal gets one card with Approve all, Deny all or One by one. `session status` and `logs` name what a session waits on.
+- Sessions started with `run --bg` that wait for approval are announced: the launching session is told once (it cannot approve), and your terminal gets one card, drawn like any approval, with Allow all, Reject all or One by one. Your other terminals say who waits (`/approvals` goes to the card). `session status` and `logs` name what a session waits on.
 - `mendcode dev start|restart|stop|status|tui|run`: a second daemon on its own data directory that runs the current checkout, marked DEV and restarted without touching the daemon your sessions use, so MendCode can be programmed from MendCode. See [dev mode](docs/dev-mode.md).
 - `mendcode usage --quota [--json]` prints the quota windows the footer shows, read from the running daemon; nothing is sent to a provider. See [usage](docs/usage.md#quota-from-the-command-line).
 - A session that runs `mendcode run --permission smart` above its own mode now asks you on one card (model, folder, mode, title, prompt) when your terminal has it open; approving starts that child with that prompt only. Without you there it is still refused, and the error gives the command to run yourself. See [permissions](docs/permissions.md#what-a-session-cannot-do-from-its-own-shell).
@@ -24,13 +36,15 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 - Home > Input position puts the chat input at the bottom, centered under the logo or at the top of the start screen.
 - Logo fonts rounded, double, shade and braille.
 - Footer packs: the footer's whole look in one data file, chosen with `/footer pack NAME` or Footer pack in `/customize`. Built in: `clean` (the new default: folder and branch, then model, effort and context), `powerline`, `minimal`, `badges`, `bars` and `plain`, each with a words-only form. Parts like changes, running shells, cost or a low quota show only when they matter, and the context changes colour at 70% and 90%. A footer you made yourself is never covered; `footerPack: off` brings back the previous footer. Profiles can ship packs. See [customize](docs/customize.md#footer-packs).
-- With the status line in the prompt's border, the activity takes the place of `READY` there instead of a row of its own, and the footer no longer repeats the model, effort, context or branch.- With `MENDCODE_BROWSER_EXTENSION=1` the model can work in your own Chrome, Arc, Brave or Edge, in a "MendCode" tab group and background tabs, on sites you allow. It asks before installing the extension. See [browser](docs/browser.md#your-own-browser-extension).
+- With the status line in the prompt's border, the activity takes the place of `READY` there instead of a row of its own, and the footer no longer repeats the model, effort, context or branch.
+- With `MENDCODE_BROWSER_EXTENSION=1` the model can work in your own Chrome, Arc, Brave or Edge, in a "MendCode" tab group and background tabs, on sites you allow. It asks before installing the extension. See [browser](docs/browser.md#your-own-browser-extension).
 - The PR reviewer measures MendCode's own pull requests (start-up, memory, size) and puts the table in the review; a rise above the noise is a critical finding. `prReview.perfAttrib: false` turns it off. See [PR review](docs/pr-review.md#performance-of-mendcodes-own-pull-requests).
 - `/reviews open <job id>` opens a PR review's reviewer session, and a running review shows its phase in `/reviews`. See [PR review](docs/pr-review.md).
 - `@mendcode review full` reviews the whole PR; plain `@mendcode review` reviews only what is new since the last full review. See [PR review](docs/pr-review.md).
 - The PR reviewer sends data, results and generated files to readers on a cheap model (or a local summary) instead of reading them whole; `readers` in `.mendcode/review.yaml` sets how many read at once. See [PR review](docs/pr-review.md#data-files-and-readers).
 - The PR reviewer's own tokens show in `/usage` as the `prReview` role. See [usage](docs/usage.md#auxiliary-calls).
-- `budget.tokens_per_diff_token` scales a review's token cap with its diff. See [PR review](docs/pr-review.md).- `threads` and `sessions` ask for up to 100 sessions (10 by default) and take `query`, `state` and `project` filters. See [peers](docs/peers.md#sessions).
+- `budget.tokens_per_diff_token` scales a review's token cap with its diff. See [PR review](docs/pr-review.md).
+- `threads` and `sessions` ask for up to 100 sessions (10 by default) and take `query`, `state` and `project` filters. See [peers](docs/peers.md#sessions).
 - `/loop` understands phrases in Spanish and English (`/loop cada 5 minutos ve diciéndome`, `/loop daily at 9am check the issues`) and asks for one line of confirmation before it starts; with no interval it paces itself (`adaptive`), and a schedule it cannot read is converted by the small model. The strict form (`/loop every 30m …`) is unchanged. See [loops](docs/loops.md#natural-language).
 - A loop starts with the permission mode of the session that created it (never more): from full access it asks nothing, and a report-only loop reads any path like its creator. From a session that asks, it reads what that session could read and asks about the rest; the footer shows `needs input` and `/loops` shows the request and answers it with `a`, `o` or `x`. A run nobody answers ends with a clear message. See [loops](docs/loops.md#permissions-and-approvals).
 - Every loop run leaves a short notice in the session that created the loop, with a link to the loop's session; it starts no model turn and the model reads it with your next message (`/loop open <id>`); `notify: none` turns it off. See [loops](docs/loops.md#notices-in-the-creator-session).
@@ -58,6 +72,8 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Changed
 
+- GitHub releases read short: a line of summary, "What's new" (up to eight highlights, so put the main items first in each section), short Fixes and Changes, and the rest folded. Titles are `MendCode v0.0.4`, `MendCode v0.0.4 Beta 1` and `MendCode Nightly`. See [releases](docs/release.md#release-titles-and-notes).
+- Nightlies are one release, "MendCode Nightly", that each build replaces, instead of a release per build; `mendcode upgrade --channel nightly` and the installers work as before, but only the latest nightly can be installed by its exact tag. See [releases](docs/release.md#channels).
 - Unused worktrees are cleaned by default: clean, merged ones idle for 14 days go in the daily pass (`worktreeGcDays: 0` turns it off). Worktrees of workflows, merges, compound runs and loops are included, and a compound run that changed nothing removes its worktree when it ends.
 - `mendcode worktrees list` answers at once and `size` shows its progress, however many large worktrees there are; sizes are measured with `du`, scans stop when the client leaves, and identical scans are shared.
 - The blobs scan skips loose files such as `.DS_Store` instead of failing to prune snapshots.
@@ -65,7 +81,8 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 - Image generation uses GPT Image 2.6 (2.5 if your account lacks it), and `image_gen` can make transparent PNGs. See [tools](docs/tools-web.md).
 - Inside a sub-agent the chat says so everywhere: one line under the top edge with its name, state, parent session and the keys back (also with the top bar off, and alone in the `minimal` tier), its row in the Agents strip filled, and the prompt in its colour with a hint of whom a message goes to.
 - The compaction card keeps its frame and shows no spinner of its own while the activity line shows one, so only one loader runs.
-- A PR review that reaches its token cap now posts a partial review of what it verified and lists what it did not review, and the next `/pr review` continues with the rest. See [PR review](docs/pr-review.md#a-review-that-reaches-the-cap).- `/pr review` (and `@mendcode review`) of a head already reviewed with the same config answers at once and runs nothing; `/pr review <n> full` reviews it again. See [PR review](docs/pr-review.md).
+- A PR review that reaches its token cap now posts a partial review of what it verified and lists what it did not review, and the next `/pr review` continues with the rest. See [PR review](docs/pr-review.md#a-review-that-reaches-the-cap).
+- `/pr review` (and `@mendcode review`) of a head already reviewed with the same config answers at once and runs nothing; `/pr review <n> full` reviews it again. See [PR review](docs/pr-review.md).
 - The `/customize` preview draws what the picked row changes: the home with the pet, a sample chat with the top bar, the prompt with its status line and your real footer, the activity, the diff.
 - Numbers in `/customize` edit with Enter and step with the arrows.
 - With your own footer rows `/customize` says so and hides the one-row footer parts, and the model edits your rows instead of replacing them.
@@ -124,9 +141,18 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Fixed
 
+- Current Claude models on Amazon Bedrock work at every `/effort`: they get adaptive thinking instead of a token budget they reject. Older Claude models are unchanged.
+- Shell commands the model runs no longer leave memory behind in the daemon.
+- With the Claude Code engine, smart mode lets edits inside the project run without asking, as it does with the native engine.
+- Claude Opus 5.5, Sonnet 5.5, Haiku 5.5, Fable and the other current models work with an Anthropic API key at every `/effort`: they get adaptive thinking at that effort instead of a token budget they reject. Older Claude models are unchanged. See [providers](docs/providers.md).
+- A turn a daemon restart interrupted resumes even when messages were waiting behind it; they follow the resumed turn instead of staying held.
+- A held queue says why: your cancel, the restart or an interruption.
+- `mendcode daemon restart` starts the next daemon itself: open terminals wait for it instead of starting one with their own environment. A daemon started from a Rex block no longer carries that block's `REX_SESSION` and `REX_BLOCK`.
 - A pull request with a very large diff of data or generated files is reviewed instead of refused for its size: data files are set aside for readers before their content is read, and the size limit applies to the code that is left.
 - A push reviews only what changed since the last review of this login on the pull request, also on a device that has no saved state; the summary names that head.
 - A review that failed for good is not queued and announced again at every daemon start; `/reviews` still shows it and `r` retries it.
+- `/reviews` opens even when a checkout is slow to answer: it shows the jobs and names the checkout it could not read.
+- A PR review whose verifier gave an unusable answer is retried, verifying the findings it had without reviewing the diff again, and its error says what the verifier answered.
 - A narrow footer row cuts its text segments (the tagline, the directory, the branch) with `…` instead of dropping the tagline whole.
 - The jump-to-latest pill no longer covers the last line of text: when that line reaches it, the pill takes a row of its own.
 - The summary printed on exit shows prompt tokens apart from cache reads and writes (`↑52K +488K cached ↓2,389`).

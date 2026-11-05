@@ -5,6 +5,8 @@ import { MAX_SILENT_STREAM_BYTES, MAX_TOOL_ARGUMENT_CHARS, argumentGuard, sseDat
 import type { CacheTtl } from "@mendcode/protocol/wire"
 import { HttpStatusError, guardedStream, joinUrl, parseToolArgs, postStream, scrub, type Fetch, type Watchdog } from "./provider-http"
 import { probeUrl } from "./network-wait"
+import { MIN_THINKING_TOKENS, adaptiveMaxTokens, adaptiveThinking, isThinkingSignatureRefusal, withoutThinkingBlocks } from "./anthropic-thinking"
+import { MESSAGE_THREADS_BETA, createMessageThreads, threadErrorCode, type ThreadPlan, type ThreadReply } from "./anthropic-threads"
 import { RetryableProviderError, type ModelEvent, type ModelMessage, type ModelProvider, type ModelRequest, type ReasoningState, type ToolSpec } from "./provider"
 
 export const ANTHROPIC_BASE_URL = "https://api.anthropic.com/v1"
@@ -12,10 +14,10 @@ export const ANTHROPIC_VERSION = "2023-06-01"
 /** Room for the answer when the request does not say; modern Claude models allow at least this much. */
 export const ANTHROPIC_DEFAULT_MAX_TOKENS = 32_000
 
-/** Reasoning effort → thinking budget in tokens (no effort = thinking off). `minimal` and `none` are off too; `xhigh` and `max` go one and two steps past `high`. */
+/** Reasoning effort → thinking budget in tokens for the models that take one (anthropic-thinking.ts); no effort = thinking off. `minimal` and `none` are off too; `xhigh` and `max` go one and two steps past `high`. */
 export const THINKING_BUDGETS: Record<ReasoningEffort, number> = { none: 0, minimal: 0, low: 2_000, medium: 8_000, high: 24_000, xhigh: 32_000, max: 48_000 }
 /** The API refuses budgets below this. */
-const MIN_THINKING_BUDGET = 1_024
+const MIN_THINKING_BUDGET = MIN_THINKING_TOKENS
 
 type Block = Record<string, unknown>
 type WireMessage = { role: "user" | "assistant"; content: Block[] }
@@ -168,13 +170,13 @@ function finishReason(stop: string | undefined, sawToolCall: boolean): "stop" | 
 type StreamEvent = {
   type?: string
   index?: number
-  message?: { usage?: Usage }
+  message?: { id?: string; usage?: Usage }
   content_block?: { type?: string; id?: string; name?: string; data?: string }
   delta?: { type?: string; text?: string; thinking?: string; signature?: string; partial_json?: string; stop_reason?: string }
   usage?: Usage
   error?: { type?: string; message?: string }
 }
-type Usage = { input_tokens?: number; output_tokens?: number; cache_creation_input_tokens?: number; cache_read_input_tokens?: number }
+type Usage = { input_tokens?: number; output_tokens?: number; cache_creation_input_tokens?: number; cache_read_input_tokens?: number; iterations?: Array<{ type?: string }> }
 
 /**
  * Anthropic Messages API adapter (streaming). The key is read through `apiKey()` on every request, sent only as
@@ -191,11 +193,14 @@ export function createAnthropicProvider(options: {
   idleTimeoutMs?: number
   maxTokens?: number
   takesImages?(model: string): boolean
+  /** The host is Anthropic's own API, which keeps message threads (beta): a request with `messageThreads` and an API key may use one. */
+  messageThreads?: boolean
 }): ModelProvider {
   const doFetch: Fetch = options.fetch ?? ((url, init) => fetch(url, init))
   const url = joinUrl(options.baseUrl ?? ANTHROPIC_BASE_URL, "/messages")
   /** Conversations (and models) whose `ttl` this host refused: they are sent without it from then on. */
   const ttlRefused = new Set<string>()
+  const threads = options.messageThreads ? createMessageThreads() : undefined
   return {
     id: options.id,
     model: options.model,
@@ -206,7 +211,9 @@ export function createAnthropicProvider(options: {
       if (!key && !request.headers?.authorization) throw new Error(`[AUTH]: no API key for ${options.id}; set it with providers.set or the provider's environment variable`)
       const secrets = [...(key ? [key] : []), ...Object.values(request.headers ?? {})]
       const messages = withoutUnsupportedImages([...request.messages], options.takesImages?.(model) ?? true)
-      const budget = Math.min(THINKING_BUDGETS[request.effort ?? "minimal"], request.maxOutputTokens ? Math.max(0, request.maxOutputTokens - 1) : Infinity)
+      // Adaptive models (anthropic-thinking.ts) take `thinking: adaptive` + `output_config.effort`; the rest keep a token budget.
+      const adaptive = adaptiveThinking({ model, effort: request.effort, maxOutputTokens: request.maxOutputTokens })
+      const budget = adaptive ? 0 : Math.min(THINKING_BUDGETS[request.effort ?? "minimal"], request.maxOutputTokens ? Math.max(0, request.maxOutputTokens - 1) : Infinity)
       const thinkingWanted = budget >= MIN_THINKING_BUDGET
       const thinking = thinkingWanted && canThink(messages, model) ? budget : 0
       const thinkingDropped = thinkingWanted && thinking === 0
@@ -220,7 +227,7 @@ export function createAnthropicProvider(options: {
       if (cacheMode !== "off") markLastUserTurn(wire, cacheMark)
       // Tools, system, the previous request's breakpoint and this one: the four Anthropic allows.
       if (cacheMode === "smart") markPreviousUserTurn(wire, cacheMark)
-      const maxTokens = request.maxOutputTokens ?? Math.max(options.maxTokens ?? ANTHROPIC_DEFAULT_MAX_TOKENS, thinking ? thinking + 8_192 : 0)
+      const maxTokens = request.maxOutputTokens ?? (adaptive ? options.maxTokens ?? adaptiveMaxTokens(request.effort, adaptive, ANTHROPIC_DEFAULT_MAX_TOKENS) : Math.max(options.maxTokens ?? ANTHROPIC_DEFAULT_MAX_TOKENS, thinking ? thinking + 8_192 : 0))
       const built: Record<string, unknown> = {
         model,
         max_tokens: maxTokens,
@@ -229,6 +236,7 @@ export function createAnthropicProvider(options: {
         messages: wire,
         ...(request.tools.length ? { tools: toAnthropicTools(request.tools, cacheMode === "smart" ? cacheMark : undefined), tool_choice: { type: "auto" } } : {}),
         ...(thinking ? { thinking: { type: "enabled", budget_tokens: thinking } } : {}),
+        ...(adaptive ?? {}),
       }
       const configured = modelParameters(built, request)
       if (request.maxOutputTokens && configured.thinking && typeof configured.thinking === "object") {
@@ -240,36 +248,55 @@ export function createAnthropicProvider(options: {
         }
       }
       const body = (await request.transformBody?.(configured)) ?? configured
+      const headers: Record<string, string> = { ...(key ? { "x-api-key": key } : {}), "anthropic-version": ANTHROPIC_VERSION, ...options.headers, ...request.headers }
+      const threadBetas = [headers["anthropic-beta"], MESSAGE_THREADS_BETA].filter(Boolean).join(",")
+      // Message threads (docs/message-threads.md): Anthropic's own API with an API key, and the session allows it (`message_threads`, no `zeroDataRetention`).
+      const plan = threads && request.messageThreads && request.conversationId && key && !request.headers?.authorization ? threads.plan(`${request.conversationId}\n${model}`, body, threadBetas) : undefined
       yield* guardedStream({
         providerId: options.id,
         signal: request.signal,
         ...(options.idleTimeoutMs !== undefined ? { idleMs: options.idleTimeoutMs } : {}),
         run: async function* ({ watchdog, progress }) {
-          const post = (sent: Record<string, unknown>) => postStream({
+          const postOnce = (sent: Record<string, unknown>, threaded: boolean) => postStream({
             providerId: options.id,
             url,
-            headers: { ...(key ? { "x-api-key": key } : {}), "anthropic-version": ANTHROPIC_VERSION, ...options.headers, ...request.headers },
+            headers: threaded ? { ...headers, "anthropic-beta": threadBetas } : headers,
             body: sent,
             doFetch: request.fetch ?? doFetch,
             watchdog,
             secrets,
           })
-          let response: Response | undefined
-          let cacheTtl = longTtl
-          try {
-            response = await post(body)
-          } catch (error) {
-            if (!longTtl || !(error instanceof HttpStatusError) || error.status !== 400) throw error
-            // Refused with `ttl` in it: the same call again without the field, once. The conversation is only remembered when that
-            // one is answered, so a request refused for another reason (it fails again here, with its own error) changes nothing.
-            response = await post(withoutCacheTtl(body))
-            if (!response) return
-            cacheTtl = false
-            if (ttlRefused.size >= MAX_TTL_REFUSED_SESSIONS) ttlRefused.delete(ttlRefused.values().next().value!)
-            ttlRefused.add(ttlSession)
+          // A signed thinking block the API no longer accepts (an edit earlier in the conversation, preserved thinking): once more
+          // without the thinking blocks, which the API documents as the way past it. The model answers without that earlier reasoning.
+          const post = async (sent: Record<string, unknown>, threaded: boolean) => {
+            try {
+              return await postOnce(sent, threaded)
+            } catch (error) {
+              const stripped = error instanceof HttpStatusError && error.status === 400 && isThinkingSignatureRefusal(error.message) ? withoutThinkingBlocks(sent) : sent
+              if (stripped === sent) throw error
+              return await postOnce(stripped, threaded)
+            }
           }
-          if (!response) return
-          yield* readStream({ response, model, watchdog, progress, providerId: options.id, secrets, thinkingDropped, cacheTtl })
+          let cacheTtl = longTtl
+          const send = async (sent: Record<string, unknown>, threaded: boolean) => {
+            try {
+              return await post(sent, threaded)
+            } catch (error) {
+              if (!longTtl || !(error instanceof HttpStatusError) || error.status !== 400 || threadFailure(error)?.code) throw error
+              // Refused with `ttl` in it: the same call again without the field, once. The conversation is only remembered when that
+              // one is answered, so a request refused for another reason (it fails again here, with its own error) changes nothing.
+              const response = await post(withoutCacheTtl(sent), threaded)
+              if (!response) return undefined
+              cacheTtl = false
+              if (ttlRefused.size >= MAX_TTL_REFUSED_SESSIONS) ttlRefused.delete(ttlRefused.values().next().value!)
+              ttlRefused.add(ttlSession)
+              return response
+            }
+          }
+          const sent = plan ? await sendThreaded(plan, body, send) : { response: await send(body, false) }
+          if (!sent.response) return
+          const onStop = plan && sent.as ? (reply: ThreadReply) => plan.record(sent.as!, reply, sent.replayed ?? false) : undefined
+          yield* readStream({ response: sent.response, model, watchdog, progress, providerId: options.id, secrets, thinkingDropped, cacheTtl, ...(onStop ? { onStop } : {}) })
         },
       })
     },
@@ -277,8 +304,48 @@ export function createAnthropicProvider(options: {
   }
 }
 
+/** A refusal that may be the thread's doing (a 400 or a 404), with its documented `error_code` when the error text carries one. */
+function threadFailure(error: unknown): { status: number; code?: string; unsupported?: string } | undefined {
+  if (!(error instanceof HttpStatusError) || (error.status !== 400 && error.status !== 404)) return undefined
+  const { code, unsupported } = threadErrorCode(error.message)
+  return { status: error.status, ...(code?.startsWith("thread_") ? { code } : {}), ...(unsupported ? { unsupported } : {}) }
+}
+
+/**
+ * Sends one request through its thread plan: the continue body when there is one, the whole conversation in a new thread
+ * when the continue fails for any thread reason (`thread_not_found`, `thread_already_continued`, …, or a 400 with no code),
+ * and the plain request (no thread from then on) when the API refuses threads for it or cannot store it. `as` is what the
+ * answered request was, so the stream's `message_stop` records the right thread.
+ */
+async function sendThreaded(plan: ThreadPlan, body: Record<string, unknown>, send: (sent: Record<string, unknown>, threaded: boolean) => Promise<Response | undefined>): Promise<{ response: Response | undefined; as?: "continue" | "create"; replayed?: boolean }> {
+  const plain = async (unsupported?: string) => {
+    plan.unthread(unsupported)
+    return { response: await send(body, false) }
+  }
+  const create = async (replayed: boolean) => {
+    try {
+      return { response: await send(plan.create, true), as: "create" as const, replayed }
+    } catch (error) {
+      const failure = threadFailure(error)
+      if (!failure?.code) throw error
+      return plain(failure.unsupported)
+    }
+  }
+  if (!plan.continue) return create(false)
+  try {
+    return { response: await send(plan.continue, true), as: "continue" }
+  } catch (error) {
+    const failure = threadFailure(error)
+    if (!failure || (!failure.code && failure.status !== 400)) throw error
+    if (failure.code === "thread_unsupported_request") return plain(failure.unsupported)
+    // Not found again right after a replay: the API cannot store this conversation (a very large one), so it goes without a thread.
+    if (failure.code === "thread_not_found" && plan.afterReplay) return plain()
+    return create(true)
+  }
+}
+
 /** The SSE events of one Messages response as neutral events. */
-async function* readStream(input: { response: Response; model: string; watchdog: Watchdog; progress: { silentBytes: number }; providerId: string; secrets: readonly string[]; thinkingDropped?: boolean; cacheTtl?: boolean }): AsyncIterable<ModelEvent> {
+async function* readStream(input: { response: Response; model: string; watchdog: Watchdog; progress: { silentBytes: number }; providerId: string; secrets: readonly string[]; thinkingDropped?: boolean; cacheTtl?: boolean; /** Told at `message_stop` (never before: a thread is continued only from a finished response). */ onStop?(reply: ThreadReply): void }): AsyncIterable<ModelEvent> {
   const { watchdog, providerId } = input
   const { signal } = watchdog
   const blocks = new Map<number, { kind: string; id?: string; name?: string; json: string; text: string; signature: string; data?: string }>()
@@ -287,6 +354,8 @@ async function* readStream(input: { response: Response; model: string; watchdog:
   const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
   let stop: string | undefined
   let sawToolCall = false
+  // What a thread needs from the reply (only kept when one is recorded): its id, its text length, its tool call ids, whether a fallback model wrote it.
+  const reply = input.onStop ? { id: "", textLength: 0, toolIds: [] as string[], fallback: false } : undefined
   const runaway = (why: string) => new RetryableProviderError(`[PROVIDER]: ${providerId} ${why}, stream abandoned`)
   const state = (): ReasoningState => ({ provider: "anthropic", model: input.model, blocks: [...reasoning] })
   const onChunk = (bytes: number) => {
@@ -304,6 +373,7 @@ async function* readStream(input: { response: Response; model: string; watchdog:
     switch (event.type) {
       case "message_start": {
         const u = event.message?.usage
+        if (reply && event.message?.id) reply.id = event.message.id
         if (u) {
           usage.input = u.input_tokens ?? 0
           usage.cacheRead = u.cache_read_input_tokens ?? 0
@@ -322,7 +392,10 @@ async function* readStream(input: { response: Response; model: string; watchdog:
         const block = event.index === undefined ? undefined : blocks.get(event.index)
         const delta = event.delta
         if (!block || !delta) break
-        if (delta.type === "text_delta" && delta.text) yield { type: "text", delta: delta.text }
+        if (delta.type === "text_delta" && delta.text) {
+          if (reply) reply.textLength += delta.text.length
+          yield { type: "text", delta: delta.text }
+        }
         else if (delta.type === "thinking_delta" && delta.thinking) {
           block.text += delta.thinking
           yield { type: "reasoning", delta: delta.thinking }
@@ -342,6 +415,7 @@ async function* readStream(input: { response: Response; model: string; watchdog:
         if (!block) break
         if (block.kind === "tool_use" && block.id && block.name) {
           sawToolCall = true
+          reply?.toolIds.push(block.id)
           yield { type: "tool_call", call: { callId: block.id, name: block.name, args: parseToolArgs(block.json) } }
         } else if (block.kind === "thinking" && block.signature) {
           reasoning.push({ type: "thinking", thinking: block.text, signature: block.signature })
@@ -359,9 +433,11 @@ async function* readStream(input: { response: Response; model: string; watchdog:
         if (event.usage?.input_tokens !== undefined && event.usage.input_tokens > 0) usage.input = event.usage.input_tokens
         if (event.usage?.cache_read_input_tokens !== undefined) usage.cacheRead = event.usage.cache_read_input_tokens
         if (event.usage?.cache_creation_input_tokens !== undefined) usage.cacheWrite = event.usage.cache_creation_input_tokens
+        if (reply && event.usage?.iterations?.some((entry) => entry.type === "fallback_message")) reply.fallback = true
         break
       }
       case "message_stop": {
+        if (reply?.id) input.onStop!({ id: reply.id, stop, textLength: reply.textLength, toolIds: reply.toolIds.join(","), fallback: reply.fallback })
         // Thinking tokens are part of output_tokens; the API does not report them apart.
         yield { type: "usage", usage: { input: usage.input, output: usage.output, reasoning: 0, cacheRead: usage.cacheRead, cacheWrite: usage.cacheWrite, ...(input.thinkingDropped ? { thinkingDropped: true as const } : {}), ...(input.cacheTtl ? { cacheTtl: "1h" as const } : {}) } }
         yield { type: "finish", reason: finishReason(stop, sawToolCall) }

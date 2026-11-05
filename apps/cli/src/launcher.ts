@@ -108,6 +108,16 @@ export async function ensureDaemon(options: { dir?: string; timeoutMs?: number; 
   const dir = options.dir ?? envDataDir()
   const found = await liveDaemon(dir)
   if (found) return { ...found, started: false }
+  // A `daemon restart` in progress starts the next daemon itself, with the environment it was given: wait for that one.
+  // Loaded only here, when no daemon answered: a terminal that finds its daemon reads nothing more at start.
+  const { restartPending } = await import("./restart-mark")
+  if (restartPending(dir)) {
+    do {
+      await Bun.sleep(50)
+      const up = await liveDaemon(dir)
+      if (up) return { ...up, started: false }
+    } while (restartPending(dir))
+  }
   // An installed user service owns startup; a terminal must not race it with a detached competitor.
   if (process.platform === "darwin" || process.platform === "linux") {
     const { createUserService } = await import("../../../packages/daemon/src/user-service")

@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { writeFileSync } from "node:fs"
 import type { PrJobSummary, PrReviewDashboard } from "@mendcode/protocol"
 import type { Line } from "../src/ui/theme"
 import { createReviewsPageState, filterJobs, groupedRows, listedJobs, metricsSummary, renderReviewsPage, stackOrder, type ReviewsData, type ReviewsPageState } from "../src/view/reviews-page"
@@ -291,5 +292,53 @@ describe("reviews page keys", () => {
     expect(reviewsPageKey(state, "r", data).action).toEqual({ type: "refresh" })
     expect(reviewsPageKey(state, "q", data).action).toEqual({ type: "close" })
     expect(reviewsPageKey(state, "z", data).state).toBe(state)
+  })
+})
+
+describe("one row per pull request", () => {
+  const history = () => [
+    job({ id: "old-fail", number: 23, state: "failed", head: sha(3), createdAt: NOW - 120 * MIN, updatedAt: NOW - 118 * MIN, phase: "corroboration", attempts: 1, error: "verification failed (no JSON object in the answer); nothing was published" }),
+    job({ id: "older-fail", number: 23, state: "failed", head: sha(4), createdAt: NOW - 180 * MIN, updatedAt: NOW - 178 * MIN, phase: "corroboration", attempts: 1, error: "verification failed; nothing was published" }),
+    job({ id: "latest-done", number: 23, state: "done", head: sha(5), createdAt: NOW - 30 * MIN, updatedAt: NOW - 25 * MIN, phase: "analysis", attempts: 0, findings: { confirmed: 1, plausible: 0, candidates: 0, resolved: 0 } }),
+    job({ id: "only-fail", number: 30, state: "failed", head: sha(6), createdAt: NOW - 10 * MIN, updatedAt: NOW - 9 * MIN, phase: "corroboration", attempts: 5, error: "verification failed (the verifier crashed); nothing was published" }),
+  ]
+
+  test("failures a later review of the same PR superseded are its history, not a failed row; Failed lists only PRs whose last run failed", () => {
+    const listed = listedJobs(dashboard(history()), createReviewsPageState().filter)
+    expect(listed.map((entry) => entry.id)).toEqual(["only-fail", "latest-done"])
+    const out = screen(render(ready(history()), createReviewsPageState(), 120, 40))
+    expect(out).toMatch(/Failed {2}1/)
+    expect(out).toMatch(/Done {2}1/)
+    expect(out).toMatch(/#23 Refresh[^\n]* · 3 runs/)
+    expect(out).toContain("done · 1 finding")
+    expect(out).toContain("Pull requests · 2")
+  })
+
+  test("a done job's detail says how it ended, never a phase or attempt 0; its earlier runs say why each failed", () => {
+    const state = { ...createReviewsPageState(), selectedId: "latest-done", detail: true }
+    const out = screen(render(ready(history()), state, 160, 48))
+    expect(out).toContain("state      done · 1 finding")
+    expect(out).not.toContain("phase analysis")
+    expect(out).not.toContain("attempt 0")
+    expect(out).toContain("Earlier runs · 2")
+    expect(out).toContain("failed · corroboration · 2h ago · verification failed (no JSON object in the answer); nothing was published")
+    const failed = screen(render(ready(history()), { ...state, selectedId: "only-fail" }, 120, 40))
+    expect(failed).toContain("state      failed in corroboration · 5 attempts")
+  })
+
+  test("a running review shows its live phase and time in the list and its steps in the detail", () => {
+    const jobs = [job({ id: "run", number: 25, state: "running", phase: "corroboration", attempts: 0 })]
+    const activity = [{ jobId: "run", sessionId: "ses_watch" as never, repo: "acme/payments", number: 25, phase: "analysis", startedAt: NOW - 80_000, steps: [{ label: "Fetching #25", detail: "head 51fe4047", startedAt: NOW - 80_000, endedAt: NOW - 76_000 }, { label: "Analysis", detail: "112 files", startedAt: NOW - 76_000 }] }]
+    const list = screen(renderReviewsPage({ data: ready(jobs), state: createReviewsPageState(), width: 100, height: 30, now: NOW, activity }))
+    expect(list).toMatch(/Running {2}1/)
+    expect(list).toContain("analysis · 1m 20s")
+    const detail = screen(renderReviewsPage({ data: ready(jobs), state: { ...createReviewsPageState(), selectedId: "run", detail: true }, width: 100, height: 30, now: NOW, activity }))
+    expect(detail).toContain("state      running · analysis · 1m 20s · attempt 1")
+    expect(detail).toContain("steps      Fetching #25 · head 51fe4047 · 4s")
+    expect(detail).toContain("Analysis · 112 files · 1m 16s so far")
+    if (process.env.CAPTURE_DIR) {
+      writeFileSync(`${process.env.CAPTURE_DIR}/reviews-running-list-100x30.txt`, list)
+      writeFileSync(`${process.env.CAPTURE_DIR}/reviews-running-detail-100x30.txt`, detail)
+    }
   })
 })

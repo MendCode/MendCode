@@ -98,7 +98,7 @@ export function createKeys(ctx: AppContext, actions: {
   keepDiscarded: ReturnType<typeof createPrompt>["keepDiscarded"]
   onEscape: () => Promise<void>
   scrollApproval: (direction: -1 | 1) => boolean
-  resolveRequest: (choice: ApprovalChoice["choice"]) => Promise<void>
+  resolveRequest: (choice: ApprovalChoice["choice"], label?: string) => Promise<void>
   toggleApprovalExplain: () => boolean
   submit: () => Promise<void>
   loadCustomCommands: ReturnType<typeof createPrompt>["loadCustomCommands"]
@@ -620,13 +620,16 @@ export function createKeys(ctx: AppContext, actions: {
       // the explanation of the pending approval is shown or hidden
     }
     else if (editor.isEmpty() && !state.planDraft && state.transcript.pendingRequests[0]?.kind === "approval" && approvalChoicesOf(pendingPanelRequest()).some((option) => option.key === key))
-      await resolveRequest(approvalChoicesOf(pendingPanelRequest()).find((option) => option.key === key)!.choice)
+    {
+      const picked = approvalChoicesOf(pendingPanelRequest()).find((option) => option.key === key)!
+      await resolveRequest(picked.choice, picked.label)
+    }
     else if (/^[1-9]$/.test(key) && editor.isEmpty() && !state.planDraft && state.mode !== "minimal" && state.transcript.pendingRequests[0]?.kind === "approval") {
       const option = approvalChoicesOf(pendingPanelRequest())[Number(key) - 1]
-      if (option) await resolveRequest(option.choice)
+      if (option) await resolveRequest(option.choice, option.label)
     } else if (key === "\r" && editor.isEmpty() && !state.planDraft && state.mode !== "minimal" && state.transcript.pendingRequests[0]?.kind === "approval") {
       const option = approvalChoicesOf(pendingPanelRequest())[state.approvalChoice]
-      if (option) await resolveRequest(option.choice)
+      if (option) await resolveRequest(option.choice, option.label)
     }
     else if (vimLive() && vim.key(key) === "handled") {
       // Consumed by normal or visual mode (or recorded in insert mode, which passes the key on).

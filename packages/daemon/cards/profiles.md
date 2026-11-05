@@ -1,5 +1,5 @@
 ---
-summary: bundle skills, commands, agents, themes, keys, views; install and share them
+summary: bundle skills, commands, agents, themes, keys, views; share them
 docs: profiles, customize
 aliases: profile, package, packages, pkg, bundle
 ---

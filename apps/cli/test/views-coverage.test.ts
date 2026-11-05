@@ -25,7 +25,7 @@ const COVERAGE: Record<string, Entry> = {
     "providers-page", "queue-page", "reasoning-page", "release-page", "reviews-page", "secrets-page", "session-list", "settings-page", "setup-page",
     "sidebar-editor", "skills-page", "slash-menu-editor", "stash-page", "storage-page", "tasks-page", "terminal-setup-page", "text-page",
     "theme-picker", "session-tree", "session-tree-page", "tools-page", "transcript-actions-page", "tsm-page", "tutorial-page", "usage-clock",
-    "usage-heatmap", "usage-page", "usage-widgets", "workflows-page", "worktrees-page", "git-commit-page", "git-pr-page", "git-page", "git-init-page", "git-publish-page",
+    "usage-heatmap", "usage-page", "usage-widgets", "whatsnew-page", "workflows-page", "worktrees-page", "git-commit-page", "git-pr-page", "git-page", "git-init-page", "git-publish-page",
   ].map((name) => [`${name}.ts`, page])),
   "status-page.ts": { slot: "page.status" },
   "file-viewer.ts": { slot: "file.viewer" },
@@ -84,6 +84,7 @@ const COVERAGE: Record<string, Entry> = {
   "voice-row.ts": { slot: "bar" },
   "agents-strip.ts": { slot: "bar" },
   "background-row.ts": { slot: "bar" },
+  "review-activity.ts": { slot: "bar" },
   // Not a slot of their own, each with its reason.
   "panel-box.ts": { allow: "box-drawing helper called by the built-in renderers of notice, approval, question and slash.menu; draws nothing on its own" },
   "deck.ts": { allow: "row layout helpers (tabs, hint and KPI rows) used inside page, widget and slot built-ins; draws nothing on its own" },

@@ -62,8 +62,13 @@ function approvalInline(m: BuiltinInput<"approval">, g: Glyphs): Line[] {
 }
 
 /** The key row of the minimal view's approval: what each key does. Not clickable. */
-function approvalInlineKeys(m: Pick<BuiltinInput<"approval">, "width" | "plan">): Line[] {
+function approvalInlineKeys(m: Pick<BuiltinInput<"approval">, "width" | "plan" | "options">): Line[] {
   const { width } = m
+  // The daemon's own choices (children waiting): every one with its key, as worded.
+  if (m.options.length && m.options.every((option) => option.choice === "answer")) {
+    const spans = m.options.flatMap((option): import("../ui/theme").Span[] => [{ text: option.key ? `[${option.key}] ` : "", fg: option.key === "d" ? "error" : "primary", bold: true }, { text: `${option.label}   `, fg: "muted" }])
+    return wrapSpans([{ text: "  " }, ...spans], width)
+  }
   return wrapSpans([
     { text: "  [a] ", fg: "primary", bold: true },
     { text: m.plan ? "approve & build   " : "approve   ", fg: "muted" },
@@ -173,7 +178,7 @@ export const BUILTIN_VIEWS: { [S in Exclude<keyof ViewModels, "prompt.frame">]: 
       const bar = renderLimitBar({ width: m.width, view: m.view as UsageLimitView, now: m.now, glyphs: g })
       return { lines: bar.rows, hits: bar.chips.map((chip) => ({ row: chip.row, from: chip.from, to: chip.to, action: chip.action })) }
     }
-    const queue = renderQueuePanel({ width: m.width, previews: m.previews, delivery: m.delivery, held: m.held, paused: m.paused, ...(m.mode ? { mode: m.mode as never } : {}), shell: new Set(m.shell), notices: new Set(m.notices ?? []) })
+    const queue = renderQueuePanel({ width: m.width, previews: m.previews, delivery: m.delivery, held: m.held, ...(m.heldBy ? { heldBy: m.heldBy } : {}), paused: m.paused, ...(m.mode ? { mode: m.mode as never } : {}), shell: new Set(m.shell), notices: new Set(m.notices ?? []) })
     return { lines: queue.rows, hits: queue.sendChip ? [{ row: queue.sendChip.row, from: queue.sendChip.from, to: queue.sendChip.to, action: "send" }] : [] }
   },
   footer: (m) => {

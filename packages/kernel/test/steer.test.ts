@@ -72,4 +72,34 @@ describe("SessionActor steering turns", () => {
     h.root.dispose()
     expect(await actor.steer(steering)).toBe(false)
   })
+
+  test("a turn carried on after a restart goes ahead of the queue the restart restored and releases it; the queued message follows", async () => {
+    const h = createHarness()
+    const manual = createManualEngine()
+    const restoredQueue = [{ queueId: h.ids("queue"), text: "queued while the turn ran", attachments: [] }]
+    const actor = createSessionActor({ sessionId: h.ids("session"), clock: h.clock, scope: h.root.child("session"), engine: manual.engine, sink: h.sink, ids: h.ids, cancelGraceMs: 1_000, restoredQueue })
+    const steering = { text: "RESUME", label: "daemon restarted · resumed", meta: { restart: "resume" } }
+    expect(actor.snapshot()).toMatchObject({ held: true, queue: [restoredQueue[0]!.queueId] })
+    // Any other steering still waits for the restored queue.
+    expect(await actor.steer(steering)).toBe(false)
+    expect(await actor.steer({ ...steering, force: true })).toBe(false)
+    expect(await actor.steer({ ...steering, afterRestart: true })).toBe(true)
+    await flush()
+    expect(manual.last().input.text).toBe("RESUME")
+    expect(actor.snapshot().held).toBe(false)
+    manual.last().finish()
+    await flush()
+    expect(manual.last().input.text).toBe("queued while the turn ran")
+  })
+
+  test("a carried-on turn does not pass a hold a cancel set", async () => {
+    const { manual, actor, submit, steering, sessionId } = setup()
+    await submit("work")
+    await submit("next")
+    await flush()
+    await actor.handle({ id: "cmd_x" as never, clientId: "cli_x" as never, type: "turn.cancel", sessionId, turnId: manual.last().input.turnId })
+    await flush()
+    expect(actor.snapshot()).toMatchObject({ held: true })
+    expect(await actor.steer({ ...steering, afterRestart: true })).toBe(false)
+  })
 })

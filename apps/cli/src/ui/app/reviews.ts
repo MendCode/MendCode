@@ -147,7 +147,7 @@ export function createReviews(ctx: AppContext, deps: { switchSession(sessionId: 
 
   function render(width: number, height: number): Line[] {
     if (!view) return []
-    return renderReviewsPage({ data, state: view, width, height, now: now(), offline: state.connection !== "connected", glyphs: ctx.glyphs })
+    return renderReviewsPage({ data, state: view, width, height, now: now(), offline: state.connection !== "connected", glyphs: ctx.glyphs, activity: state.reviewActivity })
   }
 
   return { open, openJob, key, render, close }

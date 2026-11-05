@@ -3,7 +3,8 @@ name: nightly
 # Once a day, when main has commits the last nightly does not have: tag main as vX.Y.Z-nightly.YYYYMMDD.RUN and start the release
 # workflow on that tag, which runs the whole gate before it builds and signs anything. X.Y.Z is the patch after the newest stable
 # release (the version in apps/cli/package.json before the first one). A tag pushed with the workflow token starts no workflow, so
-# the release is dispatched explicitly, on the tag ref, which keeps the signing identity the tag's. Only the 14 newest nightlies stay.
+# the release is dispatched explicitly, on the tag ref, which keeps the signing identity the tag's. The release itself is one moving
+# prerelease, "MendCode Nightly" (tag `nightly`), that release.yml replaces with every build; the versioned tags stay as git tags.
 on:
   schedule:
     - cron: "17 6 * * *"
@@ -60,12 +61,3 @@ jobs:
           gh api "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/$tag" -f sha="$head" > /dev/null
           gh workflow run release.yml --repo "$GITHUB_REPOSITORY" --ref "$tag" -f tag="$tag"
           echo "tagged $head as $tag and dispatched the release"
-      - name: Keep the 14 newest nightlies
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh release list --repo "$GITHUB_REPOSITORY" --limit 200 --json tagName --jq '.[].tagName' \
-            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+-nightly\.[0-9]{8}\.[0-9]+$' \
-            | sort -V -r \
-            | tail -n +15 \
-            | while read -r old; do gh release delete "$old" --repo "$GITHUB_REPOSITORY" --cleanup-tag --yes; done

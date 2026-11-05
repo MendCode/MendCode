@@ -562,6 +562,19 @@ export const ExtensionsChanged = lazySchema(() => z.strictObject({ ...globalBase
 /** A short note from an extension for the terminal's toast line: never stored, never part of the model's context or the transcript; local terminals only. */
 export const ExtensionFeedback = lazySchema(() => z.strictObject({ ...globalBase, gseq: z.number().int().nonnegative(), type: z.literal("extension.feedback"), extension: z.string().max(64), text: z.string().min(1).max(300), level: z.enum(["info", "success", "warning", "error"]) }))
 /**
+ * Sessions another session started (`mendcode run --bg`) that wait for the user's approval, for the terminals that have the launcher closed:
+ * an empty `children` says nothing waits now. Wire only, gseq 0, local terminals, and again to a client that connects.
+ */
+export const ChildrenWaiting = lazySchema(() => z.strictObject({
+  ...globalBase,
+  gseq: z.number().int().nonnegative(),
+  type: z.literal("children.waiting"),
+  launcher: SessionId,
+  launcherTitle: z.string().max(200),
+  total: z.number().int().nonnegative(),
+  children: z.array(z.strictObject({ sessionId: SessionId, title: z.string().max(200) })).max(12),
+}))
+/**
  * The code graph of one project directory, for a footer: counts when the index changed, never per request. Sent on the wire only (gseq 0, not stored), and again to a client that connects.
  * `none`: a first build ended without a graph, or a skip no longer holds. `skipped`: the folder is not indexed, and `reason` says why in a few words (`large folder`).
  */
@@ -579,6 +592,26 @@ export const CodegraphStatus = lazySchema(() => z.strictObject({
   /** While `indexing`: how much of the first build is done (0 to 99, in steps of ten); absent when it is not known. */
   percent: z.number().int().min(0).max(100).optional(),
 }))
+/**
+ * The PR reviews this daemon runs now, whole each time one changes: each job's watching session, its PR, when it started and its
+ * steps so far (the last without `endedAt` is the one running). An empty `jobs` says none runs. Wire only (gseq 0, not stored),
+ * local terminals, and again to a client that connects.
+ */
+export const PrReviewActivity = lazySchema(() => z.strictObject({
+  ...globalBase,
+  gseq: z.number().int().nonnegative(),
+  type: z.literal("pr.review.activity"),
+  jobs: z.array(z.strictObject({
+    jobId: z.string().min(1).max(80),
+    sessionId: SessionId,
+    repo: z.string().max(200),
+    number: z.number().int().positive(),
+    /** The ledger's phase word while it runs (`fetch`, `readers`, `analysis`, `corroboration`, `posting`). */
+    phase: z.string().max(60),
+    startedAt: z.number().int().nonnegative(),
+    steps: z.array(z.strictObject({ label: z.string().max(120), detail: z.string().max(200).optional(), startedAt: z.number().int().nonnegative(), endedAt: z.number().int().nonnegative().optional() })).max(12),
+  })).max(16),
+}))
 export const ReviewChanged =lazySchema(() => z.strictObject({ ...globalBase, type: z.literal("review.changed"), gseq: z.number().int().nonnegative(), sessionId: SessionId, review: ReviewSnapshot, reload: z.boolean().optional() }))
 export const AgentCommandsChanged = lazySchema(() => z.strictObject({ ...globalBase, type: z.literal("agent-commands.changed"), sourceSessionId: SessionId, targetSessionId: SessionId }))
 export const SessionBackgroundChanged = lazySchema(() => z.strictObject({ ...globalBase, type: z.literal("session.background.changed"), sessionId: SessionId }))
@@ -589,7 +622,7 @@ export const MflowWaiting = lazySchema(() => z.strictObject({ ...globalBase, typ
 export const TuiControlRequest = lazySchema(() => z.strictObject({ ...globalBase, type: z.literal("tui.control.request"), directory: z.string().max(4096), ...TuiRequest.shape }))
 /** An on-device dictation of this terminal, live: the microphone level (0..1) and the transcript so far. Sent only to the terminal that records. */
 export const VoiceLive = lazySchema(() => z.strictObject({ ...globalBase, type: z.literal("voice.live"), level: z.number().min(0).max(1).optional(), text: z.string().max(20_000).optional() }))
-export const GlobalEvent = lazySchema(() => z.discriminatedUnion("type", [VoiceLive, ExtensionsChanged, ExtensionFeedback, CodegraphStatus, TuiChanged, AsideChanged, SidebarChanged, UsageToday, TurnTokens, JobStateChanged, QuotaSnapshot, MemoryChanged, SettingsChanged, SessionActivity, LoopChanged, WorkflowChanged, DreamChanged, StatusLineChanged, McpChanged, ReviewChanged, AgentCommandsChanged, SessionBackgroundChanged, ChildTaskChanged, ServerLifecycle, ReleaseAvailable, MflowWaiting, TuiControlRequest]))
+export const GlobalEvent = lazySchema(() => z.discriminatedUnion("type", [VoiceLive, ExtensionsChanged, ExtensionFeedback, ChildrenWaiting, CodegraphStatus, TuiChanged, AsideChanged, SidebarChanged, UsageToday, TurnTokens, JobStateChanged, QuotaSnapshot, MemoryChanged, SettingsChanged, SessionActivity, LoopChanged, WorkflowChanged, DreamChanged, StatusLineChanged, McpChanged, ReviewChanged, PrReviewActivity, AgentCommandsChanged, SessionBackgroundChanged, ChildTaskChanged, ServerLifecycle, ReleaseAvailable, MflowWaiting, TuiControlRequest]))
 export type GlobalEvent = z.infer<typeof GlobalEvent>
 
 export const ErrorPayload = lazySchema(() => z.strictObject({

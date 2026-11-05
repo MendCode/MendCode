@@ -151,6 +151,51 @@ function touchedNodes(graph: Graph, file: FileDiff): GraphNode[] {
 }
 
 const symbolLine = (symbol: ChangedSymbol) => `${symbol.symbol} (${symbol.path}:${symbol.line})${symbol.callers.length ? `\n  callers: ${symbol.callers.join(", ")}` : ""}${symbol.callees.length ? `\n  callees: ${symbol.callees.join(", ")}` : ""}`
+/**
+ * A file's diff without its deletion-only hunks (hunks with removed lines and no added line): they say what went away, which the
+ * review reads from the line counts, and they are the cheapest text to leave out. Each file keeps its header and gains one line
+ * with the number of deleted lines and where they were. Unchanged when that line would not be shorter than what it replaces, so
+ * the prompt can only shrink.
+ */
+export function withoutDeletionHunks(text: string): string {
+  const at = text.search(/^@@ /m)
+  if (at < 0) return text
+  const head = text.slice(0, at)
+  const hunks = text.slice(at).split(/^(?=@@ )/m)
+  const dropped: Array<{ start: number; removed: number }> = []
+  const kept = hunks.filter((hunk) => {
+    const lines = hunk.replace(/\n$/, "").split("\n").slice(1)
+    const removed = lines.filter((line) => line.startsWith("-")).length
+    if (!removed || lines.some((line) => line.startsWith("+"))) return true
+    dropped.push({ start: Number(/^@@ -(\d+)/.exec(hunk)?.[1] ?? 0), removed })
+    return false
+  })
+  if (!dropped.length) return text
+  const total = dropped.reduce((sum, hunk) => sum + hunk.removed, 0)
+  const where = dropped.slice(0, 6).map((hunk) => hunk.start).join(", ") + (dropped.length > 6 ? ", …" : "")
+  const note = `(${total} deleted line${total === 1 ? "" : "s"} in ${dropped.length} hunk${dropped.length === 1 ? "" : "s"} with no added lines, not shown; old lines near ${where})\n`
+  const result = head + kept.join("") + note
+  return result.length < text.length ? result : text
+}
+
+const LANGUAGE_FAMILY: Record<string, string> = { ts: "js", tsx: "js", mts: "js", cts: "js", js: "js", jsx: "js", mjs: "js", cjs: "js", h: "c", hpp: "c", cc: "c", cpp: "c", c: "c", kts: "kt" }
+/** Extensions of data, markup and docs: never the repository's main language, whatever their size. */
+const NOT_CODE = new Set(["json", "jsonl", "csv", "tsv", "lock", "md", "mdx", "txt", "yaml", "yml", "toml", "svg", "snap", "map", "xml", "html", "css", "ipynb", "log", "sql"])
+const extOf = (file: string) => /\.([A-Za-z0-9]+)$/.exec(file)?.[1]?.toLowerCase()
+const familyOf = (file: string) => { const ext = extOf(file); return ext ? LANGUAGE_FAMILY[ext] ?? ext : undefined }
+const codeFamilyOf = (file: string) => { const ext = extOf(file); return ext && !NOT_CODE.has(ext) ? LANGUAGE_FAMILY[ext] ?? ext : undefined }
+
+/**
+ * The repository's main language as a file-extension family: the one most files of the code graph have, else the one most of the
+ * diff's text is in. Undefined when neither names one.
+ */
+export function mainLanguage({ graph, files }: { graph?: Graph | undefined; files: readonly FileDiff[] }): string | undefined {
+  const counts = new Map<string, number>()
+  if (graph) for (const file of graph.byPath.keys()) { const family = codeFamilyOf(file); if (family) counts.set(family, (counts.get(family) ?? 0) + 1) }
+  if (!counts.size) for (const file of files) { const family = codeFamilyOf(file.path); if (family) counts.set(family, (counts.get(family) ?? 0) + file.text.length) }
+  return [...counts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0]?.[0]
+}
+
 export const symbolsText = (symbols: readonly ChangedSymbol[]) => symbols.map(symbolLine).join("\n")
 const tokensOf = (diff: string, symbols: readonly ChangedSymbol[]) => estimateTokens(diff.length) + estimateTokens(symbolsText(symbols).length)
 const leftOut = (file: FileDiff, why: string, summaries?: ReadonlyMap<string, string>) => `diff --git a/${file.path} b/${file.path}\n(diff of ${file.size ? file.size.added + file.size.removed : file.text.split("\n").length} lines left out by ${why}; read the file yourself)\n${summaries?.get(file.path) ?? ""}`
@@ -310,7 +355,7 @@ async function fetchDiff({ directory, base, head, git, ignore, readers, attribut
  * The diff of `base...head` in `directory` and the graph context of what it touches, within `budgetTokens * CONTEXT_SHARE`.
  * `ignore` drops paths the repository config excludes. Without a graph the review proceeds on the diff alone and the notes say so.
  */
-export async function buildReviewContext({ directory, base, head, budgetTokens, graph, git = gitRun, ignore = () => false, readers, attributes }: { directory: string; base: string; head: string; budgetTokens: number; graph?: Graph | undefined; git?: GitRun; ignore?: (path: string) => boolean; readers?: ContextReaders | undefined; attributes?: string | undefined }): Promise<ReviewContext> {
+export async function buildReviewContext({ directory, base, head, budgetTokens, graph, git = gitRun, ignore = () => false, readers, attributes, compress = true }: { directory: string; base: string; head: string; budgetTokens: number; compress?: boolean; graph?: Graph | undefined; git?: GitRun; ignore?: (path: string) => boolean; readers?: ContextReaders | undefined; attributes?: string | undefined }): Promise<ReviewContext> {
   for (const ref of [base, head]) if (!/^[A-Za-z0-9][A-Za-z0-9._/@^~-]{0,199}$/.test(ref) || ref.includes("..")) throw new Error(`[PR_REVIEW]: invalid ref ${JSON.stringify(ref.slice(0, 80))}`)
   const fetched = await fetchDiff({ directory, base, head, git, ignore, readers: !!readers, attributes })
   const files = fetched.files
@@ -319,7 +364,8 @@ export async function buildReviewContext({ directory, base, head, budgetTokens, 
   const diffTokens = estimateTokens(files.reduce((sum, file) => sum + chars(file), 0))
   const read = triage.data.length ? await readers!({ data: triage.data, cut: [], diffTokens }) : []
   const placeholders = readerTexts(files, read)
-  const shownFiles = files.map((file) => placeholders.has(file.path) ? { ...file, text: placeholders.get(file.path)! } : file)
+  const shownFiles = files.map((file) => placeholders.has(file.path) ? { ...file, text: placeholders.get(file.path)! } : compress ? { ...file, text: withoutDeletionHunks(file.text) } : file)
+  const main = compress ? mainLanguage({ graph, files }) : undefined
   const readTokens = triage.data.filter((entry) => placeholders.has(entry.file.path)).reduce((sum, entry) => sum + estimateTokens(chars(entry.file)), 0)
   const notes: string[] = []
   let symbols: ChangedSymbol[] = []
@@ -336,7 +382,7 @@ export async function buildReviewContext({ directory, base, head, budgetTokens, 
   const limit = Math.max(1_000, Math.floor(budgetTokens * CONTEXT_SHARE))
   const whole = tokensOf(shownFiles.map((file) => file.text).join(""), symbols)
   const layout = (summaries?: ReadonlyMap<string, string>) => {
-    const single = singleView({ files: shownFiles, symbols, limit, summaries })
+    const single = singleView({ files: shownFiles, symbols, limit, summaries, main })
     // Callers and callees are cut first; a diff that still does not fit one call is reviewed in parts of whole files rather than
     // with the largest diffs left out.
     const split = single.cut.length && shownFiles.length > 1 ? splitIntoParts({ files: shownFiles, symbols, limit, summaries }) : undefined
@@ -361,7 +407,7 @@ export async function buildReviewContext({ directory, base, head, budgetTokens, 
 }
 
 /** The diff as one call carries it within `limit`: callers and callees cut first (they are context), then the largest files' diffs. */
-function singleView({ files, symbols: all, limit, summaries }: { files: readonly FileDiff[]; symbols: ChangedSymbol[]; limit: number; summaries?: ReadonlyMap<string, string> | undefined }): { diff: string; symbols: ChangedSymbol[]; truncated: boolean; notes: string[]; cut: string[] } {
+function singleView({ files, symbols: all, limit, summaries, main }: { files: readonly FileDiff[]; symbols: ChangedSymbol[]; limit: number; summaries?: ReadonlyMap<string, string> | undefined; main?: string | undefined }): { diff: string; symbols: ChangedSymbol[]; truncated: boolean; notes: string[]; cut: string[] } {
   const notes: string[] = []
   const cut: string[] = []
   let symbols = all
@@ -375,7 +421,9 @@ function singleView({ files, symbols: all, limit, summaries }: { files: readonly
     truncated = true
   }
   if (tokensOf(diffOf(), symbols) > limit) {
-    for (const entry of [...shown].sort((a, b) => b.text.length - a.text.length)) {
+    // Files outside the main language go first, the largest of each kind first.
+    const outside = (path: string) => main !== undefined && familyOf(path) !== main
+    for (const entry of [...shown].sort((a, b) => Number(outside(b.file.path)) - Number(outside(a.file.path)) || b.text.length - a.text.length)) {
       if (tokensOf(diffOf(), symbols) <= limit) break
       entry.text = leftOut(entry.file, "the token budget", summaries)
       cut.push(entry.file.path)

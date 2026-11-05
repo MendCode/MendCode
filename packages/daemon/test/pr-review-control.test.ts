@@ -20,7 +20,7 @@ const git = async (dir: string, ...args: string[]) => {
   if (done.code) throw new Error(`git ${args.join(" ")}`)
 }
 
-async function setup(options: { login?: string; reviewers?: PrReviewerSummary[]; tokens24h?: boolean } = {}) {
+async function setup(options: { login?: string; reviewers?: PrReviewerSummary[]; tokens24h?: boolean; hungReviewers?: boolean } = {}) {
   const dataDir = temp("pr-control-data-")
   const checkout = temp("pr-control-repo-")
   await git(checkout, "init", "-q", "-b", "main")
@@ -33,11 +33,12 @@ async function setup(options: { login?: string; reviewers?: PrReviewerSummary[];
   const handle: PlatformHandle = {
     dataDir,
     jobs,
+    device: () => "dev-here",
     rows: () => [{ directory: checkout, state: "watching", open: 3, publish: "allowed" }],
     concurrency: 2,
     repoOf: async () => "acme/app",
     loginOf: async () => options.login,
-    reviewers: async () => options.reviewers ?? [{ id: "global", scope: "global", areas: [], availability: "online" }],
+    reviewers: async () => options.hungReviewers ? await new Promise<never>(() => {}) : options.reviewers ?? [{ id: "global", scope: "global", areas: [], availability: "online" }],
     async retry(jobId, reason) {
       retries.push({ jobId, reason })
       jobs.transition(jobId, "pending")
@@ -46,7 +47,7 @@ async function setup(options: { login?: string; reviewers?: PrReviewerSummary[];
     async audit(input) { audits.push(input); return { ok: true, text: "Auditing the repository at HEAD.", jobId: "job_audit" } },
   }
   const configControl = createConfigControl({ dataDir, git: gitRun, now: () => NOW, repo: async () => "acme/app", login: async () => options.login })
-  const control = createPlatformControl(handle, { configControl, takeover: { takeOver, release }, now: () => NOW, ...(options.tokens24h ? { tokens24h: () => ({ input: 7, output: 3, cached: 2 }) } : {}) })
+  const control = createPlatformControl(handle, { configControl, takeover: { takeOver, release }, now: () => NOW, ...(options.tokens24h ? { tokens24h: () => ({ input: 7, output: 3, cached: 2 }) } : {}), reviewersMs: 50 })
   const add = (state: JobState = "pending", number = 12, directory = checkout) => jobs.upsert({ provider: "github", repo: "acme/app", directory, number, sessionId: "ses_watch", reviewer: "global", scope: "global", trigger: "opened", coverage: "full", base: "b".repeat(40), head: `${number}`.padEnd(40, "c"), configKey: "k", state, fixSessionId: "ses_fix" }).id
   const run = (input: Omit<PlatformControlInput, "sessionId" | "directory"> & { directory?: string }) => control.run({ sessionId: "ses_page", directory: checkout, ...input })
   return { checkout, dataDir, jobs, run, add, retries, audits }
@@ -73,6 +74,26 @@ describe("status", () => {
     add("running")
     const done = await run({ action: "status" })
     expect(done.ok && done.dashboard?.metrics.tokens24h).toEqual({ input: 7, output: 3, cached: 2 })
+  })
+
+  test("a job this daemon owns says this device, never the device id; another device's id stays", async () => {
+    const { run, jobs, checkout } = await setup()
+    const base = { provider: "github" as const, repo: "acme/app", directory: checkout, sessionId: "ses_watch", reviewer: "global", scope: "global" as const, trigger: "opened" as const, coverage: "full" as const, base: "b".repeat(40), configKey: "k", state: "pending" as const }
+    jobs.upsert({ ...base, number: 1, head: "1".padEnd(40, "c"), owner: "dev-here" })
+    jobs.upsert({ ...base, number: 2, head: "2".padEnd(40, "c"), owner: "dev-other" })
+    const done = await run({ action: "status" })
+    if (!done.ok || !done.dashboard) throw new Error("no dashboard")
+    expect(done.dashboard.jobs.map((job) => job.owner).sort()).toEqual(["dev-other", "this device"])
+  })
+
+  test("a checkout whose reviewers never answer does not hold the page: the jobs come back and the text names what is missing", async () => {
+    const { run, add, checkout } = await setup({ hungReviewers: true })
+    add("running")
+    const done = await run({ action: "status" })
+    if (!done.ok || !done.dashboard) throw new Error("no dashboard")
+    expect(done.dashboard.jobs).toHaveLength(1)
+    expect(done.dashboard.reviewers).toEqual([])
+    expect(done.text).toContain(`Reviewers not read yet (the checkout did not answer in time): ${checkout}.`)
   })
 })
 

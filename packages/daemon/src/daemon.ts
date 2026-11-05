@@ -945,6 +945,10 @@ export async function startDaemon(options: DaemonOptions) {
         emit: (draft) => void sessionSink.append(draft),
         mask: (sessionId, text) => secrets.mask(sessionId, text),
         notify: async (launcher, text, queueId) => actorFor(launcher)?.notify(text, queueId, false, "steer"),
+        announce: (waiting) => {
+          const event: GlobalEvent = { type: "children.waiting", gseq: 0, at: clock.now(), ...waiting }
+          for (const connection of connections) if (connection.clientId && isHumanTerminal(connection)) send(connection, { v: PROTOCOL_VERSION, kind: "global", body: event })
+        },
         async resolveChild({ child, requestId, decision, clientId }) {
           await actorFor(child)?.handle({ id: ids("command"), clientId: (clientId ?? taskClientId) as never, type: "request.resolve", sessionId: child, requestId, decision })
         },
@@ -1111,7 +1115,7 @@ export async function startDaemon(options: DaemonOptions) {
   /** Calls outside turns go to `/usage`'s Auxiliary section (docs/usage.md); the ledger keeps counting them as before. */
   const auxiliaryUsage = createAuxiliaryUsage({ store, now: () => clock.now(), price: (usage) => budgets.price(usage), log: (message) => logLine("warn", message) })
   /** One tool-less completion outside a turn: guarded by the budget, counted by the ledger and recorded under `auxiliary`'s role. */
-  const completeBudgeted: AuxiliaryComplete | undefined = options.complete ? async ({ auxiliary, ...request }) => {
+  const completeBudgeted: AuxiliaryComplete | undefined = options.complete ? async ({ auxiliary, onUsage, ...request }) => {
     const model = request.model ?? catalog.defaults
     await budgets.guard({ model: model.model, signal: request.signal })
     let usage: BudgetUsage | undefined
@@ -1121,7 +1125,7 @@ export async function startDaemon(options: DaemonOptions) {
       budgets.record(answer.usage)
       return answer.text
     } catch (error) { budgets.record(); throw error }
-    finally { auxiliaryUsage.record(auxiliary, usage, model.model) }
+    finally { auxiliaryUsage.record(auxiliary, usage, model.model); onUsage?.(usage) }
   } : undefined
   const extractBudgeted: DaemonOptions["extractMemory"] = options.extractMemory ? async (job, signal) => {
     const model = resolveModel({ role: "memoryExtractor", roles: rolesFor(store.settings.get(), job.directory), catalog })
@@ -2347,7 +2351,7 @@ export async function startDaemon(options: DaemonOptions) {
     enabled: () => store.settings.get().resumeAfterRestart !== false,
     now: () => clock.now(),
     lastTurn: lastTurnEvents,
-    resume: async (sessionId, text) => (await actorFor(sessionId)?.steer({ text, label: "daemon restarted · resumed", meta: { restart: "resume" } })) ?? false,
+    resume: async (sessionId, text) => (await actorFor(sessionId)?.steer({ text, label: "daemon restarted · resumed", meta: { restart: "resume" }, afterRestart: true })) ?? false,
     tell: async (launcher, text, queueId) => actorFor(launcher)?.notify(text, queueId, false, "steer"),
     title: (sessionId) => secrets.mask(sessionId, store.sessionInfo(sessionId)?.title ?? ""),
     queueId: () => ids("queue"),
@@ -2903,10 +2907,13 @@ export async function startDaemon(options: DaemonOptions) {
     return modelContextOf(store.settings.get(), info)?.window ?? info?.contextWindow ?? store.settings.get().defaultContextWindow
   }
   let prReview: import("./pr-review/service").PrReviewService | undefined
+  /** The running reviews as the wire event (`pr.review.activity`): the service keeps session ids as plain strings. */
+  const reviewActivityEvent = (jobs: ReadonlyArray<import("./pr-review/activity").ReviewActivityJob>): GlobalEvent => ({ type: "pr.review.activity", gseq: 0, at: clock.now(), jobs: jobs.map((job) => ({ ...job, sessionId: job.sessionId as SessionId })) })
   async function prReviewService() {
     if (prReview) return prReview
     const { createPrReviewService } = await import("./pr-review/service")
     const { chooseReaderModel } = await import("./pr-review/reader-models")
+    const { chooseFallbackModel } = await import("./pr-review/fallback")
     prReview ??= createPrReviewService({
       memory: reviewMemory,
       contextWindow: reviewContextWindow,
@@ -2943,6 +2950,11 @@ export async function startDaemon(options: DaemonOptions) {
         const masked = secrets.mask(sessionId as SessionId, text)
         return effectiveSettings(store.settings.get(), { safeMode: options.safeMode }).experimental?.pr_review_prompts === true ? actor?.notify(masked, undefined, true) : actor?.record(masked, true)
       },
+      // The reviews running now, whole on each change, to the local terminals: wire only, nothing stored.
+      activity: (jobs) => {
+        const event = reviewActivityEvent(jobs)
+        for (const connection of connections) if (connection.clientId && isHumanTerminal(connection)) send(connection, { v: PROTOCOL_VERSION, kind: "global", body: event })
+      },
       sessions: (owner, directory) => options.prReview?.sessions?.(owner, directory) ?? reviewSessions.factory({ owner, directory }),
       editor: (owner, directory) => options.prReview?.sessions?.(owner, directory) ?? reviewSessions.factory({ owner, directory, editing: true }),
       // Readers run on the cheapest model of the owner's own provider and transport (reader-models.ts), as hidden review children.
@@ -2953,6 +2965,17 @@ export async function startDaemon(options: DaemonOptions) {
           const ownerModel = store.hasSession(owner as SessionId) ? store.sessionModel(owner as SessionId) : undefined
           const reviewer = ownerModel ?? resolveModel({ role: "main", roles: rolesFor(store.settings.get(), directory), catalog: options.models })
           const picked = chooseReaderModel({ owner: reviewer, catalog: options.models, requested })
+          if (!picked.ok) return picked
+          return { ok: true, model: picked.model, factory: options.prReview?.sessions?.(owner, directory) ?? reviewSessions.factory({ owner, directory, model: { model: picked.model } }) }
+        },
+      }),
+      // Fallback models: same engine and provider as the reviewer's model, inside the allowed list (fallback.ts), as hidden review children.
+      fallbacks: (owner, directory) => ({
+        source(requested) {
+          if (!options.models) return { ok: false, reason: "no model catalog" }
+          const ownerModel = store.hasSession(owner as SessionId) ? store.sessionModel(owner as SessionId) : undefined
+          const reviewer = ownerModel ?? resolveModel({ role: "main", roles: rolesFor(store.settings.get(), directory), catalog: options.models })
+          const picked = chooseFallbackModel({ owner: reviewer, catalog: options.models, requested })
           if (!picked.ok) return picked
           return { ok: true, model: picked.model, factory: options.prReview?.sessions?.(owner, directory) ?? reviewSessions.factory({ owner, directory, model: { model: picked.model } }) }
         },
@@ -3515,9 +3538,14 @@ export async function startDaemon(options: DaemonOptions) {
       for (const quota of store.latestQuota()) send(connection, { v: PROTOCOL_VERSION, kind: "global", body: quota })
       // The code graph's last counts per project (a local terminal's footer); none is computed here.
       if (!connection.remoteAddress && !connection.peer) for (const status of options.codegraphStatus?.snapshot() ?? []) send(connection, { v: PROTOCOL_VERSION, kind: "global", body: codegraphEvent(status) })
+      // Children that wait for approval now, for a terminal that opens while they do.
+      if (isHumanTerminal(connection)) for (const waiting of childApprovals?.snapshot() ?? []) send(connection, { v: PROTOCOL_VERSION, kind: "global", body: { type: "children.waiting", gseq: 0, at: clock.now(), ...waiting } })
       // Whether the graph indexes this terminal's folder, so its footer can say a skip before the first turn; measured once, in the background.
       if (!connection.remoteAddress && !connection.peer && connection.directory) void publishGraphGate(connection.directory)
       send(connection, { v: PROTOCOL_VERSION, kind: "global", body: usageToday.snapshot() })
+      // The PR reviews running now, for a terminal that opens while one does.
+      const reviewing = isHumanTerminal(connection) ? prReview?.activity() ?? [] : []
+      if (reviewing.length) send(connection, { v: PROTOCOL_VERSION, kind: "global", body: reviewActivityEvent(reviewing) })
       const update = releases.notice()
       if (update) send(connection, { v: PROTOCOL_VERSION, kind: "global", body: { type: "release.available", gseq: 0, at: clock.now(), ...update } })
       return
@@ -3823,6 +3851,36 @@ export async function startDaemon(options: DaemonOptions) {
           if (!text) return reply(connection, command.id, { ok: false, code: "internal", message: "[DAEMON]: the model returned an empty recap" })
           store.sessionTree.putRecap(command.sessionId, last, text)
           return reply(connection, command.id, { ok: true, result: { text, at: clock.now(), cached: false } })
+        } catch (error) {
+          return reply(connection, command.id, { ok: false, code: "internal", message: `[DAEMON]: ${(error instanceof Error ? error.message : String(error)).slice(0, 500)}` })
+        }
+      }
+      case "whatsnew.ask": {
+        // It reads this machine's memories, settings and session titles: a local terminal only (docs/whats-new.md).
+        if (connection.remoteAddress || connection.peer) return reply(connection, command.id, { ok: false, code: "forbidden", message: "[DAEMON]: /whatsnew reads local memories and settings and is local only" })
+        const saved = store.settings.get()
+        if (!featureOn(saved, "whats_new", { safeMode: options.safeMode })) return reply(connection, command.id, { ok: false, code: "invalid_command", message: "[DAEMON]: /whatsnew is off in this tier (/tier whats_new on)" })
+        if (!completeBudgeted) return reply(connection, command.id, { ok: false, code: "invalid_command", message: "[DAEMON]: /whatsnew needs the native engine; /whatsnew all lists the changes" })
+        const { checkSuggestions, parseWhatsNew, whatsNewContext, whatsNewRequest, WHATS_NEW_TIMEOUT_MS } = await import("./whats-new")
+        const directory = command.directory
+        const memoryOn = memorySettings(saved, directory).memoryEnabled !== false
+        const context = whatsNewContext({
+          memories: memoryOn ? store.memories.list({ directory, status: "saved", profile: areaOf(saved, directory) }) : [],
+          settings: effectiveSettings(saved, { safeMode: options.safeMode }),
+          sessions: store.listSessions({ directory, limit: 30 }),
+        })
+        const request = whatsNewRequest({ version: command.version, changes: command.changes, context })
+        const roles = rolesFor(saved, directory)
+        const session = command.sessionId && store.hasSession(command.sessionId) ? store.sessionModel(command.sessionId) : undefined
+        const model = resolveModel({ role: "aside", session, roles, catalog })
+        const shown = { model: model.model, estimate: request.estimate, memories: context.memories.length, sessions: context.sessions.length }
+        if (command.dryRun) return reply(connection, command.id, { ok: true, result: shown })
+        let usage: BudgetUsage | undefined
+        try {
+          const text = redactSecrets(await completeBudgeted({ system: request.system, prompt: request.prompt, signal: AbortSignal.timeout(WHATS_NEW_TIMEOUT_MS), ...(options.models?.selectable ? { model } : {}), auxiliary: { role: "whatsNew", directory, ...(command.sessionId ? { sessionId: command.sessionId } : {}) }, onUsage: (value) => { usage = value } })).text
+          const suggestions = checkSuggestions(parseWhatsNew(text), { settings: saved, check: (patch) => store.settings.check(patch) })
+          const cost = usage ? usage.costMicros ?? budgets.price(usage) : undefined
+          return reply(connection, command.id, { ok: true, result: { ...shown, suggestions, ...(usage ? { usage: { input: usage.input, output: usage.output, ...(cost !== undefined ? { costMicros: cost } : {}) } } : {}) } })
         } catch (error) {
           return reply(connection, command.id, { ok: false, code: "internal", message: `[DAEMON]: ${(error instanceof Error ? error.message : String(error)).slice(0, 500)}` })
         }

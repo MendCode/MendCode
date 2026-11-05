@@ -25,6 +25,7 @@ import { sessionToMarkdown } from "./export"
 import { HTTP_USAGE, parseServerCommand } from "./http-cli"
 import { createDaemonServiceCli, DAEMON_USAGE, parseDaemonService, type DaemonServiceCommand } from "./daemon-service"
 import { daemonCommand } from "./launcher"
+import { clearRestart, markRestart } from "./restart-mark"
 import { droppedEnvLog, hostSessionEnvNames, restartWithoutHostSessionEnv, withoutHostSessionEnv } from "@mendcode/client/inherited-env"
 import { parseViewCommand, runViewCommand } from "./view-args"
 import { parseDocsCommand } from "./docs-args"
@@ -139,6 +140,7 @@ if (daemonService) {
       try { await client.connect(); return client } catch { client.close(); return undefined }
     },
     launch: async () => { await runtime.launchUserDaemon(options) },
+    restarting: (on) => (on ? markRestart(dir) : clearRestart(dir)),
     foreground: async () => {
       // The daemon runs in this process: it restarts once, in place, without a Claude Code shell's session variables (inherited-env.ts).
       await restartWithoutHostSessionEnv({ log: (line) => process.stderr.write(`${line}\n`) })

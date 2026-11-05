@@ -75,9 +75,14 @@ export function createRequests(ctx: AppContext, actions: {
     requestFrame()
   }
 
-  async function resolveRequest(choice: ApprovalChoice["choice"]) {
+  async function resolveRequest(choice: ApprovalChoice["choice"], label?: string) {
     const request = state.transcript.pendingRequests[0]
     if (!request || request.kind !== "approval") return
+    // The daemon's own choices (children waiting): the label is the answer.
+    if (choice === "answer") {
+      if (label) report(await input.send({ type: "request.resolve", sessionId: state.sessionId, requestId: request.requestId, decision: { kind: "answer", text: label } }))
+      return
+    }
     if (request.title === "Save to memory?" && choice === "session") {
       report(await input.send({ type: "request.resolve", sessionId: state.sessionId, requestId: request.requestId, decision: { kind: "approve", scope: "once", memoryAlways: true } }))
       return
@@ -107,7 +112,7 @@ export function createRequests(ctx: AppContext, actions: {
     if (!request || request.kind !== "approval") return
     state.approvalChoice = index
     const option = approvalChoicesOf(pendingPanelRequest())[index]
-    if (option) await resolveRequest(option.choice)
+    if (option) await resolveRequest(option.choice, option.label)
     requestFrame()
   }
 
@@ -408,7 +413,9 @@ export function createRequests(ctx: AppContext, actions: {
     const review = request.kind === "approval" ? parseApprovalReview(request.detail) : { detail: request.detail }
     const diff = renderApprovalDiff({ detail: review.detail, width: room, screenHeight: input.screen.size.height, scroll: state.approvalScroll })
     const detail: Line[] = []
-    if (diff) {
+    // A card that lists several things (children waiting) shows each on its own row.
+    if (request.options?.length) detail.push(...review.detail.split("\n").slice(0, 14).flatMap((text) => wrapSpans([{ text, fg: "body" }], room, [{ text: "  " }]).slice(0, 1)))
+    else if (diff) {
       state.approvalScroll = diff.scroll
       detail.push(...wrapSpans([{ text: diff.head, fg: "body" }], room, [{ text: "  " }]).slice(0, 2), ...diff.rows)
     } else detail.push(...wrapSpans([{ text: review.detail, fg: "body" }], room, [{ text: "  " }]).slice(0, 2))
@@ -422,7 +429,7 @@ export function createRequests(ctx: AppContext, actions: {
           ? "type feedback · enter sends it · plan mode stays · esc cancels"
           : state.planDraft?.requestId === request.requestId && state.planDraft.kind === "note"
             ? "type a note · enter rejects with it · esc cancels"
-            : `↑↓ select · enter confirm${request.title === PLAN_TITLE ? "" : " · ? explain"}${width >= 84 ? (request.title === PLAN_TITLE ? " · or type feedback" : " · or type what to do instead") : ""}`
+            : `↑↓ select · enter confirm${request.title === PLAN_TITLE || request.options?.length ? "" : " · ? explain"}${width >= 84 && !request.options?.length ? (request.title === PLAN_TITLE ? " · or type feedback" : " · or type what to do instead") : ""}`
     const explain = rich && state.approvalExplainFor === request.requestId && request.title !== PLAN_TITLE
       ? explainApproval({ tool: request.tool, permission: request.permission, mode: state.transcript.permissionMode, why: review.why, context: request.permissionContext, offer: ruleOffer(request), engineFlagged: request.engineFlagged }).flatMap((text) => wrapSpans([{ text, fg: "muted" }], room, [{ text: "  " }]))
       : undefined

@@ -102,7 +102,7 @@ const checkpointOf = (head: string, base: string, extra: Partial<JobCheckpoint> 
 
 type Answer = (input: RunPrReviewInput, call: number) => Partial<ReviewRun> & Pick<ReviewRun, "status">
 
-function harness({ repo, yaml, answer, now, audit, reviewUsage, data: given }: { data?: string; reviewUsage?: NonNullable<Parameters<typeof createPrReviewService>[0]["reviewUsage"]>; repo: Awaited<ReturnType<typeof repository>>; yaml: string; answer: Answer; now?: () => number; audit?: (input: { directory: string; head?: string }) => Promise<AuditRun> }) {
+function harness({ repo, yaml, answer, now, audit, reviewUsage, activity, data: given }: { activity?: NonNullable<Parameters<typeof createPrReviewService>[0]["activity"]>; data?: string; reviewUsage?: NonNullable<Parameters<typeof createPrReviewService>[0]["reviewUsage"]>; repo: Awaited<ReturnType<typeof repository>>; yaml: string; answer: Answer; now?: () => number; audit?: (input: { directory: string; head?: string }) => Promise<AuditRun> }) {
   const gh = fakeGh(repo)
   const data = given ?? temp("svc-data-")
   const notices: string[] = []
@@ -116,7 +116,7 @@ function harness({ repo, yaml, answer, now, audit, reviewUsage, data: given }: {
     sessionDirectory: () => repo.dir, sessionExists: () => true, notify: (_session, text) => notices.push(text), sessions, editor,
     schedule: async (job) => { await job() }, random: () => 0.5,
     review: async (input) => { inputs.push(input); const reply = answer(input, inputs.length); return { state: emptyState(), incremental: false, config, ...reply } as ReviewRun },
-    ...(audit ? { audit: audit as never } : {}), ...(reviewUsage ? { reviewUsage } : {}),
+    ...(audit ? { audit: audit as never } : {}), ...(reviewUsage ? { reviewUsage } : {}), ...(activity ? { activity } : {}),
   })
   cleanups.push(() => service.stop())
   const jobs = () => service.platform.jobs.all()
@@ -197,6 +197,57 @@ describe("review jobs through the service", () => {
     expect(byNumber(12)).toMatchObject({ state: "waiting", attempts: 1, error: "GitHub did not confirm the review" })
     expect(byNumber(12).notBefore).toBeGreaterThan(Date.now())
     expect(byNumber(13)).toMatchObject({ state: "failed", error: "verification failed; nothing was published" })
+  })
+})
+
+describe("a failed verifier", () => {
+  test("keeps its candidates on the job and backs off; the retry gets the checkpoint and the job's error names the cause", async () => {
+    let clock = Date.parse("2026-10-30T10:00:00Z")
+    const repo = await repository("enabled: true\n")
+    const head = await repo.push(12, "feature", "export const one = 2\n")
+    const kept = checkpointOf(head, repo.main, { phase: "corroboration", completedPhases: ["analysis"], candidates: [{ ...finding(), verdict: undefined }] })
+    const reason = "verification failed (the verifier's answer could not be used after one repair turn (no JSON object in the answer; it was empty)); 1 candidate finding kept for the retry; nothing was published"
+    const h = harness({ repo, yaml: "enabled: true\n", now: () => clock, answer: (_input, call) => call === 1
+      ? { status: "failed", reason, retryable: true, stop: { kind: "error", detail: "Verification failed: …", resumable: true }, checkpoint: kept }
+      : { status: "reviewed", checkpoint: checkpointOf(head, repo.main) } })
+    h.gh.prs.push({ number: 12, branch: "feature", baseRef: "main" })
+    expect((await h.service.control({ sessionId: "ses_a", action: "review", pr: "12" })).ok).toBe(true)
+    await until(() => h.jobs()[0]?.state === "waiting")
+    const [job] = h.jobs()
+    expect(job).toMatchObject({ attempts: 1, error: reason })
+    expect(job!.checkpoint.candidates).toHaveLength(1)
+    expect(h.notices.join("\n")).toContain("It is tried again at")
+    expect(h.notices.join("\n")).not.toContain("does not go away by retrying")
+    // When due, the retry hands the run the kept checkpoint: it verifies the candidates, no second review pass.
+    clock = job!.notBefore! + 1_000
+    await h.service.tick()
+    await until(() => h.jobs()[0]?.state === "done")
+    expect(h.inputs).toHaveLength(2)
+    expect(h.inputs[1]!.checkpoint).toMatchObject({ phase: "corroboration", candidates: [{ id: finding().id }] })
+  })
+})
+
+describe("a review at work", () => {
+  test("the watching session hears each step from the fetch to the end, and the run leaves the list when it ends", async () => {
+    const repo = await repository("enabled: true\n")
+    await repo.push(12, "feature", "export const one = 2\n")
+    const heard: Array<Array<{ sessionId: string; number: number; phase: string; steps: Array<{ label: string; endedAt?: number }> }>> = []
+    const h = harness({ repo, yaml: "enabled: true\n", activity: (jobs) => heard.push(jobs), answer: (input) => {
+      input.progress?.({ phase: "analysis", label: "Analysis", detail: "1 file" })
+      input.progress?.({ phase: "corroboration", label: "Verifying 2 candidates" })
+      input.progress?.({ phase: "posting", label: "Posting review" })
+      return { status: "reviewed", checkpoint: checkpointOf(input.head, input.base) }
+    } })
+    h.gh.prs.push({ number: 12, branch: "feature", baseRef: "main" })
+    expect((await h.service.control({ sessionId: "ses_a", action: "review", pr: "12" })).ok).toBe(true)
+    await until(() => h.jobs()[0]?.state === "done")
+    const last = heard.findLast((jobs) => jobs.length)!
+    expect(last).toHaveLength(1)
+    expect(last[0]).toMatchObject({ sessionId: "ses_a", number: 12, phase: "posting" })
+    expect(last[0]!.steps.map((step) => step.label)).toEqual(["Fetching #12", "Analysis", "Verifying 2 candidates", "Posting review"])
+    expect(last[0]!.steps.slice(0, -1).every((step) => step.endedAt !== undefined)).toBe(true)
+    expect(heard.at(-1)).toEqual([])
+    expect(h.service.activity()).toEqual([])
   })
 })
 

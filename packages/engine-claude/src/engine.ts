@@ -201,6 +201,11 @@ export function createClaudeEngine(options: {
   subagentContext?(sessionId: SessionId): Promise<string | undefined>
   /** One tree (docs/one-tree.md): told what each Bash or write call wrote and printed; a line it returns reaches the model as that call's context. */
   oneTree?(input: { sessionId: SessionId; cwd: string; written: string[]; output: string }): string | undefined
+  /**
+   * Smart mode (docs/permissions.md): the daemon's own rules judge each request with Claude's tool names, so smart decides the same as with the native engine.
+   * `undefined` (a tool it does not judge) and `ask` keep the approval; `allow` runs the call; `deny` refuses it without a prompt.
+   */
+  smart?(input: { sessionId: SessionId; tool: string; permission: "read" | "write" | "execute"; args: unknown; cwd: string }): { decision: "allow" | "ask" | "deny"; reason: string } | undefined
   /** The session's model, or the turn's own when `override` is given (a per-turn selection; the saved choice is untouched). */
   modelFor(sessionId: SessionId, override?: import("@mendcode/protocol").ModelChoice): ClaudeModelChoice
   /** Persistent session → Claude Code session id, so a restart resumes the conversation. */
@@ -360,7 +365,15 @@ export function createClaudeEngine(options: {
       if (!flagged && (mode === "full" || (mode === "edits" && permission === "write"))) return allow()
       if (mode === "plan" && permission !== "read") return deny(turn.input.readOnlyRun === true ? "This run is read-only: only read tools are allowed; answer from what you can read." : "Plan mode: only reading is allowed until the plan is approved.")
       // `description` is Claude's short label (often just the file name); only `decision_reason` says why it asks.
-      const reason = flagged && !(typeof request.decision_reason === "string" && request.decision_reason.trim()) ? ENGINE_FLAGGED_REASON : request.decision_reason
+      let smartReason: string | undefined
+      if (mode === "smart" && !flagged) {
+        const judged = options.smart?.({ sessionId: turn.input.sessionId, tool: name, permission, args, cwd: options.cwdFor(turn.input.sessionId) })
+        if (judged?.decision === "allow") return allow()
+        if (judged?.decision === "deny") return deny(`smart mode never runs this: ${judged.reason}`)
+        smartReason = judged?.reason
+      }
+      const hasReason = typeof request.decision_reason === "string" && request.decision_reason.trim()
+      const reason = flagged && !hasReason ? ENGINE_FLAGGED_REASON : !hasReason && smartReason ? smartReason : request.decision_reason
       const answer = await ask({ kind: "approval", title: String(request.title ?? claudeToolTitle(name, args)).slice(0, 200), detail: toolDetail(name, args, reason), tool: name, permission, ...(flagged ? { engineFlagged: true as const } : {}) })
       if (answer.kind === "approve") {
         // Only one call: the rules Claude suggests for "always" never apply to a call its own safety check flagged.

@@ -29,7 +29,7 @@ const AUTH_NAMES = ["providers.json", "environment.enc", "keys", "secrets.key", 
 
 /** Runtime state, caches, history and logs. */
 const OPERATIONAL_NAMES = [
-  "mendd.db", "mendd.db-wal", "mendd.db-shm", "mendd.lock", "mendd.sock", "mendd.endpoint", "blobs", "session-transcripts", "tool-output", "logs", "budget",
+  "mendd.db", "mendd.db-wal", "mendd.db-shm", "mendd.lock", "mendd.sock", "mendd.endpoint", "daemon-restart","blobs", "session-transcripts", "tool-output", "logs", "budget",
   "codegraph", "lsp", "fetch", "generated_images", "asides", "reviews", "Trash", ".Trash", "trash", "voice", "computer", "computer-native", "desktop", "quota-probe",
   "pets-cache", "models-dev-cache.json", "models.dev.json", "pr-watch.json", "project-rest.json", "model-resolutions.json", "acp-models.json", "mcp-pending-budget.json",
   "debug-snapshots", "diagnostics", "scratch", "scratchpads", "compound-runs", "compound-worktrees", "fanout-worktrees", "loop-worktrees", "worktrees", "worktree-manager",
@@ -123,7 +123,7 @@ export const PORTABLE_SETTINGS: ReadonlySet<string> = new Set([
   "memoryMaxEntries", "memoryProjectMaxEntries", "memoryPolicies", "memoryGlobalCompactionMaxEntries", "dreamConsolidationPolicy", "retentionDays", "worktreeBranch",
   "git", "footer", "promptCache", "outputStyle", "planExitAgent", "plan_exit_agent", "plan_files_location", "logLevel", "tool_output", "codegraph_index", "foreignResources",
   "instructionFallbacks", "projectRootMarkers", "queue", "snapshot", "snapshotScope", "compaction", "cache", "allowMessageEdits", "subagent_variant",
-  "subagentOwnerWake", "subagentCatalog", "processLimits", "resumeAfterRestart",
+  "subagentOwnerWake", "subagentCatalog", "processLimits", "resumeAfterRestart", "zeroDataRetention",
 ])
 
 /**

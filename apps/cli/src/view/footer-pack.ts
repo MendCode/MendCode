@@ -83,9 +83,13 @@ export type PackFacts = {
   context?: { tokens: number; limit: number; approx?: boolean; label?: string }
   quotas?: readonly QuotaSnapshotLike[]
   costMicros?: number
+  /** A PR review running for another session's watch (`reviewing Symbex-1#25`); the watching session shows it at work instead. */
+  reviewing?: string
   jobs?: number
   loops?: number
   workflows?: number
+  /** Children (sessions another session started) waiting for approval whose card is in another session than the open one; `/approvals` goes there. */
+  childApprovals?: number
   agents?: number
   waiting?: number
   goal?: Line
@@ -213,12 +217,14 @@ function segment(id: FooterPackSegment, facts: PackFacts, pack: FooterPackFile, 
       return facts.jobs ? { spans: [...lead(look, id), { text: `${facts.jobs} shell${facts.jobs === 1 ? "" : "s"}`, fg: color("secondary") }] } : undefined
     case "agents": {
       const words = [
+        ...(facts.reviewing ? [facts.reviewing] : []),
         ...(facts.agents ? [`${facts.agents} agent${facts.agents === 1 ? "" : "s"}`] : []),
         ...(facts.loops ? [`${facts.loops} loop${facts.loops === 1 ? "" : "s"}`] : []),
         ...(facts.workflows ? [`${facts.workflows} workflow${facts.workflows === 1 ? "" : "s"}`] : []),
+        ...(facts.childApprovals ? [`${facts.childApprovals} child approval${facts.childApprovals === 1 ? "" : "s"}`] : []),
       ]
       if (!words.length) return undefined
-      return { spans: [...lead(look, id), { text: words.join(" "), fg: facts.waiting ? "warning" : color("secondary") }, ...(facts.waiting ? [{ text: " · needs input", fg: "warning" as const }] : [])] }
+      return { spans: [...lead(look, id), { text: words.join(" "), fg: facts.waiting ? "warning" : color("secondary") }, ...(facts.childApprovals ? [{ text: " · /approvals", fg: "warning" as const }] : facts.waiting ? [{ text: " · needs input", fg: "warning" as const }] : [])] }
     }
     case "goal":
       return facts.goal?.length ? { spans: [...facts.goal] } : undefined

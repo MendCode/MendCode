@@ -46,7 +46,7 @@ A command line is split at unquoted `&&`, `||`, `;`, `|`, `&` and newlines; ever
 
 **Session grants.** In smart mode a grant covers only the same action fingerprint and causal user authority, with complete execution identity, and never a high-risk call. Changing the command, script identity, environment, or user turn asks again. Other modes retain tool/path session scopes.
 
-Claude Code sessions (engine `claude`) and the Codex engine treat `smart` as `ask`.
+Claude Code sessions (engine `claude`) decide `smart` with the same rules for Claude's Edit, Write, NotebookEdit and Bash calls (other Claude tools still ask), so an edit inside the project runs without asking. The Codex engine treats `smart` as `ask`.
 
 ### Permission reviewer (optional)
 
@@ -230,6 +230,20 @@ root, which is never accepted. The session list is held in daemon memory like th
 and the setting are local only (a remote or peer connection is refused), since the paths belong to the machine that runs
 the commands.
 
+### Skills and instructions
+
+In `smart` mode a read-only call (`read`, `grep`, `glob`, `ls`) of what MendCode itself loaded for the session does not ask
+for `external_directory`: the folder of each skill the model may load (your own, profiles', the project's, `.agents` and
+`.claude` skills, `skills.paths`) and each instruction file the system prompt includes (the global `AGENTS.md`,
+the project's `AGENTS.md`/`CLAUDE.md` chain, configured `instructions`). Both come from the same loaders that build the
+prompt, so a disabled skill, `--no-context-files` or a session without the `skill` tool adds nothing. Paths resolve
+through symlinks first (`~/.claude/skills/x` reached as its real folder counts; `..` or a link that leads out does not).
+Only reads: an edit, patch or command there still asks. Secrets-looking files inside (`.env*`, keys, `credentials*`,
+`auth.json`, `token.json`, `.git/`) still ask, and so does a `grep` over a folder that holds one. An instruction file is
+just that file, not its folder. An explicit `external_directory` deny still wins. A file a skill only points to (another
+folder of the same repository) is not loaded by MendCode and still asks; add that folder to `skills.paths` (or
+`additionalDirectories`) to read it unasked. Every tier; native engine.
+
 The third consecutive identical tool name and arguments in one turn asks for `doom_loop`; changed arguments or
 intervening assistant text reset the count. A session grant covers only that repeated tool. A user rejection stops
 by default and closes all remaining tool results. `experimental.continue_loop_on_deny: true` lets the model adapt;
@@ -294,15 +308,19 @@ answer within 120 seconds keeps the refusal, and the empty child is removed. Wit
 run, a loop, only remote or peer clients connected) it is refused at once, as before, and the error ends with the exact
 command to run from your own terminal. Only `edits` and `smart` can be asked for this way, never `full`, only for a child
 the caller has just started, and only your local terminal can approve (a remote or peer client can only dismiss the
-card). Nothing is raised without your answer. Every tier.
+card). The card also offers **Approve in full access** (the child asks nothing): that is only your pick on the card,
+never the first option, and a session asking for `full` is still refused. Nothing is raised without your answer.
+Every tier.
 
 **Children waiting for approval.** A session started from another session's shell (`mendcode run --bg`) has no terminal
 attached, so its approval used to wait unseen. Now, within a second or two of the first one, the launching session's model gets
 one notice listing what waits (it cannot approve, and is told not to poll or work around it), and a terminal of yours that has the
-launching session (or another session of its project) open gets one card: **Approve all (N)**, **Deny all** or **One by one**.
-Approve all answers exactly the requests the card listed, once each, not ones that arrived later; **One by one** opens a card per
-child. A choice a child asks with options (such as a `mendcode_settings` proposal) is shown the same way and your pick is
-forwarded. Only your own local terminal answers; dismissing a card answers nothing. A request answered in the child's own session
+launching session (or another session of its project) open gets one card, drawn like any tool approval: **Allow all (N)**, **Reject all** or **One by one**, with a row per child
+(`title · tool: detail`). Allow all answers exactly the requests the card listed, once each, not ones that arrived later;
+**One by one** opens a card per child (**Allow once** or **Reject**). A choice a child asks with options (such as a `mendcode_settings` proposal) is shown the same way and your pick is
+forwarded. Every other terminal of yours, on any session, shows a notice with the child's and the launcher's names and
+`child approvals · /approvals` in the footer's agents segment; `/approvals` opens the launching session, where the card is. The
+notice goes when the children are answered. Only your own local terminal answers; dismissing a card answers nothing. A request answered in the child's own session
 leaves the card. `mendcode session status ID` names what a child waits on (`Waiting: approval …`) and `mendcode logs ID` shows
 `waiting for approval` lines. Nothing runs until a child waits. The link to the launching session is stored with the
 child, so it survives a daemon restart: a child that waits after one is announced to the same launcher. Every tier.

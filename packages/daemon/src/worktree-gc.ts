@@ -4,7 +4,8 @@ import path from "node:path"
 import type { ProjectRestInfo, StorageArtifact, StorageWorktree, StorageWorktreesReport } from "@mendcode/protocol"
 import { DEFAULT_WORKTREE_GC_DAYS } from "@mendcode/protocol"
 import { readGitBranch } from "./git-branch"
-import { captureOutput, defaultBranch, projectGit } from "./project-git"
+import { captureOutput } from "@mendcode/tools"
+import { defaultBranch, projectGit } from "./project-git"
 
 const DAY_MS = 86_400_000
 /** Entries one size walk visits at most: a worktree this large reports a lower bound instead of stalling the daemon. */

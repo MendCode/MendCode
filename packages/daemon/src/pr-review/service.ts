@@ -4,6 +4,7 @@ import type { PrFinding, PrReviewConfigView, PrReviewDashboard, PrReviewerSummar
 import { createIndexer } from "@mendcode/codegraph"
 import { ghProcess, parseRef, type GhRun } from "../pr-watch"
 import { createAccounting, accountingFile } from "./accounting"
+import { createReviewActivity, type ReviewActivityJob } from "./activity"
 import { runAudit } from "./audit"
 import { backlogOrder, headReviewOf, planBacklog, type BacklogDecision, type HeadStatus, type ReviewAuthor } from "./backlog"
 import { budgetPolicy, classifyStop, failureStop, quotaPlan, stopText } from "./budget"
@@ -32,12 +33,14 @@ import { createOutbox } from "./outbox"
 import { createHeldStore, type HeldReview } from "./held"
 import { failureKind } from "./outage"
 import { resolveReviewLanguage } from "./language"
+import { githubEditor, providerEditor } from "./editors"
+import { runDescribe, type ReviewSnapshot } from "./describe"
 import { lacksText, mayDo, readRegistry, route, runsHere, type ReviewerRegistry } from "./registry"
 import { createRepoWatch, listedToFacts, MAX_CONCURRENT_REVIEWS, MAX_OPEN_PRS, parseListedPr, PUBLISHER_RETRY_MS, routingReason, waitingAssignment, type JobOutcome, type RepoRole, type RepoWatchJob, type ReviewAssignment, type ReviewTrigger, type WatchPlan } from "./repo-watch"
 import { buildStackGraph, stackChanges, stackSummary } from "./stacks"
 import { controlOf, release, takeOver } from "./takeover"
 import { runChecks } from "./verify"
-import { layeredConfig, reviewNotice, runConfigKey, runPrReview, type ReviewRun, type RunPrReviewInput, type RunReaders } from "./run"
+import { layeredConfig, reviewNotice, runConfigKey, runPrReview, type ReviewProgress, type ReviewRun, type RunFallbacks, type RunPrReviewInput, type RunReaders } from "./run"
 import { readReviewState, REVIEW_MARKER, stateFromMarkers, writeReviewState, type ReviewState } from "./state"
 
 /**
@@ -127,6 +130,8 @@ export type PrReviewServiceOptions = {
    * its children's factory. Absent: data files get local summaries only.
    */
   readers?(owner: string, directory: string): RunReaders
+  /** `fallback_models` of `owner`'s reviews in `directory`: a model entry as a session factory on the reviewer's own provider, or why not (fallback.ts). Absent: none. */
+  fallbacks?(owner: string, directory: string): RunFallbacks
   /** Runs `job` on the daemon's job scheduler and resolves when it ends. */
   schedule(run: () => Promise<void>): Promise<void>
   /**
@@ -147,6 +152,8 @@ export type PrReviewServiceOptions = {
    * already in the days and models of the report as a turn of a hidden session; this says how much of them is the reviewer's.
    */
   reviewUsage?: (turn: { directory: string; childSessionId: string | undefined; tokens: PrTokenUsage }) => void
+  /** The reviews running now with their steps, whole on every change (activity.ts); daemon.ts sends it to the local terminals. */
+  activity?: (jobs: ReviewActivityJob[]) => void
   /** The memory a reviewer's scope allows (daemon.ts binds it to the store); absent, reviews get no memory context. */
   memory?: ReviewMemoryRead
   /** The model window of the owner session's model, for the per-call context budget; absent, the config or the default. */
@@ -223,6 +230,7 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
   const now = options.now ?? Date.now
   const review = options.review ?? runPrReview
   const audit = options.audit ?? runAudit
+  const activity = createReviewActivity({ now, emit: (jobs) => options.activity?.(jobs) })
   const sleep = options.sleep ?? ((ms: number) => Bun.sleep(ms))
   const root = path.join(options.dir, "pr-review")
   const outbox = createOutbox({ file: path.join(root, "outbox.json"), notify: options.notify, sessionExists: options.sessionExists })
@@ -394,7 +402,17 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
   }
 
   /** `fresh`: the job's checkpoint is not handed to the run (the review of a pushed fix: a new head, its own range). */
-  async function reviewOne({ sessionId, directory, number, publish, manual, job, fresh = false, recheck, onlyNew = false }: { sessionId: string; directory: string; number: number; publish: boolean; manual: boolean; job?: ReviewJob | undefined; fresh?: boolean; recheck?: readonly PrFinding[] | undefined; onlyNew?: boolean }): Promise<Reviewed> {
+  type ReviewOneInput = { sessionId: string; directory: string; number: number; publish: boolean; manual: boolean; job?: ReviewJob | undefined; fresh?: boolean; recheck?: readonly PrFinding[] | undefined; onlyNew?: boolean }
+  /** One run of a job is live in the watching terminals from its fetch to its end, whatever the outcome (activity.ts). */
+  async function reviewOne(input: ReviewOneInput): Promise<Reviewed> {
+    const job = input.job
+    if (!job) return reviewOneRun(input)
+    activity.begin({ jobId: job.id, sessionId: input.sessionId, repo: job.repo, number: input.number })
+    activity.step(job.id, { phase: "fetch", label: `Fetching #${input.number}`, ...(job.head ? { detail: `head ${job.head.slice(0, 8)}` } : {}) })
+    try { return await reviewOneRun(input) } finally { activity.end(job.id) }
+  }
+
+  async function reviewOneRun({ sessionId, directory, number, publish, manual, job, fresh = false, recheck, onlyNew = false }: ReviewOneInput): Promise<Reviewed> {
     const repo = await repoOf(directory)
     const forge = await forgeOf(directory)
     // GitLab and Gitea: the adapter's facts in the shape gh prints (the MR's diff base is GitLab's `diff_refs.start_sha`).
@@ -451,6 +469,7 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
         publisher: { login, check: (config) => publisherOf(directory, repo, config.publishers) }, read: call,
         sessionFactory: recordedSessions(options.sessions(sessionId, worktree), current?.id),
         ...(options.readers ? { readers: options.readers(sessionId, worktree) } : {}),
+        ...(options.fallbacks ? { fallbacks: options.fallbacks(sessionId, worktree) } : {}),
         // GitLab and Gitea: the title and the description the adapter read (linked issues are read through gh on GitHub), so
         // `template.language: auto` judges the language from both.
         pullRequest: forge ? { title: typeof pr.title === "string" ? pr.title : "", body: typeof pr.body === "string" ? pr.body : "", issues: [] } : await readPullRequestInfo({ gh: call, repo, title: typeof pr.title === "string" ? pr.title : "", body: typeof pr.body === "string" ? pr.body : "" }),
@@ -466,6 +485,7 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
         ...(current ? { publishAs: { effects, reviewer: current.reviewer, configKey, jobId: current.id, ...(login ? { self: login } : {}), isCurrent: () => isCurrent(current.id) } } : {}),
         ...(checkpoint ? { checkpoint } : {}),
         ...(recheck?.length ? { recheck } : {}),
+        ...(current ? { progress: (step: ReviewProgress) => activity.step(current.id, step) } : {}),
       })
       // A partial review keeps the state of the last whole one (its head and config): it is not a review of this head.
       if (reviewed.status === "published") writeReviewState(options.dir, repo, number, reviewed.state.lastHead === head ? { ...reviewed.state, configKey } : reviewed.state)
@@ -547,7 +567,55 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
       if (assignment !== routingReason(assignment)) patchJob(job.id, { assignment: routingReason(assignment) })
       if (job.covers?.length) await standInTakes(job)
     }
-    try { return await reviewJobHeld(entry, job, reviewer) } finally { if (job) await releaseHold(job.id) }
+    try {
+      const outcome = await reviewJobHeld(entry, job, reviewer)
+      // A `/pr describe` that had to wait for this review: it goes on now, or says the review did not finish.
+      if (job) await describeAfterReview(job.id, outcome === undefined)
+      return outcome
+    } finally { if (job) await releaseHold(job.id) }
+  }
+
+  /** `/pr describe` waiting for the review job it queued (or joined): where to write and where to say how it went. */
+  const describeAfter = new Map<string, { sessionId: string; directory: string; number: number }>()
+  async function describeAfterReview(jobId: string, finished: boolean) {
+    const wanted = describeAfter.get(jobId)
+    if (!wanted) return
+    describeAfter.delete(jobId)
+    if (!finished) { void outbox.say(wanted.sessionId, `/pr describe ${wanted.number}: the review did not finish, so nothing was described; /pr describe ${wanted.number} asks again.`); return }
+    const done = await describeFromSession({ ...wanted, queue: false }).catch((error: unknown) => ({ ok: false as const, message: errorText(error) }))
+    void outbox.say(wanted.sessionId, done.ok ? done.text : done.message)
+  }
+
+  /**
+   * `/pr describe` from the terminal: the walkthrough of the last finished review of the PR's head goes into its description (and
+   * title and label as `commands` allows). It writes to the pull request, so it needs what a review needs to post: `/pr publish on`,
+   * the repository's `publishers` and the reviewer's `publish` capability. With no finished review it queues the normal one
+   * (`queue`) and describes when it ends.
+   */
+  async function describeFromSession({ sessionId, directory, number, queue = true }: { sessionId: string; directory: string; number: number; queue?: boolean }): Promise<{ ok: true; text: string } | { ok: false; message: string }> {
+    const repo = await repoCached(directory)
+    const config = await policyOf(directory, number)
+    if (watch.consentOf(directory) !== "allowed") return { ok: false, message: `/pr describe writes to ${repo}#${number}: /pr publish on first (until then reviews stay in this session).` }
+    const allowed = await publisherOf(directory, repo, config.publishers)
+    if (!allowed.ok) return { ok: false, message: `/pr describe: ${allowed.reason}.` }
+    const reviewer = await commandReviewer(directory)
+    if (reviewer.entry && !mayDo(reviewer.entry, "publish")) return { ok: false, message: `/pr describe: ${lacksText(reviewer.entry, "publish")}.` }
+    const forge = await forgeOf(directory)
+    const editor = forge ? providerEditor({ provider: forge.provider, repo, number }) : githubEditor({ gh: call, repo, number })
+    if (!editor.edit) return { ok: false, message: `/pr describe is not supported on ${editor.name}: its adapter cannot edit a pull request.` }
+    const live = await editor.read()
+    if (!live?.head) return { ok: false, message: `/pr describe: ${editor.name} did not return ${repo}#${number}.` }
+    const review = lastReviewOf(repo, number, live.head)
+    if (!review) {
+      if (!queue) return { ok: false, message: `/pr describe ${number}: there is no finished review of ${live.head.slice(0, 12)} to write from; /pr review ${number} full, then /pr describe ${number}.` }
+      const open = watch.openReview(directory, number, "", reviewer.id)
+      const id = open?.id ?? watch.review({ directory, sessionId, number, head: "" }, { reviewer: reviewer.id, scope: reviewer.scope }, forge ? { kind: forge.kind, repo: forge.repo } : undefined)
+      if (!id) return { ok: false, message: `/pr describe: the job ledger is full; try again later.` }
+      describeAfter.set(id, { sessionId, directory, number })
+      return { ok: true, text: `#${number} has no finished review of ${live.head.slice(0, 12)} yet: reviewing it (job ${id}), and the description is written when the review ends.` }
+    }
+    const done = await runDescribe({ review, current: live, editor, settings: { describeTitle: config.commands.describe_title } })
+    return done.ok ? { ok: true, text: `${repo}#${number}: ${done.text}` } : { ok: false, message: `${repo}#${number}: ${done.text}` }
   }
 
   /**
@@ -591,6 +659,8 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
         // judge: it waits without spending an attempt, or is tried again with backoff. Any other failure the run did not mark
         // retryable (a refusal of the forge, a review its verification rejected) is not tried again.
         const retry = first.retryable === true ? true : failureKind(first.reason ?? "") === "transient" ? undefined : false
+        // A retryable failure keeps what it got to (a failed verifier's candidates): the retry resumes there, not at the review pass.
+        if (current && retry && first.checkpoint) try { ledger.checkpoint(current.id, first.checkpoint) } catch { /* pruned */ }
         if (tellFailure(current)) void outbox.say(sessionId, reviewNotice({ repo: first.repo, number, run: first }))
         return { error: first.reason ?? "the review failed", retry }
       }
@@ -900,6 +970,12 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
     return entry ? { id: entry.id, scope: entry.scope, entry } : { id: "global", scope: "global" }
   }
 
+  /** The newest finished review of `head` as the job ledger kept it (its result holds the walkthrough and the findings). */
+  function lastReviewOf(repo: string, number: number, head: string): ReviewSnapshot | undefined {
+    const job = ledger.list({ repo, number, states: ["done", "running", "fixing", "validating"] }).filter((item) => item.coverage !== "audit" && !item.stop && item.checkpoint.result?.head === head).toSorted((a, b) => b.updatedAt - a.updatedAt)[0]
+    return job?.checkpoint.result ? { head, result: job.checkpoint.result } : undefined
+  }
+
   async function commentReview({ sessionId, directory, repo, number, head, actor, full = false }: { sessionId: string; directory: string; repo: string; number: number; head: string; actor: string; full?: boolean }): Promise<ReviewSummary> {
     const reviewer = await commandReviewer(directory)
     // `capabilities` without `publish`: the review is made, into this session only, and its claim is not posted either.
@@ -942,7 +1018,11 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
         if (done.stale) staleJob(current, done.reason)
         else if (done.stop && done.status !== "failed") checkpointJob({ job: current, stop: done.stop, checkpoint: done.checkpoint, config: done.config, sessionId, label: `PR review of ${repo}#${number}` })
         // Answered by one reply saying it failed: not retried behind the comment's back, `@mendcode review` again or /reviews retries it.
-        else if (done.status === "failed") move(job.id, "failed", { attempts: current.attempts + 1, error: (done.reason ?? "the review failed").slice(0, 2000) })
+        else if (done.status === "failed") {
+          // A retryable failure keeps its checkpoint, so `/reviews` retry or the next `@mendcode review` resumes from it.
+          if (done.retryable && done.checkpoint) try { ledger.checkpoint(job.id, done.checkpoint) } catch { /* pruned */ }
+          move(job.id, "failed", { attempts: current.attempts + 1, error: (done.reason ?? "the review failed").slice(0, 2000) })
+        }
         else {
           if (done.checkpoint) try { ledger.checkpoint(job.id, done.checkpoint) } catch { /* pruned */ }
           move(job.id, "done")
@@ -1110,11 +1190,11 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
         return
       }
       const personal = watch.watchOf(directory)?.role === "requested"
-      if (command.kind === "review" || command.kind === "fix") {
+      if (command.kind === "review" || command.kind === "fix" || command.kind === "describe") {
         const refused = await mentionRefusal({ directory, repo, number, config, personal: personal ? self : undefined, manual: own })
         if (refused) {
           if (own) { void outbox.say(sessionId, `${asked} (this daemon's own login): not run, ${refused}; nothing is posted on the pull request.`); return }
-          const posted = await replyTo({ gh: call, repo, number, comment, text: filteredReply(command.kind, refused), send, ...via })
+          const posted = await replyTo({ gh: call, repo, number, comment, text: filteredReply(command.kind === "fix" ? "fix" : "review", refused), send, ...via })
           void outbox.say(sessionId, `${asked}: not run, the repository's filters keep it off this pull request; ${posted ? "one reply says which" : "the reply could not be posted"}.`)
           return
         }
@@ -1146,7 +1226,18 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
       // The answering reviewer's `capabilities` without `fix`: one reply says so, and no fix session starts.
       const fixer = command.kind === "fix" ? (await commandReviewer(directory)).entry : undefined
       const noFix = fixer && !mayDo(fixer, "fix") ? lacksText(fixer, "fix") : undefined
+      // `describe`, `resolve` and `approve` write to the pull request: the answering reviewer needs `publish` like a review does.
+      const writer = command.kind === "describe" || command.kind === "resolve" || command.kind === "approve" ? (await commandReviewer(directory)).entry : undefined
+      const noWrite = writer && !mayDo(writer, "publish") ? lacksText(writer, "publish") : undefined
+      if (noWrite) {
+        const posted = await replyTo({ gh: call, repo, number, comment, text: `\`@mendcode ${command.kind}\` is not run here: ${noWrite}. Add \`publish\` to its \`capabilities\` there to let it write to the pull request.`, send, ...via })
+        void outbox.say(sessionId, `${asked}: not run, ${noWrite}; ${posted ? "one reply says why" : "the reply could not be posted"}.`)
+        return
+      }
       const outcome = await runPrCommand(command, {
+        editor: forge ? providerEditor({ provider: forge.provider, repo, number }) : githubEditor({ gh: call, repo, number }),
+        lastReview: async (head) => lastReviewOf(repo, number, head),
+        settings: { describeTitle: config.commands.describe_title, approve: config.commands.approve },
         ...(noFix ? { fixUnavailable: `\`@mendcode fix\` is not run here: ${noFix}. Add \`fix\` to its \`capabilities\` there to let it fix.` } : {}),
         gh: call, repo, number, comment, state, ...via, checked: true,
         send: own && command.kind === "fix" ? async ({ body }) => { ownReplies.push(body.split(REPLY_MARKER)[0]!.trim()); return false } : send,
@@ -1181,7 +1272,7 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
     } catch (error) {
       if (error instanceof JobBusy) {
         // Its job's review answers it: offered again at each poll, it then finds that review on the PR (`headReviewedBy`).
-        if (entry.blocked !== "job") void outbox.say(sessionId, `@mendcode review from ${comment.actor} on ${await repoCached(directory).catch(() => "")}#${number} waits: ${errorText(error)}; the comment is answered by that review.`)
+        if (entry.blocked !== "job") void outbox.say(sessionId, `@mendcode ${command.kind} from ${comment.actor} on ${await repoCached(directory).catch(() => "")}#${number} waits: ${errorText(error)}; the comment is answered by that review.`)
         return { blocked: "job" }
       }
       const repo = await repoCached(directory).catch(() => directory)
@@ -1939,6 +2030,7 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
   const handle: PlatformHandle = {
     dataDir: options.dir,
     jobs: ledger,
+    device: deviceOf,
     rows: () => watch.rows(),
     get concurrency() { return watch.concurrency },
     repoOf: repoCached,
@@ -2000,7 +2092,7 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
       for (const review of waiting) void options.schedule(() => postHeld(review))
       return done(action === "publish-on" ? `Reviews of this repository are posted to ${(await forgeOf(directory))?.name ?? "GitHub"} from now on${waiting.length ? `; posting ${waiting.length} held review${waiting.length === 1 ? "" : "s"}` : "; no finished review was waiting"}.` : "Reviews of this repository stay in this session.")
     }
-    if (action !== "review") {
+    if (action !== "review" && action !== "describe") {
       const result = await platform.run({ sessionId, action, directory, jobId, reason, scope, patch, version })
       return result.ok ? { ...done(result.text), ...(result.dashboard ? { dashboard: result.dashboard } : {}), ...(result.config ? { config: result.config } : {}) } : result
     }
@@ -2025,6 +2117,10 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
     if (facts) {
       const verdict = eligible({ facts, config: await policyOf(directory, number), trigger: "manual" })
       if (!verdict.ok) return { ok: false, message: `#${number} is not reviewed: ${verdict.reason} (filters in .mendcode/review.yaml on the base branch)` }
+    }
+    if (action === "describe") {
+      const described = await describeFromSession({ sessionId, directory, number })
+      return described.ok ? done(described.text) : described
     }
     // A `requested` watch reviews as its login's personal reviewer, an `all` watch as the repository's default global reviewer, each
     // under the id reviewers.yaml gives it: its claims and its per-head review marker then match the watch's own reviews of that head,
@@ -2067,6 +2163,8 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
     /** The session went idle: notices it could not take earlier are offered now. */
     idle: (sessionId: string) => outbox.flush(sessionId),
     held: outbox.held,
+    /** The reviews running now with their steps, for a terminal that connects while one runs. */
+    activity: () => activity.snapshot(),
     /** The platform's shared state, for daemon.ts and the tests. */
     platform: { handle, jobs: ledger, effects, accounting, permissions, profiles, ownership, device: deviceOf },
     stop() { watch.stop(); outbox.stop(); for (const hold of holds.values()) if (hold.timer) clearInterval(hold.timer) },

@@ -41,8 +41,8 @@ export const prSummary = (watches: readonly PrWatchRow[]) => {
 }
 
 /** The PR reviewer's `/pr` verbs (docs/pr-review.md); anything else is the watch's. */
-export type PrReviewAction = "watch-repo" | "unwatch-repo" | "review" | "list" | "publish-on" | "publish-off"
-export const PR_REVIEW_USAGE = "usage: /pr review [pr] [full] | watch-repo [all|requested] | unwatch-repo | repos | publish on|off"
+export type PrReviewAction = "watch-repo" | "unwatch-repo" | "review" | "describe" | "list" | "publish-on" | "publish-off"
+export const PR_REVIEW_USAGE = "usage: /pr review [pr] [full] | describe [pr] | watch-repo [all|requested] | unwatch-repo | repos | publish on|off"
 
 /** `/pr review 12`, `/pr review 12 full`, `/pr watch-repo`, `/pr publish on`...; undefined when the words are not the reviewer's. */
 export function parsePrReviewCommand(args: string): { ok: true; action: PrReviewAction; pr?: string; full?: true; role?: "all" | "requested" } | { ok: false; error: string } | undefined {
@@ -54,6 +54,7 @@ export function parsePrReviewCommand(args: string): { ok: true; action: PrReview
     const refs = full ? rest.slice(0, -1) : rest
     return refs.length > 1 ? { ok: false, error: PR_REVIEW_USAGE } : { ok: true, action: "review", ...(refs[0] ? { pr: refs[0] } : {}), ...(full ? { full: true as const } : {}) }
   }
+  if (word === "describe") return rest.length > 1 ? { ok: false, error: PR_REVIEW_USAGE } : { ok: true, action: "describe", ...(rest[0] ? { pr: rest[0] } : {}) }
   if (word === "watch-repo") return rest.length > 1 || rest[0] && !["all", "requested"].includes(rest[0].toLowerCase()) ? { ok: false, error: PR_REVIEW_USAGE } : { ok: true, action: word, ...(rest[0] ? { role: rest[0].toLowerCase() as "all" | "requested" } : {}) }
   if (word === "unwatch-repo" || word === "repos") return rest.length ? { ok: false, error: PR_REVIEW_USAGE } : { ok: true, action: word === "repos" ? "list" : word }
   if (word === "publish") return rest.length === 1 && (rest[0] === "on" || rest[0] === "off") ? { ok: true, action: rest[0] === "on" ? "publish-on" : "publish-off" } : { ok: false, error: PR_REVIEW_USAGE }

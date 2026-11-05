@@ -200,7 +200,7 @@ none`; stored settings keep their meaning). A ChatGPT subscription model now off
 (`reasoning_effort: "max"`, `"none"`, `"xhigh"`); an `xhigh` the catalog does not list is still sent as `high`. DeepSeek's
 own API (`deepseek`, which OpenCode drives through its DeepSeek protocol) gets `reasoning_effort` with
 `thinking: { type: "enabled" }`, and `none` sends only `thinking: { type: "disabled" }`. On the Messages wire `max` is a
-48k thinking budget and `none` is off; on Gemini `max` is 32,768 tokens (Gemini 3: `high`). The default effort applies only
+48k thinking budget and `none` is off (current Claude models take the level itself, see below); on Gemini `max` is 32,768 tokens (Gemini 3: `high`). The default effort applies only
 when the model lists it. models.dev's `null` fields (`interleaved`, `status`, `reasoning_options`) read as absent, so an
 offline `models.dev.json` copied from models.dev loads as it is. Checked live on 2026-10-17: chatgpt/gpt-6-luna answered a
 counting question with 220 reasoning tokens (right) at `max` and none (wrong) at `low`. ACP agents report their own
@@ -253,7 +253,8 @@ refresh every 15 turns; manual titles are preserved. Summaries are stored in ses
 
 ## Limits
 
-- Anthropic `max_tokens` defaults to 32,000 (raised above the thinking budget); a model variant can set a lower output cap.
+- Anthropic `max_tokens` defaults to 32,000 (raised above the thinking budget; 64,000 for adaptive models at `high` and above); a model variant can set a lower output cap.
+- Anthropic thinking follows the model id (`anthropic-thinking.ts`). Opus 4.7 and later, Sonnet 5 and later, Haiku 5.5 and later, Fable and Mythos take `thinking: { type: "adaptive", display: "summarized" }` with `output_config.effort` set to the `/effort` level (`low` to `max`), because they reject `budget_tokens`. `none`, `minimal` or no effort turn thinking off where the model allows it (Opus 4.7/4.8: field left out; Opus 5, Sonnet 5, Haiku 5.5: `disabled`; Sonnet 5.5: `between_tools`) and send effort `low` where it cannot be turned off (Opus 5.5, Fable, Mythos). Older ids keep the budget. A model variant's `parameters.thinking` still wins. If the API refuses a signed thinking block (the conversation before it changed), the request is sent once more without the thinking blocks.
 - Compaction uses the model's input/context window, with per-model/provider/global thresholds and absolute triggers; see [compaction](compaction.md).
 - Hosted image generation, Anthropic's server tools and provider-side web search outside `openai` are not used.
 - Thinking is left off for a request in the middle of a tool loop whose earlier steps have no signed reasoning from the same model (for instance after switching models mid-turn), as the Anthropic API requires.
@@ -377,7 +378,7 @@ The daemon reads `AWS_BEARER_TOKEN_BEDROCK` first, then the configured bearer (`
 
 Public `bedrock` options are `region`, `profile`, `auth: chain|bearer`, `endpoint`, `allowCredentialProcess`, `allowMetadata`. Null region/profile restores environment/default lookup; null endpoint restores regional routing. HTTPS and loopback HTTP overrides are accepted without URL credentials/query/fragment. Legacy `options.region/profile/endpoint/baseURL` and `npm: "@ai-sdk/amazon-bedrock"` resolve to the native adapter. Legacy endpoint wins over baseURL. v1 cross-region model prefixes are retained; explicit inference-profile prefixes and ARNs stay exact. Model ids longer than the catalog limit use a short alias with `models[].options.bedrockModelId` holding the ARN. Refresh lists streaming text foundation models, keeps configured metadata and ARN aliases, and preserves the previous catalog on failure.
 
-For example: `mendcode --dir /tmp/mendcode-bedrock-demo providers login --provider amazon-bedrock --method aws-chain --aws-region us-east-1 --aws-profile team --models amazon.nova-lite-v1:0 --json`. Bearer login uses `--method api-key --api-key-env TEAM_BEDROCK_TOKEN`, or the masked terminal prompt. `--aws-metadata` and `--aws-credential-process` are explicit opt-ins. Tests use temporary files and injected local responses; real AWS account, region availability and IAM/model entitlement are not verified.
+For example: `mendcode --dir /tmp/mendcode-bedrock-demo providers login --provider amazon-bedrock --method aws-chain --aws-region us-east-1 --aws-profile team --models amazon.nova-lite-v1:0 --json`. Bearer login uses `--method api-key --api-key-env TEAM_BEDROCK_TOKEN`, or the masked terminal prompt. `--aws-metadata` and `--aws-credential-process` are explicit opt-ins. Claude models on Bedrock follow the same thinking rule as the Anthropic API (see Limits): current ones (Opus 4.7 and later, Sonnet 5 and later, Haiku 5.5 and later, Fable, Mythos, in any region prefix or inference-profile ARN) get `thinking: { type: "adaptive" }` and `output_config.effort` in `additionalModelRequestFields` instead of a rejected `budget_tokens`; older ones keep the budget, and a model variant's `parameters.thinking` wins. Tests use temporary files and injected local responses; real AWS account, region availability and IAM/model entitlement are not verified.
 
 ## Google Vertex AI / GCP ADC (B10.04)
 

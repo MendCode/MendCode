@@ -19,7 +19,7 @@ const temp = (prefix: string) => {
   cleanups.push(() => rmSync(dir, { recursive: true, force: true }))
   return dir
 }
-type Seen = { type: string; sessionId?: string; requestId?: string; title?: string; resolution?: string; questions?: Array<{ context?: string; options?: Array<{ label: string }> }> }
+type Seen = { type: string; sessionId?: string; requestId?: string; title?: string; resolution?: string; kind?: string; detail?: string; options?: Array<{ label: string }>; questions?: Array<{ context?: string; options?: Array<{ label: string }> }> }
 
 describe.skipIf(process.platform === "win32")("sessions a session started with run --bg, blocked on approval, end to end with the real CLI", () => {
   const main = path.resolve(import.meta.dir, "../../../apps/cli/src/main.ts")
@@ -57,14 +57,14 @@ describe.skipIf(process.platform === "win32")("sessions a session started with r
     return { terminal, launcher, run, until, start, events }
   }
 
-  test("two blocked children reach the user as one card and the launcher as one notice; Approve all lets both finish", async () => {
+  test("two blocked children reach the user as one card and the launcher as one notice; Allow all lets both finish", async () => {
     const h = await boot()
     const a = await h.start("owner-a")
     const b = await h.start("owner-b")
 
-    const card = await h.until(() => h.events.find((event) => event.type === "server.request" && event.sessionId === h.launcher && event.questions?.[0]?.options?.[0]?.label === "Approve all (2)"))
-    expect(card.questions![0]!.context).toContain("owner-a")
-    expect(card.questions![0]!.context).toContain("owner-b")
+    const card = await h.until(() => h.events.find((event) => event.type === "server.request" && event.sessionId === h.launcher && event.kind === "approval" && event.options?.[0]?.label === "Allow all (2)"))
+    expect(card.detail).toContain("owner-a")
+    expect(card.detail).toContain("owner-b")
 
     // The launcher's model is told, once, that these wait for the user and that it cannot approve.
     await h.until(() => JSON.stringify(h.events).includes("blocked waiting for the user's approval") || undefined)
@@ -80,7 +80,7 @@ describe.skipIf(process.platform === "win32")("sessions a session started with r
     const refused = await h.run(`./evade session send ${a} x --async --approve`)
     expect(refused.isError).toBe(true)
 
-    expect((await h.terminal.send({ type: "request.resolve", sessionId: h.launcher, requestId: card.requestId as never, decision: { kind: "answer", text: "Approve all (2)", answers: [["Approve all (2)"]] } })).ok).toBe(true)
+    expect((await h.terminal.send({ type: "request.resolve", sessionId: h.launcher, requestId: card.requestId as never, decision: { kind: "answer", text: "Allow all (2)", answers: [["Allow all (2)"]] } })).ok).toBe(true)
     for (const child of [a, b]) {
       for (let i = 0; i < 400; i++) {
         const reply = await h.terminal.send({ type: "session.events", sessionId: child, after: 0 })

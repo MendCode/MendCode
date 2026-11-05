@@ -13,7 +13,7 @@ export const PAGE_TITLES: Readonly<Record<string, string>> = {
   "plan-review": "Plan review", "prompt-mode": "Prompt mode", compaction: "Compaction", "agent-commands": "Agent commands",
   diagnostics: "Diagnostics", worktrees: "Worktrees", warp: "Warp", compound: "Compound", marketplace: "Marketplace", intro: "Welcome",
   "ai-config": "AI config", "release-channel": "Release channel", tsm: "Sessions manager", ide: "IDE", mflow: "Flow", reviews: "Reviews", console: "Console",
-  "git-commit": "Commit", "git-pr": "Pull request", "git-init": "Initialize repository", share: "Share", keymap: "Keymap", "terminal-setup": "Terminal setup", tutorial: "Tutorial",
+  "git-commit": "Commit", "git-pr": "Pull request", "git-init": "Initialize repository", share: "Share", keymap: "Keymap", "terminal-setup": "Terminal setup", tutorial: "Tutorial", whatsnew: "What's new",
 }
 
 const text = (line: Line) => line.map((span) => span.text).join("")

@@ -5,15 +5,17 @@ import type { ReviewProvider } from "./contracts"
 import { findingFromComment, type GhCall } from "./publish"
 import { answersMarker } from "./publishers"
 import { FINDING_MARKER, type ReviewState } from "./state"
+import { runDescribe, type PrEditor, type ReviewSnapshot } from "./describe"
+import { approveBlock, approveText, APPROVE_OFF, resolveText, unsupportedText } from "./signoff"
 
 /**
- * Commands a maintainer writes in a pull request (docs/pr-review.md): `@mendcode review | pause | resume | explain | fix | learn`.
+ * Commands a maintainer writes in a pull request (docs/pr-review.md): `@mendcode review | pause | resume | explain | fix | learn | describe | resolve | approve`.
  * Only someone with write access is answered with anything but a refusal. Every reply carries a hidden marker, so MendCode never
  * takes its own reply for a command, and a hosted runner reads `pause` back from GitHub. Follow-ups explain a failing check of a
  * reviewed head once per failing set.
  */
 
-export const PR_COMMANDS = ["review", "pause", "resume", "explain", "fix", "learn"] as const
+export const PR_COMMANDS = ["review", "pause", "resume", "explain", "fix", "learn", "describe", "resolve", "approve"] as const
 export type PrCommandKind = (typeof PR_COMMANDS)[number]
 /** `target`: the login a comment addresses (`@mendcode review @alice`); only that login's reviewer answers it. */
 export type PrCommand = { kind: PrCommandKind; arg?: string; target?: string }
@@ -150,6 +152,14 @@ export type CommandDeps = {
    * PR's state, a reply without `send`). Absent, everything goes through `gh` as before.
    */
   provider?: ReviewProvider | undefined
+  /**
+   * `describe`, `resolve` and `approve` write to the pull request through the forge's side (`editor`) and build on the last
+   * finished review of a head (`lastReview`), which the daemon keeps in its job ledger. A runner without them (the hosted one) answers
+   * that it cannot. `settings`: the repository's `commands` (both off by default).
+   */
+  editor?: PrEditor | undefined
+  lastReview?: ((head: string) => Promise<ReviewSnapshot | undefined>) | undefined
+  settings?: { describeTitle: boolean; approve: boolean } | undefined
 }
 
 /** What a fix checks again right before it pushes: the PR is still open, and the commenter and the reviewer may still write to the branch. */
@@ -247,9 +257,9 @@ export async function runPrCommand(command: PrCommand, deps: CommandDeps): Promi
   const via = provider ? { provider } : {}
   const reply = async (text: string, extra = "") => ({ reply: text, posted: await replyTo({ gh, repo, number, comment, text, extra, ...(deps.send ? { send: deps.send } : {}), ...via }) })
   if (!deps.checked && !await hasWriteAccess({ gh, repo, actor: comment.actor, association: comment.association, ...via })) return { kind: "denied", ...await reply(MAINTAINERS_ONLY), state: deps.state }
-  if (!deps.checked && (command.kind === "review" || command.kind === "fix") && deps.refusal) {
+  if (!deps.checked && (command.kind === "review" || command.kind === "fix" || command.kind === "describe") && deps.refusal) {
     const refused = await deps.refusal()
-    if (refused) return { kind: "filtered", ...await reply(filteredReply(command.kind, refused)), state: deps.state }
+    if (refused) return { kind: "filtered", ...await reply(filteredReply(command.kind === "fix" ? "fix" : "review", refused)), state: deps.state }
   }
   switch (command.kind) {
     case "review": {
@@ -281,6 +291,34 @@ export async function runPrCommand(command: PrCommand, deps: CommandDeps): Promi
       const guards = fixGuards({ gh, repo, number, actor: comment.actor, association: comment.association, pushable: deps.pushable, ...via })
       const done = await deps.fix({ instructions, finding, push, guards }).catch((error: unknown): FixResult => ({ ok: false, reason: error instanceof Error ? error.message : String(error) }))
       return { kind: "fix", ...await reply(fixReply(done)), state: deps.state }
+    }
+    case "describe":
+    case "resolve":
+    case "approve": {
+      const kind = command.kind
+      const { editor, lastReview, settings } = deps
+      if (!editor || !lastReview || !settings) return { kind, ...await reply(`\`@mendcode ${kind}\` needs the MendCode daemon watching this repository: it builds on the review the daemon saved, which this runner does not keep.`), state: deps.state }
+      if (kind === "resolve") {
+        if (!editor.resolveFixed) return { kind, ...await reply(unsupportedText(kind, editor.name, "its API cannot resolve review threads")), state: deps.state }
+        const report = await editor.resolveFixed({ state: deps.state })
+        return { kind, ...await reply(resolveText({ editor, report })), state: report.state }
+      }
+      if (kind === "approve" && !settings.approve) return { kind, ...await reply(APPROVE_OFF), state: deps.state }
+      if (kind === "describe" ? !editor.edit : !editor.approve) return { kind, ...await reply(unsupportedText(kind, editor.name, kind === "describe" ? "its adapter cannot edit a pull request" : "its adapter cannot submit an approval")), state: deps.state }
+      const live = await editor.read()
+      if (!live?.head) return { kind, ...await reply(`Could not read the pull request from ${editor.name}; nothing was changed.`), state: deps.state }
+      let review = await lastReview(live.head)
+      if (!review && kind === "describe") {
+        // No finished review of this head: the normal review runs (one job, the same as `@mendcode review`), and describe goes on when it ends.
+        const done = await deps.review()
+        review = await lastReview(live.head)
+        if (!review) return { kind, ...await reply(`Could not describe ${live.head.slice(0, 12)}: the review ${done.status}${done.reason ? ` (${done.reason})` : ""}, so there is no walkthrough to write from. \`@mendcode review full\` reviews the head whole; ask again after it.`), state: deps.state }
+      }
+      if (kind === "describe") return { kind, ...await reply((await runDescribe({ review: review!, current: live, editor, settings })).text), state: deps.state }
+      const blocked = approveBlock({ enabled: settings.approve, review, head: live.head, state: deps.state })
+      if (blocked) return { kind, ...await reply(blocked), state: deps.state }
+      const done = await editor.approve!({ head: live.head, body: `${approveText(live.head)}\n\n${REPLY_MARKER}` })
+      return { kind, ...await reply(done.ok ? approveText(live.head) : `${editor.name} refused the approval (${done.reason.slice(0, 200)}); nothing was approved.`), state: deps.state }
     }
     case "learn": {
       const bullet = learningBullet(command.arg ?? "")

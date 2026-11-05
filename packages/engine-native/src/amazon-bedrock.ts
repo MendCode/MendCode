@@ -5,6 +5,7 @@ import { guardedStream, type Fetch } from "./provider-http"
 import { retryAfter } from "./openai-responses"
 import { RetryableProviderError, type ModelMessage, type ModelProvider, type ModelRequest } from "./provider"
 import type { ResolvedProvider } from "./provider-factory"
+import { adaptiveThinking } from "./anthropic-thinking"
 import { argsObject, pairToolCalls, withoutUnsupportedImages } from "./history"
 
 /** v1's region routing, expressed independently of its SDK or UI. Explicit inference profiles/ARNs stay exact. */
@@ -59,7 +60,14 @@ export function bedrockBody(request: ModelRequest, provider: string, model: stri
     const lastUser = request.messages.findLastIndex((entry) => entry.role === "user")
     const assistants = request.messages.slice(lastUser + 1).filter((entry: ModelMessage) => entry.role === "assistant")
     const signed = assistants.length > 0 && assistants.every((entry) => entry.role === "assistant" && entry.reasoning?.provider === provider && entry.reasoning.model === model)
-    if (request.effort !== "minimal" && request.effort !== "none" && (!continuing || signed)) {
+    // Current Claude models (anthropic-thinking.ts) take adaptive thinking plus the effort in these fields and reject a budget. The id reads the same with a region prefix, a version suffix or inside an inference-profile ARN.
+    const adaptive = adaptiveThinking({ model: typeof parameters.bedrockModelId === "string" ? parameters.bedrockModelId : model, effort: continuing && !signed ? undefined : request.effort, maxOutputTokens: request.maxOutputTokens })
+    if (adaptive) {
+      // An explicit `parameters.thinking` wins and is sent as it is.
+      if (parameters.thinking === undefined) Object.assign(extra, adaptive)
+      const thinking = extra.thinking as { type?: unknown } | undefined
+      if (thinking && thinking.type !== "disabled") { delete inferenceConfig.temperature; delete inferenceConfig.topP }
+    } else if (request.effort !== "minimal" && request.effort !== "none" && (!continuing || signed)) {
       const budget = request.effort === "low" ? 2048 : request.effort === "medium" ? 8192 : 24576
       if (!request.maxOutputTokens || request.maxOutputTokens > budget) { extra.thinking ??= { type: "enabled", budget_tokens: budget }; inferenceConfig.maxTokens = Math.max(Number(maxTokens), budget + 1024); delete inferenceConfig.temperature; delete inferenceConfig.topP }
     }

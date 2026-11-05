@@ -6,6 +6,7 @@ import type { ProvidersPageState, ProviderNote } from "../../view/providers-page
 import type { FooterSegment } from "@mendcode/protocol/wire"
 import type { McpStatusReport, StatusSegment, PermissionGrant, ProviderInfo, Loop, GlobalEvent, RecipesReport, SessionSummary, WorkflowSummary, CustomToolsReport, DaemonInfoReport, DreamRun, ExtensionsReport, HooksReport, MemoryCategoryInfo, MemoryEntry, MemoryGraphReport, MemoryId, PackagesReport, Settings, ChangesReport, ContextReport, ForegroundState, PermissionMode, SessionId, UsageReport, UsageWasteReport, StorageReport, ModelChoice, ModelsReport, SecretInfo } from "@mendcode/protocol"
 import type { ContextPageState } from "../../view/context-page"
+import type { ReviewActivityJob } from "../../view/review-activity"
 import { contextWindowReply, parseContextWindowArgs, type ContextWindowAck } from "../../view/context-window-reply"
 import { preload } from "../lazy-pages"
 import type { PaletteState } from "../../view/palette"
@@ -142,7 +143,7 @@ export type AppInput = {
   env?: Record<string, string | undefined>
 }
 
-export type Page = "file" | "tasks" | "stash" | "drafts" | "queue" | "history" | "skills" | "variants" | "model-picker" | "chat" | "sessions" | "usage" | "help" | "changes" | "memory" | "context" | "mcps" | "acp" | "tools" | "packages" | "loops" | "storage" | "setup" | "model" | "agent" | "theme" | "agents" | "pet" | "workflows" | "extension" | "customize" | "settings" | "status" | "extensions" | "hooks" | "connect" | "providers" | "secrets" | "env" | "tree" | "text" | "permissions" | "diagram" | "sidebar" | "memory-assistant" | "messages" | "export" | "plan-review" | "prompt-mode" | "compaction" | "agent-commands" | "diagnostics" | "worktrees" | "warp" | "git-commit" | "git-pr" | "git-init" | "compound" | "marketplace" | "intro" | "ai-config" | "release-channel" | "tsm" | "ide" | "mflow" | "reviews" | "console" | "share" | "keymap" | "terminal-setup" | "tutorial"
+export type Page = "file" | "tasks" | "stash" | "drafts" | "queue" | "history" | "skills" | "variants" | "model-picker" | "chat" | "sessions" | "usage" | "help" | "changes" | "memory" | "context" | "mcps" | "acp" | "tools" | "packages" | "loops" | "storage" | "setup" | "model" | "agent" | "theme" | "agents" | "pet" | "workflows" | "extension" | "customize" | "settings" | "status" | "extensions" | "hooks" | "connect" | "providers" | "secrets" | "env" | "tree" | "text" | "permissions" | "diagram" | "sidebar" | "memory-assistant" | "messages" | "export" | "plan-review" | "prompt-mode" | "compaction" | "agent-commands" | "diagnostics" | "worktrees" | "warp" | "git-commit" | "git-pr" | "git-init" | "compound" | "marketplace" | "intro" | "ai-config" | "release-channel" | "tsm" | "ide" | "mflow" | "reviews" | "console" | "share" | "keymap" | "terminal-setup" | "tutorial" | "whatsnew"
 
 /** Mutable bindings shared by the entry point and its feature factories. */
 export type AppState = {
@@ -284,9 +285,13 @@ export type AppState = {
   mcpsError: string
   acpState: import("../../view/acp-page").AcpPageState
   agentSessions: Map<string, AgentSession>
+  /** Sessions another session started that wait for approval, by the launcher (`children.waiting`). */
+  childWaiting: Map<string, { launcherTitle: string; total: number; children: Array<{ sessionId: string; title: string }> }>
   agentTitles: Map<string, string>
   /** The parent of each sub-agent session a `task.changed` named (the activity push does not carry it): the session pet's `agents` state reads it. */
   agentParents: Map<string, string>
+  /** The PR reviews the daemon runs now with their steps (`pr.review.activity`): the watching session's activity and the footer read it. */
+  reviewActivity: ReviewActivityJob[]
   agentShells: AgentShell[]
   /** Sub-agents the user stopped and `/relaunch` already asked to start again, by their call's item: their stopped row goes. */
   relaunched: Set<string>
@@ -360,6 +365,8 @@ export type AppState = {
   treeState: import("../../view/session-tree-keys").TreeState
   /** `/recap` and `/changelog`: a read-only scrollable document, and the body height of the page showing it. */
   textPage?: import("../../view/text-page").TextPageState
+  /** `/whatsnew`: the picks of its model call and the changes they came from (docs/whats-new.md). */
+  whatsNew?: import("../../view/whatsnew-page").WhatsNewState | undefined
   /** Where `/import setup` was opened from; esc on its page goes back there. */
   textReturn?: Page | undefined
   pageBodyHeight?: number

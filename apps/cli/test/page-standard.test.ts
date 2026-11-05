@@ -12,6 +12,7 @@ import { createReviewsPageState } from "../src/view/reviews-page"
 import { reviewsPageKey } from "../src/view/reviews-keys"
 import { createSettingsPageState, renderSettingsPage, settingsPageKey, settingsRows } from "../src/view/settings-page"
 import { DEFAULT_TUI_PROFILE } from "../src/view/tui-profile"
+import { createWhatsNewState, whatsNewKey } from "../src/view/whatsnew-page"
 
 /**
  * The page standard (docs/keys.md "Pages"): every page with a list opens a `/` box through the shared page search, Esc clears
@@ -95,7 +96,19 @@ function historyDriver(): Driver {
   }
 }
 
-const DRIVERS: Driver[] = [settingsDriver(), customizeDriver(), reviewsDriver(), marketplaceDriver(), connectDriver(), memoryDriver(), historyDriver()]
+function whatsNewDriver(): Driver {
+  const fresh = () => createWhatsNewState({ all: true, summary: "", changes: [{ section: "v0.0.3", text: "the theme picker", fresh: true }] })
+  let state = fresh()
+  let left = false
+  return {
+    name: "whatsnew", enter: "keeps",
+    press(key) { const result = whatsNewKey(state, key); state = result.state; left = result.action.type === "close" },
+    query: () => state.search.query, open: () => state.search.open, left: () => left,
+    reset() { state = fresh(); left = false },
+  }
+}
+
+const DRIVERS: Driver[] = [settingsDriver(), customizeDriver(), reviewsDriver(), marketplaceDriver(), connectDriver(), memoryDriver(), historyDriver(), whatsNewDriver()]
 const type = (driver: Driver, text: string) => { for (const key of text) driver.press(key) }
 
 describe.each(DRIVERS.map((driver) => [driver.name, driver] as const))("page search: %s", (_name, driver) => {
@@ -144,6 +157,7 @@ const PAGES: Record<string, { kind: "list"; search: "box" | "ahead" | "few" } | 
   "git-commit": { kind: "list", search: "few" }, "git-pr": { kind: "list", search: "few" }, "git-init": { kind: "list", search: "few" }, compound: { kind: "list", search: "few" },
   marketplace: { kind: "list", search: "box" }, "ai-config": { kind: "list", search: "few" }, "release-channel": { kind: "list", search: "few" }, tsm: { kind: "list", search: "few" }, ide: { kind: "list", search: "few" }, mflow: { kind: "list", search: "few" },
   reviews: { kind: "list", search: "box" }, console: { kind: "list", search: "few" }, share: { kind: "list", search: "few" }, keymap: { kind: "list", search: "few" },
+  whatsnew: { kind: "list", search: "box" },
 }
 
 describe("every page follows the standard", () => {
@@ -159,7 +173,7 @@ describe("every page follows the standard", () => {
 
   test("a page that searches with / says so in its keys", () => {
     const boxes = Object.entries(PAGES).filter(([, entry]) => entry.kind === "list" && entry.search === "box").map(([page]) => page)
-    expect(boxes.sort()).toEqual(["connect", "customize", "history", "marketplace", "memory", "model", "reviews", "settings"])
+    expect(boxes.sort()).toEqual(["connect", "customize", "history", "marketplace", "memory", "model", "reviews", "settings", "whatsnew"])
   })
 
   test("only the shared page search edits a / box (no page keeps its own copy)", () => {
@@ -179,7 +193,7 @@ describe("every page follows the standard", () => {
   })
 
   test("every *-page.ts view is a known page", () => {
-    const known = new Set(["acp", "agent-commands", "agents", "ai-config", "automation-ledger", "changes", "compaction", "compound", "connect", "console", "context", "customize", "diagnostics", "environment", "extensions", "git-commit", "git-init", "git", "git-pr", "git-publish", "help", "history", "hooks", "ide", "intro", "keymap", "loops", "marketplace", "mcps", "memory-assistant", "memory", "mflow", "model", "onboarding", "packages", "permissions", "plan-review", "prompt-mode", "providers", "queue", "reasoning", "release", "reviews", "secrets", "session-tree", "settings", "setup", "skills", "stash", "status", "storage", "tasks", "terminal-setup", "text", "tools", "transcript-actions", "tsm", "tutorial", "uninstall", "usage", "workflows", "worktrees"])
+    const known = new Set(["acp", "agent-commands", "agents", "ai-config", "automation-ledger", "changes", "compaction", "compound", "connect", "console", "context", "customize", "diagnostics", "environment", "extensions", "git-commit", "git-init", "git", "git-pr", "git-publish", "help", "history", "hooks", "ide", "intro", "keymap", "loops", "marketplace", "mcps", "memory-assistant", "memory", "mflow", "model", "onboarding", "packages", "permissions", "plan-review", "prompt-mode", "providers", "queue", "reasoning", "release", "reviews", "secrets", "session-tree", "settings", "setup", "skills", "stash", "status", "storage", "tasks", "terminal-setup", "text", "tools", "transcript-actions", "tsm", "tutorial", "uninstall", "usage", "whatsnew", "workflows", "worktrees"])
     const files = readdirSync(join(ROOT, "view")).filter((name) => name.endsWith("-page.ts")).map((name) => name.slice(0, -"-page.ts".length))
     expect(files.filter((name) => !known.has(name))).toEqual([])
   })

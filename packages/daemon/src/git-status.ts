@@ -1,12 +1,17 @@
+import { captureOutput } from "@mendcode/tools"
 import { readGitBranch } from "./git-branch"
+
+/** A status of a huge tree is cut past this (the counts then fall short) and ends at the time limit. */
+const STATUS_OUTPUT_BYTES = 32 * 1024 * 1024
+const STATUS_TIMEOUT_MS = 60_000
 
 /** Read-only status, including local upstream divergence. Never fetches or refreshes the index. */
 export async function readGitStatus(directory: string) {
   const branch = readGitBranch(directory)
   if (!branch.branch) return {}
-  const proc = Bun.spawn(["git", "-C", directory, "status", "--porcelain=v2", "--branch", "-z"], { stdout: "pipe", stderr: "pipe", env: { ...process.env, GIT_OPTIONAL_LOCKS: "0", LC_ALL: "C" } })
-  const [output, errors, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited])
-  if (code !== 0) return { ...branch, error: errors.trim().slice(0, 200) }
+  const result = await captureOutput(["git", "-C", directory, "status", "--porcelain=v2", "--branch", "-z"], { env: { ...process.env, GIT_OPTIONAL_LOCKS: "0", LC_ALL: "C" }, stderr: "capture", limit: STATUS_OUTPUT_BYTES, timeoutMs: STATUS_TIMEOUT_MS, keepOnLimit: true })
+  if (result.code !== 0 || result.stopped) return { ...branch, error: result.err.trim().slice(0, 200) }
+  const output = result.out
   const entries = output.split("\0")
   let dirty = 0
   let conflicts = 0

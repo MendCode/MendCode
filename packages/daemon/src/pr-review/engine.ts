@@ -43,6 +43,8 @@ export type ReviewEngineConfig = {
    * no internal cap. Reaching it checkpoints the candidates, it never drops them.
    */
   budgetTokens: number
+  /** `min_score`: findings the verifier scored below it are not published (unset: 0). */
+  minScore?: number | undefined
   /** Reference context from memory (review-memory.ts), with provenance: shown to the review pass as context, never as instructions. */
   memory?: ReviewMemoryContext | undefined
   /** The stages of this review (`planPhases`): stage prompts go into the review pass, `corroboration`'s into the verify pass. */
@@ -52,6 +54,8 @@ export type ReviewEngineConfig = {
   tone?: "neutral" | "concise" | "detailed" | undefined
   /** `template.language`: the language of the review's prose, pinned in the review and verify prompts. */
   language?: string | undefined
+  /** Told how many candidates the verify pass is about to judge, for the live activity; never throws into the review. */
+  onVerify?: ((candidates: number) => void) | undefined
 }
 export type ReviewSection = { id: string; title?: string | undefined; prompt?: string | undefined }
 export const DEFAULT_ENGINE_CONFIG: ReviewEngineConfig = { profile: "normal", instructions: [], learnings: "", budgetTokens: 200_000 }
@@ -243,7 +247,7 @@ function budgetStop(tokens: Tokens, config: ReviewEngineConfig, pending: number)
 function conclude({ pass, judged, pending, tokens, config, cap, prior }: { pass: Pass; judged: PrFinding[]; pending: PrFinding[]; tokens: Tokens; config: ReviewEngineConfig; cap: number; prior?: ReviewCheckpoint | undefined }): ReviewOutcome {
   const found = pass.result
   const plan = config.phases ?? DEFAULT_PHASE_PLAN
-  const kept = publishable(judged, config.profile)
+  const kept = publishable(judged, config.profile, config.minScore)
   const walkthrough = found.walkthrough ? withRiskFloor(found.walkthrough, kept) : undefined
   const { shown, folded } = rankFindings(kept, cap)
   const rejected = judged.length - kept.length
@@ -324,6 +328,7 @@ async function reviewAndVerify({ sessionFactory, context, config, cap, checks, f
   if (found.budgetHit) return closeIfStopped(conclude({ pass, judged: before, pending: unjudged, tokens: found.tokens, config, cap, prior }), before, found.tokens)
   let verified: VerifyResult
   try {
+    verifying(config, unjudged.length)
     verified = await verifyFindings({ sessionFactory, findings: unjudged, context, checks: checks ? await checks() : [], budget: config.budgetTokens - spent(found.tokens), instructions: phasePrompt(config.phases, "corroboration"), language: config.language })
   } catch (error) {
     return verifyFailed({ pass, judged: before, remaining: unjudged, before: found.tokens, error, config, prior })
@@ -334,6 +339,8 @@ async function reviewAndVerify({ sessionFactory, context, config, cap, checks, f
 }
 
 const NO_TOKENS: Tokens = { input: 0, output: 0, cached: 0 }
+/** The activity hears that a verify pass starts; a listener that throws never stops the review. */
+const verifying = (config: ReviewEngineConfig, candidates: number) => { try { config.onVerify?.(candidates) } catch { /* the activity is not the review */ } }
 
 /**
  * The closing of a review that reached its token budget (close.ts): one short verify call over the strongest candidates not
@@ -356,6 +363,7 @@ async function closeReview({ sessionFactory, context, config, cap, pass, judged,
   const picked = rankFindings(pending, CLOSE_MAX_CANDIDATES).shown
   if (picked.length) {
     try {
+      verifying(config, picked.length)
       const closed = await verifyFindings({ sessionFactory, findings: picked, context, budget: CLOSE_TOKENS, instructions: [phasePrompt(config.phases, "corroboration"), CLOSE_INSTRUCTION].filter(Boolean).join(" "), language: config.language })
       verified = closed.findings
       extra = closed.tokens
@@ -491,6 +499,7 @@ export async function resumeReview({ sessionFactory, context, config, checkpoint
   if (!remaining.length) return conclude({ pass, judged: checkpoint.verified, pending: [], tokens: found.tokens, config, cap, prior: checkpoint })
   let verified: VerifyResult
   try {
+    verifying(config, remaining.length)
     verified = await verifyFindings({ sessionFactory, findings: remaining, context, checks: checks ? await checks() : [], budget: config.budgetTokens - spent(found.tokens), instructions: phasePrompt(config.phases, "corroboration"), language: config.language })
   } catch (error) {
     return verifyFailed({ pass, judged: checkpoint.verified, remaining, before: found.tokens, error, config, prior: checkpoint })

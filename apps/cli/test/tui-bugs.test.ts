@@ -138,7 +138,7 @@ test("motion preview animates normally and stays stable with reduced motion", ()
 })
 
 test("settings pulse stops on reduced motion, explanation rows and page exit", () => {
-  const state = { page: "settings", settingsPageState: { row: 2 }, transcript: { foreground: "idle", blocks: () => [] }, agentSessions: new Map(), turnState: {}, reducedMotion: false, pulse: undefined as ReturnType<typeof setInterval> | undefined, pulseOn: true }
+  const state = { page: "settings", settingsPageState: { row: 2 }, transcript: { foreground: "idle", blocks: () => [] }, agentSessions: new Map(), turnState: {}, reviewActivity: [], reducedMotion: false, pulse: undefined as ReturnType<typeof setInterval> | undefined, pulseOn: true }
   const ticks = createTicks({ state, schedule() {}, input: {} } as never, { chatWidth: () => 100, sessionTitle: () => "", render() {} })
   try {
     ticks.syncPulse()

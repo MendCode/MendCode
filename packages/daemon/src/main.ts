@@ -636,6 +636,20 @@ export const daemon = await startDaemon({
               waitingForMcp: harness.waiting,
               subagentContext: (sessionId) => harness.instructions(sessionId),
               oneTree: oneTree.note,
+              // Smart mode decides as it does natively: Claude's tool names become the native ones the rules know.
+              smart: ({ sessionId, tool, permission, args, cwd: root }) => {
+                const record = (args ?? {}) as Record<string, unknown>
+                const native = tool === "Edit" || tool === "MultiEdit" ? { name: "edit", args: { path: record.file_path } }
+                  : tool === "Write" ? { name: "write", args: { path: record.file_path } }
+                  : tool === "NotebookEdit" ? { name: "notebook_edit", args: { path: record.notebook_path } }
+                  : tool === "Bash" ? { name: "shell", args: { command: record.command } }
+                  : undefined
+                if (!native) return undefined
+                const settings = store.settings.get()
+                const extraRoots = declaredRoots(settings.additionalDirectories, runLimits.get(sessionId)?.addDirs)
+                const { decision, reason } = classifySmart({ tool: { name: native.name, permission }, args: native.args, cwd: root, ...(extraRoots.length ? { extraRoots } : {}), ...(settings.permissionAllow ? { allowCommands: settings.permissionAllow } : {}) })
+                return { decision, reason }
+              },
               ownTools: `mcp__${HOST_MCP_SERVER}__`,
               // The Claude Code process is the session's own: a `mendcode` client run by its tools is agent-origin with this session's mode.
               onProcess: (sessionId, pid) => { const tracked = agentProcesses.agent(pid, sessionId); return () => tracked.exited() },
@@ -722,6 +736,14 @@ export const daemon = await startDaemon({
           browser,
           loops,
           loopRun,
+          // Smart-mode reads of what this session's prompt was built from: the folders of the skills it may load and its instruction files, as the system prompt finds them.
+          instructionRoots: (sessionId, root) => {
+            const limits = runLimits.get(sessionId)
+            return {
+              dirs: limits?.excludeTools?.includes("skill") ? [] : skills.modelSkills(root).map((skill) => skill.dir),
+              files: limits?.noContextFiles === true ? [] : instructionsFor.files(root),
+            }
+          },
           worktrees,
           prWatch,
           prReview,
@@ -798,6 +820,8 @@ export const daemon = await startDaemon({
           agentModel: (choice) => usableEffort(choice, modelCatalog),
           // `promptCache` setting: legacy (unset), off or smart (docs/prompt-cache.md).
           promptCache: () => store.settings.get().promptCache,
+          // Feature `message_threads` (docs/message-threads.md): not ZDR eligible, so `zeroDataRetention` keeps it off.
+          messageThreads: () => { const settings = store.settings.get(); return !settings.zeroDataRetention && featureOn(settings, "message_threads", { safeMode }) },
           cacheTtl: cacheTtl.ttlFor,
           shell: (sessionId) => shellFor(store.settings.get(), sessionId ? store.sessionDirectory(sessionId) : undefined),
           // `shellEnvironment`, `shellCommandPrefix`, `loginShell` and `web` settings (docs/resources-config.md): read per call, so a change applies to the next command.

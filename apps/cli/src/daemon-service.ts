@@ -88,6 +88,8 @@ export type DaemonServiceDeps = {
   now(): number
   /** The live process holding the data directory's writer lock: a daemon that runs even when it does not answer. */
   lockOwner?(): number | undefined
+  /** On while `restart` stops the daemon and starts the next: terminals that lost theirs wait for it instead of starting one (restart-mark.ts). */
+  restarting?(on: boolean): void
 }
 
 /** No daemon answered; `unanswered` is the pid of one that still holds the data directory. */
@@ -214,14 +216,18 @@ export function createDaemonServiceCli(deps: DaemonServiceDeps) {
         // Same refusal as stop: work in progress is never interrupted without --force.
         await busy()
         const service = await deps.host.status()
-        if (service.loaded && path.resolve(service.dataDir) === path.resolve(deps.dir)) await deps.host.control("stop")
-        else if (peer) {
-          const reply = await peer.send({ type: "daemon.shutdown", ...(command.force ? { force: true } : {}) })
-          if (!reply.ok) throw new Error(reply.error.message)
-        }
-        peer?.close(); peer = undefined
-        await stopped()
-        await started()
+        // This command starts the next daemon, with the environment it was given; the terminals that lose theirs wait for it.
+        deps.restarting?.(true)
+        try {
+          if (service.loaded && path.resolve(service.dataDir) === path.resolve(deps.dir)) await deps.host.control("stop")
+          else if (peer) {
+            const reply = await peer.send({ type: "daemon.shutdown", ...(command.force ? { force: true } : {}) })
+            if (!reply.ok) throw new Error(reply.error.message)
+          }
+          peer?.close(); peer = undefined
+          await stopped()
+          await started()
+        } finally { deps.restarting?.(false) }
         const report = await readStatus()
         result(report, daemonStatusText(report))
       } else if (command.action === "run") {

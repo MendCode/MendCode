@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from "node:fs"
 import path from "node:path"
 import type { CommandInput, CommandReply } from "@mendcode/client"
 import type { SessionTreeNode, TimelineEntry } from "@mendcode/protocol"
-import { entriesSince, CHANGELOG } from "../src/changelog"
+import { bundledChangelog, newItems, readSeen, sectionItems } from "../src/changelog"
 import { appHarness, cleanTemps, conversation, ids, NOW, tempDir } from "./session-ui-harness"
 
 afterEach(cleanTemps)
@@ -96,18 +96,21 @@ test("/changelog lists the bundled entries and marks what is new since the last 
   expect(existsSync(seenFile)).toBe(false)
   let frame = (await open()).text().join("\n")
   expect(frame).toContain("MendCode 0.0.1-dev · first look")
-  expect(frame).toContain(CHANGELOG[0]!.title)
-  expect(readFileSync(seenFile, "utf8").trim()).toBe(CHANGELOG[0]!.id)
+  const entries = bundledChangelog("0.0.1-dev")
+  expect(frame).toContain(entries[0]!.title)
+  expect(readSeen(dataDir)).toBeDefined()
 
   frame = (await open()).text().join("\n")
   expect(frame).toContain("nothing new since your last look")
-  expect(frame).not.toContain("  new")
 
-  await Bun.write(seenFile, `${CHANGELOG[1]!.id}\n`)
+  // An older seen version marks every newer section's items as new.
+  const versions = entries.filter((entry) => entry.name !== "Unreleased")
+  await Bun.write(seenFile, `${JSON.stringify({ version: versions[1]!.name, unreleased: [] })}\n`)
   frame = (await open()).text().join("\n")
-  expect(frame).toContain("1 new since your last look")
-  expect(entriesSince(CHANGELOG[1]!.id).map((entry) => entry.id)).toEqual([CHANGELOG[0]!.id])
-  expect(entriesSince(undefined)).toHaveLength(CHANGELOG.length)
+  expect(frame).toMatch(/\d+ new since your last look/)
+  expect(newItems(versions[0]!, { version: versions[1]!.name, unreleased: [] })).toBe(sectionItems(versions[0]!).length)
+  expect(newItems(versions[1]!, { version: versions[1]!.name, unreleased: [] })).toBe(0)
+  expect(readFileSync(seenFile, "utf8")).toContain(versions[0]!.name)
 })
 
 export type { CommandInput }

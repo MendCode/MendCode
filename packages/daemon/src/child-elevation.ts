@@ -5,15 +5,18 @@ import type { AgentOrigin } from "./agent-origin"
 
 /** How long the card waits for the user; no answer keeps the refusal. */
 export const ELEVATION_WAIT_MS = 120_000
-/** The highest mode a child can be approved into this way: `full` is never asked for on a card. */
+/** The highest mode a session can ask for on a card: it never asks for `full`. */
 const HIGHEST: PermissionMode = "smart"
 const SHOWN_PROMPT = 1200
 const APPROVE = "Approve once"
+/** Only the user picks this, on the card itself: the asking session cannot request it. */
+const APPROVE_FULL = "Approve in full access"
 const DENY = "Deny"
 
 export type ChildFacts = { title: string; directory: string; model: string; agent?: string | undefined; addDirs?: readonly string[] | undefined; maxTurns?: number | undefined; systemPrompt?: "replaced" | "appended" | undefined }
 
-type Pending = { sessionId: SessionId; finish(outcome: "approved" | "denied" | "abandoned", clientId?: string): void }
+/** `mode` is set when the user picked full access on the card instead of the mode asked for. */
+type Pending = { sessionId: SessionId; finish(outcome: "approved" | "denied" | "abandoned", clientId?: string, mode?: PermissionMode): void }
 /** A child the user approved: the one prompt it was approved for, until it is submitted. */
 type Approved = { launcher: string; text: string; images: number; used: boolean }
 
@@ -21,7 +24,8 @@ type Approved = { launcher: string; text: string; images: number; used: boolean 
  * A session asking to start a child above its own permission mode (docs/permissions.md, "A child with more authority").
  * The daemon never grants it by itself: one card goes to a local terminal the user has on the launching session (or, failing
  * that, on another session of its project), naming the model, the folder, the mode, the title and the prompt. Approving it
- * sets the child's mode once and lets exactly that prompt through; denying it, no answer, no such terminal, or a remote or
+ * sets the child's mode once (the one asked for, or full access when the user picks it there: a session never asks for full)
+ * and lets exactly that prompt through; denying it, no answer, no such terminal, or a remote or
  * peer client leaves the refusal in place. The approved child takes no other work from the session that started it.
  * Core permission rule: every tier.
  */
@@ -61,13 +65,14 @@ export function createChildElevation(deps: {
       prompt,
       "",
       `Approving runs this one prompt in ${input.mode}; the launching session cannot send that child anything else. No answer in ${Math.round(wait / 1000)} s keeps the refusal.`,
+      "Full access is your choice only: the child asks nothing, running every edit and command unless a rule denies it.",
     ]
     return {
       title: safe(`Start a child in ${input.mode}?`).slice(0, 500),
       questions: [{
         header: "Child permission",
         question: safe(`Start "${facts.title || input.child}" in ${input.mode} with ${facts.model}?`).slice(0, 500),
-        options: [{ label: APPROVE, description: `This child only, in ${input.mode}` }, { label: DENY }],
+        options: [{ label: APPROVE, description: `This child only, in ${input.mode}` }, { label: APPROVE_FULL, description: "This child only, in full: asks nothing" }, { label: DENY }],
         custom: false,
         context: safe(lines.join("\n")).slice(0, 4000),
       }],
@@ -91,16 +96,16 @@ export function createChildElevation(deps: {
       const requestId = deps.requestId()
       const shown = card({ launcher, child: input.child, mode: input.mode, ceiling: input.ceiling, text: input.text, images: input.images, at })
       asking.add(input.child)
-      const outcome = await new Promise<{ result: "approved" | "denied" | "abandoned"; clientId?: string | undefined }>((resolve) => {
+      const outcome = await new Promise<{ result: "approved" | "denied" | "abandoned"; clientId?: string | undefined; mode?: PermissionMode | undefined }>((resolve) => {
         const timer = setTimeout(() => entry.finish("abandoned"), wait)
         timer.unref?.()
         const entry: Pending = {
           sessionId: at,
-          finish(result, clientId) {
+          finish(result, clientId, mode) {
             if (!pending.delete(requestId)) return
             clearTimeout(timer)
             try { deps.emit({ type: "server.request.resolved", sessionId: at, requestId, resolution: result, ...(clientId ? { byClientId: clientId as never } : {}) }) } catch { /* the session is gone */ }
-            resolve({ result, clientId })
+            resolve({ result, clientId, mode })
           },
         }
         pending.set(requestId, entry)
@@ -111,7 +116,7 @@ export function createChildElevation(deps: {
       if (outcome.result === "abandoned") return `no one answered within ${Math.round(wait / 1000)} s`
       if (!input.alive() || !deps.fresh(input.child)) return "the caller went away or the child changed before the approval"
       approved.set(input.child, { launcher, text: input.text, images: input.images, used: false })
-      await deps.apply(input.child, input.mode, outcome.clientId)
+      await deps.apply(input.child, outcome.mode ?? input.mode, outcome.clientId)
       return undefined
     },
     /** An answer to one of these cards; undefined when the request is not one. Only the user's own terminal answers it. */
@@ -123,7 +128,8 @@ export function createChildElevation(deps: {
       if (!human) return { ok: false, code: "forbidden", message: "[DAEMON]: a child's higher permission is approved only from a local terminal" }
       if (decision.kind !== "answer") return { ok: false, code: "invalid_command", message: "[DAEMON]: this card takes an answer or a dismissal" }
       const answer = (decision.answers?.[0]?.[0] ?? decision.text).trim()
-      entry.finish(answer === APPROVE ? "approved" : "denied", command.clientId)
+      if (answer === APPROVE_FULL) entry.finish("approved", command.clientId, "full")
+      else entry.finish(answer === APPROVE ? "approved" : "denied", command.clientId)
       return { ok: true }
     },
     /**

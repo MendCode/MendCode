@@ -32,6 +32,18 @@ export const ReviewConfig = z.strictObject({
   enabled: z.boolean().default(false),
   profile: z.enum(["quiet", "normal", "strict"]).default("normal"),
   cap: z.number().int().min(1).max(30).default(8),
+  /**
+   * The lowest verifier score (0 to 10, from the verify pass that already judges each finding) a finding may have to be published.
+   * 0 publishes everything the verdict allows, as before; a finding the verifier gave no score is never dropped by this. Scores
+   * also order the findings within a severity before `cap` cuts them.
+   */
+  min_score: z.number().int().min(0).max(10).default(0),
+  /**
+   * Models tried, in order, when the reviewer's own model fails with a provider error or is not available (never for a quota or
+   * rate limit: `budget.on_quota` decides those). Each must be allowed in the user's model list and on the reviewer's own
+   * provider; one that is not is skipped with a note. Empty: no fallback. Base branch only.
+   */
+  fallback_models: z.array(z.string().min(1).max(160)).max(5).default([]),
   paths: z.array(z.strictObject({ glob, instructions: z.string().min(1).max(2000) })).max(50).default([]),
   ignore: z.array(glob).max(100).default([]),
   checks: z.array(z.string().min(1).max(500)).max(8).default([]),
@@ -125,6 +137,12 @@ export const ReviewConfig = z.strictObject({
    */
   backlog: BacklogConfig,
   /**
+   * What `@mendcode describe` and `@mendcode approve` may do beyond writing the description's MendCode section: `describe_title` lets
+   * describe also replace the pull request's title, `approve` lets `@mendcode approve` submit an approval. Both are off: only the
+   * repository sets them (base branch).
+   */
+  commands: z.strictObject({ describe_title: z.boolean().default(false), approve: z.boolean().default(false) }).default({ describe_title: false, approve: false }),
+  /**
    * Data and generated files (triage.ts) go to readers on a cheap model instead of the review pass whole (readers.ts). `parallel`:
    * readers at once (unset: by the install tier, minimalist 1, balanced 2, full 3). `model`: a cheap model of the reviewer's own
    * provider (reader-models.ts); one off that list is refused with a note and the automatic pick is used. `enabled: false` sends
@@ -199,7 +217,7 @@ export function parseReviewConfig(text: string | undefined, forge?: RegistryForg
   return { config: DEFAULT_REVIEW_CONFIG, problem: `[PR_REVIEW]: config ${issue.path.join(".") || "root"}: ${issue.message}; defaults used` }
 }
 
-/** Base controls `enabled`, `checks`, `budget`, `ignore`, `profile`, `cap`, `fixes`, the triggers, the cooldown, `reviewers`, `publishers`, `backlog` and `template.language`; the head may only add path instructions. */
+/** Base controls `enabled`, `checks`, `budget`, `ignore`, `profile`, `cap`, `min_score`, `fallback_models`, `fixes`, the triggers, the cooldown, `reviewers`, `publishers`, `backlog` and `template.language`; the head may only add path instructions. */
 export function mergeReviewConfigs(base: ReviewConfig, head: ReviewConfig): ReviewConfig {
   const known = new Set(base.paths.map((entry) => `${entry.glob}\n${entry.instructions}`))
   return { ...base, paths: [...base.paths, ...head.paths.filter((entry) => !known.has(`${entry.glob}\n${entry.instructions}`))].slice(0, 50) }
@@ -228,7 +246,7 @@ export const ignoredBy = (config: ReviewConfig) => (file: string) => config.igno
 
 /** The engine's view of a config for one diff: only the path instructions whose glob matches a file the diff changes. */
 export function promptConfig(config: ReviewConfig, files: readonly string[], learnings: string): ReviewEngineConfig {
-  return { profile: config.profile, instructions: config.paths.filter((entry) => files.some((file) => matches(entry.glob, file))), learnings, budgetTokens: config.budget.tokens_per_pr ?? Number.POSITIVE_INFINITY }
+  return { profile: config.profile, instructions: config.paths.filter((entry) => files.some((file) => matches(entry.glob, file))), learnings, budgetTokens: config.budget.tokens_per_pr ?? Number.POSITIVE_INFINITY, minScore: config.min_score }
 }
 
 const show = async (git: GitRun, directory: string, ref: string, file: string) => {

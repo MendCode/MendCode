@@ -322,6 +322,38 @@ export function createGiteaProvider({ baseUrl, fetch: fetcher = fetch, token = (
       return { ok: true, posts: listed.items.flatMap((item) => { const review = Review.safeParse(item); return review.success && review.data.user?.login ? [{ id: review.data.id, author: review.data.user.login, body: review.data.body ?? "", ...(review.data.commit_id ? { commit: review.data.commit_id } : {}), ...(review.data.state ? { state: review.data.state } : {}) }] : [] }) }
     },
 
+    /** `GET …/labels`: the repository's label names. */
+    async repoLabels({ repo }) {
+      const listed = await pages(`${repoPath(repo)}/labels`)
+      return listed.ok ? listed.items.flatMap((item) => typeof (item as { name?: unknown }).name === "string" ? [(item as { name: string }).name] : []) : undefined
+    },
+
+    /** `PATCH …/pulls/{index}` for the title and description; labels are added by id (`POST …/issues/{index}/labels`). */
+    async edit({ repo, number, title, body, labels }) {
+      if (!token()) return { ok: false, reason: "no Gitea token in the environment variable the config names" }
+      if (title !== undefined || body !== undefined) {
+        const answer = await request(`${repoPath(repo)}/pulls/${number}`, { method: "PATCH", body: { ...(title !== undefined ? { title } : {}), ...(body !== undefined ? { body } : {}) } })
+        if ("error" in answer || answer.status < 200 || answer.status >= 300) return { ok: false, reason: reason(answer) }
+      }
+      if (labels?.length) {
+        const known = await pages(`${repoPath(repo)}/labels`)
+        if (!known.ok) return { ok: false, reason: known.reason }
+        const ids = labels.flatMap((name) => { const found = known.items.find((item) => (item as { name?: unknown }).name === name) as { id?: unknown } | undefined; return typeof found?.id === "number" ? [found.id] : [] })
+        if (ids.length) {
+          const answer = await request(`${repoPath(repo)}/issues/${number}/labels`, { body: { labels: ids } })
+          if ("error" in answer || answer.status < 200 || answer.status >= 300) return { ok: false, reason: reason(answer) }
+        }
+      }
+      return { ok: true }
+    },
+
+    /** `POST …/pulls/{index}/reviews` with event APPROVED on the reviewed commit. */
+    async approve({ repo, number, head, body }) {
+      if (!token()) return { ok: false, reason: "no Gitea token in the environment variable the config names" }
+      const answer = await request(`${repoPath(repo)}/pulls/${number}/reviews`, { body: { body, commit_id: head, event: "APPROVED" } })
+      return "error" in answer || answer.status < 200 || answer.status >= 300 ? { ok: false, reason: reason(answer) } : { ok: true }
+    },
+
     /** The head branch and its repository; a fork takes a push only with `allow_maintainer_edit`. */
     async pushTarget({ repo, number }) {
       const answer = await request(`${repoPath(repo)}/pulls/${number}`)

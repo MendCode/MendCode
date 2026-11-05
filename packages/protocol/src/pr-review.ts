@@ -27,6 +27,8 @@ export const PrFinding = lazySchema(() => z.strictObject({
   /** The text that replaces lines `line`..`endLine` (or `line` alone): only for a fix that stays inside them. */
   suggestion: z.strictObject({ replacement: z.string().max(4000) }).optional(),
   verdict: z.enum(PR_FINDING_VERDICTS).optional(),
+  /** The verifier's 0 to 10 judgment of how sure and how much it matters; absent when the verifier gave none. */
+  score: z.number().int().min(0).max(10).optional(),
 }))
 export type PrFinding = z.infer<typeof PrFinding>
 

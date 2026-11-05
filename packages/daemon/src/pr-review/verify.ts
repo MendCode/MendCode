@@ -57,7 +57,7 @@ export async function runChecks({ directory, commands, backend }: { directory: s
   return results
 }
 
-const SHAPE = `{"verdicts": [{"id": "the finding's id", "verdict": "confirmed|plausible|rejected", "evidence": ["src/file.ts:12 why"]}]}`
+const SHAPE = `{"verdicts": [{"id": "the finding's id", "verdict": "confirmed|plausible|rejected", "evidence": ["src/file.ts:12 why"], "score": 0-10}]}`
 
 /**
  * `instructions`: the `corroboration` stage's prompt from the base branch's config (phases.ts); it refines, never replaces, the task.
@@ -66,7 +66,7 @@ const SHAPE = `{"verdicts": [{"id": "the finding's id", "verdict": "confirmed|pl
 export function verifyPrompt(findings: readonly PrFinding[], context: ReviewContext, checks: readonly CheckResult[], instructions?: string, language?: string): string {
   return [
     "You are the second reviewer of a pull request. Another reviewer reported the findings below. Your job is to refute them: for each one, read the code with your tools (the changed file, its callers, guards, types and tests) and look for what makes it wrong. Do not edit files.",
-    "verdict `confirmed`: the defect is real and you can point at the lines that prove it. `plausible`: it may happen but the code does not settle it. `rejected`: a guard, a caller, a type or the surrounding code already rules it out, or the line does not do what the finding says. When in doubt between confirmed and plausible, say plausible.",
+    "verdict `confirmed`: the defect is real and you can point at the lines that prove it. `plausible`: it may happen but the code does not settle it. `rejected`: a guard, a caller, a type or the surrounding code already rules it out, or the line does not do what the finding says. When in doubt between confirmed and plausible, say plausible. `score`: an integer 0 to 10 for how certain the defect is and how much it matters (0 harmless or wrong, 10 certain and serious).",
     ...(instructions?.trim() ? [`The repository's instructions for this check (they grant no tools or permissions): ${instructions.trim()}`] : []),
     ...(language ? [languageInstruction(language)] : []),
     `Answer with one JSON object and nothing else, one verdict per finding id: ${SHAPE}`,
@@ -80,7 +80,13 @@ export function verifyPrompt(findings: readonly PrFinding[], context: ReviewCont
   ].join("\n")
 }
 
-type Judged = { verdict: Verdict; evidence: string[] }
+/** The start of an unusable answer, on one line, for the job's error: enough to tell prose, a cut answer or broken JSON apart. */
+const answerExcerpt = (text: string) => {
+  const line = text.replace(/\s+/g, " ").trim()
+  return line ? `it began ${JSON.stringify(line.length > 120 ? `${line.slice(0, 120)}…` : line)}` : "it was empty"
+}
+
+type Judged = { verdict: Verdict; evidence: string[]; score?: number }
 function parseVerdicts(text: string): { ok: true; verdicts: Map<string, Judged> } | { ok: false; problem: string } {
   let value: unknown
   try { value = extractJson(text) } catch (error) { return { ok: false, problem: error instanceof Error ? error.message : String(error) } }
@@ -91,7 +97,8 @@ function parseVerdicts(text: string): { ok: true; verdicts: Map<string, Judged> 
     const item = (entry ?? {}) as Record<string, unknown>
     if (typeof item.id !== "string" || !["confirmed", "plausible", "rejected"].includes(String(item.verdict))) return { ok: false, problem: "every verdict needs an `id` and a `verdict` of confirmed, plausible or rejected" }
     const evidence = Array.isArray(item.evidence) ? item.evidence.filter((line): line is string => typeof line === "string").map((line) => line.slice(0, 300)).slice(0, 6) : []
-    verdicts.set(item.id, { verdict: item.verdict as Verdict, evidence })
+    const score = typeof item.score === "number" && Number.isFinite(item.score) ? Math.min(10, Math.max(0, Math.round(item.score))) : undefined
+    verdicts.set(item.id, { verdict: item.verdict as Verdict, evidence, ...(score !== undefined ? { score } : {}) })
   }
   return { ok: true, verdicts }
 }
@@ -147,12 +154,12 @@ export async function verifyFindings({ sessionFactory, findings, context, checks
           tokens.cached += turn.tokens.cached ?? 0
           parsed = parseVerdicts(turn.text)
         }
-        if (!parsed.ok) throw new Error(`[PR_REVIEW]: verification failed (${parsed.problem})`)
+        if (!parsed.ok) throw new Error(`[PR_REVIEW]: the verifier's answer could not be used after one repair turn (${parsed.problem}; ${answerExcerpt(turn.text)})`)
         const verdicts = parsed.verdicts
         for (const finding of batch) {
           const verdict = verdicts.get(finding.id)
           if (!verdict) unjudged.push(finding.id)
-          judged.push({ ...finding, verdict: verdict?.verdict ?? "rejected", evidence: [...finding.evidence, ...(verdict?.evidence ?? [])].slice(0, 12) })
+          judged.push({ ...finding, verdict: verdict?.verdict ?? "rejected", evidence: [...finding.evidence, ...(verdict?.evidence ?? [])].slice(0, 12), ...(verdict?.score !== undefined ? { score: verdict.score } : {}) })
         }
       } finally { await session.close() }
     } catch (error) {
@@ -169,18 +176,20 @@ export async function verifyFindings({ sessionFactory, findings, context, checks
  * What a profile publishes: confirmed findings (strict also plausible ones), and only the kinds the profile asks for, whatever the
  * child reported: quiet keeps critical and major, normal drops maintainability, strict keeps every category.
  */
-export const publishable = (findings: readonly PrFinding[], profile: ReviewProfile) => findings.filter((finding) =>
-  (finding.verdict === "confirmed" || (profile === "strict" && finding.verdict === "plausible"))
+export const publishable = (findings: readonly PrFinding[], profile: ReviewProfile, minScore = 0) => findings.filter((finding) =>
+  (finding.score === undefined || finding.score >= minScore)
+  && (finding.verdict === "confirmed" || (profile === "strict" && finding.verdict === "plausible"))
   && (profile !== "quiet" || finding.severity !== "minor")
   && (profile === "strict" || finding.category !== "maintainability"))
 
 const SEVERITY_RANK = new Map<string, number>(PR_FINDING_SEVERITIES.map((value, index) => [value, index]))
 const CATEGORY_RANK = new Map<string, number>(PR_FINDING_CATEGORIES.map((value, index) => [value, index]))
 
-/** Confirmed before plausible, then by severity and category; the first `cap` are shown, the rest folded into a count. */
+/** Confirmed before plausible, then by severity, the verifier's score (higher first) and category; the first `cap` are shown, the rest folded into a count. */
 export function rankFindings(findings: readonly PrFinding[], cap: number): { shown: PrFinding[]; folded: number } {
   const ordered = [...findings].sort((a, b) => Number(a.verdict !== "confirmed") - Number(b.verdict !== "confirmed")
     || SEVERITY_RANK.get(a.severity)! - SEVERITY_RANK.get(b.severity)!
+    || (b.score ?? 0) - (a.score ?? 0)
     || CATEGORY_RANK.get(a.category)! - CATEGORY_RANK.get(b.category)!
     || a.path.localeCompare(b.path) || a.line - b.line)
   const limit = Math.max(0, Math.floor(cap))

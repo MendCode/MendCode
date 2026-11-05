@@ -136,6 +136,42 @@ describe("nightly channel on a repository GitHub does not attest", () => {
   })
 })
 
+describe("the moving nightly release", () => {
+  /** The single GitHub release tagged `nightly`, whose binaries are named after the versioned tag of the build it holds. */
+  const moving = (tag = NIGHTLY) => { const row = nightly(tag); row.json.tag_name = "nightly"; return row }
+
+  test("stands for the versioned tag its binaries are named after, and the newest one while an upload replaces the old files", () => {
+    expect(parseReleases([moving().json]).map((row) => row.tag)).toEqual([NIGHTLY])
+    const mixed = moving("v0.0.1-nightly.20261005.9").json
+    mixed.assets.push(...moving().json.assets)
+    expect(parseReleases([mixed]).map((row) => row.tag)).toEqual([NIGHTLY])
+    expect(parseReleases([{ ...moving().json, assets: [] }])).toEqual([])
+    expect(parseReleases([{ ...moving().json, prerelease: false }])).toEqual([])
+  })
+
+  test("is installed and verified under the tag of the build, with the files of the moving release", async () => {
+    const h = box()
+    const fake = fakePorts([moving(), release({ tag: "v0.0.1-beta.2", prerelease: true, mode: "cosign", binaries: { "mendcode-0.0.1-beta.2-linux-x64": "b" } })])
+    expect(await runUpgrade(h.request(), fake.ports)).toMatchObject({ status: "installed", channel: "nightly", latest: NIGHTLY, verification: "cosign" })
+    expect(fake.verified.map((call) => call.tag)).toEqual([NIGHTLY, NIGHTLY])
+    expect((await runUpgrade(h.request({ check: true, channel: "beta" }), fake.ports)).latest).toBe("v0.0.1-beta.2")
+  })
+
+  test("an exact nightly target is read from the list, since only the latest build still has a release", async () => {
+    const h = box()
+    const fake = fakePorts([moving()])
+    expect(await runUpgrade(h.request({ target: NIGHTLY }), fake.ports)).toMatchObject({ status: "installed", latest: NIGHTLY })
+    expect(fake.requested.some((entry) => entry.includes("/tags/"))).toBe(false)
+    await expect(runUpgrade(h.request({ target: "v0.0.1-nightly.20261005.9" }), fakePorts([moving()]).ports)).rejects.toMatchObject({ code: "no-release" })
+  })
+
+  test("sits beside the older per-build nightlies and orders with them by version", async () => {
+    const h = box()
+    const rows = [nightly("v0.0.1-nightly.20261004.30"), moving("v0.0.1-nightly.20261006.2")]
+    expect((await runUpgrade(h.request({ check: true }), fakePorts(rows).ports)).latest).toBe("v0.0.1-nightly.20261006.2")
+  })
+})
+
 describe("cosign verification of one payload", () => {
   test("pins the exact tag identity of MendCode/MendCode and the GitHub OIDC issuer", () => {
     expect(signerIdentity("MendCode/MendCode", NIGHTLY)).toBe(`https://github.com/MendCode/MendCode/.github/workflows/release.yml@refs/tags/${NIGHTLY}`)
