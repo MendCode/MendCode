@@ -267,3 +267,34 @@ describe("Anthropic message threads", () => {
     expect(server.requests[0]!.headers["anthropic-beta"]).toBe(`other-2026-01-01,${MESSAGE_THREADS_BETA}`)
   })
 })
+
+describe("Anthropic message threads with adaptive thinking", () => {
+  const model = "claude-opus-5-5"
+
+  test("thinking and effort are fixed fields: the same ones continue the thread, a new effort starts a new one", async () => {
+    const { server, provider } = setup([reply("msg_1", "hello"), reply("msg_2", "sure"), reply("msg_3", "ok")])
+    await collect(provider.stream(request([hi], { model, effort: "high" })))
+    await collect(provider.stream(request([hi, hello, next], { model, effort: "high" })))
+    await collect(provider.stream(request([hi, hello, next, thanks, more], { model, effort: "low" })))
+    const [create, follow, changed] = server.requests
+    expect(create!.body.thinking).toEqual({ type: "adaptive", display: "summarized" })
+    expect(create!.body.output_config).toEqual({ effort: "high" })
+    expect(follow!.body.thread).toEqual({ type: "continue", previous_message_id: "msg_1" })
+    expect(follow!.body.thinking).toEqual(create!.body.thinking)
+    expect(follow!.body.output_config).toEqual(create!.body.output_config)
+    expect(changed!.body.thread).toEqual({ type: "create" })
+    expect(changed!.body.output_config).toEqual({ effort: "low" })
+    expect(changed!.body.messages).toHaveLength(5)
+  })
+
+  test("a tool loop keeps thinking on across continues, with its signed blocks left in the stored thread", async () => {
+    const { server, provider } = setup([reply("msg_1", "reading", { tools: ["toolu_1"] }), reply("msg_2", "done")])
+    await collect(provider.stream(request([hi], { model, effort: "medium" })))
+    const called: ModelMessage = { role: "assistant", content: "reading", toolCalls: [{ callId: "toolu_1", name: "read", args: { path: "a.ts" } }], reasoning: { provider: "anthropic", model, blocks: [{ type: "thinking", thinking: "hm", signature: "sig" }] } }
+    await collect(provider.stream(request([hi, called, { role: "tool", callId: "toolu_1", name: "read", output: "file", isError: false }], { model, effort: "medium" })))
+    const follow = server.requests[1]!
+    expect(follow.body.thread).toEqual({ type: "continue", previous_message_id: "msg_1" })
+    expect(follow.body.thinking).toEqual({ type: "adaptive", display: "summarized" })
+    expect(follow.body.messages).toHaveLength(1)
+  })
+})

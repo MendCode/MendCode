@@ -5,6 +5,7 @@ import { MAX_SILENT_STREAM_BYTES, MAX_TOOL_ARGUMENT_CHARS, argumentGuard, sseDat
 import type { CacheTtl } from "@mendcode/protocol/wire"
 import { HttpStatusError, guardedStream, joinUrl, parseToolArgs, postStream, scrub, type Fetch, type Watchdog } from "./provider-http"
 import { probeUrl } from "./network-wait"
+import { MIN_THINKING_TOKENS, adaptiveMaxTokens, adaptiveThinking, isThinkingSignatureRefusal, withoutThinkingBlocks } from "./anthropic-thinking"
 import { MESSAGE_THREADS_BETA, createMessageThreads, threadErrorCode, type ThreadPlan, type ThreadReply } from "./anthropic-threads"
 import { RetryableProviderError, type ModelEvent, type ModelMessage, type ModelProvider, type ModelRequest, type ReasoningState, type ToolSpec } from "./provider"
 
@@ -13,10 +14,10 @@ export const ANTHROPIC_VERSION = "2023-06-01"
 /** Room for the answer when the request does not say; modern Claude models allow at least this much. */
 export const ANTHROPIC_DEFAULT_MAX_TOKENS = 32_000
 
-/** Reasoning effort → thinking budget in tokens (no effort = thinking off). `minimal` and `none` are off too; `xhigh` and `max` go one and two steps past `high`. */
+/** Reasoning effort → thinking budget in tokens for the models that take one (anthropic-thinking.ts); no effort = thinking off. `minimal` and `none` are off too; `xhigh` and `max` go one and two steps past `high`. */
 export const THINKING_BUDGETS: Record<ReasoningEffort, number> = { none: 0, minimal: 0, low: 2_000, medium: 8_000, high: 24_000, xhigh: 32_000, max: 48_000 }
 /** The API refuses budgets below this. */
-const MIN_THINKING_BUDGET = 1_024
+const MIN_THINKING_BUDGET = MIN_THINKING_TOKENS
 
 type Block = Record<string, unknown>
 type WireMessage = { role: "user" | "assistant"; content: Block[] }
@@ -210,7 +211,9 @@ export function createAnthropicProvider(options: {
       if (!key && !request.headers?.authorization) throw new Error(`[AUTH]: no API key for ${options.id}; set it with providers.set or the provider's environment variable`)
       const secrets = [...(key ? [key] : []), ...Object.values(request.headers ?? {})]
       const messages = withoutUnsupportedImages([...request.messages], options.takesImages?.(model) ?? true)
-      const budget = Math.min(THINKING_BUDGETS[request.effort ?? "minimal"], request.maxOutputTokens ? Math.max(0, request.maxOutputTokens - 1) : Infinity)
+      // Adaptive models (anthropic-thinking.ts) take `thinking: adaptive` + `output_config.effort`; the rest keep a token budget.
+      const adaptive = adaptiveThinking({ model, effort: request.effort, maxOutputTokens: request.maxOutputTokens })
+      const budget = adaptive ? 0 : Math.min(THINKING_BUDGETS[request.effort ?? "minimal"], request.maxOutputTokens ? Math.max(0, request.maxOutputTokens - 1) : Infinity)
       const thinkingWanted = budget >= MIN_THINKING_BUDGET
       const thinking = thinkingWanted && canThink(messages, model) ? budget : 0
       const thinkingDropped = thinkingWanted && thinking === 0
@@ -224,7 +227,7 @@ export function createAnthropicProvider(options: {
       if (cacheMode !== "off") markLastUserTurn(wire, cacheMark)
       // Tools, system, the previous request's breakpoint and this one: the four Anthropic allows.
       if (cacheMode === "smart") markPreviousUserTurn(wire, cacheMark)
-      const maxTokens = request.maxOutputTokens ?? Math.max(options.maxTokens ?? ANTHROPIC_DEFAULT_MAX_TOKENS, thinking ? thinking + 8_192 : 0)
+      const maxTokens = request.maxOutputTokens ?? (adaptive ? options.maxTokens ?? adaptiveMaxTokens(request.effort, adaptive, ANTHROPIC_DEFAULT_MAX_TOKENS) : Math.max(options.maxTokens ?? ANTHROPIC_DEFAULT_MAX_TOKENS, thinking ? thinking + 8_192 : 0))
       const built: Record<string, unknown> = {
         model,
         max_tokens: maxTokens,
@@ -233,6 +236,7 @@ export function createAnthropicProvider(options: {
         messages: wire,
         ...(request.tools.length ? { tools: toAnthropicTools(request.tools, cacheMode === "smart" ? cacheMark : undefined), tool_choice: { type: "auto" } } : {}),
         ...(thinking ? { thinking: { type: "enabled", budget_tokens: thinking } } : {}),
+        ...(adaptive ?? {}),
       }
       const configured = modelParameters(built, request)
       if (request.maxOutputTokens && configured.thinking && typeof configured.thinking === "object") {
@@ -253,7 +257,7 @@ export function createAnthropicProvider(options: {
         signal: request.signal,
         ...(options.idleTimeoutMs !== undefined ? { idleMs: options.idleTimeoutMs } : {}),
         run: async function* ({ watchdog, progress }) {
-          const post = (sent: Record<string, unknown>, threaded: boolean) => postStream({
+          const postOnce = (sent: Record<string, unknown>, threaded: boolean) => postStream({
             providerId: options.id,
             url,
             headers: threaded ? { ...headers, "anthropic-beta": threadBetas } : headers,
@@ -262,6 +266,17 @@ export function createAnthropicProvider(options: {
             watchdog,
             secrets,
           })
+          // A signed thinking block the API no longer accepts (an edit earlier in the conversation, preserved thinking): once more
+          // without the thinking blocks, which the API documents as the way past it. The model answers without that earlier reasoning.
+          const post = async (sent: Record<string, unknown>, threaded: boolean) => {
+            try {
+              return await postOnce(sent, threaded)
+            } catch (error) {
+              const stripped = error instanceof HttpStatusError && error.status === 400 && isThinkingSignatureRefusal(error.message) ? withoutThinkingBlocks(sent) : sent
+              if (stripped === sent) throw error
+              return await postOnce(stripped, threaded)
+            }
+          }
           let cacheTtl = longTtl
           const send = async (sent: Record<string, unknown>, threaded: boolean) => {
             try {
