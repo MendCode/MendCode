@@ -193,5 +193,7 @@ describe("lean tool catalogue (features lean_tools and plan_tools)", () => {
     expect(impliedTools([calls("shell", { command: "ls" })], false)).toEqual([])
     expect(impliedTools([calls("shell", { command: "bun dev", background: true })], false)).toEqual(["shell_output", "shell_kill"])
     expect(impliedTools([calls("task", { description: "x", prompt: "y" })], false)).toEqual(["task_status"])
+    // A compaction drops the call that started the command, but the registry still holds it.
+    expect(impliedTools([], false, true)).toEqual(["shell_output", "shell_kill"])
   })
 })

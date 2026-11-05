@@ -1,5 +1,5 @@
 import type { Clock, TimerHandle } from "@mendcode/kernel"
-import { DEFAULT_IDLE_COMPACT_AT_TOKENS, IDLE_COMPACT_MARGIN_MS, cacheLifetime, usageContext, type CacheLifetime, type CacheTtl, type IdleCompactOffReason } from "@mendcode/protocol/wire"
+import { CACHE_HIT_SHARE, CACHE_SAMPLES_MAX, CACHE_SAMPLE_MIN_GAP_MS, CACHE_SAMPLE_MIN_PROMPT_TOKENS, DEFAULT_IDLE_COMPACT_AT_TOKENS, IDLE_COMPACT_MARGIN_MS, cacheLifetime, observedCacheLifetime, usageContext, type CacheLifetime, type CacheSample, type CacheTtl, type IdleCompactOffReason, type ObservedCacheLifetime } from "@mendcode/protocol/wire"
 import type { ContextLimits, SessionEvent, SessionId, Settings } from "@mendcode/protocol"
 
 /**
@@ -8,6 +8,10 @@ import type { ContextLimits, SessionEvent, SessionId, Settings } from "@mendcode
  * A provider keeps a prompt prefix for a few minutes after the last call. A large session left idle past that pays the full input
  * price for its whole context on the next message. One compaction just before the cache expires reads the context at the cached
  * price one last time and leaves a small one, so the expiry stops mattering. Nothing is pinged to keep a cache warm.
+ *
+ * The lifetime follows what the provider's responses show: every call after an earlier call of the same session is a sample (the gap,
+ * and whether the response read the prefix from the cache), and `observedCacheLifetime` turns the samples into a lifetime that replaces
+ * the documented or assumed one when the data says so (docs/prompt-cache.md, "Cache lifetime").
  *
  * One timer per session, set at the session's last main model call (`usage.recorded` with `compactAt`) and living only in this
  * process: a restarted daemon schedules nothing until the session's next call. Every condition is checked again when the timer fires.
@@ -27,6 +31,8 @@ export type IdleCompactionPorts = {
   child(sessionId: SessionId): boolean
   /** No running turn, nothing queued, no pending approval or question, no background task whose notice is expected. */
   idle(sessionId: SessionId): boolean
+  /** What the cache did in the provider's recent calls, newest first, read once per provider when its first call is seen. Without it the samples start empty. */
+  history?(query: { provider: string; ttl: CacheTtl | undefined }): CacheSample[]
   /** Starts the compaction when the session is still free; false when something else got there first. */
   compact(sessionId: SessionId): Promise<boolean>
 }
@@ -36,6 +42,8 @@ type Entry = {
   /** The lifetime that call asked for and got (`promptCacheTtl`, `wait_cache`): an hour instead of the provider's default. */
   ttl?: CacheTtl | undefined
   tokens: number
+  /** What the call sent as input (new, cached and written): the cache it left is at most this much. */
+  prompt: number
   /** When the provider received the session's last main call: its lifetime counts from here. */
   callAt: number
   state: "armed" | "fired" | "packed" | "expired"
@@ -57,7 +65,38 @@ export function createIdleCompaction(ports: IdleCompactionPorts) {
   const compacting = new Set<SessionId>()
 
   const atTokens = () => ports.settings().idleCompactAtTokens ?? DEFAULT_IDLE_COMPACT_AT_TOKENS
-  const lifetimeOf = (entry: Pick<Entry, "provider" | "ttl">): CacheLifetime | undefined => cacheLifetime({ provider: entry.provider, ...ports.provider(entry.provider), overrides: ports.settings().cacheLifetimeMinutes, ttl: entry.ttl })
+  /** Samples and their derived lifetime by provider and requested lifetime; `observed` is cleared when a sample is added. */
+  const learned = new Map<string, { samples: CacheSample[]; observed?: ObservedCacheLifetime | undefined; derived: boolean }>()
+  const learnerOf = (entry: Pick<Entry, "provider" | "ttl">) => {
+    const key = `${entry.provider}:${entry.ttl ?? "default"}`
+    let learner = learned.get(key)
+    if (!learner) {
+      let samples: CacheSample[] = []
+      try { samples = ports.history?.({ provider: entry.provider, ttl: entry.ttl }).slice(0, CACHE_SAMPLES_MAX) ?? [] } catch { /* without history the samples start with this process */ }
+      learner = { samples, derived: false }
+      learned.set(key, learner)
+    }
+    return learner
+  }
+  const observedOf = (entry: Pick<Entry, "provider" | "ttl">) => {
+    const learner = learnerOf(entry)
+    if (!learner.derived) { learner.observed = observedCacheLifetime(learner.samples); learner.derived = true }
+    return learner.observed
+  }
+  const lifetimeOf = (entry: Pick<Entry, "provider" | "ttl">): CacheLifetime | undefined => cacheLifetime({ provider: entry.provider, ...ports.provider(entry.provider), overrides: ports.settings().cacheLifetimeMinutes, ttl: entry.ttl, observed: observedOf(entry) })
+  /** The call that starts at `callAt` is a sample of the cache left by the session's previous call. */
+  function learn(previous: Entry | undefined, event: { provider: string; input: number; cacheRead: number; cacheWrite: number; cacheTtl?: CacheTtl | undefined }, callAt: number) {
+    if (!previous || previous.provider !== event.provider || previous.ttl !== event.cacheTtl) return
+    // A compaction changed the prefix on purpose, and a call that was never scheduled (or already compacted) left no cache to read.
+    if (previous.state === "packed" || previous.state === "fired") return
+    if (event.input + event.cacheRead + event.cacheWrite < CACHE_SAMPLE_MIN_PROMPT_TOKENS || previous.prompt < CACHE_SAMPLE_MIN_PROMPT_TOKENS) return
+    const gapMs = callAt - previous.callAt
+    if (gapMs < CACHE_SAMPLE_MIN_GAP_MS) return
+    const learner = learnerOf(previous)
+    learner.samples.unshift({ gapMs, hit: event.cacheRead >= CACHE_HIT_SHARE * previous.prompt })
+    if (learner.samples.length > CACHE_SAMPLES_MAX) learner.samples.length = CACHE_SAMPLES_MAX
+    learner.derived = false
+  }
 
   function disarm(entry: Entry | undefined) {
     entry?.timer?.cancel()
@@ -134,8 +173,11 @@ export function createIdleCompaction(ports: IdleCompactionPorts) {
           if (stale?.state === "armed") { disarm(stale); entries.delete(sessionId) }
           return
         }
-        disarm(entries.get(sessionId))
-        const entry: Entry = { provider: event.provider, ...(event.cacheTtl ? { ttl: event.cacheTtl } : {}), tokens: usageContext(event) ?? 0, callAt: event.at - (event.profile?.durationMs ?? 0), state: "armed" }
+        const previous = entries.get(sessionId)
+        disarm(previous)
+        const callAt = event.at - (event.profile?.durationMs ?? 0)
+        const entry: Entry = { provider: event.provider, ...(event.cacheTtl ? { ttl: event.cacheTtl } : {}), tokens: usageContext(event) ?? 0, prompt: event.input + event.cacheRead + event.cacheWrite, callAt, state: "armed" }
+        learn(previous, event, callAt)
         remember(sessionId, entry)
         return arm(sessionId, entry)
       }
@@ -169,6 +211,7 @@ export function createIdleCompaction(ports: IdleCompactionPorts) {
     dispose() {
       for (const entry of entries.values()) disarm(entry)
       entries.clear()
+      learned.clear()
       compacting.clear()
     },
   }

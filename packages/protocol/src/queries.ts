@@ -523,6 +523,8 @@ const SharedSettings = lazySchema(() => z.strictObject({
   compactNoticePercent: z.union([z.literal("off"), z.number().int().min(10).max(99)]).optional(),
   /** Minutes a provider keeps a prompt prefix after the last call, by provider id; replaces the built-in lifetime, and gives one to a provider that has none (compaction while idle stays off for it until then). */
   cacheLifetimeMinutes: z.record(z.string().regex(/^[a-z][a-z0-9_-]{0,31}$/), z.number().int().min(CACHE_LIFETIME_MINUTES_RANGE.min).max(CACHE_LIFETIME_MINUTES_RANGE.max)).optional(),
+  /** Optional caps on the commands the agent leaves running (`shell` with `background`, `shell_session`; docs/interactive-tools.md). By default none: a command runs until it ends, the agent or the user stops it, or its chat is deleted. `lifetimeMinutes` stops one that runs longer; `idleMinutes` stops a `shell_session` terminal no tool call touched for that long. 0 or unset is no cap. */
+  processLimits: z.object({ lifetimeMinutes: z.number().int().min(0).max(525_600).optional(), idleMinutes: z.number().int().min(0).max(525_600).optional() }).optional(),
   /** How long Anthropic keeps what the native engine caches (docs/prompt-cache.md, "Cache lifetime"): `5m` (default, no `ttl` sent) or `1h` (`ttl: "1h"` on every breakpoint; writes cost 2x the input price instead of 1.25x). Anthropic API and Claude on Vertex only. */
   promptCacheTtl: z.enum(CACHE_TTLS).optional(),
   /** Opt-in: a `promptCacheTtl` of `1h` is also given to Claude Code when it is the engine, as `CLAUDE_CODE_PROMPT_CACHE_TTL` and `CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL` in its process environment (Claude Code v2.1.242 or later). Off when unset. */

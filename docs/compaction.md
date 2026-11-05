@@ -305,7 +305,8 @@ It applies to every session the daemon holds, with or without a terminal attache
 
 **When.** The timer is set at each main model call (`usage.recorded` with `compactAt`), for the provider's lifetime counted from when
 the call was sent (the event's time minus the call's duration), minus a margin of 60 s (`IDLE_COMPACT_MARGIN_MS`) that covers the
-compaction's own start-up; a lifetime under two minutes fires at its half. So a 5-minute cache compacts 4 minutes after the last call
+compaction's own start-up; a lifetime under two minutes fires at its half. The lifetime follows what the provider's responses showed
+([observed lifetime](prompt-cache.md#observed-lifetime)) when that differs from the documented or assumed one. So a 5-minute cache compacts 4 minutes after the last call
 was sent, and an Anthropic call written at the 1-hour lifetime (`promptCacheTtl: "1h"`, or the `wait_cache` feature;
 [prompt cache](prompt-cache.md#the-anthropic-lifetime-promptcachettl)) 59 minutes after it: the lifetime is the one that call asked
 for and got (`cacheTtl` on its `usage.recorded`), not the setting's value now. A message or a turn before that cancels it, and that turn's own call sets the next one; a turn that made no model call (a

@@ -13,7 +13,7 @@ import { contextFiles, readPaths } from "./context-files"
 import { toolOwner } from "./context-rent"
 import { checkpointContext, checkpointOf, compactionDeadline, fingerprint, NativeCompactionError, portableHistory, type CompactionCheckpoint } from "./compaction-checkpoint"
 import { acceptSummary, RESUME_GUIDANCE, summaryBody } from "./compaction-summary"
-import { assistantPhaseContext, buildCompactionPrompt, compactionTriggerContext, engineAnchor, imageAttachmentContext, languageContinuityContext, latestUserRequestContext, localRescueSummary, preservedTailSnapshotContext, recentOperationalContext, renderTranscript, resumeImageRefs, subagentTaskContext, todoContext, transcriptReferenceContext } from "./compaction-context"
+import { type RunningProcess, assistantPhaseContext, buildCompactionPrompt, compactionTriggerContext, engineAnchor, imageAttachmentContext, languageContinuityContext, latestUserRequestContext, localRescueSummary, preservedTailSnapshotContext, recentOperationalContext, renderTranscript, resumeImageRefs, subagentTaskContext, todoContext, transcriptReferenceContext } from "./compaction-context"
 import type { CompactionConfig } from "@mendcode/protocol"
 import { ReasoningError, type ReasoningPort } from "./reasoning"
 import { requestEstimates } from "./request-profile"
@@ -683,7 +683,17 @@ export function createNativeEngine(options: {
     return { ...base, tools: new Map([...base.tools].filter(([name]) => offered(name))), specs: base.specs.filter((spec) => offered(spec.name)), allowTask: base.allowTask && offered(TASK_TOOL.name) }
   }
 
-  function withDiscovery(base: Toolset, messages: readonly ModelMessage[], plan = false): Toolset {
+  /** The session's commands still running, for the compaction anchor. */
+  function runningProcesses(sessionId: SessionId): RunningProcess[] {
+    const at = Date.now()
+    const seconds = (startedAt: number) => Math.max(0, Math.round((at - startedAt) / 1_000))
+    return [
+      ...(options.background?.(sessionId).list() ?? []).map((task): RunningProcess => ({ kind: "background", id: task.id, command: task.command, running: task.status === "running", seconds: seconds(task.startedAt) })),
+      ...(options.interactive?.(sessionId).list() ?? []).map((session): RunningProcess => ({ kind: "terminal", id: session.id, command: session.command, running: session.status === "running", seconds: seconds(session.startedAt) })),
+    ]
+  }
+
+  function withDiscovery(base: Toolset, messages: readonly ModelMessage[], plan = false, sessionId?: SessionId): Toolset {
     // Retain recent conversation during compaction, but renew discovery after its retained turns.
     const checkpoint = checkpointOf(messages)
     let discoveryStart = 0
@@ -699,7 +709,7 @@ export function createNativeEngine(options: {
     const primary = catalogPrimary()
     const active = activeToolNames(messages.slice(discoveryStart), primary)
     // Auxiliary tools the conversation calls for are listed without a search (`impliedTools`), after the ones already found.
-    for (const name of impliedTools(messages.slice(discoveryStart), plan)) if (!primary(name)) active.add(name)
+    for (const name of impliedTools(messages.slice(discoveryStart), plan, sessionId !== undefined && (options.background?.(sessionId).list().length ?? 0) > 0)) if (!primary(name)) active.add(name)
     const codeAllowed = policy().experimental?.code_mode === true && (!base.agent || agentAllows(base.agent, CODE_TOOL.name))
     const eligible = withPolicy(codeAllowed ? { ...base, specs: [...base.specs.filter((spec) => spec.name !== CODE_TOOL.name), toSpec(CODE_TOOL)], codeCatalog: base, codeActive: active } : base)
     const discovery = discoveryOn()
@@ -1896,7 +1906,7 @@ export function createNativeEngine(options: {
       // ends on a bare error; a cap the caller set (`--max-turns`) stops the turn as it is.
       const final = !(loop.cap !== undefined && maxSteps === loop.cap) && step === maxSteps - 1
       if (final) messages.push({ role: "user", content: "The agent step limit is reached. Summarize the work and what remains. Reply with text only; do not call tools." })
-      const available = withDiscovery(toolset, messages, input.permissionMode() === "plan")
+      const available = withDiscovery(toolset, messages, input.permissionMode() === "plan", input.sessionId)
       if (loop.trackContext) lastSpecs.set(input.sessionId, final ? [] : available.specs)
       if (loop.trackContext && available.catalog) lastCatalog.set(input.sessionId, available.catalog)
       let reply: Awaited<ReturnType<typeof callModel>>
@@ -2304,7 +2314,7 @@ export function createNativeEngine(options: {
       const agent = lastAgent.has(sessionId) ? lastAgent.get(sessionId) : options.agents?.primary(sessionId)
       const agentText = agent ? agentSection(agent) : ""
       const subagents = lastSubagents.get(sessionId) ?? options.agents?.subagents(cwd) ?? []
-      const fresh = lastSpecs.has(sessionId) && lastCatalog.has(sessionId) ? undefined : withDiscovery(withAgent(withSubagents(withProjectTools(mainToolset, await options.projectTools?.(cwd, sessionId) ?? []), subagents), agent), messages)
+      const fresh = lastSpecs.has(sessionId) && lastCatalog.has(sessionId) ? undefined : withDiscovery(withAgent(withSubagents(withProjectTools(mainToolset, await options.projectTools?.(cwd, sessionId) ?? []), subagents), agent), messages, false, sessionId)
       const toolSpecs = lastSpecs.get(sessionId) ?? fresh!.specs
       const catalog = lastCatalog.get(sessionId) ?? fresh?.catalog
       const context: SystemContext = { sessionId, prompt: lastPrompt(messages), ...(catalog ? { tools: catalog } : {}) }
@@ -2612,7 +2622,7 @@ export function createNativeEngine(options: {
         const native = checkpoint.method === "native"
         const retained = portable.length - selected.tail.length
         const resumeImages = native ? [] : resumeImageRefs(portable.slice(0, Math.max(0, retained)), selected.tail)
-        const content = native ? summary : [summary, engineAnchor({ messages: portable, tail: selected.tail }), RESUME_GUIDANCE].filter(Boolean).join("\n\n")
+        const content = native ? summary : [summary, engineAnchor({ messages: portable, tail: selected.tail, processes: runningProcesses(input.sessionId) }), RESUME_GUIDANCE].filter(Boolean).join("\n\n")
         checkpoint.tailMessages = selected.tail.length
         await options.history.replace(input.sessionId, [{ role: "user", content: `${SUMMARY_PREFIX}\n\n${content}`, compaction: checkpoint, ...(resumeImages.length ? { attachments: resumeImages } : {}) }, ...selected.tail])
         if (nativeItemId) input.emit({ type: "item.completed", itemId: nativeItemId, status: "ok", text: summary, meta })

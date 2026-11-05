@@ -1,5 +1,6 @@
 import type { Database } from "bun:sqlite"
 import type { SessionEvent } from "@mendcode/protocol"
+import { CACHE_HIT_SHARE, CACHE_SAMPLE_MIN_GAP_MS } from "@mendcode/protocol/wire"
 import { eventFromRow, type EventRow } from "./compress"
 
 /**
@@ -98,6 +99,25 @@ export function createUsageCalls(input: { db: Database; dayOf(at: number): strin
         SELECT session_id AS sessionId, seq, at, turn_id AS turnId, provider, model, input, output, reasoning, cache_read AS cacheRead,
           cache_write AS cacheWrite, cost_micros AS costMicros, context, compact_at AS compactAt, ttl, duration_ms AS durationMs
         FROM usage_calls WHERE day BETWEEN ? AND ?${scoped(range)} ORDER BY session_id, seq`).all(...args(range))
+    },
+    /**
+     * What the provider's cache did between consecutive main calls of one session (the learner of docs/prompt-cache.md, "Cache lifetime"):
+     * the gap since the call before and whether the response read from the cache at least `CACHE_HIT_SHARE` of the call before's prompt (a shared system prompt alone is not the conversation's cache). Pairs with a compaction between them are left out (the prefix
+     * changed on purpose), as are prompts under `minPrompt` tokens. The newest `limit`.
+     */
+    cacheSamples(query: { provider: string; ttl: "1h" | null; since: number; minPrompt: number; limit: number }): Array<{ gapMs: number; hit: boolean }> {
+      const rows = db.query<{ gapMs: number; hit: number }, [number, string, string, number, number, number, string | null, string | null, number]>(`
+        SELECT gap AS gapMs, cache_read >= ? * prev_prompt AS hit FROM (
+          SELECT session_id, seq, at, provider, ttl, prompt, at - COALESCE(duration_ms, 0) - LAG(at - COALESCE(duration_ms, 0)) OVER w AS gap,
+            cache_read AS cache_read, LAG(prompt) OVER w AS prev_prompt, LAG(seq) OVER w AS prev_seq, LAG(provider) OVER w AS prev_provider, LAG(ttl) OVER w AS prev_ttl
+          FROM (SELECT *, input + cache_read + cache_write AS prompt FROM usage_calls WHERE compact_at IS NOT NULL AND day >= ?)
+          WINDOW w AS (PARTITION BY session_id ORDER BY seq)
+        ) AS pairs
+        WHERE prev_seq IS NOT NULL AND provider = ? AND prev_provider = provider AND gap >= ? AND prompt >= ? AND prev_prompt >= ?
+          AND ttl IS ? AND prev_ttl IS ?
+          AND NOT EXISTS (SELECT 1 FROM usage_compactions c WHERE c.session_id = pairs.session_id AND c.seq > pairs.prev_seq AND c.seq < pairs.seq)
+        ORDER BY at DESC LIMIT ?`).all(CACHE_HIT_SHARE, dayOf(query.since), query.provider, CACHE_SAMPLE_MIN_GAP_MS, query.minPrompt, query.minPrompt, query.ttl, query.ttl, query.limit)
+      return rows.map((row) => ({ gapMs: row.gapMs, hit: row.hit === 1 }))
     },
     compactions(range: UsageCallRange): UsageCompactionRow[] {
       return db.query<UsageCompactionRow, string[]>(`

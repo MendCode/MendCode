@@ -48,3 +48,30 @@ test("every model call and finished compaction becomes a row in session order, s
   expect(store.usageCalls.compactions({ from: DAY, to: DAY })).toHaveLength(1)
   store.close()
 })
+
+test("cache samples pair consecutive main calls of a provider, skipping a compaction between them and short prompts", () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "mend-usage-samples-"))
+  dirs.push(dir)
+  let clock = T0
+  const store = openStore({ dir, now: () => clock })
+  const session = ids("session")
+  store.createSession({ id: session, directory: "/repo", title: "samples" })
+  const turnId = ids("turn")
+  const call = (at: number, cacheRead: number, extra: Record<string, unknown> = {}) => {
+    clock = at
+    store.sessionSink.append({ type: "usage.recorded", sessionId: session, turnId, provider: "chatgpt", model: "gpt-6", input: 6_000, output: 10, reasoning: 0, cacheRead, cacheWrite: 0, compactAt: 200_000, ...extra } as never)
+  }
+  call(T0, 0)
+  call(T0 + 4 * 60_000, 6_000)
+  call(T0 + 20 * 60_000, 0)
+  clock = T0 + 21 * 60_000
+  store.sessionSink.append({ type: "compaction.updated", sessionId: session, turnId, reason: "auto", state: "writing", followUp: "" })
+  clock = T0 + 22 * 60_000
+  store.sessionSink.append({ type: "compaction.updated", sessionId: session, turnId, reason: "auto", state: "packed", followUp: "" })
+  call(T0 + 30 * 60_000, 6_000)
+  call(T0 + 31 * 60_000, 3_000, { input: 100 })
+  const query = { provider: "chatgpt", ttl: null, since: T0 - 86_400_000, minPrompt: 4_096, limit: 50 }
+  expect(store.usageCalls.cacheSamples(query).map((row) => [row.gapMs, row.hit]).sort((a, b) => Number(a[0]) - Number(b[0]))).toEqual([[4 * 60_000, true], [16 * 60_000, false]])
+  expect(store.usageCalls.cacheSamples({ ...query, provider: "anthropic" })).toEqual([])
+  store.close()
+})

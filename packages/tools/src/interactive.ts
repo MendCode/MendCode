@@ -44,10 +44,10 @@ export const INTERACTIVE_LIMITS = {
   maxReadChars: 50_000,
   /** One `write` may carry this much input. */
   maxWriteChars: 16_384,
-  /** No tool call touched a session for this long: it is stopped. */
-  idleMs: 15 * 60 * 1_000,
-  /** A session still running after this long is stopped. */
-  maxLifetimeMs: 2 * 60 * 60 * 1_000,
+  /** No tool call touched a session for this long: it is stopped. 0 (the default) never stops an idle one: a server left running keeps running. */
+  idleMs: 0,
+  /** A session still running after this long is stopped. 0 (the default) lets it run until it ends, the agent or the user stops it, or its chat is deleted. */
+  maxLifetimeMs: 0,
   /** Finished sessions kept readable; the oldest are forgotten first. */
   maxFinished: 16,
   minSize: 1,

@@ -342,7 +342,22 @@ export function buildCompactionPrompt(input: { base: string; hasPreviousSummary:
  * Written by the engine, not the model: the latest real request, when the retained tail does not carry it, and the
  * open TODOs. A weak or lossy model summary therefore cannot lose what the next turn must continue.
  */
-export function engineAnchor(input: { messages: readonly ModelMessage[]; tail: readonly ModelMessage[] }): string {
+/** A command the session left running: what the engine can say of it without reading its output. */
+export type RunningProcess = { kind: "background" | "terminal"; id: string; command: string; running: boolean; seconds: number }
+const PROCESS_MAX_ITEMS = 12
+const PROCESS_COMMAND_MAX_CHARS = 200
+
+/** The commands still running when the history was packed. They live in the daemon, not in the history, so the summary cannot lose them or their unread output. */
+export function processAnchorLines(processes: readonly RunningProcess[]): string[] {
+  const live = processes.filter((process) => process.running).slice(0, PROCESS_MAX_ITEMS)
+  if (!live.length) return []
+  return [
+    "- Commands still running (they survive this compaction; their unread output is kept):",
+    ...live.map((process) => `    ${process.id} (${process.kind === "background" ? "shell_output reads it, shell_kill stops it" : "shell_session read or kill"}) running ${Math.floor(process.seconds / 60)}m: ${compactTextHead(process.command, PROCESS_COMMAND_MAX_CHARS)}`),
+  ]
+}
+
+export function engineAnchor(input: { messages: readonly ModelMessage[]; tail: readonly ModelMessage[]; processes?: readonly RunningProcess[] }): string {
   const lines: string[] = []
   const index = latestRealUserIndex(input.messages)
   const tailStart = input.messages.length - input.tail.length
@@ -352,6 +367,7 @@ export function engineAnchor(input: { messages: readonly ModelMessage[]; tail: r
   }
   const open = openTodos(currentTodos(input.messages))
   if (open.length) lines.push("- Open TODOs at compaction:", ...open.map((todo) => `    [${todo.status}] ${compactTextHead(todo.text, 300)}`))
+  lines.push(...processAnchorLines(input.processes ?? []))
   return lines.length ? `${ENGINE_ANCHOR_HEADING}\n${lines.join("\n")}` : ""
 }
 

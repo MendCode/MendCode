@@ -35,7 +35,7 @@ export { approvalRuleOffer, withApprovalRules, type ApprovalRule, type ApprovalR
 export { createIdFactory, ID_PREFIXES } from "./id-factory"
 export { DEFAULT_PROFILE, PROFILE_NAME, profileFor, type ProfileRule } from "./profiles"
 export { findSecrets, redactEventText, redactSecrets, replaceSecretMarkers, replaceSecrets, secretMarker, type Redaction, type SecretFinding } from "./redact"
-export { DEFAULT_IDLE_COMPACT_AT_TOKENS, IDLE_COMPACT_MARGIN_MS, ANTHROPIC_CACHE_LIFETIME_MS, OPENAI_CACHE_LIFETIME_MS, CHATGPT_CACHE_LIFETIME_MS, ANTHROPIC_CACHE_LIFETIME_1H_MS, CACHE_TTLS, CACHE_TTL_PROVIDER_TYPES, WAIT_CACHE_AFTER, nextWaitCache, type CacheTtl, type WaitCacheState, CACHE_LIFETIME_MINUTES_RANGE, IDLE_COMPACT_OFF_REASONS, IDLE_COMPACT_NOTE, cacheLifetime, type CacheLifetime, type CacheLifetimeSource, type IdleCompactOffReason } from "./idle-compaction-data"
+export { DEFAULT_IDLE_COMPACT_AT_TOKENS, IDLE_COMPACT_MARGIN_MS, ANTHROPIC_CACHE_LIFETIME_MS, OPENAI_CACHE_LIFETIME_MS, CHATGPT_CACHE_LIFETIME_MS, ANTHROPIC_CACHE_LIFETIME_1H_MS, CACHE_TTLS, CACHE_TTL_PROVIDER_TYPES, WAIT_CACHE_AFTER, nextWaitCache, type CacheTtl, type WaitCacheState, CACHE_LIFETIME_MINUTES_RANGE, IDLE_COMPACT_OFF_REASONS, IDLE_COMPACT_NOTE, cacheLifetime, observedCacheLifetime, CACHE_HIT_SHARE, CACHE_SAMPLES_MAX, CACHE_SAMPLE_MIN_GAP_MS, CACHE_SAMPLE_WINDOW_MS, CACHE_SAMPLE_MIN_PROMPT_TOKENS, type CacheSample, type ObservedCacheLifetime, type CacheLifetime, type CacheLifetimeSource, type IdleCompactOffReason } from "./idle-compaction-data"
 export {
   DEFAULT_COMPACT_AT_TOKENS,
   DEFAULT_FOOTER,

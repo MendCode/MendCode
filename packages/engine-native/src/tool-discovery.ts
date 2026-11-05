@@ -78,10 +78,12 @@ export const LEGACY_CATALOG: CatalogMode = { lean: false, planTools: true, aux: 
 /**
  * The auxiliary tools the conversation already calls for, so nothing that worked with them listed needs a search first: the plan
  * tools while the session is in plan mode, the two that read and stop a background command once one was started, and a sub-agent's
- * status once one was launched.
+ * status once one was launched. `background` says the session still owns background commands (the registry outlives a compaction, which drops
+ * the call that started them), so their two tools stay listed.
  */
-export function impliedTools(messages: readonly ModelMessage[], plan: boolean): string[] {
+export function impliedTools(messages: readonly ModelMessage[], plan: boolean, background = false): string[] {
   const implied = new Set<string>(plan ? ["plan_submit", "plan_review", "plan_exit"] : [])
+  if (background) { implied.add("shell_output"); implied.add("shell_kill") }
   for (const message of messages) {
     if (message.role !== "assistant") continue
     for (const call of message.toolCalls) {

@@ -73,7 +73,7 @@ export const ContextLimits = lazySchema(() => z.strictObject({
     atTokens: z.number().int().positive(),
     provider: z.string().optional(),
     lifetimeMinutes: z.number().positive().optional(),
-    lifetimeSource: z.enum(["setting", "documented", "assumed"]).optional(),
+    lifetimeSource: z.enum(["setting", "observed", "documented", "assumed"]).optional(),
   }).optional(),
 }))
 export type ContextLimits = z.infer<typeof ContextLimits>

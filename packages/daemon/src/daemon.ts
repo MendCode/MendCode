@@ -1,4 +1,4 @@
-import { DEFAULT_COMPACT_AT_TOKENS, claudeFastModel, estimateTokens } from "@mendcode/protocol/wire"
+import { CACHE_SAMPLES_MAX, CACHE_SAMPLE_MIN_PROMPT_TOKENS, CACHE_SAMPLE_WINDOW_MS, DEFAULT_COMPACT_AT_TOKENS, claudeFastModel, estimateTokens } from "@mendcode/protocol/wire"
 import { claudeAlias } from "./claude-models"
 import { recoverUsage } from "./usage-recovery"
 import { createConsole } from "./console"
@@ -660,9 +660,11 @@ export async function startDaemon(options: DaemonOptions) {
    * next tool result (so the model that started the task is not left waiting for it); an idle session is woken by it, and after a user
    * cancel it waits for the user (FC-13).
    */
-  const interactive = createInteractiveProcesses(options.interactive?.driver ? { driver: options.interactive.driver } : {})
+  // Commands the agent leaves running have no cap unless the user sets `processLimits` (docs/interactive-tools.md); read at each start and sweep.
+  const minutesToMs = (minutes: number | undefined) => minutes === undefined ? undefined : minutes * 60_000
+  const interactive = createInteractiveProcesses({ ...(options.interactive?.driver ? { driver: options.interactive.driver } : {}), caps: () => { const limits = store.settings.get().processLimits; return { idleMs: minutesToMs(limits?.idleMinutes), maxLifetimeMs: minutesToMs(limits?.lifetimeMinutes) } } })
   // The exit notice is dropped unread once shell_output gave the model that task's exit and final output itself.
-  const background: ReturnType<typeof createBackgroundTasks> = createBackgroundTasks({ onExit: (sessionId, task, tail) => void actorFor(sessionId as SessionId)?.notify(secrets.mask(sessionId as SessionId, backgroundNotice(task, tail)), undefined, false, "steer", true, () => background.exitShown(sessionId, task.id)), onWatch: (sessionId, task, lines, final) => void actorFor(sessionId as SessionId)?.notify(secrets.mask(sessionId as SessionId, watchNotice(task, lines, final)), undefined, false, "steer", true) })
+  const background: ReturnType<typeof createBackgroundTasks> = createBackgroundTasks({ lifetimeMs: () => minutesToMs(store.settings.get().processLimits?.lifetimeMinutes), onExit: (sessionId, task, tail) => void actorFor(sessionId as SessionId)?.notify(secrets.mask(sessionId as SessionId, backgroundNotice(task, tail)), undefined, false, "steer", true, () => background.exitShown(sessionId, task.id)), onWatch: (sessionId, task, lines, final) => void actorFor(sessionId as SessionId)?.notify(secrets.mask(sessionId as SessionId, watchNotice(task, lines, final)), undefined, false, "steer", true) })
 
   /** Where extensions are found for a project: what ships with MendCode, enabled packages, then the user's and the project's own folders. */
   const builtin = builtinDir(options.dir)
@@ -2347,6 +2349,7 @@ export async function startDaemon(options: DaemonOptions) {
       if (background.listAll(sessionId).some((task) => task.status === "running")) return false
       return !tasks.list(sessionId).some((task) => task.state === "queued" || task.state === "running" || task.state === "needs_input")
     },
+    history: ({ provider, ttl }) => store.usageCalls.cacheSamples({ provider, ttl: ttl === "1h" ? "1h" : null, since: clock.now() - CACHE_SAMPLE_WINDOW_MS, minPrompt: CACHE_SAMPLE_MIN_PROMPT_TOKENS, limit: CACHE_SAMPLES_MAX }),
     compact: async (sessionId) => (await actorFor(sessionId)?.compactIdle()) ?? false,
   })
   sessionObservers.push(idleCompaction.observe)

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { createVirtualClock } from "@mendcode/kernel"
-import { ANTHROPIC_CACHE_LIFETIME_1H_MS, ANTHROPIC_CACHE_LIFETIME_MS, CHATGPT_CACHE_LIFETIME_MS, DEFAULT_IDLE_COMPACT_AT_TOKENS, IDLE_COMPACT_MARGIN_MS, OPENAI_CACHE_LIFETIME_MS, cacheLifetime } from "@mendcode/protocol/wire"
+import { ANTHROPIC_CACHE_LIFETIME_1H_MS, ANTHROPIC_CACHE_LIFETIME_MS, CHATGPT_CACHE_LIFETIME_MS, DEFAULT_IDLE_COMPACT_AT_TOKENS, IDLE_COMPACT_MARGIN_MS, OPENAI_CACHE_LIFETIME_MS, cacheLifetime, observedCacheLifetime, type CacheSample } from "@mendcode/protocol/wire"
 import type { SessionEvent, SessionId, Settings, TurnId } from "@mendcode/protocol"
 import { createIdleCompaction, idleCompactFireAt } from "../src/idle-compaction"
 
@@ -11,7 +11,7 @@ const LIFETIME = CHATGPT_CACHE_LIFETIME_MS
 const FIRE_IN = LIFETIME - IDLE_COMPACT_MARGIN_MS
 
 /** The scheduler on a virtual clock, with every condition a switch the test flips. Nothing sleeps. */
-function setup(overrides: { settings?: Partial<Settings>; providers?: Record<string, { type?: string; baseUrl?: string }> } = {}) {
+function setup(overrides: { settings?: Partial<Settings>; providers?: Record<string, { type?: string; baseUrl?: string }>; history?: CacheSample[] } = {}) {
   const clock = createVirtualClock(START)
   const state = { enabled: true, packs: true, child: false, idle: true, started: true, settings: (overrides.settings ?? {}) as Partial<Settings> }
   const compacted: SessionId[] = []
@@ -21,6 +21,7 @@ function setup(overrides: { settings?: Partial<Settings>; providers?: Record<str
     enabled: () => state.enabled,
     settings: () => state.settings,
     provider: (id) => overrides.providers?.[id],
+    ...(overrides.history ? { history: () => overrides.history! } : {}),
     packs: () => state.packs,
     child: () => state.child,
     idle: () => state.idle,
@@ -345,5 +346,68 @@ describe("cache lifetimes: a call written at 1h (promptCacheTtl, wait_cache)", (
     call(150_000, { provider: "work", cacheTtl: "1h" })
     clock.advance(30 * 60_000)
     expect(idle.status(SESSION).scheduled).toBe(true)
+  })
+})
+
+const MIN = 60_000
+const samples = (minutes: number, hits: number, misses: number): CacheSample[] => [...Array(hits).fill({ gapMs: minutes * MIN, hit: true }), ...Array(misses).fill({ gapMs: minutes * MIN, hit: false })]
+
+describe("cache lifetimes: learned from the cached tokens of each response", () => {
+  test("the lifetime is the longest hit gap before the first bucket that mostly misses", () => {
+    expect(observedCacheLifetime([...samples(4, 5, 0), ...samples(9, 3, 0), ...samples(14, 0, 4)])).toEqual({ ms: 9 * MIN, closed: true })
+    expect(observedCacheLifetime([...samples(4, 5, 0), ...samples(12, 1, 0)])).toEqual({ ms: 4 * MIN, closed: false })
+    expect(observedCacheLifetime([...samples(180, 4, 0), ...samples(400, 0, 5)])).toEqual({ ms: 180 * MIN, closed: true })
+  })
+
+  test("too few samples in a bucket say nothing, and a window with no hits has no lifetime", () => {
+    expect(observedCacheLifetime(samples(4, 2, 0))).toBeUndefined()
+    expect(observedCacheLifetime(samples(4, 0, 6))).toBeUndefined()
+    expect(observedCacheLifetime([])).toBeUndefined()
+  })
+
+  test("a setting wins; observed replaces an assumed lifetime when closed or longer, a documented one only when longer", () => {
+    const longer = { ms: 40 * MIN, closed: false }
+    const shorter = { ms: 3 * MIN, closed: true }
+    expect(cacheLifetime({ provider: "chatgpt", observed: longer })).toEqual({ ms: 40 * MIN, source: "observed" })
+    expect(cacheLifetime({ provider: "chatgpt", observed: shorter })).toEqual({ ms: 3 * MIN, source: "observed" })
+    expect(cacheLifetime({ provider: "chatgpt", observed: { ms: 3 * MIN, closed: false } })).toEqual({ ms: CHATGPT_CACHE_LIFETIME_MS, source: "assumed" })
+    expect(cacheLifetime({ provider: "a", type: "anthropic", observed: shorter })).toEqual({ ms: ANTHROPIC_CACHE_LIFETIME_MS, source: "documented" })
+    expect(cacheLifetime({ provider: "a", type: "anthropic", observed: longer })).toEqual({ ms: 40 * MIN, source: "observed" })
+    expect(cacheLifetime({ provider: "chatgpt", overrides: { chatgpt: 7 }, observed: longer })).toEqual({ ms: 7 * MIN, source: "setting" })
+    // A provider nobody states stays off until a bucket was seen failing.
+    expect(cacheLifetime({ provider: "x", observed: longer })).toBeUndefined()
+    expect(cacheLifetime({ provider: "x", observed: { ms: 20 * MIN, closed: true } })).toEqual({ ms: 20 * MIN, source: "observed" })
+  })
+
+  test("stored history that shows a longer cache moves the compaction to follow it", () => {
+    const { idle, call } = setup({ history: [...samples(4, 5, 0), ...samples(25, 5, 0), ...samples(40, 0, 5)] })
+    call()
+    expect(idle.status(SESSION)).toMatchObject({ scheduled: true, at: START + 25 * MIN - IDLE_COMPACT_MARGIN_MS, lifetimeMinutes: 25, lifetimeSource: "observed" })
+  })
+
+  test("live calls teach it: reads after 14 minutes lengthen the lifetime, misses after 4 shorten it", () => {
+    // Below the idle threshold nothing is compacted, so the session can wait past the lifetime in force and show what the cache did.
+    const { clock, idle, call } = setup()
+    const warm = { cacheRead: 50_000, input: 1_000 }
+    call(50_000)
+    for (let i = 0; i < 4; i++) { clock.advance(14 * MIN); call(50_000, warm) }
+    expect(idle.status(SESSION)).toMatchObject({ lifetimeSource: "observed", lifetimeMinutes: 14 })
+    const other = setup()
+    other.call(50_000)
+    for (let i = 0; i < 4; i++) { other.clock.advance(2 * MIN); other.call(50_000, warm) }
+    for (let i = 0; i < 4; i++) { other.clock.advance(4 * MIN); other.call(50_000) }
+    expect(other.idle.status(SESSION)).toMatchObject({ lifetimeSource: "observed", lifetimeMinutes: 2 })
+  })
+
+  test("a call after a compaction, or with a short prompt, is no sample", () => {
+    const { clock, idle, call, compaction } = setup()
+    const warm = { cacheRead: 150_000 }
+    call()
+    compaction("writing"); compaction("packed")
+    clock.advance(10 * MIN)
+    call(150_000, warm)
+    clock.advance(10 * MIN)
+    call(2_000, { ...warm, input: 100, cacheRead: 2_000 })
+    expect(idle.status(SESSION)).toMatchObject({ lifetimeSource: "assumed" })
   })
 })

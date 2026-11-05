@@ -238,3 +238,16 @@ test("summary acceptance trims prefaces, rejects tool-call cosplay and keeps oth
   expect(acceptSummary(`Sure, here it is:\n${STRUCTURED}`)).toEqual({ text: STRUCTURED, structured: true })
   expect(acceptSummary("custom format summary")).toEqual({ text: "custom format summary", structured: false })
 })
+
+test("the anchor lists the commands still running, with their ids, and not the ones that ended", () => {
+  const processes = [
+    { kind: "background" as const, id: "bg_1abc", command: "bun run dev", running: true, seconds: 3_700 },
+    { kind: "background" as const, id: "bg_2def", command: "bun test", running: false, seconds: 12 },
+    { kind: "terminal" as const, id: "pty_3ghi", command: "python3", running: true, seconds: 90 },
+  ]
+  const anchor = engineAnchor({ messages: [user("only")], tail: [user("only")], processes })
+  expect(anchor).toContain("bg_1abc (shell_output reads it, shell_kill stops it) running 61m: bun run dev")
+  expect(anchor).toContain("pty_3ghi (shell_session read or kill) running 1m: python3")
+  expect(anchor).not.toContain("bg_2def")
+  expect(engineAnchor({ messages: [user("only")], tail: [user("only")], processes: [processes[1]!] })).toBe("")
+})

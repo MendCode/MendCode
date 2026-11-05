@@ -23,6 +23,9 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Changed
 
+- Commands the assistant leaves running in the background or in a terminal no longer stop after a few hours or when left untouched; they run until they end, you stop them or the chat is deleted. The `processLimits` setting (`lifetimeMinutes`, `idleMinutes`) adds a cap if you want one.
+- Compaction while idle follows the prompt-cache lifetime the provider's responses show, not a fixed five minutes, so ChatGPT and OpenAI sessions are compacted less often when their cache lasts longer. See [prompt cache](docs/prompt-cache.md#observed-lifetime).
+- After a compaction the assistant still knows which commands are running and can read their output.
 - MendCode uses less memory right after it starts.
 - Answering a message takes much less memory, most of all the first one of a session.
 - A terminal that runs MendCode in one process holds less memory, and building a project's code graph is no slower for it.

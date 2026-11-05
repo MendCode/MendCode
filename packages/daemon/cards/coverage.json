@@ -4,7 +4,7 @@
     "attachments": "feature:voice command:voice command:attach group:Image_generation setting:image_generation setting:voice tool:image_gen",
     "backlog": "feature:backlog command:backlog",
     "one-tree": "feature:one_tree",
-    "background": "flag:async_tools flag:async_questions command:bg command:ps tool:question_start tool:question_status tool:shell_monitor tool:shell_session tool:sleep tool:tool_cancel tool:tool_start tool:tool_status tool:tool_wait",
+    "background": "setting:processLimits flag:async_tools flag:async_questions command:bg command:ps tool:question_start tool:question_status tool:shell_monitor tool:shell_session tool:sleep tool:tool_cancel tool:tool_start tool:tool_status tool:tool_wait",
     "budgets": "feature:usage_resume command:usage command:limit command:stats-project file:spend.json",
     "cache-ttl": "feature:wait_cache feature:cache_countdown setting:promptCacheTtl setting:claudeCacheTtl",
     "codegraph": "feature:codegraph feature:graph_autopilot feature:graph_context feature:orientation command:graph setting:codegraph_index tool:apply_patch tool:code_search tool:diagnostics tool:graph_callers tool:graph_file_api tool:graph_find tool:graph_impact tool:graph_map tool:lsp file:formatter.json file:lsp.json",
