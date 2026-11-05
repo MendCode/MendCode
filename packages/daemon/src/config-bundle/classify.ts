@@ -29,7 +29,7 @@ const AUTH_NAMES = ["providers.json", "environment.enc", "keys", "secrets.key", 
 
 /** Runtime state, caches, history and logs. */
 const OPERATIONAL_NAMES = [
-  "mendd.db", "mendd.db-wal", "mendd.db-shm", "mendd.lock", "mendd.sock", "mendd.endpoint", "blobs", "session-transcripts", "tool-output", "logs", "budget",
+  "mendd.db", "mendd.db-wal", "mendd.db-shm", "mendd.lock", "mendd.sock", "mendd.endpoint", "daemon-restart","blobs", "session-transcripts", "tool-output", "logs", "budget",
   "codegraph", "lsp", "fetch", "generated_images", "asides", "reviews", "Trash", ".Trash", "trash", "voice", "computer", "computer-native", "desktop", "quota-probe",
   "pets-cache", "models-dev-cache.json", "models.dev.json", "pr-watch.json", "project-rest.json", "model-resolutions.json", "acp-models.json", "mcp-pending-budget.json",
   "debug-snapshots", "diagnostics", "scratch", "scratchpads", "compound-runs", "compound-worktrees", "fanout-worktrees", "loop-worktrees", "worktrees", "worktree-manager",

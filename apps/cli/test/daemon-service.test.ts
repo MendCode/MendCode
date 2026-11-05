@@ -117,6 +117,23 @@ describe("daemon lifecycle CLI", () => {
     expect(busy.calls).toContain("daemon.shutdown")
   })
 
+  test("restart holds the terminals back from the stop through its own start, and lets go when it fails too; a refusal sets nothing", async () => {
+    const h = harness(true)
+    h.deps.restarting = (on) => void h.calls.push(`restarting ${on}`)
+    expect(await h.run("daemon", "restart")).toBe(0)
+    expect(h.calls.filter((call) => call.startsWith("restarting") || ["daemon.shutdown", "launch"].includes(call))).toEqual(["restarting true", "daemon.shutdown", "launch", "restarting false"])
+    const failing = harness(true)
+    failing.deps.restarting = (on) => void failing.calls.push(`restarting ${on}`)
+    failing.deps.launch = async () => { throw new Error("no start") }
+    expect(await failing.run("daemon", "restart")).toBe(1)
+    expect(failing.calls.filter((call) => call.startsWith("restarting"))).toEqual(["restarting true", "restarting false"])
+    const busy = harness(true)
+    busy.report.activeTurns = 1
+    busy.deps.restarting = (on) => void busy.calls.push(`restarting ${on}`)
+    expect(await busy.run("daemon", "restart")).toBe(1)
+    expect(busy.calls.filter((call) => call.startsWith("restarting"))).toEqual([])
+  })
+
   test("a busy refusal names the turns and who started them; --force says what it interrupted and that it resumes", async () => {
     const busy = harness(true)
     busy.report.activeTurns = 2

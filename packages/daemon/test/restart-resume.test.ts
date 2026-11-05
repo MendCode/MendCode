@@ -6,7 +6,7 @@ import { createRestartResume, RESUME_MAX_AGE_MS, RESUME_MAX_ATTEMPTS, RESUME_MAX
 const id = (value: string) => value as SessionId
 const interrupted = (turnId: string, ...extra: SessionEvent[]) => [{ type: "turn.started", turnId }, ...extra, { type: "turn.interrupted", turnId, reason: "restart", cause: "daemon_shutdown" }] as unknown as SessionEvent[]
 
-function setup(overrides: { enabled?: boolean; sessions?: Record<string, { turn?: SessionEvent[]; queued?: number; launcher?: string }>; resume?: (sessionId: string) => boolean } = {}) {
+function setup(overrides: { enabled?: boolean; sessions?: Record<string, { turn?: SessionEvent[]; launcher?: string }>; resume?: (sessionId: string) => boolean } = {}) {
   const rows = new Map<string, PendingResume>()
   const sessions = overrides.sessions ?? {}
   const told: Array<{ launcher: string; text: string }> = []
@@ -21,7 +21,6 @@ function setup(overrides: { enabled?: boolean; sessions?: Record<string, { turn?
       },
       launchers: { get: (child) => sessions[child]?.launcher },
       hasSession: (sessionId) => sessionId in sessions,
-      queueOf: (sessionId) => Array.from({ length: sessions[sessionId]?.queued ?? 0 }),
     },
     enabled: () => overrides.enabled ?? true,
     now: () => time,
@@ -63,7 +62,6 @@ describe("resuming the turns a daemon shutdown interrupted", () => {
     const cases: Array<{ name: string; setup: () => ReturnType<typeof setup>; reason?: string }> = [
       { name: "setting off", setup: () => setup({ enabled: false, sessions: { ses_a: { turn: interrupted("trn_1"), launcher: "ses_l" }, ses_l: {} } }), reason: "resumeAfterRestart is off" },
       { name: "shell", setup: () => setup({ sessions: { ses_a: { turn: shellTurn, launcher: "ses_l" }, ses_l: {} } }), reason: "a shell command is never run again" },
-      { name: "queue", setup: () => setup({ sessions: { ses_a: { turn: interrupted("trn_1"), launcher: "ses_l", queued: 2 }, ses_l: {} } }), reason: "messages are waiting in its queue" },
       { name: "busy", setup: () => setup({ resume: () => false, sessions: { ses_a: { turn: interrupted("trn_1"), launcher: "ses_l" }, ses_l: {} } }), reason: "the session was busy or held" },
       { name: "later turn", setup: () => setup({ sessions: { ses_a: { turn: interrupted("trn_2"), launcher: "ses_l" }, ses_l: {} } }) },
       { name: "turn ended", setup: () => setup({ sessions: { ses_a: { turn: [{ type: "turn.started", turnId: "trn_1" }, { type: "turn.completed", turnId: "trn_1" }] as unknown as SessionEvent[], launcher: "ses_l" }, ses_l: {} } }) },

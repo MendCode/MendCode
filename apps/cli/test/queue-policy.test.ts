@@ -1,6 +1,7 @@
 import { afterEach, expect, test } from "bun:test"
 import { createSettingsPageState, SETTINGS_GROUPS, settingsPageKey } from "../src/view/settings-page"
 import { renderQueuePanel } from "../src/view/queue-panel"
+import { createTranscript } from "../src/view/transcript"
 import { textWidth } from "../src/view/wrap"
 import { b51Harness } from "./b51-harness"
 import { appHarness, cleanTemps, NOW } from "./session-ui-harness"
@@ -66,4 +67,27 @@ test("queue header has key hints above a bordered panel and hides itself when em
   expect(rows.at(-1)).toContain("┘")
   expect(rows.join("\n")).toContain("+1 more")
   expect(panel.sendChip?.row).toBe(rows.findIndex((row) => row.includes("SEND")))
+})
+
+test("a held queue names what held it: a cancel, a daemon restart or an interruption", () => {
+  const title = (heldBy?: "cancel" | "restart" | "interrupt") => renderQueuePanel({ width: 100, previews: ["next"], held: true, ...(heldBy ? { heldBy } : {}) }).rows.map((line) => line.map((span) => span.text).join("")).join("\n")
+  expect(title("cancel")).toContain("1 queued · Held since your cancel")
+  expect(title("restart")).toContain("1 queued · Held since the restart")
+  expect(title("interrupt")).toContain("1 queued · Held since the interruption")
+  expect(title()).toContain("1 queued · Held")
+  expect(title()).not.toContain("your cancel")
+})
+
+test("the transcript remembers what stopped the last turn, for the held queue's label", () => {
+  const transcript = createTranscript()
+  const base = { sessionId: "ses_a", at: 1 } as const
+  transcript.apply({ ...base, seq: 1, type: "turn.started", turnId: "trn_1", queueId: "que_1" } as never)
+  transcript.apply({ ...base, seq: 2, type: "turn.interrupted", turnId: "trn_1", reason: "restart", cause: "daemon_shutdown" } as never)
+  expect(transcript.lastStop).toBe("restart")
+  transcript.apply({ ...base, seq: 3, type: "turn.started", turnId: "trn_2", queueId: "que_2" } as never)
+  transcript.apply({ ...base, seq: 4, type: "turn.cancelled", turnId: "trn_2" } as never)
+  expect(transcript.lastStop).toBe("cancel")
+  transcript.apply({ ...base, seq: 5, type: "turn.started", turnId: "trn_3", queueId: "que_3" } as never)
+  transcript.apply({ ...base, seq: 6, type: "turn.completed", turnId: "trn_3" } as never)
+  expect(transcript.lastStop).toBeUndefined()
 })

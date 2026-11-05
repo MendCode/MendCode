@@ -312,6 +312,8 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
   let lastEnd: { id: ItemId | undefined } | undefined
   let queue: Array<{ queueId: QueueId; preview: string; delivery?: "queue" | "steer" | "restart"; /** A system notice (a background task ended), not something the user typed. */ notice?: true }> = []
   let foreground: ForegroundState = "idle"
+  /** What ended the last turn when it did not finish on its own: it is why a held queue waits. */
+  let lastStop: "cancel" | "restart" | "interrupt" | undefined
   let permissionMode: PermissionMode = "ask"
   /** The session's last model call: its model and the context it used (input + cache read + output tokens). */
   let lastUsage: { provider: string; model: string; contextTokens: number | undefined; /** When the provider received the call: its prompt cache's lifetime counts from here. */ callAt?: number; /** The window the engine states, when it manages its own context. */ contextWindow?: number; /** The engine's figures disagreed and the tokens were clamped to the window. */ contextApprox?: boolean; /** Where MendCode packs this session, as the engine said with that call. */ compactAt?: number } | undefined
@@ -1233,15 +1235,19 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
         rebuild()
         break
       case "turn.completed":
+        lastStop = undefined
         finishTurn(event, { outcome: "completed" })
         break
       case "turn.cancelled":
+        lastStop = "cancel"
         finishTurn(event, { outcome: "cancelled" })
         break
       case "turn.interrupted":
+        lastStop = event.reason === "restart" ? "restart" : "interrupt"
         finishTurn(event, { outcome: "interrupted", reason: event.reason })
         break
       case "turn.failed":
+        lastStop = undefined
         finishTurn(event, { outcome: "failed", error: event.error })
         break
       case "foreground.state":
@@ -1356,6 +1362,7 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
     lastSeq = 0
     queue = []
     foreground = "idle"
+    lastStop = undefined
     permissionMode = "ask"
     lastUsage = undefined
     usageNotes.reset()
@@ -1432,6 +1439,9 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
     },
     get foreground() {
       return foreground
+    },
+    get lastStop() {
+      return lastStop
     },
     get permissionMode() {
       return permissionMode

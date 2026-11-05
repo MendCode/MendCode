@@ -176,7 +176,7 @@ draft; an untitled session with one reads `Draft · preview`), `current`, `selec
 
 Three kinds, one slot. `kind: "toast"`: `variant`, `title?`, `message` (return rows of equal width; they float at the top right).
 `kind: "limit"`: `view` (`state`, `provider?`, `message`, `resetsAt?`) and `chips` (`action`, `label`). `kind: "queue"`:
-`previews`, `delivery`, `held`, `paused`, `mode?`, `shell`. Actions: `send` (queue: send the queued message now) and, for
+`previews`, `delivery`, `held`, `heldBy?` (`cancel`, `restart` or `interrupt`: what ended the last turn), `paused`, `mode?`, `shell`. Actions: `send` (queue: send the queued message now) and, for
 a limit bar, the actions of `chips` (`resume`, `schedule`, `cancel`, `snooze`, `dismiss`). Return `undefined` for kinds you
 do not draw. For `kind: "toast"`, `inline: true` asks for the one-row form the inline live region uses (the message in the
 variant's color, `width` cells); a floating box does not fit there.

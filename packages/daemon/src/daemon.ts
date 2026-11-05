@@ -2351,7 +2351,7 @@ export async function startDaemon(options: DaemonOptions) {
     enabled: () => store.settings.get().resumeAfterRestart !== false,
     now: () => clock.now(),
     lastTurn: lastTurnEvents,
-    resume: async (sessionId, text) => (await actorFor(sessionId)?.steer({ text, label: "daemon restarted · resumed", meta: { restart: "resume" } })) ?? false,
+    resume: async (sessionId, text) => (await actorFor(sessionId)?.steer({ text, label: "daemon restarted · resumed", meta: { restart: "resume" }, afterRestart: true })) ?? false,
     tell: async (launcher, text, queueId) => actorFor(launcher)?.notify(text, queueId, false, "steer"),
     title: (sessionId) => secrets.mask(sessionId, store.sessionInfo(sessionId)?.title ?? ""),
     queueId: () => ids("queue"),

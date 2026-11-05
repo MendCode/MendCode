@@ -178,7 +178,7 @@ export const BUILTIN_VIEWS: { [S in Exclude<keyof ViewModels, "prompt.frame">]: 
       const bar = renderLimitBar({ width: m.width, view: m.view as UsageLimitView, now: m.now, glyphs: g })
       return { lines: bar.rows, hits: bar.chips.map((chip) => ({ row: chip.row, from: chip.from, to: chip.to, action: chip.action })) }
     }
-    const queue = renderQueuePanel({ width: m.width, previews: m.previews, delivery: m.delivery, held: m.held, paused: m.paused, ...(m.mode ? { mode: m.mode as never } : {}), shell: new Set(m.shell), notices: new Set(m.notices ?? []) })
+    const queue = renderQueuePanel({ width: m.width, previews: m.previews, delivery: m.delivery, held: m.held, ...(m.heldBy ? { heldBy: m.heldBy } : {}), paused: m.paused, ...(m.mode ? { mode: m.mode as never } : {}), shell: new Set(m.shell), notices: new Set(m.notices ?? []) })
     return { lines: queue.rows, hits: queue.sendChip ? [{ row: queue.sendChip.row, from: queue.sendChip.from, to: queue.sendChip.to, action: "send" }] : [] }
   },
   footer: (m) => {

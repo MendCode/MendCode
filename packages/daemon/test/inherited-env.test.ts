@@ -43,6 +43,13 @@ describe("the variables a Claude Code shell leaves behind", () => {
     expect(parseDroppedEnv("TUIOS_PANE_TOKEN,TUIOS_OTHER")).toEqual(["TUIOS_PANE_TOKEN"])
   })
 
+  test("a daemon a terminal in a Rex block starts drops that block and session; the Rex installation's variables stay", () => {
+    const environment: NodeJS.ProcessEnv = { REX_SESSION: "session:01a1", REX_BLOCK: "block:01a1", REX_SERVER: "unix:///tmp/rex.sock", REX_BIN_DIR: "/opt/rex/bin", PATH: "/bin" }
+    expect(withoutHostSessionEnv(environment)).toEqual({ REX_SERVER: "unix:///tmp/rex.sock", REX_BIN_DIR: "/opt/rex/bin", PATH: "/bin" })
+    expect(hostSessionEnvNames(environment, { pane: false })).toEqual([])
+    expect(parseDroppedEnv("REX_BLOCK,REX_SERVER")).toEqual(["REX_BLOCK"])
+  })
+
   test("the copy for a daemon leaves the caller's environment untouched", () => {
     const environment: NodeJS.ProcessEnv = { CLAUDECODE: "1", PATH: "/bin" }
     expect(withoutHostSessionEnv(environment)).toEqual({ PATH: "/bin" })

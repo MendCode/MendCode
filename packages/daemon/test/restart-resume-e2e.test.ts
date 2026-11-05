@@ -113,3 +113,79 @@ describe.skipIf(process.platform === "win32")("a daemon stop with a run --bg chi
     expect(second.daemon.store.resumes.count()).toBe(0)
   }, 120_000)
 })
+
+describe.skipIf(process.platform === "win32")("restarts in a row and a message queued behind the interrupted turn", () => {
+  async function boot() {
+    const dir = temp("mcev-p-rrq-")
+    const project = temp("mcev-p-rrq-project-")
+    const open = async () => {
+      const daemon = await startDaemon({ dir, socketPath: path.join(dir, "mendd.sock"), defaultDirectory: project, buildId: computeBuildId(), engine: ({ clock }) => createFauxEngine({ clock, deltaMs: 1 }) })
+      const terminal = createClient({ socketPath: daemon.socketPath, name: "owner" })
+      await terminal.connect()
+      let closed = false
+      const stop = async () => { if (closed) return; closed = true; terminal.close(); await daemon.stop() }
+      cleanups.push(() => stop().catch(() => undefined))
+      return { daemon, terminal, stop }
+    }
+    const first = await open()
+    const created = await first.terminal.send({ type: "session.create", directory: project, title: "seda" })
+    if (!created.ok) throw new Error(created.error.message)
+    const sessionId = created.result!.sessionId as SessionId
+    const log = async (client: typeof first.terminal) => {
+      const reply = await client.send({ type: "session.events", sessionId, after: 0 })
+      return reply.ok ? (reply.result!.events as Seen[]) : []
+    }
+    const until = async <T>(find: () => T | undefined | Promise<T | undefined>) => {
+      for (let i = 0; i < 400; i++) {
+        const found = await find()
+        if (found) return found
+        await Bun.sleep(25)
+      }
+      throw new Error("timed out waiting in the test")
+    }
+    const submit = (client: typeof first.terminal, text: string) => client.send({ type: "user.submit", sessionId, text, attachments: [] })
+    return { first, open, sessionId, log, until, submit }
+  }
+
+  test("a message queued while the turn ran does not stop the resume; it follows the resumed turn and the queue is not held", async () => {
+    const h = await boot()
+    expect((await h.submit(h.first.terminal, "/tool 5000")).ok).toBe(true)
+    await h.until(async () => (await h.log(h.first.terminal)).find((event) => event.type === "item.started" && event.kind === "tool_call"))
+    expect((await h.submit(h.first.terminal, "after the turn")).ok).toBe(true)
+    await h.until(async () => (await h.log(h.first.terminal)).find((event) => event.type === "queue.added"))
+
+    await h.first.stop()
+    const second = await h.open()
+    const events = await h.until(async () => {
+      const seen = await h.log(second.terminal)
+      return seen.filter((event) => event.type === "turn.completed").length >= 2 ? seen : undefined
+    })
+    const started = events.filter((event) => event.type === "turn.started")
+    expect(started).toHaveLength(3)
+    const users = events.filter((event) => event.type === "item.started" && event.kind === "user_message")
+    expect(users[1]!.meta?.restart).toBe("resume")
+    expect(events.find((event) => event.type === "item.completed" && event.text === "after the turn")).toBeDefined()
+    const queue = await second.terminal.send({ type: "queue.list", sessionId: h.sessionId })
+    expect(queue.ok && (queue.result as { held: boolean; entries: unknown[] })).toMatchObject({ held: false, entries: [] })
+    expect(second.daemon.store.resumes.count()).toBe(0)
+  }, 120_000)
+
+  test("a second restart right after the first still resumes the turn on the third start", async () => {
+    const h = await boot()
+    expect((await h.submit(h.first.terminal, "/tool 5000")).ok).toBe(true)
+    await h.until(async () => (await h.log(h.first.terminal)).find((event) => event.type === "item.started" && event.kind === "tool_call"))
+
+    await h.first.stop()
+    // The second daemon is stopped as soon as it is up, as `daemon restart --force` run twice in a row does.
+    const second = await h.open()
+    await second.stop()
+    const third = await h.open()
+    const events = await h.until(async () => {
+      const seen = await h.log(third.terminal)
+      return seen.some((event) => event.type === "turn.completed") ? seen : undefined
+    })
+    expect(events.filter((event) => event.type === "turn.interrupted").every((event) => event.cause === "daemon_shutdown")).toBe(true)
+    expect(events.filter((event) => event.type === "item.started" && event.kind === "user_message" && event.meta?.restart === "resume").length).toBeGreaterThanOrEqual(1)
+    expect(third.daemon.store.resumes.count()).toBe(0)
+  }, 120_000)
+})

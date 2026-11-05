@@ -136,6 +136,9 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 ### Fixed
 
 - Claude Opus 5.5, Sonnet 5.5, Haiku 5.5, Fable and the other current models work with an Anthropic API key at every `/effort`: they get adaptive thinking at that effort instead of a token budget they reject. Older Claude models are unchanged. See [providers](docs/providers.md).
+- A turn a daemon restart interrupted resumes even when messages were waiting behind it; they follow the resumed turn instead of staying held.
+- A held queue says why: your cancel, the restart or an interruption.
+- `mendcode daemon restart` starts the next daemon itself: open terminals wait for it instead of starting one with their own environment. A daemon started from a Rex block no longer carries that block's `REX_SESSION` and `REX_BLOCK`.
 - A pull request with a very large diff of data or generated files is reviewed instead of refused for its size: data files are set aside for readers before their content is read, and the size limit applies to the code that is left.
 - A push reviews only what changed since the last review of this login on the pull request, also on a device that has no saved state; the summary names that head.
 - A review that failed for good is not queued and announced again at every daemon start; `/reviews` still shows it and `r` retries it.
