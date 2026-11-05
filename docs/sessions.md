@@ -544,8 +544,10 @@ turn started; `reverted` marks undone messages (they still appear, so a client c
 - attachments are listed by name (`Attachments: a.txt, shot.png`; in JSON `{ name, mime, bytes }`), never inlined;
 - message text is cut at 40 000 characters, tool output at 120 lines and 6 000 characters (`… N more lines`), other items
   at 4 000 for Markdown. JSON keeps retained parts up to 65,520 characters each, including bounded local text blobs, input, authority, metadata and declarative renders; a cut item and the whole export are flagged `truncated`;
-- the whole export stops at `EXPORT_MAX_CHARS` (120 000) of item text and is then cut to what one ack frame allows
-  (`MAX_FRAME_BYTES`, counted after JSON escaping): Markdown ends with `> Export truncated…`, JSON drops trailing turns.
+- the whole export holds at most `EXPORT_MAX_CHARS` (120 000) of item text, 1 000 turns and one ack frame
+  (`MAX_FRAME_BYTES`, counted after JSON escaping). A longer session keeps how it **ends**: the oldest turns are left out, a
+  few bounded passes find the newest whole turns that fit, Markdown opens with `> Earlier turns left out…` and ends with
+  `> Export truncated…`, and JSON is flagged `truncated`. When not even the last turn fits, Markdown keeps its end.
   The ack's `truncated` says so.
 
 Markdown (`# title`, the directory, then `## User`, `**Tool:** \`title\`` with a fenced output, `## Assistant`, notes for
@@ -561,7 +563,7 @@ failed, cancelled or interrupted turns; a `!command` is `## User (shell)`, a not
 `error`, `tool`, `source`, `attachments` and `truncated` appear only when they apply. The CLI's `mendcode export`
 now calls this command instead of returning raw NDJSON events.
 
-**HTML.** `session.export { format: "html" }` returns one self-contained page: inline CSS only, no script, no network (its CSP is `default-src 'none'`), light/dark from the viewer's setting, all text escaped, fenced code as `<pre>`. Tool input/output and thinking sit behind CSS-only checkboxes ("Tool details", "Thinking" chips in the header) that are off until clicked; printing shows everything. `toolDetails` defaults to true for HTML (the page hides it anyway); `reasoning`, metadata, timestamps and `sanitize` behave as for Markdown. The same frame limit applies: trailing turns are dropped and the ack says `truncated`.
+**HTML.** `session.export { format: "html" }` returns one self-contained page: inline CSS only, no script, no network (its CSP is `default-src 'none'`), light/dark from the viewer's setting, all text escaped, fenced code as `<pre>`. Tool input/output and thinking sit behind CSS-only checkboxes ("Tool details", "Thinking" chips in the header) that are off until clicked; printing shows everything. `toolDetails` defaults to true for HTML (the page hides it anyway); `reasoning`, metadata, timestamps and `sanitize` behave as for Markdown. The same limits apply: the oldest turns are left out and the ack says `truncated`.
 
 ## Left out of v1's behaviour
 
