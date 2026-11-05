@@ -151,7 +151,7 @@ describe("effectiveSettings", () => {
   test("flags follow the feature: JEV on in full, opt-in flags off below their tier, nothing is written back", () => {
     const input = { tier: "full", experimental: { code_mode: true } } as TierSettings
     const full = effectiveSettings(input)
-    expect(full.experimental).toEqual({ code_mode: true, reasoning_auto: true, thread_tools: true, tool_discovery: true })
+    expect(full.experimental).toEqual({ code_mode: true, git_actions: true, reasoning_auto: true, thread_tools: true, tool_discovery: true })
     expect(input.experimental).toEqual({ code_mode: true })
     const balanced = effectiveSettings({ tier: "balanced", experimental: { code_mode: true, snip: true } } as TierSettings)
     expect(balanced.experimental).toMatchObject({ code_mode: false, snip: false, reasoning_auto: false })
@@ -167,6 +167,22 @@ describe("effectiveSettings", () => {
     expect(effectiveSettings({ tier: "minimalist" } as TierSettings).tools).toMatchObject({ threads: false })
     expect(featureState({ tier: "minimalist", experimental: { thread_tools: true } }, "threads")).toEqual({ on: true, why: "setting" })
     expect(featureState({ tier: "full", experimental: { thread_tools: false } }, "threads")).toEqual({ on: false, why: "setting" })
+  })
+
+  test("git_actions: the tier allows it from balanced, full switches it on by default, and what the user wrote always wins", () => {
+    const on = (settings: TierSettings) => effectiveSettings(settings).experimental?.git_actions
+    expect(on({} as TierSettings)).toBeUndefined()
+    expect(on({ tier: "minimalist" } as TierSettings)).toBe(false)
+    expect(on({ tier: "balanced" } as TierSettings)).toBeUndefined()
+    expect(on({ tier: "full" } as TierSettings)).toBe(true)
+    expect(on({ tier: "balanced", experimental: { git_actions: true } } as TierSettings)).toBe(true)
+    expect(on({ tier: "full", experimental: { git_actions: false } } as TierSettings)).toBe(false)
+    expect(on({ tier: "full", features: { git_actions: false } } as TierSettings)).toBe(false)
+    expect(on({ tier: "minimalist", experimental: { git_actions: true } } as TierSettings)).toBe(false)
+    // The stored settings are never written to.
+    const stored = { tier: "full" } as TierSettings
+    effectiveSettings(stored)
+    expect(stored.experimental).toBeUndefined()
   })
 
   test("review_config belongs to pr_review: denied below balanced and when the feature is forced off, kept from balanced up", () => {

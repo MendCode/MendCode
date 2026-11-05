@@ -254,6 +254,7 @@ import { createPeers } from "./peers"
 import { createThreads, threadMentions } from "./threads"
 import { tierDisabledPackages } from "./package-tier"
 import { createAgentGate, createPeerOrigin, type AgentOrigin } from "./agent-origin"
+import { createSessionStarter } from "./session-start"
 import { continuationTurnOptions, REMOTE_HOST_SETTINGS, remoteExecutionCommand, remoteExecutionSettings, remoteTurnOptions } from "./remote-policy"
 import { SETTINGS_PROPOSAL_LOCAL } from "./settings-tool"
 import { createAgentCommands } from "./agent-commands"
@@ -2516,6 +2517,27 @@ export async function startDaemon(options: DaemonOptions) {
   sessionObservers.push(agentCommands.observe)
   agentCommands.recover()
 
+  /** A session opens another in a different project's folder (`threads start`, docs/peers.md): that folder's own mode, never above the opener's. */
+  const sessionStarter = createSessionStarter({
+    store,
+    home: homedir(),
+    safeMode: options.safeMode,
+    id: () => ids("session"),
+    permissionOf: (sessionId) => livePermission(sessionId),
+    agentFor: (directory) => {
+      const settings = store.settings.get()
+      const configured = settings.projectConfig?.[canonicalDir(directory)]?.defaultAgent ?? settings.defaultAgent
+      try { return configured && !agents.selectable(directory, configured) ? configured : agents.defaultName(directory) } catch { return undefined }
+    },
+    opened: async ({ sessionId, directory, mode }) => {
+      sessionSharing.created(sessionId)
+      announceSession(sessionId, directory)
+      publishActivity(sessionId, "idle", true)
+      const actor = actorFor(sessionId)
+      if (actor && mode !== "ask") await actor.handle({ id: ids("command"), clientId: taskClientId, type: "session.permission.set", sessionId, mode })
+    },
+  })
+
   /** Messages between the sessions of one project (`sessions`, `tell`); answers return to the sender as notices. */
   const peers = createPeers({
     clock,
@@ -2527,14 +2549,17 @@ export async function startDaemon(options: DaemonOptions) {
       return page.ok ? { ok: true, output: page.result.text, ...(page.result.next ? { next: page.result.next } : {}) } : { ok: false, message: page.message.replace(/^\[DAEMON\]: /, "") }
     },
     waiting: (sessionId) => agentCommands.waiting(sessionId),
-    deliver: async (from, to, text, mode) => {
+    deliver: async (from, to, text, mode, elsewhere) => {
       const waiting = actors.get(to)?.snapshot().foreground !== undefined && actors.get(to)?.snapshot().foreground !== "idle"
       try {
-        const command = await agentCommands.create(from, to, { kind: "peer_message", text: text.slice(0, 4000), ...(mode ? { mode } : {}) })
+        const command = await agentCommands.create(from, to, { kind: "peer_message", text: text.slice(0, 4000), ...(mode ? { mode } : {}) }, undefined, { elsewhere: elsewhere === true })
         return command.queueId ? { ok: true, waiting } : { ok: false, message: command.error ?? "Target could not take the message" }
       } catch (error) { return { ok: false, message: String(error) } }
     },
     sessions: (directory, limit) => store.listSessions({ directory, limit }),
+    everywhere: (limit) => store.listSessions({ limit, hideEmpty: true }),
+    authority: (sessionId) => livePermission(sessionId),
+    create: (request) => sessionStarter.start(request),
     info: (sessionId) => store.sessionInfo(sessionId),
     state: (sessionId) => actors.get(sessionId)?.snapshot().foreground ?? "idle",
     notify: async (sessionId, text, delivery) => actorFor(sessionId)?.notify(text, undefined, false, delivery),
@@ -2547,6 +2572,7 @@ export async function startDaemon(options: DaemonOptions) {
     clock,
     store,
     ...(options.foreignThreads ? { foreign: createForeignThreads(options.foreignThreads) } : {}),
+    startPlan: (from, directory) => sessionStarter.plan(from, directory),
     peers: (sessionId) => peers.port(sessionId),
     state: (sessionId) => actors.get(sessionId)?.snapshot().foreground ?? "idle",
     busy: (sessionId) => {

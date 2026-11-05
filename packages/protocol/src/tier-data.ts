@@ -52,6 +52,11 @@ export type FeatureSpec = {
   tools?: readonly string[]
   /** The `experimental` flag that carries it. */
   flag?: string
+  /**
+   * For a `permit` feature with a `flag`: the lowest tier whose default turns that flag on, when the user has not set it. What the user wrote
+   * (`/experimental <flag> on|off`) always wins, and the feature must be allowed by the tier too. Seen through `effectiveSettings`.
+   */
+  flagOnFrom?: Tier
   experimental?: true
   /** Safe mode (`--safe-mode`) turns it off. */
   safe?: true
@@ -69,8 +74,8 @@ export const FEATURES: Readonly<Record<FeatureId, FeatureSpec>> = {
   file_viewer: { label: "File viewer (click a path)", tier: "balanced", mode: "tier", cost: ["chrome"], legacy: false, own: "/customize · pathClick · /open", doc: "docs/file-viewer.md" },
   // /git: tabs for Changes, Commit and Worktrees, and a local commit of the files you tick. Nothing leaves the machine. Off with no tier and in minimalist, where /changes and /worktrees are the pages they were.
   git_hub: { label: "Git page (review, commit, worktrees)", tier: "balanced", mode: "tier", cost: ["chrome"], legacy: false, own: "/git · git.defaultTab", doc: "docs/git.md" },
-  // Push, "publish to GitHub (private)" and "create pull request" from the Git page, and its PR tab: they reach the network through the user's own git and gh logins. Allowed from balanced; `experimental.git_actions` must also be on, so no tier turns network on by itself. No tool, no prompt text.
-  git_actions: { label: "Git page push and pull request", tier: "balanced", mode: "permit", cost: [], legacy: true, own: "experimental.git_actions", flag: "git_actions", doc: "docs/git.md" },
+  // Push, "publish to GitHub (private)" and "create pull request" from the Git page, and its PR tab: they reach the network through the user's own git and gh logins. Allowed from balanced, where `experimental.git_actions` must also be on; full turns that switch on by default (`flagOnFrom`), since every push and pull request still shows its exact command on a card and waits for Enter. No tool, no prompt text, no tokens.
+  git_actions: { label: "Git page push and pull request", tier: "balanced", mode: "permit", cost: [], legacy: true, own: "experimental.git_actions", flag: "git_actions", flagOnFrom: "full", doc: "docs/git.md" },
   memory_ux: { label: "Memory consent and management", tier: "minimalist", mode: "kernel", cost: [], legacy: true, own: "memoryEnabled · memoryRequireApproval · /memory", safe: true, doc: "docs/memory.md" },
   // Not a feature that turns on or off: the setting every tier has, with the value the minimalist bundle picks.
   single_process: { label: "One process per terminal (solo)", tier: "minimalist", mode: "kernel", cost: [], legacy: true, own: "/customize · processMode · --process (auto in every tier: one process while one terminal is open, less RAM; a second client moves the daemon to its own process; solo keeps it in the terminal; daemon keeps the separate process)", safe: true, doc: "docs/design/memory-single-process.md" },
@@ -257,6 +262,7 @@ export function effectiveSettings<S extends object>(settings: S, options: TierOp
     if (state.why === "legacy" || state.why === "setting") continue
     if (spec.flag) {
       if (state.on && spec.mode === "tier" && experimental[spec.flag] !== true) { experimental[spec.flag] = true; changed = true }
+      if (state.on && spec.mode === "permit" && spec.flagOnFrom && typeof experimental[spec.flag] !== "boolean" && input.tier !== undefined && tierIncludes(input.tier, spec.flagOnFrom)) { experimental[spec.flag] = true; changed = true }
       if (!state.on && experimental[spec.flag] !== false) { experimental[spec.flag] = false; changed = true }
     }
     if (state.on) continue

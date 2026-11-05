@@ -11,6 +11,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### New
 
+- Sessions can list, message and open sessions in other projects, like Claude Code's ListAgents and SendMessage: `sessions scope=all`, `tell` and `threads message` to any session, and `threads start` for a new session in another folder with a first message. Each of those asks you every time, the receiver gets the message marked as an agent's from another project, and nothing is ever above the sender's permission. See [peers](docs/peers.md#other-projects).
 - Approving a plan (Enter, or comment then apply) now runs it with full access, as Claude Code does when it leaves plan mode; `m` on the plan page picks auto edits or ask before edits instead, and the page and the "Plan mode off" notice name the access. See [plan review](docs/plan-review.md).
 - The assistant is told what the terminal draws according to the tier: full gets the Markdown, Mermaid and callout syntax and when to use each, balanced one short line, minimalist nothing.
 - `/btw history` lists the side chats you cleared and opens one to read. The row under the side chat's name says how much of the session it sees and how much of its prompt came from the cache. See [/btw](docs/btw.md).
@@ -31,6 +32,8 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 ### Changed
 
 - A wide flowchart is drawn in the chat instead of shown as source: long labels wrap (`<br/>` still breaks a line), spacing tightens, and a left-to-right flow turns top-down when it still does not fit. The note says what was tried when nothing fits.
+- Full tier: the Git page's push, publish and pull request are on by default (`/experimental git_actions off` turns them off); each one still shows its command on a card and waits for Enter. Balanced keeps them behind the switch. See [git](docs/git.md#the-switch).
+- A session with a `/goal` now has the goal tools in its request in every tier, so the agent can mark the goal complete or blocked without searching for the tool first; sessions without a goal are unchanged.
 - The balanced tier's prompt is about 240 tokens lighter: its description of the terminal's drawing is one sentence instead of the full block.
 - The tools a `/btw` answer runs look like the transcript's tool rows. The side chat is read-only in every permission mode: only read-only commands run, never `touch`, `mv` or a redirection into a file; set its model with `models.aside`.
 - The activity line reads like Claude Code's: `⠋ Running command… (2m 53s · ↓ 88.6k tokens)`. `activityStyle` brings back the older look (`classic`) and `activityTokens` adds the sent and cached token figures. Token counts are the provider's exact usage, with no `~`.

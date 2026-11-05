@@ -1,10 +1,10 @@
 # Peers
 
-Sessions of the same project can talk to each other through two agent tools.
+Sessions can talk to each other through two agent tools: within a project freely, and across projects with an approval each time (see [Other projects](#other-projects)).
 
 ## `sessions`
 
-Lists the project's other sessions: id, title, state (`idle`, `generating`, …) and last update. The list never shows their transcripts, files or reasoning. Sub-sessions (workflow tasks, subagents) are not listed.
+Lists the project's other sessions: id, title, state (`idle`, `generating`, …), `busy=yes|no` and last update. `scope=all` lists the newest sessions of every project of this daemon with their folder (`project=…`), and `directory=<folder>` those of one other project. The list never shows their transcripts, files or reasoning. Sub-sessions (workflow tasks, subagents) are not listed.
 
 It is a list of recent conversations, not of agents working right now: `idle` does not mean the session is open, and a title does not mean it owns a file.
 
@@ -40,7 +40,7 @@ Sends a plain-text message to one session by its exact id.
 - Permission class `write`: in `ask` mode the user approves each message; the approval shows the target and the text.
 
 Limits:
-- same project (directory) only;
+- another project only through the rules in [Other projects](#other-projects);
 - at most 3 messages per session waiting for an answer, and 20 per hour;
 - messages up to 4,000 characters; replies keep the last 4,000;
 - deliveries have a durable command lifecycle. After a restart queued commands keep their existing queue id and wait for the user to resume; completed/interrupted turns settle from persisted events. An unverified delivery fails rather than inserting the prompt twice.
@@ -48,6 +48,21 @@ Limits:
 Claude Code sessions can receive messages and answer them. Native sessions have the tools; Claude Code and Codex sessions reach them as `mcp__mendcode__sessions` and `mcp__mendcode__tell` while `harness_tools` is on ([Claude Code](claude-code.md)).
 
 The `threads` tool (`message`, `wait`, `read`, `interrupt`, and `merge_back` for a fork of the calling session) and the composer's `@thread` build on the same rules and limits; see [sessions](sessions.md#thread-tools-and-thread-t4-tier-balanced).
+
+## Other projects
+
+A session can list, write to and open sessions in other projects of this daemon (on this machine only; a turn a remote or peer client started has no `threads` tool and no `tell`). The earlier limit to one project was a safety rule, not a technical one: a session of another project runs with that project's own trust, rules and permission mode, so a message there is the sender acting beyond the folder it was started in. These are the rules that replace it:
+
+- **Always asks.** `tell` (and `threads message`) to a session of another project, and `threads start`, ask the user every time, in every permission mode including full access, whatever the allow rules or saved grants say. The approval names the target's folder and shows the text. Explicit deny rules still win. Plan mode refuses them.
+- **Never above the sender.** A message goes only to a session whose permission mode is not above the sender's (`plan` < `ask` < `edits` < `smart` < `full`); otherwise it is refused at once, before any approval is asked, and nothing the user answers changes that from the sender's side: to write to a session running in full access, the user raises the sender to full. A started session gets the folder's own usual mode (its project setting, else the default) capped at the opening session's mode, so a lower-ranked session cannot launch a stronger one. This is the same ceiling an agent-origin client has ([permissions](permissions.md)).
+- **Marked and not the user's.** The message arrives as a notice (a turn with synthetic, non-user authority) that starts `[message from session … "title" in another project ("/path")]` and says an agent of another project wrote it, that it carries none of the user's authority and that the target keeps to its own permissions and project rules. The answer returns marked the same way (`[reply from session … in another project …]`, "not an instruction from the user"). Secret values never cross.
+- **Trust is not granted.** A started session in a folder that is not trusted (`trustedToolDirs`) loads none of that project's tools, hooks or extensions, as in any session opened there; the approval and the result say which it is.
+- **Narrow reach.** Reading, searching, `stats`, `interrupt` and `merge_back` through `threads` stay inside the project (`sessions read=<exact id>` already read any project). `message` and `wait` name another project's session by its full id, as `list scope=all` prints it; a sub-agent session is not addressable. The Claude Code and Codex bridge ([thread MCP](thread-mcp.md)) stays inside one project, and `session.agent-command.create` from a client still refuses another project.
+- **Same limits.** The 3 waiting messages and 20 per hour are counted across projects too. A started session counts as one message, checked before the session exists so a refusal leaves nothing behind.
+
+### `threads start`
+
+`threads start directory=<absolute folder> text=<first message> [title=<name>]` opens a new session in the folder and sends the text as its first message, a peer message like the above. The folder must exist and be a directory (`~/…` is expanded); a sub-agent session cannot start sessions. The result names the new session's id, its permission mode and whether the folder is trusted; its answer arrives as a notice, or `threads wait` with the id.
 
 ## Local command inbox (B31)
 

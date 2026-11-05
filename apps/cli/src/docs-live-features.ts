@@ -1,6 +1,6 @@
 import { existsSync, readdirSync } from "node:fs"
 import path from "node:path"
-import { FEATURES, featureState, type FeatureId, type TierSettings } from "@mendcode/protocol/wire"
+import { FEATURES, effectiveSettings, featureState, type FeatureId, type TierSettings } from "@mendcode/protocol/wire"
 import type { LiveContext } from "./docs-live"
 
 /**
@@ -17,7 +17,7 @@ export function featureLine(settings: Record<string, unknown>, id: FeatureId): s
   const state = featureState(settings as TierSettings, id)
   const why = { tier: `tier ${String(settings.tier)}`, legacy: "no tier set: its default", override: `your features.${id}`, setting: `your ${spec.flag ?? "flag"} switch`, "safe-mode": "safe mode" }[state.why]
   if (state.on && spec.mode === "permit" && spec.flag) {
-    const experimental = (settings.experimental ?? {}) as Record<string, unknown>
+    const experimental = (effectiveSettings(settings as TierSettings).experimental ?? {}) as Record<string, unknown>
     return experimental[spec.flag] === true ? `${spec.label}: on (${why}, and experimental.${spec.flag} is on)` : `${spec.label}: allowed (${why}) but off · the user turns it on with /experimental ${spec.flag} on`
   }
   if (spec.optIn) return state.on ? `${spec.label}: on (${why})` : `${spec.label}: off · the user turns it on with /tier ${id} on`

@@ -315,7 +315,7 @@ function writtenPaths(tool: string, args: unknown): string[] {
   return [...new Set(found)]
 }
 
-function approvalTitle(tool: Tool) {
+function approvalTitle(tool: Tool, args?: unknown) {
   if (["memory", "memory_graph", "remember"].includes(tool.name)) return "Save to memory?"
   const mcp = mcpParts(tool.name)
   if (mcp) return `Use ${mcp.server} tool`
@@ -324,7 +324,11 @@ function approvalTitle(tool: Tool) {
   if (tool.name === "worktree") return "Use a git worktree"
   if (tool.name === "shell_session") return "Run interactive command"
   if (tool.name === "browser") return "Use browser"
-  if (tool.name === "threads") return "Read another session"
+  if (tool.name === "tell") return "Message another session"
+  if (tool.name === "threads") {
+    const action = (args as { action?: unknown } | null | undefined)?.action
+    return action === "start" ? "Open a session in another project" : action === "message" ? "Message another session" : "Read another session"
+  }
   if (tool.name === "pr_review") return "Review a pull request"
   return tool.permission === "execute" ? "Run command" : "Edit files"
 }
@@ -721,6 +725,10 @@ export function createNativeEngine(options: {
     const active = activeToolNames(messages.slice(discoveryStart), primary)
     // Auxiliary tools the conversation calls for are listed without a search (`impliedTools`), after the ones already found.
     for (const name of impliedTools(messages.slice(discoveryStart), plan, sessionId !== undefined && (options.background?.(sessionId).list().length ?? 0) > 0)) if (!primary(name)) active.add(name)
+    // A session with an unfinished goal ends it with `update_goal`, which the continuation text names: the goal tools are listed for as long as it has one
+    // (no search first), and cost nothing in a session without a goal, whatever `plan_tools` says.
+    const goal = sessionId !== undefined && options.goals ? options.goals(sessionId).get() : undefined
+    if (goal && goal.status !== "complete" && goal.status !== "budget_limited") for (const name of GOAL_TOOL_NAMES) if (!primary(name)) active.add(name)
     const codeAllowed = policy().experimental?.code_mode === true && (!base.agent || agentAllows(base.agent, CODE_TOOL.name))
     const eligible = withPolicy(codeAllowed ? { ...base, specs: [...base.specs.filter((spec) => spec.name !== CODE_TOOL.name), toSpec(CODE_TOOL)], codeCatalog: base, codeActive: active } : base)
     const discovery = discoveryOn()
@@ -1291,7 +1299,7 @@ export function createNativeEngine(options: {
    */
   async function permit(input: TurnInput, tool: Tool, call: ToolCall, itemId: ItemId, toolset: Toolset, frozen: ReturnType<typeof freezeAction>, explicitApproval = false): Promise<PermitResult> {
     const parsedPermission = tool.args.safeParse(call.args)
-    const permissionContext = { threads: options.threads?.(input.sessionId) }
+    const permissionContext = { threads: options.threads?.(input.sessionId), peers: options.peers?.(input.sessionId) }
     if (parsedPermission.success && tool.permissionFor) tool = { ...tool, permission: tool.permissionFor(parsedPermission.data, permissionContext) }
     tool = sessionRecallPermission(tool, call.args)
     const mode = modeOf(input, toolset)
@@ -1319,12 +1327,14 @@ export function createNativeEngine(options: {
     if (mode === "plan" && tool.permission !== "read") return { kind: "deny", by: "rule", reason: "plan mode is read-only; investigate, then propose the plan with plan_submit" }
     const pluginPermission = hooks?.has("permission.ask", cwd) ? await hooks.permission?.({ sessionId: input.sessionId, cwd, tool: tool.name, args: structuredClone(call.args as Record<string, unknown>) }) : undefined
     if (pluginPermission?.status === "deny") return { kind: "deny", by: "rule", reason: "plugin permission hook denied the action" }
-    const previewOf = (data: unknown) => tool.preview!(data as never, { cwd, signal: input.signal, ...(options.packages ? { packages: options.packages(input.sessionId) } : {}), ...(options.workflows ? { workflows: options.workflows(input.sessionId) } : {}), ...(options.loops ? { loops: options.loops(input.sessionId) } : {}), ...(options.worktrees ? { worktrees: options.worktrees(input.sessionId) } : {}), ...(options.prWatch ? { prWatch: options.prWatch(input.sessionId) } : {}), ...(options.prReview ? { prReview: options.prReview(input.sessionId) } : {}), ...(options.aiConfig ? { aiConfig: options.aiConfig(input.sessionId) } : {}) }).catch(() => undefined)
+    const previewOf = (data: unknown) => tool.preview!(data as never, { cwd, signal: input.signal, ...(options.packages ? { packages: options.packages(input.sessionId) } : {}), ...(options.workflows ? { workflows: options.workflows(input.sessionId) } : {}), ...(options.loops ? { loops: options.loops(input.sessionId) } : {}), ...(options.worktrees ? { worktrees: options.worktrees(input.sessionId) } : {}), ...(options.prWatch ? { prWatch: options.prWatch(input.sessionId) } : {}), ...(options.prReview ? { prReview: options.prReview(input.sessionId) } : {}), ...(options.aiConfig ? { aiConfig: options.aiConfig(input.sessionId) } : {}), ...(options.threads ? { threads: options.threads(input.sessionId) } : {}), ...(options.peers ? { peers: options.peers(input.sessionId) } : {}) }).catch(() => undefined)
     // `approval: "always"`: the user sees exactly what will run, in every mode and whatever the allow rules or grants say (a tool that runs code the model wrote).
-    const always = tool.approval === "always" || parsedPermission.success && tool.approvalFor?.(parsedPermission.data) === true
+    const always = tool.approval === "always" || parsedPermission.success && tool.approvalFor?.(parsedPermission.data, permissionContext) === true
     // Reading another session asks once per call, except in full access (the user chose to run unattended) or when the user's own
     // message names that session's id: either is consent to read it.
     const named = parsedPermission.success && typeof (parsedPermission.data as { sessionId?: unknown }).sessionId === "string" && userText.includes((parsedPermission.data as { sessionId: string }).sessionId)
+    const refusal = parsedPermission.success ? tool.refusalFor?.(parsedPermission.data, permissionContext) : undefined
+    if (refusal) return settle({ kind: "deny", by: "rule", reason: refusal }, "deterministic", refusal)
     const individual = !always && mode !== "full" && !named && parsedPermission.success && tool.individualApprovalFor?.(parsedPermission.data, permissionContext) === true
     if (always || individual) {
       const shown = always && parsedPermission.success && tool.preview ? await previewOf(parsedPermission.data) : undefined
@@ -1332,7 +1342,7 @@ export function createNativeEngine(options: {
       const refusal = await askRefusal(input, tool, call, detail)
       if (refusal) return settle(refusal, "deterministic", refusal.reason ?? "Blocked by a PermissionRequest hook")
       record("waiting_manual", "manual", "Individual approval required")
-      const answer = await input.ask({ kind: "approval", title: approvalTitle(tool), detail, itemId, tool: tool.name, permission: tool.permission, permissionContext: { name: permissionName(tool.name), patterns, always: [] } })
+      const answer = await input.ask({ kind: "approval", title: approvalTitle(tool, call.args), detail, itemId, tool: tool.name, permission: tool.permission, permissionContext: { name: permissionName(tool.name), patterns, always: [] } })
       if (input.signal.aborted) return settle({ kind: "abandoned" }, "manual", "Approval cancelled")
       if (!withPolicy(toolset).specs.some((spec) => spec.name === tool.name)) return settle({ kind: "deny", by: "rule", reason: `tool unavailable: ${tool.name}` }, "deterministic", "Tool disabled during approval")
       if (rulePatterns.some((pattern) => matchingRule(permissionName(tool.name), pattern, rulesFor(toolset, input.sessionId))?.action === "deny")) return settle({ kind: "deny", by: "rule", reason: `permission rule denies ${tool.name}` }, "deterministic", "Permission changed during approval")
@@ -1422,7 +1432,7 @@ export function createNativeEngine(options: {
     const hookRefusal = await askRefusal(input, tool, call, detail)
     if (hookRefusal) return settle(hookRefusal, "deterministic", hookRefusal.reason ?? "Blocked by a PermissionRequest hook")
     record("waiting_manual", "manual", "Waiting for user approval")
-    const answer = await input.ask({ kind: "approval", title: approvalTitle(tool), detail, itemId, tool: tool.name, permission: tool.permission, permissionContext: { name: permissionName(tool.name), patterns, always: patterns } })
+    const answer = await input.ask({ kind: "approval", title: approvalTitle(tool, call.args), detail, itemId, tool: tool.name, permission: tool.permission, permissionContext: { name: permissionName(tool.name), patterns, always: patterns } })
     if (input.signal.aborted) return settle({ kind: "abandoned" }, "manual", "Approval cancelled")
     if (answer.kind === "approve" && answer.scope === "session") grants.add(input.sessionId, tool.name, tool.permission, undefined, undefined, provenance)
     return settle(answer, "manual", answer.kind === "deny" ? answer.reason ?? "User denied" : answer.kind === "approve" ? "User approved" : "Approval abandoned")

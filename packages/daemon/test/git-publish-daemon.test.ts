@@ -114,6 +114,19 @@ describe("git.publish while the switch is off", () => {
   })
 })
 
+describe("git.publish in the full tier", () => {
+  test("balanced stays off, full switches it on by default, and the user's off wins", async () => {
+    const b = ready()
+    const h = await boot(b)
+    await h.settings({ tier: "balanced" })
+    expect(await h.local.send({ type: "git.publish", directory: b.dir, preview: true })).toMatchObject({ ok: false, error: { code: "forbidden" } })
+    await h.settings({ tier: "full" })
+    expect(await h.local.send({ type: "git.publish", directory: b.dir, preview: true })).toMatchObject({ ok: true })
+    await h.settings({ experimental: { git_actions: false } })
+    expect(await h.local.send({ type: "git.publish", directory: b.dir, preview: true })).toMatchObject({ ok: false, error: { code: "forbidden" } })
+  })
+})
+
 describe("git.publish with the switch on", () => {
   test("a local client previews and publishes: one create with --private, the remote is added, nothing is pushed, and the session gets a note", async () => {
     const b = ready()

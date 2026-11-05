@@ -108,13 +108,11 @@ describe("while the switch is off nothing is started", () => {
     expect(await h.local.send({ type: "git.push", directory: b.dir, preview: true })).toMatchObject({ ok: true, result: { pushed: false, plan: { branch: "feat/x" } } })
   })
 
-  test("a tier alone does not turn it on: balanced with the switch unset is still off", async () => {
+  test("balanced with the switch unset is still off (full turns it on by default)", async () => {
     const b = featured()
     const h = await boot(b)
     await h.settings({ tier: "balanced" })
     expect(await h.local.send({ type: "git.push", directory: b.dir })).toMatchObject({ ok: false, error: { code: "forbidden" } })
-    await h.settings({ tier: "full" })
-    expect(await h.local.send({ type: "git.pr.create", directory: b.dir, preview: true })).toMatchObject({ ok: false, error: { code: "forbidden" } })
     await Bun.sleep(50)
     expect(calls(b)).toEqual({ git: [], gh: [] })
   })

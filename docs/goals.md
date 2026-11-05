@@ -42,7 +42,7 @@ What you see:
 
 ## Model tools
 
-Registered on the native engine's main agent (not sub-agents) when the daemon gives it a goal port. No approval is asked.
+Registered on the native engine's main agent (not sub-agents) when the daemon gives it a goal port. No approval is asked. They are in the request in every tier for as long as the session has an unfinished goal (`/goal`), so the agent can end it with `update_goal` without searching for the tool; with no goal they stay behind `tool_search` unless `/tier plan_tools on` lists them always ([tool discovery](tool-discovery.md#lean-catalogue-and-plan-tools-tier-defaults)).
 
 | tool | arguments | notes |
 |---|---|---|
