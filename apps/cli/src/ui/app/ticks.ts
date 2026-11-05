@@ -25,7 +25,9 @@ export function createTicks(ctx: AppContext, actions: {
     const home = state.page === "chat" && state.transcript.blocks().length === 0 && [...state.agentSessions.values()].some((s) => HOME_WORKING.has(s.state) && inProject(s.directory, ctx.input.directory))
     // A sub-agent's thread open in the chat's place: its own working row moves while that agent runs.
     const thread = state.page === "chat" && state.agentView !== undefined && (state.agentRoot ?? state.transcript).agentThreads().some((each) => each.itemId === state.agentView && each.running)
-    const wanted = (busy || preview || agents || home || thread) && !state.reducedMotion
+    // A PR review of the open session's watch: its activity status and running step move until the run ends (nothing at rest).
+    const reviewing = state.page === "chat" && state.reviewActivity.some((job) => job.sessionId === state.sessionId)
+    const wanted = (busy || preview || agents || home || thread || reviewing) && !state.reducedMotion
     if (wanted && !state.pulse)
       state.pulse = setInterval(() => {
         state.spinFrame++
@@ -55,7 +57,8 @@ export function createTicks(ctx: AppContext, actions: {
   }
 
   function syncLoopsTick() {
-    const wanted = state.page === "loops" && needsTick(state.loops)
+    // `/reviews` with a review running: its live time moves once a second until the run ends.
+    const wanted = state.page === "loops" && needsTick(state.loops) || state.page === "reviews" && state.reviewActivity.length > 0
     if (wanted && !state.loopsTick) state.loopsTick = setInterval(requestFrame, 1_000)
     if (!wanted && state.loopsTick) {
       clearInterval(state.loopsTick)

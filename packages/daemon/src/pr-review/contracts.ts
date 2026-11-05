@@ -367,6 +367,8 @@ export type RunPlatformOutput = { configKey: string; checkpoint?: JobCheckpoint 
 export type PlatformHandle = {
   dataDir: string
   jobs: JobLedger & { all(): ReviewJob[] }
+  /** This daemon's device id (device.ts): the page says "this device" for the jobs and watches it owns, not the id. */
+  device?: (() => string) | undefined
   rows(): Array<{ directory: string; state: string; open: number; publish: string; provider?: ProviderKind | undefined }>
   concurrency: number
   repoOf(directory: string): Promise<string>

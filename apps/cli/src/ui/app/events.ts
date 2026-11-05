@@ -157,6 +157,12 @@ export function createEvents(ctx: AppContext, actions: {
       return
     }
     if (event.type === "review.changed") return actions.noteReview(event)
+    // The PR reviews running now, whole: the watching session draws their steps and the footer of any other session names them.
+    if (event.type === "pr.review.activity") {
+      state.reviewActivity = event.jobs
+      requestFrame()
+      return
+    }
     // The code graph's counts for one project directory: kept for the footer's `codegraph` segment, which reads them only when it draws.
     if (event.type === "codegraph.status") {
       if (event.state === "none") codegraph.delete(event.directory)

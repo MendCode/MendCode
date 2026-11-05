@@ -4,6 +4,7 @@ import type { PrFinding, PrReviewConfigView, PrReviewDashboard, PrReviewerSummar
 import { createIndexer } from "@mendcode/codegraph"
 import { ghProcess, parseRef, type GhRun } from "../pr-watch"
 import { createAccounting, accountingFile } from "./accounting"
+import { createReviewActivity, type ReviewActivityJob } from "./activity"
 import { runAudit } from "./audit"
 import { backlogOrder, headReviewOf, planBacklog, type BacklogDecision, type HeadStatus, type ReviewAuthor } from "./backlog"
 import { budgetPolicy, classifyStop, failureStop, quotaPlan, stopText } from "./budget"
@@ -39,7 +40,7 @@ import { createRepoWatch, listedToFacts, MAX_CONCURRENT_REVIEWS, MAX_OPEN_PRS, p
 import { buildStackGraph, stackChanges, stackSummary } from "./stacks"
 import { controlOf, release, takeOver } from "./takeover"
 import { runChecks } from "./verify"
-import { layeredConfig, reviewNotice, runConfigKey, runPrReview, type ReviewRun, type RunFallbacks, type RunPrReviewInput, type RunReaders } from "./run"
+import { layeredConfig, reviewNotice, runConfigKey, runPrReview, type ReviewProgress, type ReviewRun, type RunFallbacks, type RunPrReviewInput, type RunReaders } from "./run"
 import { readReviewState, REVIEW_MARKER, stateFromMarkers, writeReviewState, type ReviewState } from "./state"
 
 /**
@@ -151,6 +152,8 @@ export type PrReviewServiceOptions = {
    * already in the days and models of the report as a turn of a hidden session; this says how much of them is the reviewer's.
    */
   reviewUsage?: (turn: { directory: string; childSessionId: string | undefined; tokens: PrTokenUsage }) => void
+  /** The reviews running now with their steps, whole on every change (activity.ts); daemon.ts sends it to the local terminals. */
+  activity?: (jobs: ReviewActivityJob[]) => void
   /** The memory a reviewer's scope allows (daemon.ts binds it to the store); absent, reviews get no memory context. */
   memory?: ReviewMemoryRead
   /** The model window of the owner session's model, for the per-call context budget; absent, the config or the default. */
@@ -227,6 +230,7 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
   const now = options.now ?? Date.now
   const review = options.review ?? runPrReview
   const audit = options.audit ?? runAudit
+  const activity = createReviewActivity({ now, emit: (jobs) => options.activity?.(jobs) })
   const sleep = options.sleep ?? ((ms: number) => Bun.sleep(ms))
   const root = path.join(options.dir, "pr-review")
   const outbox = createOutbox({ file: path.join(root, "outbox.json"), notify: options.notify, sessionExists: options.sessionExists })
@@ -398,7 +402,17 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
   }
 
   /** `fresh`: the job's checkpoint is not handed to the run (the review of a pushed fix: a new head, its own range). */
-  async function reviewOne({ sessionId, directory, number, publish, manual, job, fresh = false, recheck, onlyNew = false }: { sessionId: string; directory: string; number: number; publish: boolean; manual: boolean; job?: ReviewJob | undefined; fresh?: boolean; recheck?: readonly PrFinding[] | undefined; onlyNew?: boolean }): Promise<Reviewed> {
+  type ReviewOneInput = { sessionId: string; directory: string; number: number; publish: boolean; manual: boolean; job?: ReviewJob | undefined; fresh?: boolean; recheck?: readonly PrFinding[] | undefined; onlyNew?: boolean }
+  /** One run of a job is live in the watching terminals from its fetch to its end, whatever the outcome (activity.ts). */
+  async function reviewOne(input: ReviewOneInput): Promise<Reviewed> {
+    const job = input.job
+    if (!job) return reviewOneRun(input)
+    activity.begin({ jobId: job.id, sessionId: input.sessionId, repo: job.repo, number: input.number })
+    activity.step(job.id, { phase: "fetch", label: `Fetching #${input.number}`, ...(job.head ? { detail: `head ${job.head.slice(0, 8)}` } : {}) })
+    try { return await reviewOneRun(input) } finally { activity.end(job.id) }
+  }
+
+  async function reviewOneRun({ sessionId, directory, number, publish, manual, job, fresh = false, recheck, onlyNew = false }: ReviewOneInput): Promise<Reviewed> {
     const repo = await repoOf(directory)
     const forge = await forgeOf(directory)
     // GitLab and Gitea: the adapter's facts in the shape gh prints (the MR's diff base is GitLab's `diff_refs.start_sha`).
@@ -471,6 +485,7 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
         ...(current ? { publishAs: { effects, reviewer: current.reviewer, configKey, jobId: current.id, ...(login ? { self: login } : {}), isCurrent: () => isCurrent(current.id) } } : {}),
         ...(checkpoint ? { checkpoint } : {}),
         ...(recheck?.length ? { recheck } : {}),
+        ...(current ? { progress: (step: ReviewProgress) => activity.step(current.id, step) } : {}),
       })
       // A partial review keeps the state of the last whole one (its head and config): it is not a review of this head.
       if (reviewed.status === "published") writeReviewState(options.dir, repo, number, reviewed.state.lastHead === head ? { ...reviewed.state, configKey } : reviewed.state)
@@ -644,6 +659,8 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
         // judge: it waits without spending an attempt, or is tried again with backoff. Any other failure the run did not mark
         // retryable (a refusal of the forge, a review its verification rejected) is not tried again.
         const retry = first.retryable === true ? true : failureKind(first.reason ?? "") === "transient" ? undefined : false
+        // A retryable failure keeps what it got to (a failed verifier's candidates): the retry resumes there, not at the review pass.
+        if (current && retry && first.checkpoint) try { ledger.checkpoint(current.id, first.checkpoint) } catch { /* pruned */ }
         if (tellFailure(current)) void outbox.say(sessionId, reviewNotice({ repo: first.repo, number, run: first }))
         return { error: first.reason ?? "the review failed", retry }
       }
@@ -1001,7 +1018,11 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
         if (done.stale) staleJob(current, done.reason)
         else if (done.stop && done.status !== "failed") checkpointJob({ job: current, stop: done.stop, checkpoint: done.checkpoint, config: done.config, sessionId, label: `PR review of ${repo}#${number}` })
         // Answered by one reply saying it failed: not retried behind the comment's back, `@mendcode review` again or /reviews retries it.
-        else if (done.status === "failed") move(job.id, "failed", { attempts: current.attempts + 1, error: (done.reason ?? "the review failed").slice(0, 2000) })
+        else if (done.status === "failed") {
+          // A retryable failure keeps its checkpoint, so `/reviews` retry or the next `@mendcode review` resumes from it.
+          if (done.retryable && done.checkpoint) try { ledger.checkpoint(job.id, done.checkpoint) } catch { /* pruned */ }
+          move(job.id, "failed", { attempts: current.attempts + 1, error: (done.reason ?? "the review failed").slice(0, 2000) })
+        }
         else {
           if (done.checkpoint) try { ledger.checkpoint(job.id, done.checkpoint) } catch { /* pruned */ }
           move(job.id, "done")
@@ -2009,6 +2030,7 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
   const handle: PlatformHandle = {
     dataDir: options.dir,
     jobs: ledger,
+    device: deviceOf,
     rows: () => watch.rows(),
     get concurrency() { return watch.concurrency },
     repoOf: repoCached,
@@ -2141,6 +2163,8 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
     /** The session went idle: notices it could not take earlier are offered now. */
     idle: (sessionId: string) => outbox.flush(sessionId),
     held: outbox.held,
+    /** The reviews running now with their steps, for a terminal that connects while one runs. */
+    activity: () => activity.snapshot(),
     /** The platform's shared state, for daemon.ts and the tests. */
     platform: { handle, jobs: ledger, effects, accounting, permissions, profiles, ownership, device: deviceOf },
     stop() { watch.stop(); outbox.stop(); for (const hold of holds.values()) if (hold.timer) clearInterval(hold.timer) },

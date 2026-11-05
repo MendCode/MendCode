@@ -83,6 +83,8 @@ export type PackFacts = {
   context?: { tokens: number; limit: number; approx?: boolean; label?: string }
   quotas?: readonly QuotaSnapshotLike[]
   costMicros?: number
+  /** A PR review running for another session's watch (`reviewing Symbex-1#25`); the watching session shows it at work instead. */
+  reviewing?: string
   jobs?: number
   loops?: number
   workflows?: number
@@ -215,6 +217,7 @@ function segment(id: FooterPackSegment, facts: PackFacts, pack: FooterPackFile, 
       return facts.jobs ? { spans: [...lead(look, id), { text: `${facts.jobs} shell${facts.jobs === 1 ? "" : "s"}`, fg: color("secondary") }] } : undefined
     case "agents": {
       const words = [
+        ...(facts.reviewing ? [facts.reviewing] : []),
         ...(facts.agents ? [`${facts.agents} agent${facts.agents === 1 ? "" : "s"}`] : []),
         ...(facts.loops ? [`${facts.loops} loop${facts.loops === 1 ? "" : "s"}`] : []),
         ...(facts.workflows ? [`${facts.workflows} workflow${facts.workflows === 1 ? "" : "s"}`] : []),

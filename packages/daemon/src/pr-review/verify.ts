@@ -80,6 +80,12 @@ export function verifyPrompt(findings: readonly PrFinding[], context: ReviewCont
   ].join("\n")
 }
 
+/** The start of an unusable answer, on one line, for the job's error: enough to tell prose, a cut answer or broken JSON apart. */
+const answerExcerpt = (text: string) => {
+  const line = text.replace(/\s+/g, " ").trim()
+  return line ? `it began ${JSON.stringify(line.length > 120 ? `${line.slice(0, 120)}…` : line)}` : "it was empty"
+}
+
 type Judged = { verdict: Verdict; evidence: string[]; score?: number }
 function parseVerdicts(text: string): { ok: true; verdicts: Map<string, Judged> } | { ok: false; problem: string } {
   let value: unknown
@@ -148,7 +154,7 @@ export async function verifyFindings({ sessionFactory, findings, context, checks
           tokens.cached += turn.tokens.cached ?? 0
           parsed = parseVerdicts(turn.text)
         }
-        if (!parsed.ok) throw new Error(`[PR_REVIEW]: verification failed (${parsed.problem})`)
+        if (!parsed.ok) throw new Error(`[PR_REVIEW]: the verifier's answer could not be used after one repair turn (${parsed.problem}; ${answerExcerpt(turn.text)})`)
         const verdicts = parsed.verdicts
         for (const finding of batch) {
           const verdict = verdicts.get(finding.id)

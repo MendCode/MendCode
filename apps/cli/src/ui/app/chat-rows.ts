@@ -36,6 +36,7 @@ import { refreshLiveTasks } from "./live-tasks"
 import { sessionChildren } from "./session-children"
 import { fit, lineWidth } from "../../view/deck"
 import { backgroundRows, backgroundName } from "../../view/background-row"
+import { reviewPhase, reviewsIn, reviewStartedAt, reviewStepRows } from "../../view/review-activity"
 import { linkRows } from "../../view/links"
 import { homeLook, renderWelcomeReplacement } from "../../view/home"
 import { mascotPhase, mascotRows } from "../../view/mascot"
@@ -285,7 +286,10 @@ export function createChatRows(ctx: AppContext, actions: {
       state.scratchArea = { top: dock.length + live.scratch.top, left: live.scratch.left, width: live.scratch.width, rows: live.scratch.rows, first: live.scratch.first }
       state.scratchCursor = live.scratch.cursor ? { row: dock.length + live.scratch.cursor.row, col: live.scratch.cursor.col } : undefined
     }
-    const above: Line[] = [...fixedAbove, ...dock, ...(live?.rows ?? []), ...(working ? [working] : []), ...agentRows, ...extAbove, ...commentRows.above, ...(findRow ? [findRow.row] : [])]
+    // A PR review of this session's watch: its steps as tool rows over the working line, gone when the run ends (its note stays).
+    const reviewing = !inlineView && rich && !asking ? reviewsIn(state.reviewActivity, state.sessionId) : []
+    const reviewRows: Line[] = reviewing.length ? barRows("background", reviewStepRows({ jobs: reviewing, width, frame: state.spinFrame, now: now(), ascii: asciiGlyphs() }), width) : []
+    const above: Line[] = [...fixedAbove, ...dock, ...(live?.rows ?? []), ...reviewRows, ...(working ? [working] : []), ...agentRows, ...extAbove, ...commentRows.above, ...(findRow ? [findRow.row] : [])]
     // Reserve chrome first: a multiline prompt must not push the tray or footer off a short terminal.
     const editorRows = Math.max(1, Math.min(MAX_EDITOR_ROWS, height - topbar.length - above.length - popup.length - promptTop.length - frameBottom.length - below.length - cardRows - 1))
     const firstRow = Math.max(0, cursorAt - editorRows + 1)
@@ -774,7 +778,23 @@ export function createChatRows(ctx: AppContext, actions: {
     const retry = state.turnState.retry
     const hint = state.escArmedAt > 0 && now() - state.escArmedAt <= DOUBLE_ESC_MS && state.transcript.activeTurn !== undefined
     const active = BUSY.has(localState) || localState === "waiting_approval" || retry !== undefined
-    if (!active) return undefined
+    // An idle session whose watch has a PR review running shows that review at work, as a turn would show (docs/pr-review.md).
+    if (!active) {
+      const reviews = reviewsIn(state.reviewActivity, state.sessionId)
+      if (!reviews.length || !state.tuiProfile.showActivity || state.tuiProfile.activityPlacement === "off") return undefined
+      return renderWorkingRow({
+        width,
+        margin,
+        parts: (partsOverride ?? activityPartsOf(state.tuiProfile.activityParts)).filter((part) => part === "spinner" || part === "verb" || part === "elapsed"),
+        ...activityLook(),
+        ...(overlay ? { separator: g.sep } : {}),
+        spinner: state.reducedMotion ? "⋯" : SPINNER_FRAMES[state.spinFrame % SPINNER_FRAMES.length]!,
+        phase: reviewPhase(reviews),
+        ...(state.tuiProfile.showElapsed && !state.accessible ? { elapsedMs: now() - reviewStartedAt(reviews) } : {}),
+        now: now(),
+        interruptHint: false,
+      })
+    }
     if (!state.tuiProfile.showActivity && !retry && !hint) return undefined
     // `off` keeps what the user must see (a retry, the Esc hint) and nothing else, as the minimal view does.
     if (state.tuiProfile.activityPlacement === "off" && !retry && !hint) return undefined

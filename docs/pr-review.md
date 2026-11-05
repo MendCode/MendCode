@@ -42,7 +42,10 @@ is off or asleep, troubleshooting), see [PR reviewer: team setup](pr-review-setu
 3. **Verify pass.** A fresh child, never the one that found them, is told to refute each finding (at most 10 per turn): `confirmed`,
    `plausible` or `rejected`, with a `score` from 0 to 10 in the same answer (how certain the defect is and how much it matters; no extra
    call). Only confirmed findings are published; the `strict` profile also publishes plausible ones, marked as such.
-   A finding the verifier did not judge counts as rejected; a verifier that fails publishes nothing and the summary says so.
+   A finding the verifier did not judge counts as rejected; a verifier that fails publishes nothing and the summary says so. Its answer
+   gets one repair turn; one still unusable (or a child that crashed) fails the attempt with the verifier's words and the start of
+   its answer in the job's error, keeps the candidates in the checkpoint, and is retried with backoff: the retry verifies them
+   again without a second review pass. A review pass with no candidates has nothing to verify and is published as no findings.
 4. **Merge risk floor.** The review pass judges the risk before anything is verified, so the risk is never below what the
    confirmed findings show: a confirmed critical finding makes it high, a major one at least medium, and the reason starts with
    the count ("1 confirmed critical finding."). A rejected finding raises nothing.
@@ -497,6 +500,26 @@ A second review request for a PR whose review is already queued or running (a re
 the watch is reviewing) joins that job: the answer names it and no second review runs. `/reviews` shows a running job with its
 phase (`analysis`, `corroboration`); `/reviews open <job id>` opens its reviewer session (the id is in the "Reviewing #N" notice).
 The same comment is answered once, whatever the number of watches of the repository.
+
+#### Seeing a review run
+
+While a review runs (balanced and full tiers, where the reviewer is), the session that watches the repository shows it like a turn
+at work: its steps as tool rows above the prompt (`Review Fetching #25 · head 51fe4047`, `Review Readers · 32 files · <model>`,
+`Review Analysis · 112 files · incremental`, `Review Verifying 4 candidates`, `Review Posting review`), the running one with the
+spinner and its time, and the activity status `Reviewing Eden-sudo/Symbex-1#25 · analysis… (1m 20s)` when the session itself is
+idle. When the run ends they go and the session's final note stays. Any other session names it in the footer's agents segment
+(`reviewing Symbex-1#25`). The daemon sends these steps only to local terminals, only while a review runs, and stores none of them;
+the spinner and the time move with the activity status's own clock, which stops with the run. `showActivity` and
+`activityPlacement off` hide the status as they do for a turn.
+
+`/reviews` lists one row per pull request: the job at work when there is one, else the newest, with `· N runs` when the PR had
+earlier ones. So a failure that a later review of the same PR superseded is not listed under Failed: Failed holds the PRs whose
+last run failed. A running row shows its live phase and time (`analysis · 1m 20s`), a finished one what it found
+(`done · no findings`, `done · 2 findings`). The detail of a running job lists its steps; a done job says how it ended instead of
+a phase; a failed one names the phase it failed in and its attempts. Under it, `Earlier runs` lists the PR's other runs, newest
+first, each with its head, how it ended and, for a failure, its error. A job or watch this daemon owns says `this device`. When a
+checkout does not answer `status` within 3 seconds (a busy git or a hung child process), the page still gets the jobs and the
+answer names the checkout whose reviewers were not read.
 
 The run queue and the waiting records are counted apart (`/pr list` shows `jobs: N queued, M waiting`; `/reviews` groups jobs by
 state):

@@ -2907,6 +2907,8 @@ export async function startDaemon(options: DaemonOptions) {
     return modelContextOf(store.settings.get(), info)?.window ?? info?.contextWindow ?? store.settings.get().defaultContextWindow
   }
   let prReview: import("./pr-review/service").PrReviewService | undefined
+  /** The running reviews as the wire event (`pr.review.activity`): the service keeps session ids as plain strings. */
+  const reviewActivityEvent = (jobs: ReadonlyArray<import("./pr-review/activity").ReviewActivityJob>): GlobalEvent => ({ type: "pr.review.activity", gseq: 0, at: clock.now(), jobs: jobs.map((job) => ({ ...job, sessionId: job.sessionId as SessionId })) })
   async function prReviewService() {
     if (prReview) return prReview
     const { createPrReviewService } = await import("./pr-review/service")
@@ -2947,6 +2949,11 @@ export async function startDaemon(options: DaemonOptions) {
         const actor = actorFor(sessionId as SessionId)
         const masked = secrets.mask(sessionId as SessionId, text)
         return effectiveSettings(store.settings.get(), { safeMode: options.safeMode }).experimental?.pr_review_prompts === true ? actor?.notify(masked, undefined, true) : actor?.record(masked, true)
+      },
+      // The reviews running now, whole on each change, to the local terminals: wire only, nothing stored.
+      activity: (jobs) => {
+        const event = reviewActivityEvent(jobs)
+        for (const connection of connections) if (connection.clientId && isHumanTerminal(connection)) send(connection, { v: PROTOCOL_VERSION, kind: "global", body: event })
       },
       sessions: (owner, directory) => options.prReview?.sessions?.(owner, directory) ?? reviewSessions.factory({ owner, directory }),
       editor: (owner, directory) => options.prReview?.sessions?.(owner, directory) ?? reviewSessions.factory({ owner, directory, editing: true }),
@@ -3536,6 +3543,9 @@ export async function startDaemon(options: DaemonOptions) {
       // Whether the graph indexes this terminal's folder, so its footer can say a skip before the first turn; measured once, in the background.
       if (!connection.remoteAddress && !connection.peer && connection.directory) void publishGraphGate(connection.directory)
       send(connection, { v: PROTOCOL_VERSION, kind: "global", body: usageToday.snapshot() })
+      // The PR reviews running now, for a terminal that opens while one does.
+      const reviewing = isHumanTerminal(connection) ? prReview?.activity() ?? [] : []
+      if (reviewing.length) send(connection, { v: PROTOCOL_VERSION, kind: "global", body: reviewActivityEvent(reviewing) })
       const update = releases.notice()
       if (update) send(connection, { v: PROTOCOL_VERSION, kind: "global", body: { type: "release.available", gseq: 0, at: clock.now(), ...update } })
       return

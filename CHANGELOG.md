@@ -15,6 +15,8 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 - PR reviewer: the verify pass scores each finding from 0 to 10, shown small on the comment; `min_score` in `.mendcode/review.yaml` hides the lower ones and the higher scores come first before `cap` cuts. See [PR reviewer](docs/pr-review.md).
 - PR reviewer: `fallback_models` names models a review moves to when its own model fails or is not available (never for a quota); the review says which model reviewed.
 - PR reviewer: hunks that only delete lines are sent as one line, and a diff too large for one call keeps the repository's main language longest, so reviews read fewer tokens.
+- A PR review at work shows in the session that watches the repository: its steps as tool rows and the activity status with the PR, its phase and its time, gone with the final note. Other sessions name it in the footer (`reviewing Symbex-1#25`). See [PR reviewer](docs/pr-review.md#seeing-a-review-run).
+- `/reviews` lists one row per pull request with its earlier runs in the detail, so Failed holds only PRs whose last run failed; running rows show their live phase and time, done ones what they found, and this daemon's own jobs say `this device`.
 
 - With an Anthropic API key, the native engine keeps each conversation in a Claude message thread (beta) and sends only the new messages on each call: the same price, a shorter wait for the first token in long conversations. Turn it off with `/tier message_threads off`; set `zeroDataRetention: true` if your organization requires zero data retention. See [message threads](docs/message-threads.md).
 - The card that approves a child above its launcher's mode also offers Approve in full access: the child asks nothing. Only you pick it on the card; a session still cannot ask for full. See [permissions](docs/permissions.md#what-a-session-cannot-do-from-its-own-shell).
@@ -142,6 +144,8 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 - A pull request with a very large diff of data or generated files is reviewed instead of refused for its size: data files are set aside for readers before their content is read, and the size limit applies to the code that is left.
 - A push reviews only what changed since the last review of this login on the pull request, also on a device that has no saved state; the summary names that head.
 - A review that failed for good is not queued and announced again at every daemon start; `/reviews` still shows it and `r` retries it.
+- `/reviews` opens even when a checkout is slow to answer: it shows the jobs and names the checkout it could not read.
+- A PR review whose verifier gave an unusable answer is retried, verifying the findings it had without reviewing the diff again, and its error says what the verifier answered.
 - A narrow footer row cuts its text segments (the tagline, the directory, the branch) with `…` instead of dropping the tagline whole.
 - The jump-to-latest pill no longer covers the last line of text: when that line reaches it, the pill takes a row of its own.
 - The summary printed on exit shows prompt tokens apart from cache reads and writes (`↑52K +488K cached ↓2,389`).

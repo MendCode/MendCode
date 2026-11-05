@@ -261,6 +261,47 @@ describe("runPrReview: stops, checkpoints and resume", () => {
     expect(failed.retryable).toBeUndefined()
   })
 
+  test("a verifier whose answer cannot be used twice is a retryable failure that names the cause; the retry only verifies, then publishes", async () => {
+    const repo = await repository()
+    const answers = children()
+    // The live case: a verify child answered twice (the answer and its one repair turn) with nothing parseable.
+    const prose: ReviewSessionFactory = async (input) => {
+      const session = await answers.factory(input)
+      return input.purpose === "verify" ? { async send(prompt) { answers.turns.push({ purpose: "verify", prompt }); return { text: "I checked both findings and they look right.", tokens: { input: 1000, output: 100 } } }, close: session.close } : session
+    }
+    const github = fakeGh()
+    const failed = await runPrReview({ ...baseInput(repo, prose), publish: true, gh: github.gh })
+    expect(answers.purposes()).toEqual(["review", "verify", "verify"])
+    expect(failed.status).toBe("failed")
+    expect(failed.retryable).toBe(true)
+    expect(failed.reason).toBe("verification failed (the verifier's answer could not be used after one repair turn (no JSON object in the answer; it began \"I checked both findings and they look right.\")); 2 candidate findings kept for the retry; nothing was published")
+    expect(failed.checkpoint).toMatchObject({ phase: "corroboration", completedPhases: ["analysis"] })
+    expect(failed.checkpoint!.candidates).toHaveLength(2)
+    expect(github.posts()).toEqual([])
+
+    const second = children()
+    const resumed = await runPrReview({ ...baseInput(repo, second.factory), publish: true, gh: github.gh, checkpoint: failed.checkpoint })
+    expect(second.purposes()).toEqual(["verify"])
+    expect(resumed.status).toBe("published")
+    expect(resumed.outcome!.result.findings).toHaveLength(2)
+  })
+
+  test("the run tells each step it starts: analysis with its files, the verify pass with its candidates, posting", async () => {
+    const repo = await repository()
+    const github = fakeGh()
+    const steps: Array<{ phase: string; label: string; detail?: string | undefined }> = []
+    const run = await runPrReview({ ...baseInput(repo, children().factory), publish: true, gh: github.gh, progress: (step) => steps.push(step) })
+    expect(run.status).toBe("published")
+    expect(steps).toEqual([
+      { phase: "analysis", label: "Analysis", detail: "1 file" },
+      { phase: "corroboration", label: "Verifying 2 candidates" },
+      { phase: "posting", label: "Posting review" },
+    ])
+    // A listener that throws never stops the review.
+    const loud = await runPrReview({ ...baseInput(repo, children().factory), progress: () => { throw new Error("terminal gone") } })
+    expect(loud.status).toBe("reviewed")
+  })
+
   test("a checkpoint of another head is not resumed: the review runs again from the start", async () => {
     const repo = await repository()
     const kids = children()

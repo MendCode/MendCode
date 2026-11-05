@@ -132,10 +132,15 @@ export type RunPrReviewInput = {
   readers?: RunReaders | undefined
   /** Where `fallback_models` resolve to sessions (the reviewer's own provider, the allowed model list). */
   fallbacks?: RunFallbacks | undefined
+  /** Each step the run starts (readers, analysis, verification, posting), for the live activity a watching terminal shows. Never throws into the run. */
+  progress?: ((step: ReviewProgress) => void) | undefined
 } & RunPlatformInput
 
 /** `fallback_models`: the factory of each model the run may move to (fallback.ts), or why it may not; absent (the hosted runner): none. */
 export type RunFallbacks = { source(model: string): { ok: true; model: string; factory: ReviewSessionFactory } | { ok: false; reason: string } }
+
+/** A step of a running review as the activity shows it: the ledger's phase word, a label and an optional detail. */
+export type ReviewProgress = { phase: string; label: string; detail?: string | undefined }
 
 export type RunReaders = { tier?: Tier | undefined; source(requested?: string | undefined): ReaderSource }
 
@@ -350,6 +355,10 @@ async function dropInherited({ git, directory, head, stack, findings }: { git: G
 }
 
 const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? "" : "s"}`
+/** The run's step for the live activity; a listener that throws never stops the review. */
+function tell(input: Pick<RunPrReviewInput, "progress">, step: ReviewProgress) {
+  try { input.progress?.(step) } catch { /* the activity is not the review */ }
+}
 
 /**
  * Why a run with a stalled turn failed, and that it is not lost: `kept` (what the checkpoint holds) says the retry continues from
@@ -360,6 +369,16 @@ function stalledReason(error: ReviewTurnStalled, kept: string | undefined): stri
   return kept
     ? `review incomplete, ${words}; the work before it is kept (${kept}) and the retry continues from there; nothing was published`
     : `review incomplete, ${words}; the retry runs the review pass again; nothing was published`
+}
+
+/**
+ * Why a run whose verifier failed published nothing: the verifier's own words (`stop.detail`, "Verification failed: …"), and how
+ * many candidates the checkpoint keeps for the retry.
+ */
+function verifyFailedReason(stop: PrStopReason | undefined, checkpoint: JobCheckpoint): string {
+  const cause = stop?.detail.replace(/^Verification failed:\s*/, "").replace(/\s+/g, " ").trim()
+  const kept = checkpoint.candidates.length
+  return `verification failed${cause ? ` (${cause})` : ""}; ${kept ? `${plural(kept, "candidate finding")} kept for the retry; ` : ""}nothing was published`
 }
 
 /** The base branch's `.gitattributes`, bounded; the PR's own never decides what the review pass reads. */
@@ -399,7 +418,9 @@ function runReaders({ input, config, resume }: { input: RunPrReviewInput; config
     if (fresh.length) {
       const cap = scaledBudget(config.budget, diffTokens)
       const allowance = cap === undefined ? Number.POSITIVE_INFINITY : Math.floor(cap * READER_SHARE) - spent(total.tokens)
-      const result = await readGroups({ groups: fresh, source: pick(), parallel, allowance })
+      const chosen = pick()
+      tell(input, { phase: "readers", label: "Readers", detail: [plural(fresh.reduce((sum, group) => sum + group.files.length, 0), "file"), chosen.ok ? chosen.model : ""].filter(Boolean).join(" · ") })
+      const result = await readGroups({ groups: fresh, source: chosen, parallel, allowance })
       out.push(...result.summaries.values())
       total.tokens = { input: total.tokens.input + result.tokens.input, output: total.tokens.output + result.tokens.output, cached: (total.tokens.cached ?? 0) + (result.tokens.cached ?? 0) }
       total.calls += result.calls; total.byModel += result.byModel; total.byLocal += result.byLocal
@@ -472,7 +493,9 @@ async function reviewRun(input: RunPrReviewInput): Promise<ReviewRun & RunPlatfo
     const diffTokens = (context.parts ? context.parts.reduce((sum, part) => sum + part.tokens, 0) : context.tokens) + (context.readTokens ?? 0)
     const cap = scaledBudget(config.budget, diffTokens)
     const budgetTokens = cap === undefined ? Number.POSITIVE_INFINITY : Math.max(10_000, cap - (readers?.spent() ?? 0))
-    const engineConfig = engineConfigFor({ config, context, learnings: read.learnings, budgetTokens, plan, memory })
+    const engineConfig = { ...engineConfigFor({ config, context, learnings: read.learnings, budgetTokens, plan, memory }), ...(input.progress ? { onVerify: (candidates: number) => tell(input, { phase: "corroboration", label: `Verifying ${plural(candidates, "candidate")}` }) } : {}) }
+    // A resume that already has the review pass goes on with what it kept (its verify step says so); otherwise the pass starts here.
+    if (!resume?.result) tell(input, { phase: "analysis", label: "Analysis", detail: `${plural(context.files.length, "file")}${incremental ? " · incremental" : ""}` })
     const withReaders = <T extends JobCheckpoint>(checkpoint: T): T => readers?.summaries().length ? { ...checkpoint, readers: readers.summaries() } : checkpoint
     const checks = config.checks.length ? () => (input.checks ?? ((directory, commands) => runChecks({ directory, commands })))(input.directory, config.checks) : undefined
     const common = { state, config, incremental, configKey, plan }
@@ -529,11 +552,13 @@ async function reviewRun(input: RunPrReviewInput): Promise<ReviewRun & RunPlatfo
     if (outcome.stop && !closing) {
       const stop = outcome.stop
       if (attempt.stalled) return { status: "failed", reason: stalledReason(attempt.stalled, stop.remaining), ...reviewed, retryable: true }
-      if (!outcome.verified && !attempt.limit) return { status: "failed", reason: "verification failed; nothing was published", ...reviewed, stop }
+      // A verifier that failed (an answer it could not repair, a crashed child) is the model's, not the change's: the job is tried
+      // again with backoff, and the retry verifies the kept candidates without a second review pass.
+      if (!outcome.verified && !attempt.limit) return { status: "failed", reason: verifyFailedReason(stop, checkpoint), ...reviewed, stop, retryable: true }
       // An "error" stop of a complete verify pass is the review pass saying it could not review the change: its words, not a bare kind.
       return { status: "reviewed", reason: `review incomplete (${stop.kind === "error" ? stop.detail.replace(/^The review pass/, "the review pass") : stop.kind}); nothing was published`, ...reviewed, stop, ...(attempt.limit ? { retryable: true as const } : {}) }
     }
-    if (!outcome.verified) return { status: "failed", reason: "verification failed; nothing was published", ...reviewed }
+    if (!outcome.verified) return { status: "failed", reason: verifyFailedReason(undefined, checkpoint), ...reviewed, retryable: true }
     const provider = input.provider
     if (input.publisher && config.enabled) {
       const blocked = await publishBlock({ input, config })
@@ -542,6 +567,7 @@ async function reviewRun(input: RunPrReviewInput): Promise<ReviewRun & RunPlatfo
     if (!(input.gh || provider) || !input.publish || !config.enabled) return { status: "reviewed", ...(!config.enabled ? { reason: "publishing needs enabled: true in .mendcode/review.yaml on the base branch" } : {}), ...reviewed, ...keep }
     const as = input.publishAs
     if (provider) {
+      tell(input, { phase: "posting", label: "Posting review" })
       const report = await publishThroughProvider({
         provider, repo: input.repo, number: input.number, result, previous: state, resolve: fixed, info,
         ...(config.template.sections.length ? { template: config.template } : {}), ...(outcome.sections ? { sections: outcome.sections } : {}),
@@ -552,6 +578,7 @@ async function reviewRun(input: RunPrReviewInput): Promise<ReviewRun & RunPlatfo
       if (!report.posted && !report.duplicate && / refused the review/.test(report.reason ?? "")) return { status: "failed", reason: report.reason!, ...reviewed, report }
       return { status: "published", ...notPosted(report), ...reviewed, ...keep, report, state: report.state }
     }
+    tell(input, { phase: "posting", label: "Posting review" })
     const report = await publishReview({
       repo: input.repo, number: input.number, result, previous: state, process: input.gh!, resolve: fixed, info,
       ...(config.template.sections.length ? { template: config.template } : {}), ...(outcome.sections ? { sections: outcome.sections } : {}),

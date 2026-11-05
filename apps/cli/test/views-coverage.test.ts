@@ -84,6 +84,7 @@ const COVERAGE: Record<string, Entry> = {
   "voice-row.ts": { slot: "bar" },
   "agents-strip.ts": { slot: "bar" },
   "background-row.ts": { slot: "bar" },
+  "review-activity.ts": { slot: "bar" },
   // Not a slot of their own, each with its reason.
   "panel-box.ts": { allow: "box-drawing helper called by the built-in renderers of notice, approval, question and slash.menu; draws nothing on its own" },
   "deck.ts": { allow: "row layout helpers (tabs, hint and KPI rows) used inside page, widget and slot built-ins; draws nothing on its own" },

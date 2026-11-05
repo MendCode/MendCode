@@ -201,6 +201,7 @@ export function createApp(input: AppInput) {
     childWaiting: new Map(),
     agentTitles: new Map<string, string>(),
     agentParents: new Map<string, string>(),
+    reviewActivity: [],
     agentShells: [],
     relaunched: new Set<string>(),
     agentShellsBusy: false,

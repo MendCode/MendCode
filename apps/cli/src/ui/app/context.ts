@@ -6,6 +6,7 @@ import type { ProvidersPageState, ProviderNote } from "../../view/providers-page
 import type { FooterSegment } from "@mendcode/protocol/wire"
 import type { McpStatusReport, StatusSegment, PermissionGrant, ProviderInfo, Loop, GlobalEvent, RecipesReport, SessionSummary, WorkflowSummary, CustomToolsReport, DaemonInfoReport, DreamRun, ExtensionsReport, HooksReport, MemoryCategoryInfo, MemoryEntry, MemoryGraphReport, MemoryId, PackagesReport, Settings, ChangesReport, ContextReport, ForegroundState, PermissionMode, SessionId, UsageReport, UsageWasteReport, StorageReport, ModelChoice, ModelsReport, SecretInfo } from "@mendcode/protocol"
 import type { ContextPageState } from "../../view/context-page"
+import type { ReviewActivityJob } from "../../view/review-activity"
 import { contextWindowReply, parseContextWindowArgs, type ContextWindowAck } from "../../view/context-window-reply"
 import { preload } from "../lazy-pages"
 import type { PaletteState } from "../../view/palette"
@@ -289,6 +290,8 @@ export type AppState = {
   agentTitles: Map<string, string>
   /** The parent of each sub-agent session a `task.changed` named (the activity push does not carry it): the session pet's `agents` state reads it. */
   agentParents: Map<string, string>
+  /** The PR reviews the daemon runs now with their steps (`pr.review.activity`): the watching session's activity and the footer read it. */
+  reviewActivity: ReviewActivityJob[]
   agentShells: AgentShell[]
   /** Sub-agents the user stopped and `/relaunch` already asked to start again, by their call's item: their stopped row goes. */
   relaunched: Set<string>
