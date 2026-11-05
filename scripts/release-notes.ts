@@ -148,7 +148,10 @@ export function releaseNotes(input: NotesInput): string {
   lines.push("## Install", "", "```sh",
     channel === "dev" ? `curl -fsSL ${url}/releases/download/${input.tag}/install.sh | MENDCODE_VERSION=${input.tag} sh` : `curl -fsSL ${url}/releases/latest/download/install.sh | sh${flag}`,
     "```", "")
-  if (channel !== "dev") lines.push(`Already installed: \`mendcode upgrade${channel === "stable" ? "" : ` --channel ${channel}`}\`.${channel === "nightly" ? "" : ` This exact build: \`MENDCODE_VERSION=${input.tag}\` with the same installer.`}`, "")
+  const upgrade = channel === "dev" ? undefined : `mendcode upgrade${channel === "stable" ? "" : ` --channel ${channel}`}`
+  if (upgrade) lines.push(`Already installed: \`${upgrade}\`.${channel === "nightly" ? "" : ` This exact build: \`MENDCODE_VERSION=${input.tag}\` with the same installer.`}`, "")
+  // Above the long details, so the page shows it without unfolding anything; it updates an older build first.
+  lines.push(...askBlock(input.tag, `${url}/releases/tag/${source}`, upgrade))
   lines.push("<details>", "<summary>Full details</summary>", "")
   for (const group of NOTE_GROUPS) {
     if (!items[group].length) continue
@@ -170,13 +173,12 @@ export function releaseNotes(input: NotesInput): string {
     ...(input.commits.length > listed.length ? [`- … and ${input.commits.length - listed.length} more`] : []), "")
   if (input.files.length) lines.push(`${input.files.length} file${input.files.length === 1 ? "" : "s"} changed: ${areas(input.files)}.`, "")
   lines.push("</details>", "", `**Changelog**: [CHANGELOG.md](${url}/blob/${input.tag}/CHANGELOG.md)${previous ? ` · [compare with ${previous.tag}](${url}/compare/${previous.tag}...${input.tag})` : ` · [commits](${url}/commits/${input.tag})`}`, "")
-  lines.push(...askBlock(input.tag, `${url}/releases/tag/${source}`))
   return lines.join("\n")
 }
 
-/** The last block of every release page: a prompt to paste into any MendCode session (docs/whats-new.md, "The copyable prompt"). */
-export function askBlock(tag: string, page: string): string[] {
-  return ["## What fits you", "", "Paste this into any MendCode session:", "", "```text", whatsNewPrompt({ version: tag, changes: `on ${page}` }), "```", ""]
+/** The block under Install on every release page: a prompt to paste into any MendCode session (docs/whats-new.md, "The copyable prompt"). */
+export function askBlock(tag: string, page: string, upgrade?: string): string[] {
+  return ["## What fits you", "", "Paste this into any MendCode session:", "", "```text", whatsNewPrompt({ version: tag, changes: `on ${page}`, ...(upgrade ? { upgrade } : {}) }), "```", ""]
 }
 
 if (import.meta.main) {

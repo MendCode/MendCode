@@ -520,3 +520,5 @@ Every page with a list behaves the same way (a test, `apps/cli/test/page-standar
 | `Enter` or `Space`, `←` `→` | Open or toggle the selected row; change a value. |
 
 Pages with a `/` box: settings, customize, reviews, memory, history, marketplace, connect, whatsnew, and model (`/` opens its model search). Pickers that filter as you type (skills, models, agents, themes, sessions) need no `/`. The hint row names the keys the same way on each page (`/ search`, `esc back`); while the box is open it reads `type to filter · ↑↓ row · enter go · esc clear`.
+
+With Caps Lock on, a page of letter shortcuts reads a capital as its lowercase key. A page that gives shift+letter a meaning of its own keeps the capital for it.

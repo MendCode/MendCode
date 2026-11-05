@@ -15,10 +15,12 @@ page is its way to the same answer.
 
 ## The copyable prompt
 
-The last block of every release page, and of `/changelog`, is a short request in English to paste into any MendCode session:
+Every release page shows it right under Install, before the folded details, and `/changelog` ends with it: a short request in
+English to paste into any MendCode session. On a release page it also updates an older build first, with that channel's command:
 
 ```text
-MendCode v0.0.3 is installed. The changes are on https://github.com/MendCode/MendCode/releases/tag/v0.0.3.
+MendCode v0.0.3 is out. The changes are on https://github.com/MendCode/MendCode/releases/tag/v0.0.3.
+If the MendCode I run is older (`mendcode --version`), update it first with `mendcode upgrade`.
 From my memories, my past sessions and my MendCode settings, tell me which of these changes I should use, know about or configure, given what I usually do.
 Read only: do not change any setting unless I ask. Be brief.
 Answer in my language.
