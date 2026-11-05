@@ -1136,7 +1136,7 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
     } catch (error) {
       if (error instanceof JobBusy) {
         // Its job's review answers it: offered again at each poll, it then finds that review on the PR (`headReviewedBy`).
-        if (entry.blocked !== "job") void outbox.say(sessionId, `@mendcode review from ${comment.actor} on #${number} waits: ${errorText(error)}; the comment is answered by that review.`)
+        if (entry.blocked !== "job") void outbox.say(sessionId, `@mendcode review from ${comment.actor} on ${await repoCached(directory).catch(() => "")}#${number} waits: ${errorText(error)}; the comment is answered by that review.`)
         return { blocked: "job" }
       }
       const repo = await repoCached(directory).catch(() => directory)

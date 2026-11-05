@@ -140,7 +140,7 @@ export function createChatRows(ctx: AppContext, actions: {
     // A newer build installed under this terminal: on the right of the prompt's top rule until the restart into it, so it takes no
     // row (the pet keeps standing on the prompt). Only a prompt without that rule gives it a right-aligned row of its own.
     // After the restart into it, the same place says so until the first key: a restart nobody watched still gets seen.
-    const updateText = state.updateReady ? `${g.ok} Update installed ${g.sep} /restart to update` : state.updated ? `${g.ok} Updated to the new build` : ""
+    const updateText = state.updateReady ? `${g.ok} New build installed ${g.sep} /restart to switch` : state.updated ? `${g.ok} Updated to the new build` : ""
     const updateOnRule = updateText !== "" && !asking && rich && preset !== "minimal" && frame.top.length === 1
     const promptRule: Line[] = asking ? [] : toastSpans?.length ? [overlayRule(frame.top[0]!, toastSpans, ruleOffset)] : overlay === "above" && workingBuilt?.length ? [overlayRule(frame.top[0]!, workingBuilt, ruleOffset)] : statusRule?.length ? [overlayRule(frame.top[0]!, statusRule, ruleOffset)] : frame.top
     const promptTop: Line[] = updateOnRule && promptRule.length === 1 ? [ruleRight(promptRule[0]!, [{ text: updateText, fg: "success" }])] : promptRule

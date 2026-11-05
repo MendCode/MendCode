@@ -445,16 +445,16 @@ describe("prompt area in the app", () => {
     const { app, text } = harness({ width: 100 })
     app.render()
     const before = text()
-    expect(before.some((row) => row.includes("Update installed"))).toBe(false)
+    expect(before.some((row) => row.includes("New build installed"))).toBe(false)
     app.announceUpdate()
     app.announceUpdate()
     const after = text()
-    const rows = after.filter((row) => row.includes("Update installed"))
+    const rows = after.filter((row) => row.includes("New build installed"))
     expect(rows).toHaveLength(1)
-    expect(rows[0]!.trimEnd()).toMatch(/^ {2}─{40,} ✓ Update installed · \/restart to update ─{3}$/)
+    expect(rows[0]!.trimEnd()).toMatch(/^ {2}─{40,} ✓ New build installed · \/restart to switch ─{3}$/)
     expect(rows[0]!.length).toBe(before.find((row) => row.trim().startsWith("─"))!.length)
     // Nothing moves: the rule takes the notice in place, so the pet keeps standing on the prompt.
-    expect(after.findIndex((row) => row.includes("Update installed"))).toBe(before.findIndex((row) => /^ {2}─+ *$/.test(row)))
+    expect(after.findIndex((row) => row.includes("New build installed"))).toBe(before.findIndex((row) => /^ {2}─+ *$/.test(row)))
   })
 
   test("after the restart into a new build the prompt's top rule says so until the first key", async () => {

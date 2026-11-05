@@ -134,6 +134,8 @@ export const PAGE_MODULES = {
   palette: [palette],
   approval: [approvalDiff],
   pet: [petPicker],
+  // `/mascot` without a name (and Enter on customize's Mascot row) opens the same picker for the start screen.
+  mascot: [petPicker],
   connect: [connect],
   providers: [providers],
   secrets: [secrets],

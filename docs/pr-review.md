@@ -110,7 +110,9 @@ on the review itself, so later pushes, an edited description and the hosted runn
 
 The reviewer's notices to the watching session (a review published, a fix pushed, a job stopped) are recorded in its transcript as
 notices: stored and shown, with no model call. Set `experimental.pr_review_prompts: true` to have the session's model answer each
-one instead. A watch that has not ended, a held notice or a job that runs later (queued, waiting for a time, a claim or a quota
+one instead. In the transcript the pull request in a notice (`owner/repo#N`) is a terminal link to it on GitHub, and a `review <id>`
+after it links to that review (links follow the `hyperlinks` setting). A job id shows by its last eight characters with a
+`/reviews open <those characters>` hint, and the queue row keeps the pull request and what happened to it. A watch that has not ended, a held notice or a job that runs later (queued, waiting for a time, a claim or a quota
 reset) keeps a detached daemon from stopping itself when idle, and a closing terminal hands it to a detached daemon; the
 `daemon.status` answer names it in `keepAlive.standing`.
 

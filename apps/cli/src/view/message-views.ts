@@ -6,6 +6,7 @@ import { fit } from "./deck"
 import { carryMeta } from "./line-meta"
 import { textWidth } from "./wrap"
 import { sentRows } from "./reply-comments-sent"
+import { isPrNotice, noticeSpans } from "./pr-notice"
 
 /**
  * The built-in renderers of `message.user`, `message.assistant` and `message.reasoning` as pure functions of their input
@@ -34,7 +35,7 @@ export function userRows(m: Sized<UserMessageModel>, g: Glyphs): Line[] {
   if (m.variant === "notice") {
     // The first line says what happened; the output tail it carries is for the agent, shown only in full view.
     const [head = "", ...rest] = m.text.split("\n")
-    const lines = wrapSpans([{ text: head, fg: "muted" }], width, [{ text: `${g.tool} `, fg: "muted" }])
+    const lines = wrapSpans(isPrNotice(head) ? noticeSpans(head, { fg: "muted" }) : [{ text: head, fg: "muted" }], width, [{ text: `${g.tool} `, fg: "muted" }])
     if (m.mode === "full") for (const line of rest) lines.push(...wrapSpans([{ text: line, fg: "muted", dim: true }], width, [{ text: INDENT }]))
     return lines
   }

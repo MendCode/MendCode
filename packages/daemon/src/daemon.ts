@@ -2994,7 +2994,7 @@ export async function startDaemon(options: DaemonOptions) {
       if (store.goals.current(sessionId)?.goal.status === "usage_limited" && goals.handle({ id: ids("command"), clientId: taskClientId, type: "goal.update", sessionId, status: "active" }).ok) return true
       const actor = actorFor(sessionId)
       if (!actor) return false
-      const text = "The provider's usage limit has reset. Continue the work you were doing when it stopped, from where you left off."
+      const text = "The provider's usage limit is lifted. Pick the work back up where it stopped."
       if (await actor.steer({ text, label: "usage limit · resumed", meta: { usageLimit: "resume" }, force: true })) return true
       return (await actor.notify(text)) !== undefined
     },

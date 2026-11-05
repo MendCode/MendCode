@@ -5,6 +5,7 @@ import { fit, lineWidth, panelGrid, spread } from "./deck"
 import { onColor } from "./panel-box"
 import { readableText } from "./reply-comments"
 import { truncateEnd } from "./session-list"
+import { queuedNotice } from "./pr-notice"
 
 export const QUEUE_SHOWN = 3
 const QUEUED = " QUEUED "
@@ -36,7 +37,7 @@ export function renderQueuePanel(input: { width: number; previews: readonly stri
       ...(index === 0 ? [{ text: SEND, bold: true, ...onColor("primary") }, { text: " " }] : []),
       { text: input.delivery?.[index] === "steer" ? STEER : QUEUED, bold: true, ...onColor("accent") },
     ]
-    const text = truncateEnd(`${input.shell?.has(index) ? "$ " : ""}${readableText(preview, { quotes: false }).replace(/\s+/g, " ")}`, Math.max(1, room - lineWidth(chips) - 4))
+    const text = truncateEnd(`${input.shell?.has(index) ? "$ " : ""}${queuedNotice(readableText(preview, { quotes: false }).replace(/\s+/g, " "))}`, Math.max(1, room - lineWidth(chips) - 4))
     const left: Line = [{ text: "… ", fg: "muted" }, { text, fg: "body" }]
     const gap = Math.max(1, room - lineWidth(left) - lineWidth(chips))
     if (index === 0) {

@@ -42,6 +42,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Changed
 
+- The notice for an installed update now reads `New build installed · /restart to switch`, and the message that resumes work after a usage limit lifts is worded in MendCode's own voice.
 - `/context`, the footer and the sidebar show the same used / compaction point for a session, before and after the first message; `/context` uses the provider's count of the last call (images are estimated at 1,500 tokens each) and says whether the figure is measured or estimated. With Claude Code the point is the one its process was given, the model window is listed apart, and a changed `claude_compact` point restarts the process at the next turn. See [Claude Code](docs/claude-code.md).
 - The session lists of `threads` and `sessions` (and the plan list, and other programs' chats) are shorter: one header, rows grouped by project, short ids that every tool accepts, ages like `3m`, and the state only when a session is busy.
 - A wide flowchart is drawn in the chat instead of shown as source: long labels wrap (`<br/>` still breaks a line), spacing tightens, and a left-to-right flow turns top-down when it still does not fit. The note says what was tried when nothing fits.
@@ -94,6 +95,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Fixed
 
+- PR review notices link to the pull request (and the review they name) on GitHub, and show a job by a short id with the `/reviews open` hint, so narrow terminals keep the important words. See [PR review](docs/pr-review.md).
 - Computer use on apps whose content is a webview (Tauri, WebKit, Electron): the page's content is exposed, a key reaches the app when no node can take focus, and a thin result tells the model to look again before giving up. See [computer use](docs/computer.md).
 - The folders MendCode makes in the system temporary directory for Claude Code, Codex and ACP sessions are removed when the daemon stops, and a daemon that died leaves none behind: the next start clears them.
 - `--safe-mode` against a daemon not started with it names `--safe-mode` in its refusal, not `--pure`.
