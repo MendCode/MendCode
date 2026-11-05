@@ -276,6 +276,21 @@ function diffCode(line: string, mark: readonly [number, number] | undefined, roo
   return { indent, text }
 }
 
+/** Screen rows one diff line may take unless the `diffLineRows` setting says otherwise. */
+export const DIFF_LINE_ROWS = 4
+
+/** The first `cap` rows of one wrapped diff line, the last ending in `…` when rows were left out: minified code does not fill the screen. */
+function capRows(rows: Line[], cap: number): Line[] {
+  if (rows.length <= cap) return rows
+  const kept = rows.slice(0, cap)
+  const last = kept[cap - 1]!
+  const at = last.findLastIndex((span) => span.text.trim().length > 0)
+  if (at < 0) return kept
+  const span = last[at]!
+  kept[cap - 1] = [...last.slice(0, at), { ...span, text: `${[...span.text].slice(0, -1).join("")}…` }, ...last.slice(at + 1)]
+  return kept
+}
+
 function padTo(line: Line, width: number, bg: ColorName): Line {
   const used = line.reduce((sum, span) => sum + textWidth(span.text), 0)
   return used < width ? [...line, { text: " ".repeat(width - used), bg }] : line
@@ -286,7 +301,7 @@ function padTo(line: Line, width: number, bg: ColorName): Line {
  * and full-row tints for changes. The part of a changed line that differs from its replacement is bold in the marker's colour.
  * `prefix` is what leads every row (the card's indent and rule).
  */
-export function renderDiffRows(rows: DiffRow[], width: number, prefix: Span[] = [{ text: INDENT }]): Line[] {
+export function renderDiffRows(rows: DiffRow[], width: number, prefix: Span[] = [{ text: INDENT }], lineRows = DIFF_LINE_ROWS): Line[] {
   const lead = prefix.reduce((sum, span) => sum + textWidth(span.text), 0)
   const shownNumber = (row: DiffRow) => (row.kind === "remove" ? row.old : row.new ?? row.old)
   const digits = Math.max(1, ...rows.map((row) => String(shownNumber(row) ?? 0).length))
@@ -304,7 +319,7 @@ export function renderDiffRows(rows: DiffRow[], width: number, prefix: Span[] = 
     const { indent, text } = diffCode(row.text, changed.get(at), room - lead - columns - 3, markerTone, bg)
     const first: Span[] = [...prefix, { text: side(shownNumber(row)), fg: "muted", ...(bg ? { bg } : {}) }, { text: ` ${marker} ${" ".repeat(indent)}`, fg: markerTone, ...(bg ? { bg } : {}) }]
     const rest: Span[] = [...prefix, { text: " ".repeat(columns + 3 + indent), ...(bg ? { bg } : {}) }]
-    const rows = lead + columns + 3 + textWidth(row.text) <= room ? [[...first, ...text]] : wrapSpans(text, room, first, rest)
+    const rows = lead + columns + 3 + textWidth(row.text) <= room ? [[...first, ...text]] : capRows(wrapSpans(text, room, first, rest), lineRows)
     return rows.map((line) => (bg ? padTo(line, width - 1, bg) : line))
   })
 }
@@ -356,7 +371,7 @@ function facingRows(rows: readonly DiffRow[]): Array<{ across: number } | { left
  * The old file on the left and the new on the right, each with its own line numbers, a removal facing the addition that
  * replaced it with the part that differs in bold. A long line wraps inside its half; the shorter side is padded to match.
  */
-export function renderSplitDiffRows(rows: DiffRow[], width: number, prefix: Span[] = [{ text: INDENT }]): Line[] {
+export function renderSplitDiffRows(rows: DiffRow[], width: number, prefix: Span[] = [{ text: INDENT }], lineRows = DIFF_LINE_ROWS): Line[] {
   const lead = prefix.reduce((sum, span) => sum + textWidth(span.text), 0)
   const inner = Math.max(2, width - 1 - lead - SPLIT_GUTTER.length)
   const leftRoom = Math.floor(inner / 2)
@@ -374,7 +389,7 @@ export function renderSplitDiffRows(rows: DiffRow[], width: number, prefix: Span
     const { indent, text } = diffCode(row.text, changed.get(at), room - digits - 3, tone, bg)
     const first: Span[] = [{ text: number === undefined ? " ".repeat(digits) : String(number).padStart(digits), fg: "muted", ...tint }, { text: ` ${marker} ${" ".repeat(indent)}`, fg: tone, ...tint }]
     const rest: Span[] = [{ text: " ".repeat(digits + 3 + indent), ...tint }]
-    const lines = digits + 3 + textWidth(row.text) <= room ? [[...first, ...text]] : wrapSpans(text, room, first, rest)
+    const lines = digits + 3 + textWidth(row.text) <= room ? [[...first, ...text]] : capRows(wrapSpans(text, room, first, rest), lineRows)
     return lines.map((line) => fit(bg ? padTo(line, room, bg) : line, room))
   }
   return facingRows(rows).flatMap((pair): Line[] => {
@@ -450,6 +465,12 @@ export type ToolCardInput = {
   density?: "line" | "brief"
   /** Draw an edit's rows side by side (`splitDiffAt` the transcript's width); a file that only gains or only loses lines stays unified. */
   splitDiff?: boolean
+  /** False leaves the rule at the card's left blank (the `toolRail` setting); the body keeps its place. */
+  rail?: boolean
+  /** Unchanged lines a diff keeps before and after each change (the `diffContext` setting); undefined is 3. */
+  diffContext?: number
+  /** Screen rows a long diff line may take (the `diffLineRows` setting); undefined is 4. */
+  diffLineRows?: number
   /** An extension's card body for this tool (`renderTool`); undefined keeps the default card. */
   custom?: (view: ToolView) => Line[] | undefined
   /** The wait canvas a running image tool draws (the profile's `imageWait*` keys); undefined is the default canvas. */
@@ -642,9 +663,47 @@ function foldRow(prefix: Span[], text: string, fold: number): Line {
   return row
 }
 
+/** Unchanged lines a diff keeps on each side of a change unless the `diffContext` setting says otherwise. */
+export const DIFF_CONTEXT = 3
+
+/**
+ * The rows of a diff with at most `keep` unchanged rows on each side of a change (the `diffContext` setting). What a tool or another
+ * engine sent beyond that is dropped, and a gap inside the diff is marked with `⋯` as a second hunk is.
+ */
+export function trimDiffContext(rows: DiffRow[], keep: number): DiffRow[] {
+  const changed = rows.map((row) => row.kind === "add" || row.kind === "remove")
+  const near = [...changed]
+  for (let at = 0; at < rows.length; at++) {
+    if (!changed[at]) continue
+    for (let step = 1; step <= keep; step++) {
+      if (rows[at - step]?.kind !== "context") break
+      near[at - step] = true
+    }
+    for (let step = 1; step <= keep; step++) {
+      if (rows[at + step]?.kind !== "context") break
+      near[at + step] = true
+    }
+  }
+  const out: DiffRow[] = []
+  let gap = false
+  rows.forEach((row, at) => {
+    // A row of text that is not a numbered line (a tool's `… N more lines`) is a note, not context.
+    if (row.kind === "context" && !near[at] && row.number !== undefined) {
+      gap = true
+      return
+    }
+    const last = out.at(-1)
+    if (gap && last && last.kind !== "file" && last.kind !== "hunk" && row.kind !== "file" && row.kind !== "hunk") out.push({ kind: "hunk", text: "⋯" })
+    gap = false
+    out.push(row)
+  })
+  return out
+}
+
 /** One header per file (`Edit path  +3 −1`) over its rows; at most DIFF_PREVIEW_ROWS rows in all before the hint. */
-function diffBlocks({ files, c }: { files: PatchFile[]; c: CardContext }): Line[] {
+function diffBlocks({ files: whole, c }: { files: PatchFile[]; c: CardContext }): Line[] {
   const { input, level, marks } = c
+  const files = whole.map((file) => (file.rows.some((row) => row.kind === "context") ? { ...file, rows: trimDiffContext(file.rows, input.diffContext ?? DIFF_CONTEXT) } : file))
   const out: Line[] = []
   const total = files.reduce((sum, file) => sum + file.rows.length, 0)
   const pages = Math.max(1, Math.ceil(total / TOOL_PAGE_LINES))
@@ -668,7 +727,7 @@ function diffBlocks({ files, c }: { files: PatchFile[]; c: CardContext }): Line[
     out.push(header(c, { label: verbs[file.verb], target: file.path, facts: factsOf(file), quiet: out.length > 0 }, !out.length))
     const shown = Math.min(budget, file.rows.length - from)
     const draw = input.splitDiff && facesBothSides(file.rows) ? renderSplitDiffRows : renderDiffRows
-    out.push(...draw(file.rows.slice(from, from + shown), input.width, c.body.prefix))
+    out.push(...draw(file.rows.slice(from, from + shown), input.width, c.body.prefix, input.diffLineRows))
     hidden += file.rows.length - from - shown + (file.unseen ?? 0)
     budget -= shown
   }

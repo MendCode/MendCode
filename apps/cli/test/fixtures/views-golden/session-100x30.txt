@@ -1,12 +1,12 @@
-971457daae555237
+db374a633afa088a
   git /work/app
      │ 1 fail
      │ error: expected "a" received "b"
 
      ✎ Edit src/store.ts  3 lines                                                                1s
-     │ Edited src/store.ts
-     │ - const key = name
-     │ + const key = `${directory}:${name}`
+       Edited src/store.ts
+       - const key = name
+       + const key = `${directory}:${name}`
 
   • The cache key ignored the directory.
 

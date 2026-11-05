@@ -1,6 +1,6 @@
-2f0fde8c5b9a1a08
+0bc09f7e2d39767a
   git /work/app
-     │ + const key = `${directory}:${name}`
+       + const key = `${directory}:${name}`
 
   • The cache key ignored the directory.
 

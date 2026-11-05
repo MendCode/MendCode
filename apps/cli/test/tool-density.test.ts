@@ -105,7 +105,7 @@ describe("dense is the full view as it was", () => {
     // The fixture's cards before this change: the same text, one call at a time, in the full view's preview level.
     const dense = text(build({ density: "dense" }))
     expect(dense).toContain("     ▤ Read docs/extensions.md  28 lines")
-    expect(dense.filter((row) => row.startsWith("     │ ") && /^\s*│ [0-9]+ {2}/.test(row)).length).toBeGreaterThanOrEqual(6)
+    expect(dense.filter((row) => /^ {7} *[0-9]+ {2}/.test(row)).length).toBeGreaterThanOrEqual(6)
     expect(dense.join("\n")).toContain("… 22 more lines")
   })
 
@@ -129,7 +129,7 @@ describe("standard caps the preview by kind", () => {
   const of = (title: string, nth = 0) => rows.get(itemOf(title, nth))!
 
   test("a read shows 3 lines and says how many are left", () => {
-    expect(of("read: docs/extensions.md").filter((row) => /^ {5}│ +\d+/.test(row))).toHaveLength(3)
+    expect(of("read: docs/extensions.md").filter((row) => /^ {7} *\d+(\s|$)/.test(row))).toHaveLength(3)
     expect(of("read: docs/extensions.md").at(-1)).toContain("… 25 more lines")
   })
 
@@ -148,7 +148,7 @@ describe("standard caps the preview by kind", () => {
 
   test("a diff shows at most 8 rows; the session's patch has exactly 8, so nothing is left out", () => {
     const patch = of("apply_patch")
-    expect(patch.filter((row) => row.startsWith("     │ "))).toHaveLength(8)
+    expect(patch.filter((row) => row.startsWith("       "))).toHaveLength(8)
     expect(patch.at(-1)).not.toMatch(/…/)
   })
 })

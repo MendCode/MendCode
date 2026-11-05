@@ -10,7 +10,7 @@ import { FILE_OPENERS, type FileOpener } from "./links"
 import { PROCESS_MODES, type ProcessMode } from "../process-modes"
 import { GLYPH_CHOICES, type GlyphChoice } from "../ui/theme"
 import { ACTIVITY_PARTS, ACTIVITY_PARTS_DEFAULT, QUOTA_REFRESH_DEFAULT_MINUTES, normalizeQuotaRefresh, type QuotaRefreshEntry, FOOTER_ICON_MODES, STAT_PART_IDS, footerRowsProblems, footerTextProblems, normalizeUsageWidgets, type FooterIconMode, type UsageWidgetId } from "@mendcode/protocol/wire"
-import { parseMarkdownColors } from "@mendcode/protocol/wire"
+import { parseMarkdownColors, TOOL_RAIL_DEFAULT, toolRailProblems } from "@mendcode/protocol/wire"
 import { SLASH_LAYOUTS, slashProfileProblems, type SlashLayout, type SlashGroup, type SlashPreference } from "@mendcode/protocol/wire"
 import { DEFAULT_IMAGE_WAIT_CANVAS, DEFAULT_IMAGE_WAIT_INTERVAL, IMAGE_WAIT_COLORS, IMAGE_WAIT_LIMITS, IMAGE_WAIT_MODES, normalizeImageWaitArt, normalizeImageWaitCanvas, imageWaitPresetNames, type ImageWaitArt, type ImageWaitCanvas, type ImageWaitColor, type ImageWaitMode } from "./image-wait"
 
@@ -207,6 +207,12 @@ export type TuiProfile = {
   codeMapCard: (typeof CODE_MAP_CARDS)[number]
   toolDensity: (typeof TOOL_DENSITIES)[number]
   diffView: (typeof DIFF_VIEWS)[number]
+  /** Unchanged lines a diff shows before and after each change. */
+  diffContext: number
+  /** Screen rows one long diff line may take before it ends in an ellipsis. */
+  diffLineRows: number
+  /** Which tool cards draw the thin rule at their left (`name:on|off`, comma list; `TOOL_RAIL_DEFAULT`). */
+  toolRail: string
   tagline: string
   promptGlyphs: string
   activityMessages: string
@@ -464,6 +470,9 @@ export const DEFAULT_TUI_PROFILE: Readonly<TuiProfile> = {
   codeMapCard: "auto",
   toolDensity: "calm",
   diffView: "unified",
+  diffContext: 3,
+  diffLineRows: 4,
+  toolRail: TOOL_RAIL_DEFAULT,
   tagline: "",
   promptGlyphs: "",
   activityMessages: "",
@@ -809,6 +818,9 @@ export function normalizeTuiProfile(raw: unknown): TuiProfile {
     codeMapCard: oneOf(CODE_MAP_CARDS, source.codeMapCard) ?? "auto",
     toolDensity: oneOf(TOOL_DENSITIES, source.toolDensity) ?? "calm",
     diffView: oneOf(DIFF_VIEWS, source.diffView) ?? "unified",
+    diffContext: boundedInt(source.diffContext, 0, 6, 3),
+    diffLineRows: boundedInt(source.diffLineRows, 1, 50, 4),
+    toolRail: typeof source.toolRail === "string" && !toolRailProblems(source.toolRail).length ? source.toolRail.trim() : TOOL_RAIL_DEFAULT,
     tagline: oneLine(source.tagline, 80),
     promptGlyphs: normalizePromptGlyphs(source.promptGlyphs),
     activityMessages: normalizeActivityMap(source.activityMessages, false),

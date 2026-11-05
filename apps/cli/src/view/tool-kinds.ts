@@ -46,7 +46,7 @@ export function cardContext({ input, name, detail, level, ascii }: { input: Tool
   // A call kept to one row draws like the summary level wherever the summary has no row of its own to add: only the header.
   const line = input.density === "line" && level !== "full" && !running && !failed
   const brief = input.density === "brief" && level !== "full"
-  return { input, name, detail, level: line ? "summary" : level, ascii, marks, status, running, failed, cancelled, line, brief, body: { prefix: railPrefix({ rule, marks }), width: bodyWidth(input.width), marks } }
+  return { input, name, detail, level: line ? "summary" : level, ascii, marks, status, running, failed, cancelled, line, brief, body: { prefix: railPrefix({ rule, marks, shown: input.rail !== false }), width: bodyWidth(input.width), marks } }
 }
 
 /** The marker at the start of a card: the kind's glyph in the status colour; a failed call has the failure mark instead, so the state reads without colour. */

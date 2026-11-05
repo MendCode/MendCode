@@ -475,7 +475,7 @@ describe("shell", () => {
 describe("failures are never folded", () => {
   test("a failed reading call keeps its head and error message in every view", () => {
     const { events } = calls([{ title: "read: nope.ts", text: "ENOENT: nope.ts does not exist", options: { status: "error" } }])
-    for (const mode of ["balanced", "full"] as const) expect(view(events, { mode }).text()).toEqual(["     ✗ Read nope.ts  failed", "     │ ENOENT: nope.ts does not exist"])
+    for (const mode of ["balanced", "full"] as const) expect(view(events, { mode }).text()).toEqual(["     ✗ Read nope.ts  failed", "       ENOENT: nope.ts does not exist"])
     expect(view(events, { mode: "minimal" }).text()[0]).toContain("ENOENT")
   })
 })
@@ -614,7 +614,7 @@ describe("in the app", () => {
     await h.type(`\x1b[<0;${h.text()[row]!.indexOf("Read") + 3};${row + 1}m`)
     const text = h.text().join("\n")
     expect(text).toContain("Read README.md  126 lines")
-    expect(text).toContain("│  1  line 1")
+    expect(text).toMatch(/\n {8}1 {2}line 1\n/)
     expect(text).not.toContain("lines 121-126")
   })
 
@@ -622,7 +622,7 @@ describe("in the app", () => {
     const full = (await app("full", { width: 100, height: 60 })).h.text().join("\n")
     expect(full).toContain("entry0  entry3")
     expect(full).toContain("… 136 more lines")
-    expect(full).toContain("│ 6  line 6")
+    expect(full).toMatch(/\n {7}6 {2}line 6\n/)
     expect(full).not.toContain("line 7\n")
     const minimal = (await app("minimal")).h.text().join("\n")
     expect(minimal).toContain("2 tools")

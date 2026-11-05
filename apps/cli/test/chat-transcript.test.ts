@@ -390,7 +390,7 @@ describe("tools", () => {
     const { text } = view(withTool("edit: src/a.ts", diff(60)))
     expect(text[0]).toBe("     ✎ Edit src/a.ts  +60")
     expect(text.filter((l) => /\+ line \d+/.test(l))).toHaveLength(40)
-    expect(text.at(-1)).toBe("     │ … +20 lines")
+    expect(text.at(-1)).toBe("       … +20 lines")
     expect(view(withTool("edit: src/a.ts", diff(60)), { mode: "minimal" }).text.filter((l) => /\+ line \d+/.test(l)).length).toBeLessThan(40)
     const full = view(withTool("edit: src/a.ts", diff(60)), { mode: "full" }).text
     expect(full.filter((l) => /\+ line \d+/.test(l))).toHaveLength(40)
@@ -401,7 +401,7 @@ describe("tools", () => {
   test("a diff has one line-number column, aligned to the widest, no `@@` row, and marks what changed inside a line", () => {
     const text = ["@@ -98,3 +98,3 @@", " keep", "-const total = items.length", "+const total = items.length + extra", " tail"].join("\n")
     const { text: rows, lines } = view(withTool("edit: src/a.ts", text))
-    expect(rows.slice(1).map((row) => row.trimEnd())).toEqual(["     │  98   keep", "     │  99 - const total = items.length", "     │  99 + const total = items.length + extra", "     │ 100   tail"])
+    expect(rows.slice(1).map((row) => row.trimEnd())).toEqual(["        98   keep", "        99 - const total = items.length", "        99 + const total = items.length + extra", "       100   tail"])
     const added = lines.find((l) => l.text.includes("+ const total"))!
     expect(added.spans.find((s) => s.text === " + extra")).toMatchObject({ fg: "success", bold: true })
     expect(added.spans.find((s) => s.text.startsWith("const total"))).toMatchObject({ fg: "body", bg: "diffAddedBg" })

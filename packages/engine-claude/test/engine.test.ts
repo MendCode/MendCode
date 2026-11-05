@@ -823,6 +823,19 @@ describe("claude thinking blocks", () => {
     expect(events.at(-1)).toMatchObject({ type: "item.completed", itemId, status: "ok" })
   })
 
+  test("a Write's completion carries what it wrote, so its card shows the code", () => {
+    const content = "line one\nline two\n"
+    const { events, mapper } = mapped([
+      stream({ type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "toolu_w", name: "Write", input: {} } }),
+      stream({ type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: JSON.stringify({ file_path: "/p/a.txt", content }) } }),
+      stream({ type: "content_block_stop", index: 0 }),
+    ])
+    mapper.accept({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "toolu_w", content: "File created successfully at: /p/a.txt" }] }, parent_tool_use_id: null })
+    const done = events.at(-1) as { type: string; toolInput?: string }
+    expect(done.type).toBe("item.completed")
+    expect(JSON.parse(done.toolInput!)).toEqual({ file_path: "/p/a.txt", content })
+  })
+
   test("a ToolSearch that answers with tool references says which tools it loaded instead of an empty result", () => {
     const { events, mapper } = mapped([
       stream({ type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "toolu_s", name: "ToolSearch", input: {} } }),

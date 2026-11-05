@@ -1,4 +1,4 @@
-4c941e19eb158a40
+6dc796c6e5b8730a
   Sessions                   ← focus │   git /work/app
                                      │      ✗ bun test src/store.test.ts  3 pass · 1 fail  exit 1                                                                                                  1.8s
                                      │      │ bun test v1.3
@@ -7,9 +7,9 @@
                                      │      │ error: expected "a" received "b"
                                      │
                                      │      ✎ Edit src/store.ts  3 lines                                                                                                                             1s
-                                     │      │ Edited src/store.ts
-                                     │      │ - const key = name
-                                     │      │ + const key = `${directory}:${name}`
+                                     │        Edited src/store.ts
+                                     │        - const key = name
+                                     │        + const key = `${directory}:${name}`
                                      │
                                      │   • The cache key ignored the directory.
                                      │

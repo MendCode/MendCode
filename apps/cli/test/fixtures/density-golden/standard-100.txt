@@ -49,10 +49,10 @@
      │ … +5 lines
 
      ▤ Read docs/extensions.md  28 lines
-     │ 1  # Extensions
-     │ 2
-     │ 3  Extension line 2: terminal extensions load from the data dir or a trusted project.
-     │ … 25 more lines
+       1  # Extensions
+       2
+       3  Extension line 2: terminal extensions load from the data dir or a trusted project.
+       … 25 more lines
 
      ⌕ Grep "TOPICS"  2 matches in 1 file
      │ apps/cli/src/docs-commands.ts  2 matches
@@ -73,14 +73,14 @@
     ┃ The index is built from ORDER, so packages has to be added there; the file itself exists.
 
      ± Patch apps/cli/src/docs-commands.ts  +2 −1
-     │ 38   const TOPICS = loadTopics(docsDir)
-     │ 39
-     │ 40 - export const ORDER = ["keys", "mcp"]
-     │ 40 + export const ORDER = ["keys", "mcp", "packages"]
-     │ 41 + // packages sits after mcp: both are about what the terminal can load
-     │ 42   export function docsTopic(name: string) {
-     │ 43     return TOPICS.get(name)
-     │ 44   }
+       38   const TOPICS = loadTopics(docsDir)
+       39
+       40 - export const ORDER = ["keys", "mcp"]
+       40 + export const ORDER = ["keys", "mcp", "packages"]
+       41 + // packages sits after mcp: both are about what the terminal can load
+       42   export function docsTopic(name: string) {
+       43     return TOPICS.get(name)
+       44   }
 
      $ bun test apps/cli/test/docs.test.ts  241 pass · 0 fail                                 12.4s
 

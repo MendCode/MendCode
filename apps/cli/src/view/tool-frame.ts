@@ -138,7 +138,7 @@ export function headerRow(input: HeaderInput): Line {
 }
 
 /** The leading cells of a body row: the card's indent, then the rule in the card's colour. */
-export const railPrefix = ({ rule, marks }: { rule: ColorName; marks: Marks }): Span[] => [{ text: INDENT }, { text: `${marks.rail} `, fg: rule }]
+export const railPrefix = ({ rule, marks, shown = true }: { rule: ColorName; marks: Marks; shown?: boolean }): Span[] => [{ text: INDENT }, shown ? { text: `${marks.rail} `, fg: rule } : { text: "  " }]
 
 /** Cells of a body row after the rule; the last column is left empty. */
 export const bodyWidth = (width: number) => Math.max(1, width - INDENT.length - 2 - 1)

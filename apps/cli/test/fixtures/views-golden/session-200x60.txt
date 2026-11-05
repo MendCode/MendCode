@@ -1,4 +1,4 @@
-51cd120ee43691e7
+9fdb35f4c87d406b
   Sessions                   ← focus │   git /work/app
                                      │
   Active                             │   › Why does the second session see the first one's config? Please look at src/store.ts and fix it.
@@ -21,9 +21,9 @@
                                      │      │ error: expected "a" received "b"
                                      │
                                      │      ✎ Edit src/store.ts  3 lines                                                                                                                             1s
-                                     │      │ Edited src/store.ts
-                                     │      │ - const key = name
-                                     │      │ + const key = `${directory}:${name}`
+                                     │        Edited src/store.ts
+                                     │        - const key = name
+                                     │        + const key = `${directory}:${name}`
                                      │
                                      │   • The cache key ignored the directory.
                                      │

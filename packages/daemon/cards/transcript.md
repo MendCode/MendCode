@@ -7,6 +7,7 @@ For: "show the full tool output", "fewer tool cards", "hide / show the thinking"
 
 Each is a profile key: apply with customize_ui {"action":"settings","values":{"toolOutput":"expanded"}} (in minimalist find the tool with tool_search; it validates and applies live to every terminal), or the user's /customize group Session chrome. Keys and allowed values: {{program}} control-plane tui schema. Look and colours: {{program}} docs customize.
   Tool cards: [[setting:toolOutput]] auto|collapsed|expanded (what a finished card shows; ctrl+o opens one by hand and wins); [[setting:toolDensity]] calm (default, one row per finished call) | standard | dense (full view only); [[setting:codeMapCard]] auto|open|folded.
+  Diff cards (no /customize row): toolRail list like read:off,shell:on (name, prefix* or *; last match wins; file tools off by default) for the rule beside a card; diffContext 0..6 unchanged lines around a change (3); diffLineRows 1..50 rows a long line takes before … (4).
   Reasoning: [[setting:reasoning]] auto|hidden|collapsed|expanded, or the user's /thinking toggle.
   The whole view: [[setting:view]] minimal|balanced|full (/view; a tier sets it once).
   Presentation: [[setting:presentation]] auto|raw|minimal|mendcode|balanced|full (/presentation, /view; /raw gives plain copy-friendly output); [[setting:messageRenderer]] plain|markdown|full (/message-rendering); [[setting:messageLayout]] quiet|classic; [[setting:messageMeta]] off|compact|full; [[setting:timestamps]]; [[setting:username]].

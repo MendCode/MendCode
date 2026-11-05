@@ -113,6 +113,8 @@ describe("working row", () => {
       "Waiting for answer...",
     ])
     expect(toolPhase("mcp__x__do")).toBe("Running command...")
+    expect(phaseOf({ state: "tool", current: { kind: "tool_call", tool: "shell", detail: "bun test apps/cli\nsecond line" } })).toBe("Running bun test apps/cli...")
+    expect(phaseOf({ state: "tool", current: { kind: "tool_call", tool: "shell", detail: "x".repeat(80) } })).toBe(`Running ${"x".repeat(47)}…...`)
   })
 
   test("an advisor consultation reads as consulting, whatever words its question holds", () => {

@@ -3,6 +3,7 @@ import { SLASH_LAYOUTS, slashProfileProblems } from "./slash-menu-data"
 import { parseMarkdownColors } from "./theme-data"
 import { FOOTER_ICON_MODES, footerRowsProblems, footerTextProblems } from "./footer-rows-data"
 import { quotaRefreshProblems } from "./quota-refresh-data"
+import { TOOL_RAIL_DEFAULT, toolRailProblems } from "./tool-rail-data"
 
 /**
  * The named parts of the session stats registry (apps/cli/src/view/stat-parts.ts), shared by the footer (`/footer`), the activity
@@ -88,6 +89,9 @@ export const TUI_DEFAULTS: Readonly<Record<string, unknown>> = {
   "codeMapCard": "auto",
   "toolDensity": "calm",
   "diffView": "unified",
+  "diffContext": 3,
+  "diffLineRows": 4,
+  "toolRail": TOOL_RAIL_DEFAULT,
   "tagline": "",
   "promptGlyphs": "",
   "activityMessages": "",
@@ -431,7 +435,10 @@ export function tuiProblems(raw: unknown): string[] {
     else if ((key === "statusLeft" || key === "statusRight") && String(value).split(",").some((name) => name.trim() && !["mode", "model", "provider", "reasoning", "variant", "context", "permissionMode", "commandsHint", "agentsHint", "quota"].includes(name.trim()))) problems.push(`${key}: unknown status segment`)
     else if (key === "activityParts" && (unknownActivityParts(value as string).length || String(value).length > 256)) problems.push(`activityParts: expected a comma list of ${ACTIVITY_PARTS.join(", ")}`)
     else if (key === "topbarStats" && (unknownStatParts(value as string).length || String(value).length > 128)) problems.push(`topbarStats: expected a comma list of ${STAT_PART_IDS.join(", ")}`)
-    else if (key === "jumpText" && String(value).length > 40) problems.push("jumpText: at most 40 characters")
+    else if (key === "toolRail") problems.push(...toolRailProblems(value))
+    else if (key === "diffContext" && (!Number.isInteger(value) || Number(value) < 0 || Number(value) > 6)) problems.push("diffContext: expected integer 0..6")
+    else if (key === "diffLineRows" && (!Number.isInteger(value) || Number(value) < 1 || Number(value) > 50)) problems.push("diffLineRows: expected integer 1..50")
+    else if (key === "jumpText" &&String(value).length > 40) problems.push("jumpText: at most 40 characters")
     else if (key === "commentHintSeconds" && (!Number.isInteger(value) || Number(value) < 1 || Number(value) > 60)) problems.push("commentHintSeconds: expected integer 1..60")
     else if (key === "commentCollapse" && (!Number.isInteger(value) || Number(value) < 6 || Number(value) > 40)) problems.push("commentCollapse: expected integer 6..40")
     else if (key === "commentMax" && (!Number.isInteger(value) || Number(value) < 1 || Number(value) > 9)) problems.push("commentMax: expected integer 1..9")

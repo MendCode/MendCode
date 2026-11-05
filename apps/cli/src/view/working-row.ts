@@ -41,6 +41,9 @@ const TOOL_PHASES: ReadonlyArray<[RegExp, string]> = [
   [/shell|bash|exec|command/, "Running command..."],
 ]
 
+/** Characters of a running command the phase word keeps. */
+const COMMAND_CHARS = 48
+
 /** The phase word for a running tool: v1 matches the tool name against a few families. */
 export function toolPhase(tool: string) {
   const name = tool.toLowerCase()
@@ -97,7 +100,12 @@ export function phaseOf(input: { state: ForegroundState; current?: RunningItem; 
   if (current?.kind === "reasoning") return "Thinking..."
   if (current?.kind === "compaction") return "Compacting..."
   if (current?.kind === "tool_call" && current.writing) return "Writing..."
-  if (current?.kind === "tool_call") return current.tool ? toolPhase(current.tool) : "Running command..."
+  if (current?.kind === "tool_call") {
+    const phase = current.tool ? toolPhase(current.tool) : "Running command..."
+    // A shell call says which command runs from the moment it starts.
+    const command = current.tool && /^(shell|bash)$/i.test(current.tool) ? current.detail?.split("\n")[0]?.trim() : undefined
+    return command ? `Running ${command.length > COMMAND_CHARS ? `${command.slice(0, COMMAND_CHARS - 1)}…` : command}...` : phase
+  }
   return "Generating..."
 }
 

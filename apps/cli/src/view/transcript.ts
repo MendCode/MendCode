@@ -5,7 +5,7 @@ import { toolArgs, type ToolArgs } from "../extensions/tool-args"
 import { errorBox, statusLine, FULL_REASONING_ROWS, type Attachment, type TurnEnd } from "./chat-blocks"
 import { detailsDefaults, markdownStyleFor, renderMarkdown, wrapSpans } from "./markdown"
 import { setColorOverrides } from "../ui/theme"
-import { parseMarkdownColors, usageContext } from "@mendcode/protocol/wire"
+import { parseMarkdownColors, parseToolRail, toolRailShown, usageContext } from "@mendcode/protocol/wire"
 import { mermaidGeneration } from "./mermaid-lazy"
 import { goalCardRows, goalCardTitle, type GoalCard } from "./goal"
 import { limitCardLine, limitCardRows, type LimitCard, type UsageLimitView } from "./usage-limit"
@@ -744,7 +744,7 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
       const prepare = (shown: ToolCardModel): ToolCardModel => ({ ...shown, output: output.slice(0, 400) })
       // A running image tool draws the wait canvas; reduced motion holds it on its first frame.
       const imageWait = block.status === "running" && IMAGE_TOOLS.has(name) ? imageWaitConfig(appearance, options.motion?.() ?? true, imageRoom()) : undefined
-      return { slot, model, prepare, extra: { ...(hooks ? { custom: (view: ToolView) => hooks.tool(block.input ? { ...view, input: block.input } : view) } : {}), ...(imageWait ? { imageWait } : {}), ...((options.splitDiff ? options.splitDiff(width) : splitDiffAt(appearance.diffView, width)) ? { splitDiff: true } : {}) } }
+      return { slot, model, prepare, extra: { ...(hooks ? { custom: (view: ToolView) => hooks.tool(block.input ? { ...view, input: block.input } : view) } : {}), ...(imageWait ? { imageWait } : {}), ...((options.splitDiff ? options.splitDiff(width) : splitDiffAt(appearance.diffView, width)) ? { splitDiff: true } : {}), ...(toolRailShown(parseToolRail(appearance.toolRail), name) ? {} : { rail: false }), diffContext: appearance.diffContext, diffLineRows: appearance.diffLineRows } }
     }
     if (slot === "tool.row") return { slot, model: toolRowModel(block, toolRowVariant(block)!) }
     if (slot === "compaction.card") {

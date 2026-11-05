@@ -270,6 +270,8 @@ export function createTurnMapper(input: { newItemId(): ItemId; emit(event: Engin
   const plan = input.plan ?? createClaudePlan()
   /** The main agent's calls of a plan tool (TodoWrite, TaskCreate, TaskUpdate) by tool-use id: their result becomes the list's card. */
   const planCalls = new Map<string, { name: string; args: Record<string, any> | undefined }>()
+  /** A Write's input by call id: its card shows what the call put in the file, as the native `write` card does. */
+  const writeInputs = new Map<string, string>()
   /** A sub-agent's TodoWrite checklist by tool-use id: its own list, shown in its thread and never pinned. */
   const agentTodos = new Map<string, string>()
   const blocks = new Map<number, OpenBlock>()
@@ -391,6 +393,7 @@ export function createTurnMapper(input: { newItemId(): ItemId; emit(event: Engin
           args = undefined
         }
         input.onTool?.(open.name ?? "tool", args)
+        if (open.toolUseId && open.name === "Write" && typeof args?.content === "string") writeInputs.set(open.toolUseId, JSON.stringify({ file_path: args.file_path, content: args.content }).slice(0, 4000))
         if (open.toolUseId && CLAUDE_PLAN_TOOLS.has(open.name ?? "")) planCalls.set(open.toolUseId, { name: open.name!, args })
         if (open.itemId) input.emit({ type: "item.delta", itemId: open.itemId, text: "", input: { ...inputProgress(open.json), done: true } })
         const itemId = open.itemId ?? input.newItemId()
@@ -435,7 +438,9 @@ export function createTurnMapper(input: { newItemId(): ItemId; emit(event: Engin
         input.emit({ type: "item.completed", itemId, status: "ok", text: clip(card.text), meta: { tool: card.title, retitled: true } })
         continue
       }
-      input.emit({ type: "item.completed", itemId, status: part.is_error ? "error" : "ok", text: clip(text), ...(late ? { meta: late } : {}) })
+      const written = writeInputs.get(String(part.tool_use_id))
+      writeInputs.delete(String(part.tool_use_id))
+      input.emit({ type: "item.completed", itemId, status: part.is_error ? "error" : "ok", text: clip(text), ...(written ? { toolInput: written } : {}), ...(late ? { meta: late } : {}) })
     }
   }
 

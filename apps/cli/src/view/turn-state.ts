@@ -18,7 +18,7 @@ export type RequestExtras = {
   planReview?: import("@mendcode/protocol").PlanReview
 }
 
-export type RunningItem = { kind: ItemKind; tool?: string; /** The model is still writing the call's input; the tool has not started. */ writing?: boolean; /** Input characters written so far. */ inputChars?: number }
+export type RunningItem = { kind: ItemKind; tool?: string; /** What the call acts on (a shell call's command), from its title. */ detail?: string; /** The model is still writing the call's input; the tool has not started. */ writing?: boolean; /** Input characters written so far. */ inputChars?: number }
 
 /** A queued entry as the user typed it: its text (the original request when an extension rewrote it), attachments and what kind it is. */
 export type QueuedPrompt = { text: string; attachments: BlobRef[]; kind: "message" | "shell" | "notice" | "compact" }
@@ -107,7 +107,9 @@ export function createTurnState() {
         case "item.started": {
           retry = undefined
           const tool = typeof event.meta?.tool === "string" ? event.meta.tool.split(":")[0]!.trim() : undefined
-          running.set(event.itemId, { kind: event.kind, ...(tool ? { tool } : {}) })
+          const full = typeof event.meta?.tool === "string" ? event.meta.tool : ""
+          const detail = tool === "shell" && full.includes(":") ?full.slice(full.indexOf(":") + 1).trim() : ""
+          running.set(event.itemId, { kind: event.kind, ...(tool ? { tool } : {}), ...(detail ? { detail } : {}) })
           break
         }
         case "item.delta": {
@@ -117,7 +119,7 @@ export function createTurnState() {
           if (item && event.input) {
             // A tool input counts toward the turn's streamed tokens as it is written.
             if (startedAt !== undefined) streamed += Math.max(0, event.input.chars - (item.inputChars ?? 0))
-            running.set(event.itemId, { kind: item.kind, ...(item.tool ? { tool: item.tool } : {}), ...(event.input.done ? {} : { writing: true }), inputChars: event.input.chars })
+            running.set(event.itemId, { kind: item.kind, ...(item.tool ? { tool: item.tool } : {}), ...(item.detail ? { detail: item.detail } : {}), ...(event.input.done ? {} : { writing: true }), inputChars: event.input.chars })
           }
           break
         }
