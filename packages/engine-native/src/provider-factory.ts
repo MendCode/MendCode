@@ -1,5 +1,6 @@
 import type { ProviderModel, ProviderType } from "@mendcode/protocol"
 import { ANTHROPIC_VERSION, createAnthropicProvider } from "./anthropic-messages"
+import { anthropicOwnHost } from "./anthropic-threads"
 import { createChatCompletionsProvider, type ReasoningStyle } from "./openai-compatible"
 import { createResponsesProvider } from "./openai-responses"
 import { RetryableProviderError, type ModelProvider } from "./provider"
@@ -108,7 +109,7 @@ function adapterFor(input: { provider: ResolvedProvider; fetch?: Fetch; idleTime
   if (provider.npm && provider.id !== "perplexity") return createSdkProvider(provider, provider.npm)
   const model = provider.models[0]?.id ?? ""
   const common = { id: provider.id, model, ...(input.fetch ? { fetch: input.fetch } : {}), idleTimeoutMs: input.idleTimeoutMs ?? (provider.chunkTimeout === false ? 0 : provider.chunkTimeout ?? 60_000), takesImages: provider.id === "perplexity" ? () => false : takesImages(provider) }
-  if (type === "anthropic") return createAnthropicProvider({ ...common, baseUrl: provider.baseUrl, apiKey: provider.apiKey, ...(provider.headers ? { headers: provider.headers } : {}) })
+  if (type === "anthropic") return createAnthropicProvider({ ...common, baseUrl: provider.baseUrl, apiKey: provider.apiKey, ...(provider.headers ? { headers: provider.headers } : {}), ...(anthropicOwnHost(provider.baseUrl) ? { messageThreads: true } : {}) })
   if (type === "google") return createGeminiProvider({ ...common, baseUrl: provider.baseUrl, apiKey: provider.apiKey, ...(provider.headers ? { headers: provider.headers } : {}) })
   if (type === "openai")
     return createResponsesProvider({

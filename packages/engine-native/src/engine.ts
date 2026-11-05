@@ -523,6 +523,8 @@ export function createNativeEngine(options: {
   agentModel?(choice: ModelChoice): ModelChoice
   /** The `promptCache` setting, read at each model call; `legacy` when absent (docs/prompt-cache.md). */
   promptCache?(): PromptCacheMode | undefined
+  /** Feature `message_threads` without `zeroDataRetention`, read at each model call (docs/message-threads.md); off when absent. */
+  messageThreads?(): boolean
   cacheConfig?(sessionId: SessionId): import("@mendcode/protocol").CacheConfig | undefined
   /**
    * The cache lifetime this call asks its provider for (`promptCacheTtl`, `wait_cache`; docs/prompt-cache.md), asked once per request
@@ -1165,6 +1167,7 @@ export function createNativeEngine(options: {
         else if (role === "plan" && textKind === "agent_message") lastMain.delete(input.sessionId)
         modelRequest.turnSignal = providerTurnSignals.get(input.signal) ?? input.signal
         modelRequest.conversationId = input.sessionId
+        if (options.messageThreads?.()) modelRequest.messageThreads = true
         const stream = compound ? compound.budget.stream(options.provider, modelRequest, compound) : options.provider.stream(modelRequest)
         for await (const event of stream) {
           if (call.signal.aborted) break

@@ -798,6 +798,8 @@ export const daemon = await startDaemon({
           agentModel: (choice) => usableEffort(choice, modelCatalog),
           // `promptCache` setting: legacy (unset), off or smart (docs/prompt-cache.md).
           promptCache: () => store.settings.get().promptCache,
+          // Feature `message_threads` (docs/message-threads.md): not ZDR eligible, so `zeroDataRetention` keeps it off.
+          messageThreads: () => { const settings = store.settings.get(); return !settings.zeroDataRetention && featureOn(settings, "message_threads", { safeMode }) },
           cacheTtl: cacheTtl.ttlFor,
           shell: (sessionId) => shellFor(store.settings.get(), sessionId ? store.sessionDirectory(sessionId) : undefined),
           // `shellEnvironment`, `shellCommandPrefix`, `loginShell` and `web` settings (docs/resources-config.md): read per call, so a change applies to the next command.

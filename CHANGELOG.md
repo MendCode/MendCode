@@ -11,6 +11,8 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### New
 
+- With an Anthropic API key, the native engine keeps each conversation in a Claude message thread (beta) and sends only the new messages on each call: the same price, a shorter wait for the first token in long conversations. Turn it off with `/tier message_threads off`; set `zeroDataRetention: true` if your organization requires zero data retention. See [message threads](docs/message-threads.md).
+
 - `mendcode worktrees list|size|gc`: every worktree with its size, state and why it is kept, including worktrees git lists that MendCode did not make. `gc` previews and `--yes` removes; `gc --artifacts` clears `dist`, `target`, `.next` and `bun build` leftovers of idle worktrees without removing them. See [storage](docs/storage.md#what-changed).
 - `worktreeCapGb` warns on `/storage` when MendCode's worktrees pass a size you choose and frees only safe ones to get under it.
 - A daemon restart no longer leaves your turns interrupted for good: sessions it stopped, including `run --bg` children, continue when it starts again, and a `run --bg` child keeps its launching session across the restart. A session that cannot continue tells its launcher. `daemon restart` says which turns are running when it refuses, and what `--force` interrupted. Turn it off with `resumeAfterRestart: false`. See [automation](docs/automation.md#background-sessions-b17).

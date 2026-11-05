@@ -533,6 +533,8 @@ const SharedSettings = lazySchema(() => z.strictObject({
   promptCacheTtl: z.enum(CACHE_TTLS).optional(),
   /** Opt-in: a `promptCacheTtl` of `1h` is also given to Claude Code when it is the engine, as `CLAUDE_CODE_PROMPT_CACHE_TTL` and `CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL` in its process environment (Claude Code v2.1.242 or later). Off when unset. */
   claudeCacheTtl: z.boolean().optional(),
+  /** The organization requires zero data retention: features the provider does not offer under ZDR stay off (Anthropic message threads, docs/message-threads.md). Off when unset. */
+  zeroDataRetention: z.boolean().optional(),
   /** Tokens (4 characters each) of earlier conversation handed to an engine that did not run it: switching between native, Claude Code and ACP agents, a fork into one, a merge-back. Default 16000; 0 turns the engine-switch handoff off. */
   handoffTokenCap: z.number().int().min(0).max(200_000).optional(),
   reducedMotion: z.boolean().optional(),
