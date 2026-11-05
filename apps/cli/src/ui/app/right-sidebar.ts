@@ -572,7 +572,7 @@ export function createRightSidebar(ctx: AppContext, slotContext: (width: number,
     const addChat = (title?: string) => {
       if (chatArea) return
       chatArea = { top: panels.length, height: chatHeight }
-      panels.push(...sideChatRows(chat, width, chatHeight, title))
+      panels.push(...sideChatRows(chat, width, chatHeight, title, now()))
     }
     if (implicitChat) addChat()
     // A bar shorter than its cards keeps the `high` ones (and drops `low`, then `normal`, first) instead of scrolling past them; without priorities it scrolls.

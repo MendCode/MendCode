@@ -936,16 +936,20 @@ export async function startDaemon(options: DaemonOptions) {
     },
     transcript(main, afterSeq) {
       const last = store.lastSeq(main) ?? 0
-      const events = visibleEvents(store.readAfter(main, Math.max(afterSeq, last - 4_000), 4_000))
+      const from = Math.max(afterSeq, last - 4_000)
+      const events = visibleEvents(store.readAfter(main, from, 4_000))
       // What is still being written is sent again, finished, with the next question.
       const open = new Map<string, number>()
       for (const event of events) {
         if (event.type === "item.started") open.set(event.itemId, event.seq)
         else if (event.type === "item.completed") open.delete(event.itemId)
       }
-      return { text: asideTranscript(events), seq: open.size ? Math.min(...open.values()) - 1 : last }
+      const text = asideTranscript(events)
+      return { text, seq: open.size ? Math.min(...open.values()) - 1 : last, cut: from > afterSeq || text.startsWith("…") }
     },
-    permission: (main) => capPermission(livePermission(main), agents.port().primary(main)?.permission),
+    now: () => clock.now(),
+    // The main session's mode, but a full-access one counts as `smart` here; the engine then runs only read-only commands in a side session (`tasks.readOnly`), whatever the mode (docs/btw.md).
+    permission: (main) => capPermission(capPermission(livePermission(main), agents.port().primary(main)?.permission), "smart"),
     async submit(side, text, mode) {
       const actor = actorFor(side)
       if (!actor) throw new Error("side session is gone")
@@ -1178,7 +1182,7 @@ export async function startDaemon(options: DaemonOptions) {
     auxiliary: auxiliaryUsage,
     trace,
     // A side session (`/btw`) runs as a child: its agent's tools and model, no orientation, no recall.
-    tasks: { ...tasks.modelPort, isChild: (sessionId) => tasks.modelPort.isChild(sessionId) || asideSessions.isAside(sessionId), nests },
+    tasks: { ...tasks.modelPort, isChild: (sessionId) => tasks.modelPort.isChild(sessionId) || asideSessions.isAside(sessionId), nests, readOnly: (sessionId) => asideSessions.isAside(sessionId) },
     clock,
     store,
     grants,
@@ -4003,10 +4007,11 @@ export async function startDaemon(options: DaemonOptions) {
         if (command.type === "session.aside.clear") {
           // The side session goes with its history; the next question starts a new one.
           await asideSessions.clear(command.sessionId, true)
+          asides.archive(command.sessionId, asides.get(command.sessionId), clock.now())
           asides.set(command.sessionId, { messages: [], busy: false })
           publishAside(command.sessionId, asides.get(command.sessionId))
         }
-        return reply(connection, command.id, { ok: true, result: { thread: asides.get(command.sessionId) } })
+        return reply(connection, command.id, { ok: true, result: { thread: asides.get(command.sessionId), ...(command.type === "session.aside.get" && command.history ? { history: asides.history(command.sessionId) } : {}) } })
       }
       case "session.aside": {
         if (!store.hasSession(command.sessionId)) return reply(connection, command.id, { ok: false, code: "unknown_session", message: "[DAEMON]: unknown session" })

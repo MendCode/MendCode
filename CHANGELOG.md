@@ -13,6 +13,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 - Approving a plan (Enter, or comment then apply) now runs it with full access, as Claude Code does when it leaves plan mode; `m` on the plan page picks auto edits or ask before edits instead, and the page and the "Plan mode off" notice name the access. See [plan review](docs/plan-review.md).
 - The assistant is told what the terminal draws according to the tier: full gets the Markdown, Mermaid and callout syntax and when to use each, balanced one short line, minimalist nothing.
+- `/btw history` lists the side chats you cleared and opens one to read. The row under the side chat's name says how much of the session it sees and how much of its prompt came from the cache. See [/btw](docs/btw.md).
 - `/cd`, `/add-dir` and `/attach` complete paths as you type: Tab walks into the highlighted directory.
 - The assistant replies in the language of your latest message (English when unclear) and no longer switches language on its own.
 - `mendcode usage recover` adds the token usage of a Claude Code, Codex or Pi session log to Usage, with a preview first and
@@ -27,6 +28,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 ### Changed
 
 - The balanced tier's prompt is about 240 tokens lighter: its description of the terminal's drawing is one sentence instead of the full block.
+- The tools a `/btw` answer runs look like the transcript's tool rows. The side chat is read-only in every permission mode: only read-only commands run, never `touch`, `mv` or a redirection into a file; set its model with `models.aside`.
 - Commands the assistant leaves running in the background or in a terminal no longer stop after a few hours or when left untouched; they run until they end, you stop them or the chat is deleted. The `processLimits` setting (`lifetimeMinutes`, `idleMinutes`) adds a cap if you want one.
 - Compaction while idle follows the prompt-cache lifetime the provider's responses show, not a fixed five minutes, so ChatGPT and OpenAI sessions are compacted less often when their cache lasts longer. See [prompt cache](docs/prompt-cache.md#observed-lifetime).
 - After a compaction the assistant still knows which commands are running and can read their output.

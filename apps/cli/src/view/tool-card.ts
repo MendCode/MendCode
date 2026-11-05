@@ -134,7 +134,7 @@ export function toolIcon(name: string) {
   return TOOL_ICONS[name] ?? (name.startsWith("mcp__") ? "⊙" : "◆")
 }
 
-function toolLabel(name: string) {
+export function toolLabel(name: string) {
   if (LABELS[name]) return LABELS[name]
   const mcp = /^mcp__(.+?)__(.+)$/.exec(name)
   if (mcp) return `${mcp[1]} · ${mcp[2]}`

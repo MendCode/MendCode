@@ -192,7 +192,7 @@ export function createRender(ctx: AppContext, actions: {
         const sheetHeight = Math.min(Math.floor(height * .55), room)
         if (sheetHeight < 3) return []
         // An open side chat is being typed in and keeps its sheet; the cards give the chat back its rows (`panelNarrow: hide`).
-        return chat.open ? sideChatRows(chat, chatCols, sheetHeight) : state.tuiProfile.rightSidebar && state.tuiProfile.panelNarrow === "sheet" ? actions.rightRows(chatCols, sheetHeight) : []
+        return chat.open ? sideChatRows(chat, chatCols, sheetHeight, undefined, now()) : state.tuiProfile.rightSidebar && state.tuiProfile.panelNarrow === "sheet" ? actions.rightRows(chatCols, sheetHeight) : []
       } : undefined
       let laid = chatRows(chatCols, height, undefined, bottomPanel, current && !boxed ? toastView(true, chatCols)[0] : undefined)
       const spot = toast.length ? toastSpot({ rows: laid.rows, top: laid.body.top, bottom: laid.body.end, box: toast, width: chatCols }) : undefined

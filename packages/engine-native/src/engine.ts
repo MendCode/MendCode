@@ -1340,7 +1340,10 @@ export function createNativeEngine(options: {
     const allowCommands = options.permissionAllow?.()
     // `smartSandboxTrust` (off by default): a shell command inside an enforced OS sandbox with no network is contained, so smart mode does not ask about a command it merely does not know.
     const sandboxed = mode === "smart" && (tool.name === "shell" || tool.name === "shell_session") && options.smartSandboxTrust?.() === true && options.sandbox?.({ sessionId: input.sessionId, cwd })?.network === false
-    const smart = mode === "smart" ? classifySmart({ tool, args: call.args, cwd, ...(extraRoots.length ? { extraRoots } : {}), ...(allowCommands ? { allowCommands } : {}), ...(sandboxed ? { sandboxed } : {}) }) : undefined
+    const readOnly = options.tasks?.readOnly?.(input.sessionId) === true
+    const smart = mode === "smart" ? classifySmart({ tool, args: call.args, cwd, ...(readOnly ? { readOnly } : {}), ...(extraRoots.length ? { extraRoots } : {}), ...(allowCommands ? { allowCommands } : {}), ...(sandboxed ? { sandboxed } : {}) }) : undefined
+    // A read-only session (`/btw`) runs only what the read-only classification passes; an approval is never the way out.
+    if (readOnly && smart && smart.decision !== "allow") return settle({ kind: "deny", by: "rule", reason: `this session is read-only: ${smart.reason}` }, "deterministic", smart.reason)
     // What nobody should approve by reflex (`rm -rf ~`, `mkfs`) is refused before any prompt, including the external-directory one.
     if (smart?.decision === "deny" && !explicitApproval) return settle({ kind: "deny", by: "rule", reason: `smart mode never runs this: ${smart.reason}` }, "deterministic", smart.reason)
     const { external: outside, declared } = splitDeclared(externalPatterns(tool.name, call.args, cwd), extraRoots)

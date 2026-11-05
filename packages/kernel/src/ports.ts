@@ -19,6 +19,8 @@ export type TaskPort = {
   isChild(sessionId: SessionId): boolean
   /** Whether this session may start sub-agents of its own (`subagentDepth`); a sub-agent without it is offered no way to. */
   nests?(sessionId: SessionId): boolean
+  /** Whether this session may only read: a shell command that is not on the read-only list is refused, in every permission mode (`/btw`). */
+  readOnly?(sessionId: SessionId): boolean
   /** The parent of a child launched with `fork: true`, whose first turn starts from that parent's context. */
   forkOf?(sessionId: SessionId): SessionId | undefined
 }

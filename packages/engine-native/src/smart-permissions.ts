@@ -61,6 +61,8 @@ export function asShellCall(tool: string, args: unknown): { tool: string; args: 
 const AUTONOMY_TOOLS = new Set(["loop", "workflow_start", "workflow_script", "tell", "workflow_control", "worktree"])
 
 export type SmartInput = {
+  /** Only read-only commands are allowed: file work (`touch`, `mv`…), project checks and writes by redirection are not. */
+  readOnly?: boolean
   tool: { name: string; permission: "read" | "write" | "execute" }
   args: unknown
   /** Absolute project root: "inside the project" means inside this directory. */
@@ -78,6 +80,16 @@ export type SmartInput = {
 }
 
 export function classifySmart(input: SmartInput): SmartDecision {
+  if (!input.readOnly) return classifyAny(input)
+  // Read-only: the same classification, but only the read-only commands pass (no local file work, no project checks, no redirection into a file).
+  readOnlyRun = true
+  try { return classifyAny({ ...input, allowCommands: [], sandboxed: false }) } finally { readOnlyRun = false }
+}
+
+/** Set for the length of one synchronous `classifySmart` call with `readOnly`. */
+let readOnlyRun = false
+
+function classifyAny(input: SmartInput): SmartDecision {
   const { tool } = input
   if (tool.permission === "read") return allow("read", "reads never change anything")
   const shellCall = asShellCall(tool.name, input.args)
@@ -312,6 +324,16 @@ const READ_ONLY_COMMANDS = new Set([
   "which", "type", "date", "uname", "whoami", "id", "hostname", "tree", "sort", "uniq", "cut", "tr", "diff", "cmp", "comm", "grep", "egrep", "fgrep", "rg", "jq",
   "column", "nl", "tac", "rev", "seq", "sleep", "expr", "md5sum", "sha256sum", "shasum", "cksum", "od", "hexdump", "xxd", "strings", "cd",
 ])
+/** Read-only commands that can still write a file named in their arguments: `sort -o`, `uniq IN OUT`, `xxd IN OUT`, `tree -o`. */
+function writesAnArgument(name: string, words: readonly string[]): string | undefined {
+  const args = words.slice(1)
+  const positional = args.filter((word) => !word.startsWith("-"))
+  if (name === "sort" && args.some((word) => word === "-o" || /^-[a-zA-Z]*o/.test(word) && !word.startsWith("--") || word.startsWith("--output"))) return "sort writes the file named by -o"
+  if (name === "tree" && args.some((word) => word === "-o")) return "tree writes the file named by -o"
+  if ((name === "uniq" || name === "xxd") && positional.length > 1) return `${name} writes its second file argument`
+  return undefined
+}
+
 /** Ordinary local file work: fine inside the project, like the edit tools. */
 const LOCAL_FILE_COMMANDS = new Set(["mkdir", "touch", "cp", "mv"])
 
@@ -561,6 +583,12 @@ function classifySegment(segment: Segment, root: Root, allowCommands: readonly s
   if (running) note(ask("high", "runs-program", running))
   if (name === "jq" && words.slice(1).some((word) => /(?:^|[^\w$])(?:\$ENV|env)\b/.test(word))) note(ask("high", "secrets-file", "prints the environment, which holds secrets"))
 
+  if (readOnlyRun) {
+    const write = segment.words.find((word) => word.redirectTarget && word.text !== "/dev/null")
+    if (write) note(ask("uncertain", "unlisted-command", `redirects output into ${write.text}`))
+    const output = name ? writesAnArgument(name, words) : undefined
+    if (output) note(ask("uncertain", "unlisted-command", output))
+  }
   // Every path the command names (arguments, flag values, redirection targets).
   for (const word of segment.words) {
     if (word === scriptWord) continue
@@ -580,11 +608,11 @@ function classifySegment(segment: Segment, root: Root, allowCommands: readonly s
   if (!name) return allow("allow-listed-command", "only assignments or redirections")
 
   const base = path.basename(name)
-  const userListed = [...DEFAULT_ALLOW, ...allowCommands].some((prefix) => startsWithWords(words, prefix))
+  const userListed = !readOnlyRun && [...DEFAULT_ALLOW, ...allowCommands].some((prefix) => startsWithWords(words, prefix))
   if (inner) return inner.decision === "allow" || userListed ? allow("allow-listed-command", `${name} runs a script whose every command is on the allow list`) : inner
   const listed =
     (READ_ONLY_COMMANDS.has(name) && name === base) ||
-    (LOCAL_FILE_COMMANDS.has(name) && name === base) ||
+    (!readOnlyRun && LOCAL_FILE_COMMANDS.has(name) && name === base) ||
     (name === "find" && findAllowed(words)) ||
     (name === "sed" && !words.some((word) => /^-[a-zA-Z]*i/.test(word) || word === "--in-place") && sedReadOnly(words)) ||
     (name === "git" && gitSubcommandAllowed(words)) ||

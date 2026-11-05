@@ -1334,9 +1334,10 @@ export const DreamStart = lazySchema(() => z.strictObject({
 
 /**
  * `/btw`: a side question about a session. It reads the conversation but never enters it and never waits for or
- * interrupts the running turn. Ack: `{ text }`, the answer.
+ * interrupts the running turn. Ack: `{ text }`, the answer. `session.aside.get` answers `{ thread }`, and with `history` also
+ * `{ history }`: the side chats cleared before, newest first.
  */
-export const AsideGet = lazySchema(() => z.strictObject({ ...base, type: z.literal("session.aside.get"), sessionId: SessionId }))
+export const AsideGet = lazySchema(() => z.strictObject({ ...base, type: z.literal("session.aside.get"), sessionId: SessionId, history: z.boolean().optional() }))
 export const AsideClear = lazySchema(() => z.strictObject({ ...base, type: z.literal("session.aside.clear"), sessionId: SessionId }))
 export const GitStatus = lazySchema(() => z.strictObject({ ...base, type: z.literal("git.status"), directory: z.string().min(1).max(4096) }))
 /**
