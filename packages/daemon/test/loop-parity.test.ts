@@ -123,7 +123,7 @@ describe("report-only loops through the real engine", () => {
     expect(toolDone).toMatchObject({ text: expect.stringContaining("plan mode is read-only") })
     expect(existsSync(path.join(h.project, "hack.txt"))).toBe(false)
     expect(loopState(h, loop.loopId)!.history[0]!.checkpoint).toMatchObject({ status: "continue" })
-    expect(h.requests[0]!.messages.at(-1)).toMatchObject({ role: "user", content: expect.stringContaining("Report-only loop") })
+    expect(h.requests[0]!.messages.at(-1)).toMatchObject({ role: "user", content: expect.stringContaining("Report-only: write the report as your answer") })
   })
 
   test("a loop made from a template, an unknown template, report-only with a worktree, and a non-git worktree are handled at the command", async () => {

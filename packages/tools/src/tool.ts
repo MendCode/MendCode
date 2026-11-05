@@ -107,6 +107,10 @@ export type LoopCreateInput = {
   costBudget?: import("@mendcode/protocol").LoopCostBudget | undefined
   rubric?: import("@mendcode/protocol").LoopRubric | undefined
   approvalPolicy?: import("@mendcode/protocol").LoopApprovalPolicy | undefined
+  /** Absolute paths outside the project the runs will read; the user approves them once with the loop. */
+  reads?: string[] | undefined
+  /** "none" leaves no notice in this session after a run (default: a short notice per run). */
+  notify?: "creator" | "none" | undefined
 }
 
 /**

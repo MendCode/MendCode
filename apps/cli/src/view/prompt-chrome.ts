@@ -163,6 +163,8 @@ export type StatusRowInput = {
   profile?: string
   pr?: { number: number; state: string }
   loops: number
+  /** Of `loops`, those waiting on an approval or an answer: the count says `needs input` and takes the warning color. */
+  loopsWaiting?: number
   /** The session's goal indicator (docs/goals.md), already spans; leads the right side. Not given where a footer shows it. */
   goal?: Line
   /** Live workflows of this project; `waiting` of them need the user. */
@@ -240,7 +242,10 @@ function identityParts(input: StatusRowInput): FooterRowPart[] {
 function liveParts(input: StatusRowInput): FooterRowPart[] {
   const parts: FooterRowPart[] = []
   if (input.goal?.length) parts.push({ id: "goal", spans: [...input.goal], rank: 7 })
-  if (input.loops > 0) parts.push({ id: "loops", spans: [{ text: `${input.plainMarks ? "" : "↻ "}${input.loops} loop${input.loops === 1 ? "" : "s"}`, fg: "secondary" }], rank: 6 })
+  if (input.loops > 0) {
+    const waiting = input.loopsWaiting ?? 0
+    parts.push({ id: "loops", spans: [{ text: `${input.plainMarks ? "" : "↻ "}${input.loops} loop${input.loops === 1 ? "" : "s"}${waiting ? " · needs input" : ""}`, fg: waiting ? "warning" : "secondary" }], rank: waiting ? 8 : 6 })
+  }
   const flows = input.workflows
   if (flows?.live) parts.push({ id: "workflows", spans: [{ text: `${input.plainMarks ? "" : "◇ "}${flows.live} workflow${flows.live === 1 ? "" : "s"}${flows.waiting ? (input.plainMarks ? " waiting" : " ?") : ""}`, fg: flows.waiting ? "warning" : "secondary" }], rank: flows.waiting ? 8 : 6 })
   return parts

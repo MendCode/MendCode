@@ -889,4 +889,15 @@ describe("plan mode note", () => {
     expect(messages[2]).toEqual(["build", expect.stringContaining("Plan mode is off")])
     expect(messages[3]).toEqual(["again"])
   })
+
+  test("an internal read-only run in plan mode carries no plan note and no off note", async () => {
+    const { engine, commands } = setup()
+    const sessionId = ids("session")
+    let mode: PermissionMode = "plan"
+    const turn = (text: string) => engine.runTurn({ ...turnInput({ sessionId, text, mode: () => mode }).input, readOnlyRun: true })
+    await turn("review it")
+    mode = "ask"
+    await turn("again")
+    expect(commands("prompt").map((message) => String(message.message))).toEqual(["review it", "again"])
+  })
 })

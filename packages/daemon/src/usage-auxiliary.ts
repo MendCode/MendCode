@@ -7,7 +7,7 @@ import type { BudgetUsage } from "./budgets"
  * `usage_auxiliary_daily`: bookkeeping only, no request and no token of its own. `/btw` is not here: its side session runs turns,
  * which `usage.recorded` already counts.
  */
-export const AUXILIARY_ROLES = ["title", "summary", "recap", "memoryExtractor", "memoryAssistant", "memoryConsolidator", "dream", "permissionReviewer", "hook", "agentGenerate", "setup"] as const
+export const AUXILIARY_ROLES = ["title", "summary", "recap", "memoryExtractor", "memoryAssistant", "memoryConsolidator", "dream", "permissionReviewer", "hook", "agentGenerate", "setup", "loopInterpret"] as const
 export type AuxiliaryRole = (typeof AUXILIARY_ROLES)[number]
 export type AuxiliaryCall = { role: AuxiliaryRole; sessionId?: SessionId | undefined; directory?: string | undefined }
 /** The daemon's budgeted completion for calls outside a turn: `auxiliary` says whose call it is. */

@@ -24,7 +24,7 @@ import type { BackgroundPort, InteractivePort, LoopPort, PeerPort, ThreadPort, R
 import { cacheHash, cacheProject, passiveCache, selectCache } from "./cache-policy"
 import { z } from "zod"
 import { agentAllows, agentSection, capPermission, LIST_AGENTS, subagentCatalog, subagentListing, subagentName, type AgentPort, type AgentProfile } from "./agents"
-import { PLAN_EXIT_TOOL, PLAN_MODE_NOTE, PLAN_REVIEW_TOOL, PLAN_TOOL_NAMES, looksLikePlan, planPhase, safePlanArgs } from "./plan-tools"
+import { PLAN_EXIT_TOOL, PLAN_MODE_NOTE, PLAN_REVIEW_TOOL, PLAN_TOOL_NAMES, REPORT_ONLY_NOTE, looksLikePlan, planPhase, safePlanArgs } from "./plan-tools"
 import { continuationStream } from "./continuation"
 import { pairToolCalls } from "./history"
 import { GOAL_TOOL_NAMES, GOAL_TOOLS, runGoalTool, type GoalPort } from "./goal-tools"
@@ -156,7 +156,7 @@ function asLastSent(messages: ModelMessage[], last: SharedPrefix): ModelMessage[
   if (turn?.pruned) pruneHistoryToolOutputs(replayed.slice(0, turn.start))
   return historyDigest(replayed.slice(0, last.sent)) === last.digest ? replayed : undefined
 }
-type CallInput = Pick<TurnInput, "sessionId" | "signal" | "newItemId" | "emit" | "selection" | "workflow" | "turnOptions"> & Partial<Pick<TurnInput, "ask" | "turnId" | "text">> & { /** The call's tools, listed and deferred, for the system prompt. */ catalog?: ToolCatalog }
+type CallInput = Pick<TurnInput, "sessionId" | "signal" | "newItemId" | "emit" | "selection" | "workflow" | "turnOptions" | "readOnlyRun"> & Partial<Pick<TurnInput, "ask" | "turnId" | "text">> & { /** The call's tools, listed and deferred, for the system prompt. */ catalog?: ToolCatalog }
 
 const SUMMARY_PREFIX = "Summary of the conversation so far (earlier messages were compacted):"
 /** A conservative default below common 200k-token context windows; set per model in config. */
@@ -382,6 +382,8 @@ function defaultSleep(ms: number, signal: AbortSignal) {
   })
 }
 
+export type LoopRunPort = { reportOnly(sessionId: SessionId): boolean; inheritedReads(sessionId: SessionId): { all: boolean; roots: string[] } | undefined }
+
 /**
  * MendCode's own agent loop: model call → tool calls → results → model call, until the model stops.
  * Read tools run directly; write/execute tools ask through the kernel (approval once or for the session).
@@ -518,6 +520,12 @@ export function createNativeEngine(options: {
   blobPath?(ref: BlobRef): string
   /** Instruction appended as the last user message when asking the model for a summary (prompts/compaction.md); a function can vary it per project root. */
   compactionPrompt: string | ((cwd: string) => string)
+  /**
+   * Loop runs. `reportOnly`: the session is a report-only run's, which is read-only without plan mode's plan tools and note.
+   * `inheritedReads`: what the loop's creator could read without asking (`all` in full access, else directory roots); the
+   * run's reads of those paths do not ask. Writes never inherit.
+   */
+  loopRun?: LoopRunPort
   /** Offers the `task` tool (sub-agents). */
   tasks?: TaskPort
   subagents?: boolean
@@ -696,6 +704,12 @@ export function createNativeEngine(options: {
     const inTier = (name: string) => name === "session_meta" ? featureOn(policy(), "session_meta") : tier === undefined || tierIncludes(tier, base.tools.get(name)?.tier ?? "minimalist")
     const offered = (name: string) => allowed(name) && inTier(name) && (name !== "packages" || !!options.packages && featureOn(policy(), "package_tools"))
     return { ...base, tools: new Map([...base.tools].filter(([name]) => offered(name))), specs: base.specs.filter((spec) => offered(spec.name)), allowTask: base.allowTask && offered(TASK_TOOL.name) }
+  }
+
+  /** A toolset without `plan_submit`, `plan_review` and `plan_exit` (report-only loop runs). */
+  function withoutPlanTools(base: Toolset): Toolset {
+    const keep = (name: string) => !PLAN_TOOL_NAMES.has(name)
+    return { ...base, tools: new Map([...base.tools].filter(([name]) => keep(name))), specs: base.specs.filter((spec) => keep(spec.name)), ...(base.catalog ? { catalog: { listed: base.catalog.listed.filter(keep), deferred: base.catalog.deferred.filter(keep) } } : {}) }
   }
 
   /** The session's commands still running, for the compaction anchor. */
@@ -1043,7 +1057,7 @@ export function createNativeEngine(options: {
         if (!share && !fork) {
           const agentText = agent ? agentSection(agent) : ""
           if (agentText) system = `${system}\n\n${agentText}`
-          if (role === "plan") system = `${system}\n\n${PLAN_MODE_NOTE}`
+          if (role === "plan") system = `${system}\n\n${(input.readOnlyRun === true || options.loopRun?.reportOnly(input.sessionId)) ? REPORT_ONLY_NOTE : PLAN_MODE_NOTE}`
           const known = secrets?.list(input.sessionId) ?? []
           if (known.length) system = `${system}\n\n${secretsNote(known)}`
           if (input.turnOptions?.format && role !== "subagent" && textKind === "agent_message") system = `${system}\n\n${STRUCTURED_NOTE}`
@@ -1367,7 +1381,12 @@ export function createNativeEngine(options: {
     if (readOnly && smart && smart.decision !== "allow") return settle({ kind: "deny", by: "rule", reason: `this session is read-only: ${smart.reason}` }, "deterministic", smart.reason)
     // What nobody should approve by reflex (`rm -rf ~`, `mkfs`) is refused before any prompt, including the external-directory one.
     if (smart?.decision === "deny" && !explicitApproval) return settle({ kind: "deny", by: "rule", reason: `smart mode never runs this: ${smart.reason}` }, "deterministic", smart.reason)
-    const { external: outside, declared } = splitDeclared(externalPatterns(tool.name, call.args, cwd), extraRoots)
+    const split = splitDeclared(externalPatterns(tool.name, call.args, cwd), extraRoots)
+    // A loop run reads what its creator could read without asking (never writes); an explicit external_directory deny still applies to those paths.
+    const inherit = tool.permission === "read" ? options.loopRun?.inheritedReads(input.sessionId) : undefined
+    const inherited = inherit && !inherit.all ? splitDeclared(split.external, inherit.roots) : undefined
+    const outside = inherit?.all ? [] : inherited ? inherited.external : split.external
+    const declared = [...split.declared, ...(inherit?.all ? split.external : inherited?.declared ?? [])]
     const declaredDenied = declared.find((pattern) => matchingRule("external_directory", pattern, rulesFor(toolset, input.sessionId))?.action === "deny")
     if (declaredDenied) return settle({ kind: "deny", by: "rule", reason: `external_directory ${declaredDenied}` }, "deterministic", "External directory rule denies the declared directory")
     if (outside.length) {
@@ -1600,6 +1619,7 @@ export function createNativeEngine(options: {
       const result = parsed.success ? options.reasoning.requestIncrease(input.sessionId, parsed.data.reason, parsed.data.evidence) : { status: "unchanged", reason: "Concrete verification or technical evidence required" }
       return finish({ output: JSON.stringify(result), truncated: false, title: "Reasoning Auto", isError: !parsed.success })
     }
+    if (PLAN_TOOL_NAMES.has(call.name) && (input.readOnlyRun === true || options.loopRun?.reportOnly(input.sessionId))) return finish({ output: "report-only: write the report as your answer; there is no plan to submit", truncated: false, title: "report-only", isError: true })
     if (PLAN_TOOL_NAMES.has(call.name) && toolset.main) {
       if (call.name === "plan_exit") {
         const args = PLAN_EXIT_TOOL.args.safeParse(call.args)
@@ -1925,12 +1945,15 @@ export function createNativeEngine(options: {
     /** Plan mode: a review the user accepted or closed is settled (the model's next plain text is its answer, not a new plan); at most two plain-text plans are offered per turn. */
     let planSettled = false
     let autoReviews = 0
+    const reportOnlyRun = (input.readOnlyRun === true || options.loopRun?.reportOnly(input.sessionId)) === true
     for (let step = 0; step < maxSteps; step++) {
       // The last step of the engine's own limit (or the agent's) is a text-only summary of the work and what remains, so the turn never
       // ends on a bare error; a cap the caller set (`--max-turns`) stops the turn as it is.
       const final = !(loop.cap !== undefined && maxSteps === loop.cap) && step === maxSteps - 1
       if (final) messages.push({ role: "user", content: "The agent step limit is reached. Summarize the work and what remains. Reply with text only; do not call tools." })
-      const available = withDiscovery(toolset, messages, input.permissionMode() === "plan", input.sessionId)
+      const discovered = withDiscovery(toolset, messages, input.permissionMode() === "plan", input.sessionId)
+      // A report-only loop run has no plan to submit: the plan tools are not offered.
+      const available = reportOnlyRun ? withoutPlanTools(discovered) : discovered
       if (loop.trackContext) lastSpecs.set(input.sessionId, final ? [] : available.specs)
       if (loop.trackContext && available.catalog) lastCatalog.set(input.sessionId, available.catalog)
       let reply: Awaited<ReturnType<typeof callModel>>
@@ -1953,7 +1976,7 @@ export function createNativeEngine(options: {
         repeats = 0
       }
       // A plan written as plain text in plan mode is shown in the review like a plan_review call (the model was told to use it): the user can apply it.
-      if (!final && !input.signal.aborted && !planSettled && autoReviews < 2 && reply.toolCalls.length === 0 && toolset.main && !loop.structured && !loop.fork && modeOf(input, toolset) === "plan" && looksLikePlan(reply.text)) {
+      if (!final && !input.signal.aborted && !planSettled && !reportOnlyRun && autoReviews < 2 && reply.toolCalls.length === 0 && toolset.main && !loop.structured && !loop.fork && modeOf(input, toolset) === "plan" && looksLikePlan(reply.text)) {
         autoReviews++
         reply.toolCalls.push({ callId: `plan_review_${input.turnId}_${step}`, name: PLAN_REVIEW_TOOL.name, args: safePlanArgs({ markdown: reply.text.trim().slice(0, 30_000) }, (text) => secrets ? secrets.mask(input.sessionId, text) : text) })
       }

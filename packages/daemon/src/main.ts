@@ -491,7 +491,7 @@ export const daemon = await startDaemon({
   // `/tier computer on` (features.computer) switches it on while the daemon runs; the environment variable still does at start.
   computer: { enabled: process.env.MENDCODE_COMPUTER === "1" ? true : () => extractionSettings().features?.computer === true },
   browser: { enabled: process.env.MENDCODE_BROWSER === "1", ...(process.env.MENDCODE_BROWSER_PATH ? { executable: process.env.MENDCODE_BROWSER_PATH } : {}) },
-  engine: ({ notify, engineBackground, engineAgentEvent, trace, continuity, tasks, clock, store, grants, runLimits, sessionRules, emitGlobal, secrets, memory, background, interactive, workflows, peers, threads, packages, sessionMeta, loops, worktrees, prWatch, prReview, goals, review, customTools, extensionLayers, agents, plans, extensions, skills: skillLoader, recall, computer, browser, harness, compound, budget, auxiliary, aiConfig, inlineShell, reasoning, settingsWrite }) => {
+  engine: ({ notify, engineBackground, engineAgentEvent, trace, continuity, tasks, clock, store, grants, runLimits, sessionRules, emitGlobal, secrets, memory, background, interactive, workflows, peers, threads, packages, sessionMeta, loops, loopRun, worktrees, prWatch, prReview, goals, review, customTools, extensionLayers, agents, plans, extensions, skills: skillLoader, recall, computer, browser, harness, compound, budget, auxiliary, aiConfig, inlineShell, reasoning, settingsWrite }) => {
     extensionProviders = () => extensions.transportProviders()
     extensionMcpServers = (directory) => extensions.mcpServers(directory)
     extensionVirtualModels = (real) => extensions.virtualModels(real)
@@ -710,6 +710,7 @@ export const daemon = await startDaemon({
           computer,
           browser,
           loops,
+          loopRun,
           worktrees,
           prWatch,
           prReview,

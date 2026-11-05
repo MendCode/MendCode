@@ -240,6 +240,6 @@ export function createReviewSessions(deps: {
     }
   }
 
-  return { factory, observe, isReview: (id: SessionId) => mine.has(id) }
+  return { factory, observe, isReview: (id: SessionId) => mine.has(id), isEditor: (id: SessionId) => editors.has(id) }
 }
 export type ReviewSessions = ReturnType<typeof createReviewSessions>

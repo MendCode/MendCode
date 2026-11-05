@@ -724,7 +724,7 @@ export function createApp(input: AppInput) {
   const { openMessageActions, copyCommand, exportSession, transcriptActionsKey } = createTranscriptActions(ctx, { loadPage: () => loadPage("transcriptActions"), sessionTitle: (...args) => sessionTitle(...args), rewind, forkAt, copyAnswer })
   const sessionTree = createSessionTree(ctx, { loadPage: (...args) => loadPage(...args), sessionTitle: (...args) => sessionTitle(...args), switchSession: (id) => switchSession(id), jumpTo: (entry) => jumpTo(entry), forkAt: (entry) => forkAt(entry), mergeFork: (id) => mergeFork(id), openMessageActions: (...args) => openMessageActions(...args) })
   const composer = createComposerRecovery(ctx, { attachmentsOf, syncMentions, syncDraft, recallEntriesOf, keepDiscarded, openBacktrack: () => openMessageActions(false, undefined, undefined, true) })
-  const { loadLoops, saveLoop, fireLoop, controlLoop, createLoop, loadLiveLoops, noteLoop } = createLoops(ctx)
+  const { loadLoops, saveLoop, fireLoop, resolveLoopRequest, setLoopMode, confirmLoopDraft, controlLoop, createLoop, loadLiveLoops, noteLoop } = createLoops(ctx, { switchSession: (sessionId) => switchSession(sessionId) })
   const { loadWorkflows, openWorkflows, controlWorkflow, workflowCommand, loadLiveWorkflows, noteWorkflow } = createWorkflows(ctx)
   const automationLedger = createAutomationLedger(ctx)
   const { openPermissions, revokeGrant, approveRetry } = createPermissions(ctx)
@@ -987,6 +987,8 @@ export function createApp(input: AppInput) {
     loadLoops,
     saveLoop,
     fireLoop,
+    resolveLoopRequest,
+    setLoopMode,
     setPermission: (...args) => setPermission(...args),
     revokeGrant,
     diagramLayout,
@@ -1105,6 +1107,7 @@ export function createApp(input: AppInput) {
     loadMemories,
     submitPlanDraft: (...args) => submitPlanDraft(...args),
     answerQuestion: (...args) => answerQuestion(...args),
+    confirmLoopDraft: (...args) => confirmLoopDraft(...args),
     questionPaste: (...args) => questionPaste(...args),
     planReviewPaste,
     gitPaste: git.gitPaste,

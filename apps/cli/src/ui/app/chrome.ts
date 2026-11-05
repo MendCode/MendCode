@@ -353,6 +353,7 @@ export function createChrome(ctx: AppContext, actions: {
       ...(profileName() !== DEFAULT_PROFILE ? { profile: profileName() } : {}),
       ...(state.transcript.goal && !state.shellMode ? { goal: goalSpans(state.transcript.goal, now(), g) } : {}),
       loops: state.liveLoops.size,
+      ...(state.loops.some((loop) => loop.state === "needs_input" && state.liveLoops.has(loop.loopId)) ? { loopsWaiting: state.loops.filter((loop) => loop.state === "needs_input" && state.liveLoops.has(loop.loopId)).length } : {}),
       workflows: { live: state.liveWorkflows.size, waiting: [...state.liveWorkflows.values()].filter(Boolean).length },
       shell: state.shellMode,
       ...(state.statusLine ? { scriptLeft: state.statusLine.left, scriptRight: state.statusLine.right } : {}),

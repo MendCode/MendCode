@@ -1386,12 +1386,20 @@ const loopFields = lazyValue(() => ({
   costBudget: LoopCostBudget.optional(),
   rubric: LoopRubric.optional(),
   approvalPolicy: LoopApprovalPolicy.optional(),
+  /** Where a run's notice goes: the creator session (default when known) or nowhere. */
+  notify: z.enum(["creator", "none"]).optional(),
+  /** The permission mode the loop's sessions use; never above the creator's. Report-only runs are plan mode whatever this says. */
+  permission: PermissionMode.optional(),
+  /** Paths outside the project the runs will read (approved once with the loop). */
+  reads: z.array(z.string().min(1).max(4096)).max(10).optional(),
 }))
 
 export const LoopCreate = lazySchema(() => z.strictObject({
   ...base,
   type: z.literal("loop.create"),
   directory: z.string().min(1).max(4096),
+  /** The session `/loop` was typed in: the loop inherits its permission mode and reads, and reports back to it. */
+  creatorSessionId: SessionId.optional(),
   ...loopFields(),
 }).refine((command) => command.template !== undefined || (command.objective !== undefined && command.trigger !== undefined && command.budget !== undefined), {
   message: "without a template, objective, trigger and budget are required",
@@ -1405,6 +1413,12 @@ export const LoopUpdate = lazySchema(() => z.strictObject({
   loopId: LoopId,
   ...z.strictObject(loopFields()).partial().shape,
 }))
+
+/**
+ * `/loop` could not read the schedule of a phrase locally: the small role turns it into a trigger in the strict form
+ * (`every 5m`, `daily 09:00`, `adaptive 10m`, `now`) and the objective. One short model call, no tools. Ack: `{ trigger, objective }`.
+ */
+export const LoopInterpret = lazySchema(() => z.strictObject({ ...base, type: z.literal("loop.interpret"), text: z.string().min(1).max(2_000), directory: z.string().min(1).max(4096).optional() }))
 
 /** Read-only. Ack: `{ templates: LoopTemplateInfo[] }`. */
 export const LoopTemplates = lazySchema(() => z.strictObject({ ...base, type: z.literal("loop.templates") }))
@@ -1993,6 +2007,7 @@ export const COMMAND_SCHEMAS = {
   "loop.control": LoopControl,
   "loop.fire": LoopFire,
   "loop.templates": LoopTemplates,
+  "loop.interpret": LoopInterpret,
   "workflow.start": WorkflowStart,
   "workflow.list": WorkflowList,
   "workflow.get": WorkflowGet,

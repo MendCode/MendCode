@@ -2073,6 +2073,15 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
       }
       return { ...result, bytesReclaimed: Math.max(0, before - sizeOnDisk()), vacuumed: options.vacuum === true }
     },
+    /**
+     * Removes one `session.orchestration` row a newer row of the same card replaced (a loop's unread notice). The card is keyed by
+     * its group id, so clients that saw the old row update it in place; readers of the log see only the newer one. A row another
+     * session's transcript points at stays.
+     */
+    dropSupersededCard(sessionId: SessionId, seq: number): boolean {
+      return db.query(`DELETE FROM events WHERE session_id = ?1 AND seq = ?2 AND type = 'session.orchestration'
+        AND NOT EXISTS (SELECT 1 FROM transcript_prefix p WHERE p.parent_id = ?1 AND p.parent_seq = ?2)`).run(sessionId, seq).changes > 0
+    },
     /** Deletes the foreground and queue snapshots a settled session superseded (transient-events.ts); the daemon calls it when idle. */
     pruneSettledEvents(limit = 20) {
       return transientEvents.prune(limit)

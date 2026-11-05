@@ -261,7 +261,7 @@ describe("report-only loops", () => {
     expect(sessions).toEqual([expect.objectContaining({ title: "loop · report", readOnly: true })])
     clock.advance(3_600_000)
     await flush()
-    expect(submitted[0]!.text).toContain("Report-only loop")
+    expect(submitted[0]!.text).toContain("Report-only: write the report as your answer")
     const normal = service.create({ name: "normal", directory: "/repo", objective: "o", trigger: { kind: "manual" }, budget: { mode: "monitor" } })
     expect(normal.reportOnly).toBeUndefined()
     expect(sessions.at(-1)!.readOnly).toBeUndefined()

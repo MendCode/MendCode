@@ -119,7 +119,7 @@ import { createQuotaRefresh, windowsSpent, type RefreshProbe } from "./quota-ref
 import type { CodegraphStatus, CodegraphStatusHub } from "./codegraph-status"
 import { graphIndexMode } from "./graph-gate"
 import { normalizeQuotaRefresh, type QuotaRefreshProvider } from "@mendcode/protocol/wire"
-import { capPermission, memoryNoticeMeta, memoryNoticeText, restatesRequest, structuredValidator } from "@mendcode/engine-native"
+import { capPermission, declaredRoots, memoryNoticeMeta, memoryNoticeText, restatesRequest, structuredValidator } from "@mendcode/engine-native"
 import { memoryMaintenance } from "./memory-maintenance"
 import { createMemoryExtraction, type ExtractedMemory } from "./memory-extraction"
 import { createChildTasks } from "./child-tasks"
@@ -233,10 +233,11 @@ import {
   type SessionEventDraft,
 } from "@mendcode/kernel"
 import { openStore, type Store } from "@mendcode/store"
-import { checkProblems, createLoopService, createProblems, describeTemplate, loopUpdateInput, LOOP_TEMPLATES, type CreateLoopInput } from "@mendcode/loops"
+import { checkProblems, createLoopService, createProblems, describeTemplate, foldRunNotices, loopUpdateInput, LOOP_TEMPLATES, runNotice, type CreateLoopInput } from "@mendcode/loops"
 import { createLoopControl } from "./loop-control"
 import { runLoopCheck, workspaceFingerprint } from "./loop-checks"
 import { createLoopPort } from "./loop-port"
+import { LOOP_INTERPRET_SYSTEM, LOOP_INTERPRET_TIMEOUT_MS, loopInterpretRequest, readInterpretation } from "./loop-interpret"
 import { createWorktreePort } from "./worktree-port"
 import { createPrWatch, type GhRun } from "./pr-watch"
 import { createReviewSessions, REVIEW_AGENT, REVIEW_EXCLUDED_TOOLS, reviewMessage } from "./pr-review/sessions"
@@ -413,7 +414,7 @@ export type DaemonOptions = RemoteListenerOptions & {
   /** `tcp` listens on 127.0.0.1 behind a per-start secret published in `<dir>/mendd.endpoint` (Windows default); `unix` uses `socketPath`. Defaults from the platform and `MENDCODE_V2_LOCAL_TRANSPORT`. */
   localTransport?: LocalTransport
   defaultDirectory?: string
-  engine(input: { /** Queue a notice in a session from the engine (Claude Code answered a background task's end on its own). */ notify(sessionId: SessionId, text: string): void; /** Background tasks an engine runs by itself (Claude Code's), listed with the daemon's own shells. */ engineBackground(sessionId: SessionId, tasks: ReadonlyArray<{ id: string; description: string; kind: string }>, stop?: (taskId: string) => Promise<void>): void; /** What an engine's background sub-agent does after its turn ended, recorded under that turn. */ engineAgentEvent(sessionId: SessionId, turnId: import("@mendcode/protocol").TurnId, event: import("@mendcode/kernel").EngineEvent): void; trace: import("@mendcode/protocol").TracePort; budget: BudgetPort; /** Records an engine's own calls outside a turn (the permission reviewer) for `/usage`. */ auxiliary: AuxiliaryUsagePort; reasoning: import("@mendcode/engine-native").ReasoningPort; continuity: import("@mendcode/kernel").ContinuityForSession; tasks: import("@mendcode/kernel").TaskPort; clock: Clock; store: Store; grants: GrantStore; runLimits: RunLimitsStore; sessionRules(sessionId: SessionId): readonly import("@mendcode/protocol").PermissionRule[]; emitGlobal(event: GlobalEventDraft): void; secrets: SecretsPort; memory: MemoryAccess; background(sessionId: SessionId): BackgroundPort; interactive(sessionId: SessionId): InteractivePort; workflows(sessionId: SessionId): WorkflowPort; peers(sessionId: SessionId): PeerPort; sessionMeta(sessionId: SessionId): NonNullable<import("@mendcode/tools").ToolContext["sessionMeta"]>; threads(sessionId: SessionId): import("@mendcode/tools").ThreadPort; packages(sessionId: SessionId): import("@mendcode/tools").PackagePort; loops(sessionId: SessionId): LoopPort; worktrees(sessionId: SessionId): import("@mendcode/tools").WorktreePort; prWatch(sessionId: SessionId): import("@mendcode/tools").PrWatchPort; prReview(sessionId: SessionId): import("@mendcode/tools").PrReviewPort; review(sessionId: SessionId): ReviewPort; goals(sessionId: SessionId): GoalPort; customTools: CustomToolRegistry; skills: SkillLoader; extensionLayers(directory: string): ExtensionLayer[]; agents: AgentPort; plans: { latest(sessionId: SessionId): import("@mendcode/protocol").PlanReview | undefined; pointer?(sessionId: SessionId): string | undefined; roots?(sessionId: SessionId): string[]; anchored?(sessionId: SessionId): void }; extensions: EngineExtensions; recall(sessionId: SessionId): SessionRecallPort; compound(sessionId: SessionId): CompoundCall | undefined; aiConfig(sessionId: SessionId): import("@mendcode/tools").AIConfigPort; inlineShell(text: string): InlineShell[]; computer(sessionId: SessionId): import("@mendcode/tools").ComputerPort; browser(sessionId: SessionId): import("@mendcode/tools").BrowserPort; harness: { args(sessionId: SessionId): string[]; servers(sessionId: SessionId): ReturnType<ReturnType<typeof createHostMcp>["servers"]>; waiting(): boolean; instructions(sessionId: SessionId, harness?: "claude" | "codex"): Promise<string | undefined> }; /** The local owner's settings write (`mendcode_settings` after the user approved): saved, announced, followed. */ settingsWrite(patch: Record<string, unknown>): Promise<Settings> }): EnginePort & { stop?(): void }
+  engine(input: { /** Queue a notice in a session from the engine (Claude Code answered a background task's end on its own). */ notify(sessionId: SessionId, text: string): void; /** Background tasks an engine runs by itself (Claude Code's), listed with the daemon's own shells. */ engineBackground(sessionId: SessionId, tasks: ReadonlyArray<{ id: string; description: string; kind: string }>, stop?: (taskId: string) => Promise<void>): void; /** What an engine's background sub-agent does after its turn ended, recorded under that turn. */ engineAgentEvent(sessionId: SessionId, turnId: import("@mendcode/protocol").TurnId, event: import("@mendcode/kernel").EngineEvent): void; trace: import("@mendcode/protocol").TracePort; budget: BudgetPort; /** Records an engine's own calls outside a turn (the permission reviewer) for `/usage`. */ auxiliary: AuxiliaryUsagePort; reasoning: import("@mendcode/engine-native").ReasoningPort; continuity: import("@mendcode/kernel").ContinuityForSession; tasks: import("@mendcode/kernel").TaskPort; clock: Clock; store: Store; grants: GrantStore; runLimits: RunLimitsStore; sessionRules(sessionId: SessionId): readonly import("@mendcode/protocol").PermissionRule[]; emitGlobal(event: GlobalEventDraft): void; secrets: SecretsPort; memory: MemoryAccess; background(sessionId: SessionId): BackgroundPort; interactive(sessionId: SessionId): InteractivePort; workflows(sessionId: SessionId): WorkflowPort; peers(sessionId: SessionId): PeerPort; sessionMeta(sessionId: SessionId): NonNullable<import("@mendcode/tools").ToolContext["sessionMeta"]>; threads(sessionId: SessionId): import("@mendcode/tools").ThreadPort; packages(sessionId: SessionId): import("@mendcode/tools").PackagePort; loops(sessionId: SessionId): LoopPort; loopRun: import("@mendcode/engine-native").LoopRunPort; worktrees(sessionId: SessionId): import("@mendcode/tools").WorktreePort; prWatch(sessionId: SessionId): import("@mendcode/tools").PrWatchPort; prReview(sessionId: SessionId): import("@mendcode/tools").PrReviewPort; review(sessionId: SessionId): ReviewPort; goals(sessionId: SessionId): GoalPort; customTools: CustomToolRegistry; skills: SkillLoader; extensionLayers(directory: string): ExtensionLayer[]; agents: AgentPort; plans: { latest(sessionId: SessionId): import("@mendcode/protocol").PlanReview | undefined; pointer?(sessionId: SessionId): string | undefined; roots?(sessionId: SessionId): string[]; anchored?(sessionId: SessionId): void }; extensions: EngineExtensions; recall(sessionId: SessionId): SessionRecallPort; compound(sessionId: SessionId): CompoundCall | undefined; aiConfig(sessionId: SessionId): import("@mendcode/tools").AIConfigPort; inlineShell(text: string): InlineShell[]; computer(sessionId: SessionId): import("@mendcode/tools").ComputerPort; browser(sessionId: SessionId): import("@mendcode/tools").BrowserPort; harness: { args(sessionId: SessionId): string[]; servers(sessionId: SessionId): ReturnType<ReturnType<typeof createHostMcp>["servers"]>; waiting(): boolean; instructions(sessionId: SessionId, harness?: "claude" | "codex"): Promise<string | undefined> }; /** The local owner's settings write (`mendcode_settings` after the user approved): saved, announced, followed. */ settingsWrite(patch: Record<string, unknown>): Promise<Settings> }): EnginePort & { stop?(): void }
   reasoningEvaluator?: import("@mendcode/engine-native").ReasoningEvaluator
   /** Extension diagnostics (load failures, the first error of each extension); defaults to stderr. */
   log?(level: "debug" | "info" | "warn" | "error", message: string): void
@@ -1222,7 +1223,9 @@ export async function startDaemon(options: DaemonOptions) {
     },
     review: (sessionId) => reviews.port(sessionId),
     // Built below with the loop service; tools only call this during turns.
-    loops: (sessionId) => createLoopPort({ directory: store.sessionInfo(sessionId)?.directory ?? process.cwd(), service: loops, create: createLoop }),
+    loops: (sessionId) => createLoopPort({ directory: store.sessionInfo(sessionId)?.directory ?? process.cwd(), sessionId, service: loops, create: createLoop }),
+    // Loop runs: report-only runs have no plan tools; reads the loop's creator could make without asking do not ask again.
+    loopRun: { reportOnly: (sessionId) => loops.reportOnlySession(sessionId), inheritedReads: (sessionId) => loopInheritedReads(sessionId) },
     // The project service is built on first use; the `worktree` tool only calls this during turns.
     worktrees: (sessionId) => worktreePort(sessionId),
     prWatch: (sessionId) => prWatch.port(sessionId),
@@ -1311,9 +1314,18 @@ export async function startDaemon(options: DaemonOptions) {
     return { text: inlined.text, attachments: inlined.refs }
   }
 
+  /** Loop notices the creator's model has not read yet: one entry per loop, folded into the user's next message. In memory only; the transcript keeps every notice. */
+  const LOOP_NOTES_MAX = 5
+  type LoopNote = { text: string; runs: number; seq: number }
+  const loopNotes = new Map<SessionId, Map<string, LoopNote>>()
   const engine: typeof rawEngine = {
     ...rawEngine,
     async runTurn(turn) {
+      const unread = !turn.authority?.synthetic ? loopNotes.get(turn.sessionId) : undefined
+      if (unread?.size) {
+        loopNotes.delete(turn.sessionId)
+        turn = { ...turn, text: `${foldRunNotices([...unread.values()])}\n\n${turn.text}` }
+      }
       // A system continuation must not acquire tools its paused peer turn could not call, including after restart.
       const restrictionKey = `session.local-tools.restricted:${turn.sessionId}`
       if (turn.authority?.synthetic) {
@@ -2263,15 +2275,15 @@ export async function startDaemon(options: DaemonOptions) {
     store: store.loops,
     clock,
     ids,
-    createSession: ({ directory, title, readOnly }) => {
+    createSession: ({ directory, title, readOnly, permission }) => {
       const id = ids("session")
       store.createSession({ id, directory, title })
       store.meta.set(`session.title.manual:${id}`, "true")
       announceSession(id, directory)
       const actor = actorFor(id)
       // The mailbox keeps order: plan mode is set before the audit prompt that follows is handled.
-      // A loop's own session follows the user's default for new sessions, like any session they create.
-      const mode = readOnly ? "plan" : defaultPermissionFor(store.settings.get(), directory)
+      // A loop's own session has the mode it inherited from its creator, else the user's default for new sessions.
+      const mode = readOnly ? "plan" : permission ?? defaultPermissionFor(store.settings.get(), directory)
       if (mode && mode !== "ask") void actor?.handle({ id: ids("command"), clientId: loopClientId, type: "session.permission.set", sessionId: id, mode })
       return id
     },
@@ -2290,6 +2302,21 @@ export async function startDaemon(options: DaemonOptions) {
     // A hung auditor is cancelled by its exact turn (explicit target, FC-09/10).
     cancelTurn: ({ sessionId, turnId }) => actorFor(sessionId)?.handle({ id: ids("command"), clientId: loopClientId, type: "turn.cancel", sessionId, turnId }),
     onChange: (loop) => void globalSink.append({ type: "loop.changed", loop }),
+    // One short notice per run in the session that created the loop: one card per loop in the transcript (a `session.orchestration` event, replaced while unread), no turn and no model call; the model reads it with the user's next message.
+    notify: ({ loop, run }) => {
+      const creator = loop.creatorSessionId
+      if (!creator || !store.hasSession(creator)) return
+      const text = secrets.mask(creator, runNotice(loop, run))
+      const waiting = loopNotes.get(creator) ?? new Map<string, LoopNote>()
+      const earlier = waiting.get(loop.loopId)
+      const runs = (earlier?.runs ?? 0) + 1
+      // One card per loop in the transcript (keyed by the loop); a notice nobody read yet is replaced, not stacked.
+      const card = sessionSink.append({ type: "session.orchestration", sessionId: creator, groupId: `loop:${loop.loopId}`.slice(0, 64), text: runs > 1 ? `${text} · ${runs} runs` : text })
+      if (earlier) store.dropSupersededCard(creator, earlier.seq)
+      waiting.set(loop.loopId, { text, runs, seq: card.seq })
+      for (const oldest of [...waiting.keys()].slice(0, Math.max(0, waiting.size - LOOP_NOTES_MAX))) waiting.delete(oldest)
+      loopNotes.set(creator, waiting)
+    },
   })
   sessionObservers.push(loops.observe)
   loops.start()
@@ -2305,7 +2332,23 @@ export async function startDaemon(options: DaemonOptions) {
   async function createLoop(input: CreateLoopInput): Promise<{ ok: true; loop: ReturnType<typeof loops.create> } | { ok: false; message: string }> {
     const problem = await loopProblem(input)
     if (problem) return { ok: false, message: problem }
-    return { ok: true, loop: loops.create(input) }
+    // The loop starts with its creator's permission mode and never has more than it: a creator in full access makes a full-access loop.
+    const creatorMode = input.creatorSessionId && store.hasSession(input.creatorSessionId) ? livePermission(input.creatorSessionId) : undefined
+    const permission = creatorMode ? capPermission(input.permission ?? creatorMode, creatorMode) : input.permission
+    return { ok: true, loop: loops.create({ ...input, ...(permission ? { permission } : {}) }) }
+  }
+
+  /** What a loop's session may read without asking: anything when its creator is in full access, else the creator's extra directories and external-directory grants, plus the paths declared at creation. */
+  function loopInheritedReads(sessionId: SessionId): { all: boolean; roots: string[] } | undefined {
+    const loop = loops.forSession(sessionId)
+    if (!loop) return undefined
+    const roots = [...declaredRoots(loop.reads)]
+    const creator = loop.creatorSessionId
+    if (creator && store.hasSession(creator)) {
+      if (livePermission(creator) === "full") return { all: true, roots }
+      roots.push(...declaredRoots(store.settings.get().additionalDirectories, runLimits.get(creator)?.addDirs), ...grants.list(creator).filter((grant) => grant.rulePermission === "external_directory" && grant.pattern).map((grant) => grant.pattern!.replace(/\/\*$/, "")))
+    }
+    return roots.length ? { all: false, roots } : undefined
   }
 
   /** Workflows: the host loads its package only when a workflow command arrives or a run is still live. */
@@ -2416,10 +2459,13 @@ export async function startDaemon(options: DaemonOptions) {
     const restricted = { ...workflow, reserveChild: () => execution.budget?.maxDepth !== undefined && depth >= execution.budget.maxDepth ? false : workflow.reserveChild() }
     return { ...input, workflow: restricted, selection: { ...input.selection, ...(execution.model ? { model: execution.model } : {}), ...(execution.agent && depth === 1 ? { agent: execution.agent } : {}) }, permissionMode: () => execution.readOnly ? "plan" as const : capPermission(input.permissionMode(), execution.permission) }
   }
-  engine.runTurn = (input) => runWorkflowTurn(routedWorkflowInput(input))
+  /** An internal run in plan mode only to stay read-only (the engines then send it no plan note). */
+  const readOnlyRun = (sessionId: SessionId) => reviewSessions.isReview(sessionId) && !reviewSessions.isEditor(sessionId) || loops.reportOnlySession(sessionId) || workflowContext(sessionId)?.workflow.execution.readOnly === true || asideSessions.isAside(sessionId) || compoundCalls.get(sessionId)?.critic === true
+  const markedRun = <T extends { sessionId: SessionId }>(input: T): T => readOnlyRun(input.sessionId) ? { ...input, readOnlyRun: true } : input
+  engine.runTurn = (input) => runWorkflowTurn(markedRun(routedWorkflowInput(input)))
   if (engine.runShell) {
     const runWorkflowShell = engine.runShell.bind(engine)
-    engine.runShell = (input) => runWorkflowShell(routedWorkflowInput(input))
+    engine.runShell = (input) => runWorkflowShell(markedRun(routedWorkflowInput(input)))
   }
 
   const compoundClientId = ids("client")
@@ -4145,8 +4191,13 @@ export async function startDaemon(options: DaemonOptions) {
         return reply(connection, command.id, { ok: true, result: { run, consolidation: run.report?.consolidation ?? null, callsProviders: (run.report?.model.calls ?? 0) + (run.report?.consolidation?.semantic?.calls ?? 0) > 0, readsSecrets: false } })
       }
       case "loop.create": {
-        const { name, directory, objective, criteria, trigger, budget, runNow, checks, audit, template, reportOnly, workspace, costBudget, rubric, approvalPolicy } = command
+        const { name, directory, objective, criteria, trigger, budget, runNow, checks, audit, template, reportOnly, workspace, costBudget, rubric, approvalPolicy, creatorSessionId, notify, permission, reads } = command
+        if (creatorSessionId && !store.hasSession(creatorSessionId)) return reply(connection, command.id, { ok: false, code: "unknown_session", message: "[DAEMON]: unknown creator session" })
         const created = await createLoop({
+          ...(creatorSessionId ? { creatorSessionId } : {}),
+          ...(notify ? { notify } : {}),
+          ...(permission ? { permission } : {}),
+          ...(reads?.length ? { reads } : {}),
           name,
           directory,
           ...(objective ? { objective } : {}),
@@ -4177,12 +4228,27 @@ export async function startDaemon(options: DaemonOptions) {
         if (!current) return reply(connection, command.id, { ok: false, code: "target_mismatch", message: "[DAEMON]: unknown loop" })
         if (current !== before) return reply(connection, command.id, { ok: false, code: "busy", message: "[DAEMON]: the loop changed; retry the edit" })
         if (current.state === "running" || current.state === "needs_input" || current.state === "verifying") return reply(connection, command.id, { ok: false, code: "busy", message: "[DAEMON]: the loop is running; edit it after the run" })
+        // A loop never has more than its creator: lowering it is free, raising it is capped at the creator's mode.
+        const creatorMode = before.creatorSessionId && store.hasSession(before.creatorSessionId) ? livePermission(before.creatorSessionId) : undefined
+        if (patch.permission && creatorMode) patch.permission = capPermission(patch.permission, creatorMode)
         const loop = loops.update(loopId, patch)!
-        if (!!loop.reportOnly !== !!before.reportOnly) {
-          const mode = loop.reportOnly ? "plan" : defaultPermissionFor(store.settings.get(), loop.directory) ?? "ask"
+        if (!!loop.reportOnly !== !!before.reportOnly || loop.permission !== before.permission) {
+          const mode = loop.reportOnly ? "plan" : loop.permission ?? defaultPermissionFor(store.settings.get(), loop.directory) ?? "ask"
           await actorFor(loop.sessionId)?.handle({ id: command.id, clientId: command.clientId, type: "session.permission.set", sessionId: loop.sessionId, mode })
         }
         return reply(connection, command.id, { ok: true, result: { loop } })
+      }
+      case "loop.interpret": {
+        if (!completeBudgeted) return reply(connection, command.id, { ok: false, code: "invalid_command", message: "[DAEMON]: reading a schedule phrase needs the native engine" })
+        const directory = command.directory ?? options.defaultDirectory
+        const model = options.models?.selectable ? resolveModel({ role: "small", roles: rolesFor(store.settings.get(), directory), catalog: options.models }) : undefined
+        try {
+          const answer = await completeBudgeted({ system: LOOP_INTERPRET_SYSTEM, prompt: loopInterpretRequest(redactSecrets(command.text).text), signal: AbortSignal.timeout(LOOP_INTERPRET_TIMEOUT_MS), ...(model ? { model } : {}), auxiliary: { role: "loopInterpret", ...(directory ? { directory } : {}) } })
+          const read = readInterpretation(answer)
+          return read ? reply(connection, command.id, { ok: true, result: read }) : reply(connection, command.id, { ok: false, code: "invalid_command", message: "[DAEMON]: the model did not return a schedule; write it as /loop every 30m <what to do>" })
+        } catch (error) {
+          return reply(connection, command.id, { ok: false, code: "internal", message: `[DAEMON]: ${(error instanceof Error ? error.message : String(error)).slice(0, 300)}` })
+        }
       }
       case "loop.templates":
         return reply(connection, command.id, { ok: true, result: { templates: LOOP_TEMPLATES.map(describeTemplate) } })

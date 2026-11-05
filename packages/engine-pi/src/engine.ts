@@ -610,7 +610,7 @@ export function createPiEngine(options: PiEngineOptions): EnginePort & { stop():
       }
       if (connection.closed) return fail("pi_exited", "pi exited before the turn started")
       const body = await content(input, connection)
-      const planNote = planNotes.next(input.sessionId, input.permissionMode() === "plan")
+      const planNote = planNotes.next(input.sessionId, input.permissionMode() === "plan", input.readOnlyRun === true)
       if (planNote) body.message = `${body.message}\n${planNote}`
       // A cancel while pi started or the attachments were read: its abort event is gone, so nothing may be sent now.
       if (input.signal.aborted) {

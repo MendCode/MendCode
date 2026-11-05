@@ -462,6 +462,8 @@ export type AppState = {
   loopsError: string
   /** Loops in a live state for this project, kept from `loop.list` and `loop.changed`. */
   liveLoops: Set<string>
+  /** A `/loop` written as a phrase, waiting for its one-line confirmation (enter starts it, `e` edits it, a mode word lowers its permission). */
+  loopDraft?: import("./loops").LoopDraft | undefined
   workflowsState: ReturnType<typeof createWorkflowsPageState>
   workflows: WorkflowSummary[]
   workflowsLoaded: boolean

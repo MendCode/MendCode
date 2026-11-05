@@ -96,6 +96,11 @@ export type TurnInput = {
   turnOptions?: import("@mendcode/protocol").TurnOptions | undefined
   /** With `runShell` (`!!command`): the command and its output are shown, not added to the model's history. */
   localShell?: true
+  /**
+   * Set by the daemon for an internal read-only run (PR review, report-only loop, read-only workflow task, side chat, critic): its
+   * plan mode only keeps it read-only, so an engine that tells its model about plan mode sends no plan note for it.
+   */
+  readOnlyRun?: true
   /** Frozen workflow restrictions supplied by the daemon, never by a user.submit payload. */
   workflow?: {
     execution: import("@mendcode/protocol").WorkflowTaskExecution

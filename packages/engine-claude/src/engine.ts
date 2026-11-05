@@ -704,7 +704,7 @@ export function createClaudeEngine(options: {
       }
       const body = await content(input)
       // A slash command (Claude Code's own `/compact`) is sent as typed.
-      const planNote = input.text.startsWith("/") ? undefined : planNotes.next(input.sessionId, input.permissionMode() === "plan")
+      const planNote = input.text.startsWith("/") ? undefined : planNotes.next(input.sessionId, input.permissionMode() === "plan", input.readOnlyRun === true)
       if (planNote) body.push({ type: "text", text: planNote })
       // A cancel while the process started or the attachments were read: its abort event is gone, so nothing may be sent now.
       if (input.signal.aborted) {

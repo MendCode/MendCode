@@ -584,4 +584,19 @@ describe("codex plan mode note", () => {
     expect(sent[3]).toEqual(["again"])
     engine.stop()
   })
+
+  test("an internal read-only run (a PR review, a report-only loop) in plan mode carries no plan note and no off note", async () => {
+    const fake = fakeCodex(standardScript((_params, api) => api.notify("turn/completed", { threadId: "thr1", turn: { id: "turn1", status: "completed" } })))
+    const engine = createCodexEngine({ cwd: "/repo", transportFactory: () => fake.transport })
+    const ids = createIdFactory()
+    const sessionId = ids("session")
+    let mode: "plan" | "ask" = "plan"
+    const turn = (text: string) => engine.runTurn({ sessionId, turnId: ids("turn"), text, attachments: [], signal: new AbortController().signal, newItemId: () => ids("item"), emit: () => {}, ask: async () => ({ kind: "deny" }), permissionMode: () => mode, setPermissionMode: () => {}, readOnlyRun: true })
+    await turn("review it")
+    mode = "ask"
+    await turn("again")
+    const sent = fake.requests.filter((request) => request.method === "turn/start").map((request) => String(request.params.input[0].text))
+    expect(sent).toEqual(["review it", "again"])
+    engine.stop()
+  })
 })

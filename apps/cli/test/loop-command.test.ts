@@ -90,18 +90,18 @@ describe("parseLoopCommand naming and summary", () => {
 
 describe("parseLoopCommand errors", () => {
   test("empty input shows usage", () => expect(error("")).toStartWith("usage: /loop"))
-  test("unknown trigger", () => {
-    expect(error("sometimes do it")).toContain("trigger must be")
-    expect(error("30m do it")).toContain("trigger must be")
+  test("no schedule at all runs adaptive (and asks for the one-line confirmation)", () => {
+    const parsed = parseLoopCommand("sometimes do it")
+    expect(parsed.ok && parsed.natural).toBe(true)
+    expect(parsed.ok && parsed.spec.trigger).toMatchObject({ kind: "adaptive", everyMs: 600_000 })
   })
   test("interval problems", () => {
-    expect(error("every do it")).toContain("interval needs")
-    expect(error("every 30s do it")).toContain("interval needs")
+    expect(error("every 30s do it")).toContain("1m to 30d")
     expect(error("every 0m do it")).toContain("1m to 30d")
     expect(error("every 31d do it")).toContain("1m to 30d")
   })
   test("daily problems", () => {
-    expect(error("daily do it")).toContain("daily needs")
+    expect(parseLoopCommand("daily do it")).toMatchObject({ ok: true, natural: true, spec: { trigger: { kind: "interval", everyMs: 86_400_000 }, objective: "do it" } })
     expect(error("daily 25:00 do it")).toContain("HH:MM")
     expect(error("daily 09:60 do it")).toContain("HH:MM")
   })

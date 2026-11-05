@@ -105,6 +105,7 @@ unknown), under the session or directory it was made for:
 | `hook` | a `prompt` shell hook | `shell-hooks.ts` |
 | `agentGenerate` | `/agents` create with a generated definition | `agent-generate.ts` |
 | `setup` | the setup helper's answers | `setup.ask` |
+| `loopInterpret` | `/loop` with a schedule phrase the local parser did not read | `loop.interpret` |
 
 `/btw` is not in the list: its side session runs turns, already counted as turn usage.
 

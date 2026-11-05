@@ -131,6 +131,8 @@ export function createPageKeys(ctx: AppContext, actions: {
   loadLoops: ReturnType<typeof createLoops>["loadLoops"]
   saveLoop: ReturnType<typeof createLoops>["saveLoop"]
   fireLoop: ReturnType<typeof createLoops>["fireLoop"]
+  resolveLoopRequest: ReturnType<typeof createLoops>["resolveLoopRequest"]
+  setLoopMode: ReturnType<typeof createLoops>["setLoopMode"]
   setPermission: (next: PermissionMode) => Promise<boolean>
   revokeGrant: ReturnType<typeof createPermissions>["revokeGrant"]
   diagramLayout: ReturnType<typeof createDiagram>["diagramLayout"]
@@ -145,7 +147,7 @@ export function createPageKeys(ctx: AppContext, actions: {
   ensureSelectedDiff: ReturnType<typeof createChanges>["ensureSelectedDiff"]
 }) {
   const { input, state, now, editor, localDay, requestFrame, copyText, setupChoice } = ctx
-  const { acpKey, closeExtensionPage, switchSession, changeSession, forkAt, jumpTo, loadUsage, memoryPageData, loadMemoryGraph, loadDreamRuns, loadMemoryCategories, loadEvolution, loadDreamReport, memoryAction, loadSharing, storageAction, dropRevealedSecret, revealSecret, forgetSecret, restartMcp, authMcp, copyAuthMcp, loadTools, loadPackages, chooseAgent, modelAction, connectAction, providersAction, setupValues, applyRecipe, changeProfile, openFromPage, settingsValues, loadStatus, terminalExtensions, loadExtensionsReport, loadHooks, setTrust, controlLoop, loadLoops, saveLoop, fireLoop, setPermission, revokeGrant, diagramLayout, controlWorkflow, loadWorkflows, loadContext, saveReview, loadChanges, sendReview, ensureSelectedDiff } = actions
+  const { acpKey, closeExtensionPage, switchSession, changeSession, forkAt, jumpTo, loadUsage, memoryPageData, loadMemoryGraph, loadDreamRuns, loadMemoryCategories, loadEvolution, loadDreamReport, memoryAction, loadSharing, storageAction, dropRevealedSecret, revealSecret, forgetSecret, restartMcp, authMcp, copyAuthMcp, loadTools, loadPackages, chooseAgent, modelAction, connectAction, providersAction, setupValues, applyRecipe, changeProfile, openFromPage, settingsValues, loadStatus, terminalExtensions, loadExtensionsReport, loadHooks, setTrust, controlLoop, loadLoops, saveLoop, fireLoop, resolveLoopRequest, setLoopMode, setPermission, revokeGrant, diagramLayout, controlWorkflow, loadWorkflows, loadContext, saveReview, loadChanges, sendReview, ensureSelectedDiff } = actions
 
   async function handlePageKey(key: string) {
     if (state.automationLedger) return actions.automationLedgerKey(key)
@@ -494,6 +496,8 @@ export function createPageKeys(ctx: AppContext, actions: {
           state.loopsLoaded = false
           await loadLoops()
         } else if (action.type === "save") await saveLoop(action)
+        else if (action.type === "resolve") await resolveLoopRequest(action)
+        else if (action.type === "mode") await setLoopMode(action.loopId, action.permission)
         else if (action.type === "fire") await fireLoop(action.loopId)
         else if (action.type === "copy") copyText(action.text, "the fire command")
       }

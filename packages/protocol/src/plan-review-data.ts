@@ -22,10 +22,12 @@ export const PLAN_TURN_OFF_NOTE = "Plan mode is off: you may edit and run comman
  * The note a turn carries: the plan note on each turn in plan mode, the off note on the first turn after it, nothing otherwise.
  * One per engine; it remembers only which sessions were told, so a session never planning costs nothing.
  */
-export function createPlanTurnNotes(style: keyof typeof PLAN_TURN_NOTES): { next(sessionId: string, planning: boolean): string | undefined } {
+export function createPlanTurnNotes(style: keyof typeof PLAN_TURN_NOTES): { next(sessionId: string, planning: boolean, internal?: boolean): string | undefined } {
   const told = new Set<string>()
   return {
-    next(sessionId, planning) {
+    next(sessionId, planning, internal = false) {
+      // An internal read-only run (a PR review, a report-only loop) is in plan mode only to stay read-only: no plan to present, nothing to remember.
+      if (internal) return undefined
       if (planning) {
         told.add(sessionId)
         return `[MendCode: ${PLAN_TURN_NOTES[style]}]`

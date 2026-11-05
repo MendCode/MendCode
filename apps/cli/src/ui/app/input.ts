@@ -39,6 +39,8 @@ export function createInput(ctx: AppContext, actions: {
   loadMemories: ReturnType<typeof createMemory>["loadMemories"]
   submitPlanDraft: (text: string) => Promise<void>
   answerQuestion: (text: string) => Promise<void>
+  /** A `/loop` waiting for its one-line confirmation: enter starts it, `e` edits it, a mode lowers it; true when `text` was an answer to it. */
+  confirmLoopDraft: (text: string) => Promise<boolean>
   questionPaste: (text: string) => boolean
   planReviewPaste: (text: string) => boolean
   gitPaste: (text: string) => boolean
@@ -220,6 +222,7 @@ export function createInput(ctx: AppContext, actions: {
       await loadMemories()
       return
     }
+    if (state.loopDraft && await actions.confirmLoopDraft(text)) return
     if (state.planDraft) return submitPlanDraft(text)
     if (state.transcript.pendingRequests[0]?.kind === "question") return actions.answerQuestion(text)
     if (state.shellMode) {

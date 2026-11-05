@@ -13,6 +13,9 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 - `threads` and `sessions` ask for up to 100 sessions (10 by default) and take `query`, `state` and `project` filters. See [peers](docs/peers.md#sessions).
 
+- `/loop` understands phrases in Spanish and English (`/loop cada 5 minutos ve diciéndome`, `/loop daily at 9am check the issues`) and asks for one line of confirmation before it starts; with no interval it paces itself (`adaptive`), and a schedule it cannot read is converted by the small model. The strict form (`/loop every 30m …`) is unchanged. See [loops](docs/loops.md#natural-language).
+- A loop starts with the permission mode of the session that created it (never more): from full access it asks nothing, and a report-only loop reads any path like its creator. From a session that asks, it reads what that session could read and asks about the rest; the footer shows `needs input` and `/loops` shows the request and answers it with `a`, `o` or `x`. A run nobody answers ends with a clear message. See [loops](docs/loops.md#permissions-and-approvals).
+- Every loop run leaves a short notice in the session that created the loop, with a link to the loop's session; it starts no model turn and the model reads it with your next message (`/loop open <id>`); `notify: none` turns it off. See [loops](docs/loops.md#notices-in-the-creator-session).
 - Accepted and applied plans are saved as Markdown files per project (outside your repository unless `plan_files_location` is `repo`). After a compaction the agent is told where its plan is, other sessions list and read plans with `sessions plans=true`, and the `todo` list keeps the plan's steps up to date. Balanced and full; Claude Code's own plan file is used as is.
 - Sessions can list, message and open sessions in other projects, like Claude Code's ListAgents and SendMessage: `sessions scope=all`, `tell` and `threads message` to any session, and `threads start` for a new session in another folder with a first message. Each of those asks you every time, the receiver gets the message marked as an agent's from another project, and nothing is ever above the sender's permission. See [peers](docs/peers.md#other-projects).
 - Approving a plan (Enter, or comment then apply) now runs it with full access, as Claude Code does when it leaves plan mode; `m` on the plan page picks auto edits or ask before edits instead, and the page and the "Plan mode off" notice name the access. See [plan review](docs/plan-review.md).
@@ -86,7 +89,10 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Fixed
 
+- PR reviews, report-only loops, read-only workflow tasks and side chats on Codex, Pi, ACP and Claude Code are no longer told to present a plan.
+
 - Esc Esc on a message nobody answered yet brings it back into the prompt at once with its images, even with a draft or a queued message behind it; when it cannot, the notice says the model already answered.
+- A report-only loop run no longer waits on "Review plan": it is not offered the plan tools or the plan mode note, and writes its report as the answer.
 - Applying a plan on Claude Code or an ACP agent lifts the plan agent's read-only limit at once, so the next write in the same turn is allowed, and the session moves to the plan's destination agent.
 - Leaving plan mode with Shift+Tab or `/plan` returns to the mode the session had before it.
 - A plan review that ends with no decision (the daemon restarted, the request was cancelled) tells the model it was interrupted, not that you rejected the plan.

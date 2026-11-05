@@ -409,7 +409,7 @@ export function createCodexEngine(options: {
       const threadId = await threadFor(input.sessionId, input.permissionMode() === "plan")
       // A cancel while Codex started or the thread opened: its abort event is gone, so nothing may be sent now.
       if (input.signal.aborted) return { status: "ok" }
-      const planNote = planNotes.next(input.sessionId, input.permissionMode() === "plan")
+      const planNote = planNotes.next(input.sessionId, input.permissionMode() === "plan", input.readOnlyRun === true)
       return new Promise<TurnOutcome>((resolve) => {
         let settled = false
         const turn: ActiveTurn = {

@@ -1839,6 +1839,20 @@ describe("claude engine plan mode note", () => {
     engine.stop()
   })
 
+  test("an internal read-only run in plan mode carries no plan note and no off note", async () => {
+    const fake = fakeClaude({ onUser(api) { streamText(api, 0, "ok"); api.push(result()) } })
+    const { engine } = engineWith([fake])
+    const sessionId = ids("session")
+    let mode: PermissionMode = "plan"
+    const turn = (text: string) => engine.runTurn({ ...turnInput({ sessionId, text, mode: () => mode }).input, readOnlyRun: true })
+    expect(await turn("review it")).toEqual({ status: "ok" })
+    mode = "ask"
+    expect(await turn("again")).toEqual({ status: "ok" })
+    const sent = fake.written.filter((message) => message.type === "user").map((message) => message.message.content.map((block: any) => block.text))
+    expect(sent).toEqual([["review it"], ["again"]])
+    engine.stop()
+  })
+
   test("a slash command in plan is sent as typed", async () => {
     const fake = fakeClaude({ onUser(api) { streamText(api, 0, "ok"); api.push(result()) } })
     const { engine } = engineWith([fake])
