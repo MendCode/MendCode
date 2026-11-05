@@ -94,7 +94,6 @@ export function createCompactionLive(ctx: AppContext, actions: { editScratch(): 
       limit: { tokens: state.contextReport?.compactAtTokens ?? compactFallback(state), kind: "threshold" },
       now: ctx.now(),
       spinner: request.indicator ? "" : state.reducedMotion ? "⋯" : SPINNER_FRAMES[state.spinFrame % SPINNER_FRAMES.length]!,
-      progress: state.tuiProfile.compactionProgress,
       ...(view ? { arcade: { view, focused: live.focused, fieldRows: view.rows.length } } : {}),
       scratch: { text: state.scratchNote, editing: state.editingScratch !== undefined, editor: ctx.scratchEditor, readOnly: input.remote?.readOnly === true },
     })

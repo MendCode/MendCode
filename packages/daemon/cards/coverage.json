@@ -2,6 +2,7 @@
   "cards": {
     "agents": "command:agent command:agents setting:default_agent setting:agent setting:defaultAgent",
     "attachments": "feature:voice command:voice command:attach setting:image_generation setting:voice tool:image_gen",
+    "automation": "setting:resumeAfterRestart",
     "backlog": "feature:backlog command:backlog",
     "plans": "feature:plan_files setting:plan_files_location",
     "one-tree": "feature:one_tree",

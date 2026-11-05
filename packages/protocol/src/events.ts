@@ -119,6 +119,8 @@ export const TurnInterrupted = lazySchema(() => z.strictObject({
   type: z.literal("turn.interrupted"),
   turnId: TurnId,
   reason: z.enum(["restart", "transport", "stream_idle"]),
+  /** Why the daemon ended the turn: its own orderly stop, so the next start resumes it (an Esc or an error never carries this). */
+  cause: z.literal("daemon_shutdown").optional(),
 }))
 
 /** The engine is waiting to retry a failed model call (rate limit, 5xx, stalled stream); the turn is still running. */

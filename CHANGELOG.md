@@ -11,6 +11,8 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### New
 
+- A daemon restart no longer leaves your turns interrupted for good: sessions it stopped, including `run --bg` children, continue when it starts again, and a `run --bg` child keeps its launching session across the restart. A session that cannot continue tells its launcher. `daemon restart` says which turns are running when it refuses, and what `--force` interrupted. Turn it off with `resumeAfterRestart: false`. See [automation](docs/automation.md#background-sessions-b17).
+- Sessions started with `run --bg` that wait for approval are announced: the launching session is told once (it cannot approve), and your terminal gets one card with Approve all, Deny all or One by one. `session status` and `logs` name what a session waits on.
 - `mendcode dev start|restart|stop|status|tui|run`: a second daemon on its own data directory that runs the current checkout, marked DEV and restarted without touching the daemon your sessions use, so MendCode can be programmed from MendCode. See [dev mode](docs/dev-mode.md).
 - `mendcode usage --quota [--json]` prints the quota windows the footer shows, read from the running daemon; nothing is sent to a provider. See [usage](docs/usage.md#quota-from-the-command-line).
 - A session that runs `mendcode run --permission smart` above its own mode now asks you on one card (model, folder, mode, title, prompt) when your terminal has it open; approving starts that child with that prompt only. Without you there it is still refused, and the error gives the command to run yourself. See [permissions](docs/permissions.md#what-a-session-cannot-do-from-its-own-shell).
@@ -53,8 +55,9 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Changed
 
+- Image generation uses GPT Image 2.6 (2.5 if your account lacks it), and `image_gen` can make transparent PNGs. See [tools](docs/tools-web.md).
 - Inside a sub-agent the chat says so everywhere: one line under the top edge with its name, state, parent session and the keys back (also with the top bar off, and alone in the `minimal` tier), its row in the Agents strip filled, and the prompt in its colour with a hint of whom a message goes to.
-- The compaction card is two rows (stage with its bar, context before and after) and shows one loading spinner, the activity line's, instead of three.
+- The compaction card keeps its frame and shows no spinner of its own while the activity line shows one, so only one loader runs.
 - A PR review that reaches its token cap now posts a partial review of what it verified and lists what it did not review, and the next `/pr review` continues with the rest. See [PR review](docs/pr-review.md#a-review-that-reaches-the-cap).- `/pr review` (and `@mendcode review`) of a head already reviewed with the same config answers at once and runs nothing; `/pr review <n> full` reviews it again. See [PR review](docs/pr-review.md).
 - The `/customize` preview draws what the picked row changes: the home with the pet, a sample chat with the top bar, the prompt with its status line and your real footer, the activity, the diff.
 - Numbers in `/customize` edit with Enter and step with the arrows.
@@ -114,6 +117,8 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Fixed
 
+- A settings proposal (`mendcode_settings`) waiting on its card from Claude Code answers `Pending` instead of "The operation timed out", and a headless session's proposal is shown on the session that started it.
+- Smart mode runs a project binary given by path (`../../node_modules/.bin/tsc`) like the command it names, and an `echo` of `$?` no longer counts as a shell expansion.
 - `mendcode --restart-daemon` only stops a process that is a MendCode daemon for that data directory; a stale `mendd.lock` whose pid was reused is reported and left alone (a dead owner's lock is removed), and the command restarts the daemon and exits instead of opening the terminal (#2).
 - A turn that shows nothing (an idle compaction with nothing to compact) no longer adds a second "ended" line under the answer.
 - `mendcode run` and `session send` accept a long prompt or a long `--file` text (up to 200 KiB each): what does not fit a message goes as a text attachment and the model reads all of it. Over that, the error names the prompt or file, its size and the limit, and "daemon rejected" for a text that is too long now says the same. See [attachments](docs/attachments.md#long-text-from-run-and-session-send).

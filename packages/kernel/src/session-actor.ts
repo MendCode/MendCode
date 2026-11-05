@@ -26,6 +26,8 @@ type ActorCommand = Extract<
 
 export type ActorResult = { ok: true; result?: Record<string, unknown> } | { ok: false; code: ErrorCode; message: string }
 export type InterruptReason = "restart" | "transport" | "stream_idle"
+/** Set when the daemon itself stopped the turn in an orderly shutdown (the event carries it). */
+export type InterruptCause = "daemon_shutdown"
 
 /**
  * A steering turn: `text` goes to the engine as the user message, but the transcript shows only `label` (a thin
@@ -50,6 +52,7 @@ type ActiveTurn = {
   /** Set by a cancel, which ends the turn for everyone at once (`turn.cancelled`, idle) while the engine stops behind it. */
   cancelBy?: "user" | "promotion"
   interruptReason?: InterruptReason
+  interruptCause?: InterruptCause
   grace?: TimerHandle
   /** The engine's way to take a promoted message without a cancel (`TurnInput.onSendNow`). */
   sendNow?: (message: Pick<TurnInput, "text" | "attachments">) => boolean
@@ -67,7 +70,7 @@ const MAX_AGENT_ITEMS = 500
 
 type Message =
   | { kind: "command"; command: ActorCommand; authorityText?: string; reply(result: ActorResult): void }
-  | { kind: "interrupt"; reason: InterruptReason; reply(): void }
+  | { kind: "interrupt"; reason: InterruptReason; cause?: InterruptCause; reply(): void }
   | { kind: "pause"; paused: boolean; reply(paused: boolean): void }
   | { kind: "engine.event"; turnId: TurnId; event: EngineEvent }
   | { kind: "agent.event"; turnId: TurnId; event: EngineEvent }
@@ -402,7 +405,7 @@ export function createSessionActor(options: SessionActorOptions) {
     if (turn.interruptReason) {
       compactionUpdated(turn, "interrupted")
       closeOpenItems(turn, "interrupted")
-      emit({ type: "turn.interrupted", sessionId, turnId, reason: turn.interruptReason })
+      emit({ type: "turn.interrupted", sessionId, turnId, reason: turn.interruptReason, ...(turn.interruptCause ? { cause: turn.interruptCause } : {}) })
       return finish(turn)
     }
     closeOpenItems(turn, "unknown")
@@ -752,10 +755,11 @@ export function createSessionActor(options: SessionActorOptions) {
     }
   }
 
-  function onInterrupt(reason: InterruptReason) {
+  function onInterrupt(reason: InterruptReason, cause?: InterruptCause) {
     held = true
     if (!active || active.cancelBy || active.interruptReason) return settleIdle()
     active.interruptReason = reason
+    if (cause) active.interruptCause = cause
     stopTurn(active)
   }
 
@@ -783,7 +787,7 @@ export function createSessionActor(options: SessionActorOptions) {
         return message.reply(result)
       }
       case "interrupt":
-        onInterrupt(message.reason)
+        onInterrupt(message.reason, message.cause)
         return message.reply()
       case "engine.event":
         return onEngineEvent(message.turnId, message.event)
@@ -906,8 +910,8 @@ export function createSessionActor(options: SessionActorOptions) {
     handle(command: ActorCommand, authorityText?: string) {
       return new Promise<ActorResult>((reply) => post({ kind: "command", command, ...(authorityText !== undefined ? { authorityText } : {}), reply }))
     },
-    interrupt(reason: InterruptReason) {
-      return new Promise<void>((reply) => post({ kind: "interrupt", reason, reply }))
+    interrupt(reason: InterruptReason, cause?: InterruptCause) {
+      return new Promise<void>((reply) => post({ kind: "interrupt", reason, ...(cause ? { cause } : {}), reply }))
     },
     /** Pause (true) or resume (false): a paused session finishes its running turn and then starts nothing until resumed. */
     pause(value: boolean) {

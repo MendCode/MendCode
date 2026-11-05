@@ -186,13 +186,13 @@ test("a Claude Code session gets image_gen through the host tools on a ChatGPT l
   expect(result.isError).toBe(false)
   expect(result.images?.[0]?.mime).toBe("image/png")
   expect(result.output).toContain(path.join(dir, "generated_images"))
-  expect(imageCalls[0]).toMatchObject({ url: "https://chatgpt.com/backend-api/codex/images/generations", auth: "Bearer fake-subscription", body: { model: "gpt-image-2", size: "1536x1024", n: 1 } })
+  expect(imageCalls[0]).toMatchObject({ url: "https://chatgpt.com/backend-api/codex/images/generations", auth: "Bearer fake-subscription", body: { model: "gpt-image-2.6-sunburst", size: "1536x1024", n: 1 } })
   const started = events.find((event) => event.type === "item.started") as Extract<EngineEvent, { type: "item.started" }>
   expect(started).toMatchObject({ kind: "tool_call", meta: { tool: "image_gen: A blue square icon" } })
-  expect(events.some((event) => event.type === "item.delta" && event.text.includes("model openai/gpt-image-2\nsize 1536x1024"))).toBe(true)
+  expect(events.some((event) => event.type === "item.delta" && event.text.includes("model openai/gpt-image-2.6-sunburst\nsize 1536x1024"))).toBe(true)
   // The card carries the picture, as the hosted tool's does: the terminal draws it in the card instead of only its path.
   const completed = events.find((event) => event.type === "item.completed") as Extract<EngineEvent, { type: "item.completed" }>
-  expect(completed).toMatchObject({ status: "ok", meta: { model: "gpt-image-2", operation: "generations" }, attachments: [{ mime: "image/png", sha256: createHash("sha256").update(PNG).digest("hex") }] })
+  expect(completed).toMatchObject({ status: "ok", meta: { model: "gpt-image-2.6-sunburst", operation: "generations" }, attachments: [{ mime: "image/png", sha256: createHash("sha256").update(PNG).digest("hex") }] })
   // The turn's own attachment is the recent image an edit takes.
   const edited = await engine.hostCall!({ turn, name: "image_gen", args: { prompt: "Make it blue", num_last_images_to_include: 1 } })
   expect(edited.isError).toBe(false)

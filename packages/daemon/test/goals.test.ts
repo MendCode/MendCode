@@ -456,6 +456,8 @@ describe("goals across a daemon restart", () => {
     const sessionId = await openSession(first)
     await first.client.send({ type: "goal.set", sessionId, objective: "survive restarts" })
     await until(() => started(first, sessionId) >= 1)
+    // The turn stays interrupted here: resuming it is restart-resume.test.ts's subject.
+    await first.client.send({ type: "settings.set", patch: { resumeAfterRestart: false } })
     // This client would reconnect to the daemon that replaces the first one and reopen the session itself.
     first.client.close()
     await first.daemon.stop()

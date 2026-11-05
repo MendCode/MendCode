@@ -135,7 +135,7 @@ test("writer presence is nonexclusive, release belongs to the current client, an
 test("writer expiry is a read projection and background restart stops an unfinished registered child", async () => {
   const h = await start({ steps: [hang] })
   const parent = await openSession(h)
-  await h.client.send({ type: "settings.set", patch: { subagentOwnerWake: false } })
+  await h.client.send({ type: "settings.set", patch: { subagentOwnerWake: false, resumeAfterRestart: false } })
   const task = await child(h, parent)
   await until(() => h.requests.length === 1)
   await h.client.acquireBackgroundWriter(task.taskId, 1)

@@ -1209,6 +1209,12 @@ export function worktreeStorageText(report: StorageWorktreesReport) {
 }
 
 function eventLine(event: SessionEvent) {
+  // What a session waits for is the one thing a launcher reading `logs` needs to see, so it is named, not just typed.
+  if (event.type === "server.request") {
+    const asked = (event.kind === "approval" ? `${event.tool ?? "tool"}: ${event.detail || event.title}` : event.title).replace(/\s+/g, " ").slice(0, 160)
+    return `#${event.seq} ${event.type} ${event.kind === "approval" ? "waiting for approval" : "waiting for an answer"} ${event.requestId}: ${asked}\n`
+  }
+  if (event.type === "server.request.resolved") return `#${event.seq} ${event.type} ${event.requestId} ${event.resolution}\n`
   const detail = "text" in event && typeof event.text === "string" ? ` ${event.text.replace(/\s+/g, " ").slice(0, 80)}` : "kind" in event ? ` ${String(event.kind)}` : ""
   return `#${event.seq} ${event.type}${detail}\n`
 }
@@ -1561,7 +1567,11 @@ export async function runAutomation(command: Automation, deps: AutomationDeps): 
       const reply = await daemon(command.kind === "session.get" ? { type: "session.get", sessionId: command.id as SessionId } : { type: "session.inspect", sessionId: command.id as SessionId, limit: command.kind === "session.inspect" ? command.limit : 20, ...(command.kind === "session.inspect" && command.summary ? { summary: true } : {}) })
       if (!reply.ok) return fail(reply.message)
       const session = reply.result.session as import("@mendcode/protocol").SessionDetail
-      return result(reply.result, sessionHuman(session))
+      // A session blocked on the user says on what, so whoever launched it does not have to read its events to find out.
+      const blocked = command.kind === "session.status" && session.status.startsWith("waiting") ? await daemon({ type: "session.inspect", sessionId: command.id as SessionId, limit: 1 }) : undefined
+      const pending = blocked?.ok ? (blocked.result.pending as import("@mendcode/protocol").SessionInspection["pending"]) : undefined
+      const waiting = pending ? [...pending.permissions, ...pending.questions].filter((event): event is Extract<SessionEvent, { type: "server.request" }> => event.type === "server.request").map((event) => ({ requestId: event.requestId, kind: event.kind, ...(event.tool ? { tool: event.tool } : {}), detail: (event.detail || event.title).replace(/\s+/g, " ").slice(0, 200) })) : []
+      return result(waiting.length ? { ...reply.result, waiting } : reply.result, sessionHuman(session, waiting))
     }
 
     case "session.stats": {

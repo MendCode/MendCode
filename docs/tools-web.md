@@ -27,7 +27,7 @@ Timeout 25 s, cancelled with the turn. Use `webfetch` to read a result page.
 
 ## image_gen (permission: write)
 
-Arguments: `prompt` (required), `size` (`1024x1024` default, `1536x1024`, `1024x1536`), `n` (1 or 2), `path` (optional), `referenced_image_paths` (up to five absolute local paths), or `num_last_images_to_include` (1–5 distinct recent session images). Never combine reference selectors; omit both, or use recent count 0, for a new image. Missing references fail before a provider call. References are capped at 50 MB each; local files pass read and external-directory permission checks before being read or transmitted, and their identity is bound to the approval.
+Arguments: `prompt` (required; the tool description gives the model a short guide: scene or purpose, subject, details, constraints; exact text in quotes with font and placement; for edits, what to change and what to keep), `transparent_background` (a transparent PNG for cutouts and icons), `size` (`1024x1024` default, `1536x1024`, `1024x1536`), `n` (1 or 2), `path` (optional), `referenced_image_paths` (up to five absolute local paths), or `num_last_images_to_include` (1–5 distinct recent session images). Never combine reference selectors; omit both, or use recent count 0, for a new image. Missing references fail before a provider call. References are capped at 50 MB each; local files pass read and external-directory permission checks before being read or transmitted, and their identity is bound to the approval.
 
 With the setting absent, files are saved inside the project, by default `generated/<prompt-slug>-<n>.png`. The default name never overwrites: it takes the first free number. An explicit `path` is resolved against the project and refused, before any paid call, when it lies outside it, also through a symlink. With `n=2` an explicit path gets `-1` and `-2` before the extension. JPEG gets `.jpg`. Legacy API calls accept PNG/JPEG; configured adapters also accept WebP/GIF.
 
@@ -38,7 +38,7 @@ The first configured provider wins:
 | order | provider | key | model |
 |---|---|---|---|
 | 1 | OpenRouter | `OPENROUTER_API_KEY` | chat completion with `modalities: ["image","text"]` and an aspect ratio from `size`; model `google/gemini-2.5-flash-image`, override with `OPENROUTER_IMAGE_MODEL`. One call per image. |
-| 2 | OpenAI Images | `OPENAI_API_KEY` | `POST {OPENAI_BASE_URL or https://api.openai.com/v1}/images/generations`, model `gpt-image-2` (the configured and subscription default too), override with `OPENAI_IMAGE_MODEL`. `dall-e-*` models get `response_format: b64_json`, and `dall-e-3` one request per image. |
+| 2 | OpenAI Images | `OPENAI_API_KEY` | `POST {OPENAI_BASE_URL or https://api.openai.com/v1}/images/generations`, model `gpt-image-2.6-sunburst` (the configured and subscription default too; if the API refuses it, one retry with `gpt-image-2.5-sunburst`, named in the result), override with `OPENAI_IMAGE_MODEL`. `dall-e-*` models get `response_format: b64_json`, and `dall-e-3` one request per image. |
 
 Timeout 180 s. If you have both keys and want OpenAI, unset `OPENROUTER_API_KEY` for the daemon (or pick another image-output model with `OPENROUTER_IMAGE_MODEL`).
 
@@ -51,7 +51,7 @@ Set `image_generation` through `settings.set` or the typed client `imageGenerati
   "image_generation": {
     "enabled": true,
     "adapter": "codex-oauth",
-    "model": "openai:gpt-image-2",
+    "model": "openai:gpt-image-2.6-sunburst",
     "timeout_ms": 180000,
     "options": { "quality": "high", "size": "1536x1024" },
     "caption": { "enabled": true, "model": "chatgpt:vision-model", "required": false, "max_chars": 2000 }
@@ -59,7 +59,9 @@ Set `image_generation` through `settings.set` or the typed client `imageGenerati
 }
 ```
 
-Model refs accept `provider:model` and v1 `provider/model`. `auto` selects Codex OAuth for OpenAI without API credentials, OpenAI-compatible for OpenAI with credentials, or OpenRouter's Image API for OpenRouter. Other providers require explicit `openai-compatible`. Explicit `codex-oauth` keeps using the subscription even when API keys exist. With no image model/key, enabled subscription generation defaults to `openai:gpt-image-2`; configured API providers retain their image model defaults.
+`gpt-image-2.6-flare` is the faster variant; set it as `model`. A model you configure is never swapped. `options` go to the request as they are: `quality` (`low`, `medium`, `high`, `xhigh`, `max`, `auto`), `complexity` (`low`, `medium`, `high`; 2.6), `background`, `output_format`, `output_compression`, `moderation` and any other field the Images API documents. `size` stays one of the three listed sizes unless `options.size` sets another (both edges a multiple of 16, ratio at most 3:1).
+
+Model refs accept `provider:model` and v1 `provider/model`. `auto` selects Codex OAuth for OpenAI without API credentials, OpenAI-compatible for OpenAI with credentials, or OpenRouter's Image API for OpenRouter. Other providers require explicit `openai-compatible`. Explicit `codex-oauth` keeps using the subscription even when API keys exist. With no image model/key, enabled subscription generation defaults to `openai:gpt-image-2.6-sunburst`; configured API providers retain their image model defaults.
 
 Codex credentials are read from its login on each call without refreshing or rewriting that file. Its token can go only to the official ChatGPT backend or an explicitly configured loopback adapter; redirects are refused. API adapters use saved provider credentials or the existing environment keys. `base_url` overrides the image base; OpenRouter uses `/images`, Codex uses `/images/generations` or `/images/edits`, compatible edits use multipart `image[]`. `options` holds bounded provider generation parameters, never credentials, routing or references. `timeout_ms` is 1–600000.
 

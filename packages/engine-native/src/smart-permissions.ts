@@ -277,7 +277,7 @@ export function splitCommand(command: string): Segment[] {
     if (quote === '"') {
       if (char === '"') quote = undefined
       else {
-        if (char === "$" || char === "`") expansion = true
+        if ((char === "$" && command[i + 1] !== "?") || char === "`") expansion = true
         current += char
       }
       continue
@@ -288,7 +288,8 @@ export function splitCommand(command: string): Segment[] {
       continue
     }
     if (char === "$" || char === "`") {
-      expansion = true
+      // `$?` is the last exit status: it names no program and no path, so it does not hide what runs.
+      if (char === "`" || command[i + 1] !== "?") expansion = true
       current = (current ?? "") + char
       continue
     }
@@ -521,6 +522,11 @@ function sedScriptReadOnly(script: string): boolean {
   return true
 }
 
+/** A command given as a path to a binary in the project's own `node_modules/.bin` (`../../node_modules/.bin/tsc`): it is judged as the command it names (`tsc`). */
+function projectBinary(name: string, root: Root): boolean {
+  return /(?:^|\/)node_modules\/\.bin\/[^/]+$/.test(name) && insideProject(name, root)
+}
+
 function startsWithWords(words: readonly string[], prefix: string): boolean {
   const wanted = prefix.trim().split(/\s+/)
   return wanted.length <= words.length && wanted.every((word, index) => words[index] === word)
@@ -619,7 +625,8 @@ function classifySegment(segment: Segment, root: Root, allowCommands: readonly s
   if (!name) return allow("allow-listed-command", "only assignments or redirections")
 
   const base = path.basename(name)
-  const userListed = !readOnlyRun && [...DEFAULT_ALLOW, ...allowCommands].some((prefix) => startsWithWords(words, prefix))
+  const judged = projectBinary(name, root) ? [base, ...words.slice(1)] : words
+  const userListed = !readOnlyRun && [...DEFAULT_ALLOW, ...allowCommands].some((prefix) => startsWithWords(judged, prefix))
   if (inner) return inner.decision === "allow" || userListed ? allow("allow-listed-command", `${name} runs a script whose every command is on the allow list`) : inner
   const listed =
     (READ_ONLY_COMMANDS.has(name) && name === base) ||

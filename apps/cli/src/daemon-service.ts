@@ -93,6 +93,15 @@ export type DaemonServiceDeps = {
 /** No daemon answered; `unanswered` is the pid of one that still holds the data directory. */
 type NotAnswering = { running: false; dataDir: string; unanswered?: number }
 
+type Working = NonNullable<DaemonStatusReport["work"]>
+
+/** What runs, for whoever restarts: the turns' sessions, and who started each from its shell. */
+export function workText(report: Pick<DaemonStatusReport, "activeTurns" | "work">) {
+  const shown = (report.work ?? []).map((entry) => `${entry.sessionId} ${JSON.stringify(entry.title)}${entry.launcher ? ` started by ${entry.launcher} ${JSON.stringify(entry.launcherTitle ?? "")}` : ""}`)
+  const more = report.activeTurns - shown.length
+  return `${report.activeTurns} turn${report.activeTurns === 1 ? "" : "s"} running${shown.length ? `: ${shown.join("; ")}${more > 0 ? `; and ${more} more` : ""}` : ""}`
+}
+
 export function daemonStatusText(report: DaemonStatusReport | NotAnswering, service?: ServiceResult) {
   const state = report.running ? "running" : report.unanswered ? `not answering · process ${report.unanswered} holds the data directory` : "stopped"
   const lines = [`Daemon: ${state}`, `Data: ${report.dataDir}`]
@@ -106,7 +115,9 @@ export function createDaemonServiceCli(deps: DaemonServiceDeps) {
   return async (command: DaemonServiceCommand): Promise<number> => {
     let peer: Peer | undefined
     const name = `daemon.${command.service ? "service." : ""}${command.action}`
-    const result = (data: unknown, text: string) => deps.out.write(command.json ? JSON.stringify({ schema: "mendcode-next.cli.v1", kind: "result", command: name, data }) + "\n" : text)
+    /** Set when `--force` stops a daemon with turns running: they are reported, and the next start resumes them. */
+    let interrupted: (Working & { count: number }) | undefined
+    const result = (data: unknown, text: string) => deps.out.write(command.json ? JSON.stringify({ schema: "mendcode-next.cli.v1", kind: "result", command: name, data: interrupted ? { ...(data as object), interrupted: { turns: interrupted.count, sessions: interrupted } } : data }) + "\n" : (interrupted ? `Interrupted ${workText({ activeTurns: interrupted.count, work: interrupted })}. They resume when the daemon starts again (resumeAfterRestart in the settings).\n` : "") + text)
     try {
       if (command.help) { deps.out.write(DAEMON_USAGE); return 0 }
       const readStatus = async (): Promise<DaemonStatusReport | NotAnswering> => {
@@ -130,7 +141,9 @@ export function createDaemonServiceCli(deps: DaemonServiceDeps) {
       }
       const busy = async () => {
         const report = await readStatus()
-        if (!command.force && report.running && (report.activeTurns || report.backgroundJobs || report.loops.running)) throw new Error("Daemon is busy; retry with --force to interrupt work")
+        if (!report.running || !(report.activeTurns || report.backgroundJobs || report.loops.running)) return
+        if (!command.force) throw new Error(`Daemon is busy: ${report.activeTurns ? workText(report) : `${report.backgroundJobs} jobs · ${report.loops.running} loops running`}; retry with --force to interrupt work. Turns it interrupts resume when the daemon starts again`)
+        if (report.activeTurns) interrupted = Object.assign([...(report.work ?? [])], { count: report.activeTurns })
       }
       // A daemon that holds the data directory but does not answer: a new one could only fail on the lock, and stop cannot reach it.
       const unanswered = (report: DaemonStatusReport | NotAnswering) => {

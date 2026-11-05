@@ -124,6 +124,7 @@ import { memoryMaintenance } from "./memory-maintenance"
 import { createMemoryExtraction, type ExtractedMemory } from "./memory-extraction"
 import { createChildTasks } from "./child-tasks"
 import { createTaskOwnerWake } from "./task-owner-wake"
+import { createRestartResume } from "./restart-resume"
 import { createSessionBackground } from "./session-background"
 import { createAgentRegistry } from "./agents"
 import { createAgentFile } from "./agent-create"
@@ -134,6 +135,7 @@ import { createEngineHooks, createExtensions, createPromptFiles, forgetSessionEn
 import { createExtensionSessions } from "./extension-sessions"
 import { createExtensionDialogs, DIALOGS_CAPABILITY } from "./extension-dialogs"
 import type { createChildElevation as CreateChildElevation } from "./child-elevation"
+import type { createChildApprovals as CreateChildApprovals } from "./child-approvals"
 import { createStatusScripts } from "./status-scripts"
 import { approvalRulePatch, offerFor } from "./approval-rules"
 import { createShellHooks } from "./shell-hooks"
@@ -913,6 +915,40 @@ export async function startDaemon(options: DaemonOptions) {
     return (await elevationLoading).request(input)
   }
   /**
+   * Approvals sessions started from another session's shell wait for, grouped for their launcher (child-approvals.ts). The module
+   * loads when the first such request appears; a daemon whose sessions are all the user's own never loads it.
+   */
+  let childApprovals: ReturnType<typeof CreateChildApprovals> | undefined
+  let childApprovalsLoading: Promise<void> | undefined
+  let launcherOf: (child: string) => string | undefined = () => undefined
+  function observeChildApprovals(event: SessionEvent) {
+    if (childApprovals) return childApprovals.observe(event)
+    if (event.type !== "server.request" || event.async || !launcherOf(event.sessionId)) return
+    childApprovalsLoading ??= import("./child-approvals").then((module) => {
+      childApprovals = module.createChildApprovals({
+        launcherOf: (child) => launcherOf(child) as SessionId | undefined,
+        humanSessions: (launcher) => {
+          const project = store.sessionDirectory(launcher)
+          const open = [...connections].filter(isHumanTerminal).flatMap((connection) => [...connection.subscriptions.keys()])
+          const nearby = project ? open.filter((id) => id !== launcher && store.sessionDirectory(id) !== undefined && canonicalDir(store.sessionDirectory(id)!) === canonicalDir(project)) : []
+          return [...new Set([...open.filter((id) => id === launcher), ...nearby])]
+        },
+        title: (sessionId) => store.sessionInfo(sessionId)?.title ?? "",
+        turnOf: (sessionId) => actors.get(sessionId)?.snapshot().turnId,
+        requestId: () => ids("request"),
+        turnId: () => ids("turn"),
+        queueId: () => ids("queue"),
+        emit: (draft) => void sessionSink.append(draft),
+        mask: (sessionId, text) => secrets.mask(sessionId, text),
+        notify: async (launcher, text, queueId) => actorFor(launcher)?.notify(text, queueId, false, "steer"),
+        async resolveChild({ child, requestId, decision, clientId }) {
+          await actorFor(child)?.handle({ id: ids("command"), clientId: (clientId ?? taskClientId) as never, type: "request.resolve", sessionId: child, requestId, decision })
+        },
+      })
+    })
+    void childApprovalsLoading.then(() => childApprovals?.observe(event))
+  }
+  /**
    * Shell command hooks (`hooks.json`): user ones run as configured, project ones only in a directory trusted for project
    * tools. They are read from this machine's folders only; nothing a client sends configures them. `MENDCODE_HOOKS=0` turns them off.
    */
@@ -1579,7 +1615,7 @@ export async function startDaemon(options: DaemonOptions) {
   let wakeSettledPrune: (() => void) | undefined
   /** Accepted and applied plans as Markdown files (feature `plan_files`, docs/plan-review.md). */
   const planFiles = createPlanFiles({ dir: options.dir, enabled: () => featureOn(store.settings.get(), "plan_files", { safeMode: options.safeMode === true }), location: () => store.settings.get().plan_files_location ?? "data", directoryOf: (sessionId) => store.sessionDirectory(sessionId), now: () => clock.now() })
-  const sessionObservers: Array<(event: SessionEvent) => void> = [planFiles.observe,asideSessions.observe, tasks.observe, sessionBackground.observe, ownerWake.observe, extraction.observe, metadata.observe, (event) => { if (event.type === "turn.completed") maintainMemory(store.sessionDirectory(event.sessionId)) }]
+  const sessionObservers: Array<(event: SessionEvent) => void> = [planFiles.observe,asideSessions.observe, tasks.observe, sessionBackground.observe, ownerWake.observe, (event) => observeChildApprovals(event), extraction.observe, metadata.observe, (event) => { if (event.type === "turn.completed") maintainMemory(store.sessionDirectory(event.sessionId)) }]
   // An engine alias (`claude-opus`) resolves to a concrete id in the first answer's usage; remember it so the next launch names it at once.
   sessionObservers.push((event) => {
     if (event.type !== "usage.recorded") return
@@ -2282,6 +2318,23 @@ export async function startDaemon(options: DaemonOptions) {
     }
   }
 
+  /**
+   * Turns an orderly shutdown interrupted are carried on by this start with one steering turn each (restart-resume.ts); a turn that
+   * was running when a daemon died without stopping is only closed below, never re-run (FC-37, I15).
+   */
+  const restartResume = createRestartResume({
+    store,
+    enabled: () => store.settings.get().resumeAfterRestart !== false,
+    now: () => clock.now(),
+    lastTurn: lastTurnEvents,
+    resume: async (sessionId, text) => (await actorFor(sessionId)?.steer({ text, label: "daemon restarted · resumed", meta: { restart: "resume" } })) ?? false,
+    tell: async (launcher, text, queueId) => actorFor(launcher)?.notify(text, queueId, false, "steer"),
+    title: (sessionId) => secrets.mask(sessionId, store.sessionInfo(sessionId)?.title ?? ""),
+    queueId: () => ids("queue"),
+    log: logLine,
+  })
+  sessionObservers.push(restartResume.observe)
+
   /** A turn that was running when the previous daemon died is closed as interrupted, never re-run (FC-37, I15). */
   function recoverInterruptedTurns() {
     for (const { sessionId } of store.sessionsWithActiveTurn()) {
@@ -2299,7 +2352,9 @@ export async function startDaemon(options: DaemonOptions) {
       }
       for (const requestId of openRequests) sessionSink.append({ type: "server.request.resolved", sessionId, requestId: requestId as never, resolution: "abandoned", ...(planRequests.has(requestId) ? { planReview: { kind: "plan_review", action: "close", reason: "Interrupted by restart" } } : {}) })
       for (const itemId of openItems) sessionSink.append({ type: "item.completed", sessionId, itemId: itemId as never, status: "interrupted" })
-      sessionSink.append({ type: "turn.interrupted", sessionId, turnId: started.turnId, reason: "restart" })
+      // A shutdown that did not wait for the engine (it kept running past the stop) still recorded the turn: the cause stays on the event.
+      const shutdown = store.resumes.get(sessionId)?.turnId === started.turnId
+      sessionSink.append({ type: "turn.interrupted", sessionId, turnId: started.turnId, reason: "restart", ...(shutdown ? { cause: "daemon_shutdown" as const } : {}) })
       sessionSink.append({ type: "foreground.state", sessionId, state: store.queueOf(sessionId).length > 0 ? "queued" : "idle" })
       // Only a daemon that ended without stopping (a kill, a crash, the process hosting it gone) leaves a turn open.
       logLine("warn", `[DAEMON]: session ${sessionId} had a turn running when the previous daemon ended without stopping; marked interrupted`)
@@ -2309,6 +2364,9 @@ export async function startDaemon(options: DaemonOptions) {
   for (const task of store.tasks.list()) if (task.background && task.state === "interrupted" && ["queued", "working", "needs_input"].includes(store.sessionBackground.get(task.taskId)?.state ?? "")) sessionBackground.register(task.taskId, { state: "stopped", summary: task.result.slice(0, 4000) })
   ownerWake.schedule()
   continuity.recover()
+  // After start has finished (the listener is up, the engine is ready): a bounded page of the table, then one steering turn per session.
+  const resumeTimer = setTimeout(() => void restartResume.start().catch((error) => logLine("warn", `[DAEMON]: resuming interrupted turns failed: ${error instanceof Error ? error.message : String(error)}`)), 0)
+  resumeTimer.unref?.()
 
   /**
    * Loops: each run is a normal message in the loop's root session, submitted as the daemon's own
@@ -3113,6 +3171,7 @@ export async function startDaemon(options: DaemonOptions) {
     grants.revoke(sessionId, "all")
     runLimits.delete(sessionId)
     elevation?.forget(sessionId)
+    childApprovals?.forget(sessionId)
     forgetSessionEntries(options.dir, sessionId)
     sessionPermissions.delete(sessionId)
     selfPackagePorts.delete(sessionId)
@@ -3244,7 +3303,8 @@ export async function startDaemon(options: DaemonOptions) {
   }
 
   const peerOrigin = createPeerOrigin({ descendants: options.agentOrigin?.descendants === true })
-  const agentGate = createAgentGate({ modeOf: (sessionId) => (store.hasSession(sessionId) ? livePermission(sessionId) : undefined) })
+  const agentGate = createAgentGate({ modeOf: (sessionId) => (store.hasSession(sessionId) ? livePermission(sessionId) : undefined), launchers: store.launchers })
+  launcherOf = agentGate.launcherOf
 
   async function handleOnce(connection: Connection, command: Command) {
     if (connection.rejected) return
@@ -3849,7 +3909,7 @@ export async function startDaemon(options: DaemonOptions) {
           if (problem) return reply(connection, command.id, { ok: false, code: "target_mismatch", message: `[DAEMON]: ${problem}` })
         }
         if (command.type === "request.resolve") {
-          const result = elevation?.resolve(command, isHumanTerminal(connection)) ?? extensionDialogs.resolve(command) ?? continuity.resolve(command)
+          const result = childApprovals?.resolve(command, isHumanTerminal(connection)) ?? elevation?.resolve(command, isHumanTerminal(connection)) ?? extensionDialogs.resolve(command) ?? continuity.resolve(command)
           if (result) return reply(connection, command.id, result)
         }
         const actor = actorFor(command.sessionId)
@@ -5906,6 +5966,7 @@ export async function startDaemon(options: DaemonOptions) {
           ...(options.buildId ? { buildId: options.buildId } : {}),
           clients: [...connections].filter((peer) => peer.clientId).length,
           activeTurns: [...actors.values()].filter(actorWorking).length,
+          work: workingSessions(),
           backgroundJobs: scheduler.snapshot().length + engineJobs(),
           loops: { total: entries.length, active: entries.filter((loop) => loop.state === "active").length, running: entries.filter((loop) => ["running", "needs_input", "verifying"].includes(loop.state)).length },
           dream: { configured: Boolean(options.dream), enabled: Boolean(at), at: at ?? null, handled: store.meta.get(DREAM_WINDOW_KEY) ?? null },
@@ -6523,6 +6584,14 @@ export async function startDaemon(options: DaemonOptions) {
       ],
     }
   }
+  /** The sessions with a turn running, newest 20, with who started each from its shell: what `daemon restart --force` would interrupt. */
+  function workingSessions() {
+    const label = (sessionId: SessionId) => secrets.mask(sessionId, store.sessionInfo(sessionId)?.title ?? "").slice(0, 100)
+    return [...actors].filter(([, actor]) => actorWorking(actor)).slice(0, 20).map(([sessionId]) => {
+      const launcher = agentGate.launcherOf(sessionId)
+      return { sessionId, title: label(sessionId), ...(launcher && store.hasSession(launcher as SessionId) ? { launcher, launcherTitle: label(launcher as SessionId) } : {}) }
+    })
+  }
   /** Since when nothing has needed this daemon: no client, no work, nothing standing. */
   let unneededSince: number | undefined
   /** A restart asked while work ran (`daemon.shutdown` with `whenIdle`): it stops the daemon once that work ends. */
@@ -6539,6 +6608,8 @@ export async function startDaemon(options: DaemonOptions) {
 
   /** Graceful stop: running turns end as interrupted(restart), resources are released, the lock is freed. */
   async function stop() {
+    restartResume.stop()
+    clearTimeout(resumeTimer)
     threadBridge?.stop()
     hostBridge.stop()
     idleGc.stop()
@@ -6576,6 +6647,7 @@ export async function startDaemon(options: DaemonOptions) {
     continuity.stop()
     extensionDialogs.stop()
     elevation?.stop()
+    childApprovals?.stop()
     background.stop()
     interactive.stop()
     statusLines.stop()
@@ -6593,7 +6665,12 @@ export async function startDaemon(options: DaemonOptions) {
     await sessionHttpListener?.stop(true)
     listener.stop(true)
     for (const connection of connections) connection.socket.end()
-    await Promise.all([...actors.values()].map((actor) => actor.interrupt("restart")))
+    // The turns this orderly stop ends are kept for the next start to resume.
+    for (const [sessionId, actor] of actors) {
+      const now = actor.snapshot()
+      if (now.turnId && !now.stopping && now.foreground !== "compacting") restartResume.record(sessionId, now.turnId)
+    }
+    await Promise.all([...actors.values()].map((actor) => actor.interrupt("restart", "daemon_shutdown")))
     for (let i = 0; i < 20 && [...actors.values()].some((actor) => actor.snapshot().turnId); i++) await new Promise((r) => setTimeout(r, 10))
     engine.stop?.()
     for (const active of tracedTurns.values()) active.span.end("cancelled")
