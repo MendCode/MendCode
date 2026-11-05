@@ -144,7 +144,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   { name: "presentation", group: "look", setting: "presentation", aliases: [], summary: "Choose transcript presentation" },
   { name: "message-rendering", group: "look", setting: "messageRenderer", aliases: [], summary: "Choose message rendering" },
   { name: "submit-scroll", group: "look", setting: "submitScroll", aliases: [], summary: "Choose scrolling after send" },
-  { name: "timestamps", group: "look", setting: "timestamps", aliases: [], summary: "Toggle message timestamps" },
+  { name: "timestamps", group: "look", setting: "timestamps", aliases: [], summary: "Choose where the chat shows the time" },
   { name: "thinking", group: "look", setting: "reasoning", aliases: [], summary: "Toggle reasoning visibility" },
   { name: "scrollbar", group: "look", setting: "scrollbar", aliases: [], summary: "Choose the transcript scrollbar" },
   { name: "jump-to-latest", group: "look", setting: "jumpHint", aliases: ["jump"], summary: "Choose the jump-to-latest button" },
@@ -194,7 +194,7 @@ export function runsOnSelect(command: SlashCommand) {
   return command.custom !== true && command.ext !== true && !ARGUMENT_COMMANDS.has(command.name)
 }
 
-const OPTIONAL_ARGUMENTS = new Set(["limit", "daemon", "pr", "context-window", "rename", "view", "agent", "model", "permissions", "fork", "recap", "export", "import", "sandbox", "add-dir", "fast", "advisor", "output-style", "experimental", "tier", "sidebar", "find", "stash", "copy", "diagram", "mcp", "mcps", "footer", "theme", "pet", "mascot", "prompt-chrome", "presentation", "message-rendering", "submit-scroll", "scrollbar", "jump-to-latest", "activity", "comments", "prompt-mode", "username", "queue", "compound", "release-channel", "tsm", "mflow", "remote-control", "vim", "multiline", "prompt-history", "backlog"])
+const OPTIONAL_ARGUMENTS = new Set(["limit", "daemon", "pr", "context-window", "rename", "view", "agent", "model", "permissions", "fork", "recap", "export", "import", "sandbox", "add-dir", "fast", "advisor", "output-style", "experimental", "tier", "sidebar", "find", "stash", "copy", "diagram", "mcp", "mcps", "footer", "theme", "pet", "mascot", "prompt-chrome", "presentation", "message-rendering", "submit-scroll", "timestamps", "scrollbar", "jump-to-latest", "activity", "comments", "prompt-mode", "username", "queue", "compound", "release-channel", "tsm", "mflow", "remote-control", "vim", "multiline", "prompt-history", "backlog"])
 export function takesArguments(command: SlashCommand) {
   return command.name === "panel" || !runsOnSelect(command) || OPTIONAL_ARGUMENTS.has(command.name)
 }

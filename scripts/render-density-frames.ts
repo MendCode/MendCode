@@ -74,7 +74,7 @@ const profileOf = (density: Density | undefined, extra: Partial<TuiProfile> = {}
 /** The whole transcript of `events` at `width`, as the rows the chat column draws. */
 function transcriptRows(events: Parameters<ReturnType<typeof createTranscript>["apply"]>[0][], width: number, density: Density | undefined): Line[] {
   const t = createTranscript({ appearance: profileOf(density), glyphs: glyphs({}), mode: "full", now: () => DENSITY_NOW })
-  t.setAppearance({ ...profileOf(density), reasoning: "auto", toolOutput: "auto", timestamps: false })
+  t.setAppearance({ ...profileOf(density), reasoning: "auto", toolOutput: "auto", timestamps: "off" })
   for (const event of events) t.apply(event)
   return t.viewport(width, 5000).map((line) => line.spans)
 }

@@ -73,6 +73,7 @@ const ARGUMENTS: Readonly<Record<string, () => readonly SlashArgument[]>> = {
   presentation: () => words("Chat presentation", ["raw", "minimal", "mendcode", "full", "balanced", "auto"]),
   "message-rendering": () => words("Message rendering", ["plain", "markdown", "full"]),
   "submit-scroll": () => words("After sending", ["bottom", "clear"]),
+  timestamps: () => words("Time in the chat", ["bottom", "top", "off"]),
   scrollbar: () => words("Transcript scrollbar", ["auto", "always", "off"]),
   "jump-to-latest": () => words("Jump-to-latest button", ["right", "center", "left", "off"]),
   comments: () => words("Comments", ["list", "reply", "clear", "on", "off", "auto", "settings"]),

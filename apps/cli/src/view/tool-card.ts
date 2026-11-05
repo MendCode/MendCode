@@ -13,7 +13,8 @@ import { computerCard } from "./computer-card"
 import { markFold } from "./line-meta"
 import { isReadTool, type ToolCounts } from "./tool-summary"
 import { asciiGlyphs, FOLD_CARD, FOLD_PAGE, FOLD_RUN, INDENT, marksOf, railPrefix, type Marks } from "./tool-frame"
-import { cardContext, failure, globCard, grepCard, header, linesOf, listCard, pagedLines, readCard, searchCard, shapeCard, shellCard, SPINNER_ASCII, taskCard, webCard, type CardContext } from "./tool-kinds"
+import { branchRows, cardContext, failure, globCard, grepCard, header, linesOf, listCard, pagedLines, readCard, searchCard, shapeCard, shellCard, SPINNER_ASCII, taskCard, webCard, type CardContext } from "./tool-kinds"
+import { DEFAULT_TOOL_DESIGN, type ToolDesign } from "./tool-design"
 import { BRIEF_ROWS, shapeLines } from "./tool-bodies"
 import { resultShape } from "./tool-data"
 import { formatBytes } from "./tool-data"
@@ -296,31 +297,59 @@ function padTo(line: Line, width: number, bg: ColorName): Line {
   return used < width ? [...line, { text: " ".repeat(width - used), bg }] : line
 }
 
+/** What of a tool design a diff reads: how it is tinted and numbered, and its colours. */
+export type DiffDesign = Pick<ToolDesign, "diff" | "colors">
+
+/** A changed row's tint and its sign's colour in `design`; a kept row has neither. */
+function diffTones(kind: DiffRow["kind"], design: DiffDesign): { bg: ColorName | undefined; tone: ColorName; marker: string } {
+  if (kind === "add") return { bg: design.colors.addedBg, tone: design.colors.added, marker: "+" }
+  if (kind === "remove") return { bg: design.colors.removedBg, tone: design.colors.removed, marker: "-" }
+  return { bg: undefined, tone: "muted", marker: " " }
+}
+
+/**
+ * A tinted row starts its tint right after the card's rule: the blank cells between the rule and the line number (the prefix's
+ * trailing blank spans) take the tint too, so no gap of terminal background shows between the rule and the colour. A card drawn
+ * without its rule has blank cells there, and the tint starts under the header's glyph. The card's indent is never tinted.
+ */
+function tintedPrefix(prefix: Span[], bg: ColorName | undefined): Span[] {
+  if (!bg || prefix.length < 2) return prefix
+  let from = prefix.length
+  while (from > 1 && !prefix[from - 1]!.text.trim()) from--
+  return from === prefix.length ? prefix : [...prefix.slice(0, from), ...prefix.slice(from).map((span) => ({ ...span, bg }))]
+}
+
 /**
  * One number column, as Claude Code draws a diff: a removed line's old number, an added or kept line's new one, then a +/- marker
  * and full-row tints for changes. The part of a changed line that differs from its replacement is bold in the marker's colour.
- * `prefix` is what leads every row (the card's indent and rule).
+ * `prefix` is what leads every row (the card's indent and rule). `design` (a tool design's) can tint only the code or nothing, and
+ * leave out the numbers or the signs; the default tints the whole row from the rule to the edge.
  */
-export function renderDiffRows(rows: DiffRow[], width: number, prefix: Span[] = [{ text: INDENT }], lineRows = DIFF_LINE_ROWS): Line[] {
+export function renderDiffRows(rows: DiffRow[], width: number, prefix: Span[] = [{ text: INDENT }], lineRows = DIFF_LINE_ROWS, design: DiffDesign = DEFAULT_TOOL_DESIGN): Line[] {
   const lead = prefix.reduce((sum, span) => sum + textWidth(span.text), 0)
+  const { numbers, signs, tint } = design.diff
   const shownNumber = (row: DiffRow) => (row.kind === "remove" ? row.old : row.new ?? row.old)
-  const digits = Math.max(1, ...rows.map((row) => String(shownNumber(row) ?? 0).length))
-  const columns = digits
+  const digits = numbers ? Math.max(1, ...rows.map((row) => String(shownNumber(row) ?? 0).length)) : 0
+  // The cells before the code: the number, then ` + ` (or `+ ` without numbers, ` ` without signs).
+  const gutter = numbers ? digits + (signs ? 3 : 1) : signs ? 2 : 0
   const changed = changedSpans(rows)
   return rows.flatMap((row, at): Line[] => {
     // A hunk's function context or a file's path can be longer than the row: it ends in `…` rather than stopping.
     if (row.kind === "hunk") return [[...prefix, { text: `${" ".repeat(Math.max(0, digits - 1))}${truncateEnd(row.text, Math.max(0, width - lead - 1))}`, fg: "muted", dim: true }]]
     if (row.kind === "file") return [[...prefix, { text: truncateEnd(row.text, Math.max(0, width - lead - 1)), fg: "muted", bold: true }]]
-    const bg: ColorName | undefined = row.kind === "add" ? "diffAddedBg" : row.kind === "remove" ? "diffRemovedBg" : undefined
-    const marker = row.kind === "add" ? "+" : row.kind === "remove" ? "-" : " "
+    const { bg, tone: markerTone, marker } = diffTones(row.kind, design)
+    const rowBg = tint === "row" ? bg : undefined
+    const codeBg = tint === "none" ? undefined : bg
+    const rowTint = rowBg ? { bg: rowBg } : {}
     const side = (value: number | undefined) => (value === undefined ? " ".repeat(digits) : String(value).padStart(digits))
-    const markerTone: ColorName = row.kind === "add" ? "success" : row.kind === "remove" ? "error" : "muted"
-    const room = Math.max(lead + columns + 4, width - 1)
-    const { indent, text } = diffCode(row.text, changed.get(at), room - lead - columns - 3, markerTone, bg)
-    const first: Span[] = [...prefix, { text: side(shownNumber(row)), fg: "muted", ...(bg ? { bg } : {}) }, { text: ` ${marker} ${" ".repeat(indent)}`, fg: markerTone, ...(bg ? { bg } : {}) }]
-    const rest: Span[] = [...prefix, { text: " ".repeat(columns + 3 + indent), ...(bg ? { bg } : {}) }]
-    const rows = lead + columns + 3 + textWidth(row.text) <= room ? [[...first, ...text]] : capRows(wrapSpans(text, room, first, rest), lineRows)
-    return rows.map((line) => (bg ? padTo(line, width - 1, bg) : line))
+    const room = Math.max(lead + gutter + 1, width - 1)
+    const { indent, text } = diffCode(row.text, changed.get(at), room - lead - gutter, markerTone, codeBg)
+    const lineLead = tintedPrefix(prefix, rowBg)
+    const sign = numbers ? (signs ? ` ${marker} ` : " ") : signs ? `${marker} ` : ""
+    const first: Span[] = [...lineLead, ...(numbers ? [{ text: side(shownNumber(row)), fg: design.colors.number, ...rowTint }] : []), ...(sign || indent ? [{ text: `${sign}${" ".repeat(indent)}`, fg: markerTone, ...rowTint }] : [])]
+    const rest: Span[] = [...lineLead, ...(gutter + indent ? [{ text: " ".repeat(gutter + indent), ...rowTint }] : [])]
+    const lines = lead + gutter + textWidth(row.text) <= room ? [[...first, ...text]] : capRows(wrapSpans(text, room, first, rest), lineRows)
+    return lines.map((line) => (rowBg ? padTo(line, width - 1, rowBg) : line))
   })
 }
 
@@ -371,23 +400,23 @@ function facingRows(rows: readonly DiffRow[]): Array<{ across: number } | { left
  * The old file on the left and the new on the right, each with its own line numbers, a removal facing the addition that
  * replaced it with the part that differs in bold. A long line wraps inside its half; the shorter side is padded to match.
  */
-export function renderSplitDiffRows(rows: DiffRow[], width: number, prefix: Span[] = [{ text: INDENT }], lineRows = DIFF_LINE_ROWS): Line[] {
+export function renderSplitDiffRows(rows: DiffRow[], width: number, prefix: Span[] = [{ text: INDENT }], lineRows = DIFF_LINE_ROWS, design: DiffDesign = DEFAULT_TOOL_DESIGN): Line[] {
   const lead = prefix.reduce((sum, span) => sum + textWidth(span.text), 0)
   const inner = Math.max(2, width - 1 - lead - SPLIT_GUTTER.length)
   const leftRoom = Math.floor(inner / 2)
   const rightRoom = inner - leftRoom
   const digits = Math.max(1, ...rows.map((row) => String(Math.max(row.old ?? 0, row.new ?? 0)).length))
   const changed = changedSpans(rows)
+  // Each half keeps its line numbers (they are what the halves are matched by); the design decides the tint.
   const half = (at: number | undefined, side: "old" | "new", room: number): Line[] => {
     if (at === undefined) return [[{ text: " ".repeat(room) }]]
     const row = rows[at]!
-    const bg: ColorName | undefined = row.kind === "add" ? "diffAddedBg" : row.kind === "remove" ? "diffRemovedBg" : undefined
-    const tone: ColorName = row.kind === "add" ? "success" : row.kind === "remove" ? "error" : "muted"
-    const marker = row.kind === "add" ? "+" : row.kind === "remove" ? "-" : " "
+    const { bg: changedBg, tone, marker } = diffTones(row.kind, design)
+    const bg = design.diff.tint === "row" ? changedBg : undefined
     const number = side === "old" ? row.old : row.new
     const tint = bg ? { bg } : {}
-    const { indent, text } = diffCode(row.text, changed.get(at), room - digits - 3, tone, bg)
-    const first: Span[] = [{ text: number === undefined ? " ".repeat(digits) : String(number).padStart(digits), fg: "muted", ...tint }, { text: ` ${marker} ${" ".repeat(indent)}`, fg: tone, ...tint }]
+    const { indent, text } = diffCode(row.text, changed.get(at), room - digits - 3, tone, design.diff.tint === "none" ? undefined : changedBg)
+    const first: Span[] = [{ text: number === undefined ? " ".repeat(digits) : String(number).padStart(digits), fg: design.colors.number, ...tint }, { text: ` ${marker} ${" ".repeat(indent)}`, fg: tone, ...tint }]
     const rest: Span[] = [{ text: " ".repeat(digits + 3 + indent), ...tint }]
     const lines = digits + 3 + textWidth(row.text) <= room ? [[...first, ...text]] : capRows(wrapSpans(text, room, first, rest), lineRows)
     return lines.map((line) => fit(bg ? padTo(line, room, bg) : line, room))
@@ -405,8 +434,11 @@ export function renderSplitDiffRows(rows: DiffRow[], width: number, prefix: Span
       const bg = side[0]?.find((span) => span.bg)?.bg
       return [{ text: " ".repeat(room), ...(bg ? { bg } : {}) }]
     }
+    // The old half's tint starts right after the rule, as a unified row's does.
+    const leftBg = design.diff.tint === "row" && pair.left !== undefined ? diffTones(rows[pair.left]!.kind, design).bg : undefined
+    const lineLead = tintedPrefix(prefix, leftBg)
     return Array.from({ length: Math.max(left.length, right.length) }, (_, n): Line => [
-      ...prefix,
+      ...lineLead,
       ...(left[n] ?? blank(left, leftRoom)),
       { text: SPLIT_GUTTER, fg: "border" },
       ...(right[n] ?? blank(right, rightRoom)),
@@ -475,6 +507,8 @@ export type ToolCardInput = {
   custom?: (view: ToolView) => Line[] | undefined
   /** The wait canvas a running image tool draws (the profile's `imageWait*` keys); undefined is the default canvas. */
   imageWait?: ImageWaitConfig
+  /** The tool design (the `toolDesign` setting, `tool-design.ts`); undefined is the default `rail`. */
+  design?: ToolDesign
 }
 
 const ANSI = /\x1b\[[0-9;?]*[A-Za-z]|\r/g
@@ -510,6 +544,11 @@ function cardRows(input: ToolCardInput): Line[] {
   const level = levelOf(input)
   const ascii = input.ascii ?? asciiGlyphs()
   const c = cardContext({ input, name, detail, level, ascii })
+  return branchRows(c, kindRows(c))
+}
+
+function kindRows(c: CardContext): Line[] {
+  const { input, name, detail, level, ascii } = c
   const { running, failed, cancelled } = c
   const output = outputLines(input.text)
   const tone: ColorName = failed ? "error" : input.awaiting ? "warning" : "text"
@@ -713,7 +752,8 @@ function diffBlocks({ files: whole, c }: { files: PatchFile[]; c: CardContext })
   let budget = level === "full" ? TOOL_PAGE_LINES : c.brief ? BRIEF_ROWS.diff : level === "preview" ? DIFF_PREVIEW_ROWS : DIFF_ROWS
   let hidden = 0
   const verbs = { Edited: "Edit", Added: "Add", Deleted: "Delete", Patched: "Patch", Wrote: "Write" } as const
-  const statsOf = (file: PatchFile): Span[] => [...(file.added ? [{ text: `+${file.added}`, fg: "success" as const }] : []), ...(file.added && file.removed ? [{ text: " " }] : []), ...(file.removed ? [{ text: `${marks.minus}${file.removed}`, fg: "error" as const }] : [])]
+  const { colors } = c.design
+  const statsOf = (file: PatchFile): Span[] => [...(file.added ? [{ text: `+${file.added}`, fg: colors.added }] : []), ...(file.added && file.removed ? [{ text: " " }] : []), ...(file.removed ? [{ text: `${marks.minus}${file.removed}`, fg: colors.removed }] : [])]
   const factsOf = (file: PatchFile) => [...(file.facts ?? []), ...(statsOf(file).length ? [statsOf(file)] : [])]
   // A call kept to a row is one header per file with its counts, no rows.
   if (c.line) return files.map((file, index) => header(c, { label: verbs[file.verb], target: file.path, facts: factsOf(file), quiet: index > 0 }, index === 0))
@@ -727,7 +767,7 @@ function diffBlocks({ files: whole, c }: { files: PatchFile[]; c: CardContext })
     out.push(header(c, { label: verbs[file.verb], target: file.path, facts: factsOf(file), quiet: out.length > 0 }, !out.length))
     const shown = Math.min(budget, file.rows.length - from)
     const draw = input.splitDiff && facesBothSides(file.rows) ? renderSplitDiffRows : renderDiffRows
-    out.push(...draw(file.rows.slice(from, from + shown), input.width, c.body.prefix, input.diffLineRows))
+    out.push(...draw(file.rows.slice(from, from + shown), input.width, c.body.prefix, input.diffLineRows, c.design))
     hidden += file.rows.length - from - shown + (file.unseen ?? 0)
     budget -= shown
   }

@@ -375,7 +375,10 @@ graph card (`detail` nodes of a render spec with `at: "open"`; `at: "preview"` i
   folded away or hidden in any view and show their message on an error rule.
 - The `full` view's tool density is described below.
 - In `balanced`, three or more finished reading calls of one turn in a row (reasoning between them does not break the run)
-  fold into one row, `◇ Read 5 files · List 2 · Grep 3`. A failed, running or approval-pending call ends the run.
+  fold into one row, `◇ Read 5 files · List 2 · Grep 3`; three or more finished shell commands in a row fold the same way,
+  `◇ Ran 6 shell commands`. A call of the other kind, or a failed, running or approval-pending call, ends the run: a failed
+  command always shows. A click (or `ctrl+x f`) opens the row to the cards it stands for. The `full` view's `calm` density folds
+  the calls it already keeps to one row the same way.
 - In `balanced` and `full`, more than five finished one-line calls in a row keep the last five and fold the older ones into
   `◇ N tools more` (`ctrl+o` shows them). A call that may change files never folds and ends the run: native `edit`, `write`,
   `apply_patch` and `shell`, and the free-text calls of other engines (Claude Code's `edit path`, `write path` and the whole

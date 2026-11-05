@@ -35,7 +35,7 @@ type MessageCommon = Readonly<{
   text: string
   /** Epoch ms of the message, when known. */
   at?: number
-  /** The formatted time when the transcript shows timestamps, else "". */
+  /** The formatted time when the transcript shows the time over each message (`timestamps: top`), else "". */
   time: string
   mode: "minimal" | "balanced" | "full"
   style: MessageStyleModel
@@ -448,6 +448,12 @@ export type TurnStatusModel = Readonly<{
   cacheNotices: boolean
   /** `undone`: how many messages the rewind removed. */
   undone?: number
+  /** Where the chat says the time (the profile's `timestamps`): `bottom` closes a turn with one line even when `meta` is `off`. */
+  timestamps?: "bottom" | "top" | "off"
+  /** The latest turn's end only: the session's shells and sub-agents still running now (the line says so while they do). */
+  running?: Readonly<{ shells: number; agents: number }>
+  /** The column the assistant's text starts at in this block's width, so the closing line lines up with the answer above it. */
+  textColumn?: number
 }>
 
 /** The rows of a tool call that are not a card: the minimal view's one-line row, a saved-memory note, a submitted plan, the image line. */

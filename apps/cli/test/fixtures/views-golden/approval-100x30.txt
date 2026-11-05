@@ -1,9 +1,5 @@
-8f296b8deb53f14c
+9079a19bd6790341
   git /work/app
-  • The cache key ignored the directory.
-
-    ╭─ ts ───────────────────────────────────────────────────────────────────────────────────── copy
-    │ const key = `${directory}:${name}`
     │ return cache.get(key) ?? load(key)
 
     • both sessions now get their own entry
@@ -11,11 +7,15 @@
 
     See the docs (https://example.com) for details.
 
+    took 15s · ended 11:50 AM
+
   › Thanks. Run the whole suite once more.
 
      $ bun test  212 pass · 0 fail                                                             9.1s
 
   • All 212 tests pass.
+
+    took 7s · ended 11:50 AM
 
   ┃ # Allow shell?
   ┃  rm -rf build && bun run build --minify

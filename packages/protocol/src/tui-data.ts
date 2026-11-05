@@ -3,7 +3,7 @@ import { SLASH_LAYOUTS, slashProfileProblems } from "./slash-menu-data"
 import { parseMarkdownColors } from "./theme-data"
 import { FOOTER_ICON_MODES, footerRowsProblems, footerTextProblems } from "./footer-rows-data"
 import { quotaRefreshProblems } from "./quota-refresh-data"
-import { TOOL_RAIL_DEFAULT, toolRailProblems } from "./tool-rail-data"
+import { DEFAULT_TOOL_DESIGN_NAME, TIMESTAMP_PLACES, TOOL_DESIGN_NAME, TOOL_RAIL_DEFAULT, toolRailProblems } from "./tool-rail-data"
 
 /**
  * The named parts of the session stats registry (apps/cli/src/view/stat-parts.ts), shared by the footer (`/footer`), the activity
@@ -47,7 +47,7 @@ export const TUI_DEFAULTS: Readonly<Record<string, unknown>> = {
   "promptContext": "focus",
   "messageRenderer": "full",
   "submitScroll": "bottom",
-  "timestamps": false,
+  "timestamps": "bottom",
   "username": "",
   "showUsername": false,
   "scrollbar": "off",
@@ -100,6 +100,7 @@ export const TUI_DEFAULTS: Readonly<Record<string, unknown>> = {
   "diffContext": 3,
   "diffLineRows": 4,
   "toolRail": TOOL_RAIL_DEFAULT,
+  "toolDesign": DEFAULT_TOOL_DESIGN_NAME,
   "tagline": "",
   "promptGlyphs": "",
   "activityMessages": "",
@@ -245,6 +246,7 @@ export const TUI_ENUMS: Readonly<Record<string, readonly string[]>> = {
   "contextStyle": ["bar", "percent", "both"],
   "messageLayout": ["quiet", "classic"],
   "messageMeta": ["off", "compact", "full"],
+  "timestamps": TIMESTAMP_PLACES,
   "themeLock": ["", "dark", "light"],
   "logoFont": ["mendcode", "compact", "solid", "outline", "rounded", "double", "shade", "braille"],
   "promptContext": ["minimal", "focus", "guide", "full", "custom"],
@@ -423,6 +425,8 @@ export function tuiProblems(raw: unknown): string[] {
     const expected = TUI_DEFAULTS[key]
     // `scrollbar` was a boolean before it had modes: the old value is still read (true is `always`).
     if (key === "scrollbar" && typeof value === "boolean") continue
+    // So was `timestamps` (true reads as `bottom`, false as `off`).
+    if (key === "timestamps" && typeof value === "boolean") continue
     if (Array.isArray(expected) ? !Array.isArray(value) : typeof value !== typeof expected) problems.push(`${key}: expected ${Array.isArray(expected) ? "array" : typeof expected}`)
     else if (TUI_ENUMS[key] && !TUI_ENUMS[key]!.includes(value as string)) problems.push(`${key}: expected ${TUI_ENUMS[key]!.join("|")}`)
     else if (key === "homeMascot" && !HOME_MASCOT.test(value as string)) problems.push("homeMascot: expected mend or a pet reference (user:<id>, codex:<id>, package:<id>; /pet lists them)")
@@ -448,6 +452,7 @@ export function tuiProblems(raw: unknown): string[] {
     else if (key === "activityTokens" && (unknownActivityTokens(value as string).length || String(value).length > 32)) problems.push(`activityTokens: expected a comma list of ${ACTIVITY_TOKEN_PARTS.join(", ")}, or empty`)
     else if (key === "topbarStats" && (unknownStatParts(value as string).length || String(value).length > 128)) problems.push(`topbarStats: expected a comma list of ${STAT_PART_IDS.join(", ")}`)
     else if (key === "toolRail") problems.push(...toolRailProblems(value))
+    else if (key === "toolDesign" && !TOOL_DESIGN_NAME.test(String(value))) problems.push("toolDesign: expected a design name (rail, branch, terse or a tool-designs/<name>.json; letters, digits, . _ -, at most 40)")
     else if (key === "diffContext" && (!Number.isInteger(value) || Number(value) < 0 || Number(value) > 6)) problems.push("diffContext: expected integer 0..6")
     else if (key === "diffLineRows" && (!Number.isInteger(value) || Number(value) < 1 || Number(value) > 50)) problems.push("diffLineRows: expected integer 1..50")
     else if (key === "jumpText" &&String(value).length > 40) problems.push("jumpText: at most 40 characters")

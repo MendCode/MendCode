@@ -68,6 +68,7 @@ not read your data directory; to move your own setup between machines use a conf
 | Surface | How |
 | --- | --- |
 | Theme | `themes/<name>.json`, chosen with `activate.theme` |
+| Tool card design | `tool-designs/<name>.json` (header, glyphs, diff, output, rule and colours as data; [format](customize.md#scrolling)), chosen with `activate.tuiProfile.toolDesign`. Data only; `profiles create` exports it with the themes |
 | Bitmap pets | `pets/<id>/pet.json` plus its PNG/WebP atlas; `/pet` lists enabled local packages with `profile:<id>` references. Non-executable, no automatic generation or selection; `/pet export user:<uuid>` creates an atlas/manifest profile without its private reference PNG |
 | Terminal settings | `activate.tuiProfile`: logo, tagline, home layout, prompt chrome and border, user lead, done symbol, density, slash menu layout and pins, panel cards (`sidebarWidgets`) and the rest of `/customize` |
 | Tier look | `activate.tier`: the terminal side of a tier (presentation, density, whether the right panel hides). Features, prompt mode and process mode stay yours |

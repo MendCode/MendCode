@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import { extensionLayers, INSTALL_RECORD_FILE, installPackage, listPackages, MANIFEST_FILE, parsePackageSource, readLayerThemes, removePackage } from "../src"
+import { extensionLayers, INSTALL_RECORD_FILE, installPackage, listPackages, MANIFEST_FILE, parsePackageSource, readLayerThemes, readLayerToolDesigns, removePackage } from "../src"
 
 const cleanups: string[] = []
 afterEach(() => {
@@ -154,6 +154,20 @@ describe("theme files", () => {
     expect(themes.find((t) => t.name === "dusk")!.json).toEqual({ label: "Project dusk" })
     expect(themes.find((t) => t.name === "broken")!.problem).toStartWith("invalid JSON")
     expect(themes.find((t) => t.name === "Bad Name")!.problem).toContain("theme file names")
+  })
+
+  test("tool designs are read from each layer's tool-designs/*.json the same way, apart from the themes", () => {
+    const { userDir, directory } = roots()
+    const pkg = path.join(userDir, "packages", "acme")
+    write(path.join(pkg, "tool-designs", "ledger.json"), JSON.stringify({ header: { label: false } }))
+    write(path.join(pkg, "themes", "dusk.json"), "{}")
+    write(path.join(directory, ".mendcode", "tool-designs", "ledger.json"), JSON.stringify({ label: "Project ledger" }))
+    write(path.join(directory, ".mendcode", "tool-designs", "Bad Name.json"), "{}")
+    const designs = readLayerToolDesigns(extensionLayers({ userDir, directory }))
+    expect(designs.map((d) => [d.name, d.source])).toEqual([["Bad Name", "project"], ["ledger", "project"]])
+    expect(designs.find((d) => d.name === "ledger")!.json).toEqual({ label: "Project ledger" })
+    expect(designs.find((d) => d.name === "Bad Name")!.problem).toContain("design file names")
+    expect(readLayerThemes(extensionLayers({ userDir, directory })).map((t) => t.name)).toEqual(["dusk"])
   })
 })
 

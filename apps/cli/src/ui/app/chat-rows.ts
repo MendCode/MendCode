@@ -397,7 +397,9 @@ export function createChatRows(ctx: AppContext, actions: {
       comments.place({ rows, rule: bodyEnd + above.length + popup.length, ...(commentRows.chip !== undefined ? { chip: bodyEnd + commentTop + commentRows.chip } : {}), ...(commentRows.below.length ? { below: belowTop } : {}), width })
     }
     // What a mouse selection reads: the transcript rows as laid out (not as decorated above) and where the prompt landed.
-    const bodyLine = (line: { text: string; gutter?: number; soft?: "space" | "none"; itemId?: string; fold?: number; copy?: BodyLine["copy"] }): BodyLine => ({ text: line.text, gutter: line.gutter ?? 0, ...(line.itemId ? { itemId: line.itemId } : {}), ...(line.soft ? { soft: line.soft } : {}), ...(line.fold !== undefined && line.itemId ? { fold: { itemId: line.itemId, ordinal: line.fold } } : {}), ...(line.copy ? { copy: line.copy } : {}) })
+    // A row between turns (a turn's closing line, a note) belongs to no message: like a blank row it is not what a comment quotes or
+    // what the open-path key reads as "the item in view".
+    const bodyLine = (line: { text: string; gutter?: number; soft?: "space" | "none"; itemId?: string; kind?: string; fold?: number; copy?: BodyLine["copy"] }): BodyLine => ({ text: line.text, gutter: line.gutter ?? 0, ...(line.itemId && line.kind !== "status" ? { itemId: line.itemId } : {}), ...(line.soft ? { soft: line.soft } : {}), ...(line.fold !== undefined && line.itemId ? { fold: { itemId: line.itemId, ordinal: line.fold } } : {}), ...(line.copy ? { copy: line.copy } : {}) })
     const bodyLines: Array<BodyLine | undefined> = home || cleared ? body.map(() => undefined) : [...body.slice(0, padTop).map(() => undefined), ...visible.map(bodyLine), ...body.slice(padTop + visible.length).map(() => undefined)]
     // A scrolling transcript keeps its selection in transcript rows, so a drag past the edge can scroll and still copy what left the screen.
     const scrolls = !inlineBody && !home && !cleared

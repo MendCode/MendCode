@@ -90,7 +90,7 @@ import { defaultLocalTransport, localEndpointPath, removeLocalEndpoint, writeLoc
 import { homedir } from "node:os"
 import path from "node:path"
 import { remoteInstructions } from "./remote-instructions"
-import { ancestorLayers, BUILTIN_PACKAGE, claimLook, diagnosticLines, emptyDiagnostics, extensionLayers, foreignLayers, withForeignLayers, installPackage, listPackages, LookOwnedError, manifestCompatProblem, packageKey, PackageError, PackageNotInstalledError, readLayerThemes, releaseLook, removePackage, restorePackage, RESERVED_AGENTS, stageCapturedLook, type ExtensionLayer, type PackageHost, type ResourceDiagnostics } from "@mendcode/packages"
+import { ancestorLayers, BUILTIN_PACKAGE, claimLook, diagnosticLines, emptyDiagnostics, extensionLayers, foreignLayers, withForeignLayers, installPackage, listPackages, LookOwnedError, manifestCompatProblem, packageKey, PackageError, PackageNotInstalledError, readLayerThemes, readLayerToolDesigns, releaseLook, removePackage, restorePackage, RESERVED_AGENTS, stageCapturedLook, type ExtensionLayer, type PackageHost, type ResourceDiagnostics } from "@mendcode/packages"
 import { EXTENSION_API_VERSION } from "@mendcode/extension-api"
 import { canonicalDir, createCustomToolRegistry, shell, type CustomToolRegistry, type SessionRecallPort } from "@mendcode/tools"
 import { createPackageCatalog } from "./package-catalog"
@@ -4922,8 +4922,10 @@ export async function startDaemon(options: DaemonOptions) {
         }
         return reply(connection, command.id, { ok: true })
       }
-      case "themes.list":
-        return reply(connection, command.id, { ok: true, result: { themes: readLayerThemes(layersFor(command.directory)) } })
+      case "themes.list": {
+        const layers = layersFor(command.directory)
+        return reply(connection, command.id, { ok: true, result: { themes: readLayerThemes(layers), toolDesigns: readLayerToolDesigns(layers) } })
+      }
       case "theme.validate":
       case "theme.install":
       case "theme.select": {

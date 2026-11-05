@@ -113,8 +113,11 @@ test("one blank row between ordinary turns and classic remains selectable", asyn
   chat.exchange("First", "One")
   chat.exchange("Second", "Two")
   const rows = h.text(), at = rows.findIndex((row) => row.includes("• One"))
+  // The turn's closing line (`timestamps: bottom`) sits between the two, one blank row on each side, its text under the answer's.
   expect(rows[at + 1]!.trim()).toBe("")
-  expect(rows[at + 2]).toContain("› Second")
+  expect(rows[at + 2]).toMatch(/^ {4}took \d+s · ended \d{1,2}:\d{2} [AP]M$/)
+  expect(rows[at + 3]!.trim()).toBe("")
+  expect(rows[at + 4]).toContain("› Second")
   await customize(h, "messageLayout", "\x1b[C")
   await h.app.onKey("\x1b")
   expect(h.text().join("\n")).toContain("● You")

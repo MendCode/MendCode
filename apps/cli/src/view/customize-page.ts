@@ -9,6 +9,8 @@ import { ACTIVITY_MIN_CELLS, insideRoom, placeInside } from "./activity-status"
 import { activityPartsOf, renderWorkingRow } from "./working-row"
 import { SAMPLE_STATS } from "./session-stats"
 import { diffViewNote, renderToolCard, SPINNER_FRAMES, splitDiffAt } from "./tool-card"
+import { toolDesignNames, toolDesignOf } from "./tool-design"
+import { TIMESTAMP_PLACES } from "./tui-profile"
 import { overlayRule } from "./status-line"
 import { statusItems } from "./status-items"
 import { COMPACTION_PANELS, DENSITIES, DEFAULT_TUI_PROFILE, HEADING_STYLES, HOME_INPUTS, HOME_LAYOUTS, HOME_PANELS, LOGO_KINDS, MASCOT_SIZES, PET_SIZES, MARKDOWN_COLORS_MAX, MARKDOWN_COPY_HINTS, PROMPT_CHROMES, SIDEBAR_MODES, TABLE_STYLES, normalizeMarkdownColors, normalizeAscii, normalizeLogoText, normalizeProductName, normalizePromptGlyphs, normalizeActivityMap, normalizeActivityParts, normalizeStatParts, normalizeScrollbarGlyphs, normalizeFooterText, footerRowsText, parseFooterRowsText, parseQuotaRefreshText, quotaRefreshEditText, type TuiProfile } from "./tui-profile"
@@ -43,7 +45,7 @@ import type { HomeMascot } from "./home"
  */
 export const GROUPS = [
   { title: "Look", parts: [
-    { title: "", rows: ["theme", "glyphs", "sessionAccent", "diffView"] },
+    { title: "", rows: ["theme", "glyphs", "sessionAccent", "diffView", "toolDesign"] },
     { title: "Markdown", rows: ["tableStyle", "headingStyle", "markdownCopyHints", "markdownRtl", "markdownColors"] },
   ] },
   { title: "Home", parts: [
@@ -201,6 +203,7 @@ const CHOICES: Partial<Record<CustomizeRow, readonly string[]>> = {
   activitySound: ["off", "pulse", "hum"],
   promptStatus: ["off", "border"],
   attachmentChips: ["inline", "above", "both"],
+  timestamps: TIMESTAMP_PLACES,
   scrollbar: ["auto", "always", "off"], jumpHint: ["right", "center", "left", "off"], activityPlacement: ["transcript", "above", "inside", "off"],
   turnNotify: ["off", "osc9", "osc777"],
   notifyWhen: ["unfocused", "always"],
@@ -228,7 +231,7 @@ export const LABELS: Record<CustomizeRow, string> = {
   messageLayout: "Message layout", userIcon: "User icon", assistantIcon: "Assistant icon", userLabel: "User label", assistantLabel: "Assistant label", assistantName: "Assistant name", userLead: "User lead", assistantLead: "Assistant lead", userTint: "User tint", messageMeta: "Message meta",
   messageRenderer: "Message renderer", submitScroll: "Submit scroll", timestamps: "Timestamps", username: "Username", showUsername: "Show username", scrollbar: "Scrollbar", pasteSummary: "Paste summaries", pasteSummaryMinChars: "Paste threshold", copyOnSelect: "Copy on select", vimMode: "Vim mode", multiline: "Enter adds a line", shortcutOverlay: "? shortcut overlay", escBacktrack: "Esc Esc backtrack", queueRestore: "Interrupt restores queue", escRetract: "Esc takes back unanswered", pasteBurst: "Paste burst detection", draftRetentionDays: "Draft retention (days)", statusLeft: "Left segments", statusRight: "Right segments", statusColors: "Segment colors JSON", capabilityCatalogue: "Capabilities", promptContext: "Prompt context", graphIndex: "Code graph index",
   tagline: "Tagline", promptGlyphs: "Border glyphs", activityStates: "Mascot states JSON", activityMessages: "Activity text JSON", showActivityModel: "Activity model", doneSymbol: "Completion symbol",
-  presentation: "Chat presentation", reasoning: "Reasoning", toolLayout: "Tool layout", toolOutput: "Tool output", toolDensity: "Tool density", codeMapCard: "Code map card", diffView: "Diff view",
+  presentation: "Chat presentation", reasoning: "Reasoning", toolLayout: "Tool layout", toolOutput: "Tool output", toolDensity: "Tool density", codeMapCard: "Code map card", diffView: "Diff view", toolDesign: "Tool design",
   logoKind: "Logo kind", homeMascot: "Mascot", mascotMotion: "Mascot motion", mascotSize: "Mascot size", logoText: "Logo text", logoFont: "Logo font", customAscii: "Logo art", productName: "Product name", homeLayout: "Welcome layout", homeInput: "Input position", homeRightPanel: "Split panel", density: "Density", homeTips: "Tips", homeFooter: "Home footer", homeHeader: "Home header", homePanel: "Home panel", showPlaceholder: "Prompt example", placeholderText: "Example text",
   promptBorder: "Prompt border", showAgent: "Agent label", showEffort: "Reasoning effort", showPermission: "Permissions", quotaRefresh: "Quota refresh", footerPreset: "Footer preset", footerRows: "Footer rows", footerText: "Footer text JSON", footerIcons: "Footer icons", glyphs: "Glyphs", footerQuota: "Footer quota", quotaView: "Quota shows", quotaColor: "Quota colour", footerToday: "Footer today",
   promptChrome: "Prompt chrome", promptLead: "Prompt lead", statusSeparator: "Separator", showModel: "Model", showProvider: "Provider", showStatus: "Footer", showCommandHint: "Commands hint", showAgentHint: "Agents hint", attachmentChips: "Attachments",
@@ -388,7 +391,7 @@ export function customizePageKey(state: CustomizePageState, key: string, profile
     return { state, action: { type: "set", patch: { imageWaitPreset: names[(Math.max(0, names.indexOf(profile.imageWaitPreset)) + (backwards ? -1 : 1) + names.length) % names.length]! } } }
   }
   const value = profile[row]
-  const list = row === "theme" ? themeNames() : CHOICES[row]
+  const list = row === "theme" ? themeNames() : row === "toolDesign" ? toolDesignNames() : CHOICES[row]
   if (list) {
     const next = list[(Math.max(0, list.indexOf(String(value))) + (backwards ? -1 : 1) + list.length) % list.length]!
     const patch = row === "messageLayout" ? { messageLayout: next, messageMeta: next === "classic" ? "full" : "off", userIcon: next === "classic" ? "●" : "", userLead: next === "classic" ? "" : "›", userLabel: next === "classic", assistantIcon: "", assistantLead: next === "classic" ? "" : "•", assistantLabel: false, userTint: next !== "classic" } : row === "presentation" ? { presentation: next, messageRenderer: next === "raw" ? "plain" : next === "minimal" ? "markdown" : "full", reasoning: next === "raw" ? "expanded" : "collapsed" } : row === "logoFont" ? { logoFont: next, logoText: normalizeLogoText(profile.logoText, next as TuiProfile["logoFont"]) } : { [row]: next }
@@ -472,7 +475,7 @@ const DIFF_SAMPLE = [
 function diffViewPreview(profile: TuiProfile, width: number, height: number, chatWidth: number): Line[] {
   const split = splitDiffAt(profile.diffView, chatWidth)
   const note = diffViewNote(profile.diffView, chatWidth)
-  const card = renderToolCard({ title: "edit: src/cart.ts", text: DIFF_SAMPLE, status: "ok", width, expanded: true, level: "preview", frame: 0, tailLines: 0, ...(split ? { splitDiff: true } : {}) })
+  const card = renderToolCard({ title: "edit: src/cart.ts", text: DIFF_SAMPLE, status: "ok", width, expanded: true, level: "preview", frame: 0, tailLines: 0, ...(split ? { splitDiff: true } : {}), design: toolDesignOf(profile.toolDesign) })
   return [...wrap(note, Math.max(1, width - 1)).map((text): Line => [{ text, fg: "muted" }]), [], ...card].slice(0, height)
 }
 
@@ -482,7 +485,7 @@ const SCENE_TITLES: Record<PreviewScene, string> = { home: "Home preview", chat:
 
 export function previewScene(row: CustomizeRow): PreviewScene {
   const { group, part } = GROUP_OF.get(row) ?? { group: "Advanced", part: "" }
-  if (row === "diffView") return "diff"
+  if (row === "diffView" || row === "toolDesign") return "diff"
   if (part === "Markdown") return "markdown"
   if (group === "Look" || group === "Chat" || part === "Top bar") return "chat"
   if (group === "Home") return "home"

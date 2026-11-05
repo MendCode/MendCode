@@ -27,6 +27,7 @@ export const PACKAGE_KINDS = [
   { id: "commands", label: "Slash commands", paths: ["commands", "command"], selection: "commands", executable: false, switchable: true, readBy: "daemon" },
   { id: "agents", label: "Agents", paths: ["agents"], selection: "agents", executable: false, switchable: true, readBy: "daemon" },
   { id: "themes", label: "Themes", paths: ["themes"], selection: "themes", executable: false, switchable: true, readBy: "both" },
+  { id: "toolDesigns", label: "Tool designs", paths: ["tool-designs"], selection: "themes", executable: false, switchable: false, readBy: "both" },
   { id: "tools", label: "Custom tools", paths: ["tools"], selection: "tools", executable: true, switchable: true, readBy: "daemon" },
   { id: "extensions", label: "Extensions and views", paths: ["extensions"], exportPaths: ["components", "scripts"], selection: "extensions", executable: true, switchable: true, readBy: "both" },
   { id: "config", label: "Command and plugin config", paths: ["mendcode.json", "mendcode.jsonc"], exportPaths: ["plugins"], selection: "plugins", executable: true, switchable: false, readBy: "both" },

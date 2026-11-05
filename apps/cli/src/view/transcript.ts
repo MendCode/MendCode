@@ -12,14 +12,17 @@ import { limitCardLine, limitCardRows, type LimitCard, type UsageLimitView } fro
 import { hasSecretMarker, maskSecretMarkers } from "./secret-markers"
 import { graftTraceRender } from "./graft-map"
 import { FOLD_CARD, FOLD_PAGE, FOLD_RUN, isCompactTool, isFileEdit, isFoldableTool, parseToolTitle, SPINNER_FRAMES, splitDiffAt, TOOL_PAGE_LINES, type ToolLevel } from "./tool-card"
-import { countsOf, foldLabel, isReadTool } from "./tool-summary"
+import { countsOf, foldLabel, isReadTool, shellRunLabel } from "./tool-summary"
 import { DEFAULT_IMAGE_ROOM, generatedImageCaps, IMAGE_TOOLS, imageWaitConfig, type ImageRoom } from "./image-wait"
 import { callArgs, type CallArgs } from "./tool-data"
 import { keyText } from "../ui/key-labels"
 import { todayTimeOrDateTime } from "./time"
 import { fit } from "./deck"
 import { formatElapsed } from "./time"
-import { DEFAULT_TUI_PROFILE, type TuiProfile } from "./tui-profile"
+import { DEFAULT_TUI_PROFILE, timestampPlace, type TuiProfile } from "./tui-profile"
+import { toolDesignOf } from "./tool-design"
+// The start registers the profiles' tool designs through this module, so the designs add no module of their own to the start.
+export { registerToolDesignFiles } from "./tool-design"
 import { commentsOf } from "./reply-comments"
 import type { MessageStyle } from "@mendcode/extension-api"
 import type { AssistantMessageModel, CompactionCardModel, ReasoningModel, ToolCardModel, ToolRowModel, TurnStatusModel, UserMessageModel, ViewModels } from "@mendcode/extension-api/views"
@@ -217,7 +220,7 @@ export const PRESENTATION_MODES: readonly PresentationMode[] = ["minimal", "bala
  * Finished blocks are wrapped once per width and cached; only the live block is re-wrapped,
  * and the viewport reads just the visible slice (the fix for the O(n)-per-token redraw, FC-35).
  */
-export function createTranscript(options: { appearance?: Partial<TuiProfile>; /** The full tier: what the sub-agent of a `task` call runs on, by its session id or, while it runs, by what it was asked. */ subagentRun?: (ref: { taskId?: string; description: string }) => Span[] | undefined; glyphs?: Glyphs; mode?: PresentationMode; frame?: () => number; /** False while motion is reduced (setting, env or screen-reader mode): animated cards hold their first frame. */ motion?: () => boolean; now?: () => number; agent?: () => string; hooks?: TranscriptHooks; views?: ViewHost; secretTail?: (n: number) => string | undefined; images?: TranscriptImages; /** How a model id is shown on a turn's end line and a sub-agent card; the app passes the catalog's names, the default prettifies the id. */ modelLabel?: (id: string) => string; /** The notice before a compaction (usage-notes.ts); absent or returning undefined, none is said. */ compactNotice?: () => CompactNoticeConfig | undefined; /** What the terminal gives a generated picture (its rows and cell size): the wait canvas and the finished picture share that box. */ imageRoom?: () => ImageRoom; /** Whether the daemon still runs the session's background item named `description` (a background sub-agent outlives its turn). */ backgroundRunning?: (description: string) => boolean; /** Whether an edit's diff is drawn split; absent, `diffView` decides by the transcript's width. A preview narrower than the chat it shows decides by the chat's. */ splitDiff?: (width: number) => boolean } = {}) {
+export function createTranscript(options: { appearance?: Partial<TuiProfile>; /** The full tier: what the sub-agent of a `task` call runs on, by its session id or, while it runs, by what it was asked. */ subagentRun?: (ref: { taskId?: string; description: string }) => Span[] | undefined; glyphs?: Glyphs; mode?: PresentationMode; frame?: () => number; /** False while motion is reduced (setting, env or screen-reader mode): animated cards hold their first frame. */ motion?: () => boolean; now?: () => number; agent?: () => string; hooks?: TranscriptHooks; views?: ViewHost; secretTail?: (n: number) => string | undefined; images?: TranscriptImages; /** How a model id is shown on a turn's end line and a sub-agent card; the app passes the catalog's names, the default prettifies the id. */ modelLabel?: (id: string) => string; /** The notice before a compaction (usage-notes.ts); absent or returning undefined, none is said. */ compactNotice?: () => CompactNoticeConfig | undefined; /** What the terminal gives a generated picture (its rows and cell size): the wait canvas and the finished picture share that box. */ imageRoom?: () => ImageRoom; /** Whether the daemon still runs the session's background item named `description` (a background sub-agent outlives its turn). */ backgroundRunning?: (description: string) => boolean; /** How many of the session's shells and sub-agents run now, for the latest turn's closing line (`timestamps: bottom`). */ background?: () => { shells: number; agents: number }; /** Whether an edit's diff is drawn split; absent, `diffView` decides by the transcript's width. A preview narrower than the chat it shows decides by the chat's. */ splitDiff?: (width: number) => boolean } = {}) {
   const g = options.glyphs ?? defaultGlyphs()
   const shownModel = options.modelLabel ?? ((id: string) => modelLabel(id))
   const images = options.images
@@ -277,7 +280,9 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
   let conceal = true
   let appearance = { ...DEFAULT_TUI_PROFILE, ...options.appearance }
   let renderer = appearance.messageRenderer
-  let timestamps = appearance.timestamps
+  let timestamps = timestampPlace(appearance.timestamps)
+  /** The tool cards' design (the `toolDesign` setting), resolved once per look: a card reads it, never looks it up. */
+  let toolDesign = toolDesignOf(appearance.toolDesign)
   let username = appearance.showUsername ? appearance.username : ""
   /** How assistant Markdown is drawn in the current view: the `full` renderer's engine, calmer in balanced, plain in minimal. */
   const markdownStyle = () => markdownStyleFor({ profile: appearance, mode })
@@ -303,6 +308,8 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
   let readRuns: Map<ItemId, ReadRun> | undefined
   /** itemId → how little of a tool card the full view's `toolDensity` shows (absent: the level decides); rebuilt when blocks change. */
   let densities: Map<ItemId, ToolDensity> | undefined
+  /** The latest turn end (its closing line says what still runs); rebuilt when blocks change. */
+  let lastEnd: { id: ItemId | undefined } | undefined
   let queue: Array<{ queueId: QueueId; preview: string; delivery?: "queue" | "steer" | "restart"; /** A system notice (a background task ended), not something the user typed. */ notice?: true }> = []
   let foreground: ForegroundState = "idle"
   let permissionMode: PermissionMode = "ask"
@@ -378,6 +385,7 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
     collapsed = undefined
     readRuns = undefined
     densities = undefined
+    lastEnd = undefined
   }
 
   /** Index in `blocks` of the first laid-out block: everything before it waits for `loadOlder`. */
@@ -488,9 +496,10 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
   }
 
   /**
-   * In `balanced`, runs of three or more finished reading calls of one turn (read, ls, glob, grep; reasoning between them does
-   * not break a run) fold into one row. A failed, running or approval-pending call ends a run: it always shows. In the full view's
-   * `calm` density the calls already kept to one row fold the same way, with the counts spelled (`Grep 3 patterns`).
+   * In `balanced`, runs of three or more finished calls of one kind in one turn fold into one row: reading calls (read, ls, glob,
+   * grep: `Read 5 files · Grep 3`) or shell commands (`Ran 6 shell commands`); reasoning between them does not break a run, a call
+   * of the other kind does. A failed, running or approval-pending call ends a run: it always shows. In the full view's `calm`
+   * density the calls already kept to one row fold the same way, with the counts spelled (`Grep 3 patterns`).
    */
   function readRunPlan() {
     if (readRuns) return readRuns
@@ -500,20 +509,29 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
     if ((mode !== "balanced" && !calm) || toolOutput === "expanded" || (toolOutput === "auto" && toolsOpenAll)) return plan
     const rows = calm ? densityPlan() : undefined
     let run: Block[] = []
+    let runKind: "read" | "shell" | undefined
     const flush = () => {
       if (run.length >= READ_RUN_MIN) {
-        const info: ReadRun = { leader: run[0]!.itemId, ids: run.map((block) => block.itemId), label: foldLabel(run.map((block) => parseToolTitle(block.title).name), calm) }
+        const label = runKind === "shell" ? shellRunLabel(run.length) : foldLabel(run.map((block) => parseToolTitle(block.title).name), calm)
+        const info: ReadRun = { leader: run[0]!.itemId, ids: run.map((block) => block.itemId), label }
         for (const block of run) plan.set(block.itemId, info)
       }
       run = []
+      runKind = undefined
+    }
+    const kindOf = (block: Block): "read" | "shell" | undefined => {
+      if (block.kind !== "tool_call" || block.status !== "ok" || block.meta?.memorySaved === true || isAwaiting(block.itemId) || (rows && rows.get(block.itemId) !== "line")) return undefined
+      const name = parseToolTitle(block.title).name
+      return isReadTool(name) ? "read" : name === "shell" ? "shell" : undefined
     }
     for (const block of blocks) {
       if (block.kind === "reasoning") continue
-      const reading = block.kind === "tool_call" && block.status === "ok" && block.meta?.memorySaved !== true && isReadTool(parseToolTitle(block.title).name) && !isAwaiting(block.itemId) && (!rows || rows.get(block.itemId) === "line")
-      if (!reading) flush()
+      const kind = kindOf(block)
+      if (!kind) flush()
       else {
-        if (run.length && run[0]!.turnId !== block.turnId) flush()
+        if (run.length && (run[0]!.turnId !== block.turnId || runKind !== kind)) flush()
         run.push(block)
+        runKind = kind
       }
     }
     flush()
@@ -619,7 +637,8 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
   }
 
   const BLOCK_ROWS = 200
-  const timeOf = (block: Block) => (timestamps ? todayTimeOrDateTime(block.at ?? 0, now()) : "")
+  /** The time a block shows: a message only with `timestamps: top`; a turn's end with `top` or `bottom` (its closing line). */
+  const timeOf = (block: Block) => ((block.kind === "status" ? timestamps !== "off" : timestamps === "top") ? todayTimeOrDateTime(block.at ?? 0, now()) : "")
 
   /** The view slot a block draws through, when it has one. Minimal tool rows, saved memories and submitted plans are not cards. */
   function slotOf(block: Block): keyof ViewModels | undefined {
@@ -744,7 +763,7 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
       const prepare = (shown: ToolCardModel): ToolCardModel => ({ ...shown, output: output.slice(0, 400) })
       // A running image tool draws the wait canvas; reduced motion holds it on its first frame.
       const imageWait = block.status === "running" && IMAGE_TOOLS.has(name) ? imageWaitConfig(appearance, options.motion?.() ?? true, imageRoom()) : undefined
-      return { slot, model, prepare, extra: { ...(hooks ? { custom: (view: ToolView) => hooks.tool(block.input ? { ...view, input: block.input } : view) } : {}), ...(imageWait ? { imageWait } : {}), ...((options.splitDiff ? options.splitDiff(width) : splitDiffAt(appearance.diffView, width)) ? { splitDiff: true } : {}), ...(toolRailShown(parseToolRail(appearance.toolRail), name) ? {} : { rail: false }), diffContext: appearance.diffContext, diffLineRows: appearance.diffLineRows } }
+      return { slot, model, prepare, extra: { ...(hooks ? { custom: (view: ToolView) => hooks.tool(block.input ? { ...view, input: block.input } : view) } : {}), ...(imageWait ? { imageWait } : {}), ...((options.splitDiff ? options.splitDiff(width) : splitDiffAt(appearance.diffView, width)) ? { splitDiff: true } : {}), ...(toolRailShown(parseToolRail(appearance.toolRail), name) ? {} : { rail: false }), diffContext: appearance.diffContext, diffLineRows: appearance.diffLineRows, design: toolDesign } }
     }
     if (slot === "tool.row") return { slot, model: toolRowModel(block, toolRowVariant(block)!) }
     if (slot === "compaction.card") {
@@ -772,10 +791,30 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
         ...(variant === "limit" ? { limit: block.limit as unknown as Record<string, unknown> } : {}),
         ...(variant === "note" ? { note: block.note!.text } : {}),
         ...(variant === "undone" ? { undone: block.undone! } : {}),
+        ...(variant === "end" ? { timestamps, textColumn: assistantTextColumn(), ...(timestamps === "bottom" && block.itemId === lastEndId() ? { running: stillRunning() } : {}) } : {}),
       }
       return { slot, model }
     }
     return undefined
+  }
+
+  /** Where the assistant's text starts in a block: after its lead (`• `) in the quiet layout, under the classic layout's indent. */
+  function assistantTextColumn() {
+    const style = styleOf("assistant")
+    if (style.layout !== "classic") {
+      const prefix = [style.icon, style.lead, style.label].filter(Boolean).join(" ")
+      return prefix ? textWidth(prefix) + 1 : 0
+    }
+    return mode === "minimal" ? INDENT.length : INDENT.length + 1
+  }
+
+  /** The session's shells and sub-agents running now, for the latest turn's closing line; none without the app's report. */
+  const stillRunning = () => options.background?.() ?? { shells: 0, agents: 0 }
+
+  /** The latest turn end's item: only its closing line says what still runs (an older one would be stale). */
+  function lastEndId() {
+    if (!lastEnd) lastEnd = { id: blocks.findLast((block) => block.kind === "status" && block.end !== undefined && !block.limit && !block.goal && !block.note)?.itemId }
+    return lastEnd.id
   }
 
   /** The model of a tool call's non-card row. `minimal` knows how many successful tools its row stands for. */
@@ -883,7 +922,9 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
     // A tool card's rows also follow how much of it shows, its page and the folded run it may belong to.
     const run = block.kind === "tool_call" ? readRunPlan().get(block.itemId) : undefined
     const tool = block.kind === "tool_call" || block.kind === "artifact" && block.meta?.memorySaved === true ? `:${levelOf(block)}${isOrientation(block) && mapOpen(block) ? "m" : ""}${toolPage.get(block.itemId) ?? 0}:${run ? `${run.leader === block.itemId ? run.label : "m"}${openRuns.has(run.leader) ? "o" : "c"}` : "-"}${block.kind === "tool_call" ? densityPlan().get(block.itemId)?.[0] ?? "" : ""}` : ""
-    const key = `${doneSymbol}:${reasoningVisibility}:${toolOutput}:${width}:${mode}:${open ? "x" : "c"}${tool}:${mermaidGeneration()}:${fold ?? "-"}:${block.kind === "reasoning" ? reasoningRows : ""}${hooks ? `:${hooks.generation()}` : ""}${images && block.attachments?.length ? `:i${images.generation()}${generatedPicture(block) ? `:r${roomKey()}` : ""}` : ""}`
+    // The latest turn's closing line also follows what still runs.
+    const live = block.kind === "status" && timestamps === "bottom" && block.itemId === lastEndId() ? (({ shells, agents }) => `:r${shells},${agents}`)(stillRunning()) : ""
+    const key = `${doneSymbol}:${reasoningVisibility}:${toolOutput}:${width}:${mode}:${open ? "x" : "c"}${tool}:${mermaidGeneration()}:${fold ?? "-"}:${block.kind === "reasoning" ? reasoningRows : ""}${live}${hooks ? `:${hooks.generation()}` : ""}${images && block.attachments?.length ? `:i${images.generation()}${generatedPicture(block) ? `:r${roomKey()}` : ""}` : ""}`
     const thread = block.meta?.subagent === true ? threads.get(block.itemId) : undefined
     return { fold, key: thread ? `${key}:a${thread.tools}${thread.ended ? "e" : ""}${thread.last ?? ""}` : key }
   }
@@ -1484,7 +1525,8 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
     setAppearance(next: Partial<TuiProfile> & { reasoning: string; toolOutput: string }) {
       appearance = { ...appearance, ...next }
       renderer = appearance.messageRenderer
-      timestamps = appearance.timestamps
+      timestamps = timestampPlace(appearance.timestamps)
+      toolDesign = toolDesignOf(appearance.toolDesign)
       username = appearance.showUsername ? appearance.username : ""
       setColorOverrides(parseMarkdownColors(appearance.markdownColors).colors)
       reasoningVisibility = next.reasoning

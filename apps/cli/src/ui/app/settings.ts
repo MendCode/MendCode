@@ -10,6 +10,7 @@ import { activeTheme, registerThemes, setTheme, SYSTEM_THEME, themeSelection } f
 import { configureKeyLabels } from "../key-labels"
 import { keyboardWanted } from "../keyboard-protocol"
 import { themesFromFiles } from "../theme-files"
+import { DEFAULT_TOOL_DESIGN_NAME, registerToolDesignFiles } from "../../view/tool-design"
 import type { ThemesReport } from "@mendcode/protocol"
 import type { Settings, PermissionMode } from "@mendcode/protocol"
 import { featureOn } from "@mendcode/protocol/wire"
@@ -90,6 +91,7 @@ export function createSettings(ctx: AppContext, actions: {
       void input.send({ type: "themes.list", directory: input.directory ?? "" }).then((reply) => {
         if (!reply.ok || state.settingsNow !== settings) return
         registerThemes(themesFromFiles((reply.result as ThemesReport | undefined)?.themes ?? []).themes)
+        registerDesigns(reply.result as ThemesReport | undefined)
         setTheme(chosenTheme)
         requestFrame()
       })
@@ -130,9 +132,19 @@ export function createSettings(ctx: AppContext, actions: {
     void input.send({ type: "themes.list", directory: input.directory ?? "" }).then((reply) => {
       if (!reply.ok) return
       registerThemes(themesFromFiles((reply.result as ThemesReport | undefined)?.themes ?? []).themes)
+      registerDesigns(reply.result as ThemesReport | undefined)
       setTheme(themeInForce(state.settingsNow) || "mend")
       requestFrame()
     })
+  }
+
+  /**
+   * The layers' tool designs, from the same reply as their themes: a profile's design appears when it turns on and is gone when it
+   * turns off. Cards are laid out again only when a design other than the default is chosen (only then can a file change them).
+   */
+  function registerDesigns(report: ThemesReport | undefined) {
+    registerToolDesignFiles(report?.toolDesigns)
+    if (state.tuiProfile.toolDesign !== DEFAULT_TOOL_DESIGN_NAME) syncAppearance()
   }
 
   /** The theme this terminal shows: the project's own (`projectThemes`), else the profile's, else the global setting. */

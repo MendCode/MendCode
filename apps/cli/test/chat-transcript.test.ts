@@ -37,10 +37,10 @@ function stream() {
   return { emit, item, turn, events }
 }
 
-function view(events: SessionEvent[], options: { mode?: PresentationMode; width?: number; height?: number; timestamps?: boolean } = {}) {
+function view(events: SessionEvent[], options: { mode?: PresentationMode; width?: number; height?: number; timestamps?: "bottom" | "top" | "off" } = {}) {
   const t = createTranscript({ appearance: { messageLayout: "classic", messageMeta: "full", userIcon: "●", userLead: "", userLabel: true, assistantLead: "", userTint: false }, glyphs: glyphs({}), mode: options.mode ?? "balanced", now: () => NOW })
   // These tests pin the whole preview the full view prints, which is the `dense` density.
-  t.setAppearance({ reasoning: "auto", toolOutput: "auto", toolDensity: "dense", timestamps: options.timestamps ?? false })
+  t.setAppearance({ reasoning: "auto", toolOutput: "auto", toolDensity: "dense", timestamps: options.timestamps ?? "off" })
   for (const event of events) t.apply(event)
   const lines = t.viewport(options.width ?? 100, options.height ?? 200)
   return { t, lines, text: lines.map((l) => l.text).filter((l) => l.trim()) }
@@ -52,7 +52,9 @@ describe("turn end lines", () => {
     const turnId = turn()
     item(turnId, "agent_message", { text: "hello" })
     emit({ type: "turn.completed", turnId })
-    expect(view(events, { timestamps: true }).text.at(-1)).toMatch(/ · done \d{1,2}:\d{2} [AP]M$/)
+    // The meta line carries the time with the time over each message (`top`) and with the closing line's place (`bottom`).
+    expect(view(events, { timestamps: "top" }).text.at(-1)).toMatch(/ · done \d{1,2}:\d{2} [AP]M$/)
+    expect(view(events, { timestamps: "bottom" }).text.at(-1)).toMatch(/ · done \d{1,2}:\d{2} [AP]M$/)
     expect(view(events).text.at(-1)).not.toContain("done")
   })
 
@@ -151,7 +153,7 @@ describe("user message", () => {
   test("has a `● You` header, the time on the right and no left bar or message fill", () => {
     const { item, turn, events } = stream()
     item(turn(), "user_message", { text: "hello there" })
-    const { lines } = view(events, { width: 60, timestamps: true })
+    const { lines } = view(events, { width: 60, timestamps: "top" })
     const rows = lines.slice(0, 4)
     // v1's columns: the panel starts at column 3, the header and text are inset by two inside it.
     expect(rows[0]!.text).toMatch(/^ {5}● You {2,}3:49 PM {2}$/)

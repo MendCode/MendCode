@@ -855,7 +855,7 @@ if (startup?.kind === "run") {
 }
 
 // A `pr` command that checked out its branch continues here as a terminal without having loaded them.
-const [{ createApp }, { createScreen }, { keyboardWanted }, { currentLayout }, { createCrashGuard }, { registerThemes, setTheme }, { themesFromFiles }, { PRESENTATION_MODES }, { accessibleMode }] = await (terminalModules ?? loadTerminalModules())
+const [{ createApp }, { createScreen }, { keyboardWanted }, { currentLayout }, { createCrashGuard }, { registerThemes, setTheme }, { themesFromFiles }, { PRESENTATION_MODES, registerToolDesignFiles }, { accessibleMode }] = await (terminalModules ?? loadTerminalModules())
 // Theme files of the profiles, the user's and the project's `themes/` join the built-ins before settings apply.
 const themeFiles = await client.send({ type: "themes.list", directory: directory! })
 if (themeFiles.ok) {
@@ -863,6 +863,9 @@ if (themeFiles.ok) {
   registerThemes(themes)
   if (process.env.MENDCODE_THEME) setTheme(process.env.MENDCODE_THEME)
   if (problems.length) startupNotice = [startupNotice, `theme ${problems[0]!.name}: ${problems[0]!.message}${problems.length > 1 ? ` (+${problems.length - 1} more)` : ""}`].filter(Boolean).join(" · ")
+  // The tool designs of the same layers (`tool-designs/<name>.json`) come in the same reply.
+  const designProblems = registerToolDesignFiles((themeFiles.result as ThemesReport | undefined)?.toolDesigns)
+  if (designProblems.length) startupNotice = [startupNotice, `tool design ${designProblems[0]!.name}: ${designProblems[0]!.message}${designProblems.length > 1 ? ` (+${designProblems.length - 1} more)` : ""}`].filter(Boolean).join(" · ")
 }
 
 // The app applies the terminal-local image protocol from /customize before its first frame.

@@ -1,6 +1,8 @@
 import type { CompactionCardModel, ToolRowModel, TurnStatusModel } from "@mendcode/extension-api/views"
-import type { Glyphs, Line } from "../ui/theme"
-import { errorBox, statusLine, type TurnEnd } from "./chat-blocks"
+import type { Glyphs, Line, Span } from "../ui/theme"
+import { errorBox, interruptReason, statusLine, type TurnEnd } from "./chat-blocks"
+import { formatDuration } from "./time"
+import { markGutter } from "./line-meta"
 import { renderCompactionPanel, type Compaction } from "./compaction-panel"
 import { fit } from "./deck"
 import { goalCardRows, type GoalCard } from "./goal"
@@ -15,6 +17,8 @@ import { textWidth, truncateEnd } from "./wrap"
  */
 
 const INDENT = "  "
+/** A gutter wider than any row: nothing of the row is text a selection copies. */
+const CHROME_GUTTER = 1000
 type Sized<M> = M & { width: number }
 
 export function compactionRows(m: Sized<CompactionCardModel>): Line[] {
@@ -37,8 +41,11 @@ export function turnStatusRows(m: Sized<TurnStatusModel>, g: Glyphs): Line[] {
   }
   const ended = m.end as unknown as TurnEnd | undefined
   if (!ended) return []
-  const end = m.time ? { ...ended, doneAt: m.time } : ended
+  const running = runningText(m.running)
+  const end = { ...ended, ...(m.time ? { doneAt: m.time } : {}), ...(running ? { stillRunning: running } : {}) }
   const glyphs = { ...g, done: m.done }
+  // `timestamps: bottom` closes a turn with one dim line under the answer even when the message meta is off; the minimal view stays without it.
+  if (m.meta === "off" && m.timestamps === "bottom" && m.mode !== "minimal") return [...(end.error ? errorBox(end.error, width, g) : []), ...closingLine(end, m, width)]
   if (m.meta === "off") return end.error ? errorBox(end.error, width, g) : end.outcome === "completed" || end.outcome === "paused" ? [] : [[{ text: `  ${end.outcome}`, fg: "warning" }]]
   if (m.meta === "compact") {
     const { model: _model, agent: _agent, ...compact } = end
@@ -49,6 +56,33 @@ export function turnStatusRows(m: Sized<TurnStatusModel>, g: Glyphs): Line[] {
     return end.error ? [...wrapSpans([{ text: `${g.fail} ${end.error.message.split("\n")[0]}`, fg: "error" }], width, [{ text: INDENT }]).slice(0, 3), ...line] : line
   }
   return [...(end.error ? [...errorBox(end.error, width, g), []] : []), ...statusLine(end, width, glyphs, `${INDENT} `, m.mode === "full")]
+}
+
+/** `2 shells and 1 agent still running`, or undefined while nothing runs. */
+function runningText(running: TurnStatusModel["running"]): string | undefined {
+  if (!running) return undefined
+  const parts = [...(running.shells ? [`${running.shells} shell${running.shells === 1 ? "" : "s"}`] : []), ...(running.agents ? [`${running.agents} agent${running.agents === 1 ? "" : "s"}`] : [])]
+  return parts.length ? `${parts.join(" and ")} still running` : undefined
+}
+
+/**
+ * The closing line of a turn (`timestamps: bottom`): `took 2m 14s · ended 2:04 PM · 1 shell still running`, dim, starting in the
+ * column of the answer's text. A turn that did not finish says how it ended instead of `took`. Nothing to say, no line.
+ */
+function closingLine(end: TurnEnd, m: Sized<TurnStatusModel>, width: number): Line[] {
+  const aborted = end.outcome !== "completed" && end.outcome !== "failed"
+  const parts: Span[] = []
+  const took = end.ms !== undefined && end.ms >= 1000 ? formatDuration(end.ms) : undefined
+  if (aborted) parts.push({ text: `${end.outcome === "paused" ? "paused · usage limit" : end.outcome === "interrupted" && end.reason ? `interrupted (${interruptReason(end.reason)})` : end.outcome}${took ? ` after ${took}` : ""}`, fg: "warning", dim: true })
+  else if (took) parts.push({ text: `took ${took}`, fg: "muted", dim: true })
+  if (end.doneAt) parts.push({ text: `ended ${end.doneAt}`, fg: "muted", dim: true })
+  if (end.stillRunning) parts.push({ text: end.stillRunning, fg: "muted", dim: true })
+  if (!parts.length) return []
+  const column = Math.max(0, Math.min(m.textColumn ?? INDENT.length, width - 10))
+  const lead: Span[] = [{ text: " ".repeat(column) }]
+  const spans = parts.flatMap((part, at): Span[] => (at ? [{ text: " · ", fg: "muted", dim: true }, part] : [part]))
+  // Chrome, like the buttons under a picture: a copy across turns takes the messages, not this line.
+  return wrapSpans(spans, width, lead, lead).map((row) => (markGutter(row, CHROME_GUTTER), row))
 }
 
 export function toolRows(m: Sized<ToolRowModel>, g: Glyphs): Line[] {

@@ -1233,7 +1233,8 @@ export const ThemeFile = lazySchema(() => z.strictObject({
 }))
 export type ThemeFile = z.infer<typeof ThemeFile>
 
-export const ThemesReport = lazySchema(() => z.strictObject({ themes: z.array(ThemeFile) }))
+/** `toolDesigns`: the layers' `tool-designs/<name>.json` (the tool cards' looks), found and parsed like theme files; an older daemon has none. */
+export const ThemesReport = lazySchema(() => z.strictObject({ themes: z.array(ThemeFile), toolDesigns: z.array(ThemeFile).optional() }))
 export type ThemesReport = z.infer<typeof ThemesReport>
 
 export const CustomToolsReport = lazySchema(() => z.strictObject({

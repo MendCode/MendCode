@@ -43,6 +43,9 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 - `/pr setup` checks prerequisites and configures repository reviews and publishing with one confirmation; a headless setup command is also available.
 - `/voice setup` guides dictation readiness and explicitly confirms audio uploads before enabling an API provider.
 - `/graph setup` enables and builds the project's code graph with one confirmation, without changing global defaults.
+- Tool design (`toolDesign` in `/customize`): one choice that changes the whole look of the tool cards. Besides the default, `branch` (a bullet per call and a branch under it) and `terse` (no rule, plain diff signs); a profile can bring its own as `tool-designs/<name>.json`. See [customize](docs/customize.md#scrolling).
+- Each turn ends with a dim line under the answer: how long it took, when it ended and which shells or sub-agents still run. `timestamps` is now `bottom` (that line), `top` (the time over each message) or `off`. See [customize](docs/customize.md).
+- Three or more shell commands in a row fold into one `Ran 6 shell commands` row that opens on click, like reading calls.
 - The `defaultContextWindow` setting gives one context window to every model that has none of its own; a model's `modelContext` window and `/context-window` still win. The assistant now finds how to change a context window, a model, a theme or a title from `mendcode docs change` without reading MendCode's files.
 
 ### Changed
@@ -110,6 +113,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 - PR reviews and report-only loops are no longer told about plans when they try a change (MendCode's own engine and Claude Code), and Claude Code runs them outside its plan mode, so a reviewer never mistakes plan mode for a limit on its review.
 - A PR review whose diff does not fit its token budget stops before it spends: it says so up front, or before the next part of a large diff, instead of after. See [PR review](docs/pr-review.md#budgets-quotas-and-accounting).
 - The solid logo font draws square letters, and `/customize` rows no longer cut or run together.
+- The green and red tint of changed lines in a tool card's diff starts right at the card's rule, with no gap of background before the line number.
 - PR review notices link to the pull request (and the review they name) on GitHub, and show a job by a short id with the `/reviews open` hint, so narrow terminals keep the important words. See [PR review](docs/pr-review.md).
 - Computer use on apps whose content is a webview (Tauri, WebKit, Electron): the page's content is exposed, a key reaches the app when no node can take focus, and a thin result tells the model to look again before giving up. See [computer use](docs/computer.md).
 - The folders MendCode makes in the system temporary directory for Claude Code, Codex and ACP sessions are removed when the daemon stops, and a daemon that died leaves none behind: the next start clears them.
@@ -177,6 +181,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Upgrade notes
 
+- `timestamps: true` in your profile reads as `bottom`: the time moves from over each message to the line that closes each turn. `/timestamps top` brings back the old look.
 - A `~/.mendcode` left by MendCode v1 is renamed to `~/.mendcode-v1`, nothing deleted, and OpenCode's folders that pointed
   into it follow. A terminal of the earlier version still open keeps the move for the next start.
 - Earlier versions cannot read session history written or converted by this one. Keep a copy of the data directory before

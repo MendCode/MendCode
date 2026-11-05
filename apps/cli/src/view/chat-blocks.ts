@@ -187,6 +187,8 @@ export type TurnEnd = {
   error?: { code: string; message: string }
   /** When the turn ended, formatted; only with timestamps on. */
   doneAt?: string
+  /** The latest turn only: what of the session still runs (`2 shells still running`). */
+  stillRunning?: string
 }
 
 const INTERRUPT_REASONS: Readonly<Record<string, string>> = { restart: "daemon restarted", transport: "connection lost", stream_idle: "stream stalled" }
@@ -208,6 +210,7 @@ export function statusLine(end: TurnEnd, width: number, glyphs: Glyphs, indent =
   if (end.outcome === "paused") parts.push([{ text: "paused · usage limit", fg: "warning" }])
   if (end.outcome === "interrupted") parts.push([{ text: `interrupted${end.reason ? ` (${interruptReason(end.reason)})` : ""}`, fg: "warning" }])
   if (end.doneAt) parts.push([{ text: `done ${end.doneAt}`, fg: "muted" }])
+  if (end.stillRunning) parts.push([{ text: end.stillRunning, fg: "muted" }])
   if (!parts.length) return []
   const spans: Span[] = parts.flatMap((part, at): Span[] => (at ? [{ text: " · ", fg: "muted" }, ...part] : part))
   return wrapSpans(spans, width, [{ text: indent }, { text: `${glyphs.done} `, fg: aborted ? "muted" : "primary" }], [{ text: `${indent}  ` }])

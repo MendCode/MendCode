@@ -27,6 +27,7 @@ export type ExportOptionsState = {
   reasoning: boolean
   toolDetails: boolean
   assistantMetadata: boolean
+  /** Each item's time in the export: on by default when the chat shows the time over each message (`timestamps: top`). */
   timestamps: boolean
   sanitize?: boolean
   destination: "file" | "editor" | "clipboard"

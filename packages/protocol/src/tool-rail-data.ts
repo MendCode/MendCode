@@ -38,3 +38,14 @@ export function toolRailShown(entries: readonly ToolRailEntry[], tool: string): 
   }
   return shown
 }
+
+/**
+ * The `toolDesign` setting (docs/customize.md "Tool design"): the name of a built-in tool design or of a `tool-designs/<name>.json`
+ * in a profile, the data folder or the project's `.mendcode/`. The client parses the designs; this is what a name may look like.
+ */
+export const DEFAULT_TOOL_DESIGN_NAME = "rail"
+export const TOOL_DESIGN_NAME = /^[a-z0-9][a-z0-9._-]{0,39}$/i
+export const TOOL_DESIGNS_DIR = "tool-designs"
+
+/** The `timestamps` setting: the turn's closing line (`bottom`), the time over each message (`top`), or neither. It was a boolean: `true` reads as `bottom`. */
+export const TIMESTAMP_PLACES = ["bottom", "top", "off"] as const

@@ -26,7 +26,7 @@ import type { createStorage } from "./storage"
 import type { createAgents } from "./agents"
 import type { createStatus } from "./status"
 import type { createHooks } from "./hooks"
-import { featureOn } from "@mendcode/protocol/wire"
+import { featureOn, TIMESTAMP_PLACES } from "@mendcode/protocol/wire"
 import { BREAKPOINTS } from "../breakpoints"
 import { relaunchMessage, relaunchTargets } from "../../view/relaunch"
 import { sidebarVisible } from "../../view/sidebar"
@@ -572,7 +572,13 @@ export function createSlash(ctx: AppContext, actions: {
         }
         break
       }
-      case "timestamps": changeProfile({ timestamps: !state.tuiProfile.timestamps }, { session: true }); break
+      case "timestamps": {
+        // `/timestamps bottom|top|off` sets it; bare (and the bound toggle) it switches between off and the closing line of each turn.
+        const places: readonly string[] = TIMESTAMP_PLACES
+        if (parsed.args && !places.includes(parsed.args)) { state.notice = `usage: /timestamps ${places.join("|")}`; break }
+        changeProfile({ timestamps: (parsed.args || (state.tuiProfile.timestamps === "off" ? "bottom" : "off")) as TuiProfile["timestamps"] }, { session: true })
+        break
+      }
       case "thinking": changeProfile({ reasoning: state.tuiProfile.reasoning === "hidden" ? "expanded" : "hidden" }, { session: true }); break
       case "scrollbar": {
         // `/scrollbar auto|always|off` sets it; bare (and the bound toggle) it switches between off and the bar that was always there when it was on.

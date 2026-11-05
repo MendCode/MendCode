@@ -241,7 +241,10 @@ cached, and have no clickable regions (actions: none). Return `undefined` for a 
   reason?, error? }`, drawn as the status line or the error box), `goal` (`goal`), `limit` (`limit`), `note` (`note`, a cache
   note), `undone` (`undone` = messages removed by a rewind) or `checkpoint`. `meta` is the profile's message-meta level and
   `mode` the presentation mode. `at` is when the row was made (a turn end: when the turn ended) and `time` that time
-  formatted, or `""` while timestamps are off; with them on the built-in ends the line with `done 5:25 PM`.
+  formatted, or `""` while `timestamps` is `off`; with it on the built-in ends the meta line with `done 5:25 PM`. An `end` also
+  has `timestamps` (`bottom`, `top` or `off`), `textColumn` (where the answer's text starts) and, on the latest turn while
+  `timestamps` is `bottom`, `running { shells, agents }`: with `meta: off` the built-in draws its closing line
+  (`took 2m 14s · ended 2:04 PM · 1 shell still running`) from these. A message's own `time` is set only with `timestamps: top`.
 
 ### page, overlay, bar (the envelope slots)
 

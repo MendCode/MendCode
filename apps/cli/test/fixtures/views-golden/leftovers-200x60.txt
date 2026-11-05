@@ -1,12 +1,5 @@
-7e9e709c515ec50f
+b82a2acda03d89f6
   Sessions                   ← focus │   git /work/app
-                                     │      │ bun test v1.3
-                                     │      │
-                                     │      │ 3 pass
-                                     │      │ 1 fail
-                                     │      │ error: expected "a" received "b"
-                                     │
-                                     │      ✎ Edit src/store.ts  3 lines                                                                                                                             1s
                                      │        Edited src/store.ts
                                      │        - const key = name
                                      │        + const key = `${directory}:${name}`
@@ -22,11 +15,15 @@
                                      │
                                      │     See the docs (https://example.com) for details.
                                      │
+                                     │     took 15s · ended 11:50 AM
+                                     │
                                      │   › Thanks. Run the whole suite once more.
                                      │
                                      │      $ bun test  212 pass · 0 fail                                                                                                                          9.1s
                                      │
                                      │   • All 212 tests pass.
+                                     │
+                                     │     took 7s · ended 11:50 AM
                                      │
                                      │      $ ls -la src                                                                                                                                     11:50 AM
                                      │
@@ -46,6 +43,7 @@
                                      │    ┃  retry in 30s
                                      │    ┃  rate_limit
                                      │    ┃
+                                     │     took 9s · ended 11:50 AM
                                      │
                                      │   ┌─ Context packed ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
                                      │   │                                                                                                                                                             │
@@ -54,6 +52,8 @@
                                      │   │ ▸ Compacted memory · packed                                                                                                                                 │
                                      │   │                                                                                                                                                             │
                                      │   └─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+                                     │
+                                     │     took 5s · ended 11:50 AM
                                      │
                                      │   ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
                                      │   ❭

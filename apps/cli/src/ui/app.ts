@@ -431,8 +431,16 @@ export function createApp(input: AppInput) {
   const transcriptImages = { generation: () => (appState.imageCards?.images.generation() ?? 0) * 2 + (chartsPainted() ? 1 : 0), slot: (sha256: string, maxCols: number, maxRows?: number) => appState.imageCards?.images.slot(sha256, maxCols, maxRows), charts: chartsPainted }
   /** A generated picture's room: the screen's height less its chrome, at the cell size the graphics layer measured. */
   const imageRoom = () => ({ rows: imageRoomRows(input.screen.size.height), cell: appState.imageCellPixels ?? DEFAULT_IMAGE_ROOM.cell })
+  /** The session's shells and sub-agents running now, from the lists the app already keeps: the latest turn's closing line counts them. */
+  const backgroundNow = () => {
+    let shells = 0
+    let agents = 0
+    for (const shell of appState.agentShells) if (shell.status === "running" && shell.sessionId === appState.sessionId) shell.kind === "agent" ? agents++ : shells++
+    for (const task of appState.liveTasks ?? []) if (task.parentId === appState.sessionId && (task.state === "queued" || task.state === "running" || task.state === "needs_input")) agents++
+    return { shells, agents }
+  }
   /** A transcript with every option the app gives it; a chat switch makes its own through this, so views and model names keep applying. */
-  const newTranscript = () => createTranscript({ glyphs: g, mode: appState.mode, frame: () => appState.spinFrame, motion: () => !appState.reducedMotion, hooks: transcriptHooks, views, images: transcriptImages, secretTail: (n) => secretTail(n), modelLabel: (id) => modelLabel(id, appState.modelReport), now, agent: () => appState.transcript.permissionMode === "plan" ? "Plan" : "Build", compactNotice: () => compactNoticeConfig(appState.settingsNow), subagentRun: (ref) => subagentRunOf(appState, g.sep).ofCall(ref), imageRoom, backgroundRunning: (description) => appState.agentShells.some((shell) => shell.status === "running" && shell.sessionId === appState.sessionId && shell.command === description) })
+  const newTranscript = () => createTranscript({ glyphs: g, mode: appState.mode, frame: () => appState.spinFrame, motion: () => !appState.reducedMotion, hooks: transcriptHooks, views, images: transcriptImages, secretTail: (n) => secretTail(n), modelLabel: (id) => modelLabel(id, appState.modelReport), now, agent: () => appState.transcript.permissionMode === "plan" ? "Plan" : "Build", compactNotice: () => compactNoticeConfig(appState.settingsNow), subagentRun: (ref) => subagentRunOf(appState, g.sep).ofCall(ref), imageRoom, backgroundRunning: (description) => appState.agentShells.some((shell) => shell.status === "running" && shell.sessionId === appState.sessionId && shell.command === description), background: backgroundNow })
   appState.transcript = newTranscript()
   // Page states are created when the page first opens (its module loads lazily, see lazy-pages.ts).
   appState.contextState = {}

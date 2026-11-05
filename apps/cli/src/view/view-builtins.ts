@@ -146,6 +146,7 @@ export const BUILTIN_VIEWS: { [S in Exclude<keyof ViewModels, "prompt.frame">]: 
     ...(m.extra?.rail === false ? { rail: false } : {}),
     ...(typeof m.extra?.diffContext === "number" ? { diffContext: m.extra.diffContext } : {}),
     ...(typeof m.extra?.diffLineRows === "number" ? { diffLineRows: m.extra.diffLineRows } : {}),
+    ...(m.extra?.design ? { design: m.extra.design as NonNullable<ToolCardInput["design"]> } : {}),
   }),
   "tool.row": (m, g) => toolRows(m, g),
   "compaction.card": (m) => compactionRows(m),

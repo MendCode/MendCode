@@ -10,7 +10,7 @@ import { FILE_OPENERS, type FileOpener } from "./links"
 import { PROCESS_MODES, type ProcessMode } from "../process-modes"
 import { GLYPH_CHOICES, type GlyphChoice } from "../ui/theme"
 import { ACTIVITY_PARTS, ACTIVITY_PARTS_DEFAULT, ACTIVITY_STYLES, unknownActivityTokens, QUOTA_REFRESH_DEFAULT_MINUTES, normalizeQuotaRefresh, type QuotaRefreshEntry, FOOTER_ICON_MODES, STAT_PART_IDS, footerRowsProblems, footerTextProblems, normalizeUsageWidgets, type FooterIconMode, type UsageWidgetId } from "@mendcode/protocol/wire"
-import { parseMarkdownColors, TOOL_RAIL_DEFAULT, toolRailProblems } from "@mendcode/protocol/wire"
+import { DEFAULT_TOOL_DESIGN_NAME, parseMarkdownColors, TIMESTAMP_PLACES, TOOL_DESIGN_NAME, TOOL_RAIL_DEFAULT, toolRailProblems } from "@mendcode/protocol/wire"
 import { SLASH_LAYOUTS, slashProfileProblems, type SlashLayout, type SlashGroup, type SlashPreference } from "@mendcode/protocol/wire"
 import { DEFAULT_IMAGE_WAIT_CANVAS, DEFAULT_IMAGE_WAIT_INTERVAL, IMAGE_WAIT_COLORS, IMAGE_WAIT_LIMITS, IMAGE_WAIT_MODES, normalizeImageWaitArt, normalizeImageWaitCanvas, imageWaitPresetNames, type ImageWaitArt, type ImageWaitCanvas, type ImageWaitColor, type ImageWaitMode } from "./image-wait"
 
@@ -69,6 +69,16 @@ export const TOOL_DENSITIES = ["calm", "standard", "dense"] as const
  * loses lines, stay unified.
  */
 export const DIFF_VIEWS = ["unified", "split", "auto"] as const
+export { TIMESTAMP_PLACES }
+/**
+ * Where the chat says the time. The setting was a boolean before it had places: `true` (the time over each message) reads as
+ * `bottom`, the closing line that replaced it, and `false` as `off`; anything else is the default.
+ */
+export function timestampPlace(value: unknown): (typeof TIMESTAMP_PLACES)[number] {
+  if (value === true) return "bottom"
+  if (value === false) return "off"
+  return (TIMESTAMP_PLACES as readonly unknown[]).includes(value) ? (value as (typeof TIMESTAMP_PLACES)[number]) : "bottom"
+}
 /**
  * Tool layouts: one /customize choice that sets the three tool card keys together. `quiet` folds every card and the code
  * map, `default` is the shipped look, `detailed` previews every call and opens the map, `everything` opens every card in full.
@@ -129,7 +139,8 @@ export type TuiProfile = {
   presentation: "auto" | "raw" | "mendcode" | "minimal" | "balanced" | "full"
   messageRenderer: "plain" | "markdown" | "full"
   submitScroll: "bottom" | "clear"
-  timestamps: boolean
+  /** When the chat says the time: `bottom` ends each turn with a line of how long it worked and when it ended, `top` puts the time over each message, `off` neither. */
+  timestamps: (typeof TIMESTAMP_PLACES)[number]
   username: string
   showUsername: boolean
   /** The transcript's right-edge track: `auto` while scrolling or off the bottom, `always`, or `off`. `auto` and `always` keep one column free of text, so showing and hiding it never reflows. */
@@ -220,6 +231,8 @@ export type TuiProfile = {
   diffLineRows: number
   /** Which tool cards draw the thin rule at their left (`name:on|off`, comma list; `TOOL_RAIL_DEFAULT`). */
   toolRail: string
+  /** The look of every tool card (`tool-design.ts`): a built-in design or a `tool-designs/<name>.json`; an unknown name draws the default. */
+  toolDesign: string
   tagline: string
   promptGlyphs: string
   activityMessages: string
@@ -430,7 +443,7 @@ export const DEFAULT_TUI_PROFILE: Readonly<TuiProfile> = {
   promptContext: "focus",
   messageRenderer: "full",
   submitScroll: "bottom",
-  timestamps: false,
+  timestamps: "bottom",
   username: "",
   showUsername: false,
   scrollbar: "off",
@@ -483,6 +496,7 @@ export const DEFAULT_TUI_PROFILE: Readonly<TuiProfile> = {
   diffContext: 3,
   diffLineRows: 4,
   toolRail: TOOL_RAIL_DEFAULT,
+  toolDesign: DEFAULT_TOOL_DESIGN_NAME,
   tagline: "",
   promptGlyphs: "",
   activityMessages: "",
@@ -782,7 +796,7 @@ export function normalizeTuiProfile(raw: unknown): TuiProfile {
     presentation: oneOf(["auto", "raw", "mendcode", "minimal", "balanced", "full"] as const, source.presentation) ?? "auto",
     messageRenderer: source.messageRenderer === "rich" ? "full" : oneOf(["plain", "markdown", "full"] as const, source.messageRenderer) ?? "full",
     submitScroll: source.submitScroll === "clear" ? "clear" : "bottom",
-    timestamps: bool("timestamps"),
+    timestamps: timestampPlace(source.timestamps),
     username: oneLine(source.username, 64),
     showUsername: bool("showUsername"),
     scrollbar: source.scrollbar === true ? "always" : oneOf(["auto", "always", "off"] as const, source.scrollbar) ?? DEFAULT_TUI_PROFILE.scrollbar,
@@ -834,6 +848,7 @@ export function normalizeTuiProfile(raw: unknown): TuiProfile {
     diffContext: boundedInt(source.diffContext, 0, 6, 3),
     diffLineRows: boundedInt(source.diffLineRows, 1, 50, 4),
     toolRail: typeof source.toolRail === "string" && !toolRailProblems(source.toolRail).length ? source.toolRail.trim() : TOOL_RAIL_DEFAULT,
+    toolDesign: typeof source.toolDesign === "string" && TOOL_DESIGN_NAME.test(source.toolDesign) ? source.toolDesign : DEFAULT_TOOL_DESIGN_NAME,
     tagline: oneLine(source.tagline, 80),
     promptGlyphs: normalizePromptGlyphs(source.promptGlyphs),
     activityMessages: normalizeActivityMap(source.activityMessages, false),
