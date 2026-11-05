@@ -9,6 +9,10 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+### Changed
+
+- The "What fits you" prompt on a release page sits right under Install, and it updates an older MendCode first with that channel's command.
+
 ### Fixed
 
 - `mendcode --help` says `--no-context-files` leaves instruction files out while skills stay; `--exclude-tools skill` hides them.

@@ -114,9 +114,13 @@ export const versionName = (version: string) => `MendCode ${version.startsWith("
  * past sessions and settings and answers which changes of this version are worth using, knowing or configuring. Read only, short,
  * in the user's language. `changes` says where the list of changes is (a URL on the release page; `below` in `/whatsnew`).
  */
-export function whatsNewPrompt(input: { version: string; changes: string }): string {
+export function whatsNewPrompt(input: { version: string; changes: string; upgrade?: string }): string {
+  // On a release page the reader may still run an older build: the prompt then updates first (`upgrade`, the channel's command).
+  const opening = input.upgrade
+    ? [`${versionName(input.version)} is out. The changes are ${input.changes}.`, `If the MendCode I run is older (\`mendcode --version\`), update it first with \`${input.upgrade}\`.`]
+    : [`${versionName(input.version)} is installed. The changes are ${input.changes}.`]
   return [
-    `${versionName(input.version)} is installed. The changes are ${input.changes}.`,
+    ...opening,
     "From my memories, my past sessions and my MendCode settings, tell me which of these changes I should use, know about or configure, given what I usually do.",
     "Read only: do not change any setting unless I ask. Be brief.",
     "Answer in my language.",
