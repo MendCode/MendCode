@@ -4,7 +4,7 @@ import path from "node:path"
 import type { ProjectRestInfo, StorageArtifact, StorageWorktree, StorageWorktreesReport } from "@mendcode/protocol"
 import { DEFAULT_WORKTREE_GC_DAYS } from "@mendcode/protocol"
 import { readGitBranch } from "./git-branch"
-import { defaultBranch, projectGit } from "./project-git"
+import { captureOutput, defaultBranch, projectGit } from "./project-git"
 
 const DAY_MS = 86_400_000
 /** Entries one size walk visits at most: a worktree this large reports a lower bound instead of stalling the daemon. */
@@ -40,15 +40,9 @@ const SIZE_CONCURRENCY = 2
  */
 async function duBytes(root: string, signal?: AbortSignal): Promise<number | undefined> {
   if (signal?.aborted) return undefined
-  const child = Bun.spawn(["du", "-sk", root], { stdin: "ignore", stdout: "pipe", stderr: "ignore" })
-  const stop = () => child.kill()
-  signal?.addEventListener("abort", stop, { once: true })
-  const timer = setTimeout(stop, DU_TIMEOUT_MS)
-  try {
-    const [out] = await Promise.all([new Response(child.stdout).text(), child.exited])
-    const kilobytes = /^(\d+)/.exec(out.trim())?.[1]
-    return kilobytes === undefined || signal?.aborted ? undefined : Number(kilobytes) * 1024
-  } finally { clearTimeout(timer); signal?.removeEventListener("abort", stop) }
+  const { out, stopped } = await captureOutput(["du", "-sk", root], { signal, limit: 4096, timeoutMs: DU_TIMEOUT_MS })
+  const kilobytes = /^(\d+)/.exec(out.trim())?.[1]
+  return kilobytes === undefined || stopped || signal?.aborted ? undefined : Number(kilobytes) * 1024
 }
 
 /** Bytes under `root` without following links, yielding to the event loop between directories (only where `du` is missing). */
