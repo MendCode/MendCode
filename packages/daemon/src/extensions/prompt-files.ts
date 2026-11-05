@@ -56,8 +56,11 @@ export type PromptFiles = ReturnType<typeof createPromptFiles>
 /**
  * The system prompt as parts: `SYSTEM.md` replaces the packaged base prompt (the same `{{cwd}}` template),
  * `rest` (instructions, skills, memory) follows, and `APPEND_SYSTEM.md` ends as a part of its own so `/context` shows it.
+ * Without context files (`--no-context-files`) neither file of any layer is sent: both are the user's or a package's own
+ * instructions, like `AGENTS.md`, and the session gets the packaged base prompt.
  */
-export function systemPartsWith({ files, root, packaged, rest }: { files: PromptOverrides; root: string; packaged(root: string): string; rest: SystemPart[] }): SystemPart[] {
+export function systemPartsWith({ files: layered, root, packaged, rest, contextFiles = true }: { files: PromptOverrides; root: string; packaged(root: string): string; rest: SystemPart[]; contextFiles?: boolean }): SystemPart[] {
+  const files = contextFiles ? layered : {}
   return [
     { id: "base", label: files.system ? "base prompt (SYSTEM.md)" : "base prompt", text: files.system ? files.system.replaceAll("{{cwd}}", root) : packaged(root) },
     ...rest,

@@ -477,4 +477,11 @@ describe("prompt files", () => {
       ["append", "appended prompt (APPEND_SYSTEM.md)", "tail"],
     ])
   })
+
+  test("--no-context-files leaves out a layer's SYSTEM.md and APPEND_SYSTEM.md: a package's workflow and its relative links never reach the session", () => {
+    const packaged = (root: string) => `packaged for ${root}`
+    const files = { system: "custom in {{cwd}}", appendSystem: "Implement a plan: [execute](skills/execute/SKILL.md)" }
+    const parts = systemPartsWith({ files, root: "/r", packaged, rest: [], contextFiles: false })
+    expect(parts.map((p) => [p.id, p.label, p.text])).toEqual([["base", "base prompt", "packaged for /r"]])
+  })
 })

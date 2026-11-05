@@ -41,7 +41,7 @@ One loader serves both paths. The system prompt gets the chain of directories fr
   `http://` and any URL in a project's config are listed as blocked, never fetched: a repository cannot pull in text that
   changes after you reviewed it. v1 read remote instructions the same way.
 - Every prompt mode carries these files ([prompt modes](prompt-modes.md)); `--no-context-files` is the only way to leave them out.
-- `--no-context-files` (alias `-nc`, TUI and `run`): leaves all instruction files out of that session's prompt (a per-session run limit; skills, memory and the packaged prompt stay).
+- `--no-context-files` (alias `-nc`, TUI and `run`): leaves all instruction files out of that session's prompt, `SYSTEM.md` and `APPEND_SYSTEM.md` of every layer included (a per-session run limit; skills, memory and the packaged prompt stay).
 
 ## Skills, commands and agents: how files are read
 
