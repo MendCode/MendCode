@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { existsSync, mkdirSync, writeFileSync } from "node:fs"
 import path from "node:path"
 import { scratch } from "../../../apps/cli/test/extensions-harness"
-import { createCustomizeUiTool, footerExtensions, footerRowNotes } from "../src/customize-ui"
+import { createCustomizeUiTool, footerExtensions, footerOwnedNotes, footerRowNotes } from "../src/customize-ui"
 
 const cleanups: Array<() => unknown> = []
 afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup() })
@@ -54,5 +54,15 @@ describe("what customize_ui does after a model set footer rows", () => {
     expect((await run({ footerRows: ROWS, footerText: { tagline: "x" }, disabledUiExtensions: [] })).notes).toBeUndefined()
     expect((await run({ footerRows: [] })).notes).toBeUndefined()
     expect((changes.at(-1) as { profile: { disabledUiExtensions: string[] } }).profile.disabledUiExtensions).toEqual([])
+  })
+})
+
+describe("the user's own footer", () => {
+  test("a one-row key changes nothing under footer rows, and replaced rows are named so they can be put back", () => {
+    expect(footerOwnedNotes({ footerRows: [] }, { showModel: false })).toEqual([])
+    expect(footerOwnedNotes({ footerRows: ROWS }, { showModel: false, showEffort: true })[0]).toContain("showModel, showEffort change nothing")
+    expect(footerOwnedNotes({ footerRows: ROWS }, { footerRows: [["model"]] })[0]).toContain(JSON.stringify(ROWS))
+    expect(footerOwnedNotes({ footerRows: ROWS }, { footerRows: ROWS })).toEqual([])
+    expect(footerOwnedNotes({ footerRows: ROWS }, { footerRows: [] })).toEqual([])
   })
 })

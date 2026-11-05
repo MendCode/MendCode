@@ -8,7 +8,7 @@ import { snake } from "../src/view/arcade/snake"
 import { breakout } from "../src/view/arcade/breakout"
 import { bar, compactTokens, sparkline } from "../src/view/compaction-live"
 import { createCompactionFacts } from "../src/view/compaction-facts"
-import { CUSTOMIZE_ROWS } from "../src/view/customize-page"
+import { CUSTOMIZE_ROWS, customizeSteps } from "../src/view/customize-page"
 import { readTuiProfile, type TuiProfile } from "../src/view/tui-profile"
 import { textWidth } from "../src/view/wrap"
 
@@ -141,7 +141,7 @@ test("the panel is a /customize choice that persists", async () => {
   const harness = b59Harness(180, 50)
   harness.begin()
   await harness.type("/customize\r")
-  for (let i = 0; i < CUSTOMIZE_ROWS.indexOf("compactionPanel"); i++) await harness.app.onKey("\x1b[B")
+  for (let i = 0; i < customizeSteps("compactionPanel", harness.app.tuiProfile, { mode: harness.app.viewMode }); i++) await harness.app.onKey("\x1b[B")
   expect(text(harness)).toContain("Compaction panel")
   expect(readTuiProfile(harness.dataDir).compactionPanel).toBe("panel")
   await harness.app.onKey("\x1b[C")

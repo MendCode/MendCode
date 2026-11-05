@@ -5,7 +5,7 @@ import type { Loop } from "@mendcode/protocol"
 import type { CommandReply } from "@mendcode/client"
 import { DEFAULT_TUI_PROFILE, writeTuiProfile, type TuiProfile } from "../apps/cli/src/view/tui-profile"
 import { LOGO_FONTS } from "../apps/cli/src/view/logo-fonts"
-import { CUSTOMIZE_ROWS } from "../apps/cli/src/view/customize-page"
+import { CUSTOMIZE_ROWS, customizeSteps } from "../apps/cli/src/view/customize-page"
 import { SETUP_ROWS } from "../apps/cli/src/view/setup-page"
 import { fit } from "../apps/cli/src/view/deck"
 import { textWidth } from "../apps/cli/src/view/wrap"
@@ -517,7 +517,7 @@ try {
           }
           if (logoKind === "wordmark" && homeLayout === "centered" && homeRightPanel === "actions") {
             await scene.type("/customize\r")
-            for (let i = 0; i < CUSTOMIZE_ROWS.indexOf("logoFont"); i++) await scene.app.onKey("\x1b[B")
+            for (let i = 0; i < customizeSteps("logoFont", scene.app.tuiProfile, { mode: scene.app.viewMode }); i++) await scene.app.onKey("\x1b[B")
             for (const font of LOGO_FONTS) {
               sceneSave(`customize-font-${font}`)
               await scene.app.onKey("\x1b[C")
@@ -579,7 +579,7 @@ try {
     chat.emit({ type: "item.started", turnId: activeTurn, itemId: toolItem, kind: "tool_call", meta: { tool: "test" } })
     save("chat-mend-ascii")
     await h.type("/customize\r")
-    for (let i = 0; i < CUSTOMIZE_ROWS.indexOf("contextBar"); i++) await h.app.onKey("\x1b[B")
+    for (let i = 0; i < customizeSteps("contextBar", h.app.tuiProfile, { mode: h.app.viewMode }); i++) await h.app.onKey("\x1b[B")
     save("customize-session-live")
     for (let i = CUSTOMIZE_ROWS.indexOf("contextBar"); i < CUSTOMIZE_ROWS.indexOf("activityStates"); i++) await h.app.onKey("\x1b[B")
     save("customize-activity-live")

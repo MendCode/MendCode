@@ -29,7 +29,7 @@ describe("logo fonts", () => {
       expect(rows).toHaveLength(logoHeight(font))
       expect(Math.max(...rows.map(textWidth))).toBeGreaterThan(20)
     }
-    expect(LOGO_FONTS.map(logoHeight)).toEqual([3, 3, 5, 5])
+    expect(LOGO_FONTS.map(logoHeight)).toEqual([3, 3, 5, 5, 5, 5, 5, 2])
   })
 
   test("the text is upper-cased, cut at the font's cap, and a letter the font lacks draws as ?", () => {

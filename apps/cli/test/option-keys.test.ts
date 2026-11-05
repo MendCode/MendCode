@@ -6,7 +6,7 @@ import { ALT_L, ALT_Q, CODEX, comment, dragOver, has, key, scene, screen, typeTe
 import { createBindings } from "../src/ui/keymap"
 import { configureKeyLabels, resetKeyLabels } from "../src/ui/key-labels"
 import { DEFAULT_TUI_PROFILE, readTuiProfile, writeTuiProfile, type TuiProfile } from "../src/view/tui-profile"
-import { CUSTOMIZE_ROWS } from "../src/view/customize-page"
+import { CUSTOMIZE_ROWS, customizeSteps } from "../src/view/customize-page"
 import { isAltSequence, knownLayout, OPTION_BINDINGS, OPTION_LAYOUTS, OPTION_TYPED, optionBindingFor, optionKeyFor } from "../src/view/option-keys"
 import { createTerminalSetupState, describeOptionPress, optionFix, optionNotice, renderTerminalSetupPage, type TerminalKind } from "../src/view/terminal-setup-page"
 import { layoutFromPreferences, currentLayout } from "../src/ui/keyboard-layout"
@@ -421,7 +421,7 @@ describe("the live surfaces name Option on a Mac and Alt elsewhere", () => {
     h.app.applySettings({ onboarded: true })
     await h.type("/customize")
     await h.type("\r")
-    for (let i = 0; i < CUSTOMIZE_ROWS.indexOf("altLabel"); i++) await h.app.onKey("\x1b[B")
+    for (let i = 0; i < customizeSteps("altLabel", h.app.tuiProfile, { mode: h.app.viewMode }); i++) await h.app.onKey("\x1b[B")
     expect(frame(h)).toContain("Alt key label")
     expect(frame(h)).toContain("‹ auto ›")
     await h.app.onKey("\x1b[C")
@@ -452,7 +452,7 @@ describe("the live surfaces name Option on a Mac and Alt elsewhere", () => {
     h.app.applySettings({ onboarded: true })
     await h.type("/customize")
     await h.type("\r")
-    for (let i = 0; i < CUSTOMIZE_ROWS.indexOf("optionKeys"); i++) await h.app.onKey("\x1b[B")
+    for (let i = 0; i < customizeSteps("optionKeys", h.app.tuiProfile, { mode: h.app.viewMode }); i++) await h.app.onKey("\x1b[B")
     expect(frame(h)).toContain("Option characters")
     expect(frame(h)).toContain("‹ auto ›")
     await h.app.onKey("\x1b[C")

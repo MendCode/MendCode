@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test"
 import { b59Harness, B59_MEMORY } from "./b59-harness"
 import { appHarness, cleanTemps, tempDir } from "./session-ui-harness"
 import { textWidth } from "../src/view/wrap"
-import { CUSTOMIZE_ROWS } from "../src/view/customize-page"
+import { CUSTOMIZE_ROWS, customizeSteps } from "../src/view/customize-page"
 import { readTuiProfile } from "../src/view/tui-profile"
 
 afterEach(cleanTemps)
@@ -112,7 +112,7 @@ test("compaction customization persists, and cancelled panels retain their saved
   const h = b59Harness(180, 50)
   h.begin()
   await h.type("/customize\r")
-  for (let i = 0; i < CUSTOMIZE_ROWS.indexOf("compactionStyle"); i++) await h.app.onKey("\x1b[B")
+  for (let i = 0; i < customizeSteps("compactionStyle", h.app.tuiProfile, { mode: h.app.viewMode }); i++) await h.app.onKey("\x1b[B")
   await h.app.onKey("\x1b[C")
   expect(readTuiProfile(h.dataDir).compactionStyle).toBe("minimal")
   expect(text(h)).toContain("Compaction panel")

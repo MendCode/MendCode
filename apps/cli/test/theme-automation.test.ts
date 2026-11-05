@@ -5,7 +5,7 @@ import { appHarness, cleanTemps, tempDir, NOW } from "./session-ui-harness"
 import { activeTheme, registerThemes, setTheme, themeNames } from "../src/ui/theme"
 import { themesFromFiles } from "../src/ui/theme-files"
 import { readTuiProfile, writeTuiProfile } from "../src/view/tui-profile"
-import { CUSTOMIZE_ROWS } from "../src/view/customize-page"
+import { CUSTOMIZE_ROWS, customizeSteps } from "../src/view/customize-page"
 import { legacyTheme, nativeTheme } from "../../../packages/protocol/test/theme-fixtures"
 import type { ThemeFile } from "@mendcode/protocol"
 
@@ -103,7 +103,7 @@ describe("B65 themes in the app harness", () => {
     const fixture = appHarness({ dataDir, directory: "/work/project", reply: (command) => command.type === "themes.list" ? { ok: true, result: { themes: [file] } } : undefined })
     fixture.app.applySettings({ theme: "mend", projectThemes: { "/work/project": "Forest_Mode", "/work/other": "paper" } })
     await fixture.type("/customize\r")
-    for (let row = 0; row < CUSTOMIZE_ROWS.indexOf("theme"); row++) await fixture.app.onKey("\x1b[B")
+    for (let row = 0; row < customizeSteps("theme", fixture.app.tuiProfile, { mode: fixture.app.viewMode }); row++) await fixture.app.onKey("\x1b[B")
     fixture.app.render()
     expect(fixture.text().join("\n")).toContain("Forest_Mode")
     await fixture.app.onKey("\x1b[C")

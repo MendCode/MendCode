@@ -152,6 +152,7 @@ export const PROFILE_KEY_HELP: Readonly<Record<string, string>> = {
   logoFont: "the font of the home logo wordmark",
   productName: "the product name on the home screen, the window title and the small logo (MendCode)",
   homeLayout: "the home/start screen layout: centered or split",
+  homeInput: "where the chat input sits on the home/start screen: bottom, center (right under the logo) or top",
   homeTips: "tips on the home screen",
   homeFooter: "the footer line on the home screen",
   homeHeader: "the home screen's first row (project folder, product name, version)",

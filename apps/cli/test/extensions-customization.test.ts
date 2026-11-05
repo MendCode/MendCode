@@ -175,15 +175,14 @@ test("daemon event reloads edited and added modules, disable persists, slash rel
     harness.app.render()
     expect(harness.text()).toContain("SECOND")
     expect(harness.text()).toContain("NEW HEADER")
-    await harness.type("/customize\r")
+    await harness.type("/settings extensions\r")
     await harness.key("\r")
     await harness.app.extensionsReady
     await harness.key("\x1b")
     expect(harness.text()).not.toContain("SECOND")
     await harness.type("/extensions reload\r")
     expect(harness.sent.some((command) => command.type === "extensions.reload")).toBe(true)
-    await harness.type("/customize\r")
-    await harness.key("\x1b[B")
+    await harness.type("/settings exportLook\r")
     await harness.key("\r")
     expect(harness.sent.some((command) => command.type === "extensions.export")).toBe(true)
   } finally { await harness.key("\x1b"); await harness.key("\x03"); await harness.key("\x03") }

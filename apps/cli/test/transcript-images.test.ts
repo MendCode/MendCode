@@ -8,7 +8,7 @@ import { decodeJpeg } from "../src/ui/jpeg"
 import { decodeGif } from "../src/ui/gif"
 import { decodeCardImage, sniffImage } from "../src/ui/image-decode"
 import { fitImage, limitSide, resizeRgba } from "../src/ui/image-fit"
-import { CUSTOMIZE_ROWS } from "../src/view/customize-page"
+import { CUSTOMIZE_ROWS, customizeSteps } from "../src/view/customize-page"
 
 afterEach(cleanTemps)
 
@@ -196,7 +196,7 @@ test("turning transcriptImages on in /customize draws the images that were waiti
   h.app.applySettings({ onboarded: true })
   await h.app.onInput("/customize")
   await h.app.onKey("\r")
-  for (let row = 0; row < CUSTOMIZE_ROWS.indexOf("transcriptImages"); row++) await h.app.onKey("\x1b[B")
+  for (let row = 0; row < customizeSteps("transcriptImages", h.app.tuiProfile, { mode: h.app.viewMode }); row++) await h.app.onKey("\x1b[B")
   await h.app.onKey("\r")
   await h.app.onKey("\x1b")
   await settle(h)

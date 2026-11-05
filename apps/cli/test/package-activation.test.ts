@@ -41,8 +41,8 @@ const profile = (h: Awaited<ReturnType<typeof start>>) => h.app.accessibility.pr
 async function chooseLeft(h: Awaited<ReturnType<typeof start>>, key: string) {
   await h.type("/customize")
   await h.key("\r")
-  const { CUSTOMIZE_ROWS } = await import("../src/view/customize-page")
-  for (let i = 0; i < CUSTOMIZE_ROWS.indexOf(key); i++) await h.key(DOWN)
+  const { CUSTOMIZE_ROWS, customizeSteps } = await import("../src/view/customize-page")
+  for (let i = 0; i < customizeSteps(key, h.app.tuiProfile, { mode: h.app.viewMode }); i++) await h.key(DOWN)
   await h.key(LEFT)
   await h.key("\x1b")
 }
@@ -125,8 +125,8 @@ describe("profile activation is an overlay on the user's profile", () => {
     expect(profile(h).homeLayout).toBe("split")
     await h.type("/customize")
     await h.key("\r")
-    const { CUSTOMIZE_ROWS } = await import("../src/view/customize-page")
-    for (let i = 0; i < CUSTOMIZE_ROWS.indexOf("homeLayout"); i++) await h.key(DOWN)
+    const { CUSTOMIZE_ROWS, customizeSteps } = await import("../src/view/customize-page")
+    for (let i = 0; i < customizeSteps("homeLayout", h.app.tuiProfile, { mode: h.app.viewMode }); i++) await h.key(DOWN)
     await h.key(LEFT)
     await h.key("\x1b")
     expect(profile(h).homeLayout).toBe("centered")

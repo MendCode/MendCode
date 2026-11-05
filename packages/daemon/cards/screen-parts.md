@@ -16,7 +16,7 @@ A session, top to bottom:
   prompt box: promptChrome box|top-bottom|minimal|ascii-box, promptBorder single|rounded|double|ascii, promptLead (the ❭ symbol), promptGlyphs, promptStatus border
   empty prompt's example text: showPlaceholder, placeholderText
   footer under the prompt: showStatus false removes it; its parts showModel, showProvider, showAgent, showPermission, showEffort; rows and icons: footerRows ({{program}} docs footer)
-Home (start) screen: homeHeader (its first row), logoKind wordmark|mascot|both|custom|none, logoText, productName, tagline, homePanel (the session list under the logo), homeRightPanel, homeLayout centered|split, homeTips, homeFooter
+Home (start) screen: homeHeader (its first row), logoKind wordmark|mascot|both|custom|none, logoText, productName, tagline, homeInput bottom|center|top (where the chat input sits on the home), homePanel (the session list under the logo), homeRightPanel, homeLayout centered|split, homeTips, homeFooter
 Left session list: sidebar auto|always|hidden, sidebarSide left|right, sidebarHeader (its title row)
 Right panel (/panel): panelHeader (its first row), sidebarWidth, its cards sidebarWidgets ({{program}} docs layout)
 The whole screen: density compact|comfortable|spacious, theme ({{program}} docs theme), pet, terminalTitle, titleTemplate; notices: usageNotices, cacheNotices, confirmNotices

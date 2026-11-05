@@ -3,7 +3,7 @@ import { mkdirSync, writeFileSync } from "node:fs"
 import path from "node:path"
 import { b05Harness } from "./b05-harness"
 import { cleanTemps } from "./session-ui-harness"
-import { CUSTOMIZE_ROWS } from "../src/view/customize-page"
+import { CUSTOMIZE_ROWS, customizeSteps } from "../src/view/customize-page"
 import { SETUP_ROWS } from "../src/view/setup-page"
 import { textWidth } from "../src/view/wrap"
 afterEach(cleanTemps)
@@ -79,7 +79,7 @@ test("the setup and customize rows of the prompt context show the per-call cost 
   expect(h.text().join("\n")).toMatch(/guide · \+[\d,]+ tokens per call/)
   await h.app.onKey("\x1b")
   await h.type("/customize\r")
-  for (let i = 0; i < CUSTOMIZE_ROWS.indexOf("promptContext"); i++) await h.app.onKey("\x1b[B")
+  for (let i = 0; i < customizeSteps("promptContext", h.app.tuiProfile, { mode: h.app.viewMode }); i++) await h.app.onKey("\x1b[B")
   expect(h.text().join("\n")).toMatch(/guide · \+[\d,]+ tokens per call/)
 })
 test("custom is selectable only with a valid project source and shows its real name and byte count", async () => {
@@ -105,7 +105,7 @@ test("setup and customization open the same prompt selector and return to their 
   expect(h.app.page).toBe("setup")
   await h.app.onKey("\x1b")
   await h.type("/customize\r")
-  for (let i = 0; i < CUSTOMIZE_ROWS.indexOf("promptContext"); i++) await h.app.onKey("\x1b[B")
+  for (let i = 0; i < customizeSteps("promptContext", h.app.tuiProfile, { mode: h.app.viewMode }); i++) await h.app.onKey("\x1b[B")
   await h.app.onKey("\r")
   expect(h.app.page).toBe("prompt-mode")
   await h.app.onKey("\x1b")

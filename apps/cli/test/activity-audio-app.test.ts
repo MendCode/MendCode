@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from "bun:test"
 import path from "node:path"
 import type { SessionEvent, SessionId } from "@mendcode/protocol"
-import { CUSTOMIZE_ROWS, renderCustomizePage } from "../src/view/customize-page"
+import { CUSTOMIZE_ROWS, customizeSteps, renderCustomizePage } from "../src/view/customize-page"
 import { DEFAULT_TUI_PROFILE, readTuiProfile, writeTuiProfile } from "../src/view/tui-profile"
 import { tuiProblems } from "@mendcode/protocol/wire"
 import { textWidth } from "../src/view/wrap"
@@ -109,7 +109,7 @@ test("customize cycles/persists opt-in and turning off stops immediately; row fi
     const width = 100, height = 30
     const h = scene("off", { width, height })
     await h.type("/customize\r")
-    for (let i = 0; i < CUSTOMIZE_ROWS.indexOf("activitySound"); i++) await h.app.onKey("\x1b[B")
+    for (let i = 0; i < customizeSteps("activitySound", h.app.tuiProfile, { mode: h.app.viewMode }); i++) await h.app.onKey("\x1b[B")
     expect(h.text().join("\n")).toContain("Activity sound")
     expect(h.text()).toHaveLength(height!)
     expect(h.text().every((row) => textWidth(row) <= width!)).toBe(true)

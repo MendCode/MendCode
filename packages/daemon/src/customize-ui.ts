@@ -257,6 +257,23 @@ export function footerRowNotes(profile: Record<string, unknown>): string[] {
   return notes
 }
 
+/** The keys of the one-row footer: footer rows draw the whole footer, so with rows these change nothing. */
+const ONE_ROW_FOOTER_KEYS = ["showModel", "showProvider", "showEffort", "showAgent", "statusLeft", "statusRight"]
+
+/**
+ * What a model must hear when the user's own footer stands: `before` is the profile before the call. A one-row key changes nothing
+ * while footer rows draw the footer, and rows that replaced the user's own are named so they can be put back.
+ */
+export function footerOwnedNotes(before: Record<string, unknown>, values: Record<string, unknown>): string[] {
+  const rows = Array.isArray(before.footerRows) ? before.footerRows as unknown[][] : []
+  if (!rows.length) return []
+  const notes: string[] = []
+  const oneRow = ONE_ROW_FOOTER_KEYS.filter((key) => key in values)
+  if (oneRow.length && !("footerRows" in values)) notes.push(`the user's footerRows draw the footer, so ${oneRow.join(", ")} change nothing there: add or remove the part in footerRows (send the whole list, their entries kept) instead`)
+  if (Array.isArray(values.footerRows) && values.footerRows.length && JSON.stringify(values.footerRows) !== JSON.stringify(rows)) notes.push(`replaced the user's own footerRows ${JSON.stringify(rows)}: keep their entries unless they asked to drop them; sending that list back restores it`)
+  return notes
+}
+
 /**
  * The user extensions that fill a footer slot and are still on, by the name `/extensions` switches them with (the name the module
  * declares, the file's name when it declares none). They draw over or beside `footerRows`, so setting rows switches them off.
@@ -314,7 +331,9 @@ export function createCustomizeUiTool(dir: string, reload: (directory: string) =
         let notes: string[] = []
         if (action.action === "settings") {
           safeProfileStorage(dir)
+          const before = createTuiControl(dir).run({ operation: "profile" }).profile as Record<string, unknown>
           const result = createTuiControl(dir).run({ operation: "apply", profile: action.values })
+          notes.push(...footerOwnedNotes(before, action.values))
           emit({ type: "tui.changed", profile: result.profile as Record<string, never> })
           let profile = result.profile as Record<string, unknown>
           // Rows the caller just set are what the user asked to see: a user extension that draws the footer would cover them, so it

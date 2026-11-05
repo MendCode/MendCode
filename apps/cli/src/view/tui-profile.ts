@@ -26,6 +26,9 @@ export type PromptChrome = (typeof PROMPT_CHROMES)[number]
 
 export const HOME_LAYOUTS = ["centered", "split"] as const
 export type HomeLayout = (typeof HOME_LAYOUTS)[number]
+/** Where the empty prompt sits on the start screen: at the bottom (v1), right under the logo with the block centered, or under the logo at the top. */
+export const HOME_INPUTS = ["bottom", "center", "top"] as const
+export type HomeInputPlace = (typeof HOME_INPUTS)[number]
 
 /** The left project sessions (view/sidebar.ts): `auto` and legacy `always` show from 110 columns, `hidden` never. */
 export const SIDEBAR_MODES = ["auto", "always", "hidden"] as const
@@ -319,6 +322,7 @@ export type TuiProfile = {
   /** Named on the home's top row, in the terminal title and as the plain-text logo of a small terminal. */
   productName: string
   homeLayout: HomeLayout
+  homeInput: HomeInputPlace
   homeTips: boolean
   homeFooter: boolean
   /** The home screen's first row (the project folder, the product name, the runtime version); off gives the row to the logo. */
@@ -560,6 +564,7 @@ export const DEFAULT_TUI_PROFILE: Readonly<TuiProfile> = {
   logoFont: DEFAULT_LOGO_FONT,
   productName: DEFAULT_PRODUCT_NAME,
   homeLayout: "centered",
+  homeInput: "bottom",
   homeTips: false,
   homeFooter: false,
   homeHeader: true,
@@ -910,6 +915,7 @@ export function normalizeTuiProfile(raw: unknown): TuiProfile {
     logoFont,
     productName: normalizeProductName(source.productName),
     homeLayout: oneOf(HOME_LAYOUTS, source.homeLayout) ?? DEFAULT_TUI_PROFILE.homeLayout,
+    homeInput: oneOf(HOME_INPUTS, source.homeInput) ?? DEFAULT_TUI_PROFILE.homeInput,
     homeTips: typeof source.homeTips === "boolean" ? source.homeTips : DEFAULT_TUI_PROFILE.homeTips,
     homeFooter: typeof source.homeFooter === "boolean" ? source.homeFooter : DEFAULT_TUI_PROFILE.homeFooter,
     homeHeader: bool("homeHeader"),

@@ -16,7 +16,7 @@ Each is a customize key: apply with customize_ui {"action":"settings","values":{
   Activity row (the working status): [[setting:activityPlacement]] transcript|above|inside|off (/activity), [[setting:activityParts]], `activityStyle` inline|classic, `activityTokens`, [[setting:showElapsed]], [[setting:showTokens]], [[setting:doneSymbol]].
 The single toggles exist as commands: /timestamps /thinking /scrollbar /username /sticky-prompt /terminal-title /tips; the user types them. /find searches the transcript; /messages picks a message to copy, revert or fork.
 
-/customize groups: Session chrome and Markdown are this card; Prompt & footer and Status segments (prompt box, status line, footer): {{program}} docs footer. /prompt-chrome and /jump-to-latest open one row each. Turn-end signals: [[setting:turnBell]], [[setting:turnNotify]], [[setting:notifyWhen]], [[setting:autoRecap]], [[setting:idleReturn]] (Terminal group; {{program}} docs customize).
+/customize sections: Chat, Activity and Look > Markdown are this card; Prompt & footer (prompt box, status line, footer, segments, quota): {{program}} docs footer. /prompt-chrome and /jump-to-latest open one row each. Turn-end signals: [[setting:turnBell]], [[setting:turnNotify]], [[setting:notifyWhen]], [[setting:autoRecap]], [[setting:idleReturn]] (Notifications section; {{program}} docs customize).
 Tell the user what changed. The balanced and minimal views ignore toolDensity; the minimal view keeps the code map as one row.
 
 Check: the customize_ui result lists errors (a bad value changes nothing). You cannot see the screen: say the look was not verified visually.

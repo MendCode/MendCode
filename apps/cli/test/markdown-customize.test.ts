@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { CUSTOMIZE_ROWS, customizePageKey, renderCustomizePage, type CustomizePageState } from "../src/view/customize-page"
+import { CUSTOMIZE_ROWS, customizePageKey, rowShown, renderCustomizePage, type CustomizePageState } from "../src/view/customize-page"
 import { DEFAULT_TUI_PROFILE, type TuiProfile } from "../src/view/tui-profile"
 import { setColorOverrides, sgr } from "../src/ui/theme"
 import { createTranscript } from "../src/view/transcript"
@@ -14,11 +14,12 @@ const page = (state: CustomizePageState, profile: TuiProfile = DEFAULT_TUI_PROFI
   renderCustomizePage({ state, profile, preview: { root: "/work", tip: "", now: 0 }, width, height }).map((line) => line.map((span) => span.text).join(""))
 
 describe("the Markdown group in /customize", () => {
-  test("has a row for each setting, between the session rows and the status segments", () => {
+  test("has a row for each setting, under Look after the diff view, and hides with raw chat", () => {
     const start = CUSTOMIZE_ROWS.indexOf("tableStyle")
     expect(CUSTOMIZE_ROWS.slice(start, start + 5)).toEqual(["tableStyle", "headingStyle", "markdownCopyHints", "markdownRtl", "markdownColors"])
-    expect(CUSTOMIZE_ROWS[start - 1]).toBe("doneSymbol")
-    expect(CUSTOMIZE_ROWS[start + 5]).toBe("statusLeft")
+    expect(CUSTOMIZE_ROWS[start - 1]).toBe("diffView")
+    expect(rowShown("tableStyle", DEFAULT_TUI_PROFILE)).toBe(true)
+    expect(rowShown("tableStyle", { ...DEFAULT_TUI_PROFILE, presentation: "raw", messageRenderer: "plain" })).toBe(false)
   })
 
   test("the choice rows step through their values and wrap around", () => {

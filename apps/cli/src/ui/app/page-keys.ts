@@ -396,7 +396,7 @@ export function createPageKeys(ctx: AppContext, actions: {
       }
     } else if (state.page === "customize" || state.page === "settings" && state.settingsPageState.tui) {
       const modules = [...new Set([...(state.ext?.loaded ?? []).filter((entry) => entry.tui).map((entry) => entry.name), ...(state.ext?.problems ?? []).map((problem) => problem.extension)])].map((name) => ({ name, enabled: !state.tuiProfile.disabledUiExtensions.includes(name), errors: [] }))
-      const result = customizePageKey(state.customizeState, key, { ...state.tuiProfile, ...(input.directory && state.settingsNow.projectThemes?.[input.directory] ? { theme: activeTheme().name } : {}), pet: state.tuiProfile.pet || state.settingsNow.pet || "off" }, modules, actions.slashCommands?.() ?? slashCatalog(), viewRows(state))
+      const result = customizePageKey(state.customizeState, key, { ...state.tuiProfile, ...(input.directory && state.settingsNow.projectThemes?.[input.directory] ? { theme: activeTheme().name } : {}), pet: state.tuiProfile.pet || state.settingsNow.pet || "off" }, modules, actions.slashCommands?.() ?? slashCatalog(), viewRows(state), { mode: state.mode, ...(state.ext?.slotOwner("footer.replace") ? { footerExtension: state.ext.slotOwner("footer.replace")! } : {}) })
       state.customizeState = result.state
       const { action } = result
       if (action.type === "close") state.page = "chat"

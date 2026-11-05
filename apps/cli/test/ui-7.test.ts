@@ -9,7 +9,7 @@ import { cpSync, readFileSync, readdirSync, writeFileSync } from "node:fs"
 import { petPreviewBox, renderPetPicker } from "../src/view/pet-picker"
 import { sizePet } from "../src/pets/frames"
 import type { ImagePlacement } from "../src/ui/image-layer"
-import { CUSTOMIZE_ROWS } from "../src/view/customize-page"
+import { CUSTOMIZE_ROWS, customizeSteps } from "../src/view/customize-page"
 import { DEFAULT_TUI_PROFILE, PROMPT_CHROMES, readTuiProfile, writeTuiProfile } from "../src/view/tui-profile"
 import { appHarness, cleanTemps, conversation, ids, mendRowIn, mendRows, NOW, tempDir } from "./session-ui-harness"
 
@@ -33,7 +33,7 @@ describe("UI-7 pet off reproduction", () => {
     else if (route === "slash") await h.type("/pet off\r")
     else {
       await h.type("/customize\r")
-      for (let i = 0; i < CUSTOMIZE_ROWS.indexOf("pet"); i++) await h.app.onKey("\x1b[B")
+      for (let i = 0; i < customizeSteps("pet", h.app.tuiProfile, { mode: h.app.viewMode }); i++) await h.app.onKey("\x1b[B")
       await h.app.onKey(" ")
       await h.app.onKey("\x1b")
     }
@@ -52,7 +52,7 @@ describe("UI-7 pet off reproduction", () => {
 
 async function customize(h: ReturnType<typeof appHarness>, field: typeof CUSTOMIZE_ROWS[number], key = " ") {
   await h.type("/customize\r")
-  for (let i = 0; i < CUSTOMIZE_ROWS.indexOf(field); i++) await h.app.onKey("\x1b[B")
+  for (let i = 0; i < customizeSteps(field, h.app.tuiProfile, { mode: h.app.viewMode }); i++) await h.app.onKey("\x1b[B")
   await h.app.onKey(key)
   h.app.render()
 }

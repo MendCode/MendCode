@@ -3,7 +3,7 @@ import path from "node:path"
 import { parityHarness } from "../apps/cli/test/parity-b01-b02-harness"
 import { conversation, ids, NOW, tempDir, type Harness } from "../apps/cli/test/session-ui-harness"
 import { DEFAULT_TUI_PROFILE, writeTuiProfile, type TuiProfile } from "../apps/cli/src/view/tui-profile"
-import { CUSTOMIZE_ROWS } from "../apps/cli/src/view/customize-page"
+import { CUSTOMIZE_ROWS, customizeSteps } from "../apps/cli/src/view/customize-page"
 import { createPromptStash } from "../apps/cli/src/ui/prompt-stash"
 import { fit } from "../apps/cli/src/view/deck"
 import { textWidth } from "../apps/cli/src/view/wrap"
@@ -81,7 +81,7 @@ export async function renderB04B03Frames(directory: string, sizes: string[]) {
       await h.app.onKey("\x1b")
     }
     await h.type("/customize\r")
-    for (let i = 0; i < CUSTOMIZE_ROWS.indexOf("statusLeft"); i++) await h.app.onKey("\x1b[B")
+    for (let i = 0; i < customizeSteps("statusLeft", h.app.tuiProfile, { mode: h.app.viewMode }); i++) await h.app.onKey("\x1b[B")
     save(h, "customize-status-segments", "customize")
     await h.app.onKey("\x1b")
     const stash = createPromptStash({ dataDir: h.dataDir })

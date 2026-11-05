@@ -52,7 +52,7 @@ With a graphics protocol active (above), the images a session holds are drawn in
 messages, and the images tools return (a read image, a screenshot, a generated image). The card keeps its `■ N images` line; the picture
 takes rows under it, at most 72 columns by 16 rows, keeping its shape and never enlarged past its pixels. A generated image takes
 the box its wait canvas held instead ([web and image tools](tools-web.md#while-an-image-is-generated)). `transcriptImages`
-(`/customize` > Terminal > Transcript images, default on) turns it off; `images off` and a remote client never draw them either.
+(`/customize` > Chat > Transcript images, default on) turns it off; `images off` and a remote client never draw them either.
 
 The client asks the daemon for the images of the blocks on screen with `attachment.read` (a session, a hash and an offset; chunks of
 96 KB; only blobs that session's events reference, never a path; local clients only, not in the read-only set). Up to 8 MB per image is
@@ -68,7 +68,7 @@ so ctrl or cmd click opens them in terminals that support it (a terminal that do
 (`[label](url)`, `<url>`, a bare address) links to `http`/`https` only; a URL cut across rows by the layout points at the whole address on
 both rows. A path like `src/config/load.ts:42:7`, `./README.md`, `~/notes/todo.md` or `/etc/hosts` is linked by how it looks, without
 touching the disk, so an editor opens it or reports the file missing; a word without a slash, a date or `and/or` is not a path. The link
-target comes from `fileOpener` (`/customize` > Terminal > File opener): `file` (default, the system's own handler, no line number),
+target comes from `fileOpener` (`/customize` > Input & keys > File opener): `file` (default, the system's own handler, no line number),
 `vscode`, `vscode-insiders`, `cursor`, `windsurf`, `zed` (`scheme://file/abs/path:line:col`), `idea` (`idea://open?file=…&line=…`) or `none`
 (addresses only). Targets are printable ASCII, at most 2048 characters, with a fixed list of schemes; message text never carries escape
 sequences, only the span's own link is written. While MendCode reads the mouse the terminal never sees a click, so a plain click on a web
@@ -213,7 +213,7 @@ and a session another engine packs (Claude Code, Codex, ACP) show nothing. It as
 
 Ten bordered rows above the working row, with padding inside and a blank row above the prompt. Panels: Todos,
 Questions, Subagents, Jobs, Scratchpad and Info. Questions (the session's pending approvals and questions, `!` and `?`),
-Subagents show only while there is something in them; Jobs additionally needs `dockJobs: true` (Session chrome > Dock jobs in `/customize`, off by default in every tier). The dock belongs to balanced/full; minimalist gains no chrome. An empty Scratchpad can still be focused. When the width
+Subagents show only while there is something in them; Jobs additionally needs `dockJobs: true` (Top & side > Dock jobs in `/customize`, off by default in every tier). The dock belongs to balanced/full; minimalist gains no chrome. An empty Scratchpad can still be focused. When the width
 cannot hold them an empty Todos panel gives way first, then Scratchpad, Jobs, Subagents, Todos, Questions. Info stays
 unless the focused Scratchpad needs the whole width. On short terminals a multiline prompt scrolls around its cursor
 to reserve the tray and footer.
@@ -324,7 +324,7 @@ A double click selects the word under the pointer (letters, digits and `_`, plus
 and a triple click the whole wrapped line, in the transcript or the prompt; like a drag, releasing copies it (`copyOnSelect`) or keeps it for
 `ctrl+c`. Two presses count as a double click when they land on the same cell within 450 ms. While you are scrolled up, the
 `↓ new output · End` label at the bottom right is a button: pressing it follows the newest output again. The wheel scrolls
-`wheelLines` rows a notch (default 3, 1..20, `/customize` > Terminal > Wheel lines). Right click is off by default; with
+`wheelLines` rows a notch (default 3, 1..20, `/customize` > Input & keys > Wheel lines). Right click is off by default; with
 `rightClickPaste` on it pastes the clipboard into the prompt like `ctrl+v` (text, or an image as an attachment). That reads the
 daemon machine's clipboard, so it is local only and refused for a remote client.
 
@@ -403,7 +403,7 @@ graph card (`detail` nodes of a render spec with `at: "open"`; `at: "preview"` i
 #### Tool density in the full view
 
 The table's `full` column is the `dense` density. A long session of it is a wall: every call prints its preview and the
-assistant's sentences get lost. `toolDensity` (`/customize` > Session chrome > Tool density; `calm` by default) chooses how
+assistant's sentences get lost. `toolDensity` (`/customize` > Chat > Tool density; `calm` by default) chooses how
 much of each card the `full` view prints. The balanced and minimal views ignore it, `toolOutput: collapsed` and `expanded`
 and `ctrl+o` win over it, and a card the reader opened by hand stays open in every density. Nothing the model receives, no
 export and no history changes: only the rows drawn.

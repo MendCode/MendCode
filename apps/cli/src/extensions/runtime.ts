@@ -511,6 +511,8 @@ export function createExtensionRuntime(options: ExtensionRuntimeOptions) {
      */
     views: { has: viewRegistry.has, call: viewRegistry.call, handles: viewRegistry.handles, status: viewRegistry.status, reset: viewRegistry.reset } satisfies CustomViews & { status: ViewRegistry["status"]; reset: ViewRegistry["reset"] },
     hasSlot: (name: SlotName) => slots.some((entry) => entry.name === name && !entry.disabled),
+    /** The extension that draws `name` (the last one loaded wins, as in `slot`), for a page that says who owns a part of the screen. */
+    slotOwner: (name: SlotName): string | undefined => slots.findLast((entry) => entry.name === name && !entry.disabled)?.owner,
 
     /** Lines for a slot, theme-mapped and fitted to `ctx.width`; undefined when no extension draws there (keep the default). */
     slot(name: SlotName, ctx: SlotContext): Line[] | undefined {

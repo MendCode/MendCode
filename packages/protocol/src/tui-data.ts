@@ -181,6 +181,7 @@ export const TUI_DEFAULTS: Readonly<Record<string, unknown>> = {
   "logoFont": "mendcode",
   "productName": "MendCode",
   "homeLayout": "centered",
+  "homeInput": "bottom",
   "homeTips": false,
   "homeFooter": false,
   "homeHeader": true,
@@ -245,7 +246,7 @@ export const TUI_ENUMS: Readonly<Record<string, readonly string[]>> = {
   "messageLayout": ["quiet", "classic"],
   "messageMeta": ["off", "compact", "full"],
   "themeLock": ["", "dark", "light"],
-  "logoFont": ["mendcode", "compact", "solid", "outline"],
+  "logoFont": ["mendcode", "compact", "solid", "outline", "rounded", "double", "shade", "braille"],
   "promptContext": ["minimal", "focus", "guide", "full", "custom"],
   "presentation": [
     "auto",
@@ -305,6 +306,7 @@ export const TUI_ENUMS: Readonly<Record<string, readonly string[]>> = {
     "centered",
     "split"
   ],
+  "homeInput": ["bottom", "center", "top"],
   "homeRightPanel": [
     "actions",
     "agentManager"

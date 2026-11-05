@@ -1188,6 +1188,8 @@ export function createApp(input: AppInput) {
     footer: (...args) => footer(...args),
     paneFacts: () => paneFacts(),
     statusRows: (...args) => statusRows(...args),
+    promptStatusLine: (...args) => promptStatusLine(...args),
+    homeMascot: () => homeMascot,
   })
   const { chatRows, homeRoot, homeSessions, homeMascot, maxScroll, scrollTranscript } = createChatRows(ctx, {
     slashMenu,
@@ -1314,6 +1316,14 @@ export function createApp(input: AppInput) {
     },
     get page() {
       return appState.page
+    },
+    /** The terminal profile in use, read-only (tests: which /customize rows are listed). */
+    get tuiProfile(): Readonly<import("../view/tui-profile").TuiProfile> {
+      return appState.tuiProfile
+    },
+    /** The view the chat draws in (minimal, balanced, full), read-only. */
+    get viewMode() {
+      return appState.mode
     },
     /** Screen-reader mode and what it forces, read-only (tests, diagnostics). */
     get accessibility() {

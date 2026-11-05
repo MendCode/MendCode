@@ -12,7 +12,7 @@ Not in your tool list (minimalist): tool_search finds customize_ui. The result l
 All keys, types, defaults and allowed values at once: {{program}} control-plane tui schema
 Current values: {{program}} control-plane tui profile  (or status)
 Presets (the user's terminal; from your shell use customize_ui, the CLI only reads): {{program}} control-plane tui apply-preset compact|comfortable|spacious|toggle-worktree. Every apply returns a backup id; {{program}} control-plane tui rollback [--backup ID] restores it. --dry-run validates without changing.
-The user's way: /customize (a page with every control and a live preview), /theme, /view.
+The user's way: /customize (a page with every control and a live preview; / filters the rows), /theme, /view. Its sections, most changed first: Look, Home, Prompt & footer, Chat, Activity, Top & side, Input & keys, Comments, Notifications, Advanced (extensions, views, slash menu, capabilities, terminal internals, reset). A row that depends on one switched off is hidden with it.
 
 Not a customize key: the theme itself has its own card (theme), key bindings (keys), the footer rows, icons and presets (footerRows and /footer preset: card footer; no extension needed), layout and drawing that need code (extensions).
 Profiles can carry a whole look (theme, profile values, keys, views) and turn it on and off: {{program}} docs profiles.

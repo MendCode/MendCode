@@ -39,7 +39,7 @@ import { homeLook, renderWelcomeReplacement } from "../../view/home"
 import { mascotPhase, mascotRows } from "../../view/mascot"
 import { createHomeMascot } from "./home-mascot"
 import { rowsWidth } from "../../view/logo-fonts"
-import type { HomeSession } from "../../view/home"
+import type { HomePrompt, HomeSession } from "../../view/home"
 import type { ImagePlacement } from "../image-layer"
 import { activeTheme, type ColorName, type Line } from "../theme"
 import { subagentColor } from "../../view/agent-color"
@@ -277,7 +277,14 @@ export function createChatRows(ctx: AppContext, actions: {
     const rawReplacement = !asking && !replacement && !state.shellMode ?state.ext?.slot("prompt.replace", slotContext(width, editorRows))?.slice(0, editorRows) : undefined
     // The prompt's own selection (shift-arrows) or the one dragged with the mouse.
     const framedCount = asking ? request!.rows.length : replacement?.lines.length ?? rawReplacement?.length ?? shown.length
-    const promptMap = { width, bodyTop: 0, body: [], promptTop: height - below.length - frameBottom.length - framedCount, promptRows: !asking && !replacement && !rawReplacement ? framedCount : 0, promptBelow: frameBottom.length, promptFirst: firstRow, promptInset: frame.inset, promptLines: visual }
+    // `homeInput` center or top: the home leaves the prompt's rows under its logo and the prompt is drawn there (what sits over the prompt
+    // goes over the rows just above it); the footer stays at the bottom. Only where the home made room: not the split layout, a tiny screen
+    // or an extension's own home (the split layout keeps it at the bottom), and never with a question card in the prompt's place.
+    const homePlace = home && !inlineView && !asking && rich && state.tuiProfile.homeInput !== "bottom" && state.tuiProfile.homeLayout !== "split" ? state.tuiProfile.homeInput : undefined
+    let homeGap: number | undefined
+    const homeLifted = homePlace ? emptyState(width, Math.max(1, height - topbar.length - below.length), { rows: promptTop.length + framedCount + frameBottom.length, at: homePlace, placed: (row) => { homeGap = row } }) : undefined
+    const lifted = homeLifted && homeGap !== undefined ? { rows: homeLifted, above: Math.max(0, homeGap - above.length - popup.length) } : undefined
+    const promptMap = { width, bodyTop: 0, body: [], promptTop: lifted ? topbar.length + lifted.above + above.length + popup.length + promptTop.length : height - below.length - frameBottom.length - framedCount, promptRows: !asking && !replacement && !rawReplacement ? framedCount : 0, promptBelow: frameBottom.length, promptFirst: firstRow, promptInset: frame.inset, promptLines: visual }
     const selected = (state.selection?.area === "prompt" ? promptRange(promptMap, state.selection) : undefined) ?? editor.selection
     const framed: Line[] = asking ? request!.rows : replacement?.lines ?? rawReplacement ?? shown.map((line, i) => frame.row(promptRow({ text: line.text, ...(selected ? { selection: { start: Math.max(0, selected.start - line.start), end: Math.max(0, Math.min(line.end, selected.end) - line.start) } } : {}), first: firstRow + i === 0, rich, glyphs: g, lead, shell: state.shellMode, tokens: looks, ...(shownPlaceholder && editor.isEmpty() ? { placeholder: shownPlaceholder } : {}) })))
     // `inside`: the status sits at the right end of the prompt's first row, only where the typed text leaves room for it. The text and the
@@ -291,7 +298,7 @@ export function createChatRows(ctx: AppContext, actions: {
     const chrome = topbar.length + above.length + popup.length + promptTop.length + framed.length + frameBottom.length + below.length
     const sheetRoom = (rows: number) => Math.max(0, height - rows - STICKY_MIN_BODY)
     // A collapsed sidebar reserves its own space above the prompt.
-    const sheet = !inlineView ? bottomPanel?.(sheetRoom(chrome)) ?? [] : []
+    const sheet = !inlineView && !lifted ? bottomPanel?.(sheetRoom(chrome)) ?? [] : []
     const reserved = chrome + sheet.length
     // Inline mode: the live blocks that fit above the prompt; the rest of the transcript is already in the terminal's scrollback.
     const inlineBody = inlineView?.tail.slice(-Math.max(0, height - reserved))
@@ -319,7 +326,7 @@ export function createChatRows(ctx: AppContext, actions: {
     const hovered = state.hoverLink
     // The address under the pointer is underlined on every row it covers, the way a browser shows a link.
     const underHover = (lines: Line[]) => hovered ? lines.map((line) => line.some((span) => span.link === hovered) ? line.map((span) => span.link === hovered ? { ...span, underline: true } : span) : line) : lines
-    const body: Line[] = inlineBody ? plainRows(inlineBody) : cleared ? plainRows(cleared) : (home ? emptyState(width, bodyHeight).slice(0, bodyHeight) : underHover(linked(visible.map((l) => l.spans))))
+    const body: Line[] = inlineBody ? plainRows(inlineBody) : cleared ? plainRows(cleared) : (lifted ? lifted.rows : home ? emptyState(width, bodyHeight).slice(0, bodyHeight) : underHover(linked(visible.map((l) => l.spans))))
     // A transcript shorter than the body starts under the top bar after one blank row and the free rows sit between its last
     // message and the prompt; once it overflows the view follows the bottom.
     const topAnchored = !inlineBody && !home && !cleared && visible.length < bodyHeight
@@ -378,13 +385,15 @@ export function createChatRows(ctx: AppContext, actions: {
     }
     if (boxed) body.push(frameBottomEdge({ width, color: boxColor, ascii: !rich || asciiGlyphs() }))
     // Minimal keeps the last row empty: the prompt's closing rule stays full width (the screen never draws the bottom-right cell).
-    const rows: Line[] = [...topbar, ...body, ...sheet, ...above, ...popup, ...promptTop, ...framed, ...frameBottom, ...below]
+    const promptBlock = [...above, ...popup, ...promptTop, ...framed, ...frameBottom]
+    const rows: Line[] = lifted ? [...topbar, ...body.slice(0, lifted.above), ...promptBlock, ...body.slice(lifted.above + promptBlock.length), ...below] : [...topbar, ...body, ...sheet, ...promptBlock, ...below]
     if (boxed) for (let at = boxTop + 1; at < topbar.length + body.length - 1; at++) rows[at] = frameSides({ line: rows[at]!, width, color: boxColor, ascii: !rich || asciiGlyphs() })
     const panel = sheet.length ? { top: topbar.length + body.length, height: sheet.length } : undefined
-    const bodyEnd = topbar.length + body.length + sheet.length
+    // Where the rows over the prompt start: under the body, or under the logo when the home lifted the prompt.
+    const bodyEnd = lifted ? topbar.length + lifted.above : topbar.length + body.length + sheet.length
     if (!inlineView) {
       const commentTop = fixedAbove.length + dock.length + (live?.rows.length ?? 0) + agentRows.length + (working ? 1 : 0) + extAbove.length
-      const belowTop = bodyEnd + above.length + popup.length + promptTop.length + framed.length + frameBottom.length +(!minimal && preset === "minimal" ? 1 : 0)
+      const belowTop = rows.length - below.length + (!minimal && preset === "minimal" ? 1 : 0)
       comments.place({ rows, rule: bodyEnd + above.length + popup.length, ...(commentRows.chip !== undefined ? { chip: bodyEnd + commentTop + commentRows.chip } : {}), ...(commentRows.below.length ? { below: belowTop } : {}), width })
     }
     // What a mouse selection reads: the transcript rows as laid out (not as decorated above) and where the prompt landed.
@@ -421,7 +430,7 @@ export function createChatRows(ctx: AppContext, actions: {
     const cursorRow = bodyEnd + above.length + popup.length + promptTop.length + (cursorAt - firstRow)
     const current = visual[cursorAt]!
     const before = [...new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(current.text)].slice(0, editor.cursorOffset - current.start).map((s) => s.segment).join("")
-    const placements = drawPet({ rows, bottom: topbar.length + body.length, floor: sheet.length === 0 && above.length === (working ? 1 : 0) + agentRows.length ? bodyEnd + above.length : topbar.length + body.length, top: topbar.length, width, shown: petShown && !(home && homeMascot.drawn) })
+    const placements = drawPet({ rows, bottom: topbar.length + body.length, floor: sheet.length === 0 && above.length === (working ? 1 : 0) + agentRows.length ? bodyEnd + above.length : topbar.length + body.length, top: topbar.length, width, shown: petShown && !lifted && !(home && homeMascot.drawn) })
     // The start screen's pet mascot, where the terminal draws pictures: over the blank cells the home reserved for it.
     if (home && !inlineBody && !cleared) placements.push(...homeMascot.placement(topbar.length).filter((placement) => placement.row + placement.rows <= topbar.length + body.length))
     if (!inlineBody && !home && !cleared) placements.push(...transcriptPlacements({ visible, top: topbar.length + padTop, labelRows: new Set([...labelRows].map((row) => topbar.length + row)), clear: placements }))
@@ -458,7 +467,7 @@ export function createChatRows(ctx: AppContext, actions: {
     ascii: () => asciiGlyphs(),
   })
 
-  function emptyState(width: number, height: number): Line[] {
+  function emptyState(width: number, height: number, prompt?: HomePrompt): Line[] {
     homeHits = []
     const root = homeRoot()
     // Balanced and full show v1's home; minimal keeps only the name and the project, like Pi.
@@ -483,7 +492,7 @@ export function createChatRows(ctx: AppContext, actions: {
       ...(state.tuiProfile.homeTips ? { tip: homeTipText } : {}),
       ...(state.tuiProfile.homeFooter && !footerTaken ? { footer: state.homeMcp ? { mcp: state.homeMcp } : {} } : {}),
       ...(input.version ? { version: input.version } : {}),
-    }, { width, height, extra: { ...(below ? { below } : {}), ...(mascot ? { mascot } : {}) } })
+    }, { width, height, extra: { ...(below ? { below } : {}), ...(mascot ? { mascot } : {}), ...(prompt ? { prompt } : {}) } })
     homeHits = drawn.hits.flatMap((hit) => (hit.action === "open" && typeof hit.arg === "string" ? [{ row: hit.row, from: hit.from, to: hit.to, sessionId: hit.arg }] : []))
     return drawn.lines
   }

@@ -13,6 +13,10 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 - `mendcode usage --quota [--json]` prints the quota windows the footer shows, read from the running daemon; nothing is sent to a provider. See [usage](docs/usage.md#quota-from-the-command-line).
 - A session that runs `mendcode run --permission smart` above its own mode now asks you on one card (model, folder, mode, title, prompt) when your terminal has it open; approving starts that child with that prompt only. Without you there it is still refused, and the error gives the command to run yourself. See [permissions](docs/permissions.md#what-a-session-cannot-do-from-its-own-shell).
+- `/customize` is regrouped: the common sections first (Look, Home, Prompt & footer, Chat, Activity), Extensions, Views, the slash menu and terminal internals under Advanced. A row that depends on one switched off is hidden with it. See [customize](docs/customize.md).
+- `/` in `/customize` filters the rows by name, section or what they change.
+- Home > Input position puts the chat input at the bottom, centered under the logo or at the top of the start screen.
+- Logo fonts rounded, double, shade and braille.
 - With `MENDCODE_BROWSER_EXTENSION=1` the model can work in your own Chrome, Arc, Brave or Edge, in a "MendCode" tab group and background tabs, on sites you allow. It asks before installing the extension. See [browser](docs/browser.md#your-own-browser-extension).
 - The PR reviewer measures MendCode's own pull requests (start-up, memory, size) and puts the table in the review; a rise above the noise is a critical finding. `prReview.perfAttrib: false` turns it off. See [PR review](docs/pr-review.md#performance-of-mendcodes-own-pull-requests).
 - `/reviews open <job id>` opens a PR review's reviewer session, and a running review shows its phase in `/reviews`. See [PR review](docs/pr-review.md).
@@ -45,6 +49,9 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 - The compaction card is two rows (stage with its bar, context before and after) and shows one loading spinner, the activity line's, instead of three.
 - `/pr review` (and `@mendcode review`) of a head already reviewed with the same config answers at once and runs nothing; `/pr review <n> full` reviews it again. See [PR review](docs/pr-review.md).
+- The `/customize` preview draws what the picked row changes: the home with the pet, a sample chat with the top bar, the prompt with its status line and your real footer, the activity, the diff.
+- Numbers in `/customize` edit with Enter and step with the arrows.
+- With your own footer rows `/customize` says so and hides the one-row footer parts, and the model edits your rows instead of replacing them.
 - Folder profiles are now called areas: `mendcode area add|list|remove` and the `areas` setting (the old `profiles` setting is still read), and `mendcode profile restore` is `mendcode customize restore`. See [areas](docs/areas.md).
 - Packages are now called profiles: `mendcode profile ...`, `/profiles`, the `profiles` tool and `mendcode-profile.json`. The old names (`mendcode package`, `/packages`, `/pkg`, `mendcode-package.json`, `disabledPackages`) still work. See [profiles](docs/profiles.md).
 - The notice for an installed update now reads `New build installed · /restart to switch`, and the message that resumes work after a usage limit lifts is worded in MendCode's own voice.
@@ -102,6 +109,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 - PR reviews and report-only loops are no longer told about plans when they try a change (MendCode's own engine and Claude Code), and Claude Code runs them outside its plan mode, so a reviewer never mistakes plan mode for a limit on its review.
 - A PR review whose diff does not fit its token budget stops before it spends: it says so up front, or before the next part of a large diff, instead of after. See [PR review](docs/pr-review.md#budgets-quotas-and-accounting).
+- The solid logo font draws square letters, and `/customize` rows no longer cut or run together.
 - PR review notices link to the pull request (and the review they name) on GitHub, and show a job by a short id with the `/reviews open` hint, so narrow terminals keep the important words. See [PR review](docs/pr-review.md).
 - Computer use on apps whose content is a webview (Tauri, WebKit, Electron): the page's content is exposed, a key reaches the app when no node can take focus, and a thin result tells the model to look again before giving up. See [computer use](docs/computer.md).
 - The folders MendCode makes in the system temporary directory for Claude Code, Codex and ACP sessions are removed when the daemon stops, and a daemon that died leaves none behind: the next start clears them.

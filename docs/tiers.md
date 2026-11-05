@@ -13,7 +13,7 @@ Names, reconciled. `minimal`/`balanced`/`full` already mean three different thin
 | Setup preset (`/setup`, [setup](setup.md)) | `default`, `minimal`, `full`, `custom` | Nothing. A tier never writes the preset or its memory and approval choices |
 | Chat view (`view`, [layout](layout.md)) | `minimal`, `balanced`, `full` | `/tier` sets it to the tier's view |
 | Prompt mode (`/prompt-mode`, [prompt modes](prompt-modes.md)) | `minimal`, `focus`, `guide`, `full`, `custom` | `/tier` sets the project's mode: minimalist `minimal`, balanced `focus`, full `full`; `guide` is never set by a tier |
-| Jobs dock panel (terminal settings) | `dockJobs: false` by default in every tier; opt-in through `/customize` > Session chrome > Dock jobs | Only the balanced/full dock renders it; minimalist stays chrome-free and `/jobs` remains independent |
+| Jobs dock panel (terminal settings) | `dockJobs: false` by default in every tier; opt-in through `/customize` > Top & side > Dock jobs | Only the balanced/full dock renders it; minimalist stays chrome-free and `/jobs` remains independent |
 | Density (terminal settings) | `compact`, `comfortable`, `spacious` | `/tier` sets `compact` for minimalist, `comfortable` otherwise; minimalist also hides the right bar; balanced and full turn `showEffort` on |
 | Footer (the row under the prompt) | follows the view | minimal has none; balanced places its segments; full is the five-row `rows` preset until you choose a footer ([layout](layout.md#footer-by-tier)) |
 | Feature modules | the manifest below | follow the tier live |

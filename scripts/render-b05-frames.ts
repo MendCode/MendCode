@@ -1,7 +1,7 @@
 import { mkdirSync, writeFileSync } from "node:fs"
 import path from "node:path"
 import { b05Harness } from "../apps/cli/test/b05-harness"
-import { CUSTOMIZE_ROWS } from "../apps/cli/src/view/customize-page"
+import { CUSTOMIZE_ROWS, customizeSteps } from "../apps/cli/src/view/customize-page"
 import { SETUP_ROWS } from "../apps/cli/src/view/setup-page"
 import { textWidth } from "../apps/cli/src/view/wrap"
 
@@ -44,7 +44,7 @@ export async function renderB05Frames(directory: string, sizes: string[]) {
     save("setup-prompt-context", "setup")
     await h.app.onKey("\x1b")
     await h.type("/customize\r")
-    for (let i = 0; i < CUSTOMIZE_ROWS.indexOf("promptContext"); i++) await h.app.onKey("\x1b[B")
+    for (let i = 0; i < customizeSteps("promptContext", h.app.tuiProfile, { mode: h.app.viewMode }); i++) await h.app.onKey("\x1b[B")
     save("customize-prompt-context", "customize")
     await h.app.onKey("\x1b")
     await h.type("/prompt-mode\r")

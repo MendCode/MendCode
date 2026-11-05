@@ -187,7 +187,7 @@ export const BUILTIN_VIEWS: { [S in Exclude<keyof ViewModels, "prompt.frame">]: 
     return [head, ...rest]
   },
   home: (m) => {
-    const lines = renderHome({ ...(m as unknown as HomeInput), width: m.width, height: m.height, now: m.now, ...(m.extra?.below ? { below: m.extra.below as Line[] } : {}), ...(m.extra?.mascot ? { mascot: m.extra.mascot as NonNullable<HomeInput["mascot"]> } : {}) })
+    const lines = renderHome({ ...(m as unknown as HomeInput), width: m.width, height: m.height, now: m.now, ...(m.extra?.below ? { below: m.extra.below as Line[] } : {}), ...(m.extra?.mascot ? { mascot: m.extra.mascot as NonNullable<HomeInput["mascot"]> } : {}), ...(m.extra?.prompt ? { prompt: m.extra.prompt as NonNullable<HomeInput["prompt"]> } : {}) })
     return { lines, hits: homeHits(lines, m.sessions) }
   },
   "panel.widget": (m) => m.body.map((line) => [...line] as Line),

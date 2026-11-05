@@ -86,6 +86,7 @@ const COVERAGE: Record<string, Entry> = {
   // Not a slot of their own, each with its reason.
   "panel-box.ts": { allow: "box-drawing helper called by the built-in renderers of notice, approval, question and slash.menu; draws nothing on its own" },
   "deck.ts": { allow: "row layout helpers (tabs, hint and KPI rows) used inside page, widget and slot built-ins; draws nothing on its own" },
+  "page-search.ts": { allow: "the `/` filter box row of a page, drawn inside the page built-ins; the page itself draws through the page slot" },
   "page.ts": { allow: "row layout helpers (hint, tab and KPI rows) used inside the page built-ins; the page itself draws through the page slot" },
   "reply-comments-sent.ts": { allow: "the sent set of comments inside the built-in `message.user` renderer (message-views.ts); a custom `message.user` view replaces it and receives the parts as `comments` with the layout and collapse settings" },
   "reply-comments-view.ts": { allow: "the comment chips, list and reply bar are drawn from geometry the terminal also measures (marks, click areas, the prompt rule); they are customized by the comment settings (placement, style, glyphs, wording, theme roles) and the `api.comments` hooks" },
