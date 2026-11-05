@@ -229,6 +229,8 @@ export const USAGE_HELP = text([
   "Tokens and cost, last N days (default 30).",
   "  --days N  --tools N  --models [N]  --project [ID]  --json",
   "  --scope global|project|directory",
+  "  --quota [--json]        provider quota windows the daemon already holds",
+  "                          (read-only: nothing is sent to a provider)",
 ])
 
 export const STATS_HELP = text([

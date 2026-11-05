@@ -87,6 +87,15 @@ seconds. Errors omit upstream bodies. Without an adapter, the panel says “Serv
 `bun scripts/render-frames.ts .agents-frames/B77 --b77 100x30 180x50` renders the dashboard,
 widget picker, region editor, all scopes, scrolled panels and weather states using local fakes.
 
+## Quota from the command line
+
+`mendcode usage --quota` prints the provider quota windows the footer shows, one line each (`codex 5h  62% left (38% used)
+· resets in 2h · seen 1m ago`). `--json` prints `{ now, daemon, quota: [{ provider, window, usedPercent, leftPercent,
+resetsAt?, observedAt, ageMs, stale }] }`, the same list `api.usage()` gives an extension. It is read-only and free: it asks a
+daemon that already runs for the readings it holds, starts no daemon and sends nothing to any provider. Without a running
+daemon `daemon` is `false` and the list is empty: every window is unknown. A window not listed is unknown, never 0% or 100%.
+Local only; every tier.
+
 ## Auxiliary calls
 
 Some model calls are not part of any turn you sent: the daemon makes them for you. Each one is counted by role and model, with

@@ -30,7 +30,7 @@ export { TIERS, TIER_BUNDLES, TIER_BASELINE_TOKENS, MINIMALIST_SLASH, slashTier,
 
 export { assembleSchema, createSchemaCatalog, SCHEMA_PAGE_BYTES, SCHEMA_MAX_PAGES, type SchemaCatalog, type SchemaIndex, type SchemaIndexEntry, type SchemaPage } from "./schema-catalog"
 export { isLoopbackHost,parseRemoteAddress, isReadOnlyCommand, READ_ONLY_COMMANDS } from "./remote"
-export { AGENT_OPEN_COMMANDS, AGENT_CAPPED_COMMANDS, AGENT_ORIGIN_CAPABILITY, AGENT_LIMIT_CAPABILITY, AGENT_SHELL_ENV, AGENT_SHELL_FILE_BLOCKS, agentCommandClass, agentRefusal, capPermission, permissionRank, type AgentCommandClass } from "./agent-origin"
+export { AGENT_OPEN_COMMANDS, AGENT_CAPPED_COMMANDS, AGENT_ORIGIN_CAPABILITY, AGENT_LIMIT_CAPABILITY, AGENT_SHELL_ENV, AGENT_SHELL_FILE_BLOCKS, agentCommandClass, agentRefusal, capPermission, launchOf, permissionRank, type AgentCommandClass } from "./agent-origin"
 export { approvalRuleOffer, withApprovalRules, type ApprovalRule, type ApprovalRuleOffer, type ApprovalRuleLevel } from "./approval-rule"
 
 export { createIdFactory, ID_PREFIXES } from "./id-factory"

@@ -11,6 +11,8 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### New
 
+- `mendcode usage --quota [--json]` prints the quota windows the footer shows, read from the running daemon; nothing is sent to a provider. See [usage](docs/usage.md#quota-from-the-command-line).
+- A session that runs `mendcode run --permission smart` above its own mode now asks you on one card (model, folder, mode, title, prompt) when your terminal has it open; approving starts that child with that prompt only. Without you there it is still refused, and the error gives the command to run yourself. See [permissions](docs/permissions.md#what-a-session-cannot-do-from-its-own-shell).
 - With `MENDCODE_BROWSER_EXTENSION=1` the model can work in your own Chrome, Arc, Brave or Edge, in a "MendCode" tab group and background tabs, on sites you allow. It asks before installing the extension. See [browser](docs/browser.md#your-own-browser-extension).
 - The PR reviewer measures MendCode's own pull requests (start-up, memory, size) and puts the table in the review; a rise above the noise is a critical finding. `prReview.perfAttrib: false` turns it off. See [PR review](docs/pr-review.md#performance-of-mendcodes-own-pull-requests).
 - `/reviews open <job id>` opens a PR review's reviewer session, and a running review shows its phase in `/reviews`. See [PR review](docs/pr-review.md).
@@ -42,6 +44,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Changed
 
+- The compaction card is two rows (stage with its bar, context before and after) and shows one loading spinner, the activity line's, instead of three.
 - Folder profiles are now called areas: `mendcode area add|list|remove` and the `areas` setting (the old `profiles` setting is still read), and `mendcode profile restore` is `mendcode customize restore`. See [areas](docs/areas.md).
 - Packages are now called profiles: `mendcode profile ...`, `/profiles`, the `profiles` tool and `mendcode-profile.json`. The old names (`mendcode package`, `/packages`, `/pkg`, `mendcode-package.json`, `disabledPackages`) still work. See [profiles](docs/profiles.md).
 - The notice for an installed update now reads `New build installed · /restart to switch`, and the message that resumes work after a usage limit lifts is worded in MendCode's own voice.

@@ -15,12 +15,13 @@ work through extension settings and `tui.change`.
 
 While the memory is being written a live panel sits above the prompt
 (`compactionPanel`, `/customize` → Compaction → Compaction panel):
-`panel` (default: phase, stage bar, tokens before → after, elapsed), `stats`
+`panel` (default, two rows: stage with its bar, tokens before → after; `compactionProgress` off drops the bar), `stats`
 (context against the window or threshold, cache read/write, trend, saved,
 progress; only numbers the events reported), `arcade` (a random game of snake,
 breakout or 2048), `scratchpad` (the project note, editable in the panel) and
 `quiet` (one line). Under 70 columns the frame is dropped; a mode that does not
-fit the terminal height gives way to a smaller one. The transcript keeps a one-row
+fit the terminal height gives way to a smaller one. The panels draw no spinner while the
+activity line shows one (and the elapsed time is that line's): one loading indicator. The transcript keeps a one-row
 marker until the compaction ends.
 
 Arcade controls: Tab or a click focuses the game, arrows or wasd/hjkl move,

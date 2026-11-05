@@ -9,7 +9,7 @@ import { textWidth } from "./wrap"
 
 export type LiveMode = TuiProfile["compactionPanel"]
 
-/** Narrower than this the panels drop their frame and keep three or four plain rows. */
+/** Narrower than this the framed panels drop their frame and keep a few plain rows. */
 export const LIVE_COMPACT_WIDTH = 70
 export type LiveInput = {
   mode: LiveMode
@@ -23,7 +23,10 @@ export type LiveInput = {
   /** The window of the model, or the compaction threshold when the window is unknown. */
   limit?: { tokens: number; kind: "window" | "threshold" }
   now: number
+  /** The loading glyph; empty when the activity line above the prompt already shows one, so there is a single indicator. */
   spinner: string
+  /** The stage bar (`compactionProgress`); the default panel keeps only the stage name when false. */
+  progress?: boolean
   arcade?: { view: ArcadeView; focused: boolean; fieldRows: number }
   scratch?: { text: string; editing: boolean; editor?: ReturnType<typeof import("./editor").createEditor>; readOnly: boolean }
 }
@@ -96,22 +99,10 @@ function boxed(input: { title: string; right?: string; rows: Line[]; width: numb
   return [top, ...input.rows.map(row), [{ text: `╰${"─".repeat(Math.max(0, width - 2))}╯`, fg: border }]]
 }
 
-const label = (text: string): Span => ({ text: text.padEnd(9), fg: "muted" })
+/** The spinner and its space; nothing when the activity line already shows one. */
+const lead = (input: LiveInput) => (input.spinner ? `${input.spinner} ` : "")
 
-function stageRow(facts: CompactionSnapshot, spinner: string): Line {
-  const step = stepOf(facts)
-  const memory = facts.method === "native" ? "Checkpoint" : "Memory"
-  const names = ["Capture", memory, "Pack"]
-  const spans: Span[] = []
-  names.forEach((name, index) => {
-    const done = index + 1 < step || (index + 1 === step && facts.phase === "packed")
-    const current = index + 1 === step && !done
-    if (index) spans.push({ text: "   " })
-    spans.push({ text: `${done ? "●" : current ? spinner : "○"} ${name}`, fg: done ? "success" : current ? "primary" : "muted", ...(current ? { bold: true } : {}) })
-  })
-  if (facts.tailTokens) spans.push({ text: `   tail ~${compactTokens(facts.tailTokens)} kept`, fg: "muted" })
-  return spans
-}
+const label = (text: string): Span => ({ text: text.padEnd(9), fg: "muted" })
 
 /** `84.2k → …`: the context the compaction replaces, then what replaces it once both the tail and the memory are known. */
 function contextShift(facts: CompactionSnapshot): Span[] {
@@ -141,27 +132,23 @@ const elapsedText = (input: LiveInput) => {
 
 function quietRow(input: LiveInput): Line {
   const elapsed = elapsedText(input)
-  const text = [`${input.spinner} Compacting context`, phaseText(input.facts).toLowerCase(), input.facts.before ? `${compactTokens(input.facts.before.context)} tokens` : undefined, elapsed].filter(Boolean).join(" · ")
+  const text = [`${lead(input)}Compacting context`, phaseText(input.facts).toLowerCase(), input.facts.before ? `${compactTokens(input.facts.before.context)} tokens` : undefined, elapsed].filter(Boolean).join(" · ")
   return fit([{ text, fg: "muted" }], input.width)
 }
 
+/**
+ * The default card, two plain rows: the stage with its bar, then the context before and after. It carries no spinner of its own
+ * while the activity line above the prompt shows one (`spinner` empty); the elapsed time is that line's too.
+ */
 function panelRows(input: LiveInput): Line[] {
   const { facts, width } = input
-  const elapsed = elapsedText(input)
-  if (width < LIVE_COMPACT_WIDTH) {
-    return [
-      fit([{ text: `${input.spinner} `, fg: "primary" }, { text: "Compacting", fg: "text", bold: true }, { text: ` · ${phaseText(facts).toLowerCase()}${elapsed ? ` · ${elapsed}` : ""}`, fg: "muted" }], width),
-      fit(progressRow(input, width), width),
-      fit(contextShift(facts), width),
-    ]
-  }
-  const body: Line[] = [
-    spread([{ text: `${input.spinner} `, fg: "primary" }, { text: phaseText(facts), fg: "text", bold: true }], [{ text: facts.reason ? `${facts.reason} compaction` : "compaction", fg: "muted" }], width - 4),
-    progressRow(input, width - 4),
-    [label("Context"), ...contextShift(facts)],
-    stageRow(facts, input.spinner),
-  ]
-  return boxed({ title: "Compacting context", ...(elapsed ? { right: elapsed } : {}), rows: body, width })
+  const showBar = input.progress !== false
+  const elapsed = input.spinner ? elapsedText(input) : undefined
+  const head: Span[] = [{ text: lead(input), fg: "primary" }, { text: phaseText(facts), fg: "text", bold: true }]
+  const tail = `  ${stepOf(facts)}/${STEPS.length}${elapsed ? ` · ${elapsed}` : ""}`
+  const used = textWidth(head.map((span) => span.text).join("")) + tail.length + 2
+  const first: Line = showBar && width - used >= 6 ? [...head, { text: "  " }, ...bar(progressOf(facts, elapsedOf(input) ?? 0), Math.min(40, width - used), facts.phase === "packed" ? "success" : "primary"), { text: tail, fg: "muted" }] : [...head, { text: tail, fg: "muted" }]
+  return [fit(first, width), fit([label("Context"), ...contextShift(facts)], width)]
 }
 
 function statsRows(input: LiveInput): Line[] {
@@ -196,7 +183,7 @@ function statsRows(input: LiveInput): Line[] {
     : [{ text: facts.tailTokens !== undefined ? `pending · tail ~${compactTokens(facts.tailTokens)} kept` : "pending until the memory is written", fg: "muted" as const }])]
   const progress: Line = [label("Progress"), ...progressRow(input, inner - 9)]
   const elapsed = elapsedText(input)
-  if (width < LIVE_COMPACT_WIDTH) return [fit([{ text: `${input.spinner} `, fg: "primary" }, { text: "Compaction stats", fg: "text", bold: true }, { text: elapsed ? ` · ${elapsed}` : "", fg: "muted" }], width), contextRow, cacheRow, saved, progress].map((line) => fit(line, width))
+  if (width < LIVE_COMPACT_WIDTH) return [fit([{ text: lead(input), fg: "primary" }, { text: "Compaction stats", fg: "text", bold: true }, { text: elapsed ? ` · ${elapsed}` : "", fg: "muted" }], width), contextRow, cacheRow, saved, progress].map((line) => fit(line, width))
   return boxed({ title: "Compaction stats", ...(elapsed ? { right: elapsed } : {}), rows: [contextRow, cacheRow, trend, saved, progress], width })
 }
 
@@ -226,13 +213,13 @@ function arcadeRows(input: LiveInput): Line[] {
   if (width < LIVE_COMPACT_WIDTH || width - 4 < view.width + ARCADE_INFO_WIDTH) {
     const pad = Math.max(0, Math.floor((width - view.width) / 2))
     return [
-      fit([{ text: `${input.spinner} `, fg: "primary" }, { text: view.title, fg: "text", bold: true }, { text: ` · ${view.status}`, fg: "muted" }], width),
+      fit([{ text: lead(input), fg: "primary" }, { text: view.title, fg: "text", bold: true }, { text: ` · ${view.status}`, fg: "muted" }], width),
       ...view.rows.map((row) => fit([{ text: " ".repeat(pad) }, ...row], width)),
       fit(focused ? [{ text: "arrows move · space · r · n · esc leaves", fg: "muted" }] : [{ text: "tab plays", fg: "primary" }, { text: ` · ${phaseText(facts).toLowerCase()}${elapsed ? ` · ${elapsed}` : ""}`, fg: "muted" }], width),
     ]
   }
   const info: Line[] = [
-    [{ text: `${input.spinner} `, fg: "primary" }, { text: phaseText(facts), fg: "text", bold: true }],
+    [{ text: lead(input), fg: "primary" }, { text: phaseText(facts), fg: "text", bold: true }],
     [{ text: `step ${stepOf(facts)} of ${STEPS.length}${elapsed ? ` · ${elapsed}` : ""}`, fg: "muted" }],
     [{ text: view.status, fg: "warning" }],
     ...keys,
@@ -270,7 +257,7 @@ function scratchRows(input: LiveInput): { rows: Line[]; scratch?: NonNullable<Li
   const area = { top: compact ? 1 : 1, left: compact ? 0 : 2, width: textWidthRoom, rows: room, first }
   const cursor = column !== undefined && current ? { row: area.top + cursorIndex - first, col: area.left + column } : undefined
   const out = { ...area, ...(cursor ? { cursor } : {}) }
-  if (compact) return { rows: [fit([{ text: `${input.spinner} `, fg: "primary" }, { text: "Scratchpad", fg: "text", bold: true }, { text: ` · ${hint}${elapsed ? ` · ${elapsed}` : ""}`, fg: "muted" }], width), ...body.map((line) => fit(line, width))], scratch: out }
+  if (compact) return { rows: [fit([{ text: lead(input), fg: "primary" }, { text: "Scratchpad", fg: "text", bold: true }, { text: ` · ${hint}${elapsed ? ` · ${elapsed}` : ""}`, fg: "muted" }], width), ...body.map((line) => fit(line, width))], scratch: out }
   return { rows: boxed({ title: "Scratchpad", right: `${hint}${elapsed ? ` · ${elapsed}` : ""}`, rows: body, width, tone: scratch.editing ? "borderActive" : "border" }), scratch: out }
 }
 
@@ -278,14 +265,14 @@ function scratchRows(input: LiveInput): { rows: Line[]; scratch?: NonNullable<Li
 export function liveRowsNeeded(mode: LiveMode, width: number, field = 0): number {
   const compact = width < LIVE_COMPACT_WIDTH
   if (mode === "quiet") return 1
-  if (mode === "panel") return compact ? 3 : 6
+  if (mode === "panel") return 2
   if (mode === "stats") return compact ? 5 : 7
   if (mode === "scratchpad") return compact ? 3 : 4
   return field + 2
 }
 
 /**
- * The compaction panel while the context is being compacted. `panel` is the framed default (phase, stage bar,
+ * The compaction panel while the context is being compacted. `panel` is the two-row default (stage with its bar,
  * tokens before and after), `stats` charts what the events reported, `arcade` and `scratchpad` host a game and the
  * project note, `quiet` is one line. A mode that does not fit `maxRows` gives way to a smaller one.
  */

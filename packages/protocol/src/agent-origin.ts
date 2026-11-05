@@ -80,3 +80,15 @@ export const AGENT_LIMIT_CAPABILITY = "limit:"
 export function agentRefusal({ what, ask }: { what: string; ask?: string | undefined }) {
   return `refused: ${what}. A session cannot change permissions, global settings or another session's authority from its own shell; only the user can. Do not look for another way in the shell. Ask the user to ${ask ?? "run it from their own terminal, or to change it in the TUI (/settings, /permissions)"}. For a daemon setting you may instead propose the exact change with the mendcode_settings tool (find it with tool_search); the user approves it on a card.`
 }
+
+/**
+ * The prompt a run submits, as one text and an image count: what a child's higher-permission card shows and the one
+ * submission the approval lets through. Undefined for a submission that also picks a model or an agent of its own.
+ */
+export function launchOf(command: { type: string; text?: string; name?: string; args?: string; contextText?: string | undefined; attachments?: readonly unknown[] | undefined; selection?: unknown }): { text: string; images: number } | undefined {
+  if (command.selection !== undefined) return undefined
+  const images = command.attachments?.length ?? 0
+  if (command.type === "user.submit" && typeof command.text === "string") return { text: command.text, images }
+  if (command.type === "commands.execute" && typeof command.name === "string") return { text: `/${command.name}${command.args ? ` ${command.args}` : ""}${command.contextText ?? ""}`, images }
+  return undefined
+}

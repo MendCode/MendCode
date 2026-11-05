@@ -26,6 +26,8 @@ export function commandTimeout(command: CommandInput | Command, defaultMs: numbe
   if (command.type === "task.run" && !command.input.background) return Math.max(defaultMs, 3_600_000)
   if (command.type === "continuity.wait") return Math.max(defaultMs, (command.timeoutMs ?? 10000) + 5000)
   if (command.type === "setup.ask") return Math.max(defaultMs, 35_000)
+  // From a session's shell, a mode above its own can wait on the user's card (daemon `ELEVATION_WAIT_MS`).
+  if (command.type === "session.permission.set" && command.launch) return Math.max(defaultMs, 125_000)
   if (command.type === "release.check") return Math.max(defaultMs, 30_000)
   // A PR review is two model passes over the whole diff; the hosted workflow's job stops at 30 minutes.
   if (command.type === "github.run" && command.input.review) return Math.max(defaultMs, 35 * 60_000)

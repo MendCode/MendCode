@@ -262,7 +262,7 @@ export function createChatRows(ctx: AppContext, actions: {
     const dock: Line[] = rich && state.dockOpen && dockRoom >= DOCK_HEIGHT && !(compactionLive.visible() && compactionLive.mode() === "scratchpad") ? [...dockRows(width, dockRoom), []] : []
     if (!dock.length) { state.scratchArea = undefined; state.scratchCursor = undefined }
     // The compaction panel takes what is left once the prompt, the footer and six rows of transcript are kept.
-    const live = compactionLive.rows({ width, room: height - agentRows.length - topbar.length - fixedAbove.length - dock.length - (findRow ? 1 : 0) - (working ? 1 : 0) - extAbove.length - commentRows.above.length - below.length - popup.length - promptTop.length - frameBottom.length - cardRows - 7 })
+    const live = compactionLive.rows({ indicator: workingBuilt !== undefined, width, room: height - agentRows.length - topbar.length - fixedAbove.length - dock.length - (findRow ? 1 : 0) - (working ? 1 : 0) - extAbove.length - commentRows.above.length - below.length - popup.length - promptTop.length - frameBottom.length - cardRows - 7 })
     if (live?.scratch) {
       state.scratchArea = { top: dock.length + live.scratch.top, left: live.scratch.left, width: live.scratch.width, rows: live.scratch.rows, first: live.scratch.first }
       state.scratchCursor = live.scratch.cursor ? { row: dock.length + live.scratch.cursor.row, col: live.scratch.cursor.col } : undefined

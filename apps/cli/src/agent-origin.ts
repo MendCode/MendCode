@@ -36,6 +36,13 @@ export function shownCommand(argv: readonly string[]) {
   return [PROGRAM_NAME, ...argv.map((word, index) => (/^--?(?:token|password|api-key|client-secret)$/i.test(argv[index - 1] ?? "") ? "…" : quote(word)))].join(" ").slice(0, 400)
 }
 
+/** The whole command for the user's own terminal (nothing cut), in the folder it ran in when it did not name one. */
+export function operatorCommand(argv: readonly string[], directory: string) {
+  const words = argv.map((word, index) => (/^--?(?:token|password|api-key|client-secret)$/i.test(argv[index - 1] ?? "") ? "…" : quote(word)))
+  if (!argv.some((word) => /^--(?:cwd|project)(?:=|$)/.test(word))) words.splice(argv.indexOf("run") + 1, 0, "--cwd", quote(directory))
+  return [PROGRAM_NAME, ...words].join(" ")
+}
+
 export function originRefusal({ argv, what }: { argv: readonly string[]; what: string }) {
   return agentRefusal({ what: `\`${shownCommand(argv)}\` ${what}`, ask: "run it from their own terminal, or to change it in the TUI (/settings, /permissions)" })
 }

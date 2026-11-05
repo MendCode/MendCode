@@ -678,6 +678,11 @@ export const SessionPermissionSet = lazySchema(() => z.strictObject({
   type: z.literal("session.permission.set"),
   sessionId: SessionId,
   mode: PermissionMode,
+  /**
+   * The prompt the caller will submit next (`launchOf`). From a session's shell, a mode above that session's own is then
+   * put to the user on one card instead of refused at once (docs/permissions.md); approved, only this prompt goes through.
+   */
+  launch: z.strictObject({ text: z.string().max(MAX_INLINE_TEXT), images: z.number().int().min(0).max(32) }).optional(),
 }))
 
 /**

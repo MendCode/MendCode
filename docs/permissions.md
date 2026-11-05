@@ -283,6 +283,18 @@ review (`--approve` and `--dangerously-skip-permissions` are refused); it can de
 started. A caller whose session cannot be identified counts as `ask`. Sub-agents the engine starts through its own tools
 are a different path and are unchanged.
 
+**A child with more authority, approved by you.** `mendcode run … --permission smart` (or `-c permission=smart`) from a
+session in a lower mode is not refused at once when you are there to decide. If a terminal of yours has the launching
+session open (or, failing that, another session of its project), one card appears there: the model, the folder, extra
+folders, the mode, the title, the turn limit and the prompt (shortened on the card when long; a replaced or appended system
+prompt is named). Approve once starts that child in that mode with exactly that prompt; the launching session cannot send
+it anything else afterwards (it can still read it, stop it, lower its mode or remove it). Deny, dismissing the card, or no
+answer within 120 seconds keeps the refusal, and the empty child is removed. With no terminal of yours on it (a headless
+run, a loop, only remote or peer clients connected) it is refused at once, as before, and the error ends with the exact
+command to run from your own terminal. Only `edits` and `smart` can be asked for this way, never `full`, only for a child
+the caller has just started, and only your local terminal can approve (a remote or peer client can only dismiss the
+card). Nothing is raised without your answer. Every tier.
+
 **Another data directory** is not yours to protect: `mendcode --dir /tmp/x …` from a session's shell talks to another
 daemon and is not held back by the tool or the CLI (that daemon applies the same rules to its own sessions). `upgrade` and
 `uninstall` are refused whatever directory they name.

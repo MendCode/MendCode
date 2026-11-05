@@ -95,7 +95,7 @@ echo "summarize the diff" | mendcode run --ephemeral --tools read,grep --exclude
 | `--exclude-tools a,b` | Removes tools from whatever is allowed. Combines with `--tools`. |
 | `--offline` | Global flag. Removes the tools that reach the network on their own (`webfetch`, `websearch`, `image_gen`) from the session started by this invocation, for `run` and the TUI. It does not block model provider calls, MCP servers or commands the model runs in `shell`. |
 | `--system-prompt TEXT` / `--append-system-prompt TEXT` | Replaces, or extends, the project's system prompt for this run's session. |
-| `--permission ask\|edits\|plan\|smart` | Starts the run in that permission mode. `full` is not accepted here. |
+| `--permission ask\|edits\|plan\|smart` | Starts the run in that permission mode. `full` is not accepted here. From a session's own shell, a mode above that session's is put to you on one card when your terminal has the session or its project open, and refused otherwise ([permissions](permissions.md#what-a-session-cannot-do-from-its-own-shell)). |
 | `-c`, `--config KEY=VALUE` | Per-run override, repeatable. `-c` followed by `KEY=VALUE` is a config override; a bare `-c` stays `--continue`. Supported keys (dashes or underscores): `model`, `agent`, `variant`, `permission`, `max_turns`, `tools`, `exclude_tools`, `system_prompt`, `append_system_prompt`, `output_schema`, `output_last_message`, `offline`, `ephemeral`, `thinking`. An explicit flag wins over its key. Other keys are a usage error: overrides never edit global settings. |
 | stdin | A piped stdin is appended to the message arguments; `run -` with only stdin works too. |
 
@@ -206,6 +206,7 @@ mendcode recipe list
 mendcode recipe apply <name>
 
 mendcode usage [--days N]
+mendcode usage --quota [--json]
 mendcode run [--json] [--approve] [--session ID] "prompt"
 mendcode export <id> [--json] [--reasoning]
 mendcode help

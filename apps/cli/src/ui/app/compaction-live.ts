@@ -70,8 +70,8 @@ export function createCompactionLive(ctx: AppContext, actions: { editScratch(): 
     }
   }
 
-  /** The panel's rows for `width` columns and at most `room` rows, margin included; undefined when nothing shows. */
-  function rows(request: { width: number; room: number }): { rows: Line[]; scratch?: Scratch } | undefined {
+  /** The panel's rows for `width` columns and at most `room` rows, margin included; undefined when nothing shows. `indicator` says the activity line already shows a spinner, so the panel draws none. */
+  function rows(request: { width: number; room: number; indicator?: boolean }): { rows: Line[]; scratch?: Scratch } | undefined {
     live.scratchPanel = false
     arcadeShown = false
     if (!visible() || !isLoaded(moduleName()) || request.room < 1) {
@@ -93,7 +93,8 @@ export function createCompactionLive(ctx: AppContext, actions: { editScratch(): 
       ...(state.compactionFacts.lastCall ? { lastCall: state.compactionFacts.lastCall } : {}),
       limit: { tokens: state.contextReport?.compactAtTokens ?? compactFallback(state), kind: "threshold" },
       now: ctx.now(),
-      spinner: state.reducedMotion ? "⋯" : SPINNER_FRAMES[state.spinFrame % SPINNER_FRAMES.length]!,
+      spinner: request.indicator ? "" : state.reducedMotion ? "⋯" : SPINNER_FRAMES[state.spinFrame % SPINNER_FRAMES.length]!,
+      progress: state.tuiProfile.compactionProgress,
       ...(view ? { arcade: { view, focused: live.focused, fieldRows: view.rows.length } } : {}),
       scratch: { text: state.scratchNote, editing: state.editingScratch !== undefined, editor: ctx.scratchEditor, readOnly: input.remote?.readOnly === true },
     })

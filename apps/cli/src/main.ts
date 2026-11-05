@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import { parseRemoteFlags, parseTokenCommand, remoteTransport, REMOTE_DISABLED_NOTE, runTokenCommand } from "./remote"
-import { createClient } from "@mendcode/client"
+import { createClient, type CommandInput } from "@mendcode/client"
 import { defaultLocalTransport, localEndpointPath, readLocalEndpoint } from "@mendcode/client/local-endpoint"
 import type { GlobalEvent, SessionEvent, SessionId, SessionSummary, Settings, ThemesReport } from "@mendcode/protocol"
 import type { ParseResult } from "./automation"
@@ -31,8 +31,8 @@ import { parseDocsCommand } from "./docs-args"
 import { parsePackageFileCommand, runPackageFileCommand } from "./package-file-command"
 import { PROGRAM_NAME } from "@mendcode/program"
 import { createHerdrReporter, createTuiosChildren, createTuiosMeta, herdrPane, paneState, tuiosPane, waitingChild, type PaneChild, type PaneFacts } from "./herdr"
-import { guardClient, originCapabilities, originRefusal, startedBySession } from "./agent-origin"
-import { AGENT_SHELL_ENV, setBuildChannel } from "@mendcode/protocol/wire"
+import { guardClient, operatorCommand, originCapabilities, originRefusal, startedBySession } from "./agent-origin"
+import { AGENT_SHELL_ENV, launchOf, setBuildChannel } from "@mendcode/protocol/wire"
 import { EXTENSION_DIALOGS_CAPABILITY } from "@mendcode/extension-api"
 
 /** The product version shown on the home screen. */
@@ -162,6 +162,13 @@ if (viewCommand) process.exit(runViewCommand(viewCommand, { dataDir: viewCommand
 // `docs [topic]` prints a reference card of this version from the binary and local files; a daemon is asked only when one already runs. The cards load on demand.
 const docsCommand = parseDocsCommand(argv)
 if (docsCommand) process.exit(await (await import("./docs-run")).runDocsCommand(docsCommand, { dataDir: docsCommand.dir ?? envDataDir(), cwd: process.cwd(), out: process.stdout, err: process.stderr }))
+// `usage --quota` reads the quota windows a running daemon already holds: no daemon is started and no provider is asked.
+if (argv.includes("usage") && argv.includes("--quota")) {
+  const { parseUsageQuota, runUsageQuota } = await import("./usage-quota")
+  const quotaCommand = parseUsageQuota(argv)
+  if (quotaCommand && remoteAttach) { process.stderr.write("error: usage --quota is local-only\n"); process.exit(64) }
+  if (quotaCommand) process.exit(await runUsageQuota(quotaCommand, { dataDir: envDataDir(), out: process.stdout, err: process.stderr }))
+}
 // `profile new|check` work on profile folders only: no daemon, no terminal.
 const packageFileCommand = parsePackageFileCommand(argv)
 if (packageFileCommand) process.exit(await runPackageFileCommand(packageFileCommand, { cwd: process.cwd(), version: CLI_VERSION, out: process.stdout, err: process.stderr }))
@@ -761,7 +768,7 @@ async function extraDirectories(entries: readonly string[]) {
 }
 
 /** Scripted-run limits and the session's permission mode reach the daemon before anything is submitted; a daemon that cannot honour them fails the run instead of running it unrestricted. */
-async function applyRunLimits(options: Startup, target: SessionId, instruction?: string) {
+async function applyRunLimits(options: Startup, target: SessionId, instruction?: string, submission?: CommandInput) {
   const appendSystemPrompt = [options.appendSystemPrompt, instruction].filter(Boolean).join("\n\n")
   const limits = {
     ...(options.maxTurns ? { maxSteps: options.maxTurns } : {}),
@@ -778,8 +785,17 @@ async function applyRunLimits(options: Startup, target: SessionId, instruction?:
     if (!reply.ok) throw new Error(`the daemon did not accept the run limits (${reply.error.message}); restart it with --restart-daemon`)
   }
   if (options.permission) {
-    const reply = await client.send({ type: "session.permission.set", sessionId: target, mode: options.permission })
-    if (!reply.ok) throw new Error(reply.error.message)
+    // The prompt goes along: from a session's shell (which the daemon recognises, whatever this environment says), a mode
+    // above that session's own is then put to the user on a card instead of refused at once. Other clients ignore it.
+    const launch = submission ? launchOf(submission as Parameters<typeof launchOf>[0]) : undefined
+    const reply = await client.send({ type: "session.permission.set", sessionId: target, mode: options.permission, ...(launch ? { launch } : {}) })
+    if (!reply.ok) {
+      const unapproved = reply.error.code === "forbidden" && reply.error.message.includes("; not approved: ")
+      if (!unapproved) throw new Error(reply.error.message)
+      // The child this run just made never ran: it does not stay behind as an empty session.
+      if (!options.session && !options.continue) await deleteSession(target)
+      throw new Error(`${reply.error.message}\nAn operator starts it from their own terminal with:\n  ${operatorCommand(process.argv.slice(2), directory!)}`)
+    }
   }
   // Flags MendCode does not know belong to an extension; the daemon refuses one no extension of the project declares.
   if (options.extensionFlags) {
@@ -798,8 +814,8 @@ if (startup?.kind === "tui" && (startup.offline || startup.addDirs || startup.no
 if (startup?.kind === "run") {
   let submission: Awaited<ReturnType<typeof prepareRunSubmission>>
   try {
-    await applyRunLimits(startup, sessionId!, runOutput?.instruction)
     submission = await prepareRunSubmission(client, startup, sessionId!, directory!, runPrompt, remoteAttach)
+    await applyRunLimits(startup, sessionId!, runOutput?.instruction, submission)
   } catch (error) {
     process.stderr.write(`error: ${error instanceof Error ? error.message : String(error)}\n`)
     if (startup.ephemeral) await deleteSession(sessionId!)

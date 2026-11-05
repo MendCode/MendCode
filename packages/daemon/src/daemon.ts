@@ -133,6 +133,7 @@ import { createSecretsService } from "./secrets"
 import { createEngineHooks, createExtensions, createPromptFiles, forgetSessionEntries, type DaemonExtensions, type PromptFiles } from "./extensions"
 import { createExtensionSessions } from "./extension-sessions"
 import { createExtensionDialogs, DIALOGS_CAPABILITY } from "./extension-dialogs"
+import { createChildElevation, isHumanTerminal } from "./child-elevation"
 import { createStatusScripts } from "./status-scripts"
 import { approvalRulePatch, offerFor } from "./approval-rules"
 import { createShellHooks } from "./shell-hooks"
@@ -217,6 +218,7 @@ import {
   type Settings,
   type SessionId,
   type UsageProfile,
+  agentRefusal,
 } from "@mendcode/protocol"
 import { effectiveSettings, featureOn, modelContextOf } from "@mendcode/protocol/wire"
 import {
@@ -866,6 +868,40 @@ export async function startDaemon(options: DaemonOptions) {
     turnId: () => ids("turn"),
     emit: (event) => void sessionSink.append(event),
     mask: (sessionId, text) => secrets.mask(sessionId, text),
+  })
+  const humanTerminal = (connection: Connection) => isHumanTerminal(connection)
+  /** A session's shell asking for a child above its own mode: one card to the user (child-elevation.ts). */
+  const childElevation = createChildElevation({
+    humanSessions(launcher) {
+      const project = store.sessionDirectory(launcher)
+      const open = [...connections].filter(humanTerminal).flatMap((connection) => [...connection.subscriptions.keys()])
+      const nearby = project ? open.filter((id) => id !== launcher && store.sessionDirectory(id) !== undefined && canonicalDir(store.sessionDirectory(id)!) === canonicalDir(project)) : []
+      return [...new Set([...open.filter((id) => id === launcher), ...nearby])]
+    },
+    turnOf: (sessionId) => actors.get(sessionId)?.snapshot().turnId,
+    requestId: () => ids("request"),
+    turnId: () => ids("turn"),
+    emit: (event) => void sessionSink.append(event),
+    mask: (sessionId, text) => secrets.mask(sessionId, text),
+    facts(child) {
+      const directory = store.sessionDirectory(child) ?? ""
+      const model = resolveModel({ role: "main", session: store.sessionModel(child), roles: rolesFor(store.settings.get(), directory), catalog })
+      const limits = runLimits.get(child)
+      const agent = store.sessionAgent(child)
+      return {
+        title: store.sessionInfo(child)?.title ?? "",
+        directory,
+        model: `${model.model}${model.effort ? ` (effort ${model.effort})` : ""}`,
+        ...(agent && agent !== "build" ? { agent } : {}),
+        ...(limits?.addDirs?.length ? { addDirs: limits.addDirs } : {}),
+        ...(limits?.maxSteps ? { maxTurns: limits.maxSteps } : {}),
+        ...(limits?.systemPrompt !== undefined ? { systemPrompt: "replaced" as const } : limits?.appendSystemPrompt ? { systemPrompt: "appended" as const } : {}),
+      }
+    },
+    fresh: (child) => store.turns.list(child).length === 0 && store.queueOf(child).length === 0 && actors.get(child)?.snapshot().turnId === undefined,
+    async apply(child, mode, clientId) {
+      await actorFor(child)?.handle({ id: ids("command"), clientId: (clientId ?? taskClientId) as never, type: "session.permission.set", sessionId: child, mode })
+    },
   })
   /**
    * Shell command hooks (`hooks.json`): user ones run as configured, project ones only in a directory trusted for project
@@ -3053,6 +3089,7 @@ export async function startDaemon(options: DaemonOptions) {
     secrets.drop(sessionId)
     grants.revoke(sessionId, "all")
     runLimits.delete(sessionId)
+    childElevation.forget(sessionId)
     forgetSessionEntries(options.dir, sessionId)
     sessionPermissions.delete(sessionId)
     selfPackagePorts.delete(sessionId)
@@ -3199,7 +3236,17 @@ export async function startDaemon(options: DaemonOptions) {
     // A client a session started from its own shell never changes permissions, settings or another session's authority.
     if (connection.agent && command.type !== "hello") {
       const refusal = agentGate.check(connection.agent, command)
+      // A child above the caller's own mode, with the prompt it will run: the user may approve it on one card.
+      if (refusal && command.type === "session.permission.set" && command.launch) {
+        const origin = connection.agent
+        const ceiling = agentGate.ceiling(origin)
+        const why = await childElevation.request({ origin, child: command.sessionId, mode: command.mode, ceiling, text: command.launch.text, images: command.launch.images, startedByCaller: agentGate.startedHere(origin, command.sessionId), alive: () => connections.has(connection) })
+        if (why) return reply(connection, command.id, { ok: false, code: "forbidden", message: `${refusal.replace(/\.(?= A session cannot)/, `; not approved: ${why}.`)}` })
+        return reply(connection, command.id, { ok: true })
+      }
       if (refusal) return reply(connection, command.id, { ok: false, code: "forbidden", message: refusal })
+      const held = childElevation.check(connection.agent, command, agentGate.ceiling(connection.agent))
+      if (held) return reply(connection, command.id, { ok: false, code: "forbidden", message: `[DAEMON]: ${agentRefusal({ what: held })}` })
     }
     // A read-only peer observes projects the daemon already knows; it cannot point a read at any other folder of the machine.
     if (connection.peer?.readOnly && command.type !== "hello" && command.type !== "session.list" && "directory" in command && typeof command.directory === "string" && !knownProjectDirectory(command.directory)) {
@@ -3779,7 +3826,7 @@ export async function startDaemon(options: DaemonOptions) {
           if (problem) return reply(connection, command.id, { ok: false, code: "target_mismatch", message: `[DAEMON]: ${problem}` })
         }
         if (command.type === "request.resolve") {
-          const result = extensionDialogs.resolve(command) ?? continuity.resolve(command)
+          const result = childElevation.resolve(command, humanTerminal(connection)) ?? extensionDialogs.resolve(command) ?? continuity.resolve(command)
           if (result) return reply(connection, command.id, result)
         }
         const actor = actorFor(command.sessionId)
@@ -6503,6 +6550,7 @@ export async function startDaemon(options: DaemonOptions) {
     await extraction.stop()
     continuity.stop()
     extensionDialogs.stop()
+    childElevation.stop()
     background.stop()
     interactive.stop()
     statusLines.stop()

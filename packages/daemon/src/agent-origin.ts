@@ -146,6 +146,8 @@ export function createAgentGate(input: { modeOf(sessionId: SessionId): Permissio
     ceiling,
     /** The mode a session this client starts gets: the usual one, never above the caller's own. */
     cap: (origin: AgentOrigin, mode: PermissionMode): PermissionMode => capPermission(mode, ceiling(origin)),
+    /** Whether this calling session (known by id) started `target`. */
+    startedHere: (origin: AgentOrigin, target: string) => Boolean(origin.sessionId) && created.get(target) === origin.sessionId,
     started(origin: AgentOrigin, sessionId: string) {
       created.set(sessionId, origin.sessionId ?? "")
       if (created.size > MAX_CREATED) created.delete(created.keys().next().value!)
