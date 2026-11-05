@@ -107,9 +107,12 @@ export function selectAdvisorImages({ wanted, messages }: { wanted: readonly str
 }
 
 const EDIT_TOOLS = new Set(["edit", "write", "apply_patch"])
+/** The native engine's command tools: `shell`, and `shell_session` whose `start` carries the command. */
+const COMMAND_TOOLS = new Set(["shell", "shell_session"])
 const VERIFY = /\b(test|tests|tsc|typecheck|lint|build|check|pytest|vitest|jest|cargo|go vet|mypy|ruff)\b/i
 
-function editedPaths(call: { args: unknown }): string[] {
+/** The files an edit, write or apply_patch call names. */
+export function editedPaths(call: { args: unknown }): string[] {
   const args = call.args
   if (args === null || typeof args !== "object") return []
   const record = args as Record<string, unknown>
@@ -117,6 +120,19 @@ function editedPaths(call: { args: unknown }): string[] {
   if (direct.length) return direct
   const patch = Object.values(record).find((value): value is string => typeof value === "string" && /^\*\*\* (?:Add|Update|Delete) File: /m.test(value))
   return patch ? [...patch.matchAll(/^\*\*\* (?:Add|Update|Delete) File: (.+)$/gm)].map((match) => match[1]!.trim()) : []
+}
+
+const lines = (text: unknown) => typeof text === "string" && text ? text.split("\n").length : 0
+
+/** How many lines an edit, write or apply_patch call changes: the larger side of each replacement, a write's content, a patch's +/- lines. */
+export function changedLines(call: { name: string; args: unknown }): number {
+  if (call.args === null || typeof call.args !== "object") return 0
+  const record = call.args as Record<string, unknown>
+  if (call.name === "write") return lines(record.content)
+  if (call.name === "apply_patch") return typeof record.patch === "string" ? record.patch.split("\n").filter((line) => /^[+-]/.test(line)).length : 0
+  if (call.name !== "edit") return 0
+  const pairs = [{ oldString: record.oldString, newString: record.newString }, ...(Array.isArray(record.edits) ? record.edits as Array<Record<string, unknown>> : [])]
+  return pairs.reduce((total, pair) => total + Math.max(lines(pair.oldString), lines(pair.newString)), 0)
 }
 
 /**
@@ -133,7 +149,7 @@ export function advisorSessionContext({ messages, requestIndex }: { messages: re
   messages.forEach((message, index) => {
     if (message.role !== "assistant") return
     const inTurn = index >= turnStart
-    const verification = message.toolCalls.filter((call) => call.name === "bash" && VERIFY.test(String((call.args as { command?: unknown } | null)?.command ?? "")))
+    const verification = message.toolCalls.filter((call) => COMMAND_TOOLS.has(call.name) && VERIFY.test(String((call.args as { command?: unknown } | null)?.command ?? "")))
     for (const call of message.toolCalls) {
       if (!EDIT_TOOLS.has(call.name) || results.get(call.callId)?.isError) continue
       for (const path of editedPaths(call)) { const list = inTurn ? now : earlier; if (!list.includes(path)) list.push(path) }

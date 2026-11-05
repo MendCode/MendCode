@@ -104,6 +104,7 @@ export function createChildTasks(options: {
   }
   const port = {
     isChild: (sessionId) => get(sessionId) !== undefined,
+    nests: (sessionId) => lineage(sessionId).depth < (store.settings.get().subagentDepth ?? 1),
     forkOf: (sessionId) => { const task = get(sessionId); return task?.fork ? task.parentId : undefined },
     async run(parentId, input, signal, command?: { displayText: string; attachments: BlobRef[]; model?: ModelChoice }) {
       if (!store.hasSession(parentId)) throw new Error("unknown parent session")

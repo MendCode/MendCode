@@ -115,6 +115,13 @@ describe("working row", () => {
     expect(toolPhase("mcp__x__do")).toBe("Running command...")
   })
 
+  test("an advisor consultation reads as consulting, whatever words its question holds", () => {
+    expect(toolPhase("advisor: The executor is about to finish this turn. Check the diff for bugs and unverified claims.")).toBe("Consulting advisor...")
+    expect(toolPhase("advisor: Is a recursive parser fine here?")).toBe("Consulting advisor...")
+    expect(toolPhase("mcp__mendcode__advisor")).toBe("Consulting advisor...")
+    expect(toolPhase("read advisor.ts")).toBe("Reading...")
+  })
+
   test("a retry shows the countdown in the error color and always keeps it in view", () => {
     const retry = { attempt: 2, nextAt: NOW + 12_000, message: "429 rate limited ".repeat(20) }
     const row = renderWorkingRow({ width: 100, margin: 3, spinner: "⠋", phase: "Generating...", retry, now: NOW })

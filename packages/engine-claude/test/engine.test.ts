@@ -54,6 +54,31 @@ test("a bridged turn that leaves a background agent running keeps its process: t
   h.engine.stop()
 })
 
+test("a kept process that has to start again uses the bridge of the turn that joins it, not the released one of the turn that started it", async () => {
+  let turns = 0
+  const started = fakeClaude({
+    onUser(api) {
+      api.push({ type: "system", subtype: "init", session_id: "cc-session-1" })
+      if (++turns === 1) api.push({ type: "system", subtype: "background_tasks_changed", tasks: [{ task_id: "b1", task_type: "local_bash", description: "Run dashboard dev server" }] })
+      api.push(result())
+    },
+  })
+  const restarted = fakeClaude({ onUser(api) { api.push({ type: "system", subtype: "init", session_id: "cc-session-1" }); api.push(result()) } })
+  const h = engineWith([started, restarted])
+  const first = turnInput()
+  const firstBridge = { args: ["--mcp-config", "/tmp/released-turn/mcp.json"], cwd: "/temporary-project", scrub: (text: string) => text }
+  expect(await h.engine.runTurn({ ...first.input, externalMcp: firstBridge })).toEqual({ status: "ok" })
+  expect(h.engine.busy()).toBe(true)
+  // The first turn's bridge folder is gone with its turn; a new effort restarts the kept process for the next turn.
+  h.setModel({ model: "haiku", effort: "high" })
+  const secondBridge = { args: ["--mcp-config", "/tmp/current-turn/mcp.json"], cwd: "/temporary-project", scrub: (text: string) => text }
+  expect(await h.engine.runTurn({ ...turnInput({ sessionId: first.input.sessionId }).input, externalMcp: secondBridge })).toEqual({ status: "ok" })
+  expect(h.spawned).toHaveLength(2)
+  expect(h.spawned[1]!.args).toEqual(expect.arrayContaining(secondBridge.args))
+  expect(h.spawned[1]!.args).not.toContain("/tmp/released-turn/mcp.json")
+  h.engine.stop()
+})
+
 test("a cancel while the attachments are read sends nothing: the turn ends as cancelled and Claude Code never hears the prompt", async () => {
   const fake = fakeClaude({ onUser(api) { api.push(result()) } })
   const abort = new AbortController()
@@ -122,6 +147,26 @@ test("One tree hears Bash output and file writes through a PostToolUse hook, and
   const answers = fake.written.filter((message) => message.type === "control_response")
   expect(answers).toContainEqual({ type: "control_response", response: { subtype: "success", request_id: "hook-1", response: { hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: "[one tree] apps/art.ts is «Pets»'s" } } } })
   expect(answers).toContainEqual({ type: "control_response", response: { subtype: "success", request_id: "hook-2", response: {} } })
+  h.engine.stop()
+})
+
+test("Claude Code's own sub-agents are refused the advisor, workflows and MendCode's sub-agent tools; the main agent is not", async () => {
+  const call = (id: string, tool: string, agent?: string) => ({ type: "control_request", request_id: id, request: { subtype: "hook_callback", callback_id: "mendcode-subagent-tools", input: { hook_event_name: "PreToolUse", tool_name: tool, tool_input: {}, ...(agent ? { agent_id: agent } : {}) } } })
+  const fake = fakeClaude({ onUser(api) {
+    api.push({ type: "system", subtype: "init", session_id: "cc-session-1" })
+    api.push(call("hook-1", "mcp__mendcode__advisor", "a1"))
+    api.push(call("hook-2", "mcp__mendcode_threads__delegate_task", "a1"))
+    api.push(call("hook-3", "mcp__mendcode__advisor"))
+    setTimeout(() => api.push(result()), 5)
+  } })
+  const h = engineWith([fake])
+  expect(await h.engine.runTurn(turnInput().input)).toEqual({ status: "ok" })
+  const matcher = new RegExp(`^(${fake.written[0].request.hooks.PreToolUse[0].matcher})$`)
+  for (const name of ["mcp__mendcode__advisor", "mcp__mendcode__workflow_start", "mcp__mendcode_threads__delegate_task", "mcp__mendcode__loop"]) expect(matcher.test(name)).toBe(true)
+  for (const name of ["mcp__mendcode__graph_find", "mcp__mendcode__webfetch", "Bash"]) expect(matcher.test(name)).toBe(false)
+  const answers = fake.written.filter((message) => message.type === "control_response")
+  for (const id of ["hook-1", "hook-2"]) expect(answers).toContainEqual({ type: "control_response", response: { subtype: "success", request_id: id, response: { hookSpecificOutput: expect.objectContaining({ hookEventName: "PreToolUse", permissionDecision: "deny" }) } } })
+  expect(answers).toContainEqual({ type: "control_response", response: { subtype: "success", request_id: "hook-3", response: {} } })
   h.engine.stop()
 })
 
@@ -553,6 +598,15 @@ describe("claude engine turns", () => {
   test("without claude installed the turn fails with the install hint", async () => {
     const { engine } = engineWith([])
     expect(await engine.runTurn(turnInput().input)).toEqual({ status: "error", code: "claude_missing", message: "[CLAUDE]: `claude` was not found. Install Claude Code and run `claude auth login`." })
+  })
+
+  test("a claude that starts and exits at once with a \"not found\" of its own is a start error with its words, not a missing claude", async () => {
+    const refusing = () => fakeClaude({ onControl: (api, request) => request.subtype === "initialize" ? (api.exit("Error: Invalid MCP configuration:\nMCP config file not found: /tmp/gone/mcp.json"), null) : {} })
+    const { engine } = engineWith([refusing(), refusing()])
+    const outcome = await engine.runTurn(turnInput().input)
+    expect(outcome).toMatchObject({ status: "error", code: "claude_start" })
+    expect((outcome as { message: string }).message).toContain("MCP config file not found: /tmp/gone/mcp.json")
+    engine.stop()
   })
 
   test("a failed result is an error with Claude's message", async () => {
@@ -1189,6 +1243,52 @@ describe("claude engine background tasks", () => {
     expect(await h.engine.runTurn(notice.input)).toEqual({ status: "ok" })
     expect(fake.written.filter((message) => message.type === "user").length).toBe(userWrites)
     expect(notice.events.some((event) => event.type === "item.completed" && "text" in event && event.text === "It finished with exit code 0.")).toBe(true)
+    h.engine.stop()
+  })
+
+  test("a resumed process's notice about a task an earlier process left is not queued: Claude Code does not answer it, so it would reach the model as the user's words", async () => {
+    const fake = fakeClaude({ onUser(api) { api.push({ type: "system", subtype: "init", session_id: "cc-session-1" }); api.push(result()) } })
+    const notices: string[] = []
+    const h = engineWith([fake], { notify: (_sessionId, text) => void notices.push(text) })
+    expect(await h.engine.runTurn(turnInput().input)).toEqual({ status: "ok" })
+    fake.api.push({ type: "system", subtype: "task_notification", task_id: "b9old", status: "failed", output_file: "", summary: "Orphaned by a previous Claude Code process exit and reported in an aggregate summary." })
+    await Bun.sleep(10)
+    expect(notices).toEqual([])
+    expect(h.engine.busy()).toBe(false)
+    h.engine.stop()
+  })
+
+  test("the tasks a process reports killed while MendCode ends it queue no notice", async () => {
+    const fake = fakeClaude({
+      onUser(api) {
+        api.push({ type: "system", subtype: "init", session_id: "cc-session-1" })
+        api.push({ type: "system", subtype: "background_tasks_changed", tasks: [{ task_id: "b1", task_type: "local_bash", description: "Run dashboard dev server" }] })
+        api.push(result())
+      },
+    })
+    const notices: string[] = []
+    const h = engineWith([fake], { notify: (_sessionId, text) => void notices.push(text) })
+    expect(await h.engine.runTurn(turnInput().input)).toEqual({ status: "ok" })
+    h.engine.stop("restart")
+    fake.api.push({ type: "system", subtype: "task_notification", task_id: "b1", status: "killed", output_file: "", summary: "Run dashboard dev server against local API" })
+    await Bun.sleep(10)
+    expect(notices).toEqual([])
+  })
+
+  test("a notice for a task without an output file has no empty Output line", async () => {
+    const fake = fakeClaude({
+      onUser(api) {
+        api.push({ type: "system", subtype: "init", session_id: "cc-session-1" })
+        api.push({ type: "system", subtype: "background_tasks_changed", tasks: [{ task_id: "b2", task_type: "local_bash", description: "Run tests" }] })
+        api.push(result())
+      },
+    })
+    const notices: string[] = []
+    const h = engineWith([fake], { notify: (_sessionId, text) => void notices.push(text) })
+    expect(await h.engine.runTurn(turnInput().input)).toEqual({ status: "ok" })
+    fake.api.push({ type: "system", subtype: "task_notification", task_id: "b2", status: "completed", output_file: "", summary: "Run tests completed" })
+    await Bun.sleep(10)
+    expect(notices).toEqual(["Run tests completed"])
     h.engine.stop()
   })
 

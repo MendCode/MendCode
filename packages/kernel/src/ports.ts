@@ -17,6 +17,8 @@ export type TaskPort = {
   run(parentId: SessionId, input: import("@mendcode/protocol").TaskInput, signal: AbortSignal): Promise<import("@mendcode/protocol").TaskRecord>
   status(parentId: SessionId, input: { task_id?: string | undefined; action?: "list" | "get" | "wait" | "cancel" | undefined; timeout_ms?: number | undefined }, signal: AbortSignal): Promise<string>
   isChild(sessionId: SessionId): boolean
+  /** Whether this session may start sub-agents of its own (`subagentDepth`); a sub-agent without it is offered no way to. */
+  nests?(sessionId: SessionId): boolean
   /** The parent of a child launched with `fork: true`, whose first turn starts from that parent's context. */
   forkOf?(sessionId: SessionId): SessionId | undefined
 }

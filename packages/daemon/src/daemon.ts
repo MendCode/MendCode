@@ -1131,6 +1131,8 @@ export async function startDaemon(options: DaemonOptions) {
       if (turnId) await actorFor(sessionId)!.handle({ id: ids("command"), clientId: taskClientId, type: "turn.cancel", sessionId, turnId })
     },
   })
+  /** Whether a session may start sub-agents: a side question never, a workflow task only when `subagentDepth` nests, anything else below that depth. */
+  const nests = (sessionId: SessionId) => asideSessions.isAside(sessionId) ? false : workflows.execution(sessionId) !== undefined ? (store.settings.get().subagentDepth ?? 1) > 1 : tasks.port.nests(sessionId)
   /** `@name message` to a child this session already has: it continues that child (docs/agents.md, "`@agent` mentions"). */
   const mentionRouting = createMentionRouting({
     children: (parentId) => tasks.list(parentId),
@@ -1174,7 +1176,7 @@ export async function startDaemon(options: DaemonOptions) {
     auxiliary: auxiliaryUsage,
     trace,
     // A side session (`/btw`) runs as a child: its agent's tools and model, no orientation, no recall.
-    tasks: { ...tasks.modelPort, isChild: (sessionId) => tasks.modelPort.isChild(sessionId) || asideSessions.isAside(sessionId) },
+    tasks: { ...tasks.modelPort, isChild: (sessionId) => tasks.modelPort.isChild(sessionId) || asideSessions.isAside(sessionId), nests },
     clock,
     store,
     grants,
@@ -1361,7 +1363,8 @@ export async function startDaemon(options: DaemonOptions) {
       const key = model.model.startsWith("acp:") ? acpAgentKey(model.model) as `acp:${string}` : modelEngine(model, catalog) ?? options.info?.engine
       let lease: ReturnType<NonNullable<typeof threadBridge>["open"]> | undefined
       try {
-        if ((key === "claude" || key === "codex" || key?.startsWith("acp:")) && threadMcpEnabled(store.settings.get(), key as BridgeEngine, options.safeMode)) {
+        // A sub-agent gets no thread bridge (no sub-agents of its own) unless `subagentDepth` lets it nest.
+        if (nests(turn.sessionId) && (key === "claude" || key === "codex" || key?.startsWith("acp:")) && threadMcpEnabled(store.settings.get(), key as BridgeEngine, options.safeMode)) {
           const bridgeKey = key as BridgeEngine
           const module = await import("./thread-mcp")
           const { createOrchestrationReceipts } = await import("./orchestration-receipts")
@@ -1402,6 +1405,8 @@ export async function startDaemon(options: DaemonOptions) {
         const leave = key === "claude" || key === "codex" || key?.startsWith("acp:") ? hostBridge.enter(routed) : undefined
         const outcome = await rawEngine.runTurn(routed).finally(() => leave?.())
         if (outcome.status === "ok") carried.commit()
+        // The native engine keeps its own turn in its history however it ended: it is not handed to it again as another engine's.
+        else if (!external) carried.ran()
         return outcome.status === "error" && lease ? { ...outcome, message: lease.scrub(outcome.message) } : outcome
       } catch (error) {
         if (lease) throw new Error(lease.scrub(error instanceof Error ? error.message : String(error)))

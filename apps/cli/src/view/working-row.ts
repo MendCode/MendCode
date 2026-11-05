@@ -28,6 +28,7 @@ export function formatElapsed(ms: number) {
 }
 
 const TOOL_PHASES: ReadonlyArray<[RegExp, string]> = [
+  [/^advisor\b|__advisor\b/, "Consulting advisor..."],
   [/question/, "Waiting for answer..."],
   [/^task$|subagent/, "Waiting for subagents..."],
   [/web|fetch|browser|screenshot/, "Browsing..."],

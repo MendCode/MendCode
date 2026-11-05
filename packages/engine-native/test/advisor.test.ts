@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { redactSecrets, type SessionId } from "@mendcode/protocol"
-import { ADVISOR_EVIDENCE_LIMITS, advisorLimits, advisorOutput, advisorSessionContext, buildAdvisorBrief, createAdvisor, createAdvisorTracker, parseAdvisorVerdict, renderAdvisorFile, renderAdvisorFiles, selectAdvisorImages, type ModelMessage } from "../src"
+import { ADVISOR_EVIDENCE_LIMITS, COMPLETION_MIN_CHANGE, advisorLimits, advisorRequestIndex,changedLines, editedPaths,advisorOutput, advisorSessionContext, buildAdvisorBrief, createAdvisor, createAdvisorTracker, parseAdvisorVerdict, renderAdvisorFile, renderAdvisorFiles, selectAdvisorImages, type ModelMessage } from "../src"
 
 const session = "ses_advisor" as SessionId
 const mask = (text: string) => redactSecrets(text).text
@@ -23,6 +23,13 @@ describe("parseAdvisorVerdict", () => {
     expect(verdict.next).toHaveLength(6)
   })
 
+  test("keeps an optional code or ASCII example, trimmed and clamped, and omits a blank one", () => {
+    const sketch = "\n+------+\n| head |\n+------+\n  "
+    expect(parseAdvisorVerdict(JSON.stringify({ verdict: "revise", summary: "s", example: sketch })).example).toBe("+------+\n| head |\n+------+")
+    expect(parseAdvisorVerdict(JSON.stringify({ verdict: "revise", summary: "s", example: "x".repeat(9_000) })).example).toHaveLength(4_000)
+    expect("example" in parseAdvisorVerdict(JSON.stringify({ verdict: "proceed", summary: "s", example: "  " }))).toBe(false)
+  })
+
   test("garbage or an unknown verdict is a neutral proceed marked unparsable", () => {
     expect(parseAdvisorVerdict("I think it looks fine")).toMatchObject({ verdict: "proceed", fallback: "unparsable", summary: "I think it looks fine" })
     expect(parseAdvisorVerdict('{"verdict":"approve"}')).toMatchObject({ verdict: "proceed", fallback: "unparsable" })
@@ -34,8 +41,8 @@ describe("buildAdvisorBrief", () => {
     { role: "user", content: "old request" },
     { role: "assistant", content: "old answer", toolCalls: [] },
     { role: "user", content: "Fix the parser so empty input returns []" },
-    { role: "assistant", content: "", toolCalls: [{ callId: "c1", name: "bash", args: { command: "bun test" } }] },
-    { role: "tool", callId: "c1", name: "bash", output: `1 failed\nANTHROPIC_API_KEY=sk-ant-api03-${"a".repeat(90)}`, isError: true },
+    { role: "assistant", content: "", toolCalls: [{ callId: "c1", name: "shell", args: { command: "bun test" } }] },
+    { role: "tool", callId: "c1", name: "shell", output: `1 failed\nANTHROPIC_API_KEY=sk-ant-api03-${"a".repeat(90)}`, isError: true },
   ]
 
   test("carries the trigger, the latest request, plan, diff and the current turn, with secrets redacted", () => {
@@ -44,7 +51,7 @@ describe("buildAdvisorBrief", () => {
     expect(brief).toContain("Fix the parser so empty input returns []")
     expect(brief).toContain("1. guard empty input")
     expect(brief).toContain("+ if (!text) return []")
-    expect(brief).toContain("### tool bash (error)")
+    expect(brief).toContain("### tool shell (error)")
     expect(brief).not.toContain("old request")
     expect(brief).not.toContain("sk-ant-api03-aaaa")
   })
@@ -67,15 +74,39 @@ describe("createAdvisorTracker", () => {
 
   test("completion needs an unseen edit and runs once per turn", () => {
     const tracker = createAdvisorTracker()
+    const twoFiles = { paths: ["a.ts", "b.ts"], lines: 4 }
     expect(tracker.admit("completion", limits)).toBe(false)
-    tracker.noteEdit()
+    tracker.noteEdit(twoFiles)
     expect(tracker.admit("completion", limits)).toBe(true)
     tracker.consulted("completion")
-    tracker.noteEdit()
+    tracker.noteEdit(twoFiles)
     expect(tracker.admit("completion", limits)).toBe(false)
     tracker.resetTurn()
-    tracker.noteEdit()
+    tracker.noteEdit(twoFiles)
     expect(tracker.admit("completion", limits)).toBe(true)
+  })
+
+  test("completion skips a trivial turn: one file and few changed lines, summed over the turn", () => {
+    const tracker = createAdvisorTracker()
+    tracker.noteEdit({ paths: ["config.toml"], lines: 2 })
+    tracker.noteEdit({ paths: ["config.toml"], lines: COMPLETION_MIN_CHANGE.lines - 3 })
+    expect(tracker.admit("completion", limits)).toBe(false)
+    tracker.noteEdit({ paths: ["config.toml"], lines: 1 })
+    expect(tracker.admit("completion", limits)).toBe(true)
+    tracker.resetTurn()
+    tracker.noteEdit({ paths: ["config.toml"], lines: 1 })
+    expect(tracker.admit("completion", limits)).toBe(false)
+    tracker.noteEdit({ paths: ["theme.json"], lines: 1 })
+    expect(tracker.admit("completion", limits)).toBe(true)
+  })
+
+  test("changedLines counts each edit tool's own shape", () => {
+    expect(changedLines({ name: "edit", args: { path: "a.ts", oldString: "a\nb", newString: "c" } })).toBe(2)
+    expect(changedLines({ name: "edit", args: { path: "a.ts", edits: [{ oldString: "a", newString: "b\nc\nd" }, { oldString: "x", newString: "y" }] } })).toBe(4)
+    expect(changedLines({ name: "write", args: { path: "a.ts", content: "1\n2\n3" } })).toBe(3)
+    expect(changedLines({ name: "apply_patch", args: { patch: "*** Begin Patch\n*** Update File: a.ts\n@@\n-old\n+new\n keep\n*** Add File: b.ts\n+one\n*** End Patch" } })).toBe(3)
+    expect(editedPaths({ args: { patch: "*** Begin Patch\n*** Update File: a.ts\n*** Add File: b.ts\n+one\n*** End Patch" } })).toEqual(["a.ts", "b.ts"])
+    expect(changedLines({ name: "read", args: { path: "a.ts" } })).toBe(0)
   })
 
   test("per-turn and per-session caps and disabled checkpoints refuse", () => {
@@ -177,9 +208,9 @@ describe("advisor session context", () => {
     { role: "assistant", content: "", toolCalls: [{ callId: "e1", name: "edit", args: { path: "apps/api/old.ts" } }] },
     { role: "tool", callId: "e1", name: "edit", output: "ok", isError: false },
     { role: "user", content: "now fix the web page" },
-    { role: "assistant", content: "", toolCalls: [{ callId: "e2", name: "write", args: { path: "apps/web/new.html" } }, { callId: "b1", name: "bash", args: { command: "bun run typecheck" } }] },
+    { role: "assistant", content: "", toolCalls: [{ callId: "e2", name: "write", args: { path: "apps/web/new.html" } }, { callId: "b1", name: "shell", args: { command: "bun run typecheck" } }] },
     { role: "tool", callId: "e2", name: "write", output: "ok", isError: false },
-    { role: "tool", callId: "b1", name: "bash", output: "typecheck passed: 0 errors", isError: false },
+    { role: "tool", callId: "b1", name: "shell", output: "typecheck passed: 0 errors", isError: false },
   ]
 
   test("the brief separates earlier edits from this turn's and carries this turn's verification, within its cap", () => {
@@ -193,8 +224,27 @@ describe("advisor session context", () => {
   })
 
   test("a huge verification output cannot push the block past its cap", () => {
-    const loud: ModelMessage[] = [...messages.slice(0, 6), { role: "tool", callId: "b1", name: "bash", output: "z".repeat(200_000), isError: false }]
+    const loud: ModelMessage[] = [...messages.slice(0, 6), { role: "tool", callId: "b1", name: "shell", output: "z".repeat(200_000), isError: false }]
     expect(advisorSessionContext({ messages: loud, requestIndex: 3 }).length).toBeLessThanOrEqual(ADVISOR_EVIDENCE_LIMITS.contextMaxChars)
+  })
+
+  test("a screenshot read after the edits does not start the turn: the request, edits and checks stay this turn's", () => {
+    const image = { sha256: "a".repeat(64), mime: "image/png", bytes: 10, name: "after.png" }
+    const withShot: ModelMessage[] = [
+      ...messages,
+      { role: "assistant", content: "", toolCalls: [{ callId: "r1", name: "read", args: { path: "after.png" } }] },
+      { role: "tool", callId: "r1", name: "read", output: "image", isError: false },
+      { role: "user", content: "[image from read call]", attachments: [image] },
+      { role: "assistant", content: "", toolCalls: [{ callId: "t1", name: "todo", args: {} }] },
+      { role: "tool", callId: "t1", name: "todo", output: "3/3", isError: false },
+    ]
+    expect(advisorRequestIndex(withShot)).toBe(3)
+    const brief = buildAdvisorBrief({ messages: withShot, question: "Is it done?", trigger: "completion", diff: "+x", maxTokens: 24_000, mask })
+    expect(brief.slice(brief.indexOf("## Latest user request"), brief.indexOf("## Session context"))).toContain("now fix the web page")
+    const section = brief.slice(brief.indexOf("## Session context"), brief.indexOf("## Current diff"))
+    expect(section).toContain("in this turn: apps/web/new.html")
+    expect(section).toContain("typecheck passed: 0 errors")
+    expect(section).not.toContain("none recorded")
   })
 
   test("the evidence from the executor is part of the brief", () => {

@@ -71,6 +71,18 @@ const ONE_TREE_HOOK = "mendcode-one-tree"
 /** The Claude Code tools One tree hears about: the shell, whose output names files, and the ones that write a file. */
 const ONE_TREE_TOOLS = "Bash|Edit|Write|MultiEdit|NotebookEdit"
 
+/** The id of the `PreToolUse` hook that keeps MendCode's main-agent tools from Claude Code's own sub-agents. */
+const SUBAGENT_TOOLS_HOOK = "mendcode-subagent-tools"
+/** MendCode's tools only the main agent uses: the advisor, workflows, sub-agents of its own (threads, loops) and the user-facing ones. */
+const MAIN_AGENT_TOOLS = "mcp__mendcode__(advisor|workflow_.*|threads|loop|sidebar|remember|worktree|packages|pr_watch|session_meta)|mcp__mendcode_threads__.*"
+
+/** A `PreToolUse` answer: a call one of Claude Code's sub-agents makes (it carries `agent_id`) is refused, the main agent's goes on. */
+export function subagentToolAnswer(input: unknown) {
+  const hook = (input ?? {}) as { agent_id?: unknown; tool_name?: unknown }
+  if (typeof hook.agent_id !== "string" || !hook.agent_id) return {}
+  return { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: `${String(hook.tool_name)} is for the main agent only; a sub-agent does its task with its other tools and reports back.` } }
+}
+
 /** What a `PostToolUse` call wrote and printed, from Claude Code's hook input. */
 export function oneTreeCall(input: unknown): { written: string[]; output: string; cwd?: string; agent?: string } {
   const hook = (input ?? {}) as { tool_name?: unknown; tool_input?: Record<string, unknown>; tool_response?: unknown; cwd?: unknown; agent_id?: unknown }
@@ -97,6 +109,8 @@ type Connection = {
   closed: boolean
   /** Background tasks Claude Code reports running (`background_tasks_changed`): while any runs, the process is kept. */
   background: number
+  /** Every background task this process reported running: a notice about any other one (orphaned by an earlier process) is not this process's to answer. */
+  tasks: Set<string>
   /** A turn ended here before Claude Code finished stopping it (`CANCEL_GRACE_MS`): its last records are dropped up to its `result`. */
   draining?: boolean
   /**
@@ -206,6 +220,8 @@ export function createClaudeEngine(options: {
    */
   const kept = new Map<SessionId, ReturnType<typeof createClaudeEngine>>()
   const inTurn = new Set<ReturnType<typeof createClaudeEngine>>()
+  /** The bridge each bridged process starts with: the latest turn's, so a restart never points at a released lease. */
+  const bridges = new WeakMap<ReturnType<typeof createClaudeEngine>, { current: NonNullable<TurnInput["externalMcp"]> }>()
   const settle = (sessionId: SessionId, isolated: ReturnType<typeof createClaudeEngine>) => {
     if (inTurn.has(isolated)) return
     if (isolated.busy()) { kept.set(sessionId, isolated); return }
@@ -337,6 +353,10 @@ export function createClaudeEngine(options: {
 
   /** A hook registered at `initialize`; every callback is answered, an empty one when there is nothing to add, so Claude Code never waits. */
   async function answerHook(connection: Connection, message: ClaudeMessage) {
+    if (message.request?.callback_id === SUBAGENT_TOOLS_HOOK) {
+      if (!connection.closed) write(connection, controlResponse(String(message.request_id), subagentToolAnswer(message.request?.input)))
+      return
+    }
     if (message.request?.callback_id === ONE_TREE_HOOK) {
       let line: string | undefined
       try {
@@ -403,6 +423,7 @@ export function createClaudeEngine(options: {
       const tasks = (message.tasks as Array<Record<string, unknown>>).filter((task) => task && typeof task.task_id === "string")
         .map((task) => ({ id: String(task.task_id), description: String(task.description ?? "").slice(0, 200), kind: String(task.task_type ?? "") }))
       connection.background = tasks.length
+      for (const task of tasks) connection.tasks.add(task.id)
       if (tasks.length) connection.idle?.cancel()
       // An MCP change waited for the background tasks; with none left and no turn open, the process restarts now.
       else if (!connection.turn && connection.reload) { close(connection, "MCP servers changed"); return }
@@ -480,8 +501,13 @@ export function createClaudeEngine(options: {
   function between(connection: Connection, message: ClaudeMessage) {
     if (message.type === "system" && message.subtype === "task_notification") {
       if (!options.notify || connection.unsolicited) return
+      // Claude Code answers on its own only for a task of this live process. A process MendCode is ending reports its tasks
+      // killed, and a resumed one reports the tasks an earlier process left (orphaned) into the conversation without answering:
+      // a notice for either would reach the model as a message from the user.
+      if (connection.closed || !connection.tasks.has(String(message.task_id))) return
       const summary = typeof message.summary === "string" && message.summary.trim() ? message.summary.trim() : `Background task ${String(message.task_id ?? "")} ended (${String(message.status ?? "unknown")})`
-      const notice = `${summary.slice(0, 500)}${typeof message.output_file === "string" ? `\nOutput: ${message.output_file.slice(0, 500)}` : ""}`
+      const output = typeof message.output_file === "string" ? message.output_file.trim() : ""
+      const notice = `${summary.slice(0, 500)}${output ? `\nOutput: ${output.slice(0, 500)}` : ""}`
       connection.unsolicited = { notice, records: [] }
       connection.idle?.cancel()
       options.notify(connection.sessionId, notice)
@@ -505,7 +531,7 @@ export function createClaudeEngine(options: {
     const extra = { ...options.env?.(sessionId, model), ...environment?.values }
     const env = Object.keys(extra).length ? { env: extra } : {}
     const transport = options.transportFactory?.({ args, cwd, ...env }) ?? spawnClaude({ bin: options.bin ?? "claude", args, cwd, ...env })
-    const connection: Connection = { sessionId, transport, model, permission: claudePermissionMode(permission), pending: new Map(), ready: Promise.resolve(), closed: false, background: 0, agentTurns: [], envKey: environmentKey(environment), plan: createClaudePlan() }
+    const connection: Connection = { sessionId, transport, model, permission: claudePermissionMode(permission), pending: new Map(), ready: Promise.resolve(), closed: false, background: 0, tasks: new Set(), agentTurns: [], envKey: environmentKey(environment), plan: createClaudePlan() }
     connections.set(sessionId, connection)
     void (async () => {
       try {
@@ -529,8 +555,8 @@ export function createClaudeEngine(options: {
       connection.turn?.finish({ status: "error", code: "claude_exited", message: `[CLAUDE]: claude exited during the turn${tail ? `: ${tail.slice(-1_000)}` : ""}` })
       close(connection, `process exited${tail ? `: ${tail.slice(-200)}` : ""}`)
     })()
-    const hooks = { ...(options.subagentContext ? { SubagentStart: [{ hookCallbackIds: [SUBAGENT_HOOK] }] } : {}), ...(options.oneTree ? { PostToolUse: [{ matcher: ONE_TREE_TOOLS, hookCallbackIds: [ONE_TREE_HOOK] }] } : {}) }
-    connection.ready = control(connection, { subtype: "initialize", ...(Object.keys(hooks).length ? { hooks } : {}) }).then(() => undefined)
+    const hooks = { ...(options.subagentContext ? { SubagentStart: [{ hookCallbackIds: [SUBAGENT_HOOK] }] } : {}), PreToolUse: [{ matcher: MAIN_AGENT_TOOLS, hookCallbackIds: [SUBAGENT_TOOLS_HOOK] }], ...(options.oneTree ? { PostToolUse: [{ matcher: ONE_TREE_TOOLS, hookCallbackIds: [ONE_TREE_HOOK] }] } : {}) }
+    connection.ready = control(connection, { subtype: "initialize", hooks }).then(() => undefined)
     return connection
   }
 
@@ -605,20 +631,26 @@ export function createClaudeEngine(options: {
         if (plain) close(plain, "a turn with its own MCP servers")
         // Background agents of an earlier bridged turn still run in its process: this turn joins them there, so they live on. That
         // process's bridge was the earlier turn's, so its thread tools answer that the bridge is gone until a new process starts.
+        // When that process has to start again (new model, effort or credentials), it starts with this turn's bridge: the earlier
+        // turn's config file went with its turn, and Claude Code refuses to start on it.
         const running = kept.get(input.sessionId)
-        if (running?.busy()) {
+        const joined = running && bridges.get(running)
+        if (running?.busy() && joined) {
+          joined.current = input.externalMcp
           inTurn.add(running)
-          try { return await running.runTurn({ ...input, externalMcp: undefined }) }
-          finally { inTurn.delete(running); settle(input.sessionId, running) }
+          const turn = processMcpTurn(input)
+          try { return await running.runTurn(turn) }
+          finally { turn.flushProcessMcp(); inTurn.delete(running); settle(input.sessionId, running) }
         }
         if (running) settle(input.sessionId, running)
-        const mcp = input.externalMcp
+        const bridge = { current: input.externalMcp }
         const { trace: _trace, ...processOptions } = options
         const sessionId = input.sessionId
         // Its background agents ending is when a process kept for them stops.
-        const isolated: ReturnType<typeof createClaudeEngine> = createClaudeEngine({ ...processOptions, processArgs: mcp.args, waitingForMcp: () => mcp.waiting?.() === true || options.waitingForMcp?.() === true, cwdFor: () => mcp.cwd,
+        const isolated: ReturnType<typeof createClaudeEngine> = createClaudeEngine({ ...processOptions, get processArgs() { return bridge.current.args }, waitingForMcp: () => bridge.current.waiting?.() === true || options.waitingForMcp?.() === true, cwdFor: () => bridge.current.cwd,
           onBackground: (id, tasks, stop) => { options.onBackground?.(id, tasks, stop); if (!tasks.length) queueMicrotask(() => settle(sessionId, isolated)) } })
         isolatedEngines.add(isolated)
+        bridges.set(isolated, bridge)
         inTurn.add(isolated)
         const turn = processMcpTurn(input)
         // The process lives for the bridge lease, and on while the background agents it started run. Saved bindings resume the same conversation next turn.
@@ -630,8 +662,9 @@ export function createClaudeEngine(options: {
         connection = await connectionFor(input)
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error)
-        const missing = /ENOENT|not found|No such file/i.test(message)
-        return missing
+        // Only a `claude` that could not be started is missing; one that started and exited said why, and its words are kept.
+        const unstarted = !message.startsWith("[CLAUDE]") && /ENOENT|Executable not found|not found in \$PATH/i.test(message)
+        return unstarted
           ? { status: "error", code: "claude_missing", message: "[CLAUDE]: `claude` was not found. Install Claude Code and run `claude auth login`." }
           : { status: "error", code: "claude_start", message: message.startsWith("[CLAUDE]") ? message : `[CLAUDE]: ${message}` }
       }

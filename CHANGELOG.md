@@ -14,6 +14,8 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 - The assistant replies in the language of your latest message (English when unclear) and no longer switches language on its own.
 - `mendcode usage recover` adds the token usage of a Claude Code, Codex or Pi session log to Usage, with a preview first and
   an undo. See [usage recovery](docs/usage-recovery.md).
+- The advisor sees the images attached to your request and can answer with a short code snippet or ASCII sketch. See
+  [advisor](docs/advisor.md#what-the-advisor-sees).
 - `/pr setup` checks prerequisites and configures repository reviews and publishing with one confirmation; a headless setup command is also available.
 - `/voice setup` guides dictation readiness and explicitly confirms audio uploads before enabling an API provider.
 - `/graph setup` enables and builds the project's code graph with one confirmation, without changing global defaults.
@@ -50,9 +52,21 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 - The full view's footer shows the `rows` preset by default: directory, model and session figures, quota per provider and the code
   graph, each on its own row. `/footer preset classic` brings back the single-row footer. Balanced and minimalist are unchanged. See
   [layout](docs/layout.md#footer-by-tier).
+- The advisor no longer signs off small turns, such as a config value or a one-line fix; the agent can still ask it. See
+  [advisor](docs/advisor.md#when-it-is-consulted).
 
 ### Fixed
 
+- A Claude Code turn after a cancelled one whose background command still ran no longer fails with "`claude` was not
+  found"; a Claude Code that refuses to start shows its own reason.
+- Claude Code's reports about background tasks of an earlier or ended process no longer arrive as messages for the model.
+- Switching between two MendCode models after a failed or cancelled turn no longer says the conversation came from
+  Claude Code, and no longer adds that turn to the history twice.
+- Sub-agents on every engine no longer get the advisor, workflows or sub-agents of their own; `subagentDepth` above 1
+  still lets them delegate.
+- While the advisor runs, the working row says "Consulting advisor..." instead of "Patching..." or "Running command...".
+- The advisor no longer takes an image read during the turn for your request, and sees the turn's edits and the checks it
+  ran, so it stops asking for evidence the turn already has.
 - An automatic PR review checks that it may post, and that no other reviewer already has, before it spends any tokens.
 - The advisor sees a short summary of the session (earlier edits apart from this turn's, this turn's checks) and the untracked files, and the executor can pass it files with a line range and images; the extra evidence is capped and says what was cut.
 - `@MendCode review` gets no extra reply when this reviewer's own review of the head was posted after the comment.

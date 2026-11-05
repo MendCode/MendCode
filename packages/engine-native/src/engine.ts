@@ -28,8 +28,8 @@ import { PLAN_EXIT_TOOL, PLAN_MODE_NOTE, PLAN_REVIEW_TOOL, PLAN_TOOL_NAMES, look
 import { continuationStream } from "./continuation"
 import { pairToolCalls } from "./history"
 import { GOAL_TOOL_NAMES, GOAL_TOOLS, runGoalTool, type GoalPort } from "./goal-tools"
-import { renderAdvisorFiles, selectAdvisorImages, type AdvisorFileRef } from "./advisor-evidence"
-import { ADVISOR_NUDGE_PREFIX, ADVISOR_TOOL, advisorOutput, buildAdvisorBrief, createAdvisorTracker, type AdvisorConsultation, type AdvisorPort, type AdvisorTracker, type AdvisorTrigger } from "./advisor"
+import { ADVISOR_EVIDENCE_LIMITS, changedLines, editedPaths as pathsOfEdit, renderAdvisorFiles, selectAdvisorImages, type AdvisorFileRef } from "./advisor-evidence"
+import { ADVISOR_NUDGE_PREFIX, ADVISOR_TOOL, advisorOutput, advisorRequestIndex, buildAdvisorBrief, createAdvisorTracker, type AdvisorConsultation, type AdvisorPort, type AdvisorTracker, type AdvisorTrigger } from "./advisor"
 import { createGrantStore, type GrantStore } from "./grants"
 import { authorityContext, freezeAction, type AuthorityAnchor } from "./permission-context"
 import type { PermissionProvenance, PermissionReview } from "@mendcode/protocol"
@@ -184,8 +184,9 @@ const hostedLabel = (tool: HostedTool) => (tool === "web_search" ? "web search" 
 /** What the model is told once a hosted tool was taken out of the step. */
 const hostedOffNote = (tools: readonly HostedTool[]) => `The provider's ${tools.map(hostedLabel).join(" and ")} is failing right now and is off for this step. Do not wait for it: answer with what you have, say that it failed, and use another tool if one can do the job.`
 const INLINE_SHELL_MAX_CHARS = 32_000
-/** Tools a sub-agent never gets: it cannot talk to the user or propose memories on its own. */
+/** Tools a sub-agent never gets: it cannot talk to the user, propose memories, or start workflows on its own. */
 const MAIN_AGENT_ONLY = new Set(["sidebar", "question", "remember", "loop", "worktree", "threads", "packages", "pr_watch", "session_meta"])
+const mainAgentOnly = (name: string) => MAIN_AGENT_ONLY.has(name) || name.startsWith("workflow_")
 
 /** What `permit` answers: the kernel's resolutions, plus a refusal that came from the permission reviewer rather than the user. */
 type PermitResult = (EngineResolution | { kind: "deny"; reason: string; by: "reviewer" | "rule" }) & { permissionSource?: PermissionReview["source"] }
@@ -570,7 +571,7 @@ export function createNativeEngine(options: {
     return Object.defineProperty(toolset, "specs", { get: () => built ??= build(), enumerable: true, configurable: true }) as Toolset
   }
   const tools = [...options.tools, ...(options.recall ? SESSION_RECALL_TOOLS.filter((tool) => !options.tools.some((existing) => existing.name === tool.name)) : [])]
-  const subagentTools = tools.filter((tool) => !MAIN_AGENT_ONLY.has(tool.name))
+  const subagentTools = tools.filter((tool) => !mainAgentOnly(tool.name))
   const secretsSpecs = () => secrets ? [toSpec(SECRETS_TOOL)] : []
   // `snip` (experimental.snip) is listed here and kept or dropped per turn by `withPolicy`.
   const snipSpecs = () => [toSpec(SNIP_TOOL)]
@@ -600,16 +601,20 @@ export function createNativeEngine(options: {
     const diff = trigger === "plan" ? undefined : await port.diff?.(cwd, input.signal).catch(() => undefined)
     const notes: string[] = []
     const images: RequestImage[] = []
-    if (evidence?.images?.length) {
-      const picked = selectAdvisorImages({ wanted: evidence.images, messages })
-      if (!port.acceptsImages?.(input.sessionId)) notes.push(`[${evidence.images.length} image(s) named by the executor were not sent: the advisor model does not accept images]`)
+    // The request's own images are part of what the advisor judges against; the executor's named ones come after them.
+    const request = messages[advisorRequestIndex(messages)]
+    const requestImages = request?.role === "user" ? (request.attachments ?? []).filter((ref) => ref.mime.startsWith("image/")) : []
+    if (evidence?.images?.length || requestImages.length) {
+      const named = evidence?.images?.length ? selectAdvisorImages({ wanted: evidence.images, messages }) : { refs: [], missing: [] }
+      const picked = { refs: [...requestImages, ...named.refs.filter((ref) => !requestImages.some((own) => own.sha256 === ref.sha256))].slice(0, ADVISOR_EVIDENCE_LIMITS.maxImages), missing: named.missing }
+      if (!port.acceptsImages?.(input.sessionId)) notes.push(`[${(evidence?.images?.length ?? 0) + requestImages.length} image(s) of the request or named by the executor were not sent: the advisor model does not accept images]`)
       else {
         for (const ref of picked.refs) {
           const bytes = await options.readBlob?.(ref).catch(() => undefined)
           if (bytes) images.push({ mime: ref.mime, base64: Buffer.from(bytes).toString("base64") })
           else picked.missing.push(ref.name ?? ref.sha256.slice(0, 12))
         }
-        if (images.length) notes.push(`[${images.length} image(s) from the executor are attached: ${picked.refs.map((ref) => ref.name ?? ref.sha256.slice(0, 12)).join(", ")}]`)
+        if (images.length) notes.push(`[${images.length} image(s) are attached, in order: ${picked.refs.map((ref) => `${ref.name ?? ref.sha256.slice(0, 12)}${requestImages.includes(ref) ? " (from the user's request)" : " (from the executor)"}`).join(", ")}]`)
         if (picked.missing.length) notes.push(`[images not found in this session: ${picked.missing.join(", ")}]`)
       }
     }
@@ -1993,7 +1998,7 @@ export function createNativeEngine(options: {
         }
         if (toolset.main && options.advisor && call.name !== ADVISOR_TOOL.name && !input.signal.aborted) {
           const tracker = advisorTracker(input.sessionId)
-          if (!result.isError && (call.name === "edit" || call.name === "write" || call.name === "apply_patch")) tracker.noteEdit()
+          if (!result.isError && (call.name === "edit" || call.name === "write" || call.name === "apply_patch")) tracker.noteEdit({ paths: pathsOfEdit(call), lines: changedLines(call) })
           if (result.isError && tracker.noteFailure(signature, result.output.trim().split("\n", 1)[0]!.slice(0, 200))) advisorRepeat = true
         }
         // Identical captures reuse an image only while its blob is still visible in this model context.
@@ -2130,12 +2135,20 @@ export function createNativeEngine(options: {
     return { output: `${forkLine}${answer || "(the task finished without an answer)"}`, truncated: false, title, isError: !answer, meta }
   }
 
-  /** What a session's main agent is offered, as a turn would build it. */
-  async function hostToolset(sessionId: SessionId, directory: string): Promise<Toolset> {
+  /** A sub-agent's tools: no advisor, workflows or main-agent tools, and `task` only when `subagentDepth` lets it nest. */
+  function baseToolset(sessionId: SessionId, child: boolean): Toolset {
+    if (!child) return mainToolset
+    const nested = options.subagents === true && options.tasks?.nests?.(sessionId) === true
+    return { ...subagentToolset, specs: [...subagentToolset.specs, ...(nested ? [toSpec(TASK_TOOL_SHARED)] : [])], allowTask: nested }
+  }
+
+  /** What a session's agent is offered, as a turn would build it: a sub-agent on another harness gets a sub-agent's tools. */
+  async function hostToolset(sessionId: SessionId, directory: string, workflow = false): Promise<Toolset> {
     const extra = options.projectTools ? await options.projectTools(directory, sessionId, { host: true }).catch(() => []) : []
     const agent = settle(() => options.agents?.primary(sessionId), undefined)
     const subagents = settle(() => options.agents?.subagents(directory) ?? [], [])
-    return withoutHidden(withRunLimits(withPolicy(withAgent(withSubagents({ ...withProjectTools(mainToolset, extra), extras: extra }, subagents), agent)), options.runLimits?.(sessionId)), directory)
+    const child = options.tasks?.isChild(sessionId) === true || workflow
+    return withoutHidden(withRunLimits(withPolicy(withAgent(withSubagents({ ...withProjectTools(baseToolset(sessionId, child), extra), extras: extra }, subagents), agent)), options.runLimits?.(sessionId)), directory)
   }
   let hostCalls = 0
 
@@ -2150,7 +2163,7 @@ export function createNativeEngine(options: {
       return toolset.specs.filter((spec) => hostable(spec.name)).map((spec) => ({ name: spec.name, description: spec.description, parameters: spec.parameters }))
     },
     async hostCall({ turn, name, args }) {
-      const toolset = await hostToolset(turn.sessionId, options.cwdFor(turn.sessionId))
+      const toolset = await hostToolset(turn.sessionId, options.cwdFor(turn.sessionId), turn.workflow !== undefined)
       if (!hostable(name) || !toolset.tools.has(name)) return { output: `Tool ${name} is not available in this session`, isError: true }
       // The turn's own attachments are the "recent images" an image edit can take; the other harness keeps the rest of the history.
       const history: ModelMessage[] = turn.attachments.length ? [{ role: "user", content: turn.text, attachments: turn.attachments }] : []
@@ -2222,7 +2235,7 @@ export function createNativeEngine(options: {
       const agent = settle(() => options.agents?.primary(input.sessionId, input.selection?.agent), undefined)
       const subagents = settle(() => options.agents?.subagents(cwd) ?? [], [])
       const child = options.tasks?.isChild(input.sessionId) === true || input.workflow !== undefined
-      const base = child ? { ...subagentToolset, specs: [...subagentToolset.specs, ...(options.subagents ? [toSpec(TASK_TOOL_SHARED)] : [])], allowTask: options.subagents === true } : mainToolset
+      const base = baseToolset(input.sessionId, child)
       const limits = options.runLimits?.(input.sessionId)
       // A prompt's own tool exclusions stack on the session's limits: they only remove tools (and sub-agents, whose tools they cannot bound).
       const turnExcluded = input.turnOptions?.excludeTools ?? []

@@ -380,8 +380,9 @@ The budget is the `handoffTokenCap` setting (`settings.set`, 4 characters per to
 automatic handoff off for engine switches and forks, and the daemon still records the engines). The text is the already
 redacted transcript, so secrets stay markers, and the closing marker cannot be forged from inside it. `session.model.set`
 answers with `handoff: { from, to, turns, omitted, tokens }` when the switch will hand something over (the TUI shows it
-as a notice; remote and peer clients are not told). A turn that fails does not count as seen: the next attempt hands the
-same context again. The other engine's context is not the new one's: until the new model answers, the footer, dock and
+as a notice; remote and peer clients are not told). A turn that fails on another program's engine does not count as seen: the next attempt hands the
+same context again. A native turn counts as seen however it ended, since it stays in the native history, so switching
+between two native models hands nothing. The other engine's context is not the new one's: until the new model answers, the footer, dock and
 `/status` show no context for it. Forks inherit the daemon engine's record (their model history is shared with the parent) and start
 with no external engine, so a fork onto Claude Code or an ACP agent gets the copied turns once. `session_engine_seen`,
 `session_fork_base` and `session_pending_context` are additive tables that go with their session; sessions from before

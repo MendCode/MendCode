@@ -90,7 +90,7 @@ export function createPortableContext(deps: Deps) {
      * not switchable): the unseen conversation and any merged forks. `commit` records the turn as seen and drops the
      * merged contexts; call it when the turn finished well, so a failed turn hands the same context again.
      */
-    prepare(input: { sessionId: SessionId; turnId: string; key: string | undefined }): { blocks: string[]; commit(): void } {
+    prepare(input: { sessionId: SessionId; turnId: string; key: string | undefined }): { blocks: string[]; commit(): void; ran(): void } {
       const { sessionId, key } = input
       const blocks: string[] = []
       if (key) {
@@ -108,6 +108,10 @@ export function createPortableContext(deps: Deps) {
         commit() {
           if (key) store.handoff.markSeen(sessionId, key, input.turnId)
           store.handoff.clearContext(sessionId, pending.map((entry) => entry.id))
+        },
+        /** The engine ran the turn but it did not finish well: the turn is its own, while merged contexts wait for the next one. */
+        ran() {
+          if (key) store.handoff.markSeen(sessionId, key, input.turnId)
         },
       }
     },

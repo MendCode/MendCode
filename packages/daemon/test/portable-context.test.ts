@@ -10,7 +10,7 @@ import { startDaemon } from "../src"
 import { CLAUDE_MODELS } from "../src/claude-models"
 
 /** Portable handoff between engines, merge-back of forks and the lineage tree, on the daemon with a recording engine and no process spawned. */
-const NATIVE: ModelInfo[] = [{ id: "gpt-6-luna", name: "GPT-6-Luna", efforts: ["low", "medium", "high"], defaultEffort: "medium" }]
+const NATIVE: ModelInfo[] = [{ id: "gpt-6-luna", name: "GPT-6-Luna", efforts: ["low", "medium", "high"], defaultEffort: "medium" }, { id: "gpt-6.1-sol", name: "GPT-6.1-Sol", efforts: ["low", "medium", "high"], defaultEffort: "medium" }]
 const ACP: ModelInfo = { id: "acp:fake", name: "fake · ACP", efforts: [] }
 
 type Seen = { text: string; authority: string | undefined }
@@ -164,6 +164,22 @@ describe("engine switch", () => {
     expect(await h.use(quiet, "claude-opus")).not.toMatchObject({ result: { handoff: expect.anything() } })
     await h.say(quiet, "beta")
     expect(h.seen.at(-1)!.text).toBe("beta")
+  })
+
+  test("a switch between two native models after a native turn failed hands nothing and does not name the engine the session ran on before", async () => {
+    const h = await boot()
+    const session = await h.open("claude-opus")
+    await h.say(session, "on claude")
+    expect(await h.use(session, "gpt-6-luna")).toMatchObject({ ok: true, result: { handoff: { from: "Claude Code", rebuilt: true } } })
+    await h.say(session, "on luna")
+    await h.say(session, "boom")
+    const before = h.store().engineMessages.load(session, "native").length
+    const switched = await h.use(session, "gpt-6.1-sol")
+    expect(switched).toMatchObject({ ok: true })
+    expect(switched).not.toMatchObject({ result: { handoff: expect.anything() } })
+    expect(h.store().engineMessages.load(session, "native").length).toBe(before)
+    await h.say(session, "on sol")
+    expect(h.seen.at(-1)!.text).toBe("on sol")
   })
 
   test("a turn that fails hands the same context again on the next try", async () => {

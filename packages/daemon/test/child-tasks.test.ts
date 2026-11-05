@@ -109,6 +109,8 @@ test("configured admission caps are active-only and nested tasks preserve the ro
   await h.client.send({ type: "settings.set", patch: { subagentMaxChildren: 1, subagentMaxDescendants: 2, subagentOwnerWake: false } })
   const child = taskOf(await h.client.send({ type: "task.run", sessionId: parent, input: { description: "One", prompt: "Wait", background: true } }))
   await until(() => h.requests.length === 1)
+  // At depth 1 the child is offered no `task` of its own.
+  expect(h.requests[0]!.tools.some((tool) => tool.name === "task")).toBe(false)
   expect((await h.client.send({ type: "task.run", sessionId: parent, input: { description: "Two", prompt: "Go", background: true } })).ok).toBe(false)
   expect((await h.client.send({ type: "task.run", sessionId: child.taskId, input: { description: "Nested", prompt: "Go" } })).ok).toBe(false)
   await h.client.send({ type: "settings.set", patch: { subagentDepth: 2 } })
