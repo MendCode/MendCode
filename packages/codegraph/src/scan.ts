@@ -1,12 +1,12 @@
+import { languageOf } from "./language"
 import { extname } from "node:path"
+export { languageOf } from "./language"
 import { pythonBindings, scriptBindings } from "./bindings"
 import { GO_MASK, indexLines, lineAt, maskCode, maskPython, RUST_MASK, SCRIPT_MASK, SWIFT_MASK } from "./mask"
 import { finalizeDecls, findBody, matchBrace, statementEnd, type CallOptions, type Decl } from "./scan-util"
-import { EXTENSION_LANGUAGE, type CallRec, type ExportBinding, type ImportBinding, type Language, type SymbolRec } from "./types"
+import type { CallRec, ExportBinding, ImportBinding, Language, SymbolRec } from "./types"
 
 export type ScanResult = { imports: string[]; symbols: SymbolRec[]; calls: CallRec[]; bindings?: ImportBinding[]; exports?: ExportBinding[] }
-
-export const languageOf = (path: string): Language | undefined => EXTENSION_LANGUAGE[extname(path).toLowerCase()]
 
 const SCRIPT_KEYWORDS = new Set(["if", "for", "while", "switch", "catch", "function", "return", "typeof", "await", "async", "super", "import", "require", "void", "delete", "throw", "with", "of", "in"])
 const SCRIPT_CALLS: CallOptions = { generics: true, keywords: SCRIPT_KEYWORDS, declarationWords: new Set(["function"]) }

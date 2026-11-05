@@ -1,4 +1,3 @@
-import { executeCode } from "@mendcode/engine-native"
 import type { ComputerCodeReport } from "@mendcode/protocol"
 
 /** computer_code runs on the same confined interpreter as Code Mode, with only bounded computer operations. */
@@ -6,6 +5,7 @@ const TOOLS = ["observe", "press", "setValue", "click", "typeText", "key", "scro
 const LIMITS = { maxToolCalls: 16, maxOutputBytes: 65_536, timeoutMs: 30_000, maxOperations: 20_000 }
 
 export async function runComputerProgram(code: string, signal: AbortSignal, invoke: (name: string, input: unknown) => Promise<unknown>): Promise<ComputerCodeReport> {
+  const { executeCode } = await import("../../engine-native/src/code-runtime")
   const result = await executeCode({ code, names: TOOLS, signal, limits: LIMITS, invoke: (name, input) => invoke(name, input) })
   return {
     ok: result.ok,

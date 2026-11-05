@@ -1,4 +1,4 @@
-import { acpAgentKey } from "@mendcode/engine-acp"
+import { acpAgentKey } from "../../engine-acp/src/agents"
 import type { ModelChoice, SessionId } from "@mendcode/protocol"
 import type { ExtensionSessionPort } from "./extensions/session-api"
 import { catalogModel, invalidChoice, modelEngine, type ModelCatalog } from "./models"

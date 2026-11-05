@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs"
 import type { RemoteTransport } from "@mendcode/client"
 import { isLoopbackHost, parseRemoteAddress } from "@mendcode/protocol/wire"
 import { normalizeAttach } from "./http-cli"
-import { githubInvocation } from "./github-args"
+import { githubInvocation } from "./github-invocation"
 
 export const REMOTE_DISABLED_NOTE = "remote: path attachments, clipboard images, external editor, TUI extensions and local TUI files disabled; export uses --copy; workflow and goal files unavailable"
 const REMOTE_VALUES = new Set(["--connect", "--ca", "--token-file", "--socket", "--server-url", "--password", "--username"])

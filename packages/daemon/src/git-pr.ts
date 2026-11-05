@@ -1,7 +1,8 @@
 import { GIT_ACTIONS_MAX_LISTED, GIT_PR_MAX_BASE, GIT_PR_MAX_BODY, GIT_PR_MAX_TITLE, redactSecrets, type GitPrChecks, type GitPrCreateReport, type GitPrInfo, type GitPrPlan, type GitPrView } from "@mendcode/protocol"
 import { networkEnv, repoLocks, run } from "./git-exec"
 import { GitActionRefusal, commitsIn, inspect, reader, safeRefName, shownMasked } from "./git-remote"
-import { FIELDS, parseSnapshot, type Snapshot } from "./pr-watch"
+import type { Snapshot } from "./pr-watch"
+import { FIELDS } from "./pr-watch-helpers"
 
 const READ_MS = 30_000
 const CREATE_MS = 60_000
@@ -48,6 +49,7 @@ export async function gitPrView(input: { directory: string; env?: NodeJS.Process
     if (unauthenticated(done.err)) throw new GitActionRefusal(NOT_LOGGED_IN)
     throw new GitActionRefusal(`gh could not read the pull request: ${first(done.err) || `exit ${done.code}`}`)
   }
+  const { parseSnapshot } = await import("./pr-watch")
   const snapshot = parseSnapshot(redactSecrets(done.out).text)
   if (!snapshot) throw new GitActionRefusal("gh returned something that is not a pull request")
   return { branch, pr: info(snapshot) }

@@ -1,4 +1,3 @@
-import type { BedrockOptions } from "@mendcode/protocol"
 import { awsEndpoint, awsHost, signAws } from "./aws-signature"
 import { awsEvents } from "./aws-eventstream"
 import { guardedStream, type Fetch } from "./provider-http"
@@ -19,8 +18,8 @@ export function bedrockModelId(model: string, region: string): string {
   return model
 }
 
-export const bedrockRegion = (options: BedrockOptions | undefined, env: Record<string, string | undefined>) => options?.region ?? env.AWS_REGION ?? "us-east-1"
-export const bedrockBaseUrl = (region: string) => awsHost("bedrock-runtime", region)
+import { bedrockRegion, bedrockBaseUrl } from "./provider-endpoints"
+export { bedrockRegion, bedrockBaseUrl } from "./provider-endpoints"
 
 function messages(request: ModelRequest, provider: string, model: string): Array<{ role: "user" | "assistant"; content: Record<string, unknown>[] }> {
   const out: Array<{ role: "user" | "assistant"; content: Record<string, unknown>[] }> = []

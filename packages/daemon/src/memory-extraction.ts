@@ -1,6 +1,6 @@
 import type { ExtractionJob, MemoryEntry, SessionEvent, Settings } from "@mendcode/protocol"
 import type { Store } from "@mendcode/store"
-import { buildDigest } from "@mendcode/dream"
+import { buildDigest } from "../../dream/src/digest"
 
 export type ExtractedMemory = { scope: "project" | "user"; text: string; category: string; details?: MemoryEntry["details"] }
 

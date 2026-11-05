@@ -11,10 +11,15 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Changed
 
+- An idle terminal keeps fewer prepared database statements in memory, creating them only when needed.
+- The terminal leaves command-only pages and help text unloaded until needed, keeping the idle prompt lighter without changing the start screen.
+- The terminal loads computer and browser controls and other optional daemon helpers only when needed, keeping the idle prompt lighter.
 - The "What fits you" prompt on a release page sits right under Install, and it updates an older MendCode first with that channel's command.
 
 ### Fixed
 
+- Quota and live documentation no longer report an unresponsive daemon as stopped.
+- `session send` without `--approve` leaves pending tool approvals for the terminal owner instead of silently denying them, including in child sessions.
 - `mendcode --help` says `--no-context-files` leaves instruction files out while skills stay; `--exclude-tools skill` hides them.
 - `--no-context-files` also leaves out `SYSTEM.md` and `APPEND_SYSTEM.md`, including the ones an installed package brings.
 

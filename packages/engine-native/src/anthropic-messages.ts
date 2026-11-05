@@ -10,7 +10,8 @@ import { MESSAGE_THREADS_BETA, createMessageThreads, threadErrorCode, type Threa
 import { RetryableProviderError, type ModelEvent, type ModelMessage, type ModelProvider, type ModelRequest, type ReasoningState, type ToolSpec } from "./provider"
 
 export const ANTHROPIC_BASE_URL = "https://api.anthropic.com/v1"
-export const ANTHROPIC_VERSION = "2023-06-01"
+import { ANTHROPIC_VERSION } from "./provider-endpoints"
+export { ANTHROPIC_VERSION } from "./provider-endpoints"
 /** Room for the answer when the request does not say; modern Claude models allow at least this much. */
 export const ANTHROPIC_DEFAULT_MAX_TOKENS = 32_000
 

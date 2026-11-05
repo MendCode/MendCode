@@ -9,6 +9,8 @@ export type RunOptions = {
   json: boolean
   compat?: boolean
   approve: boolean
+  /** Without an approval flag, `session send` leaves approvals for the owner; standalone runs deny them by default. */
+  unapproved?: "deny" | "pending"
   /** `--dangerously-skip-permissions`: also allows a command the engine itself flagged in full access, which `approve` alone rejects. */
   skipPermissions?: boolean
   thinking?: boolean
@@ -27,13 +29,13 @@ export const ENGINE_FLAGGED_DENIAL = "headless run: the engine flagged this comm
 /**
  * 0 completed, 1 failed (also unwritable output file), 2 stopped, 3 answer rejected by --output-schema, 4 turn limit (--max-turns),
  * 5 the turn completed but an approval was denied for lack of --approve and no tool call succeeded after it; 64 is a usage error before any run.
- * 5 is free in `session send --wait` too, where 3 is a timeout and 4 a workflow that needs the user (automation.ts).
+ * `session send` leaves unapproved requests pending, so it does not produce exit 5.
  */
 export const EXIT = { completed: 0, failed: 1, stopped: 2, schema: 3, limit: 4, denied: 5 } as const
 
 /**
  * Headless turn for scripts, CI and VPS use: submits one prompt, streams only that turn's events,
- * answers approvals by policy (deny unless --approve) and resolves with an exit code.
+ * answers approvals by policy (deny unless --approve, or leave pending for the owner) and resolves with an exit code.
  */
 export function createHeadlessRun(options: RunOptions) {
   let sessionId = options.sessionId
@@ -122,6 +124,7 @@ export function createHeadlessRun(options: RunOptions) {
           })
           break
         }
+        if (!options.approve && !options.skipPermissions && options.unapproved === "pending") break
         if (event.engineFlagged) {
           // The engine's own safety check, raised although the session is in full access: `--approve` never covers it, only `--dangerously-skip-permissions` does.
           const skipped = options.skipPermissions === true

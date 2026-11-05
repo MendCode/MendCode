@@ -2,7 +2,7 @@ import { createHash } from "node:crypto"
 import { lstatSync, mkdirSync, readFileSync, realpathSync } from "node:fs"
 import path from "node:path"
 import { redactSecrets } from "@mendcode/protocol"
-import { parseCheck } from "@mendcode/loops"
+import { parseCheck } from "../../loops/src/checks"
 import { runLoopCheck } from "./loop-checks"
 
 export type CompoundSnapshot = { base: string; fingerprint: string; diff: string; files: Array<{ path: string; content: string }> }

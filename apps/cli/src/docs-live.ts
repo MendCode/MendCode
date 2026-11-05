@@ -21,6 +21,8 @@ export type LiveContext = {
   cwd: string
   settings: Record<string, unknown> | undefined
   prompt: Record<string, unknown> | undefined
+  /** A daemon was found but the requested facts could not be read. */
+  daemonUnanswered?: boolean | undefined
   /** The last quota reading of each provider a running daemon holds; undefined when no daemon answered. */
   quotas?: readonly QuotaSnapshotLike[] | undefined
   /** The quota refresh probe per listed provider, as `daemon.info` reports it; undefined when no daemon answered or none is listed. */
@@ -104,7 +106,7 @@ function modelContextLine(value: unknown): string {
   return `modelContext: ${shown.join(" · ")}`
 }
 
-const note = (context: LiveContext, lines: string[]) => (context.settings ? lines : [...lines, "(no daemon running: daemon settings not shown)"])
+const note = (context: LiveContext, lines: string[]) => (context.settings ? lines : [...lines, context.daemonUnanswered ? "(daemon did not answer: daemon settings not shown)" : "(no daemon running: daemon settings not shown)"])
 
 /**
  * What MendCode knows about provider quota windows right now, per provider and window, with the age of each reading. The readings are
@@ -112,7 +114,7 @@ const note = (context: LiveContext, lines: string[]) => (context.settings ? line
  * A provider or window that is not listed is unknown, which is the honest value to show for it.
  */
 function quotaLines(context: LiveContext): string[] {
-  if (!context.quotas) return ["provider quota: not known (no daemon is running; readings arrive with provider responses)", ...refreshLines(context)]
+  if (!context.quotas) return [context.daemonUnanswered ? "provider quota: not known (the daemon is running but did not answer; try again)" : "provider quota: not known (no daemon is running; readings arrive with provider responses)", ...refreshLines(context)]
   const now = context.now ?? Date.now()
   const readings = quotaReadings(context.quotas, now)
   const lines = readings.map((reading) => {
@@ -141,7 +143,7 @@ function refreshLines(context: LiveContext): string[] {
     if (!entry) return `${provider} refresh: off, nothing is sent`
     const every = `every ${entry.everyMinutes ?? QUOTA_REFRESH_DEFAULT_MINUTES} min${entry.model ? ` on ${entry.model}` : ""}`
     const line = reported.get(provider)
-    if (!context.quotas) return `${provider} refresh: on, ${every} (the daemon is not running: no probe has run)`
+    if (!context.quotas) return `${provider} refresh: on, ${every} (${context.daemonUnanswered ? "the daemon did not answer: probe status unknown" : "the daemon is not running: no probe has run"})`
     if (!line) return `${provider} refresh: on, ${every} (the daemon has not picked it up yet)`
     const last = line.lastProbeAt === undefined ? "no probe yet" : `last probe ${shortSpan(Math.max(0, now - line.lastProbeAt))} ago`
     const state = line.state === "stopped" ? `STOPPED (${line.lastError ?? "failed too often"}); edit quotaRefresh to start again` : line.state === "waiting" ? "waiting (no terminal attached, or the provider is at its limit)" : "running"
@@ -215,7 +217,7 @@ const PROVIDERS: Record<string, Provider> = {
   models: (context) => [...folders(context, "recipes"), ...note(context, context.settings ? [modelContextLine(context.settings.modelContext)] : [])],
   permissions: (context) => note(context, daemonLines(context, ["defaultPermission", "sandbox"])),
   tiers: (context) => note(context, [`tier: ${word(context.settings?.tier) ?? "none set (every feature keeps its own default)"}`]),
-  "prompt-modes": (context) => (context.prompt ? [`this project: mode ${word(context.prompt.mode) ?? "?"}, family ${word(context.prompt.focusID) ?? "?"}${word(context.prompt.resolvedFocus) ? ` (resolves to ${word(context.prompt.resolvedFocus)})` : ""}`] : ["(no daemon running: the saved mode is not shown)"]),
+  "prompt-modes": (context) => (context.prompt ? [`this project: mode ${word(context.prompt.mode) ?? "?"}, family ${word(context.prompt.focusID) ?? "?"}${word(context.prompt.resolvedFocus) ? ` (resolves to ${word(context.prompt.resolvedFocus)})` : ""}`] : [context.daemonUnanswered ? "(daemon did not answer: the saved mode is not shown)" : "(no daemon running: the saved mode is not shown)"]),
   budgets: (context) => note(context, daemonLines(context, ["budgets"])),
   // The two saved settings that move the compaction point; what they give a session is `context <session>`, which also knows the model's window.
   compaction: (context) => note(context, context.settings ? [

@@ -1,5 +1,5 @@
 import path from "node:path"
-import { expandVariables, serverConfigSchema, type McpServerConfig } from "@mendcode/mcp"
+import { expandVariables, serverConfigSchema, type McpServerConfig } from "../../../mcp/src/config"
 import type { ExtensionMcpServer } from "@mendcode/extension-api"
 import type { ExtensionRecord } from "./types"
 

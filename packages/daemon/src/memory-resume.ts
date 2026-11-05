@@ -1,5 +1,5 @@
 import path from "node:path"
-import { buildDigest, DIGEST_VERSION, type SessionDigest } from "@mendcode/dream"
+import { buildDigest, DIGEST_VERSION, type SessionDigest } from "../../dream/src/digest"
 import { redactSecrets, visibleEvents, type SessionId } from "@mendcode/protocol"
 import type { Store } from "@mendcode/store"
 

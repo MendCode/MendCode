@@ -137,7 +137,7 @@ with that text as the note.
 
 - The choices are **Allow once** (`a`) and **Reject** (`d`); there is no session or always choice, and a client that answers "for the session" still allows that call only (Claude's suggested rules are dropped). The `?` explanation says why it asks. Over the protocol the `server.request` event carries `engineFlagged: true`.
 - Rejecting sends your note (or "The user denied this.") back as the tool result; the turn continues.
-- Headless: `run --approve` and `session send --approve` reject it with a clear message (the turn goes on and the exit code is the turn's; exit 5 is only for an ordinary approval denied because `--approve` was not passed, see [automation](automation.md#headless-and-startup-parity-b16)); `--dangerously-skip-permissions` allows it. Both flags otherwise behave the same.
+- Headless: `run --approve` and `session send --approve` reject it with a clear message (the turn goes on and the exit code is the turn's; exit 5 is only for `run` when an ordinary approval was denied because `--approve` was not passed, see [automation](automation.md#headless-and-startup-parity-b16)); `--dangerously-skip-permissions` allows it. Both flags otherwise behave the same. `session send` without either flag leaves this approval pending for the terminal owner, just like an ordinary approval.
 - Setting `engineSafetyPrompts` (default `false`, local clients only): `true` turns these approvals on. Set it with `settings.set { patch: { engineSafetyPrompts: true } }` or in the daemon's settings.
 - A request raised in `full` for any other reason, for example when you switched to `full` mid-turn so Claude Code was not in bypass mode yet, is still answered automatically.
 

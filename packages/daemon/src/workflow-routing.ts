@@ -1,6 +1,6 @@
 import { mkdirSync, existsSync, realpathSync } from "node:fs"
 import path from "node:path"
-import { acpAgentKey } from "@mendcode/engine-acp"
+import { acpAgentKey } from "../../engine-acp/src/agents"
 import type { AgentProfile } from "@mendcode/engine-native"
 import { WorkflowEngineId, type ModelChoice, type ModelRoles, type WorkflowPlan, type WorkflowRun, type WorkflowTaskExecution, type WorkflowTaskSpec } from "@mendcode/protocol"
 import { catalogModel, invalidChoice, resolveModel, usableEffort, type ModelCatalog } from "./models"

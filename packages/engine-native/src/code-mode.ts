@@ -1,5 +1,5 @@
 import { z } from "zod"
-import { CODE_LIMITS } from "./code-runtime"
+import { CODE_LIMITS } from "./code-limits"
 
 export const CODE_TOOL = {
   name: "code",

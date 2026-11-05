@@ -41,6 +41,16 @@ describe("usage --quota", () => {
     expect(readdirSync(dataDir)).toEqual([])
   })
 
+  test("a running daemon whose read times out is not reported as absent", async () => {
+    let out = ""
+    const io = { dataDir: temp(), out: { write: (text: string) => { out += text } }, err: { write: () => {} }, now: () => NOW, read: async () => ({ status: "unanswered" as const }) }
+    expect(await runUsageQuota({ json: false }, io)).toBe(0)
+    expect(out).toBe("quota: unknown (the daemon is running but did not answer within 5 s; try again)\n")
+    out = ""
+    expect(await runUsageQuota({ json: true }, io)).toBe(0)
+    expect(JSON.parse(out)).toEqual({ now: NOW, daemon: true, quota: [], error: "daemon_unanswered" })
+  })
+
   test("with a daemon: the footer's list of windows, fresh and stale, read from what the daemon already holds", async () => {
     const dataDir = temp()
     const daemon = await startDaemon({ dir: dataDir, socketPath: path.join(dataDir, "mendd.sock"), engine: ({ clock }) => createFauxEngine({ clock, deltaMs: 1 }) })

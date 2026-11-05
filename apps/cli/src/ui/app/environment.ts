@@ -1,4 +1,5 @@
-import { createEnvironmentPageState, looksLikeDotenv, type EnvInfo, type EnvironmentPageState, type EnvScope, type PastedItem } from "../../view/environment-page"
+import type { EnvInfo, EnvironmentPageState, EnvScope, PastedItem } from "../../view/environment-page"
+import { createEnvironmentPageState, looksLikeDotenv, preload } from "../lazy-pages"
 import type { AppContext } from "./context"
 
 export function createEnvironmentPanel(ctx: AppContext) {
@@ -29,6 +30,7 @@ export function createEnvironmentPanel(ctx: AppContext) {
     finally { page.loading = false; requestFrame() }
   }
   async function open(privacy = false) {
+    await preload("env")
     state.environmentPage = createEnvironmentPageState()
     state.page = "env"
     await load()

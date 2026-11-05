@@ -1,17 +1,11 @@
 import type { ProviderModel, ProviderType } from "@mendcode/protocol"
-import { ANTHROPIC_VERSION, createAnthropicProvider } from "./anthropic-messages"
-import { anthropicOwnHost } from "./anthropic-threads"
+import { ANTHROPIC_VERSION } from "./provider-endpoints"
 import { createChatCompletionsProvider, type ReasoningStyle } from "./openai-compatible"
 import { createResponsesProvider } from "./openai-responses"
 import { RetryableProviderError, type ModelProvider } from "./provider"
 import { scrub, type Fetch } from "./provider-http"
 import { createSdkProvider } from "./provider-sdk"
-import { createGeminiProvider } from "./google-gemini"
 import { createCopilotProvider } from "./github-copilot"
-import { createAzureProvider } from "./azure-openai"
-import { createBedrockProvider } from "./amazon-bedrock"
-import { createVertexProvider } from "./google-vertex"
-import { createVertexAnthropicProvider } from "./vertex-anthropic"
 import { createXaiProvider } from "./xai-responses"
 import { createMistralProvider } from "./mistral"
 import { createDeepInfraProvider, isDeepInfra } from "./deepinfra"
@@ -79,7 +73,7 @@ export const reasoningLevels = (provider: Pick<ResolvedProvider, "models" | "rea
 }
 
 /** The adapter for a resolved provider's wire format. `fetch` is for tests; `idleTimeoutMs` bounds a silent stream. */
-function adapterFor(input: { provider: ResolvedProvider; fetch?: Fetch; idleTimeoutMs?: number; gitlabSocket?: GitLabSocketFactory }): ModelProvider {
+async function adapterFor(input: { provider: ResolvedProvider; fetch?: Fetch; idleTimeoutMs?: number; gitlabSocket?: GitLabSocketFactory }): Promise<ModelProvider> {
   const { provider } = input
   if (isCohere(provider)) return createCohereProvider(input)
   if (isCerebras(provider)) return createCerebrasProvider(input)
@@ -100,17 +94,21 @@ function adapterFor(input: { provider: ResolvedProvider; fetch?: Fetch; idleTime
   if (provider.id === "kilo") return createKiloProvider({ id: provider.id, model: provider.models[0]?.id ?? "", baseUrl: provider.baseUrl, apiKey: provider.apiKey, ...(provider.headers ? { headers: provider.headers } : {}), takesImages: takesImages(provider), ...(input.fetch ? { fetch: input.fetch } : {}), idleTimeoutMs: input.idleTimeoutMs ?? (provider.chunkTimeout === false ? 0 : provider.chunkTimeout ?? 60_000) })
   if (provider.type === "xai") return createXaiProvider(input)
   if (provider.type === "mistral") return createMistralProvider(input)
-  if (provider.type === "google-vertex") return createVertexProvider(input)
-  if (provider.type === "google-vertex-anthropic") return createVertexAnthropicProvider(input)
-  if (provider.type === "azure") return createAzureProvider(input)
-  if (provider.type === "amazon-bedrock") return createBedrockProvider(input)
+  if (provider.type === "google-vertex") return (await import("./google-vertex")).createVertexProvider(input)
+  if (provider.type === "google-vertex-anthropic") return (await import("./vertex-anthropic")).createVertexAnthropicProvider(input)
+  if (provider.type === "azure") return (await import("./azure-openai")).createAzureProvider(input)
+  if (provider.type === "amazon-bedrock") return (await import("./amazon-bedrock")).createBedrockProvider(input)
   const type = provider.id === "perplexity" ? "openai-compatible" : provider.type
   if (type === "github-copilot") return createCopilotProvider(input)
   if (provider.npm && provider.id !== "perplexity") return createSdkProvider(provider, provider.npm)
   const model = provider.models[0]?.id ?? ""
   const common = { id: provider.id, model, ...(input.fetch ? { fetch: input.fetch } : {}), idleTimeoutMs: input.idleTimeoutMs ?? (provider.chunkTimeout === false ? 0 : provider.chunkTimeout ?? 60_000), takesImages: provider.id === "perplexity" ? () => false : takesImages(provider) }
-  if (type === "anthropic") return createAnthropicProvider({ ...common, baseUrl: provider.baseUrl, apiKey: provider.apiKey, ...(provider.headers ? { headers: provider.headers } : {}), ...(anthropicOwnHost(provider.baseUrl) ? { messageThreads: true } : {}) })
-  if (type === "google") return createGeminiProvider({ ...common, baseUrl: provider.baseUrl, apiKey: provider.apiKey, ...(provider.headers ? { headers: provider.headers } : {}) })
+  if (type === "anthropic") {
+    const { createAnthropicProvider } = await import("./anthropic-messages")
+    const { anthropicOwnHost } = await import("./anthropic-threads")
+    return createAnthropicProvider({ ...common, baseUrl: provider.baseUrl, apiKey: provider.apiKey, ...(provider.headers ? { headers: provider.headers } : {}), ...(anthropicOwnHost(provider.baseUrl) ? { messageThreads: true } : {}) })
+  }
+  if (type === "google") return (await import("./google-gemini")).createGeminiProvider({ ...common, baseUrl: provider.baseUrl, apiKey: provider.apiKey, ...(provider.headers ? { headers: provider.headers } : {}) })
   if (type === "openai")
     return createResponsesProvider({
       ...common,
@@ -153,7 +151,7 @@ export function safeMessage(error: unknown, key: string | undefined, max = 300) 
 /** Generation defaults and metadata follow the selected model on every call. */
 export function createApiProvider(input: { provider: ResolvedProvider; fetch?: Fetch; idleTimeoutMs?: number; gitlabSocket?: GitLabSocketFactory }): ModelProvider {
   const { provider } = input
-  const cache = new Map<string, ModelProvider>()
+  const cache = new Map<string, Promise<ModelProvider>>()
   return {
     id: provider.id, model: provider.models[0]?.id ?? "",
     compactionLimits: (model) => {
@@ -168,9 +166,10 @@ export function createApiProvider(input: { provider: ResolvedProvider; fetch?: F
       const metadata = provider.models.find((model) => model.id === name)
       let adapter = cache.get(name)
       if (!adapter) {
-        adapter = adapterFor({ ...input, provider: { ...provider, headers: { ...provider.headers, ...metadata?.headers } } })
+        adapter = adapterFor({ ...input, provider: { ...provider, headers: { ...provider.headers, ...metadata?.headers } } }).catch((error: unknown) => { cache.delete(name); throw error })
         cache.set(name, adapter)
       }
+      const resolved = await adapter
       const controller = new AbortController()
       const abort = () => controller.abort()
       request.signal.addEventListener("abort", abort, { once: true })
@@ -184,7 +183,7 @@ export function createApiProvider(input: { provider: ResolvedProvider; fetch?: F
       // Provider-native variants may lower the output cap, but cannot raise the model's limit.
       for (const key of ["max_tokens", "max_output_tokens", "max_completion_tokens"]) if (limit && typeof parameters[key] === "number") parameters[key] = Math.min(parameters[key], limit)
       try {
-        for await (const event of adapter.stream({ ...request, parameters, ...(limit ? { maxOutputTokens: Math.min(request.maxOutputTokens ?? limit, limit) } : {}), ...(metadata?.tool_call === false ? { tools: [], hostedTools: [] } : {}), signal: controller.signal })) {
+        for await (const event of resolved.stream({ ...request, parameters, ...(limit ? { maxOutputTokens: Math.min(request.maxOutputTokens ?? limit, limit) } : {}), ...(metadata?.tool_call === false ? { tools: [], hostedTools: [] } : {}), signal: controller.signal })) {
           if (event.type !== "usage" || event.usage.costMicros !== undefined || !metadata?.cost) { yield event; continue }
           const cost = event.usage.input + event.usage.cacheRead > 200_000 ? metadata.cost.context_over_200k ?? metadata.cost : metadata.cost
           yield { ...event, usage: { ...event.usage, costMicros: Math.round(event.usage.input * cost.input + event.usage.output * cost.output + event.usage.cacheRead * (cost.cache_read ?? cost.input) + event.usage.cacheWrite * (cost.cache_write ?? cost.input)) } }

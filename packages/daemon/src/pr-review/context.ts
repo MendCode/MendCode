@@ -1,6 +1,7 @@
 import { estimateTokens } from "@mendcode/protocol"
 import { parseDiffRows } from "@mendcode/protocol/wire"
-import { loc, traverseCalls, type Graph, type GraphNode } from "@mendcode/codegraph"
+import type { Graph, GraphNode } from "@mendcode/codegraph"
+import { loc, traverseCalls } from "../../../codegraph/src/query"
 import type { PullRequestInfo } from "./pull-request"
 import type { ReaderSummary } from "./readers"
 import { diffLines, generatedRules, triageByStat, triageFiles, type TriagedFile, type TriageReason } from "./triage"
