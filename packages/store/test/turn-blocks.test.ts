@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { EVENT_DICTIONARY_V1 } from "../src/event-dictionary"
 import { decodeTurnBlock, encodeTurnBlock, isTurnBlock } from "../src/turn-blocks"
 
 const turn = [
@@ -42,7 +43,23 @@ describe("turn blocks", () => {
   test("anything that is not a block, or a newer block version, is refused", () => {
     expect(() => decodeTurnBlock(new TextEncoder().encode('{"itemId":"x"}'))).toThrow(TypeError)
     const newer = encodeTurnBlock(turn)
-    newer[4] = 2
+    newer[4] = 3
     expect(() => decodeTurnBlock(newer)).toThrow(RangeError)
+  })
+
+  test("a short turn is deflated against the event dictionary, a long one stays zstd, and both decode the same rows", () => {
+    const short = encodeTurnBlock(turn)
+    expect(short[4]).toBe(2)
+    expect(short.byteLength).toBeLessThan(Bun.zstdCompressSync(new TextEncoder().encode(turn.map((row) => row.payload).join("")), { level: 9 }).byteLength + 5)
+    // Past deflate's 32 KB window the dictionary is out of reach: a long turn keeps zstd.
+    const long = Array.from({ length: 400 }, (_, i) => ({ seq: i + 1, type: "item.delta", at: 1793671856000 + i, payload: JSON.stringify({ itemId: "itm_01M6FJS46ZDW3A6K", text: `chunk ${i} ${"·".repeat(i % 37)} ${Math.sin(i).toString(36)}` }) }))
+    const block = encodeTurnBlock(long)
+    expect(block[4]).toBe(1)
+    expect(decodeTurnBlock(block)).toEqual(long)
+    expect(decodeTurnBlock(short)).toEqual(turn)
+  })
+
+  test("the event dictionary never changes: every version 2 block was deflated against these exact bytes", () => {
+    expect(new Bun.CryptoHasher("sha256").update(EVENT_DICTIONARY_V1).digest("hex")).toBe("1f84dc263c3e29288b383c71f958dfbf0ae5aa97769ffcabd58c8747e79363a7")
   })
 })

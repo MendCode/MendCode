@@ -154,6 +154,19 @@ The same run in two processes (daemon + client): 142 / 195 MB, 147 / 243, 148 / 
   alternating launches: 135 → 130 MB RSS at the prompt, 145 → 138 after the reply (pi: 133 and 141), footprint and turn CPU
   the same. `perf.ts --mode solo`: idle 6 MB lower, after scrolling and streaming 12 to 38 MB lower, stream frames p95
   4.5 / 6.2 / 6.3 → 5.1 / 6.8 / 6.8 ms (0 / 1,000 / 10,000 messages), first frame the same.
+- Fixed, solo terminal: idle CPU. Counting every timer that fired in an idle minute (a `--preload` that wraps `setTimeout` and
+  `setInterval`) left four: the hand-off check every 5 s, the relaunch check every 20 s, the quota schedule and the mflow
+  heartbeat every 30 s. The hand-off check asked the hosted daemon for its full `daemon.status` (settings, loops, jobs,
+  keep-alive) only to learn whether another client was attached; it now reads the daemon's client count first
+  (`clients()`, apps/cli/src/main.ts) and asks for the status only then. CPU in the second 30 s at rest: 0.09 → 0.04 s
+  (two pairs, with `MENDCODE_PROCESS=solo` as the bound: 0.04 to 0.05 s); pi: 0.
+- Measured, solo terminal: CPU of a turn. The same question takes 1.1 to 1.5 s of CPU against pi's 0.2 s, with about as many
+  frames (136 against 144, counted by their synchronized-output marks) and as many bytes written (66 to 81 KB against 64 to
+  72). Per thread (`ps -M`), about 1 s is the main thread and 0.3 s three runtime threads. A profile of the compiled binary
+  (`BUN_OPTIONS=--cpu-prof`) puts about a third of the main thread in `render`, spread over a dozen pieces of about 1 % each
+  (footer, sidebar, comments, transcript lines, encoding, the frame collections): each frame rebuilds every row, about 7 ms
+  where pi's differential renderer spends about 1. Young collections in the frame governor instead of full ones (one full
+  in four) did not lower it (1.17 to 1.31 s against 1.14 to 1.28) and left 1 to 4 MB more after the reply: not kept.
 - Tried, not kept: `BUN_JSC_libpasScavengeContinuously=1` lowers the prompt to 130 MB and 65 footprint but keeps a core busy
   at rest. `Bun.shrink()` after every collection of a turn gains 1 MB more for about a third more CPU during the turn.
   `--smol` and `Malloc=1` changed nothing or made it worse.

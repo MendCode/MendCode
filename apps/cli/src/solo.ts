@@ -57,6 +57,8 @@ export type SoloHost = {
   stop(): Promise<void>
   /** Appends to the daemon's own log (`<dir>/logs/daemon.stderr.log`): the terminal's screen is not a place for it. */
   log(level: "info" | "warn" | "error", message: string): void
+  /** Clients attached right now, this terminal's own included: a count, not a `daemon.status`. */
+  clients(): number
 }
 
 export type HostOptions = {
@@ -125,6 +127,7 @@ async function startInProcess(options: HostOptions): Promise<SoloHost> {
   return {
     attach: main.daemon.attachLoopback,
     log,
+    clients: () => main.daemon.clients(),
     get stopped() { return stopped },
     async stop() {
       if (stopped) return

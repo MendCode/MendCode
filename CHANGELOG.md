@@ -23,6 +23,8 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 - MendCode uses less memory right after it starts.
 - Answering a message takes much less memory, most of all the first one of a session.
+- A terminal that runs MendCode in one process holds less memory, and building a project's code graph is no slower for it.
+- Short messages and short turns take less disk.
 - Finished turns are stored compressed in the background, so sessions take much less disk, and search, stats and session
   recall run faster.
 - MendCode keeps its data in `~/.mendcode`. The first start moves `~/.mendcode-v2` there and leaves a link with the old name,

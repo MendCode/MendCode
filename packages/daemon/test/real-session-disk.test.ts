@@ -79,9 +79,10 @@ test("a short real session stores under its budget", async () => {
     const result = sessionBytes(db, sessionId)
     db.close()
     if (process.env.MEND_DISK_REPORT) console.log(JSON.stringify(result, null, 1))
-    // Measured 3,201 (4,880 before the settled turn sealed into one block, 6,406 before the transient snapshots, the empty
-    // snapshot row and the profile numbers went); a rise means a new row or column per session.
-    expect(result.total).toBeLessThan(3_300)
+    // Measured 2,528 (3,200 before small model messages and short turns were deflated against MendCode's own dictionaries and
+    // auxiliary usage stopped keeping a row per session, 4,880 before the settled turn sealed into one block, 6,406 before the
+    // transient snapshots, the empty snapshot row and the profile numbers went); a rise means a new row or column per session.
+    expect(result.total).toBeLessThan(2_650)
     // The turn is one block; only the idle state written after it stays a row until the next turn seals.
     expect(result.tables.turn_blocks!.rows).toBe(1)
     expect(result.tables.events!.rows).toBe(1)

@@ -40,7 +40,7 @@ test("the codec stores small messages abbreviated, large ones as before, and the
   expect(legacy.unpackText(codec.packText(small))).toBe(small)
 })
 
-test("a store reads abbreviated and plain model rows alike", async () => {
+test("a store reads abbreviated, dictionary-deflated and plain model rows alike", async () => {
   const { mkdtempSync } = await import("node:fs"), { tmpdir } = await import("node:os"), path = await import("node:path")
   const { Database } = await import("bun:sqlite"), { createIdFactory } = await import("@mendcode/protocol"), { openStore } = await import("../src")
   const dir = mkdtempSync(path.join(tmpdir(), "mend-message-prefix-")), ids = createIdFactory()
@@ -49,9 +49,10 @@ test("a store reads abbreviated and plain model rows alike", async () => {
     store.createSession({ id: parent, directory: "/probe", title: "prefix" })
     store.engineMessages.save(parent, "native", shapes.slice(0, 4) as never)
     const raw = new Database(path.join(dir, "mendd.db"), { readonly: true })
-    const stored = raw.query<{ payload: string }, []>("SELECT payload FROM engine_messages ORDER BY idx").all().map(row => row.payload)
+    const stored = raw.query<{ payload: string | Uint8Array }, []>("SELECT payload FROM engine_messages ORDER BY idx").all().map(row => row.payload)
     raw.close()
-    expect(stored.every(text => text.charCodeAt(0) < 32)).toBe(true)
+    // Abbreviated TEXT, or a wrapped BLOB (\0MZ1) when deflating against the message dictionary was smaller: never the plain JSON.
+    expect(stored.every(value => typeof value === "string" ? value.charCodeAt(0) < 32 : value[0] === 0)).toBe(true)
     expect(store.engineMessages.load(parent, "native")).toEqual(shapes.slice(0, 4))
     const writer = new Database(path.join(dir, "mendd.db"))
     writer.query("INSERT INTO engine_messages(session_id, engine, idx, payload) VALUES (?, 'native', 4, ?)").run(parent, JSON.stringify(shapes[1]))

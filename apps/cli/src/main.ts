@@ -1044,6 +1044,8 @@ if (soloHost && processMode === "auto") {
   const { HAND_OFF_CHECK_MS, handOffWanted } = await import("./solo")
   const handOff = setInterval(async () => {
     if (!soloHost || soloHost.stopped || leaving) return clearInterval(handOff)
+    // Alone with the daemon there is nothing to hand off: the full status (settings, loops, jobs) is read only once another client is here.
+    if (soloHost.clients() <= 1) return
     const status = await client.send({ type: "daemon.status" }).catch(() => undefined)
     if (!status?.ok || !handOffWanted(status.result)) return
     clearInterval(handOff)

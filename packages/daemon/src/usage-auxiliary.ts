@@ -24,7 +24,7 @@ export function createAuxiliaryUsage(input: { store: Store; now(): number; price
         const directory = call.directory ?? (call.sessionId ? input.store.sessionDirectory(call.sessionId) : undefined)
         const used = usage ?? { provider: model.includes(":") ? model.split(":")[0]! : "", model, input: 0, output: 0 }
         input.store.usageAuxiliary.record({
-          at: input.now(), role: call.role, provider: used.provider, model: used.model, sessionId: call.sessionId, directory,
+          at: input.now(), role: call.role, provider: used.provider, model: used.model, directory,
           input: used.input, output: used.output, reasoning: used.reasoning, cacheRead: used.cacheRead, cacheWrite: used.cacheWrite,
           costMicros: usage ? input.price(usage) : undefined,
         })

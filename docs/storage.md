@@ -68,6 +68,24 @@ stream steps its sequence by one and mostly repeats its time and chunk size; the
 only when the columns are smaller and decode to the same entries; old model rows are not rewritten. Earlier executables
 cannot read either form.
 
+## Preset dictionaries for small rows
+
+zstd learns repeated text inside one frame, so a row of a few hundred bytes or a short turn gains little: most of it is
+MendCode's own spelling, written once per row. Two frozen dictionaries hold that spelling, and raw deflate (`node:zlib`,
+built into Bun) starts each small row with it. Each is used only when it makes the row smaller, and a test pins its
+SHA-256, because every stored row was deflated against those exact bytes: a new dictionary is a new kind.
+
+- Model messages under 1 KB (`message-dictionary.ts`, kind `D` of the `\0MZ1` header): the JSON envelope, the tool names
+  and their argument keys, the `<orientation>` block and the read tool's numbered lines. On a real data directory's 6,495
+  small rows: 46 % smaller than as text, against 31 % for zstd alone; about 9 µs to write a row and 3.5 µs to read one.
+- Sealed turns of up to 32 KB (`event-dictionary.ts`, turn block version 2): event types, id prefixes and the keys of
+  `item.*`, `queue.*` and `usage.recorded`. Turns under 4 KB are 17 % smaller than with zstd alone; larger turns keep
+  zstd (version 1), and across all turns the gain is 1.5 %.
+
+Neither holds a model name, a path past `/Users/` or any project or user text. The short real session above: 3,200 →
+2,528 bytes, with the auxiliary usage table no longer keeping a row per session (one per day, role, model and directory;
+no report read the session). Earlier executables cannot read the new forms.
+
 The probe's 100 sessions now add 24 pages beyond the empty store (events 14, model history 5, message-item index 3,
 turns 2; delta blocks fit the page the empty table already has), so the allocated growth goes from 4,424 to 3,932 bytes
 per session, short and long (Pi: 4,096 short, 8,192 long). A `VACUUM INTO` of the probe database is two pages smaller than

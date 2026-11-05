@@ -410,8 +410,8 @@ Measured 2026-11-02 on a MacBook Pro (Mac16,8), Apple M4 Pro, 24 GB RAM, macOS 2
 | Compiled CLI `help` startup | 59.3 ms | `compiledTarget` + `measureCliStartup` from [perf.ts](scripts/perf.ts) |
 | Bytes per session, 60-session batch | 154,283 | Rounded batch total / 60 after checkpoint, compression and sharing |
 | Bytes for 2,000 sessions | 235,356,160 (224.5 MiB) | Database + WAL + blobs after checkpoint; 117,678 bytes/session rounded |
-| Real CLI, one process: at the prompt / after a first reply | 135–137 / 145–148 MB RSS, 64–65 / 66–68 MB physical footprint | Compiled build in a pseudo-terminal 160×45, clean HOME with only the login copied, minimalist, balanced and full tiers, one read-only question on gpt-6-luna, the prompt after 12 s, three launches each (pi the same way: 133 / 141 MB RSS, 81 / 88 MB footprint) |
-| Real session on disk | 3.2–3.5 KB | Same run: every stored byte of that session's rows plus its session row, read after the daemon's idle step (pi: 2.8 KB session file) |
+| Real CLI, one process: at the prompt / after a first reply | 129–131 / 138–140 MB RSS, 63–64 / 66–69 MB physical footprint | Compiled build in a pseudo-terminal 160×45, clean HOME with only the login copied, minimalist, balanced and full tiers, one read-only question on gpt-6-luna, the prompt after 12 s, three launches each (pi the same way: 133 / 139 MB RSS, 81 / 88 MB footprint) |
+| Real session on disk | 2.5–2.6 KB | Same run: every stored byte of that session's rows plus its session row, read after the daemon's idle step (pi: 2.8–2.9 KB session file) |
 | Daemon RSS, idle / with a client attached | 95–98 MB / 119–130 MB | `bun scripts/perf.ts --mode daemon,solo`, compiled daemon, 0 / 1,000 / 10,000 messages |
 | Client RSS, idle / after scrolling and streaming | 66–74 MB / 131–165 MB | Same run, compiled client |
 | First frame | 163 ms / 198 ms / 220 ms | Same run, `daemon` mode, 0 / 1,000 / 10,000 messages |

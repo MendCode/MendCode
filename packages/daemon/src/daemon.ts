@@ -6369,6 +6369,8 @@ export async function startDaemon(options: DaemonOptions) {
     mflowPort: mflowListener?.port,
     remotePeers: () => [...connections].filter((c) => c.peer).map((c) => ({ address: c.remoteAddress, tokenName: c.peer!.name, readOnly: c.peer!.readOnly })),
     connections: () => connections.size,
+    /** Connections that said who they are: `daemon.status`'s `clients`, without building the rest of the status. */
+    clients: () => { let n = 0; for (const peer of connections) if (peer.clientId) n++; return n },
     attachLoopback,
     serverEventSubscriptions: () => serverEventObservers.size,
     /** Whether the workflow service was built (P6: false on a daemon that never saw a workflow). */

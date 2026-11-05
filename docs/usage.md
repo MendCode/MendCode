@@ -123,8 +123,8 @@ auxiliary (outside turns): 99.8K tokens · 26 calls · cost $0.02 (+25 unpriced)
 
 A call that fails or reports no usage counts as one call of its role with zero tokens and unknown cost. Recording is
 bookkeeping in every tier: no request, no token and no chrome of its own; the panel appears only on /usage and only when there
-were such calls. The store keeps one row per day, role, model and session (`usage_auxiliary_daily`); rows outlive their session,
-like the global daily sums. The budget ledger ([budgets](budgets.md)) counted these calls before and still does, once.
+were such calls. The store keeps one row per day, role, model and directory (`usage_auxiliary_daily`), like the global daily sums:
+every session of a project that day adds to the same row. The budget ledger ([budgets](budgets.md)) counted these calls before and still does, once.
 
 ## Waste
 

@@ -1,8 +1,13 @@
+import { deflateRawSync, inflateRawSync } from "node:zlib"
 import type { OwnEventRow } from "./compress"
+import { EVENT_DICTIONARY_V1 } from "./event-dictionary"
 
 /** `\0MB1`: a sealed turn block. Its rows come back exactly as they were stored in `events`. */
 const MAGIC = [0x00, 0x4d, 0x42, 0x31] as const
-const VERSION = 1
+/** A zstd frame (any size). */
+const VERSION_ZSTD = 1
+/** A raw deflate stream against `EVENT_DICTIONARY_V1`, written when that is smaller: short turns (event-dictionary.ts). */
+const VERSION_DICT = 2
 const ZSTD_LEVEL = 9
 
 const encoder = new TextEncoder()
@@ -36,7 +41,7 @@ const unzigzag = (value: number) => (value % 2 === 1 ? -(value + 1) / 2 : value 
 export const isTurnBlock = (value: Uint8Array) => value.byteLength > MAGIC.length && MAGIC.every((byte, i) => value[i] === byte)
 
 /**
- * One turn's stored event rows as a single zstd frame. Sequence and time are deltas, types an index into the block's own
+ * One turn's stored event rows as a single compressed frame: zstd, or deflate against the event dictionary when that is smaller. Sequence and time are deltas, types an index into the block's own
  * table, payloads the stored strings unchanged; `decodeTurnBlock` returns rows byte-identical to the ones given.
  */
 export function encodeTurnBlock(rows: readonly OwnEventRow[]): Uint8Array {
@@ -74,18 +79,23 @@ export function encodeTurnBlock(rows: readonly OwnEventRow[]): Uint8Array {
     plain.set(part, offset)
     offset += part.byteLength
   }
-  const packed = Bun.zstdCompressSync(plain, { level: ZSTD_LEVEL })
+  const zstd = Bun.zstdCompressSync(plain, { level: ZSTD_LEVEL })
+  // Deflate's window is 32 KB: past that the dictionary is out of reach and zstd wins anyway.
+  const dict = plain.byteLength <= 32_768 ? deflateRawSync(plain, { level: 9, dictionary: EVENT_DICTIONARY_V1 }) : undefined
+  const [version, packed] = dict && dict.byteLength < zstd.byteLength ? [VERSION_DICT, dict] : [VERSION_ZSTD, zstd]
   const out = new Uint8Array(MAGIC.length + 1 + packed.byteLength)
   out.set(MAGIC, 0)
-  out[MAGIC.length] = VERSION
+  out[MAGIC.length] = version
   out.set(packed, MAGIC.length + 1)
   return out
 }
 
 export function decodeTurnBlock(block: Uint8Array): OwnEventRow[] {
   if (!isTurnBlock(block)) throw new TypeError("[STORE]: not a turn block")
-  if (block[MAGIC.length] !== VERSION) throw new RangeError(`[STORE]: turn block version ${block[MAGIC.length]} is newer than this build`)
-  const plain = Bun.zstdDecompressSync(block.subarray(MAGIC.length + 1))
+  const version = block[MAGIC.length]
+  if (version !== VERSION_ZSTD && version !== VERSION_DICT) throw new RangeError(`[STORE]: turn block version ${version} is newer than this build`)
+  const body = block.subarray(MAGIC.length + 1)
+  const plain = version === VERSION_DICT ? inflateRawSync(body, { dictionary: EVENT_DICTIONARY_V1 }) : Bun.zstdDecompressSync(body)
   const at = { offset: 0 }
   const typeCount = readVarint(plain, at)
   const lengths = Array.from({ length: typeCount }, () => readVarint(plain, at))
