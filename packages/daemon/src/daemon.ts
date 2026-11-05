@@ -2852,10 +2852,16 @@ export async function startDaemon(options: DaemonOptions) {
   armRetentionSchedule()
   const idleSettledPrune = createIdleDeltaFold({ clock, delayMs: SETTLED_PRUNE_DELAY_MS, onWake: true,
     busy: () => [...actors.values()].some(actorWorking) || scheduler.snapshot().length > 0 || engineJobs() > 0,
-    step: () => store.pruneSettledEvents(20),
+    step: () => {
+      const pruned = store.pruneSettledEvents(20)
+      const sealed = store.sealSettledTurns(50)
+      return { complete: pruned.complete && sealed.complete }
+    },
     warn: error => logLine("warn", `[DAEMON]: pruning settled session snapshots failed: ${error instanceof Error ? error.message : String(error)}`),
   })
   wakeSettledPrune = idleSettledPrune.wake
+  // Once at start too: history settled before this daemon ran (an upgrade, a crash mid-step) seals without waiting for a turn.
+  idleSettledPrune.wake()
   const idleDeltaFold = createIdleDeltaFold({ clock,
     busy: () => [...actors.values()].some(actorWorking) || scheduler.snapshot().length > 0 || engineJobs() > 0,
     step: () => store.foldStoredDeltas(100),

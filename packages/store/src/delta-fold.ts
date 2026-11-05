@@ -1,10 +1,10 @@
 import type { Database } from "bun:sqlite"
 import type { SessionEvent } from "@mendcode/protocol"
-import { eventFromRow, type EventRow, type ObjectLoader } from "./compress"
+import { eventFromRow, type EventRow, type ObjectLoader, type OwnEventRow } from "./compress"
 import { isDeltaLengths, isPlainDeltaLengths, packDeltaLengths, unpackDeltaLengths } from "./delta-lengths"
 
 /** Only finalized, self-contained items fold. The archive keeps exact historical cuts, not just concatenated text. */
-export function createDeltaFold(db: Database, load?: ObjectLoader) {
+export function createDeltaFold(db: Database, load?: ObjectLoader, sealedRow: (sessionId: string, seq: number) => OwnEventRow | undefined = () => undefined) {
   db.run(`CREATE TABLE IF NOT EXISTS folded_deltas (
     session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
     item_id TEXT NOT NULL, completed_seq INTEGER NOT NULL, first_seq INTEGER NOT NULL,
@@ -19,7 +19,15 @@ export function createDeltaFold(db: Database, load?: ObjectLoader) {
   const exists = db.query("SELECT 1 FROM folded_deltas WHERE session_id = ? AND item_id = ?")
   const remove = db.query(`DELETE FROM events INDEXED BY events_message_item WHERE ${matching} AND type = 'item.delta'
     AND NOT EXISTS (SELECT 1 FROM transcript_prefix p WHERE p.parent_id = events.session_id AND p.parent_seq = events.seq)`)
-  const block = db.query<{ data: Uint8Array }, [string, string]>("SELECT data FROM folded_deltas WHERE session_id = ? AND item_id = ?")
+  const block = db.query<{ data: Uint8Array; completed_seq: number }, [string, string]>("SELECT data, completed_seq FROM folded_deltas WHERE session_id = ? AND item_id = ?")
+  const completionRow = db.query<EventRow, [string, string]>(`SELECT session_id, seq, type, at, payload FROM events INDEXED BY events_message_item WHERE ${matching} AND type = 'item.completed' ORDER BY seq LIMIT 1`)
+  /** An item's completion: its row in `events`, or in a sealed turn block (`sealedRow`) once its turn sealed. */
+  function completionOf(sessionId: string, itemId: string, completedSeq: number): EventRow | undefined {
+    const row = completionRow.get(sessionId, itemId)
+    if (row) return row
+    const sealed = sealedRow(sessionId, completedSeq)
+    return sealed?.type === "item.completed" ? { session_id: sessionId, ...sealed } : undefined
+  }
   const crossing = db.query<{ item_id: string }, [string, number, number]>("SELECT item_id FROM folded_deltas WHERE session_id = ? AND first_seq < ? AND completed_seq >= ?")
   const migrationKey = "delta-fold-cursor-v1"
   type Delta = Extract<SessionEvent, { type: "item.delta" }>
@@ -45,7 +53,7 @@ export function createDeltaFold(db: Database, load?: ObjectLoader) {
       const row = block.get(sessionId, itemId)
       if (!row) return []
       if (isDeltaLengths(row.data)) {
-        const completion = db.query<EventRow, [string, string]>(`SELECT session_id, seq, type, at, payload FROM events INDEXED BY events_message_item WHERE ${matching} AND type = 'item.completed' ORDER BY seq LIMIT 1`).get(sessionId, itemId)
+        const completion = completionOf(sessionId, itemId, row.completed_seq)
         const event = completion ? eventFromRow(completion, load) : undefined
         if (event?.type !== "item.completed" || typeof event.text !== "string") throw new RangeError("delta completion unavailable")
         return unpackDeltaLengths(row.data, event.text).filter(([seq]) => seq < beforeSeq).map(([seq, at, text]) => ({ sessionId, itemId, type: "item.delta", seq, at, text } as Delta))
@@ -78,13 +86,13 @@ export function createDeltaFold(db: Database, load?: ObjectLoader) {
       const key = "delta-lengths-cursor-v2"
       const saved = db.query<{ value: string }, [string]>("SELECT value FROM meta WHERE key = ?").get(key)
       const [session, item] = saved ? JSON.parse(saved.value) as [string, string] : ["", ""]
-      const blocks = db.query<{ session_id: string; item_id: string; data: Uint8Array }, [string, string, number]>("SELECT session_id,item_id,data FROM folded_deltas WHERE (session_id,item_id)>(?1,?2) ORDER BY session_id,item_id LIMIT ?3").all(session, item, Math.max(1, Math.min(limit, 100)))
+      const blocks = db.query<{ session_id: string; item_id: string; completed_seq: number; data: Uint8Array }, [string, string, number]>("SELECT session_id,item_id,completed_seq,data FROM folded_deltas WHERE (session_id,item_id)>(?1,?2) ORDER BY session_id,item_id LIMIT ?3").all(session, item, Math.max(1, Math.min(limit, 100)))
       let visited = 0
       db.transaction(() => {
         for (const block of blocks) {
           if (db.query("SELECT 1 FROM sessions WHERE id=? AND active_turn IS NOT NULL").get(block.session_id)) break
           if (isPlainDeltaLengths(block.data)) {
-            const completion = db.query<EventRow, [string, string]>(`SELECT session_id, seq, type, at, payload FROM events INDEXED BY events_message_item WHERE ${matching} AND type = 'item.completed' ORDER BY seq LIMIT 1`).get(block.session_id, block.item_id)
+            const completion = completionOf(block.session_id, block.item_id, block.completed_seq)
             // A block whose completion cannot be read (shared output gone) stays as written; the cursor moves on.
             try {
               const event = completion ? eventFromRow(completion, load) : undefined
@@ -119,7 +127,7 @@ export function createDeltaFold(db: Database, load?: ObjectLoader) {
           for (const block of blocks) {
             if (db.query("SELECT 1 FROM sessions WHERE id=? AND active_turn IS NOT NULL").get(block.session_id)) break
             if (!isDeltaLengths(block.data)) {
-              const row = db.query<EventRow, [string, number]>("SELECT session_id, seq, type, at, payload FROM events WHERE session_id=? AND seq=?").get(block.session_id, block.completed_seq)
+              const row = completionOf(block.session_id, block.item_id, block.completed_seq)
               const event = row ? eventFromRow(row, load) : undefined
               if (event?.type === "item.completed" && event.text && !event.blob) {
                 const payload = Buffer.from(Bun.zstdDecompressSync(block.data)).toString("utf8")

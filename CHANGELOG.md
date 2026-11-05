@@ -21,6 +21,8 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Changed
 
+- Finished turns are stored compressed in the background, so sessions take much less disk, and search, stats and session
+  recall run faster.
 - MendCode keeps its data in `~/.mendcode`. The first start moves `~/.mendcode-v2` there and leaves a link with the old name,
   so sessions, settings and sign-ins carry over. `MENDCODE_DIR` names another folder; `MENDCODE_V2_DIR` still works.
 - A terminal that hosts the daemon, and a separate daemon, hold less memory at the prompt.

@@ -1,6 +1,7 @@
 import type { Database } from "bun:sqlite"
 import type { SessionId } from "@mendcode/protocol"
 import { unpackText, type ObjectLoader } from "./compress"
+import type { SealedTurns } from "./sealed-turns"
 
 export type SessionSearchHit = { sessionId: SessionId; snippet: string }
 export type SessionSearchOptions = { text: string; regex?: boolean; sessionIds?: SessionId[]; directory?: string; limit?: number }
@@ -24,7 +25,7 @@ export function snippetAround(text: string, at: number, length: number): string 
  * the newest 300 messages inside the last 3000 events of each. A phrase is matched without regard to case; `regex` reads
  * it as an expression instead.
  */
-export function createSessionSearch(db: Database, load?: ObjectLoader) {
+export function createSessionSearch(db: Database, load?: ObjectLoader, sealed?: Pick<SealedTurns, "sealedThrough" | "rows">) {
   const candidates = db.query<{ id: string; last_seq: number }, [string, number]>("SELECT id, last_seq FROM sessions WHERE (?1 = '' OR directory = ?1) AND archived_at IS NULL ORDER BY updated_at DESC LIMIT ?2")
   const known = db.query<{ id: string; last_seq: number }, [string]>("SELECT id, last_seq FROM sessions WHERE id = ?")
   // The message items are listed once per session (an uncorrelated IN), not looked up again for every completed event:
@@ -38,6 +39,37 @@ export function createSessionSearch(db: Database, load?: ObjectLoader) {
     AND json_extract(e.payload, '$.itemId') IN (SELECT json_extract(s.payload, '$.itemId') FROM events_read s WHERE s.session_id = ?1 AND s.type = 'item.started'
       AND json_extract(s.payload, '$.kind') IN ('user_message', 'agent_message'))
     ORDER BY e.seq DESC LIMIT ?3`)
+  const revisionOf = db.query<{ payload: string }, [string, string]>("SELECT payload FROM message_revisions WHERE session_id = ? AND item_id = ?")
+  type TextRow = { text: string | null; z: number | null; zref: string | null }
+
+  /** The `texts` statement's rows for a session's sealed turns after `afterSeq`, newest first: the same messages, revisions applied. */
+  function sealedTexts(sessionId: string, afterSeq: number, limit: number): TextRow[] {
+    const through = sealed!.sealedThrough(sessionId)
+    if (through <= afterSeq || limit <= 0) return []
+    // A message's start can sit a little before the window its completion falls in.
+    const rows = sealed!.rows(sessionId, Math.max(0, afterSeq - SCAN_EVENTS), through)
+    const messages = new Set<string>()
+    for (const row of rows) {
+      if (row.type !== "item.started") continue
+      const fields = JSON.parse(row.payload) as { itemId?: string; kind?: string }
+      if (fields.itemId && (fields.kind === "user_message" || fields.kind === "agent_message")) messages.add(fields.itemId)
+    }
+    const out: TextRow[] = []
+    for (let i = rows.length - 1; i >= 0 && out.length < limit; i--) {
+      const row = rows[i]!
+      if (row.seq <= afterSeq || row.type !== "item.completed") continue
+      const fields = JSON.parse(row.payload) as { itemId?: string; text?: unknown; z?: number; zref?: string }
+      if (!fields.itemId || !messages.has(fields.itemId) || fields.text === undefined || fields.text === null) continue
+      const revision = revisionOf.get(sessionId, fields.itemId)
+      if (revision) {
+        const revised = JSON.parse(revision.payload) as { deleted?: boolean; snapshot?: { text?: string } }
+        out.push({ text: revised.deleted ? null : revised.snapshot?.text ?? String(fields.text), z: null, zref: null })
+        continue
+      }
+      out.push({ text: String(fields.text), z: fields.z ?? null, zref: fields.zref ?? null })
+    }
+    return out
+  }
 
   return {
     /** Sessions whose messages contain the phrase (or match the expression), newest session first, with the first matching line. */
@@ -54,7 +86,10 @@ export function createSessionSearch(db: Database, load?: ObjectLoader) {
       const hits: SessionSearchHit[] = []
       const limit = options.limit ?? 50
       for (const session of sessions) {
-        for (const row of texts.all(session.id, session.last_seq - SCAN_EVENTS, SCAN_MESSAGES)) {
+        const rows = texts.all(session.id, session.last_seq - SCAN_EVENTS, SCAN_MESSAGES)
+        // Sealed turns (sealed-turns.ts) are older than every row still in `events`, so they continue the newest-first scan.
+        if (sealed && rows.length < SCAN_MESSAGES) rows.push(...sealedTexts(session.id, session.last_seq - SCAN_EVENTS, SCAN_MESSAGES - rows.length))
+        for (const row of rows) {
           const text = unpackText(row.text, row.z, row.zref, load)?.slice(0, MAX_TEXT)
           const match = text ? matcher.exec(text) : null
           if (!text || !match) continue

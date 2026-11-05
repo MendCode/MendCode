@@ -1,9 +1,11 @@
 import type { Database } from "bun:sqlite"
 import { SessionBackground, type ClientId, type SessionId, type SessionBackgroundPatch, type TaskRecord, type QueueId } from "@mendcode/protocol"
 
+import type { SealedTurns } from "./sealed-turns"
+
 export type OwnerWake = { task: TaskRecord; queueId: QueueId }
 
-export function createSessionBackgroundRecords(db: Database, now: () => number) {
+export function createSessionBackgroundRecords(db: Database, now: () => number, sealed?: Pick<SealedTurns, "withId">) {
   db.run(`CREATE TABLE IF NOT EXISTS background_sessions (
     id TEXT PRIMARY KEY REFERENCES sessions(id) ON DELETE CASCADE, payload TEXT NOT NULL
   ) WITHOUT ROWID`)
@@ -72,6 +74,7 @@ export function createSessionBackgroundRecords(db: Database, now: () => number) 
       delivered(wake: OwnerWake) { db.query("UPDATE child_owner_wakes SET delivered = 1 WHERE id = ?").run(`${wake.task.taskId}:${wake.task.generation}`) },
       queued(wake: OwnerWake) {
         return db.query("SELECT 1 FROM events WHERE session_id = ? AND type = 'queue.added' AND json_extract(payload, '$.queueId') = ? LIMIT 1").get(wake.task.parentId, wake.queueId) !== null
+          || (sealed?.withId(wake.task.parentId, "queueId", wake.queueId, ["queue.added"]).length ?? 0) > 0
       },
     },
   }

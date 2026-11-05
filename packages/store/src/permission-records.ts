@@ -1,9 +1,10 @@
 import type { Database } from "bun:sqlite"
 import { unpackEvent, type ObjectLoader } from "./compress"
+import type { SealedTurns } from "./sealed-turns"
 import { PermissionGrant, PermissionReview, type PermissionGrantHistory, type SessionEvent, type SessionId } from "@mendcode/protocol"
 
 /** Audit only: reopening the database never reactivates an approval. */
-export function createPermissionRecords(db: Database, now: () => number = Date.now, load?: ObjectLoader) {
+export function createPermissionRecords(db: Database, now: () => number = Date.now, load?: ObjectLoader, sealed?: Pick<SealedTurns, "after">) {
   db.run(`CREATE TABLE IF NOT EXISTS permission_grants (
     id TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
     payload TEXT NOT NULL, revoked_at INTEGER
@@ -30,7 +31,9 @@ export function createPermissionRecords(db: Database, now: () => number = Date.n
       return turns.reverse().map((turn) => {
         // Only the turn's own completion is decoded; its envelope is not needed.
         let message: Extract<SessionEvent, { type: "item.completed" }> | undefined
-        for (const row of completions.all(sessionId, turn.seq)) {
+        // A sealed turn's rows (sealed-turns.ts) come before every row still in `events`.
+        const rows: Array<{ type: string; payload: string }> = [...(sealed?.after(sessionId, turn.seq, 8) ?? []), ...completions.all(sessionId, turn.seq)]
+        for (const row of rows.slice(0, 8)) {
           if (row.type !== "item.completed") continue
           const fields = JSON.parse(row.payload) as Record<string, unknown>
           if (fields.itemId === turn.item_id) { message = unpackEvent(fields, load) as typeof message; break }
