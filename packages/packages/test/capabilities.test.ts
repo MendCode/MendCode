@@ -27,3 +27,20 @@ test("declared capabilities and static hints never execute package code or expos
   symlinkSync(path.join(root, "extensions", "index.ts"), path.join(root, "link.ts"))
   expect(packageCapabilities(root).complete).toBe(false)
 })
+
+test("a JSON value or string ending in net, http, tls or fs is not network or filesystem use", () => {
+  const root = temp()
+  mkdirSync(path.join(root, "recipes"))
+  writeFileSync(path.join(root, "mendcode-package.json"), JSON.stringify({ name: "test", version: "1", description: "test", capabilities: [] }))
+  writeFileSync(path.join(root, "recipes", "r.json"), JSON.stringify({ description: "magnet", roles: { main: { model: "claude-sonnet" }, small: { model: "net" } }, note: "https", other: "dfs" }))
+  expect(packageCapabilities(root).observed).toEqual([])
+})
+
+test("imports and requires of the network and file modules are still found", () => {
+  const root = temp()
+  mkdirSync(path.join(root, "extensions"))
+  writeFileSync(path.join(root, "mendcode-package.json"), JSON.stringify({ name: "test", version: "1", description: "test", capabilities: [] }))
+  writeFileSync(path.join(root, "extensions", "a.ts"), 'import net from "node:net"\nimport { readFileSync } from "fs"')
+  writeFileSync(path.join(root, "extensions", "b.js"), 'const tls = require("tls")\nconst h = await import("https")\nconst fsp = require( "node:fs/promises" )')
+  expect(packageCapabilities(root).observed).toEqual(["filesystem", "network"])
+})

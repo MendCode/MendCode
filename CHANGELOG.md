@@ -16,7 +16,6 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 - The PR reviewer's own tokens show in `/usage` as the `prReview` role. See [usage](docs/usage.md#auxiliary-calls).
 - `budget.tokens_per_diff_token` scales a review's token cap with its diff. See [PR review](docs/pr-review.md).
 - `threads` and `sessions` ask for up to 100 sessions (10 by default) and take `query`, `state` and `project` filters. See [peers](docs/peers.md#sessions).
-
 - `/loop` understands phrases in Spanish and English (`/loop cada 5 minutos ve diciéndome`, `/loop daily at 9am check the issues`) and asks for one line of confirmation before it starts; with no interval it paces itself (`adaptive`), and a schedule it cannot read is converted by the small model. The strict form (`/loop every 30m …`) is unchanged. See [loops](docs/loops.md#natural-language).
 - A loop starts with the permission mode of the session that created it (never more): from full access it asks nothing, and a report-only loop reads any path like its creator. From a session that asks, it reads what that session could read and asks about the rest; the footer shows `needs input` and `/loops` shows the request and answers it with `a`, `o` or `x`. A run nobody answers ends with a clear message. See [loops](docs/loops.md#permissions-and-approvals).
 - Every loop run leaves a short notice in the session that created the loop, with a link to the loop's session; it starts no model turn and the model reads it with your next message (`/loop open <id>`); `notify: none` turns it off. See [loops](docs/loops.md#notices-in-the-creator-session).
@@ -42,9 +41,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 ### Changed
 
 - `/context`, the footer and the sidebar show the same used / compaction point for a session, before and after the first message; `/context` uses the provider's count of the last call (images are estimated at 1,500 tokens each) and says whether the figure is measured or estimated. With Claude Code the point is the one its process was given, the model window is listed apart, and a changed `claude_compact` point restarts the process at the next turn. See [Claude Code](docs/claude-code.md).
-
 - The session lists of `threads` and `sessions` (and the plan list, and other programs' chats) are shorter: one header, rows grouped by project, short ids that every tool accepts, ages like `3m`, and the state only when a session is busy.
-
 - A wide flowchart is drawn in the chat instead of shown as source: long labels wrap (`<br/>` still breaks a line), spacing tightens, and a left-to-right flow turns top-down when it still does not fit. The note says what was tried when nothing fits.
 - Full tier: the Git page's push, publish and pull request are on by default (`/experimental git_actions off` turns them off); each one still shows its command on a card and waits for Enter. Balanced keeps them behind the switch. See [git](docs/git.md#the-switch).
 - A session with a `/goal` now has the goal tools in its request in every tier, so the agent can mark the goal complete or blocked without searching for the tool first; sessions without a goal are unchanged.
@@ -95,12 +92,14 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Fixed
 
+- The folders MendCode makes in the system temporary directory for Claude Code, Codex and ACP sessions are removed when the daemon stops, and a daemon that died leaves none behind: the next start clears them.
+- `--safe-mode` against a daemon not started with it names `--safe-mode` in its refusal, not `--pure`.
 - A repeated `/pr review` joins the review already running, and one comment gets one notice however many watches the repository has.
 - A review that cannot read the change ends as incomplete without verifying, and no longer says "nothing was posted: no new findings".
 - A thread reply such as `Fixed in <head>` no longer counts as a review of that head.
 - A message with comments stays a card under your own `message.user` view unless the view declares `handles: ["comments"]`, and the pinned prompt row and the message list show it as `1 comment` instead of its tags.
+- `mendcode package check` no longer reports network or file use for a value such as `claude-sonnet` or `magnet`: only imports and requires of those modules count.
 - PR reviews, report-only loops, read-only workflow tasks and side chats on Codex, Pi, ACP and Claude Code are no longer told to present a plan.
-
 - Esc Esc on a message nobody answered yet brings it back into the prompt at once with its images, even with a draft or a queued message behind it; when it cannot, the notice says the model already answered.
 - A report-only loop run no longer waits on "Review plan": it is not offered the plan tools or the plan mode note, and writes its report as the answer.
 - Applying a plan on Claude Code or an ACP agent lifts the plan agent's read-only limit at once, so the next write in the same turn is allowed, and the session moves to the plan's destination agent.
@@ -121,7 +120,6 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 - With Caps Lock on, the letter shortcuts of settings and of the pages work as without it; capitals with a meaning of their own, like `G` or `J`, keep it.
 - `mendcode session attach ID` opens the session like `mendcode attach ID`.
 - `mendcode --help` is one grouped list of every command, and the help of every command fits 80 columns with one usage line.
-
 - The code graph's "tokens saved" compares each lookup with what you would have used instead (a grep, a line range, reading the file) rather than with whole files. The project map shows none. See [code graph](docs/code-graph.md#how-the-saving-is-estimated).
 - graft's own "tokens saved" line is no longer added to `/usage`, the footer or the map card.
 - The "tokens saved" of command output filters no longer counts output beyond what the model would have been shown.
@@ -154,7 +152,6 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
   telling you to do it by hand.
 - OpenCode Go answers again: every request carries the session it belongs to, as Go now requires. OpenCode Zen gets it too.
 - Preserve terminal preferences and settings across versions, keep recovery history, and guard against accidental downgrades.
-
 - Changes to a file saved twice in quick succession are no longer missed by model lists, config files, the file viewer or code graph
   excerpts.
 

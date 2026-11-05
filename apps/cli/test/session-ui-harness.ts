@@ -34,6 +34,8 @@ export function tempDir(prefix = "mendcode-session-ui-") {
 export function cleanTemps() {
   for (const dir of temps.splice(0)) rmSync(dir, { recursive: true, force: true })
 }
+// A file that never calls cleanTemps still leaves nothing behind once its process ends.
+process.on("exit", cleanTemps)
 
 export type HarnessOptions = {
   tuiControl?: boolean

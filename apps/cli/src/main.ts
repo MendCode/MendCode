@@ -444,13 +444,11 @@ async function connect() {
   if (fromSession) guardClient(next, process.argv.slice(2))
   if (pure) {
     const info = await next.send({ type: "daemon.info" })
-    if (!info.ok || info.result?.extensionsEnabled !== false) {
+    // --safe-mode implies --pure; the refusal names the flag that was typed.
+    const typed = safeMode ? "--safe-mode" : "--pure"
+    if (!info.ok || info.result?.extensionsEnabled !== false || (safeMode && info.result?.safeMode !== true)) {
       next.close()
-      throw new Error("--pure requires a daemon started with --pure; use a separate --dir or --isolated")
-    }
-    if (safeMode && info.result?.safeMode !== true) {
-      next.close()
-      throw new Error("--safe-mode requires a daemon started with --safe-mode; use a separate --dir or --isolated")
+      throw new Error(`${typed} requires a daemon started with ${typed}; use a separate --dir or --isolated`)
     }
   }
   log("INFO", "daemon connected")

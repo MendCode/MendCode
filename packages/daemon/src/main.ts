@@ -6,6 +6,7 @@ import { instructionControls, projectSources } from "./project-control"
 import { remoteInstructions } from "./remote-instructions"
 import { createWebfetchResources } from "./webfetch-resources"
 import { installNetworkPolicy } from "./network-policy"
+import { sweepHostMcpDirs } from "./host-mcp-sweep"
 import { systemWithLimits } from "./run-limits"
 import { memorySettings } from "./memory-config"
 import packageJson from "../../../apps/cli/package.json"
@@ -305,6 +306,8 @@ const acpAgents = createAcpAgents({
     return facts ? catalogEfforts(facts) : undefined
   },
 })
+// The directories of daemons that died without stopping are removed once, a while after start, a few at a time.
+setTimeout(() => void sweepHostMcpDirs().catch(() => undefined), 10_000).unref?.()
 // The catalog is only fetched for a daemon with somewhere to use it, and well after the first frame.
 if (engineName === "native") setTimeout(() => { if (providerService.models(true).length > 0 || acpAgents.models().length > 0) void modelsDev.refresh() }, 5_000).unref?.()
 /**
