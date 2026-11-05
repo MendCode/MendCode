@@ -13,6 +13,12 @@ const STABLE_TAG = /^v(\d{1,9})\.(\d{1,9})\.(\d{1,9})$/
 const BETA_TAG = /^v(\d{1,9})\.(\d{1,9})\.(\d{1,9})-beta\.(\d{1,9})$/
 const DEV_TAG = /^dev-[0-9a-f]{7,40}$/
 const NIGHTLY_TAG = /^v(\d{1,9})\.(\d{1,9})\.(\d{1,9})-nightly\.(\d{8})\.([1-9]\d{0,8})$/
+/** A versioned nightly tag. Its release may be gone: only the latest build is kept on the moving `nightly` release. */
+export const isNightlyTag = (tag: string) => NIGHTLY_TAG.test(tag)
+
+/** The one moving prerelease the nightly workflow keeps up to date; the versioned tag of its latest build is only in its asset names. */
+export const MOVING_NIGHTLY_TAG = "nightly"
+const NIGHTLY_ASSET = /^mendcode-(\d{1,9}\.\d{1,9}\.\d{1,9}-nightly\.\d{8}\.[1-9]\d{0,8})-(?:darwin|linux|windows)-(?:arm64|x64)(?:\.exe)?$/
 const API_ASSET_URL = /^https:\/\/api\.github\.com\/repos\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\/releases\/assets\/\d+$/
 const OS_NAMES = ["darwin", "linux"]
 const ARCH_NAMES = ["arm64", "x64"]
@@ -109,6 +115,12 @@ export function platformAsset({ os, arch }: Platform, tag: string) {
 
 const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value)
 
+/** The versioned nightly tag (`vX.Y.Z-nightly.YYYYMMDD.RUN`) the binaries of the moving nightly release belong to; undefined with none. */
+export function movingNightlyTag(assets: readonly ReleaseAsset[]): string | undefined {
+  const tags = assets.flatMap((asset) => { const match = NIGHTLY_ASSET.exec(asset.name); return match ? [`v${match[1]}`] : [] })
+  return tags.sort((a, b) => compareSemver(parseVersion(b)!, parseVersion(a)!))[0]
+}
+
 /** Reads the GitHub "list releases" response. Malformed entries are skipped, never trusted. */
 export function parseReleases(json: unknown): Release[] {
   if (!Array.isArray(json)) throw new UpgradeError("bad-response", "the release list is not a JSON array")
@@ -123,7 +135,10 @@ export function parseReleases(json: unknown): Release[] {
         assets.push({ name: asset.name, url: asset.browser_download_url, ...(apiUrl ? { apiUrl } : {}) })
       }
     }
-    releases.push({ tag: entry.tag_name, prerelease: entry.prerelease === true, draft: entry.draft === true, publishedAt: Number.isFinite(published) ? published : 0, assets })
+    // The moving nightly stands for the build its binaries are named after (the newest, while an upload replaces the old files).
+    const tag = entry.tag_name === MOVING_NIGHTLY_TAG ? entry.prerelease === true ? movingNightlyTag(assets) : undefined : entry.tag_name
+    if (tag === undefined) continue
+    releases.push({ tag, prerelease: entry.prerelease === true, draft: entry.draft === true, publishedAt: Number.isFinite(published) ? published : 0, assets })
   }
   return releases
 }

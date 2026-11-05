@@ -1,5 +1,5 @@
 import { readFileSync, writeFileSync } from "node:fs"
-import { channelOf, compareSemver, parseReleases, parseVersion, pickRelease, type Channel, type Release } from "../packages/upgrade/src/releases"
+import { channelOf, compareSemver, MOVING_NIGHTLY_TAG, parseReleases, parseVersion, pickRelease, type Channel, type Release } from "../packages/upgrade/src/releases"
 
 /**
  * The title and notes of a GitHub release (docs/release.md, "Release titles and notes"). The public repository holds one snapshot
@@ -51,16 +51,72 @@ export function parseChangelog(text: string): Map<string, ChangelogSection> {
   return sections
 }
 
-/** "MendCode v0.0.2", "MendCode v0.0.2 Beta 4", "MendCode Nightly — 2026-10-29 · Build 2", "MendCode Dev 1a2b3c4". */
+/** "MendCode v0.0.2", "MendCode v0.0.2 Beta 4", "MendCode Nightly" (the one moving release), "MendCode Dev 1a2b3c4". */
 export function releaseTitle(tag: string): string {
   const beta = /^v(\d+\.\d+\.\d+)-beta\.(\d+)$/.exec(tag)
   if (beta) return `MendCode v${beta[1]} Beta ${beta[2]}`
-  const nightly = /^v\d+\.\d+\.\d+-nightly\.(\d{4})(\d{2})(\d{2})\.(\d+)$/.exec(tag)
-  if (nightly) return `MendCode Nightly — ${nightly[1]}-${nightly[2]}-${nightly[3]} · Build ${nightly[4]}`
+  if (/^v\d+\.\d+\.\d+-nightly\.\d{8}\.[1-9]\d{0,8}$/.test(tag)) return "MendCode Nightly"
   const dev = /^dev-([0-9a-f]{7,40})$/.exec(tag)
   if (dev) return `MendCode Dev ${dev[1]!.slice(0, 7)}`
   if (/^v\d+\.\d+\.\d+$/.test(tag)) return `MendCode ${tag}`
   return fail(`unsupported release tag: ${tag}`)
+}
+
+/** The tag of the GitHub release that carries `tag`'s files: every build has its own, except a nightly, which replaces the one `nightly`. */
+export const releaseTagOf = (tag: string) => (channelOfTag(tag) === "nightly" ? MOVING_NIGHTLY_TAG : tag)
+
+const MAX_HIGHLIGHTS = 8
+const MAX_LIST = 6
+
+/** The first `count` sentences of `text` on one line (a sentence ends at . ! or ? before a capital letter, a quote, a bracket or the end). */
+export function sentences(text: string, count: number): string {
+  const flat = text.replace(/\s+/g, " ").trim()
+  let end = 0
+  for (let found = 0; found < count; found++) {
+    const next = /[.!?](?=\s+[A-Z`\[(*"]|$)/.exec(flat.slice(end))
+    if (!next) return flat
+    end += next.index + 1
+  }
+  return flat.slice(0, end)
+}
+
+/**
+ * One line for a list: the first sentence; when that is longer than `max`, it ends at its last colon or semicolon (or comma) that
+ * leaves a readable start, else at a word with `…`. Links and code spans stay whole.
+ */
+export function brief(item: string, max = 150): string {
+  const line = sentences(item, 1)
+  if (line.length <= max) return line
+  const head = line.slice(0, max)
+  // A cut keeps code spans, links and parentheses whole, and leaves some words (not only a code span) before it.
+  const whole = (index: number) => {
+    const before = head.slice(0, index)
+    const count = (character: string) => before.split(character).length - 1
+    return count("`") % 2 === 0 && count("(") === count(")") && count("[") === count("]") && before.replace(/`[^`]*`/g, "").trim().length >= 20
+  }
+  for (const [separator, least] of [[/[:;] /g, 40], [/, /g, 60]] as const) {
+    const at = [...head.matchAll(separator)].filter((found) => found.index! >= least && whole(found.index!)).pop()
+    if (at) return `${head.slice(0, at.index!)}.`
+  }
+  const cut = head.replace(/\s+\S*$/, "")
+  return `${cut.replace(/[,;:(\s]+$/, "")}…`
+}
+
+/** A highlight reads like a headline: the bold lead of the item (`**Footer packs.**`) and one sentence after it, or the first sentence. */
+export function highlight(item: string): string {
+  const lead = /^\*\*(.+?)\*\*\s*(.*)$/s.exec(item)
+  if (!lead) return brief(item, 150)
+  const title = lead[1]!.replace(/\.$/, "")
+  const rest = brief(lead[2]!, 130)
+  return rest ? `**${title}.** ${rest}` : `**${title}.**`
+}
+
+/**
+ * The same short list the release page, the nightly page and any in-app "what's new" show: the new things first, then the changes,
+ * at most eight, each one line. Fixes never crowd it out (they have their own list).
+ */
+export function highlights(items: Record<Group, string[]>): string[] {
+  return [...items.New, ...items.Changed].slice(0, MAX_HIGHLIGHTS).map(highlight)
 }
 
 /** The release `tag` follows: the newest published release older than it that its channel takes. */
@@ -138,7 +194,23 @@ function curated(input: NotesInput, previous: Release | undefined): { summary: s
   return { summary: unreleased?.summary || `${count} change${count === 1 ? "" : "s"} since ${previous?.tag ?? "the first release"}.`, items, folded }
 }
 
-/** The release notes, in English: what changed for users first, then install, verify and the full changelog folded away. */
+/** `- ` lines for `items`, at most `MAX_LIST`, then how many more the folded details hold. */
+function shortList(items: readonly string[]): string[] {
+  const shown = items.slice(0, MAX_LIST).map((item) => `- ${brief(item, 130)}`)
+  return items.length > MAX_LIST ? [...shown, `- … and ${items.length - MAX_LIST} more in the full details below`] : shown
+}
+
+/** The nightly's line: `Nightly build 2026-11-05 #7` for `v0.0.4-nightly.20261105.7`; the channel name for the others. */
+function buildLabel(tag: string, channel: Channel): string {
+  const nightly = /-nightly\.(\d{4})(\d{2})(\d{2})\.(\d+)$/.exec(tag)
+  return nightly ? `Nightly build ${nightly[1]}-${nightly[2]}-${nightly[3]} #${nightly[4]}` : CHANNEL_LABEL[channel]
+}
+
+/**
+ * The release notes, in English, short first: a line or two of summary, "What's new" (at most eight highlights), "Fixes" and
+ * "Changes" as one-line lists, then how to install. The complete items, how to verify and the commits are folded away, and the
+ * full CHANGELOG is one link.
+ */
 export function releaseNotes(input: NotesInput): string {
   const channel = channelOfTag(input.tag) ?? fail(`unsupported release tag: ${input.tag}`)
   const previous = previousRelease(input.tag, input.releases)
@@ -146,34 +218,43 @@ export function releaseNotes(input: NotesInput): string {
   const url = `https://github.com/${input.repository}`
   const version = input.tag.replace(/^v/, "")
   const sample = `mendcode-${version}-darwin-arm64`
+  const source = releaseTagOf(input.tag)
   const since = previous ? ` · since [${previous.tag}](${url}/releases/tag/${previous.tag})` : " · first release"
-  const lines = [`**${input.tag}** · ${CHANNEL_LABEL[channel]}${since} · built from [\`${input.head.slice(0, 12)}\`](${url}/commit/${input.head})`, "", summary, ""]
-  for (const group of NOTE_GROUPS) {
-    if (!items[group].length) continue
-    lines.push(`## ${group}`, "", ...items[group].map((item) => `- ${item}`), "")
-  }
+  const lines = [sentences(summary, 2), "", `${buildLabel(input.tag, channel)}${since} · built from [\`${input.head.slice(0, 12)}\`](${url}/commit/${input.head})`, ""]
+  const top = highlights(items)
+  if (top.length) lines.push("## What's new", "", ...top.map((line) => `- ${line}`), "")
+  if (items.Fixed.length) lines.push("## Fixes", "", ...shortList(items.Fixed), "")
+  const shown = new Set(items.New.concat(items.Changed).slice(0, MAX_HIGHLIGHTS))
+  const rest = items.Changed.filter((item) => !shown.has(item))
+  if (rest.length) lines.push("## Changes", "", ...shortList(rest), "")
+  for (const group of ["Upgrade notes", "Known limitations"] as const) if (items[group].length) lines.push(`## ${group}`, "", ...shortList(items[group]), "")
   if (folded.length) lines.push(`Includes ${folded.join(", ")}, which ${folded.length === 1 ? "was" : "were"} not released to this channel.`, "")
   const flag = channel === "stable" ? "" : ` -s -- --channel ${channel}`
   lines.push("## Install", "", "```sh",
     channel === "dev" ? `curl -fsSL ${url}/releases/download/${input.tag}/install.sh | MENDCODE_VERSION=${input.tag} sh` : `curl -fsSL ${url}/releases/latest/download/install.sh | sh${flag}`,
     "```", "")
-  if (channel !== "dev") lines.push(`Already installed: \`mendcode upgrade${channel === "stable" ? "" : ` --channel ${channel}`}\`. This exact build: \`MENDCODE_VERSION=${input.tag}\` with the same installer.`, "")
-  lines.push("## Verify", "",
+  if (channel !== "dev") lines.push(`Already installed: \`mendcode upgrade${channel === "stable" ? "" : ` --channel ${channel}`}\`.${channel === "nightly" ? "" : ` This exact build: \`MENDCODE_VERSION=${input.tag}\` with the same installer.`}`, "")
+  lines.push("<details>", "<summary>Full details</summary>", "")
+  for (const group of NOTE_GROUPS) {
+    if (!items[group].length) continue
+    lines.push(`### ${group}`, "", ...items[group].map((item) => `- ${item}`), "")
+  }
+  lines.push("### Verify", "",
     `\`SHA256SUMS\` lists every file of this release. It, every binary and both installers carry a keyless cosign bundle (\`*.sigstore.json\`) signed by this repository's release workflow at \`${input.tag}\`${input.provenance ? ", and the binaries have GitHub build provenance" : ""}.`,
     "", "```sh",
-    `gh release download ${input.tag} --repo ${input.repository} --pattern 'SHA256SUMS*' --pattern ${sample}`,
+    `gh release download ${source} --repo ${input.repository} --pattern 'SHA256SUMS*' --pattern ${sample}`,
     `grep ' ${sample}$' SHA256SUMS | shasum -a 256 -c`,
     `cosign verify-blob --bundle SHA256SUMS.sigstore.json --certificate-identity ${url}/.github/workflows/release.yml@refs/tags/${input.tag} --certificate-oidc-issuer https://token.actions.githubusercontent.com SHA256SUMS`,
     ...(input.provenance ? [`gh attestation verify ${sample} --repo ${input.repository}`] : []),
     "```", "")
-  lines.push("<details>", "<summary>Full changelog</summary>", "")
-  const shown = input.commits.slice(0, 100)
-  if (!shown.length) lines.push(`No commits since ${previous?.tag ?? "the start"}: it is the same commit.`, "")
+  const listed = input.commits.slice(0, 100)
+  lines.push("### Commits", "")
+  if (!listed.length) lines.push(`No commits since ${previous?.tag ?? "the start"}: it is the same commit.`, "")
   else lines.push(`${input.commits.length} commit${input.commits.length === 1 ? "" : "s"} ${previous ? `since ${previous.tag}` : "in this release"}:`, "",
-    ...shown.map((commit) => `- [\`${commit.sha.slice(0, 8)}\`](${url}/commit/${commit.sha}) ${commit.subject}`),
-    ...(input.commits.length > shown.length ? [`- … and ${input.commits.length - shown.length} more`] : []), "")
+    ...listed.map((commit) => `- [\`${commit.sha.slice(0, 8)}\`](${url}/commit/${commit.sha}) ${commit.subject}`),
+    ...(input.commits.length > listed.length ? [`- … and ${input.commits.length - listed.length} more`] : []), "")
   if (input.files.length) lines.push(`${input.files.length} file${input.files.length === 1 ? "" : "s"} changed: ${areas(input.files)}.`, "")
-  lines.push(previous ? `**Full Changelog**: ${url}/compare/${previous.tag}...${input.tag}` : `**Full Changelog**: ${url}/commits/${input.tag}`, "", "</details>", "")
+  lines.push("</details>", "", `**Changelog**: [CHANGELOG.md](${url}/blob/${input.tag}/CHANGELOG.md)${previous ? ` · [compare with ${previous.tag}](${url}/compare/${previous.tag}...${input.tag})` : ` · [commits](${url}/commits/${input.tag})`}`, "")
   return lines.join("\n")
 }
 

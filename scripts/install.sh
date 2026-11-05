@@ -98,12 +98,46 @@ newest_tag() {
     END { if (found == "") exit 1; print found }'
 }
 
+# Copies one file of the release tagged $1 into directory $2, quietly; fails when there is no such release or file.
+fetch_file() {
+  if [ "$use_gh" = 1 ]; then
+    gh release download "$1" --repo "$REPO" --pattern "$3" --dir "$2" >/dev/null 2>&1
+  else
+    curl -q -fsSL --proto '=https,file,http' --proto-redir "$redirect_protocols" "$BASE/download/$1/$3" -o "$2/$3" 2>/dev/null
+  fi
+}
+
+# Nightlies live on one moving release tagged `nightly`, replaced by every build; the tag of the build it holds (the one the binaries,
+# the checksums and the signatures are named and signed under) is read from its SHA256SUMS. Prints it, or nothing when there is none.
+moving_nightly() {
+  probe=$(mktemp -d) || return 0
+  builds=
+  if fetch_file nightly "$probe" SHA256SUMS; then
+    builds=$(awk -v suffix="-$os-$arch" '
+      { sub(/\r$/, ""); file = $2; sub(/^\*/, "", file) }
+      file ~ /^mendcode-[0-9]+\.[0-9]+\.[0-9]+-nightly\.[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]\.[0-9]+-/ && substr(file, length(file) - length(suffix) + 1) == suffix {
+        version = substr(file, 10, length(file) - 9 - length(suffix)); print "v" version "\ttrue" }' "$probe/SHA256SUMS" | newest_tag nightly) || builds=
+  fi
+  rm -rf "$probe"
+  printf '%s' "$builds"
+}
+
+# For the nightly channel, a listing that has the moving `nightly` release also gets the tag of the build it holds.
+with_moving_nightly() {
+  if [ "$channel" = nightly ] && printf '%s\n' "$1" | grep -q "^nightly$(printf '\t')true\$"; then
+    built=$(moving_nightly)
+    if [ -n "$built" ]; then printf '%s\n%s\ttrue\n' "$1" "$built"; return 0; fi
+  fi
+  printf '%s\n' "$1"
+}
+
 tag=${MENDCODE_VERSION:-}
 if [ -n "$tag" ] && [ -n "$channel" ]; then fail 'MENDCODE_VERSION names one release; it cannot be combined with a channel'; fi
 if [ -z "$tag" ]; then
   channel=${channel:-stable}
   if [ "$use_gh" = 1 ]; then
     listing=$(gh release list --repo "$REPO" --limit 100 --json tagName,isPrerelease,isDraft --jq '.[] | select(.isDraft | not) | "\(.tagName)\t\(.isPrerelease)"') || fail "cannot list the releases of $REPO with gh"
+    listing=$(with_moving_nightly "$listing")
     tag=$(printf '%s\n' "$listing" | newest_tag "$channel") || fail "no $channel release found in $REPO"
   elif [ "$channel" = stable ]; then
     latest=$(curl -q -fsSL --proto '=https,file,http' --proto-redir "$redirect_protocols" -o /dev/null -w '%{url_effective}' "$BASE/latest") || fail "cannot resolve the latest release (a private repository needs the GitHub CLI: install gh and run gh auth login)"
@@ -111,6 +145,7 @@ if [ -z "$tag" ]; then
   else
     body=$(curl -q -fsSL --proto '=https,http' --proto-redir "$redirect_protocols" -H 'Accept: application/vnd.github+json' "$API/releases?per_page=100") || fail "cannot list the releases of $REPO (a private repository needs the GitHub CLI: install gh and run gh auth login)"
     listing=$(printf '%s\n' "$body" | grep -oE '"(tag_name|prerelease)": *("[^"]*"|true|false)' | sed -E 's/^"([a-z_]+)": *"?([^"]*)"?$/\1 \2/' | awk '$1 == "tag_name" { tag = $2 } $1 == "prerelease" && tag != "" { print tag "\t" $2; tag = "" }') || true
+    listing=$(with_moving_nightly "$listing")
     tag=$(printf '%s\n' "$listing" | newest_tag "$channel") || fail "no $channel release found in $REPO"
   fi
 fi
@@ -118,7 +153,10 @@ case $tag in v*|dev-*) ;; *) tag=v$tag ;; esac
 printf '%s\n' "$tag" | LC_ALL=C grep -Eq '^(v[0-9]{1,9}\.[0-9]{1,9}\.[0-9]{1,9}(-beta\.[0-9]{1,9}|-nightly\.[0-9]{8}\.[1-9][0-9]{0,8})?|dev-[0-9a-f]{7,40})$' || fail 'unsupported release version'
 version=${tag#v}
 asset=mendcode-$version-$os-$arch
-url=$BASE/download/$tag
+# The files of the build the moving nightly release holds are under that release's tag; every other release has its own.
+rel=$tag
+case $tag in *-nightly.*) [ "$(moving_nightly)" != "$tag" ] || rel=nightly ;; esac
+url=$BASE/download/$rel
 install_dir=${MENDCODE_INSTALL_DIR:-$HOME/.local/bin}
 if [ -x "$install_dir/mendcode" ]; then
   current=$("$install_dir/mendcode" --version 2>/dev/null | awk 'NR == 1 { print $1 }') || current=
@@ -139,7 +177,7 @@ trap 'rm -rf "$stage"' EXIT
 trap 'exit 1' HUP INT TERM
 download() {
   if [ "$use_gh" = 1 ]; then
-    gh release download "$tag" --repo "$REPO" --pattern "$1" --dir "$stage" >/dev/null
+    gh release download "$rel" --repo "$REPO" --pattern "$1" --dir "$stage" >/dev/null
   else
     curl -q -fsSL --proto '=https,file,http' --proto-redir "$redirect_protocols" "$url/$1" -o "$stage/$1"
   fi

@@ -60,6 +60,8 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Changed
 
+- GitHub releases read short: a line of summary, "What's new" (up to eight highlights, so put the main items first in each section), short Fixes and Changes, and the rest folded. Titles are `MendCode v0.0.4`, `MendCode v0.0.4 Beta 1` and `MendCode Nightly`. See [releases](docs/release.md#release-titles-and-notes).
+- Nightlies are one release, "MendCode Nightly", that each build replaces, instead of a release per build; `mendcode upgrade --channel nightly` and the installers work as before, but only the latest nightly can be installed by its exact tag. See [releases](docs/release.md#channels).
 - Unused worktrees are cleaned by default: clean, merged ones idle for 14 days go in the daily pass (`worktreeGcDays: 0` turns it off). Worktrees of workflows, merges, compound runs and loops are included, and a compound run that changed nothing removes its worktree when it ends.
 - `mendcode worktrees list` answers at once and `size` shows its progress, however many large worktrees there are; sizes are measured with `du`, scans stop when the client leaves, and identical scans are shared.
 - The blobs scan skips loose files such as `.DS_Store` instead of failing to prune snapshots.

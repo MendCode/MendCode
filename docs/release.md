@@ -77,25 +77,29 @@ fails before anything is built or signed:
 |---|---|
 | `v0.0.2` | MendCode v0.0.2 |
 | `v0.0.2-beta.4` | MendCode v0.0.2 Beta 4 |
-| `v0.0.2-nightly.20261029.2` | MendCode Nightly — 2026-10-29 · Build 2 |
+| `v0.0.2-nightly.20261029.2` | MendCode Nightly (one release, tag `nightly`; see [Channels](#channels)) |
 | `dev-1a2b3c4…` | MendCode Dev 1a2b3c4 |
 
 The notes come from [CHANGELOG.md](../CHANGELOG.md), reviewed with the code it describes. The public repository has one snapshot
 commit per release, so GitHub's generated notes have nothing to list. The notes compare the release with the previous one of its
 channel, chosen the way the updater chooses (`pickRelease`): a nightly follows the newest older nightly, beta or stable. Both ends
-are the exact commits of those tags. In order:
+are the exact commits of those tags. The page reads short first, in this order:
 
-- a short line: tag, channel, the previous release, the commit it was built from;
-- the summary paragraph and the items, grouped `New`, `Changed`, `Fixed`, `Upgrade notes`, `Known limitations`;
-- how to install this channel or this exact build, and how to verify it (`SHA256SUMS`, the cosign bundles, GitHub provenance);
-- a folded **Full changelog**: the commits since the previous release, the changed files by area, the compare link.
+- one or two sentences (the start of the summary paragraph), then a line with the channel, the previous release and the commit it was built from;
+- **What's new**: at most eight one-line highlights, the section's `New` items and then its `Changed` ones, in the order the CHANGELOG
+  lists them (put the most important first). An item that starts with a bold lead (`**Footer packs.** …`) shows the lead and one
+  sentence; the rest of the item stays in the full details. The same function (`highlights` in `scripts/release-notes.ts`) is the one to use wherever an in-app "what's new" is built from these sections;
+- **Fixes** and **Changes**: at most six one-line items each, then how many more the full details hold; **Upgrade notes** and **Known limitations** the same way;
+- how to install this channel;
+- **Full details**, folded: every item of the section in full, how to verify (`SHA256SUMS`, the cosign bundles, GitHub provenance), the commits since the previous release and the changed files by area;
+- a link to `CHANGELOG.md` at the tag and the compare link.
 
 Where the text comes from:
 
 - **Stable and beta:** the section named after the tag (`## v0.0.2-beta.4 - 2026-11-02`). No section, or one without a summary
   and an item, fails the release. Versions between the previous release and this one that this channel never got are folded in
   and named: a beta whose release failed, or the betas of a stable.
-- **Nightly:** the items under `## Unreleased` that `CHANGELOG.md` at the previous release did not have. None fails the nightly,
+- **Nightly:** the items under `## Unreleased` that `CHANGELOG.md` at the previous build did not have. None fails the nightly,
   so every change that reaches `main` adds its item. A section named after the nightly's tag is used instead when it exists. A
   release whose tree is the previous release's says it is the same code.
 - An unknown `###` group or a section written twice fails, so a typo cannot drop items.
@@ -117,7 +121,7 @@ gh release edit "$tag" --repo MendCode/MendCode --title "$(cat title.txt)" --not
 |---|---|---|---|
 | `stable` | `vX.Y.Z` | release (the "latest" one) | the default for installers and `upgrade` |
 | `beta` | `vX.Y.Z-beta.N` | prerelease | `--channel beta` (also takes a newer stable) |
-| `nightly` | `vX.Y.Z-nightly.YYYYMMDD.RUN` | prerelease | `--channel nightly` (also takes a newer beta or stable); tagged from `main` by [nightly.yml](../.github/workflows/nightly.yml) |
+| `nightly` | `vX.Y.Z-nightly.YYYYMMDD.RUN` (a git tag); one release tagged `nightly` | prerelease, the single "MendCode Nightly" | `--channel nightly` (also takes a newer beta or stable); tagged from `main` by [nightly.yml](../.github/workflows/nightly.yml) |
 | `dev` | `dev-<7–40 hex sha>` | prerelease | exact tags only for installers; `upgrade --channel dev` follows the newest |
 
 `RUN` is a positive integer without leading zeros (the nightly workflow's run number), `YYYYMMDD` is the UTC date.
@@ -126,7 +130,13 @@ gh release edit "$tag" --repo MendCode/MendCode --title "$(cat title.txt)" --not
 tag points at, it tags `main` as `vX.Y.Z-nightly.YYYYMMDD.RUN`, where `X.Y.Z` is the patch after the newest stable release (the
 version in `apps/cli/package.json` before the first one), and dispatches `release.yml` on that tag, which runs the whole gate before
 it builds or signs anything. A tag pushed with the workflow token starts no workflow by itself, which is why the release is
-dispatched, on the tag ref so the signing identity is the tag's. The 14 newest nightlies are kept; older ones and their tags are deleted. Installers, the workflow and the
+dispatched, on the tag ref so the signing identity is the tag's. A nightly does not get a release of its own. `release.yml` moves the git tag `nightly` to the build and replaces the files, title and
+notes of the one prerelease tagged `nightly` ("MendCode Nightly"), the way Neovim's `nightly` works: the files go up before the old
+ones are removed, and a build that finishes after a newer one is dropped. The versioned tag stays a git tag, and the binaries, `SHA256SUMS`
+and the cosign bundles are named and signed under it (`mendcode-X.Y.Z-nightly.YYYYMMDD.RUN-<os>-<arch>`, identity
+`release.yml@refs/tags/vX.Y.Z-nightly.YYYYMMDD.RUN`), so the build is read from those names: `mendcode upgrade`, `install.sh` and
+`install.ps1` take the build the `nightly` release holds as that tag, and download its files from the `nightly` release. Only the
+latest nightly can be installed by its exact tag; an older one has no release. Installers, the workflow and the
 updater accept exactly the same tag shapes; anything else is refused. The newest nightly is the one with the highest `X.Y.Z`, then date, then
 run number. A tag whose shape and prerelease flag disagree is not part of any channel. The upgrade side of the channels is in [upgrade.md](upgrade.md).
 
