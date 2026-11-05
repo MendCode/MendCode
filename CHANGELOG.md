@@ -141,6 +141,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Fixed
 
+- Current Claude models on Amazon Bedrock work at every `/effort`: they get adaptive thinking instead of a token budget they reject. Older Claude models are unchanged.
 - Shell commands the model runs no longer leave memory behind in the daemon.
 - With the Claude Code engine, smart mode lets edits inside the project run without asking, as it does with the native engine.
 - Claude Opus 5.5, Sonnet 5.5, Haiku 5.5, Fable and the other current models work with an Anthropic API key at every `/effort`: they get adaptive thinking at that effort instead of a token budget they reject. Older Claude models are unchanged. See [providers](docs/providers.md).
