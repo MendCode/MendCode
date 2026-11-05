@@ -112,7 +112,7 @@ how you work, and the daemon holds less memory while it runs commands.
 - The balanced tier's prompt is about 240 tokens lighter: its description of the terminal's drawing is one sentence instead of the full block.
 - The tools a `/btw` answer runs look like the transcript's tool rows. The side chat is read-only in every permission mode: only read-only commands run, never `touch`, `mv` or a redirection into a file; set its model with `models.aside`.
 - The activity line reads like Claude Code's: `⠋ Running command… (2m 53s · ↓ 88.6k tokens)`. `activityStyle` brings back the older look (`classic`) and `activityTokens` adds the sent and cached token figures. Token counts are the provider's exact usage, with no `~`.
-- The full view's footer is one row (directory, model, effort, cache, quota, code graph) without repeating the context; `/footer preset rows` brings back the five rows.
+- The full view's footer without a pack is one row (directory, model, effort, cache, quota, code graph) without repeating the context; `/footer preset rows` gives the five rows.
 - Each running sub-agent task in the Agents strip says how full its context is (not Claude Code's own sub-agents). Opening a sub-agent draws a full border around its view and keeps the Agents strip, with the open one marked.
 - Commands the assistant leaves running in the background or in a terminal no longer stop after a few hours or when left untouched; they run until they end, you stop them or the chat is deleted. The `processLimits` setting (`lifetimeMinutes`, `idleMinutes`) adds a cap if you want one.
 - Compaction while idle follows the prompt-cache lifetime the provider's responses show, not a fixed five minutes, so ChatGPT and OpenAI sessions are compacted less often when their cache lasts longer. See [prompt cache](docs/prompt-cache.md#observed-lifetime).
@@ -147,9 +147,7 @@ how you work, and the daemon holds less memory while it runs commands.
 - The working row's token count shows new input and the context read from the provider's prompt cache separately.
 - The code graph autopilot refreshes the graph when a lot of code has changed, not after a number of edited files. See
   [code graph](docs/code-graph.md#autopilot).
-- The full view's footer shows the `rows` preset by default: directory, model and session figures, quota per provider and the code
-  graph, each on its own row. `/footer preset classic` brings back the single-row footer. Balanced and minimalist are unchanged. See
-  [layout](docs/layout.md#footer-by-tier).
+- The full view's footer is the `clean` pack by default; `footerPack: off` brings back the one-row `line` footer, and `/footer preset rows` the five-row layout. Balanced and minimalist are unchanged. See [layout](docs/layout.md#footer-by-tier).
 - The advisor no longer signs off small turns, such as a config value or a one-line fix; the agent can still ask it. See
   [advisor](docs/advisor.md#when-it-is-consulted).
 

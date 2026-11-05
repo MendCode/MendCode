@@ -5,6 +5,25 @@ call it makes. Ported from v1 (`agent/agent.ts`, `.mendcode/agent/*.md`) onto v2
 `packages/packages/src/agents.ts` (reading and validating files), `packages/engine-native/src/agents.ts` and `engine.ts`
 (running as an agent), `packages/daemon/src/agents.ts` (layers, trust, the commands).
 
+## How the parts relate
+
+Everything that does work runs in a **session**: one conversation with its own transcript, model, permission mode and queue.
+The other features either start sessions or sit beside them.
+
+| part | what it is | how it relates to sessions |
+|---|---|---|
+| sub-agent (`task`) | a child session that a turn starts for one job, with its own transcript and `task_id` | a foreground task returns its answer to the turn that started it; a sub-agent is not listed by `sessions` and cannot be addressed by `threads` ([sub-agents](#sub-agents), [peers](peers.md)) |
+| thread tools | `sessions`, `threads`, `tell` | let a session read or message another session of the project; other projects need your approval each time ([peers](peers.md#other-projects)) |
+| workflow | a plan of tasks in dependency order, each agent task in its own child session, then a completion contract that decides whether the work is done | the tasks are sub-sessions; the workflow is started by you or the model (which asks first) ([workflows](workflows.md)) |
+| goal | one standing objective in one session | the daemon starts each next turn itself until the goal is complete, blocked, over budget, stopped by a usage limit or paused ([goals](goals.md)) |
+| loop | recurring work that wakes on a trigger | each run is a normal message in a fresh session (in its own worktree with `workspace: "worktree"`), so the session's queue, cancel and approvals still apply ([loops](loops.md)) |
+| advisor | a second model that the session's model consults at set moments | it reads a summary of the session and answers with a verdict; off until you pick its model ([advisor](advisor.md)) |
+| profile | an installed bundle that changes how MendCode looks and what it offers | a profile never edits your settings; removing it puts everything back ([profiles](profiles.md)) |
+| area | a set of folders with its own defaults, such as a permission mode | a session belongs to the area whose folder holds its project; nothing to switch ([areas](areas.md)) |
+
+A daemon restart does not end these: a turn stopped by a clean daemon stop resumes once when the daemon starts again
+([background sessions](automation.md#background-sessions-b17)).
+
 ## Files
 
 `agents/<name>.md` in every extension layer, lowest precedence first, like skills, commands and custom tools:

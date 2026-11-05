@@ -91,6 +91,10 @@ metadata and other cells' outputs, is preserved (JSON rewritten with Jupyter's o
 under the `edit` family: edit rules, plan mode, smart mode path checks and the per-turn undo snapshot all apply, and the
 approval shows what would change. Notebooks over 20 MiB are refused.
 
+## `shell` output
+
+A foreground `shell` call writes its output to temporary files while the command runs, so the daemon does not keep it in memory. A command that writes more than 256 MB to one stream is stopped, and its reply ends with `[stopped: more than 256 MB of output]`. The timeout (120 seconds by default, at most 600) ends a command with `[timed out after … ms]`. The model reads the head and the tail of long output; the middle is dropped from what is kept in memory.
+
 ## Not done: model-callable worktree enter/exit (K85)
 
 A chat session's directory is fixed at creation (permission roots, undo snapshots, project instructions and the
