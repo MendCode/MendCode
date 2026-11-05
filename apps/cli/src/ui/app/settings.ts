@@ -58,6 +58,7 @@ export function createSettings(ctx: AppContext, actions: {
     const reply = await input.send({ type: "session.permission.set", sessionId: state.sessionId, mode: next })
     report(reply)
     requestFrame()
+    return reply.ok
   }
 
   function setMode(next: PresentationMode) {

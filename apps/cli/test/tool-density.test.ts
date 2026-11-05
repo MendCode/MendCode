@@ -135,7 +135,7 @@ describe("standard caps the preview by kind", () => {
 
   test("a search shows 3 matching lines, a shell the last 3 lines, and a web search 3 titles", () => {
     expect(of("grep: docsTopic").filter((row) => /^ {5}│ +\d+ {2}/.test(row))).toHaveLength(3)
-    expect(of("shell: wc").filter((row) => /^ {5}│ \d+ docs\//.test(row))).toHaveLength(3)
+    expect(of("shell: wc").filter((row) => /^ {5}│ +\d+ docs\//.test(row))).toHaveLength(3)
     expect(of("web_search").filter((row) => /^ {5}│ \d\. /.test(row))).toHaveLength(3)
   })
 

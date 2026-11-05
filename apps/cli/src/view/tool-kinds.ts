@@ -2,13 +2,13 @@ import type { ColorName, Line, Span } from "../ui/theme"
 import { subagentColor } from "./agent-color"
 import type { ToolCardInput, ToolLevel } from "./tool-card"
 import { clip } from "./deck"
-import { markFold, markGutter } from "./line-meta"
+import { markFold, markGutter, markSoftWrapped } from "./line-meta"
 import { wrapSpans } from "./markdown"
 import { formatDuration, formatElapsed } from "./time"
 import { BRIEF_ROWS, EXCERPT_ROWS, globGroups, GRID_ROWS, GREP_FILES, GREP_LINES_PER_FILE, grepGroups, listGrid, noteRow, PAGE_LINES, readExcerpt, readPage, SHAPE_ROWS, shapeLines, webLines, type BodyContext } from "./tool-bodies"
 import { directoryEntries, formatBytes, jsonShape, parseGrep, parseListing, parseRead, resultShape, shellSummary, webInfo } from "./tool-data"
 import { bodyWidth, factSpans, FOLD_CARD, FOLD_PAGE, glyphOf, headerRow, INDENT, marksOf, railPrefix, toneOf, type Marks, type StatusTone } from "./tool-frame"
-import { lineWidth, textWidth, truncateEnd } from "./wrap"
+import { cells, lineWidth, textWidth, truncateEnd } from "./wrap"
 
 /**
  * One function per kind of call for `balanced` (a header, at most a few body rows) and `full` (the same header over a richer
@@ -157,13 +157,43 @@ const plural = (count: number, one: string, many = `${one}s`) => `${count.toLoca
 const ANSI = /\x1b\[[0-9;?]*[A-Za-z]|\r/g
 export const linesOf = (text: string) => text.replace(ANSI, "").replace(/\s+$/, "").split("\n").filter((line) => line.length > 0)
 
+/** What a command printed, line by line, as it printed it: indentation and blank lines stay; only the trailing whitespace of each line (and of the output) goes. */
+export const outputLines = (text: string): string[] => {
+  const body = text.replace(ANSI, "").replace(/\s+$/, "").replace(/[^\S\n]+(?=\n)/g, "")
+  return body ? (body.includes("\t") ? body.replace(/\t/g, "  ") : body).split("\n") : []
+}
+
+/** One line of output as rows of the card: it keeps its indentation, a blank line stays a row, and a long line is cut at the edge into rows that copy back as one. */
+function verbatimRows({ text, tone, dim, width, prefix }: { text: string; tone: ColorName; dim: boolean; width: number; prefix: Span[] }): Line[] {
+  const room = Math.max(1, width - prefix.reduce((sum, span) => sum + textWidth(span.text), 0))
+  const rows: Line[] = []
+  let chunk = ""
+  let used = 0
+  const flush = () => {
+    const row: Line = [...prefix, { text: chunk, fg: tone, ...(dim ? { dim: true } : {}) }]
+    if (rows.length) markSoftWrapped(row, "none")
+    rows.push(row)
+    chunk = ""
+    used = 0
+  }
+  for (const cell of cells(text)) {
+    if (used + cell.width > room && chunk) flush()
+    chunk += cell.text
+    used += cell.width
+  }
+  if (chunk) flush()
+  else if (!rows.length) rows.push([...prefix])
+  return rows
+}
+
 /** The rows of an opened card's whole body: one page of TOOL_PAGE lines, with the footer that turns the page or closes the card. */
-export function pagedLines({ lines, c, tone, dim = true }: { lines: string[]; c: CardContext; tone: ColorName; dim?: boolean }): Line[] {
+export function pagedLines({ lines, c, tone, dim = true, verbatim = false }: { lines: string[]; c: CardContext; tone: ColorName; dim?: boolean; verbatim?: boolean }): Line[] {
   const pages = Math.max(1, Math.ceil(lines.length / PAGE_LINES))
   const at = Math.min(Math.max(0, c.input.page ?? 0), pages - 1)
   const from = at * PAGE_LINES
   const to = Math.min(lines.length, from + PAGE_LINES)
-  const rows = lines.slice(from, to).flatMap((text) => wrapSpans([{ text, fg: tone, ...(dim ? { dim: true } : {}) }], c.body.width + c.body.prefix.reduce((sum, span) => sum + textWidth(span.text), 0), c.body.prefix, c.body.prefix))
+  const edge = c.body.width + c.body.prefix.reduce((sum, span) => sum + textWidth(span.text), 0)
+  const rows = lines.slice(from, to).flatMap((text) => verbatim ? verbatimRows({ text, tone, dim, width: edge, prefix: c.body.prefix }) : wrapSpans([{ text, fg: tone, ...(dim ? { dim: true } : {}) }], edge, c.body.prefix, c.body.prefix))
   if (pages > 1) rows.push(noteRow(c.body, `lines ${from + 1}-${to} of ${lines.length} ${c.marks.dot} ${at < pages - 1 ? "click or ctrl+x f for the next page" : "click or ctrl+o to close"}`, at < pages - 1 ? FOLD_PAGE : FOLD_CARD))
   return rows
 }
@@ -288,12 +318,13 @@ export function grepCard(c: CardContext, pattern: string | undefined): Line[] | 
 }
 
 /** Rows of the tail of a shell's output that fit `cap`, wrapped; what is cut above them becomes `… +N lines`. */
-function tail({ c, lines, cap, tone }: { c: CardContext; lines: string[]; cap: number; tone: ColorName }): Line[] {
+function tail({ c, lines, cap, tone, verbatim = false }: { c: CardContext; lines: string[]; cap: number; tone: ColorName; verbatim?: boolean }): Line[] {
   const room = c.body.width
   const rows: Line[] = []
   let taken = 0
   while (taken < lines.length && rows.length < cap) {
-    const next = wrapSpans([{ text: lines[lines.length - 1 - taken]!, fg: tone }], room, c.body.prefix, c.body.prefix)
+    const text = lines[lines.length - 1 - taken]!
+    const next = verbatim ? verbatimRows({ text, tone, dim: false, width: room, prefix: c.body.prefix }) : wrapSpans([{ text, fg: tone }], room, c.body.prefix, c.body.prefix)
     if (rows.length > 0 && rows.length + next.length > cap) break
     rows.unshift(...next)
     taken++
@@ -306,7 +337,7 @@ function tail({ c, lines, cap, tone }: { c: CardContext; lines: string[]; cap: n
 /** `$ bun test  241 pass · 0 fail  12.4s` over the tail of its output. */
 export function shellCard(c: CardContext, limits: { summary: number; preview: number; failed: number }): Line[] {
   const { input } = c
-  const output = linesOf(input.text)
+  const output = outputLines(input.text)
   const exit = input.exitCode
   const summary = c.running ? undefined : shellSummary({ command: c.detail, text: input.text, exitCode: exit })
   // A call kept to a row or to a short preview says the shape of what it printed instead of printing it: `json · 1,155 lines`.
@@ -322,14 +353,14 @@ export function shellCard(c: CardContext, limits: { summary: number; preview: nu
   // The command wraps under its rail where the card shows a body (the `full` view, an opened card) and ends in `…` in the one-row summary.
   // It keeps the command colour whatever the exit code was: the failure is the marker, the badge and the rule.
   const head = headerRows(c, { target: c.detail || "shell", targetTone: c.input.awaiting ? "warning" : c.line ? "muted" : "primary", facts, middle: true, wrap: true }, !c.running && output.length > 0)
-  if (c.running) return [...head, ...(output.length ? tail({ c, lines: output, cap: input.tailLines, tone: "muted" }) : [noteRow(c.body, "No output yet")])]
+  if (c.running) return [...head, ...(output.length ? tail({ c, lines: output, cap: input.tailLines, tone: "muted", verbatim: true }) : [noteRow(c.body, "No output yet")])]
   if (!output.length || c.line) return head
   const passing = summary !== undefined && !c.failed
-  if (c.level === "full") return [...head, ...pagedLines({ lines: output, c, tone: "muted", dim: !c.failed })]
+  if (c.level === "full") return [...head, ...pagedLines({ lines: output, c, tone: "muted", dim: !c.failed, verbatim: true })]
   // A passing run's summary in the header says everything its output would; the rows come when the card is opened.
   if (shape || passing) return head
   const cap = c.failed ? (c.brief ? BRIEF_ROWS.shellFailed : limits.failed) : c.brief ? BRIEF_ROWS.shell : c.level === "preview" ? limits.preview : limits.summary
-  return cap > 0 ? [...head, ...tail({ c, lines: output, cap, tone: "muted" })] : head
+  return cap > 0 ? [...head, ...tail({ c, lines: output, cap, tone: "muted", verbatim: true })] : head
 }
 
 /** `Fetch  Writing tests  bun.sh · 48 KB`; `full` adds the first lines of the text. */

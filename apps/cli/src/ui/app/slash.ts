@@ -134,7 +134,7 @@ export function createSlash(ctx: AppContext, actions: {
   rightSidebarCommand: (args: string, panel?: boolean) => Promise<boolean>
   askAside: ReturnType<typeof createAside>["askAside"]
   openFetch: ReturnType<typeof createAside>["openFetch"]
-  setPermission: (next: PermissionMode) => Promise<void>
+  setPermission: (next: PermissionMode) => Promise<boolean>
   startDream: ReturnType<typeof createMemory>["startDream"]
   undoMemory: ReturnType<typeof createMemory>["undoMemory"]
   runStashCommand: ReturnType<typeof createPrompt>["runStashCommand"]

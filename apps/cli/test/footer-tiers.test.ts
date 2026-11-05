@@ -116,6 +116,34 @@ describe("the row under the prompt, laid out in groups", () => {
   })
 })
 
+describe("plan mode is named once", () => {
+  test("the agent label says Plan, so the permission does not repeat it; every other mode keeps both", () => {
+    const row = (agent: string, permission: "plan" | "edits" | "full" | "smart" | "ask", label: string) => plain(renderStatusRow({ width: 100, agent, permission, permissionLabel: label, model: "GPT-6-Luna", effort: "low", loops: 0 })).trim()
+    expect(row("Plan", "plan", "plan mode")).toBe("Plan · GPT-6-Luna · low")
+    expect(row("Build", "edits", "auto edits")).toBe("Build · auto edits · GPT-6-Luna · low")
+    expect(row("Build", "full", "full access")).toBe("Build · full access · GPT-6-Luna · low")
+    expect(row("Build", "smart", "smart approval")).toBe("Build · smart approval · GPT-6-Luna · low")
+    expect(row("Build", "ask", "ask before edits")).toBe("Build · GPT-6-Luna · low")
+  })
+
+  test("without the agent label the permission still says it is plan mode", () => {
+    expect(plain(renderStatusRow({ width: 100, permission: "plan", permissionLabel: "plan mode", model: "GPT-6-Luna", loops: 0 })).trim()).toBe("plan mode · GPT-6-Luna")
+  })
+
+  for (const [name, mode, profile] of [["the balanced row", "balanced", {}], ["the full view's built-in rows", "full", {}], ["a statusLeft template with mode", "balanced", { statusLeft: "mode,permissionMode,model,reasoning" }], ["a footer preset", "balanced", { footerRows: [["directory", "model", "effort"]] }]] as const) {
+    test(`in the app, ${name} reads plan mode once`, async () => {
+      const { h, below } = await scene({ mode, width: 100, profile: { ...profile } as Partial<TuiProfile>, quotas: false, graph: false })
+      h.event({ type: "session.permission", mode: "plan" })
+      h.app.render()
+      const text = below().join("\n")
+      expect(text.match(/plan mode|Plan/gi)?.length).toBe(1)
+      h.event({ type: "session.permission", mode: "edits" })
+      h.app.render()
+      expect(below().join("\n")).toContain("auto edits")
+    })
+  }
+})
+
 describe("the footer by tier in the app", () => {
   test("minimalist: no row under the prompt at any width (only the blank row the minimal view always ends with)", async () => {
     for (const width of [60, 100, 160]) expect((await scene({ mode: "minimal", width })).below()).toEqual([""])

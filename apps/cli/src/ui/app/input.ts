@@ -55,6 +55,8 @@ export function createInput(ctx: AppContext, actions: {
   endGoalEdit: ReturnType<typeof createGoal>["endGoalEdit"]
   /** True when the message is held for a question about a session that went cold; the prompt keeps its text. */
   idleGate(): Promise<boolean>
+  /** Sets the session's permission mode; false when the daemon refused. */
+  setPermission(next: import("@mendcode/protocol").PermissionMode): Promise<boolean>
   /** A terminal read that was not a focus report: the user is here. */
   noteInput(): void
 }) {
@@ -185,6 +187,12 @@ export function createInput(ctx: AppContext, actions: {
     // A skill or custom command named after other text runs with that text as its arguments (docs/commands.md).
     const hoisted = state.shellMode || state.editingScratch || state.editingGoal || state.editingMemory ? undefined : hoistCommand(editor.text.trim(), actions.suggestionPool())
     if (hoisted) editor.replaceAll(hoisted)
+    // `/plan <text>` enters plan mode and sends <text> as the message; a bare `/plan` only toggles the mode (slash.ts).
+    const planned = state.shellMode || state.editingScratch || state.editingGoal || state.editingMemory || state.planDraft ? undefined : /^\/plan\s+(\S[\s\S]*)$/i.exec(editor.text.trim())
+    if (planned && !slashRefusal("/plan", state.settingsNow, state.tuiProfile.slashCommands)) {
+      if (state.transcript.permissionMode !== "plan" && !(await actions.setPermission("plan"))) return requestFrame()
+      editor.replaceAll(planned[1]!.trim())
+    }
     const text = editor.text.trim()
     // The daemon takes a message of 64 KB at most: a longer one stays in the prompt, as typed, with its size.
     if (text.length > MAX_DRAFT_CHARS) {

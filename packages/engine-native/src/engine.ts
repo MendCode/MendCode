@@ -339,7 +339,17 @@ function browserDetail(args: Record<string, unknown>) {
   return `browser ${String(args.action)}`
 }
 
-function approvalDetail(call: ToolCall) {
+/** The files a formatted patch preview names (`*** Update File: a.ts`), comma-joined; empty for any other preview. */
+function previewFiles(preview: string): string {
+  const files = [...preview.matchAll(/^\*\*\* (?:Add|Update|Delete) File: (.+)$/gm)].map((match) => match[1]!)
+  return files.join(", ").slice(0, 500)
+}
+
+/**
+ * What the approval is about, as one line. `preview` is the tool's own formatted view that follows the line: with one, a call
+ * with no subject of its own is headed by the files that preview names (else the tool's name) instead of the raw JSON of its arguments.
+ */
+function approvalDetail(call: ToolCall, preview?: string) {
   const args = (call.args ?? {}) as Record<string, unknown>
   if (["memory", "memory_graph", "remember"].includes(call.name)) return `${typeof args.text === "string" ? args.text : `Memory ${args.action ?? "write"}`}\n[${args.scope === "user" || args.scope === "global" ? "user" : "project"}] [${args.category ?? (args.categoryIDs as string[] | undefined)?.[0] ?? "general"}]`
   const mcp = mcpParts(call.name)
@@ -354,6 +364,7 @@ function approvalDetail(call: ToolCall) {
   if (typeof args.path === "string") return args.path
   if (call.name === "glob" && Array.isArray(args.patterns)) return [args.pattern, ...args.patterns].filter((value): value is string => typeof value === "string").join(", ").slice(0, 500)
   if (call.name === "read" && Array.isArray(args.paths)) return readPaths(args).join(", ").slice(0, 500)
+  if (preview) return previewFiles(preview) || call.name
   return JSON.stringify(call.args).slice(0, 500)
 }
 
@@ -1317,7 +1328,7 @@ export function createNativeEngine(options: {
     const individual = !always && mode !== "full" && !named && parsedPermission.success && tool.individualApprovalFor?.(parsedPermission.data, permissionContext) === true
     if (always || individual) {
       const shown = always && parsedPermission.success && tool.preview ? await previewOf(parsedPermission.data) : undefined
-      const detail = always ? (shown ? `${approvalDetail(call)}\n\n${shown}` : approvalDetail(call)) : `This call reads another session. Attach it with @thread or approve this operation.\n\n${approvalDetail(call)}`
+      const detail = always ? (shown ? `${approvalDetail(call, shown)}\n\n${shown}` : approvalDetail(call)) : `This call reads another session. Attach it with @thread or approve this operation.\n\n${approvalDetail(call)}`
       const refusal = await askRefusal(input, tool, call, detail)
       if (refusal) return settle(refusal, "deterministic", refusal.reason ?? "Blocked by a PermissionRequest hook")
       record("waiting_manual", "manual", "Individual approval required")
@@ -1390,7 +1401,7 @@ export function createNativeEngine(options: {
     if (grants.takeRetry(input.sessionId, frozen.action.fingerprint)) return settle({ kind: "approve", scope: "once" }, "manual", "Retry approved by the user after a reviewer denial")
     const parsed = tool.args.safeParse(call.args)
     const preview = parsed.success && tool.preview ? await previewOf(parsed.data) : undefined
-    let detail = preview ? `${approvalDetail(call)}\n\n${preview}` : approvalDetail(call)
+    let detail = preview ? `${approvalDetail(call, preview)}\n\n${preview}` : approvalDetail(call)
     if (smart) {
       const reviewer = options.permissionReviewer?.enabled(input.sessionId) ? options.permissionReviewer : undefined
       if (reviewer) record("reviewing", "model", "Reviewing causal user authority and execution identity")

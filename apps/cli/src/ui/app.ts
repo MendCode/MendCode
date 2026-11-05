@@ -1085,6 +1085,7 @@ export function createApp(input: AppInput) {
     changeModelPrefs,
   })
   const { onInput, submit, onEscape } = createInput(ctx, {
+    setPermission: (...args) => setPermission(...args),
     recordSlash: slashMenu.record,
     suggestionPool,
     rewind,

@@ -1,4 +1,4 @@
-4d077c2a4316fd53
+e6dcee6279da1398
   Sessions                   ← focus │   git /work/app
                                      │
                                      │   › Why does the second session see the first one's config? Please look at src/store.ts and fix it.
@@ -16,6 +16,7 @@
                                      │
                                      │      ✗ bun test src/store.test.ts  3 pass · 1 fail  exit 1                                                                                                  1.8s
                                      │      │ bun test v1.3
+                                     │      │
                                      │      │ 3 pass
                                      │      │ 1 fail
                                      │      │ error: expected "a" received "b"
@@ -41,7 +42,6 @@
                                      │      $ bun test  212 pass · 0 fail                                                                                                                          9.1s
                                      │
                                      │   • All 212 tests pass.
-                                     │
                                      │
                                      │
                                      │

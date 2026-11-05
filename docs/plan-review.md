@@ -27,8 +27,10 @@ in plan mode. Deny rules and the engine's own safety checks still apply in full 
 
 ## Entering plan mode
 
+`/plan` alone toggles plan mode. `/plan <text>` enters plan mode (it stays in it when already there) and sends `<text>` as the message.
+
 Any way of entering plan mode (Shift+Tab, `/plan`, the `plan` agent, a `plan_review` call) is announced by a toast,
-`Plan mode: read-only · <plan model> plans · you review first`, and the footer shows `Plan · plan mode · <plan model>`: the model of the
+`Plan mode: read-only · <plan model> plans · you review first`, and the footer shows `Plan · <plan model>` (the mode is named once): the model of the
 `plan` role (the session's model when no role is set), not the one that builds. Leaving it, whichever way, says
 `Plan mode off: build runs on <model>`, with the model asked again from the daemon. Nothing is added to the screen outside plan mode.
 

@@ -131,7 +131,7 @@ export function createPageKeys(ctx: AppContext, actions: {
   loadLoops: ReturnType<typeof createLoops>["loadLoops"]
   saveLoop: ReturnType<typeof createLoops>["saveLoop"]
   fireLoop: ReturnType<typeof createLoops>["fireLoop"]
-  setPermission: (next: PermissionMode) => Promise<void>
+  setPermission: (next: PermissionMode) => Promise<boolean>
   revokeGrant: ReturnType<typeof createPermissions>["revokeGrant"]
   diagramLayout: ReturnType<typeof createDiagram>["diagramLayout"]
   controlWorkflow: ReturnType<typeof createWorkflows>["controlWorkflow"]

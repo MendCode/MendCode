@@ -21,8 +21,39 @@ test("entering plan mode says it is read-only, who plans and that the user revie
   h.app.render()
   const screen = h.text().join("\n")
   expect(screen).toContain("Plan mode: read-only · GPT-6-Astra plans · you review first")
-  expect(screen).toMatch(/Plan · plan mode · GPT-6-Astra/)
-  expect(screen).not.toMatch(/Plan · plan mode · GPT-6-Luna/)
+  expect(screen).toMatch(/Plan · GPT-6-Astra/)
+  expect(screen).not.toMatch(/Plan · plan mode/)
+  expect(screen).not.toMatch(/Plan · GPT-6-Luna/)
+})
+
+test("/plan with text enters plan mode and sends the text as the message; bare /plan only changes the mode", async () => {
+  const { h } = await planSession()
+  await h.type("/plan add a retry to fetch\r")
+  await Bun.sleep(5)
+  const commands = h.sent.filter((command) => command.type === "session.permission.set" || command.type === "user.submit")
+  expect(commands).toMatchObject([{ type: "session.permission.set", mode: "plan" }, { type: "user.submit", text: "add a retry to fetch" }])
+  await h.type("/plan\r")
+  await Bun.sleep(5)
+  expect(h.sent.filter((command) => command.type === "user.submit")).toHaveLength(1)
+  expect(h.sent.filter((command) => command.type === "session.permission.set")).toHaveLength(2)
+})
+
+test("/plan with text while already planning sends the text and does not leave plan mode", async () => {
+  const { h, chat } = await planSession()
+  chat.emit({ type: "session.permission", mode: "plan" })
+  await Bun.sleep(5)
+  await h.type("/plan and the tests\r")
+  await Bun.sleep(5)
+  expect(h.sent.filter((command) => command.type === "session.permission.set")).toHaveLength(0)
+  expect(h.sent.filter((command) => command.type === "user.submit")).toMatchObject([{ text: "and the tests" }])
+})
+
+test("/plan with text sends nothing when the daemon refuses the mode change", async () => {
+  const h = appHarness({ dataDir: tempDir(), width: 120, height: 30, reply: (command) => command.type === "session.permission.set" ? { ok: false, error: { code: "invalid", message: "no" } } as never : undefined })
+  h.app.applySettings({ onboarded: true, tier: "balanced" })
+  await h.type("/plan add a retry\r")
+  await Bun.sleep(5)
+  expect(h.sent.filter((command) => command.type === "user.submit")).toHaveLength(0)
 })
 
 test("leaving plan mode names the agent and the model that run now, and other mode changes say nothing", async () => {

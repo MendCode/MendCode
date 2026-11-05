@@ -32,9 +32,9 @@
 
      $ wc -l docs/*.md | sort -n
      │ … +79 lines
-     │ 673 docs/themes-9.md
-     │ 680 docs/views-10.md
-     │ 687 docs/layout-10.md
+     │     673 docs/themes-9.md
+     │     680 docs/views-10.md
+     │     687 docs/layout-10.md
 
      ◇ 2 tools more
      ✲ Glob docs/**/*.md  81 files

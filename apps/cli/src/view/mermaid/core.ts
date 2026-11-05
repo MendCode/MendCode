@@ -7,6 +7,8 @@ export type MermaidResult = { lines: Line[] } | { note: string }
 export const MERMAID_NOTES = {
   unsupported: "unsupported diagram",
   tooWide: "diagram too wide · shown as source",
+  tooWideTried: "diagram too wide, even compacted · shown as source",
+  tooWideRotated: "diagram too wide, even rotated · shown as source",
   tooComplex: "diagram too complex · shown as source",
 } as const
 

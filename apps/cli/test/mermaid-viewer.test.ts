@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { createIdFactory } from "@mendcode/protocol"
 import type { Line } from "../src/ui/theme"
-import { renderMermaid } from "../src/view/mermaid"
+import { MERMAID_NOTES, renderMermaid } from "../src/view/mermaid"
 import {
   createDiagramView,
   diagramBounds,
@@ -22,7 +22,7 @@ const text = (line: Line) => line.map((span) => span.text).join("")
 const plain = (lines: Line[]) => lines.map(text)
 
 const SMALL = "flowchart LR\n A[Alpha] --> B[Beta]"
-const WIDE = `flowchart LR\n ${Array.from({ length: 14 }, (_, i) => `N${i}[Node number ${i}]`).join(" --> ")}`
+const WIDE = `flowchart TD\n R[Root] --> ${Array.from({ length: 14 }, (_, i) => `N${i}[Node number ${i}]`).join(" & ")}`
 const TALL = `flowchart TD\n ${Array.from({ length: 16 }, (_, i) => `S${i}[Step ${i}]`).join(" --> ")}`
 const SEQUENCE = "sequenceDiagram\n Alice->>Bob: hello\n Bob-->>Alice: hi back"
 
@@ -59,7 +59,7 @@ describe("diagram layout and zoom", () => {
     expect(plain(view.lines)).toEqual(plain((natural as { lines: Line[] }).lines))
     expect(view.height).toBe(view.lines.length)
     expect(view.width).toBe(Math.max(...view.lines.map((line) => textWidth(text(line)))))
-    expect(renderMermaid(WIDE, 60)).toEqual({ note: "diagram too wide · shown as source" })
+    expect(renderMermaid(WIDE, 60)).toEqual({ note: MERMAID_NOTES.tooWideTried })
     const wide = layout(WIDE)
     expect(wide.note).toBeUndefined()
     expect(wide.width).toBeGreaterThan(60)
@@ -386,7 +386,7 @@ describe("/diagram in the app", () => {
   test("a diagram the chat showed as source is drawn here", async () => {
     const h = await session([fence(WIDE)], { width: 70, height: 24 })
     await h.key("\x1b")
-    expect(h.text()).toContain("diagram too wide · shown as source")
+    expect(h.text()).toContain("diagram too wide, even compacted · shown as source")
     await open(h)
     expect(h.app.page).toBe("diagram")
     expect(h.text()).not.toContain("shown as source")

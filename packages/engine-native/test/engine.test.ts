@@ -163,6 +163,41 @@ describe("native engine loop", () => {
     }
   })
 
+  test("a patch approval is headed by the files it touches, not by the raw JSON of the patch, and carries the diff", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "native-preview-"))
+    try {
+      writeFileSync(join(dir, "a.ts"), "one\ntwo\nthree\n")
+      writeFileSync(join(dir, "b.ts"), "x\ny\n")
+      const patch = ["*** Begin Patch", "*** Update File: a.ts", "@@", "-two", "+TWO", "*** Update File: b.ts", "@@", "-y", "+Y", "*** End Patch"].join("\n")
+      const { provider } = scriptedProvider([callTool("apply_patch", { patch }), stop("ok")])
+      const engine = createNativeEngine({ provider, tools: [applyPatch], history: memoryHistory(), cwdFor: () => dir, system: () => "sys", compactionPrompt: "summarize" })
+      const { input, asked } = turn({ text: "patch", answers: [{ kind: "deny" }] })
+      await engine.runTurn(input)
+      const detail = (asked[0] as { detail: string }).detail
+      expect(detail.split("\n")[0]).toBe("a.ts, b.ts")
+      expect(detail).not.toContain("Begin Patch\\n")
+      expect(detail).not.toContain('{"patch"')
+      expect(detail).toContain("*** Update File: a.ts")
+      expect(detail).toContain("+TWO")
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("a patch whose preview cannot be computed keeps the arguments as its detail", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "native-preview-"))
+    try {
+      const patch = ["*** Begin Patch", "*** Update File: missing.ts", "@@", "-x", "+y", "*** End Patch"].join("\n")
+      const { provider } = scriptedProvider([callTool("apply_patch", { patch }), stop("ok")])
+      const engine = createNativeEngine({ provider, tools: [applyPatch], history: memoryHistory(), cwdFor: () => dir, system: () => "sys", compactionPrompt: "summarize" })
+      const { input, asked } = turn({ text: "patch", answers: [{ kind: "deny" }] })
+      await engine.runTurn(input)
+      expect((asked[0] as { detail: string }).detail).toStartWith('{"patch":')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
   test("a preview that cannot be computed leaves the approval detail as the plain path", async () => {
     const dir = mkdtempSync(join(tmpdir(), "native-preview-"))
     try {

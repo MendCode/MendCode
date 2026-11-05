@@ -115,9 +115,12 @@ describe("flowchart subgraphs are laid out as clusters", () => {
     for (const label of ["Normalize alpha records", "Join with reference tables", "Write to warehouse"]) expect(rows.join("\n")).toContain(label)
   })
 
-  test("without subgraphs a flow too wide for the chat keeps the note, so /diagram draws it at full size", () => {
+  test("without subgraphs a flow too wide for the chat is laid out top-down; only when nothing fits does it keep the note", () => {
     const plain = "flowchart LR\n  A[Collect every input source] --> B[Normalize all the records] --> C[Join with reference tables] --> D[Compute derived metrics] --> E[Write to the warehouse]"
-    expect(renderMermaid(plain, 100)).toEqual({ note: MERMAID_NOTES.tooWide })
+    const rows = draw(plain, 100)
+    for (const row of rows) expect(textWidth(row)).toBeLessThanOrEqual(100)
+    expect(rows.findIndex((row) => row.includes("Collect every input source"))).toBeLessThan(rows.findIndex((row) => row.includes("Write to the warehouse")))
+    expect(renderMermaid(plain, 12)).toEqual({ note: MERMAID_NOTES.tooWideRotated })
     expect("lines" in renderMermaid(plain, 200)).toBe(true)
   })
 

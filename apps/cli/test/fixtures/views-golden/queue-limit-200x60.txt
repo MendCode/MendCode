@@ -1,6 +1,5 @@
-1bc867734e16f3d1
+ae6850d3f5ec8b16
   Sessions                   ← focus │   git /work/app
-                                     │
                                      │     ┃ Thought · 1s
                                      │     ┃ The cache key might ignore the directory. I should read the store module first and check how the key is built before touching anything.
                                      │
@@ -14,6 +13,7 @@
                                      │
                                      │      ✗ bun test src/store.test.ts  3 pass · 1 fail  exit 1                                                                                                  1.8s
                                      │      │ bun test v1.3
+                                     │      │
                                      │      │ 3 pass
                                      │      │ 1 fail
                                      │      │ error: expected "a" received "b"

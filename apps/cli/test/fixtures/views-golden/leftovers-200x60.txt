@@ -1,7 +1,7 @@
-6dc796c6e5b8730a
+7e9e709c515ec50f
   Sessions                   ← focus │   git /work/app
-                                     │      ✗ bun test src/store.test.ts  3 pass · 1 fail  exit 1                                                                                                  1.8s
                                      │      │ bun test v1.3
+                                     │      │
                                      │      │ 3 pass
                                      │      │ 1 fail
                                      │      │ error: expected "a" received "b"

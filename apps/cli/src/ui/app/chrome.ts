@@ -323,7 +323,8 @@ export function createChrome(ctx: AppContext, actions: {
     if (jobs && !segments.includes("jobs") && state.page !== "chat") counters.unshift({ text: `${jobs} job${jobs === 1 ? "" : "s"}${counters.length ? "  " : ""}`, fg: "secondary" })
     const shownModel = model ? `${modelLabel(model, state.modelReport)}${feed.fast ? ` ${fastMark(feed)}` : feed.fastIgnored ? ` ${fastMark(feed)} n/a` : ""}` : undefined
     const values = { mode: name.charAt(0).toUpperCase() + name.slice(1), model: shownModel, provider, reasoning: state.effectiveModel?.effort, variant: state.effectiveModel?.variant, permissionMode: PERMISSION_LABEL[state.transcript.permissionMode], commandsHint: "ctrl-p commands", agentsHint: "/agent", quota: quotaText({ quotas: [...quotas.values()], now: now(), view: state.tuiProfile.quotaView }) }
-    const items = (order: string) => statusItems(order, state.tuiProfile.statusColors, Object.fromEntries(Object.entries(values).filter(([, value]) => value !== undefined)), state.tuiProfile.statusSeparator)
+    // Plan mode is named once: a template that places `mode` (which reads `Plan`) does not also repeat `plan mode`.
+    const items = (order: string) => statusItems(order, state.tuiProfile.statusColors, Object.fromEntries(Object.entries(values).filter(([key, value]) => value !== undefined && !(key === "permissionMode" && state.transcript.permissionMode === "plan" && order.split(",").some((entry) => entry.trim() === "mode")))), state.tuiProfile.statusSeparator)
     const model_ = {
       ...(state.sessions.find((session) => session.sessionId === state.sessionId)?.lifecycle?.pr ? { pr: state.sessions.find((session) => session.sessionId === state.sessionId)!.lifecycle!.pr! } : {}),
       // With `footerRows` the first row is the left side whole (notice, goal and loops keep the right), and `statusRight` has no row to end.

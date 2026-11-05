@@ -224,7 +224,9 @@ function identityParts(input: StatusRowInput): FooterRowPart[] {
   if (input.pr) parts.push({ id: "pr", spans: [{ text: `#${input.pr.number} ${input.pr.state.toLowerCase()}`, fg: "link", bold: true }], rank: 3 })
   if (input.agent) parts.push({ id: "agent", spans: [{ text: input.agent, fg: "primary", ...input.agentColor, bold: true }], rank: KEEP })
   // A permission that lets the agent act without asking never gives way: at worst it is cut with `…`.
-  if (input.permission && input.permission !== "ask") parts.push({ id: "permission", spans: [{ text: input.permissionLabel ?? input.permission, fg: PERMISSION_COLOR[input.permission], bold: true }], rank: KEEP })
+  // Plan mode is named once: the agent label already says `Plan`, so the permission does not repeat it.
+  const sayPermission = input.permission !== "plan" || input.agent?.toLowerCase() !== "plan"
+  if (input.permission && input.permission !== "ask" && sayPermission) parts.push({ id: "permission", spans: [{ text: input.permissionLabel ?? input.permission, fg: PERMISSION_COLOR[input.permission], bold: true }], rank: KEEP })
   if (input.model) parts.push({ id: "model", spans: [{ text: input.model, fg: "text" }], rank: 8 })
   if (input.effort) parts.push({ id: "effort", spans: [{ text: input.effort, fg: "muted" }], rank: 5 })
   if (input.fast) parts.push({ id: "fast", spans: [input.fast.applies ? { text: input.fast.mark, fg: "warning" } : { text: `${input.fast.mark} n/a`, fg: "muted" }], rank: 5.5 })

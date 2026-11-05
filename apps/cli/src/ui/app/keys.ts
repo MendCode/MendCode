@@ -115,7 +115,7 @@ export function createKeys(ctx: AppContext, actions: {
   restoreStash: ReturnType<typeof createPrompt>["restoreStash"]
   editInExternalEditor: ReturnType<typeof createPrompt>["editInExternalEditor"]
   copyAnswer: ReturnType<typeof createPrompt>["copyAnswer"]
-  setPermission: (next: PermissionMode) => Promise<void>
+  setPermission: (next: PermissionMode) => Promise<boolean>
   takeModels: ReturnType<typeof createModel>["takeModels"]
   changeModelPrefs: ReturnType<typeof createModel>["changeModelPrefs"]
   switchSession: ReturnType<typeof createSession>["switchSession"]

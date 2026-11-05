@@ -44,16 +44,16 @@
 
      $ wc -l docs/*.md | sort -n
      │ … +72 lines
-     │ 624 docs/views-9.md
-     │ 631 docs/layout-9.md
-     │ 638 docs/customize-9.md
-     │ 645 docs/packages-9.md
-     │ 652 docs/secrets-9.md
-     │ 659 docs/sessions-9.md
-     │ 666 docs/tools-9.md
-     │ 673 docs/themes-9.md
-     │ 680 docs/views-10.md
-     │ 687 docs/layout-10.md
+     │     624 docs/views-9.md
+     │     631 docs/layout-9.md
+     │     638 docs/customize-9.md
+     │     645 docs/packages-9.md
+     │     652 docs/secrets-9.md
+     │     659 docs/sessions-9.md
+     │     666 docs/tools-9.md
+     │     673 docs/themes-9.md
+     │     680 docs/views-10.md
+     │     687 docs/layout-10.md
 
      ◇ 2 tools more
      ✲ Glob docs/**/*.md  81 files
@@ -97,15 +97,15 @@
 
      $ mendcode docs --json
      │ … +1,145 lines
-     │ { "name": "topic-1143", "file": "docs/topic-1143.md", "lines": 1243 },
-     │ { "name": "topic-1144", "file": "docs/topic-1144.md", "lines": 1244 },
-     │ { "name": "topic-1145", "file": "docs/topic-1145.md", "lines": 1245 },
-     │ { "name": "topic-1146", "file": "docs/topic-1146.md", "lines": 1246 },
-     │ { "name": "topic-1147", "file": "docs/topic-1147.md", "lines": 1247 },
-     │ { "name": "topic-1148", "file": "docs/topic-1148.md", "lines": 1248 },
-     │ { "name": "topic-1149", "file": "docs/topic-1149.md", "lines": 1249 },
-     │ ],
-     │ "count": 1150
+     │     { "name": "topic-1143", "file": "docs/topic-1143.md", "lines": 1243 },
+     │     { "name": "topic-1144", "file": "docs/topic-1144.md", "lines": 1244 },
+     │     { "name": "topic-1145", "file": "docs/topic-1145.md", "lines": 1245 },
+     │     { "name": "topic-1146", "file": "docs/topic-1146.md", "lines": 1246 },
+     │     { "name": "topic-1147", "file": "docs/topic-1147.md", "lines": 1247 },
+     │     { "name": "topic-1148", "file": "docs/topic-1148.md", "lines": 1248 },
+     │     { "name": "topic-1149", "file": "docs/topic-1149.md", "lines": 1249 },
+     │   ],
+     │   "count": 1150
      │ }
 
     ┃ Thought: Order of the topics · 1.6s
