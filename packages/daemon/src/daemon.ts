@@ -2631,7 +2631,7 @@ export async function startDaemon(options: DaemonOptions) {
     if (own) return own
     const choice = options.models ? resolveModel({ role: "main", session: store.sessionModel(id), roles: rolesFor(store.settings.get(), store.sessionInfo(id)?.directory), catalog: options.models }) : undefined
     const info = options.models && choice ? catalogModel(options.models, choice.model) : undefined
-    return modelContextOf(store.settings.get(), info)?.window ?? info?.contextWindow
+    return modelContextOf(store.settings.get(), info)?.window ?? info?.contextWindow ?? store.settings.get().defaultContextWindow
   }
   let prReview: import("./pr-review/service").PrReviewService | undefined
   async function prReviewService() {

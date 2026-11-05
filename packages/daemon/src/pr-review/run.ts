@@ -94,6 +94,12 @@ export type RunPrReviewInput = {
    * publisher already posted a review of this head.
    */
   publisher?: { login: string | undefined; check(config: ReviewConfig): Promise<PublishCheck> }
+  /**
+   * A run nobody is waiting on (a watch's automatic review, a fix round's re-review): when it means to publish, whether this
+   * reviewer may post and whether another publisher already reviewed the head is asked before the context is built or a model is
+   * called, and a run that could not post is skipped. A manual `/pr review` keeps its review for the user's session instead.
+   */
+  onlyIfPublishable?: boolean
   /** Reads the PR's reviews for `reviewedBy`, when `gh` (which only a publishing run gets) is absent. */
   read?: GhCall
   /**
@@ -241,6 +247,21 @@ export async function attemptReview({ sessionFactory, account, calling, context,
 const isAncestor = async (git: GitRun, directory: string, ancestor: string, of: string) => (await git(["merge-base", "--is-ancestor", ancestor, of], directory)).code === 0
 
 /**
+ * Why this run's review could not be posted by this reviewer, or undefined: the repository's `publishers` does not let it post, or
+ * another publisher already has a MendCode review of this head. Asked before the model (`onlyIfPublishable`) or after it.
+ */
+async function publishBlock({ input, config }: { input: RunPrReviewInput; config: ReviewConfig }): Promise<{ kind: "not-allowed"; why: string } | { kind: "other"; login: string } | undefined> {
+  const publisher = input.publisher
+  if (!publisher) return undefined
+  const allowed = await publisher.check(config)
+  if (!allowed.ok) return { kind: "not-allowed", why: allowed.reason }
+  const reader = input.gh ?? input.read
+  const other = input.provider ? await reviewedThrough({ provider: input.provider, repo: input.repo, number: input.number, head: input.head, rule: config.publishers, self: publisher.login })
+    : reader ? await reviewedBy({ gh: reader, repo: input.repo, number: input.number, head: input.head, rule: config.publishers, self: publisher.login }) : undefined
+  return other ? { kind: "other", login: other } : undefined
+}
+
+/**
  * The range to review. A resume reviews exactly the range its checkpoint was taken on (`result.base..result.head`, the same head
  * only). Otherwise from the PR's base, or for a stacked PR from the parent's head; `full` (asked, or `coverage: full`) is the whole
  * range, else only the commits since the last reviewed head when it is still in the branch (and, stacked, still past the parent).
@@ -310,6 +331,10 @@ async function reviewRun(input: RunPrReviewInput): Promise<ReviewRun & RunPlatfo
   const range = await chooseRange({ input, git, full: config.coverage === "full", resume })
   if (!range) return skipped("this head was already reviewed")
   const incremental = range.incremental
+  if (input.onlyIfPublishable && input.publish && config.enabled && (input.gh || input.provider)) {
+    const blocked = await publishBlock({ input, config })
+    if (blocked) return { ...skipped(`${blocked.kind === "other" ? `@${blocked.login} already posted a MendCode review of this head` : blocked.why}; nothing was sent to a model`), notPublisher: true as const }
+  }
   try {
     const graph = await input.graph?.().catch(() => undefined)
     const budget = budgetPolicy(config, { contextWindow: input.contextWindow })
@@ -363,14 +388,10 @@ async function reviewRun(input: RunPrReviewInput): Promise<ReviewRun & RunPlatfo
       return { status: "reviewed", reason: `review incomplete (${stop.kind}); nothing was published`, ...reviewed, stop, ...(attempt.limit ? { retryable: true as const } : {}) }
     }
     if (!outcome.verified) return { status: "failed", reason: "verification failed; nothing was published", ...reviewed }
-    const reader = input.gh ?? input.read
     const provider = input.provider
     if (input.publisher && config.enabled) {
-      const allowed = await input.publisher.check(config)
-      if (!allowed.ok) return { status: "reviewed", reason: `kept in this session: ${allowed.reason}`, notPublisher: true, ...reviewed }
-      const other = provider ? await reviewedThrough({ provider, repo: input.repo, number: input.number, head: input.head, rule: config.publishers, self: input.publisher.login })
-        : reader ? await reviewedBy({ gh: reader, repo: input.repo, number: input.number, head: input.head, rule: config.publishers, self: input.publisher.login }) : undefined
-      if (other) return { status: "reviewed", reason: `@${other} already posted a MendCode review of this head; kept in this session`, notPublisher: true, ...reviewed }
+      const blocked = await publishBlock({ input, config })
+      if (blocked) return { status: "reviewed", reason: blocked.kind === "other" ? `@${blocked.login} already posted a MendCode review of this head; kept in this session` : `kept in this session: ${blocked.why}`, notPublisher: true, ...reviewed }
     }
     if (!(input.gh || provider) || !input.publish || !config.enabled) return { status: "reviewed", ...(!config.enabled ? { reason: "publishing needs enabled: true in .mendcode/review.yaml on the base branch" } : {}), ...reviewed }
     const as = input.publishAs

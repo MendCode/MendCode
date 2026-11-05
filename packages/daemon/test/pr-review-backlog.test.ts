@@ -181,6 +181,11 @@ describe("pr-review backlog: which posted review counts for a reviewer and head"
     expect(headReviewOf({ reviews: [{ ...old, commit_id: undefined }], head, reviewer: "global", counts })).toBe(4)
     expect(headReviewOf({ reviews: [null, "junk", { id: "x" }], head, reviewer: "global", counts })).toBeUndefined()
   })
+  test("the empty COMMENTED review GitHub makes of a thread reply is not a review of the head", () => {
+    const reply = { id: 6, commit_id: head, state: "COMMENTED", body: "", user: { login: "me" } }
+    expect(headReviewOf({ reviews: [reply], head, reviewer: "global", counts })).toBeUndefined()
+    expect(headReviewOf({ reviews: [reply, { ...reply, id: 7, body: "Fixed it." }], head, reviewer: "global", counts })).toBe(7)
+  })
   test("the backlog config defaults to ten PRs within thirty days and refuses what is out of bounds", () => {
     expect(DEFAULT_BACKLOG).toEqual({ max_prs: 10, window_days: 30 })
     expect(BacklogConfig.safeParse({ max_prs: 51 }).success).toBe(false)

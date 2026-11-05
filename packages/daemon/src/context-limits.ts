@@ -22,7 +22,7 @@ export function globalTrigger(settings: Pick<Settings, "compactAtTokens">, envir
  * entry states (window, input and output limits, provider and model `compaction` overrides). A session's own window replaces
  * both the window and the input limit. Same assembly as the engine's `limitsFor`; the number itself is always the engine's.
  */
-export function modelLimits(input: { model: ModelInfo | undefined; providers: readonly ProviderInfo[]; override?: number | undefined }): CompactionLimits {
+export function modelLimits(input: { model: ModelInfo | undefined; providers: readonly ProviderInfo[]; override?: number | undefined; fallbackWindow?: number | undefined }): CompactionLimits {
   const { model } = input
   const provider = model?.provider ? input.providers.find((entry) => entry.id === model.provider) : undefined
   const entry = provider?.models.find((candidate) => namespacedModel(provider.id, candidate.id) === model!.id)
@@ -31,7 +31,8 @@ export function modelLimits(input: { model: ModelInfo | undefined; providers: re
   const outputLimit = entry?.outputLimit ?? entry?.limit?.output
   const rest = { ...(outputLimit ? { outputLimit } : {}), ...(provider?.compaction ? { provider: provider.compaction } : {}), ...(entry?.compaction ? { model: entry.compaction } : {}) }
   if (input.override) return { ...rest, contextWindow: input.override }
-  return { ...(window ? { contextWindow: window } : {}), ...(inputLimit ? { inputLimit } : {}), ...rest }
+  const known = window ?? input.fallbackWindow
+  return { ...(known ? { contextWindow: known } : {}), ...(inputLimit ? { inputLimit } : {}), ...rest }
 }
 
 /** Where the engine packs for these limits (its own `compactionThreshold`), and which setting produced that number. */
@@ -56,11 +57,11 @@ export function compactPoint(config: CompactionConfig, limits: CompactionLimits,
  * The compaction point of a catalog model under the current settings (its `modelContext` included) for a session without its own
  * window; undefined for a model another engine or an ACP agent runs (it compacts on its own).
  */
-export function modelCompactAt(input: { model: ModelInfo; providers: readonly ProviderInfo[]; settings: Pick<Settings, "compactAtTokens" | "compaction" | "modelContext">; environment?: NodeJS.ProcessEnv }): number | undefined {
+export function modelCompactAt(input: { model: ModelInfo; providers: readonly ProviderInfo[]; settings: Pick<Settings, "compactAtTokens" | "compaction" | "modelContext" | "defaultContextWindow">; environment?: NodeJS.ProcessEnv }): number | undefined {
   if (input.model.engine || input.model.id.startsWith(ACP_MODEL_PREFIX)) return undefined
   const setting = modelContextOf(input.settings, input.model)
   const override = setting?.window ? clampWindow(setting.window, input.model.maxContextWindow).tokens : undefined
-  return compactPoint(input.settings.compaction ?? {}, modelLimits({ model: input.model, providers: input.providers, override }), globalTrigger(input.settings, input.environment, setting?.compactAt)).tokens
+  return compactPoint(input.settings.compaction ?? {}, modelLimits({ model: input.model, providers: input.providers, override, fallbackWindow: input.settings.defaultContextWindow }), globalTrigger(input.settings, input.environment, setting?.compactAt)).tokens
 }
 
 /**
@@ -78,7 +79,7 @@ export function contextLimits(input: {
   override?: number | undefined
   catalog: readonly ModelInfo[]
   providers: readonly ProviderInfo[]
-  settings: Pick<Settings, "compactAtTokens" | "compaction" | "modelContext">
+  settings: Pick<Settings, "compactAtTokens" | "compaction" | "modelContext" | "defaultContextWindow">
   /** The session's last recorded model call. */
   lastUsage?: Usage | undefined
   /** A compaction packed the history after `lastUsage`. */
@@ -137,25 +138,27 @@ function measuredLimits(input: Parameters<typeof contextLimits>[0]): ContextLimi
   const overrideSource = input.override ? "session" as const : "model-setting" as const
   const max = info?.maxContextWindow ? { maxContextWindow: info.maxContextWindow } : {}
   if (!report) {
-    const window = override ?? lastUsage?.contextWindow ?? info?.contextWindow
+    const fallback = input.settings.defaultContextWindow
+    const window = override ?? lastUsage?.contextWindow ?? info?.contextWindow ?? fallback
     return {
       model,
       ...(window ? { contextWindow: window } : {}),
-      contextWindowSource: override ? overrideSource : lastUsage?.contextWindow ? "engine" : window ? "catalog" : "unknown",
+      contextWindowSource: override ? overrideSource : lastUsage?.contextWindow ? "engine" : info?.contextWindow ? "catalog" : window ? "default-setting" : "unknown",
       ...max,
       ...(lastUsage?.compactAt ? { compactAtTokens: lastUsage.compactAt, compactAtSource: "last-call" as const } : { compactAtSource: "engine-managed" as const }),
       autoCompact,
       ...context,
     }
   }
-  const limits = modelLimits({ model: info, providers: input.providers, override })
+  const known = modelLimits({ model: info, providers: input.providers, override }).contextWindow
+  const limits = modelLimits({ model: info, providers: input.providers, override, fallbackWindow: input.settings.defaultContextWindow })
   const point = compactPoint(input.settings.compaction ?? {}, limits, globalTrigger(input.settings, input.environment, setting?.compactAt))
   const { tokens: _tokens, ...explained } = point
   const window = override ?? report.contextWindow ?? limits.contextWindow
   return {
     model: report.model,
     ...(window ? { contextWindow: window } : {}),
-    contextWindowSource: override ? overrideSource : report.contextWindow ? "engine" : window ? "catalog" : "unknown",
+    contextWindowSource: override ? overrideSource : !known && window && window === input.settings.defaultContextWindow ? "default-setting" : report.contextWindow ? "engine" : window ? "catalog" : "unknown",
     ...max,
     ...(!override && limits.inputLimit && limits.inputLimit !== window ? { inputLimit: limits.inputLimit } : {}),
     compactAtTokens: report.compactAtTokens,

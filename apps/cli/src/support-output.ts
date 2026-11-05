@@ -6,7 +6,7 @@ const count = (tokens: number) => tokens.toLocaleString("en-US")
 
 /** Three lines: the model and its window, where the history is packed and what sets that, how full the context is. Each number names its source. */
 export function contextLimitsLines(limits: NonNullable<RecentContextReport["limits"]>): string[] {
-  const windowSource = { session: "this session's /context-window", "model-setting": "the modelContext setting for this model", engine: "reported by the engine", catalog: "model list", unknown: "" }[limits.contextWindowSource]
+  const windowSource = { session: "this session's /context-window", "model-setting": "the modelContext setting for this model", engine: "reported by the engine", catalog: "model list", "default-setting": "the defaultContextWindow setting", unknown: "" }[limits.contextWindowSource]
   const max = limits.maxContextWindow ? ` · max ${count(limits.maxContextWindow)}` : ""
   const window = limits.contextWindow ? `context window ${count(limits.contextWindow)} tokens (${windowSource})${max}` : `context window not stated by the model list${max}`
   const basis = limits.inputLimit ? "input limit" : "window"

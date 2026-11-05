@@ -7,7 +7,7 @@ For: "the context is filling up", "why did it forget", "when does it compact".
 
 Read numbers, never guess: {{program}} context "$MENDCODE_SESSION_ID" (--json: limits) prints the model, window and its source, where it compacts and why, tokens in context. {{program}} models [provider] --verbose: contextWindow, maxContextWindow, compactAtTokens.
 
-Window: the session's /context-window 200k|1m|128000|reset (1,000 to 10,000,000), else the model's [[setting:modelContext]], else the model list. For every session on the model: /context-window 500k --always (reset --always), never above its known maximum ({{program}} docs models).
+Window: the session's /context-window 200k|1m|128000|reset, else the model's [[setting:modelContext]], else the model list, else [[setting:defaultContextWindow]]. For every session on the model: /context-window 500k --always (reset --always), never above its known maximum ({{program}} docs models).
 Compaction point, the first set, never above the window: compaction.token_limit of the model's or provider's providers.json entry; MENDCODE_COMPACT_AT_TOKENS of the daemon; compactAt of modelContext; [[setting:compactAtTokens]] (8,000 to 2,000,000); token_limit of [[setting:compaction]]. None set: threshold percent of the window (default 95). No window stated: 160,000.
 Claude Code (claude_compact, balanced): compacts at that point, else 200k; /compact runs its own.
 For every session: /settings, Behavior, row "compact at" (450k; "default" clears), or propose {"compactAtTokens":450000} with mendcode_settings. compaction { auto (false: only /compact), threshold, token_limit, tail_turns, prune, strategy, ... } has no row.

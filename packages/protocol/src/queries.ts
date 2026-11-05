@@ -512,6 +512,11 @@ const SharedSettings = lazySchema(() => z.strictObject({
     z.strictObject({ window: z.number().int().min(MODEL_CONTEXT_RANGE.min).max(MODEL_CONTEXT_RANGE.max).optional(), compactAt: z.number().int().min(MODEL_CONTEXT_RANGE.min).max(MODEL_CONTEXT_RANGE.max).optional() })
       .refine((entry) => entry.window !== undefined || entry.compactAt !== undefined, { message: "set window, compactAt or both" }),
   ).refine((entries) => Object.keys(entries).length <= MODEL_CONTEXT_LIMIT, { message: `at most ${MODEL_CONTEXT_LIMIT} models` }).optional(),
+  /**
+   * One context window, in tokens, for every model that has no window of its own: none in the model list, none in its provider entry, none
+   * from the engine. A model's `modelContext` window, a session's `/context-window` and a window the model list knows all win over it.
+   */
+  defaultContextWindow: z.number().int().min(MODEL_CONTEXT_RANGE.min).max(MODEL_CONTEXT_RANGE.max).optional(),
   /** Compaction while idle (feature `idle_compact`, docs/compaction.md): the least context, in tokens, a session must hold to be compacted before its prompt cache expires. Default 100000. */
   idleCompactAtTokens: z.number().int().min(8_000).max(2_000_000).optional(),
   /** Notice before a compaction (feature `compact_notice`, docs/compaction.md): the share of the compaction point, in percent, at which the transcript says once how far the compaction is. Default 80; `off` never says it. */

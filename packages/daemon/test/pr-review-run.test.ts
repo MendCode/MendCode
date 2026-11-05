@@ -11,7 +11,7 @@ import { findingId } from "../src/pr-review/findings"
 import type { GhCall } from "../src/pr-review/publish"
 import { reviewNotice, runConfigKey, runPrReview } from "../src/pr-review/run"
 import { ReviewTurnError } from "../src/pr-review/sessions"
-import { emptyState } from "../src/pr-review/state"
+import { emptyState, reviewMarker } from "../src/pr-review/state"
 
 /**
  * runPrReview with the platform fields (contracts.ts `RunPlatformInput`): config layers, coverage, stacks, budget stops, quota
@@ -321,6 +321,49 @@ describe("runPrReview: publishing identity and accounting", () => {
     const run = await runPrReview({ ...baseInput(repo, children().factory), publish: true, gh: github.gh })
     expect(run.info?.checked).toBe(2)
     expect(JSON.parse(github.posts()[0]!.stdin!).body).toContain("- **Verification:** every finding was checked again by a separate pass (2 candidates judged)")
+  })
+})
+
+describe("runPrReview: onlyIfPublishable", () => {
+  /** A `gh` whose reviews list holds one MendCode review of `head` by `login`; everything else is empty. */
+  const withReviewBy = (head: string, login: string): GhCall => async ({ argv }) =>
+    /\/pulls\/12\/reviews\?/.test(argv[1] ?? "") ? { code: 0, out: JSON.stringify([{ id: 5, state: "COMMENTED", commit_id: head, body: `## MendCode review\n${reviewMarker(head)}`, user: { login, type: "User" }, author_association: "OWNER" }]) } : { code: 0, out: "[]" }
+
+  test("a reviewer that may not post, or whose head another publisher already reviewed, is skipped before any model call", async () => {
+    const repo = await repository()
+    const denied = children()
+    const refused = await runPrReview({ ...baseInput(repo, denied.factory), publish: true, onlyIfPublishable: true, gh: fakeGh().gh, publisher: { login: "nora", check: async () => ({ ok: false, reason: "@nora has no write access to acme/app" }) } })
+    expect(refused).toMatchObject({ status: "skipped", notPublisher: true })
+    expect(refused.reason).toBe("@nora has no write access to acme/app; nothing was sent to a model")
+    expect(denied.turns).toEqual([])
+
+    const taken = children()
+    const stood = await runPrReview({ ...baseInput(repo, taken.factory), publish: true, onlyIfPublishable: true, gh: withReviewBy(repo.head, "obed"), publisher: { login: "nora", check: async () => ({ ok: true }) } })
+    expect(stood).toMatchObject({ status: "skipped", notPublisher: true })
+    expect(stood.reason).toBe("@obed already posted a MendCode review of this head; nothing was sent to a model")
+    expect(taken.turns).toEqual([])
+  })
+
+  test("a reviewer that may post still reviews, and a manual run keeps its review in the session as before", async () => {
+    const repo = await repository()
+    const open = children()
+    const posted = await runPrReview({ ...baseInput(repo, open.factory), publish: true, onlyIfPublishable: true, gh: fakeGh().gh, publisher: { login: "nora", check: async () => ({ ok: true }) } })
+    expect(posted.status).toBe("published")
+    expect(open.turns.length).toBeGreaterThan(0)
+
+    const manual = children()
+    const kept = await runPrReview({ ...baseInput(repo, manual.factory), publish: true, gh: withReviewBy(repo.head, "obed"), publisher: { login: "nora", check: async () => ({ ok: true }) } })
+    expect(kept).toMatchObject({ status: "reviewed", notPublisher: true })
+    expect(kept.reason).toBe("@obed already posted a MendCode review of this head; kept in this session")
+    expect(manual.turns.length).toBeGreaterThan(0)
+  })
+
+  test("a run that does not publish is not gated", async () => {
+    const repo = await repository()
+    const kids = children()
+    const run = await runPrReview({ ...baseInput(repo, kids.factory), publish: false, onlyIfPublishable: true, gh: fakeGh().gh, publisher: { login: "nora", check: async () => ({ ok: false, reason: "no" }) } })
+    expect(run.status).toBe("reviewed")
+    expect(kids.turns.length).toBeGreaterThan(0)
   })
 })
 

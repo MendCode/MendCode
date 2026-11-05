@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSy
 import { tmpdir } from "node:os"
 import path from "node:path"
 import type { PrFinding } from "@mendcode/protocol"
-import { failingKey, failureExcerpt, failureFollowUp, learningBullet, MAINTAINERS_ONLY, nothingNewReply, parsePrCommand, pausedFromComments, runPrCommand, type CommandComment, type CommandDeps } from "../src/pr-review/commands"
+import { failingKey, failureExcerpt, failureFollowUp, hasWriteAccess, learningBullet, MAINTAINERS_ONLY, nothingNewReply, parsePrCommand, pausedFromComments, runPrCommand, type CommandComment, type CommandDeps } from "../src/pr-review/commands"
 import { gitRun } from "../src/pr-review/context"
 import type { ReviewSessionFactory } from "../src/pr-review/engine"
 import { runFix } from "../src/pr-review/fix"
@@ -162,6 +162,25 @@ describe("runPrCommand", () => {
     expect(posts[0]!.body).toContain("- a missing 'await' on store.flush is intended\nLEARNING")
     expect(posts[0]!.body).toContain("on the base branch")
     expect(learningBullet("  \n ")).toBe("")
+  })
+})
+
+describe("hasWriteAccess", () => {
+  // NotchNull#23: a contributor's "@MendCode review" was refused at 01:30 and answered at 01:39, nine minutes after GitHub added
+  // them as a collaborator (MemberEvent 01:39:13). The refusal was GitHub's real answer then; nothing is cached, so a grant counts
+  // on the next comment.
+  test("the permission is read from GitHub on every comment: a grant counts at once, a read answer is a refusal whatever the association", async () => {
+    let level = "read"
+    const gh: GhCall = async () => ({ code: 0, out: level })
+    const ask = (association?: string) => hasWriteAccess({ gh, repo: "acme/app", actor: "alpha", association })
+    expect(await ask("CONTRIBUTOR")).toBe(false)
+    expect(await ask("COLLABORATOR")).toBe(false)
+    level = "write"
+    expect(await ask("CONTRIBUTOR")).toBe(true)
+    // Only an unreadable permission falls back to the comment's association.
+    const unreadable: GhCall = async () => ({ code: 1, out: "", err: "HTTP 403" })
+    expect(await hasWriteAccess({ gh: unreadable, repo: "acme/app", actor: "alpha", association: "COLLABORATOR" })).toBe(true)
+    expect(await hasWriteAccess({ gh: unreadable, repo: "acme/app", actor: "alpha", association: "CONTRIBUTOR" })).toBe(false)
   })
 })
 
@@ -361,6 +380,37 @@ describe("the watch answers commands", () => {
     await service.command({ ...job, head: "e".repeat(40), comment: { ...job.comment, id: 9003 } })
     expect(notices.at(-1)).not.toContain("already reviewed")
     expect(notices.at(-1)).toContain("refused (no write access)")
+  })
+
+  test("@mendcode review answered by this login's own review submitted at or after the comment posts no reply; a review from before the comment, or another reviewer's, is still linked", async () => {
+    const dir = temp("cmd-data-"), project = temp("cmd-project-")
+    const { gh: base, posts, writers } = fakeGh()
+    writers.add("carol")
+    const head = "d".repeat(40)
+    const review = (login: string, submitted_at: string) => [{ id: 9001, commit_id: head, state: "COMMENTED", body: "## Summary\nReviewed.", user: { login, type: "User" }, author_association: login === "nora" ? "NONE" : "MEMBER", submitted_at }]
+    let reviews = review("nora", "2026-11-02T15:00:50Z")
+    const gh: GhCall = async (input) => input.argv[1] === "repos/acme/app/pulls/12/reviews?per_page=100" ? { code: 0, out: JSON.stringify(reviews) } : base(input)
+    const notices: string[] = []
+    const view = JSON.stringify({ number: 12, headRefOid: head, baseRefOid: "b".repeat(40), baseRefName: "main", headRefName: "feature", isDraft: false, labels: [], author: { login: "bob" }, files: [{ path: "a.ts" }], reviewRequests: [], assignees: [], isCrossRepository: false })
+    const run: GhRun = async ({ argv }) => argv[0] === "repo" ? { code: 0, out: "acme/app", err: "" } : argv.join(" ") === "api user --jq .login" ? { code: 0, out: "nora", err: "" } : argv[0] === "pr" && argv[1] === "view" ? { code: 0, out: view, err: "" } : { code: 1, out: "", err: "unexpected" }
+    const service = createPrReviewService({
+      dir, run, call: gh, intervalMs: 3_600_000, enabled: () => true, graphOn: () => false, sessionDirectory: () => project, sessionExists: () => true,
+      notify: (_session, text) => notices.push(text), sessions: () => { throw new Error("no model call") }, editor: () => { throw new Error("no model call") }, schedule: async (job) => { await job() },
+    })
+    cleanups.push(() => service.stop())
+    await service.control({ sessionId: "ses_a", action: "publish-on" })
+    const job = { kind: "command" as const, directory: project, sessionId: "ses_a", number: 12, head, trigger: "comment" as const, command: { kind: "review" as const }, comment: { ...issue("@mendcode review", "carol"), id: 9002, createdAt: "2026-11-02T15:00:30Z" } }
+    await service.command(job)
+    expect(posts).toHaveLength(0)
+    expect(notices.at(-1)).toContain("answered by this reviewer's own review")
+    reviews = review("nora", "2026-11-02T14:00:00Z")
+    await service.command({ ...job, comment: { ...job.comment, id: 9003 } })
+    expect(posts).toHaveLength(1)
+    expect(posts[0]!.body).toContain("already reviewed this head")
+    reviews = review("bob", "2026-11-02T15:00:50Z")
+    await service.command({ ...job, comment: { ...job.comment, id: 9004 } })
+    expect(posts).toHaveLength(2)
+    expect(posts[1]!.body).toContain("@bob already reviewed this head")
   })
 
   test("@mendcode explain answers in the review's language: the configured one, and with auto the one this PR's reviews resolved", async () => {

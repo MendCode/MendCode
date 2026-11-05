@@ -66,8 +66,8 @@ describe("docs: the list and the cards", () => {
     expect(lines).toHaveLength(CARDS.cards.length + 1)
     for (const card of CARDS.cards) expect(lines.filter((line) => line.startsWith(`  ${card.topic} `))).toHaveLength(1)
     expect(out).toBe(topicList(PROGRAM_NAME))
-    // About 85 characters per topic line; 53 topics fit.
-    expect(out.length).toBeLessThan(4_600)
+    // About 85 characters per topic line; 56 topics fit.
+    expect(out.length).toBeLessThan(4_800)
   })
   test("the set covers what a user asks a model to change", () => {
     const topics = CARDS.cards.map((card) => card.topic)

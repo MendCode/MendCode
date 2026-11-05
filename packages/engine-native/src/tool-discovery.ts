@@ -163,7 +163,7 @@ const CAPABILITY_GROUPS: ReadonlyArray<{ tools: readonly string[] | RegExp; name
   { tools: /^workflow_/, name: "workflow_*" },
   { tools: ["lsp"] }, { tools: ["secrets"] }, { tools: ["threads"] }, { tools: ["pr_watch"] }, { tools: ["todo"] },
   // Deferred, a model asked to change the default model told the user to do it by hand.
-  { tools: ["mendcode_settings"], note: "change MendCode's own settings: default model, tier, permissions" },
+  { tools: ["mendcode_settings"], note: "change MendCode's own settings: default model, tier, permissions, context window" },
   // Deferred behind the always-listed customize_ui, "rename the title" read as a screen setting.
   { tools: ["session_meta"], note: "rename this session's title, pin or archive it" },
 ]

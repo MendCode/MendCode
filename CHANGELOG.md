@@ -16,6 +16,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 - `/pr setup` checks prerequisites and configures repository reviews and publishing with one confirmation; a headless setup command is also available.
 - `/voice setup` guides dictation readiness and explicitly confirms audio uploads before enabling an API provider.
 - `/graph setup` enables and builds the project's code graph with one confirmation, without changing global defaults.
+- The `defaultContextWindow` setting gives one context window to every model that has none of its own; a model's `modelContext` window and `/context-window` still win. The assistant now finds how to change a context window, a model, a theme or a title from `mendcode docs change` without reading MendCode's files.
 
 ### Changed
 
@@ -45,6 +46,10 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Fixed
 
+- An automatic PR review checks that it may post, and that no other reviewer already has, before it spends any tokens.
+- `@MendCode review` gets no extra reply when this reviewer's own review of the head was posted after the comment.
+- `@mendcode review` no longer counts the empty review GitHub records when someone replies in a review thread as a review of
+  the head.
 - Session titles name what you asked; a model no longer answers your message in the title (such as saying it cannot see an
   image).
 - Asking to rename the title renames the session, not a part of the screen.

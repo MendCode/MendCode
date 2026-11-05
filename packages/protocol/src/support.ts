@@ -20,8 +20,8 @@ export const ContextLimits = lazySchema(() => z.strictObject({
   model: z.string(),
   /** Absent when nobody states a window for the model. */
   contextWindow: z.number().int().positive().optional(),
-  /** `session`: this session's `/context-window` override; `model-setting`: the model's `modelContext` window; `engine`: the engine reports it; `catalog`: the model list; `unknown`: nobody states one. */
-  contextWindowSource: z.enum(["session", "model-setting", "engine", "catalog", "unknown"]),
+  /** `session`: this session's `/context-window` override; `model-setting`: the model's `modelContext` window; `engine`: the engine reports it; `catalog`: the model list; `default-setting`: the `defaultContextWindow` setting, for a model no one states a window for; `unknown`: nobody states one. */
+  contextWindowSource: z.enum(["session", "model-setting", "engine", "catalog", "default-setting", "unknown"]),
   /** The largest window the provider is known to serve for the model; absent when unknown. */
   maxContextWindow: z.number().int().positive().optional(),
   /** A provider's input limit below the window: the threshold percentage and the cap apply to it. */

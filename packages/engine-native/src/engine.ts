@@ -417,6 +417,8 @@ export function createNativeEngine(options: {
   contextWindowFor?(sessionId: SessionId): number | undefined
   /** The user's own window for a session on a model (`/context-window`, else the model's `modelContext`): it wins over the model's, and over the provider's input limit. */
   contextWindowOverrideFor?(sessionId: SessionId, model: string | undefined): number | undefined
+  /** The user's `defaultContextWindow`: the window of a model no one states one for (not the model list, nor the provider's entry). */
+  defaultContextWindow?(): number | undefined
   /** Bytes of an attached blob (the daemon reads its content-addressed store). */
   readBlob?(ref: BlobRef): Promise<Uint8Array>
   readStoredFile?(file: string): Uint8Array | undefined
@@ -828,7 +830,9 @@ export function createNativeEngine(options: {
       return { ...rest, contextWindow: override }
     }
     const window = options.contextWindowFor?.(sessionId)
-    return { ...(window ? { contextWindow: window } : {}), ...options.provider.compactionLimits?.(choice?.model) }
+    const limits = { ...(window ? { contextWindow: window } : {}), ...options.provider.compactionLimits?.(choice?.model) }
+    const fallback = options.defaultContextWindow?.()
+    return limits.contextWindow || !fallback ? limits : { ...limits, contextWindow: fallback }
   }
   const compactAt = (sessionId: SessionId) => compactionThreshold(compactionConfig(), limitsFor(sessionId), typeof options.compactAtTokens === "function" ? options.compactAtTokens(sessionId, choiceFor(modelFor(sessionId, "main"), lastAgent.get(sessionId))?.model) : options.compactAtTokens)
   /** Tokens of old tool output each session's last request left out, so the size `pruneNow` compares does not fall because of the prune itself. */

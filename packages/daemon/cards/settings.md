@@ -3,7 +3,7 @@ summary: where settings and config files live, and who may change what
 docs: resources-config, customize, profiles
 aliases: config, configuration, files, paths
 ---
-Data dir: ~/.mendcode-v2, or the daemon's --dir / MENDCODE_V2_DIR. It holds AGENTS.md (global instructions), mcp.json, hooks.json, keybindings.json, statusline.json, tui/profile.json (terminal look) and the folders extensions/ skills/ commands/ agents/ tools/ themes/ packages/. The daemon's own settings live in its database there (mendd.db): never edit it.
+Data dir: ~/.mendcode, or the daemon's --dir / MENDCODE_DIR. It holds AGENTS.md (global instructions), mcp.json, hooks.json, keybindings.json, statusline.json, tui/profile.json (terminal look) and the folders extensions/ skills/ commands/ agents/ tools/ themes/ packages/. The daemon's own settings live in its database there (mendd.db): never edit it.
 Project: <project>/.mendcode/ holds the same kinds of files, plus project.json (project-level settings; an unreadable one is listed in /debug-config), prompts/custom.md and context/project.md. AGENTS.md or CLAUDE.md at the project root are read as instructions. Project tools, hooks, MCP, agents and extensions wait for the user to trust the project (/tools).
 Layers, lowest to highest: user packages, user folder, project packages, project folder. A later layer wins a name.
 

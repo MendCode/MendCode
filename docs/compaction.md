@@ -375,6 +375,17 @@ model's known maximum; `compactAt` replaces `compactAtTokens` for that model (ca
 patch replaces the key). It has no `/settings` row: the page edits one value per row, while this is a map keyed by model, and
 the model is known in a session, where `/context-window --always` sets it.
 
+### Window for every model (`defaultContextWindow`)
+
+`defaultContextWindow` (1,000 to 10,000,000 tokens) is one window for every model that has none of its own: the model list, the
+provider's entry and the engine state no window for it. It never replaces a window someone states. Precedence, first one set
+wins: the session's `/context-window`, the model's `modelContext` window, the window the model list, the provider's entry or the
+engine states, `defaultContextWindow`, then nothing (the compaction point falls back to 160,000). "Global" means every session, not every model: this session only is `/context-window 450k`, every session on the model in use is its
+`modelContext` window (`/context-window 450k --always`), and every model is this setting. So "set the context window to
+450k for all models" is `defaultContextWindow: 450000` (`mendcode_settings` propose, or `settings.set`), and a model whose window
+should change even though the list states one needs its own `modelContext` entry (`/context-window 450k --always`). `/context`
+and `mendcode context` name the source `default-setting`. It has no `/settings` row.
+
 The ChatGPT subscription's catalog is MendCode's own list of the account's models ([connect](connect.md#where-each-list-comes-from)).
 A model's maximum is that list's `max_context_window` when it states one, else the value OpenAI's own Codex catalog publishes (`codex-rs/models-manager/models.json`: `gpt-6-astra`
 272,000 by default, 872,000 at most; Codex lets its config raise `context_window` up to `max_context_window`). Other models have

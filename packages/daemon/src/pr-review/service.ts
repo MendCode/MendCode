@@ -26,7 +26,7 @@ import { checkoutForge, forgeName, forgeProvider, gatedOff, parseRemoteUrl } fro
 import { listAll, publishReview, publishThroughProvider, reviewerFromBody, reviewerMarker, type GhCall } from "./publish"
 import { explainFinding, failureFollowUp, filteredReply, hasWriteAccess, MAINTAINERS_ONLY, nothingNewReply, replyTo, REPLY_MARKER, runPrCommand, type CommandComment, type FixResult, type ReviewSummary } from "./commands"
 import { pushKept, runFix, type FixSource } from "./fix"
-import { answeredBy, answeredThrough, answersMarker, headReviewedBy, headReviewedThrough, mayPublish, mayPublishThrough, type PublishCheck } from "./publishers"
+import { answersRequest, answeredBy,answeredThrough, answersMarker, headReviewedBy, headReviewedThrough, mayPublish, mayPublishThrough, type PublishCheck } from "./publishers"
 import { readPullRequestInfo } from "./pull-request"
 import { createOutbox } from "./outbox"
 import { failureKind } from "./outage"
@@ -396,7 +396,7 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
       const checkpoint = !fresh && current && hasProgress(current.checkpoint) ? current.checkpoint : undefined
       const reviewed = await review({
         // A watched repository that has not enabled publishing is still reviewed, into this session only: the user started the watch.
-        repo, number, directory: worktree, base: pr.baseRefOid, head, ...(policy ? { policy } : {}), state, git, publish, force: true, full: manual,
+        repo, number, directory: worktree, base: pr.baseRefOid, head, ...(policy ? { policy } : {}), state, git, publish, force: true, full: manual, onlyIfPublishable: !manual,
         publisher: { login, check: (config) => publisherOf(directory, repo, config.publishers) }, read: call,
         sessionFactory: recordedSessions(options.sessions(sessionId, worktree), current?.id),
         // GitLab and Gitea: the title and the description the adapter read (linked issues are read through gh on GitHub), so
@@ -1030,6 +1030,8 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
         const done = forge ? await headReviewedThrough({ provider: forge.provider, repo, number, head: entry.head, rule: config.publishers, self }) : await headReviewedBy({ gh: call, repo, number, head: entry.head, rule: config.publishers, self })
         // A kept request can outlive its answer: the review its own job posted (or the running job it waited for) answers it.
         if (done && answeredByItsReview(entry, repo, number)) { void outbox.say(sessionId, `${asked}: @${done.login} already reviewed this head (review ${done.id}), so it is not reviewed again.`); return }
+        // This login's own review, submitted at or after the comment, is the answer: no second reply beside it.
+        if (done && answersRequest({ done, asked: comment.createdAt })) { void outbox.say(sessionId, `${asked}: answered by this reviewer's own review of this head (review ${done.id}); no reply is posted.`); return }
         if (done) {
           // Reviewed before anyone asked: one reply (answered once through the effects ledger) links that review, and the request
           // is kept on the pull request: its next head is reviewed, even with `triggers.synchronize` off.

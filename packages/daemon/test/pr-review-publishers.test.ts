@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { parsePrCommand, replyTo } from "../src/pr-review/commands"
 import type { GhCall } from "../src/pr-review/publish"
-import { answeredBy, answersMarker, headReviewedBy, mayPublish, reviewedBy } from "../src/pr-review/publishers"
+import { answeredBy, answersMarker, answersRequest, headReviewedBy, mayPublish, reviewedBy } from "../src/pr-review/publishers"
 import { reviewMarker } from "../src/pr-review/state"
 
 const HEAD = "c".repeat(40)
@@ -36,14 +36,43 @@ describe("who may post", () => {
     // Seen live, #12: the user's own session posted review 9001 on head 6d33aa87 by hand, without MendCode's marker.
     const review = (login: string, association: string, extra: Record<string, unknown> = {}) => ({ id: 9001, commit_id: HEAD, state: "COMMENTED", body: "## Summary\nReviewed by hand.", user: { login, type: "User" }, author_association: association, ...extra })
     const at = (reviews: unknown[]) => headReviewedBy({ gh: answering({ "repos/acme/app/pulls/12/reviews?per_page=100": JSON.stringify(reviews) }), repo: "acme/app", number: 12, head: HEAD, rule: "maintainers", self: "Alice-Dev" })
-    expect(await at([review("alice-dev", "NONE")])).toEqual({ login: "alice-dev", id: 9001 })
-    expect(await at([review("bob", "MEMBER")])).toEqual({ login: "bob", id: 9001 })
+    expect(await at([review("alice-dev", "NONE")])).toMatchObject({ login: "alice-dev", id: 9001, mine: true })
+    expect(await at([review("bob", "MEMBER")])).toMatchObject({ login: "bob", id: 9001, mine: false })
     expect(await at([review("mallory", "NONE")])).toBeUndefined()
     expect(await at([review("Alice-Dev", "NONE", { commit_id: "d".repeat(40) })])).toBeUndefined()
     expect(await at([review("Alice-Dev", "NONE", { state: "PENDING" })])).toBeUndefined()
     expect(await at([review("Alice-Dev", "NONE", { state: "DISMISSED" })])).toBeUndefined()
     // Unreadable reviews answer nothing: the command runs as before.
     expect(await headReviewedBy({ gh: answering({}), repo: "acme/app", number: 12, head: HEAD, rule: "maintainers", self: "Alice-Dev" })).toBeUndefined()
+  })
+
+  test("a review by this same login submitted at or after the comment answers it; one before it, or by someone else, does not", async () => {
+    const review = (login: string, submitted_at: string) => ({ id: 9001, commit_id: HEAD, state: "COMMENTED", body: "## Summary", user: { login, type: "User" }, author_association: "MEMBER", submitted_at })
+    const done = (reviews: unknown[]) => headReviewedBy({ gh: answering({ "repos/acme/app/pulls/12/reviews?per_page=100": JSON.stringify(reviews) }), repo: "acme/app", number: 12, head: HEAD, rule: "maintainers", self: "obed0101" })
+    const asked = "2026-11-02T15:00:30Z"
+    expect(answersRequest({ done: await done([review("Obed0101", "2026-11-02T15:00:50Z")]), asked })).toBe(true)
+    expect(answersRequest({ done: await done([review("Obed0101", asked)]), asked })).toBe(true)
+    expect(answersRequest({ done: await done([review("Obed0101", "2026-11-02T14:00:00Z")]), asked })).toBe(false)
+    expect(answersRequest({ done: await done([review("bob", "2026-11-02T15:00:50Z")]), asked })).toBe(false)
+    expect(answersRequest({ done: await done([review("Obed0101", "2026-11-02T15:00:50Z")]), asked: undefined })).toBe(false)
+    expect(answersRequest({ done: undefined, asked })).toBe(false)
+  })
+
+  test("the empty COMMENTED reviews GitHub makes of thread replies are not a review of the head; an approval, a change request or a comment with a body is", async () => {
+    // Seen live, NotchNull#23: a collaborator answered three threads with "Fixed in 3806381"; GitHub recorded three COMMENTED
+    // reviews with no body on that head, and "@mendcode review" was told they had already reviewed it.
+    const reply = { id: 7, commit_id: HEAD, state: "COMMENTED", body: "", user: { login: "alpha", type: "User" }, author_association: "COLLABORATOR" }
+    const reviews = (extra: Array<Record<string, unknown>> = []) => JSON.stringify([reply, { ...reply, id: 8 }, ...extra.map((item) => ({ ...reply, ...item }))])
+    const at = (body: string, self = "ana") => headReviewedBy({ gh: answering({ "repos/acme/app/pulls/23/reviews?per_page=100": body }), repo: "acme/app", number: 23, head: HEAD, rule: "maintainers", self })
+    expect(await at(reviews())).toBeUndefined()
+    expect(await at(reviews(), "alpha")).toBeUndefined()
+    expect(await at(reviews([{ id: 9, state: "APPROVED" }]))).toMatchObject({ login: "alpha", id: 9 })
+    expect(await at(reviews([{ id: 10, state: "CHANGES_REQUESTED" }]))).toMatchObject({ login: "alpha", id: 10 })
+    expect(await at(reviews([{ id: 11, body: "Looks good to me." }]))).toMatchObject({ login: "alpha", id: 11 })
+    // The owner's MendCode review of the head is named by its own login, not by the collaborator whose replies came first.
+    expect(await at(reviews([{ id: 12, body: `## MendCode review\n${reviewMarker(HEAD)}`, user: { login: "obed", type: "User" }, author_association: "OWNER" }]))).toMatchObject({ login: "obed", id: 12 })
+    // The same head decides the later publish: with only replies on it, nothing says it was reviewed, so the review runs.
+    expect(await reviewedBy({ gh: answering({ "repos/acme/app/pulls/23/reviews?per_page=100": reviews() }), repo: "acme/app", number: 23, head: HEAD, rule: "maintainers", self: "ana" })).toBeUndefined()
   })
 
   test("a comment another publisher answered is not answered again; every reply carries the comment it answers", async () => {

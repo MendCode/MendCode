@@ -346,6 +346,7 @@ describe("stacks", () => {
     expect(child.assignment).toContain("stack: #12 head")
     const run = h.inputs.find((input) => input.number === 13)!
     expect(run.stack).toEqual({ base: moved, parentFindings: [], parent: 12 })
+    expect(run.onlyIfPublishable).toBe(true)
   })
 })
 
@@ -389,6 +390,8 @@ describe("fix modes", () => {
     expect(h.jobs()[0]).toMatchObject({ state: "done", head: pushed })
     // The second review looked at the pushed head; the next poll sees that head as already seen.
     expect(h.inputs.map((input) => input.head)).toEqual([head, pushed])
+    // The user's own `/pr review` keeps its result in the session; the fix round's re-review asks whether it can post before any model call.
+    expect(h.inputs.map((input) => input.onlyIfPublishable)).toEqual([false, true])
     await h.service.tick()
     expect(h.jobs()).toHaveLength(1)
   })

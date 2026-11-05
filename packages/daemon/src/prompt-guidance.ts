@@ -42,15 +42,17 @@ export const PROMPT_BUDGETS = {
   // twice; the misses moved around. "before or when X do Y" and "not ... a one-time check" (it had checked git status once for "before any
   // write, refuse on a dirty tree"), with the tool's check action and the cards, made it 14 and 15 of 15 (395 bytes).
   // Both lines merged (screen parts, then behavior): 428 bytes, measured again with both evals.
-  selfKnowledge: 430,
+  // 430 -> 470: "(never read its binary or source)": a model asked to change the context window ran strings and python over the binary for a minute.
+  selfKnowledge: 470,
   // `focus` (the default) had only a one-sentence family note: the core gives it the guide's every-call habits (preambles, `todo`,
   // `path:line`, result first) and the model note joins it; together they stay under 1,200 characters over that focus (not measured with an eval).
   focus: { core: 600 },
   guide: { basics: 1_100, family: 3_000, modelNote: 600 },
   // 1,500: the guide names every card topic (45 of them now, 22 before) so the model picks one without a call; the prose was trimmed first.
-  full: { operatorGuide: 1_500 },
+  // 1,500 -> 1,750: the `change` map card name and the rule not to read the binary or source to change MendCode.
+  full: { operatorGuide: 1_750 },
   // full 7,400 -> 7,800: the base prompt's terminal rendering block (+389 characters, sent to every engine) put codex full at 7,619.
-  composed: { guide: 6_500, full: 7_800 },
+  composed: { guide: 6_500, full: 8_050 },
 } as const
 
 export type ModelNote = { label: string; match: RegExp; text: string }

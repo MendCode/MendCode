@@ -813,6 +813,7 @@ export const daemon = await startDaemon({
           transcript: (input) => transcripts.save(input),
           readStoredFile: store.readStoredFile,
           contextWindowFor: (sessionId) => modelCatalog.list().find((model) => model.id === mainModel(sessionId).model)?.contextWindow,
+          defaultContextWindow: () => store.settings.get().defaultContextWindow,
           contextWindowOverrideFor: (sessionId, model) => windowOverride({ meta: store.meta, sessionId, model: model ? findModel(modelCatalog.list(), model) : undefined, settings: store.settings.get() })?.tokens,
           cwdFor: (sessionId) => store.sessionDirectory(sessionId) || cwd,
           // `read` and `@file` load nearby instructions by the same rules (names, root markers, includes) as the system prompt.

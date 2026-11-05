@@ -142,7 +142,7 @@ const Seen = z.object({
 })
 /** A taken `@mendcode` comment the watch keeps until it is answered: it survives a restart, a full queue and a missing consent. */
 const Stored = z.object({
-  comment: z.object({ id: z.number().int(), surface: z.enum(["issue", "review"]), actor: z.string().max(255), body: z.string().max(100_000), association: z.string().max(40).optional(), inReplyTo: z.number().int().optional(), diffHunk: z.string().max(50_000).optional(), discussion: z.string().max(64).optional(), path: z.string().max(1000).optional(), line: z.number().int().optional() }),
+  comment: z.object({ id: z.number().int(), createdAt: z.string().max(40).optional(), surface: z.enum(["issue", "review"]), actor: z.string().max(255), body: z.string().max(100_000), association: z.string().max(40).optional(), inReplyTo: z.number().int().optional(), diffHunk: z.string().max(50_000).optional(), discussion: z.string().max(64).optional(), path: z.string().max(1000).optional(), line: z.number().int().optional() }),
   number: z.number().int().positive(),
   blocked: z.enum(["consent", "publisher", "job"]).optional(),
   /** When it was last handed to a job. */
@@ -332,13 +332,13 @@ const cliOf = (kind: WatchForge["kind"] | undefined) => kind === "gitlab" ? "gla
 
 type Listed = z.infer<typeof Listed>
 /** A comment as `gh api --jq` prints it, one object per line. */
-const PolledComment = z.object({ id: z.number().int(), body: z.string().max(100_000).nullable(), user: z.string().max(100).nullable(), association: z.string().max(40).nullable().optional(), html_url: z.string().max(500).optional(), pull_request_url: z.string().max(500).optional(), in_reply_to_id: z.number().int().nullable().optional(), diff_hunk: z.string().max(50_000).nullable().optional() })
-const ISSUE_COMMENTS = ".[] | {id, body, user: .user.login, association: .author_association, html_url}"
+const PolledComment = z.object({ id: z.number().int(), body: z.string().max(100_000).nullable(), user: z.string().max(100).nullable(), association: z.string().max(40).nullable().optional(), created_at: z.string().max(40).optional(), html_url: z.string().max(500).optional(), pull_request_url: z.string().max(500).optional(), in_reply_to_id: z.number().int().nullable().optional(), diff_hunk: z.string().max(50_000).nullable().optional() })
+const ISSUE_COMMENTS = ".[] | {id, body, user: .user.login, association: .author_association, created_at, html_url}"
 /** What every claim marker comment carries (ownership.ts `claimMarker`). */
 const CLAIM_MARK = "mendcode:claim"
 /** Why a draft is not reviewed while `triggers.drafts` is off, kept for `/pr list` like any other skipped PR (eligibility's words). */
 const DRAFT_SKIPPED = "draft: waits for ready for review"
-const REVIEW_COMMENTS = ".[] | {id, body, user: .user.login, association: .author_association, pull_request_url, in_reply_to_id, diff_hunk}"
+const REVIEW_COMMENTS = ".[] | {id, body, user: .user.login, association: .author_association, created_at, pull_request_url, in_reply_to_id, diff_hunk}"
 
 export function createRepoWatch(options: RepoWatchOptions) {
   const run = options.run ?? ghProcess
@@ -709,7 +709,7 @@ export function createRepoWatch(options: RepoWatchOptions) {
         if (mine === undefined) { complete = false; continue }
         answered.add(item.id)
         if (!mine) continue
-        const comment: CommandComment = { id: item.id, surface: item.surface, actor: item.author.slice(0, 255), body: item.body.slice(0, 100_000), ...(item.inReplyTo ? { inReplyTo: item.inReplyTo } : {}), ...(item.discussion ? { discussion: item.discussion.slice(0, 64) } : {}), ...(item.path ? { path: item.path.slice(0, 1000) } : {}), ...(item.line ? { line: item.line } : {}) }
+        const comment: CommandComment = { id: item.id, ...(item.createdAt ? { createdAt: item.createdAt } : {}), surface: item.surface, actor: item.author.slice(0, 255), body: item.body.slice(0, 100_000), ...(item.inReplyTo ? { inReplyTo: item.inReplyTo } : {}), ...(item.discussion ? { discussion: item.discussion.slice(0, 64) } : {}), ...(item.path ? { path: item.path.slice(0, 1000) } : {}), ...(item.line ? { line: item.line } : {}) }
         const commands = watch.commands ??= []
         if (!commands.some((stored) => stored.comment.id === item.id)) commands.push({ comment: comment as StoredCommand["comment"], number: pr.number })
         if (commands.length > MAX_COMMANDS) commands.splice(0, commands.length - MAX_COMMANDS)
@@ -753,7 +753,7 @@ export function createRepoWatch(options: RepoWatchOptions) {
         if (mine === undefined) { complete = false; continue }
         answered.add(item.id)
         if (!mine) continue
-        const comment: CommandComment = { id: item.id, surface: endpoint === "pulls/comments" ? "review" : "issue", actor: item.user, body: item.body, ...(item.association ? { association: item.association } : {}), ...(item.in_reply_to_id ? { inReplyTo: item.in_reply_to_id } : {}), ...(item.diff_hunk ? { diffHunk: item.diff_hunk } : {}) }
+        const comment: CommandComment = { id: item.id, ...(item.created_at ? { createdAt: item.created_at } : {}), surface: endpoint === "pulls/comments" ? "review" : "issue", actor: item.user, body: item.body, ...(item.association ? { association: item.association } : {}), ...(item.in_reply_to_id ? { inReplyTo: item.in_reply_to_id } : {}), ...(item.diff_hunk ? { diffHunk: item.diff_hunk } : {}) }
         const commands = watch.commands ??= []
         if (!commands.some((stored) => stored.comment.id === item.id)) commands.push({ comment: comment as StoredCommand["comment"], number })
         if (commands.length > MAX_COMMANDS) commands.splice(0, commands.length - MAX_COMMANDS)

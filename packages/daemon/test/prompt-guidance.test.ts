@@ -389,7 +389,7 @@ describe("the docs pointer: one line in every mode but custom", () => {
       const place = { dir: temp(), root: "/project" }
       const minimal = joined((await compose("minimal", family, place)).parts), focus = joined((await compose("focus", family, place)).parts)
       // 920: the pointer names the screen's parts (look requests) and MendCode's behavior (extensions): 428 bytes (PROMPT_BUDGETS.selfKnowledge).
-      expect(minimal.length).toBeLessThanOrEqual(920)
+      expect(minimal.length).toBeLessThanOrEqual(960)
       expect(minimal.length * 3).toBeLessThan(focus.length)
       expect(minimal).toContain(selfKnowledgeText())
     }
