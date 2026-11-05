@@ -1040,7 +1040,10 @@ export function createTranscript(options: { appearance?: Partial<TuiProfile>; /*
     const summary: TurnEnd = { ...end, input: turn?.input ?? 0, output: turn?.output ?? 0, reasoning: turn?.reasoning ?? 0, usage: turn?.usage ?? false, ...(turn?.calls ? { calls: turn.calls, cached: turn.cacheRead ?? 0 } : {}), ...(typeof turn?.costMicros === "number" ? { costMicros: turn.costMicros } : {}), ...(turn?.agent ? { agent: turn.agent } : {}), ...(turn?.model ? { model: shownModel(turn.model) } : {}), ...(ms !== undefined ? { ms } : {}) }
     // A `!command` turn never calls a model; its shell card already shows the duration.
     if (quiet && (ms === undefined || turn?.shell)) return
+    // A turn that left nothing on screen (an idle compaction that found nothing to do, an empty wake) says nothing, and never a second closing line in a row.
+    if (quiet && !blocks.some((block) => block.turnId === event.turnId && block.kind !== "status")) return
     const previous = blocks[blocks.length - 1]
+    if (quiet && previous?.kind === "status" && previous.end) return
     if (previous) cache.delete(previous.itemId)
     add({ itemId: `status:${event.turnId}` as ItemId, turnId: event.turnId, kind: "status", text: "", status: "ok", end: summary, at: event.at })
     invalidateCounts()

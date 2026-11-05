@@ -118,3 +118,36 @@ describe("sameDir", () => {
     expect(sameDir(path.join(h, ".mendcode"), path.join(h, "other"))).toBe(false)
   })
 })
+
+describe("stopStandaloneDaemon signals only a daemon of the directory it is asked to stop", () => {
+  const fake = (dir: string) => Bun.spawn([process.execPath, "-e", "setTimeout(() => {}, 30000)", "__daemon", "--dir", dir], { stdout: "ignore", stderr: "ignore" })
+  const shown = async (pid: number) => { const { processCommand } = await import("../src/daemon-identity"); for (let i = 0; i < 200 && !processCommand(pid)?.includes("__daemon"); i++) await Bun.sleep(10) }
+
+  test("a live process that is not a daemon, and a daemon of another directory, are left running; a daemon of this directory stops; a dead owner or no lock is already stopped", async () => {
+    const { stopStandaloneDaemon } = await import("../src/data-dir")
+    const dir = home()
+    const other = home()
+    const stranger = Bun.spawn(["sleep", "30"])
+    const elsewhere = fake(other)
+    const mine = fake(dir)
+    const gone = Bun.spawn(["true"])
+    await gone.exited
+    try {
+      await shown(elsewhere.pid)
+      await shown(mine.pid)
+      expect(await stopStandaloneDaemon(dir)).toBe(true)
+      writeFileSync(path.join(dir, "mendd.lock"), String(stranger.pid))
+      expect(await stopStandaloneDaemon(dir, 200)).toBe(false)
+      writeFileSync(path.join(dir, "mendd.lock"), String(elsewhere.pid))
+      expect(await stopStandaloneDaemon(dir, 200)).toBe(false)
+      expect([stranger.exitCode, elsewhere.exitCode]).toEqual([null, null])
+      writeFileSync(path.join(dir, "mendd.lock"), String(gone.pid))
+      expect(await stopStandaloneDaemon(dir)).toBe(true)
+      writeFileSync(path.join(dir, "mendd.lock"), String(mine.pid))
+      expect(await stopStandaloneDaemon(dir)).toBe(true)
+      expect(mine.signalCode).toBe("SIGTERM")
+    } finally {
+      stranger.kill(); elsewhere.kill(); mine.kill()
+    }
+  })
+})

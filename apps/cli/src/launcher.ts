@@ -1,7 +1,8 @@
 import { spawn } from "node:child_process"
-import { existsSync, readFileSync } from "node:fs"
+import { existsSync, readFileSync, rmSync } from "node:fs"
 import path from "node:path"
 import { dataDirFromEnv, defaultDataDirNow, mendEnv, sameDir } from "@mendcode/program/data-dir"
+import { inspectLockOwner, type OwnerProbe } from "@mendcode/program/daemon-identity"
 import { defaultLocalTransport, localEndpointPath, readLocalEndpoint } from "@mendcode/client/local-endpoint"
 import { droppedEnvArgs, hostSessionEnvNames, withoutHostSessionEnv } from "@mendcode/client/inherited-env"
 
@@ -194,17 +195,62 @@ export function isDaemonPid(pid: number, { self = process.pid, parent = process.
   return Number.isSafeInteger(pid) && pid > 1 && pid !== self && pid !== parent
 }
 
-/** `--restart-daemon`: SIGTERM the lock owner (graceful: running turns end as interrupted and resume later). */
-export async function terminateDaemon(dir = envDataDir()) {
-  const lock = path.join(dir, "mendd.lock")
-  if (!existsSync(lock)) return false
-  const pid = Number(await Bun.file(lock).text())
-  if (!isDaemonPid(pid)) return false
+/**
+ * Asks the daemon that answers on `dir`'s socket or endpoint to stop (`daemon.shutdown`, forced: running turns end as interrupted
+ * and resume later). It needs no pid, so it works wherever there is no process table. False when nobody answers, the answer is
+ * another directory's daemon, or it refuses.
+ */
+async function shutdownOverProtocol(dir: string) {
+  const up = await liveDaemon(dir)
+  if (!up) return false
+  const { createClient } = await import("@mendcode/client")
+  const client = createClient({ ...(up.tcp ? { localTcp: () => readLocalEndpoint(dir) } : { socketPath: up.socketPath }), name: "daemon-restart", reconnect: false, timeoutMs: 2000 })
   try {
-    process.kill(pid, "SIGTERM")
+    await client.connect()
+    const status = await client.send({ type: "daemon.status" })
+    if (!status.ok || !sameDir(String((status.result as { dataDir?: string } | undefined)?.dataDir ?? ""), dir)) return false
+    const reply = await client.send({ type: "daemon.shutdown", force: true })
+    if (!reply.ok) return false
+  } catch {
+    return false
+  } finally {
+    client.close()
+  }
+  await waitForSocketGone(up.socketPath)
+  const lock = path.join(dir, "mendd.lock")
+  for (let i = 0; i < 100 && existsSync(lock); i++) await Bun.sleep(20)
+  return true
+}
+
+/**
+ * `--restart-daemon`: the daemon that answers for `dir` is asked to stop over the protocol. When nobody answers, the lock owner gets
+ * SIGTERM (same graceful stop), but only a process that is a MendCode daemon serving `dir` (daemon-identity.ts); where the
+ * process table gives no command line (Windows) nothing is signalled and `report` says so. A lock that names anything else is stale:
+ * nothing is signalled, `report` says what was found, and a lock whose process no longer exists is removed. True when a daemon was stopped.
+ */
+export async function terminateDaemon(dir = envDataDir(), { report = () => {}, probe }: { report?(message: string): void; probe?: OwnerProbe } = {}) {
+  if (await shutdownOverProtocol(dir)) return true
+  const owner = inspectLockOwner({ dir, ...(probe ? { probe } : {}) })
+  if (owner.state === "none") {
+    if (owner.detail !== "no lock file") report(`mendd.lock in ${dir}: ${owner.detail}; nothing signalled`)
+    return false
+  }
+  if (owner.state === "gone") {
+    const lock = path.join(dir, "mendd.lock")
+    try { if (Number(readFileSync(lock, "utf8")) === owner.pid) rmSync(lock, { force: true }) } catch { /* another process replaced or removed it */ }
+    report(`stale mendd.lock in ${dir}: ${owner.detail}; the lock was removed, nothing signalled`)
+    return false
+  }
+  if (owner.state === "foreign") {
+    report(`mendd.lock in ${dir} is stale or foreign: ${owner.detail}; nothing signalled`)
+    return false
+  }
+  try {
+    process.kill(owner.pid, "SIGTERM")
   } catch {
     return false
   }
+  const lock = path.join(dir, "mendd.lock")
   for (let i = 0; i < 100 && existsSync(lock); i++) await Bun.sleep(20)
   return true
 }
@@ -214,23 +260,14 @@ export async function terminateDaemon(dir = envDataDir()) {
  * first, or `deadline` passes. A daemon takes the lock before it opens its socket, so a client that comes in between waits here.
  */
 export async function ownerListening(dir: string, deadline: number) {
-  const lock = path.join(dir, "mendd.lock")
   for (;;) {
     const up = await liveDaemon(dir)
     if (up) return up
-    let owner = 0
-    try { owner = Number(readFileSync(lock, "utf8")) } catch { return undefined }
-    if (!isDaemonPid(owner) || !processAlive(owner) || Date.now() > deadline) return undefined
+    // Only a daemon of this directory (or a MendCode terminal that hosts one) is waited for: a stale lock whose pid was reused ends the wait.
+    const owner = inspectLockOwner({ dir })
+    const waitable = owner.state === "daemon" || (owner.state === "foreign" && owner.mendcode === true)
+    if (!waitable || Date.now() > deadline) return undefined
     await Bun.sleep(20)
-  }
-}
-
-function processAlive(pid: number) {
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "EPERM"
   }
 }
 

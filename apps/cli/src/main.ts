@@ -389,7 +389,20 @@ const fromSession = !remoteAttach && startedBySession({ env: process.env, dir: o
 if (flag("restart-daemon") && !remoteAttach) refuseFromSession(daemonDataDir, "stops the daemon every session runs under")
 // A session never starts or drives another session with approvals off: that would be more authority than it has.
 if (!remoteAttach && (flag("approve") || flag("dangerously-skip-permissions"))) refuseFromSession(daemonDataDir, "starts or drives a session with approvals off")
-if (flag("restart-daemon")) await terminateDaemon(daemonDataDir)
+if (flag("restart-daemon")) {
+  const stopped = await terminateDaemon(daemonDataDir, { report: (message) => process.stderr.write(`${message}\n`) })
+  // On its own it restarts the daemon and ends; the terminal opens with the next `mendcode`. With a command (`run`, ...) that command goes on.
+  if (startup?.kind === "tui") {
+    try {
+      const started = await ensureDaemon({ dir: daemonDataDir ?? envDataDir() })
+      process.stdout.write(`${stopped ? "daemon restarted" : "daemon started"}${started.started ? "" : " (already running)"}\n`)
+    } catch (error) {
+      process.stderr.write(`error: ${error instanceof Error ? error.message : String(error)}\n`)
+      process.exit(1)
+    }
+    process.exit(0)
+  }
+}
 
 /**
  * Solo mode (solo.ts): an interactive local terminal that finds no daemon runs it in this process. Decided once, at the

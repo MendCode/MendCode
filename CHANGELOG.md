@@ -114,6 +114,8 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Fixed
 
+- `mendcode --restart-daemon` only stops a process that is a MendCode daemon for that data directory; a stale `mendd.lock` whose pid was reused is reported and left alone (a dead owner's lock is removed), and the command restarts the daemon and exits instead of opening the terminal (#2).
+- A turn that shows nothing (an idle compaction with nothing to compact) no longer adds a second "ended" line under the answer.
 - `mendcode run` and `session send` accept a long prompt or a long `--file` text (up to 200 KiB each): what does not fit a message goes as a text attachment and the model reads all of it. Over that, the error names the prompt or file, its size and the limit, and "daemon rejected" for a text that is too long now says the same. See [attachments](docs/attachments.md#long-text-from-run-and-session-send).
 - A PR review that finishes before you answer `/pr publish` is kept, also across a daemon restart, and `/pr publish on` posts it as found; if the pull request moved on, it says so and posts nothing, and it says when no finished review was waiting.
 - `/pr setup` and `mendcode pr setup` on a tier without the PR reviewer now apply once confirmed (they also allow the reviewer with `features.pr_review: true`; the tier is not changed); when something blocks it, the output ends with "Nothing changed". On a development daemon it says the watch is recorded and does not run.

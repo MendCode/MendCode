@@ -75,24 +75,17 @@ function alive(pid: number) {
   try { process.kill(pid, 0); return true } catch (error) { return (error as NodeJS.ErrnoException).code === "EPERM" }
 }
 
-/** Whether `pid` runs a detached daemon (`mendcode __daemon`), not a terminal that hosts one in its own process (solo mode). */
-function isStandaloneDaemon(pid: number) {
-  let command = ""
-  try { command = Bun.spawnSync(["ps", "-o", "command=", "-p", String(pid)], { stdout: "pipe", stderr: "ignore" }).stdout.toString() } catch { return false }
-  return /\s__daemon(\s|$)/.test(command) || /packages\/daemon\/src\/main\.ts/.test(command)
-}
-
 /**
  * Stops the detached daemon that holds `dir` (its pid in `mendd.lock`) with SIGTERM, the graceful stop of `--restart-daemon`
  * (running turns end as interrupted and resume), and waits for it to exit. True when nothing holds the directory any more.
  * A terminal that hosts its daemon is someone's open screen: it is left alone (false), and the move waits for a later start.
  */
 export async function stopStandaloneDaemon(dir: string, timeoutMs = 8_000) {
-  let pid: number
-  try { pid = Number(readFileSync(path.join(dir, "mendd.lock"), "utf8")) } catch { return true }
-  if (!Number.isSafeInteger(pid) || pid <= 1 || pid === process.pid || pid === process.ppid) return false
-  if (!alive(pid)) return true
-  if (!isStandaloneDaemon(pid)) return false
+  // Only a MendCode daemon serving `dir` is signalled (daemon-identity.ts): a stale lock whose pid was reused names someone else's process.
+  const owner = (await import("./daemon-identity")).inspectLockOwner({ dir })
+  if (owner.state === "gone" || (owner.state === "none" && owner.detail === "no lock file")) return true
+  if (owner.state !== "daemon") return false
+  const pid = owner.pid
   try { process.kill(pid, "SIGTERM") } catch { return !alive(pid) }
   for (const deadline = Date.now() + timeoutMs; Date.now() < deadline;) {
     if (!alive(pid)) return true
