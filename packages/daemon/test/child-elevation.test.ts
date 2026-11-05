@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test"
 import type { SessionEventDraft } from "@mendcode/kernel"
 import type { Command, RequestId, SessionId, TurnId } from "@mendcode/protocol"
-import { createChildElevation, isHumanTerminal } from "../src/child-elevation"
+import { createChildElevation } from "../src/child-elevation"
+import { isHumanTerminal } from "../src/agent-origin"
 import type { AgentOrigin } from "../src/agent-origin"
 
 const origin: AgentOrigin = { via: "process", sessionId: "ses_launcher" }

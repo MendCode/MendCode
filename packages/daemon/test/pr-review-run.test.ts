@@ -54,7 +54,7 @@ const candidate = ({ path: file, line, summary, category = "correctness" }: Cand
 const LOOP = { path: "src/math.ts", line: 3, summary: "The loop skips the first value" }
 const HALF = { path: "src/math.ts", line: 6, summary: "half() truncates odd numbers" }
 
-type Turn = { purpose: "review" | "verify"; prompt: string }
+type Turn = { purpose: "review" | "verify" | "read"; prompt: string }
 /**
  * Children that answer the review pass with `findings` and confirm every finding a verify turn names. `fail` throws on the
  * first turn of that purpose (once); `tokens` is each turn's report.

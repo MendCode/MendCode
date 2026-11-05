@@ -262,7 +262,8 @@ files of the data directory or hand a command to another service (cron, launchd,
 Three layers, strongest first:
 
 1. **The daemon** does not take a client's word for who it is. On the local Unix socket it reads the connecting process
-   from the kernel and looks for it among the processes sessions started (`shell`, background tasks, `shell_session`):
+   from the kernel and looks for it among the processes sessions started (`shell`, background tasks, `shell_session`, and each session's Claude Code process
+   when its engine is Claude Code):
    a client that descends from one, or still belongs to the terminal session one of them led after that one ended, is
    agent-origin. So is every other descendant of the daemon process (engines, MCP servers, hooks), except a terminal you
    opened through the daemon. Every session command also gets a hard file-size limit of 512 PiB, which a process can

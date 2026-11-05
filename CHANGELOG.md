@@ -22,6 +22,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 - The PR reviewer measures MendCode's own pull requests (start-up, memory, size) and puts the table in the review; a rise above the noise is a critical finding. `prReview.perfAttrib: false` turns it off. See [PR review](docs/pr-review.md#performance-of-mendcodes-own-pull-requests).
 - `/reviews open <job id>` opens a PR review's reviewer session, and a running review shows its phase in `/reviews`. See [PR review](docs/pr-review.md).
 - `@mendcode review full` reviews the whole PR; plain `@mendcode review` reviews only what is new since the last full review. See [PR review](docs/pr-review.md).
+- The PR reviewer sends data, results and generated files to readers on a cheap model (or a local summary) instead of reading them whole; `readers` in `.mendcode/review.yaml` sets how many read at once. See [PR review](docs/pr-review.md#data-files-and-readers).
 - The PR reviewer's own tokens show in `/usage` as the `prReview` role. See [usage](docs/usage.md#auxiliary-calls).
 - `budget.tokens_per_diff_token` scales a review's token cap with its diff. See [PR review](docs/pr-review.md).- `threads` and `sessions` ask for up to 100 sessions (10 by default) and take `query`, `state` and `project` filters. See [peers](docs/peers.md#sessions).
 - `/loop` understands phrases in Spanish and English (`/loop cada 5 minutos ve diciéndome`, `/loop daily at 9am check the issues`) and asks for one line of confirmation before it starts; with no interval it paces itself (`adaptive`), and a schedule it cannot read is converted by the small model. The strict form (`/loop every 30m …`) is unchanged. See [loops](docs/loops.md#natural-language).
@@ -111,6 +112,10 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Fixed
 
+- PR review readers never run on an ACP harness model (such as an OpenCode one listed under the ChatGPT login): they use the cheap model of the reviewer's own provider.
+- A PR review whose data files were summarized by readers is no longer stopped as "could not review" because the model noted it saw summaries or could not run tests: with findings, or a walkthrough, it goes on to verify and publishes with the model's note. The review prompt now says the data arrives summarized and that there is no shell.
+- In a Claude Code session, `mendcode run` from its shell is known as that session: `--file` attaches instead of being refused, and `--permission smart` above the session's mode asks you on the approval card.
+- `mendcode run --file` from a session's own shell attaches the files instead of being refused.
 - PR reviews and report-only loops are no longer told about plans when they try a change (MendCode's own engine and Claude Code), and Claude Code runs them outside its plan mode, so a reviewer never mistakes plan mode for a limit on its review.
 - A PR review whose diff does not fit its token budget stops before it spends: it says so up front, or before the next part of a large diff, instead of after. See [PR review](docs/pr-review.md#budgets-quotas-and-accounting).
 - The solid logo font draws square letters, and `/customize` rows no longer cut or run together.

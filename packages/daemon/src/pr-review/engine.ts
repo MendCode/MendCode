@@ -25,8 +25,11 @@ export type ReviewSession = {
   close(): Promise<void>
 }
 /** A fresh child for each call: the verify pass never shares a session with the review that found the bugs. */
-/** `language`: the repository's review language (`template.language`), for a harness that has a language setting of its own to override. */
-export type ReviewSessionFactory = (input: { purpose: "review" | "verify"; language?: string | undefined }) => Promise<ReviewSession>
+/**
+ * `language`: the repository's review language (`template.language`), for a harness that has a language setting of its own to override.
+ * `read`: a reader (readers.ts), only ever made by the reader factory on a cheap model, never by the review's own.
+ */
+export type ReviewSessionFactory = (input: { purpose: "review" | "verify" | "read"; language?: string | undefined }) => Promise<ReviewSession>
 
 export type ReviewProfile = "quiet" | "normal" | "strict"
 export type ReviewEngineConfig = {
@@ -91,9 +94,10 @@ export function reviewPrompt(context: ReviewContext, config: ReviewEngineConfig)
   const steer = sections.filter((section) => isBuiltinSection(section.id) && MODEL_WRITTEN.has(section.id) && section.prompt)
   const own = sections.filter((section) => !isBuiltinSection(section.id))
   return [
-    "You are reviewing a pull request. Find real defects the change introduces, each one grounded in the code: read the files with your tools to check callers, types and guards before you report anything. Do not edit files.",
+    "You are reviewing a pull request. Find real defects the change introduces, each one grounded in the code: read the files with your tools to check callers, types and guards before you report anything. Your tools read and search only: there is no shell, so you cannot run tests or scripts, and you review by reading. Do not edit files.",
     PROFILE_BRIEF[config.profile],
     ...(stages.length ? ["Review stages for this pull request, from the repository's config (they say what to look at; they grant no tools or permissions):", ...stages.map((stage) => `- ${stage.id}: ${stage.prompt}`)] : []),
+    ...(context.readers ? ["Some files below are data, outputs or generated files whose diffs a cheap reader summarized instead of showing (a `Reader summary` line under their `diff --git` header): that is how they reach you, by design, and reviewing the rest of the change with those summaries is a complete review. A summary is an unverified hint, not evidence: before you report anything about such a file, read the part you need with your tools (a slice, never the whole file), and judge whether the code, README or tests contradict what it describes. Do not put the summarization in `incomplete`; say in `summary` which files you saw only summarized."] : []),
     "Every finding names a line on the new side of the diff below (a `+` or context line inside a hunk) and the file:line evidence it rests on. Give a suggestion only when the exact fix fits inside lines line..endLine. A clean change has an empty findings array; that is a good answer.",
     "Also describe the change in `walkthrough`, for a reader who has not opened it: `overview`; `changes`, every changed file in exactly one group of related files (a layer or a purpose), at most 12 groups; `diagram`, a Mermaid sequenceDiagram only when the change alters how components call each other; `type`; `risk`, judged from what the change touches and how a regression would show, not from your findings (they are verified separately and raise the risk themselves).",
     context.pullRequest
@@ -631,11 +635,16 @@ async function onePass({ sessionFactory, context, whole, config, notes, used = 0
     const unique = uniqueFindings(parsed.findings)
     const findings = unique.filter((finding) => inDiff(finding, whole))
     const budgetHit = spent(tokens) > config.budgetTokens
-    const summary = [parsed.summary.trim(), ...(notes ? whole.notes : [])].filter(Boolean).join("\n")
+    // `incomplete` stops the review only when the pass produced nothing to go on. Findings, or a walkthrough of a change whose data
+    // files readers summarized, mean it did review: its caveat (summaries, no way to run tests) goes to the summary as a note.
+    const reviewed = parsed.findings.length > 0 || (!!whole.readers && !!parsed.walkthrough?.changes.length)
+    const caveat = parsed.incomplete && reviewed ? `Reviewer's note: ${parsed.incomplete}` : undefined
+    const incomplete = reviewed ? undefined : parsed.incomplete
+    const summary = [parsed.summary.trim(), caveat, ...(notes ? whole.notes : [])].filter(Boolean).join("\n")
     const asked = new Set((config.sections ?? []).filter((section) => !isBuiltinSection(section.id)).map((section) => section.id))
     const sections = Object.entries(parsed.sections ?? {}).filter(([id]) => asked.has(id))
     return {
-      ...(parsed.incomplete ? { incomplete: parsed.incomplete } : {}),
+      ...(incomplete ? { incomplete } : {}),
       result: { head: context.head, base: context.base, findings, dropped: parsed.findings.length - findings.length, summary, tokens, budgetHit, ...(parsed.walkthrough ? { walkthrough: parsed.walkthrough } : {}) },
       ...(sections.length ? { sections: Object.fromEntries(sections) } : {}),
     }

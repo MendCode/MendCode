@@ -1,5 +1,6 @@
 import type { SessionEventDraft } from "@mendcode/kernel"
-import { launchOf, permissionRank, type Command, type PermissionMode, type RequestId, type SessionId, type TurnId } from "@mendcode/protocol"
+import { launchOf } from "@mendcode/protocol/launch"
+import { permissionRank, type Command, type PermissionMode, type RequestId, type SessionId, type TurnId } from "@mendcode/protocol"
 import type { AgentOrigin } from "./agent-origin"
 
 /** How long the card waits for the user; no answer keeps the refusal. */
@@ -9,10 +10,6 @@ const HIGHEST: PermissionMode = "smart"
 const SHOWN_PROMPT = 1200
 const APPROVE = "Approve once"
 const DENY = "Deny"
-
-/** The user's own interactive terminal: it draws cards, is local, and is neither a session's shell nor a remote or peer client. */
-export const isHumanTerminal = (connection: { dialogs?: boolean | undefined; agent?: unknown; remoteAddress?: string | undefined; peer?: unknown }) =>
-  connection.dialogs === true && !connection.agent && !connection.remoteAddress && !connection.peer
 
 export type ChildFacts = { title: string; directory: string; model: string; agent?: string | undefined; addDirs?: readonly string[] | undefined; maxTurns?: number | undefined; systemPrompt?: "replaced" | "appended" | undefined }
 

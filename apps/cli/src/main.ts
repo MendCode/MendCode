@@ -31,8 +31,8 @@ import { parseDocsCommand } from "./docs-args"
 import { parsePackageFileCommand, runPackageFileCommand } from "./package-file-command"
 import { PROGRAM_NAME } from "@mendcode/program"
 import { createHerdrReporter, createTuiosChildren, createTuiosMeta, herdrPane, paneState, tuiosPane, waitingChild, type PaneChild, type PaneFacts } from "./herdr"
-import { guardClient, operatorCommand, originCapabilities, originRefusal, startedBySession } from "./agent-origin"
-import { AGENT_SHELL_ENV, launchOf, setBuildChannel } from "@mendcode/protocol/wire"
+import { guardClient, originCapabilities, originRefusal, startedBySession } from "./agent-origin"
+import { AGENT_SHELL_ENV, setBuildChannel } from "@mendcode/protocol/wire"
 import { EXTENSION_DIALOGS_CAPABILITY } from "@mendcode/extension-api"
 
 /** The product version shown on the home screen. */
@@ -787,14 +787,14 @@ async function applyRunLimits(options: Startup, target: SessionId, instruction?:
   if (options.permission) {
     // The prompt goes along: from a session's shell (which the daemon recognises, whatever this environment says), a mode
     // above that session's own is then put to the user on a card instead of refused at once. Other clients ignore it.
-    const launch = submission ? launchOf(submission as Parameters<typeof launchOf>[0]) : undefined
+    const launch = submission ? (await import("@mendcode/protocol/launch")).launchOf(submission as Parameters<typeof import("@mendcode/protocol/launch").launchOf>[0]) : undefined
     const reply = await client.send({ type: "session.permission.set", sessionId: target, mode: options.permission, ...(launch ? { launch } : {}) })
     if (!reply.ok) {
       const unapproved = reply.error.code === "forbidden" && reply.error.message.includes("; not approved: ")
       if (!unapproved) throw new Error(reply.error.message)
       // The child this run just made never ran: it does not stay behind as an empty session.
       if (!options.session && !options.continue) await deleteSession(target)
-      throw new Error(`${reply.error.message}\nAn operator starts it from their own terminal with:\n  ${operatorCommand(process.argv.slice(2), directory!)}`)
+      throw new Error(`${reply.error.message}\nAn operator starts it from their own terminal with:\n  ${(await import("./operator-command")).operatorCommand(process.argv.slice(2), directory!)}`)
     }
   }
   // Flags MendCode does not know belong to an extension; the daemon refuses one no extension of the project declares.

@@ -36,7 +36,7 @@ import { createRepoWatch, listedToFacts, MAX_CONCURRENT_REVIEWS, MAX_OPEN_PRS, p
 import { buildStackGraph, stackChanges, stackSummary } from "./stacks"
 import { controlOf, release, takeOver } from "./takeover"
 import { runChecks } from "./verify"
-import { layeredConfig, reviewNotice, runConfigKey, runPrReview, type ReviewRun, type RunPrReviewInput } from "./run"
+import { layeredConfig, reviewNotice, runConfigKey, runPrReview, type ReviewRun, type RunPrReviewInput, type RunReaders } from "./run"
 import { readReviewState, REVIEW_MARKER, writeReviewState, type ReviewState } from "./state"
 
 /**
@@ -121,6 +121,11 @@ export type PrReviewServiceOptions = {
   sessions(owner: string, directory: string): ReviewSessionFactory
   /** The `@mendcode fix` session for `owner`: the default agent under the user's own permission mode. */
   editor(owner: string, directory: string): ReviewSessionFactory
+  /**
+   * The readers of `owner`'s reviews in `directory` (readers.ts): the install tier and the cheap model of the owner's provider with
+   * its children's factory. Absent: data files get local summaries only.
+   */
+  readers?(owner: string, directory: string): RunReaders
   /** Runs `job` on the daemon's job scheduler and resolves when it ends. */
   schedule(run: () => Promise<void>): Promise<void>
   /**
@@ -439,6 +444,7 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
         repo, number, directory: worktree, base: pr.baseRefOid, head, ...(policy ? { policy } : {}), state, git, publish, force: true, full: manual && !onlyNewCommits && !nothingNew, onlyIfPublishable: !manual,
         publisher: { login, check: (config) => publisherOf(directory, repo, config.publishers) }, read: call,
         sessionFactory: recordedSessions(options.sessions(sessionId, worktree), current?.id),
+        ...(options.readers ? { readers: options.readers(sessionId, worktree) } : {}),
         // GitLab and Gitea: the title and the description the adapter read (linked issues are read through gh on GitHub), so
         // `template.language: auto` judges the language from both.
         pullRequest: forge ? { title: typeof pr.title === "string" ? pr.title : "", body: typeof pr.body === "string" ? pr.body : "", issues: [] } : await readPullRequestInfo({ gh: call, repo, title: typeof pr.title === "string" ? pr.title : "", body: typeof pr.body === "string" ? pr.body : "" }),

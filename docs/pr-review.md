@@ -22,6 +22,8 @@ is off or asleep, troubleshooting), see [PR reviewer: team setup](pr-review-setu
    are cut first, then the largest files' diffs, and the summary says so. A diff that still does not fit one call is reviewed in
    parts of whole files (at most 12), one review call each. Their candidates are merged before one verify pass, and a stopped job's
    checkpoint names its progress (`analysis 3/5`).
+   Data, outputs and generated files (result JSON, CSV, lockfiles, minified files, snapshots, large fixtures, assets) do not go
+   to the review pass whole: [readers](#data-files-and-readers) on a cheap model summarize them first.
    Without a graph index the review uses the diff alone and says so. The pull request's title and description, and the issues
    it closes with GitHub's keywords (`Fixes #12`, at most three, each read with one `gh api` call), go in too, as untrusted data,
    for the pre-merge checks.
@@ -75,6 +77,7 @@ fix: { mode: review, push: false, personal: false, max_rounds: 3 }   # review | 
 phases: { mode: dynamic, list: [], max_rounds_without_progress: 2 } # none | fixed | dynamic
 template: { sections: [], tone: neutral, language: English }        # tone: neutral | concise | detailed; language: a name or auto (below)
 backlog: { max_prs: 10, window_days: 30 }   # open PRs reviewed when a watch starts (below); 0..50 and 1..365; max_prs: 0 = none
+readers: { enabled: true }  # data files go to cheap readers; parallel: 1..8 (unset: by tier); model: a cheap model (below)
 ```
 
 The base branch's file decides everything a pull request could abuse: `enabled`, `checks`, `budget`, `ignore`, `profile`, `cap`,
@@ -88,6 +91,40 @@ branch's file) are used.
 `checks` run once per review, from the base config only, in the [OS sandbox](sandbox.md) with no network: the PR's checkout is
 read-only, only a scratch and the temp directories are writable, and the verifier reads their exit code and last 6,000
 characters. Without a sandbox backend they do not run, and the verifier is told why; they never run unconfined.
+
+### Data files and readers
+
+Tier: balanced and full (it is part of the PR reviewer). Before a review, each changed file is triaged. A file goes to a reader
+instead of the review pass when it is binary or an asset, a lockfile, minified or a source map, a test snapshot, marked
+`linguist-generated` or `linguist-vendored` in the base branch's `.gitattributes` (never the PR's own), a data format (JSON, JSONL,
+CSV, TSV, XML, ...) with 200 changed lines or more or under a data directory (`results/`, `outputs/`, `benchmarks/`, `fixtures/`,
+`data/`, ...), a large fixture, or a file whose added lines are mostly numbers or one repeated shape. A change under 40 lines
+stays with the review pass, and so do manifests and configuration (`package.json`, `tsconfig*.json`, `.github/`, `.mendcode/`).
+When a diff is too large for its parts, the code files cut from them go to readers too.
+
+Readers group files by directory, extension and shape (one experiment's 50 result files are one group) and return a short summary
+of each group: what it holds, its structure, and rarities such as secrets, absolute paths, NaN or Infinity, huge or truncated
+values, binaries, and data that contradicts itself. The review pass gets each summary under the first file's `diff --git`
+header, and a one-line size for the rest, then reviews as always, verify pass included. A summary is a hint: the review pass reads
+the file with its tools before it reports anything about it, and only findings the verify pass confirms are published.
+
+- **Cheap models only.** A reader runs on the cheapest model of the reviewer's own provider and transport, from a fixed list:
+  Claude Haiku (through Claude Code for a Claude Code reviewer), GPT mini, luna or nano (Codex or the ChatGPT login), Gemini Flash,
+  DeepSeek chat or Flash, Grok mini, Mistral small. The model is checked against that list before every call. `readers.model`
+  may name one of them; a model off the list, or of another provider, is refused with a note and the automatic pick is used.
+- **No cheap model, no model.** When the provider has none, or the readers' share is spent, or a reader fails or answers out of
+  shape, the group gets a local summary instead: sizes, changed lines, JSON keys or CSV columns, record counts, and the rarities
+  found without a model (a secret's kind, never its value). A reader never falls back to a larger model. The hosted workflow
+  always uses local summaries.
+- **Parallel readers.** `readers.parallel` (1..8) sets how many read at once; unset, it follows the install tier: minimalist 1,
+  balanced 2, full 3.
+- **Budget.** Readers may count up to a quarter of the review's cap, checked before each call; what they count comes off the cap
+  of the review and verify passes, so the PR's total stays under `budget.tokens_per_pr`. Their turns are in the job's ledger as
+  review work and in `/usage` under the `prReview` role, with the reader's model. A checkpoint keeps the summaries, so resuming the
+  same head does not read the files again.
+- **What you see.** The summary and the session notice say how many files went to readers and on which model, for example
+  `Readers: 106 files went to readers instead of the review pass whole: 106 files by claude-haiku (1 call, up to 2 at once, …)`.
+- `readers.enabled: false` sends every diff to the review pass as before.
 
 ### Review language and session notices
 
@@ -748,7 +785,10 @@ closing check and publishes what it verified as a **partial** review:
 
 When the first pass says it could not review the change (a restriction on its tools or mode, files it could not read: the
 `incomplete` key of its answer, or a summary that says "the review is incomplete" with no findings), the review ends there as
-incomplete, with no verification, nothing published and a notice that says so. A defect the first pass named that verification
+incomplete, with no verification, nothing published and a notice that says so. A caveat is not that: when the pass returned findings,
+or a walkthrough of a change whose data files readers summarized, its `incomplete` text (summaries instead of data, no shell to run
+tests) becomes a "Reviewer's note" in the summary and the review goes on to verify and publishes. The review prompt tells the pass
+its tools read and search only and that summarized files are a complete way to review. A defect the first pass named that verification
 ruled out is listed in the summary as ruled out, never as a finding.
 
 Five limits are kept apart: `budget.tokens_per_pr` (MendCode's own cap per PR head, across review, verify, fix and resumed rounds;

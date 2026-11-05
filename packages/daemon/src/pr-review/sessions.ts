@@ -127,7 +127,7 @@ function durationText(ms: number) {
 
 /** A review session with the id of the hidden session behind it (a fix session's id is what the job records). */
 export type IdentifiedReviewSession = ReviewSession & { id: SessionId }
-export type IdentifiedSessionFactory = (input: { purpose: "review" | "verify"; language?: string | undefined }) => Promise<IdentifiedReviewSession>
+export type IdentifiedSessionFactory = (input: { purpose: "review" | "verify" | "read"; language?: string | undefined }) => Promise<IdentifiedReviewSession>
 
 /**
  * A factory whose every prompt ends with the repository's review language (`template.language`), for prompts built outside the
@@ -199,7 +199,7 @@ export function createReviewSessions(deps: {
    */
   function factory({ owner, directory, model, editing = false }: { owner?: string | undefined; directory: string; model?: ModelChoice | undefined; editing?: boolean }): IdentifiedSessionFactory {
     return async ({ purpose, language }) => {
-      const id = deps.create({ owner, directory, model, editing, ...(language ? { language } : {}), title: editing ? "PR fix" : purpose === "review" ? "PR review" : "PR review (verify)" })
+      const id = deps.create({ owner, directory, model, editing, ...(language ? { language } : {}), title: editing ? "PR fix" : purpose === "review" ? "PR review" : purpose === "read" ? "PR review (reader)" : "PR review (verify)" })
       mine.add(id)
       if (editing) editors.add(id)
       return {

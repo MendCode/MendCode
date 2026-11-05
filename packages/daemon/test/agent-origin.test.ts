@@ -70,6 +70,13 @@ describe("what an agent-origin client may ask", () => {
     expect(g.cap(full, "plan")).toBe("plan")
   })
 
+  test("a known session attaches a file without naming a session (run --file); an unknown caller still cannot", () => {
+    const g = gate()
+    expect(g.check(ask, command({ type: "attachment.paste", path: "/work/a.png" }))).toBeUndefined()
+    expect(g.check(unknown, command({ type: "attachment.paste", path: "/work/a.png" }))).toContain("without a session")
+    expect(g.check(ask, command({ type: "attachment.paste", sessionId: "ses_other_full", path: "/work/a.png" }))).toContain("more authority")
+  })
+
   test("a session never answers an approval, and removes only sessions it started", () => {
     const g = gate()
     expect(g.check(full, command({ type: "request.resolve", sessionId: "ses_full", requestId: "req_1", decision: { kind: "approve", scope: "once" } }))).toContain("cannot answer an approval")

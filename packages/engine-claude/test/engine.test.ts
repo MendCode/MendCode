@@ -171,7 +171,7 @@ test("Claude Code's own sub-agents are refused the advisor, workflows and MendCo
 })
 
 /** A scripted stand-in for one `claude` process: `onUser` / `onControl` answer what MendCode writes. */
-function fakeClaude(script: { onUser?(api: FakeApi, content: any[]): void; onControl?(api: FakeApi, request: any): unknown } = {}) {
+function fakeClaude(script: { pid?: number; onUser?(api: FakeApi, content: any[]): void; onControl?(api: FakeApi, request: any): unknown } = {}) {
   const queue: string[] = []
   let wake: (() => void) | undefined
   let exitResolve!: (code: number) => void
@@ -217,6 +217,7 @@ function fakeClaude(script: { onUser?(api: FakeApi, content: any[]): void; onCon
     })(),
     close: () => api.exit(),
     exited,
+    pid: script.pid,
     stderrTail: () => stderr,
   }
   return { transport, written, api }
@@ -364,6 +365,30 @@ describe("claude engine turns", () => {
     // The result's usage and modelUsage are sums over every call of the turn, sub-agents included.
     api.push(result({ usage: { input_tokens: 15, cache_creation_input_tokens: 3_800, cache_read_input_tokens: 400_000, output_tokens: 1_470, output_tokens_details: { thinking_tokens: 0 } }, modelUsage: { "claude-opus-4-8": { contextWindow: windowTokens } } }))
   }
+
+  test("each session's process is announced with its pid, and its end is reported once", async () => {
+    const started: Array<[string, number]> = []
+    let ended = 0
+    const fake = fakeClaude({ pid: 4242, onUser(api) { api.push(result()) } })
+    const { engine } = engineWith([fake], { onProcess: (sessionId, pid) => { started.push([sessionId, pid]); return () => void ended++ } })
+    const { input } = turnInput()
+    expect(await engine.runTurn(input)).toEqual({ status: "ok" })
+    expect(started).toEqual([[input.sessionId, 4242]])
+    expect(ended).toBe(0)
+    fake.api.exit()
+    await fake.transport.exited
+    await Promise.resolve()
+    expect(ended).toBe(1)
+    engine.stop()
+  })
+
+  test("a transport without a pid announces nothing", async () => {
+    let announced = 0
+    const { engine } = engineWith([fakeClaude({ onUser(api) { api.push(result()) } })], { onProcess: () => void announced++ })
+    expect(await engine.runTurn(turnInput().input)).toEqual({ status: "ok" })
+    expect(announced).toBe(0)
+    engine.stop()
+  })
 
   test("context after a multi-call turn is the last main-thread call's prompt, never the turn's cumulative usage; the usage totals stay the true sums", async () => {
     const { engine } = engineWith([fakeClaude({ onUser: longTurn(200_000) })])

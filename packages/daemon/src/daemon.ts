@@ -133,7 +133,7 @@ import { createSecretsService } from "./secrets"
 import { createEngineHooks, createExtensions, createPromptFiles, forgetSessionEntries, type DaemonExtensions, type PromptFiles } from "./extensions"
 import { createExtensionSessions } from "./extension-sessions"
 import { createExtensionDialogs, DIALOGS_CAPABILITY } from "./extension-dialogs"
-import { createChildElevation, isHumanTerminal } from "./child-elevation"
+import type { createChildElevation as CreateChildElevation } from "./child-elevation"
 import { createStatusScripts } from "./status-scripts"
 import { approvalRulePatch, offerFor } from "./approval-rules"
 import { createShellHooks } from "./shell-hooks"
@@ -257,7 +257,7 @@ import { createEvolutionPromotions } from "./evolution-promotion"
 import { createPeers } from "./peers"
 import { createThreads, threadMentions } from "./threads"
 import { tierDisabledPackages } from "./package-tier"
-import { createAgentGate, createPeerOrigin, type AgentOrigin } from "./agent-origin"
+import { createAgentGate, createPeerOrigin, isHumanTerminal, type AgentOrigin } from "./agent-origin"
 import { createSessionStarter } from "./session-start"
 import { continuationTurnOptions, REMOTE_HOST_SETTINGS, remoteExecutionCommand, remoteExecutionSettings, remoteTurnOptions } from "./remote-policy"
 import { SETTINGS_PROPOSAL_LOCAL } from "./settings-tool"
@@ -869,40 +869,47 @@ export async function startDaemon(options: DaemonOptions) {
     emit: (event) => void sessionSink.append(event),
     mask: (sessionId, text) => secrets.mask(sessionId, text),
   })
-  const humanTerminal = (connection: Connection) => isHumanTerminal(connection)
-  /** A session's shell asking for a child above its own mode: one card to the user (child-elevation.ts). */
-  const childElevation = createChildElevation({
-    humanSessions(launcher) {
-      const project = store.sessionDirectory(launcher)
-      const open = [...connections].filter(humanTerminal).flatMap((connection) => [...connection.subscriptions.keys()])
-      const nearby = project ? open.filter((id) => id !== launcher && store.sessionDirectory(id) !== undefined && canonicalDir(store.sessionDirectory(id)!) === canonicalDir(project)) : []
-      return [...new Set([...open.filter((id) => id === launcher), ...nearby])]
-    },
-    turnOf: (sessionId) => actors.get(sessionId)?.snapshot().turnId,
-    requestId: () => ids("request"),
-    turnId: () => ids("turn"),
-    emit: (event) => void sessionSink.append(event),
-    mask: (sessionId, text) => secrets.mask(sessionId, text),
-    facts(child) {
-      const directory = store.sessionDirectory(child) ?? ""
-      const model = resolveModel({ role: "main", session: store.sessionModel(child), roles: rolesFor(store.settings.get(), directory), catalog })
-      const limits = runLimits.get(child)
-      const agent = store.sessionAgent(child)
-      return {
-        title: store.sessionInfo(child)?.title ?? "",
-        directory,
-        model: `${model.model}${model.effort ? ` (effort ${model.effort})` : ""}`,
-        ...(agent && agent !== "build" ? { agent } : {}),
-        ...(limits?.addDirs?.length ? { addDirs: limits.addDirs } : {}),
-        ...(limits?.maxSteps ? { maxTurns: limits.maxSteps } : {}),
-        ...(limits?.systemPrompt !== undefined ? { systemPrompt: "replaced" as const } : limits?.appendSystemPrompt ? { systemPrompt: "appended" as const } : {}),
-      }
-    },
-    fresh: (child) => store.turns.list(child).length === 0 && store.queueOf(child).length === 0 && actors.get(child)?.snapshot().turnId === undefined,
-    async apply(child, mode, clientId) {
-      await actorFor(child)?.handle({ id: ids("command"), clientId: (clientId ?? taskClientId) as never, type: "session.permission.set", sessionId: child, mode })
-    },
-  })
+  /**
+   * A session's shell asking for a child above its own mode: one card to the user (child-elevation.ts). The module loads on the
+   * first such request; until then there is nothing pending or approved, so the other calls have nothing to do.
+   */
+  let elevation: ReturnType<typeof CreateChildElevation> | undefined
+  let elevationLoading: Promise<ReturnType<typeof CreateChildElevation>> | undefined
+  async function askChildElevation(input: Parameters<ReturnType<typeof CreateChildElevation>["request"]>[0]) {
+    elevationLoading ??= import("./child-elevation").then((module) => (elevation = module.createChildElevation({
+        humanSessions(launcher) {
+          const project = store.sessionDirectory(launcher)
+          const open = [...connections].filter(isHumanTerminal).flatMap((connection) => [...connection.subscriptions.keys()])
+          const nearby = project ? open.filter((id) => id !== launcher && store.sessionDirectory(id) !== undefined && canonicalDir(store.sessionDirectory(id)!) === canonicalDir(project)) : []
+          return [...new Set([...open.filter((id) => id === launcher), ...nearby])]
+        },
+        turnOf: (sessionId) => actors.get(sessionId)?.snapshot().turnId,
+        requestId: () => ids("request"),
+        turnId: () => ids("turn"),
+        emit: (event) => void sessionSink.append(event),
+        mask: (sessionId, text) => secrets.mask(sessionId, text),
+        facts(child) {
+          const directory = store.sessionDirectory(child) ?? ""
+          const model = resolveModel({ role: "main", session: store.sessionModel(child), roles: rolesFor(store.settings.get(), directory), catalog })
+          const limits = runLimits.get(child)
+          const agent = store.sessionAgent(child)
+          return {
+            title: store.sessionInfo(child)?.title ?? "",
+            directory,
+            model: `${model.model}${model.effort ? ` (effort ${model.effort})` : ""}`,
+            ...(agent && agent !== "build" ? { agent } : {}),
+            ...(limits?.addDirs?.length ? { addDirs: limits.addDirs } : {}),
+            ...(limits?.maxSteps ? { maxTurns: limits.maxSteps } : {}),
+            ...(limits?.systemPrompt !== undefined ? { systemPrompt: "replaced" as const } : limits?.appendSystemPrompt ? { systemPrompt: "appended" as const } : {}),
+          }
+        },
+        fresh: (child) => store.turns.list(child).length === 0 && store.queueOf(child).length === 0 && actors.get(child)?.snapshot().turnId === undefined,
+        async apply(child, mode, clientId) {
+          await actorFor(child)?.handle({ id: ids("command"), clientId: (clientId ?? taskClientId) as never, type: "session.permission.set", sessionId: child, mode })
+        },
+      })))
+    return (await elevationLoading).request(input)
+  }
   /**
    * Shell command hooks (`hooks.json`): user ones run as configured, project ones only in a directory trusted for project
    * tools. They are read from this machine's folders only; nothing a client sends configures them. `MENDCODE_HOOKS=0` turns them off.
@@ -2818,6 +2825,7 @@ export async function startDaemon(options: DaemonOptions) {
   async function prReviewService() {
     if (prReview) return prReview
     const { createPrReviewService } = await import("./pr-review/service")
+    const { chooseReaderModel } = await import("./pr-review/reader-models")
     prReview ??= createPrReviewService({
       memory: reviewMemory,
       contextWindow: reviewContextWindow,
@@ -2856,6 +2864,18 @@ export async function startDaemon(options: DaemonOptions) {
       },
       sessions: (owner, directory) => options.prReview?.sessions?.(owner, directory) ?? reviewSessions.factory({ owner, directory }),
       editor: (owner, directory) => options.prReview?.sessions?.(owner, directory) ?? reviewSessions.factory({ owner, directory, editing: true }),
+      // Readers run on the cheapest model of the owner's own provider and transport (reader-models.ts), as hidden review children.
+      readers: (owner, directory) => ({
+        tier: store.settings.get().tier,
+        source(requested) {
+          if (!options.models) return { ok: false, reason: "no model catalog" }
+          const ownerModel = store.hasSession(owner as SessionId) ? store.sessionModel(owner as SessionId) : undefined
+          const reviewer = ownerModel ?? resolveModel({ role: "main", roles: rolesFor(store.settings.get(), directory), catalog: options.models })
+          const picked = chooseReaderModel({ owner: reviewer, catalog: options.models, requested })
+          if (!picked.ok) return picked
+          return { ok: true, model: picked.model, factory: options.prReview?.sessions?.(owner, directory) ?? reviewSessions.factory({ owner, directory, model: { model: picked.model } }) }
+        },
+      }),
       schedule: (run) => new Promise<void>((resolve) => { scheduler.schedule({ jobType: "pr_review", priority: "P4", run: async () => { try { await run() } finally { resolve() } } }) }),
     })
     root.onDispose(prReview.stop)
@@ -3089,7 +3109,7 @@ export async function startDaemon(options: DaemonOptions) {
     secrets.drop(sessionId)
     grants.revoke(sessionId, "all")
     runLimits.delete(sessionId)
-    childElevation.forget(sessionId)
+    elevation?.forget(sessionId)
     forgetSessionEntries(options.dir, sessionId)
     sessionPermissions.delete(sessionId)
     selfPackagePorts.delete(sessionId)
@@ -3240,12 +3260,12 @@ export async function startDaemon(options: DaemonOptions) {
       if (refusal && command.type === "session.permission.set" && command.launch) {
         const origin = connection.agent
         const ceiling = agentGate.ceiling(origin)
-        const why = await childElevation.request({ origin, child: command.sessionId, mode: command.mode, ceiling, text: command.launch.text, images: command.launch.images, startedByCaller: agentGate.startedHere(origin, command.sessionId), alive: () => connections.has(connection) })
+        const why = await askChildElevation({ origin, child: command.sessionId, mode: command.mode, ceiling, text: command.launch.text, images: command.launch.images, startedByCaller: agentGate.startedHere(origin, command.sessionId), alive: () => connections.has(connection) })
         if (why) return reply(connection, command.id, { ok: false, code: "forbidden", message: `${refusal.replace(/\.(?= A session cannot)/, `; not approved: ${why}.`)}` })
         return reply(connection, command.id, { ok: true })
       }
       if (refusal) return reply(connection, command.id, { ok: false, code: "forbidden", message: refusal })
-      const held = childElevation.check(connection.agent, command, agentGate.ceiling(connection.agent))
+      const held = elevation?.check(connection.agent, command, agentGate.ceiling(connection.agent))
       if (held) return reply(connection, command.id, { ok: false, code: "forbidden", message: `[DAEMON]: ${agentRefusal({ what: held })}` })
     }
     // A read-only peer observes projects the daemon already knows; it cannot point a read at any other folder of the machine.
@@ -3826,7 +3846,7 @@ export async function startDaemon(options: DaemonOptions) {
           if (problem) return reply(connection, command.id, { ok: false, code: "target_mismatch", message: `[DAEMON]: ${problem}` })
         }
         if (command.type === "request.resolve") {
-          const result = childElevation.resolve(command, humanTerminal(connection)) ?? extensionDialogs.resolve(command) ?? continuity.resolve(command)
+          const result = elevation?.resolve(command, isHumanTerminal(connection)) ?? extensionDialogs.resolve(command) ?? continuity.resolve(command)
           if (result) return reply(connection, command.id, result)
         }
         const actor = actorFor(command.sessionId)
@@ -6552,7 +6572,7 @@ export async function startDaemon(options: DaemonOptions) {
     await extraction.stop()
     continuity.stop()
     extensionDialogs.stop()
-    childElevation.stop()
+    elevation?.stop()
     background.stop()
     interactive.stop()
     statusLines.stop()

@@ -214,6 +214,11 @@ export function createClaudeEngine(options: {
   /** The session's `/env` credentials: in the process environment, and their names in the appended system prompt. */
   environment?(sessionId: SessionId): EngineEnvironment | undefined
   transportFactory?(input: { args: string[]; cwd: string; env?: Record<string, string> }): ClaudeTransport
+  /**
+   * A session's Claude Code process started with this pid. The daemon records it as the session's own, so a `mendcode` client
+   * run from that process's tools is known by its session. Returns what to call when the process has ended.
+   */
+  onProcess?(sessionId: SessionId, pid: number): (() => void) | void
   trace?: (direction: "in" | "out", line: string) => void
   /** Queue a notice in a session (a background task ended). Without it, what Claude Code does on its own between turns is not shown. */
   notify?(sessionId: SessionId, text: string): void
@@ -575,6 +580,10 @@ export function createClaudeEngine(options: {
     const transport = options.transportFactory?.({ args, cwd, ...env }) ?? spawnClaude({ bin: options.bin ?? "claude", args, cwd, ...env })
     const connection: Connection = { sessionId, transport, model, permission: claudePermissionMode(permission), pending: new Map(), ready: Promise.resolve(), closed: false, background: 0, tasks: new Set(), agentTurns: [], agentTasks: new Set(), envKey: environmentKey(environment), compactAt: compactWindow(extra), plan: createClaudePlan() }
     connections.set(sessionId, connection)
+    if (options.onProcess && transport.pid) {
+      const ended = options.onProcess(sessionId, transport.pid)
+      if (ended) void transport.exited.then(ended, ended)
+    }
     void (async () => {
       try {
         for await (const line of transport.lines) {

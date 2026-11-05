@@ -68,7 +68,7 @@ const FIX_RANK: Record<ReviewConfig["fix"]["mode"], number> = { review: 0, "fix-
 /** Keys only the repository sets; a personal or task layer may repeat the value, never change it. */
 const CONTROLLED = new Set<ConfigKey>(["checks", "publishers", "reviewers", "preset", "backlog"])
 /** Keys a personal or task layer sets freely: they change how a review reads, not what it may do or whose PRs it takes. */
-const RESTYLE = new Set<ConfigKey>(["profile", "cap", "template", "phases", "coverage"])
+const RESTYLE = new Set<ConfigKey>(["profile", "cap", "template", "phases", "coverage", "readers"])
 
 const globWithin = (inner: string, outer: string) => inner === outer || (() => { try { return new Bun.Glob(outer).match(inner) } catch { return false } })()
 

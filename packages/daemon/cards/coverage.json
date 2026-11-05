@@ -52,6 +52,10 @@
   },
   "internal": [
     {
+      "reason": "names of a reviewed repository's own lockfiles and manifests, not MendCode files: the PR reviewer's triage keeps manifests with the review pass and sends lockfiles to readers (docs/pr-review.md#data-files-and-readers)",
+      "items": "file:angular.json file:app.json file:devcontainer.json file:jsr.json file:launch.json file:lerna.json file:npm-shrinkwrap.json file:nx.json file:renovate.json file:turbo.json file:vercel.json"
+    },
+    {
       "reason": "Claude Code's own settings file, not MendCode's: only its effortLevel is read, as the default level of a Claude Code model (docs/claude-code.md)",
       "items": "file:settings.json"
     },

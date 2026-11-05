@@ -1,8 +1,10 @@
 import { createHash } from "node:crypto"
-import type { PrFinding, PrStopReason, PrTokenUsage } from "@mendcode/protocol"
+import type { PrFinding, PrStopReason, PrTokenUsage, Tier } from "@mendcode/protocol"
+import { groupFiles, READER_SHARE, READERS_BY_TIER, readersNote, readGroups, type ReaderSource, type ReaderSummary, type ReadResult } from "./readers"
+import { cheapReaderList, isCheapReaderModel } from "./reader-models"
 import type { Graph } from "@mendcode/codegraph"
 import { failureStop, budgetPolicy, scaledBudget, stopText } from "./budget"
-import { buildReviewContext, gitRun, type GitRun, type ReviewContext } from "./context"
+import { buildReviewContext, gitRun, type ContextReaders, type GitRun, type ReviewContext } from "./context"
 import { ignoredBy, promptConfig, readReviewConfig, type ReviewConfig } from "./config"
 import { effectiveConfig } from "./config-layers"
 import type { JobCheckpoint, PhasePlan, ReviewMemoryContext, ReviewProvider, RunPlatformInput, RunPlatformOutput } from "./contracts"
@@ -17,7 +19,7 @@ import { reviewedBy, reviewedThrough } from "./publishers"
 import type { PullRequestInfo } from "./pull-request"
 import { childNotStarted, isOverBudget, isStalled, ReviewTurnError, type ReviewTurnOverBudget, type ReviewTurnStalled } from "./sessions"
 import { reviewRange, type ReviewState } from "./state"
-import { fixedFindings, runChecks, type CheckResult } from "./verify"
+import { fixedFindings, runChecks, spent, type CheckResult } from "./verify"
 
 /**
  * One review of one pull request, the same for the daemon's repo watch and the hosted-runner Action (docs/pr-review.md): the repo
@@ -121,7 +123,15 @@ export type RunPrReviewInput = {
   perf?: PerfOptions | undefined
   /** The head is in a fork: the phase would build and run the fork's code, so it says it did not. */
   fork?: boolean
+  /**
+   * The reviewer's readers (readers.ts): the install tier (how many read at once when `readers.parallel` is unset) and the cheap
+   * model of the reviewer's own provider with the factory of its children, or why there is none. Absent (the hosted runner):
+   * data files get local summaries, never a model.
+   */
+  readers?: RunReaders | undefined
 } & RunPlatformInput
+
+export type RunReaders = { tier?: Tier | undefined; source(requested?: string | undefined): ReaderSource }
 
 // ── Shared with audit.ts ─────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -169,7 +179,8 @@ type Calling = RunPlatformInput["calling"]
 export function meteredSessions({ factory, account, calling, resuming, failures, language }: { factory: ReviewSessionFactory; account: Account; calling?: Calling; resuming: boolean; failures: ReviewTurnError[]; language?: string | undefined }): ReviewSessionFactory {
   return async ({ purpose }) => {
     const session = await factory({ purpose, ...(language ? { language } : {}) })
-    const label = resuming && purpose === "verify" ? "resume" : purpose
+    // A reader's turn is review-pass work in the ledger (its child session tells /usage which model ran it).
+    const label = purpose === "read" ? "review" : resuming && purpose === "verify" ? "resume" : purpose
     const id = (session as { id?: unknown }).id
     const sessionId = typeof id === "string" && id.length <= 120 ? id : undefined
     const of = sessionId ? { sessionId } : {}
@@ -344,6 +355,61 @@ function stalledReason(error: ReviewTurnStalled, kept: string | undefined): stri
     : `review incomplete, ${words}; the retry runs the review pass again; nothing was published`
 }
 
+/** The base branch's `.gitattributes`, bounded; the PR's own never decides what the review pass reads. */
+async function baseAttributes(git: GitRun, directory: string, ref: string): Promise<string | undefined> {
+  const done = await git(["show", `${ref}:.gitattributes`], directory).catch(() => undefined)
+  return done && done.code === 0 ? done.out.slice(0, 256 * 1024) : undefined
+}
+
+/**
+ * The readers of one run (readers.ts), bound to the config, the reviewer's reader source and the run's accounting: `read` is what
+ * the context calls; `spent` what the readers counted, which comes off the review's cap; `note` the line for the summary and the
+ * session notice; `summaries` what the checkpoint keeps for a resume of this head, which reads none of them again.
+ */
+function runReaders({ input, config, resume }: { input: RunPrReviewInput; config: ReviewConfig; resume: ReviewCheckpoint | undefined }) {
+  const parallel = config.readers.parallel ?? READERS_BY_TIER[input.readers?.tier ?? "balanced"]
+  const notes: string[] = []
+  const total: ReadResult = { summaries: new Map(), tokens: { input: 0, output: 0, cached: 0 }, calls: 0, byModel: 0, byLocal: 0, reasons: [] }
+  const kept: ReaderSummary[] = []
+  let reused = 0
+  let source: ReaderSource | undefined
+  const pick = (): ReaderSource => {
+    if (source) return source
+    const wanted = config.readers.model
+    if (wanted && !isCheapReaderModel(wanted)) notes.push(`readers.model ${wanted} was refused: it is not a cheap reader model (${cheapReaderList()}); the automatic pick was used.`)
+    const asked = wanted && isCheapReaderModel(wanted) ? wanted : undefined
+    let picked: ReaderSource = input.readers ? input.readers.source(asked) : { ok: false, reason: "this runner has no reader model" }
+    if (!picked.ok && asked && input.readers) { notes.push(`readers.model ${asked} was refused: ${picked.reason}; the automatic pick was used.`); picked = input.readers.source(undefined) }
+    source = picked.ok ? { ...picked, factory: meteredSessions({ factory: picked.factory, account: input.account, calling: input.calling, resuming: false, failures: [] }) } : picked
+    return source
+  }
+  const read: ContextReaders = async ({ data, cut, diffTokens }) => {
+    const groups = groupFiles({ data, cut })
+    const cached = resume?.readers ?? []
+    const covered = (group: (typeof groups)[number]) => cached.find((summary) => summary.paths.length === group.files.length && group.files.every((entry) => summary.paths.includes(entry.file.path)))
+    const out: ReaderSummary[] = []
+    const fresh = groups.filter((group) => { const hit = covered(group); if (hit) { out.push(hit); reused += hit.paths.length } return !hit })
+    if (fresh.length) {
+      const cap = scaledBudget(config.budget, diffTokens)
+      const allowance = cap === undefined ? Number.POSITIVE_INFINITY : Math.floor(cap * READER_SHARE) - spent(total.tokens)
+      const result = await readGroups({ groups: fresh, source: pick(), parallel, allowance })
+      out.push(...result.summaries.values())
+      total.tokens = { input: total.tokens.input + result.tokens.input, output: total.tokens.output + result.tokens.output, cached: (total.tokens.cached ?? 0) + (result.tokens.cached ?? 0) }
+      total.calls += result.calls; total.byModel += result.byModel; total.byLocal += result.byLocal
+      total.model ??= result.model
+      for (const reason of result.reasons) if (!total.reasons.includes(reason)) total.reasons.push(reason)
+    }
+    kept.push(...out)
+    return out
+  }
+  const note = () => [
+    ...notes,
+    readersNote(total, parallel),
+    reused ? `Readers: the summaries of ${reused.toLocaleString("en-US")} file${reused === 1 ? "" : "s"} were kept from this head's earlier run, not read again.` : undefined,
+  ].filter((line): line is string => !!line)
+  return { read, note, spent: () => spent(total.tokens), summaries: () => kept }
+}
+
 export async function runPrReview(input: RunPrReviewInput): Promise<ReviewRun & RunPlatformOutput> {
   const run = await reviewRun(input)
   return { ...run, head: input.head }
@@ -376,8 +442,11 @@ async function reviewRun(input: RunPrReviewInput): Promise<ReviewRun & RunPlatfo
   try {
     const graph = await input.graph?.().catch(() => undefined)
     const budget = budgetPolicy(config, { contextWindow: input.contextWindow })
-    const context = await buildReviewContext({ directory: input.directory, base: range.base, head: range.head, budgetTokens: budget.contextTokens, graph, git, ignore: ignoredBy(config) })
+    const readers = config.readers.enabled ? runReaders({ input, config, resume }) : undefined
+    const attributes = readers ? await baseAttributes(git, input.directory, policyRef) : undefined
+    const context = await buildReviewContext({ directory: input.directory, base: range.base, head: range.head, budgetTokens: budget.contextTokens, graph, git, ignore: ignoredBy(config), readers: readers?.read, attributes })
     context.notes.unshift(...notes)
+    if (readers) context.notes.push(...readers.note())
     if (input.pullRequest) context.pullRequest = input.pullRequest
     if (incremental) context.notes.push(`Incremental review: only the commits since ${range.base.slice(0, 12)}.`)
     else if (input.stack && range.base === input.stack.base) context.notes.push(`Stacked on #${input.stack.parent}: only this pull request's own commits since #${input.stack.parent}'s head ${input.stack.base.slice(0, 12)}.`)
@@ -392,8 +461,12 @@ async function reviewRun(input: RunPrReviewInput): Promise<ReviewRun & RunPlatfo
     const files = context.files.map((file) => file.path)
     const memory = input.memory ? await input.memory({ title: input.pullRequest?.title ?? `${input.repo}#${input.number}`, files }).catch(() => { context.notes.push("The reviewer's memory context could not be read; reviewed without it."); return undefined }) : undefined
     // The cap follows the change: the whole diff's size (all its parts), under `tokens_per_pr`.
-    const diffTokens = context.parts ? context.parts.reduce((sum, part) => sum + part.tokens, 0) : context.tokens
-    const engineConfig = engineConfigFor({ config, context, learnings: read.learnings, budgetTokens: scaledBudget(config.budget, diffTokens) ?? Number.POSITIVE_INFINITY, plan, memory })
+    // The diffs readers read count too, so the cap is the same with or without them; what the readers counted comes off it.
+    const diffTokens = (context.parts ? context.parts.reduce((sum, part) => sum + part.tokens, 0) : context.tokens) + (context.readTokens ?? 0)
+    const cap = scaledBudget(config.budget, diffTokens)
+    const budgetTokens = cap === undefined ? Number.POSITIVE_INFINITY : Math.max(10_000, cap - (readers?.spent() ?? 0))
+    const engineConfig = engineConfigFor({ config, context, learnings: read.learnings, budgetTokens, plan, memory })
+    const withReaders = <T extends JobCheckpoint>(checkpoint: T): T => readers?.summaries().length ? { ...checkpoint, readers: readers.summaries() } : checkpoint
     const checks = config.checks.length ? () => (input.checks ?? ((directory, commands) => runChecks({ directory, commands })))(input.directory, config.checks) : undefined
     const common = { state, config, incremental, configKey, plan }
     const attempt = await attemptReview({ sessionFactory: input.sessionFactory, account: input.account, calling: input.calling, context, config: engineConfig, plan, cap: config.cap, checks, checkpoint: resume })
@@ -401,9 +474,9 @@ async function reviewRun(input: RunPrReviewInput): Promise<ReviewRun & RunPlatfo
     if (!attempt.ok && attempt.stalled) {
       const part = attempt.checkpoint.result ? parsePartPhase(attempt.checkpoint.phase) : undefined
       const kept = part ? `${part.done} of ${part.total} parts of the diff reviewed, ${plural(attempt.checkpoint.candidates.length, "candidate finding")}` : undefined
-      return { status: "failed", reason: stalledReason(attempt.stalled, kept), ...common, checkpoint: attempt.checkpoint, retryable: true }
+      return { status: "failed", reason: stalledReason(attempt.stalled, kept), ...common, checkpoint: withReaders(attempt.checkpoint), retryable: true }
     }
-    if (!attempt.ok) return { status: "reviewed", reason: `review incomplete, stopped ${attempt.stop.kind === "budget" ? "at the token budget" : `by the provider's ${attempt.stop.kind === "quota" ? "quota" : "rate limit"}`}; nothing was published`, ...common, stop: attempt.stop, checkpoint: attempt.checkpoint, ...(attempt.stop.kind === "budget" ? {} : { retryable: true as const }) }
+    if (!attempt.ok) return { status: "reviewed", reason: `review incomplete, stopped ${attempt.stop.kind === "budget" ? "at the token budget" : `by the provider's ${attempt.stop.kind === "quota" ? "quota" : "rate limit"}`}; nothing was published`, ...common, stop: attempt.stop, checkpoint: withReaders(attempt.checkpoint), ...(attempt.stop.kind === "budget" ? {} : { retryable: true as const }) }
     let outcome = attempt.outcome
     let inherited = 0
     if (input.stack) {
@@ -427,10 +500,10 @@ async function reviewRun(input: RunPrReviewInput): Promise<ReviewRun & RunPlatfo
     const inheritedNote = inherited ? [`${plural(inherited, "finding")} #${input.stack!.parent} already reported ${inherited === 1 ? "was" : "were"} left out (this pull request is stacked on it).`] : []
     const info: ReviewInfo = { files: context.files.map((file) => ({ path: file.path, touched: file.touched.length })), profile: config.profile, cap: config.cap, incremental, notes: [...context.notes.filter((note) => !note.startsWith("Incremental review:")), ...inheritedNote], ...(complete ? { checked: outcome.candidates.length - (risenAdded ? 1 : 0) } : {}), ...(perf && perfBody(perf) ? { perf: perfBody(perf) } : {}), ...(outcome.partial ? { partial: { ...outcome.partial, number: input.number } } : {}) }
     // Always a checkpoint: the plan's decisions; complete, every judged finding; stopped, what a resume verifies.
-    const checkpoint: JobCheckpoint = outcome.checkpoint ?? {
+    const checkpoint: JobCheckpoint = withReaders(outcome.checkpoint ?? {
       completedPhases: outcome.completedPhases ?? [], candidates: [], verified: outcome.candidates, result: outcome.result,
       rounds: input.checkpoint?.rounds ?? [], decisions: plan.decisions, ...(outcome.sections ? { sections: outcome.sections } : {}),
-    }
+    })
     const reviewed = { ...common, outcome: { ...outcome, result }, info, checkpoint, ...(inherited ? { inherited } : {}), ...(rechecked ? { fixed } : {}) }
     // A review that reached its token budget and closed with a short check is posted as a partial review, never as nothing. Its stop and
     // checkpoint stay with the job (`keep`), so the next /pr review continues with the parts and candidates still missing.

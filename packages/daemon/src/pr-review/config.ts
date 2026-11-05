@@ -124,6 +124,17 @@ export const ReviewConfig = z.strictObject({
    * them (they are the baseline). Base branch only.
    */
   backlog: BacklogConfig,
+  /**
+   * Data and generated files (triage.ts) go to readers on a cheap model instead of the review pass whole (readers.ts). `parallel`:
+   * readers at once (unset: by the install tier, minimalist 1, balanced 2, full 3). `model`: a cheap model of the reviewer's own
+   * provider (reader-models.ts); one off that list is refused with a note and the automatic pick is used. `enabled: false` sends
+   * every diff to the review pass as before.
+   */
+  readers: z.strictObject({
+    enabled: z.boolean().default(true),
+    parallel: z.number().int().min(1).max(8).optional(),
+    model: z.string().min(1).max(160).optional(),
+  }).default({ enabled: true }),
 })
 export type ReviewConfig = z.infer<typeof ReviewConfig>
 export const DEFAULT_REVIEW_CONFIG: ReviewConfig = ReviewConfig.parse({})

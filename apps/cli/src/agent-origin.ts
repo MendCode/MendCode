@@ -30,17 +30,10 @@ export function originCapabilities(input: { env: Record<string, string | undefin
   return [...(startedBySession(input) ? [AGENT_ORIGIN_CAPABILITY] : []), ...(limit ? [`${AGENT_LIMIT_CAPABILITY}${limit}`] : [])]
 }
 
-const quote = (word: string) => (/^[A-Za-z0-9_@%+=:,./-]+$/.test(word) ? word : `'${word.replace(/'/g, `'\\''`)}'`)
+export const quote = (word: string) => (/^[A-Za-z0-9_@%+=:,./-]+$/.test(word) ? word : `'${word.replace(/'/g, `'\\''`)}'`)
 /** The command as the user would type it; a value that follows a token or key flag is never repeated. */
 export function shownCommand(argv: readonly string[]) {
   return [PROGRAM_NAME, ...argv.map((word, index) => (/^--?(?:token|password|api-key|client-secret)$/i.test(argv[index - 1] ?? "") ? "…" : quote(word)))].join(" ").slice(0, 400)
-}
-
-/** The whole command for the user's own terminal (nothing cut), in the folder it ran in when it did not name one. */
-export function operatorCommand(argv: readonly string[], directory: string) {
-  const words = argv.map((word, index) => (/^--?(?:token|password|api-key|client-secret)$/i.test(argv[index - 1] ?? "") ? "…" : quote(word)))
-  if (!argv.some((word) => /^--(?:cwd|project)(?:=|$)/.test(word))) words.splice(argv.indexOf("run") + 1, 0, "--cwd", quote(directory))
-  return [PROGRAM_NAME, ...words].join(" ")
 }
 
 export function originRefusal({ argv, what }: { argv: readonly string[]; what: string }) {

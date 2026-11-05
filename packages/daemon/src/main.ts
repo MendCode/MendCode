@@ -59,7 +59,7 @@ import {
 } from "@mendcode/engine-native"
 import { createModelsDev } from "./models-dev"
 import { acpAgentName } from "./acp-registry"
-import { BUILTIN_TOOLS, sandboxPolicy, canonicalDir, shellSession, createToolDefine, createWebSearchTool, loopTool, worktreeTool, prWatchTool, createComputerTools, browserTool, createUserBrowserTool, type Tool, aiConfigTool } from "@mendcode/tools"
+import { BUILTIN_TOOLS, sandboxPolicy, canonicalDir, shellSession, createToolDefine, createWebSearchTool, loopTool, worktreeTool, prWatchTool, createComputerTools, browserTool, createUserBrowserTool, type Tool, aiConfigTool, agentProcesses } from "@mendcode/tools"
 import { createDaemonImageGenTool } from "./image-generation"
 import { ptyAvailable } from "./pty-native"
 import { createAcpAgents, createAcpEngine, withAcpEngine } from "@mendcode/engine-acp"
@@ -634,6 +634,8 @@ export const daemon = await startDaemon({
               subagentContext: (sessionId) => harness.instructions(sessionId),
               oneTree: oneTree.note,
               ownTools: `mcp__${HOST_MCP_SERVER}__`,
+              // The Claude Code process is the session's own: a `mendcode` client run by its tools is agent-origin with this session's mode.
+              onProcess: (sessionId, pid) => { const tracked = agentProcesses.agent(pid, sessionId); return () => tracked.exited() },
               planApplied: (sessionId, destination) => { const target = agents.planExit?.(sessionId, destination); if (target) agents.select?.(sessionId, target.name) },
               // The same MendCode docs pointer a native session carries: slash commands, the PR reviewer and other MendCode features
               // are found with `mendcode docs --search`, not guessed from the harness's own tools.
