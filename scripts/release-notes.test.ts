@@ -294,3 +294,9 @@ describe("the copyable prompt ends every release page", () => {
     }
   })
 })
+
+test("the repository's CHANGELOG.md has one item per line: a merge never glues two items together", () => {
+  const text = readFileSync(path.join(import.meta.dir, "../CHANGELOG.md"), "utf8")
+  const glued = text.split("\n").filter((line) => line.startsWith("- ") && /[.)`]- [A-Z`*]/.test(line))
+  expect(glued).toEqual([])
+})
