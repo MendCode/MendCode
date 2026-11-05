@@ -117,7 +117,7 @@ A custom `approval` or `question` view restyles; it cannot change what a decisio
 Drawn once per finished item. `message.user` input: `itemId`, `turnId`, `text`, `at?`, `time` (formatted, or `""` when
 timestamps are off; a `!command` always has it), `mode` (`minimal | balanced | full`), `style` (`layout`, `icon`,
 `lead`, `label`, `tint`), `variant` (`message | shell | notice`), `local?`, `attachments?`, `images`, `username`,
-`expanded`, and for a sent set of comments on an answer (docs/editor.md) `comments?`: the `comments` (`n`, `of`, `quote`, `cut`, `text`), the `note`, `head?` and `tail?`, with the `layout?` and `collapse?` settings the built-in draws them by. `message.assistant` adds `renderer`, `details`, `detailsAll` and `body`: the message as rows (Markdown as the
+`expanded`, and for a sent set of comments on an answer (docs/editor.md) `comments?`: the `comments` (`n`, `of`, `quote`, `cut`, `text`), the `note`, `head?` and `tail?`, with the `layout?` and `collapse?` settings the built-in draws them by. The terminal draws a set of comments (the typed message and the card) even when a `message.user` view is installed; a view takes them over only by declaring it, `api.view("message.user", render, { handles: ["comments"] })`, and then receives `comments` and draws them. `builtin` is unchanged. `message.assistant` adds `renderer`, `details`, `detailsAll` and `body`: the message as rows (Markdown as the
 renderer allows, no lead or time), laid out 4 cells narrower than `width` so a rail or an indent fits. `message.reasoning`:
 `text`, `running`, `ms?`, `rows`, `oneLine`, `hidden`. Actions: none.
 

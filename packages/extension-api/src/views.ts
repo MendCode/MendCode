@@ -44,6 +44,9 @@ type MessageCommon = Readonly<{
 }>
 
 /** `variant`: a normal message, a `!command` the user ran, or a system notice written as a user turn. */
+/** What a view declares beyond its function. `handles: ["comments"]` on `message.user`: the view draws a sent set of comments itself; without it the terminal draws the message and its comments card. */
+export type ViewOptions = Readonly<{ handles?: readonly "comments"[] }>
+
 export type UserMessageModel = MessageCommon & Readonly<{
   variant: "message" | "shell" | "notice"
   local?: boolean

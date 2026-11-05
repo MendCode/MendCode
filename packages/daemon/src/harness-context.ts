@@ -1,4 +1,4 @@
-import { estimateTokens, usageContext } from "@mendcode/protocol/wire"
+import { estimateTokens, IMAGE_TOKENS, usageContext } from "@mendcode/protocol/wire"
 import type { ContextMessage, ContextReport, ContextSection, SessionEvent, SessionTranscriptTurn } from "@mendcode/protocol"
 
 type Usage = Extract<SessionEvent, { type: "usage.recorded" }>
@@ -34,16 +34,18 @@ export function harnessContextReport(input: { harness: string; model: string; tu
     section("history:assistant", "history · assistant", byRole.assistant.chars, byRole.assistant.count),
     section("history:tool", "history · tool results", byRole.tool.chars, byRole.tool.count),
   ]
+  if (images) history.push(section("history:images", "history · images", images * IMAGE_TOKENS * 4, images))
   const historyTokens = history.reduce((sum, entry) => sum + entry.tokens, 0)
   const measured = input.lastUsage ? usageContext(input.lastUsage) : undefined
   const own = measured !== undefined ? Math.max(0, measured - historyTokens) : 0
   const system = own > 0 ? [{ id: "system:harness", label: `system · ${input.harness}'s own prompt and tools`, chars: own * 4, tokens: own }] : []
   const sections = [...system, ...history]
   const messages = history.reduce((sum, entry) => ({ chars: sum.chars + entry.chars, tokens: sum.tokens + entry.tokens, count: sum.count + (entry.count ?? 0) }), { chars: 0, tokens: 0, count: 0 })
-  const categories = [section("system", "system", own * 4), { id: "messages", label: "messages", ...messages }]
-  if (own > 0) categories[0]!.tokens = own
+  // What the harness sends beyond the history cannot be split (its prompt, tools and CLAUDE.md are one measured lump), and it is unknown before a call.
+  const categories = [...(own > 0 ? [{ id: "harness", label: `${input.harness} base (system + tools + instructions)`, chars: own * 4, tokens: own }] : []), { id: "messages", label: "messages", ...messages }]
   return {
     model: input.model,
+    harness: input.harness,
     ...(input.contextWindow ? { contextWindow: input.contextWindow } : {}),
     categories,
     sections,

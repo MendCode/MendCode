@@ -99,18 +99,33 @@ describe("UI-8 context page", () => {
 
   test("the legend is based on the report's real categories and window, never compact threshold percentages", () => {
     const all = plain(render({ width: 180, height: 50 })).join("\n")
-    expect(all).toContain("≈121,100 / 200,000 (60.6%)")
+    expect(all).toContain("118,432 / 160,000 (74.0%)")
+    expect(all).toContain("Model window: 200,000")
     expect(all).toContain("Memory: 100 tokens (0.1%)")
     expect(all).toContain("Messages: 111,000 tokens (55.5%)")
     expect(all).toContain("Autocompact buffer: 40,000 tokens (20.0%)")
-    expect(all).toContain("Measured: 118,432 at last call")
+    expect(all).toContain("Used: measured · compacts at 160,000")
     expect(all).toContain("MCP: unavailable")
+  })
+
+  test("a Claude Code session shows no number for its base before it answers, and the measured base as one line after", () => {
+    const base = report({ harness: "Claude Code", model: "claude-sonnet", contextWindow: undefined, compactAtTokens: 475_000, estimatedTokens: 0, measuredTokens: undefined, sections: [], categories: [{ id: "messages", label: "messages", chars: 0, tokens: 0 }], largest: [] })
+    const before = plain(render({ report: base, width: 180, height: 50 })).join("\n")
+    expect(before).toContain("— / 475,000")
+    expect(before).toContain("Used: — until Claude Code answers")
+    expect(before).toContain("Model window: unknown")
+    expect(before).not.toContain("System prompt")
+    const after = plain(render({ report: { ...base, measuredTokens: 43_464, estimatedTokens: 43_464, contextWindow: 1_000_000, categories: [{ id: "harness", label: "Claude Code base (system + tools + instructions)", chars: 0, tokens: 43_457 }, { id: "messages", label: "messages", chars: 0, tokens: 7 }] }, width: 180, height: 50 })).join("\n")
+    expect(after).toContain("43,464 / 475,000 (9.2%)")
+    expect(after).toContain("Model window: 1,000,000")
+    expect(after).toContain("Claude Code base (system + tools + instructions): 43,457 tokens")
+    expect(after).not.toContain("System prompt")
   })
 
   test("old reports do not invent a context window or buffer", () => {
     const r = report({ contextWindow: undefined })
     expect(contextGlyphGrid(r).flat().filter((cell) => cell.text === "▒ ")).toHaveLength(0)
-    expect(plain(render({ report: r, width: 180 })).join("\n")).toContain("Window unknown")
+    expect(plain(render({ report: r, width: 180 })).join("\n")).toContain("Model window: unknown")
     expect(plain(render({ report: r, width: 180 })).join("\n")).toContain("Autocompact buffer: unavailable")
   })
 
@@ -147,7 +162,7 @@ describe("UI-8 context page", () => {
     expect(plain(render({ report: r, width: 180, height: 50 })).join("\n")).not.toContain("Suggestions")
     const repeats = contextSuggestions({ ...r, repeatedReads: [{ path: "src/socket.ts", count: 3, tokens: 800 }] })
     expect(repeats).toContainEqual(expect.stringContaining("src/socket.ts 3 times · 800 tokens"))
-    expect(contextSuggestions(report({ estimatedTokens: 155_000 }))).toContainEqual(expect.stringContaining("5,000 tokens before autocompact"))
+    expect(contextSuggestions(report({ estimatedTokens: 100, measuredTokens: 155_000 }))).toContainEqual(expect.stringContaining("5,000 tokens before autocompact"))
   })
 
   test("wide pages fill both columns, with largest messages visible on either tab", () => {
@@ -192,13 +207,13 @@ describe("UI-8 context page", () => {
   })
 
   test("a window set with /context-window is named on the sections tab", () => {
-    expect(plain(render({ report: report({ contextWindow: 200_000, contextWindowOverride: true }), width: 180, height: 40, state: tabbed(0) })).join("\n")).toContain("window set with /context-window")
+    expect(plain(render({ report: report({ contextWindow: 200_000, contextWindowOverride: true }), width: 180, height: 40, state: tabbed(0) })).join("\n")).toContain("set with /context-window")
   })
 
   test("loading, error, image and empty history states remain truthful", () => {
     expect(plain(render({ report: undefined })).join("\n")).toContain("loading context…")
     expect(plain(render({ report: undefined, error: "not available for this engine" })).join("\n")).toContain("not available for this engine")
-    expect(plain(render({ report: report({ images: 3 }) })).join("\n")).toContain("3 images · tokens not estimated")
+    expect(plain(render({ report: report({ images: 3 }) })).join("\n")).toContain("3 images · ≈4,500 tokens estimated (1,500 each)")
     expect(plain(render({ report: report({ largest: [] }), state: tabbed(1) })).join("\n")).toContain("History is empty")
   })
 

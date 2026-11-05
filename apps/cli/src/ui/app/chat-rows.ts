@@ -54,6 +54,7 @@ import { asciiChrome } from "./glyph-mode"
 import { overlayRule, ruleRight } from "../../view/status-line"
 import { BUSY, DOUBLE_ESC_MS, MAX_EDITOR_ROWS } from "./constants"
 import { queuePolicy } from "./queue-policy"
+import { readableText } from "../../view/reply-comments"
 import { waitingNotice } from "./daemon"
 
 /** Below this many transcript rows the pinned prompt would crowd the conversation out. */
@@ -97,7 +98,7 @@ export function createChatRows(ctx: AppContext, actions: {
     const topAt = topId === undefined ? -1 : blocks.findIndex((block) => block.itemId === topId)
     if (topAt < lastAt) return undefined
     if (stuck?.text === last.text && stuck.width === width) return stuck.row
-    const text = last.text.replace(/\s+/g, " ").trim()
+    const text = readableText(last.text, { quotes: false }).replace(/\s+/g, " ").trim()
     const row: Line | undefined = text ? [{ text: " ".repeat(PROMPT_MARGIN) }, { text: truncateEnd(`› ${text}`, Math.max(1, width - PROMPT_MARGIN * 2)), fg: "muted" }] : undefined
     stuck = { text: last.text, width, row }
     return row

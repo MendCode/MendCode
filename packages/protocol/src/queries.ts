@@ -282,6 +282,8 @@ export type ContextRent = z.infer<typeof ContextRent>
 /** What fills a session's context, by source. Estimates are chars / 4; `measuredTokens` is exact (last model call's usage). */
 export const ContextReport = lazySchema(() => z.strictObject({
   model: z.string(),
+  /** Set when another program (Claude Code, Codex) keeps the request itself: what it sends beyond the history is one measured lump. */
+  harness: z.string().optional(),
   sessionId: SessionId.optional(),
   /** Known model window; absent when the engine/catalog cannot supply it. */
   contextWindow: z.number().int().positive().optional(),
@@ -296,10 +298,12 @@ export const ContextReport = lazySchema(() => z.strictObject({
   sections: z.array(ContextSection),
   /** The five largest history messages, biggest first. */
   largest: z.array(ContextMessage).max(5),
-  /** Attached images in history; their token cost is not estimated. */
+  /** Attached images in history; each counts `IMAGE_TOKENS` in the estimate. */
   images: z.number().int().nonnegative(),
   estimatedTokens: z.number().int().nonnegative(),
+  /** The provider's count for the last call; the estimate is only the fallback when it is absent. */
   measuredTokens: z.number().int().nonnegative().optional(),
+  /** Where this session compacts: MendCode's point, or the one the engine was given (Claude Code's `CLAUDE_CODE_AUTO_COMPACT_WINDOW`). */
   compactAtTokens: z.number().int().positive(),
   /** True when `contextWindow` is the user's `session.context-window` override, not the catalog's. */
   contextWindowOverride: z.boolean().optional(),
@@ -807,7 +811,7 @@ export const ModelInfo = lazySchema(() => z.strictObject({
   contextSetting: z.strictObject({ window: z.number().int().positive().optional(), compactAt: z.number().int().positive().optional() }).optional(),
   /**
    * `models.list` only: where the native engine packs a session on this model under the settings in force (`compactAtTokens`, the
-   * `compaction` object, provider and model overrides; 160k when no window is known). Absent for a model another engine runs.
+   * `compaction` object, provider and model overrides; 160k when no window is known); for Claude Code the window `claude_compact` hands it. Absent for a model another engine runs on its own point.
    */
   compactAtTokens: z.number().int().positive().optional(),
   /** `false` when the provider is configured to refuse image input; absent otherwise (see also `modalities.input`). */

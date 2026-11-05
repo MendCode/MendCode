@@ -3,6 +3,8 @@ export const PROTOCOL_VERSION = 1 as const
 
 /** Text-only estimate in UTF-16 code units, rounded up. Provider usage remains authoritative. */
 export const estimateTokens = (chars: number) => Math.ceil(chars / 4)
+/** What one attached image counts for when no provider count exists: about what the providers charge for a typical screenshot (Anthropic caps near 1.6k, OpenAI high detail is 0.8k-1.5k). */
+export const IMAGE_TOKENS = 1_500
 
 /** The native engine's compaction threshold when the compactAtTokens setting is unset; the footer's ctx % uses the same number. */
 export const DEFAULT_COMPACT_AT_TOKENS = 160_000

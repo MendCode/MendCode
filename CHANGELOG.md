@@ -41,6 +41,8 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Changed
 
+- `/context`, the footer and the sidebar show the same used / compaction point for a session, before and after the first message; `/context` uses the provider's count of the last call (images are estimated at 1,500 tokens each) and says whether the figure is measured or estimated. With Claude Code the point is the one its process was given, the model window is listed apart, and a changed `claude_compact` point restarts the process at the next turn. See [Claude Code](docs/claude-code.md).
+
 - The session lists of `threads` and `sessions` (and the plan list, and other programs' chats) are shorter: one header, rows grouped by project, short ids that every tool accepts, ages like `3m`, and the state only when a session is busy.
 
 - A wide flowchart is drawn in the chat instead of shown as source: long labels wrap (`<br/>` still breaks a line), spacing tightens, and a left-to-right flow turns top-down when it still does not fit. The note says what was tried when nothing fits.
@@ -96,6 +98,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 - A repeated `/pr review` joins the review already running, and one comment gets one notice however many watches the repository has.
 - A review that cannot read the change ends as incomplete without verifying, and no longer says "nothing was posted: no new findings".
 - A thread reply such as `Fixed in <head>` no longer counts as a review of that head.
+- A message with comments stays a card under your own `message.user` view unless the view declares `handles: ["comments"]`, and the pinned prompt row and the message list show it as `1 comment` instead of its tags.
 - PR reviews, report-only loops, read-only workflow tasks and side chats on Codex, Pi, ACP and Claude Code are no longer told to present a plan.
 
 - Esc Esc on a message nobody answered yet brings it back into the prompt at once with its images, even with a draft or a queued message behind it; when it cannot, the notice says the model already answered.

@@ -1,4 +1,4 @@
-import { estimateTokens, usageContext } from "@mendcode/protocol/wire"
+import { estimateTokens, IMAGE_TOKENS, usageContext } from "@mendcode/protocol/wire"
 import { explicitMemoryConsent, memoryWrite, restatesRequest } from "./memory-consent"
 import { condenseCommandOutput, limitToolOutput, pruneToolOutputs as pruneHistoryToolOutputs, redactedToolStream } from "./tool-output"
 import { recentImageReferences } from "./image-references"
@@ -2394,6 +2394,7 @@ export function createNativeEngine(options: {
         section("history:user", "history · user", byRole.user.chars, byRole.user.count),
         section("history:assistant", "history · assistant", byRole.assistant.chars, byRole.assistant.count),
         section("history:tool", "history · tool results", byRole.tool.chars, byRole.tool.count),
+        ...(images ? [section("history:images", "history · images", images * IMAGE_TOKENS * 4, images)] : []),
       ]
       const measured = contextTokens.get(sessionId)
       const mcpTools = toolSpecs.filter((spec) => spec.name.startsWith("mcp__")).map((spec) => section(spec.name, spec.name, JSON.stringify(spec).length, 1))

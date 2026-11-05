@@ -7,7 +7,7 @@
  * strict schemas. Types still come from the schema modules (type-only imports are erased).
  */
 import { MAX_FRAME_BYTES, PROTOCOL_VERSION } from "./constants"
-export { estimateTokens } from "./constants"
+export { estimateTokens, IMAGE_TOKENS } from "./constants"
 export { usageContext, type UsageContextInput } from "./usage-context"
 export * from "./context-forecast"
 export { fileSignature, sameFileVersion, type FileStat } from "./file-signature"

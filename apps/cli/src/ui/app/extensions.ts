@@ -1,6 +1,6 @@
 import type { createSession } from "./session"
+import { compactFallback } from "./compact-fallback"
 import type { createPrompt } from "./prompt"
-import { DEFAULT_COMPACT_AT_TOKENS } from "@mendcode/protocol/wire"
 import { contextLimit } from "../../view/context-meter"
 import type { CustomToolsReport } from "@mendcode/protocol"
 import { DEFAULT_BINDINGS, keyName } from "../keymap"
@@ -69,7 +69,7 @@ export function createExtensions(ctx: AppContext, actions: {
       state: slotState(),
       stats: ctx.stats.read(),
       usage: ctx.usage.read(),
-      ...(tokens !== undefined ? { context: Math.max(0, Math.min(1, tokens / contextLimit(usageInForce(state), state.settingsNow.compactAtTokens ?? DEFAULT_COMPACT_AT_TOKENS))) } : {}),
+      ...(tokens !== undefined ? { context: Math.max(0, Math.min(1, tokens / contextLimit(usageInForce(state), compactFallback(state)))) } : {}),
       now: now(),
     }
   }

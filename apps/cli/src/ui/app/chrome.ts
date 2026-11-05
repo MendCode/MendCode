@@ -1,4 +1,5 @@
 import { agentColor } from "../../view/agent-color"
+import { compactFallback } from "./compact-fallback"
 import type { createSession } from "./session"
 import type { createScratch } from "./scratch"
 import type { createSecrets } from "./secrets"
@@ -6,7 +7,7 @@ import type { createAgents } from "./agents"
 import { goalSpans } from "../../view/goal"
 import { BREAKPOINTS, breakpointOf } from "../breakpoints"
 import { chatColumns, projectSessions, SIDEBAR_WIDTH, sidebarVisible } from "../../view/sidebar"
-import { DEFAULT_COMPACT_AT_TOKENS, DEFAULT_FOOTER, DEFAULT_PROFILE, FOOTER_SEGMENT_TIER, featureOn, profileFor, tierFooter, type FooterSegment } from "@mendcode/protocol/wire"
+import { DEFAULT_FOOTER, DEFAULT_PROFILE, FOOTER_SEGMENT_TIER, featureOn, profileFor, tierFooter, type FooterSegment } from "@mendcode/protocol/wire"
 import { contextIsEngineWindow, contextLimit } from "../../view/context-meter"
 import type { McpStatusReport } from "@mendcode/protocol"
 import { fastMark, footerParts, quotaText, type FooterInput } from "../../view/footer"
@@ -80,7 +81,7 @@ export function createChrome(ctx: AppContext, actions: {
       ...(state.tuiProfile.showProject && state.gitBranch ? { branch: state.gitBranch } : {}),
       title: state.tuiProfile.showSessionTitle ? title : "",
       ...(state.tuiProfile.showDiffLines && state.diffTotals ? { diff: state.diffTotals } : {}),
-      ...(state.tuiProfile.showContext && context !== undefined ? { context: { tokens: context, limit: contextLimit(usageInForce(state), state.settingsNow.compactAtTokens ?? DEFAULT_COMPACT_AT_TOKENS), ...(usageInForce(state)?.contextApprox ? { approx: true } : {}) } } : {}),
+      ...(state.tuiProfile.showContext && context !== undefined ? { context: { tokens: context, limit: contextLimit(usageInForce(state), compactFallback(state)), ...(usageInForce(state)?.contextApprox ? { approx: true } : {}) } } : {}),
       ...(topbarStats.length ? { stats: topbarStats } : {}),
       contextHover: state.contextHover === true,
       contextStyle: state.tuiProfile.contextStyle,
@@ -109,7 +110,7 @@ export function createChrome(ctx: AppContext, actions: {
     state.scratchArea = undefined
     state.scratchCursor = undefined
     const usage = usageInForce(state)
-    const percent = usage?.contextTokens !== undefined ? Math.round((usage.contextTokens / contextLimit(usage, state.settingsNow.compactAtTokens ?? DEFAULT_COMPACT_AT_TOKENS)) * 100) : undefined
+    const percent = usage?.contextTokens !== undefined ? Math.round((usage.contextTokens / contextLimit(usage, compactFallback(state))) * 100) : undefined
     const model = sessionModelId(state.effectiveModel?.model, usage?.model, state.modelReport)
     ensureScratch()
     const rows = renderDock({
@@ -239,7 +240,7 @@ export function createChrome(ctx: AppContext, actions: {
   function footerRowLines(feed: FooterInput): Line[] {
     const usage = usageInForce(state)
     const id = sessionModelId(state.effectiveModel?.model, usage?.model, state.modelReport)
-    const threshold = contextLimit(usage, state.settingsNow.compactAtTokens ?? DEFAULT_COMPACT_AT_TOKENS)
+    const threshold = contextLimit(usage, compactFallback(state))
     const { rows, builtIn } = rowsNow()
     const rowInput: FooterInput = {
         ...feed,
@@ -381,7 +382,7 @@ export function createChrome(ctx: AppContext, actions: {
       void loadBranch()
     }
     const tokens = usageInForce(state)?.contextTokens
-    const threshold = contextLimit(usageInForce(state), state.settingsNow.compactAtTokens ?? DEFAULT_COMPACT_AT_TOKENS)
+    const threshold = contextLimit(usageInForce(state), compactFallback(state))
     const model = sessionModelId(state.effectiveModel?.model, usageInForce(state)?.model, state.modelReport)
     const effort = state.effectiveModel?.effort
     const repo = input.directory ? input.directory.split(/[\\/]/).filter(Boolean).at(-1) : undefined
@@ -396,7 +397,7 @@ export function createChrome(ctx: AppContext, actions: {
   /** The session's model, context fill and cost, as a multiplexer's rail shows them beside the pane (`herdr.ts`). */
   function paneFacts(): { model?: string; contextPercent?: number; costMicros?: number } {
     const usage = usageInForce(state)
-    const threshold = contextLimit(usage, state.settingsNow.compactAtTokens ?? DEFAULT_COMPACT_AT_TOKENS)
+    const threshold = contextLimit(usage, compactFallback(state))
     const model = sessionModelId(state.effectiveModel?.model, usage?.model, state.modelReport)
     return {
       ...(model ? { model: modelLabel(model, state.modelReport) } : {}),

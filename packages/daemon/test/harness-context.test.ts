@@ -42,7 +42,9 @@ describe("context.query through the daemon", () => {
     const reply = await h.client.send({ type: "context.query", sessionId: id })
     if (!reply.ok) throw new Error(reply.error.message)
     const report = ContextReport.parse(reply.result)
-    expect(report).toMatchObject({ model: "claude-test", contextWindow: 200_000 })
+    // Claude Code's catalog window is not what it serves: unknown until a call reports it.
+    expect(report).toMatchObject({ model: "claude-test", harness: "Claude Code" })
+    expect(report.contextWindow).toBeUndefined()
     expect(report.sections.find((entry) => entry.id === "history:user")).toMatchObject({ count: 1 })
     expect(report.sections.find((entry) => entry.id === "history:assistant")).toMatchObject({ count: 1 })
   }, 15_000)

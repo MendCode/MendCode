@@ -310,7 +310,7 @@ export const UsageRecorded = lazySchema(() => z.strictObject({
   partial: z.literal(true).optional(),
   /**
    * Where MendCode will pack this session's history, in tokens, for the model and window of this call (the user's `compactAtTokens`,
-   * or the threshold percentage of the model's window). The context meter's limit when the engine does not compact on its own.
+   * or the threshold percentage of the model's window), or the window Claude Code was started with. The context meter's limit.
    */
   compactAt: z.number().int().positive().optional(),
 }))

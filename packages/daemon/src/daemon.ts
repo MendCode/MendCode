@@ -1,5 +1,5 @@
-import { CACHE_SAMPLES_MAX, CACHE_SAMPLE_MIN_PROMPT_TOKENS, CACHE_SAMPLE_WINDOW_MS, DEFAULT_COMPACT_AT_TOKENS, claudeFastModel, estimateTokens } from "@mendcode/protocol/wire"
-import { claudeAlias } from "./claude-models"
+import { CACHE_SAMPLES_MAX, CACHE_SAMPLE_MIN_PROMPT_TOKENS, CACHE_SAMPLE_WINDOW_MS, DEFAULT_COMPACT_AT_TOKENS, claudeFastModel, estimateTokens, usageContext } from "@mendcode/protocol/wire"
+import { claudeAlias, claudeCompactEnv } from "./claude-models"
 import { recoverUsage } from "./usage-recovery"
 import { createConsole } from "./console"
 import { previewPastedEnvironment, readEnvironmentImport } from "./environment-import"
@@ -3283,8 +3283,11 @@ export async function startDaemon(options: DaemonOptions) {
     const lastUsage = store.recentUsage(sessionId, 1)[0]
     const info = catalogModel(options.models!, harness.model)
     const { turns } = history.portableTurns({ sessionId, turns: store.turns.list(sessionId).filter((turn) => !turn.reverted), maxChars: HARNESS_CONTEXT_CHARS, keepFirst: false })
-    const contextWindow = readContextWindow(store.meta, sessionId) ?? lastUsage?.contextWindow ?? info?.contextWindow
-    return harnessContextReport({ harness: harness.name, model: harness.model, turns, lastUsage, contextWindow, compactAtTokens: lastUsage?.compactAt ?? contextWindow ?? DEFAULT_COMPACT_AT_TOKENS })
+    // Claude Code's catalog window (200k) is not what it serves (1M on some plans): until a call reports it, the window is unknown.
+    const contextWindow = readContextWindow(store.meta, sessionId) ?? lastUsage?.contextWindow ?? (harness.name === "Claude Code" ? undefined : info?.contextWindow)
+    // Where the process compacts: what it was started with (its last call says), else what the next one will be given, else its window.
+    const handed = harness.name === "Claude Code" ? Number(claudeCompactEnv({ model: harness.model, settings: store.settings.get(), on: featureOn(store.settings.get(), "claude_compact", { safeMode: options.safeMode === true }) })?.CLAUDE_CODE_AUTO_COMPACT_WINDOW) || undefined : undefined
+    return harnessContextReport({ harness: harness.name, model: harness.model, turns, lastUsage, contextWindow, compactAtTokens: lastUsage?.compactAt ?? handed ?? contextWindow ?? DEFAULT_COMPACT_AT_TOKENS })
   }
   const restMutations = createRestMutations({ store, messages: restSessions.messages, apply: (command) => messageMutations.apply(command) })
 
@@ -5521,9 +5524,13 @@ export async function startDaemon(options: DaemonOptions) {
         const toolOwners = owned.length && baseReport.rent ? await extensions.toolOwners(store.sessionDirectory(command.sessionId)!).catch(() => new Map<string, string>()) : undefined
         const report = toolOwners?.size ? { ...withExtensions, rent: baseReport.rent!.map((entry) => toolOwners.has(entry.tool) ? { ...entry, owner: `extension:${toolOwners.get(entry.tool)}` } : entry) } : withExtensions
         const info = options.models ? catalogModel(options.models, report.model) : undefined
+        // The provider's count of the last call, derived from what usage already stores (the `context` column stays empty for most providers); not once a compaction packed the history since.
+        const lastCall = report.measuredTokens === undefined ? store.recentUsage(command.sessionId, 1)[0] : undefined
+        const measured = lastCall && !store.readAfter(command.sessionId, lastCall.seq, 500).some((event) => event.type === "compaction.updated" && event.state === "packed") ? usageContext(lastCall) : undefined
+        const measuredPart = measured !== undefined ? { measuredTokens: measured } : {}
         const override = windowOverride({ meta: store.meta, sessionId: command.sessionId, model: info, settings: store.settings.get() })
-        if (override) return reply(connection, command.id, { ok: true, result: { ...report, sessionId: command.sessionId, contextWindow: override.tokens, ...(override.source === "session" ? { contextWindowOverride: true } : { contextWindowModelSetting: true }) } })
-        return reply(connection, command.id, { ok: true, result: { ...report, sessionId: command.sessionId, ...(report.contextWindow === undefined && info?.contextWindow ? { contextWindow: info.contextWindow } : {}) } })
+        if (override) return reply(connection, command.id, { ok: true, result: { ...report, ...measuredPart, sessionId: command.sessionId, contextWindow: override.tokens, ...(override.source === "session" ? { contextWindowOverride: true } : { contextWindowModelSetting: true }) } })
+        return reply(connection, command.id, { ok: true, result: { ...report, ...measuredPart, sessionId: command.sessionId, ...(report.contextWindow === undefined && info?.contextWindow ? { contextWindow: info.contextWindow } : {}) } })
       }
       case "usage.recover": {
         if (connection.remoteAddress || connection.peer) return reply(connection, command.id, { ok: false, code: "forbidden", message: "Usage recovery is local only" })
@@ -5686,7 +5693,7 @@ export async function startDaemon(options: DaemonOptions) {
         const compactSettings = store.settings.get()
         // A model's `modelContext` (a window or compaction point made permanent for it) is listed beside the catalog's window.
         const withSetting = (model: ModelInfo) => { const contextSetting = modelContextOf(compactSettings, model); return contextSetting ? { ...model, contextSetting } : model }
-        const models = catalog.selectable ? listed.models.map((model) => { const compactAtTokens = modelCompactAt({ model, providers: compactProviders, settings: compactSettings }); return withSetting(compactAtTokens ? { ...model, compactAtTokens } : model) }) : listed.models.map(withSetting)
+        const models = catalog.selectable ? listed.models.map((model) => { const compactAtTokens = model.engine === "claude" ? Number(claudeCompactEnv({ model: model.id, settings: compactSettings, on: featureOn(compactSettings, "claude_compact", { safeMode: options.safeMode === true }) })?.CLAUDE_CODE_AUTO_COMPACT_WINDOW) || undefined : modelCompactAt({ model, providers: compactProviders, settings: compactSettings }); return withSetting(compactAtTokens ? { ...model, compactAtTokens } : model) }) : listed.models.map(withSetting)
         return reply(connection, command.id, { ok: true, result: { ...listed, models, ...(sessionId ? { reasoning: reasoning.report(store.sessionInfo(sessionId)!.directory, sessionId) } : {}), ...(handoff ? { handoff } : {}) } })
       }
       case "reasoning.status": {

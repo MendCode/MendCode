@@ -17,7 +17,7 @@
  * project packages, project); the first `block` wins, rewrites chain.
  */
 
-import type { SlashMenuModel, ViewRenderer, ViewSlot } from "./views"
+import type { SlashMenuModel, ViewOptions, ViewRenderer, ViewSlot } from "./views"
 export type * from "./views"
 
 export const EXTENSION_API_VERSION = 1
@@ -453,7 +453,7 @@ export type TuiExtensionAPI = {
    * slot's input model that returns lines, or `undefined` to keep the built-in. `"slashMenu"` is the old name of `"slash.menu"`.
    */
   view(name: "slashMenu", render: SlashMenuRenderer): void
-  view<S extends ViewSlot>(slot: S, render: ViewRenderer<S>): void
+  view<S extends ViewSlot>(slot: S, render: ViewRenderer<S>, options?: ViewOptions): void
   /** Asks for a redraw (after the extension's own state changed, e.g. a timer). */
   redraw(): void
   /** Comments on the passages of an answer (docs/editor.md, "Extending"). */

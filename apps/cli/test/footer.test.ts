@@ -245,7 +245,8 @@ describe("transcript last usage", () => {
     expect(contextLimit({ contextTokens: 5 }, 160_000)).toBe(160_000)
     // The engine says where it will pack (95% of a 500k window): that, not the 160k default, is what the meter divides by.
     expect(contextLimit({ contextTokens: 5, compactAt: 475_000 }, 160_000)).toBe(475_000)
-    expect(contextLimit({ contextTokens: 5, compactAt: 475_000, contextWindow: 200_000 }, 160_000)).toBe(200_000)
+    // Both stated (Claude Code started with a compaction window): the compaction point is the denominator, the model window is secondary.
+    expect(contextLimit({ contextTokens: 5, compactAt: 475_000, contextWindow: 1_000_000 }, 160_000)).toBe(475_000)
     expect(text(contextBar({ tokens: 200_000, limit: 200_000, approx: true }, true))).toContain("~200K / 200K")
     expect(text(contextBar({ tokens: 200_000, limit: 200_000, approx: true }, false, "percent"))).toBe("~>99%")
     expect(text(statusLineSpans({ stateLabel: "ready", state: "idle", contextPercent: 100, contextLabel: "ctx", contextApprox: true, glyphs: glyphs({}) }, 80))).toContain("ctx ~100%")

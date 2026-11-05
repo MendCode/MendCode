@@ -490,6 +490,26 @@ describe("claude engine turns", () => {
     engine.stop()
   })
 
+  test("usage states the compaction window the process was started with; a changed window restarts it at the next turn", async () => {
+    const answer = (api: FakeApi) => {
+      api.push({ type: "system", subtype: "init", session_id: "cc-compact" })
+      streamText(api, 0, "ok")
+      api.push(result({ session_id: "cc-compact", modelUsage: { "claude-sonnet-5": { contextWindow: 1_000_000 } } }))
+    }
+    let window = "200000"
+    const { engine, spawned } = engineWith([fakeClaude({ onUser: answer }), fakeClaude({ onUser: answer })], { env: () => ({ CLAUDE_CODE_AUTO_COMPACT_WINDOW: window }) })
+    const first = turnInput()
+    await engine.runTurn(first.input)
+    expect(first.events.find((event) => event.type === "usage")).toMatchObject({ compactAt: 200_000, contextWindow: 1_000_000 })
+    // The settings changed, but the live process still compacts at what it was started with.
+    window = "475000"
+    const second = turnInput({ sessionId: first.input.sessionId })
+    await engine.runTurn(second.input)
+    expect(spawned).toHaveLength(2)
+    expect(second.events.find((event) => event.type === "usage")).toMatchObject({ compactAt: 475_000 })
+    engine.stop()
+  })
+
   test("the process environment is asked for with the session and the model it starts on (the sub-agent model follows it)", async () => {
     const answer = (api: FakeApi) => {
       api.push({ type: "system", subtype: "init", session_id: "cc-sub" })

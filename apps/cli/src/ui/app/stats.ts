@@ -1,4 +1,4 @@
-import { DEFAULT_COMPACT_AT_TOKENS } from "@mendcode/protocol/wire"
+import { compactFallback } from "./compact-fallback"
 import { contextLimit } from "../../view/context-meter"
 import { modelLabel, sessionModelId } from "../../view/model-label"
 import type { SessionStatsInput } from "../../view/session-stats"
@@ -19,7 +19,7 @@ export function liveStatsInput(state: AppState): SessionStatsInput {
     ...(last ? { last } : {}),
     calls: transcript.recentCalls,
     ...(transcript.sessionCost !== undefined ? { costMicros: transcript.sessionCost } : {}),
-    ...(usage?.contextTokens !== undefined ? { contextTokens: usage.contextTokens, contextLimit: contextLimit(usage, state.settingsNow.compactAtTokens ?? DEFAULT_COMPACT_AT_TOKENS), ...(usage.contextApprox ? { contextApprox: true } : {}) } : {}),
+    ...(usage?.contextTokens !== undefined ? { contextTokens: usage.contextTokens, contextLimit: contextLimit(usage, compactFallback(state)), ...(usage.contextApprox ? { contextApprox: true } : {}) } : {}),
     contexts: transcript.recentContexts,
     ...(model ? { model: modelLabel(model, state.modelReport) } : {}),
     ...(state.effectiveModel?.effort ? { effort: state.effectiveModel.effort } : {}),

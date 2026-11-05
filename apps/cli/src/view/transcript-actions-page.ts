@@ -4,6 +4,7 @@ import { fit, panelGrid, spread } from "./deck"
 import { renderMarkdown } from "./markdown"
 import { truncateEnd } from "./session-list"
 import { todayTimeOrDateTime } from "./time"
+import { readableText } from "./reply-comments"
 import { wrap } from "./wrap"
 
 export type MessageEntry = HistoryItem & { turnId: TurnId; at: number; anchorId: ItemId; prompt: string; promptImages: BlobRef[]; promptTruncated: boolean }
@@ -59,11 +60,11 @@ export function renderMessageActions(input: { state: MessageActionsState; width:
   const room = Math.max(0, height - 2)
   const title = s.backtrack ? "Backtrack" : s.pick ? "Copy response" : s.menu ? "Message Actions" : "Messages"
   const actions: Line[] = MESSAGE_ACTIONS.map((name, i) => [{ text: `${i === s.action ? "›" : " "} ${name}`, fg: i === s.action ? "primary" : "text", bold: i === s.action }])
-  const list = (w: number): Line[] => s.loading ? [[{ text: "Loading messages…", fg: "muted" }]] : s.entries.length ? s.entries.map((entry, i): Line => [{ text: `${i === s.selected ? "›" : " "} ${entry.kind === "user_message" ? "User" : "Assistant"} · ${todayTimeOrDateTime(entry.at, now)}  ${truncateEnd(entry.text.replace(/\s+/g, " "), Math.max(1, w - 25))}`, fg: i === s.selected ? "primary" : "text", bold: i === s.selected }]) : [[{ text: s.error || (s.pick ? "No responses in this page" : "No messages in this session"), fg: s.error ? "warning" : "muted" }]]
+  const list = (w: number): Line[] => s.loading ? [[{ text: "Loading messages…", fg: "muted" }]] : s.entries.length ? s.entries.map((entry, i): Line => [{ text: `${i === s.selected ? "›" : " "} ${entry.kind === "user_message" ? "User" : "Assistant"} · ${todayTimeOrDateTime(entry.at, now)}  ${truncateEnd(readableText(entry.text, { quotes: false }).replace(/\s+/g, " "), Math.max(1, w - 25))}`, fg: i === s.selected ? "primary" : "text", bold: i === s.selected }]) : [[{ text: s.error || (s.pick ? "No responses in this page" : "No messages in this session"), fg: s.error ? "warning" : "muted" }]]
   const preview = (w: number): Line[] => selected ? [
     ...(s.error ? wrap(s.error, w).map((text): Line => [{ text, fg: "warning" }]) : []),
     ...(selected.truncated ? [[{ text: "Truncated · copy unavailable", fg: "warning" }] as Line] : []),
-    ...renderMarkdown(selected.text, Math.max(1, w), "text"),
+    ...renderMarkdown(readableText(selected.text), Math.max(1, w), "text"),
     ...(selected.attachments?.length ? wrap(`Attachments: ${selected.attachments.join(", ")}`, w).map((text): Line => [{ text, fg: "muted" }]) : []),
   ] : []
   const main = { title: s.menu ? "Actions" : s.pick ? "Responses" : s.backtrack ? "Prompts" : "Messages", body: s.menu ? actions : list, weight: 2, active: true, scroll: s.menu ? 0 : Math.max(0, s.selected - Math.max(1, room - 5) + 1) }

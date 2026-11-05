@@ -265,7 +265,7 @@ export function claudeEditPatch(result: unknown): string | undefined {
  * message marked `agentEnd`, with its tool count, tokens and duration). Clients show the thread under the call and leave it out
  * of the main conversation. A sub-agent that ends after its turn did (a background one) is not reported.
  */
-export function createTurnMapper(input: { newItemId(): ItemId; emit(event: EngineEvent): void; model: string; /** Tools the daemon runs and draws itself: no item here. */ ownTools?: string | undefined; /** Every tool call of the main agent, with its arguments. */ onTool?(name: string, args: Record<string, any> | undefined): void; /** The session's task list, kept across its turns (TaskCreate and TaskUpdate change one task each). */ plan?: ClaudePlan }) {
+export function createTurnMapper(input: { newItemId(): ItemId; emit(event: EngineEvent): void; model: string; /** Tools the daemon runs and draws itself: no item here. */ ownTools?: string | undefined; /** Every tool call of the main agent, with its arguments. */ onTool?(name: string, args: Record<string, any> | undefined): void; /** The session's task list, kept across its turns (TaskCreate and TaskUpdate change one task each). */ plan?: ClaudePlan; /** Where the Claude Code process compacts (its `CLAUDE_CODE_AUTO_COMPACT_WINDOW`); stated with every usage so the meter measures against it. */ compactAt?: number | undefined }) {
   const own = (name: unknown) => !!input.ownTools && String(name).startsWith(input.ownTools)
   const plan = input.plan ?? createClaudePlan()
   /** The main agent's calls of a plan tool (TodoWrite, TaskCreate, TaskUpdate) by tool-use id: their result becomes the list's card. */
@@ -565,6 +565,7 @@ export function createTurnMapper(input: { newItemId(): ItemId; emit(event: Engin
       cacheWrite: Number(raw.cache_creation_input_tokens ?? 0),
       ...(measured !== undefined ? { context: clamped ? contextWindow! : Math.round(measured) } : {}),
       ...(contextWindow !== undefined ? { contextWindow } : {}),
+      ...(input.compactAt ? { compactAt: input.compactAt } : {}),
       ...(clamped ? { contextApprox: true as const } : {}),
     }
   }

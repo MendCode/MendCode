@@ -1,4 +1,4 @@
-import { DEFAULT_COMPACT_AT_TOKENS } from "@mendcode/protocol/wire"
+import { compactFallback } from "./compact-fallback"
 import { PROMPT_MARGIN } from "../../view/prompt-chrome"
 import { SPINNER_FRAMES } from "../../view/tool-card"
 import { advanceArcade, arcadeField, arcadeInput, isLoaded, pickGame, preload, renderLiveCompaction, startArcade } from "../lazy-pages"
@@ -91,7 +91,7 @@ export function createCompactionLive(ctx: AppContext, actions: { editScratch(): 
       maxRows: request.room,
       facts: state.compactionFacts.snapshot(),
       ...(state.compactionFacts.lastCall ? { lastCall: state.compactionFacts.lastCall } : {}),
-      limit: state.contextReport?.contextWindow ? { tokens: state.contextReport.contextWindow, kind: "window" } : { tokens: state.settingsNow.compactAtTokens ?? DEFAULT_COMPACT_AT_TOKENS, kind: "threshold" },
+      limit: { tokens: state.contextReport?.compactAtTokens ?? compactFallback(state), kind: "threshold" },
       now: ctx.now(),
       spinner: state.reducedMotion ? "⋯" : SPINNER_FRAMES[state.spinFrame % SPINNER_FRAMES.length]!,
       ...(view ? { arcade: { view, focused: live.focused, fieldRows: view.rows.length } } : {}),

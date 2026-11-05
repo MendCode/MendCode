@@ -131,6 +131,8 @@ type Connection = {
   lifecycle?: boolean
   /** `environmentKey` of the credentials the process started with. */
   envKey: string
+  /** The compaction window this process was started with (`CLAUDE_CODE_AUTO_COMPACT_WINDOW`): what it really compacts at, whatever the settings say now. */
+  compactAt: number | undefined
   /** Ended turns whose background agents still run: their records go on to that turn's mapper, and from it to the daemon. */
   agentTurns: Array<ReturnType<typeof createTurnMapper>>
   /**
@@ -557,6 +559,12 @@ export function createClaudeEngine(options: {
     if (!connection.closed && connection.background === 0 && !connection.unsolicited) connection.idle = clock.setTimer(processIdleMs, () => close(connection, "idle"))
   }
 
+  /** The window a process started with `env` compacts at: its variable, else the daemon's own. */
+  function compactWindow(env: Record<string, string | undefined>): number | undefined {
+    const value = Number(env.CLAUDE_CODE_AUTO_COMPACT_WINDOW ?? process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW)
+    return Number.isFinite(value) && value > 0 ? Math.round(value) : undefined
+  }
+
   function open(sessionId: SessionId, model: ClaudeModelChoice, permission: PermissionMode, withThinkingDisplay: boolean): Connection {
     const cwd = options.cwdFor(sessionId)
     const environment = options.environment?.(sessionId)
@@ -565,7 +573,7 @@ export function createClaudeEngine(options: {
     const extra = { ...options.env?.(sessionId, model), ...environment?.values }
     const env = Object.keys(extra).length ? { env: extra } : {}
     const transport = options.transportFactory?.({ args, cwd, ...env }) ?? spawnClaude({ bin: options.bin ?? "claude", args, cwd, ...env })
-    const connection: Connection = { sessionId, transport, model, permission: claudePermissionMode(permission), pending: new Map(), ready: Promise.resolve(), closed: false, background: 0, tasks: new Set(), agentTurns: [], agentTasks: new Set(), envKey: environmentKey(environment), plan: createClaudePlan() }
+    const connection: Connection = { sessionId, transport, model, permission: claudePermissionMode(permission), pending: new Map(), ready: Promise.resolve(), closed: false, background: 0, tasks: new Set(), agentTurns: [], agentTasks: new Set(), envKey: environmentKey(environment), compactAt: compactWindow(extra), plan: createClaudePlan() }
     connections.set(sessionId, connection)
     void (async () => {
       try {
@@ -601,8 +609,8 @@ export function createClaudeEngine(options: {
     // Effort is fixed when Claude Code starts, so a new model or effort restarts the process and resumes the session.
     // New `/env` credentials restart it too, unless a background agent would be lost: they wait for the next start.
     // An MCP change that waited for background tasks is made before a turn once none runs.
-    if (connection && (!sameModel(connection.model, model) || (connection.background === 0 && (connection.reload || connection.envKey !== environmentKey(options.environment?.(input.sessionId)))))) {
-      close(connection, !sameModel(connection.model, model) ? `model, effort or fast changed (${connection.model.model ?? "default"}/${connection.model.effort ?? "default"}${connection.model.fast ? "/fast" : ""} → ${model.model ?? "default"}/${model.effort ?? "default"}${model.fast ? "/fast" : ""})` : connection.reload ? "MCP servers changed" : "credentials changed")
+    if (connection && (!sameModel(connection.model, model) || (connection.background === 0 && (connection.reload || connection.envKey !== environmentKey(options.environment?.(input.sessionId)) || connection.compactAt !== compactWindow({ ...options.env?.(input.sessionId, model) }))))) {
+      close(connection, !sameModel(connection.model, model) ? `model, effort or fast changed (${connection.model.model ?? "default"}/${connection.model.effort ?? "default"}${connection.model.fast ? "/fast" : ""} → ${model.model ?? "default"}/${model.effort ?? "default"}${model.fast ? "/fast" : ""})` : connection.reload ? "MCP servers changed" : connection.compactAt !== compactWindow({ ...options.env?.(input.sessionId, model) }) ? "compaction point changed" : "credentials changed")
       connection = undefined
     }
     connection ??= open(input.sessionId, model, mode, thinkingDisplay)
@@ -717,7 +725,7 @@ export function createClaudeEngine(options: {
         let sink: (event: EngineEvent) => void = input.emit
         const turn: ActiveTurn = {
           input,
-          mapper: createTurnMapper({ newItemId: input.newItemId, emit: (event) => sink(event), model: connection.model.model ?? "claude", ownTools: options.ownTools, plan: connection.plan, onTool: (name, args) => { if (changesMcpServers(name, args)) connection.reload = true } }),
+          mapper: createTurnMapper({ newItemId: input.newItemId, emit: (event) => sink(event), model: connection.model.model ?? "claude", ownTools: options.ownTools, plan: connection.plan, compactAt: connection.compactAt, onTool: (name, args) => { if (changesMcpServers(name, args)) connection.reload = true } }),
           waitingUser: false,
           interrupted: false,
           steered: new Set(),
