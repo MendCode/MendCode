@@ -56,6 +56,10 @@
       "items": "file:settings.json"
     },
     {
+      "reason": "the user_browser tool is listed only when the user opted in (MENDCODE_BROWSER_EXTENSION=1) and its own description carries the usage; the files are written by the bridge in its own folder, not edited by the user (docs/browser.md)",
+      "items": "tool:user_browser file:config.json file:installed.json file:manifest.json file:sites.json"
+    },
+    {
       "reason": "core coding tools: every request carries each one's own schema and description, a card would only repeat it",
       "items": "tool:edit tool:glob tool:grep tool:ls tool:question tool:read tool:shell tool:shell_kill tool:shell_output tool:write"
     },

@@ -107,7 +107,7 @@ test("previews are bounded and never register authority for unreadable, oversize
   expect((await f.port.capture({}, signal())).isError).toBe(true)
   f.os.mac.failure = "/usr/sbin/screencapture"
   const denied = await f.port.capture({}, signal())
-  expect(denied.output).toContain("Screen Recording or Accessibility")
+  expect(denied.output).toContain("Screen Recording belongs to the terminal")
   expect(denied.images).toBeUndefined()
 })
 

@@ -324,6 +324,7 @@ function approvalTitle(tool: Tool, args?: unknown) {
   if (tool.name === "worktree") return "Use a git worktree"
   if (tool.name === "shell_session") return "Run interactive command"
   if (tool.name === "browser") return "Use browser"
+  if (tool.name === "user_browser") return "Use your browser"
   if (tool.name === "tell") return "Message another session"
   if (tool.name === "threads") {
     const action = (args as { action?: unknown } | null | undefined)?.action
@@ -341,6 +342,17 @@ function browserDetail(args: Record<string, unknown>) {
   if (args.action === "click") return `browser click element ${String(args.ref)} of the open page`
   if (args.action === "press") return `browser press ${clip(args.key, 20)} on the open page`
   return `browser ${String(args.action)}`
+}
+
+/** What the user approves for the extension: installing writes files in their browser profile folders; every other step names its site or element. */
+function userBrowserDetail(args: Record<string, unknown>) {
+  const clip = (value: unknown, max: number) => (typeof value === "string" ? (value.length > max ? `${value.slice(0, max - 1)}…` : value) : "")
+  if (args.action === "install") return "install the MendCode browser extension: writes the extension folder and a native-host manifest for each Chromium browser found (nothing is started)"
+  if (args.action === "allow_site") return `allow MendCode to open and use ${clip(args.origin, 200)} in your browser's MendCode tab group`
+  if (args.action === "open") return `your browser: open ${clip(args.url, 300)} in the MendCode tab group (background)`
+  if (args.action === "type") return `your browser: type ${JSON.stringify(clip(args.text, 120))} into ${clip(args.selector, 120)}${args.submit ? " and press Enter" : ""}`
+  if (args.action === "click") return `your browser: click ${clip(args.selector, 120)} in a MendCode tab`
+  return `your browser ${String(args.action)}`
 }
 
 /** The files a formatted patch preview names (`*** Update File: a.ts`), comma-joined; empty for any other preview. */
@@ -363,6 +375,7 @@ function approvalDetail(call: ToolCall, preview?: string) {
   if (call.name === "worktree" && typeof args.action === "string") return `worktree ${args.action}${typeof args.name === "string" ? ` ${args.name.slice(0, 60)}` : ""}${args.remove === true ? " (remove)" : ""}`
   if (call.name === "shell_session" && typeof args.command === "string") return `interactive (PTY, stays open for input): ${args.command}`
   if (call.name === "browser" && typeof args.action === "string") return browserDetail(args)
+  if (call.name === "user_browser" && typeof args.action === "string") return userBrowserDetail(args)
   if (call.name === "notebook_edit" && typeof args.path === "string") return `${args.action ?? "edit"} cell in ${args.path}`
   if (typeof args.command === "string") return args.command
   if (typeof args.path === "string") return args.path

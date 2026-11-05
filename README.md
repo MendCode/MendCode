@@ -341,7 +341,7 @@ Generated from [tier-data.ts](packages/protocol/src/tier-data.ts), including eve
 | [Experimental pet generator](docs/customize.md) (`pet_generator`) | — | — | Opt-in | /pet new (explicit confirmation) |
 | [Voice dictation](docs/voice.md) (`voice`) | — | — | Opt-in | voice.enabled |
 | [Computer control](docs/computer.md) (`computer`) | — | Opt-in | Opt-in | /tier computer on (macOS; off until then) |
-| [Headless browser](docs/browser.md) (`browser`) | — | — | Opt-in | MENDCODE_BROWSER=1 |
+| [Headless browser](docs/browser.md) (`browser`) | — | — | Opt-in | MENDCODE_BROWSER=1 · MENDCODE_BROWSER_EXTENSION=1 |
 | [Code Mode](docs/code-mode.md) (`code_mode`) | — | — | Opt-in | experimental.code_mode |
 | [Snip stale output](docs/compaction.md) (`snip`) | — | — | Opt-in | experimental.snip |
 | [Worktree tool](docs/worktrees.md) (`worktree_tool`) | — | — | Opt-in | experimental.worktree_tool |

@@ -24,7 +24,7 @@ export function createComputerSessionTools() {
     }),
     defineTool({
       name: "computer_observe",
-      description: "Observe an active exact-target ComputerSession as a bounded revisioned accessibility snapshot. Works while the app is in the background and does not take the user's focus. Secure fields are redacted. node.actions lists pointer and keyboard actions (click, key, scroll, drag, typeText) only while the app is in front. Optional screenshot requests return guidance to computer_capture, never silently capture the display.",
+      description: "Observe an active exact-target ComputerSession as a bounded revisioned accessibility snapshot. Works while the app is in the background and does not take the user's focus. Secure fields are redacted. A result with a hint (few nodes, usually a webview) means: observe again, then try a key or computer_capture before giving up. node.actions lists pointer and keyboard actions (click, key, scroll, drag, typeText) only while the app is in front. Optional screenshot requests return guidance to computer_capture, never silently capture the display.",
       permission: "execute",
       args: ComputerObserveInput,
       async execute(input, context) {

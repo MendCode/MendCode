@@ -148,7 +148,7 @@ export const FEATURES: Readonly<Record<FeatureId, FeatureSpec>> = {
   pet_generator: { label: "Experimental pet generator", tier: "full", mode: "permit", cost: ["calls"], legacy: false, own: "/pet new (explicit confirmation)", experimental: true, safe: true, doc: "docs/customize.md" },
   voice: { label: "Voice dictation", tier: "full", mode: "permit", cost: ["calls"], legacy: true, own: "voice.enabled", off: { voice: { enabled: false } }, doc: "docs/voice.md" },
   computer: { label: "Computer control", tier: "balanced", mode: "permit", cost: ["tools"], legacy: false, optIn: true, own: "/tier computer on (macOS; off until then)", tools: ["computer_*"], doc: "docs/computer.md" },
-  browser: { label: "Headless browser", tier: "full", mode: "permit", cost: ["tools"], legacy: true, own: "MENDCODE_BROWSER=1", tools: ["browser"], doc: "docs/browser.md" },
+  browser: { label: "Headless browser", tier: "full", mode: "permit", cost: ["tools"], legacy: true, own: "MENDCODE_BROWSER=1 · MENDCODE_BROWSER_EXTENSION=1", tools: ["browser", "user_browser"], doc: "docs/browser.md" },
   code_mode: { label: "Code Mode", tier: "full", mode: "permit", cost: ["tools"], legacy: true, own: "experimental.code_mode", flag: "code_mode", doc: "docs/code-mode.md" },
   // One compaction call of its own, in an idle session of at least `idleCompactAtTokens`, just before the provider's prompt cache expires: the history is read at the cached price one last time instead of at the full price on the next message. Off with no tier.
   idle_compact: { label: "Compact while idle", tier: "full", mode: "tier", cost: ["calls"], legacy: false, own: "/tier idle_compact off · /settings · idle compact", doc: "docs/compaction.md" },

@@ -59,7 +59,7 @@ import {
 } from "@mendcode/engine-native"
 import { createModelsDev } from "./models-dev"
 import { acpAgentName } from "./acp-registry"
-import { BUILTIN_TOOLS, sandboxPolicy, canonicalDir, shellSession, createToolDefine, createWebSearchTool, loopTool, worktreeTool, prWatchTool, createComputerTools, browserTool, type Tool, aiConfigTool } from "@mendcode/tools"
+import { BUILTIN_TOOLS, sandboxPolicy, canonicalDir, shellSession, createToolDefine, createWebSearchTool, loopTool, worktreeTool, prWatchTool, createComputerTools, browserTool, createUserBrowserTool, type Tool, aiConfigTool } from "@mendcode/tools"
 import { createDaemonImageGenTool } from "./image-generation"
 import { ptyAvailable } from "./pty-native"
 import { createAcpAgents, createAcpEngine, withAcpEngine } from "@mendcode/engine-acp"
@@ -231,6 +231,8 @@ let skills = createSkillLoader({ userDir: dir, layers: (cwd) => layersFor(cwd) }
 const mcpAllowed = () => featureOn(extractionSettings(), "mcp", { safeMode })
 /** Servers extensions register (`api.registerMcpServer`); bound once the daemon built its extensions. */
 let extensionMcpServers: (directory: string) => Promise<Record<string, McpServerConfig>> = async () => ({})
+// Opt-in (MENDCODE_BROWSER_EXTENSION=1): the user's own browser through the MendCode extension. Nothing is loaded, opened or listened on otherwise.
+const userBrowser = process.env.MENDCODE_BROWSER_EXTENSION === "1" ? (await import("./browser-bridge")).createUserBrowserBridge({ enabled: true, dataDir: dir, home: homedir() }) : undefined
 const mcp = createMcpManager({ configLoader: createMcpConfigLoader({ userDir: dir, layers: (directory) => layersFor(directory), allowed: mcpAllowed, trustedDirs: () => extractionSettings().trustedToolDirs, extensionServers: (directory) => extensionMcpServers(directory) }), auth: createMcpAuth({ dir }) })
 /** Language servers are lazy, provisioned only from offline caches, and stopped after 5 idle minutes. */
 const lsp = createLspManager({ cacheDir: path.join(dir, "lsp") })
@@ -562,6 +564,7 @@ export const daemon = await startDaemon({
     // Registered wherever they can work; the feature `computer` (off until `/tier computer on`) keeps them out of the model's tool list.
     if (process.platform === "darwin" || process.env.MENDCODE_COMPUTER === "1") builtinTools.push(...createComputerTools())
     if (process.env.MENDCODE_BROWSER === "1") builtinTools.push(browserTool)
+    if (userBrowser) { builtinTools.push(createUserBrowserTool({ port: userBrowser.port() })); userBrowser.start() }
     extensions.setBuiltinTools(builtinTools)
     const mainModel = (sessionId: Parameters<typeof store.sessionModel>[0]) => resolveModel({ role: "main", session: store.sessionModel(sessionId), roles: rolesFor(store.settings.get(), store.sessionInfo(sessionId)?.directory), catalog: modelCatalog })
     /** The model one turn runs on: its per-turn override (already validated at submit) or the session's. */
@@ -1009,6 +1012,7 @@ export const daemon = await startDaemon({
     stopClaude?.()
     stopAcp?.()
     stopPi?.()
+    userBrowser?.stop()
     void Promise.allSettled([mcp.stop(), lsp.stop(), formatter.stop()]).finally(() => hosting.active ? hosting.onStopped?.() : process.exit(0))
   },
 })
@@ -1021,6 +1025,7 @@ for (const signal of hosting.active ? [] : ["SIGINT", "SIGTERM"] as const) {
     stopClaude?.()
     stopAcp?.()
     stopPi?.()
+    userBrowser?.stop()
     void Promise.allSettled([daemon.stop(), mcp.stop(), lsp.stop(), formatter.stop()]).then(() => process.exit(0))
   })
 }
@@ -1030,5 +1035,6 @@ export async function stopDaemon() {
   stopClaude?.()
   stopAcp?.()
   stopPi?.()
+  userBrowser?.stop()
   await Promise.allSettled([daemon.stop(), mcp.stop(), lsp.stop(), formatter.stop()])
 }

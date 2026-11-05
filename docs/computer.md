@@ -22,7 +22,7 @@ in place, at the same path, only when its source changes.
 System Settings opens on Privacy & Security > Accessibility. Turn on "MendCode Computer Use". The tool that asked does not fail: it
 shows "Waiting for Accessibility permission… (System Settings is open)", looks every second for up to 2 minutes and then
 carries on by itself; Esc cancels it as any tool, and after the 2 minutes it fails saying what to turn on. Nothing to paste,
-no restart. Nothing is built or opened until a computer tool runs. Screen captures additionally require Screen Recording for the terminal/daemon.
+no restart. Nothing is built or opened until a computer tool runs. Screen captures are taken by the daemon with `screencapture`, not by "MendCode Computer Use", so Screen Recording goes to the app that started MendCode (your terminal), not to "MendCode Computer Use".
 The helper never grants itself access, and only asks when a tool needs it. OS permission and MendCode approval are
 independent requirements.
 
@@ -211,9 +211,17 @@ asks for them. The first observation of a window that holds a web page sets `AXE
 on the app (what VoiceOver sets) and waits up to 3 seconds for the page's actions, about 2 seconds
 measured in Chrome; it is cleared again when the app's last session ends or the helper exits, and
 left alone when it was already on.
+
+Apps whose content is a webview (Tauri, WebKit, Electron) can show only a handful of nodes at first. When an
+observation is that small and holds no web page, the helper also sets `AXManualAccessibility` (Electron) next to
+`AXEnhancedUserInterface`, looks again for up to 2 seconds while the tree builds, and clears what it set on the
+same terms. If the tree stays small, the result carries a `hint` telling the model to observe again or try a key or
+`computer_capture` before giving up.
 Coordinates from resized screenshots are never input authority.
-Keyboard input must confirm focus on the approved non-secure node. Drag is bounded and
-releases its button; cancellation allows cleanup before forcibly terminating stuck AX work.
+Keyboard input must confirm focus on the approved non-secure node. When that node cannot take focus (a window or a
+webview group), a `key` goes to the approved app instead, as long as no secure field or element outside the window
+holds the focus; `typeText` still needs the node. Drag is bounded and releases its button; cancellation allows
+cleanup before forcibly terminating stuck AX work.
 
 An exclusive OS file lock prevents two MendCode native helpers from controlling input
 simultaneously. Mutations, legacy navigation, app launch and window selection require

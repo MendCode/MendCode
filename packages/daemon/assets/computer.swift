@@ -510,20 +510,34 @@ func showBadge(_ show: Bool) throws {
 // and neither a posted click nor AXPress changed the page). After this attribute, the one VoiceOver sets, links and buttons
 // offer AXPress about 2 s later and it works with the window behind others. It is cleared when the app's last session ends.
 let enhancedInterface = "AXEnhancedUserInterface"
-var webAccessibility = Set<pid_t>()
-func enableWebAccessibility(_ pid: pid_t) -> Bool {
-    if webAccessibility.contains(pid) { return false }
+// Electron builds its page tree only when this one is set (Chromium alone answers to the one above).
+let manualAccessibility = "AXManualAccessibility"
+/** What this helper switched on for each app, so that only those are cleared when the last session ends. */
+var webAccessibility: [pid_t: [String]] = [:]
+/** A window tree this small has not shown its web content: a page offers links or buttons once exposed. Decision only. */
+func poorTree(count: Int, hasProbe: Bool) -> Bool { !hasProbe && count <= 12 }
+/** How a key reaches an app: through its node when that can be focused safely, to the app when nothing safe is focused, never past a secure field. Decision only. */
+func keyRoute(nodeFocusable: Bool, focusedSecure: Bool, focusedOutside: Bool) -> String {
+    if nodeFocusable { return "node" }
+    return focusedSecure || focusedOutside ? "refuse" : "app"
+}
+func enableWebAccessibility(_ pid: pid_t, names: [String] = [enhancedInterface]) -> Bool {
     let app = AXUIElementCreateApplication(pid)
-    // Already on (VoiceOver is running): not ours to switch, or to clear later.
-    if (attribute(app, enhancedInterface) as? Bool) == true { return false }
-    // Chrome answers "not implemented" and switches anyway.
-    _ = AXUIElementSetAttributeValue(app, enhancedInterface as CFString, kCFBooleanTrue)
-    webAccessibility.insert(pid)
-    return true
+    var switched = webAccessibility[pid] ?? []
+    for name in names where !switched.contains(name) {
+        // Already on (VoiceOver is running): not ours to switch, or to clear later.
+        if (attribute(app, name) as? Bool) == true { continue }
+        // Chrome answers "not implemented" and switches anyway.
+        _ = AXUIElementSetAttributeValue(app, name as CFString, kCFBooleanTrue)
+        switched.append(name)
+    }
+    let added = switched.count != (webAccessibility[pid]?.count ?? 0)
+    if !switched.isEmpty { webAccessibility[pid] = switched }
+    return added
 }
 func restoreWebAccessibility(_ pid: pid_t) {
-    guard webAccessibility.remove(pid) != nil else { return }
-    _ = AXUIElementSetAttributeValue(AXUIElementCreateApplication(pid), enhancedInterface as CFString, kCFBooleanFalse)
+    guard let names = webAccessibility.removeValue(forKey: pid) else { return }
+    for name in names { _ = AXUIElementSetAttributeValue(AXUIElementCreateApplication(pid), name as CFString, kCFBooleanFalse) }
 }
 func pressable(_ element: AXUIElement) -> Bool {
     var supported: CFArray?
@@ -539,6 +553,15 @@ func observe(_ target: Object) throws -> Object {
         while !pressable(probe) && Date() < deadline && !cancelled { RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.05)) }
         _ = try selected(target, foreground: false)
         snapshot = walkWindow(window, pid: running.processIdentifier)
+    } else if poorTree(count: snapshot.nodes.count, hasProbe: snapshot.webProbe != nil), enableWebAccessibility(running.processIdentifier, names: [enhancedInterface, manualAccessibility]) {
+        // A webview (Tauri, WebKit, Electron) shows its content only once an assistive app asks: look again while it builds the tree.
+        let deadline = Date(timeIntervalSinceNow: 2)
+        while Date() < deadline && !cancelled {
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.25))
+            _ = try selected(target, foreground: false)
+            snapshot = walkWindow(window, pid: running.processIdentifier)
+            if !poorTree(count: snapshot.nodes.count, hasProbe: snapshot.webProbe != nil) { break }
+        }
     }
     _ = try selected(target, foreground: false)
     return ["nodes": snapshot.nodes, "truncated": snapshot.truncated]
@@ -698,6 +721,14 @@ func focus(_ ref: Reference) throws {
     if let focused = elementAttribute(ax, kAXFocusedUIElementAttribute), descendant(focused, of: ref.element), !secure(focused) { return }
     guard AXUIElementSetAttributeValue(ref.element, kAXFocusedAttribute as CFString, kCFBooleanTrue) == .success, let focused = elementAttribute(ax, kAXFocusedUIElementAttribute), descendant(focused, of: ref.element), !secure(focused) else { try fail("Cannot safely focus this node for keyboard input") }
 }
+/** A key goes to the node when it can be focused; otherwise to the app, as long as no secure field or element outside the window holds the focus. */
+func focusForKey(_ ref: Reference) throws {
+    do { try focus(ref) } catch {
+        let focused = elementAttribute(AXUIElementCreateApplication(ref.pid), kAXFocusedUIElementAttribute)
+        let route = keyRoute(nodeFocusable: false, focusedSecure: focused.map { secure($0) } ?? false, focusedOutside: focused.map { !descendant($0, of: ref.window) } ?? false)
+        if route != "app" { throw error }
+    }
+}
 /** A pointer event for a window that may be behind others: it names the app's window under the point, so the app takes it as its own. */
 func aim(_ event: CGEvent?, at point: CGPoint, pid: pid_t) {
     guard let event = event, let windows = CGWindowListCopyWindowInfo([.optionAll, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { return }
@@ -805,7 +836,8 @@ func perform(_ step: Step, target: Object) throws {
         return
     }
     if name == "key" || name == "typeText" {
-        try focus(ref); _ = try selected(target, foreground: false)
+        if name == "key" { try focusForKey(ref) } else { try focus(ref) }
+        _ = try selected(target, foreground: false)
         if name == "key" {
             guard let key = input["key"] as? String, let code = keyCodes[key] else { try fail("Unsupported key") }
             let modifiers = flags(input["modifiers"] as? [String] ?? [])
@@ -1085,6 +1117,16 @@ if let flag = CommandLine.arguments.firstIndex(of: "--cursor-render"), flag + 1 
     }
     exit(0)
 }
+// Decision-only: one webview/key case per stdin line, the routes per stdout line.
+if CommandLine.arguments.contains("--web-plan") {
+    while let line = readLine() {
+        guard let data = line.data(using: .utf8), let input = try? JSONSerialization.jsonObject(with: data) as? Object else { print("{}"); continue }
+        let poor = poorTree(count: input["count"] as? Int ?? 0, hasProbe: input["probe"] as? Bool ?? false)
+        let route = keyRoute(nodeFocusable: input["focusable"] as? Bool ?? false, focusedSecure: input["secure"] as? Bool ?? false, focusedOutside: input["outside"] as? Bool ?? false)
+        print("{\"poor\":\(poor),\"route\":\"\(route)\"}")
+    }
+    exit(0)
+}
 // Decision-only: one recorded accessibility tree per stdin line, the pointer plan per stdout line. No AX object, event or window.
 if CommandLine.arguments.contains("--pointer-plan") {
     while let line = readLine() {
@@ -1175,4 +1217,4 @@ while !cancelled, let line = nextLine() {
 }
 cursorProgram = false
 try? showBadge(false)
-for pid in Array(webAccessibility) { restoreWebAccessibility(pid) }
+for pid in Array(webAccessibility.keys) { restoreWebAccessibility(pid) }
