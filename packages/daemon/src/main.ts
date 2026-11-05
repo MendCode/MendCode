@@ -425,6 +425,7 @@ function systemParts(root: string, memory: string, prompts: PromptFiles, modelID
   // SYSTEM.md replaces the packaged prompt, APPEND_SYSTEM.md follows as a part of its own; the project's files win over the user's.
   const parts = promptContextParts(dir, root, systemPartsWith({
     files: promptFileOverrides(dir, root, prompts),
+    contextFiles,
     root,
     packaged: systemPrompt,
     rest: [
