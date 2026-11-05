@@ -29,6 +29,8 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 - After a compaction the assistant still knows which commands are running and can read their output.
 - Edit, write and patch cards no longer draw a vertical rule beside their body (`toolRail` brings it back for any tool), show three unchanged lines around each change (`diffContext`) and cap a very long line at a few rows (`diffLineRows`). A Write through Claude Code shows its code as added lines.
 - A running shell call names its command in the activity row from the start.
+- Images you pasted and never sent are deleted from disk after a week.
+- With chat encryption on, MendCode starts faster, uses much less memory, and no longer rewrites the encrypted database when nothing changed.
 - MendCode uses less memory right after it starts.
 - Answering a message takes much less memory, most of all the first one of a session.
 - A terminal that runs MendCode in one process holds less memory, and building a project's code graph is no slower for it.

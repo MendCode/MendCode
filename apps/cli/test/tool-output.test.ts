@@ -146,7 +146,7 @@ describe("reading tools in each view", () => {
     const { events } = calls(READING)
     const text = view(events, { mode: "full" }).text()
     const body = (head: string, next: string) => text.slice(text.findIndex((line) => line.includes(head)) + 1, text.findIndex((line) => line.includes(next)))
-    expect(body("Read README", "Glob")).toEqual(["     │ 1  line 1", "     │ 2  line 2", "     │ 3  line 3", "     │ 4  line 4", "     │ 5  line 5", "     │ 6  line 6", "     │ … 136 more lines"])
+    expect(body("Read README", "Glob")).toEqual(["       1  line 1", "       2  line 2", "       3  line 3", "       4  line 4", "       5  line 5", "       6  line 6", "       … 136 more lines"])
     expect(text.some((line) => line.includes("line 142"))).toBe(false)
     expect(text.find((line) => line.includes("Glob"))).toContain("no files")
   })
@@ -155,8 +155,8 @@ describe("reading tools in each view", () => {
     const rows = Array.from({ length: 12 }, (_, i) => `${String(95 + i).padStart(6)}\trow ${95 + i}`).join("\n")
     const text = view(calls([{ title: "read: a.ts", text: rows, options: { input: { path: "a.ts", offset: 95, limit: 12 } } }]).events, { mode: "full" }).text()
     expect(text[0]).toBe("     ▤ Read a.ts  L95–106")
-    expect(text.slice(1, 7)).toEqual(["     │  95  row 95", "     │  96  row 96", "     │  97  row 97", "     │  98  row 98", "     │  99  row 99", "     │ 100  row 100"])
-    expect(text.at(-1)).toBe("     │ … 6 more lines")
+    expect(text.slice(1, 7)).toEqual(["        95  row 95", "        96  row 96", "        97  row 97", "        98  row 98", "        99  row 99", "       100  row 100"])
+    expect(text.at(-1)).toBe("       … 6 more lines")
   })
 
   test("the toolOutput setting: collapsed keeps the header even in full, expanded shows the full view's bodies in balanced", () => {
@@ -311,7 +311,7 @@ describe("expanding a card", () => {
     const { t, text } = view(events)
     const before = text()
     t.toggleTools()
-    const row = /^ {5}│ +\d+ {2}line \d+$/
+    const row = /^ {7} *\d+ {2}line \d+$/
     expect(text().length).toBeGreaterThan(40)
     expect(text().filter((line) => row.test(line))).toHaveLength(40)
     t.toggleDetails(itemIds[1]!, FOLD_CARD)

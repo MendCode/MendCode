@@ -2858,9 +2858,12 @@ export async function startDaemon(options: DaemonOptions) {
   workflows.boot()
   armDreamSchedule()
   armRetentionSchedule()
+  // Images pasted and never sent leave a file no row owns; the first idle step after start removes week-old ones.
+  let straysSwept = false
   const idleSettledPrune = createIdleDeltaFold({ clock, delayMs: SETTLED_PRUNE_DELAY_MS, onWake: true,
     busy: () => [...actors.values()].some(actorWorking) || scheduler.snapshot().length > 0 || engineJobs() > 0,
     step: () => {
+      if (!straysSwept) { straysSwept = true; store.removeStrayBlobs() }
       const pruned = store.pruneSettledEvents(20)
       const sealed = store.sealSettledTurns(50)
       return { complete: pruned.complete && sealed.complete }

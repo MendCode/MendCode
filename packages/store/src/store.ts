@@ -302,6 +302,8 @@ const DAY_MS = 86_400_000
 const CLEAN_BATCH = 25
 /** A blob file no row knows about is an abandoned upload only after this long (an attachment may be about to be sent). */
 const STRAY_GRACE_MS = 3_600_000
+/** The daemon's own sweep of pasted-and-never-sent images waits longer than a manual clean: a draft may sit for days. */
+const STRAY_SWEEP_GRACE_MS = 7 * DAY_MS
 const TOP_SESSIONS = 10
 /** Loops in these states are done; every other loop keeps its root session. */
 const FINISHED_LOOP_STATES = new Set(["stopped", "completed"])
@@ -768,8 +770,9 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
 
   /** Files in the blob store that no `blobs` row owns (abandoned uploads, partial writes), old enough to be safe. */
   function strayFiles(graceMs = STRAY_GRACE_MS) {
-    // An image attached to an unsent draft has no `blobs` row yet; it is kept like an owned one.
-    const known = new Set(db.query<{ sha256: string }, []>(`SELECT sha256 FROM blobs UNION SELECT * FROM (${draftBlobsSql})`).all().map((row) => row.sha256))
+    // An image attached to an unsent draft or to a message still waiting in the queue has no `blobs` row yet; it is kept like an owned one.
+    const known = new Set(db.query<{ sha256: string }, []>(`SELECT sha256 FROM blobs UNION SELECT * FROM (${draftBlobsSql})
+      UNION SELECT json_extract(value, '$.sha256') FROM queue_items, json_each(queue_items.attachments)`).all().map((row) => row.sha256))
     const cutoff = Date.now() - graceMs
     return blobs.scan().filter((file) => !known.has(file.name) && file.mtimeMs <= cutoff)
   }
@@ -1883,6 +1886,19 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
       eventObjects.sweep()
       db.run("PRAGMA incremental_vacuum")
       return result
+    },
+    /**
+     * Deletes blob files no row owns and no draft holds that are older than `graceMs` (a week by default): images pasted
+     * and never sent. Only files go; rows and sessions are untouched, so it is safe whenever the daemon is idle.
+     */
+    removeStrayBlobs(graceMs = STRAY_SWEEP_GRACE_MS) {
+      let freedBytes = 0
+      const strays = strayFiles(graceMs)
+      for (const file of strays) {
+        blobs.remove(file.name)
+        freedBytes += file.bytes
+      }
+      return { removed: strays.length, freedBytes }
     },
     /**
      * Where the disk goes. Aggregates only: one pass over events for per-session bytes (octet_length

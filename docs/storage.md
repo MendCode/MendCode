@@ -183,6 +183,15 @@ Fixed schema/index pages make the small fixture's per-session cost higher than t
 - **Retention.** `retentionDays` (daily 03:30) now also compacts and drops the streaming deltas of finished messages in
   sessions idle 3 days (the final text stays in the completed event). `worktreeGcDays` (off by default, `/settings`) adds the
   worktree cleanup to the same daily pass. A per-session mark means a daily pass only reads what is new.
+- **Images pasted and never sent.** A paste writes the image to `blobs/` before the message exists; when the message is
+  never sent, the file has no `blobs` row. The daemon's first idle step after it starts removes such files once they are a
+  week old (`removeStrayBlobs`). Files a draft or a queued message still holds are kept, and rows, sent images and
+  sessions are never touched. `storage --clean` removes them after an hour, as before.
+- **Images are stored as sent.** Attachments are content-addressed (the sha256 of the original bytes) and an image pasted
+  twice is one file. They are not recompressed: on a real data directory (804 PNGs, mostly full-resolution screenshots)
+  zstd saves 2 to 3%, and smaller encodings (re-deflated PNG, lossless WebP) change the bytes, which would break the hash
+  each session, sync and the model read back. Shrinking an attachment to what a provider sees would lose pixels, so it is
+  not done.
 
 ## Forks share their history
 
