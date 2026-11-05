@@ -1,6 +1,6 @@
 import { estimateTokens, usageContext } from "@mendcode/protocol/wire"
 import { explicitMemoryConsent, memoryWrite, restatesRequest } from "./memory-consent"
-import { condenseCommandOutput, limitToolOutput, pruneToolOutputs as pruneHistoryToolOutputs, redactedToolStream, withReportedSavings } from "./tool-output"
+import { condenseCommandOutput, limitToolOutput, pruneToolOutputs as pruneHistoryToolOutputs, redactedToolStream } from "./tool-output"
 import { recentImageReferences } from "./image-references"
 import { CONTINUITY_TOOLS, continuityResult } from "./continuity"
 import { declaredRoots, expandedShellPatterns, externalPatterns, matchingRule, nestedShellPatterns, permissionMatch, permissionName, permissionPatterns, policyRules, projectRulesOf, splitDeclared, toolDisabled, withoutBlindAllow } from "./permission-rules"
@@ -1443,7 +1443,7 @@ export function createNativeEngine(options: {
     const finish = async (raw: ToolResult, stop = false, shown?: string) => {
       const display = shown ?? (raw.display !== undefined && !raw.isError ? redactSecrets(raw.display).text : undefined)
       // Whatever a tool printed, a secret of this session only ever leaves here as its marker.
-      const masked = withReportedSavings({ result: maskResult(raw, (text) => redactSecrets(maskText(text)).text), tool: call.name })
+      const masked = maskResult(raw, (text) => redactSecrets(maskText(text)).text)
       // Command output filters (tool_output.filters): the full text is saved first and the result starts with its path.
       const condensed = await condenseCommandOutput({ result: masked, tool: call.name, args, limits: options.toolOutput?.(), save: options.saveToolOutput })
       const safe = condensed ?? masked

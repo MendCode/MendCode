@@ -83,6 +83,9 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 - `mendcode session attach ID` opens the session like `mendcode attach ID`.
 - `mendcode --help` is one grouped list of every command, and the help of every command fits 80 columns with one usage line.
 
+- The code graph's "tokens saved" compares each lookup with what you would have used instead (a grep, a line range, reading the file) rather than with whole files. The project map shows none. See [code graph](docs/code-graph.md#how-the-saving-is-estimated).
+- graft's own "tokens saved" line is no longer added to `/usage`, the footer or the map card.
+- The "tokens saved" of command output filters no longer counts output beyond what the model would have been shown.
 - A Claude Code turn after a cancelled one whose background command still ran no longer fails with "`claude` was not
   found"; a Claude Code that refuses to start shows its own reason.
 - Claude Code's reports about background tasks of an earlier or ended process no longer arrive as messages for the model.

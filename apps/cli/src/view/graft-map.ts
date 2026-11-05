@@ -1,5 +1,4 @@
 import type { RenderNode } from "@mendcode/protocol"
-import { graftReportedSavings } from "@mendcode/protocol/wire"
 
 /**
  * The text of graft's `graft_trace_calls` (an MCP tool, so its result has no render spec) read back into a
@@ -9,7 +8,7 @@ import { graftReportedSavings } from "@mendcode/protocol/wire"
  *     calls ← caller (path:L5-L9) [depth 2]
  *     calls → callee (path:L30-L40)
  *
- * graft's own `[graft] tokens saved ≈ N` line, when present, becomes the map's saved-tokens footer. Anything else
+ * graft's own `[graft] tokens saved` line is ignored: MendCode cannot verify it. Anything else
  * returns undefined and the card keeps showing the raw text.
  */
 
@@ -49,10 +48,8 @@ export function graftTraceMap(text: string): MapNode | undefined {
     }
     target.push({ label: clip(edge[2]!, LABEL_MAX), file: clip(edge[3]!, 240), line: Number(edge[4]), ...(edge[5] ? { depth: Math.min(9, Number(edge[5])) } : {}) })
   }
-  const saved = graftReportedSavings(text)
   return {
     type: "codemap",
-    ...(saved !== undefined ? { saved: Math.min(saved, 1_000_000_000) } : {}),
     center: { label: clip(head[1]!, LABEL_MAX), kind: head[2]!, file: clip(head[3]!, 240), line: Number(head[4]) },
     left: { title: "callers", entries: callers, more: more.callers, flow: "in" },
     right: { title: "callees", entries: callees, more: more.callees, flow: "out" },

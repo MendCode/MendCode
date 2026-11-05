@@ -41,7 +41,7 @@ export function sessionBytes(db: import("bun:sqlite").Database, sessionId: strin
   return { tables: out, sessions: own, total: total + own }
 }
 
-export async function runShortSession() {
+export async function runShortSession(options: { fullMemory?: boolean } = {}) {
   const project = path.join(realpathSync(tmpdir()), `mc-demo-${process.pid}`)
   mkdirSync(path.join(project, "src"), { recursive: true })
   writeFileSync(path.join(project, "src/theme.ts"), THEME + "\n")
@@ -52,12 +52,14 @@ export async function runShortSession() {
     project,
     provider: { id: "chatgpt", model: "gpt-6-astra" },
     complete: async () => "Theme Color Hex Values",
+    ...(options.fullMemory ? { extractMemory: async () => [{ scope: "project" as const, category: "conventions", text: "The palette lives in src/theme.ts" }] } : {}),
     steps: [
       [{ type: "tool_call", call: { callId: "call_A4vKrfvbYIx3p8FLqNo8mOyn", name: "read", args: { path: "src/theme.ts" } } }, usage(6796, 23, 0), { type: "finish", reason: "tool_calls" }],
       [...chunks(ANSWER, 3), usage(267, 98, 6656), { type: "finish", reason: "stop" }],
     ],
   })
   const h = harness
+  if (options.fullMemory) await h.client.send({ type: "settings.set", patch: { tier: "full" } })
   const sessionId = await openSession(h, "full")
   h.store.limitCheckpoints.track(sessionId, { provider: "codex", used: { '["codex","primary",1793887462000]': { percent: 63, at: Date.now(), burn: 0 } }, saved: [] })
   const ack = await h.client.send({ type: "user.submit", sessionId, text: PROMPT, attachments: [] })
@@ -99,5 +101,19 @@ test("a turn that changed no file keeps no snapshot row, and its changes read as
     const prompt = h.events.find((event) => event.type === "item.completed" && event.text === PROMPT)
     const reply = await h.client.send({ type: "session.changes", sessionId, ...(prompt?.type === "item.completed" ? { atItemId: prompt.itemId } : {}) })
     expect(reply).toMatchObject({ ok: true, result: { files: [], omittedFiles: 0, complete: false } })
+  } finally { rmSync(project, { recursive: true, force: true }) }
+}, 30_000)
+
+test("full tier with memory generation on stores no extraction row for a turn that was extracted", async () => {
+  const { harness: h, sessionId, project } = await runShortSession({ fullMemory: true })
+  try {
+    await until(() => h.store.memories.list({ directory: h.project }).length > 0)
+    await until(() => h.store.extraction.list().length === 0)
+    const db = new Database(path.join(h.dir, "mendd.db"), { readonly: true })
+    const result = sessionBytes(db, sessionId)
+    db.close()
+    if (process.env.MEND_DISK_REPORT) console.log(JSON.stringify(result, null, 1))
+    expect(result.tables.memory_extractions).toBeUndefined()
+    expect(result.total).toBeLessThan(2_650)
   } finally { rmSync(project, { recursive: true, force: true }) }
 }, 30_000)

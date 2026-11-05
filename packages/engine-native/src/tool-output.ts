@@ -1,5 +1,5 @@
 import { estimateTokens } from "@mendcode/protocol/wire"
-import { graftReportedSavings, redactSecrets, type Settings } from "@mendcode/protocol"
+import { redactSecrets, type Settings } from "@mendcode/protocol"
 import type { ToolResult } from "@mendcode/tools"
 import { filterToolOutput } from "./output-filters"
 
@@ -52,13 +52,6 @@ export function limitToolOutput(result: ToolResult, limits: Settings["tool_outpu
   return { ...result, output: bytes.subarray(0, end).toString("utf8"), truncated: true }
 }
 
-/** A graft lookup states its own saving (`[graft] tokens saved ≈ N`); it joins the output filters in the `/usage` tally as source `graft`. */
-export function withReportedSavings({ result, tool }: { result: ToolResult; tool: string }): ToolResult {
-  if (result.meta?.savedTokens !== undefined || !/(^|__)graft_/.test(tool)) return result
-  const saved = graftReportedSavings(result.output)
-  return saved === undefined ? result : { ...result, meta: { ...result.meta, savedTokens: saved, filter: "graft" } }
-}
-
 /** Estimated header the engine puts above a filtered result (a path is about 80 chars). */
 const FILTER_HEADER_CHARS = 150
 
@@ -75,8 +68,12 @@ export async function condenseCommandOutput(input: { result: ToolResult; tool: s
   if (!filtered) return undefined
   const saved = await save(result.output, !result.truncated).catch(() => undefined)
   if (!saved) return undefined
-  const header = `[filtered ${filtered.filter}: ${filtered.before} → ${filtered.after} lines, ~${filtered.savedTokens} tokens saved. ${saved.complete ? "Full output" : "Output excerpt"}: ${saved.path}]`
-  return { ...result, output: `${header}\n${filtered.output}`, meta: { ...result.meta, outputPath: saved.path, outputComplete: saved.complete, savedTokens: filtered.savedTokens, filter: filtered.filter } }
+  // The model never receives more than the output limits allow, so the saving is measured between what it would have been shown
+  // with and without the filter, not against a raw output of any size (a megabyte of colour codes would otherwise count as a megabyte).
+  const shown = (text: string) => limitToolOutput({ ...result, output: text }, limits).output.length
+  const savedTokens = estimateTokens(Math.max(0, shown(result.output) - shown(filtered.output) - FILTER_HEADER_CHARS))
+  const header = `[filtered ${filtered.filter}: ${filtered.before} → ${filtered.after} lines${savedTokens > 0 ? `, ~${savedTokens} tokens saved` : ""}. ${saved.complete ? "Full output" : "Output excerpt"}: ${saved.path}]`
+  return { ...result, output: `${header}\n${filtered.output}`, meta: { ...result.meta, outputPath: saved.path, outputComplete: saved.complete, ...(savedTokens > 0 ? { savedTokens, filter: filtered.filter } : { filter: filtered.filter }) } }
 }
 
 /** Old tool results are replaceable context, while the last two user turns remain verbatim. */

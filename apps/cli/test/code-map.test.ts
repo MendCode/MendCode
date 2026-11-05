@@ -506,7 +506,7 @@ const GRAFT_TEXT = [
 ].join("\n")
 
 describe("graft trace text as a call map", () => {
-  test("reads the header, callers, callees, depths and graft's own saved-tokens figure", () => {
+  test("reads the header, callers, callees, depths and ignores graft's own saved-tokens figure", () => {
     const map = graftTraceMap(GRAFT_TEXT)!
     expect(map.center).toEqual({ label: "renderToolCard", kind: "function", file: "apps/cli/src/view/tool-card.ts", line: 237 })
     expect(map.left.entries).toEqual([
@@ -517,7 +517,7 @@ describe("graft trace text as a call map", () => {
       { label: "cardRows", file: "apps/cli/src/view/tool-card.ts", line: 254, depth: 1 },
       { label: "computerCard", file: "apps/cli/src/view/computer-card.ts", line: 7, depth: 2 },
     ])
-    expect(map).toMatchObject({ saved: 16_491 })
+    expect(map.saved).toBeUndefined()
     expect(parseRenderSpec(map).ok).toBe(true)
   })
 
@@ -590,12 +590,12 @@ describe("call map in the transcript", () => {
     expect(rowsOf(minimal, 100, 40).some((row) => row.includes("┌"))).toBe(false)
   })
 
-  test("graft's MCP trace result, which has no spec, is drawn as the same map with graft's own saving", () => {
+  test("graft's MCP trace result, which has no spec, is drawn as the same map without graft's own saving", () => {
     const t = transcript({ title: "mcp__graft__graft_trace_calls: renderToolCard", text: GRAFT_TEXT })
     const rows = rowsOf(t, 100, 60).filter((row) => row.trim())
     expect(rows.some((row) => row.includes("┌renderToolCard · 2 callers · 2 callees"))).toBe(true)
     expect(rows.some((row) => row.includes("⠣ computerCard"))).toBe(true)
-    expect(rows.some((row) => row.includes("~16.5K tokens saved"))).toBe(true)
+    expect(rows.some((row) => row.includes("tokens saved"))).toBe(false)
     const other = transcript({ title: "mcp__graft__graft_find_code: x", text: GRAFT_TEXT })
     expect(rowsOf(other, 100, 60).some((row) => row.includes("┌renderToolCard"))).toBe(false)
     const without = transcript({ title: "mcp__graft__graft_trace_calls: renderToolCard", text: GRAFT_TEXT.split("\n").filter((line) => !line.startsWith("[graft] tokens")).join("\n") })

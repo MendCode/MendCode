@@ -12,7 +12,8 @@ test("impact uses the cached pre-edit graph only and reports a bounded caller li
   const impact = await h.call("graph_impact", { path: "a.ts" })
   expect(impact.output).toContain("1 direct callers")
   expect(impact.output).toContain("caller")
-  expect(impact.meta?.savedTokens).toBeGreaterThan(0)
+  // One caller and no importers: the answer is longer than the single rg line it replaces, so no saving is claimed.
+  expect(impact.meta?.savedTokens).toBeUndefined()
   expect(h.scans.length).toBe(scans)
   expect((await h.call("graph_impact", { path: "../escape.ts" })).isError).toBe(true)
 })

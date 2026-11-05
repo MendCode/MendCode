@@ -108,7 +108,24 @@ The terminal draws a `codemap` as a map, not a file list (`apps/cli/src/view/cod
 - graft's own `graft_trace_calls` (an MCP tool, so full tier) has no render spec; its text (`name · kind · path:L1-L2`, then `calls ← caller (path:L..)` and `calls → callee (path:L..) [depth N]` lines) is read back into the same map. Text in any other shape, and graft's other tools, stay as text.
 - Frames for 60x20, 100x30 and 180x50 come from `apps/cli/test/code-map.test.ts` (`GRAFT_MAP_FRAMES=1`).
 - Wide maps size each side to its visible content: the links give up width first, then complete names are reserved, then callers' file suffixes before callees' suffixes. Set `GRAFT_MAP_FRAMES_DIR` to select the frame output directory.
-- `~N tokens saved` is the lookup's own estimate: the bytes of the files the model would otherwise have opened, over four, minus the result. For `graph_find` that is the files of the top three matches, not every match listed. The footer's `~N saved` sums only `graph` savings of the current session and is absent until a graph tool has saved something there.
+- `~N tokens saved` is the lookup's own estimate: the size of what the model would really have used instead, over four, minus the result it got. The footer's `~N saved` sums only `graph` savings of the current session and is absent until a graph tool has saved something there. See [how each saving is estimated](#how-the-saving-is-estimated).
+
+## How the saving is estimated
+
+Each tool is compared with the alternative a model has without the graph, never with whole files it would not have opened. The size of an alternative comes only from what the graph already holds (file size and line count, symbol spans, call edges); no file is read and nothing is run for the figure. An `rg -n` hit is priced as `path:line:` plus 50 bytes, the assumed length of a line (the graph records no line counts, so its cache does not grow; MendCode's own sources average 61 bytes, so 50 keeps the figure low for shorter lines). When an alternative cannot be sized, or the result is not smaller than it, the lookup reports no saving: it never goes negative and is never made up. Figures already stored are not recomputed.
+
+| Tool | Alternative priced |
+|---|---|
+| `graph_find` | `rg -n <query>`: one hit per declaration whose name holds the query and one per distinct calling symbol of those declarations. With `source`, also reading each listed symbol's line range. More than 2,000 matches are not priced. |
+| `graph_callers` `in` | `rg -n <symbol>`: the declaration lines and one hit per caller listed, at every depth. |
+| `graph_callers` `out` | Reading the line range of the symbol, and of each callee that has callees listed. |
+| `graph_file_api` | Reading the file whole. |
+| `graph_impact` | `rg -n` hits for each caller and each importing file listed. |
+| `graph_map` | None: an overview replaces no single read, so it reports no saving. |
+
+The estimate is a floor for the greps: a symbol that calls the name twice, and mentions that are not calls (imports, comments), print more lines in `rg` than the graph counts. It can be above the real output when the declaration or call lines are shorter than the file's average line. The same figure feeds `meta.savedTokens`, the map card and `/usage` (source `graph`).
+
+Command output filters (`ansi`, `tests`, `git`, `tsc`, `search`, `repeats`) are measured on the same text before and after the filter, bounded by the output limits: the saving is what the model would have been shown without the filter minus what it is shown with it, so a megabyte of colour codes counts as at most the cap, not a megabyte. graft's own `[graft] tokens saved` line is not counted anywhere (`/usage`, footer, map card): MendCode cannot verify it and its method compares with whole files.
 
 ## Indexing
 
