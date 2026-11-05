@@ -318,14 +318,45 @@ async function resolveThreads({ gh, repo, number, ids, state, head }: { gh: GhCa
     const thread = threads.get(id)
     if (!thread) continue
     if (!thread.resolved) {
-      const mutation = "mutation($thread:ID!){resolveReviewThread(input:{threadId:$thread}){thread{id isResolved}}}"
-      const answer = await gh({ argv: ["api", "graphql", "--input", "-"], stdin: JSON.stringify({ query: mutation, variables: { thread: thread.id } }) }).catch(() => ({ code: -1, out: "" }))
+      const answer = await resolveThread(gh, thread.id)
       if (answer.code !== 0 && !thread.replied && !await replyFixed({ gh, repo, number, id, commentId: state.published[id]!.commentId, head })) continue
       resolved++
     }
     state.published[id] = { ...state.published[id], threadId: thread.id, resolved: true }
   }
   return resolved
+}
+
+const resolveThread = (gh: GhCall, thread: string) =>
+  gh({ argv: ["api", "graphql", "--input", "-"], stdin: JSON.stringify({ query: "mutation($thread:ID!){resolveReviewThread(input:{threadId:$thread}){thread{id isResolved}}}", variables: { thread } }) }).catch(() => ({ code: -1, out: "" }))
+
+/**
+ * `@mendcode resolve`: closes the open threads of MendCode's own findings that the last review marked fixed, those with its
+ * "Fixed in" reply (left where the reviewing account could not resolve) or recorded resolved in `state`. A thread of a finding
+ * still open, or one a person wrote, is never touched. `failed`: threads GitHub refused to resolve for this account.
+ */
+export async function resolveFixedThreads({ gh, repo, number, state }: { gh: GhCall; repo: string; number: number; state: ReviewState }): Promise<{ resolved: number; failed: number; state: ReviewState }> {
+  const threads = await threadsByFinding(gh, repo, number)
+  const next: ReviewState = { ...state, published: { ...state.published } }
+  let resolved = 0, failed = 0
+  for (const [id, thread] of threads) {
+    if (thread.resolved || !(thread.replied || state.published[id]?.resolved)) continue
+    if ((await resolveThread(gh, thread.id)).code === 0) { resolved++; if (next.published[id]) next.published[id] = { ...next.published[id], threadId: thread.id, resolved: true } } else failed++
+  }
+  return { resolved, failed, state: resolved ? next : state }
+}
+
+/** `resolveFixedThreads` through a provider adapter: the threads its finding markers name that the state records as fixed. */
+export async function resolveFixedThroughProvider({ provider, repo, number, state }: { provider: ReviewProvider; repo: string; number: number; state: ReviewState }): Promise<{ resolved: number; failed: number; state: ReviewState }> {
+  if (!provider.capabilities.resolveThreads || !provider.threads || !provider.resolve) return { resolved: 0, failed: 0, state }
+  const next: ReviewState = { ...state, published: { ...state.published } }
+  let resolved = 0, failed = 0
+  for (const thread of await provider.threads({ repo, number }).catch(() => undefined) ?? []) {
+    const id = /<!-- mendcode:f=([0-9a-f]{40}) -->/.exec(thread.body)?.[1]
+    if (!id || thread.resolved || !state.published[id]?.resolved) continue
+    if (await provider.resolve({ repo, number, discussion: thread.id }).catch(() => false)) { resolved++; next.published[id] = { ...next.published[id], threadId: thread.id, resolved: true } } else failed++
+  }
+  return { resolved, failed, state: resolved ? next : state }
 }
 
 /** One reply under a finding's inline comment: the finding is fixed at `head`. False when it could not be posted. */

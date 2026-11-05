@@ -341,6 +341,24 @@ export function createGitlabProvider({ run, hostname, baseUrl, git }: GitlabDeps
       })
     },
 
+    /** `GET …/labels`: the project's label names (a label added by name that does not exist would be created, so callers check this first). */
+    async repoLabels({ repo }) {
+      const listed = await pages(`${project(repo)}/labels`)
+      return listed.ok ? listed.items.flatMap((item) => typeof (item as { name?: unknown }).name === "string" ? [(item as { name: string }).name] : []) : undefined
+    },
+
+    /** `PUT …/merge_requests/:iid`: `title`, `description` and `add_labels` (added to the labels it has). */
+    async edit({ repo, number, title, body, labels }) {
+      const done = await api(`${project(repo)}/merge_requests/${number}`, { ...(title !== undefined ? { title } : {}), ...(body !== undefined ? { description: body } : {}), ...(labels?.length ? { add_labels: labels.join(",") } : {}) }, "PUT")
+      return done.code === 0 ? { ok: true } : { ok: false, reason: firstLine(done) }
+    },
+
+    /** `POST …/merge_requests/:iid/approve` with the head's `sha`, so an approval of an older head is refused by GitLab. */
+    async approve({ repo, number, head }) {
+      const done = await api(`${project(repo)}/merge_requests/${number}/approve`, { sha: head })
+      return done.code === 0 ? { ok: true } : { ok: false, reason: firstLine(done) }
+    },
+
     /** The source branch and project of the merge request; a fork takes a push only with `allow_collaboration`. */
     async pushTarget({ repo, number }) {
       const done = await api(`${project(repo)}/merge_requests/${number}`)

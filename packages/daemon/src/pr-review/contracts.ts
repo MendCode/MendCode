@@ -233,6 +233,12 @@ export interface ReviewProvider {
   threads?(input: { repo: string; number: number }): Promise<Array<{ id: string; resolved: boolean; body: string }> | undefined>
   /** Resolves one diff thread (only where `capabilities.resolveThreads`). */
   resolve?(input: { repo: string; number: number; discussion: string }): Promise<boolean>
+  /** The names of the repository's labels (for `@mendcode describe`, which adds only a label that exists); undefined when unreadable. */
+  repoLabels?(input: { repo: string }): Promise<string[] | undefined>
+  /** Edits a PR/MR: a new title or description, and labels (names that exist) added to the ones it has. */
+  edit?(input: { repo: string; number: number; title?: string | undefined; body?: string | undefined; labels?: string[] | undefined }): Promise<{ ok: true } | { ok: false; reason: string }>
+  /** Approves `head` of a PR/MR (`@mendcode approve`, when the repository enabled it). */
+  approve?(input: { repo: string; number: number; head: string; body: string }): Promise<{ ok: true } | { ok: false; reason: string }>
   /** Where a fix of the PR's branch is pushed: the branch, its repository path, whether it is a fork and whether it takes a push. */
   pushTarget?(input: { repo: string; number: number }): Promise<PushTarget>
 }

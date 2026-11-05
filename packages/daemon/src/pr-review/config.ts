@@ -125,6 +125,12 @@ export const ReviewConfig = z.strictObject({
    */
   backlog: BacklogConfig,
   /**
+   * What `@mendcode describe` and `@mendcode approve` may do beyond writing the description's MendCode section: `describe_title` lets
+   * describe also replace the pull request's title, `approve` lets `@mendcode approve` submit an approval. Both are off: only the
+   * repository sets them (base branch).
+   */
+  commands: z.strictObject({ describe_title: z.boolean().default(false), approve: z.boolean().default(false) }).default({ describe_title: false, approve: false }),
+  /**
    * Data and generated files (triage.ts) go to readers on a cheap model instead of the review pass whole (readers.ts). `parallel`:
    * readers at once (unset: by the install tier, minimalist 1, balanced 2, full 3). `model`: a cheap model of the reviewer's own
    * provider (reader-models.ts); one off that list is refused with a note and the automatic pick is used. `enabled: false` sends

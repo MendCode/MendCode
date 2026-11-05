@@ -30,7 +30,7 @@ describe("argument words", () => {
   })
 
   test("a blank word lists every word of the command; a partial one puts the exact word, then prefixes, then a word that only contains it", () => {
-    expect(names("pr", "")).toEqual(["pr setup", "pr on", "pr off", "pr review", "pr comments", "pr watch", "pr unwatch", "pr check", "pr watch-repo", "pr unwatch-repo", "pr repos", "pr dashboard", "pr publish", "pr list"])
+    expect(names("pr", "")).toEqual(["pr setup", "pr on", "pr off", "pr review", "pr describe", "pr comments", "pr watch", "pr unwatch", "pr check", "pr watch-repo", "pr unwatch-repo", "pr repos", "pr dashboard", "pr publish", "pr list"])
     expect(names("pr", "watch")).toEqual(["pr watch", "pr watch-repo", "pr unwatch", "pr unwatch-repo"])
     expect(names("pr", "rev")).toEqual(["pr review"])
     expect(names("pr", "zz")).toEqual([])

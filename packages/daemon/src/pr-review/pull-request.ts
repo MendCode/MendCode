@@ -1,3 +1,4 @@
+import { withoutDescribeSection } from "./describe"
 import type { GhCall } from "./publish"
 
 /**
@@ -36,7 +37,8 @@ export async function readPullRequestInfo({ gh, repo, title, body }: { gh?: GhCa
       if (typeof issue.title === "string" && !issue.pull_request) issues.push({ number, title: issue.title.slice(0, 300), body: typeof issue.body === "string" ? issue.body.slice(0, 1500) : "" })
     } catch { /* an unreadable issue is left out */ }
   }
-  return { title: title.slice(0, 300), body: body.slice(0, 4000), issues }
+  // MendCode's own `@mendcode describe` section is its words, not the author's: the pre-merge checks read the author's description.
+  return { title: title.slice(0, 300), body: withoutDescribeSection(body).slice(0, 4000), issues }
 }
 
 /** The pull request's own text inside the review prompt's untrusted block. */
