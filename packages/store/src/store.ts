@@ -88,6 +88,21 @@ function savedSetting(key: string, value: unknown): unknown {
   return Object.fromEntries(Object.entries(value).filter(([id]) => id !== "opencode" && id !== "cursor"))
 }
 
+/** The saved entries of a settings payload that still validate, one key at a time; corrupt JSON reads as no settings. */
+function validSettings(payload: string | undefined): Record<string, unknown> {
+  let raw: Record<string, unknown> = {}
+  try {
+    const parsed: unknown = payload ? JSON.parse(payload) : {}
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) raw = parsed as Record<string, unknown>
+  } catch { /* The history keeps the original; a normal write will refuse to replace corrupt JSON. */ }
+  const clean: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(raw)) {
+    const kept = savedSetting(key, value)
+    if (Settings.safeParse({ [key]: kept }).success) clean[key] = kept
+  }
+  return clean
+}
+
 type MemoryRow = {
   id: string
   scope: string
@@ -615,6 +630,12 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
   const goals = createGoals({ db, now })
   const usagePauses = createUsagePauses(db)
   const acpSettings = createAcpSettings(options.dir)
+  /**
+   * The validated view of the saved settings text. The daemon reads settings over a thousand times between start and the
+   * end of a first turn, and parsing and validating every key each time made tens of MB of garbage per turn. The row is
+   * still read on every call, so a write from any process is seen at once.
+   */
+  let settingsView: { payload: string | undefined; clean: Record<string, unknown> } | undefined
   /** `current` with `patch` merged (`null` removes a key) and validated; `saveAcp` writes the ACP part, which lives in its own file. */
   const mergedSettings = (current: Settings, patch: Record<string, unknown>) => {
     const next: Record<string, unknown> = { ...current }
@@ -1284,17 +1305,9 @@ export function openStore(options: { dir: string; warn?: (message: string) => vo
       },
       /** Runtime view only; unsupported entries remain in storage for a compatible version. */
       get(): Settings {
-        const row = db.query<{ payload: string }, []>("SELECT payload FROM settings WHERE id = 1").get()
-        let raw: Record<string, unknown> = {}
-        try {
-          const parsed: unknown = row ? JSON.parse(row.payload) : {}
-          if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) raw = parsed as Record<string, unknown>
-        } catch { /* The history keeps the original; a normal write will refuse to replace corrupt JSON. */ }
-        const clean: Record<string, unknown> = {}
-        for (const [key, value] of Object.entries(raw)) {
-          const kept = savedSetting(key, value)
-          if (Settings.safeParse({ [key]: kept }).success) clean[key] = kept
-        }
+        const payload = db.query<{ payload: string }, []>("SELECT payload FROM settings WHERE id = 1").get()?.payload
+        if (!settingsView || settingsView.payload !== payload) settingsView = { payload, clean: validSettings(payload) }
+        const clean = structuredClone(settingsView.clean)
         const acpAgents = acpSettings.get()
         delete clean.acpAgents
         if (Object.keys(acpAgents).length) clean.acpAgents = acpAgents

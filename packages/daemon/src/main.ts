@@ -77,7 +77,7 @@ import { sessionsTool, tellTool } from "./peer-tools"
 import { threadsTool } from "./thread-tool"
 import { packagesTool } from "./packages-tool"
 import { sessionMetaTool } from "./session-meta-tool"
-import { createCodeGraphTools, createCodeOverview, createGraphAutopilot, createIndexGate, createIndexer } from "@mendcode/codegraph"
+import { createCodeGraphTools, createCodeOverview, createGraphAutopilot, createIndexGate, createIndexer, scanHostCommand } from "@mendcode/codegraph"
 import { GRAPH_TOOL_PATTERNS, graphIndexMode } from "./graph-gate"
 import { filteredCatalog, modelAllowed } from "./models"
 import { createToolOutputs, toolOutputSettings } from "./tool-output"
@@ -188,7 +188,7 @@ validateRemoteListener(remoteOptions)
 // Code graph tools index lazily on first use; `MENDCODE_CODEGRAPH=0` leaves them out entirely.
 const codegraphStatus = createCodegraphStatus()
 // One indexer for the tools and for the Galaxy panel's code mode (`codegraph.overview`), so both read the same graph of a project.
-const codeIndexer = process.env.MENDCODE_CODEGRAPH === "0" ? undefined : createIndexer({ cacheDir: path.join(dir, "codegraph"), now: Date.now, onIndex: codegraphStatus.publish, onProgress: codegraphStatus.publish })
+const codeIndexer = process.env.MENDCODE_CODEGRAPH === "0" ? undefined : createIndexer({ cacheDir: path.join(dir, "codegraph"), now: Date.now, onIndex: codegraphStatus.publish, onProgress: codegraphStatus.publish, scanHost: scanHostCommand() })
 // Which folders are indexed (docs/code-graph.md): `auto` a git repository under the size limit, or the project's `/graph on|off`.
 const codeGate = codeIndexer ? createIndexGate() : undefined
 const graphGateOf = (cwd: string, signal?: AbortSignal) => codeGate!.check({ cwd, mode: graphIndexMode(extractionSettings(), cwd), signal })

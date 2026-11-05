@@ -107,6 +107,56 @@ The same run in two processes (daemon + client): 142 / 195 MB, 147 / 243, 148 / 
 - Tried, no gain: one collection in the client after 10 s without a frame. Client footprint 60 s after a reply went from 31.3 to 29.4 MB, inside the range of five runs of the build without it (28.9 to 32.6 MB); RSS moved between 43 and 91 MB in either build. Not kept.
 - Tried, no gain: drawing a streaming reply four times a second while the terminal reports (DEC 1004) that it lost focus, with an immediate frame when focus returns. Frames and bytes written fell by 82 % (574 to 101 frames, 4.2 to 0.7 MB), but the client CPU did not follow (about 5 s in both): most of it is handling the 2,250 deltas, not drawing, and the daemon used about 65 % more CPU in that case, because a client that is not busy drawing takes each delta as it arrives instead of in batches. Net CPU was the same or worse, so it was not kept; the saving would be on the terminal's side only.
 - Audit, start-up of the real CLI against a running daemon (instrumented build, cold launches in a pseudo-terminal, 120 by 40, median of 8, load 3 to 4): about 145 ms to the first frame and 8 ms more until a typed key shows. Roughly 90 ms of that is two runtime starts (the terminal restarts itself once without the DFG and FTL tiers, see "JIT tiers"); then the terminal's own modules load while the process connects (the connection waits for the module evaluation on the same thread, about 23 ms for both), the app is created (5 ms), `app.start` runs (3 ms) and the first frame is drawn (8 ms). Nothing before the first frame is waiting on work that could move behind it without changing what is drawn: the daemon round trips take under 1 ms each once connected (`--pure` adds a `daemon.info` round trip of about 75 ms to a launch, which is why `perf-real.ts --no-pure` is the realistic start). Left as it is.
+- Fixed, solo terminal: start-up garbage. A fresh prompt held 41 MB of JS heap of which 24 survived a full collection, and
+  nothing collected it, because the daemon's idle collection only followed a finished turn and the screen's every eighth
+  frame. Its footprint stayed at 87 MB for good; the pages freed after the start peak (104 MB) stayed in RSS as reclaimable
+  memory (22 MB, `footprint PID`). Three changes: the daemon collects once 10 s after start (`STARTUP_GC_MS`,
+  `packages/daemon/src/idle-gc.ts`), the solo terminal collects once (about 5 ms) between hosting the daemon and building
+  its screen (`apps/cli/src/solo.ts`), and the screen collects every second frame during its first 24
+  (`STARTUP_FRAMES`, `apps/cli/src/ui/memory-governor.ts`; an explicit `MENDCODE_GC_FRAMES` keeps its own cadence). A plain
+  `mendcode` no longer evaluates the subcommand parsers (`automation.ts` and what it reaches, about 300 KB of source). The
+  prompt in a pseudo-terminal, clean HOME, 12 s, three launches each, alternating: 148 → 136 MB RSS, footprint 88 → 72,
+  peak 105 → 93 (pi measured the same way: 131 MB RSS, 79 footprint, 94 peak). `scripts/perf-real.ts` (two processes, an
+  18 KB reply): first frame, keystroke p95 and client and daemon CPU inside the range of two pairs (2026-11-03).
+- Tried, no gain: JSC heap sizing (`BUN_JSC_forceRAMSize` 256 and 512 MB; `largeHeapSize` 4 to 16 MB lowered the prompt 3
+  to 4 MB alone and nothing on top of the collections above), a second collection before the daemon starts, and
+  `useConcurrentJIT=0` (1 to 2 MB). Each 300 KB of source not evaluated at start is worth about 1 MB of footprint, so
+  lazy-loading the daemon's rarely used subsystems (about 600 KB) is worth a few MB at most.
+- Fixed, daemon and solo terminal: a turn's garbage. Measured the way a user runs it: logged in, a clean HOME with only
+  the login copied, the prompt in a pseudo-terminal (160 by 45), one read-only question on gpt-6-luna, memory at the prompt
+  (12 s), right after the reply and 30 s later. A first turn took a solo terminal from 145 to about 200 MB RSS (footprint
+  74 → 81). Five causes, five changes:
+  - The settings were read over a thousand times between start and the end of a first turn, each read parsing the stored
+    JSON, validating every key with zod and reading `acp-agents.json`: bursts of about 45 MB of heap capacity at the prompt
+    and at the end of the turn. `store.settings.get` and the ACP file keep their validated view until the stored text changes
+    (`packages/store/src/store.ts`, `acp-settings.ts`); the row is still read on every call. After a turn: 200 → 160 MB RSS.
+  - Bun hands each chunk of a fetch body in a 256 KB buffer of its own, freed only by a collection: the 70 deltas of a short
+    answer held about 32 MB. `sseData` releases each read buffer once it is decoded (`chunk-buffers.ts`, only buffers of
+    at least 64 KB that the chunk fills less than a quarter of; a caller's own bytes are never touched). A headless daemon
+    after one turn: 163 → 148 MB RSS.
+  - The first turn converted the 81 schemas of the main toolset with zod (about 7 MB of short-lived allocations in 18 ms, the
+    turn's largest burst). The daemon now builds them before the first turn, eight at a time with a young collection between
+    (`warm` on the engine port, run by the start-up collection in `idle-gc.ts`). Built in one go at start instead, the prompt
+    rose 6 MB and the turn fell 3: that was not kept.
+  - An idle moment pushed the start-up collection from 10 s to the 30 s idle wait; it no longer does.
+  - The idle and start-up collections, and the screen's start-up frame collections, call `Bun.shrink()` after `Bun.gc(true)`,
+    which hands the freed pages back (`collectAndRelease`). Footprint at the prompt 72 → 65 MB, after a turn 77 → 68.
+  Three alternating launches per tier, medians, against pi measured the same way (2026-11-03): balanced 136 / 64 MB (RSS /
+  footprint) at the prompt, 145 / 66 after the reply; minimalist 135 / 64 and 145 / 68; full 137 / 65 and 148 / 67; pi
+  133 / 81 and 141 / 88.
+- Fixed, solo terminal: the DFG tier. A terminal that hosts the daemon now restarts with the terminal's own JIT profile (no
+  DFG, no FTL; `leanClientEnv`, apps/cli/src/launcher.ts). The one hot loop of the daemon that needed DFG is scanning files
+  for the code graph (this repository, 3,288 files: 1.7 s with it, 2.3 s without). A refresh with at least 256 files to scan
+  now scans them in a process of its own, the binary with `__codegraph-scan` under the user's environment, every tier on
+  (`packages/codegraph/src/scan-host.ts`); its records come back one line per file, in order, and a host that cannot start or
+  dies leaves the files left to the daemon. Indexing this repository from a process without DFG: 2.6 s scanning in it, 1.8 s
+  with the host (1.9 s before, with DFG), and the indexing process ends about 50 MB lower. Logged in, balanced, three
+  alternating launches: 135 → 130 MB RSS at the prompt, 145 → 138 after the reply (pi: 133 and 141), footprint and turn CPU
+  the same. `perf.ts --mode solo`: idle 6 MB lower, after scrolling and streaming 12 to 38 MB lower, stream frames p95
+  4.5 / 6.2 / 6.3 → 5.1 / 6.8 / 6.8 ms (0 / 1,000 / 10,000 messages), first frame the same.
+- Tried, not kept: `BUN_JSC_libpasScavengeContinuously=1` lowers the prompt to 130 MB and 65 footprint but keeps a core busy
+  at rest. `Bun.shrink()` after every collection of a turn gains 1 MB more for about a third more CPU during the turn.
+  `--smol` and `Malloc=1` changed nothing or made it worse.
 - Measured, memory per extra terminal (`perf-real.ts --scenario clients`, real CLI, each terminal in its own project and session, empty sessions, median of five runs): 1, 2, 4 and 8 terminals hold 30, 60, 120 and 232 MB of footprint (464 MB of RSS at 8), about 29 MB of footprint and 58 MB of RSS each; the one daemon goes from 73 to 78 MB of footprint, about 0.7 MB per terminal.
 - Still open: the transcript keeps every loaded event and block of the history it has scrolled through (`history`, `all`, `byItem`); at 10,000 messages that is about 20 MB of heap after a deep scroll, kept until the session changes. Dropping far pages would need the paging protocol to refetch them.
 - A 60 MB `bun --compile` binary starts at 42 MB RSS before any of our code runs (a plain `bun` process: 22 MB). `--bytecode` needs CommonJS output in Bun 1.3.13 and the entries use top-level await.

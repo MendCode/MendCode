@@ -172,6 +172,8 @@ const DEFAULT_MAX_STEPS = 400
  */
 const DEFAULT_COMPACTION_TIMEOUT_MS = 300_000
 const DEFAULT_TASK_STEPS = 150
+/** Tool schemas `warm` builds between two of its caller's collections: about 1 MB of short-lived allocations. */
+const WARM_SPECS_PER_STEP = 8
 /** The tool a user's `!command` runs through. */
 const SHELL_TOOL = "shell"
 /** Inline shell of a custom command: each command's deadline and the size of what may enter the prompt. */
@@ -2176,6 +2178,14 @@ export function createNativeEngine(options: {
       const executed = await runCall(run.turn, { callId: `debug-${run.turn.turnId}`, name: run.tool, args: run.params }, toolset, false, undefined, false, true)
       const { output, truncated, title, isError } = executed.result
       return { tools, result: { output, truncated, title, isError } }
+    },
+    async warm(between) {
+      for (let at = 0; at < tools.length; at += WARM_SPECS_PER_STEP) {
+        for (const tool of tools.slice(at, at + WARM_SPECS_PER_STEP)) toSpec(tool)
+        await between()
+      }
+      void mainToolset.specs
+      await between()
     },
     async runTurn(input): Promise<TurnOutcome> {
       const compound = options.compound?.(input.sessionId)

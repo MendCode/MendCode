@@ -142,6 +142,12 @@ export interface EnginePort {
   /** One such call inside the other harness's turn: the same approvals, authority, masking, output limits and card as a native call. */
   hostCall?(input: { turn: TurnInput; name: string; args: unknown }): Promise<{ output: string; isError: boolean; images?: Array<{ mime: "image/png" | "image/jpeg"; bytes: Uint8Array }> }>
   runTurn(input: TurnInput): Promise<TurnOutcome>
+  /**
+   * Optional: builds, a few at a time, what every first turn builds anyway (the tool schemas), awaiting `between` after each
+   * few so the caller can collect their garbage before it piles up. Built in one go inside a turn, it was that turn's largest
+   * burst of memory.
+   */
+  warm?(between: () => Promise<void>): Promise<void>
   /** Optional: runs the user's own `!command` (`input.text`) without a model call; engines without it reject shell mode. */
   runShell?(input: TurnInput): Promise<TurnOutcome>
   /** Checked after each turn; compaction then runs inside the same turn, before the queue advances (I2, I5). */

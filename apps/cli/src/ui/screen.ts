@@ -42,7 +42,8 @@ export function createScreen(
   options: { images?: ImageLayer; cellPixels?: CellPixels; inline?: boolean; mouse?: boolean; keyboard?: boolean; collectGarbage?: () => void; /** This process replaced one that left its frame on the alternate screen (`/restart`): the first frame paints over it instead of clearing. */ keepFrame?: boolean } = {},
 ) {
   // Frame-driven collection (memory-governor.ts); tests pass `collectGarbage` to watch the schedule.
-  const governor = createMemoryGovernor({ every: framesPerCollection(env), ...(options.collectGarbage ? { collect: options.collectGarbage } : {}) })
+  // An explicit MENDCODE_GC_FRAMES sets the whole cadence, start-up frames included.
+  const governor = createMemoryGovernor({ every: framesPerCollection(env), ...(env.MENDCODE_GC_FRAMES === undefined ? {} : { startupFrames: 0 }), ...(options.collectGarbage ? { collect: options.collectGarbage } : {}) })
   let previous: string[] = []
   let held: Line[] | undefined
   // Inline mode (--no-alt-screen): the chat lives in a region at the bottom of the normal screen and finished output

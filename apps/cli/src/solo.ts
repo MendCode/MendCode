@@ -118,6 +118,10 @@ async function startInProcess(options: HostOptions): Promise<SoloHost> {
   hosting.log = log
   hosting.onStopped = () => { stopped = true }
   const main = await import("../../../packages/daemon/src/main")
+  // The daemon's start-up garbage (its modules, store, catalogs) is collected before the terminal builds its screen, so the
+  // screen reuses those pages instead of asking the system for more: about 5 ms that lower the start peak by about 6 MB
+  // and the resident size of an idle prompt by about 5 (docs/performance.md).
+  Bun.gc(true)
   return {
     attach: main.daemon.attachLoopback,
     log,

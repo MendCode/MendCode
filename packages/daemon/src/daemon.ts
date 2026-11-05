@@ -2862,6 +2862,7 @@ export async function startDaemon(options: DaemonOptions) {
   wakeSettledPrune = idleSettledPrune.wake
   // Once at start too: history settled before this daemon ran (an upgrade, a crash mid-step) seals without waiting for a turn.
   idleSettledPrune.wake()
+  idleGc.started(engine.warm ? (between) => engine.warm!(between) : undefined)
   const idleDeltaFold = createIdleDeltaFold({ clock,
     busy: () => [...actors.values()].some(actorWorking) || scheduler.snapshot().length > 0 || engineJobs() > 0,
     step: () => store.foldStoredDeltas(100),

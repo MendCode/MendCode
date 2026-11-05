@@ -3,7 +3,7 @@ import { parseRemoteFlags, parseTokenCommand, remoteTransport, REMOTE_DISABLED_N
 import { createClient } from "@mendcode/client"
 import { defaultLocalTransport, localEndpointPath, readLocalEndpoint } from "@mendcode/client/local-endpoint"
 import type { GlobalEvent, SessionEvent, SessionId, SessionSummary, Settings, ThemesReport } from "@mendcode/protocol"
-import { helpText, parseAutomation, runAutomation, SCHEMA } from "./automation"
+import type { ParseResult } from "./automation"
 import { COMPAT, compatEnvelope } from "./compat"
 import { computeBuildId } from "@mendcode/build-id"
 import { homedir, tmpdir } from "node:os"
@@ -254,7 +254,12 @@ if (migrate?.isMigrateCommand(argv)) {
   process.exit(await migrate.runMigrateCommand(parsed.command, { out: process.stdout, err: process.stderr, home: homedir() }))
 }
 
-const automation = parseAutomation(globalOptions.offline ? [...argv, "--offline"] : argv)
+// The subcommand parsers and runners (automation.ts and everything it reaches) load only when there is something to parse: a
+// plain `mendcode` opens the terminal without evaluating them.
+const automationArgv = globalOptions.offline ? [...argv, "--offline"] : argv
+const automationModule = automationArgv.length ? await import("./automation") : undefined
+const automation: ParseResult = automationModule?.parseAutomation(automationArgv) ?? { ok: "none" }
+const automationApi = async () => automationModule ?? await import("./automation")
 if (automation.ok === true && automation.command.kind === "storage" && automation.command.offline) {
   if (remoteAttach) { process.stderr.write("error: offline storage compaction is local-only\n"); process.exit(64) }
   if (!automation.command.dryRun) refuseFromSession(arg("dir"), "rewrites the stored sessions")
@@ -339,11 +344,11 @@ if (compat && automation.ok === "none" && startup?.kind !== "run") {
 }
 if (automation.ok === false) {
   if (compat) process.stdout.write(`${JSON.stringify(compatEnvelope({ kind: "error", command: automation.topic ?? "usage", error: { code: "usage", message: automation.message } }))}\n`)
-  else process.stderr.write(`error: ${automation.message}\n${helpText(automation.topic)}`)
+  else process.stderr.write(`error: ${automation.message}\n${(await automationApi()).helpText(automation.topic)}`)
   process.exit(64)
 }
 if (automation.ok === true && automation.command.kind === "help") {
-  process.stdout.write(helpText(automation.command.topic) + (automation.command.topic ? "" : STARTUP_USAGE))
+  process.stdout.write((await automationApi()).helpText(automation.command.topic) + (automation.command.topic ? "" : STARTUP_USAGE))
   process.exit(0)
 }
 if (automation.ok === true && (automation.command.kind === "version" || automation.command.kind === "completion")) {
@@ -353,7 +358,7 @@ if (automation.ok === true && (automation.command.kind === "version" || automati
 if (automation.ok === true) {
   if (automation.command.kind === "generate" && automation.command.backend === "httpapi") {
     const { loadHttpApi, renderHttpApi } = await import("./generate-httpapi")
-    const text = renderHttpApi({ spec: await loadHttpApi(), json: automation.command.json, compat: automation.command.compat, schema: SCHEMA, now: Date.now() })
+    const text = renderHttpApi({ spec: await loadHttpApi(), json: automation.command.json, compat: automation.command.compat, schema: (await automationApi()).SCHEMA, now: Date.now() })
     // The document exceeds a pipe's buffer: exit only after the write is flushed.
     await new Promise<void>((resolve) => process.stdout.write(text, () => resolve()))
     process.exit(0)
@@ -381,7 +386,7 @@ if (startup?.kind === "tui" && /^(\/\$bunfs\/|[A-Za-z]:[\\/]~BUN[\\/])/.test(Bun
   const { leanClientEnv, forgetLeanJit, liveDaemon } = await import("./launcher")
   // Solo is only a wish until the first connection: with a daemon already running this terminal only draws.
   const hosts = soloPending && !(await liveDaemon(daemonDataDir ?? envDataDir()))
-  const lean = leanClientEnv(process.env, hosts)
+  const lean = leanClientEnv(process.env)
   // A terminal that will host the daemon also leaves a Claude Code shell's session variables behind in that restart (inherited-env.ts);
   // it keeps its tuios pane's, being that pane.
   const inherited = hosts ? hostSessionEnvNames(process.env, { pane: false }) : []
@@ -610,7 +615,7 @@ if (automation.ok === true) {
     },
   }
   process.stdout.on("error", (error: NodeJS.ErrnoException) => process.exit(error.code === "EPIPE" ? 0 : 1))
-  const code = await runAutomation(automation.command, {
+  const code = await (await automationApi()).runAutomation(automation.command, {
     client,
     listen: (handler) => void (listener = handler ? { onEvent: handler } : undefined),
     listenGlobal: (handler) => void (globalListener = handler),

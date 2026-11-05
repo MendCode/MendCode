@@ -1,12 +1,12 @@
 import { describe, expect, test } from "bun:test"
-import { createMemoryGovernor, FRAMES_PER_COLLECTION, framesPerCollection } from "../src/ui/memory-governor"
+import { createMemoryGovernor, FRAMES_PER_COLLECTION, framesPerCollection, STARTUP_FRAMES, STARTUP_FRAMES_PER_COLLECTION } from "../src/ui/memory-governor"
 import { createScreen } from "../src/ui/screen"
 import { cells, takeCells } from "../src/view/wrap"
 
 describe("memory governor", () => {
   test("collects once every N frames and starts counting again", () => {
     let collections = 0
-    const governor = createMemoryGovernor({ every: 3, collect: () => void collections++ })
+    const governor = createMemoryGovernor({ every: 3, startupFrames: 0, collect: () => void collections++ })
     for (let i = 0; i < 9; i++) governor.frame()
     expect(collections).toBe(3)
     governor.frame()
@@ -20,7 +20,7 @@ describe("memory governor", () => {
     const cost = [2, 40, 3, 4, 5]
     let clock = 0
     let collections = 0
-    const governor = createMemoryGovernor({ every: 8, now: () => clock, collect: () => { clock += cost[collections++] ?? 1 } })
+    const governor = createMemoryGovernor({ every: 8, startupFrames: 0, now: () => clock, collect: () => { clock += cost[collections++] ?? 1 } })
     const frameAt = new Map<number, number>()
     for (let frame = 1; frame <= 120; frame++) {
       const before = collections
@@ -34,9 +34,34 @@ describe("memory governor", () => {
   test("a collection that costs 250 ms leaves the next 400 frames without another", () => {
     let clock = 0
     let collections = 0
-    const governor = createMemoryGovernor({ every: 8, now: () => clock, collect: () => { collections++; clock += 250 } })
+    const governor = createMemoryGovernor({ every: 8, startupFrames: 0, now: () => clock, collect: () => { collections++; clock += 250 } })
     for (let frame = 0; frame < 400; frame++) governor.frame()
     expect(collections).toBe(1)
+  })
+
+  test("the start-up frames collect every few frames, then the interval applies", () => {
+    let collections = 0
+    const at: number[] = []
+    const governor = createMemoryGovernor({ every: 8, now: () => 0, collect: () => void collections++ })
+    for (let frame = 1; frame <= STARTUP_FRAMES + 16; frame++) {
+      const before = collections
+      governor.frame()
+      if (collections > before) at.push(frame)
+    }
+    const startup = at.filter((frame) => frame <= STARTUP_FRAMES)
+    expect(startup).toEqual(Array.from({ length: STARTUP_FRAMES / STARTUP_FRAMES_PER_COLLECTION }, (_, i) => (i + 1) * STARTUP_FRAMES_PER_COLLECTION))
+    expect(at.filter((frame) => frame > STARTUP_FRAMES)).toEqual([STARTUP_FRAMES + 8, STARTUP_FRAMES + 16])
+  })
+
+  test("only the start-up collections hand the freed pages back, each right after its collection", () => {
+    const order: string[] = []
+    let frame = 0
+    const governor = createMemoryGovernor({ every: 8, now: () => 0, collect: () => void order.push(`collect@${frame}`), release: () => void order.push(`release@${frame}`) })
+    for (frame = 1; frame <= STARTUP_FRAMES + 16; frame++) governor.frame()
+    const releases = order.filter((step) => step.startsWith("release"))
+    expect(releases).toEqual(Array.from({ length: STARTUP_FRAMES / STARTUP_FRAMES_PER_COLLECTION }, (_, i) => `release@${(i + 1) * STARTUP_FRAMES_PER_COLLECTION}`))
+    for (const release of releases) expect(order[order.indexOf(release) - 1]).toBe(release.replace("release", "collect"))
+    expect(order.filter((step) => step.startsWith("collect")).length).toBe(releases.length + 2)
   })
 
   test("0 frames turns it off", () => {

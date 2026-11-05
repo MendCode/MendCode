@@ -69,8 +69,10 @@ export function daemonEnvs(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv[] {
 
 /**
  * JIT tiers left off by default (docs/performance.md, "JIT tiers"). The daemon drops only the top tier (FTL): indexing a
- * 2,873-file project peaks about 40 MB lower and takes 7% longer. A terminal that only draws drops the DFG tier too: after
- * scrolling 10,000 messages and streaming an answer it holds 111 MB instead of 155, with stream frames still under 8 ms p95.
+ * 2,873-file project peaks about 40 MB lower and takes 7% longer. A terminal drops the DFG tier too: after scrolling 10,000
+ * messages and streaming an answer it holds 111 MB instead of 155, with stream frames still under 8 ms p95. A terminal that
+ * hosts the daemon does as well (6 MB less at the prompt and after a turn, the same turn CPU): the one hot loop of the daemon
+ * that needs DFG, scanning a project for its code graph, runs in a process of its own with every tier (codegraph scan-host.ts).
  * It also compiles a function to machine code only after 16 times the usual warm-up (`thresholdForJIT*`): the code that runs
  * every frame still gets there within the first frames, the code that runs a few times per command stays interpreted, and the
  * terminal keeps about 10 MB less after use with the same frame times (docs/performance.md).
@@ -91,9 +93,9 @@ export function forgetLeanJit(env: NodeJS.ProcessEnv = process.env) {
 }
 
 /** The environment a terminal restarts itself under to run with fewer JIT tiers; undefined when it already does or should not. */
-export function leanClientEnv(env: NodeJS.ProcessEnv, hostsDaemon: boolean): NodeJS.ProcessEnv | undefined {
+export function leanClientEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv | undefined {
   if (mendEnv(env, "JIT") === "1" || env.MENDCODE_V2_LEAN_JIT || env.BUN_JSC_useJIT !== undefined || env.BUN_JSC_useDFGJIT !== undefined || env.BUN_JSC_useFTLJIT !== undefined) return undefined
-  return { ...env, ...(hostsDaemon ? LEAN_JIT.daemon : LEAN_JIT.client) }
+  return { ...env, ...LEAN_JIT.client }
 }
 
 /**
