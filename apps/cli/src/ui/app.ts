@@ -858,6 +858,7 @@ export function createApp(input: AppInput) {
     whenIdle,
     prCommand,
     openReviews: reviews.open,
+    openReviewJob: reviews.openJob,
     titleCommand, pinCommand, settleCommand, prMetadata, fanoutCommand,
     openWorkflows,
     workflowCommand,

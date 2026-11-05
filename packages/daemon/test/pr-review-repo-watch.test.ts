@@ -793,6 +793,31 @@ describe("durable review jobs", () => {
     expect(w.watch.jobs.get(job.id)).toMatchObject({ state: "failed", attempts: MAX_JOB_ATTEMPTS, error: expect.stringContaining("interrupted 5 times") })
   })
 
+  test("a manual review of a PR whose automatic review is open joins it; a different PR does not", async () => {
+    const w = durable({ hold: true })
+    await w.watch.watchRepo("ses_a", "/repo")
+    w.gh.state.prs = [{ number: 12, headRefOid: sha(12) }]
+    await w.watch.tick()
+    const open = w.watch.jobs.list().find((job) => job.number === 12)!
+    expect(w.watch.openReview("/repo", 12, "", "global")?.id).toBe(open.id)
+    expect(w.watch.review({ directory: "/repo", sessionId: "ses_a", number: 12, head: "" })).toBe(open.id)
+    expect(w.watch.jobs.list().filter((job) => job.number === 12)).toHaveLength(1)
+    expect(w.watch.openReview("/repo", 13, "", "global")).toBeUndefined()
+  })
+
+  test("a file with several ended records of one folder keeps the newest ended one and the live one", () => {
+    const dir = temp("pr-review-ended-")
+    mkdirSync(path.join(dir, "pr-review"), { recursive: true })
+    const ended = (createdAt: number) => ({ directory: "/repo", sessionId: "ses_a", createdAt, seen: {}, ended: { at: createdAt + 1, reason: "stopped" }, publish: "allowed", commands: [] })
+    const live = { directory: "/repo", sessionId: "ses_a", createdAt: 9, seen: {}, publish: "allowed", commands: [] }
+    writeFileSync(path.join(dir, "pr-review", "watches.json"), JSON.stringify({ version: 1, watches: [ended(1), ended(2), ended(3), live] }))
+    const k = watcher()
+    const loaded = createRepoWatch({ dir, run: k.gh.run, intervalMs: 3_600_000, enabled: () => true, sessionExists: () => true, notify: () => undefined, triggers: async () => ({ opened: true, synchronize: true, ready_for_review: true, drafts: false }), start: async () => undefined })
+    cleanups.push(() => loaded.stop())
+    expect(loaded.rows()).toHaveLength(2)
+    expect(loaded.rows().map((row) => row.state)).toEqual(["ended (stopped)", "watching"])
+  })
+
   test("the same PR and head is queued once: a repeated /pr review, a repeated listing; a new head is a new job", async () => {
     const w = durable({ hold: true })
     await w.watch.watchRepo("ses_a", "/repo")

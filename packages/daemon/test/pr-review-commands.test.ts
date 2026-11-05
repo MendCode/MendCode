@@ -348,13 +348,13 @@ describe("the watch answers commands", () => {
     expect(JSON.parse(readFileSync(file, "utf8")).watches[0].commands).toEqual([])
   })
 
-  test("a kept @mendcode review whose head already has a review by this login (posted by hand) is answered by one reply linking it, without a second review or a model call", async () => {
+  test("a kept @mendcode review whose head already has a review by this login (posted from the user's own session) is answered by one reply linking it, without a second review or a model call", async () => {
     // Seen live: the user's own session posted reviews of #2, #12 and #15 itself while their requests waited for /pr publish on.
     const dir = temp("cmd-data-"), project = temp("cmd-project-")
     const { gh: base, posts, writers } = fakeGh()
     writers.add("carol")
     const head = "d".repeat(40)
-    const reviews = [{ id: 9001, commit_id: head, state: "COMMENTED", body: "## Summary\nReviewed by hand.", user: { login: "nora", type: "User" }, author_association: "NONE" }]
+    const reviews = [{ id: 9001, commit_id: head, state: "COMMENTED", body: "## MendCode review\n\nReviewed in the user's own session.", user: { login: "nora", type: "User" }, author_association: "NONE" }]
     const gh: GhCall = async (input) => input.argv[1] === "repos/acme/app/pulls/12/reviews?per_page=100" ? { code: 0, out: JSON.stringify(reviews) } : base(input)
     const notices: string[] = []
     // The PR as eligibility reads it: the filters are checked (after the commenter, before the reviewed head).
@@ -387,7 +387,7 @@ describe("the watch answers commands", () => {
     const { gh: base, posts, writers } = fakeGh()
     writers.add("carol")
     const head = "d".repeat(40)
-    const review = (login: string, submitted_at: string) => [{ id: 9001, commit_id: head, state: "COMMENTED", body: "## Summary\nReviewed.", user: { login, type: "User" }, author_association: login === "nora" ? "NONE" : "MEMBER", submitted_at }]
+    const review = (login: string, submitted_at: string) => [{ id: 9001, commit_id: head, state: "COMMENTED", body: "## MendCode review\n\nReviewed.", user: { login, type: "User" }, author_association: login === "nora" ? "NONE" : "MEMBER", submitted_at }]
     let reviews = review("nora", "2026-11-02T15:00:50Z")
     const gh: GhCall = async (input) => input.argv[1] === "repos/acme/app/pulls/12/reviews?per_page=100" ? { code: 0, out: JSON.stringify(reviews) } : base(input)
     const notices: string[] = []

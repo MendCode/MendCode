@@ -374,8 +374,18 @@ export function createRepoWatch(options: RepoWatchOptions) {
   function load(): RepoWatchRecord[] {
     try {
       const parsed = File.safeParse(JSON.parse(readFileSync(file, "utf8")))
-      return parsed.success ? carryConsent(parsed.data.watches.flatMap((item) => { const watch = Watch.safeParse(item); return watch.success ? [upgrade(watch.data)] : [] })) : []
+      return parsed.success ? withoutOldEnded(carryConsent(parsed.data.watches.flatMap((item) => { const watch = Watch.safeParse(item); return watch.success ? [upgrade(watch.data)] : [] }))) : []
     } catch { return [] }
+  }
+  /**
+   * A directory keeps at most one stopped watch, its newest (history, and the answer to "may MendCode post here"); older ended
+   * records are dropped: a directory restarted and stopped many times listed every try, and a daemon that lost its network
+   * ended each of them again.
+   */
+  function withoutOldEnded(records: RepoWatchRecord[]): RepoWatchRecord[] {
+    const newest = new Map<string, RepoWatchRecord>()
+    for (const watch of records) if (watch.ended && (newest.get(watch.directory)?.ended?.at ?? -Infinity) <= watch.ended.at) newest.set(watch.directory, watch)
+    return records.filter((watch) => !watch.ended || newest.get(watch.directory) === watch)
   }
   /**
    * The answer to "may MendCode post here" belongs to the directory, not to one watch record: a stopped watch stays in the file
@@ -590,6 +600,18 @@ export function createRepoWatch(options: RepoWatchOptions) {
   }
 
   /**
+   * The open review job a request for `head` of PR `number` by `reviewer` joins instead of becoming a second one. An empty `head` is
+   * a `/pr review`, queued before its head is known (the run fills it in): it joins the reviewer's job that is queued or running for
+   * the PR, whatever head that job has, since that job reviews the PR as it is now (a moved head supersedes it as ever).
+   */
+  function sameReview(directory: string, number: number, head: string, reviewer: string) {
+    const open = openJobs(directory, number).filter((job) => job.reviewer === reviewer && job.coverage !== "audit")
+    if (head) return open.find((job) => job.head === head)
+    const current = find(directory)?.seen[String(number)]?.head
+    return open.find((job) => ["pending", "running", "fixing", "validating"].includes(job.state) && (!job.head || !current || job.head === current))
+  }
+
+  /**
    * Queues a review of one PR head in the ledger. The same directory, PR and head already open is that job (never two); the
    * oldest pending job is cancelled, visibly, when `MAX_QUEUE` wait already.
    */
@@ -597,7 +619,7 @@ export function createRepoWatch(options: RepoWatchOptions) {
   const ownReviewer = (watch: RepoWatchRecord | undefined): ReviewAssignment => watch?.role === "requested" && watch.login ? { reviewer: `personal:${watch.login}`, scope: "personal" } : { reviewer: "global", scope: "global" }
   function enqueueReview({ watch, directory, sessionId, number, head, trigger, pr, assignment = ownReviewer(watch), forge }: { watch: RepoWatchRecord | undefined; directory: string; sessionId: string; number: number; head: string; trigger: ReviewTrigger; pr?: ListedPr | undefined; assignment?: ReviewAssignment | undefined; forge?: { kind: WatchForge["kind"]; repo: string } | undefined }) {
     // One job per reviewer and head: two reviewers routed to one PR each get theirs, the same reviewer never two.
-    const same = openJobs(directory, number).find((job) => job.head === head && job.reviewer === assignment.reviewer)
+    const same = sameReview(directory, number, head, assignment.reviewer)
     if (same) return same.id
     if (head) supersede(directory, number, head)
     const recordOnly = assignment.waiting !== undefined
@@ -650,7 +672,7 @@ export function createRepoWatch(options: RepoWatchOptions) {
     options.notify(sessionId, `${queued} reviews are queued on this daemon (more than its run queue of ${MAX_QUEUE}); new ones are still recorded and run in order, none is dropped. /reviews shows them.`)
   }
   function enqueueCommand(job: Extract<RepoWatchJob, { kind: "command" }>) {
-    if (queue.some((item) => item.comment.id === job.comment.id)) return
+    if (inFlight.has(job.comment.id) || queue.some((item) => item.comment.id === job.comment.id)) return
     if (queue.length >= MAX_QUEUE) queue.shift()
     queue.push(job)
     pump()
@@ -1114,7 +1136,7 @@ export function createRepoWatch(options: RepoWatchOptions) {
     delete record.paused
     delete record.unreadableSince
     delete record.outage
-    watches = [...watches.filter((watch) => watch !== existing), record]
+    watches = withoutOldEnded([...watches.filter((watch) => watch !== existing), record])
     save()
     // With the platform, the first listing runs now, so the answer says which open PRs without a review of their current head it
     // queued (the backlog) and which it did not, and why. Busy with another listing, the next tick does it and says it in a notice.
@@ -1242,6 +1264,8 @@ export function createRepoWatch(options: RepoWatchOptions) {
       if (watch && login) { watch.login = login; save() }
       return login
     },
+    /** The open job a review of `head` (empty: the PR as it is now) by `reviewer` would join, or undefined when it would be a new one. */
+    openReview: (directory: string, number: number, head: string, reviewer: string) => sameReview(directory, number, head, reviewer),
     /** A review asked for by hand (`/pr review`): a durable job queued behind the cap like any other; its id, unless the ledger is full. */
     review(job: Omit<RepoWatchJob, "kind" | "trigger">, assignment?: ReviewAssignment, forge?: { kind: WatchForge["kind"]; repo: string }) { return enqueueReview({ watch: find(job.directory), directory: job.directory, sessionId: job.sessionId, number: job.number, head: job.head, trigger: "manual", ...(assignment ? { assignment } : {}), ...(forge ? { forge } : {}) }) },
     /**

@@ -26,7 +26,7 @@ import { checkoutForge, forgeName, forgeProvider, gatedOff, parseRemoteUrl } fro
 import { listAll, publishReview, publishThroughProvider, reviewerFromBody, reviewerMarker, type GhCall } from "./publish"
 import { explainFinding, failureFollowUp, filteredReply, hasWriteAccess, MAINTAINERS_ONLY, nothingNewReply, replyTo, REPLY_MARKER, runPrCommand, type CommandComment, type FixResult, type ReviewSummary } from "./commands"
 import { pushKept, runFix, type FixSource } from "./fix"
-import { answersRequest, answeredBy,answeredThrough, answersMarker, headReviewedBy, headReviewedThrough, mayPublish, mayPublishThrough, type PublishCheck } from "./publishers"
+import { answersRequest, answeredBy,answeredThrough, answersMarker, headReviewedBy, headReviewedThrough, isMendCodeReview, mayPublish, mayPublishThrough, type PublishCheck } from "./publishers"
 import { readPullRequestInfo } from "./pull-request"
 import { createOutbox } from "./outbox"
 import { failureKind } from "./outage"
@@ -135,6 +135,12 @@ export type PrReviewServiceOptions = {
    * cached part), for a call a killed daemon left open; absent or undefined, only the unknown call is accounted.
    */
   sessionUsage?: (sessionId: string) => PrTokenUsage | undefined
+  /**
+   * One finished model turn of a review, fix or verify child, for `/usage` (the role `prReview`): the directory the reviewer works
+   * for, the child session that ran it (its model is read there) and the tokens it reported, `input` with the cached part. The turn is
+   * already in the days and models of the report as a turn of a hidden session; this says how much of them is the reviewer's.
+   */
+  reviewUsage?: (turn: { directory: string; childSessionId: string | undefined; tokens: PrTokenUsage }) => void
   /** The memory a reviewer's scope allows (daemon.ts binds it to the store); absent, reviews get no memory context. */
   memory?: ReviewMemoryRead
   /** The model window of the owner session's model, for the per-call context budget; absent, the config or the default. */
@@ -194,6 +200,8 @@ const IN_FLIGHT: ReadonlySet<ReviewJob["state"]> = new Set(["running", "fixing",
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error)).replace(/^\[PR_REVIEW\]:\s*/, "")
 /** A checkpoint with work in it: a resume verifies or publishes it instead of reviewing again. */
 const hasProgress = (checkpoint: JobCheckpoint) => checkpoint.result !== undefined || checkpoint.candidates.length > 0 || checkpoint.completedPhases.length > 0
+/** Where a started review is seen: the page, and its reviewer's session (`/reviews open`, as `/loop open` opens a loop's). */
+const OPEN_HINT = (jobId: string) => `/reviews shows its phase; /reviews open ${jobId} opens its reviewer session.`
 /** Platform triggers as eligibility knows them: a stack revalidation, a routing or a recovery is an automatic event like a push. */
 /** A backlog PR is the `opened` event no watch saw: `triggers.opened`, the mode and the filters decide it as they would have. */
 const eligibilityTrigger = (trigger: ReviewTrigger) => trigger === "stack" || trigger === "routed" || trigger === "recovered" ? "synchronize" as const : trigger === "backlog" ? "opened" as const : trigger
@@ -208,6 +216,7 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
   const sleep = options.sleep ?? ((ms: number) => Bun.sleep(ms))
   const root = path.join(options.dir, "pr-review")
   const outbox = createOutbox({ file: path.join(root, "outbox.json"), notify: options.notify, sessionExists: options.sessionExists })
+  const realOutbox = outbox
   const held = new Map<string, Array<() => Promise<void>>>()
   /** The last checkout step queued on each directory: parallel fetches and worktree adds on one `.git` fail on its locks. */
   const checkouts = new Map<string, Promise<unknown>>()
@@ -322,10 +331,13 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
   const accountFor = (job: ReviewJob | undefined, repo: string, number: number, head: string): RunPlatformInput["account"] => job ? ({ purpose, tokens, sessionId }) => {
     try { accounting.record({ repo, number, head: head || job.head || "unknown", reviewer: job.reviewer, jobId: job.id, purpose, attempt: job.attempts + 1, input: tokens.input, output: tokens.output, cached: tokens.cached, unreported: tokens.unreported, ...(sessionId ? { sessionId, parentSessionId: job.sessionId } : {}) }) } catch { /* a bad report is dropped, the review goes on */ }
     try { ledger.addTokens(job.id, tokens) } catch { /* the job may have been pruned */ }
+    try { options.reviewUsage?.({ directory: job.directory, childSessionId: sessionId, tokens }) } catch { /* bookkeeping never stops a review */ }
   } : undefined
   /** The call `job` starts, kept on disk until it ends: one a killed daemon never ended is accounted as unknown at the next start. */
   const callingFor = (job: ReviewJob | undefined, repo: string, number: number, head: string): RunPlatformInput["calling"] => job ? ({ purpose, sessionId }) => {
     const id = accounting.begin({ repo, number, head: head || job.head || "unknown", reviewer: job.reviewer, jobId: job.id, purpose, attempt: job.attempts + 1, ...(sessionId ? { sessionId } : {}) })
+    // The phase /reviews shows while the job runs: the review pass is `analysis`, the verify passes (and a resume's) `corroboration`.
+    try { ledger.checkpoint(job.id, { phase: purpose === "review" ? "analysis" : "corroboration" }) } catch { /* the job may have been pruned */ }
     return () => accounting.end(id)
   } : undefined
   // Calls a previous process left open died with it: accounted now, unknown spend as unknown, plus what their child sessions recorded.
@@ -354,7 +366,7 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
   /** `forge`: GitLab or Gitea by name, for what the session is told; unset on GitHub. */
   type Reviewed = ReviewRun & { repo: string; head: string; base: string; forge?: string | undefined }
   /** `fresh`: the job's checkpoint is not handed to the run (the review of a pushed fix: a new head, its own range). */
-  async function reviewOne({ sessionId, directory, number, publish, manual, job, fresh = false, recheck }: { sessionId: string; directory: string; number: number; publish: boolean; manual: boolean; job?: ReviewJob | undefined; fresh?: boolean; recheck?: readonly PrFinding[] | undefined }): Promise<Reviewed> {
+  async function reviewOne({ sessionId, directory, number, publish, manual, job, fresh = false, recheck, onlyNew = false }: { sessionId: string; directory: string; number: number; publish: boolean; manual: boolean; job?: ReviewJob | undefined; fresh?: boolean; recheck?: readonly PrFinding[] | undefined; onlyNew?: boolean }): Promise<Reviewed> {
     const repo = await repoOf(directory)
     const forge = await forgeOf(directory)
     // GitLab and Gitea: the adapter's facts in the shape gh prints (the MR's diff base is GitLab's `diff_refs.start_sha`).
@@ -394,9 +406,12 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
       const contextWindow = options.contextWindow?.(sessionId)
       const stack = stackOf(directory, repo, current, number)
       const checkpoint = !fresh && current && hasProgress(current.checkpoint) ? current.checkpoint : undefined
+      // `onlyNew` (an `@mendcode review` comment): a head whose ancestor was reviewed with this same config is reviewed like a push
+      // (the commits since, and the open findings re-checked); anything else, and every explicit `/pr review`, reviews the whole PR.
+      const onlyNewCommits = onlyNew && !checkpoint && !!state.lastHead && state.lastHead !== head && state.configKey === configKey
       const reviewed = await review({
         // A watched repository that has not enabled publishing is still reviewed, into this session only: the user started the watch.
-        repo, number, directory: worktree, base: pr.baseRefOid, head, ...(policy ? { policy } : {}), state, git, publish, force: true, full: manual, onlyIfPublishable: !manual,
+        repo, number, directory: worktree, base: pr.baseRefOid, head, ...(policy ? { policy } : {}), state, git, publish, force: true, full: manual && !onlyNewCommits, onlyIfPublishable: !manual,
         publisher: { login, check: (config) => publisherOf(directory, repo, config.publishers) }, read: call,
         sessionFactory: recordedSessions(options.sessions(sessionId, worktree), current?.id),
         // GitLab and Gitea: the title and the description the adapter read (linked issues are read through gh on GitHub), so
@@ -413,7 +428,7 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
         ...(checkpoint ? { checkpoint } : {}),
         ...(recheck?.length ? { recheck } : {}),
       })
-      if (reviewed.status === "published") writeReviewState(options.dir, repo, number, reviewed.state)
+      if (reviewed.status === "published") writeReviewState(options.dir, repo, number, { ...reviewed.state, configKey })
       return { ...reviewed, repo, head, base: pr.baseRefOid, ...(forge ? { forge: forge.name } : {}) }
     } finally {
       await git(["worktree", "remove", "--force", worktree], directory)
@@ -833,7 +848,7 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
     return entry ? { id: entry.id, scope: entry.scope, entry } : { id: "global", scope: "global" }
   }
 
-  async function commentReview({ sessionId, directory, repo, number, head, actor }: { sessionId: string; directory: string; repo: string; number: number; head: string; actor: string }): Promise<ReviewSummary> {
+  async function commentReview({ sessionId, directory, repo, number, head, actor, full = false }: { sessionId: string; directory: string; repo: string; number: number; head: string; actor: string; full?: boolean }): Promise<ReviewSummary> {
     const reviewer = await commandReviewer(directory)
     // `capabilities` without `publish`: the review is made, into this session only, and its claim is not posted either.
     const publishes = mayDo(reviewer.entry, "publish")
@@ -855,8 +870,11 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
     // Held by, or already reviewed on, another device: the comment waits and is answered by that device's review.
     if (!gate.ok) { settleGate(job, gate); throw new JobBusy(gate.reason) }
     try {
-      const done = await reviewOne({ sessionId, directory, number, publish: publishes, manual: true, job })
-      void outbox.say(sessionId, reviewNotice({ repo, number, run: done }))
+      const done = await reviewOne({ sessionId, directory, number, publish: publishes, manual: true, job, onlyNew: !full })
+      if (done.incremental && ledger.get(job.id)?.coverage === "full") patchJob(job.id, { coverage: "incremental" })
+      // Nothing new on a new head posts no review, but this command's reply (a comment) says so: the notice must not say nothing was posted.
+      const answeredByComment = done.status === "published" && !!done.report && !done.report.posted && !done.report.duplicate
+      void outbox.say(sessionId, reviewNotice({ repo, number, run: answeredByComment ? { ...done, reason: "no new review was posted; one comment on the pull request says there is nothing new" } : done }))
       const local = !publishes && reviewer.entry && done.status === "reviewed" ? `the review stays in the reviewer's MendCode session: ${lacksText(reviewer.entry, "publish")}` : undefined
       if (local) void outbox.say(sessionId, `PR review of ${repo}#${number} stays in this session: ${lacksText(reviewer.entry!, "publish")}, so nothing is posted to the pull request and its claim stays on this device.`)
       const current = ledger.get(job.id)
@@ -979,8 +997,31 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
    * the repository lets this reviewer post (`publishers`) and no publisher, this one included, answered it yet. A comment that cannot
    * be answered yet comes back `blocked`: the watch keeps it and runs it again once that can change, and the session is told once.
    */
+  /** What each `@mendcode` comment's session already heard, by comment id (the newest `TOLD_COMMENTS`): one notice per change of state. */
+  const told = new Map<number, Set<string>>()
+  const TOLD_COMMENTS = 200
+  /** Comments whose command runs now in this process: a second offer of the same comment never starts a second run. */
+  const answering = new Set<number>()
   async function commandJob(entry: Extract<RepoWatchJob, { kind: "command" }>): Promise<JobOutcome> {
+    const { comment } = entry
+    if (answering.has(comment.id)) return entry.blocked ? { blocked: entry.blocked } : undefined
+    answering.add(comment.id)
+    try { return await commandJobOnce(entry) } finally { answering.delete(comment.id) }
+  }
+  async function commandJobOnce(entry: Extract<RepoWatchJob, { kind: "command" }>): Promise<JobOutcome> {
     const { sessionId, directory, number, command, comment } = entry
+    // A notice about this comment is said once per state: the same words for the same comment are never said again.
+    const outbox = {
+      say(to: string, text: string) {
+        const known = told.get(comment.id) ?? new Set<string>()
+        if (known.has(text)) return Promise.resolve()
+        known.add(text)
+        told.delete(comment.id)
+        told.set(comment.id, known)
+        if (told.size > TOLD_COMMENTS) told.delete(told.keys().next().value!)
+        return realOutbox.say(to, text)
+      },
+    }
     try {
       const repo = await repoCached(directory)
       const asked = `@mendcode ${command.kind} from ${comment.actor} on ${repo}#${number}`
@@ -1057,7 +1098,8 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
         ...(noFix ? { fixUnavailable: `\`@mendcode fix\` is not run here: ${noFix}. Add \`fix\` to its \`capabilities\` there to let it fix.` } : {}),
         gh: call, repo, number, comment, state, ...via, checked: true,
         send: own && command.kind === "fix" ? async ({ body }) => { ownReplies.push(body.split(REPLY_MARKER)[0]!.trim()); return false } : send,
-        review: () => commentReview({ sessionId, directory, repo, number, head: entry.head, actor: comment.actor }),
+        // `@mendcode review` reviews what is new since the last review of an earlier head; `@mendcode review full` reviews the whole PR.
+        review: () => commentReview({ sessionId, directory, repo, number, head: entry.head, actor: comment.actor, full: /^full\b/i.test(command.arg ?? "") }),
         // The answer is public like the review: in the review's language (`auto` keeps the one this PR's reviews resolved).
         explain: (question) => explainFinding({ sessionFactory: inLanguage(options.sessions(sessionId, directory), resolveReviewLanguage({ configured: config.template.language, stored: state.language }).language), ...question }),
         fixesAllowed: async () => (await fixInfo()).config.fixes,
@@ -1215,6 +1257,8 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
     for (const item of reviews ?? []) {
       const review = item as { id?: unknown; commit_id?: unknown; state?: unknown; body?: unknown; user?: { login?: unknown } | null }
       if (review.commit_id !== head || review.state === "PENDING" || review.state === "DISMISSED" || typeof review.id !== "number" || typeof review.user?.login !== "string" || !sameLogin(review.user.login, login)) continue
+      // A reply in a finding's thread ("Fixed in ...") is a review of this login for GitHub, not a review of the head.
+      if (!isMendCodeReview(review.body)) continue
       const marked = reviewerFromBody(typeof review.body === "string" ? review.body : "")
       if (!marked || marked.reviewer === ours) return review.id
     }
@@ -1505,8 +1549,8 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
   async function reviewedElsewhere(repo: string, number: number, head: string, login: string, directory: string): Promise<number | undefined> {
     const reviews = await reviewsOf(repo, number, directory)
     for (const item of reviews ?? []) {
-      const review = item as { id?: unknown; commit_id?: unknown; state?: unknown; user?: { login?: unknown } | null }
-      if (review.commit_id === head && review.state !== "PENDING" && review.state !== "DISMISSED" && typeof review.id === "number" && typeof review.user?.login === "string" && sameLogin(review.user.login, login)) return review.id
+      const review = item as { id?: unknown; commit_id?: unknown; state?: unknown; body?: unknown; user?: { login?: unknown } | null }
+      if (review.commit_id === head && review.state !== "PENDING" && review.state !== "DISMISSED" && typeof review.id === "number" && typeof review.user?.login === "string" && sameLogin(review.user.login, login) && isMendCodeReview(review.body)) return review.id
     }
     return undefined
   }
@@ -1929,8 +1973,11 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
     // under the id reviewers.yaml gives it: its claims and its per-head review marker then match the watch's own reviews of that head,
     // so a head the watch reviewed as `team` is not posted again as `global`.
     const reviewer = await commandReviewer(directory)
-    watch.review({ directory, sessionId, number, head: "" }, { reviewer: reviewer.id, scope: reviewer.scope }, forge ? { kind: forge.kind, repo: forge.repo } : undefined)
-    return done(`Reviewing #${number}. The findings arrive in this session when the review ends (two passes, no edits).`)
+    // A review of this PR that is queued or running already is the one this request asks for: it joins it, nothing is spent twice.
+    const joined = watch.openReview(directory, number, "", reviewer.id)
+    if (joined) return done(`#${number} is already being reviewed (job ${joined.id}, ${joined.state}${joined.checkpoint.phase ? `, ${joined.checkpoint.phase}` : ""}${joined.head ? `, head ${joined.head.slice(0, 12)}` : ""}); this request joined it, and the findings arrive in the session that started it. ${OPEN_HINT(joined.id)}`)
+    const queued = watch.review({ directory, sessionId, number, head: "" }, { reviewer: reviewer.id, scope: reviewer.scope }, forge ? { kind: forge.kind, repo: forge.repo } : undefined)
+    return done(`Reviewing #${number}. The findings arrive in this session when the review ends (two passes, no edits).${queued ? ` Job ${queued}: ${OPEN_HINT(queued)}` : ""}`)
   }
 
   // Jobs a stopped daemon left queued or running start now, without waiting for a watch's first poll (the pump checks `enabled`).

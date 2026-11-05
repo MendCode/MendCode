@@ -49,6 +49,21 @@ export function budgetPolicy(config: Pick<ReviewConfig, "budget">, { contextWind
  */
 export const countedTokens = (used: PrTokenUsage) => Math.max(0, used.input - (used.cached ?? 0)) + used.output
 
+/** The base every review's scaled budget starts from: the fixed cost of a child that reads the checkout, whatever the size of the diff. */
+export const SCALED_BUDGET_BASE = 150_000
+
+/**
+ * The cap one review runs under: `tokens_per_pr` is the ceiling, and the cap grows with the change from `SCALED_BUDGET_BASE` by
+ * `tokens_per_diff_token` for each token of diff (`diffTokens`, the whole diff, not only one part of it). Undefined when
+ * `tokens_per_pr` is `null` (no internal cap) or the scale is 0 and nothing else bounds it.
+ */
+export function scaledBudget(budget: Pick<ReviewConfig["budget"], "tokens_per_pr" | "tokens_per_diff_token">, diffTokens: number): number | undefined {
+  const ceiling = budget.tokens_per_pr ?? undefined
+  if (ceiling === undefined) return undefined
+  if (!budget.tokens_per_diff_token) return ceiling
+  return Math.min(ceiling, Math.max(10_000, SCALED_BUDGET_BASE + Math.round(budget.tokens_per_diff_token * Math.max(0, diffTokens))))
+}
+
 /** Two usages added field by field; an absent `cached` or `unreported` stays absent when both lack it. */
 export function addUsage(a: PrTokenUsage, b: PrTokenUsage): PrTokenUsage {
   const cached = a.cached === undefined && b.cached === undefined ? undefined : (a.cached ?? 0) + (b.cached ?? 0)

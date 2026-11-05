@@ -78,6 +78,28 @@ export function createReviews(ctx: AppContext, deps: { switchSession(sessionId: 
     timer.unref?.()
   }
 
+  /**
+   * `/reviews open <job id>` (the link a started review's notice carries, as `/loop open <loop id>` is a loop's): the job's reviewer
+   * session when it has one, else the page with a line saying where the job is. A job id is matched whole, by its start or by its end;
+   * a session id opens that session.
+   */
+  async function openJob(target: string) {
+    if (target.startsWith("ses_")) return deps.switchSession(target as SessionId)
+    if (input.remote) return fail("reviews: opening a job works only from a local session")
+    if (!state.sessionId) return fail("no session yet: send a message first")
+    const reply = await input.send({ type: "pr.review", sessionId: state.sessionId, action: "status" })
+    if (!reply.ok) return fail(`reviews: ${clean(reply.error.message)}`)
+    const dashboard = dashboardOf(reply.result)
+    const job = dashboard?.jobs.find((entry) => entry.id === target) ?? dashboard?.jobs.find((entry) => target.length >= 6 && (entry.id.startsWith(target) || entry.id.endsWith(target)))
+    if (!job) return fail(`no review job ${target}`)
+    if (!job.sessionId) {
+      say(`job ${job.id} is ${job.state}${job.phase ? ` · ${job.phase}` : ""}; its reviewer session starts when the review does`, "info", { title: "PR review" })
+      return open()
+    }
+    close()
+    return deps.switchSession(job.sessionId as SessionId)
+  }
+
   function close() {
     visit++
     stopPolling()
@@ -128,5 +150,5 @@ export function createReviews(ctx: AppContext, deps: { switchSession(sessionId: 
     return renderReviewsPage({ data, state: view, width, height, now: now(), offline: state.connection !== "connected", glyphs: ctx.glyphs })
   }
 
-  return { open, key, render, close }
+  return { open, openJob, key, render, close }
 }

@@ -43,13 +43,16 @@ export const ReviewConfig = z.strictObject({
    * its cache) plus output across the review, verify, fix and resumed rounds of one PR head; `null` is no internal cap. It is not
    * the context window: `context_tokens` bounds what one call carries (unset: from the model's window). At the cap or at a real
    * quota the job checkpoints with its candidates kept; `on_quota` says whether it waits for the reset (`wait`) or stops (`stop`).
+   * `tokens_per_diff_token` scales the cap with the change: a review of a small diff is held to a fixed base plus that many tokens
+   * per token of diff, never above `tokens_per_pr`; 0 holds every review to `tokens_per_pr` alone.
    */
   budget: z.strictObject({
     tokens_per_pr: z.number().int().min(10_000).max(1_000_000_000).nullable().default(1_000_000),
+    tokens_per_diff_token: z.number().min(0).max(1_000).default(8),
     context_tokens: z.number().int().min(8_000).max(2_000_000).optional(),
     on_quota: z.enum(["wait", "stop"]).default("wait"),
     max_wait_minutes: z.number().int().min(1).max(10_080).default(360),
-  }).default({ tokens_per_pr: 1_000_000, on_quota: "wait", max_wait_minutes: 360 }),
+  }).default({ tokens_per_pr: 1_000_000, tokens_per_diff_token: 8, on_quota: "wait", max_wait_minutes: 360 }),
   /**
    * Which pull requests start a review by themselves: `auto` on the triggers, `on-request` only when asked (`@mendcode review`, a
    * requested reviewer, `/pr review`), `labels` only with a label in `filters.labels.include`. Filters narrow every mode.

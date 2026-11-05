@@ -32,13 +32,16 @@ describe("who may post", () => {
     expect(await at([review("github-actions[bot]", "NONE", HEAD, "Bot")])).toBe("github-actions[bot]")
   })
 
-  test("a submitted review of the head, hand-written or MendCode's, by this login or a publisher answers @mendcode review; another head, a pending or dismissed review or an outsider's does not", async () => {
-    // Seen live, #12: the user's own session posted review 9001 on head 6d33aa87 by hand, without MendCode's marker.
-    const review = (login: string, association: string, extra: Record<string, unknown> = {}) => ({ id: 9001, commit_id: HEAD, state: "COMMENTED", body: "## Summary\nReviewed by hand.", user: { login, type: "User" }, author_association: association, ...extra })
+  test("a submitted review of the head, MendCode's by this login or any by a publisher, answers @mendcode review; a hand-written note of this login, another head, a pending or dismissed review or an outsider's does not", async () => {
+    // Seen live, #12: the user's own session posted review 9001 on head 6d33aa87 without MendCode's marker, with a MendCode summary.
+    const review = (login: string, association: string, extra: Record<string, unknown> = {}) => ({ id: 9001, commit_id: HEAD, state: "COMMENTED", body: "## MendCode review\n\nReviewed in the user's own session.", user: { login, type: "User" }, author_association: association, ...extra })
     const at = (reviews: unknown[]) => headReviewedBy({ gh: answering({ "repos/acme/app/pulls/12/reviews?per_page=100": JSON.stringify(reviews) }), repo: "acme/app", number: 12, head: HEAD, rule: "maintainers", self: "Alice-Dev" })
     expect(await at([review("alice-dev", "NONE")])).toMatchObject({ login: "alice-dev", id: 9001, mine: true })
     expect(await at([review("bob", "MEMBER")])).toMatchObject({ login: "bob", id: 9001, mine: false })
     expect(await at([review("mallory", "NONE")])).toBeUndefined()
+    // This login's own post counts only when it is a MendCode review: a note by hand or a thread reply under the login does not.
+    expect(await at([review("alice-dev", "NONE", { body: "## Summary\nReviewed by hand." })])).toBeUndefined()
+    expect(await at([review("alice-dev", "NONE", { body: "Fixed in 0384447e: the file is gone." })])).toBeUndefined()
     expect(await at([review("Alice-Dev", "NONE", { commit_id: "d".repeat(40) })])).toBeUndefined()
     expect(await at([review("Alice-Dev", "NONE", { state: "PENDING" })])).toBeUndefined()
     expect(await at([review("Alice-Dev", "NONE", { state: "DISMISSED" })])).toBeUndefined()
@@ -47,7 +50,7 @@ describe("who may post", () => {
   })
 
   test("a review by this same login submitted at or after the comment answers it; one before it, or by someone else, does not", async () => {
-    const review = (login: string, submitted_at: string) => ({ id: 9001, commit_id: HEAD, state: "COMMENTED", body: "## Summary", user: { login, type: "User" }, author_association: "MEMBER", submitted_at })
+    const review = (login: string, submitted_at: string) => ({ id: 9001, commit_id: HEAD, state: "COMMENTED", body: "## MendCode review", user: { login, type: "User" }, author_association: "MEMBER", submitted_at })
     const done = (reviews: unknown[]) => headReviewedBy({ gh: answering({ "repos/acme/app/pulls/12/reviews?per_page=100": JSON.stringify(reviews) }), repo: "acme/app", number: 12, head: HEAD, rule: "maintainers", self: "obed0101" })
     const asked = "2026-11-02T15:00:30Z"
     expect(answersRequest({ done: await done([review("Obed0101", "2026-11-02T15:00:50Z")]), asked })).toBe(true)

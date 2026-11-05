@@ -5,9 +5,11 @@ import type { BudgetUsage } from "./budgets"
 /**
  * Who asked for a model call that is not part of a turn (docs/usage.md, "Auxiliary calls"). Each one is recorded in
  * `usage_auxiliary_daily`: bookkeeping only, no request and no token of its own. `/btw` is not here: its side session runs turns,
- * which `usage.recorded` already counts.
+ * which `usage.recorded` already counts. `prReview` is the exception that attributes: the PR reviewer's child sessions are hidden
+ * sessions whose turns `usage.recorded` already counted in the days and models (and whose per-call rows go with the session), so
+ * this row says how much of those totals the reviewer spent; reports leave it out of "outside turns" sums.
  */
-export const AUXILIARY_ROLES = ["title", "summary", "recap", "memoryExtractor", "memoryAssistant", "memoryConsolidator", "dream", "permissionReviewer", "hook", "agentGenerate", "setup", "loopInterpret"] as const
+export const AUXILIARY_ROLES = ["title", "summary", "recap", "memoryExtractor", "memoryAssistant", "memoryConsolidator", "dream", "permissionReviewer", "hook", "agentGenerate", "setup", "loopInterpret", "prReview"] as const
 export type AuxiliaryRole = (typeof AUXILIARY_ROLES)[number]
 export type AuxiliaryCall = { role: AuxiliaryRole; sessionId?: SessionId | undefined; directory?: string | undefined }
 /** The daemon's budgeted completion for calls outside a turn: `auxiliary` says whose call it is. */

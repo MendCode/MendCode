@@ -18,7 +18,11 @@ import { publishable, rankFindings, spent, VerificationError, verifyFindings, ty
 export type ReviewTurn = { text: string; tokens: { input: number; output: number; cached?: number | undefined } }
 
 /** One child session: `send` runs a turn and returns its last answer and the provider-reported tokens of that turn. */
-export type ReviewSession = { send(prompt: string): Promise<ReviewTurn>; close(): Promise<void> }
+export type ReviewSession = {
+  /** `limit`: the most tokens this turn may count (input not served from the provider's cache plus output) before the daemon stops it. */
+  send(prompt: string, options?: { limit?: number | undefined }): Promise<ReviewTurn>
+  close(): Promise<void>
+}
 /** A fresh child for each call: the verify pass never shares a session with the review that found the bugs. */
 /** `language`: the repository's review language (`template.language`), for a harness that has a language setting of its own to override. */
 export type ReviewSessionFactory = (input: { purpose: "review" | "verify"; language?: string | undefined }) => Promise<ReviewSession>
@@ -160,7 +164,7 @@ export type ReviewOutcome = {
 }
 
 /** `partial`: the review pass of a diff in parts stopped (the budget) after `done` of `total` parts; its summary is the model's only. */
-type Pass = { result: PrReviewResult; sections?: Record<string, string> | undefined; partial?: { done: number; total: number } | undefined }
+type Pass = { result: PrReviewResult; sections?: Record<string, string> | undefined; partial?: { done: number; total: number } | undefined; incomplete?: string | undefined }
 type Tokens = ReviewTurn["tokens"]
 /** Where a review pass of a diff in parts starts: after `done` parts, whose merged pass (findings: the candidates so far) is `pass`. */
 type PassStart = { done: number; pass: Pass }
@@ -175,6 +179,11 @@ export class ReviewPassError extends Error {
     this.name = "ReviewPassError"
   }
 }
+
+/** The share of a review's token budget the review pass may count in its turns; the verify pass has the rest. */
+export const REVIEW_PASS_SHARE = 0.8
+/** A turn is never limited below this: a repair turn after a nearly spent pass still gets room to answer. */
+const MIN_TURN_LIMIT = 5_000
 
 const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? "" : "s"}`
 const budgetText = (budget: number) => Number.isFinite(budget) ? budget.toLocaleString("en-US") : "no internal cap"
@@ -204,6 +213,10 @@ function conclude({ pass, judged, pending, tokens, config, cap, prior }: { pass:
   const { shown, folded } = rankFindings(kept, cap)
   const rejected = judged.length - kept.length
   const notes = [found.summary]
+  // The first pass wrote its summary before the verifier judged anything: a defect it names that the verifier ruled out must not
+  // read as a finding (a published "No findings" next to "found a dispatch defect").
+  const ruledOut = judged.filter((finding) => finding.verdict === "rejected")
+  if (ruledOut.length) notes.push(`The first pass raised ${plural(ruledOut.length, "possible defect")} that verification ruled out, so ${ruledOut.length === 1 ? "it is" : "they are"} not ${ruledOut.length === 1 ? "a finding" : "findings"}: ${ruledOut.slice(0, 3).map((finding) => `${finding.path}:${finding.line} ${finding.summary}`).join("; ")}${ruledOut.length > 3 ? `; and ${ruledOut.length - 3} more` : ""}.`)
   if (pending.length) {
     notes.push(judged.length
       ? `Stopped at the token budget (${budgetText(config.budgetTokens)}); findings it did not verify are not published.`
@@ -256,6 +269,8 @@ export async function reviewPullRequest({ sessionFactory, context, config, cap, 
 async function reviewAndVerify({ sessionFactory, context, config, cap, checks, from, prior }: { sessionFactory: ReviewSessionFactory; context: ReviewContext; config: ReviewEngineConfig; cap: number; checks?: (() => Promise<CheckResult[]>) | undefined; from?: PassStart | undefined; prior?: ReviewCheckpoint | undefined }): Promise<ReviewOutcome> {
   const pass = await reviewPass({ sessionFactory, context, config, from, prior })
   if (pass.partial) return partialStop({ pass, context, config, progressed: !from || pass.partial.done > from.done, prior })
+  // The review pass says it could not review the change: no verifier, no re-check, no post. The work after a pass that read nothing is waste.
+  if (pass.incomplete) return incompleteStop({ pass, config, prior })
   const found = pass.result
   if (!found.findings.length) return conclude({ pass, judged: [], pending: [], tokens: found.tokens, config, cap, prior })
   // The review pass alone spent the budget: every candidate is kept for the resume, none is sent to a verifier.
@@ -297,6 +312,26 @@ function partialStop({ pass, context, config, progressed, prior }: { pass: Pass;
   return {
     result: { ...found, findings: [], dropped: found.dropped + candidates.length, summary, budgetHit: true },
     verified: true, folded: 0, candidates, completedPhases: checkpoint.completedPhases, validation: validationGate({ complete: false, verified: true }), stop, checkpoint,
+    ...(pass.sections ? { sections: pass.sections } : {}),
+  }
+}
+
+/**
+ * A review pass whose child said it could not review the change (a restriction on its tools or mode, files it could not read): the
+ * review is incomplete, never a clean "No findings", and nothing after the pass runs. What it listed is dropped, not verified: a
+ * pass that could not read the change did not ground it. The checkpoint holds no pass, so a retry reviews again from the start.
+ */
+function incompleteStop({ pass, config, prior }: { pass: Pass; config: ReviewEngineConfig; prior?: ReviewCheckpoint | undefined }): ReviewOutcome {
+  const found = pass.result
+  const plan = config.phases ?? DEFAULT_PHASE_PLAN
+  const why = pass.incomplete!
+  const dropped = found.findings.length
+  const checkpoint = passCheckpoint({ pass: undefined, done: 0, total: 1, config, prior })
+  const stop: PrStopReason = { kind: "error", detail: `The review pass could not review the pull request: ${why}`.slice(0, 600), resumable: true, remaining: "the review pass did not finish; a retry reviews it again" }
+  const summary = [found.summary, `The review is incomplete: the review pass could not review the change${dropped ? `; its ${plural(dropped, "unverified finding")} ${dropped === 1 ? "was" : "were"} not kept` : ""}. Nothing was published.`].filter(Boolean).join("\n")
+  return {
+    result: { ...found, findings: [], dropped: found.dropped + dropped, summary, budgetHit: found.budgetHit },
+    verified: true, folded: 0, candidates: [], completedPhases: checkpoint.completedPhases, validation: validationGate({ complete: false, verified: true }), stop, checkpoint,
     ...(pass.sections ? { sections: pass.sections } : {}),
   }
 }
@@ -370,7 +405,7 @@ export async function runReview({ sessionFactory, context, config }: { sessionFa
 async function reviewPass({ sessionFactory, context, config, from, prior }: { sessionFactory: ReviewSessionFactory; context: ReviewContext; config: ReviewEngineConfig; from?: PassStart | undefined; prior?: ReviewCheckpoint | undefined }): Promise<Pass> {
   const parts = context.parts && context.parts.length > 1 ? context.parts : undefined
   if (!parts) {
-    const pass = await onePass({ sessionFactory, context, whole: context, config, notes: true })
+    const pass = await onePass({ sessionFactory, context, whole: context, config, notes: true, used: from ? spent(from.pass.result.tokens) : 0 })
     if (!from) return pass
     const tokens = add(from.pass.result.tokens, pass.result.tokens)
     return { ...pass, result: { ...pass.result, tokens, budgetHit: spent(tokens) > config.budgetTokens } }
@@ -381,12 +416,14 @@ async function reviewPass({ sessionFactory, context, config, from, prior }: { se
     if (merged && spent(merged.result.tokens) >= config.budgetTokens) return { ...merged, partial: { done: index, total } }
     let pass: Pass
     try {
-      pass = await onePass({ sessionFactory, context: partContext(context, index), whole: context, config, notes: false })
+      pass = await onePass({ sessionFactory, context: partContext(context, index), whole: context, config, notes: false, used: merged ? spent(merged.result.tokens) : 0 })
     } catch (error) {
       const left = `${total - index} of ${total} parts of the diff not reviewed`
       throw new ReviewPassError(error, passCheckpoint({ pass: merged, done: index, total, config, prior }), left)
     }
     merged = merged ? mergePasses(merged, pass) : pass
+    // A part the child could not review: the later parts would meet the same restriction, so they are not sent.
+    if (merged.incomplete) break
   }
   const result = merged!.result
   return { ...merged!, result: { ...result, summary: [result.summary, ...context.notes].filter(Boolean).join("\n"), budgetHit: spent(result.tokens) > config.budgetTokens } }
@@ -425,7 +462,9 @@ function mergePasses(a: Pass, b: Pass): Pass {
   const walkthrough = mergeWalkthroughs(a.result.walkthrough, b.result.walkthrough)
   const ids = new Set([...Object.keys(a.sections ?? {}), ...Object.keys(b.sections ?? {})])
   const sections = Object.fromEntries([...ids].map((id) => [id, clip([a.sections?.[id], b.sections?.[id]].filter(Boolean).join("\n\n"), SECTION_TEXT)]))
+  const incomplete = a.incomplete ?? b.incomplete
   return {
+    ...(incomplete ? { incomplete } : {}),
     result: {
       head: a.result.head, base: a.result.base, findings, dropped: a.result.dropped + b.result.dropped + all.length - findings.length,
       summary: clip([a.result.summary, b.result.summary].filter(Boolean).join("\n"), SUMMARY_TEXT), tokens: add(a.result.tokens, b.result.tokens), budgetHit: false,
@@ -439,14 +478,16 @@ function mergePasses(a: Pass, b: Pass): Pass {
  * One review call over `context` (the whole pull request, or one part of it): its findings on `whole`'s diff, its summary (with
  * `whole`'s notes when `notes`), walkthrough and sections.
  */
-async function onePass({ sessionFactory, context, whole, config, notes }: { sessionFactory: ReviewSessionFactory; context: ReviewContext; whole: ReviewContext; config: ReviewEngineConfig; notes: boolean }): Promise<Pass> {
+async function onePass({ sessionFactory, context, whole, config, notes, used = 0 }: { sessionFactory: ReviewSessionFactory; context: ReviewContext; whole: ReviewContext; config: ReviewEngineConfig; notes: boolean; used?: number }): Promise<Pass> {
   const session = await sessionFactory({ purpose: "review" })
   try {
-    let turn = await session.send(reviewPrompt(context, config))
+    // The review pass keeps most of the budget; the verify pass needs the rest. A turn past its share is stopped (`ReviewTurnOverBudget`).
+    const share = Number.isFinite(config.budgetTokens) ? Math.floor(config.budgetTokens * REVIEW_PASS_SHARE) - used : undefined
+    let turn = await session.send(reviewPrompt(context, config), { limit: share === undefined ? undefined : Math.max(MIN_TURN_LIMIT, share) })
     let tokens = turn.tokens
     let parsed = parseFindings(turn.text)
     if (!parsed.ok) {
-      turn = await session.send(repairPrompt(parsed.problems))
+      turn = await session.send(repairPrompt(parsed.problems), { limit: share === undefined ? undefined : Math.max(MIN_TURN_LIMIT, share - spent(tokens)) })
       tokens = add(tokens, turn.tokens)
       parsed = parseFindings(turn.text)
     }
@@ -458,6 +499,7 @@ async function onePass({ sessionFactory, context, whole, config, notes }: { sess
     const asked = new Set((config.sections ?? []).filter((section) => !isBuiltinSection(section.id)).map((section) => section.id))
     const sections = Object.entries(parsed.sections ?? {}).filter(([id]) => asked.has(id))
     return {
+      ...(parsed.incomplete ? { incomplete: parsed.incomplete } : {}),
       result: { head: context.head, base: context.base, findings, dropped: parsed.findings.length - findings.length, summary, tokens, budgetHit, ...(parsed.walkthrough ? { walkthrough: parsed.walkthrough } : {}) },
       ...(sections.length ? { sections: Object.fromEntries(sections) } : {}),
     }

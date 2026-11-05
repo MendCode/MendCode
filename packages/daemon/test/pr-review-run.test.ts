@@ -392,3 +392,37 @@ describe("runAudit", () => {
     expect(kids.turns[0]!.prompt).toContain("src/math.ts")
   })
 })
+
+describe("runPrReview: the review ends early and stays within what its diff earns", () => {
+  test("a first pass that says it could not review ends the review: no verification, nothing published, no 'no new findings'", async () => {
+    const repo = await repository()
+    const github = fakeGh()
+    const turns: string[] = []
+    const factory: ReviewSessionFactory = async ({ purpose }) => ({
+      async send() { turns.push(purpose); return { text: JSON.stringify({ summary: "x", findings: [], incomplete: "my tools are read-only and I could not open the changed files" }), tokens: { input: 1000, output: 50 } } },
+      async close() {},
+    })
+    const run = await runPrReview({ ...baseInput(repo, factory), publish: true, gh: github.gh })
+    expect(turns).toEqual(["review"])
+    expect(github.posts()).toEqual([])
+    expect(run.reason).toContain("review incomplete")
+    expect(run.reason).toContain("nothing was published")
+    expect(run.reason).not.toContain("no new findings")
+  })
+
+  test("a defect the verification discarded is named as ruled out, never as a finding", async () => {
+    const repo = await repository()
+    const factory: ReviewSessionFactory = async ({ purpose }) => ({
+      async send(prompt) {
+        if (purpose === "review") return { text: JSON.stringify({ summary: "Changes the math helpers.", findings: [LOOP, HALF].map(candidate) }), tokens: { input: 100, output: 10 } }
+        const ids = prompt.slice(prompt.indexOf("<findings"), prompt.indexOf("</findings>")).split("\n").flatMap((line) => { try { const value = JSON.parse(line) as { id?: string; path?: string; line?: number }; return value.id ? [value] : [] } catch { return [] } })
+        return { text: JSON.stringify({ verdicts: ids.map((entry) => ({ id: entry.id, verdict: entry.line === 6 ? "rejected" : "confirmed", evidence: [`${entry.path}:${entry.line}`], reason: "the caller never passes odd numbers" })) }), tokens: { input: 100, output: 10 } }
+      },
+      async close() {},
+    })
+    const run = await runPrReview(baseInput(repo, factory))
+    expect(run.outcome!.result.findings.map((finding) => finding.line)).toEqual([3])
+    expect(run.outcome!.result.summary).toContain("ruled out")
+    expect(run.outcome!.result.summary).toContain("half() truncates odd numbers")
+  })
+})

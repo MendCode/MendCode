@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto"
 import type { PrFinding, PrStopReason, PrTokenUsage } from "@mendcode/protocol"
 import type { Graph } from "@mendcode/codegraph"
-import { failureStop, budgetPolicy, stopText } from "./budget"
+import { failureStop, budgetPolicy, scaledBudget, stopText } from "./budget"
 import { buildReviewContext, gitRun, type GitRun, type ReviewContext } from "./context"
 import { ignoredBy, promptConfig, readReviewConfig, type ReviewConfig } from "./config"
 import { effectiveConfig } from "./config-layers"
@@ -14,7 +14,7 @@ import { publishReview, publishThroughProvider, type GhCall, type PublishReport,
 import type { PublishCheck } from "./publishers"
 import { reviewedBy, reviewedThrough } from "./publishers"
 import type { PullRequestInfo } from "./pull-request"
-import { childNotStarted, isStalled, ReviewTurnError, type ReviewTurnStalled } from "./sessions"
+import { childNotStarted, isOverBudget, isStalled, ReviewTurnError, type ReviewTurnOverBudget, type ReviewTurnStalled } from "./sessions"
 import { reviewRange, type ReviewState } from "./state"
 import { fixedFindings, runChecks, type CheckResult } from "./verify"
 
@@ -166,12 +166,12 @@ export function meteredSessions({ factory, account, calling, resuming, failures,
     const of = sessionId ? { sessionId } : {}
     return {
       ...session,
-      async send(prompt: string) {
+      async send(prompt: string, options?: { limit?: number | undefined }) {
         // Kept on disk while the call runs: a daemon killed mid-call leaves it, and the next start accounts it as unknown.
         let ended: (() => void) | undefined
         try { ended = calling?.({ purpose: label, ...of }) } catch { /* accounting never stops a review */ }
         try {
-          const turn = await session.send(prompt)
+          const turn = await session.send(prompt, options)
           const tokens: PrTokenUsage = { input: turn.tokens.input, output: turn.tokens.output, ...(turn.tokens.cached !== undefined ? { cached: turn.tokens.cached } : {}) }
           account?.({ purpose: label, tokens, ...of })
           return turn
@@ -195,6 +195,14 @@ export function turnStop(error: ReviewTurnError, remaining?: string): PrStopReas
   return { ...stop, ...(error.kind !== "error" ? { kind: error.kind } : {}), ...(error.resetsAt !== undefined ? { resetsAt: error.resetsAt } : {}) }
 }
 const providerLimit = (error: unknown): ReviewTurnError | undefined => error instanceof ReviewTurnError && error.kind !== "error" ? error : undefined
+/** A turn the daemon stopped at its token limit as a resumable `budget` stop: what was counted, and which settings raise it. */
+export function overBudgetStop(error: ReviewTurnOverBudget, remaining?: string): PrStopReason {
+  return {
+    kind: "budget",
+    detail: `A model turn reached the token limit of this review (${Math.round(error.used).toLocaleString("en-US")} tokens counted of ${Math.round(error.limit).toLocaleString("en-US")}; the limit follows the size of the diff, budget.tokens_per_diff_token, up to budget.tokens_per_pr) before it answered, so it was stopped.`,
+    unit: "tokens", used: Math.round(error.used), limit: Math.round(error.limit), resumable: true, ...(remaining ? { remaining } : {}),
+  }
+}
 
 export type ReviewAttempt =
   | { ok: true; outcome: ReviewOutcome; limit?: ReviewTurnError | undefined; stalled?: ReviewTurnStalled | undefined }
@@ -229,11 +237,17 @@ export async function attemptReview({ sessionFactory, account, calling, context,
     const remaining = partial?.checkpoint.result ? partial.remaining : "the review pass has not finished"
     const limit = providerLimit(failure)
     if (limit) return { ok: false, stop: turnStop(limit, remaining), checkpoint: kept }
+    if (isOverBudget(failure)) return { ok: false, stop: overBudgetStop(failure, remaining), checkpoint: kept }
     if (isStalled(failure)) return { ok: false, stalled: failure, checkpoint: kept }
     throw failure
   }
   const stalled = failures.filter(isStalled).at(-1)
   if (stalled && outcome.stop && !outcome.verified) return { ok: true, outcome, stalled }
+  const over = failures.filter(isOverBudget).at(-1)
+  if (over && outcome.stop && !outcome.verified) {
+    outcome = { ...outcome, stop: overBudgetStop(over, outcome.stop.remaining), result: { ...outcome.result, summary: outcome.result.summary.replace(/Verification failed \(.*\); nothing was published\./, "Stopped at the token budget before every candidate was verified; nothing was published.") } }
+    return { ok: true, outcome, limit: over }
+  }
   const limit = failures.filter((entry) => !!providerLimit(entry)).at(-1)
   if (limit && outcome.stop && !outcome.verified) {
     outcome = { ...outcome, stop: turnStop(limit, outcome.stop.remaining), result: { ...outcome.result, summary: outcome.result.summary.replace(/Verification failed \(.*\); nothing was published\./, `Stopped by the provider's ${limit.kind === "quota" ? "quota" : "rate limit"} before every candidate was verified; nothing was published.`) } }
@@ -346,7 +360,9 @@ async function reviewRun(input: RunPrReviewInput): Promise<ReviewRun & RunPlatfo
     const plan = planPhases({ config: config.phases, facts: phaseFacts({ context, fixMode: config.fix.mode, stacked: !!input.stack }) })
     const files = context.files.map((file) => file.path)
     const memory = input.memory ? await input.memory({ title: input.pullRequest?.title ?? `${input.repo}#${input.number}`, files }).catch(() => { context.notes.push("The reviewer's memory context could not be read; reviewed without it."); return undefined }) : undefined
-    const engineConfig = engineConfigFor({ config, context, learnings: read.learnings, budgetTokens: budget.tokensPerPr ?? Number.POSITIVE_INFINITY, plan, memory })
+    // The cap follows the change: the whole diff's size (all its parts), under `tokens_per_pr`.
+    const diffTokens = context.parts ? context.parts.reduce((sum, part) => sum + part.tokens, 0) : context.tokens
+    const engineConfig = engineConfigFor({ config, context, learnings: read.learnings, budgetTokens: scaledBudget(config.budget, diffTokens) ?? Number.POSITIVE_INFINITY, plan, memory })
     const checks = config.checks.length ? () => (input.checks ?? ((directory, commands) => runChecks({ directory, commands })))(input.directory, config.checks) : undefined
     const common = { state, config, incremental, configKey, plan }
     const attempt = await attemptReview({ sessionFactory: input.sessionFactory, account: input.account, calling: input.calling, context, config: engineConfig, plan, cap: config.cap, checks, checkpoint: resume })
@@ -356,7 +372,7 @@ async function reviewRun(input: RunPrReviewInput): Promise<ReviewRun & RunPlatfo
       const kept = part ? `${part.done} of ${part.total} parts of the diff reviewed, ${plural(attempt.checkpoint.candidates.length, "candidate finding")}` : undefined
       return { status: "failed", reason: stalledReason(attempt.stalled, kept), ...common, checkpoint: attempt.checkpoint, retryable: true }
     }
-    if (!attempt.ok) return { status: "reviewed", reason: `review incomplete, stopped by the provider's ${attempt.stop.kind === "quota" ? "quota" : "rate limit"}; nothing was published`, ...common, stop: attempt.stop, checkpoint: attempt.checkpoint, retryable: true }
+    if (!attempt.ok) return { status: "reviewed", reason: `review incomplete, stopped ${attempt.stop.kind === "budget" ? "at the token budget" : `by the provider's ${attempt.stop.kind === "quota" ? "quota" : "rate limit"}`}; nothing was published`, ...common, stop: attempt.stop, checkpoint: attempt.checkpoint, ...(attempt.stop.kind === "budget" ? {} : { retryable: true as const }) }
     let outcome = attempt.outcome
     let inherited = 0
     if (input.stack) {
@@ -385,7 +401,8 @@ async function reviewRun(input: RunPrReviewInput): Promise<ReviewRun & RunPlatfo
       const stop = outcome.stop
       if (attempt.stalled) return { status: "failed", reason: stalledReason(attempt.stalled, stop.remaining), ...reviewed, retryable: true }
       if (!outcome.verified && !attempt.limit) return { status: "failed", reason: "verification failed; nothing was published", ...reviewed, stop }
-      return { status: "reviewed", reason: `review incomplete (${stop.kind}); nothing was published`, ...reviewed, stop, ...(attempt.limit ? { retryable: true as const } : {}) }
+      // An "error" stop of a complete verify pass is the review pass saying it could not review the change: its words, not a bare kind.
+      return { status: "reviewed", reason: `review incomplete (${stop.kind === "error" ? stop.detail.replace(/^The review pass/, "the review pass") : stop.kind}); nothing was published`, ...reviewed, stop, ...(attempt.limit ? { retryable: true as const } : {}) }
     }
     if (!outcome.verified) return { status: "failed", reason: "verification failed; nothing was published", ...reviewed }
     const provider = input.provider

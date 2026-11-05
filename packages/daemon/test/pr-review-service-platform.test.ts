@@ -102,7 +102,7 @@ const checkpointOf = (head: string, base: string, extra: Partial<JobCheckpoint> 
 
 type Answer = (input: RunPrReviewInput, call: number) => Partial<ReviewRun> & Pick<ReviewRun, "status">
 
-function harness({ repo, yaml, answer, now, audit }: { repo: Awaited<ReturnType<typeof repository>>; yaml: string; answer: Answer; now?: () => number; audit?: (input: { directory: string; head?: string }) => Promise<AuditRun> }) {
+function harness({ repo, yaml, answer, now, audit, reviewUsage }: { reviewUsage?: NonNullable<Parameters<typeof createPrReviewService>[0]["reviewUsage"]>; repo: Awaited<ReturnType<typeof repository>>; yaml: string; answer: Answer; now?: () => number; audit?: (input: { directory: string; head?: string }) => Promise<AuditRun> }) {
   const gh = fakeGh(repo)
   const data = temp("svc-data-")
   const notices: string[] = []
@@ -116,7 +116,7 @@ function harness({ repo, yaml, answer, now, audit }: { repo: Awaited<ReturnType<
     sessionDirectory: () => repo.dir, sessionExists: () => true, notify: (_session, text) => notices.push(text), sessions, editor,
     schedule: async (job) => { await job() }, random: () => 0.5,
     review: async (input) => { inputs.push(input); const reply = answer(input, inputs.length); return { state: emptyState(), incremental: false, config, ...reply } as ReviewRun },
-    ...(audit ? { audit: audit as never } : {}),
+    ...(audit ? { audit: audit as never } : {}), ...(reviewUsage ? { reviewUsage } : {}),
   })
   cleanups.push(() => service.stop())
   const jobs = () => service.platform.jobs.all()
@@ -126,7 +126,8 @@ function harness({ repo, yaml, answer, now, audit }: { repo: Awaited<ReturnType<
 describe("review jobs through the service", () => {
   test("a new PR is routed (reason on the job), reviewed once as a durable job with its owner, publish identity, tokens and checkpoint, and ends done", async () => {
     const repo = await repository("enabled: true\n")
-    const h = harness({ repo, yaml: "enabled: true\n", answer: (input) => { input.account?.({ purpose: "review", tokens: { input: 100, output: 10 } }); return { status: "reviewed", configKey: "k", checkpoint: checkpointOf(input.head, input.base) } } })
+    const spent: Array<{ directory: string; tokens: unknown }> = []
+    const h = harness({ repo, yaml: "enabled: true\n", reviewUsage: ({ directory, tokens }) => spent.push({ directory, tokens }), answer: (input) => { input.account?.({ purpose: "review", tokens: { input: 100, output: 10 } }); return { status: "reviewed", configKey: "k", checkpoint: checkpointOf(input.head, input.base) } } })
     expect((await h.service.control({ sessionId: "ses_a", action: "watch-repo" })).ok).toBe(true)
     await repo.push(12, "feature", "export const one = 2\n")
     h.gh.prs.push({ number: 12, branch: "feature", baseRef: "main" })
@@ -140,6 +141,8 @@ describe("review jobs through the service", () => {
     expect(h.inputs[0]!.publishAs).toMatchObject({ reviewer: "global", jobId: job!.id, self: "ana" })
     expect(h.inputs[0]!.checkpoint).toBeUndefined()
     expect(h.service.platform.accounting.totals({ repo: "acme/app", number: 12, head: job!.head, reviewer: "global" })?.tokens).toMatchObject({ input: 100, output: 10 })
+    // Each model turn of the review also reaches /usage's prReview role, with the folder the reviewer works for.
+    expect(spent).toEqual([{ directory: repo.dir, tokens: { input: 100, output: 10 } }])
     // An idle poll after the review queues nothing new.
     await h.service.tick()
     expect(h.jobs()).toHaveLength(1)

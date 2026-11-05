@@ -60,6 +60,7 @@ fixes: false            # whether `@mendcode fix` may push a commit to the PR br
 triggers: { opened: true, synchronize: true, ready_for_review: true, drafts: false }
 budget:
   tokens_per_pr: 1000000  # per PR head: input not served from the provider's cache, plus output; null = no internal cap
+  tokens_per_diff_token: 8  # the cap grows with the diff: 150,000 + 8 per diff token, never above tokens_per_pr; 0 = always tokens_per_pr
   context_tokens: 200000  # what one call may carry (half of it is the diff and graph context); unset: 200,000
   on_quota: wait          # wait | stop at a real provider quota (platform module, below)
   max_wait_minutes: 360
@@ -194,7 +195,9 @@ them changed (a fix often inserts the missing call above the flagged line): one 
 GitHub lets only writers and the PR author resolve a thread; where it refuses (a publisher with read access), one reply in the
 thread says `Fixed in <head>` instead. An explicit review (`/pr review`, `pr_review`, `@mendcode review`) re-checks every open
 finding, also on a head reviewed before; when it finds nothing new it posts no second review, and `@mendcode review` gets a reply
-naming the head and the findings still open. A missing or logged-out `gh`
+naming the head and the findings still open. A review counts as a review of a head only when it is a MendCode review (it has the
+`## MendCode review` summary or MendCode's marker) when it comes from your own login: the empty review GitHub records for a thread
+reply (`Fixed in <head>`) or a note written by hand is not one. A missing or logged-out `gh`
 pauses the watch with one notice. A paused watch tries again every 5 minutes, and at the first tick after the daemon starts, and
 resumes by itself with a second notice; `/pr watch-repo` tries at once. It keeps what it saw, so the PRs opened, the heads pushed
 and the `@mendcode` comments written during the pause (every page of them) are handled when it resumes, not taken as a new
@@ -269,7 +272,8 @@ still needs that login's write access. Anything it is refused is said in the ses
 
 | Command | What happens |
 |---|---|
-| `@mendcode review` | Reviews the whole PR (not only the commits since the last review), even a paused PR. A head that already has a review by your login or a counted publisher is not reviewed again: one reply links that review and says "the next push will be reviewed", and the next head is reviewed. A PR the repository's filters keep out of review (an excluded label, branch or author, a bot, `filters.paths`, a draft without `triggers.drafts`, a personal profile's narrowing) gets one reply naming the filter instead, and nothing runs. |
+| `@mendcode review` | Reviews what is new: when a full review of an earlier head exists and the config is unchanged, only the commits since it (like a push), re-checking the open findings; otherwise the whole PR. Even a paused PR. A head that already has a review by your login or a counted publisher is not reviewed again: one reply links that review and says "the next push will be reviewed", and the next head is reviewed. A PR the repository's filters keep out of review (an excluded label, branch or author, a bot, `filters.paths`, a draft without `triggers.drafts`, a personal profile's narrowing) gets one reply naming the filter instead, and nothing runs. |
+| `@mendcode review full` | Reviews the whole PR, like `/pr review`. |
 | `@mendcode pause` / `resume` | New pushes are not reviewed until `resume`; `review` still works. The reply carries `<!-- mendcode:paused=1 -->`, so a hosted runner reads it back. |
 | `@mendcode explain [question]` | As a reply to one of MendCode's review comments: a read-only child reads the code and answers about that finding, and may say it is wrong. |
 | `@mendcode fix [what]` | Held to the same filters as `@mendcode review` (one reply naming the filter). Needs `fixes: true` on the base branch, and a branch in this repository or a fork that allows edits from maintainers. A separate session (the default agent, your normal permission mode, its approvals come to you) edits a throwaway worktree at the head; the base config's checks run on the result; one commit is pushed to the PR's branch only if they pass, never with force. A failing check, no change, or a branch that moved meanwhile pushes nothing and the reply says why. Local daemon only: the hosted workflow's token cannot push. |
@@ -418,6 +422,11 @@ open PRs again. Each poll lists every open PR (up to 1,000), so after a pause or
 reviews requested meanwhile are found from GitHub's current state, not from events that were missed. A daemon start counts as a
 catch-up: its first listing also asks for the work routed to its personal reviewers that no event announced (a review requested, a
 claim that lapsed while it was down).
+
+A second review request for a PR whose review is already queued or running (a repeated `/pr review`, `@mendcode review` on a head
+the watch is reviewing) joins that job: the answer names it and no second review runs. `/reviews` shows a running job with its
+phase (`analysis`, `corroboration`); `/reviews open <job id>` opens its reviewer session (the id is in the "Reviewing #N" notice).
+The same comment is answered once, whatever the number of watches of the repository.
 
 The run queue and the waiting records are counted apart (`/pr list` shows `jobs: N queued, M waiting`; `/reviews` groups jobs by
 state):
@@ -694,6 +703,17 @@ Status: in the daemon. A budget stop leaves the job `checkpointed` with its cand
 once. It runs under the policy on the base branch at that moment, so a budget the repository raised meanwhile applies. A quota or
 rate limit with `on_quota: wait` puts the job in `waiting` until the reset and then resumes the same way. Every model turn is
 recorded in `accounting.json`, under purpose `resume` for a resumed verify pass.
+
+The cap a review actually gets scales with its diff: `min(tokens_per_pr, 150,000 + tokens_per_diff_token x diff tokens)`, so a
+one-commit review cannot spend a whole-PR allowance. It is enforced inside a model turn too: a turn whose reported tokens reach
+what is left of the review pass's share (80%) or of the verify budget is cancelled, and the review ends as incomplete ("stopped at
+the token budget; nothing was published") with its checkpoint, instead of finishing the turn first. A personal config can only
+lower `tokens_per_diff_token`.
+
+When the first pass says it could not review the change (a restriction on its tools or mode, files it could not read: the
+`incomplete` key of its answer, or a summary that says "the review is incomplete" with no findings), the review ends there as
+incomplete, with no verification, nothing published and a notice that says so. A defect the first pass named that verification
+ruled out is listed in the summary as ruled out, never as a finding.
 
 Five limits are kept apart: `budget.tokens_per_pr` (MendCode's own cap per PR head, across review, verify, fix and resumed rounds;
 `null` is no internal cap), `budget.context_tokens` (one call, not a total), the provider's real quota, a rate limit, and the loop

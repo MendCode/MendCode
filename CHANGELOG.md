@@ -11,6 +11,10 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### New
 
+- `/reviews open <job id>` opens a PR review's reviewer session, and a running review shows its phase in `/reviews`. See [PR review](docs/pr-review.md).
+- `@mendcode review full` reviews the whole PR; plain `@mendcode review` reviews only what is new since the last full review. See [PR review](docs/pr-review.md).
+- The PR reviewer's own tokens show in `/usage` as the `prReview` role. See [usage](docs/usage.md#auxiliary-calls).
+- `budget.tokens_per_diff_token` scales a review's token cap with its diff. See [PR review](docs/pr-review.md).
 - `threads` and `sessions` ask for up to 100 sessions (10 by default) and take `query`, `state` and `project` filters. See [peers](docs/peers.md#sessions).
 
 - `/loop` understands phrases in Spanish and English (`/loop cada 5 minutos ve diciéndome`, `/loop daily at 9am check the issues`) and asks for one line of confirmation before it starts; with no interval it paces itself (`adaptive`), and a schedule it cannot read is converted by the small model. The strict form (`/loop every 30m …`) is unchanged. See [loops](docs/loops.md#natural-language).
@@ -89,6 +93,9 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Fixed
 
+- A repeated `/pr review` joins the review already running, and one comment gets one notice however many watches the repository has.
+- A review that cannot read the change ends as incomplete without verifying, and no longer says "nothing was posted: no new findings".
+- A thread reply such as `Fixed in <head>` no longer counts as a review of that head.
 - PR reviews, report-only loops, read-only workflow tasks and side chats on Codex, Pi, ACP and Claude Code are no longer told to present a plan.
 
 - Esc Esc on a message nobody answered yet brings it back into the prompt at once with its images, even with a draft or a queued message behind it; when it cannot, the notice says the model already answered.

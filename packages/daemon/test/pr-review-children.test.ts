@@ -47,7 +47,7 @@ const skill = defineTool({ name: "skill", description: "Load a skill", permissio
 const memoryTools = ["memory", "memory_graph", "remember"].map((name) => defineTool({ name, description: `Stands for ${name}`, permission: "read", args: z.object({}), execute: async () => ({ output: "user memory: prefers tabs", truncated: false, title: name, isError: false }) }))
 
 /** Runs `/pr review 12` in a real daemon whose review child is the scripted model `steps`; returns what the child was offered and got. */
-async function reviewWith(steps: ModelEvent[][]) {
+async function reviewWith(steps: ModelEvent[][], outcome = "reviewed") {
   const { dir: project, base, head } = await repository()
   const data = temp("pr-child-data-")
   const run: GhRun = async ({ argv }) => {
@@ -78,7 +78,7 @@ async function reviewWith(steps: ModelEvent[][]) {
   expect(await client.send({ type: "pr.review", sessionId, action: "review", pr: "12" })).toMatchObject({ ok: true })
   const notice = () => daemon.store.readAfter(sessionId, 0, 10_000).flatMap((event) => event.type === "queue.added" && event.notice && event.text.startsWith("PR review of") ? [event.text] : [])[0]
   for (let i = 0; i < 300 && !notice(); i++) await Bun.sleep(20)
-  expect(notice()).toContain("PR review of acme/app#12: reviewed")
+  expect(notice()).toContain(`PR review of acme/app#12: ${outcome}`)
   // The review turn's last model call holds every tool result of that turn.
   const results = requests.map((request) => request.messages.filter((message) => message.role === "tool")).reduce((most, next) => next.length > most.length ? next : most, [])
   return { offered: requests[0]!.tools.map((tool) => tool.name), results, limits }
@@ -112,4 +112,15 @@ test("a review child gets no skills and no instruction files; a read that names 
   expect(JSON.stringify(results[0])).toContain(REVIEW_APPROVAL_REFUSED)
   expect(JSON.stringify(results[0])).not.toContain("Do not retry")
   expect(JSON.stringify(results[1])).toContain("export const one = 2")
+})
+
+test("a review turn that reports more tokens than the diff earns is cut inside the turn: no further model call, nothing published, an honest reason", async () => {
+  // A one-line diff earns 150k tokens (80% for the review pass); the first call reports 400k, so the turn is cancelled before its next step.
+  const runaway: ModelEvent[] = [{ type: "usage", usage: { input: 400_000, output: 100, reasoning: 0, cacheRead: 0, cacheWrite: 0 } }, ...callTool("read", { path: "a.ts" })]
+  const late = Array.from({ length: 5 }, () => stop(JSON.stringify({ summary: "late", findings: [] })))
+  const steps = [runaway, ...late]
+  const done = await reviewWith(steps, "")
+  expect(done.results).toHaveLength(0)
+  // Every step after the runaway call is still unused: the turn was cancelled instead of being allowed to continue.
+  expect(steps).toHaveLength(5)
 })

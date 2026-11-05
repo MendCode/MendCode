@@ -157,6 +157,7 @@ export function restrictLayer(current: ReviewConfig, layer: ConfigLayer, label: 
           if (part.tokens_per_pr === null) { if (current.budget.tokens_per_pr !== null) refuse("budget.tokens_per_pr", `no cap is above the repository's ${current.budget.tokens_per_pr}`) }
           else budget.tokens_per_pr = current.budget.tokens_per_pr === null ? part.tokens_per_pr as number : atMost("budget.tokens_per_pr", part.tokens_per_pr, current.budget.tokens_per_pr)
         }
+        if ("tokens_per_diff_token" in part) budget.tokens_per_diff_token = atMost("budget.tokens_per_diff_token", part.tokens_per_diff_token, current.budget.tokens_per_diff_token)
         if ("context_tokens" in part) budget.context_tokens = current.budget.context_tokens === undefined ? part.context_tokens as number : atMost("budget.context_tokens", part.context_tokens, current.budget.context_tokens)
         if (part.on_quota === "wait" && current.budget.on_quota === "stop") refuse("budget.on_quota", "the repository stops at a quota; waiting for it is longer")
         else if (part.on_quota !== undefined) budget.on_quota = part.on_quota as ReviewConfig["budget"]["on_quota"]

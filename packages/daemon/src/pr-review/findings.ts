@@ -80,7 +80,11 @@ export function parseSections(raw: unknown): Record<string, string> | undefined 
   return entries.length ? Object.fromEntries(entries) : undefined
 }
 
-export type ParsedFindings = { ok: true; summary: string; findings: PrFinding[]; walkthrough?: PrWalkthrough; sections?: Record<string, string> } | { ok: false; problems: string[] }
+/** `incomplete`: the reason the review child gives when it could not review the change (a restriction on its tools or mode, files it could not read). */
+export type ParsedFindings = { ok: true; summary: string; findings: PrFinding[]; walkthrough?: PrWalkthrough; sections?: Record<string, string>; incomplete?: string } | { ok: false; problems: string[] }
+
+/** The child's own words for "I could not review this", when it improvised them into the summary instead of the `incomplete` key. */
+const SAYS_INCOMPLETE = /(?:the )?review is incomplete/i
 
 /** `{ summary, findings: [...] }` from an answer, every finding valid, or the problems a repair turn is told about. */
 export function parseFindings(text: string): ParsedFindings {
@@ -98,11 +102,15 @@ export function parseFindings(text: string): ParsedFindings {
   if (problems.length) return { ok: false, problems: problems.slice(0, 12) }
   const walkthrough = parseWalkthrough(body.walkthrough)
   const sections = parseSections(body.sections)
-  return { ok: true, summary: typeof body.summary === "string" ? body.summary.slice(0, 4000) : "", findings, ...(walkthrough ? { walkthrough } : {}), ...(sections ? { sections } : {}) }
+  const summary = typeof body.summary === "string" ? body.summary.slice(0, 4000) : ""
+  const said = typeof body.incomplete === "string" ? body.incomplete.trim().slice(0, 600) : ""
+  // The key wins; a summary that says the review is incomplete while it reports nothing counts as the same statement.
+  const incomplete = said || (!findings.length && SAYS_INCOMPLETE.test(summary) ? summary.slice(0, 600) : "")
+  return { ok: true, summary, findings, ...(walkthrough ? { walkthrough } : {}), ...(sections ? { sections } : {}), ...(incomplete ? { incomplete } : {}) }
 }
 
 /** The shape the review child is asked to answer in, quoted in its prompt and in the repair turn. */
-export const FINDINGS_SHAPE = `{"summary": "two or three sentences on what the change does and its risk", "findings": [{"path": "src/file.ts", "line": 42, "endLine": 44, "severity": "${PR_FINDING_SEVERITIES.join("|")}", "category": "${PR_FINDING_CATEGORIES.join("|")}", "summary": "one line, at most 160 characters", "detail": "why it is wrong and what happens, at most 1200 characters", "evidence": ["src/file.ts:42", "src/caller.ts:10"], "suggestion": {"replacement": "the exact new text of lines line..endLine, only when the fix stays inside them"}}], "walkthrough": {"overview": "two to four sentences: what changes and why, for a reader who has not opened the diff", "changes": [{"layer": "a short name for related files, such as Shared status reader", "files": ["src/file.ts"], "summary": "one sentence on what changed in them"}], "diagram": "sequenceDiagram ... (only when the change alters how components call each other; leave the key out otherwise)", "type": "${PR_CHANGE_TYPES.join("|")}", "risk": {"level": "${PR_MERGE_RISKS.join("|")}", "reason": "one or two sentences"}, "checks": [{"name": "Title|Description|Linked issues|Out of scope", "status": "${PR_CHECK_STATUSES.join("|")}", "explanation": "one or two sentences"}]}}`
+export const FINDINGS_SHAPE = `{"summary": "two or three sentences on what the change does and its risk", "findings": [{"path": "src/file.ts", "line": 42, "endLine": 44, "severity": "${PR_FINDING_SEVERITIES.join("|")}", "category": "${PR_FINDING_CATEGORIES.join("|")}", "summary": "one line, at most 160 characters", "detail": "why it is wrong and what happens, at most 1200 characters", "evidence": ["src/file.ts:42", "src/caller.ts:10"], "suggestion": {"replacement": "the exact new text of lines line..endLine, only when the fix stays inside them"}}], "walkthrough": {"overview": "two to four sentences: what changes and why, for a reader who has not opened the diff", "changes": [{"layer": "a short name for related files, such as Shared status reader", "files": ["src/file.ts"], "summary": "one sentence on what changed in them"}], "diagram": "sequenceDiagram ... (only when the change alters how components call each other; leave the key out otherwise)", "type": "${PR_CHANGE_TYPES.join("|")}", "risk": {"level": "${PR_MERGE_RISKS.join("|")}", "reason": "one or two sentences"}, "checks": [{"name": "Title|Description|Linked issues|Out of scope", "status": "${PR_CHECK_STATUSES.join("|")}", "explanation": "one or two sentences"}]}, "incomplete": "only when you could not review the change (a restriction on your tools or mode, files you could not read): one sentence on what stopped you; leave the key out otherwise"}`
 
 /** Keeps a deterministic order and drops the second copy of an id. */
 export function uniqueFindings(findings: readonly PrFinding[]): PrFinding[] {

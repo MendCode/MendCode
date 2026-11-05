@@ -2793,6 +2793,14 @@ export async function startDaemon(options: DaemonOptions) {
       enabled: prReviewOn,
       // This device's capacity, read again at every start: a changed setting applies to the next job (docs/pr-review.md "Concurrency").
       concurrency: () => store.settings.get().prReview?.concurrency,
+      // The reviewer's own spend, per day, model and directory (the role `prReview`): its turns are in the usage totals already, under
+      // whatever model the child ran on, and their per-call rows leave with the child session.
+      reviewUsage: ({ directory, childSessionId, tokens }) => {
+        const choice = childSessionId && store.hasSession(childSessionId as SessionId) ? store.sessionModel(childSessionId as SessionId) : undefined
+        const [provider, model] = choice?.model.includes(":") ? [choice.model.split(":")[0]!, choice.model.slice(choice.model.indexOf(":") + 1)] : ["", choice?.model ?? ""]
+        const cacheRead = tokens.cached ?? 0
+        auxiliaryUsage.record({ role: "prReview", directory }, { provider, model, input: Math.max(0, tokens.input - cacheRead), output: tokens.output, cacheRead }, model)
+      },
       // A review call a killed daemon left open: what its child session recorded, summed as the review sessions add usage.
       sessionUsage: (sessionId) => {
         const total = store.sessionStats.get(sessionId, clock.now())?.usage.total

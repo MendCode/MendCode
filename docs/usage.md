@@ -106,6 +106,12 @@ unknown), under the session or directory it was made for:
 | `agentGenerate` | `/agents` create with a generated definition | `agent-generate.ts` |
 | `setup` | the setup helper's answers | `setup.ask` |
 | `loopInterpret` | `/loop` with a schedule phrase the local parser did not read | `loop.interpret` |
+| `prReview` | the PR reviewer's own turns (review, verify, fix children), one row per day, model and directory | `pr-review/service.ts` |
+
+`prReview` is the one role that attributes instead of adding: the reviewer's child sessions are hidden sessions whose turns the
+days and models already count (and their per-call rows go when the session is deleted), so its row says how much of those totals
+was the reviewer's. It is listed marked "(in the totals above)" and left out of the "outside turns" sum. Its input is what the
+provider did not serve from its cache; cached tokens are in `cacheRead`.
 
 `/btw` is not in the list: its side session runs turns, already counted as turn usage.
 

@@ -94,6 +94,22 @@ export class ReviewTurnStalled extends ReviewTurnError {
   }
 }
 export const isStalled = (error: unknown): error is ReviewTurnStalled => error instanceof ReviewTurnStalled
+/**
+ * A turn the daemon stopped because it spent its token limit (`limit`, in tokens not served from the provider's cache plus output)
+ * before it answered: a child that keeps reading past the budget of this change. Its kind is `error` (not a provider limit); the run
+ * turns it into a resumable `budget` stop that says which limit to raise.
+ */
+export class ReviewTurnOverBudget extends ReviewTurnError {
+  readonly limit: number
+  readonly used: number
+  constructor(limit: number, used: number) {
+    super(`[PR_REVIEW]: the review turn was stopped at its token budget: ${Math.round(used).toLocaleString("en-US")} tokens counted of ${Math.round(limit).toLocaleString("en-US")} before it answered`, "error")
+    this.name = "ReviewTurnOverBudget"
+    this.limit = limit
+    this.used = used
+  }
+}
+export const isOverBudget = (error: unknown): error is ReviewTurnOverBudget => error instanceof ReviewTurnOverBudget
 /** The approval was answered, or the child works again: its items, its turn, its usage, or a state other than waiting for one. */
 const endsApprovalWait = (event: SessionEvent) =>
   event.type === "server.request.resolved" || event.type.startsWith("item.") || event.type.startsWith("turn.") || event.type === "usage.recorded"
@@ -127,7 +143,7 @@ export function inLanguage(factory: ReviewSessionFactory, language: string): Rev
 
 type Ended = { ok: true; turn: ReviewTurn } | { ok: false; error: ReviewTurnError }
 /** `last`: when the child last sent any event; `asking`: a fix session's approval is with the user, so silence is not a stall. */
-type Waiting = { text: string; message?: string; tokens: ReviewTurn["tokens"]; reported: boolean; last: number; asking: boolean; done(result: Ended): void }
+type Waiting = { text: string; message?: string; tokens: ReviewTurn["tokens"]; reported: boolean; last: number; asking: boolean; limit?: number | undefined; done(result: Ended): void }
 
 export function createReviewSessions(deps: {
   /**
@@ -188,9 +204,9 @@ export function createReviewSessions(deps: {
       if (editing) editors.add(id)
       return {
         id,
-        async send(prompt) {
+        async send(prompt, options) {
           const started = clock()
-          const ended = new Promise<Ended>((resolve) => waiting.set(id, { text: "", tokens: { input: 0, output: 0, cached: 0 }, reported: false, last: started, asking: false, done: resolve }))
+          const ended = new Promise<Ended>((resolve) => waiting.set(id, { text: "", tokens: { input: 0, output: 0, cached: 0 }, reported: false, last: started, asking: false, limit: options?.limit, done: resolve }))
           const unwatch = watchTurn(id, started)
           try {
             await deps.submit(id, prompt, editing)
@@ -222,6 +238,15 @@ export function createReviewSessions(deps: {
       case "usage.recorded":
         entry.tokens = { input: entry.tokens.input + event.input + event.cacheRead + event.cacheWrite, output: entry.tokens.output + event.output, cached: (entry.tokens.cached ?? 0) + event.cacheRead }
         entry.reported = true
+        {
+          const counted = entry.tokens.input - (entry.tokens.cached ?? 0) + entry.tokens.output
+          if (entry.limit !== undefined && counted >= entry.limit) {
+            const limit = entry.limit
+            entry.limit = undefined
+            void deps.cancel(event.sessionId)
+            entry.done({ ok: false, error: withSpent(new ReviewTurnOverBudget(limit, counted), entry.tokens, true) })
+          }
+        }
         return
       case "server.request":
         if (editors.has(event.sessionId)) { entry.asking = true; return }
