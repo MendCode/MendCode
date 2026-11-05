@@ -62,7 +62,7 @@ function wholeAdded(file: FileDiff, added: readonly string[], removed: readonly 
 export function localFacts(file: FileDiff): LocalFacts {
   const { added, removed, stats } = diffLines(file)
   const binary = /^(Binary files .* differ|GIT binary patch)$/m.test(file.text.slice(0, 4_000))
-  const facts: LocalFacts = { nan: 0, absolute: [], secrets: [], binary, huge: stats.addedChars > HUGE_CHARS }
+  const facts: LocalFacts = { nan: 0, absolute: [], secrets: [], binary, huge: stats.addedChars > HUGE_CHARS || !!file.size }
   const whole = wholeAdded(file, added, removed)
   const ext = file.path.slice(file.path.lastIndexOf(".") + 1).toLowerCase()
   if (whole !== undefined && ext === "json" && whole.length <= 8_000_000) {
@@ -75,7 +75,7 @@ export function localFacts(file: FileDiff): LocalFacts {
       } else if (value && typeof value === "object") facts.keys = Object.keys(value).slice(0, 30)
     } catch { /* NaN and Infinity are not JSON: counted below, and the reader is told */ }
   }
-  if ((ext === "jsonl" || ext === "ndjson") && added.length) {
+  if ((ext === "jsonl" || ext === "ndjson") && added.length && !file.size) {
     facts.records = added.filter((line) => line.trim()).length
     try { const first = JSON.parse(added[0]!) as unknown; if (first && typeof first === "object" && !Array.isArray(first)) facts.keys = Object.keys(first).slice(0, 30) } catch { /* not a record line */ }
   }

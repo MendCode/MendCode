@@ -2,7 +2,7 @@ import type { Line } from "../ui/theme"
 import { truncateEnd } from "./wrap"
 
 /**
- * The `/` filter of a page, shared so every page searches the same way: `/` opens it, typed keys edit the query, Backspace deletes,
+ * The `/` filter of a page, shared so every page searches the same way: `/` opens it, typed keys edit the query, Backspace deletes, Ctrl+U clears the text, `/` on a closed box that kept its query reopens it with that text,
  * Esc closes it (the query cleared), Enter keeps the query and closes the box. A page holds a `PageSearch`, passes keys to
  * `pageSearchKey` first, filters its own items with `searchMatches`, and draws `pageSearchRow` where its box goes.
  */
@@ -13,14 +13,21 @@ export const closedSearch = (): PageSearch => ({ open: false, query: "" })
 
 /** Undefined when the key is not the search's (the page handles it); otherwise the next search and what happened. */
 export function pageSearchKey(search: PageSearch | undefined, key: string): PageSearchResult | undefined {
-  if (!search?.open) return key === "/" ? { search: { open: true, query: "" }, event: "changed" } : undefined
+  // `/` opens the box; one still holding a kept query takes it back with its text.
+  if (!search?.open) return key === "/" ? { search: { open: true, query: search?.query ?? "" }, event: "changed" } : undefined
   if (key === "\x1b") return { search: closedSearch(), event: "closed" }
   if (key === "\r") return { search: { open: false, query: search.query }, event: "submitted" }
+  if (key === "\x15") return { search: { ...search, query: "" }, event: "changed" }
   if (key === "\x7f" || key === "\b") return { search: { ...search, query: search.query.slice(0, -1) }, event: "changed" }
   if (/^[^\x00-\x1f\x7f-\x9f]+$/u.test(key)) return { search: { ...search, query: (search.query + key).slice(0, 80) }, event: "changed" }
   // Arrows and the other keys move in the filtered list while the box is open.
   return undefined
 }
+
+/** The hint row while a page's search is open: the same words on every page. */
+export const SEARCH_HINT = "type to filter · ↑↓ row · enter go · esc clear"
+/** The page's own hint row, or the shared one while its search box is open. */
+export const searchHint = (search: PageSearch | undefined, normal: string) => (search?.open ? SEARCH_HINT : normal)
 
 /** Whether every word of `query` is in one of `fields` (any case); an empty query matches everything. */
 export function searchMatches(query: string, fields: readonly string[]): boolean {

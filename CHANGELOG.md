@@ -17,7 +17,8 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 - `mendcode usage --quota [--json]` prints the quota windows the footer shows, read from the running daemon; nothing is sent to a provider. See [usage](docs/usage.md#quota-from-the-command-line).
 - A session that runs `mendcode run --permission smart` above its own mode now asks you on one card (model, folder, mode, title, prompt) when your terminal has it open; approving starts that child with that prompt only. Without you there it is still refused, and the error gives the command to run yourself. See [permissions](docs/permissions.md#what-a-session-cannot-do-from-its-own-shell).
 - `/customize` is regrouped: the common sections first (Look, Home, Prompt & footer, Chat, Activity), Extensions, Views, the slash menu and terminal internals under Advanced. A row that depends on one switched off is hidden with it. See [customize](docs/customize.md).
-- `/` in `/customize` filters the rows by name, section or what they change.
+- `/` in `/customize` and `/settings` filters the rows by name, section or what they change.
+- Reviews, memory, history, marketplace and connect search with the same `/` box as `/customize` and `/settings`: same keys, same match count, same hint row; `esc` clears the box before it leaves the page. The wheel now also scrolls history, keymap, prompt mode and compaction. See [pages](docs/layout.md#pages-one-set-of-keys).
 - Home > Input position puts the chat input at the bottom, centered under the logo or at the top of the start screen.
 - Logo fonts rounded, double, shade and braille.
 - Footer packs: the footer's whole look in one data file, chosen with `/footer pack NAME` or Footer pack in `/customize`. Built in: `clean` (the new default: folder and branch, then model, effort and context), `powerline`, `minimal`, `badges`, `bars` and `plain`, each with a words-only form. Parts like changes, running shells, cost or a low quota show only when they matter, and the context changes colour at 70% and 90%. A footer you made yourself is never covered; `footerPack: off` brings back the previous footer. Profiles can ship packs. See [customize](docs/customize.md#footer-packs).
@@ -117,6 +118,12 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Fixed
 
+- A pull request with a very large diff of data or generated files is reviewed instead of refused for its size: data files are set aside for readers before their content is read, and the size limit applies to the code that is left.
+- A push reviews only what changed since the last review of this login on the pull request, also on a device that has no saved state; the summary names that head.
+- A review that failed for good is not queued and announced again at every daemon start; `/reviews` still shows it and `r` retries it.
+- A narrow footer row cuts its text segments (the tagline, the directory, the branch) with `…` instead of dropping the tagline whole.
+- The jump-to-latest pill no longer covers the last line of text: when that line reaches it, the pill takes a row of its own.
+- The summary printed on exit shows prompt tokens apart from cache reads and writes (`↑52K +488K cached ↓2,389`).
 - A settings proposal (`mendcode_settings`) waiting on its card from Claude Code answers `Pending` instead of "The operation timed out", and a headless session's proposal is shown on the session that started it.
 - Smart mode runs a project binary given by path (`../../node_modules/.bin/tsc`) like the command it names, and an `echo` of `$?` no longer counts as a shell expansion.
 - `mendcode --restart-daemon` only stops a process that is a MendCode daemon for that data directory; a stale `mendd.lock` whose pid was reused is reported and left alone (a dead owner's lock is removed), and the command restarts the daemon and exits instead of opening the terminal (#2).

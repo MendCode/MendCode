@@ -1392,9 +1392,9 @@ export function createApp(input: AppInput) {
     /** What to print after leaving the full-screen UI: the session, its usage and how long it ran (empty when nothing happened). */
     exitSummary(options: { color?: boolean } = {}) {
       const model = sessionModelId(appState.effectiveModel?.model, appState.transcript.lastUsage?.model, appState.modelReport)
-      const { turns, input: tokensIn, output: tokensOut } = appState.turnState.totals
+      const { turns, input: tokensIn, cacheRead, cacheWrite, output: tokensOut } = appState.turnState.totals
       const hasHistory = appState.transcript.blocks().length > 0 || appState.paging?.more === true
-      return exitSummary({ sessionId: appState.sessionId, title: sessionTitle(), turns, input: tokensIn, output: tokensOut, ...(model ? { model: modelLabel(model, appState.modelReport) } : {}), elapsedMs: now() - appState.openedAt, hasHistory, ...(options.color ? { color: true } : {}) })
+      return exitSummary({ sessionId: appState.sessionId, title: sessionTitle(), turns, input: tokensIn, cacheRead, cacheWrite, output: tokensOut, ...(model ? { model: modelLabel(model, appState.modelReport) } : {}), elapsedMs: now() - appState.openedAt, hasHistory, ...(options.color ? { color: true } : {}) })
     },
     applySettings,
     openSetup,

@@ -336,6 +336,22 @@ export function createChatRows(ctx: AppContext, actions: {
       bodyHeight -= 1
       visible = state.transcript.viewport(tw, bodyHeight, localState.offset)
     }
+    // The "jump to latest" button: a pill whenever the view is off the bottom, with how many rows arrived below while it was. A click or End (with
+    // an empty prompt) follows the newest output again. It never covers text: on the last row when that row is clear under it, else on a row of
+    // its own under the transcript (one row less of text). At the right it stops before the pet's cells and the bar's column.
+    const petShown = rich && !inlineBody && popup.length === 0 && width >= PET_MIN_WIDTH
+    const jumpHint = state.tuiProfile.jumpHint
+    const jumpOn = !inlineBody && !home && !localState.follow && jumpHint !== "off"
+    const pill = jumpOn ?jumpPill(jumpText({ template: state.tuiProfile.jumpText, unseen: localState.unseen, keyHint: editor.isEmpty(), g }), g) : undefined
+    const pillWidth = pill ? pill.reduce((sum, span) => sum + textWidth(span.text), 0) : 0
+    const pet = pill && petShown && jumpHint === "right" ? petCells(bodyHeight) : undefined
+    const pillFrom = pill && jumpHint !== "off" ? jumpFrom({ position: jumpHint, width: tw, labelWidth: pillWidth, gutter: pet ? Math.max(0, pet.cols + 1 - gutter) : 0 }) : 0
+    const lastRow = visible[visible.length - 1]
+    const pillOwnRow = !!pill && bodyHeight > STICKY_MIN_BODY && visible.length >= bodyHeight && !!lastRow && textWidth(lastRow.spans.map((span) => span.text).join("").trimEnd()) > pillFrom
+    if (pillOwnRow) {
+      bodyHeight -= 1
+      visible = state.transcript.viewport(tw, bodyHeight, localState.offset)
+    }
     state.lastBodyHeight = Math.max(1, bodyHeight)
     if (!inlineBody && !home && !cleared) wantImages(visible)
     const links = state.tuiProfile.hyperlinks ? { cwd: input.directory ?? "", ...(input.home ? { home: input.home } : {}), opener: state.tuiProfile.fileOpener } : undefined
@@ -354,16 +370,10 @@ export function createChatRows(ctx: AppContext, actions: {
     /** Blank rows above the transcript's first shown row. */
     const padTop = topAnchored ? blankAbove : body.length - visible.length
     const shownFrom = topAnchored ? 0 : state.transcript.totalLines(tw) - localState.offset - visible.length
-    // The "jump to latest" button: a pill on the transcript's last row whenever the view is off the bottom, with how many rows arrived below
-    // while it was. A click or End (with an empty prompt) follows the newest output again. It covers the text under it, never the bar's column
-    // or the pet: at the right it stops before the pet's cells.
-    const petShown = rich && !inlineBody && popup.length === 0 && width >= PET_MIN_WIDTH
     let jump: { row: number; from: number; to: number } | undefined
-    if (!inlineBody && !home && !localState.follow && state.tuiProfile.jumpHint !== "off") {
-      const pill = jumpPill(jumpText({ template: state.tuiProfile.jumpText, unseen: localState.unseen, keyHint: editor.isEmpty(), g }), g)
-      const pillWidth = pill.reduce((sum, span) => sum + textWidth(span.text), 0)
-      const pet = petShown && state.tuiProfile.jumpHint === "right" ? petCells(bodyHeight) : undefined
-      const from = jumpFrom({ position: state.tuiProfile.jumpHint, width: tw, labelWidth: pillWidth, gutter: pet ? Math.max(0, pet.cols + 1 - gutter) : 0 })
+    if (pill) {
+      const from = pillFrom
+      if (pillOwnRow) body.push([])
       const drawn = overlayAt({ line: body[body.length - 1]!, width: tw, from, label: pill })
       if (drawn) {
         body[body.length - 1] = drawn

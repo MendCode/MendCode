@@ -132,7 +132,30 @@ export function triageFile(file: Pick<FileDiff, "path" | "text" | "deleted">, ru
   return undefined
 }
 
-export type TriagedFile = { file: FileDiff; reason: TriageReason; stats: TriageStats }
+/**
+ * The part of `triageFile` that needs no diff text: what `git diff --numstat` (path, lines added and removed, binary) already says.
+ * A file this names goes to readers without its whole diff being fetched; a file it does not name may still be data by its content
+ * (`triageFile` decides once its diff is read).
+ */
+export function triageByStat({ path, added, removed, binary }: { path: string; added: number; removed: number; binary: boolean }, rules: ReturnType<typeof generatedRules> = []): TriageReason | undefined {
+  if (binary) return "binary"
+  const ext = extension(path)
+  const name = baseName(path)
+  const changed = added + removed
+  if (ASSET_EXTENSIONS.has(ext) && changed >= TRIAGE_MIN_LINES) return "asset"
+  if (changed < TRIAGE_MIN_LINES) return undefined
+  if (LOCKFILES.has(name)) return "lockfile"
+  if (/\.min\.(js|css|mjs)$|\.map$/i.test(name)) return "minified"
+  if (ext === "snap" || /(^|\/)__snapshots__\//.test(path)) return "snapshot"
+  if (markedGenerated(path, rules)) return "generated"
+  const configuration = MANIFESTS.has(name) || /(^|\/)tsconfig[^/]*\.json$/.test(path) || path.startsWith(".github/") || path.startsWith(".mendcode/")
+  if (configuration) return undefined
+  if (DATA_EXTENSIONS.has(ext) && (changed >= DATA_MIN_LINES || DATA_DIR.test(path))) return "data"
+  if (FIXTURE_DIR.test(path) && changed >= DATA_MIN_LINES) return "fixture"
+  return undefined
+}
+
+export type TriagedFile ={ file: FileDiff; reason: TriageReason; stats: TriageStats }
 
 /** The files of a diff split into what the review pass reads and what goes to readers, in diff order. */
 export function triageFiles(files: readonly FileDiff[], attributes?: string | undefined): { code: FileDiff[]; data: TriagedFile[] } {

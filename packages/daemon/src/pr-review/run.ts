@@ -448,7 +448,7 @@ async function reviewRun(input: RunPrReviewInput): Promise<ReviewRun & RunPlatfo
     context.notes.unshift(...notes)
     if (readers) context.notes.push(...readers.note())
     if (input.pullRequest) context.pullRequest = input.pullRequest
-    if (incremental) context.notes.push(`Incremental review: only the commits since ${range.base.slice(0, 12)}.`)
+    if (incremental) context.notes.push(`Incremental review: only what changed since the last review at ${range.base.slice(0, 7)}; the rest of the pull request was reviewed then (read other files with your tools when a change depends on them).`)
     else if (input.stack && range.base === input.stack.base) context.notes.push(`Stacked on #${input.stack.parent}: only this pull request's own commits since #${input.stack.parent}'s head ${input.stack.base.slice(0, 12)}.`)
     // The cost phase: a subprocess with execution, outside the model's read-only pass; it never fails or blocks the review.
     const perf: PerfOutcome | undefined = input.perf ? await measurePerf({ directory: input.directory, base: input.base, head: input.head, git, options: input.perf, fork: input.fork === true }) : undefined
@@ -498,7 +498,7 @@ async function reviewRun(input: RunPrReviewInput): Promise<ReviewRun & RunPlatfo
     // The base of the result is the PR's base, so a later incremental review still knows where the PR starts.
     const result = { ...outcome.result, base: input.base }
     const inheritedNote = inherited ? [`${plural(inherited, "finding")} #${input.stack!.parent} already reported ${inherited === 1 ? "was" : "were"} left out (this pull request is stacked on it).`] : []
-    const info: ReviewInfo = { files: context.files.map((file) => ({ path: file.path, touched: file.touched.length })), profile: config.profile, cap: config.cap, incremental, notes: [...context.notes.filter((note) => !note.startsWith("Incremental review:")), ...inheritedNote], ...(complete ? { checked: outcome.candidates.length - (risenAdded ? 1 : 0) } : {}), ...(perf && perfBody(perf) ? { perf: perfBody(perf) } : {}), ...(outcome.partial ? { partial: { ...outcome.partial, number: input.number } } : {}) }
+    const info: ReviewInfo = { files: context.files.map((file) => ({ path: file.path, touched: file.touched.length })), profile: config.profile, cap: config.cap, incremental, ...(incremental ? { since: range.base } : {}), notes: [...context.notes.filter((note) => !note.startsWith("Incremental review:")), ...inheritedNote], ...(complete ? { checked: outcome.candidates.length - (risenAdded ? 1 : 0) } : {}), ...(perf && perfBody(perf) ? { perf: perfBody(perf) } : {}), ...(outcome.partial ? { partial: { ...outcome.partial, number: input.number } } : {}) }
     // Always a checkpoint: the plan's decisions; complete, every judged finding; stopped, what a resume verifies.
     const checkpoint: JobCheckpoint = withReaders(outcome.checkpoint ?? {
       completedPhases: outcome.completedPhases ?? [], candidates: [], verified: outcome.candidates, result: outcome.result,

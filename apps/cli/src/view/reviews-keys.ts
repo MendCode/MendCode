@@ -1,3 +1,4 @@
+import { pageSearchKey } from "./page-search"
 import type { PrJobSummary, PrReviewDashboard } from "@mendcode/protocol"
 import { canCancel, canPause, canRelease, canResume, canRetry, canTakeOver, listedJobs, MAX_FILTER_TEXT, MAX_REASON_TEXT, reviewRepos, selectedJob, STATE_FILTERS, type ReviewsPageState } from "./reviews-page"
 
@@ -75,12 +76,13 @@ export function reviewsPageKey(state: ReviewsPageState, key: string, dashboard: 
     return text === undefined ? keep(state) : keep({ ...state, reason: { ...state.reason, text } })
   }
 
-  if (state.typing) {
-    if (key === ESC) return keep({ ...state, typing: false, selected: 0, filter: { ...state.filter, text: "" } })
-    if (ENTER.has(key)) return keep({ ...state, typing: false })
-    const text = typedText(state.filter.text, key, MAX_FILTER_TEXT)
-    return text === undefined ? keep(state) : keep({ ...state, selected: 0, filter: { ...state.filter, text } })
+  // The `/` filter edits through the shared page search; arrows still move in the filtered list while the box is open.
+  const searched = pageSearchKey({ open: state.typing === true, query: state.filter.text }, key)
+  if (searched && (state.typing || (key === "/" && state.tab === 0 && !state.detail && !state.confirm && !state.config))) {
+    const { search } = searched
+    return keep({ ...state, typing: search.open, selected: 0, filter: { ...state.filter, text: search.query.slice(0, MAX_FILTER_TEXT) } })
   }
+  if (state.typing && !UP.has(key) && !DOWN.has(key) && key !== PAGE_UP && key !== PAGE_DOWN) return keep(state)
 
   if (state.confirm) {
     const { confirm, ...rest } = state
@@ -134,7 +136,6 @@ export function reviewsPageKey(state: ReviewsPageState, key: string, dashboard: 
     if (key === PAGE_DOWN) return move(at + 10)
     if (key === "g" || key === "\x1b[H") return move(0)
     if (key === "G" || key === "\x1b[F") return move(jobs.length - 1)
-    if (key === "/") return keep({ ...state, typing: true })
     if (key === "f" || key === "F") return keep({ ...state, selected: 0, filter: { ...state.filter, state: cycle(STATE_FILTERS, state.filter.state, key === "f" ? 1 : -1) } })
     if (key === "m") {
       const repos: Array<string | undefined> = [undefined, ...reviewRepos(dashboard)]

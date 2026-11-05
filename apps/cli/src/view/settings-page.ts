@@ -8,6 +8,7 @@ import { truncateEnd } from "./session-list"
 import { normalizeTime } from "./setup-page"
 import { textWidth, wrap } from "./wrap"
 import { settingsPreview } from "./settings-preview"
+import { pageSearchKey, pageSearchRow, SEARCH_HINT, searchMatches, type PageSearch } from "./page-search"
 import type { TuiProfile } from "./tui-profile"
 
 /**
@@ -86,7 +87,7 @@ export const SETTINGS_GROUPS: ReadonlyArray<{ title: string; rows: readonly RowD
 
 const ALL_ROWS: readonly RowDef[] = SETTINGS_GROUPS.flatMap((group) => group.rows)
 
-export type SettingsPageState = { row: number; tui?: string; /** Characters typed into a number or time row. */ typing?: string; error?: string }
+export type SettingsPageState = { row: number; tui?: string; /** Characters typed into a number or time row. */ typing?: string; error?: string; /** The `/` filter over the rows. */ search?: PageSearch }
 
 /** `open` runs that slash command (the page closes). `set` is the `settings.set` patch, `null` clearing a setting. */
 export type SettingsAction =
@@ -122,7 +123,7 @@ const UP = new Set(["\x1b[A", "\x1bOA", "\x10", "k"])
 const DOWN = new Set(["\x1b[B", "\x1bOB", "\x0e", "j"])
 const LEFT = new Set(["\x1b[D", "\x1bOD", "h"])
 const RIGHT = new Set(["\x1b[C", "\x1bOC", "l"])
-const HINTS = ["↑↓ row · ←→ change · enter open · esc back", "↑↓ · ←→ · enter · esc back", "esc back"]
+const HINTS = ["↑↓ row · ←→ change · enter open · / search · esc back", "↑↓ · ←→ · enter · / search · esc back", "↑↓ · enter · esc back", "esc back"]
 const TYPING_HINTS = ["type a value · enter save · esc cancel", "enter save · esc cancel"]
 const NAME_WIDTH = 15
 const VALUE_WIDTH = 22
@@ -268,8 +269,38 @@ function choose(def: RowDef, values: SettingsValues, themes: readonly string[], 
   }
 }
 
-/** Handles one raw key. Returns the same state object when nothing changed. */
+const GROUP_OF = new Map<SettingsRow, string>(SETTINGS_GROUPS.flatMap((group) => group.rows.map((def): [SettingsRow, string] => [def.id, group.title])))
+
+/** Whether a row answers the search: its label, id, section or what it explains. */
+export const settingsRowMatches = (def: RowDef, query: string) => searchMatches(query, [def.label, def.id, GROUP_OF.get(def.id) ?? "", SETTINGS_HELP[def.id]])
+
+/** The row index `delta` rows from `from` among those matching `query` (`from` itself when none is). */
+function nextMatching(from: number, delta: 1 | -1, query: string): number {
+  for (let index = from + delta; index >= 0 && index < ALL_ROWS.length; index += delta) if (settingsRowMatches(ALL_ROWS[index]!, query)) return index
+  return from
+}
+
+/** Handles one raw key. Returns the same state object when nothing changed. `/` filters the rows like every page's search. */
 export function settingsPageKey(state: SettingsPageState, typed: string, values: SettingsValues, options: { themes: readonly string[] }): { state: SettingsPageState; action: SettingsAction } {
+  if (state.typing === undefined) {
+    const searched = pageSearchKey(state.search, typed)
+    if (searched) {
+      const query = searched.search.open ? searched.search.query : ""
+      const here = settingsRowMatches(rowAt(state), query) ? state.row : ALL_ROWS.findIndex((def) => settingsRowMatches(def, query))
+      return { state: { row: here < 0 ? state.row : here, ...(searched.event === "changed" ? { search: searched.search } : {}) }, action: NONE }
+    }
+    const query = state.search?.query ?? ""
+    const folded = foldLetter(typed)
+    if (query && (UP.has(folded) || DOWN.has(folded))) {
+      const next = nextMatching(state.row, UP.has(folded) ? -1 : 1, query)
+      return next === state.row ? { state, action: NONE } : { state: { row: next, search: state.search! }, action: NONE }
+    }
+  }
+  const result = settingsKey(state, typed, values, options)
+  return state.search && result.state !== state && result.state.search === undefined && result.action.type !== "close" ? { ...result, state: { ...result.state, search: state.search } } : result
+}
+
+function settingsKey(state: SettingsPageState, typed: string, values: SettingsValues, options: { themes: readonly string[] }): { state: SettingsPageState; action: SettingsAction } {
   const def = rowAt(state)
   const cleared: SettingsPageState = { row: state.row }
   // Typing keeps the raw key (`200K`); otherwise Caps Lock's `Q` is the `q` shortcut.
@@ -427,7 +458,7 @@ export function renderSettingsPage(input: { state: SettingsPageState; values: Se
   if (height <= 0 || width <= 0) return []
   const glyphs = input.glyphs ?? defaultGlyphs()
   const typing = state.typing !== undefined
-  const hints = (typing ? TYPING_HINTS : HINTS).find((text) => textWidth(text) <= Math.max(20, width - 15)) ?? "esc back"
+  const hints = state.search?.open && !typing ? SEARCH_HINT : (typing ? TYPING_HINTS : HINTS).find((text) => textWidth(text) <= Math.max(20, width - 15)) ?? "esc back"
   const wide = width >= 90
   const inner = Math.min(MAX_COLUMN, Math.max(1, columns(Math.max(1, width - 4), wide ? [3, 2] : [1])[0]! - 4))
   const nameWidth = Math.min(NAME_WIDTH, Math.max(8, Math.floor(inner / 3)))
@@ -435,10 +466,16 @@ export function renderSettingsPage(input: { state: SettingsPageState; values: Se
   const focus = rowAt(state)
   let body: Line[] = []
   let focusLine = 0
-  SETTINGS_GROUPS.forEach((group, index) => {
-    if (index > 0) body.push([])
+  const query = state.search?.query ?? ""
+  const listed = (def: RowDef) => def.id === focus.id || settingsRowMatches(def, query)
+  const searchRow = pageSearchRow(state.search, ALL_ROWS.filter(listed).length, inner)
+  if (searchRow) body.push(searchRow, [])
+  let groups = 0
+  SETTINGS_GROUPS.forEach((group) => {
+    if (!group.rows.some(listed)) return
+    if (groups++ > 0) body.push([])
     body.push([{ text: group.title, fg: "text", bold: true }])
-    for (const def of group.rows) {
+    for (const def of group.rows.filter(listed)) {
       const on = def.id === focus.id
       const view = shown(def, values, on ? state : { row: 0 })
       const marker: Span = on ? { text: `${glyphs.user} `, fg: "primary", bold: true } : { text: "  " }

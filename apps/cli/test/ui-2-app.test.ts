@@ -210,6 +210,9 @@ test("activity tokens count the current turn and preserve session totals", () =>
   chat.emit({ ...usage, turnId: second })
   expect(turn.output).toBe(23)
   expect(turn.totals.output).toBe(46)
+  chat.emit({ ...usage, turnId: second, input: 5, cacheRead: 700, cacheWrite: 40 })
+  // The session totals keep the cache apart from the prompt.
+  expect(turn.totals).toMatchObject({ input: 25, cacheRead: 700, cacheWrite: 40 })
 })
 
 test("window title tokens, accent and sidebar side apply to the real app", async () => {

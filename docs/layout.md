@@ -271,7 +271,7 @@ already loaded blocks; `/timeline` jumps can widen layout to a loaded message. A
 while new output arrives.
 
 The transcript's own scroll chrome is drawn inside the chat column, never over a sidebar. The jump-to-latest pill sits on
-the row just above the prompt's top rule whenever the view is off the bottom; the optional scrollbar is a one-cell column
+the row just above the prompt's top rule whenever the view is off the bottom, on a row of its own when the transcript's last line would reach it; the optional scrollbar is a one-cell column
 at the column's right edge, reserved for as long as `scrollbar` is `auto` or `always` so showing it moves no text. With the
 activity status at `above` it is laid over the prompt's top rule, and at `inside` over the right of its first row: neither
 takes a row, so a turn starting or ending never moves the transcript. All of it is configured in
@@ -506,3 +506,17 @@ read-job states; a posted async question remains answerable after its originatin
 `bun scripts/render-frames.ts .agents-frames/B57 --b57 100x30 180x50` renders batch selection,
 custom editing, Review, scrolling, TODO cards, the dock, clearing and an opt-in sidebar through
 the app harness, with temporary data and no provider.
+
+## Pages: one set of keys
+
+Every page with a list behaves the same way (a test, `apps/cli/test/page-standard.test.ts`, holds each page to it):
+
+| Key | What it does |
+|---|---|
+| `/` | Opens the search box above the rows; typed text (including `q`, `j`, `k`) filters them and the row shows the match count. Backspace deletes. |
+| `↑` `↓` | Move among the rows that match. The mouse wheel and the trackpad send the same keys. |
+| `Enter` | Closes the box. In `/settings` and `/customize` the cursor stays on the picked row with every row listed again; in lists (reviews, memory, history, marketplace) the filter stays. In `/connect` it connects the match. |
+| `Esc` | Clears the box first; then goes back to the page it was opened from (to the chat when it was opened from there). |
+| `Enter` or `Space`, `←` `→` | Open or toggle the selected row; change a value. |
+
+Pages with a `/` box: settings, customize, reviews, memory, history, marketplace, connect, and model (`/` opens its model search). Pickers that filter as you type (skills, models, agents, themes, sessions) need no `/`. The hint row names the keys the same way on each page (`/ search`, `esc back`); while the box is open it reads `type to filter · ↑↓ row · enter go · esc clear`.

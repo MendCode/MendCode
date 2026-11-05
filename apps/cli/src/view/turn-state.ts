@@ -53,7 +53,7 @@ export function createTurnState() {
   /** What the running turn's message was as typed (text and attachments), so Esc Esc can hand it back without asking the daemon. Gone with the turn. */
   let sent: QueuedPrompt | undefined
   /** Turns started and tokens used in this session since the client attached (for the exit summary). */
-  const totals = { turns: 0, input: 0, output: 0 }
+  const totals = { turns: 0, input: 0, cacheRead: 0, cacheWrite: 0, output: 0 }
 
   function restoreRequest(event: Extract<SessionEvent, { type: "server.request" }>) {
     if (resolvedRequests.has(event.requestId)) return
@@ -98,8 +98,10 @@ export function createTurnState() {
           break
         case "usage.recorded":
           liveOutput = 0
-          // v1: input counts the cache, output counts the reasoning.
-          totals.input += event.input + event.cacheRead + event.cacheWrite
+          // The session's totals keep the cache apart (as /usage does): `input` is what was not read from or written to it; output counts the reasoning.
+          totals.input += event.input
+          totals.cacheRead += event.cacheRead
+          totals.cacheWrite += event.cacheWrite
           totals.output += event.output + event.reasoning
           if (startedAt !== undefined) {
             output += event.output + event.reasoning

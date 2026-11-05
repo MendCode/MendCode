@@ -7,6 +7,7 @@ import { tabsRow, type PageTab } from "./page"
 import { pickerFrame } from "./picker-frame"
 import { relativeTime, timeAgo } from "./session-list"
 import { shortenMiddle, textWidth, truncateEnd, wrap } from "./wrap"
+import { SEARCH_HINT } from "./page-search"
 
 /**
  * `/reviews` (and `/pr dashboard`): the PR review platform's page (docs/pr-review.md). Jobs grouped by state with stacks under their
@@ -355,7 +356,7 @@ const PAGE_TABS: PageTab[] = [{ key: "1", label: "Jobs" }, { key: "2", label: "W
 
 /** The keys shown in the header, the most useful first (the header keeps those that fit), for what the selected job allows. */
 export function reviewsHints(state: ReviewsPageState, job: PrJobSummary | undefined): string {
-  if (state.typing) return "type to filter · enter keep · esc clear"
+  if (state.typing) return SEARCH_HINT
   if (state.reason) return "type the reason · enter retry · esc cancel"
   if (state.config) return "↑↓ scroll · esc back"
   if (state.tab === 1) return "↑↓ scroll · 1 jobs · r refresh · esc back"
@@ -372,7 +373,7 @@ export function reviewsHints(state: ReviewsPageState, job: PrJobSummary | undefi
   ] : []
   const parts = state.detail
     ? [...actions, "↑↓ scroll", "r refresh", "esc back"]
-    : [...(job ? ["enter detail"] : []), "/ filter", ...actions, "f state", "m repo", "↑↓ select", "2 watches", "r refresh", "esc back"]
+    : [...(job ? ["enter detail"] : []), "/ search", ...actions, "f state", "m repo", "↑↓ select", "2 watches", "r refresh", "esc back"]
   return parts.join(" · ")
 }
 

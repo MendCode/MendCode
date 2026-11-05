@@ -3,7 +3,7 @@ import { parseDiffRows } from "@mendcode/protocol/wire"
 import { loc, traverseCalls, type Graph, type GraphNode } from "@mendcode/codegraph"
 import type { PullRequestInfo } from "./pull-request"
 import type { ReaderSummary } from "./readers"
-import { diffLines, triageFiles, type TriagedFile } from "./triage"
+import { diffLines, generatedRules, triageByStat, triageFiles, type TriagedFile, type TriageReason } from "./triage"
 
 /**
  * What a review reads (docs/pr-review.md): the diff of `base...head` and, for every symbol a hunk touches, its callers and callees
@@ -14,15 +14,32 @@ import { diffLines, triageFiles, type TriagedFile } from "./triage"
  * read-only tools.
  */
 
-export type GitRun = (args: string[], cwd: string) => Promise<{ code: number; out: string }>
+/** `maxBytes`: stop reading there and kill git; the result is then `cut` and `out` holds the first `maxBytes` bytes (a code of 0). */
+export type GitRun = (args: string[], cwd: string, maxBytes?: number) => Promise<{ code: number; out: string; cut?: true | undefined }>
 
-/** `git` without a shell; output bounded by the caller's process helper. */
-export const gitRun: GitRun = async (args, cwd) => {
+/** `git` without a shell; output bounded by `maxBytes` when the caller sets it. */
+export const gitRun: GitRun = async (args, cwd, maxBytes) => {
   try {
     const child = Bun.spawn(["git", ...args], { cwd, stdin: "ignore", stdout: "pipe", stderr: "ignore", env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0" } })
     const timer = setTimeout(() => child.kill(), 60_000)
     try {
-      const out = await new Response(child.stdout).text()
+      if (maxBytes === undefined) {
+        const out = await new Response(child.stdout).text()
+        return { code: await child.exited, out }
+      }
+      const chunks: Uint8Array[] = []
+      let size = 0
+      let cut = false
+      const reader = child.stdout.getReader()
+      for (;;) {
+        const { done, value } = await reader.read()
+        if (done) break
+        chunks.push(value)
+        size += value.length
+        if (size > maxBytes) { cut = true; child.kill(); break }
+      }
+      const out = Buffer.concat(chunks).subarray(0, maxBytes).toString("utf8")
+      if (cut) { await child.exited.catch(() => undefined); return { code: 0, out, cut: true } }
       return { code: await child.exited, out }
     } finally { clearTimeout(timer) }
   } catch { return { code: 127, out: "" } }
@@ -33,7 +50,13 @@ export const GRAPH_DEPTH = 2
 /** The share of the PR's token budget the context may take; the rest is for the review answer and the verify pass. */
 export const CONTEXT_SHARE = 0.5
 const MAX_SYMBOLS = 40
-const MAX_DIFF_BYTES = 4 * 1024 * 1024
+/** The most the reviewable part of a diff may be: data, generated and asset files are set aside first and are not counted. */
+export const MAX_DIFF_BYTES = 4 * 1024 * 1024
+/** The most of one data, generated or asset file's diff that is fetched: a sample for readers (with readers off, for the budget cut). */
+const SAMPLE_BYTES_READERS = 1_500_000
+const SAMPLE_BYTES_PLAIN = 256 * 1024
+/** Files read in one `git diff` call. */
+const FETCH_CHUNK = 100
 
 export type FileDiff = {
   path: string
@@ -44,6 +67,8 @@ export type FileDiff = {
   /** New-side lines the change touched: added lines and where lines were deleted. */
   touched: number[]
   deleted: boolean
+  /** The whole change's size from `git diff --numstat`, set when `text` is only a sample of a data, generated or asset file's diff. */
+  size?: { added: number; removed: number } | undefined
 }
 
 export type ChangedSymbol = { symbol: string; path: string; line: number; callers: string[]; callees: string[] }
@@ -96,7 +121,7 @@ export function parseUnifiedDiff(diff: string): FileDiff[] {
     const lines = text.replace(/\n$/, "").split("\n")
     const plus = lines.find((line) => line.startsWith("+++ "))
     const header = /^diff --git a\/(.+) b\/(.+)$/.exec(lines[0]!)
-    const target = plus && plus !== "+++ /dev/null" ? plus.slice(4).replace(/^b\//, "") : header?.[2]
+    const target = plus && plus !== "+++ /dev/null" ? plus.slice(4).replace(/^b\//, "").replace(/\t$/, "") : header?.[2]
     if (!target) continue
     const deleted = plus === "+++ /dev/null"
     const right = new Set<number>()
@@ -128,7 +153,7 @@ function touchedNodes(graph: Graph, file: FileDiff): GraphNode[] {
 const symbolLine = (symbol: ChangedSymbol) => `${symbol.symbol} (${symbol.path}:${symbol.line})${symbol.callers.length ? `\n  callers: ${symbol.callers.join(", ")}` : ""}${symbol.callees.length ? `\n  callees: ${symbol.callees.join(", ")}` : ""}`
 export const symbolsText = (symbols: readonly ChangedSymbol[]) => symbols.map(symbolLine).join("\n")
 const tokensOf = (diff: string, symbols: readonly ChangedSymbol[]) => estimateTokens(diff.length) + estimateTokens(symbolsText(symbols).length)
-const leftOut = (file: FileDiff, why: string, summaries?: ReadonlyMap<string, string>) => `diff --git a/${file.path} b/${file.path}\n(diff of ${file.text.split("\n").length} lines left out by ${why}; read the file yourself)\n${summaries?.get(file.path) ?? ""}`
+const leftOut = (file: FileDiff, why: string, summaries?: ReadonlyMap<string, string>) => `diff --git a/${file.path} b/${file.path}\n(diff of ${file.size ? file.size.added + file.size.removed : file.text.split("\n").length} lines left out by ${why}; read the file yourself)\n${summaries?.get(file.path) ?? ""}`
 /** The one-line summary line a reader's summary adds under a file's header; `undefined` when it covers other paths first. */
 const summaryLine = (summary: ReaderSummary) => `Reader summary (${summary.by === "local" ? "local scan, no model" : summary.by}, unverified): ${summary.text}\n`
 
@@ -142,7 +167,7 @@ export function readerTexts(files: readonly FileDiff[], summaries: readonly Read
     summary.paths.forEach((file, index) => {
       const found = files.find((entry) => entry.path === file)
       if (!found) return
-      const { stats } = diffLines(found)
+      const stats = found.size ?? diffLines(found).stats
       const head = `(+${stats.added.toLocaleString("en-US")} -${stats.removed.toLocaleString("en-US")} lines, not shown${index === 0 ? ": a reader read it" : ", summarized above"})`
       texts.set(file, `diff --git a/${file} b/${file}\n${head}\n${index === 0 ? summaryLine(summary) : ""}`)
     })
@@ -186,23 +211,116 @@ export function splitIntoParts({ files, symbols, limit, summaries }: { files: re
   return { parts, cut }
 }
 
+/** Characters of a file's whole diff: its text, or for a sample the text scaled up to the whole change. */
+const chars = (file: FileDiff) => file.size ? Math.round(file.text.length * (file.size.added + file.size.removed) / Math.max(1, file.text.split("\n").length)) : file.text.length
+
+type NumstatRow = { path: string; added: number; removed: number; binary: boolean }
+
+/** `git diff --numstat -z` output (no renames), or undefined when it is not that. */
+export function parseNumstat(out: string): NumstatRow[] | undefined {
+  const rows: NumstatRow[] = []
+  for (const record of out.split("\0")) {
+    if (!record) continue
+    const match = /^(\d+|-)\t(\d+|-)\t([^\n]+)$/.exec(record)
+    if (!match) return undefined
+    const binary = match[1] === "-"
+    rows.push({ path: match[3]!, added: binary ? 0 : Number(match[1]), removed: binary ? 0 : Number(match[2]), binary })
+  }
+  return rows
+}
+
+const MiB = (bytes: number) => (bytes / 1024 / 1024).toFixed(1)
+
+/**
+ * The files of `base...head` with their diffs, without ever holding a data file's whole diff. `git diff --numstat` lists the files
+ * and their sizes first; what triage names from that alone (a lockfile, an asset, a data format, what the base marks generated) is
+ * fetched as a sample for readers, and only the rest is fetched whole, in a few calls. The safety bound (`MAX_DIFF_BYTES`) is on
+ * that reviewable rest. A git that does not answer `--numstat` (a test double) falls back to the one whole diff.
+ */
+async function fetchDiff({ directory, base, head, git, ignore, readers, attributes }: { directory: string; base: string; head: string; git: GitRun; ignore: (path: string) => boolean; readers: boolean; attributes: string | undefined }): Promise<{ files: FileDiff[]; triage: { code: FileDiff[]; data: TriagedFile[] } }> {
+  const range = `${base}...${head}`
+  const failed = () => new Error(`[PR_REVIEW]: git diff ${range} failed in ${directory}`)
+  const diffArgs = ["diff", "--no-color", "--no-ext-diff", "--no-renames", "-U3", range, "--"]
+  const stat = await git(["diff", "--no-renames", "--numstat", "-z", range, "--"], directory)
+  if (stat.code !== 0) throw failed()
+  const rows = parseNumstat(stat.out)
+  if (!rows) {
+    const whole = await git(diffArgs, directory)
+    if (whole.code !== 0) throw failed()
+    if (whole.out.length > MAX_DIFF_BYTES) throw new Error(`[PR_REVIEW]: the diff is larger than ${MAX_DIFF_BYTES / 1024 / 1024} MiB`)
+    const files = parseUnifiedDiff(whole.out).filter((file) => !ignore(file.path))
+    return { files, triage: readers ? triageFiles(files, attributes) : { code: files, data: [] } }
+  }
+  const listed = rows.filter((row) => !ignore(row.path))
+  const rules = generatedRules(attributes)
+  const named = new Map<string, TriageReason>()
+  for (const row of listed) { const reason = triageByStat(row, rules); if (reason) named.set(row.path, reason) }
+  const sampleBytes = readers ? SAMPLE_BYTES_READERS : SAMPLE_BYTES_PLAIN
+  const literal = (path: string) => `:(literal)${path}`
+  const sized = new Map(listed.map((row) => [row.path, row]))
+  /** One file's diff, up to `maxBytes`: a cut one ends at its last whole line and carries the whole change's size. */
+  const one = async (row: NumstatRow, maxBytes: number): Promise<{ file: FileDiff | undefined; cut: boolean }> => {
+    const done = await git(diffArgs.concat(literal(row.path)), directory, maxBytes)
+    if (done.code !== 0) throw failed()
+    const text = done.cut ? done.out.slice(0, done.out.lastIndexOf("\n") + 1) : done.out
+    const file = parseUnifiedDiff(text)[0]
+    if (file && done.cut) file.size = { added: row.added, removed: row.removed }
+    return { file, cut: done.cut === true }
+  }
+  const found = new Map<string, FileDiff>()
+  const oversized = new Set<string>()
+  const aside = listed.filter((row) => named.has(row.path))
+  for (let at = 0; at < aside.length; at += 4) {
+    await Promise.all(aside.slice(at, at + 4).map(async (row) => { const { file } = await one(row, sampleBytes); if (file) found.set(row.path, file) }))
+  }
+  const rest = listed.filter((row) => !named.has(row.path))
+  for (let at = 0; at < rest.length; at += FETCH_CHUNK) {
+    const chunk = rest.slice(at, at + FETCH_CHUNK)
+    const done = await git(diffArgs.concat(chunk.map((row) => literal(row.path))), directory, MAX_DIFF_BYTES + 1)
+    if (done.code !== 0) throw failed()
+    if (!done.cut && done.out.length <= MAX_DIFF_BYTES) { for (const file of parseUnifiedDiff(done.out)) if (sized.has(file.path)) found.set(file.path, file); continue }
+    // These files together are large: each is read on its own, so the data among them is a sample and the rest counts toward the bound.
+    for (const row of chunk) {
+      const { file, cut } = await one(row, MAX_DIFF_BYTES + 1)
+      if (!file) continue
+      found.set(row.path, file)
+      if (cut) oversized.add(row.path)
+    }
+  }
+  const files = listed.flatMap((row) => found.get(row.path) ?? [])
+  const withStats = (entry: TriagedFile): TriagedFile => { const row = sized.get(entry.file.path); return row && entry.file.size ? { ...entry, stats: { ...entry.stats, added: row.added, removed: row.removed } } : entry }
+  const restFiles = rest.flatMap((row) => found.get(row.path) ?? [])
+  const triaged = readers ? triageFiles(restFiles, attributes) : { code: restFiles, data: [] }
+  const data = [
+    ...aside.flatMap((row) => { const file = found.get(row.path); return file ? [withStats({ file, reason: named.get(row.path)!, stats: { ...diffLines(file).stats, added: row.added, removed: row.removed } })] : [] }),
+    ...triaged.data.map(withStats),
+  ].sort((a, b) => files.indexOf(a.file) - files.indexOf(b.file))
+  const reviewable = triaged.code
+  const dataPaths = new Set(data.map((entry) => entry.file.path))
+  const bytes = reviewable.reduce((sum, file) => sum + file.text.length, 0)
+  const tooBig = [...oversized].filter((path) => !dataPaths.has(path))
+  if (bytes > MAX_DIFF_BYTES || tooBig.length) {
+    const set = readers ? `${data.length} data, generated or asset file${data.length === 1 ? "" : "s"} set aside for readers and not counted` : "readers are off, so data files are not set aside"
+    throw new Error(`[PR_REVIEW]: the reviewable part of the diff is ${tooBig.length ? `larger than ${MiB(MAX_DIFF_BYTES)} MiB in ${tooBig.slice(0, 3).join(", ")} alone` : `${MiB(bytes)} MiB in ${reviewable.length} file${reviewable.length === 1 ? "" : "s"}`}, more than the ${MiB(MAX_DIFF_BYTES)} MiB a review reads (${set}); split the pull request or mark generated files in .gitattributes`)
+  }
+  return { files, triage: { code: reviewable, data } }
+}
+
 /**
  * The diff of `base...head` in `directory` and the graph context of what it touches, within `budgetTokens * CONTEXT_SHARE`.
  * `ignore` drops paths the repository config excludes. Without a graph the review proceeds on the diff alone and the notes say so.
  */
 export async function buildReviewContext({ directory, base, head, budgetTokens, graph, git = gitRun, ignore = () => false, readers, attributes }: { directory: string; base: string; head: string; budgetTokens: number; graph?: Graph | undefined; git?: GitRun; ignore?: (path: string) => boolean; readers?: ContextReaders | undefined; attributes?: string | undefined }): Promise<ReviewContext> {
   for (const ref of [base, head]) if (!/^[A-Za-z0-9][A-Za-z0-9._/@^~-]{0,199}$/.test(ref) || ref.includes("..")) throw new Error(`[PR_REVIEW]: invalid ref ${JSON.stringify(ref.slice(0, 80))}`)
-  const result = await git(["diff", "--no-color", "--no-ext-diff", "--no-renames", "-U3", `${base}...${head}`, "--"], directory)
-  if (result.code !== 0) throw new Error(`[PR_REVIEW]: git diff ${base}...${head} failed in ${directory}`)
-  if (result.out.length > MAX_DIFF_BYTES) throw new Error(`[PR_REVIEW]: the diff is larger than ${MAX_DIFF_BYTES / 1024 / 1024} MiB`)
-  const files = parseUnifiedDiff(result.out).filter((file) => !ignore(file.path))
+  const fetched = await fetchDiff({ directory, base, head, git, ignore, readers: !!readers, attributes })
+  const files = fetched.files
   // Data and generated files go to readers (when the run has them): the review pass gets their summaries in place of their diffs.
-  const triage = readers ? triageFiles(files, attributes) : { code: files, data: [] }
-  const diffTokens = estimateTokens(files.reduce((sum, file) => sum + file.text.length, 0))
+  const triage = readers ? fetched.triage : { code: files, data: [] }
+  const diffTokens = estimateTokens(files.reduce((sum, file) => sum + chars(file), 0))
   const read = triage.data.length ? await readers!({ data: triage.data, cut: [], diffTokens }) : []
   const placeholders = readerTexts(files, read)
   const shownFiles = files.map((file) => placeholders.has(file.path) ? { ...file, text: placeholders.get(file.path)! } : file)
-  const readTokens = triage.data.filter((entry) => placeholders.has(entry.file.path)).reduce((sum, entry) => sum + estimateTokens(entry.file.text.length), 0)
+  const readTokens = triage.data.filter((entry) => placeholders.has(entry.file.path)).reduce((sum, entry) => sum + estimateTokens(chars(entry.file)), 0)
   const notes: string[] = []
   let symbols: ChangedSymbol[] = []
   if (!graph) notes.push("No code graph index: reviewed from the diff alone.")

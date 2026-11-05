@@ -102,6 +102,14 @@ CSV, TSV, XML, ...) with 200 changed lines or more or under a data directory (`r
 stays with the review pass, and so do manifests and configuration (`package.json`, `tsconfig*.json`, `.github/`, `.mendcode/`).
 When a diff is too large for its parts, the code files cut from them go to readers too.
 
+**A large pull request is not refused for its size.** The diff is not read whole: `git diff --numstat` lists the files and their
+sizes first, a file triage names from that alone (an asset, a lockfile, a data format, a generated file) is read only as a sample
+for its reader (at most about 1.5 MB), and the rest is read in a few calls. The safety bound, 4 MiB, is on that reviewable rest.
+Past it the review stops before any model call, and the failure says how large the reviewable part is and how many data files were
+set aside, for example `the reviewable part of the diff is 9.0 MiB in 41 files, more than the 4.0 MiB a review reads`; split the
+pull request or mark generated files in `.gitattributes`. With readers off nothing is set aside, so a data file is a sample the
+token budget cuts.
+
 Readers group files by directory, extension and shape (one experiment's 50 result files are one group) and return a short summary
 of each group: what it holds, its structure, and rarities such as secrets, absolute paths, NaN or Infinity, huge or truncated
 values, binaries, and data that contradicts itself. The review pass gets each summary under the first file's `diff --git`
@@ -234,6 +242,8 @@ MendCode never does. A read outside the
 checkout is refused with what may be read instead. A push reviews only the commits since the last reviewed head (the whole PR after a force push) and re-checks the
 published findings in the files it changed, whether their lines were rewritten, moved, or left as they were while code next to
 them changed (a fix often inserts the missing call above the flagged line): one that no longer reproduces gets its thread resolved.
+The last reviewed head is the saved state's, or, when this device has none (another device reviewed, the data directory was wiped),
+the head marker of this login's newest review on the PR. The summary says `only the commits since the last review at `0afbdcd``.
 GitHub lets only writers and the PR author resolve a thread; where it refuses (a publisher with read access), one reply in the
 thread says `Fixed in <head>` instead. An explicit review (`/pr review`, `pr_review`, `@mendcode review`) re-checks every open
 finding, also on a head reviewed before; when it finds nothing new it posts no second review, and `@mendcode review` gets a reply
@@ -464,7 +474,9 @@ running. The newest 500 finished jobs are kept. A damaged file is set aside (`jo
 open PRs again. Each poll lists every open PR (up to 1,000), so after a pause or downtime the PRs opened, the heads pushed and the
 reviews requested meanwhile are found from GitHub's current state, not from events that were missed. A daemon start counts as a
 catch-up: its first listing also asks for the work routed to its personal reviewers that no event announced (a review requested, a
-claim that lapsed while it was down).
+claim that lapsed while it was down). A catch-up leaves alone a PR head whose review failed for good (an error that retrying does not
+change, told once when it happened), so a restart does not queue it again or repeat the notice; `/reviews` keeps showing it and
+its retry (`r`) runs it again, and a new head is reviewed as usual.
 
 A second review request for a PR whose review is already queued or running (a repeated `/pr review`, `@mendcode review` on a head
 the watch is reviewing) joins that job: the answer names it and no second review runs. `/reviews` shows a running job with its

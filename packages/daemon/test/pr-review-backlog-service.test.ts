@@ -8,7 +8,7 @@ import type { ReviewSessionFactory } from "../src/pr-review/engine"
 import type { GhCall } from "../src/pr-review/publish"
 import type { ReviewRun, RunPrReviewInput } from "../src/pr-review/run"
 import { createPrReviewService } from "../src/pr-review/service"
-import { emptyState } from "../src/pr-review/state"
+import { emptyState, reviewMarker } from "../src/pr-review/state"
 
 /**
  * The backlog through `createPrReviewService` (backlog.ts): open PRs whose current head has no review are reviewed when a watch
@@ -146,7 +146,7 @@ function model(gate?: Promise<void>) {
 }
 
 type Clock = { wall: number; mono: number }
-function daemon({ hub, checkout, brain, scripted = false, data = temp("bl-data-"), clock }: { hub: ReturnType<typeof github>; checkout: string; brain?: ReturnType<typeof model>; scripted?: boolean; data?: string; clock?: Clock }) {
+function daemon({ hub, checkout, brain, scripted = false, data = temp("bl-data-"), clock }: { hub: ReturnType<typeof github>; checkout: string; brain?: ReturnType<typeof model>; scripted?: boolean | ((input: RunPrReviewInput) => Promise<ReviewRun>); data?: string; clock?: Clock }) {
   const gh = hub.as("ana")
   const notices: string[] = []
   const inputs: RunPrReviewInput[] = []
@@ -155,7 +155,7 @@ function daemon({ hub, checkout, brain, scripted = false, data = temp("bl-data-"
     ...(clock ? { now: () => clock.wall, monotonic: () => clock.mono } : {}),
     sessionDirectory: () => checkout, sessionExists: () => true, notify: (_session, text) => notices.push(text),
     sessions: (brain ?? model()).factory, editor: () => (async () => { throw new Error("no fix session in these tests") }) as never, schedule: async (job) => { await job() }, random: () => 0.5, sleep: async () => {},
-    ...(scripted ? { review: async (input: RunPrReviewInput) => { inputs.push(input); return { state: emptyState(), incremental: false, status: "reviewed" } as ReviewRun } } : {}),
+    ...(scripted ? { review: async (input: RunPrReviewInput) => { inputs.push(input); return typeof scripted === "function" ? scripted(input) : { state: emptyState(), incremental: false, status: "reviewed" } as ReviewRun } } : {}),
   })
   cleanups.push(() => service.stop())
   const jobs = () => service.platform.jobs.all()
@@ -314,4 +314,69 @@ describe("the backlog through the service: open PRs without a review when a watc
     await vps.service.control({ sessionId: "ses", action: "unwatch-repo" })
     expect(await vps.watchRepo()).toContain("1 already reviewed at the current head stays as it is.")
   }, 40_000)
+})
+
+describe("a push after a review the saved state does not know, and a failure that does not go away", () => {
+  test("this login's published review is the last reviewed head when no state was saved: a push reviews from it, and says where", async () => {
+    const repo = await repository("enabled: true\ncooldown:\n  pr_minutes: 0\n")
+    const hub = github(repo)
+    const old = await repo.push(5)
+    hub.prs.push({ number: 5 })
+    hub.reviews.set(5, [{ id: 77, commit_id: old, state: "COMMENTED", body: `## MendCode review\n${reviewMarker(old)}`, user: { login: "ana", type: "User" }, author_association: "MEMBER" }])
+    const d = daemon({ hub, checkout: repo.dir, scripted: true })
+    await d.service.control({ sessionId: "ses", action: "publish-on" })
+    expect(await d.watchRepo()).toContain("1 already reviewed at the current head stays as it is.")
+    const head = await repo.push(5, "export const pr = 55\n")
+    await d.service.tick()
+    await until(() => d.reviewed(5) === 1)
+    expect(d.inputs[0]!.head).toBe(head)
+    expect(d.inputs[0]!.state.lastHead).toBe(old)
+  }, 30_000)
+
+  test("a review that fails for good is told once: a daemon restart does not queue or announce it again, /reviews keeps it and a retry runs it", async () => {
+    const repo = await repository("enabled: true\n")
+    const hub = github(repo)
+    await repo.push(23)
+    hub.prs.push({ number: 23 })
+    const clock: Clock = { wall: Date.now(), mono: 1_000_000 }
+    const failing = async () => ({ status: "failed", reason: "[PR_REVIEW]: the reviewable part of the diff is 9.0 MiB, more than a review reads", state: emptyState(), incremental: false }) as ReviewRun
+    const d = daemon({ hub, checkout: repo.dir, scripted: failing, clock })
+    await d.service.control({ sessionId: "ses", action: "publish-on" })
+    await d.watchRepo()
+    await until(() => d.jobs().some((job) => job.number === 23 && job.state === "failed"))
+    expect(d.notices.filter((text) => text.includes("failed")).length).toBe(1)
+    await d.service.stop()
+    const again = daemon({ hub, checkout: repo.dir, scripted: failing, data: d.data, clock })
+    await again.service.tick()
+    await again.service.tick()
+    expect(again.reviewed(23)).toBe(0)
+    expect(again.notices.filter((text) => /failed|caught up/.test(text))).toEqual([])
+    const job = again.jobs().find((item) => item.number === 23)!
+    expect(job.state).toBe("failed")
+    expect(await again.service.control({ sessionId: "ses", action: "list" })).toMatchObject({ ok: true })
+    const retried = await again.service.platform.handle.retry(job.id, "the PR was split")
+    expect(retried.ok).toBe(true)
+    await until(() => again.reviewed(23) === 1)
+  }, 30_000)
+
+  test("a catch-up after a restart reads the network by listing, not by PR: a permanently failed head costs no review read, and the listing is one call", async () => {
+    const repo = await repository("enabled: true\n")
+    const hub = github(repo)
+    for (const number of [21, 22, 23]) { await repo.push(number); hub.prs.push({ number }) }
+    const clock: Clock = { wall: Date.now(), mono: 1_000_000 }
+    const failing = async () => ({ status: "failed", reason: "[PR_REVIEW]: the reviewable part of the diff is 9.0 MiB, more than a review reads", state: emptyState(), incremental: false }) as ReviewRun
+    const d = daemon({ hub, checkout: repo.dir, scripted: failing, clock })
+    await d.service.control({ sessionId: "ses", action: "publish-on" })
+    await d.watchRepo()
+    await until(() => d.jobs().filter((job) => job.state === "failed").length === 3)
+    await d.service.stop()
+    const calls: string[] = []
+    const as = hub.as
+    hub.as = (login: string) => { const inner = as(login); return { run: async (input) => { calls.push(input.argv.join(" ")); return inner.run(input) }, call: async (input) => { calls.push(input.argv.join(" ")); return inner.call(input) } } }
+    const again = daemon({ hub, checkout: repo.dir, scripted: failing, data: d.data, clock })
+    await again.service.tick()
+    expect(calls.filter((call) => call.startsWith("pr list")).length).toBeLessThanOrEqual(1)
+    expect(calls.filter((call) => /pulls\/\d+\/reviews/.test(call))).toEqual([])
+    expect(again.inputs).toEqual([])
+  }, 30_000)
 })

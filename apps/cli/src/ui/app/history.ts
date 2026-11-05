@@ -1,6 +1,6 @@
 import type { HistoryReport, HistoryTurn, MessageRevision, SessionId } from "@mendcode/protocol"
 import type { AppContext } from "./context"
-import { createHistoryState, historyTurns, historyReaderRows } from "../lazy-pages"
+import { createHistoryState, historyTurns, historyReaderRows, historySearchKey } from "../lazy-pages"
 
 export function createHistory(ctx: AppContext, actions: { loadPage(): Promise<void> }) {
   const { input, state, requestFrame } = ctx
@@ -56,17 +56,18 @@ export function createHistory(ctx: AppContext, actions: { loadPage(): Promise<vo
     const h = state.historyState
     const turns = historyTurns(state.historyReport, h.query)
     const selected = turns[h.selected]
-    if (h.editing) {
-      if (key === "\x1b") { h.editing = false; h.query = h.queryBefore ?? ""; delete h.queryBefore }
-      else if (key === "\r") { h.editing = false; h.page = 0; await loadHistory({}, true) }
-      else if (key === "\x7f" || key === "\b") h.query = Array.from(h.query).slice(0, -1).join("")
-      else if (!/[\x00-\x1f\x7f]/.test(key)) h.query = (h.query + key).slice(0, 200)
+    const searched = h.editing || key === "/" ? historySearchKey(h, key) : undefined
+    if (searched) {
+      // Enter also looks through older pages, which the loaded turns do not hold.
+      if (searched === "submitted") { h.page = 0; await loadHistory({}, true) }
+    } else if (h.editing) {
+      if (key === "\x1b[A" || key === "\x10") h.selected = Math.max(0, h.selected - 1)
+      else if (key === "\x1b[B" || key === "\x0e") h.selected = Math.min(Math.max(0, turns.length - 1), h.selected + 1)
     } else if (key === "\x1b" || key === "q") {
       if (h.reader) { h.reader = false; h.scroll = 0 }
       else if (h.query) { h.query = ""; h.selected = 0 }
       else { remember(); serial++; state.page = "chat" }
     } else if (key === "l") { remember(); serial++; state.page = "chat"; ctx.view.jump(state.sessionId, 0, 0) }
-    else if (key === "/") { h.queryBefore = h.query; h.editing = true }
     else if (h.reader) {
       const max = Math.max(0, historyReaderRows(state.historyDetail ?? selected, h, Math.max(1, input.screen.size.width - 4), ctx.now()).length - Math.max(1, input.screen.size.height - 7))
       const step = key === "\x1b[5~" || key === "\x1b[6~" ? Math.max(1, input.screen.size.height - 8) : 1
