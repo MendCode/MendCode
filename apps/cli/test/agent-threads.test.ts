@@ -15,6 +15,8 @@ async function chat(shells: Array<Record<string, unknown>> = []) {
       if (command.type === "session.children") return { ok: true, result: { sessions: [] } } as never
       if (command.type === "task.list") return { ok: true, result: { tasks: [] } } as never
       if (command.type === "background.list") return { ok: true, result: { tasks: shells.map((shell) => ({ sessionId: h.sessionId, ...shell })) } } as never
+      if (command.type === "user.submit") return { ok: true, result: { queueId: "queue_thread" } } as never
+      if (command.type === "queue.remove") return { ok: true } as never
       return undefined
     },
   })
@@ -376,4 +378,43 @@ test("a stopped sub-agent's row goes once a turn begun after the stop has ended;
   talk.emit({ type: "turn.completed", turnId: "turn_2" })
   h.app.render()
   expect(screen(h)).not.toContain("stopped by you")
+})
+
+test("an open sub-agent's thread has its own prompt and its own queue: the conversation's draft and queued messages wait, untouched, until it is back", async () => {
+  const { h, talk } = await chat()
+  talk.emit({ type: "queue.added", queueId: "queue_main", text: "queued in the conversation", attachments: [] })
+  talk.emit({ type: "queue.changed", queue: [{ queueId: "queue_main", preview: "queued in the conversation", attachments: 0 }] })
+  await h.type("main draft")
+  await h.type("\x18\x1b[B")
+  h.app.render()
+  expect(screen(h)).toContain("1 of 2 · ←→ · ↑ back")
+  expect(h.app.editor.text).toBe("")
+  expect(screen(h)).not.toContain("queued in the conversation")
+  // ↑ on the thread's empty prompt has nothing of its own queued: it returns to the conversation instead of taking its message.
+  await h.type("\x1b[A")
+  h.app.render()
+  expect(h.sentOf("queue.remove")).toHaveLength(0)
+  expect(h.app.editor.text).toBe("main draft")
+  expect(screen(h)).toContain("queued in the conversation")
+  // A message sent from the thread is queued in the thread's view; alt+↑ there takes only it back.
+  await h.type("\x18\x1b[B")
+  await h.type("from the thread\r")
+  const sent = h.sentOf("user.submit").at(-1) as { text: string }
+  expect(sent.text).toBe("from the thread")
+  talk.emit({ type: "queue.added", queueId: "queue_thread", text: "from the thread", attachments: [] })
+  talk.emit({ type: "queue.changed", queue: [{ queueId: "queue_main", preview: "queued in the conversation", attachments: 0 }, { queueId: "queue_thread", preview: "from the thread", attachments: 0 }] })
+  h.app.render()
+  expect(screen(h)).toContain("from the thread")
+  expect(screen(h)).not.toContain("queued in the conversation")
+  await h.type("\x1b[1;3A")
+  expect(h.sentOf("queue.remove").map((command) => (command as { queueId: string }).queueId)).toEqual(["queue_thread"])
+  expect(h.app.editor.text).toBe("from the thread")
+  talk.emit({ type: "queue.changed", queue: [{ queueId: "queue_main", preview: "queued in the conversation", attachments: 0 }] })
+  // The thread's text never becomes the session's saved draft; once its prompt is empty, ↑ returns to the conversation as it was left.
+  expect(h.sentOf("draft.set").map((command) => (command as { text: string }).text)).not.toContain("from the thread")
+  await h.type("\x7f".repeat("from the thread".length))
+  await h.type("\x1b[A")
+  h.app.render()
+  expect(h.app.editor.text).toBe("main draft")
+  expect(screen(h)).toContain("queued in the conversation")
 })

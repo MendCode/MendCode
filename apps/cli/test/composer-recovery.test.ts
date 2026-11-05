@@ -3,6 +3,7 @@ import { writeFileSync } from "node:fs"
 import path from "node:path"
 import { createEditor } from "../src/view/editor"
 import { promptSearchBar, searchPrompts } from "../src/view/prompt-search"
+import { buildCommentMessage, parseCommentMessage } from "../src/view/reply-comments"
 import { renderShortcutOverlay, shortcutEntries } from "../src/view/shortcut-overlay"
 import { createBindings } from "../src/ui/keymap"
 import { textWidth } from "../src/view/wrap"
@@ -204,6 +205,26 @@ describe("edit a queued prompt", () => {
     h.chat.emit({ type: "queue.changed", queue: [] })
     await h.type(ALT_UP)
     expect(h.text().join("\n")).toContain("nothing queued")
+  })
+
+  test("a queued message with comments comes back as its text and its comments, never the envelope, and goes out again whole", async () => {
+    const h = queued()
+    const message = buildCommentMessage({ comments: [{ id: 1, quote: "use a ```fence``` here", text: "why </quote> this?" }, { id: 2, quote: "second passage", text: "and this" }], general: "my own words" })
+    const withComments = ids("queue")
+    h.chat.emit({ type: "queue.added", queueId: withComments, text: message, attachments: [] })
+    h.chat.emit({ type: "queue.changed", queue: [...h.entries, { queueId: withComments, preview: message.replace(/\s+/g, " ").slice(0, 200), attachments: 0 }] })
+    expect(h.text().join("\n")).toContain("2 comments")
+    expect(h.text().join("\n")).not.toMatch(/mendcode_comments|<\/?quote>|<\/?comment/)
+    await h.type(ALT_UP)
+    expect(h.sentOf("queue.remove").at(-1)).toMatchObject({ queueId: withComments })
+    h.chat.emit({ type: "queue.changed", queue: h.entries })
+    expect(h.app.editor.text).toBe("my own words")
+    expect(h.text().join("\n")).not.toMatch(/mendcode_comments|<\/?quote>|<\/?comment/)
+    await h.type("\r")
+    const resent = h.sentOf("user.submit").map((command) => (command as { text: string }).text).at(-1)!
+    const parsed = parseCommentMessage(resent)
+    expect(parsed?.comments.map(({ quote, text }) => ({ quote, text }))).toEqual([{ quote: "use a ```fence``` here", text: "why </quote> this?" }, { quote: "second passage", text: "and this" }])
+    expect(parsed?.note).toBe("my own words")
   })
 
   test("the queue panel names the key", () => {

@@ -71,6 +71,19 @@ describe("turn state", () => {
     expect(state.startedAt).toBeUndefined()
   })
 
+  test("a sub-agent's steps never become the running item: the phase stays on what the main agent does while agents work", () => {
+    const state = createTurnState()
+    state.apply(ev({ type: "turn.started", turnId, queueId: ids("queue") }))
+    const call = ids("item")
+    state.apply(ev({ type: "item.started", turnId, itemId: call, kind: "tool_call", meta: { tool: "agent B1", subagent: true } }))
+    for (const [kind, tool] of [["tool_call", "shell: gh search code"], ["reasoning", undefined], ["tool_call", "edit: a.ts"], ["agent_message", undefined]] as const) {
+      state.apply(ev({ type: "item.started", turnId, itemId: ids("item"), kind, meta: { agentParent: call, ...(tool ? { tool } : {}) } }))
+      expect(state.current).toEqual({ kind: "tool_call", tool: "agent B1" })
+    }
+    state.apply(ev({ type: "item.completed", itemId: call, status: "ok" }))
+    expect(state.current).toBeUndefined()
+  })
+
   test("keeps the extra fields of a request until it is resolved", () => {
     const state = createTurnState()
     const requestId = ids("request")

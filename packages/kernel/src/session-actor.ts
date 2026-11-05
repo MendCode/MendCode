@@ -42,6 +42,8 @@ type ActiveTurn = {
   abort: AbortController
   scope: Scope
   openItems: Set<ItemId>
+  /** The open items an engine's sub-agent opened (`agentParent`): its thread's, never the turn's own step, state or tools. */
+  agentOpen: Set<ItemId>
   pending: Map<RequestId, (resolution: EngineResolution) => void>
   questions: Map<RequestId, NonNullable<EngineRequest["questions"]>>
   plans: Map<RequestId, NonNullable<EngineRequest["planReview"]>>
@@ -245,6 +247,7 @@ export function createSessionActor(options: SessionActorOptions) {
       abort: new AbortController(),
       scope: scope.child(`turn:${turnId}`),
       openItems: new Set(),
+      agentOpen: new Set(),
       pending: new Map(),
       questions: new Map(),
       plans: new Map(),
@@ -384,6 +387,7 @@ export function createSessionActor(options: SessionActorOptions) {
   function closeOpenItems(turn: ActiveTurn, status: "cancelled" | "interrupted" | "unknown") {
     for (const itemId of turn.openItems) emit({ type: "item.completed", sessionId, itemId, status })
     turn.openItems.clear()
+    turn.agentOpen.clear()
   }
 
   function onEngineDone(turnId: TurnId, phase: Phase, outcome: TurnOutcome) {
@@ -460,7 +464,9 @@ export function createSessionActor(options: SessionActorOptions) {
     if (event.type === "item.started") {
       turn.openItems.add(event.itemId)
       emit({ type: "item.started", sessionId, turnId, itemId: event.itemId, kind: event.kind, ...(event.meta ? { meta: event.meta } : {}) })
-      if (turn.phase === "turn") setForeground(event.kind === "tool_call" ? "tool" : "generating")
+      // A sub-agent's step is drawn in its thread: the turn's state follows the main agent only, and does not flip with each agent's tool.
+      if (typeof event.meta?.agentParent === "string") turn.agentOpen.add(event.itemId)
+      else if (turn.phase === "turn") setForeground(event.kind === "tool_call" ? "tool" : "generating")
       return
     }
     if (!turn.openItems.has(event.itemId)) return
@@ -481,7 +487,7 @@ export function createSessionActor(options: SessionActorOptions) {
       ...(event.render ? { render: event.render } : {}),
       ...(event.meta ? { meta: displayMeta(event.meta) } : {}),
     })
-    if (turn.phase === "turn" && foreground === "tool") setForeground("generating")
+    if (!turn.agentOpen.delete(event.itemId) && turn.phase === "turn" && foreground === "tool") setForeground("generating")
   }
 
   /** Items a background sub-agent opened after the turn that started it ended, until each completes (bounded). */
@@ -840,8 +846,8 @@ export function createSessionActor(options: SessionActorOptions) {
       }
       case "engine.queue": {
         const turn = active
-        // Never bypass a held queue.
-        if (!isLive(message.turnId) || !turn || turn.phase !== "turn" || held || paused || turn.pending.size || turn.openItems.size) return message.reply(undefined)
+        // Never bypass a held queue. Only the main agent's own open steps hold a message back: a sub-agent's tools run in its thread.
+        if (!isLive(message.turnId) || !turn || turn.phase !== "turn" || held || paused || turn.pending.size || turn.openItems.size > turn.agentOpen.size) return message.reply(undefined)
         // After its answer, such a turn is done: the next message gets a turn of its own (and no selection made for another one).
         if (turn.alone && message.userOnly) return message.reply(undefined)
         dropShown()

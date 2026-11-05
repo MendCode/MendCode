@@ -79,6 +79,9 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 - The mouse wheel and trackpad scroll every page with rows or text, including Usage.
 - Enter or space turns the pet off from `/pet`, trusts a project in `/tools` and `/hooks`, and switches the IDE bridge on or off.
 - Closing MendCode quickly, or with Ctrl+C or a termination signal, no longer leaves part of the screen painted.
+- With Claude Code, a background sub-agent's commands stay in its own thread: they no longer show as a message of the main agent, change the working row or hold queued messages back.
+- A queued message with comments comes back to edit as your text and its comment chips, and goes out again with them; the queue never shows their markup.
+- A Claude Code sub-agent's thread has its own prompt and queue: the conversation's draft and queued messages wait untouched until you return.
 - An automatic PR review checks that it may post, and that no other reviewer already has, before it spends any tokens.
 - The advisor sees a short summary of the session (earlier edits apart from this turn's, this turn's checks) and the untracked files, and the executor can pass it files with a line range and images; the extra evidence is capped and says what was cut.
 - `@MendCode review` gets no extra reply when this reviewer's own review of the head was posted after the comment.

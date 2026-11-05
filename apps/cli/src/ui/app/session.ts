@@ -187,7 +187,9 @@ export function createSession(ctx: AppContext, actions: {
     ctx.comments.switching()
     // The prompt is the leaving session's draft: saved now (a pending save goes out too), and emptied below so the next one starts with its own.
     const promptOwned = !input.remote?.readOnly && !state.editingScratch && !state.editingGoal && state.editingMemory === undefined && !state.planDraft
-    if (promptOwned) drafts.changed(state.sessionId, { text: editor.text, images: draftRefs(state.attachments, editor.text) })
+    // With a sub-agent's thread open, the prompt on screen is the thread's: the conversation's, set aside, is the draft.
+    const leaving = state.agentMainPrompt ?? { text: editor.text, attachments: state.attachments }
+    if (promptOwned) drafts.changed(state.sessionId, { text: leaving.text, images: draftRefs(leaving.attachments, leaving.text) })
     drafts.flush()
     // The history is the project's, shared by its sessions: what is in the prompt is kept as a draft entry, and the next ↑ reads the list again.
     void actions.keepDiscarded({ track: false })
@@ -219,6 +221,8 @@ export function createSession(ctx: AppContext, actions: {
     state.sessionParentId = undefined
     state.agentRoot = undefined
     state.agentView = undefined
+    state.agentMainPrompt = undefined
+    state.agentViews = undefined
     state.sidebarFocus = false
     state.sidebarSelected = next
     state.contextHover = false

@@ -1,6 +1,7 @@
 import type { Line } from "../ui/theme"
 import { clip, panelGrid } from "./deck"
 import { pickerFrame } from "./picker-frame"
+import { readableText } from "./reply-comments"
 import { wrap } from "./wrap"
 
 export type QueueRowKind = "message" | "shell" | "compact" | "notice"
@@ -22,7 +23,7 @@ export type QueuePageState = {
 
 export const createQueuePageState = (mode: string): QueuePageState => ({ selected: 0, rows: [], held: false, paused: false, mode, loaded: false })
 
-const label = (row: QueueRow) => row.kind === "compact" ? "compact context" : (row.displayText ?? row.text).replace(/\s+/g, " ").trim() || "(empty)"
+const label = (row: QueueRow) => row.kind === "compact" ? "compact context" : readableText(row.displayText ?? row.text, { quotes: false }).replace(/\s+/g, " ").trim() || "(empty)"
 const chip = (row: QueueRow) => (row.delivery === "steer" ? "STEER" : row.delivery === "queue" ? "WAIT" : row.delivery === "restart" ? "NEXT" : "")
 
 /** The session's queue as a manageable list: order, delivery and the full text of the selected message. */
@@ -57,7 +58,7 @@ export function renderQueuePage(state: QueuePageState, width: number, height: nu
         return shown.split("\n").flatMap((part) => wrap(part, Math.max(1, w)).map((text): Line => [{ text, fg: "text" }]))
       }
       if (!selected) return []
-      const text = selected.kind === "compact" ? "Compacts the context before the next message." : selected.text
+      const text = selected.kind === "compact" ? "Compacts the context before the next message." : readableText(selected.text)
       const notes = [
         ...(selected.attachments ? [`${selected.attachments} attached`] : []),
         ...(selected.delivery === "steer" ? ["Joins the running turn after its next tool result"] : selected.delivery === "queue" ? ["Waits for the response to finish"] : selected.delivery === "restart" ? ["Interrupts the running turn"] : []),

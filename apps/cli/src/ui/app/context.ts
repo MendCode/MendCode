@@ -248,6 +248,10 @@ export type AppState = {
   /** A sub-agent thread open in the chat's place (ui/app/agent-view.ts): the item of its call, and the session's own transcript while `transcript` is the thread's view. */
   agentView?: import("@mendcode/protocol").ItemId | undefined
   agentRoot?: AppState["transcript"] | undefined
+  /** The conversation's prompt, set aside while a thread is open (each view has its own; the thread's never becomes the saved draft). */
+  agentMainPrompt?: import("./agent-view").ViewPrompt | undefined
+  /** By thread: its own prompt while another view is shown, and the messages sent while it was open (the queue it shows and edits; true once listed). */
+  agentViews?: Map<import("@mendcode/protocol").ItemId, { prompt?: import("./agent-view").ViewPrompt; queued: Map<string, boolean> }> | undefined
   agentBackgrounds?: import("@mendcode/protocol").SessionBackgroundEntry[]
   agentBackgroundError?: string
   extractionJobs?: Omit<import("@mendcode/protocol").ExtractionJob, "text">[]

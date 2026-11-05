@@ -1335,6 +1335,71 @@ describe("claude engine background tasks", () => {
     h.engine.stop()
   })
 
+  test("a background agent's own long Bash call (Claude Code 2.1.317 reports it as a task owned by the sub-agent) stays in the agent's thread and never becomes a notice for the main agent", async () => {
+    const fake = fakeClaude({
+      onUser(api) {
+        api.push({ type: "system", subtype: "init", session_id: "cc-session-1" })
+        streamTool(api, 0, "toolu_agent", "Agent", { description: "B1 diff wrap", subagent_type: "general-purpose", prompt: "compare", run_in_background: true })
+        api.push({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_agent", content: "Async agent launched successfully. agentId: a2a7" }] } })
+        api.push({ type: "system", subtype: "background_tasks_changed", tasks: [{ task_id: "a2a7", task_type: "local_agent", description: "B1 diff wrap" }] })
+        streamText(api, 1, "launched")
+        api.push(result())
+      },
+    })
+    const notices: string[] = []
+    const late: EngineEvent[] = []
+    const h = engineWith([fake], { notify: (_sessionId, text) => void notices.push(text), onAgentEvent: (_sessionId, _turnId, event) => void late.push(event) })
+    const first = turnInput()
+    expect(await h.engine.runTurn(first.input)).toEqual({ status: "ok" })
+    const command = "cd /tmp/b1 && gh search code --repo sst/opencode \"diffWrapMode\" --limit 5"
+    // As recorded from Claude Code 2.1.317: the sub-agent's foreground Bash gets a task of its own once it runs a few seconds.
+    fake.api.push({ type: "assistant", parent_tool_use_id: "toolu_agent", message: { content: [{ type: "tool_use", id: "toolu_bash", name: "Bash", input: { command } }] } })
+    fake.api.push({ type: "system", subtype: "task_started", task_id: "brchy3yfk", owned_by_subagent: true, tool_use_id: "toolu_bash", description: command, is_backgrounded: false, parent_task_id: "a2a7", task_type: "local_bash" })
+    fake.api.push({ type: "system", subtype: "task_notification", task_id: "brchy3yfk", tool_use_id: "toolu_bash", status: "completed", output_file: "", summary: command })
+    fake.api.push({ type: "user", parent_tool_use_id: "toolu_agent", message: { content: [{ type: "tool_result", tool_use_id: "toolu_bash", content: "anomalyco/opencode" }] } })
+    await Bun.sleep(10)
+    expect(notices).toEqual([])
+    expect(late.map((event) => event.type)).toEqual(["item.started", "item.completed"])
+    expect(late[0]).toMatchObject({ meta: { tool: `shell: ${command}` } })
+    // The agent's own end is still the notice Claude Code answers.
+    fake.api.push({ type: "system", subtype: "task_notification", task_id: "a2a7", tool_use_id: "toolu_agent", status: "completed", output_file: "/tmp/tasks/a2a7.output", summary: "ok", usage: { tool_uses: 1 } })
+    await Bun.sleep(10)
+    expect(notices).toEqual(["ok\nOutput: /tmp/tasks/a2a7.output"])
+    h.engine.stop()
+  })
+
+  test("a background agent's background shell ends while the user sends a message: no notice turn opens, and the message goes out at once", async () => {
+    let calls = 0
+    const fake = fakeClaude({
+      onUser(api) {
+        calls++
+        api.push({ type: "system", subtype: "init", session_id: "cc-session-1" })
+        if (calls === 1) {
+          streamTool(api, 0, "toolu_agent", "Agent", { description: "B1", subagent_type: "general-purpose", prompt: "run it in the background", run_in_background: true })
+          api.push({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "toolu_agent", content: "Async agent launched successfully. agentId: a7dd" }] } })
+        }
+        streamText(api, 1, calls === 1 ? "launched" : "answered")
+        api.push(result())
+      },
+    })
+    const notices: string[] = []
+    const h = engineWith([fake], { notify: (_sessionId, text) => void notices.push(text) })
+    const first = turnInput()
+    expect(await h.engine.runTurn(first.input)).toEqual({ status: "ok" })
+    // As recorded from Claude Code 2.1.317: the sub-agent's `run_in_background` Bash is a task owned by the sub-agent too.
+    fake.api.push({ type: "assistant", parent_tool_use_id: "toolu_agent", message: { content: [{ type: "tool_use", id: "toolu_bg", name: "Bash", input: { command: "sleep 8; echo done-bg", run_in_background: true } }] } })
+    fake.api.push({ type: "system", subtype: "task_started", task_id: "bfhn1fqzd", owned_by_subagent: true, tool_use_id: "toolu_bg", description: "Run delayed echo in background", is_backgrounded: true, parent_task_id: "a7dd", task_type: "local_bash" })
+    // Claude Code lists it among the process's background tasks as well: being listed does not make its end the main agent's.
+    fake.api.push({ type: "system", subtype: "background_tasks_changed", tasks: [{ task_id: "a7dd", task_type: "local_agent", description: "B1" }, { task_id: "bfhn1fqzd", task_type: "local_bash", description: "Run delayed echo in background", parent_task_id: "a7dd" }] })
+    fake.api.push({ type: "system", subtype: "task_notification", task_id: "bfhn1fqzd", tool_use_id: "toolu_bg", status: "completed", output_file: "", summary: "Background command \"Run delayed echo in background\" completed (exit code 0)" })
+    await Bun.sleep(10)
+    expect(notices).toEqual([])
+    const sent = h.engine.runTurn(turnInput({ sessionId: first.input.sessionId, text: "next" }).input)
+    expect(await Promise.race([sent, Bun.sleep(200).then(() => "held")])).toEqual({ status: "ok" })
+    expect(notices).toEqual([])
+    h.engine.stop()
+  })
+
   test("an agent Claude Code sends to the background on its own (async_launched, no run_in_background) is a background agent: bg call, reports after its turn", async () => {
     const fake = fakeClaude({
       onUser(api) {

@@ -29,6 +29,8 @@ import { createClaudePlan, type ClaudePlan } from "./plan"
 export const DEFAULT_PROCESS_IDLE_MS = 10 * 60_000
 /** Records of a turn Claude Code runs on its own that are kept until its notice is shown; a runaway one is cut there. */
 const MAX_UNSOLICITED = 2_000
+/** Sub-agent tool tasks remembered until their end (`agentTasks`); one that never reports its end is forgotten past this many. */
+const MAX_AGENT_TASKS = 256
 const CONTROL_TIMEOUT_MS = 30_000
 /** Esc gives Claude Code this long to stop a turn on its own; then the turn ends here and what it still sends is dropped. */
 export const CANCEL_GRACE_MS = 3_000
@@ -130,6 +132,12 @@ type Connection = {
   envKey: string
   /** Ended turns whose background agents still run: their records go on to that turn's mapper, and from it to the daemon. */
   agentTurns: Array<ReturnType<typeof createTurnMapper>>
+  /**
+   * Tasks a sub-agent's own tools run, by task id, from Claude Code's `task_started` (`owned_by_subagent`) to their `task_notification`.
+   * Claude Code 2.1.317 reports a sub-agent's long Bash call this way; the call belongs to that agent's thread, and the main agent never
+   * answers its end, so it is no background task of the session's own.
+   */
+  agentTasks: Set<string>
   /** The tasks TaskCreate and TaskUpdate keep in this process, so every turn's card shows the whole list. */
   plan: ClaudePlan
 }
@@ -434,6 +442,7 @@ export function createClaudeEngine(options: {
       })
       return
     }
+    if (agentTask(connection, message)) return
     // A background agent of an ended turn: its records go to that turn; Claude Code's notice that it ended is also read below.
     const owner = connection.agentTurns.find((mapper) => mapper.owns(message))
     if (owner) {
@@ -460,6 +469,21 @@ export function createClaudeEngine(options: {
     // A tool result of the turn itself is where Claude Code can take a message in: queued ones go to it now, as it does with a
     // message typed while it works (it reads them after the running step's tool results, or answers them right after this turn).
     if (message.type === "user" && !message.parent_tool_use_id && Array.isArray(message.message?.content) && message.message.content.some((part: { type?: string }) => part?.type === "tool_result")) void steerQueued(connection, turn)
+  }
+
+  /**
+   * True for Claude Code's notice that a sub-agent's own tool started or ended (`agentTasks`). Its tool is already drawn in the
+   * agent's thread; read as a background task of the session, its end opened a turn of the main agent that showed the agent's
+   * command as a message and held the queue until Claude Code next answered.
+   */
+  function agentTask(connection: Connection, message: ClaudeMessage): boolean {
+    if (message.type !== "system" || typeof message.task_id !== "string") return false
+    if (message.subtype === "task_started" && message.owned_by_subagent === true) {
+      if (connection.agentTasks.size >= MAX_AGENT_TASKS) connection.agentTasks.clear()
+      connection.agentTasks.add(message.task_id)
+      return true
+    }
+    return message.subtype === "task_notification" && connection.agentTasks.delete(message.task_id)
   }
 
   /** Writes what the user queued while the turn runs to Claude Code, which takes it into the turn the way it takes a typed message. */
@@ -531,7 +555,7 @@ export function createClaudeEngine(options: {
     const extra = { ...options.env?.(sessionId, model), ...environment?.values }
     const env = Object.keys(extra).length ? { env: extra } : {}
     const transport = options.transportFactory?.({ args, cwd, ...env }) ?? spawnClaude({ bin: options.bin ?? "claude", args, cwd, ...env })
-    const connection: Connection = { sessionId, transport, model, permission: claudePermissionMode(permission), pending: new Map(), ready: Promise.resolve(), closed: false, background: 0, tasks: new Set(), agentTurns: [], envKey: environmentKey(environment), plan: createClaudePlan() }
+    const connection: Connection = { sessionId, transport, model, permission: claudePermissionMode(permission), pending: new Map(), ready: Promise.resolve(), closed: false, background: 0, tasks: new Set(), agentTurns: [], agentTasks: new Set(), envKey: environmentKey(environment), plan: createClaudePlan() }
     connections.set(sessionId, connection)
     void (async () => {
       try {

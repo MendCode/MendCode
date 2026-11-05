@@ -221,11 +221,24 @@ export function parseCommentMessage(message: string): ParsedComments | undefined
   return { comments, note, ...(head ? { head } : {}), ...(tail ? { tail } : {}), ...(header.includes(' parked="1"') ? { parked: true } : {}), ...(header.includes(' draft="1"') ? { draft: true } : {}) }
 }
 
+const replyComment = (comment: ParsedComment, index: number, itemId: string | undefined): ReplyComment => ({ id: index + 1, quote: comment.quote, text: comment.text, ...(itemId ? { itemId } : {}), ...(comment.of === CONTEXT_OF ? { other: true as const } : {}) })
+
 /** A saved draft's comments, when its text is the draft envelope; undefined for ordinary text (the text is then the whole draft). */
 export function parseCommentDraft(text: string): { comments: ReplyComment[]; draft: string; parked: boolean } | undefined {
   const parsed = parseCommentMessage(text)
   if (!parsed?.draft || !parsed.comments.length) return undefined
-  return { comments: parsed.comments.map((comment, index): ReplyComment => ({ id: index + 1, quote: comment.quote, text: comment.text, ...(comment.item ? { itemId: comment.item } : {}), ...(comment.of === CONTEXT_OF ? { other: true as const } : {}) })), draft: parsed.note, parked: parsed.parked === true }
+  return { comments: parsed.comments.map((comment, index) => replyComment(comment, index, comment.item)), draft: parsed.note, parked: parsed.parked === true }
+}
+
+/**
+ * A message that was composed with comments (a queued one pulled back to edit), as the user composed it: the comments and the typed
+ * text (any text around the envelope included). The wire names no message, so one on the `last answer` is tied to `lastItemId` again.
+ * Undefined for any other text.
+ */
+export function parseSentComments(text: string, lastItemId: string | undefined): { comments: ReplyComment[]; text: string } | undefined {
+  const parsed = parseCommentMessage(text)
+  if (!parsed?.comments.length) return undefined
+  return { comments: parsed.comments.map((comment, index) => replyComment(comment, index, comment.of === "last answer" ? lastItemId : comment.item)), text: [parsed.head, parsed.note, parsed.tail].filter(Boolean).join("\n\n") }
 }
 
 /** A message that may be an envelope as plain readable lines (history, a search hit, a draft preview); other text is returned unchanged. */

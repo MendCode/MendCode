@@ -106,6 +106,8 @@ export function createTurnState() {
           break
         case "item.started": {
           retry = undefined
+          // A sub-agent's step shows in its own thread and row: the working row names what the main agent does, steady while agents work.
+          if (typeof event.meta?.agentParent === "string") break
           const tool = typeof event.meta?.tool === "string" ? event.meta.tool.split(":")[0]!.trim() : undefined
           const full = typeof event.meta?.tool === "string" ? event.meta.tool : ""
           const detail = tool === "shell" && full.includes(":") ?full.slice(full.indexOf(":") + 1).trim() : ""

@@ -297,6 +297,9 @@ export function createInput(ctx: AppContext, actions: {
     if (!reply.ok) state.clearPending = false
     if (!reply.ok && restorable) { state.attachments = sending; if (typed.pastes.length) restoreTyped(); else editor.replaceAll(text) }
     if (reply.ok) {
+      // Sent from a sub-agent's thread: it goes to the session, and while queued it is that thread's to see and edit.
+      const queueId = reply.result?.queueId
+      if (state.agentView && state.sessionId === submissionSession && typeof queueId === "string") state.agentViews?.get(state.agentView)?.queued.set(queueId, false)
       if (attached) ctx.comments.sent()
       ide.markSent()
       if (expanded !== undefined && !parseSlash(text)) actions.recordSlash?.(/^\/([a-z0-9][a-z0-9:_-]*)/i.exec(text)?.[1]?.toLowerCase() ?? "")
