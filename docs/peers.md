@@ -8,6 +8,8 @@ Lists the project's other sessions: id, title, state (`idle`, `generating`, …)
 
 It is a list of recent conversations, not of agents working right now: `idle` does not mean the session is open, and a title does not mean it owns a file.
 
+`sessions plans=true` lists the plan files you accepted or applied instead (`plan=<id> title status steps session path`; `scope` and `directory` work as above) and `read=<plan-… id>` returns one, local only ([plan files](plan-review.md#plan-files)).
+
 ### `read`: one session's conversation
 
 `sessions read=<exact session id>` returns that conversation, oldest first, as the Markdown of [`/export`](sessions.md) without the

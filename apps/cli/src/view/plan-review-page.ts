@@ -2,7 +2,11 @@ import { PLAN_APPLY_LABELS, type PlanApplyPermission } from "@mendcode/protocol/
 import type { PlanReviewRecord } from "@mendcode/protocol"
 import type { Line } from "../ui/theme"
 import { columns, fit, panelGrid, spread } from "./deck"
-import { renderMarkdown, wrapSpans } from "./markdown"
+import { wrapSpans } from "./markdown"
+import { assistantBody } from "./message-views"
+import type { MarkdownStyle } from "./markdown-style"
+import { styleKey } from "./markdown-style"
+import { mermaidGeneration } from "./mermaid-lazy"
 import { createEditor, graphemes } from "./editor"
 import { textWidth } from "./wrap"
 
@@ -16,11 +20,17 @@ export type PlanDraft = {
   /** The access the session takes when the plan is applied (`m` cycles it). */
   permission: PlanApplyPermission
   scroll: number
+  /** How far the Review panel is scrolled when it is taller than its room; the wheel moves it while the pointer is over it. */
+  reviewScroll: number
+  /** Where the Review panel sat on the last frame (0-based cells), so a wheel report can tell which panel it is over. */
+  reviewBox?: { left: number; right: number; top: number; bottom: number; overflow: boolean }
+  /** The drawn plan, one entry: the rows of the last markdown and width, so scrolling does not draw the plan again. It goes with the draft. */
+  drawn?: { key: string; rows: Line[] }
   editor: ReturnType<typeof createEditor>
   note: string
 }
 
-export function renderPlanReviewPage(input: { record: PlanReviewRecord; draft: PlanDraft; pending: boolean; width: number; height: number; index: number; count: number }): { rows: Line[]; cursor?: { row: number; col: number } } {
+export function renderPlanReviewPage(input: { record: PlanReviewRecord; draft: PlanDraft; pending: boolean; width: number; height: number; index: number; count: number; /** How the chat draws an answer (`messageRenderer`, concealed or not): the plan is drawn the same way. */ renderer: "plain" | "markdown" | "full"; markdown: MarkdownStyle }): { rows: Line[]; cursor?: { row: number; col: number } } {
   const { record, draft, pending, width, height } = input
   const compact = width < 70
   const editing = draft.stage !== "preview"
@@ -51,12 +61,18 @@ export function renderPlanReviewPage(input: { record: PlanReviewRecord; draft: P
   const visual = draft.editor.visualLines()
   let cursorRow = visual.findLastIndex((row) => row.start <= draft.editor.cursorOffset)
   cursorRow = Math.max(0, cursorRow)
-  const body = editing ? visual.map((row) => [{ text: row.text, fg: "text" as const }]) : renderMarkdown([draft.markdown.replace(/^\s*#\s+[^\n]+\n{1,2}/, ""), ...(draft.comments ? [`## Implementation comments\n\n${draft.comments}`] : []), ...(record.reply?.reason ? [`## Rejection reason\n\n${record.reply.reason}`] : [])].join("\n\n"), textRoom)
+  const body = editing ? visual.map((row) => [{ text: row.text, fg: "text" as const }]) : planRows({ draft, source: [draft.markdown.replace(/^\s*#\s+[^\n]+\n{1,2}/, ""), ...(draft.comments ? [`## Implementation comments\n\n${draft.comments}`] : []), ...(record.reply?.reason ? [`## Rejection reason\n\n${record.reply.reason}`] : [])].join("\n\n"), room: textRoom, renderer: input.renderer, markdown: input.markdown })
   if (editing) draft.scroll = Math.min(draft.scroll, cursorRow)
   if (editing && cursorRow >= draft.scroll + visible) draft.scroll = cursorRow - visible + 1
   draft.scroll = Math.max(0, Math.min(draft.scroll, body.length - visible))
   const title = draft.stage === "preview" ? record.title || "Plan" : draft.stage === "edit" ? "Edit plan" : draft.stage === "comments" ? "Implementation comments" : "Reject reason"
-  const groups = compact ? [[{ title, body: body.slice(draft.scroll, draft.scroll + visible), active: true }], [{ title: "Review", body: reviewBody }]] : [[{ title, body: body.slice(draft.scroll, draft.scroll + visible), weight, active: true }, { title: "Review", body: reviewBody, weight: 1 }]]
+  const reviewHeight = compact ? panelsHeight - mainHeight - 1 : panelsHeight
+  const reviewVisible = Math.max(1, reviewHeight - (compact ? 2 : 4))
+  draft.reviewScroll = Math.max(0, Math.min(draft.reviewScroll, reviewBody.length - reviewVisible))
+  const reviewTop = 2 + (compact ? mainHeight + 1 : 0)
+  const reviewLeft = 2 + (compact ? 0 : room - side)
+  draft.reviewBox = { left: reviewLeft, right: 2 + room - 1, top: reviewTop, bottom: reviewTop + reviewHeight - 1, overflow: reviewBody.length > reviewVisible }
+  const groups = compact ? [[{ title, body: body.slice(draft.scroll, draft.scroll + visible), active: true }], [{ title: "Review", body: reviewBody, scroll: draft.reviewScroll }]] : [[{ title, body: body.slice(draft.scroll, draft.scroll + visible), weight, active: true }, { title: "Review", body: reviewBody, weight: 1, scroll: draft.reviewScroll }]]
   const grid = panelGrid({ rows: groups, width: room, heights: compact ? [mainHeight, panelsHeight - mainHeight - 1] : [panelsHeight], compact, padding: !compact })
   const header: Line = [{ text: `${width < 90 ? "Plan" : "Plan review"}${input.count > 1 ? ` · ${input.index + 1}/${input.count}` : ""}`, fg: "primary", bold: true }]
   // Keep a single header hint row even on a narrow terminal.
@@ -64,4 +80,19 @@ export function renderPlanReviewPage(input: { record: PlanReviewRecord; draft: P
   while (rows.length < height) rows.push([])
   const cursor = editing ? { row: 2 + 2 + cursorRow - draft.scroll, col: 2 + (compact ? 0 : 2) + textWidth(graphemes(draft.editor.text).slice(visual[cursorRow]!.start, draft.editor.cursorOffset).join("")) } : undefined
   return { rows: rows.slice(0, height).map((row) => fit(row, width)), ...(cursor ? { cursor: { row: Math.min(height - 1, cursor.row), col: Math.min(width - 1, cursor.col) } } : {}) }
+}
+
+/**
+ * The plan drawn as the chat draws an answer (`assistantBody`: the tier's markdown style, diagrams, callouts and tables). Only the last
+ * drawing is kept, for the plan, width, renderer and diagram module it was made with, so a held arrow key moves a window over the same rows.
+ */
+function planRows(input: { draft: PlanDraft; source: string; room: number; renderer: "plain" | "markdown" | "full"; markdown: MarkdownStyle }): Line[] {
+  const { draft, source, room, markdown } = input
+  // The chat shows a diagram as source at `markdown`; this page has always drawn it, so only `plain` keeps the text raw.
+  const renderer = input.renderer === "plain" ? "plain" : "full"
+  const key = `${room}:${renderer}:${styleKey(markdown)}:${mermaidGeneration()}:${source}`
+  if (draft.drawn?.key === key) return draft.drawn.rows
+  const rows = assistantBody({ text: source, renderer, markdown, details: {}, detailsAll: false } as unknown as Parameters<typeof assistantBody>[0], room)
+  draft.drawn = { key, rows }
+  return rows
 }

@@ -503,7 +503,7 @@ export function createNativeEngine(options: {
   onMissingUsage?(): void
   /** Custom agents (`agents/*.md`): the session's primary agent and the sub-agents `task` can name. Absent = only the built-in behaviour. */
   agents?: AgentPort
-  plans?: { latest(sessionId: SessionId): import("@mendcode/protocol").PlanReview | undefined }
+  plans?: { latest(sessionId: SessionId): import("@mendcode/protocol").PlanReview | undefined; /** The line naming the session's open plan file (feature `plan_files`), kept in a compaction's engine anchor. */ pointer?(sessionId: SessionId): string | undefined; /** The folder of the project's plan files: read and edited like the project, with no external-directory question. */ roots?(sessionId: SessionId): string[]; /** Told when a summary carries the pointer line, so the next message does not repeat it. */ anchored?(sessionId: SessionId): void }
   /** Makes a choice an agent asked for usable (an effort the model does not support falls back to its default); used as is when absent. */
   agentModel?(choice: ModelChoice): ModelChoice
   /** The `promptCache` setting, read at each model call; `legacy` when absent (docs/prompt-cache.md). */
@@ -1357,7 +1357,7 @@ export function createNativeEngine(options: {
         if (readGate && readGate.kind !== "approve") return settle(readGate, "deterministic", "Image reference read refused")
       }
     }
-    const extraRoots = declaredRoots(policy().additionalDirectories, options.runLimits?.(input.sessionId)?.addDirs)
+    const extraRoots = declaredRoots(policy().additionalDirectories, options.runLimits?.(input.sessionId)?.addDirs, options.plans?.roots?.(input.sessionId))
     const allowCommands = options.permissionAllow?.()
     // `smartSandboxTrust` (off by default): a shell command inside an enforced OS sandbox with no network is contained, so smart mode does not ask about a command it merely does not know.
     const sandboxed = mode === "smart" && (tool.name === "shell" || tool.name === "shell_session") && options.smartSandboxTrust?.() === true && options.sandbox?.({ sessionId: input.sessionId, cwd })?.network === false
@@ -2086,6 +2086,8 @@ export function createNativeEngine(options: {
     input.emit({ type: "item.delta", itemId, text: review.markdown })
     const answer = await input.ask({ kind: "approval", title: "Review plan", detail: "", itemId, tool: "plan_review", planReview: review })
     const reply = answer.kind === "plan_review" ? answer : answer.kind === "approve" ? { action: "apply" as const } : answer.kind === "deny" ? { action: "reject" as const, reason: answer.reason } : { action: "close" as const }
+    // No decision (the daemon restarted, the request was cancelled or the turn ended): the user did not reject the plan, and the model must not say so.
+    if (answer.kind === "abandoned") return { output: "Plan review was interrupted before the user decided (no approval and no rejection). Do not treat this as a rejection: ask the user whether to continue, or wait.", truncated: false, title: "plan interrupted", isError: false }
     const markdown = "markdown" in reply && reply.markdown ? reply.markdown : review.markdown
     latestPlans.set(input.sessionId, { ...review, markdown })
     const comments = "comments" in reply && reply.comments ? `\nUser implementation comments:\n${reply.comments}` : ""
@@ -2648,7 +2650,8 @@ export function createNativeEngine(options: {
         const native = checkpoint.method === "native"
         const retained = portable.length - selected.tail.length
         const resumeImages = native ? [] : resumeImageRefs(portable.slice(0, Math.max(0, retained)), selected.tail)
-        const content = native ? summary : [summary, engineAnchor({ messages: portable, tail: selected.tail, processes: runningProcesses(input.sessionId) }), RESUME_GUIDANCE].filter(Boolean).join("\n\n")
+        const content = native ? summary : [summary, engineAnchor({ messages: portable, tail: selected.tail, processes: runningProcesses(input.sessionId), plan: options.plans?.pointer?.(input.sessionId) }), RESUME_GUIDANCE].filter(Boolean).join("\n\n")
+        if (!native) options.plans?.anchored?.(input.sessionId)
         checkpoint.tailMessages = selected.tail.length
         await options.history.replace(input.sessionId, [{ role: "user", content: `${SUMMARY_PREFIX}\n\n${content}`, compaction: checkpoint, ...(resumeImages.length ? { attachments: resumeImages } : {}) }, ...selected.tail])
         if (nativeItemId) input.emit({ type: "item.completed", itemId: nativeItemId, status: "ok", text: summary, meta })

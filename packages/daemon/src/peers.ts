@@ -1,6 +1,6 @@
 import { permissionRank, type PermissionMode, type QueueId, type SessionEvent, type SessionId, type TurnId } from "@mendcode/protocol"
 import type { Clock } from "@mendcode/kernel"
-import type { PeerPort, PeerSession } from "@mendcode/tools"
+import type { PeerPort, PeerScope, PeerSession } from "@mendcode/tools"
 
 export const MAX_PEER_SESSIONS = 32
 /** Messages one session may have waiting for an answer at once, and may send per hour (no ping-pong storms). */
@@ -60,6 +60,9 @@ export function createPeers(input: {
   stats?(sessionId: SessionId): string | undefined
   /** A page of a session's conversation (`sessions read`) for `from`, which the daemon may refuse (a turn a remote client started). */
   read?(from: SessionId, sessionId: SessionId, cursor: string | undefined): ReturnType<NonNullable<PeerPort["read"]>>
+  /** The plan files of `from`'s project (or of `where`), and one by id; the daemon may refuse both for a turn a remote client started. */
+  plans?(from: SessionId, where: PeerScope | undefined): ReturnType<NonNullable<PeerPort["plans"]>>
+  readPlan?(from: SessionId, id: string): ReturnType<NonNullable<PeerPort["readPlan"]>>
 }) {
   /** Answers by sender, target and `clientRequestId` (bounded): a retried `tell` returns the first answer and sends nothing. */
   const requests = new Map<string, Awaited<ReturnType<PeerPort["tell"]>>>()
@@ -149,6 +152,8 @@ export function createPeers(input: {
           if (!input.info(target as SessionId)) return { ok: false, message: `no session ${target}; read needs its exact id (ses_…)` }
           return input.read?.(from, target as SessionId, cursor) ?? { ok: false, message: "reading sessions is not available here" }
         },
+        plans: (where) => input.plans?.(from, where) ?? { ok: false, message: "plan files are not available here" },
+        readPlan: (id) => input.readPlan?.(from, id) ?? { ok: false, message: "plan files are not available here" },
         list(limit = MAX_PEER_SESSIONS, where): PeerSession[] {
           const own = input.info(from)?.directory
           if (!own) return []

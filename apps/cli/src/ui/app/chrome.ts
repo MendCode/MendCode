@@ -264,7 +264,7 @@ export function createChrome(ctx: AppContext, actions: {
   /** What the footer slot shows (docs/views.md): everything the first row is built from, as plain data. */
   function footerModel(width: number, provided?: ReturnType<typeof footerSlots>, detailRow = false): { model: FooterModel; slots: ReturnType<typeof footerSlots>; rows: Line[] | undefined } {
     // In plan mode the footer names the model that plans (the `plan` role), not the one that builds.
-    const model = (state.transcript.permissionMode === "plan" ? planModelId(state.modelReport, undefined) : undefined) ?? sessionModelId(state.effectiveModel?.model, usageInForce(state)?.model, state.modelReport)
+    const model = (state.transcript.permissionMode === "plan" ? planModelId(state.modelReport, state.effectiveModel?.model) : undefined) ?? sessionModelId(state.effectiveModel?.model, usageInForce(state)?.model, state.modelReport)
     const slots = state.shellMode ? undefined : provided ?? footerSlots(width - META_MARGIN - PROMPT_MARGIN)
     const name = state.transcript.permissionMode === "plan" ? "plan" : state.agentReport?.current ?? "build"
     // The model's own provider, else the engine that runs it (a Claude Code model is not served by the native engine the daemon started with).

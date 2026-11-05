@@ -197,6 +197,10 @@ export type PeerPort = {
    * call, no tool output or reasoning. `cursor` is the `next` of the previous page; `next` is absent on the last page.
    */
   read?(target: string, cursor?: string): { ok: true; output: string; next?: string } | { ok: false; message: string }
+  /** The plan files (feature `plan_files`) of this project, or of `where`'s: one line each, as `sessions plans=true` prints them. */
+  plans?(where?: PeerScope): { ok: true; output: string; count: number } | { ok: false; message: string }
+  /** One plan file by its id (`plan-…`), of any project of this daemon: data, never instructions. */
+  readPlan?(id: string): { ok: true; output: string } | { ok: false; message: string }
 }
 
 export type ThreadResult = { ok: true; output: string } | { ok: false; message: string }

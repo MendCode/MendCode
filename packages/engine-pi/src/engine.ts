@@ -3,7 +3,7 @@ import { createHash, randomUUID } from "node:crypto"
 import { join } from "node:path"
 import type { SandboxPolicy } from "@mendcode/tools"
 import type { BlobRef, ModelChoice, PermissionMode, SessionId } from "@mendcode/protocol"
-import { attachmentOrder } from "@mendcode/protocol/wire"
+import { attachmentOrder, createPlanTurnNotes } from "@mendcode/protocol/wire"
 import { environmentKey, realClock, type Clock, type EngineEnvironment, type EnginePort, type EngineRequest, type EngineResolution, type TimerHandle, type TurnInput, type TurnOutcome } from "@mendcode/kernel"
 import type { PiCapabilities, ResolvedPiConfig } from "./config"
 import { createPiMapper, MAX_TEXT } from "./events"
@@ -146,6 +146,9 @@ const grantKey = (request: GateRequest) => createHash("sha256").update(JSON.stri
  * turn outside `full` mode is refused when that bridge did not load. Extension dialogs (`confirm`, `select`, `input`,
  * `editor`) become approvals and questions. No credential of pi is read or copied.
  */
+/** pi is never told MendCode's mode, so every turn in plan carries a short note. */
+const planNotes = createPlanTurnNotes("reply")
+
 export function createPiEngine(options: PiEngineOptions): EnginePort & { stop(): void } {
   const clock = options.clock ?? realClock
   const idleMs = options.idleMs
@@ -607,6 +610,8 @@ export function createPiEngine(options: PiEngineOptions): EnginePort & { stop():
       }
       if (connection.closed) return fail("pi_exited", "pi exited before the turn started")
       const body = await content(input, connection)
+      const planNote = planNotes.next(input.sessionId, input.permissionMode() === "plan")
+      if (planNote) body.message = `${body.message}\n${planNote}`
       // A cancel while pi started or the attachments were read: its abort event is gone, so nothing may be sent now.
       if (input.signal.aborted) {
         if (!connection.closed) connection.idle = clock.setTimer(processIdleMs, () => close(connection))

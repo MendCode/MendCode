@@ -69,6 +69,7 @@ import { createModelResolutions } from "./model-resolutions"
 import { createMemorySharing } from "./memory-sharing"
 import { createMemoryWorkspaces } from "./memory-workspaces"
 import { readPlanReviews, remotePlanReply } from "./plan-review"
+import { createPlanFiles, planLine } from "./plan-files"
 import { permissionsStatus } from "./permissions"
 import { readScratchpad, writeScratchpad } from "./scratchpad"
 import { changeBacklog, readBacklog } from "./backlog"
@@ -411,7 +412,7 @@ export type DaemonOptions = RemoteListenerOptions & {
   /** `tcp` listens on 127.0.0.1 behind a per-start secret published in `<dir>/mendd.endpoint` (Windows default); `unix` uses `socketPath`. Defaults from the platform and `MENDCODE_V2_LOCAL_TRANSPORT`. */
   localTransport?: LocalTransport
   defaultDirectory?: string
-  engine(input: { /** Queue a notice in a session from the engine (Claude Code answered a background task's end on its own). */ notify(sessionId: SessionId, text: string): void; /** Background tasks an engine runs by itself (Claude Code's), listed with the daemon's own shells. */ engineBackground(sessionId: SessionId, tasks: ReadonlyArray<{ id: string; description: string; kind: string }>, stop?: (taskId: string) => Promise<void>): void; /** What an engine's background sub-agent does after its turn ended, recorded under that turn. */ engineAgentEvent(sessionId: SessionId, turnId: import("@mendcode/protocol").TurnId, event: import("@mendcode/kernel").EngineEvent): void; trace: import("@mendcode/protocol").TracePort; budget: BudgetPort; /** Records an engine's own calls outside a turn (the permission reviewer) for `/usage`. */ auxiliary: AuxiliaryUsagePort; reasoning: import("@mendcode/engine-native").ReasoningPort; continuity: import("@mendcode/kernel").ContinuityForSession; tasks: import("@mendcode/kernel").TaskPort; clock: Clock; store: Store; grants: GrantStore; runLimits: RunLimitsStore; sessionRules(sessionId: SessionId): readonly import("@mendcode/protocol").PermissionRule[]; emitGlobal(event: GlobalEventDraft): void; secrets: SecretsPort; memory: MemoryAccess; background(sessionId: SessionId): BackgroundPort; interactive(sessionId: SessionId): InteractivePort; workflows(sessionId: SessionId): WorkflowPort; peers(sessionId: SessionId): PeerPort; sessionMeta(sessionId: SessionId): NonNullable<import("@mendcode/tools").ToolContext["sessionMeta"]>; threads(sessionId: SessionId): import("@mendcode/tools").ThreadPort; packages(sessionId: SessionId): import("@mendcode/tools").PackagePort; loops(sessionId: SessionId): LoopPort; worktrees(sessionId: SessionId): import("@mendcode/tools").WorktreePort; prWatch(sessionId: SessionId): import("@mendcode/tools").PrWatchPort; prReview(sessionId: SessionId): import("@mendcode/tools").PrReviewPort; review(sessionId: SessionId): ReviewPort; goals(sessionId: SessionId): GoalPort; customTools: CustomToolRegistry; skills: SkillLoader; extensionLayers(directory: string): ExtensionLayer[]; agents: AgentPort; plans: { latest(sessionId: SessionId): import("@mendcode/protocol").PlanReview | undefined }; extensions: EngineExtensions; recall(sessionId: SessionId): SessionRecallPort; compound(sessionId: SessionId): CompoundCall | undefined; aiConfig(sessionId: SessionId): import("@mendcode/tools").AIConfigPort; inlineShell(text: string): InlineShell[]; computer(sessionId: SessionId): import("@mendcode/tools").ComputerPort; browser(sessionId: SessionId): import("@mendcode/tools").BrowserPort; harness: { args(sessionId: SessionId): string[]; servers(sessionId: SessionId): ReturnType<ReturnType<typeof createHostMcp>["servers"]>; waiting(): boolean; instructions(sessionId: SessionId, harness?: "claude" | "codex"): Promise<string | undefined> }; /** The local owner's settings write (`mendcode_settings` after the user approved): saved, announced, followed. */ settingsWrite(patch: Record<string, unknown>): Promise<Settings> }): EnginePort & { stop?(): void }
+  engine(input: { /** Queue a notice in a session from the engine (Claude Code answered a background task's end on its own). */ notify(sessionId: SessionId, text: string): void; /** Background tasks an engine runs by itself (Claude Code's), listed with the daemon's own shells. */ engineBackground(sessionId: SessionId, tasks: ReadonlyArray<{ id: string; description: string; kind: string }>, stop?: (taskId: string) => Promise<void>): void; /** What an engine's background sub-agent does after its turn ended, recorded under that turn. */ engineAgentEvent(sessionId: SessionId, turnId: import("@mendcode/protocol").TurnId, event: import("@mendcode/kernel").EngineEvent): void; trace: import("@mendcode/protocol").TracePort; budget: BudgetPort; /** Records an engine's own calls outside a turn (the permission reviewer) for `/usage`. */ auxiliary: AuxiliaryUsagePort; reasoning: import("@mendcode/engine-native").ReasoningPort; continuity: import("@mendcode/kernel").ContinuityForSession; tasks: import("@mendcode/kernel").TaskPort; clock: Clock; store: Store; grants: GrantStore; runLimits: RunLimitsStore; sessionRules(sessionId: SessionId): readonly import("@mendcode/protocol").PermissionRule[]; emitGlobal(event: GlobalEventDraft): void; secrets: SecretsPort; memory: MemoryAccess; background(sessionId: SessionId): BackgroundPort; interactive(sessionId: SessionId): InteractivePort; workflows(sessionId: SessionId): WorkflowPort; peers(sessionId: SessionId): PeerPort; sessionMeta(sessionId: SessionId): NonNullable<import("@mendcode/tools").ToolContext["sessionMeta"]>; threads(sessionId: SessionId): import("@mendcode/tools").ThreadPort; packages(sessionId: SessionId): import("@mendcode/tools").PackagePort; loops(sessionId: SessionId): LoopPort; worktrees(sessionId: SessionId): import("@mendcode/tools").WorktreePort; prWatch(sessionId: SessionId): import("@mendcode/tools").PrWatchPort; prReview(sessionId: SessionId): import("@mendcode/tools").PrReviewPort; review(sessionId: SessionId): ReviewPort; goals(sessionId: SessionId): GoalPort; customTools: CustomToolRegistry; skills: SkillLoader; extensionLayers(directory: string): ExtensionLayer[]; agents: AgentPort; plans: { latest(sessionId: SessionId): import("@mendcode/protocol").PlanReview | undefined; pointer?(sessionId: SessionId): string | undefined; roots?(sessionId: SessionId): string[]; anchored?(sessionId: SessionId): void }; extensions: EngineExtensions; recall(sessionId: SessionId): SessionRecallPort; compound(sessionId: SessionId): CompoundCall | undefined; aiConfig(sessionId: SessionId): import("@mendcode/tools").AIConfigPort; inlineShell(text: string): InlineShell[]; computer(sessionId: SessionId): import("@mendcode/tools").ComputerPort; browser(sessionId: SessionId): import("@mendcode/tools").BrowserPort; harness: { args(sessionId: SessionId): string[]; servers(sessionId: SessionId): ReturnType<ReturnType<typeof createHostMcp>["servers"]>; waiting(): boolean; instructions(sessionId: SessionId, harness?: "claude" | "codex"): Promise<string | undefined> }; /** The local owner's settings write (`mendcode_settings` after the user approved): saved, announced, followed. */ settingsWrite(patch: Record<string, unknown>): Promise<Settings> }): EnginePort & { stop?(): void }
   reasoningEvaluator?: import("@mendcode/engine-native").ReasoningEvaluator
   /** Extension diagnostics (load failures, the first error of each extension); defaults to stderr. */
   log?(level: "debug" | "info" | "warn" | "error", message: string): void
@@ -1195,7 +1196,7 @@ export async function startDaemon(options: DaemonOptions) {
     secrets,
     extensionLayers: layersFor,
     agents: agents.port(),
-    plans: { latest: (sessionId) => readPlanReviews(store, sessionId, 1)[0] },
+    plans: { latest: (sessionId) => readPlanReviews(store, sessionId, 1)[0], pointer: (sessionId) => planFiles.pointer(sessionId), roots: (sessionId) => planFiles.roots(sessionId), anchored: (sessionId) => planFiles.anchored(sessionId) },
     background: (sessionId) => background.forSession(sessionId),
     interactive: (sessionId) => interactive.forSession(sessionId),
     // The host is built below; tools only call this during turns, after startup.
@@ -1366,7 +1367,9 @@ export async function startDaemon(options: DaemonOptions) {
       const carried = portable.prepare({ sessionId: turn.sessionId, turnId: turn.turnId, key: engineKeyOf(model) })
       // An engine of another program (Claude Code, an ACP agent) takes the agent override as a permission ceiling and instructions.
       const profile = agents.port().primary(turn.sessionId, turn.selection?.agent)
-      const routed = withHandoff(external ? withExternalAgent(turn, profile) : turn, carried.blocks)
+      // After a compaction (whichever engine did it) the first turn is told where the plan file is, not given the plan.
+      const planNote = planFiles.afterCompaction(turn.sessionId)
+      const routed = withHandoff(external ? withExternalAgent(turn, profile, () => agents.port().primary(turn.sessionId, turn.selection?.agent)) : turn, planNote ? [...carried.blocks, planNote.text] : carried.blocks)
       const key = model.model.startsWith("acp:") ? acpAgentKey(model.model) as `acp:${string}` : modelEngine(model, catalog) ?? options.info?.engine
       let lease: ReturnType<NonNullable<typeof threadBridge>["open"]> | undefined
       try {
@@ -1411,7 +1414,7 @@ export async function startDaemon(options: DaemonOptions) {
         // Calls Claude Code, Codex or an ACP agent makes to MendCode's tools during this turn run as calls of this turn.
         const leave = key === "claude" || key === "codex" || key?.startsWith("acp:") ? hostBridge.enter(routed) : undefined
         const outcome = await rawEngine.runTurn(routed).finally(() => leave?.())
-        if (outcome.status === "ok") carried.commit()
+        if (outcome.status === "ok") { carried.commit(); planNote?.done() }
         // The native engine keeps its own turn in its history however it ended: it is not handed to it again as another engine's.
         else if (!external) carried.ran()
         return outcome.status === "error" && lease ? { ...outcome, message: lease.scrub(outcome.message) } : outcome
@@ -1516,7 +1519,9 @@ export async function startDaemon(options: DaemonOptions) {
   extraction.wake()
   const metadata = createSessionMetadata({ store, complete: options.info?.engine === "native" ? completeBudgeted : undefined, settings: () => store.settings.get(), agent: (id, role) => agents.auxiliary(store.sessionDirectory(id)!, role), model: (id, role) => resolveModel({ role, session: store.sessionModel(id), roles: rolesFor(store.settings.get(), store.sessionDirectory(id)), catalog }), changed: (id) => publishActivity(id, actors.get(id)?.snapshot().foreground ?? "idle", true) })
   let wakeSettledPrune: (() => void) | undefined
-  const sessionObservers: Array<(event: SessionEvent) => void> = [asideSessions.observe, tasks.observe, sessionBackground.observe, ownerWake.observe, extraction.observe, metadata.observe, (event) => { if (event.type === "turn.completed") maintainMemory(store.sessionDirectory(event.sessionId)) }]
+  /** Accepted and applied plans as Markdown files (feature `plan_files`, docs/plan-review.md). */
+  const planFiles = createPlanFiles({ dir: options.dir, enabled: () => featureOn(store.settings.get(), "plan_files", { safeMode: options.safeMode === true }), location: () => store.settings.get().plan_files_location ?? "data", directoryOf: (sessionId) => store.sessionDirectory(sessionId), now: () => clock.now() })
+  const sessionObservers: Array<(event: SessionEvent) => void> = [planFiles.observe,asideSessions.observe, tasks.observe, sessionBackground.observe, ownerWake.observe, extraction.observe, metadata.observe, (event) => { if (event.type === "turn.completed") maintainMemory(store.sessionDirectory(event.sessionId)) }]
   // An engine alias (`claude-opus`) resolves to a concrete id in the first answer's usage; remember it so the next launch names it at once.
   sessionObservers.push((event) => {
     if (event.type !== "usage.recorded") return
@@ -2547,6 +2552,18 @@ export async function startDaemon(options: DaemonOptions) {
       if (store.meta.get(`session.local-tools.restricted:${from}`) === "true") return { ok: false, message: "reading another session is local only" }
       const page = history.read({ sessionId, cursor })
       return page.ok ? { ok: true, output: page.result.text, ...(page.result.next ? { next: page.result.next } : {}) } : { ok: false, message: page.message.replace(/^\[DAEMON\]: /, "") }
+    },
+    // Plan files follow the rules of reading a session: this project's by default, others by scope or exact id, and local only.
+    plans: (from, where) => {
+      if (store.meta.get(`session.local-tools.restricted:${from}`) === "true") return { ok: false, message: "reading plans is local only" }
+      const own = store.sessionDirectory(from)
+      const found = planFiles.list(where?.scope === "all" ? { all: true } : { directory: where?.directory ?? own })
+      return { ok: true, output: found.length ? found.map(planLine).join("\n") : "No plan files.", count: found.length }
+    },
+    readPlan: (from, id) => {
+      if (store.meta.get(`session.local-tools.restricted:${from}`) === "true") return { ok: false, message: "reading plans is local only" }
+      const plan = planFiles.read(id, store.sessionDirectory(from))
+      return plan.ok ? { ok: true, output: plan.text } : plan
     },
     waiting: (sessionId) => agentCommands.waiting(sessionId),
     deliver: async (from, to, text, mode, elsewhere) => {

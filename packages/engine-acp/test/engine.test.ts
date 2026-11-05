@@ -693,3 +693,22 @@ describe("agents file and routing", () => {
     expect(await router.runTurn(turnInput().input)).toEqual({ status: "ok" })
   })
 })
+
+describe("plan mode note", () => {
+  test("every turn in plan carries the plan note after the prompt, the first turn after it says it ended, others carry nothing", async () => {
+    const { engine, received } = setup()
+    const sessionId = ids("session")
+    let mode: PermissionMode = "plan"
+    const turn = (text: string) => engine.runTurn(turnInput({ sessionId, text, mode: () => mode }).input)
+    await turn("plan it")
+    await turn("more")
+    mode = "ask"
+    await turn("build")
+    await turn("again")
+    const prompts = received().filter((message) => message.method === "session/prompt").map((message) => message.params.prompt.map((block: any) => block.text))
+    expect(prompts[0]).toEqual(["plan it", expect.stringContaining("Plan mode is on")])
+    expect(prompts[1]![1]).toBe(prompts[0]![1])
+    expect(prompts[2]).toEqual(["build", expect.stringContaining("Plan mode is off")])
+    expect(prompts[3]).toEqual(["again"])
+  })
+})

@@ -752,7 +752,9 @@ export function createKeys(ctx: AppContext, actions: {
 
   async function cyclePermission() {
     const current = state.transcript.permissionMode
-    await setPermission(PERMISSION_MODES[(PERMISSION_MODES.indexOf(current) + 1) % PERMISSION_MODES.length]!)
+    // Leaving plan goes back to the mode the session had before it; without one known, the cycle's own order.
+    const before = state.modeBeforePlan?.sessionId === state.sessionId ? state.modeBeforePlan.mode : undefined
+    await setPermission(current === "plan" && before && before !== "plan" ? before : PERMISSION_MODES[(PERMISSION_MODES.indexOf(current) + 1) % PERMISSION_MODES.length]!)
   }
 
   /**

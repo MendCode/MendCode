@@ -109,6 +109,7 @@ The unverified OpenCode serve and Cursor SDK adapters and their tier switches ha
 | `pet_generator` (experimental; [customize](customize.md#experimental-custom-pet-generator)) | full | permit | explicit `/pet new` and confirmation; requires enabled `image_generation`, `features.pet_generator: false` blocks it |
 | `voice`, `browser`, `code_mode`, `snip`, `worktree_tool` | full | permit | `voice.enabled`, `MENDCODE_BROWSER=1`, `experimental.*` |
 | `one_tree` (sessions sharing one checkout: one line on a tool result that names a file another session is changing; [one tree](one-tree.md)) | balanced | tier | `/tier one_tree on\|off` (off without a tier; no tool, no prompt text, nothing while a session works alone) |
+| `plan_files` (accepted and applied plans saved as Markdown, a pointer line after compaction, `sessions plans=true`; [plan review](plan-review.md#plan-files)) | balanced | tier | `/tier plan_files on\|off` (off without a tier; `plan_files_location`; nothing is written or sent in a session without a plan) |
 | `computer` ([computer](computer.md)), `graph_context` ([code graph](code-graph.md)) | balanced | opt-in | `/tier computer on`, `/tier graph_context on`; no tier turns them on |
 | `pi` (your own pi as an engine; [pi-engine](pi-engine.md)) | full | permit | `pi.json` or `/tier pi on` |
 | `storage_compact` ([storage](storage.md)) | minimalist | permit | explicit offline compaction; `features.storage_compact: false` refuses it |

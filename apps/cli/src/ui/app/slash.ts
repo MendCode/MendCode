@@ -767,7 +767,7 @@ export function createSlash(ctx: AppContext, actions: {
         break
       }
       case "plan":
-        await setPermission(state.transcript.permissionMode === "plan" ? "ask" : "plan")
+        await setPermission(state.transcript.permissionMode === "plan" ? (state.modeBeforePlan?.sessionId === state.sessionId && state.modeBeforePlan.mode !== "plan" ? state.modeBeforePlan.mode : "ask") : "plan")
         break
       case "dream":
         await startDream()

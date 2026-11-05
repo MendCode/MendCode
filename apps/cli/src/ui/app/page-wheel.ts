@@ -7,7 +7,7 @@ const ARROWS = { up: "\x1b[A", down: "\x1b[B" }
 const PAGING = { up: "\x1b[5~", down: "\x1b[6~" }
 
 /** Pages that read as text: one wheel notch scrolls as many lines as the transcript's. */
-const SCROLLING: ReadonlySet<Page> = new Set<Page>(["text", "status", "help", "changes", "messages", "export", "diagnostics"])
+const SCROLLING: ReadonlySet<Page> = new Set<Page>(["text", "status", "help", "changes", "messages", "export", "diagnostics", "plan-review"])
 
 /** Pages made of rows: the wheel moves the selection a row at a time, as the arrow keys do. */
 const LISTS: ReadonlySet<Page> = new Set<Page>([

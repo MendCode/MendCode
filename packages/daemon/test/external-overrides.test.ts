@@ -18,7 +18,7 @@ type Seen = { text: string; selection: TurnInput["selection"]; mode: PermissionM
 const cleanups: Array<() => Promise<void> | void> = []
 afterEach(async () => { for (const fn of cleanups.splice(0).reverse()) await fn() })
 
-async function boot() {
+async function boot(script?: (turn: TurnInput) => Promise<void>) {
   const dir = realpathSync(mkdtempSync(path.join(tmpdir(), "mendd-external-")))
   const project = realpathSync(mkdtempSync(path.join(tmpdir(), "mendd-external-proj-")))
   cleanups.push(() => rmSync(dir, { recursive: true, force: true }), () => rmSync(project, { recursive: true, force: true }))
@@ -37,6 +37,7 @@ async function boot() {
       const engine: EnginePort = {
         async runTurn(turn) {
           seen.push({ text: turn.text, selection: turn.selection, mode: turn.permissionMode(), authority: turn.authority?.text })
+          await script?.(turn)
           const itemId = turn.newItemId()
           turn.emit({ type: "item.started", itemId, kind: "agent_message" })
           turn.emit({ type: "item.completed", itemId, status: "ok", text: `answer to ${turn.authority?.text ?? turn.text}` })
@@ -176,4 +177,21 @@ test("the fork seed keeps the newest messages when the history exceeds the limit
   expect(text).not.toContain("User: question 1 ")
   expect(text).toMatch(/\d+ earlier turns are not included/)
   expect(text.length).toBeLessThan(16_000 * 4 + 1_000)
+})
+
+test("applying a plan in the middle of an external turn lifts the plan agent's ceiling at once, and the next turn is not in plan", async () => {
+  const live: PermissionMode[] = []
+  const h = await boot(async (turn) => {
+    if (turn.text !== "plan it") return
+    live.push(turn.permissionMode())
+    turn.setPermissionMode("full")
+    await until(() => turn.permissionMode() === "full")
+    live.push(turn.permissionMode())
+  })
+  const session = await h.open("claude-opus")
+  await h.client.send({ type: "session.permission.set", sessionId: session, mode: "plan" })
+  await h.say(session, "plan it")
+  expect(live).toEqual(["plan", "full"])
+  await h.say(session, "now build")
+  expect(h.seen.at(-1)).toMatchObject({ text: "now build", mode: "full" })
 })

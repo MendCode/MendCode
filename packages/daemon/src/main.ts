@@ -628,6 +628,7 @@ export const daemon = await startDaemon({
               subagentContext: (sessionId) => harness.instructions(sessionId),
               oneTree: oneTree.note,
               ownTools: `mcp__${HOST_MCP_SERVER}__`,
+              planApplied: (sessionId, destination) => { const target = agents.planExit?.(sessionId, destination); if (target) agents.select?.(sessionId, target.name) },
               // The same MendCode docs pointer a native session carries: slash commands, the PR reviewer and other MendCode features
               // are found with `mendcode docs --search`, not guessed from the harness's own tools.
               appendSystem,

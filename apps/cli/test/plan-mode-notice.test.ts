@@ -73,3 +73,56 @@ test("the plan model is the plan role, else the session's own", () => {
   expect(planModelId(report as never, "gpt-6-luna")).toBe("gpt-6-astra")
   expect(planModelId({ ...report, roles: {} } as never, "gpt-6-luna")).toBe("gpt-6-luna")
 })
+
+test("an engine that runs the whole session plans on the session's model, whatever the plan role says", () => {
+  const claude = { ...report, models: [{ id: "claude-opus", name: "Claude Opus", engine: "claude" }, { id: "gpt-6-luna", name: "GPT-6-Luna" }] }
+  expect(planModelId(claude as never, "claude-opus")).toBe("claude-opus")
+  expect(planModelId(claude as never, "acp:agent/model")).toBe("acp:agent/model")
+  expect(planModelId(claude as never, "gpt-6-luna")).toBe("gpt-6-astra")
+})
+
+test("on a Claude Code session the notice and the footer name the session's model, not the plan role", async () => {
+  const claude = { ...report, models: [{ id: "claude-opus", name: "Claude Opus", engine: "claude" }], defaults: { model: "claude-opus" }, effective: { model: "claude-opus" } }
+  const h = appHarness({ dataDir: tempDir(), width: 120, height: 30, reply: (command) => command.type === "models.list" ? { ok: true, result: claude } as never : undefined })
+  h.app.applySettings({ onboarded: true, tier: "balanced" })
+  await h.type("")
+  await Bun.sleep(5)
+  conversation(h.sessionId, h.app.onEvent).emit({ type: "session.permission", mode: "plan" })
+  await Bun.sleep(5)
+  h.app.render()
+  const screen = h.text().join("\n")
+  expect(screen).toContain("Plan mode: read-only · Opus plans · you review first")
+  expect(screen).not.toMatch(/Astra/)
+})
+
+test("leaving plan mode with Shift+Tab or /plan returns to the mode the session had before it; without one the cycle order stands", async () => {
+  const { h, chat } = await planSession()
+  const modes = () => h.sent.filter((command) => command.type === "session.permission.set").map((command) => (command as { mode: string }).mode)
+  chat.emit({ type: "session.permission", mode: "full" })
+  chat.emit({ type: "session.permission", mode: "plan" })
+  await Bun.sleep(5)
+  await h.app.onKey("\x1b[Z")
+  await Bun.sleep(5)
+  expect(modes()).toEqual(["full"])
+  chat.emit({ type: "session.permission", mode: "full" })
+  chat.emit({ type: "session.permission", mode: "plan" })
+  await Bun.sleep(5)
+  await h.type("/plan\r")
+  await Bun.sleep(5)
+  expect(modes()).toEqual(["full", "full"])
+  // Other steps of the cycle are unchanged.
+  chat.emit({ type: "session.permission", mode: "ask" })
+  await Bun.sleep(5)
+  await h.app.onKey("\x1b[Z")
+  await Bun.sleep(5)
+  expect(modes().at(-1)).toBe("edits")
+})
+
+test("a session that entered plan mode from ask before edits goes back to it", async () => {
+  const { h, chat } = await planSession()
+  chat.emit({ type: "session.permission", mode: "plan" })
+  await Bun.sleep(5)
+  await h.app.onKey("\x1b[Z")
+  await Bun.sleep(5)
+  expect(h.sent.filter((command) => command.type === "session.permission.set").map((command) => (command as { mode: string }).mode)).toEqual(["ask"])
+})

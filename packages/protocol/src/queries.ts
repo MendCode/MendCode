@@ -663,6 +663,8 @@ const SharedSettings = lazySchema(() => z.strictObject({
   subagent_variant: z.string().min(1).max(100).optional(),
   default_agent: z.string().min(1).max(64).optional(),
   plan_exit_agent: z.string().min(1).max(64).optional(),
+  /** Where accepted and applied plans are kept as Markdown (docs/plan-review.md): `data` (default) in the project's folder of the data directory, `repo` in `.mendcode/plans/` of the project. */
+  plan_files_location: z.enum(["data", "repo"]).optional(),
   agent: z.record(z.string().regex(/^[a-z0-9][a-z0-9_-]{0,63}$/), AgentConfig).optional(),
   provider: z.record(z.string().min(1).max(32), ProviderConfig).optional(),
   /** `filters`: condense command output (ANSI, passing tests, repeats) with the full output kept on disk; unset follows the tier's `output_filters` feature. */

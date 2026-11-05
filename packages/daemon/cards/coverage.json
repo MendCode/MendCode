@@ -3,6 +3,7 @@
     "agents": "command:agent command:agents setting:default_agent setting:agent setting:defaultAgent",
     "attachments": "feature:voice command:voice command:attach group:Image_generation setting:image_generation setting:voice tool:image_gen",
     "backlog": "feature:backlog command:backlog",
+    "plans": "feature:plan_files setting:plan_files_location",
     "one-tree": "feature:one_tree",
     "background": "setting:processLimits flag:async_tools flag:async_questions command:bg command:ps tool:question_start tool:question_status tool:shell_monitor tool:shell_session tool:sleep tool:tool_cancel tool:tool_start tool:tool_status tool:tool_wait",
     "budgets": "feature:usage_resume command:usage command:limit command:stats-project file:spend.json",

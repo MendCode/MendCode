@@ -209,6 +209,8 @@ export type AppState = {
   draftsState?: import("../../view/stash-page").DraftsState
   /** The /queue page: the session's queue with full text, read from the daemon (`queue.list`) and refreshed on every queue change. */
   queueState?: import("../../view/queue-page").QueuePageState | undefined
+  /** The mode this session was in when it entered plan mode, so leaving plan with the cycle key or `/plan` goes back to it (memory only; unknown after a restart). */
+  modeBeforePlan?: { sessionId: string; mode: import("@mendcode/protocol").PermissionMode } | undefined
   /** Set by the flip-send key for the next `user.submit` only: how that one message meets a running turn. */
   nextDelivery?: import("@mendcode/protocol").QueueDelivery | undefined
   /** The mouse selection in the transcript or the prompt, while it is dragged (or kept, with `copyOnSelect` off); and where the last frame put them. */

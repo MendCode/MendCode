@@ -1,4 +1,4 @@
-import { PLAN_APPLY_DEFAULT, type BlobRef, type PermissionMode, type ReasoningEffort, type SessionId, type TurnId } from "@mendcode/protocol"
+import { PLAN_APPLY_DEFAULT, createPlanTurnNotes, type BlobRef, type PermissionMode, type ReasoningEffort, type SessionId, type TurnId } from "@mendcode/protocol"
 import { layoutAttachments } from "@mendcode/protocol/wire"
 import { createHash, randomUUID } from "node:crypto"
 import { environmentKey, processMcpTurn, realClock, type Clock, type EngineEnvironment, type EngineEvent, type EnginePort, type EngineResolution, type TimerHandle, type TurnInput, type TurnOutcome } from "@mendcode/kernel"
@@ -24,6 +24,7 @@ import {
 } from "./protocol"
 import { spawnClaude, type ClaudeTransport } from "./transport"
 import { createClaudePlan, type ClaudePlan } from "./plan"
+import { claudePlanFile } from "./plan-file"
 
 /** A session's `claude` process is stopped after this long without a turn; the next turn resumes it. */
 export const DEFAULT_PROCESS_IDLE_MS = 10 * 60_000
@@ -166,6 +167,9 @@ function toolDetail(name: string, args: Record<string, any>, reason: unknown) {
  * the turn, answers tool permissions, questions and plan approval, and reads the subscription's rate limits.
  * No credentials are read or copied. One process per session stays up between turns and is resumed after a stop.
  */
+/** Claude Code reminds the model of plan mode only now and then, so every turn in plan carries a short note; module-wide because a turn with its own MCP servers runs in a fresh engine. */
+const planNotes = createPlanTurnNotes("tool")
+
 export function createClaudeEngine(options: {
   bin?: string
   clock?: Clock
@@ -184,6 +188,8 @@ export function createClaudeEngine(options: {
    * when it runs them, so here they are allowed without a second question and get no second card.
    */
   ownTools?: string
+  /** An applied plan: the session moves to the plan's destination agent (the reviewer's choice, else the configured one), as the native engine does. */
+  planApplied?(sessionId: SessionId, destination: string | undefined): void
   /** Text added after Claude Code's own system prompt for a project directory: what MendCode draws that Claude Code's terminal does not. */
   appendSystem?(cwd: string): string | undefined
   /**
@@ -325,12 +331,16 @@ export function createClaudeEngine(options: {
       if (name === "ExitPlanMode") {
         // The same review page the native engine opens (docs/plan-review.md); Claude Code leaves plan mode on its own, so only apply continues.
         const markdown = String(args.plan ?? "").trim().slice(0, 30_000) || "(empty plan)"
-        const answer = await ask({ kind: "approval", title: "Review plan", detail: "", tool: "plan_review", permission: "write", planReview: { markdown, phase: "implementation", destination: "build" } })
+        const file = claudePlanFile(markdown, args.planFilePath ?? args.plan_file_path)
+        const answer = await ask({ kind: "approval", title: "Review plan", detail: "", tool: "plan_review", permission: "write", planReview: { markdown, phase: "implementation", destination: "build", ...(file ? { file } : {}) } })
+        // No decision (the daemon restarted, the request was cancelled or the turn ended): the user did not reject the plan, and the model must not say so.
+        if (answer.kind === "abandoned") return deny("Plan review was interrupted before the user decided (no approval and no rejection). Do not treat this as a rejection: ask the user whether to continue, or wait.")
         const reply = answer.kind === "plan_review" ? answer : answer.kind === "approve" ? { action: "apply" as const } : answer.kind === "deny" ? { action: "reject" as const, reason: answer.reason } : { action: "close" as const }
         if (reply.action === "accept" || reply.action === "close") return deny("The user did not approve the plan.")
         if (reply.action === "edit") return deny(`The user edited the plan; revise it from this Markdown and submit it again:\n\n${"markdown" in reply && reply.markdown ? reply.markdown : markdown}`)
         if (reply.action === "reject") return deny(reply.reason ? `The user wants changes to the plan: ${reply.reason}` : "The user did not approve the plan.")
         turn.input.setPermissionMode("permission" in reply && reply.permission ? reply.permission : PLAN_APPLY_DEFAULT)
+        options.planApplied?.(turn.input.sessionId, "destination" in reply ? reply.destination : undefined)
         connection.permission = "default"
         return allow()
       }
@@ -693,6 +703,9 @@ export function createClaudeEngine(options: {
           : { status: "error", code: "claude_start", message: message.startsWith("[CLAUDE]") ? message : `[CLAUDE]: ${message}` }
       }
       const body = await content(input)
+      // A slash command (Claude Code's own `/compact`) is sent as typed.
+      const planNote = input.text.startsWith("/") ? undefined : planNotes.next(input.sessionId, input.permissionMode() === "plan")
+      if (planNote) body.push({ type: "text", text: planNote })
       // A cancel while the process started or the attachments were read: its abort event is gone, so nothing may be sent now.
       if (input.signal.aborted) {
         keepIdle(connection)

@@ -853,3 +853,22 @@ describe("routing", () => {
     expect(attempts).toBe(2)
   })
 })
+
+describe("plan mode note", () => {
+  test("every turn in plan carries the plan note after the message, the first turn after it says it ended, others carry nothing", async () => {
+    const { engine, commands } = setup()
+    const sessionId = ids("session")
+    let mode: PermissionMode = "plan"
+    const turn = (text: string) => engine.runTurn(turnInput({ sessionId, text, mode: () => mode }).input)
+    await turn("plan it")
+    await turn("more")
+    mode = "ask"
+    await turn("build")
+    await turn("again")
+    const messages = commands("prompt").map((message) => String(message.message).split("\n"))
+    expect(messages[0]).toEqual(["plan it", expect.stringContaining("Plan mode is on")])
+    expect(messages[1]![1]).toBe(messages[0]![1])
+    expect(messages[2]).toEqual(["build", expect.stringContaining("Plan mode is off")])
+    expect(messages[3]).toEqual(["again"])
+  })
+})

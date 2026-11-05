@@ -8,6 +8,8 @@ export const PlanReview = lazySchema(() => z.strictObject({
   title: z.string().max(200).optional(),
   phase: z.enum(["plan", "implementation"]),
   destination: z.string().min(1).max(64),
+  /** The file an engine already keeps this plan in (Claude Code's `~/.claude/plans/<name>.md`); MendCode then registers that path and keeps no second copy of the text. */
+  file: z.string().min(1).max(1024).optional(),
 }))
 export type PlanReview = z.infer<typeof PlanReview>
 
@@ -32,4 +34,4 @@ export const PlanReviewRecord = lazySchema(() => PlanReview.extend({
 }))
 export type PlanReviewRecord = z.infer<typeof PlanReviewRecord>
 
-export { PLAN_APPLY_PERMISSIONS, PLAN_APPLY_DEFAULT, PLAN_APPLY_LABELS, type PlanApplyPermission } from "./plan-review-data"
+export { PLAN_APPLY_PERMISSIONS, PLAN_APPLY_DEFAULT, PLAN_APPLY_LABELS, PLAN_TURN_NOTES, PLAN_TURN_OFF_NOTE, createPlanTurnNotes, type PlanApplyPermission } from "./plan-review-data"

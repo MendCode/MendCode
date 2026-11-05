@@ -68,6 +68,15 @@ describe("plan mode reaches the model and ends in the review", () => {
     }
   })
 
+  test("a review that ends without a decision (daemon restarted, request cancelled) tells the model it was interrupted, not rejected", async () => {
+    const t = run([stop(PLAN), stop("ok")], { mode: "plan", answers: [{ kind: "abandoned" }] })
+    await t.engine.runTurn(t.input)
+    const output = (t.requests[1]!.messages.at(-1) as { output: string }).output
+    expect(output).toContain("interrupted")
+    expect(output).not.toMatch(/rejected|not approved/i)
+    expect(t.mode()).toBe("plan")
+  })
+
   test("a rejected plain-text plan comes back as feedback; an accepted one is not reviewed again", async () => {
     const rejected = run([stop(PLAN), stop("revised")], { mode: "plan", answers: [{ kind: "plan_review", action: "reject", reason: "add tests" }] })
     await rejected.engine.runTurn(rejected.input)

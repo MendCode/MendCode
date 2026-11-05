@@ -121,7 +121,7 @@ export const PORTABLE_SETTINGS: ReadonlySet<string> = new Set([
   "theme", "view", "pet", "reducedMotion", "compactAtTokens", "modelContext", "defaultContextWindow", "idleCompactAtTokens", "compactNoticePercent", "cacheLifetimeMinutes", "promptCacheTtl",
   "claudeCacheTtl", "handoffTokenCap", "disabledSkills", "agentMentions", "memoryMaintenance", "memoryEnabled", "memoryUse", "memoryGenerate", "memoryMaxPromptTokens",
   "memoryMaxEntries", "memoryProjectMaxEntries", "memoryPolicies", "memoryGlobalCompactionMaxEntries", "dreamConsolidationPolicy", "retentionDays", "worktreeBranch",
-  "git", "footer", "promptCache", "outputStyle", "planExitAgent", "plan_exit_agent", "logLevel", "tool_output", "codegraph_index", "foreignResources",
+  "git", "footer", "promptCache", "outputStyle", "planExitAgent", "plan_exit_agent", "plan_files_location", "logLevel", "tool_output", "codegraph_index", "foreignResources",
   "instructionFallbacks", "projectRootMarkers", "queue", "snapshot", "snapshotScope", "compaction", "cache", "allowMessageEdits", "subagent_variant",
   "subagentOwnerWake", "subagentCatalog", "processLimits",
 ])

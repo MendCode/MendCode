@@ -79,6 +79,7 @@ export function createEvents(ctx: AppContext, actions: {
   /** Entering plan mode says who plans and that nothing changes before the review; leaving it says what runs now (the models are asked again first). */
   function announcePlanMode(from: PermissionMode, to: PermissionMode) {
     if ((from === "plan") === (to === "plan")) return
+    if (to === "plan") state.modeBeforePlan = { sessionId: state.sessionId, mode: from }
     const notice = () => planModeNotice({ from, to, report: state.modelReport, planModel: planModelId(state.modelReport, state.effectiveModel?.model), buildModel: state.effectiveModel?.model, agent: state.agentReport?.current })
     void actions.loadEffectiveModel().then(() => { say(notice()!, "info"); requestFrame() })
   }

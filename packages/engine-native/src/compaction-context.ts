@@ -357,7 +357,7 @@ export function processAnchorLines(processes: readonly RunningProcess[]): string
   ]
 }
 
-export function engineAnchor(input: { messages: readonly ModelMessage[]; tail: readonly ModelMessage[]; processes?: readonly RunningProcess[] }): string {
+export function engineAnchor(input: { messages: readonly ModelMessage[]; tail: readonly ModelMessage[]; processes?: readonly RunningProcess[]; /** The line naming the session's open plan file: the plan itself is read from the file, never copied here. */ plan?: string | undefined }): string {
   const lines: string[] = []
   const index = latestRealUserIndex(input.messages)
   const tailStart = input.messages.length - input.tail.length
@@ -367,6 +367,7 @@ export function engineAnchor(input: { messages: readonly ModelMessage[]; tail: r
   }
   const open = openTodos(currentTodos(input.messages))
   if (open.length) lines.push("- Open TODOs at compaction:", ...open.map((todo) => `    [${todo.status}] ${compactTextHead(todo.text, 300)}`))
+  if (input.plan) lines.push(`- ${input.plan}`)
   lines.push(...processAnchorLines(input.processes ?? []))
   return lines.length ? `${ENGINE_ANCHOR_HEADING}\n${lines.join("\n")}` : ""
 }

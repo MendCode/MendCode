@@ -1,11 +1,16 @@
 import type { ModelsReport, PermissionMode } from "@mendcode/protocol"
+import { externalEngine } from "./fast-mode"
 import { modelLabel } from "./model-label"
 
 /** What the footer calls each permission mode; leaving plan mode names the one the session landed in. */
 const MODE_NAME: Readonly<Record<PermissionMode, string>> = { ask: "ask before edits", smart: "smart approval", edits: "auto edits", full: "full access", plan: "plan mode" }
 
-/** The model plan mode runs on: the `plan` role when one is set, else the session's own model (what the engine resolves for the plan role). */
+/**
+ * The model plan mode runs on. Only the daemon's own engine switches to the `plan` role; Claude Code, Codex, pi and ACP agents run the
+ * whole session on its model, so for those it is the session's own, whatever the role says.
+ */
 export function planModelId(report: ModelsReport | undefined, sessionModel: string | undefined): string | undefined {
+  if (sessionModel?.startsWith("acp:") || externalEngine(sessionModel, report)) return sessionModel
   return report?.roles.plan?.model ?? sessionModel
 }
 

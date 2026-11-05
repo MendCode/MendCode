@@ -627,7 +627,7 @@ describe("claude engine turns", () => {
 })
 
 describe("claude engine permissions", () => {
-  async function permissionTurn(request: Record<string, unknown>, options: { mode?: PermissionMode; answer?: (request: EngineRequest) => EngineResolution; safetyPrompts?: () => boolean | undefined } = {}) {
+  async function permissionTurn(request: Record<string, unknown>, options: { mode?: PermissionMode; answer?: (request: EngineRequest) => EngineResolution; safetyPrompts?: () => boolean | undefined; engine?: Partial<Parameters<typeof createClaudeEngine>[0]> } = {}) {
     let decision: any
     const fake = fakeClaude({
       async onUser(api) {
@@ -636,7 +636,7 @@ describe("claude engine permissions", () => {
         api.push(result())
       },
     })
-    const { engine, spawned } = engineWith([fake], { safetyPrompts: options.safetyPrompts ?? (() => true) })
+    const { engine, spawned } = engineWith([fake], { safetyPrompts: options.safetyPrompts ?? (() => true), ...options.engine })
     const turn = turnInput({ mode: () => options.mode ?? "ask", ...(options.answer ? { answer: options.answer } : {}) })
     const outcome = await engine.runTurn(turn.input)
     engine.stop()
@@ -764,6 +764,25 @@ describe("claude engine permissions", () => {
     expect(edited.decision.behavior).toBe("deny")
     expect((edited.decision as { message: string }).message).toContain("1. do it twice")
     expect(edited.modes).toEqual([])
+  })
+
+  test("applying a plan moves the session to the plan's destination agent; a rejected or interrupted one does not", async () => {
+    const moves: Array<string | undefined> = []
+    const engine = { planApplied: (_session: SessionId, destination: string | undefined) => void moves.push(destination) }
+    await permissionTurn({ tool_name: "ExitPlanMode", input: { plan: "1. do it" } }, { mode: "plan", answer: () => ({ kind: "plan_review", action: "apply", destination: "review" }), engine })
+    await permissionTurn({ tool_name: "ExitPlanMode", input: { plan: "1. do it" } }, { mode: "plan", answer: () => ({ kind: "approve", scope: "once" }), engine })
+    await permissionTurn({ tool_name: "ExitPlanMode", input: { plan: "1. do it" } }, { mode: "plan", answer: () => ({ kind: "deny", reason: "no" }), engine })
+    await permissionTurn({ tool_name: "ExitPlanMode", input: { plan: "1. do it" } }, { mode: "plan", answer: () => ({ kind: "abandoned" }), engine })
+    expect(moves).toEqual(["review", undefined])
+  })
+
+  test("a plan review that ends without a decision tells the model it was interrupted, not that the user rejected it", async () => {
+    const abandoned = await permissionTurn({ tool_name: "ExitPlanMode", input: { plan: "1. do it" } }, { mode: "plan", answer: () => ({ kind: "abandoned" }) })
+    expect(abandoned.decision.behavior).toBe("deny")
+    const message = (abandoned.decision as { message: string }).message
+    expect(message).toContain("interrupted")
+    expect(message).not.toContain("did not approve")
+    expect(abandoned.modes).toEqual([])
   })
 })
 
@@ -1765,5 +1784,36 @@ describe("claude engine background tasks", () => {
     expect(await h.engine.runTurn(next.input)).toEqual({ status: "ok" })
     expect(fake.written.filter((message) => message.type === "user").at(-1).message.content.at(-1).text).toBe("something else")
     h.engine.stop()
+  })
+})
+
+describe("claude engine plan mode note", () => {
+  test("every turn in plan carries the plan note, the first turn after plan says it ended, and other turns carry nothing", async () => {
+    const reply = (api: FakeApi) => { streamText(api, 0, "ok"); api.push(result()) }
+    const fake = fakeClaude({ onUser: reply })
+    const { engine } = engineWith([fake])
+    const sessionId = ids("session")
+    let mode: PermissionMode = "plan"
+    const turn = (text: string) => engine.runTurn(turnInput({ sessionId, text, mode: () => mode }).input)
+    expect(await turn("plan it")).toEqual({ status: "ok" })
+    expect(await turn("and the tests")).toEqual({ status: "ok" })
+    mode = "ask"
+    expect(await turn("now build")).toEqual({ status: "ok" })
+    expect(await turn("and more")).toEqual({ status: "ok" })
+    const sent = fake.written.filter((message) => message.type === "user").map((message) => message.message.content.map((block: any) => block.text))
+    expect(sent[0]).toEqual(["plan it", expect.stringContaining("Plan mode is on")])
+    expect(sent[0]![1]).toContain("ExitPlanMode")
+    expect(sent[1]).toEqual(["and the tests", sent[0]![1]])
+    expect(sent[2]).toEqual(["now build", expect.stringContaining("Plan mode is off")])
+    expect(sent[3]).toEqual(["and more"])
+    engine.stop()
+  })
+
+  test("a slash command in plan is sent as typed", async () => {
+    const fake = fakeClaude({ onUser(api) { streamText(api, 0, "ok"); api.push(result()) } })
+    const { engine } = engineWith([fake])
+    await engine.runTurn(turnInput({ sessionId: ids("session"), text: "/compact", mode: () => "plan" }).input)
+    expect(fake.written.filter((message) => message.type === "user")[0].message.content).toEqual([{ type: "text", text: "/compact" }])
+    engine.stop()
   })
 })
