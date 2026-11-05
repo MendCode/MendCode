@@ -9,6 +9,12 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+## v0.0.4-beta.1 - 2026-11-05
+
+Packages become profiles and areas, sessions gain threads, side chats and resumable turns after a restart, the PR reviewer
+describes, scores and shows its progress live, smart permissions cover more cases with every engine, `/whatsnew` shows what fits
+how you work, and the daemon holds less memory while it runs commands.
+
 ### New
 
 - The PR reviewer's `@mendcode describe` (and `/pr describe`) writes a summary into the pull request's description from its review, in a marked section that never touches what a person wrote; the title changes only with `commands.describe_title`, and a label is added only if the repository has one. `@mendcode resolve` closes the threads of findings the last review marked fixed, and `@mendcode approve` (off unless `commands.approve` is on) approves a head whose last review confirmed nothing. See [PR review](docs/pr-review.md#commands-in-a-pull-request).
