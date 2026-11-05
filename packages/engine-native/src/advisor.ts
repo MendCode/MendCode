@@ -1,7 +1,8 @@
 import { ADVISOR_DEFAULTS, type AdvisorCheckpoint, type ModelChoice, type SessionId } from "@mendcode/protocol"
 import { z } from "zod"
 import { compactText, isRealUser, renderTranscript } from "./compaction-context"
-import type { ModelMessage } from "./provider"
+import { ADVISOR_EVIDENCE_LIMITS, advisorSessionContext } from "./advisor-evidence"
+import type { ModelMessage, RequestImage } from "./provider"
 
 /**
  * The advisor (docs/advisor.md): a second, usually stronger model the main agent consults before committing to an
@@ -28,7 +29,9 @@ export type AdvisorLimits = { checkpoints: AdvisorCheckpoint[]; maxCallsPerTurn:
 export type AdvisorPort = {
   enabled(sessionId: SessionId): boolean
   limits(sessionId: SessionId): AdvisorLimits
-  consult(input: { sessionId: SessionId; trigger: AdvisorTrigger; brief: string; signal: AbortSignal }): Promise<AdvisorConsultation>
+  /** Whether the session's advisor model takes images; absent means no. */
+  acceptsImages?(sessionId: SessionId): boolean
+  consult(input: { sessionId: SessionId; trigger: AdvisorTrigger; brief: string; images?: RequestImage[]; signal: AbortSignal }): Promise<AdvisorConsultation>
   /** The working tree's diff for the brief (bounded by the caller); absent or undefined means none. */
   diff?(cwd: string, signal: AbortSignal): Promise<string | undefined>
 }
@@ -45,6 +48,8 @@ export const ADVISOR_TOOL = {
   ].join(" "),
   args: z.object({
     question: z.string().min(1).max(2_000).describe("What you want the advisor to judge: the decision, the failure, or the work to sign off"),
+    files: z.array(z.object({ path: z.string().min(1).max(500), startLine: z.number().int().min(1).optional(), endLine: z.number().int().min(1).optional() })).max(ADVISOR_EVIDENCE_LIMITS.maxFiles).optional().describe("Evidence: files to show it, with an optional line range (capped)"),
+    images: z.array(z.string().min(1).max(200)).max(ADVISOR_EVIDENCE_LIMITS.maxImages).optional().describe("Evidence: names or sha256 prefixes of images already in this session"),
   }),
 }
 
@@ -125,7 +130,7 @@ const TRIGGER_HEADINGS: Record<AdvisorTrigger, string> = {
  * user request in full, the plan and diff when given, then as much of the latest transcript as fits. `mask` runs last
  * over the whole text so nothing unredacted leaves the process.
  */
-export function buildAdvisorBrief(input: { messages: readonly ModelMessage[]; question: string; trigger: AdvisorTrigger; plan?: string | undefined; diff?: string | undefined; maxTokens: number; mask(text: string): string }): string {
+export function buildAdvisorBrief(input: { messages: readonly ModelMessage[]; question: string; trigger: AdvisorTrigger; plan?: string | undefined; diff?: string | undefined; evidence?: string | undefined; maxTokens: number; mask(text: string): string }): string {
   if (input.maxTokens < 1_000) throw new RangeError("[ADVISOR]: maxTokens must be at least 1000")
   const budget = input.maxTokens * 4
   const requestIndex = input.messages.findLastIndex((message) => isRealUser(message) && !message.content.startsWith(ADVISOR_NUDGE_PREFIX))
@@ -135,8 +140,10 @@ export function buildAdvisorBrief(input: { messages: readonly ModelMessage[]; qu
     TRIGGER_HEADINGS[input.trigger],
     `## Question\n${compactText(input.question, 2_000)}`,
     `## Latest user request\n${request && isRealUser(request) ? compactText(request.content, REQUEST_CHARS) : "(none in this context)"}`,
+    `## Session context\n${advisorSessionContext({ messages: input.messages, requestIndex })}`,
     ...(input.plan?.trim() ? [`## Plan\n${compactText(input.plan, PLAN_CHARS)}`] : []),
     ...(input.diff?.trim() ? [`## Current diff\n\`\`\`diff\n${compactText(input.diff, DIFF_CHARS).replaceAll("```", "'''")}\n\`\`\``] : []),
+    ...(input.evidence?.trim() ? [`## Evidence from the executor\n${input.evidence.trim().replaceAll("```", "'''")}`] : []),
   ].join("\n\n")
   const room = budget - head.length - 64
   // The current turn first: from the request onward; older history only through the transcript's own truncation.
@@ -223,9 +230,11 @@ export function advisorOutput(trigger: AdvisorTrigger, consultation: AdvisorCons
  * throws; a timeout, cancellation, refused budget or provider error is a neutral verdict with `fallback` set.
  */
 export function createAdvisor(options: {
-  complete(input: { system: string; prompt: string; signal: AbortSignal; model: ModelChoice }): Promise<{ text: string; usage?: AdvisorUsage | undefined; account?: string | undefined }>
+  complete(input: { system: string; prompt: string; images?: RequestImage[]; signal: AbortSignal; model: ModelChoice }): Promise<{ text: string; usage?: AdvisorUsage | undefined; account?: string | undefined }>
   /** The advisor model for a session; undefined means no advisor (the default). */
   modelFor(sessionId: SessionId): ModelChoice | undefined
+  /** Whether that model takes images; absent means no, so images are never sent to it. */
+  acceptsImages?(model: ModelChoice): boolean
   limitsFor(sessionId: SessionId): AdvisorLimits
   timeoutMs?: number
 }): AdvisorPort {
@@ -233,6 +242,7 @@ export function createAdvisor(options: {
   const neutral = (fallback: NonNullable<AdvisorVerdict["fallback"]>, summary: string): AdvisorConsultation => ({ verdict: { verdict: "proceed", summary, findings: [], next: [], fallback } })
   return {
     enabled: (sessionId) => options.modelFor(sessionId) !== undefined,
+    acceptsImages: (sessionId) => { const model = options.modelFor(sessionId); return !!model && options.acceptsImages?.(model) === true },
     limits: (sessionId) => options.limitsFor(sessionId),
     async consult(request) {
       if (request.signal.aborted) return neutral("error", "cancelled")
@@ -244,7 +254,7 @@ export function createAdvisor(options: {
       let timer: ReturnType<typeof setTimeout> | undefined
       const timedOut = new Promise<"timeout">((resolve) => { timer = setTimeout(() => resolve("timeout"), timeoutMs) })
       try {
-        const reply = await Promise.race([options.complete({ system: ADVISOR_SYSTEM, prompt: request.brief, signal: controller.signal, model }), timedOut])
+        const reply = await Promise.race([options.complete({ system: ADVISOR_SYSTEM, prompt: request.brief, ...(request.images?.length && options.acceptsImages?.(model) ? { images: request.images } : {}), signal: controller.signal, model }), timedOut])
         if (reply === "timeout") return { ...neutral("timeout", `the advisor did not answer within ${Math.round(timeoutMs / 1000)} s`), model: model.model }
         return { verdict: parseAdvisorVerdict(reply.text), model: model.model, ...(reply.usage ? { usage: reply.usage } : {}), ...(reply.account ? { account: reply.account } : {}) }
       } catch (error) {

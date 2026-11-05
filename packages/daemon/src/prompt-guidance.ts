@@ -43,7 +43,8 @@ export const PROMPT_BUDGETS = {
   // write, refuse on a dirty tree"), with the tool's check action and the cards, made it 14 and 15 of 15 (395 bytes).
   // Both lines merged (screen parts, then behavior): 428 bytes, measured again with both evals.
   // 430 -> 470: "(never read its binary or source)": a model asked to change the context window ran strings and python over the binary for a minute.
-  selfKnowledge: 470,
+  // 470 -> 630: the one-line language rule (reply in the user's latest message language, never switch on its own) rides on this line in every mode but custom.
+  selfKnowledge: 630,
   // `focus` (the default) had only a one-sentence family note: the core gives it the guide's every-call habits (preambles, `todo`,
   // `path:line`, result first) and the model note joins it; together they stay under 1,200 characters over that focus (not measured with an eval).
   focus: { core: 600 },
@@ -52,7 +53,8 @@ export const PROMPT_BUDGETS = {
   // 1,500 -> 1,750: the `change` map card name and the rule not to read the binary or source to change MendCode.
   full: { operatorGuide: 1_750 },
   // full 7,400 -> 7,800: the base prompt's terminal rendering block (+389 characters, sent to every engine) put codex full at 7,619.
-  composed: { guide: 6_500, full: 8_050 },
+  // full 8,050 -> 8,100: the language rule on the docs pointer (+161 characters) put codex full at 8,081.
+  composed: { guide: 6_500, full: 8_100 },
 } as const
 
 export type ModelNote = { label: string; match: RegExp; text: string }

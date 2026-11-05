@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test"
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { redactSecrets, type SessionId } from "@mendcode/protocol"
-import { advisorLimits, advisorOutput, buildAdvisorBrief, createAdvisor, createAdvisorTracker, parseAdvisorVerdict, type ModelMessage } from "../src"
+import { ADVISOR_EVIDENCE_LIMITS, advisorLimits, advisorOutput, advisorSessionContext, buildAdvisorBrief, createAdvisor, createAdvisorTracker, parseAdvisorVerdict, renderAdvisorFile, renderAdvisorFiles, selectAdvisorImages, type ModelMessage } from "../src"
 
 const session = "ses_advisor" as SessionId
 const mask = (text: string) => redactSecrets(text).text
@@ -107,5 +110,96 @@ describe("createAdvisor", () => {
     const none = createAdvisor({ complete: async () => ({ text: "" }), modelFor: () => undefined, limitsFor: () => limits })
     expect(none.enabled(session)).toBe(false)
     expect((await none.consult({ sessionId: session, trigger: "tool", brief, signal: new AbortController().signal })).verdict.fallback).toBe("error")
+  })
+})
+
+describe("advisor evidence", () => {
+  const image = { sha256: "ab".repeat(32), mime: "image/png", bytes: 10, name: "shot.png" }
+
+  test("a line range is sliced and numbered; a range past the end says so", () => {
+    const text = Array.from({ length: 50 }, (_, i) => `line ${i + 1}`).join("\n")
+    const ranged = renderAdvisorFile({ path: "a.ts", text, startLine: 10, endLine: 12 })
+    expect(ranged).toContain("### a.ts (lines 10-12 of 50)")
+    expect(ranged).toContain("10: line 10\n11: line 11\n12: line 12")
+    expect(ranged).not.toContain("line 13")
+    expect(renderAdvisorFile({ path: "a.ts", text, startLine: 90 })).toContain("the file has 50 lines")
+  })
+
+  test("a file without a range stops at the line cap and says how many lines were cut and how to ask for them", () => {
+    const text = Array.from({ length: 1_000 }, (_, i) => `l${i + 1}`).join("\n")
+    const out = renderAdvisorFile({ path: "big.ts", text })
+    const cap = ADVISOR_EVIDENCE_LIMITS.fileMaxLines
+    expect(out).toContain(`${cap}: l${cap}\n`)
+    expect(out).not.toContain(`${cap + 1}: l${cap + 1}`)
+    expect(out).toContain(`[${1_000 - cap} lines cut`)
+    expect(out).toContain("pass startLine/endLine")
+    expect(renderAdvisorFile({ path: "big.ts", text, startLine: 1, endLine: 1_000 })).toContain("lines cut")
+  })
+
+  test("several files share one total cap; files outside the project or past the count are not sent", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "advisor-evidence-"))
+    try {
+      const wide = Array.from({ length: 200 }, () => "x".repeat(100)).join("\n")
+      for (const name of ["a.txt", "b.txt", "c.txt", "d.txt"]) writeFileSync(join(dir, name), wide)
+      const out = await renderAdvisorFiles({ files: ["a.txt", "b.txt", "c.txt", "d.txt", "../outside.txt"].map((path) => ({ path })), cwd: dir })
+      expect(out.length).toBeLessThanOrEqual(ADVISOR_EVIDENCE_LIMITS.filesTotalChars + 2_000)
+      expect(out).toContain("### a.txt")
+      expect(out).toContain("lines cut")
+      expect(out).toContain("the files together are capped")
+      expect(out).toContain("### ../outside.txt\n[not sent: ")
+      const many = await renderAdvisorFiles({ files: Array.from({ length: 9 }, () => ({ path: "a.txt", startLine: 1, endLine: 1 })), cwd: dir })
+      expect(many).toContain("3 more files not sent")
+    } finally { rmSync(dir, { recursive: true, force: true }) }
+  })
+
+  test("images are chosen from the session's attachments by name or hash prefix, capped in count", () => {
+    const other = { ...image, sha256: "cd".repeat(32), name: "other.png" }
+    const messages: ModelMessage[] = [{ role: "user", content: "see", attachments: [image, other] }]
+    expect(selectAdvisorImages({ wanted: ["shot.png", "cdcdcd", "nope.png"], messages })).toEqual({ refs: [image, other], missing: ["nope.png"] })
+    expect(selectAdvisorImages({ wanted: Array(10).fill("shot.png"), messages }).refs).toHaveLength(1)
+  })
+
+  test("images reach the advisor model only when it accepts them", async () => {
+    const seen: unknown[] = []
+    const make = (accepts: boolean) => createAdvisor({ complete: async (input) => { seen.push(input.images); return { text: '{"verdict":"proceed"}' } }, modelFor: () => ({ model: "m" }), acceptsImages: () => accepts, limitsFor: () => limits })
+    const request = { sessionId: session, trigger: "tool" as const, brief: "b", images: [{ mime: "image/png", base64: "AAAA" }], signal: new AbortController().signal }
+    expect(make(true).acceptsImages?.(session)).toBe(true)
+    expect(make(false).acceptsImages?.(session)).toBe(false)
+    await make(true).consult(request)
+    await make(false).consult(request)
+    expect(seen).toEqual([[{ mime: "image/png", base64: "AAAA" }], undefined])
+  })
+})
+
+describe("advisor session context", () => {
+  const messages: ModelMessage[] = [
+    { role: "user", content: "first request" },
+    { role: "assistant", content: "", toolCalls: [{ callId: "e1", name: "edit", args: { path: "apps/api/old.ts" } }] },
+    { role: "tool", callId: "e1", name: "edit", output: "ok", isError: false },
+    { role: "user", content: "now fix the web page" },
+    { role: "assistant", content: "", toolCalls: [{ callId: "e2", name: "write", args: { path: "apps/web/new.html" } }, { callId: "b1", name: "bash", args: { command: "bun run typecheck" } }] },
+    { role: "tool", callId: "e2", name: "write", output: "ok", isError: false },
+    { role: "tool", callId: "b1", name: "bash", output: "typecheck passed: 0 errors", isError: false },
+  ]
+
+  test("the brief separates earlier edits from this turn's and carries this turn's verification, within its cap", () => {
+    const brief = buildAdvisorBrief({ messages, question: "Is it done?", trigger: "completion", diff: "+x", maxTokens: 24_000, mask })
+    const section = brief.slice(brief.indexOf("## Session context"), brief.indexOf("## Current diff"))
+    expect(section).toContain("Earlier requests in this session: 1")
+    expect(section).toContain("earlier turns: apps/api/old.ts")
+    expect(section).toContain("in this turn: apps/web/new.html")
+    expect(section).toContain("typecheck passed: 0 errors")
+    expect(section.length).toBeLessThanOrEqual(ADVISOR_EVIDENCE_LIMITS.contextMaxChars + 200)
+  })
+
+  test("a huge verification output cannot push the block past its cap", () => {
+    const loud: ModelMessage[] = [...messages.slice(0, 6), { role: "tool", callId: "b1", name: "bash", output: "z".repeat(200_000), isError: false }]
+    expect(advisorSessionContext({ messages: loud, requestIndex: 3 }).length).toBeLessThanOrEqual(ADVISOR_EVIDENCE_LIMITS.contextMaxChars)
+  })
+
+  test("the evidence from the executor is part of the brief", () => {
+    const brief = buildAdvisorBrief({ messages, question: "q", trigger: "tool", evidence: "### a.ts (lines 1-2 of 2)\n1: x", maxTokens: 24_000, mask })
+    expect(brief).toContain("## Evidence from the executor")
+    expect(brief).toContain("1: x")
   })
 })

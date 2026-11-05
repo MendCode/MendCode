@@ -200,7 +200,7 @@ export const slashTier = (name: string): Tier => (MINIMALIST_SLASH as readonly s
  * Estimated tokens of system prompt plus tool definitions on every request, per tier, for the test pool of tools
  * (packages/daemon/test/tier.test.ts holds each tier to it). Setup and the tutorial quote it as "what it costs in context".
  */
-export const TIER_BASELINE_TOKENS: Readonly<Record<Tier, number>> = { minimalist: 3_500, balanced: 5_000, full: 6_400 }
+export const TIER_BASELINE_TOKENS: Readonly<Record<Tier, number>> = { minimalist: 3_500, balanced: 5_050, full: 6_400 }
 
 /** The slice of Settings the manifest reads; a real Settings object fits. */
 export type TierSettings = {

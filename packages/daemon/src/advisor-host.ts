@@ -1,5 +1,5 @@
 import { featureOn, type AIConfigAdvisor, type ModelChoice, type ModelRoles, type SessionId, type Settings } from "@mendcode/protocol"
-import { advisorLimits, createAdvisor, type AdvisorPort, type AdvisorUsage } from "@mendcode/engine-native"
+import { advisorLimits, createAdvisor, type AdvisorPort, type AdvisorUsage, type RequestImage } from "@mendcode/engine-native"
 import { claudeAlias } from "./claude-models"
 import { runLoopCheck } from "./loop-checks"
 import { invalidChoice, modelEngine, type ModelCatalog } from "./models"
@@ -44,12 +44,18 @@ export function claudeAdvisorAlias(status: AdvisorStatus | undefined): string | 
 }
 
 const DIFF_MAX_CHARS = 48_000
+const UNTRACKED_MAX = 40
 
 /** The working tree against HEAD, bounded; undefined outside a git checkout or on any failure. */
 export async function advisorDiff(cwd: string, signal: AbortSignal): Promise<string | undefined> {
   const result = await runLoopCheck({ argv: ["git", "--no-optional-locks", "diff", "HEAD", "--no-color", "--no-ext-diff", "--unified=3"], cwd, signal, timeoutSeconds: 10 }).catch(() => undefined)
   if (!result || result.exitCode !== 0 || signal.aborted) return undefined
-  return result.output.length > DIFF_MAX_CHARS ? result.output.slice(0, DIFF_MAX_CHARS) : result.output
+  const diff = result.output.length > DIFF_MAX_CHARS ? result.output.slice(0, DIFF_MAX_CHARS) : result.output
+  // `git diff` never shows a new file that is not staged: name them, so the advisor does not call a visible file missing.
+  const untracked = await runLoopCheck({ argv: ["git", "--no-optional-locks", "ls-files", "--others", "--exclude-standard"], cwd, signal, timeoutSeconds: 10 }).catch(() => undefined)
+  const names = untracked && untracked.exitCode === 0 ? untracked.output.split("\n").filter(Boolean) : []
+  if (!names.length) return diff
+  return `${diff}\n# Untracked files, not part of the diff above (${names.length}): ${names.slice(0, UNTRACKED_MAX).join(", ")}${names.length > UNTRACKED_MAX ? ", ..." : ""}\n`
 }
 
 /**
@@ -60,7 +66,9 @@ export function createAdvisorHost(options: {
   status(sessionId: SessionId): AdvisorStatus | undefined
   settings(): Settings
   guard(input: { model: string; signal: AbortSignal }): Promise<void>
-  complete(input: { system: string; prompt: string; signal: AbortSignal; model: ModelChoice }): Promise<{ text: string; usage?: AdvisorUsage | undefined; account?: string | undefined }>
+  complete(input: { system: string; prompt: string; images?: RequestImage[]; signal: AbortSignal; model: ModelChoice }): Promise<{ text: string; usage?: AdvisorUsage | undefined; account?: string | undefined }>
+  /** Whether a model takes images (a Claude Code advisor never does: it reads the brief on stdin). */
+  acceptsImages?(model: ModelChoice): boolean
   /** A Claude Code model answers through the `claude` CLI (advisor-claude.ts) instead of `complete`; `isClaude` says which models. */
   claude?: { isClaude(model: ModelChoice): boolean; complete(input: { system: string; prompt: string; signal: AbortSignal; model: ModelChoice }): Promise<{ text: string; usage?: AdvisorUsage | undefined; account?: string | undefined }> }
   timeoutMs?: number
@@ -72,6 +80,7 @@ export function createAdvisorHost(options: {
   const port = createAdvisor({
     modelFor: native,
     limitsFor: () => advisorLimits(options.settings().advisor),
+    acceptsImages: (model) => !options.claude?.isClaude(model) && options.acceptsImages?.(model) === true,
     complete: async (input) => {
       try { await options.guard({ model: input.model.model, signal: input.signal }) }
       catch (error) { throw new Error(`budget: ${error instanceof Error ? error.message : String(error)}`) }

@@ -11,6 +11,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### New
 
+- The assistant replies in the language of your latest message (English when unclear) and no longer switches language on its own.
 - `mendcode usage recover` adds the token usage of a Claude Code, Codex or Pi session log to Usage, with a preview first and
   an undo. See [usage recovery](docs/usage-recovery.md).
 - `/pr setup` checks prerequisites and configures repository reviews and publishing with one confirmation; a headless setup command is also available.
@@ -47,6 +48,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 ### Fixed
 
 - An automatic PR review checks that it may post, and that no other reviewer already has, before it spends any tokens.
+- The advisor sees a short summary of the session (earlier edits apart from this turn's, this turn's checks) and the untracked files, and the executor can pass it files with a line range and images; the extra evidence is capped and says what was cut.
 - `@MendCode review` gets no extra reply when this reviewer's own review of the head was posted after the comment.
 - `@mendcode review` no longer counts the empty review GitHub records when someone replies in a review thread as a review of
   the head.

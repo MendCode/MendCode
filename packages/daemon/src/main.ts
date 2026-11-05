@@ -103,7 +103,7 @@ import { promptContextParts, promptFileOverrides } from "./prompt-context"
 import { outputStyleText } from "./output-styles"
 import { createPromptModes, graphAutopilotPart, visiblePlanPart } from "./prompt-modes"
 import { selfKnowledgeText, visiblePlanText } from "./prompt-guidance"
-import { foreignEngine, invalidChoice, modelEngine, resolveModel, unusableRoles, usableEffort, type ModelCatalog } from "./models"
+import { foreignEngine, imageRefusal, invalidChoice, modelEngine, resolveModel, unusableRoles, usableEffort, type ModelCatalog } from "./models"
 import { claudeAlias, claudeCompactEnv, claudeSubagentEnv, createClaudeDetection, createClaudeModelCatalog, probeClaude } from "./claude-models"
 import { createEngineRouter } from "./engine-router"
 import { withCodexEngine } from "./codex-router"
@@ -379,7 +379,7 @@ function routedProvider(input: { onResponseHeaders?: (headers: Headers) => void 
 let completionTrace: import("@mendcode/protocol").TracePort | undefined
 /** One Tree's memory of a session (set where it is built), dropped when the session is deleted. */
 let forgetOneTree: ((sessionId: import("@mendcode/protocol").SessionId) => void) | undefined
-async function completeWithUsage(input: { system: string; prompt: string; signal: AbortSignal; model?: ModelChoice | undefined; onText?(text: string): void }) {
+async function completeWithUsage(input: { system: string; prompt: string; images?: import("@mendcode/engine-native").RequestImage[]; signal: AbortSignal; model?: ModelChoice | undefined; onText?(text: string): void }) {
   const span = completionTrace?.start("session.llm")
   let status: "ok" | "error" = "ok"
   let text = ""
@@ -388,7 +388,7 @@ async function completeWithUsage(input: { system: string; prompt: string; signal
     const provider = routedProvider()
     // An ACP agent runs whole sessions, not single completions: a session on one falls back to the default model here.
     const model = input.model && acpAgents.agentOf(input.model.model) === undefined ? usableEffort(input.model, modelCatalog) : undefined
-    for await (const event of provider.stream({ system: input.system, messages: [{ role: "user", content: input.prompt }], tools: [], ...(model ? { model: model.model, effort: model.effort, parameters: model.parameters } : {}), signal: input.signal })) {
+    for await (const event of provider.stream({ system: input.system, messages: [{ role: "user", content: input.prompt, ...(input.images?.length ? { images: input.images } : {}) }], tools: [], ...(model ? { model: model.model, effort: model.effort, parameters: model.parameters } : {}), signal: input.signal })) {
       if (event.type === "text") {
         text += event.delta
         input.onText?.(event.delta)
@@ -750,6 +750,7 @@ export const daemon = await startDaemon({
             status: advisorFor,
             settings: () => store.settings.get(),
             guard: (request) => budget.guard(request),
+            acceptsImages: (model) => imageRefusal(model, modelCatalog) === undefined,
             // A Claude Code advisor answers through one headless `claude -p` on the user's Claude login (advisor-claude.ts).
             claude: {
               isClaude: (model) => modelEngine(model, modelCatalog) === "claude",

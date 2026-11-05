@@ -28,6 +28,7 @@ import { PLAN_EXIT_TOOL, PLAN_MODE_NOTE, PLAN_REVIEW_TOOL, PLAN_TOOL_NAMES, look
 import { continuationStream } from "./continuation"
 import { pairToolCalls } from "./history"
 import { GOAL_TOOL_NAMES, GOAL_TOOLS, runGoalTool, type GoalPort } from "./goal-tools"
+import { renderAdvisorFiles, selectAdvisorImages, type AdvisorFileRef } from "./advisor-evidence"
 import { ADVISOR_NUDGE_PREFIX, ADVISOR_TOOL, advisorOutput, buildAdvisorBrief, createAdvisorTracker, type AdvisorConsultation, type AdvisorPort, type AdvisorTracker, type AdvisorTrigger } from "./advisor"
 import { createGrantStore, type GrantStore } from "./grants"
 import { authorityContext, freezeAction, type AuthorityAnchor } from "./permission-context"
@@ -590,13 +591,30 @@ export function createNativeEngine(options: {
   /** The advisor applies to this loop: the main agent, the session has one, and the tool survived every narrowing (agent, tier, run limits). */
   const advisorOffered = (sessionId: SessionId, toolset: Toolset) => toolset.main && !!options.advisor?.enabled(sessionId) && toolset.specs.some((spec) => spec.name === ADVISOR_TOOL.name)
   /** One consultation: bounded, redacted brief; counted against the caps; its usage reported under the advisor's model. */
-  async function consultAdvisor(input: TurnInput, trigger: AdvisorTrigger, question: string, messages: readonly ModelMessage[], plan?: string): Promise<AdvisorConsultation> {
+  async function consultAdvisor(input: TurnInput, trigger: AdvisorTrigger, question: string, messages: readonly ModelMessage[], plan?: string, evidence?: { files?: AdvisorFileRef[] | undefined; images?: string[] | undefined }): Promise<AdvisorConsultation> {
     const port = options.advisor!
     const limits = port.limits(input.sessionId)
-    const diff = trigger === "plan" ? undefined : await port.diff?.(options.cwdFor(input.sessionId), input.signal).catch(() => undefined)
-    const brief = buildAdvisorBrief({ messages, question, trigger, plan: plan ?? latestPlans.get(input.sessionId)?.markdown, diff, maxTokens: limits.maxBriefTokens, mask: (text) => redactSecrets(secrets ? secrets.mask(input.sessionId, text) : text).text })
+    const cwd = options.cwdFor(input.sessionId)
+    const diff = trigger === "plan" ? undefined : await port.diff?.(cwd, input.signal).catch(() => undefined)
+    const notes: string[] = []
+    const images: RequestImage[] = []
+    if (evidence?.images?.length) {
+      const picked = selectAdvisorImages({ wanted: evidence.images, messages })
+      if (!port.acceptsImages?.(input.sessionId)) notes.push(`[${evidence.images.length} image(s) named by the executor were not sent: the advisor model does not accept images]`)
+      else {
+        for (const ref of picked.refs) {
+          const bytes = await options.readBlob?.(ref).catch(() => undefined)
+          if (bytes) images.push({ mime: ref.mime, base64: Buffer.from(bytes).toString("base64") })
+          else picked.missing.push(ref.name ?? ref.sha256.slice(0, 12))
+        }
+        if (images.length) notes.push(`[${images.length} image(s) from the executor are attached: ${picked.refs.map((ref) => ref.name ?? ref.sha256.slice(0, 12)).join(", ")}]`)
+        if (picked.missing.length) notes.push(`[images not found in this session: ${picked.missing.join(", ")}]`)
+      }
+    }
+    const files = evidence?.files?.length ? await renderAdvisorFiles({ files: evidence.files, cwd }) : ""
+    const brief = buildAdvisorBrief({ messages, question, trigger, plan: plan ?? latestPlans.get(input.sessionId)?.markdown, diff, evidence: [files, ...notes].filter(Boolean).join("\n\n"), maxTokens: limits.maxBriefTokens, mask: (text) => redactSecrets(secrets ? secrets.mask(input.sessionId, text) : text).text })
     advisorTracker(input.sessionId).consulted(trigger)
-    const consultation = await port.consult({ sessionId: input.sessionId, trigger, brief, signal: input.signal })
+    const consultation = await port.consult({ sessionId: input.sessionId, trigger, brief, ...(images.length ? { images } : {}), signal: input.signal })
     const usage = consultation.usage
     if (usage) input.emit({ type: "usage", provider: usage.provider, model: usage.model, input: usage.input, output: usage.output, reasoning: usage.reasoning ?? 0, cacheRead: usage.cacheRead ?? 0, cacheWrite: usage.cacheWrite ?? 0 })
     return consultation
@@ -1594,7 +1612,7 @@ export function createNativeEngine(options: {
       if (!options.advisor.enabled(input.sessionId)) return finish({ output: "advisor unavailable: no advisor model is set for this session", truncated: false, title: "advisor", isError: true })
       const refusal = trigger === "tool" ? advisorTracker(input.sessionId).refusal(options.advisor.limits(input.sessionId)) : undefined
       if (refusal) return finish({ output: `advisor unavailable: ${refusal}`, truncated: false, title: "advisor", isError: true })
-      const consultation = await consultAdvisor(input, trigger, parsedAdvisor.data.question, messages)
+      const consultation = await consultAdvisor(input, trigger, parsedAdvisor.data.question, messages, undefined, { files: parsedAdvisor.data.files, images: parsedAdvisor.data.images })
       return finish({ output: advisorOutput(trigger, consultation), truncated: false, title: `advisor · ${consultation.verdict.verdict}`, isError: advisorFailed(consultation), meta: advisorMeta(trigger, consultation) })
     }
     const tool = toolset.tools.get(call.name)

@@ -367,6 +367,12 @@ describe("the docs pointer: one line in every mode but custom", () => {
   test("a lasting rule is an extension: gpt-6-luna answered \"block rm -rf\" and \"never read private/\" with a promise", () => {
     expect(selfKnowledgeText()).toContain("A rule the user sets for later (block, always, before or when X do Y) is an extension, not a promise or a one-time check.")
   })
+  test("every mode but custom tells the model to answer in the user's language and never switch on its own", async () => {
+    expect(selfKnowledgeText()).toContain("Reply in the language of the user's latest message (English when unclear) and never switch language on your own; code, identifiers and commands stay as they are.")
+    for (const mode of ["minimal", "focus", "guide", "full"] as const) {
+      expect(joined((await compose(mode, "deepseek")).parts)).toContain("Reply in the language of the user's latest message")
+    }
+  })
   test("the search is scoped to those parts: an unscoped \"first run docs\" made gpt-6-luna open a coding task with a docs search", () => {
     const line = selfKnowledgeText()
     expect(line).toContain(`for those only, first run \`${PROGRAM_NAME} docs --search <words>\``)
@@ -389,7 +395,8 @@ describe("the docs pointer: one line in every mode but custom", () => {
       const place = { dir: temp(), root: "/project" }
       const minimal = joined((await compose("minimal", family, place)).parts), focus = joined((await compose("focus", family, place)).parts)
       // 920: the pointer names the screen's parts (look requests) and MendCode's behavior (extensions): 428 bytes (PROMPT_BUDGETS.selfKnowledge).
-      expect(minimal.length).toBeLessThanOrEqual(960)
+      // 960 -> 1,120: the language rule (161 characters) is on the same line.
+      expect(minimal.length).toBeLessThanOrEqual(1_120)
       expect(minimal.length * 3).toBeLessThan(focus.length)
       expect(minimal).toContain(selfKnowledgeText())
     }
