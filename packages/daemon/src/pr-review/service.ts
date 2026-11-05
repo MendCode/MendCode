@@ -145,6 +145,10 @@ export type PrReviewServiceOptions = {
   memory?: ReviewMemoryRead
   /** The model window of the owner session's model, for the per-call context budget; absent, the config or the default. */
   contextWindow?: (sessionId: string) => number | undefined
+  /** `prReview.perfAttrib` (daemon.ts binds the setting): false turns the cost phase of MendCode's own pull requests off; read at every review. */
+  perfAttrib?: () => boolean | undefined
+  /** Overrides of the cost phase (tests stand in a runner and a timeout). */
+  perf?: Partial<import("./perf").PerfOptions>
   /** Stands in for `runPrReview` (tests). */
   review?: PlatformReview
   /** Stands in for `runAudit` (tests). */
@@ -194,7 +198,7 @@ class JobBusy extends Error {}
 
 export const PR_REVIEW_DISABLED = "The PR reviewer is off: it reaches the network through gh and spends model calls, so turn it on with /experimental pr_review on (balanced tier or above)"
 
-const View = (text: string) => { try { return JSON.parse(text) as { number?: number; headRefOid?: string; baseRefOid?: string; baseRefName?: string; url?: string; title?: string; body?: string; files?: Array<{ path?: unknown }> } } catch { return {} } }
+const View = (text: string) => { try { return JSON.parse(text) as { number?: number; headRefOid?: string; baseRefOid?: string; baseRefName?: string; isCrossRepository?: boolean; url?: string; title?: string; body?: string; files?: Array<{ path?: unknown }> } } catch { return {} } }
 const SHA = /^[0-9a-f]{40}$/
 const IN_FLIGHT: ReadonlySet<ReviewJob["state"]> = new Set(["running", "fixing", "validating"])
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error)).replace(/^\[PR_REVIEW\]:\s*/, "")
@@ -372,7 +376,7 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
     // GitLab and Gitea: the adapter's facts in the shape gh prints (the MR's diff base is GitLab's `diff_refs.start_sha`).
     const viewed = forge
       ? await forgeView(forge, directory, number).then((facts) => ({ code: 0, out: JSON.stringify({ number, headRefOid: facts.head, baseRefOid: facts.base, baseRefName: facts.baseRef, url: facts.url, title: facts.title ?? "", body: facts.body ?? "" }) }), () => ({ code: 1, out: "" }))
-      : await run({ argv: ["pr", "view", String(number), "--json", "number,headRefOid,baseRefOid,baseRefName,url,title,body"], cwd: directory })
+      : await run({ argv: ["pr", "view", String(number), "--json", "number,headRefOid,baseRefOid,baseRefName,isCrossRepository,url,title,body"], cwd: directory })
     const pr = View(viewed.out)
     if (viewed.code !== 0 || !pr.headRefOid || !pr.baseRefOid || !SHA.test(pr.headRefOid) || !SHA.test(pr.baseRefOid)) throw new Error(`[PR_REVIEW]: ${forge ? forge.name : "gh"} could not read pull request #${number}`)
     const head = pr.headRefOid
@@ -404,6 +408,7 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
       const configKey = runConfigKey({ policy: policy ?? pr.baseRefOid, layers })
       if (current && current.configKey !== configKey) patchJob(current.id, { configKey })
       const contextWindow = options.contextWindow?.(sessionId)
+      const perfOptions = options.perfAttrib?.() === false ? undefined : { dir: path.join(root, "perf"), ...options.perf }
       const stack = stackOf(directory, repo, current, number)
       const checkpoint = !fresh && current && hasProgress(current.checkpoint) ? current.checkpoint : undefined
       // `onlyNew` (an `@mendcode review` comment): a head whose ancestor was reviewed with this same config is reviewed like a push
@@ -418,6 +423,8 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
         // `template.language: auto` judges the language from both.
         pullRequest: forge ? { title: typeof pr.title === "string" ? pr.title : "", body: typeof pr.body === "string" ? pr.body : "", issues: [] } : await readPullRequestInfo({ gh: call, repo, title: typeof pr.title === "string" ? pr.title : "", body: typeof pr.body === "string" ? pr.body : "" }),
         ...(forge ? { provider: forge.provider } : publish ? { gh: call } : {}),
+        // The cost phase of a MendCode pull request (perf.ts): GitHub only (a forge adapter says nothing of forks), unless the user turned it off.
+        ...(!forge && perfOptions ? { perf: perfOptions, fork: pr.isCrossRepository === true } : {}),
         ...(options.graphOn() ? { graph: () => createIndexer({ cacheDir: graphCache, now: Date.now }).graph({ cwd: worktree, signal: AbortSignal.timeout(120_000) }) } : {}),
         ...(current ? { reviewer: { id: current.reviewer, scope, ...(login ? { login } : {}) } } : {}),
         ...(layers ? { layers } : {}),

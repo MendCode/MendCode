@@ -20,6 +20,8 @@ export type ReviewInfo = {
   files: ReadonlyArray<{ path: string; touched: number }>; profile: string; cap: number; incremental: boolean; notes: readonly string[]
   /** How many candidate findings the separate verify pass judged (0: the review pass raised none, so no verify pass ran). Unset: not known. */
   checked?: number | undefined
+  /** The cost table measured for a MendCode pull request (perf.ts `perfBody`), shown in the review details. */
+  perf?: string | undefined
 }
 
 /** A fence longer than any run of backticks in `text`, so a finding's own code never closes it. */
@@ -236,7 +238,7 @@ export function renderReviewBody({ result, inline, moved, repo, info, template, 
     walkthrough: () => walkthrough ? walkthroughBlock(walkthrough, titledFolded("walkthrough", "<strong>Walkthrough</strong>"), open) : "",
     checks: () => walkthrough ? checksBlock(walkthrough, titles.get("checks")) : "",
     outside: () => outside,
-    details: () => details(titles.get("details") ?? "Review details", facts + files, open),
+    details: () => details(titles.get("details") ?? "Review details", facts + (info?.perf ? `\n\n${info.perf}` : "") + files, open || (!!info?.perf && /\*\*perf-attrib: sube/.test(info.perf))),
     footer: () => tone === "concise" ? "" : "<sub>Comment <code>@mendcode review</code> to review again · <code>@mendcode pause</code> / <code>resume</code> · reply to a finding with <code>explain</code>, <code>fix</code> or <code>learn</code> · settings in <code>.mendcode/review.yaml</code></sub>",
   }
   /** Folded sections take the title as their label; the others get it as a heading above them. */

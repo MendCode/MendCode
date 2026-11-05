@@ -3,11 +3,13 @@
 // measured at ready, after one reply and at rest, for each process: physical footprint, JS heap by object type (`heapStats`) and by
 // constructor (heap snapshot), native memory by region (`vmmap --summary` on macOS, `smaps_rollup` on Linux), modules loaded, CPU per phase;
 // plus the binary's size and the session's bytes per table.
-//   bun scripts/perf-attrib.ts --base REF|BINARY --cand REF|BINARY [--rounds 2] [--rest 20] [--json] [--markdown] [--out DIR] [--keep]
+//   bun scripts/perf-attrib.ts --base REF|BINARY --cand REF|BINARY [--rounds 2] [--rest 20] [--json] [--markdown] [--out DIR] [--keep] [--cache DIR]
 //   bun scripts/perf-attrib.ts --calibrate BINARY [--rounds 3]     (the same build on both sides; writes scripts/perf-attrib-noise.json)
 // REF is a commit-ish: it is built in a temporary worktree that is removed at the end. BINARY is a compiled mendcode (copied, never touched).
+// --cache DIR keeps the binary built for each REF (one file per full commit id, platform and arch) and reuses it next time, so measuring the same
+// commit again builds nothing; the caller bounds the directory (the PR reviewer evicts the oldest).
 // Exit code 1 when a metric rose above its measured noise threshold, so CI or a reviewer can treat it as a finding.
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs"
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { Database } from "bun:sqlite"
 import { tmpdir } from "node:os"
 import path from "node:path"
@@ -301,11 +303,35 @@ export function toMarkdown(input: { base: string; cand: string; rounds: number; 
 // ---------------------------------------------------------------------------------------------------------------------------------
 // Inputs: a compiled binary, or a commit built in a temporary worktree
 
-async function resolveBuild(spec: string, scratch: string, label: string, cleanups: Array<() => void>) {
+/** Where `--cache` keeps the build of commit `sha`: one file per commit, platform and arch. */
+export const cacheFile = (cache: string, sha: string) => path.join(cache, `${sha}-${process.platform}-${process.arch}`)
+
+/** A cached build of `sha` copied to `into`, or undefined when there is none. */
+export function takeCached(cache: string | undefined, sha: string, into: string): string | undefined {
+  if (!cache) return undefined
+  const file = cacheFile(cache, sha)
+  if (!existsSync(file) || !statSync(file).isFile()) return undefined
+  copyFileSync(file, into)
+  return into
+}
+
+/** Keeps a fresh build in the cache; written beside its name and renamed, so a killed run never leaves half a binary under the real name. */
+export function keepBuilt(cache: string | undefined, sha: string, binary: string) {
+  if (!cache) return
+  mkdirSync(cache, { recursive: true })
+  const file = cacheFile(cache, sha)
+  const partial = `${file}.part-${process.pid}`
+  copyFileSync(binary, partial)
+  renameSync(partial, file)
+}
+
+async function resolveBuild(spec: string, scratch: string, label: string, cleanups: Array<() => void>, cache?: string) {
   const asFile = path.resolve(spec)
   if (existsSync(asFile) && statSync(asFile).isFile()) { const copy = path.join(scratch, label); copyFileSync(asFile, copy); return { binary: copy, name: spec } }
   const sha = Bun.spawnSync(["git", "-C", REPO, "rev-parse", "--verify", `${spec}^{commit}`]).stdout.toString().trim()
   if (!sha) throw new Error(`perf-attrib: ${spec} is neither a file nor a commit`)
+  const hit = takeCached(cache, sha, path.join(scratch, label))
+  if (hit) return { binary: hit, name: `${spec} (${sha.slice(0, 8)}, cached build)` }
   const tree = path.join(scratch, `tree-${label}`)
   const added = Bun.spawnSync(["git", "-C", REPO, "worktree", "add", "--detach", tree, sha])
   if (added.exitCode !== 0) throw new Error(`git worktree add failed: ${added.stderr.toString()}`)
@@ -314,6 +340,7 @@ async function resolveBuild(spec: string, scratch: string, label: string, cleanu
     const run = Bun.spawnSync(argv, { cwd: tree, stdout: "ignore", stderr: "pipe" })
     if (run.exitCode !== 0) throw new Error(`${argv.join(" ")} failed in ${spec}: ${run.stderr.toString().slice(-500)}`)
   }
+  keepBuilt(cache, sha, path.join(scratch, label))
   return { binary: path.join(scratch, label), name: `${spec} (${sha.slice(0, 8)})` }
 }
 
@@ -337,6 +364,7 @@ if (import.meta.main) {
   const scratch = realpathSync(mkdtempSync(path.join(tmpdir(), "perf-attrib-")))
   const cleanups: Array<() => void> = []
   const out = flag("out") ? path.resolve(flag("out")!) : undefined
+  const cache = flag("cache") ? path.resolve(flag("cache")!) : undefined
   if (out) mkdirSync(out, { recursive: true })
   let exit = 0
   try {
@@ -344,8 +372,8 @@ if (import.meta.main) {
     const baseSpec = calibrate ?? flag("base") ?? flag("rescore") ?? (() => { throw new Error("usage: perf-attrib --base REF|BINARY --cand REF|BINARY | --calibrate BINARY") })()
     const candSpec = calibrate ?? flag("cand") ?? flag("rescore") ?? (() => { throw new Error("perf-attrib: --cand is required") })()
     const rescore = flag("rescore")
-    const base = rescore ? { binary: "", name: baseSpec } : await resolveBuild(baseSpec, scratch, "base", cleanups)
-    const cand = rescore ? { binary: "", name: candSpec } : calibrate ? { binary: base.binary, name: base.name } : await resolveBuild(candSpec, scratch, "cand", cleanups)
+    const base = rescore ? { binary: "", name: baseSpec } : await resolveBuild(baseSpec, scratch, "base", cleanups, cache)
+    const cand = rescore ? { binary: "", name: candSpec } : calibrate ? { binary: base.binary, name: base.name } : await resolveBuild(candSpec, scratch, "cand", cleanups, cache)
     const runs: { base: Flat[]; cand: Flat[] } = { base: [], cand: [] }
     let modules: ReturnType<typeof moduleDiff> = null
     const firstLists: Record<string, Awaited<ReturnType<typeof measureRun>>["lists"]> = {}
@@ -362,7 +390,7 @@ if (import.meta.main) {
     }
     modules = moduleDiff(firstLists.base?.modules.tui, firstLists.cand?.modules.tui)
     if (calibrate || has("write-noise")) {
-      const noise: Noise = { schema: SCHEMA_VERSION, runs: runs.base.length + runs.cand.length, measuredAt: new Date().toISOString(), build: base.name, range: noiseFrom([runs.base, runs.cand]) }
+      const noise: Noise = { schema: SCHEMA_VERSION, runs: runs.base.length + runs.cand.length, measuredAt: new Date().toISOString(), build: path.basename(base.name), range: noiseFrom([runs.base, runs.cand]) }
       writeFileSync(NOISE_FILE, JSON.stringify(noise))
       const cmp = compare(runs.base, runs.cand, noise)
       const pick = ["total.ready.fp_mb", "total.after.fp_mb", "total.rest.fp_mb", "tui.rest.fp_mb", "daemon.rest.fp_mb", "tui.rest.heap.size_b", "daemon.rest.heap.size_b", "tui.rest.heap.objects", "daemon.rest.heap.objects", "tui.rest.heap.extra_b", "daemon.rest.heap.extra_b"]

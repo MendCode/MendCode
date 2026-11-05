@@ -2793,6 +2793,7 @@ export async function startDaemon(options: DaemonOptions) {
       enabled: prReviewOn,
       // This device's capacity, read again at every start: a changed setting applies to the next job (docs/pr-review.md "Concurrency").
       concurrency: () => store.settings.get().prReview?.concurrency,
+      perfAttrib: () => store.settings.get().prReview?.perfAttrib,
       // The reviewer's own spend, per day, model and directory (the role `prReview`): its turns are in the usage totals already, under
       // whatever model the child ran on, and their per-call rows leave with the child session.
       reviewUsage: ({ directory, childSessionId, tokens }) => {

@@ -59,6 +59,8 @@ export type ReviewContext = {
   notes: string[]
   /** The title, description and linked issues the pre-merge checks read; absent when the caller could not read them. */
   pullRequest?: PullRequestInfo
+  /** The cost table measured for a MendCode pull request and the rule the model applies to it (perf.ts `perfPrompt`); absent for other repositories. */
+  perf?: string | undefined
   /** Estimated tokens of `diff` plus the symbol lines. */
   tokens: number
   /**

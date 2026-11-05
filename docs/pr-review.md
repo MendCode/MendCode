@@ -742,6 +742,26 @@ it. A change applies to the next start, without a restart. The background job sc
 also caps how many run (2 in normal mode, 4 in high), so values above 2 take effect only there. `/pr watch-repo list`, the
 `pr_review` status and the `/reviews` page show the value ("running N of M at once").
 
+### Performance of MendCode's own pull requests
+
+When the repository under review is MendCode itself (the checkout's root package is `mendcode` and holds `scripts/perf-attrib.ts`),
+the daemon measures the pull request before the model pass: it runs `bun scripts/perf-attrib.ts --base <merge base> --cand <head>
+--markdown` as a separate subprocess (the review model stays read-only and builds nothing), on the offline faux engine, so it uses no
+model and no login. The table goes into the review's details and to the model as input, so a finding can cite its numbers; the only
+model cost is the table's text.
+
+- A metric that rose above the measured noise (the script exits 1) adds a critical `performance` finding on the first changed line
+  of the code that can change cost. Within the noise is no difference.
+- Without a table, the model is told so and reports a major finding when the change adds start-up, per-turn or per-frame work, a
+  timer, a stored row or column, a dependency or an embedded asset and the pull request gives no before/after numbers.
+- It runs only when the diff touches code, manifests or build scripts (`apps/`, `packages/`, `features/`, `package.json`, the lockfile,
+  `scripts/build*`); a diff of docs, tests and fixtures alone is skipped. A head in a fork is never built; the review says so.
+- It never blocks or fails a review. A timeout (20 minutes), a failed build or a missing `bun` leaves a note in the review:
+  "Performance was not measured: <why>".
+- Built binaries are cached per full commit id, platform and arch in `<data dir>/pr-review/perf/cache`: the newest two (a base and a head) are kept,
+  anything older than three days or left half-written is removed after every run, and scratch directories are deleted at the end.
+- `prReview.perfAttrib: false` (`settings.set`, on when unset) turns the phase off. Other repositories are never measured.
+
 ### Providers
 
 The daemon picks the forge from the checkout's `origin`: github.com through `gh`, as described above; gitlab.com, or a host whose name

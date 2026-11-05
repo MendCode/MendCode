@@ -10,6 +10,7 @@ import { resumeReview, ReviewPassError, reviewPullRequest, type ReviewCheckpoint
 import { dedupeInherited, lineReader } from "./fingerprint"
 import { resolveReviewLanguage, withReviewLanguage } from "./language"
 import { parsePartPhase, phaseFacts, phasesBefore, planPhases } from "./phases"
+import { measurePerf, perfBody, perfFinding, perfNote, perfPrompt, type PerfOptions, type PerfOutcome } from "./perf"
 import { publishReview, publishThroughProvider, type GhCall, type PublishReport, type ReviewInfo } from "./publish"
 import type { PublishCheck } from "./publishers"
 import { reviewedBy, reviewedThrough } from "./publishers"
@@ -112,6 +113,14 @@ export type RunPrReviewInput = {
    * incremental review, so a round counts only what the re-check closed, published or not.
    */
   recheck?: readonly PrFinding[]
+  /**
+   * The cost phase of a MendCode pull request (perf.ts): when set, and the checkout is the MendCode repository and the diff can
+   * change what it costs, `scripts/perf-attrib.ts` runs as a subprocess before the model pass and its table goes to the model and
+   * the review. Absent (the hosted runner, a repository that is not MendCode, `prReview.perfAttrib: false`): no phase.
+   */
+  perf?: PerfOptions | undefined
+  /** The head is in a fork: the phase would build and run the fork's code, so it says it did not. */
+  fork?: boolean
 } & RunPlatformInput
 
 // ── Shared with audit.ts ─────────────────────────────────────────────────────────────────────────────────────────────────
@@ -357,6 +366,13 @@ async function reviewRun(input: RunPrReviewInput): Promise<ReviewRun & RunPlatfo
     if (input.pullRequest) context.pullRequest = input.pullRequest
     if (incremental) context.notes.push(`Incremental review: only the commits since ${range.base.slice(0, 12)}.`)
     else if (input.stack && range.base === input.stack.base) context.notes.push(`Stacked on #${input.stack.parent}: only this pull request's own commits since #${input.stack.parent}'s head ${input.stack.base.slice(0, 12)}.`)
+    // The cost phase: a subprocess with execution, outside the model's read-only pass; it never fails or blocks the review.
+    const perf: PerfOutcome | undefined = input.perf ? await measurePerf({ directory: input.directory, base: input.base, head: input.head, git, options: input.perf, fork: input.fork === true }) : undefined
+    if (perf) {
+      context.perf = perfPrompt(perf)
+      const note = perfNote(perf)
+      if (note) context.notes.push(note)
+    }
     const plan = planPhases({ config: config.phases, facts: phaseFacts({ context, fixMode: config.fix.mode, stacked: !!input.stack }) })
     const files = context.files.map((file) => file.path)
     const memory = input.memory ? await input.memory({ title: input.pullRequest?.title ?? `${input.repo}#${input.number}`, files }).catch(() => { context.notes.push("The reviewer's memory context could not be read; reviewed without it."); return undefined }) : undefined
@@ -382,6 +398,10 @@ async function reviewRun(input: RunPrReviewInput): Promise<ReviewRun & RunPlatfo
       outcome = { ...outcome, result: { ...outcome.result, findings: shown.kept }, ...(outcome.checkpoint && pending ? { checkpoint: { ...outcome.checkpoint, candidates: pending.kept } } : {}) }
     }
     const complete = !outcome.stop
+    // A measured rise is a critical finding of its own: it does not depend on what the model noticed.
+    const risen = perf && complete ? perfFinding({ outcome: perf, context }) : undefined
+    const risenAdded = !!risen && !outcome.result.findings.some((finding) => finding.id === risen.id)
+    if (risen && risenAdded) outcome ={ ...outcome, result: { ...outcome.result, findings: [risen, ...outcome.result.findings] }, candidates: [risen, ...outcome.candidates] }
     const published = Object.values(input.state.published).flatMap((entry) => entry.finding && !entry.resolved ? [entry.finding] : [])
     const previous = [...published, ...(input.recheck ?? []).filter((finding) => !published.some((known) => known.id === finding.id))]
     // An explicit full review re-checks the open findings too: otherwise asking again after a fix could never close their threads.
@@ -390,7 +410,7 @@ async function reviewRun(input: RunPrReviewInput): Promise<ReviewRun & RunPlatfo
     // The base of the result is the PR's base, so a later incremental review still knows where the PR starts.
     const result = { ...outcome.result, base: input.base }
     const inheritedNote = inherited ? [`${plural(inherited, "finding")} #${input.stack!.parent} already reported ${inherited === 1 ? "was" : "were"} left out (this pull request is stacked on it).`] : []
-    const info: ReviewInfo = { files: context.files.map((file) => ({ path: file.path, touched: file.touched.length })), profile: config.profile, cap: config.cap, incremental, notes: [...context.notes.filter((note) => !note.startsWith("Incremental review:")), ...inheritedNote], ...(complete ? { checked: outcome.candidates.length } : {}) }
+    const info: ReviewInfo = { files: context.files.map((file) => ({ path: file.path, touched: file.touched.length })), profile: config.profile, cap: config.cap, incremental, notes: [...context.notes.filter((note) => !note.startsWith("Incremental review:")), ...inheritedNote], ...(complete ? { checked: outcome.candidates.length - (risenAdded ? 1 : 0) } : {}), ...(perf && perfBody(perf) ? { perf: perfBody(perf) } : {}) }
     // Always a checkpoint: the plan's decisions; complete, every judged finding; stopped, what a resume verifies.
     const checkpoint: JobCheckpoint = outcome.checkpoint ?? {
       completedPhases: outcome.completedPhases ?? [], candidates: [], verified: outcome.candidates, result: outcome.result,

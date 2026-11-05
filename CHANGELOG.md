@@ -11,6 +11,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### New
 
+- The PR reviewer measures MendCode's own pull requests (start-up, memory, size) and puts the table in the review; a rise above the noise is a critical finding. `prReview.perfAttrib: false` turns it off. See [PR review](docs/pr-review.md#performance-of-mendcodes-own-pull-requests).
 - `/reviews open <job id>` opens a PR review's reviewer session, and a running review shows its phase in `/reviews`. See [PR review](docs/pr-review.md).
 - `@mendcode review full` reviews the whole PR; plain `@mendcode review` reviews only what is new since the last full review. See [PR review](docs/pr-review.md).
 - The PR reviewer's own tokens show in `/usage` as the `prReview` role. See [usage](docs/usage.md#auxiliary-calls).

@@ -595,7 +595,7 @@ const SharedSettings = lazySchema(() => z.strictObject({
    * when unset. Per device, not per repository: it is this machine's capacity, shared by every watched repository. The daemon's
    * background scheduler still runs at most 2 jobs at once in its normal resource mode (4 in high), so 3 and 4 need high.
    */
-  prReview: z.strictObject({ concurrency: z.number().int().min(1).max(4).optional() }).optional(),
+  prReview: z.strictObject({ concurrency: z.number().int().min(1).max(4).optional(), /** Off: the reviewer of MendCode's own repository does not measure a pull request's cost (docs/pr-review.md "Performance"). On when unset. */ perfAttrib: z.boolean().optional() }).optional(),
   /** Footer segments in display order; DEFAULT_FOOTER when unset. */
   footer: z.array(z.enum(FOOTER_SEGMENTS)).max(FOOTER_SEGMENTS.length).optional(),
   /** Prompt-cache hints the native engine sends (docs/prompt-cache.md): `legacy` (default) = today's per-session key · `off` = none · `smart` = per-lineage keys and Anthropic breakpoints at tools, system and the last user message. */
