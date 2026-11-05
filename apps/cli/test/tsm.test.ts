@@ -17,7 +17,7 @@ describe("B72 TSM automation", () => {
     expect(parseAutomation(["tsm"])).toMatchObject({ ok: true, command: { request: { query: { operation: "status" } } } })
     expect(parseAutomation(["tsm", "--help"])).toMatchObject({ ok: true, command: { kind: "help", topic: "tsm" } })
     expect(helpText("tsm")).toContain("dry-run")
-    expect(HELP).toContain("tsm <status")
+    expect(HELP).toContain("tsm <command>")
     for (const shell of ["bash", "zsh"] as const) expect(completionScript(shell)).toContain("tsm) ")
   })
   test("adapter open/create are pure previews; invalid or execution arguments fail", () => {

@@ -100,7 +100,7 @@ export function systemText(report: SystemReport) {
   return `${JSON.stringify(report.facts, null, 2)}\n`
 }
 
-const COMMANDS = ["backlog", "run", "export", "acp", "app-server", "session", "memory", "loop", "workflow", "usage", "storage", "package", "recipe", "profile", "control-plane", "tui", "help", "context", "status", "doctor", "debug", "generate", "completion", "agent", "import", "uninstall", "cache", "daemon", "loops", "db", "tsm", "github", "pr", "ps", "logs", "kill", "attach"]
+export const COMMANDS = ["backlog", "run", "export", "acp", "app-server", "session", "memory", "loop", "workflow", "usage", "storage", "package", "recipe", "profile", "control-plane", "tui", "help", "context", "status", "doctor", "debug", "generate", "completion", "agent", "import", "uninstall", "cache", "daemon", "loops", "db", "tsm", "github", "pr", "ps", "logs", "kill", "attach"]
 const SUBCOMMANDS: Record<string, string> = {
   "control-plane": "ai system tui tsm", ai: "env status", env: "status",
   system: "status doctor check toolchain config-paths config-layers precedence adapter-status", debug: "rg config info paths scrap skill startup agent file lsp snapshot wait", rg: "tree files search",

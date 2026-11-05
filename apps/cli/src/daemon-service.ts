@@ -1,3 +1,4 @@
+import { DAEMON_HELP } from "./help-text"
 import path from "node:path"
 import { sameDir } from "@mendcode/program/data-dir"
 import type { CommandInput, CommandReply } from "@mendcode/client"
@@ -6,13 +7,7 @@ import { redactSecrets } from "@mendcode/protocol/wire"
 import type { ServiceAction, ServiceOptions, ServiceResult } from "../../../packages/daemon/src/user-service"
 import { PROGRAM_NAME } from "@mendcode/program"
 
-export const DAEMON_USAGE = `usage: ${PROGRAM_NAME} daemon <start|run|status|logs|stop|restart> [--dir D] [--json]
-  daemon service <plan|install|start|stop|restart|status|logs|uninstall> (macOS/Linux)
-    [--service-dir D] [--cwd PROJECT] [--engine ENGINE]
-  [control-plane] loops daemon [--once [--execute]] | service <action> (macOS/Linux)
-  [control-plane] memory dream daemon [--once [--execute]] | service <action> (macOS/Linux)
-  --lines N (1–1000)   --force (interrupt active work)
-`
+export const DAEMON_USAGE = `${DAEMON_HELP}\n`
 
 export type DaemonServiceCommand = {
   action: ServiceAction | "run" | "tick"

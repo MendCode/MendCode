@@ -348,7 +348,8 @@ if (automation.ok === false) {
   process.exit(64)
 }
 if (automation.ok === true && automation.command.kind === "help") {
-  process.stdout.write((await automationApi()).helpText(automation.command.topic) + (automation.command.topic ? "" : STARTUP_USAGE))
+  const topic = automation.command.topic
+  process.stdout.write(topic && ["tui", "run", "attach", "acp", "app-server", "pet"].includes(topic) ? STARTUP_USAGE : (await automationApi()).helpText(topic))
   process.exit(0)
 }
 if (automation.ok === true && (automation.command.kind === "version" || automation.command.kind === "completion")) {

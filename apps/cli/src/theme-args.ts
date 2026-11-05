@@ -1,3 +1,4 @@
+import { THEME_HELP } from "./help-text"
 import { THEME_NAME } from "@mendcode/protocol/wire"
 import type { Common, ParseResult } from "./automation"
 import { COMPAT } from "./compat"
@@ -8,7 +9,7 @@ export type ThemeAutomation =
   | { kind: "theme.install"; file: string; name?: string; scope: "user" | "project" }
   | { kind: "theme.select"; name: string; scope: "user" | "project" }
 
-export const THEME_USAGE = `usage: ${PROGRAM_NAME} theme validate <file>\n  theme install <file> [--name NAME] [--scope project|user|global]\n  theme select <name> [--scope project|user|global]\n  --dir D | --data-dir D  --json | --format json`
+export const THEME_USAGE = THEME_HELP
 const VALUES = new Set(["dir", "data-dir", "engine", "name", "scope", "format", "compat"])
 
 export function parseTheme(argv: string[]): ParseResult | undefined {

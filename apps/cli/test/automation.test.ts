@@ -97,7 +97,7 @@ describe("argument parsing", () => {
     expect(failure("storage", "--clean", "--older-than", "soon")).toContain("--older-than")
     expect(failure("storage", "--clean", "--dry-run", "--vacuum")).toContain("cannot vacuum")
     expect(helpText("storage")).toContain("--dry-run")
-    expect(helpText()).toContain("mendcode storage")
+    expect(helpText()).toContain("storage [--clean]")
   })
 
   test("help at the top level and per command", () => {
@@ -105,7 +105,7 @@ describe("argument parsing", () => {
     expect(parsed("--help")).toMatchObject({ kind: "help" })
     expect(parsed("session", "--help")).toMatchObject({ kind: "help", topic: "session" })
     expect(parsed("help", "loop")).toMatchObject({ topic: "loop" })
-    expect(helpText()).toContain("exit codes: 0 ok")
+    expect(helpText()).toContain("Exit codes: 0 ok")
     for (const topic of ["session", "memory", "loop", "usage"]) expect(helpText(topic)).toStartWith(`usage: mendcode ${topic}`)
     for (const word of ["session list", "session create", "session send", "session wait", "session events", "session cancel", "memory", "loop", "usage"]) expect(helpText()).toContain(word.split(" ")[0]!)
   })

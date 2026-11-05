@@ -1,7 +1,8 @@
+import { PROJECT_HELP } from "./help-text"
 import { PROJECT_OPERATIONS, PROMPT_FOCUS_CHOICES, type ProjectControlInput, type ProjectPackagePatch, type PromptFocusChoice } from "@mendcode/protocol/wire"
 import { PROGRAM_NAME } from "@mendcode/program"
 
-export const PROJECT_USAGE = `usage: ${PROGRAM_NAME} control-plane project <init|config-show|context-status|context-refresh|context-show|focus-status|focus-list|focus-show [ID]|focus-use ID|package-show|package-set> [--dir DATA] [--json]`
+export const PROJECT_USAGE = PROJECT_HELP
 export type ProjectAutomation = { kind: "project"; input: ProjectControlInput }
 const packageFlags = { id: "id", title: "title", description: "description", version: "version", kind: "kind", channel: "channel", "source-type": "sourceType", "source-url": "sourceURL", "compat-mendcode": "compatMendcode", "compat-runtime-pack": "compatRuntimePack" } as const
 

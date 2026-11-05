@@ -13,17 +13,6 @@ export type LoopAutomation =
   | { kind: "loop.tick"; id?: string; limit: number; execute: boolean; reportOnly: boolean }
   | { kind: "loop.activate"; id: string; reason?: string }
 
-export const LOOP_CONTROL_USAGE = [
-  "  status [--all]                                state, budget, next wake and scheduler",
-  "  examples|templates                           built-in templates",
-  "  draft [NAME OBJECTIVE] [--template ID] [--name N] [--objective O] [--interval-ms N | --daily-at HH:MM --timezone Z]",
-  "  show <id>                                    objective, runs, children and journal",
-  "  tail <id> [--limit N]                         last 50 journal events (1–200); JSON lines with --json",
-  "  monitor <id> [--once] [--interval-ms N]        refresh every 2000ms; non-TTY prints once",
-  "  tick [id] [--limit N] [--execute] [--report-only]  dry-run unless --execute; due loops default limit 1",
-  "  activate <id> [--reason TEXT] [--no-service]   enable the integrated daemon scheduler",
-  "  aliases: loops … · control-plane loops …",
-].join("\n")
 
 /** v1 plural/control-plane spelling; existing singular commands retain their parser. */
 function commandOffset(argv: string[]) {

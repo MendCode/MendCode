@@ -1,3 +1,4 @@
+import { foldLetter } from "../ui/caps-lock"
 import { DEFAULT_COMPACT_AT_TOKENS, DEFAULT_COMPACT_NOTICE_PERCENT, DEFAULT_IDLE_COMPACT_AT_TOKENS, featureOn } from "@mendcode/protocol/wire"
 import type { Settings } from "@mendcode/protocol"
 import { glyphs as defaultGlyphs, type ColorName, type Glyphs, type Line, type Span } from "../ui/theme"
@@ -268,9 +269,11 @@ function choose(def: RowDef, values: SettingsValues, themes: readonly string[], 
 }
 
 /** Handles one raw key. Returns the same state object when nothing changed. */
-export function settingsPageKey(state: SettingsPageState, key: string, values: SettingsValues, options: { themes: readonly string[] }): { state: SettingsPageState; action: SettingsAction } {
+export function settingsPageKey(state: SettingsPageState, typed: string, values: SettingsValues, options: { themes: readonly string[] }): { state: SettingsPageState; action: SettingsAction } {
   const def = rowAt(state)
   const cleared: SettingsPageState = { row: state.row }
+  // Typing keeps the raw key (`200K`); otherwise Caps Lock's `Q` is the `q` shortcut.
+  const key = state.typing === undefined ? foldLetter(typed) : typed
   if (state.typing !== undefined) {
     if (key === "\x1b") return { state: cleared, action: NONE }
     if (key === "\x7f" || key === "\b") return { state: { row: state.row, typing: state.typing.slice(0, -1) }, action: NONE }

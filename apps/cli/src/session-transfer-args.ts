@@ -1,3 +1,5 @@
+import { IMPORT_HELP } from "./help-text"
+import { EXPORT_HELP } from "./help-text"
 import { PROGRAM_NAME } from "@mendcode/program"
 export type TransferExport = {
   kind: "session.export"
@@ -12,8 +14,8 @@ export type TransferExport = {
 }
 export type ImportFrom = "auto" | "mendcode" | "claude-code" | "codex"
 export type TransferImport = { kind: "session.import"; source?: string; from?: ImportFrom; latest?: boolean }
-export const TRANSFER_EXPORT_USAGE = `usage: ${PROGRAM_NAME} export [sessionID] [--format json|markdown|html] [--sanitize] [--no-reasoning] [--no-tools] [--metadata] [--timestamps]`
-export const TRANSFER_IMPORT_USAGE = `usage: ${PROGRAM_NAME} import <file.json|file.jsonl|URL> [--from auto|mendcode|claude-code|codex] [--dir DATA] [--json] | import --latest [--from claude-code|codex]`
+export const TRANSFER_EXPORT_USAGE = EXPORT_HELP
+export const TRANSFER_IMPORT_USAGE = IMPORT_HELP
 const IMPORT_FROM: readonly string[] = ["auto", "mendcode", "claude-code", "codex"]
 /** `import <file|URL>` or `import --latest`; `--from` names the tool whose transcript it is (sniffed when omitted). */
 export function parseTransferImport(words: string[], flags: Map<string, string | true>): TransferImport | { error: string } {

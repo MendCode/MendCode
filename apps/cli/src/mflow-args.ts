@@ -1,9 +1,10 @@
+import { MFLOW_HELP } from "./help-text"
 import type { MflowActivation, MflowChange, MflowRead } from "@mendcode/protocol"
 import type { Common, ParseResult } from "./automation"
 import { PROGRAM_NAME } from "@mendcode/program"
 
 export type MflowAutomation = { kind: "mflow"; request: { type: "mflow.query"; query: MflowRead } | { type: "mflow.change"; change: MflowChange } }
-export const MFLOW_USAGE = `usage: ${PROGRAM_NAME} [control-plane] mflow <status|activate|deactivate|remove|setup|scan|relay-guide|plan|doctor|legacy-status|start|stop> [--json]\n  activate|setup [--room ROOM] [--url embedded|http://127.0.0.1:PORT] [--token-file PRIVATE_FILE] [--priority 0–9]\n  --dir DATA selects daemon storage; --project PATH selects the project\n  opt-in coordination; setup configures only, start is explicit; file sync is off`
+export const MFLOW_USAGE = MFLOW_HELP
 const values = new Set(["dir", "data-dir", "engine", "format", "project", "room", "url", "signaling", "token-file", "priority", "relay"])
 const options = new Set(["room", "url", "signaling", "token-file", "priority", "relay"])
 const safe = (value: string) => value.length <= 4096 && !/[\x00-\x1f\x7f]/.test(value)

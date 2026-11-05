@@ -1,9 +1,11 @@
+import { SHARE_HELP } from "./help-text"
+import { CONSOLE_HELP } from "./help-text"
 import type { CommandInput } from "@mendcode/client"
 import type { Common, ParseResult } from "./automation"
 import { PROGRAM_NAME } from "@mendcode/program"
 
-export const CONSOLE_USAGE = `usage: ${PROGRAM_NAME} console <setup [URL] --token-file FILE|off|login [URL]|logout [email]|switch [orgID]|orgs|open|status> [--dir DATA] [--json]`
-export const SHARE_USAGE = `usage: ${PROGRAM_NAME} share <status|create|sync|remove> SESSION_ID | share policy <disabled|manual|auto> | share local SESSION_ID [--remove] | share gist SESSION_ID <--yes|--remove> [--dir DATA] [--json]`
+export const CONSOLE_USAGE = CONSOLE_HELP
+export const SHARE_USAGE = SHARE_HELP
 export type ConsoleAutomation = { kind: "console"; operation: "status" | "setup" | "off" | "login" | "logout" | "switch" | "orgs" | "open"; argument?: string; tokenFile?: string }
 export type ShareAutomation = { kind: "share"; request: CommandInput }
 export function parseConsole(argv: string[]): ParseResult | undefined {

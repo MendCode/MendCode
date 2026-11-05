@@ -1,10 +1,11 @@
+import { WORKTREE_HELP } from "./help-text"
 import type { WorktreeChange, WorktreeRead, WorktreeCreateInput } from "@mendcode/protocol"
 import type { Common, ParseResult } from "./automation"
 import { COMPAT } from "./compat"
 import { PROGRAM_NAME } from "@mendcode/program"
 
 export type WorktreeAutomation = { kind: "worktree"; request: { type: "worktree.query"; query: WorktreeRead } | { type: "worktree.change"; change: WorktreeChange } }
-export const WORKTREE_USAGE = `usage: ${PROGRAM_NAME} [control-plane] worktree <status|plan|create|open|adopt|remove|reset|doctor> [target] [--json]\n  plan|create NAME [--branch B] [--base REF] [--path PATH] [--focus F]\n  --dir DATA selects daemon storage; --project PATH selects the project\n  create/open/remove/reset only preview; adopt and plan save registry data`
+export const WORKTREE_USAGE = WORKTREE_HELP
 const values = new Set(["dir", "data-dir", "engine", "format", "compat", "project", "branch", "base", "path", "focus"])
 const globalValues = new Set(["dir", "data-dir", "engine", "format", "compat", "project"])
 const safe = (value: string) => value.length > 0 && value.length <= 4096 && !/[\x00-\x1f\x7f]/.test(value)

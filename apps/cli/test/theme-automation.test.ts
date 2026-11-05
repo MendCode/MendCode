@@ -19,7 +19,7 @@ describe("B65 theme CLI", () => {
     expect(parseAutomation(["theme", "install", "theme.json", "--name=1Night.Mode", "--scope=user", "--data-dir=/tmp/data", "--json"])).toMatchObject({ command: { name: "1Night.Mode", scope: "user", dir: "/tmp/data", json: true } })
     expect(parseAutomation(["theme", "select", "Forest_Mode", "--scope", "global"])).toMatchObject({ command: { kind: "theme.select", name: "Forest_Mode", scope: "user" } })
     expect(parseAutomation(["theme", "--help"])).toMatchObject({ command: { kind: "help", topic: "theme" } })
-    expect(helpText("theme")).toContain("theme validate <file>")
+    expect(helpText("theme")).toContain("validate <file>")
     expect(parseAutomation(["session", "list"]).ok).toBe(true)
   })
   for (const args of [

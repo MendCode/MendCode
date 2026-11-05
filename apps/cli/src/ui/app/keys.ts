@@ -1,3 +1,4 @@
+import { foldForPage } from "./caps-pages"
 import type { createSession } from "./session"
 import { modelWithEffort } from "../../view/model-label"
 import { chipRowAttachments, liveAttachments } from "../../view/attachments"
@@ -188,7 +189,9 @@ export function createKeys(ctx: AppContext, actions: {
     // Back in the chat the trail is over: a page opened from here later has no parent page.
     if (state.page === "chat") state.pageSeen = undefined
     // Before anything drops the selection or types the key: Option+Q arriving as `œ` is the comment key where that key means something (ui/app/option-keys.ts).
-    const key = optionKeys.rewrite(typed, plainPrompt() && !MOUSE_SGR.test(typed) && !(vimLive() && vim.mode !== "insert"))
+    const rewritten = optionKeys.rewrite(typed, plainPrompt() && !MOUSE_SGR.test(typed) && !(vimLive() && vim.mode !== "insert"))
+    // Caps Lock: a page of letter shortcuts reads `Q` as `q` (ui/app/caps-pages.ts).
+    const key = foldForPage(state, rewritten)
     // The tutorial's practice chat is a whole terminal of its own: every key (ctrl+c and esc included) is its, never this one's.
     if (state.page === "tutorial") return MOUSE_SGR.test(key) ? undefined : pageKey(key)
     // An extension modal owns the keyboard while it is open, ctrl+c included (it closes the modal); mouse reports are dropped.

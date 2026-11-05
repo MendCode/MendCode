@@ -177,7 +177,7 @@ describe("docs: search", () => {
     expect(parseDocsCommand(["docs", "--search", "pause", "agent"])).toEqual({ help: false, words: ["pause", "agent"], search: true })
     expect(parseDocsCommand(["docs", "pause", "agent", "--search", "--dir", "/tmp/x"])).toEqual({ help: false, words: ["pause", "agent"], dir: "/tmp/x", search: true })
     expect(parseDocsCommand(["docs", "--search"])!.error).toMatch(/--search needs words/)
-    expect(DOCS_USAGE).toContain("docs --search WORDS")
+    expect(DOCS_USAGE).toContain("--search WORDS")
   })
   test("it prints up to five cards best first, each with its summary and the line that answers, and exits 0", async () => {
     const { code, out, err } = await run(["docs", "--search", "pause", "agent"])

@@ -78,6 +78,11 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 - Memories no longer pile up in Pending when Dream runs on schedule or from `/dream`: the full tier consolidates them, and a Dream run stopped by a restart no longer blocks its project.
 - Dream uses your `small` model when no `dream` model is set, instead of the main one.
+- A value pasted in `/env` is always masked: pasting on the list opens the add form, and the name field only takes name characters.
+- With Caps Lock on, the letter shortcuts of settings and of the pages work as without it; capitals with a meaning of their own, like `G` or `J`, keep it.
+- `mendcode session attach ID` opens the session like `mendcode attach ID`.
+- `mendcode --help` is one grouped list of every command, and the help of every command fits 80 columns with one usage line.
+
 - A Claude Code turn after a cancelled one whose background command still ran no longer fails with "`claude` was not
   found"; a Claude Code that refuses to start shows its own reason.
 - Claude Code's reports about background tasks of an earlier or ended process no longer arrive as messages for the model.
