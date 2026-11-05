@@ -86,6 +86,8 @@ export type AppInput = {
   launchDirectory?: string
   /** Shown on the home screen next to the product name. */
   version?: string
+  /** A development daemon (docs/dev-mode.md): the top bar and the home screen say so. */
+  dev?: boolean
   home?: string
   now?: () => number
   schedule?: (fn: () => void) => void

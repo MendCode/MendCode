@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 import "@mendcode/protocol/zod-config"
-import { dataDirFromEnv, defaultDataDirNow, isDefaultDataDir, mendEnv } from "@mendcode/program/data-dir"
+import { dataDirFromEnv, defaultDataDirNow, isDefaultDataDir, mendEnv, sameDir } from "@mendcode/program/data-dir"
 import { engineEnvironment } from "./engine-environment"
 import { instructionControls, projectSources } from "./project-control"
 import { remoteInstructions } from "./remote-instructions"
@@ -153,6 +153,8 @@ if (process.env.MENDCODE_V2_LEAN_JIT === "1") for (const key of ["BUN_JSC_useDFG
 const dir = arg("dir") ?? dataDirFromEnv(process.env) ?? DEFAULT_DIR
 /** The default directory under either name: a user service still started with `--dir ~/.mendcode-v2` reads the same home layers. */
 const atDefaultDir = isDefaultDataDir(dir)
+/** `mendcode dev` (docs/dev-mode.md): a development daemon, never on the user's own data directory. */
+const devDaemon = Boolean(process.env.MENDCODE_DEV) && !atDefaultDir && sameDir(process.env.MENDCODE_DEV!, dir)
 
 /**
  * The PR reviewer's config control for `review_config`, loaded on the tool's first call (config layers, profiles and YAML stay out
@@ -469,6 +471,7 @@ export const daemon = await startDaemon({
   // Everything this process starts (engines, MCP servers, hooks) is not the user at a terminal (docs/permissions.md).
   agentOrigin: { descendants: true },
   ...(arg("local-transport") ? { localTransport: arg("local-transport") as "tcp" | "unix" } : {}),
+  ...(devDaemon ? { dev: true } : {}),
   ...(argv.includes("--pure") || safeMode ? { extensionsEnabled: false } : {}),
   ...(safeMode ? { safeMode: true, shellHooksEnabled: false } : {}),
   // ~/.agents and ~/.claude are read only by a daemon on the default data directory (or one told where home is), so a private --dir stays self-contained.

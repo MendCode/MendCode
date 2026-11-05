@@ -11,6 +11,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### New
 
+- `mendcode dev start|restart|stop|status|tui|run`: a second daemon on its own data directory that runs the current checkout, marked DEV and restarted without touching the daemon your sessions use, so MendCode can be programmed from MendCode. See [dev mode](docs/dev-mode.md).
 - `mendcode usage --quota [--json]` prints the quota windows the footer shows, read from the running daemon; nothing is sent to a provider. See [usage](docs/usage.md#quota-from-the-command-line).
 - A session that runs `mendcode run --permission smart` above its own mode now asks you on one card (model, folder, mode, title, prompt) when your terminal has it open; approving starts that child with that prompt only. Without you there it is still refused, and the error gives the command to run yourself. See [permissions](docs/permissions.md#what-a-session-cannot-do-from-its-own-shell).
 - `/customize` is regrouped: the common sections first (Look, Home, Prompt & footer, Chat, Activity), Extensions, Views, the slash menu and terminal internals under Advanced. A row that depends on one switched off is hidden with it. See [customize](docs/customize.md).
@@ -112,6 +113,8 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Fixed
 
+- Smart mode resolves relative paths in a shell command against the directory it runs in (the call's `workdir`, then each `cd`), so `../../node_modules/.bin/tsc` from `packages/widgets` no longer asks as "outside the project". A path that really leaves the project still asks.
+- PR review readers on Claude Code are no longer stopped at their token bound after they have already answered: the bound now covers the harness's own prompt and the model's thinking, so the data summaries come from the cheap model instead of a local scan.
 - PR review readers never run on an ACP harness model (such as an OpenCode one listed under the ChatGPT login): they use the cheap model of the reviewer's own provider.
 - A PR review whose data files were summarized by readers is no longer stopped as "could not review" because the model noted it saw summaries or could not run tests: with findings, or a walkthrough, it goes on to verify and publishes with the model's note. The review prompt now says the data arrives summarized and that there is no shell.
 - In a Claude Code session, `mendcode run` from its shell is known as that session: `--file` attaches instead of being refused, and `--permission smart` above the session's mode asks you on the approval card.

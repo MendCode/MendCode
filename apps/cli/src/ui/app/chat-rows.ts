@@ -498,7 +498,7 @@ export function createChatRows(ctx: AppContext, actions: {
       look: { ...homeLook(profile), ...(asciiGlyphs() ? { ascii: true } : {}) } as never,
       ...(state.tuiProfile.homeTips ? { tip: homeTipText } : {}),
       ...(state.tuiProfile.homeFooter && !footerTaken ? { footer: state.homeMcp ? { mcp: state.homeMcp } : {} } : {}),
-      ...(input.version ? { version: input.version } : {}),
+      ...(input.version ? { version: input.dev ? `${input.version} DEV` : input.version } : {}),
     }, { width, height, extra: { ...(below ? { below } : {}), ...(mascot ? { mascot } : {}), ...(prompt ? { prompt } : {}) } })
     homeHits = drawn.hits.flatMap((hit) => (hit.action === "open" && typeof hit.arg === "string" ? [{ row: hit.row, from: hit.from, to: hit.to, sessionId: hit.arg }] : []))
     return drawn.lines

@@ -272,7 +272,7 @@ export function createAside(ctx: AppContext) {
       ...(model ? { model: modelWithEffort(model, state.effectiveModel?.effort, state.modelReport) } : {}),
       ...(state.todayUsage ? { usageToday: state.todayUsage } : {}),
       ...(petRef ? { pet: state.petList?.find((choice) => choice.ref === petRef)?.name ?? petRef.slice(petRef.indexOf(":") + 1) } : {}),
-      ...(input.version ? { version: input.version } : {}),
+      ...(input.version ? { version: input.dev ? `${input.version} DEV` : input.version } : {}),
       terminal: `${input.screen.size.width}x${input.screen.size.height}`,
     }
     requestFrame()

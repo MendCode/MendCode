@@ -27,9 +27,11 @@ export const READER_SHARE = 0.25
 export const READER_CALL_TOKENS = 24_000
 /**
  * What one reader call is allowed on top of its excerpt (the brief, the answer, and the harness's own prompt, which the first call
- * of a Claude Code child writes to the cache uncached) before the daemon stops it.
+ * of a Claude Code child writes to the cache uncached) before the daemon stops it. Measured live (Claude Haiku through Claude Code,
+ * 12,087 tokens of excerpt): 58,641 input, about 46,000 of it the harness, and 10,379 output, mostly thinking, in one call that
+ * counted 69,020. A limit below that stops the call after it is paid for and discards its answer.
  */
-export const READER_TURN_OVERHEAD = 40_000
+export const READER_TURN_OVERHEAD = 64_000
 /** The excerpt of one file within a group: its first lines, and a few of its last. */
 const EXCERPT_HEAD_LINES = 120
 const EXCERPT_TAIL_LINES = 20

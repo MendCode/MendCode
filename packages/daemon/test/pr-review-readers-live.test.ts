@@ -3,7 +3,7 @@ import { estimateTokens } from "@mendcode/protocol"
 import { buildReviewContext } from "../src/pr-review/context"
 import { DEFAULT_ENGINE_CONFIG, reviewPrompt, reviewPullRequest, type ReviewSessionFactory } from "../src/pr-review/engine"
 import { findingId, parseFindings } from "../src/pr-review/findings"
-import { groupFiles, readGroups } from "../src/pr-review/readers"
+import { groupFiles, readGroups, READER_TURN_OVERHEAD } from "../src/pr-review/readers"
 
 /**
  * The live review of Eden-sudo/Symbex-1 #23 (a manual `full` review, 116 files: 106 result JSON files, 10 code files) stopped with
@@ -92,5 +92,12 @@ describe("a review whose data files reached the model as reader summaries", () =
 
   test("parseFindings keeps the recorded caveat as incomplete; deciding what it means is the engine's job", () => {
     expect(parseFindings(answer({ incomplete: RECORDED_CAVEAT }))).toMatchObject({ ok: true, incomplete: RECORDED_CAVEAT })
+  })
+})
+
+describe("the bound of a reader call", () => {
+  test("a Claude Haiku reader as measured live (12,087 tokens of excerpt, 69,020 counted in one call) is not stopped before it answers", () => {
+    const limit = Math.ceil(12_087 * 1.5) + READER_TURN_OVERHEAD
+    expect(limit).toBeGreaterThanOrEqual(58_641 + 10_379 + 5_000)
   })
 })

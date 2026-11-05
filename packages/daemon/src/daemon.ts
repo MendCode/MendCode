@@ -437,6 +437,8 @@ export type DaemonOptions = RemoteListenerOptions & {
   safeMode?: boolean
   clock?: Clock
   cancelGraceMs?: number
+  /** A development daemon (docs/dev-mode.md): the PR review watch, Dream and loop triggers never run in it, whatever its settings say. */
+  dev?: boolean
   /** Reported in the handshake so clients can detect a stale daemon. */
   buildId?: string
   mcp?: McpControl
@@ -1977,7 +1979,7 @@ export async function startDaemon(options: DaemonOptions) {
     dreamTimer = undefined
     const at = store.settings.get().dreamAt
     const runs: Array<{ runId: number }> = []
-    if (!at || !options.dream) return { status: "skipped", reason: !at ? "Schedule disabled" : "Dream is not configured", runs }
+    if (!at || !options.dream || options.dev) return { status: "skipped", reason: options.dev ? "Development daemon" : !at ? "Schedule disabled" : "Dream is not configured", runs }
     const handled = store.meta.get(DREAM_WINDOW_KEY)
     if (reset || handled === undefined) store.meta.set(DREAM_WINDOW_KEY, dateKey(windows(clock.now(), at).last))
     else {
@@ -2362,7 +2364,7 @@ export async function startDaemon(options: DaemonOptions) {
     },
   })
   sessionObservers.push(loops.observe)
-  loops.start()
+  if (!options.dev) loops.start()
 
   /** Creates and edits share the input checks and the worktree's git checkout requirement. */
   async function loopProblem(input: CreateLoopInput): Promise<string | undefined> {
@@ -2752,7 +2754,7 @@ export async function startDaemon(options: DaemonOptions) {
     dir: options.dir,
     ...(options.prWatch?.run ? { run: options.prWatch.run } : {}),
     ...(options.prWatch?.intervalMs ? { intervalMs: options.prWatch.intervalMs } : {}),
-    enabled: () => effectiveSettings(store.settings.get(), { safeMode: options.safeMode }).experimental?.pr_watch === true,
+    enabled: () => !options.dev && effectiveSettings(store.settings.get(), { safeMode: options.safeMode }).experimental?.pr_watch === true,
     sessionExists: (sessionId) => store.hasSession(sessionId as SessionId),
     sessionDirectory: (sessionId) => store.sessionInfo(sessionId as SessionId)?.directory,
     notify: async (sessionId, text) => actorFor(sessionId as SessionId)?.notify(text, undefined, true),
@@ -2761,6 +2763,7 @@ export async function startDaemon(options: DaemonOptions) {
   root.onDispose(prWatch.stop)
 
   /** The PR reviewer (docs/pr-review.md): needs the tier's permit and `experimental.pr_review`; nothing loads until a watch exists or `/pr review` runs. */
+  // A development daemon reviews on request (`/pr review`, the tool); only the watch is off there.
   const prReviewOn = () => featureOn(store.settings.get(), "pr_review", { safeMode: options.safeMode }) && effectiveSettings(store.settings.get(), { safeMode: options.safeMode }).experimental?.pr_review === true
   const reviewSessions = createReviewSessions({
     create({ owner, directory, title, model: chosen, editing, language }) {

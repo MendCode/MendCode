@@ -109,7 +109,18 @@ function classifyAny(input: SmartInput): SmartDecision {
 // ---- paths ---------------------------------------------------------------------------------------------------
 
 /** The project root; `extra` are declared extra workspace directories that count as part of the project. */
-type Root = { logical: string; real: string; extra?: Root[] }
+type Root = {
+  logical: string
+  real: string
+  extra?: Root[]
+  /** Where relative paths resolve: the directory the command really runs in (the shell `workdir`, then each `cd`); the project root when unset. */
+  base?: string
+}
+
+/** The same project, with relative paths resolved against `directory` (itself relative to the current base). */
+function inDirectory(root: Root, directory: string): Root {
+  return { ...root, base: path.resolve(root.base ?? root.logical, expandHome(directory)) }
+}
 
 export function projectRoot(cwd: string, extra: readonly string[] = []): Root {
   const logical = path.resolve(cwd)
@@ -137,7 +148,7 @@ const within = (parent: string, child: string) => child === parent || child.star
 
 /** The root (the project or a declared extra directory) that holds the target, symlinks resolved, or undefined. */
 function containingRoot(target: string, root: Root): Root | undefined {
-  const resolved = path.resolve(root.logical, target)
+  const resolved = path.resolve(root.base ?? root.logical, target)
   const real = realOf(resolved)
   return [root, ...(root.extra ?? [])].find((candidate) => within(candidate.logical, resolved) && within(candidate.real, real))
 }
@@ -194,7 +205,7 @@ function judgePath(target: string, root: Root, verb: string): SmartDecision | un
   const home = containingRoot(expanded, root)
   const inside = home !== undefined
   // Inside the project only the part below its root counts (a project that lives under a folder named like a secret is fine).
-  const relative = home ? path.relative(home.logical, path.resolve(root.logical, expanded)) : expanded
+  const relative = home ? path.relative(home.logical, path.resolve(root.base ?? root.logical, expanded)) : expanded
   if (isSecretPath(relative)) return ask("high", "secrets-file", `${verb} ${target}, which looks like a secrets file`)
   if (!inside) return ask("high", "outside-project", `${verb} ${target}, outside the project`)
   if (isGitInternal(relative)) return ask("high", "git-internals", `${verb} ${target}, inside .git`)
@@ -630,7 +641,15 @@ function classifyScript(command: string, root: Root, allowCommands: readonly str
   if (depth > MAX_SHELL_DEPTH) return ask("high", "runs-program", `shell commands nested more than ${MAX_SHELL_DEPTH} levels deep`)
   const segments = splitCommand(command)
   if (segments.length === 0) return ask("uncertain", "unlisted-command", "an empty command")
-  const decisions = segments.map((segment) => classifySegment(segment, root, allowCommands, depth, segments.length === 1))
+  // Relative paths mean the directory the command runs in: the shell's `workdir`, then wherever a plain `cd DIR` moved to.
+  let here = workdir === undefined ? root : inDirectory(root, workdir)
+  const decisions = segments.map((segment) => {
+    const verdict = classifySegment(segment, here, allowCommands, depth, segments.length === 1)
+    const moved = cdTarget(segment)
+    if (moved === null) return worst(verdict, ask("uncertain", "unclear-target", "cd to a directory that cannot be read from the text, so later relative paths cannot be placed"))
+    if (moved !== undefined) here = inDirectory(here, moved)
+    return verdict
+  })
   for (const substituted of commandSubstitutions(command)) {
     const result = classifyScript(substituted, root, allowCommands, depth + 1)
     if (result.risk === "high") decisions.push(result)
@@ -640,6 +659,15 @@ function classifyScript(command: string, root: Root, allowCommands: readonly str
   // The most severe decision wins; among equals the first (so the prompt names the first thing that was wrong).
   const verdict = decisions.reduce(worst)
   return verdict.decision === "allow" && decisions.length > 1 ? allow("allow-listed-command", "every command in the line is on the allow list") : verdict
+}
+
+/** Where a `cd` segment goes: the directory (`~` for a bare `cd`), null when the text does not say (`cd -`, `cd $X`), undefined when the segment is not a `cd`. */
+function cdTarget(segment: Segment): string | null | undefined {
+  const [name, ...rest] = segment.words.map((word) => word.text)
+  if (name !== "cd") return undefined
+  const operands = rest.filter((word) => word !== "--" && word !== "-L" && word !== "-P")
+  if (segment.expansion || operands.length > 1 || operands[0]?.startsWith("-")) return null
+  return operands[0] ?? "~"
 }
 
 function classifyShell(args: Record<string, unknown>, root: Root, allowCommands: readonly string[]): SmartDecision {

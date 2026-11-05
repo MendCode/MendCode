@@ -78,6 +78,7 @@ export function createChrome(ctx: AppContext, actions: {
     const bar = {
       path: !state.tuiProfile.showProject ? "" : input.remote ? `remote ${input.remote.host}${input.remote.readOnly ? " · read-only" : ""}` : input.directory ?? "",
       hideProject: !state.tuiProfile.showProject,
+      ...(input.dev ? { dev: true } : {}),
       ...(state.tuiProfile.showDiffFiles && state.diffTotals ? { files: state.changedFiles.length } : {}),
       ...(input.home ? { home: input.home } : {}),
       ...(state.tuiProfile.showProject && state.gitBranch ? { branch: state.gitBranch } : {}),

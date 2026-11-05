@@ -122,6 +122,12 @@ export function createDaemonServiceCli(deps: DaemonServiceDeps) {
         if (!sameDir(report.dataDir, deps.dir)) throw new Error("Daemon data directory mismatch")
         return report
       }
+      // The socket is gone before the process is: the next start waits for the writer lock to be released, or it would find a daemon that "does not answer".
+      const stopped = async () => {
+        await deps.waitStopped()
+        const deadline = deps.now() + 5000
+        while (deps.lockOwner?.() && deps.now() < deadline) await deps.sleep(20)
+      }
       const busy = async () => {
         const report = await readStatus()
         if (!command.force && report.running && (report.activeTurns || report.backgroundJobs || report.loops.running)) throw new Error("Daemon is busy; retry with --force to interrupt work")
@@ -158,19 +164,19 @@ export function createDaemonServiceCli(deps: DaemonServiceDeps) {
             const reply = await peer.send({ type: "daemon.shutdown", ...(command.force ? { force: true } : {}) })
             if (!reply.ok) throw new Error(reply.error.message)
             peer.close(); peer = undefined
-            await deps.waitStopped()
+            await stopped()
           }
           if (command.action === "restart" && service.loaded) {
             await deps.host.control("stop")
             peer?.close(); peer = undefined
-            await deps.waitStopped()
+            await stopped()
           }
         }
         const service = await deps.host.control(command.action === "restart" ? "start" : command.action)
         if (["start", "restart"].includes(command.action)) await started()
         if (["stop", "uninstall"].includes(command.action)) {
           peer?.close(); peer = undefined
-          await deps.waitStopped()
+          await stopped()
         }
         const report = await readStatus()
         result({ ...service, daemon: report }, command.action === "plan" ? `Service: ${service.backend}\nDefinition: ${service.definitionPath}\nCommand: ${service.programArguments.join(" ")}\nstdout: ${service.stdoutPath}\nstderr: ${service.stderrPath}\n` : daemonStatusText(report, service))
@@ -186,7 +192,7 @@ export function createDaemonServiceCli(deps: DaemonServiceDeps) {
           if (!reply.ok) throw new Error(reply.error.message)
         }
         peer?.close(); peer = undefined
-        await deps.waitStopped()
+        await stopped()
         const report = await readStatus()
         if (report.running) throw new Error("Daemon is still running")
         unanswered(report)
@@ -201,7 +207,7 @@ export function createDaemonServiceCli(deps: DaemonServiceDeps) {
           if (!reply.ok) throw new Error(reply.error.message)
         }
         peer?.close(); peer = undefined
-        await deps.waitStopped()
+        await stopped()
         await started()
         const report = await readStatus()
         result(report, daemonStatusText(report))

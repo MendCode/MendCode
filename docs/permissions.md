@@ -26,7 +26,7 @@ Approving with "for this session" records a **grant** for that tool; later calls
 | `git-internals` | a path inside `.git/` (hooks and config run or leak code) | asks (high) |
 | `agent-config` | a path inside `.mendcode/` (hooks, tools and extensions the daemon runs later, outside any sandbox) | asks (high) |
 | `runs-program` | an option or variable that makes an allow-listed command run another program: `rg --pre`, `git grep -O`, `sort --compress-program`, a leading `PATH=`, `LD_PRELOAD=`, `GIT_*=`… | asks (high) |
-| `outside-project` | a path (argument, flag value, redirection target, `workdir`, `cd`) that is not inside the project, including `..`, `~` and symlinks that lead out; `/dev/null` is fine | asks (high) |
+| `outside-project` | a path (argument, flag value, redirection target, `workdir`, `cd`) that is not inside the project, including `..`, `~` and symlinks that lead out (relative paths count from the directory the command runs in: the call's `workdir`, then each plain `cd DIR`; a `cd` whose target the text does not give asks); `/dev/null` is fine | asks (high) |
 | `network` | `curl`, `wget`, `ssh`, `npx`…, `git push/pull/fetch/clone`, profile installs/updates (`bun install`, `npm add`…), any URL in the command | asks (high) |
 | `autonomy` | `loop`, `workflow_start`, `tell` (start autonomous work or message another session) | asks (high) |
 | `shell-expansion` | `$VAR`, `$(…)`, backticks or `<(…)` outside single quotes: what runs cannot be read from the text. A saved wildcard allow rule (`ls *`) never covers such a command | asks (uncertain) |

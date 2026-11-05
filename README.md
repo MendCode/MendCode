@@ -276,6 +276,7 @@ bun run build                                    # dist/mendcode-next for this m
 tag runs [release.yml](.github/workflows/release.yml), which runs the whole test gate, builds the five binaries (macOS and Linux
 x64/arm64, Windows x64), signs them with keyless cosign, attests them and attaches an SBOM; [nightly.yml](.github/workflows/nightly.yml)
 tags `main` once a day when it changed. There is no Apple notarization or Windows code signing yet ([releases](docs/release.md)).
+To program MendCode from a stable MendCode and try the change in a second daemon that restarts alone, use [`mendcode dev`](docs/dev-mode.md).
 See [CONTRIBUTING.md](CONTRIBUTING.md) to send a change.
 
 ## Replaceable views

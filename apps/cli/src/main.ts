@@ -9,7 +9,7 @@ import { computeBuildId } from "@mendcode/build-id"
 import { homedir, tmpdir } from "node:os"
 import { mkdtemp, realpath, stat } from "node:fs/promises"
 import path from "node:path"
-import { DEFAULT_DIR, ensureDaemon, envDataDir, stopIfStale, terminateDaemon, waitForSocketGone } from "./launcher"
+import { DEFAULT_DIR, runInherited, ensureDaemon, envDataDir, stopIfStale, terminateDaemon, waitForSocketGone } from "./launcher"
 import { resolveProcessMode, startsSolo } from "./process-modes"
 import { createHeadlessRun } from "./run"
 import { loadRunOutput, type RunOutput } from "./run-output"
@@ -30,6 +30,7 @@ import { parseViewCommand, runViewCommand } from "./view-args"
 import { parseDocsCommand } from "./docs-args"
 import { parsePackageFileCommand, runPackageFileCommand } from "./package-file-command"
 import { PROGRAM_NAME } from "@mendcode/program"
+import { sameDir } from "@mendcode/program/data-dir"
 import { createHerdrReporter, createTuiosChildren, createTuiosMeta, herdrPane, paneState, tuiosPane, waitingChild, type PaneChild, type PaneFacts } from "./herdr"
 import { guardClient, originCapabilities, originRefusal, startedBySession } from "./agent-origin"
 import { AGENT_SHELL_ENV, setBuildChannel } from "@mendcode/protocol/wire"
@@ -103,6 +104,17 @@ if (traceEnabled && remoteAttach) {
 if (globalOptions.approve === true && remoteAttach) {
   process.stderr.write("error: --approve is local-only; trust a remote project on its own machine\n")
   process.exit(64)
+}
+// `dev` starts the checkout's own CLI on a separate data directory and never connects to the main daemon (docs/dev-mode.md). Loaded on demand.
+if (argv[0] === "dev") {
+  const dev = await import("./dev-mode")
+  const parsed = dev.parseDev(argv)
+  if (typeof parsed === "string") { process.stderr.write(`error: ${parsed}\n${dev.DEV_USAGE}`); process.exit(64) }
+  process.exit(await dev.runDev(parsed, {
+    env: process.env, cwd: process.cwd(), out: process.stdout, err: process.stderr, execPath: process.execPath, main: Bun.main, which: Bun.which,
+    own: path.resolve(import.meta.dir, "../../.."),
+    spawn: ({ command, env, cwd }) => runInherited({ command, env, cwd }),
+  }))
 }
 let daemonService: DaemonServiceCommand | undefined
 try { daemonService = parseDaemonService(argv) } catch (error) {
@@ -987,6 +999,7 @@ app = createApp({
   ...(startup?.prompt !== undefined ? { startup: { prompt: startup.prompt } } : startup?.initialMessage !== undefined ? { startup: { initialMessage: startup.initialMessage } } : {}),
   ...(startup?.diagnostics ? { diagnostics: { memory: () => process.memoryUsage(), snapshot: async () => (await import("./diagnostics")).writeSnapshot(dataDir, "tui") } } : {}),
   version: CLI_VERSION,
+  ...(process.env.MENDCODE_DEV && sameDir(process.env.MENDCODE_DEV, dataDir) ? { dev: true } : {}),
   pure,
   ...(safeMode ? { safeMode: true } : {}),
   ...(process.env.HOME ? { home: process.env.HOME } : {}),

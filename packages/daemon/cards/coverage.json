@@ -86,6 +86,10 @@
     {
       "reason": "maintainer records (security audit, half-done audit, performance budgets, release pipeline, PTY smoke harness), not user-facing",
       "items": "doc:security-2026-10-04 doc:halfdone-audit doc:performance doc:release doc:pty-smoke"
+    },
+    {
+      "reason": "contributor workflow (programming MendCode from a checkout with mendcode dev), not something a session helps a user configure; a card would add to every prompt",
+      "items": "doc:dev-mode"
     }
   ]
 }

@@ -238,3 +238,10 @@ export async function waitForSocketGone(socketPath: string, timeoutMs = 3_000) {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline && existsSync(socketPath)) await Bun.sleep(20)
 }
+
+/** `mendcode dev` (dev-mode.ts): the checkout's own CLI, on this terminal, resolved with its exit code. */
+export async function runInherited({ command, env, cwd }: { command: string[]; env: Record<string, string>; cwd: string }): Promise<number> {
+  const [executable, ...args] = command
+  const child = spawn(executable!, args, { cwd, env, stdio: "inherit", windowsHide: true })
+  return await new Promise<number>((resolve) => { child.on("error", () => resolve(1)); child.on("exit", (code, signal) => resolve(code ?? (signal ? 128 : 1))) })
+}

@@ -14,6 +14,8 @@ export type TopbarInput = {
   home?: string
   branch?: string
   hideProject?: boolean
+  /** A development daemon (docs/dev-mode.md): a short DEV mark leads the right side and stays when the rest does not fit. */
+  dev?: boolean
   files?: number
   title: string
   /** Lines added/removed in the working tree; hidden when both are zero. */
@@ -29,6 +31,7 @@ export type TopbarInput = {
   stats?: Line
 }
 
+export const DEV_MARK = "DEV"
 const BAR_CELLS = 8
 const MIN_TITLE = 8
 const MIN_LEFT = 10
@@ -100,6 +103,7 @@ export function contextBar(context: { tokens: number; limit: number; approx?: bo
 /** The right side: the stat parts the profile places (`topbarStats`) first, when they fit beside the left side's minimum, then what the bar always carries. */
 function rightSide(input: TopbarInput): Line {
   const base = fixedRight(input)
+  if (input.dev) base.unshift({ text: DEV_MARK + (base.length ? "  " : ""), fg: "warning" })
   if (!input.stats?.length) return base
   const joined: Line = [...input.stats, ...(base.length ? [{ text: "  " }] : []), ...base]
   return lineWidth(joined) <= input.width - MIN_LEFT - 1 ? joined : base
@@ -128,7 +132,7 @@ export function renderTopbar(input: TopbarInput): Line {
   const path = input.home && input.path.startsWith(input.home) ? `~${input.path.slice(input.home.length)}` : input.path
   const leftText = input.hideProject ? "" : `${input.branch || "git"} ${path}`
   let right = rightSide(input)
-  if (lineWidth(right) > width - MIN_LEFT - 1) right = []
+  if (lineWidth(right) > width - MIN_LEFT - 1) right = input.dev ? [{ text: DEV_MARK, fg: "warning" }] : []
   const rightWidth = lineWidth(right)
   const room = width - rightWidth - (rightWidth ? 1 : 0)
   // The title box: about a third of the width, never less than MIN_TITLE, only if the left keeps MIN_LEFT cells.
