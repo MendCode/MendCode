@@ -35,6 +35,7 @@ import { authorityContext, freezeAction, type AuthorityAnchor } from "./permissi
 import type { PermissionProvenance, PermissionReview } from "@mendcode/protocol"
 import type { PermissionReviewer } from "./permission-reviewer"
 import { classifySmart } from "./smart-permissions"
+import { instructionRootRead, type InstructionRoots } from "./instruction-reads"
 import type { EngineHooks } from "./hooks"
 import { resolveMentions } from "./mentions"
 import { orientationBlock } from "./orientation"
@@ -541,6 +542,12 @@ export function createNativeEngine(options: {
    * run's reads of those paths do not ask. Writes never inherit.
    */
   loopRun?: LoopRunPort
+  /**
+   * The skill folders and instruction files MendCode loads for this session (docs/permissions.md, "Skills and instructions"):
+   * in smart mode a read-only call that stays inside them does not ask for external_directory. Asked only for a call that
+   * would otherwise ask.
+   */
+  instructionRoots?(sessionId: SessionId, cwd: string): InstructionRoots
   /** Offers the `task` tool (sub-agents). */
   tasks?: TaskPort
   subagents?: boolean
@@ -1402,8 +1409,11 @@ export function createNativeEngine(options: {
     // A loop run reads what its creator could read without asking (never writes); an explicit external_directory deny still applies to those paths.
     const inherit = tool.permission === "read" ? options.loopRun?.inheritedReads(input.sessionId) : undefined
     const inherited = inherit && !inherit.all ? splitDeclared(split.external, inherit.roots) : undefined
-    const outside = inherit?.all ? [] : inherited ? inherited.external : split.external
-    const declared = [...split.declared, ...(inherit?.all ? split.external : inherited?.declared ?? [])]
+    const beyond = inherit?.all ? [] : inherited ? inherited.external : split.external
+    // Smart mode reads the skills and instruction files MendCode itself loaded for this session without asking (reads only; secrets still ask).
+    const ownInstructions = mode === "smart" && beyond.length > 0 && options.instructionRoots !== undefined && instructionRootRead({ tool: tool.name, args: call.args, cwd, roots: options.instructionRoots(input.sessionId, cwd) })
+    const outside = ownInstructions ? [] : beyond
+    const declared = [...split.declared, ...(inherit?.all ? split.external : inherited?.declared ?? []), ...(ownInstructions ? beyond : [])]
     const declaredDenied = declared.find((pattern) => matchingRule("external_directory", pattern, rulesFor(toolset, input.sessionId))?.action === "deny")
     if (declaredDenied) return settle({ kind: "deny", by: "rule", reason: `external_directory ${declaredDenied}` }, "deterministic", "External directory rule denies the declared directory")
     if (outside.length) {

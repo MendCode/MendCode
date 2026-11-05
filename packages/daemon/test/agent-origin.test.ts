@@ -310,6 +310,18 @@ describe.skipIf(process.platform === "win32")("a child above the caller's mode, 
     expect(more.output).toContain("one prompt")
   }, 120_000)
 
+  test("full access picked on the card by the user: the child asked for smart starts in full", async () => {
+    const h = await boot(true)
+    const running = h.run(launch)
+    const card = await h.card()
+    expect((card.questions?.[0] as { options?: Array<{ label: string }> } | undefined)?.options?.map((option) => option.label)).toEqual(["Approve once", "Approve in full access", "Deny"])
+    expect((await h.terminal.send({ type: "request.resolve", sessionId: h.sessionId, requestId: card.requestId as never, decision: { kind: "answer", text: "Approve in full access", answers: [["Approve in full access"]] } })).ok).toBe(true)
+    const result = await running
+    expect(result.isError).toBe(false)
+    const child = result.output.trim().split("\n").find((line) => line.startsWith("ses_"))!.trim() as SessionId
+    expect(await h.modeOf(child)).toBe("full")
+  }, 120_000)
+
   test("denied: refused as before, and the empty child does not stay behind", async () => {
     const h = await boot(true)
     const before = (await h.sessions()).length

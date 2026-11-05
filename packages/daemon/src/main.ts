@@ -722,6 +722,14 @@ export const daemon = await startDaemon({
           browser,
           loops,
           loopRun,
+          // Smart-mode reads of what this session's prompt was built from: the folders of the skills it may load and its instruction files, as the system prompt finds them.
+          instructionRoots: (sessionId, root) => {
+            const limits = runLimits.get(sessionId)
+            return {
+              dirs: limits?.excludeTools?.includes("skill") ? [] : skills.modelSkills(root).map((skill) => skill.dir),
+              files: limits?.noContextFiles === true ? [] : instructionsFor.files(root),
+            }
+          },
           worktrees,
           prWatch,
           prReview,

@@ -12,6 +12,8 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 ### New
 
 - With an Anthropic API key, the native engine keeps each conversation in a Claude message thread (beta) and sends only the new messages on each call: the same price, a shorter wait for the first token in long conversations. Turn it off with `/tier message_threads off`; set `zeroDataRetention: true` if your organization requires zero data retention. See [message threads](docs/message-threads.md).
+- The card that approves a child above its launcher's mode also offers Approve in full access: the child asks nothing. Only you pick it on the card; a session still cannot ask for full. See [permissions](docs/permissions.md#what-a-session-cannot-do-from-its-own-shell).
+- In smart mode, reading the skills and instruction files MendCode loaded for the session no longer asks for external directory access, also through symlinks. Edits there and secrets files still ask. See [permissions](docs/permissions.md#skills-and-instructions).
 
 - `mendcode worktrees list|size|gc`: every worktree with its size, state and why it is kept, including worktrees git lists that MendCode did not make. `gc` previews and `--yes` removes; `gc --artifacts` clears `dist`, `target`, `.next` and `bun build` leftovers of idle worktrees without removing them. See [storage](docs/storage.md#what-changed).
 - `worktreeCapGb` warns on `/storage` when MendCode's worktrees pass a size you choose and frees only safe ones to get under it.
