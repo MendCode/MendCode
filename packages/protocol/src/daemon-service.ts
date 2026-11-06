@@ -20,7 +20,13 @@ export const DaemonStatusReport = lazySchema(() => z.strictObject({
   keepAlive: z.strictObject({ running: z.array(z.string()), standing: z.array(z.string()) }).optional(),
   /** A restart was asked while work ran: the daemon stops once it ends, and the terminals' reconnect starts the installed build. */
   restartPending: z.literal(true).optional(),
+  /** A restart is waiting for running commands and background work (`daemon.shutdown` with `drainMs`): who still runs what, until when, and whether it is over. */
+  drain: z.strictObject({ waiting: RestartHeld, until: z.number(), done: z.boolean() }).optional(),
 }))
+
+/** The sessions a restart waits on, at most 20, each with at most 8 of what runs in it (a command line or a background task). */
+export const RestartHeld = lazySchema(() => z.array(z.strictObject({ sessionId: z.string(), title: z.string().max(100), items: z.array(z.string().max(300)).max(8) })).max(20))
+export type RestartHeld = z.infer<typeof RestartHeld>
 export type DaemonStatusReport = z.infer<typeof DaemonStatusReport>
 
 export const DaemonLogsReport = lazySchema(() => z.strictObject({

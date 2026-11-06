@@ -37,6 +37,10 @@ export function createRestartResume(deps: {
   title(sessionId: SessionId): string
   queueId(): QueueId
   log(level: "info" | "warn", message: string): void
+  /** What the previous stop killed in each session (commands, background tasks), as the text the session reads; read once per start. */
+  lost?(): Promise<Map<string, string>>
+  /** Tells a session that is not resumed what the stop killed in it. */
+  tellLost?(sessionId: SessionId, text: string): Promise<unknown>
 }) {
   let stopped = false
   /** Sessions this daemon resumed and the attempt each is on; forgotten when the resumed turn ends in any way but a shutdown. */
@@ -82,6 +86,7 @@ export function createRestartResume(deps: {
     /** Resumes what the previous daemon's shutdown interrupted. Runs once, after start. */
     async start() {
       let carried = 0
+      const lost = (await deps.lost?.()) ?? new Map<string, string>()
       for (let page = deps.store.resumes.list(PAGE); page.length > 0 && !stopped; page = deps.store.resumes.list(PAGE)) {
         for (const entry of page) {
           if (stopped) return
@@ -94,7 +99,9 @@ export function createRestartResume(deps: {
           }
           if (carried >= RESUME_MAX_PER_START) { tell(entry, `more than ${RESUME_MAX_PER_START} sessions were interrupted at once`); continue }
           resumed.set(entry.sessionId as SessionId, entry.attempts + 1)
-          if (await deps.resume(entry.sessionId as SessionId, RESUME_TEXT)) {
+          const killed = lost.get(entry.sessionId)
+          if (await deps.resume(entry.sessionId as SessionId, killed ? `${RESUME_TEXT}\n\n${killed}` : RESUME_TEXT)) {
+            lost.delete(entry.sessionId)
             carried++
             deps.log("info", `[DAEMON]: session ${entry.sessionId} resumed after the daemon restart`)
           } else {
@@ -102,6 +109,11 @@ export function createRestartResume(deps: {
             tell(entry, "the session was busy or held")
           }
         }
+      }
+      // Sessions whose stop killed background work but had no turn to resume (or were not resumed) are told on their own.
+      for (const [sessionId, text] of lost) {
+        if (stopped) return
+        if (deps.store.hasSession(sessionId as SessionId)) await deps.tellLost?.(sessionId as SessionId, text).catch(() => undefined)
       }
     },
     stop() { stopped = true },

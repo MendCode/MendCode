@@ -481,6 +481,12 @@ export const DaemonShutdown = lazySchema(() => z.strictObject({
   force: z.boolean().optional(),
   /** Busy: instead of refusing, stop as soon as the running turns and jobs end (a restart that cuts nothing). Ack `{ pending: true }`. */
   whenIdle: z.boolean().optional(),
+  /**
+   * The first step of a forced restart, not a stop: each session with a command, a background task or a sub-agent running is held
+   * (it starts no new turn; a turn with nothing running is interrupted to resume after the restart) until that work ends or this
+   * many ms pass. Ack `{ waiting }` (the sessions and what runs in each); `daemon.status` reports `drain` until the stop that follows.
+   */
+  drainMs: z.number().int().min(0).max(3_600_000).optional(),
 }))
 
 /** Read-only. Ack: `DaemonInfoReport` (engine, data directory, pid, and the subscription login check when the engine uses one). */
