@@ -35,7 +35,7 @@ Prismantis is copied.
 | Links | Have: OSC 8 through `safeLink` and the `hyperlinks` setting; `(url)` shown after a label. `markdown.ts:10`, `ui/hyperlink.ts` | Have, plus underline |
 | Footnotes | Missing | Have: `[^1]` references as superscripts, `[^1]: text` definitions |
 | Horizontal rules | Partial: 40 cells, dim. `markdown.ts:202` | Have: full width, own slot |
-| Copy buttons on tables, lists, quotes, diagrams | Missing | Have: `copy` on the top border of boxed tables, `art  copy` beside a diagram, by key on lists and quotes (no visible chrome). Never in minimal; code only in balanced |
+| Copy buttons on tables, lists, quotes, diagrams | Missing | Have: `copy` on the top border of boxed tables, by key on lists, quotes and diagrams (no visible chrome). Never in minimal; code only in balanced |
 | Right-to-left text | Missing | Have, with limits (below): paragraphs, headings, lists and quotes |
 | Settings file | Partial: `tui/profile.json` and `/customize`, nothing for Markdown | Have: `tableStyle`, `headingStyle`, `markdownCopyHints`, `markdownRtl`, `markdownColors` in `profile.json`, rows in `/customize` with a live preview |
 
@@ -122,16 +122,14 @@ No claim of equal coverage with Prismantis is made: its language list was not av
 ### Copy affordances
 
 Only code keeps a header row (`╭─ ts ──── copy`, full width: it reads as a panel). Lists and quotes draw no header, no
-rail and no button: they are plain Markdown (a quote keeps its own `│` bar). Tables and diagrams get no header line
-either; their hint is drawn on their own art:
+rail and no button: they are plain Markdown (a quote keeps its own `│` bar). Drawn diagrams and charts show no button
+at all. Tables get no header line either; their hint is drawn on their own top border:
 
 ```
 ┌───────┬─────┬─────── copy ┐        a boxed table: on the top border, right-aligned to the table
-yes ┌────────┐    ╭───────╮ art  copy   a diagram: on its first row, right of the art, only over blank cells
 ```
 
-A hint that does not fit is not drawn (a table narrower than 12 cells, a last column under 6 cells, a first diagram row
-with no blank cells there); `rules`, `minimal` and stacked tables have no top border. The key still works in all of
+A hint that does not fit is not drawn (a table narrower than 12 cells, a last column under 6 cells); `rules`, `minimal` and stacked tables have no top border. The key still works in all of
 these. Hint rows are chrome, so a mouse selection skips them (a boxed table's top border is the one row that is not
 copied with a selection).
 
@@ -143,16 +141,16 @@ selection map (`ui/selection.ts` `BodyLine.copy`) and clicked in `ui/app/mouse-s
 no block in view it says so. Both go through `copyText`, the OSC 52 path that `/copy` uses. A mouse selection copies
 lists and quotes as it always did.
 
-| Block | Visible hint | `copy` / key puts | `art` puts |
-|---|---|---|---|
-| fenced code | header: language (`text` when none) + `copy` | the code as typed, tabs kept; while streaming, what has arrived | |
-| table | `copy` on the top border (`box`, `grid`) | the Markdown source | |
-| list | none | the list's source | |
-| quote | none | the text without `>` | |
-| mermaid | `art  copy` beside the first row | the source | the diagram as drawn |
-| diagram that cannot be drawn | code header with `copy` | the source | |
+| Block | Visible hint | `copy` / key puts |
+|---|---|---|
+| fenced code | header: language (`text` when none) + `copy` | the code as typed, tabs kept; while streaming, what has arrived |
+| table | `copy` on the top border (`box`, `grid`) | the Markdown source |
+| list | none | the list's source |
+| quote | none | the text without `>` |
+| mermaid diagram or chart | none | the source |
+| diagram that cannot be drawn | code header with `copy` | the source |
 
-`markdownCopyHints` picks what is visible: `code` (code headers only), `all` (plus the table and diagram hints) or `off`
+`markdownCopyHints` picks what is visible: `code` (code headers only), `all` (plus the table hint) or `off`
 (a header with the language and no button); `auto` is `code` in balanced and `all` in full. The minimal view is plain
 and has no hints at all. Hints that do not fit are dropped from the right.
 

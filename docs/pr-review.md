@@ -545,7 +545,11 @@ the spinner and the time move with the activity status's own clock, which stops 
 `activityPlacement off` hide the status as they do for a turn.
 
 `/reviews` lists one row per pull request: the job at work when there is one, else the newest, with `· N runs` when the PR had
-earlier ones. So a failure that a later review of the same PR superseded is not listed under Failed: Failed holds the PRs whose
+earlier ones. On GitHub each row also shows the pull request's own state (`merged`, `closed`, `draft`, `open · ready`,
+`open · CI ✗`, `open · CI …`, `open · conflict`, `open · findings` for an open critical or major finding) and the detail a
+`pull request` line with up to three failing checks; the daemon reads it with one `gh pr list` per repository when the page opens
+and on `r`, keeps it a minute, and leaves the cell empty when the read fails or the forge is GitLab or Gitea. `f` also filters
+on it: `ready`, `needs work` (failing checks, a conflict or a blocking finding) and `closed` (merged or closed). So a failure that a later review of the same PR superseded is not listed under Failed: Failed holds the PRs whose
 last run failed. A running row shows the activity status's spinner with its phase, running step and time
 (`⠋ analysis · 112 files · 1m 20s`), a finished one what it found (`done · no findings`, `done · 2 findings`). Until you pick a
 row (↑↓ or enter, which marks the detail `pinned`), the selection follows the running review that started last, else the job

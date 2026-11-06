@@ -15,7 +15,9 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Changed
 
+- Diagrams and charts no longer show art/copy labels; tables and code blocks keep copy.
 - `/reviews` follows the running or newest review until you pick one, and running reviews show a live spinner with their phase, step and time.
+- `/reviews` shows each pull request's GitHub state (merged, closed, draft, ready, failing checks or conflicts), and `f` can filter to ready, needs work or closed.
 
 ### Fixed
 

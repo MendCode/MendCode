@@ -3,6 +3,7 @@ import { appHarness, cleanTemps, conversation, tempDir, type Harness } from "./s
 import { DEFAULT_BINDINGS, KEY_ACTIONS } from "../src/ui/keymap"
 import { osc52Copy } from "../src/ui/osc52"
 import type { PresentationMode } from "../src/view/transcript"
+import { ensureMermaid, onMermaidLoaded } from "../src/view/mermaid-lazy"
 
 afterEach(cleanTemps)
 
@@ -117,4 +118,21 @@ test("ctrl+x Y copies the block nearest the middle of the screen and says so whe
   plain.app.render()
   expect(plain.text().join("\n")).toContain("no copyable block in view")
   expect(plain.written).toEqual([])
+})
+
+test("a chart draws no art or copy labels; a click on its title copies nothing and ctrl+x Y still copies its source", async () => {
+  const loaded = new Promise<void>((resolve) => onMermaidLoaded(resolve))
+  if (ensureMermaid() === undefined) await loaded
+  const chart = 'xychart-beta\n  title "Cups per month"\n  x-axis [jan, feb, mar]\n  y-axis "n" 0 --> 100\n  bar [20, 55, 80]'
+  const h = await chatWith("full", `A chart.\n\n\`\`\`mermaid\n${chart}\n\`\`\``)
+  const title = rowOf(h, "Cups per month")
+  expect(title).toBeGreaterThan(-1)
+  expect(h.text()[title]).not.toMatch(/\bart\b|\bcopy\b/)
+  const end = h.text()[title]!.indexOf("Cups per month") + "Cups per month".length
+  for (const col of [end + 3, end + 8, 90]) await click(h, col, title)
+  expect(h.written).toEqual([])
+  await h.type("\x18Y")
+  h.app.render()
+  expect(h.written).toEqual([osc52Copy(chart)!])
+  expect(h.text().join("\n")).toContain("copied diagram")
 })

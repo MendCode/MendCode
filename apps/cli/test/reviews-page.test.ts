@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { writeFileSync } from "node:fs"
 import type { PrJobSummary, PrReviewDashboard } from "@mendcode/protocol"
 import type { Line } from "../src/ui/theme"
-import { createReviewsPageState, filterJobs, groupedRows, listedJobs, metricsSummary, renderReviewsPage, stackOrder, type ReviewsData, type ReviewsPageState } from "../src/view/reviews-page"
+import { createReviewsPageState, filterJobs, groupedRows, listedJobs, metricsSummary, prCell, renderReviewsPage, stackOrder, type ReviewsData, type ReviewsPageState } from "../src/view/reviews-page"
 import { reviewsCommand, reviewsPageKey } from "../src/view/reviews-keys"
 import { textWidth } from "../src/view/wrap"
 import { createTicks } from "../src/ui/app/ticks"
@@ -429,5 +429,66 @@ describe("the selection follows the latest review until one is picked", () => {
       if (state.pulse) clearInterval(state.pulse)
       if (state.loopsTick) clearInterval(state.loopsTick)
     }
+  })
+})
+
+describe("the pull request's GitHub state", () => {
+  type Pr = NonNullable<PrJobSummary["pullRequest"]>
+  const open: Pr = { state: "open", draft: false, mergeable: "mergeable", checks: "passing" }
+  const cases: Array<{ name: string; pr: Pr; blocking?: number; text: string; fg: string }> = [
+    { name: "merged", pr: { ...open, state: "merged" }, text: "merged", fg: "muted" },
+    { name: "closed", pr: { ...open, state: "closed" }, text: "closed", fg: "muted" },
+    { name: "draft", pr: { ...open, draft: true }, text: "draft", fg: "muted" },
+    { name: "ready", pr: open, text: "open · ready", fg: "success" },
+    { name: "ready without any check", pr: { ...open, checks: "none" }, text: "open · ready", fg: "success" },
+    { name: "a failed check", pr: { ...open, checks: "failing", failing: ["lint", "e2e"] }, text: "open · CI ✗", fg: "error" },
+    { name: "checks running", pr: { ...open, checks: "pending" }, text: "open · CI …", fg: "muted" },
+    { name: "a conflict", pr: { ...open, mergeable: "conflicting" }, text: "open · conflict", fg: "warning" },
+    { name: "an open major finding", pr: open, blocking: 1, text: "open · findings", fg: "warning" },
+  ]
+  const withPr = (pr: Pr | undefined, blocking?: number, patch: Partial<PrJobSummary> = {}) => job({ state: "done", ...(pr ? { pullRequest: pr } : {}), findings: { confirmed: blocking ?? 0, plausible: 0, candidates: 0, resolved: 0, ...(blocking ? { blocking } : {}) }, ...patch })
+
+  for (const entry of cases) {
+    test(`${entry.name}: the row says ${entry.text} in ${entry.fg}, and so does the detail's pull request line`, () => {
+      const target = withPr(entry.pr, entry.blocking)
+      expect(prCell(target)).toEqual({ text: entry.text, fg: entry.fg as never })
+      const rows = render(ready([target]), createReviewsPageState(), 160, 48)
+      const span = rows.flat().find((item) => item.text === entry.text)
+      expect(span?.fg).toBe(entry.fg as never)
+      expect(screen(rows)).toContain(`pull request  ${entry.text}`)
+    })
+  }
+
+  test("the detail names the failing checks; an unknown state shows no cell and no pull request line", () => {
+    const failing = render(ready([withPr({ ...open, checks: "failing", failing: ["lint", "e2e", "build"] })]), createReviewsPageState(), 160, 48)
+    expect(screen(failing)).toContain("failing lint, e2e, build")
+    const unknown = render(ready([withPr(undefined)]), createReviewsPageState(), 160, 48)
+    expect(screen(unknown)).not.toContain("pull request  ")
+    expect(prCell(withPr(undefined))).toBeUndefined()
+  })
+
+  test("f reaches ready, needs work and closed after the review states; each keeps only its pull requests", () => {
+    const jobs = [
+      withPr(open, undefined, { id: "ready" }),
+      withPr({ ...open, checks: "failing" }, undefined, { id: "ci" }),
+      withPr({ ...open, mergeable: "conflicting" }, undefined, { id: "conflict" }),
+      withPr(open, 2, { id: "blocking" }),
+      withPr({ ...open, state: "merged" }, undefined, { id: "merged" }),
+      withPr({ ...open, state: "closed" }, undefined, { id: "closed" }),
+      withPr({ ...open, draft: true }, undefined, { id: "draft" }),
+      withPr(undefined, undefined, { id: "unknown" }),
+    ]
+    const board = dashboard(jobs)
+    let state = createReviewsPageState()
+    const seen: string[] = []
+    for (let step = 0; step < 12; step++) { state = reviewsPageKey(state, "f", board).state; seen.push(state.filter.state) }
+    expect(seen.slice(-3)).toEqual(["ready", "needs-work", "closed"])
+    const ids = (filter: ReviewsPageState["filter"]["state"]) => filterJobs(jobs, { text: "", state: filter }).map((entry) => entry.id).sort()
+    expect(ids("ready")).toEqual(["ready"])
+    expect(ids("needs-work")).toEqual(["blocking", "ci", "conflict"])
+    expect(ids("closed")).toEqual(["closed", "merged"])
+    const prompt = screen(render({ status: "ready", dashboard: board, fetchedAt: NOW }, { ...createReviewsPageState(), filter: { text: "", state: "needs-work" } }, 120, 40))
+    expect(prompt).toContain("· needs work")
+    expect(reviewsPageKey(createReviewsPageState(), "F", board).state.filter.state).toBe("closed")
   })
 })

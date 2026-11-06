@@ -672,6 +672,11 @@ export const PrReviewControl = lazySchema(() => z.strictObject({
   /** A partial config: top-level keys replace, `null` removes an override (personal) or a key (global). */
   patch: z.record(z.string(), z.unknown()).optional(),
   version: z.number().int().nonnegative().optional(),
+  /**
+   * `status` only: read the pull requests' GitHub state (one `gh pr list` per repository): `cached` reads a repository whose
+   * last read is older than a minute, `refresh` reads it now. Unset, the last read state is attached and nothing is fetched.
+   */
+  pullRequests: z.enum(["cached", "refresh"]).optional(),
 }))
 
 /** Applies from the next tool call of the session; every subscribed client sees `session.permission`. */

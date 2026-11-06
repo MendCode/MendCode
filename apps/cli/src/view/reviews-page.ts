@@ -20,7 +20,9 @@ import { SPINNER_FRAMES } from "./tool-card"
 
 export type JobState = PrJobSummary["state"]
 export type ReviewGroupId = "running" | "fixing" | "waiting" | "checkpointed" | "paused" | "pending" | "failed" | "done" | "ended"
-export type StateFilter = "all" | ReviewGroupId
+/** `ready`, `needs-work` and `closed` filter on the pull request's GitHub state (`prVerdict`), not the review's. */
+export type PrFilter = "ready" | "needs-work" | "closed"
+export type StateFilter = "all" | ReviewGroupId | PrFilter
 
 /** The order the page lists jobs in: work in motion first, then held, queued, failed and finished work. */
 export const REVIEW_GROUPS: ReadonlyArray<{ id: ReviewGroupId; label: string; states: readonly JobState[]; tone: ColorName }> = [
@@ -34,7 +36,53 @@ export const REVIEW_GROUPS: ReadonlyArray<{ id: ReviewGroupId; label: string; st
   { id: "done", label: "Done", states: ["done"], tone: "success" },
   { id: "ended", label: "Stale · cancelled", states: ["stale", "cancelled"], tone: "muted" },
 ]
-export const STATE_FILTERS: readonly StateFilter[] = ["all", ...REVIEW_GROUPS.map((group) => group.id)]
+export const PR_FILTERS: ReadonlyArray<{ id: PrFilter; label: string }> = [{ id: "ready", label: "ready" }, { id: "needs-work", label: "needs work" }, { id: "closed", label: "closed" }]
+export const STATE_FILTERS: readonly StateFilter[] = ["all", ...REVIEW_GROUPS.map((group) => group.id), ...PR_FILTERS.map((filter) => filter.id)]
+const filterLabel = (filter: StateFilter) => PR_FILTERS.find((entry) => entry.id === filter)?.label ?? REVIEW_GROUPS.find((entry) => entry.id === filter)?.label.toLowerCase() ?? filter
+
+/**
+ * What the pull request's GitHub state says, for its cell and the `ready` · `needs work` · `closed` filters: `ready` is open, not a
+ * draft, mergeable, checks passing (or none) and no blocking finding; `ci-failed`, `conflict` and `blocking` need work. Undefined
+ * while the state is unknown (not read yet, or not GitHub).
+ */
+export type PrVerdict = "merged" | "closed" | "draft" | "ready" | "ci-failed" | "ci-running" | "conflict" | "blocking" | "open"
+export function prVerdict(job: PrJobSummary): PrVerdict | undefined {
+  const pr = job.pullRequest
+  if (!pr) return undefined
+  if (pr.state !== "open") return pr.state
+  if (pr.draft) return "draft"
+  if (pr.checks === "failing") return "ci-failed"
+  if (pr.mergeable === "conflicting") return "conflict"
+  if ((job.findings.blocking ?? 0) > 0) return "blocking"
+  if (pr.checks === "pending") return "ci-running"
+  return pr.mergeable === "mergeable" ? "ready" : "open"
+}
+
+const PR_CELLS: Record<PrVerdict, { text: string; fg: ColorName }> = {
+  merged: { text: "merged", fg: "muted" },
+  closed: { text: "closed", fg: "muted" },
+  draft: { text: "draft", fg: "muted" },
+  ready: { text: "open · ready", fg: "success" },
+  "ci-failed": { text: "open · CI ✗", fg: "error" },
+  "ci-running": { text: "open · CI …", fg: "muted" },
+  conflict: { text: "open · conflict", fg: "warning" },
+  blocking: { text: "open · findings", fg: "warning" },
+  open: { text: "open", fg: "muted" },
+}
+
+/** The row's pull request cell and the detail's `pull request` line; undefined while the state is unknown. */
+export function prCell(job: PrJobSummary): { text: string; fg: ColorName } | undefined {
+  const verdict = prVerdict(job)
+  return verdict ? PR_CELLS[verdict] : undefined
+}
+
+function matchesPrFilter(job: PrJobSummary, filter: PrFilter) {
+  const verdict = prVerdict(job)
+  if (filter === "ready") return verdict === "ready"
+  if (filter === "closed") return verdict === "merged" || verdict === "closed"
+  return verdict === "ci-failed" || verdict === "conflict" || verdict === "blocking"
+}
+const isPrFilter = (filter: StateFilter): filter is PrFilter => PR_FILTERS.some((entry) => entry.id === filter)
 
 /** Where the page's data stands: `unavailable` is a daemon whose `status` answer has no dashboard; `remote` a client that may not ask. */
 export type ReviewsData = { status: "loading" | "ready" | "error" | "unavailable" | "remote"; dashboard?: PrReviewDashboard; error?: string; fetchedAt?: number }
@@ -81,7 +129,8 @@ function haystack(job: PrJobSummary) {
 /** Jobs that pass the filter: every word of the text, the state group and the repository. */
 export function filterJobs(jobs: readonly PrJobSummary[], filter: ReviewsPageState["filter"]): PrJobSummary[] {
   const words = filter.text.toLowerCase().split(/\s+/).filter(Boolean)
-  return jobs.filter((job) => (filter.state === "all" || groupOf(job.state).id === filter.state)
+  const state = filter.state
+  return jobs.filter((job) => (state === "all" || (isPrFilter(state) ? matchesPrFilter(job, state) : groupOf(job.state).id === state))
     && (!filter.repo || job.repo === filter.repo)
     && (!words.length || words.every((word) => haystack(job).includes(word))))
 }
@@ -286,12 +335,17 @@ function field(label: string, value: string, width: number, fg: ColorName = "bod
 
 type Column = { text: string; fg: ColorName; width: number }
 
-function jobRow(input: { entry: { job: PrJobSummary; depth: number; stackedOn?: number }; selected: boolean; width: number; now: number; glyphs: Glyphs; showRepo: boolean; live?: LiveRun | undefined; earlier: number; spinner: string; statusWidth: number }): Line {
-  const { entry, selected, width, now, glyphs, showRepo, live, earlier, spinner, statusWidth } = input
+/** The pull request cell's width: `open · conflict` and a gap. */
+const PR_CELL_WIDTH = 16
+
+function jobRow(input: { entry: { job: PrJobSummary; depth: number; stackedOn?: number }; selected: boolean; width: number; now: number; glyphs: Glyphs; showRepo: boolean; showPr: boolean; live?: LiveRun | undefined; earlier: number; spinner: string; statusWidth: number }): Line {
+  const { entry, selected, width, now, glyphs, showRepo, showPr, live, earlier, spinner, statusWidth } = input
   const { job } = entry
   const status = job.state === "running" && live ? liveLine(live, spinner, statusWidth - 1) : statusWord(job, live)
+  const pr = prCell(job)
   const columns: Column[] = [
     { text: status, fg: job.state === "failed" ? "error" : job.state === "waiting" || job.state === "checkpointed" ? "warning" : live ? "primary" : "muted", width: statusWidth },
+    ...(showPr ? [{ text: pr?.text ?? "", fg: pr?.fg ?? ("muted" as ColorName), width: PR_CELL_WIDTH }] : []),
     { text: relativeTime(now, job.updatedAt), fg: "muted", width: 5 },
     { text: `${job.reviewer}${job.control === "user" ? " · you" : ""}`, fg: job.scope === "personal" ? "secondary" : "muted", width: 16 },
     ...(showRepo ? [{ text: job.repo, fg: "muted" as ColorName, width: 20 }] : []),
@@ -352,6 +406,12 @@ export function jobDetailRows(job: PrJobSummary, width: number, now: number, ext
   rows.push(...field("state", stateText(job, live), width, groupOf(job.state).tone))
   // The same live line the running row shows, under the state.
   if (job.state === "running" && live) rows.push(...field("", liveLine(live, spinner), width, "primary"))
+  // The pull request's GitHub state, as the row's cell says it, and the checks that fail.
+  const pr = prCell(job)
+  if (pr) {
+    rows.push([{ text: "pull request  ", fg: "muted" }, { text: pr.text, fg: pr.fg }])
+    if (job.pullRequest?.failing?.length) rows.push(...field("", `failing ${job.pullRequest.failing.join(", ")}`, width, "error"))
+  }
   // The run's steps so far, as its watching session shows them; the last one is still running.
   if (live) for (const [at, step] of live.steps.entries()) rows.push(...field(at === 0 ? "steps" : "", `${step.label}${step.detail ? ` · ${step.detail}` : ""} · ${formatElapsed((step.endedAt ?? now) - step.startedAt)}${step.endedAt === undefined ? " so far" : ""}`, width, step.endedAt === undefined ? "primary" : "body"))
   rows.push(...field("trigger", `${job.trigger.replaceAll("_", " ")} · ${job.coverage} review`, width))
@@ -494,7 +554,7 @@ function promptRows(state: ReviewsPageState, width: number): Line[] {
   if (!state.typing && !text && group === "all" && !repo) return []
   const parts: Span[] = [{ text: "/ ", fg: "primary", bold: true }, { text: text || (state.typing ? "" : "any"), fg: text ? "text" : "muted" }]
   if (state.typing) parts.push({ text: "▏", fg: "primary" })
-  if (group !== "all") parts.push({ text: ` · ${REVIEW_GROUPS.find((entry) => entry.id === group)!.label.toLowerCase()}`, fg: "muted" })
+  if (group !== "all") parts.push({ text: ` · ${filterLabel(group)}`, fg: "muted" })
   if (repo) parts.push({ text: ` · ${repo}`, fg: "muted" })
   return [clampLine(parts, width), []]
 }
@@ -526,10 +586,11 @@ function listRows(input: { dashboard: PrReviewDashboard; state: ReviewsPageState
   const rows = groupedRows(filterJobs(per.latest, state.filter))
   if (!rows.length) return [...prompt, ...noJobsRows(dashboard, width)]
   const showRepo = new Set(dashboard.jobs.map((entry) => entry.repo)).size > 1
+  const showPr = rows.some((row) => row.kind === "job" && row.job.pullRequest !== undefined)
   const statusWidth = rows.some((row) => row.kind === "job" && row.job.state === "running" && live.has(row.job.id)) ? LIVE_STATUS_WIDTH : 22
   const drawn = rows.map((row): Line => row.kind === "group"
     ? clampLine([{ text: row.label, fg: row.tone, bold: true }, { text: `  ${row.count}`, fg: "muted" }], width)
-    : jobRow({ entry: row, selected: row.job === job, width, now, glyphs, showRepo, live: live.get(row.job.id), earlier: per.history.get(row.job.id)?.length ?? 0, spinner, statusWidth }))
+    : jobRow({ entry: row, selected: row.job === job, width, now, glyphs, showRepo, showPr, live: live.get(row.job.id), earlier: per.history.get(row.job.id)?.length ?? 0, spinner, statusWidth }))
   const at = rows.findIndex((row) => row.kind === "job" && row.job === job)
   const visible = Math.max(1, room - prompt.length)
   // Keep the selected row and its group header in view; the window never starts past the last full page.

@@ -379,5 +379,5 @@ export type PlatformHandle = {
   /** An explicit audit of the repository at the checkout's HEAD: findings stay in the session, never on a PR. */
   audit(input: { sessionId: string; directory: string }): Promise<{ ok: true; text: string; jobId: string } | { ok: false; message: string }>
 }
-export type PlatformControlInput = { sessionId: string; action: PrReviewAction; directory: string; jobId?: string | undefined; reason?: string | undefined; scope?: ReviewerScope | undefined; patch?: Record<string, unknown> | undefined; version?: number | undefined }
+export type PlatformControlInput = { sessionId: string; action: PrReviewAction; directory: string; jobId?: string | undefined; reason?: string | undefined; scope?: ReviewerScope | undefined; patch?: Record<string, unknown> | undefined; version?: number | undefined; pullRequests?: "cached" | "refresh" | undefined }
 export type PlatformControlResult = { ok: true; text: string; dashboard?: import("@mendcode/protocol").PrReviewDashboard; config?: import("@mendcode/protocol").PrReviewConfigView } | { ok: false; message: string }

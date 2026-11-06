@@ -4261,7 +4261,7 @@ export async function startDaemon(options: DaemonOptions) {
         }
         if (!prReviewOn()) return reply(connection, command.id, { ok: false, code: "invalid_command", message: "[DAEMON]: The PR reviewer is off: it reaches the network through gh and spends model calls, so turn it on with /experimental pr_review on (balanced tier or above)" })
         // The platform's fields (job actions, audit, config) go through as given; the service and control.ts validate them.
-        const done = await (await prReviewService()).control({ sessionId: command.sessionId, action: command.action, directory: command.directory, pr: command.pr, full: command.full, role: command.role, jobId: command.jobId, reason: command.reason, scope: command.scope, patch: command.patch, version: command.version })
+        const done = await (await prReviewService()).control({ sessionId: command.sessionId, action: command.action, directory: command.directory, pr: command.pr, full: command.full, role: command.role, jobId: command.jobId, reason: command.reason, scope: command.scope, patch: command.patch, version: command.version, pullRequests: command.pullRequests })
         if (!done.ok) return reply(connection, command.id, { ok: false, code: "invalid_command", message: `[DAEMON]: ${done.message}` })
         return reply(connection, command.id, { ok: true, result: { text: done.text, watches: done.watches, ...(done.dashboard ? { dashboard: done.dashboard } : {}), ...(done.config ? { config: done.config } : {}) } })
       }

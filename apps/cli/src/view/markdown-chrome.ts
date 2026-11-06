@@ -11,7 +11,7 @@ export type HeaderButton = { text: string; copy: string; label: string }
 const GAP = "  "
 
 /**
- * The header row of a block: `╭─ label ──────── art  copy`. The whole row is chrome (a selection skips it) and each
+ * The header row of a block: `╭─ label ──────── copy`. The whole row is chrome (a selection skips it) and each
  * button answers a click. Buttons that do not fit are dropped from the right, then the label is cut.
  */
 export function blockHeader(input: { label: string; width: number; roles: Roles; buttons: readonly HeaderButton[] }): Line {
@@ -95,7 +95,7 @@ function segment(row: Line, from: number, to: number): string | undefined {
 }
 
 /**
- * Draws buttons inside a row of a block's own art, right edge at `end` (a table's top border, a diagram's first row): the
+ * Draws buttons inside a row of a block's own art, right edge at `end` (a table's top border): the
  * cells they take must satisfy `accept`, otherwise nothing is drawn and the key is the only way to copy. A `tail` span
  * stays after the buttons. The row becomes chrome, so a selection skips the hint.
  */
