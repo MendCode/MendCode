@@ -63,11 +63,13 @@ const BOX = { tl: "┌", tr: "┐", bl: "└", br: "┘", h: "─", v: "│" } a
  * block among messages: single border, one space of padding at the sides, the title in the primary color.
  * `compact` drops the padding rows. Exactly `width` wide; `height`, when given, is exact too.
  */
-export function boxPanel(input: { title?: string; body: Line[]; width: number; height?: number; compact?: boolean; active?: boolean; titleTone?: ColorName; borderTitle?: boolean; flat?: boolean; scroll?: number }): Line[] {
+export function boxPanel(input: { title?: string; titleNote?: string; body: Line[]; width: number; height?: number; compact?: boolean; active?: boolean; titleTone?: ColorName; borderTitle?: boolean; flat?: boolean; scroll?: number }): Line[] {
   const { width } = input
   if (width < 4) return []
+  // A dim word after the title (`pinned`), never bold.
+  const note: Line = input.titleNote ? [{ text: ` · ${input.titleNote}`, fg: "muted", dim: true }] : []
   if (input.flat) {
-    const head: Line[] = input.title ? [[{ text: input.title, fg: input.titleTone ?? "primary", bold: true }], [{ text: BOX.h.repeat(width), fg: "border" }]] : []
+    const head: Line[] = input.title ? [clip([{ text: input.title, fg: input.titleTone ?? "primary", bold: true }, ...note], width), [{ text: BOX.h.repeat(width), fg: "border" }]] : []
     const room = input.height === undefined ? input.body.length : Math.max(0, input.height - head.length)
     const start = Math.max(0, Math.min(input.scroll ?? 0, Math.max(0, input.body.length - room)))
     return toHeight([...head, ...input.body.slice(start, start + room)], width, input.height ?? head.length + room)
@@ -92,7 +94,7 @@ export function boxPanel(input: { title?: string; body: Line[]; width: number; h
   }
   const rule = BOX.h.repeat(width - 2)
   const top: Line = input.borderTitle && input.title
-    ? [{ text: `${BOX.tl}─ `, fg: border }, ...clip([{ text: input.title, fg: input.titleTone ?? "primary", bold: true }], width - 6)]
+    ? [{ text: `${BOX.tl}─ `, fg: border }, ...clip([{ text: input.title, fg: input.titleTone ?? "primary", bold: true }, ...note], width - 6)]
     : [{ text: `${BOX.tl}${rule}`, fg: border }]
   if (input.borderTitle && input.title) top.push({ text: ` ${BOX.h.repeat(Math.max(0, width - lineWidth(top) - 2))}`, fg: border })
   top.push({ text: BOX.tr, fg: border })
@@ -176,6 +178,8 @@ export function beside(blocks: Array<{ lines: Line[]; width: number }>, gap = 1)
 
 export type GridPanel = {
   title: string
+  /** A dim word after the title. */
+  note?: string
   body: Line[] | ((width: number) => Line[])
   weight?: number
   scroll?: number
@@ -196,7 +200,7 @@ export function panelGrid(input: { rows: GridPanel[][]; width: number; heights?:
       const bodies = items.map((item, i) => typeof item.body === "function" ? item.body(compact ? widths[i]! : Math.max(1, widths[i]! - 4)) : item.body)
       const height = input.heights?.[rowIndex] ?? Math.max(0, ...bodies.map((body) => body.length)) + (input.padding === true ? 4 : 2)
       if (rows.length && gap) rows.push([])
-      rows.push(...beside(items.map((item, i) => ({ width: widths[i]!, lines: boxPanel({ title: item.title, body: bodies[i]!, width: widths[i]!, height, compact: input.padding !== true, borderTitle: true, flat: compact, scroll: item.scroll ?? 0, active: item.active ?? false }) })), gap))
+      rows.push(...beside(items.map((item, i) => ({ width: widths[i]!, lines: boxPanel({ title: item.title, ...(item.note ? { titleNote: item.note } : {}), body: bodies[i]!, width: widths[i]!, height, compact: input.padding !== true, borderTitle: true, flat: compact, scroll: item.scroll ?? 0, active: item.active ?? false }) })), gap))
     }
   })
   return rows.map((row) => fit(row, width))

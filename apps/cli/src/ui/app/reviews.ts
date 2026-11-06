@@ -2,6 +2,7 @@ import type { PrReviewConfigView, PrReviewDashboard, SessionId } from "@mendcode
 import type { ReviewsData, ReviewsPageState } from "../../view/reviews-page"
 import type { ReviewsPageAction } from "../../view/reviews-keys"
 import type { Line } from "../theme"
+import { SPINNER_FRAMES } from "../../view/tool-card"
 import { createReviewsPageState, preload, renderReviewsPage, reviewsCommand, reviewsPageKey } from "../lazy-pages"
 import type { AppContext } from "./context"
 
@@ -137,7 +138,7 @@ export function createReviews(ctx: AppContext, deps: { switchSession(sessionId: 
 
   async function key(key: string) {
     if (!view) return
-    const result = reviewsPageKey(view, key, data.dashboard)
+    const result = reviewsPageKey(view, key, data.dashboard, state.reviewActivity)
     const changed = result.state !== view
     view = result.state
     if (changed || result.action.type !== "none") requestFrame()
@@ -147,7 +148,7 @@ export function createReviews(ctx: AppContext, deps: { switchSession(sessionId: 
 
   function render(width: number, height: number): Line[] {
     if (!view) return []
-    return renderReviewsPage({ data, state: view, width, height, now: now(), offline: state.connection !== "connected", glyphs: ctx.glyphs, activity: state.reviewActivity })
+    return renderReviewsPage({ data, state: view, width, height, now: now(), offline: state.connection !== "connected", glyphs: ctx.glyphs, activity: state.reviewActivity, spinner: state.reducedMotion ? "⋯" : SPINNER_FRAMES[state.spinFrame % SPINNER_FRAMES.length]! })
   }
 
   return { open, openJob, key, render, close }

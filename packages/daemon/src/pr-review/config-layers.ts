@@ -10,7 +10,7 @@ import { isPresetName, overlay, presetLayer, type ReviewPresetName } from "./pre
  * The repository decides what could be abused or what other people rely on. A personal or task layer may narrow and restyle
  * (profile, cap, template, phases, coverage, added path instructions and ignores, a lower budget, a fix mode up to the
  * repository's, stricter filters and cooldown) but never turn on what the repository has off nor change what it controls
- * (`enabled`, `fixes`, `fix.push`, `fix.personal`, `checks`, `publishers`, `reviewers`, `preset`, `backlog`, `template.language`, wider triggers or filters). Such a
+ * (`enabled`, `fixes`, `fix.push`, `fix.personal`, `checks`, `publishers`, `reviewers`, `preset`, `backlog`, `status`, `template.language`, wider triggers or filters). Such a
  * value is not applied and becomes a problem naming its key path; it is never a silent change. A PR's own head config is not a
  * layer here: it still only adds path instructions (`mergeReviewConfigs`).
  */
@@ -66,7 +66,7 @@ export function patchLayer(layer: ConfigLayer, patch: Record<string, unknown>): 
 const MODE_RANK: Record<ReviewConfig["mode"], number> = { "on-request": 0, labels: 1, auto: 2 }
 const FIX_RANK: Record<ReviewConfig["fix"]["mode"], number> = { review: 0, "fix-once": 1, "fix-loop": 2 }
 /** Keys only the repository sets; a personal or task layer may repeat the value, never change it. */
-const CONTROLLED = new Set<ConfigKey>(["checks", "publishers", "reviewers", "preset", "backlog", "commands", "fallback_models"])
+const CONTROLLED = new Set<ConfigKey>(["checks", "publishers", "reviewers", "preset", "backlog", "commands", "fallback_models", "status"])
 /** Keys a personal or task layer sets freely: they change how a review reads, not what it may do or whose PRs it takes. */
 const RESTYLE = new Set<ConfigKey>(["profile", "cap", "min_score", "template", "phases", "coverage", "readers"])
 

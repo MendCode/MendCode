@@ -8,8 +8,9 @@ import { pickerFrame } from "./picker-frame"
 import { relativeTime, timeAgo } from "./session-list"
 import { shortenMiddle, textWidth, truncateEnd, wrap } from "./wrap"
 import { SEARCH_HINT } from "./page-search"
-import type { ReviewActivityJob } from "./review-activity"
+import { reviewStep, type ReviewActivityJob } from "./review-activity"
 import { formatElapsed } from "./time"
+import { SPINNER_FRAMES } from "./tool-card"
 
 /**
  * `/reviews` (and `/pr dashboard`): the PR review platform's page (docs/pr-review.md). Jobs grouped by state with stacks under their
@@ -44,7 +45,10 @@ export type ReviewsConfigState = { jobId: string; number: number; scope: PrJobSu
 export type ReviewsPageState = {
   /** 0 jobs, 1 watches and reviewers. */
   tab: 0 | 1
-  /** The selected job by id, so a refresh that reorders the list keeps the selection on the same job. */
+  /**
+   * The job the user picked (↑↓, enter or a job action), by id, so a refresh that reorders the list keeps the selection on it.
+   * Unset, the selection follows the latest review (`followedJob`); esc in the list unsets it again.
+   */
   selectedId?: string
   selected: number
   /** The selected job's detail fills the page (Enter); the list shows otherwise. */
@@ -158,8 +162,21 @@ export function listedJobs(dashboard: PrReviewDashboard | undefined, filter: Rev
   return groupedRows(filterJobs(latestPerPr(dashboard.jobs).latest, filter)).flatMap((row) => (row.kind === "job" ? [row.job] : []))
 }
 
-export function selectedJob(state: ReviewsPageState, jobs: readonly PrJobSummary[]): PrJobSummary | undefined {
+/**
+ * The job an unpinned selection follows: the running review that started last (its live start, else when it was queued), else
+ * the job updated last. A tie keeps the one listed first.
+ */
+export function followedJob(jobs: readonly PrJobSummary[], activity: readonly ReviewActivityJob[] = []): PrJobSummary | undefined {
+  const started = new Map(activity.map((job) => [job.jobId, job.startedAt]))
+  const latest = (list: readonly PrJobSummary[], at: (job: PrJobSummary) => number) => list.reduce((best, job) => (at(job) > at(best) ? job : best))
+  const running = jobs.filter((job) => job.state === "running" || started.has(job.id))
+  if (running.length) return latest(running, (job) => started.get(job.id) ?? job.createdAt)
+  return jobs.length ? latest(jobs, (job) => job.updatedAt) : undefined
+}
+
+export function selectedJob(state: ReviewsPageState, jobs: readonly PrJobSummary[], activity?: readonly ReviewActivityJob[]): PrJobSummary | undefined {
   if (!jobs.length) return undefined
+  if (state.selectedId === undefined) return followedJob(jobs, activity)
   return jobs.find((job) => job.id === state.selectedId) ?? jobs[Math.max(0, Math.min(state.selected, jobs.length - 1))]
 }
 
@@ -189,9 +206,26 @@ export const canRelease = (job: PrJobSummary) => job.fixSessionId !== undefined 
 const short = (sha: string) => sha.slice(0, 7) || "—"
 
 /** A running job as the daemon's live activity has it: its phase and how long the run has gone (`pr.review.activity`). */
-export type LiveRun = { phase: string; elapsedMs: number; steps: ReviewActivityJob["steps"] }
+export type LiveRun = { phase: string; step: string; elapsedMs: number; steps: ReviewActivityJob["steps"] }
 export function liveRuns(activity: readonly ReviewActivityJob[] | undefined, now: number): Map<string, LiveRun> {
-  return new Map((activity ?? []).map((job) => [job.jobId, { phase: job.phase, elapsedMs: Math.max(0, now - job.startedAt), steps: job.steps }]))
+  return new Map((activity ?? []).map((job) => [job.jobId, { phase: job.phase, step: reviewStep(job), elapsedMs: Math.max(0, now - job.startedAt), steps: job.steps }]))
+}
+
+/** The status column a running row gets while any listed review runs: room for the spinner, phase, step and time. */
+const LIVE_STATUS_WIDTH = 34
+
+/**
+ * A running review's live line, as the activity status says it: spinner, phase · running step · time. In `width` cells the step
+ * is cut first, then dropped; the phase and the time stay.
+ */
+export function liveLine(live: LiveRun, spinner: string, width = Number.POSITIVE_INFINITY): string {
+  const head = `${spinner} ${live.phase}`
+  const tail = ` · ${formatElapsed(live.elapsedMs)}`
+  const full = `${spinner} ${live.step}${tail}`
+  if (textWidth(full) <= width) return full
+  const detail = live.step.slice(live.phase.length).replace(/^ · /, "")
+  const room = width - textWidth(head) - textWidth(tail) - 3
+  return detail && room >= 4 ? `${head} · ${truncateEnd(detail, room)}${tail}` : `${head}${tail}`
 }
 
 /** What a finished review left: its findings, never a phase it went through. */
@@ -252,11 +286,12 @@ function field(label: string, value: string, width: number, fg: ColorName = "bod
 
 type Column = { text: string; fg: ColorName; width: number }
 
-function jobRow(input: { entry: { job: PrJobSummary; depth: number; stackedOn?: number }; selected: boolean; width: number; now: number; glyphs: Glyphs; showRepo: boolean; live?: LiveRun | undefined; earlier: number }): Line {
-  const { entry, selected, width, now, glyphs, showRepo, live, earlier } = input
+function jobRow(input: { entry: { job: PrJobSummary; depth: number; stackedOn?: number }; selected: boolean; width: number; now: number; glyphs: Glyphs; showRepo: boolean; live?: LiveRun | undefined; earlier: number; spinner: string; statusWidth: number }): Line {
+  const { entry, selected, width, now, glyphs, showRepo, live, earlier, spinner, statusWidth } = input
   const { job } = entry
+  const status = job.state === "running" && live ? liveLine(live, spinner, statusWidth - 1) : statusWord(job, live)
   const columns: Column[] = [
-    { text: statusWord(job, live), fg: job.state === "failed" ? "error" : job.state === "waiting" || job.state === "checkpointed" ? "warning" : live ? "primary" : "muted", width: 22 },
+    { text: status, fg: job.state === "failed" ? "error" : job.state === "waiting" || job.state === "checkpointed" ? "warning" : live ? "primary" : "muted", width: statusWidth },
     { text: relativeTime(now, job.updatedAt), fg: "muted", width: 5 },
     { text: `${job.reviewer}${job.control === "user" ? " · you" : ""}`, fg: job.scope === "personal" ? "secondary" : "muted", width: 16 },
     ...(showRepo ? [{ text: job.repo, fg: "muted" as ColorName, width: 20 }] : []),
@@ -307,14 +342,16 @@ export function tokenText(tokens: PrJobSummary["tokens"]): string {
 }
 
 /** Everything the ledger says about one job, top to bottom: what it is, where it stands, why, and what it has used. */
-export function jobDetailRows(job: PrJobSummary, width: number, now: number, extra: { live?: LiveRun | undefined; earlier?: readonly PrJobSummary[] | undefined } = {}): Line[] {
-  const { live, earlier = [] } = extra
+export function jobDetailRows(job: PrJobSummary, width: number, now: number, extra: { live?: LiveRun | undefined; earlier?: readonly PrJobSummary[] | undefined; spinner?: string } = {}): Line[] {
+  const { live, earlier = [], spinner = SPINNER_FRAMES[0] } = extra
   const rows: Line[] = []
   rows.push(...wrap(`${jobLabel(job)} ${job.title ?? ""}`.trim(), width).map((text): Line => [{ text, fg: "text", bold: true }]))
   if (job.url) rows.push([{ text: shortenMiddle(job.url, width), fg: "muted" }])
   rows.push([])
   rows.push(...field("repository", `${job.repo} · ${job.provider}`, width))
   rows.push(...field("state", stateText(job, live), width, groupOf(job.state).tone))
+  // The same live line the running row shows, under the state.
+  if (job.state === "running" && live) rows.push(...field("", liveLine(live, spinner), width, "primary"))
   // The run's steps so far, as its watching session shows them; the last one is still running.
   if (live) for (const [at, step] of live.steps.entries()) rows.push(...field(at === 0 ? "steps" : "", `${step.label}${step.detail ? ` · ${step.detail}` : ""} · ${formatElapsed((step.endedAt ?? now) - step.startedAt)}${step.endedAt === undefined ? " so far" : ""}`, width, step.endedAt === undefined ? "primary" : "body"))
   rows.push(...field("trigger", `${job.trigger.replaceAll("_", " ")} · ${job.coverage} review`, width))
@@ -439,7 +476,7 @@ export function reviewsHints(state: ReviewsPageState, job: PrJobSummary | undefi
   ] : []
   const parts = state.detail
     ? [...actions, "↑↓ scroll", "r refresh", "esc back"]
-    : [...(job ? ["enter detail"] : []), "/ search", ...actions, "f state", "m repo", "↑↓ select", "2 watches", "r refresh", "esc back"]
+    : [...(job ? ["enter detail"] : []), "/ search", ...actions, "f state", "m repo", "↑↓ select", "2 watches", "r refresh", state.selectedId !== undefined ? "esc follow latest" : "esc back"]
   return parts.join(" · ")
 }
 
@@ -483,15 +520,16 @@ function noJobsRows(dashboard: PrReviewDashboard, width: number): Line[] {
 /** Rows a panel body gets at this width: a flat panel (under 68 cells) loses its title and rule, a boxed one its borders and padding. */
 const panelRoom = (width: number, height: number) => Math.max(1, height - (width < 68 ? 2 : 4))
 
-function listRows(input: { dashboard: PrReviewDashboard; state: ReviewsPageState; job: PrJobSummary | undefined; width: number; room: number; now: number; glyphs: Glyphs; per: ReturnType<typeof latestPerPr>; live: Map<string, LiveRun> }): Line[] {
-  const { dashboard, state, job, width, room, now, glyphs, per, live } = input
+function listRows(input: { dashboard: PrReviewDashboard; state: ReviewsPageState; job: PrJobSummary | undefined; width: number; room: number; now: number; glyphs: Glyphs; per: ReturnType<typeof latestPerPr>; live: Map<string, LiveRun>; spinner: string }): Line[] {
+  const { dashboard, state, job, width, room, now, glyphs, per, live, spinner } = input
   const prompt = state.detail ? [] : promptRows(state, width)
   const rows = groupedRows(filterJobs(per.latest, state.filter))
   if (!rows.length) return [...prompt, ...noJobsRows(dashboard, width)]
   const showRepo = new Set(dashboard.jobs.map((entry) => entry.repo)).size > 1
+  const statusWidth = rows.some((row) => row.kind === "job" && row.job.state === "running" && live.has(row.job.id)) ? LIVE_STATUS_WIDTH : 22
   const drawn = rows.map((row): Line => row.kind === "group"
     ? clampLine([{ text: row.label, fg: row.tone, bold: true }, { text: `  ${row.count}`, fg: "muted" }], width)
-    : jobRow({ entry: row, selected: row.job === job, width, now, glyphs, showRepo, live: live.get(row.job.id), earlier: per.history.get(row.job.id)?.length ?? 0 }))
+    : jobRow({ entry: row, selected: row.job === job, width, now, glyphs, showRepo, live: live.get(row.job.id), earlier: per.history.get(row.job.id)?.length ?? 0, spinner, statusWidth }))
   const at = rows.findIndex((row) => row.kind === "job" && row.job === job)
   const visible = Math.max(1, room - prompt.length)
   // Keep the selected row and its group header in view; the window never starts past the last full page.
@@ -502,17 +540,23 @@ function listRows(input: { dashboard: PrReviewDashboard; state: ReviewsPageState
   return [...prompt, ...drawn.slice(start, start + visible)]
 }
 
-export function renderReviewsPage(input: { data: ReviewsData; state: ReviewsPageState; width: number; height: number; now: number; offline?: boolean; glyphs?: Glyphs; activity?: readonly ReviewActivityJob[] }): Line[] {
+/**
+ * `spinner` is the activity status's frame (the app's pulse turns it while a review runs and this page is open); `activity` the
+ * daemon's live runs, which the unpinned selection follows.
+ */
+export function renderReviewsPage(input: { data: ReviewsData; state: ReviewsPageState; width: number; height: number; now: number; offline?: boolean; glyphs?: Glyphs; activity?: readonly ReviewActivityJob[]; spinner?: string }): Line[] {
   const { data, state, width, height, now } = input
   if (height <= 0) return []
   const offline = input.offline ?? false
   const glyphs = input.glyphs ?? defaultGlyphs()
+  const spinner = input.spinner ?? SPINNER_FRAMES[0]
   const dashboard = data.dashboard
   const jobs = listedJobs(dashboard, state.filter)
-  const job = selectedJob(state, jobs)
+  const job = selectedJob(state, jobs, input.activity)
+  const pinned = state.selectedId !== undefined && job?.id === state.selectedId ? { note: "pinned" } : {}
   const per = latestPerPr(dashboard?.jobs ?? [])
   const live = liveRuns(input.activity, now)
-  const detailOf = (w: number) => jobDetailRows(job!, w, now, { live: live.get(job!.id), earlier: per.history.get(job!.id) })
+  const detailOf = (w: number) => jobDetailRows(job!, w, now, { live: live.get(job!.id), earlier: per.history.get(job!.id), spinner })
   const room = Math.max(0, height - 2)
   const hints = reviewsHints(state, job)
   const status = offline ? "daemon offline" : data.status === "error" && dashboard ? "refresh failed" : ""
@@ -531,21 +575,21 @@ export function renderReviewsPage(input: { data: ReviewsData; state: ReviewsPage
       ] })
     }
   } else if (state.detail && job) {
-    body = single({ title: `${jobLabel(job)} · ${job.state}`, scroll: state.scroll, body: (w) => [...promptRows(state, w), ...detailOf(w)] })
+    body = single({ title: `${jobLabel(job)} · ${job.state}`, ...pinned, scroll: state.scroll, body: (w) => [...promptRows(state, w), ...detailOf(w)] })
   } else {
     const listTitle = `Pull requests · ${jobs.length}${per.latest.length !== jobs.length ? ` of ${per.latest.length}` : ""}`
     if (isWide(width) && job) {
       body = panelGrid({ width, compact: false, padding: true, maxColumns: 2, heights: [room], rows: [[
-        { title: listTitle, weight: 3, active: true, body: (w) => listRows({ dashboard, state, job, per, live, width: w, room: panelRoom(width, room), now, glyphs }) },
-        { title: jobLabel(job), weight: 2, body: (w) => detailOf(w) },
+        { title: listTitle, weight: 3, active: true, body: (w) => listRows({ dashboard, state, job, per, live, spinner, width: w, room: panelRoom(width, room), now, glyphs }) },
+        { title: jobLabel(job), ...pinned, weight: 2, body: (w) => detailOf(w) },
       ]] })
     } else if (!isCompact(width) && job && room >= 16) {
       const top = Math.max(6, Math.floor(room * 0.5))
       body = panelGrid({ width, compact: false, padding: true, maxColumns: 1, heights: [top, Math.max(0, room - top - 1)], rows: [
-        [{ title: listTitle, active: true, body: (w) => listRows({ dashboard, state, job, per, live, width: w, room: panelRoom(width, top), now, glyphs }) }],
-        [{ title: `#${job.number} · enter for all of it`, body: (w) => detailOf(w) }],
+        [{ title: listTitle, active: true, body: (w) => listRows({ dashboard, state, job, per, live, spinner, width: w, room: panelRoom(width, top), now, glyphs }) }],
+        [{ title: `#${job.number} · enter for all of it`, ...pinned, body: (w) => detailOf(w) }],
       ] })
-    } else body = single({ title: listTitle, body: (w) => listRows({ dashboard, state, job, per, live, width: w, room: panelRoom(width, room), now, glyphs }) })
+    } else body = single({ title: listTitle, body: (w) => listRows({ dashboard, state, job, per, live, spinner, width: w, room: panelRoom(width, room), now, glyphs }) })
   }
   const frame = pickerFrame(title, hints, width, height, body)
   if (height > 1) {

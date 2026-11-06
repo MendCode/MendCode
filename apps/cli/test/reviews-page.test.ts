@@ -5,6 +5,7 @@ import type { Line } from "../src/ui/theme"
 import { createReviewsPageState, filterJobs, groupedRows, listedJobs, metricsSummary, renderReviewsPage, stackOrder, type ReviewsData, type ReviewsPageState } from "../src/view/reviews-page"
 import { reviewsCommand, reviewsPageKey } from "../src/view/reviews-keys"
 import { textWidth } from "../src/view/wrap"
+import { createTicks } from "../src/ui/app/ticks"
 
 const NOW = Date.UTC(2026, 9, 30, 12, 0, 0)
 const MIN = 60_000
@@ -331,14 +332,102 @@ describe("one row per pull request", () => {
     const activity = [{ jobId: "run", sessionId: "ses_watch" as never, repo: "acme/payments", number: 25, phase: "analysis", startedAt: NOW - 80_000, steps: [{ label: "Fetching #25", detail: "head 51fe4047", startedAt: NOW - 80_000, endedAt: NOW - 76_000 }, { label: "Analysis", detail: "112 files", startedAt: NOW - 76_000 }] }]
     const list = screen(renderReviewsPage({ data: ready(jobs), state: createReviewsPageState(), width: 100, height: 30, now: NOW, activity }))
     expect(list).toMatch(/Running {2}1/)
-    expect(list).toContain("analysis · 1m 20s")
+    expect(list).toContain("⠋ analysis · 112 files · 1m 20s")
     const detail = screen(renderReviewsPage({ data: ready(jobs), state: { ...createReviewsPageState(), selectedId: "run", detail: true }, width: 100, height: 30, now: NOW, activity }))
     expect(detail).toContain("state      running · analysis · 1m 20s · attempt 1")
+    expect(detail).toContain("           ⠋ analysis · 112 files · 1m 20s")
     expect(detail).toContain("steps      Fetching #25 · head 51fe4047 · 4s")
     expect(detail).toContain("Analysis · 112 files · 1m 16s so far")
     if (process.env.CAPTURE_DIR) {
       writeFileSync(`${process.env.CAPTURE_DIR}/reviews-running-list-100x30.txt`, list)
       writeFileSync(`${process.env.CAPTURE_DIR}/reviews-running-detail-100x30.txt`, detail)
+    }
+  })
+})
+
+describe("the selection follows the latest review until one is picked", () => {
+  type Activity = NonNullable<Parameters<typeof renderReviewsPage>[0]["activity"]>
+  const running = (jobId: string, number: number, startedAt: number): Activity[number] => ({ jobId, sessionId: "ses_watch" as never, repo: "acme/payments", number, phase: "analysis", startedAt, steps: [{ label: "Analysis", detail: "112 files", startedAt }] })
+  const selectedRow = (out: string) => out.split("\n").find((line) => line.includes("❯"))
+  const draw = (jobs: PrJobSummary[], state: ReviewsPageState, activity: Activity = []) => screen(renderReviewsPage({ data: ready(jobs), state, width: 160, height: 48, now: NOW, activity }))
+
+  test("follows the running job, the one started last when several run", () => {
+    const jobs = [job({ id: "old-run", number: 30, state: "running", phase: "analysis" }), job({ id: "new-run", number: 31, state: "running", phase: "analysis" }), job({ id: "fresh-done", number: 32, state: "done", updatedAt: NOW - 1_000 })]
+    const activity = [running("old-run", 30, NOW - 10 * MIN), running("new-run", 31, NOW - MIN)]
+    expect(selectedRow(draw(jobs, createReviewsPageState(), activity))).toContain("#31")
+    expect(reviewsPageKey(createReviewsPageState(), "s", dashboard(jobs), activity).state.selectedId).toBeUndefined()
+  })
+
+  test("follows the newest job when none runs, and moves on its own when a new review starts", () => {
+    const idle = [job({ id: "older", number: 40, state: "done", updatedAt: NOW - 60 * MIN }), job({ id: "newer", number: 41, state: "failed", updatedAt: NOW - 2 * MIN })]
+    const state = createReviewsPageState()
+    expect(selectedRow(draw(idle, state))).toContain("#41")
+    const started = [...idle, job({ id: "started", number: 42, state: "running", phase: "discovery", updatedAt: NOW - 30 * MIN })]
+    expect(selectedRow(draw(started, state, [running("started", 42, NOW - 5_000)]))).toContain("#42")
+  })
+
+  test("an arrow pins the selection, says so in the detail title and the hints, and a new review does not move it", () => {
+    const jobs = [job({ id: "a", number: 50, state: "done", updatedAt: NOW - MIN }), job({ id: "b", number: 51, state: "done", updatedAt: NOW - 9 * MIN })]
+    const unpinned = draw(jobs, createReviewsPageState())
+    expect(unpinned).not.toContain("pinned")
+    expect(unpinned).not.toContain("esc follow latest")
+    const state = reviewsPageKey(createReviewsPageState(), "\x1b[B", dashboard(jobs)).state
+    expect(state.selectedId).toBe("b")
+    const pinned = draw(jobs, state)
+    expect(selectedRow(pinned)).toContain("#51")
+    expect(pinned).toContain("#51 · pinned")
+    expect(pinned).toContain("esc follow latest")
+    const later = [...jobs, job({ id: "c", number: 52, state: "running", phase: "analysis" })]
+    expect(selectedRow(draw(later, state, [running("c", 52, NOW - 1_000)]))).toContain("#51")
+  })
+
+  test("esc on a pinned selection unpins and follows again; a second esc leaves the page", () => {
+    const data = dashboard(populated())
+    const pinned = reviewsPageKey(reviewsPageKey(createReviewsPageState(), "j", data).state, "\r", data).state
+    expect(pinned).toMatchObject({ selectedId: "child", detail: true })
+    const list = reviewsPageKey(pinned, "\x1b", data)
+    expect(list.state).toMatchObject({ selectedId: "child", detail: false })
+    const following = reviewsPageKey(list.state, "\x1b", data)
+    expect(following.action.type).toBe("none")
+    expect(following.state.selectedId).toBeUndefined()
+    expect(reviewsPageKey(following.state, "\x1b", data).action).toEqual({ type: "close" })
+  })
+
+  test("a running row shows the activity spinner with its phase, running step and time", () => {
+    const jobs = [job({ id: "run", number: 60, state: "running", phase: "analysis" }), job({ id: "idle", number: 61, state: "done" })]
+    const activity = [running("run", 60, NOW - 75_000)]
+    const frame = (spinner: string) => screen(renderReviewsPage({ data: ready(jobs), state: createReviewsPageState(), width: 160, height: 48, now: NOW, activity, spinner }))
+    // The list row, left of a wide page's detail pane.
+    const rowOf = (out: string, number: number) => out.split("\n").map((line) => line.split("│ │")[0]!).find((line) => line.includes(`#${number} Refresh`))!
+    expect(rowOf(frame("⠙"), 60)).toContain("⠙ analysis · 112 files · 1m 15s")
+    expect(rowOf(frame("⠙"), 61)).not.toContain("⠙")
+    for (const width of [80, 100, 120]) {
+      const narrow = screen(renderReviewsPage({ data: ready(jobs), state: createReviewsPageState(), width, height: 24, now: NOW, activity }))
+      expect(rowOf(narrow, 60)).toMatch(/❯ #60 Refresh[^\n]*⠋ analysis[^\n]* · 1m 15s/)
+    }
+  })
+
+  test("no redraw timer runs on the page while no review runs; one pulse runs while one does", () => {
+    const state = { page: "reviews", settingsPageState: { row: 9 }, transcript: { foreground: "idle", blocks: () => [] }, agentSessions: new Map(), turnState: {}, reviewActivity: [] as Activity[number][], reducedMotion: false, pulse: undefined as ReturnType<typeof setInterval> | undefined, pulseOn: true, loopsTick: undefined as ReturnType<typeof setInterval> | undefined, spinFrame: 0 }
+    const ticks = createTicks({ state, schedule() {}, input: {} } as never, { chatWidth: () => 100, sessionTitle: () => "", render() {} })
+    try {
+      ticks.syncPulse()
+      ticks.syncLoopsTick()
+      expect(state.pulse).toBeUndefined()
+      expect(state.loopsTick).toBeUndefined()
+      state.reviewActivity = [running("run", 60, NOW)]
+      ticks.syncPulse()
+      ticks.syncLoopsTick()
+      expect(state.pulse).toBeDefined()
+      expect(state.loopsTick).toBeUndefined()
+      state.reviewActivity = []
+      ticks.syncPulse()
+      ticks.syncLoopsTick()
+      expect(state.pulse).toBeUndefined()
+      expect(state.loopsTick).toBeUndefined()
+    } finally {
+      if (state.pulse) clearInterval(state.pulse)
+      if (state.loopsTick) clearInterval(state.loopsTick)
     }
   })
 })

@@ -9,6 +9,14 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+### New
+
+- PR reviews set a `MendCode review` commit status on the head, so a branch can require that its latest commit was reviewed and has nothing blocking.
+
+### Changed
+
+- `/reviews` follows the running or newest review until you pick one, and running reviews show a live spinner with their phase, step and time.
+
 ### Fixed
 
 - `mendcode profile check` fails a workflow script too large to run, instead of letting it install and fail later.
