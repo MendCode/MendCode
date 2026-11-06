@@ -52,6 +52,14 @@ describe("mendcode profile new", () => {
     expect(result.ok).toBe(true)
   })
 
+  test("profile check fails a workflow script larger than a run accepts, which would install and fail only when run", async () => {
+    const { dir } = await scaffold()
+    writeFileSync(path.join(dir, "workflows", "too-big.js"), `export const meta = { name: "too-big" }\n${"// padding\n".repeat(5000)}`)
+    const result = checkPackage({ dir, host, knownSlots: VIEW_SLOT_NAMES })
+    expect(result.ok).toBe(false)
+    expect(result.errors).toEqual([expect.stringMatching(/^workflows\/too-big\.js is \d+ KB; a workflow script runs only up to 48 KB$/)])
+  })
+
   test("profile check is the CLI command too: exit 0 for the scaffold, 1 with the reason for a broken copy", async () => {
     const { dir } = await scaffold()
     const run = async (folder: string) => {

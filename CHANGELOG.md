@@ -15,6 +15,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Fixed
 
+- `mendcode profile check` fails a workflow script too large to run, instead of letting it install and fail later.
 - PR reviews retain deferred files' changed lines, withhold full coverage for unread files, and keep small diffs batched.
 - Release reviews reuse only proven full reviews, work with GitHub Actions tokens, and read commit trees together instead of separately.
 - A session whose child waits for approval gets one notice that disappears once answered and stays out of your queue, and answering a card that just changed no longer shows "request is not pending".
