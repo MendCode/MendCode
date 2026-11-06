@@ -118,7 +118,7 @@ describe("release notes", () => {
     // Once in the short Fixes and once in the folded details, never twice in the same list.
     expect(notes.match(/run --format json/g)).toHaveLength(2)
     expect(notes).toContain("curl -fsSL https://github.com/MendCode/MendCode/releases/latest/download/install.sh | sh\n")
-    expect(notes).toContain("Already installed: `mendcode upgrade`.")
+    expect(notes).toContain("Already installed: `mendcode upgrade --channel stable`.")
   })
 
   test("a nightly lists the Unreleased items its previous release did not have, and fails when there are none", () => {
@@ -216,7 +216,7 @@ describe("release notes for a beta, a stable and a nightly", () => {
     const notes = releaseNotes(input("v0.0.4", { releases: [release("v0.0.3")], changelog: stable, tagChangelog: stable }))
     expect(notes).toContain("\nStable · since [v0.0.3]")
     expect(notes).toContain("## What's new")
-    expect(notes).toContain("Already installed: `mendcode upgrade`.")
+    expect(notes).toContain("Already installed: `mendcode upgrade --channel stable`.")
     expect(releaseTitle("v0.0.4")).toBe("MendCode v0.0.4")
   })
 
@@ -279,7 +279,7 @@ describe("the copyable prompt sits under Install on every release page", () => {
     const stable = RICH.replace("## v0.0.4-beta.1", "## v0.0.4")
     const unreleased = "## Unreleased\n\nToday's build.\n\n### Fixed\n\n- A fixed thing.\n"
     const pages: [string, string, string][] = [
-      [releaseNotes(input("v0.0.4", { releases: [release("v0.0.3")], changelog: stable, tagChangelog: stable })), "/releases/tag/v0.0.4", "`mendcode upgrade`"],
+      [releaseNotes(input("v0.0.4", { releases: [release("v0.0.3")], changelog: stable, tagChangelog: stable })), "/releases/tag/v0.0.4", "`mendcode upgrade --channel stable`"],
       [releaseNotes(input("v0.0.4-beta.1", { releases: RICH_RELEASES, changelog: RICH, tagChangelog: RICH })), "/releases/tag/v0.0.4-beta.1", "`mendcode upgrade --channel beta`"],
       [releaseNotes(input("v0.0.4-nightly.20261105.7", { releases: [...RICH_RELEASES, release("v0.0.4-nightly.20261104.5")], changelog: unreleased, tagChangelog: unreleased, previousChangelog: "## Unreleased\n" })), "/releases/tag/nightly", "`mendcode upgrade --channel nightly`"],
     ]
