@@ -9,13 +9,21 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+### Fixed
+
+- `mendcode profile check` fails a workflow script too large to run, instead of letting it install and fail later.
+
+## v0.0.4-beta.4 - 2026-11-06
+
+Large pull requests get reviewed through cheap readers instead of failing, merged pull requests count as reviewed only after
+a full review, and a child session's approvals no longer fill your queue.
+
 ### Changed
 
 - Large code pull requests keep reviewing with cheap readers fetching overflow files in pieces, with unread files clearly listed.
 
 ### Fixed
 
-- `mendcode profile check` fails a workflow script too large to run, instead of letting it install and fail later.
 - PR reviews retain deferred files' changed lines, withhold full coverage for unread files, and keep small diffs batched.
 - Release reviews reuse only proven full reviews, work with GitHub Actions tokens, and read commit trees together instead of separately.
 - A session whose child waits for approval gets one notice that disappears once answered and stays out of your queue, and answering a card that just changed no longer shows "request is not pending".
