@@ -421,7 +421,7 @@ function runReaders({ input, config, resume }: { input: RunPrReviewInput; config
   const read: ContextReaders = async ({ data, cut, diffTokens, load }) => {
     const groups = groupFiles({ data, cut })
     const cached = resume?.readers ?? []
-    const covered = (group: (typeof groups)[number]) => cached.find((summary) => summary.paths.length === group.files.length && group.files.every((entry) => summary.paths.includes(entry.file.path)))
+    const covered = (group: (typeof groups)[number]) => cached.find((summary) => summary.by !== "not read" && (group.kind !== "code" || summary.by !== "local") && summary.paths.length === group.files.length && group.files.every((entry) => summary.paths.includes(entry.file.path)))
     const out: ReaderSummary[] = []
     const fresh = groups.filter((group) => { const hit = covered(group); if (hit) { out.push(hit); reused += hit.paths.length } return !hit })
     if (fresh.length) {
@@ -558,7 +558,7 @@ async function reviewRun(input: RunPrReviewInput): Promise<ReviewRun & RunPlatfo
     const inheritedNote = inherited ? [`${plural(inherited, "finding")} #${input.stack!.parent} already reported ${inherited === 1 ? "was" : "were"} left out (this pull request is stacked on it).`] : []
     const usedModel = fallbackUsed(fallbackState, fallbackSources)
     const info: ReviewInfo = { ...(usedModel ? { fallback: { model: usedModel, ...(fallbackState.reason ? { why: fallbackState.reason } : {}) } } : {}), files: context.files.map((file) => ({ path: file.path, touched: file.touched.length })), profile: config.profile, cap: config.cap, incremental, ...(incremental ? { since: range.base } : {}), notes: [...context.notes.filter((note) => !note.startsWith("Incremental review:")), ...inheritedNote], ...(complete ? { checked: outcome.candidates.length - (risenAdded ? 1 : 0) } : {}), ...(perf && perfBody(perf) ? { perf: perfBody(perf) } : {}), ...(outcome.partial ? { partial: { ...outcome.partial, number: input.number } } : {}) }
-    if (complete && !incremental && !input.stack && range.base === input.base) info.fullBase = input.base
+    if (complete && !result.budgetHit && !outcome.partial && !context.unread?.length && !incremental && !input.stack && range.base === input.base) info.fullBase = input.base
     // Always a checkpoint: the plan's decisions; complete, every judged finding; stopped, what a resume verifies.
     const checkpoint: JobCheckpoint = withReaders(outcome.checkpoint ?? {
       completedPhases: outcome.completedPhases ?? [], candidates: [], verified: outcome.candidates, result: outcome.result,
