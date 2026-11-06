@@ -62,6 +62,22 @@ describe("a diff far larger than 4 MiB made of data is not refused: triage separ
     expect(context.readTokens).toBeGreaterThan(1_000_000)
   }, 60_000)
 
+  test("a generated file whose bounded sample holds fewer changed lines than triage needs stays a reader's file, and an unread one withholds full coverage", async () => {
+    // The first added line is longer than the readers' sample, so the sample keeps the header and no changed line at all.
+    const generated = `export const blob = "${"x".repeat(1_600_000)}"\n` + Array.from({ length: 60 }, (_, i) => `export const v${i} = ${i}\n`).join("")
+    const repo = await fixture({ "gen/out.ts": generated, "src/a.ts": code("alpha") })
+    const attributes = "gen/** linguist-generated\n"
+    for (const by of ["local", "not read"]) {
+      const seen: string[][] = []
+      const readers: ContextReaders = async ({ data }) => { seen.push(data.map((entry) => entry.file.path)); return data.map((entry) => ({ id: "g1", paths: [entry.file.path], text: "generated constants", by })) }
+      const context = await buildReviewContext({ directory: repo.dir, base: repo.base, head: repo.head, budgetTokens: 400_000, readers, attributes })
+      expect(seen).toEqual([["gen/out.ts"]])
+      if (by === "local") expect(context.diff).toContain("generated constants")
+      expect(context.diff).toContain("+export function alpha")
+      expect(context.unread?.includes("gen/out.ts") ?? false).toBe(by === "not read")
+    }
+  }, 60_000)
+
   test("with readers off the data file is a bounded sample the budget cuts, not an error", async () => {
     const repo = await fixture({ "results/run-1.json": results(150_000), "src/a.ts": code("alpha") })
     const context = await buildReviewContext({ directory: repo.dir, base: repo.base, head: repo.head, budgetTokens: 40_000 })

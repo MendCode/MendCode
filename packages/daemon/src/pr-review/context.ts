@@ -376,7 +376,14 @@ async function fetchDiff({ directory, base, head, git, ignore, readers, attribut
     if (fits) {
       for (const file of batched) found.set(file.path, file)
       const files = listed.flatMap((row) => found.get(row.path) ?? [])
-      return { files, triage: readers ? triageFiles(files, attributes) : { code: files, data: [] } }
+      if (!readers) return { files, triage: { code: files, data: [] } }
+      // Set-aside files keep what their full numstat row named them: a bounded sample can hold too few lines to be named again.
+      const scanned = triageFiles(files.filter((file) => !named.has(file.path)), attributes)
+      const data = [
+        ...files.flatMap((file) => { const row = sized.get(file.path)!, reason = named.get(file.path); return reason ? [{ file, reason, stats: { ...diffLines(file).stats, added: row.added, removed: row.removed } }] : [] }),
+        ...scanned.data,
+      ].sort((a, b) => files.indexOf(a.file) - files.indexOf(b.file))
+      return { files, triage: { code: scanned.code, data } }
     }
   }
   let bytes = 0
