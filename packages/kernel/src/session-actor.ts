@@ -860,6 +860,8 @@ export function createSessionActor(options: SessionActorOptions) {
       }
       case "engine.queue": {
         const turn = active
+        // Send now already delivered the message; its queued entry must survive the interrupted tool's result for the adopted turn.
+        if (turn?.handedOff) return message.reply(undefined)
         // Never bypass a held queue. Only the main agent's own open steps hold a message back: a sub-agent's tools run in its thread.
         if (!isLive(message.turnId) || !turn || turn.phase !== "turn" || held || paused || turn.pending.size || turn.openItems.size > turn.agentOpen.size) return message.reply(undefined)
         // After its answer, such a turn is done: the next message gets a turn of its own (and no selection made for another one).
