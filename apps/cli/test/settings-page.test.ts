@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test"
+import { afterEach, beforeEach, describe, expect, test } from "bun:test"
 import type { Settings } from "@mendcode/protocol"
 import { DEFAULT_THEME } from "../src/themes"
 import { glyphs, setTheme } from "../src/ui/theme"
@@ -7,6 +7,8 @@ import { textWidth } from "../src/view/wrap"
 import { appHarness, scratch } from "./extensions-harness"
 
 const made: Array<ReturnType<typeof scratch>> = []
+// Another file in the same process may leave its theme active; these tests read the default.
+beforeEach(() => setTheme(DEFAULT_THEME))
 afterEach(() => {
   for (const item of made.splice(0)) item.cleanup()
   // Theme edits apply process-wide; later tests start from the default.
