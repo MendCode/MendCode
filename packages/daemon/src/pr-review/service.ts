@@ -223,6 +223,12 @@ const OPEN_HINT = (jobId: string) => `/reviews shows its phase; /reviews open ${
 /** A backlog PR is the `opened` event no watch saw: `triggers.opened`, the mode and the filters decide it as they would have. */
 const eligibilityTrigger = (trigger: ReviewTrigger) => trigger === "stack" || trigger === "routed" || trigger === "recovered" ? "synchronize" as const : trigger === "backlog" ? "opened" as const : trigger
 
+/** A load run once: every caller, concurrent ones included, gets the same promise and so the same value. */
+export function sharedLoad<T>(load: () => Promise<T>): () => Promise<T> {
+  let loading: Promise<T> | undefined
+  return () => (loading ??= load())
+}
+
 export function createPrReviewService(options: PrReviewServiceOptions) {
   const run = options.run ?? ghProcess
   const call = options.call ?? ghCall
@@ -2069,7 +2075,8 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
   const configControl = createConfigControl({ dataDir: options.dir, repo: (directory) => repoCached(directory).catch(() => undefined), login: (directory) => watch.loginOf(directory), git, now, provider: "github", profiles })
   // The reviews page's pull request states load with the page's first read of them, never at start-up.
   let prStates: import("./pr-states").PrStates | undefined
-  const loadPrStates = async () => (prStates ??= (await import("./pr-states")).createPrStates({ run, now }))
+  // One shared load: concurrent first reads (one per repository) must all fill the same cache, not one each.
+  const loadPrStates = sharedLoad(() => import("./pr-states").then(({ createPrStates }) => (prStates = createPrStates({ run, now }))))
   const pullRequests = { fetch: async (repo: string, directory: string, refresh: boolean) => (await loadPrStates()).fetch(repo, directory, refresh), cached: (repo: string) => prStates?.cached(repo) }
   const platform = createPlatformControl(handle, { configControl, takeover: { takeOver, release }, now, tokens24h: () => accounting.last24h().tokens, pullRequests })
 
