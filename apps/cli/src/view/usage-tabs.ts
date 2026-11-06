@@ -10,6 +10,7 @@ import { textWidth, wrap } from "./wrap"
 import { usageWeatherRows } from "./usage-widgets"
 import { wasteTab } from "./usage-waste-tab"
 import { auxiliaryLabel, auxiliaryOrder, auxiliaryTotals, callCount } from "./usage-auxiliary"
+import { cacheHit, costText, harnessRows, modelRows, periodTotals, sumTotals, totalsOf, totalsTable } from "./usage-breakdown"
 
 /**
  * The /usage tabs as pure row builders over a UsageReport: Overview (dashboard, heatmap, insights),
@@ -187,7 +188,7 @@ export function overviewTab(view: UsageView): Line[] {
     ]
   }
   const streak = report.insights?.streak
-  const status: Line[] = [note(`Window ${view.range} days · ${activeDays.size} active days`), note(streak ? `Streak ${streak.current}d · ${streak.longest}d longest` : "Streaks unavailable"), note(`Cache ${compact(cache)} · ${percent(sum.cacheRead, sum.input + sum.cacheRead)} hit`)]
+  const status: Line[] = [note(`Window ${view.range} days · ${activeDays.size} active days`), note(streak ? `Streak ${streak.current}d · ${streak.longest}d longest` : "Streaks unavailable"), note(`Cache ${compact(cache)} · ${cacheHit(sum)} hit`)]
   const quota = (room: number): Line[] => report.quotas.length ? report.quotas.flatMap((quota) => [
     ...quota.windows.map((window): Line => [strong(`${quota.provider} ${windowName(window)} `), { text: `${Math.max(0, Math.round(100 - window.usedPercent))}% left`, fg: leftColor(100 - window.usedPercent) }, ...(window.resetsAt ? [muted(` · ${resetAt(window.resetsAt, view.now)}`)] : [])]),
     [muted(`updated ${ago(view.now - quota.fetchedAt)}`)],
@@ -361,26 +362,56 @@ export function limitsTab(view: UsageView): Line[] {
 
 export function tokensTab(view: UsageView): Line[] {
   const { width } = view
+  const { report } = view
+  // Every call of the range: the page's days already carry the calls outside turns and imported usage.
   const sum = sums(view)
-  const cacheBase = sum.input + sum.cacheRead
   const rows: Line[] = [
     ...kpiRow(
       [
         { value: compact(sum.tokens), label: "Total" },
         { value: compact(sum.input), label: "Input" },
         { value: compact(sum.output), label: "Output" },
-        { value: compact(sum.reasoning), label: "Reasoning" },
-        { value: percent(sum.cacheRead, cacheBase), label: "Cache hit" },
+        { value: compact(sum.cacheRead), label: "Cache read" },
+        { value: compact(sum.cacheWrite), label: "Cache write" },
+        { value: cacheHit(sum), label: "Cache hit" },
       ],
       width,
     ),
     [],
   ]
+  if (!sum.tokens && !sum.calls) {
+    rows.push(...section({ title: "Totals", subtitle: rangeLabel(view.range), body: empty("No model calls in this range yet. Totals appear after the first answer, from any harness."), width }))
+    return rows
+  }
+  rows.push(
+    ...section({
+      title: "Totals",
+      subtitle: "Every call: turns of every harness, sub-agents, calls outside turns and imported usage",
+      body: totalsTable({ head: "period", rows: periodTotals(report, view.bounds.to, { label: rangeLabel(view.range), from: view.bounds.from }).map((period) => ({ name: period.label, totals: period.totals })), width, nameWidth: 15 }),
+      width,
+    }),
+    [],
+  )
+  const harness = harnessRows(report)
+  rows.push(
+    ...section({
+      title: "By harness",
+      subtitle: `${rangeLabel(view.range)} · each call counted once`,
+      body: report.harnesses === undefined
+        ? empty("This daemon does not report harnesses yet: restart it after the update.")
+        : [
+            ...totalsTable({ head: "harness", rows: harness.rows, total: sum, width }),
+            ...harness.notes.map((text) => [muted(text)]),
+          ],
+      width,
+    }),
+    [],
+  )
   const mix = kvList(
     [
       { label: "Input", value: `${compact(sum.input)} · ${percent(sum.input, sum.tokens)}` },
       { label: "Output", value: `${compact(sum.output)} · ${percent(sum.output, sum.tokens)}` },
-      { label: "Reasoning", value: `${compact(sum.reasoning)} · ${percent(sum.reasoning, sum.tokens)}` },
+      { label: "  of it reasoning", value: compact(sum.reasoning) },
       { label: "Cache read", value: `${compact(sum.cacheRead)} · ${percent(sum.cacheRead, sum.tokens)}` },
       { label: "Cache write", value: `${compact(sum.cacheWrite)} · ${percent(sum.cacheWrite, sum.tokens)}` },
     ],
@@ -388,7 +419,7 @@ export function tokensTab(view: UsageView): Line[] {
   )
   const cost = kvList(
     [
-      { label: "Estimated cost", value: sum.costMicros > 0 ? money(sum.costMicros) : sum.unpriced > 0 ? "n/a" : money(0) },
+      { label: "Estimated cost", value: costText(sum.costMicros, sum.unpriced, sum.calls, sum.tokens) },
       { label: "Unpriced calls", value: thousands(sum.unpriced) },
       { label: "Model calls", value: thousands(sum.calls) },
       { label: "Tokens per call", value: sum.calls ? compact(Math.round(sum.tokens / sum.calls)) : "—" },
@@ -405,38 +436,25 @@ export function tokensTab(view: UsageView): Line[] {
 
 export function modelsTab(view: UsageView): Line[] {
   const { report, width } = view
-  const models = [...report.models].sort((a, b) => b.input + b.output - (a.input + a.output))
+  const models = modelRows(report.models)
   const rows: Line[] = [
     ...section({
       title: "Models",
-      subtitle: rangeLabel(view.range),
-      body: models.length
-        ? table({
-            head: ["model", "tokens", "calls", "cost"],
-            rows: models.map((model) => [`${model.provider}/${model.model}`, compact(model.input + model.output), compact(model.calls), model.costMicros > 0 ? money(model.costMicros) : "—"]),
-            widths: [9, 8, 10],
-            width,
-          })
-        : empty("No model usage in this range"),
+      subtitle: `${rangeLabel(view.range)} · turns of every harness and sub-agent`,
+      body: models.length ? totalsTable({ head: "model", rows: models, total: sumTotals(models.map((model) => model.totals)), width }) : empty("No model usage in this range"),
       width,
     }),
     [],
   ]
-  // Calls outside the user's turns (titles, summaries, memory, hooks...): their own section, never part of the totals above.
+  // Calls outside the user's turns (titles, summaries, memory, hooks...): their own section, added to the Tokens tab's totals.
   const auxiliary = report.auxiliary ?? []
   if (auxiliary.length) {
     const total = auxiliaryTotals(auxiliary)
-    const cost = total.costMicros > 0 ? ` · ${money(total.costMicros)}${total.unpriced ? "+" : ""}` : ""
     rows.push(
       ...section({
         title: "Auxiliary calls",
-        subtitle: `Outside your turns · ${callCount(total.calls, thousands)} · ${compact(total.tokens)} tok${cost}`,
-        body: table({
-          head: ["role · model", "calls", "in", "out", "cost"],
-          rows: auxiliaryOrder(auxiliary).map((entry) => [auxiliaryLabel(entry), compact(entry.calls), compact(entry.input), compact(entry.output), entry.costMicros > 0 ? money(entry.costMicros) : "—"]),
-          widths: [7, 8, 7, 9],
-          width,
-        }),
+        subtitle: `Outside your turns · ${callCount(total.calls, thousands)} · ${compact(total.tokens)} tok · ${costText(total.costMicros, total.unpriced, total.calls, total.tokens)}`,
+        body: totalsTable({ head: "role · model", rows: auxiliaryOrder(auxiliary).map((entry) => ({ name: auxiliaryLabel(entry), totals: totalsOf([entry]) })), width }),
         width,
       }),
       [],

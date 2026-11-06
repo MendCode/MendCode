@@ -1,5 +1,5 @@
 import type { Database } from "bun:sqlite"
-import type { UsageAuxiliary } from "@mendcode/protocol"
+import type { UsageAuxiliary, UsageAuxiliaryDay } from "@mendcode/protocol"
 
 /**
  * Model calls the daemon makes outside a turn (title, summary, recap, memory, hooks, the permission reviewer, setup...), one daily
@@ -71,6 +71,17 @@ export function createUsageAuxiliary(input: { db: Database; dayOf(at: number): s
       GROUP BY role, provider, model ORDER BY input + output DESC, calls DESC, role, model LIMIT ${MAX_ROWS}`).all(...args)
   }
 
-  return { record, report }
+  /** The range's calls summed per day, without the roles in `exclude` (those whose turns the day sums already count). */
+  function days(range: AuxiliaryUsageRange, exclude: readonly string[] = []): UsageAuxiliaryDay[] {
+    const scoped = range.directories ? " AND directory IN (SELECT value FROM json_each(?4))" : ""
+    const args = [range.from, range.to, JSON.stringify(exclude), ...(range.directories ? [JSON.stringify(range.directories)] : [])]
+    return db.query<UsageAuxiliaryDay, string[]>(`
+      SELECT day, SUM(input) AS input, SUM(output) AS output, SUM(reasoning) AS reasoning, SUM(cache_read) AS cacheRead, SUM(cache_write) AS cacheWrite,
+        SUM(calls) AS calls, SUM(cost_micros) AS costMicros, SUM(cost_unknown_calls) AS costUnknownCalls
+      FROM usage_auxiliary_daily WHERE day BETWEEN ?1 AND ?2 AND role NOT IN (SELECT value FROM json_each(?3))${scoped}
+      GROUP BY day ORDER BY day`).all(...args)
+  }
+
+  return { record, report, days }
 }
 export type UsageAuxiliaryStore = ReturnType<typeof createUsageAuxiliary>

@@ -36,8 +36,8 @@ describe("footer segments: cache, tokens, effort, jobs, sandbox, vim, update", (
   })
 
   test("tokens shows prompt, output and the cache counters that are not zero", () => {
-    expect(text(segmentSpans("tokens", footerInput({ usage: totals })))).toBe("in 10.5K out 2,500 cr 9,000 cw 500")
-    expect(text(segmentSpans("tokens", footerInput({ usage: { ...totals, cacheRead: 0, cacheWrite: 0 } })))).toBe("in 1,000 out 2,500")
+    expect(text(segmentSpans("tokens", footerInput({ usage: totals })))).toBe("in 10.5K out 2,400 cr 9,000 cw 500")
+    expect(text(segmentSpans("tokens", footerInput({ usage: { ...totals, cacheRead: 0, cacheWrite: 0 } })))).toBe("in 1,000 out 2,400")
     expect(segmentSpans("tokens", footerInput({ usage: { ...totals, calls: 0 } }))).toEqual([])
   })
 

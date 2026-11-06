@@ -57,7 +57,7 @@ export function usageScope(store: Store, query: ScopeQuery, defaultDirectory = p
   return { kind, scope, projects, known, directories }
 }
 
-export function createUsageQuery(store: Store, defaultDirectory = process.cwd()) {
+export function createUsageQuery(store: Store, defaultDirectory = process.cwd(), breakdown?: typeof import("./usage-breakdown").usageBreakdown) {
   return (query: Omit<Extract<Command, { type: "usage.query" }>, "type" | "id" | "clientId">, today: string): Omit<UsageReport, "quotas"> => {
     const { kind, scope, projects, known, directories } = usageScope(store, query, defaultDirectory)
     const range = { from: query.from, to: query.to }
@@ -93,11 +93,13 @@ export function createUsageQuery(store: Store, defaultDirectory = process.cwd())
       day.input += row.input; day.output += row.output; day.cacheRead += row.cacheRead; day.cacheWrite += row.cacheWrite
       const model = `recovered:${row.engine}`
       let group = report.models.find((entry) => entry.model === model)
-      if (!group) { group = { provider: row.engine, model, input: 0, output: 0, calls: 0, costMicros: 0, costUnknownCalls: 0 }; report.models.push(group) }
+      if (!group) { group = { provider: row.engine, model, input: 0, output: 0, calls: 0, costMicros: 0, costUnknownCalls: 0, cacheRead: 0, cacheWrite: 0 }; report.models.push(group) }
       group.input += row.input; group.output += row.output
+      group.cacheRead = (group.cacheRead ?? 0) + row.cacheRead; group.cacheWrite = (group.cacheWrite ?? 0) + row.cacheWrite
     }
     report.days.sort((a, b) => a.day.localeCompare(b.day))
-    return report
+    // By harness and the calls outside turns per day: only when the caller loaded the breakdown (the daemon's `usage.query` does).
+    return breakdown ? { ...report, ...breakdown({ store, range: kind === "global" ? range : scoped, days: report.days }) } : report
   }
 }
 

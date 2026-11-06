@@ -5805,10 +5805,11 @@ export async function startDaemon(options: DaemonOptions) {
       case "usage.query": {
         if (command.from > command.to) return reply(connection, command.id, { ok: false, code: "invalid_command", message: "[DAEMON]: usage range is reversed" })
         const profile = options.usageProfile ? await options.usageProfile().catch(() => ({})) : {}
+        const { usageBreakdown } = await import("./usage-breakdown")
         return reply(connection, command.id, {
           ok: true,
           result: {
-            ...createUsageQuery(store, options.defaultDirectory)(command, localDay(clock.now())),
+            ...createUsageQuery(store, options.defaultDirectory, usageBreakdown)(command, localDay(clock.now())),
             quotas: store.latestQuota(),
             ...(Object.keys(profile).length ? { profile } : {}),
           },

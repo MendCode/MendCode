@@ -4,7 +4,7 @@ import { environmentKey, processMcpTurn, realClock, type Clock, type EngineEnvir
 import type { AcpAgentConfig, AcpModelOption } from "./agents"
 import { AcpRpcError, createRpcPeer, type RpcPeer } from "./rpc"
 import { spawnAcp, type AcpTransport } from "./transport"
-import { acpKindPermission, createUpdateMapper, MAX_TEXT, toolContentText } from "./updates"
+import { acpKindPermission, acpUsage, createUpdateMapper, MAX_TEXT, toolContentText } from "./updates"
 
 /** The ACP revision this client speaks. */
 export const ACP_PROTOCOL_VERSION = 1
@@ -444,6 +444,9 @@ export function createAcpEngine(options: AcpEngineOptions): EnginePort & { stop(
         connection.rpc.request("session/prompt", { sessionId: acpSessionId, prompt }).then(
           (result) => {
             const reason = (result as Json | undefined)?.stopReason
+            // What the turn used, when the agent says it (cancelled and refused turns were paid for too).
+            const usage = acpUsage(result, connection.modelOption?.current ? `${agent}/${connection.modelOption.current}` : agent, turn.mapper.context())
+            if (usage) input.emit(usage)
             if (reason === "cancelled" || turn.interrupted) {
               turn.mapper.finish("interrupted")
               return turn.finish({ status: "ok" })

@@ -20,6 +20,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 - Diagrams and charts no longer show art/copy labels; tables and code blocks keep copy.
 - `/reviews` follows the running or newest review until you pick one, and running reviews show a live spinner with their phase, step and time.
 - `/reviews` shows each pull request's GitHub state (merged, closed, draft, ready, failing checks or conflicts), and `f` can filter to ready, needs work or closed.
+- `/usage` totals count every call once (every harness, ACP agents, sub-agents, calls outside your turns, imported usage) with cache read and write, reasoning no longer counted twice (also in the sidebar, the footer and each turn's output figure), and show today, 7 and 30 days, a by-harness table and cache columns with hit rate per model; an unpriced cost says unknown.
 
 ### Fixed
 

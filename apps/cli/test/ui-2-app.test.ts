@@ -202,14 +202,15 @@ test("activity tokens count the current turn and preserve session totals", () =>
   const first = ids("turn")
   chat.emit({ type: "turn.started", turnId: first, queueId: ids("queue") })
   chat.emit({ ...usage, turnId: first })
-  expect(turn.output).toBe(23)
+  expect(turn.output).toBe(20)
   chat.emit({ type: "turn.completed", turnId: first })
   const second = ids("turn")
   chat.emit({ type: "turn.started", turnId: second, queueId: ids("queue") })
   expect(turn.output).toBe(0)
   chat.emit({ ...usage, turnId: second })
-  expect(turn.output).toBe(23)
-  expect(turn.totals.output).toBe(46)
+  expect(turn.output).toBe(20)
+  // Reasoning is inside output: counted once.
+  expect(turn.totals.output).toBe(40)
   chat.emit({ ...usage, turnId: second, input: 5, cacheRead: 700, cacheWrite: 40 })
   // The session totals keep the cache apart from the prompt.
   expect(turn.totals).toMatchObject({ input: 25, cacheRead: 700, cacheWrite: 40 })

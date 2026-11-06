@@ -204,8 +204,46 @@ export const UsageModel = lazySchema(() => z.strictObject({
   calls: z.number().int().nonnegative(),
   costMicros: z.number().int().nonnegative(),
   costUnknownCalls: z.number().int().nonnegative().optional(),
+  /** Part of `output` (every engine reports thinking inside its output count); absent from older daemons. */
+  reasoning: z.number().int().nonnegative().optional(),
+  cacheRead: z.number().int().nonnegative().optional(),
+  cacheWrite: z.number().int().nonnegative().optional(),
 }))
 export type UsageModel = z.infer<typeof UsageModel>
+
+/**
+ * The range's turn usage by the harness that ran it: `native`, `claude-code`, `codex`, `pi`, `acp:<agent>`, `imported:<engine>`
+ * (usage recovered from a harness's own log) and `unattributed` (calls of sessions deleted since, still in the daily sums). The rows
+ * add up to `days`. `subagents` is the part made by child sessions (sub-agents, reviewer children), already inside the row.
+ */
+export const UsageHarness = lazySchema(() => z.strictObject({
+  harness: z.string().max(80),
+  calls: Count,
+  sessions: Count,
+  input: Count,
+  output: Count,
+  reasoning: Count,
+  cacheRead: Count,
+  cacheWrite: Count,
+  costMicros: Count,
+  costUnknownCalls: Count,
+  subagents: z.strictObject({ calls: Count, sessions: Count, tokens: Count }).optional(),
+}))
+export type UsageHarness = z.infer<typeof UsageHarness>
+
+/** Calls outside turns summed per day (attribution-only roles such as `prReview` left out, their turns are in `days`). */
+export const UsageAuxiliaryDay = lazySchema(() => z.strictObject({
+  day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  input: Count,
+  output: Count,
+  reasoning: Count,
+  cacheRead: Count,
+  cacheWrite: Count,
+  calls: Count,
+  costMicros: Count,
+  costUnknownCalls: Count,
+}))
+export type UsageAuxiliaryDay = z.infer<typeof UsageAuxiliaryDay>
 
 /**
  * The model calls the daemon made outside a turn (a title, a summary, memory, a hook, a recap...), by role and model, for the range.
@@ -356,6 +394,10 @@ export const UsageReport = lazySchema(() => z.strictObject({
   savings: z.array(z.strictObject({ source: z.string().max(64), calls: Count, tokens: Count })).max(20).optional(),
   /** Calls outside turns, per role and model; absent from older daemons and when there were none. Not in `days` or `models`. */
   auxiliary: z.array(UsageAuxiliary).max(200).optional(),
+  /** `auxiliary` per day, so a period's total can include the calls outside turns; absent from older daemons and when there were none. */
+  auxiliaryDays: z.array(UsageAuxiliaryDay).optional(),
+  /** Turn usage by harness, adding up to `days`; absent from older daemons and when there was none. */
+  harnesses: z.array(UsageHarness).max(40).optional(),
   /** Absent from older daemons, and when no login identity is readable. */
   profile: UsageProfile.optional(),
   /** Absent from older daemons. */

@@ -294,7 +294,7 @@ describe("exit summary", () => {
     now += 125_000
     const summary = h.app.exitSummary()
     expect(summary).toContain("MendCode · Fix tests")
-    expect(summary).toContain("GPT-6-Luna · ↑1,000 +30K cached ↓250 · 1 turn · 2m 5s")
+    expect(summary).toContain("GPT-6-Luna · ↑1,000 +30K cached ↓200 · 1 turn · 2m 5s")
     expect(summary).toContain(`--session ${h.sessionId}`)
   })
 })
