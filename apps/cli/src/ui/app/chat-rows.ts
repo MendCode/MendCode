@@ -287,11 +287,7 @@ export function createChatRows(ctx: AppContext, actions: {
       state.scratchArea = { top: dock.length + live.scratch.top, left: live.scratch.left, width: live.scratch.width, rows: live.scratch.rows, first: live.scratch.first }
       state.scratchCursor = live.scratch.cursor ? { row: dock.length + live.scratch.cursor.row, col: live.scratch.cursor.col } : undefined
     }
-    // A PR review of this session's watch: its steps as tool rows over the working line, gone when the run ends (its note stays).
-    const reviewView = state.reviewActivity.length ? reviewActivityView() : undefined
-    const reviewing = reviewView && !inlineView && rich && !asking ? reviewView.reviewsIn(state.reviewActivity, state.sessionId) : []
-    const reviewRows: Line[] = reviewView && reviewing.length ? barRows("background", reviewView.reviewStepRows({ jobs: reviewing, width, frame: state.spinFrame, now: now(), ascii: asciiGlyphs() }), width) : []
-    const above: Line[] = [...fixedAbove, ...dock, ...(live?.rows ?? []), ...reviewRows, ...(working ? [working] : []), ...agentRows, ...extAbove, ...commentRows.above, ...(findRow ? [findRow.row] : [])]
+    const above: Line[] = [...fixedAbove, ...dock, ...(live?.rows ?? []), ...(working ? [working] : []), ...agentRows, ...extAbove, ...commentRows.above, ...(findRow ? [findRow.row] : [])]
     // Reserve chrome first: a multiline prompt must not push the tray or footer off a short terminal.
     const editorRows = Math.max(1, Math.min(MAX_EDITOR_ROWS, height - topbar.length - above.length - popup.length - promptTop.length - frameBottom.length - below.length - cardRows - 1))
     const firstRow = Math.max(0, cursorAt - editorRows + 1)

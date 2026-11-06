@@ -2389,9 +2389,8 @@ export async function startDaemon(options: DaemonOptions) {
   for (const task of store.tasks.list()) if (task.background && task.state === "interrupted" && ["queued", "working", "needs_input"].includes(store.sessionBackground.get(task.taskId)?.state ?? "")) sessionBackground.register(task.taskId, { state: "stopped", summary: task.result.slice(0, 4000) })
   ownerWake.schedule()
   continuity.recover()
-  // After start has finished (the listener is up, the engine is ready): a bounded page of the table, then one steering turn per session.
-  const resumeTimer = setTimeout(() => void restartResume.start().catch((error) => logLine("warn", `[DAEMON]: resuming interrupted turns failed: ${error instanceof Error ? error.message : String(error)}`)), 0)
-  resumeTimer.unref?.()
+  // Armed at the end of start, after every service below exists: start awaits lazy modules, and a resumed turn must not run first.
+  let resumeTimer: ReturnType<typeof setTimeout> | undefined
 
   /**
    * Loops: each run is a normal message in the loop's root session, submitted as the daemon's own
@@ -6820,6 +6819,10 @@ export async function startDaemon(options: DaemonOptions) {
     rmSync(options.socketPath, { force: true })
     if (localSecret) removeLocalEndpoint(options.dir, localSecret)
   }
+
+  // After start has finished (the listener is up, the engine is ready): a bounded page of the table, then one steering turn per session.
+  resumeTimer = setTimeout(() => void restartResume.start().catch((error) => logLine("warn", `[DAEMON]: resuming interrupted turns failed: ${error instanceof Error ? error.message : String(error)}`)), 0)
+  resumeTimer.unref?.()
 
   return {
     socketPath: options.socketPath,

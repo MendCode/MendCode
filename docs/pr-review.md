@@ -122,6 +122,16 @@ set aside, for example `the reviewable part of the diff is 9.0 MiB in 41 files, 
 pull request or mark generated files in `.gitattributes`. With readers off nothing is set aside, so a data file is a sample the
 token budget cuts.
 
+**Already-reviewed release pull requests.** On GitHub, a release PR (for example `beta` into `stable`) reuses the last
+contiguous reviewed tree from merged PRs in its range. The reviewer checks at most two pages of recently updated closed PRs,
+and at most two pages of reviews per matching PR. Only its own account's latest MendCode review counts, with a completion
+marker for exactly the head that was merged; a stale, partial, missing or unreadable review does not establish coverage.
+In first-parent order, an unreviewed PR or direct push stops coverage; merge-only changes remain to be reviewed. The summary
+says `Already reviewed in #82, #83, #84; this review covers only <baseline>..<head>`. If the trees are identical, it publishes
+a short note that nothing else changed, without calling a model. The same 4 MiB safety bound applies to the remainder, not
+the already-reviewed prefix. History outside the bounded lookup is reviewed normally; explicit full reviews still review
+the whole range. This lookup runs with the reviewer, never at start-up.
+
 Readers group files by directory, extension and shape (one experiment's 50 result files are one group) and return a short summary
 of each group: what it holds, its structure, and rarities such as secrets, absolute paths, NaN or Infinity, huge or truncated
 values, binaries, and data that contradicts itself. The review pass gets each summary under the first file's `diff --git`
@@ -504,11 +514,10 @@ The same comment is answered once, whatever the number of watches of the reposit
 #### Seeing a review run
 
 While a review runs (balanced and full tiers, where the reviewer is), the session that watches the repository shows it like a turn
-at work: its steps as tool rows above the prompt (`Review Fetching #25 · head 51fe4047`, `Review Readers · 32 files · <model>`,
-`Review Analysis · 112 files · incremental`, `Review Verifying 4 candidates`, `Review Posting review`), the running one with the
-spinner and its time, and the activity status `Reviewing Eden-sudo/Symbex-1#25 · analysis… (1m 20s)` when the session itself is
-idle. When the run ends they go and the session's final note stays. Any other session names it in the footer's agents segment
-(`reviewing Symbex-1#25`). The daemon sends these steps only to local terminals, only while a review runs, and stores none of them;
+at work, in one live line: the activity status `Reviewing #25 · analysis · 112 files · incremental… (1m 20s)`, with the PR, the
+phase, the running step's detail and the time. Finished steps are not drawn; when the run ends the line goes and the session's
+final note stays. Any other session, and the watching session while its own turn holds the activity status, names it in the
+footer's agents segment (`reviewing Symbex-1#25`). The daemon sends these steps only to local terminals, only while a review runs, and stores none of them;
 the spinner and the time move with the activity status's own clock, which stops with the run. `showActivity` and
 `activityPlacement off` hide the status as they do for a turn.
 

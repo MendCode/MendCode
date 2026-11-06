@@ -80,7 +80,7 @@ async function askDaemon({ topic, dataDir, cwd }: { topic: string; dataDir: stri
   if (!running) return none
   // A daemon sends the last quota reading of every provider right after the hello, as global events: nothing else is asked for them.
   const quotas: QuotaSnapshotLike[] = []
-  const client = createClient({ ...(running.tcp ? { localTcp: () => readLocalEndpoint(dataDir) } : { socketPath: running.socketPath }), name: "docs", reconnect: false, timeoutMs: 1500, onGlobal: (event) => { if (event.type === "quota.snapshot") quotas.push(event) } })
+  const client = createClient({ ...(running.tcp ? { localTcp: () => readLocalEndpoint(dataDir) } : { socketPath: running.socketPath }), name: "docs", reconnect: false, timeoutMs: 5000, onGlobal: (event) => { if (event.type === "quota.snapshot") quotas.push(event) } })
   try {
     await client.connect()
     const settings = wantsSettings ? await client.send({ type: "settings.get" }) : undefined
