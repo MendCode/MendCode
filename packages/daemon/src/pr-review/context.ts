@@ -382,7 +382,10 @@ async function fetchDiff({ directory, base, head, git, ignore, readers, attribut
       const data = [
         ...files.flatMap((file) => { const row = sized.get(file.path)!, reason = named.get(file.path); return reason ? [{ file, reason, stats: { ...diffLines(file).stats, added: row.added, removed: row.removed } }] : [] }),
         ...scanned.data,
-      ].sort((a, b) => files.indexOf(a.file) - files.indexOf(b.file))
+      ]
+      // Diff order, by a position table: a many-file review must not search the list on every comparison.
+      const position = new Map(files.map((file, index) => [file, index]))
+      data.sort((a, b) => position.get(a.file)! - position.get(b.file)!)
       return { files, triage: { code: scanned.code, data } }
     }
   }
