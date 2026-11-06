@@ -255,6 +255,32 @@ From the next message, a short tone block is appended to the native system promp
 
 Styles change how answers read, never tools, permissions or verification. External Codex/Claude Code engines keep their own prompts.
 
+## Reply language (`/language`)
+
+Replies are in one language, restated with every message you send, so a long run of tool output, files or logs in another language
+does not move the answers to it. The setting is `settings.language`, in every tier:
+
+- unset or `auto` (the default): the language of your latest message, judged locally from the message (its script, then common words
+  of Spanish, Portuguese, French, English and a few more). No model call. When the message is too short or mixed to tell, the line
+  asks for the language you write in without naming one.
+- a language name (`Español`, `English`, `Deutsch`): every reply is in it, whatever the conversation is in.
+
+Run `/language` to see it, `/language auto`, `/language <name>` or `/language next` (auto, English, Español, Português, Français) to
+change it; the **Reply language** row of `/customize` (Chat, Messages) steps through the same list. A model can propose it with
+`mendcode_settings` (`{"language":"Español"}`, `null` for auto), saved on your Apply. It applies from the next message.
+
+How each engine gets the line (one short sentence: `Reply in Spanish.`, or `Reply in the user's language.` when auto cannot tell):
+
+| Engine | Where the line goes | Seen in the transcript |
+|---|---|---|
+| native | after your message's text in the model's history, in brackets; never in the system prompt, so the cached prefix is the same every turn | no |
+| Claude Code | its `UserPromptSubmit` hook's `additionalContext`, which Claude Code adds to your message as context | no |
+| Codex | after your text (and the plan-mode note) in the turn's input | no |
+| pi | after your message (and the plan-mode note) in the prompt | no |
+
+A sub-agent, workflow task or critic gets no line: it answers its parent, not you. A PR review or fix session uses the repository's
+review language (`template.language`, [PR review](pr-review.md)) in place of yours. ACP agents get no line.
+
 ## Automation
 
 ```sh

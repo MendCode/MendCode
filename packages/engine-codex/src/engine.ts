@@ -177,6 +177,8 @@ export function createCodexEngine(options: {
   runLimits?: CodexRunLimits | undefined
   /** Text for a project directory added to the thread's developer instructions, after Codex's own (which stay): what MendCode draws that Codex's terminal does not. */
   appendSystem?(cwd: string): string | undefined
+  /** The `language` setting's line for a turn (docs/prompt-modes.md): sent after the user's text in the turn's input, as the plan note is; MendCode's transcript keeps what the user typed. */
+  replyLanguage?(sessionId: SessionId, text: string): Promise<string | undefined> | string | undefined
   /** MendCode's own tools (code graph, computer use, image_gen, memory, settings…) for the one session this process serves, through the daemon's loopback MCP bridge. */
   hostServers?: readonly HostServer[]
   /** What the model is told about those tools. Codex keeps an MCP server's `instructions` out of the model's prompt (0.162), so they join the thread's developer instructions. */
@@ -410,6 +412,9 @@ export function createCodexEngine(options: {
       // A cancel while Codex started or the thread opened: its abort event is gone, so nothing may be sent now.
       if (input.signal.aborted) return { status: "ok" }
       const planNote = planNotes.next(input.sessionId, input.permissionMode() === "plan", input.readOnlyRun === true)
+      const language = await Promise.resolve(options.replyLanguage?.(input.sessionId, input.text)).catch(() => undefined)
+      const text = [input.text, planNote, language ? `(${language})` : undefined].filter(Boolean).join("\n")
+      if (input.signal.aborted) return { status: "ok" }
       return new Promise<TurnOutcome>((resolve) => {
         let settled = false
         const turn: ActiveTurn = {
@@ -447,7 +452,7 @@ export function createCodexEngine(options: {
         )
         rpc!
           .request("turn/start", {
-            threadId, input: [{ type: "text", text: planNote ? `${input.text}\n${planNote}` : input.text, text_elements: [] }], model, effort,
+            threadId, input: [{ type: "text", text, text_elements: [] }], model, effort,
             // A resumed thread may have had a different ceiling on its previous turn.
             sandboxPolicy: input.permissionMode() === "plan" ? { type: "readOnly" } : { type: "workspaceWrite", writableRoots: [options.cwd], networkAccess: false },
           })

@@ -43,6 +43,7 @@ const ARGUMENTS: Readonly<Record<string, () => readonly SlashArgument[]>> = {
   tier: () => [...words("Use this tier", TIERS), { word: "off", summary: "No tier: every flag decides" }, ...Object.keys(FEATURES).map((id) => ({ word: id, summary: "Set this feature: on, off or default", more: true as const }))],
   "tier *": () => [...onOff("the feature"), { word: "default", summary: "Follow the tier" }],
   "output-style": () => words("Answer in this style", OUTPUT_STYLES),
+  language: () => [{ word: "auto", summary: "Reply in the language of your latest message" }, ...words("Always reply in this language", ["English", "Español", "Português", "Français"]), { word: "next", summary: "Step to the next language" }],
   whatsnew: () => [{ word: "all", summary: "Every change in the changelog, no model call" }],
   fast: () => [...onOff("the priority service tier"), { word: "status", summary: "Show whether it is on" }],
   graph: () => [{ word: "setup", summary: "Enable and build the project graph with one confirmation" }, ...onOff("code graph indexing"), { word: "auto", summary: "Index when the project is large enough" }, { word: "default", summary: "Set the default for new projects", more: true }],

@@ -20,6 +20,10 @@ export const FAST_USAGE = "usage: /fast [on|off|status]"
 export const OUTPUT_STYLE_USAGE = `usage: /output-style [${OUTPUT_STYLES.join("|")}]`
 export const EXPERIMENTAL_USAGE = "usage: /experimental [flag [on|off]]"
 export const GRAPH_USAGE = "usage: /graph [on|off|auto] · /graph default on|off|auto"
+/** What `/language next` (the /customize row) steps through; any other language name is typed: `/language Deutsch`. */
+export const LANGUAGE_PRESETS = ["auto", "English", "Español", "Português", "Français"] as const
+export const LANGUAGE_USAGE = "usage: /language [auto|<language name>|next]"
+const LANGUAGE_NAME = /^\p{L}[\p{L}\p{M} ()-]{0,39}$/u
 const flagIds = new Set<string>(EXPERIMENTAL_FLAGS.map((flag) => flag.id))
 type ConfigLayer = { id: string; label: string; source: string; present: boolean; entries: string[]; note?: string }
 
@@ -297,6 +301,21 @@ export function createQuickSettings(ctx: AppContext, actions: { changeProfile(pa
     if (await save({ projectConfig: Object.keys(entry).length ? { ...others, [directory]: entry } : others })) say(first === "auto" ? "graph auto here · indexes a git repo under the size limit" : `graph ${first} here`, "success")
   }
 
+  /**
+   * `/language [auto|<name>|next]`: the language replies are in (`language`, docs/prompt-modes.md). `auto` (unset) follows the user's latest
+   * message; a name holds; `next` steps through `LANGUAGE_PRESETS` (the /customize row); bare `/language` says what holds.
+   */
+  async function languageCommand(args: string) {
+    const word = args.trim()
+    const current = state.settingsNow.language ?? "auto"
+    if (!word) { say(`reply language: ${current}${current === "auto" ? " (the language of your latest message)" : ""} · ${LANGUAGE_USAGE}`); return }
+    const next = word.toLowerCase() === "next" ? LANGUAGE_PRESETS[(LANGUAGE_PRESETS.indexOf(current as never) + 1) % LANGUAGE_PRESETS.length]! : word.toLowerCase() === "auto" ? "auto" : word
+    if (next !== "auto" && !LANGUAGE_NAME.test(next)) { say(LANGUAGE_USAGE, "warning"); return }
+    if (readOnly()) { say("settings are read-only for this terminal", "warning"); return }
+    if (!await save({ language: next === "auto" ? null : next })) return
+    say(`reply language: ${next} · applies from the next message`, "success")
+  }
+
   async function cdCommand(args: string) {
     const target = args.trim()
     if (!target) { say(`in ${input.directory ?? "."} · usage: /cd <directory>`); return }
@@ -308,7 +327,7 @@ export function createQuickSettings(ctx: AppContext, actions: { changeProfile(pa
 
   /** True when the text was one of these commands. */
   async function quickCommand(text: string): Promise<boolean> {
-    const match = /^\/(fast|advisor|output-style|experimental|tier|debug-config|cd|pwd|graph)(?:\s+(.*))?$/s.exec(text.trim())
+    const match = /^\/(fast|advisor|output-style|experimental|tier|debug-config|cd|pwd|graph|language)(?:\s+(.*))?$/s.exec(text.trim())
     if (!match) return false
     const args = match[2] ?? ""
     switch (match[1]) {
@@ -321,6 +340,7 @@ export function createQuickSettings(ctx: AppContext, actions: { changeProfile(pa
       case "cd": await cdCommand(args); break
       case "pwd": say(input.directory ?? "."); break
       case "graph": await graphCommand(args); break
+      case "language": await languageCommand(args); break
     }
     return true
   }

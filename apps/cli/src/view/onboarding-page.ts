@@ -4,7 +4,7 @@ import { glyphs as defaultGlyphs, GLYPH_CHOICES, type ColorName, type GlyphChoic
 import { appearancePage, focusedWindow } from "./appearance-layout"
 import { beside, fit, panelGrid } from "./deck"
 import { lineWidth, textWidth, wrap } from "./wrap"
-import type { Detected, ModelOption, ReadyItem } from "./onboarding-detect"
+import { wayStateWord, type Detected, type ModelOption, type ReadyItem, type Way, type WayAction } from "./onboarding-detect"
 import { importPickerText, importSummary, importValue, openPicker, pickerKey, renderImportPicker, toggleAll, validSelection, type ImportPicker } from "./onboarding-import"
 import { modelConnects, modelPickerFocus, modelPickerKey, modelPickerText, openModelPicker, renderModelPicker, type ModelPicker } from "./onboarding-models"
 import { PERMISSION_NOTES, TIER_WHAT, onboardingSample, tierLine, type SampleLook, type SamplePart } from "./onboarding-sample"
@@ -72,13 +72,16 @@ export type OnboardingAction =
   | { type: "recheck" }
   /** Enter on a sign-in row: `/connect <target>` (the provider list when empty), then back to this page, checked again. */
   | { type: "connect"; target: string }
+  /** Enter on "Use Codex · its own harness" before its models are listed: turn its thread bridge on, then back here, checked again. */
+  | { type: "harness"; engine: "codex" }
 
 const UP = new Set(["\x1b[A", "\x1bOA", "\x10", "k"])
 const DOWN = new Set(["\x1b[B", "\x1bOB", "\x0e", "j", "\t"])
 const LEFT = new Set(["\x1b[D", "\x1bOD", "h"])
 const RIGHT = new Set(["\x1b[C", "\x1bOC", "l", " "])
 
-export const onboardingRows = (detected: Detected | undefined, state?: Pick<OnboardingState, "look" | "glyphs" | "style">): OnboardingRow[] => ["model", "tier", "permission", ...(state?.look !== undefined ? ["look" as const] : []), ...(state?.glyphs !== undefined ? ["glyphs" as const] : []), ...(state?.style ? STYLE_ROWS : []), ...(detected?.importRow ? ["import" as const] : []), "start"]
+/** No Model row while nothing can run: a model means something only once a harness or an account is chosen above it. */
+export const onboardingRows = (detected: Detected | undefined, state?: Pick<OnboardingState, "look" | "glyphs" | "style">): OnboardingRow[] => [...(detected && !detected.usable ? [] : ["model" as const]), "tier", "permission", ...(state?.look !== undefined ? ["look" as const] : []), ...(state?.glyphs !== undefined ? ["glyphs" as const] : []), ...(state?.style ? STYLE_ROWS : []), ...(detected?.importRow ? ["import" as const] : []), "start"]
 
 /** First-run values start at the recommendation; a reopened page starts at what is saved, so Enter changes nothing by itself. */
 export function createOnboardingState(input: { current: OnboardingCurrent; firstRun: boolean }): OnboardingState {
@@ -135,6 +138,36 @@ export function connectRows(detected: Detected | undefined): ConnectRow[] {
   return (detected?.items ?? []).filter((item) => shownItem(item) && NATIVE_ITEMS.has(item.id)).map((item) => ({ id: item.id, target: item.id === "chatgpt" ? "chatgpt" : "" }))
 }
 
+/** One focusable line of Ready: an action of a way, in the order Ready draws them. */
+export type WayRow = { way: Way; action: WayAction }
+export const wayRows = (detected: Detected | undefined): WayRow[] => (detected?.ways ?? []).flatMap((way) => way.actions.map((action) => ({ way, action })))
+
+/**
+ * Where the focus stands after a check: with nothing that can run, on the first way to fix that (the page's main action); once
+ * something can run where it could not (back from a sign-in, a harness turned on), on the Model row showing it. Every choice
+ * made so far is kept.
+ */
+export function focusAfterCheck(state: OnboardingState, detected: Detected, before?: Detected): OnboardingState {
+  const { ready, ...choosing } = state
+  void ready
+  const rows = wayRows(detected)
+  // The focused action is followed by what it is, not where it stood: a sign-in that worked is gone from the list.
+  if (state.ready !== undefined && before) {
+    const left = wayRows(before)[Math.min(state.ready, wayRows(before).length - 1)]
+    const at = left ? rows.findIndex((row) => wayKey(row) === wayKey(left)) : -1
+    if (at >= 0) return { ...state, ready: at }
+    return detected.usable || !rows.length ? { ...choosing, row: 0 } : { ...state, ready: 0 }
+  }
+  if (!detected.usable) return rows.length && state.ready === undefined && state.row === 0 ? { ...state, ready: 0 } : state
+  if (before && !before.usable) return { ...choosing, row: 0 }
+  return state
+}
+const wayKey = (row: WayRow) => `${row.way.id}:${row.action.kind}:${row.action.label}`
+
+/** What Enter does on a focused way, as the hints say it. */
+const WAY_ENTER: Record<WayAction["kind"], string> = { model: "enter use it", connect: "enter sign in, then back here", harness: "enter turn it on, then back here", recheck: "enter check again" }
+const WAY_ENTER_SHORT: Record<WayAction["kind"], string> = { model: "enter use it", connect: "enter sign in", harness: "enter turn on", recheck: "enter recheck" }
+
 export function onboardingKey(state: OnboardingState, key: string, ctx: { detected: Detected | undefined; firstRun: boolean; themes?: readonly string[] | undefined }): { state: OnboardingState; action: OnboardingAction } {
   const importRow = ctx.detected?.importRow
   const none = (next: OnboardingState = state) => ({ state: next, action: { type: "none" } as OnboardingAction })
@@ -157,17 +190,24 @@ export function onboardingKey(state: OnboardingState, key: string, ctx: { detect
   if (key === "\x1b") return { state, action: { type: "defaults" } }
   if (key === "r") return { state, action: { type: "recheck" } }
   if (key === "p") return none({ ...state, preview: !state.preview })
-  const signIn = connectRows(ctx.detected)
-  if (state.ready !== undefined && signIn.length) {
-    const at = Math.min(state.ready, signIn.length - 1)
+  const ways = wayRows(ctx.detected)
+  if (state.ready !== undefined && ways.length) {
+    const at = Math.min(state.ready, ways.length - 1)
     const { ready, ...choosing } = state
     void ready
     if (UP.has(key)) return none({ ...state, ready: Math.max(0, at - 1) })
-    if (DOWN.has(key)) return none(at + 1 < signIn.length ? { ...state, ready: at + 1 } : { ...choosing, row: 0 })
-    if (key === "\r") return { state, action: { type: "connect", target: signIn[at]!.target } }
+    if (DOWN.has(key)) return none(at + 1 < ways.length ? { ...state, ready: at + 1 } : { ...choosing, row: 0 })
+    if (key === "\r" || key === " ") {
+      const { action } = ways[at]!
+      // A model is picked on the page (the Model row shows it), never saved here; the other actions leave and come back.
+      if (action.kind === "model") return none({ ...choosing, model: action.model, row: 0 })
+      if (action.kind === "connect") return { state, action: { type: "connect", target: action.target } }
+      if (action.kind === "harness") return { state, action: { type: "harness", engine: action.engine } }
+      return { state, action: { type: "recheck" } }
+    }
     return none()
   }
-  if (UP.has(key) && state.row === 0 && signIn.length) return none({ ...state, ready: signIn.length - 1 })
+  if (UP.has(key) && state.row === 0 && ways.length) return none({ ...state, ready: ways.length - 1 })
   if (UP.has(key)) return none({ ...state, row: Math.max(0, state.row - 1) })
   if (DOWN.has(key)) return none({ ...state, row: Math.min(rows.length - 1, state.row + 1) })
   if (row === "import" && key === " ") return none({ ...state, picker: openPicker(importRow, state.imports) })
@@ -203,6 +243,8 @@ export function onboardingKey(state: OnboardingState, key: string, ctx: { detect
   }
   if (key === "\r") {
     if (row === "import") return none({ ...state, picker: openPicker(importRow, state.imports) })
+    // Nothing can answer yet: only the last row ("skip for now") leaves; Enter elsewhere goes to the first way to fix that.
+    if (ctx.detected && !ctx.detected.usable && row !== "start" && ways.length) return none({ ...state, ready: 0 })
     const model = state.model ?? ctx.detected?.recommended
     return { state, action: { type: "finish", choices: { ...(model ? { model } : {}), tier: state.tier, permission: state.permission, ...(state.look !== undefined ? { theme: state.look } : {}), ...(state.glyphs !== undefined ? { glyphs: state.glyphs } : {}), ...(state.style ? { style: state.style } : {}), imports: validSelection(importRow, state.imports) } } }
   }
@@ -225,7 +267,8 @@ export type OnboardingInput = {
   chatWidth?: number
 }
 
-const TONE = (ok: boolean): ColorName => (ok ? "success" : "muted")
+/** "Ready" says what is; with nothing that can run, the panel is where to choose how to run. */
+const readyTitle = (usable: boolean) => usable ? "Ready" : "Choose how to run"
 
 /** The tier a row shows: `none` previews as balanced chat, as the daemon would without a tier. */
 const previewTier = (tier: OnboardingTier): Tier => (tier === "none" ? "balanced" : tier)
@@ -277,91 +320,94 @@ function styleNote(input: OnboardingInput, row: OnboardingRow, style: SetupStyle
 /** The style as the sample draws it. */
 const sampleLook = (style: SetupStyle | undefined): SampleLook | undefined => style ? { ...stylePatch(style) } as SampleLook : undefined
 
-/** Glyph and label column of a Ready row. */
-const READY_INDENT = 16
-/** A command cut into rows of `width`: at spaces when it can, inside a long word (a path) when it must; every character kept. */
-function wrapCommand(text: string, width: number): string[] {
-  const rows: string[] = []
-  let row = ""
-  for (const word of text.split(" ")) {
-    const next = row ? `${row} ${word}` : word
-    if (next.length <= width) { row = next; continue }
-    if (row) rows.push(row)
-    let rest = word
-    while (rest.length > width) { rows.push(rest.slice(0, width)); rest = rest.slice(width) }
-    row = rest
-  }
-  if (row) rows.push(row)
-  return rows
-}
+/** The label column of a Ready row: its mark (2) and the longest label. */
+const READY_LABEL = 13
+/** The column an action and its note start at, under their way. */
+const ACTION_INDENT = 2
+const NOTE_INDENT = 4
 
-/** The focused sign-in row, when the focus is up in Ready. */
-const focusedConnect = (input: Pick<OnboardingInput, "state" | "detected">): ConnectRow | undefined => {
-  const rows = connectRows(input.detected)
+/** The focused Ready line, when the focus is up in Ready. */
+const focusedWay = (input: Pick<OnboardingInput, "state" | "detected">): WayRow | undefined => {
+  const rows = wayRows(input.detected)
   return input.state.ready === undefined || !rows.length ? undefined : rows[Math.min(input.state.ready, rows.length - 1)]
 }
 
-/** What Enter on a sign-in row does, as the dim line under it. */
-function connectNote(item: ReadyItem): string {
-  if (item.id === "chatgpt") return item.ok ? "enter opens /connect chatgpt: status, sign out" : "enter signs MendCode in, then comes back here"
-  return item.ok ? "enter opens /connect to add a provider" : "enter opens /connect to save a key here"
-}
+/** The state of a way in words: what it is now, before the detail of how. */
+const stateWord = (way: Way): string => way.state === "missing" ? "" : wayStateWord(way)
+const STATE_MARK: Record<Way["state"], { text: string; fg: ColorName }> = { ready: { text: "✓", fg: "success" }, unconfirmed: { text: "?", fg: "warning" }, "sign-in": { text: "·", fg: "warning" }, failed: { text: "!", fg: "error" }, missing: { text: "·", fg: "muted" } }
 
-/** Who each group of Ready rows signs in with, longest wording first. */
-const READY_GROUPS = [
-  { native: true, titles: ["MendCode's own engine · signs in itself", "MendCode's own engine"] },
-  { native: false, titles: ["External harnesses · their own login", "External · own login"] },
-] as const
+/** `text` after `prefix` on the first line and indented by `indent` on the next ones; every word kept, nothing cut. */
+function wrapped(prefix: Line, text: string, width: number, indent: number, fg: ColorName, bold = false): Line[] {
+  const first = Math.max(10, width - lineWidth(prefix))
+  const rows = wrap(text, first)
+  const head = rows[0] ?? ""
+  const rest = wrap(rows.slice(1).join(" "), Math.max(10, width - indent))
+  return [[...prefix, { text: head, fg, bold }], ...rest.filter(Boolean).map((row): Line => [{ text: " ".repeat(indent) }, { text: row, fg, bold }])]
+}
 
 /**
- * Ready as rows: MendCode's own engine (the ChatGPT login, API keys) apart from the external harnesses (Claude Code, Codex,
- * pi) that run on their own tool's login, each group under its heading when `headings`. The focused sign-in row carries the
- * focus mark in place of its glyph (the line under it says what Enter does), so no row moves as the focus does.
+ * Ready as rows: each tool or login found, best first, with its state (ready, needs sign-in, failed) and, under it, every action
+ * Enter can take on it from here: use it, sign in and come back, turn the Codex harness on, or check again after a step in a
+ * terminal. What is not installed closes the list on one line each. The focused action carries the focus mark and the line
+ * under it says what Enter does; nothing is ever cut, so a narrow terminal wraps instead. `focus` is the focused note's last line.
  */
-function readyLines(input: OnboardingInput, width: number, glyphs: Glyphs, headings: boolean): Line[] {
+function readyLines(input: OnboardingInput, width: number, glyphs: Glyphs): { lines: Line[]; focus: number } {
   const { detected } = input
-  if (!detected) return [[{ text: input.loading ? "checking this machine…" : "nothing detected", fg: "muted" }]]
-  const focused = focusedConnect(input)
+  if (!detected) return { lines: [[{ text: input.loading ? "checking this machine…" : "nothing detected", fg: "muted" }]], focus: 0 }
+  const focused = focusedWay(input)
+  // Something can run and the focus is on a choice: one line per way, its actions a key (↑) away.
+  const folded = detected.usable && !focused
   const lines: Line[] = []
-  const firstFit = (candidates: readonly string[]) => candidates.find((text) => textWidth(text) <= width) ?? candidates[candidates.length - 1]!
-  for (const group of READY_GROUPS) {
-    const items = detected.items.filter((item) => shownItem(item) && NATIVE_ITEMS.has(item.id) === group.native)
-    if (!items.length) continue
-    if (headings) lines.push(fit([{ text: firstFit(group.titles), fg: "muted", bold: true }], width))
-    for (const item of items) {
-      const on = focused?.id === item.id
-      const head: Line = [on ? { text: `${glyphs.user} `, fg: "primary" } : { text: `${item.ok ? "✓" : "·"} `, fg: TONE(item.ok) }, { text: item.label.padEnd(14), fg: on ? "primary" : item.ok ? "text" : "muted", bold: on }]
-      const tail = item.ok ? item.detail : item.fix ? `→ ${item.fix}` : item.detail
-      // A fix is a command to copy: when it does not fit beside its label it goes whole on the lines below, never cut.
-      if (!item.ok && item.fix && READY_INDENT + tail.length > width) {
-        lines.push(fit([...head, { text: item.detail, fg: "muted" }], width))
-        for (const row of wrapCommand(`→ ${item.fix}`, Math.max(10, width - READY_INDENT))) lines.push([{ text: " ".repeat(READY_INDENT) }, { text: row, fg: "muted" }])
-      } else lines.push(fit([...head, { text: tail, fg: "muted" }], width))
-      if (on) for (const text of wrap(connectNote(item), Math.max(10, width - 4)).slice(0, 2)) lines.push([{ text: `    ${text}`, fg: "muted" }])
+  let focus = 0
+  for (const way of detected.ways) {
+    if (folded) {
+      const head: Line = [{ text: `${STATE_MARK[way.state].text} `, fg: STATE_MARK[way.state].fg }, { text: way.label.padEnd(READY_LABEL), fg: way.state === "missing" ? "muted" : "text", bold: way.state === "ready" }]
+      lines.push(...wrapped(head, [stateWord(way), way.detail].filter(Boolean).join(" · "), width, 2 + READY_LABEL, "muted"))
+      continue
+    }
+    const mark = STATE_MARK[way.state]
+    const word = stateWord(way)
+    const tail = [word, way.detail].filter(Boolean).join(" · ")
+    const head: Line = [{ text: `${mark.text} `, fg: mark.fg }, { text: way.label.padEnd(READY_LABEL), fg: way.state === "missing" ? "muted" : "text", bold: way.state === "ready" }]
+    lines.push(...wrapped(head, tail, width, 2 + READY_LABEL, "muted"))
+    for (const action of way.actions) {
+      const on = focused?.action === action
+      const prefix: Line = [{ text: " ".repeat(ACTION_INDENT) }, { text: `${on ? glyphs.user : "›"} `, fg: on ? "primary" : "muted" }]
+      lines.push(...wrapped(prefix, action.label, width, ACTION_INDENT + 2, on ? "primary" : "text", on))
+      if (!on) continue
+      for (const text of wrap(action.note, Math.max(10, width - NOTE_INDENT))) lines.push([{ text: `${" ".repeat(NOTE_INDENT)}${text}`, fg: "muted" }])
+      focus = lines.length - 1
     }
   }
-  return lines
+  if (!detected.ways.length) lines.push([{ text: "nothing found on this machine · r checks again", fg: "muted" }])
+  else if (folded && wayRows(detected).length) lines.push([{ text: "↑ from the first choice: use, sign in or check again", fg: "muted" }])
+  return { lines, focus }
 }
 
-/** The ready list as at most two wrapped lines, found items first. */
+/** Ready folded, while something can run and the focus is on a choice: the ways that are ready, and the key to see them all. Wrapped whole. */
 function readySummary(input: OnboardingInput, width: number): Line[] {
   const { detected } = input
   if (!detected) return [[{ text: input.loading ? "checking this machine…" : "nothing detected", fg: "muted" }]]
-  const items = detected.items.filter((item) => item.ok || item.fix)
-  const text = items.map((item) => item.ok ? `✓ ${item.label}` : `· ${item.label} → ${item.fix}`).join("   ")
-  return wrap(text, Math.max(10, width)).slice(0, 2).map((row) => [{ text: row, fg: "muted" as ColorName }])
+  const ready = detected.ways.filter((way) => way.state === "ready").map((way) => `✓ ${way.label}`)
+  const text = [...ready, wayRows(detected).length ? "↑ every way to run" : ""].filter(Boolean).join("   ")
+  return wrap(text, Math.max(10, width)).map((row) => [{ text: row, fg: "muted" as ColorName }])
 }
 
 /** The one line that says what Enter will do: start chatting with exactly these choices. */
-export function actionText(input: OnboardingInput, onImportRow: boolean): { lead: string; text: string } {
+export function actionText(input: OnboardingInput, onImportRow: boolean, onStart = false): { lead: string; text: string } {
   const { state, detected } = input
+  // Nothing can answer yet: the last line never promises a chat, it offers an honest way out (this page opens again next launch).
+  if (detected && !detected.usable) {
+    const lead = onStart ? "enter  " : "↓ enter  "
+    return { lead, text: `${lead}skip for now · nothing can answer yet · /setup reopens this` }
+  }
   const model = modelOf(detected, state)
   const lead = onImportRow ? "↓ enter  " : "enter  "
   return { lead, text: `${lead}start chatting · ${model?.label ?? "default model"} · ${tierName(state.tier)} · ${state.permission} · ${importSummary(detected?.importRow, state.imports)}` }
 }
 
 function actionLines(input: OnboardingInput, width: number, current: OnboardingRow | undefined, glyphs: Glyphs): Line[] {
-  const { lead, text } = actionText(input, current === "import")
+  const { lead, text } = actionText(input, current === "import", current === "start")
   const mark: Line = [{ text: current === "start" ? `${glyphs.user} ` : "  ", fg: "primary" }]
   return wrap(text, Math.max(10, width - 2)).map((row, index): Line => index === 0
     ? [...mark, { text: row.slice(0, lead.length), fg: "primary", bold: true }, { text: row.slice(lead.length), fg: "text", bold: current === "start" }]
@@ -388,7 +434,7 @@ function rowDetail(input: OnboardingInput, row: OnboardingRow): string {
   const { state, detected } = input
   const model = modelOf(detected, state)
   // The way to the whole list comes before the line about the model, so a narrow column never cuts it.
-  if (row === "model") return model ? `${model.current ? "current · " : model.recommended ? "recommended · " : ""}${modelCount(detected)} · ${model.line}` : detected && !detected.options.length ? "nothing to run yet: space lists the sign-ins, ↑ to a Ready row signs in, or fix one and press r" : "the engine chooses its own model"
+  if (row === "model") return model ? `${model.current ? "current · " : model.recommended ? "recommended · " : ""}${modelCount(detected)} · ${model.line}` : detected && !detected.options.length ? "nothing to run yet: ↑ choose how to run, then the model" : "the engine chooses its own model"
   if (row === "tier") return `${state.tier === "none" ? "no tier: every feature at its own default" : tierLine(state.tier)} · ←→ ${tierChoices(input.firstRun).map(tierName).join(" · ")}`
   if (row === "permission") return PERMISSION_NOTES[state.permission] ?? ""
   if (row === "look") return "the whole screen repaints now · saved when you start chatting"
@@ -403,7 +449,7 @@ function chooseLines(input: OnboardingInput, width: number, glyphs: Glyphs): { l
   const { state, detected } = input
   const rows = onboardingRows(detected, state)
   // Up in Ready, no choice is focused.
-  const current = focusedConnect(input) ? undefined : rows[Math.min(state.row, rows.length - 1)]
+  const current = focusedWay(input) ? undefined : rows[Math.min(state.row, rows.length - 1)]
   const lines: Line[] = []
   let focus = 0
   const model = modelOf(detected, state)
@@ -419,7 +465,7 @@ function chooseLines(input: OnboardingInput, width: number, glyphs: Glyphs): { l
     focus = lines.length - 1
   }
   const none = detected && !detected.options.length
-  rowLine("model", "Model", modelValue(model, detected, width - 14) ?? (none ? "none found" : input.loading ? "checking…" : "default"))
+  if (rows.includes("model")) rowLine("model", "Model", modelValue(model, detected, width - 14) ?? (none ? "none found" : input.loading ? "checking…" : "default"))
   rowLine("tier", "Tier", state.tier)
   rowLine("permission", "Permission", state.permission)
   if (state.look !== undefined || state.glyphs !== undefined || state.style) lines.push([{ text: "  Look", fg: "muted", bold: true }])
@@ -496,7 +542,10 @@ export function renderOnboardingPage(input: OnboardingInput): Line[] {
   const row = rows[Math.min(state.row, rows.length - 1)]!
   const usable = detected?.usable ?? true
   const firstFit = (candidates: string[], room: number) => candidates.find((text) => textWidth(text) <= room) ?? candidates[candidates.length - 1]!
-  const subtitle = firstFit(input.firstRun
+  // With nothing that can answer, the page never speaks of starting a chat: choosing how to run comes first.
+  const subtitle = firstFit(!usable
+    ? [`${input.firstRun ? "welcome · " : ""}choose how to run first · or skip for now`, "choose how to run · or skip for now", "choose how to run first"]
+    : input.firstRun
     ? ["welcome · all optional · nothing is saved until you start chatting", "all optional · nothing is saved until you start chatting", "all optional · saved when you start"]
     : ["nothing is saved until you start chatting", "saved when you start chatting"], inner)
   const hintRoom = inner - "Setup".length - 2
@@ -515,13 +564,14 @@ export function renderOnboardingPage(input: OnboardingInput): Line[] {
     return appearancePage({ title: "Setup", subtitle, hints, body, width, height })
   }
   const keyed = width < PREVIEW_KEY_WIDTH || width < 72 && height < STACKED_PREVIEW_HEIGHT
-  const signingIn = focusedConnect(input) !== undefined
+  const way = focusedWay(input)
+  const signingIn = way !== undefined
   const hints = firstFit(state.preview && keyed
     ? ["←→ change · p choices · esc back", "p choices · esc back"]
-    : signingIn
-      ? ["↑↓ row · enter sign in · esc keep defaults", "enter sign in · esc skip"]
+    : way
+      ? [`↑↓ way · ${WAY_ENTER[way.action.kind]} · r check again · esc skip`, `↑↓ · ${WAY_ENTER[way.action.kind]} · esc skip`, `↑↓ · ${WAY_ENTER_SHORT[way.action.kind]} · r recheck · esc skip`, `↑↓ · ${WAY_ENTER_SHORT[way.action.kind]} · esc skip`, `${WAY_ENTER_SHORT[way.action.kind]} · esc skip`]
       : !usable
-        ? ["↑ sign in · r check again · enter continue anyway · esc keep defaults", "r check again · enter continue anyway · esc keep defaults", "r recheck · enter go on · esc skip", "r recheck · esc skip"]
+        ? ["↑ pick a way to run · r check again · esc skip for now", "↑ ways to run · r recheck · esc skip", "↑ ways to run · esc skip"]
         : row === "import"
           ? ["↑↓ row · ←→ nothing/all · enter pick · esc keep defaults", "↑↓ row · enter pick · esc skip", "enter pick · esc skip"]
           : keyed
@@ -535,17 +585,17 @@ export function renderOnboardingPage(input: OnboardingInput): Line[] {
     // The whole width: the choices grow to 64 columns, the preview takes the rest, as wide as a chat on this terminal.
     const leftWidth = Math.max(34, Math.min(64, Math.floor(inner * 0.45)))
     const rightWidth = inner - leftWidth - 1
-    // Ready takes at most two fifths of the rows; its group headings are the first to go when they do not fit.
-    const readyCap = Math.max(4, Math.floor(room * 0.4))
-    const grouped = readyLines(input, leftWidth, glyphs, true)
-    const readyBody = grouped.length + 2 <= readyCap ? grouped : readyLines(input, leftWidth, glyphs, false)
-    const readyHeight = Math.min(readyBody.length + 2, readyCap)
+    // Ready takes at most two fifths of the rows (half while nothing can run); past that it scrolls with the focused way.
+    const readyCap = Math.max(4, Math.floor(room * (usable ? 0.4 : 0.5)))
+    const ready = readyLines(input, leftWidth, glyphs)
+    const readyHeight = Math.min(ready.lines.length + 2, readyCap)
+    const readyBody = focusedWindow(ready.lines, ready.focus, readyHeight - 2)
     const action = actionLines(input, leftWidth, row, glyphs)
     const choose = chooseLines(input, leftWidth, glyphs)
     // Ready, a gap, Choose, a gap and the Enter line, over the one-line foot: the Enter line stays put while Choose scrolls.
     const chooseHeight = Math.min(choose.lines.length + 2, Math.max(6, room - readyHeight - action.length - 3))
     const panels = panelGrid({ width: leftWidth, compact: true, maxColumns: 1, padding: false, gap: 1, rows: [
-      [{ title: "Ready", body: readyBody.slice(0, readyHeight - 2) }],
+      [{ title: readyTitle(usable), body: readyBody }],
       [{ title: "Choose", body: focusedWindow(choose.lines, choose.focus, chooseHeight - 2) }],
     ], heights: [readyHeight, chooseHeight] })
     // The whole height: the Enter line stands at the foot of the column, level with the bottom of the preview.
@@ -563,15 +613,17 @@ export function renderOnboardingPage(input: OnboardingInput): Line[] {
       [{ title: previewTitle(input, row, inner), body: [...note, [], ...sample] }],
     ] })
   } else {
-    // Stacked: the ready list folds into two lines (whole while a sign-in row is focused); where the preview is a key away, Choose takes its room.
-    const readyBody = signingIn ? readyLines(input, inner, glyphs, false) : readySummary(input, inner)
-    const readyHeight = readyBody.length + 2
+    // Stacked: every way with its actions while nothing can run or one is focused, else the ready ones folded (wrapped whole);
+    // where the preview is a key away, Choose takes its room. Ready scrolls with its focus rather than cut a line.
     const action = actionLines(input, inner, row, glyphs)
     const choose = chooseLines(input, inner, glyphs)
     const previewRoom = keyed ? 0 : 8
+    const ready = signingIn || !usable ? readyLines(input, inner, glyphs) : { lines: readySummary(input, inner), focus: 0 }
+    const readyHeight = Math.min(ready.lines.length + 2, Math.max(4, room - action.length - previewRoom - Math.min(choose.lines.length + 2, 6)))
+    const readyBody = focusedWindow(ready.lines, ready.focus, readyHeight - 2)
     const chooseHeight = Math.max(4, Math.min(choose.lines.length + 2, room - readyHeight - action.length - previewRoom))
     const top = panelGrid({ width: inner, compact: true, maxColumns: 1, gap: 0, rows: [
-      [{ title: "Ready", body: readyBody }],
+      [{ title: readyTitle(usable), body: readyBody }],
       [{ title: "Choose", body: focusedWindow(choose.lines, choose.focus, chooseHeight - 2) }],
     ], heights: [readyHeight, chooseHeight] })
     body = [...top, ...action]
@@ -588,13 +640,15 @@ export function onboardingText(input: OnboardingInput): string[] {
   const { detected, state } = input
   if (state.picker && detected?.importRow) return importPickerText(detected.importRow, state.picker)
   if (state.models) return modelPickerText({ picker: state.models, detected, connects: modelConnects(detected, connectRows(detected)), chosen: state.model ?? detected?.recommended })
-  const out = ["Setup. Enter starts chatting with the choices below. Escape keeps working defaults. Nothing is written until you start chatting."]
-  for (const item of detected?.items ?? []) out.push(`${item.ok ? "Found" : "Missing"}: ${item.label}, ${item.detail}${!item.ok && item.fix ? `. To fix: ${item.fix}` : ""}.`)
-  const focused = focusedConnect(input)
-  const focusedItem = focused && detected?.items.find((item) => item.id === focused.id)
-  if (focusedItem) out.push(`Focused: ${focusedItem.label}. ${connectNote(focusedItem)}.`)
+  const usable = detected?.usable !== false
+  const out = [usable
+    ? "Setup. Enter starts chatting with the choices below. Escape keeps working defaults. Nothing is written until you start chatting."
+    : "Setup. Nothing can answer yet: choose how to run first. Up and down move between the ways below; Enter acts on the focused one. Escape skips for now."]
+  for (const way of detected?.ways ?? []) out.push(`${way.label}: ${wayStateWord(way)}, ${way.detail}.${way.actions.length ? ` Actions: ${way.actions.map((action) => action.label).join("; ")}.` : ""}`)
+  const focused = focusedWay(input)
+  if (focused) out.push(`Focused: ${focused.way.label}, ${focused.action.label}. Enter: ${focused.action.note}.`)
   const model = modelOf(detected, state)
-  out.push(`Model: ${model?.label ?? "none"}${model?.recommended ? " (recommended)" : ""}. ${model?.line ?? ""}`)
+  if (usable) out.push(`Model: ${model?.label ?? "none"}${model?.recommended ? " (recommended)" : ""}. ${model?.line ?? ""}`)
   if (detected?.options.length) out.push(`${detected.options.length} ${detected.options.length === 1 ? "model" : "models"} found, from ${detected.groups.map((group) => group.title).join(", ")}. Space on the Model row lists them all; left and right step through them.`)
   out.push(`Tier: ${state.tier}. ${state.tier === "none" ? "No tier." : tierLine(state.tier)}.`)
   out.push(`Permission: ${state.permission}. ${PERMISSION_NOTES[state.permission] ?? ""}.`)
@@ -608,8 +662,7 @@ export function onboardingText(input: OnboardingInput): string[] {
     out.push(`Pet: ${style.pet}. ${styleNote(input, "pet", style)}.`)
   }
   if (detected?.importRow) out.push(`Import: ${importValue(detected.importRow, state.imports)}. Available from ${detected.importRow.summary}. Enter or Space on the Import row opens the list; the default imports nothing.`)
-  const signIn = connectRows(detected)
-  if (signIn.length) out.push(`Sign in: up from Model reaches ${signIn.map((row) => row.id === "chatgpt" ? "the ChatGPT login" : "API keys").join(" and ")}; Enter there runs ${signIn.map((row) => row.target ? `/connect ${row.target}` : "/connect").join(" or ")} and comes back here. Claude Code, Codex and pi use their own logins.`)
-  out.push(`Enter starts chatting: ${actionText(input, false).text.slice("enter  ".length)}.`)
+  if (usable && wayRows(detected).length) out.push("Up from the first choice reaches the ways to run above; Enter there uses one, signs in and comes back here, or checks again. Claude Code, Codex and pi use their own logins.")
+  out.push(usable ? `Enter starts chatting: ${actionText(input, false).text.slice("enter  ".length)}.` : "The last row skips for now: nothing can answer yet, and /setup reopens this page.")
   return out
 }

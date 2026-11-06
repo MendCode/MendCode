@@ -1,4 +1,6 @@
-import type { Line, Span } from "../ui/theme"
+import type { ColorName, Line, Span } from "../ui/theme"
+import { fit as fitLine, spread } from "./deck"
+import { tabsRow, type PageTab } from "./page"
 import { actionLabel, DIRECT_KEYS, INLINE_KEYS, LEADER_CHORDS, type BindingAction } from "../ui/keymap"
 import { parseKeySpec } from "../extensions/keybindings"
 import { PROFILE_KEY_HELP } from "@mendcode/protocol/tui-key-help"
@@ -10,6 +12,18 @@ import { textWidth, truncateEnd, wrap } from "./wrap"
  * summarized in words (`default`, on/off, "1 pinned command: retro-crt"), plus the detail of the selected one. Pure: built from
  * the activation rows the terminal already holds.
  */
+
+/** The tabs /profiles and /marketplace share, in this order: 1, 2 and 3 switch between them on both pages. */
+export const PROFILE_TABS: PageTab[] = [{ key: "1", label: "What it takes over", short: "Takes over" }, { key: "2", label: "Installed", short: "Installed" }, { key: "3", label: "Marketplace", short: "Market" }]
+
+/** Row two of /profiles and /marketplace: the three tabs on the left (`active` on the element background), `right` after them. */
+export function profileTabsRow(input: { active: number; right: string; tone?: ColorName; width: number }): Line {
+  const { width } = input
+  const tabs = tabsRow(PROFILE_TABS, input.active, Math.max(1, width < 100 ? width : Math.floor(width * 0.55)))
+  const used = tabs.reduce((sum, span) => sum + textWidth(span.text), 0)
+  const right = truncateEnd(input.right, Math.max(0, width - used - 2))
+  return fitLine(right ? spread(tabs, [{ text: right, fg: input.tone ?? "muted" }], width) : tabs, width)
+}
 
 /** A value as the page shows it: `quiet` ones (`default`, `unbound`, `built-in`) are drawn dim. */
 export type ShownValue = { text: string; quiet: boolean }

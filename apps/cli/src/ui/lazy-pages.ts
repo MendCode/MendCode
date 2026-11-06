@@ -352,6 +352,7 @@ export const createOnboardingState: OnboardingMod["createOnboardingState"] = (..
 export const onboardingKey: OnboardingMod["onboardingKey"] = (...args) => onboarding.get().onboardingKey(...args)
 export const renderOnboardingPage: OnboardingMod["renderOnboardingPage"] = (...args) => onboarding.get().renderOnboardingPage(...args)
 export const onboardingText: OnboardingMod["onboardingText"] = (...args) => onboarding.get().onboardingText(...args)
+export const focusAfterCheck: OnboardingMod["focusAfterCheck"] = (...args) => onboarding.get().focusAfterCheck(...args)
 export const detectReady: typeof import("../view/onboarding-detect").detectReady = (...args) => onboardingDetect.get().detectReady(...args)
 
 type CustomizeMod = typeof import("../view/customize-page")
@@ -537,8 +538,8 @@ export const renderCompoundPage: typeof import("../view/compound-page").renderCo
 
 type MarketplaceMod = typeof import("../view/marketplace-page")
 export const createMarketplaceState: MarketplaceMod["createMarketplaceState"] = (...args) => marketplace.get().createMarketplaceState(...args)
-export const catalogMatches: MarketplaceMod["catalogMatches"] = (...args) => marketplace.get().catalogMatches(...args)
-export const catalogSearchKey: MarketplaceMod["catalogSearchKey"] = (...args) => marketplace.get().catalogSearchKey(...args)
+export const marketplaceKey: MarketplaceMod["marketplaceKey"] = (...args) => marketplace.get().marketplaceKey(...args)
+export const marketplaceConfirmFor: MarketplaceMod["confirmFor"] = (...args) => marketplace.get().confirmFor(...args)
 export const renderMarketplacePage: MarketplaceMod["renderMarketplacePage"] = (...args) => marketplace.get().renderMarketplacePage(...args)
 
 export const renderIntroPage: SetupMod["renderIntroPage"] = (...args) => setup.get().renderIntroPage(...args)

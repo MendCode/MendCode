@@ -418,3 +418,24 @@ describe("profiles page: what a profile overrides", () => {
     expect(text).not.toContain("┌─ Override ─")
   })
 })
+
+describe("profiles tabs", () => {
+  test("row two holds the tabs in the order What it takes over | Installed | Marketplace, the active one marked", () => {
+    for (const [state, active] of [[createPackagesPageState(), "2 Installed"], [{ selected: 0, overrides: { key: "user:toolbox", selected: 0 } }, "1 What it takes over"]] as const) {
+      const lines = render(state as PackagesPageState, 160, 40)
+      const row = plain(lines)[1]!
+      expect(row.indexOf("1 What it takes over")).toBeLessThan(row.indexOf("2 Installed"))
+      expect(row.indexOf("2 Installed")).toBeLessThan(row.indexOf("3 Marketplace"))
+      const marked = lines[1]!.find((span) => span.bg === "element")
+      expect(marked?.text.trim()).toBe(active)
+    }
+  })
+  test("1 opens the selected profile's overrides, 2 goes back to the list and 3 opens the marketplace", () => {
+    expect(press(createPackagesPageState(), "j", "1").state.overrides).toEqual({ key: "project:quiet", selected: 0 })
+    expect(press(createPackagesPageState(), "1", "2").state.overrides).toBeUndefined()
+    expect(press(createPackagesPageState(), "3").action).toEqual({ type: "marketplace" })
+    const back = press(createPackagesPageState(), "1", "3")
+    expect(back.action).toEqual({ type: "marketplace" })
+    expect(back.state.overrides).toBeUndefined()
+  })
+})
