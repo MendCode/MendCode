@@ -1,6 +1,19 @@
 import type { AppState } from "./context"
 
-export type QueuePolicy = "after-response" | "after-tools" | "immediate"
+/** The daemon's own notes for the agent (a session it started waits for approval): hidden from the queue panel. */
+const INTERNAL_NOTICE = /^Internal notification\. /
+
+/** Whether a queued entry is one of the daemon's internal notes for the agent, which the queue panel never lists. */
+export function internalQueued(entry: { preview: string; notice?: true }): boolean {
+  return entry.notice === true && INTERNAL_NOTICE.test(entry.preview)
+}
+
+/** The queue as the panel shows it: what the user's actions (send now, drop last, edit last) act on. */
+export function userQueue<Entry extends { preview: string; notice?: true }>(queue: readonly Entry[]): Entry[] {
+  return queue.filter((entry) => !internalQueued(entry))
+}
+
+export type QueuePolicy ="after-response" | "after-tools" | "immediate"
 
 /**
  * The queue policy in force for the open session: the saved one (`/queue`), else what its engine can do. A message sent while
