@@ -44,4 +44,6 @@ test("optional daemon helpers stay outside the solo prompt's static chunks", asy
   ]) expect(inputs.has(`packages/daemon/src/${file}.ts`), file).toBe(false)
   // /usage's breakdown views load with the page or the `usage`/`stats` command.
   expect(inputs.has("apps/cli/src/view/usage-breakdown.ts")).toBe(false)
+  // /profiles and what it names of an override (labels, groups, summaries) load with the page.
+  for (const file of ["packages-page", "profile-overrides", "customize-rows"]) expect(inputs.has(`apps/cli/src/view/${file}.ts`), file).toBe(false)
 }, 20_000)

@@ -11,6 +11,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Changed
 
+- `/profiles` → `o` groups what a profile overrides with plain names and before → after values, shows the selected one in a detail and tags the ones you kept `yours`; `k` there keeps your value, and the list's header shows a few keys with `?` for the rest.
 - `/reviews` has a quieter header: a few keys with `?` for the rest, and only what needs attention (running, queued, waiting, failed) next to the tabs; the 24-hour totals stay in the Watches tab.
 - `@mendcode review` on a head that was already reviewed now replies with that review's result (its findings, the earlier ones now fixed and those still open) and suggests `@mendcode review full`, instead of a bare "skipped" with a terminal command.
 
