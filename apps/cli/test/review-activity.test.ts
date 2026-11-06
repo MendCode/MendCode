@@ -48,30 +48,25 @@ const running = (sessionId: string, patch: Partial<ReviewActivityJob> = {}): Rev
 describe("a PR review at work", () => {
   // The view loads with the first activity that has a job (lazy-pages.ts); these cases draw it at once.
   beforeAll(() => loadReviewActivity())
-  test("the watching session shows the steps as tool rows and the activity status with the PR, phase and time", () => {
+  test("the watching session shows one live line: the PR, its phase, the running step's detail and the time", () => {
     const h = harness()
     h.note("Watching Eden-sudo/Symbex-1.")
     h.global({ type: "pr.review.activity", jobs: [running(h.sessionId)] })
-    const screen = h.text().join("\n")
-    expect(screen).toContain("Review Fetching #25 · head 51fe4047")
-    expect(screen).toContain("Review Readers · 32 files · gpt-6-luna")
-    expect(screen).toContain("Review Analysis · 112 files · incremental")
-    expect(screen).toContain("Reviewing Eden-sudo/Symbex-1#25 · analysis")
-    expect(screen).toContain("1m 20s")
-    // The steps sit right over the activity status, finished ones first.
     const rows = h.text()
-    const analysis = rows.findIndex((row) => row.includes("Review Analysis"))
-    const status = rows.findIndex((row) => row.includes("Reviewing Eden-sudo/Symbex-1#25"))
-    expect(rows.findIndex((row) => row.includes("Review Fetching"))).toBeLessThan(analysis)
-    expect(analysis).toBeLessThan(status)
+    const live = rows.filter((row) => row.includes("Reviewing #25"))
+    expect(live).toHaveLength(1)
+    expect(live[0]).toContain("Reviewing #25 · analysis · 112 files · incremental")
+    expect(live[0]).toContain("1m 20s")
+    // Finished steps are not drawn while it runs; the final note says how it went.
+    expect(rows.join("\n")).not.toContain("Fetching #25")
+    expect(rows.join("\n")).not.toContain("Readers")
     if (process.env.CAPTURE_DIR) writeFileSync(`${process.env.CAPTURE_DIR}/watch-session-running-100x30.txt`, rows.join("\n"))
 
-    // The run ends: the rows and the status go, and the final note the daemon records is what stays.
+    // The run ends: the line goes, and the final note the daemon records is what stays.
     h.global({ type: "pr.review.activity", jobs: [] })
     h.note("PR review of Eden-sudo/Symbex-1#25: no findings.")
     const after = h.text().join("\n")
-    expect(after).not.toContain("Review Analysis")
-    expect(after).not.toContain("Reviewing Eden-sudo")
+    expect(after).not.toContain("Reviewing #25")
     expect(after).toContain("PR review of Eden-sudo/Symbex-1#25: no findings.")
     if (process.env.CAPTURE_DIR) writeFileSync(`${process.env.CAPTURE_DIR}/watch-session-done-100x30.txt`, h.text().join("\n"))
   })
@@ -82,8 +77,7 @@ describe("a PR review at work", () => {
     h.global({ type: "pr.review.activity", jobs: [running("ses_watch")] })
     const screen = h.text().join("\n")
     expect(screen).toContain("reviewing Symbex-1#25")
-    expect(screen).not.toContain("Review Analysis")
-    expect(screen).not.toContain("Reviewing Eden-sudo")
+    expect(screen).not.toContain("Reviewing #25")
     if (process.env.CAPTURE_DIR) writeFileSync(`${process.env.CAPTURE_DIR}/other-session-footer-100x30.txt`, h.text().join("\n"))
     h.global({ type: "pr.review.activity", jobs: [] })
     expect(h.text().join("\n")).not.toContain("reviewing Symbex-1#25")
@@ -94,6 +88,9 @@ describe("a PR review at work", () => {
     const two = running("ses_b", { jobId: "prj_2", number: 23, repo: "Eden-sudo/Symbex-1", phase: "corroboration" })
     expect(reviewFooterWord([one, two], "ses_c")).toBe("reviewing Symbex-1#25 +1")
     expect(reviewFooterWord([one], "ses_a")).toBeUndefined()
-    expect(reviewPhase([two])).toBe("Reviewing Eden-sudo/Symbex-1#23 · corroboration...")
+    // While the watching session's own turn holds the activity status, the footer names its review instead.
+    expect(reviewFooterWord([one], "ses_a", true)).toBe("reviewing Symbex-1#25")
+    expect(reviewPhase([two])).toBe("Reviewing #23 · corroboration · 112 files · incremental...")
+    expect(reviewPhase([one, two])).toBe("Reviewing #25 · analysis · 112 files · incremental · +1...")
   })
 })

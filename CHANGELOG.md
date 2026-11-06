@@ -9,6 +9,10 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+### Changed
+
+- A running PR review shows one live line above the prompt with its phase, current step and time, instead of a row per step.
+
 ## v0.0.4 - 2026-11-05
 
 Profiles and areas, threads and side chats, turns that resume after a restart, a PR reviewer that describes, scores and
