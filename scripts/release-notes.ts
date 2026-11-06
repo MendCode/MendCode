@@ -148,7 +148,8 @@ export function releaseNotes(input: NotesInput): string {
   lines.push("## Install", "", "```sh",
     channel === "dev" ? `curl -fsSL ${url}/releases/download/${input.tag}/install.sh | MENDCODE_VERSION=${input.tag} sh` : `curl -fsSL ${url}/releases/latest/download/install.sh | sh${flag}`,
     "```", "")
-  const upgrade = channel === "dev" ? undefined : `mendcode upgrade${channel === "stable" ? "" : ` --channel ${channel}`}`
+  // The channel is always named: a bare `mendcode upgrade` follows the remembered channel, so a beta install would stay on beta.
+  const upgrade = channel === "dev" ? undefined : `mendcode upgrade --channel ${channel}`
   if (upgrade) lines.push(`Already installed: \`${upgrade}\`.${channel === "nightly" ? "" : ` This exact build: \`MENDCODE_VERSION=${input.tag}\` with the same installer.`}`, "")
   // Above the long details, so the page shows it without unfolding anything; it updates an older build first.
   lines.push(...askBlock(input.tag, `${url}/releases/tag/${source}`, upgrade))
