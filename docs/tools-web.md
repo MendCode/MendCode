@@ -1,16 +1,63 @@
 # Web search and image generation
 
-Explicit balanced/full `webfetch` modes: `pdf` extracts up to 100 pages using an already installed `pdftotext`; `github` accepts public `owner/repo` identifiers for shallow scratch clones. Both require execute permission and daemon-only argument arrays with sandbox policy, isolated HOME and no inherited credentials. PDF input is capped at 5 MiB and scratch removed afterward. Commands have a 30-second deadline, 2 MiB output cap and sampled 50 MiB scratch limit (temporary overshoot possible). Successful clones remain in the daemon data directory; hooks, external/file git protocols and credential helpers are disabled. Content is untrusted and never executed. Peer turns cannot call webfetch. Disable resource ports with `/tier webfetch_modes off`. No account, dependency download or video support is added.
+Use `websearch` to find pages, `webfetch` to read them, and `image_gen` to generate or edit images. Search and image generation use the keys or subscription routes described below.
+
+## Fetch PDFs and GitHub repositories
+
+Explicit balanced/full `webfetch` modes provide these inputs:
+
+| Mode | Does |
+|---|---|
+| `pdf` | Extracts up to 100 pages using an already installed `pdftotext`. PDF input is capped at 5 MiB; scratch is removed afterward. |
+| `github` | Accepts public `owner/repo` identifiers for shallow scratch clones. Successful clones remain in the daemon data directory. |
+
+Both require execute permission and daemon-only argument arrays with sandbox policy, isolated HOME and no inherited credentials.
+
+| Command limit | Value |
+|---|---|
+| Deadline | 30-second deadline. |
+| Output | 2 MiB output cap. |
+| Scratch | Sampled 50 MiB scratch limit; temporary overshoot possible. |
+
+Hooks, external/file git protocols and credential helpers are disabled. Content is untrusted and never executed.
+
+- Peer turns cannot call webfetch.
+- Disable resource ports with `/tier webfetch_modes off`.
+- No account, dependency download or video support is added.
+
+## Choose search and image routes
 
 Web search is key-gated. Claude Code and ACP agents get both tools too, as `mcp__mendcode__webfetch` and `mcp__mendcode__websearch`, for the sites their own tools refuse ([Claude Code](claude-code.md)); Codex runs its own live web search. Image generation preserves key-gated API calls and adds independently configured subscription generation and captions.
 
-With no search key and a ChatGPT login (MendCode's own or the Codex CLI's), `websearch` uses the subscription's search endpoint, the one the Codex CLI calls for its web tool; it works with any model of the session, because the tool runs in MendCode, not in the model's provider. The subscription's hosted `web_search` (a tool the provider runs inside a response) is offered only when no `websearch` tool is registered: on 2026-10-08 it answered every request with a server error while the search endpoint kept working. `MENDCODE_WEB_SEARCH=0` turns both off and `MENDCODE_IMAGE_GEN=0` the hosted `image_generation`. `websearch` and `image_gen` are ordinary function tools. The latter selects its own generation and caption models, independent of the active chat model.
+### Search without an API key
 
-The daemon reads the keys from its environment when it starts (so a key added later needs a daemon restart to register the tool). Keys are sent only to the provider's own host, never written to an event, log or error message: a provider that echoes the key in an error body gets it replaced with `***`.
+With no search key and a ChatGPT login (MendCode's own or the Codex CLI's), `websearch` uses the subscription's search endpoint, the one the Codex CLI calls for its web tool.
+
+This works with any session model because the tool runs in MendCode, not in the model's provider.
+
+The subscription's hosted `web_search`, which the provider runs inside a response, is offered only when no `websearch` tool is registered. On 2026-10-08 it answered every request with a server error while the search endpoint kept working.
+
+| Variable | Turns off |
+|---|---|
+| `MENDCODE_WEB_SEARCH=0` | Both search routes. |
+| `MENDCODE_IMAGE_GEN=0` | Hosted `image_generation`. |
+
+`websearch` and `image_gen` are ordinary function tools. The latter selects its own generation and caption models, independent of the active chat model.
+
+### Key handling
+
+The daemon reads environment keys when it starts. A key added later needs a daemon restart to register the tool.
+
+Keys go only to the provider's own host, never to an event, log or error message. If a provider echoes the key in an error body, it is replaced with `***`.
 
 ## websearch (permission: read)
 
-Arguments: `query` (required, at most 400 characters) and `numResults` (1 to 10, default 5). Returns a numbered list of title, link, date when the provider gives one, and a snippet of at most 400 characters. The whole result is capped like every tool output.
+| Argument | Requirement |
+|---|---|
+| `query` | Required, at most 400 characters. |
+| `numResults` | 1 to 10, default 5. |
+
+The result is a numbered list of title, link, date when the provider gives one, and a snippet of at most 400 characters. The whole result is capped like every tool output.
 
 The first configured provider wins:
 
@@ -27,9 +74,31 @@ Timeout 25 s, cancelled with the turn. Use `webfetch` to read a result page.
 
 ## image_gen (permission: write)
 
-Arguments: `prompt` (required; the tool description gives the model a short guide: scene or purpose, subject, details, constraints; exact text in quotes with font and placement; for edits, what to change and what to keep), `transparent_background` (a transparent PNG for cutouts and icons), `size` (`1024x1024` default, `1536x1024`, `1024x1536`), `n` (1 or 2), `path` (optional), `referenced_image_paths` (up to five absolute local paths), or `num_last_images_to_include` (1–5 distinct recent session images). Never combine reference selectors; omit both, or use recent count 0, for a new image. Missing references fail before a provider call. References are capped at 50 MB each; local files pass read and external-directory permission checks before being read or transmitted, and their identity is bound to the approval.
+| Argument | Use |
+|---|---|
+| `prompt` | Required. The tool description guides the model through scene or purpose, subject, details and constraints; exact text in quotes with font and placement; for edits, what to change and what to keep. |
+| `transparent_background` | A transparent PNG for cutouts and icons. |
+| `size` | `1024x1024` default, `1536x1024`, `1024x1536`. |
+| `n` | 1 or 2. |
+| `path` | Optional output path. |
+| `referenced_image_paths` | Up to five absolute local paths. |
+| `num_last_images_to_include` | 1–5 distinct recent session images. |
 
-With the setting absent, files are saved inside the project, by default `generated/<prompt-slug>-<n>.png`. The default name never overwrites: it takes the first free number. An explicit `path` is resolved against the project and refused, before any paid call, when it lies outside it, also through a symlink. With `n=2` an explicit path gets `-1` and `-2` before the extension. JPEG gets `.jpg`. Legacy API calls accept PNG/JPEG; configured adapters also accept WebP/GIF.
+Never combine reference selectors. For a new image, omit both or use recent count 0.
+
+- Missing references fail before a provider call.
+- References are capped at 50 MB each.
+- Local files pass read and external-directory permission checks before being read or transmitted; their identity is bound to the approval.
+
+### Save generated images
+
+With the setting absent, files are saved inside the project, by default `generated/<prompt-slug>-<n>.png`. The default name never overwrites: it takes the first free number.
+
+An explicit `path` is resolved against the project. A path outside it, including through a symlink, is refused before any paid call.
+
+- With `n=2`, an explicit path gets `-1` and `-2` before the extension.
+- JPEG gets `.jpg`.
+- Legacy API calls accept PNG/JPEG; configured adapters also accept WebP/GIF.
 
 The result carries the saved paths as text and the images as `ToolResult.images` (at most two, each at most 5 MB; a larger file is saved and reported as too large to show).
 
@@ -44,7 +113,25 @@ Timeout 180 s. If you have both keys and want OpenAI, unset `OPENROUTER_API_KEY`
 
 ### Independent configuration (B50.1)
 
-Set `image_generation` through `settings.set` or the typed client `imageGeneration(settings)` helper. `imageGeneration()` reads it; `imageGeneration(null)` clears it. Settings apply at the next turn. In a native session subscription generation requires explicit `enabled: true` (the ChatGPT models have the hosted `image_generation`); in a [Claude Code](claude-code.md) session an absent `enabled` counts as on while a ChatGPT login or a saved OpenAI provider key exists, since Claude Code has no image tool of its own. Subscription calls use MendCode's own ChatGPT login first, then the Codex CLI's. Captions require explicit `caption.enabled: true`. Existing API-key selection remains when the setting is absent; `enabled: false` hides the tool entirely.
+Set `image_generation` through `settings.set` or the typed client helper. Settings apply at the next turn.
+
+| Helper | Does |
+|---|---|
+| `imageGeneration(settings)` | Set the configuration. |
+| `imageGeneration()` | Read it. |
+| `imageGeneration(null)` | Clear it. |
+
+### Enable generation and captions
+
+| Session or setting | Behavior |
+|---|---|
+| Native session | Subscription generation requires explicit `enabled: true`; ChatGPT models have hosted `image_generation`. |
+| [Claude Code](claude-code.md) session | An absent `enabled` counts as on while a ChatGPT login or a saved OpenAI provider key exists, since Claude Code has no image tool of its own. |
+| Setting absent | Existing API-key selection remains. |
+| `enabled: false` | Hide the tool entirely. |
+| Captions | Require explicit `caption.enabled: true`. |
+
+Subscription calls use MendCode's own ChatGPT login first, then the Codex CLI's.
 
 ```json
 {
@@ -59,27 +146,136 @@ Set `image_generation` through `settings.set` or the typed client `imageGenerati
 }
 ```
 
-`gpt-image-2.6-flare` is the faster variant; set it as `model`. A model you configure is never swapped. `options` go to the request as they are: `quality` (`low`, `medium`, `high`, `xhigh`, `max`, `auto`), `complexity` (`low`, `medium`, `high`; 2.6), `background`, `output_format`, `output_compression`, `moderation` and any other field the Images API documents. `size` stays one of the three listed sizes unless `options.size` sets another (both edges a multiple of 16, ratio at most 3:1).
+### Models and options
 
-Model refs accept `provider:model` and v1 `provider/model`. `auto` selects Codex OAuth for OpenAI without API credentials, OpenAI-compatible for OpenAI with credentials, or OpenRouter's Image API for OpenRouter. Other providers require explicit `openai-compatible`. Explicit `codex-oauth` keeps using the subscription even when API keys exist. With no image model/key, enabled subscription generation defaults to `openai:gpt-image-2.6-sunburst`; configured API providers retain their image model defaults.
+`gpt-image-2.6-flare` is the faster variant; set it as `model`. A model you configure is never swapped. Model refs accept `provider:model` and v1 `provider/model`.
 
-Codex credentials are read from its login on each call without refreshing or rewriting that file. Its token can go only to the official ChatGPT backend or an explicitly configured loopback adapter; redirects are refused. API adapters use saved provider credentials or the existing environment keys. `base_url` overrides the image base; OpenRouter uses `/images`, Codex uses `/images/generations` or `/images/edits`, compatible edits use multipart `image[]`. `options` holds bounded provider generation parameters, never credentials, routing or references. `timeout_ms` is 1–600000.
+`options` go to the request as they are:
 
-Configured generation saves originals under `<dataDir>/generated_images`; an explicit `path` saves inside the project. PNG/JPEG/WebP/GIF bytes are validated, output/downloads capped at 50 MB, and downloads never receive credentials. Default filenames never overwrite. Full TUI results use the shared bordered panel with saved paths, generation model and the actual optional caption; there is no inline raster preview.
+| Option | Values or behavior |
+|---|---|
+| `quality` | `low`, `medium`, `high`, `xhigh`, `max`, `auto` |
+| `complexity` | `low`, `medium`, `high`; 2.6 |
+| `background`, `output_format`, `output_compression`, `moderation` | As documented by the Images API, along with any other field it documents. |
+| `options.size` | Override the three listed `size` values; both edges must be a multiple of 16, ratio at most 3:1. Otherwise `size` stays one of the three listed sizes. |
 
-Caption calls use the independently selected native vision provider without tools or hosted tools. A model explicitly declared text-only is refused. `caption.prompt` overrides the description request; `max_chars` caps persisted text (1–10000). Optional failure reports caption unavailable and retains the image; `required: true` fails after saving the artifact and returns its path. Disabled captions make no model call. Local fake services cover these contracts; account access and provider model availability still require live service verification.
+### Adapter selection
+
+| Selection | Adapter |
+|---|---|
+| `auto`, OpenAI without API credentials | Codex OAuth. |
+| `auto`, OpenAI with credentials | OpenAI-compatible. |
+| `auto`, OpenRouter | OpenRouter's Image API. |
+| Other providers | Require explicit `openai-compatible`. |
+| Explicit `codex-oauth` | Keep using the subscription even when API keys exist. |
+
+With no image model/key, enabled subscription generation defaults to `openai:gpt-image-2.6-sunburst`. Configured API providers retain their image model defaults.
+
+### Credentials and request boundaries
+
+Codex credentials are read from its login on each call without refreshing or rewriting that file. Its token can go only to the official ChatGPT backend or an explicitly configured loopback adapter; redirects are refused.
+
+API adapters use saved provider credentials or the existing environment keys.
+
+| Request setting | Behavior |
+|---|---|
+| `base_url` | Overrides the image base. |
+| OpenRouter | Uses `/images`. |
+| Codex | Uses `/images/generations` or `/images/edits`. |
+| Compatible edits | Use multipart `image[]`. |
+| `options` | Bounded provider generation parameters, never credentials, routing or references. |
+| `timeout_ms` | 1–600000. |
+
+### Configured output
+
+Configured generation saves originals under `<dataDir>/generated_images`; an explicit `path` saves inside the project. Default filenames never overwrite.
+
+- PNG/JPEG/WebP/GIF bytes are validated.
+- Output/downloads are capped at 50 MB.
+- Downloads never receive credentials.
+
+Full TUI results use the shared bordered panel with saved paths, generation model and the actual optional caption. There is no inline raster preview.
+
+### Captions
+
+Caption calls use the independently selected native vision provider without tools or hosted tools. A model explicitly declared text-only is refused.
+
+| Caption setting or outcome | Behavior |
+|---|---|
+| `caption.prompt` | Override the description request. |
+| `max_chars` | Cap persisted text, 1–10000. |
+| Optional failure | Report caption unavailable and retain the image. |
+| `required: true` | Fail after saving the artifact and return its path. |
+| Disabled captions | Make no model call. |
+
+Local fake services cover these contracts. Account access and provider model availability still require live service verification.
 
 Frames: `bun scripts/render-frames.ts .agents-frames/B50.1 100x30 180x50 --b50-1`.
 
 ### While an image is generated
 
-While `image_gen` or the native engine's hosted `image_generation` runs, its card (in every view, minimal too) is v1's wait canvas: `Generating image` and the prompt over a bordered ASCII field, with the model and requested size under it (`image_gen` prints `model …` and `size …` before its request; the hosted tool knows neither, so it says `default image model` and `size auto`). A call still waiting for its approval keeps the plain header. When the call ends, the finished card replaces the canvas. Under a finished picture, in every view, one row says what the file is and keeps v1's buttons: `PNG · 1.2 MB  open  folder  copy path`. `open` shows the image in the system's viewer and `folder` shows it in its folder (Finder, Explorer; the folder on Linux), both through the daemon's `image.open` (local clients only; the file must be a regular file whose bytes are a PNG, JPEG, GIF or WebP; a stored blob, named by its hash, opens through a copy with an extension in the system's temporary folder). `copy path` puts the path on the clipboard. The path is `image_gen`'s saved file, the native hosted tool's stored blob, or the file a Codex session saved; a failed call has no row, and a narrow screen drops the buttons that do not fit. A Codex session's own image generation (Codex saves the file itself) gets the same card: the revised prompt, the saved path and the picture, stored like a native one; a failed or blocked one is an error card with Codex's reason.
+While `image_gen` or the native engine's hosted `image_generation` runs, its card shows v1's wait canvas in every view, minimal too. It shows `Generating image` and the prompt over a bordered ASCII field, with the model and requested size below.
 
-The canvas has the shape and the cells of the picture it waits for, and the finished picture is drawn in the same box, so nothing jumps sideways or changes size when it arrives (the finished card's `■ 1 image` line puts it one row lower). With room for it, `1024x1024` is 48 × 24 cells, `1024x1536` (portrait) 32 × 24 and `1536x1024` (landscape) 72 × 24; any other `WxH`, or an aspect such as `16:9`, keeps its shape inside 72 × 24. `auto`, and a call that has not said its size, is square until a size arrives. Pixels become cells at the terminal's measured cell size (8 × 16 px when it does not report one). A narrow transcript (a small terminal, the sidebar open) or a short screen shrinks the box, keeping its shape: it never takes more than the screen's rows less 8 (the card's header, the composer and the footer), so an 80 × 30 terminal draws a square at 44 × 22.
+| Tool | Model and size rows |
+|---|---|
+| `image_gen` | Prints `model …` and `size …` before its request. |
+| Hosted tool | Knows neither, so says `default image model` and `size auto`. |
+
+A call waiting for approval keeps the plain header. When the call ends, the finished card replaces the canvas.
+
+### Open a finished picture
+
+In every view, a row under the finished picture describes the file and keeps v1's buttons: `PNG · 1.2 MB  open  folder  copy path`.
+
+| Button | Does |
+|---|---|
+| `open` | Show the image in the system's viewer. |
+| `folder` | Show it in its folder: Finder, Explorer, or the folder on Linux. |
+| `copy path` | Put the path on the clipboard. |
+
+`open` and `folder` use the daemon's `image.open`:
+
+- Local clients only.
+- The file must be a regular file whose bytes are a PNG, JPEG, GIF or WebP.
+- A stored blob, named by its hash, opens through a copy with an extension in the system's temporary folder.
+
+The path is `image_gen`'s saved file, the native hosted tool's stored blob, or the file a Codex session saved. A failed call has no row; a narrow screen drops buttons that do not fit.
+
+Codex's own image generation saves the file itself and gets the same card: revised prompt, saved path and picture, stored like a native one. A failed or blocked call is an error card with Codex's reason.
+
+### Canvas size
+
+The canvas has the shape and cells of the picture it waits for. The finished picture uses the same box, so nothing jumps sideways or changes size; the finished card's `■ 1 image` line puts it one row lower.
+
+With room available:
+
+| Requested size | Canvas cells |
+|---|---|
+| `1024x1024` | 48 × 24 |
+| `1024x1536` (portrait) | 32 × 24 |
+| `1536x1024` (landscape) | 72 × 24 |
+| Other `WxH`, or an aspect such as `16:9` | Keeps its shape inside 72 × 24. |
+| `auto`, or no size yet | Square until a size arrives. |
+
+Pixels become cells at the terminal's measured cell size, or 8 × 16 px when it reports none.
+
+A narrow transcript (small terminal or sidebar open) or a short screen shrinks the box while keeping its shape. It never takes more than the screen's rows less 8 for the card's header, composer and footer. An 80 × 30 terminal draws a square at 44 × 22.
+
+### Animation and presets
 
 The field loops one of the built-in presets (`drops` by default, `cycle`, `constellation`, `orbit`, `pulse`, `scanner`) or your own frames, one frame per 280 ms. It moves with the busy pulse the app already runs while a turn works, so it adds no timer and stops when the call ends. Reduced motion (`MENDCODE_REDUCED_MOTION=1`, the setting, or screen-reader mode) and `imageWait: "static"` hold the first frame.
 
-`/customize` → Image generation sets the customize keys `imageWait` (`animated`, `static`), `imageWaitPreset`, `imageWaitSpeed` (ms per frame, 80–5000), `imageWaitColor` (`mixed` accents the moving marks, `accent`, `muted`) and `imageWaitMeta` (the model and size rows). Two more live in `<dataDir>/tui/profile.json`:
+Use `/customize` → Image generation for these customize keys:
+
+| Key | Values or effect |
+|---|---|
+| `imageWait` | `animated`, `static` |
+| `imageWaitPreset` | Choose a preset. |
+| `imageWaitSpeed` | ms per frame, 80–5000. |
+| `imageWaitColor` | `mixed` accents the moving marks; also `accent`, `muted`. |
+| `imageWaitMeta` | The model and size rows. |
+
+Two more live in `<dataDir>/tui/profile.json`:
 
 ```json
 {
@@ -92,7 +288,29 @@ The field loops one of the built-in presets (`drops` by default, `cycle`, `const
 }
 ```
 
-A user preset is picked by its name; it has `frames` (each a string or a list of lines) or one `static` frame, and `fit` (`contain`, or `crop` to keep the middle rows) and `align` (`left`, `center`, `right`) for frames of another size than the field. At most 16 presets, 64 frames each, 48 lines of 160 single-cell characters; escapes and controls are dropped. `imageWaitCanvas` (the values above are the defaults) bounds the box of a generated picture, waiting or finished: at most `maxWidth` × `maxHeight` cells; the canvas alone grows to `minWidth` × `minHeight` where the room allows, so a very long or tall shape stays legible; `heightRatio` is the height over the width assumed for `auto` (1, square); `paddingX` and `paddingY` are the field's margins inside the border. A short box gives up the padding first, then the model row, then the size row. A profile saved with the earlier fixed-box defaults (`maxWidth` 52, `maxHeight` 16, `heightRatio` 0.45, nothing changed) gets these.
+Pick a user preset by its name:
+
+| Preset field | Use |
+|---|---|
+| `frames` | Each frame is a string or a list of lines. |
+| `static` | One static frame instead. |
+| `fit` | `contain`, or `crop` to keep the middle rows, for frames sized differently from the field. |
+| `align` | `left`, `center`, `right`, for frames sized differently from the field. |
+
+Limits are 16 presets, 64 frames each, 48 lines of 160 single-cell characters. Escapes and controls are dropped.
+
+### Canvas settings
+
+`imageWaitCanvas` bounds the box of a generated picture, waiting or finished. The values in the example above are the defaults.
+
+| Field | Effect |
+|---|---|
+| `maxWidth`, `maxHeight` | At most `maxWidth` × `maxHeight` cells. |
+| `minWidth`, `minHeight` | The canvas alone grows to `minWidth` × `minHeight` where room allows, so very long or tall shapes stay legible. |
+| `heightRatio` | Height over width assumed for `auto`: 1, square. |
+| `paddingX`, `paddingY` | Field margins inside the border. |
+
+A short box gives up padding first, then the model row, then the size row. A profile saved with unchanged earlier fixed-box defaults (`maxWidth` 52, `maxHeight` 16, `heightRatio` 0.45) gets these defaults.
 
 ## Limits
 
@@ -103,7 +321,7 @@ A user preset is picked by its name; it has `frames` (each a string or a list of
 
 The native engine can run `webfetch` as a persisted read job after explicit
 `experimental.async_tools` opt-in. See [async tools and questions](async-tools.md).
-# Explicit routes on demand
+## Explicit routes on demand
 
 `/pet new` uses the same image API abstraction as `image_gen`, including OpenAI-key and Codex-subscription routes, but only after a local full-tier plan and explicit paid-call confirmation. It forces transparent PNG, medium quality and a fixed 1024×1024 provider canvas; post-processing stays local. See [custom pet generation](customize.md#experimental-custom-pet-generator) for estimates, budget reservations, unsupported output and the unverified owner-only real-provider checklist.
 

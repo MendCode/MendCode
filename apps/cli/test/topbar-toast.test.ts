@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import { overlayLines } from "../src/view/overlay"
-import { renderToast, toastPosition } from "../src/view/toast"
+import { DETAILS_HINT, renderToast, renderToastRow, toastCut, toastPosition } from "../src/view/toast"
+import { glyphSet } from "../src/ui/theme"
 import { renderTopbar, topbarAnimates, truncateMiddle } from "../src/view/topbar"
 import { textWidth } from "../src/view/wrap"
 import type { Line } from "../src/ui/theme"
@@ -75,23 +76,38 @@ describe("toast", () => {
     await h.type("/sidebar preset full\r")
     expect(h.text().join("\n")).toContain("Right bar presets need")
   })
-  test("both borders in the variant color on the panel fill, bold title, wrapped message, all rows equal width", () => {
-    const rows = renderToast({ variant: "success", title: "Memory saved", message: "2 memories saved for this project; review them in /memory when you have a minute." }, 120)
-    const widths = rows.map((row) => textWidth(text(row)))
-    expect(new Set(widths).size).toBe(1)
-    expect(widths[0]).toBe(60)
-    expect(rows.every((row) => row[0]!.text === "┃" && row[0]!.fg === "success" && row.at(-1)!.text === "┃")).toBe(true)
-    expect(rows.every((row) => row.every((span) => span.bg === "panel"))).toBe(true)
-    expect(rows[1]![1]).toMatchObject({ bold: true })
-    expect(text(rows[1]!)).toContain("Memory saved")
-    expect(rows.map(text).join("\n")).toContain("review them in")
-    expect(rows.map(text).join("\n")).toContain("/memory when you have a minute.")
+  test("each severity has its own mark and theme colour; no border on either side, one row on the panel fill", () => {
+    const g = glyphSet("unicode")
+    for (const [variant, mark] of [["success", "✓"], ["info", "•"], ["warning", "!"], ["error", "✗"]] as const) {
+      const rows = renderToast({ variant, title: "Memory saved", message: "project · Use bun" }, 120, g)
+      expect(rows).toHaveLength(1)
+      expect(rows[0]!.find((span) => span.text.trim() === mark)).toMatchObject({ fg: variant, bold: true })
+      expect(rows[0]!.find((span) => span.text === "Memory saved")).toMatchObject({ fg: variant, bold: true })
+      expect(rows[0]!.every((span) => span.bg === "panel")).toBe(true)
+      expect(text(rows[0]!)).not.toMatch(/[┃│]/)
+    }
+    expect(text(renderToastRow({ variant: "error", message: "no" }, 40, 2, glyphSet("ascii")))).toBe("  x no")
   })
 
-  test("narrow screens shrink it; very narrow screens show nothing; long messages are capped", () => {
-    expect(textWidth(text(renderToast({ variant: "info", message: "hi" }, 40)[0]!))).toBe(34)
-    expect(renderToast({ variant: "info", message: "hi" }, 16)).toEqual([])
-    expect(renderToast({ variant: "error", message: "x ".repeat(400) }, 120).length).toBeLessThanOrEqual(8)
+  test("a long message is cut on its one row and the hint stays whole; the details hint asks for F4 only when something is hidden", () => {
+    const long = { variant: "error" as const, message: "settings.set failed: ".repeat(12), hint: "F4 details" }
+    const row = renderToastRow(long, 80, 2)
+    expect(textWidth(text(row))).toBeLessThanOrEqual(80)
+    expect(text(row)).toContain("…")
+    expect(text(row)).toEndWith(" · F4 details")
+    expect(row.at(-1)).toMatchObject({ fg: "muted" })
+    expect(toastCut({ variant: "info", message: "saved" }, 80)).toBe(false)
+    expect(toastCut({ variant: "info", message: "x".repeat(90) }, 80)).toBe(true)
+    // A message of several lines is one row too: its lines joined, the rest behind F4.
+    expect(toastCut({ variant: "info", message: "extra directories\n/a" }, 80)).toBe(true)
+    expect(text(renderToastRow({ variant: "info", message: "extra directories\n/a\n/b" }, 80, 2))).toContain("extra directories · /a · /b")
+    expect(DETAILS_HINT).toBe("F4 details")
+  })
+
+  test("on a page it is as wide as its text, at most 100 cells; very narrow screens show nothing", () => {
+    expect(textWidth(text(renderToast({ variant: "info", message: "hi" }, 120)[0]!))).toBe(6)
+    expect(textWidth(text(renderToast({ variant: "error", message: "x ".repeat(400) }, 200)[0]!))).toBe(100)
+    expect(renderToast({ variant: "info", message: "hi" }, 15)).toEqual([])
     expect(toastPosition(60, 120)).toEqual({ row: 2, col: 58 })
   })
 })

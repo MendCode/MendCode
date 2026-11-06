@@ -5,8 +5,15 @@ different from [extensions](extensions.md) (TypeScript modules in the daemon); b
 
 ## Configuring
 
-A layer's `hooks.json` lists commands per event. Layers are the same as for extensions and custom tools: the data dir
-(`hooks.json`, your own hooks), packages, and the project's `.mendcode/hooks.json`.
+Add commands to a layer's `hooks.json`, grouped by event. The layers are the same as for extensions and custom tools:
+
+| Layer | Configuration |
+|---|---|
+| Data dir | `hooks.json`, your own hooks. |
+| Packages | Package hooks. |
+| Project | The project's `.mendcode/hooks.json`. |
+
+For example:
 
 ```json
 {
@@ -19,16 +26,20 @@ A layer's `hooks.json` lists commands per event. Layers are the same as for exte
 }
 ```
 
-- `command` is a string (run by `/bin/sh -c`, or `cmd /c` on Windows) or an argv array (`./x` is relative to the folder
-  holding `hooks.json`). The working directory is the session's project.
-- `timeout` is in seconds (default 15, at most 120). A timed-out hook is killed and ignored.
-- `matcher` (tool events, `SessionStart`, `Notification`, `PreCompact` and `PostCompact`) is a case-insensitive regular
-  expression tested against the whole tool name (`bash`, `write`, `edit`, `read`, MCP tools as named in the tool list),
-  the session source, the notification type or the compaction trigger; empty or `*` matches everything.
-- `type` is `command` (the default), `http` or `prompt`; see [Hook types](#hook-types).
-- Event names are case-insensitive. A bad file, unknown event or invalid matcher is listed as a problem in `/hooks`; the
-  rest still loads. Hooks of one event run in order, one at a time, and the first one that blocks ends the chain.
-- Files are re-read at the start of every turn (and at most every 5 s otherwise).
+| Field | Value and behavior |
+|---|---|
+| `command` | A string run by `/bin/sh -c` (`cmd /c` on Windows), or an argv array. `./x` is relative to the folder holding `hooks.json`; the working directory is the session's project. |
+| `timeout` | Seconds; default 15, at most 120 seconds. A timed-out hook is killed and ignored. |
+| `matcher` | A case-insensitive regular expression for tool events, `SessionStart`, `Notification`, `PreCompact` and `PostCompact`. Empty or `*` matches everything. |
+| `type` | `command` (the default), `http` or `prompt`; see [Hook types](#hook-types). |
+
+The matcher is tested against the whole tool name (`bash`, `write`, `edit`, `read`, MCP tools as named in the tool list), the session source, the notification type or the compaction trigger.
+
+Event names are case-insensitive. A bad file, unknown event or invalid matcher is listed as a problem in `/hooks`; the rest still loads.
+
+Hooks of one event run in order, one at a time. The first one that blocks ends the chain.
+
+Files are re-read at the start of every turn, and at most every 5 s otherwise.
 
 ## Events
 
@@ -52,23 +63,47 @@ own loops). Prompt, `Stop`, `Notification`, `SubagentStop` and session events wo
 
 ## Hook types
 
-- **`command`**: runs a program, as above.
-- **`http`**: `{ "type": "http", "url": "https://hooks.example.com/mendcode", "headers": { "x-team": "core" }, "timeout": 10 }`
-  POSTs the same JSON as `command` hooks get on stdin to the URL. A 2xx reply continues, or blocks with the same JSON
-  decision as above; any other status, a network error or a timeout is logged and ignored, and redirects are not followed.
-  **Off by default**: an http hook runs only when its whole URL matches a pattern of the `allowedHttpHookUrls` setting
-  (`*` spans any characters; unset or empty means none run), on top of the project trust for project-layer hooks. The
-  URL shown in `/hooks` and in the log has no query or credentials, and headers are sent as written (no variables).
-- **`prompt`**: `{ "type": "prompt", "prompt": "Does this command look safe? $ARGUMENTS" }` asks the model to judge the
-  event; `$ARGUMENTS` (or the end of the prompt when absent) is the event JSON, masked and cut at 8 000 characters. The
-  model answers `{"ok": false, "reason": "..."}` to block; an unreadable answer, an error or a missing model is a failed
-  run and never blocks. It uses the budgeted completion of the native engine (the default model, counted in budgets), so
-  each run costs a model call; put it on rare events and a precise matcher.
+### Run a command
 
-Exit 0 continues. Any other exit code, a spawn failure or a timeout is recorded and ignored (the call goes ahead): a hook
-that must gate something has to exit 2. Stdout of an exit-0 hook may be JSON, `{"decision":"block","reason":"..."}`, or
-Claude Code's `hookSpecificOutput.permissionDecision: "deny"`, which block like exit 2. Nothing a hook prints can approve a
-call or skip a permission prompt, and hooks cannot rewrite tool arguments.
+The `command` type runs a program as described under Configuring.
+
+### Send an HTTP request
+
+An `http` hook can use this configuration:
+
+`{ "type": "http", "url": "https://hooks.example.com/mendcode", "headers": { "x-team": "core" }, "timeout": 10 }`
+
+It POSTs the same JSON that `command` hooks get on stdin to the URL.
+
+| Response | Result |
+|---|---|
+| 2xx | Continue, or block with the same JSON decision described below. |
+| Any other status, network error or timeout | Log and ignore. |
+| Redirect | Not followed. |
+
+**Note:** HTTP hooks are off by default. A hook runs only when its whole URL matches a pattern of `allowedHttpHookUrls`, on top of project trust for project-layer hooks.
+
+In that setting, `*` spans any characters; unset or empty means none run. The URL shown in `/hooks` and in the log has no query or credentials. Headers are sent as written, with no variables.
+
+### Ask a model
+
+A `prompt` hook asks the model to judge the event:
+
+`{ "type": "prompt", "prompt": "Does this command look safe? $ARGUMENTS" }`
+
+`$ARGUMENTS` is the event JSON, masked and cut at 8 000 characters. When absent, the JSON goes at the end of the prompt.
+
+The model answers `{"ok": false, "reason": "..."}` to block. An unreadable answer, an error or a missing model is a failed run and never blocks.
+
+Each run costs a model call: it uses the native engine's budgeted completion with the default model, counted in budgets. Use rare events and a precise matcher.
+
+### Continue or block
+
+Exit 0 continues. A hook that must gate something has to exit 2; any other exit code, a spawn failure or a timeout is recorded and ignored, so the call goes ahead.
+
+Stdout of an exit-0 hook may be JSON, `{"decision":"block","reason":"..."}`, or Claude Code's `hookSpecificOutput.permissionDecision: "deny"`. These block like exit 2.
+
+Nothing a hook prints can approve a call or skip a permission prompt. Hooks cannot rewrite tool arguments.
 
 ## What a hook receives
 
@@ -79,47 +114,89 @@ One JSON object on stdin:
   "turn_id": "turn_…", "tool_name": "bash", "tool_use_id": "call_…", "tool_input": { "command": "ls" } }
 ```
 
-`PostToolUse` adds `tool_response: { output, is_error }` (output cut at 32 KB); `PostToolUseFailure` has `error`;
-`PermissionRequest` has `tool_name`, `tool_input` and `detail`; `Notification` has `notification_type`, `title` and
-`message`; `PreCompact` has `trigger` and `tokens`; `PostCompact` has `trigger` and `summary`; `SubagentStop` has
-`agent_session_id`; `UserPromptSubmit` has `prompt`; `Stop` has
-`stop_hook_active`; `SessionStart` has `source` and `parent_session_id`; `SessionEnd` has `reason`. Environment:
-`MENDCODE_PROJECT_DIR` (also `CLAUDE_PROJECT_DIR`), `MENDCODE_HOOK_DIR` (the folder of the `hooks.json`),
-`MENDCODE_HOOK_EVENT`, `MENDCODE_SESSION_ID`.
+| Event | Additional fields |
+|---|---|
+| `PostToolUse` | `tool_response: { output, is_error }`; output cut at 32 KB. |
+| `PostToolUseFailure` | `error` |
+| `PermissionRequest` | `tool_name`, `tool_input`, `detail` |
+| `Notification` | `notification_type`, `title`, `message` |
+| `PreCompact` | `trigger`, `tokens` |
+| `PostCompact` | `trigger`, `summary` |
+| `SubagentStop` | `agent_session_id` |
+| `UserPromptSubmit` | `prompt` |
+| `Stop` | `stop_hook_active` |
+| `SessionStart` | `source`, `parent_session_id` |
+| `SessionEnd` | `reason` |
+
+| Environment variable | Value |
+|---|---|
+| `MENDCODE_PROJECT_DIR`, also `CLAUDE_PROJECT_DIR` | Project directory. |
+| `MENDCODE_HOOK_DIR` | The folder of the `hooks.json`. |
+| `MENDCODE_HOOK_EVENT` | Hook event. |
+| `MENDCODE_SESSION_ID` | Session ID. |
 
 ## Security
 
-- Hooks run commands as you. **User-layer hooks run as configured. Project-layer hooks (the repository's `.mendcode/`
-  and its packages) run only after you trust the directory**, with the same trust as project tools and extensions
-  (`trustedToolDirs`). Untrusted project hooks are listed in `/hooks` with `not trusted` and never started. Trust is per
-  canonical directory, so a worktree is a different directory.
-- Project hooks do not inherit environment variables that look like credentials (names containing `API_KEY`, `TOKEN`,
-  `SECRET`, `PASSWORD`, `CREDENTIAL`, `PRIVATE_KEY`). User hooks get the daemon's environment.
-- The configuration is read from the daemon machine's own folders. Nothing a client, remote peer or MCP server sends can
-  add a hook, and `hooks.list` refuses remote connections (it is not a read-only remote command).
-- Tool arguments and results reach hooks the way they reach the model: secrets from the secrets store are markers, and
-  the whole stdin payload, stdout and stderr are masked again before they are used or shown. Hook output is capped (64 KB
-  captured; feedback to the model 4 000 characters), and every run has a timeout and is killed with its process group.
-- A failed or timed-out hook logs one line (event, source, outcome, exit code, program name) and never what it printed.
-- `http` hooks reach only URLs you list in `allowedHttpHookUrls`, never follow redirects and log no URL; `prompt` hooks
-  send the masked event to your configured model. `PermissionRequest` hooks can only refuse.
-- `MENDCODE_HOOKS=0` starts the daemon with all shell hooks off.
+**Warning:** Hooks run commands as you. User-layer hooks run as configured; project-layer hooks run only after you trust the directory.
+
+### Project trust and environment
+
+Project-layer hooks include the repository's `.mendcode/` and its packages. They use the same trust as project tools and extensions (`trustedToolDirs`).
+
+Untrusted project hooks appear in `/hooks` with `not trusted` and never start. Trust is per canonical directory, so a worktree is a different directory.
+
+Project hooks do not inherit environment variables with credential-like names containing `API_KEY`, `TOKEN`, `SECRET`, `PASSWORD`, `CREDENTIAL` or `PRIVATE_KEY`. User hooks get the daemon's environment.
+
+Configuration comes from the daemon machine's own folders. Nothing a client, remote peer or MCP server sends can add a hook.
+
+`hooks.list` refuses remote connections; it is not a read-only remote command.
+
+### Payloads, output and failures
+
+Tool arguments and results reach hooks the way they reach the model: secrets from the secrets store are markers. The whole stdin payload, stdout and stderr are masked again before use or display.
+
+| Protection | Limit or behavior |
+|---|---|
+| Captured hook output | 64 KB |
+| Feedback to the model | 4 000 characters |
+| Every run | Has a timeout and is killed with its process group. |
+| Failed or timed-out hook | Logs one line: event, source, outcome, exit code, program name; never what it printed. |
+
+`http` hooks reach only URLs you list in `allowedHttpHookUrls`, never follow redirects and log no URL. `prompt` hooks send the masked event to your configured model. `PermissionRequest` hooks can only refuse.
+
+Start the daemon with `MENDCODE_HOOKS=0` to turn all shell hooks off.
 
 ## `/hooks`
 
-Lists the configured hooks (event, matcher, command, the layer it came from (`user`, `project` or `user package <name>`),
-whether it runs and why not (`not trusted`, or `not allowed` for an http hook outside `allowedHttpHookUrls`), file,
-timeout, type), the recent runs of this daemon for
-the project (time, event, tool, outcome, exit code, duration, first line of what the hook said) and problems with the
-files. `tab` or `1`/`2` switch between the two lists, `t` trusts or untrusts the project, `r` refreshes. It is read-only
-apart from trust; edit `hooks.json` to change hooks.
+Open `/hooks` to inspect configuration, recent runs and file problems. It is read-only apart from trust; edit `hooks.json` to change hooks.
+
+| List | What it shows |
+|---|---|
+| Configured hooks | Event, matcher, command, layer (`user`, `project` or `user package <name>`), whether it runs and why not, file, timeout, type. |
+| Recent runs of this daemon for the project | Time, event, tool, outcome, exit code, duration, first line of what the hook said. |
+
+A hook that cannot run shows `not trusted`, or `not allowed` for an http hook outside `allowedHttpHookUrls`.
+
+| Key | Does |
+|---|---|
+| `tab` or `1`/`2` | Switch between the two lists. |
+| `t` | Trust or untrust the project. |
+| `r` | Refresh. |
 
 ## Project trust
 
-- On start, a project whose hooks, custom tools or extensions are waiting for trust shows a prompt before anything of it
-  runs: `y` trusts the directory, `n` (or esc) leaves it untrusted and asks again next time. Nothing is asked when nothing
-  project-local is waiting, with `--no-approve`, with a startup prompt (`-p`), or on remote sessions.
-- `/trust` shows that prompt on demand; `/trust on`, `/trust off` set the trust directly; `/trust status` says where it
-  stands. `/tools` and `/extensions` (`t`) set the same trust.
-- `--approve` (a global flag, local daemons only) trusts the current project before anything runs, for the TUI and for
-  `run`; it persists like any trust. `--no-approve` skips the startup prompt for that launch.
+On start, a project whose hooks, custom tools or extensions are waiting for trust shows a prompt before anything project-local runs:
+
+1. Press `y` to trust the directory.
+2. Or press `n` (or esc) to leave it untrusted and ask again next time.
+
+No prompt appears when nothing project-local is waiting, with `--no-approve`, with a startup prompt (`-p`), or on remote sessions.
+
+| Command or flag | Does |
+|---|---|
+| `/trust` | Show the prompt on demand. |
+| `/trust on`, `/trust off` | Set trust directly. |
+| `/trust status` | Show where trust stands. |
+| `/tools`, `/extensions` (`t`) | Set the same trust. |
+| `--approve` | Global flag, local daemons only: trust the current project before anything runs, for the TUI and `run`. Persists like any trust. |
+| `--no-approve` | Skip the startup prompt for that launch. |

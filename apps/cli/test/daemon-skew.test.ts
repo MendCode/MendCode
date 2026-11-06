@@ -231,7 +231,7 @@ describe("the terminal while it runs", () => {
   test("/daemon tells that the daemon is older than this terminal", async () => {
     const { h } = app(async () => "busy", { older: true })
     await h.type("/daemon\r")
-    expect(screen(h)).toContain("(older than this terminal)")
+    expect(screen(h)).toContain("Daemon older than this terminal")
   })
 
   test("a current daemon shows no line", () => {
@@ -280,7 +280,7 @@ describe("the terminal while it runs", () => {
     await h.type("/daemon restart\r")
     expect(restarts()).toBe(1)
     await reconnect(h)
-    expect(screen(h)).toContain("daemon restarted · this terminal is an older build, reopen it to update")
+    expect(screen(h)).toContain("daemon restarted · reopen this terminal to update it")
     expect(screen(h)).not.toContain("restarting daemon…")
   })
 
@@ -314,7 +314,12 @@ describe("the terminal while it runs", () => {
       reply: (command: CommandInput) => command.type === "daemon.status" ? { ok: true, result: { buildId: "dev-abc", activeTurns: 1, backgroundJobs: 0, clients: 2 } } : undefined,
     })
     await h.type("/daemon\r")
-    expect(screen(h)).toContain("daemon dev-abc · 1 turns · 0 jobs · 2 clients")
+    // In words; the build id is behind F4.
+    expect(screen(h)).toContain("Daemon running · 1 turn · 0 jobs · 2 terminals")
+    expect(screen(h)).not.toContain("dev-abc")
+    await h.app.onKey("\x1bOS")
+    expect(screen(h)).toContain("Daemon build dev-abc")
+    expect(screen(h)).toContain("1 turn running, 0 background jobs, 2 terminals connected")
   })
 
   test("a remote attach has no daemon to restart", async () => {

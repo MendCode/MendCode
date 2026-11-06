@@ -1,6 +1,10 @@
 # Project, worktree and workspace REST (B85)
 
-These routes use the existing opt-in, loopback HTTP adapter and require a full v2 remote token. Mutations reject browser Origin requests. Native clients use `restProject(directory, input)`; `project.rest` is deliberately excluded from `READ_ONLY_COMMANDS`. No external sync service or network request starts implicitly.
+Use these REST routes to manage projects, worktrees, workspaces and local sync through the existing opt-in, loopback HTTP adapter. Start with a full v2 remote token; mutations reject browser Origin requests.
+
+No external sync service or network request starts implicitly.
+
+## Routes
 
 | Route | Payload / response |
 |---|---|
@@ -23,17 +27,118 @@ These routes use the existing opt-in, loopback HTTP adapter and require a full v
 | `POST /sync/replay` | `{directory, events: [{id, aggregateID, seq, type, data}]}`; `{sessionID}` |
 | `POST /sync/steal` | `{sessionID}` with a workspace selector; `{sessionID}` |
 
-The donor HTTP envelope is preserved with native v2 project/session/workspace IDs and event types. Project metadata lives privately in `<dir>/project-rest.json`; reads discover known projects, matching v1's discovery behavior. Selectors use the existing `directory` / `x-opencode-directory` and `workspace` / `x-mendcode-workspace` contracts. `GET /project` lists known projects globally; workspace lists, sync history and all mutations stay in the selected project. The earlier native `{adapter: "local", name, directory}` workspace registration payload retains its `{workspace}` response. Native framed commands remain compatible.
+## Select a project or workspace
 
-Worktree execution is separate from B30's unchanged preview commands. Creation checks out HEAD before replying and records ownership. Automatic startup is off; `runStartup: true` explicitly runs the project's saved start command followed by `startCommand`, in the new worktree. Startup has a 30-second deadline per script, suppresses output, and retains the worktree on failure. No Git hooks, credential prompts, fetch or pull are run. Worktree mutations serialize within this service and hold project leases that reject competing session creation. Daemon shutdown cancels pending Git/startup work before closing the store.
+Selectors use the existing `directory` / `x-opencode-directory` and `workspace` / `x-mendcode-workspace` contracts.
 
-Remove/reset reject base/external/drifted/dirty worktrees, ignored files and directories with sessions or automation. Removal also refuses unmerged commits, moves the directory to `<dir>/trash/worktrees`, then unregisters it and deletes its merged branch. Reset preserves the previous HEAD under `refs/mendcode/worktree-backups` before changing the branch. Force deletion, dirty reset/clean and implicit startup after reset remain intentionally unavailable. These safeguards are the conservative B85 decision and limit SERVER-014/015 parity.
+| Scope | Routes |
+|---|---|
+| Global known projects | `GET /project` |
+| Selected project | Workspace lists, sync history and all mutations |
 
-The local workspace adapter registers an existing directory and never deletes its files. The worktree adapter assigns a unique branch (`branch: null`); caller-selected branch reuse, remote/custom adapters and provisioning services remain unsupported. Workspace removal requires its sessions to be warped out first.
+Project metadata lives privately in `<dir>/project-rest.json`. Reads discover known projects, matching v1's discovery behavior.
 
-Warp moves a settled root session and its children atomically, appends `session.workspace.changed`, releases stale actors/grants, and retains transcripts/model history. Active turns, queued work, unfinished goals, approvals, active automation and external-engine bindings block the move. The existing chat applies the new directory and refreshes its branch/diff/MCP state without new chrome. For an HTTP/WebSocket attachment scoped to the old workspace, reconnect to the target workspace before submitting another command; an old project-scoped connection never gains access to the destination implicitly.
+The donor HTTP envelope is preserved with native v2 project/session/workspace IDs and event types. The earlier native `{adapter: "local", name, directory}` workspace registration payload retains its `{workspace}` response. Native framed commands remain compatible.
 
-Sync uses zero-based HTTP sequences (`native seq - 1`). History is paged to 2,000 events / one protocol frame. `x-mendcode-sync-more: true` indicates another page; advance each aggregate cursor to its last returned sequence. Native replies also include `hasMore`. Complete native histories starting at zero can be replayed into a new root session, preserving IDs, timestamps and model context; exact retries are idempotent. A replay may also continue a stored session: events at or after the stored end (a gap returns 409) are appended with their model messages, overlapping events must equal the stored ones (otherwise 409), and the combined history must be settled. Validation finishes before the transaction. Events that reference blobs (`blob`, `attachments`) need them stored first: `POST /sync/blob` (`{sha256, bytes, mime, offset, data}`, base64 chunks of at most 128 KiB in order, up to 8 MiB, hash verified on the last chunk) and `POST /sync/blob/read` (`{sha256, offset}`, project blobs only) are native extensions for this, full token only. A donor v1 history (`session.created.1`, `session.updated.1`, `message.updated.1`, `message.part.updated.1`, `message.removed.1`, `message.part.removed.1`, also `@1`) replays as one complete snapshot from sequence zero: its final messages and parts become native turns, items (text, reasoning, finished tool calls) and errors, with IDs derived from the donor's, so a repeated replay is an exact retry. Donor file, subtask and compaction parts, `session.deleted`, other donor types, incremental donor batches and unfinished runtime work are rejected; the session directory is the selected project. Runtime work is never resumed. Local workspaces share one authoritative store, so `sync.start` requires no background loop; cross-daemon/remote synchronization remains open for SERVER-122.
+## Create a worktree
+
+Worktree execution is separate from B30's unchanged preview commands. Creation checks out HEAD before replying and records ownership.
+
+Automatic startup is off. To run startup in the new worktree, set `runStartup: true`:
+
+1. The project's saved start command runs.
+2. `startCommand` runs after it.
+
+Startup has a 30-second deadline per script, suppresses output, and retains the worktree on failure. No Git hooks, credential prompts, fetch or pull are run.
+
+Worktree mutations serialize within this service and hold project leases that reject competing session creation. Daemon shutdown cancels pending Git/startup work before closing the store.
+
+## Remove or reset a worktree
+
+Remove/reset reject base/external/drifted/dirty worktrees, ignored files and directories with sessions or automation.
+
+Removal also refuses unmerged commits. It then:
+
+1. Moves the directory to `<dir>/trash/worktrees`.
+2. Unregisters it.
+3. Deletes its merged branch.
+
+Reset preserves the previous HEAD under `refs/mendcode/worktree-backups` before changing the branch.
+
+**Warning:** Force deletion, dirty reset/clean and implicit startup after reset remain intentionally unavailable. These safeguards are the conservative B85 decision and limit SERVER-014/015 parity.
+
+## Register or remove a workspace
+
+| Adapter | Behavior |
+|---|---|
+| Local | Registers an existing directory and never deletes its files |
+| Worktree | Assigns a unique branch (`branch: null`) |
+
+Caller-selected branch reuse, remote/custom adapters and provisioning services remain unsupported. Before removing a workspace, warp its sessions out.
+
+## Move sessions with warp
+
+Warp moves a settled root session and its children atomically. It appends `session.workspace.changed`, releases stale actors/grants, and retains transcripts/model history.
+
+The move is blocked by:
+
+- Active turns or queued work.
+- Unfinished goals or approvals.
+- Active automation or external-engine bindings.
+
+The existing chat applies the new directory and refreshes its branch/diff/MCP state without new chrome.
+
+For an HTTP/WebSocket attachment scoped to the old workspace, reconnect to the target workspace before submitting another command. An old project-scoped connection never gains access to the destination implicitly.
+
+## Read and replay sync history
+
+Sync uses zero-based HTTP sequences (`native seq - 1`). History is paged to 2,000 events / one protocol frame.
+
+1. Read a page of history.
+2. Advance each aggregate cursor to its last returned sequence.
+3. Read another page when `x-mendcode-sync-more: true` indicates one. Native replies also include `hasMore`.
+
+### Native replay
+
+Complete native histories starting at zero can be replayed into a new root session, preserving IDs, timestamps and model context. Exact retries are idempotent.
+
+A replay may also continue a stored session:
+
+- Events at or after the stored end are appended with their model messages; a gap returns 409.
+- Overlapping events must equal the stored ones (otherwise 409), and the combined history must be settled.
+
+Validation finishes before the transaction.
+
+### Store blobs before replay
+
+Events that reference blobs (`blob`, `attachments`) need them stored first. These native extensions require a full token:
+
+| Route | Payload and limits |
+|---|---|
+| `POST /sync/blob` | `{sha256, bytes, mime, offset, data}`; base64 chunks of at most 128 KiB in order, up to 8 MiB, hash verified on the last chunk |
+| `POST /sync/blob/read` | `{sha256, offset}`; project blobs only |
+
+### Donor v1 replay
+
+A donor v1 history replays as one complete snapshot from sequence zero. Accepted types are `session.created.1`, `session.updated.1`, `message.updated.1`, `message.part.updated.1`, `message.removed.1`, `message.part.removed.1`, also `@1`.
+
+Its final messages and parts become native turns, items (text, reasoning, finished tool calls) and errors. IDs derive from the donor's, so a repeated replay is an exact retry.
+
+The following are rejected:
+
+- Donor file, subtask and compaction parts.
+- `session.deleted` and other donor types.
+- Incremental donor batches and unfinished runtime work.
+
+The session directory is the selected project. Runtime work is never resumed.
+
+### Local sync limits
+
+Local workspaces share one authoritative store, so `sync.start` requires no background loop. Cross-daemon/remote synchronization remains open for SERVER-122.
+
+## Implementation and frames
+
+Native clients use `restProject(directory, input)`. `project.rest` is deliberately excluded from `READ_ONLY_COMMANDS`.
 
 Frames of the existing chat before warp, after warp and after detach:
 

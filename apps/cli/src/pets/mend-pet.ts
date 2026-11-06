@@ -1,4 +1,4 @@
-import { BEATS, mendImage } from "../view/mend-sprite"
+import { BEATS, mendImage, mendPalette } from "../view/mend-sprite"
 import { artPixels, createFrameCache, spriteCells } from "./art"
 import type { CellPixels } from "./frames"
 import { PET_SIZES, type PetSize } from "./pet-slot"
@@ -13,10 +13,12 @@ const sprites = new Map<string, PetSprite>()
 const scaled = createFrameCache(4 * 1024 * 1024)
 
 export function mendSprite(phase: string, beat = 0): PetSprite {
-  const id = `mend/${phase}/${beat % BEATS}`
+  // The palette's key is in the id, and so in every scaled frame's key: a theme switch draws the robot in its new colors.
+  const palette = mendPalette()
+  const id = `mend/${palette.key}/${phase}/${beat % BEATS}`
   let sprite = sprites.get(id)
   if (!sprite) {
-    sprite = { id, rows: new Map([["idle", [mendImage(phase, beat % BEATS)]]]), art: "pixel" }
+    sprite = { id, rows: new Map([["idle", [mendImage(phase, beat % BEATS, palette)]]]), art: "pixel" }
     sprites.set(id, sprite)
   }
   return sprite

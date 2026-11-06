@@ -18,16 +18,22 @@ function harness(initial = false, installed = false, loaded = false) {
   const drains: Array<NonNullable<DaemonStatusReport["drain"]>> = []
   let drainReply: CommandReply | undefined
   let draining = false
+  /** The daemon lets its wait go instead of stopping (the wait failed): its status has no `drain` any more. */
+  let letGo = false
   const peer = { close() {}, async send(command: CommandInput): Promise<CommandReply> {
     if (command.type === "daemon.shutdown" && command.drainMs !== undefined) {
       calls.push(`drain ${command.drainMs}`)
       draining = !drainReply
       return drainReply ?? { ok: true, result: { waiting: drains[0]?.waiting ?? [] } }
     }
+    // A daemon whose wait ended stops by itself: its connection closes.
+    if (!running) return { ok: false, error: { code: "internal", message: "[CLIENT]: connection closed" } } as CommandReply
     calls.push(command.type)
     if (command.type === "daemon.shutdown") { running = false; return { ok: true } }
     if (command.type === "daemon.status" && draining && drains.length) {
       const drain = drains.length > 1 ? drains.shift()! : drains[0]!
+      if (drain.done && !letGo) { running = false; draining = false }
+      if (letGo && drain.done) { draining = false; return { ok: true, result: report } }
       return { ok: true, result: { ...report, drain } }
     }
     if (command.type === "daemon.tick") return { ok: true, result: { scheduler: command.scheduler, execute: command.execute, due: [], started: [] } }
@@ -53,7 +59,7 @@ function harness(initial = false, installed = false, loaded = false) {
     },
   }
   const run = (...args: string[]) => createDaemonServiceCli(deps)(parsed(...args))
-  return { calls, report, deps, run, drains, refuseDrain: (reply: CommandReply) => { drainReply = reply }, output: () => out, error: () => err }
+  return { calls, report, deps, run, drains, refuseDrain: (reply: CommandReply) => { drainReply = reply }, letGo: () => { letGo = true }, output: () => out, error: () => err }
 }
 
 describe("daemon lifecycle CLI", () => {
@@ -129,17 +135,30 @@ describe("daemon lifecycle CLI", () => {
     expect(busy.calls).toContain("daemon.shutdown")
   })
 
-  test("restart --force first waits for the commands and background tasks that run, says which, and stops once they end", async () => {
+  test("restart --force first waits for the commands and background tasks that run, says which; the daemon stops by itself and this command starts the next one", async () => {
     const h = harness(true)
+    h.deps.restarting = (on) => void h.calls.push(`restarting ${on}`)
     h.report.activeTurns = 1
     h.report.backgroundJobs = 1
     const waiting = [{ sessionId: "ses_a", title: "owner-a", items: ["shell: bun run test", "background task: while sleep 5; do date; done"] }]
     h.drains.push({ waiting, until: 120_000, done: false }, { waiting: [waiting[0]!].map((entry) => ({ ...entry, items: [entry.items[1]!] })), until: 120_000, done: false }, { waiting: [], until: 120_000, done: true })
-    expect(await h.run("daemon", "restart", "--force")).toBe(0)
-    expect(h.calls.filter((call) => call.startsWith("drain") || ["daemon.shutdown", "launch"].includes(call))).toEqual(["drain 120000", "daemon.shutdown", "launch"])
-    expect(h.output()).toContain('Waiting up to 120 s for work that a restart would kill (--grace):\n  ses_a "owner-a": shell: bun run test; background task: while sleep 5; do date; done')
+    const code = await h.run("daemon", "restart", "--force")
+    expect(h.error()).toBe("")
+    expect(code).toBe(0)
+    // No second shutdown: the daemon stopped at the end of its wait; the terminals were held back from the wait on.
+    expect(h.calls.filter((call) => call.startsWith("drain") || call.startsWith("restarting") || ["daemon.shutdown", "launch"].includes(call))).toEqual(["restarting true", "drain 120000", "restarting true", "launch", "restarting false"])
+    expect(h.output()).toContain('Waiting up to 120 s for work that a restart would kill (--grace); keep this command running:\n  ses_a "owner-a": shell: bun run test; background task: while sleep 5; do date; done')
     expect(h.output()).toContain('Still waiting on:\n  ses_a "owner-a": background task: while sleep 5; do date; done')
     expect(h.output()).toContain("The work ended; restarting.")
+  })
+
+  test("a wait the daemon let go without stopping is followed by the forced stop, so the restart still happens", async () => {
+    const h = harness(true)
+    h.report.activeTurns = 1
+    h.letGo()
+    h.drains.push({ waiting: [{ sessionId: "ses_a", title: "a", items: ["shell: sleep 9"] }], until: 120_000, done: false }, { waiting: [], until: 120_000, done: true })
+    expect(await h.run("daemon", "restart", "--force")).toBe(0)
+    expect(h.calls.filter((call) => call.startsWith("drain") || ["daemon.shutdown", "launch"].includes(call))).toEqual(["drain 120000", "daemon.shutdown", "launch"])
   })
 
   test("a restart whose grace ends with work running names what it kills; --grace 0, an idle daemon and an older daemon skip the wait", async () => {
@@ -150,7 +169,7 @@ describe("daemon lifecycle CLI", () => {
     expect(await late.run("daemon", "restart", "--force", "--grace", "5")).toBe(0)
     expect(late.calls).toContain("drain 5000")
     expect(late.output()).toContain('Still running after 5 s; the restart stops it now:\n  ses_b "monitor": background task: tail -f build.log\nEach session is told what was stopped')
-    expect(late.calls.filter((call) => call.startsWith("drain") || ["daemon.shutdown", "launch"].includes(call))).toEqual(["drain 5000", "daemon.shutdown", "launch"])
+    expect(late.calls.filter((call) => call.startsWith("drain") || ["daemon.shutdown", "launch"].includes(call))).toEqual(["drain 5000", "launch"])
 
     const none = harness(true)
     none.report.activeTurns = 1

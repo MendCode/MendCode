@@ -1,35 +1,284 @@
 # Session REST adapter (B81)
 
-The opt-in [HTTP adapter](remote.md#http-adapter-b34) exposes sessions through the existing daemon. Binding remains loopback-only; every request requires a v2 remote token. No listener, provider or external service is enabled by this adapter. These compatibility projections use native v2 session/item/request IDs, not v1 database IDs. The `session.rest.*` commands (read, update, control, mutate) and `attachment.put` require full tokens and are deliberately absent from `READ_ONLY_COMMANDS`; `/command` retains its existing observational permissions.
+Use the opt-in [HTTP adapter](remote.md#http-adapter-b34) to read and control sessions through the existing daemon. Binding remains loopback-only; every request requires a v2 remote token.
 
-`GET /session`, `/session/status`, `/session/agent-view`, `/session/:id`, `/session/:id/children`, `/session/:id/todo`, `/session/:id/diff`, `/session/:id/message` and `/session/:id/message/:messageID` return v1-style arrays, status maps, session records, or `{info, parts}` messages. Project identity is derived from v2's canonical Git/project root. Session records add `path`, the directory relative to that root (omitted at the root). The list routes (`/session`, `/session/agent-view`, `/experimental/session`, `/api/session`) accept `scope=project` (every session of the selected workspace's project, not only its directory) and `path=<project-relative dir>` (sessions at or below it, across the project; an empty value means the whole project). `path` must stay inside the project (no leading `/`, drive letter or `..`), otherwise 400; both are fixed inside a cursor, so a `cursor` cannot be combined with them. Without either, lists stay on the exact workspace directory.
+## Access and IDs
 
-Messages are full donor DTOs: assistant info always has `mode`, `agent`, `cost` and `tokens` (zeros until usage is recorded), `error` is `{name: "UnknownError", data: {message}}`, text/reasoning parts carry `time`, tool states are `pending|running|completed|error` with `title`, `metadata`, and `error` for failures, and compaction parts say `auto`. `GET /session/:id/message/:messageID` honours `view` (`tui`/`history` drop reasoning and cap tool output at 2,000 characters), `partsLimit` and `partsAfter`. `/api/session/:id/message` and `/context` return donor v2 messages: user `files`/`agents`, assistant `content` (`text`, `reasoning` with `id`, `tool` with donor `state` content/structured and `time`), `{type: "compaction", reason, summary}` and `error: {type: "unknown", message}`. Agent View rows (`/session/agent-view`) are the donor `BackgroundSession.Entry`: `sessionID`, derived `state`, `summary`, `error`, `pinned`, `process`, `writer` (only while its lease is live), `time`, `metadata` overrides and `session`, plus v2's `status`; sessions without a background record use the directory as summary. Todo records come from completed todo tool inputs; diffs are described below.
+The `session.rest.*` commands (read, update, control, mutate) and `attachment.put` require full tokens. They are deliberately absent from `READ_ONLY_COMMANDS`; `/command` retains its existing observational permissions.
 
-`GET .../diff` returns v1 `SnapshotFileDiff` rows `{file, patch, additions, deletions, status}`: the net change of every live turn (first before-state to last after-state of each file, a git-style patch with header), or one user message's persisted diff with `?messageID=`. A path whose file bytes were pruned (only the newest 20 turns keep bytes) falls back to the per-turn summaries that survive pruning: their counts add up and their patches follow each other, and the row carries `truncated: true`. Shell changes are included only with `snapshotScope: "worktree"` (opt-in, see [sessions](sessions.md#undo-and-redo)). User messages carry `info.summary.diffs` (patches cut to 4 KB per file, 16 KB per message) from that persisted summary, and `GET /session/:id` carries `summary {additions, deletions, files}` (sum of the persisted per-turn summaries; not in lists) and `revert {messageID, partID?}` while an unrevert can restore something. Unknown provider/model/cost counters are omitted. Reverted turns remain in the event log and are excluded from these projections.
+These compatibility projections use native v2 session/item/request IDs, not v1 database IDs. No listener, provider or external service is enabled by this adapter.
 
-`POST /session` accepts an empty body or `{title?, parentID?, agent?, model?}`. `model` is `{providerID, modelID, variant?}`. `PATCH /session/:id` accepts `{title?, time?: {archived?: epochMilliseconds | null}}`. Archive state persists privately in the daemon data directory, is excluded from REST lists by default, and is restored with `null`. `DELETE /session/:id` uses existing session deletion safeguards. `POST .../fork {messageID?}` copies the transcript, excluding the selected message. `.../revert {messageID, partID?}` and `.../unrevert` use v2 undo/redo, including tracked file restoration. A user `messageID` reverts that message and everything after it; an assistant `messageID` or a `partID` reverts from that part on (see [part-level revert](sessions.md#part-level-revert)); an unknown message is 404. `.../unrevert` restores every waiting undo group and part-level revert (`session.redo {all}`) and returns the session unchanged when nothing is reverted.
+## Read sessions and messages
 
-`POST .../message {parts: [{type: "text", text}], model?, agent?}` waits for that specific queued turn and returns its assistant message. `.../prompt_async` accepts the same body and returns 204 after admission. Text parts can be ignored with `ignored: true`. `.../command {command, arguments, model?, agent?}` expands daemon-side Markdown commands; `init` queues repository instruction generation. `.../init {providerID, modelID, messageID}` uses that same initialization prompt and keeps the supplied `messageID` as the user message's id (`user.submit` accepts an optional `messageId`); an id that already exists is refused without queuing anything.
+`GET /session`, `/session/status`, `/session/agent-view`, `/session/:id`, `/session/:id/children`, `/session/:id/todo`, `/session/:id/diff`, `/session/:id/message` and `/session/:id/message/:messageID` return v1-style arrays, status maps, session records, or `{info, parts}` messages.
 
-R7 write fidelity. Prompt bodies (`message`, `prompt_async`) also take `messageID`, `variant`, `system` and these parts: `text` (`synthetic` text goes to the model but not the transcript, `ignored` text shows in the transcript but not to the model), `file`, `agent` and `subtask`. A `file` part must be a `data:` URL, never a path or remote URL (501): PNG/JPEG/GIF/WebP/PDF bytes are stored as attachments by their real type through `attachment.put` (about 140 KB), and `text/*` or JSON files are inlined into the prompt (64 KB). `agent` and `subtask` parts become an instruction to use the task tool, and `system` becomes a leading block of that turn's prompt (user level, not the engine's system prompt). `noReply`, per-prompt `tools` and structured `format` are described under R9a below. `messageID` (or one the adapter generates) is passed to `user.submit` and becomes the user message's item ID, so a prompt queued behind a running turn keeps one ID from admission to the transcript, and `/api/session/:id/prompt` returns that ID for `deferred` and `immediate` delivery. A duplicate ID is refused. `.../command` also takes `messageID`, `variant` and file `parts`, and a Markdown command's `agent`, `model` and `subtask` front matter apply unless the request names its own (a sub-task command is delegated to its agent through the task tool and leaves the turn's agent alone). `.../init` now keeps the requested `messageID`.
+Project identity is derived from v2's canonical Git/project root. Session records add `path`, the directory relative to that root, omitted at the root.
 
-`POST .../shell {agent, command, model?, messageID?}` queues the user's own `!command` (`user.shell`, no model call and no approval, the same authority as a full-token `user.shell`), waits for it and returns the shell message. The agent must exist and a model must be a known provider/model pair; both only label the response, since the transcript stores the session's own agent and model. It needs an engine with shell mode and is absent from `READ_ONLY_COMMANDS`.
+### Choose a project scope
 
-`DELETE .../message/:messageID`, `DELETE .../message/:messageID/part/:partID` and `PATCH .../message/:messageID/part/:partID` (a text part: `{id, type: "text", text}`, identity fields checked against the route) apply the native message revisions through `session.rest.mutate`. The REST ids are resolved to the native items and their current revisions, so no `If-Match` is needed. They keep every revision safeguard: `allowMessageEdits` must be on (403 otherwise), the session idle with an empty queue (409), exact native history (compacted, shell-composed or external history is refused), reasoning and compaction parts are not revisable and a part PATCH accepts text only. Deleting a user message removes its text and attachments; deleting just the text of a message that has attachments clears the text. A message deletion applies item by item after a check that all of them are revisable; the original events stay in the log.
+The list routes (`/session`, `/session/agent-view`, `/experimental/session`, `/api/session`) accept:
 
-`POST .../summarize {providerID, modelID, instructions?, auto?}` queues a compaction with the instructions and, when the model differs from the session's, that model (`session.compact {instructions, model}`). The native engine then writes a portable summary on that model instead of a native checkpoint; other engines refuse the options (400). `auto` is accepted and ignored. `GET /api/session/:id/context` returns the native engine's own saved history (after compaction and revisions) with ids `ctx_NNNNNN` by position and tool results folded into their calls, header `X-Context-Source: engine`; sessions without a native history (external engines, nothing saved yet) fall back to the transcript projection (`X-Context-Source: transcript`). Over the 256 KB frame the oldest entries are dropped and `X-Truncated: true` is set.
+| Filter | Scope |
+|---|---|
+| `scope=project` | Every session of the selected workspace's project, not only its directory |
+| `path=<project-relative dir>` | Sessions at or below it, across the project; an empty value means the whole project |
+| Neither | The exact workspace directory |
 
-`POST .../abort` stops the active turn. `.../cancel-turn {targetMessageID}` returns `cancelled`, `already_terminal`, `target_mismatch` or `not_running`, without cancelling a different turn. `.../interrupt` promotes the oldest queued prompt and interrupts the active one. `.../permissions/:requestID {response: "once" | "always" | "reject"}` resolves the actual pending approval. `always` means session scope, not permanent global permission.
+`path` must stay inside the project: no leading `/`, drive letter or `..`. Otherwise the response is 400. Both filters are fixed inside a cursor, so a `cursor` cannot be combined with them.
 
-`GET /api/session` and `/api/session/:id/message` return `{items, cursor: {previous?, next?}}`. `limit` defaults to 50, `order` to `desc`; cursors preserve order, filters and selected workspace/session. Do not combine `cursor` with order or filters. Legacy messages default to chronological order and the newest requested window; `before`/`after` require a positive limit. Legacy navigation uses `X-Older-Cursor`, `X-Newer-Cursor`, `X-Next-Cursor` and `Link` headers. Large messages/pages are bounded; `partsMore`/`partsCursor` and `X-Truncated` identify cuts. `view` supports full/tui/tui-all/history, with reasoning omitted from tui/history.
+### Message fields
 
-`POST /api/session/:id/prompt {prompt: {text}, delivery?: "immediate" | "deferred"}` queues the prompt; immediate waits, deferred returns after admission. `POST .../compact` queues compaction and returns 204 after completion; `POST .../wait` returns 204 once idle. Waits are event-driven, cancel on disconnect and have a 55-second deadline (409 on expiry). Native clients can use `restSessions`, `updateRestSession` and `controlRestSession`; a wait's explicit `timeoutMs` is independent of the client's usual RPC deadline.
+Messages are full donor DTOs:
 
-`GET /experimental/session` lists sessions across daemon projects, with optional `roots`, `start`, `search`, `limit`, `archived`, and numeric update-time `cursor`. An explicit workspace/directory scopes the global list. `archived=true` includes archived sessions. Normal routes remain scoped to the selected registered workspace. `GET /experimental/usage-insights?start=EPOCH_MS&limit=1000&messageLimit=500` returns v1-style `days`, `totals`, `topTools`, `topAgents`, and `topModels`, using native observed usage, messages and tracked file snapshots. Every local day from `start` to today is a row, zeroed when idle; to keep one answer inside a daemon frame only the most recent 366 days are padded, and older days appear only when they had activity. A day is active with tokens or user messages; `activeDays`, `currentStreak` (zero unless today is active) and `longestStreak` follow that rule. `GET /api/session/:id/context` projects visible messages since the last recorded compaction.
+| Field or part | Contents |
+|---|---|
+| Assistant info | Always has `mode`, `agent`, `cost` and `tokens`, with zeros until usage is recorded |
+| `error` | `{name: "UnknownError", data: {message}}` |
+| Text/reasoning parts | Carry `time` |
+| Tool states | `pending|running|completed|error` with `title`, `metadata`, and `error` for failures |
+| Compaction parts | Say `auto` |
 
-`POST /session` and `PATCH /session/:id` accept `permission: [{permission, pattern, action}]` (max 500; `[]` clears) and the session projection lists it. Rules are private daemon state (`session-permissions.json`, 0600), removed with the session, and the native engine evaluates them after settings and agent rules (last match wins) for that session and the sub-agent sessions it spawns; a deny refuses the call and an allow skips the approval ask. They do not hide a tool from the model's tool list. Requires a full token.
+`GET /session/:id/message/:messageID` honours `view`, `partsLimit` and `partsAfter`. The `tui`/`history` views drop reasoning and cap tool output at 2,000 characters.
 
-R9a prompt leftovers (native engine only; Claude Code, ACP and Codex sessions answer 501 because they would silently ignore them). `noReply: true` records the user message in the transcript and the model history without calling the model (no budget applies); the response is that user message and the next prompt sees it. `tools: { name: false }` removes tools (wildcards allowed) for that prompt only; `true` never adds a tool the agent, permission rules or run limits withhold, and sub-agents (whose tools it cannot bound) are off for that turn. `format: { type: "json_schema", schema, retryCount }` (object schema, up to 16 KB, local `$ref`s only, `retryCount` default 2) gives the model a `StructuredOutput` tool whose arguments are validated against the schema; a valid call ends the turn and its arguments are the assistant message's `info.structured`; a plain-text or invalid answer is retried, and after the retries the turn fails with `info.error.name = "StructuredOutputError"`. The three options travel as `turnOptions` on `user.submit`, are stored on the queued message (they survive a restart) and keep that prompt from joining a running turn. Assistant messages of turns with model calls carry `step-start`/`step-finish` parts: each model call is a step, opened before its first part and closed after its tool calls with that call's tokens and cost (`reason` `tool-calls`, `stop` or the turn's end state); without usage reports a step ends where tool calls give way to a new answer. Turns without a model call (`!command`, compaction, `noReply`) have none; the `tui`/`history` views and v2 content omit them, and they cannot be edited or deleted. A structured answer over 64 KB is not exposed in `info.structured` (the tool part still shows it).
+`/api/session/:id/message` and `/context` return donor v2 messages:
 
-Remaining compatibility limits: v1's full snapshot accounting in usage; the user message's stored `system`/`tools` fields; complete unbounded message bodies and exact v1 message/part IDs; `file:`/remote file URLs (501), `noReply`, `tools` and `format` on a session whose engine is not the native one (501), a per-message agent/model stored for shell and prompts (the transcript keeps the session's), and a real system-prompt override (`system` is prompt text); deferred prompts queued behind active turns keep their message ID from admission; active model-context retention beyond the recorded compaction boundary. Unsupported request fields are rejected before submission. No TUI screens change in B81, R6 or R7, so terminal frames are not applicable.
+- User `files`/`agents`.
+- Assistant `content`: `text`, `reasoning` with `id`, `tool` with donor `state` content/structured and `time`.
+- `{type: "compaction", reason, summary}` and `error: {type: "unknown", message}`.
+
+### Agent View and todos
+
+Agent View rows (`/session/agent-view`) are the donor `BackgroundSession.Entry`: `sessionID`, derived `state`, `summary`, `error`, `pinned`, `process`, `writer` (only while its lease is live), `time`, `metadata` overrides and `session`, plus v2's `status`.
+
+Sessions without a background record use the directory as summary. Todo records come from completed todo tool inputs; diffs are described below.
+
+## Inspect diffs and summaries
+
+`GET .../diff` returns v1 `SnapshotFileDiff` rows `{file, patch, additions, deletions, status}`. By default, this is the net change of every live turn: each file's first before-state to last after-state, as a git-style patch with header.
+
+Use `?messageID=` for one user message's persisted diff. Shell changes are included only with `snapshotScope: "worktree"`, an opt-in setting; see [sessions](sessions.md#undo-and-redo).
+
+Only the newest 20 turns keep file bytes. A path whose bytes were pruned falls back to the per-turn summaries that survive pruning: counts add up, patches follow each other, and the row carries `truncated: true`.
+
+| Projection | Summary fields |
+|---|---|
+| User messages | `info.summary.diffs` from the persisted summary; patches cut to 4 KB per file, 16 KB per message |
+| `GET /session/:id` | `summary {additions, deletions, files}`, summed from persisted per-turn summaries, not in lists; `revert {messageID, partID?}` while an unrevert can restore something |
+
+Unknown provider/model/cost counters are omitted. Reverted turns remain in the event log and are excluded from these projections.
+
+## Create, archive and restore sessions
+
+| Route | Body and behavior |
+|---|---|
+| `POST /session` | Empty body or `{title?, parentID?, agent?, model?}`; `model` is `{providerID, modelID, variant?}` |
+| `PATCH /session/:id` | `{title?, time?: {archived?: epochMilliseconds | null}}` |
+| `DELETE /session/:id` | Existing session deletion safeguards apply |
+| `POST .../fork {messageID?}` | Copy the transcript, excluding the selected message |
+| `.../revert {messageID, partID?}` | Use v2 undo, including tracked file restoration |
+| `.../unrevert` | Use v2 redo, including tracked file restoration |
+
+Archive state persists privately in the daemon data directory and is excluded from REST lists by default. Restore it with `null`.
+
+### Revert boundaries
+
+- A user `messageID` reverts that message and everything after it.
+- An assistant `messageID` or a `partID` reverts from that part on; see [part-level revert](sessions.md#part-level-revert).
+- An unknown message returns 404.
+
+`.../unrevert` restores every waiting undo group and part-level revert (`session.redo {all}`). When nothing is reverted, it returns the session unchanged.
+
+## Submit prompts and commands
+
+| Route | Result |
+|---|---|
+| `POST .../message {parts: [{type: "text", text}], model?, agent?}` | Wait for that specific queued turn and return its assistant message |
+| `.../prompt_async` | Accept the same body and return 204 after admission |
+| `.../command {command, arguments, model?, agent?}` | Expand daemon-side Markdown commands; `init` queues repository instruction generation |
+| `.../init {providerID, modelID, messageID}` | Use that same initialization prompt and keep the supplied `messageID` as the user message's id |
+
+Text parts can be ignored with `ignored: true`. For initialization, `user.submit` accepts an optional `messageId`; an id that already exists is refused without queuing anything. `.../init` now keeps the requested `messageID`.
+
+### R7 write fidelity
+
+Prompt bodies (`message`, `prompt_async`) also take `messageID`, `variant`, `system` and these parts:
+
+| Part | Behavior |
+|---|---|
+| `text` | `synthetic` text goes to the model but not the transcript; `ignored` text shows in the transcript but not to the model |
+| `file` | Must be a `data:` URL, never a path or remote URL (501) |
+| `agent`, `subtask` | Become an instruction to use the task tool |
+
+PNG/JPEG/GIF/WebP/PDF bytes are stored as attachments by their real type through `attachment.put` (about 140 KB). `text/*` or JSON files are inlined into the prompt (64 KB).
+
+`system` becomes a leading block of that turn's prompt: user level, not the engine's system prompt. `noReply`, per-prompt `tools` and structured `format` are described under R9a below.
+
+### Message IDs and command defaults
+
+`messageID`, or one the adapter generates, is passed to `user.submit` and becomes the user message's item ID. A prompt queued behind a running turn keeps one ID from admission to the transcript.
+
+`/api/session/:id/prompt` returns that ID for `deferred` and `immediate` delivery. A duplicate ID is refused.
+
+`.../command` also takes `messageID`, `variant` and file `parts`. A Markdown command's `agent`, `model` and `subtask` front matter apply unless the request names its own.
+
+A sub-task command is delegated to its agent through the task tool and leaves the turn's agent alone.
+
+## Run a shell command
+
+`POST .../shell {agent, command, model?, messageID?}` queues your own `!command`, waits for it and returns the shell message. It uses `user.shell`: no model call and no approval, with the same authority as a full-token `user.shell`.
+
+The agent must exist and a model must be a known provider/model pair. Both only label the response, since the transcript stores the session's own agent and model.
+
+This route needs an engine with shell mode and is absent from `READ_ONLY_COMMANDS`.
+
+## Revise messages
+
+These routes apply native message revisions through `session.rest.mutate`:
+
+| Route | Operation |
+|---|---|
+| `DELETE .../message/:messageID` | Delete a message |
+| `DELETE .../message/:messageID/part/:partID` | Delete a part |
+| `PATCH .../message/:messageID/part/:partID` | Patch a text part with `{id, type: "text", text}`; identity fields are checked against the route |
+
+REST ids resolve to native items and their current revisions, so no `If-Match` is needed. Every revision safeguard remains:
+
+- `allowMessageEdits` must be on; otherwise 403.
+- The session must be idle with an empty queue; otherwise 409.
+- History must be exact native history. Compacted, shell-composed or external history is refused.
+- Reasoning and compaction parts are not revisable. A part PATCH accepts text only.
+
+Deleting a user message removes its text and attachments. Deleting just the text of a message that has attachments clears the text.
+
+A message deletion applies item by item after checking that all are revisable. The original events stay in the log.
+
+## Compact and read model context
+
+`POST .../summarize {providerID, modelID, instructions?, auto?}` queues a compaction with the instructions. When the model differs from the session's, it also selects that model (`session.compact {instructions, model}`).
+
+The native engine then writes a portable summary on that model instead of a native checkpoint. Other engines refuse the options (400). `auto` is accepted and ignored.
+
+`GET /api/session/:id/context` returns the native engine's own saved history after compaction and revisions. IDs are `ctx_NNNNNN` by position, and tool results are folded into their calls.
+
+| History source | Header |
+|---|---|
+| Native engine's saved history | `X-Context-Source: engine` |
+| No native history: external engines or nothing saved yet | Transcript projection, `X-Context-Source: transcript` |
+
+Over the 256 KB frame, the oldest entries are dropped and `X-Truncated: true` is set. `GET /api/session/:id/context` projects visible messages since the last recorded compaction.
+
+## Control turns and approvals
+
+| Route | Behavior |
+|---|---|
+| `POST .../abort` | Stop the active turn |
+| `.../cancel-turn {targetMessageID}` | Return `cancelled`, `already_terminal`, `target_mismatch` or `not_running`, without cancelling a different turn |
+| `.../interrupt` | Promote the oldest queued prompt and interrupt the active one |
+| `.../permissions/:requestID {response: "once" | "always" | "reject"}` | Resolve the actual pending approval |
+
+**Note:** `always` means session scope, not permanent global permission.
+
+## Page through results
+
+`GET /api/session` and `/api/session/:id/message` return `{items, cursor: {previous?, next?}}`.
+
+| Option | Default or rule |
+|---|---|
+| `limit` | 50 |
+| `order` | `desc` |
+| `cursor` | Preserves order, filters and selected workspace/session; do not combine it with order or filters |
+| `view` | Supports full/tui/tui-all/history; tui/history omit reasoning |
+
+Legacy messages default to chronological order and the newest requested window. `before`/`after` require a positive limit. Legacy navigation uses `X-Older-Cursor`, `X-Newer-Cursor`, `X-Next-Cursor` and `Link` headers.
+
+Large messages/pages are bounded. `partsMore`/`partsCursor` and `X-Truncated` identify cuts.
+
+## Queue work and wait
+
+| Route | Completion |
+|---|---|
+| `POST /api/session/:id/prompt {prompt: {text}, delivery?: "immediate" | "deferred"}` | Queue the prompt; immediate waits, deferred returns after admission |
+| `POST .../compact` | Queue compaction; return 204 after completion |
+| `POST .../wait` | Return 204 once idle |
+
+Waits are event-driven, cancel on disconnect and have a 55-second deadline (409 on expiry). Native clients can use `restSessions`, `updateRestSession` and `controlRestSession`; a wait's explicit `timeoutMs` is independent of the client's usual RPC deadline.
+
+## List across projects and inspect usage
+
+`GET /experimental/session` lists sessions across daemon projects. It accepts optional `roots`, `start`, `search`, `limit`, `archived`, and a numeric update-time `cursor`.
+
+An explicit workspace/directory scopes the global list. `archived=true` includes archived sessions. Normal routes remain scoped to the selected registered workspace.
+
+### Usage insights
+
+`GET /experimental/usage-insights?start=EPOCH_MS&limit=1000&messageLimit=500` returns v1-style `days`, `totals`, `topTools`, `topAgents`, and `topModels`. These use native observed usage, messages and tracked file snapshots.
+
+Every local day from `start` to today is a row, zeroed when idle. To keep one answer inside a daemon frame, only the most recent 366 days are padded; older days appear only when they had activity.
+
+A day is active with tokens or user messages. `activeDays`, `currentStreak` and `longestStreak` follow that rule; `currentStreak` is zero unless today is active.
+
+## Set session permissions
+
+`POST /session` and `PATCH /session/:id` accept `permission: [{permission, pattern, action}]`: max 500 rules, and `[]` clears them. The session projection lists them. A full token is required.
+
+The native engine evaluates these rules after settings and agent rules, with the last match winning. They apply to that session and the sub-agent sessions it spawns.
+
+- A deny refuses the call.
+- An allow skips the approval ask.
+- Rules do not hide a tool from the model's tool list.
+
+Rules are private daemon state in `session-permissions.json`, mode 0600, and are removed with the session.
+
+## R9a prompt leftovers
+
+These options are native engine only. Claude Code, ACP and Codex sessions answer 501 because they would silently ignore them.
+
+### Record without a reply
+
+`noReply: true` records the user message in the transcript and model history without calling the model; no budget applies. The response is that user message, and the next prompt sees it.
+
+### Limit tools for one prompt
+
+`tools: { name: false }` removes tools for that prompt only; wildcards are allowed. `true` never adds a tool the agent, permission rules or run limits withhold.
+
+Sub-agents, whose tools this option cannot bound, are off for that turn.
+
+### Request structured output
+
+`format: { type: "json_schema", schema, retryCount }` gives the model a `StructuredOutput` tool whose arguments are validated against the schema.
+
+| Setting | Limit or default |
+|---|---|
+| Schema | Object schema, up to 16 KB, local `$ref`s only |
+| `retryCount` | Default 2 |
+
+A valid call ends the turn; its arguments become the assistant message's `info.structured`. A plain-text or invalid answer is retried. After the retries, the turn fails with `info.error.name = "StructuredOutputError"`.
+
+A structured answer over 64 KB is not exposed in `info.structured`; the tool part still shows it.
+
+### Queuing and model steps
+
+The three options travel as `turnOptions` on `user.submit`. They are stored on the queued message, survive a restart and keep that prompt from joining a running turn.
+
+Assistant messages of turns with model calls carry `step-start`/`step-finish` parts. Each model call is a step, opened before its first part and closed after its tool calls with that call's tokens and cost.
+
+The `reason` is `tool-calls`, `stop` or the turn's end state. Without usage reports, a step ends where tool calls give way to a new answer.
+
+Turns without a model call (`!command`, compaction, `noReply`) have no steps. The `tui`/`history` views and v2 content omit them, and they cannot be edited or deleted.
+
+## Remaining compatibility limits
+
+The following remain compatibility limits:
+
+- v1's full snapshot accounting in usage.
+- The user message's stored `system`/`tools` fields.
+- Complete unbounded message bodies and exact v1 message/part IDs.
+- `file:`/remote file URLs (501).
+- `noReply`, `tools` and `format` on a session whose engine is not the native one (501).
+- A per-message agent/model stored for shell and prompts: the transcript keeps the session's.
+- A real system-prompt override: `system` is prompt text.
+- Active model-context retention beyond the recorded compaction boundary.
+
+Deferred prompts queued behind active turns keep their message ID from admission. Unsupported request fields are rejected before submission.
+
+No TUI screens change in B81, R6 or R7, so terminal frames are not applicable.

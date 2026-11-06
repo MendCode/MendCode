@@ -209,6 +209,8 @@ export function createInput(ctx: AppContext, actions: {
     const delivery = state.nextDelivery
     state.nextDelivery = undefined
     state.submits++
+    // An error notice has no timer: the next thing sent is the action that clears it (docs/commands.md#notices).
+    if (ctx.toasts.current?.variant === "error") ctx.toasts.dismiss()
     if (state.editingScratch) return saveScratch()
     if (state.editingGoal) return saveGoalEdit()
     if (state.editingMemory) {

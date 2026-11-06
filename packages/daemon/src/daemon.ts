@@ -2389,16 +2389,11 @@ export async function startDaemon(options: DaemonOptions) {
     return restartDrain ??= createRestartDrain({
       sessions: () => actors.keys(),
       running: (sessionId) => runningWork(sessionId, openToolCalls),
-      turn: (sessionId) => { const now = actors.get(sessionId)?.snapshot(); return now?.turnId && !now.stopping && now.foreground !== "compacting" ? now.turnId : undefined },
       title: sessionTitle,
+      paused: (sessionId) => actors.get(sessionId)?.snapshot().paused === true,
       hold: (sessionId, on) => actors.get(sessionId)?.pause(on) ?? Promise.resolve(),
-      interrupt: async (sessionId, turnId) => {
-        const actor = actors.get(sessionId)
-        if (!actor) return
-        restartResume.record(sessionId, turnId)
-        await actor.interrupt("restart", "daemon_shutdown")
-      },
-      released: () => void restartResume.start().catch(() => undefined),
+      // After the reply that started the wait is out; the stop interrupts the turns still open, for the next start to resume.
+      stop: () => void setTimeout(() => void stop().then(() => options.onShutdown?.()), 10),
       now: () => clock.now(),
       log: logLine,
     })
@@ -6116,9 +6111,11 @@ export async function startDaemon(options: DaemonOptions) {
         }
       }
       case "daemon.shutdown": {
-        // A forced restart's wait, before its stop: the sessions are held and what still runs is waited for (restart-drain.ts).
+        // A forced restart's wait: the sessions are held, what still runs is waited for, then the daemon stops (restart-drain.ts).
+        // A socket client that leaves before that lets it go; the client that asked starts the next daemon.
         if (command.drainMs !== undefined) {
-          const waiting = await (await loadRestartDrain()).begin(command.drainMs, connection.agent?.sessionId)
+          if (stopped) return reply(connection, command.id, { ok: true, result: { waiting: [] } })
+          const waiting = await (await loadRestartDrain()).begin(command.drainMs, { except: connection.agent?.sessionId, gone: connection.ended?.signal })
           return reply(connection, command.id, { ok: true, result: { waiting } })
         }
         const busy =() => [...actors.values()].some(actorWorking) || scheduler.snapshot().length > 0 || engineJobs() > 0 || loops.list().some((loop) => loop.state === "verifying")

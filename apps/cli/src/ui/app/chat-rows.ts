@@ -646,13 +646,14 @@ export function createChatRows(ctx: AppContext, actions: {
   }
 
   /** The cells of the pet as it would be drawn in a transcript `room` rows tall; undefined when there is none or it does not fit. */
-  /** A notice row as it lies over the prompt's rule: the message cut to the room and its hint kept. */
+  /** A notice row as it lies over the prompt's rule: the message (its widest span that is not the muted hint) cut to the room, the mark and hint kept. */
   function ruleNotice(row: Line, room: number): Line {
     const spans = row.filter((span) => span.text.trim() !== "")
     if (!spans.length) return []
     const over = spans.reduce((sum, span) => sum + textWidth(span.text), 0) - room
-    const first = over > 0 ? { ...spans[0]!, text: truncateEnd(spans[0]!.text, Math.max(1, textWidth(spans[0]!.text) - over)) } : spans[0]!
-    return [first, ...spans.slice(1)]
+    if (over <= 0) return spans
+    const cut = spans.reduce((best, span, index) => span.fg !== "muted" && textWidth(span.text) > textWidth(spans[best]!.text) ? index : best, 0)
+    return spans.map((span, index) => index === cut ? { ...span, text: truncateEnd(span.text, Math.max(1, textWidth(span.text) - over)) } : span)
   }
 
   /** Mend stands beside the prompt when chosen, and in place of a pet that half blocks would draw as noise (no pictures here). */

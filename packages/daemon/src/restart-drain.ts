@@ -2,8 +2,6 @@ import type { RestartHeld, SessionEvent, SessionId } from "@mendcode/protocol"
 
 /** How often a drain looks at the sessions it holds. */
 export const DRAIN_TICK_MS = 250
-/** A drain whose stop never came (the restart command died) lets its sessions go this long after its grace ended. */
-export const DRAIN_RELEASE_MS = 60_000
 const MAX_SESSIONS = 20
 const MAX_ITEMS = 8
 const ITEM_CHARS = 300
@@ -84,28 +82,27 @@ export function takeLost(meta: Meta): Map<string, string[]> {
 }
 
 /**
- * The wait of a forced restart (`daemon.shutdown` with `drainMs`). Every session is held (paused: it starts no new turn). A session
- * with nothing running has its turn interrupted now, to resume after the restart; one with a command, a background task or a
- * sub-agent running is waited for, until that ends or the grace runs out. The stop that follows kills only what still runs then.
- * Nothing runs outside a drain: its timer exists only between `begin` and the stop or the release.
+ * The wait of a forced restart (`daemon.shutdown` with `drainMs`). Every session is held (paused: it starts no new turn) and nothing
+ * is interrupted while it waits: a session with a command, a background task or a sub-agent running is waited for, until that ends
+ * or the grace runs out. Then the daemon itself stops (`stop`), which interrupts the turns still open (they resume after the restart)
+ * and kills only what still runs. When every client that asked goes away first, the drain is let go: the sessions it paused go on,
+ * and no turn was cut. Nothing runs outside a drain: its timer exists only between `begin` and the stop or the release.
  */
 export function createRestartDrain(deps: {
   sessions(): Iterable<SessionId>
   /** What runs in a session that a stop would kill; empty when nothing does. */
   running(sessionId: SessionId): string[]
-  turn(sessionId: SessionId): string | undefined
   title(sessionId: SessionId): string
+  /** Paused already (by the user): the drain neither pauses it nor releases it. */
+  paused(sessionId: SessionId): boolean
   hold(sessionId: SessionId, on: boolean): Promise<unknown>
-  /** Records the turn for the next start and interrupts it (the shutdown cause). */
-  interrupt(sessionId: SessionId, turnId: string): Promise<unknown>
-  /** The drain was let go without a stop: resume the turns it interrupted. */
-  released(): void
+  /** The wait is over: stop the daemon for the restart. Called once. */
+  stop(): void
   now(): number
   log(level: "info" | "warn", message: string): void
   tickMs?: number
-  releaseMs?: number
 }) {
-  let state: { until: number; except?: string | undefined; done: boolean; waiting: RestartHeld; held: Set<SessionId> } | undefined
+  let state: { until: number; except?: string | undefined; done: boolean; waiting: RestartHeld; seen: Set<SessionId>; held: Set<SessionId>; askers: number } | undefined
   let timer: ReturnType<typeof setInterval> | undefined
   let ticking = false
 
@@ -115,29 +112,34 @@ export function createRestartDrain(deps: {
     try {
       const current = state
       for (const sessionId of deps.sessions()) {
-        if (sessionId === current.except) continue
-        if (!current.held.has(sessionId)) { current.held.add(sessionId); await deps.hold(sessionId, true) }
-        if (deps.running(sessionId).length) continue
-        const turnId = deps.turn(sessionId)
-        if (turnId) await deps.interrupt(sessionId, turnId)
+        if (sessionId === current.except || current.seen.has(sessionId)) continue
+        current.seen.add(sessionId)
+        if (deps.paused(sessionId)) continue
+        current.held.add(sessionId)
+        await deps.hold(sessionId, true)
+        if (state !== current) return
       }
-      if (state !== current) return
+      if (state !== current || current.done) return
       current.waiting = collectHeld({ sessions: deps.sessions(), running: deps.running, title: deps.title, except: current.except })
-      if (!current.done && (!current.waiting.length || deps.now() >= current.until)) {
-        current.done = true
-        deps.log(current.waiting.length ? "warn" : "info", current.waiting.length ? `[DAEMON]: the restart's grace ended with work still running; the stop kills it:\n${heldText(current.waiting)}` : "[DAEMON]: the work a restart waited for ended")
-      }
-      if (current.done && deps.now() >= current.until + (deps.releaseMs ?? DRAIN_RELEASE_MS)) release()
+      if (current.waiting.length && deps.now() < current.until) return
+      current.done = true
+      if (timer) clearInterval(timer)
+      timer = undefined
+      deps.log(current.waiting.length ? "warn" : "info", current.waiting.length ? `[DAEMON]: the restart's grace ended with work still running; stopping kills it:\n${heldText(current.waiting)}` : "[DAEMON]: the work a restart waited for ended; stopping for the restart")
+      deps.stop()
+    } catch (error) {
+      deps.log("warn", `[DAEMON]: restart wait failed: ${error instanceof Error ? error.message : String(error)}`)
+      release("it failed")
     } finally { ticking = false }
   }
 
-  function release() {
+  /** Lets the drain go without a stop: every session it paused goes on. */
+  function release(why: string) {
     const current = state
-    if (!current) return
+    if (!current || current.done) return
     dispose()
-    deps.log("warn", "[DAEMON]: no stop came after the restart's wait; the sessions it held go on")
+    deps.log("warn", `[DAEMON]: the restart's wait was let go (${why}); the sessions it held go on`)
     for (const sessionId of current.held) void deps.hold(sessionId, false)
-    deps.released()
   }
 
   function dispose() {
@@ -147,17 +149,27 @@ export function createRestartDrain(deps: {
   }
 
   return {
-    /** Starts holding (or extends a drain already running); what runs now, for the caller to show. `except`: the session that asked. */
-    async begin(graceMs: number, except?: string): Promise<RestartHeld> {
+    /**
+     * Starts holding (or extends a drain already running); what runs now, for the caller to show. `except`: the session that asked.
+     * `gone`: aborted when the client that asked leaves; once every one that asked has left, the drain is let go.
+     */
+    async begin(graceMs: number, input: { except?: string | undefined; gone?: AbortSignal | undefined } = {}): Promise<RestartHeld> {
       const until = deps.now() + graceMs
       if (state) state.until = Math.max(state.until, until)
-      else state = { until, except, done: false, waiting: [], held: new Set() }
+      else state = { until, except: input.except, done: false, waiting: [], seen: new Set(), held: new Set(), askers: 0 }
+      const current = state
+      if (input.gone) {
+        current.askers++
+        const left = () => { if (state === current && --current.askers === 0) release("the client that asked for the restart left") }
+        if (input.gone.aborted) left()
+        else input.gone.addEventListener("abort", left, { once: true })
+      }
       await tick()
-      if (state && !timer) {
-        timer = setInterval(() => void tick().catch((error) => deps.log("warn", `[DAEMON]: restart wait failed: ${error instanceof Error ? error.message : String(error)}`)), deps.tickMs ?? DRAIN_TICK_MS)
+      if (state && !state.done && !timer) {
+        timer = setInterval(() => void tick(), deps.tickMs ?? DRAIN_TICK_MS)
         timer.unref?.()
       }
-      return state?.waiting ?? []
+      return current.waiting
     },
     status() {
       return state ? { waiting: state.waiting, until: state.until, done: state.done } : undefined

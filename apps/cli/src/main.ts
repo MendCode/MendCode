@@ -937,9 +937,10 @@ if (!startup?.isolated) {
 process.once("exit", (code) => {
   if (soloHost && !soloHost.stopped) soloHost.log("warn", `[SOLO]: the terminal hosting the daemon exited (code ${code}); turns still running end as interrupted`)
 })
-// MendCode's own pets only: another program's pets folder (Codex's) is that program's.
+// MendCode's own pets only: another program's pets folder (Codex's) is that program's. The built-in ones (MendGirl) live in
+// the executable and are listed first; their module loads with the pet list, never at start.
 const pets = {
-  dirs: [{ dir: path.join(dataDir, "pets"), source: "user" as const }],
+  dirs: [{ dir: "", source: "builtin" as const }, { dir: path.join(dataDir, "pets"), source: "user" as const }],
   cacheDir: path.join(dataDir, "pets-cache"),
   images: false,
 }

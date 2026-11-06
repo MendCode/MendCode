@@ -1,6 +1,20 @@
-# Resources and config safety
+Use daemon settings to control resource discovery, instruction files, shell policy and network access. Inspect the saved configuration with `/debug-config`; secret values are never printed.
 
-All settings below are daemon settings (`settings.set`, `/debug-config` to inspect). Secret values are never printed. Remote and peer clients cannot set `proxy`, `shellEnvironment`, `shellCommandPrefix`, `loginShell`, `web`, `sandbox`, `trustedToolDirs` (or run `tools.trust`), `allowedHttpHookUrls`, `permission`, `permissionAllow` or `projectConfig`, and `/debug-config` is local only.
+## Resources and config safety
+
+All settings below are daemon settings, changed through `settings.set`. `/debug-config` is local only.
+
+Remote and peer clients cannot set these fields:
+
+| Restricted settings |
+|---|
+| `proxy` |
+| `shellEnvironment`, `shellCommandPrefix`, `loginShell` |
+| `web`, `sandbox` |
+| `trustedToolDirs` (or run `tools.trust`) |
+| `allowedHttpHookUrls` |
+| `permission`, `permissionAllow` |
+| `projectConfig` |
 
 ## `.agents` and `.claude` resources
 
@@ -12,23 +26,84 @@ MendCode reads, as data only, the folders other agents use:
 | `<project>/.claude/{skills,commands,agents}`, `~/.claude/{skills,commands,agents}` | skills, slash commands, agents |
 | `.mendcode` of the project's parent folders inside its repository (`repo/.mendcode` when you open `repo/apps/web`) | skills, slash commands, agents |
 
-- MendCode's own folders win on the same name: `.claude` sits under `~/.mendcode` (user) and `<project>/.mendcode` (project). The project's `.agents`/`.claude` beat the user's own folder.
-- Nothing executable is read from them: no tools, hooks, MCP, extensions or `mendcode.json`.
-- Parent folders: the walk goes from the project's parent up to the folder holding `.git`, farthest first, so the nearest
-  folder wins and the project's own `.mendcode` wins over all of them. A project that is itself the repository root, a
-  folder outside any repository, and a walk that would reach your home folder inherit nothing. Like `.claude`, they give
-  prompt data only (v1 inherited command folders the same way); they are read even with `foreignResources` off.
-- Claude command files: `description` and `argument-hint` are cut to fit; `model` and `agent` are kept and applied only when that model or agent exists here (`sonnet` or `Explore` names another tool's), otherwise the session's model and the current agent stay; `subtask` works as in native files; a file that does not fit is reported and skipped, and a command never replaces a built-in. `$ARGUMENTS`, `$1` and `` !`cmd` `` work as in MendCode's own commands (the shell part still goes through permissions).
-- Claude agent files keep `name`, `description`, `tools` and `disallowedTools` (Claude tool names mapped: Read, Grep, Glob, LS, Bash→shell, Edit/Write, WebFetch, WebSearch…; unknown names are dropped). `model`, `color`, `permissionMode` are ignored; `build` and `plan` are reserved. Project agents still need the project to be trusted (`/tools`).
-- A project `.claude`/`.agents` that is a symlink leaving the project is skipped. Inside a skills folder a symlinked directory is followed when it resolves inside the layer's own folder (or the project, for project layers), exactly like a symlinked `SKILL.md`; one that leaves is refused and listed in `/doctor`.
-- Home folders are read only by a daemon on the default data directory, or when `MENDCODE_FOREIGN_HOME` names the home. A daemon started with its own `--dir` stays self-contained.
-- Decision: on by default (v1 did the same and these are prompt data). `settings.set {"foreignResources": false}` turns it all off.
+### Priority and parent folders
+
+MendCode's own folders win on the same name: `.claude` sits under `~/.mendcode` (user) and `<project>/.mendcode` (project). The project's `.agents`/`.claude` beat the user's own folder.
+
+Nothing executable is read from them: no tools, hooks, MCP, extensions or `mendcode.json`.
+
+The parent-folder walk goes from the project's parent up to the folder holding `.git`, farthest first. The nearest folder wins and the project's own `.mendcode` wins over all of them.
+
+These cases inherit nothing:
+
+- A project that is itself the repository root.
+- A folder outside any repository.
+- A walk that would reach your home folder.
+
+Like `.claude`, parent folders give prompt data only (v1 inherited command folders the same way). They are read even with `foreignResources` off.
+
+### Claude commands and agents
+
+| Claude command field or case | Behavior |
+|---|---|
+| `description`, `argument-hint` | Cut to fit |
+| `model`, `agent` | Kept and applied only when that model or agent exists here; otherwise the session's model and current agent stay (`sonnet` or `Explore` names another tool's) |
+| `subtask` | Works as in native files |
+| File that does not fit | Reported and skipped |
+| Built-in command name | Never replaced |
+| `$ARGUMENTS`, `$1` and `` !`cmd` `` | Work as in MendCode's own commands; the shell part still goes through permissions |
+
+Claude agent files keep `name`, `description`, `tools` and `disallowedTools`. Claude tool names are mapped: Read, Grep, Glob, LS, Bash→shell, Edit/Write, WebFetch, WebSearch…; unknown names are dropped.
+
+`model`, `color`, `permissionMode` are ignored; `build` and `plan` are reserved. Project agents still need the project to be trusted (`/tools`).
+
+### Symlinks and home folders
+
+A project `.claude`/`.agents` that is a symlink leaving the project is skipped.
+
+Inside a skills folder a symlinked directory is followed when it resolves inside the layer's own folder (or the project, for project layers), exactly like a symlinked `SKILL.md`. One that leaves is refused and listed in `/doctor`.
+
+Home folders are read only by a daemon on the default data directory, or when `MENDCODE_FOREIGN_HOME` names the home. A daemon started with its own `--dir` stays self-contained.
+
+Decision: on by default (v1 did the same and these are prompt data). `settings.set {"foreignResources": false}` turns it all off.
 
 ## Instruction files
 
-Per directory, from the session directory up to the project root, the first file found of `AGENTS.override.md`, `AGENTS.md`, `CLAUDE.md`, `CONTEXT.md`, then `instructionFallbacks` names. `AGENTS.override.md` replaces the rest in its directory (a local override; keep it out of git). In the data directory, `AGENTS.override.md` replaces the global `AGENTS.md`.
+### Choose the instruction file
 
-One loader serves both paths. The system prompt gets the chain of directories from the session directory up to the project root, and the `read` tool and `@file` mentions get the instructions of the directories below the session directory when a file there is read. Both use the same file rule, `@include` lines, limits (16,000 characters per file, 64,000 in total, 100 files, include depth 8) and settings. A file is re-read when its inode, size, mtime or ctime changes (so a rewrite within a coarse filesystem's timestamp tick is still noticed); on `read`, an edited instruction file is delivered again (a delivery is keyed by path and version), an unchanged one is not.
+Per directory, from the session directory up to the project root, the first file found wins, in this order:
+
+1. `AGENTS.override.md`.
+2. `AGENTS.md`.
+3. `CLAUDE.md`.
+4. `CONTEXT.md`.
+5. `instructionFallbacks` names.
+
+`AGENTS.override.md` replaces the rest in its directory (a local override; keep it out of git). In the data directory, `AGENTS.override.md` replaces the global `AGENTS.md`.
+
+### Loading and limits
+
+One loader serves both paths:
+
+| Path | Instructions loaded |
+|---|---|
+| System prompt | The chain of directories from the session directory up to the project root |
+| `read` tool and `@file` mentions | Directories below the session directory when a file there is read |
+
+Both use the same file rule, `@include` lines and settings, with these limits:
+
+| Limit | Value |
+|---|---|
+| Per file | 16,000 characters |
+| Total | 64,000 characters |
+| Files | 100 |
+| Include depth | 8 |
+
+A file is re-read when its inode, size, mtime or ctime changes, so a rewrite within a coarse filesystem's timestamp tick is still noticed.
+
+On `read`, an edited instruction file is delivered again (a delivery is keyed by path and version); an unchanged one is not.
+
+### Overrides, roots and extra files
 
 - Both `AGENTS.md` and `CLAUDE.md` in one directory: `AGENTS.md` is used and `CLAUDE.md` is not, so a `CLAUDE.md` that is only `@AGENTS.md` (or a symlink to it) never loads twice. A `CLAUDE.md` with its own content next to an `AGENTS.md` is not read; put it behind an `@CLAUDE.md` line in `AGENTS.md` (include) or use `AGENTS.override.md` for the local part. The rule is documented and tested; change it only for a real layout it breaks.
 - `projectRootMarkers` (default `[".git"]`): names that mark the root while walking up. `[]` reads the session directory only. With no marker in sight the walk is bounded: inside the user's home it stops at the home (or where the filesystem changes), elsewhere only the session directory is used. It never reaches `/`.
@@ -45,9 +120,37 @@ One loader serves both paths. The system prompt gets the chain of directories fr
 
 ## Skills, commands and agents: how files are read
 
-Frontmatter is YAML (`Bun.YAML`): `description: |` blocks, quoted and multi-line values, lists and maps work as in Claude Code, Codex and pi files; the whole frontmatter is read. A frontmatter that is not valid YAML falls back to `key: value` lines and says so. A skill's `name` may be namespaced (`plugin:skill`, `acme.lint`); a skill is `/skill-name` when its name is slash-safe (letters, digits, `_ - :`).
+### Frontmatter and names
 
-Layers resolve first, caps apply after: the 100-skill, 200-command and 100-agent quotas drop the lowest-priority layers first, so project entries never fall off because a lower layer is full. `/doctor` lists, one line each: what another layer overrides (`skill review (user) is overridden by project`), what a cap left out, files that failed (one bad command or skill never stops the others), fields read but not applied, and unknown fields. The skills page shows the same per skill, `/doctor` also lists a skill or command a terminal built-in shadows (the built-in wins).
+Frontmatter is YAML (`Bun.YAML`): `description: |` blocks, quoted and multi-line values, lists and maps work as in Claude Code, Codex and pi files. The whole frontmatter is read.
+
+A frontmatter that is not valid YAML falls back to `key: value` lines and says so. A skill's `name` may be namespaced (`plugin:skill`, `acme.lint`).
+
+A skill is `/skill-name` when its name is slash-safe (letters, digits, `_ - :`).
+
+### Layer quotas and diagnostics
+
+Layers resolve first, caps apply after:
+
+| Resource | Quota |
+|---|---|
+| Skills | 100-skill |
+| Commands | 200-command |
+| Agents | 100-agent |
+
+Quotas drop the lowest-priority layers first, so project entries never fall off because a lower layer is full.
+
+`/doctor` lists, one line each:
+
+- What another layer overrides (`skill review (user) is overridden by project`).
+- What a cap left out.
+- Files that failed; one bad command or skill never stops the others.
+- Fields read but not applied, and unknown fields.
+- A skill or command a terminal built-in shadows; the built-in wins.
+
+The skills page shows the same per skill.
+
+### Supported fields
 
 Honoured means applied; noted means read and shown as a note (on load, in `/skills`, in `/doctor`) but not applied; ignored means not read, and the field name is listed.
 
@@ -68,9 +171,24 @@ Honoured means applied; noted means read and shown as a note (on load, in `/skil
 | anything else (`context`, `hooks`, `paths`, …) | ignored, listed once | ignored, listed once |
 | Codex `$NAME` placeholders (`argument-hint: FILE=<path>`) | not applicable | not substituted: noted; use `$1`…`$9` or `$ARGUMENTS` |
 
-Skill commands: `/skill-name args` sends the skill's folder and body with `$ARGUMENTS` filled (arguments are appended when the body has no placeholder). Only `$ARGUMENTS` is replaced, and `!` shell markers in a skill body are never run. A skill whose `/name` is taken by a built-in or a custom command does not become a command; `/doctor` says so. Skills of the profile that ships with MendCode itself stay out of the slash menu (the model and `/skills` reach them). The `skill` tool called with no `name` lists the skills it can load, which is how the model finds them in `minimal` mode, where the prompt carries no catalog.
+### Invoke skill commands
 
-Reload: the daemon watches the data directory (skills, commands, agents and extensions of its own and of its profiles) and, for projects trusted for project tools, the project's `.mendcode`, `.claude` and `.agents` folders including their profiles, with an 80 ms debounce and at most 16 project folders. An edit reloads extensions and tells terminals; an untrusted project is never watched.
+`/skill-name args` sends the skill's folder and body with `$ARGUMENTS` filled. Arguments are appended when the body has no placeholder.
+
+Only `$ARGUMENTS` is replaced, and `!` shell markers in a skill body are never run. A skill whose `/name` is taken by a built-in or a custom command does not become a command; `/doctor` says so.
+
+Skills of the profile that ships with MendCode itself stay out of the slash menu; the model and `/skills` reach them.
+
+The `skill` tool called with no `name` lists the skills it can load. This is how the model finds them in `minimal` mode, where the prompt carries no catalog.
+
+### Reload edited files
+
+The daemon watches these locations with an 80 ms debounce and at most 16 project folders:
+
+- The data directory: skills, commands, agents and extensions of its own and of its profiles.
+- For projects trusted for project tools: the project's `.mendcode`, `.claude` and `.agents` folders including their profiles.
+
+An edit reloads extensions and tells terminals; an untrusted project is never watched.
 
 ## Shell policy
 
@@ -84,8 +202,20 @@ For the model's `shell`, background `shell` and `shell_session` commands (the us
 }
 ```
 
-- `shellEnvironment` unset: the command inherits everything (unchanged). When set: `inherit` `all` (default), `core` (PATH, HOME, USER, SHELL, LANG, LC_*, TERM, TMPDIR, TZ…) or `none`; then `includeOnly`, then names containing KEY, SECRET, TOKEN, PASSWORD or CREDENTIAL are dropped unless `keepSecrets`, then `exclude` (case-insensitive globs); `set` is applied last. The result is what the permission review sees.
-- `shellCommandPrefix` is placed before the command in the same shell. `loginShell` starts POSIX shells with `-l`. Both off unless set.
+When `shellEnvironment` is unset, the command inherits everything (unchanged). When set, the environment is built in this order:
+
+1. Apply `inherit`: `all` (default), `core` (PATH, HOME, USER, SHELL, LANG, LC_*, TERM, TMPDIR, TZ…) or `none`.
+2. Apply `includeOnly`.
+3. Drop names containing KEY, SECRET, TOKEN, PASSWORD or CREDENTIAL unless `keepSecrets`.
+4. Apply `exclude` (case-insensitive globs).
+5. Apply `set` last.
+
+The result is what the permission review sees.
+
+| Setting | Effect | Default |
+|---|---|---|
+| `shellCommandPrefix` | Placed before the command in the same shell | Off unless set |
+| `loginShell` | Starts POSIX shells with `-l` | Off unless set |
 
 ## Config problems
 
@@ -97,7 +227,13 @@ Settings the daemon ignores (invalid, unknown, or an unreadable `.mendcode/proje
 { "proxy": { "url": "http://proxy.local:3128", "noProxy": ["internal.corp", ".lan"], "caFile": "/etc/ssl/corp-ca.pem" } }
 ```
 
-Every outbound request of the daemon (providers, search, fetch, MCP) goes through the proxy; loopback and `noProxy` hosts (suffix match, `*` for all) go direct. `caFile` (PEM, under 2 MB) is trusted in addition to the system roots; an unreadable file fails the request rather than skipping verification. http and https proxies only (no SOCKS, no CIDR in `noProxy`). The URL may carry credentials and is never logged or shown. Shell commands the model runs are not proxied; set `shellEnvironment.set` for those.
+Every outbound request of the daemon (providers, search, fetch, MCP) goes through the proxy. Loopback and `noProxy` hosts (suffix match, `*` for all) go direct.
+
+`caFile` (PEM, under 2 MB) is trusted in addition to the system roots. An unreadable file fails the request rather than skipping verification.
+
+- http and https proxies only: no SOCKS, no CIDR in `noProxy`.
+- The URL may carry credentials and is never logged or shown.
+- Shell commands the model runs are not proxied; set `shellEnvironment.set` for those.
 
 ## Web domain rules
 
@@ -105,18 +241,58 @@ Every outbound request of the daemon (providers, search, fetch, MCP) goes throug
 { "web": { "allowDomains": ["docs.example.com"], "blockDomains": ["spam.io"] } }
 ```
 
-Apply to `webfetch` (every redirect hop) and `websearch` (results). A block wins; with an allow list only those domains and their subdomains pass. `websearch` also takes `recency` (`day`, `week`, `month`, `year`): sent to Exa, Brave and Tavily; the OpenRouter plugin has no date filter, so the reply says so. Exa and Tavily get the domains natively, Brave gets `-site:` terms, and every result is checked locally either way.
+Rules apply to `webfetch` (every redirect hop) and `websearch` (results). A block wins; with an allow list only those domains and their subdomains pass.
+
+`websearch` also takes `recency` (`day`, `week`, `month`, `year`):
+
+| Provider | Recency | Domain filtering |
+|---|---|---|
+| Exa and Tavily | Sent to the provider | Domains passed natively |
+| Brave | Sent to the provider | `-site:` terms |
+| OpenRouter plugin | No date filter; the reply says so | |
+
+Every result is checked locally either way.
 
 ## Settings the model proposes
 
-The model can change any daemon setting (tier, default permission, models and roles, compaction, budgets, output style, experimental flags, providers' extras, ...) through the `mendcode_settings` tool, and only with your approval of that exact change. It is lent to Claude Code sessions as `mcp__mendcode__mendcode_settings`.
+The model can change any daemon setting through the `mendcode_settings` tool, only with your approval of that exact change. This includes tier, default permission, models and roles, compaction, budgets, output style, experimental flags and providers' extras.
 
-- `get` returns the saved settings with secrets hidden: values under credential-like names (`key`, `token`, `secret`, `password`, ...) and every value of `env`, `headers` and `shellEnvironment.set` read `[hidden]`, and secret-looking text is masked.
-- `propose { patch, reason }` takes a `settings.set` patch: each top-level key's value replaces the whole value and `null` resets it. The patch is validated against the settings schema first, without writing; an invalid one is refused and you are not asked. A patch that changes nothing is not asked either.
-- Otherwise a question card **Change MendCode settings?** shows one `path: before → after` line per changed value (the same redaction on both sides, up to 24 lines) and `Why: <reason>`, with **Apply** and **Don't apply**. Only Apply saves, through the same write as `settings.set`: every terminal gets `settings.changed` and the services that read the setting follow. Any other answer, a typed reply or a dismissed card saves nothing.
+It is lent to Claude Code sessions as `mcp__mendcode__mendcode_settings`.
 
-A call from Claude Code that waits on the card for about 40 seconds is answered `Pending` (the card stays open while the turn runs and saves on Apply), instead of the harness dropping it with a timeout. From a session another session started, the card is shown on the launching session too ([permissions](permissions.md#what-a-session-cannot-do-from-its-own-shell)).
+### Inspect and propose
 
-The card asks in every permission mode, `full` included, and in every tier: no mode, grant or allow rule answers it. With nobody to ask (a headless `mendcode run`, a host without questions) the tool refuses and returns the change for you to make in `/settings`. A patch that names a key only the machine running MendCode sets (`permission`, `sandbox`, `shellEnvironment`, `trustedToolDirs`, `proxy`, `projectConfig`, `tier`, `features`, `experimental` and the rest a remote `settings.set` refuses) is titled **Change MendCode settings? (answer on this machine)**, and the daemon refuses an Apply to it from a remote or peer client. The model is told to propose only what you asked for and never to raise or remove a spend limit unless you asked for that exact change. Terminal look (theme, footer, prompt box) stays with `customize_ui`.
+`get` returns the saved settings with secrets hidden:
+
+- Values under credential-like names (`key`, `token`, `secret`, `password`, ...) read `[hidden]`.
+- Every value of `env`, `headers` and `shellEnvironment.set` reads `[hidden]`.
+- Secret-looking text is masked.
+
+`propose { patch, reason }` takes a `settings.set` patch. Each top-level key's value replaces the whole value and `null` resets it.
+
+The patch is validated against the settings schema first, without writing. An invalid one is refused and you are not asked; a patch that changes nothing is not asked either.
+
+### Approve an exact change
+
+1. Review the **Change MendCode settings?** question card. It shows one `path: before → after` line per changed value, with the same redaction on both sides, up to 24 lines, and `Why: <reason>`.
+2. Choose **Apply** or **Don't apply**. Only Apply saves, through the same write as `settings.set`.
+3. After Apply, every terminal gets `settings.changed` and the services that read the setting follow.
+
+Any other answer, a typed reply or a dismissed card saves nothing.
+
+A call from Claude Code that waits on the card for about 40 seconds is answered `Pending`, instead of the harness dropping it with a timeout. The card stays open while the turn runs and saves on Apply.
+
+From a session another session started, the card is shown on the launching session too ([permissions](permissions.md#what-a-session-cannot-do-from-its-own-shell)).
+
+### Approval boundaries
+
+The card asks in every permission mode, `full` included, and in every tier: no mode, grant or allow rule answers it.
+
+With nobody to ask (a headless `mendcode run`, a host without questions), the tool refuses and returns the change for you to make in `/settings`.
+
+A patch naming a machine-only key is titled **Change MendCode settings? (answer on this machine)**. The daemon refuses an Apply to it from a remote or peer client.
+
+Machine-only keys include `permission`, `sandbox`, `shellEnvironment`, `trustedToolDirs`, `proxy`, `projectConfig`, `tier`, `features`, `experimental` and the rest a remote `settings.set` refuses.
+
+The model is told to propose only what you asked for and never to raise or remove a spend limit unless you asked for that exact change. Terminal look (theme, footer, prompt box) stays with `customize_ui`.
 
 Code: `packages/packages/src/layers.ts`, `packages/engine-native/src/project-instructions.ts`, `packages/tools/src/shell-policy.ts`, `web-policy.ts`, `packages/daemon/src/network-policy.ts`, `config-layers.ts`.

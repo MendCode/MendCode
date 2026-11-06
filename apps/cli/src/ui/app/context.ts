@@ -670,7 +670,8 @@ export type AppContext = {
   stateLabels: Record<ForegroundState, string>
   permissionLabels: Record<PermissionMode, string>
   localDay(at: number): string
-  say(message: string, variant?: ToastVariant, extra?: { title?: string; hint?: string; oneLine?: boolean; ms?: number; quiet?: boolean }): void
+  /** Shows the app's one notice (docs/commands.md#notices); `detail` is the full text F4 opens when `message` is its short summary. */
+  say(message: string, variant?: ToastVariant, extra?: { title?: string; hint?: string; detail?: string; oneLine?: boolean; ms?: number; quiet?: boolean }): void
   fail(message: string): void
   report(reply: CommandReply): void
   requestFrame(): void

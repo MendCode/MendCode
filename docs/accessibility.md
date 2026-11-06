@@ -2,17 +2,22 @@
 
 Screen-reader mode makes the terminal easy to follow with a screen reader or a braille display: linear output, nothing that moves, plain text.
 
-Turn it on with any of:
+## Turn on screen-reader mode
 
-- `/accessible on` (also `off` and `toggle`), or `/customize` > Advanced > Screen reader. Saved in the terminal settings.
-- `mendcode --accessible` for one run.
-- `MENDCODE_ACCESSIBLE=1` for every run of that shell (`MENDCODE_ACCESSIBLE=0` turns a saved setting off for that run).
+Choose how long you want the mode to apply:
 
-There is no automatic detection: a terminal gives no reliable sign that a screen reader is running, so the mode is always asked for.
+| Use | Does |
+|---|---|
+| `/accessible on`, or `/customize` > Advanced > Screen reader | Turns the mode on and saves it in the terminal settings. The command also accepts `off` and `toggle`. |
+| `mendcode --accessible` | Turns the mode on for one run. |
+| `MENDCODE_ACCESSIBLE=1` | Turns the mode on for every run of that shell. |
+| `MENDCODE_ACCESSIBLE=0` | Turns a saved setting off for that run. |
+
+There is no automatic detection: a terminal gives no reliable sign that a screen reader is running, so you always turn the mode on explicitly.
 
 ## What it does
 
-| | |
+| Change | What you get |
 |---|---|
 | Inline screen | The chat stays in the terminal's own scrollback instead of the alternate screen, so finished output is written once, in order, and never repainted. Pages (`/help`, `/customize`, ...) still borrow the alternate screen while they are open. `--alt-screen` overrides it. |
 | No mouse reporting | The terminal keeps its own selection and cursor review. |
@@ -20,10 +25,47 @@ There is no automatic detection: a terminal gives no reliable sign that a screen
 | Plain text | The presentation becomes `raw` (plain message rendering, reasoning expanded), the same look `/raw` gives. |
 | Questions | The question card marks the highlighted answer with `>` and puts the terminal cursor on its row (in its text field while you type your own answer), so cursor review reads the answer in focus. Ticks are `[x]`. |
 
-The inline screen and mouse change apply at the next launch; motion and the plain look apply at once. `/accessible off` puts the normal look back (`presentation auto`, full message rendering, reasoning auto) and the screen and mouse follow at the next launch. A run started with `--accessible` or the environment variable does not write its plain look into the saved profile.
+### When changes apply
+
+| Change | When it applies |
+|---|---|
+| Inline screen and mouse reporting | At the next launch. |
+| Motion and the plain look | At once. |
+| `/accessible off` | Puts the normal look back (`presentation auto`, full message rendering, reasoning auto); the screen and mouse follow at the next launch. |
+
+A run started with `--accessible` or the environment variable does not write its plain look into the saved profile.
+
+## Notifications and keyboard aids
 
 The terminal bell and desktop notice (`/customize` > Terminal) are independent and useful here: they say when a turn ends or waits for an approval.
 
-Other aids that are always on: the keyboard reaches every page, `Alt+Enter` or `Ctrl+J` insert a newline in any terminal, and `/doctor` lists what the terminal supports.
+These other aids are always on:
 
-The first-run screen and `/tutorial` have a linear version in this mode. The first-run screen lists what was found, the model, tier and permission rows with the value of each and its one-line preview note, and the keys, as plain lines with no side-by-side panels. The tutorial opens each lesson as sentences (`Lesson 3 of 13: Attach a file with @.`, why, what to do, `Done:` / `To do:` for each step, the keys), then the practice chat below, and says that the practice chat is not real. Both use the same lessons and the same keys as the visual version; nothing is only drawn.
+| Aid | Does |
+|---|---|
+| Keyboard navigation | Reaches every page. |
+| `Alt+Enter` or `Ctrl+J` | Inserts a newline in any terminal. |
+| `/doctor` | Lists what the terminal supports. |
+
+## First-run screen and tutorial
+
+The first-run screen and `/tutorial` have a linear version in this mode. Both use the same lessons and the same keys as the visual version; nothing is only drawn.
+
+### First-run screen
+
+The first-run screen uses plain lines with no side-by-side panels. It lists:
+
+- What was found.
+- The model, tier and permission rows, with the value of each and its one-line preview note.
+- The keys.
+
+### Tutorial
+
+The tutorial opens each lesson as sentences, then puts the practice chat below. It says that the practice chat is not real.
+
+Each lesson gives you:
+
+- The lesson title, such as `Lesson 3 of 13: Attach a file with @.`.
+- Why and what to do.
+- `Done:` / `To do:` for each step.
+- The keys.

@@ -40,7 +40,7 @@ describe("/advisor", () => {
     await h.type("/advisor gpt-6.1-sol#high\r")
     expect(h.sentOf("settings.set")[0]).toMatchObject({ patch: { models: { main: { model: "gpt-6-luna" }, advisor: { model: "gpt-6.1-sol", effort: "high" } } } })
     expect(settings()).toMatchObject({ models: { advisor: { model: "gpt-6.1-sol" } } })
-    expect(screen(h)).toContain("ChatGPT subscription quota")
+    expect((await h.details()).join("\n")).toContain("ChatGPT subscription quota")
   })
 
   test("refuses unknown models and efforts without saving, and turns off", async () => {
@@ -60,7 +60,7 @@ describe("/advisor", () => {
     const { h } = app({ settings: { models: { advisor: { model: "gpt-6.1-sol" } } }, advisor: { model: "gpt-6.1-sol", checkpoints: ["plan", "repeat_error", "completion"], applied: true } })
     await h.type("/advisor\r")
     expect(screen(h)).toContain("advisor gpt-6.1-sol · applied")
-    expect(screen(h)).toContain("0/20 consultations")
+    expect((await h.details()).join("\n")).toContain("0/20 consultations")
   })
 })
 

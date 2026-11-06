@@ -46,7 +46,7 @@ describe("/add-dir", () => {
     expect(h.sentOf("settings.set")).toHaveLength(0)
     expect(h.text().join("\n")).toContain("extra directory for this session")
     await h.type("/add-dir\r")
-    expect(flat(h.text())).toContain("· this session")
+    expect(flat(await h.details())).toContain("· this session")
   })
 
   test("save keeps the directory in the additionalDirectories setting and remove drops it", async () => {
@@ -54,7 +54,7 @@ describe("/add-dir", () => {
     await h.type(`/add-dir save ${real}\r`)
     expect(h.sentOf("settings.set").at(-1)).toEqual({ type: "settings.set", patch: { additionalDirectories: [real] } })
     await h.type("/add-dir\r")
-    expect(flat(h.text())).toContain("· saved")
+    expect(flat(await h.details())).toContain("· saved")
     await h.type(`/add-dir remove ${real}\r`)
     expect(h.sentOf("settings.set").at(-1)).toEqual({ type: "settings.set", patch: { additionalDirectories: [] } })
     expect(h.text().join("\n")).toContain("no longer an extra directory")
@@ -76,7 +76,7 @@ describe("/add-dir", () => {
     const { h, real } = app({ remote: true })
     await h.type(`/add-dir ${real}\r`)
     expect(h.sentOf("session.run.configure")).toHaveLength(0)
-    expect(h.text().join("\n")).toContain("local only")
+    expect((await h.details()).join("\n")).toContain("local only")
   })
 })
 

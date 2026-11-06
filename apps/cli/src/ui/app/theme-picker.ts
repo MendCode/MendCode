@@ -48,7 +48,7 @@ export function createThemePicker(ctx: AppContext, actions: {
 
   async function applyTheme(requested: string) {
     if (!setTheme(requested)) {
-      state.notice = `unknown theme: ${requested} (${[SYSTEM_THEME, ...themeNames()].join(", ")})`
+      ctx.say(`unknown theme: ${requested}`, "warning", { hint: "/theme picks one", detail: `Themes: ${[SYSTEM_THEME, ...themeNames()].join(", ")}`, oneLine: true })
       return
     }
     if (themeSelection() === SYSTEM_THEME) input.screen.requestTerminalMode?.()

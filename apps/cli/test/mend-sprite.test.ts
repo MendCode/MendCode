@@ -1,13 +1,41 @@
-import { describe, expect, test } from "bun:test"
-import { BEATS, mendBeat, mendImage } from "../src/view/mend-sprite"
+import { afterEach, describe, expect, test } from "bun:test"
+import { createHash } from "node:crypto"
+import { mendPicture, mendSprite } from "../src/pets/mend-pet"
+import { DEFAULT_THEME, THEMES } from "../src/themes"
+import { setTheme } from "../src/ui/theme"
+import { BEATS, mendBeat, mendImage, mendPalette, mendSpriteLines } from "../src/view/mend-sprite"
 
 const CHEEK = [240, 168, 172]
 const EYE = [11, 52, 47]
+const theme = (name: string) => THEMES.find((entry) => entry.name === name)!
+const MEND = mendPalette(theme("mend"))
+
+afterEach(() => setTheme(DEFAULT_THEME))
 
 /** The columns of row `y` drawn in `rgb`. */
 function columns(phase: string, beat: number, y: number, rgb: number[]): number[] {
-  const { width, rgba } = mendImage(phase, beat)
+  const { width, rgba } = mendImage(phase, beat, MEND)
   return Array.from({ length: width }, (_, x) => x).filter((x) => rgb.every((value, i) => rgba[(y * width + x) * 4 + i] === value))
+}
+
+/** Every pixel of a frame as [r, g, b], the background left out. */
+function drawnColors(phase: string, palette = mendPalette()): number[][] {
+  const { rgba } = mendImage(phase, 0, palette)
+  const out: number[][] = []
+  for (let at = 0; at < rgba.length; at += 4) if (rgba[at + 3]) out.push([rgba[at]!, rgba[at + 1]!, rgba[at + 2]!])
+  return out
+}
+
+const PHASES = ["idle", "thinking", "editing", "reading", "blocked", "error", "running", "hover"]
+
+/** Every frame of every phase, as pictures and as half blocks, hashed: the robot as one value. */
+function allFrames(): string {
+  const hash = createHash("sha256")
+  for (const phase of PHASES) for (let beat = 0; beat < BEATS; beat++) {
+    hash.update(mendImage(phase, beat).rgba)
+    hash.update(JSON.stringify(mendSpriteLines(phase, 2, beat)))
+  }
+  return hash.digest("hex")
 }
 
 describe("the built-in Mend", () => {
@@ -35,5 +63,53 @@ describe("the built-in Mend", () => {
   test("a beat every half second of the spinner, none with reduced motion", () => {
     expect([0, 3, 4, 31, 32].map((frame) => mendBeat(frame, true))).toEqual([0, 0, 1, 7, 0])
     expect(mendBeat(13, false)).toBe(0)
+  })
+})
+
+describe("Mend's colors follow the theme", () => {
+  test("the Mend theme and every theme without a palette of its own keep the mint and teal robot, frame for frame", () => {
+    for (const name of ["mend", "mint", "paper", "amber", "matrix"]) {
+      setTheme(name)
+      expect(mendPalette().key).toBe("mend")
+      // Every frame as drawn before themes had a say.
+      expect(allFrames()).toBe("793e3b38aea5d4133324cf1cbb9575a1aeae4b2d0215c205099934a8d2ab5c0f")
+    }
+  })
+
+  test("Ink draws it in black and white: grey everywhere but the pink cheeks", () => {
+    setTheme("ink")
+    const colors = drawnColors("idle")
+    const grey = colors.filter(([r, g, b]) => r === g && g === b)
+    expect(colors.filter((color) => !grey.includes(color))).toEqual([CHEEK, CHEEK])
+    // A white head, a mid-grey outline and dark eyes, all readable on Ink's #0a0a0a.
+    expect(colors).toContainEqual([250, 250, 250])
+    expect(colors).toContainEqual([115, 115, 115])
+    expect(colors).toContainEqual([23, 23, 23])
+    expect(Math.min(...grey.filter(([r]) => r !== 23).map(([r]) => r))).toBeGreaterThan(0x40 - 1)
+  })
+
+  test("an error turns the body the theme's red; the head stays", () => {
+    setTheme("ink")
+    const error = drawnColors("error")
+    expect(error).toContainEqual([0xf0, 0x71, 0x78])
+    expect(error).toContainEqual([250, 250, 250])
+    expect(error).not.toContainEqual([64, 64, 64])
+    expect(drawnColors("error", MEND)).toContainEqual([239, 68, 68])
+  })
+
+  test("the frame caches key by palette, so a theme switch draws the new colors", () => {
+    setTheme("mend")
+    const mintLines = mendSpriteLines("idle", 1)
+    const mintPicture = mendPicture("idle", 13, 7, { width: 8, height: 16 })
+    setTheme("ink")
+    const inkLines = mendSpriteLines("idle", 1)
+    const inkPicture = mendPicture("idle", 13, 7, { width: 8, height: 16 })
+    expect(inkLines).not.toEqual(mintLines)
+    expect(inkPicture.key).not.toBe(mintPicture.key)
+    expect(mendSprite("idle").id).toContain("ink")
+    expect(Buffer.from(inkPicture.image.rgba).equals(Buffer.from(mintPicture.image.rgba))).toBe(false)
+    setTheme("mend")
+    expect(mendSpriteLines("idle", 1)).toBe(mintLines)
+    expect(mendPicture("idle", 13, 7, { width: 8, height: 16 }).image).toBe(mintPicture.image)
   })
 })

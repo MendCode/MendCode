@@ -249,7 +249,7 @@ export function createSetup(ctx: AppContext, actions: {
     } else if (action.type === "tier") {
       if (action.tier) {
         const applied = await applyTierBundle(ctx, { tier: action.tier, changeProfile })
-        if (applied) { applySettings(applied.settings); state.notice = applied.summary }
+        if (applied) { applySettings(applied.settings); ctx.say(applied.notice.message, "success", { hint: applied.notice.hint, detail: applied.notice.detail, oneLine: true }) }
       } else {
         const reply = await input.send({ type: "settings.set", patch: { tier: null } } as never)
         report(reply)

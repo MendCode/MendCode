@@ -11,17 +11,20 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### New
 
+- MendGirl, with neko ears and her little robot, ships as a built-in pet beside MendAscii: choose her in `/pet` or as the start screen's mascot with `/mascot mendgirl`.
 - Workflow scripts can pass text to a check's standard input with `check(command, { stdin })`.
 
 ### Changed
 
+- MendAscii takes the theme's colors: under the default Ink theme it is a black and white robot with pink cheeks; the Mend theme and the others keep the mint and teal one.
+- Every notice is now one short row in words with the same look and place: a severity mark, the message and what to do next, with `F4 details` for the full text (`/tier` says the tier, its prompt and how many features are on, instead of a list of flag ids); errors stay until your next prompt or command.
 - `/profiles` → `o` groups what a profile overrides with plain names and before → after values, shows the selected one in a detail and tags the ones you kept `yours`; `k` there keeps your value, and the list's header shows a few keys with `?` for the rest.
 - `/reviews` has a quieter header: a few keys with `?` for the rest, and only what needs attention (running, queued, waiting, failed) next to the tabs; the 24-hour totals stay in the Watches tab.
 - `@mendcode review` on a head that was already reviewed now replies with that review's result (its findings, the earlier ones now fixed and those still open) and suggests `@mendcode review full`, instead of a bare "skipped" with a terminal command.
 
 ### Fixed
 
-- `mendcode daemon restart --force` no longer kills a command, background task, monitor or agent a session is running: it waits a bounded time for that work (`--grace`) and says which sessions it waits on; anything it still has to stop is listed by command line to that session when the daemon starts again.
+- `mendcode daemon restart --force` no longer kills a command, background task, monitor or agent a session is running: it waits a bounded time for that work (`--grace`) and says which sessions it waits on, then the daemon really restarts; anything it still has to stop is listed by command line to that session when the daemon starts again. A restart command that goes away during the wait leaves the sessions unpaused and interrupts nothing.
 
 ## v0.0.4-beta.5 - 2026-11-06
 

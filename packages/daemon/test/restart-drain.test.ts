@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { mkdtempSync, realpathSync, rmSync } from "node:fs"
+import { existsSync, mkdtempSync, realpathSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { computeBuildId } from "@mendcode/build-id"
@@ -8,6 +8,7 @@ import { createFauxEngine } from "@mendcode/engine-faux"
 import type { DaemonStatusReport, SessionId } from "@mendcode/protocol"
 import { startDaemon } from "../src"
 import { openToolCalls, recordLost, takeLost } from "../src/restart-drain"
+import { boot as bootNative, callTool, openSession, stop, until } from "./native-harness"
 
 const cleanups: Array<() => Promise<void> | void> = []
 afterEach(async () => {
@@ -27,7 +28,8 @@ async function boot() {
   let background: Background = () => {}
   const open = async () => {
     // The faux engine runs the turns; the background tasks a Claude Code process reports are played by the test.
-    const daemon = await startDaemon({ dir, socketPath: path.join(dir, "mendd.sock"), defaultDirectory: project, buildId: computeBuildId(), engine: (input) => {
+    let shutdowns = 0
+    const daemon = await startDaemon({ dir, socketPath: path.join(dir, "mendd.sock"), defaultDirectory: project, buildId: computeBuildId(), onShutdown: () => { shutdowns++ }, engine: (input) => {
       background = (sessionId, tasks) => input.engineBackground(sessionId, tasks, async () => {})
       return createFauxEngine({ clock: input.clock, deltaMs: 1 })
     } })
@@ -36,7 +38,14 @@ async function boot() {
     let closed = false
     const stop = async () => { if (closed) return; closed = true; terminal.close(); await daemon.stop() }
     cleanups.push(() => stop().catch(() => undefined))
-    return { daemon, terminal, stop }
+    /** A client like `daemon restart`'s: no reconnect, so closing it is the command going away. */
+    const control = async () => {
+      const client = createClient({ socketPath: daemon.socketPath, name: "daemon-control", reconnect: false, timeoutMs: 2000 })
+      await client.connect()
+      cleanups.push(() => client.close())
+      return client
+    }
+    return { daemon, terminal, stop, control, shutdowns: () => shutdowns }
   }
   const first = await open()
   const created = await first.terminal.send({ type: "session.create", directory: project, title: "worker" })
@@ -91,55 +100,80 @@ describe("the work a restart would kill", () => {
 })
 
 describe.skipIf(process.platform === "win32")("a forced restart waits for running work", () => {
-  test("with nothing running the wait is over at once", async () => {
+  const stoppedItself = (h: Awaited<ReturnType<typeof boot>>) => h.until(() => (h.first.shutdowns() > 0 && !existsSync(h.first.daemon.socketPath)) || undefined)
+
+  test("with nothing running the daemon stops at once, by itself", async () => {
     const h = await boot()
+    const control = await h.first.control()
     const started = Date.now()
-    expect(await h.drain(h.first.terminal, 60_000)).toEqual([])
-    expect((await h.status(h.first.terminal)).drain).toMatchObject({ waiting: [], done: true })
-    expect(Date.now() - started).toBeLessThan(1_000)
+    expect(await h.drain(control, 60_000)).toEqual([])
+    await stoppedItself(h)
+    expect(Date.now() - started).toBeLessThan(2_000)
   }, 60_000)
 
-  test("a command in flight is waited for and finishes; the turn ends or is interrupted to resume, and nothing is reported killed", async () => {
+  test("a command in flight is waited for and finishes, then the daemon really stops; the turn is cut only by that stop, and nothing is reported killed", async () => {
     const h = await boot()
     expect((await h.submit(h.first.terminal, "/tool 1500")).ok).toBe(true)
     const tool = await h.toolStarted(h.first.terminal)
-    const waiting = await h.drain(h.first.terminal, 60_000)
-    expect(waiting).toEqual([{ sessionId: h.sessionId, title: "worker", items: ["faux"] }])
-    const drain = await h.until(async () => { const now = (await h.status(h.first.terminal)).drain; return now?.done ? now : undefined })
-    expect(drain.waiting).toEqual([])
-    const events = await h.log(h.first.terminal)
-    expect(events.find((event) => event.type === "item.completed" && event.itemId === tool.itemId)).toMatchObject({ status: "ok", text: "tool done" })
-    // The turn's answer may beat the next look; otherwise the look interrupts it for the next start to carry on.
-    await h.until(async () => (await h.log(h.first.terminal)).some((event) => event.type === "turn.completed" || (event.type === "turn.interrupted" && event.cause === "daemon_shutdown")) || undefined)
+    const control = await h.first.control()
+    expect(await h.drain(control, 60_000)).toEqual([{ sessionId: h.sessionId, title: "worker", items: ["faux"] }])
+    await Bun.sleep(400)
+    // Waiting cuts nothing: the turn is still open and the daemon still runs.
+    expect(h.first.shutdowns()).toBe(0)
+    expect((await h.log(h.first.terminal)).some((event) => event.type === "turn.interrupted")).toBe(false)
+    await stoppedItself(h)
 
-    await h.first.stop()
     const second = await h.open()
+    const events = await h.log(second.terminal)
+    expect(events.find((event) => event.type === "item.completed" && event.itemId === tool.itemId)).toMatchObject({ status: "ok", text: "tool done" })
     await Bun.sleep(300)
-    // Nothing was killed, so nothing says so.
     expect(JSON.stringify(await h.log(second.terminal))).not.toContain("did not finish")
   }, 60_000)
 
   test("a background task holds the restart until it ends", async () => {
     const h = await boot()
     h.background(h.sessionId, [{ id: "b1", description: "Watch the build", kind: "local_bash", command: "while sleep 5; do date; done" }])
-    const waiting = await h.drain(h.first.terminal, 60_000)
-    expect(waiting[0]?.items).toEqual(["background task: while sleep 5; do date; done"])
+    const control = await h.first.control()
+    expect((await h.drain(control, 60_000))[0]?.items).toEqual(["background task: while sleep 5; do date; done"])
     await Bun.sleep(400)
-    expect((await h.status(h.first.terminal)).drain).toMatchObject({ done: false })
+    expect((await h.status(control)).drain).toMatchObject({ done: false })
     h.background(h.sessionId, [])
-    await h.until(async () => (await h.status(h.first.terminal)).drain?.done || undefined)
+    await stoppedItself(h)
   }, 60_000)
 
-  test("when the grace runs out the stop kills what still runs, and the session is told which commands died", async () => {
+  test("a restart command that goes away mid-wait lets it go: the sessions are unpaused, no turn is interrupted and the daemon keeps running", async () => {
+    const h = await boot()
+    expect((await h.submit(h.first.terminal, "/tool 1500")).ok).toBe(true)
+    await h.toolStarted(h.first.terminal)
+    // A second session the user paused stays paused; the drain releases only what it paused.
+    const other = await h.first.terminal.send({ type: "session.create", directory: h.first.daemon.store.sessionDirectory(h.sessionId)!, title: "mine" })
+    const mine = other.ok ? other.result!.sessionId as SessionId : h.sessionId
+    expect((await h.first.terminal.send({ type: "session.control", sessionId: mine, action: "pause" })).ok).toBe(true)
+    const control = await h.first.control()
+    await h.drain(control, 60_000)
+    const paused = async (sessionId: SessionId) => { const reply = await h.first.terminal.send({ type: "queue.list", sessionId }); return reply.ok ? (reply.result as { paused: boolean }).paused : undefined }
+    expect(await paused(h.sessionId)).toBe(true)
+    control.close()
+    await h.until(async () => (await h.status(h.first.terminal)).drain === undefined || undefined)
+    expect(await paused(h.sessionId)).toBe(false)
+    expect(await paused(mine)).toBe(true)
+    await h.until(async () => (await h.log(h.first.terminal)).some((event) => event.type === "turn.completed") || undefined)
+    expect((await h.log(h.first.terminal)).some((event) => event.type === "turn.interrupted")).toBe(false)
+    expect(h.first.shutdowns()).toBe(0)
+    // The session takes new work again.
+    expect((await h.submit(h.first.terminal, "hello")).ok).toBe(true)
+    await h.until(async () => (await h.log(h.first.terminal)).filter((event) => event.type === "turn.completed").length >= 2 || undefined)
+  }, 60_000)
+
+  test("when the grace runs out the daemon stops and kills what still runs, and the session is told which commands died", async () => {
     const h = await boot()
     expect((await h.submit(h.first.terminal, "/tool 60000")).ok).toBe(true)
     await h.toolStarted(h.first.terminal)
     h.background(h.sessionId, [{ id: "m1", description: "Monitor", kind: "monitor", command: "Monitor: tail -f build.log" }])
-    expect((await h.drain(h.first.terminal, 300))[0]?.items).toEqual(["faux", "background task: Monitor: tail -f build.log"])
-    const drain = await h.until(async () => { const now = (await h.status(h.first.terminal)).drain; return now?.done ? now : undefined })
-    expect(drain.waiting[0]?.items).toHaveLength(2)
+    const control = await h.first.control()
+    expect((await h.drain(control, 300))[0]?.items).toEqual(["faux", "background task: Monitor: tail -f build.log"])
+    await stoppedItself(h)
 
-    await h.first.stop()
     const second = await h.open()
     const after = await h.until(async () => { const seen = await h.log(second.terminal); return JSON.stringify(seen).includes("did not finish") ? seen : undefined })
     const told = JSON.stringify(after)
@@ -154,5 +188,18 @@ describe.skipIf(process.platform === "win32")("a forced restart waits for runnin
     await h.first.stop()
     const second = await h.open()
     await h.until(async () => JSON.stringify(await h.log(second.terminal)).includes("`background task: bun run dev`") || undefined)
+  }, 60_000)
+
+  test("the native engine's foreground shell command, streaming output, is waited for", async () => {
+    const h = await bootNative({ shell: true, steps: [callTool("shell", { command: "for i in 1 2 3 4 5 6; do echo line $i; sleep 0.25; done" }), stop("done")] })
+    cleanups.push(() => h.cleanup())
+    const sessionId = await openSession(h)
+    expect((await h.client.send({ type: "user.submit", sessionId, text: "render", attachments: [] })).ok).toBe(true)
+    await until(() => h.events.some((event) => event.type === "item.delta" && event.text.includes("line")))
+    const reply = await h.client.send({ type: "daemon.shutdown", force: true, drainMs: 30_000 })
+    expect(reply.ok && (reply.result as { waiting: Array<{ items: string[] }> }).waiting[0]?.items[0]).toStartWith("shell: for i in")
+    await until(() => !existsSync(h.daemon.socketPath), 15_000)
+    const shell = h.events.find((event) => event.type === "item.started" && event.kind === "tool_call")!
+    expect(h.events.find((event) => event.type === "item.completed" && event.itemId === (shell as { itemId: string }).itemId)).toMatchObject({ status: "ok" })
   }, 60_000)
 })

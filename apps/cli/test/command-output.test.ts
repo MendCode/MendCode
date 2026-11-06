@@ -54,7 +54,7 @@ test("/pr review [pr] full asks the daemon to review the head again whole; witho
 test("long daemon replies and notices use a scrollable page, short confirmations do not", async () => {
   const h = appHarness({ reply: (command) => command.type === "pr.review" ? { ok: true, result: { text: report } } : undefined })
   await h.type("/pr review 7\r")
-  expect(h.text().join("\n")).toContain("F4 full text")
+  expect(h.text().join("\n")).toContain("F4 details")
   await h.app.onKey("\x1bOS")
   expect(h.text().join("\n")).toContain("esc back")
   await h.app.onKey("G")

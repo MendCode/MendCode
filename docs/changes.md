@@ -1,27 +1,44 @@
-# Changes review, plan review and pasted secrets (terminal)
+Review diffs with `/changes`, respond to plan approvals and inspect pasted-secret markers such as `‹secret:N›` in the terminal. Start with `/changes` to select rows, add comments and send a review.
 
-What the terminal adds around `/changes`, plan approvals and `‹secret:N›` markers. Changes selection and comments are
-shared with the model through the daemon (`review.query`, `review.update`, `review.changed`). Plan review uses
-`request.resolve`; sending a Changes review uses one `user.submit`.
+## Changes review, plan review and pasted secrets (terminal)
+
+Changes selection and comments are shared with the model through the daemon (`review.query`, `review.update`, `review.changed`). Plan review uses `request.resolve`; sending a Changes review uses one `user.submit`.
 
 ## /changes review
 
-Balanced/full: `o` previews a local suggested order and `O` applies it: source, tests, docs, generated/binary, then path within each group. This is a filename heuristic, not dependency analysis or an LLM call. It never applies during comment/jump editing. Refresh retains the selected path, draft and comments; an explicitly applied order stays for that open view. `/tier review_order off` disables it. Minimalist leaves it off unless explicitly enabled.
+1. Run `/changes` (alias `/diff`) to list the working tree's files and their diffs.
+2. Focus the diff and move its row cursor to the code you want to discuss.
+3. Add comments on the cursor or selection, then use **send review**.
 
-`/changes session` shows the session's persisted net changes; `/changes message <n>` shows the nth user message's
-changes from `/timeline`, including reverted turns. These sources do not use the current Git diff. `r` refreshes the
-same source; navigation uses the existing panel grid and compact tabs below 70 columns. Historical views are read-only.
+### Choose a source
 
-The additive `session.changes { sessionId, atItemId? }` command and `client.sessionChanges()` return `ChangesReport`
-with `scope` and `complete`. Per-message summaries survive snapshot-byte pruning; session totals involving pruned
-bytes are marked **Partial** because overlapping older edits cannot be recomputed exactly. Disabled snapshots,
-untracked writers and capture limits also produce partial reports. Diff text is redacted and bounded. The command
-requires full peer access: source content is deliberately not added to `READ_ONLY_COMMANDS`.
+| Command | Shows |
+|---|---|
+| `/changes` | The working tree's files and diffs |
+| `/changes session` | The session's persisted net changes |
+| `/changes message <n>` | The nth user message's changes from `/timeline`, including reverted turns |
 
-`/changes` (alias `/diff`) lists the working tree's files and their diffs. With the diff focused the page has a row
-cursor, and comments are made on it. Ported from v1's `/changes` (`routes/changes/*`): row selection, `c` comment, `]`/`[`
-hunks, `n`/`p` files, `l` jump to a line, `g`/`G`, `r` refresh. New in v2: multi-row selection, hunk comments, edit and
-delete, the comment list, and **send review**.
+The session and message sources do not use the current Git diff. Historical views are read-only. `r` refreshes the same source; navigation uses the existing panel grid and compact tabs below 70 columns.
+
+### Choose a review order
+
+In balanced/full, `o` previews a local suggested order and `O` applies it:
+
+1. Source.
+2. Tests.
+3. Docs.
+4. Generated/binary.
+5. Path within each group.
+
+This is a filename heuristic, not dependency analysis or an LLM call. It never applies during comment/jump editing.
+
+Refresh retains the selected path, draft and comments; an explicitly applied order stays for that open view. `/tier review_order off` disables it. Minimalist leaves it off unless explicitly enabled.
+
+### Keys
+
+Ported from v1's `/changes` (`routes/changes/*`): row selection, `c` comment, `]`/`[` hunks, `n`/`p` files, `l` jump to a line, `g`/`G`, `r` refresh.
+
+New in v2: multi-row selection, hunk comments, edit and delete, the comment list, and **send review**.
 
 | Key | What it does |
 |---|---|
@@ -40,21 +57,37 @@ delete, the comment list, and **send review**.
 
 ### Replay
 
-`R` (or `/changes replay [n]`, which opens the last message's changes, or message `n`, already in replay) shows one
-hunk at a time and steps through every hunk of every file, in the list's order, with `step 3/9 · hunk 2/2 of this file`
-above it. `]`, `space`, `enter`, `↓` or `→` go forward; `[`, `,`, `backspace`, `↑` or `←` go back; `n` / `p` jump to the
-next / previous file's first hunk; `g` / `G` the first / last step. `esc` or `R` leaves replay (the cursor stays on that
-hunk); `c` / `C` still comment the hunk on screen. It works on every source, including the read-only `session` and
-`message` views. Files with no hunk (binary, a pure rename) have no step. Order is the report's (by path), not
-chronological.
+Press `R` to show one hunk at a time. Alternatively, `/changes replay [n]` opens the last message's changes, or message `n`, already in replay.
 
-In the comment box: `enter` saves, `alt+enter` adds a line, `ctrl+u` clears, `esc` cancels. A review holds 60 comments of
-800 characters at most.
+Replay steps through every hunk of every file, in the list's order, with `step 3/9 · hunk 2/2 of this file` above it.
 
-The daemon saves selection and comments atomically in `<dataDir>/reviews/<sessionId>.json`. The terminal keeps a
-mirror in `<dataDir>/tui/reviews/<sessionId>.json`, removed when empty; existing client-only comments are imported on
-the first daemon update. Reopening, reconnecting or restarting preserves the shared review. A comment keeps the diff rows it is about, so it
-is found again after a refresh even when the lines moved; one whose code is gone is listed as outdated and still sent.
+| Key | In replay |
+|---|---|
+| `]`, `space`, `enter`, `↓` or `→` | Go forward |
+| `[`, `,`, `backspace`, `↑` or `←` | Go back |
+| `n` / `p` | Jump to the next / previous file's first hunk |
+| `g` / `G` | First / last step |
+| `esc` or `R` | Leave replay; the cursor stays on that hunk |
+| `c` / `C` | Comment the hunk on screen |
+
+It works on every source, including the read-only `session` and `message` views. Files with no hunk (binary, a pure rename) have no step. Order is the report's (by path), not chronological.
+
+### Write and keep comments
+
+| Key | In the comment box |
+|---|---|
+| `enter` | Save |
+| `alt+enter` | Add a line |
+| `ctrl+u` | Clear |
+| `esc` | Cancel |
+
+A review holds 60 comments of 800 characters at most.
+
+The daemon saves selection and comments atomically in `<dataDir>/reviews/<sessionId>.json`. The terminal keeps a mirror in `<dataDir>/tui/reviews/<sessionId>.json`, removed when empty.
+
+Existing client-only comments are imported on the first daemon update. Reopening, reconnecting or restarting preserves the shared review.
+
+A comment keeps the diff rows it is about, so it is found again after a refresh even when the lines moved. One whose code is gone is listed as outdated and still sent.
 
 ### The review message
 
@@ -85,10 +118,17 @@ MendCode review workspace:
 </mendcode_review_context>
 ```
 
-The location is `path:11-12` (new lines), `path:old 11` (removed rows), both when the range has both, `path hunk @@ … @@` for a hunk
-and the bare path for a file without rows (binary, rename). Excerpts are cut to 40 rows, and to 12, 4 or none when the
-message would pass 60 000 characters. After a successful send those comment ids are removed and the page closes; comments arriving during the send remain. A
-failed send keeps the review.
+| Location | Means |
+|---|---|
+| `path:11-12` | New lines |
+| `path:old 11` | Removed rows |
+| Both forms | A range with both |
+| `path hunk @@ … @@` | A hunk |
+| Bare path | A file without rows (binary, rename) |
+
+Excerpts are cut to 40 rows, and to 12, 4 or none when the message would pass 60 000 characters.
+
+After a successful send those comment ids are removed and the page closes; comments arriving during the send remain. A failed send keeps the review.
 
 ### The Git page
 
@@ -118,11 +158,26 @@ The terminal sends targeted additions, edits, removals and selection changes wit
 whole shared list. A remote navigation preserves an open comment/jump draft. Events are ephemeral; `review.query` hydrates
 state after reconnect. Read-only remote peers can query, but cannot update the review.
 
-Legacy `review { path }` and no-argument diff summaries remain available outside a daemon; explicit workspace actions
-report unavailable there. Diffs remain bounded, include untracked files, and never change Git's index (`GIT_OPTIONAL_LOCKS=0`).
-Shared reviews hold at most 60 comments, each 800 characters, with a 100 KB snapshot cap. File replies bound block rows and
-patch text, flag truncation and stay below the protocol frame limit. The standalone numbered-diff mode keeps its existing
-60-file, 12-hunk and 600-line / 30 KB limits. Sources: `packages/tools/src/tools/review.ts`, `packages/daemon/src/review.ts`.
+Legacy `review { path }` and no-argument diff summaries remain available outside a daemon; explicit workspace actions report unavailable there.
+
+Diffs remain bounded, include untracked files, and never change Git's index (`GIT_OPTIONAL_LOCKS=0`). File replies bound block rows and patch text, flag truncation and stay below the protocol frame limit.
+
+| Mode | Limits |
+|---|---|
+| Shared reviews | At most 60 comments, each 800 characters, with a 100 KB snapshot cap |
+| Standalone numbered-diff | Existing 60-file, 12-hunk and 600-line / 30 KB limits |
+
+### Persisted changes reports
+
+The additive `session.changes { sessionId, atItemId? }` command and `client.sessionChanges()` return `ChangesReport` with `scope` and `complete`.
+
+Per-message summaries survive snapshot-byte pruning. Session totals involving pruned bytes are marked **Partial** because overlapping older edits cannot be recomputed exactly.
+
+Disabled snapshots, untracked writers and capture limits also produce partial reports. Diff text is redacted and bounded.
+
+The command requires full peer access: source content is deliberately not added to `READ_ONLY_COMMANDS`.
+
+Sources: `packages/tools/src/tools/review.ts`, `packages/daemon/src/review.ts`.
 
 ## Plan review
 
@@ -142,12 +197,20 @@ Letters type into the prompt while an edit or comment is open, so they never app
 
 ## Pasted secrets
 
-Markers in the transcript, the approval panel and tool titles are drawn as `‹secret ··<tail>›` with the tail from
-`secrets.list` (asked once when a marker without a known tail arrives; a forgotten secret keeps showing the marker). The
-transcript keeps the raw marker.
+Markers in the transcript, the approval panel and tool titles are drawn as `‹secret ··<tail>›` with the tail from `secrets.list`.
 
-`/secrets` lists the session's secrets: marker, kind, tail and time. `enter` calls `secrets.reveal` and shows the value
-under the list **only while that row stays selected**; moving, pressing `enter` again, `esc`, `q` or any other way off the
-page hides it, and a reply that arrives after that is dropped. The value lives in the page state only: never logged, never in
-a toast (an error says "could not reveal the secret"), never written to disk, stripped of terminal escapes and capped at
-six rows. `x` twice calls `secrets.forget` (its marker stops resolving).
+The list is asked once when a marker without a known tail arrives; a forgotten secret keeps showing the marker. The transcript keeps the raw marker.
+
+### Reveal or forget a secret
+
+1. Open `/secrets` to list the session's secrets: marker, kind, tail and time.
+2. Press `enter` to call `secrets.reveal` and show the value under the list **only while that row stays selected**.
+3. To forget it, press `x` twice. This calls `secrets.forget`; its marker stops resolving.
+
+Moving, pressing `enter` again, `esc`, `q` or any other way off the page hides the value. A reply that arrives after that is dropped.
+
+The value lives in the page state only:
+
+- Never logged or written to disk.
+- Never in a toast; an error says "could not reveal the secret".
+- Stripped of terminal escapes and capped at six rows.

@@ -1,5 +1,7 @@
 # Remote MCP servers and OAuth
 
+Connect a remote MCP server, approve integration requests locally, and authorize access through your browser. This guide also covers resources, prompts, server questions and the protocol behind them.
+
 ## Integration requests and local approval (full tier)
 
 `POST /mcp` with a full REST token stores a pending server and returns **202** with
@@ -9,13 +11,13 @@ gate. They never start a process, contact the requested URL, discover tools/prom
 or authorize OAuth while pending. Replacing an approved entry suspends its running client;
 all integration writes conservatively require approval again, including enable-only edits.
 
-In the local terminal, open `/mcp`, select **pending approval**, review the quoted command,
-argument array, environment **names** and working directory, or the URL, then press **a** to
-approve or **x** to reject. **PgUp/PgDn** scroll long details. Secret argument values and URL
-credentials/token parameters are masked; environment/header values never appear in this review.
-Approval binds to the displayed revision: changed or expired requests require a fresh review.
-Only local clients can send `mcp.decide`; full and read-only peers cannot approve or reject.
-The server starts lazily after approval, under the normal MCP tier and tool permissions.
+1. In the local terminal, open `/mcp` and select **pending approval**.
+2. Review the quoted command, argument array, environment **names** and working directory, or the URL. **PgUp/PgDn** scroll long details.
+3. Press **a** to approve or **x** to reject. The server starts lazily after approval, under the normal MCP tier and tool permissions.
+
+Secret argument values and URL credentials/token parameters are masked. Environment/header values never appear in this review.
+
+Approval binds to the displayed revision: changed or expired requests require a fresh review. Only local clients can send `mcp.decide`; full and read-only peers cannot approve or reject.
 
 Pending requests persist in mode-0600 `mcp.json` across daemon restarts, expire after **24 hours**,
 and share a daemon-wide limit of **10**, tracked in `mcp-pending-budget.json`. REST `GET /mcp`
@@ -24,7 +26,11 @@ responses. Rejection discards the submitted execution details. Rejection/expiry 
 entries so a lower config layer cannot silently reactivate the same name. A fresh request or
 an explicit local replacement is needed; no external service or account is enabled automatically.
 
-An MCP server entry with a `url` instead of a `command` is a remote server. It is reached over streamable HTTP (one POST per message, answered as JSON or as an event stream). A server that has no such endpoint (HTTP 400, 404 or 405 on the first call) is tried again over the older HTTP+SSE transport, where `url` is the event stream.
+## Configure a remote server
+
+An MCP server entry with a `url` instead of a `command` is a remote server. It is reached over streamable HTTP: one POST per message, answered as JSON or as an event stream.
+
+A server with no such endpoint, returning HTTP 400, 404 or 405 on the first call, is tried again over the older HTTP+SSE transport. There, `url` is the event stream.
 
 ```json
 {
@@ -46,6 +52,16 @@ An MCP server entry with a `url` instead of a `command` is a remote server. It i
 | `elicitation` | `false` stops the client announcing elicitation to this server (local or remote); its questions are then declined. On by default. |
 
 ## The flow
+
+### Start authorization in the terminal
+
+1. On `/mcps`, select a server with `auth: needs_auth` and press `a` (`a auth`), or run `/mcp auth <server>`.
+2. The terminal shows the authorization URL and copies it through OSC 52 (`auth URL copied`). Press `c` to copy it again.
+3. Open that URL yourself. The daemon never opens a browser.
+
+`mcp.changed` events refresh the page when authorization starts or settles, including denial/cancellation.
+
+### What happens during authorization
 
 When a remote server answers 401 and no stored token fixes it, the server is `failed` with the error `needs authorization`, and its status shows `auth: "needs_auth"`. Authorization then works like this (`McpManager.startAuth`):
 
@@ -71,8 +87,6 @@ One flow per server: starting another cancels the first. `cancelAuth` stops a wa
 `mcp.status` shows remote servers like local ones: `command` holds the URL without query or credentials followed by `[oauth: authorized]`, `[oauth: needs authorization]` or `[oauth: waiting for the browser]`. The manager's status also carries `transport: "remote"` and `auth: "none" | "needs_auth" | "pending" | "authorized"` (see the protocol note below).
 
 ## Terminal and protocol
-
-On `/mcps`, select a server with `auth: needs_auth` and press `a` (`a auth`), or run `/mcp auth <server>`. The terminal shows the authorization URL and copies it through OSC 52 (`auth URL copied`); `c` copies it again. Open that URL yourself. `mcp.changed` events refresh the page when authorization starts or settles, including denial/cancellation. The daemon never opens a browser.
 
 The additive protocol command and optional status fields are:
 
@@ -114,7 +128,17 @@ Both are `read` tools, so they run without approval in the usual modes (permissi
 
 ## Elicitation
 
-A server may ask the user for input while a tool call is running (`elicitation/create`, form mode of the 2025-06-18 specification). The client announces `capabilities.elicitation` at the handshake unless the server entry sets `"elicitation": false`. The question shows up like any other question: titled `<server> asks for input`, the server's message as the prompt, one tab per field (strings and numbers are typed, booleans are Yes/No, enums and `oneOf` lists are options, `array` of enum is multi-select, more than nine choices become typed text). A form with no fields is a plain accept/decline.
+A server may ask you for input while a tool call is running (`elicitation/create`, form mode of the 2025-06-18 specification). The client announces `capabilities.elicitation` at the handshake unless the server entry sets `"elicitation": false`.
+
+The question appears like any other question, titled `<server> asks for input`, with the server's message as the prompt and one tab per field.
+
+| Field | Input control |
+|---|---|
+| Strings and numbers | typed text |
+| Booleans | Yes/No |
+| Enums and `oneOf` lists | options; more than nine choices become typed text |
+| `array` of enum | multi-select; more than nine choices become typed text |
+| No fields | plain accept/decline |
 
 - The answer is typed against the requested schema (required fields, `minLength`/`maxLength`, `minimum`/`maximum`, integers, enum membership, item counts). An answer that does not fit is sent as `cancel`, with no content.
 - Declining the question sends `decline`; abandoning it sends `cancel`. Without a person to ask (no question channel in that run), for `url` mode, for a field type that cannot be asked, or when a field name or title looks like a credential (password, token, secret, API key, ...), the client answers `decline` without showing anything.
@@ -123,31 +147,95 @@ A server may ask the user for input while a tool call is running (`elicitation/c
 
 ## Standalone MCP CLI
 
-`mcp auth list` shows OAuth-capable remote servers, including expired credentials. `mcp auth [name]` selects a server when omitted, returns the authorization URL and waits for a running authorized server through `mcp.changed`. Interrupt, denial and the five-minute deadline have distinct nonzero exits; interruption and timeout cancel the flow. `mcp logout [name]` also finds expired stored credentials and forgets both the client registration and tokens.
+### Authorize or forget a server
+
+| Command | Does |
+|---|---|
+| `mcp auth list` | shows OAuth-capable remote servers, including expired credentials |
+| `mcp auth [name]` | selects a server when omitted, returns the authorization URL and waits for a running authorized server through `mcp.changed` |
+| `mcp logout [name]` | also finds expired stored credentials and forgets both the client registration and tokens |
+
+Interrupt, denial and the five-minute deadline have distinct nonzero exits. Interruption and timeout cancel the flow.
+
+### Debug authorization
 
 `mcp debug <name>` sends an unauthenticated initialize probe (at most 20 seconds) and discovers OAuth metadata after HTTP 401. It reports sanitized endpoints, HTTP status, credential presence and expiry; it never prints tokens, registers a client or refreshes credentials. Local and OAuth-disabled servers are rejected. This operation can contact a remote server, so it is not in the remote read-only command allowlist.
 
-`mcp add` supports a bordered local/remote terminal wizard or explicit arguments. Additive `mcp.add` writes one unexpanded entry atomically to `<dataDir>/mcp.json` (`user`) or `<project>/.mendcode/mcp.json` (`project`), preserving other servers and fields. Client secrets entered as `--client-secret-env VAR` remain `${VAR}` references. `--dry-run` writes nothing; malformed existing files and duplicate names without `--replace` are refused. Read-only `mcp.status` adds optional `authStored` and `authExpiresAt` fields without exposing credentials. A replaced running server needs restart to adopt the new config.
+### Add a server
+
+`mcp add` supports a bordered local/remote terminal wizard or explicit arguments. Additive `mcp.add` writes one unexpanded entry atomically, preserving other servers and fields:
+
+| Scope | File |
+|---|---|
+| `user` | `<dataDir>/mcp.json` |
+| `project` | `<project>/.mendcode/mcp.json` |
+
+- Client secrets entered as `--client-secret-env VAR` remain `${VAR}` references.
+- `--dry-run` writes nothing.
+- Malformed existing files and duplicate names without `--replace` are refused.
+- A replaced running server needs restart to adopt the new config.
+
+Read-only `mcp.status` adds optional `authStored` and `authExpiresAt` fields without exposing credentials.
 
 `mcp add docs --url https://mcp.example/mcp --callback-port 19876 --redirect-uri http://127.0.0.1:19876/mcp/oauth/callback` stores the callback settings without starting authorization. They conflict with `--no-oauth` and are not accepted for local servers.
 
 ## Project servers and trust
 
-A server that comes from a project (`<project>/.mendcode/mcp.json` or a project profile's `mcp.json`) can run a command or reach a URL of the repository's choosing, so it follows the same `/tools` trust as project hooks, extensions and custom tools. While the directory is not trusted, such a server is listed in `/mcp` and `mcp.status` with `needsTrust` and nothing else happens: no process is spawned, no URL is contacted, no tools, prompts or resources are discovered, and no OAuth starts; calling one of its names answers as if the server did not exist. User-scope servers (`<dataDir>/mcp.json`, user profiles) are unaffected.
+A project server comes from `<project>/.mendcode/mcp.json` or a project profile's `mcp.json`. It can run a command or reach a URL of the repository's choosing, so it follows the same `/tools` trust as project hooks, extensions and custom tools.
+
+While the directory is not trusted, the server is listed in `/mcp` and `mcp.status` with `needsTrust`, but nothing else happens:
+
+- No process is spawned and no URL is contacted.
+- No tools, prompts or resources are discovered and no OAuth starts.
+- Calling one of its names answers as if the server did not exist.
+
+User-scope servers (`<dataDir>/mcp.json`, user profiles) are unaffected.
 
 A trusted project's stdio server starts with the shell-hook environment policy: names that look like credentials (`CREDENTIAL_ENV`: provider and cloud keys, tokens, passwords) are not inherited unless the server's own `env` lists them (a literal value or a `${VAR}` reference written in its config).
 
-The server set is rebuilt, not just read once, whenever it can change: profile install, enable, disable and remove, and trusting or untrusting a directory. Servers that are no longer configured stop (an idle one at once, one in use after its call), new ones are available lazily, and an entry whose command, URL or env changed restarts on next use. A reload never discards a running client whose configuration did not change.
+The server set is rebuilt, not just read once, whenever it can change: profile install, enable, disable and remove, and trusting or untrusting a directory.
+
+| Change | Result |
+|---|---|
+| Server no longer configured | stops at once if idle, or after its call if in use |
+| New server | available lazily |
+| Command, URL or env changed | restarts on next use |
+| Configuration unchanged | reload never discards the running client |
 
 ## Resources and prompts
 
 Discovery isolates failures per server and per category: a failed prompt list does not hide available resources. Diagnostics stay visible in the catalog.
 
-`/mcps` → `x` opens the bordered catalog. `tab` cycles resources, prompts and URI templates; arrows select, `r` reads a resource, `l` reloads, and `esc` returns to servers. `enter` inserts `@server:resource` or `/server:prompt` into the editor; it never submits. `PgUp/PgDn` scroll details. Below 70 columns the panels stack. URI templates are discoverable but require a concrete URI for `mcp.resource.read`.
+### Browse the catalog
 
-Resource aliases appear beside files in the `@` picker. Names replace punctuation/spaces with `_`, preserving v1's `server:name` aliases. Submission reads each selected resource once and appends text to the engine prompt; binary content gets a MIME label rather than base64. Missing/ambiguous resources fail without starting a turn. A prompt allows at most 16 distinct resource mentions and 128,000 resource-text characters.
+1. Open `/mcps` and press `x`. The bordered catalog opens.
+2. Use `tab` to cycle resources, prompts and URI templates, then arrows to select.
+3. Press `enter` to insert `@server:resource` or `/server:prompt` into the editor. It never submits.
 
-MCP prompts join custom slash commands, without replacing project/user/extension commands. Arguments support quoted strings and follow the server's declaration order; the final argument collects remaining words. Missing required arguments retain the draft and show the error. `prompts/get` text messages form the submitted prompt; non-text media are omitted. Extra text for a prompt without declared arguments is appended.
+| Key | Does |
+|---|---|
+| `r` | reads a resource |
+| `l` | reloads |
+| `esc` | returns to servers |
+| `PgUp/PgDn` | scrolls details |
+
+Below 70 columns the panels stack. URI templates are discoverable but require a concrete URI for `mcp.resource.read`.
+
+### Attach a resource
+
+Resource aliases appear beside files in the `@` picker. Names replace punctuation/spaces with `_`, preserving v1's `server:name` aliases.
+
+Submission reads each selected resource once and appends text to the engine prompt. Binary content gets a MIME label rather than base64.
+
+Missing/ambiguous resources fail without starting a turn. A prompt allows at most 16 distinct resource mentions and 128,000 resource-text characters.
+
+### Use an MCP prompt
+
+MCP prompts join custom slash commands without replacing project/user/extension commands. Arguments support quoted strings and follow the server's declaration order; the final argument collects remaining words.
+
+Missing required arguments retain the draft and show the error. `prompts/get` text messages form the submitted prompt; non-text media are omitted. Extra text for a prompt without declared arguments is appended.
+
+### Catalog protocol and limits
 
 Additive commands: `mcp.catalog`, `mcp.resources.list` (the functional equivalent of experimental resource.list), `mcp.resource.read`, `mcp.prompts.list`, `mcp.prompt.get`. All take `directory`; read/get also take `server` and `uri`/`name` (get accepts an `args` object). Typed client helpers are `mcpCatalog`, `readMcpResource`, `getMcpPrompt`. These operations may start servers/contact services and expose content, so none is remotely read-only. Read-only peers' `commands.list/expand` also skip MCP discovery. The HTTP bridge remains B83's responsibility.
 

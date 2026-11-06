@@ -1,20 +1,74 @@
 # Voice dictation (B14)
 
-Speak into the prompt. Hold **space** on the prompt, as in Claude Code: once the key repeats, the spaces it typed are taken back, the microphone listens while it stays held, and the words land at the cursor when you let go (for review; nothing is sent by itself). `/voice` or `ctrl+x v` (`voice.toggle`) starts and stops the same recording without holding; `esc` drops it.
+Speak into the prompt and review the words at the cursor before sending. Dictation works the same with MendCode's own engine, Claude Code, Codex, pi or an ACP agent.
 
-The row shows the moment the hold is noticed: an amber dot and `starting… wait to speak` while the microphone and the speech model open, then the red dot once they listen. The terminal asks whether dictation is ready on the first repeat of a held space (a space typed by hand asks nothing), which also builds the on-device helper in the background, so the first recording does not wait for the compiler. If the transcript does not come back (the daemon stopped, the connection closed), the words already shown in the row are put in the prompt as a draft instead of being lost; an empty transcript falls back to them too. Only `esc` drops what was said.
+1. Hold **space** on the prompt, as in Claude Code. Once the key repeats, the spaces it typed are taken back.
+2. Wait for the red dot, then speak while holding the key. An amber dot and `starting… wait to speak` mean the microphone and speech model are still opening.
+3. Let go. The words land at the cursor for review; nothing is sent by itself.
 
-While it listens a row over the prompt shows a red dot, bars that move with your voice (`▁▂▃▄▅▆▇█`, the newest on the right; `.:-=+*#` in an ASCII terminal), the clock, the words heard so far and how it stops. It works the same whatever runs the session: MendCode's own engine, Claude Code, Codex, pi or an ACP agent.
+## Recording controls
 
-- `/voice on` / `/voice off` set `voice.enabled`; `/voice status` shows provider, model and what is missing; `/voice language` lists `auto` and every language the on-device model hears, by name (`/voice language es`, or two at once: `/voice language es en`; any other ISO code works with an API); `/voice start|stop|cancel` are the explicit forms.
+| Control | Does |
+|---|---|
+| `/voice` or `ctrl+x v` (`voice.toggle`) | starts and stops the same recording without holding |
+| `esc` | drops the recording |
+| `/voice on` / `/voice off` | set `voice.enabled` |
+| `/voice status` | shows provider, model and what is missing |
+| `/voice language` | lists `auto` and every language the on-device model hears, by name |
+| `/voice language es` | selects one language |
+| `/voice language es en` | selects two at once; any other ISO code works with an API |
+| `/voice start|stop|cancel` | explicit recording controls |
+
+### Readiness and live transcript
+
+The terminal asks whether dictation is ready on the first repeat of a held space; a space typed by hand asks nothing. This also builds the on-device helper in the background, so the first recording does not wait for the compiler.
+
+While listening, a row over the prompt shows:
+
+- A red dot and bars that move with your voice: `▁▂▃▄▅▆▇█`, newest on the right; `.:-=+*#` in an ASCII terminal.
+- The clock, the words heard so far and how it stops.
+
+If the transcript does not come back because the daemon stopped or the connection closed, the words already shown in the row become a prompt draft instead of being lost. An empty transcript falls back to them too. Only `esc` drops what was said.
 
 ## Where the words come from
 
-**On this Mac (default on macOS 26 or later).** Apple's on-device speech model hears the microphone: free, no key, no setup, and no audio leaves the machine. A small Swift helper (`packages/daemon/assets/dictate.swift`) is compiled once with Apple's Command Line Tools into `<dir>/voice/local/<hash>/` and streams levels and the running transcript to the daemon, which relays them only to the terminal that records (`voice.live`). The first use of a language may download its model (macOS does it; the helper waits up to 3 minutes for it). macOS asks for microphone access the first time. With the language unset it listens in the first two languages of System Settings > Language & Region at once (English and Spanish on a bilingual Mac, each on its own model, about 19 MB for the helper) and keeps the transcript the models are surer of (while listening, the row shows the running words of the model whose text reads as its own language, since a model hearing another language spells its sounds in its own words; the words arrive about a second after they are said); the region does not pick the model, so English (Panama) hears with US English, not the Irish model Apple's own lookup returns. `/voice language es` names one language and listens with it alone; `/voice language es en` names the two to hear at once. On macOS 26 the on-device model knows English, Spanish, French, German, Italian, Portuguese, Japanese, Korean, Chinese, Cantonese and eleven languages of India; for another language use an API. It is on without `/voice on` only in the full tier; minimalist and balanced leave it off until `/voice on`, and `/voice off` turns it off anywhere. `voice.provider: "local"` asks for it by name.
+### On this Mac
 
-**An API (Linux, Windows, or when chosen).** With `provider` or `base_url` set, or where the on-device model cannot run, the daemon records the clip with the first installed recorder (`rec`/`sox`, then `arecord` on Linux or `ffmpeg` on macOS/Linux) into a 16 kHz mono WAV under `<dir>/voice/`, uploads the finished clip to an OpenAI-compatible `POST <base>/audio/transcriptions` and deletes the file. The clip leaves the machine, so this stays off until `/voice on`. Its bars stay flat (the level is not measured), and the words appear once the upload answers. On Windows only SoX works (best effort).
+Apple's on-device speech model is the default on macOS 26 or later: free, no key, no setup, and no audio leaves the machine. `voice.provider: "local"` asks for it by name.
 
-One recording at a time, owned by the connection that started it; a disconnect, `esc`, `/voice off` or daemon shutdown drops it.
+It is on without `/voice on` only in the full tier. Minimalist and balanced leave it off until `/voice on`; `/voice off` turns it off anywhere.
+
+On first use:
+
+- macOS asks for microphone access.
+- A language may need its model downloaded by macOS; the helper waits up to 3 minutes.
+
+With the language unset, it listens in the first two languages of System Settings > Language & Region at once. On a bilingual Mac that can be English and Spanish, each on its own model, about 19 MB for the helper.
+
+It keeps the transcript the models are surer of. While listening, the row shows the running words of the model whose text reads as its own language: a model hearing another language spells its sounds in its own words. Words arrive about a second after they are said.
+
+The region does not pick the model. English (Panama) hears with US English, not the Irish model Apple's own lookup returns.
+
+| Choice | Result |
+|---|---|
+| `/voice language es` | listens with one named language alone |
+| `/voice language es en` | hears the two named languages at once |
+
+On macOS 26 the on-device model knows English, Spanish, French, German, Italian, Portuguese, Japanese, Korean, Chinese, Cantonese and eleven languages of India. For another language, use an API.
+
+### An API
+
+On Linux, Windows, when `provider` or `base_url` is set, or where the on-device model cannot run, the daemon uses an API:
+
+1. It records a 16 kHz mono WAV under `<dir>/voice/` with the first installed recorder: `rec`/`sox`, then `arecord` on Linux or `ffmpeg` on macOS/Linux.
+2. It uploads the finished clip to an OpenAI-compatible `POST <base>/audio/transcriptions`.
+3. It deletes the file.
+
+**Note:** The clip leaves the machine, so this stays off until `/voice on`. Bars stay flat because the level is not measured; words appear once the upload answers. On Windows only SoX works (best effort).
+
+### Recording ownership
+
+Only one recording runs at a time, owned by the connection that started it. A disconnect, `esc`, `/voice off` or daemon shutdown drops it.
 
 ## Setting
 
@@ -32,10 +86,26 @@ One recording at a time, owned by the connection that started it; a disconnect, 
 
 ## Telegram voice messages
 
-With the [Telegram bridge](channels.md) on and `voice.enabled`, a voice message from a paired chat is downloaded, transcribed, echoed back as `Heard: ...` and run as an ordinary prompt (never as a `/command`). Over 5 minutes or 20 MB is refused; with voice off the chat gets `Could not transcribe: voice dictation is off`.
+With the [Telegram bridge](channels.md) on and `voice.enabled`, a voice message from a paired chat follows this sequence:
+
+1. It is downloaded and transcribed.
+2. The chat gets `Heard: ...`.
+3. The text runs as an ordinary prompt, never as a `/command`.
+
+Messages over 5 minutes or 20 MB are refused. With voice off, the chat gets `Could not transcribe: voice dictation is off`.
 
 ## Security
 
-`voice.control` is local-only (remote and peer clients get `forbidden`) and is not a read-only command. Keys never reach logs or errors (provider replies are scrubbed of the header values). The terminal never records or uploads by itself.
+`voice.control` is local-only: remote and peer clients get `forbidden`. It is not a read-only command.
 
-Code: `packages/daemon/src/voice.ts`, `voice-local.ts` (+ `assets/dictate.swift`) and `voice-recorder.ts`, `packages/protocol/src/voice.ts`, `apps/cli/src/ui/app/voice.ts`, `apps/cli/src/view/voice-row.ts`.
+Keys never reach logs or errors; provider replies are scrubbed of the header values. The terminal never records or uploads by itself.
+
+## Implementation
+
+A small Swift helper (`packages/daemon/assets/dictate.swift`) is compiled once with Apple's Command Line Tools into `<dir>/voice/local/<hash>/`. It streams levels and the running transcript to the daemon, which relays them only to the terminal that records (`voice.live`).
+
+| Code | Area |
+|---|---|
+| `packages/daemon/src/voice.ts`, `voice-local.ts` (+ `assets/dictate.swift`) and `voice-recorder.ts` | daemon recording and transcription |
+| `packages/protocol/src/voice.ts` | protocol |
+| `apps/cli/src/ui/app/voice.ts`, `apps/cli/src/view/voice-row.ts` | terminal dictation and row |
