@@ -133,3 +133,14 @@ describe("status attaches the states", () => {
     expect(done.dashboard.jobs[0]!.pullRequest).toBeUndefined()
   })
 })
+
+test("concurrent first reads of PR states share one cache: the loader runs once and every caller gets the same instance", async () => {
+  const { sharedLoad } = await import("../src/pr-review/service")
+  let made = 0
+  const load = sharedLoad(async () => { await Bun.sleep(5); made++; return { id: made } })
+  const [a, b, c] = await Promise.all([load(), load(), load()])
+  expect(made).toBe(1)
+  expect(b).toBe(a)
+  expect(c).toBe(a)
+  expect(await load()).toBe(a)
+})
