@@ -109,7 +109,7 @@ describe("oversized code uses bounded cheap readers", () => {
   }
 
   for (const tier of ["balanced", "full"] as const) test(`${tier}: a six MiB code release reviews and publishes through the fake forge`, async () => {
-    const repo = await largeRepo()
+    const repo = await largeRepo("readers:\n  parallel: 1\n")
     const review = children({ findings: [] })
     const forge = fakeGh()
     const pieces: string[] = []
@@ -118,8 +118,8 @@ describe("oversized code uses bounded cheap readers", () => {
       const result = await gitRun(...args)
       if (args[0][0] === "diff" && args[0].includes("-U3")) {
         expect(Buffer.byteLength(result.out)).toBeLessThanOrEqual(MAX_DIFF_BYTES)
-        expect(args[0].filter((arg) => arg.startsWith(":(literal)")).length).toBe(1)
-        if (reading) pieces.push(args[0].at(-1)!)
+        expect(args[0].filter((arg) => arg.startsWith(":(literal)")).length).toBeLessThanOrEqual(100)
+        if (reading) { expect(args[0].filter((arg) => arg.startsWith(":(literal)")).length).toBe(1); pieces.push(args[0].at(-1)!) }
       }
       return result
     }
@@ -138,6 +138,11 @@ describe("oversized code uses bounded cheap readers", () => {
     expect(review.turns.map((turn) => turn.prompt).join("\n")).toContain("export contract risk")
     expect(forge.posts().length).toBeGreaterThan(0)
     expect(run.info!.notes.join("\n")).toContain("Not read in full by the review pass")
+    expect(run.info!.fullBase).toBe(repo.base)
+    const resumed = await runPrReview({ ...baseInput(repo, review.factory), checkpoint: run.checkpoint, readers: { tier, source: () => { throw new Error("cached summaries must not pick a model") } } })
+    expect(resumed.status).toBe("reviewed")
+    expect(resumed.info!.notes.join("\n")).toContain("not read again")
+    expect(resumed.info!.fullBase).toBe(repo.base)
   }, 60_000)
 
   test("spent reader share publishes with every remaining file listed as not read, without loading it", async () => {
@@ -161,6 +166,29 @@ describe("oversized code uses bounded cheap readers", () => {
     expect(loads).toBe(8)
     expect(run.info!.notes.join("\n")).toContain("Not read: src/code-")
     expect(forge.posts().map((post) => post.stdin ?? "").join("\n")).toContain("not read")
+    expect(run.info!.fullBase).toBeUndefined()
+    const body = JSON.parse(forge.posts()[0]!.stdin!).body as string
+    expect(body).not.toContain("mendcode:full-review")
+    const commits = (await git(repo.dir, "rev-list", "--reverse", `${repo.base}..${repo.head}`)).split("\n").map((sha) => ({ sha }))
+    const historical = (text: string) => fakeGh((endpoint) => {
+      if (endpoint.includes("/pulls?state=closed")) return [{ number: 12, merged_at: "2026-11-01T00:00:00Z", merge_commit_sha: repo.head, head: { sha: repo.head }, base: { sha: repo.base } }]
+      if (endpoint.includes("/commits?")) return commits
+      if (endpoint.includes("/reviews?")) return [{ body: `${text}\n${reviewerMarker({ reviewer: "global", configKey: "base", key: repo.head })}`, commit_id: repo.head, state: "COMMENTED", submitted_at: "2026-11-01T00:00:00Z", user: { login: "review-bot" } }]
+    }).gh
+    const coverage = { git: gitRun, directory: repo.dir, repo: "acme/app", number: 99, base: repo.base, head: repo.head, self: "review-bot" }
+    expect(await alreadyReviewed({ ...coverage, gh: historical(body) })).toBeUndefined()
+    // Positive control: the same history would be skipped if we incorrectly certified it.
+    expect(await alreadyReviewed({ ...coverage, gh: historical(`${body}\n<!-- mendcode:full-review base=${repo.base} -->`) })).toEqual({ base: repo.head, prs: [12] })
+  }, 60_000)
+
+  test.each(["unavailable", "failed"])("%s readers publish without certifying full coverage", async (mode) => {
+    const repo = await largeRepo()
+    const forge = fakeGh()
+    const run = await runPrReview({ ...baseInput(repo, children({ findings: [] }).factory), publish: true, gh: forge.gh, readers: { tier: "balanced", source: () => mode === "unavailable" ? { ok: false, reason: "no cheap model" } : { ok: true, model: "claude-haiku", factory: async () => { throw new Error("reader failed") } } } })
+    expect(run.status).toBe("published")
+    expect(run.info!.notes.join("\n")).toContain("Not read:")
+    expect(run.info!.fullBase).toBeUndefined()
+    expect(forge.posts().map((post) => post.stdin ?? "").join("\n")).not.toContain("mendcode:full-review")
   }, 60_000)
 
   for (const mode of ["minimalist", "disabled"] as const) test(`${mode} keeps the four MiB failure before any model or publication`, async () => {

@@ -6,6 +6,8 @@ export const GROUP_DELAY_MS = 1500
 /** Items one card lists and singles it opens; the rest are answered in their own session. */
 const MAX_LISTED = 12
 const SHOWN_DETAIL = 160
+/** Replaced cards whose late answer is still applied. */
+const MAX_RETIRED = 16
 export const APPROVE_ALL = "Allow all"
 export const DENY_ALL = "Reject all"
 export const ONE_BY_ONE = "One by one"
@@ -41,8 +43,12 @@ export function createChildApprovals(deps: {
   queueId(): QueueId
   emit(event: SessionEventDraft): void
   mask(sessionId: SessionId, text: string): string
-  /** The text for the launching session's model; resolves once it is queued or steered. */
+  /** The text for the launching session's model; resolves once it is queued or steered (undefined: refused). The `queueId` of a notice still queued rewrites it. */
   notify(launcher: SessionId, text: string, queueId: QueueId): Promise<unknown>
+  /** Whether the notice `queueId` still waits in the launcher's queue, unread by its model. */
+  queued?(launcher: SessionId, queueId: QueueId): boolean
+  /** Takes a notice that still waits back out of the launcher's queue. */
+  unqueue?(launcher: SessionId, queueId: QueueId): void
   /** Answers the child's own request as the user. */
   resolveChild(input: { child: SessionId; requestId: RequestId; decision: { kind: "approve"; scope: "once" } | { kind: "deny" } | { kind: "answer"; text: string; answers: string[][] }; clientId: string | undefined }): Promise<void>
   /** Who waits for `launcher`, told to every local terminal so the one with another session open can see it; no children says nothing waits now. */
@@ -55,9 +61,48 @@ export function createChildApprovals(deps: {
   const timers = new Map<SessionId, ReturnType<typeof setTimeout>>()
   const delay = deps.delayMs ?? GROUP_DELAY_MS
   const announced = new Map<SessionId, string>()
+  /** Each launcher's one notice that may still wait in its queue: rewritten as its requests change, taken back once none waits. */
+  const notices = new Map<SessionId, { queueId: QueueId; items: RequestId[]; confirmed: boolean }>()
+  /** Cards replaced or answered lately: a terminal that answers one before it saw the replacement still gets its answer applied. */
+  const retired = new Map<RequestId, Card>()
+  /** Requests a card's answer is being sent to: no new card lists them again. */
+  const answering = new Set<RequestId>()
   let stopped = false
 
   const forLauncher = (launcher: SessionId) => [...waiting.values()].filter((entry) => entry.launcher === launcher)
+
+  function retire(card: Card) {
+    retired.set(card.requestId, card)
+    if (retired.size > MAX_RETIRED) retired.delete(retired.keys().next().value!)
+  }
+  /** The launcher's notice while it still waits unread; one its model already read (or that was refused) is forgotten. */
+  function queuedNotice(launcher: SessionId) {
+    const held = notices.get(launcher)
+    if (held?.confirmed && !(deps.queued?.(launcher, held.queueId) ?? false)) notices.delete(launcher)
+    return notices.get(launcher)
+  }
+  function tell(launcher: SessionId, entries: Waiting[], queueId: QueueId) {
+    const held = { queueId, items: entries.map((entry) => entry.requestId), confirmed: false }
+    notices.set(launcher, held)
+    const settle = (accepted: unknown) => {
+      if (notices.get(launcher) !== held) return
+      if (accepted === undefined) notices.delete(launcher)
+      else held.confirmed = true
+    }
+    void deps.notify(launcher, notice(entries), queueId).then(settle, () => settle(undefined))
+  }
+  /** One notice per launcher: what is new joins the one still queued, and once nothing it lists waits it leaves the queue. */
+  function updateNotice(launcher: SessionId, fresh: Waiting[]) {
+    const held = queuedNotice(launcher)
+    const kept = held ? held.items.flatMap((id) => waiting.get(id) ?? []) : []
+    if (held && !kept.length && !fresh.length) {
+      notices.delete(launcher)
+      try { deps.unqueue?.(launcher, held.queueId) } catch { /* the session is gone */ }
+      return
+    }
+    if (!fresh.length && (!held || kept.length === held.items.length)) return
+    tell(launcher, [...kept, ...fresh], held?.queueId ?? deps.queueId())
+  }
 
   function withdraw(requestId: RequestId, at: SessionId, resolution: "answered" | "abandoned", clientId?: string) {
     try { deps.emit({ type: "server.request.resolved", sessionId: at, requestId, resolution, ...(clientId ? { byClientId: clientId as never } : {}) }) } catch { /* the session is gone */ }
@@ -66,6 +111,7 @@ export function createChildApprovals(deps: {
     const card = cards.get(launcher)
     if (!card) return
     cards.delete(launcher)
+    retire(card)
     withdraw(card.requestId, card.at, resolution, clientId)
   }
   function closeSingles(launcher: SessionId) {
@@ -137,19 +183,18 @@ export function createChildApprovals(deps: {
     if (stopped) return
     const entries = forLauncher(launcher)
     const fresh = entries.filter((entry) => !entry.announced)
-    if (fresh.length) {
-      for (const entry of fresh) entry.announced = true
-      void deps.notify(launcher, notice(fresh), deps.queueId()).catch(() => undefined)
-    }
+    for (const entry of fresh) entry.announced = true
+    updateNotice(launcher, fresh)
     // A choice a child asks (a settings proposal, a question with options) is shown to the user as it is: a headless child has no one to see it.
     const at = deps.humanSessions(launcher)[0]
     if (at) for (const entry of entries) if (entry.mirror && !entry.mirrored) { entry.mirrored = true; singleCard(entry, at) }
     announce(launcher)
-    const approvals = entries.filter((entry) => entry.approval)
+    const approvals = entries.filter((entry) => entry.approval && !answering.has(entry.requestId))
     const open = cards.get(launcher)
     if (!approvals.length) return closeCard(launcher)
     // The same requests are already on the card: leave it where the user is looking at it.
-    if (open && open.items.length === Math.min(approvals.length, MAX_LISTED) && open.items.every((id) => waiting.has(id))) return
+    const listed = approvals.slice(0, MAX_LISTED)
+    if (open && open.items.length === listed.length && open.items.every((id, index) => id === listed[index]!.requestId)) return
     closeCard(launcher)
     if (at) cards.set(launcher, groupCard(launcher, at, approvals))
   }
@@ -161,11 +206,13 @@ export function createChildApprovals(deps: {
     timers.set(launcher, timer)
   }
 
-  async function answerItems(items: RequestId[], approve: boolean, clientId: string | undefined) {
+  /** Answers the requests that still wait, all at once; a request answered meanwhile in its own session is skipped. */
+  function answerItems(items: RequestId[], approve: boolean, clientId: string | undefined) {
     for (const requestId of items) {
       const entry = waiting.get(requestId)
-      if (!entry) continue
-      await deps.resolveChild({ child: entry.child, requestId, decision: approve ? { kind: "approve", scope: "once" } : { kind: "deny" }, clientId }).catch(() => undefined)
+      if (!entry || answering.has(requestId)) continue
+      answering.add(requestId)
+      void deps.resolveChild({ child: entry.child, requestId, decision: approve ? { kind: "approve", scope: "once" } : { kind: "deny" }, clientId }).catch(() => undefined).finally(() => answering.delete(requestId))
     }
   }
 
@@ -184,19 +231,21 @@ export function createChildApprovals(deps: {
       }
       if (event.type === "server.request.resolved") {
         const entry = waiting.get(event.requestId)
-        if (entry) { waiting.delete(event.requestId); announce(entry.launcher); schedule(entry.launcher) }
+        if (entry) { waiting.delete(event.requestId); updateNotice(entry.launcher, []); announce(entry.launcher); schedule(entry.launcher) }
       }
     },
     /** An answer to one of these cards; undefined when the request is not one. Only the user's own terminal answers it. */
     resolve(command: Extract<Command, { type: "request.resolve" }>, human: boolean): { ok: true } | { ok: false; code: "forbidden" | "invalid_command"; message: string } | undefined {
-      const card = [...cards.values()].find((entry) => entry.requestId === command.requestId)
+      // A card replaced while the user answered it is still this module's: its answer goes to what it listed that still waits.
+      const card = [...cards.values()].find((entry) => entry.requestId === command.requestId) ?? retired.get(command.requestId)
+      const current = card !== undefined && cards.get(card.launcher) === card
       const single = singles.get(command.requestId)
       const at = card?.at ?? single?.at
       if (!at || at !== command.sessionId) return undefined
       const decision = command.decision
       // Dismissing a card answers nothing: the children keep waiting and the card comes back when the group changes.
       if (decision.kind === "deny") {
-        if (card) { cards.delete(card.launcher); withdraw(card.requestId, card.at, "abandoned", command.clientId) }
+        if (card) { if (current) { cards.delete(card.launcher); retire(card); withdraw(card.requestId, card.at, "abandoned", command.clientId) } }
         else if (single) { singles.delete(single.requestId); withdraw(single.requestId, single.at, "abandoned", command.clientId) }
         return { ok: true }
       }
@@ -204,8 +253,7 @@ export function createChildApprovals(deps: {
       if (decision.kind !== "answer") return { ok: false, code: "invalid_command", message: "[DAEMON]: this card takes an answer or a dismissal" }
       const answer = (decision.answers?.[0]?.[0] ?? decision.text).trim()
       if (card) {
-        cards.delete(card.launcher)
-        withdraw(card.requestId, card.at, "answered", command.clientId)
+        if (current) { cards.delete(card.launcher); retire(card); withdraw(card.requestId, card.at, "answered", command.clientId) }
         if (answer.startsWith(APPROVE_ALL)) void answerItems(card.items, true, command.clientId)
         else if (answer === DENY_ALL) void answerItems(card.items, false, command.clientId)
         else if (answer === ONE_BY_ONE) for (const id of card.items) { const entry = waiting.get(id); if (entry) singleCard(entry, card.at) }
@@ -225,6 +273,7 @@ export function createChildApprovals(deps: {
     pending: (launcher: SessionId) => forLauncher(launcher).map((entry) => ({ child: entry.child, requestId: entry.requestId, approval: entry.approval })),
     forget(sessionId: SessionId) {
       for (const [id, entry] of waiting) if (entry.child === sessionId || entry.launcher === sessionId) { waiting.delete(id); if (entry.launcher !== sessionId) schedule(entry.launcher) }
+      notices.delete(sessionId)
       closeCard(sessionId)
       closeSingles(sessionId)
       for (const launcher of new Set([...announced.keys(), sessionId])) announce(launcher)

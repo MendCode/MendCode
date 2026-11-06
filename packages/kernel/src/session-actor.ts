@@ -822,6 +822,14 @@ export function createSessionActor(options: SessionActorOptions) {
         return
       }
       case "notice": {
+        // The same notice again while it still waits (one per subject, rewritten as its subject changes): its text is replaced in place.
+        const queuedNotice = message.queueId && !message.idleOnly && !message.recordOnly ? queue.find((entry) => entry.queueId === message.queueId && entry.notice) : undefined
+        if (queuedNotice) {
+          queuedNotice.text = message.text
+          emit({ type: "queue.edited", sessionId, queueId: queuedNotice.queueId, text: message.text })
+          emitQueue()
+          return message.reply(queuedNotice.queueId)
+        }
         // A full queue takes no more notices: the daemon hears `undefined`, as for a notice that could not wait.
         if ((message.idleOnly && (active || held || paused || queue.length)) || queue.length >= MAX_QUEUE_ENTRIES) return message.reply(undefined)
         // Queued like a message but never clears `held`: after a user cancel it waits for the user (FC-13).
@@ -932,6 +940,7 @@ export function createSessionActor(options: SessionActorOptions) {
      * `rides`: nobody waits on a reply to it, so after a cancel it goes with the user's next message instead of taking a turn first;
      * steered, it keeps its place in the queue, joins together with the others like it as one message, and leaves the turn's authority as it is.
      * `unless`: asked just before the notice would be read; true means the model already has its news (it read the task's exit itself), and the notice is dropped.
+     * The `queueId` of a notice that still waits in the queue replaces that notice's text in place (its place and delivery stay).
      */
     notify(text: string, queueId?: QueueId, idleOnly = false, delivery?: "queue" | "steer", rides = false, unless?: () => boolean) {
       return new Promise<QueueId | undefined>((reply) => post({ kind: "notice", text, ...(queueId ? { queueId } : {}), ...(idleOnly ? { idleOnly } : {}), ...(delivery ? { delivery } : {}), ...(rides ? { rides } : {}), ...(unless ? { unless } : {}), reply }))
