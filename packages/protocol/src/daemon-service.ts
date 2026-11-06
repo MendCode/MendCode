@@ -21,7 +21,7 @@ export const DaemonStatusReport = lazySchema(() => z.strictObject({
   /** A restart was asked while work ran: the daemon stops once it ends, and the terminals' reconnect starts the installed build. */
   restartPending: z.literal(true).optional(),
   /** A restart is waiting for running commands and background work (`daemon.shutdown` with `drainMs`): who still runs what, until when, and whether it is over. */
-  drain: z.strictObject({ waiting: RestartHeld, until: z.number(), done: z.boolean() }).optional(),
+  drain: z.strictObject({ waiting: RestartHeld, /** Sessions that wait for the user (an approval or a question): not waited for, they resume after the restart. */ asking: RestartHeld.optional(), until: z.number(), done: z.boolean() }).optional(),
 }))
 
 /** The sessions a restart waits on, at most 20, each with at most 8 of what runs in it (a command line or a background task). */

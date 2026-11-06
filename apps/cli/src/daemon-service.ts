@@ -181,8 +181,13 @@ export function createDaemonServiceCli(deps: DaemonServiceDeps) {
         const reply = await peer.send({ type: "daemon.shutdown", force: true, drainMs: graceS * 1000 }).catch((error: unknown) => ({ ok: false as const, error }))
         if (!reply.ok) return
         const say = (text: string) => { if (!command.json) deps.out.write(text) }
-        let shown = heldLines((reply.result as { waiting?: Parameters<typeof heldLines>[0] } | undefined)?.waiting ?? [])
+        const first = reply.result as { waiting?: Parameters<typeof heldLines>[0]; asking?: Parameters<typeof heldLines>[0] } | undefined
+        let shown = heldLines(first?.waiting ?? [])
         if (shown) say(`Waiting up to ${graceS} s for work that a restart would kill (--grace); keep this command running:\n${shown}\n`)
+        // A session that waits for the user's answer runs nothing: the restart does not wait for it, and its turn resumes afterwards.
+        let asked = heldLines(first?.asking ?? [])
+        const askingText = (lines: string) => `Waiting for you (an approval or a question; the restart does not wait for it, the turn resumes after it):\n${lines}\n`
+        if (asked) say(askingText(asked))
         let told = false
         let marked = deps.now()
         for (;;) {
@@ -200,6 +205,9 @@ export function createDaemonServiceCli(deps: DaemonServiceDeps) {
             else if (shown) say("The work ended; restarting.\n")
           } else if (!status.drain.done && now !== shown && now) say(`Still waiting on:\n${now}\n`)
           shown = now
+          const asking = heldLines(status.drain.asking ?? [])
+          if (!status.drain.done && asking && asking !== asked) say(askingText(asking))
+          asked = asking
           await deps.sleep(250)
         }
       }

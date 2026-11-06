@@ -71,7 +71,8 @@ const MAX_AGENT_ITEMS = 500
 type Message =
   | { kind: "command"; command: ActorCommand; authorityText?: string; reply(result: ActorResult): void }
   | { kind: "interrupt"; reason: InterruptReason; cause?: InterruptCause; reply(): void }
-  | { kind: "pause"; paused: boolean; reply(paused: boolean): void }
+  | { kind: "pause"; paused: boolean; keepHeld?: boolean; reply(paused: boolean): void }
+  | { kind: "restart.release"; reply(released: boolean): void }
   | { kind: "engine.event"; turnId: TurnId; event: EngineEvent }
   | { kind: "agent.event"; turnId: TurnId; event: EngineEvent }
   | { kind: "engine.request"; turnId: TurnId; request: EngineRequest; resolve(resolution: EngineResolution): void }
@@ -156,7 +157,7 @@ export function createSessionActor(options: SessionActorOptions) {
       else if (message.kind === "pause") message.reply(false)
       else if (message.kind === "engine.request") message.resolve({ kind: "abandoned" })
       else if (message.kind === "notice") message.reply(undefined)
-      else if (message.kind === "steer" || message.kind === "compact.idle") message.reply(false)
+      else if (message.kind === "steer" || message.kind === "compact.idle" || message.kind === "restart.release") message.reply(false)
       else if (message.kind === "engine.queue") message.reply(undefined)
       return
     }
@@ -860,11 +861,19 @@ export function createSessionActor(options: SessionActorOptions) {
         const changed = paused !== message.paused
         paused = message.paused
         // Resuming also releases a user-cancel or restart hold: it is the user's explicit "go on".
-        if (!paused) held = false
+        if (!paused && !message.keepHeld) held = false
         if (changed) options.onPause?.(paused)
         if (!paused) settleIdle()
         else if (!active && queue.length > 0) setForeground("queued")
         return message.reply(paused)
+      }
+      case "restart.release": {
+        // Only the hold a restored queue starts with: a pause, a cancel or an interrupt since then stays.
+        if (!held || !heldSinceRestart || paused) return message.reply(false)
+        held = false
+        heldSinceRestart = false
+        settleIdle()
+        return message.reply(true)
       }
       case "engine.queue": {
         const turn = active
@@ -929,9 +938,16 @@ export function createSessionActor(options: SessionActorOptions) {
     interrupt(reason: InterruptReason, cause?: InterruptCause) {
       return new Promise<void>((reply) => post({ kind: "interrupt", reason, ...(cause ? { cause } : {}), reply }))
     },
-    /** Pause (true) or resume (false): a paused session finishes its running turn and then starts nothing until resumed. */
-    pause(value: boolean) {
-      return new Promise<boolean>((reply) => post({ kind: "pause", paused: value, reply }))
+    /**
+     * Pause (true) or resume (false): a paused session finishes its running turn and then starts nothing until resumed. `keepHeld`:
+     * resuming leaves a user cancel's or an interrupt's hold as it is (a restart's wait letting go of its own pause).
+     */
+    pause(value: boolean, keepHeld = false) {
+      return new Promise<boolean>((reply) => post({ kind: "pause", paused: value, ...(keepHeld ? { keepHeld } : {}), reply }))
+    },
+    /** Lets the queue a restart restored go on, in order; false when nothing was held that way (or a pause, cancel or interrupt holds it now). */
+    releaseRestoredHold() {
+      return new Promise<boolean>((reply) => post({ kind: "restart.release", reply }))
     },
     /**
      * A system notice the agent should answer (a background task finished). It starts a turn when the

@@ -2369,6 +2369,20 @@ export async function startDaemon(options: DaemonOptions) {
     tellLost: async (sessionId, text) => store.settings.get().resumeAfterRestart !== false ? actorFor(sessionId)?.notify(text) : undefined,
   })
   sessionObservers.push(restartResume.observe)
+  /**
+   * The queues the previous daemon's restart wait held come back held, like every restored queue; that hold was the wait's, not
+   * the user's: after the interrupted turns are resumed (they go first), the messages of those sessions go on, in order. One meta
+   * read at start; the module loads only when the previous stop held something.
+   */
+  async function releaseDrainHolds() {
+    if (!store.meta.get("restart.held")) return
+    const { takeHeld } = await import("./restart-drain")
+    for (const sessionId of takeHeld(store.meta)) {
+      if (stopped) return
+      if (!store.hasSession(sessionId as SessionId)) continue
+      if (await actorFor(sessionId as SessionId)?.releaseRestoredHold()) logLine("info", `[DAEMON]: session ${sessionId}: the messages the restart held go on`)
+    }
+  }
 
   /** What runs in a session that a stop would kill: a tool call in flight, a compaction, Claude Code's background tasks, the session's background shells. */
   function runningWork(sessionId: SessionId, openTools: (events: SessionEvent[]) => string[]): string[] {
@@ -2380,18 +2394,26 @@ export async function startDaemon(options: DaemonOptions) {
     for (const task of background.listAll(sessionId)) if (task.status === "running") items.push(`background shell: ${task.command}`)
     return items.map((item) => secrets.mask(sessionId, item))
   }
+  /** What in a session's running turn waits for the user (an approval or question card): a stop cuts nothing there, the turn resumes. */
+  function askingWork(sessionId: SessionId, turnWork: (events: SessionEvent[]) => { asking: string[] }): string[] {
+    const now = actors.get(sessionId)?.snapshot()
+    if (!now?.turnId || now.stopping || now.pendingRequests === 0) return []
+    return turnWork(lastTurnEvents(sessionId) ?? []).asking.map((item) => secrets.mask(sessionId, item))
+  }
   const sessionTitle = (sessionId: SessionId) => secrets.mask(sessionId, store.sessionInfo(sessionId)?.title ?? "")
   /** The wait of a forced restart (`daemon.shutdown` with `drainMs`); loaded by the first one. */
   let restartDrain: import("./restart-drain").RestartDrain | undefined
   async function loadRestartDrain() {
     if (restartDrain) return restartDrain
-    const { createRestartDrain, openToolCalls } = await import("./restart-drain")
+    const { createRestartDrain, openToolCalls, turnWork } = await import("./restart-drain")
     return restartDrain ??= createRestartDrain({
       sessions: () => actors.keys(),
       running: (sessionId) => runningWork(sessionId, openToolCalls),
+      asking: (sessionId) => askingWork(sessionId, turnWork),
       title: sessionTitle,
       paused: (sessionId) => actors.get(sessionId)?.snapshot().paused === true,
-      hold: (sessionId, on) => actors.get(sessionId)?.pause(on) ?? Promise.resolve(),
+      // Letting go of its own pause leaves a user cancel's hold in place.
+      hold: (sessionId, on) => actors.get(sessionId)?.pause(on, true) ?? Promise.resolve(),
       // After the reply that started the wait is out; the stop interrupts the turns still open, for the next start to resume.
       stop: () => void setTimeout(() => void stop().then(() => options.onShutdown?.()), 10),
       now: () => clock.now(),
@@ -6116,8 +6138,10 @@ export async function startDaemon(options: DaemonOptions) {
         // A socket client that leaves before that lets it go; the client that asked starts the next daemon.
         if (command.drainMs !== undefined) {
           if (stopped) return reply(connection, command.id, { ok: true, result: { waiting: [] } })
-          const waiting = await (await loadRestartDrain()).begin(command.drainMs, { except: connection.agent?.sessionId, gone: connection.ended?.signal })
-          return reply(connection, command.id, { ok: true, result: { waiting } })
+          const drain = await loadRestartDrain()
+          const waiting = await drain.begin(command.drainMs, { except: connection.agent?.sessionId, gone: connection.ended?.signal })
+          const asking = drain.status()?.asking
+          return reply(connection, command.id, { ok: true, result: { waiting, ...(asking ? { asking } : {}) } })
         }
         const busy =() => [...actors.values()].some(actorWorking) || scheduler.snapshot().length > 0 || engineJobs() > 0 || loops.list().some((loop) => loop.state === "verifying")
         if (busy() && !command.force && command.whenIdle) {
@@ -6801,7 +6825,13 @@ export async function startDaemon(options: DaemonOptions) {
     stopped = true
     // Before anything is stopped: what still runs (a command, a background task) is about to be killed; the next start tells each session.
     const except = restartDrain?.except()
+    // The queues the drain held are restored held by the next start; it lets go of these (not the ones a user pause or cancel holds).
+    const drainHeld = restartDrain?.held().filter((sessionId) => { const now = actors.get(sessionId)?.snapshot(); return now?.paused === true && !now.held }) ?? []
     restartDrain?.dispose()
+    if (drainHeld.length) {
+      try { (await import("./restart-drain")).recordHeld(store.meta, drainHeld) }
+      catch (error) { logLine("warn", `[DAEMON]: could not record the sessions the restart held: ${error instanceof Error ? error.message : String(error)}`) }
+    }
     if ([...actors.values()].some(actorWorking) || engineJobs() > 0 || scheduler.snapshot().length > 0 || background.listAll().some((task) => task.status === "running")) {
       try {
         const { collectHeld, recordLost, openToolCalls, heldText } = await import("./restart-drain")
@@ -6881,7 +6911,10 @@ export async function startDaemon(options: DaemonOptions) {
   }
 
   // After start has finished (the listener is up, the engine is ready): a bounded page of the table, then one steering turn per session.
-  resumeTimer = setTimeout(() => void restartResume.start().catch((error) => logLine("warn", `[DAEMON]: resuming interrupted turns failed: ${error instanceof Error ? error.message : String(error)}`)), 0)
+  resumeTimer = setTimeout(() => void restartResume.start()
+    .catch((error) => logLine("warn", `[DAEMON]: resuming interrupted turns failed: ${error instanceof Error ? error.message : String(error)}`))
+    .then(releaseDrainHolds)
+    .catch((error) => logLine("warn", `[DAEMON]: releasing the queues a restart held failed: ${error instanceof Error ? error.message : String(error)}`)), 0)
   resumeTimer.unref?.()
 
   return {

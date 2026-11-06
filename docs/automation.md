@@ -272,9 +272,13 @@ When that work has ended, or after `--grace S` (0–3600 seconds, 120 by default
 
 The session that runs the restart command itself is not waited for.
 
-Keep the command running until it is done: if it goes away during the wait, the daemon lets the wait go, the sessions it paused go on and nothing is interrupted.
+A session that only waits for you (an approval or a question card, with no tool running yet) is not waited for either: the command lists it under "Waiting for you", the stop interrupts its turn, and the turn resumes after the restart like any other, so the model can ask again.
 
-While it waits, `daemon status --json` shows `drain` (`waiting`, `until`, `done`).
+Keep the command running until it is done: if it goes away during the wait, the daemon lets the wait go, the sessions it paused go on and nothing is interrupted; a session held by your cancel stays held.
+
+The wait's pause never outlives it. Messages sent to a session during the wait queue behind it; the new daemon restores every queue held, as after any stop, and then, once the interrupted turns are resumed, lets go of the queues the wait held, so those messages are sent in order. A session you paused yourself, or one your cancel held, keeps its queue held until you act.
+
+While it waits, `daemon status --json` shows `drain` (`waiting`, `asking` for the sessions waiting for you, `until`, `done`).
 
 An idle daemon restarts without waiting, and a daemon older than this wait restarts as before.
 

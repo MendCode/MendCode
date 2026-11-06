@@ -7,7 +7,7 @@ import { createClient } from "@mendcode/client"
 import { createFauxEngine } from "@mendcode/engine-faux"
 import type { DaemonStatusReport, SessionId } from "@mendcode/protocol"
 import { startDaemon } from "../src"
-import { openToolCalls, recordLost, takeLost } from "../src/restart-drain"
+import { openToolCalls, recordHeld, recordLost, takeHeld, takeLost, turnWork } from "../src/restart-drain"
 import { boot as bootNative, callTool, openSession, stop, until } from "./native-harness"
 
 const cleanups: Array<() => Promise<void> | void> = []
@@ -86,6 +86,30 @@ describe("the work a restart would kill", () => {
       { type: "item.completed", itemId: "b", status: "ok" },
       { type: "item.started", itemId: "c", kind: "agent_message" },
     ] as never)).toEqual(["shell: bun run test"])
+  })
+
+  test("a tool call whose approval card waits for the user is asking, not running; a resolved one runs again", () => {
+    const events = [
+      { type: "item.started", itemId: "a", kind: "tool_call", meta: { tool: "workflow_script: mend-quality" } },
+      { type: "server.request", requestId: "r1", itemId: "a", kind: "approval", title: "Run workflow" },
+      { type: "item.started", itemId: "b", kind: "tool_call", meta: { tool: "shell: bun run test" } },
+      // Claude Code names no item: its request is matched by the call's title.
+      { type: "item.started", itemId: "c", kind: "tool_call", meta: { tool: "Bash: rm -rf dist" } },
+      { type: "server.request", requestId: "r2", kind: "approval", title: "Bash: rm -rf dist" },
+      // A child session's mirrored approval is that session's wait, not this one's.
+      { type: "server.request", requestId: "r3", kind: "approval", title: "child edit", async: true },
+    ]
+    expect(turnWork(events as never)).toEqual({ running: ["shell: bun run test"], asking: ["workflow_script: mend-quality", "Bash: rm -rf dist"] })
+    expect(openToolCalls([...events, { type: "server.request.resolved", requestId: "r1", resolution: "approved" }] as never)).toEqual(["workflow_script: mend-quality", "shell: bun run test"])
+  })
+
+  test("the sessions a restart's wait held are kept across meta's 500-character values and read back once", () => {
+    const values = new Map<string, string>()
+    const meta = { get: (key: string) => values.get(key), set: (key: string, value: string) => void values.set(key, value.slice(0, 500)) }
+    const ids = Array.from({ length: 60 }, (_, i) => `ses_01M6S2GPTAZCY${String(i).padStart(3, "0")}`)
+    recordHeld(meta, ids)
+    expect(takeHeld(meta)).toEqual(ids)
+    expect(takeHeld(meta)).toEqual([])
   })
 
   test("what a stop killed is kept within meta's 500 characters and read back once", () => {
@@ -188,6 +212,54 @@ describe.skipIf(process.platform === "win32")("a forced restart waits for runnin
     await h.first.stop()
     const second = await h.open()
     await h.until(async () => JSON.stringify(await h.log(second.terminal)).includes("`background task: bun run dev`") || undefined)
+  }, 60_000)
+
+  test("after the restart every queue the wait held goes on in order; a queue the user paused stays held", async () => {
+    const h = await boot()
+    expect((await h.submit(h.first.terminal, "/tool 600")).ok).toBe(true)
+    await h.toolStarted(h.first.terminal)
+    const other = await h.first.terminal.send({ type: "session.create", directory: h.first.daemon.store.sessionDirectory(h.sessionId)!, title: "mine" })
+    const mine = other.ok ? other.result!.sessionId as SessionId : h.sessionId
+    expect((await h.first.terminal.send({ type: "session.control", sessionId: mine, action: "pause" })).ok).toBe(true)
+    expect((await h.first.terminal.send({ type: "user.submit", sessionId: mine, text: "mine waits", attachments: [] })).ok).toBe(true)
+    const control = await h.first.control()
+    await h.drain(control, 60_000)
+    // Sent during the wait: they queue behind the hold, in this order.
+    expect((await h.submit(h.first.terminal, "first after")).ok).toBe(true)
+    expect((await h.submit(h.first.terminal, "second after")).ok).toBe(true)
+    await stoppedItself(h)
+
+    const second = await h.open()
+    const answered = await h.until(async () => {
+      const replies = (await h.log(second.terminal)).filter((event) => event.type === "item.completed" && event.text?.startsWith("echo:")).map((event) => event.text)
+      return replies.some((text) => text?.includes("second after")) ? replies : undefined
+    })
+    expect(answered.join("\n")).toMatch(/first after[\s\S]*second after/)
+    const queue = await second.terminal.send({ type: "queue.list", sessionId: mine })
+    expect(queue.ok && queue.result).toMatchObject({ held: true, entries: [{ text: "mine waits" }] })
+  }, 60_000)
+
+  test("a session waiting on an approval card does not extend the wait; it is named as waiting for you and its turn resumes after the restart", async () => {
+    const h = await bootNative({ shell: true, steps: [callTool("shell", { command: "echo approved" }), stop("resumed")] })
+    cleanups.push(() => h.cleanup())
+    const sessionId = await openSession(h, "ask")
+    expect((await h.client.send({ type: "user.submit", sessionId, text: "run it", attachments: [] })).ok).toBe(true)
+    await until(() => h.events.some((event) => event.type === "server.request"))
+    const started = Date.now()
+    const reply = await h.client.send({ type: "daemon.shutdown", force: true, drainMs: 30_000 })
+    expect(reply.ok && reply.result).toMatchObject({ waiting: [], asking: [{ sessionId, items: [expect.stringContaining("echo approved")] }] })
+    await until(() => !existsSync(h.daemon.socketPath), 15_000)
+    expect(Date.now() - started).toBeLessThan(5_000)
+    await Bun.sleep(300)
+
+    // The next start resumes the turn; the model calls the tool again and the card comes back. Nothing is told as killed.
+    const next = await bootNative({ shell: true, dir: h.dir, project: h.project, steps: [callTool("shell", { command: "echo approved" }), stop("done")] })
+    cleanups.push(() => next.cleanup())
+    await next.client.subscribe(sessionId, 0)
+    await until(() => next.events.filter((event) => event.type === "server.request").length >= 2, 15_000)
+    expect(next.events.some((event) => event.type === "turn.interrupted")).toBe(true)
+    expect(next.events.some((event) => event.type === "item.started" && event.meta?.restart === "resume")).toBe(true)
+    expect(JSON.stringify(next.events)).not.toContain("did not finish")
   }, 60_000)
 
   test("the native engine's foreground shell command, streaming output, is waited for", async () => {

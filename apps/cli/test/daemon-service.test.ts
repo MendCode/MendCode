@@ -24,7 +24,7 @@ function harness(initial = false, installed = false, loaded = false) {
     if (command.type === "daemon.shutdown" && command.drainMs !== undefined) {
       calls.push(`drain ${command.drainMs}`)
       draining = !drainReply
-      return drainReply ?? { ok: true, result: { waiting: drains[0]?.waiting ?? [] } }
+      return drainReply ?? { ok: true, result: { waiting: drains[0]?.waiting ?? [], ...(drains[0]?.asking ? { asking: drains[0].asking } : {}) } }
     }
     // A daemon whose wait ended stops by itself: its connection closes.
     if (!running) return { ok: false, error: { code: "internal", message: "[CLIENT]: connection closed" } } as CommandReply
@@ -150,6 +150,19 @@ describe("daemon lifecycle CLI", () => {
     expect(h.output()).toContain('Waiting up to 120 s for work that a restart would kill (--grace); keep this command running:\n  ses_a "owner-a": shell: bun run test; background task: while sleep 5; do date; done')
     expect(h.output()).toContain('Still waiting on:\n  ses_a "owner-a": background task: while sleep 5; do date; done')
     expect(h.output()).toContain("The work ended; restarting.")
+  })
+
+  test("a session waiting on an approval card is named as waiting for you, never as what the restart still waits on", async () => {
+    const h = harness(true)
+    h.report.activeTurns = 2
+    const waiting = [{ sessionId: "ses_a", title: "tests", items: ["shell: bun run test"] }]
+    const asking = [{ sessionId: "ses_b", title: "e2e mend-autopilot ledger", items: ["workflow_script: mend-quality"] }]
+    h.drains.push({ waiting, asking, until: 120_000, done: false }, { waiting: [], asking, until: 120_000, done: true })
+    expect(await h.run("daemon", "restart", "--force")).toBe(0)
+    expect(h.output()).toContain('Waiting for you (an approval or a question; the restart does not wait for it, the turn resumes after it):\n  ses_b "e2e mend-autopilot ledger": workflow_script: mend-quality')
+    expect(h.output()).not.toContain("Still waiting on")
+    expect(h.output()).not.toMatch(/Waiting up to[^\n]*\n[^\n]*ses_b/)
+    expect(h.output()).not.toMatch(/Still running after[\s\S]*ses_b/)
   })
 
   test("a wait the daemon let go without stopping is followed by the forced stop, so the restart still happens", async () => {
