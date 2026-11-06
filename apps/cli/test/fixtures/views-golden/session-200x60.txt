@@ -1,15 +1,15 @@
-c1e56d42bd50de9e
-  Sessions                   ← focus │   git /work/app
+77f545541ae9df03
+   Sessions                       ⠋1 │   git /work/app
                                      │
-  Active                             │   › Why does the second session see the first one's config? Please look at src/store.ts and fix it.
-    Cache key bug                    │
-    2m ago                           │     ┃ Thought · 1s
-                                     │     ┃ The cache key might ignore the directory. I should read the store module first and check how the key is built before touching anything.
-    Earlier work                     │
-    1h ago                           │      ▤ Read src/store.ts  14 lines                                                                                                                            1s
+   Today                             │   › Why does the second session see the first one's config? Please look at src/store.ts and fix it.
+   · Cache key bug                2m │
+   · Earlier work                 1h │     ┃ Thought · 1s
+   ⠋ Release notes                5h │     ┃ The cache key might ignore the directory. I should read the store module first and check how the key is built before touching anything.
+                                     │
+                                     │      ▤ Read src/store.ts  14 lines                                                                                                                            1s
                                      │      ⌕ Grep cache.get  3 matches in 2 files                                                                                                                   1s
-    Release notes                    │      │ src/store.ts  2 matches
-    5h ago                 ● running │      │ 12  const hit = cache.get(name)
+                                     │      │ src/store.ts  2 matches
+                                     │      │ 12  const hit = cache.get(name)
                                      │      │ src/config.ts  1 match
                                      │      │  7  cache.get(path)
                                      │      │ … +1 more match

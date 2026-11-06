@@ -16,7 +16,7 @@ const FIELDS: Record<ViewSlot, string> = {
   question: "title, detail, options [{ label, description }], choice, picked, multiple, typing; a batch adds questions and draft",
   "prompt.frame": "preset, border, lead, borders (return { top, bottom, left?, right? })",
   topbar: "path, branch, title, diff, context { tokens, limit }, files, navigation",
-  "sessions.sidebar": "sessions [{ sessionId, title, state, queued, updatedAt }], current, selected, focused",
+  "sessions.sidebar": "sessions [{ sessionId, title, state, queued, updatedAt, parentId }], current, selected, focused, unread, spinner, blink",
   notice: "kind: toast { variant, title, message } | limit { view, chips } | queue { previews, delivery, held, paused }",
   footer: "agent, model, effort, fast, provider, permissionLabel, counters, segments, detail, goal, notice, connection, extraRows",
   home: "root, sessions, look, tip, footer, spinner, bare",

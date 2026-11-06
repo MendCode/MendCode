@@ -289,7 +289,7 @@ Actions:
 | `messages.open` | `ctrl+x k` (Message Actions: copy, revert or fork a message; same as `/messages`; a plain click on the transcript never opens it) |
 | `voice.toggle` | `ctrl+x v` (start or stop dictation; same as `/voice`, see `voice.md`) |
 | `details.toggle` | `ctrl+x f` (fold or open the `<details>` block nearest the middle of the screen; a click on a block's `▸`/`▾` summary row does the same for that block, and `ctrl+o` still opens every block) |
-| `block.copy` | `ctrl+x Y` (copy the code block, table, list, quote or diagram nearest the middle of the screen; a click on a visible `copy` (a code header, a table border, beside a diagram) does the same, `art` copies a diagram as drawn; lists and quotes have no visible hint, only this key; see [markdown rendering](design/markdown-parity.md)) |
+| `block.copy` | `ctrl+x Y` (copy the code block, table, list, quote or diagram nearest the middle of the screen; a click on a visible `copy` (a code header, a table border) does the same; lists, quotes and diagrams have no visible hint, only this key; see [markdown rendering](design/markdown-parity.md)) |
 | `command:<name>` | a slash command, built-in or terminal extension (`"f4": "command:usage"`) |
 | `page:<id>` | an extension page; with no extension page of that id, the built-in page its slash command opens (`page:git` is `/git`) |
 | `modal:<id>` | an extension modal (`api.modal`) |

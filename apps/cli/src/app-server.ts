@@ -258,7 +258,8 @@ export function createAppServer(deps: AppServerDeps) {
         notify("serverRequest/resolved", { threadId, requestId: event.requestId, resolution: event.resolution })
         return
       case "usage.recorded": {
-        const total = event.input + event.output + event.reasoning
+        // Reasoning is inside output: added once.
+        const total = event.input + event.output
         notify("thread/tokenUsage/updated", {
           threadId,
           turnId: event.turnId,

@@ -50,7 +50,8 @@ export function findingCounts(job: Pick<ReviewJob, "checkpoint">): PrJobSummary[
   const lastOpen = rounds.at(-1)?.open
   const open = lastOpen ? new Set(lastOpen) : undefined
   const resolved = open ? confirmed.filter((finding) => !open.has(finding.id)).length : 0
-  return { confirmed: confirmed.length, plausible, candidates: candidates.length, resolved }
+  const blocking = confirmed.filter((finding) => (finding.severity === "critical" || finding.severity === "major") && (!open || open.has(finding.id))).length
+  return { confirmed: confirmed.length, plausible, candidates: candidates.length, resolved, ...(blocking ? { blocking } : {}) }
 }
 
 /** One ledger job as the page shows it: `sessionId` is the review session (not the watch's), strings cut to the protocol's bounds. */

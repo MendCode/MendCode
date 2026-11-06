@@ -5,10 +5,10 @@ import { compact } from "./format"
 import { formatCost, formatSpeed, formatTtft } from "./footer"
 import { truncateEnd } from "./session-list"
 import { resetClock, resetIn } from "./usage-limit"
-import type { SessionUsage } from "./usage-notes"
+import type { ModelUsage, SessionUsage } from "./usage-notes"
 import { cacheHitPercent } from "./usage-notes"
 import { lineWidth as widthOf, textWidth } from "./wrap"
-import { facts } from "./panel-card"
+import { facts, labelValue } from "./panel-card"
 
 /**
  * Session panel card bodies: pure functions from plain data to coloured rows. Every row is at most
@@ -144,7 +144,7 @@ export function tokensCard(data: TokensCard, width: number): Line[] {
   const hit = cacheHitPercent(usage)
   const cost: Span[] = data.costMicros === undefined ? [{ text: "unpriced", fg: "muted" }] : [{ text: formatCost(data.costMicros), fg: "text" }, ...(data.subscription ? [{ text: " (sub)", fg: "muted" as const }] : [])]
   return [
-    facts(`Input ${compact(usage.input + usage.cacheRead + usage.cacheWrite)}`, `Output ${compact(usage.output + usage.reasoning)}`, width),
+    facts(`Input ${compact(usage.input + usage.cacheRead + usage.cacheWrite)}`, `Output ${compact(usage.output)}`, width),
     facts(`Cache ${compact(usage.cacheRead)}`, `Hit ${hit === undefined ? "n/a" : `${hit}%`}`, width),
     kv({ label: "Cost", value: cost, width }),
     ...(data.model ? [kv({ label: "Model", value: data.model, role: "muted", width })] : []),
@@ -152,6 +152,23 @@ export function tokensCard(data: TokensCard, width: number): Line[] {
 }
 
 export type ToolsCard = { enabled?: number; total?: number; names?: string[]; error?: string }
+/** The models panel: the top five models by tokens with their in/out and cache, as /usage counts them (reasoning is inside output). */
+export function modelsCard(models: readonly Readonly<ModelUsage>[], width: number): Line[] {
+  const muted = (value: string): Line => [{ text: value, fg: "muted" }]
+  if (!models.length) return [muted("No model usage yet")]
+  const tokens = (model: Readonly<ModelUsage>) => model.input + model.output + model.cacheRead + model.cacheWrite
+  const sorted = [...models].sort((a, b) => tokens(b) - tokens(a))
+  return [
+    ...sorted.slice(0, 5).flatMap((model) => [
+      labelValue(model.provider ? `${model.provider}/${model.model}` : model.model, `${model.calls} call${model.calls === 1 ? "" : "s"}`, width),
+      facts(`In ${compact(model.input)}`, `Out ${compact(model.output)}`, width),
+      facts(`Read ${compact(model.cacheRead)}`, `Write ${compact(model.cacheWrite)}`, width),
+    ]),
+    ...(sorted.length > 5 ? [muted(`+${sorted.length - 5} models · ${compact(sorted.slice(5).reduce((sum, model) => sum + tokens(model), 0))} tokens`)] : []),
+    muted("Loaded history · incl. compaction"),
+  ]
+}
+
 export function toolsCard(data: ToolsCard, width: number): Line[] {
   if (data.enabled === undefined || data.total === undefined) return [[{ text: data.error ?? "Tool list unavailable", fg: "muted" }]]
   const rows: Line[] = [kv({ label: "Enabled", value: `${data.enabled} / ${data.total}`, width })]

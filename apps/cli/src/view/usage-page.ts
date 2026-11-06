@@ -2,6 +2,7 @@ import type { UsageReport, UsageWasteReport, UsageWeatherReport } from "@mendcod
 import type { UsageWidgetId } from "@mendcode/protocol/wire"
 import { glyphs, type Glyphs, type Line } from "../ui/theme"
 import { fit, spread } from "./deck"
+import { daysWithAuxiliary } from "./usage-breakdown"
 import { compact } from "./format"
 import { tabsRow, type PageTab } from "./page"
 import { addDays, clampDay, dayTokens, indexDays, type HeatMode } from "./usage-heatmap"
@@ -125,7 +126,8 @@ export function renderUsagePage(input: { report: UsageReport; state: UsagePageSt
   const { report, state, today, width, height, now } = input
   if (input.profile && (state.widgetIndex !== undefined || state.weatherInput !== undefined)) return renderUsageWidgetSettings({ state, profile: input.profile, width, height })
   const bounds = rangeBounds(state.range, today)
-  const days = indexDays(report.days, bounds)
+  // Every call counts in the page's days: the turns of every harness and the calls outside turns.
+  const days = indexDays(daysWithAuxiliary(report.days, report.auxiliaryDays), bounds)
   const activity = report.activity ? new Map(report.activity.filter((entry) => entry.day >= bounds.from && entry.day <= bounds.to).map((entry) => [entry.day, entry])) : undefined
   const inner = Math.max(1, width - 2)
   const compactScreen = inner < 68

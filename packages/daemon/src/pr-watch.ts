@@ -69,7 +69,8 @@ const View = z.object({
 })
 
 const FAILED = new Set(["FAILURE", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE", "STALE"])
-function bucketOf(item: z.infer<typeof Rollup>): CheckBucket {
+/** One entry of `statusCheckRollup` (a check run or a commit status) as pass, fail, pending or skip. */
+export function bucketOf(item: z.infer<typeof Rollup>): CheckBucket {
   if (item.__typename === "StatusContext" || (item.context && !item.name)) {
     if (item.state === "SUCCESS") return "pass"
     if (item.state === "FAILURE" || item.state === "ERROR") return "fail"

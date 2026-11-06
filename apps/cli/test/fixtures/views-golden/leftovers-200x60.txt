@@ -1,5 +1,5 @@
-94630210ee51d4fd
-  Sessions                   ← focus │   git /work/app
+45f39b1e797323ca
+   Sessions                  ← focus │   git /work/app
                                      │        Edited src/store.ts
                                      │        - const key = name
                                      │        + const key = `${directory}:${name}`

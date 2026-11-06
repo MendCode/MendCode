@@ -1,4 +1,4 @@
-import { PrReviewDashboard, type PrReviewerSummary, type PrTokenUsage } from "@mendcode/protocol"
+import { PrReviewDashboard, type PrPullRequestState, type PrReviewerSummary, type PrTokenUsage } from "@mendcode/protocol"
 import type { ConfigControl, ConfigControlAction } from "./config-control"
 import { JOB_TRANSITIONS, type JobState, type PlatformControlInput, type PlatformControlResult, type PlatformHandle, type ReviewJob } from "./contracts"
 import { buildDashboard, type DashboardWatchInput } from "./dashboard"
@@ -31,9 +31,17 @@ export type PlatformControlDeps = {
   tokens24h?: () => PrTokenUsage
   /** How long `status` waits for a checkout's reviewers before answering without them (`REVIEWERS_MS`). */
   reviewersMs?: number
+  /** The pull requests' GitHub states (pr-states.ts): `status` with `pullRequests` reads them, every `status` attaches the last read. */
+  pullRequests?: {
+    fetch(repo: string, directory: string, refresh: boolean): Promise<void>
+    cached(repo: string): ReadonlyMap<number, PrPullRequestState> | undefined
+  }
+  /** How long `status` waits for those reads before answering with what is cached (`PULL_REQUESTS_MS`); a slower read lands in the cache. */
+  pullRequestsMs?: number
 }
 
 const REVIEWERS_MS = 3_000
+const PULL_REQUESTS_MS = 8_000
 const THIS_DEVICE = "this device"
 /** `promise`'s value, or undefined once `ms` passed first; the timer is cleared either way. */
 async function withinTime<T>(promise: Promise<T>, ms: number): Promise<T | undefined> {
@@ -73,8 +81,28 @@ export function createPlatformControl(handle: PlatformHandle, deps: PlatformCont
     }
   }
 
-  async function status(): Promise<PlatformControlResult> {
+  /** Reads each GitHub repository's pull requests once (`fetch` dedupes and caches), waiting at most `pullRequestsMs`. */
+  async function readPullRequests(jobs: readonly ReviewJob[], mode: "cached" | "refresh") {
+    const source = deps.pullRequests
+    if (!source) return
+    const repos = new Map<string, string>()
+    for (const job of jobs) if (job.provider === "github" && job.coverage !== "audit" && !repos.has(job.repo)) repos.set(job.repo, job.directory)
+    const reads = [...repos].slice(0, 50).map(([repo, directory]) => source.fetch(repo, directory, mode === "refresh").catch(() => undefined))
+    if (reads.length) await withinTime(Promise.all(reads), deps.pullRequestsMs ?? PULL_REQUESTS_MS)
+  }
+
+  function withPullRequests(dashboard: PrReviewDashboard): PrReviewDashboard {
+    const source = deps.pullRequests
+    if (!source) return dashboard
+    return { ...dashboard, jobs: dashboard.jobs.map((job) => {
+      const pullRequest = job.provider === "github" && job.coverage !== "audit" ? source.cached(job.repo)?.get(job.number) : undefined
+      return pullRequest ? { ...job, pullRequest } : job
+    }) }
+  }
+
+  async function status(input: PlatformControlInput): Promise<PlatformControlResult> {
     const jobs = handle.jobs.all()
+    const pullRequests = input.pullRequests ? readPullRequests(jobs, input.pullRequests) : undefined
     // The repository of a watch from its newest job: no provider call on a page that refreshes every few seconds.
     const repoOf = new Map<string, string>()
     for (const job of [...jobs].sort((a, b) => a.updatedAt - b.updatedAt)) repoOf.set(job.directory, job.repo)
@@ -92,6 +120,8 @@ export function createPlatformControl(handle: PlatformHandle, deps: PlatformCont
     if (here) dashboard = { ...dashboard, jobs: dashboard.jobs.map((job) => job.owner === here ? { ...job, owner: THIS_DEVICE } : job), watches: dashboard.watches.map((watch) => watch.owner === here ? { ...watch, owner: THIS_DEVICE } : watch), reviewers: dashboard.reviewers.map((reviewer) => reviewer.device === here ? { ...reviewer, device: THIS_DEVICE } : reviewer) }
     const tokens = deps.tokens24h?.()
     if (tokens) dashboard = PrReviewDashboard.parse({ ...dashboard, metrics: { ...dashboard.metrics, tokens24h: tokens } })
+    await pullRequests
+    dashboard = withPullRequests(dashboard)
     const { running, queued, waiting } = dashboard.metrics
     return { ok: true, text: `${dashboard.watches.length} watch${dashboard.watches.length === 1 ? "" : "es"}, ${dashboard.jobs.length} job${dashboard.jobs.length === 1 ? "" : "s"} (${running} running, ${queued} queued, ${waiting} waiting); at most ${dashboard.metrics.concurrency} at once on this device (prReview.concurrency).${unread.length ? ` Reviewers not read yet (the checkout did not answer in time): ${unread.join(", ")}.` : ""}`, dashboard }
   }
@@ -180,7 +210,7 @@ export function createPlatformControl(handle: PlatformHandle, deps: PlatformCont
       if (!PLATFORM_ACTIONS.has(input.action)) return refuse(`${input.action} is not a review platform action`)
       try {
         switch (input.action) {
-          case "status": return await status()
+          case "status": return await status(input)
           case "job-pause": return await pause(input)
           case "job-resume": return await resume(input)
           case "job-cancel": return await cancel(input)

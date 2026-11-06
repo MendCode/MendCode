@@ -18,6 +18,7 @@ import { onBackground, sampleSprite, sheetOf, smoothSample } from "../apps/cli/t
 import { cleanTemps, plain } from "../apps/cli/test/session-ui-harness"
 import type { PetImage } from "../apps/cli/src/pets/decode"
 import { createHomePet, HOME_PET_SIZES, type HomePetSize } from "../apps/cli/src/pets/home-pet"
+import { DEFAULT_THEME } from "../apps/cli/src/themes"
 import { activeTheme, setTheme, type Line } from "../apps/cli/src/ui/theme"
 import type { TuiProfile } from "../apps/cli/src/view/tui-profile"
 import { encodeImagePng } from "../packages/tools/src/pet-png"
@@ -76,7 +77,7 @@ async function compare(store: PetStore, pet: Imported, size: HomePetSize, label:
 }
 
 try {
-  setTheme("mend")
+  setTheme(DEFAULT_THEME)
   const store = petStore()
   const pixel = sampleSprite()
   const smooth = smoothSample()
@@ -130,7 +131,7 @@ try {
     writeFileSync(path.join(output, "report.txt"), `${report.join("\n")}\nimage calls made: ${store.imageCalls}\n`)
   }
 } finally {
-  setTheme("mend")
+  setTheme(DEFAULT_THEME)
   cleanTemps()
   rmSync("/tmp/mcev-q-demo", { recursive: true, force: true })
 }

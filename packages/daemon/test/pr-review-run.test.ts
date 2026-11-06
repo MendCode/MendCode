@@ -89,8 +89,11 @@ function fakeGh(read?: (endpoint: string) => unknown) {
     if (input.argv[1] === "graphql") return { code: 0, out: "{}" }
     return { code: 0, out: "[]" }
   }
-  const posts = () => calls.filter((call) => call.argv.includes("POST"))
-  return { gh, calls, posts }
+  const isStatus = (call: { argv: string[] }) => /\/statuses\//.test(call.argv[1] ?? "")
+  /** Every POST but the commit statuses (commit-status.ts), which `statuses` reads as `{ state, description, ... }`. */
+  const posts = () => calls.filter((call) => call.argv.includes("POST") && !isStatus(call))
+  const statuses = () => calls.filter(isStatus).map((call) => JSON.parse(call.stdin ?? "{}") as { state: string; description: string; context: string; target_url: string })
+  return { gh, calls, posts, statuses }
 }
 
 const baseInput = (repo: { dir: string; base: string; head: string }, sessionFactory: ReviewSessionFactory) => ({
@@ -979,5 +982,100 @@ describe("runPrReview: a review that reaches the cap closes as a partial one", (
     expect(run.status).toBe("published")
     expect(run.stop).toMatchObject({ kind: "budget", resumable: true })
     expect(JSON.parse(github.posts()[0]!.stdin!).body).toContain("## MendCode partial review")
+  })
+})
+
+describe("runPrReview: the commit status on the PR head", () => {
+  const PR_URL = "https://github.com/acme/app/pull/12"
+  const statusCalls = (calls: Array<{ argv: string[] }>, head: string) => calls.filter((call) => call.argv[1] === `repos/acme/app/statuses/${head}` && call.argv.includes("POST"))
+
+  test("a clean review sets pending, then success with No findings linked to the posted review", async () => {
+    const repo = await repository()
+    const github = fakeGh()
+    const run = await runPrReview({ ...baseInput(repo, children({ findings: [] }).factory), publish: true, gh: github.gh })
+    expect(run.status).toBe("published")
+    expect(statusCalls(github.calls, repo.head)).toHaveLength(2)
+    expect(github.statuses()).toEqual([
+      { state: "pending", description: "Reviewing…", context: "MendCode review", target_url: PR_URL },
+      { state: "success", description: "No findings", context: "MendCode review", target_url: `${PR_URL}#pullrequestreview-101` },
+    ])
+    // The pending status goes out before the review is posted.
+    const order = github.calls.filter((call) => call.argv.includes("POST")).map((call) => /statuses/.test(call.argv[1]!) ? "status" : "review")
+    expect(order).toEqual(["status", "review", "status"])
+  })
+
+  test("a re-review of a new head that posts nothing still says the head was reviewed: success with No new findings", async () => {
+    const repo = await repository()
+    const github = fakeGh()
+    const first = await runPrReview({ ...baseInput(repo, children({ findings: [] }).factory), publish: true, gh: github.gh })
+    write(repo.dir, "README.md", "notes\n")
+    await git(repo.dir, "add", "-A"); await git(repo.dir, "commit", "-qm", "docs")
+    const head = await git(repo.dir, "rev-parse", "HEAD")
+    const again = await runPrReview({ ...baseInput({ ...repo, head }, children({ findings: [] }).factory), state: first.state, publish: true, gh: github.gh })
+    expect(again.status).toBe("published")
+    expect(again.report?.posted).toBe(false)
+    expect(github.posts()).toHaveLength(1)
+    expect(statusCalls(github.calls, head)).toHaveLength(2)
+    expect(github.statuses().slice(2)).toEqual([
+      { state: "pending", description: "Reviewing…", context: "MendCode review", target_url: PR_URL },
+      { state: "success", description: "No new findings", context: "MendCode review", target_url: PR_URL },
+    ])
+  })
+
+  test("a critical or major finding open on the head is a failure; a personal reviewer has its own context", async () => {
+    const repo = await repository()
+    const github = fakeGh()
+    const effects = createEffectLedger({ file: path.join(temp("mc-run-effects-"), "effects.json") })
+    const run = await runPrReview({ ...baseInput(repo, children().factory), publish: true, gh: github.gh, publishAs: { effects, reviewer: "personal:alice", configKey: "cfg1", jobId: "job1", isCurrent: () => true } })
+    expect(run.status).toBe("published")
+    expect(github.statuses().map(({ state, description, context }) => ({ state, description, context }))).toEqual([
+      { state: "pending", description: "Reviewing…", context: "MendCode review (personal:alice)" },
+      { state: "failure", description: "2 blocking findings", context: "MendCode review (personal:alice)" },
+    ])
+  })
+
+  test("a review that stops at the token budget is an error, never a success, even when its partial review is posted", async () => {
+    const repo = await repository({ baseConfig: "enabled: true\nbudget:\n  tokens_per_pr: 10000\n" })
+    const github = fakeGh()
+    const kids = children({ tokens: { input: 20_000, output: 100 }, fail: { purpose: "verify", error: new Error("[PR_REVIEW]: the closing check crashed") } })
+    const run = await runPrReview({ ...baseInput(repo, kids.factory), publish: true, gh: github.gh })
+    expect(run.stop).toMatchObject({ kind: "budget" })
+    expect(github.statuses().map(({ state, description }) => ({ state, description }))).toEqual([
+      { state: "pending", description: "Reviewing…" },
+      { state: "error", description: "Paused at the token budget" },
+    ])
+  })
+
+  test("a failed review is an error naming the cause, bounded to GitHub's 140 characters", async () => {
+    const repo = await repository()
+    const github = fakeGh()
+    const run = await runPrReview({ ...baseInput(repo, children({ fail: { purpose: "review", error: new Error(`[PR_REVIEW]: the review turn failed: ${"x".repeat(300)}`) } }).factory), publish: true, gh: github.gh })
+    expect(run.status).toBe("failed")
+    const last = github.statuses().at(-1)!
+    expect(last.state).toBe("error")
+    expect(last.description.startsWith("Review failed: ")).toBe(true)
+    expect(last.description.length).toBeLessThanOrEqual(140)
+  })
+
+  test("no status is set when the run does not publish, or when status: false", async () => {
+    const repo = await repository()
+    const github = fakeGh()
+    await runPrReview({ ...baseInput(repo, children().factory), publish: false, gh: github.gh })
+    expect(github.statuses()).toEqual([])
+    const off = await repository({ baseConfig: "enabled: true\nstatus: false\n" })
+    const run = await runPrReview({ ...baseInput(off, children().factory), publish: true, gh: github.gh })
+    expect(run.status).toBe("published")
+    expect(github.statuses()).toEqual([])
+  })
+
+  test("a token without statuses permission (403) does not fail the review, and the final status is not attempted", async () => {
+    const repo = await repository()
+    const github = fakeGh()
+    const gh: GhCall = (input) => /\/statuses\//.test(input.argv[1] ?? "") ? (github.calls.push(input), Promise.resolve({ code: 1, out: "", err: "gh: Resource not accessible by integration (HTTP 403)" })) : github.gh(input)
+    const run = await runPrReview({ ...baseInput(repo, children().factory), publish: true, gh })
+    expect(run.status).toBe("published")
+    expect(run.report?.posted).toBe(true)
+    expect(github.posts()).toHaveLength(1)
+    expect(statusCalls(github.calls, repo.head)).toHaveLength(1)
   })
 })

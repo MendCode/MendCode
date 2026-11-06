@@ -602,7 +602,7 @@ describe("the wizard in the app", () => {
       const chosen = activeTheme().name
       expect(chosen).not.toBe(first)
       expect(writes(kept)[0]).toMatchObject({ onboarded: true, theme: chosen })
-    } finally { setTheme("mend") }
+    } finally { setTheme((await import("../src/themes")).DEFAULT_THEME) }
   })
   test("the Glyphs row redraws the whole screen in the set at once, esc puts the first one back and enter saves it to the profile", async () => {
     const { setGlyphMode } = await import("../src/ui/theme")

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { createIdFactory } from "@mendcode/protocol"
+import { DEFAULT_THEME } from "../src/themes"
 import { SETUP_ROWS } from "../src/view/setup-page"
 import { createApp } from "../src/ui/app"
 import { activeTheme, glyphs, setTheme, type Line } from "../src/ui/theme"
@@ -58,16 +59,17 @@ describe("first-run onboarding", () => {
   })
   test("choices save immediately and theme previews at once", async () => {
     const { app, sets, text } = harness()
+    // The theme is process-wide and an earlier file may have changed it: start from the default, the one a new user has.
     const before = activeTheme().name
-    expect(before).toBe("mend")
+    setTheme(DEFAULT_THEME)
     await app.openSetup({ advanced: true })
     await app.onKey("j")
     await app.onKey("\x1b[C")
-    expect(sets()).toEqual([{ theme: "matrix" }])
-    expect(activeTheme().name).toBe("matrix")
+    expect(sets()).toEqual([{ theme: "mend" }])
+    expect(activeTheme().name).toBe("mend")
     const output = text().join("\n")
     expect(output).toContain("theme")
-    expect(output).toContain("‹ matrix ›")
+    expect(output).toContain("‹ mend ›")
     await app.onKey("j")
     await app.onKey("\x1b[C")
     expect(sets().at(-1)).toEqual({ view: "full" })

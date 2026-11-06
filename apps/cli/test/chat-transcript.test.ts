@@ -58,13 +58,13 @@ describe("turn end lines", () => {
     expect(view(events).text.at(-1)).not.toContain("done")
   })
 
-  test("completion totals include reasoning and full view names its reported tokens", () => {
+  test("completion totals hold reasoning once (inside output) and full view names its reported tokens", () => {
     const { emit, item, turn, events } = stream()
     const turnId = turn()
     item(turnId, "agent_message", { text: "hello" })
     emit({ type: "usage.recorded", turnId, provider: "p", model: "gpt-6-luna", input: 1_000, output: 300, reasoning: 200, cacheRead: 0, cacheWrite: 0 })
     emit({ type: "turn.completed", turnId })
-    expect(view(events).text.at(-1)).toContain("↑1,000 ↓500")
+    expect(view(events).text.at(-1)).toContain("↑1,000 ↓300")
     expect(view(events).text.at(-1)).not.toContain("reasoning tokens")
     expect(view(events, { mode: "full" }).text.at(-1)).toContain("200 reasoning tokens")
   })

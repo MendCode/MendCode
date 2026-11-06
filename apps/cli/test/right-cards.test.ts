@@ -70,7 +70,7 @@ describe("card rows", () => {
   test("the tokens card shows in, out, cache read, hit and cost with the subscription mark", () => {
     const rows = tokensCard({ usage: { calls: 2, input: 1000, output: 400, reasoning: 100, cacheRead: 9000, cacheWrite: 0 }, costMicros: 123_000, subscription: true }, 40).map(plain)
     expect(rows[0]).toContain("Input 10K")
-    expect(rows[0]).toContain("Output 500")
+    expect(rows[0]).toContain("Output 400")
     expect(rows[1]).toContain("Cache 9,000")
     expect(rows[1]).toContain("Hit 90%")
     expect(rows[2]).toBe("Cost     $0.12 (sub)")
@@ -156,7 +156,7 @@ describe("status line and footer", () => {
     const calls = [{ at: 1, model: "m", output: 100, reasoning: 20, firstTokenMs: 900, durationMs: 4_900, toolCount: 0 }, { at: 2, model: "m", output: 50, reasoning: 0, firstTokenMs: 12_000, durationMs: 14_000, toolCount: 1 }]
     const input: FooterInput = { segments: FOOTER_STATS, width: 140, glyphs: g, stateLabel: "ready", state: "idle", dotOn: true, connection: "connected", permission: "ask", permissionLabel: "", quotas: [], now: 0, notice: "", calls, spentMicros: 4_000 }
     expect(plain(segmentSpans("ttft", input))).toBe("ttft 12s")
-    expect(plain(segmentSpans("tps", { ...input, calls: calls.slice(0, 1) }))).toBe("30.0 tok/s")
+    expect(plain(segmentSpans("tps", { ...input, calls: calls.slice(0, 1) }))).toBe("25.0 tok/s")
     expect(plain(segmentSpans("spend", input))).toBe("<$0.01")
     expect(segmentSpans("ttft", { ...input, calls: [] })).toEqual([])
     expect(callSpeed({ output: 10, reasoning: 0, firstTokenMs: null, durationMs: 1000 })).toBeUndefined()

@@ -132,9 +132,6 @@ function fenceEnd(lines: string[], from: number, fence: { char: string; size: nu
   return -1
 }
 
-/** Rows as the plain text a terminal shows: no styling, no trailing blanks. */
-const plainRows = (rows: Line[]) => rows.map((row) => plainText(row).trimEnd()).join("\n").replace(/\n+$/, "")
-
 function render(source: string, width: number, base: ColorName, context: RenderContext): Line[] {
   const { style, roles } = context
   const enhanced = style.enhanced
@@ -523,13 +520,13 @@ function diagramRows(input: { body: string[]; width: number; style: MarkdownStyl
     const blank = (row: Line) => !row.some((span) => span.text.trim())
     const first = recolored.findIndex((row) => !blank(row))
     const drawn = first < 0 ? recolored : recolored.slice(first, recolored.findLastIndex((row) => !blank(row)) + 1)
-    if (style.copy === "all" && drawn.length) hintDiagram(drawn, { code, art: plainRows(drawn), width, roles })
+    // A drawn diagram or chart shows no buttons: only the copy key reaches its source.
     return tagCopy(drawn, code, "diagram")
   }
   return [sourceHeader(), ...body.flatMap((line) => codeLines({ raw: line, width, style })), ...wrapSpans([{ text: diagram.note, fg: "muted", dim: true }], width)]
 }
 
-/** Below this width a table or diagram has no room for a hint on its own art: the key is the only way to copy. */
+/** Below this width a table has no room for a hint on its own art: the key is the only way to copy. */
 const HINT_MIN_WIDTH = 12
 
 /** `┌───────┬──── copy ┐`: the `copy` hint on a boxed table's top border, right-aligned to the table. Rules, minimal and stacked tables have no top border. */
@@ -539,15 +536,6 @@ function hintTable(rows: Line[], input: { source: string; roles: Roles }) {
   const total = textWidth(text)
   if (!top || !text.startsWith("┌") || total < HINT_MIN_WIDTH) return
   const hinted = overlayHint({ row: top, end: total - 1, buttons: [{ text: "copy", copy: input.source, label: "table" }], roles: input.roles, accept: (cut) => /^─+$/.test(cut), tail: { ...top[0]!, text: text.slice(-1) } })
-  if (hinted) rows[0] = hinted
-}
-
-/** `art  copy` after the first row of a diagram, to the right of its art (or flush right when it fills the width), only where those cells are blank. */
-function hintDiagram(rows: Line[], input: { code: string; art: string; width: number; roles: Roles }) {
-  const widest = Math.max(...rows.map((row) => textWidth(plainText(row).trimEnd())))
-  if (widest < HINT_MIN_WIDTH) return
-  const buttons: HeaderButton[] = [{ text: "art", copy: input.art, label: "diagram as drawn" }, { text: "copy", copy: input.code, label: "diagram" }]
-  const hinted = overlayHint({ row: rows[0]!, end: Math.min(input.width, widest + 1 + 9), buttons, roles: input.roles, accept: (cut) => !cut.trim() })
   if (hinted) rows[0] = hinted
 }
 

@@ -129,7 +129,8 @@ function callCost(call: UsageCallRow, price: WasteInput["price"]): { total: numb
   const tariff = price(call.provider, call.model)
   const split = tariff ? (() => {
     const rate = rates(tariff, call)
-    return { input: call.input * rate.input, output: (call.output + call.reasoning) * rate.output, read: call.cacheRead * rate.read, write: call.cacheWrite * rate.write }
+    // Reasoning is part of `output` in every engine's count: priced once.
+    return { input: call.input * rate.input, output: call.output * rate.output, read: call.cacheRead * rate.read, write: call.cacheWrite * rate.write }
   })() : undefined
   if (call.costMicros !== null) return { total: call.costMicros, billed: true, ...(split ? { split } : {}) }
   if (!split) return undefined
@@ -240,7 +241,7 @@ export function analyzeWaste(input: WasteInput): UsageWasteReport {
     split.reread += call.cacheRead
     split.written += call.cacheWrite
     split.fresh += call.input
-    split.output += call.output + call.reasoning
+    split.output += call.output
     const cost = callCost(call, input.price)
     if (cost?.billed) priced.billed++
     else if (cost) priced.list++

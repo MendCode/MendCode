@@ -15,7 +15,7 @@ import type { TuiActions } from "@mendcode/extension-api"
 import { nextVariantChoice, nextModelChoice } from "../model-cycle"
 import { answersForItself, parseSlash, runsOnSelect, takesArguments } from "../../view/commands"
 import { shellPlaceholderFor } from "../../view/prompt-chrome"
-import { projectSessions, SIDEBAR_WIDTH } from "../../view/sidebar"
+import { projectSessions, SETTLED_ROW, SIDEBAR_WIDTH, sidebarStops } from "../../view/sidebar"
 import { approvalChoicesOf, type ApprovalChoice, type PanelRequest } from "../../view/request-panel"
 import type { AppContext } from "./context"
 import { EDIT_ACTIONS, type EditAction } from "../../view/editor-actions"
@@ -372,7 +372,8 @@ export function createKeys(ctx: AppContext, actions: {
     const screenClick = clickOf(key)
     if (screenClick && state.page === "chat" && (onRight ? screenClick.col >= width - sideWidth : screenClick.col < offset)) {
       const hit = (onRight ? screenClick.col >= width - sideWidth : screenClick.col < SIDEBAR_WIDTH) ? state.sidebarHits?.find((hit) => hit.row === screenClick.row) : undefined
-      if (hit) await actions.switchSession(hit.sessionId as typeof state.sessionId)
+      if (hit?.sessionId === SETTLED_ROW) state.sidebarSettledOpen = !state.sidebarSettledOpen
+      else if (hit) await actions.switchSession(hit.sessionId as typeof state.sessionId)
       return requestFrame()
     }
     const click = screenClick ? { ...screenClick, col: screenClick.col - offset } : undefined
@@ -418,11 +419,15 @@ export function createKeys(ctx: AppContext, actions: {
         return requestFrame()
       }
       if (state.sidebarFocus && !mouse) {
-        const index = Math.max(0, sessions.findIndex((session) => session.sessionId === (state.sidebarSelected ?? state.sessionId)))
-        if (key === "\x1b[A" || key === "\x1b[B") state.sidebarSelected = sessions[Math.max(0, Math.min(sessions.length - 1, index + (key === "\x1b[B" ? 1 : -1)))]?.sessionId
-        else if (key === "\r" && sessions[index]) {
+        // The rows the list draws, the folded Settled row among them; Enter (or the arrow away from the prompt) on it folds or unfolds.
+        const stops = sidebarStops(sessions, state.sidebarSettledOpen === true)
+        const index = Math.max(0, stops.indexOf(state.sidebarSelected ?? state.sessionId))
+        const onSettled = stops[index] === SETTLED_ROW
+        if (key === "\x1b[A" || key === "\x1b[B") state.sidebarSelected = stops[Math.max(0, Math.min(stops.length - 1, index + (key === "\x1b[B" ? 1 : -1)))]
+        else if (onSettled && (key === "\r" || (onRight ? key === "\x1b[C" : key === "\x1b[D"))) state.sidebarSettledOpen = !state.sidebarSettledOpen
+        else if (key === "\r" && stops[index]) {
           state.sidebarFocus = false
-          await actions.switchSession(sessions[index]!.sessionId)
+          await actions.switchSession(stops[index]! as typeof state.sessionId)
         } else if (key === "\x1b" || (onRight ? key === "\x1b[D" : key === "\x1b[C")) state.sidebarFocus = false
         return requestFrame()
       }

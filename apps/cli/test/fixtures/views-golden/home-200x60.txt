@@ -1,12 +1,12 @@
-d5d24aacb14f827a
-  Sessions                   ← focus │
+a4b594ed2b6983b2
+   Sessions                       ⠋1 │
                                      │   /work/app                                                                                                                                            MendCode
-  Active                             │
-    Cache key bug                    │
-    2m ago                 ● running │
+   Today                             │
+   ⠋ Cache key bug                2m │
+   · Earlier work                 1h │
                                      │
-    Earlier work                     │
-    1h ago                           │
+                                     │
+                                     │
                                      │
                                      │
                                      │

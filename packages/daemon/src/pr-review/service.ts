@@ -223,6 +223,12 @@ const OPEN_HINT = (jobId: string) => `/reviews shows its phase; /reviews open ${
 /** A backlog PR is the `opened` event no watch saw: `triggers.opened`, the mode and the filters decide it as they would have. */
 const eligibilityTrigger = (trigger: ReviewTrigger) => trigger === "stack" || trigger === "routed" || trigger === "recovered" ? "synchronize" as const : trigger === "backlog" ? "opened" as const : trigger
 
+/** A load run once: every caller, concurrent ones included, gets the same promise and so the same value. */
+export function sharedLoad<T>(load: () => Promise<T>): () => Promise<T> {
+  let loading: Promise<T> | undefined
+  return () => (loading ??= load())
+}
+
 export function createPrReviewService(options: PrReviewServiceOptions) {
   const run = options.run ?? ghProcess
   const call = options.call ?? ghCall
@@ -2067,13 +2073,18 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
   }
 
   const configControl = createConfigControl({ dataDir: options.dir, repo: (directory) => repoCached(directory).catch(() => undefined), login: (directory) => watch.loginOf(directory), git, now, provider: "github", profiles })
-  const platform = createPlatformControl(handle, { configControl, takeover: { takeOver, release }, now, tokens24h: () => accounting.last24h().tokens })
+  // The reviews page's pull request states load with the page's first read of them, never at start-up.
+  let prStates: import("./pr-states").PrStates | undefined
+  // One shared load: concurrent first reads (one per repository) must all fill the same cache, not one each.
+  const loadPrStates = sharedLoad(() => import("./pr-states").then(({ createPrStates }) => (prStates = createPrStates({ run, now }))))
+  const pullRequests = { fetch: async (repo: string, directory: string, refresh: boolean) => (await loadPrStates()).fetch(repo, directory, refresh), cached: (repo: string) => prStates?.cached(repo) }
+  const platform = createPlatformControl(handle, { configControl, takeover: { takeOver, release }, now, tokens24h: () => accounting.last24h().tokens, pullRequests })
 
   /** `full` (`review` only): review the head whole even when it was already reviewed with this config. */
-  type ControlInput = { sessionId: string; action: PrReviewAction; directory?: string | undefined; pr?: string | undefined; full?: boolean | undefined; role?: "all" | "requested" | undefined; jobId?: string | undefined; reason?: string | undefined; scope?: ReviewerScope | undefined; patch?: Record<string, unknown> | undefined; version?: number | undefined }
+  type ControlInput = { sessionId: string; action: PrReviewAction; directory?: string | undefined; pr?: string | undefined; full?: boolean | undefined; role?: "all" | "requested" | undefined; jobId?: string | undefined; reason?: string | undefined; scope?: ReviewerScope | undefined; patch?: Record<string, unknown> | undefined; version?: number | undefined; pullRequests?: "cached" | "refresh" | undefined }
   type ControlResult = { ok: true; text: string; watches: ReturnType<typeof watch.rows>; dashboard?: PrReviewDashboard; config?: PrReviewConfigView } | { ok: false; message: string }
 
-  async function control({ sessionId, action, directory: given, pr, full, role, jobId, reason, scope, patch, version }: ControlInput): Promise<ControlResult> {
+  async function control({ sessionId, action, directory: given, pr, full, role, jobId, reason, scope, patch, version, pullRequests: readPullRequests }: ControlInput): Promise<ControlResult> {
     if (!options.enabled()) return { ok: false, message: PR_REVIEW_DISABLED }
     const directory = given ?? options.sessionDirectory(sessionId)
     if (!directory || !path.isAbsolute(directory)) return { ok: false, message: "unknown session directory" }
@@ -2093,7 +2104,7 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
       return done(action === "publish-on" ? `Reviews of this repository are posted to ${(await forgeOf(directory))?.name ?? "GitHub"} from now on${waiting.length ? `; posting ${waiting.length} held review${waiting.length === 1 ? "" : "s"}` : "; no finished review was waiting"}.` : "Reviews of this repository stay in this session.")
     }
     if (action !== "review" && action !== "describe") {
-      const result = await platform.run({ sessionId, action, directory, jobId, reason, scope, patch, version })
+      const result = await platform.run({ sessionId, action, directory, jobId, reason, scope, patch, version, pullRequests: readPullRequests })
       return result.ok ? { ...done(result.text), ...(result.dashboard ? { dashboard: result.dashboard } : {}), ...(result.config ? { config: result.config } : {}) } : result
     }
     const ref = parseRef(pr)

@@ -5,7 +5,7 @@ import path from "node:path"
 import { createClient } from "@mendcode/client"
 import { createFauxEngine } from "@mendcode/engine-faux"
 import type { PackagesReport, Settings } from "@mendcode/protocol"
-import { setTheme } from "../src/ui/theme"
+import { DEFAULT_THEME } from "../src/themes"
 import { startDaemon } from "../../../packages/daemon/src"
 import { readWorkflowScripts } from "../../../packages/daemon/src/workflow-files"
 import { extensionLayers } from "../../../packages/packages/src"
@@ -28,7 +28,7 @@ const cleanups: Array<() => Promise<void> | void> = []
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0).reverse()) await cleanup()
   registerThemes([])
-  setTheme("mend")
+  setTheme(DEFAULT_THEME)
 })
 
 function temp(prefix: string) {
@@ -120,7 +120,7 @@ async function shots(all: Array<{ key: string; h: Terminal }>) {
 describe("the Retro profile changes every surface and puts everything back", () => {
   test("install -> enable -> frames differ per surface -> hot reload -> disable -> byte-equal default -> remove", async () => {
     // The palette is process-wide state another test file may have left behind: start from the default one.
-    setTheme("mend")
+    setTheme(DEFAULT_THEME)
     const env = await boot()
     const surfaces: Surface[] = ["chat", "slash", "home"]
     const small = SIZES[0], large = SIZES[1]

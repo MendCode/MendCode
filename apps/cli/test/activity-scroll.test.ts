@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test"
+import { DEFAULT_THEME } from "../src/themes"
 import { appHarness, cleanTemps, conversation, ids, plain, tempDir, type Harness } from "./session-ui-harness"
 import { DEFAULT_TUI_PROFILE, readTuiProfile, writeTuiProfile, type TuiProfile } from "../src/view/tui-profile"
 import { SIDEBAR_PRESETS } from "../src/view/sidebar-spec"
@@ -7,7 +8,7 @@ import { scrollThumb } from "../src/view/scroll-chrome"
 import { setTheme } from "../src/ui/theme"
 import { textWidth } from "../src/view/wrap"
 
-afterEach(() => { cleanTemps(); setTheme("mend") })
+afterEach(() => { cleanTemps(); setTheme(DEFAULT_THEME) })
 
 const press = (col: number, row: number) => `\x1b[<0;${col + 1};${row + 1}M`
 const release = (col: number, row: number) => `\x1b[<0;${col + 1};${row + 1}m`

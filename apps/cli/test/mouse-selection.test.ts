@@ -1,5 +1,7 @@
-import { afterEach, expect, test } from "bun:test"
+import { afterEach, describe, expect, test } from "bun:test"
 import { appHarness, cleanTemps, conversation, tempDir, type Harness } from "./session-ui-harness"
+import { appHarness as extensionHarness, extension, scratch } from "./extensions-harness"
+import type { Line } from "../src/ui/theme"
 import { DEFAULT_TUI_PROFILE, writeTuiProfile } from "../src/view/tui-profile"
 import { AUTOSCROLL_MS } from "../src/ui/app/mouse-selection"
 
@@ -210,4 +212,42 @@ test("the footer under the prompt is selectable: a drag copies its text, a plain
   expect(h.frames.at(-1)![footer]!.some((span) => span.bg === "primary")).toBe(true)
   await h.app.onKey(release(end, footer))
   expect(osc52(h)).toEqual([text.trim()])
+})
+
+describe("a selection over a message drawn with its own background", () => {
+  const temps: Array<ReturnType<typeof scratch>> = []
+  afterEach(() => { for (const temp of temps.splice(0)) temp.cleanup() })
+  const selected = (line: Line) => line.filter((span) => span.fg === "background" && span.bg === "primary" && !span.fgHex && !span.bgHex).map((span) => span.text).join("")
+
+  test("the built-in tinted user message shows the highlight on the dragged words and copies them", async () => {
+    const h = await chat()
+    const row = rowOf(h, "And history?")
+    const col = h.text()[row]!.indexOf("history")
+    expect(h.frames.at(-1)![row]!.some((span) => span.bg === "promptBg")).toBe(true)
+    await h.app.onKey(press(col, row))
+    await h.app.onKey(drag(col + 6, row))
+    expect(selected(h.frames.at(-1)![row]!)).toBe("history")
+    await h.app.onKey(release(col + 6, row))
+    expect(osc52(h)).toEqual(["history"])
+  })
+
+  test("a user message view with an exact background colour: the selection paints over it, on the pressed row, and copies what it shows", async () => {
+    const temp = scratch()
+    temps.push(temp)
+    temp.write("data/extensions/look.ts", extension("look", `api.view("message.user", (m) => [[{ text: "  " + m.text + "    ", fg: "#ffffff", bg: "#334455" }]])`))
+    const h = await extensionHarness({ dataDir: temp.dataDir, directory: temp.project, width: 80, height: 24 })
+    await h.start({ onboarded: true } as never)
+    h.message("select these words please", "ok")
+    const row = h.rows().findIndex((text) => text.includes("these words"))
+    const col = h.rows()[row]!.indexOf("these")
+    await h.key(press(col, row))
+    await h.key(drag(col + 10, row))
+    const frame = h.frames.at(-1)!
+    expect(selected(frame[row]!)).toBe("these words")
+    expect(frame.filter((line, at) => at !== row && selected(line))).toEqual([])
+    // The cells around the selection keep the message's own colour.
+    expect(frame[row]!.find((span) => span.text.includes("please"))?.bgHex).toBe("#334455")
+    await h.key(release(col + 10, row))
+    expect(h.written.filter((data) => data.startsWith("\x1b]52;c;")).map((data) => Buffer.from(data.slice(7, -1), "base64").toString("utf8"))).toEqual(["these words"])
+  })
 })

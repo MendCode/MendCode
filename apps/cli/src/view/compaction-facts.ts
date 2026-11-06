@@ -51,7 +51,7 @@ export function createCompactionFacts() {
       lastSeq = event.seq
       switch (event.type) {
         case "usage.recorded":
-          if (current.active) current = { ...current, summaryTokens: (current.summaryTokens ?? 0) + event.output + event.reasoning }
+          if (current.active) current = { ...current, summaryTokens: (current.summaryTokens ?? 0) + event.output }
           else {
             calls.push({ turnId: event.turnId, input: event.input, cacheRead: event.cacheRead, cacheWrite: event.cacheWrite, output: event.output, context: usageContext(event) ?? 0 })
             if (calls.length > 64) calls.shift()

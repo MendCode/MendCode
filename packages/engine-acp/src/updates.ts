@@ -112,12 +112,39 @@ const terminal = (status: unknown) => status === "completed" || status === "fail
  * items; a tool call is one item that completes when its update says completed or failed; each changed plan of the agent
  * is one finished list card (`planCard`).
  */
+const tokens = (value: unknown) => (typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0)
+
+/**
+ * The turn's usage from a `session/prompt` result's `usage` (ACP: `inputTokens`, `outputTokens`, `thoughtTokens`,
+ * `cachedReadTokens`, `cachedWriteTokens`, `totalTokens`), as one `usage` event under provider `acp`. An agent whose
+ * `inputTokens` already holds its cached tokens (total = input + output) has them taken out, so the cache is not counted twice.
+ * No cost: ACP gives none per turn, so the price stays unknown unless the user priced the model. Undefined without usage.
+ */
+export function acpUsage(result: unknown, model: string, context?: { used?: number; size?: number }): Extract<EngineEvent, { type: "usage" }> | undefined {
+  const raw = isRecord(result) && isRecord(result.usage) ? result.usage : undefined
+  if (!raw) return undefined
+  const reported = tokens(raw.inputTokens)
+  const output = tokens(raw.outputTokens)
+  const cacheRead = tokens(raw.cachedReadTokens)
+  const cacheWrite = tokens(raw.cachedWriteTokens)
+  const total = tokens(raw.totalTokens)
+  const cacheInside = total > 0 && total === reported + output && cacheRead + cacheWrite > 0 && cacheRead + cacheWrite <= reported
+  const input = cacheInside ? reported - cacheRead - cacheWrite : reported
+  if (!input && !output && !cacheRead && !cacheWrite) return undefined
+  return {
+    type: "usage", provider: "acp", model: model.slice(0, 128), input, output, reasoning: Math.min(output, tokens(raw.thoughtTokens)), cacheRead, cacheWrite,
+    ...(context?.used ? { context: context.used } : {}), ...(context?.size ? { contextWindow: context.size } : {}),
+  }
+}
+
 export function createUpdateMapper(input: { newItemId(): ItemId; emit(event: EngineEvent): void }) {
   let open: OpenText | undefined
   // A call is announced (`item.started`) once its input is known, so its card opens with MendCode's name for it (`shell: ls`).
   const tools = new Map<string, { itemId?: ItemId; call: AcpToolCall }>()
   /** The checklist of the turn's last plan card: a plan sent again unchanged draws no second card. Per turn: the next turn's first plan draws again. */
   let lastPlan: string | undefined
+  /** The agent's last `usage_update`: tokens its context holds and its window. */
+  const context: { used?: number; size?: number } = {}
 
   function closeText() {
     if (!open) return
@@ -191,11 +218,19 @@ export function createUpdateMapper(input: { newItemId(): ItemId; emit(event: Eng
           input.emit({ type: "item.completed", itemId, status: "ok", text: clip(card.text) })
           return
         }
+        case "usage_update": {
+          if (tokens(update.used)) context.used = tokens(update.used)
+          if (tokens(update.size)) context.size = tokens(update.size)
+          return
+        }
         default:
           // user_message_chunk (history replay), available_commands_update, current_mode_update…: nothing to show.
           return
       }
     },
+
+    /** What the agent last said its context holds, for the turn's usage. */
+    context: () => context,
 
     /** Closes what the turn left open: streamed text ends ok, tool calls without a result end interrupted (or error). */
     finish(status: "ok" | "interrupted" | "error") {

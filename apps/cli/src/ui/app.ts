@@ -1239,6 +1239,7 @@ export function createApp(input: AppInput) {
   const { syncPulse, syncTopbarTick, syncLoopsTick, syncWorkflowsTick, syncUsageTick, syncBackgroundTick, requestFrame: tickFrame } = createTicks(ctx, {
     chatWidth: (...args) => chatWidth(...args),
     sessionTitle: (...args) => sessionTitle(...args),
+    sidebarShown: (...args) => sidebarShown(...args),
     render,
   })
   const { queueCommand, queueKey, noteQueue } = createQueue(ctx, (...args) => applySettings(...args))

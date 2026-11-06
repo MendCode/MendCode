@@ -70,7 +70,7 @@ const PARTS: readonly StatPart[] = [
     help: "prompt and output tokens, with the cache reads and writes when there are any; output includes the reasoning tokens",
     short: (s) => {
       if (s.calls === 0) return undefined
-      const pieces = [words("in "), figure(compact(s.input + s.cacheRead + s.cacheWrite)), words(" out "), figure(compact(s.output + s.reasoning))]
+      const pieces = [words("in "), figure(compact(s.input + s.cacheRead + s.cacheWrite)), words(" out "), figure(compact(s.output))]
       if (s.cacheRead > 0) pieces.push(words(" cr "), figure(compact(s.cacheRead)))
       if (s.cacheWrite > 0) pieces.push(words(" cw "), figure(compact(s.cacheWrite)))
       return pieces
