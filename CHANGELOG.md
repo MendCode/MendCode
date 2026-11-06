@@ -9,6 +9,10 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+### New
+
+- PR reviews reuse changes already reviewed in merged pull requests, reviewing only the remainder of release PRs and calling no model when nothing else changed.
+
 ### Changed
 
 - A running PR review shows one live line above the prompt with its phase, current step and time, instead of a row per step.
@@ -16,6 +20,8 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 ### Fixed
 
 - Send now continues with the promoted message exactly once after interrupting a running tool.
+- After a daemon restart with watched pull requests, resumed turns no longer fail because they started before the reviewer was ready.
+- Live answers of `mendcode docs` wait for a busy daemon as long as `mendcode usage --quota` does.
 
 ## v0.0.4 - 2026-11-05
 
