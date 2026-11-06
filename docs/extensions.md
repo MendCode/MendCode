@@ -423,6 +423,8 @@ ignored; edits apply to the next model call. Prompt files are not code, so they 
 `APPEND_SYSTEM.md` is the user's own text, so every [prompt mode](prompt-modes.md) sends it, like `AGENTS.md`: "always answer
 in Spanish" in `<data dir>/APPEND_SYSTEM.md` reaches every session of every project. `SYSTEM.md` takes the place of the packaged
 base prompt, so it applies in `focus`, `guide` and `full`; `minimal` and `custom` send a base of their own and leave it out.
+`--no-context-files` leaves out both files of every layer (the user's, a package's, a profile's, the project's), like `AGENTS.md`:
+the session gets the packaged base prompt. `COMPACTION.md` still applies.
 For text that depends on the session (today's date, the branch), use a `prompt.system` hook instead.
 
 ## Runtime helpers

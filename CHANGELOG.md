@@ -16,6 +16,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 ### Fixed
 
 - `mendcode --help` says `--no-context-files` leaves instruction files out while skills stay; `--exclude-tools skill` hides them.
+- `--no-context-files` also leaves out `SYSTEM.md` and `APPEND_SYSTEM.md`, including the ones an installed package brings.
 
 ## v0.0.4-beta.1 - 2026-11-05
 
