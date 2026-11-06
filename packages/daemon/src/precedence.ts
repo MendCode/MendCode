@@ -1,11 +1,10 @@
 import path from "node:path"
 import { PROMPT_FILES } from "@mendcode/extension-api"
 import { createSkillLoader } from "@mendcode/engine-native"
-import { loadMcpConfig } from "@mendcode/mcp"
+import { loadMcpConfig } from "../../mcp/src/config"
 import { emptyDiagnostics, layerLabel, readLayerAgents, readLayerThemes, type ExtensionLayer, type ResourceDiagnostics, type ResourceKindName } from "@mendcode/packages"
 import type { PrecedenceClaim, PrecedenceFacts, PrecedenceSurface } from "@mendcode/protocol/wire"
 import { createCustomToolRegistry } from "@mendcode/tools"
-import { loadCustomCommands } from "./custom-commands"
 import { createPromptFiles } from "./extensions/prompt-files"
 import { readRecipes } from "./recipes"
 import { readShellHooks } from "./shell-hooks"
@@ -45,7 +44,7 @@ export async function fileClaims(input: { layers: readonly ExtensionLayer[]; dir
   const skills = createSkillLoader({ userDir: input.userDir, layers: () => input.layers as ExtensionLayer[] }).inspect(input.directory)
   fromDiagnostics("skills", skills.diagnostics, "skill", skills.skills)
   const commandReport = emptyDiagnostics()
-  await loadCustomCommands({ directory: input.directory, userDir: input.userDir, layers: input.layers as ExtensionLayer[], report: commandReport }).catch(() => [])
+  await (await import("./custom-commands")).loadCustomCommands({ directory: input.directory, userDir: input.userDir, layers: input.layers as ExtensionLayer[], report: commandReport }).catch(() => [])
   fromDiagnostics("commands", commandReport, "command", [])
   const agents = readLayerAgents(input.layers, { projectTrusted: input.projectTrusted })
   fromDiagnostics("agents", { ...emptyDiagnostics(), overridden: agents.overridden }, "agent", [])

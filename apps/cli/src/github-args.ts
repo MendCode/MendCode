@@ -4,25 +4,14 @@ import type { ReasoningEffort } from "@mendcode/protocol"
 import { REASONING_EFFORTS } from "@mendcode/protocol/wire"
 import type { ParseResult, Common } from "./automation"
 import { PROGRAM_NAME } from "@mendcode/program"
+import { GITHUB_VALUE_FLAGS as values, githubInvocation } from "./github-invocation"
+export { githubInvocation } from "./github-invocation"
 
 export const GITHUB_USAGE = GITHUB_HELP
 export const PR_USAGE = PR_HELP
 export type GithubAutomation = { kind: "github.install"; model?: string; write: boolean; hosted?: boolean; release?: string; sha256?: string } | { kind: "github.run"; event?: string; token?: string; model?: string; variant?: string; effort?: ReasoningEffort; prompt?: string; mentions?: string[]; publish: boolean; approve: boolean; thinking: boolean; attachments: boolean; review?: boolean } | { kind: "pr"; number: number; token?: string; noTui: boolean }
 export type PrSetupAutomation = { kind: "pr.setup"; session: string; role?: "all" | "requested"; yes: boolean }
-const values = new Set(["session", "dir", "data-dir", "project", "cwd", "engine", "format", "compat", "token", "model", "variant", "effort", "event", "prompt", "mentions", "connect", "server-url", "ca", "token-file", "socket", "release", "sha256"])
 const booleans = new Set(["yes", "json", "help", "write", "publish", "approve", "thinking", "attachments", "no-tui", "hosted", "review"])
-
-/** Locate command words without mistaking credential/transport option values for commands. */
-export function githubInvocation(argv: string[]) {
-  const words: string[] = []
-  for (let i = 0; i < argv.length; i++) {
-    const token = argv[i]!
-    if (token.startsWith("--")) { if (!token.includes("=") && values.has(token.slice(2))) i++; continue }
-    if (token === "-h" || token === "-v") continue
-    words.push(token)
-  }
-  return words[0] === "github" ? words[1] === "run" ? "github.run" : "github.install" : words[0] === "pr" ? "pr" : undefined
-}
 
 export function parseGithub(argv: string[]): ParseResult | undefined {
   const invocation = githubInvocation(argv)

@@ -1,20 +1,10 @@
-import type { VertexOptions } from "@mendcode/protocol"
 import { createAnthropicProvider } from "./anthropic-messages"
-import { vertexEndpoint } from "./google-vertex"
+import { vertexEndpoint, vertexAnthropicRouting, VERTEX_ANTHROPIC_MODEL } from "./provider-endpoints"
 import type { ResolvedProvider } from "./provider-factory"
 import { scrub, type Fetch } from "./provider-http"
 import type { ModelProvider } from "./provider"
 
-export const isVertexType = (type: string | undefined) => type === "google-vertex" || type === "google-vertex-anthropic"
-export const VERTEX_ANTHROPIC_MODEL = /^[A-Za-z0-9][A-Za-z0-9._-]*(?:@[A-Za-z0-9._-]+)?$/
-
-/** v1's Claude routing differs from Gemini: global by default, no GOOGLE_VERTEX_LOCATION alias. */
-export function vertexAnthropicRouting(options: VertexOptions = {}, env: Record<string, string | undefined> = {}) {
-  return {
-    project: options.project ?? env.GOOGLE_CLOUD_PROJECT ?? env.GCP_PROJECT ?? env.GCLOUD_PROJECT,
-    location: options.location ?? env.GOOGLE_CLOUD_LOCATION ?? env.VERTEX_LOCATION ?? "global",
-  }
-}
+export { isVertexType, VERTEX_ANTHROPIC_MODEL, vertexAnthropicRouting } from "./provider-endpoints"
 
 /** Vertex uses Messages SSE with Google bearer auth and a publisher model in the URL. */
 export function createVertexAnthropicProvider(input: { provider: ResolvedProvider; fetch?: Fetch; idleTimeoutMs?: number }): ModelProvider {

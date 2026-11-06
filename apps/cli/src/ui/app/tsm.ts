@@ -2,7 +2,6 @@ import type { TsmChange, TsmRead, TsmReport } from "@mendcode/protocol"
 import type { AppContext } from "./context"
 import type { TsmPageState } from "../../view/tsm-page"
 import { preload } from "../lazy-pages"
-import { parseTsm, TSM_USAGE } from "../../tsm-args"
 import { TSM_ACTIONS } from "../../tsm-actions"
 
 export function createTsm(ctx: AppContext) {
@@ -51,6 +50,7 @@ export function createTsm(ctx: AppContext) {
   async function tsmCommand(text: string) {
     const match = /^\/tsm(?:\s+([\s\S]*))?$/.exec(text.trim())
     if (!match) return false
+    const { parseTsm, TSM_USAGE } = await import("../../tsm-args")
     await preload("tsm")
     const view: TsmPageState = { selected: 0, scroll: 0, detailsFocused: false, section: "status", mux: "auto", readOnly: input.remote?.readOnly ?? false }
     state.tsm = view

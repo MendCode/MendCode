@@ -51,7 +51,7 @@ export const fileLine = (file: string, label = path.basename(file)) => `${label}
 
 /** The lines of a feature card: the features it is about, then its settings, or the daemon note when none runs. */
 export function withSettings(context: LiveContext, build: (settings: Record<string, unknown>) => string[]): string[] {
-  return context.settings ? build(context.settings) : [NO_DAEMON]
+  return context.settings ? build(context.settings) : [context.daemonUnanswered ? "(daemon did not answer: daemon settings not shown)" : NO_DAEMON]
 }
 
 /** A card about some features: one line each, then the values of the settings it names (with their defaults) when there are any. */

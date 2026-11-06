@@ -1,4 +1,4 @@
-import { parseCheck } from "@mendcode/loops"
+import { parseCheck } from "../../loops/src/checks"
 import { WorkflowPlan, WorkflowScriptPlan, type WorkflowContract } from "@mendcode/protocol"
 import { routingProblems } from "./routing"
 import { agentSpecs, compositionProblems } from "./composition"

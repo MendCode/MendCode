@@ -1,5 +1,8 @@
 import { isAbsolute } from "node:path"
-import { createProblems, describeTrigger, parseTrigger, resolveCreateInput, checkProblems, type CreateLoopInput, type LoopService } from "@mendcode/loops"
+import type { CreateLoopInput, LoopService } from "@mendcode/loops"
+import { createProblems, resolveCreateInput } from "../../loops/src/inputs"
+import { describeTrigger, parseTrigger } from "../../loops/src/schedule"
+import { checkProblems } from "../../loops/src/checks"
 import type { Loop, LoopBudget, SessionId } from "@mendcode/protocol"
 import type { LoopCreateInput, LoopPort } from "@mendcode/tools"
 

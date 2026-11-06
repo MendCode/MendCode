@@ -2,7 +2,7 @@ import { statSync } from "node:fs"
 import path from "node:path"
 import type { CommandReply } from "@mendcode/client"
 import type { ChannelsChange, ChannelsReport, SessionEvent, SessionId } from "@mendcode/protocol"
-import { createChannelBridge, type BridgeHost } from "./channels-bridge"
+import type { createChannelBridge, BridgeHost } from "./channels-bridge"
 import { createChannelsConfig, createPairing, resolveTelegramToken } from "./channels-config"
 import { createTelegramApi } from "./channels-telegram"
 import type { Transcription } from "./voice"
@@ -73,6 +73,7 @@ export function createChannels(options: ChannelsOptions) {
         const me = await api.getMe(signal)
         let current: ReturnType<typeof createChannelBridge> | undefined
         host = await (options.connect ?? defaultConnect)((event) => current?.onEvent(event))
+        const { createChannelBridge } = await import("./channels-bridge")
         current = bridge = createChannelBridge({ api, host, config, pairing, dataDir: options.dir, log: options.log, ...(options.transcribe ? { transcribe: options.transcribe } : {}) })
         // Messages sent while the daemon was off are dropped, not replayed as turns.
         const backlog = await api.getUpdates({ offset: -1, timeoutSeconds: 0, signal })

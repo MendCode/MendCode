@@ -292,6 +292,9 @@
       },
     },
   },
+  "patchedDependencies": {
+    "zod@4.6.6": "patches/zod@4.6.6.patch",
+  },
   "packages": {
     "@jsquash/webp": ["@jsquash/webp@1.5.0", "", { "dependencies": { "wasm-feature-detect": "1.9.0" } }, "sha512-KggLoj2MnRSfIqTeKe1EmbljTX2vuV7mh79k89PCL1pyqiDULcPM1L47twxXt0hkb68F70bXiL31MxsuoZtKFw=="],
 

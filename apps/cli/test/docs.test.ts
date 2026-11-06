@@ -384,6 +384,8 @@ describe("docs: usage and the footer name their data source", () => {
   test("live: no reading says every window is unknown; no daemon says nothing is known", () => {
     expect(liveLines("usage", { dataDir: temp(), cwd: temp(), settings: undefined, prompt: undefined, now: NOW, quotas: [] })[0]).toBe("no provider has reported a quota window yet: every window is unknown")
     expect(liveLines("usage", { dataDir: temp(), cwd: temp(), settings: undefined, prompt: undefined, now: NOW })[0]).toMatch(/^provider quota: not known \(no daemon is running/)
+    expect(liveLines("usage", { dataDir: temp(), cwd: temp(), settings: undefined, prompt: undefined, daemonUnanswered: true })[0]).toContain("the daemon is running but did not answer")
+    expect(liveLines("commands", { dataDir: temp(), cwd: temp(), settings: undefined, prompt: undefined, daemonUnanswered: true })[0]).toContain("daemon did not answer")
     expect(liveLines("usage", { dataDir: temp(), cwd: temp(), settings: undefined, prompt: undefined, now: NOW, quotas: [snapshot("codex", 8, { windows: [{ id: "w", label: "7d", usedPercent: 8, resetsAt: NOW - 1 }] })] })[0]).toContain("window already reset")
   })
 

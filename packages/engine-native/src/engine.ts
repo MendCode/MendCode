@@ -49,9 +49,7 @@ import { hostable } from "./host-tools"
 import { activeToolNames, createToolSearch, impliedTools, isPrimaryIn, PLAN_TOOLS, searchTools, TOOL_SEARCH_NAME, withoutDiscovered, type CatalogMode, type ToolCatalog } from "./tool-discovery"
 import { compactToolSchema } from "./tool-schema"
 import { CODE_TOOL } from "./code-mode"
-import { CodeError } from "./code-parser"
 import { createIdFactory, tierIncludes, featureOn } from "@mendcode/protocol/wire"
-import { executeCode } from "./code-runtime"
 import { bindComputerAuthority } from "./computer-authority"
 import { DEFAULT_STRUCTURED_RETRIES, STRUCTURED_NOTE, STRUCTURED_NUDGE, STRUCTURED_TOOL, structuredTool } from "./structured-output"
 
@@ -1614,6 +1612,8 @@ export function createNativeEngine(options: {
       let stopped = false
       let previousNested = "", nestedRepeats = 0, sequence = 0
       const nestedInstructions: string[] = []
+      const { executeCode } = await import("./code-runtime")
+      const { CodeError } = await import("./code-parser")
       const value = await executeCode({
         code: parsed.data.code, signal: input.signal,
         names: eligible().specs.map((spec) => spec.name).filter((name) => name !== CODE_TOOL.name),

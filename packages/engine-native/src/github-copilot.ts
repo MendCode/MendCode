@@ -1,5 +1,4 @@
 import type { ProviderModel } from "@mendcode/protocol"
-import { createAnthropicProvider } from "./anthropic-messages"
 import { createChatCompletionsProvider } from "./openai-compatible"
 import { createResponsesProvider } from "./openai-responses"
 import { COPILOT_HEADERS, copilotUrl } from "./github-copilot-auth"
@@ -50,7 +49,7 @@ export function createCopilotProvider(input: { provider: ResolvedProvider; fetch
       }
       const common = { id: provider.id, model, fetch: doFetch, ...(input.idleTimeoutMs ? { idleTimeoutMs: input.idleTimeoutMs } : {}), takesImages: (id: string) => provider.models.find((entry) => entry.id === id)?.images !== false }
       const headers = { ...provider.headers, ...COPILOT_HEADERS }
-      const adapter = endpoint === "/v1/messages" ? createAnthropicProvider({ ...common, baseUrl: `${baseUrl}/v1`, apiKey: () => key, headers, ...(metadata?.maxOutputTokens ? { maxTokens: metadata.maxOutputTokens } : {}) })
+      const adapter = endpoint === "/v1/messages" ? (await import("./anthropic-messages")).createAnthropicProvider({ ...common, baseUrl: `${baseUrl}/v1`, apiKey: () => key, headers, ...(metadata?.maxOutputTokens ? { maxTokens: metadata.maxOutputTokens } : {}) })
         : endpoint === "/responses" ? createResponsesProvider({ ...common, baseUrl, headers: async () => ({ ...headers, authorization: `Bearer ${key}` }), routingHeader: false, hostedTools: [], authHint: "rejected GitHub Copilot authorization; reconnect with /connect github-copilot" })
         : createChatCompletionsProvider({ ...common, baseUrl, apiKey: () => key, requireKey: true, headers })
       try { yield* adapter.stream(request) } catch (error) {

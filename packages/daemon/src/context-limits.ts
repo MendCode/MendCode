@@ -1,5 +1,5 @@
 import { compactionThreshold, namespacedModel, type CompactionLimits } from "@mendcode/engine-native"
-import { ACP_MODEL_PREFIX } from "@mendcode/engine-acp"
+import { ACP_MODEL_PREFIX } from "../../engine-acp/src/agents"
 import { compactEstimate, compactNoticePercent, featureOn, usageContext, type ContextSample, type TierSettings } from "@mendcode/protocol/wire"
 import { clampWindow, findModel, modelContextOf, type CompactionConfig, type ContextLimits, type ContextReport, type ModelInfo, type ProviderInfo, type SessionEvent, type Settings } from "@mendcode/protocol"
 

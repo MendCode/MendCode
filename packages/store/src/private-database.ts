@@ -1,4 +1,4 @@
-import { Database } from "bun:sqlite"
+import { Database, type Statement } from "bun:sqlite"
 import { existsSync, lstatSync, readFileSync, readdirSync, rmSync } from "node:fs"
 import path from "node:path"
 import { atomicPrivateWrite, cleanPrivateTemp, createSealedFiles, isSealedFile, privateTempTarget } from "./sealed-file"
@@ -52,10 +52,15 @@ export function openPrivateDatabase(dir: string, file: string) {
   const check = () => { if (failed) throw failed }
   function statement(sql: string, params?: unknown) {
     let version = generation
-    let stmt = params === undefined ? live.query(sql) : live.prepare(sql, params as never)
-    return new Proxy(stmt, {
+    // Store modules declare their queries at open, but only the ones actually used need a native statement.
+    // Keep it after first use (Bun's query cache also shares identical SQL); a privacy switch replaces the connection.
+    let stmt: Statement | undefined
+    return new Proxy({}, {
       get(_target, property) {
-        if (version !== generation) { stmt = live.query(sql); version = generation }
+        if (!stmt || version !== generation) {
+          stmt = params === undefined || version !== generation ? live.query(sql) : live.prepare(sql, params as never)
+          version = generation
+        }
         const value = Reflect.get(stmt, property, stmt)
         if (typeof value !== "function") return value
         return (...args: unknown[]) => {

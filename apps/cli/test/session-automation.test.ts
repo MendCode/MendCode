@@ -164,27 +164,60 @@ test("a wait on a turn the daemon interrupted says interrupted, from pushes and 
   expect(JSON.parse(polled.out.at(-1)!).data).toMatchObject({ status: "interrupted" })
 })
 
-test("send --wait exits 5 when its approval is denied for lack of --approve; --json says so, --approve keeps 0", async () => {
-  const turn = async (...flags: string[]) => {
-    const queueId = ids("queue"), turnId = ids("turn")
-    const h = fake(() => ({ ok: true, result: { queueId } }))
-    const running = runAutomation(parsed("session", "send", id, "task", ...flags), h.deps)
-    await Bun.sleep(1)
-    h.push({ type: "turn.started", turnId, queueId })
-    h.push({ type: "server.request", turnId, requestId: ids("request"), kind: "approval", title: "Run", detail: "rm x" })
-    h.push({ type: "turn.completed", turnId })
-    return { code: await running, h }
+test.each([
+  { child: false, json: false }, { child: false, json: true },
+  { child: true, json: false }, { child: true, json: true },
+])("send leaves approvals for the owner (child=$child, json=$json)", async ({ child, json }) => {
+  const queueId = ids("queue"), turnId = ids("turn"), sessionId = child ? ids("session") : id
+  const h = fake(() => ({ ok: true, result: { queueId, ...(child ? { task: { taskId: sessionId } } : {}) } }))
+  let settled = false
+  const running = runAutomation(parsed("session", "send", id, "task", ...(child ? ["--command", "review"] : []), ...(json ? ["--json"] : [])), h.deps).then((code) => { settled = true; return code })
+  await Bun.sleep(1)
+  h.push({ type: "turn.started", sessionId, turnId, queueId })
+  const requests = [ids("request"), ids("request")]
+  for (const [index, requestId] of requests.entries()) {
+    h.push({ type: "server.request", sessionId, turnId, requestId, kind: "approval", title: "Run", detail: "rm x", ...(index ? { engineFlagged: true } : {}) })
   }
-  const denied = await turn("--json")
-  expect(denied.code).toBe(5)
-  expect(JSON.parse(denied.h.out.at(-1)!).data).toMatchObject({ exitCode: 5, status: "denied", approvalDenied: true })
-  expect(denied.h.commands).toContainEqual(expect.objectContaining({ type: "request.resolve", decision: expect.objectContaining({ kind: "deny" }) }))
-  const human = await turn()
-  expect(human.code).toBe(5)
-  expect(human.h.err.join("")).toContain("pass --approve to allow it")
-  const approved = await turn("--approve", "--json")
-  expect(approved.code).toBe(0)
-  expect(JSON.parse(approved.h.out.at(-1)!).data).toEqual({ sessionId: id, exitCode: 0, status: "completed" })
+  await Bun.sleep(1)
+  expect(settled).toBe(false)
+  expect(h.commands.filter((command) => command.type === "request.resolve")).toEqual([])
+  expect(h.err.join("")).not.toContain("denied")
+  // Another client (the owner) answers; send observes that answer and the completed turn.
+  for (const requestId of requests) h.push({ type: "server.request.resolved", sessionId, requestId, resolution: "approved" })
+  h.push({ type: "turn.completed", sessionId, turnId })
+  expect(await running).toBe(0)
+  if (json) expect(JSON.parse(h.out.at(-1)!).data).toEqual({ sessionId: id, exitCode: 0, status: "completed" })
+})
+
+test.each(["--approve", "--dangerously-skip-permissions"])("send %s keeps approval and question decisions in the child", async (flag) => {
+  const queueId = ids("queue"), turnId = ids("turn"), sessionId = ids("session")
+  const h = fake(() => ({ ok: true, result: { queueId, task: { taskId: sessionId } } }))
+  const running = runAutomation(parsed("session", "send", id, "task", "--command", "review", flag, "--json"), h.deps)
+  await Bun.sleep(1)
+  h.push({ type: "turn.started", sessionId, turnId, queueId })
+  const approval = ids("request"), flagged = ids("request"), question = ids("request")
+  h.push({ type: "server.request", sessionId, turnId, requestId: approval, kind: "approval", title: "Write", detail: "file" })
+  h.push({ type: "server.request", sessionId, turnId, requestId: flagged, kind: "approval", title: "Run", detail: "rm x", engineFlagged: true })
+  h.push({ type: "server.request", sessionId, turnId, requestId: question, kind: "question", title: "Choose" })
+  expect(h.commands).toContainEqual({ type: "request.resolve", sessionId, requestId: approval, decision: { kind: "approve", scope: "once" } })
+  expect(h.commands).toContainEqual(expect.objectContaining({ type: "request.resolve", sessionId, requestId: flagged, decision: expect.objectContaining({ kind: flag === "--approve" ? "deny" : "approve" }) }))
+  expect(h.commands).toContainEqual(expect.objectContaining({ type: "request.resolve", sessionId, requestId: question, decision: expect.objectContaining({ kind: "deny" }) }))
+  h.push({ type: "turn.completed", sessionId, turnId })
+  expect(await running).toBe(0)
+  expect(JSON.parse(h.out.at(-1)!).data).toEqual({ sessionId: id, exitCode: 0, status: "completed" })
+})
+
+test("send times out without resolving a pending approval or cancelling its turn", async () => {
+  const queueId = ids("queue"), turnId = ids("turn")
+  const h = fake(() => ({ ok: true, result: { queueId } }))
+  const running = runAutomation(parsed("session", "send", id, "task", "--timeout-ms", "100", "--json"), h.deps)
+  await Bun.sleep(1)
+  h.push({ type: "turn.started", turnId, queueId })
+  h.push({ type: "server.request", turnId, requestId: ids("request"), kind: "approval", title: "Write", detail: "file" })
+  h.timers[0]!.callback()
+  expect(await running).toBe(3)
+  expect(h.commands.filter((command) => command.type === "request.resolve" || command.type === "turn.cancel")).toEqual([])
+  expect(JSON.parse(h.out.at(-1)!).data.status).toBe("timeout")
 })
 
 test("wait requires a terminal result, refreshes at the requested interval and cleans timers", async () => {

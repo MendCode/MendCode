@@ -2,7 +2,7 @@ import { readdirSync, readFileSync, statSync } from "node:fs"
 import path from "node:path"
 import type { ExtensionLayer, ExtensionSource } from "@mendcode/packages"
 import { WorkflowContract, WorkflowPlan } from "@mendcode/protocol"
-import { validateContract, validatePlan } from "@mendcode/workflows"
+import { validateContract, validatePlan } from "../../workflows/src/plan"
 
 /**
  * Saved workflow contracts (`contracts/<name>.json`, a `WorkflowContract`) and plans (`workflows/<name>.json`, a

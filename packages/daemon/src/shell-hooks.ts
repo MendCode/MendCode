@@ -1,6 +1,6 @@
 import { readFileSync, statSync } from "node:fs"
 import path from "node:path"
-import { CREDENTIAL_ENV } from "@mendcode/mcp"
+import { CREDENTIAL_ENV } from "../../mcp/src/env"
 import type { ExtensionLayer } from "@mendcode/packages"
 import type { HookRunInfo, HooksReport } from "@mendcode/protocol"
 import { runManaged } from "@mendcode/tools"

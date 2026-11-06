@@ -1,4 +1,4 @@
-import { loadMcpConfig, type LoadedMcpConfig, type McpServerConfig } from "@mendcode/mcp"
+import { loadMcpConfig, type LoadedMcpConfig, type McpServerConfig } from "../../mcp/src/config"
 import type { ExtensionLayer } from "@mendcode/packages"
 import { canonicalDir } from "@mendcode/tools"
 

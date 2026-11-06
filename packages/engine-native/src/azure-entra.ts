@@ -1,16 +1,17 @@
 import { RetryableProviderError } from "./provider"
 import { retryAfter } from "./openai-responses"
 import type { Fetch } from "./provider-http"
+import { entraReady, AZURE_TOKEN_ENV } from "./credential-presence"
+export { AZURE_TOKEN_ENV } from "./credential-presence"
 
 export const AZURE_SCOPE = "https://cognitiveservices.azure.com/.default"
-export const AZURE_TOKEN_ENV = "AZURE_OPENAI_AUTH_TOKEN"
 type Env = Record<string, string | undefined>
 
 /** No discovery, credential reads or HTTP until an explicitly enabled Entra provider requests a token. */
 export function createAzureEntraCredential(options: { env(): Env; fetch?: Fetch; now?(): number; tokenEnv?: string }) {
   let cached: { signature: string; token: string; expires: number } | undefined
   const tokenEnv = options.tokenEnv ?? AZURE_TOKEN_ENV
-  const ready = () => Boolean(options.env()[tokenEnv]?.trim() || ["AZURE_TENANT_ID", "AZURE_CLIENT_ID", "AZURE_CLIENT_SECRET"].every((name) => options.env()[name]?.trim()))
+  const ready = () => entraReady(options)
   return {
     ready,
     async token(signal: AbortSignal): Promise<string> {

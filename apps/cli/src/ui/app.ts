@@ -83,7 +83,6 @@ import { createTsm } from "./app/tsm"
 import { readModelPrefs } from "../view/model-prefs"
 import type { Settings, ForegroundState, GlobalEvent, PermissionMode } from "@mendcode/protocol"
 import type { AgentSession } from "../view/agents-page"
-import { createModelPageState } from "../view/model-page"
 import type { CommandReply } from "@mendcode/client"
 import { createToasts } from "./toasts"
 /** A command's own report stays long enough to read a status line, then goes. */
@@ -491,7 +490,7 @@ export function createApp(input: AppInput) {
   /** The user's /footer choice; without one, full view shows every segment and the others the default set. */
   appState.customFooter = undefined!
 
-  appState.modelState = createModelPageState()
+  appState.modelState = { row: 0 }
 
   appState.modelPrefs = input.modelPrefs ?? (input.dataDir ? readModelPrefs(input.dataDir) : { favorites: [], recents: [] })
   appState.providersState = undefined!

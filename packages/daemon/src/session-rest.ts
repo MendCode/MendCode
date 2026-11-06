@@ -1,4 +1,4 @@
-import { readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs"
+import { realpathSync, renameSync, writeFileSync } from "node:fs"
 import path from "node:path"
 import { createHash } from "node:crypto"
 import { MAX_FRAME_BYTES, startedQueueIds, visibleEvents,type ChangesReport, type Command, type ItemId, type RestMessage, type RestReadInput, type RestSession, type SessionDetail, type SessionEvent, type SessionId } from "@mendcode/protocol"
@@ -12,6 +12,7 @@ import { restUsage } from "./session-rest-usage"
 import { restFileDiffs, restMessageSummary, restRevert, restSessionSummary } from "./session-rest-diff"
 import type { SessionPermissionRules } from "./session-permission-rules"
 import { DEV_VERSION } from "@mendcode/program"
+import { readRestArchives } from "./session-rest-archives"
 
 const CONTEXT_TEXT_LIMIT = 40_000
 type Control = Extract<Command, { type: "session.rest.control" }>
@@ -40,15 +41,12 @@ export function createRestSessions(input: {
   changes(id: SessionId, itemId?: string): ChangesReport | undefined
   /** Per-session permission rules the engine evaluates; absent when the embedding keeps none. */
   permissions?: SessionPermissionRules
+  /** The daemon's validated startup snapshot; standalone callers read it on creation. */
+  archives?: Record<string, number>
 }) {
   const { store } = input
   const file = path.join(input.dir, "session-rest.json")
-  let archives: Record<string, number> = {}
-  try {
-    const value = JSON.parse(readFileSync(file, "utf8"))
-    if (!value || typeof value !== "object" || Array.isArray(value) || Object.values(value).some((entry) => typeof entry !== "number" || !Number.isSafeInteger(entry) || entry < 0)) throw new Error("invalid session-rest.json")
-    archives = value
-  } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error }
+  let archives = input.archives ?? readRestArchives(input.dir)
   const observers = new Set<() => void>()
   const cancellations = new Set<() => void>()
   function events(id: SessionId) {

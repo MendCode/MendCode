@@ -1,4 +1,5 @@
-import { outboundEndpoint } from "./endpoint-policy"
+import { geminiUrl } from "./provider-endpoints"
+export { geminiUrl } from "./provider-endpoints"
 import { argsObject, orderedParts, pairToolCalls, withoutUnsupportedImages } from "./history"
 import { MAX_SILENT_STREAM_BYTES, MAX_TOOL_ARGUMENT_CHARS, sseData } from "./openai-responses"
 import { guardedStream, httpFailure, joinUrl, postStream, scrub, type Fetch, type Watchdog } from "./provider-http"
@@ -88,7 +89,6 @@ function generationConfig(request: ModelRequest, model: string): Record<string, 
   return config
 }
 
-export const geminiUrl = (value: string): URL => outboundEndpoint(value, "Gemini")
 
 /** Native GenerateContent SSE transport; credentials travel in a header, never in the URL. */
 export function createGeminiProvider(options: {

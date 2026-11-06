@@ -5,12 +5,8 @@ import { RetryableProviderError, type ModelProvider } from "./provider"
 import type { ResolvedProvider } from "./provider-factory"
 import { scrub, type Fetch } from "./provider-http"
 
-/** Explicit gateways are supported, but plaintext credentials may only travel over HTTP on loopback. */
-export function azureBaseUrl(value: string): string {
-  const url = new URL(value)
-  if (url.username || url.password || url.search || url.hash || !(url.protocol === "https:" || url.protocol === "http:" && ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname))) throw new Error("Azure endpoint must use HTTPS or loopback HTTP, without credentials, query or fragment")
-  return url.toString().replace(/\/+$/, "")
-}
+import { azureBaseUrl } from "./provider-endpoints"
+export { azureBaseUrl } from "./provider-endpoints"
 
 /** Azure SDK's Responses default and opt-in legacy deployment URLs, expressed through v2's native adapters. */
 export function azureUrl(baseUrl: string, model: string, path: string, options: AzureOptions = {}): string {

@@ -1,4 +1,4 @@
-import { claudeEffort } from "@mendcode/engine-claude"
+import { claudeEffort } from "../../engine-claude/src/protocol"
 import type { AdvisorUsage } from "@mendcode/engine-native"
 import { withoutHostSessionEnv } from "@mendcode/client/inherited-env"
 import type { ModelChoice } from "@mendcode/protocol"

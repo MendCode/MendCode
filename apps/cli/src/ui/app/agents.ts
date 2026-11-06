@@ -1,6 +1,6 @@
 import type { SessionId, CustomToolsReport, McpStatusReport, PackageConfigReport, PackagesReport, GlobalEvent, SessionSummary, AgentCommandsReport, McpCatalogReport, McpResourceContent } from "@mendcode/protocol"
 import type { AgentShell, AgentSubtask } from "../../view/agents-page"
-import { taskUsage } from "../../view/tasks-page"
+import { taskUsage } from "../../view/task-usage"
 import type { CommandInput } from "@mendcode/client"
 import type { AppContext } from "./context"
 

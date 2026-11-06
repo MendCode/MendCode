@@ -1,7 +1,7 @@
 import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
 import path from "node:path"
 import { redactSecrets, type McpConfigInput, type McpServerStatus, type RestMcpConfig } from "@mendcode/protocol"
-import { serverConfigSchema } from "@mendcode/mcp"
+import { serverConfigSchema } from "../../mcp/src/config"
 import { mcpPendingBudget } from "./mcp-pending-budget"
 
 /** Folder holding `mcp.json`: the project's `.mendcode`, or the daemon data directory for the user scope. */

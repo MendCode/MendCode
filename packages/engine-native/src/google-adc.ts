@@ -1,12 +1,12 @@
 import { createHash, createPrivateKey, sign } from "node:crypto"
 import { readFileSync, statSync } from "node:fs"
-import path from "node:path"
+import { googlePresence, GOOGLE_TOKEN_ENV } from "./credential-presence"
+export { GOOGLE_TOKEN_ENV } from "./credential-presence"
 import { RetryableProviderError } from "./provider"
 import { retryAfter } from "./openai-responses"
 import type { Fetch } from "./provider-http"
 
 export const GOOGLE_CLOUD_SCOPE = "https://www.googleapis.com/auth/cloud-platform"
-export const GOOGLE_TOKEN_ENV = "GOOGLE_OAUTH_ACCESS_TOKEN"
 type Env = Record<string, string | undefined>
 type Credential = Record<string, unknown>
 type Token = { token: string; expires: number }
@@ -48,11 +48,7 @@ export function createGoogleAdcCredential(options: { env(): Env; fetch?: Fetch; 
   let quotaProject: string | undefined
   let cached: (Token & { signature: string }) | undefined
   let pending: { signature: string; promise: Promise<Token>; controller: AbortController; users: number } | undefined
-  const file = () => {
-    const env = options.env()
-    return env.GOOGLE_APPLICATION_CREDENTIALS || (env.CLOUDSDK_CONFIG ? path.join(env.CLOUDSDK_CONFIG, "application_default_credentials.json") : env.HOME ? path.join(env.HOME, ".config", "gcloud", "application_default_credentials.json") : undefined)
-  }
-  const exists = () => { try { const target = file(); return Boolean(target && statSync(target).isFile()) } catch { return false } }
+  const { file, exists, ready } = googlePresence(options)
 
   async function json(url: string, init: RequestInit, signal: AbortSignal): Promise<Credential> {
     let response: Response
@@ -139,7 +135,7 @@ export function createGoogleAdcCredential(options: { env(): Env; fetch?: Fetch; 
 
   return {
     quotaProject: () => options.env().GOOGLE_CLOUD_QUOTA_PROJECT?.trim() || quotaProject,
-    ready: () => Boolean(options.env()[tokenEnv]?.trim() || exists() || options.allowMetadata),
+    ready,
     async token(signal: AbortSignal): Promise<string> {
       signal.throwIfAborted()
       const supplied = options.env()[tokenEnv]?.trim()

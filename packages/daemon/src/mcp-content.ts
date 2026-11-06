@@ -1,5 +1,4 @@
 import type { McpCatalogReport, McpPromptResult, McpResourceContent } from "@mendcode/protocol"
-import { promptText } from "@mendcode/mcp"
 
 export type McpContentPort = {
   catalog?(directory: string): Promise<McpCatalogReport>
@@ -28,6 +27,7 @@ export async function expandMcpPrompt(port: McpContentPort, directory: string, n
     else if (argument.required) throw new Error(`/${name} needs <${argument.name}>`)
   }
   const input = { directory, server: prompt.server, name: prompt.name, args: inputs }
+  const { promptText } = await import("@mendcode/mcp")
   const text = promptText(await (port.getPromptResult?.(input) ?? port.getPrompt!(input)))
   if (!text.trim()) throw new Error(`MCP prompt /${name} returned no text`)
   return prompt.arguments?.length || !args.trim() ? text : `${text}\n\n${args}`
