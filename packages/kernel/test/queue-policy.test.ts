@@ -245,6 +245,33 @@ test("send now hands the message to an engine that takes it mid-turn: nothing is
   expect(h.manual.last().input.text).toBe("next")
 })
 
+for (const delivery of [undefined, "steer"] as const) test(`send now reserves its adopted turn when the interrupted tool returns (${delivery ?? "after-tools"})`, async () => {
+  const h = setup("after-tools")
+  await h.submit("first")
+  const previous = h.manual.last()
+  const tool = previous.input.newItemId()
+  previous.input.emit({ type: "item.started", itemId: tool, kind: "tool_call" })
+  const handed: string[] = []
+  previous.input.onSendNow?.((message) => { handed.push(message.text); return true })
+  const next = h.queued(await h.command({ type: "user.submit", text: "promoted", attachments: [], ...(delivery ? { delivery } : {}) }))
+  await h.submit("later")
+  await h.command({ type: "queue.promote", queueId: next })
+  // Claude's send_now interrupts the tool, whose result calls takeQueued before the old turn ends.
+  previous.input.emit({ type: "item.completed", itemId: tool, status: "cancelled" })
+  expect(await previous.input.takeQueued?.()).toBeUndefined()
+  expect(await previous.input.takeQueued?.({ userOnly: true })).toBeUndefined()
+  expect(handed).toEqual(["promoted"])
+  expect(h.actor.snapshot().queue[0]).toBe(next)
+  previous.finish()
+  await flush()
+  expect(h.manual.turns.map((turn) => turn.input.text)).toEqual(["first", "promoted"])
+  expect(h.h.events.filter((event) => event.type === "turn.started" && event.queueId === next)).toHaveLength(1)
+  h.manual.last().finish()
+  await flush()
+  expect(h.manual.turns.map((turn) => turn.input.text)).toEqual(["first", "promoted", "later"])
+  expect(h.h.events.filter((event) => event.type === "item.completed" && event.text === "promoted")).toHaveLength(1)
+})
+
 test("send now still cancels when the engine does not take the message", async () => {
   const h = setup()
   await h.submit("first")

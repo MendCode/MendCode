@@ -504,11 +504,10 @@ The same comment is answered once, whatever the number of watches of the reposit
 #### Seeing a review run
 
 While a review runs (balanced and full tiers, where the reviewer is), the session that watches the repository shows it like a turn
-at work: its steps as tool rows above the prompt (`Review Fetching #25 · head 51fe4047`, `Review Readers · 32 files · <model>`,
-`Review Analysis · 112 files · incremental`, `Review Verifying 4 candidates`, `Review Posting review`), the running one with the
-spinner and its time, and the activity status `Reviewing Eden-sudo/Symbex-1#25 · analysis… (1m 20s)` when the session itself is
-idle. When the run ends they go and the session's final note stays. Any other session names it in the footer's agents segment
-(`reviewing Symbex-1#25`). The daemon sends these steps only to local terminals, only while a review runs, and stores none of them;
+at work, in one live line: the activity status `Reviewing #25 · analysis · 112 files · incremental… (1m 20s)`, with the PR, the
+phase, the running step's detail and the time. Finished steps are not drawn; when the run ends the line goes and the session's
+final note stays. Any other session, and the watching session while its own turn holds the activity status, names it in the
+footer's agents segment (`reviewing Symbex-1#25`). The daemon sends these steps only to local terminals, only while a review runs, and stores none of them;
 the spinner and the time move with the activity status's own clock, which stops with the run. `showActivity` and
 `activityPlacement off` hide the status as they do for a turn.
 
