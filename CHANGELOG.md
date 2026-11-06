@@ -9,6 +9,10 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+### New
+
+- PR reviews reuse changes already reviewed in merged pull requests, reviewing only the remainder of release PRs and calling no model when nothing else changed.
+
 ### Changed
 
 - A running PR review shows one live line above the prompt with its phase, current step and time, instead of a row per step.
