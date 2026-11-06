@@ -313,7 +313,9 @@ For each developer:
   (stages, findings, stop reason, tokens), `o` to open the PR, `s` for the review session and `S` for the fix session. `p` and
   `u` pause and resume, `x` cancels, and `R` retries (it asks for a reason). `t` takes a job's fix session over, or releases it.
   `c` shows the job's effective config and where each key came from, `/` filters, and `2` shows the watches and reviewers with
-  each one's device and availability.
+  each one's device and availability. The header names only `enter detail · / search · ? keys` (and `esc follow latest` while
+  a job is pinned); `?` lists every key under the tabs. Next to the tabs the page counts only what needs attention (running,
+  queued, waiting, failed) or says `idle`; the Watches tab's ledger keeps the 24-hour totals and tokens.
 - **`/pr list`** shows each watched PR and, for a PR that is not reviewed, why (`draft: waits for ready for review`, `label
   \`no-review\` excluded`). It also shows `jobs: N queued, M waiting`.
 - **`/pr review 42`** reviews one PR now, in your session. Asking your session ("review PR 42") does the same through the

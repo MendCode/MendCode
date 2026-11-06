@@ -50,6 +50,8 @@ export type ReviewRun = {
   info?: ReviewInfo
   /** The repository's `publishers` does not let this reviewer post, or another publisher already did: nothing to ask or hold. */
   notPublisher?: true
+  /** Skipped because this head was already reviewed: `state` holds that review's findings. */
+  reviewedBefore?: true
   /** The config version the run used (`runConfigKey`). */
   configKey?: string
   /** What to keep for the job: the plan's decisions always; with `stop`, the candidates a resume verifies. */
@@ -478,7 +480,7 @@ async function reviewRun(input: RunPrReviewInput, status?: ReturnType<typeof com
   const resume = input.checkpoint?.result && input.checkpoint.result.head === input.head ? input.checkpoint as ReviewCheckpoint : undefined
   if (input.checkpoint && !resume) notes.push(input.checkpoint.result ? `The checkpoint was taken on head ${input.checkpoint.result.head.slice(0, 12)}, not this one: reviewed again from the start.` : "The checkpoint holds no finished review pass: the review pass runs again.")
   const range = await chooseRange({ input, git, full: config.coverage === "full", resume })
-  if (!range) return skipped(`head ${input.head.slice(0, 12)} was already reviewed, so nothing was sent to a model; /pr review ${input.number} full reviews it again whole`)
+  if (!range) return { ...skipped(`head ${input.head.slice(0, 12)} was already reviewed, so nothing was sent to a model; /pr review ${input.number} full reviews it again whole`), reviewedBefore: true as const }
   const incremental = range.incremental
   if (input.onlyIfPublishable && input.publish && config.enabled && (input.gh || input.provider)) {
     const blocked = await publishBlock({ input, config })

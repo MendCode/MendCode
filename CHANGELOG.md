@@ -9,6 +9,11 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+### Changed
+
+- `/reviews` has a quieter header: a few keys with `?` for the rest, and only what needs attention (running, queued, waiting, failed) next to the tabs; the 24-hour totals stay in the Watches tab.
+- `@mendcode review` on a head that was already reviewed now replies with that review's result (its findings, the earlier ones now fixed and those still open) and suggests `@mendcode review full`, instead of a bare "skipped" with a terminal command.
+
 ## v0.0.4-beta.5 - 2026-11-06
 
 Ink, black and white like the website, is the new default theme; the sessions sidebar fits one session per line with a

@@ -25,7 +25,7 @@ import { createPermissions } from "./permissions"
 import { createProfileStore } from "./profile-store"
 import { checkoutForge, forgeName, forgeProvider, gatedOff, parseRemoteUrl } from "./providers"
 import { listAll, publishReview, publishThroughProvider, reviewerFromBody, reviewerMarker, type GhCall } from "./publish"
-import { explainFinding, failureFollowUp, filteredReply, hasWriteAccess, MAINTAINERS_ONLY, nothingNewReply, replyTo, REPLY_MARKER, runPrCommand, type CommandComment, type FixResult, type ReviewSummary } from "./commands"
+import { alreadyReviewedReply, explainFinding, failureFollowUp, filteredReply, hasWriteAccess, MAINTAINERS_ONLY, nothingNewReply, replyTo, REPLY_MARKER, runPrCommand, type CommandComment, type FixResult, type ReviewSummary } from "./commands"
 import { pushKept, runFix, type FixSource } from "./fix"
 import { answersRequest, answeredBy,answeredThrough, answersMarker, headReviewedBy, headReviewedThrough, isMendCodeReview, mayPublish, mayPublishThrough, type PublishCheck } from "./publishers"
 import { readPullRequestInfo } from "./pull-request"
@@ -978,8 +978,13 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
 
   /** The newest finished review of `head` as the job ledger kept it (its result holds the walkthrough and the findings). */
   function lastReviewOf(repo: string, number: number, head: string): ReviewSnapshot | undefined {
-    const job = ledger.list({ repo, number, states: ["done", "running", "fixing", "validating"] }).filter((item) => item.coverage !== "audit" && !item.stop && item.checkpoint.result?.head === head).toSorted((a, b) => b.updatedAt - a.updatedAt)[0]
+    const job = lastReviewJob(repo, number, head)
     return job?.checkpoint.result ? { head, result: job.checkpoint.result } : undefined
+  }
+
+  /** The job behind `lastReviewOf`: its result, and `updatedAt` for when it finished. */
+  function lastReviewJob(repo: string, number: number, head: string): ReviewJob | undefined {
+    return ledger.list({ repo, number, states: ["done", "running", "fixing", "validating"] }).filter((item) => item.coverage !== "audit" && !item.stop && item.checkpoint.result?.head === head).toSorted((a, b) => b.updatedAt - a.updatedAt)[0]
   }
 
   async function commentReview({ sessionId, directory, repo, number, head, actor, full = false }: { sessionId: string; directory: string; repo: string; number: number; head: string; actor: string; full?: boolean }): Promise<ReviewSummary> {
@@ -1037,7 +1042,11 @@ export function createPrReviewService(options: PrReviewServiceOptions) {
       // Published with nothing new on a new head posts no review: the reply then names the head and the earlier findings' state.
       const report = done.report
       const nothingNew = done.status === "published" && report && !report.posted && !report.duplicate ? nothingNewReply({ head, resolved: report.resolved, state: report.state }) : undefined
-      return { status: done.status, reason: local ?? done.reason ?? report?.reason, posted: report?.posted ?? false, ...(nothingNew ? { text: nothingNew } : {}) }
+      // A head already reviewed ran nothing: the reply gives that review's result, never just "skipped".
+      const before = done.status === "skipped" && done.reviewedBefore ? lastReviewJob(repo, number, head) : undefined
+      const already = done.status === "skipped" && done.reviewedBefore ? alreadyReviewedReply({ head, state: done.state, result: before?.checkpoint.result, at: before?.updatedAt, now: now() }) : undefined
+      const text = nothingNew ?? already
+      return { status: done.status, reason: local ?? done.reason ?? report?.reason, posted: report?.posted ?? false, ...(text ? { text } : {}) }
     } catch (error) {
       const current = ledger.get(job.id)
       if (current && IN_FLIGHT.has(current.state)) move(job.id, "failed", { attempts: current.attempts + 1, error: errorText(error).slice(0, 2000) })

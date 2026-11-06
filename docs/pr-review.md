@@ -214,7 +214,8 @@ tier). Local sessions only; remote and peer clients are refused.
 - `/pr review [pr]` reviews one pull request now (the current branch's when omitted), even when the repo config is off; posting still
   needs `enabled: true`. A head already reviewed with the same config is answered at once ("already reviewed at …, so nothing was
   run"), before anything is spent; `/pr review [pr] full` (the tool's `full: true`) reviews it again whole. A plain `@mendcode review` on such a head is
-  skipped the same way. A head that only has a partial review (it reached the cap) is not reviewed: `/pr review` continues it with
+  skipped the same way, and its reply gives that review's result: when it ran, its new findings, the earlier findings now fixed
+  and those still open, by severity, and `@mendcode review full` to review the whole pull request again. A head that only has a partial review (it reached the cap) is not reviewed: `/pr review` continues it with
   what is missing.
 - The `pr_review` tool is the model's way to do the same. It has two actions:
   - `review` follows the session's permission mode like a command: full access runs it, other modes ask ("Review a pull

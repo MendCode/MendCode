@@ -6,7 +6,7 @@ import { canCancel, canPause, canRelease, canResume, canRetry, canTakeOver, list
 /**
  * Keys of the reviews page (`reviews-page.ts`). Pure: a key gives the next page state and at most one action; the app sends the
  * action's `pr.review` command (`reviewsCommand`) and never decides what a key means. Destructive actions ask first (`x` cancel,
- * `t` take over or release); a retry needs a typed reason.
+ * `t` take over or release); a retry needs a typed reason. `?` shows or hides every key of the jobs tab; esc hides it first.
  */
 
 export type ReviewsJobAction = "job-pause" | "job-resume" | "job-cancel" | "job-retry" | "take-over" | "release"
@@ -103,6 +103,14 @@ export function reviewsPageKey(state: ReviewsPageState, key: string, dashboard: 
     if (key === PAGE_UP || key === PAGE_DOWN) return keep({ ...state, scroll: Math.max(0, state.scroll + (key === PAGE_UP ? -10 : 10)) })
     return keep(state)
   }
+
+  if (key === "?" && state.tab === 0) {
+    if (!state.keys) return keep({ ...state, keys: true })
+    const { keys: _hidden, ...rest } = state
+    void _hidden
+    return keep(rest)
+  }
+  if (key === ESC && state.keys) { const { keys: _hidden, ...rest } = state; void _hidden; return keep(rest) }
 
   const filtered = state.filter.text !== "" || state.filter.state !== "all" || state.filter.repo !== undefined
   if (key === "q") return { state, action: { type: "close" } }

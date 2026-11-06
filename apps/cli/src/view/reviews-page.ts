@@ -2,7 +2,7 @@ import type { PrJobSummary, PrReviewConfigView, PrReviewDashboard, PrReviewerSum
 import { isCompact, isWide } from "../ui/breakpoints"
 import { glyphs as defaultGlyphs, type ColorName, type Glyphs, type Line, type Span } from "../ui/theme"
 import { fit, panelGrid, spread, type GridPanel } from "./deck"
-import { compact, thousands } from "./format"
+import { thousands } from "./format"
 import { tabsRow, type PageTab } from "./page"
 import { pickerFrame } from "./picker-frame"
 import { relativeTime, timeAgo } from "./session-list"
@@ -109,6 +109,8 @@ export type ReviewsPageState = {
   /** `R` asked for the reason a retry is sent with. */
   reason?: { jobId: string; number: number; text: string }
   config?: ReviewsConfigState
+  /** `?` opened the list of every key under the tabs; `?` or esc closes it. */
+  keys?: boolean
 }
 
 export const MAX_FILTER_TEXT = 100
@@ -499,45 +501,84 @@ function ledgerRows(dashboard: PrReviewDashboard, width: number): Line[] {
   ].map((line) => clampLine(line, width))
 }
 
-/** The metrics in one plain line for the tab row, shortened to fit `width`; empty without data. */
-export function metricsSummary(dashboard: PrReviewDashboard | undefined, width: number): string {
-  if (!dashboard) return ""
+/**
+ * What needs attention, for the tab row: running (behind the activity spinner), queued, waiting and failed, each only when
+ * non-zero, "idle" when all are zero, empty without data. The 24-hour totals and tokens live in the Watches tab's ledger.
+ * Counts that do not fit `width` are dropped from the end.
+ */
+export function metricsSummary(dashboard: PrReviewDashboard | undefined, width: number, spinner: string = SPINNER_FRAMES[0]!): Span[] {
+  if (!dashboard) return []
   const m = dashboard.metrics
-  const tokens = `${compact(m.tokens24h.input)} in · ${compact(m.tokens24h.output)} out`
-  const options = [
-    `${m.running}/${m.concurrency} running · ${m.queued} queued · ${m.waiting} waiting · 24h ${m.done24h} done · ${m.failed24h} failed · ${tokens}`,
-    `${m.running}/${m.concurrency} running · ${m.queued} queued · ${m.waiting} waiting · 24h ${m.done24h} done · ${m.failed24h} failed`,
-    `${m.running}/${m.concurrency} running · ${m.queued} queued · ${m.waiting} waiting`,
-    `${m.running}/${m.concurrency} running`,
-  ]
-  return options.find((text) => textWidth(text) <= width) ?? ""
+  const counts: Array<[number, string, ColorName]> = [[m.running, "running", "text"], [m.queued, "queued", "muted"], [m.waiting, "waiting", "muted"], [m.failed24h, "failed", "error"]]
+  const shown = counts.filter(([count]) => count > 0)
+  if (!shown.length) return textWidth("idle") <= width ? [{ text: "idle", fg: "muted", dim: true }] : []
+  for (let take = shown.length; take > 0; take--) {
+    const spans = shown.slice(0, take).flatMap(([count, label, fg], index): Span[] => [
+      ...(index ? [{ text: " · ", fg: "muted" as ColorName }] : []),
+      ...(label === "running" ? [{ text: `${spinner} `, fg: "primary" as ColorName }] : []),
+      { text: `${count} ${label}`, fg },
+    ])
+    if (textWidth(spans.map((span) => span.text).join("")) <= width) return spans
+  }
+  return []
+}
+
+/** Every key of the jobs tab with what it does, for the `?` section. */
+const PAGE_KEYS: ReadonlyArray<readonly [string, string]> = [
+  ["↑↓", "select"], ["g G", "first, last"], ["enter", "detail"], ["/", "search"], ["f F", "state filter"], ["m", "repo filter"],
+  ["o", "open PR"], ["s", "review session"], ["S", "fix session"], ["p", "pause"], ["u", "resume"], ["R", "retry (asks why)"],
+  ["x", "cancel"], ["t", "take over, release"], ["c", "config"], ["1 2 tab", "jobs, watches"], ["r", "refresh"],
+  ["esc", "follow latest, back"], ["q", "close"], ["?", "hide keys"],
+]
+
+const KEY_GAP = 2
+const COLUMN_GAP = 4
+
+/** Rows of the keys in `columns` columns, read down each column; each column as wide as its longest key and meaning. */
+function keyColumns(columns: number) {
+  const rows = Math.ceil(PAGE_KEYS.length / columns)
+  const sets = Array.from({ length: columns }, (_, column) => PAGE_KEYS.slice(column * rows, (column + 1) * rows))
+  const widths = sets.map((set) => ({ key: Math.max(0, ...set.map(([key]) => textWidth(key))), meaning: Math.max(0, ...set.map(([, meaning]) => textWidth(meaning))) }))
+  const total = widths.reduce((sum, w) => sum + w.key + KEY_GAP + w.meaning, 0) + COLUMN_GAP * (columns - 1)
+  return { rows, sets, widths, total }
+}
+
+/** The `?` section: the keys in as many columns as fit (at most five), indented like the tabs. */
+function keysRows(width: number): Line[] {
+  let layout = keyColumns(1)
+  for (let columns = 5; columns > 1; columns--) {
+    const candidate = keyColumns(columns)
+    if (candidate.total + 1 <= width) { layout = candidate; break }
+  }
+  const { rows, sets, widths } = layout
+  return Array.from({ length: rows }, (_, row) => clampLine([{ text: " " }, ...sets.flatMap((set, column): Span[] => {
+    const entry = set[row]
+    if (!entry) return []
+    const [key, meaning] = entry
+    const last = column === sets.length - 1 || !sets[column + 1]?.[row]
+    const pad = last ? "" : " ".repeat(widths[column]!.meaning - textWidth(meaning) + COLUMN_GAP)
+    return [{ text: key + " ".repeat(widths[column]!.key - textWidth(key) + KEY_GAP), fg: "text", bold: true }, { text: meaning + pad, fg: "muted" }]
+  })], width))
 }
 
 // ── Page ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
-const PAGE_TABS: PageTab[] = [{ key: "1", label: "Jobs" }, { key: "2", label: "Watches & reviewers", short: "Watches" }]
+const PAGE_TABS: PageTab[] = [{ key: "1", label: "Jobs" }, { key: "2", label: "Watches" }]
 
-/** The keys shown in the header, the most useful first (the header keeps those that fit), for what the selected job allows. */
+/**
+ * The keys shown in the header: a few, with `?` for the rest (`PAGE_KEYS`), plus at most one that matters right now (esc while a
+ * job is pinned or a filter is on). The last one always stays when the header is narrow.
+ */
 export function reviewsHints(state: ReviewsPageState, job: PrJobSummary | undefined): string {
   if (state.typing) return SEARCH_HINT
   if (state.reason) return "type the reason · enter retry · esc cancel"
   if (state.config) return "↑↓ scroll · esc back"
   if (state.tab === 1) return "↑↓ scroll · 1 jobs · r refresh · esc back"
-  const actions = job ? [
-    ...(job.url ? ["o open PR"] : []),
-    ...(job.sessionId ? ["s session"] : []),
-    ...(job.fixSessionId ? ["S fix session"] : []),
-    ...(canResume(job) ? ["u resume"] : []),
-    ...(canPause(job) ? ["p pause"] : []),
-    ...(canRetry(job) ? ["R retry"] : []),
-    ...(canCancel(job) ? ["x cancel"] : []),
-    ...(canTakeOver(job) ? ["t take over"] : canRelease(job) ? ["t release"] : []),
-    "c config",
-  ] : []
-  const parts = state.detail
-    ? [...actions, "↑↓ scroll", "r refresh", "esc back"]
-    : [...(job ? ["enter detail"] : []), "/ search", ...actions, "f state", "m repo", "↑↓ select", "2 watches", "r refresh", state.selectedId !== undefined ? "esc follow latest" : "esc back"]
-  return parts.join(" · ")
+  const keys = state.keys ? "? hide keys" : "? keys"
+  if (state.detail) return ["↑↓ scroll", keys, "esc back"].join(" · ")
+  const filtered = state.filter.text !== "" || state.filter.state !== "all" || state.filter.repo !== undefined
+  const context = state.keys ? [] : state.selectedId !== undefined ? ["esc follow latest"] : filtered ? ["esc clear filter"] : []
+  return [...(job ? ["enter detail"] : []), "/ search", keys, ...context].join(" · ")
 }
 
 /** The question or input that replaces the top row of the active panel: a confirm, the retry reason or the filter being typed. */
@@ -618,7 +659,10 @@ export function renderReviewsPage(input: { data: ReviewsData; state: ReviewsPage
   const per = latestPerPr(dashboard?.jobs ?? [])
   const live = liveRuns(input.activity, now)
   const detailOf = (w: number) => jobDetailRows(job!, w, now, { live: live.get(job!.id), earlier: per.history.get(job!.id), spinner })
-  const room = Math.max(0, height - 2)
+  const keys = state.keys && state.tab === 0 && !state.config && dashboard && data.status !== "remote" ? keysRows(width) : []
+  // The keys section leaves the panels at least four rows, and a blank row parts it from them.
+  const keyLines = keys.length ? [...keys.slice(0, Math.max(1, height - 7)), []] : []
+  const room = Math.max(0, height - 2 - keyLines.length)
   const hints = reviewsHints(state, job)
   const status = offline ? "daemon offline" : data.status === "error" && dashboard ? "refresh failed" : ""
   const title = `Reviews${state.filter.repo ? ` · ${state.filter.repo}` : ""}${status ? ` · ${status}` : ""}`
@@ -652,11 +696,11 @@ export function renderReviewsPage(input: { data: ReviewsData; state: ReviewsPage
       ] })
     } else body = single({ title: listTitle, body: (w) => listRows({ dashboard, state, job, per, live, spinner, width: w, room: panelRoom(width, room), now, glyphs }) })
   }
-  const frame = pickerFrame(title, hints, width, height, body)
+  const frame = pickerFrame(title, hints, width, height, [...keyLines, ...body])
   if (height > 1) {
     const tabs = tabsRow(PAGE_TABS, state.tab, Math.max(1, Math.floor(width / 2)))
-    const summary = metricsSummary(dashboard, Math.max(0, width - textWidth(tabs.map((span) => span.text).join("")) - 2))
-    frame[1] = fit(spread(tabs, summary ? [{ text: summary, fg: "muted" }] : [], width), width)
+    const summary = metricsSummary(dashboard, Math.max(0, width - textWidth(tabs.map((span) => span.text).join("")) - 2), spinner)
+    frame[1] = fit(spread(tabs, summary, width), width)
   }
   return frame
 }

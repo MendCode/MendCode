@@ -71,7 +71,9 @@ describe("reviews page render", () => {
       const out = screen(rows)
       expect(out).toContain("Reviews")
       expect(out).toContain("1 Jobs")
-      expect(out).toContain("1/2 running")
+      expect(out).toContain("⠋ 1 running · 1 queued · 1 waiting · 1 failed")
+      expect(out).toContain("enter detail · / search · ? keys")
+      expect(out).not.toMatch(/24h|\d+ done|\d out\b|2 watches/)
       // 80x24 shows the list above a detail preview, so only the first groups fit; the selected job is the first one.
       const labels = height >= 40 ? ["Running", "Fixing · validating", "Waiting · offline", "Checkpointed", "Pending"] : ["Running", "Fixing · validating"]
       const order = labels.map((label) => out.indexOf(label))
@@ -166,8 +168,38 @@ describe("reviews page render", () => {
   })
 
   test("metrics never invent a number: without a dashboard the summary is empty", () => {
-    expect(metricsSummary(undefined, 200)).toBe("")
-    expect(metricsSummary(dashboard([]), 30)).toBe("1/2 running")
+    expect(metricsSummary(undefined, 200)).toEqual([])
+  })
+
+  test("the tab row counts only what needs attention: non-zero running, queued, waiting and failed, else idle", () => {
+    const words = (spans: ReturnType<typeof metricsSummary>) => spans.map((span) => span.text).join("")
+    const base = dashboard([])
+    expect(words(metricsSummary(base, 200, "⠙"))).toBe("⠙ 1 running · 1 queued · 1 waiting · 1 failed")
+    expect(words(metricsSummary(base, 20))).toBe("⠋ 1 running")
+    const some = { ...base, metrics: { ...base.metrics, running: 0, waiting: 0 } }
+    expect(words(metricsSummary(some, 200))).toBe("1 queued · 1 failed")
+    const idle = { ...base, metrics: { ...base.metrics, running: 0, queued: 0, waiting: 0, failed24h: 0 } }
+    expect(metricsSummary(idle, 200)).toEqual([{ text: "idle", fg: "muted", dim: true }])
+  })
+
+  test("? lists every key under the tabs and hides it again; esc hides it before it unpins or leaves", () => {
+    const data = dashboard(populated())
+    const opened = reviewsPageKey(createReviewsPageState(), "?", data).state
+    expect(opened.keys).toBe(true)
+    const out = screen(render(ready(), opened, 200, 40))
+    for (const meaning of ["open PR", "retry (asks why)", "config", "state filter", "repo filter", "select", "refresh", "follow latest, back", "take over, release", "hide keys"]) expect(out).toContain(meaning)
+    expect(out).toContain("enter detail · / search · ? hide keys")
+    exactSize(render(ready(), opened, 80, 24), 80, 24)
+    expect(reviewsPageKey(opened, "?", data).state.keys).toBeUndefined()
+    const escaped = reviewsPageKey(opened, "\x1b", data)
+    expect(escaped.action.type).toBe("none")
+    expect(escaped.state.keys).toBeUndefined()
+    expect(screen(render(ready(), createReviewsPageState(), 200, 40))).not.toContain("retry (asks why)")
+  })
+
+  test("the header names one context key at most: esc clear filter while a filter is on", () => {
+    const filtered = reviewsPageKey(createReviewsPageState(), "f", dashboard(populated())).state
+    expect(screen(render(ready(), filtered, 200, 40))).toContain("? keys · esc clear filter")
   })
 })
 

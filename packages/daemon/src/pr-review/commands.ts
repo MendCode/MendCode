@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto"
-import type { PrFinding } from "@mendcode/protocol"
+import { PR_FINDING_SEVERITIES, type PrFinding, type PrReviewResult } from "@mendcode/protocol"
 import type { ReviewSessionFactory } from "./engine"
 import type { ReviewProvider } from "./contracts"
 import { findingFromComment, type GhCall } from "./publish"
@@ -100,6 +100,46 @@ export function nothingNewReply({ head, resolved, state }: { head: string; resol
     for (const finding of open.slice(0, 10)) lines.push(`- \`${finding.path}:${finding.line}\` ${finding.summary.replace(/\s+/g, " ").slice(0, 160)}`)
     if (open.length > 10) lines.push(`- and ${open.length - 10} more`)
   } else if (Object.keys(state.published).length) lines.push("Every earlier finding is resolved.")
+  return lines.join("\n")
+}
+
+const sinceText = (ms: number) => {
+  const unit = (count: number, word: string) => `${count} ${word}${count === 1 ? "" : "s"} ago`
+  if (ms < 60_000) return "just now"
+  if (ms < 3_600_000) return unit(Math.round(ms / 60_000), "minute")
+  if (ms < 86_400_000) return unit(Math.round(ms / 3_600_000), "hour")
+  return unit(Math.round(ms / 86_400_000), "day")
+}
+
+/** "1 major, 2 minor", most severe first. */
+const bySeverity = (findings: readonly PrFinding[]) => PR_FINDING_SEVERITIES.flatMap((severity) => {
+  const count = findings.filter((finding) => finding.severity === severity).length
+  return count ? [`${count} ${severity}`] : []
+}).join(", ")
+
+/** "the earlier major finding is fixed", "2 earlier findings are fixed (1 major, 1 minor)". */
+const fixedText = (fixed: readonly PrFinding[]) =>
+  fixed.length === 1 ? `the earlier ${fixed[0]!.severity} finding is fixed` : `${fixed.length} earlier findings are fixed (${bySeverity(fixed)})`
+
+/**
+ * The reply to `@mendcode review` on a head that was already reviewed, so nothing ran: that review's result in plain words (when, what
+ * it found, which earlier findings are fixed and which are still open) and the comment that reviews the whole pull request again.
+ * `result`/`at`: the stored review of `head` and when it finished, when the job ledger still holds it; `state`: the saved findings.
+ */
+export function alreadyReviewedReply({ head, state, result, at, now = Date.now() }: { head: string; state: ReviewState; result?: PrReviewResult | undefined; at?: number | undefined; now?: number }): string {
+  const entries = Object.values(state.published).flatMap((entry) => entry.finding ? [{ finding: entry.finding, resolved: entry.resolved === true }] : [])
+  const fixed = entries.filter((entry) => entry.resolved).map((entry) => entry.finding)
+  const open = entries.filter((entry) => !entry.resolved).map((entry) => entry.finding)
+  const found = result ? (result.findings.length ? `${result.findings.length} new finding${result.findings.length === 1 ? "" : "s"} (${bySeverity(result.findings)})` : "no new findings") : undefined
+  const parts = [found, fixed.length ? fixedText(fixed) : undefined].filter((part): part is string => !!part)
+  if (!parts.length) parts.push(open.length ? `${open.length} finding${open.length === 1 ? " is" : "s are"} open` : "no findings")
+  const lines = [`Already reviewed ${head.slice(0, 7)}${at === undefined ? "" : ` (${sinceText(Math.max(0, now - at))})`}: ${parts.join("; ")}.`]
+  if (open.length) {
+    lines.push(`Still open (${open.length}):`)
+    for (const finding of open.slice(0, 10)) lines.push(`- \`${finding.path}:${finding.line}\` (${finding.severity}) ${finding.summary.replace(/\s+/g, " ").slice(0, 160)}`)
+    if (open.length > 10) lines.push(`- and ${open.length - 10} more`)
+  }
+  lines.push("Comment `@mendcode review full` to review the whole pull request again.")
   return lines.join("\n")
 }
 
