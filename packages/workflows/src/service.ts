@@ -391,7 +391,7 @@ export function createWorkflowService(options: {
     put(execution ? { ...current, tasks: current.tasks.map((task) => task.id === taskId ? { ...task, execution } : task) } : current)
     const run$ = options.runCheck
     const stdin = run.script ? scripts.stdinOf(run, taskId) : undefined
-    const gates = run$ ? runChecks({ checks: [command], cwd: execution?.directory ?? run.directory, signal: controller.signal, run: run$, timeouts: [timeoutSeconds], ...(stdin !== undefined ? { stdin } : {}) }) : Promise.resolve([{ id: command, status: "fail" as const, detail: "checks cannot run in this daemon" }])
+    const gates = run$ ? runChecks({ checks: [command], cwd: execution?.directory ?? run.directory, signal: controller.signal, run: run$, timeouts: [timeoutSeconds], ...(run.script ? { keepOutput: true } : {}), ...(stdin !== undefined ? { stdin } : {}) }) : Promise.resolve([{ id: command, status: "fail" as const, detail: "checks cannot run in this daemon" }])
     void gates.then(([gate]) => {
       if (checks.get(key) !== controller) return
       checks.delete(key)

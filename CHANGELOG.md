@@ -30,6 +30,7 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ### Fixed
 
+- A workflow script's `check()` that passes now gets the command's output in `detail`, as a failing one already did, instead of just "pass".
 - The first-run setup shows each tool and login it found (Codex, Claude Code, ChatGPT, API keys, pi) as a row you can act on: use Codex as its own harness, sign MendCode in with your ChatGPT account and come back with your choices kept, use Claude Code, or add a key. Using Codex this way works in every tier and leaves your tier as it is (`/tier codex_engine on|off`). With nothing that can answer yet, it no longer offers to start chatting with a model that does not exist; it offers to skip for now instead.
 - A compaction threshold written as a fraction (such as 0.8 for 80%) now compacts at that share of the context window instead of right away on an almost empty session; the threshold is a percent of the window, and a new value above 100 or not above 0 is refused with a message saying so.
 - The agent gives a session's full id (`ses_…`), which `mendcode attach` takes, instead of a short code, and `/sessions` finds a session by its full id or the short end of it.

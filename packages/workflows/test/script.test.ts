@@ -172,6 +172,18 @@ describe("script runs", () => {
     expect(stored).toMatch(/stdinBytes\\*":26/)
   })
 
+  test("a passing check() gives the script the command's output, after an exit line, so it can read what the command printed", async () => {
+    const h = scriptHarness({ responder: () => "x" })
+    const run = h.start(wf(`
+      const passed = await check("git rev-parse --show-toplevel")
+      return { ok: passed.ok, last: passed.detail.split("\\n").at(-1), first: passed.detail.split("\\n")[0] }
+    `))
+    await settle(30)
+    const done = h.get(run)
+    expect(done.state).toBe("completed")
+    expect(JSON.parse(done.script!.result!)).toEqual({ ok: true, last: "ok", first: "exit 0" })
+  })
+
   test("check() refuses stdin over 1024 KB or that is not a string, without running anything", async () => {
     const h = scriptHarness({ responder: () => "x" })
     const run = h.start(wf(`
