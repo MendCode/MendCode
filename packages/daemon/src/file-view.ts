@@ -1,7 +1,7 @@
 import { constants } from "node:fs"
 import { lstat, open, opendir, realpath, stat } from "node:fs/promises"
 import path from "node:path"
-import { FILE_VIEW_MAX_BYTES, FILE_VIEW_MAX_ENTRIES, FILE_VIEW_MAX_HITS, FILE_VIEW_MAX_LINE, FILE_VIEW_MAX_REPLY_BYTES, FILE_VIEW_MAX_ROWS, FILE_VIEW_MAX_SCAN, isHighlighted, lexEntry, redactSecrets, type FileView, type FileViewEntry, type FileViewKind } from "@mendcode/protocol"
+import { fileSignature, FILE_VIEW_MAX_BYTES, FILE_VIEW_MAX_ENTRIES, FILE_VIEW_MAX_HITS, FILE_VIEW_MAX_LINE, FILE_VIEW_MAX_REPLY_BYTES, FILE_VIEW_MAX_ROWS, FILE_VIEW_MAX_SCAN, isHighlighted, lexEntry, redactSecrets, type FileView, type FileViewEntry, type FileViewKind } from "@mendcode/protocol"
 import { projectPath } from "./file-rest"
 import { FileApiError } from "./file-rest-process"
 
@@ -90,7 +90,7 @@ export async function viewFile(input: { directory: string; path: string; from?: 
   if (!info) return answer("missing", shown)
   if (info.isDirectory()) return listFolder(resolved, shown).catch(() => answer("directory", shown))
   if (!info.isFile()) return answer("special", shown)
-  const version = `${info.size}:${Math.round(info.mtimeMs)}`
+  const version = fileSignature(info)
   const base = { size: info.size, version }
   if (input.known === version) return { path: shown, kind: "text", ...base, unchanged: true }
   const extension = path.extname(shown).slice(1).toLowerCase()

@@ -47,12 +47,12 @@ describe("precedence from the CLI", () => {
     expect(parsed("control-plane", "system", "precedence")).toMatchObject({ kind: "system", operation: "precedence" })
     const claims = [
       { surface: "skills", name: "review", layer: "user", rank: 1 },
-      { surface: "skills", name: "review", layer: "package user:kit", rank: 0 },
+      { surface: "skills", name: "review", layer: "profile user:kit", rank: 0 },
       { surface: "skills", name: "review", layer: "project", rank: 3 },
     ]
-    const text = systemText({ operation: "precedence", ok: true, checks: [], failures: [], facts: { claims, layers: ["package user:kit", "user", "project"], truncated: false } })
+    const text = systemText({ operation: "precedence", ok: true, checks: [], failures: [], facts: { claims, layers: ["profile user:kit", "user", "project"], truncated: false } })
     expect(text).toContain("Skills")
-    expect(text).toContain("- review: project · overrides user, package user:kit")
+    expect(text).toContain("- review: project · overrides user, profile user:kit")
     expect(completionScript("bash")).toContain("precedence")
   })
 })
@@ -148,8 +148,8 @@ describe("slash commands", () => {
     expect(h.sentOf("session.model.set")[0]).toMatchObject({ choice: { model: "claude-sonnet-5-5", fast: true } })
     expect(h.sentOf("settings.set")).toHaveLength(0)
     expect(screen(h)).toContain("fast mode on · not applied to Sonnet 5.5 (Claude")
-    // The footer says the same: the mark is there, muted, with n/a (an item of its own beside the model now).
-    expect(screen(h)).toContain("Sonnet 5.5 · fast n/a")
+    // The footer says the same: the mark is there, muted, with n/a (beside the model in the default pack).
+    expect(screen(h)).toContain("Sonnet 5.5 fast n/a")
     await h.type("/fast status\r")
     expect(screen(h)).toContain("fast mode on · not applied to Sonnet 5.5 (Claude")
   })

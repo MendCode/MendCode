@@ -1,6 +1,6 @@
 import { existsSync, readdirSync } from "node:fs"
 import path from "node:path"
-import { FEATURES, featureState, type FeatureId, type TierSettings } from "@mendcode/protocol/wire"
+import { FEATURES, effectiveSettings, featureState, type FeatureId, type TierSettings } from "@mendcode/protocol/wire"
 import type { LiveContext } from "./docs-live"
 
 /**
@@ -17,7 +17,7 @@ export function featureLine(settings: Record<string, unknown>, id: FeatureId): s
   const state = featureState(settings as TierSettings, id)
   const why = { tier: `tier ${String(settings.tier)}`, legacy: "no tier set: its default", override: `your features.${id}`, setting: `your ${spec.flag ?? "flag"} switch`, "safe-mode": "safe mode" }[state.why]
   if (state.on && spec.mode === "permit" && spec.flag) {
-    const experimental = (settings.experimental ?? {}) as Record<string, unknown>
+    const experimental = (effectiveSettings(settings as TierSettings).experimental ?? {}) as Record<string, unknown>
     return experimental[spec.flag] === true ? `${spec.label}: on (${why}, and experimental.${spec.flag} is on)` : `${spec.label}: allowed (${why}) but off · the user turns it on with /experimental ${spec.flag} on`
   }
   if (spec.optIn) return state.on ? `${spec.label}: on (${why})` : `${spec.label}: off · the user turns it on with /tier ${id} on`
@@ -51,7 +51,7 @@ export const fileLine = (file: string, label = path.basename(file)) => `${label}
 
 /** The lines of a feature card: the features it is about, then its settings, or the daemon note when none runs. */
 export function withSettings(context: LiveContext, build: (settings: Record<string, unknown>) => string[]): string[] {
-  return context.settings ? build(context.settings) : [NO_DAEMON]
+  return context.settings ? build(context.settings) : [context.daemonUnanswered ? "(daemon did not answer: daemon settings not shown)" : NO_DAEMON]
 }
 
 /** A card about some features: one line each, then the values of the settings it names (with their defaults) when there are any. */
@@ -72,7 +72,7 @@ export const FEATURE_PROVIDERS: Record<string, Provider> = {
     settingsLine(settings, { subagentDepth: 1, subagentMaxChildren: 4, subagentMaxDescendants: 16, subagentOwnerWake: true, subagentCatalog: 6, agentMentions: "address" }),
     folderLine(context, "agents"),
   ]),
-  git: aboutFeatures(["git_hub", "git_actions", "worktree_tool", "pr_watch", "review_order"], { worktreeGcDays: "off" }),
+  git: aboutFeatures(["git_hub", "git_actions", "worktree_tool", "pr_watch", "review_order"], { worktreeGcDays: 14, worktreeCapGb: "off" }),
   codegraph: aboutFeatures(["codegraph", "graph_context", "orientation", "lean_tools"]),
   computer: aboutFeatures(["computer", "browser"]),
   web: aboutFeatures(["webfetch_modes", "web_routing"], {}, (_context, settings) => [
@@ -82,7 +82,7 @@ export const FEATURE_PROVIDERS: Record<string, Provider> = {
   reasoning: aboutFeatures(["jev"]),
   pet: aboutFeatures(["pets", "pet_generator"]),
   tools: aboutFeatures(["lean_tools", "tool_discovery", "code_mode", "output_filters"]),
-  packages: aboutFeatures(["packages", "package_tools", "package_capabilities", "official_packages"]),
+  profiles: aboutFeatures(["profiles", "profile_tools", "profile_capabilities", "official_profiles"]),
   memory: aboutFeatures(["memory_ux"], { memoryEnabled: true, memoryUse: false, memoryGenerate: false, memoryRequireApproval: true, memoryMaxEntries: 50, memoryMaxPromptTokens: 10_000, dreamAt: "off" }),
   goals: aboutFeatures(["plan_tools"]),
   threads: aboutFeatures(["threads", "handoff"]),

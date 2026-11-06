@@ -12,6 +12,23 @@ const script = path.join(import.meta.dir, "install.sh")
 const body = "#!/bin/sh\nprintf 'fake mendcode\\n'\n"
 const hash = sha256Hex(new TextEncoder().encode(body))
 
+test("installer refuses older stable and prerelease versions unless forced", () => {
+  for (const [current, target] of [["2.0.0", "1.2.3"], ["1.2.3", "1.2.3-beta.9"], ["1.2.3-beta.10", "1.2.3-beta.9"]]) {
+    const box = fixture("Linux", "x86_64", true, target)
+    mkdirSync(box.install)
+    const original = `#!/bin/sh\nprintf '${current} (stable)\\n'\n`
+    writeFileSync(path.join(box.install, "mendcode"), original, { mode: 0o755 })
+    const denied = box.run()
+    expect(denied.exitCode).toBe(1)
+    expect(denied.stderr.toString()).toContain(`v${current} → v${target}`)
+    expect(readFileSync(path.join(box.install, "mendcode"), "utf8")).toBe(original)
+    const forced = box.run({}, ["--force"])
+    expect(forced.exitCode).toBe(0)
+    expect(forced.stderr.toString()).toContain("warning: downgrade")
+    expect(readFileSync(path.join(box.install, "mendcode"), "utf8")).toBe(body)
+  }
+})
+
 function fixture(os = "Linux", arch = "x86_64", hashing = true, version = "1.2.3") {
   const dir = mkdtempSync(path.join(tmpdir(), "mend-install-"))
   temps.push(dir)
@@ -47,8 +64,8 @@ for (const [os, arch] of [["Darwin", "arm64"], ["Darwin", "x86_64"], ["Linux", "
     expect({ code: result.exitCode, stderr: result.stderr.toString() }).toEqual({ code: 0, stderr: "" })
     expect(readFileSync(path.join(box.install, "mendcode"), "utf8")).toBe(body)
     expect(statSync(path.join(box.install, "mendcode")).mode & 0o777).toBe(0o755)
-    expect(readdirSync(box.install).sort()).toEqual([".mendcode-v2-install", "mendcode"])
-    expect(readFileSync(path.join(box.install, ".mendcode-v2-install"), "utf8")).toBe(`schema=mendcode-v2.install.v1\nbinary=mendcode\nsha256=${hash}\ntier=balanced\n`)
+    expect(readdirSync(box.install).sort()).toEqual([".mendcode-install", "mendcode"])
+    expect(readFileSync(path.join(box.install, ".mendcode-install"), "utf8")).toBe(`schema=mendcode.install.v1\nbinary=mendcode\nsha256=${hash}\ntier=balanced\n`)
     expect(result.stdout.toString()).toContain("PATH")
     expect(existsSync(path.join(box.dir, "home"))).toBe(false)
   })
@@ -264,6 +281,53 @@ test("without gh the channel is read from the public API with the same ordering,
   } finally { server.stop(true) }
 })
 
+// The nightly workflow keeps one release tagged `nightly`; its files are named and signed under the versioned tag of the build it holds.
+function movingNightly(box: ReturnType<typeof fixture>, version: string) {
+  const held = path.join(box.dir, "release", "download", "nightly")
+  mkdirSync(held, { recursive: true })
+  writeFileSync(path.join(held, box.name.replace(/mendcode-[^-]*-nightly\.\d+\.\d+/, `mendcode-${version}`)), body)
+  writeFileSync(path.join(held, "SHA256SUMS"), `${hash}  mendcode-${version}-linux-x64\n`)
+  return held
+}
+
+test("an exact nightly tag is installed from the moving nightly release when that holds its build, and from its own release otherwise", () => {
+  const newer = "0.0.1-nightly.20261007.3"
+  const box = fixture("Linux", "x86_64", true, newer)
+  rmSync(box.assets, { recursive: true })
+  movingNightly(box, newer)
+  const result = box.run()
+  expect({ code: result.exitCode, stderr: result.stderr.toString() }).toEqual({ code: 0, stderr: "" })
+  expect(result.stdout.toString()).toContain(`Installed mendcode ${newer}`)
+  // An older build has no release any more; its tag still resolves where a release for it exists.
+  const older = fixture("Linux", "x86_64", true, NIGHTLY)
+  movingNightly(older, newer)
+  expect(older.run().exitCode).toBe(0)
+  const gone = fixture("Linux", "x86_64", true, NIGHTLY)
+  rmSync(gone.assets, { recursive: true })
+  movingNightly(gone, newer)
+  expect(gone.run().exitCode).toBe(1)
+})
+
+test("the nightly channel takes the build of the moving nightly release over older per-build nightlies, and other channels ignore it", async () => {
+  const newer = "0.0.1-nightly.20261007.3"
+  const box = fixture("Linux", "x86_64", true, newer)
+  rmSync(box.assets, { recursive: true })
+  movingNightly(box, newer)
+  const listing = [["v0.0.1-nightly.20261005.12", "true"], ["v0.0.1-beta.2", "true"], ["nightly", "true"]]
+  const pretty = JSON.stringify(listing.map(([tag, pre]) => ({ tag_name: tag, draft: false, prerelease: pre === "true", assets: [] })), null, 2)
+  const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: (request) => new URL(request.url).pathname === "/releases" ? new Response(pretty) : new Response("unexpected", { status: 404 }) })
+  try {
+    for (const [channel, expected] of [["nightly", `Installed mendcode ${newer}`], ["beta", "error: cannot download SHA256SUMS of v0.0.1-beta.2"]] as const) {
+      const running = Bun.spawn(["/bin/sh", script, "--channel", channel], {
+        env: { HOME: path.join(box.dir, "home"), PATH: box.tools, FAKE_OS: "Linux", FAKE_ARCH: "x86_64", MENDCODE_INSTALL_DIR: box.install, MENDCODE_DOWNLOAD_BASE: pathToFileURL(path.join(box.dir, "release")).href, MENDCODE_API_BASE: `http://127.0.0.1:${server.port}`, MENDCODE_ALLOW_UNSIGNED: "1" },
+        stdout: "pipe", stderr: "pipe",
+      })
+      const [stderr, stdout] = await Promise.all([new Response(running.stderr).text(), new Response(running.stdout).text()])
+      expect(stdout + stderr).toContain(expected)
+    }
+  } finally { server.stop(true) }
+})
+
 test("an unknown channel, a channel with an exact version and a stray argument are refused", () => {
   const box = fixture()
   for (const [extra, args, message] of [[{ MENDCODE_VERSION: "" }, ["--channel", "edge"], "channel must be"], [{}, ["--channel", "nightly"], "cannot be combined"], [{ MENDCODE_VERSION: "" }, ["--wat"], "unknown argument"], [{ MENDCODE_VERSION: "" }, ["--channel"], "needs a value"]] as const) {
@@ -275,12 +339,12 @@ test("an unknown channel, a channel with an exact version and a stray argument a
 
 test("--tier, --tier= and MENDCODE_TIER record the starting tier in the receipt, balanced when none is given, and the binary is the same", () => {
   const box = fixture()
-  const receipt = () => readFileSync(path.join(box.install, ".mendcode-v2-install"), "utf8")
+  const receipt = () => readFileSync(path.join(box.install, ".mendcode-install"), "utf8")
   for (const [args, extra, tier] of [[["--tier", "minimalist"], {}, "minimalist"], [["--tier=full"], {}, "full"], [[], { MENDCODE_TIER: "minimalist" }, "minimalist"], [["--tier", "balanced"], { MENDCODE_TIER: "full" }, "balanced"], [[], {}, "balanced"]] as const) {
     rmSync(box.install, { recursive: true, force: true })
     const result = box.run({ ...extra }, [...args])
     expect({ code: result.exitCode, stderr: result.stderr.toString() }).toEqual({ code: 0, stderr: "" })
-    expect(receipt()).toBe(`schema=mendcode-v2.install.v1\nbinary=mendcode\nsha256=${hash}\ntier=${tier}\n`)
+    expect(receipt()).toBe(`schema=mendcode.install.v1\nbinary=mendcode\nsha256=${hash}\ntier=${tier}\n`)
     expect(result.stdout.toString()).toContain(`starting tier: ${tier}`)
     expect(readFileSync(path.join(box.install, "mendcode"), "utf8")).toBe(body)
   }

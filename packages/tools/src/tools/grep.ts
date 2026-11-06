@@ -1,7 +1,7 @@
-import { spawn } from "node:child_process"
 import { readdir, stat } from "node:fs/promises"
 import { join, relative, sep } from "node:path"
 import { z } from "zod"
+import { captureOutput, type Captured } from "../capture-output"
 import { defineTool, type ToolContext, type ToolResult } from "../tool"
 import {
   cancelled,
@@ -64,69 +64,49 @@ export function nestedRepetition(pattern: string): boolean {
 
 const clip = (text: string) => (text.length > MAX_LINE_CHARS ? `${text.slice(0, MAX_LINE_CHARS)}…` : text)
 
-function searchWithRg({ search, context, rg }: { search: Search; context: ToolContext; rg: string }): Promise<Found | string> {
+/** The most of rg's output taken: far more than the match cap can render, so a pattern matching everything ends here. */
+const RG_OUTPUT_BYTES = 4 * 1024 * 1024
+const RG_TIMEOUT_MS = 10 * 60_000
+
+async function searchWithRg({ search, context, rg }: { search: Search; context: ToolContext; rg: string }): Promise<Found | string> {
   const args = ["--line-number", "--with-filename", "--no-heading", "--color", "never"]
   if (search.ignoreCase) args.push("-i")
   if (search.context > 0) args.push("-C", String(search.context), "--null")
   if (search.include) args.push("--glob", search.include)
   args.push("--glob", "!node_modules", "--glob", "!.git")
   args.push("-e", search.pattern, "--", search.base)
-  return new Promise((resolve) => {
-    const child = spawn(rg, args, { cwd: context.cwd, stdio: ["ignore", "pipe", "pipe"] })
-    const lines: string[] = []
-    let matches = 0
-    let pending = ""
-    let stderr = ""
-    let capped = false
-    let settled = false
-    const prefix = `${context.cwd}${sep}`
-    const finish = (value: Found | string) => {
-      if (settled) return
-      settled = true
-      context.signal.removeEventListener("abort", onAbort)
-      resolve(value)
+  let result: Captured
+  try {
+    result = await captureOutput([rg, ...args], { cwd: context.cwd, stderr: "capture", signal: context.signal, limit: RG_OUTPUT_BYTES, timeoutMs: RG_TIMEOUT_MS, keepOnLimit: true })
+  } catch (error) {
+    return `cannot run rg: ${errorMessage(error)}`
+  }
+  if (context.signal.aborted) return "cancelled"
+  const lines: string[] = []
+  let matches = 0
+  let capped = result.truncated
+  const prefix = `${context.cwd}${sep}`
+  // A cut output ends inside a line: the partial one is dropped.
+  const text = result.truncated ? result.out.slice(0, result.out.lastIndexOf("\n") + 1) : result.out
+  for (const raw of text.split("\n")) {
+    if (raw === "" || capped && matches >= MAX_MATCHES) continue
+    if (search.context > 0 && raw === GROUP_SEPARATOR) {
+      if (lines.length > 0 && lines[lines.length - 1] !== GROUP_SEPARATOR) lines.push(raw)
+      continue
     }
-    const push = (raw: string) => {
-      if (raw === "" || capped) return
-      if (search.context > 0 && raw === GROUP_SEPARATOR) {
-        if (lines.length > 0 && lines[lines.length - 1] !== GROUP_SEPARATOR) lines.push(raw)
-        return
-      }
-      const parsed = search.context > 0 ? NULL_LINE.exec(raw) : null
-      const isMatch = search.context === 0 || parsed?.[3] === ":"
-      if (isMatch && matches >= MAX_MATCHES) {
-        capped = true
-        child.kill("SIGTERM")
-        return
-      }
-      if (isMatch) matches++
-      const line = parsed ? `${parsed[1]}${parsed[3]}${parsed[2]}${parsed[3]}${raw.slice(parsed[0].length)}` : raw
-      lines.push(clip(line.startsWith(prefix) ? line.slice(prefix.length) : line))
+    const parsed = search.context > 0 ? NULL_LINE.exec(raw) : null
+    const isMatch = search.context === 0 || parsed?.[3] === ":"
+    if (isMatch && matches >= MAX_MATCHES) {
+      capped = true
+      break
     }
-    const onAbort = () => {
-      child.kill("SIGKILL")
-      finish("cancelled")
-    }
-    context.signal.addEventListener("abort", onAbort, { once: true })
-    child.stdout.setEncoding("utf8")
-    child.stdout.on("data", (chunk: string) => {
-      pending += chunk
-      const parts = pending.split("\n")
-      pending = parts.pop() ?? ""
-      for (const part of parts) push(part)
-    })
-    child.stderr.setEncoding("utf8")
-    child.stderr.on("data", (chunk: string) => {
-      if (stderr.length < 2000) stderr += chunk
-    })
-    child.on("error", (error) => finish(`cannot run rg: ${errorMessage(error)}`))
-    child.on("close", (code) => {
-      push(pending)
-      if (lines[lines.length - 1] === GROUP_SEPARATOR) lines.pop()
-      if (capped || code === 0 || code === 1) return finish({ lines, matches, capped })
-      finish(stderr.trim().split("\n")[0] || `rg exited with code ${code}`)
-    })
-  })
+    if (isMatch) matches++
+    const line = parsed ? `${parsed[1]}${parsed[3]}${parsed[2]}${parsed[3]}${raw.slice(parsed[0].length)}` : raw
+    lines.push(clip(line.startsWith(prefix) ? line.slice(prefix.length) : line))
+  }
+  if (lines[lines.length - 1] === GROUP_SEPARATOR) lines.pop()
+  if (capped || result.code === 0 || result.code === 1) return { lines, matches, capped }
+  return result.err.trim().split("\n")[0] || `rg exited with code ${result.code}`
 }
 
 async function searchWithWalker({ search, context }: { search: Search; context: ToolContext }): Promise<Found | string> {

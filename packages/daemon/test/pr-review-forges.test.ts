@@ -192,10 +192,12 @@ for (const kind of ["gitlab", "gitea"] as const) {
       expect(claims).toHaveLength(1)
       expect(claims[0]!.body).toContain("released")
 
-      // The same head again: no new event, and a manual review of it posts nothing new.
+      // The same head again: no new event, and a manual review of it is answered at once, with no job and no model call.
       await d.service.tick()
-      expect((await d.service.control({ sessionId: "ses_a", action: "review", pr: "12" })).ok).toBe(true)
-      await until(() => d.jobs().filter((item) => item.state === "done").length === 2)
+      const again0 = await d.service.control({ sessionId: "ses_a", action: "review", pr: "12" })
+      expect(again0.ok && again0.text).toContain(`#12 was already reviewed at ${head.slice(0, 12)} with this config, so nothing was run`)
+      expect(d.jobs()).toHaveLength(1)
+      expect(d.brain.asked).toEqual(["review", "verify"])
       expect(forge.posts.get(12)).toHaveLength(1)
       expect(forge.writes.filter((write) => write.startsWith("publish"))).toEqual(["publish #12"])
 

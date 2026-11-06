@@ -10,7 +10,7 @@ const dirs: string[] = []
 const temp = () => { const dir = mkdtempSync(path.join(tmpdir(), "official-kit-")); dirs.push(dir); return dir }
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }) })
 test("small official kit previews without code, installs one unit and preserves stable identity/resource preferences", async () => {
-  const userDir = temp(), directory = temp(), source = path.resolve(import.meta.dir, "../../../examples/official-packages")
+  const userDir = temp(), directory = temp(), source = path.resolve(import.meta.dir, "../../../examples/official-profiles")
   const registry = createPackageRegistry({ userDir, directory, capabilities: true })
   registry.addSource("official", source, true)
   const entries = registry.search("", "official").entries
@@ -25,7 +25,7 @@ test("small official kit previews without code, installs one unit and preserves 
   expect(listPackages({ userDir, directory })).toHaveLength(1)
   const key = "project:mendcode-review"
   const disabledResources = setResourceEnabled({ userDir, directory, disabledResources: [], key, resource: "commands/focused-review", enabled: false })
-  const manifest = path.join(directory, ".mendcode/packages/mendcode-review/mendcode-package.json")
+  const manifest = path.join(directory, ".mendcode/packages/mendcode-review/mendcode-profile.json")
   writeFileSync(manifest, JSON.stringify({ ...JSON.parse(readFileSync(manifest, "utf8")), title: "Renamed display name" }))
   expect(listPackageResources({ userDir, directory, disabledResources, key })[0]?.resources[0]?.enabled).toBe(false)
   expect(listPackages({ userDir, directory })[0]?.key).toBe(key)
@@ -35,7 +35,7 @@ test("small official kit previews without code, installs one unit and preserves 
 test("duplicate content warns across scopes/identities without disabling anything", async () => {
   const userDir = temp(), directory = temp(), source = temp()
   mkdirSync(path.join(source, "commands"))
-  const manifest = path.join(source, "mendcode-package.json")
+  const manifest = path.join(source, "mendcode-profile.json")
   writeFileSync(manifest, JSON.stringify({ name: "one", version: "1", description: "one" }))
   writeFileSync(path.join(source, "commands/review.md"), "Review only")
   const registry = createPackageRegistry({ userDir, directory })
@@ -49,7 +49,7 @@ test("duplicate content warns across scopes/identities without disabling anythin
 test("environment preview reports names without evaluating code or exposing values", () => {
   const directory = temp()
   mkdirSync(path.join(directory, "extensions"))
-  writeFileSync(path.join(directory, "mendcode-package.json"), JSON.stringify({ name: "env-hints", version: "1", description: "hints", environment: ["EXAMPLE_TOKEN"] }))
+  writeFileSync(path.join(directory, "mendcode-profile.json"), JSON.stringify({ name: "env-hints", version: "1", description: "hints", environment: ["EXAMPLE_TOKEN"] }))
   writeFileSync(path.join(directory, "extensions/index.ts"), 'throw new Error("never load"); process.env.EXAMPLE_TOKEN; Bun.env["OTHER_KEY"]; const hidden = "private-value"')
   const caps = packageCapabilities(directory)
   expect(caps.declaredEnvironment).toEqual(["EXAMPLE_TOKEN"])

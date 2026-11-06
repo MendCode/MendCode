@@ -77,7 +77,7 @@ export function createDaemon(ctx: AppContext, deps: { reloadTerminal: () => Prom
     const reply = await input.send({ type: "extensions.reload", directory: input.directory ?? "" })
     if (!reply.ok) return fail(reply.error.message)
     await deps.reloadTerminal()
-    say("Reloaded extensions, packages, keys and themes")
+    say("Reloaded extensions, profiles, keys and themes")
   }
 
   const RUN = { reload, restart: restartTerminal } as const

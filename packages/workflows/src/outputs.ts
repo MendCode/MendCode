@@ -1,4 +1,4 @@
-import { lastMarkedBlock } from "@mendcode/loops"
+import { lastMarkedBlock } from "../../loops/src/marked-block"
 import type { WorkflowAgentTaskSpec, WorkflowPlan, WorkflowTask } from "@mendcode/protocol"
 import { agentSpecs } from "./composition"
 

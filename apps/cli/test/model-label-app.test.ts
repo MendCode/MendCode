@@ -59,7 +59,10 @@ test("a Claude Code alias reads as its family until the engine reports what it r
     { id: "claude-opus", name: "Claude Opus · Claude Code", efforts: ["low", "high"], engine: "claude" },
     { id: "gpt-6-luna", name: "GPT-6-Luna", efforts: ["low"] },
   ], defaults: { model: "gpt-6-luna" }, roles: {}, effective: { model: "claude-opus", effort: "high" } }
-  const h = appHarness({ width: 120, height: 40, dataDir: tempDir(), directory: "/work/app", reply: (command) => command.type === "models.list" ? { ok: true, result: claude } : undefined })
+  // The built-in footer (`footerPack: off`) names the engine that serves the model; the clean pack names none.
+  const dataDir = tempDir()
+  writeTuiProfile(dataDir, { ...DEFAULT_TUI_PROFILE, footerPack: "off" })
+  const h = appHarness({ width: 120, height: 40, dataDir, directory: "/work/app", reply: (command) => command.type === "models.list" ? { ok: true, result: claude } : undefined })
   h.app.applySettings({ onboarded: true, reducedMotion: true })
   const talk = conversation(h.sessionId, (event) => h.app.onEvent(event))
   talk.exchange("hello", "hi")

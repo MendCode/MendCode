@@ -8,6 +8,7 @@ import { resolveDataDir, binPaths } from "./install"
 import { readState, writeState } from "./state"
 import { readRecovery, verifyRecovery } from "./recovery"
 import { PROGRAM_NAME } from "@mendcode/program"
+import { dataDirFromEnv } from "@mendcode/program/data-dir"
 
 export type UpgradeCommand = { json: boolean; dir?: string; channel?: Channel; target?: string; method?: string; inspect?: boolean; set?: boolean; check: boolean; force: boolean; rollback: boolean; allowUnsigned?: boolean; requireSignature?: boolean; help: boolean }
 export type UpgradeParse = { ok: true; command: UpgradeCommand } | { ok: false; message: string }
@@ -28,7 +29,7 @@ export const UPGRADE_USAGE = [
   "  --method, -m    direct/curl use the verified binary installer; package-manager releases are unavailable",
   "  --force         install even when up to date or when the release is older than the running version",
   "  --rollback      go back to the previous binary (run it again to return to the newer one)",
-  "  --dir D         data directory (default: MENDCODE_V2_DIR or ~/.mendcode-v2); the binary goes to <D>/bin/mendcode-next",
+  "  --dir D         data directory (default: MENDCODE_DIR or ~/.mendcode); the binary goes to <D>/bin/mendcode-next",
   "  release source: MendCode/MendCode, or MENDCODE_UPGRADE_REPO=owner/name; a private repository is read with GH_TOKEN, GITHUB_TOKEN or `gh auth login`",
 ].join("\n")
 
@@ -127,7 +128,7 @@ export type UpgradeCommandDeps = {
   err: { write(text: string): unknown }
   env: Record<string, string | undefined>
   home: string
-  /** The CLI's default data directory (`~/.mendcode-v2`). */
+  /** The CLI's default data directory (`~/.mendcode`). */
   defaultDir: string
   currentVersion: string
   platform: Platform
@@ -151,7 +152,7 @@ export function upgradeText(result: UpgradeResult, { check }: { check: boolean }
     case "ahead":
       return `running ${current} is newer than the newest ${channel} release ${latest}; nothing installed (--force installs ${latest} anyway)\n`
     case "installed":
-      return `installed ${latest} (${channel})${result.downgrade ? " as a downgrade" : ""}: ${result.installedTo}\n${VERIFIED_NOTE[result.verification ?? "attestation"]}\n${RESTART_NOTE}\n${result.rollbackAvailable ? `previous verified version kept: \`${PROGRAM_NAME} upgrade --rollback\` restores it` : "--rollback unavailable: external recovery required"}\n`
+      return `installed ${latest} (${channel})${result.downgrade ? ` as a downgrade from ${current}` : ""}: ${result.installedTo}\n${VERIFIED_NOTE[result.verification ?? "attestation"]}\n${RESTART_NOTE}\n${result.rollbackAvailable ? `previous verified version kept: \`${PROGRAM_NAME} upgrade --rollback\` restores it` : "--rollback unavailable: external recovery required"}\n`
     case "rolled-back":
       return `rolled back: ${result.installedTo} is the previous version again\n${RESTART_NOTE}\n`
   }
@@ -166,7 +167,7 @@ export async function runUpgradeCommand(command: UpgradeCommand, deps: UpgradeCo
   }
   const line = (value: object) => out.write(`${JSON.stringify({ schema: UPGRADE_SCHEMA, ...value })}\n`)
   try {
-    const dataDir = path.resolve(command.dir ?? deps.env.MENDCODE_V2_DIR ?? deps.defaultDir)
+    const dataDir = path.resolve(command.dir ?? dataDirFromEnv(deps.env) ?? deps.defaultDir)
     if (command.inspect || command.set) {
       resolveDataDir({ dataDir, home: deps.home })
       const release = command.set ? await deps.ports.fs.lock(dataDir) : undefined

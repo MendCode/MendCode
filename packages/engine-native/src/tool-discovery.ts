@@ -78,10 +78,12 @@ export const LEGACY_CATALOG: CatalogMode = { lean: false, planTools: true, aux: 
 /**
  * The auxiliary tools the conversation already calls for, so nothing that worked with them listed needs a search first: the plan
  * tools while the session is in plan mode, the two that read and stop a background command once one was started, and a sub-agent's
- * status once one was launched.
+ * status once one was launched. `background` says the session still owns background commands (the registry outlives a compaction, which drops
+ * the call that started them), so their two tools stay listed.
  */
-export function impliedTools(messages: readonly ModelMessage[], plan: boolean): string[] {
+export function impliedTools(messages: readonly ModelMessage[], plan: boolean, background = false): string[] {
   const implied = new Set<string>(plan ? ["plan_submit", "plan_review", "plan_exit"] : [])
+  if (background) { implied.add("shell_output"); implied.add("shell_kill") }
   for (const message of messages) {
     if (message.role !== "assistant") continue
     for (const call of message.toolCalls) {
@@ -162,6 +164,10 @@ const CAPABILITY_GROUPS: ReadonlyArray<{ tools: readonly string[] | RegExp; name
   { tools: ["browser"] }, { tools: ["screenshot"] }, { tools: ["loop"] },
   { tools: /^workflow_/, name: "workflow_*" },
   { tools: ["lsp"] }, { tools: ["secrets"] }, { tools: ["threads"] }, { tools: ["pr_watch"] }, { tools: ["todo"] },
+  // Deferred, a model asked to change the default model told the user to do it by hand.
+  { tools: ["mendcode_settings"], note: "change MendCode's own settings: default model, tier, permissions, context window" },
+  // Deferred behind the always-listed customize_ui, "rename the title" read as a screen setting.
+  { tools: ["session_meta"], note: "rename this session's title, pin or archive it" },
 ]
 
 /** The group's present tools in one of the two lists, as the model reads them: `remember/memory`, `computer_* (computer use)`. */

@@ -39,6 +39,8 @@ export function createInput(ctx: AppContext, actions: {
   loadMemories: ReturnType<typeof createMemory>["loadMemories"]
   submitPlanDraft: (text: string) => Promise<void>
   answerQuestion: (text: string) => Promise<void>
+  /** A `/loop` waiting for its one-line confirmation: enter starts it, `e` edits it, a mode lowers it; true when `text` was an answer to it. */
+  confirmLoopDraft: (text: string) => Promise<boolean>
   questionPaste: (text: string) => boolean
   planReviewPaste: (text: string) => boolean
   gitPaste: (text: string) => boolean
@@ -55,6 +57,8 @@ export function createInput(ctx: AppContext, actions: {
   endGoalEdit: ReturnType<typeof createGoal>["endGoalEdit"]
   /** True when the message is held for a question about a session that went cold; the prompt keeps its text. */
   idleGate(): Promise<boolean>
+  /** Sets the session's permission mode; false when the daemon refused. */
+  setPermission(next: import("@mendcode/protocol").PermissionMode): Promise<boolean>
   /** A terminal read that was not a focus report: the user is here. */
   noteInput(): void
 }) {
@@ -156,7 +160,11 @@ export function createInput(ctx: AppContext, actions: {
     if (pasted) ctx.drafts.flush()
   }
 
+  /** The message Esc Esc is taking back: a send waits for it so the resent text does not queue behind a turn that is still stopping. */
+  let retracting: Promise<void> | undefined
+
   async function submit() {
+    if (retracting) await retracting
     // A user alias (`slashCommands[].aliases`) is the command it names from here on: the prompt, the history and the recents see `/changes`, not `/d`.
     const aliased = editor.text.startsWith("/") ? actions.expandAlias(editor.text.trim()) : undefined
     if (aliased) editor.replaceAll(aliased)
@@ -185,6 +193,12 @@ export function createInput(ctx: AppContext, actions: {
     // A skill or custom command named after other text runs with that text as its arguments (docs/commands.md).
     const hoisted = state.shellMode || state.editingScratch || state.editingGoal || state.editingMemory ? undefined : hoistCommand(editor.text.trim(), actions.suggestionPool())
     if (hoisted) editor.replaceAll(hoisted)
+    // `/plan <text>` enters plan mode and sends <text> as the message; a bare `/plan` only toggles the mode (slash.ts).
+    const planned = state.shellMode || state.editingScratch || state.editingGoal || state.editingMemory || state.planDraft ? undefined : /^\/plan\s+(\S[\s\S]*)$/i.exec(editor.text.trim())
+    if (planned && !slashRefusal("/plan", state.settingsNow, state.tuiProfile.slashCommands)) {
+      if (state.transcript.permissionMode !== "plan" && !(await actions.setPermission("plan"))) return requestFrame()
+      editor.replaceAll(planned[1]!.trim())
+    }
     const text = editor.text.trim()
     // The daemon takes a message of 64 KB at most: a longer one stays in the prompt, as typed, with its size.
     if (text.length > MAX_DRAFT_CHARS) {
@@ -208,6 +222,7 @@ export function createInput(ctx: AppContext, actions: {
       await loadMemories()
       return
     }
+    if (state.loopDraft && await actions.confirmLoopDraft(text)) return
     if (state.planDraft) return submitPlanDraft(text)
     if (state.transcript.pendingRequests[0]?.kind === "question") return actions.answerQuestion(text)
     if (state.shellMode) {
@@ -297,6 +312,9 @@ export function createInput(ctx: AppContext, actions: {
     if (!reply.ok) state.clearPending = false
     if (!reply.ok && restorable) { state.attachments = sending; if (typed.pastes.length) restoreTyped(); else editor.replaceAll(text) }
     if (reply.ok) {
+      // Sent from a sub-agent's thread: it goes to the session, and while queued it is that thread's to see and edit.
+      const queueId = reply.result?.queueId
+      if (state.agentView && state.sessionId === submissionSession && typeof queueId === "string") state.agentViews?.get(state.agentView)?.queued.set(queueId, false)
       if (attached) ctx.comments.sent()
       ide.markSent()
       if (expanded !== undefined && !parseSlash(text)) actions.recordSlash?.(/^\/([a-z0-9][a-z0-9:_-]*)/i.exec(text)?.[1]?.toLowerCase() ?? "")
@@ -310,15 +328,50 @@ export function createInput(ctx: AppContext, actions: {
   }
 
   /** The user message of a running turn the model has not answered yet, when Esc may take it back (`escRetract`, an empty prompt). */
-  function retractable(turnId: TurnId): ItemId | undefined {
-    // Messages queued behind it were written after it: taking it back under them would reorder the conversation, so Esc only stops.
-    if (!state.tuiProfile.escRetract || !editor.isEmpty() || state.attachments.length > 0 || state.transcript.queue.length > 0 || input.remote?.readOnly) return undefined
+  function retractable(turnId: TurnId): { itemId: ItemId; answered: boolean } | undefined {
+    if (!state.tuiProfile.escRetract || state.shellMode || input.remote?.readOnly) return undefined
     const blocks = state.transcript.blocks().filter((block) => block.turnId === turnId)
     const message = blocks.find((block) => block.kind === "user_message")
     if (!message || message.notice || message.shell) return undefined
     // A line of narration ("Checking the routes first.") is not an answer yet: GPT models write one before every first tool call.
     const said = blocks.reduce((total, block) => total + (block.kind === "agent_message" ? block.text.trim().length : 0), 0)
-    return said > RETRACT_NARRATION_CHARS ? undefined : message.itemId
+    return { itemId: message.itemId, answered: said > RETRACT_NARRATION_CHARS }
+  }
+
+  /**
+   * Takes the unanswered message back at once: it goes in front of whatever the prompt holds and of the messages queued behind it
+   * (they were written after it, so the order stays), and the daemon is told afterwards. Text and images come from what this client
+   * saw being sent; when it did not see it (attached mid-turn), the daemon's report fills the prompt as before.
+   */
+  async function retract(itemId: ItemId) {
+    const session = state.sessionId
+    const sent = state.turnState.sentPrompt
+    const behind = state.transcript.queue.map((entry) => ({ queueId: entry.queueId, prompt: state.turnState.queuedPrompt(entry.queueId) })).filter((entry): entry is { queueId: typeof entry.queueId; prompt: NonNullable<typeof entry.prompt> } => entry.prompt?.kind === "message")
+    if (!sent || sent.kind !== "message") {
+      await actions.rewind("undo", false, itemId)
+      if (state.rewindCard?.state === "done") state.rewindCard = undefined
+      state.notice = "message back in the prompt"
+      return requestFrame()
+    }
+    const before = { text: editor.text, attachments: state.attachments }
+    actions.composer.place([sent, ...behind.map((entry) => entry.prompt)])
+    const placed = editor.text
+    state.notice = "message back in the prompt"
+    requestFrame()
+    await actions.rewind("undo", false, itemId, sent.text, sent.attachments, true)
+    if (state.sessionId !== session) return
+    if (state.rewindCard?.state === "done") {
+      state.rewindCard = undefined
+      // The queued messages now live in the prompt: they leave the queue only once the undo went through, so a failed one loses nothing.
+      const removed = await Promise.all(behind.map((entry) => input.send({ type: "queue.remove", sessionId: session, queueId: entry.queueId })))
+      if (removed.some((reply) => !reply.ok)) say("a queued message had already started · it is also in the prompt", "warning")
+    } else if (editor.text === placed) {
+      // The undo did not happen (files changed since, an error): the prompt is as it was, and the card or error says why.
+      editor.replaceAll(before.text)
+      state.attachments = before.attachments
+      state.notice = ""
+    }
+    requestFrame()
   }
 
   async function onEscape() {
@@ -359,13 +412,13 @@ export function createInput(ctx: AppContext, actions: {
     state.escArmedAt = 0
     // Nothing answered yet (a typo caught in time): the message is taken back, as if never sent, and waits in the prompt to fix.
     const unanswered = retractable(turnId)
-    if (unanswered) {
-      await actions.rewind("undo", false, unanswered)
-      if (state.rewindCard?.state === "done") state.rewindCard = undefined
-      state.notice = "message back in the prompt"
-      return requestFrame()
+    if (unanswered && !unanswered.answered) {
+      const taking = retract(unanswered.itemId).finally(() => { if (retracting === taking) retracting = undefined })
+      retracting = taking
+      return taking
     }
     const reply = await input.send({ type: "turn.cancel", sessionId: state.sessionId, turnId })
+    if (reply.ok && unanswered?.answered) state.notice = "already answered · esc esc to edit"
     if (!reply.ok && reply.error.code !== "target_mismatch") fail(reply.error.message)
     // The interrupt holds the queue; the terminal sends it on, so what was queued runs once the cancelled turn has stopped.
     // With `queueRestore` the queued messages come back into the prompt instead.

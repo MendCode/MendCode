@@ -26,7 +26,8 @@ function isGenerated(choice: PetChoice): boolean {
   return choice.ref.startsWith("user:") && choice.generated !== undefined
 }
 
-export function petPickerKey(state: PetPickerState, key: string, choices: readonly PetChoice[]): { state: PetPickerState; action: PetPickerAction } {
+/** `current` is the pet in use: space turns it off; space with the pet off turns the highlighted one on. */
+export function petPickerKey(state: PetPickerState, key: string, choices: readonly PetChoice[], current?: string): { state: PetPickerState; action: PetPickerAction } {
   const move = (by: number) => ({ state: { selected: Math.min(Math.max(0, choices.length - 1), Math.max(0, state.selected + by)) }, action: { type: "none" } as const })
   if (key === "\x1b" || key === "q") return { state, action: { type: "close" } }
   if (key === "\x1b[A" || key === "k") return move(-1)
@@ -47,7 +48,9 @@ export function petPickerKey(state: PetPickerState, key: string, choices: readon
     if (key === "n") return { state, action: { type: "fill", text: `/pet rename ${chosen.ref} ` } }
     if (key === "d") return { state, action: { type: "fill", text: `/pet delete ${chosen.ref} --confirm` } }
   }
-  if (key === "\r" && chosen) return { state, action: { type: "choose", ref: chosen.ref } }
+  const showing = current !== undefined && current !== "" && current !== "off"
+  if (key === " " && showing) return { state, action: { type: "choose", ref: "off" } }
+  if ((key === "\r" || key === " ") && chosen) return { state, action: { type: "choose", ref: chosen.ref } }
   return { state, action: { type: "none" } }
 }
 
@@ -158,5 +161,5 @@ export function renderPetPicker(input: { choices: readonly PetChoice[] | undefin
   const body = panel.wide ? beside([{ lines: list, width: panel.listWidth }, { lines: preview, width: panel.width }], 2) : [...list, ...Array.from({ length: panel.gap }, (): Line => []), ...preview]
   const current = choices?.find((choice) => choice.ref === input.current)?.name ?? "off"
   const own = selected?.imported ? " · n rename · d delete" : ""
-  return appearancePage({ title: input.mascot ? "Mascot" : "Pet", subtitle: `now ${current}${choices ? ` · ${choices.length} available` : ""}`, body, hints: input.mascot ? `↑↓ select · enter start screen · o title only${own} · esc back` : `↑↓ select · enter choose · o off${own} · esc back`, width, height })
+  return appearancePage({ title: input.mascot ? "Mascot" : "Pet", subtitle: `now ${current}${choices ? ` · ${choices.length} available` : ""}`, body, hints: input.mascot ? `↑↓ select · enter start screen · space on/off · o title only${own} · esc back` : `↑↓ select · enter choose · space on/off · o off${own} · esc back`, width, height })
 }

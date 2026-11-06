@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
-import { INSTALL_RECEIPT, parseInstallReceipt, readInstallPreset } from "../src/install-receipt"
+import { INSTALL_RECEIPT, LEGACY_INSTALL_RECEIPT, parseInstallReceipt, readInstallPreset } from "../src/install-receipt"
 
 const SUM = "a".repeat(64)
 const temps: string[] = []
@@ -22,6 +22,16 @@ describe("parseInstallReceipt", () => {
 })
 
 describe("readInstallPreset", () => {
+  test("an earlier installer's receipt (.mendcode-v2-install) is still read; the current name wins when both exist", () => {
+    const root = temp()
+    const bin = path.join(root, "bin")
+    mkdirSync(bin, { recursive: true })
+    writeFileSync(path.join(bin, LEGACY_INSTALL_RECEIPT), `schema=mendcode-v2.install.v1\nbinary=mendcode\nsha256=${SUM}\ntier=full\n`)
+    const read = () => readInstallPreset({ runningBinary: path.join(bin, "mendcode"), env: {}, home: path.join(root, "home"), platform: "linux" })
+    expect(read()).toBe("full")
+    writeFileSync(path.join(bin, INSTALL_RECEIPT), `schema=mendcode.install.v1\nbinary=mendcode\nsha256=${SUM}\ntier=minimalist\n`)
+    expect(read()).toBe("minimalist")
+  })
   test("a binary's own directory wins; its receipt names the tier", () => {
     const root = temp()
     receipt(path.join(root, "bin"), `schema=mendcode-v2.install.v1\nbinary=mendcode\nsha256=${SUM}\ntier=minimalist\n`)

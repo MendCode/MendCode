@@ -29,6 +29,18 @@ export type PlatformControlDeps = {
    * metric is the job totals of the jobs updated in that window (dashboard.ts).
    */
   tokens24h?: () => PrTokenUsage
+  /** How long `status` waits for a checkout's reviewers before answering without them (`REVIEWERS_MS`). */
+  reviewersMs?: number
+}
+
+const REVIEWERS_MS = 3_000
+const THIS_DEVICE = "this device"
+/** `promise`'s value, or undefined once `ms` passed first; the timer is cleared either way. */
+async function withinTime<T>(promise: Promise<T>, ms: number): Promise<T | undefined> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([promise, new Promise<undefined>((resolve) => { timer = setTimeout(() => resolve(undefined), ms) })])
+  } finally { clearTimeout(timer) }
 }
 
 const PLATFORM_ACTIONS = new Set<PlatformControlInput["action"]>(["status", "audit", "job-pause", "job-resume", "job-cancel", "job-retry", "take-over", "release", "config-show", "config-preview", "config-apply", "config-revert", "config-history"])
@@ -68,13 +80,20 @@ export function createPlatformControl(handle: PlatformHandle, deps: PlatformCont
     for (const job of [...jobs].sort((a, b) => a.updatedAt - b.updatedAt)) repoOf.set(job.directory, job.repo)
     const watches: DashboardWatchInput[] = handle.rows().map((row) => ({ ...row, ...(repoOf.has(row.directory) ? { repo: repoOf.get(row.directory) } : {}) }))
     const reviewers = new Map<string, PrReviewerSummary>()
-    const listed = await Promise.all([...new Set(watches.map((watch) => watch.directory))].map((directory) => handle.reviewers(directory).catch(() => [] as PrReviewerSummary[])))
+    // The reviewers are read from each checkout (git, the forge): one that does not answer in time is left out and named, so the
+    // page never waits on a busy checkout or a hung child process for the jobs it already has.
+    const directories = [...new Set(watches.map((watch) => watch.directory))]
+    const unread: string[] = []
+    const listed = await Promise.all(directories.map((directory) => withinTime(handle.reviewers(directory).catch(() => [] as PrReviewerSummary[]), deps.reviewersMs ?? REVIEWERS_MS).then((read) => { if (!read) unread.push(directory); return read ?? [] })))
     for (const reviewer of listed.flat()) if (!reviewers.has(reviewer.id)) reviewers.set(reviewer.id, reviewer)
     let dashboard = buildDashboard({ jobs, watches, reviewers: [...reviewers.values()], now: now(), concurrency: handle.concurrency })
+    // This daemon's own device reads as "this device": its id says nothing to the person looking at the page.
+    const here = handle.device?.()
+    if (here) dashboard = { ...dashboard, jobs: dashboard.jobs.map((job) => job.owner === here ? { ...job, owner: THIS_DEVICE } : job), watches: dashboard.watches.map((watch) => watch.owner === here ? { ...watch, owner: THIS_DEVICE } : watch), reviewers: dashboard.reviewers.map((reviewer) => reviewer.device === here ? { ...reviewer, device: THIS_DEVICE } : reviewer) }
     const tokens = deps.tokens24h?.()
     if (tokens) dashboard = PrReviewDashboard.parse({ ...dashboard, metrics: { ...dashboard.metrics, tokens24h: tokens } })
     const { running, queued, waiting } = dashboard.metrics
-    return { ok: true, text: `${dashboard.watches.length} watch${dashboard.watches.length === 1 ? "" : "es"}, ${dashboard.jobs.length} job${dashboard.jobs.length === 1 ? "" : "s"} (${running} running, ${queued} queued, ${waiting} waiting); at most ${dashboard.metrics.concurrency} at once on this device (prReview.concurrency).`, dashboard }
+    return { ok: true, text: `${dashboard.watches.length} watch${dashboard.watches.length === 1 ? "" : "es"}, ${dashboard.jobs.length} job${dashboard.jobs.length === 1 ? "" : "s"} (${running} running, ${queued} queued, ${waiting} waiting); at most ${dashboard.metrics.concurrency} at once on this device (prReview.concurrency).${unread.length ? ` Reviewers not read yet (the checkout did not answer in time): ${unread.join(", ")}.` : ""}`, dashboard }
   }
 
   async function pause(input: PlatformControlInput): Promise<PlatformControlResult> {

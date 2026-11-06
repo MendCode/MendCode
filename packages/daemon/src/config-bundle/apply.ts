@@ -1,4 +1,5 @@
 import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs"
+import { updateProfile, replaceProfile } from "@mendcode/program/profile-history"
 import path from "node:path"
 import { randomBytes } from "node:crypto"
 import { activationStateJson, parseActivationState } from "@mendcode/protocol/wire"
@@ -10,18 +11,18 @@ import { compareWithBundle, type CompareReport } from "./compare"
 import { installedTreeHash } from "./export"
 import { linkOnPath, targetBytes, type ImportPlan, type PlanStep } from "./plan"
 
-/** What an import asks the running daemon to do, through the same commands `/packages`, `/settings` and the CLI use. */
+/** What an import asks the running daemon to do, through the same commands `/profiles`, `/settings` and the CLI use. */
 export type ImportPorts = {
   settings(): Promise<Record<string, unknown>>
   /** `settings.set`: validated by the daemon, every client hears it. */
   setSettings(patch: Record<string, unknown>): Promise<void>
-  /** `packages.install` of a local folder (the audited installer; it enables the package and may refuse the look). */
+  /** `profiles.install` of a local folder (the audited installer; it enables the profile and may refuse the look). */
   installPackage(input: { dir: string; replace: boolean }): Promise<void>
-  /** `packages.enable`. */
+  /** `profiles.enable`. */
   enablePackage(input: { key: string; enabled: boolean }): Promise<void>
-  /** `packages.remove` (to the Trash). */
+  /** `profiles.remove` (to the Trash). */
   removePackage(input: { name: string }): Promise<void>
-  /** `packages.resource`. */
+  /** `profiles.resource`. */
   setPackageResource(input: { key: string; resource: string; enabled: boolean }): Promise<void>
 }
 
@@ -95,7 +96,7 @@ function unitFiles(dataDir: string, unit: string): string[] {
   return readdirSync(full, { recursive: true, withFileTypes: true }).filter((entry) => !entry.isDirectory()).map((entry) => path.relative(dataDir, path.join(entry.parentPath, entry.name)).split(path.sep).join("/"))
 }
 
-/** The installer and `packages.enable` refuse a second look owner with this sentence (`LookOwnedError`). */
+/** The installer and `profiles.enable` refuse a second look owner with this sentence (`LookOwnedError`). */
 const isLookRefusal = (error: unknown) => error instanceof Error && error.message.includes("owns the look")
 
 /**
@@ -209,8 +210,8 @@ async function applyPackage(input: { step: PlanStep; bundle: Bundle; dataDir: st
   if (step.kind !== "package" || !["new", "replace"].includes(step.status)) return
   const key = `user:${step.name}`
   const settings = await ports.settings()
-  const disabledResources = (Array.isArray(settings.disabledPackageResources) ? settings.disabledPackageResources as string[] : []).filter((entry) => entry.startsWith(`${key}/`)).map((entry) => entry.slice(key.length + 1))
-  const listedOff = (Array.isArray(settings.disabledPackages) ? settings.disabledPackages as string[] : []).includes(key)
+  const disabledResources = (Array.isArray(settings.disabledProfileResources) ? settings.disabledProfileResources as string[] : []).filter((entry) => entry.startsWith(`${key}/`)).map((entry) => entry.slice(key.length + 1))
+  const listedOff = (Array.isArray(settings.disabledProfiles) ? settings.disabledProfiles as string[] : []).includes(key)
   const before = { installed: Boolean(step.current), enabled: step.current?.enabled ?? false, disabledResources, listedOff }
   const sameTree = step.current?.treeSha256 === step.treeSha256
   const change: "new" | "replace" | "state" = !step.current ? "new" : sameTree ? "state" : "replace"
@@ -229,17 +230,17 @@ async function applyPackage(input: { step: PlanStep; bundle: Bundle; dataDir: st
       atomicWrite(target, input.bytesFor(entry.path), entry.executable)
     }
     try { await ports.installPackage({ dir: stage, replace: change === "replace" }) } catch (error) {
-      // Another package owns the look: the installer keeps this one installed and off. That is the state to report, not a failure.
+      // Another profile owns the look: the installer keeps this one installed and off. That is the state to report, not a failure.
       if (!(isLookRefusal(error) && existsSync(path.join(input.dataDir, "packages", step.name)))) throw error
-      if (step.enabled) input.journal.notes.push(`packages/${step.name}: installed but off, another package owns the look (${error instanceof Error ? error.message : ""}); /packages switches it`)
+      if (step.enabled) input.journal.notes.push(`packages/${step.name}: installed but off, another profile owns the look (${error instanceof Error ? error.message : ""}); /profiles switches it`)
     }
   }
   const now = await ports.settings()
-  const on = !(Array.isArray(now.disabledPackages) ? now.disabledPackages as string[] : []).includes(key)
+  const on = !(Array.isArray(now.disabledProfiles) ? now.disabledProfiles as string[] : []).includes(key)
   if (on !== step.enabled) {
     try { await ports.enablePackage({ key, enabled: step.enabled }) } catch (error) {
       if (!isLookRefusal(error)) throw error
-      input.journal.notes.push(`packages/${step.name}: left off, another package owns the look; /packages switches it`)
+      input.journal.notes.push(`packages/${step.name}: left off, another profile owns the look; /profiles switches it`)
     }
   }
   for (const resource of step.disabledResources) if (!disabledResources.includes(resource)) await ports.setPackageResource({ key, resource, enabled: false })
@@ -258,7 +259,8 @@ function mergeJson(input: { plan: ImportPlan; dataDir: string; folder: string; r
   const backup = backupCopy({ dataDir: input.dataDir, folder: input.folder, relative: input.relative })
   const bytes = Buffer.from(`${JSON.stringify({ ...current, ...input.patch }, null, 2)}\n`)
   input.record({ type: "file", path: input.relative, ...(backup ? { backup } : {}), afterSha256: sha256(bytes) })
-  atomicWrite(file, bytes)
+  if (input.relative === "tui/profile.json") updateProfile(file, (raw) => ({ ...raw, ...input.patch }))
+  else atomicWrite(file, bytes)
 }
 
 /** Every import of this data directory, newest first. */
@@ -301,28 +303,33 @@ export async function rollbackImport(input: { dataDir: string; importId: string;
         undone.push(op.unit)
       } else if (op.type === "file") {
         if (op.afterSha256 && fileSha(path.join(dataDir, op.path)) !== op.afterSha256 && !input.force) { skipped.push(`${op.path}: changed since the import`); continue }
-        if (op.backup) { rmSync(path.join(dataDir, op.path), { force: true }); restore(op.backup, op.path) }
+        if (op.path === "tui/profile.json") {
+          const file = path.join(dataDir, op.path)
+          const before = op.backup ? JSON.parse(readFileSync(path.join(folder, op.backup), "utf8")) as Record<string, unknown> : undefined
+          replaceProfile(file, before)
+        }
+        else if (op.backup) { rmSync(path.join(dataDir, op.path), { force: true }); restore(op.backup, op.path) }
         else rmSync(path.join(dataDir, op.path), { force: true })
         // Pending MCP servers hold a slot of the daemon-wide pending budget until they expire: give the slots back.
         for (const name of op.mcpServers ?? []) mcpPendingBudget(dataDir, `${path.resolve(path.join(dataDir, op.path))}\0${name}`, undefined, Date.now())
         undone.push(op.path)
       } else if (op.type === "package") {
         const key = `user:${op.name}`
-        // The resource switches this import turned off go back on first, while the package is still installed.
+        // The resource switches this import turned off go back on first, while the profile is still installed.
         for (const resource of op.after.disabledResources) if (!op.before.disabledResources.includes(resource)) await input.ports.setPackageResource({ key, resource, enabled: true })
         if (op.change === "new") {
           await input.ports.removePackage({ name: op.name })
           const listed = await input.ports.settings()
-          const off = Array.isArray(listed.disabledPackages) ? listed.disabledPackages as string[] : []
-          if (!op.before.listedOff && off.includes(key)) await input.ports.setSettings({ disabledPackages: off.length > 1 ? off.filter((entry) => entry !== key) : null })
+          const off = Array.isArray(listed.disabledProfiles) ? listed.disabledProfiles as string[] : []
+          if (!op.before.listedOff && off.includes(key)) await input.ports.setSettings({ disabledProfiles: off.length > 1 ? off.filter((entry) => entry !== key) : null })
         } else {
           if (op.change === "replace" && op.backup) {
             await input.ports.removePackage({ name: op.name })
             await input.ports.installPackage({ dir: path.join(folder, op.backup), replace: false }).catch((error: unknown) => { if (!isLookRefusal(error)) throw error })
           }
           const now = await input.ports.settings()
-          const on = !(Array.isArray(now.disabledPackages) ? now.disabledPackages as string[] : []).includes(key)
-          if (on !== op.before.enabled) await input.ports.enablePackage({ key, enabled: op.before.enabled }).catch((error: unknown) => { if (!isLookRefusal(error)) throw error; problems.push(`packages/${op.name}: could not switch back on, another package owns the look`) })
+          const on = !(Array.isArray(now.disabledProfiles) ? now.disabledProfiles as string[] : []).includes(key)
+          if (on !== op.before.enabled) await input.ports.enablePackage({ key, enabled: op.before.enabled }).catch((error: unknown) => { if (!isLookRefusal(error)) throw error; problems.push(`packages/${op.name}: could not switch back on, another profile owns the look`) })
         }
         undone.push(`packages/${op.name}`)
       } else if (op.type === "settings") {

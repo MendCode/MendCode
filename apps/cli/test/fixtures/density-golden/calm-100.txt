@@ -35,14 +35,14 @@
     ┃ The index is built from ORDER, so packages has to be added there; the file itself exists.
 
      ± Patch apps/cli/src/docs-commands.ts  +2 −1
-     │ 38   const TOPICS = loadTopics(docsDir)
-     │ 39
-     │ 40 - export const ORDER = ["keys", "mcp"]
-     │ 40 + export const ORDER = ["keys", "mcp", "packages"]
-     │ 41 + // packages sits after mcp: both are about what the terminal can load
-     │ 42   export function docsTopic(name: string) {
-     │ 43     return TOPICS.get(name)
-     │ 44   }
+       38   const TOPICS = loadTopics(docsDir)
+       39
+       40 - export const ORDER = ["keys", "mcp"]
+       40 + export const ORDER = ["keys", "mcp", "packages"]
+       41 + // packages sits after mcp: both are about what the terminal can load
+       42   export function docsTopic(name: string) {
+       43     return TOPICS.get(name)
+       44   }
 
      $ bun test apps/cli/test/docs.test.ts  241 pass · 0 fail                                 12.4s
      ◆ packages list  object · 4 keys

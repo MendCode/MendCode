@@ -365,9 +365,9 @@ describe("memory page rows", () => {
 
   test("filter line shows the query and a no-match message", () => {
     const rows = plain(render({ ...start(), filter: "zzz", filtering: true })).map(unwrapPanel)
-    expect(rows.some((line) => line === "/ zzz▏")).toBe(true)
+    expect(rows.some((line) => line === "/ zzz_  0 matches")).toBe(true)
     expect(rows.some((line) => line === 'no match for "zzz"')).toBe(true)
-    expect(plain(render({ ...start(), filter: "pnpm" })).map(unwrapPanel).some((line) => line === "/ pnpm")).toBe(true)
+    expect(plain(render({ ...start(), filter: "pnpm" })).map(unwrapPanel).some((line) => line.startsWith("/ pnpm"))).toBe(true)
   })
 
   test("confirm delete pins an error colored prompt above the list, inside the panel", () => {

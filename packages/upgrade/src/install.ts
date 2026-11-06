@@ -15,8 +15,8 @@ const within = (parent: string, child: string) => {
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative))
 }
 
-/** Legacy MendCode locations; an upgrade never writes to or under them. */
-export const v1Dirs = (home: string) => [path.join(home, ".mendcode"), path.join(home, ".local", "share", "mendcode")]
+/** MendCode v1's locations (set aside in `~/.mendcode-v1` when `~/.mendcode` became this version's folder); an upgrade never writes to or under them. */
+export const v1Dirs = (home: string) => [path.join(home, ".mendcode-v1"), path.join(home, ".local", "share", "mendcode")]
 
 /** The absolute data directory, or a refusal when it is (inside) a legacy MendCode directory. */
 export function resolveDataDir({ dataDir, home }: { dataDir: string; home: string }) {

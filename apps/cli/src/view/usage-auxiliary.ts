@@ -7,9 +7,13 @@ import type { UsageAuxiliary } from "@mendcode/protocol"
 
 export type AuxiliaryTotals = { calls: number; input: number; output: number; tokens: number; costMicros: number; unpriced: number }
 
+/** Roles whose turns the days and models already count (hidden sessions run turns): listed to say whose they are, never added to "outside turns". */
+export const ATTRIBUTION_ROLES: readonly string[] = ["prReview"]
+
 export function auxiliaryTotals(entries: readonly UsageAuxiliary[]): AuxiliaryTotals {
   const out: AuxiliaryTotals = { calls: 0, input: 0, output: 0, tokens: 0, costMicros: 0, unpriced: 0 }
   for (const entry of entries) {
+    if (ATTRIBUTION_ROLES.includes(entry.role)) continue
     out.calls += entry.calls
     out.input += entry.input
     out.output += entry.output
@@ -38,5 +42,5 @@ export function callCount(calls: number, format: (value: number) => string) {
 
 /** "summary · gpt-6-luna": the role, then the model id without its provider (the CLI's JSON keeps both). */
 export function auxiliaryLabel(entry: UsageAuxiliary) {
-  return `${entry.role} · ${entry.model || entry.provider || "unknown model"}`
+  return `${entry.role} · ${entry.model || entry.provider || "unknown model"}${ATTRIBUTION_ROLES.includes(entry.role) ? " (in the totals above)" : ""}`
 }

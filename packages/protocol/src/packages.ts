@@ -33,22 +33,22 @@ export const PackageAssetsReport = lazySchema(() => z.strictObject({
 }))
 export type PackageAssetsReport = z.infer<typeof PackageAssetsReport>
 
-export const PackagesSearch = lazySchema(() => z.strictObject({ ...base, type: z.literal("packages.search"), query: z.string().max(500).optional(), sourceId: name.optional() }))
-export const PackagesShow = lazySchema(() => z.strictObject({ ...base, type: z.literal("packages.show"), name, sourceId: name.optional() }))
-export const PackagesPreview = lazySchema(() => z.strictObject({ ...base, type: z.literal("packages.preview"), name: name.optional(), sourceId: name, scope }))
-export const PackagesSources = lazySchema(() => z.strictObject({ ...base, type: z.literal("packages.sources") }))
-export const PackagesAddSource = lazySchema(() => z.strictObject({ ...base, type: z.literal("packages.add-source"), sourceId: name, location: z.string().min(1).max(4096), enabled: z.boolean().optional() }))
-export const PackagesRemoveSource = lazySchema(() => z.strictObject({ ...base, type: z.literal("packages.remove-source"), sourceId: name }))
-export const PackagesInstallCatalog = lazySchema(() => z.strictObject({ ...base, type: z.literal("packages.install-catalog"), name, sourceId: name.optional(), scope, replace: z.boolean().optional() }))
-export const PackagesInstallSource = lazySchema(() => z.strictObject({ ...base, type: z.literal("packages.install-source"), sourceId: name, scope, replace: z.boolean().optional() }))
-export const PackagesDisableAll = lazySchema(() => z.strictObject({ ...base, type: z.literal("packages.disable-all"), scope: scope.optional() }))
-export const PackagesAssets = lazySchema(() => z.strictObject({ ...base, type: z.literal("packages.assets") }))
+export const PackagesSearch = lazySchema(() => z.strictObject({ ...base, type: z.literal("profiles.search"), query: z.string().max(500).optional(), sourceId: name.optional() }))
+export const PackagesShow = lazySchema(() => z.strictObject({ ...base, type: z.literal("profiles.show"), name, sourceId: name.optional() }))
+export const PackagesPreview = lazySchema(() => z.strictObject({ ...base, type: z.literal("profiles.preview"), name: name.optional(), sourceId: name, scope }))
+export const PackagesSources = lazySchema(() => z.strictObject({ ...base, type: z.literal("profiles.sources") }))
+export const PackagesAddSource = lazySchema(() => z.strictObject({ ...base, type: z.literal("profiles.add-source"), sourceId: name, location: z.string().min(1).max(4096), enabled: z.boolean().optional() }))
+export const PackagesRemoveSource = lazySchema(() => z.strictObject({ ...base, type: z.literal("profiles.remove-source"), sourceId: name }))
+export const PackagesInstallCatalog = lazySchema(() => z.strictObject({ ...base, type: z.literal("profiles.install-catalog"), name, sourceId: name.optional(), scope, replace: z.boolean().optional() }))
+export const PackagesInstallSource = lazySchema(() => z.strictObject({ ...base, type: z.literal("profiles.install-source"), sourceId: name, scope, replace: z.boolean().optional() }))
+export const PackagesDisableAll = lazySchema(() => z.strictObject({ ...base, type: z.literal("profiles.disable-all"), scope: scope.optional() }))
+export const PackagesAssets = lazySchema(() => z.strictObject({ ...base, type: z.literal("profiles.assets") }))
 /** Downloads a remote catalog's index into the local cache (the only catalog call that reaches the network). Opt-in: the source must be enabled. Ack: `{ sources, entries }`. */
-export const PackagesRefresh = lazySchema(() => z.strictObject({ ...base, type: z.literal("packages.refresh"), sourceId: name }))
-/** Lists installed packages' switchable resources (skills, commands, agents, themes, tools, extensions); `key` narrows to one package. Ack: `PackageConfigReport`. */
-export const PackagesConfig = lazySchema(() => z.strictObject({ ...base, type: z.literal("packages.config"), key: z.string().max(200).optional() }))
-/** Turns one resource of an installed package on or off (`Settings.disabledPackageResources`). Ack: `PackageConfigReport` for that package. */
-export const PackagesResource = lazySchema(() => z.strictObject({ ...base, type: z.literal("packages.resource"), key: z.string().max(200), resource: z.string().max(200), enabled: z.boolean() }))
+export const PackagesRefresh = lazySchema(() => z.strictObject({ ...base, type: z.literal("profiles.refresh"), sourceId: name }))
+/** Lists installed profiles' switchable resources (skills, commands, agents, themes, tools, extensions); `key` narrows to one profile. Ack: `PackageConfigReport`. */
+export const PackagesConfig = lazySchema(() => z.strictObject({ ...base, type: z.literal("profiles.config"), key: z.string().max(200).optional() }))
+/** Turns one resource of an installed profile on or off (`Settings.disabledProfileResources`). Ack: `PackageConfigReport` for that profile. */
+export const PackagesResource = lazySchema(() => z.strictObject({ ...base, type: z.literal("profiles.resource"), key: z.string().max(200), resource: z.string().max(200), enabled: z.boolean() }))
 export const PackageConfigReport = lazySchema(() => z.strictObject({
   directory: z.string(),
   packages: z.array(z.strictObject({

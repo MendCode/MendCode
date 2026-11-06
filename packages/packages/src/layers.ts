@@ -6,18 +6,18 @@ import { SWITCHABLE_KINDS } from "@mendcode/protocol/wire"
 /**
  * Where extensions are discovered. Every loader (skills, commands, custom tools, MCP) reads the same kind
  * folder (`skills/`, `commands/`, `tools/`, `mcp.json`) in each layer, lowest precedence first:
- * user packages → the user's own files → project packages → the project's own files. A later layer wins
- * on name collisions, so what the user or project writes always overrides what a package ships.
+ * user profiles → the user's own files → project profiles → the project's own files. A later layer wins
+ * on name collisions, so what the user or project writes always overrides what a profile ships.
  */
 export type ExtensionSource = "user" | "project"
 
 export type ExtensionLayer = {
-  /** The folder that holds the kind folders: the data dir, `<project>/.mendcode`, or a package root. */
+  /** The folder that holds the kind folders: the data dir, `<project>/.mendcode`, or a profile root. */
   dir: string
   source: ExtensionSource
-  /** Set for a package layer. */
+  /** Set for a profile layer. */
   pkg?: string
-  /** Resources of this package layer turned off (`skills/foo`, `commands/review`, …); loaders skip them. */
+  /** Resources of this profile layer turned off (`skills/foo`, `commands/review`, …); loaders skip them. */
   off?: readonly string[]
   /**
    * Set on `.agents` and `.claude` layers (see `foreignLayers`): data only, and only the listed kinds are read
@@ -26,26 +26,26 @@ export type ExtensionLayer = {
   foreign?: { kinds: readonly ResourceKind[]; origin: "agents" | "claude" | "parent" }
 }
 
-/** The kinds one resource of which can be switched off: the switchable rows of the one table of package kinds (`PACKAGE_KINDS`). */
+/** The kinds one resource of which can be switched off: the switchable rows of the one table of profile kinds (`PACKAGE_KINDS`). */
 export const RESOURCE_KINDS = SWITCHABLE_KINDS
 export type ResourceKind = (typeof SWITCHABLE_KINDS)[number]
 
-/** `skills/foo`: how one resource of a package is addressed. */
+/** `skills/foo`: how one resource of a profile is addressed. */
 export const resourceId = (kind: ResourceKind, name: string) => `${kind}/${name}`
 
-/** `user:pkg/skills/foo`: a resource id under its package key, as stored in `Settings.disabledPackageResources`. */
+/** `user:pkg/skills/foo`: a resource id under its profile key, as stored in `Settings.disabledProfileResources`. */
 export const resourceKey = (pkgKey: string, id: string) => `${pkgKey}/${id}`
 
-/** Whether a loader may use `name` of `kind` from this layer; only package layers carry switches. */
+/** Whether a loader may use `name` of `kind` from this layer; only profile layers carry switches. */
 export const layerAllows = (layer: Pick<ExtensionLayer, "off">, kind: ResourceKind, name: string) => !layer.off?.includes(resourceId(kind, name))
 
 export const PACKAGES_DIR = "packages"
 export const PACKAGE_NAME = /^[a-z0-9][a-z0-9._-]{0,63}$/
 
-/** `user:name` / `project:name`: how a package is addressed for enable/disable. */
+/** `user:name` / `project:name`: how a profile is addressed for enable/disable. */
 export const packageKey = (source: ExtensionSource, name: string) => `${source}:${name}`
 
-/** The folder a scope keeps its own files in: the data dir, or `<project>/.mendcode` (packages, Trash and activation state live under it). */
+/** The folder a scope keeps its own files in: the data dir, or `<project>/.mendcode` (profiles, Trash and activation state live under it). */
 export function scopeBase({ source, userDir, directory }: { source: ExtensionSource; userDir: string; directory: string }) {
   return source === "user" ? userDir : path.join(directory, ".mendcode")
 }
@@ -54,7 +54,7 @@ export function packagesRoot({ source, userDir, directory }: { source: Extension
   return path.join(scopeBase({ source, userDir, directory }), PACKAGES_DIR)
 }
 
-/** Installed package folders of one scope, sorted by name; folders with an invalid name are skipped. */
+/** Installed profile folders of one scope, sorted by name; folders with an invalid name are skipped. */
 export function packageDirs(root: string): Array<{ name: string; dir: string }> {
   if (!existsSync(root)) return []
   const found: Array<{ name: string; dir: string }> = []
@@ -69,7 +69,11 @@ export function packageDirs(root: string): Array<{ name: string; dir: string }> 
 /** What ships with MendCode itself (e.g. the skill that teaches extending it); below everything the user installs. */
 export const BUILTIN_PACKAGE = "builtin"
 
-/** The layers for a project, lowest precedence first. Disabled packages are left out. */
+const resolved = (dir: string) => { try { return realpathSync(dir) } catch { return path.resolve(dir) } }
+/** Whether `<directory>/.mendcode` is the data directory itself (a session in the home folder, `~/.mendcode`): then it is the user layer only. */
+export const projectIsUserDir = ({ userDir, directory }: { userDir: string; directory: string }) => resolved(path.join(directory, ".mendcode")) === resolved(userDir)
+
+/** The layers for a project, lowest precedence first. Disabled profiles are left out. */
 export function extensionLayers({ userDir, directory, disabled = [], disabledResources = [], builtinDir }: { userDir: string; directory: string; disabled?: readonly string[]; disabledResources?: readonly string[]; builtinDir?: string }): ExtensionLayer[] {
   const off = new Set(disabled)
   const resourcesOff = (key: string) => disabledResources.filter((entry) => entry.startsWith(`${key}/`)).map((entry) => entry.slice(key.length + 1))
@@ -81,14 +85,16 @@ export function extensionLayers({ userDir, directory, disabled = [], disabledRes
         return { dir, source, pkg: name, ...(resources.length ? { off: resources } : {}) }
       })
   const builtin: ExtensionLayer[] = builtinDir ? [{ dir: builtinDir, source: "user", pkg: BUILTIN_PACKAGE }] : []
-  return [...builtin, ...packages("user"), { dir: userDir, source: "user" }, ...packages("project"), { dir: path.join(directory, ".mendcode"), source: "project" }]
+  const user: ExtensionLayer[] = [...builtin, ...packages("user"), { dir: userDir, source: "user" }]
+  if (projectIsUserDir({ userDir, directory })) return user
+  return [...user, ...packages("project"), { dir: path.join(directory, ".mendcode"), source: "project" }]
 }
 
 /** The layers a loader sees when it is not given any: just the user's and the project's own folders. */
 export function defaultLayers({ userDir, directory }: { userDir: string; directory: string }): ExtensionLayer[] {
   return [
     { dir: userDir, source: "user" },
-    { dir: path.join(directory, ".mendcode"), source: "project" },
+    ...(projectIsUserDir({ userDir, directory }) ? [] : [{ dir: path.join(directory, ".mendcode"), source: "project" as const }]),
   ]
 }
 

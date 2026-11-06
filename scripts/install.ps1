@@ -6,6 +6,7 @@
 #                                       # it never overwrites a tier or settings that already exist, and /tier changes it later (docs/release.md)
 # While the repository is private the GitHub CLI reads it: `gh auth login` (or GH_TOKEN) is all it needs. Every install checks
 # the SHA256 of the binary and the cosign signature of the release workflow; see docs/release.md.
+param([switch] $Force)
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
@@ -60,6 +61,31 @@ function Select-NewestTag([object[]] $Releases, [string] $Name) {
   $Best
 }
 
+# Nightlies live on one moving release tagged `nightly`, replaced by every build. Its binaries, checksums and signatures are named and
+# signed under the versioned tag of the build it holds, which is read from its SHA256SUMS. Returns that tag, or nothing.
+function Get-MovingNightly {
+  $Probe = Join-Path ([IO.Path]::GetTempPath()) ('mendcode-probe-' + [Guid]::NewGuid().ToString('N'))
+  $null = New-Item -ItemType Directory -Path $Probe
+  try {
+    if ($UseGh) {
+      & gh release download nightly --repo $Repo --pattern SHA256SUMS --dir $Probe *> $null
+      if ($LASTEXITCODE -ne 0) { return }
+    } else {
+      $Uri = [Uri] "$Base/download/nightly/SHA256SUMS"
+      if ($Uri.IsFile) { Copy-Item -LiteralPath $Uri.LocalPath -Destination (Join-Path $Probe 'SHA256SUMS') }
+      else { Invoke-WebRequest -UseBasicParsing -Uri $Uri -OutFile (Join-Path $Probe 'SHA256SUMS') }
+    }
+    $Builds = @(Get-Content -LiteralPath (Join-Path $Probe 'SHA256SUMS') | ForEach-Object {
+      if ($_ -cmatch '^[0-9a-fA-F]{64} [ *]?mendcode-(\d+\.\d+\.\d+-nightly\.\d{8}\.\d+)-windows-x64\.exe$') { [pscustomobject] @{ Tag = "v$($Matches[1])"; Prerelease = $true } }
+    })
+    if ($Builds.Count) { Select-NewestTag $Builds 'nightly' }
+  } catch {
+    return
+  } finally {
+    Remove-Item -LiteralPath $Probe -Recurse -Force -ErrorAction SilentlyContinue
+  }
+}
+
 $Tag = $env:MENDCODE_VERSION
 if ($Tag -and $Channel) { throw 'MENDCODE_VERSION names one release; it cannot be combined with a channel' }
 if (-not $Tag) {
@@ -68,6 +94,10 @@ if (-not $Tag) {
     $Listing = & gh release list --repo $Repo --limit 100 --json 'tagName,isPrerelease,isDraft' | ConvertFrom-Json
     if ($LASTEXITCODE -ne 0) { throw "cannot list the releases of $Repo with gh" }
     $Releases = @($Listing | Where-Object { -not $_.isDraft } | ForEach-Object { [pscustomobject] @{ Tag = $_.tagName; Prerelease = [bool] $_.isPrerelease } })
+    if ($Channel -eq 'nightly' -and @($Releases | Where-Object { $_.Tag -ceq 'nightly' -and $_.Prerelease }).Count) {
+      $Built = Get-MovingNightly
+      if ($Built) { $Releases = @($Releases) + [pscustomobject] @{ Tag = $Built; Prerelease = $true } }
+    }
     $Tag = Select-NewestTag $Releases $Channel
   } elseif ($Channel -eq 'stable') {
     $Response = Invoke-WebRequest -UseBasicParsing -Uri "$Base/latest"
@@ -76,6 +106,10 @@ if (-not $Tag) {
   } else {
     $Listing = Invoke-RestMethod -UseBasicParsing -Uri "$Api/releases?per_page=100" -Headers @{ Accept = 'application/vnd.github+json' }
     $Releases = @($Listing | Where-Object { -not $_.draft } | ForEach-Object { [pscustomobject] @{ Tag = $_.tag_name; Prerelease = [bool] $_.prerelease } })
+    if ($Channel -eq 'nightly' -and @($Releases | Where-Object { $_.Tag -ceq 'nightly' -and $_.Prerelease }).Count) {
+      $Built = Get-MovingNightly
+      if ($Built) { $Releases = @($Releases) + [pscustomobject] @{ Tag = $Built; Prerelease = $true } }
+    }
     $Tag = Select-NewestTag $Releases $Channel
   }
 }
@@ -83,14 +117,29 @@ if ($Tag -notmatch '^(v|dev-)') { $Tag = "v$Tag" }
 if ($Tag -cnotmatch '^(v[0-9]{1,9}\.[0-9]{1,9}\.[0-9]{1,9}(-beta\.[0-9]{1,9}|-nightly\.[0-9]{8}\.[1-9][0-9]{0,8})?|dev-[0-9a-f]{7,40})$') { throw 'unsupported release version' }
 $Version = $Tag -creplace '^v', ''
 $Asset = "mendcode-$Version-windows-x64.exe"
-$Url = "$Base/download/$Tag"
+# The files of the build the moving nightly release holds are under that release's tag; every other release has its own.
+$Rel = $Tag
+if ($Tag -match '-nightly\.' -and (Get-MovingNightly) -ceq $Tag) { $Rel = 'nightly' }
+$Url = "$Base/download/$Rel"
 $InstallDir = if ($env:MENDCODE_INSTALL_DIR) { $env:MENDCODE_INSTALL_DIR } else { Join-Path $env:LOCALAPPDATA 'Programs\mendcode' }
+$Installed = Join-Path $InstallDir 'mendcode.exe'
+if (Test-Path -LiteralPath $Installed) {
+  $Current = ((& $Installed --version 2>$null) -split '\s+')[0]
+  if ($Current -notmatch '^(v|dev-)') { $Current = "v$Current" }
+  if ($Current -ne $Tag -and $Current -match '^v\d+\.\d+\.\d+($|-beta\.|-nightly\.)' -and $Tag -notmatch '^dev-') {
+    $Newest = Select-NewestTag @([pscustomobject] @{ Tag = $Current; Prerelease = $Current.Contains('-') }, [pscustomobject] @{ Tag = $Tag; Prerelease = $Tag.Contains('-') }) 'nightly'
+    if ($Newest -eq $Current) {
+      Write-Warning "Downgrade $Current → $Tag"
+      if (-not $Force) { throw 'refusing to replace a newer binary; use -Force to downgrade' }
+    }
+  }
+}
 $null = New-Item -ItemType Directory -Force -Path $InstallDir
 $Stage = Join-Path $InstallDir ('.mendcode-install.' + [Guid]::NewGuid().ToString('N'))
 $null = New-Item -ItemType Directory -Path $Stage
 function Download([string] $Name) {
   if ($UseGh) {
-    & gh release download $Tag --repo $Repo --pattern $Name --dir $Stage *> $null
+    & gh release download $Rel --repo $Repo --pattern $Name --dir $Stage *> $null
     if ($LASTEXITCODE -ne 0) { throw "cannot download $Name of $Tag" }
     return
   }
@@ -125,8 +174,10 @@ try {
   $Destination = Join-Path $InstallDir 'mendcode.exe'
   if (Test-Path -LiteralPath $Destination) { [IO.File]::Replace($Binary, $Destination, $null) }
   else { [IO.File]::Move($Binary, $Destination) }
-  $Receipt = "schema=mendcode-v2.install.v1`nbinary=mendcode.exe`nsha256=$Expected`ntier=$Tier`n"
-  [IO.File]::WriteAllText((Join-Path $InstallDir '.mendcode-v2-install'), $Receipt, (New-Object Text.UTF8Encoding($false)))
+  $Receipt = "schema=mendcode.install.v1`nbinary=mendcode.exe`nsha256=$Expected`ntier=$Tier`n"
+  [IO.File]::WriteAllText((Join-Path $InstallDir '.mendcode-install'), $Receipt, (New-Object Text.UTF8Encoding($false)))
+  # An earlier installer's receipt, under the old name; the new one replaces it.
+  Remove-Item -LiteralPath (Join-Path $InstallDir '.mendcode-v2-install') -ErrorAction SilentlyContinue
   $UserPath = [Environment]::GetEnvironmentVariable('Path', 'User')
   $Entries = @($UserPath -split ';' | ForEach-Object { $_.Trim().TrimEnd('\') })
   if ($Entries -notcontains $InstallDir.TrimEnd('\')) {

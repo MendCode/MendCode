@@ -79,3 +79,38 @@ snapshots can contain sensitive page content and are stored in the session like 
 - No arbitrary JavaScript evaluation, file upload, downloads, cross-origin iframe content, shadow DOM or
   multi-tab control. These need a separate, stronger approval class than this conservative first version.
 - The browser's own Chromium sandbox is on; `--no-sandbox` is passed only when the daemon runs as root.
+
+## Your own browser (extension)
+
+The `browser` tool above drives a headless Chromium of its own. `user_browser` is the other half: it works in the
+browser you already use (Chrome, Arc, Brave, Edge, Chromium) through a MendCode extension, in background tabs of a tab
+group titled "MendCode", so you keep browsing and focus is never taken. It needs no Accessibility permission. It is
+**off by default**: start the daemon with `MENDCODE_BROWSER_EXTENSION=1` (feature `browser`, full tier). Until you also
+install the extension, nothing listens and nothing is written.
+
+| Action | Approval | Result |
+|---|---|---|
+| `status` | none | installed, connected, allowed sites |
+| `install` | execute | writes the files below; the model asks you with a question first |
+| `allow_site {origin}` | execute | adds the site to MendCode's list |
+| `open {url}` | execute | opens it in the MendCode group, in the background (site must be allowed) |
+| `tabs`, `read {tabId}`, `close {tabId}` | none | the group's tabs, a tab's page text (labelled untrusted), close it |
+| `click {tabId, selector}`, `type {tabId, selector, text, submit?}` | execute | by CSS selector; password, card and one-time-code fields are refused |
+
+`install` writes, and returns the list of, these files (macOS and Linux; Windows needs a registry entry and is not
+supported yet): the extension folder, `host.mjs` and `host.sh` and `installed.json` under `<data dir>/browser/`, and one
+`NativeMessagingHosts/com.mendcode.browser.json` per browser whose profile folder exists. Then load the extension once:
+`chrome://extensions`, Developer mode, Load unpacked, pick `<data dir>/browser/extension`, and restart the browser.
+
+How it connects: the browser starts `host.sh` (a stdio native messaging host) when the extension asks; the host only
+joins stdio to the daemon's socket `<data dir>/browser/bridge.sock` (mode 0600, listening only while the bridge is
+enabled and installed). Messages are 4-byte little-endian length plus JSON in both directions. The extension's first
+message carries a per-install token the daemon checks; a wrong token is dropped.
+
+Security: a site works only when **both** sides agree: MendCode's list (`allow_site`, approved by you) and the browser's
+own optional host permission (the extension's toolbar button, on that site, which needs your click). The extension acts
+only on tabs it opened itself, inside its group; your own tabs are never read or driven. It holds no `cookies`
+permission and fills no password, card or one-time-code field. Page text is returned labelled as untrusted web content.
+Tests use fake sockets and temp directories; nothing touches a real browser.
+
+Not yet: Firefox and Safari, Windows, a CLI install command, and keeping remote/peer turns away from the tool.

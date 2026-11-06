@@ -1,11 +1,10 @@
 import type { ProviderModel } from "@mendcode/protocol"
-import { createAnthropicProvider } from "./anthropic-messages"
 import { createChatCompletionsProvider } from "./openai-compatible"
 import { createResponsesProvider } from "./openai-responses"
 import { RetryableProviderError, type ModelProvider } from "./provider"
 import { type Fetch, joinUrl } from "./provider-http"
 import { gitlabConfig, gitlabUrl, gitlabKey as keyOf, gitlabJson as json, gitlabFailure as fail } from "./gitlab-http"
-import { createGitLabWorkflowProvider, type GitLabSocketFactory } from "./gitlab-workflow"
+import type { GitLabSocketFactory } from "./gitlab-workflow"
 export { gitlabConfig, gitlabUrl } from "./gitlab-http"
 import type { ResolvedProvider } from "./provider-factory"
 import { GITLAB_CHAT_MODELS, GITLAB_MODELS, GITLAB_WORKFLOW_REFS } from "./gitlab-models"
@@ -63,7 +62,7 @@ export function createGitLabProvider(input: { provider: ResolvedProvider; fetch?
   const gateway = gitlabUrl(config.aiGatewayUrl ?? baseUrl).href.replace(/\/+$/, "")
   const transport = input.fetch ?? ((url, init) => fetch(url, init))
   const now = input.now ?? Date.now
-  const workflow = createGitLabWorkflowProvider(input)
+  let workflow: ModelProvider | undefined
   let cached: { key: string; token: string; headers: Record<string, string>; expires: number } | undefined
 
   async function access(doFetch: Fetch, signal: AbortSignal, key: string) {
@@ -89,7 +88,12 @@ export function createGitLabProvider(input: { provider: ResolvedProvider; fetch?
     model: provider.models[0]?.id ?? "duo-chat-sonnet-4-6",
     async *stream(request) {
       const id = request.model ?? provider.models[0]?.id ?? "duo-chat-sonnet-4-6"
-      if (id === "duo-workflow" || id.startsWith("duo-workflow-")) { yield* workflow.stream(request); return }
+      if (id === "duo-workflow" || id.startsWith("duo-workflow-")) {
+        const { createGitLabWorkflowProvider } = await import("./gitlab-workflow")
+        workflow ??= createGitLabWorkflowProvider(input)
+        yield* workflow.stream(request)
+        return
+      }
       const mapping = GITLAB_CHAT_MODELS[id]
       if (!mapping) throw new Error(`[PROVIDER]: unknown GitLab agentic model ${id}`)
       const override = request.parameters?.providerModel
@@ -128,7 +132,7 @@ export function createGitLabProvider(input: { provider: ResolvedProvider; fetch?
       }
       const common = { id: provider.id, model, fetch: guarded, ...(input.idleTimeoutMs !== undefined ? { idleTimeoutMs: input.idleTimeoutMs } : {}), takesImages: () => provider.models.find((entry) => entry.id === id)?.images !== false }
       const adapter = mapping.format === "anthropic"
-        ? createAnthropicProvider({ ...common, baseUrl: `${gateway}/ai/v1/proxy/anthropic/v1`, apiKey: () => undefined })
+        ? (await import("./anthropic-messages")).createAnthropicProvider({ ...common, baseUrl: `${gateway}/ai/v1/proxy/anthropic/v1`, apiKey: () => undefined })
         : mapping.format === "responses"
           ? createResponsesProvider({ ...common, baseUrl: `${gateway}/ai/v1/proxy/openai/v1`, headers: async () => ({ authorization: "Bearer delegated" }), routingHeader: false, hostedTools: [] })
           : createChatCompletionsProvider({ ...common, baseUrl: `${gateway}/ai/v1/proxy/openai/v1`, apiKey: () => undefined })

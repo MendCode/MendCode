@@ -1,44 +1,14 @@
 import { createHash } from "node:crypto"
-import { readFileSync, statSync } from "node:fs"
-import { homedir } from "node:os"
 import path from "node:path"
 import { spawn } from "node:child_process"
 import type { BedrockOptions } from "@mendcode/protocol"
 import type { Fetch } from "./provider-http"
 import { awsHost, signAws, type AwsCredentials } from "./aws-signature"
+import { awsPresence, awsCredentials as credentials, readAwsFile as read } from "./credential-presence"
 
 type Env = Record<string, string | undefined>
 type Profile = Record<string, string>
 const failure = (reason: string) => new Error(`[AUTH]: AWS ${reason}`)
-
-function read(file: string): string {
-  if (statSync(file).size > 1024 * 1024) throw failure("credential file exceeds 1 MiB")
-  return readFileSync(file, "utf8")
-}
-
-function ini(file: string): Record<string, Profile> {
-  let text: string
-  try { text = read(file) } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return {}; throw failure("credential file could not be read") }
-  const sections: Record<string, Profile> = Object.create(null)
-  let section: Profile | undefined
-  for (const line of text.split(/\r?\n/)) {
-    const title = /^\s*\[([^\]]+)\]\s*(?:[#;].*)?$/.exec(line)
-    if (title) { section = sections[title[1]!.replace(/^profile /, "")] ??= Object.create(null); continue }
-    const entry = /^\s*([a-zA-Z0-9_]+)\s*=\s*(.*?)\s*$/.exec(line)
-    if (section && entry) section[entry[1]!] = entry[2]!
-  }
-  return sections
-}
-
-function credentials(raw: Record<string, unknown>): AwsCredentials {
-  const accessKeyId = raw.AccessKeyId ?? raw.accessKeyId ?? raw.aws_access_key_id
-  const secretAccessKey = raw.SecretAccessKey ?? raw.secretAccessKey ?? raw.aws_secret_access_key
-  const sessionToken = raw.SessionToken ?? raw.sessionToken ?? raw.aws_session_token
-  const expires = raw.Expiration ?? raw.expiration ?? raw.aws_expiration
-  const expiration = typeof expires === "number" ? expires : typeof expires === "string" ? Date.parse(expires) : undefined
-  if (typeof accessKeyId !== "string" || !/^[A-Za-z0-9]{8,128}$/.test(accessKeyId) || typeof secretAccessKey !== "string" || !/^[\x21-\x7e]{8,4096}$/.test(secretAccessKey) || sessionToken !== undefined && (typeof sessionToken !== "string" || !/^[\x21-\x7e]{1,16384}$/.test(sessionToken)) || expiration !== undefined && (!Number.isFinite(expiration) || expiration <= Date.now())) throw failure("credentials are invalid or expired")
-  return { accessKeyId, secretAccessKey, ...(typeof sessionToken === "string" ? { sessionToken } : {}), ...(expiration !== undefined ? { expiration } : {}) }
-}
 
 function processArgs(command: string): string[] {
   const args: string[] = []
@@ -60,22 +30,10 @@ function processArgs(command: string): string[] {
 /** Read-only AWS files, per-call environment, temporary credentials cached only until refresh. No SDK dependency. */
 export function createAwsCredentialChain(input: { env(): Env; options: BedrockOptions; region: string; fetch?: Fetch; home?: string }) {
   const doFetch: Fetch = input.fetch ?? ((url, init) => fetch(url, init))
-  const home = input.home ?? homedir()
+  const { home, files, profileName, envKeys, ready } = awsPresence(input)
   const cache = new Map<string, AwsCredentials>()
   const pending = new Map<string, Promise<AwsCredentials>>()
   const ssoTokens = new Map<string, { stamp: string; token: Record<string, unknown> }>()
-  const files = () => {
-    const env = input.env()
-    const config = ini(env.AWS_CONFIG_FILE ?? path.join(home, ".aws/config"))
-    const keys = ini(env.AWS_SHARED_CREDENTIALS_FILE ?? path.join(home, ".aws/credentials"))
-    return { config, profiles: Object.fromEntries([...new Set([...Object.keys(config), ...Object.keys(keys)])].map((id) => [id, { ...config[id], ...keys[id] }])) }
-  }
-  const profileName = () => input.options.profile ?? input.env().AWS_PROFILE
-  const envKeys = (): AwsCredentials | undefined => {
-    const env = input.env()
-    if (!env.AWS_ACCESS_KEY_ID && !env.AWS_SECRET_ACCESS_KEY) return undefined
-    return credentials({ AccessKeyId: env.AWS_ACCESS_KEY_ID, SecretAccessKey: env.AWS_SECRET_ACCESS_KEY, SessionToken: env.AWS_SESSION_TOKEN })
-  }
   async function remote(url: string, init: RequestInit, signal: AbortSignal): Promise<Response> {
     let response: Response
     try { response = await doFetch(url, { ...init, redirect: "error", signal: AbortSignal.any([signal, AbortSignal.timeout(10_000)]) }) }
@@ -197,15 +155,7 @@ export function createAwsCredentialChain(input: { env(): Env; options: BedrockOp
   }
   return {
     /** Candidate presence only: never resolves a remote role or executes a credential process. */
-    ready(): boolean {
-      try {
-        const env = input.env()
-        if (!profileName() && envKeys()) return true
-        const selected = files().profiles[profileName() ?? "default"]
-        if (selected) return Boolean(selected.aws_access_key_id && selected.aws_secret_access_key || selected.role_arn || selected.sso_session || selected.sso_start_url || selected.credential_process && input.options.allowCredentialProcess)
-        return Boolean(env.AWS_WEB_IDENTITY_TOKEN_FILE && env.AWS_ROLE_ARN || input.options.allowMetadata && (env.AWS_CONTAINER_CREDENTIALS_FULL_URI || env.AWS_CONTAINER_CREDENTIALS_RELATIVE_URI || env.AWS_EC2_METADATA_DISABLED !== "true"))
-      } catch { return false }
-    },
+    ready,
     async get(signal: AbortSignal): Promise<AwsCredentials> {
       if (signal.aborted) throw signal.reason
       if (!profileName()) { const keys = envKeys(); if (keys) return keys }

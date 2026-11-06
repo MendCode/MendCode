@@ -21,7 +21,7 @@ function fixture() {
 }
 function snapshot(directory: string, relative: string) { return readFileSync(path.join(directory, relative, "runtime-pack.json"), "utf8") }
 
-test("create authors an audited native package and exposes it in the local catalog without activating it", async () => {
+test("create authors an audited native profile and exposes it in the local catalog without activating it", async () => {
   const f = fixture()
   const report = authorLocalPackage({ directory: f.directory, action: "create", metadata: { id: "review", title: "Review Kit", description: "Review helpers", version: "1.2.0", kind: "skill-pack", channel: "local", sourceType: "local", sourceURL: "./review", compatMendcode: "^2", compatRuntimePack: "^0" }, now: () => 42 })
   expect(report).toMatchObject({ name: "review", version: "1.2.0", activated: false, signed: false, secretsIncluded: false })
@@ -65,7 +65,7 @@ test("delete-local moves only generated data to Trash, clears selection and pres
   expect(f.registry().search("", "local").entries.filter((entry) => entry.name === "review")).toHaveLength(1)
 })
 
-test("failed metadata, selection and secret audits leave the previous package and authoring selection unchanged", () => {
+test("failed metadata, selection and secret audits leave the previous profile and authoring selection unchanged", () => {
   const f = fixture()
   const report = authorLocalPackage({ directory: f.directory, action: "create" })
   const before = snapshot(f.directory, report.packagePath), state = readFileSync(path.join(f.source, "package-authoring.json"), "utf8")
@@ -105,7 +105,7 @@ test("source and output links cannot redirect an authoring write or removal", ()
   expect(() => authorLocalPackage({ directory: project, action: "create" })).toThrow("links")
 })
 
-test("bounded exports reject oversized assets before replacing the package", () => {
+test("bounded exports reject oversized assets before replacing the profile", () => {
   const f = fixture()
   const report = authorLocalPackage({ directory: f.directory, action: "create" })
   const before = snapshot(f.directory, report.packagePath)

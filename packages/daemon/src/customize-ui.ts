@@ -257,6 +257,23 @@ export function footerRowNotes(profile: Record<string, unknown>): string[] {
   return notes
 }
 
+/** The keys of the one-row footer: footer rows draw the whole footer, so with rows these change nothing. */
+const ONE_ROW_FOOTER_KEYS = ["showModel", "showProvider", "showEffort", "showAgent", "statusLeft", "statusRight"]
+
+/**
+ * What a model must hear when the user's own footer stands: `before` is the profile before the call. A one-row key changes nothing
+ * while footer rows draw the footer, and rows that replaced the user's own are named so they can be put back.
+ */
+export function footerOwnedNotes(before: Record<string, unknown>, values: Record<string, unknown>): string[] {
+  const rows = Array.isArray(before.footerRows) ? before.footerRows as unknown[][] : []
+  if (!rows.length) return []
+  const notes: string[] = []
+  const oneRow = ONE_ROW_FOOTER_KEYS.filter((key) => key in values)
+  if (oneRow.length && !("footerRows" in values)) notes.push(`the user's footerRows draw the footer, so ${oneRow.join(", ")} change nothing there: add or remove the part in footerRows (send the whole list, their entries kept) instead`)
+  if (Array.isArray(values.footerRows) && values.footerRows.length && JSON.stringify(values.footerRows) !== JSON.stringify(rows)) notes.push(`replaced the user's own footerRows ${JSON.stringify(rows)}: keep their entries unless they asked to drop them; sending that list back restores it`)
+  return notes
+}
+
 /**
  * The user extensions that fill a footer slot and are still on, by the name `/extensions` switches them with (the name the module
  * declares, the file's name when it declares none). They draw over or beside `footerRows`, so setting rows switches them off.
@@ -282,9 +299,9 @@ export function footerExtensions(dir: string, profile: Record<string, unknown>):
  * a key, set it) comes first, the extension contract is one line and the rest of it is `mendcode docs extensions`.
  */
 export const CUSTOMIZE_UI_DESCRIPTION = [
-  "Change what the user sees in this MendCode terminal (their screen, not project code): any bar, panel, sidebar, prompt box, footer, message label, start screen, logo, scroll button, thinking block, theme or color. A request about one of those means this terminal unless the user names project files: apply it yourself now; never tell the user to do it.",
-  "keys: query is a few English words for the part (\"top bar\", \"footer\", \"prompt border\"); returns the matching keys: what each changes, type, values, default, current value. Use it when unsure of a key.",
-  "settings: values {key: value}, applied live, e.g. {\"showTopbar\":false} removes the whole row above a session ({\"contextBar\":\"off\"} only its context bar; the start screen's first row is homeHeader: change only the part asked for), {\"panelHeader\":false} the panel's first row, {\"showStatus\":false} the footer, {\"promptBorder\":\"rounded\"}, {\"theme\":\"paper\"}. A bad key or value changes nothing, names the nearest keys. quotaRefresh spends real quota: only when asked.",
+  "Change what the user sees in this MendCode terminal (their screen, not project code): any bar, panel, sidebar, prompt box, footer, message label, start screen, logo, scroll button, thinking block, theme or color. A request about one of those means this terminal unless the user names project files: apply it yourself now; never tell the user to do it. A session's title is session_meta, not this.",
+  "keys: query is a few English words for the part (\"top bar\", \"footer\", \"prompt border\"); returns the matching keys: what each changes, values, default, current value.",
+  "settings: values {key: value}, applied live, e.g. {\"showTopbar\":false} removes the whole row above a session ({\"contextBar\":\"off\"} only its context bar; the start screen's first row is homeHeader: change only the part asked for), {\"panelHeader\":false} the panel's first row, {\"showStatus\":false} the footer, {\"promptBorder\":\"rounded\"}, {\"theme\":\"paper\"}. A bad key changes nothing and names the nearest. quotaRefresh spends real quota: only when asked.",
   `write/edit/reload: code, only for what no key does: a module in <data dir>/extensions (write: flat name.ts|js and the whole content; edit: file, old unique literal, new), run with the user's privileges after approval. Contract: export default {name:'unique',tui(api){...}}; api.settings.set(key,value), api.messageStyle(role,{icon,label,lead}), api.renderMessage(role,fn), api.slot(name,ctx=>lines), api.view(slot,fn), api.widget, api.page; lines are arrays of spans {text,fg,bg,bold,dim}. Read ${PROGRAM_NAME} docs extensions before writing one. Result errors: fix with edit, then reload.`,
 ].join("\n")
 
@@ -314,7 +331,9 @@ export function createCustomizeUiTool(dir: string, reload: (directory: string) =
         let notes: string[] = []
         if (action.action === "settings") {
           safeProfileStorage(dir)
+          const before = createTuiControl(dir).run({ operation: "profile" }).profile as Record<string, unknown>
           const result = createTuiControl(dir).run({ operation: "apply", profile: action.values })
+          notes.push(...footerOwnedNotes(before, action.values))
           emit({ type: "tui.changed", profile: result.profile as Record<string, never> })
           let profile = result.profile as Record<string, unknown>
           // Rows the caller just set are what the user asked to see: a user extension that draws the footer would cover them, so it

@@ -12,14 +12,11 @@ import { createHookBus, type HookBus } from "./hooks"
 import { adaptTool, toolProblem, wrapBuiltin, type ExtensionEngineTool } from "./tool-adapter"
 import { CONTEXT_REWRITE_HOOKS, DAEMON_HOOKS, MAX_EXTENSION_ERRORS, type ExtensionLog, type ExtensionRecord } from "./types"
 import { discoverPluginFiles, type PluginFile } from "@mendcode/extension-api/plugin-files"
-import { preflightModule } from "@mendcode/extension-api/preflight"
-import { adaptPluginModule } from "./plugin-adapter"
 import { createPluginAuth } from "./plugin-auth"
-import { registerPluginToolImports } from "./plugin-tool"
 import { providerEntry, providerProblem, type ExtensionProviderEntry } from "./provider-registration"
 import { extensionExec } from "./exec"
-import { createSessionApi, type ExtensionSessionPort } from "./session-api"
-import { createDialogApi, type ExtensionDialogPort } from "./dialogs"
+import type { ExtensionSessionPort } from "./session-api"
+import type { ExtensionDialogPort } from "./dialogs"
 import { createSessionEntries } from "./entries"
 import { createExtensionEvents } from "./event-bus"
 import { checkFlagValues, declaredFlags, flagProblem, type FlagValues } from "./flags"
@@ -39,7 +36,7 @@ const messageOf = (error: unknown) => (error instanceof Error ? error.message : 
 export type ExtensionsOptions = {
   /** The MendCode data dir: extensions keep private data in `<dataDir>/extensions-data/<name>`. */
   dataDir: string
-  /** Extension layers of a project (packages, the user's and the project's own folders), lowest precedence first. */
+  /** Extension layers of a project (profiles, the user's and the project's own folders), lowest precedence first. */
   layersFor(directory: string): ExtensionLayer[]
   /** Whether project-layer code may run in `directory`: the same trust as project custom tools. */
   isTrusted(directory: string): boolean
@@ -189,7 +186,8 @@ export function createExtensions(options: ExtensionsOptions) {
     }
   }
 
-  function createApi(record: ExtensionRecord, name: string): DaemonExtensionAPI {
+  async function createApi(record: ExtensionRecord, name: string): Promise<DaemonExtensionAPI> {
+    const [{ createSessionApi }, { createDialogApi }] = await Promise.all([import("./session-api"), import("./dialogs")])
     let dataDir: string | undefined
     const refuse = (what: string) => {
       if (!record.sealed) return false
@@ -241,7 +239,7 @@ export function createExtensions(options: ExtensionsOptions) {
         const problem = virtualModelProblem(model)
         if (problem) return fail(record, problem)
         // The catalog serves every project, so a project's own extension cannot add to it (like a provider).
-        if (record.layer === "project") return fail(record, "registerVirtualModel: a virtual model comes from a user extension (<data dir>/extensions or a user package), not a project")
+        if (record.layer === "project") return fail(record, "registerVirtualModel: a virtual model comes from a user extension (<data dir>/extensions or a user profile), not a project")
         record.virtualModels ??= []
         if (record.virtualModels.some((entry) => entry.id === model.id)) return fail(record, `registerVirtualModel: ${model.id} is registered twice`)
         record.virtualModels.push({ id: model.id, models: [...model.models], ...(model.name ? { name: model.name } : {}), ...(model.route ? { route: model.route } : {}) })
@@ -316,7 +314,7 @@ export function createExtensions(options: ExtensionsOptions) {
         const problem = providerProblem(value)
         if (problem) return fail(record, problem)
         // Providers serve every project (like providers.json in the data dir), so a project's own extension cannot add one.
-        if (value.baseUrl !== undefined && record.layer === "project") return fail(record, "registerProvider: a provider with baseUrl comes from a user extension (<data dir>/extensions or a user package), not a project")
+        if (value.baseUrl !== undefined && record.layer === "project") return fail(record, "registerProvider: a provider with baseUrl comes from a user extension (<data dir>/extensions or a user profile), not a project")
         record.provider = value
       },
       exec: extensionExec,
@@ -349,9 +347,10 @@ export function createExtensions(options: ExtensionsOptions) {
     const result = record as ExtensionRecord & { failed?: string }
     try {
       if (candidate.plugin?.error) throw new Error(candidate.plugin.error)
-      if (candidate.plugin) registerPluginToolImports()
+      if (candidate.plugin) (await import("./plugin-tool")).registerPluginToolImports()
       else {
         // A syntax error or a missing import is found without importing: the runtime would remember the failed import and refuse the fix.
+        const { preflightModule } = await import("@mendcode/extension-api/preflight")
         const problem = preflightModule(candidate.file)
         if (problem) throw new Error(problem)
       }
@@ -359,7 +358,7 @@ export function createExtensions(options: ExtensionsOptions) {
       const cache = createRequire(import.meta.url).cache
       for (const key of Object.keys(cache)) if (key === candidate.file || key.startsWith(candidate.dir + path.sep)) delete cache[key]
       const module = await withinLoadLimit(import(`${pathToFileURL(candidate.file).href}?v=${stamp}.${++loads}`), options.importTimeoutMs ?? IMPORT_TIMEOUT_MS) as Record<string, unknown>
-      const value = candidate.plugin ? adaptPluginModule(module, { ...candidate, plugin: candidate.plugin }, directory) : module.default
+      const value = candidate.plugin ? (await import("./plugin-adapter")).adaptPluginModule(module, { ...candidate, plugin: candidate.plugin }, directory) : module.default
       if (!isRecord(value) || typeof value.name !== "string" || !EXTENSION_NAME.test(value.name)) fail(record, "invalid extension: the default export must be { name, daemon?, tui? } with a name of letters, digits, . _ - (max 64)")
       else if ((value.daemon !== undefined && typeof value.daemon !== "function") || (value.tui !== undefined && typeof value.tui !== "function")) fail(record, "invalid extension: daemon and tui must be functions")
       else extension = value
@@ -381,7 +380,7 @@ export function createExtensions(options: ExtensionsOptions) {
     if (typeof extension.pluginId === "string") record.pluginId = extension.pluginId
     if (extension.abi === "v1-adapter" || extension.abi === "tool-module") record.abi = extension.abi
     if (record.daemon) {
-      const api = createApi(record, record.name)
+      const api = await createApi(record, record.name)
       const setup = await bus.guard(record, "daemon()", () => (extension.daemon as (api: DaemonExtensionAPI) => unknown)(api))
       if (!setup.ok) {
         result.failed = record.errors.at(-1) ?? "daemon() failed"
@@ -413,7 +412,7 @@ export function createExtensions(options: ExtensionsOptions) {
     return records
   }
 
-  /** User-layer extensions (user folder, user packages, builtin): the same for every directory, loaded once. */
+  /** User-layer extensions (user folder, user profiles, builtin): the same for every directory, loaded once. */
   let userRecords: Promise<ExtensionRecord[]> | undefined
   const candidatesFor = (layer: ExtensionLayer) => [...discover(layer), ...discoverPluginFiles(layer.dir, options.dataDir, "server").map((file) => ({ ...file, layer })), ...(layer.source === "project" && !layer.pkg && path.basename(layer.dir) === ".mendcode" ? discoverPluginFiles(path.dirname(layer.dir), options.dataDir, "server").map((file) => ({ ...file, layer })) : [])]
   async function loadUser(layers: ExtensionLayer[], directory: string) {

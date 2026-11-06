@@ -141,7 +141,7 @@ header and keys; `esc` returns to the conversation at the same scroll position. 
 
 ## Settings
 
-All in `/customize` > Terminal (profile keys), all switchable.
+All in `/customize` > Terminal (customize keys), all switchable.
 
 | Setting | Values | Default |
 |---|---|---|
@@ -152,7 +152,7 @@ All in `/customize` > Terminal (profile keys), all switchable.
 
 `file_viewer` is a [tier](tiers.md) feature (balanced and above, `features.file_viewer` overrides). Minimalist never shows the right slot
 unless `pathClick: panel` is set or the tier is raised; the `/open` command is listed from balanced. `pathClick` and `viewerFocus` cannot be
-set by a package.
+set by a profile.
 
 ## What it reads, and where
 

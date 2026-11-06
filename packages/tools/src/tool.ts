@@ -107,6 +107,10 @@ export type LoopCreateInput = {
   costBudget?: import("@mendcode/protocol").LoopCostBudget | undefined
   rubric?: import("@mendcode/protocol").LoopRubric | undefined
   approvalPolicy?: import("@mendcode/protocol").LoopApprovalPolicy | undefined
+  /** Absolute paths outside the project the runs will read; the user approves them once with the loop. */
+  reads?: string[] | undefined
+  /** "none" leaves no notice in this session after a run (default: a short notice per run). */
+  notify?: "creator" | "none" | undefined
 }
 
 /**
@@ -154,7 +158,8 @@ export type WorktreePort = {
 export type PrReviewPort = {
   /** What a review of `pr` now would do, for the approval text; never throws. */
   preview(input: { pr?: string | undefined }): Promise<string>
-  review(input: { pr?: string | undefined }): Promise<{ ok: true; text: string } | { ok: false; message: string }>
+  /** `full`: review the head whole even when it was already reviewed with the same config. */
+  review(input: { pr?: string | undefined; full?: boolean | undefined }): Promise<{ ok: true; text: string } | { ok: false; message: string }>
   status(): Promise<{ ok: true; text: string } | { ok: false; message: string }>
 }
 
@@ -167,16 +172,31 @@ export type PrWatchPort = {
 }
 
 /** One other session of the same project, as `sessions` shows it: never its transcript. */
-export type PeerSession = { sessionId: string; title: string; state: string; updatedAt: number }
+export type PeerSession = { sessionId: string; title: string; state: string; updatedAt: number; /** Set when the list spans projects (`scope: "all"` or a `directory`). */ directory?: string; /** The shortest end of the id (at least 8 characters) that no other session shares: what lists print and every tool accepts as the id. */ shortId?: string }
+
+/** What a list covers: this session's project (default), every project of this daemon, or one other project's folder. */
+export type PeerScope = { scope?: "project" | "all" | undefined; directory?: string | undefined; /** Only sessions whose title contains this text. */ query?: string | undefined; /** Only sessions that are working (`busy`) or not (`idle`). */ state?: "busy" | "idle" | undefined; /** Only sessions whose folder contains this text; it searches every project. */ project?: string | undefined }
+
+/** A session started in another project's folder with a first message; the message and its answer follow the `tell` rules. */
+export type PeerStart = { directory: string; text: string; title?: string | undefined }
+export type PeerStartResult = { ok: true; sessionId: string; directory: string; permission: string; trusted: boolean } | { ok: false; message: string }
 
 /**
  * What the peer tools may do: list the project's other sessions and queue a plain-text message for one. The message
  * waits for the target's next free moment; the target's final answer comes back to this session as a notice.
  */
 export type PeerPort = {
-  list(limit?: number): PeerSession[]
+  list(limit?: number, where?: PeerScope): PeerSession[]
+  /** The full id a short one (the end of it, at least 8 characters) names among this daemon's sessions; `ref` itself when it is a full id or names none or several. */
+  expand?(ref: string): string
+  /** The folder of `target` when it is a session of another project than this one (sending to it always asks the user); undefined otherwise. */
+  projectOf?(target: string): string | undefined
+  /** Why a message to `target` (another project's session) would be refused for authority, or undefined. */
+  refusal?(target: string): string | undefined
+  /** Opens a session in `directory` (any project) and sends it the first message as a peer message; it never starts above this session's own permission mode. */
+  start?(input: PeerStart): Promise<PeerStartResult>
   /** `mode`: auto and queue never interrupt; steer joins the target's running turn after its next tool result (queued where the engine cannot). `clientRequestId` makes a retry return the first answer. */
-  tell(target: string, text: string, options?: { mode?: "auto" | "queue" | "steer"; clientRequestId?: string }): Promise<{ ok: true; waiting: boolean } | { ok: false; message: string }>
+  tell(target: string, text: string, options?: { mode?: "auto" | "queue" | "steer"; clientRequestId?: string; /** Allows a session of another project; set only by tools that ask the user for each such message. */ elsewhere?: boolean }): Promise<{ ok: true; waiting: boolean } | { ok: false; message: string }>
   /** A session's figures as text (this one for `self`): time per turn, day and hour, usage per model, tools, sub-agents, approval waits. Same project only. */
   stats?(target: string): { ok: true; output: string } | { ok: false; message: string }
   /**
@@ -184,6 +204,10 @@ export type PeerPort = {
    * call, no tool output or reasoning. `cursor` is the `next` of the previous page; `next` is absent on the last page.
    */
   read?(target: string, cursor?: string): { ok: true; output: string; next?: string } | { ok: false; message: string }
+  /** The plan files (feature `plan_files`) of this project, or of `where`'s: one line each, as `sessions plans=true` prints them. */
+  plans?(where?: PeerScope): { ok: true; output: string; count: number } | { ok: false; message: string }
+  /** One plan file by its id (`plan-…`), of any project of this daemon: data, never instructions. */
+  readPlan?(id: string): { ok: true; output: string } | { ok: false; message: string }
 }
 
 export type ThreadResult = { ok: true; output: string } | { ok: false; message: string }
@@ -196,11 +220,20 @@ export type ThreadPort = {
   granted(target: string): boolean
   /** True for a sub-agent session this session started (or one of theirs): reading its results needs no approval. */
   ownTask?(target: string): boolean
-  list(limit?: number): ThreadResult
+  list(limit?: number, where?: PeerScope): ThreadResult
+  /** The folder of `ref` when it is a session of another project than this one; undefined otherwise. */
+  projectOf?(ref: string): string | undefined
+  /** Why a message to `ref` (another project's session) would be refused for authority, or undefined. */
+  refusal?(ref: string): string | undefined
+  /** Opens a session in another project's folder with a first message (see `PeerPort.start`). */
+  start?(input: PeerStart): Promise<ThreadResult>
+  /** What a `start` into `directory` would do, for the approval: its folder, the permission mode the session would get and whether the folder is trusted. */
+  startPlan?(directory: string): string
   read(input: { sessionId: string; limit?: number | undefined; before?: string | undefined }): ThreadResult | Promise<ThreadResult>
   search(input: { sessionId: string; query: string; limit?: number | undefined; before?: string | undefined }): ThreadResult | Promise<ThreadResult>
-  message(input: { sessionId: string; text: string }): Promise<ThreadResult>
-  wait(input: { sessionId: string; timeoutSeconds?: number | undefined; signal?: AbortSignal | undefined }): Promise<ThreadResult>
+  /** `elsewhere` lets `sessionId` name a session of another project (its full id); only the `threads` tool sets it, and it always asks first. */
+  message(input: { sessionId: string; text: string; elsewhere?: boolean | undefined }): Promise<ThreadResult>
+  wait(input: { sessionId: string; timeoutSeconds?: number | undefined; signal?: AbortSignal | undefined; elsewhere?: boolean | undefined }): Promise<ThreadResult>
   interrupt(input: { sessionId: string }): Promise<ThreadResult>
   /** Brings what a fork of this session did since it branched into this session, as context for its next turn. Only a fork of this very session. */
   mergeBack(input: { sessionId: string }): ThreadResult
@@ -271,12 +304,14 @@ export interface Tool<Args extends z.ZodType = z.ZodType> {
   description: string
   permission: ToolPermission
   /** After argument validation, a mixed read/write tool may narrow its permission for this call. */
-  permissionFor?(args: z.infer<Args>, context?: { threads?: ThreadPort | undefined }): ToolPermission
+  permissionFor?(args: z.infer<Args>, context?: { threads?: ThreadPort | undefined; peers?: PeerPort | undefined }): ToolPermission
   /** Requires the user's approval for this exact call, regardless of mode, allow rules or saved grants. */
-  individualApprovalFor?(args: z.infer<Args>, context?: { threads?: ThreadPort | undefined }): boolean
+  individualApprovalFor?(args: z.infer<Args>, context?: { threads?: ThreadPort | undefined; peers?: PeerPort | undefined }): boolean
   /** `always`, or `approvalFor` per call: the call asks, showing `preview`, in every permission mode and whatever the allow rules or saved grants say. */
   approval?: "always"
-  approvalFor?(args: z.infer<Args>): boolean
+  approvalFor?(args: z.infer<Args>, context?: { threads?: ThreadPort | undefined; peers?: PeerPort | undefined }): boolean
+  /** A reason the call can never run (checked before any approval is asked, so the user is not asked to approve what would be refused). */
+  refusalFor?(args: z.infer<Args>, context?: { threads?: ThreadPort | undefined; peers?: PeerPort | undefined }): string | undefined
   /** The lowest tier that offers this tool to the model (docs/tiers.md); absent means every tier. Ignored while no `tier` is set. */
   tier?: import("@mendcode/protocol/wire").Tier
   args: Args

@@ -97,7 +97,7 @@ describe("argument parsing", () => {
     expect(failure("storage", "--clean", "--older-than", "soon")).toContain("--older-than")
     expect(failure("storage", "--clean", "--dry-run", "--vacuum")).toContain("cannot vacuum")
     expect(helpText("storage")).toContain("--dry-run")
-    expect(helpText()).toContain("mendcode storage")
+    expect(helpText()).toContain("storage [--clean]")
   })
 
   test("help at the top level and per command", () => {
@@ -105,7 +105,7 @@ describe("argument parsing", () => {
     expect(parsed("--help")).toMatchObject({ kind: "help" })
     expect(parsed("session", "--help")).toMatchObject({ kind: "help", topic: "session" })
     expect(parsed("help", "loop")).toMatchObject({ topic: "loop" })
-    expect(helpText()).toContain("exit codes: 0 ok")
+    expect(helpText()).toContain("Exit codes: 0 ok")
     for (const topic of ["session", "memory", "loop", "usage"]) expect(helpText(topic)).toStartWith(`usage: mendcode ${topic}`)
     for (const word of ["session list", "session create", "session send", "session wait", "session events", "session cancel", "memory", "loop", "usage"]) expect(helpText()).toContain(word.split(" ")[0]!)
   })
@@ -273,7 +273,7 @@ describe("output formatting", () => {
     expect(project.sent[0]).toEqual({ type: "memory.add", scope: "project", directory: "/work/app", text: "fact" })
     const user = harness({ send })
     await runAutomation(parsed("memory", "add", "--user", "--category", "style", "terse"), user.deps)
-    // The directory only picks the profile a user memory belongs to.
+    // The directory only picks the area a user memory belongs to.
     expect(user.sent[0]).toEqual({ type: "memory.add", scope: "user", directory: "/work/app", text: "terse", category: "style" })
     expect(user.out).toEqual(["saved mem_1\n"])
   })
@@ -626,37 +626,37 @@ describe("integration with a real daemon (faux engine)", () => {
   })
 })
 
-describe("package commands", () => {
+describe("profile commands", () => {
   const pkg = { name: "acme", source: "user", key: "user:acme", dir: "/d/packages/acme", enabled: true, manifest: { name: "acme", version: "1.2.0", description: "Acme helpers" }, contents: { tools: 1, skills: 0, commands: 2, themes: 0, mcp: true } }
 
   test("parsing: user scope unless --project; install takes a source and --replace", () => {
-    expect(parsed("package", "list")).toMatchObject({ kind: "package.list" })
-    expect(parsed("package", "install", "github:acme/tools#v1", "--replace")).toMatchObject({ kind: "package.install", source: "github:acme/tools#v1", scope: "user", replace: true })
-    expect(parsed("package", "remove", "acme", "--project")).toMatchObject({ kind: "package.remove", name: "acme", scope: "project" })
-    expect(parsed("package", "disable", "acme")).toMatchObject({ kind: "package.enable", name: "acme", scope: "user", enabled: false, switch: false })
-    expect(parsed("package", "enable", "project:retro", "--switch")).toMatchObject({ kind: "package.enable", name: "retro", scope: "project", enabled: true, switch: true })
-    expect(parsed("package", "remove", "acme")).toMatchObject({ kind: "package.remove", purge: false })
-    expect(parsed("package", "remove", "acme", "--purge")).toMatchObject({ kind: "package.remove", name: "acme", purge: true })
-    expect(parsed("package", "restore", "acme")).toMatchObject({ kind: "package.restore", name: "acme", scope: "user" })
+    expect(parsed("package", "list")).toMatchObject({ kind: "profile.list" })
+    expect(parsed("package", "install", "github:acme/tools#v1", "--replace")).toMatchObject({ kind: "profile.install", source: "github:acme/tools#v1", scope: "user", replace: true })
+    expect(parsed("package", "remove", "acme", "--project")).toMatchObject({ kind: "profile.remove", name: "acme", scope: "project" })
+    expect(parsed("package", "disable", "acme")).toMatchObject({ kind: "profile.enable", name: "acme", scope: "user", enabled: false, switch: false })
+    expect(parsed("package", "enable", "project:retro", "--switch")).toMatchObject({ kind: "profile.enable", name: "retro", scope: "project", enabled: true, switch: true })
+    expect(parsed("package", "remove", "acme")).toMatchObject({ kind: "profile.remove", purge: false })
+    expect(parsed("package", "remove", "acme", "--purge")).toMatchObject({ kind: "profile.remove", name: "acme", purge: true })
+    expect(parsed("package", "restore", "acme")).toMatchObject({ kind: "profile.restore", name: "acme", scope: "user" })
     expect(failure("package", "install")).toContain("needs <folder")
-    expect(failure("package", "zap")).toContain('unknown package command "zap"')
+    expect(failure("package", "zap")).toContain('unknown profile command "zap"')
     expect(helpText("package")).toContain("enable|disable <name>")
   })
 
-  test("each command maps to its daemon command and prints the package rows", async () => {
-    const h = harness({ send: () => ({ ok: true, result: { directory: "/work/app", packages: [pkg, { ...pkg, name: "old", key: "project:old", source: "project", enabled: false, manifest: undefined, problem: "no mendcode-package.json", contents: { tools: 0, skills: 0, commands: 0, themes: 0, mcp: false } }] } }) })
+  test("each command maps to its daemon command and prints the profile rows", async () => {
+    const h = harness({ send: () => ({ ok: true, result: { directory: "/work/app", packages: [pkg, { ...pkg, name: "old", key: "project:old", source: "project", enabled: false, manifest: undefined, problem: "no mendcode-profile.json", contents: { tools: 0, skills: 0, commands: 0, themes: 0, mcp: false } }] } }) })
     expect(await runAutomation(parsed("package", "list"), h.deps)).toBe(0)
-    expect(h.sent[0]).toEqual({ type: "packages.list", directory: "/work/app" })
-    expect(h.out.join("")).toBe("user:acme@1.2.0  on       1 tool, 2 commands, mcp  Acme helpers\nproject:old  problem  empty  (no mendcode-package.json)\n")
+    expect(h.sent[0]).toEqual({ type: "profiles.list", directory: "/work/app" })
+    expect(h.out.join("")).toBe("user:acme@1.2.0  on       1 tool, 2 commands, mcp  Acme helpers\nproject:old  problem  empty  (no mendcode-profile.json)\n")
     const install = harness({ send: () => ({ ok: true, result: { packages: [pkg] } }) })
     await runAutomation(parsed("package", "install", "./acme", "--project"), install.deps)
-    expect(install.sent[0]).toEqual({ type: "packages.install", directory: "/work/app", source: "./acme", scope: "project" })
+    expect(install.sent[0]).toEqual({ type: "profiles.install", directory: "/work/app", source: "./acme", scope: "project" })
     expect(install.out.join("")).toStartWith("installed\nuser:acme@1.2.0")
     const off = harness({ send: () => ({ ok: true, result: { packages: [{ ...pkg, enabled: false }] } }) })
     await runAutomation(parsed("package", "disable", "acme"), off.deps)
-    expect(off.sent[0]).toEqual({ type: "packages.enable", directory: "/work/app", key: "user:acme", enabled: false })
+    expect(off.sent[0]).toEqual({ type: "profiles.enable", directory: "/work/app", key: "user:acme", enabled: false })
     expect(off.out.join("")).toStartWith("disabled user:acme\nuser:acme@1.2.0  off")
-    const refused = harness({ send: () => ({ ok: false, error: { code: "invalid_command", message: "[PACKAGES]: refused" } }) })
+    const refused = harness({ send: () => ({ ok: false, error: { code: "invalid_command", message: "[PROFILES]: refused" } }) })
     expect(await runAutomation(parsed("package", "install", "./x"), refused.deps)).toBe(1)
     expect(refused.err.join("")).toContain("refused")
   })
@@ -693,18 +693,18 @@ describe("recipe commands", () => {
   })
 })
 
-describe("profile commands", () => {
+describe("area commands", () => {
   test("parsing", () => {
-    expect(parsed("profile")).toMatchObject({ kind: "profile.list" })
-    expect(parsed("profile", "add", "company", "~/Code/acme", "./vendor", "--permission", "edits")).toMatchObject({ kind: "profile.add", name: "company", folders: ["~/Code/acme", "./vendor"], permission: "edits" })
-    expect(failure("profile", "add", "personal", "/x")).toContain("needs a name")
-    expect(failure("profile", "add", "company")).toContain("at least one folder")
-    expect(failure("profile", "add", "company", "/x", "--permission", "root")).toContain("--permission")
-    expect(failure("profile", "remove")).toContain("needs <name>")
-    expect(helpText("profile")).toContain("add <name> <folder>")
+    expect(parsed("area")).toMatchObject({ kind: "area.list" })
+    expect(parsed("area", "add", "company", "~/Code/acme", "./vendor", "--permission", "edits")).toMatchObject({ kind: "area.add", name: "company", folders: ["~/Code/acme", "./vendor"], permission: "edits" })
+    expect(failure("area", "add", "personal", "/x")).toContain("needs a name")
+    expect(failure("area", "add", "company")).toContain("at least one folder")
+    expect(failure("area", "add", "company", "/x", "--permission", "root")).toContain("--permission")
+    expect(failure("area", "remove")).toContain("needs <name>")
+    expect(helpText("area")).toContain("add <name> <folder>")
   })
 
-  test("add writes the profiles setting with folders resolved from here, and marks the profile of this directory", async () => {
+  test("add writes the areas setting with folders resolved from here, and marks the area of this directory", async () => {
     let settings: Record<string, unknown> = {}
     const h = harness({
       send: (command: Record<string, unknown>) => {
@@ -716,13 +716,13 @@ describe("profile commands", () => {
         return undefined
       },
     })
-    expect(await runAutomation(parsed("profile", "add", "company", ".", "~/Code/acme", "--permission", "edits"), h.deps)).toBe(0)
-    expect(settings.profiles).toEqual([{ name: "company", directories: ["/work/app", "~/Code/acme"], defaultPermission: "edits" }])
+    expect(await runAutomation(parsed("area", "add", "company", ".", "~/Code/acme", "--permission", "edits"), h.deps)).toBe(0)
+    expect(settings.areas).toEqual([{ name: "company", directories: ["/work/app", "~/Code/acme"], defaultPermission: "edits" }])
     expect(h.out.join("")).toBe("  personal         everything else\n* company          /work/app, ~/Code/acme  · edits\n")
     const removed = harness({ send: (command: Record<string, unknown>) => (command.type === "settings.get" ? { ok: true, result: { settings } } : { ok: true }) })
-    expect(await runAutomation(parsed("profile", "remove", "company"), removed.deps)).toBe(0)
-    expect(removed.sent.find((command) => command.type === "settings.set")).toEqual({ type: "settings.set", patch: { profiles: null } })
-    expect(await runAutomation(parsed("profile", "remove", "nope"), removed.deps)).toBe(1)
+    expect(await runAutomation(parsed("area", "remove", "company"), removed.deps)).toBe(0)
+    expect(removed.sent.find((command) => command.type === "settings.set")).toEqual({ type: "settings.set", patch: { areas: null } })
+    expect(await runAutomation(parsed("area", "remove", "nope"), removed.deps)).toBe(1)
   })
 })
 

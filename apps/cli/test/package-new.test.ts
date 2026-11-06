@@ -31,20 +31,20 @@ async function scaffold(name = "ember") {
   return { parent, dir: path.join(parent, name), code, out: out.join(""), err: err.join("") }
 }
 
-describe("mendcode package new", () => {
-  test("writes a complete package with one file per thing a package can change", async () => {
+describe("mendcode profile new", () => {
+  test("writes a complete profile with one file per thing a profile can change", async () => {
     const { dir, code } = await scaffold()
     expect(code).toBe(0)
-    for (const file of ["mendcode-package.json", "README.md", "themes/ember.json", "extensions/message-assistant.ts", "extensions/tool-card.ts", "commands/ember-hello.md", "skills/ember-tips/SKILL.md", "keybindings.json", "workflows/ember-review.js", "docs/hooks.example.json"]) expect(existsSync(path.join(dir, file))).toBe(true)
+    for (const file of ["mendcode-profile.json", "README.md", "themes/ember.json", "extensions/message-assistant.ts", "extensions/tool-card.ts", "commands/ember-hello.md", "skills/ember-tips/SKILL.md", "keybindings.json", "workflows/ember-review.js", "docs/hooks.example.json"]) expect(existsSync(path.join(dir, file))).toBe(true)
     // The hooks example is not live: only hooks.json is read.
     expect(existsSync(path.join(dir, "hooks.json"))).toBe(false)
-    const manifest = JSON.parse(readFileSync(path.join(dir, "mendcode-package.json"), "utf8"))
+    const manifest = JSON.parse(readFileSync(path.join(dir, "mendcode-profile.json"), "utf8"))
     expect(manifest.activate.views).toEqual({ "message.assistant": "message-assistant", "tool.card": "tool-card" })
     expect(manifest.activate.tuiProfile.slashMenu).toBe("groups")
     expect(manifest.compatibility.api).toBe(EXTENSION_API_VERSION)
   })
 
-  test("passes package check with no errors and no warnings", async () => {
+  test("passes profile check with no errors and no warnings", async () => {
     const { dir } = await scaffold()
     const result = checkPackage({ dir, host, knownSlots: VIEW_SLOT_NAMES })
     expect(result.errors).toEqual([])
@@ -52,7 +52,7 @@ describe("mendcode package new", () => {
     expect(result.ok).toBe(true)
   })
 
-  test("package check is the CLI command too: exit 0 for the scaffold, 1 with the reason for a broken copy", async () => {
+  test("profile check is the CLI command too: exit 0 for the scaffold, 1 with the reason for a broken copy", async () => {
     const { dir } = await scaffold()
     const run = async (folder: string) => {
       const out: string[] = []
@@ -63,7 +63,7 @@ describe("mendcode package new", () => {
     const copy = (change: (manifest: Record<string, any>) => void) => {
       const broken = path.join(temp(), "broken")
       cpSync(dir, broken, { recursive: true })
-      const manifestFile = path.join(broken, "mendcode-package.json")
+      const manifestFile = path.join(broken, "mendcode-profile.json")
       const manifest = JSON.parse(readFileSync(manifestFile, "utf8"))
       change(manifest)
       writeFileSync(manifestFile, JSON.stringify(manifest))
@@ -72,7 +72,7 @@ describe("mendcode package new", () => {
     // A forbidden key stops at the schema, with the reason.
     const forbidden = await run(copy((manifest) => { manifest.activate.tuiProfile.permissionMode = "bypass" }))
     expect(forbidden.code).toBe(1)
-    expect(forbidden.text).toMatch(/permissionMode: a package cannot set permissions/)
+    expect(forbidden.text).toMatch(/permissionMode: a profile cannot set permissions/)
     // Everything else is listed together.
     const broken = copy((manifest) => {
       manifest.activate.views["message.assistant"] = "gone"
@@ -96,7 +96,7 @@ describe("mendcode package new", () => {
     expect(await runPackageFileCommand(parsePackageFileCommand(["package", "new", "ok-name"])!, io)).toBe(1)
   })
 
-  test("other `package` words are not this command", () => {
+  test("other `profile` words are not this command", () => {
     expect(parsePackageFileCommand(["package", "install", "x"])).toBeUndefined()
     expect(parsePackageFileCommand(["review", "this"])).toBeUndefined()
   })

@@ -4,6 +4,9 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+patchedDependencies:
+  zod@4.6.6: f02f83687f1fcfc9fe0f62215d98a0d86c6ca77eee1053e22a4d9bfb39298728
+
 importers:
 
   .:
@@ -83,7 +86,7 @@ importers:
         version: link:../tools
       zod:
         specifier: 4.6.6
-        version: 4.6.6
+        version: 4.6.6(patch_hash=f02f83687f1fcfc9fe0f62215d98a0d86c6ca77eee1053e22a4d9bfb39298728)
     devDependencies:
       '@mendcode/protocol':
         specifier: workspace:*
@@ -156,7 +159,7 @@ importers:
         version: link:../workflows
       zod:
         specifier: 4.6.6
-        version: 4.6.6
+        version: 4.6.6(patch_hash=f02f83687f1fcfc9fe0f62215d98a0d86c6ca77eee1053e22a4d9bfb39298728)
     devDependencies:
       '@mendcode/testkit':
         specifier: workspace:*
@@ -169,7 +172,7 @@ importers:
         version: link:../protocol
       zod:
         specifier: 4.6.6
-        version: 4.6.6
+        version: 4.6.6(patch_hash=f02f83687f1fcfc9fe0f62215d98a0d86c6ca77eee1053e22a4d9bfb39298728)
 
   packages/editor-launch: {}
 
@@ -183,7 +186,7 @@ importers:
         version: link:../protocol
       zod:
         specifier: 4.6.6
-        version: 4.6.6
+        version: 4.6.6(patch_hash=f02f83687f1fcfc9fe0f62215d98a0d86c6ca77eee1053e22a4d9bfb39298728)
     devDependencies:
       '@mendcode/testkit':
         specifier: workspace:*
@@ -243,7 +246,7 @@ importers:
         version: link:../tools
       zod:
         specifier: 4.6.6
-        version: 4.6.6
+        version: 4.6.6(patch_hash=f02f83687f1fcfc9fe0f62215d98a0d86c6ca77eee1053e22a4d9bfb39298728)
 
   packages/engine-pi:
     dependencies:
@@ -258,7 +261,7 @@ importers:
         version: link:../tools
       zod:
         specifier: 4.6.6
-        version: 4.6.6
+        version: 4.6.6(patch_hash=f02f83687f1fcfc9fe0f62215d98a0d86c6ca77eee1053e22a4d9bfb39298728)
     devDependencies:
       '@mendcode/testkit':
         specifier: workspace:*
@@ -282,7 +285,7 @@ importers:
         version: link:../protocol
       zod:
         specifier: 4.6.6
-        version: 4.6.6
+        version: 4.6.6(patch_hash=f02f83687f1fcfc9fe0f62215d98a0d86c6ca77eee1053e22a4d9bfb39298728)
 
   packages/lsp:
     dependencies:
@@ -291,7 +294,7 @@ importers:
         version: link:../tools
       zod:
         specifier: 4.6.6
-        version: 4.6.6
+        version: 4.6.6(patch_hash=f02f83687f1fcfc9fe0f62215d98a0d86c6ca77eee1053e22a4d9bfb39298728)
 
   packages/mcp:
     dependencies:
@@ -303,7 +306,7 @@ importers:
         version: link:../tools
       zod:
         specifier: 4.6.6
-        version: 4.6.6
+        version: 4.6.6(patch_hash=f02f83687f1fcfc9fe0f62215d98a0d86c6ca77eee1053e22a4d9bfb39298728)
 
   packages/migrate:
     dependencies:
@@ -325,7 +328,7 @@ importers:
     dependencies:
       zod:
         specifier: 4.6.6
-        version: 4.6.6
+        version: 4.6.6(patch_hash=f02f83687f1fcfc9fe0f62215d98a0d86c6ca77eee1053e22a4d9bfb39298728)
 
   packages/program: {}
 
@@ -333,7 +336,7 @@ importers:
     dependencies:
       zod:
         specifier: 4.6.6
-        version: 4.6.6
+        version: 4.6.6(patch_hash=f02f83687f1fcfc9fe0f62215d98a0d86c6ca77eee1053e22a4d9bfb39298728)
 
   packages/store:
     dependencies:
@@ -365,9 +368,12 @@ importers:
       '@mendcode/packages':
         specifier: workspace:*
         version: link:../packages
+      '@mendcode/program':
+        specifier: workspace:*
+        version: link:../program
       zod:
         specifier: 4.6.6
-        version: 4.6.6
+        version: 4.6.6(patch_hash=f02f83687f1fcfc9fe0f62215d98a0d86c6ca77eee1053e22a4d9bfb39298728)
 
   packages/upgrade:
     dependencies:
@@ -385,7 +391,7 @@ importers:
         version: link:../protocol
       zod:
         specifier: 4.6.6
-        version: 4.6.6
+        version: 4.6.6(patch_hash=f02f83687f1fcfc9fe0f62215d98a0d86c6ca77eee1053e22a4d9bfb39298728)
 
   spikes/render:
     dependencies:
@@ -805,4 +811,4 @@ snapshots:
 
   web-tree-sitter@0.25.10: {}
 
-  zod@4.6.6: {}
+  zod@4.6.6(patch_hash=f02f83687f1fcfc9fe0f62215d98a0d86c6ca77eee1053e22a4d9bfb39298728): {}

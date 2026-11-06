@@ -6,7 +6,7 @@ import { createApp } from "../src/ui/app"
 import { createScreen } from "../src/ui/screen"
 import type { ImagePlacement } from "../src/ui/image-layer"
 import type { Line } from "../src/ui/theme"
-import { CUSTOMIZE_ROWS } from "../src/view/customize-page"
+import { CUSTOMIZE_ROWS, customizeSteps } from "../src/view/customize-page"
 import { tuiProfilePath } from "../src/view/tui-profile"
 import { scratch } from "./extensions-harness"
 
@@ -47,7 +47,7 @@ async function harness(options: { env?: Record<string, string>; profile?: string
   async function customizeImages() {
     await app.onInput("/customize")
     await app.onKey("\r")
-    for (let row = 0; row < CUSTOMIZE_ROWS.indexOf("images"); row++) await app.onKey("\x1b[B")
+    for (let row = 0; row < customizeSteps("images", app.tuiProfile, { mode: app.viewMode }); row++) await app.onKey("\x1b[B")
     app.render()
   }
   async function key(seq: string) {

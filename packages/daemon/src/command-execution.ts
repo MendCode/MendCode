@@ -1,6 +1,6 @@
 import type { AgentInfo, ModelChoice, PermissionMode } from "@mendcode/protocol"
 import { catalogChoice } from "./catalog-control"
-import { commandArguments, expandCommandTemplate, type CustomCommand } from "./custom-commands"
+import type { CustomCommand } from "./custom-commands"
 import { invalidChoice, modelEngine, usableEffort, type ModelCatalog } from "./models"
 
 export function createCommandExecution(options: {
@@ -54,7 +54,7 @@ export function createCommandExecution(options: {
       if (subtask && external) throw new Error("subtask commands require a native session and model")
       let text: string
       if (definition.mcp) {
-        const values = commandArguments(input.args)
+        const values = (await import("./custom-commands")).commandArguments(input.args)
         const args: Record<string, string> = {}
         for (const [index, argument] of definition.mcp.arguments.entries()) {
           const value = values[index]
@@ -69,7 +69,7 @@ export function createCommandExecution(options: {
           if (definition.source === "project" && !input.trusted) throw new Error("trust this project's tools before executing inline shell (/tools)")
           if (external || options.engine && options.engine !== "native") throw new Error("inline shell in commands needs the native engine and a native model")
         }
-        text = await expandCommandTemplate(definition.body, input.args, (command) => options.inlineShell(command))
+        text = await (await import("./custom-commands")).expandCommandTemplate(definition.body, input.args, (command) => options.inlineShell(command))
       }
       return { text, subtask, agent: agentName, ...(explicit !== undefined || input.hasSelection || subtask && selected ? { model: usableEffort(model, options.catalog) } : {}) }
     },

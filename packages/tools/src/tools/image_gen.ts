@@ -4,7 +4,7 @@ import { z } from "zod"
 import { defineTool, type Tool, type ToolResult } from "../tool"
 import { displayPath, errorMessage, fail } from "../util"
 import { clip, envValue, isRecord, requestJson, type FetchLike } from "./api_http"
-import { createImageApi, DEFAULT_CODEX_IMAGE_MODEL, type ImageApiCredentials } from "./image_api"
+import { createImageApi, DEFAULT_CODEX_IMAGE_MODEL, FALLBACK_IMAGE_MODEL, type ImageApiCredentials } from "./image_api"
 import type { ImageGenerationSettings } from "@mendcode/protocol"
 import { detectMediaMime } from "../media"
 
@@ -29,7 +29,7 @@ const ASPECT: Record<(typeof SIZES)[number], string> = { "1024x1024": "1:1", "15
 type ImageType = "png" | "jpeg" | "gif" | "webp"
 type Generated = { bytes: Uint8Array; type: ImageType }
 type GenerateInput = { prompt: string; size: (typeof SIZES)[number]; count: number; key: string; fetch: FetchLike; signal: AbortSignal; env: Record<string, string | undefined> }
-type GenerateOutcome = { ok: true; images: Generated[]; model: string } | { ok: false; message: string }
+type GenerateOutcome = { ok: true; images: Generated[]; model: string; fellBackFrom?: string } | { ok: false; message: string }
 type Provider = { id: keyof typeof IMAGE_GEN_ENV; generate(input: GenerateInput): Promise<GenerateOutcome> }
 
 /** PNG or JPEG by magic bytes; anything else (webp, a text error page) is not accepted. */
@@ -91,7 +91,17 @@ const openrouter: Provider = {
 const openai: Provider = {
   id: "openai",
   async generate({ prompt, size, count, key, fetch, signal, env }) {
-    const model = envValue({ env, name: IMAGE_GEN_MODEL_ENV.openai }) ?? DEFAULT_OPENAI_MODEL
+    const chosen = envValue({ env, name: IMAGE_GEN_MODEL_ENV.openai })
+    const first = await requestImages({ model: chosen ?? DEFAULT_OPENAI_MODEL, prompt, size, count, key, fetch, signal, env })
+    // Only the built-in default falls back, and only when the API refuses the model or request.
+    if (first.ok || chosen || !/returned HTTP (400|404|422)\b/.test(first.message) || signal.aborted) return first
+    const retry = await requestImages({ model: FALLBACK_IMAGE_MODEL, prompt, size, count, key, fetch, signal, env })
+    return retry.ok ? { ...retry, fellBackFrom: DEFAULT_OPENAI_MODEL } : first
+  },
+}
+
+async function requestImages({ model, prompt, size, count, key, fetch, signal, env }: GenerateInput & { model: string }): Promise<GenerateOutcome> {
+  {
     const base = (envValue({ env, name: "OPENAI_BASE_URL" }) ?? "https://api.openai.com/v1").replace(/\/+$/, "")
     const dalle = model.startsWith("dall-e")
     // dall-e-3 takes one image per request; the gpt-image models take n.
@@ -128,7 +138,7 @@ const openai: Provider = {
     }
     if (images.length === 0) return { ok: false, message: "OpenAI Images returned no image" }
     return { ok: true, images: images.slice(0, count), model }
-  },
+  }
 }
 
 /** First configured wins: OpenRouter, then OpenAI. */
@@ -167,8 +177,12 @@ export async function insideProject({ cwd, target }: { cwd: string; target: stri
   }
 }
 
+/** Short prompting guide for the GPT Image models, shown to the model with the tool. */
+const PROMPT_GUIDE =
+  "A complete description of the image, in this order: scene or purpose (poster, UI mockup, icon), subject, key details (materials, framing, lighting), then constraints. Put exact text in quotes and give its font, size, color and placement; keep text short. For a cutout or icon also set transparent_background and describe an isolated subject with no scenery or shadows. For edits say what to change and what must stay the same, one change at a time. Describe a UI or product as if it already exists."
+
 const args = z.object({
-  prompt: z.string().trim().min(1).max(MAX_PROMPT_CHARS).describe("A complete description of the image: subject, style, composition, any exact text"),
+  prompt: z.string().trim().min(1).max(MAX_PROMPT_CHARS).describe(PROMPT_GUIDE),
   size: z.enum(SIZES).optional().describe("1024x1024 (default), 1536x1024 (landscape) or 1024x1536 (portrait)"),
   n: z.number().int().min(1).max(MAX_IMAGES).optional().describe(`How many images (default 1, at most ${MAX_IMAGES})`),
   path: z
@@ -176,6 +190,7 @@ const args = z.object({
     .min(1)
     .optional()
     .describe(`Where to save it, inside the project (default ${DEFAULT_DIR}/<prompt-slug>-<n>.png). With n=2 the files get -1 and -2 before the extension.`),
+  transparent_background: z.boolean().optional().describe("true for a cutout, sticker or icon that needs a transparent background (PNG); omit otherwise. Needs the configured or subscription image path"),
   referenced_image_paths: z.array(z.string().min(1).max(4096)).max(5).optional().describe("Absolute local image paths to edit; read and external-directory permissions apply. Never combine with recent images"),
   num_last_images_to_include: z.number().int().min(0).max(5).optional().describe("0 for a new image, 1–5 for recent conversation images to edit"),
 })
@@ -225,7 +240,7 @@ export function createImageGenTool({
       "Generate or edit one or two images using the independently configured image provider/model. Use only for an explicit user image request. For edits use up to five absolute local referenced_image_paths or num_last_images_to_include (1–5), never both. Read and external-directory permissions apply. For new images omit references or use 0. Returns saved paths, images and an optional visual caption. Configured generation saves managed artifacts; path saves inside the project. Never overwrite an existing asset unless the user requested replacement.",
     permission: "write",
     args,
-    async execute({ prompt, size, n, path, referenced_image_paths, num_last_images_to_include }, context): Promise<ToolResult> {
+    async execute({ prompt, size, n, path, transparent_background, referenced_image_paths, num_last_images_to_include }, context): Promise<ToolResult> {
       const title = `Image ${clip({ text: prompt, max: 60 })}`
       const cfg = settings?.()
       if (cfg?.enabled === false) return fail({ title, message: "image_gen is disabled in config" })
@@ -257,8 +272,8 @@ export function createImageGenTool({
         return fail({ title, message: "Unable to read image references" })
       }
       if (recent && references.length !== recent) return fail({ title, message: `Requested ${recent} recent images, but only ${references.length} are available; attach the missing images again` })
-      const configured = cfg?.enabled === true || references.length > 0
-      const effective = { ...cfg, model: cfg?.model ?? (cfg?.adapter === "codex-oauth" ? "openai:gpt-image-2" : provider ? `${provider.id}:${envValue({ env, name: IMAGE_GEN_MODEL_ENV[provider.id] }) ?? (provider.id === "openai" ? DEFAULT_OPENAI_MODEL : DEFAULT_OPENROUTER_MODEL)}` : "openai:gpt-image-2") }
+      const configured = cfg?.enabled === true || references.length > 0 || transparent_background === true
+      const effective = { ...cfg, model: cfg?.model ?? (cfg?.adapter === "codex-oauth" ? `openai:${DEFAULT_CODEX_IMAGE_MODEL}` : provider ? `${provider.id}:${envValue({ env, name: IMAGE_GEN_MODEL_ENV[provider.id] }) ?? (provider.id === "openai" ? DEFAULT_OPENAI_MODEL : DEFAULT_OPENROUTER_MODEL)}` : `openai:${DEFAULT_CODEX_IMAGE_MODEL}`) }
       // What the terminal's wait canvas shows while the image is made; the result's text replaces it.
       context.onOutput?.(`model ${effective.model.replace(":", "/")}\nsize ${size ?? "1024x1024"}\n`)
       const apiCredentials = (id: string) => credentials ? credentials(id) : (id === "openai" || id === "openrouter" ? (() => {
@@ -266,7 +281,7 @@ export function createImageGenTool({
         return key ? { baseUrl: envValue({ env, name: id === "openai" ? "OPENAI_BASE_URL" : "OPENROUTER_BASE_URL" }) ?? (id === "openai" ? "https://api.openai.com/v1" : "https://openrouter.ai/api/v1"), headers: { authorization: `Bearer ${key}` } } : undefined
       })() : undefined)
       const outcome = configured
-        ? await createImageApi({ settings: effective, fetch, ...(subscriptionHeaders ? { subscriptionHeaders } : {}), credentials: apiCredentials })({ prompt, size: size ?? "1024x1024", count, references, signal: context.signal })
+        ? await createImageApi({ settings: effective, fetch, ...(subscriptionHeaders ? { subscriptionHeaders } : {}), credentials: apiCredentials })({ prompt, size: size ?? "1024x1024", count, references, ...(transparent_background ? { transparent: true } : {}), signal: context.signal })
         : await provider!.generate({ prompt, size: size ?? "1024x1024", count, key: envValue({ env, name: IMAGE_GEN_ENV[provider!.id] })!, fetch, signal: context.signal, env })
       if (!outcome.ok) return fail({ title, message: `image_gen failed: ${outcome.message}` })
       if (context.signal.aborted) return fail({ title, message: "cancelled" })
@@ -331,7 +346,7 @@ export function createImageGenTool({
       )
       const relativePaths = saved.map((file) => relative(context.cwd, file))
       return {
-        output: `${lines.join("\n")}\nmodel: ${outcome.model}${captionStatus === "completed" ? `\nVisual caption: ${captionText}` : captionStatus === "error" ? "\nVisual caption unavailable" : ""}`,
+        output: `${lines.join("\n")}\nmodel: ${outcome.model}${outcome.fellBackFrom ? ` (${outcome.fellBackFrom} was not available for this account)` : ""}${captionStatus === "completed" ? `\nVisual caption: ${captionText}` : captionStatus === "error" ? "\nVisual caption unavailable" : ""}`,
         truncated: false,
         title,
         isError: false,

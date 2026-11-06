@@ -2,6 +2,7 @@ import { createHash } from "node:crypto"
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { buildGraph, type Graph } from "./graph"
+import { HOSTED_SCAN_FILES, hostedScan } from "./scan-host"
 import { readWiring, wiringStamp } from "./graft"
 import { scanSource } from "./scan"
 import { walkProject, type WalkedFile } from "./walk"
@@ -17,6 +18,8 @@ export type IndexerOptions = {
   onIndex?: ((status: IndexStatus) => void) | undefined
   /** Called while a first build scans, at every tenth of its files (`indexing` with `percent`): a client that shows progress asks for it; `onIndex` stays one event at the start and one at the end. */
   onProgress?: ((status: IndexStatus) => void) | undefined
+  /** The command of a scan host (`scanHostCommand`, scan-host.ts): a refresh with at least `HOSTED_SCAN_FILES` files to scan scans them there. */
+  scanHost?: string[] | undefined
 }
 
 /** What an index holds, for a client that shows it: the count of files, symbols and call edges, and whether the first build is still running (`none`: it ended without a graph). */
@@ -25,8 +28,12 @@ export type IndexStatus = { cwd: string; state: "indexing" | "indexed" | "none";
 /** The first build of a project in this process: files scanned of those to scan. */
 export type IndexProgress = { done: number; total: number }
 
-/** What changed on disk since the last index: the files a refresh would scan or drop, of those indexed. */
-export type IndexDrift = { changed: number; indexed: number }
+/**
+ * What changed on disk since the last index: the files a refresh would scan or drop, of those indexed, and `bytes`, the amount of code
+ * that moved. A new file counts its size, a deleted one the size it had when indexed, a modified one the larger of its size change and
+ * `touchBytes` (capped by its own size): a same-size edit shows no size change, but a file the disk says was written is not free.
+ */
+export type IndexDrift = { changed: number; indexed: number; bytes: number }
 
 /** The counts of a built graph, one pass over its nodes. */
 export function indexStatus(graph: Graph): IndexStatus {
@@ -45,7 +52,7 @@ export type Indexer = {
   /** Where a build or refresh of `cwd` that is running now stands; undefined when none runs. */
   progress(cwd: string): IndexProgress | undefined
   /** Files new, changed or deleted since the last index, from one walk and no scan; undefined when the project was never indexed. */
-  drift(args: { cwd: string; signal: AbortSignal }): Promise<IndexDrift | undefined>
+  drift(args: { cwd: string; signal: AbortSignal; touchBytes?: number | undefined }): Promise<IndexDrift | undefined>
 }
 
 /** `dirty`: records changed since the graph was last derived (an aborted refresh leaves this set). */
@@ -100,7 +107,7 @@ export const MAX_PROJECTS_IN_MEMORY = 2
 /** A project's graph nobody asked for in this long is dropped from memory; the next question rebuilds it from the cache file. */
 export const IDLE_DROP_MS = 10 * 60_000
 
-export function createIndexer({ cacheDir, now, onScan, onIndex, onProgress, maxFiles = MAX_INDEXED_FILES }: IndexerOptions): Indexer {
+export function createIndexer({ cacheDir, now, onScan, onIndex, onProgress, scanHost, maxFiles = MAX_INDEXED_FILES }: IndexerOptions): Indexer {
   const states = new Map<string, State>()
   const queues = new Map<string, Promise<unknown>>()
   /** When each project's graph was last asked for; one left alone for `IDLE_DROP_MS` is dropped from memory (its cache file stays). */
@@ -149,34 +156,66 @@ export function createIndexer({ cacheDir, now, onScan, onIndex, onProgress, maxF
     // Files this run will scan: the denominator of the progress a client or a tool result reports for a first build.
     let toScan = 0
     for (const [path, walked] of walk.files) if (differs(cache.files[path], walked) && !(wiring && Math.max(walked.mtimeMs, walked.ctimeMs) <= wiring.mtimeMs && wiring.files.has(path))) toScan++
+    const coveredBy = (path: string, walked: WalkedFile) => wiring && Math.max(walked.mtimeMs, walked.ctimeMs) <= wiring.mtimeMs ? wiring.files.get(path) : undefined
+    const scans = (path: string, walked: WalkedFile) => {
+      const current = cache.files[path]
+      return !coveredBy(path, walked) && !(current !== undefined && !differs(current, walked) && (current.source === "scan" || !graftChanged))
+    }
+    let host: ReturnType<typeof hostedScan> | undefined
+    if (scanHost && toScan >= HOSTED_SCAN_FILES) {
+      try {
+        host = hostedScan({ command: scanHost, signal, request: { cwd, files: [...walk.files].filter(([path, walked]) => scans(path, walked)).map(([path, walked]) => ({ path, walked })) } })
+      } catch {
+        host = undefined
+      }
+    }
+    const scanOne = async (path: string, walked: WalkedFile) => {
+      if (host) {
+        try {
+          const rec = await host.next(path)
+          onScan?.(path)
+          return rec
+        } catch {
+          // A host that died or failed: the files left are scanned here.
+          host.close()
+          host = undefined
+          if (signal.aborted) throw aborted()
+        }
+      }
+      return scanFile({ cwd, path, walked, onScan })
+    }
     const first = state.graph === undefined
     let scanned = 0
     let lastTen = 0
     progress.set(cwd, { done: 0, total: toScan })
-    for (const [path, walked] of walk.files) {
-      const current = cache.files[path]
-      const unchanged = current !== undefined && !differs(current, walked)
-      const covered = wiring && Math.max(walked.mtimeMs, walked.ctimeMs) <= wiring.mtimeMs ? wiring.files.get(path) : undefined
-      if (covered) {
-        cache.files[path] = { mtimeMs: walked.mtimeMs, ctimeMs: walked.ctimeMs, size: walked.size, language: walked.language, source: "graft", imports: covered.imports, symbols: covered.symbols, calls: covered.calls }
+    try {
+      for (const [path, walked] of walk.files) {
+        const current = cache.files[path]
+        const unchanged = current !== undefined && !differs(current, walked)
+        const covered = coveredBy(path, walked)
+        if (covered) {
+          cache.files[path] = { mtimeMs: walked.mtimeMs, ctimeMs: walked.ctimeMs, size: walked.size, language: walked.language, source: "graft", imports: covered.imports, symbols: covered.symbols, calls: covered.calls }
+          changed = true
+          state.dirty = true
+          continue
+        }
+        if (unchanged && (current.source === "scan" || !graftChanged)) continue
+        if (!host && ++sinceYield % 50 === 0) {
+          await new Promise<void>((resolve) => setImmediate(resolve))
+        }
+        if (signal.aborted) throw aborted()
+        const rec = await scanOne(path, walked)
         changed = true
         state.dirty = true
-        continue
+        if (rec) cache.files[path] = rec
+        else { delete cache.files[path]; incomplete = true }
+        progress.set(cwd, { done: ++scanned, total: toScan })
+        // A first build tells its client at every tenth: enough for a footer to move, never one event per file.
+        const ten = toScan > 0 ? Math.min(9, Math.floor((scanned / toScan) * 10)) : 0
+        if (first && ten > lastTen) { lastTen = ten; onProgress?.({ cwd, state: "indexing", files: scanned, symbols: 0, edges: 0, partial: cache.partial, percent: ten * 10 }) }
       }
-      if (unchanged && (current.source === "scan" || !graftChanged)) continue
-      if (++sinceYield % 50 === 0) {
-        await new Promise<void>((resolve) => setImmediate(resolve))
-      }
-      if (signal.aborted) throw aborted()
-      const rec = await scanFile({ cwd, path, walked, onScan })
-      changed = true
-      state.dirty = true
-      if (rec) cache.files[path] = rec
-      else { delete cache.files[path]; incomplete = true }
-      progress.set(cwd, { done: ++scanned, total: toScan })
-      // A first build tells its client at every tenth: enough for a footer to move, never one event per file.
-      const ten = toScan > 0 ? Math.min(9, Math.floor((scanned / toScan) * 10)) : 0
-      if (first && ten > lastTen) { lastTen = ten; onProgress?.({ cwd, state: "indexing", files: scanned, symbols: 0, edges: 0, partial: cache.partial, percent: ten * 10 }) }
+    } finally {
+      host?.close()
     }
     for (const path of Object.keys(cache.files)) {
       if (!walk.files.has(path)) {
@@ -203,14 +242,20 @@ export function createIndexer({ cacheDir, now, onScan, onIndex, onProgress, maxF
     cachePath,
     peek: (cwd) => states.get(cwd)?.graph,
     progress: (cwd) => progress.get(cwd),
-    async drift({ cwd, signal }) {
+    async drift({ cwd, signal, touchBytes = 0 }) {
       const cache = states.get(cwd)?.cache ?? (await loadCache({ file: cachePath(cwd), cwd }))
       if (!cache) return undefined
       const walk = await walkProject({ cwd, signal, maxFiles })
       let changed = 0
-      for (const [path, walked] of walk.files) if (differs(cache.files[path], walked)) changed++
-      for (const path of Object.keys(cache.files)) if (!walk.files.has(path)) changed++
-      return { changed, indexed: Object.keys(cache.files).length }
+      let bytes = 0
+      for (const [path, walked] of walk.files) {
+        const current = cache.files[path]
+        if (!differs(current, walked)) continue
+        changed++
+        bytes += current === undefined ? walked.size : Math.max(Math.abs(walked.size - current.size), Math.min(walked.size, touchBytes))
+      }
+      for (const [path, current] of Object.entries(cache.files)) if (!walk.files.has(path)) { changed++; bytes += current.size }
+      return { changed, indexed: Object.keys(cache.files).length, bytes }
     },
     graph({ cwd, signal }) {
       touch(cwd)
@@ -227,7 +272,8 @@ export function createIndexer({ cacheDir, now, onScan, onIndex, onProgress, maxF
   }
 }
 
-async function scanFile({ cwd, path, walked, onScan }: { cwd: string; path: string; walked: WalkedFile; onScan: ((path: string) => void) | undefined }): Promise<FileRec | undefined> {
+/** Reads and scans one file (also the scan host's work); undefined for a file that cannot be read or scanned. */
+export async function scanFile({ cwd, path, walked, onScan }: { cwd: string; path: string; walked: WalkedFile; onScan: ((path: string) => void) | undefined }): Promise<FileRec | undefined> {
   let buffer: Buffer
   try {
     buffer = await readFile(join(cwd, path))

@@ -74,7 +74,7 @@ describe("effective config layers", () => {
     })
     expect(result.problems).toEqual([])
     expect(result.config.enabled).toBe(false)
-    expect(result.config.budget).toEqual({ tokens_per_pr: 200_000, on_quota: "stop", max_wait_minutes: 360 })
+    expect(result.config.budget).toEqual({ tokens_per_pr: 200_000, tokens_per_diff_token: 8, on_quota: "stop", max_wait_minutes: 360 })
     expect(result.config.fix).toEqual({ mode: "fix-once", push: false, personal: true, max_rounds: 2 })
     expect(result.config.ignore).toEqual(["dist/**", "docs/**"])
     expect(result.config.paths.map((entry) => entry.glob)).toEqual(["src/**", "src/db/**"])

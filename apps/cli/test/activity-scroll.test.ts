@@ -25,7 +25,7 @@ type Scene = { width: number; height: number; side?: Side; profile?: Partial<Tui
 
 async function scene({ width, height, side = "none", profile = {}, clock, reduced }: Scene) {
   const dataDir = tempDir()
-  writeTuiProfile(dataDir, { ...DEFAULT_TUI_PROFILE, sidebar: side === "none" ? "hidden" : "auto", ...(side === "both" ? { rightSidebar: true, sidebarWidgets: structuredClone(SIDEBAR_PRESETS.pulse) } : {}), ...profile })
+  writeTuiProfile(dataDir, { ...DEFAULT_TUI_PROFILE, footerDefaultRows: false, sidebar: side === "none" ? "hidden" : "auto", ...(side === "both" ? { rightSidebar: true, sidebarWidgets: structuredClone(SIDEBAR_PRESETS.pulse) } : {}), ...profile })
   const h = appHarness({ dataDir, directory: tempDir(), width, height, mode: "full", now: () => clock?.at ?? TURN_AT + 173_000 })
   h.app.applySettings({ onboarded: true, ...(reduced ? { reducedMotion: true } : {}) })
   await Bun.sleep(10)
@@ -57,7 +57,7 @@ describe("activity status placement", () => {
           const idle = rows(classic.h)
           startTurn(classic.h)
           const busy = rows(classic.h)
-          expect(busy[ruleRow(busy) - 1]).toContain("Generating...")
+          expect(busy[ruleRow(busy) - 1]).toContain("Generating…")
           // Today's look, kept as the default: the row is taken from the transcript, which moves up by one.
           expect(ruleRow(busy)).toBe(ruleRow(idle))
           expect(lastResult(busy)).toBe(lastResult(idle) - 1)
@@ -73,16 +73,16 @@ describe("activity status placement", () => {
             expect(lastResult(after), placement).toBe(lastResult(before))
             expect(after.length).toBe(before.length)
             expect(h.cursors.at(-1), placement).toEqual(cursorBefore)
-            if (placement === "off") expect(after.join("\n")).not.toContain("Generating...")
-            else expect(after.filter((line) => line.includes("Generating...")), placement).toHaveLength(1)
+            if (placement === "off") expect(after.join("\n")).not.toContain("Generating…")
+            else expect(after.filter((line) => line.includes("Generating…")), placement).toHaveLength(1)
             for (const line of after) expect(textWidth(line)).toBeLessThanOrEqual(width)
             if (placement === "above") {
-              expect(after[ruleRow(after)]).toMatch(/─{2} \S Generating\.\.\. · \d+m \d+s/)
+              expect(after[ruleRow(after)]).toMatch(/─{2} \S Generating… \(\d+m \d+s/)
               expect(after[ruleRow(after)]).toMatch(/─{4,}\s*$/)
             }
             if (placement === "inside") {
               const first = after[promptRow(after)]!
-              expect(first).toMatch(/❭\s+\S Generating\.\.\. · \d+m \d+s/)
+              expect(first).toMatch(/❭\s+\S Generating… \(\d+m \d+s/)
               expect(first.indexOf("❭")).toBe(before[promptRow(before)]!.indexOf("❭"))
             }
           }
@@ -97,7 +97,7 @@ describe("activity status placement", () => {
     const idle = rows(h)
     expect(idle[ruleRow(idle)]).toMatch(/^\s*─+\s*$/)
     const turnId = startTurn(h)
-    expect(rows(h)[ruleRow(rows(h))]).toContain("Generating...")
+    expect(rows(h)[ruleRow(rows(h))]).toContain("Generating…")
     h.app.onEvent({ type: "turn.completed", sessionId: h.sessionId, seq: 910, at: TURN_AT + 5_000, turnId } as never)
     h.app.onEvent({ type: "foreground.state", sessionId: h.sessionId, seq: 911, at: TURN_AT + 5_000, state: "idle" } as never)
     const done = rows(h)
@@ -112,7 +112,7 @@ describe("activity status placement", () => {
     const cursor = h.cursors.at(-1)
     startTurn(h)
     const busy = rows(h)
-    expect(busy[promptRow(busy)]).toMatch(/^ {2}❭ fix the tests {2,}\S Generating\.\.\./)
+    expect(busy[promptRow(busy)]).toMatch(/^ {2}❭ fix the tests {2,}\S Generating…/)
     expect(h.cursors.at(-1)).toEqual(cursor)
     // Everything else on screen is as it was before the turn started.
     const same = (lines: string[]) => lines.filter((_, index) => index !== promptRow(lines) && index > 0 && index < lines.length - 1)
@@ -121,12 +121,12 @@ describe("activity status placement", () => {
     await h.type("x".repeat(28))
     const core = rows(h)
     expect(core[promptRow(core)]).toContain("fix the tests" + "x".repeat(28))
-    expect(core[promptRow(core)]).toMatch(/Generating\.\.\. · 2m 53s\s*$/)
+    expect(core[promptRow(core)]).toMatch(/Generating… \(2m 53s\)\s*$/)
     expect(core[promptRow(core)]).not.toContain("tokens")
     await h.type("x".repeat(12))
     const tight = rows(h)
     expect(tight[promptRow(tight)]).toContain("fix the tests" + "x".repeat(40))
-    expect(tight[promptRow(tight)]).toMatch(/\S 2m 53s\s*$/)
+    expect(tight[promptRow(tight)]).toMatch(/\S \(2m 53s\)\s*$/)
     expect(tight[promptRow(tight)]).not.toContain("Generating")
     await h.type("x".repeat(12))
     const full = rows(h)
@@ -150,10 +150,10 @@ describe("activity status placement", () => {
       const { h, talk } = await scene({ width: 100, height: 26, reduced: true, profile: { activityPlacement: placement } })
       talk.exchange("hello", "there")
       startTurn(h)
-      const first = rows(h).find((line) => line.includes("Generating..."))!
-      expect(first, placement).toContain("⋯ Generating...")
+      const first = rows(h).find((line) => line.includes("Generating…"))!
+      expect(first, placement).toContain("⋯ Generating…")
       h.app.onEvent({ type: "usage.recorded", sessionId: h.sessionId, seq: 903, at: TURN_AT + 3_000, turnId: ids("turn"), provider: "p", model: "m", input: 1, output: 1, reasoning: 0, cacheRead: 0, cacheWrite: 0 } as never)
-      expect(rows(h).find((line) => line.includes("Generating..."))!.replace(/\d+m \d+s/, "")).toContain("⋯ Generating...")
+      expect(rows(h).find((line) => line.includes("Generating…"))!.replace(/\d+m \d+s/, "")).toContain("⋯ Generating…")
     }
   })
 
@@ -164,7 +164,7 @@ describe("activity status placement", () => {
     startTurn(plainRow.h)
     queued(plainRow.h)
     const row = rows(plainRow.h)[ruleRow(rows(plainRow.h))]!
-    expect(row).toContain("Generating... · 2m 53s · ↑1,000 ↓1,240 tokens")
+    expect(row).toContain("Generating… (2m 53s · ↓ 1,240 tokens)")
     expect(row).not.toContain("queued")
     expect(row).not.toContain("tok/s")
 
@@ -172,14 +172,14 @@ describe("activity status placement", () => {
     custom.talk.exchange("hello", "there")
     startTurn(custom.h)
     queued(custom.h)
-    expect(rows(custom.h)[ruleRow(rows(custom.h))]).toMatch(/2m 53s · \S Generating\.\.\. · 1 queued · 7 tok\/s/)
+    expect(rows(custom.h)[ruleRow(rows(custom.h))]).toMatch(/\S Generating… \(2m 53s · 1 queued · 7 tok\/s\)/)
 
     // The older toggles still switch their part off.
     const toggled = await scene({ width: 120, height: 26, profile: { activityPlacement: "above", showElapsed: false, showTokens: false } })
     toggled.talk.exchange("hello", "there")
     startTurn(toggled.h)
     const gated = rows(toggled.h)[ruleRow(rows(toggled.h))]!
-    expect(gated).toContain("Generating...")
+    expect(gated).toContain("Generating…")
     expect(gated).not.toContain("2m")
     expect(gated).not.toContain("tokens")
   })
@@ -243,6 +243,19 @@ describe("the jump-to-latest button", () => {
       })
     }
   }
+
+  test("it never covers text: a transcript row that reaches its columns keeps its words and the pill takes a row of its own", async () => {
+    const s = await scene({ width: 100, height: 30 })
+    s.talk.exchange("Count for me", Array.from({ length: 90 }, (_, i) => `row ${String(i + 1).padStart(2, "0")} ${"word ".repeat(15)}end`).join("\n"))
+    rows(s.h)
+    await s.h.app.onKey(WHEEL_UP)
+    const lines = rows(s.h)
+    const at = pillRow(lines)
+    expect(at).toBeGreaterThan(-1)
+    expect(lines[at]!.replace(/↓ latest · End/, "").trim()).toBe("")
+    // The row above is a whole line of the answer, not one with a hole where the pill would sit.
+    expect(lines[at - 1]).toMatch(/word end\s*$/)
+  })
 
   test("the owner's session: full view, both sidebars, 200 columns, scrolled up in a long transcript", async () => {
     const { h } = await scrolled({ width: 210, height: 60, side: "both" })
@@ -566,14 +579,14 @@ describe("the customize page", () => {
       profile: { ...DEFAULT_TUI_PROFILE, activityPlacement, ...extra }, preview: { root: "/work", tip: "", now: 0, model: "luna" }, screenHeight: 30, width: 80, height: 14, glyphs: { ...appHarnessGlyphs }, surface: "status",
     }).map(plain)
     const above = preview("above")
-    expect(above.findIndex((line) => line.includes("Generating..."))).toBe(above.findIndex((line) => line.includes("❭")) - 1)
-    expect(above.find((line) => line.includes("Generating..."))).toMatch(/─{2} \S Generating\.\.\. · 1m 21s/)
+    expect(above.findIndex((line) => line.includes("Generating…"))).toBe(above.findIndex((line) => line.includes("❭")) - 1)
+    expect(above.find((line) => line.includes("Generating…"))).toMatch(/─{2} \S Generating… \(1m 21s/)
     const inside = preview("inside")
-    expect(inside.find((line) => line.includes("❭"))).toContain("Generating...")
+    expect(inside.find((line) => line.includes("❭"))).toContain("Generating…")
     const classic = preview("transcript")
-    expect(classic[classic.findIndex((line) => line.includes("❭")) - 2]).toContain("Generating...")
-    expect(preview("off").join("\n")).not.toContain("Generating...")
-    expect(preview("above", { activityParts: "elapsed,spinner" }).join("\n")).toMatch(/1m 21s · \S/)
+    expect(classic[classic.findIndex((line) => line.includes("❭")) - 2]).toContain("Generating…")
+    expect(preview("off").join("\n")).not.toContain("Generating…")
+    expect(preview("above", { activityParts: "elapsed,spinner" }).join("\n")).toMatch(/\S \(1m 21s\)/)
   })
 })
 

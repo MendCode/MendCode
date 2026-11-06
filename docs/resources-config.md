@@ -12,7 +12,7 @@ MendCode reads, as data only, the folders other agents use:
 | `<project>/.claude/{skills,commands,agents}`, `~/.claude/{skills,commands,agents}` | skills, slash commands, agents |
 | `.mendcode` of the project's parent folders inside its repository (`repo/.mendcode` when you open `repo/apps/web`) | skills, slash commands, agents |
 
-- MendCode's own folders win on the same name: `.claude` sits under `~/.mendcode-v2` (user) and `<project>/.mendcode` (project). The project's `.agents`/`.claude` beat the user's own folder.
+- MendCode's own folders win on the same name: `.claude` sits under `~/.mendcode` (user) and `<project>/.mendcode` (project). The project's `.agents`/`.claude` beat the user's own folder.
 - Nothing executable is read from them: no tools, hooks, MCP, extensions or `mendcode.json`.
 - Parent folders: the walk goes from the project's parent up to the folder holding `.git`, farthest first, so the nearest
   folder wins and the project's own `.mendcode` wins over all of them. A project that is itself the repository root, a
@@ -28,7 +28,7 @@ MendCode reads, as data only, the folders other agents use:
 
 Per directory, from the session directory up to the project root, the first file found of `AGENTS.override.md`, `AGENTS.md`, `CLAUDE.md`, `CONTEXT.md`, then `instructionFallbacks` names. `AGENTS.override.md` replaces the rest in its directory (a local override; keep it out of git). In the data directory, `AGENTS.override.md` replaces the global `AGENTS.md`.
 
-One loader serves both paths. The system prompt gets the chain of directories from the session directory up to the project root, and the `read` tool and `@file` mentions get the instructions of the directories below the session directory when a file there is read. Both use the same file rule, `@include` lines, limits (16,000 characters per file, 64,000 in total, 100 files, include depth 8) and settings. A file is re-read when its mtime or size changes; on `read`, an edited instruction file is delivered again (a delivery is keyed by path and version), an unchanged one is not.
+One loader serves both paths. The system prompt gets the chain of directories from the session directory up to the project root, and the `read` tool and `@file` mentions get the instructions of the directories below the session directory when a file there is read. Both use the same file rule, `@include` lines, limits (16,000 characters per file, 64,000 in total, 100 files, include depth 8) and settings. A file is re-read when its inode, size, mtime or ctime changes (so a rewrite within a coarse filesystem's timestamp tick is still noticed); on `read`, an edited instruction file is delivered again (a delivery is keyed by path and version), an unchanged one is not.
 
 - Both `AGENTS.md` and `CLAUDE.md` in one directory: `AGENTS.md` is used and `CLAUDE.md` is not, so a `CLAUDE.md` that is only `@AGENTS.md` (or a symlink to it) never loads twice. A `CLAUDE.md` with its own content next to an `AGENTS.md` is not read; put it behind an `@CLAUDE.md` line in `AGENTS.md` (include) or use `AGENTS.override.md` for the local part. The rule is documented and tested; change it only for a real layout it breaks.
 - `projectRootMarkers` (default `[".git"]`): names that mark the root while walking up. `[]` reads the session directory only. With no marker in sight the walk is bounded: inside the user's home it stops at the home (or where the filesystem changes), elsewhere only the session directory is used. It never reaches `/`.
@@ -41,7 +41,7 @@ One loader serves both paths. The system prompt gets the chain of directories fr
   `http://` and any URL in a project's config are listed as blocked, never fetched: a repository cannot pull in text that
   changes after you reviewed it. v1 read remote instructions the same way.
 - Every prompt mode carries these files ([prompt modes](prompt-modes.md)); `--no-context-files` is the only way to leave them out.
-- `--no-context-files` (alias `-nc`, TUI and `run`): leaves all instruction files out of that session's prompt (a per-session run limit; skills, memory and the packaged prompt stay).
+- `--no-context-files` (alias `-nc`, TUI and `run`): leaves all instruction files out of that session's prompt, `SYSTEM.md` and `APPEND_SYSTEM.md` of every layer included (a per-session run limit; skills, memory and the packaged prompt stay).
 
 ## Skills, commands and agents: how files are read
 
@@ -68,9 +68,9 @@ Honoured means applied; noted means read and shown as a note (on load, in `/skil
 | anything else (`context`, `hooks`, `paths`, …) | ignored, listed once | ignored, listed once |
 | Codex `$NAME` placeholders (`argument-hint: FILE=<path>`) | not applicable | not substituted: noted; use `$1`…`$9` or `$ARGUMENTS` |
 
-Skill commands: `/skill-name args` sends the skill's folder and body with `$ARGUMENTS` filled (arguments are appended when the body has no placeholder). Only `$ARGUMENTS` is replaced, and `!` shell markers in a skill body are never run. A skill whose `/name` is taken by a built-in or a custom command does not become a command; `/doctor` says so. Skills of the package that ships with MendCode itself stay out of the slash menu (the model and `/skills` reach them). The `skill` tool called with no `name` lists the skills it can load, which is how the model finds them in `minimal` mode, where the prompt carries no catalog.
+Skill commands: `/skill-name args` sends the skill's folder and body with `$ARGUMENTS` filled (arguments are appended when the body has no placeholder). Only `$ARGUMENTS` is replaced, and `!` shell markers in a skill body are never run. A skill whose `/name` is taken by a built-in or a custom command does not become a command; `/doctor` says so. Skills of the profile that ships with MendCode itself stay out of the slash menu (the model and `/skills` reach them). The `skill` tool called with no `name` lists the skills it can load, which is how the model finds them in `minimal` mode, where the prompt carries no catalog.
 
-Reload: the daemon watches the data directory (skills, commands, agents and extensions of its own and of its packages) and, for projects trusted for project tools, the project's `.mendcode`, `.claude` and `.agents` folders including their packages, with an 80 ms debounce and at most 16 project folders. An edit reloads extensions and tells terminals; an untrusted project is never watched.
+Reload: the daemon watches the data directory (skills, commands, agents and extensions of its own and of its profiles) and, for projects trusted for project tools, the project's `.mendcode`, `.claude` and `.agents` folders including their profiles, with an 80 ms debounce and at most 16 project folders. An edit reloads extensions and tells terminals; an untrusted project is never watched.
 
 ## Shell policy
 
@@ -114,6 +114,8 @@ The model can change any daemon setting (tier, default permission, models and ro
 - `get` returns the saved settings with secrets hidden: values under credential-like names (`key`, `token`, `secret`, `password`, ...) and every value of `env`, `headers` and `shellEnvironment.set` read `[hidden]`, and secret-looking text is masked.
 - `propose { patch, reason }` takes a `settings.set` patch: each top-level key's value replaces the whole value and `null` resets it. The patch is validated against the settings schema first, without writing; an invalid one is refused and you are not asked. A patch that changes nothing is not asked either.
 - Otherwise a question card **Change MendCode settings?** shows one `path: before → after` line per changed value (the same redaction on both sides, up to 24 lines) and `Why: <reason>`, with **Apply** and **Don't apply**. Only Apply saves, through the same write as `settings.set`: every terminal gets `settings.changed` and the services that read the setting follow. Any other answer, a typed reply or a dismissed card saves nothing.
+
+A call from Claude Code that waits on the card for about 40 seconds is answered `Pending` (the card stays open while the turn runs and saves on Apply), instead of the harness dropping it with a timeout. From a session another session started, the card is shown on the launching session too ([permissions](permissions.md#what-a-session-cannot-do-from-its-own-shell)).
 
 The card asks in every permission mode, `full` included, and in every tier: no mode, grant or allow rule answers it. With nobody to ask (a headless `mendcode run`, a host without questions) the tool refuses and returns the change for you to make in `/settings`. A patch that names a key only the machine running MendCode sets (`permission`, `sandbox`, `shellEnvironment`, `trustedToolDirs`, `proxy`, `projectConfig`, `tier`, `features`, `experimental` and the rest a remote `settings.set` refuses) is titled **Change MendCode settings? (answer on this machine)**, and the daemon refuses an Apply to it from a remote or peer client. The model is told to propose only what you asked for and never to raise or remove a spend limit unless you asked for that exact change. Terminal look (theme, footer, prompt box) stays with `customize_ui`.
 

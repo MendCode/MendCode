@@ -6,12 +6,12 @@ Extensions are trusted TypeScript modules that change how MendCode runs. The con
 and session events without writing TypeScript, see [shell hooks](hooks.md).
 
 Terminal views (messages, tool cards, approvals, bars, home, the slash menu and more) use `tui(api) { api.view(slot, input => lines) }`; see [views.md](views.md). Terminal menu replacements use `tui(api) { api.view("slashMenu", ctx => lines) }`, including
-package extensions. See [the complete slashMenu contract and example](customize.md#replacing-the-slash-menu-view).
+profile extensions. See [the complete slashMenu contract and example](customize.md#replacing-the-slash-menu-view).
 They reload through the existing customize-ui watcher and share the extension render circuit breaker;
 a failed view shows a notice and falls back to tabs until reload.
 
 ```ts
-// ~/.mendcode-v2/extensions/guard.ts  (or <project>/.mendcode/extensions/guard.ts)
+// ~/.mendcode/extensions/guard.ts  (or <project>/.mendcode/extensions/guard.ts)
 export default {
   name: "guard",
   daemon(api) {
@@ -41,7 +41,7 @@ without checks gets a note saying so.
 
 It uses the writing permission gate (`list` only reads, `command` and `check` execute), so plan mode cannot write and approvals follow the
 permission mode. The same file confinement as `customize_ui` applies: flat names, no links, mode 0600, the data directory outside the
-project. `customize_ui` stays the tool for the look (profile keys); both write the same folder. The system prompt's one-line
+project. `customize_ui` stays the tool for the look (customize keys); both write the same folder. The system prompt's one-line
 pointer names MendCode's own commands, tools, hooks, system prompt and models as MendCode's, and says that a rule the user sets
 for later is an extension, not a promise (measured by `scripts/eval-extend.ts`, below). `mendcode docs extend` is the card.
 
@@ -88,14 +88,14 @@ check fails on an empty install and passes on a reference solution, with no mode
 ## Where they are found
 
 `<layer>/extensions/*.ts|js` and `<layer>/extensions/<name>/index.ts|js`, in every extension layer, in this order
-(the order hooks run in): builtin package, user packages, the user's folder (`~/.mendcode-v2`), project packages,
+(the order hooks run in): builtin profile, user profiles, the user's folder (`~/.mendcode`), project profiles,
 the project's `.mendcode/`. Files ending `.d.ts`, dotfiles and folders without an index are ignored; at most 64 per layer.
 
-- User-layer modules (user folder, user packages) load once for the whole daemon.
-- Project-layer modules (the project's `.mendcode/` and its packages) are imported only when the directory is trusted:
+- User-layer modules (user folder, user profiles) load once for the whole daemon.
+- Project-layer modules (the project's `.mendcode/` and its profiles) are imported only when the directory is trusted:
   the same `trustedToolDirs` and path matching as project custom tools (`tools.trust`). An untrusted project's modules
   are listed by `extensions.list` with `trusted: false` and are never imported. Trusting or untrusting (or changing
-  `disabledPackages` or `disabledPackageResources`) drops the per-directory cache; the next use reloads, and untrust stops applying them at once.
+  `disabledProfiles` or `disabledProfileResources`) drops the per-directory cache; the next use reloads, and untrust stops applying them at once.
 - Loading is lazy: the first turn, `/command`, `user.submit` or `extensions.list` of a directory loads what it needs,
   then it is cached per directory. A directory without extension files costs a few directory listings and no `import()`.
 - A module must default-export `{ name, daemon?, tui? }` (`name`: letters, digits, `.`, `_`, `-`; it names the data
@@ -252,7 +252,7 @@ export default {
 - `models` is required: `[{ id, name?, context?, images?, effort?, maxOutputTokens? }]`.
 - The id is lowercase letters, digits, `_` and `-` (max 32). Built-in ids and presets (`chatgpt`, `openai`, `anthropic`,
   `openrouter`...) are refused: configure those with `/connect`. A `providers.json` entry with the same id wins over the extension.
-- Only user-layer extensions (`<data dir>/extensions`, user packages) can add one, because a provider serves every project. A
+- Only user-layer extensions (`<data dir>/extensions`, user profiles) can add one, because a provider serves every project. A
   project extension's attempt is an error in `/extensions`.
 - `providers.list` reports it with `source: "extension"`. It is there once the daemon loaded its user extensions (the first
   session, `/extensions` or the model list do); disabling or deleting the extension takes it away.
@@ -415,7 +415,7 @@ api.on("input", async (e) => {
 
 ## Prompt files
 
-Per layer, the last layer that has the file wins (project over its packages over user): `SYSTEM.md` replaces the
+Per layer, the last layer that has the file wins (project over its profiles over user): `SYSTEM.md` replaces the
 packaged system prompt (the `{{cwd}}` template still applies), `APPEND_SYSTEM.md` is appended as its own system part
 (`/context` shows it as `system:append`), `COMPACTION.md` replaces the compaction prompt. Files over 64 KB or empty are
 ignored; edits apply to the next model call. Prompt files are not code, so they are not gated by trust (like `AGENTS.md`).
@@ -423,6 +423,8 @@ ignored; edits apply to the next model call. Prompt files are not code, so they 
 `APPEND_SYSTEM.md` is the user's own text, so every [prompt mode](prompt-modes.md) sends it, like `AGENTS.md`: "always answer
 in Spanish" in `<data dir>/APPEND_SYSTEM.md` reaches every session of every project. `SYSTEM.md` takes the place of the packaged
 base prompt, so it applies in `focus`, `guide` and `full`; `minimal` and `custom` send a base of their own and leave it out.
+`--no-context-files` leaves out both files of every layer (the user's, a package's, a profile's, the project's), like `AGENTS.md`:
+the session gets the packaged base prompt. `COMPACTION.md` still applies.
 For text that depends on the session (today's date, the branch), use a `prompt.system` hook instead.
 
 ## Runtime helpers
@@ -433,7 +435,7 @@ For text that depends on the session (today's date, the branch), use a `prompt.s
 
 ## `extensions.list`
 
-`{ type: "extensions.list", directory }` answers `{ extensions: Array<{ name, source: "user" | "project" | "package",
+`{ type: "extensions.list", directory }` answers `{ extensions: Array<{ name, source: "user" | "project" | "profile",
 file, daemon, tui, tools, commands, hooks, errors, trusted, flags?, mcpServers?, virtualModels?, events?, disabled?, conflicts?, breaker?, kept?, context? }>, conflicts? }` in hook order, loading the directory's extensions first.
 Untrusted project extensions appear with `trusted: false`, `daemon: false`, no tools, commands or hooks.
 
@@ -442,37 +444,37 @@ Untrusted project extensions appear with `trusted: false`, `daemon: false`, no t
 User extension files now reload automatically through the daemon watcher. `/extensions reload` invalidates module caches, reruns daemon registration and notifies terminals; terminal timers/listeners should use `api.onDispose`. In-flight daemon callbacks are not cancelled. `customize_ui` uses the existing writing permission gate and returns attached terminals' setup errors; it writes only flat files in the user data directory, never project extensions. Details and terminal APIs: `extensions-tui.md`.
 
 - Hooks cannot be cancelled once started; a stuck handler is ignored after the time limit but keeps its resources.
-- Package activation changes invalidate user and project extension caches and notify attached terminals immediately.
+- Profile activation changes invalidate user and project extension caches and notify attached terminals immediately.
 - `context`/`request.before` shapes are provider-specific ("advanced"); the engine does not re-validate a replaced body.
 - `compact.before` reports `reason: "auto"` for a manual `/compact` only if a turn asked for compaction and was cancelled before it ran.
 
-## Shipping extensions in a package
+## Shipping extensions in a profile
 
-A package (`<data dir>/packages/<name>/` or `<project>/.mendcode/packages/<name>/`, see the packages commands) may
+A profile (`<data dir>/packages/<name>/` or `<project>/.mendcode/packages/<name>/`, see the profiles commands) may
 carry an `extensions/` folder with the same layout as any extension layer: `extensions/*.ts|js` and
-`extensions/<name>/index.ts|js`. Nothing else is needed: the package is an extension layer (`pkg` = its name, reported as
-`source: "package"` by `extensions.list`), so its modules load in the layer order above, after the builtin package
-and before the user's own folder (user packages) or the project's own `.mendcode/` (project packages).
+`extensions/<name>/index.ts|js`. Nothing else is needed: the profile is an extension layer (`pkg` = its name, reported as
+`source: "profile"` by `extensions.list`), so its modules load in the layer order above, after the builtin profile
+and before the user's own folder (user profiles) or the project's own `.mendcode/` (project profiles).
 
 ```
 acme/
-  mendcode-package.json      { "name": "acme", "version": "1.0.0", "description": "…", "extensions": true }
+  mendcode-profile.json      { "name": "acme", "version": "1.0.0", "description": "…", "extensions": true }
   extensions/
     guard.ts
     audit/index.ts
 ```
 
-- `mendcode-package.json` may declare `"extensions": true` (the package ships code that runs in the daemon) or `false`.
+- `mendcode-profile.json` may declare `"extensions": true` (the profile ships code that runs in the daemon) or `false`.
   The declaration is checked at install: `true` with no loadable module in `extensions/`, or `false` with some, refuses
-  the install. Leaving it out is allowed; the folder is installed and counted either way. `packages.list` reports the
+  the install. Leaving it out is allowed; the folder is installed and counted either way. `profiles.list` reports the
   number of modules as `contents.extensions` (counted by name, nothing is imported).
-- The install rules are the ones for every package directory: no links, no credential or key files (`.env`, `*.pem`,
-  `*.key`, local databases), at most 2 000 files and 20 MB per package, `.git` and `node_modules` are not copied. A
-  package that needs dependencies must bundle them into its files.
-- Trust is the layer's: a user package's modules run once the package is installed and enabled; a project package's
-  modules (and any package installed under the project) run only when the directory is trusted (`tools.trust`), exactly
+- The install rules are the ones for every profile directory: no links, no credential or key files (`.env`, `*.pem`,
+  `*.key`, local databases), at most 2 000 files and 20 MB per profile, `.git` and `node_modules` are not copied. A
+  profile that needs dependencies must bundle them into its files.
+- Trust is the layer's: a user profile's modules run once the profile is installed and enabled; a project profile's
+  modules (and any profile installed under the project) run only when the directory is trusted (`tools.trust`), exactly
   like the project's own `.mendcode/extensions/`.
-- Package installs, removals and activation changes reload user and project extension registrations and notify
+- Profile installs, removals and activation changes reload user and project extension registrations and notify
   terminals. In-flight callbacks still finish; new calls use the new projection. Local catalogs and the marketplace
   are documented in [packages.md](packages.md).
 
@@ -497,14 +499,14 @@ in the data directory, project root or `.mendcode`. Entries accept a specifier o
 `disabledPlugins` excludes full specifiers or NPM package names. The last declaration of an NPM identity wins
 within a config. Project imports require project-tool trust. `--pure` disables external daemon and terminal
 extensions; it refuses an existing daemon that was started without pure mode. Use a separate `--dir` for it.
-`--safe-mode` goes further (also no packages, hooks, MCP or project tools); see [tiers](tiers.md). An extension tool may
+`--safe-mode` goes further (also no profiles, hooks, MCP or project tools); see [tiers](tiers.md). An extension tool may
 declare `tier: "minimalist" | "balanced" | "full"`; it is offered only when the user's tier includes it, and always when no tier is set.
 
 `plugin <module>` (alias `plug`) registers a local file/package or installs an NPM module into the private
 `<data dir>/plugin-cache`. `--global/-g` selects the user config; `--force/-f` replaces an existing identity,
 preserving tuple options. Existing JSONC is backed up before a successful atomic rewrite. NPM installation
 requires pnpm 11+, uses the offline cache, ignores lifecycle scripts and pins the resolved version. Startup
-never installs dependencies. A package may expose `./server` and `./tui` entries; a server-only package uses
+never installs dependencies. A profile may expose `./server` and `./tui` entries; a server-only profile uses
 its main/default export. Missing modules appear as load errors in `/extensions`.
 
 Server functions (default or named exports), `{ id, server }` modules, and legacy `tool/*.ts|js` or

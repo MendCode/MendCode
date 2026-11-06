@@ -34,7 +34,7 @@ Without the bridge, a Claude Code, Codex or ACP session whose MendCode tools (`h
 
 Tools:
 
-- `thread_list`: other sessions in the same project, bounded metadata only.
+- `thread_list {limit?, query?, state?}`: other sessions in the same project, bounded metadata only, in the compact form of [`sessions`](peers.md#sessions): 10 by default, `limit` up to 100 (more returns 100 and says so), `query` filters titles, `state` is `busy` or `idle`. Its ids are the short ones; every thread tool takes them.
 - `thread_create {title}`: an idle child session, with the parent's model and permission ceiling. Send a message to start it.
 - `thread_message {sessionId, text}`: the existing bounded peer queue, with its pending-message and rate limits.
 - `thread_wait {sessionId, timeoutSeconds?}`: at most 120 seconds; timeout does not cancel the target.

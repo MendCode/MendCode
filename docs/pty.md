@@ -40,7 +40,7 @@ append `-l` for login shells, inherit daemon environment plus supplied overrides
 Trusted daemon extensions receive the existing `shell.env` hook before spawn (`sessionId` is the PTY id, `cwd` the validated
 terminal directory); returned values override user env before the fixed terminal markers. Disposal/aborted HTTP creation
 while a hook is pending prevents spawn. Hook values obey the same env bounds, and no PTY env is broadcast to chat clients.
-Native PTY uses Bun.Terminal on macOS/Linux with no new dependency; Windows ConPTY is off by default in this adapter (`MENDCODE_V2_CONPTY=1` opts in when the runtime exposes `Bun.Terminal`; unverified), and its preferred shell there is `pwsh`, `powershell` or `%COMSPEC%`.
+Native PTY uses Bun.Terminal on macOS/Linux with no new dependency; Windows ConPTY is off by default in this adapter (`MENDCODE_CONPTY=1` opts in when the runtime exposes `Bun.Terminal`; unverified), and its preferred shell there is `pwsh`, `powershell` or `%COMSPEC%`.
 `DaemonOptions.pty.driver` permits local fakes/embeddings; tests never open network ports or invoke a real shell.
 
 Clients have `ptyShells`, `ptyList`, `ptyCreate`, `ptyGet`, `ptyUpdate`, `ptyRemove`, `ptyConnectToken` and

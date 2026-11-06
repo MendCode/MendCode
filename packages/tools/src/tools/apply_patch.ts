@@ -1,7 +1,7 @@
 import { readFile, rm, stat } from "node:fs/promises"
 import { z } from "zod"
 import { defineTool } from "../tool"
-import { atomicWrite, boundPreview, displayPath, errorMessage, exists, fail, renderDiff, resolvePath, succeed, truncateText, withFileLock } from "../util"
+import { atomicWrite, boundPreview, DIFF_CONTEXT_LINES, displayPath, errorMessage, exists, fail, renderDiff, resolvePath, succeed, truncateText, withFileLock } from "../util"
 
 type Hunk = {
   header: string | undefined
@@ -235,7 +235,7 @@ function applyHunks({ path, original: onDisk, hunks, renamed }: { path: string; 
   return crlf ? updated.replace(/\n/g, "\r\n") : updated
 }
 
-type Planned = { write: Map<string, string>; remove: Set<string>; summary: string[]; preview: string[]; /** The permission bits a moved file takes to its new path. */ modes: Map<string, number> }
+type Planned = { write: Map<string, string>; remove: Set<string>; summary: string[]; preview: string[]; /** The preview with unchanged lines around each change: what the card shows once the patch is applied. */ display: string[]; /** The permission bits a moved file takes to its new path. */ modes: Map<string, number> }
 
 async function plan({ ops, cwd }: { ops: FileOp[]; cwd: string }): Promise<Planned> {
   const write = new Map<string, string>()
@@ -244,6 +244,7 @@ async function plan({ ops, cwd }: { ops: FileOp[]; cwd: string }): Promise<Plann
   const touched = new Set<string>()
   const summary: string[] = []
   const preview: string[] = []
+  const display: string[] = []
   const touch = (abs: string, shown: string) => {
     if (touched.has(abs)) throw new PatchError(`${shown} is modified more than once in the patch`)
     touched.add(abs)
@@ -257,11 +258,13 @@ async function plan({ ops, cwd }: { ops: FileOp[]; cwd: string }): Promise<Plann
       write.set(abs, op.lines.length === 0 ? "" : `${op.lines.join("\n")}\n`)
       summary.push(`A ${shown}`)
       preview.push(`*** Add File: ${shown}`, ...op.lines.map((line) => `+${line}`))
+      display.push(`*** Add File: ${shown}`, ...op.lines.map((line) => `+${line}`))
     } else if (op.kind === "delete") {
       if (!(await exists(abs))) throw new PatchError(`delete ${shown}: file does not exist`)
       remove.add(abs)
       summary.push(`D ${shown}`)
       preview.push(`*** Delete File: ${shown}`)
+      display.push(`*** Delete File: ${shown}`)
     } else {
       let original: string
       try {
@@ -280,14 +283,16 @@ async function plan({ ops, cwd }: { ops: FileOp[]; cwd: string }): Promise<Plann
         remove.add(abs)
         summary.push(`M ${shown} -> ${destShown}`)
         preview.push(`*** Update File: ${shown} -> ${destShown}`, renderDiff({ before: original, after: updated }))
+        display.push(`*** Update File: ${shown} -> ${destShown}`, renderDiff({ before: original, after: updated, context: DIFF_CONTEXT_LINES }))
       } else {
         write.set(abs, updated)
         summary.push(`M ${shown}`)
         preview.push(`*** Update File: ${shown}`, renderDiff({ before: original, after: updated }))
+        display.push(`*** Update File: ${shown}`, renderDiff({ before: original, after: updated, context: DIFF_CONTEXT_LINES }))
       }
     }
   }
-  return { write, remove, summary, preview, modes }
+  return { write, remove, summary, preview, display, modes }
 }
 
 async function commit({ planned }: { planned: Planned }): Promise<void> {
@@ -343,7 +348,7 @@ export default defineTool({
           truncated: capped.truncated,
           meta: { files: ops.length },
         }),
-        display: boundPreview(planned.preview.join("\n")),
+        display: boundPreview(planned.display.join("\n")),
       }
     } catch (error) {
       if (error instanceof PatchError) return fail({ title, message: `${error.message}; no files changed` })

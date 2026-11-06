@@ -1,9 +1,5 @@
-a769f1bc2e9c579c
+d160508405f0ff4d
   git /work/app
-
-  • The cache key ignored the directory.
-
-    ╭─ ts ───────────────────────────────────────────────────────────────────────────────────── copy
     │ const key = `${directory}:${name}`
     │ return cache.get(key) ?? load(key)
 
@@ -12,11 +8,15 @@ a769f1bc2e9c579c
 
     See the docs (https://example.com) for details.
 
+    took 15s · ended 11:50 AM
+
   › Thanks. Run the whole suite once more.
 
      $ bun test  212 pass · 0 fail                                                             9.1s
 
   • All 212 tests pass.
+
+    took 7s · ended 11:50 AM
 
   ┃ /model        Switch model                                                   setup · ctrl+x m
   ┃ /prompt-mode  Choose prompt context                                         context / setting
@@ -28,4 +28,4 @@ a769f1bc2e9c579c
   ────────────────────────────────────────────────────────────────────────────────────────────────
   ❭ /mod
   ────────────────────────────────────────────────────────────────────────────────────────────────
-   Build
+   /work/app

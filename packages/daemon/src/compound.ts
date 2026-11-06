@@ -3,7 +3,7 @@ import path from "node:path"
 import { createCompoundBudget, type CompoundCall } from "@mendcode/engine-native"
 import { redactSecrets, type CompoundAssessment, type CompoundConfig, type CompoundReport, type CompoundRun, type CompoundRunInput, type ModelRoles, type ResolvedCompoundProfile, type SessionId } from "@mendcode/protocol"
 import { compoundHash, readCompoundConfig, resolveCompoundProfiles, writeCompoundConfig } from "./compound-config"
-import { compoundCheckArgs, compoundSnapshot, createCompoundWorkspace, type CompoundSnapshot } from "./compound-workspace"
+import { compoundCheckArgs, compoundSnapshot, createCompoundWorkspace, releaseEmptyCompoundWorkspace, type CompoundSnapshot } from "./compound-workspace"
 import { runLoopCheck } from "./loop-checks"
 import type { ModelCatalog } from "./models"
 
@@ -157,6 +157,7 @@ export function createCompoundHost(options: Dependencies) {
       budget.stop()
       save(run)
       active.delete(run.runId)
+      if (run.workspace && run.base) await releaseEmptyCompoundWorkspace(input.directory, run.workspace, run.base)
     }
   }
 

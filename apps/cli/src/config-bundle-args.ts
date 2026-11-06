@@ -1,3 +1,4 @@
+import { CONFIG_BUNDLE_HELP } from "./help-text"
 import type { Common, ParseResult } from "./automation"
 import { PROGRAM_NAME } from "@mendcode/program"
 
@@ -11,17 +12,7 @@ export type ConfigBundleAutomation =
   | { kind: "config-bundle.imports" }
   | { kind: "config-bundle.rollback"; importId: string; force: boolean }
 
-export const CONFIG_BUNDLE_USAGE = `usage: ${PROGRAM_NAME} config-bundle <command> [--dir D] [--json]
-  inventory                                  what this data directory holds and where each part falls (read-only)
-  export <file> [--allow-flagged PATH]... [--overwrite]
-                                             one verifiable file: manifest, sha256 per file, exclusions listed
-  inspect <file>                             check the hashes and list what the bundle carries (read-only)
-  import <file> [--on-conflict keep|replace] [--resolve ITEM=keep|replace]... [--rewrite-home]
-                                             preview only: nothing changes; prints the plan id
-  import <file> --apply --plan ID [same options]
-                                             applies exactly the previewed plan, with backups and a journal
-  imports                                    earlier imports of this data directory
-  rollback <import-id> [--force]             undoes one import; --force also undoes items changed since`
+export const CONFIG_BUNDLE_USAGE = CONFIG_BUNDLE_HELP
 
 const VALUE_FLAGS = new Set(["dir", "data-dir", "format", "allow-flagged", "on-conflict", "resolve", "plan", "engine"])
 const BOOLEAN_FLAGS = new Set(["json", "help", "overwrite", "apply", "rewrite-home", "force"])

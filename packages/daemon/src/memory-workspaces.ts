@@ -16,7 +16,7 @@ export function createMemoryWorkspaces(input: { store: Store; profile(directory?
     const active = root ?? directory
     const profile = input.profile(directory)
     if (view === "project" && !active) throw new Error("Select a project first")
-    if (active && input.profile(active) !== profile) throw new Error("Project belongs to another profile")
+    if (active && input.profile(active) !== profile) throw new Error("Project belongs to another area")
     const entries = input.store.memories.list({ ...(view === "project" && active ? { directory: active } : {}), profile, session: "all" }).filter((entry) => view === "user" ? entry.scope === "user" : entry.scope === "user" || (entry.directory && input.profile(entry.directory) === profile))
     const memories = entries.slice(0, 200)
     const saved = memories.filter((entry) => entry.status === "saved" && entry.scope !== "session")

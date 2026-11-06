@@ -563,3 +563,40 @@ describe.skipIf(process.env.MENDCODE_LIVE_CODEX !== "1")("codex engine (live, gp
     expect(checkSessionLog(events, { final: true })).toEqual([])
   }, 120_000)
 })
+
+describe("codex plan mode note", () => {
+  test("every turn in plan carries the plan note after the text, the first turn after it says it ended, others carry nothing", async () => {
+    const fake = fakeCodex(standardScript((_params, api) => api.notify("turn/completed", { threadId: "thr1", turn: { id: "turn1", status: "completed" } })))
+    const engine = createCodexEngine({ cwd: "/repo", transportFactory: () => fake.transport })
+    const ids = createIdFactory()
+    const sessionId = ids("session")
+    let mode: "plan" | "ask" = "plan"
+    const turn = (text: string) => engine.runTurn({ sessionId, turnId: ids("turn"), text, attachments: [], signal: new AbortController().signal, newItemId: () => ids("item"), emit: () => {}, ask: async () => ({ kind: "deny" }), permissionMode: () => mode, setPermissionMode: () => {} })
+    await turn("plan it")
+    await turn("more")
+    mode = "ask"
+    await turn("build")
+    await turn("again")
+    const sent = fake.requests.filter((request) => request.method === "turn/start").map((request) => String(request.params.input[0].text).split("\n"))
+    expect(sent[0]).toEqual(["plan it", expect.stringContaining("Plan mode is on")])
+    expect(sent[1]![1]).toBe(sent[0]![1])
+    expect(sent[2]).toEqual(["build", expect.stringContaining("Plan mode is off")])
+    expect(sent[3]).toEqual(["again"])
+    engine.stop()
+  })
+
+  test("an internal read-only run (a PR review, a report-only loop) in plan mode carries no plan note and no off note", async () => {
+    const fake = fakeCodex(standardScript((_params, api) => api.notify("turn/completed", { threadId: "thr1", turn: { id: "turn1", status: "completed" } })))
+    const engine = createCodexEngine({ cwd: "/repo", transportFactory: () => fake.transport })
+    const ids = createIdFactory()
+    const sessionId = ids("session")
+    let mode: "plan" | "ask" = "plan"
+    const turn = (text: string) => engine.runTurn({ sessionId, turnId: ids("turn"), text, attachments: [], signal: new AbortController().signal, newItemId: () => ids("item"), emit: () => {}, ask: async () => ({ kind: "deny" }), permissionMode: () => mode, setPermissionMode: () => {}, readOnlyRun: true })
+    await turn("review it")
+    mode = "ask"
+    await turn("again")
+    const sent = fake.requests.filter((request) => request.method === "turn/start").map((request) => String(request.params.input[0].text))
+    expect(sent).toEqual(["review it", "again"])
+    engine.stop()
+  })
+})

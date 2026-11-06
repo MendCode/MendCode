@@ -104,7 +104,7 @@ describe("side chat tools, retries and approvals", () => {
   test("the tools an answer ran are lines of the thread, before the answer", async () => {
     const { client, sessionId } = await boot()
     await client.send({ type: "session.aside", sessionId, text: "/tool 20" })
-    expect((await thread(client, sessionId)).messages).toEqual([{ role: "user", text: "/tool 20" }, { role: "tool", text: "faux" }, { role: "assistant", text: "echo: /tool 20" }])
+    expect((await thread(client, sessionId)).messages).toMatchObject([{ role: "user", text: "/tool 20" }, { role: "tool", text: "faux", status: "ok", ms: expect.any(Number) }, { role: "assistant", text: "echo: /tool 20" }])
   })
 
   test("a provider retry shows as the thread's status while it waits, and the answer clears it", async () => {
@@ -121,7 +121,7 @@ describe("side chat tools, retries and approvals", () => {
     await client.send({ type: "session.aside", sessionId, text: "/ask" })
     const done = await thread(client, sessionId)
     expect(done.busy).toBe(false)
-    expect(done.messages).toContainEqual({ role: "tool", text: "needed approval: refused in the side chat" })
+    expect(done.messages).toContainEqual({ role: "tool", text: "needed approval: refused in the side chat", status: "error" })
   })
 })
 
@@ -189,6 +189,27 @@ describe("persistent side chat", () => {
     await until(() => { void sessions().then((n) => { remaining = n }); return remaining === 1 })
     await client.send({ type: "session.aside", sessionId, text: "Fresh" })
     expect(prompts.at(-1)).toStartWith(ASIDE_BRIEF)
+  })
+
+  test("the thread says what the side chat saw of the main session, and clear keeps the thread for /btw history", async () => {
+    const { client, sessionId, dir } = await boot()
+    await client.send({ type: "session.aside", sessionId, text: "First question" })
+    const first = await thread(client, sessionId)
+    expect(first.context).toMatchObject({ cut: false })
+    await client.send({ type: "session.aside", sessionId, text: "Second" })
+    expect((await thread(client, sessionId)).context?.seen).toBeGreaterThanOrEqual(first.context!.seen)
+    expect(await client.send({ type: "session.aside.get", sessionId, history: true })).toMatchObject({ ok: true, result: { history: [] } })
+    await client.send({ type: "session.aside.clear", sessionId })
+    await client.send({ type: "session.aside", sessionId, text: "Third" })
+    await client.send({ type: "session.aside.clear", sessionId })
+    // An empty chat is not kept; the others come back newest first.
+    await client.send({ type: "session.aside.clear", sessionId })
+    const reply = await client.send({ type: "session.aside.get", sessionId, history: true })
+    const history = (reply.ok ? reply.result?.history : []) as Array<{ at: number; messages: Array<{ role: string; text: string }> }>
+    expect(history.map((entry) => entry.messages[0]!.text)).toEqual(["Third", "First question"])
+    expect(history[0]!.messages.at(-1)).toMatchObject({ role: "assistant", text: "echo: Third" })
+    expect(await client.send({ type: "session.aside.get", sessionId })).not.toMatchObject({ result: { history: expect.anything() } })
+    expect(dir).toBeTruthy()
   })
 
   test("one answer at a time, and clear stops a running answer and wins over its end", async () => {

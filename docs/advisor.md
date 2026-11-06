@@ -27,17 +27,18 @@ The main agent has an `advisor` tool and calls it when it decides to (its descri
 |---|---|---|
 | `plan` | `plan_submit` / `plan_review`, before you see the plan | `revise` or `stop` sends the plan back to the agent with the findings; it revises and submits again, and the second submission reaches you. `proceed` shows you the plan with the advice attached to the agent's result |
 | `repeat_error` | the second time a tool call fails with the same arguments and the same first error line | the verdict joins the history as an `advisor` call, so the next step sees it |
-| `completion` | the agent answers without tool calls, the turn edited files, and no consultation happened after the last edit | `revise` or `stop` gives the agent exactly one more step to address it (or to stop and tell you); `proceed` ends the turn as usual |
+| `completion` | the agent answers without tool calls, the turn's edits touched at least 2 files or changed at least 20 lines, and no consultation happened after the last edit | `revise` or `stop` gives the agent exactly one more step to address it (or to stop and tell you); `proceed` ends the turn as usual |
 
-Each checkpoint runs at most once per turn. Only the main agent is advised: sub-agents never get the tool or the checkpoints. A scripted run's tool allow-list and an agent's tool list apply to the tool as to any other; permission rules can deny `advisor`.
+A trivial turn (one file, fewer than 20 changed lines: a config value, a one-line fix) ends without the `completion` sign-off: the review would make you wait after the answer for a change you can read at a glance. The agent can still call the advisor itself, and `plan` and `repeat_error` are unaffected. Lines are counted from the edits themselves (each replacement's larger side, a write's content, a patch's `+`/`-` lines), summed over the turn.
 
-Checkpoint calls appear in the transcript as ordinary `advisor` tool rows (marked as made by the engine), so you see every consultation and its verdict.
+Each checkpoint runs at most once per turn. Only the main agent is advised: sub-agents never get the tool or the checkpoints, on any engine (a child on another engine is not lent it, and Claude Code's own sub-agents are refused it). A scripted run's tool allow-list and an agent's tool list apply to the tool as to any other; permission rules can deny `advisor`.
 
+Checkpoint calls appear in the transcript as ordinary `advisor` tool rows (marked as made by the engine), so you see every consultation and its verdict. While one runs, the working row reads "Consulting advisor...".
 ## What the advisor sees
 
-Not the whole conversation. A brief of at most `maxBriefTokens` (24,000 by default, 4 characters each): the checkpoint and question, your latest request in full, the plan, the working tree's `git diff HEAD` (bounded), and as much of the current turn's transcript as fits. Secrets are redacted before the brief leaves the process. The advisor has no tools.
+Not the whole conversation. A brief of at most `maxBriefTokens` (24,000 by default, 4 characters each): the checkpoint and question, your latest request in full, the plan, the working tree's `git diff HEAD` (bounded), and as much of the current turn's transcript as fits. The turn starts at your last message; an image a tool read during the turn does not count as your request. The brief lists the files this turn edited and the checks it ran (tests, typecheck, lint, build) apart from earlier turns'. The images attached to your request go with it when the advisor model accepts images. Secrets are redacted before the brief leaves the process. The advisor has no tools.
 
-It answers JSON: `verdict` (`proceed`, `revise` or `stop`), a short `summary`, up to 8 `findings` (claim, evidence, severity) and up to 6 `next` steps. An answer that cannot be read becomes a neutral `proceed` with the text as its summary. A timeout (60 s), a provider error or a refused budget is reported in the tool row and the turn continues without the advice; the advisor never fails a turn.
+It answers JSON: `verdict` (`proceed`, `revise` or `stop`), a short `summary`, up to 8 `findings` (claim, evidence, severity), up to 6 `next` steps and, when it shows the change better than words, an `example`: a short code snippet or ASCII sketch. An answer that cannot be read becomes a neutral `proceed` with the text as its summary. A timeout (60 s), a provider error or a refused budget is reported in the tool row and the turn continues without the advice; the advisor never fails a turn.
 
 ## Usage and limits
 

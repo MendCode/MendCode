@@ -5,7 +5,7 @@ import type { Line } from "../ui/theme"
 export const PAGE_TITLES: Readonly<Record<string, string>> = {
   file: "File", tasks: "Tasks", stash: "Stash", drafts: "Drafts", queue: "Queue", history: "Prompt history", skills: "Skills", variants: "Variants",
   "model-picker": "Models", sessions: "Sessions", usage: "Usage", help: "Help", changes: "Changes", memory: "Memory", context: "Context",
-  mcps: "MCP servers", acp: "ACP agents", tools: "Tools", packages: "Packages", loops: "Loops", storage: "Storage", setup: "Setup",
+  mcps: "MCP servers", acp: "ACP agents", tools: "Tools", packages: "Profiles", loops: "Loops", storage: "Storage", setup: "Setup",
   model: "Model", agent: "Agent", theme: "Themes", agents: "Agent View", pet: "Pet", workflows: "Workflows", extension: "Extension",
   customize: "Customize", settings: "Settings", status: "Status", extensions: "Extensions", hooks: "Hooks", connect: "Connect",
   providers: "Providers", secrets: "Secrets", env: "Environment", tree: "Session tree", text: "Document", permissions: "Permissions",
@@ -13,7 +13,7 @@ export const PAGE_TITLES: Readonly<Record<string, string>> = {
   "plan-review": "Plan review", "prompt-mode": "Prompt mode", compaction: "Compaction", "agent-commands": "Agent commands",
   diagnostics: "Diagnostics", worktrees: "Worktrees", warp: "Warp", compound: "Compound", marketplace: "Marketplace", intro: "Welcome",
   "ai-config": "AI config", "release-channel": "Release channel", tsm: "Sessions manager", ide: "IDE", mflow: "Flow", reviews: "Reviews", console: "Console",
-  "git-commit": "Commit", "git-pr": "Pull request", "git-init": "Initialize repository", share: "Share", keymap: "Keymap", "terminal-setup": "Terminal setup", tutorial: "Tutorial",
+  "git-commit": "Commit", "git-pr": "Pull request", "git-init": "Initialize repository", share: "Share", keymap: "Keymap", "terminal-setup": "Terminal setup", tutorial: "Tutorial", whatsnew: "What's new",
 }
 
 const text = (line: Line) => line.map((span) => span.text).join("")

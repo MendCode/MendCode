@@ -1,9 +1,11 @@
 import { spawn } from "node:child_process"
+import { fstatSync } from "node:fs"
 import { stat } from "node:fs/promises"
 import { StringDecoder } from "node:string_decoder"
 import { z } from "zod"
 import { agentProcesses, agentShellLaunch, ownerCommandRefusal } from "../agent-origin"
 import { blastRadiusPreview } from "../blast-radius"
+import { discardFiles, followFile, open, temporary, WATCH_MS } from "../capture-output"
 import { defaultShell,killProcessTree, shellArgv, shellSpawnOptions } from "../platform-shell"
 import { sandboxCommand, sandboxHint } from "../sandbox"
 import { defineTool } from "../tool"
@@ -13,7 +15,11 @@ import { binaryNote, countBinaryChars, displayPath, errorMessage, fail, isBinary
 const DEFAULT_TIMEOUT_MS = 120_000
 const MAX_TIMEOUT_MS = 600_000
 const KILL_GRACE_MS = 2_000
-const EXIT_DRAIN_MS = 150
+/**
+ * A command that writes this much to one stream is stopped: a file has no backpressure the way a pipe had, so a runaway command (`yes`)
+ * would fill the temporary directory until its timeout. Far above anything the model reads (head and tail are kept).
+ */
+const MAX_STREAM_BYTES = 256 * 1024 * 1024
 /** In-memory retention: beyond this the middle of the output is dropped before head/tail truncation. */
 const KEEP_HEAD_CHARS = 1_000_000
 const KEEP_TAIL_CHARS = 3_000_000
@@ -75,13 +81,27 @@ export default defineTool({
     if (!wrapped.ok) return fail({ title, message: wrapped.error })
     const [binary, ...binaryArguments] = wrapped.argv as [string, ...string[]]
 
+    // Output goes to two private files, not pipes: Bun keeps native buffer for every piped child that the system never takes back.
+    const files = { stdout: temporary(), stderr: temporary() }
+    const fds: { stdout?: number; stderr?: number } = {}
+    try {
+      fds.stdout = open(files.stdout)
+      fds.stderr = open(files.stderr)
+    } catch (error) {
+      discardFiles({ fds: [fds.stdout, fds.stderr], files: [files.stdout, files.stderr] })
+      return fail({ title, message: `cannot run command: ${errorMessage(error)}` })
+    }
+    const outputFds = fds as { stdout: number; stderr: number }
+
     return new Promise((resolve) => {
       const child = spawn(binary, binaryArguments, {
         cwd,
         ...shellSpawnOptions({ shell: shellFile }),
-        stdio: ["ignore", "pipe", "pipe"],
+        stdio: ["ignore", outputFds.stdout, outputFds.stderr],
         env: { ...launch.environment, PAGER: "cat", GIT_PAGER: "cat", TERM: "dumb" },
       })
+      // The child holds its own descriptors: the names go now, so no exit path can leave a file behind (Windows removes them at the end).
+      discardFiles({ fds: [], files: [files.stdout, files.stderr] })
       const pid = child.pid
       const tracked = owner ? agentProcesses.user(pid) : agentProcesses.agent(pid, context.environment?.MENDCODE_SESSION_ID)
       child.once("exit", () => tracked.exited())
@@ -91,13 +111,15 @@ export default defineTool({
       let dropped = 0
       let timedOut = false
       let wasCancelled = false
+      let tooMuch = false
       let settled = false
       let killTimer: ReturnType<typeof setTimeout> | undefined
-      let drainTimer: ReturnType<typeof setTimeout> | undefined
+      let poll: ReturnType<typeof setInterval> | undefined
 
       const decoders = { stdout: new StringDecoder("utf8"), stderr: new StringDecoder("utf8") }
       /** Counted over everything the command printed, also what the retention below drops. */
       const seen = { bytes: 0, chars: 0, binaryChars: 0, stderr: false, liveNoted: false }
+      const followers = { stdout: followFile({ fd: outputFds.stdout }), stderr: followFile({ fd: outputFds.stderr }) }
       const append = (text: string) => {
         if (text === "") return
         const binaryChars = countBinaryChars(text)
@@ -122,6 +144,23 @@ export default defineTool({
         }
       }
 
+      /** Takes the bytes each file gained since the last call; `all` keeps going until both are caught up. */
+      const drain = (all: boolean) => {
+        for (const name of ["stdout", "stderr"] as const) {
+          for (let reads = 0; all || reads < 16; reads++) {
+            let chunk: Buffer | undefined
+            try { chunk = followers[name].next() } catch { break }
+            if (!chunk) break
+            seen.bytes += chunk.length
+            if (name === "stderr") seen.stderr = true
+            append(decoders[name].write(chunk))
+          }
+        }
+      }
+      const overLimit = () => {
+        try { return fstatSync(outputFds.stdout).size > MAX_STREAM_BYTES || fstatSync(outputFds.stderr).size > MAX_STREAM_BYTES } catch { return false }
+      }
+
       const killGroup = (signal: NodeJS.Signals) => killProcessTree({ pid, signal, fallback: (name) => { try { child.kill(name) } catch { /* already gone */ } } })
       const terminate = () => {
         killGroup("SIGTERM")
@@ -143,13 +182,13 @@ export default defineTool({
         if (settled) return
         settled = true
         clearTimeout(timeout)
-        if (drainTimer) clearTimeout(drainTimer)
+        if (poll) clearInterval(poll)
         context.signal.removeEventListener("abort", onAbort)
         // Sweep stragglers left in the group (background children of a finished command).
         if (killTimer) clearTimeout(killTimer)
         killGroup("SIGKILL")
-        child.stdout?.destroy()
-        child.stderr?.destroy()
+        drain(true)
+        discardFiles({ fds: [outputFds.stdout, outputFds.stderr], files: [files.stdout, files.stderr] })
         append(decoders.stdout.end())
         append(decoders.stderr.end())
         const full = dropped > 0 ? `${head}\n… output omitted …\n${tail}` : head + tail
@@ -162,6 +201,7 @@ export default defineTool({
         let expectedExit: string | undefined
         if (spawnError) output = spawnError
         else if (timedOut) output += `${output ? "\n" : ""}[timed out after ${limit} ms]`
+        else if (tooMuch) output += `${output ? "\n" : ""}[stopped: more than ${MAX_STREAM_BYTES / 1024 ** 2} MB of output]`
         else if (wasCancelled) output += `${output ? "\n" : ""}[cancelled]`
         else if (exitCode !== 0) {
           const hint = context.sandbox ? sandboxHint({ output, policy: context.sandbox }) : undefined
@@ -173,26 +213,19 @@ export default defineTool({
           output,
           truncated: binary ? false : capped.truncated,
           title,
-          isError: exitCode !== 0 || timedOut || wasCancelled,
+          isError: exitCode !== 0 || timedOut || wasCancelled || tooMuch,
           meta: { exitCode, timedOut, cancelled: wasCancelled, durationMs: Date.now() - started, ...(binary ? { binary: true, outputBytes: seen.bytes } : {}), ...(expectedExit ? { expectedExit } : {}) },
         })
       }
 
-      child.stdout?.on("data", (chunk: Buffer) => {
-        seen.bytes += chunk.length
-        append(decoders.stdout.write(chunk))
-      })
-      child.stderr?.on("data", (chunk: Buffer) => {
-        seen.bytes += chunk.length
-        seen.stderr = true
-        append(decoders.stderr.write(chunk))
-      })
+      // A file has no backpressure and no event: its new bytes are read on a short poll while the command runs.
+      poll = setInterval(() => {
+        drain(false)
+        if (!tooMuch && !wasCancelled && !timedOut && overLimit()) { tooMuch = true; terminate() }
+      }, WATCH_MS)
       child.on("error", (error) => finish(-1, `cannot run command: ${errorMessage(error)}`))
-      child.on("exit", (code, signal) => {
-        // Pipes may stay open if a background process inherited them; do not wait forever.
-        drainTimer = setTimeout(() => finish(code ?? -1, undefined, signal), EXIT_DRAIN_MS)
-      })
-      child.on("close", (code, signal) => finish(code ?? -1, undefined, signal))
+      // Nothing is held open by a background process any more: the files are read to their end when the command exits.
+      child.on("exit", (code, signal) => finish(code ?? -1, undefined, signal))
     })
   },
   /** Blast radius of a risky command (`rm`, `git clean`, `git reset --hard`, `find -delete`…): read-only, shown in the approval. */

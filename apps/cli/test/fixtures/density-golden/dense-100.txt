@@ -44,16 +44,16 @@
 
      $ wc -l docs/*.md | sort -n
      │ … +72 lines
-     │ 624 docs/views-9.md
-     │ 631 docs/layout-9.md
-     │ 638 docs/customize-9.md
-     │ 645 docs/packages-9.md
-     │ 652 docs/secrets-9.md
-     │ 659 docs/sessions-9.md
-     │ 666 docs/tools-9.md
-     │ 673 docs/themes-9.md
-     │ 680 docs/views-10.md
-     │ 687 docs/layout-10.md
+     │     624 docs/views-9.md
+     │     631 docs/layout-9.md
+     │     638 docs/customize-9.md
+     │     645 docs/packages-9.md
+     │     652 docs/secrets-9.md
+     │     659 docs/sessions-9.md
+     │     666 docs/tools-9.md
+     │     673 docs/themes-9.md
+     │     680 docs/views-10.md
+     │     687 docs/layout-10.md
 
      ◇ 2 tools more
      ✲ Glob docs/**/*.md  81 files
@@ -73,13 +73,13 @@
      │ … +4 lines
 
      ▤ Read docs/extensions.md  28 lines
-     │ 1  # Extensions
-     │ 2
-     │ 3  Extension line 2: terminal extensions load from the data dir or a trusted project.
-     │ 4  Extension line 3: terminal extensions load from the data dir or a trusted project.
-     │ 5  Extension line 4: terminal extensions load from the data dir or a trusted project.
-     │ 6  Extension line 5: terminal extensions load from the data dir or a trusted project.
-     │ … 22 more lines
+       1  # Extensions
+       2
+       3  Extension line 2: terminal extensions load from the data dir or a trusted project.
+       4  Extension line 3: terminal extensions load from the data dir or a trusted project.
+       5  Extension line 4: terminal extensions load from the data dir or a trusted project.
+       6  Extension line 5: terminal extensions load from the data dir or a trusted project.
+       … 22 more lines
 
      ⌕ Grep "TOPICS"  2 matches in 1 file
      │ apps/cli/src/docs-commands.ts  2 matches
@@ -97,29 +97,29 @@
 
      $ mendcode docs --json
      │ … +1,145 lines
-     │ { "name": "topic-1143", "file": "docs/topic-1143.md", "lines": 1243 },
-     │ { "name": "topic-1144", "file": "docs/topic-1144.md", "lines": 1244 },
-     │ { "name": "topic-1145", "file": "docs/topic-1145.md", "lines": 1245 },
-     │ { "name": "topic-1146", "file": "docs/topic-1146.md", "lines": 1246 },
-     │ { "name": "topic-1147", "file": "docs/topic-1147.md", "lines": 1247 },
-     │ { "name": "topic-1148", "file": "docs/topic-1148.md", "lines": 1248 },
-     │ { "name": "topic-1149", "file": "docs/topic-1149.md", "lines": 1249 },
-     │ ],
-     │ "count": 1150
+     │     { "name": "topic-1143", "file": "docs/topic-1143.md", "lines": 1243 },
+     │     { "name": "topic-1144", "file": "docs/topic-1144.md", "lines": 1244 },
+     │     { "name": "topic-1145", "file": "docs/topic-1145.md", "lines": 1245 },
+     │     { "name": "topic-1146", "file": "docs/topic-1146.md", "lines": 1246 },
+     │     { "name": "topic-1147", "file": "docs/topic-1147.md", "lines": 1247 },
+     │     { "name": "topic-1148", "file": "docs/topic-1148.md", "lines": 1248 },
+     │     { "name": "topic-1149", "file": "docs/topic-1149.md", "lines": 1249 },
+     │   ],
+     │   "count": 1150
      │ }
 
     ┃ Thought: Order of the topics · 1.6s
     ┃ The index is built from ORDER, so packages has to be added there; the file itself exists.
 
      ± Patch apps/cli/src/docs-commands.ts  +2 −1
-     │ 38   const TOPICS = loadTopics(docsDir)
-     │ 39
-     │ 40 - export const ORDER = ["keys", "mcp"]
-     │ 40 + export const ORDER = ["keys", "mcp", "packages"]
-     │ 41 + // packages sits after mcp: both are about what the terminal can load
-     │ 42   export function docsTopic(name: string) {
-     │ 43     return TOPICS.get(name)
-     │ 44   }
+       38   const TOPICS = loadTopics(docsDir)
+       39
+       40 - export const ORDER = ["keys", "mcp"]
+       40 + export const ORDER = ["keys", "mcp", "packages"]
+       41 + // packages sits after mcp: both are about what the terminal can load
+       42   export function docsTopic(name: string) {
+       43     return TOPICS.get(name)
+       44   }
 
      $ bun test apps/cli/test/docs.test.ts  241 pass · 0 fail                                 12.4s
 

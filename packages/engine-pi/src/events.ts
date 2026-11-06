@@ -36,6 +36,8 @@ export function createPiMapper(input: { newItemId(): ItemId; emit(event: EngineE
   let compaction: ItemId | undefined
   let last: { stopReason?: string; errorMessage?: string } = {}
   let retryFailure: string | undefined
+  /** The output tokens of the assistant message in flight, as last sent live (a message's usage is recorded at its end). */
+  let liveOutput = 0
 
   function close(key: string, status: "ok" | "interrupted" = "ok") {
     const block = open.get(key)
@@ -107,6 +109,12 @@ export function createPiMapper(input: { newItemId(): ItemId; emit(event: EngineE
     accept(event: Json) {
       switch (event.type) {
         case "message_update": {
+          // The record's `usage` is the call's cumulative figure so far as the provider reports it (zero until the end for a provider that sends nothing sooner).
+          const streamed = isRecord(event.usage) ? number(event.usage.output) : 0
+          if (streamed > 0 && streamed !== liveOutput) {
+            liveOutput = streamed
+            input.emit({ type: "usage.live", output: streamed })
+          }
           const update = event.assistantMessageEvent
           if (!isRecord(update)) return
           const index = update.contentIndex
@@ -138,6 +146,7 @@ export function createPiMapper(input: { newItemId(): ItemId; emit(event: EngineE
           const message = event.message
           if (!isRecord(message) || message.role !== "assistant") return
           closeText()
+          liveOutput = 0
           usage(message)
           last = { ...(typeof message.stopReason === "string" ? { stopReason: message.stopReason } : {}), ...(typeof message.errorMessage === "string" ? { errorMessage: message.errorMessage } : {}) }
           return

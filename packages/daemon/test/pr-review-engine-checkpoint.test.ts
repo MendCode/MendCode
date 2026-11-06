@@ -20,12 +20,14 @@ const idOf = (line: number, summary = `defect on line ${line}`) => findingId({ p
  * A scripted engine: the review child answers `review`, each verify child confirms every id its prompt carries (or what `verify`
  * says). Every turn reports `tokens`. It records the purpose and prompt of each call.
  */
-function engine({ review, tokens = { input: 1000, output: 100 }, verify }: { review: unknown; tokens?: ReviewTurn["tokens"]; verify?: (ids: string[]) => string }) {
+function engine({ review, tokens = { input: 1000, output: 100 }, verify, closing = "confirm" }: { review: unknown; tokens?: ReviewTurn["tokens"]; verify?: (ids: string[]) => string; closing?: "confirm" | "fail" }) {
   const asked: Array<{ purpose: string; prompt: string }> = []
   const factory: ReviewSessionFactory = async ({ purpose }) => ({
     async send(prompt) {
       asked.push({ purpose, prompt })
       if (purpose === "review") return { text: JSON.stringify(review), tokens }
+      // The short closing check at the budget (close.ts) can be scripted to fail, so a test sees what stays unverified.
+      if (closing === "fail" && prompt.includes("short closing check")) throw new Error("[PR_REVIEW]: the closing check failed")
       const ids = [...prompt.matchAll(/"id":"([0-9a-f]{40})"/g)].map((match) => match[1]!)
       return { text: verify ? verify(ids) : JSON.stringify({ verdicts: ids.map((id) => ({ id, verdict: "confirmed", evidence: [] })) }), tokens }
     },
@@ -86,13 +88,16 @@ describe("review prompt", () => {
 })
 
 describe("budget checkpoints", () => {
-  test("a review pass over the budget keeps every candidate in the checkpoint, says it is incomplete, and the resume verifies them without a second review pass", async () => {
-    const first = engine({ review: { summary: "Adds math.", findings: [raw(3), raw(7)], sections: { notes: "N." } }, tokens: { input: 60_000, output: 1_000 } })
+  test("a review pass over the budget whose closing check fails keeps every candidate in the checkpoint, says it is partial, and the resume verifies them without a second review pass", async () => {
+    const first = engine({ review: { summary: "Adds math.", findings: [raw(3), raw(7)], sections: { notes: "N." } }, tokens: { input: 60_000, output: 1_000 }, closing: "fail" })
     const cfg = config({ budgetTokens: 50_000, sections: [{ id: "notes" }] })
     const stopped = await reviewPullRequest({ sessionFactory: first.factory, context: context(), config: cfg, cap: 8 })
-    expect(first.purposes()).toEqual(["review"])
+    // The one closing check was tried and failed: nothing is published as a finding, the candidates are counted.
+    expect(first.purposes()).toEqual(["review", "verify"])
     expect(stopped.result).toMatchObject({ findings: [], budgetHit: true, dropped: 2 })
+    expect(stopped.partial).toMatchObject({ unverified: 2, notReviewed: [], reviewed: ["src/math.ts"] })
     expect(stopped.result.summary).toContain("The review is incomplete: 2 candidate findings not verified yet are kept")
+    expect(stopped.result.summary).toContain("Partial review: all 1 files reviewed; 2 candidate findings not verified (not published)")
     expect(stopped.stop).toEqual({ kind: "budget", detail: expect.stringContaining("(50,000)"), unit: "tokens", used: 61_000, limit: 50_000, resumable: true, remaining: "2 candidates not verified" })
     expect(PrStopReason.safeParse(stopped.stop).success).toBe(true)
     expect(stopped.checkpoint).toMatchObject({ phase: "corroboration", completedPhases: ["analysis"], verified: [], sections: { notes: "N." } })
@@ -110,7 +115,8 @@ describe("budget checkpoints", () => {
     expect(resumed.checkpoint).toBeUndefined()
     expect(resumed.result.findings.map((finding) => [finding.id, finding.verdict])).toEqual([[idOf(3), "confirmed"], [idOf(7), "confirmed"]])
     expect(resumed.result.summary).toBe("Adds math.")
-    expect(resumed.result.tokens).toEqual({ input: 62_000, output: 1_100, cached: 0 })
+    // The continuation counts its own spending: the stopped run's stays in the job's ledger.
+    expect(resumed.result.tokens).toEqual({ input: 2_000, output: 100, cached: 0 })
     expect(resumed.result.budgetHit).toBe(false)
     expect(resumed.sections).toEqual({ notes: "N." })
     expect(resumed.validation).toEqual({ ok: true, reason: "complete and verified" })
@@ -119,9 +125,10 @@ describe("budget checkpoints", () => {
   test("a budget reached during verification keeps the judged batch and the unjudged candidates apart; the resume judges only the rest", async () => {
     const lines = Array.from({ length: 12 }, (_, i) => i + 1)
     // Review 10,000 + first verify batch 10,000 = 20,000 >= the 15,000 budget: the second batch is never sent.
-    const first = engine({ review: { summary: "S.", findings: lines.map((line) => raw(line)) }, tokens: { input: 10_000, output: 0 }, verify: (ids) => JSON.stringify({ verdicts: ids.map((id, index) => ({ id, verdict: index === 0 ? "rejected" : "confirmed", evidence: [] })) }) })
+    const first = engine({ review: { summary: "S.", findings: lines.map((line) => raw(line)) }, tokens: { input: 10_000, output: 0 }, closing: "fail", verify: (ids) => JSON.stringify({ verdicts: ids.map((id, index) => ({ id, verdict: index === 0 ? "rejected" : "confirmed", evidence: [] })) }) })
     const stopped = await reviewPullRequest({ sessionFactory: first.factory, context: context(), config: config({ budgetTokens: 15_000 }), cap: 30 })
-    expect(first.purposes()).toEqual(["review", "verify"])
+    // The review, the first batch, then the one short closing check (scripted to fail here).
+    expect(first.purposes()).toEqual(["review", "verify", "verify"])
     expect(stopped.checkpoint!.verified).toHaveLength(10)
     expect(stopped.checkpoint!.candidates.map((finding) => finding.id)).toEqual([idOf(11), idOf(12)])
     expect(stopped.checkpoint!.candidates.every((finding) => finding.verdict === undefined)).toBe(true)
@@ -139,6 +146,29 @@ describe("budget checkpoints", () => {
     expect(resumed.stop).toBeUndefined()
   })
 
+  test("at the cap the closing is one bounded call: at most eight candidates, the strongest first; the rest are counted, kept for the continuation and never published", async () => {
+    const lines = Array.from({ length: 12 }, (_, i) => i + 1)
+    const severities = (line: number) => line <= 8 ? "critical" : "minor"
+    const review = { summary: "S.", findings: lines.map((line) => ({ ...raw(line), severity: severities(line) })) }
+    const run = engine({ review, tokens: { input: 60_000, output: 0 } })
+    const outcome = await reviewPullRequest({ sessionFactory: run.factory, context: context(), config: config({ budgetTokens: 50_000 }), cap: 30 })
+    // The review pass, then exactly one closing call: never a second batch, never another review.
+    expect(run.purposes()).toEqual(["review", "verify"])
+    expect(run.asked[1]!.prompt).toContain("short closing check")
+    expect(run.asked[1]!.prompt).not.toContain("diff --git")
+    const named = [...run.asked[1]!.prompt.matchAll(/"id":"([0-9a-f]{40})"/g)].map((match) => match[1])
+    expect(named.sort()).toEqual(lines.filter((line) => line <= 8).map((line) => idOf(line)).sort())
+    expect(outcome.result.findings).toHaveLength(8)
+    expect(outcome.result.findings.every((finding) => finding.severity === "critical" && finding.verdict === "confirmed")).toBe(true)
+    expect(outcome.partial).toMatchObject({ unverified: 4, notReviewed: [] })
+    expect(outcome.stop).toMatchObject({ kind: "budget", resumable: true, remaining: "4 candidates not verified" })
+    expect(outcome.checkpoint!.candidates.map((finding) => finding.id).sort()).toEqual(lines.filter((line) => line > 8).map((line) => idOf(line)).sort())
+    expect(outcome.checkpoint!.verified).toHaveLength(8)
+    expect(outcome.checkpoint!.result!.tokens).toEqual({ input: 0, output: 0, cached: 0 })
+    const body = renderReviewBody({ result: outcome.result, inline: 8, moved: [], info: { files: [], profile: "normal", cap: 30, incremental: false, notes: [], partial: outcome.partial! } })
+    expect(body).toContain("4 candidate findings were found but not verified, so they are not published.")
+  })
+
   test("with no internal cap (Infinity) a review that spends millions of tokens is never stopped", async () => {
     const run = engine({ review: { summary: "S.", findings: Array.from({ length: 15 }, (_, i) => raw(i + 1)) }, tokens: { input: 5_000_000, output: 200_000 } })
     const outcome = await reviewPullRequest({ sessionFactory: run.factory, context: context(), config: config({ budgetTokens: Number.POSITIVE_INFINITY }), cap: 30 })
@@ -149,12 +179,15 @@ describe("budget checkpoints", () => {
     expect(outcome.result.findings).toHaveLength(15)
   })
 
-  test("a resume whose budget is still spent judges nothing, calls no model, keeps the checkpoint and stops as no progress", async () => {
-    const first = engine({ review: { summary: "S.", findings: [raw(3)] }, tokens: { input: 60_000, output: 0 } })
+  test("a resume whose budget is still spent tries only the short closing check; when that judges nothing it keeps the checkpoint and stops as no progress", async () => {
+    const first = engine({ review: { summary: "S.", findings: [raw(3)] }, tokens: { input: 60_000, output: 0 }, closing: "fail" })
     const stopped = await reviewPullRequest({ sessionFactory: first.factory, context: context(), config: config({ budgetTokens: 50_000 }), cap: 8 })
-    const second = engine({ review: {} })
-    const again = await resumeReview({ sessionFactory: second.factory, context: context(), config: config({ budgetTokens: 50_000 }), checkpoint: stopped.checkpoint!, cap: 8 })
-    expect(second.asked).toEqual([])
+    // A checkpoint from before the allowance was renewed: the spending is still on it.
+    const spentCheckpoint = { ...stopped.checkpoint!, result: { ...stopped.checkpoint!.result!, tokens: { input: 60_000, output: 0, cached: 0 } } }
+    const second = engine({ review: {}, closing: "fail" })
+    const again = await resumeReview({ sessionFactory: second.factory, context: context(), config: config({ budgetTokens: 50_000 }), checkpoint: spentCheckpoint, cap: 8 })
+    expect(second.purposes()).toEqual(["verify"])
+    expect(again.partial).toBeUndefined()
     expect(again.stop).toMatchObject({ kind: "no_progress", resumable: false, unit: "tokens", used: 60_000, limit: 50_000 })
     expect(again.checkpoint!.candidates.map((finding) => finding.id)).toEqual([idOf(3)])
     expect(again.result.findings).toEqual([])

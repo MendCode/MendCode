@@ -67,12 +67,20 @@ export type FooterPreset = {
   help: string
   rows: readonly (readonly string[])[]
   /** Profile keys the preset sets with its rows (`classic` clears the rows and leaves the rest). */
-  profile?: { quotaView?: "used" | "left"; quotaColor?: "pressure" | "accent" }
+  profile?: { quotaView?: "used" | "left"; quotaColor?: "pressure" | "accent"; footerDefaultRows?: boolean }
 }
+
+/** The preset the full view's footer is while the user never chose rows or a list (`footerDefaultRows`, docs/customize.md "Footer rows"). */
+export const FOOTER_DEFAULT_PRESET = "line"
 
 /** Presets, in the order `/footer preset` lists them. `classic` is the single row of the default footer. */
 export const FOOTER_PRESETS: Readonly<Record<string, FooterPreset>> = {
-  classic: { help: "the single row of the default footer", rows: [] },
+  classic: { help: "the single row of the default footer, also in the full view", rows: [], profile: { footerDefaultRows: false } },
+  line: {
+    help: "one row: directory, model, effort, cache share, quota windows and the code graph; the context is the top bar's",
+    rows: [["directory", "model", "effort", "cache", "quota", "codegraph"]],
+    profile: { quotaView: "left", quotaColor: "accent" },
+  },
   rows: {
     help: "five rows: directory and tagline, model and session figures, then one row per quota provider and the code graph",
     rows: [["directory", "text:tagline"], ["model", "effort", "context", "cache", "tokens"], ["quota:codex"], ["quota:claude"], ["codegraph"]],

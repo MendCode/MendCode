@@ -9,7 +9,7 @@ const TERMINAL = new Set(["turn.completed", "turn.cancelled", "turn.interrupted"
  * Checks a session's event log against the session invariants (one active turn, terminal events close it…) that
  * are observable from events alone. Pure function: same log, same violations.
  */
-export function checkSessionLog(events: SessionEvent[], options: { final?: boolean } = {}): Violation[] {
+export function checkSessionLog(events: SessionEvent[], options: { final?: boolean; folded?: boolean } = {}): Violation[] {
   const violations: Violation[] = []
   let activeTurn: string | undefined
   const openItems = new Map<string, string>()
@@ -20,7 +20,7 @@ export function checkSessionLog(events: SessionEvent[], options: { final?: boole
   let lastState = "idle"
 
   events.forEach((event, index) => {
-    if (event.seq !== index + 1) violations.push({ invariant: "I4", message: `seq ${event.seq} at position ${index + 1}`, seq: event.seq })
+    if (options.folded ? event.seq <= (events[index - 1]?.seq ?? 0) : event.seq !== index + 1) violations.push({ invariant: "I4", message: `seq ${event.seq} at position ${index + 1}`, seq: event.seq })
     switch (event.type) {
       case "turn.started":
         if (activeTurn) violations.push({ invariant: "I1", message: `turn ${event.turnId} started while ${activeTurn} active`, seq: event.seq })

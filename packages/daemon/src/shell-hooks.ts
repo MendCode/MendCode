@@ -1,6 +1,6 @@
 import { readFileSync, statSync } from "node:fs"
 import path from "node:path"
-import { CREDENTIAL_ENV } from "@mendcode/mcp"
+import { CREDENTIAL_ENV } from "../../mcp/src/env"
 import type { ExtensionLayer } from "@mendcode/packages"
 import type { HookRunInfo, HooksReport } from "@mendcode/protocol"
 import { runManaged } from "@mendcode/tools"
@@ -14,7 +14,7 @@ import { z } from "zod"
  *
  * Exit 0 continues (stdout may be `{"decision":"block","reason":"..."}`), exit 2 blocks and its stderr goes back to the
  * model (or the user, for `UserPromptSubmit`), any other exit or a timeout is logged and ignored. User-layer hooks run
- * as configured; project-layer ones (the repository's `.mendcode` and its packages) only in a trusted directory, the
+ * as configured; project-layer ones (the repository's `.mendcode` and its profiles) only in a trusted directory, the
  * same trust as project tools. The configuration is read from the daemon's own disk, never from a client.
  *
  * Two more hook types: `http` POSTs the event as JSON to a URL (a 2xx reply may carry the same `{"decision":"block"}`;
@@ -75,7 +75,7 @@ export type ShellHook = {
   url?: string
   headers?: Record<string, string>
   prompt?: string
-  /** `user`, `project` or `package <name>`: which layer's `hooks.json` it came from. */
+  /** `user`, `project` or `profile <name>`: which layer's `hooks.json` it came from. */
   layer: string
   display: string
   timeoutMs: number
@@ -185,7 +185,7 @@ export function readShellHooks(layers: readonly ExtensionLayer[]): { hooks: Shel
             argv,
             ...("url" in entry ? { url: entry.url, ...(entry.headers ? { headers: entry.headers } : {}) } : {}),
             ...("prompt" in entry ? { prompt: entry.prompt } : {}),
-            layer: layer.pkg ? `${layer.source} package ${layer.pkg}` : layer.source,
+            layer: layer.pkg ? `${layer.source} profile ${layer.pkg}` : layer.source,
             display,
             timeoutMs: Math.round((entry.timeout ?? DEFAULT_HOOK_TIMEOUT_MS / 1_000) * 1_000),
             source: layer.source,

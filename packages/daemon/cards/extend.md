@@ -1,5 +1,5 @@
 ---
-summary: change MendCode itself: commands, tools, guards, prompt, events, providers
+summary: change MendCode: commands, tools, guards, prompt, events, providers
 docs: extensions, extensions-tui, hooks, providers
 aliases: behavior, behaviour, guard, guards, intercept, extend-mendcode, self-modify
 ---

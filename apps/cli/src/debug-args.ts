@@ -1,19 +1,12 @@
+import { DATABASE_HELP } from "./help-text"
+import { DEBUG_HELP } from "./help-text"
 import type { DebugInput } from "@mendcode/protocol"
 import type { Common, ParseResult } from "./automation"
 import { PROGRAM_NAME } from "@mendcode/program"
 
 export type DebugAutomation = { kind: "debug"; input: DebugInput } | { kind: "debug.wait"; timeoutMs?: number } | { kind: "db"; operation: "path" | "query" | "shell"; sql?: string; format: "json" | "tsv" }
-export const DEBUG_USAGE = [
-  `usage: ${PROGRAM_NAME} debug <command> [--dir DATA] [--json]`,
-  "  config · info · paths · scrap · skill · startup",
-  "  agent NAME [--tool ID --params JSON --approve]",
-  "  file search QUERY | read PATH | status | list PATH | tree [DIR]",
-  "  lsp diagnostics FILE | symbols QUERY | document-symbols URI",
-  "  snapshot track | patch HASH | diff HASH",
-  "  rg tree|files|search PATTERN [--query TEXT] [--glob PATTERN]… [--limit N]",
-  "  wait [--timeout-ms MS]                      explicit hold until interrupt",
-].join("\n")
-export const DATABASE_USAGE = `usage: ${PROGRAM_NAME} db [path|SQL] [--format json|tsv] [--dir DATA]\n  no SQL: read-only SQL shell; .tables · .schema [TABLE] · .quit`
+export const DEBUG_USAGE = DEBUG_HELP
+export const DATABASE_USAGE = DATABASE_HELP
 
 /** Kept separate so db's literal TSV format and debug-only flags do not alter other command parsers. */
 export function parseDebug(argv: string[]): ParseResult | undefined {

@@ -11,7 +11,7 @@ function commandOffset(argv: string[]) {
 /**
  * Background-session shorthands over `session`, so a run started with `run --bg` is as easy to follow as a shell job:
  * `ps` → `session list --active`, `logs ID [-f]` → `session events ID [--follow]`, `kill ID` → `session cancel ID`.
- * `attach ID` opens the terminal UI on that session and is handled by the startup parser instead.
+ * `session attach ID` is the same as `attach ID`, which opens the terminal UI on that session and is handled by the startup parser instead.
  */
 export function jobAliases(argv: string[]): string[] {
   const index = commandOffset(argv)
@@ -22,5 +22,7 @@ export function jobAliases(argv: string[]): string[] {
   if (word === "ps") return [...head, "session", "list", "--active", ...rest]
   if (word === "logs") return [...head, "session", "events", ...rest.map((token) => token === "-f" ? "--follow" : token)]
   if (word === "kill") return [...head, "session", "cancel", ...rest]
+  // `session attach ID` is `attach ID`: it opens the terminal UI, which the startup parser handles.
+  if (word === "session" && rest[0] === "attach") return [...head, ...rest]
   return argv
 }

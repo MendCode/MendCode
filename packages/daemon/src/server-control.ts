@@ -1,6 +1,7 @@
 import { MemoryConfigPatch, ProjectRuntimeConfig, RestConfig, RestProjectConfig, RestUpgradeResult, Settings, redactSecrets, type ModelRoles, type ProcessMemory, type RestConfig as Config, type RestLogInput, type RestUpgradeInput } from "@mendcode/protocol"
 import type { Store } from "@mendcode/store"
-import { defaultPermissionFor, rolesFor, shellFor } from "./profiles"
+import { isDeepStrictEqual } from "node:util"
+import { defaultPermissionFor, rolesFor, shellFor } from "./areas"
 import type { ConfigExtras, ServerConfigExtras } from "./server-config-extras"
 import { memorySettings } from "./memory-config"
 import { catalogModel, invalidChoice, type ModelCatalog } from "./models"
@@ -127,8 +128,9 @@ export function createServerControl(input: {
       if (problem) throw new Error(problem)
     }
     if (Object.keys(extras).length) await input.extras!.apply(extras, directory, pendingMcp)
-    if (JSON.stringify(next) !== JSON.stringify(current)) {
-      const settings = input.store.settings.set(next)
+    if (!isDeepStrictEqual(next, current)) {
+      const patch = Object.fromEntries(Object.keys(saved).map((key) => [key, (next as Record<string, unknown>)[key] ?? null]))
+      const settings = input.store.settings.set(patch)
       input.changed(settings, saved)
     }
     return get(directory)

@@ -1,5 +1,9 @@
-import { createProblems, describeTrigger, parseTrigger, resolveCreateInput, checkProblems, type CreateLoopInput, type LoopService } from "@mendcode/loops"
-import type { Loop, LoopBudget } from "@mendcode/protocol"
+import { isAbsolute } from "node:path"
+import type { CreateLoopInput, LoopService } from "@mendcode/loops"
+import { createProblems, resolveCreateInput } from "../../loops/src/inputs"
+import { describeTrigger, parseTrigger } from "../../loops/src/schedule"
+import { checkProblems } from "../../loops/src/checks"
+import type { Loop, LoopBudget, SessionId } from "@mendcode/protocol"
 import type { LoopCreateInput, LoopPort } from "@mendcode/tools"
 
 const MAX_LISTED = 20
@@ -46,7 +50,11 @@ export function toCreateInput(directory: string, input: LoopCreateInput): { ok: 
     reportOnly: input.reportOnly ?? true,
     ...(input.workspace ? { workspace: input.workspace } : {}),
     ...(input.runNow ? { runNow: true } : {}),
+    ...(input.reads?.length ? { reads: input.reads } : {}),
+    ...(input.notify ? { notify: input.notify } : {}),
   }
+  const relative = input.reads?.find((path) => !isAbsolute(path))
+  if (relative) problems.push(`reads must be absolute paths (got "${relative}")`)
   const problem = createProblems(built)
   if (problem) problems.push(problem)
   return problems.length ? { ok: false, problems } : { ok: true, input: built }
@@ -64,6 +72,9 @@ function previewText(input: CreateLoopInput): string {
     ...(input.rubric ? [`Runtime rubric: ${JSON.stringify(input.rubric)}`] : []),
     ...(input.approvalPolicy ? [`Approval required: ${input.approvalPolicy.requireApprovalFor.join(", ")}`] : []),
     ...(input.checks?.length ? [`Host checks: ${input.checks.join("; ")}`] : []),
+    ...(input.reads?.length ? [`Reads outside the project (approved with this loop): ${input.reads.join(", ")}`] : []),
+    input.notify === "none" ? "No notice is left in this session after a run." : "Each run leaves a short notice in this session.",
+    "The loop inherits this session's permission mode (never more) and reads what this session could read without asking.",
     "",
     `Objective:\n${resolved.objective.slice(0, 600)}${resolved.objective.length > 600 ? "…" : ""}`,
   ].join("\n")
@@ -73,7 +84,7 @@ function previewText(input: CreateLoopInput): string {
  * The loop tool's port for one session's project: it creates through the same checks as `loop.create`, lists the
  * project's loops and pauses one of them. Nothing else (resume, stop, delete, accept) is reachable from the agent.
  */
-export function createLoopPort(input: { directory: string; service: Pick<LoopService, "list" | "get" | "pause">; create(input: CreateLoopInput): Promise<{ ok: true; loop: Loop } | { ok: false; message: string }> }): LoopPort {
+export function createLoopPort(input: { directory: string; /** The session whose agent calls the tool: it becomes the loop's creator. */ sessionId?: SessionId; service: Pick<LoopService, "list" | "get" | "pause">; create(input: CreateLoopInput): Promise<{ ok: true; loop: Loop } | { ok: false; message: string }> }): LoopPort {
   const { directory, service } = input
   return {
     async preview(request) {
@@ -83,7 +94,7 @@ export function createLoopPort(input: { directory: string; service: Pick<LoopSer
     async create(request) {
       const built = toCreateInput(directory, request)
       if (!built.ok) return { ok: false, message: built.problems.join("; ") }
-      const created = await input.create(built.input)
+      const created = await input.create({ ...built.input, ...(input.sessionId ? { creatorSessionId: input.sessionId } : {}) })
       if (!created.ok) return created
       const { loop } = created
       return { ok: true, loopId: loop.loopId, text: `Loop "${loop.name}" created (${loop.loopId}), ${describeTrigger(loop.trigger)}. The user follows it in /loops; do not poll it.` }

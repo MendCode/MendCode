@@ -98,6 +98,8 @@ export type ModelRequest = {
   turnSignal?: AbortSignal
   /** Daemon session identity for providers with server-side conversation state. */
   conversationId?: string
+  /** Feature `message_threads` (docs/message-threads.md): the Anthropic adapter may keep this conversation in a message thread (beta) on Anthropic's own API. */
+  messageThreads?: boolean
 }
 
 /**

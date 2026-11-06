@@ -195,6 +195,22 @@ describe("shell", () => {
     expect(out).toHaveLength(1 + 1 + 12)
   })
 
+  test("the output keeps its indentation and its blank lines; only trailing spaces go", () => {
+    const text = "export function add(a: number, b: number) {\n  return a + b   \n}\n\nexport function sub(a: number, b: number) {\n  return a - b\n}\n"
+    for (const level of ["preview", "full"] as const) {
+      const out = rows({ title: "shell: cat math.ts", text, level, status: "ok", exitCode: 0, tailLines: 20 }).slice(1)
+      expect(out).toEqual(["   │ export function add(a: number, b: number) {", "   │   return a + b", "   │ }", "   │", "   │ export function sub(a: number, b: number) {", "   │   return a - b", "   │ }"])
+    }
+  })
+
+  test("a long output line is cut at the card's edge and keeps its indentation on the first row", () => {
+    const out = rows({ title: "shell: cat wide", text: `    ${"x".repeat(100)}`, level: "full", width: 40, exitCode: 0 }).slice(1)
+    expect(out.length).toBeGreaterThan(2)
+    expect(out[0]).toContain("│     xx")
+    expect(out.every((row) => textWidth(row) <= 40)).toBe(true)
+    expect(out.join("").replace(/[│\s]/g, "")).toBe("x".repeat(100))
+  })
+
   test("a long command is cut in its middle, an opened card shows it whole", () => {
     const command = `bun test ${"apps/cli/test/some-very-long-file-name.test.ts ".repeat(4)}--bail`
     const short = rows({ title: `shell: ${command}`, text: "x\ny", level: "summary", width: 60 })
@@ -353,7 +369,7 @@ describe("the frame", () => {
     expect(out[0]!.some((span) => span.text === "failed")).toBe(false)
     expect(out[1]!.find((span) => span.text.startsWith("│"))).toMatchObject({ fg: "error" })
     for (const row of out.slice(1)) for (const span of words(row)) expect(span.fg).toBe("muted")
-    expect(words(out.at(-1)!).map((span) => span.text)).toEqual(["line", "29"])
+    expect(words(out.at(-1)!).map((span) => span.text)).toEqual(["line 29"])
     // With no colour at all the state is still the mark and the word.
     expect(rows({ title: "shell: make all", text, status: "error", exitCode: 2, level: "preview", ascii: true })[0]).toBe("   x make all  exit 2")
   })

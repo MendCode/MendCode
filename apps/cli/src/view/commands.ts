@@ -3,6 +3,7 @@ import { FEATURES, featureState, slashTier, tierIncludes, type FeatureId, type S
 import { SLASH_TIERS, SLASH_TIER_CAPS, slashMatch } from "./slash-match"
 import { POPUP_ROWS, popupWindowStart, renderPopup } from "./popup"
 import { argumentMatches } from "./slash-arguments"
+import { pathMatches, takesPath } from "./path-arguments"
 
 export type SlashCommand = {
   name: string
@@ -10,6 +11,8 @@ export type SlashCommand = {
   feature?: FeatureId
   setting?: string
   aliases: string[]
+  /** Older names that still run the command; not listed in the menu, the help or the docs. */
+  hiddenAliases?: string[]
   summary: string
   shortcut?: string
   /** From .mendcode/commands: inserted as text so its arguments can follow. */
@@ -20,7 +23,7 @@ export type SlashCommand = {
   /** Set on the catalog the command editor shows: the tier does not list it unless the user's `hidden: false` does. */
   tierHidden?: true
   /** A row of a command's argument words (`/pr publish`, view/slash-arguments.ts): `more` when another word follows it. */
-  argument?: { more: boolean }
+  argument?: { more: boolean; /** A path: Tab writes it without a space (a directory ends with `/`), and Enter sends the line as typed. */ path?: true }
 }
 
 export const SLASH_COMMANDS: SlashCommand[] = [
@@ -54,6 +57,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   { name: "label", group: "session", aliases: [], summary: "Bookmark the latest message" },
   { name: "recap", group: "context", aliases: [], summary: "Summarize this session" },
   { name: "changelog", group: "more", aliases: [], summary: "Show MendCode changes" },
+  { name: "whatsnew", group: "more", feature: "whats_new", aliases: [], summary: "Show changes that fit how you work" },
   { name: "export", group: "session", aliases: [], summary: "Export the transcript" },
   { name: "import", group: "session", aliases: [], summary: "Import a Claude Code or Codex session" },
   { name: "fast", group: "setup", aliases: [], summary: "Toggle priority service" },
@@ -98,6 +102,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   { name: "privacy", group: "context", aliases: [], summary: "Toggle optional local chat encryption" },
   { name: "secrets", group: "context", aliases: [], summary: "Manage pasted secrets" },
   { name: "ps", group: "agents", aliases: [], summary: "Show or stop background commands" },
+  { name: "approvals", group: "agents", aliases: [], summary: "Jump to children waiting for approval" },
   { name: "tasks", group: "agents", feature: "subagents", aliases: [], summary: "Browse child sessions" },
   { name: "relaunch", group: "agents", aliases: [], summary: "Start again the sub-agents esc stopped" },
   { name: "bg", group: "agents", aliases: ["background"], summary: "Detach to Agent View" },
@@ -120,7 +125,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   { name: "limit", group: "session", aliases: [], summary: "Resume a turn paused by a usage limit" },
   { name: "daemon", group: "more", aliases: [], summary: "Show or restart the daemon" },
   { name: "restart", group: "more", aliases: [], summary: "Restart this terminal on the same session" },
-  { name: "reload", group: "more", aliases: [], summary: "Reload extensions, packages, keys and themes" },
+  { name: "reload", group: "more", aliases: [], summary: "Reload extensions, profiles, keys and themes" },
   { name: "pr", group: "code", feature: "pr_watch", aliases: ["pr-watch"], summary: "Review, watch and comment on pull requests" },
   { name: "reviews", group: "code", feature: "pr_review", aliases: [], summary: "Manage PR review jobs and reviewers" },
   { name: "loops", group: "agents", aliases: ["loop"], summary: "Manage loops" },
@@ -129,7 +134,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   { name: "acp", group: "setup", aliases: [], summary: "Configure ACP agents" },
   { name: "mcps", group: "setup", feature: "mcp", aliases: ["mcp"], summary: "Manage MCP servers" },
   { name: "tools", group: "setup", aliases: [], summary: "Manage custom tools" },
-  { name: "packages", group: "setup", feature: "packages", aliases: ["pkg"], summary: "Manage packages" },
+  { name: "profiles", group: "setup", feature: "profiles", aliases: [], hiddenAliases: ["packages", "pkg"], summary: "Manage profiles" },
   { name: "footer", group: "look", aliases: [], summary: "Customize footer segments" },
   { name: "theme", group: "look", aliases: ["themes"], summary: "Pick a theme" },
   { name: "pet", group: "look", feature: "pets", aliases: [], summary: "Choose a pet" },
@@ -141,7 +146,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   { name: "presentation", group: "look", setting: "presentation", aliases: [], summary: "Choose transcript presentation" },
   { name: "message-rendering", group: "look", setting: "messageRenderer", aliases: [], summary: "Choose message rendering" },
   { name: "submit-scroll", group: "look", setting: "submitScroll", aliases: [], summary: "Choose scrolling after send" },
-  { name: "timestamps", group: "look", setting: "timestamps", aliases: [], summary: "Toggle message timestamps" },
+  { name: "timestamps", group: "look", setting: "timestamps", aliases: [], summary: "Choose where the chat shows the time" },
   { name: "thinking", group: "look", setting: "reasoning", aliases: [], summary: "Toggle reasoning visibility" },
   { name: "scrollbar", group: "look", setting: "scrollbar", aliases: [], summary: "Choose the transcript scrollbar" },
   { name: "jump-to-latest", group: "look", setting: "jumpHint", aliases: ["jump"], summary: "Choose the jump-to-latest button" },
@@ -169,7 +174,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   { name: "worktrees", group: "code", aliases: [], summary: "Manage worktrees and previews" },
   { name: "warp", group: "more", aliases: [], summary: "Choose a workspace" },
   { name: "compound", group: "agents", aliases: [], summary: "Run a bounded agent workflow" },
-  { name: "marketplace", group: "setup", feature: "packages", aliases: [], summary: "Browse the package catalog" },
+  { name: "marketplace", group: "setup", feature: "profiles", aliases: [], summary: "Browse the profile catalog" },
   { name: "mend-assets", group: "more", aliases: [], summary: "Inspect runtime assets" },
   { name: "intro", group: "look", aliases: [], summary: "Replay MendCode intro" },
   { name: "ai-config", group: "setup", aliases: [], summary: "Inspect, preview and save model recipes" },
@@ -191,13 +196,13 @@ export function runsOnSelect(command: SlashCommand) {
   return command.custom !== true && command.ext !== true && !ARGUMENT_COMMANDS.has(command.name)
 }
 
-const OPTIONAL_ARGUMENTS = new Set(["limit", "daemon", "pr", "context-window", "rename", "view", "agent", "model", "permissions", "fork", "recap", "export", "import", "sandbox", "add-dir", "fast", "advisor", "output-style", "experimental", "tier", "sidebar", "find", "stash", "copy", "diagram", "mcp", "mcps", "footer", "theme", "pet", "mascot", "prompt-chrome", "presentation", "message-rendering", "submit-scroll", "scrollbar", "jump-to-latest", "activity", "comments", "prompt-mode", "username", "queue", "compound", "release-channel", "tsm", "mflow", "remote-control", "vim", "multiline", "prompt-history", "backlog"])
+const OPTIONAL_ARGUMENTS = new Set(["limit", "daemon", "pr", "context-window", "rename", "view", "agent", "model", "permissions", "fork", "recap", "export", "import", "sandbox", "add-dir", "fast", "advisor", "output-style", "experimental", "tier", "sidebar", "find", "stash", "copy", "diagram", "mcp", "mcps", "footer", "theme", "pet", "mascot", "prompt-chrome", "presentation", "message-rendering", "submit-scroll", "timestamps", "scrollbar", "jump-to-latest", "activity", "comments", "prompt-mode", "username", "queue", "compound", "release-channel", "tsm", "mflow", "remote-control", "vim", "multiline", "prompt-history", "backlog", "whatsnew"])
 export function takesArguments(command: SlashCommand) {
   return command.name === "panel" || !runsOnSelect(command) || OPTIONAL_ARGUMENTS.has(command.name)
 }
 
 function names(command: SlashCommand) {
-  return [command.name, ...command.aliases]
+  return [command.name, ...command.aliases, ...(command.hiddenAliases ?? [])]
 }
 
 /** Matches "/name" or "/alias" optionally followed by args. Leading space, "//" and unknown names are not commands. */
@@ -271,6 +276,7 @@ export function gatedMatches(query: string, settings: TierSettings, custom: Slas
  * tier before this existed and its handler answers for itself (`/panel`), so that stays.
  */
 export function slashRefusal(text: string, settings: TierSettings, prefs: readonly SlashPreference[] = []): string | undefined {
+  if (/^\/customize\s+restore(?:\s|$)/i.test(text.trim())) return undefined
   const command = parseSlash(text)?.command
   if (!command || command.feature || ANSWERS_FOR_ITSELF.has(command.name) || tierListed(command, settings, prefs)) return undefined
   const needs: Tier = slashTier(command.name)
@@ -286,11 +292,12 @@ export function slashRefusal(text: string, settings: TierSettings, prefs: readon
  * The commands `text` matches, best match first. Among equal matches the ones used before come first, the most used ahead
  * (`/s` with `/sessions` in the recents puts it over `/settings`); an exact name or alias still wins over a used prefix.
  */
-export function slashSuggestions(text: string, custom: SlashCommand[] = [], catalog?: SlashCommand[], recents: ReadonlyArray<{ name: string; count: number; last: number }> = []): SlashCommand[] {
+export function slashSuggestions(text: string, custom: SlashCommand[] = [], catalog?: SlashCommand[], recents: ReadonlyArray<{ name: string; count: number; last: number }> = [], directory?: string): SlashCommand[] {
   const typed = /^\/(\S+)\s+([\s\S]*)$/.exec(text)
   if (typed) {
     const command = (catalog ?? slashCatalog(custom)).find((candidate) => names(candidate).includes(typed[1]!.toLowerCase()))
     if (!command || command.custom || command.ext) return []
+    if (takesPath(command.name)) return pathMatches({ command: command.name, args: typed[2]!, base: directory }).map((match) => ({ name: match.name, group: command.group, aliases: [], summary: match.summary, argument: { more: false, path: true as const } }))
     return argumentMatches(command.name, typed[2]!).map((option) => ({ name: option.name, group: command.group, aliases: [], summary: option.summary, ...(option.feature ? { feature: option.feature } : {}), argument: { more: option.more === true } }))
   }
   if (!text.startsWith("/") || text.startsWith("//") || /\s/.test(text)) return []

@@ -11,7 +11,7 @@ scroll with arrows or Page Up/Down. Saved plans stay visible in the detail panel
 From the balanced tier `/worktrees` and `/warp` open under the tabs of the [Git page](git.md); the workspace picker marks the rows with uncommitted changes (`dirty`, from `worktree.query`). Nothing else changes.
 
 What worktrees cost on disk, and the merged/clean/idle cleanup (`storage --worktrees`, `worktreeGcDays`), is in
-[storage.md](storage.md).
+[storage.md](storage.md). `mendcode worktrees list|size|gc` shows and cleans them from the command line.
 
 ## A new session in its own worktree
 

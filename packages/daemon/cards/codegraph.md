@@ -1,5 +1,5 @@
 ---
-summary: find symbols and callers by graph, language servers, and the code map card
+summary: symbols and callers by graph, language servers, the code map card
 docs: code-graph, lsp, formatters
 aliases: graph, callers, symbols, lsp, code-map, definition, references, impact, diagnostics
 ---

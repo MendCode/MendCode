@@ -1,5 +1,5 @@
 import { z } from "zod"
-import { DEFAULT_PROFILE, estimateTokens, memoryCategoryId, redactSecrets, type MemoryEntry, type Settings } from "@mendcode/protocol"
+import { DEFAULT_AREA, estimateTokens, memoryCategoryId, redactSecrets, type MemoryEntry, type Settings } from "@mendcode/protocol"
 import { selectMemories } from "@mendcode/engine-native"
 import type { Store } from "@mendcode/store"
 import { memorySettings } from "../memory-config"
@@ -41,7 +41,7 @@ export type ReviewMemoryScope = "global" | "personal"
 export type ReviewMemoryInput = {
   reader: ReviewMemoryReader
   scope: ReviewMemoryScope
-  /** The profile whose user memories a personal reviewer reads (`profileOf(settings, directory)`). */
+  /** The area whose user memories a personal reviewer reads (`areaOf(settings, directory)`). */
   profile: string
   /** The watch's checkout (job `directory`), not the review's throwaway worktree: project memories are keyed by it. */
   directory: string
@@ -96,7 +96,7 @@ function personalRefusal(entry: MemoryEntry, directory: string, profile: string)
   if (entry.scope === "session") return "session scope: belongs to one session only"
   if (entry.scope === "project" && entry.directory !== directory) return "another project's memory"
   // The store keeps the default profile as no profile at all.
-  if (entry.scope === "user" && (entry.profile ?? DEFAULT_PROFILE) !== profile) return "another profile's memory"
+  if (entry.scope === "user" && (entry.profile ?? DEFAULT_AREA) !== profile) return "another area's memory"
   if (entry.details?.action) return "an assistant draft, not a memory"
   return undefined
 }

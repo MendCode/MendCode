@@ -38,8 +38,10 @@ export function renderToast(toast: Toast, screenWidth: number): Line[] {
   if (message.length > MAX_MESSAGE_ROWS) shown[MAX_MESSAGE_ROWS - 1] = `${shown[MAX_MESSAGE_ROWS - 1]!.slice(0, Math.max(0, inner - 1))}…`
   for (const part of shown) lines.push(row(part))
   if (toast.hint?.trim()) {
-    const hint = row(toast.hint.trim().slice(0, inner))
-    lines.push(hint.map((span, index) => index === 1 ? { ...span, fg: "muted" as const } : span))
+    for (const part of wrap(toast.hint.trim(), inner)) {
+      const hint = row(part)
+      lines.push(hint.map((span, index) => index === 1 ? { ...span, fg: "muted" as const } : span))
+    }
   }
   lines.push(blank)
   return lines

@@ -1,7 +1,7 @@
 import { readFileSync, statSync } from "node:fs"
 import path from "node:path"
 import type { ExtensionLayer } from "@mendcode/packages"
-import type { Goal } from "@mendcode/protocol"
+import { fileSignature, type Goal } from "@mendcode/protocol"
 import continuation from "../prompts/goals/continuation.md" with { type: "file" }
 import budget_limit from "../prompts/goals/budget_limit.md" with { type: "file" }
 import objective_updated from "../prompts/goals/objective_updated.md" with { type: "file" }
@@ -40,7 +40,7 @@ type Cached = { signature: string; text: string }
 
 /**
  * The goal templates: the packaged ones, overridable like the other prompts by `goals/<kind>.md` in an extension layer
- * (the last layer that has the file wins, so the project's own folder beats its packages, which beat the user's folder).
+ * (the last layer that has the file wins, so the project's own folder beats its profiles, which beat the user's folder).
  * Reads are cached by mtime and size.
  */
 export function createGoalPrompts(input: { layersFor(directory: string): ExtensionLayer[]; enabled?: boolean; packagedDir?: string }) {
@@ -49,7 +49,7 @@ export function createGoalPrompts(input: { layersFor(directory: string): Extensi
   function read(file: string): string | undefined {
     const info = statSync(file, { throwIfNoEntry: false })
     if (!info?.isFile() || info.size > MAX_GOAL_PROMPT_BYTES) return undefined
-    const signature = `${info.mtimeMs}:${info.size}`
+    const signature = fileSignature(info)
     const cached = cache.get(file)
     if (cached?.signature === signature) return cached.text
     try {

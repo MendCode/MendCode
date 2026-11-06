@@ -71,9 +71,9 @@ describe("B17 model control", () => {
     expect(report.presets.find((preset) => preset.name === "openai-api-gpt-6-astra")?.available).toBe(true)
     expect(report.presets.find((preset) => preset.name === "openai-api-gpt-5-nano")?.available).toBe(false)
   })
-  test("client helpers, dry-run, real write and use-preset persist in the active folder profile", async () => {
+  test("client helpers, dry-run, real write and use-preset persist in the active area", async () => {
     const { client, project } = await boot()
-    await client.send({ type: "settings.set", patch: { profiles: [{ name: "team", directories: [project], models: { small: { model: "gpt-6-luna" } } }] } })
+    await client.send({ type: "settings.set", patch: { areas: [{ name: "team", directories: [project], models: { small: { model: "gpt-6-luna" } } }] } })
     expect(await client.modelsConfig(project)).toMatchObject({ ok: true, report: { roles: { small: { model: "gpt-6-luna" } } } })
     expect(await client.send({ type: "models.default.set", directory: project, provider: "openai", model: "gpt-6-astra", authMode: "api-key", dryRun: true })).toMatchObject({ ok: true, result: { writesConfig: false, roles: { main: { model: "openai:gpt-6-astra" } } } })
     expect(await client.modelsConfig(project)).toMatchObject({ ok: true, report: { roles: { small: { model: "gpt-6-luna" } } } })

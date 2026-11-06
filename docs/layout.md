@@ -52,7 +52,7 @@ With a graphics protocol active (above), the images a session holds are drawn in
 messages, and the images tools return (a read image, a screenshot, a generated image). The card keeps its `■ N images` line; the picture
 takes rows under it, at most 72 columns by 16 rows, keeping its shape and never enlarged past its pixels. A generated image takes
 the box its wait canvas held instead ([web and image tools](tools-web.md#while-an-image-is-generated)). `transcriptImages`
-(`/customize` > Terminal > Transcript images, default on) turns it off; `images off` and a remote client never draw them either.
+(`/customize` > Chat > Transcript images, default on) turns it off; `images off` and a remote client never draw them either.
 
 The client asks the daemon for the images of the blocks on screen with `attachment.read` (a session, a hash and an offset; chunks of
 96 KB; only blobs that session's events reference, never a path; local clients only, not in the read-only set). Up to 8 MB per image is
@@ -68,7 +68,7 @@ so ctrl or cmd click opens them in terminals that support it (a terminal that do
 (`[label](url)`, `<url>`, a bare address) links to `http`/`https` only; a URL cut across rows by the layout points at the whole address on
 both rows. A path like `src/config/load.ts:42:7`, `./README.md`, `~/notes/todo.md` or `/etc/hosts` is linked by how it looks, without
 touching the disk, so an editor opens it or reports the file missing; a word without a slash, a date or `and/or` is not a path. The link
-target comes from `fileOpener` (`/customize` > Terminal > File opener): `file` (default, the system's own handler, no line number),
+target comes from `fileOpener` (`/customize` > Input & keys > File opener): `file` (default, the system's own handler, no line number),
 `vscode`, `vscode-insiders`, `cursor`, `windsurf`, `zed` (`scheme://file/abs/path:line:col`), `idea` (`idea://open?file=…&line=…`) or `none`
 (addresses only). Targets are printable ASCII, at most 2048 characters, with a fixed list of schemes; message text never carries escape
 sequences, only the span's own link is written. While MendCode reads the mouse the terminal never sees a click, so a plain click on a web
@@ -90,7 +90,7 @@ every slot, page and modal renderer ([extensions](extensions-tui.md#slots)).
 | wide | 110 to 149 | pages put detail beside the list; chat shows left project sessions (`auto`) |
 | xl | 150 and up | larger grids; chat keeps the left session list |
 
-Pages on the wide breakpoint: sessions, setup, changes, loops, workflows, memory, packages, MCP servers, tools and help.
+Pages on the wide breakpoint: sessions, setup, changes, loops, workflows, memory, profiles, MCP servers, tools and help.
 They used to switch at 120 columns (workflows at 120 columns of inner width, that is 122 of terminal width); the spec says
 110, so a terminal of 110 to 119 columns now gets the side-by-side layout. Three places keep a threshold of their own that
 is not a spec breakpoint: the status and memory-graph pages switch at 100, and the pet needs 80
@@ -119,7 +119,7 @@ gives chat 121 columns. The declarative [right sidebar](sidebar.md) is empty and
 | `always` (legacy) | same as `auto` |
 | `hidden` | never |
 
-The minimal view and a session with nothing in it (the home screen) never show it. The mode is a TUI profile setting
+The minimal view and a session with nothing in it (the home screen) never show it. The mode is a terminal settings setting
 (`sidebar` in `<dataDir>/tui/profile.json`, like the rest of `/customize`): `/sidebar auto|always|hidden` sets it,
 `/sidebar` or `ctrl+x b` (bindable as `sidebar.toggle`) toggles it: a visible sidebar is hidden, a hidden one comes back as
 `auto` (under 110 columns it says there is no room and changes nothing). Existing `auto` profiles now mean left sessions
@@ -172,8 +172,9 @@ shows it (the state in the working row, the context in the top bar, notices over
 | View | Row under the prompt |
 |---|---|
 | minimal | none; nothing is added (`footerRows` or an extension slot still draw their own rows) |
-| balanced | `Build · GPT-6-Luna · high · fast · native │ ↻ 1 loop │ ~12 turns to compact`: agent, a permission other than ask, model, reasoning effort (`showEffort`), `fast` (`fast n/a` when `/fast` never reaches the model), engine; then the goal, loops and workflows; then each placed segment (`forecast` by default) |
-| full | the balanced row, and a second row for full's own segments: `GRAPH 2,594 files · 17,641 symbols · 41,203 edges · indexed │ cache 85% │ codex 7d 8%  claude 7d 61% 5h 11%` |
+| balanced and full, by default | the `clean` footer pack: `~/Code/app · main` then `GPT-6-Luna · high · ◔ 24%` on the right, the rest only when it matters ([customize.md](customize.md#footer-packs)); a footer you made is drawn as written instead |
+| balanced, `footerPack: off` | `Build · GPT-6-Luna · high · fast · native │ ↻ 1 loop │ ~12 turns to compact`: agent, a permission other than ask, model, reasoning effort (`showEffort`), `fast` (`fast n/a` when `/fast` never reaches the model), engine; then the goal, loops and workflows; then each placed segment (`forecast` by default) |
+| full, `footerPack: off` | the `line` preset, while you never chose rows or a `/footer` list: one row, `~/Code/app · GPT-6-Luna · high:JEV · cache 85% · codex 7d ███████░ 92% left resets 5d9h · claude 7d ███░░░░░ 39% left resets 1d23h · GRAPH 2,594 files · indexed` (the context is the top bar's; `/footer preset rows` is the five-row layout, see below) |
 
 - Groups are split by a muted ` │ ` (` | ` in ASCII chrome); the items of a group by the separator (`statusSeparator`, ` · `). Only
   explicit right-hand content keeps the right edge: hints, `statusRight`, script and extension right slots, connection trouble.
@@ -181,11 +182,18 @@ shows it (the state in the working row, the context in the top bar, notices over
   alone), the lowest-ranked first; then parts give way in rank order: segments, extension and script items, profile and PR, the
   engine, the effort, fast, the loops, the goal, the model. The agent and a permission that acts without asking never give way (at
   worst they are cut with `…`). A compacted segment gets its whole form back when it fits again.
-- Full's second row shows only when something on it has something to say: the code graph after the daemon pushed this folder's
-  status (it never asks for the saved tokens, which a placed `codegraph` asks once per model call), the cache share from the second
-  call (the first is always cold), the quota windows once read. It is not drawn when script rows, extension rows or `footerRows` use
-  that place, or on a terminal under 24 rows, where a row is worth more to the transcript and the panel sheet; its segments then
-  join the first row and give way first.
+- Full's default is the `line` preset (`FOOTER_PRESETS.line`, one row) with its quota look (`quotaView: left`, `quotaColor: accent`,
+  unless the profile already holds another value). It applies only in the full view and only while `footerRows` is empty, `/footer`
+  placed no list and `footerDefaultRows` is on; `footerRows`, a `/footer` list, `/footer preset classic` (also `/footer rows 0`, and the
+  `classic` stop of the `/customize` preset row) or `/footer reset` back to the default decide otherwise. An item with nothing to say is
+  not drawn: a provider with no quota reading (no Codex or no Claude login), the code graph before the daemon pushed this folder's
+  status (it never asks for the saved tokens, which a placed `codegraph` asks once per model call), and the cache share until the
+  second call (the first is always cold). The row does not repeat the context, which the top bar's Context bar shows. When it does
+  not fit, the quota windows give up their bars first, then the code graph, the effort, the cache share and the quotas give way in
+  that order. Your own rows are drawn as written, cut to a quarter of the terminal's height from the bottom. Pages (`/usage`,
+  `/profiles`) do not carry the rows. `/footer preset rows` is the earlier default, five rows (directory and tagline, model and
+  context, the Codex quota, the Claude quota, the code graph); `/footer preset classic` the balanced row with agent, `fast`, loops
+  and the forecast, plus a second row of graph, cache and quota.
 - Screen-reader mode: one separator everywhere, counts as words (`1 loop`, not `↻ 1 loop`) and quota figures without bars. ASCII
   glyphs: `|` between groups and no marks before counts. Nothing in the footer moves, so reduced motion changes nothing here.
 - `showEffort` is on by default and `/tier balanced|full` turns it on; a profile saved before keeps its own value (Customize > Prompt &
@@ -206,12 +214,13 @@ and a session another engine packs (Claude Code, Codex, ACP) show nothing. It as
 
 Ten bordered rows above the working row, with padding inside and a blank row above the prompt. Panels: Todos,
 Questions, Subagents, Jobs, Scratchpad and Info. Questions (the session's pending approvals and questions, `!` and `?`),
-Subagents and Jobs show only while there is something in them; an empty Scratchpad can still be focused. When the width
+Subagents show only while there is something in them; Jobs additionally needs `dockJobs: true` (Top & side > Dock jobs in `/customize`, off by default in every tier). The dock belongs to balanced/full; minimalist gains no chrome. An empty Scratchpad can still be focused. When the width
 cannot hold them an empty Todos panel gives way first, then Scratchpad, Jobs, Subagents, Todos, Questions. Info stays
 unless the focused Scratchpad needs the whole width. On short terminals a multiline prompt scrolls around its cursor
 to reserve the tray and footer.
 
-- **Jobs** are the session's background shell tasks (`background.list`, asked at startup, when the dock opens, on session
+- **Todos** wraps task text with a hanging indent under its marker, using the extra width left by hidden panels. Current tasks come first, then pending, then completed/cancelled; completed text is muted. The five body rows stay capped, with `+N more` counting items not fully shown (including an oversized first item's remaining text). Full text remains in the transcript and sidebar Todos card.
+- **Jobs** stays available through `/jobs` whether or not its dock panel is enabled. It shows the session's background shell tasks (`background.list`, asked at startup, when the dock opens, on session
   activity and after turns): running ones first with their elapsed time, finished ones with `exit N` or `killed`.
   The footer counts running jobs across sessions.
 - **Scratchpad** is a per-project note, persisted by `scratchpad.get/set` in the daemon's data directory (`scratchpads/<sha256 canonical project path>.txt`, at most 8,000 characters). It is excluded from model history. `/scratch`, `ctrl+x s`, or a click in the Scratchpad panel focuses its own instance of the prompt editor inside the tray. Arrows, Home/End, word motion, selection, undo and multiline paste work there; Enter inserts a newline. Changes autosave after 500 ms; Esc returns focus to the unchanged prompt and flushes pending changes. A long note scrolls around the real cursor with a mini scrollbar. Ctrl+T opens padded bordered widgets with a blank row above the prompt. Editing needs the balanced/full view and at least 18 rows.
@@ -221,36 +230,21 @@ has no slot of its own.
 
 ## The visible plan
 
-Feature `visible_plan` (balanced and full; on without a tier; `/tier visible_plan off`). While the session's task list has
-an open item, one muted row sits over the working row, right above the prompt:
-
-```
-    ▸ Fix the off-by-one in the tokenizer's column count · 1/3
-   ───────────────────────────────────────────────────────────
-   ❭
-```
-
-It names the item in progress (the next pending one when none is) and the finished items over the ones not cancelled.
-On a narrow terminal the item is cut with `…` before the count gives way; under eight cells for the item only the
-mark and the count stay (`▸ 1/3`). ASCII chrome marks with `>` (in progress) and `-` (next) and separates with `|`;
-screen-reader mode reads `Plan: Fix the off-by-one…, 1 of 3 done`. The row goes when every item is done or cancelled,
-or the list is cleared (`[]`). While the dock is open (`ctrl+t`) the row steps aside: the Todos panel lists the whole
-plan. On a terminal too short for both, it gives way to the right panel's bottom sheet instead of taking a row from it. The voice row, the queue and the other rows above the prompt keep their places over it. A terminal extension
-restyles it as the `plan` bar (`bar` view). The minimal view and the minimalist tier draw nothing.
+Feature `visible_plan` (balanced and full; on without a tier; `/tier visible_plan off`) controls the tool's listing and guidance, not a progress row. No current-task row is drawn above the working status in any tier or density. The Todos dock (`ctrl+t`), transcript todo card and sidebar Todos card retain the list. `/activity` continues to control the working status, not tasks.
 
 What the model is told: `todo` is listed in every request of balanced and full (feature `plan_tools` still keeps the goal
-tools behind `tool_search`), its description says the user sees the list pinned as live progress, when to use it (three or
+tools behind `tool_search`), its description says the user follows the list in the transcript and Todos dock, when to use it (three or
 more steps, several requests, before the first edit) and not to repeat it in the answer, and focus, guide and full carry
 one line saying the same while `todo` is listed. Minimalist has no `todo` tool at all (the tool declares the balanced
 tier), so neither its schema nor a line about it is sent, and `tool_search` cannot find it.
 
-Every engine's list is drawn the same way. The native `todo` writes a card titled `todo d/n` (done over the items not cancelled, the row's own count) with one `[x]`, `[~]`, `[ ]`
+Every engine's list is drawn the same way. The native `todo` writes a card titled `todo d/n` (done over the items not cancelled) with one `[x]`, `[~]`, `[ ]`
 or `[-]` line per item. Claude Code's `TodoWrite` (the item in progress reads as its `activeForm`) and its
 `TaskCreate`/`TaskUpdate` tasks (kept per Claude Code process; `deleted` removes one), Codex's `update_plan`
-(`turn/plan/updated`) and an ACP agent's `plan` are turned into that card by their engines, so the row, the dock and the
+(`turn/plan/updated`) and an ACP agent's `plan` are turned into that card by their engines, so the dock and the
 right panel's Todos card show them too. A sub-agent's own TodoWrite stays in its thread. Codex's `plan` item (plan mode's
 proposal, prose) is not a list and stays an artifact. With `visible_plan` on, Claude Code, Codex and ACP agents are told in
-one line after their own prompt that their list is pinned; pi, which has no list tool, is not.
+one line after their own prompt where their list is shown; pi, which has no list tool, is not.
 
 ## Long transcripts
 
@@ -277,14 +271,14 @@ already loaded blocks; `/timeline` jumps can widen layout to a loaded message. A
 while new output arrives.
 
 The transcript's own scroll chrome is drawn inside the chat column, never over a sidebar. The jump-to-latest pill sits on
-the row just above the prompt's top rule whenever the view is off the bottom; the optional scrollbar is a one-cell column
+the row just above the prompt's top rule whenever the view is off the bottom, on a row of its own when the transcript's last line would reach it; the optional scrollbar is a one-cell column
 at the column's right edge, reserved for as long as `scrollbar` is `auto` or `always` so showing it moves no text. With the
 activity status at `above` it is laid over the prompt's top rule, and at `inside` over the right of its first row: neither
 takes a row, so a turn starting or ending never moves the transcript. All of it is configured in
 [customize.md](customize.md#activity-status) and measured by `bun scripts/render-activity-scroll-frames.ts <directory> [before|after]`.
 
 A transcript shorter than the body is top-anchored: it starts under the top bar after one blank row and the free rows sit
-between its last message and the prompt (a short toast lies over the prompt's top rule and takes no row, so nothing moves when it comes or goes; only the minimal view, which has no rule, gives it a row above the prompt; a command's own report (`/daemon`, `/footer`, a usage line) uses the same slot for 8 seconds, so there is one place for notices and the footer holds state only; success is silent where the result is already on screen (text copied by selecting, a draft saved or restored, a quote or queued prompt put back in the prompt, comments parked or back, a goal set): only what failed or tells something new is said, and the `confirmNotices` profile key (Customize > Confirmations) brings those confirmations back; a toast that needs several lines, such as an error with detail, takes the first empty place at its right, below the top bar and the pinned prompt, and with none falls back to that row, never over text). Once it overflows the view
+between its last message and the prompt (a short toast lies over the prompt's top rule and takes no row, so nothing moves when it comes or goes; only the minimal view, which has no rule, gives it a row above the prompt; a command's own report (`/daemon`, `/footer`, a usage line) uses the same slot for 8 seconds, so there is one place for notices and the footer holds state only; success is silent where the result is already on screen (text copied by selecting, a draft saved or restored, a quote or queued prompt put back in the prompt, comments parked or back, a goal set): only what failed or tells something new is said, and the `confirmNotices` customize key (Customize > Confirmations) brings those confirmations back; a toast that needs several lines, such as an error with detail, takes the first empty place at its right, below the top bar and the pinned prompt, and with none falls back to that row, never over text). Once it overflows the view
 follows the bottom as above. Mouse selection, the find highlights, images and the pet use the same rows as drawn.
 
 ## Inline mode (no alternate screen)
@@ -331,7 +325,7 @@ A double click selects the word under the pointer (letters, digits and `_`, plus
 and a triple click the whole wrapped line, in the transcript or the prompt; like a drag, releasing copies it (`copyOnSelect`) or keeps it for
 `ctrl+c`. Two presses count as a double click when they land on the same cell within 450 ms. While you are scrolled up, the
 `↓ new output · End` label at the bottom right is a button: pressing it follows the newest output again. The wheel scrolls
-`wheelLines` rows a notch (default 3, 1..20, `/customize` > Terminal > Wheel lines). Right click is off by default; with
+`wheelLines` rows a notch (default 3, 1..20, `/customize` > Input & keys > Wheel lines). Right click is off by default; with
 `rightClickPaste` on it pastes the clipboard into the prompt like `ctrl+v` (text, or an image as an attachment). That reads the
 daemon machine's clipboard, so it is local only and refused for a remote client.
 
@@ -356,7 +350,7 @@ A failed call says so with its marker, a word and its rule, and nothing else on 
 (`x` in ASCII) in the error role instead of the kind's glyph, the header carries `exit 2` (a shell), `HTTP 404` (a fetch) or
 `failed` / `interrupted` in the error role, and the rule at the left is the error role. The command or target keeps its normal
 colour. The output under the rule is the muted output role, like a passing call's; a short error (one or two lines, such as
-`[PACKAGES]: Package tree exceeds approval budget`) is the normal text colour so it reads at once. A shell's output is stdout and
+`[PROFILES]: Profile tree exceeds approval budget`) is the normal text colour so it reads at once. A shell's output is stdout and
 stderr merged, so its lines cannot be told apart and none is tinted. A long error shows its first 3 lines (a shell its last 12,
 or 4 in the `calm` and `standard` densities) and `… +N lines`, which opens the card. Without colour the state is still the `✗`
 and the word.
@@ -382,7 +376,10 @@ graph card (`detail` nodes of a render spec with `at: "open"`; `at: "preview"` i
   folded away or hidden in any view and show their message on an error rule.
 - The `full` view's tool density is described below.
 - In `balanced`, three or more finished reading calls of one turn in a row (reasoning between them does not break the run)
-  fold into one row, `◇ Read 5 files · List 2 · Grep 3`. A failed, running or approval-pending call ends the run.
+  fold into one row, `◇ Read 5 files · List 2 · Grep 3`; three or more finished shell commands in a row fold the same way,
+  `◇ Ran 6 shell commands`. A call of the other kind, or a failed, running or approval-pending call, ends the run: a failed
+  command always shows. A click (or `ctrl+x f`) opens the row to the cards it stands for. The `full` view's `calm` density folds
+  the calls it already keeps to one row the same way.
 - In `balanced` and `full`, more than five finished one-line calls in a row keep the last five and fold the older ones into
   `◇ N tools more` (`ctrl+o` shows them). A call that may change files never folds and ends the run: native `edit`, `write`,
   `apply_patch` and `shell`, and the free-text calls of other engines (Claude Code's `edit path`, `write path` and the whole
@@ -410,7 +407,7 @@ graph card (`detail` nodes of a render spec with `at: "open"`; `at: "preview"` i
 #### Tool density in the full view
 
 The table's `full` column is the `dense` density. A long session of it is a wall: every call prints its preview and the
-assistant's sentences get lost. `toolDensity` (`/customize` > Session chrome > Tool density; `calm` by default) chooses how
+assistant's sentences get lost. `toolDensity` (`/customize` > Chat > Tool density; `calm` by default) chooses how
 much of each card the `full` view prints. The balanced and minimal views ignore it, `toolOutput: collapsed` and `expanded`
 and `ctrl+o` win over it, and a card the reader opened by hand stays open in every density. Nothing the model receives, no
 export and no history changes: only the rows drawn.
@@ -509,3 +506,19 @@ read-job states; a posted async question remains answerable after its originatin
 `bun scripts/render-frames.ts .agents-frames/B57 --b57 100x30 180x50` renders batch selection,
 custom editing, Review, scrolling, TODO cards, the dock, clearing and an opt-in sidebar through
 the app harness, with temporary data and no provider.
+
+## Pages: one set of keys
+
+Every page with a list behaves the same way (a test, `apps/cli/test/page-standard.test.ts`, holds each page to it):
+
+| Key | What it does |
+|---|---|
+| `/` | Opens the search box above the rows; typed text (including `q`, `j`, `k`) filters them and the row shows the match count. Backspace deletes. |
+| `↑` `↓` | Move among the rows that match. The mouse wheel and the trackpad send the same keys. |
+| `Enter` | Closes the box. In `/settings` and `/customize` the cursor stays on the picked row with every row listed again; in lists (reviews, memory, history, marketplace) the filter stays. In `/connect` it connects the match. |
+| `Esc` | Clears the box first; then goes back to the page it was opened from (to the chat when it was opened from there). |
+| `Enter` or `Space`, `←` `→` | Open or toggle the selected row; change a value. |
+
+Pages with a `/` box: settings, customize, reviews, memory, history, marketplace, connect, whatsnew, and model (`/` opens its model search). Pickers that filter as you type (skills, models, agents, themes, sessions) need no `/`. The hint row names the keys the same way on each page (`/ search`, `esc back`); while the box is open it reads `type to filter · ↑↓ row · enter go · esc clear`.
+
+With Caps Lock on, a page of letter shortcuts reads a capital as its lowercase key. A page that gives shift+letter a meaning of its own keeps the capital for it.

@@ -12,15 +12,15 @@ afterEach(() => { for (const dir of made.splice(0)) dir.cleanup() })
 const plain = (row: { text: string }[]) => row.map((span) => span.text).join("")
 
 /** The 23 words the owner kept: one other name per command, `/quit` alone has two. `pr-watch` is the feature's own name (docs/pr-watch.md). */
-const KEPT = ["pr=pr-watch", "changes=diff", "sessions=resume", "settings=config", "quit=exit", "quit=q", "help=?", "mcps=mcp", "find=search", "usage=stats", "model=models", "theme=themes", "keymap=keybindings", "context=ctx", "memory=mem", "extensions=ext", "packages=pkg", "workflows=wf", "loops=loop", "bg=background", "permissions=perm", "providers=provider", "jump-to-latest=jump"]
+const KEPT = ["pr=pr-watch", "changes=diff", "sessions=resume", "settings=config", "quit=exit", "quit=q", "help=?", "mcps=mcp", "find=search", "usage=stats", "model=models", "theme=themes", "keymap=keybindings", "context=ctx", "memory=mem", "extensions=ext", "workflows=wf", "loops=loop", "bg=background", "permissions=perm", "providers=provider", "jump-to-latest=jump"]
 
 describe("the built-in aliases", () => {
   test("only the kept ones exist, at most one per command, `/quit` the one exception", () => {
     const found = SLASH_COMMANDS.flatMap((command) => command.aliases.map((alias) => `${command.name}=${alias}`))
     expect(found.sort()).toEqual([...KEPT].sort())
     for (const command of SLASH_COMMANDS) expect([command.name, command.aliases.length <= (command.name === "quit" ? 2 : 1)]).toEqual([command.name, true])
-    expect(SLASH_COMMANDS).toHaveLength(158)
-    expect(SLASH_COMMANDS.filter((command) => command.aliases.length)).toHaveLength(22)
+    expect(SLASH_COMMANDS).toHaveLength(160)
+    expect(SLASH_COMMANDS.filter((command) => command.aliases.length)).toHaveLength(21)
   })
   test("the Git page adds one command, /git, with no alias: /changes, /diff, /worktrees and /warp keep their names and their own summaries", () => {
     expect(SLASH_COMMANDS.find((command) => command.name === "git")).toMatchObject({ aliases: [], feature: "git_hub" })

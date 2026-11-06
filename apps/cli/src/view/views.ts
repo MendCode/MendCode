@@ -4,7 +4,7 @@ import { BUILTIN_VIEWS, HOST_BLOCKS, builtinFrame, type BuiltinResult, type Fram
 import { rebase, secure, validArgFor } from "./view-safety"
 
 /**
- * The view-slot host (docs/views.md). Every part of the terminal that a user or package may redraw asks the host:
+ * The view-slot host (docs/views.md). Every part of the terminal that a user or profile may redraw asks the host:
  * a custom view registered through the extension runtime answers first, then the built-in renderer of the same slot,
  * which receives the same typed input. A terminal without extensions never loads the runtime and pays one property read.
  *
@@ -34,6 +34,8 @@ export type ViewCallOptions = {
 export type CustomViews = {
   has(slot: ViewSlot): boolean
   call(slot: ViewSlot, model: unknown, env: ViewEnvValues, options: ViewCallOptions): CustomResult | undefined
+  /** Whether the slot's view declared that it draws `part` of its model itself (`handles`); absent, every view counts as declaring it. */
+  handles?(slot: ViewSlot, part: string): boolean
 }
 
 export type LineSlot = Exclude<ViewSlot, "prompt.frame">
@@ -82,6 +84,8 @@ export function createViewHost(options: ViewHostOptions) {
   function custom<S extends LineSlot>(slot: S, model: ViewModels[S], at: DrawAt): Drawn | undefined {
     const runtime = live(slot)
     if (!runtime) return undefined
+    // A sent set of comments is a card the terminal draws, unless the view declared `handles: ["comments"]`.
+    if (slot === "message.user" && (model as { comments?: unknown }).comments && runtime.handles?.(slot, "comments") === false) return undefined
     // A slot whose options grant or refuse something: the terminal's own block is drawn first, so the view knows its size.
     const block = hostOptions(slot) ? HOST_BLOCKS[slot as "approval" | "question"](builtinInput(slot, model, at) as never) : undefined
     const shown = block ? { ...model, optionRows: block.rows.length } : model

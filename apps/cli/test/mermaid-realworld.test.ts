@@ -301,3 +301,33 @@ describe("realistic model-style diagrams", () => {
     }
   }
 })
+
+describe("a long-labelled LR flowchart with <br/> (Vorlen pipeline)", () => {
+  const source = `flowchart LR
+  V[Vorlen: chief of staff<br/>prioridades, cola de tareas] --> P[Planner caro<br/>rol plan: Opus/Astra<br/>escribe la tarea con criterios]
+  P --> W[Workflow MendCode]
+  W --> E1[Worker barato A<br/>worktree]
+  W --> E2[Worker barato B<br/>worktree]
+  E1 --> C{contract.checks<br/>tests, tipos, verify skill}
+  E2 --> C
+  C --> A[Auditor de solo lectura<br/>otro modelo]
+  A --> PR[PR listo para merge<br/>sin merge automático]
+  ADV[Advisor caro<br/>3 momentos] -.-> E1
+  ADV -.-> E2`
+
+  for (const width of [100, 200]) {
+    test(`is drawn inside ${width} columns with every box and no word cut`, () => {
+      const rows = draw(source, width)
+      for (const row of rows) expect(textWidth(row)).toBeLessThanOrEqual(width)
+      const all = rows.join("\n")
+      for (const word of ["Vorlen:", "prioridades,", "Planner", "Workflow", "MendCode", "contract.checks", "verify", "Auditor", "automático", "Advisor", "momentos"]) expect(all).toContain(word)
+      expect(all.match(/Worker barato/g)).toHaveLength(2)
+    })
+  }
+
+  test("a <br/> stays a line break when the labels are wrapped narrower", () => {
+    const all = draw(source, 100).join("\n")
+    expect(all).toMatch(/Vorlen: chief of staff\s*│/)
+    expect(all).toMatch(/prioridades, cola de tareas\s*│/)
+  })
+})

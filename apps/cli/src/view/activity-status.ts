@@ -57,7 +57,7 @@ export const ACTIVITY_PART_HELP: Readonly<Record<ActivityPart, string>> = {
   elapsed: "time since the turn started",
   stalled: "no response for ... after 45 s of silence",
   model: "the model (needs Activity model on)",
-  tokens: "tokens sent (↑) and received (↓) this turn, ~ while estimated",
+  tokens: "this turn's tokens as the provider reported them: received (↓) by default; `activityTokens` adds sent new (↑) and resent from the prompt cache (+ cached)",
   tps: "output tokens per second",
   queue: "prompts waiting behind this turn",
   interrupt: "[esc again to interrupt] after the first Esc",

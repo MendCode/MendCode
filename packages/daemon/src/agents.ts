@@ -43,7 +43,7 @@ const toProfile = (agent: FoundAgent): AgentProfile => {
 
 /**
  * Custom agents of a project: `agents/*.md` of every extension layer. Files are read when asked (a turn, a listing), so an
- * edit applies to the next turn without a restart. Project agents (the project's own and its packages') count only while
+ * edit applies to the next turn without a restart. Project agents (the project's own and its profiles') count only while
  * the directory is trusted for project tools, like custom tools.
  */
 export function createAgentRegistry(options: {

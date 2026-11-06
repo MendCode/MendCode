@@ -28,7 +28,7 @@ Each row shows the memory's scope (`user`, `project` or `session`), `pinned` whe
 | `x` | Saved | archive |
 | `r` | Archived | restore |
 | `e` | all | edit the text in the prompt (`enter` saves, `esc` cancels) |
-| `p` | Saved | pin or unpin (`memory.update` with `pinned`); at most 20 per profile, directory or session, and the daemon's refusal is shown |
+| `p` | Saved | pin or unpin (`memory.update` with `pinned`); at most 20 per area, directory or session, and the daemon's refusal is shown |
 | `c` | all | pick a category from the known list (`memory.categories`): `↑↓` or `1`–`9`, `enter` sets it (`memory.update` with `category`) |
 | `s` | Saved | pick a scope: `user`, `project` (this directory) or `session` (this session) |
 | `d` | all | delete (asks first) |
@@ -91,13 +91,13 @@ Settings are independent: `memoryEnabled` gates generated proposals and retrieva
 
 `/remember [--user] <text>` saves one fact at once (this project, or every project with `--user`) without a proposal; it answers `remembered (this project)` or the error.
 
-Completed ordinary user turns enqueue one redacted digest (at most 64 000 characters), excluding tool/reasoning output and child task turns. One worker persists queued/running/completed/skipped/failed state, attempts and retry deadlines, with 128 pending jobs and the latest 256 terminal jobs retained. A call times out after 45 seconds, retries twice with backoff, and never applies a late result after timeout or shutdown. Restart recovers interrupted jobs; settlement writes proposals and completion in one transaction. Disabling generation while a call runs discards its result. Without an extractor, jobs remain queued with a reason. The native daemon uses the tool-free `memoryExtractor` role (fallback `small`, then main); execution needs a configured provider. `memory.extraction.list/retry` and client `extractions(directory)` expose jobs without digest text.
+Completed ordinary user turns enqueue one redacted digest (at most 64 000 characters), excluding tool/reasoning output and child task turns. One worker persists queued/running/completed/skipped/failed state, attempts and retry deadlines, with 128 pending jobs retained; a job that finished leaves no row, and only the newest 20 failed or skipped ones stay to be retried. A call times out after 45 seconds, retries twice with backoff, and never applies a late result after timeout or shutdown. Restart recovers interrupted jobs; settlement writes proposals and completion in one transaction. Disabling generation while a call runs discards its result. Without an extractor, jobs remain queued with a reason. The native daemon uses the tool-free `memoryExtractor` role (fallback `small`, then main); execution needs a configured provider. `memory.extraction.list/retry` and client `extractions(directory)` expose jobs without digest text.
 
-Maintenance defaults disabled. Preview reports exact generated duplicates within the same profile/scope/project/session. Auto-consolidate archives these duplicates after a completed turn or extraction; user-authored, pinned and revision entries are protected. Maintenance stays deterministic and never calls a model; scored and semantic consolidation of pending proposals belongs to [Dream](dream.md) (`memoryConsolidator` role). Sharing is a local, explicit-consent flow described below. Codex import remains outside the local extraction worker.
+Maintenance defaults disabled. Preview reports exact generated duplicates within the same area/scope/project/session. Auto-consolidate archives these duplicates after a completed turn or extraction; user-authored, pinned and revision entries are protected. Maintenance stays deterministic and never calls a model; scored and semantic consolidation of pending proposals belongs to [Dream](dream.md) (`memoryConsolidator` role). Sharing is a local, explicit-consent flow described below. Codex import remains outside the local extraction worker.
 
 ## What the agent sees
 
-The agent does not get every saved memory, only the ones that matter for what you just said. Before each model call, MendCode ranks the memories the session may see (your profile's user memories, the project's, and the session's own) and injects them as the `<mendcode_memory>` block, within the retrieval budget (6 000 characters by default) and the configured token/entry caps:
+The agent does not get every saved memory, only the ones that matter for what you just said. Before each model call, MendCode ranks the memories the session may see (your area's user memories, the project's, and the session's own) and injects them as the `<mendcode_memory>` block, within the retrieval budget (6 000 characters by default) and the configured token/entry caps:
 
 1. **Pinned** memories, always, newest first. They may use up to three times the relevance budget, but remain bounded by the configured overall prompt cap.
 2. Memories that **match the prompt** or are linked to one that does, best first. A match is any distinctive word of the prompt found in a memory's text or category (full-text search; stop words and words under three letters are ignored).
@@ -105,11 +105,25 @@ The agent does not get every saved memory, only the ones that matter for what yo
 
 The score of a memory is its match, its recency (half-life of 30 days), its links to matches, a small lift for `preferences`, `constraints` and `security` and for the session's own memories, minus a penalty when another saved memory *supersedes* it. A memory already shown earlier in the session gets a lift too, so the prompt changes only when the ranking clearly does (this keeps the provider's prompt cache useful). When the block leaves memories out it says how many and points to `memory_graph` search.
 
+## Memory by tier
+
+| tier | memory |
+|---|---|
+| minimalist | Exactly the switches you set. Nothing is injected, extracted or consolidated until you turn it on |
+| balanced | Same: the switches you set. A new chat starts clean |
+| full | `memory_auto` fills the switches you never set: facts reach prompts, a post-turn extractor keeps decisions, preferences and the state of the work (with scores), Dream consolidates Pending every night and archives duplicates, and the caps are 20 project and 100 total entries. `resume_context` adds a note of at most 1 800 characters to the system prompt of a new chat |
+
+A switch present in your settings (global or project) always wins over the tier. `/tier memory_auto off` and `/tier resume_context off` turn either one off.
+
+Nightly consolidation in full saves a Pending proposal when its scores pass the gates (confidence ≥ .9, durability ≥ .85, change risk ≤ .2, low sensitivity) and its category is commands, stack, constraints, conventions, preferences, architecture, objective or release. A proposal that needs a person (other categories, redacted or sensitive text, revisions of user or pinned facts) stays in Pending instead of being archived. A proposal below the score gates or already remembered is archived and can be restored.
+
+The resume note (part of the system prompt, next to the memory block; nothing is stored in the session) lists the newest sessions of this project (three) and of other projects in the last 7 days (three), each as its goal and where it stopped, from the session's recap when one exists, otherwise from its digest. It is built once per session and kept in the daemon's memory, so every request carries the same text and the cached prompt prefix holds; after a daemon restart a chat that already has turns drops it (one cache miss).
+
 ## Scopes
 
 | scope | visible to | removed |
 |---|---|---|
-| `user` | every project of one [profile](profiles.md) | with the memory |
+| `user` | every project of one [area](areas.md) | with the memory |
 | `project` | one directory | with the memory |
 | `session` | one session only; never injected or listed anywhere else | with the session |
 
@@ -123,13 +137,13 @@ The score of a memory is its match, its recency (half-life of 30 days), its link
 |---|---|---|
 | `project` | `directory` | that project's (from another project too) |
 | `session` | `sessionId` of an existing session | that session's, with the session's project as its directory |
-| `user` | nothing | your memory for the profile it came from (a project or session memory takes the profile of its folder) |
+| `user` | nothing | your memory for the area it came from (a project or session memory takes the area of its folder) |
 
 A pending Dream revision (update/archive) cannot change scope, and a pinned memory only moves where the pin cap (20) has room. The move and any `text`/`category`/`pinned` in the same command are checked together and applied only if all are valid. `memory.update` without `scope` behaves as before.
 
 ## Pinned
 
-A saved memory can be pinned (`memory.update` with `pinned`, or `memory.add` with `pinned`). Pinned memories are injected whatever the prompt says. At most **20** per profile (user scope), directory (project) or session. Only saved memories can be pinned; archiving or returning a memory to review unpins it.
+A saved memory can be pinned (`memory.update` with `pinned`, or `memory.add` with `pinned`). Pinned memories are injected whatever the prompt says. At most **20** per area (user scope), directory (project) or session. Only saved memories can be pinned; archiving or returning a memory to review unpins it.
 
 ## Categories and policies
 
@@ -189,7 +203,7 @@ Saved memories can be linked to each other. The links make a graph that the agen
 - Only **saved** memories can be linked. Pending or archived ones cannot.
 - A memory has at most 16 links. A pair has at most one link: linking it again replaces the kind.
 - Deleting a memory removes its links. Archiving keeps them, but archived memories are not in the graph.
-- The graph follows [profiles](profiles.md). Project memories of the directory and user memories of its profile are nodes; another profile's user memories are not.
+- The graph follows [areas](areas.md). Project memories of the directory and user memories of its area are nodes; another area's user memories are not.
 
 ## Health
 
@@ -216,7 +230,7 @@ The row also counts isolated memories and conflicts. A conflict turns it red.
 | `1`–`4`, `tab` | other tabs |
 | `esc` | back to the chat |
 
-The page has the same header as `/changes` (`Memory · dir …`, the keys on the right, the counts under it) and two titled boxes: **Graph** (the health row, the canvas and a legend) and **Memory** (the selected memory's text, scope, category, profile, project and origin, then its links). On a narrow terminal the Memory box goes under the graph, and on a small one it shrinks to a line under it.
+The page has the same header as `/changes` (`Memory · dir …`, the keys on the right, the counts under it) and two titled boxes: **Graph** (the health row, the canvas and a legend) and **Memory** (the selected memory's text, scope, category, area, project and origin, then its links). On a narrow terminal the Memory box goes under the graph, and on a small one it shrinks to a line under it.
 
 The canvas draws each link as a braille line: dotted for `related`, solid with an arrow for `supports` and `supersedes`, dashed for `conflicts`. A memory's dot takes the color of its category (the legend under the canvas names them), and the selected one is `◉`. With `MENDCODE_GLYPHS=ascii` the canvas is plain characters.
 
@@ -224,15 +238,15 @@ The view shows up to 200 memories, the most linked first.
 
 ## Agent tool
 
-`memory` exposes `status`, `categories`, `list`, `search`, `context`, `add`, `update`, `delete` and `propose` through the daemon's `memory.model` command. CRUD writes are explicit approved tool calls; proposals follow category policies. `global` is the profile's user scope. Graph `workspace`/`group-view` facts keep that classification in metadata and belong to this project; they do not grant access to other profiles. Both model tools use write permission because their action union can mutate memory; read-only peers cannot invoke `memory.model`.
+`memory` exposes `status`, `categories`, `list`, `search`, `context`, `add`, `update`, `delete` and `propose` through the daemon's `memory.model` command. CRUD writes are explicit approved tool calls; proposals follow category policies. `global` is the area's user scope. Graph `workspace`/`group-view` facts keep that classification in metadata and belong to this project; they do not grant access to other areas. Both model tools use write permission because their action union can mutate memory; read-only peers cannot invoke `memory.model`.
 
 `memory_graph` exposes `overview`, `search`, `upsert_fact`, `link` and `validate`. Upsert preserves the id and links on edits and explicit scope moves; links default to `related`, with the existing 16-link cap. Validation reports integrity separately from disconnected/isolated health. Tags, multiple category ids, evidence, confidence and sensitivity persist with memories; search includes tags and secondary categories. High-sensitivity entries are excluded from Markdown sharing. Automatic extraction can still run after these tools; normalized duplicates are skipped before writing.
 
 ### Memory assistant
 
-Press `t` in Memory to open its assistant. The selected project, tab, category and memory focus its answer; the current project's and profile's memory remain available. Enter asks; PgUp/PgDn scroll, Ctrl+R opens Pending, Ctrl+X cancels, Ctrl+L clears history, and Esc returns to Memory. Ctrl+N sets the chat aside in the archive and starts a new one; Ctrl+O lists archived chats (↑↓ select, Enter restores it and archives the live chat if it has messages, x forgets it, Esc closes). The prompt's main draft is preserved. Compact terminals use one column; larger ones show conversation and Selection/Pending in shared bordered panels. Hints stay in the header.
+Press `t` in Memory to open its assistant. The selected project, tab, category and memory focus its answer; the current project's and area's memory remain available. Enter asks; PgUp/PgDn scroll, Ctrl+R opens Pending, Ctrl+X cancels, Ctrl+L clears history, and Esc returns to Memory. Ctrl+N sets the chat aside in the archive and starts a new one; Ctrl+O lists archived chats (↑↓ select, Enter restores it and archives the live chat if it has messages, x forgets it, Esc closes). The prompt's main draft is preserved. Compact terminals use one column; larger ones show conversation and Selection/Pending in shared bordered panels. Hints stay in the header.
 
-History lives at `<dataDir>/memory-assistant/<profile-project-hash>.json`, separate from `/btw`, the main event log and engine history. It survives restart; interrupted calls are marked. Questions, context and answers are redacted and bounded. Clear/cancel discard late completions and their actions. Archived chats live in a `.archive` folder beside that file (private files, newest 20 kept per profile and project, same redaction as the live thread); clear still discards without archiving. Commands: `memory.assistant.get/send/clear/cancel/archive` (`archive` takes `action: archive|list|restore|delete` and an `archiveId`); client helpers: `memoryModel`, `memoryAssistant`, `memoryAssistantArchive`. These commands are not available to read-only peers.
+History lives at `<dataDir>/memory-assistant/<area-project-hash>.json`, separate from `/btw`, the main event log and engine history. It survives restart; interrupted calls are marked. Questions, context and answers are redacted and bounded. Clear/cancel discard late completions and their actions. Archived chats live in a `.archive` folder beside that file (private files, newest 20 kept per area and project, same redaction as the live thread); clear still discards without archiving. Commands: `memory.assistant.get/send/clear/cancel/archive` (`archive` takes `action: archive|list|restore|delete` and an `archiveId`); client helpers: `memoryModel`, `memoryAssistant`, `memoryAssistantArchive`. These commands are not available to read-only peers.
 
 The tool-free completion uses the `memoryAssistant` model role, falling back to `memoryExtractor`, `small`, then main. No provider means a visible refusal. Responses can draft pending facts, edits, deletes, scope/category moves, graph facts and links; approval applies supported actions, rejection removes the draft. Control drafts are applied only on your approval, after validation, and stay pending with the reason when they cannot be:
 
@@ -250,11 +264,11 @@ Dream windows (start and end) are not modelled: v2 runs once a day at one time. 
 
 ## Workspaces and Markdown sharing
 
-`w` opens the project browser from any memory tab (outside text editing). ↑↓ selects Current project, User memories, All projects or a recorded project; Enter loads it and Esc cancels. Projects come from v2's persisted sessions and memories, with origin, parent group, profile, status counts and manual/agent counts. No filesystem discovery or v1 data reads occur. All projects merges memory lists and graph nodes within the active profile; user memories appear once. Project selection also scopes Dream and Evolution without changing the chat session. Reports show omitted entries when the 200-entry limit is reached.
+`w` opens the project browser from any memory tab (outside text editing). ↑↓ selects Current project, User memories, All projects or a recorded project; Enter loads it and Esc cancels. Projects come from v2's persisted sessions and memories, with origin, parent group, area, status counts and manual/agent counts. No filesystem discovery or v1 data reads occur. All projects merges memory lists and graph nodes within the active area; user memories appear once. Project selection also scopes Dream and Evolution without changing the chat session. Reports show omitted entries when the 200-entry limit is reached.
 
 Sharing (`9`) uses `s` for project/user scope, `e` to enable, `d` to disable, `o` to export and `i` to import; ↑↓/PgUp/PgDn scroll results. Enabling requires typing `ENABLE PROJECT` or `ENABLE USER` in the page. Errors, skipped ids and conflict reasons stay in the result panel. Imported changes appear as update diffs in Pending; `a` approves and `x` rejects.
 
-The daemon writes bounded private snapshots and an index under `<dataDir>/memory-sharing/<scope>-<identity>/`. Sharing is off by default for each project/profile. Only saved non-session entries without detected secrets or redaction markers are exported; security-category and high-sensitivity entries are excluded. Files are capped at 32 KiB, the inventory at 200. Disable and file deletion keep internal memories and exported files intact. External edits to a snapshot or index are never silently overwritten.
+The daemon writes bounded private snapshots and an index under `<dataDir>/memory-sharing/<scope>-<identity>/`. Sharing is off by default for each project/area. Only saved non-session entries without detected secrets or redaction markers are exported; security-category and high-sensitivity entries are excluded. Files are capped at 32 KiB, the inventory at 200. Disable and file deletion keep internal memories and exported files intact. External edits to a snapshot or index are never silently overwritten.
 
 The metadata header identifies the v2 origin and exact internal revision. Import validates it and creates a durable, deduplicated manual-review proposal; category auto policies never bypass approval. Approval compares the original revision again and rejects stale edits, preserving ids, pins and graph links. Symlinks, non-regular/oversized files, malformed metadata, changed origins and secrets are refused visibly. Accepted edits can be re-exported to refresh their revision.
 

@@ -21,8 +21,8 @@ type Context = {
 const COLUMNS = { exportable: "exportable today", omitted: "omitted", machine: "machine-specific", approval: "needs authentication or approval", "not-portable": "not portable" } as const
 
 /**
- * `config-bundle`: the user's own MendCode setup in one verifiable file, separate from packages. Files are read and written
- * here, on this machine (never for a remote attachment); every setting, package and profile change goes through the
+ * `config-bundle`: the user's own MendCode setup in one verifiable file, separate from profiles. Files are read and written
+ * here, on this machine (never for a remote attachment); every setting, profile and profile change goes through the
  * daemon's own commands. The bundle module (zod) loads only when this command runs.
  */
 export function createConfigBundleAutomation(ctx: Context) {
@@ -40,10 +40,10 @@ export function createConfigBundleAutomation(ctx: Context) {
   const ports = {
     settings,
     setSettings: async (patch: Record<string, unknown>) => { await daemon({ type: "settings.set", patch }) },
-    installPackage: async (input: { dir: string; replace: boolean }) => { await daemon({ type: "packages.install", directory: ctx.directory, source: input.dir, scope: "user", ...(input.replace ? { replace: true } : {}) }) },
-    enablePackage: async (input: { key: string; enabled: boolean }) => { await daemon({ type: "packages.enable", directory: ctx.directory, key: input.key, enabled: input.enabled }) },
-    removePackage: async (input: { name: string }) => { await daemon({ type: "packages.remove", directory: ctx.directory, name: input.name, scope: "user" }) },
-    setPackageResource: async (input: { key: string; resource: string; enabled: boolean }) => { await daemon({ type: "packages.resource", directory: ctx.directory, key: input.key, resource: input.resource, enabled: input.enabled }) },
+    installPackage: async (input: { dir: string; replace: boolean }) => { await daemon({ type: "profiles.install", directory: ctx.directory, source: input.dir, scope: "user", ...(input.replace ? { replace: true } : {}) }) },
+    enablePackage: async (input: { key: string; enabled: boolean }) => { await daemon({ type: "profiles.enable", directory: ctx.directory, key: input.key, enabled: input.enabled }) },
+    removePackage: async (input: { name: string }) => { await daemon({ type: "profiles.remove", directory: ctx.directory, name: input.name, scope: "user" }) },
+    setPackageResource: async (input: { key: string; resource: string; enabled: boolean }) => { await daemon({ type: "profiles.resource", directory: ctx.directory, key: input.key, resource: input.resource, enabled: input.enabled }) },
   }
   const home = ctx.home ?? ctx.env?.HOME ?? ""
   const fromSession = (dir: string) => startedBySession({ env: ctx.env ?? {}, dir })
@@ -76,7 +76,7 @@ export function createConfigBundleAutomation(ctx: Context) {
         const summary = { file: target, manifestSha256: bundle.manifestSha256, entries: manifest.entries.length, bytes: Buffer.byteLength(text), packages: manifest.packages.map((pkg) => `${pkg.name}${pkg.enabled ? "" : " (off)"}`), settings: { applied: Object.keys(manifest.settings.portable), approval: Object.keys(manifest.settings.approval), machine: Object.keys(manifest.settings.machine), withheld: manifest.settings.withheld }, excluded: manifest.excluded, warnings: manifest.warnings }
         const lines = [
           `exported ${manifest.entries.length} files (${Buffer.byteLength(text)} bytes) to ${target}`, `manifest sha256 ${bundle.manifestSha256}`,
-          `packages: ${summary.packages.join(", ") || "none"}`,
+          `profiles: ${summary.packages.join(", ") || "none"}`,
           `settings applied on import: ${summary.settings.applied.join(", ") || "none"}`,
           `settings waiting for approval on the target: ${summary.settings.approval.join(", ") || "none"}`,
           `settings of this machine (shown, never applied): ${summary.settings.machine.join(", ") || "none"}`,
@@ -91,7 +91,7 @@ export function createConfigBundleAutomation(ctx: Context) {
         const lines = [
           `valid bundle v${manifest.version}: ${manifest.entries.length} files, every sha256 checked; manifest ${bundle.manifestSha256}`,
           `from ${manifest.source.platform}/${manifest.source.arch} ${manifest.source.dataDir}${manifest.source.mendcodeVersion ? ` · MendCode ${manifest.source.mendcodeVersion}` : ""}${manifest.source.buildId ? ` · ${manifest.source.buildId}` : ""} · ${new Date(manifest.createdAt).toISOString()}`,
-          `packages: ${manifest.packages.map((pkg) => `${pkg.name}@${pkg.version ?? "?"}${pkg.enabled ? "" : " (off)"}${pkg.autoRuns.length ? ` runs ${pkg.autoRuns.join(",")}` : ""}`).join(", ") || "none"}`,
+          `profiles: ${manifest.packages.map((pkg) => `${pkg.name}@${pkg.version ?? "?"}${pkg.enabled ? "" : " (off)"}${pkg.autoRuns.length ? ` runs ${pkg.autoRuns.join(",")}` : ""}`).join(", ") || "none"}`,
           `files by action: ${Object.entries(manifest.entries.reduce<Record<string, number>>((count, entry) => ({ ...count, [entry.action]: (count[entry.action] ?? 0) + 1 }), {})).map(([action, count]) => `${action} ${count}`).join(", ")}`,
           `left out: ${manifest.excluded.length} · warnings: ${manifest.warnings.length}`,
         ]
@@ -135,10 +135,10 @@ type PlanView = import("@mendcode/daemon/config-bundle").ImportPlan
 function planText({ plan, file, command }: { plan: PlanView; file: string; command: Extract<ConfigBundleAutomation, { kind: "config-bundle.import" }> }) {
   const lines = [`preview only: nothing was changed · plan ${plan.planId.slice(0, 16)}`, `from ${plan.source.platform} ${plan.source.dataDir} into ${plan.target.platform} ${plan.target.dataDir}`]
   const count = (predicate: (step: PlanView["steps"][number]) => boolean) => plan.steps.filter(predicate).length
-  lines.push(`write ${count((step) => step.kind === "unit" && (step.status === "new" || step.status === "replace"))} resources · identical ${count((step) => "status" in step && step.status === "identical")} · packages to install ${count((step) => step.kind === "package" && (step.status === "new" || step.status === "replace"))} · settings ${count((step) => step.kind === "setting" && (step.status === "new" || step.status === "replace"))} · profile keys ${count((step) => step.kind === "profile" && (step.status === "new" || step.status === "replace"))}`)
+  lines.push(`write ${count((step) => step.kind === "unit" && (step.status === "new" || step.status === "replace"))} resources · identical ${count((step) => "status" in step && step.status === "identical")} · profiles to install ${count((step) => step.kind === "package" && (step.status === "new" || step.status === "replace"))} · settings ${count((step) => step.kind === "setting" && (step.status === "new" || step.status === "replace"))} · terminal settings ${count((step) => step.kind === "profile" && (step.status === "new" || step.status === "replace"))}`)
   const section = (title: string, rows: string[]) => { if (rows.length) lines.push("", `${title} (${rows.length})`, ...rows.map((row) => `  ${row}`)) }
   section("changes", plan.steps.flatMap((step) => step.kind === "unit" && (step.status === "new" || step.status === "replace") ? [`${step.status.padEnd(8)} ${step.unit}${step.files.some((entry) => entry.rewritten) ? " (home folder rewritten)" : ""}`]
-    : step.kind === "package" && (step.status === "new" || step.status === "replace") ? [`${step.status.padEnd(8)} packages/${step.name} (${step.enabled ? "on" : "off"}) via the package installer`]
+    : step.kind === "package" && (step.status === "new" || step.status === "replace") ? [`${step.status.padEnd(8)} packages/${step.name} (${step.enabled ? "on" : "off"}) via the profile installer`]
       : step.kind === "setting" && (step.status === "new" || step.status === "replace") ? [`${step.status.padEnd(8)} settings.${step.key} = ${JSON.stringify(step.value).slice(0, 80)}`]
         : step.kind === "profile" && (step.status === "new" || step.status === "replace") ? [`${step.status.padEnd(8)} tui/profile.json#${step.key} = ${JSON.stringify(step.value).slice(0, 60)}`]
           : step.kind === "mcp" && (step.status === "new" || step.status === "replace") ? [`${step.status.padEnd(8)} mcp.json#${step.name} (pending approval in /mcp)`]

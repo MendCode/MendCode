@@ -229,7 +229,7 @@ describe("layer labels", () => {
       writeFileSync(path.join(dir, "hooks.json"), JSON.stringify({ hooks: { Stop: [{ hooks: [{ command: "true" }] }] } }))
     }
     const { hooks } = readShellHooks([{ dir: user, source: "user" }, { dir: pkg, source: "user", pkg: "lint-kit" }, { dir: project, source: "project" }])
-    expect(hooks.map((hook) => hook.layer)).toEqual(["user", "user package lint-kit", "project"])
+    expect(hooks.map((hook) => hook.layer)).toEqual(["user", "user profile lint-kit", "project"])
   })
 })
 

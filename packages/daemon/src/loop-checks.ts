@@ -2,6 +2,7 @@ import { createHash } from "node:crypto"
 import { readdirSync, statSync } from "node:fs"
 import { join } from "node:path"
 import type { CheckRunner } from "@mendcode/loops"
+import { fileSignature } from "@mendcode/protocol"
 import { killProcessTree } from "@mendcode/tools"
 
 const DEFAULT_CHECK_TIMEOUT_SECONDS = 300
@@ -66,7 +67,7 @@ function describeFiles(root: string, paths: Iterable<string>, hash: ReturnType<t
       return
     }
     const info = statSync(join(root, relative), { throwIfNoEntry: false })
-    hash.update(`\0${relative}\0${info ? `${info.size}:${Math.floor(info.mtimeMs)}` : "gone"}`)
+    hash.update(`\0${relative}\0${info ? fileSignature(info) : "gone"}`)
   }
 }
 

@@ -26,6 +26,10 @@ export function commandTimeout(command: CommandInput | Command, defaultMs: numbe
   if (command.type === "task.run" && !command.input.background) return Math.max(defaultMs, 3_600_000)
   if (command.type === "continuity.wait") return Math.max(defaultMs, (command.timeoutMs ?? 10000) + 5000)
   if (command.type === "setup.ask") return Math.max(defaultMs, 35_000)
+  // From a session's shell, a mode above its own can wait on the user's card (daemon `ELEVATION_WAIT_MS`).
+  if (command.type === "session.permission.set" && command.launch) return Math.max(defaultMs, 125_000)
+  // A scan of many large worktrees measures disk; the daemon stops it when the client leaves.
+  if (command.type === "storage.worktrees" || command.type === "storage.clean" && (command.worktrees || command.artifacts || command.worktreesOnly)) return Math.max(defaultMs, 10 * 60_000)
   if (command.type === "release.check") return Math.max(defaultMs, 30_000)
   // A PR review is two model passes over the whole diff; the hosted workflow's job stops at 30 minutes.
   if (command.type === "github.run" && command.input.review) return Math.max(defaultMs, 35 * 60_000)
@@ -175,6 +179,11 @@ export function createClient(options: {
     if (reply.ok || body.type === "hello" || reply.error.code !== "invalid_command") return reply
     if (!reply.error.message.startsWith("[PROTOCOL]:") && reply.error.message !== "invalid remote command frame") return reply
     options.onRejected?.({ command: body.type, detail: reply.error.message })
+    const tooLong = [...reply.error.message.matchAll(/Too big: expected string to have <=(\d+) characters\s*→ at body\.([\w.[\]]+)/g)].flatMap((match) => {
+      const value = match[2]!.split(/[.[\]]+/).filter(Boolean).reduce<unknown>((into, key) => (into && typeof into === "object" ? (into as Record<string, unknown>)[key] : undefined), body)
+      return typeof value === "string" ? [`${match[2]} is ${value.length.toLocaleString("en-US")} characters; the limit is ${Number(match[1]).toLocaleString("en-US")}`] : []
+    })
+    if (tooLong.length) return { ok: false, error: { ...reply.error, message: `daemon rejected ${body.type} · ${tooLong.join("; ")}` } }
     // The same build parses what this client builds: the value itself is wrong (a mistyped id), not the daemon's age.
     if (options.buildId && daemonBuildId === options.buildId) {
       const fields = [...new Set([...reply.error.message.matchAll(/→ at body\.([\w.[\]]+)/g)].map((match) => match[1]!))]
@@ -878,19 +887,19 @@ export function createClient(options: {
       return request({ type: "session.part.update", sessionId, messageId, partId: part.id, part, expectedRevision, id: ids("command"), clientId }, true)
     },
     async packageCatalog(directory: string, query = "", sourceId?: string): Promise<{ ok: true; report: import("@mendcode/protocol").PackageCatalogReport } | { ok: false; error: ErrorPayload }> {
-      const reply = await request({ type: "packages.search", id: ids("command"), clientId, directory, query, ...(sourceId ? { sourceId } : {}) }, true)
+      const reply = await request({ type: "profiles.search", id: ids("command"), clientId, directory, query, ...(sourceId ? { sourceId } : {}) }, true)
       return reply.ok ? { ok: true, report: reply.result as unknown as import("@mendcode/protocol").PackageCatalogReport } : reply
     },
     async packagePreview(directory: string, sourceId: string, name?: string, scope: "user" | "project" = "user"): Promise<{ ok: true; report: import("@mendcode/protocol").PackagePreviewReport } | { ok: false; error: ErrorPayload }> {
-      const reply = await request({ type: "packages.preview", id: ids("command"), clientId, directory, sourceId, scope, ...(name ? { name } : {}) }, true)
+      const reply = await request({ type: "profiles.preview", id: ids("command"), clientId, directory, sourceId, scope, ...(name ? { name } : {}) }, true)
       return reply.ok ? { ok: true, report: reply.result as unknown as import("@mendcode/protocol").PackagePreviewReport } : reply
     },
-    async authorPackage(directory: string, action: "create" | "update", options: Omit<Extract<CommandInput, { type: "packages.create" }>, "type" | "directory"> = {}): Promise<{ ok: true; report: import("@mendcode/protocol").PackageAuthoringReport } | { ok: false; error: ErrorPayload }> {
-      const reply = await request({ type: action === "create" ? "packages.create" : "packages.update", id: ids("command"), clientId, directory, ...options }, true)
+    async authorPackage(directory: string, action: "create" | "update", options: Omit<Extract<CommandInput, { type: "profiles.create" }>, "type" | "directory"> = {}): Promise<{ ok: true; report: import("@mendcode/protocol").PackageAuthoringReport } | { ok: false; error: ErrorPayload }> {
+      const reply = await request({ type: action === "create" ? "profiles.create" : "profiles.update", id: ids("command"), clientId, directory, ...options }, true)
       return reply.ok ? { ok: true, report: reply.result as unknown as import("@mendcode/protocol").PackageAuthoringReport } : reply
     },
     async deleteLocalPackage(directory: string): Promise<{ ok: true; report: import("@mendcode/protocol").PackageDeleteLocalReport } | { ok: false; error: ErrorPayload }> {
-      const reply = await request({ type: "packages.delete-local", id: ids("command"), clientId, directory }, true)
+      const reply = await request({ type: "profiles.delete-local", id: ids("command"), clientId, directory }, true)
       return reply.ok ? { ok: true, report: reply.result as unknown as import("@mendcode/protocol").PackageDeleteLocalReport } : reply
     },
     installPlugin(directory: string, spec: string, options: { global?: boolean; force?: boolean } = {}) {

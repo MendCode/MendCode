@@ -1,5 +1,9 @@
+import { PLAN_APPLY_DEFAULT, PLAN_APPLY_PERMISSIONS } from "@mendcode/protocol/wire"
 import type { PlanReviewRecord, PlanReviewReply } from "@mendcode/protocol"
 import { createEditor } from "../../view/editor"
+import { markdownStyleFor } from "../../view/markdown-style"
+import { MOUSE_SGR } from "./constants"
+import { wheelStep } from "./page-wheel"
 import type { PlanDraft, PlanStage } from "../../view/plan-review-page"
 import { preload, renderPlanReviewPage } from "../lazy-pages"
 import type { AppContext } from "./context"
@@ -25,7 +29,7 @@ export function createPlanReview(ctx: AppContext) {
     const view = current()
     if (!view) return undefined
     if (draft?.id !== view.record.requestId) {
-      draft = { id: view.record.requestId, stage: "preview", markdown: view.record.markdown, comments: view.record.reply?.comments ?? "", destination: view.record.destination, scroll: 0, editor: createEditor({ wordWrap: true }), note: "" }
+      draft = { id: view.record.requestId, stage: "preview", markdown: view.record.markdown, comments: view.record.reply?.comments ?? "", destination: view.record.destination, permission: view.record.reply?.permission ?? (input.remote ? "ask" : PLAN_APPLY_DEFAULT), scroll: 0, reviewScroll: 0, editor: createEditor({ wordWrap: true }), note: "" }
       busy = false
     }
     return { ...view, draft: draft! }
@@ -66,22 +70,51 @@ export function createPlanReview(ctx: AppContext) {
     if (!markdown.trim()) { draft.note = "Plan is empty"; return requestFrame() }
     if (markdown.length > 30_000 || comments.length > 4000 || draft.stage === "reject" && draft.editor.text.length > 2000) { draft.note = "Review exceeds the text limit"; return requestFrame() }
     busy = true
-    const reply = await input.send({ type: "request.resolve", sessionId: state.sessionId, requestId: record.requestId, decision: { kind: "plan_review", action, ...(action === "apply" || action === "accept" || action === "edit" ? { markdown, ...(comments.trim() ? { comments: comments.trim() } : {}), destination: draft.destination } : {}), ...(action === "reject" && draft.editor.text.trim() ? { reason: draft.editor.text.trim() } : {}) } })
+    const decision = { kind: "plan_review" as const, action, ...(action === "apply" || action === "accept" || action === "edit" ? { markdown, ...(comments.trim() ? { comments: comments.trim() } : {}), destination: draft.destination, ...(action === "apply" ? { permission: draft.permission } : {}) } : {}), ...(action === "reject" && draft.editor.text.trim() ? { reason: draft.editor.text.trim() } : {}) }
+    const resolve = (sent: typeof decision) => input.send({ type: "request.resolve", sessionId: state.sessionId, requestId: record.requestId, decision: sent })
+    let reply = await resolve(decision)
+    // A daemon from before the `permission` field cannot parse the reply (the client turns that into "it may be an older build"): once more without it, so the plan is still applied, with that daemon's own access.
+    let skewed = false
+    if (!reply.ok && "permission" in decision && reply.error.code === "invalid_command" && reply.error.message.includes("older build")) {
+      const { permission: _unsupported, ...legacy } = decision
+      reply = await resolve(legacy)
+      skewed = reply.ok
+    }
     busy = false
     if (record.sessionId !== state.sessionId) return
     if (!reply.ok) draft.note = reply.error.message
-    else if (state.page === "plan-review") state.page = "chat"
+    else {
+      if (state.page === "plan-review") state.page = "chat"
+      if (skewed) state.notice = "plan applied · the access you chose waits for /daemon restart"
+    }
     requestFrame()
+  }
+
+  /** A wheel report scrolls the plan, or the Review panel when the pointer is over it and it is taller than its room; any other mouse report does nothing here. */
+  function planReviewWheel(key: string, active: PlanDraft) {
+    const match = /^\x1b\[<(\d+);(\d+);(\d+)[Mm]$/.exec(key)
+    const button = Number(match![1]) & ~(4 | 8 | 16)
+    const step = wheelStep({ page: "plan-review" })
+    if (!step || (button !== 64 && button !== 65) || active.stage !== "preview") return
+    const notch = step.repeat === "notch" ? state.tuiProfile.wheelLines : 1
+    const col = Number(match![2]) - 1
+    const row = Number(match![3]) - 1
+    const box = active.reviewBox
+    const over = box?.overflow && col >= box.left && col <= box.right && row >= box.top && row <= box.bottom
+    const delta = (button === 64 ? -1 : 1) * notch
+    if (over) active.reviewScroll = Math.max(0, active.reviewScroll + delta)
+    else active.scroll = Math.max(0, active.scroll + delta)
   }
 
   async function planReviewKey(key: string): Promise<boolean> {
     const view = sync()
     if (!view) return false
     const { draft: active, record, pending } = view
+    if (MOUSE_SGR.test(key)) { planReviewWheel(key, active); requestFrame(); return true }
     if (key === "\x1b" || key === "\x03") {
       if (active.stage !== "preview") stage("preview")
       else if (pending) await send("close")
-      else { state.page = "chat"; saved = []; active.note = "" }
+      else { state.page = "chat"; saved = []; active.note = ""; draft = undefined }
     } else if (active.stage !== "preview") {
       if (key === "\x0f") await send(active.stage === "reject" ? "reject" : record.phase === "plan" ? "accept" : "apply")
       else if (key === "\x13") await send("edit")
@@ -98,6 +131,7 @@ export function createPlanReview(ctx: AppContext) {
       else if (key === "e") stage("edit")
       else if (key === "c") stage("comments")
       else if (key === "r") stage("reject")
+      else if (key === "m") active.permission = PLAN_APPLY_PERMISSIONS[(PLAN_APPLY_PERMISSIONS.indexOf(active.permission) + 1) % PLAN_APPLY_PERMISSIONS.length]!
       else if (key === "t") {
         const reply = await input.send({ type: "agents.list", sessionId: state.sessionId })
         if (!reply.ok) active.note = reply.error.message
@@ -121,7 +155,9 @@ export function createPlanReview(ctx: AppContext) {
 
   function planReviewFrame(width: number, height: number) {
     const view = sync()
-    return view ? renderPlanReviewPage({ ...view, width, height, index: view.pending ? 0 : selected, count: view.pending ? 1 : saved.length }) : undefined
+    // Nothing to review: the drawn plan goes with its draft.
+    if (!view) { draft = undefined; return undefined }
+    return renderPlanReviewPage({ ...view, width, height, index: view.pending ? 0 : selected, count: view.pending ? 1 : saved.length, renderer: state.transcript.concealed ? state.tuiProfile.messageRenderer : "plain", markdown: markdownStyleFor({ profile: state.tuiProfile, mode: state.mode }) })
   }
   return { openPlanReview, planReviewKey, planReviewPaste, planReviewFrame }
 }

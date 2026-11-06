@@ -4,7 +4,8 @@ import path from "node:path"
 import { createIdFactory, type ComputerCaptureMetadata } from "@mendcode/protocol"
 import { openStore } from "@mendcode/store"
 import type { CommandRunner, ToolResult } from "@mendcode/tools"
-import { createComputerControl, type ComputerOptions } from "../src/computer"
+import type { ComputerOptions } from "../src/computer"
+import { createLazyComputerControl as createComputerControl } from "../src/lazy-controls"
 
 export function png(width = 800, height = 500, extra = 0) {
   const bytes = Buffer.alloc(24 + extra)

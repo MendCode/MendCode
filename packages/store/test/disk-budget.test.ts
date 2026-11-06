@@ -81,7 +81,7 @@ describe("budget", () => {
     if (process.env.MEND_DISK_REPORT) console.log(`${sessions} sessions: ${full.total} bytes · ${(full.total / MB).toFixed(1)} MiB on disk (${Math.round(full.total / sessions)} bytes per session)`)
     expect(full.total).toBeLessThan(350 * MB * CI_SHARE)
     const idle = store.compactStorage({ deltaIdleDays: 0 })
-    expect(idle.deltaEvents).toBe(sessions * TYPICAL_SESSION.turns * TYPICAL_SESSION.deltasPerMessage)
+    expect(idle.deltaEvents).toBe(0) // Finished items were already folded transactionally.
     expect(measure(store).total).toBeLessThanOrEqual(full.total)
   }, 240_000 * timeScale())
 })
@@ -143,7 +143,7 @@ describe("forks of a long session", () => {
     expect(forked.report.engineBytes).toBe(alone.report.engineBytes)
     expect(copied.report.engineBytes).toBeGreaterThan(alone.report.engineBytes * 5)
     // Copies now deduplicate model/tool content too, so use their smaller current cost as the comparison.
-    expect(perFork).toBeLessThan(perCopy * 0.25)
+    expect(perFork).toBeLessThan(perCopy / 3) // Copies now compress message text too; unchanged absolute fork budget below.
     // Measured 104 KiB/fork, including address indexes, model prefixes and shared-object refs.
     expect(perFork).toBeLessThan(115 * 1024)
     for (const fork of forks) expect(shared.store.engineMessages.load(fork.sessionId, "native")).toEqual(history)

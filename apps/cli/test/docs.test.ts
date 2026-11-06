@@ -66,12 +66,12 @@ describe("docs: the list and the cards", () => {
     expect(lines).toHaveLength(CARDS.cards.length + 1)
     for (const card of CARDS.cards) expect(lines.filter((line) => line.startsWith(`  ${card.topic} `))).toHaveLength(1)
     expect(out).toBe(topicList(PROGRAM_NAME))
-    // About 85 characters per topic line; 53 topics fit.
-    expect(out.length).toBeLessThan(4_600)
+    // About 85 characters per topic line; 56 topics fit.
+    expect(out.length).toBeLessThan(4_800)
   })
   test("the set covers what a user asks a model to change", () => {
     const topics = CARDS.cards.map((card) => card.topic)
-    for (const topic of ["settings", "theme", "keys", "extensions", "footer", "commands", "tiers", "prompt-modes", "models", "permissions", "tools", "skills", "agents", "hooks", "mcp", "packages"]) expect(topics).toContain(topic)
+    for (const topic of ["settings", "theme", "keys", "extensions", "footer", "commands", "tiers", "prompt-modes", "models", "permissions", "tools", "skills", "agents", "hooks", "mcp", "profiles"]) expect(topics).toContain(topic)
   })
   test("a topic prints its card: a header line, the text with the program name filled in, exit 0", async () => {
     const { code, out } = await run(["docs", "extensions"])
@@ -104,7 +104,7 @@ describe("docs: the list and the cards", () => {
     const { code, out, err } = await run(["docs", "packages", "prompt-modes", "extensions"], place)
     expect({ code, err }).toEqual({ code: 0, err: "" })
     const headers = [...out.matchAll(new RegExp(`^${PROGRAM_NAME} docs ([a-z-]+):`, "gm"))].map((match) => match[1])
-    expect(headers).toEqual(["packages", "prompt-modes", "extensions"])
+    expect(headers).toEqual(["profiles", "prompt-modes", "extensions"])
     const again = await run(["docs", "footer", "statusline", "footer"], place)
     expect([...again.out.matchAll(new RegExp(`^${PROGRAM_NAME} docs ([a-z-]+):`, "gm"))]).toHaveLength(1)
     expect(await run(["docs", "footer"], place)).toMatchObject({ out: again.out })
@@ -177,7 +177,7 @@ describe("docs: search", () => {
     expect(parseDocsCommand(["docs", "--search", "pause", "agent"])).toEqual({ help: false, words: ["pause", "agent"], search: true })
     expect(parseDocsCommand(["docs", "pause", "agent", "--search", "--dir", "/tmp/x"])).toEqual({ help: false, words: ["pause", "agent"], dir: "/tmp/x", search: true })
     expect(parseDocsCommand(["docs", "--search"])!.error).toMatch(/--search needs words/)
-    expect(DOCS_USAGE).toContain("docs --search WORDS")
+    expect(DOCS_USAGE).toContain("--search WORDS")
   })
   test("it prints up to five cards best first, each with its summary and the line that answers, and exits 0", async () => {
     const { code, out, err } = await run(["docs", "--search", "pause", "agent"])
@@ -234,7 +234,7 @@ describe("docs: live lines of the feature cards", () => {
   const context = (settings?: Record<string, unknown>) => ({ dataDir: temp(), cwd: temp(), settings, prompt: undefined })
   test("a card about features says on or off with the reason and the switch, and without a daemon it says nothing is known", () => {
     expect(liveLines("git", context({ tier: "minimalist" })).join("\n")).toMatch(/off \(tier minimalist\) · \/tier balanced includes it/)
-    expect(liveLines("git", context({ tier: "balanced" })).join("\n")).toContain("worktreeGcDays off (default)")
+    expect(liveLines("git", context({ tier: "balanced" })).join("\n")).toContain("worktreeGcDays 14 (default)")
     expect(liveLines("git", context(undefined)).join("\n")).toContain("no daemon running")
     expect(liveLines("memory", context({ tier: "balanced", memoryUse: true })).join("\n")).toMatch(/memoryUse true · memoryGenerate false \(default\)/)
   })
@@ -384,6 +384,8 @@ describe("docs: usage and the footer name their data source", () => {
   test("live: no reading says every window is unknown; no daemon says nothing is known", () => {
     expect(liveLines("usage", { dataDir: temp(), cwd: temp(), settings: undefined, prompt: undefined, now: NOW, quotas: [] })[0]).toBe("no provider has reported a quota window yet: every window is unknown")
     expect(liveLines("usage", { dataDir: temp(), cwd: temp(), settings: undefined, prompt: undefined, now: NOW })[0]).toMatch(/^provider quota: not known \(no daemon is running/)
+    expect(liveLines("usage", { dataDir: temp(), cwd: temp(), settings: undefined, prompt: undefined, daemonUnanswered: true })[0]).toContain("the daemon is running but did not answer")
+    expect(liveLines("commands", { dataDir: temp(), cwd: temp(), settings: undefined, prompt: undefined, daemonUnanswered: true })[0]).toContain("daemon did not answer")
     expect(liveLines("usage", { dataDir: temp(), cwd: temp(), settings: undefined, prompt: undefined, now: NOW, quotas: [snapshot("codex", 8, { windows: [{ id: "w", label: "7d", usedPercent: 8, resetsAt: NOW - 1 }] })] })[0]).toContain("window already reset")
   })
 

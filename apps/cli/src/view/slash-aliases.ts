@@ -32,7 +32,7 @@ export function removedAliasHint(text: string): string | undefined {
   return word !== undefined && now !== undefined ? `/${word} is now /${now}` : undefined
 }
 
-const builtinWords = () => new Set([...SLASH_COMMANDS, ...DIAGNOSTIC_COMMANDS].flatMap((command) => [command.name, ...command.aliases]))
+const builtinWords = () => new Set([...SLASH_COMMANDS, ...DIAGNOSTIC_COMMANDS].flatMap((command) => [command.name, ...command.aliases, ...("hiddenAliases" in command ? command.hiddenAliases ?? [] : [])]))
 
 /**
  * The aliases a profile defines (`slashCommands: [{ name: "changes", aliases: ["d"] }]`): alias to command name. An alias that is the

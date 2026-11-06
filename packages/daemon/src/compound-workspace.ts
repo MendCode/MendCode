@@ -2,7 +2,7 @@ import { createHash } from "node:crypto"
 import { lstatSync, mkdirSync, readFileSync, realpathSync } from "node:fs"
 import path from "node:path"
 import { redactSecrets } from "@mendcode/protocol"
-import { parseCheck } from "@mendcode/loops"
+import { parseCheck } from "../../loops/src/checks"
 import { runLoopCheck } from "./loop-checks"
 
 export type CompoundSnapshot = { base: string; fingerprint: string; diff: string; files: Array<{ path: string; content: string }> }
@@ -60,4 +60,15 @@ export async function compoundSnapshot(directory: string, signal: AbortSignal, e
     files.push({ path: name, content: redactSecrets(bytes.toString("utf8")).text })
   }
   return { base, fingerprint: hash.digest("hex"), diff: redactSecrets(diff).text, files }
+}
+
+/** Ends a compound workspace that produced nothing: clean and still on its base commit, so removing it loses nothing. A candidate stays for review. */
+export async function releaseEmptyCompoundWorkspace(directory: string, workspace: string, base: string): Promise<boolean> {
+  const signal = AbortSignal.timeout(15_000)
+  try {
+    if (await git(workspace, ["status", "--porcelain", "--untracked-files=normal"], signal) !== "") return false
+    if (await git(workspace, ["rev-parse", "HEAD"], signal) !== base) return false
+    await git(directory, ["worktree", "remove", workspace], signal)
+    return true
+  } catch { return false }
 }

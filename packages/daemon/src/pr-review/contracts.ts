@@ -41,6 +41,8 @@ export type JobCheckpoint = {
   decisions: Array<{ phase: string; action: "added" | "skipped" | "kept"; reason: string }>
   /** The template's own sections the review pass wrote (`template.sections` with a prompt), so a resumed review still renders them. */
   sections?: Record<string, string> | undefined
+  /** The readers' summaries of this head (readers.ts), so a resume of the same head does not pay for them again. */
+  readers?: Array<{ id: string; paths: string[]; text: string; by: string }> | undefined
 }
 
 export type ReviewJob = {
@@ -231,6 +233,12 @@ export interface ReviewProvider {
   threads?(input: { repo: string; number: number }): Promise<Array<{ id: string; resolved: boolean; body: string }> | undefined>
   /** Resolves one diff thread (only where `capabilities.resolveThreads`). */
   resolve?(input: { repo: string; number: number; discussion: string }): Promise<boolean>
+  /** The names of the repository's labels (for `@mendcode describe`, which adds only a label that exists); undefined when unreadable. */
+  repoLabels?(input: { repo: string }): Promise<string[] | undefined>
+  /** Edits a PR/MR: a new title or description, and labels (names that exist) added to the ones it has. */
+  edit?(input: { repo: string; number: number; title?: string | undefined; body?: string | undefined; labels?: string[] | undefined }): Promise<{ ok: true } | { ok: false; reason: string }>
+  /** Approves `head` of a PR/MR (`@mendcode approve`, when the repository enabled it). */
+  approve?(input: { repo: string; number: number; head: string; body: string }): Promise<{ ok: true } | { ok: false; reason: string }>
   /** Where a fix of the PR's branch is pushed: the branch, its repository path, whether it is a fork and whether it takes a push. */
   pushTarget?(input: { repo: string; number: number }): Promise<PushTarget>
 }
@@ -359,6 +367,8 @@ export type RunPlatformOutput = { configKey: string; checkpoint?: JobCheckpoint 
 export type PlatformHandle = {
   dataDir: string
   jobs: JobLedger & { all(): ReviewJob[] }
+  /** This daemon's device id (device.ts): the page says "this device" for the jobs and watches it owns, not the id. */
+  device?: (() => string) | undefined
   rows(): Array<{ directory: string; state: string; open: number; publish: string; provider?: ProviderKind | undefined }>
   concurrency: number
   repoOf(directory: string): Promise<string>

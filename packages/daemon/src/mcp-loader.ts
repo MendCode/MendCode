@@ -1,4 +1,4 @@
-import { loadMcpConfig, type LoadedMcpConfig, type McpServerConfig } from "@mendcode/mcp"
+import { loadMcpConfig, type LoadedMcpConfig, type McpServerConfig } from "../../mcp/src/config"
 import type { ExtensionLayer } from "@mendcode/packages"
 import { canonicalDir } from "@mendcode/tools"
 
@@ -10,7 +10,7 @@ export const projectTrusted = ({ trustedToolDirs, directory }: { trustedToolDirs
 
 /**
  * The MCP config the daemon's manager reads for a directory: every layer's `mcp.json`, with the project's own servers (and
- * its packages') held back as `needs trust` until the directory is trusted. Nothing is created, spawned or contacted for them.
+ * its profiles') held back as `needs trust` until the directory is trusted. Nothing is created, spawned or contacted for them.
  */
 export function createMcpConfigLoader({ userDir, layers, allowed, trustedDirs, extensionServers }: {
   userDir: string

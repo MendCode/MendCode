@@ -26,15 +26,15 @@ test("views, keys, widgets and commands name the layer in force and the ones it 
     const row = rows.find((candidate) => candidate.surface === surface && candidate.name === name)
     expect(row, `${surface} ${name}`).toBeDefined()
     expect(row!.effective, surface).toEqual([{ layer: "project" }])
-    expect(row!.overridden.map((entry) => entry.layer), surface).toEqual(["user", "package user:pk"])
+    expect(row!.overridden.map((entry) => entry.layer), surface).toEqual(["user", "profile user:pk"])
   }
   const text = describePrecedence(rows, { onlyConflicts: true }).flatMap((section) => section.lines)
-  expect(text).toContain("- message.assistant: project · overrides user, package user:pk")
+  expect(text).toContain("- message.assistant: project · overrides user, profile user:pk")
   runtime.dispose()
   expect(runtime.claims()).toEqual([])
 })
 
-test("a profile key the package changes lists your settings as overridden; a key you kept wins again", () => {
+test("a profile key the profile changes lists your settings as overridden; a key you kept wins again", () => {
   const rows = resolvePrecedence(terminalClaims({
     activation: { problems: [], keybindings: [], result: { rows: [
       { part: "profile", key: "density", package: "user:retro", value: "compact", base: "comfortable", kept: false },
@@ -46,9 +46,9 @@ test("a profile key the package changes lists your settings as overridden; a key
     keybindingFile: [{ spec: "alt+g", action: "messages.open", target: { kind: "direct", seqs: ["alt+g"] } } as never],
     kept: new Set(),
   }))
-  expect(rows.find((row) => row.surface === "profile" && row.name === "density")).toEqual({ surface: "profile", name: "density", effective: [{ layer: "package user:retro", note: "profile" }], overridden: [{ layer: "your settings" }], inactive: [] })
+  expect(rows.find((row) => row.surface === "profile" && row.name === "density")).toEqual({ surface: "profile", name: "density", effective: [{ layer: "profile user:retro", note: "terminal settings" }], overridden: [{ layer: "your settings" }], inactive: [] })
   expect(rows.find((row) => row.surface === "profile" && row.name === "userLead")!.effective).toEqual([{ layer: "you (kept)" }])
   const keys = rows.find((row) => row.surface === "keybindings" && row.name === "alt+g")!
-  expect(keys.effective).toEqual([{ layer: "package user:retro" }])
+  expect(keys.effective).toEqual([{ layer: "profile user:retro" }])
   expect(keys.overridden).toEqual([{ layer: "your keybindings.json" }])
 })

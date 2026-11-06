@@ -1,0 +1,247 @@
+// Bun Snapshot v1, https://bun.sh/docs/test/snapshots
+
+exports[`repository page golden 80x24, minimal=false 1`] = `
+"Repository watches                  ↑↓ scroll · space page · g/G ends · esc back
+[ ] select · s stop · r restart · R refresh                                     
+┌─ Repository watches ─────────────────────────────────────────────────────────┐
+│                                                                              │
+│ Selected                                                                     │
+│ /work/alpha                                                                  │
+│ watching · role requested · 12 open · publish allowed                        │
+│                                                                              │
+│ Active                                                                       │
+│ Directory                                 State     Role       Open  Publish │
+│ > /work/alpha                             watching  requested  12    allowed │
+│   /work/beta                              paused    all        3     denied  │
+│                                                                              │
+│ Ended                                                                        │
+│ Directory                                     State  Role    Open  Publish   │
+│   /work/old                                   ended  config  0     not asked │
+│                                                                              │
+│ Report                                                                       │
+│ Repository report line 0: all details remain readable                        │
+│ Repository report line 1: all details remain readable                        │
+│ Repository report line 2: all details remain readable                        │
+│ Repository report line 3: all details remain readable                        │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘"
+`;
+
+exports[`repository page golden 80x24, minimal=true 1`] = `
+"Repository watches                  ↑↓ scroll · space page · g/G ends · esc back
+[ ] select · s stop · r restart · R refresh                                     
+Selected                                                                        
+/work/alpha                                                                     
+watching · role requested · 12 open · publish allowed                           
+                                                                                
+Active                                                                          
+Directory                                 State     Role       Open  Publish    
+> /work/alpha                             watching  requested  12    allowed    
+  /work/beta                              paused    all        3     denied     
+                                                                                
+Ended                                                                           
+Directory                                     State  Role    Open  Publish      
+  /work/old                                   ended  config  0     not asked    
+                                                                                
+Report                                                                          
+Repository report line 0: all details remain readable                           
+Repository report line 1: all details remain readable                           
+Repository report line 2: all details remain readable                           
+Repository report line 3: all details remain readable                           
+Repository report line 4: all details remain readable                           
+Repository report line 5: all details remain readable                           
+Repository report line 6: all details remain readable                           
+Repository report line 7: all details remain readable                           "
+`;
+
+exports[`repository page golden 100x30, minimal=false 1`] = `
+"Repository watches                                      ↑↓ scroll · space page · g/G ends · esc back
+[ ] select · s stop · r restart · R refresh                                                         
+┌─ Repository watches ─────────────────────────────────────────────────────────────────────────────┐
+│                                                                                                  │
+│ Selected                                                                                         │
+│ /work/alpha                                                                                      │
+│ watching · role requested · 12 open · publish allowed                                            │
+│                                                                                                  │
+│ Active                                                                                           │
+│ Directory                                                     State     Role       Open  Publish │
+│ > /work/alpha                                                 watching  requested  12    allowed │
+│   /work/beta                                                  paused    all        3     denied  │
+│                                                                                                  │
+│ Ended                                                                                            │
+│ Directory                                                         State  Role    Open  Publish   │
+│   /work/old                                                       ended  config  0     not asked │
+│                                                                                                  │
+│ Report                                                                                           │
+│ Repository report line 0: all details remain readable                                            │
+│ Repository report line 1: all details remain readable                                            │
+│ Repository report line 2: all details remain readable                                            │
+│ Repository report line 3: all details remain readable                                            │
+│ Repository report line 4: all details remain readable                                            │
+│ Repository report line 5: all details remain readable                                            │
+│ Repository report line 6: all details remain readable                                            │
+│ Repository report line 7: all details remain readable                                            │
+│ Repository report line 8: all details remain readable                                            │
+│ Repository report line 9: all details remain readable                                            │
+│                                                                                                  │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘"
+`;
+
+exports[`repository page golden 100x30, minimal=true 1`] = `
+"Repository watches                                      ↑↓ scroll · space page · g/G ends · esc back
+[ ] select · s stop · r restart · R refresh                                                         
+Selected                                                                                            
+/work/alpha                                                                                         
+watching · role requested · 12 open · publish allowed                                               
+                                                                                                    
+Active                                                                                              
+Directory                                                     State     Role       Open  Publish    
+> /work/alpha                                                 watching  requested  12    allowed    
+  /work/beta                                                  paused    all        3     denied     
+                                                                                                    
+Ended                                                                                               
+Directory                                                         State  Role    Open  Publish      
+  /work/old                                                       ended  config  0     not asked    
+                                                                                                    
+Report                                                                                              
+Repository report line 0: all details remain readable                                               
+Repository report line 1: all details remain readable                                               
+Repository report line 2: all details remain readable                                               
+Repository report line 3: all details remain readable                                               
+Repository report line 4: all details remain readable                                               
+Repository report line 5: all details remain readable                                               
+Repository report line 6: all details remain readable                                               
+Repository report line 7: all details remain readable                                               
+Repository report line 8: all details remain readable                                               
+Repository report line 9: all details remain readable                                               
+Repository report line 10: all details remain readable                                              
+Repository report line 11: all details remain readable                                              
+Repository report line 12: all details remain readable                                              
+Repository report line 13: all details remain readable                                              "
+`;
+
+exports[`repository page golden 200x60, minimal=false 1`] = `
+"Repository watches                                                                                                                                          ↑↓ scroll · space page · g/G ends · esc back
+[ ] select · s stop · r restart · R refresh                                                                                                                                                             
+┌─ Repository watches ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                                                                                                                                                                                      │
+│ Selected                                                                                                                                                                                             │
+│ /work/alpha                                                                                                                                                                                          │
+│ watching · role requested · 12 open · publish allowed                                                                                                                                                │
+│                                                                                                                                                                                                      │
+│ Active                                                                                                                                                                                               │
+│ Directory                                                                                                                                                         State     Role       Open  Publish │
+│ > /work/alpha                                                                                                                                                     watching  requested  12    allowed │
+│   /work/beta                                                                                                                                                      paused    all        3     denied  │
+│                                                                                                                                                                                                      │
+│ Ended                                                                                                                                                                                                │
+│ Directory                                                                                                                                                             State  Role    Open  Publish   │
+│   /work/old                                                                                                                                                           ended  config  0     not asked │
+│                                                                                                                                                                                                      │
+│ Report                                                                                                                                                                                               │
+│ Repository report line 0: all details remain readable                                                                                                                                                │
+│ Repository report line 1: all details remain readable                                                                                                                                                │
+│ Repository report line 2: all details remain readable                                                                                                                                                │
+│ Repository report line 3: all details remain readable                                                                                                                                                │
+│ Repository report line 4: all details remain readable                                                                                                                                                │
+│ Repository report line 5: all details remain readable                                                                                                                                                │
+│ Repository report line 6: all details remain readable                                                                                                                                                │
+│ Repository report line 7: all details remain readable                                                                                                                                                │
+│ Repository report line 8: all details remain readable                                                                                                                                                │
+│ Repository report line 9: all details remain readable                                                                                                                                                │
+│ Repository report line 10: all details remain readable                                                                                                                                               │
+│ Repository report line 11: all details remain readable                                                                                                                                               │
+│ Repository report line 12: all details remain readable                                                                                                                                               │
+│ Repository report line 13: all details remain readable                                                                                                                                               │
+│ Repository report line 14: all details remain readable                                                                                                                                               │
+│ Repository report line 15: all details remain readable                                                                                                                                               │
+│ Repository report line 16: all details remain readable                                                                                                                                               │
+│ Repository report line 17: all details remain readable                                                                                                                                               │
+│ Repository report line 18: all details remain readable                                                                                                                                               │
+│ Repository report line 19: all details remain readable                                                                                                                                               │
+│ Repository report line 20: all details remain readable                                                                                                                                               │
+│ Repository report line 21: all details remain readable                                                                                                                                               │
+│ Repository report line 22: all details remain readable                                                                                                                                               │
+│ Repository report line 23: all details remain readable                                                                                                                                               │
+│ Repository report line 24: all details remain readable                                                                                                                                               │
+│ Repository report line 25: all details remain readable                                                                                                                                               │
+│ Repository report line 26: all details remain readable                                                                                                                                               │
+│ Repository report line 27: all details remain readable                                                                                                                                               │
+│ Repository report line 28: all details remain readable                                                                                                                                               │
+│ Repository report line 29: all details remain readable                                                                                                                                               │
+│ Repository report line 30: all details remain readable                                                                                                                                               │
+│ Repository report line 31: all details remain readable                                                                                                                                               │
+│ Repository report line 32: all details remain readable                                                                                                                                               │
+│ Repository report line 33: all details remain readable                                                                                                                                               │
+│ Repository report line 34: all details remain readable                                                                                                                                               │
+│ Repository report line 35: all details remain readable                                                                                                                                               │
+│ Repository report line 36: all details remain readable                                                                                                                                               │
+│ Repository report line 37: all details remain readable                                                                                                                                               │
+│ Repository report line 38: all details remain readable                                                                                                                                               │
+│ Repository report line 39: all details remain readable                                                                                                                                               │
+│                                                                                                                                                                                                      │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘"
+`;
+
+exports[`repository page golden 200x60, minimal=true 1`] = `
+"Repository watches                                                                                                                                          ↑↓ scroll · space page · g/G ends · esc back
+[ ] select · s stop · r restart · R refresh                                                                                                                                                             
+Selected                                                                                                                                                                                                
+/work/alpha                                                                                                                                                                                             
+watching · role requested · 12 open · publish allowed                                                                                                                                                   
+                                                                                                                                                                                                        
+Active                                                                                                                                                                                                  
+Directory                                                                                                                                                         State     Role       Open  Publish    
+> /work/alpha                                                                                                                                                     watching  requested  12    allowed    
+  /work/beta                                                                                                                                                      paused    all        3     denied     
+                                                                                                                                                                                                        
+Ended                                                                                                                                                                                                   
+Directory                                                                                                                                                             State  Role    Open  Publish      
+  /work/old                                                                                                                                                           ended  config  0     not asked    
+                                                                                                                                                                                                        
+Report                                                                                                                                                                                                  
+Repository report line 0: all details remain readable                                                                                                                                                   
+Repository report line 1: all details remain readable                                                                                                                                                   
+Repository report line 2: all details remain readable                                                                                                                                                   
+Repository report line 3: all details remain readable                                                                                                                                                   
+Repository report line 4: all details remain readable                                                                                                                                                   
+Repository report line 5: all details remain readable                                                                                                                                                   
+Repository report line 6: all details remain readable                                                                                                                                                   
+Repository report line 7: all details remain readable                                                                                                                                                   
+Repository report line 8: all details remain readable                                                                                                                                                   
+Repository report line 9: all details remain readable                                                                                                                                                   
+Repository report line 10: all details remain readable                                                                                                                                                  
+Repository report line 11: all details remain readable                                                                                                                                                  
+Repository report line 12: all details remain readable                                                                                                                                                  
+Repository report line 13: all details remain readable                                                                                                                                                  
+Repository report line 14: all details remain readable                                                                                                                                                  
+Repository report line 15: all details remain readable                                                                                                                                                  
+Repository report line 16: all details remain readable                                                                                                                                                  
+Repository report line 17: all details remain readable                                                                                                                                                  
+Repository report line 18: all details remain readable                                                                                                                                                  
+Repository report line 19: all details remain readable                                                                                                                                                  
+Repository report line 20: all details remain readable                                                                                                                                                  
+Repository report line 21: all details remain readable                                                                                                                                                  
+Repository report line 22: all details remain readable                                                                                                                                                  
+Repository report line 23: all details remain readable                                                                                                                                                  
+Repository report line 24: all details remain readable                                                                                                                                                  
+Repository report line 25: all details remain readable                                                                                                                                                  
+Repository report line 26: all details remain readable                                                                                                                                                  
+Repository report line 27: all details remain readable                                                                                                                                                  
+Repository report line 28: all details remain readable                                                                                                                                                  
+Repository report line 29: all details remain readable                                                                                                                                                  
+Repository report line 30: all details remain readable                                                                                                                                                  
+Repository report line 31: all details remain readable                                                                                                                                                  
+Repository report line 32: all details remain readable                                                                                                                                                  
+Repository report line 33: all details remain readable                                                                                                                                                  
+Repository report line 34: all details remain readable                                                                                                                                                  
+Repository report line 35: all details remain readable                                                                                                                                                  
+Repository report line 36: all details remain readable                                                                                                                                                  
+Repository report line 37: all details remain readable                                                                                                                                                  
+Repository report line 38: all details remain readable                                                                                                                                                  
+Repository report line 39: all details remain readable                                                                                                                                                  
+Repository report line 40: all details remain readable                                                                                                                                                  
+Repository report line 41: all details remain readable                                                                                                                                                  
+Repository report line 42: all details remain readable                                                                                                                                                  
+Repository report line 43: all details remain readable                                                                                                                                                  "
+`;

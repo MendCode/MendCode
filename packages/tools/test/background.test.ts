@@ -63,6 +63,24 @@ describe("background tasks", () => {
     expect(port.list().find((t) => t.id === agent.task.id)).toMatchObject({ status: "killed", killedBy: "agent" })
   })
 
+  test("a task has no lifetime cap by default, and the cap in force at its start applies when one is set", async () => {
+    const none = registry({})
+    const free = none.tasks.forSession("s1").start({ command: "sleep 30", cwd: tempDir() })
+    expect(free.ok && free.task.status).toBe("running")
+    let capMs: number | undefined = 120
+    const exits: BackgroundTaskInfo[] = []
+    const capped = createBackgroundTasks({ lifetimeMs: () => capMs, onExit: (_, task) => void exits.push(task) })
+    registries.push(capped)
+    const killed = capped.forSession("s1").start({ command: "sleep 30", cwd: tempDir() })
+    capMs = 0
+    const spared = capped.forSession("s1").start({ command: "sleep 30", cwd: tempDir() })
+    if (!killed.ok || !spared.ok) throw new Error("start failed")
+    await Bun.sleep(600)
+    expect(exits.map((task) => task.id)).toEqual([killed.task.id])
+    expect(capped.forSession("s1").list().find((task) => task.id === spared.task.id)?.status).toBe("running")
+    expect(none.tasks.forSession("s1").list()[0]?.status).toBe("running")
+  })
+
   test("the user stops a task: it ends killed by the user, no exit notice wakes the model, and its read says so", async () => {
     const { tasks, exits } = registry()
     const port = tasks.forSession("s1")

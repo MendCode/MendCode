@@ -23,6 +23,7 @@ export type LiveInput = {
   /** The window of the model, or the compaction threshold when the window is unknown. */
   limit?: { tokens: number; kind: "window" | "threshold" }
   now: number
+  /** The loading glyph; empty when the activity line above the prompt already shows one, so there is a single indicator. */
   spinner: string
   arcade?: { view: ArcadeView; focused: boolean; fieldRows: number }
   scratch?: { text: string; editing: boolean; editor?: ReturnType<typeof import("./editor").createEditor>; readOnly: boolean }
@@ -96,6 +97,9 @@ function boxed(input: { title: string; right?: string; rows: Line[]; width: numb
   return [top, ...input.rows.map(row), [{ text: `╰${"─".repeat(Math.max(0, width - 2))}╯`, fg: border }]]
 }
 
+/** The spinner and its space; nothing when the activity line already shows one. */
+const lead = (input: LiveInput) => (input.spinner ? `${input.spinner} ` : "")
+
 const label = (text: string): Span => ({ text: text.padEnd(9), fg: "muted" })
 
 function stageRow(facts: CompactionSnapshot, spinner: string): Line {
@@ -141,7 +145,7 @@ const elapsedText = (input: LiveInput) => {
 
 function quietRow(input: LiveInput): Line {
   const elapsed = elapsedText(input)
-  const text = [`${input.spinner} Compacting context`, phaseText(input.facts).toLowerCase(), input.facts.before ? `${compactTokens(input.facts.before.context)} tokens` : undefined, elapsed].filter(Boolean).join(" · ")
+  const text = [`${lead(input)}Compacting context`, phaseText(input.facts).toLowerCase(), input.facts.before ? `${compactTokens(input.facts.before.context)} tokens` : undefined, elapsed].filter(Boolean).join(" · ")
   return fit([{ text, fg: "muted" }], input.width)
 }
 
@@ -150,16 +154,16 @@ function panelRows(input: LiveInput): Line[] {
   const elapsed = elapsedText(input)
   if (width < LIVE_COMPACT_WIDTH) {
     return [
-      fit([{ text: `${input.spinner} `, fg: "primary" }, { text: "Compacting", fg: "text", bold: true }, { text: ` · ${phaseText(facts).toLowerCase()}${elapsed ? ` · ${elapsed}` : ""}`, fg: "muted" }], width),
+      fit([{ text: lead(input), fg: "primary" }, { text: "Compacting", fg: "text", bold: true }, { text: ` · ${phaseText(facts).toLowerCase()}${elapsed ? ` · ${elapsed}` : ""}`, fg: "muted" }], width),
       fit(progressRow(input, width), width),
       fit(contextShift(facts), width),
     ]
   }
   const body: Line[] = [
-    spread([{ text: `${input.spinner} `, fg: "primary" }, { text: phaseText(facts), fg: "text", bold: true }], [{ text: facts.reason ? `${facts.reason} compaction` : "compaction", fg: "muted" }], width - 4),
+    spread([{ text: lead(input), fg: "primary" }, { text: phaseText(facts), fg: "text", bold: true }], [{ text: facts.reason ? `${facts.reason} compaction` : "compaction", fg: "muted" }], width - 4),
     progressRow(input, width - 4),
     [label("Context"), ...contextShift(facts)],
-    stageRow(facts, input.spinner),
+    stageRow(facts, input.spinner || "◐"),
   ]
   return boxed({ title: "Compacting context", ...(elapsed ? { right: elapsed } : {}), rows: body, width })
 }
@@ -196,7 +200,7 @@ function statsRows(input: LiveInput): Line[] {
     : [{ text: facts.tailTokens !== undefined ? `pending · tail ~${compactTokens(facts.tailTokens)} kept` : "pending until the memory is written", fg: "muted" as const }])]
   const progress: Line = [label("Progress"), ...progressRow(input, inner - 9)]
   const elapsed = elapsedText(input)
-  if (width < LIVE_COMPACT_WIDTH) return [fit([{ text: `${input.spinner} `, fg: "primary" }, { text: "Compaction stats", fg: "text", bold: true }, { text: elapsed ? ` · ${elapsed}` : "", fg: "muted" }], width), contextRow, cacheRow, saved, progress].map((line) => fit(line, width))
+  if (width < LIVE_COMPACT_WIDTH) return [fit([{ text: lead(input), fg: "primary" }, { text: "Compaction stats", fg: "text", bold: true }, { text: elapsed ? ` · ${elapsed}` : "", fg: "muted" }], width), contextRow, cacheRow, saved, progress].map((line) => fit(line, width))
   return boxed({ title: "Compaction stats", ...(elapsed ? { right: elapsed } : {}), rows: [contextRow, cacheRow, trend, saved, progress], width })
 }
 
@@ -226,13 +230,13 @@ function arcadeRows(input: LiveInput): Line[] {
   if (width < LIVE_COMPACT_WIDTH || width - 4 < view.width + ARCADE_INFO_WIDTH) {
     const pad = Math.max(0, Math.floor((width - view.width) / 2))
     return [
-      fit([{ text: `${input.spinner} `, fg: "primary" }, { text: view.title, fg: "text", bold: true }, { text: ` · ${view.status}`, fg: "muted" }], width),
+      fit([{ text: lead(input), fg: "primary" }, { text: view.title, fg: "text", bold: true }, { text: ` · ${view.status}`, fg: "muted" }], width),
       ...view.rows.map((row) => fit([{ text: " ".repeat(pad) }, ...row], width)),
       fit(focused ? [{ text: "arrows move · space · r · n · esc leaves", fg: "muted" }] : [{ text: "tab plays", fg: "primary" }, { text: ` · ${phaseText(facts).toLowerCase()}${elapsed ? ` · ${elapsed}` : ""}`, fg: "muted" }], width),
     ]
   }
   const info: Line[] = [
-    [{ text: `${input.spinner} `, fg: "primary" }, { text: phaseText(facts), fg: "text", bold: true }],
+    [{ text: lead(input), fg: "primary" }, { text: phaseText(facts), fg: "text", bold: true }],
     [{ text: `step ${stepOf(facts)} of ${STEPS.length}${elapsed ? ` · ${elapsed}` : ""}`, fg: "muted" }],
     [{ text: view.status, fg: "warning" }],
     ...keys,
@@ -270,7 +274,7 @@ function scratchRows(input: LiveInput): { rows: Line[]; scratch?: NonNullable<Li
   const area = { top: compact ? 1 : 1, left: compact ? 0 : 2, width: textWidthRoom, rows: room, first }
   const cursor = column !== undefined && current ? { row: area.top + cursorIndex - first, col: area.left + column } : undefined
   const out = { ...area, ...(cursor ? { cursor } : {}) }
-  if (compact) return { rows: [fit([{ text: `${input.spinner} `, fg: "primary" }, { text: "Scratchpad", fg: "text", bold: true }, { text: ` · ${hint}${elapsed ? ` · ${elapsed}` : ""}`, fg: "muted" }], width), ...body.map((line) => fit(line, width))], scratch: out }
+  if (compact) return { rows: [fit([{ text: lead(input), fg: "primary" }, { text: "Scratchpad", fg: "text", bold: true }, { text: ` · ${hint}${elapsed ? ` · ${elapsed}` : ""}`, fg: "muted" }], width), ...body.map((line) => fit(line, width))], scratch: out }
   return { rows: boxed({ title: "Scratchpad", right: `${hint}${elapsed ? ` · ${elapsed}` : ""}`, rows: body, width, tone: scratch.editing ? "borderActive" : "border" }), scratch: out }
 }
 

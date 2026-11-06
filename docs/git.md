@@ -61,9 +61,9 @@ Argv, no shell, the environment of `git.commit`, output bounded, timeout, one ac
 
 ## The switch
 
-Push, publish and pull request creation are the only parts of the page that use the network and the only ones that publish anything, so they are behind `experimental.git_actions` (`/experimental git_actions on`), off by default. It follows the same policy as the [PR watch](pr-watch.md): the tier allows it (balanced and full; the feature is `git_actions`), your switch turns it on, `features.git_actions: false` blocks it, minimalist never offers it, and no tier turns the network on by itself.
+Push, publish and pull request creation are the only parts of the page that use the network and the only ones that publish anything, so they are behind `experimental.git_actions` (`/experimental git_actions on`). It follows the same policy as the [PR watch](pr-watch.md): the tier allows it (balanced and full; the feature is `git_actions`), `features.git_actions: false` blocks it and minimalist never offers it. The switch is off by default in balanced, where your `/experimental git_actions on` turns it on, and on by default in full, where `/experimental git_actions off` turns it off; what you set always wins. Full can do this because nothing runs by itself there: every push, publish and pull request shows its exact command on a card and waits for Enter, with no "always allow", and the model has no tool for any of it. No tier turns the network on for the model.
 
-| | Switch off (default) | Switch on |
+| | Switch off (default in balanced) | Switch on (default in full) |
 |---|---|---|
 | Commit tab | as above | as above, unchanged |
 | PR tab | one line: "Off: this tab uses the network · /experimental git_actions on" (or "Blocked by features.git_actions" when that blocks it) | the pull request, `u` push, `P` create |

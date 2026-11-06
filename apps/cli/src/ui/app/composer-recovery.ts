@@ -2,6 +2,7 @@ import type { BlobRef } from "@mendcode/protocol"
 import { liveAttachments } from "../../view/attachments"
 import { PROMPT_MARGIN } from "../../view/prompt-chrome"
 import { PROMPT_SEARCH_MAX_QUERY, PROMPT_SEARCH_PROMPTS, promptSearchBar, searchPrompts, type RecallEntry } from "../../view/prompt-search"
+import { MAX_COMMENTS, parseSentComments, readableMessage, type ReplyComment } from "../../view/reply-comments"
 import type { QueuedPrompt } from "../../view/turn-state"
 import { MOUSE_SGR } from "./constants"
 import type { AppContext } from "./context"
@@ -44,12 +45,31 @@ export function createComposerRecovery(ctx: AppContext, actions: {
     return { text: entry.preview, attachments: [], kind: state.turnState.isShellQueued(queueId) ? "shell" : "message" }
   }
 
+  /**
+   * The entries' text as the user composed it: a message sent with comments gives its typed words to the prompt and its comments back
+   * to the chips (as long as none are pending; else they come back as readable lines), so the envelope never shows and a resend keeps them.
+   */
+  function composed(entries: readonly QueuedPrompt[]): string[] {
+    const lastItemId = state.transcript.blocks().findLast((block) => block.kind === "agent_message")?.itemId
+    const free = !ctx.comments.store.count && !ctx.comments.composing()
+    const comments: ReplyComment[] = []
+    const texts = entries.map((entry) => {
+      const parsed = entry.kind === "message" ? parseSentComments(entry.text, lastItemId) : undefined
+      if (!parsed) return entry.text
+      if (!free || comments.length + parsed.comments.length > MAX_COMMENTS) return readableMessage(entry.text)
+      comments.push(...parsed.comments)
+      return parsed.text
+    })
+    if (comments.length) ctx.comments.restore(comments, false)
+    return texts.filter((text, index) => text || entries[index]!.kind !== "message")
+  }
+
   /** Puts a taken entry in front of what is in the prompt (so pulling back several rebuilds the order they were queued in). */
   function place(entries: readonly QueuedPrompt[]) {
     const shell = entries.find((entry) => entry.kind === "shell")
     if (shell) state.shellMode = true
     const typed = editor.text
-    editor.replaceAll([...entries.map((entry) => entry.text), ...(typed ? [typed] : [])].join("\n"))
+    editor.replaceAll([...composed(entries), ...(typed ? [typed] : [])].join("\n"))
     state.attachments = [...entries.flatMap((entry) => actions.attachmentsOf(entry.attachments)), ...state.attachments]
     refresh()
   }
@@ -268,5 +288,5 @@ export function createComposerRecovery(ctx: AppContext, actions: {
     await actions.openBacktrack()
   }
 
-  return { editQueued, canEditQueued, sendQueueNext, restoreQueue, backtrackEscape, openBacktrack, openSearch, searchKey, searchPaste, searchRow }
+  return { place, editQueued, canEditQueued, sendQueueNext, restoreQueue, backtrackEscape, openBacktrack, openSearch, searchKey, searchPaste, searchRow }
 }

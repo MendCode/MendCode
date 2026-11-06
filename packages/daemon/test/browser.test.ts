@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from "bun:test"
 import type { BrowserInput } from "@mendcode/tools"
 import { browserLaunchArgs, connectCdp, findBrowserExecutable, type BrowserDriver, type CdpConnection, type CdpEvent } from "../src/browser-cdp"
-import { createBrowserControl } from "../src/browser"
+import { createLazyBrowserControl as createBrowserControl } from "../src/lazy-controls"
 
 type Call = { method: string; params: Record<string, unknown>; sessionId?: string | undefined }
 

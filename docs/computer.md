@@ -7,15 +7,32 @@ is macOS-only. The separate [browser](browser.md) tool is not your existing brow
 
 ## Setup
 
-The first native operation compiles the embedded Swift source locally using Apple's
-Command Line Tools (`xcode-select --install` if missing). No package download, network
-server or paid service is involved. The private executable is cached under
-`<dir>/computer-native/<source-hash>/mendcode-computer` and reused. Enable this helper
-in System Settings > Privacy & Security > Accessibility (`+`, then `cmd+shift+G` and paste
-the path; the error of a tool that lacks the permission prints it). Screen captures additionally
-require Screen Recording for the terminal/daemon. The helper checks permissions without
-opening permission prompts or granting itself access. OS permission and MendCode approval
-are independent requirements. Updated helper code can require renewed OS permission.
+The first native operation builds the embedded Swift source locally using Apple's Command Line Tools
+(`xcode-select --install` if missing) into an app, **MendCode Computer Use.app**, at `<dir>/MendCode Computer Use.app`
+(`~/.mendcode/` by default). No package download, network server or paid service is involved.
+
+The app has a fixed name, bundle identifier (`com.mendcode.computer-use`) and path, and is signed ad hoc with that
+identifier and a designated requirement that names only the identifier. It is opened through LaunchServices
+(`open -g -n -a`), so macOS treats it as its own responsible process and Accessibility belongs to it, not to the terminal
+or daemon that asked (a loose executable started by a terminal is judged as that terminal, which is why the older helper
+never worked after being enabled). The daemon talks to it over a private socket in `<dir>/computer-native/`. It is rebuilt
+in place, at the same path, only when its source changes.
+
+**Once:** the first time a tool needs Accessibility, MendCode Computer Use asks for it: the system dialog lists the app and
+System Settings opens on Privacy & Security > Accessibility. Turn on "MendCode Computer Use". The tool that asked does not fail: it
+shows "Waiting for Accessibility permission… (System Settings is open)", looks every second for up to 2 minutes and then
+carries on by itself; Esc cancels it as any tool, and after the 2 minutes it fails saying what to turn on. Nothing to paste,
+no restart. Nothing is built or opened until a computer tool runs. Screen captures are taken by the daemon with `screencapture`, not by "MendCode Computer Use", so Screen Recording goes to the app that started MendCode (your terminal), not to "MendCode Computer Use".
+The helper never grants itself access, and only asks when a tool needs it. OS permission and MendCode approval are
+independent requirements.
+
+Without a Developer ID certificate the signature cannot be anchored to a team, so macOS may ask again after an update; if
+Accessibility shows the app on but tools still say it is missing, turn it off and on again.
+
+**Old entries.** Versions before this one left one loose "mendcode-computer" entry in Accessibility per build. The
+folders are deleted by MendCode the first time the app is built, but macOS offers no way to remove entries from code: open
+System Settings > Privacy & Security > Accessibility, select each old "mendcode-computer" entry and press `-`. (`tccutil
+reset Accessibility` removes all of them, and every other app's, so it is not recommended.)
 
 The daemon owns a persistent private stdio broker retaining **real AXUIElement objects**,
 not reconstructed child indices. Apps/windows and the JavaScript heap are not persisted
@@ -24,7 +41,8 @@ as authority. Restart, shutdown or cancellation cannot replay an action.
 ## Virtual cursor
 
 The native helper draws the agent cursor of [agent-desktop](https://github.com/vercel-labs/agent-desktop)
-(Apache-2.0, ported to Swift; see [THIRD_PARTY.md](../THIRD_PARTY.md)): a **white dart with a dark rim** and a soft
+(Apache-2.0, ported to Swift; see [THIRD_PARTY.md](../THIRD_PARTY.md)): a **white dart with a dark rim**, the size of
+your own pointer (it follows the Accessibility cursor size) and resting where it last acted, with a soft
 shadow, and beside it a **black pill naming what it does** (`MendCode` when it appears, then `Click`, `Press`, `Typing`,
 `Text`, `Key`, `Scroll`, `Dragging`). A new label fades in with a small pop. The pill sits right of and below the tip, or on
 the other side at a screen edge. All of it lives in transparent, non-activating, click-through panels that screenshots and the
@@ -193,9 +211,17 @@ asks for them. The first observation of a window that holds a web page sets `AXE
 on the app (what VoiceOver sets) and waits up to 3 seconds for the page's actions, about 2 seconds
 measured in Chrome; it is cleared again when the app's last session ends or the helper exits, and
 left alone when it was already on.
+
+Apps whose content is a webview (Tauri, WebKit, Electron) can show only a handful of nodes at first. When an
+observation is that small and holds no web page, the helper also sets `AXManualAccessibility` (Electron) next to
+`AXEnhancedUserInterface`, looks again for up to 2 seconds while the tree builds, and clears what it set on the
+same terms. If the tree stays small, the result carries a `hint` telling the model to observe again or try a key or
+`computer_capture` before giving up.
 Coordinates from resized screenshots are never input authority.
-Keyboard input must confirm focus on the approved non-secure node. Drag is bounded and
-releases its button; cancellation allows cleanup before forcibly terminating stuck AX work.
+Keyboard input must confirm focus on the approved non-secure node. When that node cannot take focus (a window or a
+webview group), a `key` goes to the approved app instead, as long as no secure field or element outside the window
+holds the focus; `typeText` still needs the node. Drag is bounded and releases its button; cancellation allows
+cleanup before forcibly terminating stuck AX work.
 
 An exclusive OS file lock prevents two MendCode native helpers from controlling input
 simultaneously. Mutations, legacy navigation, app launch and window selection require

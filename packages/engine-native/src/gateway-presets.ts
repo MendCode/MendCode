@@ -3,13 +3,25 @@ import { createChatCompletionsProvider } from "./openai-compatible"
 import type { ModelProvider } from "./provider"
 import type { Fetch } from "./provider-http"
 
+/** OpenCode's routing header: one stable value per conversation lets Go and Zen route and cache it. */
+export const OPENCODE_SESSION_HEADER = "x-opencode-session"
+/** A call outside a session (a connection test) still carries one id, the same for this process. */
+const PROCESS_SESSION = `mendcode-${crypto.randomUUID()}`
+
+/** The session header and a client name, for a host that routes by them; an explicit user-agent from config wins. */
+export function withSessionHeader(headers: Headers, name: string, conversationId: string | undefined): Headers {
+  headers.set(name, conversationId || PROCESS_SESSION)
+  if (!headers.has("user-agent")) headers.set("user-agent", "mendcode")
+  return headers
+}
+
 /**
  * Hosted and local OpenAI-compatible hosts that need nothing beyond Chat Completions: one guarded transport serves all
  * of them instead of one module each. The guard is the shared outbound policy (HTTPS, or HTTP on loopback only, no
  * credentials/query/fragment in the URL), the current key as the only Authorization, and redirects refused.
  * `keyless` hosts (a local server) send a Bearer header only when a key exists.
  */
-export const GATEWAY_PRESETS: Readonly<Record<string, { label: string; keyEnv?: string; keyless?: true }>> = {
+export const GATEWAY_PRESETS: Readonly<Record<string, { label: string; keyEnv?: string; keyless?: true; sessionHeader?: string }>> = {
   fireworks: { label: "Fireworks", keyEnv: "FIREWORKS_API_KEY" },
   huggingface: { label: "Hugging Face", keyEnv: "HF_TOKEN" },
   baseten: { label: "Baseten", keyEnv: "BASETEN_API_KEY" },
@@ -17,7 +29,8 @@ export const GATEWAY_PRESETS: Readonly<Record<string, { label: string; keyEnv?: 
   minimax: { label: "MiniMax", keyEnv: "MINIMAX_API_KEY" },
   xiaomi: { label: "Xiaomi MiMo", keyEnv: "XIAOMI_API_KEY" },
   zai: { label: "Z.AI", keyEnv: "ZHIPU_API_KEY" },
-  "opencode-go": { label: "OpenCode Go", keyEnv: "OPENCODE_GO_API_KEY" },
+  // Go refuses a request without a stable per-conversation id in this header (400 MissingSessionID).
+  "opencode-go": { label: "OpenCode Go", keyEnv: "OPENCODE_GO_API_KEY", sessionHeader: OPENCODE_SESSION_HEADER },
   "ant-ling": { label: "Ant Ling", keyEnv: "ANT_LING_API_KEY" },
   nearai: { label: "NEAR AI", keyEnv: "NEARAI_API_KEY" },
   foundry: { label: "Microsoft Foundry", keyEnv: "AZURE_AI_FOUNDRY_API_KEY" },
@@ -49,9 +62,11 @@ export function createGatewayProvider(options: Parameters<typeof createChatCompl
     if (!value && !keyless) throw new Error(missingKey(id))
     return value || undefined
   }
-  const guarded = (doFetch: Fetch, key?: string): Fetch => async (url, init) => {
+  const sessionHeader = GATEWAY_PRESETS[id]?.sessionHeader
+  const guarded = (doFetch: Fetch, key?: string, conversationId?: string): Fetch => async (url, init) => {
     gatewayUrl(id, url)
-    return doFetch(url, { ...init, headers: gatewayHeaders(init.headers, await token(key)), redirect: "error" })
+    const headers = gatewayHeaders(init.headers, await token(key))
+    return doFetch(url, { ...init, headers: sessionHeader ? withSessionHeader(headers, sessionHeader, conversationId) : headers, redirect: "error" })
   }
   const adapter = createChatCompletionsProvider({ ...options, requireKey: !keyless, fetch: guarded(transport) })
   return {
@@ -61,7 +76,7 @@ export function createGatewayProvider(options: Parameters<typeof createChatCompl
       const key = await token()
       yield* adapter.stream({
         ...request,
-        fetch: guarded(request.fetch ?? transport, key),
+        fetch: guarded(request.fetch ?? transport, key, request.conversationId),
         transformBody: async (body) => ({ ...await request.transformBody?.(body) ?? body, stream: true, stream_options: { include_usage: true } }),
       })
     },

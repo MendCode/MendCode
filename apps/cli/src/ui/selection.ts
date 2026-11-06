@@ -249,6 +249,8 @@ export function bodyText(map: SelectionMap, selection: Selection): string {
   let text = ""
   let pendingBlank = 0
   let any = false
+  // A row of chrome between two gaps (a turn's closing line) leaves one gap, not both.
+  let mergeGap = false
   for (let row = start.row; row <= end.row; row++) {
     const line = lineOf(map, row)
     if (!line) continue
@@ -258,9 +260,11 @@ export function bodyText(map: SelectionMap, selection: Selection): string {
     const slice = /^│.*│$/.test(drawn) ? drawn.slice(1, -1).trim().split(/\s*│\s*/).join("\t") : drawn
     // A row of nothing is the gap between paragraphs; a row of only chrome (a table rule, a code block's label) is not there at all.
     if (!slice || BOX_RULE.test(line.text)) {
-      if (any && line.text.trim() === "") pendingBlank++
+      if (any && line.text.trim() === "" && !mergeGap) pendingBlank++
+      else if (pendingBlank && line.text.trim() !== "") mergeGap = true
       continue
     }
+    mergeGap = false
     if (!any) text = slice
     else if (line.soft && !pendingBlank) text += `${line.soft === "space" ? " " : ""}${slice}`
     else text += `${"\n".repeat(pendingBlank + 1)}${slice}`

@@ -3,7 +3,7 @@ summary: run a shell command at tool, prompt and session events (hooks.json)
 docs: hooks
 aliases: hook
 ---
-hooks.json in <data dir> (yours), in a package, or <project>/.mendcode/hooks.json (needs /tools trust). Re-read every turn.
+hooks.json in <data dir> (yours), in a profile, or <project>/.mendcode/hooks.json (needs /tools trust). Re-read every turn.
   { "hooks": {
       "PreToolUse": [ { "matcher": "bash|write", "hooks": [ { "type": "command", "command": "./check.sh", "timeout": 10 } ] } ],
       "Stop": [ { "hooks": [ { "command": "npm test --silent" } ] } ] } }

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdtempSync, readFileSync, renameSync, rmSync, utimesSync, writeFileSync } from "node:fs"
 import { homedir, tmpdir } from "node:os"
 import path from "node:path"
 import { CHATGPT_CLIENT_VERSION, CHATGPT_MODELS_RETRY_MS, CHATGPT_MODELS_TTL_MS, createChatgptModelCatalog, NATIVE_DEFAULTS } from "../src"
@@ -100,6 +100,37 @@ describe("MendCode's own ChatGPT model list", () => {
     writeFileSync(path.join(dir, "chatgpt-models.json"), "{ half")
     expect(models.status()).toMatchObject({ stale: true, models: 0 })
     expect(ids(models.list())).toContain(NATIVE_DEFAULTS.model)
+  })
+
+  test("a file rewritten within the filesystem's timestamp resolution (same mtime) is read again", async () => {
+    const dir = temp()
+    const server = backend(listed(["gpt-6-luna"]))
+    const models = catalog({ dir, fetch: server.fetch })
+    await models.settle()
+    const file = path.join(dir, "chatgpt-models.json")
+    const tick = 1_700_000_000
+    utimesSync(file, tick, tick)
+    expect(ids(models.list())).toEqual(["gpt-6-luna"])
+    // A broken rewrite stamped with the mtime the cache already holds.
+    writeFileSync(file, "{ half")
+    utimesSync(file, tick, tick)
+    expect(models.status()).toMatchObject({ stale: true, models: 0 })
+  })
+
+  test("a file replaced by rename with the same size and mtime is read again", async () => {
+    const dir = temp()
+    const server = backend(listed(["gpt-6-luna"]))
+    const models = catalog({ dir, fetch: server.fetch })
+    await models.settle()
+    const file = path.join(dir, "chatgpt-models.json")
+    const tick = 1_700_000_000
+    utimesSync(file, tick, tick)
+    expect(models.status()).toMatchObject({ models: 1 })
+    const same = "{ half".padEnd(readFileSync(file, "utf8").length, " ")
+    writeFileSync(`${file}.next`, same)
+    utimesSync(`${file}.next`, tick, tick)
+    renameSync(`${file}.next`, file)
+    expect(models.status()).toMatchObject({ stale: true, models: 0 })
   })
 
   test("another account or another protocol version asks again without the old ETag", async () => {

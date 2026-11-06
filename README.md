@@ -39,7 +39,7 @@ pull requests.
 
 - [Why MendCode](#why-mendcode)
 - [Install](#install) · [First run](#first-run)
-- [What it does](#what-it-does): [sessions](#sessions-that-outlive-the-terminal), [pull request reviews](#pull-request-reviews), [memory](#memory-you-can-read-and-edit), [packages and profiles](#packages-and-profiles), [long work](#goals-loops-and-sub-agents), [/changes](#review-the-diff-before-you-commit), [engines](#one-screen-several-engines)
+- [What it does](#what-it-does): [sessions](#sessions-that-outlive-the-terminal), [pull request reviews](#pull-request-reviews), [memory](#memory-you-can-read-and-edit), [profiles and areas](#profiles-and-areas), [long work](#goals-loops-and-sub-agents), [/changes](#review-the-diff-before-you-commit), [engines](#one-screen-several-engines)
 - [Status](#status) · [Build from source](#build-from-source)
 - Reference: [views](#replaceable-views), [script workflows](#script-workflows), [Markdown](#markdown-renderer), [process modes](#process-modes), [terminal details](#terminal-details), [tiers](#tiers), [measurements](#measurements), [engines](#engines), [embedding](#embedding), [security](#security-model), [docs](#docs-and-development)
 
@@ -52,8 +52,8 @@ pull requests.
 | A model that reads less of your repository | A code graph answers where a symbol is and who calls it, with exact `file:line` ([code graph](docs/code-graph.md)) |
 | Long sessions that do not forget | Compaction packs the conversation and keeps a scratchpad of what was folded ([compaction](docs/compaction.md)) |
 | Reviews you can trust | Two passes on every pull request: one finds defects, a fresh one tries to refute each ([PR reviewer](docs/pr-review.md)) |
-| A whole setup you can swap and share | One package carries a theme, home screen, prompt, keys, views, skills and commands; turning it off puts everything back ([packages](docs/packages.md)) |
-| Work kept apart from personal | A profile is a set of folders with its own user memories, model roles and default permission, applied without switching ([profiles](docs/profiles.md)) |
+| A whole setup you can swap and share | One profile carries a theme, home screen, prompt, keys, views, skills and commands; turning it off puts everything back ([profiles](docs/profiles.md)) |
+| Work kept apart from personal | An area is a set of folders with its own user memories, model roles and default permission, applied without switching ([areas](docs/areas.md)) |
 | As much or as little as you like | Three tiers, minimalist, balanced and full, from a plain prompt to every panel ([tiers](#tiers)) |
 
 ## Install
@@ -200,22 +200,22 @@ memories as related, supports, supersedes or conflicts; a memory linked to one t
   <img src="docs/assets/readme/memory-graph.svg" alt="The memory page's Graph tab: saved memories and their links around the selected one, drawn as braille lines, with the selected memory and its links in a box beside it." width="100%">
 </p>
 
-### Packages and profiles
+### Profiles and areas
 
-A package is a whole setup in one folder: a theme, the terminal profile (logo, home screen, prompt box, density, slash menu,
+A profile is a whole setup in one folder: a theme, the terminal settings (logo, home screen, prompt box, density, slash menu,
 panel cards), the right panel, keybindings, prompt files and any of the 22 view slots that draw the transcript, plus the skills,
 commands, agents, MCP servers and workflows it adds. It is an overlay: nothing is written into your settings, and turning it off
-puts everything back. `/packages` then `o` lists every setting, key and view it takes over, and `k` keeps your own value for one.
-`mendcode package new mylook` writes a complete package to start from, and anyone installs yours with
-`mendcode package install github:you/mylook` ([packages](docs/packages.md)).
+puts everything back. `/profiles` then `o` lists every setting, key and view it takes over, and `k` keeps your own value for one.
+`mendcode profile new mylook` writes a complete profile to start from, and anyone installs yours with
+`mendcode profile install github:you/mylook` ([profiles](docs/profiles.md)).
 
-A profile is a set of folders. `mendcode profile add company ~/Code/acme` gives everything under it its own user memories, model
+An area is a set of folders. `mendcode area add company ~/Code/acme` gives everything under it its own user memories, model
 roles and default permission; open a terminal there and you are working as `company`, shown as `◆ company` under the prompt.
-Everything else is personal ([profiles](docs/profiles.md)). Your own setup moves to another machine as one checked file
+Everything else is personal ([areas](docs/areas.md)). Your own setup moves to another machine as one checked file
 ([config bundles](docs/config-bundle.md)).
 
 <p align="center">
-  <img src="docs/assets/readme/packages.svg" alt="The packages page listing what the retro example package takes over: theme, home screen, prompt box, slash menu, panel cards, two keys and two views, each from the default to the package's value." width="100%">
+  <img src="docs/assets/readme/profiles.svg" alt="The profiles page listing what the retro example profile takes over: theme, home screen, prompt box, slash menu, panel cards, two keys and two views, each from the default to the profile's value." width="100%">
 </p>
 
 ### Goals, loops and sub-agents
@@ -258,7 +258,7 @@ Version 0.x: expect changes between releases, and back up your data before upgra
   run on real Linux machines yet, and Windows has no script host and no daemon smoke test ([workflows](docs/workflows.md#security-model), [releases](docs/release.md)).
 - **Tested against fake transports, not real accounts:** Claude Code, Codex, ACP and pi as engines, the GitHub automation,
   the Telegram bridge and MCP OAuth ([GitHub](docs/github.md), [channels](docs/channels.md), [MCP OAuth](docs/mcp-oauth.md)).
-- **Your data:** `--dir`, else `MENDCODE_V2_DIR`, else `~/.mendcode-v2`. To back it up, quit every terminal, run
+- **Your data:** `--dir`, else `MENDCODE_DIR`, else `~/.mendcode`. To back it up, quit every terminal, run
   `mendcode daemon stop` and copy the whole directory (the database with its `-wal` and `-shm` files, `blobs/`, and `keys/`, which
   the encrypted secrets need) ([storage](docs/storage.md), [secrets](docs/secrets.md)).
 
@@ -276,6 +276,7 @@ bun run build                                    # dist/mendcode-next for this m
 tag runs [release.yml](.github/workflows/release.yml), which runs the whole test gate, builds the five binaries (macOS and Linux
 x64/arm64, Windows x64), signs them with keyless cosign, attests them and attaches an SBOM; [nightly.yml](.github/workflows/nightly.yml)
 tags `main` once a day when it changed. There is no Apple notarization or Windows code signing yet ([releases](docs/release.md)).
+To program MendCode from a stable MendCode and try the change in a second daemon that restarts alone, use [`mendcode dev`](docs/dev-mode.md).
 See [CONTRIBUTING.md](CONTRIBUTING.md) to send a change.
 
 ## Replaceable views
@@ -329,8 +330,8 @@ Generated from [tier-data.ts](packages/protocol/src/tier-data.ts), including eve
 |---|---|---|---|---|
 | [Slash menu layouts](docs/customize.md) (`slash_menu`) | Kernel | Kernel | Kernel | /customize · slashMenu · slashCommands (minimalist lists 20 commands, flat) |
 | [Extensions](docs/extensions.md) (`extensions`) | Kernel | Kernel | Kernel | MENDCODE_EXTENSIONS=0 · --pure |
-| [Installed packages](docs/packages.md) (`packages`) | Kernel | Kernel | Kernel | disabledPackages · /marketplace |
-| [Package chat tools](docs/packages.md) (`package_tools`) | — | Included | Included | features.package_tools |
+| [Installed profiles](docs/profiles.md) (`profiles`) | Kernel | Kernel | Kernel | disabledProfiles · /marketplace |
+| [Profile chat tools](docs/profiles.md) (`profile_tools`) | — | Included | Included | features.profile_tools |
 | [Shell hooks](docs/hooks.md) (`hooks`) | Kernel | Kernel | Kernel | MENDCODE_HOOKS=0 |
 | [MCP servers](docs/mcp-oauth.md) (`mcp`) | — | — | Included | mcp.json |
 | [Code graph tools](docs/code-graph.md) (`codegraph`) | — | Included | Included | MENDCODE_CODEGRAPH=0 |
@@ -341,7 +342,7 @@ Generated from [tier-data.ts](packages/protocol/src/tier-data.ts), including eve
 | [Experimental pet generator](docs/customize.md) (`pet_generator`) | — | — | Opt-in | /pet new (explicit confirmation) |
 | [Voice dictation](docs/voice.md) (`voice`) | — | — | Opt-in | voice.enabled |
 | [Computer control](docs/computer.md) (`computer`) | — | Opt-in | Opt-in | /tier computer on (macOS; off until then) |
-| [Headless browser](docs/browser.md) (`browser`) | — | — | Opt-in | MENDCODE_BROWSER=1 |
+| [Headless browser](docs/browser.md) (`browser`) | — | — | Opt-in | MENDCODE_BROWSER=1 · MENDCODE_BROWSER_EXTENSION=1 |
 | [Code Mode](docs/code-mode.md) (`code_mode`) | — | — | Opt-in | experimental.code_mode |
 | [Snip stale output](docs/compaction.md) (`snip`) | — | — | Opt-in | experimental.snip |
 | [Worktree tool](docs/worktrees.md) (`worktree_tool`) | — | — | Opt-in | experimental.worktree_tool |
@@ -362,11 +363,11 @@ Generated from [tier-data.ts](packages/protocol/src/tier-data.ts), including eve
 | [Graph orientation and impact](docs/code-graph.md) (`graph_context`) | — | Opt-in | Opt-in | /tier graph_context on (off until then: the model calls the graph tools itself) |
 | [Focused session handoff](docs/sessions.md) (`handoff`) | — | Included | Included | /handoff &lt;goal&gt; |
 | [Instruction includes](docs/prompt-modes.md) (`instruction_includes`) | — | Included | Included | @relative/path in AGENTS.md |
-| [Package capability preview](docs/packages.md) (`package_capabilities`) | — | Included | Included | /marketplace preview |
+| [Profile capability preview](docs/profiles.md) (`profile_capabilities`) | — | Included | Included | /marketplace preview |
 | [Caveman prose style](docs/prompt-modes.md) (`caveman`) | — | Opt-in | Opt-in | /output-style caveman |
 | [PDF and repository fetch](docs/tools-web.md) (`webfetch_modes`) | — | Opt-in | Opt-in | webfetch mode |
 | [Deferred MCP tools](docs/tool-discovery.md) (`tool_discovery`) | — | — | Included | experimental.tool_discovery |
-| [Official package kit](docs/packages.md) (`official_packages`) | — | Opt-in | Opt-in | Explicit local catalog install |
+| [Official profile kit](docs/profiles.md) (`official_profiles`) | — | Opt-in | Opt-in | Explicit local catalog install |
 | [Durable orchestration receipts](docs/thread-mcp.md) (`orchestration_receipts`) | Kernel | Kernel | Kernel | clientRequestId on thread mutations |
 | [Metric experiments](docs/loops.md) (`autoresearch`) | — | — | Opt-in | On-demand metric-experiment skill |
 | [Explicit web routes](docs/tools-web.md) (`web_routing`) | — | Opt-in | Opt-in | On-demand explicit-web skill |
@@ -397,27 +398,34 @@ Generated from [tier-data.ts](packages/protocol/src/tier-data.ts), including eve
 | [Cache countdown (footer)](docs/layout.md) (`cache_countdown`) | — | — | Opt-in | /footer +warm |
 | [One tree: sessions sharing a checkout](docs/one-tree.md) (`one_tree`) | — | Included | Included | /tier one_tree off |
 | [Advisor model](docs/advisor.md) (`advisor`) | — | Opt-in | Opt-in | /advisor &lt;model&gt; |
-| [Visible plan (todo and the progress row)](docs/layout.md) (`visible_plan`) | — | Included | Included | /tier visible_plan off |
+| [Visible plan (todo and its guidance)](docs/layout.md) (`visible_plan`) | — | Included | Included | /tier visible_plan off |
 | [Code graph autopilot](docs/code-graph.md) (`graph_autopilot`) | — | — | Included | /tier graph_autopilot on\|off (on by default in nightly, dev and local builds only) |
+| [Automatic memory (use, generate, nightly consolidation)](docs/memory.md) (`memory_auto`) | — | — | Included | /tier memory_auto off · memoryUse · memoryGenerate · memoryRequireApproval · dreamConsolidationPolicy (a switch you set wins) |
+| [Resume note in a new chat](docs/memory.md) (`resume_context`) | — | — | Included | /tier resume_context off |
+| [Plans kept as Markdown files](docs/plan-review.md) (`plan_files`) | — | Included | Included | /tier plan_files off · plan_files_location |
+| [Claude message threads](docs/message-threads.md) (`message_threads`) | Included | Included | Included | /tier message_threads off · zeroDataRetention |
+| [What's new for you](docs/whats-new.md) (`whats_new`) | — | Included | Included | /whatsnew · /whatsnew all · /tier whats_new off |
 <!-- tiers:end -->
 
 ## Measurements
 
-Measured 2026-10-04 on a MacBook Pro (Mac16,8), Apple M4 Pro, 24 GB RAM, macOS 27.0 (26A428), Bun 1.3.13, arm64; source revision `631d5ab`. Synthetic offline workloads, temporary stores and HOME, no real providers or other coding tools.
+Measured 2026-11-02 on a MacBook Pro (Mac16,8), Apple M4 Pro, 24 GB RAM, macOS 27.0 (26A428), Bun 1.3.13, arm64; source revision `b482241f`. Synthetic offline workloads, temporary stores and HOME, no real providers or other coding tools, except the two real-CLI rows. Load average 5–6 (shared machine, not repeated on an idle one).
 
 | Measure | Result | Method |
 |---|---|---|
-| Compiled CLI `help` startup | 99.4 ms | Median of five launches, `compiledTarget` + `measureCliStartup` from [perf.ts](scripts/perf.ts) |
-| Bytes per session, 60-session batch | 206,165 | Rounded batch total / 60 after checkpoint, compression and sharing |
-| Bytes for 2,000 sessions | 345,800,704 (329.8 MiB) | Database + WAL + blobs after checkpoint; 172,900 bytes/session rounded |
-| Daemon RSS, idle / with a client attached | 98 MB / 104–129 MB | `bun scripts/perf.ts` at revision `3066087`, compiled daemon, 0 / 1,000 / 10,000 messages |
-| Client RSS, idle / after scrolling and streaming | 63–71 MB / 107–133 MB | Same run, compiled client |
-| First frame | 96 ms / 142 ms / 186 ms | Same run as the two-process RSS rows (revision `3066087`, `daemon` mode), 0 / 1,000 / 10,000 messages |
-| Scroll frame p95 | 2.5 ms / 4.7 ms / 3.3 ms | Same run |
-| Streaming frame p95 | 3.6 ms / 7.5 ms / 5.4 ms | Same run |
-| Opt-in one process (`processMode: auto` or `solo`, selected by the minimalist tier; the default is two processes), RSS idle / after use | 113 / 148 MB (0 messages), 133 / 216 MB (10,000) | `bun scripts/perf.ts --mode daemon,solo` on 2026-10-05, load average 5.5 (shared machine, not repeated on an idle one); the same run in two processes, daemon + client: 142 / 195 MB and 148 / 249 MB; real CLI in a pseudo-terminal, 0 messages: 124 MB solo against 167 MB in two processes. [Design](docs/design/memory-single-process.md) |
-| Opt-in one process, frame p95, scroll / stream | 4.5 to 8.4 ms / 5.6 to 9.1 ms | Same run as the one-process RSS row |
-| Opt-in one process, first frame | 180 ms / 196 ms / 210 ms | Same run as the one-process RSS row, 0 / 1,000 / 10,000 messages ([performance](docs/performance.md#solo-mode-one-process)) |
+| Compiled CLI `help` startup | 59.3 ms | `compiledTarget` + `measureCliStartup` from [perf.ts](scripts/perf.ts) |
+| Bytes per session, 60-session batch | 154,283 | Rounded batch total / 60 after checkpoint, compression and sharing |
+| Bytes for 2,000 sessions | 235,356,160 (224.5 MiB) | Database + WAL + blobs after checkpoint; 117,678 bytes/session rounded |
+| Real CLI, one process: at the prompt / after a first reply | 129–131 / 138–140 MB RSS, 63–64 / 66–69 MB physical footprint | Compiled build in a pseudo-terminal 160×45, clean HOME with only the login copied, minimalist, balanced and full tiers, one read-only question on gpt-6-luna, the prompt after 12 s, three launches each (pi the same way: 133 / 139 MB RSS, 81 / 88 MB footprint) |
+| Real session on disk | 2.5–2.6 KB | Same run: every stored byte of that session's rows plus its session row, read after the daemon's idle step (pi: 2.8–2.9 KB session file) |
+| Daemon RSS, idle / with a client attached | 95–98 MB / 119–130 MB | `bun scripts/perf.ts --mode daemon,solo`, compiled daemon, 0 / 1,000 / 10,000 messages |
+| Client RSS, idle / after scrolling and streaming | 66–74 MB / 131–165 MB | Same run, compiled client |
+| First frame | 163 ms / 198 ms / 220 ms | Same run, `daemon` mode, 0 / 1,000 / 10,000 messages |
+| Scroll frame p95 | 3.5 ms / 5.6 ms / 5.3 ms | Same run |
+| Streaming frame p95 | 5.3 ms / 7.4 ms / 7.3 ms | Same run |
+| One process (`processMode: auto`, the default in every tier, or `solo`; `daemon` keeps two processes and is what the rows above measure), RSS idle / after use | 128 / 220 MB (0 messages), 145 / 305 MB (10,000) | Same run; this rig starts the process without the launcher's compile options, so it reads higher than the real-CLI row. [Design](docs/design/memory-single-process.md) |
+| One process, frame p95, scroll / stream | 1.7 to 8.4 ms / 2.3 to 3.0 ms | Same run as the one-process RSS row |
+| One process, first frame | 304 ms / 323 ms / 342 ms | Same run as the one-process RSS row, 0 / 1,000 / 10,000 messages ([performance](docs/performance.md#solo-mode-one-process)) |
 
 Disk command: `MEND_DISK_REPORT=1 bun test packages/store/test/disk-budget.test.ts` (5 passed). Each [synthetic session](packages/store/test/synthetic-data.ts) has eight turns, three tool calls/turn, streamed text, model history and file snapshots. Batch sizes share different amounts of data; these are not predictions for arbitrary transcripts or Git worktrees. The [disk test](packages/store/test/disk-budget.test.ts) enforces 210 KiB/session for the small batch and 350 MiB for 2,000 sessions. See [storage](docs/storage.md).
 
@@ -448,7 +456,7 @@ External engines retain their own authentication and tool loops. Fake transports
 
 ## Docs and development
 
-[Commands](docs/commands.md) · [Customization](docs/customize.md) · [Views](docs/views.md) · [Workflows](docs/workflows.md) · [Memory](docs/memory.md) · [Compaction](docs/compaction.md) · [Worktrees](docs/worktrees.md) · [Packages](docs/packages.md) · [Usage limits](docs/usage-limit.md) · [Upgrade](docs/upgrade.md) · [Uninstall](docs/uninstall.md) · [Migrating from the legacy MendCode](docs/migrate-v1.md)
+[Commands](docs/commands.md) · [Customization](docs/customize.md) · [Views](docs/views.md) · [Workflows](docs/workflows.md) · [Memory](docs/memory.md) · [Compaction](docs/compaction.md) · [Worktrees](docs/worktrees.md) · [Profiles](docs/profiles.md) · [Usage limits](docs/usage-limit.md) · [Upgrade](docs/upgrade.md) · [Uninstall](docs/uninstall.md) · [Migrating from the legacy MendCode](docs/migrate-v1.md)
 
 ```sh
 bun test scripts/readme-tiers.test.ts apps/cli/test/footprint.test.ts apps/cli/test/tui-automation.test.ts

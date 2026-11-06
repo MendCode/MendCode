@@ -3,6 +3,7 @@ import { constants, closeSync, openSync } from "node:fs"
 import { chmod, lstat, mkdir, readFile, rename, writeFile } from "node:fs/promises"
 import { homedir } from "node:os"
 import path from "node:path"
+import { sameDir } from "@mendcode/program/data-dir"
 import { daemonLogPaths, daemonLogs } from "./daemon-logs"
 import { droppedEnvArgs, hostSessionEnvNames, withoutHostSessionEnv } from "@mendcode/client/inherited-env"
 import { writerLockOwner } from "@mendcode/store"
@@ -36,7 +37,7 @@ export const DETACHED_IDLE_EXIT_MS = 10 * 60_000
 
 /** The user service keeps its daemon on purpose (launchd and systemd would restart one that left): it never stops for being idle. */
 export function runsAsUserService(env: NodeJS.ProcessEnv) {
-  return env.MENDCODE_V2_SERVICE === "1" || env.XPC_SERVICE_NAME === LABEL || Boolean(env.INVOCATION_ID)
+  return env.MENDCODE_SERVICE === "1" || env.MENDCODE_V2_SERVICE === "1" || env.XPC_SERVICE_NAME === LABEL || Boolean(env.INVOCATION_ID)
 }
 const xml = (text: string) => text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&apos;")
 const unitQuote = (text: string) => '"' + text.replaceAll("\\", "\\\\").replaceAll('"', '\\"').replaceAll("%", "%%").replaceAll("$", () => "$$") + '"'
@@ -125,14 +126,14 @@ export function createUserService(options: ServiceOptions, execute: ServiceExecu
     if (!text) return undefined
     const value = JSON.parse(text) as ServiceOptions
     if (typeof value.dir !== "string" || typeof value.cwd !== "string" || !Array.isArray(value.command) || !value.command.every((item) => typeof item === "string") || (value.engine !== undefined && typeof value.engine !== "string")) throw new Error("Invalid daemon service binding")
-    if (requireMatch && path.resolve(value.dir) !== requested.dataDir) throw new Error(`User service belongs to ${value.dir}; use that --dir`)
+    if (requireMatch && !sameDir(value.dir, requested.dataDir)) throw new Error(`User service belongs to ${value.dir}; use that --dir`)
     return daemonServicePlan({ ...options, dir: value.dir, cwd: value.cwd, command: value.command, ...(value.engine ? { engine: value.engine } : {}) })
   }
   async function status(): Promise<ServiceResult> {
     const plan = await binding(false) ?? requested
     const definition = await readOptional(plan.definitionPath)
     const loaded = plan.supported ? execute(plan.statusCommand) : { code: 1, stdout: "", stderr: "No user service manager on this platform; use daemon start or daemon run" }
-    const drift = [...(definition === undefined ? ["definition-missing"] : definition !== daemonServiceDefinition(plan) ? ["definition-drift"] : []), ...(plan.dataDir !== requested.dataDir ? ["data-dir-mismatch"] : [])]
+    const drift = [...(definition === undefined ? ["definition-missing"] : definition !== daemonServiceDefinition(plan) ? ["definition-drift"] : []), ...(!sameDir(plan.dataDir, requested.dataDir) ? ["data-dir-mismatch"] : [])]
     return { ...plan, installed: definition !== undefined, loaded: loaded.code === 0, drift, detail: (loaded.stdout || loaded.stderr).trim().slice(0, 2000) }
   }
   async function control(action: ServiceAction): Promise<ServiceResult> {

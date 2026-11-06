@@ -4,7 +4,7 @@ import path from "node:path"
 import { AIConfigInput, AIConfigRecipe, MODEL_ROLES, redactSecrets, type AIConfigAlternative, type AIConfigInput as Input, type AIConfigInspection, type AIConfigIssue, type AIConfigModel, type AIConfigPlan, type AIConfigReport, type AIConfigTarget, type AIConfigValidation, type ModelChoice, type ModelInfo, type ModelRole, type Settings, type SessionId } from "@mendcode/protocol"
 import { canonicalDir, type AIConfigPort } from "@mendcode/tools"
 import { invalidChoice, resolveModel, type ModelCatalog } from "./models"
-import { rolesFor } from "./profiles"
+import { rolesFor } from "./areas"
 import { advisorReport, advisorStatus } from "./advisor-host"
 
 const MAX_BYTES = 16 * 1024

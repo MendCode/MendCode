@@ -2,4 +2,6 @@
 # Tests cannot signal anything outside the processes they spawned (scripts/test-kill-guard.ts).
 # A `bun test` with no path is refused: it would load the whole suite into one process (scripts/test-scope-guard.ts).
 # The terminal the run happens in (tmux, screen, tuios) is hidden from tests that do not set their own (scripts/test-terminal-env.ts).
-preload = ["./scripts/test-kill-guard.ts", "./scripts/test-scope-guard.ts", "./scripts/test-terminal-env.ts"]
+# The glyph set a test switches (an app built with ASCII glyphs) is reset after each test, so it never reaches the next file in the process (scripts/test-glyph-mode.ts).
+# Each test process makes its temporary files in a directory of its own and removes it on exit (scripts/test-tmpdir.ts).
+preload = ["./scripts/test-tmpdir.ts", "./scripts/test-kill-guard.ts", "./scripts/test-scope-guard.ts", "./scripts/test-terminal-env.ts", "./scripts/test-glyph-mode.ts"]

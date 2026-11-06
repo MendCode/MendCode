@@ -83,7 +83,6 @@ import { createTsm } from "./app/tsm"
 import { readModelPrefs } from "../view/model-prefs"
 import type { Settings, ForegroundState, GlobalEvent, PermissionMode } from "@mendcode/protocol"
 import type { AgentSession } from "../view/agents-page"
-import { createModelPageState } from "../view/model-page"
 import type { CommandReply } from "@mendcode/client"
 import { createToasts } from "./toasts"
 /** A command's own report stays long enough to read a status line, then goes. */
@@ -102,6 +101,7 @@ import { osc52Copy } from "./osc52"
 import { createPromptStash } from "./prompt-stash"
 import { placeholderFor, shellPlaceholderFor } from "../view/prompt-chrome"
 import { DEFAULT_TUI_PROFILE, normalizeTuiProfile, readTuiProfile } from "../view/tui-profile"
+import { recoverProfile, profileFile } from "@mendcode/program/profile-history"
 import { ACCESSIBLE_LOOK } from "../view/accessible"
 import { homeTip } from "../view/home-tips"
 import { createTurnState } from "../view/turn-state"
@@ -197,8 +197,10 @@ export function createApp(input: AppInput) {
     mcpsError: "",
     acpState: { selected: 0 },
     agentSessions: new Map<string, AgentSession>(),
+    childWaiting: new Map(),
     agentTitles: new Map<string, string>(),
     agentParents: new Map<string, string>(),
+    reviewActivity: [],
     agentShells: [],
     relaunched: new Set<string>(),
     agentShellsBusy: false,
@@ -430,8 +432,16 @@ export function createApp(input: AppInput) {
   const transcriptImages = { generation: () => (appState.imageCards?.images.generation() ?? 0) * 2 + (chartsPainted() ? 1 : 0), slot: (sha256: string, maxCols: number, maxRows?: number) => appState.imageCards?.images.slot(sha256, maxCols, maxRows), charts: chartsPainted }
   /** A generated picture's room: the screen's height less its chrome, at the cell size the graphics layer measured. */
   const imageRoom = () => ({ rows: imageRoomRows(input.screen.size.height), cell: appState.imageCellPixels ?? DEFAULT_IMAGE_ROOM.cell })
+  /** The session's shells and sub-agents running now, from the lists the app already keeps: the latest turn's closing line counts them. */
+  const backgroundNow = () => {
+    let shells = 0
+    let agents = 0
+    for (const shell of appState.agentShells) if (shell.status === "running" && shell.sessionId === appState.sessionId) shell.kind === "agent" ? agents++ : shells++
+    for (const task of appState.liveTasks ?? []) if (task.parentId === appState.sessionId && (task.state === "queued" || task.state === "running" || task.state === "needs_input")) agents++
+    return { shells, agents }
+  }
   /** A transcript with every option the app gives it; a chat switch makes its own through this, so views and model names keep applying. */
-  const newTranscript = () => createTranscript({ glyphs: g, mode: appState.mode, frame: () => appState.spinFrame, motion: () => !appState.reducedMotion, hooks: transcriptHooks, views, images: transcriptImages, secretTail: (n) => secretTail(n), modelLabel: (id) => modelLabel(id, appState.modelReport), now, agent: () => appState.transcript.permissionMode === "plan" ? "Plan" : "Build", compactNotice: () => compactNoticeConfig(appState.settingsNow), subagentRun: (ref) => subagentRunOf(appState, g.sep).ofCall(ref), imageRoom, backgroundRunning: (description) => appState.agentShells.some((shell) => shell.status === "running" && shell.sessionId === appState.sessionId && shell.command === description) })
+  const newTranscript = () => createTranscript({ glyphs: g, mode: appState.mode, frame: () => appState.spinFrame, motion: () => !appState.reducedMotion, hooks: transcriptHooks, views, images: transcriptImages, secretTail: (n) => secretTail(n), modelLabel: (id) => modelLabel(id, appState.modelReport), now, agent: () => appState.transcript.permissionMode === "plan" ? "Plan" : "Build", compactNotice: () => compactNoticeConfig(appState.settingsNow), subagentRun: (ref) => subagentRunOf(appState, g.sep).ofCall(ref), imageRoom, backgroundRunning: (description) => appState.agentShells.some((shell) => shell.status === "running" && shell.sessionId === appState.sessionId && shell.command === description), background: backgroundNow })
   appState.transcript = newTranscript()
   // Page states are created when the page first opens (its module loads lazily, see lazy-pages.ts).
   appState.contextState = {}
@@ -442,6 +452,12 @@ export function createApp(input: AppInput) {
   appState.toolsState = undefined!
   appState.packagesState = undefined!
   /** The terminal's own look (`<dataDir>/tui/profile.json`, see /customize); read once at start, the defaults without a data dir. */
+  if (!input.profile && input.dataDir) {
+    try {
+      const recovery = recoverProfile(profileFile(input.dataDir))
+      if (recovery.restored) appState.notice = `Restored ${recovery.restored} settings · undo: /customize restore ${recovery.backupId ?? ""}`
+    } catch (error) { appState.notice = `Terminal settings safety: ${error instanceof Error ? error.message : String(error)}` }
+  }
   appState.tuiProfile = input.profile ?? (input.dataDir ? readTuiProfile(input.dataDir) : { ...DEFAULT_TUI_PROFILE })
   // Screen-reader mode from the saved setting or from this run (flag, environment): reduced motion and the plain look, in memory only for a one-off run.
   appState.accessible = input.accessible ?? appState.tuiProfile.accessible
@@ -474,7 +490,7 @@ export function createApp(input: AppInput) {
   /** The user's /footer choice; without one, full view shows every segment and the others the default set. */
   appState.customFooter = undefined!
 
-  appState.modelState = createModelPageState()
+  appState.modelState = { row: 0 }
 
   appState.modelPrefs = input.modelPrefs ?? (input.dataDir ? readModelPrefs(input.dataDir) : { favorites: [], recents: [] })
   appState.providersState = undefined!
@@ -544,6 +560,11 @@ export function createApp(input: AppInput) {
     // Success is silent where the result is already on screen (`quiet`): only what failed or tells something new is said. `confirmNotices` brings those back.
     // The notice it would have replaced goes all the same: it spoke of a state that is over.
     if (extra.quiet && !appState.tuiProfile.confirmNotices) return void toasts.dismiss()
+    {
+      // Never steal focus from a form or an async command. The complete latest report stays one key away,
+      // even after its preview expires; only one string is retained and the page module stays lazy.
+      appState.commandOutput = { title: extra.title ?? (variant === "error" ? "Error" : "Command output"), message, ...(extra.hint ? { hint: extra.hint } : {}) }
+    }
     appState.toastPage = appState.page
     toasts.show({ variant, message, ...(extra.title ? { title: extra.title } : {}), ...(extra.hint ? { hint: extra.hint } : {}), ...(extra.oneLine ? { oneLine: true } : {}) }, extra.ms)
   }
@@ -678,7 +699,7 @@ export function createApp(input: AppInput) {
   const { endGoalEdit, saveGoalEdit, goalCommand, confirmGoalPrompt } = createGoal(ctx)
   const { limitCommand, limitKey, limitClick, limitEscape } = createUsageLimit(ctx)
   const { daemonCommand, whenIdle, noteTurnEnded, cancelWait, reconcile: reconcileDaemon } = createDaemon(ctx, { reloadTerminal: async () => refreshThemes() })
-  const { prCommand } = createPrWatchCommand(ctx, { setFlags })
+  const { prCommand, reposKey } = createPrWatchCommand(ctx, { setFlags })
   const returnFlow = createReturn(ctx, { submit: () => submit() })
   const ps = createPs(ctx, { loadAgentShells })
   const { attachmentsOf, stashKey, syncDraft, restoreDraft, restoreUnsent, openDrafts, draftsKey, attachPasted, insertPasted, expandedPrompt, pasteClipboardImage, undoEdit, stashPrompt, restoreStash, runStashCommand, editInExternalEditor, copyAnswer, recallOlder, recallNewer, remember, recordCommand, ranCommand, keepDiscarded, bump, recallEntriesOf, suggestionPool, loadCustomCommands, syncMentions, expandCustom } = createPrompt(ctx, { extOn: () => extOn() })
@@ -707,12 +728,16 @@ export function createApp(input: AppInput) {
     openTree: (options) => sessionTree.open(options),
   })
   const sessionNav = createSessionNav(ctx)
+  // `/whatsnew` loads its controller on first use: a terminal that never opens it pays nothing at start-up.
+  let whatsNewController: Promise<ReturnType<typeof import("./app/whats-new").createWhatsNew>> | undefined
+  const loadWhatsNew = () => (whatsNewController ??= import("./app/whats-new").then((module) => module.createWhatsNew(ctx)))
+  const whatsNew = { command: async (args: string) => (await loadWhatsNew()).command(args), key: async (key: string) => (await loadWhatsNew()).key(key) }
   const { titleCommand, pinCommand, settleCommand, prMetadata } = createSessionLifecycle(ctx, reloadSessions)
   const { fanoutCommand } = createFanout(ctx, { switchSession, openChanges: async () => { await loadPage("changes"); ctx.state.page = "changes"; await loadChanges() } })
   const { openMessageActions, copyCommand, exportSession, transcriptActionsKey } = createTranscriptActions(ctx, { loadPage: () => loadPage("transcriptActions"), sessionTitle: (...args) => sessionTitle(...args), rewind, forkAt, copyAnswer })
   const sessionTree = createSessionTree(ctx, { loadPage: (...args) => loadPage(...args), sessionTitle: (...args) => sessionTitle(...args), switchSession: (id) => switchSession(id), jumpTo: (entry) => jumpTo(entry), forkAt: (entry) => forkAt(entry), mergeFork: (id) => mergeFork(id), openMessageActions: (...args) => openMessageActions(...args) })
   const composer = createComposerRecovery(ctx, { attachmentsOf, syncMentions, syncDraft, recallEntriesOf, keepDiscarded, openBacktrack: () => openMessageActions(false, undefined, undefined, true) })
-  const { loadLoops, saveLoop, fireLoop, controlLoop, createLoop, loadLiveLoops, noteLoop } = createLoops(ctx)
+  const { loadLoops, saveLoop, fireLoop, resolveLoopRequest, setLoopMode, confirmLoopDraft, controlLoop, createLoop, loadLiveLoops, noteLoop } = createLoops(ctx, { switchSession: (sessionId) => switchSession(sessionId) })
   const { loadWorkflows, openWorkflows, controlWorkflow, workflowCommand, loadLiveWorkflows, noteWorkflow } = createWorkflows(ctx)
   const automationLedger = createAutomationLedger(ctx)
   const { openPermissions, revokeGrant, approveRetry } = createPermissions(ctx)
@@ -805,6 +830,8 @@ export function createApp(input: AppInput) {
     ideCommand,
     setSidebar: (...args) => setSidebar(...args),
     footerSegments: (...args) => footerSegments(...args),
+    footerIsOwn: () => footerIsOwn(),
+    refreshThemes: () => refreshThemes(),
     switchSession,
     openSessions,
     attachPasted,
@@ -846,6 +873,7 @@ export function createApp(input: AppInput) {
     whenIdle,
     prCommand,
     openReviews: reviews.open,
+    openReviewJob: reviews.openJob,
     titleCommand, pinCommand, settleCommand, prMetadata, fanoutCommand,
     openWorkflows,
     workflowCommand,
@@ -858,6 +886,7 @@ export function createApp(input: AppInput) {
     runStashCommand,
     openDrafts,
     sessionNav,
+    whatsNew,
     sessionTree,
     copyAnswer,
     rewind,
@@ -878,6 +907,7 @@ export function createApp(input: AppInput) {
     changeProfile: (...args) => changeProfile(...args),
   })
   const { pageKey } = createPageKeys(ctx, {
+    reposKey,
     gitKey: git.gitKey,
     environmentKey: environmentPanel.key,
     petPlanKey,
@@ -885,6 +915,7 @@ export function createApp(input: AppInput) {
     openPrecedence,
     slashCommands: () => editableCatalog(suggestionPool(), appState.settingsNow),
     sessionNav,
+    whatsNewKey: whatsNew.key,
     sessionTree,
     tasksKey: subagents.tasksKey,
     controlSession,
@@ -974,6 +1005,8 @@ export function createApp(input: AppInput) {
     loadLoops,
     saveLoop,
     fireLoop,
+    resolveLoopRequest,
+    setLoopMode,
     setPermission: (...args) => setPermission(...args),
     revokeGrant,
     diagramLayout,
@@ -1072,6 +1105,7 @@ export function createApp(input: AppInput) {
     changeModelPrefs,
   })
   const { onInput, submit, onEscape } = createInput(ctx, {
+    setPermission: (...args) => setPermission(...args),
     recordSlash: slashMenu.record,
     suggestionPool,
     rewind,
@@ -1091,6 +1125,7 @@ export function createApp(input: AppInput) {
     loadMemories,
     submitPlanDraft: (...args) => submitPlanDraft(...args),
     answerQuestion: (...args) => answerQuestion(...args),
+    confirmLoopDraft: (...args) => confirmLoopDraft(...args),
     questionPaste: (...args) => questionPaste(...args),
     planReviewPaste,
     gitPaste: git.gitPaste,
@@ -1170,6 +1205,8 @@ export function createApp(input: AppInput) {
     footer: (...args) => footer(...args),
     paneFacts: () => paneFacts(),
     statusRows: (...args) => statusRows(...args),
+    promptStatusLine: (...args) => promptStatusLine(...args),
+    homeMascot: () => homeMascot,
   })
   const { chatRows, homeRoot, homeSessions, homeMascot, maxScroll, scrollTranscript } = createChatRows(ctx, {
     slashMenu,
@@ -1191,7 +1228,7 @@ export function createApp(input: AppInput) {
     transcriptWidth: () => transcriptWidth(),
     promptStatusLine: (...args) => promptStatusLine(...args),
   })
-  const { sessionTitle, topbarRow, dockRows, sidebarRows, loadSidebarMcp, setSidebar, statusRow, statusRows, footer, footerSegments, sidebarShown, chatWidth, scrollbarGutter, transcriptWidth, ensureBranch, promptStatusLine, paneFacts } = createChrome(ctx, {
+  const { sessionTitle, topbarRow, dockRows, sidebarRows, loadSidebarMcp, setSidebar, statusRow, statusRows, footer, footerSegments, footerIsOwn, sidebarShown, chatWidth, scrollbarGutter, transcriptWidth, ensureBranch, promptStatusLine, paneFacts } = createChrome(ctx, {
     loadBranch,
     ensureScratch,
     secretTail,
@@ -1297,6 +1334,14 @@ export function createApp(input: AppInput) {
     get page() {
       return appState.page
     },
+    /** The terminal profile in use, read-only (tests: which /customize rows are listed). */
+    get tuiProfile(): Readonly<import("../view/tui-profile").TuiProfile> {
+      return appState.tuiProfile
+    },
+    /** The view the chat draws in (minimal, balanced, full), read-only. */
+    get viewMode() {
+      return appState.mode
+    },
     /** Screen-reader mode and what it forces, read-only (tests, diagnostics). */
     get accessibility() {
       return { accessible: appState.accessible, reducedMotion: appState.reducedMotion, profile: appState.tuiProfile }
@@ -1354,9 +1399,9 @@ export function createApp(input: AppInput) {
     /** What to print after leaving the full-screen UI: the session, its usage and how long it ran (empty when nothing happened). */
     exitSummary(options: { color?: boolean } = {}) {
       const model = sessionModelId(appState.effectiveModel?.model, appState.transcript.lastUsage?.model, appState.modelReport)
-      const { turns, input: tokensIn, output: tokensOut } = appState.turnState.totals
+      const { turns, input: tokensIn, cacheRead, cacheWrite, output: tokensOut } = appState.turnState.totals
       const hasHistory = appState.transcript.blocks().length > 0 || appState.paging?.more === true
-      return exitSummary({ sessionId: appState.sessionId, title: sessionTitle(), turns, input: tokensIn, output: tokensOut, ...(model ? { model: modelLabel(model, appState.modelReport) } : {}), elapsedMs: now() - appState.openedAt, hasHistory, ...(options.color ? { color: true } : {}) })
+      return exitSummary({ sessionId: appState.sessionId, title: sessionTitle(), turns, input: tokensIn, cacheRead, cacheWrite, output: tokensOut, ...(model ? { model: modelLabel(model, appState.modelReport) } : {}), elapsedMs: now() - appState.openedAt, hasHistory, ...(options.color ? { color: true } : {}) })
     },
     applySettings,
     openSetup,

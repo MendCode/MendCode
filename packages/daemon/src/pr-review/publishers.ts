@@ -1,6 +1,6 @@
 import type { ReviewProvider } from "./contracts"
 import { listAll, type GhCall } from "./publish"
-import { reviewMarker } from "./state"
+import { REVIEW_MARKER, reviewMarker } from "./state"
 
 /**
  * Who may post for MendCode on a repository (docs/pr-review.md, "Many reviewers on one repository"). Anyone can run a reviewer
@@ -44,22 +44,56 @@ function counts(rule: PublishersRule, author: { login?: string | undefined; asso
   return MAINTAINER_ASSOCIATIONS.has(author.association ?? "")
 }
 
+/**
+ * Whether a submitted review is a review. GitHub wraps every reply in a review thread in a `COMMENTED` review with an empty
+ * body (seen live on a pull request: three of them, one per thread an author answered with "Fixed in ..."): those are replies,
+ * not a verdict on the head. An approval, a change request, or a comment review with a body is one.
+ */
+export function isReview({ state, body }: { state?: unknown; body?: unknown }): boolean {
+  if (state !== "COMMENTED") return true
+  return typeof body === "string" && body.trim().length > 0
+}
+
+/**
+ * Whether a review is a MendCode review of its head: its summary (`## MendCode review`) or its hidden head marker is in the body.
+ * A reply MendCode posts in a finding's thread ("Fixed in ...") is a review for GitHub too, and so is a hand-written one under
+ * the same login: neither says the head was reviewed, so a head with only those is still to be reviewed.
+ */
+export function isMendCodeReview(body: unknown): boolean {
+  return typeof body === "string" && (body.includes("## MendCode review") || REVIEW_MARKER.test(body))
+}
+
 type Posted = { body?: string | null; user?: { login?: string; type?: string } | null; author_association?: string }
 const authorOf = (item: Posted) => ({ login: item.user?.login, association: item.author_association, bot: item.user?.type === "Bot" })
+
+/** A review of a head: who posted it, whether this reviewer's own login did, and when it was submitted (where the forge says). */
+export type ReviewedHead = { login: string; id: number; mine?: boolean; at?: string }
+
+/**
+ * Whether a review of the head posted by this same login at or after the comment that asked for it already answers that comment.
+ * Without both times the request is not taken as answered.
+ */
+export function answersRequest({ done, asked }: { done: ReviewedHead | undefined; asked: string | undefined }): boolean {
+  if (!done?.mine || !done.at || !asked) return false
+  const reviewed = Date.parse(done.at)
+  const requested = Date.parse(asked)
+  return Number.isFinite(reviewed) && Number.isFinite(requested) && reviewed >= requested
+}
 
 /**
  * A submitted review of `head` by this login or by a publisher that counts, MendCode's or written by hand: an `@mendcode review`
  * of a head that already has one is answered (seen live: the user's own session reviewed #2, #12 and #15 itself while
  * their requests waited for `/pr publish on`). Undefined when there is none or the reviews cannot be read.
  */
-export async function headReviewedBy({ gh, repo, number, head, rule, self }: { gh: GhCall; repo: string; number: number; head: string; rule: PublishersRule; self: string | undefined }): Promise<{ login: string; id: number } | undefined> {
+export async function headReviewedBy({ gh, repo, number, head, rule, self }: { gh: GhCall; repo: string; number: number; head: string; rule: PublishersRule; self: string | undefined }): Promise<ReviewedHead | undefined> {
   const reviews = await listAll(gh, `repos/${repo}/pulls/${number}/reviews`)
   if (!reviews) return undefined
-  for (const review of reviews as Array<Posted & { id?: number; commit_id?: string; state?: string }>) {
-    if (review.commit_id !== head || review.state === "PENDING" || review.state === "DISMISSED" || typeof review.id !== "number") continue
+  for (const review of reviews as Array<Posted & { id?: number; commit_id?: string; state?: string; submitted_at?: string }>) {
+    if (review.commit_id !== head || review.state === "PENDING" || review.state === "DISMISSED" || typeof review.id !== "number" || !isReview(review)) continue
     const author = authorOf(review)
     const mine = !!self && author.login?.toLowerCase() === self.toLowerCase()
-    if (mine || counts(rule, author)) return { login: author.login ?? "a bot", id: review.id }
+    // This login's own post is a review of the head only when it is MendCode's (not a thread reply or a hand-written note).
+    if (mine ? isMendCodeReview(review.body) : counts(rule, author)) return { login: author.login ?? "a bot", id: review.id, mine, ...(review.submitted_at ? { at: review.submitted_at } : {}) }
   }
   return undefined
 }
@@ -114,7 +148,8 @@ export async function headReviewedThrough({ provider, repo, number, head, rule, 
   for (const post of read.posts) {
     if (post.state === "PENDING" || post.state === "DISMISSED" || post.state === "REQUEST_REVIEW") continue
     if (post.commit !== head && !post.body.includes(reviewMarker(head))) continue
-    if (sameLogin(post.author, self) || await counts(post.author)) return { login: post.author, id: post.id }
+    if (!isReview(post)) continue
+    if (sameLogin(post.author, self) ? isMendCodeReview(post.body) : await counts(post.author)) return { login: post.author, id: post.id }
   }
   return undefined
 }

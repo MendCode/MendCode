@@ -20,9 +20,14 @@ mendcode upgrade [target] [--channel stable|beta|dev|nightly] [--method direct|c
 | `--force` | install even when already up to date, or when the release is older than the running version |
 | `--rollback` | go back to the previous binary; running it again returns to the newer one |
 | `--json` | one line `{"schema":"mendcode-next.cli.v1","kind":"result"\|"error","command":"upgrade",...}` |
-| `--dir D` | data directory, like the rest of the CLI (`--dir`, else `MENDCODE_V2_DIR`, else `~/.mendcode-v2`) |
+| `--dir D` | data directory, like the rest of the CLI (`--dir`, else `MENDCODE_DIR`, else `~/.mendcode`) |
 
 Exit codes: 0 ok, 1 failure, 64 usage error.
+
+An exact older target requires `--force`; naming its version alone is not consent to downgrade.
+The refusal identifies the running and requested versions. The POSIX installer likewise checks the installed binary's
+version, warns with both versions, and requires `--force`; the PowerShell installer uses `-Force`.
+Stable, beta and nightly versions are ordered numerically; development hashes are not ordered versions.
 
 ## Channels
 
@@ -33,7 +38,7 @@ Exit codes: 0 ok, 1 failure, 64 usage error.
 | `dev` | `dev-<shortsha>` | prerelease | publication time |
 | `nightly` | `vX.Y.Z-nightly.YYYYMMDD.RUN`, and the beta and stable tags | prerelease | version, date, then numeric run |
 
-The first releases are `v0.0.1-beta.N`, then `v0.0.1`; nightly tags (`vX.Y.Z-nightly.YYYYMMDD.RUN`) are published by `nightly.yml` each day `main` changed ([releases](release.md#channels)). `mendcode upgrade --channel beta` installs the newest beta (or a newer stable), and `--channel nightly` the newest nightly (or a newer beta or stable), of `MendCode/MendCode` with no environment variable and remembers the channel; `--check` only reports. The same tag shapes are accepted by `install.sh` / `install.ps1` ([release.md](release.md#channels)).
+The first releases are `v0.0.1-beta.N`, then `v0.0.1`; nightly tags (`vX.Y.Z-nightly.YYYYMMDD.RUN`) are published by `nightly.yml` each day `main` changed ([releases](release.md#channels)). `mendcode upgrade --channel beta` installs the newest beta (or a newer stable), and `--channel nightly` the newest nightly (or a newer beta or stable; the one `nightly` release holds the latest build, named by its tag `vX.Y.Z-nightly.YYYYMMDD.RUN`), of `MendCode/MendCode` with no environment variable and remembers the channel; `--check` only reports. The same tag shapes are accepted by `install.sh` / `install.ps1` ([release.md](release.md#channels)).
 
 A tag whose shape and prerelease flag disagree (for example `v1.2.3` marked prerelease), drafts and other tags are ignored. A channel takes its own releases and every steadier channel's: `beta` also takes `stable`, `nightly` also takes `beta` and `stable`. So a newer stable reaches a beta or nightly user, and a channel with no release of its own yet (a new repository's beta) installs the stable one instead of failing. `stable` never takes a prerelease and `dev` takes only dev builds; `upgrade --channel stable` goes back to releases only. At the same `X.Y.Z` its betas come before its nightlies, and both before the stable release of that version.
 
@@ -54,7 +59,7 @@ The new binary is staged as `.new`, the current one is copied to `.prev`, then `
 
 `<data dir>/bin` is not added to `PATH`. Run the binary by its path or link it yourself; `scripts/install-dev.sh` (a wrapper around a checkout) is unrelated and untouched.
 
-After installing, an open terminal moves to the new build by itself (macOS and Linux): it checks its own binary every 20 seconds and, when the file was replaced, says so right away with `✓ Update installed · /restart to update` on the right of the prompt's top rule (it takes no row, so nothing above the prompt moves; a prompt without that rule shows it right-aligned on a row of its own), and restarts in place on the same chat (then `✓ Updated to the new build` takes that same place until the first key, so a restart nobody watched is still seen) once that interrupts nothing of its own: no turn running in its chat, nothing typed in the prompt, the chat showing, and no key for 10 seconds. Turns of other chats run in the daemon and do not hold it back; a terminal that hosts the daemon itself still waits for all of its work. Until then it keeps running as it is. It is the same process (same pid, same terminal tab), not a second one. A chat with no messages comes back as a new empty chat. On Windows, or started with `--isolated`, `--ephemeral` or attached to a remote daemon, restart `mendcode` yourself. The background daemon is replaced on the next launch once it is idle (the existing version-skew check); `mendcode --restart-daemon` does it immediately.
+After installing, an open terminal moves to the new build by itself (macOS and Linux): it checks its own binary every 20 seconds and, when the file was replaced, says so right away with `✓ New build installed · /restart to switch` on the right of the prompt's top rule (it takes no row, so nothing above the prompt moves; a prompt without that rule shows it right-aligned on a row of its own), and restarts in place on the same chat (then `✓ Updated to the new build` takes that same place until the first key, so a restart nobody watched is still seen) once that interrupts nothing of its own: no turn running in its chat, nothing typed in the prompt, the chat showing, and no key for 10 seconds. Turns of other chats run in the daemon and do not hold it back; a terminal that hosts the daemon itself still waits for all of its work. Until then it keeps running as it is. It is the same process (same pid, same terminal tab), not a second one. A chat with no messages comes back as a new empty chat. On Windows, or started with `--isolated`, `--ephemeral` or attached to a remote daemon, restart `mendcode` yourself. The background daemon is replaced on the next launch once it is idle (the existing version-skew check); `mendcode --restart-daemon` does it immediately: it stops the daemon of the data directory (only if the process in `mendd.lock` is a MendCode daemon for that directory; otherwise it says what it found and signals nothing), starts a new one and exits without opening the terminal.
 
 ## Version skew
 

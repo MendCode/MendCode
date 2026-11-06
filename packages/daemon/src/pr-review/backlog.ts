@@ -1,6 +1,7 @@
 import { z } from "zod"
 import type { PrFacts } from "./contracts"
 import { reviewerFromBody, reviewerMarker } from "./publish"
+import { isReview } from "./publishers"
 import { REVIEW_MARKER } from "./state"
 
 /**
@@ -132,7 +133,7 @@ export type ReviewAuthor = { login?: string | undefined; association?: string | 
 export function headReviewOf({ reviews, head, reviewer, counts }: { reviews: readonly unknown[]; head: string; reviewer: string; counts(author: ReviewAuthor): boolean }): number | undefined {
   const ours = reviewerFromBody(reviewerMarker({ reviewer, configKey: "x", key: "" }))?.reviewer
   for (const item of reviews as PostedReview[]) {
-    if (!item || typeof item !== "object" || typeof item.id !== "number" || item.state === "PENDING" || item.state === "DISMISSED") continue
+    if (!item || typeof item !== "object" || typeof item.id !== "number" || item.state === "PENDING" || item.state === "DISMISSED" || !isReview(item)) continue
     const body = typeof item.body === "string" ? item.body : ""
     const marked = REVIEW_MARKER.exec(body)?.[1]
     if (item.commit_id !== head && !(marked && head.startsWith(marked))) continue

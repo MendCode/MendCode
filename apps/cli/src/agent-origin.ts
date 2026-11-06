@@ -30,7 +30,7 @@ export function originCapabilities(input: { env: Record<string, string | undefin
   return [...(startedBySession(input) ? [AGENT_ORIGIN_CAPABILITY] : []), ...(limit ? [`${AGENT_LIMIT_CAPABILITY}${limit}`] : [])]
 }
 
-const quote = (word: string) => (/^[A-Za-z0-9_@%+=:,./-]+$/.test(word) ? word : `'${word.replace(/'/g, `'\\''`)}'`)
+export const quote = (word: string) => (/^[A-Za-z0-9_@%+=:,./-]+$/.test(word) ? word : `'${word.replace(/'/g, `'\\''`)}'`)
 /** The command as the user would type it; a value that follows a token or key flag is never repeated. */
 export function shownCommand(argv: readonly string[]) {
   return [PROGRAM_NAME, ...argv.map((word, index) => (/^--?(?:token|password|api-key|client-secret)$/i.test(argv[index - 1] ?? "") ? "…" : quote(word)))].join(" ").slice(0, 400)

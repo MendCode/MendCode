@@ -265,11 +265,13 @@ export function claudeEditPatch(result: unknown): string | undefined {
  * message marked `agentEnd`, with its tool count, tokens and duration). Clients show the thread under the call and leave it out
  * of the main conversation. A sub-agent that ends after its turn did (a background one) is not reported.
  */
-export function createTurnMapper(input: { newItemId(): ItemId; emit(event: EngineEvent): void; model: string; /** Tools the daemon runs and draws itself: no item here. */ ownTools?: string | undefined; /** Every tool call of the main agent, with its arguments. */ onTool?(name: string, args: Record<string, any> | undefined): void; /** The session's task list, kept across its turns (TaskCreate and TaskUpdate change one task each). */ plan?: ClaudePlan }) {
+export function createTurnMapper(input: { newItemId(): ItemId; emit(event: EngineEvent): void; model: string; /** Tools the daemon runs and draws itself: no item here. */ ownTools?: string | undefined; /** Every tool call of the main agent, with its arguments. */ onTool?(name: string, args: Record<string, any> | undefined): void; /** The session's task list, kept across its turns (TaskCreate and TaskUpdate change one task each). */ plan?: ClaudePlan; /** Where the Claude Code process compacts (its `CLAUDE_CODE_AUTO_COMPACT_WINDOW`); stated with every usage so the meter measures against it. */ compactAt?: number | undefined }) {
   const own = (name: unknown) => !!input.ownTools && String(name).startsWith(input.ownTools)
   const plan = input.plan ?? createClaudePlan()
   /** The main agent's calls of a plan tool (TodoWrite, TaskCreate, TaskUpdate) by tool-use id: their result becomes the list's card. */
   const planCalls = new Map<string, { name: string; args: Record<string, any> | undefined }>()
+  /** A Write's input by call id: its card shows what the call put in the file, as the native `write` card does. */
+  const writeInputs = new Map<string, string>()
   /** A sub-agent's TodoWrite checklist by tool-use id: its own list, shown in its thread and never pinned. */
   const agentTodos = new Map<string, string>()
   const blocks = new Map<number, OpenBlock>()
@@ -297,24 +299,40 @@ export function createTurnMapper(input: { newItemId(): ItemId; emit(event: Engin
   const spent = new Map<string, { input: number; output: number; cacheRead: number; cacheWrite: number; model: string | undefined }>()
   /** Whether the `result` message reported the turn's usage (then the per-call sums are not sent). */
   let reported = false
+  /** The calls' output tokens summed so far (kept in step with `spent`), and the sum last sent live. */
+  let liveOutput = 0
+  let liveSent = 0
   const count = (value: unknown) => (typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0)
 
   /** A call's figures arrive more than once (start, delta, whole message): each field keeps its largest value, never a sum. */
   function noteSpend(id: unknown, usage: any, callModel?: unknown) {
     if (typeof id !== "string" || !id || !usage || typeof usage !== "object") return
     const was = spent.get(id)
+    const output = Math.max(was?.output ?? 0, count(usage.output_tokens))
+    liveOutput += output - (was?.output ?? 0)
     spent.set(id, {
       input: Math.max(was?.input ?? 0, count(usage.input_tokens)),
-      output: Math.max(was?.output ?? 0, count(usage.output_tokens)),
+      output,
       cacheRead: Math.max(was?.cacheRead ?? 0, count(usage.cache_read_input_tokens)),
       cacheWrite: Math.max(was?.cacheWrite ?? 0, count(usage.cache_creation_input_tokens)),
       model: typeof callModel === "string" ? callModel : was?.model,
     })
   }
 
+  /**
+   * Claude Code's `result` is the only usage it sends, at the turn's end. Until then the turn's output tokens are what its calls reported,
+   * shown live when a call's `message_delta` gives its cumulative figure (the other copies of it can lag the call, so they publish nothing).
+   */
+  function publishLive() {
+    if (reported || liveOutput <= liveSent) return
+    liveSent = liveOutput
+    input.emit({ type: "usage.live", output: liveOutput })
+  }
+
   /** One call's usage arrives up to three times (`message_start`, `message_delta`, the whole `assistant` message), each repeating the same call: the figures are set, never added. */
-  function noteCall(id: unknown, usage: any, callModel?: unknown) {
-    noteSpend(id, usage, callModel)
+  function noteCall(id: unknown, usage: any, callModel?: unknown, started = false) {
+    // `message_start` carries a placeholder output (1) before the model has written anything: it is no figure to show or sum.
+    noteSpend(id, started && usage && typeof usage === "object" ? { ...usage, output_tokens: 0 } : usage, callModel)
     if (!usage || typeof usage !== "object") return
     const prompt = count(usage.input_tokens) + count(usage.cache_read_input_tokens) + count(usage.cache_creation_input_tokens)
     const output = count(usage.output_tokens)
@@ -333,11 +351,14 @@ export function createTurnMapper(input: { newItemId(): ItemId; emit(event: Engin
     if (event?.type === "message_start") {
       blocks.clear()
       if (typeof event.message?.model === "string") model = event.message.model
-      noteCall(event.message?.id, event.message?.usage, event.message?.model)
+      noteCall(event.message?.id, event.message?.usage, event.message?.model, true)
       return
     }
     if (event?.type === "message_delta") {
-      if (lastCall) noteCall(lastCall.id, { output_tokens: event.usage?.output_tokens })
+      if (lastCall) {
+        noteCall(lastCall.id, { output_tokens: event.usage?.output_tokens })
+        publishLive()
+      }
       return
     }
     if (event?.type === "content_block_start") {
@@ -391,6 +412,7 @@ export function createTurnMapper(input: { newItemId(): ItemId; emit(event: Engin
           args = undefined
         }
         input.onTool?.(open.name ?? "tool", args)
+        if (open.toolUseId && open.name === "Write" && typeof args?.content === "string") writeInputs.set(open.toolUseId, JSON.stringify({ file_path: args.file_path, content: args.content }).slice(0, 4000))
         if (open.toolUseId && CLAUDE_PLAN_TOOLS.has(open.name ?? "")) planCalls.set(open.toolUseId, { name: open.name!, args })
         if (open.itemId) input.emit({ type: "item.delta", itemId: open.itemId, text: "", input: { ...inputProgress(open.json), done: true } })
         const itemId = open.itemId ?? input.newItemId()
@@ -435,7 +457,9 @@ export function createTurnMapper(input: { newItemId(): ItemId; emit(event: Engin
         input.emit({ type: "item.completed", itemId, status: "ok", text: clip(card.text), meta: { tool: card.title, retitled: true } })
         continue
       }
-      input.emit({ type: "item.completed", itemId, status: part.is_error ? "error" : "ok", text: clip(text), ...(late ? { meta: late } : {}) })
+      const written = writeInputs.get(String(part.tool_use_id))
+      writeInputs.delete(String(part.tool_use_id))
+      input.emit({ type: "item.completed", itemId, status: part.is_error ? "error" : "ok", text: clip(text), ...(written ? { toolInput: written } : {}), ...(late ? { meta: late } : {}) })
     }
   }
 
@@ -541,6 +565,7 @@ export function createTurnMapper(input: { newItemId(): ItemId; emit(event: Engin
       cacheWrite: Number(raw.cache_creation_input_tokens ?? 0),
       ...(measured !== undefined ? { context: clamped ? contextWindow! : Math.round(measured) } : {}),
       ...(contextWindow !== undefined ? { contextWindow } : {}),
+      ...(input.compactAt ? { compactAt: input.compactAt } : {}),
       ...(clamped ? { contextApprox: true as const } : {}),
     }
   }

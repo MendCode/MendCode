@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto"
 import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs"
 import path from "node:path"
-import type { ModelInfo } from "@mendcode/protocol"
+import { fileSignature, type ModelInfo } from "@mendcode/protocol"
 import { CHATGPT_PLAN_BASE_URL } from "./chatgpt-auth"
 import { CHATGPT_CODEX_BASE_URL } from "./codex-auth"
 import { parseCodexModels } from "./codex-models"
@@ -51,18 +51,18 @@ export function createChatgptModelCatalog(options: {
 }) {
   const file = path.join(options.dir, "chatgpt-models.json")
   const now = options.now ?? Date.now
-  let loaded: { mtimeMs: number; saved: Saved | undefined } | undefined
+  let loaded: { signature: string; saved: Saved | undefined } | undefined
   let refreshing: Promise<void> | undefined
   let failedAt = 0
   let error: string | undefined
 
   function read(): Saved | undefined {
     try {
-      const { mtimeMs } = statSync(file)
-      if (loaded?.mtimeMs !== mtimeMs) {
+      const signature = fileSignature(statSync(file))
+      if (loaded?.signature !== signature) {
         const raw = JSON.parse(readFileSync(file, "utf8")) as Partial<Saved>
         const valid = typeof raw.fetchedAt === "number" && typeof raw.identity === "string" && typeof raw.clientVersion === "string" && Array.isArray(raw.models)
-        loaded = { mtimeMs, saved: valid ? raw as Saved : undefined }
+        loaded = { signature, saved: valid ? raw as Saved : undefined }
       }
       return loaded.saved
     } catch {

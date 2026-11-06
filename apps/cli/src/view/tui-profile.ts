@@ -1,6 +1,7 @@
 import { sidebarSpec } from "./sidebar-spec"
 import type { SidebarWidget } from "@mendcode/protocol"
 import fs from "node:fs"
+import { updateProfile } from "@mendcode/program/profile-history"
 import path from "node:path"
 import { DEFAULT_LOGO_FONT, DEFAULT_LOGO_TEXT, LOGO_FONTS, LOGO_TEXT_MAX, type LogoFont } from "./logo-fonts"
 import { cells, textWidth } from "./wrap"
@@ -8,8 +9,8 @@ import { IMAGE_MODES, type ImageMode } from "../pets/detect"
 import { FILE_OPENERS, type FileOpener } from "./links"
 import { PROCESS_MODES, type ProcessMode } from "../process-modes"
 import { GLYPH_CHOICES, type GlyphChoice } from "../ui/theme"
-import { ACTIVITY_PARTS, ACTIVITY_PARTS_DEFAULT, QUOTA_REFRESH_DEFAULT_MINUTES, normalizeQuotaRefresh, type QuotaRefreshEntry, FOOTER_ICON_MODES, STAT_PART_IDS, footerRowsProblems, footerTextProblems, normalizeUsageWidgets, type FooterIconMode, type UsageWidgetId } from "@mendcode/protocol/wire"
-import { parseMarkdownColors } from "@mendcode/protocol/wire"
+import { ACTIVITY_PARTS, ACTIVITY_PARTS_DEFAULT, ACTIVITY_STYLES, unknownActivityTokens, QUOTA_REFRESH_DEFAULT_MINUTES, normalizeQuotaRefresh, type QuotaRefreshEntry, FOOTER_ICON_MODES, FOOTER_PACK_DEFAULT, FOOTER_PACK_NAME, FOOTER_PACK_SYMBOLS, STAT_PART_IDS, footerRowsProblems, footerTextProblems, normalizeUsageWidgets, type FooterIconMode, type FooterPackSymbols, type UsageWidgetId } from "@mendcode/protocol/wire"
+import { DEFAULT_TOOL_DESIGN_NAME, parseMarkdownColors, TIMESTAMP_PLACES, TOOL_DESIGN_NAME, TOOL_RAIL_DEFAULT, toolRailProblems } from "@mendcode/protocol/wire"
 import { SLASH_LAYOUTS, slashProfileProblems, type SlashLayout, type SlashGroup, type SlashPreference } from "@mendcode/protocol/wire"
 import { DEFAULT_IMAGE_WAIT_CANVAS, DEFAULT_IMAGE_WAIT_INTERVAL, IMAGE_WAIT_COLORS, IMAGE_WAIT_LIMITS, IMAGE_WAIT_MODES, normalizeImageWaitArt, normalizeImageWaitCanvas, imageWaitPresetNames, type ImageWaitArt, type ImageWaitCanvas, type ImageWaitColor, type ImageWaitMode } from "./image-wait"
 
@@ -25,6 +26,9 @@ export type PromptChrome = (typeof PROMPT_CHROMES)[number]
 
 export const HOME_LAYOUTS = ["centered", "split"] as const
 export type HomeLayout = (typeof HOME_LAYOUTS)[number]
+/** Where the empty prompt sits on the start screen: at the bottom (v1), right under the logo with the block centered, or under the logo at the top. */
+export const HOME_INPUTS = ["bottom", "center", "top"] as const
+export type HomeInputPlace = (typeof HOME_INPUTS)[number]
 
 /** The left project sessions (view/sidebar.ts): `auto` and legacy `always` show from 110 columns, `hidden` never. */
 export const SIDEBAR_MODES = ["auto", "always", "hidden"] as const
@@ -65,6 +69,16 @@ export const TOOL_DENSITIES = ["calm", "standard", "dense"] as const
  * loses lines, stay unified.
  */
 export const DIFF_VIEWS = ["unified", "split", "auto"] as const
+export { TIMESTAMP_PLACES }
+/**
+ * Where the chat says the time. The setting was a boolean before it had places: `true` (the time over each message) reads as
+ * `bottom`, the closing line that replaced it, and `false` as `off`; anything else is the default.
+ */
+export function timestampPlace(value: unknown): (typeof TIMESTAMP_PLACES)[number] {
+  if (value === true) return "bottom"
+  if (value === false) return "off"
+  return (TIMESTAMP_PLACES as readonly unknown[]).includes(value) ? (value as (typeof TIMESTAMP_PLACES)[number]) : "bottom"
+}
 /**
  * Tool layouts: one /customize choice that sets the three tool card keys together. `quiet` folds every card and the code
  * map, `default` is the shipped look, `detailed` previews every call and opens the map, `everything` opens every card in full.
@@ -125,7 +139,8 @@ export type TuiProfile = {
   presentation: "auto" | "raw" | "mendcode" | "minimal" | "balanced" | "full"
   messageRenderer: "plain" | "markdown" | "full"
   submitScroll: "bottom" | "clear"
-  timestamps: boolean
+  /** When the chat says the time: `bottom` ends each turn with a line of how long it worked and when it ended, `top` puts the time over each message, `off` neither. */
+  timestamps: (typeof TIMESTAMP_PLACES)[number]
   username: string
   showUsername: boolean
   /** The transcript's right-edge track: `auto` while scrolling or off the bottom, `always`, or `off`. `auto` and `always` keep one column free of text, so showing and hiding it never reflows. */
@@ -140,6 +155,10 @@ export type TuiProfile = {
   activityPlacement: "transcript" | "above" | "inside" | "off"
   /** The parts it shows, in order (`ACTIVITY_PARTS`); a part the old `show*` toggles switch off stays hidden. */
   activityParts: string
+  /** How the parts are laid out: `inline` (`Generating… (2m 53s · ↓ 4.3k tokens)`) or `classic` (one run of parts, blanks between). */
+  activityStyle: (typeof ACTIVITY_STYLES)[number]
+  /** The figures of the `tokens` part, a comma list of `out`, `in`, `cache`; empty is the style's own (`out` inline; `in,cache,out` classic). */
+  activityTokens: string
   /** Comments on passages of an answer (docs/editor.md): `auto` is on in the balanced and full views and off in minimal. */
   comments: (typeof COMMENT_MODES)[number]
   /** What `alt+q` (and its `ctrl+x w` chord) does with a selection: comment on it, or quote it into the prompt as before. `ctrl+g` always comments. */
@@ -206,6 +225,14 @@ export type TuiProfile = {
   codeMapCard: (typeof CODE_MAP_CARDS)[number]
   toolDensity: (typeof TOOL_DENSITIES)[number]
   diffView: (typeof DIFF_VIEWS)[number]
+  /** Unchanged lines a diff shows before and after each change. */
+  diffContext: number
+  /** Screen rows one long diff line may take before it ends in an ellipsis. */
+  diffLineRows: number
+  /** Which tool cards draw the thin rule at their left (`name:on|off`, comma list; `TOOL_RAIL_DEFAULT`). */
+  toolRail: string
+  /** The look of every tool card (`tool-design.ts`): a built-in design or a `tool-designs/<name>.json`; an unknown name draws the default. */
+  toolDesign: string
   tagline: string
   promptGlyphs: string
   activityMessages: string
@@ -250,10 +277,18 @@ export type TuiProfile = {
   quotaRefresh: QuotaRefreshEntry[]
   /** The built-in footer as rows of segment names (docs/customize.md, "Footer rows"); empty is the single default row. */
   footerRows: string[][]
+  /** While `footerRows` is empty and `/footer` never placed segments, the full view's footer is the `rows` preset (on by default); off keeps the single row (`/footer preset classic`). */
+  footerDefaultRows: boolean
   /** Lines the `text:<name>` segment shows: one line, or a list one of which shows per day. */
   footerText: Record<string, string | string[]>
   /** An icon before each footer segment: none, plain Unicode glyphs, or Nerd Font icons. */
   footerIcons: FooterIconMode
+  /** The footer's look as a pack (docs/customize.md, "Footer packs"): `clean` by default, `off` for the built-in rows; never drawn over a footer of the user's own. */
+  footerPack: string
+  /** The pack's glyphs: the terminal's glyph set (`auto`) or words only (`text`). */
+  footerPackSymbols: FooterPackSymbols
+  /** With a footer of the user's own, the pack is drawn above it instead of standing aside. */
+  footerPackStack: boolean
   messageLayout: "quiet" | "classic"
   userIcon: string
   assistantIcon: string
@@ -306,6 +341,7 @@ export type TuiProfile = {
   /** Named on the home's top row, in the terminal title and as the plain-text logo of a small terminal. */
   productName: string
   homeLayout: HomeLayout
+  homeInput: HomeInputPlace
   homeTips: boolean
   homeFooter: boolean
   /** The home screen's first row (the project folder, the product name, the runtime version); off gives the row to the logo. */
@@ -320,6 +356,8 @@ export type TuiProfile = {
   sidebarHeader: boolean
   /** The running sub-agents and background commands listed over the prompt; off leaves them to /tasks and ctrl+t. */
   showTasks: boolean
+  /** Opt-in Jobs panel in the balanced/full dock; minimal draws no dock. */
+  dockJobs: boolean
   /** Show the local block-font clock in the Usage dashboard. */
   usageClock: boolean
   /** Ring the terminal bell when a turn ends (off by default). */
@@ -411,7 +449,7 @@ export const DEFAULT_TUI_PROFILE: Readonly<TuiProfile> = {
   promptContext: "focus",
   messageRenderer: "full",
   submitScroll: "bottom",
-  timestamps: false,
+  timestamps: "bottom",
   username: "",
   showUsername: false,
   scrollbar: "off",
@@ -420,6 +458,8 @@ export const DEFAULT_TUI_PROFILE: Readonly<TuiProfile> = {
   jumpText: "",
   activityPlacement: "transcript",
   activityParts: ACTIVITY_PARTS_DEFAULT,
+  activityStyle: "inline",
+  activityTokens: "",
   comments: "auto",
   commentKey: "comment",
   commentHint: "prompt",
@@ -459,6 +499,10 @@ export const DEFAULT_TUI_PROFILE: Readonly<TuiProfile> = {
   codeMapCard: "auto",
   toolDensity: "calm",
   diffView: "unified",
+  diffContext: 3,
+  diffLineRows: 4,
+  toolRail: TOOL_RAIL_DEFAULT,
+  toolDesign: DEFAULT_TOOL_DESIGN_NAME,
   tagline: "",
   promptGlyphs: "",
   activityMessages: "",
@@ -497,8 +541,12 @@ export const DEFAULT_TUI_PROFILE: Readonly<TuiProfile> = {
   footerToday: false,
   quotaRefresh: [],
   footerRows: [],
+  footerDefaultRows: true,
   footerText: {},
   footerIcons: "none",
+  footerPack: FOOTER_PACK_DEFAULT,
+  footerPackSymbols: "auto",
+  footerPackStack: false,
   messageLayout: "quiet",
   userIcon: "",
   assistantIcon: "",
@@ -539,6 +587,7 @@ export const DEFAULT_TUI_PROFILE: Readonly<TuiProfile> = {
   logoFont: DEFAULT_LOGO_FONT,
   productName: DEFAULT_PRODUCT_NAME,
   homeLayout: "centered",
+  homeInput: "bottom",
   homeTips: false,
   homeFooter: false,
   homeHeader: true,
@@ -547,6 +596,7 @@ export const DEFAULT_TUI_PROFILE: Readonly<TuiProfile> = {
   placeholderText: "",
   sidebarHeader: true,
   showTasks: true,
+  dockJobs: false,
   usageClock: true,
   turnBell: false,
   turnNotify: "off",
@@ -755,7 +805,7 @@ export function normalizeTuiProfile(raw: unknown): TuiProfile {
     presentation: oneOf(["auto", "raw", "mendcode", "minimal", "balanced", "full"] as const, source.presentation) ?? "auto",
     messageRenderer: source.messageRenderer === "rich" ? "full" : oneOf(["plain", "markdown", "full"] as const, source.messageRenderer) ?? "full",
     submitScroll: source.submitScroll === "clear" ? "clear" : "bottom",
-    timestamps: bool("timestamps"),
+    timestamps: timestampPlace(source.timestamps),
     username: oneLine(source.username, 64),
     showUsername: bool("showUsername"),
     scrollbar: source.scrollbar === true ? "always" : oneOf(["auto", "always", "off"] as const, source.scrollbar) ?? DEFAULT_TUI_PROFILE.scrollbar,
@@ -764,6 +814,8 @@ export function normalizeTuiProfile(raw: unknown): TuiProfile {
     jumpText: oneLine(source.jumpText, 40),
     activityPlacement: oneOf(["transcript", "above", "inside", "off"] as const, source.activityPlacement) ?? "transcript",
     activityParts: normalizeActivityParts(source.activityParts),
+    activityStyle: oneOf(ACTIVITY_STYLES, source.activityStyle) ?? "inline",
+    activityTokens: typeof source.activityTokens === "string" && !unknownActivityTokens(source.activityTokens).length && source.activityTokens.length <= 32 ? source.activityTokens.split(",").map((name) => name.trim()).filter(Boolean).join(",") : "",
     comments: oneOf(COMMENT_MODES, source.comments) ?? "auto",
     commentKey: oneOf(COMMENT_KEYS, source.commentKey) ?? "comment",
     commentHint: oneOf(COMMENT_HINTS, source.commentHint) ?? "prompt",
@@ -802,6 +854,10 @@ export function normalizeTuiProfile(raw: unknown): TuiProfile {
     codeMapCard: oneOf(CODE_MAP_CARDS, source.codeMapCard) ?? "auto",
     toolDensity: oneOf(TOOL_DENSITIES, source.toolDensity) ?? "calm",
     diffView: oneOf(DIFF_VIEWS, source.diffView) ?? "unified",
+    diffContext: boundedInt(source.diffContext, 0, 6, 3),
+    diffLineRows: boundedInt(source.diffLineRows, 1, 50, 4),
+    toolRail: typeof source.toolRail === "string" && !toolRailProblems(source.toolRail).length ? source.toolRail.trim() : TOOL_RAIL_DEFAULT,
+    toolDesign: typeof source.toolDesign === "string" && TOOL_DESIGN_NAME.test(source.toolDesign) ? source.toolDesign : DEFAULT_TOOL_DESIGN_NAME,
     tagline: oneLine(source.tagline, 80),
     promptGlyphs: normalizePromptGlyphs(source.promptGlyphs),
     activityMessages: normalizeActivityMap(source.activityMessages, false),
@@ -844,8 +900,12 @@ export function normalizeTuiProfile(raw: unknown): TuiProfile {
     footerToday: bool("footerToday"),
     quotaRefresh: normalizeQuotaRefresh(source.quotaRefresh),
     footerRows: normalizeFooterLayout(source.footerRows),
+    footerDefaultRows: bool("footerDefaultRows"),
     footerText: normalizeFooterText(source.footerText),
     footerIcons: oneOf(FOOTER_ICON_MODES, source.footerIcons) ?? "none",
+    footerPack: typeof source.footerPack === "string" && FOOTER_PACK_NAME.test(source.footerPack) ? source.footerPack : FOOTER_PACK_DEFAULT,
+    footerPackSymbols: oneOf(FOOTER_PACK_SYMBOLS, source.footerPackSymbols) ?? "auto",
+    footerPackStack: bool("footerPackStack"),
     messageLayout: oneOf(["quiet", "classic"] as const, source.messageLayout) ?? "quiet",
     userIcon: oneLine(source.userIcon, 4),
     assistantIcon: oneLine(source.assistantIcon, 4),
@@ -882,6 +942,7 @@ export function normalizeTuiProfile(raw: unknown): TuiProfile {
     logoFont,
     productName: normalizeProductName(source.productName),
     homeLayout: oneOf(HOME_LAYOUTS, source.homeLayout) ?? DEFAULT_TUI_PROFILE.homeLayout,
+    homeInput: oneOf(HOME_INPUTS, source.homeInput) ?? DEFAULT_TUI_PROFILE.homeInput,
     homeTips: typeof source.homeTips === "boolean" ? source.homeTips : DEFAULT_TUI_PROFILE.homeTips,
     homeFooter: typeof source.homeFooter === "boolean" ? source.homeFooter : DEFAULT_TUI_PROFILE.homeFooter,
     homeHeader: bool("homeHeader"),
@@ -890,6 +951,7 @@ export function normalizeTuiProfile(raw: unknown): TuiProfile {
     placeholderText: oneLine(source.placeholderText, 120),
     sidebarHeader: bool("sidebarHeader"),
     showTasks: bool("showTasks"),
+    dockJobs: bool("dockJobs"),
     usageClock: bool("usageClock"),
     turnBell: typeof source.turnBell === "boolean" ? source.turnBell : DEFAULT_TUI_PROFILE.turnBell,
     turnNotify: oneOf(["off", "osc9", "osc777"] as const, source.turnNotify) ?? "off",
@@ -951,7 +1013,6 @@ export function readTuiProfile(dataDir: string): TuiProfile {
     if (!fs.existsSync(file)) return { ...DEFAULT_TUI_PROFILE }
     const raw = JSON.parse(fs.readFileSync(file, "utf8"))
     const profile = normalizeTuiProfile(raw)
-    if (raw && ["small", "standard", "shadow", "classic", "opencode", "slant"].includes(raw.logoFont)) writeTuiProfile(dataDir, profile)
     return profile
   } catch {
     return { ...DEFAULT_TUI_PROFILE }
@@ -959,13 +1020,21 @@ export function readTuiProfile(dataDir: string): TuiProfile {
 }
 
 /** Saves `profile` (validated again) next to the other terminal files; written whole, then renamed into place. */
-export function writeTuiProfile(dataDir: string, profile: TuiProfile): { ok: true } | { ok: false; error: string } {
+export function writeTuiProfile(dataDir: string, profile: TuiProfile, changed?: readonly string[]): { ok: true } | { ok: false; error: string } {
   const file = tuiProfilePath(dataDir)
   const temp = `${file}.${process.pid}.tmp`
   try {
-    fs.mkdirSync(path.dirname(file), { recursive: true })
-    fs.writeFileSync(temp, `${JSON.stringify(normalizeTuiProfile(profile), null, 2)}\n`)
-    fs.renameSync(temp, file)
+    updateProfile(file, (raw) => {
+      const normalized = normalizeTuiProfile(profile) as unknown as Record<string, unknown>
+      const stored = normalizeTuiProfile(raw) as unknown as Record<string, unknown>
+      const next = { ...raw }
+      for (const key of changed ?? Object.keys(normalized)) {
+        if (!Object.hasOwn(normalized, key)) continue
+        if (!changed && Object.hasOwn(raw, key) && JSON.stringify(raw[key]) !== JSON.stringify(stored[key])) continue
+        next[key] = normalized[key]
+      }
+      return next
+    })
     return { ok: true }
   } catch (error) {
     try {

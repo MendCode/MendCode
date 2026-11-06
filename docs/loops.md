@@ -51,6 +51,54 @@ v1's *gates* and *stop conditions* become `Rules:` and `Stop and report when:` l
 
 `reportOnly` loops report but never change anything. Their sessions start in **plan mode** (the same mechanism as the independent auditor): write and execute tools are refused by the engine whatever the default permission is, and the run prompt says so. A report-only loop cannot use a worktree (it never edits).
 
+A report-only run has no plan to submit. It is not offered `plan_submit`, `plan_review` or `plan_exit`, a plain-text report is not turned into a plan review, and it does not get plan mode's note; its note says *report-only: write the report as your answer*. A run therefore never stops at "Review plan".
+
+## Natural language
+
+`/loop` takes a phrase as well as the strict form, in Spanish or English. The local parser reads the common ones without a model call:
+
+| you type | trigger |
+|---|---|
+| `/loop cada 5 minutos ve diciéndome` | `every 5m`, objective "ve diciéndome" |
+| `/loop cada hora revisa el CI`, `every hour check CI`, `hourly …` | `every 1h` |
+| `/loop cada media hora …`, `every half hour …` | `every 30m` |
+| `/loop todos los días a las 9 revisa los issues`, `daily at 9am check the issues` | `daily 09:00` (`a las 9 de la noche`, `at 9:30pm` work) |
+| `/loop revisa el CI cada 10 minutos` | the schedule can come anywhere |
+| `/loop adaptive …`, or no schedule at all | `adaptive 10m` |
+
+Numbers can be written out (`cada cinco minutos`, `every five minutes`). Flags go after the schedule (`/loop cada 10 minutos --goal arregla los tests until: pasan`). A schedule the parser does not know (`cada tercer jueves`) is converted by the small model role (`loop.interpret`, one short call, listed as `loopInterpret` in [usage](usage.md)); if it cannot, the command says to use the strict form. Seconds, or spans under 1 minute or over 30 days, are refused.
+
+With no interval the loop is `adaptive`: it starts at 10 minutes and the runs set the pace, like `/loop` without an interval in Claude Code.
+
+A phrase is not started at once. One line shows what will run: `loop: every 5m · full access · <objective>` with `enter start · e edit` as its hint. Enter starts it; `e` puts the strict form back in the prompt; typing `ask`, `smart` or `edits` lowers the permission the loop starts with (never above the session's); anything else drops the loop. The strict form (`/loop every 30m …`) starts at once, as before, and its confirmation names the permission too.
+
+The loop runs in its own session and does not see the conversation, so say what to do on each run.
+
+## Permissions and approvals
+
+A loop remembers the session that created it (`creatorSessionId`: the one `/loop` was typed in, or the one whose agent called the `loop` tool).
+
+| the creator is in | a report-only loop | any other loop |
+|---|---|---|
+| **full access** | reads any path, inside or outside the project, without asking; writing is impossible (plan mode) | starts in full access, so it asks nothing |
+| **edits**, **smart** or **ask** | reads what the creator could read without asking (its project, `--add-dir` directories, external-directory grants) and the paths declared with the loop; asks about the rest | starts in the creator's mode and asks as that session would |
+
+A loop never has more than its creator: the permission it starts with is capped by the creator's mode, and `loop.update { permission }` (the `m` key in `/loops`, one step down) cannot raise it past it. Only reads are inherited; a write outside the project always asks, whatever the creator could read.
+
+The `loop` tool takes `reads` (absolute paths outside the project the runs will need). The creation approval lists them, so one approval covers the loop; they are saved with it (`Loop.reads`).
+
+A run that asks waits as **needs input**: the footer says `↻ 1 loop · needs input`, and `/loops` shows what it asked for (`waiting on you`) and answers it in the loop's session: `a` allows once, `o` allows for the loop's session, `x` refuses (`request.resolve`). A question or plan review is answered by opening the session (`enter`). If nobody answers in 15 minutes the run is cancelled and ends as failed with `no answer to "…" in 15m`; the loop stays active and the next run is scheduled.
+
+## Notices in the creator session
+
+When a run ends, the creator session gets one short notice (`notify: "creator"`, the default for a loop with a creator):
+
+```
+[loop "Avance sesión" · run 3 continue] the other repo has 3 new commits (next 14:35Z · session ses_… · /loop open lop_…)
+```
+
+It is a transcript card (a `session.orchestration` event keyed by the loop), not a message: it starts no model turn, so a run costs the creator session no tokens and no reply, and it is one event row of about 200 bytes with no turn, queue or usage rows. While you have not written since, the next run of the same loop replaces the card (`... · 3 runs`) instead of adding another, so unread notices cost nothing more on disk. The model reads them only with your next message, as one line: `[loops since your last message]` with the latest notice of each loop and how many earlier runs it stands for (at most 5 loops, kept in memory). A session without loops stores nothing extra. `/loop open <loop id>` (or a `ses_…` id) opens the loop's session, as `enter` does in `/loops`. Set `notify: "none"` on `loop.create` / `loop.update` (or in the `loop` tool) to get no notices.
+
 ## Worktree lease
 
 `workspace: "worktree"` gives each run its own git worktree so it never collides with your edits:
@@ -70,9 +118,10 @@ The agent can `create`, `list` and `pause` loops of its session's project (permi
 
 | command | does |
 |---|---|
-| `loop.create` | `template`, `reportOnly`, `workspace`, triggers above; `objective`/`trigger`/`budget` optional with a template |
+| `loop.create` | `template`, `reportOnly`, `workspace`, triggers above; `objective`/`trigger`/`budget` optional with a template. Also `creatorSessionId` (the session it reports to and inherits from), `permission` (capped by the creator's mode), `reads` (paths outside the project) and `notify` (`creator` or `none`) |
 | `loop.update` | `{ loopId, name?, objective?, criteria?, trigger?, budget?, checks?, audit?, template?, reportOnly?, workspace?, runNow? }`: partial edit; keeps id, directory, root session, history and state, bumps `updatedAt`, recomputes the next wake for active loops and emits `loop.changed`. An explicit template supplies defaults like create. `criteria: ""`, `checks: []`, `reportOnly: false` and `workspace: "in-place"` clear those options. `runNow` only advances an active loop; disabled loops stay disabled. Running, waiting-input and verifying loops refuse edits with `busy`; retry after the run |
 | `loop.templates` | `{ templates: [{ id, name, description, summary }] }` |
+| `loop.interpret` | `{ text, directory? }` → `{ trigger, objective }`: the small role turns a schedule phrase into a strict-form trigger (`every 5m`, `daily 09:00`, `adaptive 10m`, `now`) and the work; one short call |
 | `loop.fire` | `{ loopId, note? }` → `{ loop, queued }` |
 | `loop.list`, `loop.control` | as before |
 | `loop.draft` | `{ directory, name?, objective?, template?, trigger?, budget?, reportOnly? }`: paused draft, no wake or provider call. Without a template, name/objective are required; defaults are manual/monitor |
@@ -93,7 +142,7 @@ Left out: v1's OS service for waking loops while the app is closed (the daemon w
 
 ## The /loops page
 
-`/loops` (terminal UI) lists this project's loops with the state, the trigger and the next wake. Keys: `↑↓` select, `enter` open, `tab` scope, `1`/`2` tabs, `p` pause or resume, `n` run now, `a` accept, `s` stop, `d` delete, `esc` back.
+`/loops` (terminal UI) lists this project's loops with the state, the trigger and the next wake. Keys: `↑↓` select, `enter` open, `tab` scope, `1`/`2` tabs, `p` pause or resume, `n` run now, `a` accept, `s` stop, `d` delete, `m` lower the permission mode (one step: full to edits to ask), `esc` back. On a loop that waits on a tool permission, `a` allows it once, `o` for the loop's session and `x` refuses (see [Permissions and approvals](#permissions-and-approvals)).
 
 - **`c` new loop** opens a form: name, objective, trigger (`←→`: manual, interval, daily, adaptive, external), the fields that trigger needs, budget (monitor, goal, fixed), report-only, worktree lease, run now. Interval, `min` and `max` take a span such as `30m`, `2h` or `1d`; daily takes `HH:MM` and an optional IANA time zone. `enter` moves to the next row and saves on the last one; the line under the form shows what will be sent, or what is missing.
 - **`t` new from a template** starts the same form on a template (the daemon's `loop.templates`, else the four in this document). Rows left as `template` are not sent, so the template's trigger, budget and report-only apply; set a row to override it. The objective you type becomes the template's "Specifically" line.
@@ -130,6 +179,6 @@ Artifacts record checkpoints/evidence/hash, run memory (the checkpoint summary a
 
 Scheduler text edits preserve the existing due time. Workspace creation rechecks the attempt and revision before dispatch, so an intervening edit/stop/delete cannot submit the old prompt or revive a removed loop. An unused lease is released through the existing lifecycle; cleanup failure is retained for inspection. A queue ACK still records dispatch rather than successful completion.
 
-The optional `mendcode-autoresearch` data package reuses loops, checks, audit, caps and receipts. `acceptExperiment` in `@mendcode/loops` accepts a numeric improvement only with passing unwaived correctness gates, finite metrics, known cost, and iteration/token/cost caps. It does not run a process or edit a checkout. Metric, direction, checks, budget and worktree must be provided explicitly; unknown cost is never zero.
+The optional `mendcode-autoresearch` data profile reuses loops, checks, audit, caps and receipts. `acceptExperiment` in `@mendcode/loops` accepts a numeric improvement only with passing unwaived correctness gates, finite metrics, known cost, and iteration/token/cost caps. It does not run a process or edit a checkout. Metric, direction, checks, budget and worktree must be provided explicitly; unknown cost is never zero.
 
-Use `workspace: "in-place"` only in a separately user-authorized isolated checkout for these experiments. Loop-managed `workspace: "worktree"` has its own commit-on-release behavior and is not selected by this package. The package never commits, resets or reverts automatically. Numeric evaluation is a host helper; a dedicated automated measurement tool is not activated by installing the skill.
+Use `workspace: "in-place"` only in a separately user-authorized isolated checkout for these experiments. Loop-managed `workspace: "worktree"` has its own commit-on-release behavior and is not selected by this profile. The profile never commits, resets or reverts automatically. Numeric evaluation is a host helper; a dedicated automated measurement tool is not activated by installing the skill.

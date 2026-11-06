@@ -2,7 +2,7 @@ import type { AgentViewMetadata, SessionBackgroundEntry, SessionDetail, TaskReco
 import { parityHarness } from "./parity-b01-b02-harness"
 import { ids, NOW } from "./session-ui-harness"
 
-export function b62Harness(width = 100, height = 30) {
+export function b62Harness(width = 100, height = 30, extra: Parameters<typeof parityHarness>[0] = {}) {
   const parent = ids("session"), first = ids("session"), second = ids("session")
   const root = { sessionId: parent, title: "Review daemon lifecycle", directory: "/work/mendcode", createdAt: NOW - 40_000, updatedAt: NOW, lastSeq: 0, queued: 0, state: "idle", status: "idle", permission: "ask" } as SessionDetail
   const sessions: SessionDetail[] = [root, { ...root, sessionId: first, parentId: parent, title: "Inspect actor wake", createdAt: NOW - 20_000 }, { ...root, sessionId: second, parentId: parent, title: "Review writer presence", createdAt: NOW - 10_000 }]
@@ -10,7 +10,7 @@ export function b62Harness(width = 100, height = 30) {
   let tasks: TaskRecord[] = [task, { ...task, taskId: second, generation: 1, description: "Review writer presence", state: "needs_input", result: "Awaiting approval to read the local report." }]
   let metadata: AgentViewMetadata[] = [{ sessionId: first, title: "Wake reliability", tags: ["daemon", "review"], group: "Parity", priority: "high", notes: "Inspect the saved child transcript before resuming.", pinned: true, archived: false }]
   let backgrounds: SessionBackgroundEntry[] = tasks.map((task) => ({ sessionId: task.taskId, state: task.state === "completed" ? "completed" : "needs_input", summary: task.result, pinned: false, createdAt: task.createdAt, updatedAt: task.updatedAt, session: { sessionId: task.taskId, title: task.description, directory: root.directory, parentId: parent, agent: task.agent }, ...(task.taskId === first ? { metadata: metadata[0]! } : {}) }))
-  const h = parityHarness({ width, height, sessionId: parent, reply: (command) => {
+  const h = parityHarness({ ...extra, width, height, sessionId: parent, reply: (command) => {
     if (command.type === "session.list") return { ok: true, result: { sessions } }
     if (command.type === "session.get") return { ok: true, result: { session: sessions.find((session) => session.sessionId === command.sessionId) } }
     if (command.type === "session.children") return { ok: true, result: { sessions: sessions.filter((session) => session.parentId === command.sessionId) } }

@@ -1,7 +1,7 @@
 import { existsSync, lstatSync, readdirSync, readFileSync, readlinkSync } from "node:fs"
 import path from "node:path"
-import { parseActivationState, tuiProblems, type ActivationState, type SavedLook } from "@mendcode/protocol/wire"
-import { serverConfigSchema } from "@mendcode/mcp"
+import { currentSettingKeys, parseActivationState, tuiProblems, type ActivationState, type SavedLook } from "@mendcode/protocol/wire"
+import { serverConfigSchema } from "../../../mcp/src/config"
 import { readMcpServers } from "../mcp-config"
 import { settingsDiff } from "../settings-tool"
 import { canonicalJson, entryBytes, sha256, type Bundle, type BundleEntry, type BundleExclusion, type BundlePackage } from "./bundle"
@@ -192,19 +192,19 @@ export function planImport(input: PlanInput): ImportPlan {
     }
   }
 
-  // Packages: installed by the package installer, or quarantined when they would run code once enabled.
+  // Profiles: installed by the profile installer, or quarantined when they would run code once enabled.
   const packagesLink = linkOnPath(dataDir, "packages")
   for (const pkg of manifest.packages) {
     const item = `packages/${pkg.name}`
     const dir = path.join(dataDir, "packages", pkg.name)
-    const disabled = Array.isArray(input.settings.disabledPackages) ? input.settings.disabledPackages as string[] : []
+    const disabled = Array.isArray(input.settings.disabledProfiles) ? input.settings.disabledProfiles as string[] : []
     const installed = existsSync(dir)
     const current = installed ? { ...(installedTreeHash(dir) ? { treeSha256: installedTreeHash(dir)!.sha256 } : {}), enabled: !disabled.includes(`user:${pkg.name}`) } : undefined
     const pkgEntries = manifest.entries.filter((entry) => entry.path.startsWith(`${item}/`))
     const rewritten = pkgEntries.map((entry) => { const target = targetBytes({ bundle, entry, home: input.home, rewriteHome }); return { path: entry.path, sha256: sha256(target.bytes), rewritten: target.rewritten } })
     const treeSha256 = rewritten.some((entry) => entry.rewritten) ? packageTreeHash(rewritten, pkg.name) : pkg.treeSha256
     const base = { kind: "package" as const, name: pkg.name, enabled: pkg.enabled, disabledResources: pkg.disabledResources, treeSha256, ...(current ? { current } : {}) }
-    if (pkg.autoRuns.length) { steps.push({ ...base, status: "quarantine", reason: `runs code once enabled (${pkg.autoRuns.join(", ")}): review it, then install it with mendcode package install` }); continue }
+    if (pkg.autoRuns.length) { steps.push({ ...base, status: "quarantine", reason: `runs code once enabled (${pkg.autoRuns.join(", ")}): review it, then install it with mendcode profile install` }); continue }
     const link = packagesLink ?? linkOnPath(dataDir, item)
     if (link) { steps.push({ ...base, status: "blocked", reason: `${link.at} is a link to ${link.target}` }); conflicts.push({ item, resolution: "blocked", detail: `${link.at} is a link` }); continue }
     const status: StepStatus = !current ? "new" : current.treeSha256 === treeSha256 && current.enabled === pkg.enabled ? "identical" : resolve(item)
@@ -215,7 +215,8 @@ export function planImport(input: PlanInput): ImportPlan {
   }
 
   // Settings: preferences apply; the user's authority and this machine's folders wait.
-  const portable = manifest.settings.portable
+  // A bundle written before a settings rename (`profiles` is now `areas`) is read under the current names.
+  const portable = currentSettingKeys(manifest.settings.portable)
   for (const key of Object.keys(portable).sort()) {
     const raw = portable[key]
     const value = rewriteHome && manifest.source.home && manifest.source.home !== input.home ? JSON.parse(JSON.stringify(raw).split(manifest.source.home).join(input.home)) as unknown : raw
@@ -224,14 +225,14 @@ export function planImport(input: PlanInput): ImportPlan {
     if (status === "keep" || status === "replace") conflicts.push({ item, resolution: status, detail: "set differently on this machine" })
     steps.push({ kind: "setting", key, status, value })
   }
-  for (const [key, value] of Object.entries(manifest.settings.approval).sort(([a], [b]) => a.localeCompare(b))) {
-    // Which packages are on, and their switched-off resources, travel with each package (`packages.enable`, `packages.resource`).
-    if (key === "disabledPackages" || key === "disabledPackageResources") continue
+  for (const [key, value] of Object.entries(currentSettingKeys(manifest.settings.approval)).sort(([a], [b]) => a.localeCompare(b))) {
+    // Which profiles are on, and their switched-off resources, travel with each profile (`profiles.enable`, `profiles.resource`).
+    if (key === "disabledProfiles" || key === "disabledProfileResources") continue
     if (canonicalJson(input.settings[key]) === canonicalJson(value)) continue
     const withheld = manifest.settings.withheld.includes(key)
     steps.push({ kind: "pending", item: `settings.${key}`, scope: "approval", reason: withheld ? "your authority; the bundle hides its credential-like value: set it on this machine" : "your authority (permissions, models, trust, spend, execution): approve it on this machine", diff: settingsDiff(input.settings, { ...input.settings, [key]: value }, [key]) })
   }
-  for (const key of Object.keys(manifest.settings.machine).sort()) steps.push({ kind: "pending", item: `settings.${key}`, scope: "machine", reason: "describes the source machine (folders, shells, schedules): not applied", diff: [] })
+  for (const key of Object.keys(currentSettingKeys(manifest.settings.machine)).sort()) steps.push({ kind: "pending", item: `settings.${key}`, scope: "machine", reason: "describes the source machine (folders, shells, schedules): not applied", diff: [] })
 
   // Terminal profile: key by key, through the profile's own validation.
   const profileEntry = manifest.entries.find((entry) => entry.action === "tui-profile")
@@ -255,7 +256,7 @@ export function planImport(input: PlanInput): ImportPlan {
     }
   }
 
-  // Activation: the keys kept by hand over the look's package.
+  // Activation: the keys kept by hand over the look's profile.
   const activationEntry = manifest.entries.find((entry) => entry.action === "activation")
   if (activationEntry) {
     const state: ActivationState = parseActivationState((() => { try { return JSON.parse(entryBytes(bundle, activationEntry).toString("utf8")) } catch { return {} } })())
@@ -266,7 +267,7 @@ export function planImport(input: PlanInput): ImportPlan {
     steps.push({ kind: "activation", ...(state.look ? { look: state.look } : {}), kept: state.kept.slice().sort(), ...(Object.keys(saved).length ? { saved } : {}), status })
   }
 
-  // Precedence: who wins for a name both a package and your own folder hold.
+  // Precedence: who wins for a name both a profile and your own folder hold.
   const own = new Set<string>()
   for (const step of steps) if (step.kind === "unit" && step.status !== "blocked") for (const file of step.files) { const name = resourceName(file.path); if (name) own.add(name) }
   for (const kind of ["skills", "commands", "agents", "themes"]) for (const name of existsSync(path.join(dataDir, kind)) ? readdirSync(path.join(dataDir, kind)) : []) { const resource = resourceName(`${kind}/${name}`); if (resource) own.add(resource) }
@@ -274,8 +275,8 @@ export function planImport(input: PlanInput): ImportPlan {
   const notePackage = (pkg: string, relative: string) => { const name = resourceName(relative); if (name) packaged.set(name, new Set([...packaged.get(name) ?? [], pkg])) }
   for (const pkg of manifest.packages) for (const entry of manifest.entries) if (entry.path.startsWith(`packages/${pkg.name}/`)) notePackage(pkg.name, entry.path.slice(`packages/${pkg.name}/`.length))
   for (const name of existsSync(path.join(dataDir, "packages")) && !packagesLink ? readdirSync(path.join(dataDir, "packages")) : []) for (const kind of ["skills", "commands", "agents", "themes"]) for (const child of existsSync(path.join(dataDir, "packages", name, kind)) ? readdirSync(path.join(dataDir, "packages", name, kind)) : []) notePackage(name, `${kind}/${child}`)
-  for (const [name, pkgs] of [...packaged].sort(([a], [b]) => a.localeCompare(b))) if (own.has(name)) precedence.push(`${name}: your own folder wins over package ${[...pkgs].join(", ")}; a project's .mendcode can still override both`)
-    else if (pkgs.size > 1) precedence.push(`${name}: packages ${[...pkgs].join(", ")} all ship it; the later package in layer order wins`)
+  for (const [name, pkgs] of [...packaged].sort(([a], [b]) => a.localeCompare(b))) if (own.has(name)) precedence.push(`${name}: your own folder wins over profile ${[...pkgs].join(", ")}; a project's .mendcode can still override both`)
+    else if (pkgs.size > 1) precedence.push(`${name}: profiles ${[...pkgs].join(", ")} all ship it; the later profile in layer order wins`)
 
   const planId = sha256(canonicalJson({ bundle: bundle.manifestSha256, dataDir, rewriteHome, steps, conflicts }))
   return { planId, bundleSha256: bundle.manifestSha256, source: manifest.source, target: { dataDir, home: input.home, platform: input.platform }, steps, conflicts, warnings: [...new Set(warnings)], precedence, excluded: manifest.excluded.filter((entry) => entry.path !== CONFIG_IMPORTS_DIR) }

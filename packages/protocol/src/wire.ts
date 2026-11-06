@@ -7,9 +7,10 @@
  * strict schemas. Types still come from the schema modules (type-only imports are erased).
  */
 import { MAX_FRAME_BYTES, PROTOCOL_VERSION } from "./constants"
-export { estimateTokens } from "./constants"
+export { estimateTokens, IMAGE_TOKENS } from "./constants"
 export { usageContext, type UsageContextInput } from "./usage-context"
 export * from "./context-forecast"
+export { fileSignature, sameFileVersion, type FileStat } from "./file-signature"
 export * from "./backlog-data"
 export * from "./todo-list-data"
 export { claudeFastModel, findModel } from "./model-lookup"
@@ -17,13 +18,15 @@ export { clampWindow, modelContextOf, modelRef, MODEL_CONTEXT_LIMIT, MODEL_CONTE
 import type { Frame } from "./frames"
 export type { ComputerCaptureInput, ComputerKeyInput, ComputerCaptureMetadata, ComputerCaptureReport, ComputerKeyReport } from "./computer"
 export type { ComputerSessionInput, ComputerObserveInput, ComputerCodeInput, ComputerTarget, ComputerNode, ComputerSessionReport, ComputerObservation, ComputerCodeReport } from "./computer-session"
-export { graftReportedSavings } from "./graft-savings"
 export { layoutAttachments, attachmentOrder, attachmentPlacementProblem, pastedText, inlineTexts, MAX_ATTACHMENT_LABEL, type LayoutPart, type PlacedRef } from "./attachment-layout"
 export { setupImportKey, type SetupImportKeyParts } from "./setup-import-data"
 export { QUOTA_REFRESH_PROVIDERS, QUOTA_REFRESH_MIN_MINUTES, QUOTA_REFRESH_DEFAULT_MINUTES, QUOTA_REFRESH_COST, QUOTA_REFRESH_CLAUDE, normalizeQuotaRefresh, quotaRefreshIntervalMs, quotaRefreshProblems, quotaRefreshText, type QuotaRefreshEntry, type QuotaRefreshProvider } from "./quota-refresh-data"
-export { FOOTER_ROWS_MAX, FOOTER_ROW_SEGMENTS_MAX, FOOTER_HEIGHT_FRACTION, FOOTER_ICON_MODES, FOOTER_PRESETS, FOOTER_PRESET_NAMES, FOOTER_TEXT_MAX_ENTRIES, FOOTER_TEXT_MAX_CHARS, footerRowsProblems, footerSegmentProblem, footerTextLine, footerTextProblems, parseRowSegment, type FooterIconMode, type FooterPreset } from "./footer-rows-data"
+export { FOOTER_PACK_BUILTINS, FOOTER_PACK_CHIPS, FOOTER_PACK_CONTEXT, FOOTER_PACK_DEFAULT, FOOTER_PACK_GLYPH_SETS, FOOTER_PACK_NAME, FOOTER_PACK_OFF, FOOTER_PACK_QUOTA, FOOTER_PACK_ROWS_MAX, FOOTER_PACK_SEGMENTS, FOOTER_PACK_STYLES, FOOTER_PACK_SYMBOLS, footerPackProblems, type FooterPackFile, type FooterPackGlyphSet, type FooterPackLook, type FooterPackRow, type FooterPackSegment, type FooterPackSymbols } from "./footer-pack-data"
+export { FOOTER_DEFAULT_PRESET, FOOTER_ROWS_MAX, FOOTER_ROW_SEGMENTS_MAX, FOOTER_HEIGHT_FRACTION, FOOTER_ICON_MODES, FOOTER_PRESETS, FOOTER_PRESET_NAMES, FOOTER_TEXT_MAX_ENTRIES, FOOTER_TEXT_MAX_CHARS, footerRowsProblems, footerSegmentProblem, footerTextLine, footerTextProblems, parseRowSegment, type FooterIconMode, type FooterPreset } from "./footer-rows-data"
 export { PROMPT_MODES, PROMPT_FAMILIES, PROMPT_FOCUS_CHOICES, promptFocusLabel, promptCostLine, promptCostWarning, promptCostOf, type PromptModeCost, type PromptMode, type PromptFamily, type PromptFocusChoice, type PromptFocus, type PromptStatus, type PromptBuildReport } from "./prompt-data"
-export { TUI_DEFAULTS, TUI_ENUMS, TUI_OPERATIONS, ACTIVITY_PARTS, ACTIVITY_PARTS_DEFAULT, unknownActivityParts, STAT_PART_IDS, unknownStatParts, type StatPartId, tuiProblems, type ActivityPart, type TuiOperation, type TuiControlInput, type TuiControlReport } from "./tui-data"
+export { PLAN_APPLY_PERMISSIONS, PLAN_APPLY_DEFAULT, PLAN_APPLY_LABELS, PLAN_TURN_NOTES, PLAN_TURN_OFF_NOTE, createPlanTurnNotes, type PlanApplyPermission } from "./plan-review-data"
+export { TOOL_RAIL_DEFAULT, parseToolRail, toolRailProblems, toolRailShown, type ToolRailEntry, DEFAULT_TOOL_DESIGN_NAME, TOOL_DESIGN_NAME, TOOL_DESIGNS_DIR, TIMESTAMP_PLACES } from "./tool-rail-data"
+export { TUI_DEFAULTS, TUI_ENUMS, TUI_OPERATIONS, ACTIVITY_PARTS, ACTIVITY_PARTS_DEFAULT, ACTIVITY_STYLES, ACTIVITY_TOKEN_PARTS, unknownActivityTokens, unknownActivityParts, STAT_PART_IDS, unknownStatParts, type StatPartId, tuiProblems, type ActivityPart, type TuiOperation, type TuiControlInput, type TuiControlReport } from "./tui-data"
 export { TIERS, TIER_BUNDLES, TIER_BASELINE_TOKENS, MINIMALIST_SLASH, slashTier, FEATURES, FEATURE_IDS, tierIncludes, featureState, featureOn, effectiveSettings, tierRows, tierDiff, isTier, isFeatureId, setBuildChannel, buildChannel, type BuildChannel, type Tier, type TierBundle, type FeatureId, type FeatureSpec, type FeatureState, type TierRow, type TierSettings } from "./tier-data"
 
 export { assembleSchema, createSchemaCatalog, SCHEMA_PAGE_BYTES, SCHEMA_MAX_PAGES, type SchemaCatalog, type SchemaIndex, type SchemaIndexEntry, type SchemaPage } from "./schema-catalog"
@@ -32,9 +35,9 @@ export { AGENT_OPEN_COMMANDS, AGENT_CAPPED_COMMANDS, AGENT_ORIGIN_CAPABILITY, AG
 export { approvalRuleOffer, withApprovalRules, type ApprovalRule, type ApprovalRuleOffer, type ApprovalRuleLevel } from "./approval-rule"
 
 export { createIdFactory, ID_PREFIXES } from "./id-factory"
-export { DEFAULT_PROFILE, PROFILE_NAME, profileFor, type ProfileRule } from "./profiles"
+export { DEFAULT_AREA, AREA_NAME, areaFor, type AreaRule } from "./areas"
 export { findSecrets, redactEventText, redactSecrets, replaceSecretMarkers, replaceSecrets, secretMarker, type Redaction, type SecretFinding } from "./redact"
-export { DEFAULT_IDLE_COMPACT_AT_TOKENS, IDLE_COMPACT_MARGIN_MS, ANTHROPIC_CACHE_LIFETIME_MS, OPENAI_CACHE_LIFETIME_MS, CHATGPT_CACHE_LIFETIME_MS, ANTHROPIC_CACHE_LIFETIME_1H_MS, CACHE_TTLS, CACHE_TTL_PROVIDER_TYPES, WAIT_CACHE_AFTER, nextWaitCache, type CacheTtl, type WaitCacheState, CACHE_LIFETIME_MINUTES_RANGE, IDLE_COMPACT_OFF_REASONS, IDLE_COMPACT_NOTE, cacheLifetime, type CacheLifetime, type CacheLifetimeSource, type IdleCompactOffReason } from "./idle-compaction-data"
+export { DEFAULT_IDLE_COMPACT_AT_TOKENS, IDLE_COMPACT_MARGIN_MS, ANTHROPIC_CACHE_LIFETIME_MS, OPENAI_CACHE_LIFETIME_MS, CHATGPT_CACHE_LIFETIME_MS, ANTHROPIC_CACHE_LIFETIME_1H_MS, CACHE_TTLS, CACHE_TTL_PROVIDER_TYPES, WAIT_CACHE_AFTER, nextWaitCache, type CacheTtl, type WaitCacheState, CACHE_LIFETIME_MINUTES_RANGE, IDLE_COMPACT_OFF_REASONS, IDLE_COMPACT_NOTE, cacheLifetime, observedCacheLifetime, CACHE_HIT_SHARE, CACHE_SAMPLES_MAX, CACHE_SAMPLE_MIN_GAP_MS, CACHE_SAMPLE_WINDOW_MS, CACHE_SAMPLE_MIN_PROMPT_TOKENS, type CacheSample, type ObservedCacheLifetime, type CacheLifetime, type CacheLifetimeSource, type IdleCompactOffReason } from "./idle-compaction-data"
 export {
   DEFAULT_COMPACT_AT_TOKENS,
   DEFAULT_FOOTER,
@@ -124,6 +127,7 @@ export { AGENT_CREATE_PERMISSIONS, AGENT_CREATE_NAME, agentName } from "./agent-
 
 export * from "./project-data"
 export { adaptiveBounds } from "./loop-wire"
+export { RENAMED_SETTINGS, RENAMED_FEATURES, RENAMED_TOOLS, currentSettingKeys } from "./settings-renames"
 export { projectMessageEvent, revisedEvents } from "./message-projection"
 
 export type { BudgetPolicy, BudgetPrice, BudgetReport, SetupReport, SetupPreset } from "./setup"
@@ -140,3 +144,4 @@ export { FILE_VIEW_MAX_BYTES, FILE_VIEW_MAX_ROWS, FILE_VIEW_MAX_LINE, FILE_VIEW_
 export { highlight, isHighlighted, HIGHLIGHT_LANGUAGES, lexEntry, sanitizeState, isFreshState, type HighlightState } from "./syntax"
 export { ideContext, ideSelectionKey, type IdePosition, type IdeEditorName, type IdeSelection, type IdeReport, type IdeOpenReport } from "./ide-data"
 export { SLASH_LAYOUTS, SLASH_GROUPS, slashProfileProblems, type SlashLayout, type SlashGroupId, type SlashGroup, type SlashPreference } from "./slash-menu-data"
+export { DEFAULT_WORKTREE_GC_DAYS, effectiveWorktreeGcDays, worktreeCapBytes } from "./worktree-gc-data"

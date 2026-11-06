@@ -98,7 +98,7 @@ export function createPalette(ctx: AppContext, actions: {
         if (ref) actions.openRef(ref)
       } else if (item.id === "home:picker") state.palette = { query: "", selected: state.tuiProfile.homeLayout === "split" ? 1 : 0, title: "Home welcome mode" }
       else if (item.id.startsWith("home:")) {
-        // Through the one profile path, so a layer over the profile (a package's look) is never saved as the user's own.
+        // Through the one profile path, so a layer over the profile (a profile's look) is never saved as the user's own.
         actions.changeProfile({ homeLayout: value as "centered" | "split" })
       } else if (item.id.startsWith("customize:")) {
         await runKeepingDraft("/customize")

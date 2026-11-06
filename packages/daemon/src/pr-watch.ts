@@ -1,9 +1,11 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
 import path from "node:path"
 import { z } from "zod"
-import type { PrWatchPort } from "@mendcode/tools"
+import { captureOutput, type PrWatchPort } from "@mendcode/tools"
 import { redactSecrets } from "@mendcode/protocol/wire"
 import { clockMark, elapsed, failureKind, OUTAGE_LIMIT_MS, outageGap, type ClockMark } from "./pr-review/outage"
+import { describeWatches, FIELDS, noWatch, parseRef } from "./pr-watch-helpers"
+export { FIELDS, parseRef } from "./pr-watch-helpers"
 
 /**
  * PR watch (docs/pr-watch.md): the daemon polls linked pull requests through the user's own `gh` login and wakes the owning
@@ -20,25 +22,9 @@ const GH_TIMEOUT_MS = 15_000
 /** `gh` without a shell. A missing `gh` is a failed result (exit 127), never a throw. */
 export const ghProcess: GhRun = async ({ argv, cwd }) => {
   try {
-    const child = Bun.spawn(["gh", ...argv], { cwd, stdin: "ignore", stdout: "pipe", stderr: "pipe", env: { ...process.env, GH_PROMPT_DISABLED: "1", GH_NO_UPDATE_NOTIFIER: "1", GH_PAGER: "cat", NO_COLOR: "1" } })
-    const timer = setTimeout(() => child.kill(), GH_TIMEOUT_MS)
-    try {
-      const read = async (stream: ReadableStream<Uint8Array>, limit: number) => {
-        const chunks: Uint8Array[] = []
-        let bytes = 0
-        const reader = stream.getReader()
-        while (true) {
-          const part = await reader.read()
-          if (part.done) break
-          bytes += part.value.byteLength
-          if (bytes > limit) { child.kill(); throw new Error("gh output is too large") }
-          chunks.push(part.value)
-        }
-        return Buffer.concat(chunks).toString("utf8").trim()
-      }
-      const [out, err] = await Promise.all([read(child.stdout, OUTPUT_LIMIT), read(child.stderr, 64 * 1024)])
-      return { code: await child.exited, out, err }
-    } finally { clearTimeout(timer) }
+    const result = await captureOutput(["gh", ...argv], { cwd, stderr: "capture", env: { ...process.env, GH_PROMPT_DISABLED: "1", GH_NO_UPDATE_NOTIFIER: "1", GH_PAGER: "cat", NO_COLOR: "1" }, limit: OUTPUT_LIMIT, timeoutMs: GH_TIMEOUT_MS })
+    if (result.truncated) throw new Error("gh output is too large")
+    return { code: result.code, out: result.out.trim(), err: result.err.trim() }
   } catch (error) {
     return { code: 127, out: "", err: error instanceof Error ? error.message : String(error) }
   }
@@ -54,7 +40,6 @@ const MAX_ENDED = 30
 const MAX_SEEN = 400
 const MAX_PENDING = 12
 const EXCERPT = 280
-export const FIELDS = "number,title,url,state,isDraft,mergeable,reviewDecision,headRefName,baseRefName,author,statusCheckRollup,comments,reviews"
 
 export type CheckBucket = "pass" | "fail" | "pending" | "skip"
 export type Check = { name: string; bucket: CheckBucket; url?: string | undefined }
@@ -212,20 +197,6 @@ export type PrWatchOptions = {
 }
 
 export const DISABLED = "PR watch is off: it reaches the network through gh, so turn it on with /experimental pr_watch on"
-const REF_NUMBER =/^#?(\d{1,7})$/
-const REF_URL = /^https:\/\/github\.com\/([A-Za-z0-9_.-]{1,100})\/([A-Za-z0-9_.-]{1,100})\/pull\/(\d{1,7})(?:[/?#].*)?$/
-const REF_BRANCH = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,99}$/
-/** A PR reference as the watch accepts it: a number, a github.com pull URL or a branch; never an option or a shell string. */
-export function parseRef(value: string | undefined): { ok: true; arg?: string; number?: number; url?: string } | { ok: false; message: string } {
-  const text = value?.trim()
-  if (!text) return { ok: true }
-  const number = REF_NUMBER.exec(text)
-  if (number) return { ok: true, arg: number[1]!, number: Number(number[1]) }
-  const url = REF_URL.exec(text)
-  if (url) { const canonical = `https://github.com/${url[1]}/${url[2]}/pull/${url[3]}`; return { ok: true, arg: canonical, url: canonical, number: Number(url[3]) } }
-  if (REF_BRANCH.test(text) && !text.includes("..")) return { ok: true, arg: text }
-  return { ok: false, message: "pr must be a number, #number, a github.com pull request URL or a branch name" }
-}
 
 export function createPrWatch(options: PrWatchOptions) {
   const run = options.run ?? ghProcess
@@ -453,7 +424,7 @@ export function createPrWatch(options: PrWatchOptions) {
     if (!ref.ok) return ref
     const matches = (item: PrWatchRecord) => ref.url ? item.url === ref.url : ref.number !== undefined ? item.number === ref.number : item.head === ref.arg
     const targets = mine(sessionId).filter(active).filter((item) => !pr?.trim() || matches(item))
-    if (!targets.length) return { ok: false, message: pr?.trim() ? "no watch of this session matches that pull request" : "this session watches no pull request" }
+    if (!targets.length) return noWatch(pr)
     for (const target of targets) { target.pending = []; target.pendingOther = false; end(target, "stopped") }
     save()
     return { ok: true, text: `Stopped watching ${targets.map((item) => `#${item.number}`).join(", ")}.`, watches: list(sessionId) }
@@ -462,9 +433,7 @@ export function createPrWatch(options: PrWatchOptions) {
   function list(sessionId: string): PrWatchInfo[] {
     return mine(sessionId).sort((a, b) => b.createdAt - a.createdAt).slice(0, 20).map(info)
   }
-  const describe = (items: readonly PrWatchInfo[]) => items.length
-    ? items.map((item) => `#${item.number} ${JSON.stringify(clip(item.title, 80))} · ${item.state === "watching" ? "watching" : `ended (${item.state})`} · ${item.summary} · ${item.url}`).join("\n")
-    : "no pull request is watched by this session"
+  const describe = describeWatches
 
   /** A read of one PR without a watch or a wake: `/pr check`. */
   async function check(sessionId: string, pr: string | undefined): Promise<{ ok: true; text: string; watches: PrWatchInfo[] } | { ok: false; message: string }> {

@@ -1,6 +1,7 @@
 import type { Database } from "bun:sqlite"
 import type { SessionEvent, UsageActivityDay, UsageDay, UsageInsights, UsageModel, UsageTool } from "@mendcode/protocol"
 import { streaks } from "./usage-insights"
+import { eventFromRow } from "./compress"
 
 type Range = { from: string; to: string; directories: string[] }
 type Started = { turn?: number; items: Map<string, { at: number; kind: string; tool?: string }> }
@@ -98,7 +99,7 @@ export function createUsageScopes(input: { db: Database; dayOf(at: number): stri
   // Upgrade once, transactionally, including databases with more than a client event window of history.
   if (!db.query("SELECT 1 FROM meta WHERE key = 'usage_scopes_backfill'").get()) {
     db.transaction(() => {
-      for (const row of db.query<{ payload: string }, []>("SELECT payload FROM events ORDER BY session_id, seq").iterate()) record(JSON.parse(row.payload) as SessionEvent)
+      for (const row of db.query<import("./compress").EventRow, []>("SELECT session_id, seq, type, at, payload FROM events ORDER BY session_id, seq").iterate()) record(eventFromRow(row))
       db.run("INSERT INTO meta(key, value) VALUES ('usage_scopes_backfill', '1')")
     })()
     starts.clear()

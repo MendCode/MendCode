@@ -1,4 +1,7 @@
+import { deflateRawSync, inflateRawSync } from "node:zlib"
 import type { SessionEvent } from "@mendcode/protocol"
+import { MESSAGE_DICTIONARY_V1 } from "./message-dictionary"
+import { abbreviateMessage, expandMessage } from "./message-prefix"
 
 /** Text and file content shorter than this stays as it is: the zstd frame would eat the gain. */
 export const COMPRESS_MIN_BYTES = 1024
@@ -10,6 +13,8 @@ const KIND_ZSTD = 0x5a
 const KIND_RAW = 0x52
 const KIND_REF = 0x46
 const KIND_MESSAGE = 0x45
+/** A small model message deflated against `MESSAGE_DICTIONARY_V1` (message-dictionary.ts); the body inflates to its abbreviated form. */
+const KIND_DICT = 0x44
 const HEADER_BYTES = 9
 const SHA_BYTES = 32
 
@@ -70,9 +75,20 @@ export function createCodec(options: { enabled?: boolean; objects?: { put(text: 
   return {
     enabled,
 
-    /** JSON text of an engine message: plain TEXT when small, a zstd BLOB when that is smaller. */
+    /**
+     * JSON text of an engine message. Under `COMPRESS_MIN_BYTES`: deflated against the message dictionary when that is smaller,
+     * its abbreviated TEXT otherwise (MendCode's own sessions: 46 % smaller than as TEXT, against 31 % for zstd alone). From there:
+     * a zstd BLOB when that is smaller.
+     */
     packText(text: string): string | Uint8Array {
-      if (!enabled || text.length < COMPRESS_MIN_BYTES) return text
+      if (!enabled) return text
+      if (text.length < COMPRESS_MIN_BYTES) {
+        const short = abbreviateMessage(text)
+        const bytes = encoder.encode(short)
+        if (decoder.decode(bytes) !== short) return short
+        const packed = deflateRawSync(bytes, { level: 9, dictionary: MESSAGE_DICTIONARY_V1 })
+        return packed.byteLength + HEADER_BYTES < bytes.byteLength ? wrap(KIND_DICT, Buffer.byteLength(text), packed) : short
+      }
       // Keep the exact JSON envelope, sharing only content already present in the transcript.
       if (options.objects) {
         let message: Record<string, unknown> | undefined
@@ -94,8 +110,8 @@ export function createCodec(options: { enabled?: boolean; objects?: { put(text: 
     },
     unpackText(value: StoredValue): string {
       if (value === null || value === undefined) return ""
-      if (typeof value === "string") return value
-      if (!isWrapped(value)) return decoder.decode(value)
+      if (typeof value === "string") return expandMessage(value)
+      if (!isWrapped(value)) return expandMessage(decoder.decode(value))
       if (value[4] === KIND_MESSAGE) {
         const body = bodyOf(value)
         const hash = bytesToHex(body.subarray(0, SHA_BYTES))
@@ -106,6 +122,7 @@ export function createCodec(options: { enabled?: boolean; objects?: { put(text: 
         return JSON.stringify(message)
       }
       if (value[4] === KIND_ZSTD) return decoder.decode(Bun.zstdDecompressSync(bodyOf(value)))
+      if (value[4] === KIND_DICT) return expandMessage(decoder.decode(inflateRawSync(bodyOf(value), { dictionary: MESSAGE_DICTIONARY_V1 })))
       return decoder.decode(bodyOf(value))
     },
     /** Raw size of a packed text: how much the row would take without compression. */
@@ -119,7 +136,7 @@ export function createCodec(options: { enabled?: boolean; objects?: { put(text: 
     packEvent(event: SessionEvent, json: string, toolCall: boolean): string {
       if (!enabled || json.length < COMPRESS_MIN_BYTES) return json
       if (event.type !== "item.completed" && event.type !== "item.delta") return json
-      if (!toolCall && !(event.type === "item.completed" && event.toolInput !== undefined)) return json
+      if (!toolCall && event.type !== "item.completed") return json
       const text = event.text
       if (typeof text !== "string" || text.length < COMPRESS_MIN_BYTES) return json
       const bytes = encoder.encode(text)
@@ -127,7 +144,7 @@ export function createCodec(options: { enabled?: boolean; objects?: { put(text: 
       const packed = zstd(bytes)
       if (!packed) return json
       const based = Buffer.from(packed).toString("base64")
-      if (options.objects && based.length < text.length * 0.8) return JSON.stringify({ ...event, text: "", z: text.length, zref: options.objects.put(text) })
+      if (options.objects && (toolCall || event.type === "item.completed" && event.toolInput !== undefined) && based.length < text.length * 0.8) return JSON.stringify({ ...event, text: "", z: text.length, zref: options.objects.put(text) })
       return based.length < text.length * 0.8 ? JSON.stringify({ ...event, text: based, z: text.length }) : json
     },
 
@@ -159,6 +176,71 @@ export type Codec = ReturnType<typeof createCodec>
 /** Resolves a shared event object (event-objects.ts) to the base64 of its zstd bytes, the form a packed event carries in `text`. */
 export type ObjectLoader = (sha256: string) => string | undefined
 
+/** An `events` row: the envelope (session, sequence, time, type) lives in its columns. */
+export type EventRow = { session_id: string; seq: number; type: string; at: number; payload: string }
+/** A row read for a known session. */
+export type OwnEventRow = { seq: number; type: string; at: number; payload: string }
+
+/**
+ * SQL for an inherited row's payload (`e` the parent's event, `p` its transcript_prefix address): a legacy payload gets
+ * the reader's session and sequence written into its envelope; a compact one takes them from the address columns.
+ */
+export const INHERITED_PAYLOAD = `CASE WHEN substr(e.payload, 1, 12) = '{"sessionId"' THEN json_set(e.payload, '$.sessionId', p.session_id, '$.seq', p.seq) ELSE e.payload END`
+
+/** Protocol ids/types contain no JSON escapes. Noncanonical legacy JSON is never compacted. */
+function envelopePrefix(sessionId: string, seq: number, at: number, type: string): string {
+  return `{"sessionId":"${sessionId}","seq":${seq},"at":${at},"type":"${type}"`
+}
+
+/** The stored form of an event row: its JSON without the leading envelope its columns already hold. Lossless by construction. */
+export function compactEnvelope(payload: string, event: { sessionId: string; seq: number; at: number; type: string }): string {
+  const prefix = envelopePrefix(event.sessionId, event.seq, event.at, event.type)
+  if (!payload.startsWith(prefix)) return payload
+  const next = payload.charCodeAt(prefix.length)
+  if (next === 44 /* , */) return "{" + payload.slice(prefix.length + 1)
+  return next === 125 /* } */ && payload.length === prefix.length + 1 ? "{}" : payload
+}
+
+const PROFILE_KEYS = ["instructions", "memory", "history", "toolResults", "toolSchemas", "media", "total"] as const
+const PROFILE_TEXT = /,"profile":\{"estimatedTokens":\{"instructions":(\d+),"memory":(\d+),"history":(\d+),"toolResults":(\d+),"toolSchemas":(\d+),"media":(\d+),"total":(\d+)\},"firstTokenMs":(\d+|null),"durationMs":(\d+),"toolCount":(\d+),"imageCount":(\d+)\}/
+
+/**
+ * The stored form of a `usage.recorded` request profile: its eleven numbers in a fixed order instead of five nested key
+ * names per call. Only the exact serialization of the protocol's profile is rewritten; `unpackEvent` restores the object.
+ */
+export function compactProfile(payload: string, type: string): string {
+  if (type !== "usage.recorded") return payload
+  return payload.replace(PROFILE_TEXT, (_, ...found: string[]) => `,"profile":[${found.slice(0, 11).join(",")}]`)
+}
+
+function expandProfile(values: unknown[]): Record<string, unknown> {
+  const estimatedTokens: Record<string, unknown> = {}
+  PROFILE_KEYS.forEach((key, index) => { estimatedTokens[key] = values[index] })
+  return { estimatedTokens, firstTokenMs: values[7], durationMs: values[8], toolCount: values[9], imageCount: values[10] }
+}
+
+/** A payload written before envelopes moved to columns carries its envelope itself. */
+export function hasEnvelope(payload: string): boolean {
+  return payload.startsWith('{"sessionId"')
+}
+
+/** The full serialized event of a row, byte-identical to what was appended. */
+export function eventPayload(row: EventRow): string {
+  if (hasEnvelope(row.payload)) return row.payload
+  const prefix = envelopePrefix(row.session_id, row.seq, row.at, row.type)
+  return prefix + (row.payload === "{}" ? "}" : "," + row.payload.slice(1))
+}
+
+/** The event of a stored row, with the original key order (envelope first). */
+export function eventFromColumns<T = SessionEvent>(sessionId: string, seq: number, at: number, type: string, payload: string, load?: ObjectLoader): T {
+  if (hasEnvelope(payload)) return parseEvent<T>(payload, load)
+  return unpackEvent({ sessionId, seq, at, type, ...(JSON.parse(payload) as Record<string, unknown>) }, load) as T
+}
+
+export function eventFromRow<T = SessionEvent>(row: EventRow, load?: ObjectLoader): T {
+  return eventFromColumns<T>(row.session_id, row.seq, row.at, row.type, row.payload, load)
+}
+
 /** `JSON.parse` of a stored event payload, undoing `packEvent` (and, with `load`, the sharing of large output with forks). */
 export function parseEvent<T = SessionEvent>(payload: StoredValue, load?: ObjectLoader): T {
   const event = JSON.parse(typeof payload === "string" ? payload : decoder.decode(payload ?? new Uint8Array())) as Record<string, unknown>
@@ -166,6 +248,7 @@ export function parseEvent<T = SessionEvent>(payload: StoredValue, load?: Object
 }
 
 export function unpackEvent(event: Record<string, unknown>, load?: ObjectLoader): Record<string, unknown> {
+  if (Array.isArray(event.profile) && event.profile.length === 11) event.profile = expandProfile(event.profile)
   if (typeof event.zref === "string") {
     const based = load?.(event.zref)
     if (based === undefined) throw new RangeError(`[STORE]: shared output ${event.zref.slice(0, 12)} is not available`)

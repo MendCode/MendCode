@@ -195,3 +195,56 @@ describe("tool schemas Claude Code accepts", () => {
     bridge.stop()
   })
 })
+
+describe("a call that waits on the user's answer", () => {
+  function waitingBridge(pendingMs: number) {
+    let handler: ((request: Request) => Promise<Response>) | undefined
+    const answers: Array<(text: string) => void> = []
+    let finished: string | undefined
+    const host = createHostMcp({
+      enabled: () => true,
+      directory: () => "/project",
+      tools: async () => TOOLS,
+      pendingMs,
+      call: async ({ turn, name }) => {
+        if (name === "graph_find") return { output: "found", isError: false }
+        const answer = await (turn as { ask: (request: unknown) => Promise<{ text: string }> }).ask({ kind: "question", title: "Change settings?", detail: "x" })
+        finished = answer.text
+        return { output: `Applied ${answer.text}`, isError: false }
+      },
+      listen: (handle) => { handler = handle; return { url: "http://127.0.0.1:1/mcp", stop() { handler = undefined } } },
+    })
+    const auth = JSON.parse(readFileSync(host.args(SESSION)[1]!, "utf8")).mcpServers[HOST_MCP_SERVER].headers.Authorization as string
+    const turn = { sessionId: SESSION, turnId: "turn_1", signal: new AbortController().signal, ask: () => new Promise((resolve) => answers.push((text) => resolve({ kind: "answer", text }))) } as unknown as TurnInput
+    host.enter(turn)
+    const call = (name: string) => handler!(new Request("http://127.0.0.1:1/mcp", { method: "POST", headers: { "content-type": "application/json", authorization: auth }, body: JSON.stringify({ jsonrpc: "2.0", id: 7, method: "tools/call", params: { name, arguments: {} } }) })).then((response) => response.json() as Promise<any>)
+    return { call, answers, finished: () => finished, host }
+  }
+
+  test("past the limit the harness is told it is pending, not left to time out, and the card still works when answered", async () => {
+    const { call, answers, finished, host } = waitingBridge(40)
+    const reply = await call("computer_observe")
+    expect(reply.result.isError).toBe(false)
+    expect(reply.result.content[0].text).toStartWith("Pending:")
+    expect(reply.result.content[0].text).toContain("Do not call this tool again")
+    // The call is still waiting for the user: the other harness is not idle.
+    expect(host.waiting()).toBe(true)
+    answers[0]!("Apply")
+    await Bun.sleep(20)
+    expect(finished()).toBe("Apply")
+    expect(host.waiting()).toBe(false)
+  })
+
+  test("a call that is not waiting on the user is never cut short, however long it takes", async () => {
+    const { call } = waitingBridge(10)
+    expect((await call("graph_find")).result.content[0].text).toBe("found")
+  })
+
+  test("an answer inside the limit is the tool's own result", async () => {
+    const { call, answers } = waitingBridge(5_000)
+    const running = call("computer_observe")
+    await Bun.sleep(10)
+    answers[0]!("Don't apply")
+    expect((await running).result.content[0].text).toBe("Applied Don't apply")
+  })
+})

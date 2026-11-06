@@ -40,7 +40,7 @@ An MCP server entry with a `url` instead of a `command` is a remote server. It i
 |---|---|
 | `url` | http(s) URL. Set exactly one of `url` or `command`. |
 | `transport` | `"http"` or `"sse"` to skip the automatic choice. |
-| `headers` | Sent on every request; `${VAR}` (or `{env:VAR}`, the v1/opencode spelling) is expanded from the environment like everywhere in `mcp.json`. `{file:path}` is a file's text without its final newline (relative to the `mcp.json`, or `~/…`; at most 64 KB), for a token kept in its own file. It is read only in your own `mcp.json` and a trusted project's own, never in a package's (a package could send your files to its server); a missing file becomes empty and is reported in `/mcp`. |
+| `headers` | Sent on every request; `${VAR}` (or `{env:VAR}`, the v1/opencode spelling) is expanded from the environment like everywhere in `mcp.json`. `{file:path}` is a file's text without its final newline (relative to the `mcp.json`, or `~/…`; at most 64 KB), for a token kept in its own file. It is read only in your own `mcp.json` and a trusted project's own, never in a profile's (a profile could send your files to its server); a missing file becomes empty and is reported in `/mcp`. |
 | `oauth` | `false` turns OAuth off (a 401 then just means the headers are wrong). An object sets `clientId`, `clientSecret` (for a client registered by hand), `scope`, `callbackPort` and `redirectUri`. |
 | `timeoutMs` | As for local servers. |
 | `elicitation` | `false` stops the client announcing elicitation to this server (local or remote); its questions are then declined. On by default. |
@@ -133,11 +133,11 @@ A server may ask the user for input while a tool call is running (`elicitation/c
 
 ## Project servers and trust
 
-A server that comes from a project (`<project>/.mendcode/mcp.json` or a project package's `mcp.json`) can run a command or reach a URL of the repository's choosing, so it follows the same `/tools` trust as project hooks, extensions and custom tools. While the directory is not trusted, such a server is listed in `/mcp` and `mcp.status` with `needsTrust` and nothing else happens: no process is spawned, no URL is contacted, no tools, prompts or resources are discovered, and no OAuth starts; calling one of its names answers as if the server did not exist. User-scope servers (`<dataDir>/mcp.json`, user packages) are unaffected.
+A server that comes from a project (`<project>/.mendcode/mcp.json` or a project profile's `mcp.json`) can run a command or reach a URL of the repository's choosing, so it follows the same `/tools` trust as project hooks, extensions and custom tools. While the directory is not trusted, such a server is listed in `/mcp` and `mcp.status` with `needsTrust` and nothing else happens: no process is spawned, no URL is contacted, no tools, prompts or resources are discovered, and no OAuth starts; calling one of its names answers as if the server did not exist. User-scope servers (`<dataDir>/mcp.json`, user profiles) are unaffected.
 
 A trusted project's stdio server starts with the shell-hook environment policy: names that look like credentials (`CREDENTIAL_ENV`: provider and cloud keys, tokens, passwords) are not inherited unless the server's own `env` lists them (a literal value or a `${VAR}` reference written in its config).
 
-The server set is rebuilt, not just read once, whenever it can change: package install, enable, disable and remove, and trusting or untrusting a directory. Servers that are no longer configured stop (an idle one at once, one in use after its call), new ones are available lazily, and an entry whose command, URL or env changed restarts on next use. A reload never discards a running client whose configuration did not change.
+The server set is rebuilt, not just read once, whenever it can change: profile install, enable, disable and remove, and trusting or untrusting a directory. Servers that are no longer configured stop (an idle one at once, one in use after its call), new ones are available lazily, and an entry whose command, URL or env changed restarts on next use. A reload never discards a running client whose configuration did not change.
 
 ## Resources and prompts
 

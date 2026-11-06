@@ -1,6 +1,6 @@
 ---
 summary: how long Anthropic keeps the prompt cache: 5m or 1h, and Claude Code's
-docs: prompt-cache, claude-code, compaction
+docs: prompt-cache, claude-code, compaction, message-threads
 aliases: ttl, cache-lifetime, one-hour-cache
 ---
 For: "keep the Anthropic cache longer", "my cache expires while the tests run", "1h cache", "does Claude Code get the 1h cache".
@@ -18,5 +18,7 @@ Compaction while idle follows the call: after one written at 1h it starts 59 min
 Claude Code as the engine manages its own cache. /settings row "claude ttl" ([[setting:claudeCacheTtl]], off in every tier): with cache ttl at 1h, each new Claude Code process is started with CLAUDE_CODE_PROMPT_CACHE_TTL=1h and CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL=1h (Claude Code 2.1.242 or later). At 5m nothing is passed and Claude Code keeps its defaults: on a subscription the main conversation already gets an hour, its sub-agents 5 minutes.
 
 How long it has left, full tier, off until placed ([[feature:cache_countdown]]; the user runs /footer +warm, or /tier cache_countdown on outside full): "cache 12m", "cache cold · next sends 161K" after; "~" when the lifetime is assumed (ChatGPT). Where expiries cost: /usage tab Waste, {{program}} stats --waste.
+
+Message threads ([[feature:message_threads]], every tier, Anthropic API key only; /tier message_threads off): each native call sends only its new messages; a compaction, undo or changed tools start a new thread, a thread error resends all. Not ZDR eligible: [[setting:zeroDataRetention]] true turns them off.
 
 Not possible: a lifetime other than 5m or 1h; a longer lifetime on OpenAI, ChatGPT, Bedrock or any other provider; pings that keep a cache warm.

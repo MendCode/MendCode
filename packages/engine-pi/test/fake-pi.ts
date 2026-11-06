@@ -103,7 +103,7 @@ async function run(id: string, said: string, images: unknown[]) {
   }
   if (said.startsWith("tool")) {
     const tool = said.split(" ")[1] ?? "bash"
-    const payload = said.slice(`tool ${tool}`.length).trim()
+    const payload = said.split("\n")[0]!.slice(`tool ${tool}`.length).trim()
     const input = payload ? JSON.parse(payload) : tool === "bash" ? { command: "ls -la" } : tool === "edit" ? { path: "a.ts", edits: [{ oldText: "a", newText: "b" }] } : { path: "a.txt" }
     startRun()
     emit({ type: "message_update", usage, assistantMessageEvent: { type: "toolcall_start", contentIndex: 0, id: "t1", toolName: tool } })
@@ -119,7 +119,7 @@ async function run(id: string, said: string, images: unknown[]) {
   }
   if (said.startsWith("ext-")) {
     startRun()
-    const kind = said.slice(4).split(" ")[0]
+    const kind = said.slice(4).split(/[ \n]/)[0]
     const request = kind === "confirm" ? { method: "confirm", title: "Clear it?", message: "All of it." } : kind === "select" ? { method: "select", title: "Pick one", options: ["red", "green"] } : kind === "allow" ? { method: "select", title: "Run rm -rf?", options: ["Yes", "No"] } : kind === "input" ? { method: "input", title: "Name?", placeholder: "x" } : { method: "editor", title: "Edit", prefill: "draft" }
     const answer = await dialog(request)
     await text(`answer:${JSON.stringify({ value: answer.value, confirmed: answer.confirmed, cancelled: answer.cancelled })}`)

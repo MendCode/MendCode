@@ -2,7 +2,7 @@ import { modelAllowed } from "./models"
 import type { ModelsDev } from "./models-dev"
 import { chmodSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs"
 import path from "node:path"
-import { PROVIDER_ID, ProviderBaseUrl, ProviderId, ProviderModel, ProviderType, ProviderSdkModule, type ModelInfo, type ProviderInfo, type ProviderTestResult, type ProviderAdapter, ProviderOptions, ProviderConfig, ModelParameters, redactSecrets, type ModelChoice, type Settings } from "@mendcode/protocol"
+import { fileSignature, PROVIDER_ID, ProviderBaseUrl, ProviderId, ProviderModel, ProviderType, ProviderSdkModule, type ModelInfo, type ProviderInfo, type ProviderTestResult, type ProviderAdapter, ProviderOptions, ProviderConfig, ModelParameters, redactSecrets, type ModelChoice, type Settings } from "@mendcode/protocol"
 import {
   DEFAULT_PROVIDER_EFFORT,
   PROVIDER_PRESETS,
@@ -19,19 +19,7 @@ import {
   createCopilotAuth,
   copilotUrl,
   type CopilotAuth,
-  azureBaseUrl,
-  createAzureEntraCredential,
-  createAwsCredentialChain,
-  bedrockRegion,
-  bedrockBaseUrl,
   awsEndpoint,
-  vertexRouting,
-  vertexAnthropicRouting,
-  isVertexType,
-  VERTEX_ANTHROPIC_MODEL,
-  vertexBaseUrl,
-  vertexEndpoint,
-  createGoogleAdcCredential,
   xaiBaseUrl,
   xaiVariants,
   mistralBaseUrl,
@@ -48,7 +36,6 @@ import {
   sapAiConfig,
   parseSapServiceKey,
   zenmuxUrl,
-  geminiUrl,
   gitlabUrl,
   gitlabConfig,
   cerebrasUrl,
@@ -68,6 +55,8 @@ import {
   cloudflareGatewayBaseUrl,
   CLOUDFLARE_GATEWAY_MODEL,
 } from "@mendcode/engine-native"
+import { azureBaseUrl, bedrockRegion, bedrockBaseUrl, vertexRouting, vertexAnthropicRouting, isVertexType, VERTEX_ANTHROPIC_MODEL, vertexBaseUrl, vertexEndpoint, geminiUrl } from "../../engine-native/src/provider-endpoints"
+import { createAwsCredentialChain, createAzureEntraCredential, createGoogleAdcCredential } from "../../engine-native/src/lazy-credentials"
 import { z } from "zod"
 import { CompactionOverride } from "@mendcode/protocol"
 import { AzureOptions } from "@mendcode/protocol"
@@ -232,7 +221,7 @@ export function createProviderService(options: { dir: string; env?: Env; fetch?:
     let insecure = false
     try {
       const stat = statSync(file)
-      stamp = `${stat.mtimeMs}:${stat.size}`
+      stamp = fileSignature(stat)
       insecure = (stat.mode & 0o077) !== 0
     } catch {
       cache = { stamp, entries: {} }
@@ -261,9 +250,31 @@ export function createProviderService(options: { dir: string; env?: Env; fetch?:
   }
 
   function save(entries: Record<string, Entry>) {
+    // Only fields changed from the parsed view are owned by this writer. Keep raw future entries/fields.
+    let raw: Record<string, unknown> = {}
+    try {
+      raw = JSON.parse(readFileSync(file, "utf8"))
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("Invalid providers.json")
+    } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw new Error("Cannot save unreadable providers.json; repair it first") }
+    const previous = load().entries
+    const providers = { ...(raw.providers && typeof raw.providers === "object" && !Array.isArray(raw.providers) ? raw.providers as Record<string, unknown> : {}) }
+    for (const id of new Set([...Object.keys(previous), ...Object.keys(entries)])) {
+      const next = entries[id]
+      if (!next) { delete providers[id]; continue }
+      if (JSON.stringify(previous[id]) === JSON.stringify(next)) continue
+      const stored = providers[id]
+      const merged: Record<string, unknown> = stored && typeof stored === "object" && !Array.isArray(stored) ? { ...stored } : {}
+      for (const key of new Set([...Object.keys(previous[id] ?? {}), ...Object.keys(next)])) {
+        const value = (next as Record<string, unknown>)[key]
+        if (JSON.stringify((previous[id] as Record<string, unknown> | undefined)?.[key]) === JSON.stringify(value)) continue
+        if (value === undefined) delete merged[key]
+        else merged[key] = value
+      }
+      providers[id] = merged
+    }
     mkdirSync(options.dir, { recursive: true })
     const temporary = `${file}.${process.pid}.tmp`
-    writeFileSync(temporary, `${JSON.stringify({ providers: entries }, null, 2)}\n`, { mode: 0o600 })
+    writeFileSync(temporary, `${JSON.stringify({ ...raw, providers }, null, 2)}\n`, { mode: 0o600 })
     chmodSync(temporary, 0o600)
     renameSync(temporary, file)
     cache = undefined

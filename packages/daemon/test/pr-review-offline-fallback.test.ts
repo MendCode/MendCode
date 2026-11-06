@@ -318,7 +318,12 @@ describe("/pr review on an all watch", () => {
     await until(() => vps.job(14, "team")?.state === "done")
     expect(hub.reviews.get(14)).toHaveLength(1)
     clock.now += MINUTE
-    expect((await vps.service.control({ sessionId: "ses", action: "review", pr: "14" })).ok).toBe(true)
+    // Asked again on the same head as the same reviewer (team): answered at once, so no second job and certainly none as global.
+    const again = await vps.service.control({ sessionId: "ses", action: "review", pr: "14" })
+    expect(again.ok && again.text).toContain("was already reviewed at")
+    expect(vps.jobs(14).map((job) => job.reviewer)).toEqual(["team"])
+    // An explicit full review runs, still as team.
+    expect((await vps.service.control({ sessionId: "ses", action: "review", pr: "14", full: true })).ok).toBe(true)
     await until(() => vps.jobs(14).length === 2 && vps.jobs(14).every((job) => ["done", "failed", "stale"].includes(job.state)))
     expect(vps.jobs(14).map((job) => job.reviewer)).toEqual(["team", "team"])
     expect(vps.jobs(14).some((job) => job.reviewer === "global")).toBe(false)

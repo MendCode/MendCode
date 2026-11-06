@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises"
 import type { BlobRef, ItemId, ItemKind, SessionId, TodoListItem } from "@mendcode/protocol"
-import { todoListCard, todoListStatus } from "@mendcode/protocol/wire"
+import { createPlanTurnNotes, todoListCard, todoListStatus } from "@mendcode/protocol/wire"
 import { processMcpTurn, realClock, type Clock, type EngineEnvironment, type EnginePort, type EngineResolution, type GlobalEventDraft, type TimerHandle, type TurnInput, type TurnOutcome } from "@mendcode/kernel"
 import { createRpc, spawnCodex, type Transport } from "./rpc"
 import { codexLanguageInstruction, codexRunLimits, type CodexRunLimits } from "./run-limits"
@@ -151,6 +151,9 @@ function hostServerConfig(servers: readonly HostServer[]) {
   }
   return { args, env, names }
 }
+
+/** Codex is told only that its sandbox is read-only, so every turn in plan carries a short note; module-wide because a turn with its own MCP servers runs in a fresh engine. */
+const planNotes = createPlanTurnNotes("reply")
 
 export function createCodexEngine(options: {
   cwd: string
@@ -406,6 +409,7 @@ export function createCodexEngine(options: {
       const threadId = await threadFor(input.sessionId, input.permissionMode() === "plan")
       // A cancel while Codex started or the thread opened: its abort event is gone, so nothing may be sent now.
       if (input.signal.aborted) return { status: "ok" }
+      const planNote = planNotes.next(input.sessionId, input.permissionMode() === "plan", input.readOnlyRun === true)
       return new Promise<TurnOutcome>((resolve) => {
         let settled = false
         const turn: ActiveTurn = {
@@ -443,7 +447,7 @@ export function createCodexEngine(options: {
         )
         rpc!
           .request("turn/start", {
-            threadId, input: [{ type: "text", text: input.text, text_elements: [] }], model, effort,
+            threadId, input: [{ type: "text", text: planNote ? `${input.text}\n${planNote}` : input.text, text_elements: [] }], model, effort,
             // A resumed thread may have had a different ceiling on its previous turn.
             sandboxPolicy: input.permissionMode() === "plan" ? { type: "readOnly" } : { type: "workspaceWrite", writableRoots: [options.cwd], networkAccess: false },
           })

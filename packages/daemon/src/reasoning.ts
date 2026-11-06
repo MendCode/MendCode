@@ -7,7 +7,7 @@ import { featureOn, findModel } from "@mendcode/protocol/wire"
 import { createReasoningController, type ReasoningEvaluator } from "@mendcode/engine-native"
 import type { Store } from "@mendcode/store"
 import { resolveModel, type ModelCatalog } from "./models"
-import { rolesFor } from "./profiles"
+import { rolesFor } from "./areas"
 import type { BudgetPort } from "./budgets"
 
 const defaults: Policy = { version: 1, mode: "off", remoteProcessing: false, provider: "openrouter", maxLeaseSteps: 2, maxDecisionsPerTurn: 8, failureMode: "pause" }

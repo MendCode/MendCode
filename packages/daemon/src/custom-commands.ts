@@ -99,7 +99,7 @@ const MAX_TEMPLATE_FILE_BYTES = 256 * 1024
 
 /**
  * A template's `{file:path}` references (v1's and opencode's spelling) replaced by the file's text. The path is relative to the
- * config file and must stay inside `root` (the project, the user's folder or the package): a command is prompt data, it cannot
+ * config file and must stay inside `root` (the project, the user's folder or the profile): a command is prompt data, it cannot
  * pull in files from elsewhere on the machine.
  */
 function inlineFiles(template: string, base: string, root: string): string {

@@ -21,7 +21,7 @@ async function fixture() {
   const dir = temp(), project = temp(), source = temp()
   for (const name of ["alpha", "beta", "retro", "modern"]) {
     const activate = name === "retro" ? { tuiProfile: { density: "compact" } } : name === "modern" ? { tuiProfile: { density: "spacious" } } : undefined
-    write(path.join(source, name, "mendcode-package.json"), JSON.stringify({ name, version: "1.0.0", description: `${name} package`, ...(activate ? { activate } : {}) }))
+    write(path.join(source, name, "mendcode-profile.json"), JSON.stringify({ name, version: "1.0.0", description: `${name} profile`, ...(activate ? { activate } : {}) }))
     write(path.join(source, name, "skills", name, "SKILL.md"), `---\nname: ${name}\ndescription: ${name} helpers\n---\n${name}`)
     write(path.join(source, name, "commands", "example.md"), `${name} command`)
   }
@@ -38,7 +38,7 @@ async function fixture() {
   await client.connect()
   cleanups.push(() => client.close())
   expect(await client.send({ type: "settings.set", patch: { tier: "balanced" } })).toMatchObject({ ok: true })
-  expect(await client.send({ type: "packages.add-source", directory: project, sourceId: "team", location: source, enabled: true })).toMatchObject({ ok: true })
+  expect(await client.send({ type: "profiles.add-source", directory: project, sourceId: "team", location: source, enabled: true })).toMatchObject({ ok: true })
   const created = await client.send({ type: "session.create", directory: project })
   expect(created.ok).toBe(true)
   if (!created.ok) throw new Error(created.error.message)
@@ -50,7 +50,7 @@ async function fixture() {
   return { port, apply, trust, look, dir, project, source, restrict: (value: string) => restrict(sessionId, value), client }
 }
 
-test("faux daemon shares all local package actions, coexistence and Trash with /packages", async () => {
+test("faux daemon shares all local package actions, coexistence and Trash with /profiles", async () => {
   const fixtureData = await fixture()
   const { port, apply, dir, project, client } = fixtureData
   expect((await port.run({ action: "search", sourceId: "team" })).entries).toBeDefined()
@@ -65,13 +65,13 @@ test("faux daemon shares all local package actions, coexistence and Trash with /
   await apply({ action: "disable", key: "user:alpha" })
   expect((await port.run({ action: "list" })).packages).toContainEqual(expect.objectContaining({ name: "alpha", enabled: false }))
   await apply({ action: "enable", key: "user:alpha" })
-  expect(await client.send({ type: "packages.list", directory: project })).toMatchObject({ ok: true, result: await port.run({ action: "list" }) })
+  expect(await client.send({ type: "profiles.list", directory: project })).toMatchObject({ ok: true, result: await port.run({ action: "list" }) })
   const location = listPackages({ userDir: dir, directory: project }).find((pkg) => pkg.name === "alpha")!.dir
   await apply({ action: "remove", key: "user:alpha" })
   expect(existsSync(location)).toBe(false)
   expect(JSON.stringify(listTrash({ base: dir }))).toContain("alpha")
   const scaffold = await apply({ action: "new", name: "draft", scope: "user" })
-  expect(existsSync(path.join(scaffold.dir as string, "mendcode-package.json"))).toBe(true)
+  expect(existsSync(path.join(scaffold.dir as string, "mendcode-profile.json"))).toBe(true)
   expect(await port.run({ action: "check", name: "draft", scope: "user" })).toMatchObject({ check: { ok: true } })
 })
 
@@ -100,7 +100,7 @@ test("look switch is explicit and disabling the owner restores the prior look", 
   await apply({ action: "install", name: "retro", sourceId: "team", scope: "user" })
   expect(look().overlay.density).toBe("compact")
   await expect(port.preview({ action: "install", name: "modern", sourceId: "team", scope: "user" })).rejects.toThrow("switch-look")
-  expect(await client.send({ type: "packages.install-catalog", directory: project, name: "modern", sourceId: "team", scope: "user" })).toMatchObject({ ok: false })
+  expect(await client.send({ type: "profiles.install-catalog", directory: project, name: "modern", sourceId: "team", scope: "user" })).toMatchObject({ ok: false })
   const preview = JSON.parse(await port.preview({ action: "switch-look", key: "user:modern" }))
   expect(preview.changes.overlayKeys).toContain("density")
   expect(preview.changes.nextLook.overlay.density).toBe("spacious")
@@ -110,10 +110,10 @@ test("look switch is explicit and disabling the owner restores the prior look", 
   expect(look().overlay.density).toBe("compact")
 })
 
-test("replacement previews preserve resource switches without duplicating the old package layer", async () => {
+test("replacement previews preserve resource switches without duplicating the old profile layer", async () => {
   const { apply, port, client } = await fixture()
   await apply({ action: "install", name: "alpha", sourceId: "team", scope: "user" })
-  expect(await client.send({ type: "settings.set", patch: { disabledPackageResources: ["user:alpha/commands/example"] } })).toMatchObject({ ok: true })
+  expect(await client.send({ type: "settings.set", patch: { disabledProfileResources: ["user:alpha/commands/example"] } })).toMatchObject({ ok: true })
   await apply({ action: "disable", key: "user:alpha" })
   const enabling = JSON.parse(await port.preview({ action: "enable", key: "user:alpha" }))
   expect(enabling.precedence.claims.some((claim: { surface: string; name: string }) => claim.surface === "commands" && claim.name === "example")).toBe(false)
@@ -125,9 +125,9 @@ test("replacement previews preserve resource switches without duplicating the ol
   await port.run(replacement)
 })
 
-test("a package whose keybindings file broke after install can still be inspected, disabled and removed", async () => {
+test("a profile whose keybindings file broke after install can still be inspected, disabled and removed", async () => {
   const { port, apply, source, dir, project } = await fixture()
-  write(path.join(source, "keyed", "mendcode-package.json"), JSON.stringify({ name: "keyed", version: "1.0.0", description: "keyed package", activate: { keybindings: "keys.json" } }))
+  write(path.join(source, "keyed", "mendcode-profile.json"), JSON.stringify({ name: "keyed", version: "1.0.0", description: "keyed profile", activate: { keybindings: "keys.json" } }))
   write(path.join(source, "keyed", "keys.json"), JSON.stringify({ "ctrl+g": "session.new" }))
   write(path.join(source, "marketplace-index.json"), JSON.stringify({ version: 0, packs: [{ id: "keyed", version: "1.0.0", source: { url: "keyed" } }] }))
   await apply({ action: "install", name: "keyed", sourceId: "team", scope: "user" })

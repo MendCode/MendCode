@@ -359,7 +359,7 @@ export function createSessionHistory(deps: HistoryDeps) {
         if (!turn) return fail("target_mismatch", "that item is not a user message of this session")
         if (turn.status === "running") return fail("busy", "that message's turn is still running")
         const summary = store.turns.snapshots.get(sessionId, turn.turnId)?.summary
-        return { ok: true, result: { ...(summary ?? { root: info.directory, files: [], omittedFiles: 0, complete: false }), scope: "message" } }
+        return { ok: true, result: { ...(summary ?? { root: canonicalDirectory(info.directory), files: [], omittedFiles: 0, complete: false }), scope: "message" } }
       }
       const combined = new Map<string, FileSnapshot>()
       const archived = new Map<string, ChangesReport["files"][number]>()
@@ -634,28 +634,30 @@ export function createSessionHistory(deps: HistoryDeps) {
       if (!info) return fail("unknown_session", "unknown session")
       // The HTML page hides tool input/output behind a toggle, so it carries them unless the caller says otherwise.
       const options: ExportOptions = { ...(format === "json" ? { fullParts: true } : format === "html" ? { toolDetails: true } : {}), ...Object.fromEntries(Object.entries(requested).filter(([, value]) => value !== undefined)) }
-      const collected = collect(store, sessionId, options)
+      const { collected, earlier: startedLater } = collectLatest(store, sessionId, options)
       const frameBudget = MAX_FRAME_BYTES - FRAME_HEADROOM
       const escaped = (text: string) => Buffer.byteLength(JSON.stringify(text))
       let turns = collected.turns
       let truncated = collected.truncated
+      let earlier = startedLater
       const render = () => {
         const transcript: SessionTranscript = { format: "mendcode-session@1", sessionId, title: redactSecrets(info.title).text, directory: redactSecrets(info.directory).text, turns, truncated, exportedAt: deps.now() }
         const safe = options.sanitize ? sanitizeTranscript(transcript) : transcript
         if (format === "html") return renderHtml({ title: safe.title, directory: safe.directory, turns: safe.turns, truncated, exportedAt: safe.exportedAt, timestamps: options.timestamps })
-        return format === "json" ? JSON.stringify(safe, null, 2) : renderMarkdown({ title: safe.title, directory: safe.directory, turns: safe.turns, truncated, options })
+        return format === "json" ? JSON.stringify(safe, null, 2) : renderMarkdown({ title: safe.title, directory: safe.directory, turns: safe.turns, truncated, earlier, options })
       }
       let text = render()
-      // The ack is one frame: a JSON export drops trailing turns until it fits, Markdown is cut (both say so).
+      // The ack is one frame: the oldest turns go first until it fits, so a long session still shows how it ends (both formats say so).
       while (escaped(text) > frameBudget && turns.length > 1) {
-        turns = turns.slice(0, Math.max(1, Math.floor(turns.length * 0.8)))
+        turns = turns.slice(turns.length - Math.max(1, Math.floor(turns.length * 0.8)))
         truncated = true
+        earlier = true
         text = render()
       }
       if (escaped(text) > frameBudget) {
         truncated = true
         const cut = Math.floor(frameBudget / 2.2)
-        text = format !== "markdown" ? (turns = [], render()) : `${text.slice(0, cut)}\n\n> Export truncated.\n`
+        text = format !== "markdown" ? (turns = [], render()) : `> Export truncated: only the end of the last turn fits.\n\n${text.slice(-cut)}`
       }
       return { ok: true, result: { format, text, turns: turns.length, truncated } }
     },
@@ -732,6 +734,28 @@ function clip(text: string, { chars, lines }: { chars: number; lines?: number })
 const limitOf = (kind: ItemKind, full = false) => full ? 65_520 : (kind === "user_message" || kind === "agent_message" ? MESSAGE_CHARS : kind === "tool_call" ? TOOL_CHARS : OTHER_CHARS)
 
 /**
+ * The export of a session too long for its limits keeps how it ends, not how it began: when a pass from the start stops early,
+ * the newest run of whole turns that one pass reads to the end is found by halving (each pass stops at the same limits, so the
+ * search costs a few bounded passes). `earlier` says older turns were left out.
+ */
+function collectLatest(store: Store, sessionId: SessionId, options: ExportOptions): { collected: ReturnType<typeof collect>; earlier: boolean } {
+  const whole = collect(store, sessionId, options)
+  if (whole.stop === undefined || options.fromSeq !== undefined) return { collected: whole, earlier: false }
+  const starts = store.turns.list(sessionId).filter((turn) => !turn.reverted).map((turn) => turn.seq).sort((a, b) => a - b)
+  const from = (count: number) => collect(store, sessionId, { ...options, fromSeq: starts[starts.length - count]! - 1 })
+  let fits = 0
+  let best: ReturnType<typeof collect> | undefined
+  for (let low = 1, high = starts.length - 1; low <= high; ) {
+    const middle = (low + high) >> 1
+    const pass = from(middle)
+    if (pass.stop === undefined) { fits = middle; best = pass; low = middle + 1 } else high = middle - 1
+  }
+  // Not even the last turn fits whole: it is read from its start as far as the limits go.
+  const collected = best ?? (starts.length > 0 ? from(1) : whole)
+  return { collected: { ...collected, truncated: true }, earlier: fits < starts.length }
+}
+
+/**
  * One pass over the session's events in pages: the turns that are not undone, with each item's text bounded. `starts` is the seq each
  * turn and item starts at; `resume` is the first seq a limit left out (an item past a cap, or one the pass stopped inside), so a reader
  * that pages (`read`) starts its next page there instead of skipping what was not collected; `stop` is where the pass stopped early.
@@ -749,7 +773,7 @@ function collect(store: Store, sessionId: SessionId, options: ExportOptions): { 
   let stop: number | undefined
   const leftOut = (seq: number) => { truncated = true; if (resume === undefined || seq < resume) resume = seq }
   pages: for (let cursor = options.fromSeq ?? 0; ; ) {
-    const page = store.readAfter(sessionId, cursor, EXPORT_PAGE)
+    const page = options.untilSeq === undefined ? store.readAfter(sessionId, cursor, EXPORT_PAGE) : store.readExactAfter(sessionId, cursor, EXPORT_PAGE)
     for (const event of store.messages.project(page)) {
       if (options.untilSeq !== undefined && event.seq >= options.untilSeq) break pages
       if (total > EXPORT_MAX_CHARS) {
@@ -868,7 +892,7 @@ function collect(store: Store, sessionId: SessionId, options: ExportOptions): { 
           break
       }
     }
-    if (page.length < EXPORT_PAGE) break
+    if (page.length === 0 || options.untilSeq === undefined && page.length < EXPORT_PAGE) break
     cursor = page[page.length - 1]!.seq
   }
   // An item still open (an interrupted turn) keeps what its deltas gave.
@@ -888,8 +912,9 @@ function fence(text: string) {
   return `${ticks}\n${text.replace(/\s+$/, "")}\n${ticks}`
 }
 
-function renderMarkdown({ title, directory, turns, truncated, options }: { title: string; directory: string; turns: ExportTurn[]; truncated: boolean; options: ExportOptions }) {
+function renderMarkdown({ title, directory, turns, truncated, earlier = false, options }: { title: string; directory: string; turns: ExportTurn[]; truncated: boolean; earlier?: boolean; options: ExportOptions }) {
   const out: string[] = [`# ${redactSecrets(title.trim() || "MendCode session").text}`, `\`${directory}\``]
+  if (earlier) out.push("> Earlier turns left out: the export keeps the most recent turns that fit.")
   for (const turn of turns) out.push(...renderTurn(turn, options))
   if (truncated) out.push("> Export truncated: content exceeds transcript/frame limits.")
   return `${out.join("\n\n")}\n`

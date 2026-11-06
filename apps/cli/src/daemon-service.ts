@@ -1,17 +1,13 @@
+import { DAEMON_HELP } from "./help-text"
 import path from "node:path"
+import { sameDir } from "@mendcode/program/data-dir"
 import type { CommandInput, CommandReply } from "@mendcode/client"
 import type { DaemonStatusReport, DaemonLogsReport } from "@mendcode/protocol"
 import { redactSecrets } from "@mendcode/protocol/wire"
 import type { ServiceAction, ServiceOptions, ServiceResult } from "../../../packages/daemon/src/user-service"
 import { PROGRAM_NAME } from "@mendcode/program"
 
-export const DAEMON_USAGE = `usage: ${PROGRAM_NAME} daemon <start|run|status|logs|stop|restart> [--dir D] [--json]
-  daemon service <plan|install|start|stop|restart|status|logs|uninstall> (macOS/Linux)
-    [--service-dir D] [--cwd PROJECT] [--engine ENGINE]
-  [control-plane] loops daemon [--once [--execute]] | service <action> (macOS/Linux)
-  [control-plane] memory dream daemon [--once [--execute]] | service <action> (macOS/Linux)
-  --lines N (1–1000)   --force (interrupt active work)
-`
+export const DAEMON_USAGE = `${DAEMON_HELP}\n`
 
 export type DaemonServiceCommand = {
   action: ServiceAction | "run" | "tick"
@@ -92,10 +88,21 @@ export type DaemonServiceDeps = {
   now(): number
   /** The live process holding the data directory's writer lock: a daemon that runs even when it does not answer. */
   lockOwner?(): number | undefined
+  /** On while `restart` stops the daemon and starts the next: terminals that lost theirs wait for it instead of starting one (restart-mark.ts). */
+  restarting?(on: boolean): void
 }
 
 /** No daemon answered; `unanswered` is the pid of one that still holds the data directory. */
 type NotAnswering = { running: false; dataDir: string; unanswered?: number }
+
+type Working = NonNullable<DaemonStatusReport["work"]>
+
+/** What runs, for whoever restarts: the turns' sessions, and who started each from its shell. */
+export function workText(report: Pick<DaemonStatusReport, "activeTurns" | "work">) {
+  const shown = (report.work ?? []).map((entry) => `${entry.sessionId} ${JSON.stringify(entry.title)}${entry.launcher ? ` started by ${entry.launcher} ${JSON.stringify(entry.launcherTitle ?? "")}` : ""}`)
+  const more = report.activeTurns - shown.length
+  return `${report.activeTurns} turn${report.activeTurns === 1 ? "" : "s"} running${shown.length ? `: ${shown.join("; ")}${more > 0 ? `; and ${more} more` : ""}` : ""}`
+}
 
 export function daemonStatusText(report: DaemonStatusReport | NotAnswering, service?: ServiceResult) {
   const state = report.running ? "running" : report.unanswered ? `not answering · process ${report.unanswered} holds the data directory` : "stopped"
@@ -110,7 +117,9 @@ export function createDaemonServiceCli(deps: DaemonServiceDeps) {
   return async (command: DaemonServiceCommand): Promise<number> => {
     let peer: Peer | undefined
     const name = `daemon.${command.service ? "service." : ""}${command.action}`
-    const result = (data: unknown, text: string) => deps.out.write(command.json ? JSON.stringify({ schema: "mendcode-next.cli.v1", kind: "result", command: name, data }) + "\n" : text)
+    /** Set when `--force` stops a daemon with turns running: they are reported, and the next start resumes them. */
+    let interrupted: (Working & { count: number }) | undefined
+    const result = (data: unknown, text: string) => deps.out.write(command.json ? JSON.stringify({ schema: "mendcode-next.cli.v1", kind: "result", command: name, data: interrupted ? { ...(data as object), interrupted: { turns: interrupted.count, sessions: interrupted } } : data }) + "\n" : (interrupted ? `Interrupted ${workText({ activeTurns: interrupted.count, work: interrupted })}. They resume when the daemon starts again (resumeAfterRestart in the settings).\n` : "") + text)
     try {
       if (command.help) { deps.out.write(DAEMON_USAGE); return 0 }
       const readStatus = async (): Promise<DaemonStatusReport | NotAnswering> => {
@@ -122,12 +131,21 @@ export function createDaemonServiceCli(deps: DaemonServiceDeps) {
         const reply = await peer.send({ type: "daemon.status" })
         if (!reply.ok) throw new Error(reply.error.message)
         const report = reply.result as unknown as DaemonStatusReport
-        if (path.resolve(report.dataDir) !== path.resolve(deps.dir)) throw new Error("Daemon data directory mismatch")
+        // Followed through links: a daemon an older terminal started on `~/.mendcode-v2` serves `~/.mendcode` after the move.
+        if (!sameDir(report.dataDir, deps.dir)) throw new Error("Daemon data directory mismatch")
         return report
+      }
+      // The socket is gone before the process is: the next start waits for the writer lock to be released, or it would find a daemon that "does not answer".
+      const stopped = async () => {
+        await deps.waitStopped()
+        const deadline = deps.now() + 5000
+        while (deps.lockOwner?.() && deps.now() < deadline) await deps.sleep(20)
       }
       const busy = async () => {
         const report = await readStatus()
-        if (!command.force && report.running && (report.activeTurns || report.backgroundJobs || report.loops.running)) throw new Error("Daemon is busy; retry with --force to interrupt work")
+        if (!report.running || !(report.activeTurns || report.backgroundJobs || report.loops.running)) return
+        if (!command.force) throw new Error(`Daemon is busy: ${report.activeTurns ? workText(report) : `${report.backgroundJobs} jobs · ${report.loops.running} loops running`}; retry with --force to interrupt work. Turns it interrupts resume when the daemon starts again`)
+        if (report.activeTurns) interrupted = Object.assign([...(report.work ?? [])], { count: report.activeTurns })
       }
       // A daemon that holds the data directory but does not answer: a new one could only fail on the lock, and stop cannot reach it.
       const unanswered = (report: DaemonStatusReport | NotAnswering) => {
@@ -161,19 +179,19 @@ export function createDaemonServiceCli(deps: DaemonServiceDeps) {
             const reply = await peer.send({ type: "daemon.shutdown", ...(command.force ? { force: true } : {}) })
             if (!reply.ok) throw new Error(reply.error.message)
             peer.close(); peer = undefined
-            await deps.waitStopped()
+            await stopped()
           }
           if (command.action === "restart" && service.loaded) {
             await deps.host.control("stop")
             peer?.close(); peer = undefined
-            await deps.waitStopped()
+            await stopped()
           }
         }
         const service = await deps.host.control(command.action === "restart" ? "start" : command.action)
         if (["start", "restart"].includes(command.action)) await started()
         if (["stop", "uninstall"].includes(command.action)) {
           peer?.close(); peer = undefined
-          await deps.waitStopped()
+          await stopped()
         }
         const report = await readStatus()
         result({ ...service, daemon: report }, command.action === "plan" ? `Service: ${service.backend}\nDefinition: ${service.definitionPath}\nCommand: ${service.programArguments.join(" ")}\nstdout: ${service.stdoutPath}\nstderr: ${service.stderrPath}\n` : daemonStatusText(report, service))
@@ -189,7 +207,7 @@ export function createDaemonServiceCli(deps: DaemonServiceDeps) {
           if (!reply.ok) throw new Error(reply.error.message)
         }
         peer?.close(); peer = undefined
-        await deps.waitStopped()
+        await stopped()
         const report = await readStatus()
         if (report.running) throw new Error("Daemon is still running")
         unanswered(report)
@@ -198,14 +216,18 @@ export function createDaemonServiceCli(deps: DaemonServiceDeps) {
         // Same refusal as stop: work in progress is never interrupted without --force.
         await busy()
         const service = await deps.host.status()
-        if (service.loaded && path.resolve(service.dataDir) === path.resolve(deps.dir)) await deps.host.control("stop")
-        else if (peer) {
-          const reply = await peer.send({ type: "daemon.shutdown", ...(command.force ? { force: true } : {}) })
-          if (!reply.ok) throw new Error(reply.error.message)
-        }
-        peer?.close(); peer = undefined
-        await deps.waitStopped()
-        await started()
+        // This command starts the next daemon, with the environment it was given; the terminals that lose theirs wait for it.
+        deps.restarting?.(true)
+        try {
+          if (service.loaded && path.resolve(service.dataDir) === path.resolve(deps.dir)) await deps.host.control("stop")
+          else if (peer) {
+            const reply = await peer.send({ type: "daemon.shutdown", ...(command.force ? { force: true } : {}) })
+            if (!reply.ok) throw new Error(reply.error.message)
+          }
+          peer?.close(); peer = undefined
+          await stopped()
+          await started()
+        } finally { deps.restarting?.(false) }
         const report = await readStatus()
         result(report, daemonStatusText(report))
       } else if (command.action === "run") {

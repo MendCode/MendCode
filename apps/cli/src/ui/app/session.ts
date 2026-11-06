@@ -71,7 +71,7 @@ export function createSession(ctx: AppContext, actions: {
   }
 
   /** `/undo` and `/redo`: the daemon's report as a card; files changed after the turn make it ask before overwriting them (`force`). */
-  async function rewind(kind: RewindKind, force = false, atItemId?: ItemId, prompt?: string, images?: BlobRef[]) {
+  async function rewind(kind: RewindKind, force = false, atItemId?: ItemId, prompt?: string, images?: BlobRef[], placed = false) {
     const sessionId = state.sessionId
     const reply = await input.send({ type: kind === "undo" ? "session.undo" : "session.redo", sessionId, ...(force ? { force: true } : {}), ...(kind === "undo" && atItemId ? { atItemId } : {}), ...(kind === "undo" && state.transcript.activeTurn ? { cancelRunning: true } : {}) })
     if (sessionId !== state.sessionId) return
@@ -94,6 +94,7 @@ export function createSession(ctx: AppContext, actions: {
       images = report.prompt.attachments
     }
     if (kind === "redo" && report.canRedo !== true) { prompt = ""; images = [] }
+    if (placed) return requestFrame()
     if (prompt !== undefined) {
       ctx.editor.replaceAll(prompt)
       state.attachments = pendingFromRefs(images ?? [])
@@ -187,7 +188,9 @@ export function createSession(ctx: AppContext, actions: {
     ctx.comments.switching()
     // The prompt is the leaving session's draft: saved now (a pending save goes out too), and emptied below so the next one starts with its own.
     const promptOwned = !input.remote?.readOnly && !state.editingScratch && !state.editingGoal && state.editingMemory === undefined && !state.planDraft
-    if (promptOwned) drafts.changed(state.sessionId, { text: editor.text, images: draftRefs(state.attachments, editor.text) })
+    // With a sub-agent's thread open, the prompt on screen is the thread's: the conversation's, set aside, is the draft.
+    const leaving = state.agentMainPrompt ?? { text: editor.text, attachments: state.attachments }
+    if (promptOwned) drafts.changed(state.sessionId, { text: leaving.text, images: draftRefs(leaving.attachments, leaving.text) })
     drafts.flush()
     // The history is the project's, shared by its sessions: what is in the prompt is kept as a draft entry, and the next ↑ reads the list again.
     void actions.keepDiscarded({ track: false })
@@ -219,6 +222,8 @@ export function createSession(ctx: AppContext, actions: {
     state.sessionParentId = undefined
     state.agentRoot = undefined
     state.agentView = undefined
+    state.agentMainPrompt = undefined
+    state.agentViews = undefined
     state.sidebarFocus = false
     state.sidebarSelected = next
     state.contextHover = false
@@ -416,6 +421,8 @@ export function createSession(ctx: AppContext, actions: {
     const detail = await input.send({ type: "session.get", sessionId })
     if (sessionId !== state.sessionId) return
     if (detail.ok && detail.result?.session) state.sessionParentId = (detail.result.session as import("@mendcode/protocol").SessionDetail).parentId
+    // The strip lists the parent's sub-agents once this session is known to be one.
+    if (state.sessionParentId) void refreshLiveTasks(ctx)
     void acquireBackgroundWriter(sessionId)
     requestFrame()
   }
@@ -424,8 +431,10 @@ export function createSession(ctx: AppContext, actions: {
   async function loadBranch() {
     if (!input.directory) return
     const reply = await input.send({ type: "git.branch", directory: input.directory })
+    const before = state.gitBranch ?? ""
     state.gitBranch = reply.ok && typeof reply.result?.branch === "string" ? reply.result.branch : ""
-    requestFrame()
+    // A frame only when what is drawn changes: no branch draws as an unknown one, so an empty reply schedules nothing.
+    if (state.gitBranch !== before) requestFrame()
   }
 
   return { releaseBackgroundWriter, navigateMessage, renameSession, forkSession, rewind, jumpTo, forkAt, forkCommand, mergeFork, switchSession, changeSession, searchSessionContent, reloadSessions, openSessions, loadTitle, loadBranch, recoverMissingSession, verifySession }

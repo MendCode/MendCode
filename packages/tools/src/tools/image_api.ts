@@ -4,10 +4,14 @@ import { detectMediaMime } from "../media"
 import { arch, platform, release } from "node:os"
 
 export type ImageApiCredentials = { baseUrl: string; headers: Record<string, string> }
-export type ImageApiInput = { prompt: string; count: number; size: string; references: Array<{ mime: string; bytes: Uint8Array }>; signal: AbortSignal }
-export type ImageApi = (input: ImageApiInput) => Promise<{ ok: true; images: Array<{ bytes: Uint8Array; type: "png" | "jpeg" | "gif" | "webp" }>; model: string } | { ok: false; message: string }>
+export type ImageApiInput = { prompt: string; count: number; size: string; transparent?: boolean; references: Array<{ mime: string; bytes: Uint8Array }>; signal: AbortSignal }
+export type ImageApi = (input: ImageApiInput) => Promise<{ ok: true; images: Array<{ bytes: Uint8Array; type: "png" | "jpeg" | "gif" | "webp" }>; model: string; fellBackFrom?: string } | { ok: false; message: string }>
 
-export const DEFAULT_CODEX_IMAGE_MODEL = "gpt-image-2"
+/** GPT Image 2.6 "sunburst" is the detailed, edit-capable variant; "flare" is the fast one and is chosen with `image_generation.model`. */
+export const DEFAULT_CODEX_IMAGE_MODEL = "gpt-image-2.6-sunburst"
+/** Used once, only when the default is refused as an unknown model or request (an account or backend that does not have 2.6 yet). */
+export const FALLBACK_IMAGE_MODEL = "gpt-image-2.5-sunburst"
+const REFUSED_MODEL = /returned HTTP (400|404|422)\b/
 
 export function imageModelRef(value: string) {
   const colon = value.indexOf(":")
@@ -30,9 +34,9 @@ export function createImageApi(input: {
   subscriptionHeaders?(): Promise<Record<string, string>>
   credentials?(provider: string): ImageApiCredentials | undefined
 }): ImageApi {
-  return async (request) => {
+  const send = async (request: ImageApiInput, modelOverride?: string): Promise<Awaited<ReturnType<ImageApi>>> => {
     const cfg = input.settings
-    const ref = imageModelRef(cfg.model ?? `openai/${DEFAULT_CODEX_IMAGE_MODEL}`)
+    const ref = imageModelRef(modelOverride ? `openai/${modelOverride}` : cfg.model ?? `openai/${DEFAULT_CODEX_IMAGE_MODEL}`)
     if (!ref?.model) return { ok: false, message: "image_generation.model requires provider:model or provider/model" }
     const adapter = cfg.adapter && cfg.adapter !== "auto" ? cfg.adapter : ref.provider === "openrouter" ? "openrouter" : ref.provider === "openai" && !input.credentials?.("openai") ? "codex-oauth" : ref.provider === "openai" ? "openai-compatible" : undefined
     if (!adapter) return { ok: false, message: `No automatic image adapter for ${ref.provider}; configure image_generation.adapter` }
@@ -60,7 +64,7 @@ export function createImageApi(input: {
     const urls = request.references.map((image) => `data:${image.mime};base64,${Buffer.from(image.bytes).toString("base64")}`)
     let url: string
     let body: BodyInit
-    const options = { size: request.size, ...cfg.options }
+    const options = { size: request.size, ...(request.transparent && adapter !== "openrouter" ? { background: "transparent", output_format: "png" } : {}), ...cfg.options }
     if (adapter === "openrouter") {
       url = base.endsWith("/images") ? base : `${base.endsWith("/api/v1") ? base : `${base}/api/v1`}/images`
       body = JSON.stringify({ ...options, model: ref.model, prompt: request.prompt, n: request.count, ...(urls.length ? { input_references: urls.map((url) => ({ type: "image_url", image_url: { url } })) } : {}) })
@@ -117,5 +121,13 @@ export function createImageApi(input: {
       images.push({ bytes, type })
     }
     return images.length ? { ok: true, images, model: ref.model } : { ok: false, message: "Image API returned no image" }
+  }
+  return async (request) => {
+    const outcome = await send(request)
+    const configured = input.settings.model ? imageModelRef(input.settings.model) : undefined
+    const usesDefault = !configured || configured.provider === "openai" && configured.model === DEFAULT_CODEX_IMAGE_MODEL
+    if (outcome.ok || !usesDefault || !REFUSED_MODEL.test(outcome.message) || request.signal.aborted) return outcome
+    const retry = await send(request, FALLBACK_IMAGE_MODEL)
+    return retry.ok ? { ...retry, fellBackFrom: DEFAULT_CODEX_IMAGE_MODEL } : outcome
   }
 }

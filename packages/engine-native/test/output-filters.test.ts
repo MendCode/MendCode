@@ -4,7 +4,7 @@ import { z } from "zod"
 import { defineTool } from "@mendcode/tools"
 import { createNativeEngine, memoryHistory, type AgentProfile } from "../src"
 import { filterToolOutput } from "../src/output-filters"
-import { redactedToolStream, withReportedSavings } from "../src/tool-output"
+import { redactedToolStream } from "../src/tool-output"
 import { callTool, scriptedProvider, stop, turn } from "./harness"
 
 const shell = (command: string, output: string, isError = false) => filterToolOutput({ tool: "shell", command, isError, output })
@@ -174,13 +174,13 @@ test("a filtered result still over the cap is cut with the unfiltered copy kept 
   expect(sent).toContain("the full unfiltered output is at the path above")
 })
 
-test("a graft lookup's own saving joins the tally as source graft; other tools and missing lines add nothing", () => {
-  const printed = "[graft] tokens saved ≈ 16,491 (98%) — this output ≈ 316 tok\n\nrenderToolCard · function"
-  const base = { output: printed, truncated: false, title: "t", isError: false }
-  expect(withReportedSavings({ result: base, tool: "mcp__graft__graft_trace_calls" }).meta).toEqual({ savedTokens: 16_491, filter: "graft" })
-  expect(withReportedSavings({ result: { ...base, meta: { exitCode: 0 } }, tool: "graft_find_code" }).meta).toEqual({ exitCode: 0, savedTokens: 16_491, filter: "graft" })
-  expect(withReportedSavings({ result: base, tool: "shell" }).meta).toBeUndefined()
-  expect(withReportedSavings({ result: { ...base, output: "no savings line" }, tool: "graft_find_code" }).meta).toBeUndefined()
-  const filtered = { ...base, meta: { savedTokens: 5, filter: "tests" } }
-  expect(withReportedSavings({ result: filtered, tool: "graft_find_code" })).toBe(filtered)
+test("the saving is measured against what the output limits would have shown the model, not against the raw size", async () => {
+  // 40,000 lines of colour codes: the raw text is megabytes, but without the filter the model would have been shown only the 50 KB cap.
+  const raw = Array.from({ length: 40_000 }, (_, i) => `\x1b[32mline ${i}\x1b[0m`).join("\n")
+  const h = run({ output: raw, command: "bun run build", filters: true })
+  await h.done
+  const completed = h.events.find((event) => event.type === "item.completed" && event.meta?.filter === "ansi") as unknown as { meta: { savedTokens?: number } } | undefined
+  expect(completed).toBeDefined()
+  expect(estimateTokens(raw.length)).toBeGreaterThan(100_000)
+  expect(Number(completed!.meta.savedTokens ?? 0)).toBeLessThan(estimateTokens(51_200))
 })

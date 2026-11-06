@@ -16,8 +16,10 @@ fail() { printf 'error: %s\n' "$*" >&2; exit 1; }
 
 channel=${MENDCODE_CHANNEL:-}
 tier=${MENDCODE_TIER:-}
+force=0
 while [ $# -gt 0 ]; do
   case $1 in
+    --force) force=1; shift ;;
     --channel) [ $# -ge 2 ] || fail '--channel needs a value'; channel=$2; shift 2 ;;
     --channel=*) channel=${1#--channel=}; shift ;;
     --tier) [ $# -ge 2 ] || fail '--tier needs a value'; tier=$2; shift 2 ;;
@@ -96,12 +98,46 @@ newest_tag() {
     END { if (found == "") exit 1; print found }'
 }
 
+# Copies one file of the release tagged $1 into directory $2, quietly; fails when there is no such release or file.
+fetch_file() {
+  if [ "$use_gh" = 1 ]; then
+    gh release download "$1" --repo "$REPO" --pattern "$3" --dir "$2" >/dev/null 2>&1
+  else
+    curl -q -fsSL --proto '=https,file,http' --proto-redir "$redirect_protocols" "$BASE/download/$1/$3" -o "$2/$3" 2>/dev/null
+  fi
+}
+
+# Nightlies live on one moving release tagged `nightly`, replaced by every build; the tag of the build it holds (the one the binaries,
+# the checksums and the signatures are named and signed under) is read from its SHA256SUMS. Prints it, or nothing when there is none.
+moving_nightly() {
+  probe=$(mktemp -d) || return 0
+  builds=
+  if fetch_file nightly "$probe" SHA256SUMS; then
+    builds=$(awk -v suffix="-$os-$arch" '
+      { sub(/\r$/, ""); file = $2; sub(/^\*/, "", file) }
+      file ~ /^mendcode-[0-9]+\.[0-9]+\.[0-9]+-nightly\.[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]\.[0-9]+-/ && substr(file, length(file) - length(suffix) + 1) == suffix {
+        version = substr(file, 10, length(file) - 9 - length(suffix)); print "v" version "\ttrue" }' "$probe/SHA256SUMS" | newest_tag nightly) || builds=
+  fi
+  rm -rf "$probe"
+  printf '%s' "$builds"
+}
+
+# For the nightly channel, a listing that has the moving `nightly` release also gets the tag of the build it holds.
+with_moving_nightly() {
+  if [ "$channel" = nightly ] && printf '%s\n' "$1" | grep -q "^nightly$(printf '\t')true\$"; then
+    built=$(moving_nightly)
+    if [ -n "$built" ]; then printf '%s\n%s\ttrue\n' "$1" "$built"; return 0; fi
+  fi
+  printf '%s\n' "$1"
+}
+
 tag=${MENDCODE_VERSION:-}
 if [ -n "$tag" ] && [ -n "$channel" ]; then fail 'MENDCODE_VERSION names one release; it cannot be combined with a channel'; fi
 if [ -z "$tag" ]; then
   channel=${channel:-stable}
   if [ "$use_gh" = 1 ]; then
     listing=$(gh release list --repo "$REPO" --limit 100 --json tagName,isPrerelease,isDraft --jq '.[] | select(.isDraft | not) | "\(.tagName)\t\(.isPrerelease)"') || fail "cannot list the releases of $REPO with gh"
+    listing=$(with_moving_nightly "$listing")
     tag=$(printf '%s\n' "$listing" | newest_tag "$channel") || fail "no $channel release found in $REPO"
   elif [ "$channel" = stable ]; then
     latest=$(curl -q -fsSL --proto '=https,file,http' --proto-redir "$redirect_protocols" -o /dev/null -w '%{url_effective}' "$BASE/latest") || fail "cannot resolve the latest release (a private repository needs the GitHub CLI: install gh and run gh auth login)"
@@ -109,6 +145,7 @@ if [ -z "$tag" ]; then
   else
     body=$(curl -q -fsSL --proto '=https,http' --proto-redir "$redirect_protocols" -H 'Accept: application/vnd.github+json' "$API/releases?per_page=100") || fail "cannot list the releases of $REPO (a private repository needs the GitHub CLI: install gh and run gh auth login)"
     listing=$(printf '%s\n' "$body" | grep -oE '"(tag_name|prerelease)": *("[^"]*"|true|false)' | sed -E 's/^"([a-z_]+)": *"?([^"]*)"?$/\1 \2/' | awk '$1 == "tag_name" { tag = $2 } $1 == "prerelease" && tag != "" { print tag "\t" $2; tag = "" }') || true
+    listing=$(with_moving_nightly "$listing")
     tag=$(printf '%s\n' "$listing" | newest_tag "$channel") || fail "no $channel release found in $REPO"
   fi
 fi
@@ -116,15 +153,31 @@ case $tag in v*|dev-*) ;; *) tag=v$tag ;; esac
 printf '%s\n' "$tag" | LC_ALL=C grep -Eq '^(v[0-9]{1,9}\.[0-9]{1,9}\.[0-9]{1,9}(-beta\.[0-9]{1,9}|-nightly\.[0-9]{8}\.[1-9][0-9]{0,8})?|dev-[0-9a-f]{7,40})$' || fail 'unsupported release version'
 version=${tag#v}
 asset=mendcode-$version-$os-$arch
-url=$BASE/download/$tag
+# The files of the build the moving nightly release holds are under that release's tag; every other release has its own.
+rel=$tag
+case $tag in *-nightly.*) [ "$(moving_nightly)" != "$tag" ] || rel=nightly ;; esac
+url=$BASE/download/$rel
 install_dir=${MENDCODE_INSTALL_DIR:-$HOME/.local/bin}
+if [ -x "$install_dir/mendcode" ]; then
+  current=$("$install_dir/mendcode" --version 2>/dev/null | awk 'NR == 1 { print $1 }') || current=
+  case $current in v*|dev-*) current_tag=$current ;; *) current_tag=v$current ;; esac
+  if [ "$current_tag" != "$tag" ]; then
+    current_pre=false; case $current_tag in *-*) current_pre=true ;; esac
+    target_pre=false; case $tag in *-*) target_pre=true ;; esac
+    newest=$(printf '%s\t%s\n%s\t%s\n' "$current_tag" "$current_pre" "$tag" "$target_pre" | newest_tag nightly) || newest=
+    if [ "$newest" = "$current_tag" ]; then
+      printf 'warning: downgrade %s → %s\n' "$current_tag" "$tag" >&2
+      [ "$force" = 1 ] || fail 'refusing to replace a newer binary; use --force to downgrade'
+    fi
+  fi
+fi
 mkdir -p "$install_dir"
 stage=$(mktemp -d "$install_dir/.mendcode-install.XXXXXX")
 trap 'rm -rf "$stage"' EXIT
 trap 'exit 1' HUP INT TERM
 download() {
   if [ "$use_gh" = 1 ]; then
-    gh release download "$tag" --repo "$REPO" --pattern "$1" --dir "$stage" >/dev/null
+    gh release download "$rel" --repo "$REPO" --pattern "$1" --dir "$stage" >/dev/null
   else
     curl -q -fsSL --proto '=https,file,http' --proto-redir "$redirect_protocols" "$url/$1" -o "$stage/$1"
   fi
@@ -153,8 +206,10 @@ else
 fi
 chmod 755 "$stage/$asset"
 mv -f "$stage/$asset" "$install_dir/mendcode"
-printf 'schema=mendcode-v2.install.v1\nbinary=mendcode\nsha256=%s\ntier=%s\n' "$actual" "$tier" > "$stage/ownership"
-mv -f "$stage/ownership" "$install_dir/.mendcode-v2-install"
+printf 'schema=mendcode.install.v1\nbinary=mendcode\nsha256=%s\ntier=%s\n' "$actual" "$tier" > "$stage/ownership"
+mv -f "$stage/ownership" "$install_dir/.mendcode-install"
+# An earlier installer's receipt, under the old name; the new one replaces it.
+rm -f "$install_dir/.mendcode-v2-install"
 printf 'Installed mendcode %s to %s/mendcode (starting tier: %s)\n' "$version" "$install_dir" "$tier"
 case ":$PATH:" in
   *":$install_dir:"*) printf 'Run mendcode to start. mendcode upgrade updates it; --channel beta or nightly switches channel.\n' ;;
@@ -162,8 +217,9 @@ case ":$PATH:" in
 esac
 # Service installation is explicit; it does not start the daemon in this shell.
 if [ "${MENDCODE_INSTALL_SERVICE:-0}" = 1 ]; then
-  if [ -n "${MENDCODE_V2_DIR:-}" ]; then
-    "$install_dir/mendcode" daemon service install --dir "$MENDCODE_V2_DIR"
+  service_dir="${MENDCODE_DIR:-${MENDCODE_V2_DIR:-}}"
+  if [ -n "$service_dir" ]; then
+    "$install_dir/mendcode" daemon service install --dir "$service_dir"
   else
     "$install_dir/mendcode" daemon service install
   fi

@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { DEFAULT_TUI_PROFILE } from "../src/view/tui-profile"
 import { createIdFactory, type ContextReport, type SessionEvent, type UsageReport } from "@mendcode/protocol"
 import { createApp } from "../src/ui/app"
 import { glyphs, type Line } from "../src/ui/theme"
@@ -64,7 +65,7 @@ describe("forecast footer segment", () => {
     const frames: Line[][] = []
     const screen = { size: { width: 100, height: 12 }, draw: (rows: Line[]) => void frames.push(rows) } as unknown as Parameters<typeof createApp>[0]["screen"]
     const sessionId = ids("session")
-    const app = createApp({ sessionId, screen, directory: "/work/app", exit() {}, schedule: (fn: () => void) => fn(), glyphs: glyphs({}), now: () => NOW, mode: "full", send: async () => ({ ok: true }) } as never)
+    const app = createApp({ sessionId, screen, profile: { ...DEFAULT_TUI_PROFILE, footerDefaultRows: false }, directory: "/work/app", exit() {}, schedule: (fn: () => void) => fn(), glyphs: glyphs({}), now: () => NOW, mode: "full", send: async () => ({ ok: true }) } as never)
     app.applySettings({ compactAtTokens: 100_000, ...settings } as never)
     let seq = 0
     const turn = (inputTokens: number) => {

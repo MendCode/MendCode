@@ -5,7 +5,6 @@
     "main": { "model": "gpt-6-luna", "effort": "low" },
     "plan": { "model": "gpt-6-luna", "effort": "low" },
     "subagent": { "model": "gpt-6-luna", "effort": "low" },
-    "compaction": { "model": "gpt-6-luna", "effort": "low" },
     "dream": { "model": "gpt-6-luna", "effort": "low" }
   }
 }

@@ -27,7 +27,7 @@ export function reviewFixture(options: ReviewOptions = {}) {
   const { width = 180, height = 50, tier = "full", session = "active" } = options
   const dataDir = options.reopen?.dataDir ?? tempDir(), directory = options.reopen?.directory ?? tempDir(), sessionId = (options.reopen?.sessionId ?? ids("session")) as ReturnType<typeof ids>, childId = ids("session"), forkId = ids("session")
   const widgets = options.widgets ?? (options.preset ? structuredClone(SIDEBAR_PRESETS[options.preset]) : [])
-  if (!options.reopen) writeTuiProfile(dataDir, { ...DEFAULT_TUI_PROFILE, panelNarrow: "sheet", sidebarWidgets: widgets as never, rightSidebar: options.rightSidebar ?? (widgets as unknown[]).length > 0 })
+  if (!options.reopen) writeTuiProfile(dataDir, { ...DEFAULT_TUI_PROFILE, footerDefaultRows: false, panelNarrow: "sheet", sidebarWidgets: widgets as never, rightSidebar: options.rightSidebar ?? (widgets as unknown[]).length > 0 })
   const active = session === "active"
   const nodes = [
     { sessionId, title: "Panel session", createdAt: NOW - 60_000, updatedAt: NOW, current: true, labels: [] },

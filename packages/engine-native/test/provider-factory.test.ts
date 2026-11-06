@@ -31,6 +31,20 @@ const TURN = [
 ]
 
 describe("OpenAI API-key provider (Responses API)", () => {
+  test("concurrent first requests share one adapter initialization", async () => {
+    let constructions = 0
+    const { server } = setup(() => sse(TURN))
+    // An OpenAI request only reads this field when copying the config for a new adapter.
+    const models = [{ id: "gpt-test", images: false }]
+    const input: ResolvedProvider = { id: "openai", type: "openai", baseUrl: `${server.url}/v1`, apiKey: () => KEY, keyRequired: true, models }
+    Object.defineProperty(input, "azure", { enumerable: true, get: () => { constructions++; return undefined } })
+    const concurrent = createApiProvider({ provider: input })
+    const results = await Promise.all([collect(concurrent.stream(request())), collect(concurrent.stream(request()))])
+    expect(results[0]).toEqual(results[1])
+    expect(constructions).toBe(1)
+    expect(server.requests).toHaveLength(2)
+  })
+
   test("uses the Responses path with a bearer key, no session routing header, and only the hosted tools API hosts run", async () => {
     const { server, provider } = setup(() => sse(TURN))
     const events = await collect(provider.stream(request({ model: "gpt-x", effort: "high", cacheKey: "sess_1", hostedTools: ["web_search", "image_generation"] })))

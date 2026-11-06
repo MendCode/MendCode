@@ -23,12 +23,40 @@ export const SidebarAction = lazySchema(() => z.discriminatedUnion("action", [
 ]))
 export type SidebarAction = z.infer<typeof SidebarAction>
 
-/** The `/btw` side chat: questions, answers and the tools the answers used (`tool` lines), the model answering, and what it is doing now. */
+/** One entry of a side chat: a question, an answer, or a tool the answer ran (`status`: running, then ok or error; `ms` once it ended). */
+const AsideMessage = z.strictObject({
+  role: z.enum(["user", "assistant", "tool"]),
+  text: z.string().max(24_000),
+  status: z.enum(["running", "ok", "error"]).optional(),
+  ms: z.number().int().nonnegative().optional(),
+})
+
+/**
+ * What a side chat has to go on: `seen` characters of the main session (`cut`: the start of it is missing), and the side
+ * model's last prompt in tokens with the share that came from the provider's cache.
+ */
+const AsideContext = z.strictObject({
+  seen: z.number().int().nonnegative(),
+  cut: z.boolean(),
+  tokens: z.number().int().nonnegative().optional(),
+  cached: z.number().int().nonnegative().optional(),
+})
+
+/** The `/btw` side chat: questions, answers and the tools the answers used (`tool` lines), the model answering, what it sees, and what it is doing now. */
 export const AsideThread = lazySchema(() => z.strictObject({
-  messages: z.array(z.strictObject({ role: z.enum(["user", "assistant", "tool"]), text: z.string().max(24_000) })).max(64),
+  messages: z.array(AsideMessage).max(64),
   busy: z.boolean(),
   error: z.string().max(500).optional(),
   model: z.string().max(200).optional(),
   status: z.string().max(300).optional(),
+  context: AsideContext.optional(),
 }))
 export type AsideThread = z.infer<typeof AsideThread>
+
+/** A side chat that was cleared, kept for `/btw history`: when, which model, and its entries. */
+export const AsideArchive = lazySchema(() => z.strictObject({
+  at: z.number().int().nonnegative(),
+  model: z.string().max(200).optional(),
+  messages: z.array(AsideMessage).max(64),
+}))
+export type AsideArchive = z.infer<typeof AsideArchive>

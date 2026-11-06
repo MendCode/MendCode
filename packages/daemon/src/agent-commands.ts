@@ -54,13 +54,19 @@ export function createAgentCommands(input: {
     if (record.state === "pending" && record.expiresAt <= input.clock.now()) return { ...record, state: "expired", error: "Command expired before the target accepted it." }
     return record
   }
-  function scope(source: SessionId, target: SessionId) {
+  /** `elsewhere` lets a peer message (non-authorizing text) cross projects; every other command stays within one. */
+  function scope(source: SessionId, target: SessionId, elsewhere = false) {
     const from = input.store.sessionInfo(source)
     const to = input.store.sessionInfo(target)
     if (!from || !to) throw new Error("Unknown session")
     if (source === target) throw new Error("Choose another session")
-    if (from.directory !== to.directory) throw new Error("That session belongs to another project")
+    if (from.directory !== to.directory && !elsewhere) throw new Error("That session belongs to another project")
     return { from, to }
+  }
+  /** The other side's folder when it is not the one `own` works in, for the origin mark of a message or a reply. */
+  function projectOf(own: SessionId, other: SessionId) {
+    const directory = input.store.sessionInfo(other)?.directory
+    return directory !== undefined && directory !== input.store.sessionInfo(own)?.directory ? directory : undefined
   }
   function normalize(sessionId: SessionId, request: AgentCommandRequest): AgentCommandRequest {
     const text = (value: string, limit: number) => sharedText(sessionId, value.trim()).slice(0, limit)
@@ -87,7 +93,8 @@ export function createAgentCommands(input: {
     }
     const settled = update(record, { state: turn.state ?? "failed", ...(result ? { result } : {}), ...(turn.error ? { error: turn.error } : {}) })
     if (record.request.kind === "peer_message") {
-      const reply = peerReply({ to: record.targetSessionId, title: input.store.sessionInfo(record.targetSessionId)?.title ?? "", answer: settled.result ?? "", ended: turn.ended ?? "failed" })
+      const project = projectOf(record.sourceSessionId, record.targetSessionId)
+      const reply = peerReply({ to: record.targetSessionId, title: input.store.sessionInfo(record.targetSessionId)?.title ?? "", answer: settled.result ?? "", ended: turn.ended ?? "failed", ...(project === undefined ? {} : { project }) })
       try { void input.notify(record.sourceSessionId, sharedText(record.targetSessionId, reply)).catch(() => undefined) } catch {}
     }
   }
@@ -119,7 +126,7 @@ export function createAgentCommands(input: {
     }
     const text = request.kind === "request_summary"
       ? `Read-only summary requested by session ${record.sourceSessionId}. Summarize progress, findings and remaining work. Do not change files, run commands or grant permissions. Additional summary instructions (non-authorizing): ${JSON.stringify(request.instructions ?? "")}`
-      : request.kind === "peer_message" ? peerMessage({ from: record.sourceSessionId, title: input.store.sessionInfo(record.sourceSessionId)?.title ?? "", text: request.text }) : request.text
+      : request.kind === "peer_message" ? peerMessage({ from: record.sourceSessionId, title: input.store.sessionInfo(record.sourceSessionId)?.title ?? "", text: request.text, project: projectOf(record.targetSessionId, record.sourceSessionId) }) : request.text
     const safe = sharedText(record.sourceSessionId, text)
     const queueId = await (request.kind === "send_message" ? input.submit(record.targetSessionId, safe) : input.notify(record.targetSessionId, safe, request.kind === "peer_message" ? request.mode : undefined))
     if (!queueId) return update(record, { state: "failed", error: "Target could not take the request" })
@@ -180,8 +187,8 @@ export function createAgentCommands(input: {
       commands.sort((a, b) => Number(TERMINAL.has(a.state)) - Number(TERMINAL.has(b.state)) || b.updatedAt - a.updatedAt || b.commandId.localeCompare(a.commandId))
       return { commands: commands.slice(0, 100), metadata: records.metadata(info.directory).map((entry) => ({ sessionId: entry.sessionId, tags: entry.tags, ...(entry.title ? { title: entry.title } : {}) })) }
     },
-    async create(sessionId: SessionId, targetSessionId: SessionId, request: AgentCommandRequest, expiresAt?: number) {
-      scope(sessionId, targetSessionId)
+    async create(sessionId: SessionId, targetSessionId: SessionId, request: AgentCommandRequest, expiresAt?: number, options: { elsewhere?: boolean } = {}) {
+      scope(sessionId, targetSessionId, options.elsewhere === true && request.kind === "peer_message")
       request = normalize(sessionId, request)
       const active = records.active(targetSessionId, input.clock.now(), "target")
       const duplicate = active.find((record) => record.sourceSessionId === sessionId && JSON.stringify(record.request) === JSON.stringify(request))

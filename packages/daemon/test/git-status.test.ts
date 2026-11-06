@@ -42,3 +42,17 @@ test("a merge conflict shows up as a conflict", async () => {
   git("merge", "side")
   expect(await readGitStatus(dir)).toMatchObject({ conflicts: 1, untracked: 0 })
 })
+
+test("staged and unstaged changes are counted apart, and a file changed in both counts in both", async () => {
+  const { dir, git, write } = repo()
+  write("a.txt", "one\n")
+  write("b.txt", "one\n")
+  git("add", ".")
+  git("commit", "-q", "-m", "first")
+  write("a.txt", "two\n")
+  git("add", "a.txt")
+  write("a.txt", "three\n")
+  write("b.txt", "two\n")
+  write("c.txt", "new\n")
+  expect(await readGitStatus(dir)).toMatchObject({ dirty: 3, staged: 1, unstaged: 2, untracked: 1 })
+})

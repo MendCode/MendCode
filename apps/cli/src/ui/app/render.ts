@@ -1,6 +1,7 @@
 import { psCard } from "../../view/ps-card"
+import { footerRowsOf } from "../../view/footer-rows"
 import { inProject } from "../../view/project-scope"
-import { renderEnvironmentPage } from "../../view/environment-page"
+import { renderEnvironmentPage } from "../lazy-pages"
 import { renderIntroPage, renderOnboardingPage } from "../lazy-pages"
 import { listedBuiltins, slashCatalog } from "../../view/commands"
 import { modelLabel, sessionModelId } from "../../view/model-label"
@@ -14,7 +15,7 @@ import type { createSecrets } from "./secrets"
 import type { createAgents } from "./agents"
 import type { createStatus } from "./status"
 import { renderMessageActions, renderExportOptions } from "../lazy-pages"
-import { renderTreePage, renderTextPage, renderCompactionPage, renderPromptModePage, renderStashPage, renderDraftsPage, renderHistoryPage, renderSkillsPage, renderModelPicker, renderVariantPicker } from "../lazy-pages"
+import { renderTreePage, renderTextPage, renderCompactionPage, renderPromptModePage, renderStashPage, renderDraftsPage, renderHistoryPage, renderSkillsPage, renderModelPicker, renderVariantPicker, renderWhatsNewPage } from "../lazy-pages"
 import { renderDiagnosticsPage, renderQueuePage } from "../lazy-pages"
 import { renderIdePage } from "../lazy-pages"
 import { renderWorktreesPage } from "../lazy-pages"
@@ -35,7 +36,7 @@ import type { Settings } from "@mendcode/protocol"
 import { activeTheme, themeList, themeModeState, themeSelection } from "../theme"
 import { asciiLine } from "../ascii"
 import { applyGlyphMode } from "./glyph-mode"
-import { renderModelPage } from "../../view/model-page"
+import { renderModelPage } from "../lazy-pages"
 import type { PaletteItem, PaletteOverlay, PaletteState } from "../../view/palette"
 import { pageModel } from "../../view/page-views"
 import { sideChat, sideChatRows, sideInput } from "./aside"
@@ -44,12 +45,13 @@ import { viewRows } from "./view-rows"
 import { toastBoxed, toastPosition, toastSpot } from "../../view/toast"
 import { PROMPT_MARGIN } from "../../view/prompt-chrome"
 import { overlayLines } from "../../view/overlay"
-import { type HelpExtensions, renderHelpPage } from "../../view/help-page"
+import type { HelpExtensions } from "../../view/help-page"
+import { renderHelpPage } from "../lazy-pages"
 import { renderSessionList } from "../../view/session-list"
 import type { PresentationMode } from "../../view/transcript"
 import { mascotPhase } from "../../view/mascot"
 import { terminalTitle } from "../../view/terminal-title"
-import { lineWidth as lineWidthOf, textWidth } from "../../view/wrap"
+import { lineWidth as lineWidthOf, textWidth, wrap } from "../../view/wrap"
 import type { ImagePlacement } from "../image-layer"
 import type { Line } from "../theme"
 import type { AppContext } from "./context"
@@ -105,6 +107,8 @@ export function createRender(ctx: AppContext, actions: {
   /** The open extension modal as a card over the screen; undefined when none is open (or it closed itself). */
   extensionModalOverlay: (width: number, height: number) => { rows: Line[]; top: number; left: number; title?: string } | undefined
   footer: (width: number) => Line
+  promptStatusLine: (room: number) => Line | undefined
+  homeMascot: () => { art(): import("../../view/home").HomeMascot | undefined; placement(top: number): ImagePlacement[] }
   paneFacts: () => { model?: string; contextPercent?: number; costMicros?: number }
   statusRows: (width: number) => Line[]
   planReviewFrame: (width: number, height: number) => { rows: Line[]; cursor?: { row: number; col: number } } | undefined
@@ -167,7 +171,11 @@ export function createRender(ctx: AppContext, actions: {
     const chatOffset = sessionsSide === "left" ? leftWidth : 0
     // One row unless the message needs more (an error with detail): the notice row above the prompt, never a box over the transcript. Pages keep the box.
     const current = toasts.current
-    const toastView = (inline: boolean, cols: number) => ctx.views.draw("notice", { kind: "toast", ...(inline ? { inline: true } : {}), variant: current!.variant, ...(current!.title ? { title: current!.title } : {}), message: current!.message, ...(current!.hint ? { hint: current!.hint } : {}) }, { width: cols, height: inline ? 1 : 8 }).lines
+    const toastView = (inline: boolean, cols: number) => {
+      const cut = inline ? toastBoxed({ ...current!, oneLine: false }, cols) : wrap(current!.message.trim(), Math.max(1, Math.min(60, cols - 6) - 6)).length > 6
+      const hint = [current!.hint, ...(cut && !(current!.oneLine && current!.hint) && state.commandOutput?.message === current!.message ? ["F4 full text"] : [])].filter(Boolean).join(" · ")
+      return ctx.views.draw("notice", { kind: "toast", ...(inline ? { inline: true } : {}), variant: current!.variant, ...(current!.title ? { title: current!.title } : {}), message: current!.message, ...(hint ? { hint } : {}) }, { width: cols, height: inline ? 1 : 8 }).lines
+    }
     const boxed = !!current && (state.page !== "chat" || toastBoxed(current, chatCols))
     const toast = boxed ? toastView(false, chatCols) : []
     const accentColors = ["#86efac", "#67e8f9", "#fcd34d", "#c4b5fd", "#fda4af"]
@@ -187,7 +195,7 @@ export function createRender(ctx: AppContext, actions: {
         const sheetHeight = Math.min(Math.floor(height * .55), room)
         if (sheetHeight < 3) return []
         // An open side chat is being typed in and keeps its sheet; the cards give the chat back its rows (`panelNarrow: hide`).
-        return chat.open ? sideChatRows(chat, chatCols, sheetHeight) : state.tuiProfile.rightSidebar && state.tuiProfile.panelNarrow === "sheet" ? actions.rightRows(chatCols, sheetHeight) : []
+        return chat.open ? sideChatRows(chat, chatCols, sheetHeight, undefined, now()) : state.tuiProfile.rightSidebar && state.tuiProfile.panelNarrow === "sheet" ? actions.rightRows(chatCols, sheetHeight) : []
       } : undefined
       let laid = chatRows(chatCols, height, undefined, bottomPanel, current && !boxed ? toastView(true, chatCols)[0] : undefined)
       const spot = toast.length ? toastSpot({ rows: laid.rows, top: laid.body.top, bottom: laid.body.end, box: toast, width: chatCols }) : undefined
@@ -241,7 +249,10 @@ export function createRender(ctx: AppContext, actions: {
     }
     const { finished, tail } = actions.inline.take(width)
     const start = actions.inline.startLine()
-    const toast = toasts.current ? ctx.views.draw("notice", { kind: "toast", inline: true, variant: toasts.current.variant, ...(toasts.current.title ? { title: toasts.current.title } : {}), message: toasts.current.message, ...(toasts.current.hint ? { hint: toasts.current.hint } : {}) }, { width, height: 1 }).lines[0] : undefined
+    const current = toasts.current
+    const fullHint = current && !(current.oneLine && current.hint) && toastBoxed({ ...current, oneLine: false }, width) && state.commandOutput?.message === current.message
+    const hint = [current?.hint, ...(fullHint ? ["F4 full text"] : [])].filter(Boolean).join(" · ")
+    const toast = current ? ctx.views.draw("notice", { kind: "toast", inline: true, variant: current.variant, ...(current.title ? { title: current.title } : {}), message: current.message, ...(hint ? { hint } : {}) }, { width, height: 1 }).lines[0] : undefined
     const { rows, cursor } = chatRows(width, height - (toast ? 1 : 0), { tail })
     input.screen.draw(toast ? [toast, ...rows] : rows, toast ? { ...cursor, row: cursor.row + 1 } : cursor, [], start ? [start, [], ...finished] : finished)
   }
@@ -260,26 +271,27 @@ export function createRender(ctx: AppContext, actions: {
     return rows === built.rows ? built : { rows, top: 0, left: 0, cursor: { row: 0, col: 0 } }
   }
 
+  /** `draw` with `profile` as the terminal's profile, then the saved one back: a preview draws what the change would look like. */
+  function withProfile<T>(profile: import("../../view/tui-profile").TuiProfile, draw: () => T): T {
+    const saved = state.tuiProfile
+    state.tuiProfile = profile
+    try { return draw() } finally { state.tuiProfile = saved }
+  }
+
   function pageRows(width: number, height: number, placements: ImagePlacement[] = []): Line[] {
+    const customizing = state.page === "customize" || state.page === "settings" && state.settingsPageState.tui !== undefined
+    // An extension that replaces the footer owns it: the page says so instead of offering rows that cannot change it.
+    const footerOwner = customizing && state.ext ? state.ext.slotOwner("footer.replace") : undefined
     // Setup draws the model it is choosing; the agent/model bar would show the one in use, so no page of the setup flow carries it.
     const inSetup = state.page === "setup" || state.onboarding !== undefined && state.page === "text"
-    // `footerRows` are the chat's: a page keeps its whole height (the single-row footer still shows on a page).
-    const foot = state.tuiProfile.footerRows.length === 0 && !["diagnostics", "worktrees", "warp", "setup", "intro", "ai-config", "tsm", "mflow", "console", "share"].includes(state.page) && !inSetup && state.tuiProfile.showStatus ? actions.statusRows(width).slice(0, Math.max(0, height - 1)) : []
+    // Footer rows (the user's, or the full view's default) are the chat's: a page keeps its whole height (the single-row footer still shows on a page).
+    const foot = footerRowsOf({ mode: state.mode, profile: state.tuiProfile, list: state.customFooter }).rows.length === 0 && !["diagnostics", "worktrees", "warp", "setup", "intro", "ai-config", "tsm", "mflow", "console", "share"].includes(state.page) && !inSetup && state.tuiProfile.showStatus ? actions.statusRows(width).slice(0, Math.max(0, height - 1)) : []
     const bodyHeight = Math.max(1, height - foot.length)
-    const preview = { root: homeRoot(), sessions: homeSessions(), tip: homeTipText, now: now(), chatWidth: actions.transcriptWidth(),agent: state.agentReport?.current ?? "Build", loops: state.liveLoops.size, ...(input.version ? { version: input.version } : {}), ...(state.effectiveModel?.model ? { model: state.effectiveModel.model } : {}), ...(state.effectiveModel?.effort ? { effort: state.effectiveModel.effort } : {}), ...(state.modelReport?.engine ? { provider: state.modelReport.engine } : {}), ...(state.homeMcp ? { mcp: state.homeMcp } : {}), phase: mascotPhase({ state: state.transcript.foreground, connected: state.connection === "connected", retry: state.turnState.retry !== undefined, ...(state.turnState.current ? { current: state.turnState.current } : {}) }), session: (cols: number, rows: number, profile = state.tuiProfile): Line[] => {
-      const saved = state.tuiProfile
-      const glyphsNow = { state, glyphs: ctx.glyphs, pinned: input.glyphs, env: input.env ?? process.env }
-      state.tuiProfile = profile
-      applyGlyphMode(glyphsNow)
-      state.transcript.setAppearance(profile)
-      // The sample shows the previewed glyph set even while the rest of the frame keeps the saved one.
-      const ascii = state.glyphMode === "ascii"
-      try {
-        const rows_ = state.transcript.blocks().length ? [actions.topbarRow(cols), ...state.transcript.viewport(cols, Math.max(0, rows - 1)).map((line) => line.spans)] : [[{ text: "No conversation yet", fg: "muted" as const }]]
-        return ascii ? rows_.map(asciiLine) : rows_
-      }
-      finally { state.tuiProfile = saved; applyGlyphMode(glyphsNow); state.transcript.setAppearance(saved) }
-    } }
+    const preview = { root: homeRoot(), sessions: homeSessions(), tip: homeTipText, now: now(), chatWidth: actions.transcriptWidth(),agent: state.agentReport?.current ?? "Build", loops: state.liveLoops.size, ...(input.version ? { version: input.version } : {}), ...(state.effectiveModel?.model ? { model: state.effectiveModel.model } : {}), ...(state.effectiveModel?.effort ? { effort: state.effectiveModel.effort } : {}), ...(state.modelReport?.engine ? { provider: state.modelReport.engine } : {}), ...(state.homeMcp ? { mcp: state.homeMcp } : {}), phase: mascotPhase({ state: state.transcript.foreground, connected: state.connection === "connected", retry: state.turnState.retry !== undefined, ...(state.turnState.current ? { current: state.turnState.current } : {}) }), mode: state.mode, session: { title: actions.sessionTitle(), ...(state.gitBranch ? { branch: state.gitBranch } : {}) },
+      // The chat's own footer and status line, drawn with the previewed profile: the user's footer rows and extensions are what the pane shows.
+      footer: (cols: number, profile: import("../../view/tui-profile").TuiProfile) => withProfile(profile, () => actions.statusRows(cols)),
+      statusLine: (room: number, profile: import("../../view/tui-profile").TuiProfile) => withProfile(profile, () => actions.promptStatusLine(room)),
+      ...(customizing ? { mascot: actions.homeMascot().art() } : {}) }
     let body: Line[] = []
     if (state.page === "file") body = actions.fileOpen.pageRows(width, bodyHeight)
     else if (state.automationLedger) body = renderAutomationLedger({ state: state.automationLedger, width, height: bodyHeight })
@@ -292,7 +304,8 @@ export function createRender(ctx: AppContext, actions: {
       const result = renderCompactionPage({ ...(data ? { data } : {}), state: state.compactionView!, profile: state.tuiProfile, readOnly: input.remote?.readOnly === true, width, height: bodyHeight })
       body = result.rows
       state.compactionCursor = result.cursor
-    } else if (state.page === "history") body = renderHistoryPage({ state: state.historyState, report: state.historyReport, detail: state.historyDetail, error: state.historyError, loading: state.historyLoading, width, height: bodyHeight, now: now() })
+    } else if (state.page === "whatsnew" && state.whatsNew) body = renderWhatsNewPage({ state: state.whatsNew, width, height: bodyHeight })
+    else if (state.page === "history") body = renderHistoryPage({ state: state.historyState, report: state.historyReport, detail: state.historyDetail, error: state.historyError, loading: state.historyLoading, width, height: bodyHeight, now: now() })
     else if (state.page === "prompt-mode") body = renderPromptModePage({ state: state.promptModeState!, ...(state.promptReport ? { report: state.promptReport } : {}), error: state.promptError ?? "", width, height: bodyHeight })
     else if (state.page === "compound") body = renderCompoundPage({ ...(state.compoundReport ? { report: state.compoundReport } : {}), state: state.compoundPage!, width, height: bodyHeight, readOnly: input.remote?.readOnly ?? false })
     else if (state.page === "skills") body = renderSkillsPage({ state: state.skillsState, report: state.skillsReport, error: state.skillsError, width, height: bodyHeight })
@@ -340,7 +353,7 @@ export function createRender(ctx: AppContext, actions: {
     else if (state.page === "tree") body = renderTreePage({ model: state.tree?.model, error: state.tree?.error ?? "", state: state.treeState, stats: state.tree?.stats ?? new Map(), width, height: bodyHeight, now: now(), pick: state.tree?.pick ?? false, glyphs: g, label: (id) => modelLabel(id, state.modelReport) })
     else if (state.page === "text" && state.textPage) {
       state.pageBodyHeight = bodyHeight
-      body = renderTextPage({ state: state.textPage, width, height: bodyHeight })
+      body = renderTextPage({ state: state.textPage, width, height: bodyHeight, minimal: state.mode === "minimal" })
     }
     else if (state.page === "pet") body = renderPetPicker({ choices: state.petList, current: state.petPickerMascot ? (state.tuiProfile.logoKind === "mascot" || state.tuiProfile.logoKind === "both" ? state.tuiProfile.homeMascot : "off") : state.tuiProfile.pet || state.settingsNow.pet, ...(state.petPickerMascot ? { mascot: true } : {}), state: state.petPicker, width, height: bodyHeight, graphics: input.screen.imageProtocol !== undefined && input.screen.imageProtocol !== "off", placements, plan: state.petPlan, progress: state.petProgress, busy: state.petGenerating, error: state.petPlanError })
     else if (state.page === "storage") body = renderStoragePage({ report: state.storageReport, error: state.storageError, state: state.storageState, ...(state.storageRetention ? { retentionDays: state.storageRetention } : {}), ...(state.storageWorktreeGc ? { worktreeGcDays: state.storageWorktreeGc } : {}), width, height: bodyHeight, now: now(), glyphs: g })
@@ -407,6 +420,9 @@ export function createRender(ctx: AppContext, actions: {
         ...(state.promptReport ? { promptStatus: state.promptReport } : {}),
         graphIndex: state.settingsNow.codegraph_index ?? "auto",
         preview,
+        facts: { mode: state.mode, ...(footerOwner ? { footerExtension: footerOwner } : {}) },
+        // The home's pet picture, placed over the preview's blank cells where the terminal draws pictures.
+        mascotAt: (origin) => placements.push(...actions.homeMascot().placement(origin.row).map((placement) => ({ ...placement, col: placement.col + origin.col }))),
         width,
         height: bodyHeight,
         glyphs: g,

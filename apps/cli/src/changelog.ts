@@ -1,101 +1,95 @@
 import fs from "node:fs"
 import path from "node:path"
+import changelogFile from "../../../CHANGELOG.md" with { type: "file" }
+import { NOTE_GROUPS, parseChangelog, plainItem, type ChangelogSection } from "@mendcode/protocol/changelog"
+import { channelOfVersion, compareSemver, MOVING_NIGHTLY_TAG, parseVersion } from "@mendcode/upgrade/releases"
+import { UPGRADE_REPO } from "@mendcode/upgrade/settings"
 
 /**
- * What changed in MendCode, newest first, shown by `/changelog`. It is bundled with the app (no network). `id` is the
- * date the entry was written and orders entries; the terminal remembers the newest id it has shown, so the next
- * `/changelog` marks what is new since then. Add an entry at the top for each user-visible change set.
+ * What changed in MendCode, read from the CHANGELOG.md packed into the build (no network), for `/changelog` and `/whatsnew`
+ * (docs/whats-new.md). The terminal remembers what it showed in `<dataDir>/tui/changelog-seen`: the newest version section and
+ * the items of `## Unreleased` (a nightly's changes have no version of their own), so the next look marks only what is new.
+ * Loaded on first use: nothing here runs at start-up.
  */
-export type ChangelogEntry = { id: string; version: string; title: string; items: string[] }
 
-export const CHANGELOG: readonly ChangelogEntry[] = [
-  {
-    id: "2026-10-28",
-    version: "0.0.1-dev",
-    title: "Pull request reviews, argument completion, message times",
-    items: [
-      "/pr on and /pr off turn the pull request watcher and reviewer on or off together; /pr comments replaces /pr-comments",
-      "The reviewer waits 10 minutes between reviews of one pull request and does at most 20 an hour per repository (cooldown in .mendcode/review.yaml); /pr watch-repo requested reviews only what is assigned or requested of you",
-      "Reviews read like a reviewer's: a verdict, a table of findings linked to their lines, collapsible details and a prompt for AI agents under each comment",
-      "Tab completes the arguments of slash commands, not only their names: /pr pub then Tab gives /pr publish",
-      "/timestamps also ends a turn's line with done and the time; session_read gives the model each message's time",
-      "A custom message view gets the built-in rows, so a script can add its own line under any message",
-      "Graph tools asked about a folder of another indexed project answer from that project's graph",
-      "s on the model page turns fast mode on or off for models that offer it",
-      "A held queue says why (Held since your cancel) and that ctrl+s sends it",
-    ],
-  },
-  {
-    id: "2026-10-08",
-    version: "0.0.1-dev",
-    title: "Drafts per session",
-    items: [
-      "A session with only an unsent draft reads Draft · first words (Draft · 1 image for attachments), not Untitled session, in the sidebar, /sessions and the palette",
-      "Opening a session puts its draft back in the prompt by itself; the prompt you leave is saved as that session's draft",
-      "An empty prompt saves no draft, and the unsent-draft notice names images and attachments instead of 0 chars",
-    ],
-  },
-  {
-    id: "2026-10-03",
-    version: "0.0.1-dev",
-    title: "Session navigation",
-    items: [
-      "/tree shows the fork family of a session as a tree: filter, search, open any branch, see bookmarks and ask for a branch summary",
-      "/label <text> bookmarks the latest message; labels also show in /timeline, where l edits them",
-      "/recap writes a short summary of the session so far with the model, on demand",
-      "/changelog (this page) lists what changed, with what is new since you last looked",
-    ],
-  },
-  {
-    id: "2026-10-02",
-    version: "0.0.1-dev",
-    title: "Drafts, images and diagrams",
-    items: [
-      "Unsent drafts survive restarts: ctrl+r restores one, /drafts lists those of other sessions",
-      "Selecting text with the mouse copies it as plain text (copyOnSelect)",
-      "Pasting an image from the clipboard works on every OS and shows a sized [Image #N] chip",
-      "Theme picker with live preview, system light/dark and mode lock: /theme",
-      "Compaction panel modes: panel, stats, arcade, scratchpad and quiet",
-      "Mermaid parses real-world model output, math renders as Unicode and <details> collapses",
-      "The latest prompt stays pinned under the top bar while you scroll (/sticky-prompt)",
-    ],
-  },
-  {
-    id: "2026-10-01",
-    version: "0.0.1-dev",
-    title: "Terminal look",
-    items: [
-      "Quiet chat design after v1: plain messages, one-line footer, left session sidebar",
-      "Full session history page (/history), model, variant and skill pickers",
-      "Usage dashboard and panel-grid pages, context page as a category grid",
-      "Persistent side chat for /btw and a right sidebar the agent builds",
-      "Customize the interface from extensions and by asking the agent",
-    ],
-  },
-]
+/** A section as the pages show it: `## Unreleased` names the running build, the others their tag and date. */
+export type ChangelogEntry = ChangelogSection & { title: string }
+/** What the terminal showed last. `date` is the marker of the older hand-kept list (a date), read as "every section up to that day". */
+export type ChangelogSeen = { version?: string | undefined; date?: string | undefined; unreleased: string[] }
 
-/** Entries newer than the last id the terminal showed; all of them when it never showed one. */
-export function entriesSince(seen: string | undefined): ChangelogEntry[] {
-  return CHANGELOG.filter((entry) => !seen || entry.id > seen)
+const MAX_SEEN_ITEMS = 500
+
+/** The sections of the bundled CHANGELOG.md, newest first, without empty ones; a file the parser refuses throws. */
+export function bundledChangelog(version?: string): ChangelogEntry[] {
+  return changelogEntries(fs.readFileSync(changelogFile, "utf8"), version)
 }
+
+export function changelogEntries(text: string, version?: string): ChangelogEntry[] {
+  return [...parseChangelog(text).values()]
+    .filter((section) => NOTE_GROUPS.some((group) => section.items[group].length))
+    .map((section) => ({ ...section, title: section.name === "Unreleased" ? `Unreleased${version ? ` · in ${version}` : ""}` : `${section.name}${section.date ? ` · ${section.date}` : ""}` }))
+}
+
+/** Where the copyable prompt says the changes are: this build's release page, or `/changelog` for a build with no release. */
+export function changesWhere(version: string): string {
+  const channel = channelOfVersion(version)
+  if (!channel || channel === "dev") return "listed by /changelog in MendCode"
+  return `on https://github.com/${UPGRADE_REPO}/releases/tag/${channel === "nightly" ? MOVING_NIGHTLY_TAG : `v${version.replace(/^v/, "")}`}`
+}
+
+/** Every item of a section, in the CHANGELOG's group order. */
+export const sectionItems = (section: ChangelogSection): string[] => NOTE_GROUPS.flatMap((group) => section.items[group])
+
+/** A short stable id of an item (FNV-1a), so the seen file holds a few characters per item instead of its text. */
+export function itemKey(item: string): string {
+  let hash = 0x811c9dc5
+  for (const char of plainItem(item)) hash = Math.imul(hash ^ char.codePointAt(0)!, 0x01000193) >>> 0
+  return hash.toString(36)
+}
+
+/** Which items of `section` (in `sectionItems` order) are new since `seen`; none on a first look (nothing to compare with). */
+export function freshItems(section: ChangelogEntry, seen: ChangelogSeen | undefined): boolean[] {
+  const items = sectionItems(section)
+  if (!seen) return items.map(() => false)
+  if (section.name === "Unreleased") {
+    const known = new Set(seen.unreleased)
+    return items.map((item) => !known.has(itemKey(item)))
+  }
+  const at = parseVersion(section.name)
+  const before = seen.version ? parseVersion(seen.version) : undefined
+  const fresh = at && before ? compareSemver(at, before) > 0 : !!(seen.date && section.date && section.date > seen.date)
+  return items.map(() => fresh)
+}
+
+/** How many items of `section` are new since `seen`. */
+export const newItems = (section: ChangelogEntry, seen: ChangelogSeen | undefined): number => freshItems(section, seen).filter(Boolean).length
 
 const seenFile = (dataDir: string) => path.join(dataDir, "tui", "changelog-seen")
 
-/** The newest entry id this terminal showed, kept in `<dataDir>/tui/changelog-seen`; undefined when there is none. */
-export function readSeen(dataDir: string): string | undefined {
+/** What this terminal showed last; undefined when it never showed the changelog. */
+export function readSeen(dataDir: string): ChangelogSeen | undefined {
+  let text: string
+  try { text = fs.readFileSync(seenFile(dataDir), "utf8").trim() } catch { return undefined }
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return { date: text, unreleased: [] }
   try {
-    const text = fs.readFileSync(seenFile(dataDir), "utf8").trim()
-    return /^\d{4}-\d{2}-\d{2}$/.test(text) ? text : undefined
+    const value = JSON.parse(text) as { version?: unknown; unreleased?: unknown }
+    return {
+      ...(typeof value.version === "string" ? { version: value.version } : {}),
+      unreleased: Array.isArray(value.unreleased) ? value.unreleased.filter((key): key is string => typeof key === "string").slice(0, MAX_SEEN_ITEMS) : [],
+    }
   } catch {
     return undefined
   }
 }
 
-/** Records the newest entry as shown. A failed write only means the entries show as new again. */
-export function writeSeen(dataDir: string, id: string) {
+/** Records `entries` as shown. A failed write only means the entries show as new again. */
+export function writeSeen(dataDir: string, entries: readonly ChangelogEntry[]) {
+  const version = entries.find((entry) => entry.name !== "Unreleased" && parseVersion(entry.name))?.name
+  const unreleased = entries.find((entry) => entry.name === "Unreleased")
+  const seen = { ...(version ? { version } : {}), unreleased: unreleased ? sectionItems(unreleased).map(itemKey).slice(0, MAX_SEEN_ITEMS) : [] }
   try {
     fs.mkdirSync(path.dirname(seenFile(dataDir)), { recursive: true })
-    fs.writeFileSync(seenFile(dataDir), `${id}\n`)
+    fs.writeFileSync(seenFile(dataDir), `${JSON.stringify(seen)}\n`)
   } catch {
     // Nothing to do: the marker is a convenience.
   }

@@ -22,6 +22,7 @@ export function createEngineRouter(input: { primary: EnginePort; claude: () => P
       return engine.runTurn(turn)
     },
     ...(primary.runShell ? { runShell: primary.runShell.bind(primary) } : {}),
+    ...(primary.warm ? { warm: primary.warm.bind(primary) } : {}),
     needsCompaction: (sessionId) => !input.usesClaude(sessionId) && primary.needsCompaction(sessionId),
     ...(primary.contextReport
       ? {

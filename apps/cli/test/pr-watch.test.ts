@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, test } from "bun:test"
 import { parseSlash } from "../src/view/commands"
-import { parsePrCommand, prSections, prSummary, PR_USAGE, type PrWatchRow } from "../src/view/pr-watch"
+import { parsePrCommand, parsePrReviewCommand, PR_REVIEW_USAGE, prSections, prSummary, PR_USAGE, type PrWatchRow } from "../src/view/pr-watch"
 import { appHarness, cleanTemps } from "./session-ui-harness"
 
 afterAll(cleanTemps)
@@ -72,5 +72,13 @@ describe("/pr in the terminal", () => {
     await remote.type("/pr 7\r")
     expect(remote.sentOf("pr.watch")).toEqual([])
     expect(remote.text().join("\n")).toContain("pr: gh runs on the daemon's own machine")
+  })
+})
+
+describe("/pr describe", () => {
+  test("takes an optional pull request and nothing more", () => {
+    expect(parsePrReviewCommand("describe")).toEqual({ ok: true, action: "describe" })
+    expect(parsePrReviewCommand("describe 12")).toEqual({ ok: true, action: "describe", pr: "12" })
+    expect(parsePrReviewCommand("describe 12 13")).toEqual({ ok: false, error: PR_REVIEW_USAGE })
   })
 })

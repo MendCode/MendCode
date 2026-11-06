@@ -1,8 +1,8 @@
-import { z } from "zod"
+import { lspToolDefinitions } from "./tool-definitions"
 import { defineTool, type Tool } from "@mendcode/tools"
 import { formatDiagnosticLines, capLines, formatDiagnosticsResult } from "./format"
-import { DEFAULT_TIMEOUT_MS, type LspManager } from "./manager"
-import { LspInput } from "../../protocol/src/lsp"
+import type { LspManager } from "./manager"
+import { DEFAULT_TIMEOUT_MS } from "./timeouts"
 import type { FormatterManager } from "./formatter"
 import type { LspDiagnostic } from "./client"
 import { relative } from "node:path"
@@ -16,10 +16,7 @@ export const DEFAULT_WRITE_WAIT_MS = 300
 
 export function createLspTool(manager: LspManager): Tool {
   return defineTool({
-    name: "lsp",
-    description: "Semantic code navigation: goToDefinition, findReferences, hover, documentSymbol, workspaceSymbol, goToImplementation, prepareCallHierarchy, incomingCalls, outgoingCalls. filePath and editor line/character (1-based) are required; query filters workspace symbols.",
-    permission: "read",
-    args: LspInput,
+    ...lspToolDefinitions.lsp,
     async execute(input, context) {
       const detail = input.operation === "workspaceSymbol" ? "" : input.operation === "documentSymbol" ? input.filePath : `${input.filePath}:${input.line}:${input.character}`
       const title = `${input.operation}${detail ? ` ${detail}` : ""}`
@@ -35,10 +32,7 @@ export function createLspTool(manager: LspManager): Tool {
 /** The `diagnostics` tool: language-server problems (errors, warnings) of one file. */
 export function createDiagnosticsTool(manager: LspManager): Tool {
   return defineTool({
-    name: "diagnostics",
-    description: "Report compiler/type-checker problems for a file from its language server (TypeScript, Python, Go, Rust). Returns 'no problems' when clean.",
-    permission: "read",
-    args: z.object({ path: z.string().describe("File path, absolute or relative to the project root") }),
+    ...lspToolDefinitions.diagnostics,
     async execute({ path }, context) {
       const title = `Diagnostics ${path}`
       if (context.signal.aborted) return { output: "cancelled", truncated: false, title, isError: true }

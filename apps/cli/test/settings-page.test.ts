@@ -25,8 +25,8 @@ const FULL: Settings = {
   pet: "codex:luna",
   footer: ["state", "model"],
   trustedToolDirs: ["/a", "/b"],
-  disabledPackages: ["user:x"],
-  profiles: [{ name: "work", directories: ["/w"] }],
+  disabledProfiles: ["user:x"],
+  areas: [{ name: "work", directories: ["/w"] }],
   models: { main: { model: "gpt-6" }, fast: { model: "mini" } },
 }
 
@@ -50,7 +50,7 @@ describe("/settings page", () => {
     const text = h.text()
     for (const title of ["Appearance", "Behavior", "Models", "Memory", "Storage", "More", "Subagents", "Queue"]) expect(text).toContain(title)
     for (const row of ["at once        ‹ default (4) ›", "whole tree     ‹ default (16) ›"]) expect(text).toContain(row)
-    for (const label of ["theme", "view", "motion", "pet", "footer", "permission", "compact at", "idle compact", "cache ttl", "claude ttl", "profiles", "trusted tools", "disabled pkgs", "onboarded", "roles", "dream at", "retention", "customize", "extensions"]) expect(text).toContain(label)
+    for (const label of ["theme", "view", "motion", "pet", "footer", "permission", "compact at", "idle compact", "cache ttl", "claude ttl", "areas", "trusted tools", "disabled pkgs", "onboarded", "roles", "dream at", "retention", "customize", "extensions"]) expect(text).toContain(label)
     for (const value of ["‹ mend ›", "‹ balanced ›", "‹ normal ›", "codex:luna", "2 segments", "‹ edits ›", "‹ 200k ›", "work", "2 directories", "1 off", "‹ on ›", "gpt-6 · 1 more role", "‹ 04:15 ›", "‹ 90 days ›"]) expect(text).toContain(value)
     expect(text).toContain(`${SETTINGS_GROUPS.flatMap((group) => group.rows).length} settings`)
     expect(h.rows()).toHaveLength(50)
@@ -59,10 +59,10 @@ describe("/settings page", () => {
   test("the page covers every field of Settings exactly once", () => {
     const ids = SETTINGS_GROUPS.flatMap((group) => group.rows.map((row) => row.id))
     expect(new Set(ids).size).toBe(ids.length)
-    const fields = ["profiles", "models", "theme", "view", "defaultPermission", "compactAtTokens", "reducedMotion", "pet", "trustedToolDirs", "disabledPackages", "dreamAt", "retentionDays", "worktreeGcDays", "footer", "onboarded"]
+    const fields = ["areas", "models", "theme", "view", "defaultPermission", "compactAtTokens", "reducedMotion", "pet", "trustedToolDirs", "disabledProfiles", "dreamAt", "retentionDays", "worktreeGcDays", "footer", "onboarded"]
     for (const field of fields) expect(ids as string[]).toContain(field)
     // Pinned to the protocol: a setting added there without a row here fails this list.
-    const source = Object.keys(({ profiles: 1, models: 1, theme: 1, view: 1, defaultPermission: 1, compactAtTokens: 1, reducedMotion: 1, pet: 1, trustedToolDirs: 1, disabledPackages: 1, dreamAt: 1, retentionDays: 1, worktreeGcDays: 1, footer: 1, onboarded: 1 } satisfies Record<keyof Settings, 1>))
+    const source = Object.keys(({ areas: 1, models: 1, theme: 1, view: 1, defaultPermission: 1, compactAtTokens: 1, reducedMotion: 1, pet: 1, trustedToolDirs: 1, disabledProfiles: 1, dreamAt: 1, retentionDays: 1, worktreeGcDays: 1, footer: 1, onboarded: 1 } satisfies Record<keyof Settings, 1>))
     expect(source.sort()).toEqual([...fields].sort())
   })
 
@@ -166,19 +166,27 @@ describe("/settings page", () => {
     expect(patches(h).at(-1)).toEqual({ type: "settings.set", patch: { retentionDays: 45 } })
   })
 
-  test("worktree cleanup cycles through off, 7, 14 and 30 days or takes a typed count from 1", async () => {
+  test("worktree cleanup starts at 14 days and cycles through off (0), 7, 14 and 30 or takes a typed count", async () => {
     const h = await open({ onboarded: true })
     await down(h, 18)
     expect(h.text()).toContain("worktree gc")
+    expect(h.text()).toContain("14 days")
     await h.key(RIGHT)
-    expect(patches(h).at(-1)).toEqual({ type: "settings.set", patch: { worktreeGcDays: 7 } })
-    await h.type("0")
+    expect(patches(h).at(-1)).toEqual({ type: "settings.set", patch: { worktreeGcDays: 30 } })
+    await h.type("4000")
     await h.key("\r")
-    expect(h.text()).toContain("days must be 1-3650")
-    await h.key("\x7f")
+    expect(h.text()).toContain("days must be 0-3650")
+    for (let i = 0; i < 4; i++) await h.key("\x7f")
     await h.type("21")
     await h.key("\r")
     expect(patches(h).at(-1)).toEqual({ type: "settings.set", patch: { worktreeGcDays: 21 } })
+  })
+
+  test("worktree cleanup is turned off with 0, which the cycle reaches from 7 days", async () => {
+    const h = await open({ onboarded: true, worktreeGcDays: 7 })
+    await down(h, 18)
+    await h.key(LEFT)
+    expect(patches(h).at(-1)).toEqual({ type: "settings.set", patch: { worktreeGcDays: 0 } })
   })
 
   test("footer: a custom one resets to the default, the default does nothing", async () => {
@@ -192,7 +200,7 @@ describe("/settings page", () => {
     expect(patches(plain)).toEqual([])
   })
 
-  test("profiles are shown, not edited here", async () => {
+  test("areas are shown, not edited here", async () => {
     const h = await open(FULL)
     await down(h, 11)
     for (const key of ["\r", RIGHT, LEFT, " "]) await h.key(key)
@@ -200,7 +208,7 @@ describe("/settings page", () => {
     expect(h.text()).toContain("not editable here")
   })
 
-  test("link rows open /customize, /extensions, /model, /tools, /packages and /storage", async () => {
+  test("link rows open /customize, /extensions, /model, /tools, /profiles and /storage", async () => {
     const reply = (command: Record<string, unknown>) => (command.type === "extensions.list" ? { ok: true, result: { extensions: [] } } : undefined)
     const rows: Array<[number, string]> = [[12, "tools"], [13, "packages"], [15, "model"], [19, "storage"], [20, "customize"], [21, "extensions"], [22, "acp"]]
     for (const [count, page] of rows) {

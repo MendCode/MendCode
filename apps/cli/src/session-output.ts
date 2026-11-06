@@ -3,7 +3,7 @@ import type { ModelChoice, ModelInfo, ModelsReport, ReasoningEffort, SessionDeta
 import { findModel, modelRef } from "@mendcode/protocol/wire"
 import type { SessionSelection } from "./session-args"
 
-export function sessionHuman(session: SessionDetail) {
+export function sessionHuman(session: SessionDetail, waiting: ReadonlyArray<{ requestId: string; kind: string; tool?: string; detail: string }> = []) {
   return [
     `${session.sessionId}  ${session.title}`,
     `State: ${session.status}`,
@@ -13,6 +13,7 @@ export function sessionHuman(session: SessionDetail) {
     `Updated: ${new Date(session.updatedAt).toISOString()}`,
     ...(session.summary ? [`Summary: ${session.summary}`] : []),
     ...(session.archivedAt !== undefined ? [`Archived: ${new Date(session.archivedAt).toISOString()}`] : []),
+    ...waiting.map((entry) => `Waiting: ${entry.kind === "approval" ? "approval" : "question"} ${entry.requestId}: ${entry.tool ? `${entry.tool}: ` : ""}${entry.detail}`),
   ].join("\n") + "\n"
 }
 

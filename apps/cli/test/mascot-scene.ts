@@ -71,7 +71,7 @@ export async function mascotScene(input: { store: PetStore; ref?: string; width?
     ...(input.version ? { version: input.version } : {}),
     ...(input.graphics ? { screen: graphicsScreen(width, height) as never, ...(input.graphics.cell ? { imageAnswers: { cellPixels: input.graphics.cell } } : {}) } : {}),
     reply: async (command) => {
-      if (command.type === "packages.list") return { ok: true, result: { directory, packages: [] } }
+      if (command.type === "profiles.list") return { ok: true, result: { directory, packages: [] } }
       if (command.type !== "pet.manage") return { ok: true }
       // As the daemon answers: a refused operation is a reply, not a thrown error.
       try { return { ok: true, result: await input.store.generator.manage("scene", command.input) } }

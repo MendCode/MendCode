@@ -1,5 +1,5 @@
 import type { ChangesReport, GitCommitReport, GitInitReport, GitPrCreateReport, GitPrView, GitPublishReport, GitPushReport } from "@mendcode/protocol"
-import { GIT_COMMIT_MAX_MESSAGE, GIT_NO_REMOTE, GIT_PR_MAX_BODY, GIT_PR_MAX_TITLE, GIT_PUBLISH_MAX_DESCRIPTION, GIT_PUBLISH_MAX_NAME, GIT_PUBLISH_MAX_OWNER, featureOn } from "@mendcode/protocol/wire"
+import { GIT_COMMIT_MAX_MESSAGE, GIT_NO_REMOTE, GIT_PR_MAX_BODY, GIT_PR_MAX_TITLE, GIT_PUBLISH_MAX_DESCRIPTION, GIT_PUBLISH_MAX_NAME, GIT_PUBLISH_MAX_OWNER, effectiveSettings, featureOn } from "@mendcode/protocol/wire"
 import { createEditor } from "../../view/editor"
 import type { GitCommitNotice } from "../../view/git-commit-page"
 import type { GitStatusInfo, GitTab } from "../../view/git-page"
@@ -56,7 +56,7 @@ export function createGit(ctx: AppContext, deps: { loadChanges(reload?: boolean)
   function closed(): GitPrBody | undefined {
     if (input.remote) return line("gh runs on the daemon's own machine: use this tab from a local session", "muted", true)
     if (!featureOn(state.settingsNow, "git_actions")) return line("Blocked by features.git_actions · /tier git_actions default", "muted", true)
-    if (state.settingsNow.experimental?.git_actions !== true) return line("Off: this tab uses the network · /experimental git_actions on", "muted", true)
+    if (effectiveSettings(state.settingsNow).experimental?.git_actions !== true) return line("Off: this tab uses the network · /experimental git_actions on", "muted", true)
     return undefined
   }
 

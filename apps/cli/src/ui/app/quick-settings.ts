@@ -180,7 +180,7 @@ export function createQuickSettings(ctx: AppContext, actions: { changeProfile(pa
         sections: [
           { heading: "Now", note: settings.tier ?? "no tier", lines: [
             settings.tier ? `- ${settings.tier}: ${TIER_BUNDLES[settings.tier].summary}` : "- no tier set: every feature keeps its own default",
-            ...(input.safeMode ? ["- safe mode: no extensions, packages, hooks, MCP or project tools"] : []),
+            ...(input.safeMode ? ["- safe mode: no extensions, profiles, hooks, MCP or project tools"] : []),
           ] },
           { heading: "Bundles", lines: TIERS.map((tier) => {
             const bundle = TIER_BUNDLES[tier]
@@ -274,6 +274,9 @@ export function createQuickSettings(ctx: AppContext, actions: { changeProfile(pa
     const directory = input.directory
     const global: Mode = settings.codegraph_index ?? "auto"
     const project = directory ? settings.projectConfig?.[directory]?.codegraph_index : undefined
+    if (first === "setup") {
+      return (await import("./feature-setup")).graphSetup(ctx, settings, !second)
+    }
     if (!featureOn(settings, "codegraph")) { say("code graph is off in this tier · /tier codegraph on", "warning"); return }
     if (first === "" || first === "status") { say(`graph ${project ?? global} here${project ? "" : " (default)"} · default ${global}`); return }
     if (readOnly()) { say("settings are read-only for this terminal", "warning"); return }

@@ -51,7 +51,7 @@ describe("find in the transcript", () => {
     await h.type(UP)
     await h.type(UP)
     expect(barRow(h.text())).toContain("1/4")
-    expect(h.text().join("\n")).toContain("Needle prompt number 3")
+    expect(h.text().join("\n")).toContain("answer 2 has a needle inside")
     await h.type(UP)
     expect(barRow(h.text())).toContain("4/4")
     await h.type(DOWN)

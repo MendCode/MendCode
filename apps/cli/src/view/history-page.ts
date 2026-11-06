@@ -5,9 +5,18 @@ import { pickerFrame } from "./picker-frame"
 import { renderMarkdown } from "./markdown"
 import { todayTimeOrDateTime } from "./time"
 import { readableText } from "./reply-comments"
+import { pageSearchKey, SEARCH_HINT, searchMatches } from "./page-search"
 
-export type HistoryState = { selected: number; view: "timeline" | "tree" | "pages"; split: boolean; tools: "hidden" | "count" | "tree"; query: string; editing: boolean; reader: boolean; scroll: number; collapsed: string[]; page: number; queryBefore?: string }
+export type HistoryState = { selected: number; view: "timeline" | "tree" | "pages"; split: boolean; tools: "hidden" | "count" | "tree"; query: string; editing: boolean; reader: boolean; scroll: number; collapsed: string[]; page: number }
 export const createHistoryState = (width = 100): HistoryState => ({ selected: 0, view: width < 70 ? "timeline" : "tree", split: width >= 110, tools: "count", query: "", editing: false, reader: false, scroll: 0, collapsed: [], page: 0 })
+/** The `/` box through the shared page search, changing `h` in place; undefined when the key is not the search's. Enter reports "submitted" so the caller can search older pages. */
+export function historySearchKey(h: HistoryState, key: string): "changed" | "closed" | "submitted" | undefined {
+  const result = pageSearchKey({ open: h.editing, query: h.query }, key)
+  if (!result) return undefined
+  h.query = result.search.query
+  h.editing = result.search.open
+  return result.event === "none" ? "changed" : result.event
+}
 export function firstPlainLine(text: string): string {
   // A set of comments reads as its count and the first comment; any other text is drawn as Markdown as it is.
   const readable = readableText(text, { quotes: false })
@@ -15,8 +24,7 @@ export function firstPlainLine(text: string): string {
   return first?.map((span) => span.text).join("").trim() ?? ""
 }
 export function historyTurns(report: HistoryReport | undefined, query: string): HistoryTurn[] {
-  const needle = query.toLowerCase().trim()
-  return (report?.turns ?? []).filter((turn) => !needle || [turn.preview, ...turn.items.map((item) => `${item.text} ${item.tool ?? ""} ${item.title ?? ""}`)].join(" ").toLowerCase().includes(needle))
+  return (report?.turns ?? []).filter((turn) => searchMatches(query, [turn.preview, ...turn.items.map((item) => `${item.text} ${item.tool ?? ""} ${item.title ?? ""}`)]))
 }
 
 function itemRows(item: HistoryItem, width: number, full: boolean): Line[] {
@@ -44,8 +52,8 @@ export function renderHistoryPage(input: { state: HistoryState; report: HistoryR
   const turns = historyTurns(report, state.query)
   const selected = turns[Math.max(0, Math.min(state.selected, turns.length - 1))]
   const room = Math.max(0, height - 2)
-  const hints = state.editing ? "enter search · esc cancel" : state.reader ? "↑↓ scroll · esc back · l live" : width < 70 ? "/ search · enter open · v view · esc back" : "↑↓ · enter open · / search · v view · s split · t tools · Pg↑↓ page · l live · esc back"
-  const summary = input.error ? input.error : state.editing ? `Quick Jump / ${state.query}` : `Page ${state.page + 1} · ${state.view} · ${turns.length} turns · tools ${state.tools}${state.query ? ` · / ${state.query}` : ""}${input.loading ? " · loading…" : ""}`
+  const hints = state.editing ? SEARCH_HINT : state.reader ? "↑↓ scroll · esc back · l live" : width < 70 ? "/ search · enter open · v view · esc back" : "↑↓ · enter open · / search · v view · s split · t tools · Pg↑↓ page · l live · esc back"
+  const summary = input.error ? input.error : state.editing ? `/ ${state.query}_  ${turns.length} match${turns.length === 1 ? "" : "es"}` : `Page ${state.page + 1} · ${state.view} · ${turns.length} turns · tools ${state.tools}${state.query ? ` · / ${state.query}` : ""}${input.loading ? " · loading…" : ""}`
   const preview = (w: number) => historyReaderRows(state.reader ? input.detail ?? selected : selected, state, w, input.now)
   if (state.reader) return pickerFrame("History · Turn", hints, width, height, panelGrid({ width, compact: false, padding: true, ...(width < 70 ? { maxColumns: 1 } : {}), heights: [room], rows: [[{ title: "Conversation turn", body: preview, scroll: state.scroll }]] }), summary)
   let focus = 0

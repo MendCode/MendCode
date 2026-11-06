@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test"
 import { createMemoryGraphTool, createMemoryTool, createRememberTool } from "../src/memory"
-import { loadSystemPrompt, loadTerminalRendering } from "../src/defaults"
+import { loadSystemPrompt } from "../src/defaults"
 
 const remember = createRememberTool(() => "pending")
 const memory = createMemoryTool({ request: () => ({}) })
@@ -24,21 +24,17 @@ test("memory guidance and the orientation line stay within the prompt budget", a
   // The call-economy wording (read several files in one call, edit with one patch, no directory listing) added ~175 characters on purpose.
   // Charts drawn in the reply without being asked for Mermaid: one sentence, ~80 characters.
   // Code found through the graph lookups first where the folder is indexed (they are listed only there): ~60 characters on purpose.
-  // What else the terminal draws (swatches, callouts, path links, no Markdown images, diff cards): ~390 characters, also sent to other harnesses.
-  expect(total - 2381).toBeLessThanOrEqual(1050)
+  // What the terminal draws (swatches, callouts, path links, images) moved out of this file into packages/daemon/prompts/rendering.md, sent by prompt mode; only the diff-card line stayed.
+  expect(total - 2381).toBeLessThanOrEqual(0)
   expect(system).toContain("If a request needs no code, answer without tools.")
   // Code questions reach for the graph before text search, without the user having to say "use graph".
   expect(system).toContain("Find code with `graph_find`/`graph_callers` when listed, text with `grep`/`glob`")
   expect(system).not.toContain("Use the tools to inspect before you change anything")
 })
 
-test("the terminal rendering lines an engine with its own prompt gets are the packaged ones, and only those", async () => {
-  const rendering = await loadTerminalRendering()
-  const lines = rendering.split("\n")
-  expect(lines[0]).toStartWith("Terminal rendering")
-  expect(lines.slice(1).every((line) => line.startsWith("- "))).toBe(true)
-  expect(rendering).toContain("```mermaid")
-  expect(rendering).toContain("xychart-beta")
-  expect(rendering).not.toContain("apply_patch")
-  expect((await loadSystemPrompt())("/x")).toContain(rendering)
+test("the base prompt no longer carries the terminal rendering block: the prompt mode decides how much of it a model gets", async () => {
+  const system = (await loadSystemPrompt())("/x")
+  expect(system).not.toContain("Terminal rendering")
+  expect(system).not.toContain("mermaid")
+  expect(system).toContain("Edits already show as diff cards")
 })

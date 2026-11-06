@@ -27,7 +27,10 @@ env:
 
 jobs:
   checks:
-    runs-on: ubuntu-24.04
+    # The repository variable CHECKS_RUNNER moves only these test rows to another runner (blacksmith-4vcpu-ubuntu-2404); unset, they
+    # run on GitHub's. Builds, signing and attestation stay on GitHub-hosted runners whatever it says: `mendcode upgrade` verifies
+    # attestations with --deny-self-hosted-runners, and a third-party runner counts as self-hosted.
+    runs-on: ${{ vars.CHECKS_RUNNER || 'ubuntu-24.04' }}
     # The suite in five rows on five runners at once (the same rows as ci.yml). One runner took them one after another: 1006 s on
     # 2026-11-01 (v0.0.2-beta.4: daemon 335, packages 182, rest 35, cli-1..12 454 s together), 17 of the release's 19 minutes. Now the
     # gate takes as long as its slowest row, daemon, about 6 minutes with setup. Every row must pass; fail-fast is off so one run shows
@@ -181,6 +184,10 @@ jobs:
     needs: [checks, notes, build]
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    # Nightlies replace one GitHub release (tag `nightly`), so two of them never publish at once; every other tag has its own release.
+    concurrency:
+      group: publish-${{ contains(inputs.tag || github.ref_name, '-nightly.') && 'nightly' || inputs.tag || github.ref_name }}
+      cancel-in-progress: false
     permissions:
       contents: write
       id-token: write
@@ -243,6 +250,7 @@ jobs:
           bun scripts/checksums.ts dist
           cosign sign-blob --yes --new-bundle-format --bundle dist/SHA256SUMS.sigstore.json dist/SHA256SUMS
       - name: Create the release from the existing tag
+        if: ${{ !contains(env.TAG, '-nightly.') }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -250,3 +258,36 @@ jobs:
           flags=(--repo "$GITHUB_REPOSITORY" --verify-tag --title "$(cat "$RUNNER_TEMP/notes/title.txt")" --notes-file "$RUNNER_TEMP/notes/notes.md")
           if [ "$PRERELEASE" = true ]; then flags+=(--prerelease); else flags+=(--latest); fi
           gh release create "$TAG" dist/* "${flags[@]}"
+      # A nightly has no release of its own: the one prerelease tagged `nightly` (titled "MendCode Nightly") is moved to this commit and
+      # given this build's files and notes. The versioned tag stays a plain git tag: the binaries, the checksums and the signatures
+      # are named and signed under it, and the installers and `mendcode upgrade` read the build from those names. The files go up
+      # before the old ones are removed, so a download never finds the release empty; an older build that finishes late is dropped.
+      - name: Update the moving nightly release
+        if: ${{ contains(env.TAG, '-nightly.') }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          test -s "$RUNNER_TEMP/notes/notes.md" && test -s "$RUNNER_TEMP/notes/title.txt"
+          flags=(--repo "$GITHUB_REPOSITORY" --title "$(cat "$RUNNER_TEMP/notes/title.txt")" --notes-file "$RUNNER_TEMP/notes/notes.md" --prerelease)
+          if gh release view nightly --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            held=$(gh release view nightly --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | sed -nE 's/^mendcode-(.*)-darwin-arm64$/v\1/p' | sort -V | tail -n 1)
+            if [ -n "$held" ] && [ "$(printf '%s\n%s\n' "$held" "$TAG" | sort -V | tail -n 1)" != "$TAG" ]; then
+              echo "nightly already holds $held, newer than $TAG; leaving it"
+              exit 0
+            fi
+          fi
+          sha=$(git rev-parse HEAD)
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/nightly" > /dev/null 2>&1; then
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/git/refs/tags/nightly" -f sha="$sha" -F force=true > /dev/null
+          else
+            gh api "repos/$GITHUB_REPOSITORY/git/refs" -f ref=refs/tags/nightly -f sha="$sha" > /dev/null
+          fi
+          if gh release view nightly --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release upload nightly dist/* --repo "$GITHUB_REPOSITORY" --clobber
+            gh release view nightly --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | while read -r name; do
+              if [ ! -e "dist/$name" ]; then gh release delete-asset nightly "$name" --repo "$GITHUB_REPOSITORY" --yes; fi
+            done
+            gh release edit nightly "${flags[@]}"
+          else
+            gh release create nightly dist/* "${flags[@]}" --verify-tag
+          fi

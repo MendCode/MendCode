@@ -1,5 +1,6 @@
 import { modelParameters } from "./model-parameters"
 import { cacheHash } from "./cache-policy"
+import { chunkBuffers } from "./chunk-buffers"
 import { fingerprint, NativeCompactionError } from "./compaction-checkpoint"
 import { redactSecrets, type ReasoningEffort } from "@mendcode/protocol"
 import { orderedParts, withoutUnsupportedImages } from "./history"
@@ -223,6 +224,7 @@ export async function* sseData(body: ReadableStream<Uint8Array>, signal: AbortSi
   /** Bytes read for the event being read (its unfinished line and its `data:` lines so far). */
   let pending = 0
   const reader = body.getReader()
+  const buffers = chunkBuffers()
   const cancel = () => void reader.cancel().catch(() => {})
   signal.addEventListener("abort", cancel, { once: true })
   try {
@@ -235,6 +237,7 @@ export async function* sseData(body: ReadableStream<Uint8Array>, signal: AbortSi
       if (done) break
       onChunk(value.byteLength)
       let text = decoder.decode(value, { stream: true })
+      buffers.read(value)
       let newline = text.indexOf("\n")
       while (newline >= 0) {
         const raw = partial.length ? partial.join("") + text.slice(0, newline) : text.slice(0, newline)
@@ -257,6 +260,7 @@ export async function* sseData(body: ReadableStream<Uint8Array>, signal: AbortSi
     signal.removeEventListener("abort", cancel)
     // Leaving early (completion, a failure, a runaway guard) must also stop the body, or the socket keeps filling.
     cancel()
+    buffers.done()
   }
 }
 

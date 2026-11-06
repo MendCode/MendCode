@@ -244,14 +244,15 @@ test("selecting a partial hidden setting opens /settings at that profile row; ty
   await h.key("\r")
   expect(h.app.page).toBe("settings")
   expect(h.text()).toContain("Timestamps")
+  // The row steps through bottom (the default), top and off.
   await h.key("\x1b[C")
-  expect(readTuiProfile(dataDir).timestamps).toBe(true)
+  expect(readTuiProfile(dataDir).timestamps).toBe("top")
   await h.key("\x1b")
   await h.type("/timestamps")
   await h.key("\r")
   // The settings row writes the profile; the slash command only this session's screen.
-  expect(h.app.accessibility.profile.timestamps).toBe(false)
-  expect(readTuiProfile(dataDir).timestamps).toBe(true)
+  expect(h.app.accessibility.profile.timestamps).toBe("off")
+  expect(readTuiProfile(dataDir).timestamps).toBe("top")
 })
 test("minimalist default is compact flat; explicit layout survives restart", async () => {
   const { dataDir } = temporary()

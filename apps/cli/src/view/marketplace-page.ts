@@ -4,6 +4,7 @@ import { panelGrid, type GridPanel } from "./deck"
 import { pickerFrame } from "./picker-frame"
 import { describeContents } from "./packages-page"
 import { wrap } from "./wrap"
+import { pageSearchKey, SEARCH_HINT, searchMatches } from "./page-search"
 
 export type MarketplaceState = {
   mode: "catalog" | "sources" | "assets"
@@ -19,7 +20,21 @@ export type MarketplaceState = {
   scroll: number
 }
 export const createMarketplaceState = (): MarketplaceState => ({ mode: "catalog", selected: 0, query: "", scope: "user", input: "", draftId: "", scroll: 0 })
-export const catalogMatches = (report: PackageCatalogReport | undefined, query: string) => (report?.entries ?? []).filter((entry) => [entry.name, entry.title ?? "", entry.description, entry.version, entry.sourceId, ...entry.tags].join(" ").toLowerCase().includes(query.trim().toLowerCase()))
+export const catalogMatches = (report: PackageCatalogReport | undefined, query: string) => (report?.entries ?? []).filter((entry) => searchMatches(query, [entry.name, entry.title ?? "", entry.description, entry.version, entry.sourceId, ...entry.tags]))
+
+/** The catalog's `/` search through the shared page search. True when the key was the search's (the state is changed in place). */
+export function catalogSearchKey(page: MarketplaceState, key: string, mayOpen: boolean): boolean {
+  if (page.editing !== "query" && !(key === "/" && !page.editing && page.mode === "catalog" && mayOpen)) return false
+  const result = pageSearchKey({ open: page.editing === "query", query: page.input }, key)
+  if (!result) return false
+  page.input = result.search.query
+  page.query = result.search.query
+  page.selected = 0
+  page.scroll = 0
+  if (result.search.open) page.editing = "query"
+  else delete page.editing
+  return true
+}
 const row = (text: string, fg: "text" | "muted" | "primary" | "error" | "warning" = "text"): Line => [{ text, fg }]
 
 export function renderMarketplacePage(input: { state: MarketplaceState; report?: PackageCatalogReport | undefined; sources: PackageSourceInfo[]; preview?: PackagePreviewReport | undefined; assets?: PackageAssetsReport | undefined; error: string; width: number; height: number }): Line[] {
@@ -28,9 +43,9 @@ export function renderMarketplacePage(input: { state: MarketplaceState; report?:
   const split = width >= 110
   const entries = catalogMatches(input.report, state.query)
   const selected = entries[Math.min(state.selected, Math.max(0, entries.length - 1))]
-  const hints = state.confirm ? "y confirm · esc cancel" : state.editing ? "enter save · esc cancel" : state.mode === "assets" ? "[] scroll · r reload · esc back" : state.mode === "sources" ? state.sourceDetail ? "enter list · e on/off · d remove · esc back" : "enter details · a add · e on/off · u fetch · d remove · c catalog · ↑↓ select · esc back" : input.preview ? "i install · p scope · [] scroll · esc back" : "↑↓ select · enter preview · / search · s sources · p scope · r reload · esc back"
+  const hints = state.confirm ? "y confirm · esc cancel" : state.editing === "query" ? SEARCH_HINT : state.editing ? "enter save · esc cancel" : state.mode === "assets" ? "[] scroll · r reload · esc back" : state.mode === "sources" ? state.sourceDetail ? "enter list · e on/off · d remove · esc back" : "enter details · a add · e on/off · u fetch · d remove · c catalog · ↑↓ select · esc back" : input.preview ? "i install · p scope · [] scroll · esc back" : "↑↓ select · enter preview · / search · s sources · p scope · r reload · esc back"
   const title = state.mode === "assets" ? "MendCode Assets" : state.mode === "sources" ? "Marketplace / Sources" : input.preview ? "Marketplace / Preview" : "MendCode Marketplace"
-  const summary = input.error || (state.editing ? `${state.editing === "query" ? "Search" : state.editing === "id" ? "Source ID" : `Folder or https catalog for ${state.draftId}`} / ${state.input}█` : state.confirm === "install" ? `Install ${input.preview?.entry.name} in ${state.scope}?` : state.confirm === "remove-source" ? `Remove source ${input.sources[state.selected]?.id}?` : state.mode === "assets" ? "" : state.mode === "sources" ? `${input.sources.length} source${input.sources.length === 1 ? "" : "s"}` : `${entries.length} package${entries.length === 1 ? "" : "s"} · ${state.scope}${state.sourceId ? ` · ${state.sourceId}` : ""}${state.query ? ` · ${state.query}` : ""}`)
+  const summary = input.error || (state.editing === "query" ? `/ ${state.input}_  ${entries.length} match${entries.length === 1 ? "" : "es"}` : state.editing ? `${state.editing === "id" ? "Source ID" : `Folder or https catalog for ${state.draftId}`} / ${state.input}█` : state.confirm === "install" ? `Install ${input.preview?.entry.name} in ${state.scope}?` : state.confirm === "remove-source" ? `Remove source ${input.sources[state.selected]?.id}?` : state.mode === "assets" ? "" : state.mode === "sources" ? `${input.sources.length} source${input.sources.length === 1 ? "" : "s"}` : `${entries.length} profile${entries.length === 1 ? "" : "s"} · ${state.scope}${state.sourceId ? ` · ${state.sourceId}` : ""}${state.query ? ` · ${state.query}` : ""}`)
   const grid = (panels: GridPanel[], focus = state.selected) => {
     if (split) return panelGrid({ width, rows: [panels], heights: [room], compact: false, padding: true })
     if (width < 70) {
@@ -56,9 +71,9 @@ export function renderMarketplacePage(input: { state: MarketplaceState; report?:
     ]), summary)
   }
   const preview = input.preview
-  const detail: GridPanel = { title: preview ? "Install preview" : "Package", weight: 3, scroll: state.scroll, body: (w) => {
+  const detail: GridPanel = { title: preview ? "Install preview" : "Profile", weight: 3, scroll: state.scroll, body: (w) => {
     const entry = preview?.entry ?? selected
-    if (!entry) return [row(input.error || (input.report ? "No packages match" : "Loading catalog…"), input.error ? "error" : "muted")]
+    if (!entry) return [row(input.error || (input.report ? "No profiles match" : "Loading catalog…"), input.error ? "error" : "muted")]
     const rows = [row(entry.title ?? entry.name, "primary"), row(`${entry.name} · ${entry.version} · ${entry.state}`), ...wrap(entry.description, w).map((text) => row(text)), [], row(`Source: ${entry.sourceId}`), ...wrap(entry.location, w).map((text) => row(text, "muted")), ...wrap(describeContents(entry.contents), w).map((text) => row(text)), ...(entry.tags.length ? wrap(`Tags: ${entry.tags.join(", ")}`, w).map((text) => row(text, "muted")) : [])]
     if (entry.problem) rows.push(...wrap(entry.problem, w).map((text) => row(text, "error")))
     if (entry.remote) rows.push([], row("Fetched and audited on install", "muted"))
@@ -75,6 +90,6 @@ export function renderMarketplacePage(input: { state: MarketplaceState; report?:
     if (preview) rows.push([], row(`${preview.action === "replace" ? `Replace ${preview.installedVersion ?? "installed"}` : "Install"} → ${preview.scope}`, "primary"), row(`${preview.problems.length} audit problems`, preview.problems.length ? "error" : "text"), ...preview.problems.flatMap((problem) => wrap(problem, w).map((text) => row(text, "error"))))
     return rows
   } }
-  const list: GridPanel = { title: "Catalog", body: (w) => entries.length ? entries.map((entry, i) => row(`${i === state.selected ? "›" : " "} ${entry.name} · ${entry.version} · ${entry.state}`, i === state.selected ? "primary" : "text")) : [row(input.error || (input.report ? "No catalog packages" : "Loading catalog…"), input.error ? "error" : "muted"), ...input.report?.issues.flatMap((issue) => wrap(issue, w).map((text) => row(text, "error"))) ?? []], weight: 2, active: true, scroll: Math.max(0, state.selected - room + 5) }
+  const list: GridPanel = { title: "Catalog", body: (w) => entries.length ? entries.map((entry, i) => row(`${i === state.selected ? "›" : " "} ${entry.name} · ${entry.version} · ${entry.state}`, i === state.selected ? "primary" : "text")) : [row(input.error || (input.report ? "No catalog profiles" : "Loading catalog…"), input.error ? "error" : "muted"), ...input.report?.issues.flatMap((issue) => wrap(issue, w).map((text) => row(text, "error"))) ?? []], weight: 2, active: true, scroll: Math.max(0, state.selected - room + 5) }
   return pickerFrame(title, hints, width, height, grid([list, detail]), summary)
 }

@@ -1,4 +1,5 @@
 import type { Database } from "bun:sqlite"
+import type { ThawFilter } from "./sealed-turns"
 
 /**
  * Everything the store knows about how one session spent its time and tokens, for a person or a model asked "how long did it
@@ -49,27 +50,40 @@ const localDay = (at: number) => { const date = new Date(at); return `${date.get
 const localHour = (at: number) => `${localDay(at)} ${pad(new Date(at).getHours())}:00`
 const hourStart = (at: number) => { const date = new Date(at); date.setMinutes(0, 0, 0); return date.getTime() }
 
-export function createSessionStatsRecords(db: Database) {
+const STATS_WHOLE_TYPES = new Set(["turn.started", "turn.completed", "turn.cancelled", "turn.interrupted", "turn.failed", "usage.recorded", "server.request", "server.request.resolved"])
+/** Every sealed row a statement below can select: whole types, tool call starts, and failed or agent-ending completions. */
+export const STATS_THAW: ThawFilter = {
+  key: "stats",
+  accept: (row) => STATS_WHOLE_TYPES.has(row.type)
+    || row.type === "item.started" && row.payload.includes('"tool_call"')
+    || row.type === "item.completed" && (row.payload.includes('"error"') || row.payload.includes('"agentEnd"')),
+}
+
+/**
+ * `thaw` makes a session's sealed turns visible to `events_own_all` (sealed-turns.ts) before its statements run; `sealedCount`
+ * is how many rows and the latest time its blocks hold, which the event count adds without thawing every row.
+ */
+export function createSessionStatsRecords(db: Database, thaw: (sessionId: string, filter: ThawFilter) => void = () => {}, sealedCount: (sessionId: string) => { rows: number; lastAt: number | null } = () => ({ rows: 0, lastAt: null })) {
   const session = db.query<{ title: string; directory: string; parent_id: string | null; created_at: number }, [string]>("SELECT title, directory, parent_id, created_at FROM sessions WHERE id = ?")
-  const counts = db.query<{ events: number; last: number | null }, [string]>("SELECT COUNT(*) AS events, MAX(at) AS last FROM events WHERE session_id = ?")
-  const turnEvents = db.query<{ type: string; at: number; turn: string | null }, [string]>(`SELECT type, at, json_extract(payload, '$.turnId') AS turn FROM events
+  const counts = db.query<{ events: number; last: number | null }, [string]>("SELECT COUNT(*) AS events, MAX(at) AS last FROM main.events WHERE session_id = ?")
+  const turnEvents = db.query<{ type: string; at: number; turn: string | null }, [string]>(`SELECT type, at, json_extract(payload, '$.turnId') AS turn FROM events_own_all
     WHERE session_id = ? AND type IN ('turn.started', 'turn.completed', 'turn.cancelled', 'turn.interrupted', 'turn.failed') ORDER BY seq`)
   const usageEvents = db.query<{ turn: string | null; provider: string; model: string; input: number | null; output: number | null; reasoning: number | null; cacheRead: number | null; cacheWrite: number | null; costMicros: number | null; partial: number | null }, [string]>(`SELECT
     json_extract(payload, '$.turnId') AS turn, json_extract(payload, '$.provider') AS provider, json_extract(payload, '$.model') AS model,
     json_extract(payload, '$.input') AS input, json_extract(payload, '$.output') AS output, json_extract(payload, '$.reasoning') AS reasoning,
     json_extract(payload, '$.cacheRead') AS cacheRead, json_extract(payload, '$.cacheWrite') AS cacheWrite, json_extract(payload, '$.costMicros') AS costMicros,
     json_extract(payload, '$.partial') AS partial
-    FROM events WHERE session_id = ? AND type = 'usage.recorded' ORDER BY seq`)
+    FROM events_own_all WHERE session_id = ? AND type = 'usage.recorded' ORDER BY seq`)
   // A tool call's name is its title up to the first ": " (`shell: ls` is shell); the start says whose it is, the end how it went.
   const toolCalls = db.query<{ item: string | null; tool: string | null; agent: number }, [string]>(`SELECT json_extract(payload, '$.itemId') AS item,
     json_extract(payload, '$.meta.tool') AS tool, json_extract(payload, '$.meta.agentParent') IS NOT NULL AS agent
-    FROM events WHERE session_id = ? AND type = 'item.started' AND json_extract(payload, '$.kind') = 'tool_call'`)
-  const failedItems = db.query<{ item: string | null }, [string]>(`SELECT json_extract(payload, '$.itemId') AS item FROM events
+    FROM events_own_all WHERE session_id = ? AND type = 'item.started' AND json_extract(payload, '$.kind') = 'tool_call'`)
+  const failedItems = db.query<{ item: string | null }, [string]>(`SELECT json_extract(payload, '$.itemId') AS item FROM events_own_all
     WHERE session_id = ? AND type = 'item.completed' AND json_extract(payload, '$.status') = 'error'`)
   const agentEnds = db.query<{ runs: number; toolCalls: number | null; tokens: number | null; ms: number | null }, [string]>(`SELECT COUNT(*) AS runs,
     SUM(json_extract(payload, '$.meta.toolCalls')) AS toolCalls, SUM(json_extract(payload, '$.meta.tokens')) AS tokens, SUM(json_extract(payload, '$.meta.durationMs')) AS ms
-    FROM events WHERE session_id = ? AND type = 'item.completed' AND json_extract(payload, '$.meta.agentEnd') = 1`)
-  const requests = db.query<{ type: string; at: number; id: string | null }, [string]>(`SELECT type, at, json_extract(payload, '$.requestId') AS id FROM events
+    FROM events_own_all WHERE session_id = ? AND type = 'item.completed' AND json_extract(payload, '$.meta.agentEnd') = 1`)
+  const requests = db.query<{ type: string; at: number; id: string | null }, [string]>(`SELECT type, at, json_extract(payload, '$.requestId') AS id FROM events_own_all
     WHERE session_id = ? AND type IN ('server.request', 'server.request.resolved') ORDER BY seq`)
   const children = db.query<{ id: string }, [string]>("SELECT id FROM sessions WHERE parent_id = ?")
 
@@ -83,6 +97,7 @@ export function createSessionStatsRecords(db: Database) {
       if (seen.has(child.id)) continue
       seen.add(child.id)
       total.sessions++
+      thaw(child.id, STATS_THAW)
       for (const row of usageEvents.all(child.id)) add(total.usage, usageOf(row))
       const nested = childUsage(child.id, seen)
       total.sessions += nested.sessions
@@ -95,7 +110,11 @@ export function createSessionStatsRecords(db: Database) {
     get(sessionId: string, now: number): SessionStats | undefined {
       const info = session.get(sessionId)
       if (!info) return undefined
-      const { events, last } = counts.get(sessionId) ?? { events: 0, last: null }
+      thaw(sessionId, STATS_THAW)
+      const own = counts.get(sessionId) ?? { events: 0, last: null }
+      const sealed = sealedCount(sessionId)
+      const events = own.events + sealed.rows
+      const last = own.last === null ? sealed.lastAt : sealed.lastAt === null ? own.last : Math.max(own.last, sealed.lastAt)
 
       const turns = new Map<string, SessionStatsTurn>()
       for (const row of turnEvents.all(sessionId)) {

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import { FOOTER_PRESETS, FOOTER_PRESET_NAMES, FOOTER_ROWS_MAX, footerRowsProblems, footerTextLine, tuiProblems } from "@mendcode/protocol/wire"
-import { createCustomizePageState, customizePageKey, CUSTOMIZE_ROWS } from "../src/view/customize-page"
-import { footerRowBudget, parseFooterRowsCommand, renderFooterRows } from "../src/view/footer-rows"
+import { createCustomizePageState, customizePageKey, CUSTOMIZE_ROWS, footerPresetOf } from "../src/view/customize-page"
+import { footerQuotaStyle, footerRowBudget, footerRowsOf, parseFooterRowsCommand, renderFooterRows } from "../src/view/footer-rows"
 import { glyphs } from "../src/ui/theme"
 import { footerIcon } from "../src/ui/footer-icons"
 import { DEFAULT_TUI_PROFILE, normalizeTuiProfile } from "../src/view/tui-profile"
@@ -33,11 +33,11 @@ describe("the built-in footer takes any number of rows by settings alone", () =>
     expect((await screen({ profile: { presentation: "minimal" } })).text().some((row) => row.includes("gpt-6.1-sol") || row.includes("GPT-6.1-Sol"))).toBe(false)
     const full = await screen({ profile: FIVE_ROWS })
     expect(has(full.text())).toBe(true)
-    await full.h.type("/packages")
+    await full.h.type("/profiles")
     await full.h.key("\r")
     await Bun.sleep(10)
     full.h.app.render()
-    expect(full.text().some((row) => row.includes("Packages"))).toBe(true)
+    expect(full.text().some((row) => row.includes("Profiles"))).toBe(true)
     expect(full.text().some((row) => row.includes("CODEX"))).toBe(false)
   })
 
@@ -64,7 +64,7 @@ describe("the built-in footer takes any number of rows by settings alone", () =>
   test("the preset `rows` is that layout; the tagline is the only thing left to say", async () => {
     expect(FOOTER_PRESETS.rows!.rows).toEqual(FIVE_ROWS.footerRows!)
     expect(FOOTER_PRESETS.rows!.profile).toEqual({ quotaView: "left", quotaColor: "accent" })
-    expect(FOOTER_PRESET_NAMES).toEqual(["classic", "rows", "compact", "telemetry"])
+    expect(FOOTER_PRESET_NAMES).toEqual(["classic", "line", "rows", "compact", "telemetry"])
     for (const name of FOOTER_PRESET_NAMES) expect(footerRowsProblems(FOOTER_PRESETS[name]!.rows)).toEqual([])
   })
 
@@ -123,6 +123,20 @@ describe("the built-in footer takes any number of rows by settings alone", () =>
     // The user's own `showPermission` off hides it, as in the single row.
     expect(renderFooterRows({ input: { ...input, showPermission: false }, rows: [["model"]], limit: 5 }).map((line) => line.length)).toEqual([0])
     expect(renderFooterRows({ input: { ...input, permission: "ask" }, rows: [["model"]], limit: 5 }).map((line) => line.length)).toEqual([0])
+  })
+
+  test("a narrow row cuts its tagline with an ellipsis and keeps the directory; the tagline goes only when a few cells are all there is", () => {
+    const input = { segments: [], width: 60, glyphs: glyphs({}), stateLabel: "ready", state: "idle", dotOn: true, connection: "connected", permission: "ask", permissionLabel: "ask", quotas: [], now: NOW, notice: "", directory: "~/Code/repos/codeconfig", texts: { tagline: "Día de los Símbolos Patrios — bandera arriba, tests también" } } as const
+    const row = (width: number) => renderFooterRows({ input: { ...input, width }, rows: [["directory", "text:tagline"]], limit: 1 })[0]!.map((span) => span.text).join("")
+    expect(row(120)).toBe("~/Code/repos/codeconfig · Día de los Símbolos Patrios — bandera arriba, tests también")
+    const narrow = row(60)
+    expect(narrow.startsWith("~/Code/repos/codeconfig · Día")).toBe(true)
+    expect(narrow.endsWith("…")).toBe(true)
+    expect(textWidth(narrow)).toBeLessThanOrEqual(60)
+    // Cells for only the separator and a couple of letters: the tagline is dropped whole, not left as a stub.
+    expect(row(28)).toBe("~/Code/repos/codeconfig")
+    // A directory longer than the row is cut too, never dropped.
+    expect(row(12)).toMatch(/^~\/Code.*…$/)
   })
 
   test("statusColors recolours a segment by name, and the separator is the profile's", async () => {
@@ -218,7 +232,7 @@ describe("/footer rows grammar", () => {
   test("preset sets rows and the keys the preset names", () => {
     expect(parseFooterRowsCommand("preset rows", current)).toMatchObject({ ok: true, patch: { footerRows: FIVE_ROWS.footerRows, quotaView: "left", quotaColor: "accent" }, notice: "footer preset rows: 5 rows" })
     expect(parseFooterRowsCommand("preset classic", current)).toMatchObject({ ok: true, patch: { footerRows: [] } })
-    expect(parseFooterRowsCommand("preset nope", current)).toEqual({ ok: false, error: 'unknown preset "nope" (classic, rows, compact, telemetry)' })
+    expect(parseFooterRowsCommand("preset nope", current)).toEqual({ ok: false, error: 'unknown preset "nope" (classic, line, rows, compact, telemetry)' })
     expect(parseFooterRowsCommand("preset", current)).toMatchObject({ ok: false })
   })
   test("row N sets, appends, removes; rows N keeps the first N", () => {
@@ -244,8 +258,14 @@ describe("/customize", () => {
   const row = (name: string) => CUSTOMIZE_ROWS.indexOf(name as never)
   test("the rows, the text and the icons have rows of their own, and the preset cycles", () => {
     for (const name of ["footerPreset", "footerRows", "footerText", "footerIcons"]) expect(row(name)).toBeGreaterThan(-1)
-    const cycled = customizePageKey({ ...createCustomizePageState(), row: row("footerPreset") }, "l", DEFAULT_TUI_PROFILE)
-    expect(cycled.action).toMatchObject({ type: "set", patch: { footerRows: [["directory", "text:tagline"], ["model", "effort", "context", "cache", "tokens"], ["quota:codex"], ["quota:claude"], ["codegraph"]], quotaView: "left" } })
+    // The default (the full view's own rows) is the first stop; classic, the single row, comes next and keeps the full view on it.
+    expect(footerPresetOf(DEFAULT_TUI_PROFILE)).toBe("default")
+    const toClassic = customizePageKey({ ...createCustomizePageState(), row: row("footerPreset") }, "l", DEFAULT_TUI_PROFILE)
+    expect(toClassic.action).toEqual({ type: "set", patch: { footerRows: [], footerDefaultRows: false } })
+    const classic = { ...DEFAULT_TUI_PROFILE, footerDefaultRows: false }
+    expect(footerPresetOf(classic)).toBe("classic")
+    const cycled = customizePageKey({ ...createCustomizePageState(), row: row("footerPreset") }, "l", classic)
+    expect(cycled.action).toMatchObject({ type: "set", patch: { footerRows: [["directory", "model", "effort", "cache", "quota", "codegraph"]], quotaView: "left" } })
     const icons = customizePageKey({ ...createCustomizePageState(), row: row("footerIcons") }, "l", DEFAULT_TUI_PROFILE)
     expect(icons.action).toMatchObject({ type: "set", patch: { footerIcons: "glyph" } })
   })
@@ -347,5 +367,49 @@ describe("the codegraph segment shows the index the daemon pushed", () => {
     before.h.app.render()
     const after = await screen({ width: 100 })
     expect(before.text()).toEqual(after.text())
+  })
+})
+
+describe("the full view's default rows", () => {
+  const profile = { footerRows: [] as string[][], footerDefaultRows: true }
+  const rows = FOOTER_PRESETS.line!.rows
+  const five = FOOTER_PRESETS.rows!.rows
+
+  test("only the full view that nobody configured gets the line preset; balanced and minimalist keep their footer", () => {
+    expect(footerRowsOf({ mode: "full", profile, list: undefined })).toEqual({ rows, builtIn: true })
+    expect(footerRowsOf({ mode: "balanced", profile, list: undefined }).rows).toEqual([])
+    expect(footerRowsOf({ mode: "minimal", profile, list: undefined }).rows).toEqual([])
+  })
+
+  test("the user's rows, a /footer list and `preset classic` each win; a saved list equal to the old default does not count", () => {
+    expect(footerRowsOf({ mode: "full", profile: { ...profile, footerRows: [["model"]] }, list: undefined })).toEqual({ rows: [["model"]], builtIn: false })
+    expect(footerRowsOf({ mode: "full", profile, list: ["state", "context"] }).rows).toEqual([])
+    expect(footerRowsOf({ mode: "full", profile: { ...profile, footerDefaultRows: false }, list: undefined }).rows).toEqual([])
+    expect(footerRowsOf({ mode: "full", profile, list: ["state", "permission", "context", "quota", "notice"] }).builtIn).toBe(true)
+  })
+
+  test("`preset classic` and `rows 0` turn the default off; a nonzero count edits the rows on screen", () => {
+    expect(parseFooterRowsCommand("preset classic", { rows: [], icons: "none" })).toMatchObject({ ok: true, patch: { footerRows: [], footerDefaultRows: false } })
+    expect(parseFooterRowsCommand("rows 0", { rows: [], icons: "none" })).toMatchObject({ ok: true, patch: { footerRows: [], footerDefaultRows: false } })
+    expect(parseFooterRowsCommand("rows 2", { rows: five, icons: "none" })).toMatchObject({ ok: true, patch: { footerRows: [five[0], five[1]] } })
+    expect(parseFooterRowsCommand("preset rows", { rows: [], icons: "none" })).toMatchObject({ ok: true, patch: { footerRows: five.map((row) => [...row]), quotaView: "left", quotaColor: "accent" } })
+  })
+
+  test("the default is one row that does not repeat the context, and the quota windows give up their bars before anything is dropped", () => {
+    expect(rows).toEqual([["directory", "model", "effort", "cache", "quota", "codegraph"]])
+    expect(rows.flat()).not.toContain("context")
+  })
+
+  test("the quota look is the preset's (left, accent) unless the profile already holds another value", () => {
+    expect(footerQuotaStyle({ profile: { quotaView: "used", quotaColor: "pressure" }, builtIn: true })).toEqual({ view: "left", color: "accent" })
+    expect(footerQuotaStyle({ profile: { quotaView: "used", quotaColor: "accent" }, builtIn: true })).toEqual({ view: "left", color: "accent" })
+    expect(footerQuotaStyle({ profile: { quotaView: "used", quotaColor: "pressure" }, builtIn: false })).toEqual({ view: "used", color: "pressure" })
+  })
+
+  test("the profile defaults to the full view's rows on", () => {
+    expect(DEFAULT_TUI_PROFILE.footerDefaultRows).toBe(true)
+    expect(normalizeTuiProfile({ footerDefaultRows: false }).footerDefaultRows).toBe(false)
+    expect(normalizeTuiProfile({}).footerDefaultRows).toBe(true)
+    expect(tuiProblems({ footerDefaultRows: "no" })).toEqual(["footerDefaultRows: expected boolean"])
   })
 })

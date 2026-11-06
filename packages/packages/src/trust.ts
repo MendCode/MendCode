@@ -9,7 +9,7 @@ export function packageFingerprint(directory: string): string | undefined {
   const walk = (dir: string, depth: number): boolean => {
     if (depth > 8) return false
     for (const entry of readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
-      if (["mendcode-package.json", ".mendcode-install.json", "node_modules", ".git"].includes(entry.name)) continue
+      if (["mendcode-profile.json", "mendcode-package.json", ".mendcode-install.json", "node_modules", ".git"].includes(entry.name)) continue
       const file = path.join(dir, entry.name)
       const info = lstatSync(file)
       if (info.isSymbolicLink()) return false

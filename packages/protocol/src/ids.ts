@@ -1,9 +1,10 @@
 import { z } from "zod"
 import { ID_PREFIXES, type IdKind } from "./id-factory"
 
-export { createIdFactory, ID_PREFIXES, type IdKind } from "./id-factory"
+export { createIdFactory, decodeIdTime, ID_PREFIXES, type IdKind } from "./id-factory"
 
-const ULID_BODY = "[0-9A-HJKMNP-TV-Z]{26}"
+/** 10 time characters, then 6 random ones (current ids) or 16 (ids written before the shorter tail). */
+const ULID_BODY = "[0-9A-HJKMNP-TV-Z]{16}(?:[0-9A-HJKMNP-TV-Z]{10})?"
 
 
 function idSchema<K extends IdKind>(kind: K) {

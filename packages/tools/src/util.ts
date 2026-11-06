@@ -267,8 +267,14 @@ export function boundPreview(text: string): string {
   return `${lines.slice(0, keep).join("\n")}\n… ${(lines.length - keep).toLocaleString("en-US")} more lines`
 }
 
-/** Short unified-style diff: the changed line range with the common prefix/suffix trimmed. */
-export function renderDiff({ before, after }: { before: string; after: string }): string {
+/** Unchanged lines the card of an edit keeps on each side of the change at most; the terminal's `diffContext` setting picks how many show. */
+export const DIFF_CONTEXT_LINES = 6
+
+/**
+ * Short unified-style diff: the changed line range with the common prefix/suffix trimmed. `context` keeps that many unchanged
+ * lines before and after the range (a card shows them; the model's text does not carry them).
+ */
+export function renderDiff({ before, after, context = 0 }: { before: string; after: string; context?: number }): string {
   const a = before.split("\n")
   const b = after.split("\n")
   let prefix = 0
@@ -279,6 +285,17 @@ export function renderDiff({ before, after }: { before: string; after: string })
   }
   const removed = a.slice(prefix, a.length - suffix)
   const added = b.slice(prefix, b.length - suffix)
-  const header = `@@ -${prefix + 1},${removed.length} +${prefix + 1},${added.length} @@`
-  return [header, ...removed.map((line) => `-${line}`), ...added.map((line) => `+${line}`)].join("\n")
+  // A file's last line break ends its last line; it is not a line of its own to show as context.
+  const closing = a.length - suffix
+  const room = closing < a.length && a.at(-1) === "" ? suffix - 1 : suffix
+  const lead = Math.min(context, prefix)
+  const trail = Math.max(0, Math.min(context, room))
+  const header = `@@ -${prefix - lead + 1},${removed.length + lead + trail} +${prefix - lead + 1},${added.length + lead + trail} @@`
+  return [
+    header,
+    ...a.slice(prefix - lead, prefix).map((line) => ` ${line}`),
+    ...removed.map((line) => `-${line}`),
+    ...added.map((line) => `+${line}`),
+    ...a.slice(closing, closing + trail).map((line) => ` ${line}`),
+  ].join("\n")
 }

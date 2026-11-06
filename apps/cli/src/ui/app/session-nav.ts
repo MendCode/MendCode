@@ -1,5 +1,6 @@
 import { createTextPageState, textPageKey, textPageRows, textPageViewport } from "../lazy-pages"
 import type { AppContext } from "./context"
+import type { TextSection } from "../../view/text-page"
 
 /**
  * `/recap` (the model's summary of the session) and `/changelog`, drawn as read-only text pages. The tree and the
@@ -24,25 +25,52 @@ export function createSessionNav(ctx: AppContext) {
     requestFrame()
   }
 
+  /** `/changelog`: each section of the bundled CHANGELOG.md as its highlights (the release page's), what is new since the last look marked. */
   async function changelogCommand() {
-    const { CHANGELOG, entriesSince, readSeen, writeSeen } = await import("../../changelog")
+    const [{ bundledChangelog, changesWhere, newItems, readSeen, sectionItems, writeSeen }, { highlights, plainItem, whatsNewPrompt }] = await Promise.all([import("../../changelog"), import("@mendcode/protocol/changelog")])
+    let entries: ReturnType<typeof bundledChangelog>
+    try { entries = bundledChangelog(input.version) } catch (error) {
+      state.textPage = createTextPageState({ title: "Changelog", status: "error", error: error instanceof Error ? error.message : String(error) })
+      state.page = "text"
+      return requestFrame()
+    }
     const seen = input.dataDir ? readSeen(input.dataDir) : undefined
-    const fresh = new Set(entriesSince(seen).map((entry) => entry.id))
-    const unseen = seen === undefined ? 0 : fresh.size
+    const fresh = entries.map((entry) => newItems(entry, seen))
+    const unseen = fresh.reduce((sum, count) => sum + count, 0)
+    const sections: TextSection[] = entries.map((entry, index) => {
+      const top = highlights(entry.items)
+      const more = sectionItems(entry).length - top.length
+      const count = fresh[index]!
+      return {
+        heading: entry.title,
+        ...(count ? { note: count === sectionItems(entry).length ? "new" : `${count} new` } : {}),
+        lines: [...top.map((line) => `- ${plainItem(line)}`), ...(more > 0 ? [`- ${more} more${entry.items.Fixed.length ? `, ${entry.items.Fixed.length} of them fixes` : ""} · /whatsnew all`] : [])],
+      }
+    })
+    if (input.version) sections.push({ heading: "What fits you", note: "paste into any session", muted: true, lines: whatsNewPrompt({ version: input.version, changes: changesWhere(input.version) }).split("\n") })
     state.textPage = createTextPageState({
       title: "Changelog",
       summary: `${input.version ? `MendCode ${input.version} · ` : ""}${seen === undefined ? "first look" : unseen ? `${unseen} new since your last look` : "nothing new since your last look"}`,
-      sections: CHANGELOG.map((entry) => ({ heading: `${entry.id} · ${entry.title}`, ...(seen !== undefined && fresh.has(entry.id) ? { note: "new" } : {}), lines: entry.items.map((item) => `- ${item}`) })),
+      sections,
     })
     state.page = "text"
-    const newest = CHANGELOG[0]
-    if (input.dataDir && newest) writeSeen(input.dataDir, newest.id)
+    if (input.dataDir) writeSeen(input.dataDir, entries)
     requestFrame()
   }
 
   async function textKey(key: string) {
     const page = state.textPage
     if (!page) { state.page = "chat"; return requestFrame() }
+    if (key === "\r" && page.confirm) {
+      const confirm = page.confirm
+      page.confirm = undefined
+      page.summary = "Applying setup…"
+      requestFrame()
+      try { await confirm() } catch (error) {
+        if (state.textPage === page) { page.status = "error"; page.error = error instanceof Error ? error.message : "Setup failed; retry the setup command." }
+      }
+      return requestFrame()
+    }
     if (key === "r" && page.title === "Recap" && page.status !== "loading") return recapCommand("refresh")
     const { width, height } = input.screen.size
     const view = textPageViewport(width, state.pageBodyHeight ?? height)
@@ -51,7 +79,16 @@ export function createSessionNav(ctx: AppContext) {
     // The import page goes back to the page it was opened from, not always to the chat.
     if (result.close) {
       visit++
-      const back = page.title === "Import setup" ? state.textReturn : undefined
+      if (state.commandOutputReturn) {
+        const back = state.commandOutputReturn
+        delete state.commandOutputReturn
+        state.page = back.page
+        if (back.text) state.textPage = back.text
+        else delete state.textPage
+        state.textReturn = back.textReturn
+        return requestFrame()
+      }
+      const back = state.textReturn
       state.textReturn = undefined
       state.page = back && back !== "text" && (back !== "setup" || state.onboarding || state.setupAdvanced) ? back : "chat"
     }

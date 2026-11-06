@@ -1,7 +1,7 @@
 import { z } from "zod"
 import { defineTool, fail } from "@mendcode/tools"
 import type { ConfigControl, ConfigControlAction } from "./pr-review/config-control"
-import { NO_SELF_MENTION } from "./pr-review-tool"
+import { NO_SELF_MENTION } from "./pr-review-tool-definition"
 
 /**
  * `review_config`: the conversational side of the PR reviewer's configuration (docs/pr-review.md). The model reads, previews,

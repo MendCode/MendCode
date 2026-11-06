@@ -15,7 +15,7 @@ import { slashMatch } from "./view/slash-match"
 export const CARDS: CardIndex = cardIndex
 
 type Output = { write(text: string): unknown }
-export type DocsIO = { dataDir: string; cwd: string; out: Output; err: Output; program?: string; live?: (command: { topic: string; dataDir: string; cwd: string }) => Promise<Pick<LiveContext, "settings" | "prompt" | "quotas" | "refresh">> }
+export type DocsIO = { dataDir: string; cwd: string; out: Output; err: Output; program?: string; live?: (command: { topic: string; dataDir: string; cwd: string }) => Promise<Pick<LiveContext, "settings" | "prompt" | "quotas" | "refresh" | "daemonUnanswered">> }
 
 /** Several cards in one call stop here: the cards are read in one go. A card is never cut; those that do not fit are named. */
 export const DOCS_OUTPUT_BUDGET = 12_000
@@ -70,7 +70,7 @@ export function searchText(program: string, words: readonly string[], cards: rea
 const fill = (text: string, program: string) => text.replaceAll("{{program}}", program)
 
 /** The daemon facts a card needs, from a daemon that already runs: none is started, and a slow or refusing one is skipped. */
-async function askDaemon({ topic, dataDir, cwd }: { topic: string; dataDir: string; cwd: string }): Promise<Pick<LiveContext, "settings" | "prompt" | "quotas" | "refresh">> {
+async function askDaemon({ topic, dataDir, cwd }: { topic: string; dataDir: string; cwd: string }): Promise<Pick<LiveContext, "settings" | "prompt" | "quotas" | "refresh" | "daemonUnanswered">> {
   const none = { settings: undefined, prompt: undefined, quotas: undefined, refresh: undefined }
   const wantsSettings = NEEDS_SETTINGS.has(topic)
   const wantsPrompt = NEEDS_PROMPT.has(topic)
@@ -80,7 +80,7 @@ async function askDaemon({ topic, dataDir, cwd }: { topic: string; dataDir: stri
   if (!running) return none
   // A daemon sends the last quota reading of every provider right after the hello, as global events: nothing else is asked for them.
   const quotas: QuotaSnapshotLike[] = []
-  const client = createClient({ ...(running.tcp ? { localTcp: () => readLocalEndpoint(dataDir) } : { socketPath: running.socketPath }), name: "docs", reconnect: false, timeoutMs: 1500, onGlobal: (event) => { if (event.type === "quota.snapshot") quotas.push(event) } })
+  const client = createClient({ ...(running.tcp ? { localTcp: () => readLocalEndpoint(dataDir) } : { socketPath: running.socketPath }), name: "docs", reconnect: false, timeoutMs: 5000, onGlobal: (event) => { if (event.type === "quota.snapshot") quotas.push(event) } })
   try {
     await client.connect()
     const settings = wantsSettings ? await client.send({ type: "settings.get" }) : undefined
@@ -91,9 +91,10 @@ async function askDaemon({ topic, dataDir, cwd }: { topic: string; dataDir: stri
       prompt: prompt?.ok ? (prompt.result as Record<string, unknown> | undefined) : undefined,
       quotas: info?.ok ? quotas : undefined,
       refresh: info?.ok ? (info.result?.quotaRefresh as LiveContext["refresh"]) : undefined,
+      daemonUnanswered: (wantsSettings && !settings?.ok) || (wantsPrompt && !prompt?.ok) || (wantsQuotas && !info?.ok),
     }
   } catch {
-    return none
+    return { ...none, daemonUnanswered: true }
   } finally {
     client.close()
   }

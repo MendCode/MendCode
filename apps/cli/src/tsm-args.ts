@@ -1,10 +1,11 @@
+import { TSM_HELP } from "./help-text"
 import type { TsmChange, TsmRead } from "@mendcode/protocol"
 import type { Common, ParseResult } from "./automation"
 import { COMPAT } from "./compat"
 import { PROGRAM_NAME } from "@mendcode/program"
 
 export type TsmAutomation = { kind: "tsm"; request: { type: "tsm.query"; query: TsmRead } | { type: "tsm.change"; change: TsmChange } }
-export const TSM_USAGE = `usage: ${PROGRAM_NAME} [control-plane] tsm <status|plan|install|setup|activate|deactivate|remove|doctor> [--mux cmux|kitty|ghostty|wezterm|auto] [--json]\n  open TARGET | create NAME [--branch B] [--base REF] [--path PATH] [--focus F] (preview only)\n  --dir DATA selects daemon storage; --project PATH selects the project\n  plan/install/setup save a dry-run plan; remove recycles only MendCode scaffold`
+export const TSM_USAGE = TSM_HELP
 const values = new Set(["dir", "data-dir", "engine", "format", "compat", "project", "mux", "branch", "base", "path", "focus"])
 const muxes = ["cmux", "kitty", "ghostty", "wezterm", "auto"] as const
 const safe = (value: string) => value.length > 0 && value.length <= 4096 && !/[\x00-\x1f\x7f]/.test(value)

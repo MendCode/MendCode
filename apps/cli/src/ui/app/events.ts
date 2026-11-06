@@ -5,7 +5,7 @@ import type { createChanges } from "./changes"
 import type { createMemory } from "./memory"
 import type { createSecrets } from "./secrets"
 import type { createAgents } from "./agents"
-import { preload } from "../lazy-pages"
+import { loadReviewActivity, preload } from "../lazy-pages"
 import { sidebarVisible } from "../../view/sidebar"
 import { withPushedDraft } from "../../view/session-label"
 import { normalizeTuiProfile } from "../../view/tui-profile"
@@ -79,6 +79,7 @@ export function createEvents(ctx: AppContext, actions: {
   /** Entering plan mode says who plans and that nothing changes before the review; leaving it says what runs now (the models are asked again first). */
   function announcePlanMode(from: PermissionMode, to: PermissionMode) {
     if ((from === "plan") === (to === "plan")) return
+    if (to === "plan") state.modeBeforePlan = { sessionId: state.sessionId, mode: from }
     const notice = () => planModeNotice({ from, to, report: state.modelReport, planModel: planModelId(state.modelReport, state.effectiveModel?.model), buildModel: state.effectiveModel?.model, agent: state.agentReport?.current })
     void actions.loadEffectiveModel().then(() => { say(notice()!, "info"); requestFrame() })
   }
@@ -89,9 +90,12 @@ export function createEvents(ctx: AppContext, actions: {
     if (state.paging && !state.paging.ready && state.paging.loading) { state.paging.held.push(event); return }
     state.lastEventAt = ctx.now()
     const width = chatWidth()
-    const before = state.transcript.totalLines(width)
-    const windowTop = state.transcript.olderBlocks
     const following = view.get(state.sessionId).follow
+    // The growth only matters to a reader who left the bottom (`onGrowth` ignores it otherwise). A streamed delta cannot make the reader follow or
+    // leave, so for a follower it costs no layout here: the next frame lays the growing block out once for all the deltas it covers.
+    const measured = !following || event.type !== "item.delta"
+    const before = measured ? state.transcript.totalLines(width) : 0
+    const windowTop = state.transcript.olderBlocks
     state.turnState.apply(event)
     state.compactionFacts.apply(event)
     const permissionBefore = state.transcript.permissionMode
@@ -141,7 +145,7 @@ export function createEvents(ctx: AppContext, actions: {
     if (event.type === "queue.added" && event.notice) say(event.text.split("\n")[0]!.slice(0, 200), "info")
     // A /compact that did nothing says why; with no card in the transcript it would otherwise just vanish.
     if (event.type === "compaction.updated" && event.state === "skipped" && event.reason === "manual") say(event.note ?? "Nothing to compact", "info")
-    view.onGrowth(state.sessionId, state.transcript.totalLines(chatWidth()) - before)
+    if (measured) view.onGrowth(state.sessionId, state.transcript.totalLines(chatWidth()) - before)
     requestFrame()
   }
 
@@ -153,6 +157,13 @@ export function createEvents(ctx: AppContext, actions: {
       return
     }
     if (event.type === "review.changed") return actions.noteReview(event)
+    // The PR reviews running now, whole: the watching session draws their steps and the footer of any other session names them.
+    if (event.type === "pr.review.activity") {
+      state.reviewActivity = event.jobs
+      if (event.jobs.length) void loadReviewActivity().then(requestFrame, () => undefined)
+      requestFrame()
+      return
+    }
     // The code graph's counts for one project directory: kept for the footer's `codegraph` segment, which reads them only when it draws.
     if (event.type === "codegraph.status") {
       if (event.state === "none") codegraph.delete(event.directory)
@@ -161,6 +172,18 @@ export function createEvents(ctx: AppContext, actions: {
       return
     }
     // `api.toast` from a daemon extension: the toast line only. The prompt, its focus and the transcript are untouched, and nothing reaches the model.
+    if (event.type === "children.waiting") {
+      const before = state.childWaiting.get(event.launcher)
+      if (event.total) state.childWaiting.set(event.launcher, { launcherTitle: event.launcherTitle, total: event.total, children: event.children })
+      else state.childWaiting.delete(event.launcher)
+      // The terminal that has the launcher open shows the card itself; any other says who waits and where to answer.
+      const fresh = event.children.filter((child) => !before?.children.some((known) => known.sessionId === child.sessionId))
+      if (fresh.length && event.launcher !== state.sessionId) {
+        const who = fresh.length === 1 ? `"${fresh[0]!.title}"` : `${fresh.length} child sessions`
+        say(`${who} from "${event.launcherTitle || event.launcher}" ${fresh.length === 1 ? "waits" : "wait"} for approval`, "warning", { hint: "/approvals", oneLine: true, ms: 12_000 })
+      }
+      return requestFrame()
+    }
     if (event.type === "extension.feedback") return say(`${event.extension}: ${event.text}`, event.level)
     if (event.type === "extensions.changed") {
       void actions.reloadExtensions(event.revision)
@@ -211,6 +234,11 @@ export function createEvents(ctx: AppContext, actions: {
       state.todayUsage = { tokens: event.tokens, calls: event.calls, ...(event.costMicros ? { costMicros: event.costMicros } : {}) }
       return requestFrame()
     }
+    // A running count from an engine that records its usage later: the activity line only, and only for the open session's turn.
+    if (event.type === "turn.tokens") {
+      if (event.sessionId === state.sessionId && state.turnState.noteLive(event)) requestFrame()
+      return
+    }
     if (event.type === "agent-commands.changed") return actions.peerCommandsChanged(event.sourceSessionId, event.targetSessionId)
     if (event.type === "task.changed") {
       state.agentParents.delete(event.sessionId)
@@ -218,7 +246,7 @@ export function createEvents(ctx: AppContext, actions: {
       if (state.agentParents.size > AGENT_PARENTS_KEPT) state.agentParents.delete(state.agentParents.keys().next().value!)
       followPet(state)
       if (state.page === "tasks" && event.parentId === state.sessionId) void actions.loadTasks()
-      if (event.parentId === state.sessionId) void refreshLiveTasks(ctx)
+      if (event.parentId === state.sessionId || event.parentId === state.sessionParentId) void refreshLiveTasks(ctx)
       if (state.page === "agents") void actions.loadBackgroundSessions()
       // The agents card and /tree draw the sub-agents' state and model: ask again.
       state.sidebarTreeRev++

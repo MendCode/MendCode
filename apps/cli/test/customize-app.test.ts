@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs"
 import path from "node:path"
 import type { Line } from "../src/ui/theme"
-import { createCustomizePageState, customizePageKey, customizePreview, renderCustomizePage, CUSTOMIZE_ROWS } from "../src/view/customize-page"
+import { createCustomizePageState, customizePageKey, customizePreview, renderCustomizePage, CUSTOMIZE_ROWS, customizeSteps } from "../src/view/customize-page"
 import { logoRowsFor } from "../src/view/logo-fonts"
 import { LOGO_MARK } from "../src/view/logo-mark"
 import { DEFAULT_TUI_PROFILE, tuiProfilePath, type TuiProfile } from "../src/view/tui-profile"
@@ -35,19 +35,24 @@ async function open(options: { width?: number; height?: number; settings?: Recor
   return { h, dataDir }
 }
 
+/** The profile the page hides rows by: the saved one, as the app reads it. */
+const shownProfile = (h: Awaited<ReturnType<typeof appHarness>>): TuiProfile => h.app.tuiProfile as TuiProfile
 const at = (name: typeof CUSTOMIZE_ROWS[number]) => ({ row: CUSTOMIZE_ROWS.indexOf(name) })
 async function select(h: Awaited<ReturnType<typeof appHarness>>, name: typeof CUSTOMIZE_ROWS[number]) {
   if (h.app.page !== "chat") await h.key("\x1b")
   await h.type("/customize")
   await h.key("\r")
-  for (let i = 0; i < at(name).row; i++) await h.key(DOWN)
+  for (let i = 0; i < customizeSteps(name, shownProfile(h), { mode: h.app.viewMode }); i++) await h.key(DOWN)
 }
 
 describe("/customize page", () => {
   test("grouped choices and the real home preview, without invented sessions or models", async () => {
     const { h } = await open({ width: 180, height: 50 })
     expect(h.app.page).toBe("customize")
-    for (const label of ["Home", "Logo kind", "Logo text", "Logo font", "Product name", "Welcome layout", "Split panel", "Density", "Prompt & footer", "Preview"]) expect(h.text()).toContain(label)
+    for (const label of ["Home", "Logo kind", "Logo text", "Logo font", "Product name", "Welcome layout", "Split panel", "Density", "Prompt & footer", "Chat preview"]) expect(h.text()).toContain(label)
+    // The Home rows preview the home itself.
+    await select(h, "logoKind")
+    expect(h.text()).toContain("Home preview")
     expect(h.text()).toContain(LOGO_MARK[0]!)
     expect(h.text()).toContain("No sessions yet")
     expect(h.text()).not.toMatch(/sample sessions|Port the palette|gpt-6|● Tip/)
@@ -89,6 +94,10 @@ describe("/customize page", () => {
 
   test("custom ASCII keeps spaces and newlines and changes the home immediately", async () => {
     const { h, dataDir } = await open({ width: 180, height: 50 })
+    // Logo art is listed once Logo kind is custom: the row that uses it.
+    await select(h, "logoKind")
+    for (let i = 0; i < 3; i++) await h.key(RIGHT)
+    expect(saved(dataDir).logoKind).toBe("custom")
     await select(h, "customAscii")
     await h.key("\r")
     await h.type("  /\\")
@@ -104,7 +113,7 @@ describe("/customize page", () => {
   test("all fonts cycle, removed fonts migrate, and none hides the identity", async () => {
     const { h, dataDir } = await open({ width: 180, height: 50 })
     await select(h, "logoFont")
-    for (const font of ["compact", "solid", "outline", "mendcode"]) {
+    for (const font of ["compact", "solid", "outline", "rounded", "double", "shade", "braille", "mendcode"]) {
       await h.key(RIGHT)
       expect(saved(dataDir).logoFont).toBe(font)
     }
@@ -135,13 +144,14 @@ describe("/customize page", () => {
   test("every boolean applies and round-trips, reset restores defaults", async () => {
     const { h, dataDir } = await open({ width: 180, height: 50 })
     const fields = CUSTOMIZE_ROWS.filter((row) => row !== "reset" && typeof DEFAULT_TUI_PROFILE[row] === "boolean")
-    // One pass down the page: rows are in CUSTOMIZE_ROWS order, so moving from the previous field is enough.
-    let row = 0
-    await select(h, CUSTOMIZE_ROWS[0]!)
+    // Each row opened by name (`/settings <row>`): a row an earlier toggle hid (the footer's under Footer off) is still reached.
+    await h.key("\x1b")
     for (const field of fields) {
-      for (; row < at(field).row; row++) await h.key(DOWN)
+      await h.type(`/settings ${field}`)
+      await h.key("\r")
       await h.key(" ")
       expect(saved(dataDir)[field]).toBe(!DEFAULT_TUI_PROFILE[field])
+      await h.key("\x1b")
     }
     await select(h, "reset")
     await h.key("\r")

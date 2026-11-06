@@ -65,7 +65,8 @@ describe("B10.05 Vertex Anthropic CLI factories", () => {
     await h.type("m"); expect(h.app.page).toBe("model")
     await h.type("\x1b[D")
     expect(h.commands("session.model.set").at(-1)).toMatchObject({ choice: { model: `${ID}:${MODEL}` } })
-    await h.type("\x1b"); await h.run("/connect Vertex Anthropic")
+    // esc leaves the model page for the connect page it came from, and once more leaves that
+    await h.type("\x1b"); await h.type("\x1b"); await h.run("/connect Vertex Anthropic")
     expect(h.text()).toContain("TEAM_TOKEN")
     await h.type("\x1b"); await h.type("\x1b")
   }, 15_000)

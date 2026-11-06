@@ -3,9 +3,13 @@ import path from "node:path"
 import { EXTENSIONS_DIR } from "@mendcode/extension-api"
 import { discoverPluginFiles, type PluginFile } from "@mendcode/extension-api/plugin-files"
 
+const resolvedDir = (dir: string) => { try { return realpathSync(dir) } catch { return path.resolve(dir) } }
+/** The home folder's `.mendcode` is the data directory: one user layer, never a project one too (the daemon's `projectIsUserDir`). */
+const projectIsUserDir = ({ userDir, directory }: { userDir: string; directory: string }) => resolvedDir(path.join(directory, ".mendcode")) === resolvedDir(userDir)
+
 /**
  * Finds extension modules on disk: `<layer>/extensions/*.ts|js` and `<layer>/extensions/<name>/index.ts|js` for the
- * user dir, its packages, the project's `.mendcode/` and the project's packages. Pure filesystem; it imports nothing
+ * user dir, its profiles, the project's `.mendcode/` and the project's packages. Pure filesystem; it imports nothing
  * from the extensions it finds, so a terminal without any pays one failed `existsSync` per layer and loads nothing.
  */
 
@@ -17,12 +21,12 @@ export type ExtensionFile = {
   /** The extension's own directory: its folder, or `extensions/` for a single file. */
   dir: string
   source: ExtensionSource
-  /** The package that ships it, if any. */
+  /** The profile that ships it, if any. */
   pkg?: string
   plugin?: PluginFile["plugin"]
 }
 
-/** Same rule as the daemon's package loader (packages/src/layers.ts). */
+/** Same rule as the daemon's profile loader (packages/src/layers.ts). */
 const PACKAGE_NAME = /^[a-z0-9][a-z0-9._-]{0,63}$/
 const PACKAGES_DIR = "packages"
 const MODULE_FILE = /^[^.].*\.(ts|js)$/
@@ -57,8 +61,8 @@ function packageRoots(root: string): Array<{ name: string; dir: string }> {
 }
 
 /**
- * Every extension module for a terminal, in load order: user, user packages, project packages, project.
- * `disabled` holds `user:name` / `project:name` keys (the daemon's `disabledPackages`); those packages are skipped.
+ * Every extension module for a terminal, in load order: user, user profiles, project profiles, project.
+ * `disabled` holds `user:name` / `project:name` keys (the daemon's `disabledProfiles`); those profiles are skipped.
  * Project modules are listed with `source: "project"`; the caller decides whether the directory is trusted.
  */
 export function discoverExtensions(input: { dataDir: string; directory?: string | undefined; disabled?: readonly string[] | undefined; disabledResources?: readonly string[] | undefined }): ExtensionFile[] {
@@ -68,9 +72,9 @@ export function discoverExtensions(input: { dataDir: string; directory?: string 
     packageRoots(root)
       .filter(({ name }) => !off.has(`${source}:${name}`))
       .flatMap(({ name, dir }) => [...modulesIn(path.join(dir, EXTENSIONS_DIR), source, name, resourcesOff), ...discoverPluginFiles(dir, input.dataDir, "tui").map((file) => ({ ...file, source, pkg: name }))])
-  // Same order as the daemon's layers (packages/packages/src/layers.ts): the user's packages, then the user's own folder, then the project's packages, then its own folder. Later wins.
+  // Same order as the daemon's layers (packages/packages/src/layers.ts): the user's profiles, then the user's own folder, then the project's packages, then its own folder. Later wins.
   const user = [...packages("user", path.join(input.dataDir, PACKAGES_DIR)), ...modulesIn(path.join(input.dataDir, EXTENSIONS_DIR), "user"), ...discoverPluginFiles(input.dataDir, input.dataDir, "tui").map((file) => ({ ...file, source: "user" as const }))]
-  if (!input.directory) return user
+  if (!input.directory || projectIsUserDir({ userDir: input.dataDir, directory: input.directory })) return user
   const project = path.join(input.directory, ".mendcode")
   return [...user, ...packages("project", path.join(project, PACKAGES_DIR)), ...modulesIn(path.join(project, EXTENSIONS_DIR), "project"), ...[project, input.directory].flatMap((root) => discoverPluginFiles(root, input.dataDir, "tui").map((file) => ({ ...file, source: "project" as const })))]
 }
@@ -88,9 +92,9 @@ export function canonicalDirectory(directory: string): string {
 export type ActivationManifest = { key: string; source: ExtensionSource; name: string; dir: string; manifest: Record<string, unknown> }
 
 /**
- * Enabled packages whose manifest declares `"activate"` (the activation profile, docs/packages.md), in layer order: user
- * packages, then project packages. A substring test first, so a terminal without any pays one small read per package and
- * never parses or loads the activation code (extensions/activation.ts). Project packages are listed; the caller applies trust.
+ * Enabled profiles whose manifest declares `"activate"` (the activation, docs/profiles.md), in layer order: user
+ * profiles, then project profiles. A substring test first, so a terminal without any pays one small read per profile and
+ * never parses or loads the activation code (extensions/activation.ts). Project profiles are listed; the caller applies trust.
  */
 export function activationManifests(input: { dataDir: string; directory?: string | undefined; disabled?: readonly string[] | undefined }): ActivationManifest[] {
   const off = new Set(input.disabled ?? [])
@@ -99,16 +103,16 @@ export function activationManifests(input: { dataDir: string; directory?: string
     for (const { name, dir } of packageRoots(root)) {
       if (off.has(`${source}:${name}`)) continue
       try {
-        const text = readFileSync(path.join(dir, "mendcode-package.json"), "utf8")
+        const text = readFileSync(path.join(dir, existsSync(path.join(dir, "mendcode-profile.json")) ? "mendcode-profile.json" : "mendcode-package.json"), "utf8")
         if (text.length > 32 * 1024 || !text.includes('"activate"')) continue
         const manifest: unknown = JSON.parse(text)
         if (typeof manifest === "object" && manifest !== null && !Array.isArray(manifest) && "activate" in manifest) found.push({ key: `${source}:${name}`, source, name, dir, manifest: manifest as Record<string, unknown> })
       } catch {
-        // No manifest, or not JSON: the package has no activation (`package check` reports a broken manifest).
+        // No manifest, or not JSON: the profile has no activation (`profile check` reports a broken manifest).
       }
     }
   }
   scan("user", path.join(input.dataDir, PACKAGES_DIR))
-  if (input.directory) scan("project", path.join(input.directory, ".mendcode", PACKAGES_DIR))
+  if (input.directory && !projectIsUserDir({ userDir: input.dataDir, directory: input.directory })) scan("project", path.join(input.directory, ".mendcode", PACKAGES_DIR))
   return found
 }

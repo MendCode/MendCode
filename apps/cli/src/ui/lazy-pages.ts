@@ -21,6 +21,9 @@ function lazyModule<T>(name: string, load: () => Promise<T>): Loaded<T> {
 }
 
 const tasks = lazyModule("tasks-page", () => import("../view/tasks-page"))
+const help = lazyModule("help-page", () => import("../view/help-page"))
+const modelPage = lazyModule("model-page", () => import("../view/model-page"))
+const environment = lazyModule("environment-page", () => import("../view/environment-page"))
 const usage = lazyModule("usage-page", () => import("../view/usage-page"))
 const memory = lazyModule("memory-page", () => import("../view/memory-page"))
 const context = lazyModule("context-page", () => import("../view/context-page"))
@@ -65,6 +68,12 @@ const modelPicker = lazyModule("model-picker", () => import("../view/model-picke
 const modelQuick = lazyModule("model-quick", () => import("../view/model-quick"))
 const sessionTree = lazyModule("session-tree-page", () => import("../view/session-tree-page"))
 const textPage = lazyModule("text-page", () => import("../view/text-page"))
+const whatsNewPage = lazyModule("whatsnew-page", () => import("../view/whatsnew-page"))
+/** The running PR reviews' steps and footer word: loaded with the first activity that has a job, so a terminal that never sees a review pays nothing. */
+const reviewActivity = lazyModule("review-activity", () => import("../view/review-activity"))
+export const loadReviewActivity = () => reviewActivity.load()
+/** The review-activity view once loaded; undefined before (nothing to draw yet). */
+export const reviewActivityView = () => (reviewActivity.loaded() ? reviewActivity.get() : undefined)
 const permissions = lazyModule("permissions-page", () => import("../view/permissions-page"))
 const sidebar = lazyModule("sidebar-editor", () => import("../view/sidebar-editor"))
 const promptMode = lazyModule("prompt-mode-page", () => import("../view/prompt-mode-page"))
@@ -98,6 +107,9 @@ const tutorialSandbox = lazyModule("tutorial-sandbox", () => import("../tutorial
 
 /** Modules behind each slash command that opens a page (or needs one to run). */
 export const PAGE_MODULES = {
+  help: [help],
+  modelPage: [modelPage],
+  env: [environment],
   tasks: [tasks],
   usage: [usage],
   memory: [memory],
@@ -111,7 +123,7 @@ export const PAGE_MODULES = {
   mcps: [mcps],
   acp: [acp],
   tools: [tools],
-  packages: [packages],
+  profiles: [packages],
   agent: [agentPicker],
   theme: [themePicker],
   agents: [agents, peerCommands],
@@ -134,19 +146,22 @@ export const PAGE_MODULES = {
   palette: [palette],
   approval: [approvalDiff],
   pet: [petPicker],
+  // `/mascot` without a name (and Enter on customize's Mascot row) opens the same picker for the start screen.
+  mascot: [petPicker],
   connect: [connect],
   providers: [providers],
   secrets: [secrets],
   history: [history],
   skills: [skills],
   variants: [modelPicker],
-  modelPicker: [modelPicker],
+  modelPicker: [modelPicker, modelPage],
   modelQuick: [modelPicker, modelQuick],
   timeline: [sessionTree],
   tree: [sessionTree],
   recap: [textPage],
   pr: [textPage],
   changelog: [textPage],
+  whatsnew: [whatsNewPage],
   permissions: [permissions],
   diagram: [diagram],
   sidebar: [sidebar],
@@ -183,7 +198,7 @@ export const PAGE_MODULES = {
 export type PageName = keyof typeof PAGE_MODULES
 
 /** Names of the lazily loaded modules, for the footprint test. */
-export const LAZY_MODULE_FILES = ["stash-page", "queue-page","history-page", "skills-page", "model-picker", "acp-page", "agent-picker", "theme-picker", "usage-page", "memory-page", "context-page", "changes-page", "git-page", "git-commit-page", "git-pr-page", "git-init-page", "mcps-page", "tools-page", "packages-page", "storage-page", "agents-page", "loops-page", "loop-command", "workflows-page", "workflow-command", "setup-page", "onboarding-page", "onboarding-detect", "customize-page", "settings-page", "status-page", "extensions-page", "hooks-page", "palette", "approval-diff", "pet-picker", "connect-page", "providers-page", "secrets-page", "session-tree-page", "text-page", "permissions-page", "mermaid-viewer", "sidebar-editor", "transcript-actions-page", "plan-review-page", "prompt-mode-page", "compaction-page", "agent-commands-page", "diagnostics-page", "worktrees-page", "automation-ledger-page", "compound-page", "marketplace-page", "ai-config-page", "reasoning-page", "release-page", "tsm-page", "ide-page", "mflow-page", "reviews-page", "reviews-keys", "console-page", "compaction-live", "compaction-arcade", "keymap-page", "terminal-setup-page", "tutorial-page", "model-quick", "file-viewer"] as const
+export const LAZY_MODULE_FILES = ["help-page", "model-page", "environment-page", "tasks-page", "stash-page", "queue-page","history-page", "skills-page", "model-picker", "acp-page", "agent-picker", "theme-picker", "usage-page", "memory-page", "context-page", "changes-page", "git-page", "git-commit-page", "git-pr-page", "git-init-page", "mcps-page", "tools-page", "packages-page", "storage-page", "agents-page", "loops-page", "loop-command", "workflows-page", "workflow-command", "setup-page", "onboarding-page", "onboarding-detect", "customize-page", "settings-page", "status-page", "extensions-page", "hooks-page", "palette", "approval-diff", "pet-picker", "connect-page", "providers-page", "secrets-page", "session-tree-page", "text-page", "whatsnew-page", "review-activity", "permissions-page", "mermaid-viewer", "sidebar-editor", "transcript-actions-page", "plan-review-page", "prompt-mode-page", "compaction-page", "agent-commands-page", "diagnostics-page", "worktrees-page", "automation-ledger-page", "compound-page", "marketplace-page", "ai-config-page", "reasoning-page", "release-page", "tsm-page", "ide-page", "mflow-page", "reviews-page", "reviews-keys", "console-page", "compaction-live", "compaction-arcade", "keymap-page", "terminal-setup-page", "tutorial-page", "model-quick", "file-viewer"] as const
 
 /** The lazily loaded modules a slash command needs, if any. */
 export function slashPage(command: string): PageName | undefined {
@@ -208,6 +223,21 @@ export async function preload(name: PageName, options: { onSlow?: () => void; sl
     if (timer) clearTimeout(timer)
   }
 }
+
+type HelpMod = typeof import("../view/help-page")
+export const renderHelpPage: HelpMod["renderHelpPage"] = (...args) => help.get().renderHelpPage(...args)
+export const helpKeyRows: HelpMod["helpKeyRows"] = (...args) => help.get().helpKeyRows(...args)
+export const helpPageWindow: HelpMod["helpPageWindow"] = (...args) => help.get().helpPageWindow(...args)
+
+type ModelPageMod = typeof import("../view/model-page")
+export const createModelPageState: ModelPageMod["createModelPageState"] = (...args) => modelPage.get().createModelPageState(...args)
+export const renderModelPage: ModelPageMod["renderModelPage"] = (...args) => modelPage.get().renderModelPage(...args)
+export const modelPageKey: ModelPageMod["modelPageKey"] = (...args) => modelPage.get().modelPageKey(...args)
+
+type EnvironmentMod = typeof import("../view/environment-page")
+export const createEnvironmentPageState: EnvironmentMod["createEnvironmentPageState"] = (...args) => environment.get().createEnvironmentPageState(...args)
+export const looksLikeDotenv: EnvironmentMod["looksLikeDotenv"] = (...args) => environment.get().looksLikeDotenv(...args)
+export const renderEnvironmentPage: EnvironmentMod["renderEnvironmentPage"] = (...args) => environment.get().renderEnvironmentPage(...args)
 
 type UsageMod = typeof import("../view/usage-page")
 export const createUsagePageState: UsageMod["createUsagePageState"] = (...args) => usage.get().createUsagePageState(...args)
@@ -371,6 +401,11 @@ export const textPageKey: TextPageMod["textPageKey"] = (...args) => textPage.get
 export const textPageViewport: TextPageMod["textPageViewport"] = (...args) => textPage.get().textPageViewport(...args)
 export const renderTextPage: TextPageMod["renderTextPage"] = (...args) => textPage.get().renderTextPage(...args)
 
+type WhatsNewMod = typeof import("../view/whatsnew-page")
+export const createWhatsNewState: WhatsNewMod["createWhatsNewState"] = (...args) => whatsNewPage.get().createWhatsNewState(...args)
+export const whatsNewKey: WhatsNewMod["whatsNewKey"] = (...args) => whatsNewPage.get().whatsNewKey(...args)
+export const renderWhatsNewPage: WhatsNewMod["renderWhatsNewPage"] = (...args) => whatsNewPage.get().renderWhatsNewPage(...args)
+
 type PermissionsMod = typeof import("../view/permissions-page")
 export const createPermissionsPageState: PermissionsMod["createPermissionsPageState"] = (...args) => permissions.get().createPermissionsPageState(...args)
 export const permissionsPageKey: PermissionsMod["permissionsPageKey"] = (...args) => permissions.get().permissionsPageKey(...args)
@@ -421,6 +456,7 @@ export const renderSidebarEditor: typeof import("../view/sidebar-editor").render
 type HistoryMod = typeof import("../view/history-page")
 export const createHistoryState: HistoryMod["createHistoryState"] = (...args) => history.get().createHistoryState(...args)
 export const historyTurns: HistoryMod["historyTurns"] = (...args) => history.get().historyTurns(...args)
+export const historySearchKey: HistoryMod["historySearchKey"] = (...args) => history.get().historySearchKey(...args)
 export const historyReaderRows: typeof import("../view/history-page").historyReaderRows = (...args) => history.get().historyReaderRows(...args)
 export const renderHistoryPage: HistoryMod["renderHistoryPage"] = (...args) => history.get().renderHistoryPage(...args)
 type SkillsMod = typeof import("../view/skills-page")
@@ -496,6 +532,7 @@ export const renderCompoundPage: typeof import("../view/compound-page").renderCo
 type MarketplaceMod = typeof import("../view/marketplace-page")
 export const createMarketplaceState: MarketplaceMod["createMarketplaceState"] = (...args) => marketplace.get().createMarketplaceState(...args)
 export const catalogMatches: MarketplaceMod["catalogMatches"] = (...args) => marketplace.get().catalogMatches(...args)
+export const catalogSearchKey: MarketplaceMod["catalogSearchKey"] = (...args) => marketplace.get().catalogSearchKey(...args)
 export const renderMarketplacePage: MarketplaceMod["renderMarketplacePage"] = (...args) => marketplace.get().renderMarketplacePage(...args)
 
 export const renderIntroPage: SetupMod["renderIntroPage"] = (...args) => setup.get().renderIntroPage(...args)

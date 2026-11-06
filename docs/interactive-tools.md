@@ -43,9 +43,12 @@ how much was lost. `write` input is at most 16 384 characters. `\n` presses ente
   it, nothing is added to `READ_ONLY_COMMANDS`, and its output is not part of the chat event stream except as tool
   results (which are secret-masked like any other).
 - **Lifetime.** Killed when the chat session is deleted, when its project is disposed, and when the daemon stops. A
-  session nobody touched (any tool call on it) for 15 minutes is stopped; any session is stopped after 2 hours. At most
-  4 running sessions per chat and 8 in total. Finished sessions stay readable (16 kept). The idle sweep timer exists only
+  session runs until it ends or is stopped; the optional `processLimits.idleMinutes` (nobody touched it with a tool call) and `processLimits.lifetimeMinutes` caps stop one, 0 or unset meaning no cap. At most
+  4 running sessions per chat and 8 in total. Finished sessions stay readable (16 kept). The sweep timer exists only
   while a session is running. The daemon does not evict a chat session from memory while it has a running session.
+- **Background commands.** `shell` with `background: true` follows the same rule: no cap by default, and `processLimits.lifetimeMinutes`
+  stops one that runs longer. A compaction keeps them: the registry lives in the daemon, the summary lists the running ones with their ids,
+  and `shell_output` and `shell_kill` stay listed while the chat owns any. A daemon restart still ends them.
 - **Availability.** macOS and Linux under Bun (`Bun.Terminal`, no new dependency). Elsewhere the tool is not offered and
   `shell` remains. Start failures return a tool error, never throw.
 
@@ -87,6 +90,10 @@ cell id) or `delete`. Replacing a code cell clears its outputs and execution cou
 metadata and other cells' outputs, is preserved (JSON rewritten with Jupyter's one-space indent). Permission `write`
 under the `edit` family: edit rules, plan mode, smart mode path checks and the per-turn undo snapshot all apply, and the
 approval shows what would change. Notebooks over 20 MiB are refused.
+
+## `shell` output
+
+A foreground `shell` call writes its output to temporary files while the command runs, so the daemon does not keep it in memory. A command that writes more than 256 MB to one stream is stopped, and its reply ends with `[stopped: more than 256 MB of output]`. The timeout (120 seconds by default, at most 600) ends a command with `[timed out after … ms]`. The model reads the head and the tail of long output; the middle is dropped from what is kept in memory.
 
 ## Not done: model-callable worktree enter/exit (K85)
 

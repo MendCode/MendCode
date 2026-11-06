@@ -90,7 +90,7 @@ export function createMemoryControl(input: {
   const entries = (directory: string) => store.memories.list({ directory, profile: input.profile(directory) })
   function target(directory: string, args: MemoryControlInput) {
     const memory = entries(directory).find((entry) => entry.memoryId === args.memoryId && (!args.scope || entry.scope === args.scope))
-    if (!memory) throw new Error("Memory not found in this project/profile/scope")
+    if (!memory) throw new Error("Memory not found in this project/area/scope")
     return memory
   }
   function propose(directory: string, text: string, args: MemoryControlInput, source: "user" | "agent" = "user") {

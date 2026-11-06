@@ -52,7 +52,8 @@ describe("platform resume: a budget stop keeps the candidates and a resume finis
     const context = await buildReviewContext({ directory: dir, base: "main", head: "feature", budgetTokens: 200_000 })
     const review = scripted([JSON.stringify({ summary: "Changes total and half.", findings: [candidate(3, "The loop skips the first value"), candidate(6, "half() truncates odd numbers")] })])
     const stopped = await reviewPullRequest({ sessionFactory: review.factory, context, config: { ...DEFAULT_ENGINE_CONFIG, budgetTokens: 500 }, cap: 8 })
-    expect(review.asked).toEqual(["review"])
+    // The review pass, then the one short closing check (it gets no usable answer here, so both candidates stay unverified).
+    expect(review.asked).toEqual(["review", "verify", "verify"])
     expect(stopped.stop).toMatchObject({ kind: "budget", unit: "tokens", used: 1100, limit: 500, resumable: true, remaining: "2 candidates not verified" })
     expect(stopped.result.findings).toEqual([])
     expect(stopped.result.summary).toContain("The review is incomplete")
@@ -80,8 +81,8 @@ describe("platform resume: a budget stop keeps the candidates and a resume finis
     expect(resumed.stop).toBeUndefined()
     expect(resumed.validation).toEqual({ ok: true, reason: "complete and verified" })
     expect(resumed.result.findings.map((finding) => [finding.line, finding.verdict])).toEqual([[3, "confirmed"]])
-    // The tokens of the stopped run still count: the resume adds to them.
-    expect(resumed.result.tokens).toMatchObject({ input: 2000, output: 200 })
+    // The continuation counts its own spending under a fresh allowance; the stopped run's stays in the job's ledger.
+    expect(resumed.result.tokens).toMatchObject({ input: 1000, output: 100 })
     restarted.checkpoint(job.id, { candidates: [], verified: resumed.candidates, completedPhases: resumed.completedPhases ?? [] })
     restarted.transition(job.id, "validating")
     expect(toSummary(restarted.transition(job.id, "done")).findings).toMatchObject({ confirmed: 1, candidates: 0 })

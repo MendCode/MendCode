@@ -8,6 +8,8 @@ import { appHarness, cleanTemps, tempDir } from "./session-ui-harness"
 
 afterAll(cleanTemps)
 const asReply = (reply: unknown) => reply as CommandReply
+/** The screen as one line without the card's borders, so a label that wraps after the temporary path still reads as one. */
+const flat = (lines: string[]) => lines.join(" ").replace(/[┃│]/g, " ").replace(/\s+/g, " ")
 
 function app(options: { remote?: boolean } = {}) {
   const project = realpathSync(tempDir("mendcode-adddir-"))
@@ -44,7 +46,7 @@ describe("/add-dir", () => {
     expect(h.sentOf("settings.set")).toHaveLength(0)
     expect(h.text().join("\n")).toContain("extra directory for this session")
     await h.type("/add-dir\r")
-    expect(h.text().join("\n")).toContain("extra · this session")
+    expect(flat(h.text())).toContain("· this session")
   })
 
   test("save keeps the directory in the additionalDirectories setting and remove drops it", async () => {
@@ -52,7 +54,7 @@ describe("/add-dir", () => {
     await h.type(`/add-dir save ${real}\r`)
     expect(h.sentOf("settings.set").at(-1)).toEqual({ type: "settings.set", patch: { additionalDirectories: [real] } })
     await h.type("/add-dir\r")
-    expect(h.text().join("\n")).toContain("extra · saved")
+    expect(flat(h.text())).toContain("· saved")
     await h.type(`/add-dir remove ${real}\r`)
     expect(h.sentOf("settings.set").at(-1)).toEqual({ type: "settings.set", patch: { additionalDirectories: [] } })
     expect(h.text().join("\n")).toContain("no longer an extra directory")

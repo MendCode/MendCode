@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { PrStopReason } from "@mendcode/protocol"
-import { budgetPolicy, checkBudget, classifyStop, CONTEXT_WINDOW_SHARE, countedTokens, failureStop, MAX_RATE_LIMIT_WAITS, quotaPlan, RESET_GRACE_MS, stopText, UNKNOWN_RESET_BACKOFF_MINUTES } from "../src/pr-review/budget"
+import { budgetPolicy, checkBudget, scaledBudget, classifyStop, CONTEXT_WINDOW_SHARE, countedTokens, failureStop, MAX_RATE_LIMIT_WAITS, quotaPlan, RESET_GRACE_MS, stopText, UNKNOWN_RESET_BACKOFF_MINUTES } from "../src/pr-review/budget"
 import { DEFAULT_REVIEW_CONFIG, ReviewConfig } from "../src/pr-review/config"
 import { DEFAULT_CONTEXT_TOKENS, type BudgetPolicy } from "../src/pr-review/contracts"
 
@@ -225,5 +225,17 @@ describe("stopText", () => {
     const text = stopText({ kind: "no_progress", detail: "two rounds left the same findings open", unit: "rounds", used: 2, resumable: false })
     expect(text).toContain("Used: 2 rounds (measured) of no internal limit.")
     expect(text).toContain("The job cannot continue from where it stopped.")
+  })
+})
+
+describe("scaledBudget", () => {
+  const budget = (tokens_per_pr: number | null, tokens_per_diff_token = 8) => ({ tokens_per_pr, tokens_per_diff_token })
+  test("the cap grows with the diff from a base, never above the configured ceiling, and is off without a ceiling", () => {
+    expect(scaledBudget(budget(1_000_000), 1_000)).toBe(158_000)
+    expect(scaledBudget(budget(1_000_000), 130_000)).toBe(1_000_000)
+    expect(scaledBudget(budget(100_000), 1_000)).toBe(100_000)
+    expect(scaledBudget(budget(5_000), 0)).toBe(5_000)
+    expect(scaledBudget(budget(null), 1_000)).toBeUndefined()
+    expect(scaledBudget(budget(1_000_000, 0), 1_000)).toBe(1_000_000)
   })
 })

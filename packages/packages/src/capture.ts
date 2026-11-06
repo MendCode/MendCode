@@ -8,7 +8,7 @@ import { MANIFEST_FILE } from "./manifest"
 const STATE_KEYS = new Set(["tutorialDone"])
 
 /**
- * The stored terminal profile as a package's `activate.tuiProfile`: every look key the profile holds, without the keys a package
+ * The stored terminal profile as a profile's `activate.tuiProfile`: every look key the profile holds, without the keys a profile
  * may not set (launch settings, clipboard, notifications) and without state. A key the activation check still refuses is left
  * out rather than failing the capture; a look over the activation size limit fails with that reason. `skipped` names the left-out
  * keys the user had changed from their default.
@@ -25,7 +25,7 @@ export function capturedProfile(profile: Record<string, unknown>): { tuiProfile:
   return { tuiProfile, skipped: [...new Set([...skipped, ...refused])].filter(changed).sort() }
 }
 
-/** Writes a package folder holding only the captured look, under `userDir`; the caller installs it and then calls `cleanup`. */
+/** Writes a profile folder holding only the captured look, under `userDir`; the caller installs it and then calls `cleanup`. */
 export function stageCapturedLook(input: { userDir: string; name: string; profile: Record<string, unknown> }): { dir: string; skipped: string[]; cleanup(): void } {
   const { tuiProfile, skipped } = capturedProfile(input.profile)
   const dir = mkdtempSync(path.join(input.userDir, ".package-capture-"))

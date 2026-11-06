@@ -26,12 +26,14 @@ type ActorCommand = Extract<
 
 export type ActorResult = { ok: true; result?: Record<string, unknown> } | { ok: false; code: ErrorCode; message: string }
 export type InterruptReason = "restart" | "transport" | "stream_idle"
+/** Set when the daemon itself stopped the turn in an orderly shutdown (the event carries it). */
+export type InterruptCause = "daemon_shutdown"
 
 /**
  * A steering turn: `text` goes to the engine as the user message, but the transcript shows only `label` (a thin
  * marker), tagged with `meta`. It is never queued or persisted: it starts at once or not at all (see `steer`).
  */
-export type Steering = { text: string; label: string; meta: Record<string, string>; /** The user asked for it: it may start although a user cancel left the session held. */ force?: boolean }
+export type Steering = { text: string; label: string; meta: Record<string, string>; /** The user asked for it: it may start although a user cancel left the session held. */ force?: boolean; /** Carries on a turn a daemon shutdown interrupted: it starts ahead of the queue the restart restored (held), which then follows it as it would have followed that turn. */ afterRestart?: boolean }
 
 type QueueEntry = { queueId: QueueId; text: string; displayText?: string; authorityText?: string; attachments: BlobRef[]; messageId?: ItemId; selection?: TurnInput["selection"]; turnOptions?: TurnInput["turnOptions"]; compact?: true; /** With `compact`: started by the daemon in an idle session (`compactIdle`), never queued or persisted. */ idle?: true; instructions?: string; notice?: true; shell?: true; local?: true; steer?: Pick<Steering, "label" | "meta">; /** Per-message override of the queue policy; not persisted (a restored queue is held). */ delivery?: QueueDelivery; /** A notice nobody waits on for a reply (a background task ended): held after a cancel, it goes with the user's next message. Not persisted. */ rides?: true; /** When a `rides` notice arrived, to keep it in order with notices held outside the queue. */ at?: number; /** True once the model was shown what this notice says by another way: it is then dropped unread. Not persisted. */ unless?: () => boolean; /** Sent now on its own (send now, restart, idle steer): no other queued message joins its turn. Not persisted. */ alone?: true }
 type Phase = "turn" | "compaction"
@@ -42,12 +44,15 @@ type ActiveTurn = {
   abort: AbortController
   scope: Scope
   openItems: Set<ItemId>
+  /** The open items an engine's sub-agent opened (`agentParent`): its thread's, never the turn's own step, state or tools. */
+  agentOpen: Set<ItemId>
   pending: Map<RequestId, (resolution: EngineResolution) => void>
   questions: Map<RequestId, NonNullable<EngineRequest["questions"]>>
   plans: Map<RequestId, NonNullable<EngineRequest["planReview"]>>
   /** Set by a cancel, which ends the turn for everyone at once (`turn.cancelled`, idle) while the engine stops behind it. */
   cancelBy?: "user" | "promotion"
   interruptReason?: InterruptReason
+  interruptCause?: InterruptCause
   grace?: TimerHandle
   /** The engine's way to take a promoted message without a cancel (`TurnInput.onSendNow`). */
   sendNow?: (message: Pick<TurnInput, "text" | "attachments">) => boolean
@@ -65,7 +70,7 @@ const MAX_AGENT_ITEMS = 500
 
 type Message =
   | { kind: "command"; command: ActorCommand; authorityText?: string; reply(result: ActorResult): void }
-  | { kind: "interrupt"; reason: InterruptReason; reply(): void }
+  | { kind: "interrupt"; reason: InterruptReason; cause?: InterruptCause; reply(): void }
   | { kind: "pause"; paused: boolean; reply(paused: boolean): void }
   | { kind: "engine.event"; turnId: TurnId; event: EngineEvent }
   | { kind: "agent.event"; turnId: TurnId; event: EngineEvent }
@@ -90,6 +95,8 @@ export type SessionActorOptions = {
   onForeground?(state: ForegroundState): void
   /** The pause flag changed (`pause`/`resume`), so panels can show it even when the foreground state did not move. */
   onPause?(paused: boolean): void
+  /** The running turn's output tokens not yet in a recorded usage (0 once one records them). Live only: nothing is stored. */
+  onLiveOutput?(turnId: TurnId, output: number): void
   /** Queue recovered after a restart. It starts held: nothing runs until the user acts. */
   restoredQueue?: Array<{ queueId: QueueId; text: string; displayText?: string; authorityText?: string; attachments: BlobRef[]; messageId?: ItemId; selection?: TurnInput["selection"]; turnOptions?: TurnInput["turnOptions"]; compact?: true; instructions?: string; notice?: true; shell?: true; local?: true; rides?: true }>
   /** Persisted mode of the session (default "ask"). */
@@ -134,6 +141,8 @@ export function createSessionActor(options: SessionActorOptions) {
   let foreground: ForegroundState = "idle"
   let active: ActiveTurn | undefined
   let held = queue.length > 0
+  /** The hold is the one a restored queue starts with, not a cancel's or an interrupt's: a turn carried on after a restart may go ahead of it. */
+  let heldSinceRestart = held
   /** Pause after the running turn: nothing new starts until `resume`, whatever is queued or submitted meanwhile. */
   let paused = false
   let permissionMode: PermissionMode = options.permissionMode ?? "ask"
@@ -245,6 +254,7 @@ export function createSessionActor(options: SessionActorOptions) {
       abort: new AbortController(),
       scope: scope.child(`turn:${turnId}`),
       openItems: new Set(),
+      agentOpen: new Set(),
       pending: new Map(),
       questions: new Map(),
       plans: new Map(),
@@ -384,6 +394,7 @@ export function createSessionActor(options: SessionActorOptions) {
   function closeOpenItems(turn: ActiveTurn, status: "cancelled" | "interrupted" | "unknown") {
     for (const itemId of turn.openItems) emit({ type: "item.completed", sessionId, itemId, status })
     turn.openItems.clear()
+    turn.agentOpen.clear()
   }
 
   function onEngineDone(turnId: TurnId, phase: Phase, outcome: TurnOutcome) {
@@ -396,7 +407,7 @@ export function createSessionActor(options: SessionActorOptions) {
     if (turn.interruptReason) {
       compactionUpdated(turn, "interrupted")
       closeOpenItems(turn, "interrupted")
-      emit({ type: "turn.interrupted", sessionId, turnId, reason: turn.interruptReason })
+      emit({ type: "turn.interrupted", sessionId, turnId, reason: turn.interruptReason, ...(turn.interruptCause ? { cause: turn.interruptCause } : {}) })
       return finish(turn)
     }
     closeOpenItems(turn, "unknown")
@@ -445,8 +456,10 @@ export function createSessionActor(options: SessionActorOptions) {
   function onEngineEvent(turnId: TurnId, event: EngineEvent) {
     if (!isLive(turnId) || !active) return
     const turn = active
+    if (event.type === "usage.live") return options.onLiveOutput?.(turnId, event.output)
     if (event.type === "usage") {
       const { type: _type, ...usage } = event
+      options.onLiveOutput?.(turnId, 0)
       emit({ type: "usage.recorded", sessionId, turnId, ...usage })
       return
     }
@@ -460,7 +473,9 @@ export function createSessionActor(options: SessionActorOptions) {
     if (event.type === "item.started") {
       turn.openItems.add(event.itemId)
       emit({ type: "item.started", sessionId, turnId, itemId: event.itemId, kind: event.kind, ...(event.meta ? { meta: event.meta } : {}) })
-      if (turn.phase === "turn") setForeground(event.kind === "tool_call" ? "tool" : "generating")
+      // A sub-agent's step is drawn in its thread: the turn's state follows the main agent only, and does not flip with each agent's tool.
+      if (typeof event.meta?.agentParent === "string") turn.agentOpen.add(event.itemId)
+      else if (turn.phase === "turn") setForeground(event.kind === "tool_call" ? "tool" : "generating")
       return
     }
     if (!turn.openItems.has(event.itemId)) return
@@ -481,7 +496,7 @@ export function createSessionActor(options: SessionActorOptions) {
       ...(event.render ? { render: event.render } : {}),
       ...(event.meta ? { meta: displayMeta(event.meta) } : {}),
     })
-    if (turn.phase === "turn" && foreground === "tool") setForeground("generating")
+    if (!turn.agentOpen.delete(event.itemId) && turn.phase === "turn" && foreground === "tool") setForeground("generating")
   }
 
   /** Items a background sub-agent opened after the turn that started it ended, until each completes (bounded). */
@@ -676,6 +691,7 @@ export function createSessionActor(options: SessionActorOptions) {
         }
         if (active.cancelBy || active.interruptReason) return { ok: true, result: { alreadyStopping: true } }
         held = true
+        heldSinceRestart = false
         cancel(active, "user")
         return { ok: true }
       }
@@ -742,19 +758,23 @@ export function createSessionActor(options: SessionActorOptions) {
     }
   }
 
-  function onInterrupt(reason: InterruptReason) {
+  function onInterrupt(reason: InterruptReason, cause?: InterruptCause) {
     held = true
+    heldSinceRestart = false
     if (!active || active.cancelBy || active.interruptReason) return settleIdle()
     active.interruptReason = reason
+    if (cause) active.interruptCause = cause
     stopTurn(active)
   }
 
   /**
    * Starts a steering turn when nothing else wants the session: no turn running, nothing queued (queued messages always
    * go first), and not held by a user cancel or an interrupt, unless the steering is `force` (and then only with an empty queue).
+   * An `afterRestart` steering goes ahead of a queue the restart restored and releases it: those messages follow it.
    */
   function onSteer(steering: Steering): boolean {
-    if (active || queue.length > 0 || paused || (held && !steering.force)) return false
+    const ahead = steering.afterRestart === true && held && heldSinceRestart
+    if (active || paused || (queue.length > 0 && !ahead) || (held && !steering.force && !ahead)) return false
     held = false
     start({ queueId: ids("queue"), text: steering.text, attachments: [], steer: { label: steering.label, meta: steering.meta } })
     return true
@@ -773,7 +793,7 @@ export function createSessionActor(options: SessionActorOptions) {
         return message.reply(result)
       }
       case "interrupt":
-        onInterrupt(message.reason)
+        onInterrupt(message.reason, message.cause)
         return message.reply()
       case "engine.event":
         return onEngineEvent(message.turnId, message.event)
@@ -840,8 +860,10 @@ export function createSessionActor(options: SessionActorOptions) {
       }
       case "engine.queue": {
         const turn = active
-        // Never bypass a held queue.
-        if (!isLive(message.turnId) || !turn || turn.phase !== "turn" || held || paused || turn.pending.size || turn.openItems.size) return message.reply(undefined)
+        // Send now already delivered the message; its queued entry must survive the interrupted tool's result for the adopted turn.
+        if (turn?.handedOff) return message.reply(undefined)
+        // Never bypass a held queue. Only the main agent's own open steps hold a message back: a sub-agent's tools run in its thread.
+        if (!isLive(message.turnId) || !turn || turn.phase !== "turn" || held || paused || turn.pending.size || turn.openItems.size > turn.agentOpen.size) return message.reply(undefined)
         // After its answer, such a turn is done: the next message gets a turn of its own (and no selection made for another one).
         if (turn.alone && message.userOnly) return message.reply(undefined)
         dropShown()
@@ -896,8 +918,8 @@ export function createSessionActor(options: SessionActorOptions) {
     handle(command: ActorCommand, authorityText?: string) {
       return new Promise<ActorResult>((reply) => post({ kind: "command", command, ...(authorityText !== undefined ? { authorityText } : {}), reply }))
     },
-    interrupt(reason: InterruptReason) {
-      return new Promise<void>((reply) => post({ kind: "interrupt", reason, reply }))
+    interrupt(reason: InterruptReason, cause?: InterruptCause) {
+      return new Promise<void>((reply) => post({ kind: "interrupt", reason, ...(cause ? { cause } : {}), reply }))
     },
     /** Pause (true) or resume (false): a paused session finishes its running turn and then starts nothing until resumed. */
     pause(value: boolean) {

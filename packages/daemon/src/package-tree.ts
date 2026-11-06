@@ -4,10 +4,10 @@ import path from "node:path"
 import { MAX_PACKAGE_BYTES, MAX_PACKAGE_FILES, PackageError } from "@mendcode/packages"
 
 /**
- * What the chat approval of a package covers. The fingerprint hashes EVERY byte of EVERY file (so a change after the preview voids
+ * What the chat approval of a profile covers. The fingerprint hashes EVERY byte of EVERY file (so a change after the preview voids
  * the approval); the summary is what the approval shows of the tree: counts, size, the biggest files, and every file that can run
  * or configure something, in full. A tree over a limit is refused with the limit, the measured value and the shell alternative.
- * The file and byte limits are the ones a package has anywhere (`package install` refuses the same trees).
+ * The file and byte limits are the ones a profile has anywhere (`profile install` refuses the same trees).
  */
 export const TREE_LIMITS = { depth: 12, files: MAX_PACKAGE_FILES, bytes: MAX_PACKAGE_BYTES, runnable: 150, largest: 5, folders: 12 } as const
 /** The scan stops counting here: a tree this big is refused whatever its exact size. */
@@ -44,7 +44,7 @@ function why(entry: Entry): TreeSummary["runnable"][number]["why"] | undefined {
 }
 
 /**
- * Fingerprints and summarises a package folder. `alternative` is the shell command the refusal offers instead.
+ * Fingerprints and summarises a profile folder. `alternative` is the shell command the refusal offers instead.
  * Throws a PackageError for a link, an unsupported file or a tree over a limit.
  */
 export function readPackageTree(directory: string, alternative: string): { fingerprint: string; summary: TreeSummary } {
@@ -53,24 +53,24 @@ export function readPackageTree(directory: string, alternative: string): { finge
   const scan = (folder: string, depth: number) => {
     deepest = Math.max(deepest, depth)
     const root = lstatSync(folder)
-    if (!root.isDirectory() || root.isSymbolicLink()) throw new PackageError("Package directory must not be linked")
+    if (!root.isDirectory() || root.isSymbolicLink()) throw new PackageError("Profile directory must not be linked")
     if (depth > TREE_LIMITS.depth + 1) return
     for (const entry of readdirSync(folder, { withFileTypes: true }).sort((first, second) => first.name.localeCompare(second.name))) {
       if (SKIPPED.has(entry.name)) continue
       const file = path.join(folder, entry.name), stat = lstatSync(file)
-      if (stat.isSymbolicLink()) throw new PackageError("Linked package resources cannot be approved")
+      if (stat.isSymbolicLink()) throw new PackageError("Linked profile resources cannot be approved")
       if (stat.isDirectory()) scan(file, depth + 1)
       else if (stat.isFile()) {
         if (counted >= COUNT_STOP) { stopped = true; return }
         counted++
         bytes += stat.size
         entries.push({ file, relative: path.relative(directory, file), size: stat.size, executable: (stat.mode & 0o111) !== 0 })
-      } else throw new PackageError("Unsupported package resource")
+      } else throw new PackageError("Unsupported profile resource")
       if (stopped) return
     }
   }
   scan(directory, 0)
-  const tooBig = (what: string, limit: string, found: string) => new PackageError(`Package tree is too large to approve in chat: ${what} (limit ${limit}, found ${found}). Nothing was changed. ${alternative}`)
+  const tooBig = (what: string, limit: string, found: string) => new PackageError(`Profile tree is too large to approve in chat: ${what} (limit ${limit}, found ${found}). Nothing was changed. ${alternative}`)
   if (deepest > TREE_LIMITS.depth) throw tooBig("nested folders", `${TREE_LIMITS.depth} levels`, `${deepest} levels`)
   if (counted > TREE_LIMITS.files) throw tooBig("files", `${TREE_LIMITS.files}`, stopped ? `more than ${COUNT_STOP}` : `${counted}`)
   if (bytes > TREE_LIMITS.bytes) throw tooBig("total size", megabytes(TREE_LIMITS.bytes), megabytes(bytes))

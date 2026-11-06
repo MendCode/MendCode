@@ -146,6 +146,35 @@ test("after-tools never consumes while a tool is open, a request is pending, or 
   expect(h.actor.snapshot()).toMatchObject({ held: true, foreground: "queued" })
 })
 
+test("after-tools: a sub-agent's open tools neither hold the queue nor move the turn's state; the main agent's own tool does", async () => {
+  const h = setup("after-tools")
+  await h.submit("first")
+  const input = h.manual.last().input
+  await h.submit("next")
+  const call = input.newItemId()
+  input.emit({ type: "item.started", itemId: call, kind: "tool_call", meta: { tool: "agent B1", subagent: true, background: true } })
+  input.emit({ type: "item.completed", itemId: call, status: "ok", text: "running in the background" })
+  await flush()
+  const states = () => h.h.events.filter((e) => e.type === "foreground.state").map((e) => e.state)
+  const before = states().length
+  const agentTool = input.newItemId()
+  const agentThought = input.newItemId()
+  input.emit({ type: "item.started", itemId: agentTool, kind: "tool_call", meta: { tool: "shell: gh search code", agentParent: call } })
+  input.emit({ type: "item.started", itemId: agentThought, kind: "reasoning", meta: { agentParent: call } })
+  await flush()
+  expect(states().slice(before)).toEqual([])
+  expect(await input.takeQueued?.()).toMatchObject({ text: "next" })
+  await h.submit("later")
+  const own = input.newItemId()
+  input.emit({ type: "item.started", itemId: own, kind: "tool_call", meta: { tool: "shell: ls" } })
+  expect(await input.takeQueued?.()).toBeUndefined()
+  input.emit({ type: "item.completed", itemId: agentTool, status: "ok" })
+  await flush()
+  expect(h.actor.snapshot().foreground).toBe("tool")
+  input.emit({ type: "item.completed", itemId: own, status: "ok" })
+  expect(await input.takeQueued?.()).toMatchObject({ text: "later" })
+})
+
 for (const kind of ["shell", "compact", "selection"] as const) test(`after-tools preserves the ${kind} turn boundary`, async () => {
   const h = setup("after-tools")
   await h.submit("first")
@@ -214,6 +243,33 @@ test("send now hands the message to an engine that takes it mid-turn: nothing is
   await flush()
   expect(h.manual.turns).toHaveLength(2)
   expect(h.manual.last().input.text).toBe("next")
+})
+
+for (const delivery of [undefined, "steer"] as const) test(`send now reserves its adopted turn when the interrupted tool returns (${delivery ?? "after-tools"})`, async () => {
+  const h = setup("after-tools")
+  await h.submit("first")
+  const previous = h.manual.last()
+  const tool = previous.input.newItemId()
+  previous.input.emit({ type: "item.started", itemId: tool, kind: "tool_call" })
+  const handed: string[] = []
+  previous.input.onSendNow?.((message) => { handed.push(message.text); return true })
+  const next = h.queued(await h.command({ type: "user.submit", text: "promoted", attachments: [], ...(delivery ? { delivery } : {}) }))
+  await h.submit("later")
+  await h.command({ type: "queue.promote", queueId: next })
+  // Claude's send_now interrupts the tool, whose result calls takeQueued before the old turn ends.
+  previous.input.emit({ type: "item.completed", itemId: tool, status: "cancelled" })
+  expect(await previous.input.takeQueued?.()).toBeUndefined()
+  expect(await previous.input.takeQueued?.({ userOnly: true })).toBeUndefined()
+  expect(handed).toEqual(["promoted"])
+  expect(h.actor.snapshot().queue[0]).toBe(next)
+  previous.finish()
+  await flush()
+  expect(h.manual.turns.map((turn) => turn.input.text)).toEqual(["first", "promoted"])
+  expect(h.h.events.filter((event) => event.type === "turn.started" && event.queueId === next)).toHaveLength(1)
+  h.manual.last().finish()
+  await flush()
+  expect(h.manual.turns.map((turn) => turn.input.text)).toEqual(["first", "promoted", "later"])
+  expect(h.h.events.filter((event) => event.type === "item.completed" && event.text === "promoted")).toHaveLength(1)
 })
 
 test("send now still cancels when the engine does not take the message", async () => {

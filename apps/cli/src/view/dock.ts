@@ -1,7 +1,7 @@
 import type { ColorName, Line } from "../ui/theme"
 import { beside, clip, fit, boxPanel } from "./deck"
 import { formatElapsed } from "./time"
-import { textWidth } from "./wrap"
+import { textWidth, wrap } from "./wrap"
 import { editorRows } from "./editor"
 
 /**
@@ -52,13 +52,25 @@ function bounded(rows: Line[], room: number): Line[] {
 
 function todosBody(todos: readonly TodoItem[], width: number): Line[] {
   const open = todos.filter((todo) => todo.status === "pending" || todo.status === "in_progress").length
-  const rows = todos.length
-    ? todos.map((todo): Line => {
-        const mark = TODO_MARK[todo.status]
-        return clip([{ text: `${mark.glyph} `, fg: mark.fg }, ...(todo.priority ? [{ text: `${todo.priority} · `, fg: todo.priority === "high" ? "warning" as const : "muted" as const }] : []), { text: todo.text, fg: todo.status === "done" ? "muted" : mark.fg === "text" ? "text" : mark.fg }], width)
-      })
-    : [[{ text: "□ No todo items.", fg: "muted" }] satisfies Line]
-  return [header("Todos", `${open} open`, width), ...bounded(rows, BODY_ROWS)]
+  const rank = { in_progress: 0, pending: 1, done: 2, cancelled: 3 }
+  const ordered = [...todos].sort((a, b) => rank[a.status] - rank[b.status])
+  const rows: Line[] = []
+  let shown = 0
+  for (const todo of ordered) {
+    const mark = TODO_MARK[todo.status]
+    const lines = wrap(`${todo.priority ? `${todo.priority} · ` : ""}${todo.text}`, Math.max(2, width - 2))
+    const room = BODY_ROWS - rows.length
+    const fits = lines.length <= room && (shown === ordered.length - 1 || lines.length < room)
+    if (!fits && rows.length) break
+    const take = fits ? lines.length : Math.max(0, room - 1)
+    rows.push(...lines.slice(0, take).map((text, index): Line => [{ text: index ? "  " : `${mark.glyph} `, fg: mark.fg }, { text, fg: mark.fg }]))
+    // An oversized first item keeps a preview; the count includes its unfinished text.
+    if (!fits) break
+    shown++
+  }
+  if (shown < ordered.length) rows.push([{ text: `+${ordered.length - shown} more`, fg: "muted" }])
+  if (!todos.length) rows.push([{ text: "□ No todo items.", fg: "muted" }])
+  return [header("Todos", `${open} open`, width), ...rows]
 }
 
 function subagentsBody(subagents: readonly DockSubagent[], width: number): Line[] {
@@ -105,6 +117,8 @@ type DockInput = {
   questions?: readonly DockQuestion[]
   /** Background shell tasks; the panel shows only while there are some. */
   jobs?: readonly DockJob[]
+  /** Opt-in Jobs panel; the jobs page remains available independently. */
+  showJobs?: boolean
   now?: number
   /** The project note; an empty panel can still receive focus. */
   scratch?: DockScratch
@@ -117,7 +131,7 @@ export function dockPanels(input: DockInput): DockPanelKind[] {
   const wanted = new Set<DockPanelKind>(["todos", "info"])
   if (input.questions?.length) wanted.add("questions")
   if (input.subagents.length) wanted.add("subagents")
-  if (input.jobs?.length) wanted.add("jobs")
+  if (input.showJobs && input.jobs?.length) wanted.add("jobs")
   if (input.scratch) wanted.add("scratch")
   const need = () => [...wanted].reduce((sum, kind) => sum + PANEL_MIN[kind], 0) + wanted.size - 1
   if (need() > input.width && input.todos.length === 0 && wanted.size > 2) wanted.delete("todos")
@@ -180,9 +194,13 @@ export function renderDock(input: DockInput): Line[] {
   const plan = dockPanels(input)
   const gaps = plan.length - 1
   const base = Math.floor((width - gaps) / plan.length)
+  const neighborWidth = (kind: DockPanelKind) => Math.max(PANEL_MIN[kind], Math.ceil((width - gaps) / (plan.length + 1)))
+  const todoWidth = plan.includes("todos") && input.todos.length
+    ? width - gaps - plan.filter((kind) => kind !== "todos").reduce((sum, kind) => sum + neighborWidth(kind), 0)
+    : undefined
   let left = 0
   const blocks = plan.map((kind, index) => {
-    const panelWidth = index === plan.length - 1 ? width - gaps - base * (plan.length - 1) : base
+    const panelWidth = todoWidth !== undefined ? kind === "todos" ? todoWidth : neighborWidth(kind) : index === plan.length - 1 ? width - gaps - base * (plan.length - 1) : base
     const inner = Math.max(1, panelWidth - 2 * PAD_X)
     const body =
       kind === "todos"

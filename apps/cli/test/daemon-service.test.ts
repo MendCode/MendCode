@@ -117,6 +117,39 @@ describe("daemon lifecycle CLI", () => {
     expect(busy.calls).toContain("daemon.shutdown")
   })
 
+  test("restart holds the terminals back from the stop through its own start, and lets go when it fails too; a refusal sets nothing", async () => {
+    const h = harness(true)
+    h.deps.restarting = (on) => void h.calls.push(`restarting ${on}`)
+    expect(await h.run("daemon", "restart")).toBe(0)
+    expect(h.calls.filter((call) => call.startsWith("restarting") || ["daemon.shutdown", "launch"].includes(call))).toEqual(["restarting true", "daemon.shutdown", "launch", "restarting false"])
+    const failing = harness(true)
+    failing.deps.restarting = (on) => void failing.calls.push(`restarting ${on}`)
+    failing.deps.launch = async () => { throw new Error("no start") }
+    expect(await failing.run("daemon", "restart")).toBe(1)
+    expect(failing.calls.filter((call) => call.startsWith("restarting"))).toEqual(["restarting true", "restarting false"])
+    const busy = harness(true)
+    busy.report.activeTurns = 1
+    busy.deps.restarting = (on) => void busy.calls.push(`restarting ${on}`)
+    expect(await busy.run("daemon", "restart")).toBe(1)
+    expect(busy.calls.filter((call) => call.startsWith("restarting"))).toEqual([])
+  })
+
+  test("a busy refusal names the turns and who started them; --force says what it interrupted and that it resumes", async () => {
+    const busy = harness(true)
+    busy.report.activeTurns = 2
+    busy.report.work = [{ sessionId: "ses_a", title: "owner-a", launcher: "ses_l", launcherTitle: "seda" }, { sessionId: "ses_b", title: "own session" }]
+    expect(await busy.run("daemon", "restart")).toBe(1)
+    expect(busy.error()).toContain('Daemon is busy: 2 turns running: ses_a "owner-a" started by ses_l "seda"; ses_b "own session"; retry with --force')
+    expect(busy.error()).toContain("resume when the daemon starts again")
+    expect(await busy.run("daemon", "restart", "--force")).toBe(0)
+    expect(busy.output()).toContain('Interrupted 2 turns running: ses_a "owner-a" started by ses_l "seda"; ses_b "own session". They resume when the daemon starts again')
+    const json = harness(true)
+    json.report.activeTurns = 1
+    json.report.work = [{ sessionId: "ses_a", title: "owner-a" }]
+    expect(await json.run("daemon", "stop", "--force", "--json")).toBe(0)
+    expect(JSON.parse(json.output()).data.interrupted).toEqual({ turns: 1, sessions: [{ sessionId: "ses_a", title: "owner-a" }] })
+  })
+
   test("busy work cannot be interrupted implicitly; force is explicit", async () => {
     for (const args of [["daemon", "stop"], ["daemon", "service", "restart"], ["daemon", "service", "uninstall"]]) {
       const h = harness(true, true, true)
@@ -166,7 +199,7 @@ test("the real CLI service help remains lazy and local-only validation precedes 
       const process = Bun.spawnSync(["bun", entry, "--dir", dir, ...args], { stdout: "pipe", stderr: "pipe" })
       expect(process.exitCode).toBe(args.includes("--socket") ? 64 : 0)
       expect(process.stderr.toString()).not.toContain("ENOENT")
-      expect(process.stdout.toString() + process.stderr.toString()).toContain(args.includes("--socket") ? "local-only" : "daemon service")
+      expect(process.stdout.toString() + process.stderr.toString()).toContain(args.includes("--socket") ? "local-only" : "service <action>")
     }
     const script = `process.argv = [process.execPath, ${JSON.stringify(entry)}, "daemon", "service", "--help"]; const stop = new Error("exit"); process.stdout.write = () => true; process.exit = () => { throw stop }; try { await import(${JSON.stringify(entry)}) } catch (e) { if (e !== stop) throw e }; const cache = Object.keys(require.cache); console.error(JSON.stringify({ zod: cache.some(k => k.includes("/zod/")), host: cache.some(k => k.endsWith("/user-service.ts")) }))`
     const probe = Bun.spawnSync(["bun", "-e", script], { stdout: "pipe", stderr: "pipe" })

@@ -26,10 +26,10 @@ Approving with "for this session" records a **grant** for that tool; later calls
 | `git-internals` | a path inside `.git/` (hooks and config run or leak code) | asks (high) |
 | `agent-config` | a path inside `.mendcode/` (hooks, tools and extensions the daemon runs later, outside any sandbox) | asks (high) |
 | `runs-program` | an option or variable that makes an allow-listed command run another program: `rg --pre`, `git grep -O`, `sort --compress-program`, a leading `PATH=`, `LD_PRELOAD=`, `GIT_*=`… | asks (high) |
-| `outside-project` | a path (argument, flag value, redirection target, `workdir`, `cd`) that is not inside the project, including `..`, `~` and symlinks that lead out; `/dev/null` is fine | asks (high) |
-| `network` | `curl`, `wget`, `ssh`, `npx`…, `git push/pull/fetch/clone`, package installs/updates (`bun install`, `npm add`…), any URL in the command | asks (high) |
+| `outside-project` | a path (argument, flag value, redirection target, `workdir`, `cd`) that is not inside the project, including `..`, `~` and symlinks that lead out (relative paths count from the directory the command runs in: the call's `workdir`, then each plain `cd DIR`; a `cd` whose target the text does not give asks); `/dev/null` is fine | asks (high) |
+| `network` | `curl`, `wget`, `ssh`, `npx`…, `git push/pull/fetch/clone`, profile installs/updates (`bun install`, `npm add`…), any URL in the command | asks (high) |
 | `autonomy` | `loop`, `workflow_start`, `tell` (start autonomous work or message another session) | asks (high) |
-| `shell-expansion` | `$VAR`, `$(…)`, backticks or `<(…)` outside single quotes: what runs cannot be read from the text. A saved wildcard allow rule (`ls *`) never covers such a command | asks (uncertain) |
+| `shell-expansion` | `$VAR`, `$(…)`, backticks or `<(…)` outside single quotes (`$?`, the last exit status, is not one): what runs cannot be read from the text. A saved wildcard allow rule (`ls *`) never covers such a command | asks (uncertain) |
 | `unlisted-command` | a command that is not allow-listed and matched no risk rule | asks (uncertain) |
 | `unclear-target` | an edit whose file cannot be read from its arguments | asks (uncertain) |
 | `unknown-tool` | MCP tools, custom tools, any other write/execute tool | asks (uncertain) |
@@ -42,11 +42,11 @@ A command line is split at unquoted `&&`, `||`, `;`, `|`, `&` and newlines; ever
 
 **Refusals.** The `forbidden` rule is the only one that never prompts: nothing in a coding session needs it, and a prompt is one reflexive click from a wiped machine. A `permissionAllow` prefix, the sandbox setting and a session grant cannot lift it. `full` mode (explicit user choice) and your own `!command` are not affected. The model is told `smart mode never runs this: <why>`.
 
-**Allow list.** Built in: read-only commands (`ls`, `cat`, `head`, `tail`, `wc`, `grep`, `rg`, `sort`, `diff`, `jq`, `echo`, `pwd`, `cd`, `find` without `-delete/-exec`, `sed` without `-i`…), local file work inside the project (`mkdir`, `touch`, `cp`, `mv`), read-only `git` (`status`, `diff`, `log`, `show`, `branch` listing, `rev-parse`, `blame`…), the program's own reference cards (`mendcode docs` or `mendcode docs <topic>` as the whole command line: the bare program name and one plain topic word, nothing before, after or around it), and the project's own checks (`bun test`, `bun run typecheck|lint|build|check`, `npm test`, `tsc`, `cargo test`, `go test`, `pytest`…). Add your own prefixes with the `permissionAllow` setting (`["make test", "git commit"]`): a prefix matches the first words of a command, and it can never override a risk rule (`git commit -m x && git push` still asks for `network`).
+**Allow list.** Built in: read-only commands (`ls`, `cat`, `head`, `tail`, `wc`, `grep`, `rg`, `sort`, `diff`, `jq`, `echo`, `pwd`, `cd`, `find` without `-delete/-exec`, `sed` without `-i`…), local file work inside the project (`mkdir`, `touch`, `cp`, `mv`), read-only `git` (`status`, `diff`, `log`, `show`, `branch` listing, `rev-parse`, `blame`…), the program's own reference cards (`mendcode docs` or `mendcode docs <topic>` as the whole command line: the bare program name and one plain topic word, nothing before, after or around it), and the project's own checks (`bun test`, `bun run typecheck|lint|build|check`, `npm test`, `tsc`, `cargo test`, `go test`, `pytest`…); a binary of the project's own `node_modules/.bin` given by path (`../../node_modules/.bin/tsc`) is judged as the command it names (`tsc`), and one outside the project is still `outside-project`. Add your own prefixes with the `permissionAllow` setting (`["make test", "git commit"]`): a prefix matches the first words of a command, and it can never override a risk rule (`git commit -m x && git push` still asks for `network`).
 
 **Session grants.** In smart mode a grant covers only the same action fingerprint and causal user authority, with complete execution identity, and never a high-risk call. Changing the command, script identity, environment, or user turn asks again. Other modes retain tool/path session scopes.
 
-Claude Code sessions (engine `claude`) and the Codex engine treat `smart` as `ask`.
+Claude Code sessions (engine `claude`) decide `smart` with the same rules for Claude's Edit, Write, NotebookEdit and Bash calls (other Claude tools still ask), so an edit inside the project runs without asking. The Codex engine treats `smart` as `ask`.
 
 ### Permission reviewer (optional)
 
@@ -87,7 +87,7 @@ Compared with the public `openai/codex` repository (`codex-rs/core/src/exec_poli
 | Reviewer | guardian | optional reviewer role: only clears `uncertain` calls, sees causal user authority and execution fingerprints, never a high-risk one |
 | Grants | per command prefix amendment | smart grants bind the exact action and user authority; never cover a high-risk call |
 
-**`smartSandboxTrust`.** Codex's strongest idea is that the sandbox, not a prompt, protects against what rules cannot read. v2 keeps rules in front and adds the same thing as an opt-in: with `smartSandboxTrust: true`, the OS sandbox on (`read-only` or `workspace-write`) and `network: off`, an `unlisted-command` or `shell-expansion` call runs without asking (rule `sandboxed`). Every rule that flags a risk still asks: deleting project files, network, paths outside the project, secrets, `.git`, `.mendcode`, package installs. The sandbox confines writes and the network; **reads stay open** (a script can read `~/.ssh` and print it into the transcript), which Codex accepts too. Decision taken: off by default; needs the user's own `settings.set`, refused for remote peers. With no sandbox backend the shell tool refuses to run at all (`docs/sandbox.md`), so the setting never runs anything unconfined.
+**`smartSandboxTrust`.** Codex's strongest idea is that the sandbox, not a prompt, protects against what rules cannot read. v2 keeps rules in front and adds the same thing as an opt-in: with `smartSandboxTrust: true`, the OS sandbox on (`read-only` or `workspace-write`) and `network: off`, an `unlisted-command` or `shell-expansion` call runs without asking (rule `sandboxed`). Every rule that flags a risk still asks: deleting project files, network, paths outside the project, secrets, `.git`, `.mendcode`, profile installs. The sandbox confines writes and the network; **reads stay open** (a script can read `~/.ssh` and print it into the transcript), which Codex accepts too. Decision taken: off by default; needs the user's own `settings.set`, refused for remote peers. With no sandbox backend the shell tool refuses to run at all (`docs/sandbox.md`), so the setting never runs anything unconfined.
 
 ## Blast-radius preview
 
@@ -137,7 +137,7 @@ with that text as the note.
 
 - The choices are **Allow once** (`a`) and **Reject** (`d`); there is no session or always choice, and a client that answers "for the session" still allows that call only (Claude's suggested rules are dropped). The `?` explanation says why it asks. Over the protocol the `server.request` event carries `engineFlagged: true`.
 - Rejecting sends your note (or "The user denied this.") back as the tool result; the turn continues.
-- Headless: `run --approve` and `session send --approve` reject it with a clear message (the turn goes on and the exit code is the turn's; exit 5 is only for an ordinary approval denied because `--approve` was not passed, see [automation](automation.md#headless-and-startup-parity-b16)); `--dangerously-skip-permissions` allows it. Both flags otherwise behave the same.
+- Headless: `run --approve` and `session send --approve` reject it with a clear message (the turn goes on and the exit code is the turn's; exit 5 is only for `run` when an ordinary approval was denied because `--approve` was not passed, see [automation](automation.md#headless-and-startup-parity-b16)); `--dangerously-skip-permissions` allows it. Both flags otherwise behave the same. `session send` without either flag leaves this approval pending for the terminal owner, just like an ordinary approval.
 - Setting `engineSafetyPrompts` (default `false`, local clients only): `true` turns these approvals on. Set it with `settings.set { patch: { engineSafetyPrompts: true } }` or in the daemon's settings.
 - A request raised in `full` for any other reason, for example when you switched to `full` mid-turn so Claude Code was not in bypass mode yet, is still answered automatically.
 
@@ -230,6 +230,20 @@ root, which is never accepted. The session list is held in daemon memory like th
 and the setting are local only (a remote or peer connection is refused), since the paths belong to the machine that runs
 the commands.
 
+### Skills and instructions
+
+In `smart` mode a read-only call (`read`, `grep`, `glob`, `ls`) of what MendCode itself loaded for the session does not ask
+for `external_directory`: the folder of each skill the model may load (your own, profiles', the project's, `.agents` and
+`.claude` skills, `skills.paths`) and each instruction file the system prompt includes (the global `AGENTS.md`,
+the project's `AGENTS.md`/`CLAUDE.md` chain, configured `instructions`). Both come from the same loaders that build the
+prompt, so a disabled skill, `--no-context-files` or a session without the `skill` tool adds nothing. Paths resolve
+through symlinks first (`~/.claude/skills/x` reached as its real folder counts; `..` or a link that leads out does not).
+Only reads: an edit, patch or command there still asks. Secrets-looking files inside (`.env*`, keys, `credentials*`,
+`auth.json`, `token.json`, `.git/`) still ask, and so does a `grep` over a folder that holds one. An instruction file is
+just that file, not its folder. An explicit `external_directory` deny still wins. A file a skill only points to (another
+folder of the same repository) is not loaded by MendCode and still asks; add that folder to `skills.paths` (or
+`additionalDirectories`) to read it unasked. Every tier; native engine.
+
 The third consecutive identical tool name and arguments in one turn asks for `doom_loop`; changed arguments or
 intervening assistant text reset the count. A session grant covers only that repeated tool. A user rejection stops
 by default and closes all remaining tool results. `experimental.continue_loop_on_deny: true` lets the model adapt;
@@ -247,8 +261,8 @@ The [Git page](git.md)'s push, publish and pull request actions are not model to
 
 A session runs shell commands, and `mendcode` is on the PATH there. From that shell a session can read (`docs`, `status`,
 `models`, `context`, `session list|get|events`, `control-plane … status`) and nothing else that is the user's to decide:
-it cannot change permission defaults or rules, settings, models, recipes, profiles, provider credentials, MCP servers,
-packages, extensions, themes, the prompt mode, memory, loops, workflows, remote tokens, sharing or the console account,
+it cannot change permission defaults or rules, settings, models, recipes, areas, provider credentials, MCP servers,
+profiles, extensions, themes, the prompt mode, memory, loops, workflows, remote tokens, sharing or the console account,
 and it cannot stop, restart, upgrade or uninstall anything. This holds in every permission mode, `full` included. The
 same commands from your own terminal, from the TUI, from cron and from CI work as before. A daemon setting you ask the
 model to change goes through the `mendcode_settings` tool instead, which saves nothing until you approve the exact change
@@ -262,7 +276,8 @@ files of the data directory or hand a command to another service (cron, launchd,
 Three layers, strongest first:
 
 1. **The daemon** does not take a client's word for who it is. On the local Unix socket it reads the connecting process
-   from the kernel and looks for it among the processes sessions started (`shell`, background tasks, `shell_session`):
+   from the kernel and looks for it among the processes sessions started (`shell`, background tasks, `shell_session`, and each session's Claude Code process
+   when its engine is Claude Code):
    a client that descends from one, or still belongs to the terminal session one of them led after that one ended, is
    agent-origin. So is every other descendant of the daemon process (engines, MCP servers, hooks), except a terminal you
    opened through the daemon. Every session command also gets a hard file-size limit of 512 PiB, which a process can
@@ -283,11 +298,38 @@ review (`--approve` and `--dangerously-skip-permissions` are refused); it can de
 started. A caller whose session cannot be identified counts as `ask`. Sub-agents the engine starts through its own tools
 are a different path and are unchanged.
 
+**A child with more authority, approved by you.** `mendcode run … --permission smart` (or `-c permission=smart`) from a
+session in a lower mode is not refused at once when you are there to decide. If a terminal of yours has the launching
+session open (or, failing that, another session of its project), one card appears there: the model, the folder, extra
+folders, the mode, the title, the turn limit and the prompt (shortened on the card when long; a replaced or appended system
+prompt is named). Approve once starts that child in that mode with exactly that prompt; the launching session cannot send
+it anything else afterwards (it can still read it, stop it, lower its mode or remove it). Deny, dismissing the card, or no
+answer within 120 seconds keeps the refusal, and the empty child is removed. With no terminal of yours on it (a headless
+run, a loop, only remote or peer clients connected) it is refused at once, as before, and the error ends with the exact
+command to run from your own terminal. Only `edits` and `smart` can be asked for this way, never `full`, only for a child
+the caller has just started, and only your local terminal can approve (a remote or peer client can only dismiss the
+card). The card also offers **Approve in full access** (the child asks nothing): that is only your pick on the card,
+never the first option, and a session asking for `full` is still refused. Nothing is raised without your answer.
+Every tier.
+
+**Children waiting for approval.** A session started from another session's shell (`mendcode run --bg`) has no terminal
+attached, so its approval used to wait unseen. Now, within a second or two of the first one, the launching session's model gets
+one notice listing what waits (it cannot approve, and is told not to poll or work around it), and a terminal of yours that has the
+launching session (or another session of its project) open gets one card, drawn like any tool approval: **Allow all (N)**, **Reject all** or **One by one**, with a row per child
+(`title · tool: detail`). Allow all answers exactly the requests the card listed, once each, not ones that arrived later;
+**One by one** opens a card per child (**Allow once** or **Reject**). A choice a child asks with options (such as a `mendcode_settings` proposal) is shown the same way and your pick is
+forwarded. Every other terminal of yours, on any session, shows a notice with the child's and the launcher's names and
+`child approvals · /approvals` in the footer's agents segment; `/approvals` opens the launching session, where the card is. The
+notice goes when the children are answered. Only your own local terminal answers; dismissing a card answers nothing. A request answered in the child's own session
+leaves the card. `mendcode session status ID` names what a child waits on (`Waiting: approval …`) and `mendcode logs ID` shows
+`waiting for approval` lines. Nothing runs until a child waits. The link to the launching session is stored with the
+child, so it survives a daemon restart: a child that waits after one is announced to the same launcher. Every tier.
+
 **Another data directory** is not yours to protect: `mendcode --dir /tmp/x …` from a session's shell talks to another
 daemon and is not held back by the tool or the CLI (that daemon applies the same rules to its own sessions). `upgrade` and
 `uninstall` are refused whatever directory they name.
 
-**Known limits.** On Windows, and with `MENDCODE_V2_LOCAL_TRANSPORT=tcp`, the socket carries no process identity: the CLI's
+**Known limits.** On Windows, and with `MENDCODE_LOCAL_TRANSPORT=tcp`, the socket carries no process identity: the CLI's
 refusal and the tool's are what is left. On macOS a hand-written client (not the CLI) that both starts a new terminal
 session and detaches from its parent is not recognised. A `!command` you type in the prompt runs through the same tool and
 is refused like the model's; run it in your terminal. A hook script that calls a write command is refused too. If your own

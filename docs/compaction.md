@@ -20,7 +20,8 @@ While the memory is being written a live panel sits above the prompt
 progress; only numbers the events reported), `arcade` (a random game of snake,
 breakout or 2048), `scratchpad` (the project note, editable in the panel) and
 `quiet` (one line). Under 70 columns the frame is dropped; a mode that does not
-fit the terminal height gives way to a smaller one. The transcript keeps a one-row
+fit the terminal height gives way to a smaller one. The panels draw no spinner while the
+activity line shows one: a single loading indicator. The transcript keeps a one-row
 marker until the compaction ends.
 
 Arcade controls: Tab or a click focuses the game, arrows or wasd/hjkl move,
@@ -189,7 +190,7 @@ nobody states: there is nothing to predict.
 
 The threshold is the `compactNoticePercent` setting: a percentage of that limit from 10 to 99 (default 80), or `"off"`. In
 `/settings`, section Behavior, row `compact notice` cycles default, 50, 60, 70, 90 and off. It replaces the `context at 81% of
-the compaction threshold` toast that `Limit notices` raised at 80% and 95%; that profile key now covers provider quota only.
+the compaction threshold` toast that `Limit notices` raised at 80% and 95%; that customize key now covers provider quota only.
 
 `mendcode context <sessionID>` prints the same estimate as its fourth line whenever a context and a limit are known, whether or
 not the threshold is reached, and says where the notice stands:
@@ -224,6 +225,13 @@ The shared request is sent when all of these hold; otherwise the own request, as
 | the summariser is the main call's model: the `compaction` role resolves to exactly what `main` resolves to, or the model picked for this `/compact` is that model. A `compaction` role with its own model, effort or variant is the user's choice of another summariser and keeps its own request | not reported |
 | the stored history still starts with the messages that call sent (nothing was edited, removed or snipped since) | `history-changed` |
 | it fits: the last call's context (the provider's count: its request plus its reply; an estimate without one), plus what the history gained since, plus the prompt, is within the model's input limit; when only a context window is stated, the summary's `max_summary_tokens` (4,096 unset) must fit in it too | `too-large` |
+
+With no `compaction` role set, the summariser is the session's own model, effort and variant, including a model chosen for the
+session with `/model`, so the shared request applies. The built-in `quick`, `balanced` and `deep` recipes do not bind `compaction`.
+Set the role only to choose another summariser on purpose; `/models` then shows a muted line under the `compaction` row saying
+it does not reuse the session's prompt cache (shown only while the role differs from what the session uses). A `compaction` role
+saved by an earlier build's recipe (gpt-6-luna on low or medium effort) is removed once on the first start, so it follows the
+session again.
 
 Elapsed time is not a condition. After the cache has expired neither request reads anything from it, and the shared one is then
 larger by the tool list and by the old tool output the own request would have pruned (nothing, far from the compaction point). A
@@ -298,7 +306,8 @@ It applies to every session the daemon holds, with or without a terminal attache
 
 **When.** The timer is set at each main model call (`usage.recorded` with `compactAt`), for the provider's lifetime counted from when
 the call was sent (the event's time minus the call's duration), minus a margin of 60 s (`IDLE_COMPACT_MARGIN_MS`) that covers the
-compaction's own start-up; a lifetime under two minutes fires at its half. So a 5-minute cache compacts 4 minutes after the last call
+compaction's own start-up; a lifetime under two minutes fires at its half. The lifetime follows what the provider's responses showed
+([observed lifetime](prompt-cache.md#observed-lifetime)) when that differs from the documented or assumed one. So a 5-minute cache compacts 4 minutes after the last call
 was sent, and an Anthropic call written at the 1-hour lifetime (`promptCacheTtl: "1h"`, or the `wait_cache` feature;
 [prompt cache](prompt-cache.md#the-anthropic-lifetime-promptcachettl)) 59 minutes after it: the lifetime is the one that call asked
 for and got (`cacheTtl` on its `usage.recorded`), not the setting's value now. A message or a turn before that cancels it, and that turn's own call sets the next one; a turn that made no model call (a
@@ -367,6 +376,17 @@ model's known maximum; `compactAt` replaces `compactAtTokens` for that model (ca
 `/context-window`, then `modelContext`, then the model list. A client can also write it with `settings.set` (the whole map: the
 patch replaces the key). It has no `/settings` row: the page edits one value per row, while this is a map keyed by model, and
 the model is known in a session, where `/context-window --always` sets it.
+
+### Window for every model (`defaultContextWindow`)
+
+`defaultContextWindow` (1,000 to 10,000,000 tokens) is one window for every model that has none of its own: the model list, the
+provider's entry and the engine state no window for it. It never replaces a window someone states. Precedence, first one set
+wins: the session's `/context-window`, the model's `modelContext` window, the window the model list, the provider's entry or the
+engine states, `defaultContextWindow`, then nothing (the compaction point falls back to 160,000). "Global" means every session, not every model: this session only is `/context-window 450k`, every session on the model in use is its
+`modelContext` window (`/context-window 450k --always`), and every model is this setting. So "set the context window to
+450k for all models" is `defaultContextWindow: 450000` (`mendcode_settings` propose, or `settings.set`), and a model whose window
+should change even though the list states one needs its own `modelContext` entry (`/context-window 450k --always`). `/context`
+and `mendcode context` name the source `default-setting`. It has no `/settings` row.
 
 The ChatGPT subscription's catalog is MendCode's own list of the account's models ([connect](connect.md#where-each-list-comes-from)).
 A model's maximum is that list's `max_context_window` when it states one, else the value OpenAI's own Codex catalog publishes (`codex-rs/models-manager/models.json`: `gpt-6-astra`

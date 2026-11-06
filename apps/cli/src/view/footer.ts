@@ -41,6 +41,8 @@ export type FooterInput = {
   codegraph?: { on: boolean; savedTokens?: number; /** The counts the daemon last pushed for this project; absent until a graph tool indexed it. */ index?: { state: "indexing" | "indexed"; files: number; symbols: number; edges: number; /** While indexing: the share of the first build done, when the daemon said. */ percent?: number }; /** Why this folder is not indexed (`large folder`, `no git repo`, `off`), as the daemon's gate said. */ skipped?: string }
   /** The profile's `footerText`: what `text:<name>` shows. */
   texts?: Readonly<Record<string, string | readonly string[]>>
+  /** A screen reader gets the quota windows as figures, without bars or reset times (their compact form), at any width. */
+  plainQuota?: boolean
   /** An icon before each segment (`footerIcons`); `ascii` chrome never has one. */
   icons?: { mode: FooterIconMode; ascii?: boolean }
   /** Between the windows of a named provider's quota (the profile's `statusSeparator`). */
@@ -89,7 +91,12 @@ const GAP = "  "
 /** State and notice are never dropped when the footer overflows. */
 const KEPT = new Set<FooterSegment>(["state", "notice"])
 /** When the footer overflows the lowest rank goes first, the later one of equal rank before the earlier: telemetry, then quota and spend, then branch and model, with the goal and the context last. */
-const DROP_RANK: Readonly<Record<string, number>> = { ttft: 1, tps: 1, spend: 1, cache: 1, tokens: 1, update: 1, vim: 2, sandbox: 2, jobs: 2, forecast: 2, effort: 2, hit: 1, think: 1, calls: 1, ctx: 2, today: 3, cost: 3, quota: 3, branch: 4, model: 5, permission: 6, goal: 7, context: 8, codegraph: 1, time: 1, text: 1, directory: 4, warm: 2 }
+export const DROP_RANK: Readonly<Record<string, number>> = { ttft: 1, tps: 1, spend: 1, cache: 1, tokens: 1, update: 1, vim: 2, sandbox: 2, jobs: 2, forecast: 2, effort: 2, hit: 1, think: 1, calls: 1, ctx: 2, today: 3, cost: 3, quota: 3, branch: 4, model: 5, permission: 6, goal: 7, context: 8, codegraph: 1, time: 1, text: 1, directory: 4, warm: 2 }
+
+/** Segments whose text is the user's or the machine's own words: a narrow row cuts them with `…` instead of dropping them. */
+const SHRINKABLE = new Set(["text", "directory", "branch", "goal"])
+/** The fewest cells a cut segment keeps, the `…` included; under it the segment is dropped. */
+const MIN_SHRUNK = 6
 
 export { formatCost, formatSpeed, formatTtft } from "./stat-parts"
 
@@ -101,7 +108,7 @@ export { quotaText } from "./footer-quota"
 
 /** The `quota` segment (every provider) or `quota:<provider>` (one); the rules for a stale or ended window live in footer-quota.ts. */
 function quotaSpans(input: FooterInput, only?: string): Span[] {
-  return quotaSegmentSpans({ quotas: input.quotas, now: input.now, style: input.quotaStyle ?? { view: "used", color: "pressure" }, glyphs: input.glyphs, width: input.width, ...(only !== undefined ? { only } : {}), ...(input.separator !== undefined ? { separator: input.separator } : {}) })
+  return quotaSegmentSpans({ quotas: input.quotas, now: input.now, style: input.quotaStyle ?? { view: "used", color: "pressure" }, glyphs: input.glyphs, width: input.plainQuota ? 0 : input.width, ...(only !== undefined ? { only } : {}), ...(input.separator !== undefined ? { separator: input.separator } : {}) })
 }
 
 /** The mark of priority processing: the lightning of the footer's icon mode, or the word when there are no icons (`none`, accessible or ASCII chrome). */
@@ -267,6 +274,15 @@ export function dropToFit(parts: Array<{ id: string; spans: Span[] }>, width: nu
     const lowest = Math.min(...droppable.map(rank))
     const drop = droppable.findLast((part) => rank(part) === lowest)
     if (!drop) break
+    // Free text (a tagline, a path, a branch) is cut with `…` to the room left before it is dropped; it goes only when a few cells are all there is.
+    if (SHRINKABLE.has(parseRowSegment(drop.id).id)) {
+      const room = width - (total() - widthOf(drop.spans))
+      if (room >= MIN_SHRUNK) {
+        // `clip` ends the cut text with `…` itself.
+        drop.spans = clip(drop.spans, room)
+        break
+      }
+    }
     parts.splice(parts.indexOf(drop), 1)
   }
   return total

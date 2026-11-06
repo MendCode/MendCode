@@ -5,7 +5,7 @@ import type { TerminalMode } from "./terminal-mode"
 export type { ColorName, Theme }
 
 let active: Theme = THEMES.find((theme) => theme.name === DEFAULT_THEME) ?? mend
-/** Themes from files (packages, the user's and the project's `themes/`); a file wins over a built-in of the same name. */
+/** Themes from files (profiles, the user's and the project's `themes/`); a file wins over a built-in of the same name. */
 let fileThemes: Theme[] = []
 
 function allThemes(): Theme[] {

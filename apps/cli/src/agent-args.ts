@@ -1,3 +1,4 @@
+import { AGENT_HELP } from "./help-text"
 import { AGENT_CREATE_NAME, AGENT_CREATE_PERMISSIONS } from "@mendcode/protocol/wire"
 import type { Common, ParseResult } from "./automation"
 import { COMPAT } from "./compat"
@@ -8,7 +9,7 @@ export type AgentAutomation =
   | { kind: "agent.create"; path?: string; description?: string; name?: string; mode?: "all" | "primary" | "subagent"; permissions?: string[]; model?: string; generate?: boolean }
   | { kind: "agent.debug"; name: string; tool?: string; params?: Record<string, unknown> }
 
-export const AGENT_USAGE = `usage: ${PROGRAM_NAME} agent list\n  agent create [--path DIR] [--description TEXT] [--mode all|primary|subagent]\n    [--permissions bash,read,edit,glob,grep,webfetch,task,todowrite,websearch,lsp,skill] [--model provider/model | -m provider/model] [--name NAME]\n    [--generate]  (the model writes name, when-to-use text and prompt; falls back to the plain template)\n  debug agent <name> [--tool ID] [--params JSON]\n  --dir D | --data-dir D  --json | --format json`
+export const AGENT_USAGE = AGENT_HELP
 const VALUES = new Set(["dir", "data-dir", "engine", "format", "compat", "path", "description", "mode", "permissions", "tools", "model", "name", "tool", "params"])
 const COMMON = ["dir", "data-dir", "engine", "format", "compat", "json", "help"]
 

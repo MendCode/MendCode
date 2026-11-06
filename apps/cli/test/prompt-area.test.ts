@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { DEFAULT_TUI_PROFILE } from "../src/view/tui-profile"
 import { createIdFactory, type SessionEvent } from "@mendcode/protocol"
 import { createApp } from "../src/ui/app"
 import { glyphs, type Line } from "../src/ui/theme"
@@ -20,6 +21,7 @@ function harness(options: { mode?: PresentationMode; width?: number; height?: nu
   const turnId = ids("turn")
   let exited = false
   const app = createApp({
+    profile: { ...DEFAULT_TUI_PROFILE, footerDefaultRows: false },
     sessionId,
     screen,
     directory: "/work/app",
@@ -69,6 +71,19 @@ describe("turn state", () => {
     expect(state.startedAt).toBeUndefined()
   })
 
+  test("a sub-agent's steps never become the running item: the phase stays on what the main agent does while agents work", () => {
+    const state = createTurnState()
+    state.apply(ev({ type: "turn.started", turnId, queueId: ids("queue") }))
+    const call = ids("item")
+    state.apply(ev({ type: "item.started", turnId, itemId: call, kind: "tool_call", meta: { tool: "agent B1", subagent: true } }))
+    for (const [kind, tool] of [["tool_call", "shell: gh search code"], ["reasoning", undefined], ["tool_call", "edit: a.ts"], ["agent_message", undefined]] as const) {
+      state.apply(ev({ type: "item.started", turnId, itemId: ids("item"), kind, meta: { agentParent: call, ...(tool ? { tool } : {}) } }))
+      expect(state.current).toEqual({ kind: "tool_call", tool: "agent B1" })
+    }
+    state.apply(ev({ type: "item.completed", itemId: call, status: "ok" }))
+    expect(state.current).toBeUndefined()
+  })
+
   test("keeps the extra fields of a request until it is resolved", () => {
     const state = createTurnState()
     const requestId = ids("request")
@@ -111,6 +126,15 @@ describe("working row", () => {
       "Waiting for answer...",
     ])
     expect(toolPhase("mcp__x__do")).toBe("Running command...")
+    expect(phaseOf({ state: "tool", current: { kind: "tool_call", tool: "shell", detail: "bun test apps/cli\nsecond line" } })).toBe("Running bun test apps/cli...")
+    expect(phaseOf({ state: "tool", current: { kind: "tool_call", tool: "shell", detail: "x".repeat(80) } })).toBe(`Running ${"x".repeat(47)}…...`)
+  })
+
+  test("an advisor consultation reads as consulting, whatever words its question holds", () => {
+    expect(toolPhase("advisor: The executor is about to finish this turn. Check the diff for bugs and unverified claims.")).toBe("Consulting advisor...")
+    expect(toolPhase("advisor: Is a recursive parser fine here?")).toBe("Consulting advisor...")
+    expect(toolPhase("mcp__mendcode__advisor")).toBe("Consulting advisor...")
+    expect(toolPhase("read advisor.ts")).toBe("Reading...")
   })
 
   test("a retry shows the countdown in the error color and always keeps it in view", () => {
@@ -245,7 +269,7 @@ describe("prompt area in the app", () => {
     ev({ type: "item.started", turnId, itemId: item, kind: "tool_call", meta: { tool: "read: src/a.ts" } })
     app.render()
     let rows = text()
-    const working = rows.findIndex((row) => /^ {3}\S Reading\.\.\. {2}1m 5s$/.test(row))
+    const working = rows.findIndex((row) => /^ {3}\S Reading… \(1m 5s\)$/.test(row))
     expect(working).toBeGreaterThan(-1)
     expect(rows[working + 1]!.trimEnd()).toBe(`  ${"─".repeat(96)}`)
     now += 3_000
@@ -253,11 +277,11 @@ describe("prompt area in the app", () => {
     ev({ type: "item.started", turnId, itemId: ids("item"), kind: "reasoning" })
     app.render()
     rows = text()
-    expect(rows.some((row) => /Thinking\.\.\. {2}1m 8s$/.test(row))).toBe(true)
+    expect(rows.some((row) => /Thinking… \(1m 8s\)$/.test(row))).toBe(true)
     ev({ type: "turn.completed", turnId })
     ev({ type: "foreground.state", state: "idle" })
     app.render()
-    expect(text().some((row) => row.includes("Thinking..."))).toBe(false)
+    expect(text().some((row) => row.includes("Thinking…"))).toBe(false)
   })
 
   test("the first Esc shows [esc again to interrupt] in the working row; the second cancels", async () => {
@@ -266,7 +290,7 @@ describe("prompt area in the app", () => {
     ev({ type: "turn.started", turnId, queueId: ids("queue") })
     ev({ type: "foreground.state", state: "generating", turnId })
     await app.onKey("\x1b")
-    expect(text().some((row) => row.includes("Generating...") && row.includes("[esc again to interrupt]"))).toBe(true)
+    expect(text().some((row) => row.includes("Generating…") && row.includes("[esc again to interrupt]"))).toBe(true)
     expect(text().at(-1)).not.toContain("esc again")
     await app.onKey("\x1b")
     expect(sent.find((command) => command.type === "turn.cancel")).toBeDefined()
@@ -329,20 +353,108 @@ describe("prompt area in the app", () => {
     expect(sent.some((command) => command.type === "session.undo")).toBe(false)
   })
 
+  describe("Esc Esc on a message with images that nothing answered yet", () => {
+    const blob = (index: number) => ({ sha256: index.toString(16).padStart(64, "0"), bytes: 1000, mime: "image/png", name: `shot-${index}.png`, label: `[Image #${index}]`, at: 0 })
+    const images = Array.from({ length: 12 }, (_, index) => blob(index + 1))
+    const sentText = `te marcare todos los slops ${images.map((image) => image.label).join(" ")} revisalos`
+    const report = (text: string) => ({ ok: true, result: { turnIds: [], itemId: "x", files: { restored: [], removed: [], skipped: [] }, history: { messages: 1, tracked: true }, shellUntracked: false, notes: [], prompt: { text, attachments: images }, canRedo: true, changes: [] } })
+
+    /** The message as the daemon sends it: queued, taken out of the queue, turn started, the user message item. */
+    function sentMessage(options: { send?: (command: Record<string, unknown>) => unknown } = {}) {
+      const rig = harness({ send: options.send ?? ((command) => command.type === "session.undo" ? report(sentText) : undefined) })
+      const queueId = ids("queue")
+      const message = ids("item")
+      rig.ev({ type: "queue.added", queueId, text: sentText, attachments: images })
+      rig.ev({ type: "queue.changed", queue: [{ queueId, preview: sentText.slice(0, 200), attachments: 12, kind: "message" }] })
+      rig.ev({ type: "queue.changed", queue: [] })
+      rig.ev({ type: "turn.started", turnId: rig.turnId, queueId })
+      rig.ev({ type: "item.started", turnId: rig.turnId, itemId: message, kind: "user_message" })
+      rig.ev({ type: "item.completed", itemId: message, status: "ok", text: sentText })
+      rig.ev({ type: "foreground.state", state: "generating", turnId: rig.turnId })
+      return { ...rig, message }
+    }
+
+    /** Enter on whatever the prompt holds: what the next message would carry. */
+    async function resend(rig: ReturnType<typeof sentMessage>) {
+      await rig.app.onKey("\r")
+      return rig.sent.findLast((command) => command.type === "user.submit") as { text: string; attachments: Array<{ label?: string }> } | undefined
+    }
+
+    test("a screenshot queued behind it does not stop it: the message and the queued one come back, in order, with every image", async () => {
+      const rig = sentMessage()
+      const { app, ev, sent, message } = rig
+      const queued = ids("queue")
+      ev({ type: "queue.added", queueId: queued, text: "[Image #18]", attachments: [blob(18)] })
+      ev({ type: "queue.changed", queue: [{ queueId: queued, preview: "[Image #18]", attachments: 1, kind: "message" }] })
+      await app.onKey("\x1b")
+      await app.onKey("\x1b")
+      expect(sent.some((command) => command.type === "turn.cancel")).toBe(false)
+      expect(sent.find((command) => command.type === "session.undo")).toMatchObject({ atItemId: message, cancelRunning: true })
+      expect(sent.find((command) => command.type === "queue.remove")).toMatchObject({ queueId: queued })
+      expect(app.editor.text).toBe(`${sentText}\n[Image #18]`)
+      const again = await resend(rig)
+      expect(again?.attachments.map((attachment) => attachment.label)).toEqual([...images.map((image) => image.label), "[Image #18]"])
+    })
+
+    test("a draft in the prompt does not stop it: the message goes in front of what was typed", async () => {
+      const rig = sentMessage()
+      await type(rig.app, "otra cosa")
+      await rig.app.onKey("\x1b")
+      await rig.app.onKey("\x1b")
+      expect(rig.sent.some((command) => command.type === "turn.cancel")).toBe(false)
+      expect(rig.app.editor.text).toBe(`${sentText}\notra cosa`)
+      expect((await resend(rig))?.attachments).toHaveLength(12)
+    })
+
+    test("the prompt is filled before the daemon answers the undo", async () => {
+      let release: (reply: unknown) => void = () => {}
+      const rig = sentMessage({ send: (command) => command.type === "session.undo" ? new Promise((resolve) => { release = resolve }) : undefined })
+      await rig.app.onKey("\x1b")
+      const second = rig.app.onKey("\x1b")
+      await new Promise((resolve) => setTimeout(resolve, 5))
+      expect(rig.app.editor.text).toBe(sentText)
+      release(report(sentText))
+      await second
+      expect(rig.app.editor.text).toBe(sentText)
+      expect((await resend(rig))?.attachments).toHaveLength(12)
+    })
+
+    test("an undo the daemon refuses puts the prompt back as it was", async () => {
+      const rig = sentMessage({ send: (command) => command.type === "session.undo" ? { ok: false, error: { code: "invalid_state", message: "nothing to undo" } } : undefined })
+      await type(rig.app, "borrador")
+      await rig.app.onKey("\x1b")
+      await rig.app.onKey("\x1b")
+      expect(rig.app.editor.text).toBe("borrador")
+      expect(rig.text().some((row) => row.includes("nothing to undo"))).toBe(true)
+    })
+
+    test("once the model answered, the interrupt says why the message was not taken back", async () => {
+      const rig = sentMessage()
+      const answer = ids("item")
+      rig.ev({ type: "item.started", turnId: rig.turnId, itemId: answer, kind: "agent_message" })
+      rig.ev({ type: "item.delta", itemId: answer, text: "Arranco con la revisión. ".repeat(12) })
+      await rig.app.onKey("\x1b")
+      await rig.app.onKey("\x1b")
+      expect(rig.sent.some((command) => command.type === "turn.cancel")).toBe(true)
+      expect(rig.sent.some((command) => command.type === "session.undo")).toBe(false)
+      expect(rig.text().some((row) => row.includes("already answered · esc esc to edit"))).toBe(true)
+    })
+  })
+
   test("a newer build installed under the terminal is said once on the right of the prompt's top rule, taking no row", () => {
     const { app, text } = harness({ width: 100 })
     app.render()
     const before = text()
-    expect(before.some((row) => row.includes("Update installed"))).toBe(false)
+    expect(before.some((row) => row.includes("New build installed"))).toBe(false)
     app.announceUpdate()
     app.announceUpdate()
     const after = text()
-    const rows = after.filter((row) => row.includes("Update installed"))
+    const rows = after.filter((row) => row.includes("New build installed"))
     expect(rows).toHaveLength(1)
-    expect(rows[0]!.trimEnd()).toMatch(/^ {2}─{40,} ✓ Update installed · \/restart to update ─{3}$/)
+    expect(rows[0]!.trimEnd()).toMatch(/^ {2}─{40,} ✓ New build installed · \/restart to switch ─{3}$/)
     expect(rows[0]!.length).toBe(before.find((row) => row.trim().startsWith("─"))!.length)
     // Nothing moves: the rule takes the notice in place, so the pet keeps standing on the prompt.
-    expect(after.findIndex((row) => row.includes("Update installed"))).toBe(before.findIndex((row) => /^ {2}─+ *$/.test(row)))
+    expect(after.findIndex((row) => row.includes("New build installed"))).toBe(before.findIndex((row) => /^ {2}─+ *$/.test(row)))
   })
 
   test("after the restart into a new build the prompt's top rule says so until the first key", async () => {
@@ -350,10 +462,20 @@ describe("prompt area in the app", () => {
     app.render()
     const rows = text().filter((row) => row.includes("Updated to the new build"))
     expect(rows).toHaveLength(1)
-    expect(rows[0]!.trimEnd()).toMatch(/^ {2}─{40,} ✓ Updated to the new build ─{3}$/)
+    // The one notice that names /whatsnew (docs/whats-new.md): the changes it lists are this build's.
+    expect(rows[0]!.trimEnd()).toMatch(/^ {2}─{40,} ✓ Updated to the new build · \/whatsnew ─{3}$/)
     await app.onInput("a")
     app.render()
     expect(text().some((row) => row.includes("Updated to the new build"))).toBe(false)
+  })
+
+  test("after the restart, minimalist (no /whatsnew) says only that the build changed", () => {
+    const { app, text } = harness({ width: 100, updated: true })
+    app.applySettings({ tier: "minimalist" })
+    app.render()
+    const row = text().find((line) => line.includes("Updated to the new build"))
+    expect(row).toBeDefined()
+    expect(row).not.toContain("/whatsnew")
   })
 
   test("a provider retry shows in the working row with a live countdown until the next event", () => {
@@ -386,11 +508,11 @@ describe("prompt area in the app", () => {
   test("minimal says the model is working, reports a retry above the prompt and nothing below", () => {
     const { app, text, ev, turnId } = harness({ mode: "minimal" })
     app.render()
-    expect(text().some((row) => row.includes("Generating..."))).toBe(false)
+    expect(text().some((row) => row.includes("Generating…"))).toBe(false)
     ev({ type: "turn.started", turnId, queueId: ids("queue") })
     ev({ type: "foreground.state", state: "generating", turnId })
     app.render()
-    expect(text().some((row) => row.includes("Generating..."))).toBe(true)
+    expect(text().some((row) => row.includes("Generating…"))).toBe(true)
     ev({ type: "turn.retrying", turnId, attempt: 1, nextAt: NOW + 4_000, message: "overloaded" })
     expect(text().some((row) => row.includes("[retrying in 4s attempt #1]"))).toBe(true)
     expect(text().at(-1)).toBe("")

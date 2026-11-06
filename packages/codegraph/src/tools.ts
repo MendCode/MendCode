@@ -2,13 +2,14 @@ import { estimateTokens } from "@mendcode/protocol/wire"
 import { existsSync } from "node:fs"
 import { basename, dirname, join, resolve } from "node:path"
 import { cancelled, defineTool, errorMessage, fail, succeed, truncateText, type Tool, type ToolContext, type ToolResult } from "@mendcode/tools"
-import { z } from "zod"
+import { graphToolDefinitions } from "./tool-definitions"
 import type { Graph, GraphNode } from "./graph"
 import type { GraphAutopilot } from "./autopilot"
 import { holdsHome, type GraphGate, type GraphSkipReason } from "./index-gate"
 import { createIndexer, type Indexer, type IndexStatus } from "./indexer"
 import { JG_TIMEOUT_MS, literalSearch, parseJgOutput, runJg, type JgHit } from "./jg"
 import { findSymbols, inDegree, loc, projectMap, projectRelative, resolveSymbol, traverseCalls, under } from "./query"
+import { fileChars, grepChars, hitChars, lookupSavings, MAX_PRICED_MATCHES, nodeHitChars, rangeChars, sumChars } from "./savings"
 import { languageOf } from "./scan"
 import { sourceExcerpts } from "./source"
 import { MAX_RESULTS, SYMBOL_KINDS, type SymbolKind } from "./types"
@@ -44,30 +45,15 @@ const OTHER_SIDE_ROWS = 12
 const HUB_TABLE_ROWS = 6
 /** Symbols the file API's table lists in the `full` view. */
 const SYMBOL_TABLE_ROWS = 6
-/** Distinct files of a `graph_find` result its saving counts: the ones a grep-and-read would have opened. */
-const FIND_SAVING_FILES = 3
 /** Rows of a list node in a render spec (the protocol's RENDER_LIMITS.rows). */
 const RENDER_ROWS = 50
 
 const clip = (text: string, max: number): string => (text.length > max ? `${text.slice(0, max - 1)}…` : text)
 const partialNote = (graph: Graph): string => (graph.partial ? `\n[partial: ${graph.files.size} files indexed; file cap, oversized or unreadable sources may omit results]` : "")
-const callDepth = z.union([z.number().int().min(1).max(20), z.literal("all")]).optional()
 
 type Edge = { from: string; to: string; relation?: string }
 
 const withRender = (result: ToolResult, render: unknown): ToolResult => ({ ...result, render })
-
-/**
- * Estimated tokens a lookup kept out of the context: reading every file it points at whole (bytes / 4) instead of the
- * result it returned (chars / 4). Never negative; undefined when nothing was saved or no listed file has a known size,
- * so a caller shows no figure rather than an invented one.
- */
-export function lookupSavings({ graph, paths, output }: { graph: Graph; paths: Iterable<string>; output: string }): number | undefined {
-  let bytes = 0
-  for (const path of new Set(paths)) bytes += graph.files.get(path)?.size ?? 0
-  const saved = estimateTokens(bytes) - estimateTokens(output.length)
-  return saved > 0 ? saved : undefined
-}
 
 /** `meta` entries that feed the `/usage` savings tally (`savedTokens`, source `graph`), or nothing when the saving is unknown. */
 const savingsMeta = (saved: number | undefined) => (saved === undefined ? {} : { savedTokens: saved, filter: "graph" })
@@ -153,17 +139,7 @@ function acrossProjects(indexer: Indexer, tool: Tool): Tool {
 
 function findTool(indexer: Indexer, gate: Gate): Tool {
   return defineTool({
-    name: "graph_find",
-    description:
-      "Where code is: symbols ranked by name, with file:line, from the project index. Ask this before grep or reading files to find a function, class or type. TS/JS/Python/Go/Rust/Swift.",
-    permission: "read",
-    args: z.object({
-      query: z.string().trim().min(1).describe("Name or Class.method"),
-      kind: z.string().optional().describe("Declaration kind, e.g. function, class, method"),
-      path: z.string().optional().describe("File/directory scope"),
-      limit: z.number().int().min(1).max(MAX_RESULTS).optional().describe("Max results (default 20)"),
-      source: z.boolean().optional().describe("8 source lines/match"),
-    }),
+    ...graphToolDefinitions.find,
     async execute({ query, kind, path, limit, source }, context) {
       const title = `Graph find ${clip(query, 60)}`
       if (kind !== undefined && !SYMBOL_KINDS.has(kind)) return fail({ title, message: `unknown kind "${kind}"` })
@@ -189,9 +165,11 @@ function findTool(indexer: Indexer, gate: Gate): Tool {
           })
           if (found.length > shown.length) lines.push(`[${found.length - shown.length} more matches; narrow the query or pass path/kind]`)
           const capped = truncateText({ text: lines.join("\n") + partialNote(graph) })
-          // A search replaces a grep and the few best files opened after it, not every file of every match: only the top files count.
-          const opened = [...new Set(shown.map((node) => node.path))].slice(0, FIND_SAVING_FILES)
-          const saved = lookupSavings({ graph, paths: opened, output: capped.text })
+          // The alternative is `rg -n <query>` (every declaration and calling symbol whose name holds it), plus reading each listed symbol's lines when the source came with it.
+          const needle = query.trim().toLowerCase()
+          const named = found.length > MAX_PRICED_MATCHES ? [] : found.map((entry) => entry.node).filter((node) => node.name.toLowerCase().includes(needle) || node.label.toLowerCase().includes(needle))
+          const grep = found.length > MAX_PRICED_MATCHES ? undefined : grepChars({ graph, declarations: named })
+          const saved = lookupSavings({ alternativeChars: source && grep !== undefined ? sumChars([grep, ...shown.filter((node) => node.start > 0).map((node) => rangeChars({ node }))]) : grep, output: capped.text })
           const render = {
             type: "codemap",
             center: { label: clip(`search: ${query}`, LABEL_LIMIT), kind: "search" },
@@ -208,16 +186,7 @@ function findTool(indexer: Indexer, gate: Gate): Tool {
 
 function callersTool(indexer: Indexer, gate: Gate): Tool {
   return defineTool({
-    name: "graph_callers",
-    description:
-      "Who calls a symbol, or what it calls, across files; ask before changing it. Follows aliases/re-exports; dynamic dispatch may be missing.",
-    permission: "read",
-    args: z.object({
-      symbol: z.string().trim().min(1).describe("Symbol, Class.method or path#name"),
-      direction: z.enum(["in", "out"]).default("in").describe("in = callers, out = callees"),
-      depth: callDepth.describe("Default 1; all = full reach, capped output"),
-      path: z.string().optional().describe("Disambiguate by file or directory"),
-    }),
+    ...graphToolDefinitions.callers,
     async execute({ symbol, direction, depth, path }, context) {
       const title = `${direction === "in" ? "Callers of" : "Callees of"} ${clip(symbol, 60)}`
       const scope = path === undefined ? undefined : projectRelative({ cwd: context.cwd, input: path })
@@ -252,8 +221,15 @@ function callersTool(indexer: Indexer, gate: Gate): Tool {
           const side = (title: string, flow: "in" | "out", found: { rows: typeof rows; more: number }) => ({ title, entries: found.rows.map((entry) => mapEntry({ node: entry.node, depth: entry.depth, via: entry.via })), more: found.more, flow })
           const callers = direction === "in" ? { rows, more } : other
           const callees = direction === "out" ? { rows, more } : other
-          // Only the files the model was told about count; the other side of the map is for the user.
-          const saved = lookupSavings({ graph, paths: [start.path, ...rows.map((entry) => entry.node.path)], output: capped.text })
+          // The other side of the map is for the user and does not count. Callers are what `rg -n` on the name prints (the declarations and a line per caller); callees are the bodies read to see what they call.
+          const lastLevel = levels === "all" ? Math.max(0, ...rows.map((entry) => entry.depth)) : levels
+          const declared = [start, ...resolved.others]
+          const bodies = new Map([start, ...rows.filter((entry) => entry.depth < lastLevel).map((entry) => entry.node)].map((node) => [node.id, node]))
+          const alternative =
+            direction === "in"
+              ? sumChars([...declared, ...rows.map((entry) => entry.node)].map((node) => nodeHitChars({ node })))
+              : sumChars([...bodies.values()].map((node) => rangeChars({ node })))
+          const saved = lookupSavings({ alternativeChars: alternative, output: capped.text })
           const render = {
             type: "codemap",
             center: mapEntry({ node: start }),
@@ -270,10 +246,7 @@ function callersTool(indexer: Indexer, gate: Gate): Tool {
 
 function fileApiTool(indexer: Indexer, gate: Gate): Tool {
   return defineTool({
-    name: "graph_file_api",
-    description: "One file's symbols with line spans and imports, without its contents; ask before reading a large file whole.",
-    permission: "read",
-    args: z.object({ path: z.string().min(1).describe("Project-relative file") }),
+    ...graphToolDefinitions.fileApi,
     async execute({ path }, context) {
       const title = `File API ${clip(path, 80)}`
       const rel = projectRelative({ cwd: context.cwd, input: path })
@@ -300,7 +273,8 @@ function fileApiTool(indexer: Indexer, gate: Gate): Tool {
           if (nodes.length > shown.length) lines.push(`[${nodes.length - shown.length} more symbols not shown]`)
           if (nodes.length === 0) lines.push("(no symbols found)")
           const capped = truncateText({ text: lines.join("\n") + partialNote(graph) })
-          const saved = lookupSavings({ graph, paths: [rel], output: capped.text })
+          // The alternative is reading the file whole.
+          const saved = lookupSavings({ alternativeChars: fileChars({ graph, path: rel }), output: capped.text })
           // One summary row; the top symbols as a table in the `full` view; the whole listing once the card is opened.
           const top = nodes.filter((node) => !node.parent).sort((a, b) => Number(b.exported) - Number(a.exported) || a.start - b.start).slice(0, SYMBOL_TABLE_ROWS)
           const render = {
@@ -322,13 +296,7 @@ const SHORT_LANGUAGE = { typescript: "ts", javascript: "js", python: "py", go: "
 
 function mapTool(indexer: Indexer, gate: Gate): Tool {
   return defineTool({
-    name: "graph_map",
-    description: "Project directories, languages and most-called symbols.",
-    permission: "read",
-    args: z.object({
-      path: z.string().optional().describe("Only under this directory"),
-      depth: z.number().int().min(1).max(3).optional().describe("Directory levels to group by (default 2)"),
-    }),
+    ...graphToolDefinitions.map,
     async execute({ path, depth }, context) {
       const title = `Code map${path ? ` ${clip(path, 60)}` : ""}`
       const scope = path === undefined ? undefined : projectRelative({ cwd: context.cwd, input: path })
@@ -395,8 +363,8 @@ function mapTool(indexer: Indexer, gate: Gate): Tool {
               },
             ],
           }
-          const saved = lookupSavings({ graph, paths: map.hubs.map((hub) => hub.node.path), output: capped.text })
-          return withRender(succeed({ title, output: capped.text, truncated: capped.truncated, meta: { ...meta, ...savingsMeta(saved) } }), render)
+          // No honest alternative to a project overview: it replaces a few listings, not any file the model would have read, so it reports no saving.
+          return withRender(succeed({ title, output: capped.text, truncated: capped.truncated, meta }), render)
         },
       })
     },
@@ -425,14 +393,7 @@ function hitLines(hits: JgHit[]): string[] {
 function searchTool({ indexer, options }: { indexer: Indexer; options: CodeGraphOptions }): Tool {
   const gate = options.gate
   return defineTool({
-    name: "code_search",
-    description:
-      "Concept search via jg; falls back to symbols and literal text.",
-    permission: "read",
-    args: z.object({
-      query: z.string().trim().min(1).describe("Concept or identifier"),
-      path: z.string().optional().describe("File/directory scope (default: the whole project)"),
-    }),
+    ...graphToolDefinitions.search,
     async execute({ query, path }, context) {
       const title = `Code search ${clip(query, 60)}`
       if (context.signal.aborted) return cancelled(title)
@@ -487,11 +448,7 @@ function searchTool({ indexer, options }: { indexer: Indexer; options: CodeGraph
 
 function impactTool(indexer: Indexer, autopilot: GraphAutopilot | undefined): Tool {
   return defineTool({
-    name: "graph_impact",
-    tier: "balanced",
-    description: "Cached transitive callers/importers. No scan; not safety proof.",
-    permission: "read",
-    args: z.object({ path: z.string().min(1).max(4096), depth: callDepth.describe("Default 2, or all") }),
+    ...graphToolDefinitions.impact,
     async execute({ path, depth }, context) {
       const title = "Cached graph impact"
       if (context.signal.aborted) return cancelled(title)
@@ -533,7 +490,8 @@ function impactTool(indexer: Indexer, autopilot: GraphAutopilot | undefined): To
         ...(imports.length > shownImports.length ? [`[${imports.length - shownImports.length} more importing files]`] : []),
       ].join("\n") + partialNote(graph)
       const capped = truncateText({ text: output })
-      const saved = lookupSavings({ graph, paths: [...rows.map((entry) => entry.node.path), ...shownImports], output: capped.text })
+      // The alternative is the `rg -n` lines that show each caller and each importing file.
+      const saved = lookupSavings({ alternativeChars: sumChars([...rows.map((entry) => nodeHitChars({ node: entry.node })), ...shownImports.map((path) => hitChars({ path, line: 1 }))]), output: capped.text })
       return succeed({ title, output: capped.text, truncated: capped.truncated || more > 0 || imports.length > shownImports.length, meta: { callers: direct.size, reachable: rows.length + more, importingFiles: imports.length, symbols: symbols.length, cached: true, builtAt: graph.builtAt, partial: graph.partial, ...savingsMeta(saved) } })
     },
   })

@@ -3,6 +3,6 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "exports": { ".": "./src/index.ts", "./wire": "./src/wire.ts" },
+  "exports": { ".": "./src/index.ts", "./wire": "./src/wire.ts", "./tui-key-help": "./src/tui-key-help.ts", "./launch": "./src/launch.ts", "./zod-config": "./src/zod-config.ts", "./changelog": "./src/changelog.ts" },
   "dependencies": { "zod": "4.6.6" }
 }

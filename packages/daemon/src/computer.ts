@@ -59,7 +59,7 @@ export function createComputerControl(store: Store, dir: string, options: Comput
     signal.throwIfAborted()
     const result = await run(args, signal)
     signal.throwIfAborted()
-    if (result.code !== 0) throw new Error(result.stderr.includes("Foreground application changed") ? "Foreground application changed; capture again. No key was pressed." : "Native computer operation failed. Check Screen Recording or Accessibility permission for the terminal running MendCode.")
+    if (result.code !== 0) throw new Error(result.stderr.includes("Foreground application changed") ? "Foreground application changed; capture again. No key was pressed." : "Native computer operation failed. Screen Recording belongs to the terminal that started MendCode; Accessibility belongs to \"MendCode Computer Use\".")
     return result.stdout.trim()
   }
   async function processID(signal: AbortSignal) {
@@ -107,7 +107,7 @@ export function createComputerControl(store: Store, dir: string, options: Comput
             await writeFile(filePath, new Uint8Array(), { flag: "wx", mode: 0o600 })
             const shot = ["/usr/sbin/screencapture", "-x", "-t", "png", ...(input.region ? ["-R", `${input.region.x},${input.region.y},${input.region.width},${input.region.height}`] : input.windowID != null ? ["-l", String(input.windowID)] : ["-m"]), filePath]
             // An unknown window ID fails the same way as a missing permission; say which input to change before blaming the permission.
-            if (input.windowID != null) await command(shot, signal).catch((error) => { throw signal.aborted ? error : new Error(`No on-screen window has the macOS window ID ${input.windowID} (a ComputerSession windowID is not one), or Screen Recording permission is missing for the terminal running MendCode. Capture the main display with no arguments, or a region such as an observed window's bounds.`) })
+            if (input.windowID != null) await command(shot, signal).catch((error) => { throw signal.aborted ? error : new Error(`No on-screen window has the macOS window ID ${input.windowID} (a ComputerSession windowID is not one), or Screen Recording permission is missing for the terminal that started MendCode (not for "MendCode Computer Use"). Capture the main display with no arguments, or a region such as an observed window's bounds.`) })
             else await command(shot, signal)
             await chmod(filePath, 0o600)
             let bytes = await readFile(filePath)

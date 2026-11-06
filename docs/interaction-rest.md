@@ -13,7 +13,7 @@ No commands were added to `READ_ONLY_COMMANDS`.
 | `POST /question/:requestID/reply` | `{answers: string[][]}` in question order → `true` |
 | `POST /question/:requestID/reject` | No body required → `true` |
 | `GET /plan-review` | Pending plans, separate from durable review history |
-| `POST /plan-review/:requestID/reply` | `{action: "apply" | "edit" | "reject" | "close", markdown?, comments?, reason?}` → `true` |
+| `POST /plan-review/:requestID/reply` | `{action: "apply" | "edit" | "reject" | "close", markdown?, comments?, reason?, permission?: "full" | "edits" | "ask"}` (`permission` defaults to `ask` here; the terminal defaults to `full`, see [plan review](plan-review.md#access-after-applying)) → `true` |
 | `POST /memory/side-chat` | `{root?, message, history?, context?}` → `{text, actions}` |
 
 Requests use the v1 field names (`id`, `sessionID`, `tool.messageID`, `tool.callID`, `permission`, `patterns`, `always`,

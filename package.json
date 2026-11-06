@@ -19,5 +19,19 @@
     "@mendcode/protocol": "workspace:*",
     "@mendcode/store": "workspace:*",
     "@mendcode/client": "workspace:*"
-  }
+  },
+  "patchedDependencies": {
+    "zod@4.6.6": "patches/zod@4.6.6.patch"
+  },
+  "pnpm": {
+    "patchedDependencies": {
+      "zod@4.6.6": "patches/zod@4.6.6.patch"
+    }
+  },
+  "workspaces": [
+    "packages/*",
+    "apps/*",
+    "features/*",
+    "spikes/*"
+  ]
 }

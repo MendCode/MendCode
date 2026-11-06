@@ -12,9 +12,9 @@ export type LocalTransport = (typeof LOCAL_TRANSPORTS)[number]
 
 export type LocalTcpEndpoint = { transport: "tcp"; hostname: "127.0.0.1"; port: number; token: string; pid: number }
 
-/** `MENDCODE_V2_LOCAL_TRANSPORT=tcp|unix` wins; otherwise Windows uses tcp and everything else unix. */
+/** `MENDCODE_LOCAL_TRANSPORT=tcp|unix` (or `MENDCODE_V2_LOCAL_TRANSPORT`) wins; otherwise Windows uses tcp and everything else unix. */
 export function defaultLocalTransport(platform: string = process.platform, env: Record<string, string | undefined> = process.env): LocalTransport {
-  const chosen = env.MENDCODE_V2_LOCAL_TRANSPORT
+  const chosen = env.MENDCODE_LOCAL_TRANSPORT || env.MENDCODE_V2_LOCAL_TRANSPORT
   if (chosen === "tcp" || chosen === "unix") return chosen
   return platform === "win32" ? "tcp" : "unix"
 }

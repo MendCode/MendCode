@@ -1,5 +1,5 @@
 ---
-summary: reopen, fork, undo, export, search and tidy sessions; the queue and drafts
+summary: reopen, fork, undo, export, search, tidy sessions; queue and drafts
 docs: sessions, storage, editor
 aliases: session, resume, fork, undo, redo, export, import, history, drafts, queue, archive, stash
 ---

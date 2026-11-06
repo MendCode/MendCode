@@ -11,6 +11,8 @@ export const DaemonStatusReport = lazySchema(() => z.strictObject({
   /** Connected clients that completed the handshake (absent from daemons that predate the field). */
   clients: z.number().int().nonnegative().optional(),
   activeTurns: z.number().int().nonnegative(),
+  /** The sessions whose turns run (at most 20), each with the session that started it from its shell when there is one: what a restart would interrupt. */
+  work: z.array(z.strictObject({ sessionId: z.string(), title: z.string().max(100), launcher: z.string().optional(), launcherTitle: z.string().max(100).optional() })).max(20).optional(),
   backgroundJobs: z.number().int().nonnegative(),
   loops: z.strictObject({ total: z.number().int().nonnegative(), active: z.number().int().nonnegative(), running: z.number().int().nonnegative() }),
   dream: z.strictObject({ configured: z.boolean(), enabled: z.boolean(), at: z.string().nullable(), handled: z.string().nullable() }),

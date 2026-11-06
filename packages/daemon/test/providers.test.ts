@@ -222,7 +222,7 @@ describe("roles", () => {
   ]
   const catalog: ModelCatalog = { selectable: true, list: () => MODELS, defaults: { model: "gpt-6-luna", effort: "low" } }
 
-  test("aside falls back to small, then the session's model, then main; every other role ignores small and aside", () => {
+  test("aside falls back to small, then the session's model, then main; dream follows small; every other role ignores small and aside", () => {
     const session = { model: "gpt-6-sol", effort: "high" as const }
     const roles: ModelRoles = { main: { model: "gpt-6-luna" }, small: { model: "groq:llama" }, aside: { model: "gpt-6-sol", effort: "low" } }
     expect(resolveModel({ role: "aside", session, roles, catalog })).toEqual({ model: "gpt-6-sol", effort: "low" })
@@ -231,7 +231,7 @@ describe("roles", () => {
     expect(resolveModel({ role: "aside", roles: { main: roles.main! }, catalog })).toEqual({ model: "gpt-6-luna", effort: "low" })
     expect(resolveModel({ role: "aside", roles: {}, catalog })).toEqual({ model: "gpt-6-luna", effort: "low" })
     expect(resolveModel({ role: "compaction", session, roles: { small: roles.small! }, catalog })).toEqual({ model: "gpt-6-sol", effort: "high" })
-    expect(resolveModel({ role: "dream", roles: { small: roles.small! }, catalog })).toEqual({ model: "gpt-6-luna", effort: "low" })
+    expect(resolveModel({ role: "dream", roles: { small: roles.small! }, catalog })).toEqual({ model: "groq:llama" })
   })
 
   test("roles saved before aside and small existed keep resolving exactly as before", () => {

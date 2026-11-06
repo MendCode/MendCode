@@ -70,6 +70,7 @@ function buildSchemas() {
     rounds: z.array(z.object({ at: z.number(), open: z.array(z.string().max(80)).max(1000), commit: z.string().max(64).optional(), interrupted: z.literal(true).optional(), kept: z.string().max(200).optional() })).max(100),
     decisions: z.array(z.object({ phase: z.string().max(60), action: z.enum(["added", "skipped", "kept"]), reason: z.string().max(600) })).max(100),
     sections: z.record(z.string().regex(/^[a-z][a-z0-9-]{0,39}$/), z.string().max(8000)).refine((value) => Object.keys(value).length <= 20, "at most 20 sections").optional(),
+    readers: z.array(z.object({ id: z.string().max(20), paths: z.array(z.string().max(4096)).max(2000), text: z.string().max(2000), by: z.string().max(200) })).max(500).optional(),
   })
   const Job = z.object({
     id: z.string().min(1).max(80),

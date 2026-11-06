@@ -2,6 +2,7 @@ import { z } from "zod"
 import { LoopId, SessionId } from "./ids"
 import { adaptiveBounds } from "./loop-wire"
 import { lazySchema } from "./lazy"
+import { PermissionMode } from "./states"
 export { adaptiveBounds } from "./loop-wire"
 
 const MAX_INTERVAL_MS = 30 * 86_400_000
@@ -231,6 +232,16 @@ export const Loop = lazySchema(() => z.strictObject({
   reportOnly: z.boolean().optional(),
   /** "worktree": each run works in its own git worktree, never in the user's checkout (see `LoopWorktree`). Absent = "in-place". */
   workspace: z.enum(["in-place", "worktree"]).optional(),
+  /** The session that created the loop (a `/loop` command or the `loop` tool); its reads are inherited and it gets a notice per run. */
+  creatorSessionId: SessionId.optional(),
+  /** Where a run's short notice goes: the creator session (default when it is known) or nowhere. */
+  notify: z.enum(["creator", "none"]).optional(),
+  /** The permission mode the loop's sessions start in, inherited from the creator at creation (never above it); absent = the user's default. Report-only runs are always plan mode. */
+  permission: PermissionMode.optional(),
+  /** Paths outside the project the runs will read, declared at creation and approved once with it. */
+  reads: z.array(z.string().min(1).max(4096)).max(10).optional(),
+  /** A request the run's session is waiting on; /loops shows it and resolves a tool approval with a/o. */
+  waiting: z.strictObject({ sessionId: SessionId, requestId: z.string().min(1).max(100), kind: z.enum(["approval", "question"]), title: z.string().max(500), detail: z.string().max(2_000), tool: z.string().max(200).optional(), at: z.number().int().nonnegative() }).optional(),
   /** Adaptive triggers: the interval the next wakeup uses (moves between the trigger's bounds as runs act or find nothing). */
   adaptiveMs: z.number().int().min(60_000).max(MAX_INTERVAL_MS).optional(),
   /** External triggers: a fire that arrived while a run was in progress; it starts a run as soon as the loop is free. */

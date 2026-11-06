@@ -4,7 +4,7 @@ import { binPaths, installBinary, resolveDataDir, rollbackBinary } from "./insta
 import { readRecovery, verifyRecovery, writeRecovery } from "./recovery"
 import { validateReleaseIndex } from "./release-index"
 import type { UpgradePorts } from "./ports"
-import { channelOf, decide, type Channel, type Decision, type Platform, type ReleaseAsset, parseReleases, pickRelease, platformAsset } from "./releases"
+import { channelOf, decide, isNightlyTag, type Channel, type Decision, type Platform, type ReleaseAsset, parseReleases, pickRelease, platformAsset } from "./releases"
 import { CHECKSUMS_ASSET, GITHUB_API, MAX_BUNDLE_BYTES, MAX_DOWNLOAD_BYTES, PROVENANCE_ASSET, RELEASE_INDEX_ASSET, RELEASES_PER_PAGE, SIGSTORE_SUFFIX, UPGRADE_REPO, UPGRADE_REPO_ENV, UPGRADE_REPO_PLACEHOLDER } from "./settings"
 import { readState, writeState } from "./state"
 
@@ -19,7 +19,7 @@ export function resolveRepo(env: Record<string, string | undefined>) {
 }
 
 export type UpgradeRequest = {
-  /** The data directory exactly as the rest of the CLI resolves it (--dir, MENDCODE_V2_DIR, default). */
+  /** The data directory exactly as the rest of the CLI resolves it (--dir, MENDCODE_DIR or MENDCODE_V2_DIR, default). */
   dataDir: string
   home: string
   /** `owner/name`; not read for a rollback. */
@@ -98,7 +98,7 @@ async function performUpgrade(request: UpgradeRequest, ports: UpgradePorts): Pro
   if (!REPO_SLUG.test(request.repo)) throw new UpgradeError("bad-repo", `invalid repository "${request.repo}"`)
   const listUrl = `${GITHUB_API}/repos/${request.repo}/releases?per_page=${RELEASES_PER_PAGE}`
   const target = request.target && request.target !== "latest" ? request.target.startsWith("v") || request.target.startsWith("dev-") ? request.target : `v${request.target}` : undefined
-  const json = await remote("cannot list releases", () => ports.fetchJson(target ? `${GITHUB_API}/repos/${request.repo}/releases/tags/${encodeURIComponent(target)}` : listUrl))
+  const json = await remote("cannot list releases", () => ports.fetchJson(target && !isNightlyTag(target) ? `${GITHUB_API}/repos/${request.repo}/releases/tags/${encodeURIComponent(target)}` : listUrl))
   const releases = parseReleases(target && !Array.isArray(json) ? [json] : json)
   const release = target ? releases.find((row) => row.tag === target && channelOf(row) !== undefined) : pickRelease(releases, channel)
   if (!release) throw new UpgradeError("no-release", `no ${channel} release found in ${request.repo}`)
@@ -109,7 +109,8 @@ async function performUpgrade(request: UpgradeRequest, ports: UpgradePorts): Pro
   if (request.check) return { ...found, status: STATUS_OF[decision] }
 
   const save = (lastVersion: string | null) => writeState({ fs, dataDir, state: { channel, lastCheckAt: ports.now(), lastVersion } })
-  if (decision !== "update" && !request.force && !(target && decision === "ahead")) {
+  if (decision === "ahead" && target && !request.force) throw new UpgradeError("downgrade", `refusing downgrade ${request.currentVersion} → ${release.tag}; use --force to install the older version`)
+  if (decision !== "update" && !request.force) {
     await save(state.lastVersion)
     return { ...found, status: STATUS_OF[decision] }
   }

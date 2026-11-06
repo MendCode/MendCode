@@ -1,4 +1,5 @@
 import { ComputerCaptureInput, ComputerKeyInput } from "@mendcode/protocol"
+import { withComputerOutput } from "./computer-output"
 import { defineTool, type ToolResult } from "../tool"
 import { fail } from "../util"
 import { createComputerSessionTools, type ComputerActivation } from "./computer-session"
@@ -20,7 +21,7 @@ export function createComputerTools() {
       permission: "execute",
       args: ComputerCaptureInput,
       async execute(input, context) {
-        return context.computer ? context.computer.capture(input, context.signal) : fail({ title: "Computer screenshot", message: "Computer capture is disabled" })
+        return context.computer ? withComputerOutput(context, () => context.computer!.capture(input, context.signal)) : fail({ title: "Computer screenshot", message: "Computer capture is disabled" })
       },
     }),
     defineTool({
@@ -29,7 +30,7 @@ export function createComputerTools() {
       permission: "execute",
       args: ComputerKeyInput,
       async execute(input, context) {
-        return context.computer ? context.computer.key(input, context.signal) : fail({ title: "Computer key", message: "Computer keyboard control is disabled" })
+        return context.computer ? withComputerOutput(context, () => context.computer!.key(input, context.signal)) : fail({ title: "Computer key", message: "Computer keyboard control is disabled" })
       },
     }),
     ...createComputerSessionTools(),

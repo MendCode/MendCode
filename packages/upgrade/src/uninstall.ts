@@ -4,7 +4,8 @@ import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSy
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { UNINSTALL_USAGE, type UninstallCommand } from "./uninstall-args"
-import { INSTALL_RECEIPT, parseInstallReceipt } from "./install-receipt"
+import { dataDirFromEnv } from "@mendcode/program/data-dir"
+import { parseInstallReceipt, receiptIn } from "./install-receipt"
 
 export type UninstallTarget = { path: string; kind: "config" | "data" | "cache" | "state" | "binary" | "unknown"; action: "trash" | "keep" | "split" | "blocked"; bytes: number; reason?: string; fingerprint: string }
 export type UninstallPlan = { dataDir: string; owned: boolean; daemon: "inactive" | "active" | "unverified"; pid?: number; targets: UninstallTarget[]; blockers: string[]; fatal: boolean }
@@ -32,7 +33,6 @@ const GROUPS: Record<string, UninstallTarget["kind"]> = {
   builtin: "cache", "pets-cache": "cache", lsp: "cache", codegraph: "cache", diagnostics: "cache",
   "mendd.sock": "state", "mendd.endpoint": "state",
 }
-const RECEIPT = INSTALL_RECEIPT
 const within = (parent: string, child: string) => { const relative = path.relative(parent, child); return relative === "" || relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative) }
 const canonical = (file: string): string => {
   if (existsSync(file)) return realpathSync(file)
@@ -41,7 +41,7 @@ const canonical = (file: string): string => {
 }
 
 function guardPath(dir: string, home: string) {
-  const protectedDirs = [home, path.parse(home).root, path.join(home, ".mendcode"), path.join(home, ".codex"),
+  const protectedDirs = [home, path.parse(home).root, path.join(home, ".mendcode-v1"), path.join(home, ".codex"),
     ...["share", "state"].map((kind) => path.join(home, ".local", kind, "mendcode")),
     path.join(home, ".config", "mendcode"), path.join(home, ".cache", "mendcode"), path.join(home, "Code", "MendCode")]
   const physical = canonical(dir)
@@ -135,7 +135,7 @@ function retainedDatabase(bytes: Uint8Array, command: UninstallCommand) {
 }
 
 export function collectUninstallPlan(command: UninstallCommand, deps: UninstallDeps): UninstallPlan {
-  const dataDir = guardDirectory(path.resolve(command.dir ?? deps.env.MENDCODE_V2_DIR ?? deps.defaultDir), deps.home)
+  const dataDir = guardDirectory(path.resolve(command.dir ?? dataDirFromEnv(deps.env) ?? deps.defaultDir), deps.home)
   const plan: UninstallPlan = { dataDir, owned: false, ...daemonState(dataDir, deps.alive ?? alive), targets: [], blockers: [], fatal: false }
   if (plan.daemon !== "inactive") {
     plan.blockers.push(plan.daemon === "active" ? `Active daemon (pid ${plan.pid}); stop it before uninstalling` : "Daemon ownership unverified; inspect the lock/socket before uninstalling")
@@ -175,7 +175,7 @@ export function collectUninstallPlan(command: UninstallCommand, deps: UninstallD
   const installedBinary = (binary: string) => {
     if (!existsSync(binary) || plan.targets.some((target) => target.path === binary && target.action === "trash")) return
     guardPath(binary, deps.home)
-    const receipt = path.join(path.dirname(binary), RECEIPT)
+    const receipt = receiptIn(path.dirname(binary))
     let owned = false
     if (existsSync(receipt) && lstatSync(receipt).isFile() && lstatSync(binary).isFile()) {
       const expected = parseInstallReceipt(readFileSync(receipt, "utf8"))

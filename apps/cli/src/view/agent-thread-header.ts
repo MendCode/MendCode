@@ -3,24 +3,31 @@ import { subagentColor } from "./agent-color"
 import { clip, lineWidth } from "./deck"
 import { formatElapsed } from "./time"
 import type { AgentThread } from "./transcript"
-import { truncateEnd } from "./wrap"
+import { textWidth, truncateEnd } from "./wrap"
+
+/** What a thread is doing, or how it ended. */
+export function threadState(thread: AgentThread): Span {
+  return thread.running ? { text: thread.last ?? "starting", fg: "text" } : thread.status === "ok" ? { text: "done", fg: "success" } : thread.status === "error" ? { text: "failed", fg: "error" } : { text: "interrupted", fg: "warning" }
+}
 
 /**
  * The head of a sub-agent's thread opened in the chat's place: its name in its own colour (the one its strip row and card wear),
  * where it sits among its siblings and the keys that move, then what it is and what it is doing, and a rule under both. Three
  * rows, each exactly `width` cells after `inset`.
  */
-export function agentThreadHeader(input: { thread: AgentThread; index: number; count: number; now: number; width: number; inset: number; sep: string; rule: string }): Line[] {
+export function agentThreadHeader(input: { thread: AgentThread; index: number; count: number; now: number; width: number; inset: number; sep: string; rule: string; /** The session the thread belongs to. */ parent?: string }): Line[] {
   const { thread, sep } = input
   const room = Math.max(1, input.width - input.inset * 2)
   const pad: Span = { text: " ".repeat(input.inset) }
   const color = subagentColor(thread.description)
   const keys: Line = [{ text: [...(input.count > 1 ? [`${input.index + 1} of ${input.count}`, "←→"] : []), "↑ back"].join(` ${sep} `), fg: "muted" }]
   const nameRoom = Math.max(4, room - lineWidth(keys) - 4)
-  const name: Line = [{ text: "◆ ", fg: thread.running ? color : "muted" }, { text: truncateEnd(thread.description, nameRoom - 2), fg: thread.running ? color : "text", bold: true }]
+  // Whose it is, after the name, when the row has room for it; the keys keep the right.
+  const owner = input.parent ? truncateEnd(`${sep} of ${input.parent}`, Math.max(0, nameRoom - 2 - textWidth(thread.description) - 2)) : ""
+  const name: Line = [{ text: "◆ ", fg: thread.running ? color : "muted" }, { text: truncateEnd(thread.description, nameRoom - 2), fg: thread.running ? color : "text", bold: true }, ...(owner.length > 4 ? [{ text: ` ${owner}`, fg: "muted" as const }] : [])]
   const gap = Math.max(2, room - lineWidth(name) - lineWidth(keys))
   const first: Line = lineWidth(name) + 2 + lineWidth(keys) <= room ? [...name, { text: " ".repeat(gap) }, ...keys] : clip(name, room)
-  const state: Span = thread.running ? { text: thread.last ?? "starting", fg: "text" } : thread.status === "ok" ? { text: "done", fg: "success" } : thread.status === "error" ? { text: "failed", fg: "error" } : { text: "interrupted", fg: "warning" }
+  const state = threadState(thread)
   const elapsed = thread.startedAt !== undefined ? formatElapsed((thread.running ? input.now : thread.endedAt ?? input.now) - thread.startedAt) : undefined
   const facts: Span[] = [
     { text: thread.agent, fg: "muted" },

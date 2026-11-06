@@ -10,7 +10,11 @@ export type ExitSummaryInput = {
   sessionId: string
   title: string
   turns: number
+  /** Prompt tokens that did not come from or go to the provider's cache. */
   input: number
+  /** Prompt tokens read from the cache, and written to it: shown apart from `input`. */
+  cacheRead?: number
+  cacheWrite?: number
   output: number
   model?: string
   elapsedMs: number
@@ -32,6 +36,6 @@ export function exitSummary(input: ExitSummaryInput): string {
   const dim = (text: string) => (input.color ? `\x1b[2m${text}\x1b[22m` : text)
   const bold = (text: string) => (input.color ? `\x1b[1m${text}\x1b[22m` : text)
   const title = input.title.trim() || "untitled"
-  const usage = input.turns > 0 ? [input.model, `↑${compact(input.input)} ↓${compact(input.output)}`, `${input.turns} turn${input.turns === 1 ? "" : "s"}`, formatDuration(input.elapsedMs)].filter(Boolean).join(" · ") : ""
+  const usage = input.turns > 0 ? [input.model, [`↑${compact(input.input)}`, ...(input.cacheRead ? [`+${compact(input.cacheRead)} cached`] : []), ...(input.cacheWrite ? [`+${compact(input.cacheWrite)} cache write`] : []), `↓${compact(input.output)}`].join(" "), `${input.turns} turn${input.turns === 1 ? "" : "s"}`, formatDuration(input.elapsedMs)].filter(Boolean).join(" · ") : ""
   return [`${dim("MendCode ·")} ${bold(title)}`, ...(usage ? [`  ${dim(usage)}`] : []), `  ${dim("resume:")} ${bold(`${PROGRAM_NAME} --session ${input.sessionId}`)}`, ""].join("\n")
 }

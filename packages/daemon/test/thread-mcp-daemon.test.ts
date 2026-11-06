@@ -166,24 +166,45 @@ test("mutation receipts survive process leases and retries recheck permission", 
 
 test("idle bridge children share the cumulative spawn and depth budget", async () => {
   const h = await boot()
-  await h.client.send({ type: "settings.set", patch: { tier: "full", threadMcp: { claude: true }, subagentDepth: 1 } })
+  await h.client.send({ type: "settings.set", patch: { tier: "full", threadMcp: { claude: true }, subagentDepth: 2 } })
   const parent = await h.create()
   const results: any[] = []
-  h.run(async (turn) => { results.push(await h.invoke(turn, "thread_create", { title: "idle" })); return { status: "ok" } })
+  h.run(async (turn) => { results.push(turn.externalMcp ? await h.invoke(turn, "thread_create", { title: "idle" }) : "no bridge"); return { status: "ok" } })
   await h.say(parent)
   const child = h.daemon.store.listSessions({ directory: h.project, roots: false }).find((session) => session.parentId === parent)!
   await h.say(child.sessionId)
-  expect(results[1].result.isError).toBe(true)
-  expect(results[1].result.content[0].text).toContain("depth limit")
+  expect(results[1].result.content[0].text).toContain("state=idle")
+  // The deepest child is offered no bridge at all.
+  const grandchild = h.daemon.store.listSessions({ directory: h.project, roots: false }).find((session) => session.parentId === child.sessionId)!
+  await h.say(grandchild.sessionId)
+  expect(results[2]).toBe("no bridge")
   h.daemon.store.meta.set(`orchestration.spawns:${parent}`, "256")
   await h.say(parent)
-  expect(results[2].result.isError).toBe(true)
-  expect(results[2].result.content[0].text).toContain("accumulated-spawn")
+  expect(results[3].result.isError).toBe(true)
+  expect(results[3].result.content[0].text).toContain("accumulated-spawn")
+})
+
+test("a child session gets no thread bridge unless subagentDepth lets it nest", async () => {
+  const h = await boot()
+  await h.client.send({ type: "settings.set", patch: { tier: "full", threadMcp: { claude: true } } })
+  const parent = await h.create()
+  const bridged: boolean[] = []
+  h.run(async (turn) => {
+    bridged.push(turn.externalMcp !== undefined)
+    if (turn.sessionId === parent && bridged.length === 1) await h.invoke(turn, "thread_create", { title: "idle" })
+    return { status: "ok" }
+  })
+  await h.say(parent)
+  const child = h.daemon.store.listSessions({ directory: h.project, roots: false }).find((session) => session.parentId === parent)!
+  await h.say(child.sessionId)
+  await h.client.send({ type: "settings.set", patch: { subagentDepth: 2 } })
+  await h.say(child.sessionId)
+  expect(bridged).toEqual([true, false, true])
 })
 
 test("daemon bridge creates project children and delegates across configured engines with lineage and permission ceilings", async () => {
   const h = await boot()
-  await h.client.send({ type: "settings.set", patch: { tier: "full", threadMcp: { claude: true, codex: true } } })
+  await h.client.send({ type: "settings.set", patch: { tier: "full", threadMcp: { claude: true, codex: true }, subagentDepth: 2 } })
   const parent = await h.create()
   const other = await h.create("configured-native", path.join(h.project, "elsewhere"))
   const results: any[] = []

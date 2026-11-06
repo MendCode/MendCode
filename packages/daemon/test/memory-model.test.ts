@@ -192,7 +192,7 @@ test("B63 assistant refuses another profile selection and isolates history when 
   const project = temporary()
   const privateRoot = temporary()
   const privateProject = path.join(privateRoot, "project")
-  await h.client.send({ type: "settings.set", patch: { profiles: [{ name: "company", directories: [`${privateRoot}/*`] }] } })
+  await h.client.send({ type: "settings.set", patch: { areas: [{ name: "company", directories: [`${privateRoot}/*`] }] } })
   await h.model(project, { action: "add", scope: "global", text: "Personal rule" })
   await h.model(privateProject, { action: "add", scope: "global", text: "Company rule" })
   expect(await h.client.memoryAssistant(project, "foreign selection", { root: privateProject })).toMatchObject({ ok: false })
@@ -202,7 +202,7 @@ test("B63 assistant refuses another profile selection and isolates history when 
   expect(calls[0]).not.toContain("Personal rule")
   expect(calls[0]).toContain('"requireApproval":true')
   expect(await h.client.memoryAssistant(project)).toMatchObject({ ok: true, thread: { messages: [] } })
-  await h.client.send({ type: "settings.set", patch: { profiles: [] } })
+  await h.client.send({ type: "settings.set", patch: { areas: [] } })
   expect(await h.client.memoryAssistant(privateProject)).toMatchObject({ ok: true, thread: { messages: [] } })
 })
 

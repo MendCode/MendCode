@@ -107,3 +107,50 @@ test("the detection list is plain text with ASCII checkboxes and fits a narrow s
   expect(looksLikeDotenv("# c\nexport A_B = 1")).toBe(true)
   expect(looksLikeDotenv("-----BEGIN KEY-----\nA=\n")).toBe(false)
 })
+
+const SECRET = "sk-fake-9f8e7d6c5b4a3210zyxwvu"
+
+test("a value pasted into the name field never draws and moves to the masked value field", async () => {
+  const h = harness()
+  await h.open(); await h.key("a"); await h.paste(SECRET)
+  expect(h.text()).not.toContain(SECRET)
+  expect(h.text()).not.toContain("sk-fake")
+  expect(h.text()).toContain("•••••••• (set)")
+  await h.key("\t")
+  await h.key("\t")
+  expect(h.text()).not.toContain("sk-fake")
+})
+
+test("a value pasted on the list opens the add form with the value masked", async () => {
+  const h = harness()
+  await h.open(); await h.paste(SECRET)
+  expect(h.text()).not.toContain("sk-fake")
+  expect(h.text()).toContain("•••••••• (set)")
+  expect(h.sent.some((command) => command.type === "env.set" || command.type === "user.submit" || command.type === "prompt.record")).toBe(false)
+})
+
+test("a value pasted in the value field is masked and saved only on Enter", async () => {
+  const h = harness()
+  await h.open(); await h.key("a")
+  for (const char of "MY_KEY") await h.key(char)
+  await h.key("\r"); await h.paste(`${SECRET}\nline2`)
+  expect(h.text()).not.toContain("sk-fake")
+  await h.key("\r")
+  expect(h.sent.filter((command) => command.type === "env.set").at(-1)).toMatchObject({ name: "MY_KEY", value: `${SECRET}\nline2` })
+})
+
+test("the name field refuses characters a name cannot hold", async () => {
+  const h = harness()
+  await h.open(); await h.key("a"); await h.key("-"); await h.key("k")
+  expect(h.text()).not.toContain("-k")
+})
+
+test("Caps Lock: capital shortcuts work on the list, and capitals still type into the form", async () => {
+  const h = harness()
+  await h.open(); await h.key("A")
+  expect(h.text()).toContain("Credential")
+  for (const char of "API_KEY") await h.key(char)
+  expect(h.text()).toContain("API_KEY")
+  await h.key("\x1b"); await h.key("Q")
+  expect(h.text()).not.toContain("Environment & privacy")
+})

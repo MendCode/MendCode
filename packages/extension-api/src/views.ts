@@ -1,5 +1,5 @@
 /**
- * View slots: one contract that lets an extension or a package replace how a part of the terminal is drawn.
+ * View slots: one contract that lets an extension or a profile replace how a part of the terminal is drawn.
  * Types and one small constant table only (no zod, no imports), so view authors and the thin client share it:
  * `import type { ViewRenderer } from "@mendcode/extension-api/views"`.
  *
@@ -35,7 +35,7 @@ type MessageCommon = Readonly<{
   text: string
   /** Epoch ms of the message, when known. */
   at?: number
-  /** The formatted time when the transcript shows timestamps, else "". */
+  /** The formatted time when the transcript shows the time over each message (`timestamps: top`), else "". */
   time: string
   mode: "minimal" | "balanced" | "full"
   style: MessageStyleModel
@@ -44,6 +44,9 @@ type MessageCommon = Readonly<{
 }>
 
 /** `variant`: a normal message, a `!command` the user ran, or a system notice written as a user turn. */
+/** What a view declares beyond its function. `handles: ["comments"]` on `message.user`: the view draws a sent set of comments itself; without it the terminal draws the message and its comments card. */
+export type ViewOptions = Readonly<{ handles?: readonly "comments"[] }>
+
 export type UserMessageModel = MessageCommon & Readonly<{
   variant: "message" | "shell" | "notice"
   local?: boolean
@@ -142,7 +145,7 @@ export type ToolCardModel = Readonly<{
   mapDetail?: "balanced" | "full"
 }>
 
-export type ApprovalOption = Readonly<{ label: string; /** The letter key that also picks it ("" when none). */ key: string; choice: "once" | "session" | "project" | "user" | "deny" | "note" | "edit" | "comment" }>
+export type ApprovalOption = Readonly<{ label: string; /** The letter key that also picks it ("" when none). */ key: string; choice: "once" | "session" | "project" | "user" | "deny" | "note" | "edit" | "comment" | "answer" }>
 export type ApprovalModel = Readonly<{
   requestId: string
   /** `panel` is the boxed prompt; `inline` is the minimal view's one-line prompt. */
@@ -221,7 +224,7 @@ export type LimitAction = "resume" | "schedule" | "cancel" | "snooze" | "dismiss
 export type NoticeModel =
   | Readonly<{ kind: "toast"; variant: "info" | "success" | "warning" | "error"; title?: string; message: string; /** What to do next (`/memory undo`), muted and kept whole when one row has to cut the message. */ hint?: string; /** One row, not a floating box: the notice row above the prompt, or the inline live region. */ inline?: boolean }>
   | Readonly<{ kind: "limit"; view: Readonly<{ state: "paused" | "scheduled" | "snoozed" | "ready"; provider?: string; message: string; resetsAt?: number }>; chips: readonly Readonly<{ action: LimitAction; label: string }>[] }>
-  | Readonly<{ kind: "queue"; previews: readonly string[]; delivery: readonly (("queue" | "steer" | "restart") | undefined)[]; held: boolean; paused: boolean; mode?: string; shell: readonly number[]; /** Positions that are system notices, not the user's messages. */ notices?: readonly number[] }>
+  | Readonly<{ kind: "queue"; previews: readonly string[]; delivery: readonly (("queue" | "steer" | "restart") | undefined)[]; held: boolean; /** What ended the last turn, which is why a held queue waits. */ heldBy?: "cancel" | "restart" | "interrupt"; paused: boolean; mode?: string; shell: readonly number[]; /** Positions that are system notices, not the user's messages. */ notices?: readonly number[] }>
 
 export type ScriptSegment = Readonly<{ text: string; fg?: string | undefined; bold?: boolean | undefined; prepend?: boolean | undefined }>
 /** The rows under the prompt (agent, model, runtime, counters). Spans inside are theme spans. */
@@ -445,6 +448,12 @@ export type TurnStatusModel = Readonly<{
   cacheNotices: boolean
   /** `undone`: how many messages the rewind removed. */
   undone?: number
+  /** Where the chat says the time (the profile's `timestamps`): `bottom` closes a turn with one line even when `meta` is `off`. */
+  timestamps?: "bottom" | "top" | "off"
+  /** The latest turn's end only: the session's shells and sub-agents still running now (the line says so while they do). */
+  running?: Readonly<{ shells: number; agents: number }>
+  /** The column the assistant's text starts at in this block's width, so the closing line lines up with the answer above it. */
+  textColumn?: number
 }>
 
 /** The rows of a tool call that are not a card: the minimal view's one-line row, a saved-memory note, a submitted plan, the image line. */

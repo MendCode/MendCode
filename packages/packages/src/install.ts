@@ -8,10 +8,10 @@ import { moveToTrash, restoreFromTrash } from "./trash"
 export const MAX_PACKAGE_FILES = 2_000
 export const MAX_PACKAGE_BYTES = 20 * 1024 * 1024
 const GIT_TIMEOUT_MS = 120_000
-/** Never copied from a source: version control and installed dependencies are not part of a package. */
+/** Never copied from a source: version control and installed dependencies are not part of a profile. */
 const SKIPPED = new Set([".git", "node_modules", INSTALL_RECORD_FILE])
 
-/** Files a package must never carry: credentials, keys, local databases. Checked by name, before anything is installed. */
+/** Files a profile must never carry: credentials, keys, local databases. Checked by name, before anything is installed. */
 const SECRET_FILES: RegExp[] = [
   /^\.env(\..+)?$/,
   /^auth\.json$/,
@@ -28,11 +28,11 @@ export type PackageSource = { kind: "local"; dir: string } | { kind: "git"; url:
 
 export class PackageError extends Error {
   constructor(message: string) {
-    super(`[PACKAGES]: ${message}`)
+    super(`[PROFILES]: ${message}`)
   }
 }
 
-/** `remove` named a package that is not installed: the daemon answers `target_mismatch`, not a refusal of the request itself. */
+/** `remove` named a profile that is not installed: the daemon answers `target_mismatch`, not a refusal of the request itself. */
 export class PackageNotInstalledError extends PackageError {}
 
 const NPM_NAME = /^(@[a-z0-9~][\w.~-]*\/)?[a-z0-9~][\w.~-]*$/
@@ -57,7 +57,7 @@ export function isPinnedSpec(spec: string): boolean {
   return /^(github:|git:|https?:|ssh:|git@)/.test(base) && COMMIT.test(ref ?? "")
 }
 
-/** `npm:name@1.2.3` or `npm:@scope/name@1.2.3`, optionally `#sha512-…` to require that tarball digest. Ranges and tags are refused: a package is pinned. */
+/** `npm:name@1.2.3` or `npm:@scope/name@1.2.3`, optionally `#sha512-…` to require that tarball digest. Ranges and tags are refused: a profile is pinned. */
 function parseNpm(base: string, integrity: string | undefined): PackageSource {
   const body = base.slice("npm:".length)
   const at = body.lastIndexOf("@")
@@ -72,7 +72,7 @@ function parseNpm(base: string, integrity: string | undefined): PackageSource {
 /** A local folder (resolved against `cwd`), npm (`npm:name@x.y.z`), or git: `github:owner/repo`, `git:<url>`, `https://…`, `git@…`, each with an optional `#ref` (a full commit pins it). */
 export function parsePackageSource(spec: string, cwd: string): PackageSource {
   const trimmed = spec.trim()
-  if (!trimmed) throw new PackageError("empty package source")
+  if (!trimmed) throw new PackageError("empty profile source")
   const [base, ref] = trimmed.split("#", 2) as [string, string | undefined]
   if (base.startsWith("npm:")) return parseNpm(base, ref)
   const withRef = (url: string): PackageSource => {
@@ -91,7 +91,7 @@ export function parsePackageSource(spec: string, cwd: string): PackageSource {
   return { kind: "local", dir }
 }
 
-/** Walks a staged package: refuses links, secrets and oversize trees. Returns the problems found (empty = fine). */
+/** Walks a staged profile: refuses links, secrets and oversize trees. Returns the problems found (empty = fine). */
 export function auditPackageTree(root: string, options: { skipSourceFiles?: boolean } = {}): string[] {
   const problems: string[] = []
   let files = 0
@@ -103,7 +103,7 @@ export function auditPackageTree(root: string, options: { skipSourceFiles?: bool
       if (options.skipSourceFiles && SKIPPED.has(entry.name)) continue
       const full = path.join(dir, entry.name)
       const rel = path.relative(root, full)
-      if (entry.isSymbolicLink()) problems.push(`${rel}: links are not allowed in a package`)
+      if (entry.isSymbolicLink()) problems.push(`${rel}: links are not allowed in a profile`)
       else if (entry.isDirectory()) walk(full)
       else if (entry.isFile()) {
         files++
@@ -114,8 +114,8 @@ export function auditPackageTree(root: string, options: { skipSourceFiles?: bool
     }
   }
   walk(root)
-  if (files > MAX_PACKAGE_FILES) problems.push(`${files} files; a package holds at most ${MAX_PACKAGE_FILES}`)
-  if (bytes > MAX_PACKAGE_BYTES) problems.push(`${Math.round(bytes / 1024 / 1024)} MB; a package holds at most ${MAX_PACKAGE_BYTES / 1024 / 1024} MB`)
+  if (files > MAX_PACKAGE_FILES) problems.push(`${files} files; a profile holds at most ${MAX_PACKAGE_FILES}`)
+  if (bytes > MAX_PACKAGE_BYTES) problems.push(`${Math.round(bytes / 1024 / 1024)} MB; a profile holds at most ${MAX_PACKAGE_BYTES / 1024 / 1024} MB`)
   return problems
 }
 
@@ -129,7 +129,7 @@ async function run(argv: string[], cwd: string, timeoutMs: number, label: string
   return out
 }
 
-/** `npm pack name@version`: downloads the registry tarball only. No install, no lifecycle scripts, nothing is executed from the package. */
+/** `npm pack name@version`: downloads the registry tarball only. No install, no lifecycle scripts, nothing is executed from the profile. */
 async function npmPack({ name, version, dest }: { name: string; version: string; dest: string }): Promise<string> {
   const out = await run(["npm", "pack", `${name}@${version}`, "--pack-destination", dest, "--json", "--ignore-scripts", "--no-fund", "--no-audit"], dest, NPM_TIMEOUT_MS, "npm pack", { npm_config_ignore_scripts: "true", npm_config_update_notifier: "false" })
   let filename: unknown
@@ -144,10 +144,10 @@ async function extractTarball({ tarball, stage }: { tarball: string; stage: stri
   if (bytes.byteLength > MAX_TARBALL_BYTES) throw new PackageError(`tarball is ${Math.round(bytes.byteLength / 1024 / 1024)} MB; at most ${MAX_TARBALL_BYTES / 1024 / 1024} MB`)
   const names = (await run(["tar", "-tzf", tarball], path.dirname(tarball), GIT_TIMEOUT_MS, "tar list")).split("\n").filter(Boolean)
   const kinds = (await run(["tar", "-tvzf", tarball], path.dirname(tarball), GIT_TIMEOUT_MS, "tar list")).split("\n").filter(Boolean)
-  if (names.length > MAX_PACKAGE_FILES * 2) throw new PackageError(`tarball holds ${names.length} entries; a package holds at most ${MAX_PACKAGE_FILES} files`)
+  if (names.length > MAX_PACKAGE_FILES * 2) throw new PackageError(`tarball holds ${names.length} entries; a profile holds at most ${MAX_PACKAGE_FILES} files`)
   const bad = names.find((entry) => entry.startsWith("/") || entry.split("/").includes("..") || !(entry === "package/" || entry.startsWith("package/")))
   if (bad) throw new PackageError(`tarball entry outside package/: ${bad}`)
-  if (kinds.some((line) => /^[lh]/.test(line))) throw new PackageError("links are not allowed in a package")
+  if (kinds.some((line) => /^[lh]/.test(line))) throw new PackageError("links are not allowed in a profile")
   mkdirSync(stage, { recursive: true })
   await run(["tar", "-xzf", tarball, "-C", stage, "--strip-components=1"], path.dirname(tarball), GIT_TIMEOUT_MS, "tar extract")
   return `sha512-${new Bun.CryptoHasher("sha512").update(bytes).digest("base64")}`
@@ -202,10 +202,10 @@ export type PackageHost = { appVersion?: string | undefined; apiVersion: number 
 export const manifestCompatProblem = (manifest: PackageManifest, host: PackageHost) => compatibilityProblem({ compatibility: manifest.compatibility, appVersion: host.appVersion, apiVersion: host.apiVersion })
 
 /**
- * Installs a package into the user's or the project's packages folder. The source is staged next to the
- * destination, audited (manifest, compatibility, links, secrets, size) and only then moved into place. A replaced package is
+ * Installs a profile into the user's or the project's packages folder. The source is staged next to the
+ * destination, audited (manifest, compatibility, links, secrets, size) and only then moved into place. A replaced profile is
  * swapped atomically: if either rename fails the previous copy is put back exactly as it was, and once the swap has happened the
- * previous copy goes to the Trash (`packages restore` brings it back). A failed install leaves nothing behind.
+ * previous copy goes to the Trash (`profiles restore` brings it back). A failed install leaves nothing behind.
  */
 export async function installPackage(input: { spec: string; scope: ExtensionSource; userDir: string; directory: string; cwd?: string; replace?: boolean; now?: () => number; expected?: { name: string; version: string; commit?: string; integrity?: string }; fetchers?: PackageFetchers; host?: PackageHost; rename?: (from: string, to: string) => void }): Promise<InstallResult> {
   const rename = input.rename ?? renameSync
@@ -222,7 +222,7 @@ export async function installPackage(input: { spec: string; scope: ExtensionSour
     const read = readManifest(stage)
     if ("problem" in read) throw new PackageError(read.problem)
     const { manifest } = read
-    if (input.expected && (manifest.name !== input.expected.name || manifest.version !== input.expected.version)) throw new PackageError("catalog name/version differs from staged package manifest")
+    if (input.expected && (manifest.name !== input.expected.name || manifest.version !== input.expected.version)) throw new PackageError("catalog name/version differs from staged profile manifest")
     const mismatch = extensionsProblem({ manifest, dir: stage })
     if (mismatch) throw new PackageError(mismatch)
     const incompatible = input.host ? manifestCompatProblem(manifest, input.host) : undefined
@@ -239,7 +239,7 @@ export async function installPackage(input: { spec: string; scope: ExtensionSour
       try {
         rename(stage, dest)
       } catch (error) {
-        // The swap did not complete: whatever is at `dest` is not the new package, and the old one goes back untouched.
+        // The swap did not complete: whatever is at `dest` is not the new profile, and the old one goes back untouched.
         rmSync(dest, { recursive: true, force: true })
         renameSync(old, dest)
         throw error
@@ -257,7 +257,7 @@ export async function installPackage(input: { spec: string; scope: ExtensionSour
 }
 
 /**
- * Removes an installed package. The folder moves to the scope's Trash (`<data dir>/.Trash` or `<project>/.mendcode/.Trash`, the
+ * Removes an installed profile. The folder moves to the scope's Trash (`<data dir>/.Trash` or `<project>/.mendcode/.Trash`, the
  * same one authoring uses) and stays restorable for 30 days; `purge` deletes it for good. Returns false when there was none.
  */
 export function removePackage(input: { name: string; scope: ExtensionSource; userDir: string; directory: string; purge?: boolean; now?: () => number; rename?: (from: string, to: string) => void }): boolean {

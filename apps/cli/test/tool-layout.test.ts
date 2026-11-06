@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { createCustomizePageState, customizePageKey, CUSTOMIZE_ROWS, toolLayoutOf } from "../src/view/customize-page"
+import { createCustomizePageState, customizePageKey, CUSTOMIZE_ROWS, customizeSteps, toolLayoutOf } from "../src/view/customize-page"
 import { DEFAULT_TUI_PROFILE, readTuiProfile, TOOL_LAYOUTS, TOOL_LAYOUT_NAMES, writeTuiProfile } from "../src/view/tui-profile"
 import { textWidth } from "../src/view/wrap"
 import { appHarness, cleanTemps, tempDir } from "./session-ui-harness"
@@ -47,7 +47,7 @@ describe("Tool layout", () => {
       const h = appHarness({ dataDir, width, height })
       apps.push(h)
       await h.type("/customize\r")
-      for (let i = 0; i < row; i++) await h.app.onKey("\x1b[B")
+      for (let i = 0; i < customizeSteps("toolLayout", h.app.tuiProfile, { mode: h.app.viewMode }); i++) await h.app.onKey("\x1b[B")
       expect(h.text().join("\n")).toMatch(/Tool layout +‹ default ›/)
       await h.app.onKey("\x1b[C")
       expect(h.text().join("\n")).toMatch(/Tool layout +‹ detailed ›/)

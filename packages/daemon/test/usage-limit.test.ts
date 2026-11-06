@@ -458,7 +458,7 @@ describe("usage limit in the daemon", () => {
     clock.jump(PAST_RESET_MS)
     await until(() => states(h, sessionId).includes("resumed"), 12_000)
     await until(() => h.requests.length === 2)
-    expect(lastUser(h, 1)).toContain("usage limit has reset")
+    expect(lastUser(h, 1)).toContain("usage limit is lifted")
     // The earlier request is still in the history the second one carries.
     expect(JSON.stringify(h.requests[1]!.messages)).toContain("refactor the parser")
     expect(h.store.usagePauses.get(sessionId)).toBeUndefined()
@@ -491,7 +491,7 @@ describe("usage limit in the daemon", () => {
     clock.jump(PAST_RESET_MS)
     await until(() => states(second, sessionId).includes("resumed"), 12_000)
     await until(() => second.requests.length === 1)
-    expect(lastUser(second, 0)).toContain("usage limit has reset")
+    expect(lastUser(second, 0)).toContain("usage limit is lifted")
   }, 25_000)
 
   test("a limit with a tool call mid-turn still pauses", async () => {

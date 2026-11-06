@@ -327,6 +327,19 @@ describe("bounded source context", () => {
     expectValidRender(source)
   })
 
+  test("a source rewritten within the timestamp resolution (same mtime and ctime, another size) is not exposed", async () => {
+    const root = project({ root: temp(), files: { "a.ts": "export function before() {}\n" } })
+    const indexer = createIndexer({ cacheDir: temp(), now: Date.now })
+    const signal = new AbortController().signal
+    const graph = await indexer.graph({ cwd: root, signal })
+    put({ root, path: "a.ts", content: "export function changed() {}\n" })
+    // A coarse filesystem gives the rewrite the timestamps the index recorded: only the size tells.
+    const now = statSync(join(root, "a.ts"))
+    const coarse = { ...graph, files: new Map(graph.files) }
+    coarse.files.set("a.ts", { ...graph.files.get("a.ts")!, mtimeMs: now.mtimeMs, ctimeMs: now.ctimeMs })
+    expect((await sourceExcerpts({ graph: coarse, nodes: graph.nodes, signal })).size).toBe(0)
+  })
+
   test("a source changed after indexing or replaced by an external symlink is not exposed", async () => {
     const root = project({ root: temp(), files: { "a.ts": "export function before() {}\n" } })
     const indexer = createIndexer({ cacheDir: temp(), now: Date.now })

@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { DEFAULT_TUI_PROFILE } from "../src/view/tui-profile"
 import { DEFAULT_FOOTER, FOOTER_SEGMENTS, createIdFactory, type FooterSegment, type SessionEvent } from "@mendcode/protocol"
 import { createApp } from "../src/ui/app"
 import { glyphs, type Line } from "../src/ui/theme"
@@ -244,7 +245,8 @@ describe("transcript last usage", () => {
     expect(contextLimit({ contextTokens: 5 }, 160_000)).toBe(160_000)
     // The engine says where it will pack (95% of a 500k window): that, not the 160k default, is what the meter divides by.
     expect(contextLimit({ contextTokens: 5, compactAt: 475_000 }, 160_000)).toBe(475_000)
-    expect(contextLimit({ contextTokens: 5, compactAt: 475_000, contextWindow: 200_000 }, 160_000)).toBe(200_000)
+    // Both stated (Claude Code started with a compaction window): the compaction point is the denominator, the model window is secondary.
+    expect(contextLimit({ contextTokens: 5, compactAt: 475_000, contextWindow: 1_000_000 }, 160_000)).toBe(475_000)
     expect(text(contextBar({ tokens: 200_000, limit: 200_000, approx: true }, true))).toContain("~200K / 200K")
     expect(text(contextBar({ tokens: 200_000, limit: 200_000, approx: true }, false, "percent"))).toBe("~>99%")
     expect(text(statusLineSpans({ stateLabel: "ready", state: "idle", contextPercent: 100, contextLabel: "ctx", contextApprox: true, glyphs: glyphs({}) }, 80))).toContain("ctx ~100%")
@@ -276,6 +278,7 @@ describe("footer in the app", () => {
     const screen = { size: { width: 100, height: 12 }, draw: (rows: Line[]) => void frames.push(rows) } as unknown as Parameters<typeof createApp>[0]["screen"]
     const sessionId = ids("session")
     const app = createApp({
+      profile: { ...DEFAULT_TUI_PROFILE, footerDefaultRows: false },
       // Balanced shows only v1's row under the prompt; the footer segments are the full view's addition.
       sessionId, screen, directory: "/work/app", exit() {}, schedule: (fn: () => void) => fn(), glyphs: glyphs({}), now: () => NOW, mode: "full",
       send: async (command: Record<string, unknown>) => {
@@ -387,7 +390,7 @@ describe("footer in the app", () => {
     await tick()
     const saved = sent.find((c) => c.type === "settings.set") as { patch: { footer: null } }
     expect(saved.patch.footer).toBeNull()
-    expect(screen()).toContain("footer: forecast codegraph cache quota (full view default)")
+    expect(screen()).toContain("rows: 1 (the full view's default; /footer preset classic for one row)")
   })
 
   test("/footer with an unknown segment reports an error and saves nothing", async () => {

@@ -4,6 +4,7 @@ import { panelGrid, clip, spread, fit } from "./deck"
 import { BASE_URL_PATTERN, CONNECT_PRESETS, ENV_NAME_PATTERN, GATEWAY_CHOICES, PROVIDER_ID_PATTERN, PROVIDER_TYPE_CHOICES, RESERVED_IDS, isOutboundEndpoint, isVertexPreset, OPENCODE_AGENT, OPENCODE_FREE, presetOf, providerName, type ConnectPreset } from "./provider-presets"
 import { truncateEnd } from "./session-list"
 import { wrap } from "./wrap"
+import { pageSearchKey, pageSearchRow, searchMatches } from "./page-search"
 
 /**
  * `/connect`: pick a preset (or a custom endpoint), give its key (masked; or the environment variable that holds it), then
@@ -45,8 +46,7 @@ export type ConnectState = {
 
 /** Indexes into `CONNECT_CHOICES` that the pick list shows for `query`, in their order. */
 export function connectMatches(query: string | undefined): number[] {
-  const wanted = query?.trim().toLowerCase() ?? ""
-  return CONNECT_CHOICES.flatMap((id, index) => !wanted || id.includes(wanted) || choiceName(id).toLowerCase().includes(wanted) ? [index] : [])
+  return CONNECT_CHOICES.flatMap((id, index) => searchMatches(query ?? "", [id, choiceName(id)]) ? [index] : [])
 }
 
 /** What `providers.set` gets; `apiKey` is the only secret and lives in this object for one call. */
@@ -458,27 +458,22 @@ export function connectKey(state: ConnectState, key: string): { state: ConnectSt
  * selected one and esc ends the search (a second esc closes the page). Undefined: the key is the list's own.
  */
 function searchKey(state: ConnectState, key: string): { state: ConnectState; action: ConnectAction } | undefined {
-  const filtered = (query: string, searching: boolean): { state: ConnectState; action: ConnectAction } => {
-    const matches = connectMatches(query)
+  const searched = pageSearchKey({ open: state.searching === true, query: state.query ?? "" }, key)
+  if (searched) {
+    // Enter connects the selected match; the shared box would only keep the query.
+    if (searched.event === "submitted") return connectMatches(state.query).includes(state.selected) ? choose({ ...state, query: "", searching: false }, CONNECT_CHOICES[state.selected]!) : { state, action: NONE }
+    const { search } = searched
+    const matches = connectMatches(search.query)
     const selected = matches.includes(state.selected) ? state.selected : matches[0] ?? state.selected
-    return { state: { ...state, query, searching, selected }, action: NONE }
+    return { state: { ...state, query: search.query, searching: search.open, selected }, action: NONE }
   }
-  if (!state.searching) return key === "/" ? filtered("", true) : undefined
-  const query = state.query ?? ""
-  const matches = connectMatches(query)
-  // While searching, letters are text: j, k and q are typed, not moves or close.
-  const typed = /^[\x20-\x7e]+$/.test(key)
-  if (key === "\x1b") return { state: { ...state, query: "", searching: false }, action: NONE }
-  if ((UP.has(key) || DOWN.has(key)) && !typed) {
+  if (state.searching && (UP.has(key) || DOWN.has(key))) {
+    const matches = connectMatches(state.query)
     const at = Math.max(0, matches.indexOf(state.selected))
     const next = matches[Math.max(0, Math.min(matches.length - 1, at + (UP.has(key) ? -1 : 1)))]
     return { state: next === undefined ? state : { ...state, selected: next }, action: NONE }
   }
-  if (key === "\r") return matches.includes(state.selected) ? choose({ ...state, query: "", searching: false }, CONNECT_CHOICES[state.selected]!) : { state, action: NONE }
-  if (BACKSPACE.has(key)) return filtered(query.slice(0, -1), true)
-  if (key === CTRL_U) return filtered("", true)
-  if (typed) return filtered(`${query}${key}`.slice(0, 40), true)
-  return { state, action: NONE }
+  return state.searching ? { state, action: NONE } : undefined
 }
 
 /** A choice opens its form; OpenCode (free) has nothing to type and is added at once. */
@@ -522,7 +517,7 @@ const hintsFor = (state: ConnectState): string => {
   if (state.confirmLogout) return "y remove saved login · any other key cancel"
   if (state.step === "methods") return ["azure", "amazon-bedrock"].includes(state.target ?? "") ? "↑↓ method · enter select · esc back" : "↑↓ method · enter select · s login status · esc back"
   if (state.step === "oauth") return state.authStatus?.state === "pending" ? "c copy · s status · x cancel · esc close" : state.authStatus?.source === "v2" ? `${state.authStatus.state === "authorized" ? "m models" : "e login"} · r refresh · d logout · esc close` : "e retry · esc close"
-  if (state.step === "pick") return state.searching ? "type to filter · ↑↓ select · enter connect · esc end search" : "↑↓ select · enter connect · / search · 1-9 jump · esc back"
+  if (state.step === "pick") return state.searching ? "type to filter · ↑↓ select · enter connect · esc clear" : "↑↓ select · enter connect · / search · 1-9 jump · esc back"
   if (state.step === "busy") return "esc close"
   if (state.step === "result" && state.result?.provider === OPENCODE_FREE) return state.result.ok ? "m open model page · esc close" : "esc close"
   if (state.step === "result") return state.result?.ok ? "r refresh models · m open model page · t test again · esc close" : `${["github-copilot", "llmgateway", "nvidia", "sap-ai-core", "zenmux", "gitlab", "kilo", "cloudflare-ai-gateway"].includes(state.target ?? "") ? "r refresh models · " : ""}e edit details · t test again · esc close`
@@ -565,7 +560,7 @@ function pickBody(input: ConnectPageInput, inner: number, glyphs: Glyphs): { bod
   const nameWidth = Math.max(...CONNECT_CHOICES.map((id) => choiceName(id).length)) + 2
   const shown = state.searching ? connectMatches(state.query) : CONNECT_CHOICES.map((_, index) => index)
   if (state.searching) {
-    rows.push(fit([{ text: "/ ", fg: "primary", bold: true }, { text: state.query ?? "", fg: "text" }, { text: "▏", fg: "primary" }, { text: `  ${shown.length} of ${CONNECT_CHOICES.length}`, fg: "muted" }], inner), [])
+    rows.push(pageSearchRow({ open: true, query: state.query ?? "" }, shown.length, inner) ?? [], [])
     if (shown.length === 0) rows.push([{ text: `  No provider matches "${state.query}" · backspace edits · esc ends the search`, fg: "muted" }])
   }
   shown.forEach((index) => {

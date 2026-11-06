@@ -27,7 +27,7 @@ function put(root: string, relative: string, text: string) {
 }
 const parts = [{ id: "base", label: "native", text: "native harness" }, { id: "instructions", label: "project", text: "project rules" }, { id: "skills", label: "skills", text: "skill catalogue" }, { id: "append", label: "extension", text: "extension append" }, { id: "memory", label: "memory", text: "memory rules" }]
 
-test("project modes and all six families persist independently of folder profiles and other projects", () => {
+test("project modes and all six families persist independently of areas and other projects", () => {
   const dir = temp(), project = temp(), other = temp()
   const modes = createPromptModes(dir)
   expect(modes.status(project)).toMatchObject({ mode: "focus", focusID: "auto", available: ["minimal", "focus", "guide", "full"] })
@@ -74,15 +74,29 @@ test("mode composition matches preset boundaries, memory stays independent and c
   // the user's own text, like the instructions, so every mode carries it.
   expect(build("minimal").parts.map((p) => p.id)).toEqual(["base", "self-knowledge", "instructions", "append", "memory"])
   // Memory is chosen per user message, so in focus, guide and full it is the last part and everything before it is a stable prefix.
-  expect(build("focus").parts.map((p) => p.id)).toEqual(["base", "instructions", "skills", "append", "boundary", "self-knowledge", "focus", "focus-core", "memory"])
-  expect(build("guide").parts.map((p) => p.id)).toEqual(["base", "instructions", "skills", "append", "boundary", "self-knowledge", "focus", "focus-guide", "memory"])
-  expect(build("full").parts.map((p) => p.id)).toEqual([...parts.map((p) => p.id).filter((id) => id !== "memory"), "boundary", "self-knowledge", "focus", "focus-guide", "capabilities", "memory"])
+  expect(build("focus").parts.map((p) => p.id)).toEqual(["base", "instructions", "skills", "append", "boundary", "self-knowledge", "focus", "focus-core", "rendering", "memory"])
+  expect(build("guide").parts.map((p) => p.id)).toEqual(["base", "instructions", "skills", "append", "boundary", "self-knowledge", "focus", "focus-guide", "rendering", "memory"])
+  expect(build("full").parts.map((p) => p.id)).toEqual([...parts.map((p) => p.id).filter((id) => id !== "memory"), "boundary", "self-knowledge", "focus", "focus-guide", "rendering", "capabilities", "memory"])
   expect(build("custom").parts.map((p) => p.id)).toEqual(["boundary", "instructions", "append", "memory"])
   put(root, ".mendcode/prompts/custom.md", "---\nname: Custom\n---\nWork at {{cwd}}")
   const custom = build("custom")
   expect(custom.parts.map((p) => p.id)).toEqual(["boundary", "base", "instructions", "append", "memory"])
   expect(custom.parts[1]?.text).toBe(`Work at ${root}`)
   expect(promptBuildReport(custom, {}).instructions).toBeUndefined()
+})
+test("what the terminal draws is told by tier: nothing in minimal, one sentence in focus, the exact syntax in full", () => {
+  const dir = temp(), root = temp()
+  const text = (mode: "minimal" | "focus" | "guide" | "full" | "custom") => composePromptParts(dir, root, parts, { mode }).parts.map((part) => part.text).join("\n\n")
+  for (const word of ["mermaid", "[!NOTE]", "[!WARNING]", "Terminal rendering"]) expect(text("minimal")).not.toContain(word)
+  expect(text("custom")).not.toContain("mermaid")
+  const short = composePromptParts(dir, root, parts, { mode: "focus" }).parts.find((part) => part.id === "rendering")!.text
+  expect(short.length).toBeLessThan(260)
+  for (const word of ["mermaid", "[!NOTE]", "[!WARNING]"]) expect(short).toContain(word)
+  expect(short).not.toContain("[!CAUTION]")
+  const full = composePromptParts(dir, root, parts, { mode: "full" }).parts.find((part) => part.id === "rendering")!.text
+  for (const word of ["```mermaid", "> [!NOTE]", "TIP", "IMPORTANT", "WARNING", "CAUTION", "when structure beats prose", "`$$"]) expect(full).toContain(word)
+  expect(full.length).toBeGreaterThan(short.length * 4)
+  expect(text("guide")).toContain(full)
 })
 test("full loads family context without duplicating the instruction hierarchy; reports redact secrets", () => {
   const dir = temp(), root = temp()

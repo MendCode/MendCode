@@ -55,7 +55,10 @@ describe("feature manifest", () => {
     expect(featureOn({ tier: "minimalist" }, "usage_resume")).toBe(true)
     expect(featureOn({ tier: "minimalist", features: { usage_resume: false } }, "usage_resume")).toBe(false)
     expect(rows.threads).toEqual([false, true, true])
-    expect(tierDiff("minimalist", "balanced")).toEqual({ added: ["package_tools", "codegraph", "subagents", "script_workflows", "computer", "threads", "pr_watch", "pr_review", "output_filters", "forecast", "review_order", "session_meta", "limit_checkpoint", "graph_context", "handoff", "instruction_includes", "package_capabilities", "caveman", "webfetch_modes", "official_packages", "web_routing", "panel", "panel_models", "file_viewer", "aux_tools", "harness_tools", "ui_tool", "orientation", "git_hub", "git_actions", "compact_notice", "cheap_subagents", "claude_compact", "one_tree", "advisor", "visible_plan"], removed: [] })
+    expect(tierDiff("minimalist", "balanced")).toEqual({ added: ["profile_tools", "codegraph", "subagents", "script_workflows", "computer", "threads", "pr_watch", "pr_review", "output_filters", "forecast", "review_order", "session_meta", "limit_checkpoint", "graph_context", "handoff", "instruction_includes", "profile_capabilities", "caveman", "webfetch_modes", "official_profiles", "web_routing", "panel", "panel_models", "file_viewer", "aux_tools", "harness_tools", "ui_tool", "orientation", "git_hub", "git_actions", "compact_notice", "cheap_subagents", "claude_compact", "one_tree", "advisor", "visible_plan", "plan_files", "whats_new"], removed: [] })
+    // `/whatsnew` is balanced's and full's; with no tier it is there as before tiers; minimalist keeps only the release notes' prompt.
+    expect(rows.whats_new).toEqual([false, true, true])
+    expect(featureOn({}, "whats_new")).toBe(true)
     // The visible plan (todo listed, its prompt line and the progress row) is balanced's and full's; minimalist has none of it.
     expect(rows.visible_plan).toEqual([false, true, true])
     expect(featureOn({}, "visible_plan")).toBe(true)
@@ -131,7 +134,7 @@ describe("featureState", () => {
     expect(featureOn({ tier: "minimalist", features: { hooks: false } }, "hooks")).toBe(true)
     expect(featureOn({}, "hooks", { safeMode: true })).toBe(false)
     expect(featureOn({}, "extensions", { safeMode: true })).toBe(false)
-    expect(featureOn({}, "packages", { safeMode: true })).toBe(false)
+    expect(featureOn({}, "profiles", { safeMode: true })).toBe(false)
     expect(featureOn({}, "mcp", { safeMode: true })).toBe(false)
     expect(featureOn({}, "codegraph", { safeMode: true })).toBe(true)
   })
@@ -151,7 +154,7 @@ describe("effectiveSettings", () => {
   test("flags follow the feature: JEV on in full, opt-in flags off below their tier, nothing is written back", () => {
     const input = { tier: "full", experimental: { code_mode: true } } as TierSettings
     const full = effectiveSettings(input)
-    expect(full.experimental).toEqual({ code_mode: true, reasoning_auto: true, thread_tools: true, tool_discovery: true })
+    expect(full.experimental).toEqual({ code_mode: true, git_actions: true, reasoning_auto: true, thread_tools: true, tool_discovery: true })
     expect(input.experimental).toEqual({ code_mode: true })
     const balanced = effectiveSettings({ tier: "balanced", experimental: { code_mode: true, snip: true } } as TierSettings)
     expect(balanced.experimental).toMatchObject({ code_mode: false, snip: false, reasoning_auto: false })
@@ -167,6 +170,22 @@ describe("effectiveSettings", () => {
     expect(effectiveSettings({ tier: "minimalist" } as TierSettings).tools).toMatchObject({ threads: false })
     expect(featureState({ tier: "minimalist", experimental: { thread_tools: true } }, "threads")).toEqual({ on: true, why: "setting" })
     expect(featureState({ tier: "full", experimental: { thread_tools: false } }, "threads")).toEqual({ on: false, why: "setting" })
+  })
+
+  test("git_actions: the tier allows it from balanced, full switches it on by default, and what the user wrote always wins", () => {
+    const on = (settings: TierSettings) => effectiveSettings(settings).experimental?.git_actions
+    expect(on({} as TierSettings)).toBeUndefined()
+    expect(on({ tier: "minimalist" } as TierSettings)).toBe(false)
+    expect(on({ tier: "balanced" } as TierSettings)).toBeUndefined()
+    expect(on({ tier: "full" } as TierSettings)).toBe(true)
+    expect(on({ tier: "balanced", experimental: { git_actions: true } } as TierSettings)).toBe(true)
+    expect(on({ tier: "full", experimental: { git_actions: false } } as TierSettings)).toBe(false)
+    expect(on({ tier: "full", features: { git_actions: false } } as TierSettings)).toBe(false)
+    expect(on({ tier: "minimalist", experimental: { git_actions: true } } as TierSettings)).toBe(false)
+    // The stored settings are never written to.
+    const stored = { tier: "full" } as TierSettings
+    effectiveSettings(stored)
+    expect(stored.experimental).toBeUndefined()
   })
 
   test("review_config belongs to pr_review: denied below balanced and when the feature is forced off, kept from balanced up", () => {
@@ -189,7 +208,7 @@ describe("effectiveSettings", () => {
   test("safe mode alone turns MCP off without a tier", () => {
     const safe = effectiveSettings({} as TierSettings, { safeMode: true })
     // Safe mode keeps the chat-side package manager off too: it installs and enables code the session would then load.
-    expect(safe.tools).toEqual({ "mcp__*": false, "mcp_resource_*": false, packages: false, session_meta: false, "computer_*": false })
+    expect(safe.tools).toEqual({ "mcp__*": false, "mcp_resource_*": false, profiles: false, session_meta: false, "computer_*": false })
   })
 })
 

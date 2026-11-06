@@ -73,6 +73,15 @@ test("the CI workflow runs the same gate on Linux for pull requests and on deman
   expect(job["timeout-minutes"]).toBeGreaterThanOrEqual(20)
   expectPinned(job.steps, ciSource)
   expect(ciSource).toContain("ubuntu-24.04")
+  // CHECKS_RUNNER may move the test rows to a third-party runner; whatever builds, signs or attests stays GitHub-hosted, because
+  // `mendcode upgrade` verifies attestations with --deny-self-hosted-runners.
+  const testRunner = "${{ vars.CHECKS_RUNNER || 'ubuntu-24.04' }}"
+  expect((job as Job & { "runs-on": string })["runs-on"]).toBe(testRunner)
+  for (const [name, other] of Object.entries(workflow.jobs) as [string, Job & { "runs-on": string }][]) {
+    if (name === "checks") expect(other["runs-on"]).toBe(testRunner)
+    else expect(other["runs-on"]).not.toContain("CHECKS_RUNNER")
+  }
+  for (const row of (workflow.jobs.build!.strategy!.matrix.include as { runner: string }[])) expect(row.runner).not.toMatch(/blacksmith|self-hosted/)
   // The scale loosens time budgets for a slow shared runner; it must not leak into the smoke of the release binaries or any local run.
   for (const text of [source, ciSource]) expect(text).not.toContain("MENDCODE_TEST_TIME_SCALE")
   expect(gateSource.match(/MENDCODE_TEST_TIME_SCALE/g)).toHaveLength(1)
@@ -171,8 +180,9 @@ test("the nightly workflow runs daily, writes only from its one job, and its she
 
 /** Runs the tagging step in a throwaway repository with a `gh` that only logs its arguments. */
 function tagStep(setup: (git: (...args: string[]) => void) => void) {
-  const { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, chmodSync } = require("node:fs") as typeof import("node:fs")
+  const { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, chmodSync, rmSync } = require("node:fs") as typeof import("node:fs")
   const dir = mkdtempSync(path.join(require("node:os").tmpdir(), "mendcode-nightly-"))
+  try {
   const bin = path.join(dir, "bin")
   mkdirSync(bin)
   const log = path.join(dir, "gh.log")
@@ -190,6 +200,7 @@ function tagStep(setup: (git: (...args: string[]) => void) => void) {
   const script = nightly.jobs.tag!.steps.find((step) => step.run?.includes("gh workflow run"))!.run!
   const result = Bun.spawnSync([Bun.which("bash")!, "-e", "-c", script], { cwd: repo, env: { ...env, RUN: "42", GITHUB_REPOSITORY: "MendCode/MendCode" }, stdout: "pipe", stderr: "pipe" })
   return { code: result.exitCode, out: result.stdout.toString() + result.stderr.toString(), gh: existsSync(log) ? readFileSync(log, "utf8") : "" }
+  } finally { rmSync(dir, { recursive: true, force: true }) }
 }
 
 test("a nightly takes the patch after the newest stable, or the package version before one, and is dispatched on its own tag", () => {
@@ -229,4 +240,63 @@ test("main that already has a nightly is not tagged again", () => {
   expect(again.code).toBe(0)
   expect(again.out).toContain("already has a nightly")
   expect(again.gh).toBe("")
+})
+
+/** Runs the moving-nightly step in a throwaway checkout with a `gh` that logs its arguments and answers from `held` (the assets of the `nightly` release, or undefined for none). */
+function movingNightlyStep(tag: string, held: string[] | undefined) {
+  const { mkdtempSync, mkdirSync, writeFileSync, readFileSync, chmodSync, rmSync } = require("node:fs") as typeof import("node:fs")
+  const dir = mkdtempSync(path.join(require("node:os").tmpdir(), "mendcode-moving-"))
+  try {
+    const bin = path.join(dir, "bin")
+    mkdirSync(bin)
+    mkdirSync(path.join(dir, "dist"))
+    mkdirSync(path.join(dir, "notes"))
+    for (const name of [`mendcode-${tag.slice(1)}-darwin-arm64`, "SHA256SUMS"]) writeFileSync(path.join(dir, "dist", name), "x")
+    writeFileSync(path.join(dir, "notes", "notes.md"), "notes")
+    writeFileSync(path.join(dir, "notes", "title.txt"), "MendCode Nightly\n")
+    const log = path.join(dir, "gh.log")
+    writeFileSync(path.join(bin, "gh"), `#!/bin/sh
+printf '%s\\n' "$*" >> "${log}"
+case "$*" in
+  "release view nightly"*"--json assets"*) ${held ? `printf '%s\\n' ${held.map((name) => `'${name}'`).join(" ")}` : "exit 1"} ;;
+  "release view nightly"*) ${held ? "exit 0" : "exit 1"} ;;
+  "api repos/"*"/git/ref/tags/nightly") exit ${held ? 0 : 1} ;;
+esac
+`)
+    chmodSync(path.join(bin, "gh"), 0o755)
+    const git = (...args: string[]) => Bun.spawnSync(["git", ...args], { cwd: dir, env: { PATH: process.env.PATH!, HOME: dir, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@example.invalid", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@example.invalid" } })
+    git("init", "-q"); git("commit", "-q", "--allow-empty", "-m", "one")
+    const script = workflow.jobs.release!.steps.find((step) => step.name === "Update the moving nightly release")!.run!
+    const done = Bun.spawnSync([Bun.which("bash")!, "-c", script], { cwd: dir, env: { PATH: `${bin}:${process.env.PATH}`, HOME: dir, TAG: tag, GITHUB_REPOSITORY: "MendCode/MendCode", RUNNER_TEMP: dir }, stdout: "pipe", stderr: "pipe" })
+    return { code: done.exitCode, out: done.stdout.toString(), err: done.stderr.toString(), gh: readFileSync(log, "utf8") }
+  } finally { rmSync(dir, { recursive: true, force: true }) }
+}
+
+test("a nightly updates the one moving release instead of creating a release per build", () => {
+  const { release } = workflow.jobs
+  const step = release!.steps.find((entry) => entry.name === "Update the moving nightly release")!
+  expect(step.if).toContain("-nightly.")
+  expect(release!.steps.find((entry) => entry.name === "Create the release from the existing tag")!.if).toContain("!contains")
+  expect(Bun.YAML.stringify(release)).toContain("publish-")
+  expect(nightlySource).not.toContain("release delete")
+  const created = movingNightlyStep("v0.0.4-nightly.20261105.7", undefined)
+  expect(created.code).toBe(0)
+  expect(created.gh).toContain("-f ref=refs/tags/nightly")
+  expect(created.gh).toContain("release create nightly dist/")
+  expect(created.gh).toContain("--title MendCode Nightly --notes-file")
+  expect(created.gh).toContain("--prerelease --verify-tag")
+  expect(created.gh).not.toContain("release delete")
+  const updated = movingNightlyStep("v0.0.4-nightly.20261105.7", ["mendcode-0.0.4-nightly.20261104.5-darwin-arm64", "SHA256SUMS", "old-only.txt"])
+  expect(updated.code).toBe(0)
+  expect(updated.gh).toContain("-X PATCH repos/MendCode/MendCode/git/refs/tags/nightly -f sha=")
+  expect(updated.gh).toContain("release upload nightly dist/")
+  expect(updated.gh).toContain("--clobber")
+  expect(updated.gh).toContain("release delete-asset nightly old-only.txt")
+  expect(updated.gh).not.toContain("delete-asset nightly SHA256SUMS")
+  expect(updated.gh).toContain("release edit nightly")
+  // A build that finishes after a newer one leaves the release alone.
+  const late = movingNightlyStep("v0.0.4-nightly.20261105.7", ["mendcode-0.0.4-nightly.20261105.9-darwin-arm64"])
+  expect(late.out).toContain("already holds v0.0.4-nightly.20261105.9")
+  expect(late.gh).not.toContain("release upload")
+  expect(late.gh).not.toContain("refs/tags/nightly")
 })

@@ -6,10 +6,10 @@ import { createTextPageState, preload } from "../lazy-pages"
 /**
  * The terminal's half of the precedence report: what is only decided here (profile keys, keybindings, view slots, panel widgets,
  * extension commands and pages). The daemon answers for everything read from files (`system.query precedence`); both lists of
- * claims go through the one `resolvePrecedence` of the protocol, so `/packages`, `/doctor` and the tests read one answer.
+ * claims go through the one `resolvePrecedence` of the protocol, so `/profiles`, `/doctor` and the tests read one answer.
  *
- * Layer order of keybindings, lowest first, as `buildBindings` applies it: the user's file, the packages' files, the keys the
- * user chose by hand after a package took them, and extension keys last (they win over every file).
+ * Layer order of keybindings, lowest first, as `buildBindings` applies it: the user's file, the profiles' files, the keys the
+ * user chose by hand after a profile took them, and extension keys last (they win over every file).
  */
 const EXTENSION_KEY_RANK = 10
 
@@ -21,7 +21,7 @@ export type TerminalClaimInput = {
   runtimeProfile: readonly string[]
   /** `keybindings.json` of the user. */
   keybindingFile: readonly KeybindingEntry[]
-  /** Keys (profile names, `keybindings:<spec>`) the user chose by hand after a package took them. */
+  /** Keys (profile names, `keybindings:<spec>`) the user chose by hand after a profile took them. */
   kept: ReadonlySet<string>
 }
 
@@ -31,7 +31,7 @@ export function terminalClaims(input: TerminalClaimInput): PrecedenceClaim[] {
   for (const row of result?.rows ?? []) {
     if (row.part === "keybinding" || row.part === "prompt" || row.part === "view") continue
     if (row.base !== undefined && JSON.stringify(row.base) !== JSON.stringify(row.value)) claims.push({ surface: "profile", name: row.key, layer: "your settings", rank: 0 })
-    claims.push({ surface: "profile", name: row.key, layer: `package ${row.package}`, rank: 1, note: row.part })
+    claims.push({ surface: "profile", name: row.key, layer: `profile ${row.package}`, rank: 1, note: row.part === "profile" ? "terminal settings" : row.part })
     if (row.kept) claims.push({ surface: "profile", name: row.key, layer: "you (kept)", rank: 3 })
   }
   for (const key of input.runtimeProfile) {
@@ -39,7 +39,7 @@ export function terminalClaims(input: TerminalClaimInput): PrecedenceClaim[] {
     claims.push({ surface: "profile", name: key, layer: "extension", rank: 2 })
   }
   for (const entry of input.keybindingFile) claims.push({ surface: "keybindings", name: entry.spec.toLowerCase(), layer: "your keybindings.json", rank: input.kept.has(`keybindings:${entry.spec}`) ? 2 : 0 })
-  for (const entry of result?.keybindings ?? []) claims.push({ surface: "keybindings", name: entry.spec.toLowerCase(), layer: `package ${entry.package}`, rank: 1 })
+  for (const entry of result?.keybindings ?? []) claims.push({ surface: "keybindings", name: entry.spec.toLowerCase(), layer: `profile ${entry.package}`, rank: 1 })
   for (const claim of input.runtime) claims.push(claim.surface === "keybindings" ? { ...claim, rank: EXTENSION_KEY_RANK + claim.rank } : claim)
   return claims
 }
@@ -72,7 +72,7 @@ export function createPrecedence(ctx: AppContext) {
   /** Text-page sections: only the rows where a choice was made, or everything with `all`. */
   const precedenceSections = (report: PrecedenceReport, options: { all?: boolean } = {}) => describePrecedence(report.rows, { onlyConflicts: !options.all }).map((section) => ({ heading: section.heading, note: `${section.lines.length}`, lines: section.lines }))
 
-  /** `c` in /packages: every name that more than one layer holds, and what is waiting for trust. */
+  /** `c` in /profiles: every name that more than one layer holds, and what is waiting for trust. */
   async function openPrecedence() {
     const [report] = await Promise.all([precedenceReport(), preload("recap")])
     const sections = precedenceSections(report)

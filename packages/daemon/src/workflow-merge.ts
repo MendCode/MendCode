@@ -22,6 +22,13 @@ async function identity(cwd: string): Promise<Record<string, string>> {
 
 const slug = (text: string) => text.replace(/^wfl_/, "").replace(/[^A-Za-z0-9]+/g, "").slice(-10) || "run"
 
+/** True when `directory` is a worktree (routing workspace or merge worktree) of a workflow run that has not finished. */
+export function workflowWorktreeHeld(options: { dir: string; run: { workflowId: string; originSessionId?: string | undefined; state: string }; directory: string }): boolean {
+  if (["completed", "failed", "stopped"].includes(options.run.state)) return false
+  const within = (...parts: string[]) => { const root = path.join(options.dir, ...parts); return options.directory === root || options.directory.startsWith(`${root}${path.sep}`) }
+  return within("workflows", "merge", slug(options.run.workflowId)) || within("workflows", "workspaces", options.run.workflowId) || (options.run.originSessionId !== undefined && within("workflows", "workspaces", options.run.originSessionId))
+}
+
 async function numstat(cwd: string, range: string[]): Promise<Pick<WorktreeSummary, "files" | "insertions" | "deletions" | "changed">> {
   const rows = (await git(cwd, ["diff", "--numstat", ...range])).out.split("\n").filter(Boolean).map((line) => line.split("\t"))
   const count = (value: string | undefined) => (value && /^\d+$/.test(value) ? Number(value) : 0)

@@ -1,5 +1,6 @@
 import type { Settings } from "@mendcode/protocol"
 import type { QueuePageState, QueueRow } from "../../view/queue-page"
+import { parseCommentMessage } from "../../view/reply-comments"
 import { createQueuePageState, preload } from "../lazy-pages"
 import type { AppContext } from "./context"
 import { queuePolicy } from "./queue-policy"
@@ -8,6 +9,8 @@ type QueueMode = NonNullable<Settings["queue"]>["mode"]
 type QueueList = { held: boolean; paused: boolean; entries: QueueRow[] }
 
 const PRINTABLE = /^[^\x00-\x1f\x7f]+$/u
+/** A message sent with comments: edited in the prompt, where its comments are chips again, never as its envelope here. */
+const hasComments = (row: QueueRow) => row.kind === "message" && parseCommentMessage(row.text) !== undefined
 
 export function createQueue(ctx: AppContext, applySettings: (settings: Settings) => void) {
   const { input, state, report, requestFrame, say } = ctx
@@ -119,7 +122,8 @@ export function createQueue(ctx: AppContext, applySettings: (settings: Settings)
       if (target >= 0 && target < page.rows.length && await act(page, { type: "queue.reorder", sessionId, queueId: row.queueId as never, to: up ? "up" : "down" })) page.selected = target
     } else if ((key === "e" || key === "\r") && row) {
       page.deleting = undefined
-      if (row.editable) { page.error = undefined; page.edit = { queueId: row.queueId, text: row.text, cursor: row.text.length } }
+      if (row.editable && hasComments(row)) page.error = "it has comments: edit it in the prompt (alt+↑ takes the last)"
+      else if (row.editable) { page.error = undefined; page.edit = { queueId: row.queueId, text: row.text, cursor: row.text.length } }
       else page.error = row.kind === "message" || row.kind === "shell" ? "this message was expanded by a command or mention and cannot be edited" : "only a message can be edited"
     } else if (key === "s" && row) {
       page.deleting = undefined

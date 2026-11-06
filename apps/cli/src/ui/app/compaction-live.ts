@@ -1,4 +1,4 @@
-import { DEFAULT_COMPACT_AT_TOKENS } from "@mendcode/protocol/wire"
+import { compactFallback } from "./compact-fallback"
 import { PROMPT_MARGIN } from "../../view/prompt-chrome"
 import { SPINNER_FRAMES } from "../../view/tool-card"
 import { advanceArcade, arcadeField, arcadeInput, isLoaded, pickGame, preload, renderLiveCompaction, startArcade } from "../lazy-pages"
@@ -70,8 +70,8 @@ export function createCompactionLive(ctx: AppContext, actions: { editScratch(): 
     }
   }
 
-  /** The panel's rows for `width` columns and at most `room` rows, margin included; undefined when nothing shows. */
-  function rows(request: { width: number; room: number }): { rows: Line[]; scratch?: Scratch } | undefined {
+  /** The panel's rows for `width` columns and at most `room` rows, margin included; undefined when nothing shows. `indicator` says the activity line already shows a spinner, so the panel draws none. */
+  function rows(request: { width: number; room: number; indicator?: boolean }): { rows: Line[]; scratch?: Scratch } | undefined {
     live.scratchPanel = false
     arcadeShown = false
     if (!visible() || !isLoaded(moduleName()) || request.room < 1) {
@@ -91,9 +91,9 @@ export function createCompactionLive(ctx: AppContext, actions: { editScratch(): 
       maxRows: request.room,
       facts: state.compactionFacts.snapshot(),
       ...(state.compactionFacts.lastCall ? { lastCall: state.compactionFacts.lastCall } : {}),
-      limit: state.contextReport?.contextWindow ? { tokens: state.contextReport.contextWindow, kind: "window" } : { tokens: state.settingsNow.compactAtTokens ?? DEFAULT_COMPACT_AT_TOKENS, kind: "threshold" },
+      limit: { tokens: state.contextReport?.compactAtTokens ?? compactFallback(state), kind: "threshold" },
       now: ctx.now(),
-      spinner: state.reducedMotion ? "⋯" : SPINNER_FRAMES[state.spinFrame % SPINNER_FRAMES.length]!,
+      spinner: request.indicator ? "" : state.reducedMotion ? "⋯" : SPINNER_FRAMES[state.spinFrame % SPINNER_FRAMES.length]!,
       ...(view ? { arcade: { view, focused: live.focused, fieldRows: view.rows.length } } : {}),
       scratch: { text: state.scratchNote, editing: state.editingScratch !== undefined, editor: ctx.scratchEditor, readOnly: input.remote?.readOnly === true },
     })

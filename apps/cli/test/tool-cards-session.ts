@@ -225,7 +225,7 @@ export type ToolCardsViewOptions = { mode?: PresentationMode; width?: number; he
 /** The transcript column of a session in one view, as plain rows. */
 export function toolCardsView(events: SessionEvent[], options: ToolCardsViewOptions = {}) {
   const t = createTranscript({ appearance: { messageLayout: "classic", messageMeta: "full" }, glyphs: glyphs({}), mode: options.mode ?? "balanced", now: () => SESSION_NOW })
-  t.setAppearance({ reasoning: "auto", toolOutput: (options.toolOutput ?? "auto") as "auto", toolDensity: options.toolDensity ?? "dense", timestamps: false })
+  t.setAppearance({ reasoning: "auto", toolOutput: (options.toolOutput ?? "auto") as "auto", toolDensity: options.toolDensity ?? "dense", timestamps: "off" })
   for (const event of events) t.apply(event)
   return { t, rows: () => t.viewport(options.width ?? 100, options.height ?? 1000).map((line) => line.text) }
 }

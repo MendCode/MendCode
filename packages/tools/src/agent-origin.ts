@@ -1,6 +1,7 @@
 import { realpathSync } from "node:fs"
 import { homedir } from "node:os"
 import path from "node:path"
+import { defaultDataDirNow } from "@mendcode/program/data-dir"
 import { AGENT_SHELL_ENV, AGENT_SHELL_FILE_BLOCKS, agentRefusal } from "@mendcode/protocol/wire"
 
 /**
@@ -16,7 +17,7 @@ const shellName = (shell: string) => (shell.split(/[\\/]/).pop() ?? shell).toLow
 
 /** The data directory a session's own `mendcode` reads: the daemon's (the engine exports it), else the default one. */
 export function agentDataDir(environment: Readonly<NodeJS.ProcessEnv> | undefined) {
-  return path.resolve(environment?.MENDCODE_V2_DIR || path.join(homedir(), ".mendcode-v2"))
+  return path.resolve(environment?.MENDCODE_DIR || environment?.MENDCODE_V2_DIR || defaultDataDirNow(homedir()))
 }
 
 /** The environment of a command a session starts: the caller's plus the variable that names the daemon it runs under. */
@@ -111,15 +112,15 @@ const RULES: Record<string, Rule> = {
   models: { subs: ["set-default", "use-preset"], what: "changes the default model", ask: "/models" },
   recipe: { subs: ["apply"], what: "sets every model role", ask: "/models" },
   recipes: { subs: ["apply"], what: "sets every model role", ask: "/models" },
-  profile: { subs: ["add", "remove"], what: "changes a folder profile and its default permission" },
-  profiles: { subs: ["add", "remove"], what: "changes a folder profile and its default permission" },
+  area: { subs: ["add", "remove"], what: "changes an area and its default permission" },
+  areas: { subs: ["add", "remove"], what: "changes an area and its default permission" },
   cache: { subs: ["enable", "on", "disable", "off"], what: "changes the prompt cache setting" },
   console: { subs: ["setup", "off", "login", "logout", "switch", "open", "policy"], what: "changes the console account or its policy" },
   share: { subs: ["create", "sync", "remove", "policy", "local", "gist"], what: "publishes a session or changes the sharing policy" },
   providers: { subs: ["login", "logout", "smoke"], what: "changes provider credentials", ask: "/connect" },
   auth: { subs: ["login", "refresh", "logout"], what: "changes provider credentials", ask: "/connect" },
   mcp: { subs: ["add", "add-local", "auth", "logout"], except: ["auth:list"], what: "changes the MCP servers this machine runs", ask: "/mcp" },
-  package: { subs: ["install", "use", "install-source", "use-source", "remove", "restore", "enable", "disable", "deselect", "disable-all", "deselect-all", "add-source", "remove-source", "refresh", "create", "update", "delete-local"], what: "installs, removes or switches packages", ask: "/packages" },
+  profile: { subs: ["install", "use", "install-source", "use-source", "remove", "restore", "enable", "disable", "deselect", "disable-all", "deselect-all", "add-source", "remove-source", "refresh", "create", "update", "delete-local"], what: "installs, removes or switches profiles", ask: "/profiles" },
   plugin: { what: "installs an extension" },
   theme: { subs: ["install", "select"], what: "installs or selects a theme", ask: "/theme" },
   agent: { subs: ["create", "debug"], what: "creates an agent or runs one of its tools with approval off" },
@@ -147,8 +148,10 @@ const RULES: Record<string, Rule> = {
 }
 RULES.loops = RULES.loop!
 RULES.workflows = RULES.workflow!
-RULES.packages = RULES.package!
-RULES.marketplace = RULES.package!
+RULES.profiles = RULES.profile!
+RULES.package = RULES.profile!
+RULES.packages = RULES.profile!
+RULES.marketplace = RULES.profile!
 /** First words that only read or work inside the session's own authority; the first known first word decides. */
 const SAFE_HEADS = new Set(["run", "session", "sessions", "ps", "logs", "kill", "attach", "docs", "status", "doctor", "context", "usage", "stats", "export", "db", "generate", "completion", "help", "apply", "pr", "acp", "app-server", "ai", "system", "setup", "budget", "remote"])
 const APPROVAL_FLAGS = ["--approve", "--dangerously-skip-permissions"]
@@ -252,8 +255,8 @@ function checkInvocation(program: string, args: string[], directory: string | un
   if (!rule.subs) return refusalFor(shown, rule)
   const sub = rest[0]
   if (!sub || !rule.subs.includes(sub)) {
-    // `package config <name> enable|disable …` switches a resource; plain `config` only shows.
-    return (head === "package" || head === "packages") && sub === "config" && rest.some((word) => word === "enable" || word === "disable") ? refusalFor(shown, rule) : undefined
+    // `profile config <name> enable|disable …` switches a resource; plain `config` only shows.
+    return (head === "profile" || head === "profiles" || head === "package" || head === "packages") && sub === "config" && rest.some((word) => word === "enable" || word === "disable") ? refusalFor(shown, rule) : undefined
   }
   if (rule.except?.includes(`${sub}:${rest[1] ?? ""}`)) return undefined
   return refusalFor(shown, rule)
@@ -265,7 +268,7 @@ function checkCommand(words: string[], lookup: Lookup, depth: number): string | 
     const match = ASSIGNMENT.exec(word)
     if (!match) return false
     lookup.variables.set(match[1]!, expand(match[2]!, lookup.variables))
-    if (match[1] === "MENDCODE_V2_DIR") directory = lookup.variables.get(match[1])
+    if (match[1] === "MENDCODE_DIR" || match[1] === "MENDCODE_V2_DIR") directory = lookup.variables.get(match[1])
     return true
   }
   for (let i = 0; i < words.length; i++) {

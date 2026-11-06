@@ -1,5 +1,5 @@
 ---
-summary: open a file or folder in the viewer beside the chat; click a path; diagrams
+summary: open a file or folder beside the chat; click a path; diagrams
 docs: file-viewer, mermaid, changes
 aliases: file-viewer, open, path-click, preview, mermaid, diagram, pathclick
 ---
@@ -8,7 +8,7 @@ For: "open that file at line 40", "show me the file beside the chat", "what does
 The user's way (tier balanced; /tier file_viewer on enables it elsewhere):
   Click a file path in the conversation, or type /open <path>[:line[-line]] (@ completes the path; /open close closes it). alt+o opens the first path in the selection or the item in view; alt+x closes (actions file.open and file.close in {{program}} docs key-actions). A folder lists its entries.
   The viewer is read-only: header, line numbers, syntax colors, the cited lines selected, Git marks in the margin, / search (n, N), : and a number jumps to a line.
-  Profile keys (customize_ui settings, {{program}} docs customize): [[setting:pathClick]] auto|panel|editor (what a click does; panel turns the viewer on anywhere), [[setting:fileOpener]] file|vscode|cursor|zed|idea|none (the editor that o and editor links open), [[setting:viewerNumbers]], [[setting:viewerWrap]] auto|on|off, [[setting:viewerFocus]] (does it take the keyboard).
+  Customize keys (customize_ui settings, {{program}} docs customize): [[setting:pathClick]] auto|panel|editor (what a click does; panel turns the viewer on anywhere), [[setting:fileOpener]] file|vscode|cursor|zed|idea|none (the editor that o and editor links open), [[setting:viewerNumbers]], [[setting:viewerWrap]] auto|on|off, [[setting:viewerFocus]] (does it take the keyboard).
   /diagram [n] opens a Mermaid diagram of the session on a pannable canvas (arrows pan, +/- zoom); with messageRenderer full a mermaid fence in an answer is drawn as a diagram, and the source stays when the layout fails.
 
 What the model can do: reference paths as src/app.rs:120 or src/ui.rs:56-79 in backticks so they are clickable. There is no tool that opens the viewer for the user or reads what is shown in it; to read a file use read.

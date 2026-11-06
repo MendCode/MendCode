@@ -5,9 +5,12 @@ import { afterEach } from "bun:test"
 import type { McpServerConfig } from "../src"
 
 const dirs: string[] = []
-afterEach(() => {
+const clean = () => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true })
-})
+}
+afterEach(clean)
+// A directory made outside a test (a describe body, a hook) is removed when the process ends.
+process.on("exit", clean)
 
 export function tempDir(): string {
   const dir = mkdtempSync(join(tmpdir(), "mendcode-mcp-"))

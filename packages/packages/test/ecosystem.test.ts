@@ -40,7 +40,7 @@ describe("npm and commit pinning", () => {
   test("npm specs need an exact version; ranges, tags and bad digests are refused", () => {
     expect(parsePackageSource("npm:acme@1.2.3", "/")).toEqual({ kind: "npm", name: "acme", version: "1.2.3" })
     expect(parsePackageSource("npm:@scope/acme@1.2.3-beta.1", "/")).toEqual({ kind: "npm", name: "@scope/acme", version: "1.2.3-beta.1" })
-    for (const spec of ["npm:acme", "npm:acme@^1.2.3", "npm:acme@latest", "npm:acme@1.2", "npm:@scope/acme", "npm:BAD NAME@1.0.0", "npm:../x@1.0.0"]) expect(() => parsePackageSource(spec, "/")).toThrow("[PACKAGES]")
+    for (const spec of ["npm:acme", "npm:acme@^1.2.3", "npm:acme@latest", "npm:acme@1.2", "npm:@scope/acme", "npm:BAD NAME@1.0.0", "npm:../x@1.0.0"]) expect(() => parsePackageSource(spec, "/")).toThrow("[PROFILES]")
     expect(() => parsePackageSource("npm:acme@1.0.0#md5-zzz", "/")).toThrow("sha512")
     expect(() => parsePackageSource("git:--upload-pack=touch", "/")).toThrow("dash")
   })
@@ -180,7 +180,7 @@ describe("remote catalogs", () => {
     await registry.refresh("hub")
     for (const bad of ["not json", JSON.stringify({ version: 1, packs: [] }), JSON.stringify({ version: 0, packs: [good.packs[0], good.packs[0]] }), JSON.stringify({ version: 0, packs: [{ id: "local", version: "1" }] }), "x".repeat(1024 * 1024 + 1)]) {
       body = bad
-      await expect(registry.refresh("hub")).rejects.toThrow("[PACKAGES]")
+      await expect(registry.refresh("hub")).rejects.toThrow("[PROFILES]")
     }
     expect(registry.search("", "hub").entries.map((entry) => entry.name)).toEqual(["npmpack"])
   })
@@ -236,7 +236,7 @@ describe("per-resource switches", () => {
     expect(kit!.resources.every((resource) => resource.enabled)).toBe(true)
   })
 
-  test("switching stores a key, rejects unknown packages or resources, and turning back on drops it", () => {
+  test("switching stores a key, rejects unknown profiles or resources, and turning back on drops it", () => {
     const roots = installed()
     const off = setResourceEnabled({ ...roots, disabledResources: [], key: "user:kit", resource: "commands/review", enabled: false })
     expect(off).toEqual(["user:kit/commands/review"])
@@ -246,7 +246,7 @@ describe("per-resource switches", () => {
     expect(() => setResourceEnabled({ ...roots, disabledResources: [], key: "user:kit", resource: "skills/nope", enabled: false })).toThrow("no resource")
   })
 
-  test("layers carry the switches of their package only; theme and agent loaders skip switched-off files", () => {
+  test("layers carry the switches of their profile only; theme and agent loaders skip switched-off files", () => {
     const roots = installed()
     const layers = extensionLayers({ ...roots, disabledResources: ["user:kit/themes/night", "user:kit/agents/helper", "project:other/themes/night"] })
     const pkg = layers.find((layer) => layer.pkg === "kit")!

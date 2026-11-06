@@ -1,9 +1,10 @@
 import type { Database } from "bun:sqlite"
-import { parseEvent, type ObjectLoader } from "./compress"
+import { eventFromColumns, type OwnEventRow, type ObjectLoader } from "./compress"
 import type { ItemId, MessageRevision, SessionEvent, SessionId } from "@mendcode/protocol"
 import { projectMessageEvent } from "@mendcode/protocol/wire"
 
-export function createMessageRevisions(db: Database, load: ObjectLoader) {
+/** `sealedItem`: an item's rows in sealed turn blocks (sealed-turns.ts), which `events_read` does not hold. */
+export function createMessageRevisions(db: Database, load: ObjectLoader, sealedItem: (sessionId: string, itemId: string) => OwnEventRow[] = () => []) {
   db.run(`CREATE TABLE IF NOT EXISTS message_revisions (
     session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
     item_id TEXT NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(session_id, item_id)
@@ -11,7 +12,7 @@ export function createMessageRevisions(db: Database, load: ObjectLoader) {
   db.run("CREATE INDEX IF NOT EXISTS events_message_item ON events(session_id, json_extract(payload, '$.itemId'), seq) WHERE type IN ('item.started', 'item.delta', 'item.completed')")
   const get = db.query<{ payload: string }, [string, string]>("SELECT payload FROM message_revisions WHERE session_id = ? AND item_id = ?")
   const put = db.query("INSERT INTO message_revisions(session_id, item_id, payload) VALUES (?, ?, ?) ON CONFLICT(session_id, item_id) DO UPDATE SET payload = excluded.payload")
-  const item = db.query<{ payload: string }, [string, string]>("SELECT payload FROM events_read WHERE session_id = ? AND type IN ('item.started', 'item.delta', 'item.completed') AND json_extract(payload, '$.itemId') = ? ORDER BY seq LIMIT 10001")
+  const item = db.query<OwnEventRow, [string, string]>("SELECT seq, type, at, payload FROM events_read WHERE session_id = ? AND type IN ('item.started', 'item.delta', 'item.completed') AND json_extract(payload, '$.itemId') = ? ORDER BY seq LIMIT 10001")
   const revision = (sessionId: SessionId, itemId: ItemId): MessageRevision | undefined => {
     const row = get.get(sessionId, itemId)
     return row ? JSON.parse(row.payload) as MessageRevision : undefined
@@ -20,6 +21,7 @@ export function createMessageRevisions(db: Database, load: ObjectLoader) {
     revision,
     has(sessionId: SessionId, itemId: ItemId) {
       return db.query("SELECT 1 FROM events_read WHERE session_id = ? AND type = 'item.started' AND json_extract(payload, '$.itemId') = ? LIMIT 1").get(sessionId, itemId) !== null
+        || sealedItem(sessionId, itemId).some((row) => row.type === "item.started")
     },
     record(event: SessionEvent) {
       if (event.type === "message.revised") put.run(event.sessionId, event.itemId, JSON.stringify(event))
@@ -34,9 +36,9 @@ export function createMessageRevisions(db: Database, load: ObjectLoader) {
       })
     },
     read(sessionId: SessionId, itemId: ItemId) {
-      const rows = item.all(sessionId, itemId)
+      const rows = sealedItem(sessionId, itemId).concat(item.all(sessionId, itemId))
       if (rows.length > 10000) throw new RangeError("message event limit exceeded")
-      const events = rows.map((row) => parseEvent(row.payload, load))
+      const events = rows.map((row) => eventFromColumns(sessionId, row.seq, row.at, row.type, row.payload, load))
       const start = events.find((event): event is Extract<SessionEvent, { type: "item.started" }> => event.type === "item.started")
       const completed = events.findLast((event): event is Extract<SessionEvent, { type: "item.completed" }> => event.type === "item.completed")
       if (!start || !completed) return undefined

@@ -116,6 +116,7 @@ test("restart retains the queue held and mode, then explicit send resumes it onc
   await h.client.send({ type: "user.submit", sessionId, text: "Old", attachments: [] })
   await until(() => h.requests.length === 1)
   await h.client.send({ type: "user.submit", sessionId, text: "Restored", attachments: [] })
+  await h.client.send({ type: "settings.set", patch: { resumeAfterRestart: false } })
   await h.client.close()
   await h.daemon.stop()
   const again = await boot({ dir: h.dir, project: h.project, steps: [stop("Resumed")] })

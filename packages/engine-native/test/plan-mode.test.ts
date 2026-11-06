@@ -45,9 +45,36 @@ describe("plan mode reaches the model and ends in the review", () => {
     expect(await t.engine.runTurn(t.input)).toEqual({ status: "ok" })
     expect(t.asked).toHaveLength(1)
     expect(t.asked[0]).toMatchObject({ kind: "approval", tool: "plan_review", planReview: { markdown: PLAN.trim(), destination: "build" } })
-    expect(t.mode()).toBe("ask")
+    expect(t.mode()).toBe("full")
     expect(t.requests.map((request) => request.model)).toEqual(["gpt-6-astra", "gpt-6-luna"])
     expect((t.requests[1]!.messages.at(-1) as { output: string }).output).toContain("Plan approved")
+    expect((t.requests[1]!.messages.at(-1) as { output: string }).output).toContain("full access")
+  })
+
+  test("applying with another access keeps it: auto edits and ask before edits stay choices", async () => {
+    for (const [permission, label] of [["edits", "auto edits"], ["ask", "ask before edits"]] as const) {
+      const t = run([stop(PLAN), stop("implemented")], { mode: "plan", settings: { tier: "balanced" }, answers: [{ kind: "plan_review", action: "apply", permission }] })
+      await t.engine.runTurn(t.input)
+      expect(t.mode()).toBe(permission)
+      expect((t.requests[1]!.messages.at(-1) as { output: string }).output).toContain(label)
+    }
+  })
+
+  test("accepting without implementation and the other answers do not change the access", async () => {
+    for (const action of ["accept", "edit", "close"] as const) {
+      const t = run([stop(PLAN), stop(PLAN)], { mode: "plan", answers: [{ kind: "plan_review", action, ...(action === "edit" ? { markdown: PLAN } : {}) }] })
+      await t.engine.runTurn(t.input)
+      expect([action, t.mode()]).toEqual([action, "plan"])
+    }
+  })
+
+  test("a review that ends without a decision (daemon restarted, request cancelled) tells the model it was interrupted, not rejected", async () => {
+    const t = run([stop(PLAN), stop("ok")], { mode: "plan", answers: [{ kind: "abandoned" }] })
+    await t.engine.runTurn(t.input)
+    const output = (t.requests[1]!.messages.at(-1) as { output: string }).output
+    expect(output).toContain("interrupted")
+    expect(output).not.toMatch(/rejected|not approved/i)
+    expect(t.mode()).toBe("plan")
   })
 
   test("a rejected plain-text plan comes back as feedback; an accepted one is not reviewed again", async () => {

@@ -39,9 +39,10 @@ export function createEngineHistory(db: Database) {
         SELECT p.parent_id, MIN(chain.lim, p.upto) FROM chain JOIN engine_prefix p ON p.session_id = chain.sid AND p.engine = ?2
       )
       SELECT m.idx AS idx, m.payload AS payload FROM chain
-      JOIN engine_messages m ON m.session_id = chain.sid AND m.engine = ?2 AND m.idx < chain.lim AND m.idx >= ?3
+      CROSS JOIN engine_messages m ON m.session_id = chain.sid AND m.engine = ?2 AND m.idx < chain.lim AND m.idx >= ?3
         AND m.idx >= COALESCE((SELECT upto FROM engine_prefix WHERE session_id = chain.sid AND engine = ?2), 0)
       ORDER BY m.idx`),
+    ownRows: db.query<HistoryRow, [string, string, number]>("SELECT idx, payload FROM engine_messages WHERE session_id = ? AND engine = ? AND idx >= ? ORDER BY idx"),
     bytes: db.query<{ n: number | null }, [string, string, number]>(`
       WITH RECURSIVE chain(sid, lim) AS (
         SELECT ?1, ?3
@@ -49,7 +50,7 @@ export function createEngineHistory(db: Database) {
         SELECT p.parent_id, MIN(chain.lim, p.upto) FROM chain JOIN engine_prefix p ON p.session_id = chain.sid AND p.engine = ?2
       )
       SELECT SUM(octet_length(m.payload)) AS n FROM chain
-      JOIN engine_messages m ON m.session_id = chain.sid AND m.engine = ?2 AND m.idx < chain.lim
+      CROSS JOIN engine_messages m ON m.session_id = chain.sid AND m.engine = ?2 AND m.idx < chain.lim
         AND m.idx >= COALESCE((SELECT upto FROM engine_prefix WHERE session_id = chain.sid AND engine = ?2), 0)`),
     prefixes: db.query<{ session_id: string; engine: string; upto: number; parent_id: string }, [number]>("SELECT session_id, engine, upto, parent_id FROM engine_prefix ORDER BY session_id LIMIT ?"),
   }
@@ -66,7 +67,7 @@ export function createEngineHistory(db: Database) {
 
   /** The messages from index `from` on, in order, resolved through the prefix chain. */
   function rows(sessionId: string, engine: string, from = 0): HistoryRow[] {
-    return q.rows.all(sessionId, engine, from)
+    return (q.prefix.get(sessionId, engine) ? q.rows : q.ownRows).all(sessionId, engine, from)
   }
 
   /** Every engine that holds messages for the session, own or shared. */

@@ -30,6 +30,10 @@ export type LoopsPageAction =
   | { type: "review"; loopId: string; action: "waive" | "approve"; target: string }
   /** The form saved: create a loop, or update `replaces` in place. */
   | { type: "save"; fields: LoopCreateFields; summary: string; replaces?: { loopId: string; name: string; state: LoopState }; form: LoopForm }
+  /** A tool permission the loop's session waits on: `a` allows it once, `o` for the loop's session, `x` refuses (`request.resolve`). */
+  | { type: "resolve"; loopId: string; sessionId: string; requestId: string; decision: "once" | "session" | "deny" }
+  /** Lowers the permission mode the loop's runs use (`m`); the daemon never lets it pass its creator's. */
+  | { type: "mode"; loopId: string; permission: Loop["permission"] & string }
   /** An external loop: start a run now (`loop.fire`). */
   | { type: "fire"; loopId: string }
   /** Put `text` (the fire command) on the clipboard. */
@@ -78,6 +82,10 @@ function clampLine(line: Line, width: number): Line {
   }
   return out
 }
+
+/** The next mode down for `m`: full access to edits to asking. */
+const LOWER_MODE: Record<string, NonNullable<Loop["permission"]>> = { full: "edits", edits: "ask", smart: "ask" }
+const MODE_NAME: Record<string, string> = { full: "full access", edits: "edits", smart: "smart", ask: "ask", plan: "plan" }
 
 const canPause = (loop: Loop) => loop.state === "active" || loop.state === "needs_input" || loop.state === "verifying"
 const canAccept = (loop: Loop) => loop.state !== "running" && loop.state !== "needs_input" && loop.state !== "completed" && loop.reviewInvalidatedAt === undefined
@@ -135,6 +143,10 @@ export function loopsPageKey(state: LoopsPageState, key: string, all: Loop[]): {
   if (key === "f") return canFire(target) ? { state, action: { type: "fire", loopId: target.loopId } } : { state, action: NONE }
   if (key === "p") return canPause(target) ? control("pause") : canResume(target) ? control("resume") : { state, action: NONE }
   if (key === "n") return canRun(target) ? control("run") : { state, action: NONE }
+  // A run waiting on a tool permission is answered here with the keys the gates use: a allows once, o for the loop's session, x refuses.
+  const waiting = target.state === "needs_input" && target.waiting?.kind === "approval" ? target.waiting : undefined
+  if (waiting && (key === "a" || key === "o" || key === "x")) return { state, action: { type: "resolve", loopId: target.loopId, sessionId: waiting.sessionId, requestId: waiting.requestId, decision: key === "a" ? "once" : key === "o" ? "session" : "deny" } }
+  if (key === "m" && !target.reportOnly && LOWER_MODE[target.permission ?? ""]) return { state, action: { type: "mode", loopId: target.loopId, permission: LOWER_MODE[target.permission!]! } }
   if (key === "w" && target.history.at(-1)?.checkpointHash && target.reviewInvalidatedAt === undefined) {
     const gate = target.history.at(-1)?.gates?.find((gate) => gate.status === "fail" && !["budget", "policy", "integrity"].includes(gate.failureClass ?? "") && !["cost-budget", "approval-policy"].includes(gate.id))
     if (gate) return { state, action: { type: "review", loopId: target.loopId, action: "waive", target: gate.id } }
@@ -271,7 +283,7 @@ function scheduleRows(loop: Loop, width: number, now: number): Line[] {
     when.push({ text: " · now every ", fg: "muted" }, { text: spanText(pace), fg: pace >= maxMs ? "warning" : "text", bold: true }, { text: pace <= minMs ? " (fastest)" : pace >= maxMs ? " (slowest)" : "", fg: "muted" })
   }
   rows.push(when)
-  const mode = [loop.reportOnly ? "report-only" : "", loop.workspace === "worktree" ? "worktree" : "", loop.template ? `template ${loop.template}` : ""].filter(Boolean)
+  const mode = [loop.reportOnly ? "report-only" : loop.permission ? MODE_NAME[loop.permission] ?? loop.permission : "", loop.workspace === "worktree" ? "worktree" : "", loop.template ? `template ${loop.template}` : "", loop.creatorSessionId && loop.notify !== "none" ? "notices to creator" : ""].filter(Boolean)
   if (mode.length) rows.push([{ text: "mode      ", fg: "muted" }, { text: mode.join(" · "), fg: loop.reportOnly ? "warning" : "body" }])
   if (trigger.kind === "external") {
     rows.push([{ text: "fire      ", fg: "muted" }, { text: FIRE_COMMAND(loop.loopId), fg: "text" }])
@@ -293,7 +305,11 @@ function detailRows(loop: Loop, width: number, now: number): Line[] {
   rows.push([{ text: "objective", fg: "muted" }], ...wrapped(loop.objective, width, MAX_OBJECTIVE_LINES, "  ", "body"))
   if (loop.criteria) rows.push([{ text: "until", fg: "muted" }], ...wrapped(loop.criteria, width, 2, "  ", "body"))
   rows.push(...scheduleRows(loop, width, now))
-  if (loop.reason) rows.push([{ text: "reason", fg: "muted" }], ...wrapped(loop.reason, width, 2, "  ", loop.state === "blocked" ? "error" : "warning"))
+  if (loop.state === "needs_input" && loop.waiting) {
+    const asked = loop.waiting
+    rows.push([{ text: "waiting on you", fg: "warning", bold: true }, { text: ` · ${relativeTime(now, asked.at)}${relativeTime(now, asked.at) === "now" ? "" : " ago"}`, fg: "muted" }], ...wrapped(`${asked.title}${asked.detail ? `: ${asked.detail.split("\n")[0]}` : ""}`, width, 3, "  ", "body"))
+    rows.push(asked.kind === "approval" ? [{ text: "  ", fg: "muted" }, { text: "a", fg: "text", bold: true }, { text: " allow once · ", fg: "muted" }, { text: "o", fg: "text", bold: true }, { text: " allow for the loop · ", fg: "muted" }, { text: "x", fg: "text", bold: true }, { text: " refuse", fg: "muted" }] : [{ text: "  enter opens its session to answer", fg: "muted" }])
+  } else if (loop.reason) rows.push([{ text: "reason", fg: "muted" }], ...wrapped(loop.reason, width, 2, "  ", loop.state === "blocked" ? "error" : "warning"))
   if (loop.feedback) rows.push(...wrapped(loop.feedback, width, 3, "", "warning"))
   if (loop.override) rows.push(...wrapped(`accepted by you  ${loop.override.reason}`, width, 2, "", "body"))
   rows.push([{ text: "runs", fg: "muted" }])
@@ -327,7 +343,8 @@ export function renderLoopsPage(input: { loops: Loop[]; state: LoopsPageState; w
   const selected = clamp(state.selected, loops.length)
   const target = loops[selected]
   const room = Math.max(0, height - 2)
-  const hints = "b evidence · " + (target?.reviewInvalidatedAt !== undefined ? "n run · e edit · pgdn evidence · esc back" : `${target?.trigger.kind === "external" ? "y copy fire cmd · f fire · " : ""}w waive · a accept · o approve · pgdn evidence · ↑↓ select · e edit · c new · t template · p pause · n run · esc back`)
+  const asking = target?.state === "needs_input" && target.waiting?.kind === "approval"
+  const hints = asking ? "a allow once · o allow for the loop · x refuse · enter open session · ↑↓ select · esc back" : "b evidence · " + (target && !target.reportOnly && LOWER_MODE[target.permission ?? ""] ? "m lower mode · " : "") + (target?.reviewInvalidatedAt !== undefined ? "n run · e edit · pgdn evidence · esc back" : `${target?.trigger.kind === "external" ? "y copy fire cmd · f fire · " : ""}w waive · a accept · o approve · pgdn evidence · ↑↓ select · e edit · c new · t template · p pause · n run · esc back`)
   const list = (w: number): Line[] => {
     const rows: Line[] = []
     const confirm = confirmRow(state, loops, w)

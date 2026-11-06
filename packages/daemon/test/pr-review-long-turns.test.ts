@@ -5,7 +5,7 @@ import path from "node:path"
 import { estimateTokens, type SessionEvent, type SessionId } from "@mendcode/protocol"
 import { classifyStop } from "../src/pr-review/budget"
 import { buildReviewContext, CONTEXT_SHARE, gitRun, MAX_REVIEW_PARTS, parseUnifiedDiff, splitIntoParts, type GitRun } from "../src/pr-review/context"
-import { DEFAULT_ENGINE_CONFIG, resumeReview, reviewPullRequest, type ReviewEngineConfig, type ReviewSessionFactory } from "../src/pr-review/engine"
+import { DEFAULT_ENGINE_CONFIG, passShortfall, resumeReview, REVIEW_PASS_SHARE, reviewPullRequest, type ReviewEngineConfig, type ReviewSessionFactory } from "../src/pr-review/engine"
 import { failureKind } from "../src/pr-review/outage"
 import { DEFAULT_PHASE_PLAN, parsePartPhase, partPhase } from "../src/pr-review/phases"
 import { attemptReview, reviewNotice, runPrReview } from "../src/pr-review/run"
@@ -263,27 +263,76 @@ describe("a stalled or budget-stopped review keeps the parts it finished", () =>
     expect(resumed.result.tokens.input).toBe(1_000 * total + 1_000 * Math.ceil(10 / 10))
   })
 
-  test("the token budget between parts is a resumable budget stop; a resume that cannot review another part is no_progress", async () => {
+  test("a budget the rest of the parts cannot fit stops before the next part, not after paying for it; a resume that cannot review another part is no_progress", async () => {
     const context = await largeContext(10, 300, CALL)
     const total = context.parts!.length
-    const kids = partsEngine({ tokens: { input: 4_000, output: 0 } })
-    const stopped = await reviewPullRequest({ sessionFactory: kids.factory, context, config: config({ budgetTokens: 10_000 }), cap: 50 })
-    expect(kids.reviews()).toBe(3)
-    expect(stopped.stop).toMatchObject({ kind: "budget", resumable: true, unit: "tokens", limit: 10_000 })
-    expect(stopped.stop!.remaining).toContain(`${total - 3} of ${total} parts of the diff not reviewed`)
-    expect(stopped.checkpoint!.phase).toBe(partPhase(3, total))
-    expect(stopped.result.findings).toEqual([])
-    expect(stopped.result.summary).toContain(`after part 3 of ${total}`)
+    const diff = context.parts!.reduce((sum, part) => sum + part.tokens, 0)
+    // The estimate fits the review pass, but each part really counts about twice its estimate (a dense diff, the files it reads).
+    const budgetTokens = Math.ceil((1.5 * diff) / REVIEW_PASS_SHARE)
+    const kids = partsEngine({ tokens: { input: Math.ceil((2 * diff) / total), output: 0 } })
+    const stopped = await reviewPullRequest({ sessionFactory: kids.factory, context, config: config({ budgetTokens }), cap: 50 })
+    expect(kids.reviews()).toBe(1)
+    expect(stopped.stop).toMatchObject({ kind: "budget", resumable: true, unit: "tokens", limit: budgetTokens })
+    expect(stopped.stop!.detail).toContain(`Stopped before part 2 of ${total} without spending on it`)
+    expect(stopped.stop!.remaining).toContain(`${total - 1} of ${total} parts of the diff not reviewed`)
+    expect(stopped.checkpoint!.phase).toBe(partPhase(1, total))
+    // It does not end empty: the closing check verified part 1's candidates, and the rest is said to be missing.
+    expect(stopped.partial).toMatchObject({ reviewed: context.parts![0]!.files, notReviewed: context.parts!.slice(1).flatMap((part) => part.files), unverified: 0 })
+    expect(stopped.result.findings.map((finding) => finding.path)).toEqual(context.parts![0]!.files)
+    expect(stopped.result.summary).toContain(`the ${total - 1} remaining parts need about`)
 
+    // An allowance too small for any further part makes no progress, and says so.
     const again = partsEngine()
-    const stuck = await resumeReview({ sessionFactory: again.factory, context, config: config({ budgetTokens: 10_000 }), checkpoint: stopped.checkpoint!, cap: 50 })
+    const stuck = await resumeReview({ sessionFactory: again.factory, context, config: config({ budgetTokens: 1_000 }), checkpoint: stopped.checkpoint!, cap: 50 })
     expect(again.reviews()).toBe(0)
     expect(stuck.stop).toMatchObject({ kind: "no_progress", resumable: false })
+    expect(stuck.partial).toBeUndefined()
 
     const raised = await resumeReview({ sessionFactory: again.factory, context, config: config(), checkpoint: stopped.checkpoint!, cap: 50 })
-    expect(again.reviewed).toEqual(context.parts!.slice(3).map((part) => part.files))
+    expect(again.reviewed).toEqual(context.parts!.slice(1).map((part) => part.files))
     expect(raised.stop).toBeUndefined()
     expect(raised.result.findings).toHaveLength(10)
+  })
+
+  test("a budget that fits the measured cost changes nothing: every part is reviewed once and every candidate verified", async () => {
+    const context = await largeContext(10, 300, CALL)
+    const total = context.parts!.length
+    const diff = context.parts!.reduce((sum, part) => sum + part.tokens, 0)
+    const kids = partsEngine({ tokens: { input: Math.ceil(diff / total), output: 100 } })
+    const done = await reviewPullRequest({ sessionFactory: kids.factory, context, config: config({ budgetTokens: Math.ceil((2 * diff) / REVIEW_PASS_SHARE) }), cap: 50 })
+    expect(kids.reviews()).toBe(total)
+    expect(done.stop).toBeUndefined()
+    expect(done.result.findings).toHaveLength(10)
+  })
+
+  test("a diff larger than all the review pass may spend is never sent: the stop says so before any model call", async () => {
+    const context = await largeContext(10, 300, CALL)
+    const diff = context.parts!.reduce((sum, part) => sum + part.tokens, 0)
+    const kids = partsEngine()
+    const stopped = await reviewPullRequest({ sessionFactory: kids.factory, context, config: config({ budgetTokens: Math.floor(diff / REVIEW_PASS_SHARE) - 1_000 }), cap: 50 })
+    expect(kids.reviews()).toBe(0)
+    expect(stopped.stop).toMatchObject({ kind: "budget", resumable: true, used: 0 })
+    expect(stopped.stop!.detail).toContain("Nothing was sent to a model")
+    expect(stopped.stop!.detail).toContain(`needs at least about ${diff.toLocaleString("en-US")} tokens`)
+    expect(stopped.checkpoint!.phase).toBe("analysis")
+    expect(stopped.checkpoint!.result).toBeUndefined()
+  })
+
+  test("PR #23 as it ran (four parts of JSON results, about 365K counted each, cap 1,000,000): it stops after part 1, not mid part 3 after 1,071,143", async () => {
+    // The real parts of Eden-sudo/Symbex-1#23 at 0afbdcdc (buildReviewContext with a 400K call bound): 180,171 · 192,279 · 193,631 · 121,438.
+    const parts = [180_171, 192_279, 193_631, 121_438].map((tokens) => ({ tokens }))
+    const budgetTokens = 1_000_000
+    expect(passShortfall({ parts, index: 0, used: 0, budgetTokens })).toBeUndefined()
+    // Part 1 counted about what parts 1 and 2 did together on average (729,106 / 2).
+    const afterOne = passShortfall({ parts, index: 1, used: 364_553, budgetTokens })
+    expect(afterOne).toBeDefined()
+    expect(afterOne!.left).toBe(800_000 - 364_553)
+    expect(afterOne!.needed).toBeGreaterThan(1_000_000)
+    // As it ran: two parts done, 70,894 left for part 3 (800,000 - 729,106), whose first request alone counted 341,975.
+    const beforeThree = passShortfall({ parts, index: 2, used: 729_106, budgetTokens })
+    expect(beforeThree).toMatchObject({ left: 70_894 })
+    expect(beforeThree!.needed).toBeGreaterThan(341_975)
+    expect(passShortfall({ parts, index: 1, used: 364_553, budgetTokens: Number.POSITIVE_INFINITY })).toBeUndefined()
   })
 
   test("a checkpoint whose diff now splits differently runs the review pass again, still counting the tokens it spent", async () => {

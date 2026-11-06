@@ -8,7 +8,7 @@ import { snake } from "../src/view/arcade/snake"
 import { breakout } from "../src/view/arcade/breakout"
 import { bar, compactTokens, sparkline } from "../src/view/compaction-live"
 import { createCompactionFacts } from "../src/view/compaction-facts"
-import { CUSTOMIZE_ROWS } from "../src/view/customize-page"
+import { customizeSteps } from "../src/view/customize-page"
 import { readTuiProfile, type TuiProfile } from "../src/view/tui-profile"
 import { textWidth } from "../src/view/wrap"
 
@@ -62,6 +62,16 @@ test("the default panel is framed, names the phase, shows stage progress and tok
   expect(screen).toContain("● Capture")
   expect(screen).toContain("tail ~248 kept")
   fits(h, 100, 34)
+})
+
+test("while compacting the card is framed and has no spinner of its own: the activity line's is the only one", async () => {
+  for (const mode of MODES) {
+    const h = await compacting(mode)
+    const spinners = h.text().join("\n").match(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/g) ?? []
+    expect(spinners.length).toBe(1)
+    expect(text(h)).toMatch(/Compacting…/)
+  }
+  expect(text(await compacting("panel"))).toContain("╭─ Compacting context")
 })
 
 test("stats mode charts only what the events reported: context against the limit, cache split, trend, saved and progress", async () => {
@@ -124,7 +134,7 @@ test("the panel is a /customize choice that persists", async () => {
   const harness = b59Harness(180, 50)
   harness.begin()
   await harness.type("/customize\r")
-  for (let i = 0; i < CUSTOMIZE_ROWS.indexOf("compactionPanel"); i++) await harness.app.onKey("\x1b[B")
+  for (let i = 0; i < customizeSteps("compactionPanel", harness.app.tuiProfile, { mode: harness.app.viewMode }); i++) await harness.app.onKey("\x1b[B")
   expect(text(harness)).toContain("Compaction panel")
   expect(readTuiProfile(harness.dataDir).compactionPanel).toBe("panel")
   await harness.app.onKey("\x1b[C")

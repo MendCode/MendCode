@@ -7,20 +7,20 @@ import { relativeTime, shortenMiddle, truncateEnd } from "./session-list"
 import { textWidth, wrap } from "./wrap"
 import { PROGRAM_NAME } from "@mendcode/program"
 
-/** One package's switchable resources (`c`): `resources` is undefined until the daemon answers. */
+/** One profile's switchable resources (`c`): `resources` is undefined until the daemon answers. */
 export type PackagesConfigState = { key: string; selected: number; resources?: Array<{ id: string; kind: string; name: string; enabled: boolean }> }
-/** What a package's activation overrides right now (`o`): `selected` is the row, `key` the package. */
+/** What a profile's activation overrides right now (`o`): `selected` is the row, `key` the profile. */
 export type PackagesOverridesState = { key: string; selected: number }
 export type PackagesPageState = { selected: number; confirm?: { key: string }; confirmAll?: boolean; scroll?: number; config?: PackagesConfigState; overrides?: PackagesOverridesState }
 
-/** One thing an enabled package overrides: a profile key, a keybinding, a prompt file or a view slot. `kept`: the user chose their own. */
+/** One thing an enabled profile overrides: a profile key, a keybinding, a prompt file or a view slot. `kept`: the user chose their own. */
 export type ActivationRowView = { package: string; part: string; key: string; value: string; base?: string; mine?: string; kept: boolean }
-/** What `/packages` shows of the activation layer; built from the terminal's activation (see `activationView`). */
+/** What `/profiles` shows of the activation layer; built from the terminal's activation (see `activationView`). */
 export type PackagesActivationView = { rows: ActivationRowView[]; owners: string[]; waiting: Array<{ package: string; owner: string; changes: string[] }>; conflicts: string[]; problems: string[] }
 
 const shown = (value: unknown): string => typeof value === "string" ? value : JSON.stringify(value) ?? "—"
 
-/** The activation as the page draws it; undefined when no enabled package has one. */
+/** The activation as the page draws it; undefined when no enabled profile has one. */
 export type ActivationLive = { result: { rows: Array<{ package: string; part: string; key: string; value: unknown; base?: unknown; kept: boolean; mine?: unknown }>; owners: Partial<Record<string, string>>; waiting: Array<{ package: string; owner: string; changes: string[] }>; conflicts: string[] }; problems: string[] }
 
 export function activationView(live: ActivationLive | undefined): PackagesActivationView | undefined {
@@ -54,10 +54,10 @@ const MAX_DESCRIPTION_LINES = 4
 const LABEL_WIDTH = 10
 const STATE_WIDTH = 7
 const HINTS = "↑↓ select · space/e on/off · o overrides · p precedence · c resources · d remove · x deselect all · m marketplace · r reload · esc back"
-const OVERRIDES_HINTS = "↑↓ select · k keep mine / use package · d turn package off · esc back"
+const OVERRIDES_HINTS = "↑↓ select · k keep mine / use profile · d turn profile off · esc back"
 const CONFIG_HINTS = "↑↓ select · space/e on/off · esc back"
 const CONFIRM_HINTS = "d/y remove · esc cancel"
-const EMPTY = `no packages · install with: ${PROGRAM_NAME} package install <folder|github:owner/repo>`
+const EMPTY = `no profiles · install with: ${PROGRAM_NAME} profile install <folder|github:owner/repo>`
 const WIDE_HEIGHT = 24
 
 export function createPackagesPageState(): PackagesPageState {
@@ -116,7 +116,7 @@ export function packagesPageKey(state: PackagesPageState, key: string, packages:
   return { state, action: NONE }
 }
 
-/** The rows of the activation that belong to one package. */
+/** The rows of the activation that belong to one profile. */
 export function overrideRows(activation: PackagesActivationView | undefined, key: string): ActivationRowView[] {
   return (activation?.rows ?? []).filter((row) => row.package === key)
 }
@@ -141,7 +141,7 @@ function overridesRows(key: string, activation: PackagesActivationView | undefin
   const rows = overrideRows(activation, key)
   const waiting = activation?.waiting.find((entry) => entry.package === key)
   const head: Line[] = waiting ? [clampLine([{ text: `look inactive: ${waiting.owner} owns it. Enabling ${key} again asks to switch.`, fg: "warning" }], width)] : []
-  if (!rows.length && !waiting) return [[{ text: "this package overrides nothing right now", fg: "muted" }]]
+  if (!rows.length && !waiting) return [[{ text: "this profile overrides nothing right now", fg: "muted" }]]
   const at = clamp(selected, rows.length)
   const room = Math.max(1, capacity - head.length)
   const offset = Math.max(0, at - room + 1)
@@ -172,7 +172,7 @@ function configKey(state: PackagesPageState, config: PackagesConfigState, key: s
 function configRows(config: PackagesConfigState, width: number, capacity: number): Line[] {
   const resources = config.resources
   if (!resources) return [[{ text: "loading resources…", fg: "muted" }]]
-  if (!resources.length) return [[{ text: "this package ships no switchable resources", fg: "muted" }]]
+  if (!resources.length) return [[{ text: "this profile ships no switchable resources", fg: "muted" }]]
   const selected = clamp(config.selected, resources.length)
   const offset = Math.max(0, selected - capacity + 1)
   return resources.slice(offset, offset + capacity).map((resource, i): Line => clampLine([
@@ -205,10 +205,10 @@ function stateOf(pkg: PackageInfo): { label: string; fg: ColorName } {
 }
 
 function summaryOf(packages: PackageInfo[]): string {
-  if (packages.length === 0) return "no packages"
+  if (packages.length === 0) return "no profiles"
   const off = packages.filter((pkg) => !pkg.enabled).length
   const problems = packages.filter((pkg) => pkg.problem).length
-  return [plural(packages.length, "package"), off ? `${off} off` : "", problems ? plural(problems, "problem") : ""].filter(Boolean).join(" · ")
+  return [plural(packages.length, "profile"), off ? `${off} off` : "", problems ? plural(problems, "problem") : ""].filter(Boolean).join(" · ")
 }
 
 function installedText(installedAt: number, now: number | undefined): string {
@@ -301,30 +301,30 @@ export function renderPackagesPage(input: { report: PackagesReport | undefined; 
     const config = state.config
     const off = config.resources?.filter((resource) => !resource.enabled).length ?? 0
     const panel = { title: `Resources · ${config.key}`, active: true, weight: 1, body: (w: number): Line[] => configRows(config, w, Math.max(1, room - 4)) }
-    return pickerFrame(`Packages · ${config.key}`, CONFIG_HINTS, width, height, panelGrid({ width, rows: [[panel]], heights: [room], compact: false, padding: true, maxColumns: 1 }), input.error ? `Error · ${input.error}` : config.resources ? `${plural(config.resources.length, "resource")}${off ? ` · ${off} off` : ""}` : "")
+    return pickerFrame(`Profiles · ${config.key}`, CONFIG_HINTS, width, height, panelGrid({ width, rows: [[panel]], heights: [room], compact: false, padding: true, maxColumns: 1 }), input.error ? `Error · ${input.error}` : config.resources ? `${plural(config.resources.length, "resource")}${off ? ` · ${off} off` : ""}` : "")
   }
   if (state.overrides) {
     const overrides = state.overrides
     const rows = overrideRows(activation, overrides.key)
     const panel = { title: `Overrides · ${overrides.key}`, active: true, weight: 1, body: (w: number): Line[] => overridesRows(overrides.key, activation, overrides.selected, w, Math.max(1, room - 4)) }
     const kept = rows.filter((row) => row.kept).length
-    return pickerFrame(`Packages · ${overrides.key}`, OVERRIDES_HINTS, width, height, panelGrid({ width, rows: [[panel]], heights: [room], compact: false, padding: true, maxColumns: 1 }), input.error ? `Error · ${input.error}` : `${plural(rows.length, "override")}${kept ? ` · ${kept} yours` : ""}`)
+    return pickerFrame(`Profiles · ${overrides.key}`, OVERRIDES_HINTS, width, height, panelGrid({ width, rows: [[panel]], heights: [room], compact: false, padding: true, maxColumns: 1 }), input.error ? `Error · ${input.error}` : `${plural(rows.length, "override")}${kept ? ` · ${kept} yours` : ""}`)
   }
   const split = isWide(width) && height >= WIDE_HEIGHT
   const confirming = !!state.confirm
-  const notice = state.confirmAll ? "Deselect all packages? y confirms · any key cancels" : input.error || (confirming ? `remove ${packages[selected]?.key}? d or y confirms · any key cancels` : "")
+  const notice = state.confirmAll ? "Deselect all profiles? y confirms · any key cancels" : input.error || (confirming ? `remove ${packages[selected]?.key}? d or y confirms · any key cancels` : "")
   const summary = notice ? `${state.confirmAll ? "Confirm deselect all" : confirming ? "Confirm remove" : "Error"} · ${notice}` : report ? summaryOf(packages) : ""
   const hints = state.confirmAll ? "y deselect all · esc cancel" : confirming ? CONFIRM_HINTS : HINTS
   const list = { title: "Installed", active: true, weight: 3, body: (w: number): Line[] => {
-    if (!report) return [[{ text: input.error || "loading packages…", fg: input.error ? "error" : "muted" }]]
+    if (!report) return [[{ text: input.error || "loading profiles…", fg: input.error ? "error" : "muted" }]]
     if (!packages.length) return emptyRows(w)
     const widths: Widths = { key: Math.max(4, Math.min(30, Math.floor(w * 0.4), Math.max(...packages.map((pkg) => textWidth(pkg.key))))), version: Math.min(12, Math.max(...packages.map((pkg) => textWidth(pkg.manifest?.version ?? "")))) }
     const capacity = Math.max(1, (split ? room : Math.floor((room - 1) * 0.4)) - 4)
     const offset = Math.max(0, selected - capacity + 1)
     return packages.slice(offset, offset + capacity).map((pkg, i) => packageRow({ pkg, selected: offset + i === selected, width: w, widths, glyphs }))
   } }
-  const detail = { title: "Package", weight: 4, scroll: state.scroll ?? 0, body: (w: number): Line[] => packages[selected] ? detailRows(packages[selected]!, w, now, activation) : [] }
+  const detail = { title: "Profile", weight: 4, scroll: state.scroll ?? 0, body: (w: number): Line[] => packages[selected] ? detailRows(packages[selected]!, w, now, activation) : [] }
   const top = Math.max(6, Math.floor((room - 1) * 0.4))
   const body = panelGrid({ width, rows: split ? [[list, detail]] : [[list], [detail]], heights: split ? [room] : [top, Math.max(0, room - top - 1)], compact: false, padding: true, maxColumns: split ? 2 : 1 })
-  return pickerFrame(`Packages${report ? ` · ${report.directory}` : ""}`, hints, width, height, body, summary)
+  return pickerFrame(`Profiles${report ? ` · ${report.directory}` : ""}`, hints, width, height, body, summary)
 }

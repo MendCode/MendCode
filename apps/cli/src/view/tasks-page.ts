@@ -3,13 +3,9 @@ import type { Line, Span } from "../ui/theme"
 import { runSpans } from "./agents-strip"
 import { panelGrid } from "./deck"
 import { appearancePage } from "./appearance-layout"
-import { compact } from "./format"
+import { taskUsage } from "./task-usage"
+export { taskUsage } from "./task-usage"
 import { truncateEnd, wrap } from "./wrap"
-
-/** `12.4K in · 1,204 out · $0.04`: what a child spent over all its runs; the cost only when every call had a price. */
-export function taskUsage(stats: NonNullable<TaskRecord["stats"]>): string {
-  return [`${compact(stats.input)} in`, `${compact(stats.output)} out`, ...(stats.costMicros ? [`$${(stats.costMicros / 1e6).toFixed(2)}`] : [])].join(" · ")
-}
 
 /**
  * What the opened child adds under its name, one fact a line, each only when known: what it ran on, what it spent, the files

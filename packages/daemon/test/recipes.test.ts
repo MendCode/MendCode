@@ -84,6 +84,7 @@ describe("built-in recipes", () => {
     expect(builtin.map((recipe) => recipe.name).sort()).toEqual(["balanced", "deep", "quick"])
     for (const recipe of builtin) {
       expect(recipe.problem).toBeUndefined()
+      expect(recipe.roles.compaction).toBeUndefined() // compaction follows the session, so it keeps the prompt cache
       for (const choice of Object.values(recipe.roles)) {
         expect(choice?.model).toBe("gpt-6-luna")
         expect(["low", "medium", "high"]).toContain(choice?.effort ?? "")

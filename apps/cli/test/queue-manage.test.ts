@@ -1,18 +1,20 @@
 import { afterEach, expect, test } from "bun:test"
 import type { Settings } from "@mendcode/protocol"
+import { buildCommentMessage } from "../src/view/reply-comments"
 import { appHarness, cleanTemps, conversation, ids } from "./session-ui-harness"
 
 afterEach(cleanTemps)
 
 type Entry = { queueId: string; kind: string; text: string; attachments: number; editable: boolean; delivery?: string }
 
-function queueHarness(mode: NonNullable<Settings["queue"]>["mode"] = "after-response") {
+function queueHarness(mode: NonNullable<Settings["queue"]>["mode"] = "after-response", extra: Entry[] = []) {
   const settings: Settings = { onboarded: true, reducedMotion: true, queue: { mode } }
   const first = ids("queue"), second = ids("queue"), expanded = ids("queue")
   let entries: Entry[] = [
     { queueId: first, kind: "message", text: "Check the cancellation path", attachments: 0, editable: true },
     { queueId: second, kind: "message", text: "Run the focused tests", attachments: 0, editable: true },
     { queueId: expanded, kind: "message", text: "expanded file contents", attachments: 0, editable: false },
+    ...extra,
   ]
   const lists: number[] = []
   const h = appHarness({ width: 110, height: 30, directory: "/work/queue", reply: (command) => {
@@ -102,6 +104,24 @@ test("an expanded message is not editable and says why; esc leaves an edit witho
   await h.app.onKey("\x1b")
   expect(h.sentOf("queue.edit")).toHaveLength(0)
   expect(h.text().join("\n")).toContain("Queue")
+})
+
+test("a message with comments shows as its words and count, never its envelope, and is not edited as raw text here", async () => {
+  const message = buildCommentMessage({ comments: [{ id: 1, quote: "the passage", text: "why this?" }], general: "my note" })
+  const h = queueHarness("after-response", [{ queueId: ids("queue"), kind: "message", text: message, attachments: 0, editable: true }])
+  await h.type("/queue\r")
+  await Bun.sleep(5)
+  for (let step = 0; step < 3; step++) await h.app.onKey("\x1b[B")
+  let text = h.text().join("\n")
+  expect(text).toContain("1 comment")
+  expect(text).toContain("why this?")
+  expect(text).not.toMatch(/mendcode_comments|<\/?quote>|<\/?comment/)
+  await h.app.onKey("e")
+  await Bun.sleep(5)
+  text = h.text().join("\n")
+  expect(text).toContain("it has comments")
+  expect(text).not.toMatch(/mendcode_comments|<\/?quote>|<\/?comment/)
+  expect(h.sentOf("queue.edit")).toHaveLength(0)
 })
 
 test("a queue change from another terminal refreshes the open page", async () => {

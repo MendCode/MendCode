@@ -1,6 +1,6 @@
 import type { Database } from "bun:sqlite"
 import type { SessionEvent } from "@mendcode/protocol"
-import { createCodec, unpackEvent, type Codec } from "./compress"
+import { createCodec, eventFromRow, eventPayload, compactEnvelope, type EventRow, type Codec } from "./compress"
 import type { EventObjects } from "./event-objects"
 import type { TurnsStore } from "./turns"
 
@@ -51,8 +51,12 @@ export function createStorageUpkeep(input: { db: Database; codec: Codec; turns: 
   const num = (sql: string) => Number(get<{ n: number | null }>(sql)?.n ?? 0)
 
   function extras(): StorageExtras {
+    // Settled turns sealed into blocks (sealed-turns.ts) are one line: their rows' types are inside the compressed blocks.
     const eventTypes = db
-      .query<EventTypeBytes, []>("SELECT type, COUNT(*) AS count, SUM(octet_length(payload)) AS bytes FROM events GROUP BY type ORDER BY bytes DESC LIMIT 6")
+      .query<EventTypeBytes, []>(`SELECT type, count, bytes FROM (
+        SELECT type, COUNT(*) AS count, SUM(octet_length(payload)) AS bytes FROM events GROUP BY type
+        UNION ALL SELECT 'sealed turns' AS type, COUNT(*) AS count, SUM(length(data)) AS bytes FROM turn_blocks HAVING COUNT(*) > 0
+      ) ORDER BY bytes DESC LIMIT 6`)
       .all()
     const snap = turns.storage.stats()
     const inline = ["turn_files.before_content", "turn_files.after_content", "turn_call_files.before_content"].reduce((total, ref) => {
@@ -98,7 +102,8 @@ export function createStorageUpkeep(input: { db: Database; codec: Codec; turns: 
   }
 
   /** Streaming deltas of items that have their final text: replay needs only the completed event. */
-  const deltaTarget = `type = 'item.delta' AND EXISTS (SELECT 1 FROM events c WHERE c.session_id = events.session_id
+  const deltaTarget = `type = 'item.delta' AND EXISTS (SELECT 1 FROM folded_deltas f WHERE f.session_id = events.session_id
+    AND f.item_id = json_extract(events.payload, '$.itemId')) AND EXISTS (SELECT 1 FROM events c WHERE c.session_id = events.session_id
     AND c.type IN ('item.started', 'item.delta', 'item.completed') AND c.type = 'item.completed'
     AND json_extract(c.payload, '$.itemId') = json_extract(events.payload, '$.itemId')
     AND json_extract(c.payload, '$.text') IS NOT NULL AND json_extract(c.payload, '$.blob') IS NULL)`
@@ -187,8 +192,8 @@ export function createStorageUpkeep(input: { db: Database; codec: Codec; turns: 
   /** Visits each session's events once: a mark per session says how far an earlier pass looked, so a daily pass only reads what is new. */
   function compactEvents(result: CompactResult, limit: number, dryRun: boolean) {
     const previewCodec = createCodec({ enabled: codec.enabled, objects: { put: input.objects.preview, load: input.objects.load } })
-    const select = db.query<{ seq: number; payload: string }, [string, number, number]>(
-      `SELECT seq, payload FROM events WHERE session_id = ? AND seq > ? AND type IN ('item.completed', 'item.delta') AND (length(payload) >= ${COMPRESSIBLE_ROW} OR payload LIKE '%,"z":%')
+    const select = db.query<EventRow, [string, number, number]>(
+      `SELECT session_id, seq, type, at, payload FROM events WHERE session_id = ? AND seq > ? AND type IN ('item.completed', 'item.delta') AND (length(payload) >= ${COMPRESSIBLE_ROW} OR payload LIKE '%,"z":%')
        AND payload NOT LIKE '%"zref":%' ORDER BY seq LIMIT ?`,
     )
     const update = db.query("UPDATE events SET payload = ? WHERE session_id = ? AND seq = ?")
@@ -206,8 +211,8 @@ export function createStorageUpkeep(input: { db: Database; codec: Codec; turns: 
         if (!rows.length) break
         const rewrites: Array<{ seq: number; payload: string }> = []
         for (const row of rows) {
-          const event = unpackEvent(JSON.parse(row.payload) as Record<string, unknown>, input.objects.load) as unknown as SessionEvent
-          const packed = (dryRun ? previewCodec : codec).packEvent(event, row.payload, isToolCall(event))
+          const event = eventFromRow(row, input.objects.load)
+          const packed = compactEnvelope((dryRun ? previewCodec : codec).packEvent(event, eventPayload(row), isToolCall(event)), event)
           if (packed === row.payload) continue
           rewrites.push({ seq: row.seq, payload: packed })
           result.eventRows++
@@ -218,10 +223,8 @@ export function createStorageUpkeep(input: { db: Database; codec: Codec; turns: 
           db.transaction(() => {
             for (const row of rewrites) {
               const hash = JSON.parse(row.payload).zref as string | undefined
+              // Forks reading this row by address rely on this session's reference until a deletion hands them the row.
               if (hash) input.objects.refer(hash, session.id)
-              if (hash) {
-                for (const child of db.query<{ session_id: string }, [string, number]>("SELECT session_id FROM transcript_prefix WHERE parent_id = ? AND parent_seq = ?").all(session.id, row.seq)) input.objects.refer(hash, child.session_id)
-              }
               update.run(row.payload, session.id, row.seq)
             }
             markEvents.run(session.id, cursor)

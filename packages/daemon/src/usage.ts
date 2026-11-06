@@ -67,7 +67,7 @@ export function createUsageQuery(store: Store, defaultDirectory = process.cwd())
     const savings = store.usageScopes.savings({ ...range, directories: kind === "global" ? known : directories })
     // Calls outside turns: global shows every one, sessionless ones included; a scope shows those made for its directories.
     const auxiliary = store.usageAuxiliary.report(kind === "global" ? range : scoped)
-    return {
+    const report = {
       ...(savings.length ? { savings } : {}),
       ...(auxiliary.length ? { auxiliary } : {}),
       ...range,
@@ -82,6 +82,22 @@ export function createUsageQuery(store: Store, defaultDirectory = process.cwd())
         activity: store.usageScopes.activity(scoped), tools: store.usageScopes.tools(scoped, toolLimit < 0 ? Infinity : toolLimit), insights: store.usageScopes.insights({ ...scoped, today }),
       }),
     }
+    // Recovered external-harness usage is kept apart and added on top, never written into the native projections.
+    for (const row of store.usageRecovery.rows({ ...range, ...(kind === "global" ? {} : { directories }) })) {
+      if (!row.input && !row.output && !row.cacheRead && !row.cacheWrite) continue
+      let day = report.days.find((entry) => entry.day === row.day)
+      if (!day) {
+        day = { day: row.day, input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0, costMicros: 0, costUnknownCalls: 0, calls: 0, sessions: 0 }
+        report.days.push(day)
+      }
+      day.input += row.input; day.output += row.output; day.cacheRead += row.cacheRead; day.cacheWrite += row.cacheWrite
+      const model = `recovered:${row.engine}`
+      let group = report.models.find((entry) => entry.model === model)
+      if (!group) { group = { provider: row.engine, model, input: 0, output: 0, calls: 0, costMicros: 0, costUnknownCalls: 0 }; report.models.push(group) }
+      group.input += row.input; group.output += row.output
+    }
+    report.days.sort((a, b) => a.day.localeCompare(b.day))
+    return report
   }
 }
 

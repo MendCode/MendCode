@@ -4,6 +4,7 @@ import { ComputerSessionInput, ComputerObserveInput, ComputerCodeInput, Computer
 import { fail, type ComputerActivation, type ToolResult } from "@mendcode/tools"
 import { NotDelivered, type BatchOutcome, type ComputerAccessibility, type SemanticAction } from "./computer-accessibility"
 import { runComputerProgram } from "./computer-program"
+import { POOR_TREE_HINT, poorObservation } from "./computer-hints"
 
 type Audit = { action: string; revision: number; nodeID: string; result: "dispatched" | "failed" | "unknown"; at: number }
 type State = { id: string; sessionId: SessionId; sourceId: string; target: ComputerTarget; mode: "observe" | "control"; createdAt: number; expiresAt: number; lastActiveAt: number; revision: number; stopped: boolean; busy: boolean; program: boolean; abort: AbortController; observation?: ComputerObservation | undefined; audit: Audit[] }
@@ -300,7 +301,7 @@ export function createComputerSessions(os: ComputerAccessibility, now: () => num
           return guarded("Computer semantic observation", async () => {
             const input = ComputerObserveInput.parse(raw)
             const observation = await observe(input.computerSessionID, sessionId, signal)
-            return result("Computer semantic observation", { ...observation, ...(input.screenshot ? { screenshotFallback: "Call computer_capture for visual evidence: no arguments for the main display, or region set to the first node's bounds for this window (windowID there is a macOS number, not this session's handle); preview pixels are not control coordinates." } : {}) }, { computerSessionID: input.computerSessionID, revision: observation.revision, nodeCount: observation.nodes.length, truncated: observation.truncated })
+            return result("Computer semantic observation", { ...observation, ...(poorObservation(observation.nodes) ? { hint: POOR_TREE_HINT } : {}), ...(input.screenshot ? { screenshotFallback: "Call computer_capture for visual evidence: no arguments for the main display, or region set to the first node's bounds for this window (windowID there is a macOS number, not this session's handle); preview pixels are not control coordinates." } : {}) }, { computerSessionID: input.computerSessionID, revision: observation.revision, nodeCount: observation.nodes.length, truncated: observation.truncated })
           })
         },
         code(raw: ComputerCodeInput, abort: AbortSignal) {

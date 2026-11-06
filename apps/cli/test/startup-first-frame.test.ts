@@ -9,7 +9,7 @@ afterAll(cleanTemps)
  * (an ACP agent's or a provider's catalog), quotas, providers, the code graph. The first frame is drawn, and typing works, while
  * every one of them is still unanswered; they fill in when they come.
  */
-const SLOW = ["sidebar.get", "models.list", "providers.list", "usage.query", "quota.get", "changes.query", "mcp.status", "codegraph.status", "agents.list", "extensions.report", "session.list", "status.watch", "git.branch", "packages.list"]
+const SLOW = ["sidebar.get", "models.list", "providers.list", "usage.query", "quota.get", "changes.query", "mcp.status", "codegraph.status", "agents.list", "extensions.report", "session.list", "status.watch", "git.branch", "profiles.list"]
 
 function startingApp() {
   const unanswered: CommandInput[] = []

@@ -5,6 +5,7 @@ import type { CommandReply } from "@mendcode/client"
 import { readScratch, SCRATCH_MAX_CHARS, scratchPath, writeScratch } from "../src/ui/scratchpad"
 import { DOCK_HEIGHT, dockPanels, parseTodoText, renderDock, type DockInfo, type DockJob } from "../src/view/dock"
 import { createEditor } from "../src/view/editor"
+import { DEFAULT_TUI_PROFILE } from "../src/view/tui-profile"
 import { textWidth } from "../src/view/wrap"
 import { appHarness, cleanTemps, conversation, ids, NOW, plain, tempDir } from "./session-ui-harness"
 
@@ -19,7 +20,7 @@ const joined = (rows: ReturnType<typeof renderDock>) => rows.map(plain).join("\n
 
 describe("dock panels", () => {
   test("Questions, Jobs and the scratch note show only when there is something for them", () => {
-    const base = { width: 200, todos, subagents: [], info }
+    const base = { width: 200, todos, subagents: [], info, showJobs: true }
     expect(dockPanels(base)).toEqual(["todos", "info"])
     expect(dockPanels({ ...base, scratch: { lines: [""], editing: false } })).toEqual(["todos", "scratch", "info"])
     expect(dockPanels({ ...base, questions: [{ kind: "question", title: "Which file?" }], jobs: [job()], scratch: { lines: ["note"], editing: false }, subagents: [{ label: "x", status: "working", tone: "warning" }] })).toEqual(["todos", "questions", "subagents", "jobs", "scratch", "info"])
@@ -27,7 +28,7 @@ describe("dock panels", () => {
   })
 
   test("a narrow dock drops panels in order; compact mode keeps one full-width panel", () => {
-    const all = { todos, subagents: [{ label: "x", status: "working", tone: "warning" as const }], info, questions: [{ kind: "approval" as const, title: "Run command" }], jobs: [job()], scratch: { lines: ["note"], editing: false } }
+    const all = { showJobs: true, todos, subagents: [{ label: "x", status: "working", tone: "warning" as const }], info, questions: [{ kind: "approval" as const, title: "Run command" }], jobs: [job()], scratch: { lines: ["note"], editing: false } }
     const at = (width: number) => dockPanels({ width, ...all })
     expect(at(200)).toEqual(["todos", "questions", "subagents", "jobs", "scratch", "info"])
     expect(at(150)).toEqual(["todos", "questions", "subagents", "jobs", "info"])
@@ -38,7 +39,7 @@ describe("dock panels", () => {
   })
 
   test("Questions lists approvals with ! and questions with ?, with the count on the right", () => {
-    const text = joined(render(120, { questions: [{ kind: "approval", title: "Run command" }, { kind: "question", title: "Which file should I edit?" }] }))
+    const text = joined(render(140, { questions: [{ kind: "approval", title: "Run command" }, { kind: "question", title: "Which file should I edit?" }] }))
     expect(text).toContain("Questions")
     expect(text).toMatch(/Questions\s+2/)
     expect(text).toContain("! Run command")
@@ -46,7 +47,7 @@ describe("dock panels", () => {
   })
 
   test("Jobs shows this session's shell tasks: running ones with their elapsed time, finished ones with their exit status", () => {
-    const text = joined(render(140, { now: NOW, jobs: [job(), job({ command: "bun test", status: "exited", exitCode: 0, endedAt: NOW - 1_000 }), job({ command: "make", status: "exited", exitCode: 2 }), job({ command: "sleep 99", status: "killed" })] }))
+    const text = joined(render(140, { showJobs: true, now: NOW, jobs: [job(), job({ command: "bun test", status: "exited", exitCode: 0, endedAt: NOW - 1_000 }), job({ command: "make", status: "exited", exitCode: 2 }), job({ command: "sleep 99", status: "killed" })] }))
     expect(text).toContain("Jobs")
     expect(text).toContain("1 running")
     expect(text).toMatch(/• bun run dev\s+2m 5s/)
@@ -140,7 +141,7 @@ describe("the dock in the app", () => {
   test("Jobs asks for the background tasks when the dock opens and shows only this session's", async () => {
     const other = ids("session")
     let tasks: unknown[] = []
-    const h = appHarness({ reply: (command) => (command.type === "background.list" ? asReply({ ok: true, result: { tasks } }) : undefined) })
+    const h = appHarness({ hostProfile: { ...DEFAULT_TUI_PROFILE, dockJobs: true }, reply: (command) => (command.type === "background.list" ? asReply({ ok: true, result: { tasks } }) : undefined) })
     conversation(h.sessionId, (event) => h.app.onEvent(event)).exchange("hello", "hi")
     tasks = [
       { id: "bg1", sessionId: h.sessionId, command: "bun run dev", cwd: "/w", status: "running", startedAt: NOW - 65_000 },

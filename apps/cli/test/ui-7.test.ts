@@ -9,7 +9,7 @@ import { cpSync, readFileSync, readdirSync, writeFileSync } from "node:fs"
 import { petPreviewBox, renderPetPicker } from "../src/view/pet-picker"
 import { sizePet } from "../src/pets/frames"
 import type { ImagePlacement } from "../src/ui/image-layer"
-import { CUSTOMIZE_ROWS } from "../src/view/customize-page"
+import { CUSTOMIZE_ROWS, customizeSteps } from "../src/view/customize-page"
 import { DEFAULT_TUI_PROFILE, PROMPT_CHROMES, readTuiProfile, writeTuiProfile } from "../src/view/tui-profile"
 import { appHarness, cleanTemps, conversation, ids, mendRowIn, mendRows, NOW, tempDir } from "./session-ui-harness"
 
@@ -33,7 +33,7 @@ describe("UI-7 pet off reproduction", () => {
     else if (route === "slash") await h.type("/pet off\r")
     else {
       await h.type("/customize\r")
-      for (let i = 0; i < CUSTOMIZE_ROWS.indexOf("pet"); i++) await h.app.onKey("\x1b[B")
+      for (let i = 0; i < customizeSteps("pet", h.app.tuiProfile, { mode: h.app.viewMode }); i++) await h.app.onKey("\x1b[B")
       await h.app.onKey(" ")
       await h.app.onKey("\x1b")
     }
@@ -52,7 +52,7 @@ describe("UI-7 pet off reproduction", () => {
 
 async function customize(h: ReturnType<typeof appHarness>, field: typeof CUSTOMIZE_ROWS[number], key = " ") {
   await h.type("/customize\r")
-  for (let i = 0; i < CUSTOMIZE_ROWS.indexOf(field); i++) await h.app.onKey("\x1b[B")
+  for (let i = 0; i < customizeSteps(field, h.app.tuiProfile, { mode: h.app.viewMode }); i++) await h.app.onKey("\x1b[B")
   await h.app.onKey(key)
   h.app.render()
 }
@@ -113,8 +113,11 @@ test("one blank row between ordinary turns and classic remains selectable", asyn
   chat.exchange("First", "One")
   chat.exchange("Second", "Two")
   const rows = h.text(), at = rows.findIndex((row) => row.includes("• One"))
+  // The turn's closing line (`timestamps: bottom`) sits between the two, one blank row on each side, its text under the answer's.
   expect(rows[at + 1]!.trim()).toBe("")
-  expect(rows[at + 2]).toContain("› Second")
+  expect(rows[at + 2]).toMatch(/^ {4}took \d+s · ended \d{1,2}:\d{2} [AP]M$/)
+  expect(rows[at + 3]!.trim()).toBe("")
+  expect(rows[at + 4]).toContain("› Second")
   await customize(h, "messageLayout", "\x1b[C")
   await h.app.onKey("\x1b")
   expect(h.text().join("\n")).toContain("● You")
@@ -129,7 +132,7 @@ for (const chrome of PROMPT_CHROMES) test(`${chrome}: footer outside input with 
     const h = appHarness({ dataDir, width, height, directory: "/work/app" })
     conversation(h.sessionId, h.app.onEvent).exchange("Check", "Ready")
     await h.type("\x14")
-    const rows = h.text(), footer = rows.findLastIndex((row) => /Build/.test(row))
+    const rows = h.text(), footer = rows.findLastIndex((row) => /\/work\/app/.test(row))
     const bottom = rows.findLastIndex((row) => /─{10}|═{10}|={10}/.test(row))
     expect(h.frames.at(-1)).toHaveLength(height)
     expect(rows.every((row) => textWidth(row) <= width)).toBe(true)
@@ -290,11 +293,11 @@ for (const chrome of PROMPT_CHROMES) test(`${chrome}: tray and multiline prompt 
   conversation(h.sessionId, h.app.onEvent).exchange("Hello", "Ready")
   await h.type("\x1b[200~one\ntwo\nthree\nfour\nfive\nsix\x1b[201~\x18s")
   await h.type("tray note")
-  expect(h.text().at(-1)).toContain("Build")
+  expect(h.text().at(-1)).toContain("/work/app")
   let cursor = h.cursors.at(-1)!
   expect(h.text()[cursor.row]).toContain("tray note")
   await h.type("\x1b")
-  expect(h.text().at(-1)).toContain("Build")
+  expect(h.text().at(-1)).toContain("/work/app")
   cursor = h.cursors.at(-1)!
   expect(h.text()[cursor.row]).toContain("six")
   expect(h.app.editor.text).toBe("one\ntwo\nthree\nfour\nfive\nsix")

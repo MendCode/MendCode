@@ -25,6 +25,8 @@ export type ViewEntry = {
   render: (input: never) => unknown
   /** The old `api.view("slashMenu", ...)` registration. */
   legacy: boolean
+  /** What the view declared it draws itself (`handles` of `api.view`); the terminal draws the rest (docs/views.md). */
+  handles: readonly string[]
   /** The breaker opened: the view is not called until it is reset or reloaded. */
   disabled: boolean
   strikes: number
@@ -187,9 +189,13 @@ export function createViewRegistry(options: ViewRegistryOptions) {
   }
 
   return {
-    register(owner: string, slot: ViewSlot, render: (input: never) => unknown, legacy = false) {
-      entries.push({ owner, slot, render, legacy, disabled: false, strikes: 0, calls: 0, totalMs: 0, memo: new Map() })
+    register(owner: string, slot: ViewSlot, render: (input: never) => unknown, legacy = false, handles: readonly string[] = []) {
+      entries.push({ owner, slot, render, legacy, handles, disabled: false, strikes: 0, calls: 0, totalMs: 0, memo: new Map() })
       options.changed()
+    },
+    /** Whether the view answering for `slot` declared that it draws `part` of its model itself. */
+    handles(slot: ViewSlot, part: string): boolean {
+      return top(slot)?.handles.includes(part) === true
     },
     /** Whether a view that is not tripped answers for the slot. */
     has: (slot: ViewSlot) => top(slot) !== undefined,

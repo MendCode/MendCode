@@ -27,11 +27,25 @@ describe("doc search: words", () => {
     expect(wordsOf("MendCode runs PreToolUse hooks")).toEqual(["mendcode", "runs", "pretooluse", "hooks"])
     expect(queryStems(["contextWindow"])).toEqual(["contextwindow", "context", "window"])
   })
+  test("a search for the context window for all models finds the cards that name the default key and the per-model key, and the map says what global means", () => {
+    for (const query of ["context window", "context window all models", "default context window"]) {
+      const hits = searchCards(query.split(" "), cards).slice(0, 3).map((hit) => hit.topic)
+      expect([query, hits.some((topic) => ["change", "models", "compaction"].includes(topic))]).toEqual([query, true])
+    }
+    const text = (topic: string) => cards.find((card) => card.topic === topic)!.text
+    for (const topic of ["change", "models"]) {
+      expect(text(topic)).toContain("defaultContextWindow")
+      expect(text(topic)).toContain("modelContext")
+    }
+    expect(text("change")).toContain("/context-window 450k --always")
+    expect(text("change")).toMatch(/"Global" = every session[^.]*not "all models"/)
+    expect(text("change")).toMatch(/Never read MendCode's binary or source/)
+  })
   test("what a model typed when it looked for the window and the compaction point finds the card that answers, first", () => {
     const first = (query: string) => searchCards(query.split(" "), cards)[0]!.topic
     for (const query of ["context compaction", "compaction settings", "context window", "context-window reset", "global contextWindow settings", "compactAtTokens", "where does it compact"]) expect([query, first(query)]).toEqual([query, "compaction"])
     expect(first("settings config file")).toBe("settings")
-    expect(searchCards(["global", "contextWindow", "settings"], cards).slice(0, 2).map((hit) => hit.topic)).toEqual(["compaction", "settings"])
+    expect(searchCards(["global", "contextWindow", "settings"], cards).slice(0, 2).map((hit) => hit.topic)).toEqual(["compaction", "change"])
   })
   test("a query drops stop words and one-letter words, merges repeats, and keeps at most eight stems", () => {
     expect(queryStems(["how", "do", "I", "pause", "the", "agents", "agent"])).toEqual(["do", "pause", "agent"])

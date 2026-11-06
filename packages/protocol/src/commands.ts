@@ -9,6 +9,7 @@ import { ServerHealth, ServerMemory, ServerConfigGet, ServerConfigUpdate, Server
 import { MemoryControlInput, DreamControlInput } from "./memory-control"
 import { MemoryWorkspaceList, MemoryBrowse, MemorySharingStatus, MemorySharingConfigure, MemorySharingExport, MemorySharingImport } from "./memory-sharing"
 import { z } from "zod"
+import { currentSettingKeys } from "./settings-renames"
 import { attachmentPlacementProblem } from "./attachment-layout"
 import { MessagePart, MessagePartId, MessageTarget } from "./message-parts"
 import { PlanReviewReply } from "./plan-review"
@@ -439,6 +440,17 @@ export const DraftList = lazySchema(() => z.strictObject({
   maxAgeDays: z.number().int().min(1).max(3650).optional(),
 }))
 
+/** Reversible recovery of an external harness's token usage from its JSONL log. Ack result: the preview, the applied rows or `{ undone }`. */
+export const UsageRecover = lazySchema(() => z.strictObject({
+  ...base,
+  type: z.literal("usage.recover"),
+  sessionId: SessionId,
+  engine: z.enum(["claude", "codex", "pi"]),
+  action: z.enum(["preview", "apply", "undo"]),
+  file: z.string().min(1).max(4096).optional(),
+  fingerprint: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+}))
+
 /** Ack result: `UsageReport` for the inclusive local-day range. */
 export const UsageQuery = lazySchema(() => z.strictObject({
   ...base,
@@ -633,7 +645,7 @@ export const PrWatchControl = lazySchema(() => z.strictObject({
 /**
  * The PR reviewer (docs/pr-review.md), run by the daemon through the user's own forge CLI (`gh`, `glab`) or Gitea token: `watch-repo` reviews every new pull request and
  * new head of the session's repository (`directory` when given), `unwatch-repo` stops that, `review` reviews one PR now (`pr`: a
- * number, `#number` or a github.com pull URL; the current branch's PR when omitted), `list` shows the watches, `publish-on` and
+ * number, `#number` or a github.com pull URL; the current branch's PR when omitted), `describe` writes that PR's description from its review, `list` shows the watches, `publish-on` and
  * `publish-off` answer the one question asked before the first post to a repository; `role` is whose PRs a `watch-repo` takes. Notices go to `sessionId`. Needs
  * `experimental.pr_review`; local clients only. Ack: `{ text, watches }`, plus `dashboard` for `status` and `config` for the `config-*` actions.
  *
@@ -647,9 +659,11 @@ export const PrReviewControl = lazySchema(() => z.strictObject({
   ...base,
   type: z.literal("pr.review"),
   sessionId: SessionId,
-  action: z.enum(["watch-repo", "unwatch-repo", "review", "list", "publish-on", "publish-off", "status", "audit", "job-pause", "job-resume", "job-cancel", "job-retry", "take-over", "release", "config-show", "config-preview", "config-apply", "config-revert", "config-history"]),
+  action: z.enum(["setup-preview", "setup-apply", "watch-repo", "unwatch-repo", "review", "describe", "list", "publish-on", "publish-off", "status", "audit", "job-pause", "job-resume", "job-cancel", "job-retry", "take-over", "release", "config-show", "config-preview", "config-apply", "config-revert", "config-history"]),
   directory: z.string().min(1).max(4096).optional(),
   pr: z.string().min(1).max(300).optional(),
+  /** `review` only: review the head whole even when it was already reviewed with the same config (otherwise answered at once, nothing run). */
+  full: z.boolean().optional(),
   /** `watch-repo` only: `all` reviews every PR, `requested` only the ones that request this daemon's forge login; unset, the repo config's `reviewers`. */
   role: z.enum(["all", "requested"]).optional(),
   jobId: z.string().min(1).max(80).optional(),
@@ -666,6 +680,11 @@ export const SessionPermissionSet = lazySchema(() => z.strictObject({
   type: z.literal("session.permission.set"),
   sessionId: SessionId,
   mode: PermissionMode,
+  /**
+   * The prompt the caller will submit next (`launchOf`). From a session's shell, a mode above that session's own is then
+   * put to the user on one card instead of refused at once (docs/permissions.md); approved, only this prompt goes through.
+   */
+  launch: z.strictObject({ text: z.string().max(MAX_INLINE_TEXT), images: z.number().int().min(0).max(32) }).optional(),
 }))
 
 /**
@@ -790,6 +809,12 @@ export const StorageClean = lazySchema(() => z.strictObject({
   /** Also removes the daemon's merged, clean, unused worktrees idle `worktreeIdleDays` (default 14) and old trash. Local only. */
   worktrees: z.boolean().optional(),
   worktreeIdleDays: z.number().int().min(0).max(3650).optional(),
+  /** Instead of removing worktrees: removes heavy ignored output (dist, target, .next) of idle worktrees and stale `bun build` leftovers. Local only. */
+  artifacts: z.boolean().optional(),
+  /** Also removes worktrees git lists that MendCode did not make, when clean, merged and idle. Local only. */
+  external: z.boolean().optional(),
+  /** Only the worktree part: no session retention, vacuum or compaction (`mendcode worktrees gc`). Local only. */
+  worktreesOnly: z.boolean().optional(),
 }))
 
 /** Lists the worktrees the daemon created (size, state, whether cleaning would remove them) and the trash. Local only. Ack: `StorageWorktreesReport`. */
@@ -797,6 +822,12 @@ export const StorageWorktrees = lazySchema(() => z.strictObject({
   ...base,
   type: z.literal("storage.worktrees"),
   idleDays: z.number().int().min(0).max(3650).optional(),
+  /** Also lists heavy ignored output and stale build leftovers. */
+  artifacts: z.boolean().optional(),
+  /** "cached": answer at once with the sizes already known (unknown ones flagged); "full" (default) measures every worktree first. */
+  measure: z.enum(["cached", "full"]).optional(),
+  /** Also lists the worktrees git knows in each project that MendCode did not make. */
+  external: z.boolean().optional(),
 }))
 
 /** Ack result: `ContextReport`; `invalid_command` when the engine cannot report its context. */
@@ -1088,7 +1119,8 @@ export const AcpRegistry = lazySchema(() => z.strictObject({
 export const SettingsSet = lazySchema(() => z.strictObject({
   ...base,
   type: z.literal("settings.set"),
-  patch: z.record(z.string(), z.unknown()),
+  /** Names renamed in a later version (`profiles` is now `areas`) are read as their current names. */
+  patch: z.record(z.string(), z.unknown()).transform(currentSettingKeys),
 }))
 
 /** Read-only: never starts a server. Ack: `McpStatusReport` (configured servers of `directory` plus config issues). */
@@ -1132,7 +1164,7 @@ export const ToolsTrust = lazySchema(() => z.strictObject({
 
 /**
  * Lists the extensions (TypeScript modules: hooks, tools, commands, terminal slots) of a project root: the user's,
- * packages' and the project's own. Loads them on first use; project ones only when the directory is trusted
+ * profiles' and the project's own. Loads them on first use; project ones only when the directory is trusted
  * (`tools.trust`). Ack: `ExtensionsReport`.
  */
 export const ExtensionsList = lazySchema(() => z.strictObject({
@@ -1142,7 +1174,7 @@ export const ExtensionsList = lazySchema(() => z.strictObject({
 }))
 
 /**
- * Lists the shell command hooks (`hooks.json`) configured for a project root: the user's, packages' and the project's own,
+ * Lists the shell command hooks (`hooks.json`) configured for a project root: the user's, profiles' and the project's own,
  * which of them run (project ones only when the directory is trusted, `tools.trust`), the recent runs, and what in the
  * project still waits for trust. Local clients only; never a read-only (remote) command. Ack: `HooksReport`.
  */
@@ -1164,20 +1196,20 @@ export const ExtensionsDisable = lazySchema(() => z.strictObject({ ...base, type
 export const ExtensionsFlags = lazySchema(() => z.strictObject({ ...base, type: z.literal("extensions.flags"), sessionId: SessionId, flags: z.record(z.string().regex(/^[a-z][a-z0-9-]{0,39}$/), z.union([z.string().min(1).max(300), z.boolean()])).refine((flags) => Object.keys(flags).length <= 16, "at most 16 extension flags") }))
 export const ExtensionsExport = lazySchema(() => z.strictObject({ ...base, type: z.literal("extensions.export"), directory: z.string().min(1).max(4096) }))
 
-/** Lists installed packages for a project root (the user's and the project's). Ack: `PackagesReport`. */
+/** Lists installed profiles for a project root (the user's and the project's). Ack: `PackagesReport`. */
 export const PackagesList = lazySchema(() => z.strictObject({
   ...base,
-  type: z.literal("packages.list"),
+  type: z.literal("profiles.list"),
   directory: z.string().min(1).max(4096),
 }))
 
 /**
- * Installs a package from a local folder or git (`github:owner/repo#ref`, `git:<url>`, `https://…`). The daemon
+ * Installs a profile from a local folder or git (`github:owner/repo#ref`, `git:<url>`, `https://…`). The daemon
  * stages, audits (manifest, links, secrets, size) and moves it into place. Ack: `PackagesReport` after the install.
  */
 export const PackagesInstall = lazySchema(() => z.strictObject({
   ...base,
-  type: z.literal("packages.install"),
+  type: z.literal("profiles.install"),
   directory: z.string().min(1).max(4096),
   source: z.string().min(1).max(2048),
   scope: z.enum(["user", "project"]),
@@ -1185,45 +1217,45 @@ export const PackagesInstall = lazySchema(() => z.strictObject({
 }))
 
 /**
- * Saves the user's stored terminal profile as a user package named `name` whose activation sets those keys (`activate.tuiProfile`,
- * keys a package may set only), then installs it like `packages.install`: a look to switch to later from `/packages`. It copies no
+ * Saves the user's stored terminal profile as a user profile named `name` whose activation sets those keys (`activate.tuiProfile`,
+ * keys a profile may set only), then installs it like `profiles.install`: a look to switch to later from `/profiles`. It copies no
  * code, keybindings or settings. Ack: `PackagesReport`.
  */
 export const PackagesCapture = lazySchema(() => z.strictObject({
   ...base,
-  type: z.literal("packages.capture"),
+  type: z.literal("profiles.capture"),
   directory: z.string().min(1).max(4096),
   name: z.string().regex(/^[a-z0-9][a-z0-9._-]{0,63}$/),
   replace: z.boolean().optional(),
 }))
 
-/** Removes an installed package: it moves to the Trash (restorable with `packages.restore` for 30 days) unless `purge` deletes it. Ack: `PackagesReport`. */
+/** Removes an installed profile: it moves to the Trash (restorable with `profiles.restore` for 30 days) unless `purge` deletes it. Ack: `PackagesReport`. */
 export const PackagesRemove = lazySchema(() => z.strictObject({
   ...base,
-  type: z.literal("packages.remove"),
+  type: z.literal("profiles.remove"),
   directory: z.string().min(1).max(4096),
   name: z.string().min(1).max(64),
   scope: z.enum(["user", "project"]),
   purge: z.boolean().optional(),
 }))
 
-/** Brings the newest trashed copy of a removed package back (disabled until enabled). Ack: `PackagesReport`. */
+/** Brings the newest trashed copy of a removed profile back (disabled until enabled). Ack: `PackagesReport`. */
 export const PackagesRestore = lazySchema(() => z.strictObject({
   ...base,
-  type: z.literal("packages.restore"),
+  type: z.literal("profiles.restore"),
   directory: z.string().min(1).max(4096),
   name: z.string().min(1).max(64),
   scope: z.enum(["user", "project"]),
 }))
 
 /**
- * Turns an installed package on or off without removing it. Enabling checks the package's `compatibility` and, when it
- * brings a look, claims it: another package that owns the look is replaced only with `switch`. Ack: `PackagesReport`;
+ * Turns an installed profile on or off without removing it. Enabling checks the profile's `compatibility` and, when it
+ * brings a look, claims it: another profile that owns the look is replaced only with `switch`. Ack: `PackagesReport`;
  * everyone gets `settings.changed`.
  */
 export const PackagesEnable = lazySchema(() => z.strictObject({
   ...base,
-  type: z.literal("packages.enable"),
+  type: z.literal("profiles.enable"),
   directory: z.string().min(1).max(4096),
   key: z.string().min(1).max(200),
   enabled: z.boolean(),
@@ -1307,7 +1339,7 @@ export const ProvidersRefresh = lazySchema(() => z.strictObject({
   provider: ProviderId,
 }))
 
-/** Theme files (`themes/<name>.json`) of every extension layer for a project, parsed but not validated. Ack: `ThemesReport`. */
+/** Theme files (`themes/<name>.json`) and footer pack files (`footer-packs/<name>.json`) of every extension layer for a project, parsed but not validated. Ack: `ThemesReport`. */
 export const ThemesList = lazySchema(() => z.strictObject({
   ...base,
   type: z.literal("themes.list"),
@@ -1323,9 +1355,10 @@ export const DreamStart = lazySchema(() => z.strictObject({
 
 /**
  * `/btw`: a side question about a session. It reads the conversation but never enters it and never waits for or
- * interrupts the running turn. Ack: `{ text }`, the answer.
+ * interrupts the running turn. Ack: `{ text }`, the answer. `session.aside.get` answers `{ thread }`, and with `history` also
+ * `{ history }`: the side chats cleared before, newest first.
  */
-export const AsideGet = lazySchema(() => z.strictObject({ ...base, type: z.literal("session.aside.get"), sessionId: SessionId }))
+export const AsideGet = lazySchema(() => z.strictObject({ ...base, type: z.literal("session.aside.get"), sessionId: SessionId, history: z.boolean().optional() }))
 export const AsideClear = lazySchema(() => z.strictObject({ ...base, type: z.literal("session.aside.clear"), sessionId: SessionId }))
 export const GitStatus = lazySchema(() => z.strictObject({ ...base, type: z.literal("git.status"), directory: z.string().min(1).max(4096) }))
 /**
@@ -1374,12 +1407,20 @@ const loopFields = lazyValue(() => ({
   costBudget: LoopCostBudget.optional(),
   rubric: LoopRubric.optional(),
   approvalPolicy: LoopApprovalPolicy.optional(),
+  /** Where a run's notice goes: the creator session (default when known) or nowhere. */
+  notify: z.enum(["creator", "none"]).optional(),
+  /** The permission mode the loop's sessions use; never above the creator's. Report-only runs are plan mode whatever this says. */
+  permission: PermissionMode.optional(),
+  /** Paths outside the project the runs will read (approved once with the loop). */
+  reads: z.array(z.string().min(1).max(4096)).max(10).optional(),
 }))
 
 export const LoopCreate = lazySchema(() => z.strictObject({
   ...base,
   type: z.literal("loop.create"),
   directory: z.string().min(1).max(4096),
+  /** The session `/loop` was typed in: the loop inherits its permission mode and reads, and reports back to it. */
+  creatorSessionId: SessionId.optional(),
   ...loopFields(),
 }).refine((command) => command.template !== undefined || (command.objective !== undefined && command.trigger !== undefined && command.budget !== undefined), {
   message: "without a template, objective, trigger and budget are required",
@@ -1393,6 +1434,12 @@ export const LoopUpdate = lazySchema(() => z.strictObject({
   loopId: LoopId,
   ...z.strictObject(loopFields()).partial().shape,
 }))
+
+/**
+ * `/loop` could not read the schedule of a phrase locally: the small role turns it into a trigger in the strict form
+ * (`every 5m`, `daily 09:00`, `adaptive 10m`, `now`) and the objective. One short model call, no tools. Ack: `{ trigger, objective }`.
+ */
+export const LoopInterpret = lazySchema(() => z.strictObject({ ...base, type: z.literal("loop.interpret"), text: z.string().min(1).max(2_000), directory: z.string().min(1).max(4096).optional() }))
 
 /** Read-only. Ack: `{ templates: LoopTemplateInfo[] }`. */
 export const LoopTemplates = lazySchema(() => z.strictObject({ ...base, type: z.literal("loop.templates") }))
@@ -1767,6 +1814,15 @@ export const SessionLabel = lazySchema(() => z.strictObject({
  */
 export const SessionRecap = lazySchema(() => z.strictObject({ ...base, type: z.literal("session.recap"), sessionId: SessionId, refresh: z.boolean().optional() }))
 
+/**
+ * `/whatsnew` (docs/whats-new.md): one model call (the aside role, else the session's model) that reads the changes the terminal
+ * sends with this machine's memories, effective settings and recent session titles of `directory`, and answers which of them fit
+ * the user. Local terminals only. `dryRun` builds the request and returns its model and estimated tokens without calling it.
+ * Ack: `{ model, estimate, suggestions?, usage? }`; a suggestion's `patch` was validated as `settings.set` would and comes with its `diff`.
+ * `changes` is at most `WHATS_NEW_MAX_CHANGES` (changelog.ts; written out here so the protocol does not load that module).
+ */
+export const WhatsNewAsk = lazySchema(() => z.strictObject({ ...base, type: z.literal("whatsnew.ask"), directory: z.string().min(1).max(4096), sessionId: SessionId.optional(), version: z.string().min(1).max(80), changes: z.string().min(1).max(16_000), dryRun: z.boolean().optional() }))
+
 export const SessionChildren = lazySchema(() => z.strictObject({ ...base, type: z.literal("session.children"), sessionId: SessionId }))
 export const SessionBackgroundList = lazySchema(() => z.strictObject({ ...base, type: z.literal("session.background.list"), directory: z.string().max(4096).optional() }))
 export const SessionBackgroundRegister = lazySchema(() => z.strictObject({ ...base, type: z.literal("session.background.register"), sessionId: SessionId, ...SessionBackgroundPatch.shape }))
@@ -1981,6 +2037,7 @@ export const COMMAND_SCHEMAS = {
   "loop.control": LoopControl,
   "loop.fire": LoopFire,
   "loop.templates": LoopTemplates,
+  "loop.interpret": LoopInterpret,
   "workflow.start": WorkflowStart,
   "workflow.list": WorkflowList,
   "workflow.get": WorkflowGet,
@@ -2040,6 +2097,7 @@ export const COMMAND_SCHEMAS = {
   "secrets.reveal": SecretsReveal,
   "secrets.forget": SecretsForget,
   "usage.query": UsageQuery,
+  "usage.recover": UsageRecover,
   "usage.waste": UsageWasteQuery,
   "daemon.shutdown": DaemonShutdown,
   "daemon.info": DaemonInfo,
@@ -2113,12 +2171,12 @@ export const COMMAND_SCHEMAS = {
   "extensions.disable": ExtensionsDisable,
   "extensions.flags": ExtensionsFlags,
   "extensions.export": ExtensionsExport,
-  "packages.list": PackagesList,
-  "packages.install": PackagesInstall,
-  "packages.capture": PackagesCapture,
-  "packages.remove": PackagesRemove,
-  "packages.restore": PackagesRestore,
-  "packages.enable": PackagesEnable,
+  "profiles.list": PackagesList,
+  "profiles.install": PackagesInstall,
+  "profiles.capture": PackagesCapture,
+  "profiles.remove": PackagesRemove,
+  "profiles.restore": PackagesRestore,
+  "profiles.enable": PackagesEnable,
   "themes.list": ThemesList,
   "status.watch": StatusWatch,
   "recipes.list": RecipesList,
@@ -2198,6 +2256,7 @@ export const COMMAND_SCHEMAS = {
   "session.merge": SessionMerge,
   "session.label": SessionLabel,
   "session.recap": SessionRecap,
+  "whatsnew.ask": WhatsNewAsk,
   "session.children": SessionChildren,
   "session.background.list": SessionBackgroundList,
   "session.background.register": SessionBackgroundRegister,
@@ -2248,22 +2307,22 @@ export const COMMAND_SCHEMAS = {
   "session.message.delete": SessionDeleteMessage,
   "session.part.delete": SessionDeletePart,
   "session.part.update": SessionUpdatePart,
-  "packages.search": PackagesSearch,
-  "packages.show": PackagesShow,
-  "packages.preview": PackagesPreview,
-  "packages.sources": PackagesSources,
-  "packages.add-source": PackagesAddSource,
-  "packages.remove-source": PackagesRemoveSource,
-  "packages.install-catalog": PackagesInstallCatalog,
-  "packages.install-source": PackagesInstallSource,
-  "packages.disable-all": PackagesDisableAll,
-  "packages.assets": PackagesAssets,
-  "packages.refresh": PackagesRefresh,
-  "packages.config": PackagesConfig,
-  "packages.resource": PackagesResource,
-  "packages.create": PackagesCreate,
-  "packages.update": PackagesUpdate,
-  "packages.delete-local": PackagesDeleteLocal,
+  "profiles.search": PackagesSearch,
+  "profiles.show": PackagesShow,
+  "profiles.preview": PackagesPreview,
+  "profiles.sources": PackagesSources,
+  "profiles.add-source": PackagesAddSource,
+  "profiles.remove-source": PackagesRemoveSource,
+  "profiles.install-catalog": PackagesInstallCatalog,
+  "profiles.install-source": PackagesInstallSource,
+  "profiles.disable-all": PackagesDisableAll,
+  "profiles.assets": PackagesAssets,
+  "profiles.refresh": PackagesRefresh,
+  "profiles.config": PackagesConfig,
+  "profiles.resource": PackagesResource,
+  "profiles.create": PackagesCreate,
+  "profiles.update": PackagesUpdate,
+  "profiles.delete-local": PackagesDeleteLocal,
   "plugins.install": PluginsInstall,
   "plugins.auth-methods": PluginsAuthMethods,
   "plugins.auth-start": PluginsAuthStart,
@@ -2383,11 +2442,24 @@ export const Command = lazySchema(() => z.discriminatedUnion("type", Object.valu
 export type Command = z.infer<typeof Command>
 export type CommandType = Command["type"]
 
+/** Command types of an older client that the current name replaces: `packages.*` is now `profiles.*`. */
+const LEGACY_COMMAND_PREFIXES: ReadonlyArray<readonly [string, string]> = [["packages.", "profiles."]]
+
+/** `input` with an older command `type` under its current name; anything else is returned as it is. */
+function withCurrentType(input: unknown): unknown {
+  if (typeof input !== "object" || input === null) return input
+  const type = (input as { type?: unknown }).type
+  if (typeof type !== "string") return input
+  const legacy = LEGACY_COMMAND_PREFIXES.find(([old]) => type.startsWith(old))
+  return legacy ? { ...input, type: legacy[1] + type.slice(legacy[0].length) } : input
+}
+
 /**
  * Validates one command with the schema its `type` names. Same result and issues as `Command.safeParse`; only the
  * schema of that command is built. An unknown or missing `type` goes through the full union for its error message.
  */
 export function parseCommand(input: unknown): z.ZodSafeParseResult<Command> {
+  input = withCurrentType(input)
   const type = typeof input === "object" && input !== null ? (input as { type?: unknown }).type : undefined
   const schema: z.ZodType<Command> = typeof type === "string" && Object.hasOwn(COMMAND_SCHEMAS, type) ? COMMAND_SCHEMAS[type as CommandType] : Command
   return schema.safeParse(input)

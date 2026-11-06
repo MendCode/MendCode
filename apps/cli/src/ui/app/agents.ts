@@ -1,6 +1,6 @@
 import type { SessionId, CustomToolsReport, McpStatusReport, PackageConfigReport, PackagesReport, GlobalEvent, SessionSummary, AgentCommandsReport, McpCatalogReport, McpResourceContent } from "@mendcode/protocol"
 import type { AgentShell, AgentSubtask } from "../../view/agents-page"
-import { taskUsage } from "../../view/tasks-page"
+import { taskUsage } from "../../view/task-usage"
 import type { CommandInput } from "@mendcode/client"
 import type { AppContext } from "./context"
 
@@ -176,11 +176,11 @@ export function createAgents(ctx: AppContext) {
     requestFrame()
   }
 
-  /** Lists packages, or runs a packages command whose ack is the fresh report; `done` becomes the notice on success. */
+  /** Lists profiles, or runs a profiles command whose ack is the fresh report; `done` becomes the notice on success. */
   async function loadPackages(command?: CommandInput, done?: string) {
-    const reply = await input.send(command ?? { type: "packages.list", directory: input.directory ?? "" })
-    if (reply.ok && (command?.type === "packages.config" || command?.type === "packages.resource")) {
-      // Resource switches of one package: shown by the page's config view, the installed list is unchanged.
+    const reply = await input.send(command ?? { type: "profiles.list", directory: input.directory ?? "" })
+    if (reply.ok && (command?.type === "profiles.config" || command?.type === "profiles.resource")) {
+      // Resource switches of one profile: shown by the page's config view, the installed list is unchanged.
       const found = (reply.result as PackageConfigReport).packages[0]
       if (state.packagesState.config && found?.key === state.packagesState.config.key) state.packagesState.config.resources = found.resources
       state.packagesError = ""
@@ -189,8 +189,8 @@ export function createAgents(ctx: AppContext) {
       state.packagesReport = reply.result as PackagesReport
       state.packagesError = ""
       if (done) state.notice = done
-    } else if (command?.type === "packages.enable" && command.enabled && /--switch/.test(reply.error.message)) {
-      // Another package owns the look: turning this one on is the switch the user asked for, so it is made at once and the notice
+    } else if (command?.type === "profiles.enable" && command.enabled && /--switch/.test(reply.error.message)) {
+      // Another profile owns the look: turning this one on is the switch the user asked for, so it is made at once and the notice
       // says which one went off. Turning that one back on switches back.
       const owner = /(\S+) owns the look/.exec(reply.error.message)?.[1]
       return loadPackages({ ...command, switch: true }, owner ? `${command.key} on · ${owner} off` : `${command.key} on`)

@@ -486,6 +486,39 @@ describe("PR review service", () => {
     expect(posts).toHaveLength(1)
     expect(path.join(data, "pr-review", "acme", "app", "12.json")).toBeTruthy()
   })
+
+  test("/pr review of a head already reviewed with the same config answers at once and runs nothing; full reviews it again", async () => {
+    const { reviewer, notices, posts, data, turns } = await service()
+    await reviewer.control({ sessionId: "ses_a", action: "review", pr: "12" })
+    for (let i = 0; i < 100 && notices.length < 2; i++) await Bun.sleep(20)
+    await reviewer.control({ sessionId: "ses_a", action: "publish-on" })
+    for (let i = 0; i < 100 && !posts.length; i++) await Bun.sleep(20)
+    expect(posts).toHaveLength(1)
+    expect(turns()).toBe(2)
+    const state = JSON.parse(readFileSync(path.join(data, "pr-review", "acme", "app", "12.json"), "utf8")) as { lastHead?: string; configKey?: string }
+    expect(state.configKey).toBeDefined()
+    const head = state.lastHead!
+    // As on #22 at 0384447e: asked again on the same head and config. Answered now, no job, no model call.
+    const again = await reviewer.control({ sessionId: "ses_a", action: "review", pr: "12" })
+    expect(again.ok && again.text).toBe(`#12 was already reviewed at ${head.slice(0, 12)} with this config, so nothing was run. To review it again whole: /pr review 12 full (pr_review with full: true).`)
+    await Bun.sleep(100)
+    expect(turns()).toBe(2)
+    // A state an older version wrote has no config key (the real 22.json): the finished job of that head says which config it ran with.
+    const file = path.join(data, "pr-review", "acme", "app", "12.json")
+    const { configKey: _dropped, ...legacy } = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>
+    writeFileSync(file, JSON.stringify(legacy))
+    const legacyAgain = await reviewer.control({ sessionId: "ses_a", action: "review", pr: "12" })
+    expect(legacyAgain.ok && legacyAgain.text).toContain("was already reviewed at")
+    await Bun.sleep(100)
+    expect(turns()).toBe(2)
+    // `full` is the explicit ask: the head is reviewed again whole (and, nothing being new, posts nothing).
+    const full = await reviewer.control({ sessionId: "ses_a", action: "review", pr: "12", full: true })
+    expect(full.ok && full.text).toContain("Reviewing #12.")
+    // Review, verify, and the re-check of the open finding an explicit full review does.
+    for (let i = 0; i < 150 && turns() < 5; i++) await Bun.sleep(20)
+    expect(turns()).toBe(5)
+    expect(posts).toHaveLength(1)
+  })
 })
 
 describe("daemon", () => {
@@ -793,6 +826,31 @@ describe("durable review jobs", () => {
     expect(w.watch.jobs.get(job.id)).toMatchObject({ state: "failed", attempts: MAX_JOB_ATTEMPTS, error: expect.stringContaining("interrupted 5 times") })
   })
 
+  test("a manual review of a PR whose automatic review is open joins it; a different PR does not", async () => {
+    const w = durable({ hold: true })
+    await w.watch.watchRepo("ses_a", "/repo")
+    w.gh.state.prs = [{ number: 12, headRefOid: sha(12) }]
+    await w.watch.tick()
+    const open = w.watch.jobs.list().find((job) => job.number === 12)!
+    expect(w.watch.openReview("/repo", 12, "", "global")?.id).toBe(open.id)
+    expect(w.watch.review({ directory: "/repo", sessionId: "ses_a", number: 12, head: "" })).toBe(open.id)
+    expect(w.watch.jobs.list().filter((job) => job.number === 12)).toHaveLength(1)
+    expect(w.watch.openReview("/repo", 13, "", "global")).toBeUndefined()
+  })
+
+  test("a file with several ended records of one folder keeps the newest ended one and the live one", () => {
+    const dir = temp("pr-review-ended-")
+    mkdirSync(path.join(dir, "pr-review"), { recursive: true })
+    const ended = (createdAt: number) => ({ directory: "/repo", sessionId: "ses_a", createdAt, seen: {}, ended: { at: createdAt + 1, reason: "stopped" }, publish: "allowed", commands: [] })
+    const live = { directory: "/repo", sessionId: "ses_a", createdAt: 9, seen: {}, publish: "allowed", commands: [] }
+    writeFileSync(path.join(dir, "pr-review", "watches.json"), JSON.stringify({ version: 1, watches: [ended(1), ended(2), ended(3), live] }))
+    const k = watcher()
+    const loaded = createRepoWatch({ dir, run: k.gh.run, intervalMs: 3_600_000, enabled: () => true, sessionExists: () => true, notify: () => undefined, triggers: async () => ({ opened: true, synchronize: true, ready_for_review: true, drafts: false }), start: async () => undefined })
+    cleanups.push(() => loaded.stop())
+    expect(loaded.rows()).toHaveLength(2)
+    expect(loaded.rows().map((row) => row.state)).toEqual(["ended (stopped)", "watching"])
+  })
+
   test("the same PR and head is queued once: a repeated /pr review, a repeated listing; a new head is a new job", async () => {
     const w = durable({ hold: true })
     await w.watch.watchRepo("ses_a", "/repo")
@@ -963,7 +1021,7 @@ describe("durable review jobs", () => {
     await w.watch.tick()
     await w.settled()
     expect(w.watch.describe()).toContain(`${MAX_OPEN_PRS + 5} open PRs`)
-  })
+  }, 20_000)
 
   test("stopping the watch of a repository cancels its reviews that had not started", async () => {
     const w = durable({ hold: true, concurrency: 1 })

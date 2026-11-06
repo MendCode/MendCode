@@ -3,3 +3,7 @@ packages:
   - "apps/*"
   - "features/*"
   - "spikes/*"
+
+# pnpm 11 no longer reads package.json's pnpm.patchedDependencies.
+patchedDependencies:
+  zod@4.6.6: patches/zod@4.6.6.patch

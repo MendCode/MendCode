@@ -307,6 +307,9 @@ describe("the paths a model takes, end to end", () => {
     expect(text.indexOf("Multi-row footers are settings")).toBe(0)
     expect(text.slice(0, 160)).toContain("an extension is only for data MendCode does not have")
     for (const word of ["footerRows", "footerIcons", "footerText", "/footer preset", "quotaRefresh", "never in prompt.above", "set it when the user asks for live usage"]) expect(text).toContain(word)
+    // The user's own footer rows are edited, never swapped for a preset, and the one-row keys are named as doing nothing there.
+    expect(text).toContain("The user's footer wins")
+    expect(text).toContain("never swap in a preset")
     // Every preset the card lists exists, and every preset that exists is listed.
     const listed = /\/footer preset ([a-z|]+)/.exec(text)![1]!.split("|")
     expect(listed.sort()).toEqual([...FOOTER_PRESET_NAMES].sort())

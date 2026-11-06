@@ -1,3 +1,4 @@
+import { foldForPage } from "./caps-pages"
 import type { createSession } from "./session"
 import { modelWithEffort } from "../../view/model-label"
 import { chipRowAttachments, liveAttachments } from "../../view/attachments"
@@ -30,6 +31,7 @@ import { createBlockCopy } from "./block-copy"
 import { footerShowsModel } from "../../view/tui-profile"
 import { fileInSlot, panelWanted } from "./file-slot"
 import { queuePolicy } from "./queue-policy"
+import { wheelStep } from "./page-wheel"
 
 export function createKeys(ctx: AppContext, actions: {
   slashMenu: ReturnType<typeof import("./slash-menu").createSlashMenu>
@@ -96,7 +98,7 @@ export function createKeys(ctx: AppContext, actions: {
   keepDiscarded: ReturnType<typeof createPrompt>["keepDiscarded"]
   onEscape: () => Promise<void>
   scrollApproval: (direction: -1 | 1) => boolean
-  resolveRequest: (choice: ApprovalChoice["choice"]) => Promise<void>
+  resolveRequest: (choice: ApprovalChoice["choice"], label?: string) => Promise<void>
   toggleApprovalExplain: () => boolean
   submit: () => Promise<void>
   loadCustomCommands: ReturnType<typeof createPrompt>["loadCustomCommands"]
@@ -113,7 +115,7 @@ export function createKeys(ctx: AppContext, actions: {
   restoreStash: ReturnType<typeof createPrompt>["restoreStash"]
   editInExternalEditor: ReturnType<typeof createPrompt>["editInExternalEditor"]
   copyAnswer: ReturnType<typeof createPrompt>["copyAnswer"]
-  setPermission: (next: PermissionMode) => Promise<void>
+  setPermission: (next: PermissionMode) => Promise<boolean>
   takeModels: ReturnType<typeof createModel>["takeModels"]
   changeModelPrefs: ReturnType<typeof createModel>["changeModelPrefs"]
   switchSession: ReturnType<typeof createSession>["switchSession"]
@@ -162,6 +164,18 @@ export function createKeys(ctx: AppContext, actions: {
    * paste…) saves that text as a draft entry of the project's history, with a one-line toast.
    */
   async function onKey(key: string) {
+    if ((key === "\x1bOS" || key === "\x1b[14~") && state.commandOutput && !state.commandOutputReturn) {
+      const output = state.commandOutput
+      const parent = state.page
+      const { preload, createTextPageState } = await import("../lazy-pages")
+      await preload("recap")
+      if (state.page !== parent) return
+      state.commandOutputReturn = { page: parent, ...(state.textPage ? { text: state.textPage } : {}), ...(state.textReturn ? { textReturn: state.textReturn } : {}) }
+      state.textPage = createTextPageState({ title: output.title, sections: [{ lines: [output.message, ...(output.hint ? [output.hint] : [])] }] })
+      state.page = "text"
+      ctx.toasts.dismiss()
+      return requestFrame()
+    }
     const before = plainPrompt() ? editor.text : ""
     const submits = state.submits
     await handleKey(key)
@@ -172,8 +186,12 @@ export function createKeys(ctx: AppContext, actions: {
   }
 
   async function handleKey(typed: string) {
+    // Back in the chat the trail is over: a page opened from here later has no parent page.
+    if (state.page === "chat") state.pageSeen = undefined
     // Before anything drops the selection or types the key: Option+Q arriving as `œ` is the comment key where that key means something (ui/app/option-keys.ts).
-    const key = optionKeys.rewrite(typed, plainPrompt() && !MOUSE_SGR.test(typed) && !(vimLive() && vim.mode !== "insert"))
+    const rewritten = optionKeys.rewrite(typed, plainPrompt() && !MOUSE_SGR.test(typed) && !(vimLive() && vim.mode !== "insert"))
+    // Caps Lock: a page of letter shortcuts reads `Q` as `q` (ui/app/caps-pages.ts).
+    const key = foldForPage(state, rewritten)
     // The tutorial's practice chat is a whole terminal of its own: every key (ctrl+c and esc included) is its, never this one's.
     if (state.page === "tutorial") return MOUSE_SGR.test(key) ? undefined : pageKey(key)
     // An extension modal owns the keyboard while it is open, ctrl+c included (it closes the modal); mouse reports are dropped.
@@ -263,11 +281,11 @@ export function createKeys(ctx: AppContext, actions: {
       // A transcript selection stays on its text while the wheel moves it, so a drag can reach past one screen.
       if (state.page === "chat") mouseSelection.scrollUnder(-wheel * notch)
       else state.selection = undefined
-      if (state.page === "sessions" || state.page === "changes") for (let i = 0; i < (state.page === "changes" ? notch : 1); i++) await pageKey(wheel < 0 ? "\x1b[A" : "\x1b[B")
-      // Pages that read like a list scroll the way their keys do: help by lines, settings by rows (not while a value is typed), context by pages.
-      else if (state.page === "help") for (let i = 0; i < notch; i++) await pageKey(wheel < 0 ? "\x1b[A" : "\x1b[B")
-      else if (state.page === "settings" && !state.settingsPageState.tui && state.settingsPageState.typing === undefined) await pageKey(wheel < 0 ? "\x1b[A" : "\x1b[B")
-      else if (state.page === "context") await pageKey(wheel < 0 ? "\x1b[5~" : "\x1b[6~")
+      // Every page with rows or text scrolls the way its own keys do (ui/app/page-wheel.ts); not while a value is typed.
+      const customizing = state.page === "customize" || state.page === "settings" && state.settingsPageState.tui
+      const typing = state.page === "customize" || state.page === "settings" ? customizing ? state.customizeState.typing !== undefined || state.customizeState.menu !== undefined : state.settingsPageState.typing !== undefined : false
+      const step = wheelStep({ page: state.page, usageTab: state.page === "usage" ? state.usageState.tab : undefined, typing })
+      if (step) for (let i = 0; i < (step.repeat === "notch" ? notch : 1); i++) await pageKey(wheel < 0 ? step.up : step.down)
       return requestFrame()
     }
     const menu = state.page === "chat" && editor.lines().length === 1 && !state.shellMode && !pendingPanelRequest() ? actions.slashMenu.model(chatWidth(), Math.max(3, height - 9)) : undefined
@@ -286,6 +304,10 @@ export function createKeys(ctx: AppContext, actions: {
       state.suggestion = 0
       editor.clear()
       // An argument word: Tab writes it and a space; Enter sends the line as typed, unless another word has to follow.
+      if (command.argument?.path) {
+        editor.insert(`/${command.name}`)
+        return requestFrame()
+      }
       if (command.argument) {
         editor.insert(`/${command.name}${textOnly || command.argument.more ? " " : ""}`)
         if (!textOnly && !command.argument.more) return submit()
@@ -535,7 +557,7 @@ export function createKeys(ctx: AppContext, actions: {
     // Enter on a half-typed argument word (`/pr rev`) takes the highlighted one, like a half-typed command; a word that only contains what was typed
     // (`/sandbox on`, read-only) is never taken for it, and on a blank word Enter runs the command as typed.
     const typedArgument = editor.text.trim().toLowerCase()
-    const halfArgument = chosen?.argument && /\S$/.test(editor.text) && typedArgument !== `/${chosen.name}` && `/${chosen.name}`.startsWith(typedArgument)
+    const halfArgument = chosen?.argument && !chosen.argument.path && /\S$/.test(editor.text) && typedArgument !== `/${chosen.name}` && `/${chosen.name}`.startsWith(typedArgument)
     if (chosen && (key === "\t" || key === "\r" && ((!parseSlash(editor.text) && editor.text !== `/${chosen.name}`) || halfArgument || state.suggestion > 0))) return complete(Math.min(state.suggestion, suggestions.length - 1), key === "\t")
     if (mentionActive && (key === "\t" || key === "\r")) return completeMention(Math.min(state.mentionSuggestion, state.mentionResults.length - 1))
     if (mentionActive && key === "\x1b") return closeMentions()
@@ -598,13 +620,16 @@ export function createKeys(ctx: AppContext, actions: {
       // the explanation of the pending approval is shown or hidden
     }
     else if (editor.isEmpty() && !state.planDraft && state.transcript.pendingRequests[0]?.kind === "approval" && approvalChoicesOf(pendingPanelRequest()).some((option) => option.key === key))
-      await resolveRequest(approvalChoicesOf(pendingPanelRequest()).find((option) => option.key === key)!.choice)
+    {
+      const picked = approvalChoicesOf(pendingPanelRequest()).find((option) => option.key === key)!
+      await resolveRequest(picked.choice, picked.label)
+    }
     else if (/^[1-9]$/.test(key) && editor.isEmpty() && !state.planDraft && state.mode !== "minimal" && state.transcript.pendingRequests[0]?.kind === "approval") {
       const option = approvalChoicesOf(pendingPanelRequest())[Number(key) - 1]
-      if (option) await resolveRequest(option.choice)
+      if (option) await resolveRequest(option.choice, option.label)
     } else if (key === "\r" && editor.isEmpty() && !state.planDraft && state.mode !== "minimal" && state.transcript.pendingRequests[0]?.kind === "approval") {
       const option = approvalChoicesOf(pendingPanelRequest())[state.approvalChoice]
-      if (option) await resolveRequest(option.choice)
+      if (option) await resolveRequest(option.choice, option.label)
     }
     else if (vimLive() && vim.key(key) === "handled") {
       // Consumed by normal or visual mode (or recorded in insert mode, which passes the key on).
@@ -730,7 +755,9 @@ export function createKeys(ctx: AppContext, actions: {
 
   async function cyclePermission() {
     const current = state.transcript.permissionMode
-    await setPermission(PERMISSION_MODES[(PERMISSION_MODES.indexOf(current) + 1) % PERMISSION_MODES.length]!)
+    // Leaving plan goes back to the mode the session had before it; without one known, the cycle's own order.
+    const before = state.modeBeforePlan?.sessionId === state.sessionId ? state.modeBeforePlan.mode : undefined
+    await setPermission(current === "plan" && before && before !== "plan" ? before : PERMISSION_MODES[(PERMISSION_MODES.indexOf(current) + 1) % PERMISSION_MODES.length]!)
   }
 
   /**

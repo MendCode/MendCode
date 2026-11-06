@@ -14,6 +14,7 @@ import { panelGrid, columns } from "./deck"
 import type { MemoryWorkspacesReport } from "@mendcode/protocol"
 import { appearancePage } from "./appearance-layout"
 import { section, tabsRow, type PageTab } from "./page"
+import { pageSearchKey, pageSearchRow, SEARCH_HINT } from "./page-search"
 import { relativeTime, shortenMiddle, truncateEnd } from "./session-list"
 import { lineWidth, textWidth, wrap } from "./wrap"
 
@@ -97,9 +98,9 @@ const DOWN = new Set(["\x1b[B", "\x1bOB", "\x0e"])
 
 const PICK_HINTS = "↑↓ choose · 1-9 pick · enter set · esc cancel"
 const HINTS: Record<MemoryPageTab, string> = {
-  pending: "a approve · x reject · e edit · c category · d delete · / filter · w projects · tab/1-9 tabs · esc back",
-  saved: "p pin · x archive · e edit · c category · s scope · d delete · / filter · w projects · tab/1-9 tabs · esc back",
-  archived: "r restore · e edit · c category · d delete · / filter · w projects · tab/1-9 tabs · esc back",
+  pending: "a approve · x reject · e edit · c category · d delete · / search · w projects · tab/1-9 tabs · esc back",
+  saved: "p pin · x archive · e edit · c category · s scope · d delete · / search · w projects · tab/1-9 tabs · esc back",
+  archived: "r restore · e edit · c category · d delete · / search · w projects · tab/1-9 tabs · esc back",
   dream: dreamTabHints({ selected: 0 }),
   graph: MEMORY_GRAPH_HINTS,
   policies: POLICIES_HINTS,
@@ -120,7 +121,7 @@ const TAB_LABELS: Record<MemoryPageTab, { label: string; short: string }> = {
 }
 const PAGE_TABS: PageTab[] = PAGE_TAB_ORDER.map((tab, index) => ({ key: String(index + 1), ...TAB_LABELS[tab] }))
 const SCOPE_CHOICES: ReadonlyArray<{ id: MemoryScope; note: string }> = [
-  { id: "user", note: "every project of your profile" },
+  { id: "user", note: "every project of your area" },
   { id: "project", note: "this project only" },
   { id: "session", note: "this session only" },
 ]
@@ -311,6 +312,9 @@ export function memoryPageKey(
     if ((key === "d" || key === "y") && target) return stay({ confirmDelete: false }, { type: "delete", memoryId: target.memoryId })
     return stay({ confirmDelete: false })
   }
+  // The `/` filter edits through the shared page search (Esc clears it, Enter keeps it); arrows move in the matches meanwhile.
+  const searched = state.filtering || key === "/" ? pageSearchKey({ open: state.filtering, query: state.filter }, key) : undefined
+  if (searched) return refilter(searched.search.query, searched.search.open)
   if (key === "\x1b") {
     if (state.filter || state.filtering) return stay({ filter: "", filtering: false, selected: 0, scroll: 0 })
     return { state, action: { type: "close" } }
@@ -320,10 +324,7 @@ export function memoryPageKey(
   if (UP.has(key)) return go(selected - 1)
   if (DOWN.has(key)) return go(selected + 1)
   if (key === "\x7f" || key === "\b") return state.filter ? refilter(Array.from(state.filter).slice(0, -1).join("")) : { state, action: NONE }
-  if (state.filtering) {
-    if (key === "\r" || key === "\n") return stay({ filtering: false })
-    return isPrintable(key) ? refilter(state.filter + key) : { state, action: NONE }
-  }
+  if (state.filtering) return { state, action: NONE }
 
   switch (key) {
     case "1":
@@ -340,8 +341,6 @@ export function memoryPageKey(
       return go(selected - 1)
     case "j":
       return go(selected + 1)
-    case "/":
-      return stay({ filtering: true })
     case "a":
       return tab === "pending" && target ? { state, action: { type: "approve", memoryId: target.memoryId } } : { state, action: NONE }
     case "x":
@@ -528,7 +527,7 @@ export function renderMemoryPage(input: {
   const { memories, state, directory, width, now } = input
   const height = Math.max(0, input.height)
   const glyphs = input.glyphs ?? defaultGlyphs()
-  const hints = state.tab === "sharing" && state.sharing.confirmation !== undefined ? "enter enable · ctrl+u clear · esc cancel" : state.tab === "dream" ? `${state.dream.typing === undefined ? "t assistant · " : ""}${dreamTabHints(state.dream)}` : state.pick ? PICK_HINTS : `t assistant · ${HINTS[state.tab]}`
+  const hints = state.tab === "sharing" && state.sharing.confirmation !== undefined ? "enter enable · ctrl+u clear · esc cancel" : state.tab === "dream" ? `${state.dream.typing === undefined ? "t assistant · " : ""}${dreamTabHints(state.dream)}` : state.pick ? PICK_HINTS : state.filtering && ["pending", "saved", "archived"].includes(state.tab) ? SEARCH_HINT : `t assistant · ${HINTS[state.tab]}`
 
   if (state.workspace.picking !== undefined) return pickerFrame("Memory · Projects", "↑↓ choose · enter select · esc cancel", width, height, renderWorkspacePicker(state.workspace, input.data?.workspaces, input.data?.currentDirectory, width, Math.max(0, height - 2)), `${input.data?.workspaces?.workspaces.length ?? 0} projects${input.data?.workspaces?.omitted ? ` · ${input.data.workspaces.omitted} omitted` : ""}`)
   const activeTab = PAGE_TAB_ORDER.indexOf(state.tab)
@@ -588,7 +587,8 @@ export function renderMemoryPage(input: {
   const detailWidth = input.data?.workspaces && wide ? Math.max(1, gridWidths[1]! - 4) : wide ? inner - listWidth - GUTTER : 0
 
   const headRows: Line[] = []
-  if (state.filter || state.filtering) headRows.push(clampLine([{ text: `/ ${state.filter}`, fg: "text" }, ...(state.filtering ? [{ text: "▏", fg: "primary" as const }] : [])], listWidth))
+  const searchRow = pageSearchRow({ open: state.filtering, query: state.filter }, visible.length, listWidth)
+  if (searchRow) headRows.push(searchRow)
   if (state.confirmDelete) headRows.push(clampLine([{ text: "delete this memory? d/y confirm · any other key cancels", fg: "error", bold: true }], listWidth))
   if (state.pick) headRows.push(...pickRows({ pick: state.pick, target: active, categories: input.data?.categories, width: listWidth, max: Math.max(2, Math.min(7, room - 6)) }))
   if (headRows.length) headRows.push([])
