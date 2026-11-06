@@ -11,6 +11,9 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## v0.0.4-beta.5 - 2026-11-06
 
+Ink, black and white like the website, is the new default theme; the sessions sidebar fits one session per line with a
+state symbol; `/usage` counts every harness and call once with cache; `/reviews` shows each pull request's state.
+
 ### New
 
 - PR reviews set a `MendCode review` commit status on the head, so a branch can require that its latest commit was reviewed and has nothing blocking.
