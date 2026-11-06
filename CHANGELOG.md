@@ -9,6 +9,11 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 ## Unreleased
 
+## v0.0.4-beta.4 - 2026-11-06
+
+Large pull requests get reviewed through cheap readers instead of failing, merged pull requests count as reviewed only after
+a full review, and a child session's approvals no longer fill your queue.
+
 ### Changed
 
 - Large code pull requests keep reviewing with cheap readers fetching overflow files in pieces, with unread files clearly listed.
