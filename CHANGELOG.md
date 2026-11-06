@@ -13,6 +13,10 @@ A section is a summary paragraph and items under `### New`, `### Changed`, `### 
 
 - Large code pull requests keep reviewing with cheap readers fetching overflow files in pieces, with unread files clearly listed.
 
+### Fixed
+
+- Release reviews reuse only proven full reviews, work with GitHub Actions tokens, and read commit trees together instead of separately.
+
 ## v0.0.4 - 2026-11-05
 
 Profiles and areas, threads and side chats, turns that resume after a restart, a PR reviewer that describes, scores and

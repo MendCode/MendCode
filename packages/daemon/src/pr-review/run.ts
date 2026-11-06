@@ -83,6 +83,8 @@ export type RunPrReviewInput = {
   git?: GitRun
   graph?: () => Promise<Graph | undefined>
   gh?: GhCall
+  /** Known publisher identity, including installation-token bots that cannot call GET /user. */
+  self?: string | undefined
   /** The caller's consent to post (the repo config's `enabled` is checked here too). */
   publish: boolean
   /** Review the whole PR even when the head was reviewed before (`@mendcode review`). */
@@ -342,7 +344,7 @@ async function chooseRange({ input, git, full, resume }: { input: RunPrReviewInp
   if (range && gh && !input.provider) {
     const { alreadyReviewed } = await import("./already-reviewed")
     const covered = await alreadyReviewed({ gh, git, directory: input.directory, repo: input.repo, number: input.number, base: range.base, head: range.head,
-      reviewer: input.publishAs?.reviewer ?? input.reviewer?.id, self: input.publishAs?.self ?? input.publisher?.login ?? input.reviewer?.login })
+      reviewer: input.publishAs?.reviewer ?? input.reviewer?.id, self: input.publishAs?.self ?? input.self ?? input.publisher?.login ?? input.reviewer?.login })
     if (covered) return { base: covered.base, head: range.head, incremental: true, alreadyReviewed: covered.prs }
   }
   return range
@@ -556,6 +558,7 @@ async function reviewRun(input: RunPrReviewInput): Promise<ReviewRun & RunPlatfo
     const inheritedNote = inherited ? [`${plural(inherited, "finding")} #${input.stack!.parent} already reported ${inherited === 1 ? "was" : "were"} left out (this pull request is stacked on it).`] : []
     const usedModel = fallbackUsed(fallbackState, fallbackSources)
     const info: ReviewInfo = { ...(usedModel ? { fallback: { model: usedModel, ...(fallbackState.reason ? { why: fallbackState.reason } : {}) } } : {}), files: context.files.map((file) => ({ path: file.path, touched: file.touched.length })), profile: config.profile, cap: config.cap, incremental, ...(incremental ? { since: range.base } : {}), notes: [...context.notes.filter((note) => !note.startsWith("Incremental review:")), ...inheritedNote], ...(complete ? { checked: outcome.candidates.length - (risenAdded ? 1 : 0) } : {}), ...(perf && perfBody(perf) ? { perf: perfBody(perf) } : {}), ...(outcome.partial ? { partial: { ...outcome.partial, number: input.number } } : {}) }
+    if (complete && !incremental && !input.stack && range.base === input.base) info.fullBase = input.base
     // Always a checkpoint: the plan's decisions; complete, every judged finding; stopped, what a resume verifies.
     const checkpoint: JobCheckpoint = withReaders(outcome.checkpoint ?? {
       completedPhases: outcome.completedPhases ?? [], candidates: [], verified: outcome.candidates, result: outcome.result,
@@ -597,7 +600,7 @@ async function reviewRun(input: RunPrReviewInput): Promise<ReviewRun & RunPlatfo
     }
     tell(input, { phase: "posting", label: "Posting review" })
     const report = await publishReview({
-      repo: input.repo, number: input.number, result, previous: state, process: input.gh!, resolve: fixed, info,
+      repo: input.repo, number: input.number, result, previous: state, process: input.gh!, resolve: fixed, info, self: input.self,
       ...(config.template.sections.length ? { template: config.template } : {}), ...(outcome.sections ? { sections: outcome.sections } : {}),
       ...(as ? { effects: as.effects, reviewer: as.reviewer, configKey: as.configKey, jobId: as.jobId, isCurrent: as.isCurrent, ...(as.self ? { self: as.self } : {}) } : {}),
     })

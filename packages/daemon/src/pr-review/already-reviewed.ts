@@ -1,10 +1,10 @@
 import { z } from "zod"
 import type { GitRun } from "./context"
 import { DEFAULT_REVIEWER, reviewerFromBody, reviewerMarker, type GhCall } from "./publish"
-import { REVIEW_MARKER } from "./state"
+import { FULL_REVIEW_MARKER, REVIEW_MARKER } from "./state"
 
 const Sha = z.string().regex(/^[0-9a-f]{40,64}$/)
-const Pull = z.object({ number: z.number().int().positive(), merged_at: z.string().nullable(), merge_commit_sha: Sha.nullable(), head: z.object({ sha: Sha }) })
+const Pull = z.object({ number: z.number().int().positive(), merged_at: z.string().nullable(), merge_commit_sha: Sha.nullable(), head: z.object({ sha: Sha }), base: z.object({ sha: Sha }) })
 const Review = z.object({ body: z.string().nullable(), state: z.string(), commit_id: z.string().nullable(), submitted_at: z.string().nullable(), user: z.object({ login: z.string() }).nullable() })
 
 /** Two pages at most, never GitHub's unbounded --paginate. Failed reads prove no coverage. */
@@ -20,7 +20,7 @@ async function page(gh: GhCall, endpoint: string): Promise<unknown[] | undefined
  * A contiguous prefix of reviewed trees, not merely the newest reviewed merge: a direct push, an
  * unreviewed PR or merge-only edits must stay in the diff. Loaded only when a GitHub review chooses
  * its range. Accounting records calls, not completion; the published head + reviewer markers are
- * the completion evidence, restricted to the reviewer's account as in findReviewMarker.
+ * completion evidence only with a full-review base, restricted to the reviewer's account as in findReviewMarker.
  */
 export async function alreadyReviewed({ gh, git, directory, repo, number, base, head, reviewer = DEFAULT_REVIEWER, self }: {
   gh: GhCall; git: GitRun; directory: string; repo: string; number: number; base: string; head: string; reviewer?: string | undefined; self?: string | undefined
@@ -29,6 +29,7 @@ export async function alreadyReviewed({ gh, git, directory, repo, number, base, 
     const chain = await git(["rev-list", "--first-parent", "--reverse", `${base}..${head}`], directory, 128 * 1024)
     if (chain.code !== 0 || chain.cut || !chain.out.trim()) return undefined
     const commits = chain.out.trim().split("\n")
+    if (![base, head, ...commits].every((sha) => Sha.safeParse(sha).success)) return undefined
     const inRange = new Set(commits)
     const pulls = new Map<string, z.infer<typeof Pull>>()
     for (let n = 1; n <= 2; n++) {
@@ -50,18 +51,26 @@ export async function alreadyReviewed({ gh, git, directory, repo, number, base, 
       self = user.data.login
     }
     const identity = reviewerFromBody(reviewerMarker({ reviewer, configKey: "", key: "" }))!.reviewer
-    const tree = async (ref: string) => {
-      const done = await git(["rev-parse", "--verify", `${ref}^{tree}`], directory)
-      return done.code === 0 && Sha.safeParse(done.out.trim()).success ? done.out.trim() : undefined
+    // At most one merge-base per candidate in the bounded PR lookup, never per history commit.
+    const starts = new Map<string, string>()
+    for (const [commit, pr] of pulls) {
+      if (pr.head.sha === commit) continue
+      const start = await git(["merge-base", `${commit}^1`, pr.head.sha], directory, 128)
+      if (start.code === 0 && !start.cut && Sha.safeParse(start.out.trim()).success) starts.set(commit, start.out.trim())
     }
-    let cursorTree = await tree(base)
+    const refs = [...new Set([base, ...commits, ...starts.values(), ...[...pulls.values()].map((pr) => pr.head.sha)])]
+    const resolved = await git(["rev-parse", ...refs.map((ref) => `${ref}^{tree}`)], directory, refs.length * 65 + 1)
+    const values = resolved.out.trim().split("\n")
+    if (resolved.code !== 0 || resolved.cut || values.length !== refs.length || !values.every((sha) => Sha.safeParse(sha).success)) return undefined
+    const trees = new Map(refs.map((ref, i) => [ref, values[i]!]))
+    let cursorTree = trees.get(base)
     if (!cursorTree) return undefined
     let baseline: string | undefined
     const prs: number[] = []
     // Commits since the covered prefix that no merged PR has claimed yet: a fast-forward merge brings the PR's own commits.
     let pending: string[] = []
     for (const commit of commits) {
-      const mergedTree = await tree(commit)
+      const mergedTree = trees.get(commit)
       if (!mergedTree) break
       if (mergedTree === cursorTree && !pending.length) continue
       const pr = pulls.get(commit)
@@ -74,8 +83,8 @@ export async function alreadyReviewed({ gh, git, directory, repo, number, base, 
       } else {
         // A merge commit: the PR's reviewed diff must start at the prefix we have already covered, not after a gap.
         if (pending.length) break
-        const start = await git(["merge-base", `${commit}^1`, pr.head.sha], directory)
-        if (start.code !== 0 || !Sha.safeParse(start.out.trim()).success || await tree(start.out.trim()) !== cursorTree) break
+        const start = starts.get(commit)
+        if (!start || trees.get(start) !== cursorTree) break
       }
       const reviews: z.infer<typeof Review>[] = []
       let complete = false
@@ -92,7 +101,9 @@ export async function alreadyReviewed({ gh, git, directory, repo, number, base, 
       const last = reviews.filter((review) => review.state !== "PENDING" && review.submitted_at && review.user?.login.toLowerCase() === self!.toLowerCase()
         && reviewerFromBody(review.body)?.reviewer === identity).sort((a, b) => a.submitted_at!.localeCompare(b.submitted_at!)).at(-1)
       if (!last || last.commit_id !== pr.head.sha || REVIEW_MARKER.exec(last.body ?? "")?.[1] !== pr.head.sha) break
-      const reviewedTree = await tree(pr.head.sha)
+      // Optional prose/sections may hide stacked or incremental scope; absence is not proof.
+      if (FULL_REVIEW_MARKER.exec(last.body ?? "")?.[1] !== pr.base.sha) break
+      const reviewedTree = trees.get(pr.head.sha)
       if (!reviewedTree) break
       if (mergedTree === reviewedTree) {
         // Also handles squash merges: use the equivalent tree on the first-parent chain.
@@ -102,7 +113,7 @@ export async function alreadyReviewed({ gh, git, directory, repo, number, base, 
         prs.push(pr.number)
       } else {
         // A merge resolution was not reviewed: leave it (and everything after it) in the remainder.
-        if ((await git(["merge-base", "--is-ancestor", pr.head.sha, head], directory)).code === 0) {
+        if ((await git(["merge-base", "--is-ancestor", pr.head.sha, head], directory, 128)).code === 0) {
           baseline = pr.head.sha
           prs.push(pr.number)
         }

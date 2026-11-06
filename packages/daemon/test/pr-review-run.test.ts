@@ -4,10 +4,12 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 import type { PrTokenUsage } from "@mendcode/protocol"
 import { EMPTY_TREE, runAudit } from "../src/pr-review/audit"
+import { alreadyReviewed } from "../src/pr-review/already-reviewed"
 import { gitRun, MAX_DIFF_BYTES, type GitRun } from "../src/pr-review/context"
 import { createEffectLedger } from "../src/pr-review/effects"
 import type { ReviewSessionFactory } from "../src/pr-review/engine"
 import { findingId } from "../src/pr-review/findings"
+import { ACTIONS_BOT, hostedReview } from "../src/pr-review/hosted"
 import { reviewerMarker, type GhCall } from "../src/pr-review/publish"
 import { reviewNotice, runConfigKey, runPrReview } from "../src/pr-review/run"
 import { ReviewTurnError, ReviewTurnOverBudget } from "../src/pr-review/sessions"
@@ -208,11 +210,11 @@ describe("runPrReview: already reviewed merged pull requests", () => {
     }
     return { ...repo, head: await git(repo.dir, "rev-parse", "HEAD"), prs }
   }
-  const review = (head: string, extra: Record<string, unknown> = {}) => ({
-    body: `${reviewMarker(head)}\n${reviewerMarker({ reviewer: "global", configKey: "base", key: head })}`, commit_id: head,
+  const review = (head: string, extra: Record<string, unknown> = {}, base?: string) => ({
+    body: `${reviewMarker(head)}\n${reviewerMarker({ reviewer: "global", configKey: "base", key: head })}${base ? `\n<!-- mendcode:full-review base=${base} -->` : ""}`, commit_id: head,
     state: "COMMENTED", submitted_at: "2026-11-01T00:00:00Z", user: { login: "review-bot" }, ...extra,
   })
-  function githubFor(repo: Awaited<ReturnType<typeof release>>, reviews = (head: string) => [review(head)]) {
+  function githubFor(repo: Awaited<ReturnType<typeof release>>, reviews = (head: string) => [review(head, {}, repo.prs.find((pr) => pr.head.sha === head)!.base.sha)]) {
     return fakeGh((endpoint) => {
       if (endpoint === "user") return { login: "review-bot" }
       if (endpoint.includes("/pulls?state=closed")) return [...repo.prs].reverse()
@@ -222,6 +224,82 @@ describe("runPrReview: already reviewed merged pull requests", () => {
       return pr ? reviews(pr.head.sha) : undefined
     })
   }
+
+  test.each(["stacked", "incremental", "unknown"])("%s completion does not prove full merged coverage", async (kind) => {
+    const repo = await release({ fastForward: true })
+    const pr = repo.prs[0]!
+    const historical = fakeGh()
+    await runPrReview({ ...baseInput({ ...repo, base: pr.base.sha, head: pr.head.sha }, children({ findings: [{ path: "src/reviewed-82.ts", line: 1, summary: "Review candidate" }] }).factory), number: pr.number, gh: historical.gh, publish: true,
+      ...(kind === "stacked" ? { stack: { base: pr.commits[0]!, parent: 81, parentFindings: [] } } : {}),
+      ...(kind === "incremental" ? { state: { ...emptyState(), lastHead: pr.commits[0]! } } : {}),
+    })
+    const body = kind === "unknown" ? review(pr.head.sha).body : JSON.parse(historical.posts()[0]!.stdin!).body
+    const github = githubFor(repo, (head) => head === pr.head.sha ? [review(head, { body })] : [review(head, {}, repo.prs.find((item) => item.head.sha === head)!.base.sha)])
+    const kids = children({ findings: [] })
+    const run = await runPrReview({ ...baseInput(repo, kids.factory), gh: github.gh })
+    expect(run.incremental).toBe(false)
+    expect(kids.turns[0]!.prompt).toContain("src/reviewed-82-first.ts")
+  })
+
+  test("full review publishes base evidence even with scope sections hidden", async () => {
+    const repo = await repository({ baseConfig: "enabled: true\ntemplate:\n  sections:\n    - id: verdict\n      enabled: false\n    - id: details\n      enabled: false\n" })
+    const github = fakeGh()
+    await runPrReview({ ...baseInput(repo, children({ findings: [] }).factory), gh: github.gh, publish: true })
+    expect(JSON.parse(github.posts()[0]!.stdin!).body).toContain(`<!-- mendcode:full-review base=${repo.base} -->`)
+  })
+
+  test.each([ACTIONS_BOT, "personal-publisher", "configured-bot"])("hosted coverage uses %s without repeating /user discovery", async (login) => {
+    const repo = await release()
+    const github = githubFor(repo, (head) => [review(head, { user: { login } }, repo.prs.find((pr) => pr.head.sha === head)!.base.sha)])
+    let users = 0
+    const gh: GhCall = async (input) => {
+      const endpoint = input.argv[1] ?? ""
+      if (endpoint === "user") { users++; return login === ACTIONS_BOT ? { code: 1, out: "" } : { code: 0, out: input.argv.includes("--jq") ? login : JSON.stringify({ login }) } }
+      if (endpoint === "repos/acme/app/pulls/12") return { code: 0, out: JSON.stringify({ head: { sha: repo.head }, base: { sha: repo.base } }) }
+      if (input.argv.includes("--paginate")) return { code: 0, out: "" }
+      return github.gh(input)
+    }
+    const kids = children({ findings: [] })
+    const run = await hostedReview({ directory: repo.dir, event: JSON.stringify({ eventName: "pull_request", repo: { owner: "acme", repo: "app" }, payload: { action: "opened", pull_request: { number: 12 } } }), gh, publish: false, sessionFactory: kids.factory, ...(login === "configured-bot" ? { self: login } : {}) })
+    expect(run.status).toBe("reviewed")
+    expect(kids.turns).toEqual([])
+    expect(users).toBe(login === "configured-bot" ? 0 : 1)
+  })
+
+  test.each(["wrong-base", "newer-incremental", "cut-trees", "missing-tree"])("%s cannot establish coverage", async (kind) => {
+    const repo = await release()
+    const github = githubFor(repo, (head) => {
+      const pr = repo.prs.find((item) => item.head.sha === head)!
+      return kind === "wrong-base" ? [review(head, {}, head)] : kind === "newer-incremental"
+        ? [review(head, {}, pr.base.sha), review(head, { submitted_at: "2026-11-02T00:00:00Z" })]
+        : [review(head, {}, pr.base.sha)]
+    })
+    const runner: GitRun = async (...args) => {
+      const done = await gitRun(...args)
+      return args[0][0] !== "rev-parse" ? done : kind === "cut-trees" ? { ...done, cut: true } : kind === "missing-tree" ? { ...done, out: "" } : done
+    }
+    expect(await alreadyReviewed({ gh: github.gh, git: runner, directory: repo.dir, repo: "acme/app", number: 12, base: repo.base, head: repo.head })).toBeUndefined()
+  })
+
+  test.each([0, 1000])("tree discovery stays batched with %i uncovered tail commits", async (tail) => {
+    const repo = await release()
+    const github = githubFor(repo)
+    const commits = (await git(repo.dir, "rev-list", "--first-parent", "--reverse", `${repo.base}..${repo.head}`)).split("\n")
+    const trees = new Map<string, string>()
+    for (const ref of [repo.base, ...commits, ...repo.prs.map((pr) => pr.head.sha)]) trees.set(ref, await git(repo.dir, "rev-parse", `${ref}^{tree}`))
+    for (let i = 0; i < tail; i++) { const sha = (i + 1).toString(16).padStart(40, "0"); commits.push(sha); trees.set(sha, "f".repeat(40)) }
+    const calls: string[][] = []
+    const runner: GitRun = async (args, cwd, max) => {
+      calls.push(args)
+      if (args[0] === "rev-list") return { code: 0, out: commits.join("\n") }
+      if (args[0] === "rev-parse") return { code: 0, out: args.slice(1).filter((arg) => !arg.startsWith("--")).map((ref) => trees.get(ref.replace(/\^\{tree\}$/, ""))!).join("\n") }
+      return gitRun(args, cwd, max)
+    }
+    expect(await alreadyReviewed({ gh: github.gh, git: runner, directory: repo.dir, repo: "acme/app", number: 12, base: repo.base, head: commits.at(-1)! })).toEqual({ base: repo.head, prs: [82, 83, 84] })
+    expect(calls.filter((args) => args[0] === "rev-parse")).toHaveLength(1)
+    expect(calls.length).toBeLessThanOrEqual(5)
+    expect(github.calls.length).toBeLessThanOrEqual(5)
+  })
 
   test("fast-forwarded PRs with several commits each count as reviewed", async () => {
     const repo = await release({ large: true, fastForward: true })
@@ -309,7 +387,7 @@ describe("runPrReview: already reviewed merged pull requests", () => {
         ? Array.from({ length: 100 }, () => ({ ...repo.prs[0], merge_commit_sha: repo.base }))
         : [...repo.prs, ...Array.from({ length: 97 }, () => ({ ...repo.prs[0], merge_commit_sha: repo.base }))]
       const pr = repo.prs.find((pr) => endpoint.includes(`/pulls/${pr.number}/reviews?`))
-      return pr ? [review(pr.head.sha)] : undefined
+      return pr ? [review(pr.head.sha, {}, pr.base.sha)] : undefined
     })
     const run = await runPrReview({ ...baseInput(repo, kids.factory), gh: github.gh, publish: true })
     expect(run.status).toBe("published")
