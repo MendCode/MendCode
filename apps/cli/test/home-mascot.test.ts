@@ -1,4 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test"
+import { DEFAULT_THEME } from "../src/themes"
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import path from "node:path"
 import { TUI_DEFAULTS, TUI_ENUMS, featureOn, tuiProblems } from "@mendcode/protocol/wire"
@@ -26,7 +27,7 @@ import { onBackground, sampleSprite, sheetOf, smoothSample } from "./mascot-samp
 import { cleanTemps, conversation, mendRowIn, plain, tempDir } from "./session-ui-harness"
 
 afterAll(() => {
-  setTheme("mend")
+  setTheme(DEFAULT_THEME)
   cleanTemps()
 })
 

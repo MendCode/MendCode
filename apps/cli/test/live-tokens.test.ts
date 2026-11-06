@@ -1,9 +1,10 @@
 import { afterEach, expect, test } from "bun:test"
+import { DEFAULT_THEME } from "../src/themes"
 import { appHarness, cleanTemps, ids, plain, tempDir, type Harness } from "./session-ui-harness"
 import { DEFAULT_TUI_PROFILE, writeTuiProfile } from "../src/view/tui-profile"
 import { setTheme } from "../src/ui/theme"
 
-afterEach(() => { cleanTemps(); setTheme("mend") })
+afterEach(() => { cleanTemps(); setTheme(DEFAULT_THEME) })
 
 const TURN_AT = 1_800_000_000_000
 const rows = (h: Harness) => (h.app.render(), h.frames.at(-1)!.map(plain))

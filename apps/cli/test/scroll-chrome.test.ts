@@ -1,4 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test"
+import { DEFAULT_THEME } from "../src/themes"
 import { ACTIVITY_PARTS, ACTIVITY_PARTS_DEFAULT, tuiProblems, TUI_DEFAULTS, TUI_ENUMS } from "@mendcode/protocol/wire"
 import { glyphs, setTheme, sgr, themeNames, activeTheme, type Line } from "../src/ui/theme"
 import { THEMES } from "../src/themes"
@@ -10,7 +11,7 @@ import { textWidth } from "../src/view/wrap"
 
 const text = (line: Line) => line.map((span) => span.text).join("")
 const g = glyphs({})
-afterAll(() => { setTheme("mend") })
+afterAll(() => { setTheme(DEFAULT_THEME) })
 
 describe("scrollbar geometry", () => {
   test("nothing is drawn while the transcript fits", () => {
