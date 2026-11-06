@@ -3,7 +3,7 @@ import { sessionActivityAt } from "./session-label"
 
 /**
  * The session picker's query language, shared by the view and the key handler:
- *   plain words      every word must be in the title, directory, tags, agent or model
+ *   plain words      every word must be in the title, folder, tags, agent or model (or the id, 8 characters or more)
  *   "a phrase"       the quoted text, spaces included
  *   re:pattern       the rest of the line is a case-insensitive regular expression
  *   tag:x  color:x   the session has a tag starting with x / that color mark
@@ -75,6 +75,22 @@ function haystack(session: SessionSummary) {
   return [session.title, ...(session.draft ? ["draft", session.draft.preview] : []), session.directory, ...(session.tags ?? []).map((tag) => `#${tag}`), session.color ?? "", session.agent ?? "", session.model?.model ?? ""].join("\n").toLowerCase()
 }
 
+/** How many sessions /sessions loads at once; a search past them asks the daemon (`findTerm`). */
+export const SESSION_PAGE = 200
+/** How many sessions one search past the loaded page may bring back. */
+export const FIND_LIMIT = 50
+
+/**
+ * The word the daemon is asked for when the loaded page may not hold every match: the longest plain word of the query
+ * (title, folder or id), or undefined for a regular expression, an invalid query or tags and colors alone.
+ */
+export function findTerm(filter: string): string | undefined {
+  const query = parseSessionQuery(filter)
+  if (query.invalid || query.regex) return undefined
+  const term = [...query.terms].sort((a, b) => b.length - a.length)[0]
+  return term ? term.slice(0, MAX_PATTERN) : undefined
+}
+
 export function matchesQuery(session: SessionSummary, query: SessionQuery, hits?: Readonly<Record<string, string>>): boolean {
   if (query.invalid) return false
   if (!query.tags.every((tag) => (session.tags ?? []).some((own) => own.startsWith(tag)))) return false
@@ -83,8 +99,12 @@ export function matchesQuery(session: SessionSummary, query: SessionQuery, hits?
   if (hits?.[session.sessionId] !== undefined) return true
   if (query.regex) return query.regex.test(haystack(session))
   const own = haystack(session)
-  return query.terms.every((term) => own.includes(term))
+  const id = session.sessionId.toLowerCase()
+  return query.terms.every((term) => own.includes(term) || isIdPart(term) && id.includes(term))
 }
+
+/** A pasted session id, whole (`ses_…`) or the end the agent's lists show (8 characters or more): short words never match an id. */
+const isIdPart = (term: string) => term.length >= 8 && /^[a-z0-9_]+$/.test(term)
 
 /** The sessions left by the filter, the named-only switch and the scope; order is the caller's. */
 export function selectSessions(sessions: SessionSummary[], filter: string, view: SessionView, currentDirectory?: string): SessionSummary[] {

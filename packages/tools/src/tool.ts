@@ -84,6 +84,8 @@ export type SessionRecallPort = {
   find?(input: import("@mendcode/protocol").SessionRecallSearchInput): import("@mendcode/protocol").SessionRecallFound
   read(input: import("@mendcode/protocol").SessionRecallReadInput): import("@mendcode/protocol").SessionRecallPage | import("@mendcode/protocol").SessionRecallMessage
   notes(input: import("@mendcode/protocol").SessionNotesInput): import("@mendcode/protocol").SessionNotesReport
+  /** `session_open`: another session of this project (full id or its end), with the command that opens it in a terminal; throws for any other session. */
+  open?(input: import("@mendcode/protocol").SessionOpenInput): { session_id: string; title: string; attach: string }
   /** `auto_recall`: the earlier turns of this session that the latest compaction packed away and that best match `query`, newest context first. */
   relevant?(input: { query: string; limit: number; maxChars: number }): RecalledTurn[]
 }

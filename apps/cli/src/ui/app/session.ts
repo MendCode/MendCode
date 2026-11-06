@@ -4,12 +4,13 @@ import type { BlobRef, ItemId, RewindReport, SessionMergeReport, SessionTreeNode
 import type { SessionId, SessionSummary } from "@mendcode/protocol"
 import type { SessionColor } from "@mendcode/protocol/wire"
 import { featureOn } from "@mendcode/protocol/wire"
-import { contentQuery } from "../../view/session-query"
+import { contentQuery, FIND_LIMIT, findTerm, SESSION_PAGE } from "../../view/session-query"
 import { truncateEnd } from "../../view/wrap"
 import { placeholderFor } from "../../view/prompt-chrome"
 import { createTurnState } from "../../view/turn-state"
 import { createCompactionFacts } from "../../view/compaction-facts"
-import { createSessionListState, orderSessions, sessionListKey, viewOf } from "../../view/session-list"
+import { createSessionListState, orderSessions, viewOf } from "../../view/session-list"
+import { preload, sessionListKey } from "../lazy-pages"
 import type { AppContext } from "./context"
 import { followPet } from "./pet-follow"
 import { refreshLiveTasks } from "./live-tasks"
@@ -346,6 +347,33 @@ export function createSession(ctx: AppContext, actions: {
     requestFrame()
   }
 
+  let finding = 0
+  /**
+   * Asks the daemon for sessions past the loaded page whose title, folder or id hold the filter's longest word (at most
+   * `FIND_LIMIT`, in the list's scope). Nothing is asked while the loaded page holds every session; the latest question wins.
+   */
+  async function findSessions() {
+    const serial = ++finding
+    const list = state.sessionList
+    const term = findTerm(list.filter)
+    if (!term || state.sessions.length < SESSION_PAGE) {
+      if (list.found) { delete state.sessionList.found; delete state.sessionList.foundFor }
+      return requestFrame()
+    }
+    const folder = list.scope === "project" ? list.directory : undefined
+    const reply = await input.send({ type: "session.list", limit: FIND_LIMIT, archived: true, hideEmpty: true, find: term, ...(folder ? { directory: folder, roots: false } : {}) })
+    if (serial !== finding || state.sessionList.filter !== list.filter) return
+    // A daemon that does not know `find` answers with an error: the loaded page is all there is.
+    state.sessionList.found = reply.ok ? (reply.result?.sessions as SessionSummary[] | undefined) ?? [] : []
+    state.sessionList.foundFor = list.filter
+    requestFrame()
+  }
+
+  /** A new filter on /sessions: past the loaded page and, with ^F on, in the messages. */
+  async function searchSessions() {
+    await Promise.all([searchSessionContent(), findSessions()])
+  }
+
   async function navigateMessage(kind: "next" | "previous" | "last-user") {
     if (kind === "last-user") {
       const sessionId = state.sessionId
@@ -395,14 +423,17 @@ export function createSession(ctx: AppContext, actions: {
   /** "This project" asks for the folder's own sessions with their children (nested under them); all projects, the top ones of each. */
   async function reloadSessions() {
     const folder = state.page === "sessions" && state.sessionList.scope === "project" ? state.sessionList.directory : undefined
-    const reply = await input.send({ type: "session.list", limit: 200, archived: true, hideEmpty: true, ...(folder ? { directory: folder, roots: false } : {}) })
+    const reply = await input.send({ type: "session.list", limit: SESSION_PAGE, archived: true, hideEmpty: true, ...(folder ? { directory: folder, roots: false } : {}) })
     if (!reply.ok) fail(reply.error.message)
     else state.sessions = (reply.result?.sessions as SessionSummary[]) ?? []
+    // What was found past the page belongs to the list just replaced: a filter still typed asks again.
+    if (state.page === "sessions" && state.sessionList.filter) await findSessions()
     requestFrame()
   }
 
   async function openSessions(archived = false) {
     state.renameFromChat = false
+    await preload("sessions")
     state.page = "sessions"
     state.sessionList = createSessionListState(input.remote ? undefined : input.directory)
     if (archived) state.sessionList.archived = true
@@ -439,5 +470,5 @@ export function createSession(ctx: AppContext, actions: {
     if (state.gitBranch !== before) requestFrame()
   }
 
-  return { releaseBackgroundWriter, navigateMessage, renameSession, forkSession, rewind, jumpTo, forkAt, forkCommand, mergeFork, switchSession, changeSession, searchSessionContent, reloadSessions, openSessions, loadTitle, loadBranch, recoverMissingSession, verifySession }
+  return { releaseBackgroundWriter, navigateMessage, renameSession, forkSession, rewind, jumpTo, forkAt, forkCommand, mergeFork, switchSession, changeSession, searchSessionContent, searchSessions, findSessions, reloadSessions, openSessions, loadTitle, loadBranch, recoverMissingSession, verifySession }
 }

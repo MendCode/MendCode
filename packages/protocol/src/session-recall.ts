@@ -57,6 +57,12 @@ export const SessionRecallMessage = lazySchema(() => z.strictObject({
 }))
 export type SessionRecallMessage = z.infer<typeof SessionRecallMessage>
 
+/** `session_open`: a session of this project by its full id or the end of it (at least 8 characters). */
+export const SessionOpenInput = lazySchema(() => z.strictObject({
+  session_id: z.string().trim().min(8).max(64),
+}))
+export type SessionOpenInput = z.infer<typeof SessionOpenInput>
+
 export const SessionNotesInput = lazySchema(() => z.strictObject({
   action: z.enum(["read", "write"]),
   version: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),

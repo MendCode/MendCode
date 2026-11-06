@@ -1,4 +1,4 @@
-import { SessionNotesInput, SessionRecallReadInput, SessionRecallSearchInput } from "@mendcode/protocol"
+import { SessionNotesInput, SessionOpenInput, SessionRecallReadInput, SessionRecallSearchInput } from "@mendcode/protocol"
 import { defineTool, fail, type Tool, type ToolContext } from "@mendcode/tools"
 
 function result(name: string, context: ToolContext, run: (port: NonNullable<ToolContext["recall"]>) => unknown) {
@@ -10,7 +10,7 @@ function result(name: string, context: ToolContext, run: (port: NonNullable<Tool
 export const SESSION_RECALL_TOOLS = [
   defineTool({
     name: "session_search",
-    description: "Search one bounded page of historical messages, including before compaction. Follow next_cursor for older pages, even when this page has no matches. Only the current session or linked descendants in this project. scope \"project\" finds other sessions of this project by title or text, newest first; next_cursor goes in cursor; session_read may read them. Reasoning is never returned.",
+    description: "Search one bounded page of historical messages, including before compaction. Follow next_cursor for older pages, even when this page has no matches. Only the current session or linked descendants in this project. scope \"project\" finds other sessions of this project by words said in them or their title, newest first: search what was said, never guess titles; next_cursor goes in cursor; session_read may read them, session_open opens one for the user. Reasoning is never returned.",
     permission: "read",
     args: SessionRecallSearchInput,
     execute: async (input, context) => result("session_search", context, (port) => {
@@ -32,6 +32,19 @@ export const SESSION_RECALL_TOOLS = [
     permission: "write",
     args: SessionNotesInput,
     execute: async (input, context) => result("session_notes", context, (port) => port.notes(input)),
+  }),
+  defineTool({
+    name: "session_open",
+    description: "Open another session of this project for the user (\"take me there\"): their MendCode terminal switches to it when this turn ends. session_id: the full ses_ id, or its end, from session_search scope project or sessions. Replies with the attach command for other clients.",
+    permission: "read",
+    args: SessionOpenInput,
+    execute: async (input, context) => {
+      if (!context.recall?.open) return fail({ title: "session_open", message: "Opening sessions is not available here" })
+      try {
+        const target = context.recall.open(input)
+        return { output: `Opening ${target.session_id} (${target.title || "untitled"}) in the user's MendCode terminal when this turn ends. Elsewhere: ${target.attach}`, truncated: false, title: `Open ${target.title || target.session_id}`, isError: false, meta: { openSession: target.session_id } }
+      } catch (error) { return fail({ title: "session_open", message: error instanceof Error ? error.message : String(error) }) }
+    },
   }),
 ]
 

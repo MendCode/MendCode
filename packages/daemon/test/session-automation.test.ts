@@ -55,6 +55,18 @@ test("list filters roots, project, literal title search, since, agent, model and
   expect(active).toMatchObject({ ok: true, result: { sessions: [] } })
 })
 
+test("find matches the title, the folder path or the id in any case, past older sessions, within the limit", async () => {
+  const h = await native()
+  const glass = await create(h, { title: "Tema glassmorphism para Obsidian", directory: "/notes/Obsidian-Vault" })
+  for (let i = 0; i < 30; i++) h.store.createSession({ id: ids("session"), directory: h.project, title: `Newer ${i}` })
+  const found = (find: string) => h.client.send({ type: "session.list", find, limit: 5 }).then((reply) => (reply.ok ? (reply.result?.sessions as Array<{ sessionId: string }>).map((session) => session.sessionId) : reply.error.code))
+  expect(await found("GLASS")).toEqual([glass])
+  expect(await found("obsidian-vault")).toEqual([glass])
+  expect(await found(glass)).toEqual([glass])
+  expect(await found(glass.slice(0, 14).toLowerCase())).toContain(glass)
+  expect(await found("newer")).toHaveLength(5)
+})
+
 test("inspect reports finished conversation, children and pending requests; historical text and metadata are sanitized", async () => {
   const h = await native({ steps: [stop("answer")] })
   const root = await openSession(h)

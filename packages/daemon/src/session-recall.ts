@@ -1,4 +1,5 @@
 import { redactSecrets, type ErrorCode, type SessionId, type SessionRecallFound, type SessionRecallPage, type SessionRecallReadInput, type SessionRecallSearchInput } from "@mendcode/protocol"
+import { PROGRAM_NAME } from "@mendcode/program"
 import type { Store } from "@mendcode/store"
 import { canonicalDir, type SessionRecallPort } from "@mendcode/tools"
 import { rankTurns } from "./turn-recall"
@@ -103,6 +104,21 @@ export function createSessionRecall(store: Store) {
     }
     throw new SessionRecallError("target_mismatch", "Session is outside the current session and its linked children")
   }
+  /** A session of this project (as /sessions lists it) by its full id, or the end of one a search returned or the project holds. */
+  function openTarget(sessionId: SessionId, ref: string) {
+    const origin = enabled(sessionId)
+    let id = store.sessionInfo(ref as SessionId) ? ref as SessionId : undefined
+    if (!id) {
+      const needle = ref.toLowerCase()
+      const known = new Set([...(found.get(sessionId) ?? []), ...store.listSessions({ directory: origin.directory, limit: 200 }).map((session) => session.sessionId as SessionId)])
+      const hits = [...known].filter((candidate) => candidate.toLowerCase().endsWith(needle))
+      if (hits.length === 1) id = hits[0]
+    }
+    const session = id ? store.sessionInfo(id) : undefined
+    if (!id || !session || canonicalDir(session.directory) !== canonicalDir(origin.directory)) throw new SessionRecallError("target_mismatch", "No session with that id in this project; find it with session_search scope project")
+    if (id === sessionId) throw new SessionRecallError("target_mismatch", "That is this session")
+    return { session_id: id, title: redactSecrets(session.title.slice(0, 200)).text, attach: `${PROGRAM_NAME} attach ${id}` }
+  }
   function page(sessionId: SessionId, input: SessionRecallReadInput, search: boolean): SessionRecallPage {
     const id = target(sessionId, input.session_id)
     const before = input.before ? store.recall.item(id, input.before) : undefined
@@ -126,6 +142,7 @@ export function createSessionRecall(store: Store) {
       return {
         search: (input) => page(sessionId, input, true),
         find: (input) => projectSearch(sessionId, input),
+        open: (input) => openTarget(sessionId, input.session_id),
         read: (input) => {
           if (!input.message_id) return page(sessionId, input, false)
           const id = target(sessionId, input.session_id)

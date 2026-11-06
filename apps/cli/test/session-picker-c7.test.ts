@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import type { SessionSummary } from "@mendcode/protocol"
-import { createSessionListState, filterSessions, groupSessions, orderSessions, renderSessionList, sessionListKey, viewOf } from "../src/view/session-list"
+import { createSessionListState, filterSessions, groupSessions, orderSessions, viewOf } from "../src/view/session-list"
+import { renderSessionList, sessionListKey } from "../src/view/sessions-page"
 import { contentQuery, matchesQuery, nextSort, parseSessionQuery, parseTagDraft } from "../src/view/session-query"
 import type { Line } from "../src/ui/theme"
 import { appHarness, cleanTemps, conversation, ids, NOW, tempDir } from "./session-ui-harness"
@@ -136,7 +137,7 @@ describe("picker keys", () => {
     expect(at("parent run")).not.toContain("↳")
     expect(at("child task")).toMatch(/↳ \S+ child task/)
     expect(at("grandchild task")).toMatch(/ {2}↳ \S+ grandchild task/)
-    expect(rows.join("\n")).toContain("this project")
+    expect(rows.join("\n")).toContain("● this folder")
   })
 
   test("ctrl+f turns message search on (asking the daemon), typing asks again, turning it off drops the hits", () => {
@@ -151,7 +152,7 @@ describe("picker keys", () => {
     const off = key({ ...typed.state, hits: { x: "old" } }, "\x06")
     expect(off.state.content).toBe(false)
     expect(off.state.hits).toBeUndefined()
-    expect(key(createSessionListState(), "r").action).toEqual({ type: "changed" })
+    expect(key(createSessionListState(), "r").action).toEqual({ type: "search" })
   })
 
   test("ctrl+t opens the tag editor with the row's own tags and color, enter applies the words", () => {
@@ -191,7 +192,7 @@ describe("picker view", () => {
   test("the summary names sort, scope, named-only and message search", () => {
     expect(render()).toContain("all projects")
     const out = render({ ...createSessionListState(), sort: "name", scope: "project", named: true, content: true, hits: { [login.sessionId]: "the login flow broke" } })
-    expect(out).toContain("this project")
+    expect(out).toContain("● this folder")
     expect(out).toContain("sort name")
     expect(out).toContain("named only")
     expect(out).toContain("messages 1")

@@ -108,6 +108,9 @@ describe("peers", () => {
     expect(result.output).toContain("## Assistant\n\necho: /tool 5")
     expect(result.output).not.toContain("tool done")
     expect(result.output).toEndWith("end of conversation")
+    // Asked by the short end a list prints, the page is still headed by the full id, which `mendcode attach` and /sessions take.
+    const short = await sessionsTool.execute({ read: other.slice(-8) }, { cwd: "/work/app", signal: new AbortController().signal, peers: port(a) } as never)
+    expect(short.output).toStartWith(`Session ${other}, another conversation's history`)
     // The list stays this project's own.
     expect(port(a).list().map((session) => session.sessionId)).toEqual([])
     expect(port(a).read!("ses_nope")).toMatchObject({ ok: false, message: expect.stringContaining("exact id") })

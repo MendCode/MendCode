@@ -55,7 +55,7 @@ export function createSessionAutomation(input: {
     return sanitizeSession({ ...summary, ...(store.meta.get(`session.summary:${id}`) ? { summary: store.meta.get(`session.summary:${id}`) } : {}), ...(store.meta.get(`session.title.manual:${id}`) === "true" ? { named: true } : {}), ...(marks?.tags.length ? { tags: marks.tags } : {}), ...(marks?.color ? { color: marks.color } : {}), state, status, permission: store.permissionModeOf(id), ...(agent ? { agent } : {}), ...(model ? { model } : {}), ...(store.detached.has(id) ? { detached: true } : {}) })
   }
 
-  function list(options: { limit?: number | undefined; directory?: string | undefined; project?: string | undefined; roots?: boolean | undefined; since?: number | undefined; search?: string | undefined; agent?: string | undefined; model?: string | undefined; state?: string | undefined; active?: boolean | undefined; archived?: boolean | undefined; hideEmpty?: boolean | undefined }) {
+  function list(options: { limit?: number | undefined; directory?: string | undefined; project?: string | undefined; roots?: boolean | undefined; since?: number | undefined; search?: string | undefined; find?: string | undefined; agent?: string | undefined; model?: string | undefined; state?: string | undefined; active?: boolean | undefined; archived?: boolean | undefined; hideEmpty?: boolean | undefined }) {
     const sessions: SessionDetail[] = []
     const limit = options.limit ?? 100
     // Bytes of `JSON.stringify(sessions)`, kept as entries are added: "[", "]" and a comma before every entry after the first.

@@ -78,7 +78,7 @@ export const LEGACY_CATALOG: CatalogMode = { lean: false, planTools: true, aux: 
 /**
  * The auxiliary tools the conversation already calls for, so nothing that worked with them listed needs a search first: the plan
  * tools while the session is in plan mode, the two that read and stop a background command once one was started, and a sub-agent's
- * status once one was launched. `background` says the session still owns background commands (the registry outlives a compaction, which drops
+ * status once one was launched, and `session_open` once a project search ran. `background` says the session still owns background commands (the registry outlives a compaction, which drops
  * the call that started them), so their two tools stay listed.
  */
 export function impliedTools(messages: readonly ModelMessage[], plan: boolean, background = false): string[] {
@@ -89,6 +89,8 @@ export function impliedTools(messages: readonly ModelMessage[], plan: boolean, b
     for (const call of message.toolCalls) {
       if (call.name === "shell" && (call.args as { background?: unknown } | null)?.background === true) { implied.add("shell_output"); implied.add("shell_kill") }
       if (call.name === "task") implied.add("task_status")
+      // A session found in the project is one step from "take me there".
+      if (call.name === "session_search" && (call.args as { scope?: unknown } | null)?.scope === "project") implied.add("session_open")
     }
   }
   return [...implied]

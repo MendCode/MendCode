@@ -707,7 +707,7 @@ export function createApp(input: AppInput) {
   const { loadPetChoices, choosePet, petReady, petCommand, petPlanKey, petNames } = createPets(ctx, { changeProfile: (...args) => changeProfile(...args) })
   const images = createImages(ctx)
   const subagents = createSubagents(ctx, { switchSession: (id) => switchSession(id), loadPage: (name) => loadPage(name) })
-  const { releaseBackgroundWriter, forkSession, rewind, navigateMessage, renameSession, jumpTo, forkAt, forkCommand, mergeFork, switchSession, changeSession, searchSessionContent, reloadSessions, openSessions, loadTitle, loadBranch, recoverMissingSession, verifySession } = createSession(ctx, {
+  const { releaseBackgroundWriter, forkSession, rewind, navigateMessage, renameSession, jumpTo, forkAt, forkCommand, mergeFork, switchSession, changeSession, searchSessions, reloadSessions, openSessions, loadTitle, loadBranch, recoverMissingSession, verifySession } = createSession(ctx, {
     resetAudio: audio.reset,
     newTranscript,
     loadDiffTotals,
@@ -952,7 +952,7 @@ export function createApp(input: AppInput) {
     closeExtensionPage: (...args) => closeExtensionPage(...args),
     switchSession,
     changeSession,
-    searchSessionContent,
+    searchSessions,
     reloadSessions,
     historyKey,
     skillsKey,
@@ -1275,6 +1275,7 @@ export function createApp(input: AppInput) {
     },
     reloadExtensions,
     noteTurnEnded,
+    openSession: (sessionId) => switchSession(sessionId),
     loadMcps,
     chatWidth: () => transcriptWidth(),
     noteSecretMarkers,
